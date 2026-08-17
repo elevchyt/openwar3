@@ -3211,6 +3211,20 @@ export class MapViewerScene {
     // so a drain-spawned neutral building (a frozen client re-scouting a merchant, item 2c)
     // otherwise renders at the map origin forever. Everything else just gets its first
     // frame's pose a frame early.
+    //
+    // …and it must be seated where the unit IS, not where it was asked for. On the reserved-id
+    // path the sim unit was already alive while the model streamed, and a script gets to move
+    // it in that window (WTii's Unit Tester teleports every unit you buy out of the shop the
+    // same tick it is created). Seating at the stale spot puts the body at the shop for the one
+    // frame before the entry sync catches up — the flicker this whole path exists to avoid.
+    if (reservedId !== undefined) {
+      const u = this.rts.simWorld.units.get(simId);
+      if (u) {
+        x = u.x;
+        y = u.y;
+        facing = u.facing;
+      }
+    }
     const [seatW, seatH] = seatHalfExtents(def, fp);
     const z = fp && this.footMaxHeight ? this.footMaxHeight(x, y, seatW, seatH) : (this.heightSampler ? this.heightSampler(x, y) : 0);
     instance.setLocation([x, y, z]);
@@ -8266,6 +8280,16 @@ export class MapViewerScene {
       // collision family this whole phase removes.
       if (!this.rts?.frozenClient) this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
       this.rts?.tick(SIM_DT); // sim runs in seconds; advance + sync before render
+      // A unit that came into existence THIS step exists for this step's triggers. The spawns
+      // used to be drained during render, i.e. after the script had already been pumped, so a
+      // trained unit was one whole frame old before any trigger could see it — and a map that
+      // moves what you buy showed it standing at the shop for that frame before it vanished.
+      // WTii's Unit Tester is the visible case (`Move Trained Units`: an enter-region trigger on
+      // the rect the shops stand in, `SetUnitPositionLoc` to the arena), and the same gap
+      // delayed every EVENT_PLAYER_UNIT_TRAIN_FINISH by a frame. Drain-once, so the render and
+      // background-pump callers that also ask are harmless.
+      const spawnWorld = this.rts?.simWorld;
+      if (spawnWorld) this.drainWorldSpawns(spawnWorld);
       this.reapDestructibles(); // a gate the sim just broke opens the way a script-killed one does
       // A frozen client runs the script INIT (config/main — the melee starting bases are
       // born there, under ids every machine allocates identically) but never PUMPS it:
