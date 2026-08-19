@@ -1278,6 +1278,15 @@ export interface SimUnit {
   // like any other soldier — which is why the classification, not "can harvest", is
   // the flag to key off.
   isPeon: boolean;
+  /** "Ward" in UnitBalance.slk's `type` column — the ten planted, immobile gadgets: Serpent
+   *  Ward (`osp1`-`osp4`), Healing Ward (`ohwd`), Sentry Ward (`oeye`), Stasis Trap (`otot`),
+   *  Watcher Ward (`nwad`), Monster Lure (`nlur`), Goblin Land Mine (`nglm`). They are units
+   *  rather than structures, so nothing else in the data separates them from a soldier.
+   *
+   *  Like a worker, a ward is something a creep turns on LAST (see threatTier): a camp that
+   *  chews on the Serpent Wards while the army that planted them stands on top of it is
+   *  fighting the decoy instead of the fight. */
+  ward: boolean;
   /** "Ancient" in UnitBalance.slk's `type` column — the six night elf structures that are
    *  really trees: Tree of Life/Ages/Eternity, Ancient of War/Lore/Wind/Wonders and the
    *  Ancient Protector. (Moon Well, Hunter's Hall, Altar of Elders and Chimaera Roost are
@@ -4374,6 +4383,7 @@ export class SimWorld {
       | "baseInvulnerable"
       | "mechanical"
       | "isPeon"
+      | "ward"
       | "ancient"
       | "mineId"
       | "entangler"
@@ -4423,7 +4433,7 @@ export class SimWorld {
       | "baseSightNight"
     >,
     building?: BuildingState | null,
-    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; ancient?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
+    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; ward?: boolean; ancient?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
   ): SimUnit {
     const hero = opts?.hero;
     // The primary weapon is DERIVED, never passed in: it is the first slot `weapsOn` has
@@ -4583,6 +4593,7 @@ export class SimWorld {
       baseInvulnerable: !!opts?.baseInvulnerable,
       mechanical: !!opts?.mechanical,
       isPeon: !!opts?.isPeon,
+      ward: !!opts?.ward,
       ancient: !!opts?.ancient,
       mineId: 0, // set by entangleMine for an egol
       entangler: 0, // …and the Tree of Life that grew it (attachEntangled)
@@ -9869,7 +9880,10 @@ export class SimWorld {
         const strike = w.ranged ? w.range : w.range + ATTACK_LEASH;
         const curGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
         if (curGap > strike) {
-          const near = this.acquireTarget(u, strike);
+          // A creep asks the same tier-ordered question it asks everywhere else: the enemy
+          // that is RIGHT HERE is worth turning on, but not when the thing right here is the
+          // Peasant or the Serpent Ward standing in front of the army (see threatTier).
+          const near = u.isCreep ? this.bestCreepTarget(u, strike) : this.acquireTarget(u, strike);
           if (near && near.id !== t.id) {
             this.issueAttack(u.id, near.id);
             t = near;
@@ -10073,7 +10087,11 @@ export class SimWorld {
       if (!this.canSee(u, t)) continue; // never aggro what we cannot see (sight + fog + LOS)
       cands.push({ t, gap });
     }
-    cands.sort((a, b) => a.gap - b.gap);
+    // Nearest first — except for a creep, which ranks by threat tier first and only breaks
+    // ties by distance (threatTier), so a switch forced by an unreachable target can't be the
+    // back door that puts the camp back on the workers.
+    if (u.isCreep) cands.sort((a, b) => this.threatTier(b.t) - this.threatTier(a.t) || a.gap - b.gap);
+    else cands.sort((a, b) => a.gap - b.gap);
     for (let i = 0; i < cands.length && i < 5; i++) {
       if (this.canReachToAttack(u, cands[i].t)) return cands[i].t;
     }
@@ -10418,19 +10436,54 @@ export class SimWorld {
     return this.lineOfSight(u.x, u.y, t.x, t.y, u.flying || t.flying);
   }
 
+  /** The two things a creep camp turns on LAST, however close they are standing: a WORKER
+   *  and a WARD. Both are the same mistake — the camp spends itself on something that is not
+   *  the fight while the army that brought it stands on top of them.
+   *
+   *  Both come straight from UnitBalance.slk's `type` column rather than from anything we
+   *  infer: `Peon` is exactly the nine harvest-and-build units (Peasant, Peon, Acolyte, Wisp
+   *  and the five neutral variants) and `Ward` is exactly the ten planted gadgets (Serpent,
+   *  Healing, Sentry and Watcher Wards, Stasis Trap, Monster Lure, Goblin Land Mine). Keying
+   *  off the classification is what makes the Militia a normal soldier: `hmil` is its own
+   *  unit type with no `Peon` in its `type` at all, so a Peasant that calls to arms stops
+   *  being a worker the instant it changes shape — which is the point of the ability.
+   *
+   *  It is also why an armed ward is still bottom of the pile: a Serpent Ward carries a real
+   *  weapon and would otherwise outrank the Grunt beside it. */
+  private lowPriorityTarget(t: SimUnit): boolean {
+    return t.isPeon || t.ward;
+  }
+
+  /** The target a roused creep actually turns on, given the one it was HANDED — a camp-mate's
+   *  shout (alertCamp) or whatever just hit it. Ranking workers and wards last has to survive
+   *  both, or the ordering is decided by whichever of them fires first: an edge creep with only
+   *  the Peasant inside its own 500 shouts, and the whole camp walks past the army to mob the
+   *  Peasant; a Serpent Ward plinks a Murloc, and the camp turns on the ward that was planted
+   *  to make it do exactly that. So a handed-over worker or ward is only a SUGGESTION — the
+   *  creep still looks around first and keeps whatever outranks it. Anything else is handed
+   *  straight through, because a shout about a Footman is the camp cohesion working. */
+  private creepTargetOver(c: SimUnit, handed: SimUnit): SimUnit {
+    if (!this.lowPriorityTarget(handed)) return handed;
+    const own = this.bestCreepTarget(c, c.aggroRange);
+    return own && this.threatTier(own) > this.threatTier(handed) ? own : handed;
+  }
+
   /** How much of a threat a target is to a creep, for target selection: armed
-   *  units (incl. heroes) rank above helpless units, which rank above buildings.
+   *  units (incl. heroes) rank above helpless units, which rank above buildings,
+   *  which rank above the workers and wards of lowPriorityTarget.
    *  Creeps "attack enemy units first" instead of chewing a structure while an
    *  army stands on them. Same tier → distance breaks the tie (see bestCreepTarget). */
   private threatTier(t: SimUnit): number {
-    if (t.building) return 0; // structures last
-    if (t.weapon) return 2; // armed units / heroes first
-    return 1; // unarmed units (workers) in between
+    if (this.lowPriorityTarget(t)) return 0; // workers and wards dead last
+    if (t.building) return 1; // structures next
+    if (t.weapon) return 3; // armed units / heroes first
+    return 2; // unarmed units in between
   }
 
   /** Highest-threat hostile within `range` for a creep — the biggest threat tier,
    *  nearest within that tier. This is what makes a camp focus the real threat
-   *  rather than the nearest thing. */
+   *  rather than the nearest thing, and — through the bottom tier — what stops it
+   *  focusing the Peasant or the Serpent Ward standing in front of the real thing. */
   private bestCreepTarget(u: SimUnit, range: number): SimUnit | null {
     let best: SimUnit | null = null;
     let bestTier = -1;
@@ -12002,8 +12055,12 @@ export class SimWorld {
     // so it would otherwise be the one automatic path that could give a wind-walking hero
     // away without the player asking for it.
     const passive = target.isPeon || this.harvesting(target) || target.cloaked;
-    if (notFighting && target.weapon && !passive && !target.returning && attacker && this.hostile(target, attacker) && attacker.id !== target.targetId) {
-      this.issueAttack(target.id, attackerId);
+    if (notFighting && target.weapon && !passive && !target.returning && attacker && this.hostile(target, attacker)) {
+      // A creep hit by a WARD (or by a worker) returns fire on whatever it can see that
+      // outranks the thing that hit it — see creepTargetOver. A Serpent Ward's whole job is
+      // to be shot at instead of the army that planted it.
+      const foe = target.isCreep ? this.creepTargetOver(target, attacker) : attacker;
+      if (foe.id !== target.targetId) this.issueAttack(target.id, foe.id);
     }
     // Creep "call for help" (Battle.net creep basics): attacking one creep rallies
     // its whole camp — every camp-mate within CREEP_CALL_FOR_HELP aggros the
@@ -13400,10 +13457,23 @@ export class SimWorld {
       if (u.acquireT <= 0) {
         u.acquireT = ACQUIRE_PERIOD;
         const cur = this.units.get(u.targetId!)!;
-        const best = this.bestCreepTarget(u, u.aggroRange);
-        if (best && best.id !== cur.id && this.threatTier(best) > this.threatTier(cur)) {
-          this.issueAttack(u.id, best.id);
-          u.campHelper = false; // picked this one out of its own aggro range
+        // ...unless it is already TRADING BLOWS with a WORKER. Ranking workers last decides
+        // what a creep PICKS; a fight it has already closed on and is swinging at is not
+        // re-opened, or a camp mobbing the Peasant that pulled it would walk off him the
+        // moment the army it fetched arrived, and the worker it had all but killed would live.
+        // `inCombat` (in the strike band, per engage) is the line: still walking over is
+        // still choosing, and that one does upgrade.
+        //
+        // A WARD gets no such stay of execution, and that asymmetry is the point of it: a
+        // worker is a real kill the camp is most of the way through, while a Serpent Ward is
+        // bait — standing there trading with it while the Riflemen shoot is precisely the
+        // thing the ward was planted to buy.
+        if (!(u.inCombat && cur.isPeon)) {
+          const best = this.bestCreepTarget(u, u.aggroRange);
+          if (best && best.id !== cur.id && this.threatTier(best) > this.threatTier(cur)) {
+            this.issueAttack(u.id, best.id);
+            u.campHelper = false; // picked this one out of its own aggro range
+          }
         }
       }
       if (dist >= MAX_GUARD_DISTANCE) {
@@ -13612,8 +13682,12 @@ export class SimWorld {
       if (!this.sameCamp(c, u)) continue;
       c.asleep = false; // rouse the camp
       if (c.order === "idle" && c.weapon && this.hostile(c, target)) {
-        this.issueAttack(c.id, target.id);
-        c.campHelper = true; // came for a camp-mate's shout — must not relay it
+        const t = this.creepTargetOver(c, target); // a shout about a Peasant doesn't blind it
+        this.issueAttack(c.id, t.id);
+        // Only a creep that took the shouter's word for it is a helper. One that looked up and
+        // picked something better found it inside its OWN aggro range, which is exactly what
+        // makes a creep an originator in tickAcquire — so it may shout in its turn.
+        c.campHelper = t === target;
       }
     }
   }
