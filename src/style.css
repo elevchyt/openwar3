@@ -688,8 +688,9 @@ body.in-game .menu-panel { display: none; }
 }
 
 /* --- Hero bar (issue #95): your heroes stacked down the top-left corner, each an icon
-   with an HP and a mana bar under it. Every length comes from ui/hud.ts HERO_BAR, which
-   measured them off the real client; nothing here picks a size of its own.
+   with an HP and a mana bar under it. ui/hud.ts hands the widget exactly one size — the
+   slot width, measured off the real client — and every length below is a fraction of it,
+   so the bar scales as a piece and nothing here picks a size of its own.
 
    The offsets are the HUD's own corner, which IS the game's frame: in a match #ui is the
    16:9 stage box and carries a transform, so .hud's `position: fixed` resolves against that
@@ -704,8 +705,19 @@ body.in-game .menu-panel { display: none; }
   gap: var(--hero-gap);
   pointer-events: none; /* only the buttons take the mouse */
   z-index: 4;
+
+  /* ONE size drives the widget: hud.ts hands us --hero-slot (the slot's width) and every
+     other length here is a fraction of it, so the icon and the bars under it are exactly as
+     wide as each other and the whole bar rescales from that single number. The denominators
+     are the reference shot's own pixels (72-wide bars, 17 tall, 1 px under the icon, 8 px
+     between slots) — the proportions are the client's even where the size isn't. */
+  --hero-btn: var(--hero-slot); /* the icon is square and fills the slot's width */
+  --hero-bars-w: var(--hero-slot); /* …and the HP/mana block is exactly as wide */
+  --hero-bars: calc(var(--hero-slot) * 17 / 72);
+  --hero-bar-gap: calc(var(--hero-slot) / 72); /* icon bottom → bars top */
+  --hero-gap: calc(var(--hero-slot) * 8 / 72); /* between two slots: NOT measured (see hud.ts) */
 }
-.hud-hero-slot { width: var(--hero-bars-w); }
+.hud-hero-slot { width: var(--hero-slot); }
 /* The frame around the icon. `war3skins.txt` names one (HeroBarBorder =
    human-hero-border.blp) that is NOT in the 1.27a archives at all, so the real client
    falls back to its built-in grey bevel — a dark hairline, a light inner ring — which is

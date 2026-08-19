@@ -481,20 +481,21 @@ const STATBAR_FILL = "UI\\Feedback\\HPBarConsole\\human-healthbar-fill.blp";
  * so the bar scales with the window like the rest of the console.
  *
  * The one number NOT in that shot is the gap between two buttons — it holds a single hero.
- * `HERO_BAR.gap` is eyeballed to keep the stack reading as separate buttons.
+ * The stack gap below is eyeballed to keep the stack reading as separate buttons.
+ *
+ * **One slot, one number.** The icon and the bars under it are the SAME width — they share
+ * the slot, so their edges line up — and every other length in the widget (bar heights, the
+ * frame bevel, the stack pitch) is a fraction of that one width, written out in `style.css`
+ * against the measured 72 px. So `HERO_BAR.slot` is the only knob: change it and the whole
+ * hero bar scales as a piece. The reference bars are 72 px wide and its button 68; we draw
+ * the slot at 76 so the portrait reads a little bigger than the real client's (a deliberate,
+ * developer-asked deviation — the one place this widget departs from the shot).
  */
 const HERO_PX = UI_HEIGHT / 1080; // one screen pixel of the reference capture, in world units
 const HERO_BAR = {
   left: 3 * HERO_PX,
   top: 0.032 + 2 * HERO_PX, // clear of the upper button bar's strip (ConsoleUI.fdf: 0.032 tall)
-  // 68 px is what the reference shot measures; we draw the portrait a touch bigger (76 px)
-  // on purpose — a deliberate, developer-asked deviation. Only the icon grows: `bars`/
-  // `barsWidth` below stay at the measured 72 × 17 so the HP/mana block is untouched.
-  button: 76 * HERO_PX, // the icon + its frame (square)
-  bars: 17 * HERO_PX, // the HP/mana block under it
-  barsWidth: 72 * HERO_PX,
-  barGap: 1 * HERO_PX, // button bottom → bars top
-  gap: 8 * HERO_PX, // between two buttons: NOT measured (see above)
+  slot: 76 * HERO_PX, // icon width = bars width = the slot; everything else scales off it
   max: 7, // the most buttons the real bar holds
 } as const;
 
@@ -1615,11 +1616,7 @@ export class GameHud {
     const px = (v: number): string => `calc(var(--stage-h) * ${v / UI_HEIGHT})`;
     bar.style.setProperty("--hero-left", px(HERO_BAR.left));
     bar.style.setProperty("--hero-top", px(HERO_BAR.top));
-    bar.style.setProperty("--hero-btn", px(HERO_BAR.button));
-    bar.style.setProperty("--hero-bars", px(HERO_BAR.bars));
-    bar.style.setProperty("--hero-bars-w", px(HERO_BAR.barsWidth));
-    bar.style.setProperty("--hero-bar-gap", px(HERO_BAR.barGap));
-    bar.style.setProperty("--hero-gap", px(HERO_BAR.gap));
+    bar.style.setProperty("--hero-slot", px(HERO_BAR.slot)); // the widget's ONE size (see HERO_BAR)
     for (let i = 0; i < HERO_BAR.max; i++) {
       const slot = document.createElement("div");
       slot.className = "hud-hero-slot";
