@@ -109,7 +109,9 @@ export class TextTagOverlay {
       // WC3 anchors a text tag at its BOTTOM-LEFT — the text grows right and up from the
       // point it was given. Every "centre my damage number" snippet in the wild subtracts
       // half its own width precisely because the engine does not, so we must not either.
-      el.style.transform = `translate(${p.x + dx}px, ${p.y - dy}px) translateY(-100%)`;
+      // The engine's OWN combat text is the exception, and centres (TextTagObj.centered).
+      const centre = tt.centered ? " translateX(-50%)" : "";
+      el.style.transform = `translate(${p.x + dx}px, ${p.y - dy}px) translateY(-100%)${centre}`;
       el.style.fontSize = `${Math.max(1, tt.size * ctx.uiScale)}px`;
       el.style.color = cssColor(tt.color);
       el.style.opacity = String(alpha);
@@ -135,6 +137,88 @@ export class TextTagOverlay {
     this.root.remove();
   }
 }
+
+/**
+ * The ENGINE's own floating combat text, as opposed to the script's `texttag`s above.
+ *
+ * WC3 raises two of these off its combat resolution, with no trigger anywhere in sight — the
+ * red "127!" a Critical Strike leaves over the unit it struck, and the "!" a deny leaves in
+ * the dead unit's owner colour (see `CombatText` in src/sim/world.ts). They are the same KIND
+ * of object as a script's text tag and are drawn by the same overlay; what differs is who
+ * owns them. So this holds them in the identical `TextTagObj` shape, ages them by the same
+ * rule `Runtime.advanceTextTags` uses, and hands the list to `TextTagOverlay.update` merged
+ * with the script's — which is also why a melee match, where no script is listening and
+ * `rt.textTags` is empty forever, still shows a Blademaster's crits.
+ *
+ * Handle ids are NEGATIVE. The overlay keys its live elements by `handleId` and the JASS
+ * handle pool only ever mints positives, so the two namespaces cannot collide.
+ */
+export class CombatTextTags {
+  private tags: TextTagObj[] = [];
+  private nextId = -1;
+
+  /** Raise one piece of combat text over a world point. `followUnit` (> 0) makes it ride the
+   *  unit, which is what a crit number does; a deny's victim is already dead, so it stays put. */
+  spawn(t: { text: string; color: number; x: number; y: number; z: number; followUnit: number }): void {
+    // A brawl can raise these faster than they expire; cap the list rather than let a
+    // long-running match accumulate DOM for text nobody is reading.
+    if (this.tags.length >= MAX_COMBAT_TAGS) this.tags.splice(0, this.tags.length - MAX_COMBAT_TAGS + 1);
+    this.tags.push({
+      handleId: this.nextId--,
+      text: t.text,
+      x: t.x,
+      y: t.y,
+      z: t.z,
+      size: COMBAT_TEXT_HEIGHT,
+      color: t.color,
+      visible: true,
+      permanent: false,
+      lifespan: COMBAT_TEXT_LIFESPAN,
+      fadepoint: COMBAT_TEXT_FADEPOINT,
+      age: 0,
+      velX: 0,
+      velY: COMBAT_TEXT_RISE,
+      offsetX: 0,
+      offsetY: 0,
+      suspended: false,
+      followUnit: t.followUnit > 0 ? t.followUnit : -1,
+      dead: false,
+      centered: true, // the client centres a crit number over the unit's head
+    });
+  }
+
+  /** Age and retire, off the SIM clock — so a paused game leaves the numbers hanging exactly
+   *  where they are, the same contract `Runtime.advanceTextTags` keeps for a script's tags. */
+  advance(dt: number): void {
+    for (let i = this.tags.length - 1; i >= 0; i--) {
+      const tt = this.tags[i];
+      tt.age += dt;
+      tt.offsetY += tt.velY * dt;
+      if (tt.age >= tt.lifespan) this.tags.splice(i, 1);
+    }
+  }
+
+  /** The live tags, for merging into the overlay's frame. */
+  get live(): ReadonlyArray<TextTagObj> {
+    return this.tags;
+  }
+
+  clear(): void {
+    this.tags = [];
+  }
+}
+
+// The look, in Blizzard.j's own units so it reads the way the game states it (Blizzard.j
+// 6086-6099): `TextTagSize2Height` scales a font SIZE linearly such that size 10 is a screen
+// height of 0.023, and `TextTagSpeed2Velocity` scales a SPEED such that 128 is 0.071 — both
+// screen-relative, in the 0.8x0.6 UI space, which is why the text climbs the screen at a fixed
+// rate instead of travelling north through the world. Size and speed are matched to the
+// client's crit number by eye; the conversions are the game's.
+const COMBAT_TEXT_HEIGHT = (10 * 0.023) / 10; // font size 10
+const COMBAT_TEXT_RISE = (64 * 0.071) / 128; // speed 64, straight up
+const COMBAT_TEXT_LIFESPAN = 1.2; // seconds on screen
+const COMBAT_TEXT_FADEPOINT = 0.6; // ...of which the last 0.6s fades out
+const MAX_COMBAT_TAGS = 64;
 
 /** How opaque a tag is right now. A PERMANENT tag never fades. Otherwise it holds full
  *  strength until its fadepoint, then fades linearly to nothing at its lifespan — the

@@ -1,4 +1,4 @@
-import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning } from "../sim/world";
+import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning, type CombatText } from "../sim/world";
 
 /**
  * What one client is TOLD about the world (docs/multiplayer.md Phase E item 5).
@@ -390,9 +390,12 @@ export interface FxSnapshot {
   castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string; x: number; y: number }>;
   /** Casts whose effect fired (`drainCastFires`): the ability's cast sound. */
   castFires: Array<{ casterId: number; code: string; abilityId: string; x: number; y: number }>;
+  /** Engine floating combat text (`drainCombatTexts`) — a Critical Strike's red number, a
+   *  deny's "!". Already carries its own `x`/`y` (the AoI test), so nothing is added here. */
+  texts: CombatText[];
 }
 
-export const EMPTY_FX: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [] };
+export const EMPTY_FX: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };
 
 /** A corpse, whole — `SimCorpse` is already the client-safe subset (identity, pose, the
  *  decay clock, the raised latch a render corpse hides on). Crossing it as STATE is what
@@ -836,5 +839,5 @@ export function snapshotFor(
   // sim keeps mutating while the message waits to serialize.
   const stash = world.stashOf(recipient);
   const research = Object.fromEntries(world.tech?.researchedBy(recipient) ?? []);
-  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, projectiles, corpses, fx: { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [] }, deaths: [], commands };
+  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, projectiles, corpses, fx: { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] }, deaths: [], commands };
 }

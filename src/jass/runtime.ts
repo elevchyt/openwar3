@@ -62,6 +62,12 @@ export interface TextTagObj {
   suspended: boolean;
   followUnit: number; // sim id of the unit it tracks (SetTextTagPosUnit), or -1
   dead: boolean; // DestroyTextTag'd (or expired) — the renderer should drop it
+  /** Draw the text CENTRED on its anchor instead of growing right from it. Never set on a
+   *  script's tag — the natives anchor bottom-left and every "centre my damage number"
+   *  snippet in the wild subtracts half its own width because of it. It is set on the text
+   *  the ENGINE raises for itself (a crit number, a deny mark — see CombatTextTags), which
+   *  the real client centres over the unit's head. */
+  centered?: boolean;
 }
 
 /** One button of a JASS `dialog` (DialogAddButton / DialogAddQuitButton). The engine

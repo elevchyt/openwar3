@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning } from "../sim/world";
+import { SimWorld, weaponsFromDef, isOffField, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -2819,17 +2819,22 @@ export class RtsController {
       const fxLs = this.sim.drainLightningStops();
       const fxCs = this.sim.drainCastStarts();
       const fxCf = this.sim.drainCastFires();
+      const fxT = this.sim.drainCombatTexts();
       if (fxE.length) this.fxEffects.push(...fxE);
       if (fxS.length) this.fxSplats.push(...fxS);
       if (fxL.length) this.fxLightnings.push(...fxL);
       if (fxLs.length) this.fxLightningStops.push(...fxLs);
       if (fxCs.length) this.fxCastStarts.push(...fxCs);
       if (fxCf.length) this.fxCastFires.push(...fxCf);
-      if (this.matchLinkIsHost && this.matchLink && (fxE.length || fxS.length || fxL.length || fxLs.length || fxCs.length || fxCf.length)) {
+      if (fxT.length) this.fxCombatTexts.push(...fxT);
+      if (this.matchLinkIsHost && this.matchLink && (fxE.length || fxS.length || fxL.length || fxLs.length || fxCs.length || fxCf.length || fxT.length)) {
         this.wireFx.effects.push(...fxE);
         this.wireFx.splats.push(...fxS);
         this.wireFx.lightnings.push(...fxL);
         this.wireFx.lightningStops.push(...fxLs);
+        // Combat text needs no enrichment on the way out: the sim already stamped each one
+        // with where it happened, which is both the anchor and the recipients' AoI test.
+        this.wireFx.texts.push(...fxT);
         // The wire copy of a cast carries the CASTER's position — the AoI test each
         // recipient's filter runs; the sim's event names only the caster.
         for (const c of fxCs) {
@@ -4983,6 +4988,7 @@ export class RtsController {
       this.fxLightningStops.push(...(fx.lightningStops ?? []));
       this.fxCastStarts.push(...fx.castStarts);
       this.fxCastFires.push(...fx.castFires);
+      this.fxCombatTexts.push(...(fx.texts ?? []));
     }
     // Which absences are DEATHS: consumed by the removal drain this same tick (`tick`),
     // which routes them through `onDeath` — collapse animation, death cry, corpse —
@@ -5111,7 +5117,8 @@ export class RtsController {
   private fxLightningStops: string[] = [];
   private fxCastStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string }> = [];
   private fxCastFires: Array<{ casterId: number; code: string; abilityId: string }> = [];
-  private wireFx: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [] };
+  private fxCombatTexts: CombatText[] = [];
+  private wireFx: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };
   drainFxEffects(): typeof this.fxEffects {
     if (this.fxEffects.length > 400) this.fxEffects.splice(0, this.fxEffects.length - 400);
     if (!this.fxEffects.length) return this.fxEffects;
@@ -5150,12 +5157,19 @@ export class RtsController {
     this.fxCastFires = [];
     return out;
   }
+  drainFxCombatTexts(): CombatText[] {
+    if (this.fxCombatTexts.length > 200) this.fxCombatTexts.splice(0, this.fxCombatTexts.length - 200);
+    if (!this.fxCombatTexts.length) return this.fxCombatTexts;
+    const out = this.fxCombatTexts;
+    this.fxCombatTexts = [];
+    return out;
+  }
   /** Hand the wire its buffered presentation events (`HostSources.drainFx`). Swap-and-return
    *  so the ~60 Hz caller allocates only when something actually happened. */
   private takeWireFx(): FxSnapshot {
     const out = this.wireFx;
-    if (!out.effects.length && !out.splats.length && !out.lightnings.length && !out.lightningStops.length && !out.castStarts.length && !out.castFires.length) return out;
-    this.wireFx = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [] };
+    if (!out.effects.length && !out.splats.length && !out.lightnings.length && !out.lightningStops.length && !out.castStarts.length && !out.castFires.length && !out.texts.length) return out;
+    this.wireFx = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };
     return out;
   }
 

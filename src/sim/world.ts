@@ -2,7 +2,7 @@ import { BUILD_CELL, PATHING_CELL, footprintCells, type PathDomain, type Pathing
 import { findPath, smoothPath } from "./pathfind";
 import { targsKindError } from "./targeting";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
-import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { slotMissileArt, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
@@ -201,6 +201,34 @@ export interface SimLightning {
    *  `drain:<casterId>` and the sim asks the renderer to cut it (`drainLightningStops`).
    *  A bolt with no tag simply lives out its `life`. */
   tag?: string;
+}
+
+/**
+ * One piece of floating COMBAT text — the world-space number the engine itself puts over a
+ * unit, as opposed to the `texttag` a script asks for with CreateTextTag (7.19). WC3 raises
+ * two of these off its own combat resolution and neither is scriptable:
+ *
+ *  • `crit` — a Critical Strike's blow, drawn in red as the damage dealt with an exclamation
+ *    mark after it ("127!"), over the unit that was struck. It follows the victim.
+ *  • `deny` — a bare "!" over one of YOUR OWN or an ALLY's units that a friendly killed, in
+ *    the colour of the player the dead unit belonged to. It is why a deny reads as a deny.
+ *
+ * The colour of a deny is a SLOT, not an RGB: `SetPlayerColor` can move a slot's colour under
+ * the match (see RtsController.playerColor), and the sim does not track that — the client
+ * resolves it against the same palette the minimap dots and the cinematic speaker names use.
+ * `x`/`y` is where it happened: the anchor for a deny (whose unit is already gone by the time
+ * anyone draws it) and the area-of-interest test the host filters recipients by.
+ */
+export interface CombatText {
+  kind: "crit" | "deny";
+  /** The unit the text floats over, and follows. 0 for a deny — the victim is dead. */
+  unitId: number;
+  x: number;
+  y: number;
+  text: string;
+  /** `deny` only: the slot whose COLOUR the "!" wears (the dead unit's owner). -1 for a crit,
+   *  which is red for everyone. */
+  colorSlot: number;
 }
 
 /** A unit type's weapon slots as the sim wants them (see WeaponSlotDef for the data behind
@@ -1988,6 +2016,10 @@ export class SimWorld {
   // cast START — WC3 syncs the sound to the effect at the cast point (issue #23), and
   // an interrupted wind-up (which never reaches here) correctly makes no sound.
   private castFires: Array<{ casterId: number; code: string; abilityId: string }> = [];
+  // Floating COMBAT text the engine raises by itself — a Critical Strike's red "127!" and a
+  // deny's "!" (see CombatText). Not a script's CreateTextTag: no trigger is involved, and it
+  // must appear in a melee match where nothing is listening.
+  private combatTexts: CombatText[] = [];
   // Heroes that just gained a level: renderer plays the level-up nova + sound.
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
@@ -9390,6 +9422,13 @@ export class SimWorld {
     this.castFires = [];
     return out;
   }
+  /** Floating combat text raised this frame — a crit's red number, a deny's "!" (CombatText). */
+  drainCombatTexts(): CombatText[] {
+    if (!this.combatTexts.length) return this.combatTexts;
+    const out = this.combatTexts;
+    this.combatTexts = [];
+    return out;
+  }
   /** Heroes that leveled up this frame (renderer plays the level-up nova). */
   drainLevelUps(): Array<{ unitId: number; level: number }> {
     if (!this.levelUps.length) return this.levelUps;
@@ -11202,6 +11241,13 @@ export class SimWorld {
     const orb = this.resolveOrb(attacker, target);
     this.applyOrbArmorFirst(attacker, target, orb);
     const dealt = this.applyDamage(target, raw, attacker.id, w.attackType, w.weaponSound);
+    // The crit's own tell: WC3 prints the blow over the victim in red with an exclamation
+    // mark ("127!"), and it is the DAMAGE DEALT — what the health bar actually loses, after
+    // armour — not the pre-mitigation roll. Nothing lands, nothing is printed: a swing the
+    // target was invulnerable to (or that an evade ate before this) shows no number.
+    if (attacker.swingCrit && dealt > 0) {
+      this.combatTexts.push({ kind: "crit", unitId: target.id, x: target.x, y: target.y, text: `${Math.round(dealt)}!`, colorSlot: -1 });
+    }
     // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
     if (dealt > 0) this.applyCleave(attacker, target, raw);
     // Vampiric Aura: the attacker heals for a fraction of the melee damage dealt.
@@ -11747,37 +11793,62 @@ export class SimWorld {
     return dmg * (1 - share) + per; // target keeps the unshared part + its own slice
   }
 
+  /** The Critical Strike level-data the unit carries, from EITHER row the effect ships as —
+   *  the Blademaster's AOcr or the Pandaren Brewmaster's ANdb (Drunken Brawler), which the
+   *  meta table declares as one field group (see isCriticalStrikeCode). A unit is not
+   *  expected to hold both; the first one found wins. */
+  private criticalStrikeLevel(u: SimUnit): AbilityLevel | null {
+    if (!this.abilities) return null;
+    for (const ab of u.abilities) {
+      if (ab.level < 1 || !isCriticalStrikeCode(ab.code)) continue;
+      const def = this.abilities.get(ab.id);
+      const lvl = def?.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      if (lvl) return lvl;
+    }
+    return null;
+  }
+
   /**
-   * Critical Strike (AOcr): roll dataA "Chance to Critical Strike" for a swing about to
-   * begin. Rolled at the swing's START, not at the blow, so the strike can animate as one
+   * Critical Strike (AOcr / ANdb): roll dataA "Chance to Critical Strike" for a swing about
+   * to begin. Rolled at the swing's START, not at the blow, so the strike can animate as one
    * (see swingCrit/swingSlam); dealDamage spends the result via applyCriticalStrike.
    *
    * dataA is a PERCENT, not a fraction: AbilityMetaData.slk gives Ocr1 `data=1` (→ dataA)
-   * with `maxVal=100`, and AOcr carries DataA1..4 = 15 — the Blademaster's 15%. Note the
-   * sibling field Ocr4 "Chance to Evade" (data=4) has `maxVal=1` and AEev stores 0.1, so
-   * the two conventions genuinely differ within one table; read the meta, don't assume.
+   * with `maxVal=100`, and AOcr carries DataA1..4 = 15 — the Blademaster's 15% (ANdb carries
+   * 10). Note the sibling field Ocr4 "Chance to Evade" (data=4) has `maxVal=1` and AEev
+   * stores 0.1, so the two conventions genuinely differ within one table; read the meta,
+   * don't assume — and Drunken Brawler carries BOTH fields, which is what makes it one
+   * ability rather than a crit bolted to an evasion (see tryEvade).
    */
   private rollCriticalStrike(u: SimUnit): boolean {
-    const lvl = this.passiveLevelData(u, "AOcr");
+    const lvl = this.criticalStrikeLevel(u);
     if (!lvl) return false;
     const chance = this.dataOf(lvl, 0) / 100; // dataA — "Chance to Critical Strike" (%)
     return chance > 0 && this.rng() < chance;
   }
 
-  /** Critical Strike (AOcr): multiply a swing the roll already marked as a crit by dataB
-   *  "Damage Multiplier" (AOcr DataB1..4 = 2/3/4/4 — the Blademaster's x2/x3/x4). */
+  /** Critical Strike (AOcr / ANdb): multiply a swing the roll already marked as a crit by
+   *  dataB "Damage Multiplier" (AOcr DataB1..4 = 2/3/4/4 — the Blademaster's x2/x3/x4; ANdb
+   *  carries the same 2/3/4 for Drunken Brawler). */
   private applyCriticalStrike(attacker: SimUnit, damage: number): number {
     if (!attacker.swingCrit) return damage;
-    const lvl = this.passiveLevelData(attacker, "AOcr");
+    const lvl = this.criticalStrikeLevel(attacker);
     if (!lvl) return damage;
     return damage * this.dataOf(lvl, 1, 2); // dataB — damage multiplier
   }
 
-  /** Evasion (AEev): dataA chance for the DEFENDER to dodge a physical attack. */
+  /** Evasion: dataA chance for the DEFENDER to dodge a physical attack.
+   *
+   *  Two rows, two field layouts, because they are two different abilities that happen to
+   *  share an effect: the Demon Hunter's Evasion (AEev) IS the dodge, so it sits in dataA
+   *  (0.1/0.2/0.3); Drunken Brawler (ANdb) is a Critical Strike row whose dodge rides the
+   *  Ocr4 "Chance to Evade" field, i.e. dataD (0.07/0.14/0.21). Both are FRACTIONS —
+   *  AbilityMetaData gives Ocr4 `maxVal=1`, unlike the crit chance next to it. */
   private tryEvade(target: SimUnit): boolean {
-    const lvl = this.passiveLevelData(target, "AEev");
-    if (!lvl) return false;
-    const chance = this.dataOf(lvl, 0); // dataA — evasion chance
+    const evasion = this.passiveLevelData(target, "AEev");
+    const brawler = evasion ? null : this.criticalStrikeLevel(target);
+    // A Blademaster falls through to here too and correctly dodges nothing: AOcr's dataD is 0.
+    const chance = evasion ? this.dataOf(evasion, 0) : brawler ? this.dataOf(brawler, 3) : 0;
     return chance > 0 && this.rng() < chance;
   }
 
@@ -12096,6 +12167,20 @@ export class SimWorld {
     // Reincarnation (Tauren Chieftain / Elder Sage, AOre): a fatal blow instead
     // revives the hero in place, on a long cooldown (stored on the ability).
     if (this.tryReincarnate(u)) return;
+    // A DENY: this unit was killed by its own side. WC3 marks it with a bare "!" floating up
+    // from the body in the colour of the player who owned it — the tell that the kill was
+    // taken away from the enemy rather than earned by them, and the only feedback the engine
+    // gives for it. Raised here, above every other death consequence, because the victim's
+    // record is about to be picked apart (and, further down, deleted).
+    //
+    // Both sides must be real player slots: a creep camp cutting down one of its own is not a
+    // deny, and neither is anything Neutral Passive (`hostile` already answers false for a
+    // shop or a critter, which would otherwise make every dead sheep flash a mark). The
+    // killer must not be the victim — a unit that blows itself up denied nobody.
+    const denier = killerId ? this.units.get(killerId) : undefined;
+    if (denier && denier.id !== u.id && u.owner >= 0 && denier.owner >= 0 && !this.hostile(denier, u)) {
+      this.combatTexts.push({ kind: "deny", unitId: 0, x: u.x, y: u.y, text: "!", colorSlot: u.owner });
+    }
     this.deathBlast(u); // `Adda` — goblin land mines and sappers take the neighbours with them
     this.orbDeathEffects(u); // Black Arrow raises its minion, Incinerate goes off
     this.refundPendingBuild(u); // died before its building went up → refund the cost

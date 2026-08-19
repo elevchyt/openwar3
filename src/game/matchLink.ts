@@ -455,6 +455,7 @@ export class MatchLink {
       this.fxBuf.lightningStops.push(...fx.lightningStops);
       this.fxBuf.castStarts.push(...fx.castStarts);
       this.fxBuf.castFires.push(...fx.castFires);
+      this.fxBuf.texts.push(...fx.texts);
       if (this.fxBuf.effects.length > 512) this.fxBuf.effects.splice(0, this.fxBuf.effects.length - 512);
     }
     const deaths = sources.drainDeaths?.();
@@ -483,6 +484,7 @@ export class MatchLink {
           lightningStops: this.fxBuf.lightningStops,
           castStarts: this.fxBuf.castStarts.filter((e) => !viewer.fogBlocksAt(e)),
           castFires: this.fxBuf.castFires.filter((e) => !viewer.fogBlocksAt(e)),
+          texts: this.fxBuf.texts.filter((e) => !viewer.fogBlocksAt(e)),
         };
       }
       // Deaths ride EVERY send — the record's absence does too, and the death must never
@@ -497,7 +499,7 @@ export class MatchLink {
       this.emitted++;
     }
     if (due) {
-      this.fxBuf = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [] };
+      this.fxBuf = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };
       this.deathBuf = [];
     }
     // Cleared whether or not a seat was found for them: an unseated peer is a routing bug to
@@ -506,7 +508,7 @@ export class MatchLink {
     return sent;
   }
 
-  private fxBuf: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [] };
+  private fxBuf: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };
   private deathBuf: Array<{ id: number; x: number; y: number }> = [];
 
   /**
@@ -552,6 +554,7 @@ export class MatchLink {
       this.pendingFx.lightningStops.push(...(fx.lightningStops ?? []));
       this.pendingFx.castStarts.push(...fx.castStarts);
       this.pendingFx.castFires.push(...fx.castFires);
+      this.pendingFx.texts.push(...(fx.texts ?? []));
       // Same cap as the host's send buffer: a wedged consumer must not grow this forever.
       if (this.pendingFx.effects.length > 512) this.pendingFx.effects.splice(0, this.pendingFx.effects.length - 512);
     }
@@ -560,14 +563,14 @@ export class MatchLink {
     for (const d of snap.deaths ?? []) this.pendingDeaths.set(d.id, d);
   }
 
-  private pendingFx: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [] };
+  private pendingFx: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };
   private readonly pendingDeaths = new Map<number, { id: number; x: number; y: number }>();
 
   /** Client side: every fx event received since the last take, across ALL payloads —
    *  the applier consumes this alongside applying `latest()`. */
   takeFx(): FxSnapshot {
     const out = this.pendingFx;
-    this.pendingFx = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [] };
+    this.pendingFx = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };
     return out;
   }
 

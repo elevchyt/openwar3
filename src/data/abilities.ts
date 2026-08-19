@@ -18,6 +18,21 @@ export function isRepairCode(code: string): boolean {
   return code === "Arep" || code === "Arst" || code === "Aren";
 }
 
+/** The base codes CRITICAL STRIKE ships as. One behaviour, two rows — and the sibling
+ *  aliases fold into them for free, because AbilityData.slk gives each clone the base row's
+ *  `code`: "Critical Strike (creep)" (ACct) and "Critical Strike (item)" (AIcs) both carry
+ *  `code=AOcr`, and Chen's campaign Drunken Brawler (Acdb) carries `code=ANdb`.
+ *
+ *  Why they are one implementation rather than two: AbilityMetaData.slk hands both rows the
+ *  SAME field group — `Ocr1..Ocr6` are declared `useSpecific=AOcr,ACct,ANdb` — so dataA is
+ *  "Chance to Critical Strike" (a percent, maxVal=100), dataB the damage multiplier and dataD
+ *  "Chance to Evade" (a fraction, maxVal=1) on the Brewmaster exactly as on the Blademaster.
+ *  Drunken Brawler is Critical Strike with the evasion half switched on:
+ *  AOcr = 15% × 2/3/4, ANdb = 10% × 2/3/4 with a 7/14/21% dodge. */
+export function isCriticalStrikeCode(code: string): boolean {
+  return code === "AOcr" || code === "ANdb";
+}
+
 /** How an ability is aimed. Derived from its `code` (see KNOWN_ABILITIES). */
 export type TargetType = "none" | "unit" | "point" | "passive";
 

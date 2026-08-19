@@ -57,7 +57,7 @@ import { ModelViewerScene } from "./modelViewer";
 import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { wc3ToPlain } from "../ui/wc3Text";
-import { GameHud, isTyping, upkeepBand, type HudDriver, type CommandButton } from "../ui/hud";
+import { GameHud, isTyping, upkeepBand, PLAYER_COLORS, type HudDriver, type CommandButton } from "../ui/hud";
 import { GAME_WIDTH, GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
 import { UI_HEIGHT } from "../ui/fdf/layout";
 import { MatchOverDialog } from "../ui/gameMenu";
@@ -78,7 +78,7 @@ import { MultiboardOverlay } from "../ui/multiboard";
 import { TimerDialogOverlay } from "../ui/timerDialog";
 import { CinematicPanelOverlay } from "../ui/cinematicPanel";
 import { ScriptCamera, type CameraState } from "./scriptCamera";
-import { TextTagOverlay, type TextTagContext } from "./textTags";
+import { CombatTextTags, TextTagOverlay, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
 import { loadTechRegistry, type TechRegistry } from "../data/techtree";
@@ -156,6 +156,17 @@ function randomSeed(): number {
 
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
 const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // hero level-up nova
+// Floating combat text (see CombatTextTags). A crit's number is red for EVERYONE — it is not a
+// player colour and must not be read as one, even though it happens to be the same red the
+// palette gives slot 0. `Z` lifts the text off the victim's feet to roughly over its head; the
+// overlay adds the terrain and, for a flier, its altitude, so one offset serves ground and air.
+const CRIT_TEXT_COLOR = 0xffff0303;
+const COMBAT_TEXT_Z = 100;
+
+/** "#rrggbb" → the 0xAARRGGBB a text tag carries, opaque. */
+function argbOf(css: string): number {
+  return (0xff000000 | parseInt(css.slice(1), 16)) >>> 0;
+}
 /** The shop indicator: the team-coloured arrow over whoever will receive the next purchase.
  *  `Targetattach=overhead` in the ability data, hence the attach token. See collectShopArrows
  *  for why this is AneuTarget and not the AneuCaster the data names first. */
@@ -846,6 +857,10 @@ export class MapViewerScene {
   onLocalVictory: (() => void) | null = null;
   // --- the trigger's on-screen output (7.19) ---
   private textTags: TextTagOverlay | null = null; // CreateTextTag, drawn in the world
+  // The ENGINE's own floating combat text — a Critical Strike's red "127!", a deny's "!".
+  // Drawn by the overlay above but owned here, because no script is involved: it must work in
+  // a melee match, where `rt.textTags` stays empty for the whole game.
+  private readonly combatText = new CombatTextTags();
   private leaderboard: LeaderboardOverlay | null = null; // CreateLeaderboard, top-right
   private multiboard: MultiboardOverlay | null = null; // CreateMultiboard — the grid scoreboard (7.22)
   private timerDialogs: TimerDialogOverlay | null = null; // CreateTimerDialog — the countdown windows (7.21)
@@ -2703,6 +2718,7 @@ export class MapViewerScene {
     // belongs in the world layer — the leaderboard/multiboard/timers below are SCREEN-anchored
     // UI and belong in #ui, which CSS has already fitted to the same stage.
     this.textTags = new TextTagOverlay(worldLayer());
+    this.combatText.clear(); // last match's numbers are not this one's
     this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin, (p) => this.rts?.playerColor(p) ?? p);
     this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
     this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
@@ -2743,19 +2759,35 @@ export class MapViewerScene {
     }
   }
 
-  /** Drive the script's on-screen output for this frame. Runs on the RENDER clock (a text
-   *  tag must keep tracking its unit and the camera while the game is paused), while its
-   *  ageing/drift/expiry run on the SIM tick inside the interpreter — so a paused game
-   *  leaves the text hanging exactly where it was rather than freezing it off-screen. */
+  /** Project every live floating text onto this frame's camera. Runs on the RENDER clock (a
+   *  text tag must keep tracking its unit and the camera while the game is paused), while its
+   *  ageing/drift/expiry run on the SIM tick — so a paused game leaves the text hanging
+   *  exactly where it was rather than freezing it off-screen.
+   *
+   *  TWO sources, one overlay and therefore one call: the script's tags (`CreateTextTag`) and
+   *  the engine's own combat text. The overlay drops every tag it was not shown this frame, so
+   *  handing it one list and then the other would have each half erase the other's elements.
+   *  Deliberately NOT gated on a running map script — a melee match has one but never pumps
+   *  it on a client, and a crit number is the engine's to draw either way. */
+  private updateFloatingText(): void {
+    if (!this.textTags || !this.rts) return;
+    const script = this.mapScript?.interp.rt.textTags ?? [];
+    const combat = this.combatText.live;
+    if (!script.length && !combat.length) {
+      this.textTags.clear();
+      return;
+    }
+    // Concatenated only when both halves are live — the common case is one or the other.
+    const tags = !combat.length ? script : !script.length ? combat : [...script, ...combat];
+    this.textTags.update(tags, this.textTagContext());
+  }
+
+  /** Drive the script's on-screen output for this frame — everything BUT the floating text,
+   *  which `updateFloatingText` owns because the engine raises some of its own. */
   private updateScriptUi(): void {
     const engine = this.mapScript;
     if (!engine || !this.rts) return;
     const rt = engine.interp.rt;
-
-    if (this.textTags) {
-      if (rt.textTags.length) this.textTags.update(rt.textTags, this.textTagContext());
-      else this.textTags.clear();
-    }
     // An open Quest Log repaints when the script changes a quest under it; and a
     // FlashQuestDialogButton since last frame lights the HUD's Quests button, which
     // opening the log is what clears — as in the game.
@@ -8286,6 +8318,11 @@ export class MapViewerScene {
       // collision family this whole phase removes.
       if (!this.rts?.frozenClient) this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
       this.rts?.tick(SIM_DT); // sim runs in seconds; advance + sync before render
+      // Engine combat text ages on the SIM clock, like a script's text tags do inside the
+      // interpreter — so the F10 menu freezes a crit number in place instead of running it
+      // out while the game is stopped. Both machines do this: a frozen client is fed the
+      // same events over the wire and owes them the same rise and fade.
+      this.combatText.advance(SIM_DT);
       // A unit that came into existence THIS step exists for this step's triggers. The spawns
       // used to be drained during render, i.e. after the script had already been pumped, so a
       // trained unit was one whole frame old before any trigger could see it — and a map that
@@ -8522,6 +8559,23 @@ export class MapViewerScene {
           const arts = SPELL_SOUND_ART[c.code]?.(def) ?? [def.targetArt, def.casterArt, def.specialArt];
           this.sounds?.playSpellSound(arts, SPELL_SOUND_FALLBACK[c.code], at);
         }
+        // Floating COMBAT text: a Critical Strike's red "127!" over the unit it struck, and
+        // the "!" a deny leaves behind (see CombatText). Read off the CONTROLLER's queue like
+        // the four drains above, so a frozen client raises the same text off its payload.
+        for (const t of this.rts!.drainFxCombatTexts()) {
+          this.combatText.spawn({
+            text: t.text,
+            // A crit is red for everyone. A deny wears the colour of the player whose unit
+            // died, resolved HERE and not in the sim: `SetPlayerColor` can move a slot's
+            // colour mid-match, and the palette is the client's (same one the minimap dots
+            // and a cinematic's speaker names use).
+            color: t.colorSlot >= 0 ? argbOf(PLAYER_COLORS[this.rts!.playerColor(t.colorSlot) % PLAYER_COLORS.length]) : CRIT_TEXT_COLOR,
+            x: t.x,
+            y: t.y,
+            z: COMBAT_TEXT_Z,
+            followUnit: t.unitId,
+          });
+        }
         // Hero level-up nova.
         for (const lu of world.drainLevelUps()) {
           const h = world.units.get(lu.unitId);
@@ -8724,6 +8778,7 @@ export class MapViewerScene {
       if (this.showRegions && fogScene) this.renderRegions(fogScene.camera.viewProjectionMatrix);
       // The script's on-screen output (7.19) — floating text projected onto this frame's
       // camera, plus the leaderboard/dialog panels. After the world is drawn: it's DOM.
+      this.updateFloatingText();
       this.updateScriptUi();
       this.raf = requestAnimationFrame(frame);
     };
@@ -8803,6 +8858,7 @@ export class MapViewerScene {
     // The script's on-screen output (7.19) — its DOM outlives the canvas otherwise.
     this.textTags?.dispose();
     this.textTags = null;
+    this.combatText.clear();
     this.leaderboard?.dispose();
     this.multiboard?.dispose();
     this.multiboard = null;

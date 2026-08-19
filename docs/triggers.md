@@ -960,6 +960,30 @@ and shrink into the distance. Also nailed down from the sources:
 - **Bottom-left anchored**, as the engine does — every "centre my damage number" snippet subtracts half its
   own width precisely because WC3 doesn't. Fogged tags are hidden with the ground.
 
+#### The engine's own combat text — the crit number and the deny mark
+
+Two pieces of world text are **not** a script's doing, and both had to be raised by the engine or they would
+never appear in a melee match (which runs a script but pumps it on the host only, and registers no trigger
+for either of these anyway):
+
+- **A Critical Strike's blow** prints the damage *dealt* — post-armour, what the health bar actually loses —
+  in red with an exclamation mark, `127!`, over the unit that was struck, following it as it moves. It is
+  raised by `AOcr` **and** `ANdb`, because Drunken Brawler is Critical Strike: `AbilityMetaData.slk` gives
+  both rows the same field group (`Ocr1..Ocr6`, `useSpecific=AOcr,ACct,ANdb`), so dataA is the chance
+  percent, dataB the multiplier and dataD "Chance to Evade" on either. The clones fold in off their `code`
+  column for free — `ACct`/`AIcs` (creep + item crit) carry `code=AOcr`, Chen's `Acdb` carries `code=ANdb`.
+- **A deny** — one of your own or an ally's units killed by your side — leaves a bare `!` in the colour of
+  the player who owned the dead unit. The colour is resolved on the CLIENT from a player **slot**, not baked
+  in the sim: `SetPlayerColor` can move a slot's colour mid-match.
+
+Mechanically they are ordinary text tags and share `TextTagOverlay`, but they are owned by `CombatTextTags`
+(same file) rather than by `runtime.textTags`, and aged on the sim tick by the renderer rather than by the
+interpreter — so they work with no script running. They cross the wire as another `FxSnapshot` lane
+(`fx.texts`), AoI-filtered by eyes-on-the-spot like every other presentation event, so a client sees the
+enemy Blademaster's crits on its own units. One deviation from the rule above, and it is the engine's own:
+this text is **centred** on its anchor (`TextTagObj.centered`), because the client centres it over the
+unit's head rather than growing it rightward the way the natives do.
+
 ### The victory / defeat dialogs
 
 7.3 already flipped the melee end-state correctly (`bj_meleeDefeated` / `bj_meleeVictoried`), but the dialog
