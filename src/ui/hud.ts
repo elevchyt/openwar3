@@ -487,7 +487,10 @@ const HERO_PX = UI_HEIGHT / 1080; // one screen pixel of the reference capture, 
 const HERO_BAR = {
   left: 3 * HERO_PX,
   top: 0.032 + 2 * HERO_PX, // clear of the upper button bar's strip (ConsoleUI.fdf: 0.032 tall)
-  button: 68 * HERO_PX, // the icon + its frame (square)
+  // 68 px is what the reference shot measures; we draw the portrait a touch bigger (76 px)
+  // on purpose — a deliberate, developer-asked deviation. Only the icon grows: `bars`/
+  // `barsWidth` below stay at the measured 72 × 17 so the HP/mana block is untouched.
+  button: 76 * HERO_PX, // the icon + its frame (square)
   bars: 17 * HERO_PX, // the HP/mana block under it
   barsWidth: 72 * HERO_PX,
   barGap: 1 * HERO_PX, // button bottom → bars top
