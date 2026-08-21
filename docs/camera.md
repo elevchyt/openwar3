@@ -206,6 +206,29 @@ executing Blizzard.j itself rather than reimplementing melee setup, so there is 
 "correct" here. (It is also what makes the worker spacing a usable ruler: the camera is pointed
 exactly at the middle of them.)
 
+## Hold a hero key or a control-group digit and the camera follows
+
+Tapping `F1`/`F2`/`F3` or a group digit twice inside the double-tap window centres the camera on
+that selection. **Keep the second press down** and the camera rides it until the key comes back
+up (issue #114) — the same gesture as holding the portrait, which locks onto the primary unit
+(`focusSelected`). What a held hotkey follows is the selection's **centroid**, the same point the
+double-tap jumped to, so a spread-out control group stays framed instead of the view clinging to
+whichever member happens to be primary.
+
+The focus is **eased** toward that centroid rather than written from it, and that easing is the
+whole reason it doesn't judder. The sim advances in whole `SIM_DT` steps at `SIM_HZ` (60), a
+rendered frame retires 0, 1 or 2 of them, and a focus assigned straight from the centroid
+inherits that stutter — the unit stays nailed to the middle of the screen while the entire world
+shudders around it once per dropped or doubled step. Approaching at a fixed time constant
+(`FOLLOW_TAU_MS`, in the frame-rate-independent `1 - e^(-dt/τ)` form, never a raw per-frame
+fraction) absorbs it: measured against a held hero on Echo Isles it halves the frame-to-frame
+jerk of the focus (2.4 vs 4.3 world units/frame²) and trails the running hero by ~28 units — a
+fifth of a terrain tile.
+
+A single press *held* does not follow. Only the second tap arms it, and the release is handled on
+`keyup` **and** on the window losing focus — a hold that never gets its keyup (alt-tab mid-hold)
+would otherwise leave the camera glued to the group with no key to let go of.
+
 ## Related
 
 - [`docs/triggers.md`](triggers.md) — the JASS/trigger tracker; the script camera is milestone 7.24.

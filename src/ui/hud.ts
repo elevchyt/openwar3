@@ -226,10 +226,15 @@ export interface HudDriver {
   assignControlGroup(key: string): void;
   /** Shift+N — append the current selection to control group N. */
   appendControlGroup(key: string): void;
-  /** N — recall control group N; `jump` (double-tap) also centres the camera. */
-  recallControlGroup(key: string, jump: boolean): void;
-  /** F1/F2/F3 — select hero `index`; `jump` (double-tap) also centres the camera. */
-  selectHero(index: number, jump: boolean): void;
+  /** N — recall control group N; `jump` (double-tap) also centres the camera. False when
+   *  the group is empty: nothing was selected, so nothing may be followed either. */
+  recallControlGroup(key: string, jump: boolean): boolean;
+  /** F1/F2/F3 — select hero `index`; `jump` (double-tap) also centres the camera. False when
+   *  the player has no such hero. */
+  selectHero(index: number, jump: boolean): boolean;
+  /** Hold the key down on that double-tap (a hero key or a control-group digit) and the
+   *  camera RIDES the recalled selection until the key comes back up — WC3's hold-to-follow. */
+  followSelection(on: boolean): void;
   /** The hero bar's buttons: the local player's living heroes in hire order, the order
    *  F1/F2/F3 also count in. */
   heroBar(): HeroBarEntry[];
@@ -858,6 +863,10 @@ export class GameHud {
     parent.appendChild(this.root);
     this.applyWidgetSkin();
     window.addEventListener("keydown", this.onKey);
+    // Keyup and blur are NOT gated the way `onKey` is (hidden console, open dialog, typing):
+    // whatever swallows the press, a hold that has already begun must always be released.
+    window.addEventListener("keyup", this.onKeyUp);
+    window.addEventListener("blur", this.endFollow);
     this.unwatchPress = watchPress();
   }
 
@@ -951,6 +960,8 @@ export class GameHud {
 
   dispose(): void {
     window.removeEventListener("keydown", this.onKey);
+    window.removeEventListener("keyup", this.onKeyUp);
+    window.removeEventListener("blur", this.endFollow);
     this.unwatchPress();
     this.minimapResize?.disconnect();
     for (const id of this.msgTimers) clearTimeout(id);
@@ -1048,6 +1059,36 @@ export class GameHud {
   private lastTapKey = ""; // for double-tap detection (control-group / hero camera jump)
   private lastTapAt = 0;
 
+  /** The hero key / control-group digit currently HELD after its double-tap, whose
+   *  camera-follow ends when it comes back up (see `holdFollow`). */
+  private followKey: string | null = null;
+
+  /** The identity a held hotkey is remembered by. Digits go by `code` (Digit1…) for the
+   *  same reason the recall below does — with Shift down `key` is the shifted symbol, and
+   *  the keyup for a key pressed unshifted can still arrive shifted. */
+  private static followToken(e: KeyboardEvent): string {
+    return e.code.startsWith("Digit") ? e.code : e.key;
+  }
+
+  /** Begin WC3's hold-to-follow: the double-tap already centred the camera on the group,
+   *  and while the key stays down the camera rides it. */
+  private holdFollow(token: string): void {
+    this.followKey = token;
+    this.driver.followSelection(true);
+  }
+
+  /** Let go of the followed group (keyup, or the window losing the keyboard mid-hold —
+   *  no keyup ever arrives for that, and the camera would stay stuck to the group). */
+  private endFollow = (): void => {
+    if (this.followKey === null) return;
+    this.followKey = null;
+    this.driver.followSelection(false);
+  };
+
+  private onKeyUp = (e: KeyboardEvent): void => {
+    if (this.followKey === GameHud.followToken(e)) this.endFollow();
+  };
+
   /** True when `key` repeats the previous key within the double-tap window. */
   private tapAgain(key: string): boolean {
     const now = performance.now();
@@ -1105,10 +1146,14 @@ export class GameHud {
       this.refreshSelectionNow();
       return;
     }
-    // Hero hotkeys F1/F2/F3: select the hero (double-tap centres the camera).
+    // Hero hotkeys F1/F2/F3: select the hero (double-tap centres the camera, and holding
+    // that second tap down keeps the camera on him as he moves).
     if (e.key === "F1" || e.key === "F2" || e.key === "F3") {
       e.preventDefault();
-      this.driver.selectHero(Number(e.key[1]) - 1, this.tapAgain(e.key));
+      const again = this.tapAgain(e.key);
+      // Only a hero who is actually THERE may be followed — F3 with two heroes selects
+      // nothing, and must not leave the camera riding whatever was already selected.
+      if (this.driver.selectHero(Number(e.key[1]) - 1, again) && again) this.holdFollow(GameHud.followToken(e));
       this.refreshSelectionNow();
       return;
     }
@@ -1122,7 +1167,11 @@ export class GameHud {
       const n = digit[1];
       if (e.ctrlKey || e.metaKey) this.driver.assignControlGroup(n);
       else if (e.shiftKey) this.driver.appendControlGroup(n);
-      else this.driver.recallControlGroup(n, this.tapAgain(n));
+      else {
+        const again = this.tapAgain(n);
+        // …and likewise an empty group recalls nothing, so there is nothing to ride.
+        if (this.driver.recallControlGroup(n, again) && again) this.holdFollow(GameHud.followToken(e));
+      }
       this.refreshSelectionNow();
       return;
     }

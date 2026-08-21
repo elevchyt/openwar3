@@ -147,6 +147,12 @@ const SIM_DT = 1 / SIM_HZ;
  *  queues still more — the classic spiral of death. */
 const MAX_STEPS_PER_FRAME = 5;
 
+/** Time constant of the hold-to-follow camera (issue #114): the focus covers ~63% of the
+ *  remaining distance to the followed group every 90 ms. Short enough that the group never
+ *  visibly drifts off-centre, long enough to smooth the uneven number of sim steps a frame
+ *  retires — see the ease in `updateCamera`. */
+const FOLLOW_TAU_MS = 90;
+
 /** A match seed for a game nobody specified one for (single player). Math.random is fine
  *  HERE and nowhere near the sim: this picks the seed, it doesn't roll off it. The Park-
  *  Miller LCG the sim uses wants a positive int below 2^31-1. */
@@ -927,6 +933,7 @@ export class MapViewerScene {
   private portraitLabel = ""; // sound-set of the unit currently in the portrait (drives talk anim)
   private lastVoice: { label: string; until: number } | null = null; // most recent voice line (label + when it ends), so a bust that finishes loading mid-line still mouths it
   private cameraLock = false; // portrait held → camera follows the selected unit
+  private groupFollow = false; // hero key / control-group digit held after its double-tap → camera rides the group
   private cardPage: "root" | "build" | "learn" = "root";
   private lastSelected: number | null = null;
   /** The building riding the cursor, waiting for the click that puts it down.
@@ -2125,6 +2132,7 @@ export class MapViewerScene {
       },
       setCameraTargetUnit: (id, xOff, yOff) => {
         this.cameraLock = false; // the script's controller replaces the portrait's follow-lock
+        this.groupFollow = false; // …and the held hotkey's, which follows the same way
         this.scriptCam.setTargetUnit(id, xOff, yOff);
       },
       resetToGameCamera: (duration) => this.scriptCam.resetToGameCamera(duration, this.readCamera()),
@@ -5724,10 +5732,18 @@ export class MapViewerScene {
       assignControlGroup: (key) => this.rts?.assignGroup(key),
       appendControlGroup: (key) => this.rts?.appendGroup(key),
       recallControlGroup: (key, jump) => {
-        if (this.rts?.recallGroup(key) && jump) this.jumpToSelection();
+        if (!this.rts?.recallGroup(key)) return false;
+        if (jump) this.jumpToSelection();
+        return true;
       },
       selectHero: (index, jump) => {
-        if (this.rts?.selectHero(index) && jump) this.jumpToSelection();
+        if (!this.rts?.selectHero(index)) return false;
+        if (jump) this.jumpToSelection();
+        return true;
+      },
+      followSelection: (on) => {
+        this.groupFollow = on;
+        if (on) this.cameraLock = false; // one follow at a time — this replaces the portrait's
       },
       heroBar: () => this.rts?.heroBar() ?? [],
       rallyToHero: (index) => this.rts?.rallyToHero(index) ?? false,
@@ -9511,6 +9527,29 @@ export class MapViewerScene {
         this.target[1] = pos[1];
       } else {
         this.cameraLock = false;
+      }
+    }
+
+    // A hero key (F1/F2/F3) or a control-group digit HELD after its double-tap: the camera
+    // rides that selection until the key comes back up (issue #114). It follows the group's
+    // CENTROID — the same point the double-tap jumped to — so a group stays framed as it
+    // spreads out, rather than the camera clinging to whichever member is primary.
+    //
+    // Eased rather than pinned, which is what keeps it from juddering: the sim advances in
+    // whole SIM_DT steps (see SIM_HZ) and a rendered frame retires 0, 1 or 2 of them, so a
+    // focus written straight from the centroid inherits that stutter and the whole world
+    // shudders once per dropped or doubled step. Approaching at a fixed time constant is
+    // frame-rate independent (the 1 - e^(-dt/τ) form, not a raw per-frame fraction) and
+    // absorbs the uneven steps; the residual trail behind a running hero is ~25 units, a
+    // fifth of a terrain tile.
+    if (this.groupFollow) {
+      const c = this.rts?.selectionCentroid();
+      if (c) {
+        const k = 1 - Math.exp(-dtMs / FOLLOW_TAU_MS);
+        this.target[0] += (c[0] - this.target[0]) * k;
+        this.target[1] += (c[1] - this.target[1]) * k;
+      } else {
+        this.groupFollow = false; // everyone it was following is gone
       }
     }
 

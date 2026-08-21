@@ -1337,7 +1337,15 @@ export class RtsController {
     const u = this.sim.units.get(this.primary);
     if (!e || !u || u.owner !== this.localPlayer || u.building) return; // buildings don't voice orders
     const def = this.registry.get(e.typeId);
-    if (def?.soundSet) this.sounds.play(def.soundSet, attack ? "YesAttack" : "Yes", undefined, this.primary); // source = focused unit
+    if (!def?.soundSet) return;
+    // source = focused unit
+    if (this.sounds.play(def.soundSet, attack ? "YesAttack" : "Yes", undefined, this.primary)) {
+      // Being sent somewhere is the unit TALKING, and the annoyed escalation only builds on
+      // uninterrupted re-clicking: a "Yes"/"YesAttack" in the middle of it restarts the count,
+      // so the next click is a plain "What" again rather than resuming at "Pissed". Counted by
+      // the line actually HEARD, exactly as announceSelection advances the streak.
+      this.voiceStreak = 0;
+    }
   }
 
   /** What war3mapUnits.doo declares about every placed entity, and the id it reserved
