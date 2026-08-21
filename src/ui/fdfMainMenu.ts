@@ -37,7 +37,13 @@ const REPO_TEXT = "github.com/elevchyt/openwar3";
  * band left beneath it is thin. Anything taller than this puts the line back on the panel's
  * rivet strip, which is exactly what it must not sit on.
  */
-const VERSION_POINT = { x: -0.015, y: 0.006, w: 0.3, h: 0.014 };
+const VERSION_POINT = { x: -0.015, y: 0.003, w: 0.3, h: 0.016 };
+
+/** The line's type size. `StandardSmallTitleTextTemplate` sets 0.011 — the size of a caption
+ *  inside a panel, which is smaller than it needs to be out here in the open with nothing
+ *  around it — so it takes the ordinary glue text size instead, 0.013, the one
+ *  StandardTemplates.fdf gives StandardTextTemplate and StandardInfoTextTemplate. */
+const VERSION_FONT = 0.013;
 
 export interface MainMenuHandlers {
   onSinglePlayer: () => void;
@@ -102,6 +108,7 @@ function buildMainMenuRoot(lib: FdfLibrary): FdfFrame {
     // The template justifies left; this line is hung off the RIGHT edge, so it reads from
     // there — the same edge every button above it is anchored to.
     setProp(line, "FontJustificationH", [arg("JUSTIFYRIGHT")]);
+    setProp(line, "FrameFont", [str("MasterFont"), num(VERSION_FONT), str("")]);
     setProp(line, "Text", [str(REPO_TEXT)]);
     root.children.push(line);
   }
