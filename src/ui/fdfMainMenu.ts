@@ -30,14 +30,17 @@ const REPO_TEXT = "github.com/elevchyt/openwar3";
 /**
  * Where the line sits: hard into the bottom-right corner, UNDER the panel rather than on it.
  *
- * x is the right edge the whole button chain is anchored to (MainMenu.fdf's backdrops all take
- * -0.015 off MainMenuFrame's right). y is small on purpose — the reference's build line sits
+ * x is a little further in than the button chain above it (MainMenu.fdf's backdrops all take
+ * -0.015 off MainMenuFrame's right; this takes -0.025), which brings the line back inside the
+ * right-hand chrome rather than running out past its edge — that chrome is a 3D model framing
+ * a widescreen screen, so it does not end where this 4:3 file's own right inset does.
+ * y is small on purpose — the reference's build line sits
  * below the button panel in the corner of the SCREEN, and our panel is a 3D model stretched to
  * a widescreen frame, so it reaches lower than the 4:3 one this file was authored for and the
  * band left beneath it is thin. Anything taller than this puts the line back on the panel's
  * rivet strip, which is exactly what it must not sit on.
  */
-const VERSION_POINT = { x: -0.015, y: 0.003, w: 0.3, h: 0.016 };
+const VERSION_POINT = { x: -0.025, y: 0.003, w: 0.3, h: 0.016 };
 
 /** The line's type size. `StandardSmallTitleTextTemplate` sets 0.011 — the size of a caption
  *  inside a panel, which is smaller than it needs to be out here in the open with nothing
