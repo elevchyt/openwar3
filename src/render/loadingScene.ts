@@ -57,6 +57,9 @@ interface MdxInstance {
   /** The animation's playhead, in the model's own frame times. Writable — which is the whole
    *  of `LoadingScene.setProgress`; see there. */
   frame: number;
+  /** What the viewer multiplies the frame's `dt` by before advancing `frame`. Zero on the load
+   *  bar, which is seeked rather than played — see `setProgress`. */
+  timeScale: number;
   setScene(scene: unknown): void;
   setSequence(index: number): void;
   setSequenceLoopMode(mode: number): void;
@@ -113,6 +116,9 @@ export class LoadingScene {
       const instance = this.add(barModel, birth, HOLD_AT_END);
       const seq = barModel.sequences[birth];
       this.bar = { instance, start: seq.interval[0], end: seq.interval[1] };
+      // The bar is SEEKED, never played — see `setProgress`. `timeScale = 0` is what makes
+      // that true of the frame actually drawn, and not only of the one we asked for.
+      instance.timeScale = 0;
       this.setProgress(0);
     }
 
@@ -133,6 +139,16 @@ export class LoadingScene {
    * So we seek it rather than driving the bones ourselves. Poking `localScale` instead is
    * overwritten on the next update by the very track it was imitating, which showed as a bar
    * that ignored `setProgress` entirely and crept up over the clip's own 23.5 seconds.
+   *
+   * And the seek has to be the LAST word on the playhead, which is why the instance runs at
+   * `timeScale = 0` (see `load`). `updateAnimations` does `frame += dt` before it samples the
+   * bones, so a bar that is merely re-seeked every frame is drawn at `seek + dt` — the frame we
+   * asked for plus however long the LAST frame took. That is the load-screen wobble: the clip
+   * spans 23467 frames across 53% of the screen width, so a 100 ms hitch pushes the fill ~4 px
+   * right and a 550 ms one ~20 px, and while the real progress sits still (it holds at 0.6 for
+   * the whole model preload) the bar jitters back and forth by exactly the jitter in frame
+   * time. Measured on `(2)EchoIsles.w3x`: dt swung 0…550 ms across the tail. With the clock
+   * stopped the drawn frame is the seeked frame, and the bar only ever moves when we move it.
    */
   setProgress(p: number): void {
     this.progress = Math.max(0, Math.min(1, p));
