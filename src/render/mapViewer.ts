@@ -588,6 +588,40 @@ const ViewerClass = War3MapViewer as unknown as {
   new (canvas: HTMLCanvasElement, solver: Solver, isReforged: boolean): W3xViewer;
 };
 
+/**
+ * How far along a streaming load is, when nothing knows how much there is to load.
+ *
+ * The loader discovers its own work as it goes — a model's fetch dispatches its textures',
+ * and each of those may dispatch more — so there is no total to divide by until it is over.
+ * What there IS at any moment is the work DISCOVERED so far and how much of it has landed:
+ * `done / (done + pending)`, counted off the viewer's own in-flight map by watching which
+ * keys disappear.
+ *
+ * That ratio climbs as the queue drains and DIPS when a fresh burst is discovered, so it is
+ * reported through a high-water mark: a load bar may only ever go forwards, and one that
+ * stepped back would look exactly like the frame-time wobble we just took out of it
+ * (render/loadingScene.ts).
+ *
+ * Measured on `(2)EchoIsles.w3x`: the map's own art is 279 fetches over ~1.0 s, which the
+ * ratio walks in ~17 steps at 0.00 → 0.36 → 0.51 → 0.64 → 0.85 → 0.99 → 1.
+ */
+class LoaderProgress {
+  /** The keys that were in flight at the previous sample — a key that is gone by the next
+   *  one has landed. (The loader hands out no completion count of its own.) */
+  private inFlight = new Set<string>();
+  private done = 0;
+  private high = 0;
+
+  /** Sample the loader's in-flight set and answer the fraction to report, 0…1. */
+  sample(promiseMap: Map<string, unknown>): number {
+    for (const key of this.inFlight) if (!promiseMap.has(key)) this.done++;
+    this.inFlight = new Set(promiseMap.keys());
+    const total = this.done + this.inFlight.size;
+    this.high = Math.max(this.high, total > 0 ? this.done / total : 0);
+    return this.high;
+  }
+}
+
 export class MapViewerScene {
   // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
   // (7.24).
@@ -1813,12 +1847,16 @@ export class MapViewerScene {
     }
   }
 
-  async startMelee(config: MeleeConfig): Promise<void> {
+  async startMelee(config: MeleeConfig, onProgress?: (p: number) => void): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
     // Resources come from the script (MeleeStartingResources), so open empty.
     const races = this.beginMatch(config, 0, 0);
     this.rts.enableSeeding(); // owners/teams configured → trySeed may adopt the map's units
-    await this.waitForMapUnits(); // …and the creeps/mines must all be in the sim before the script runs
+    // …and the creeps/mines must all be in the sim before the script runs. This is the LONG
+    // wait of the whole load — the map's art streaming in — and the only one of them the
+    // browser is free to paint through, so it is what the loading bar creeps on (see
+    // `startGame` in src/main.ts).
+    await this.waitForMapUnits(onProgress);
     this.rts.seedModellessPlaced(); // …including the ones the renderer never delivers (dummy units)
     const engine = this.runMapScript({ melee: true, races, slots: config.slots });
     // No script (or it created nothing for the local player — a script that leans on
@@ -1881,26 +1919,35 @@ export class MapViewerScene {
    *  clear, then ate the workers). So: unitsReady (every load dispatched) → promiseMap
    *  empty (every load resolved) → two more frames, for trySeed to adopt the stragglers.
    *  Capped, so a model that never resolves can't hang the match. */
-  private waitForMapUnits(timeoutMs = 30000): Promise<void> {
+  private waitForMapUnits(onProgress?: (p: number) => void, timeoutMs = 30000): Promise<void> {
     return this.waitForLoader(
       () => !!this.viewer.map?.unitsReady && this.viewer.promiseMap.size === 0,
       timeoutMs,
       "map units",
+      onProgress,
     );
   }
 
   /** Poll until the loader goes quiet — `ready()` true on two CONSECUTIVE frames, because a
    *  fetch that resolves often dispatches the next one (a model's textures) and a single
    *  empty `promiseMap` is just the gap between them. Capped: a model that never resolves
-   *  must not hang the match. Shared by `waitForMapUnits` and the start preload. */
-  private waitForLoader(ready: () => boolean, timeoutMs: number, what: string): Promise<void> {
+   *  must not hang the match. Shared by `waitForMapUnits` and the start preload.
+   *
+   *  `onProgress` is fed `LoaderProgress` on every poll, which is what keeps the loading
+   *  screen's bar moving through the wait rather than parked on the last milestone. */
+  private waitForLoader(
+    ready: () => boolean, timeoutMs: number, what: string, onProgress?: (p: number) => void,
+  ): Promise<void> {
     return new Promise((resolve) => {
       const t0 = performance.now();
+      const drain = onProgress ? new LoaderProgress() : null;
       let settledFrames = 0;
       const poll = (): void => {
+        if (drain && onProgress) onProgress(drain.sample(this.viewer.promiseMap));
         settledFrames = ready() ? settledFrames + 1 : 0;
         if (settledFrames >= 2 || performance.now() - t0 > timeoutMs) {
           if (settledFrames < 2) console.warn(`[openwar3] ${what} still streaming after ${Math.round(timeoutMs / 1000)}s — starting anyway.`);
+          onProgress?.(1);
           resolve();
           return;
         }
@@ -1934,16 +1981,25 @@ export class MapViewerScene {
    */
   async preloadForStart(onProgress: (p: number) => void = () => {}): Promise<void> {
     const t0 = performance.now();
-    // Whatever the script set going — its spawns are still streaming when it returns.
-    await this.waitForLoader(() => this.viewer.promiseMap.size === 0, 20000, "the map's art");
-    onProgress(0.2);
+    // The two halves of this are timed alike, so they take half the span each: measured on
+    // `(2)EchoIsles.w3x`, the whole call is ~0.7 s of which the drain is ~0.25 s — and that is
+    // with a roster the map had already spawned, which is the case that flatters the roster
+    // half. Fixed shares rather than one count across both, because a queued fetch and a
+    // tech-tree entry are not the same unit of work.
+    const DRAIN_SHARE = 0.5;
+    // Whatever the script set going — its spawns are still streaming when it returns. Reported
+    // per poll rather than as one step at the end, or the bar stands still through it.
+    await this.waitForLoader(
+      () => this.viewer.promiseMap.size === 0, 20000, "the map's art",
+      (p) => onProgress(DRAIN_SHARE * p),
+    );
     const roster = this.producibleRoster();
     let done = 0;
     await Promise.all(roster.map(async (id) => {
       const def = this.registry.get(id);
       if (def?.icon) this.blpIcon(def.icon); // decodes the BLP into the icon cache, once
       if (def?.model) await this.viewer.load(def.model, this.solver).catch(() => undefined);
-      onProgress(0.2 + (0.8 * ++done) / roster.length);
+      onProgress(DRAIN_SHARE + ((1 - DRAIN_SHARE) * ++done) / roster.length);
     }));
     onProgress(1);
     console.info(`[openwar3] preloaded ${roster.length} ${this.localRace} unit model(s) + icons in ${Math.round(performance.now() - t0)}ms.`);
@@ -2027,7 +2083,7 @@ export class MapViewerScene {
    *   2. Run the map's own config() through our JASS interpreter (src/jass/) — the
    *      first live use of the trigger engine on the real script. Best-effort: a
    *      script problem must never abort the match. */
-  async startCustom(config: MeleeConfig): Promise<void> {
+  async startCustom(config: MeleeConfig, onProgress?: (p: number) => void): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
     // Custom maps get their starting resources from triggers (not the melee default),
     // so seed empty stashes; the map's own script grants gold/lumber where it wants.
@@ -2068,7 +2124,7 @@ export class MapViewerScene {
     // a map whose init has not run yet must not be simulated through it (see holdWorld).
     this.rts.holdWorld(true);
     this.rts.enableSeeding(); // owners/teams configured → trySeed may adopt the map's units
-    await this.waitForMapUnits(); // …and every one of them must be adopted before the script runs
+    await this.waitForMapUnits(onProgress); // …and every one of them must be adopted before the script runs
     // A dummy unit never arrives through the renderer at all, and on a custom map it is often
     // load-bearing — Extreme Candy War's cinematic vision pair is the whole reason its intro
     // is visible. Seed those from the .doo before the script runs, like everything else.

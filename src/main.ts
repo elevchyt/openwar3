@@ -572,7 +572,17 @@ async function startGame(
     await step(0.15, () => enterMap(bytes, info.name));
     // Melee maps get the standard setup (town hall + workers, melee rules);
     // custom/scenario maps run their own triggers instead (see mapKind.ts).
-    await step(0.6, () => (info.isMelee ? mapScene?.startMelee(config) : mapScene?.startCustom(config)));
+    //
+    // Setup is where the bar spends most of its life and it used to spend it PARKED: the long
+    // wait inside it is the map's own art streaming in (MapViewerScene.startMelee), and that
+    // is exactly the stretch the browser is free to paint through, so a bar with nothing to
+    // say sat still for it. It now creeps on the loader's own drain — 0.6 → 0.9 here, the last
+    // tenth to the preload, in the ratio the two were measured at on `(2)EchoIsles.w3x`
+    // (~1.0 s of streaming against ~0.3 s of preload).
+    const setupProgress = (p: number): void => loading?.setProgress(0.6 + 0.3 * p);
+    await step(0.6, () => (info.isMelee
+      ? mapScene?.startMelee(config, setupProgress)
+      : mapScene?.startCustom(config, setupProgress)));
     // …and there the world STOPS, built but not begun, until the screen comes down
     // (MapViewerScene.holdAtStart). Every game, not only a campaign chapter: setup returns
     // seconds before the player is looking at the map, and the creeps, the melee clock and the
@@ -593,7 +603,7 @@ async function startGame(
     // frame each is first wanted on (MapViewerScene.preloadForStart — the job WC3's own
     // `Preload` natives do for a map). It is also what the hold below is spent on.
     const tailStart = performance.now();
-    await mapScene?.preloadForStart((p) => loading?.setProgress(0.6 + 0.4 * p));
+    await mapScene?.preloadForStart((p) => loading?.setProgress(0.9 + 0.1 * p));
     // Our bar is full. Tell the room (a LAN match), and hold while any other machine is still
     // loading — their seats light as their messages arrive and the bar's caption becomes the
     // game's own "WAITING FOR OTHER PLAYERS". `waitForAll` gives up after a minute rather than
