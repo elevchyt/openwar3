@@ -2040,6 +2040,20 @@ body.in-game .fdf-screen.fdf-ingame {
 }
 .fdf-frame { pointer-events: none; }
 
+/* The main menu's version line (ui/fdfMainMenu.ts) — the corner where the reference prints its
+   build number, and the one piece of glue text that is a LINK. It has to take the pointer back
+   (the frame it sits in is pointer-events:none, above) and it lights to white under the cursor,
+   which is `StandardSmallTextTemplate`'s own FontHighlightColor: the game's answer to "this
+   responds" is a colour change, never an underline, so there is none here either. */
+.fdf-version-link {
+  pointer-events: auto;
+  /* the frame's own FontColor, handed over by ui/fdfMainMenu.ts — as a variable, so that the
+     hover below is not fighting an inline style it cannot win against */
+  color: var(--fdf-link-color, inherit);
+  text-decoration: none;
+}
+.fdf-version-link:hover { color: #fff; }
+
 /* NO focus ring anywhere on an FDF screen.
    The page-wide `*:focus-visible` rule at the top of this file gives everything a gold outline
    and a gold glow, which is right for ordinary DOM and wrong here: every one of these widgets
