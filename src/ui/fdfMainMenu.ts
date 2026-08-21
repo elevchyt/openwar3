@@ -15,8 +15,10 @@ import { arg, num, setProp, str } from "./mapBrowser";
  * logo. It is the one thing on that screen MainMenu.fdf does not declare: the file has no
  * frame for it anywhere (its only *NetVersion frames belong to the replay-confirm dialog),
  * because the engine's own CGameUI stamps the build number in. So we compose it here out of
- * the game's own `StandardSmallTextTemplate`, the small gold face every glue label uses,
- * rather than inventing a look for it.
+ * the game's own `StandardSmallTitleTextTemplate` — the WHITE twin of the small glue label
+ * (StandardTemplates.fdf gives the pair identical metrics, `MasterFont` at 0.011, and differs
+ * only in FontColor: 1 1 1 against the gold 0.99 0.827 0.0705). White is the colour the
+ * reference prints its build in, so it is the one this line takes.
  *
  * Ours names the project instead of a patch number, and — unlike the reference's, which is
  * inert text — it OPENS THE REPO in a new tab (see `linkRepo`).
@@ -25,10 +27,17 @@ const VERSION_FRAME = "OpenWar3VersionText";
 const REPO_URL = "https://github.com/elevchyt/openwar3";
 const REPO_TEXT = "github.com/elevchyt/openwar3";
 
-/** Where the line sits: the right edge the whole button chain is anchored to
- *  (MainMenu.fdf's backdrops all take -0.015 off MainMenuFrame's right), and low enough to
- *  clear the Exit backdrop, whose own BOTTOMRIGHT anchor stands it 0.05 off the bottom. */
-const VERSION_POINT = { x: -0.015, y: 0.035, w: 0.3, h: 0.014 };
+/**
+ * Where the line sits: hard into the bottom-right corner, UNDER the panel rather than on it.
+ *
+ * x is the right edge the whole button chain is anchored to (MainMenu.fdf's backdrops all take
+ * -0.015 off MainMenuFrame's right). y is small on purpose — the reference's build line sits
+ * below the button panel in the corner of the SCREEN, and our panel is a 3D model stretched to
+ * a widescreen frame, so it reaches lower than the 4:3 one this file was authored for and the
+ * band left beneath it is thin. Anything taller than this puts the line back on the panel's
+ * rivet strip, which is exactly what it must not sit on.
+ */
+const VERSION_POINT = { x: -0.015, y: 0.006, w: 0.3, h: 0.014 };
 
 export interface MainMenuHandlers {
   onSinglePlayer: () => void;
@@ -81,7 +90,7 @@ function buildMainMenuRoot(lib: FdfLibrary): FdfFrame {
   const root = lib.resolveRoot("MainMenuFrame");
   if (!root) throw new Error("MainMenu.fdf: no MainMenuFrame frame");
 
-  const line = lib.resolveRoot("StandardSmallTextTemplate");
+  const line = lib.resolveRoot("StandardSmallTitleTextTemplate");
   if (line) {
     line.name = VERSION_FRAME;
     setProp(line, "Width", [num(VERSION_POINT.w)]);
@@ -108,10 +117,13 @@ function buildMainMenuRoot(lib: FdfLibrary): FdfFrame {
  *
  * The COLOUR has to move with it, and it has to move as a CUSTOM PROPERTY. `paintText` writes
  * FontColor as an INLINE colour on the span, and an inline colour beats any stylesheet rule
- * trying to change it — including the `:hover` that lights the line up to the template's own
- * FontHighlightColor (1 1 1 1 — white; a colour change is how the game says "this responds").
- * Handed over as a variable the anchor's own rules read, both states are stylesheet rules
- * again and the hover wins on order, exactly as it should.
+ * trying to change it — including the `:hover`. Handed over as a variable the anchor's own
+ * rules read, both states are stylesheet rules again and the hover wins on order.
+ *
+ * The hover goes to GOLD, which is the one place this line reads its own template backwards.
+ * A colour change is how the glue says "this responds", and everywhere else that means gold
+ * text going white — but this line starts white (the reference's build colour), and white has
+ * nowhere brighter to go. So it lights to the gold of its sibling template instead.
  */
 function linkRepo(s: FdfScreen): void {
   const el = s.frame(VERSION_FRAME);

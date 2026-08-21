@@ -2042,9 +2042,10 @@ body.in-game .fdf-screen.fdf-ingame {
 
 /* The main menu's version line (ui/fdfMainMenu.ts) — the corner where the reference prints its
    build number, and the one piece of glue text that is a LINK. It has to take the pointer back
-   (the frame it sits in is pointer-events:none, above) and it lights to white under the cursor,
-   which is `StandardSmallTextTemplate`'s own FontHighlightColor: the game's answer to "this
-   responds" is a colour change, never an underline, so there is none here either. */
+   (the frame it sits in is pointer-events:none, above) and it lights to the glue's own gold
+   under the cursor — the line itself is white, so gold is the direction left to it (see
+   ui/fdfMainMenu.ts). The game's answer to "this responds" is a colour change, never an
+   underline, so there is none here either. */
 .fdf-version-link {
   pointer-events: auto;
   /* the frame's own FontColor, handed over by ui/fdfMainMenu.ts — as a variable, so that the
@@ -2052,7 +2053,8 @@ body.in-game .fdf-screen.fdf-ingame {
   color: var(--fdf-link-color, inherit);
   text-decoration: none;
 }
-.fdf-version-link:hover { color: #fff; }
+/* StandardSmallTextTemplate's FontColor 0.99 0.827 0.0705 — the small glue label's gold. */
+.fdf-version-link:hover { color: rgb(252, 211, 18); }
 
 /* NO focus ring anywhere on an FDF screen.
    The page-wide `*:focus-visible` rule at the top of this file gives everything a gold outline
