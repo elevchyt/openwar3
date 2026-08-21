@@ -178,6 +178,11 @@ export interface AbilityDef {
    *  relies on the SND…AITM event inside its Target model (verified 1.27a
    *  Units\ItemAbilityFunc.txt + AbilitySounds.slk row Y49). */
   effectSound: string;
+  /** AbilityFunc `Effectsoundlooped` — the LABEL of the bed that plays for as long as the
+   *  ability's effect runs (`[ANst] Effectsoundlooped = StampedeLoop`, `[AUls]` →
+   *  LocustSwarmLoop). The channelled FIELDS mostly carry theirs on their effect object
+   *  instead (see fxLoopSound); these two carry it on the ability itself. */
+  effectSoundLooped: string;
   buffArt: string; // buffFx[0]'s path — the primary persistent model (convenience).
   /** The buff's own `Effectart` — the effect played when the buff ENDS, as distinct from
    *  buffFx (worn while it lasts) and the ability's `Effectart` (a pre-cast warning).
@@ -197,6 +202,24 @@ export interface AbilityDef {
    *  This — NOT the ability's own TargetArt — is where a buff's art lives; most
    *  buff-applying abilities have no TargetArt at all. */
   buffFx: BuffFx[];
+  /** The `EfctID1` column's own `[X….]` section in AbilityFunc — the EFFECT OBJECT, a
+   *  third art carrier alongside the ability and its buff, and the one an area FIELD's
+   *  art actually lives on. Six of the fields are Blizzard's own: `[AHbz] EfctID1 = XHbz`,
+   *  and `[XHbz]` is where `BlizzardTarget.mdl` and `Effectsoundlooped=BlizzardLoop` sit.
+   *  The ability row itself names no art at all for any of them, which is why Tranquility,
+   *  Earthquake and Death and Decay used to land in silence with nothing on the ground.
+   *
+   *    [XEtq]  Effectart = …\Tranquility\Tranquility.mdl   Effectsoundlooped = TranquilityLoop
+   *    [XOeq]  Effectart = …\EarthQuake\EarthQuakeTarget.mdl  Effectsoundlooped = EarthquakeLoop
+   *    [XUdd]  Effectart = …\DeathandDecay\DeathandDecayTarget.mdl
+   *    [XNhs]  Specialart = …\Human\Heal\HealTarget.mdl     (Healing Spray's per-target burst)
+   *
+   *  `fxLoopSound`/`fxSound` are AbilitySounds.slk LABELS, like `effectSound` — not paths. */
+  fxArt: string; // the effect object's Effectart — the field/area model
+  fxSpecialArt: string; // its Specialart — the per-target burst (Healing Spray)
+  fxMissileArt: string; // its Missileart (Volcano's rising rock)
+  fxLoopSound: string; // Effectsoundlooped — the bed under a running field
+  fxSound: string; // Effectsound — the one-shot per wave (BlizzardWave)
   /** AbilityFunc `LightningEffect` — the LightningData row ids this ability strings between
    *  its caster and its targets (`CLPB,CLSB` for Chain Lightning, `DRAB,DRAL,DRAM` for the
    *  Drains). These are NOT models: a lightning is a ribbon linking two moving points, drawn
@@ -307,7 +330,9 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AUdc: { target: "unit" }, // Death Coil — heal undead / harm living
   AUdp: { target: "unit" }, // Death Pact — sacrifice a friendly unit to heal
   AUau: { target: "passive" }, // Unholy Aura — +move speed & hp regen
-  AUan: { target: "point" }, // Animate Dead — temporarily raise nearby corpses
+  // Animate Dead is the same corpse-eating family (`targs1 = air,ground,dead`) and is cast
+  // the same way: pressed, then it sweeps `Area1` = 900 around the Death Knight for bodies.
+  AUan: { target: "none" }, // Animate Dead — temporarily raise nearby corpses
   // -- Lich --
   AUfn: { target: "unit" }, // Frost Nova — missile: AoE damage + slow on impact
   AUfu: { target: "unit", autocast: true }, // Frost Armor — +armour, slows attackers
@@ -321,14 +346,20 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // -- Crypt Lord --
   AUim: { target: "point" }, // Impale — line nuke + stun
   AUts: { target: "passive" }, // Spiked Carapace — bonus armour + return damage
-  AUcb: { target: "point" }, // Carrion Beetles — summon a beetle
+  // Carrion Beetles' `targs1` is the single flag `dead`: it eats a CORPSE, and the Crypt Lord
+  // finds his own inside `Rng1` = 900 the moment the button is pressed. Nothing to aim.
+  AUcb: { target: "none" }, // Carrion Beetles — raise a beetle from the nearest corpse
   AUls: { target: "none" }, // Locust Swarm — self PBAoE life-drain field
   // === Night Elf heroes ===
   // -- Keeper of the Grove --
   AEer: { target: "unit" }, // Entangling Roots — root + DoT
-  AEfn: { target: "point" }, // Force of Nature — summon treants
+  AEfn: { target: "point" }, // Force of Nature — turn the TREES at a point into treants
   AEah: { target: "passive" }, // Thorns Aura — return melee damage
-  AEtq: { target: "point" }, // Tranquility — channelled area heal field
+  // Tranquility takes no target at all: `Rng1` is literally "-" in AbilityData.slk (no cast
+  // range = nothing to aim at), and the rain falls on `Area1` = 900 around the Keeper. The
+  // tooltip agrees — "Causes rains of healing energy to pour down in a large area" names no
+  // target — and so does the button in the real game, which fires on the click.
+  AEtq: { target: "none" }, // Tranquility — channelled heal field, centred on the caster
   // -- Priestess of the Moon --
   AHfa: { target: "unit", autocast: true }, // Searing Arrows — bonus fire damage on attack
   AEst: { target: "none" }, // Scout — summon a flying owl
@@ -343,7 +374,11 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AEbl: { target: "point" }, // Blink — teleport a short distance
   AEfk: { target: "none" }, // Fan of Knives — PBAoE nuke
   AEsh: { target: "unit" }, // Shadow Strike — missile: damage + poison DoT + slow
-  AEsv: { target: "passive" }, // Vengeance — (ultimate passive)
+  // Vengeance is not a passive — it SUMMONS: "Creates a powerful avatar that summons
+  // invulnerable spirits from nearby corpses" (Ubertip), i.e. `Esv1` = 1 of `UnitID1 = espv`
+  // (the Avatar of Vengeance) for `Dur1` = 180s. Filed as a passive it had no target type,
+  // so the button could issue no order and the Warden's ultimate simply did nothing.
+  AEsv: { target: "none" }, // Vengeance — summon the Avatar of Vengeance
   // === Neutral heroes ===
   // -- Naga Sea Witch --
   // Forked Lightning — a cone of bolts, but AIMED AT A UNIT: "Calls forth a cone of
@@ -360,7 +395,11 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   ANch: { target: "unit" }, // Charm — take control of a target
   // -- Pandaren Brewmaster --
   ANbf: { target: "point" }, // Breath of Fire — line nuke
-  ANdh: { target: "point" }, // Drunken Haze — area slow
+  // Drunken Haze is thrown AT A UNIT and splashes: `targs1 = air,ground,enemy,organic,neutral`
+  // with `Rng1` = 550, and its `Area1` = 200 is the spill around whoever it lands on — the
+  // same shape as the Alchemist's Acid Bomb, which is the other half of the same throw. The
+  // tooltip's "Drenches enemy units" is about the splash, not about aiming at the ground.
+  ANdh: { target: "unit" }, // Drunken Haze — flask at a unit; slow + miss chance, splashed
   ANdb: { target: "passive" }, // Drunken Brawler — crit + evasion (passive)
   ANef: { target: "none" }, // Storm, Earth and Fire — summon three pandaren
   // -- Beastmaster --
@@ -703,6 +742,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       effectArt: mdlPath(f ? str(f, "Effectart") : ""),
       areaArt: mdlPath(f ? str(f, "Areaeffectart") : ""),
       effectSound: f ? str(f, "Effectsound") : "", // a SLK label, NOT a path — no mdlPath here
+      effectSoundLooped: f ? str(f, "Effectsoundlooped") : "", // ditto — a label
       // The persistent buff model lives on the BUFF, not the ability: resolve
       // buffid1's own [B….] func section TargetArt (Banish → BanishTarget, an aura →
       // GeneralAuraTarget, Flame Strike → FlameStrikeDamageTarget). Verified 2026-07
@@ -711,6 +751,13 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       buffArt: buffFx[0]?.path ?? "",
       buffEffectArt: mdlPath(buffField(func, str(r, "buffid1"), "Effectart")),
       buffSpecialArt: mdlPath(buffField(func, str(r, "buffid1"), "Specialart")),
+      // …and the EFFECT OBJECT the `EfctID1` column names (see AbilityDef.fxArt) — read
+      // from the same AbilityFunc file through the same helper the buff uses.
+      fxArt: mdlPath(buffField(func, str(r, "efctid1"), "Effectart")),
+      fxSpecialArt: mdlPath(buffField(func, str(r, "efctid1"), "Specialart")),
+      fxMissileArt: mdlPath(buffField(func, str(r, "efctid1"), "Missileart")),
+      fxLoopSound: buffField(func, str(r, "efctid1"), "Effectsoundlooped"), // a LABEL, not a path
+      fxSound: buffField(func, str(r, "efctid1"), "Effectsound"),
       lightning: (f ? str(f, "LightningEffect") : "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean),
       animNames: (f ? str(f, "animnames") : "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
       // Order strings (AbilityFunc `Order`/`Orderon`/`Orderoff`) — how a trigger casts it.
@@ -810,10 +857,16 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     effectArt: "",
     areaArt: "",
     effectSound: "",
+    effectSoundLooped: "",
     buffFx: [],
     buffArt: "",
     buffEffectArt: "",
     buffSpecialArt: "",
+    fxArt: "",
+    fxSpecialArt: "",
+    fxMissileArt: "",
+    fxLoopSound: "",
+    fxSound: "",
     lightning: [],
     animNames: [],
     order: "",

@@ -56,9 +56,13 @@ const unitReg = { get: (id) => UNITS[id] };
 // it (str(r, `unitid${L}`)), which is why the alternate form arrives under that name.
 const ABILS = {
   Abur: { id: "Abur", code: "Abur", levelData: [lvl({ dataStr: ["ucry"], summon: "ucrm" })] },
-  // Call to Arms puts its alternate form in DataB and carries a 45s duration — the two ways
-  // it differs from Burrow, and the two things altFormOf/tickAltForm exist for.
-  Amil: { id: "Amil", code: "Amil", levelData: [lvl({ dataStr: ["hpea", "hmil"], duration: 45 })] },
+  // Call to Arms puts its alternate form in DataB and is TIMED — the two ways it differs
+  // from Burrow, and the two things altFormOf/tickAltForm exist for. Both of its duration
+  // columns read 40 in 1.30's AbilityData.slk (`Amil Dur1 = HeroDur1 = 40`), and it is
+  // **HeroDur** the toggle counts: on a morph row `Dur` is the transition between models
+  // (Burrow 1.45, Ethereal Form 0.7, Robo-Goblin 1.5 — none of them a form duration) while
+  // HeroDur is how long the form lasts. See SimWorld.morphToggle.
+  Amil: { id: "Amil", code: "Amil", levelData: [lvl({ dataStr: ["hpea", "hmil"], duration: 40, heroDuration: 40 })] },
   // Bear Form — the same two columns again, on a pair that carries mana.
   Abrf: { id: "Abrf", code: "Abrf", levelData: [lvl({ dataStr: ["edoc"], summon: "edcm" })] },
 };
@@ -176,7 +180,7 @@ function peasant(id, typeId = "hpea") {
   // Again: none of this is coded, it is hmil's row.
   check("…faster (hmil spd 270)", u.speed, 270);
   check("…better armoured (hmil def 4)", u.baseArmor, 4);
-  check("…and the 45s clock is running (Amil Dur1)", u.altFormLeft, 45);
+  check("…and the 40s clock is running (Amil HeroDur1)", u.altFormLeft, 40);
   check("…through the ability that owns both ids", u.altFormAbil, "Amil");
 }
 
@@ -184,10 +188,10 @@ function peasant(id, typeId = "hpea") {
 {
   const u = peasant(11);
   world.morphToggle(u, ABILS.Amil);
-  world.tickAltForm(u, 44);
-  check("at 44s he is still a militia", u.typeId, "hmil");
+  world.tickAltForm(u, 39);
+  check("at 39s he is still a militia", u.typeId, "hmil");
   world.tickAltForm(u, 1.5);
-  check("past 45s he reverts himself", u.typeId, "hpea");
+  check("past 40s he reverts himself", u.typeId, "hpea");
   check("…and the clock is cleared", u.altFormLeft, 0);
   check("…back to Peasant speed", (world.recomputeStats(u), u.speed), 190);
 }

@@ -634,7 +634,12 @@ export class SoundBoard {
       if (!art) continue;
       // "2"/"3" pick up the numbered variants WC3 ships for a repeated effect sound
       // (BlizzardTarget1/2/3.wav) — playPool then picks one at random per cast/wave.
-      const paths = this.folderSounds("cast", art, ["", "1", "2", "3", "Cast", "Target", "Caster", "Death"]);
+      // "Birth"/"Birth1" are the other half of WC3's naming for a cast sound — the spells
+      // that name their WAV after the moment the effect is BORN rather than after the model
+      // (Abilities\Spells\Undead\Sleep\SleepBirth1.wav, Blink\BlinkBirth1.wav,
+      // Voodoo\BigBadVoodooSpellBirth1.wav, HealingSpray\HealingSprayBirth1.wav). Without
+      // them those spells cast in silence: nothing in their folder matches base or "1".
+      const paths = this.folderSounds("cast", art, ["", "1", "2", "3", "Cast", "Target", "Caster", "Birth", "Birth1", "Birth2", "Death"]);
       if (paths.length) {
         this.playPool({ paths, ...meta }, "spell", at);
         return;
@@ -765,6 +770,15 @@ export class SoundBoard {
    *  shared impact pool sits at its cap through a fight and would silently drop it. */
   playAbilitySound(label: string, at?: SoundPos): void {
     if (label) this.playPool(this.resolve("ability", label), "spell", at);
+  }
+
+  /** The WAV behind an AbilitySounds label, for a caller that wants to LOOP it rather than
+   *  fire it once — an effect object's `Effectsoundlooped` (`XUdd` → "DeathAndDecayLoop" →
+   *  Abilities\Spells\Undead\DeathandDecay\DeathAndDecayLoop1.wav). Returns the path so the
+   *  caller can drive it through setPathLoop keyed on the FIELD, which is what makes two
+   *  Blizzards on the ground at once share one howl instead of stacking two. */
+  abilityLoopPath(label: string): string {
+    return (label && this.resolve("ability", label)?.paths[0]) || "";
   }
 
   /** Play the sound an MDX SND event object names, by its 4-char code — the same

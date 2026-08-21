@@ -34,7 +34,7 @@ import {
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
-import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -337,6 +337,10 @@ export interface SimBuff {
    *  same thing. Both halves of the effect (the regeneration and the stun that pins the
    *  unit while it runs) wear the flag, so they end together. `timeLeft` is Infinity. */
   untilHealed?: boolean;
+  /** Dispel Magic and its kin may not take this off. Doom is the one that needs it — the
+   *  ability's whole point is that it "cannot be dispelled", and its row proves the intent
+   *  by carrying no duration column at all: the curse runs until it kills. */
+  undispellable?: boolean;
 }
 
 /** The ORB EFFECT one blow carries, once the priority ladder has picked it (see
@@ -371,6 +375,17 @@ export type BuffKind =
   | "manaShield" // absorb incoming damage into mana instead of hp; value = mana spent per hp
   | "root" // value = move-slow fraction (Entangling Roots pins to 1.0); can still attack
   | "vuln" // value = fraction of EXTRA damage the holder takes (Berserk +50%)
+  | "miss" // value = chance this unit's attacks simply MISS (Drunken Haze's `Nsi2 "Chance To
+  //         Miss (%)"`). Not a slow and not a damage cut — the blow is rolled and thrown away,
+  //         which is why it stacks with neither.
+  | "strength" // value = flat bonus STRENGTH on a hero (Robo-Goblin's `Nrg5 "Strength Bonus"`).
+  //             Not the same as `maxHp`: strength is a hero ATTRIBUTE, so the info panel shows
+  //             it, it carries hit points at HP_PER_STR, and it carries attack damage too when
+  //             Strength is the hero's primary — which for the Tinker it is.
+  | "maxHp" // value = flat bonus to the MAXIMUM life pool (Metamorphosis' `Eme5 "Alternate
+  //          Form Hit Point Bonus"` = 500). Goes through the same ratio-preserving ceiling
+  //          move every other bonus does (see recomputeStats), so the demon arrives as
+  //          healthy as the Demon Hunter was.
   | "mark" // no effect of its own: a timed FLAG the holder wears (Black Arrow's, whose whole
   //          point is what happens if the holder dies before it expires — see orbDeathEffects)
   | "shield" // Lightning Shield: value = dps dealt to units around the holder, value2 = radius
@@ -475,6 +490,10 @@ export interface SummonRequest {
    *  first, which is right for a caster-relative summon and wrong for every targeted one
    *  (see MapViewerScene.summonSpot). */
   atPoint: boolean;
+  /** The raised unit cannot be hurt at all. Animate Dead's `Hre2 "Raised Units Are
+   *  Invulnerable"` = 1 is the only setter, and it is what the ultimate IS: six bodies that
+   *  cannot be killed, only waited out. */
+  invulnerable?: boolean;
   illusion?: IllusionInit;
 }
 
@@ -1405,6 +1424,19 @@ export interface SimUnit {
    *  whole of the effect — it does no damage of its own — so it is state on the VICTIM,
    *  cleared when the buff that carries it expires (see tickBuffs) and read in kill(). */
   blackArrow: { abilityId: string; rank: number; sourceId: number; owner: number; team: number } | null;
+  /** DOOM (`ANdo`): the same shape as the Black Arrow mark and for the same reason — the
+   *  effect is what happens when the unit DIES, so the fact rides the victim. Dying under
+   *  Doom summons `UnitID1` (`nba2`, a Doom Guard) for `Ndo3` = 120 seconds. */
+  doomed: { abilityId: string; rank: number; sourceId: number; owner: number; team: number } | null;
+  /** IMMOLATION (`AEim`): the ability id currently alight on this unit, "" when it is out.
+   *  A toggle, not a cast — see tickImmolation for the mana it burns to stay lit. */
+  immolation: string;
+  immolationTick: number; // seconds accumulated toward the next burn (`Dur1` = 1s)
+  /** BIG BAD VOODOO (`AOvd`): seconds of ritual left, and the ability running it. A CHANNEL,
+   *  so this counts down only while the Shadow Hunter is still standing there casting — see
+   *  tickVoodoo, which is also what hands the invulnerability out. */
+  voodooLeft: number;
+  voodooAbil: string;
   /** Marked by Incinerate (`ANia`/`ANic`): dying while still aflame blasts everything nearby.
    *  Paired with the "incinerate" buff, whose `value2` counts the stacks. */
   incinerate: { abilityId: string; rank: number; sourceId: number } | null;
@@ -1693,6 +1725,11 @@ const IAS_MIN = -0.8; // -80% — cannot be slowed below 1/5 of its base attack 
 const DAMAGE_POINT_FLOOR = 0.02; // a swing always lands 0.02s before it may start the next
 const UNIT_MANA_REGEN = 0.67; // flat mana/sec for non-hero casters (approx WC3 base)
 const AURA_REFRESH = 0.5; // aura buffs re-applied each tick with this TTL (fade on leave)
+/** Big Bad Voodoo's invulnerability is handed out on the same short leash an aura is, for
+ *  the same reason: a broken CHANNEL has to strip it from everybody the same instant, and
+ *  the cheapest way to make that true is to stop renewing it. Shorter than AURA_REFRESH —
+ *  "instantly" is what the ritual breaking is supposed to feel like. */
+const VOODOO_REFRESH = 0.25;
 const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // Channelled abilities (base code): the caster stands locked for the channel and a
 // new order stops it AND the remaining ticks (unlike a backswing, which is free to
@@ -1706,7 +1743,11 @@ const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // ends the moment she moves, attacks, casts again or is stunned, and that the life stops
 // transferring with it. Its channel length is the plain `Dur1` (6s Siphon Mana, 8s Drain) —
 // it schedules no wave field, so the teardown is tickDrains rather than tickSpellFields.
-const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr"]);
+// Big Bad Voodoo joins them on its `Animnames = stand,channel`, which is the data saying the
+// Shadow Hunter stands in his own circle for the whole 30 seconds. Its protection is renewed
+// off the caster's tick rather than off the field (see tickVoodoo), so it needs no field of
+// its own; what CHANNELED buys it is the standing, the looped channel clip, and the break.
+const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd"]);
 // Delayed-strike abilities that drop their Effectart (a ground "beware" warning) the
 // moment the cast WIND-UP begins — not when it lands — so it charges up in place and
 // REMAINS visible even if the cast is interrupted before ignition. Flame Strike's
@@ -1714,6 +1755,33 @@ const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq
 // Blood Mage — by moving or a stun — leaves only the gong + vortex, no flames). The
 // strike itself (pillar + burn) still needs the wind-up to finish (see spells AHfs).
 const PRECAST_WARNING = new Set(["AHfs"]);
+/**
+ * Abilities whose `Cast` column is NOT a casting time.
+ *
+ * AbilityData.slk's `Cast` is a wind-up for the spells that have one (Blizzard 1.0, Flame
+ * Strike 0.9/1.33, Rain of Fire 1.0 — the Archmage really does hold his staff up before the
+ * first shard). But the column is a free number, and several rows use it for something else
+ * entirely. Shadow Strike's own Ubertip is the proof, quoting the field as an interval:
+ *
+ *     "…dealing <AEsh,DataE1> initial damage, and <AEsh,DataA1> damage every
+ *      <AEsh,Cast1> seconds for <AEsh,Dur1> seconds."
+ *
+ * Cast1 = 3 there is the POISON TICK. Read as a wind-up it made the Warden stand still for
+ * three seconds before every dagger — an ability that is instant in the real game. The
+ * handler spends the number as what it is (see spells.ts AEsh); this is the other half,
+ * keeping it out of the wind-up. Reincarnation (Cast=3, the revive delay), Replenish
+ * (Cast=6, the pour) and Parasite (Cast=90) are the same kind of borrowing; they don't run
+ * through the ordinary cast path, so they need no entry.
+ */
+const CAST_TIME_IS_NOT_A_WINDUP = new Set(["AEsh"]);
+/** Abilities whose CAST ANIMATION runs for the ability's whole duration even though the
+ *  caster is free to walk and fight through it — so they are NOT in CHANNELED, which would
+ *  pin them in place. Bladestorm is the only one in 1.30: the Blademaster spins for `Dur1` =
+ *  7 seconds while he keeps moving and killing, and the spin IS the ability. His model has a
+ *  clip that exists for nothing else ("Attack Walk Stand Spin", see CAST_ANIM_FALLBACK), and
+ *  without this it would be released after the ordinary cast backswing, a fraction of a
+ *  second in. */
+export const ANIM_FOR_DURATION = new Set(["AOww"]);
 // Immediate abilities (base code): pressing the button IS the cast. No wind-up, no
 // cast animation, and no re-tasking — the caster keeps attacking/walking straight
 // through it. Two cases, both with `Cast1=0` in AbilityData.slk and no `Animnames`
@@ -4049,7 +4117,19 @@ export class SimWorld {
     // `baseDamage` off its target (spells.ts) to size its bonus, so a bear buffed while still
     // wearing the caster form's 18 would get a Druid's Inner Fire, not a bear's.
     u.baseDamage = u.weapon?.baseDamage ?? 0;
-    u.abilities = this.buildAbilitiesFor(def);
+    // A hero's LEARNED ranks survive the swap. Both halves of a hero morph carry the same
+    // `heroAbilList` — `Edem` and `Edmm` are both `AEmb,AEim,AEev,AEme` — and rebuilding them
+    // from the type reset every one to level 0, which took the Demon Hunter's entire spellbook
+    // off his command card the instant he metamorphosed, Metamorphosis itself included (an
+    // ability at level 0 draws no button). Cooldowns and autocast settings ride along for the
+    // same reason: they belong to the hero, not to the body he is currently wearing. An
+    // ability the NEW form introduces (Robo-Goblin's `ANde` Demolish) still arrives at the
+    // level its own list gives it.
+    const kept = new Map(u.abilities.map((a) => [a.id, a]));
+    u.abilities = this.buildAbilitiesFor(def).map((a) => {
+      const was = kept.get(a.id);
+      return was ? { ...a, level: Math.max(a.level, was.level), cooldownLeft: was.cooldownLeft, autocastOn: was.autocastOn } : a;
+    });
     // What it produces is a property of the TYPE, so re-derive it: a structure that only gains
     // a training list on upgrade would otherwise never get a rally point.
     if (u.building && this.techReg) u.building.producesUnits = this.techReg.producesUnits(toTypeId);
@@ -4086,8 +4166,8 @@ export class SimWorld {
    * pair can be entered from either side, which matters because several of these units are
    * TRAINED in their alternate form (the Spirit Walker arrives ethereal).
    */
-  morphToggle(u: SimUnit, def: AbilityDef): boolean {
-    const lvl = def.levelData[0];
+  morphToggle(u: SimUnit, def: AbilityDef, rank = 1): boolean {
+    const lvl = def.levelData[Math.min(Math.max(1, rank), def.levelData.length) - 1];
     const normal = lvl?.dataStr[0] ?? ""; // DataA "Normal Form Unit" — the same for all of them
     const alternate = altFormOf(lvl);
     if (!normal || !alternate) return false;
@@ -4098,11 +4178,42 @@ export class SimWorld {
     // the alternate half of the model — the burrowed pose is "Stand Alternate", reached
     // through the same Morph clip an Ancient uses. See SimUnit.altModel.
     u.altModel = to === alternate;
-    // A TIMED form runs itself out and reverts (Call to Arms' 45 seconds of being a militia).
-    // Duration lives on the ability, not the unit, and only counts on the way IN — going back
-    // to normal clears it, whether the clock ran down or a player rang the bell again.
-    u.altFormLeft = to === alternate ? lvl?.duration ?? 0 : 0;
+    // A TIMED form runs itself out and reverts; an untimed one is a toggle the player turns
+    // off. Which is which is **HeroDur**, not Dur, and the whole morph family agrees:
+    //   Amil (Militia)      Dur 40   HeroDur 40   → 40 seconds, then back to a Peasant
+    //   ANcr (Chem. Rage)   Dur 0.35 HeroDur 15   → 15 seconds of ogre
+    //   AEme (Metamorph.)   Dur 1.5  HeroDur 45   → 45 seconds of demon
+    //   Abur (Burrow)       Dur 1.45 HeroDur 0    → until you dig out
+    //   ANrg (Robo-Goblin)  Dur 1.5  HeroDur 0    → until you press it again
+    //   Aetf/Astn/Arav/Asb1 Dur <1   HeroDur 0    → same
+    // On a morph row `Dur` is the TRANSITION (the sub-two-second shuffle between models);
+    // HeroDur is how long the FORM lasts. Reading Dur — which is what this did — gave every
+    // toggle a one-and-a-half-second clock, so a burrowed Crypt Fiend popped straight back
+    // out and Robo-Goblin reverted before the animation finished.
+    u.altFormLeft = to === alternate ? lvl?.heroDuration ?? 0 : 0;
     u.altFormAbil = to === alternate ? def.id : "";
+    // The stats the ABILITY adds on top of whatever the alternate unit already carries.
+    // DataE/DataF are NOT one meaning across the family — AbilityMetaData scopes each pair
+    // to the rows that own it, so the column has to be read against the base code:
+    //   `Eme5 "Alternate Form Hit Point Bonus"`  useSpecific = AEme,AEIl,AEvi   → 500
+    //   `Nrg5 "Strength Bonus"` / `Nrg6 "Defense Bonus"`  useSpecific = ANrg,ANg1..3 → 5 / 1
+    //   `Ncr5`/`Ncr6` (Chemical Rage) are named "(Info Panel Only)" outright — the movement
+    //     and attack rate they quote are already Nalm's own numbers, so nothing to apply.
+    // Read blind (DataE for everyone) this handed Robo-Goblin 5 bonus HIT POINTS instead of
+    // 5 Strength and gave the Alchemist a half a hit point for his move-speed column.
+    // Applied as buffs so leaving the form takes them off again with the rest of the morph.
+    u.buffs = u.buffs.filter((b) => b.group !== "altform");
+    if (to === alternate) {
+      if (def.code === "AEme") {
+        const bonusHp = this.dataOf(lvl, 4, 0);
+        if (bonusHp > 0) this.applyBuffInternal(u, { kind: "maxHp", group: "altform", timeLeft: Infinity, sourceId: u.id, value: bonusHp });
+      } else if (def.code === "ANrg") {
+        const str = this.dataOf(lvl, 4, 0);
+        const def0 = this.dataOf(lvl, 5, 0);
+        if (str > 0) this.applyBuffInternal(u, { kind: "strength", group: "altform", timeLeft: Infinity, sourceId: u.id, value: str });
+        if (def0 > 0) this.applyBuffInternal(u, { kind: "armor", group: "altform", timeLeft: Infinity, sourceId: u.id, value: def0 });
+      }
+    }
     // A form with no weapon can neither attack nor keep a target it was swinging at, and the
     // weaponless one is also the ethereal one (weapsOn=0 is how the Spirit Walker's two forms
     // are told apart in the data — there is no "is ethereal" column).
@@ -4123,6 +4234,103 @@ export class SimWorld {
     const def = this.abilities?.get(u.altFormAbil);
     if (def) this.morphToggle(u, def);
     else u.altFormLeft = 0; // ability gone (custom data reload) — just stop counting
+  }
+
+  /**
+   * IMMOLATION (`AEim`) — the one damage aura you switch on and pay for by the second.
+   *
+   * `Order=immolation` / `Unorder=unimmolation` make it a toggle rather than a cast, and the
+   * three Data columns (AbilityMetaData Eim1..Eim3) are the whole rule:
+   *   DataA "Damage per Interval"      10/15/20   every `Dur1` = 1 second
+   *   DataB "Mana Drained per Second"  7
+   *   DataC "Buffer Mana Required"     10         below this it snuffs itself out
+   * plus `Cost1` = 25 to light it. Deactivating is free — the Ubertip says so from both
+   * sides ("Drains mana until deactivated." / "Deactivate Immolation to stop draining
+   * mana."), which is why only the ON half checks affordability.
+   *
+   * The burn itself has to follow the Demon Hunter around, so it runs on his tick rather
+   * than as a placed field (which is what the old handler made it: a stationary 12-second
+   * circle wherever he happened to be standing when he pressed the button).
+   */
+  private toggleImmolation(u: SimUnit): void {
+    const ab = u.abilities.find((a) => a.code === "AEim");
+    const def = ab && this.abilities?.get(ab.id);
+    if (!ab || !def) return;
+    if (u.immolation) {
+      this.douseImmolation(u);
+      return;
+    }
+    const lvl = def.levelData[Math.min(ab.level || 1, def.levelData.length) - 1];
+    if (!lvl || u.mana < lvl.cost) return;
+    u.mana -= lvl.cost; // the activation cost; the per-second drain starts on the next tick
+    u.immolation = ab.id;
+    // `[BEim] Targetart = …\NightElf\Immolation\ImmolationTarget.mdl` — the flames he
+    // wears. Timeless: it holds until the toggle goes off, so the buff carries no clock.
+    this.applyBuffInternal(u, { kind: "mark", group: "immolation", timeLeft: Infinity, sourceId: u.id, ...this.buffArtOf(def) });
+  }
+
+  /** Put Immolation out — by the player's hand, by an empty mana bar, or by death. */
+  private douseImmolation(u: SimUnit): void {
+    u.immolation = "";
+    u.buffs = u.buffs.filter((b) => b.group !== "immolation");
+  }
+
+  /** Burn, and pay for burning. Runs on the lit unit's own tick so the ring of fire travels
+   *  with him. `[BEim] Specialart = …\Immolation\ImmolationDamage.mdl` (attach `head`) is
+   *  the flare on each unit it catches. */
+  private tickImmolation(u: SimUnit, dt: number): void {
+    if (!u.immolation) return;
+    const def = this.abilities?.get(u.immolation);
+    const ab = u.abilities.find((a) => a.id === u.immolation);
+    if (!def || !ab) return this.douseImmolation(u);
+    const lvl = def.levelData[Math.min(ab.level || 1, def.levelData.length) - 1];
+    if (!lvl) return this.douseImmolation(u);
+    u.mana -= this.dataOf(lvl, 1, 7) * dt; // DataB "Mana Drained per Second"
+    // DataC "Buffer Mana Required": it goes out on its own once the pool is this low, which
+    // is what stops Immolation draining a Demon Hunter to zero and leaving him spell-less.
+    if (u.mana <= this.dataOf(lvl, 2, 10)) {
+      u.mana = Math.max(0, u.mana);
+      return this.douseImmolation(u);
+    }
+    const interval = lvl.duration || 1;
+    u.immolationTick += dt;
+    if (u.immolationTick < interval) return;
+    u.immolationTick -= interval;
+    const dmg = this.dataOf(lvl, 0, 10);
+    for (const t of this.unitsInAreaInternal(u.x, u.y, lvl.area || 160)) {
+      if (t === u || t.hp <= 0 || t.invulnerable || !this.hostile(u, t) || !this.targsAdmit(t, def.targetFlags)) continue;
+      this.landDamage(t, dmg, u.id, false);
+      if (def.buffSpecialArt) this.spellEffects.push({ art: def.buffSpecialArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
+    }
+  }
+
+  /**
+   * BIG BAD VOODOO (`AOvd`) — a ritual, not a blessing. `Animnames = stand,channel` makes it
+   * a channel, and that is the entire balance of the ultimate: the Shadow Hunter stands in
+   * his own circle for the full `Dur1` = 30 seconds, protected by nothing (`targs1` has no
+   * `self`), and the moment he moves, is stunned, or dies, every ally in `Area1` = 800 drops
+   * out of invulnerability at once.
+   *
+   * That instant loss is why the buff is handed out on a SHORT leash and renewed here rather
+   * than granted once for thirty seconds: stop renewing and it is gone within a tick, with no
+   * bookkeeping to walk. Same trick the auras use (AURA_REFRESH).
+   */
+  private tickVoodoo(u: SimUnit, dt: number): void {
+    if (u.voodooLeft <= 0) return;
+    const def = this.abilities?.get(u.voodooAbil);
+    // The channel's own break test: still ordered to cast, still this ability, still alive
+    // and able. `order` leaves "cast" the moment the player moves him or a stun lands.
+    if (!def || u.hp <= 0 || u.order !== "cast" || u.stunned) {
+      u.voodooLeft = 0;
+      u.voodooAbil = "";
+      return;
+    }
+    u.voodooLeft -= dt;
+    const lvl = def.levelData[0];
+    for (const t of this.unitsInAreaInternal(u.x, u.y, lvl.area || 800)) {
+      if (t === u || t.hp <= 0 || !this.allied(u, t) || !this.targsAdmit(t, def.targetFlags)) continue;
+      this.applyBuffInternal(t, { kind: "invuln", group: "voodoo", timeLeft: VOODOO_REFRESH, sourceId: u.id, ...this.buffArtOf(def) });
+    }
   }
 
   /** Is this unit type an ETHEREAL form, as opposed to merely a weaponless one? A burrowed
@@ -4408,6 +4616,11 @@ export class SimWorld {
       | "pendingCast"
       | "arrowShot"
       | "blackArrow"
+      | "doomed"
+      | "immolation"
+      | "immolationTick"
+      | "voodooLeft"
+      | "voodooAbil"
       | "incinerate"
       | "isCreep"
       | "guarding"
@@ -4618,6 +4831,11 @@ export class SimWorld {
       pendingCast: null,
       arrowShot: null,
       blackArrow: null,
+      doomed: null,
+      immolation: "",
+      immolationTick: 0,
+      voodooLeft: 0,
+      voodooAbil: "",
       incinerate: null,
       // Creep guard AI is off by default; the map seeder flips isCreep on and sets
       // the guard point / aggro range / sleep flag for Neutral Hostile units.
@@ -6455,8 +6673,12 @@ export class SimWorld {
   private recomputeStats(u: SimUnit): void {
     const item = this.itemBonuses(u);
     const upg = this.upgradeBonuses(u);
+    // Buffed attributes (Robo-Goblin's Strength) count exactly as an item's do — same pool,
+    // same downstream effects (hit points, damage on a Strength hero, the panel's number).
+    let buffStr = 0;
+    for (const b of u.buffs) if (b.kind === "strength") buffStr += b.value;
     if (u.isHero) {
-      u.str = Math.floor(u.baseStr + u.strPerLevel * (u.level - 1)) + item.str;
+      u.str = Math.floor(u.baseStr + u.strPerLevel * (u.level - 1)) + item.str + buffStr;
       u.agi = Math.floor(u.baseAgi + u.agiPerLevel * (u.level - 1)) + item.agi;
       u.int = Math.floor(u.baseInt + u.intPerLevel * (u.level - 1)) + item.int;
     }
@@ -6481,6 +6703,7 @@ export class SimWorld {
     let invisible = false;
     let cloaked = false;
     let invuln = false;
+    let maxHpBonus = 0;
     for (const b of u.buffs) {
       if (b.kind === "armor") armorBonus += b.value;
       else if (b.kind === "manaRegen") manaRegenBonus += b.value;
@@ -6506,10 +6729,11 @@ export class SimWorld {
         if (b.delay <= 0) invisible = true; // …but not actually faded until the transition elapses
       }
       else if (b.kind === "invuln") invuln = true;
+      else if (b.kind === "maxHp") maxHpBonus += b.value; // Metamorphosis' alternate-form pool
     }
     // Masonry-style `rhpo` is a PERCENTAGE of the base pool, applied before the flat `rhpx`
     // adds (Animal War Training's +150).
-    const newMaxHp = (u.baseMaxHp + HP_PER_STR * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp;
+    const newMaxHp = (u.baseMaxHp + HP_PER_STR * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp + maxHpBonus;
     const newMaxMana = u.baseMaxMana + MANA_PER_INT * dInt + upg.mana;
     // Moving the ceiling keeps the unit's RELATIVE pool, in both directions: "Increasing the
     // maximum amount of Hit Points of a unit does not change its relative Hit Points"
@@ -7423,7 +7647,7 @@ export class SimWorld {
       }
     }
     const art = init.art ?? "";
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed });
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed, undispellable: init.undispellable });
   }
 
   private interruptForStun(u: SimUnit): void {
@@ -7904,15 +8128,18 @@ export class SimWorld {
       // Casting Time (they add — hiveworkshop "Cast Point and Backswing" 265781;
       // castPoint 0 → an instant cast). Storm Bolt = MK's 0.4; Blizzard = Archmage's
       // 0.3 + the spell's 1.0 Casting Time = 1.3s before the first shard.
-      pc.castLeft = u.castPoint + lvl.castTime;
+      pc.castLeft = u.castPoint + (CAST_TIME_IS_NOT_A_WINDUP.has(pc.code) ? 0 : lvl.castTime);
       const channelLen = this.channelDuration(def, pc.rank);
       // Tell the renderer to play the cast clip and hold it for the whole cast
-      // (wind-up + backswing, or wind-up + channel — looped for a channel).
-      const hold = pc.castLeft + (channelLen > 0 ? channelLen : u.castBackswing);
+      // (wind-up + backswing, or wind-up + channel — looped for a channel). A
+      // spin-for-the-duration ability (Bladestorm) holds and loops the same way without
+      // being a channel; see ANIM_FOR_DURATION.
+      const animLen = ANIM_FOR_DURATION.has(pc.code) ? (lvl.heroDuration || lvl.duration || 0) : 0;
+      const hold = pc.castLeft + (channelLen > 0 ? channelLen : animLen > 0 ? animLen : u.castBackswing);
       const warnArt = PRECAST_WARNING.has(pc.code) ? def.effectArt : "";
       // tx/ty/targetId let the renderer aim cast-triggered visuals at the target —
       // e.g. the Blood Mage hurling one of his orbiting spheres (issue #37).
-      this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0, tx, ty, targetId: pc.targetId, warnArt });
+      this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0 || animLen > 0, tx, ty, targetId: pc.targetId, warnArt });
       // The caster has begun: SPELL_CHANNEL then SPELL_CAST (7.17). WC3 raises both at
       // the start of the cast — CHANNEL as the caster commits to it, CAST as the spell
       // itself begins; the EFFECT below is the one most triggers actually listen for.
@@ -8190,7 +8417,16 @@ export class SimWorld {
     // startZ and impactZ are the same and the renderer's height lerp is a no-op.
     const w = u.weapon;
     const lzLocal = w && w.launchZ > 0 ? w.launchZ : DEFAULT_MISSILE_HEIGHT;
-    const [lx, ly, lz0] = launchPoint(u, w?.launchX ?? 0, w?.launchY ?? 0, lzLocal);
+    // A wave that SHOWS a missile leaves the front of the caster, not his middle. The
+    // melee casters that throw one name no launch offset at all — UnitWeapons has LaunchX,
+    // LaunchY and LaunchZ blank for the Brewmaster, the Warden and the Tauren Chieftain —
+    // so `launchPoint` puts the model dead on the unit's origin, i.e. inside him, and the
+    // first frames of Breath of Fire were drawn coming out of the panda's back. One hull
+    // radius forward is the front of the model, which is where his mouth is. Only for a
+    // wave with a missile: a TRAIL wave (Impale) is the ground bursting open and its first
+    // tendril belongs at the caster's feet.
+    const nose = def.missileArt && !(w && (w.launchX || w.launchY)) ? u.radius : 0;
+    const [lx, ly, lz0] = launchPoint(u, (w?.launchX ?? 0) + nose, w?.launchY ?? 0, lzLocal);
     const lz = lz0 + u.flyHeight;
     const proj: SimProjectile = {
       id,
@@ -8602,7 +8838,7 @@ export class SimWorld {
    *  They live OUTSIDE their field on purpose: shards already in the air still land
    *  when the channel is broken, so a Blizzard cancelled the instant before impact
    *  still deals that last wave. */
-  private waveImpacts: Array<{ t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"] }> = [];
+  private waveImpacts: Array<{ t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean }> = [];
 
   // --- Mirror Image (AOmi) ------------------------------------------------------------
   //
@@ -8638,7 +8874,9 @@ export class SimWorld {
   /** Strip every timed buff (Dispel Magic; Mirror Image dispels its own caster). Auras
    *  re-apply on the next tick, so only the timed ones actually go. */
   private dispelUnit(u: SimUnit): void {
-    u.buffs = [];
+    // …except the ones no dispel may touch. Doom is the only one in 1.30 and it is the whole
+    // ability: "This spell cannot be dispelled" — a Doomed unit is going to die.
+    u.buffs = u.buffs.filter((b) => b.undispellable);
   }
 
   /** Begin Mirror Image: hide the caster, and work out where everyone lands. */
@@ -8883,10 +9121,21 @@ export class SimWorld {
         // (Blizzard, Rain of Fire) throws its shards now and hurts on impact, 0.8s
         // later; every other field (Flame Strike's burn, Starfall, …) has no falling
         // art and detonates immediately.
+        // `scatter`: the wave lands somewhere inside the field rather than dead centre.
+        // Stampede is the reason — `Area1` = 1000 is the ground the herd covers, but a
+        // single beast only catches `Nst4 "Damage Radius"` = 275 of it, sixty times over.
+        let wx = f.x;
+        let wy = f.y;
+        if (f.scatter) {
+          const a = this.rng() * Math.PI * 2;
+          const r = f.scatter * Math.sqrt(this.rng());
+          wx += Math.cos(a) * r;
+          wy += Math.sin(a) * r;
+        }
         const impact = {
           t: f.impactDelay ?? 0,
-          x: f.x,
-          y: f.y,
+          x: wx,
+          y: wy,
           area: f.area,
           damage: f.damagePerWave,
           casterId: f.casterId,
@@ -8895,6 +9144,9 @@ export class SimWorld {
           maxDamage: f.maxDamagePerWave ?? 0,
           buildingReduction: f.buildingReduction ?? 0,
           dot: f.dot,
+          pctOfMax: f.damagePctOfMax ?? false,
+          buildingsOnly: f.buildingsOnly ?? false,
+          fellsTrees: f.fellsTrees ?? false,
         };
         if (impact.t > 0) this.waveImpacts.push(impact);
         else this.landWave(impact);
@@ -8907,13 +9159,17 @@ export class SimWorld {
         if (f.art) {
           const n = f.artPerWave ?? 1;
           const base = this.rng() * Math.PI * 2;
+          // Art spreads over whichever circle is bigger: the damage area, or the ground a
+          // scattered field covers (Tranquility's rain fills its whole 900, Stampede's
+          // beasts arrive anywhere in the herd's 1000).
+          const spread = Math.max(f.area, f.scatter ?? 0);
           for (let s = 0; s < n; s++) {
             const ang = base + ((s + this.rng()) * Math.PI * 2) / n;
-            const r = f.area * Math.sqrt(this.rng());
+            const r = spread * Math.sqrt(this.rng());
             // `sound` cues the art's folder WAV — ONCE per wave (on the first shard),
             // not once per shard: six overlapping 3s BlizzardTarget clips a second
             // would be a wall of noise, where WC3 gives one shard-fall per wave.
-            this.spellEffects.push({ art: f.art, x: f.x + Math.cos(ang) * r, y: f.y + Math.sin(ang) * r, targetId: 0, z: 0, sound: f.waveSound && s === 0 });
+            this.spellEffects.push({ art: f.art, x: wx + Math.cos(ang) * r, y: wy + Math.sin(ang) * r, targetId: 0, z: 0, sound: f.waveSound && s === 0 });
           }
         }
       }
@@ -8941,8 +9197,15 @@ export class SimWorld {
     // scaling forever with the size of the clump it lands on.
     const each = w.maxDamage > 0 && hit.length * w.damage > w.maxDamage ? w.maxDamage / hit.length : w.damage;
     for (const t of hit) {
+      // Earthquake's `Oeq2` is "Damage per Second to BUILDINGS" and its units half is a
+      // slow, so its waves pass straight through anything that walks.
+      if (w.buildingsOnly && !t.building) continue;
       // "Building Reduction" (DataD): structures shrug off this fraction of the wave.
-      const dmg = t.building ? each * (1 - w.buildingReduction) : each;
+      let dmg = t.building ? each * (1 - w.buildingReduction) : each;
+      // …and Death and Decay's is not a number of hit points at all but a SHARE of the
+      // victim's pool (`Udd1 "Max Life Drained per Second (%)"` = 0.04), which is what
+      // makes it the one spell a Town Hall genuinely fears.
+      if (w.pctOfMax) dmg = t.maxHp * dmg;
       if (dmg > 0) this.landDamage(t, dmg, w.casterId, false); // spell damage: ignore armor
       // Rain of Fire's burn: every wave (re)lights whatever it hits for DataE dps.
       if (w.dot && w.dot.dps > 0 && !t.building) {
@@ -8953,7 +9216,11 @@ export class SimWorld {
     // (Flame Strike's targs1 = ground,enemy,neutral,friend,structure,self,tree,debris —
     // MPQ AHfs). Each wave deals damagePerWave to a tree's HP; a standard 50-HP tree
     // falls after ~4 waves of L1 (15/wave), leaving a hole in the forest as in WC3.
-    if (w.flags.includes("tree")) this.damageTreesInArea(w.x, w.y, w.area, w.damage);
+    // …or when the ability says so itself: Death and Decay clears a forest in the real game
+    // but its `targs1` (air,ground,structure,ward) has no way to express it (see fellsTrees).
+    // A tree has no maximum life to take a percentage of, so a %-of-max field fells outright.
+    if (w.fellsTrees) this.damageTreesInArea(w.x, w.y, w.area, Infinity);
+    else if (w.flags.includes("tree")) this.damageTreesInArea(w.x, w.y, w.area, w.damage);
   }
 
   /** Apply `dmg` to the HP of every tree within `radius`; fell any that hit 0. Felled
@@ -9021,7 +9288,7 @@ export class SimWorld {
 
   /** Mark up to `max` friendly corpses near a point as raised, emitting a summon
    *  request to re-create each as a living unit for `owner`. Returns the count. */
-  raiseNearbyCorpsesInternal(x: number, y: number, radius: number, owner: number, team: number, max: number): number {
+  raiseNearbyCorpsesInternal(x: number, y: number, radius: number, owner: number, team: number, max: number, opts?: RaiseOptions): number {
     let raised = 0;
     for (const c of this.corpses.values()) {
       if (raised >= max) break;
@@ -9029,7 +9296,16 @@ export class SimWorld {
       if (Math.hypot(c.x - x, c.y - y) > radius) continue;
       c.raised = true; // the renderer hides the corpse model once raised
       // A raised corpse stands back up where it fell, not a step in front of the caster.
-      this.summonRequests.push({ unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner, team, summonLeft: 0, sourceId: 0, summonArt: "", unsummonArt: "", atPoint: true });
+      this.summonRequests.push({
+        unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner, team,
+        // Resurrection gives the unit back (summonLeft 0, permanent, itself again). Animate
+        // Dead does not: what stands up is a SUMMON on a clock, and `summonLeft > 0` is what
+        // the spawn path reads to strip it — see MapViewerScene's summon handling, which
+        // gives a timed raise no abilities and no corpse of its own.
+        summonLeft: opts?.durationSec ?? 0,
+        invulnerable: opts?.invulnerable ?? false,
+        sourceId: 0, summonArt: opts?.art ?? "", unsummonArt: opts?.unsummonArt ?? "", atPoint: true,
+      });
       raised++;
     }
     return raised;
@@ -9090,7 +9366,7 @@ export class SimWorld {
     requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint) => {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint });
     },
-    raiseNearbyCorpses: (x, y, r, owner, team, max) => this.raiseNearbyCorpsesInternal(x, y, r, owner, team, max),
+    raiseNearbyCorpses: (x, y, r, owner, team, max, opts) => this.raiseNearbyCorpsesInternal(x, y, r, owner, team, max, opts),
     consumeCorpse: (x, y, r) => this.consumeCorpseInternal(x, y, r),
     linkSpirits: (unit, group, durationSec, share) => {
       unit.linkGroup = [...group];
@@ -9156,12 +9432,79 @@ export class SimWorld {
     },
     teleport: (u, x, y) => this.teleportUnit(u, x, y),
     mirrorImage: (caster, def, rank) => this.startMirrorImage(caster, def, rank),
-    changeOwner: (u, owner, team) => {
-      u.owner = owner;
-      u.team = team;
-    },
+    changeOwner: (u, owner, team) => this.changeUnitOwner(u, owner, team),
     killUnit: (u) => this.kill(u),
+    fellTrees: (x, y, radius, max) => this.fellTreesInternal(x, y, radius, max),
+    takeCorpse: (x, y, radius) => this.takeCorpseInternal(x, y, radius),
+    toggleImmolation: (u) => this.toggleImmolation(u),
+    markDoom: (t, caster, def, rank) => {
+      t.doomed = { abilityId: def.id, rank, sourceId: caster.id, owner: caster.owner, team: caster.team };
+    },
+    voodoo: (caster, def, rank) => {
+      caster.voodooLeft = def.levelData[Math.min(rank, def.levelData.length) - 1]?.duration || 30;
+      caster.voodooAbil = def.id;
+    },
+    countOwned: (owner, typeId) => {
+      let n = 0;
+      for (const u of this.units.values()) if (u.hp > 0 && u.owner === owner && u.typeId === typeId) n++;
+      return n;
+    },
   };
+
+  /** Fell up to `max` trees within `radius` of a point, nearest first, and say where each
+   *  stood. Force of Nature's whole shape: `targs1 = tree`, `Efn1` trees, one Treant each in
+   *  the hole it left. Goes through the same `felled` queue harvesting does, so the renderer
+   *  unstamps the pathing, plays the tree's death and clears the sight blocker. */
+  private fellTreesInternal(x: number, y: number, radius: number, max: number): Array<{ x: number; y: number }> {
+    const out: Array<{ x: number; y: number }> = [];
+    for (const t of this.nearestTrees(x, y, radius, Math.max(1, max))) {
+      if (Math.hypot(t.x - x, t.y - y) > radius) continue; // nearestTrees pads to `limit`
+      this.trees.delete(t.id);
+      this.felled.push(t);
+      out.push({ x: t.x, y: t.y });
+    }
+    return out;
+  }
+
+  /** Take the nearest corpse within `radius` and say what it was. The corpse-eating abilities
+   *  that TAKE NO TARGET (Carrion Beetles, and Animate Dead through raiseNearbyCorpses) find
+   *  their own body this way; `raised` is the same flag a raise or a Cannibalize sets, which
+   *  is what stops two beetles climbing out of one Footman. */
+  private takeCorpseInternal(x: number, y: number, radius: number): { x: number; y: number; facing: number; unitId: string } | null {
+    let best: SimCorpse | undefined;
+    let bestDist = Infinity;
+    for (const c of this.corpses.values()) {
+      if (c.raised || c.mechanical || !c.unitId) continue;
+      const dist = Math.hypot(c.x - x, c.y - y);
+      if (dist > radius || dist >= bestDist) continue;
+      best = c;
+      bestDist = dist;
+    }
+    if (!best) return null;
+    best.raised = true;
+    return { x: best.x, y: best.y, facing: best.facing, unitId: best.unitId };
+  }
+
+  /** SetUnitOwner: hand a unit to another player (Charm, and the JASS native). The COLOUR
+   *  has to move with it — a Charmed Knight fighting for the blue player is blue, and a
+   *  creep taken off the Neutral Hostile slot stops wearing creep red. The sim only records
+   *  the change; the models live on the renderer, so the swap is queued for it to pick up
+   *  (drainOwnerChanges) exactly as a morph is. */
+  changeUnitOwner(u: SimUnit, owner: number, team: number): void {
+    if (u.owner === owner && u.team === team) return;
+    u.owner = owner;
+    u.team = team;
+    this.ownerChanges.push({ unitId: u.id, owner });
+  }
+
+  private ownerChanges: Array<{ unitId: number; owner: number }> = [];
+  /** Units whose controller changed this tick — the renderer re-tints them. */
+  drainOwnerChanges(): Array<{ unitId: number; owner: number }> {
+    if (!this.ownerChanges.length) return this.ownerChanges;
+    const out = this.ownerChanges;
+    this.ownerChanges = [];
+    return out;
+  }
 
   /** Relocate a unit instantly and re-settle it onto the pathing grid (Blink,
    *  Mass Teleport). Clears its current path so it doesn't walk back. */
@@ -9311,12 +9654,13 @@ export class SimWorld {
     // gets what it asked for; only the rotating-there part has no meaning here.
     if (instant || u.turnRate <= 0) u.facing = rad;
   }
-  /** JASS SetUnitOwner — reassign owner + team (team decides allegiance/vision). */
+  /** JASS SetUnitOwner — reassign owner + team (team decides allegiance/vision). Goes
+   *  through changeUnitOwner so a script-driven handover re-tints the model too, exactly as
+   *  Charm's does (the native's own `changeColor` argument is what the engine calls it). */
   setUnitOwner(id: number, owner: number, team: number): void {
     const u = this.units.get(id);
     if (u) {
-      u.owner = owner;
-      u.team = team;
+      this.changeUnitOwner(u, owner, team);
     }
   }
   /** JASS SetUnitMoveSpeed — the current move speed (buffs recompute from baseSpeed,
@@ -9380,8 +9724,8 @@ export class SimWorld {
    *  drain* channels this is a live view, not a one-shot queue: the renderer polls it
    *  each frame to sustain a channel's looping bed and to stop it the moment the field
    *  ends — whether it exhausted its waves or the caster was interrupted. */
-  activeSpellFields(): Array<{ code: string; x: number; y: number }> {
-    return this.spellFields.map((f) => ({ code: f.code, x: f.x, y: f.y }));
+  activeSpellFields(): Array<{ code: string; x: number; y: number; loopSound: string; shake: boolean }> {
+    return this.spellFields.map((f) => ({ code: f.code, x: f.x, y: f.y, loopSound: f.loopSound ?? "", shake: f.shake ?? false }));
   }
 
   /** Play a one-shot effect model at a point. For the spawn paths the renderer owns:
@@ -9496,6 +9840,8 @@ export class SimWorld {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
       this.tickMeld(u); // Shadow Meld holds only while the unit is still and the sun is down
       this.tickAltForm(u, dt); // a timed form (militia) running out and reverting
+      this.tickImmolation(u, dt); // Immolation burns whatever it is standing next to, and pays for it
+      this.tickVoodoo(u, dt); // …and Big Bad Voodoo renews its circle for as long as the ritual holds
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u); // a Moon Well pouring itself into whoever is drinking
@@ -11798,6 +12144,10 @@ export class SimWorld {
     if (attacker?.isIllusion) rawDamage *= attacker.illusionDamageDealt;
     // Evasion (Demon Hunter passive AEev): a chance to dodge a physical attack.
     if (this.tryEvade(target)) return 0;
+    // …and the other side of the same coin: a drunk ATTACKER simply misses. Drunken Haze's
+    // `Nsi2 "Chance To Miss (%)"` (0.45/0.65/0.8) is not a damage cut or a slow — the swing
+    // is thrown and goes nowhere, which is why the buff has a kind of its own.
+    if (attacker && this.rollMiss(attacker)) return 0;
     // Defend (Adef, granted by the Rhde research): a Footman braced behind his shield turns
     // arrows aside. Straight off the ability's own Ubertip, which spells the whole thing out:
     // "Activate to have a <DataF1>% chance to reflect Piercing attacks upon the source, and to
@@ -11897,6 +12247,14 @@ export class SimWorld {
    *  (0.1/0.2/0.3); Drunken Brawler (ANdb) is a Critical Strike row whose dodge rides the
    *  Ocr4 "Chance to Evade" field, i.e. dataD (0.07/0.14/0.21). Both are FRACTIONS —
    *  AbilityMetaData gives Ocr4 `maxVal=1`, unlike the crit chance next to it. */
+  /** Does this attacker's swing go wide? The highest `miss` buff it wears decides — the
+   *  chances do not add up, the same way two slows don't (see recomputeStats). */
+  private rollMiss(attacker: SimUnit): boolean {
+    let chance = 0;
+    for (const b of attacker.buffs) if (b.kind === "miss") chance = Math.max(chance, b.value);
+    return chance > 0 && this.rng() < chance;
+  }
+
   private tryEvade(target: SimUnit): boolean {
     const evasion = this.passiveLevelData(target, "AEev");
     const brawler = evasion ? null : this.criticalStrikeLevel(target);
@@ -12188,6 +12546,30 @@ export class SimWorld {
             unitId: lvl.summon, x: u.x, y: u.y, facing: u.facing, owner: mark.owner, team: mark.team,
             summonLeft: this.dataOf(lvl, 2, 80), sourceId: mark.sourceId,
             summonArt: def.targetArt, unsummonArt: def.buffEffectArt, atPoint: true,
+          });
+        }
+      }
+    }
+    // DOOM (`ANdo`): "…until the unit dies, at which point a Doom Guard is summoned in its
+    // place." `Ndo2 "Number of Summoned Units"` = 1 of `UnitID1` = nba2 for `Ndo3` = 120
+    // seconds, and it belongs to the Pit Lord who cast it, not to the corpse's owner. Same
+    // shape as the Black Arrow mark above: the effect IS the death, so the fact rides the
+    // victim. `[BNdi] Effectart = …\Other\Doom\DoomDeath.mdl` is the flare it arrives in.
+    // A body that goes out stops burning: Immolation is a standing toggle, and leaving it set
+    // on a dead unit would relight a revived hero for free (and keep draining his mana).
+    if (u.immolation) this.douseImmolation(u);
+    const doom = u.doomed;
+    u.doomed = null;
+    if (doom && this.abilities) {
+      const def = this.abilities.get(doom.abilityId);
+      const lvl = def?.levelData[Math.min(doom.rank, def.levelData.length) - 1];
+      if (def && lvl && lvl.summon) {
+        const deathArt = this.abilities.buffFx(lvl.buffs[1] ?? "")[0]?.path ?? def.buffEffectArt;
+        for (let i = 0; i < Math.max(1, Math.round(this.dataOf(lvl, 1, 1))); i++) {
+          this.summonRequests.push({
+            unitId: lvl.summon, x: u.x, y: u.y, facing: u.facing, owner: doom.owner, team: doom.team,
+            summonLeft: this.dataOf(lvl, 2, 120), sourceId: doom.sourceId,
+            summonArt: deathArt, unsummonArt: def.buffEffectArt, atPoint: true,
           });
         }
       }

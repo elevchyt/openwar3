@@ -56,8 +56,12 @@ export interface SpellApi {
    *  you clicked. Without it (x, y) is the caster's own position and the unit is placed a
    *  step in front of them, WC3-style (see MapViewerScene.summonSpot). */
   requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number, art?: { summon: string; unsummon: string }, atPoint?: boolean): void;
-  /** Raise up to `max` friendly corpses near a point back to life (Resurrection). */
-  raiseNearbyCorpses(x: number, y: number, radius: number, owner: number, team: number, max: number): number;
+  /** Raise up to `max` corpses near a point back onto their feet.
+   *
+   *  Resurrection calls it bare, and what comes back is the unit itself. Animate Dead passes
+   *  `opts`, and what comes back is a SUMMON: a timed, optionally invulnerable body that
+   *  keeps its weapon and loses everything it knew (see world.ts raiseNearbyCorpsesInternal). */
+  raiseNearbyCorpses(x: number, y: number, radius: number, owner: number, team: number, max: number, opts?: RaiseOptions): number;
   /** Consume ONE corpse within `radius` — the Ghoul's meal. Returns false when there is
    *  nothing to eat, which is the difference between raising (take what you can, any number)
    *  and cannibalising (one body, and no ability without it). */
@@ -86,7 +90,7 @@ export interface SpellApi {
   setReplenishTarget(well: SimUnit, targetId: number): void;
   /** Swap a unit between the two forms its ability names (DataA "Normal Form Unit" and
    *  UnitID1 "Alternate Form Unit") — Burrow and every other two-form ability. */
-  morphToggle(unit: SimUnit, def: AbilityDef): boolean;
+  morphToggle(unit: SimUnit, def: AbilityDef, rank?: number): boolean;
   /** Look up another ability's own row. The town bell reaches for `Amil` this way so the
    *  militia's stats and timer stay stated once, on the ability that owns them. */
   abilityOf(id: string): AbilityDef | undefined;
@@ -134,6 +138,27 @@ export interface SpellApi {
   changeOwner(unit: SimUnit, owner: number, team: number): void;
   /** Kill a unit outright (Death Pact / Dark Ritual sacrifice, Transmute). */
   killUnit(unit: SimUnit): void;
+  /** Fell up to `max` trees within `radius` of a point and say WHERE each stood. Force of
+   *  Nature is the reason it returns the spots rather than a count: its `targs1` is `tree`
+   *  and each treant it makes stands in the hole its own tree left. */
+  fellTrees(x: number, y: number, radius: number, max: number): Array<{ x: number; y: number }>;
+  /** Consume the nearest corpse within `radius` and hand back what it was — the raise-from-
+   *  a-body abilities that TAKE NO TARGET (Carrion Beetles, Animate Dead) find their own. */
+  takeCorpse(x: number, y: number, radius: number): { x: number; y: number; facing: number; unitId: string } | null;
+  /** Immolation (`AEim`): light the caster, or put him out. The burn itself runs on the
+   *  caster's own tick (world.ts tickImmolation) because it has to follow him around. */
+  toggleImmolation(unit: SimUnit): void;
+  /** Doom (`ANdo`): mark a unit so that DYING under the curse summons the Doom Guard its
+   *  `UnitID1` names. Same shape as Black Arrow's minion — the death is the trigger, so the
+   *  fact has to be recorded on the victim rather than acted on here. */
+  markDoom(target: SimUnit, caster: SimUnit, def: AbilityDef, rank: number): void;
+  /** Big Bad Voodoo (`AOvd`): open the ritual. A channel, so the world keeps handing the
+   *  invulnerability out for as long as the Shadow Hunter stands there (tickVoodoo). */
+  voodoo(caster: SimUnit, def: AbilityDef, rank: number): void;
+  /** How many units of a given type this owner already has alive — Carrion Beetles' own
+   *  `Ucb5 "Max Units Summoned"` cap, which is the only thing stopping a Crypt Lord
+   *  turning a battlefield of corpses into an army. */
+  countOwned(owner: number, typeId: string): number;
 
   /** Mirror Image: run the caster-vanishes -> missiles -> illusions sequence (AOmi).
    *  Staged over time in the world, so the handler only kicks it off. */
@@ -164,6 +189,8 @@ export interface SimBuffInit {
   /** Runs on the holder's HEALTH BAR rather than on a clock: it ends the moment the unit is
    *  at full hit points, whenever that is. See SimBuff.untilHealed (Staff of Sanctuary). */
   untilHealed?: boolean;
+  /** Dispel Magic may not remove this (Doom). See SimBuff.undispellable. */
+  undispellable?: boolean;
 }
 
 /** The art half of an applyBuff: spread into a SimBuffInit (`...fx(def)`).
@@ -201,6 +228,10 @@ export interface SpellFieldInit {
   interval: number; // seconds between waves
   casterId: number;
   art: string;
+  /** The looping bed under this field for as long as it runs — an AbilitySounds.slk LABEL
+   *  (see AbilityDef.fxLoopSound / effectSoundLooped), carried on the field so the renderer
+   *  can key one loop per field without having to find the ability again. */
+  loopSound?: string;
   artPerWave?: number; // how many copies of `art` to scatter across the area each wave (default 1).
   //                      WC3's Blizzard rains a handful of shards per wave, not a single one.
   waveSound?: boolean; // cue the art's folder WAV once per wave (Blizzard's shard fall).
@@ -216,6 +247,61 @@ export interface SpellFieldInit {
   impactDelay?: number; // seconds between a wave's art SPAWNING and its damage landing. The shard
   //                       is a falling model, and WC3 hurts you when it hits the ground, not when
   //                       it appears in the sky. See SHARD_FALL.
+  /** Each wave lands at a RANDOM point within `scatter` of (x,y) rather than dead centre —
+   *  a field whose area of EFFECT is smaller than the area it covers. Stampede is the one
+   *  that needs it: `Area1` = 1000 is the ground the herd tramples, while `Nst4 "Damage
+   *  Radius"` = 275 is what a single beast catches, and 60 beasts arrive one at a time. */
+  scatter?: number;
+  /** Damage is a FRACTION OF EACH TARGET'S MAXIMUM LIFE, not a flat number. Death and Decay
+   *  is the whole reason: `Udd1` is named "Max Life Drained per Second (%)" and reads 0.04,
+   *  which is why it melts a Town Hall and tickles a Ghoul. */
+  damagePctOfMax?: boolean;
+  /** Fell trees in the area even though `targs1` doesn't list `tree`. Death and Decay clears
+   *  a forest in the real game, but its Targets Allowed is only `air,ground,structure,ward` —
+   *  the flag list can't express it, so the ability states it (cf. POLARITY_SPELLS). */
+  fellsTrees?: boolean;
+  /** Only STRUCTURES take this field's damage. Earthquake's `Oeq2` is named "Damage per
+   *  Second to Buildings" and its units half is a slow, not a wound — the tooltip says so
+   *  outright ("damages buildings … slows units"). */
+  buildingsOnly?: boolean;
+  /** The field rocks the CAMERA while it runs (Earthquake, the one thing in the game that
+   *  does). Presentation only — see MapViewerScene.updateFieldLoops. */
+  shake?: boolean;
+}
+
+/** Play a field's art ONCE, at its centre, held for the whole run — for the effects that are
+ *  one big sustained model rather than a shower of small ones.
+ *
+ *  Which a field is comes from its own data. Blizzard and Rain of Fire carry `DataC "Number
+ *  of Shards"` and scatter that many BlizzardTarget/RainOfFireTarget copies per wave; the
+ *  ones with no count column at all are single effects sized for the whole circle, and their
+ *  models say so — Tranquility.mdx runs Birth 0–2.7s then Stand to 5.6s, EarthQuakeTarget.mdx
+ *  Birth then a 9-second Stand. Scattering a dozen of THOSE per second (which is what a
+ *  shard-style field did to Tranquility) buries the map in overlapping light pillars and
+ *  costs a third of the frame rate. */
+function fieldOnce(api: SpellApi, def: AbilityDef, x: number, y: number, seconds: number): void {
+  const art = fieldArt(def);
+  if (art) api.emitEffect(art, x, y, 0, seconds);
+}
+
+/** The model a FIELD paints on the ground, and the looping bed it lays under it.
+ *
+ *  Neither is normally on the ability row: WC3 puts them on the ability's EFFECT OBJECT,
+ *  the `[X….]` section its `EfctID1` column names (see AbilityDef.fxArt) — `[AUdd] EfctID1
+ *  = XUdd`, and `[XUdd]` is where `DeathandDecayTarget.mdl` and `Effectsoundlooped =
+ *  DeathAndDecayLoop` sit. Nine of our field spells are like that (Blizzard, Rain of Fire,
+ *  Starfall, Volcano, Flame Strike, Earthquake, Tranquility, Death and Decay, Healing Spray
+ *  and Cluster Rockets), which is why they used to run with bare ground and no sound.
+ *  `areaArt` and
+ *  `targetArt` come first for the custom rows that DO put the model on the ability itself;
+ *  FIELD_ART is the last resort for a row that names none anywhere. */
+function fieldArt(def: AbilityDef): string {
+  return def.areaArt || def.fxArt || def.targetArt || FIELD_ART[def.code] || "";
+}
+/** …and the loop label: the effect object's, else the ability's own (Stampede and Locust
+ *  Swarm carry `Effectsoundlooped` on themselves and have no effect object at all). */
+function fieldLoop(def: AbilityDef): string {
+  return def.fxLoopSound || def.effectSoundLooped;
 }
 
 /** How a wave sweeps and how it shows itself (SpellApi.launchWave). */
@@ -229,6 +315,14 @@ export interface WaveOptions {
   /** One-shot effects dropped along the line every `step` units, for a wave whose art is
    *  the ground it passes over rather than a projectile (Impale's tendrils). */
   trail?: { art: string; step: number };
+}
+
+/** Animate Dead's half of a raise (see SpellApi.raiseNearbyCorpses). */
+export interface RaiseOptions {
+  durationSec: number; // 0 = permanent (Resurrection)
+  invulnerable?: boolean; // `Hre2 "Raised Units Are Invulnerable"`
+  art?: string; // the burst each body rises in
+  unsummonArt?: string; // …and the one that replaces it when the timer runs out
 }
 
 /** Where a cast is aimed. */
@@ -331,7 +425,8 @@ function waveField(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number
     waves,
     interval,
     casterId: caster.id,
-    art: def.areaArt || def.targetArt || FIELD_ART[def.code] || "",
+    art: fieldArt(def),
+    loopSound: fieldLoop(def),
     artPerWave: Math.max(1, d(lvl, 2, 6)), // DataC "Number of Shards": 6/7/10 by rank
     waveSound: true,
     impactDelay: SHARD_FALL,
@@ -1099,11 +1194,28 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     }
   },
 
-  // Fan of Knives (Warden) — PBAoE: dataA damage to all enemies within `area`.
+  // Fan of Knives (Warden) — PBAoE: `Efk1 "Damage Per Target"` to every enemy within `area`,
+  // capped in total by `Efk2 "Maximum Total Damage"` (300/625/950 — the AoE cap that stops it
+  // scaling forever with the size of the clump).
+  //
+  // Its art is the reason this looked like nothing happened: `[AEfk] Casterart=` is EMPTY and
+  // the models sit on the two fields beside it —
+  //     Effectart  = …\NightElf\FanOfKnives\FanOfKnivesCaster.mdl   the burst at the Warden
+  //     Missileart = …\NightElf\FanOfKnives\FanOfKnivesMissile.mdl  the blades that fan out
+  // — so reaching for `casterArt` drew neither. The blades are not real projectiles (the
+  // damage is instant and uncapped by travel), so each one is dropped as a one-shot on the
+  // unit it is meant for, which is where WC3's land too.
   AEfk: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
-    for (const t of enemiesInArea(api, caster, def, caster.x, caster.y, lvl.area || 400)) api.spellDamage(t, d(lvl, 0, 75), caster.id);
+    if (def.effectArt) api.emitEffect(def.effectArt, caster.x, caster.y, caster.id);
+    const hit = enemiesInArea(api, caster, def, caster.x, caster.y, lvl.area || 400);
+    const per = d(lvl, 0, 75);
+    const cap = d(lvl, 1, 0);
+    const each = cap > 0 && hit.length * per > cap ? cap / hit.length : per;
+    for (const t of hit) {
+      api.spellDamage(t, each, caster.id);
+      if (def.missileArt) api.emitEffect(def.missileArt, t.x, t.y, t.id, 0.6);
+    }
   },
 
   // War Stomp (Tauren) — slam: dataA damage + a stun (dur/herodur) to ground
@@ -1126,11 +1238,16 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, 0);
+    // The nova ring is `[AUfn] Effectart = …\Undead\FrostNova\FrostNovaTarget.mdl`. The row
+    // has no TargetArt at all, so the old reach for `targetArt` drew nothing — and took the
+    // cast sound with it, because the WAV (FrostNovaTarget1.wav) is resolved off the model.
+    if (def.effectArt) api.emitEffect(def.effectArt, t.x, t.y, 0);
     api.spellDamage(t, d(lvl, 1, 100), caster.id);
     for (const o of enemiesInArea(api, caster, def, t.x, t.y, lvl.area || 200)) {
       if (o !== t) api.spellDamage(o, d(lvl, 0, 50), caster.id);
-      api.applyBuff(o, { kind: "slow", group: "frostnova", timeLeft: dur(lvl, o) || 4, sourceId: caster.id, value: 0.4, value2: 0.4 });
+      // …and the frozen unit wears `Bfro`'s own art (FrostDamage.mdl) for as long as it is
+      // slowed — the shared "Frozen" buff Frost Armor and the Frost Attacks also apply.
+      api.applyBuff(o, { kind: "slow", group: "frostnova", timeLeft: dur(lvl, o) || 4, sourceId: caster.id, value: 0.4, value2: 0.4, ...fx(def) });
     }
   },
 
@@ -1168,22 +1285,69 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     });
   },
 
-  // Tranquility (Keeper, ult) — heal every ally in a wide area over time (applied
-  // as a heal-over-time buff for the channel duration; dataA = hp/sec).
-  AEtq: (api, caster, def, rank, ctx) => {
+  // Tranquility (Keeper, ult) — rain of healing energy over everything friendly around the
+  // KEEPER. It takes no target at all: `Rng1` is "-" in the SLK (see KNOWN_ABILITIES), so
+  // pressing the button IS the cast and the circle is centred on the caster, not on a spot
+  // the player picks. Columns Etq1..Etq4:
+  //   DataA "Life Healed"                40    per interval
+  //   DataB "Heal Interval"              1
+  //   DataD "Initial Immunity Duration"  3     the tooltip names it; nothing else reads it
+  //
+  // Both models come from outside the ability row, which is why it used to rain nothing:
+  //   [XEtq] Effectart = …\NightElf\Tranquility\Tranquility.mdl  (EfctID1 — the downpour)
+  //          Effectsoundlooped = TranquilityLoop
+  //   [AEtr] Targetart = …\Tranquility\TranquilityTarget.mdl      (BuffID1 — worn by each
+  //          healed unit; note the buff id is an ABILITY row, see the buff index)
+  AEtq: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    if (def.areaArt) api.emitEffect(def.areaArt, ctx.x, ctx.y, 0);
-    for (const t of alliesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 1000, { self: true })) {
-      if (!t.mechanical) api.applyBuff(t, { kind: "hot", group: "tranquility", timeLeft: lvl.duration || 30, sourceId: caster.id, value: d(lvl, 0, 20), ...fx(def) });
+    const total = lvl.heroDuration || lvl.duration || 30;
+    const area = lvl.area || 900;
+    const interval = d(lvl, 1, 1) || 1;
+    // The downpour is ONE model over the whole circle (see fieldOnce); the field beside it
+    // deals nothing and exists only to hold the loop for exactly as long as the channel runs
+    // and to be torn down with it on an interrupt.
+    fieldOnce(api, def, caster.x, caster.y, total);
+    api.addSpellField({
+      code: def.code, x: caster.x, y: caster.y, area,
+      damagePerWave: 0, waves: Math.max(1, Math.round(total / interval)), interval,
+      casterId: caster.id, art: "", loopSound: fieldLoop(def),
+    });
+    for (const t of alliesInArea(api, caster, def, caster.x, caster.y, area, { self: true })) {
+      if (!t.mechanical) api.applyBuff(t, { kind: "hot", group: "tranquility", timeLeft: total, sourceId: caster.id, value: d(lvl, 0, 40) / interval, ...fx(def) });
     }
   },
 
-  // Healing Spray (Alchemist) — heal allies in a small area for dataA on cast.
+  // Healing Spray (Alchemist) — the Alchemist lobs potion bottles into the area, wave after
+  // wave. It shares Cluster Rockets' Data row (AbilityMetaData `Ncs1..Ncs5`,
+  // useSpecific=ANhs,ANcs) with one column of its own (`Nhs6`):
+  //   DataA "Damage Amount"    30/45/60   ← HEALING here: `targs1` is friend,self,…
+  //   DataB "Damage Interval"  1
+  //   DataC "Missile Count"    6          bottles per wave
+  //   DataD "Max Damage"       280/385/490  the cap over the whole spray
+  //   DataF "Wave Count"       3/4/5
+  // So it is a heal-over-time, not the single 40-hp splash this used to be.
+  //
+  // The bottle is `Missileart = …\Other\HealingSpray\HealBottleMissile.mdl` and the burst
+  // on each healed unit is on the EFFECT OBJECT (`[XNhs] Specialart = …\Human\Heal\
+  // HealTarget.mdl`) — the ability row has no Casterart, Targetart or Areaeffectart at all.
   ANhs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    if (def.areaArt) api.emitEffect(def.areaArt, ctx.x, ctx.y, 0);
-    for (const t of alliesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 250, { self: true })) {
-      if (!t.mechanical) api.spellHeal(t, d(lvl, 0, 40));
+    const interval = d(lvl, 1, 1) || 1;
+    const waves = Math.max(1, d(lvl, 5, 3));
+    const cap = d(lvl, 3, 0);
+    const total = Math.min(cap > 0 ? cap : Infinity, d(lvl, 0, 30) * waves);
+    const time = waves * interval;
+    const area = lvl.area || 250;
+    // The bottles raining in, as a damage-less field so they arrive wave by wave.
+    api.addSpellField({
+      code: def.code, x: ctx.x, y: ctx.y, area, damagePerWave: 0,
+      waves, interval, casterId: caster.id,
+      art: def.missileArt, artPerWave: Math.max(1, d(lvl, 2, 6)), scatter: area * 0.7, waveSound: true,
+    });
+    for (const t of alliesInArea(api, caster, def, ctx.x, ctx.y, area, { self: true })) {
+      if (t.mechanical) continue;
+      api.applyBuff(t, { kind: "hot", group: "healingspray", timeLeft: time, sourceId: caster.id, value: total / time, ...fx(def) });
+      if (def.fxSpecialArt) api.emitEffect(def.fxSpecialArt, t.x, t.y, t.id);
     }
   },
 
@@ -1232,12 +1396,25 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(t, { kind: "ethereal", group: "banish", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: d(lvl, 0, 0.5), ...fx(def) });
   },
 
-  // Doom (Pit Lord, ult) — a heavy damage-over-time curse (dataA/sec).
+  // Doom (Pit Lord, ult) — the curse is only half of it. `Ndo1..Ndo3` + `UnitID1`:
+  //   DataA "Damage Per Second"            40
+  //   DataB "Number of Summoned Units"     1
+  //   DataC "Summoned Unit Duration (s)"   120
+  //   UnitID1                              nba2 — a DOOM GUARD
+  // "…until the unit dies, at which point a Doom Guard is summoned in its place" — and it
+  // is UNDISPELLABLE, which is the reason the row lists no duration column at all: Doom
+  // runs until it kills. So the curse goes on with no clock and the death half rides the
+  // mark, exactly as Black Arrow's minion does (both are raised in world.ts orbDeathEffects).
+  //
+  // Its two buffs split the same way: `[BNdo] Targetart = …\Other\Doom\DoomTarget.mdl` is
+  // the fire the doomed unit wears, `[BNdi] Effectart = …\Doom\DoomDeath.mdl` is what plays
+  // when it goes.
   ANdo: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "dot", group: "doom", timeLeft: 40, sourceId: caster.id, value: d(lvl, 0, 40), ...fx(def) });
+    api.applyBuff(t, { kind: "dot", group: "doom", timeLeft: Infinity, sourceId: caster.id, value: d(lvl, 0, 40), undispellable: true, ...fx(def) });
+    api.markDoom(t, caster, def, rank);
   },
 
   // Soul Burn (Firelord) — a damage-over-time burn that also silences the target.
@@ -1250,15 +1427,24 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(t, { kind: "silence", group: "soulburn", timeLeft: d0, sourceId: caster.id });
   },
 
-  // Acid Bomb (Alchemist) — splash: reduce armour (negative armour buff, dataD)
-  // and apply a corrosive damage-over-time (dataE) to the target and nearby units.
+  // Acid Bomb (Alchemist) — "Hurls a flask of acid at a target. The flask breaks upon
+  // impact, splashing a powerful acid on nearby hostile units" (Ubertip): a UNIT-target
+  // throw whose `Area1` = 200 splashes around whoever it lands on — the same shape as the
+  // Brewmaster's Drunken Haze, which is the other half of the same idea. Columns Nab3..Nab6,
+  // and the old code was one column out on every one of them:
+  //   DataC "Armor Penalty"      3/4/5     ← was read from DataD
+  //   DataD "Primary Damage"     6/11/17   the PRIMARY target's dps
+  //   DataE "Secondary Damage"   4/7/11    …and everyone else's ("slightly less damage")
+  //   DataF "Damage Interval"    1
   ANab: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
+    const life = lvl.duration || 15;
+    const tick = d(lvl, 5, 1) || 1;
     for (const o of enemiesInArea(api, caster, def, t.x, t.y, lvl.area || 200)) {
-      api.applyBuff(o, { kind: "armor", group: "acid", timeLeft: lvl.duration || 15, sourceId: caster.id, value: -d(lvl, 3, 5), ...fx(def) });
-      api.applyBuff(o, { kind: "dot", group: "acid", timeLeft: lvl.duration || 15, sourceId: caster.id, value: d(lvl, 4, 3) });
+      api.applyBuff(o, { kind: "armor", group: "acid", timeLeft: life, sourceId: caster.id, value: -d(lvl, 2, 3), ...fx(def) });
+      api.applyBuff(o, { kind: "dot", group: "acid", timeLeft: life, sourceId: caster.id, value: (o === t ? d(lvl, 3, 6) : d(lvl, 4, 4)) / tick });
     }
   },
 
@@ -1274,16 +1460,25 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 
-  // Shadow Strike (Warden) — the missile hits for dataE, then a poison damage-
-  // over-time (dataA/sec) plus a movement slow for the duration.
+  // Shadow Strike (Warden) — a thrown dagger: `Esh5 "Initial Damage"` (75/150/225) on the
+  // hit, then `Esh1 "Decaying Damage"` (10/30/45) every three seconds for `Dur1` = 15.1,
+  // plus `Esh2 "Movement Speed Factor"` = 0.5 of a slow.
+  //
+  // Those three seconds are the ability's `Cast1` column, and its own Ubertip is what proves
+  // it: "…dealing <AEsh,DataE1> initial damage, and <AEsh,DataA1> damage every
+  // <AEsh,Cast1> seconds for <AEsh,Dur1> seconds." `Cast` on this row is the POISON TICK,
+  // not a casting time — which is why the Warden used to stand still for three seconds
+  // before throwing (see world.ts CAST_TIME_IS_NOT_A_WINDUP). Our dot ticks continuously,
+  // so the per-tick figure is spread over the interval to give the same total.
   AEsh: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    const d0 = dur(lvl, t) || 15;
+    const d0 = dur(lvl, t) || 15.1;
+    const tick = lvl.castTime || 3;
     api.spellDamage(t, d(lvl, 4, 75), caster.id);
-    api.applyBuff(t, { kind: "dot", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 0, 10), ...fx(def) });
-    api.applyBuff(t, { kind: "slow", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0 });
+    api.applyBuff(t, { kind: "dot", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 0, 10) / tick, ...fx(def) });
+    api.applyBuff(t, { kind: "slow", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: d(lvl, 2, 0) });
   },
 
   // Howl of Terror (Pit Lord) — enemies in `area` deal dataA less attack damage.
@@ -1295,19 +1490,33 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     }
   },
 
-  // Drunken Haze (Brewmaster) — slow the movement & attack of enemies in an area
-  // (the WC3 miss chance isn't modelled).
+  // Drunken Haze (Brewmaster) — a flask thrown at ONE unit that splashes over the ones
+  // beside it: "Drenches enemy units in alcohol, causing their movement speed to be reduced
+  // by <ANdh,DataC1,%>%, and have a <ANdh,DataB1,%>% chance to miss on attacks" (Ubertip).
+  // Its `targs1` is `air,ground,enemy,organic,neutral` and `Rng1` = 550 — a unit-target
+  // ability whose `Area1` = 200 is the splash around the one you hit, not a circle you aim
+  // at the ground. (Same shape as Acid Bomb, the Alchemist's version of the same throw.)
+  // Its columns are the shared Silence row `Nsi1..Nsi4`:
+  //   DataB "Chance To Miss (%)"       0.45/0.65/0.8
+  //   DataC "Movement Speed Modifier"  0.15/0.3/0.5
   ANdh: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
     const lvl = def.levelData[rank - 1];
-    for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 200)) {
-      api.applyBuff(t, { kind: "slow", group: "haze", timeLeft: dur(lvl, t) || 10, sourceId: caster.id, value: 0.25, value2: 0.25, ...fx(def) });
+    for (const o of enemiesInArea(api, caster, def, t.x, t.y, lvl.area || 200)) {
+      const d0 = dur(lvl, o) || 12;
+      api.applyBuff(o, { kind: "slow", group: "haze", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 0.15), value2: 0, ...fx(def) });
+      api.applyBuff(o, { kind: "miss", group: "haze", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.45) });
     }
   },
 
   // Silence (Dark Ranger) — enemies in the area can't cast for the duration.
   ANsi: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    if (def.areaArt) api.emitEffect(def.areaArt, ctx.x, ctx.y, 0);
+    // `[ANsi] Effectart = …\Other\Silence\SilenceAreaBirth.mdl` — the dark ring that
+    // slams down over the area. The row names no Areaeffectart, so the old read drew
+    // nothing and the spell was also silent (Silence1.wav resolves off this model).
+    if (def.effectArt) api.emitEffect(def.effectArt, ctx.x, ctx.y, 0);
     for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 300)) {
       api.applyBuff(t, { kind: "silence", group: "silence", timeLeft: lvl.duration || 8, sourceId: caster.id, ...fx(def) });
     }
@@ -1364,12 +1573,32 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     }
   },
 
-  // Death and Decay (Lich, ult) — a decay field damaging everything in `area` each
-  // second for the duration (flat approximation of WC3's %-max-hp tick).
+  // Death and Decay (Lich, ult) — the plague field. Every number is its own row's:
+  //   `Udd1 "Max Life Drained per Second (%)"` = 0.04 — a PERCENTAGE of each victim's
+  //   maximum life, once a second, for `Dur1` = 35 over `Area1` = 300/400. That is what
+  //   makes it the building-killer it is: 4% of a Town Hall's 1500 dwarfs 4% of a Ghoul's
+  //   340, and a flat 20 (what this used to deal) had the ranking exactly backwards.
+  //
+  // Its art is on the effect object, not the ability: `[AUdd] EfctID1 = XUdd`, and
+  // `[XUdd] Effectart = …\Undead\DeathandDecay\DeathandDecayTarget.mdl` with
+  // `Effectsoundlooped = DeathAndDecayLoop`. `[AUdd]` itself names no art and no sound at
+  // all, which is why the field ran invisibly and in silence. The per-victim rot is
+  // `[BUdd] Targetart = …\DeathandDecayDamage.mdl`, carried on the wave's own buff art.
+  //
+  // Trees: it clears a forest in the real game, but `targs1` is `air,ground,structure,ward`
+  // with no `tree` — the flag list has no way to say it, so the ability does (fellsTrees).
   AUdd: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    const waves = Math.max(6, Math.round(lvl.duration || 30));
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 300, damagePerWave: 20, waves, interval: 1, casterId: caster.id, art: def.areaArt || def.targetArt });
+    const waves = Math.max(6, Math.round(lvl.duration || 35));
+    api.addSpellField({
+      code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 300,
+      damagePerWave: d(lvl, 0, 0.04), damagePctOfMax: true,
+      waves, interval: 1, casterId: caster.id,
+      // DeathandDecayTarget is ONE small purple spirit, not a pool — WC3 carpets the circle
+      // with them. Ten a second, each living out its ~1.9s Stand clip, is what reads as the
+      // rot spreading over the ground rather than as three dots on a lawn.
+      art: fieldArt(def), loopSound: fieldLoop(def), artPerWave: 10, fellsTrees: true,
+    });
   },
 
   // Starfall (Priestess, ult) — channelled: stars rain on enemies around the
@@ -1378,35 +1607,95 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     const interval = d(lvl, 1, 1.5) || 1.5;
     const waves = Math.max(4, Math.round((lvl.duration || 45) / interval));
-    api.addSpellField({ code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800, damagePerWave: d(lvl, 0, 50), waves, interval, casterId: caster.id, art: def.areaArt || def.targetArt });
+    api.addSpellField({ code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800, damagePerWave: d(lvl, 0, 50), waves, interval, casterId: caster.id, art: fieldArt(def), loopSound: fieldLoop(def) });
   },
 
-  // Stampede (Beastmaster, ult) — a herd tramples the target area over time.
+  // Stampede (Beastmaster, ult) — a herd of thunder lizards stampedes THROUGH the area,
+  // one beast at a time. AbilityMetaData names all five columns (Nst1..Nst5):
+  //   DataA "Beasts Per Second"        2      → one arrives every 0.5s for the 30s duration
+  //   DataB "Beast Collision Radius"   55
+  //   DataC "Damage Amount"            60     ← what a beast deals where it lands
+  //   DataD "Damage Radius"            275    ← …and how wide, which is NOT `Area1` (1000,
+  //                                             the ground the herd covers — hence `scatter`)
+  //   DataE "Damage Delay"             0.2
+  // The old code read DataB — the COLLISION RADIUS — as the damage, so a stampede hit for
+  // 55 in a 1000-radius circle 15 times instead of 60 in a 275 one sixty times.
+  //
+  // The beast itself is the ability's Missileart (StampedeMissile.mdl, the running lizard);
+  // `Effectsoundlooped = StampedeLoop` is on the ability rather than on an effect object,
+  // which is what fieldLoop's second half is for.
   ANst: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 1000, damagePerWave: d(lvl, 1, 55), waves: 15, interval: 2, casterId: caster.id, art: def.areaArt || def.targetArt });
+    const perSec = Math.max(0.1, d(lvl, 0, 2));
+    const total = lvl.heroDuration || lvl.duration || 30;
+    api.addSpellField({
+      code: def.code, x: ctx.x, y: ctx.y,
+      area: d(lvl, 3, 275), scatter: lvl.area || 1000,
+      damagePerWave: d(lvl, 2, 60),
+      waves: Math.max(1, Math.round(total * perSec)), interval: 1 / perSec,
+      impactDelay: d(lvl, 4, 0.2), casterId: caster.id,
+      art: def.missileArt || fieldArt(def), loopSound: fieldLoop(def), waveSound: true,
+    });
   },
 
-  // Cluster Rockets (Tinker) — dataC volleys of dataA damage in `area`.
+  // Cluster Rockets (Tinker) — a salvo of rockets into the area. Its Data columns are the
+  // SAME shared row Healing Spray uses (AbilityMetaData `Ncs1..Ncs5`, useSpecific=ANhs,ANcs):
+  //   DataA "Damage Amount"      11.25/19.75/30.5   per rocket
+  //   DataB "Damage Interval"    0.25
+  //   DataC "Missile Count"      6/12/18
+  //   DataD "Max Damage"         105/195/300        the cap over the whole salvo
+  //   DataF "Effect Duration"    1.01               how long the salvo takes to land
+  // The rockets are the ability's own Missileart (TinkerRocketMissile.mdl) — nothing is on
+  // an area art field, which is why the salvo used to be an invisible tick of damage.
   ANcs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 200, damagePerWave: d(lvl, 0, 30), waves: d(lvl, 2, 6), interval: 0.2, casterId: caster.id, art: def.areaArt || def.targetArt });
+    const interval = d(lvl, 1, 0.25) || 0.25;
+    const waves = Math.max(1, Math.round((d(lvl, 5, 1) || 1) / interval));
+    const rockets = Math.max(1, d(lvl, 2, 6));
+    const perWave = rockets / waves;
+    api.addSpellField({
+      code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 200,
+      damagePerWave: d(lvl, 0, 11.25) * perWave, waves, interval,
+      maxDamagePerWave: d(lvl, 3, 0) / waves,
+      casterId: caster.id, art: def.missileArt || fieldArt(def),
+      artPerWave: Math.max(1, Math.round(perWave)), waveSound: true,
+    });
   },
 
   // Volcano (Firelord, ult) — sustained eruption damaging the target area.
   ANvc: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 500, damagePerWave: d(lvl, 1, 8), waves: 12, interval: 1, casterId: caster.id, art: def.areaArt || def.targetArt });
+    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 500, damagePerWave: d(lvl, 1, 8), waves: 12, interval: 1, casterId: caster.id, art: fieldArt(def), loopSound: fieldLoop(def) });
   },
 
-  // Earthquake (Far Seer, ult) — rumbling field: slows units and damages buildings
-  // in `area`. Modelled as a repeating damage field over the ground.
+  // Earthquake (Far Seer, ult) — the ground itself comes apart. Columns Oeq1..Oeq4:
+  //   DataA "Effect Delay"                    0.5
+  //   DataB "Damage per Second to Buildings"  50    ← BUILDINGS ONLY
+  //   DataC "Units Slowed (%)"                0.75  ← and units are only SLOWED
+  //   DataD "Final Area"                      250
+  // The old code read DataA (the 0.5s delay) as the slow fraction and split DataB across
+  // everything in the circle, so it hurt units it should not touch and slowed them by half
+  // instead of three quarters.
+  //
+  // Art + sound are on the effect object: `[AOeq] EfctID1 = XOeq`, `[XOeq] Effectart =
+  // …\Orc\EarthQuake\EarthQuakeTarget.mdl`, `Effectsoundlooped = EarthquakeLoop`. The
+  // ability row names neither, which is why the quake was silent, still and invisible. The
+  // slowed unit wears `[BOeq] Targetart` (StasisTotemTarget, overhead) through fx(def).
   AOeq: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    const waves = Math.max(6, Math.round(lvl.duration || 25));
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 250, damagePerWave: d(lvl, 1, 50) / 4, waves, interval: 1, casterId: caster.id, art: def.areaArt || def.targetArt });
-    for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 250)) {
-      api.applyBuff(t, { kind: "slow", group: "quake", timeLeft: lvl.duration || 25, sourceId: caster.id, value: d(lvl, 0, 0.5), value2: 0 });
+    const total = lvl.heroDuration || lvl.duration || 25;
+    const area = lvl.area || 250;
+    fieldOnce(api, def, ctx.x, ctx.y, total); // one EarthQuakeTarget over the whole circle
+    api.addSpellField({
+      code: def.code, x: ctx.x, y: ctx.y, area,
+      damagePerWave: d(lvl, 1, 50), buildingsOnly: true,
+      waves: Math.max(6, Math.round(total)), interval: 1, delay: d(lvl, 0, 0.5),
+      casterId: caster.id, art: "", loopSound: fieldLoop(def),
+      shake: true,
+    });
+    for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, area)) {
+      if (t.building) continue; // a building cannot be slowed; it is being knocked down instead
+      api.applyBuff(t, { kind: "slow", group: "quake", timeLeft: total, sourceId: caster.id, value: d(lvl, 2, 0.75), value2: 0, ...fx(def) });
     }
   },
 
@@ -1419,17 +1708,45 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.addSpellField({ code: def.code, x: caster.x, y: caster.y, area: lvl.area || 200, damagePerWave: d(lvl, 0, 110), waves: Math.max(3, Math.round(lvl.duration || 7)), interval: 1, casterId: caster.id, art: def.casterArt || def.specialArt });
   },
 
-  // Immolation (Demon Hunter) — burn nearby enemies for dataA/sec; here it fires a
-  // short damage field around the caster (a toggle isn't modelled).
-  AEim: (api, caster, def, rank) => {
-    const lvl = def.levelData[rank - 1];
-    api.addSpellField({ code: def.code, x: caster.x, y: caster.y, area: lvl.area || 160, damagePerWave: d(lvl, 0, 10), waves: 12, interval: 1, casterId: caster.id, art: def.specialArt || def.casterArt });
-  },
+  // Immolation (Demon Hunter) — a TOGGLE, not a cast: pressing it lights the Demon Hunter
+  // and he burns until he (or an empty mana bar) puts it out. Columns Eim1..Eim3:
+  //   DataA "Damage per Interval"   10/15/20   every `Dur1` = 1 second
+  //   DataB "Mana Drained per Second" 7
+  //   DataC "Buffer Mana Required"    10       below this it snuffs itself out
+  // plus `Cost1` = 25 to light it (deactivating is free — `Unorder = unimmolation`).
+  // The burn itself lives in world.ts tickImmolation, because it has to keep up with a
+  // caster who is walking; all this does is flip the switch.
+  AEim: (api, caster) => api.toggleImmolation(caster),
 
-  // Locust Swarm (Crypt Lord, ult) — a swarm drains enemies around the caster.
+  // Locust Swarm (Crypt Lord, ult) — the swarm is not an effect, it is TWENTY UNITS. The
+  // ability's columns say so (Uls1..Uls5 + `UnitID1 = uloc`, the Locust):
+  //   DataA "Number of Swarm Units"          20
+  //   DataB "Unit Release Interval (s)"      0.2
+  //   DataC "Max Swarm Units Per Target"     7
+  //   DataD "Damage Return Factor"           0.75   (what the Crypt Lord heals back)
+  //   DataE "Damage Return Threshold"        20
+  // `uloc` is a 65-hp flier with a 12-damage Spells-type attack and the `Aloc` Locust
+  // ability — it does the damage with its own weapon, which is why there is no damage
+  // column here at all. Modelling it as a nameless damage field (what this was) is why it
+  // had "no particles": the locusts ARE the particles.
+  //
+  // The field it still registers deals nothing — it is there to hold the swarm's own
+  // `Effectsoundlooped = LocustSwarmLoop` for the duration and to be torn down with it.
+  // NOT YET MODELLED: the DataD/DataE return that heals the Crypt Lord off their bites.
   AUls: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    api.addSpellField({ code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800, damagePerWave: d(lvl, 0, 20) / 4, waves: Math.max(6, Math.round(lvl.duration || 30)), interval: 1, casterId: caster.id, art: def.casterArt || def.specialArt });
+    const total = lvl.heroDuration || lvl.duration || 30;
+    const unit = lvl.summon || "uloc";
+    const count = Math.max(1, d(lvl, 0, 20));
+    for (let i = 0; i < count; i++) {
+      const facing = caster.facing + (i / count) * Math.PI * 2;
+      api.requestSummon(unit, caster.x, caster.y, facing, caster.owner, caster.team, total, caster.id, summonArt(def), false);
+    }
+    api.addSpellField({
+      code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800,
+      damagePerWave: 0, waves: Math.max(1, Math.round(total)), interval: 1,
+      casterId: caster.id, art: "", loopSound: fieldLoop(def),
+    });
   },
 
   // Wind Walk (Blademaster) — vanish after a beat, move faster, and hit the next thing you
@@ -1637,12 +1954,27 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     });
   },
 
-  // Metamorphosis / Robo-Goblin / Chemical Rage — transforms modelled as a timed
-  // self power-up (bonus armour, damage, and attack speed) rather than a full
-  // model/stat swap.
-  AEme: (api, caster, def, rank) => transformBuff(api, caster, def, rank, 6, 20),
-  ANrg: (api, caster, def, rank) => transformBuff(api, caster, def, rank, 4, 12),
-  ANcr: (api, caster, def, rank) => transformBuff(api, caster, def, rank, 3, 10),
+  // Metamorphosis / Robo-Goblin / Chemical Rage — REAL form swaps, not stat buffs. All
+  // three sit in AbilityMetaData's morph family (`Eme1..Eme4` are declared
+  // `useSpecific=AEme,…,Abur,…,ANcr,ANrg,…` — the very same columns Burrow uses), so each
+  // carries the pair morphToggle already reads:
+  //   DataA   "Normal Form Unit"      Edem / Nalc / Ntin
+  //   UnitID1 "Alternate Form Unit"   Edmm / Nalm / Nrob
+  // and the alternate UNIT is where every "bonus" in the tooltip actually lives, which is
+  // why a stat buff could never have got any of them right:
+  //   • Edmm (Demon Form) attacks at range 600 with `atkType chaos`, `weapTp msplash` and
+  //     750 base life, against the Demon Hunter's 100-range melee normal attack — that is
+  //     the tooltip's "a powerful Demon with a ranged attack" in full. On top of it,
+  //     `Eme5 "Alternate Form Hit Point Bonus"` = DataE = 500 is the only stat the ability
+  //     itself adds, and the tooltip names that too.
+  //   • Nrob is `type Mechanical` and carries `ANde` (Demolish) — "rendering him immune to
+  //     most forms of stun, most offensive spells" is what being Mechanical MEANS.
+  //   • Nalm moves 405 against the Alchemist's 290.
+  // Duration comes off HeroDur (see morphToggle): 45s for Metamorphosis, 15 for Chemical
+  // Rage, and Robo-Goblin has none at all — it is a toggle you turn off yourself.
+  AEme: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
+  ANrg: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
+  ANcr: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
 
   // Frost Armor (Lich) — buff a friendly unit with +armour (dataB) for the
   // duration (WC3 also slows melee attackers, which we don't model). Autocasts.
@@ -1674,9 +2006,17 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const dy = ctx.y - caster.y;
     const dist = Math.hypot(dx, dy) || 1;
     const r = Math.min(dist, maxR);
-    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, 0);
+    // Both models, and the AbilityFunc row says outright which end each belongs to:
+    //     // Art to play at the new coordinate
+    //     Areaeffectart = …\NightElf\Blink\BlinkTarget.mdl
+    //     // Art to leave behind at old coordinate
+    //     Specialart    = …\NightElf\Blink\BlinkCaster.mdl
+    // Neither is TargetArt or Casterart — both of those are empty on `[AEbl]`, which is why
+    // Blink used to teleport with no smoke at either end (and, with no model to resolve a
+    // WAV off, in silence: BlinkBirth1.wav / BlinkArrival1.wav live beside them).
+    if (def.specialArt) api.emitEffect(def.specialArt, caster.x, caster.y, 0);
     api.teleport(caster, caster.x + (dx / dist) * r, caster.y + (dy / dist) * r);
-    if (def.targetArt) api.emitEffect(def.targetArt, caster.x, caster.y, 0);
+    if (def.areaArt) api.emitEffect(def.areaArt, caster.x, caster.y, 0);
   },
 
   // Mass Teleport (Archmage, ult) — warp the caster and nearby allies to a point.
@@ -1694,12 +2034,20 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     });
   },
 
-  // Big Bad Voodoo (Shadow Hunter, ult) — nearby allies become invulnerable.
+  // Big Bad Voodoo (Shadow Hunter, ult) — a CHANNEL (`Animnames = stand,channel`), and that
+  // is the whole balance of it: the Shadow Hunter himself is not protected and has to stand
+  // in his own circle for the full `Dur1` = 30 seconds. Move him, stun him or kill him and
+  // the ritual breaks — and every ally loses the invulnerability the same instant, which is
+  // why the buff is refreshed on a short leash from the caster's tick (world.ts tickVoodoo)
+  // instead of being handed out once for 30 seconds.
+  //
+  // Two buffs, and neither is on the ability: `[BOvd] Targetart = …\Orc\Voodoo\
+  // VoodooAuraTarget.mdl` (overhead, on each protected ally) and `[BOvc] Targetart =
+  // …\Voodoo\VoodooAura.mdl` (the ring on the ground under the Shadow Hunter).
   AOvd: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    for (const t of alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 800, { self: false })) {
-      api.applyBuff(t, { kind: "invuln", group: "voodoo", timeLeft: lvl.duration || 30, sourceId: caster.id, ...fx(def) });
-    }
+    api.voodoo(caster, def, rank);
+    if (def.buffFx.length) api.emitEffect(def.buffArt, caster.x, caster.y, caster.id, lvl.duration || 30);
   },
 
   // --- drains / sacrifices ---
@@ -1769,7 +2117,15 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t) || t.isHero) return;
     const lvl = def.levelData[rank - 1];
+    // `Udp1 "Life Converted to Mana"` — a FRACTION of the sacrifice's maximum life
+    // (0.33/0.66/1), which is why the Lich wants a full-health Ghoul and not a hurt one.
     caster.mana = Math.min(caster.maxMana, caster.mana + t.maxHp * d(lvl, 0, 0.33));
+    // Two models, one per end of the ritual, and the row names them plainly:
+    //   Casterart = …\Undead\DarkRitual\DarkRitualCaster.mdl   the mana arriving
+    //   Targetart = …\Undead\DarkRitual\DarkRitualTarget.mdl   the sacrifice going out
+    // The target's is the one carrying the sound (DarkRitualTarget1.wav) — playing only the
+    // caster's, as this did, left the spell both half-drawn and silent.
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
     if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
     api.killUnit(t);
   },
@@ -1801,10 +2157,42 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.dismissSummons(caster.owner, wolfTypes);
     summonSpell(api, caster, def, rank, { count: 0, atPoint: false });
   },
-  // Force of Nature (Keeper) — summon dataA treants at the target point.
-  AEfn: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 0, atPoint: true }, ctx),
-  // Carrion Beetles (Crypt Lord) — raise a beetle from a corpse at the point.
-  AUcb: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true }, ctx),
+  // Force of Nature (Keeper) — it does not conjure treants out of the air, it turns TREES
+  // into them, and its own `targs1` says so: the single flag `tree`. `Efn1 "Number of
+  // Summoned Units"` = 2/3/4 is the cap and `Area1` = 150/225/300 the circle it looks in;
+  // each Treant stands in the hole its own tree left, so a Keeper cutting a Force of Nature
+  // out of a treeline opens a path through it. Summoning them off `dataB` at the click
+  // (what summonSpell did) both made the wrong number and left the grove standing.
+  AEfn: (api, caster, def, rank, ctx) => {
+    const lvl = def.levelData[rank - 1];
+    if (!lvl.summon) return;
+    const art = summonArt(def);
+    const life = lvl.heroDuration || lvl.duration || 60;
+    for (const spot of api.fellTrees(ctx.x, ctx.y, lvl.area || 150, Math.max(1, d(lvl, 0, 2)))) {
+      api.requestSummon(lvl.summon, spot.x, spot.y, caster.facing, caster.owner, caster.team, life, caster.id, art, true);
+    }
+  },
+  // Carrion Beetles (Crypt Lord) — `targs1 = dead`: the ability eats a CORPSE. Pressing it
+  // takes no aiming at all; the Crypt Lord finds the nearest body inside `Rng1` = 900 and
+  // a beetle climbs out of it. Columns (the shared raise-from-corpse row Rai1..Rai4 plus
+  // two of its own):
+  //   DataA "Units Summoned (Type One)"  1
+  //   DataC "Unit Type One"              ucs1/ucs2/ucs3   ← a RAWCODE, hence dataStr
+  //   DataE "Max Units Summoned"         5
+  // Beetles are permanent ("Beetles are permanent until killed" — Ubertip), so no timer.
+  AUcb: (api, caster, def, rank) => {
+    const lvl = def.levelData[rank - 1];
+    const unit = lvl.dataStr[2] || lvl.summon || SUMMON_FALLBACK[def.code] || "";
+    if (!unit) return;
+    const cap = d(lvl, 4, 5);
+    if (cap > 0 && api.countOwned(caster.owner, unit) >= cap) return;
+    const corpse = api.takeCorpse(caster.x, caster.y, lvl.castRange || lvl.area || 900);
+    if (!corpse) return;
+    const art = summonArt(def);
+    for (let i = 0; i < Math.max(1, d(lvl, 0, 1)); i++) {
+      api.requestSummon(unit, corpse.x, corpse.y, corpse.facing, caster.owner, caster.team, 0, caster.id, art, true);
+    }
+  },
   // Summon Bear / Quilbeast / Hawk (Beastmaster) — one beast beside the caster.
   ANsg: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
   ANsq: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
@@ -1823,6 +2211,19 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   ANef: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 3, atPoint: false }),
   // Phoenix (Blood Mage, ult) — summon a phoenix beside the caster.
   AHpx: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
+  // Vengeance (Warden, ult) — "Creates a powerful avatar that summons invulnerable spirits
+  // from nearby corpses to attack your enemies" (Ubertip). It is a SUMMON, and the data says
+  // exactly what of: `Esv1 "Number of Summoned Units"` = 1 of `UnitID1 = espv`, the Avatar of
+  // Vengeance (level 7, 1200 hp, a 450-range missile attack) for `Dur1` = 180 seconds. The
+  // Avatar carries `Avng` on autocast — raising the `even` Spirits is ITS ability, not this
+  // one. It was filed as a passive in KNOWN_ABILITIES, which is why the button did nothing
+  // at all: with no target type there was no order to give.
+  //
+  // Its birth is `Missileart = …\SpiritOfVengeance\SpiritOfVengeanceBirthMissile.mdl` and
+  // the Avatar leaves on `Targetart` (feralspiritdone), which summonArt reads via
+  // `[BEsv] Effectart`.
+  AEsv: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
+
   // Mirror Image (Blademaster) — conjure illusions (copies of the caster's type).
   // Mirror Image (Blademaster) — the whole ability is a staged shuffle (the caster
   // vanishes, MirrorImageCaster plays, missiles fly out, and images land alongside the
@@ -1840,31 +2241,39 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AUin: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 250)) api.spellDamage(t, d(lvl, 0, 50), caster.id);
-    if (lvl.summon) api.requestSummon(lvl.summon, ctx.x, ctx.y, caster.facing, caster.owner, caster.team, lvl.heroDuration || lvl.duration || 180, caster.id, { summon: "", unsummon: def.buffEffectArt }, true);
+    // How long the Infernal stays is `Uin2 "Duration"` = 180 — NOT the Dur/HeroDur columns,
+    // which on this row are the 4s/2s STUN the crash lands on everything under it. Reading
+    // them (as this did) gave the Dreadlord's ultimate a two-second demon.
+    if (lvl.summon) api.requestSummon(lvl.summon, ctx.x, ctx.y, caster.facing, caster.owner, caster.team, d(lvl, 1, 180), caster.id, { summon: def.effectArt, unsummon: def.buffEffectArt }, true);
     if (def.specialArt) api.emitEffect(def.specialArt, ctx.x, ctx.y, 0);
   },
 
-  // Animate Dead (Death Knight, ult) — raise dataA nearby corpses to fight again.
-  AUan: (api, caster, def, rank, ctx) => {
+  // Animate Dead (Death Knight, ult) — `targs1 = air,ground,dead`, the same corpse-eating
+  // family as Carrion Beetles, and cast the same way: pressed, not aimed. It sweeps `Area1`
+  // = 900 around the Death Knight and stands `Uan1 "Number of Corpses Raised"` = 6 of the
+  // bodies back up.
+  //   DataB — `Hre2 "Raised Units Are Invulnerable"` = 1. They cannot be killed; they simply
+  //           run out (`Dur1` = 40s at rank 1, 120 after) — which is the whole ultimate.
+  // What comes back is a SUMMON, not the unit that died: it keeps the corpse's body and its
+  // weapon and loses everything else it once knew (spells, autocast, its own abilities), and
+  // it leaves no second corpse behind. That is what `raiseNearbyCorpses` builds.
+  //
+  // The burst each body rises in is `Specialart = …\Undead\AnimateDead\AnimateDeadTarget.mdl`
+  // (the ability row has no Casterart at all, so the old read drew nothing).
+  AUan: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    if (def.casterArt) api.emitEffect(def.casterArt, ctx.x, ctx.y, 0);
-    api.raiseNearbyCorpses(ctx.x, ctx.y, lvl.area || 900, caster.owner, caster.team, Math.max(1, d(lvl, 0, 6)));
+    api.raiseNearbyCorpses(caster.x, caster.y, lvl.area || 900, caster.owner, caster.team, Math.max(1, d(lvl, 0, 6)), {
+      durationSec: lvl.heroDuration || lvl.duration || 40,
+      invulnerable: d(lvl, 1, 0) !== 0,
+      art: def.specialArt || def.casterArt,
+      unsummonArt: def.buffEffectArt,
+    });
   },
 };
 
 /** Level-data of the ability being cast (rank is 1-based). */
 function lv(def: AbilityDef, rank: number): AbilityLevel {
   return def.levelData[Math.min(rank, def.levelData.length) - 1];
-}
-
-/** A transform ultimate/toggle modelled as a timed self power-up: +armour and
- *  +attack damage, plus a movement/attack-speed boost, for the (hero) duration. */
-function transformBuff(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, armor: number, damage: number): void {
-  const lvl = lv(def, rank);
-  const t = lvl.heroDuration || lvl.duration || 30;
-  api.applyBuff(caster, { kind: "armor", group: "transform", timeLeft: t, sourceId: caster.id, value: armor, ...fx(def) });
-  api.applyBuff(caster, { kind: "damage", group: "transform", timeLeft: t, sourceId: caster.id, value: damage });
-  api.applyBuff(caster, { kind: "haste", group: "transform", timeLeft: t, sourceId: caster.id, value: 0.15, value2: 0.15 });
 }
 
 /** Generic summon: place `count` (0 ⇒ read dataA/dataB) copies of the ability's

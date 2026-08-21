@@ -191,13 +191,14 @@ const SPELL_SOUND_FALLBACK: Record<string, string> = {
 const SPELL_SOUND_ART: Record<string, (d: AbilityDef) => string[]> = {
   AOmi: (d) => [d.specialArt],
 };
-// The looping bed a channelled area field lays down for as long as it runs. WC3 ships
-// these WAVs beside the effect model but references them from no data field (MPQ
-// HumanAbilityFunc.txt [AHbz] has no sound entry at all), so they're named here.
-const FIELD_LOOP_SOUND: Record<string, string> = {
-  AHbz: "Abilities\\Spells\\Human\\Blizzard\\BlizzardLoop1.wav", // 4s wind, looped for the 6s channel
-  ANrf: "Abilities\\Spells\\Demon\\RainOfFire\\RainOfFireLoop1.wav", // the roar under the Pit Lord's waves
-};
+// The looping bed a channelled area field lays down for as long as it runs. This is DATA,
+// not a hardcode: the label rides on the field (SpellFieldInit.loopSound), taken from the
+// ability's `Effectsoundlooped` or — for the six fields that carry their art on an effect
+// object rather than on themselves — from that object's (see AbilityDef.fxLoopSound).
+//   [XHbz] Effectsoundlooped = BlizzardLoop      [XUdd] → DeathAndDecayLoop
+//   [XErf] → RainOfFireLoop                      [XOeq] → EarthquakeLoop
+//   [XEtq] → TranquilityLoop                     [ANst] → StampedeLoop (on the ability)
+// Each label is an AbilitySounds.slk row naming the WAV; Sounds.abilityLoopPath resolves it.
 // The item icon carried on the cursor while moving it, as a fraction of an inventory
 // slot: just under it, so the hand looks like it's holding that same icon.
 const CARRIED_ITEM_SCALE = 0.85;
@@ -214,6 +215,13 @@ const FIXED_CARD_ICONS = [
 // Blizzard.j's InitDNCSounds(): a rooster crows the moment the clock reaches Dawn, a
 // wolf howls at Dusk. Both are rows of UI\SoundInfo\AmbienceSounds.slk, playing
 // Sound\Time\DaybreakRooster.wav and Sound\Time\DuskWolf.wav.
+/** How close the camera has to be looking to feel an Earthquake, and how hard it bucks.
+ *  In no data file — `CameraSetEQNoiseForPlayer(p, richter)` is a Blizzard.j helper that
+ *  takes its magnitude from the caller, and the ability row carries no camera field at all.
+ *  Read as `velocity / magnitude` Hz (see ScriptCamera's NOISE_* note): 240/30 = 8 Hz. */
+const EQ_FEEL_RANGE = 2200;
+const EQ_MAGNITUDE = 30;
+const EQ_VELOCITY = 240;
 const DAWN_SOUND = "RoosterSound";
 const DUSK_SOUND = "WolfSound";
 const MAX_HEROES = MELEE.MELEE_HERO_LIMIT; // altars + tavern combined
@@ -3711,14 +3719,27 @@ export class MapViewerScene {
   /** Loop keys of the channelled fields that were running last frame, so a field that
    *  has since ended can have its bed stopped (`FIELD_LOOP_SOUND`). */
   private fieldLoops = new Set<string>();
+  /** True while this client's camera is being shaken by an Earthquake (see updateFieldLoops).
+   *  Tracked so the noise is set once on each edge rather than every frame — and so it is
+   *  cleared when the quake ends without stamping on a cinematic that set its own. */
+  private quaking = false;
 
   /** Reconcile the looping bed of every running channelled field against last frame:
    *  start one for each new field, stop the ones whose field is gone. Keyed by code +
    *  position so two simultaneous Blizzards each howl at their own spot. */
-  private updateFieldLoops(fields: Array<{ code: string; x: number; y: number }>): void {
+  private updateFieldLoops(fields: Array<{ code: string; x: number; y: number; loopSound: string; shake: boolean }>): void {
     const live = new Set<string>();
+    // Earthquake is the one thing in the game that moves the CAMERA as a gameplay effect,
+    // and Blizzard.j says how: `CameraSetEQNoiseForPlayer` → `CameraSetTargetNoiseEx(…,
+    // vertOnly = true)`, i.e. the ground bucks rather than sliding sideways. Felt only if
+    // you are looking anywhere near it — the rumble belongs to the shot, not to the match.
+    const quake = fields.some((f) => f.shake && Math.hypot(f.x - this.target[0], f.y - this.target[1]) < EQ_FEEL_RANGE);
+    if (quake !== this.quaking) {
+      this.quaking = quake;
+      this.scriptCam.setNoise(false, quake ? EQ_MAGNITUDE : 0, quake ? EQ_VELOCITY : 0, true);
+    }
     for (const f of fields) {
-      const wav = FIELD_LOOP_SOUND[f.code];
+      const wav = this.sounds?.abilityLoopPath(f.loopSound) ?? "";
       if (!wav) continue;
       const key = `${f.code}|${Math.round(f.x)}|${Math.round(f.y)}`;
       live.add(key);
@@ -4278,7 +4299,15 @@ export class MapViewerScene {
       inst.setSequenceLoopMode(0); // play once, then settleBuffFx takes over
       this.buffFxBirthing.add(key);
     } else {
-      inst.setSequence(this.effectSequence(inst));
+      // No Birth clip: there is no flash to open on, so go straight to the steady state —
+      // the looping Stand. Mana Shield is the case that needs it. `ManaShieldCaster.mdx`
+      // ships four sequences — `nothing`, `Stand First`, `Stand Second`, `Stand Third` (the
+      // three strengths the sphere shows as it soaks damage) — and effectSequence, which
+      // takes the first clip with a sane interval, picked **"nothing"**. So the Naga wore a
+      // frozen yellow flare and no blue sphere at all, which is exactly the "wrong colour"
+      // it looked like: the shield's own Blue_Star2/Blue_Glow2 layers only animate in Stand.
+      const idle = this.seqIndex(inst, /^stand/i);
+      inst.setSequence(idle >= 0 ? idle : this.effectSequence(inst));
       inst.setSequenceLoopMode(2);
     }
     inst.show();
@@ -7360,6 +7389,31 @@ export class MapViewerScene {
     return resolveTipRefs(text, { abilities: this.abilities, items: this.items, units: this.registry, upgrades: this.upgrades }, { self, level: rank });
   }
 
+  /** Is this toggle ability currently ON — i.e. should its button wear the `un` face and
+   *  offer to switch it off? Four shapes, and each answers with the state it actually keeps:
+   *    • Root/Uproot (`Aroo`) — the Ancient is planted.
+   *    • Immolation (`AEim`) — the Demon Hunter is alight (`[AEim]` Art=BTNImmolationOn,
+   *      Unart=BTNImmolationOff; the two icons are the whole feedback that it is burning).
+   *    • Mana Shield (`ANms`) — the shield is up (Art=BTNNeutralManaShield /
+   *      Unart=…ShieldOff).
+   *    • Every FORM toggle — Burrow, Ethereal/Corporeal Form, Call to Arms, Robo-Goblin —
+   *      is on when the unit IS its ability's alternate form unit, which is the same pair of
+   *      columns morphToggle reads. That is generic on purpose: it needs no list, and an
+   *      autocast row whose `UnitID1` names a summon (Black Arrow's `ndr1`) can never match
+   *      the caster's own type, so it stays untouched.
+   *
+   *  Autocast toggles are NOT here: their on/off is the green autocast border, not a
+   *  different icon, and both directions of those rows carry the same `Art`. */
+  private toggleIsOn(su: SimUnit, code: string, def: AbilityDef): boolean {
+    if (code === "Aroo") return !su.uprooted;
+    if (code === "AEim") return !!su.immolation;
+    if (code === "ANms") return su.buffs.some((b) => b.kind === "manaShield");
+    if (def.autocast) return false;
+    const lvl = def.levelData[0];
+    const alt = lvl ? lvl.summon || lvl.dataStr[1] || "" : "";
+    return !!alt && su.typeId === alt;
+  }
+
   /** Append a movable unit's learned/innate abilities (and a hero's Learn Skill
    *  button) to its command card. Auras show as passive (disabled) indicators;
    *  autocast abilities (Heal/Slow) toggle; the rest arm a target or fire. */
@@ -7389,11 +7443,11 @@ export class MapViewerScene {
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
-      // A toggle shows the face of what it can do NEXT. `Aroo` is the case that needs it —
-      // one row, two directions (Order=root Art=BTNRoot "Root" / Unorder=unroot
-      // Unart=BTNUproot "Uproot") — so a PLANTED Ancient wears the `un` half, because
-      // pulling itself up is the move available to it. See AbilityDef.unIcon.
-      const reversed = ab.code === "Aroo" && !su.uprooted && !!def.unIcon;
+      // A toggle shows the face of what it can do NEXT: one row, two directions
+      // (`[Aroo]` Order=root Art=BTNRoot "Root" / Unorder=unroot Unart=BTNUproot "Uproot"),
+      // so a PLANTED Ancient wears the `un` half because pulling itself up is the move
+      // available to it. See AbilityDef.unIcon and toggleIsOn for the other three shapes.
+      const reversed = !!def.unIcon && this.toggleIsOn(su, ab.code, def);
       // …and a planted Ancient with anything in its queue cannot pull itself up at all: WC3
       // greys Uproot out for as long as it is training or researching, because the work would
       // have nowhere to go. The sim refuses it too (SimWorld.rootRefusal) — this is the half
@@ -8386,6 +8440,12 @@ export class MapViewerScene {
       // The summon burst belongs on the SPOT the unit lands on, not on the caster —
       // three wolves fan out around the Far Seer, and each arrives in its own.
       if (s.summonArt) world.emitEffectAt(s.summonArt, sx, sy, true); // the model carries its own SND event
+      // …and a summon whose ability names NO burst still announces itself, because in WC3
+      // the sound of a ward going down is the WARD's own: every one of them (`[AOsw]` Serpent
+      // Ward, `[Aeye]` Sentry Ward, `[Ahwd]` Healing Ward, `[Asta]` Stasis Trap) carries no
+      // art field at all, and the SND event sits on the arriving unit's Birth clip. Without
+      // this a Shadow Hunter planted his ward in total silence.
+      else this.sounds?.playModelSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
       void this.spawnUnit(d, sx, sy, s.owner, s.team).then((simId) => {
         if (simId === null) return;
         const su = world.units.get(simId);
@@ -8394,6 +8454,15 @@ export class MapViewerScene {
           su.summonLeft = summonLeft;
           su.summonMax = summonLeft;
           su.isSummon = true; // temporary summon — expires, leaves no corpse, ×0.5 XP
+          // A RAISED body is a shell, not the unit that fell: "the raised units keep their
+          // attacks but lose all abilities and spells" (Animate Dead). It walks and swings
+          // and nothing else — no autocast, no casting, no Web, no Burrow.
+          if (su.abilities.length) su.abilities = [];
+        }
+        // …and Animate Dead's raise cannot be hurt at all (`Hre2 "Raised Units Are
+        // Invulnerable"`), which is why the ultimate is six bodies you can only wait out.
+        if (su && s.invulnerable) {
+          su.buffs.push({ kind: "invuln", group: "raised", timeLeft: summonLeft > 0 ? summonLeft : Infinity, sourceId: s.sourceId, value: 0, value2: 0, art: "", fx: [], buffId: "", delay: 0 });
         }
         // Turn the fresh copy into an illusion of its original. The sim owns this: the
         // level has to be applied and the stats rebuilt off it before hp/mana can be set
@@ -8639,6 +8708,12 @@ export class MapViewerScene {
         // A building became something else: swap its model in place. The sim kept the SAME
         // entity — rally point, queue, selection and damage all carried over — so this only
         // has to re-skin it and re-read the food it supplies.
+        // A unit that changed hands (Charm, a script's SetUnitOwner) wears its new owner's
+        // colour from the next frame. The sim only records the handover — models are the
+        // renderer's — so a Charmed Knight fighting for blue turns blue, and a creep taken
+        // off the Neutral Hostile slot stops wearing creep red. Same lookup the spawner uses
+        // (playerColor): a slot's colour is not its index.
+        for (const c of world.drainOwnerChanges()) this.rts!.setUnitTeamColor(c.unitId, this.rts!.playerColor(c.owner));
         for (const m of world.drainMorphs()) {
           const owner = world.units.get(m.unitId)?.owner;
           if (owner === this.localPlayer) this.sounds?.playUi(`UpgradeComplete${UI_SOUND_RACE[this.localRace]}`);
@@ -8694,7 +8769,14 @@ export class MapViewerScene {
           if (!def) continue;
           const caster = world.units.get(c.casterId);
           const at = caster ? { x: caster.x, y: caster.y, z: this.rts!.groundHeightAt(caster.x, caster.y) } : undefined;
-          const arts = SPELL_SOUND_ART[c.code]?.(def) ?? [def.targetArt, def.casterArt, def.specialArt];
+          // Target → caster → special first (the effect the player is looking at), then the
+          // three carriers a spell that names NO art of its own falls back on: its own
+          // `Effectart` (Silence's SilenceAreaBirth → Silence1.wav), its effect object's
+          // (Death and Decay, Tranquility, Earthquake — see AbilityDef.fxArt) and finally
+          // its BUFF's worn model, which for Sleep is the only art in the whole chain
+          // (`[BUsl] Targetart = …\Undead\Sleep\SleepTarget.mdl` → SleepBirth1.wav).
+          // Without these three, those spells cast in silence.
+          const arts = SPELL_SOUND_ART[c.code]?.(def) ?? [def.targetArt, def.casterArt, def.specialArt, def.effectArt, def.areaArt, def.fxArt, def.fxSpecialArt, def.buffArt];
           this.sounds?.playSpellSound(arts, SPELL_SOUND_FALLBACK[c.code], at);
         }
         // Floating COMBAT text: a Critical Strike's red "127!" over the unit it struck, and

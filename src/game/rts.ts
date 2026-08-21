@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText } from "../sim/world";
+import { SimWorld, weaponsFromDef, isOffField, ANIM_FOR_DURATION, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -251,6 +251,9 @@ interface Entry {
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
   castAnimT: number; // >0 while a cast animation is held (skips the normal picker)
+  /** The held clip outlives the CAST: it neither ends with the order nor breaks on movement
+   *  (Bladestorm — see ANIM_FOR_DURATION). Cleared when castAnimT runs out. */
+  castAnimSticky: boolean;
   /** The TARGET tier's Birth clip while this building is upgrading into it (Scout Tower →
    *  Guard Tower). Resolved once per target and cached here because it costs a sequence-name
    *  pass; `seq` -1 means "this pair has no upgrade clip to play". See upgradeBirthFor. */
@@ -333,6 +336,17 @@ const POSE_SNAP_DIST = 400;
 const DEATH_CLIP_FALLBACK = 1.6; // seconds to hold a Death clip of unknown length
 const DECAY_CLIP_FALLBACK = 3; // seconds to hold a Decay Flesh clip of unknown length
 const CAST_ANIM_HOLD = 0.8; // seconds a cast animation is held from the picker
+/** Tokens in an `Animnames` list that name no clip: they say how the picked one PLAYS
+ *  ("looping") rather than which one it is. Kept out of the name match, so `spell,looping`
+ *  (Healing Spray, Stampede, Earthquake, Starfall) resolves to "Spell" and not to nothing. */
+const ANIM_MODIFIERS = new Set(["looping"]);
+/** Casters whose AbilityFunc row names no `Animnames` at all, but whose MODEL carries a clip
+ *  meant for exactly that ability. Only Bladestorm needs it in 1.30: `[AOww]` is bare, the
+ *  Blademaster has no "Spell" sequence to fall back to, and "Attack Walk Stand Spin" is the
+ *  whirlwind itself — without this the ultimate played with him standing there. */
+const CAST_ANIM_FALLBACK: Record<string, RegExp> = {
+  AOww: /\bspin\b/i,
+};
 /** The engine's OWN buff rows, for the states no ability defines a buff for.
  *
  *  A stun is the case that matters: Storm Bolt, Firebolt and the Mountain King's Bash carry
@@ -2152,6 +2166,7 @@ export class RtsController {
         lastSwingSeq: -1,
         lastChopSeq: -1,
         castAnimT: 0,
+        castAnimSticky: false,
         moveEma: 1,
         prevDrawnX: NaN,
         prevDrawnY: NaN,
@@ -2278,6 +2293,7 @@ export class RtsController {
       lastSwingSeq: -1,
       lastChopSeq: -1,
       castAnimT: 0,
+        castAnimSticky: false,
       moveEma: 1,
       prevDrawnX: NaN,
       prevDrawnY: NaN,
@@ -2576,6 +2592,7 @@ export class RtsController {
       lastSwingSeq: -1,
       lastChopSeq: -1,
       castAnimT: 0,
+        castAnimSticky: false,
       moveEma: 1,
       prevDrawnX: NaN,
       prevDrawnY: NaN,
@@ -2689,6 +2706,7 @@ export class RtsController {
     if (!animation) {
       // Reset: back to the idle stand, released to the normal animation picker.
       e.castAnimT = 0;
+      e.castAnimSticky = false;
       e.unit.state = WidgetState.IDLE;
       if (e.anims.stand >= 0) {
         e.unit.instance.setSequence(e.anims.stand);
@@ -2705,6 +2723,7 @@ export class RtsController {
     e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
     e.curSeq = seq;
     e.unit.state = WidgetState.WALK; // hold it against the idle picker
+    e.castAnimSticky = false;
     e.castAnimT = seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
   }
 
@@ -3022,7 +3041,12 @@ export class RtsController {
       // once and WC3 "animation canceling" looks instantaneous.
       if (e.castAnimT > 0) {
         e.castAnimT -= dt;
-        if (u.order === "cast" && !u.moving) {
+        // …except a spin-for-the-duration clip, which is the ability itself rather than a
+        // gesture in front of it: Bladestorm's cast ENDS the instant it starts (it is not a
+        // channel — the Blademaster keeps walking and killing), and its clip is authored for
+        // exactly that ("Attack Walk Stand Spin"). Answering to `order === "cast"` dropped
+        // the spin a frame after it began. See SimWorld.ANIM_FOR_DURATION.
+        if (e.castAnimSticky || (u.order === "cast" && !u.moving)) {
           setAnimRate(e, 1); // a cast gesture plays at its authored rate, unhasted
           continue;
         }
@@ -3325,20 +3349,28 @@ export class RtsController {
     const e = this.byId.get(casterId);
     if (!e) return;
     const def = this.abilityDefByCode(code);
-    const tags = def?.animNames ?? [];
+    // `Animnames` is a list of NAME TOKENS that together pick one clip, not a list of
+    // alternatives: `spell,slam` means the sequence called "Spell Slam", `spell,throw`
+    // "Spell Throw", `spell,two` "Spell Two". Matching on the last token alone — which is
+    // what this did — hands `spell,slam` the Warden's "Attack Slam" instead, so Fan of
+    // Knives made her swing her glaives. So: require EVERY token, then fall back by
+    // dropping tokens from the right, then to a plain "Spell".
+    const tags = (def?.animNames ?? []).filter((t) => !ANIM_MODIFIERS.has(t));
     const names = e.anims.seqNames;
     const pick = (re: RegExp) => names.findIndex((n) => re.test(n));
+    const pickAll = (want: string[]) => (want.length ? names.findIndex((n) => want.every((t) => new RegExp(`\\b${t}\\b`, "i").test(n))) : -1);
     let seq = -1;
     // A channelled spell prefers a dedicated "channel" clip (Blizzard, Starfall).
     if (loop) seq = pick(/channel/i);
-    // Otherwise prefer the more specific tag (throw/slam) over the generic "spell".
-    if (seq < 0)
-      for (const tag of [...tags].reverse()) {
-        if (tag === "spell") continue;
-        seq = pick(new RegExp(`\\b${tag}\\b`, "i"));
-        if (seq >= 0) break;
-      }
+    for (let n = tags.length; seq < 0 && n > 0; n--) seq = pickAll(tags.slice(0, n));
     if (seq < 0) seq = pick(/spell/i);
+    // …and last, the ability's own named clip for the handful whose AbilityFunc row carries
+    // no Animnames at all yet whose caster has a dedicated animation waiting (see
+    // CAST_ANIM_FALLBACK). Bladestorm is the one that matters: `[AOww]` names nothing, the
+    // Blademaster's model has no "Spell" clip either (Stand*/Attack/Attack Slam/Walk/Death/
+    // Dissipate/**Attack Walk Stand Spin**), so the whole ultimate used to play standing
+    // still — the spin IS the ability.
+    if (seq < 0 && CAST_ANIM_FALLBACK[code]) seq = pick(CAST_ANIM_FALLBACK[code]);
     // No Animnames and no Spell clip on the model → the caster simply stands. This used to
     // fall back to the ATTACK animation, which is not something WC3 does: the engine plays
     // the clip Animnames asks for, else "Spell", else nothing. The Blademaster has no Spell
@@ -3350,6 +3382,7 @@ export class RtsController {
     e.curSeq = seq;
     e.unit.state = WidgetState.WALK; // don't let the idle picker immediately override the cast
     e.castAnimT = hold > 0 ? hold : CAST_ANIM_HOLD; // hold the clip for the whole cast
+    e.castAnimSticky = ANIM_FOR_DURATION.has(code); // …and Bladestorm keeps it past the cast
   }
 
   private abilityDefByCode(code: string): AbilityDef | undefined {
