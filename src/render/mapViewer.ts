@@ -147,11 +147,10 @@ const SIM_DT = 1 / SIM_HZ;
  *  queues still more — the classic spiral of death. */
 const MAX_STEPS_PER_FRAME = 5;
 
-/** Time constant of the hold-to-follow camera (issue #114): the focus covers ~63% of the
- *  remaining distance to the followed group every 90 ms. Short enough that the group never
- *  visibly drifts off-centre, long enough to smooth the uneven number of sim steps a frame
- *  retires — see the ease in `updateCamera`. */
-const FOLLOW_TAU_MS = 90;
+/** Time constant of the hold-to-follow camera's spring (issue #114) — see `followHeld`.
+ *  Critically damped, so the lag it costs a group moving at speed `v` is `2·τ·v`: 45 ms
+ *  trails a running hero by ~27 units, a fifth of a terrain tile. */
+const FOLLOW_TAU_MS = 45;
 
 /** A match seed for a game nobody specified one for (single player). Math.random is fine
  *  HERE and nowhere near the sim: this picks the seed, it doesn't roll off it. The Park-
@@ -934,6 +933,11 @@ export class MapViewerScene {
   private lastVoice: { label: string; until: number } | null = null; // most recent voice line (label + when it ends), so a bust that finishes loading mid-line still mouths it
   private cameraLock = false; // portrait held → camera follows the selected unit
   private groupFollow = false; // hero key / control-group digit held after its double-tap → camera rides the group
+  private followVel: [number, number] = [0, 0]; // that follow's spring velocity, world units/s
+  /** GAME milliseconds the PREVIOUS frame's `advanceSim` actually retired (0, one or two
+   *  SIM_DT steps, and 0 while paused). The follow moves on this clock rather than the render
+   *  one — see `followHeld`. */
+  private lastSimStep = 0;
   private cardPage: "root" | "build" | "learn" = "root";
   private lastSelected: number | null = null;
   /** The building riding the cursor, waiting for the click that puts it down.
@@ -5477,6 +5481,55 @@ export class MapViewerScene {
     }
   }
 
+  /**
+   * A hero key (F1/F2/F3) or a control-group digit HELD after its double-tap: the camera rides
+   * that selection until the key comes back up (issue #114). It follows the group's CENTROID —
+   * the same point the double-tap jumped to — so a group stays framed as it spreads out, rather
+   * than the camera clinging to whichever member is primary.
+   *
+   * Two things keep it from juddering, and both are about the follow agreeing with the world
+   * it is following rather than about filtering harder:
+   *
+   * 1. **It moves on the SIM's clock, not the render one.** Units are drawn straight from sim
+   *    positions — there is no interpolation between steps (see SIM_HZ) — so on screen they
+   *    advance in whole SIM_DT jumps at 60 Hz however fast the display runs. A focus eased on
+   *    the frame's `dtMs` therefore covers a different distance than the unit did, every frame,
+   *    and the unit slides back and forth against the middle of the screen. It is invisible
+   *    while the display happens to BE 60 Hz and one step lands per frame; on anything faster
+   *    (or with vsync off) frames outnumber steps and it is the whole of the jitter. Measured
+   *    on a held hero on Echo Isles: with frames outrunning the sim the hero slid 3.8 px per
+   *    frame, which is 0.5 px once the follow is fed `lastSimStep` — the game time the sim
+   *    actually retired — and the camera and the world advance together. (This is also why
+   *    the frame loop derives the camera AFTER `advanceSim` rather than before it: aiming at
+   *    where the group was one frame ago puts the same error back.)
+   * 2. **A critically damped spring, not a plain ease.** What is left is the odd frame that
+   *    retires two steps or none. A first-order ease answers that within the one frame — a
+   *    flick; a spring has velocity, so it spreads the correction over the next few frames and
+   *    the eye never catches it. Closed form about the goal, so any frame length is stable:
+   *    x(t) = (d + (v + ωd)t)·e^(-ωt), ω = 1/τ.
+   *
+   * The camera trails the group by `2·τ·speed` — ~24 units for a running hero, a fifth of a
+   * terrain tile, which is why the hero still reads as centred.
+   */
+  private followHeld(): void {
+    if (!this.groupFollow) return;
+    const c = this.rts?.selectionCentroid();
+    if (!c) {
+      this.groupFollow = false; // everyone it was following is gone
+      return;
+    }
+    const dt = this.lastSimStep / 1000; // seconds of GAME time, 0 while the sim is stopped
+    if (dt <= 0) return; // a paused/held world doesn't move, so neither does the camera
+    const w = 1000 / FOLLOW_TAU_MS;
+    const decay = Math.exp(-w * dt);
+    for (let i = 0; i < 2; i++) {
+      const d = this.target[i] - c[i];
+      const step = (this.followVel[i] + w * d) * dt;
+      this.target[i] = c[i] + (d + step) * decay;
+      this.followVel[i] = (this.followVel[i] - w * step) * decay;
+    }
+  }
+
   /** Command-card icon (BLP path) of the local race's worker, for the idle button. */
   private workerIcon(): string | null {
     const workerId = (STARTING_UNITS[this.localRace] ?? []).map((s) => s.id).find((id) => WORKERS[id]);
@@ -5743,7 +5796,10 @@ export class MapViewerScene {
       },
       followSelection: (on) => {
         this.groupFollow = on;
-        if (on) this.cameraLock = false; // one follow at a time — this replaces the portrait's
+        if (on) {
+          this.cameraLock = false; // one follow at a time — this replaces the portrait's
+          this.followVel[0] = this.followVel[1] = 0; // the double-tap already put us there, at rest
+        }
       },
       heroBar: () => this.rts?.heroBar() ?? [],
       rallyToHero: (index) => this.rts?.rallyToHero(index) ?? false,
@@ -8313,6 +8369,7 @@ export class MapViewerScene {
   private advanceSim(now: number): void {
     if (this.paused || this.startHeld) {
       this.simLast = now;
+      this.lastSimStep = 0; // no game time passed, so a camera following a group holds too
       // A world held at the gate still ADOPTS: the loading screen's last stretch is the start
       // preload, and models the map's script spawned are still resolving through it. Seeding
       // is not simulation — it is how a delivered instance becomes a sim unit at all — so a
@@ -8362,6 +8419,7 @@ export class MapViewerScene {
       steps++;
     }
     if (steps === MAX_STEPS_PER_FRAME) this.simAccum = 0;
+    this.lastSimStep = steps * SIM_DT * 1000; // the clock the held-key camera follow runs on
     // How much GAME time this pass actually bought. The two clocks are not the same clock —
     // a slow frame steps at most MAX_STEPS_PER_FRAME and drops the rest — and anything the
     // SCRIPT timed has to be aged by this one (see the cinematic panel's update).
@@ -8407,6 +8465,15 @@ export class MapViewerScene {
       // one (docs/multiplayer.md Phase G item 4). Single-player keeps the browser's
       // natural "hidden tab = paused game".
       if (!this.bgPump && this.rts?.networked) this.startBackgroundPump();
+      // The sim steps FIRST, and the camera is derived from the world it just produced.
+      //
+      // The camera used to be updated at the top of the frame, off the world as it stood
+      // BEFORE the frame's sim steps — which is fine for a camera the player is driving and
+      // wrong for one that is riding a unit: `followHeld` would aim at where the group was
+      // one frame ago, by a margin that changes with however many steps the frame went on to
+      // retire. Deriving it here instead means the focus and the positions the frame is about
+      // to DRAW come from the same instant of game time.
+      this.advanceSim(t);
       this.updateCamera(dt);
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.hud?.frame(dt);
@@ -8420,7 +8487,6 @@ export class MapViewerScene {
         this.portraitWarmAccum = 0;
         this.warmPortraits();
       }
-      this.advanceSim(t);
       // The cinematic panel runs on the SIM's clock, not the render one.
       //
       // Everything it counts down was written by the map in the same seconds its
@@ -9530,28 +9596,7 @@ export class MapViewerScene {
       }
     }
 
-    // A hero key (F1/F2/F3) or a control-group digit HELD after its double-tap: the camera
-    // rides that selection until the key comes back up (issue #114). It follows the group's
-    // CENTROID — the same point the double-tap jumped to — so a group stays framed as it
-    // spreads out, rather than the camera clinging to whichever member is primary.
-    //
-    // Eased rather than pinned, which is what keeps it from juddering: the sim advances in
-    // whole SIM_DT steps (see SIM_HZ) and a rendered frame retires 0, 1 or 2 of them, so a
-    // focus written straight from the centroid inherits that stutter and the whole world
-    // shudders once per dropped or doubled step. Approaching at a fixed time constant is
-    // frame-rate independent (the 1 - e^(-dt/τ) form, not a raw per-frame fraction) and
-    // absorbs the uneven steps; the residual trail behind a running hero is ~25 units, a
-    // fifth of a terrain tile.
-    if (this.groupFollow) {
-      const c = this.rts?.selectionCentroid();
-      if (c) {
-        const k = 1 - Math.exp(-dtMs / FOLLOW_TAU_MS);
-        this.target[0] += (c[0] - this.target[0]) * k;
-        this.target[1] += (c[1] - this.target[1]) * k;
-      } else {
-        this.groupFollow = false; // everyone it was following is gone
-      }
-    }
+    this.followHeld(); // a held hero key / group digit: ride the selection (issue #114)
 
     // Pan the ground target relative to view yaw. WASD only outside a match —
     // in-game the letters belong to command hotkeys (M/A/S), WC3 pans with

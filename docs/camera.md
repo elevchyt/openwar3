@@ -215,15 +215,35 @@ up (issue #114) — the same gesture as holding the portrait, which locks onto t
 double-tap jumped to, so a spread-out control group stays framed instead of the view clinging to
 whichever member happens to be primary.
 
-The focus is **eased** toward that centroid rather than written from it, and that easing is the
-whole reason it doesn't judder. The sim advances in whole `SIM_DT` steps at `SIM_HZ` (60), a
-rendered frame retires 0, 1 or 2 of them, and a focus assigned straight from the centroid
-inherits that stutter — the unit stays nailed to the middle of the screen while the entire world
-shudders around it once per dropped or doubled step. Approaching at a fixed time constant
-(`FOLLOW_TAU_MS`, in the frame-rate-independent `1 - e^(-dt/τ)` form, never a raw per-frame
-fraction) absorbs it: measured against a held hero on Echo Isles it halves the frame-to-frame
-jerk of the focus (2.4 vs 4.3 world units/frame²) and trails the running hero by ~28 units — a
-fifth of a terrain tile.
+### Follow the sim's clock, not the frame's
+
+The focus is **eased** toward that centroid rather than written from it, but the easing is not
+what keeps it from juddering — the CLOCK is.
+
+Units are drawn straight from sim positions; there is no interpolation between steps (see
+`SIM_HZ`). On screen they therefore advance in whole `SIM_DT` jumps at 60 Hz no matter how fast
+the display runs. A focus eased on the frame's `dtMs` covers a different distance than the unit
+did that frame, every frame, so the unit slides back and forth against the middle of the screen.
+At exactly 60 Hz vsync one step lands per frame and it hides; on a 144 Hz panel — or with vsync
+off — frames outnumber steps and it is *all* of the jitter. Measured on a held hero on Echo
+Isles, with frames outrunning the sim:
+
+| | hero slides on screen | focus vs unit, per frame |
+| --- | --- | --- |
+| eased on the frame's `dtMs` | 3.83 px | 3.28 units |
+| eased on the sim's `lastSimStep` | 0.47 px | 0.11 units |
+
+Two consequences follow from that, and neither is optional:
+
+- The frame loop derives the camera **after** `advanceSim`, not before it. Aiming at where the
+  group stood one frame ago puts the same error straight back, by a margin that changes with
+  however many steps the frame went on to retire.
+- What is left — the odd frame that retires two steps or none — is absorbed by making the ease a
+  **critically damped spring** rather than a first-order lag. A lag answers a doubled step inside
+  the one frame, which is a flick; a spring has velocity, so it spreads the correction over the
+  next few frames. Closed form about the goal (`x(t) = (d + (v + ωd)t)·e^(-ωt)`, ω = 1/τ), so any
+  frame length is stable. It trails the group by `2·τ·speed`: ~24 units for a running hero, a
+  fifth of a terrain tile.
 
 A single press *held* does not follow. Only the second tap arms it, and the release is handled on
 `keyup` **and** on the window losing focus — a hold that never gets its keyup (alt-tab mid-hold)
