@@ -166,6 +166,10 @@ const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // h
 // palette gives slot 0. `Z` lifts the text off the victim's feet to roughly over its head; the
 // overlay adds the terrain and, for a flier, its altitude, so one offset serves ground and air.
 const CRIT_TEXT_COLOR = 0xffff0303;
+// Transmute's payout wears the game's own GOLD, the colour every tooltip in the install
+// gilds a hotkey and a price with (`|cffffcc00`) and the one the resource readout is drawn
+// in. It is not a player colour either — the number is the money, not whose money it is.
+const GOLD_TEXT_COLOR = 0xffffcc00;
 const COMBAT_TEXT_Z = 100;
 
 /** "#rrggbb" → the 0xAARRGGBB a text tag carries, opaque. */
@@ -8799,11 +8803,16 @@ export class MapViewerScene {
         for (const t of this.rts!.drainFxCombatTexts()) {
           this.combatText.spawn({
             text: t.text,
-            // A crit is red for everyone. A deny wears the colour of the player whose unit
-            // died, resolved HERE and not in the sim: `SetPlayerColor` can move a slot's
-            // colour mid-match, and the palette is the client's (same one the minimap dots
-            // and a cinematic's speaker names use).
-            color: t.colorSlot >= 0 ? argbOf(PLAYER_COLORS[this.rts!.playerColor(t.colorSlot) % PLAYER_COLORS.length]) : CRIT_TEXT_COLOR,
+            // A crit is red for everyone and Transmute's payout is gold for everyone. A deny
+            // wears the colour of the player whose unit died, resolved HERE and not in the
+            // sim: `SetPlayerColor` can move a slot's colour mid-match, and the palette is
+            // the client's (same one the minimap dots and a cinematic's speaker names use).
+            color:
+              t.kind === "gold"
+                ? GOLD_TEXT_COLOR
+                : t.colorSlot >= 0
+                  ? argbOf(PLAYER_COLORS[this.rts!.playerColor(t.colorSlot) % PLAYER_COLORS.length])
+                  : CRIT_TEXT_COLOR,
             x: t.x,
             y: t.y,
             z: COMBAT_TEXT_Z,

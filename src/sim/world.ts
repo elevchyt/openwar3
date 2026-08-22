@@ -220,7 +220,7 @@ export interface SimLightning {
  * anyone draws it) and the area-of-interest test the host filters recipients by.
  */
 export interface CombatText {
-  kind: "crit" | "deny";
+  kind: "crit" | "deny" | "gold";
   /** The unit the text floats over, and follows. 0 for a deny — the victim is dead. */
   unitId: number;
   x: number;
@@ -1813,6 +1813,13 @@ function altFormOf(lvl: AbilityLevel | undefined): string {
 }
 
 const IMMEDIATE = new Set(["AHds", "ACds", "AOwk"]);
+/** Abilities that refuse a target for being TOO BIG, with the cap in their own `DataC`.
+ *  Transmute is the only one in 1.30 and its Ubertip names both the rule and the column:
+ *  "Transmute cannot be used on Heroes, or creeps above level <ANtm,DataC1>" (= 5). The
+ *  hero half is already the row's `nonhero` flag; this is the other half, and the game
+ *  ships the line for it — `Creeptoopowerful` = "That creature is too powerful."
+ *  (Units\CommandStrings.txt [Errors]). */
+const CREEP_LEVEL_CAP = new Set(["ANtm"]);
 /**
  * The ARROWS, the loudest members of the ATTACK MODIFIER (orb) family — abilities that ride
  * on a shot rather than being one. The family itself, and the rule that only ONE of its
@@ -4144,6 +4151,35 @@ export class SimWorld {
     u.hp = Math.max(1, u.maxHp * frac);
     this.tech?.invalidate(); // a Keep satisfies requirements a Town Hall does not
     this.morphs.push({ unitId: u.id, from, to: toTypeId });
+  }
+
+  /**
+   * TRANSMUTE (`ANtm`), the paying half — the Alchemist's ultimate is the one spell whose
+   * whole effect is a transaction, and this is the side of it that needs the world: what the
+   * victim is worth, whose purse it lands in, and the number that floats up off the body.
+   *
+   * What it is worth is its own `goldcost` / `lumbercost` (UnitBalance.slk) scaled by the
+   * ability's factors, rounded to the gold piece. 125% is not only what `Ntm1` says, it is
+   * the arithmetic behind every number players quote for it — a Footman (135) pays 169, a
+   * Rifleman (205) 256, a Knight (245) 306 — which is the check that the column is a gold
+   * factor at all, the World Editor's names for these fields living in strings the install
+   * does not ship.
+   *
+   * The text floats over the VICTIM, not the caster: it is the body turning into the money,
+   * and that is where the player is looking. It also stays where the body was rather than
+   * following anything, because a moment later there is nothing left to follow — the same
+   * reason a deny's "!" is placed and not attached (see CombatText).
+   */
+  private transmuteInternal(target: SimUnit, caster: SimUnit, goldFactor: number, lumberFactor: number): number {
+    const def = this.unitReg?.get(target.typeId);
+    const gold = Math.max(0, Math.round((def?.goldCost ?? 0) * goldFactor));
+    const lumber = Math.max(0, Math.round((def?.lumberCost ?? 0) * lumberFactor));
+    const stash = this.stashOf(caster.owner);
+    stash.gold += gold;
+    stash.lumber += lumber;
+    if (gold > 0) this.combatTexts.push({ kind: "gold", unitId: 0, x: target.x, y: target.y, text: `+${gold}`, colorSlot: -1 });
+    this.kill(target, caster.id);
+    return gold;
   }
 
   /**
@@ -7816,6 +7852,14 @@ export class SimWorld {
     // may not pick a Footman at all — see MANA_TARGET_SPELLS.
     const manaTarget = MANA_TARGET_SPELLS[code];
     if (manaTarget && target.maxMana <= 0) return manaTarget;
+    // …and the ones that refuse a target for being too big (CREEP_LEVEL_CAP). Read off the
+    // caster's own rank rather than a constant, because the cap is a data column: a map that
+    // retunes `DataC` retunes what its Alchemist may melt down.
+    if (CREEP_LEVEL_CAP.has(code) && target.isCreep) {
+      const lvl = this.passiveLevelData(caster, code);
+      const cap = lvl ? this.dataOf(lvl, 2, 0) : 0;
+      if (cap > 0 && target.level > cap) return "Creeptoopowerful";
+    }
     // A heal with nothing to heal is refused, not wasted — WC3 won't let you spend a
     // Paladin's mana on an undamaged Footman. The hero/unit split is the data's own:
     // "Hero has full health." vs "Already at full health."
@@ -9558,6 +9602,7 @@ export class SimWorld {
     mirrorImage: (caster, def, rank) => this.startMirrorImage(caster, def, rank),
     changeOwner: (u, owner, team) => this.changeUnitOwner(u, owner, team),
     killUnit: (u) => this.kill(u),
+    transmute: (target, caster, goldFactor, lumberFactor) => this.transmuteInternal(target, caster, goldFactor, lumberFactor),
     fellTrees: (x, y, radius, max) => this.fellTreesInternal(x, y, radius, max),
     takeCorpse: (x, y, radius) => this.takeCorpseInternal(x, y, radius),
     toggleImmolation: (u) => this.toggleImmolation(u),

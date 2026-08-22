@@ -138,6 +138,11 @@ export interface SpellApi {
   changeOwner(unit: SimUnit, owner: number, team: number): void;
   /** Kill a unit outright (Death Pact / Dark Ritual sacrifice, Transmute). */
   killUnit(unit: SimUnit): void;
+  /** Transmute (`ANtm`): melt a unit down for its owner-facing cost and pay the CASTER's
+   *  player, then kill it. The factors are the ability's own columns; everything else (what
+   *  the victim is worth, whose purse it lands in, the number that floats over the body) is
+   *  the world's. Returns the gold paid. */
+  transmute(target: SimUnit, caster: SimUnit, goldFactor: number, lumberFactor: number): number;
   /** Fell up to `max` trees within `radius` of a point and say WHERE each stood. Force of
    *  Nature is the reason it returns the spots rather than a count: its `targs1` is `tree`
    *  and each treant it makes stands in the hole its own tree left. */
@@ -2138,13 +2143,22 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 
-  // Transmute (Alchemist, ult) — instantly kill a non-hero target (gold reward is
-  // handled by the economy layer).
-  ANtm: (api, _caster, def, _rank, ctx) => {
+  // Transmute (Alchemist, ult) — melt a non-hero target down for gold. Its whole effect is a
+  // transaction, and both halves are the row's own numbers.
+  ANtm: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t || t.isHero || t.building) return;
+    const lvl = def.levelData[rank - 1];
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
-    api.killUnit(t);
+    // The two `unreal` columns this row carries are the price it pays for the body:
+    //   Ntm1 (DataA) = 1.25   × the victim's GOLD cost
+    //   Ntm2 (DataB) = 0      × its lumber cost
+    // (Ntm3 = 5 is the creep level it refuses above — enforced at the order, see
+    // SimWorld.targetError / CREEP_LEVEL_CAP.) The World Editor's own names for these live
+    // in strings the install does not ship, so the reading is checked against the numbers
+    // players quote instead, and they are `goldcost × 1.25` rounded to the point: a Footman
+    // (135) pays 169, a Rifleman (205) 256, a Knight (245) 306.
+    api.transmute(t, caster, d(lvl, 0, 1.25), d(lvl, 1, 0));
   },
 
   // --- summons ---

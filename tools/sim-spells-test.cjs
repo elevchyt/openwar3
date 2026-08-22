@@ -31,7 +31,7 @@ function unit(over = {}) {
 
 /** Records what the handler did instead of touching a world. */
 function harness(units) {
-  const log = { buffs: [], damage: [], heals: [], effects: [], bolts: [], boltStops: [], waves: [] };
+  const log = { buffs: [], damage: [], heals: [], effects: [], bolts: [], boltStops: [], waves: [], transmutes: [] };
   const api = {
     rng: () => 0.5,
     getUnit: (id) => units.find((u) => u.id === id),
@@ -58,6 +58,7 @@ function harness(units) {
     // id itself as the "path" so a test can assert WHICH row was chosen.
     buffFxOf: (buffId) => (buffId ? [{ path: buffId, attach: [] }] : []),
     dispel: () => {}, emitSplat: () => {}, summon: () => {}, killUnit: () => {},
+    transmute: (t, c, goldFactor, lumberFactor) => { log.transmutes.push({ id: t.id, by: c.id, goldFactor, lumberFactor }); return 0; },
   };
   return { api, log };
 }
@@ -377,6 +378,28 @@ const round = (n) => Math.round(n * 1000) / 1000;
     const { api, log } = harness([caster, flyer]);
     SPELL_HANDLERS.AUim(api, caster, impale, 1, { targetId: 3, x: 300, y: 0, wave: { budget: 0 } });
     check("a flyer is passed under", log.damage, []);
+  }
+}
+
+// Transmute — `[ANtm]` is the one spell whose whole effect is a transaction, and the row
+// carries the price as a pair of `unreal` factors on what the victim COST:
+//   Ntm1 (DataA) = 1.25   × its gold cost      Ntm2 (DataB) = 0   × its lumber cost
+// (Ntm3 = 5 is the creep level it refuses above, enforced at the order rather than here.)
+// The World Editor's names for these fields live in strings the install does not ship, so
+// the reading is checked against the numbers players quote — `goldcost × 1.25` rounded: a
+// Footman (135) pays 169, a Rifleman (205) 256, a Knight (245) 306.
+{
+  const caster = unit({ id: 1, team: 0 });
+  const foe = unit({ id: 2, team: 1 });
+  const { api, log } = harness([caster, foe]);
+  SPELL_HANDLERS.ANtm(api, caster, def({ code: "ANtm", data: [1.25, 0, 5, 1] }), 1, { targetId: 2, x: 0, y: 0 });
+  check("Transmute melts the target down at the row's two factors", log.transmutes, [{ id: 2, by: 1, goldFactor: 1.25, lumberFactor: 0 }]);
+  {
+    // A HERO is refused by the row's own `nonhero` flag; the handler holds the line too.
+    const hero = unit({ id: 3, team: 1, isHero: true });
+    const { api: a2, log: l2 } = harness([caster, hero]);
+    SPELL_HANDLERS.ANtm(a2, caster, def({ code: "ANtm", data: [1.25, 0, 5, 1] }), 1, { targetId: 3, x: 0, y: 0 });
+    check("…and never a Hero", l2.transmutes, []);
   }
 }
 

@@ -220,21 +220,56 @@ console.log("a tower's ordered attack");
 // an Alchemist could transmute a creep out of a camp, or bomb the camp outright, and walk
 // away unchased. Both go through the same provoke() now, raised at the cast.
 console.log("a harmful spell provokes its victim, damage or no damage");
+// The Alchemist's own row, and the units it melts down. `goldcost` is the only field the
+// payout reads; the Rifleman's real 205 is here so the arithmetic below is the game's.
+const TRANSMUTE = { code: "ANtm", targetArt: "", targetFlags: ["air", "ground", "enemy", "neutral", "nonhero"],
+  levelData: [{ ...emptyAbilityLevel(), data: [1.25, 0, 5, 1] }] };
+// `abilities` is there because add() reads a def's ability list to size a transport's hold;
+// the payout itself reads nothing but the two costs.
+const COSTS = { get: (id) => ({ id, abilities: [], goldCost: id === "hrif" ? 205 : 0, lumberCost: id === "hrif" ? 30 : 0 }) };
 {
-  const w = new SimWorld(grid(), 1);
+  const w = new SimWorld(grid(), 1, undefined, undefined, COSTS);
   const caster = addUnit(w, 1, 0, 500, 500);
-  const victim = addUnit(w, 2, 1, 760, 500, { hp: 500, maxHp: 500 });
+  const victim = addUnit(w, 2, 1, 760, 500, { typeId: "hrif", hp: 500, maxHp: 500 });
   const mate = addUnit(w, 3, 1, 900, 500, { hp: 500, maxHp: 500 });
   // `isCreep` and the guard post are set on the unit AFTER add(), the way RtsController seeds
   // a map-placed creep — add() itself takes neither. Both guard posts sit at the same spot,
   // which is what makes the two camp-mates (sameCamp: within MiscGame CreepCallForHelp).
   for (const c of [victim, mate]) { c.isCreep = true; c.aggroRange = 600; c.guardX = 800; c.guardY = 500; }
-  // Only the fields ANtm's handler reads. It is deliberately the spell that leaves NOTHING
-  // behind to raise the alarm from: the camp has to be alerted while its victim is still
-  // standing there to be alerted about.
-  w.applySpellEffect("ANtm", 1, caster, { targetId: victim.id, x: victim.x, y: victim.y }, { code: "ANtm", targetArt: "" });
+  const before = w.stashOf(0).gold;
+  // Deliberately the spell that leaves NOTHING behind to raise the alarm from: the camp has
+  // to be alerted while its victim is still standing there to be alerted about.
+  w.applySpellEffect("ANtm", 1, caster, { targetId: victim.id, x: victim.x, y: victim.y }, TRANSMUTE);
   check("the transmuted creep is gone", !w.units.has(victim.id) || w.units.get(victim.id).hp <= 0);
   check("...and its camp-mate turns on the caster", mate.targetId === caster.id);
+  // 205 × 1.25 = 256.25 → 256, the number players quote for a Rifleman.
+  check(`...and the caster's player is paid 125% of its gold cost (${w.stashOf(0).gold - before})`, w.stashOf(0).gold - before === 256);
+  check("...and nothing in lumber, which is what DataB says", w.stashOf(0).lumber === 0);
+  // The number floats over the BODY, not the caster — that is where the gold came from.
+  const texts = w.drainCombatTexts();
+  check("...with a gold text over the victim", texts.length === 1 && texts[0].kind === "gold" && texts[0].text === "+256"
+    && texts[0].x === victim.x && texts[0].y === victim.y && texts[0].unitId === 0);
+}
+
+// …and the cap. `[ANtm]`'s Ubertip names both the rule and the column it reads: "Transmute
+// cannot be used on Heroes, or creeps above level <ANtm,DataC1>" — DataC1 = 5. Refused at
+// the ORDER, with the line the game ships for it, rather than eating 150 mana on a no-op.
+console.log("Transmute refuses a creep above its level cap");
+{
+  const w = new SimWorld(grid(), 1, { get: (id) => (id === "ANtm" ? TRANSMUTE : undefined) }, undefined, COSTS);
+  const caster = addUnit(w, 1, 0, 500, 500);
+  caster.abilities = [{ id: "ANtm", code: "ANtm", level: 1, cooldownLeft: 0, autocastOn: false }];
+  const small = addUnit(w, 2, 1, 760, 500, { typeId: "hrif" });
+  const big = addUnit(w, 3, 1, 900, 500, { typeId: "hrif" });
+  for (const c of [small, big]) c.isCreep = true;
+  small.level = 5;
+  big.level = 7; // a Granite Golem's, the one thing on Echo Isles it may not touch
+  check("level 5 is inside the cap", w.targetError(caster, small, TRANSMUTE.targetFlags, "ANtm") === null);
+  check("level 7 is not", w.targetError(caster, big, TRANSMUTE.targetFlags, "ANtm") === "Creeptoopowerful");
+  // The cap is about CREEPS, which is the word the Ubertip uses: a player's own high-level
+  // unit is not one, and the row's `nonhero` flag is what keeps Heroes out.
+  big.isCreep = false;
+  check("...but only for a creep", w.targetError(caster, big, TRANSMUTE.targetFlags, "ANtm") === null);
 }
 
 // ── A cast is an ORDER, and an order replaces the one before it ─────────────────────────
