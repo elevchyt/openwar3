@@ -16,6 +16,9 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 const { PathingGrid, PathingFlag } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
+// Build ability ranks from the real blank rather than a literal, so a stub cannot drift from
+// AbilityLevel the moment a field is added (same reason sim-morph-test does it).
+const { emptyAbilityLevel } = require(join(REPO, ".sim-build", "src", "data", "abilities.js"));
 
 let failures = 0;
 const check = (label, cond) => {
@@ -206,6 +209,66 @@ console.log("a tower's ordered attack");
     run(w, 1);
     check("an auto-acquired target outside weapon range is still held", w.units.get(1).targetId === closing.id);
   }
+}
+
+
+// ── A harmful SPELL is an attack ────────────────────────────────────────────────────────
+// Waking, returning fire and the creep camp's call for help all hang off landDamage, which
+// is the right home for a blow and only half the story. Two of the Alchemist's three spells
+// never pass through it: `[ANtm]` Transmute lands no damage at all (it deletes the unit) and
+// `[ANab]` Acid Bomb lands its as a dot the victim's own tick spends against hp directly. So
+// an Alchemist could transmute a creep out of a camp, or bomb the camp outright, and walk
+// away unchased. Both go through the same provoke() now, raised at the cast.
+console.log("a harmful spell provokes its victim, damage or no damage");
+{
+  const w = new SimWorld(grid(), 1);
+  const caster = addUnit(w, 1, 0, 500, 500);
+  const victim = addUnit(w, 2, 1, 760, 500, { hp: 500, maxHp: 500 });
+  const mate = addUnit(w, 3, 1, 900, 500, { hp: 500, maxHp: 500 });
+  // `isCreep` and the guard post are set on the unit AFTER add(), the way RtsController seeds
+  // a map-placed creep — add() itself takes neither. Both guard posts sit at the same spot,
+  // which is what makes the two camp-mates (sameCamp: within MiscGame CreepCallForHelp).
+  for (const c of [victim, mate]) { c.isCreep = true; c.aggroRange = 600; c.guardX = 800; c.guardY = 500; }
+  // Only the fields ANtm's handler reads. It is deliberately the spell that leaves NOTHING
+  // behind to raise the alarm from: the camp has to be alerted while its victim is still
+  // standing there to be alerted about.
+  w.applySpellEffect("ANtm", 1, caster, { targetId: victim.id, x: victim.x, y: victim.y }, { code: "ANtm", targetArt: "" });
+  check("the transmuted creep is gone", !w.units.has(victim.id) || w.units.get(victim.id).hp <= 0);
+  check("...and its camp-mate turns on the caster", mate.targetId === caster.id);
+}
+
+// ── A cast is an ORDER, and an order replaces the one before it ─────────────────────────
+// Casting used to remember the attack it interrupted and go straight back to it, which made
+// the spell read as though it had never taken the caster's attention: an Alchemist told to
+// Healing Spray mid-fight sprayed and resumed chasing whatever he had been swinging at.
+// Resuming is for an AUTOCAST — a Priest healing inside a commanded fight is pausing, not
+// defecting — and that half still stands.
+console.log("a player's cast replaces the order it interrupted; an autocast resumes it");
+{
+  const ABIL = { id: "Atst", code: "Atst", target: "none", levelData: [emptyAbilityLevel()] };
+  const mk = () => {
+    const w = new SimWorld(grid(), 1, { get: (id) => (id === "Atst" ? ABIL : undefined) });
+    const u = addUnit(w, 1, 0, 500, 500);
+    u.abilities = [{ id: "Atst", code: "Atst", level: 1, cooldownLeft: 0, autocastOn: false }]; // add() takes no ability list
+    const foe = addUnit(w, 2, 1, 1600, 500);
+    w.issueOrder(1, { kind: "attack", targetId: foe.id, force: false });
+    run(w, 1);
+    return { w, u, foe };
+  };
+  const commanded = mk();
+  check("it is carrying out the attack order", commanded.u.order === "attack" && commanded.u.attackOrdered);
+  check("the cast was accepted", commanded.w.issueCast(1, "Atst"));
+  run(commanded.w, 3);
+  // The COMMITMENT is what a cast ends, not the fighting: a unit left idle beside a fight
+  // re-acquires on its own next tick, and that auto-acquired target is not an order.
+  // Idle, holding nobody. What it does NEXT is its own business — a unit standing beside a
+  // fight re-acquires on the following tick, and an auto-acquired target is not an order.
+  check("a cast the PLAYER issued drops the commanded attack", commanded.u.order !== "attack" && commanded.u.targetId === null);
+
+  const auto = mk();
+  check("…the same cast, accepted", auto.w.issueCast(1, "Atst", 0, 0, 0, true)); // …the last argument is `auto`
+  run(auto.w, 3);
+  check("an AUTOCAST goes back to it", auto.u.order === "attack" && auto.u.targetId === auto.foe.id);
 }
 
 console.log(failures === 0 ? "\nattack-order: all checks passed" : `\nattack-order: ${failures} FAILED`);

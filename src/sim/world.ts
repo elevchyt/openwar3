@@ -7980,12 +7980,21 @@ export class SimWorld {
     // enhanced shot (see isArrowOrb). Checked after the target test so it inherits the
     // same data-driven rules — Searing Arrows may be aimed at a building, Cold Arrows may not.
     if (isArrowOrb(code)) return this.issueArrowShot(u, ab, lvl, targetId);
-    // Remember an attack-move/follow/commanded-attack to resume after the cast (WC3 casters
-    // keep marching/following/fighting once they've cast). The ATTACK case is what makes an
-    // autocast inside a commanded fight a pause rather than a defection: the Priest heals and
-    // then goes straight back to the unit the player pointed him at (see tickAttack).
-    const resume: PendingCast["resume"] =
-      u.order === "attackmove"
+    // Remember an attack-move/follow/commanded-attack to resume after the cast — for an
+    // AUTOMATIC cast only. That is the whole of what resuming is for: an autocast fired from
+    // inside a commanded fight is a pause, not a defection, so the Priest heals and goes
+    // straight back to the unit the player pointed him at (see tickAttack).
+    //
+    // A cast the PLAYER issued is the opposite. It is an ORDER, and an order replaces the one
+    // before it — that is what every other order in the game does, and a spell is not special.
+    // Resuming one made the old order outlive the new one: an Alchemist told to Healing Spray
+    // mid-fight sprayed and then went straight back to chasing whatever he had been swinging
+    // at, so the cast read as though it had never taken his attention at all. Nothing is lost
+    // by dropping it — a unit left idle beside a fight re-acquires on its own next tick, which
+    // is the "re-aggro happens by itself" the player is relying on.
+    const resume: PendingCast["resume"] = !auto
+      ? null
+      : u.order === "attackmove"
         ? { kind: "attackmove", x: u.amDestX, y: u.amDestY }
         : u.order === "follow" && u.targetId
           ? { kind: "follow", id: u.targetId }
@@ -8600,6 +8609,19 @@ export class SimWorld {
     // because a handler may cast in turn (Chain Lightning's bounce, an item's sub-ability).
     const outer = this.casting;
     this.casting = { def: d, rank: Math.max(1, rank) };
+    // Casting something HARMFUL at a unit is attacking it, and the victim answers the same
+    // way it answers a blow: it wakes, it returns fire, and its camp comes with it (see
+    // provoke). Whether it is harmful is not a property list to keep — it is simply whether
+    // the caster is hostile to whoever it just aimed at.
+    //
+    // Raised BEFORE the handler, because two of them leave nothing to raise it from
+    // afterwards: Transmute (`ANtm`) deletes its victim outright, so a camp alerted after
+    // the fact would be alerted by a corpse, and Acid Bomb (`ANab`) lands its damage as a
+    // dot that the victim's own tick spends against `hp` directly rather than through
+    // landDamage. Neither ever reached the aggro path at all — an Alchemist could bomb or
+    // transmute a creep camp and walk away unchased.
+    const victim = ctx.targetId ? this.units.get(ctx.targetId) : undefined;
+    if (victim && this.hostile(caster, victim)) this.provoke(victim, caster.id);
     try {
       handler(this.spellApi, caster, d, Math.max(1, rank), ctx);
     } finally {
@@ -9455,8 +9477,15 @@ export class SimWorld {
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
-    applyBuff: (t, buff) =>
-      this.applyBuffInternal(t, buff.buffId === undefined && this.casting ? { ...buff, buffId: buffIdOf(this.casting.def, this.casting.rank) } : buff),
+    applyBuff: (t, buff) => {
+      // A debuff landing on an enemy is the same provocation the cast itself is (see
+      // applySpellEffect), and this is where the ones the cast could not name arrive: Acid
+      // Bomb's `Area1` splash catches everything around the unit it was thrown at, and only
+      // the handler knows who that turned out to be.
+      const src = this.units.get(buff.sourceId);
+      if (this.casting && src && src !== t && this.hostile(src, t)) this.provoke(t, src.id);
+      this.applyBuffInternal(t, buff.buffId === undefined && this.casting ? { ...buff, buffId: buffIdOf(this.casting.def, this.casting.rank) } : buff);
+    },
     dispel: (t) => this.dispelUnit(t),
     requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint) => {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint });
@@ -12474,6 +12503,24 @@ export class SimWorld {
       this.kill(target, attackerId);
       return amount;
     }
+    this.provoke(target, attackerId);
+    return amount;
+  }
+
+  /**
+   * Being ATTACKED, from the victim's side: waking, returning fire, and calling the camp.
+   *
+   * Split out of landDamage because a blow is not the only way to attack someone. Every
+   * harmful SPELL is one too, and WC3 treats it as one — a creep hit by Slow, Curse, Purge or
+   * Faerie Fire turns on the caster exactly as if it had been struck, and its camp comes with
+   * it. Reached from applySpellEffect for those, which is the only path that has the fact:
+   * several of them land no damage at all (Transmute does not damage its victim, it deletes
+   * it) and several more land it as a buff the victim's own tick spends (Acid Bomb is a dot),
+   * so nothing about them ever passes through here. The Alchemist could Acid Bomb or Transmute
+   * a creep camp and walk away un-chased.
+   */
+  private provoke(target: SimUnit, attackerId: number): void {
+    if (target.hp <= 0) return;
     // A struck creep wakes and, being in combat, resets its "head home" timer —
     // so while it's between the soft and hard guard limits, continued attacks keep
     // it fighting (MiscGame: it only leaves after GuardReturnTime *unattacked*).
@@ -12533,7 +12580,6 @@ export class SimWorld {
         }
       }
     }
-    return amount;
   }
 
   /** Mana Shield (Naga Sea Witch, ANms): redirect incoming damage into the unit's
