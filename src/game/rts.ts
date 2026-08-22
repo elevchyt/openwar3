@@ -1211,6 +1211,15 @@ export class RtsController {
     const morph = buildAnimSet(seqs, animPropsFor(def, !alt)).morph;
     // Hold the morph clip for its own length: castAnimT keeps the ordinary stand/walk picker
     // off this unit until the Ancient has finished hauling itself up or settling down.
+    //
+    // STICKY, unlike a cast gesture. The ordinary hold is released the moment the unit stops
+    // casting, which is right for a throw or a slam — WC3 animation-cancelling is instant —
+    // but a shape change is not a gesture in front of an ability, it is the unit becoming the
+    // other thing, and nothing cancels it. Chemical Rage only looked right without this by
+    // accident: the Alchemist is still in his cast backswing on the way IN, so `order` was
+    // "cast" and the hold survived, while the way OUT is a timer expiring with no order at
+    // all — the picker took the ogre straight to an idle stand and the return morph never
+    // played a frame.
     if (morph < 0) return; // model authors no transition — snap to the new set
     const inst = e.unit.instance;
     inst.setSequence(morph);
@@ -1218,6 +1227,7 @@ export class RtsController {
     e.curSeq = morph;
     e.unit.state = WidgetState.WALK; // hold it against the idle picker, as a cast clip does
     e.castAnimT = seqDuration(inst, morph, CAST_ANIM_HOLD);
+    e.castAnimSticky = true;
   }
 
   /** Dim an enemy/neutral BUILDING that's shown from fog memory (last-seen, out of
@@ -2562,7 +2572,11 @@ export class RtsController {
       simId,
       unit: { instance, state: WidgetState.IDLE },
       anims,
-      altModel: alt ? true : undefined,
+      // A real boolean, not `undefined`: `undefined` means "no baseline yet" to
+      // applyFormAnims, which then SWALLOWS the first form change as a baseline — and for
+      // everything but an Ancient (built rooted) the first form change is the morph the
+      // player just paid for. Stating it here is what lets the transition clip play.
+      altModel: alt,
       moveHeight: lift(def.moveHeight),
       footHalfW: 0, // set by setBuildingFootprint() once the footprint is stamped
       footHalfH: 0,
@@ -2610,6 +2624,43 @@ export class RtsController {
     }
   }
 
+  /**
+   * Re-read every render fact a unit's TYPE decides, on the body it is already wearing.
+   *
+   * This is the whole of a morph between two types that share ONE model, which is how WC3
+   * writes most form pairs: `Nalc`/`Nalm`/`Nal2`/`Nal3` are four unit ids over one
+   * HeroGoblinAlchemist.mdx, `ucry`/`ucrm` two over one CryptFiend.mdx. Handing those a new
+   * instance (which is what remodel does, and what this used to be part of) throws away the
+   * pose mid-play — including the "Morph" transition applyFormAnims has just started — so
+   * the Alchemist popped into his ogre with no shuffle between the two.
+   *
+   * It deliberately leaves the POSE alone (`curSeq`, the swing/chop latches, `altModel`):
+   * that is the body's state, not the type's, and the body has not changed.
+   */
+  retype(simId: number, def: UnitDef): boolean {
+    const entry = this.byId.get(simId);
+    if (!entry) return false;
+    // A morph is how a unit ENTERS its alternate form (a Crypt Fiend burrowing), so the
+    // sequence list has to be read with that form's props or it arrives wearing the plain
+    // half — the burrowed Fiend standing above ground.
+    const props = animPropsFor(def, this.sim.units.get(simId)?.altModel ?? false);
+    const seqs = entry.unit.instance.model.sequences;
+    entry.anims = buildAnimSet(seqs, props);
+    Object.assign(entry, findBirthFields(seqs, props));
+    entry.typeId = def.id;
+    entry.race = def.race;
+    entry.name = def.name;
+    entry.foodUsed = def.foodUsed;
+    entry.foodMade = def.foodMade;
+    entry.level = def.level;
+    entry.modelPath = def.model;
+    entry.baseScale = def.modelScale || 1;
+    entry.curScale = def.modelScale || 1;
+    entry.selRadius = (def.selScale || 1) * SEL_RADIUS_PER_SCALE;
+    entry.moveHeight = lift(def.moveHeight);
+    return true;
+  }
+
   /** Swap a live unit's model + type-derived render facts, keeping the SAME entry — the
    *  Town Hall that just finished becoming a Keep (issue #57). The old instance is dropped
    *  and every field that came from the old UnitDef is re-read from the new one.
@@ -2622,26 +2673,8 @@ export class RtsController {
     entry.unit.instance.hide(); // drop the old body
     instance.setBlendTime?.(def.animBlend);
     entry.unit = { instance, state: WidgetState.IDLE };
-    // A morph is how a unit ENTERS its alternate form (a Crypt Fiend burrowing), so the new
-    // body has to be read with that form's props or it arrives wearing the plain half — the
-    // burrowed Fiend standing above ground. Re-baselining `altModel` also lets applyFormAnims
-    // play the transition, which it otherwise skips: the flag already matches.
-    const alt = this.sim.units.get(simId)?.altModel ?? false;
-    const props = animPropsFor(def, alt);
-    entry.anims = buildAnimSet(instance.model.sequences, props);
-    entry.altModel = alt ? true : undefined;
-    Object.assign(entry, findBirthFields(instance.model.sequences, props));
-    entry.typeId = def.id;
-    entry.race = def.race;
-    entry.name = def.name;
-    entry.foodUsed = def.foodUsed;
-    entry.foodMade = def.foodMade;
-    entry.level = def.level;
-    entry.modelPath = def.model;
-    entry.baseScale = def.modelScale || 1;
-    entry.curScale = def.modelScale || 1;
-    entry.selRadius = (def.selScale || 1) * SEL_RADIUS_PER_SCALE;
-    entry.moveHeight = lift(def.moveHeight);
+    if (!this.retype(simId, def)) return false;
+    entry.altModel = this.sim.units.get(simId)?.altModel ?? false;
     entry.curSeq = -1;
     entry.lastSwingSeq = -1;
     entry.lastChopSeq = -1;
@@ -3360,8 +3393,19 @@ export class RtsController {
     const pick = (re: RegExp) => names.findIndex((n) => re.test(n));
     const pickAll = (want: string[]) => (want.length ? names.findIndex((n) => want.every((t) => new RegExp(`\\b${t}\\b`, "i").test(n))) : -1);
     let seq = -1;
-    // A channelled spell prefers a dedicated "channel" clip (Blizzard, Starfall).
-    if (loop) seq = pick(/channel/i);
+    // `looping` in an Animnames list is the OTHER half of the same fact the sim's `loop` flag
+    // carries: the gesture is held and repeated for the cast rather than played once. Healing
+    // Spray is the row that needs it said here — `[ANhs] Animnames = spell,looping` while the
+    // ability is not a channel (the Alchemist is free to walk off mid-spray, so it is not in
+    // CHANNELED and the sim sends `loop = false`), and HeroGoblinAlchemist.mdx authors that
+    // held pose as "Spell Channel", 2.0s and flagged looping, alongside a one-shot "Attack two
+    // Spell - New" for his throws. Matching on the tag alone found the throw.
+    const loops = loop || (def?.animNames ?? []).includes("looping");
+    // A looping/channelled cast prefers a dedicated "channel" clip (Blizzard, Starfall,
+    // Healing Spray). Under the alternate half of a two-form model the lookup needs no help:
+    // applyAnimProps has already renamed "Spell Channel Alternate" to a plain "spell channel"
+    // and blanked the walking form's, so a raging Alchemist sprays from his ogre body.
+    if (loops) seq = pick(/channel/i);
     for (let n = tags.length; seq < 0 && n > 0; n--) seq = pickAll(tags.slice(0, n));
     if (seq < 0) seq = pick(/spell/i);
     // …and last, the ability's own named clip for the handful whose AbilityFunc row carries
@@ -3378,7 +3422,7 @@ export class RtsController {
     // Animnames either — had him swing his sword to conjure his images.
     if (seq < 0) return;
     e.unit.instance.setSequence(seq);
-    e.unit.instance.setSequenceLoopMode(loop ? SequenceLoopMode.Loop : SequenceLoopMode.ModelDefined);
+    e.unit.instance.setSequenceLoopMode(loops ? SequenceLoopMode.Loop : SequenceLoopMode.ModelDefined);
     e.curSeq = seq;
     e.unit.state = WidgetState.WALK; // don't let the idle picker immediately override the cast
     e.castAnimT = hold > 0 ? hold : CAST_ANIM_HOLD; // hold the clip for the whole cast
@@ -3388,6 +3432,12 @@ export class RtsController {
   private abilityDefByCode(code: string): AbilityDef | undefined {
     for (const a of this.abilities.all()) if (a.code === code) return a;
     return undefined;
+  }
+
+  /** The model file a unit is currently DRAWN with. A morph that lands on the same file
+   *  wants `retype`, not `remodel` — see the note on retype. */
+  renderedModelPath(simId: number): string {
+    return this.byId.get(simId)?.modelPath ?? "";
   }
 
   /** The rendered model instance for a unit — for effects that ride the model's

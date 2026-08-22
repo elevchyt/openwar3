@@ -3203,14 +3203,23 @@ export class MapViewerScene {
     if (!map || !this.rts || !def) return;
     const su = this.rts.simView.units.get(simId);
     if (!su || su.hp <= 0) return; // died while the new model streamed in
-    const model = await this.viewer.load(def.model, this.solver);
-    if (!model) return;
-    const instance = model.addInstance();
-    instance.setScene(map.worldScene);
-    instance.setTeamColor(this.rts.playerColor(su.owner)); // the owner's COLOUR, not its slot
-    if (!this.rts.remodel(simId, instance, def)) {
-      instance.hide(); // the unit went away while we were loading
-      return;
+    // A morph onto the SAME model file needs no new body — and must not be given one. Most
+    // WC3 form pairs are one MDX under two unit ids (Nalc↔Nalm↔Nal2↔Nal3 are all
+    // HeroGoblinAlchemist.mdx, ucry↔ucrm both CryptFiend.mdx), and swapping the instance
+    // resets the pose, which lands squarely on the "Morph" transition applyFormAnims starts
+    // the same frame — the Alchemist snapped into his ogre instead of shuffling into it.
+    if (this.rts.renderedModelPath(simId) !== def.model) {
+      const model = await this.viewer.load(def.model, this.solver);
+      if (!model) return;
+      const instance = model.addInstance();
+      instance.setScene(map.worldScene);
+      instance.setTeamColor(this.rts.playerColor(su.owner)); // the owner's COLOUR, not its slot
+      if (!this.rts.remodel(simId, instance, def)) {
+        instance.hide(); // the unit went away while we were loading
+        return;
+      }
+    } else if (!this.rts.retype(simId, def)) {
+      return; // the unit went away
     }
     // Re-lay the ground splat: a Keep's foundation is a different texture and scale from a
     // Town Hall's, so drop the old decal before painting the new one.
@@ -8715,8 +8724,13 @@ export class MapViewerScene {
         // (playerColor): a slot's colour is not its index.
         for (const c of world.drainOwnerChanges()) this.rts!.setUnitTeamColor(c.unitId, this.rts!.playerColor(c.owner));
         for (const m of world.drainMorphs()) {
-          const owner = world.units.get(m.unitId)?.owner;
-          if (owner === this.localPlayer) this.sounds?.playUi(`UpgradeComplete${UI_SOUND_RACE[this.localRace]}`);
+          const u = world.units.get(m.unitId);
+          // …and the chime, which belongs to the BUILDING half of this event only. `morphs`
+          // carries every type swap there is, and the two kinds sound nothing alike in WC3: a
+          // Town Hall finishing its Keep announces itself, an Alchemist entering Chemical Rage
+          // (or a Crypt Fiend burrowing, or a Peasant taking up arms) does not — it played the
+          // "upgrade complete" fanfare over every hero morph.
+          if (u?.owner === this.localPlayer && u.building) this.sounds?.playUi(`UpgradeComplete${UI_SOUND_RACE[this.localRace]}`);
           void this.remodelUnit(m.unitId, m.to);
         }
         // --- spells / abilities ---

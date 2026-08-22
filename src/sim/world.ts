@@ -4171,7 +4171,15 @@ export class SimWorld {
     const normal = lvl?.dataStr[0] ?? ""; // DataA "Normal Form Unit" — the same for all of them
     const alternate = altFormOf(lvl);
     if (!normal || !alternate) return false;
-    const to = u.typeId === alternate ? normal : alternate;
+    // Which direction to go is "am I standing in ANY of this ability's alternate forms?", not
+    // "am I standing in THIS rank's". Chemical Rage is the row that makes the difference: it
+    // names a different ogre per rank (`UnitID1` = Nalm / Nal2 / Nal3, each with the attack
+    // cooldown its level's tooltip quotes), so a rank-3 Alchemist raging is a `Nal3` and the
+    // revert — which runs at the ability's own rank but must work from whichever body it
+    // finds — would otherwise read "not Nalm, so morph FORWARD" and turn an ogre into a
+    // smaller ogre instead of back into the Alchemist.
+    const inAlt = def.levelData.some((l) => altFormOf(l) === u.typeId);
+    const to = inAlt ? normal : alternate;
     if (!this.unitReg?.get(to)) return false; // this install doesn't ship the other form
     this.morphUnit(u, to);
     // Both forms share one MDX (ucrm is CryptFiend.mdx too), so the alternate FORM also wears
@@ -4213,6 +4221,21 @@ export class SimWorld {
         if (str > 0) this.applyBuffInternal(u, { kind: "strength", group: "altform", timeLeft: Infinity, sourceId: u.id, value: str });
         if (def0 > 0) this.applyBuffInternal(u, { kind: "armor", group: "altform", timeLeft: Infinity, sourceId: u.id, value: def0 });
       }
+      // …and the STATUS line. A morph is not a stat buff, but several morph rows still name a
+      // buff row, and a buff row with `Buffart` is exactly what the info panel shows (see
+      // RtsController.statusBuffsFor):
+      //   `[ANcr] BuffID1 = BNcr` → Bufftip "Chemical Rage", Buffubertip "This unit is
+      //     benefiting from Chemical Rage.  It is moving and attacking more quickly.",
+      //     Buffart BTNChemicalRage.blp
+      //   `[AEme] BuffID1 = BEme` → the same for Metamorphosis
+      // while Robo-Goblin and Burrow leave `BuffID` empty and show nothing — which is the
+      // data drawing the line for us, so nothing here needs a list. It carries the FORM's
+      // clock so the icon is on screen for exactly as long as the ogre is; an untimed toggle
+      // gets Infinity and is taken off by the group filter above when it is switched back.
+      const row = this.buffArtOf(def, rank);
+      if (row.buffId) {
+        this.applyBuffInternal(u, { kind: "mark", group: "altform", timeLeft: u.altFormLeft > 0 ? u.altFormLeft : Infinity, sourceId: u.id, ...row });
+      }
     }
     // A form with no weapon can neither attack nor keep a target it was swinging at, and the
     // weaponless one is also the ethereal one (weapsOn=0 is how the Spirit Walker's two forms
@@ -4221,6 +4244,30 @@ export class SimWorld {
     if (!u.weapon) this.stop(u.id);
     this.recomputeStats(u);
     return true;
+  }
+
+  /**
+   * Is this ability a FORM TOGGLE — one of the pairs morphToggle swaps between?
+   *
+   * Read off the row rather than listed, because the row is unambiguous: a morph names a
+   * UNIT TYPE in DataA ("Normal Form Unit" — `Edem`, `Nalc`, `Ntin`, `ucry`) where every
+   * other ability that uses the column puts a number in it (a summon's DataA is a count).
+   * So "DataA resolves to a real unit type AND UnitID1/DataB names another" is the whole
+   * test, and it is the same pair morphToggle refuses to run without.
+   *
+   * What it is FOR is the cast animation. Not one of the nine form-toggle rows in 1.30
+   * carries an `Animnames` at all — `[AEme]`, `[ANcr]`, `[ANrg]`, `[Abur]`, `[Amil]`,
+   * `[Aetf]`, `[Astn]`, `[Arav]`, `[Asb1]` are each just an icon pair and an order — and
+   * that silence is the data saying a morph has no cast GESTURE: the transition between the
+   * two halves of the model IS its animation ("Morph" / "Morph Alternate", authored at
+   * exactly the `Dur` the row quotes — 0.33s of clip against Chemical Rage's Dur1 = 0.35).
+   * Left to the ordinary fallback, `playCastAnim` reached for the caster's "Spell" clip and
+   * the Alchemist threw a potion ("Attack two Spell - New") before turning into an ogre.
+   */
+  private isFormToggle(def: AbilityDef): boolean {
+    const lvl = def.levelData[0];
+    // `dataStr` is absent on hand-built defs (tests, custom rows), same caveat buffIdOf carries.
+    return !!lvl?.dataStr && !!altFormOf(lvl) && !!this.unitReg?.get(lvl.dataStr[0] ?? "");
   }
 
   /** Run a timed alternate form down, and revert it when the clock does. Call to Arms is the
@@ -8139,7 +8186,11 @@ export class SimWorld {
       const warnArt = PRECAST_WARNING.has(pc.code) ? def.effectArt : "";
       // tx/ty/targetId let the renderer aim cast-triggered visuals at the target —
       // e.g. the Blood Mage hurling one of his orbiting spheres (issue #37).
-      this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0 || animLen > 0, tx, ty, targetId: pc.targetId, warnArt });
+      // A FORM TOGGLE raises none: its animation is the morph transition the renderer plays
+      // when the body swaps, not a gesture in front of it (see isFormToggle).
+      if (!this.isFormToggle(def)) {
+        this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0 || animLen > 0, tx, ty, targetId: pc.targetId, warnArt });
+      }
       // The caster has begun: SPELL_CHANNEL then SPELL_CAST (7.17). WC3 raises both at
       // the start of the cast — CHANNEL as the caster commits to it, CAST as the spell
       // itself begins; the EFFECT below is the one most triggers actually listen for.
@@ -9389,7 +9440,7 @@ export class SimWorld {
       return true;
     },
     setReplenishTarget: (well, targetId) => { well.replenishTargetId = targetId; },
-    morphToggle: (unit, def) => this.morphToggle(unit, def),
+    morphToggle: (unit, def, rank) => this.morphToggle(unit, def, rank),
     abilityOf: (id) => this.abilities?.get(id),
     dismissSummons: (owner, typeIds) => {
       const set = new Set(typeIds);
@@ -12087,9 +12138,9 @@ export class SimWorld {
   /** The persistent models a buff-carrying orb hangs on its victim — its own `buffid1` row's
    *  art, exactly as every other buff resolves it. Never the ability's `Targetart`: for an
    *  orb that field is the model worn by the CARRIER (see orbAttachments). */
-  private buffArtOf(def: AbilityDef): { art?: string; fx?: BuffFx[]; buffId: string } {
-    const buffId = buffIdOf(def);
-    return def.buffFx.length ? { art: def.buffArt, fx: def.buffFx, buffId } : { buffId };
+  private buffArtOf(def: AbilityDef, rank = 1): { art?: string; fx?: BuffFx[]; buffId: string } {
+    const buffId = buffIdOf(def, rank);
+    return def.buffFx?.length ? { art: def.buffArt, fx: def.buffFx, buffId } : { buffId };
   }
 
   /**
