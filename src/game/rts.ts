@@ -2153,6 +2153,12 @@ export class RtsController {
         simId,
         unit,
         anims,
+        // The form baseline, stated (see spawnUnit): `undefined` means "not baselined yet" to
+        // applyFormAnims, which then swallows a unit's FIRST form change as a baseline and
+        // plays no transition — so a map-placed Crypt Fiend or Gargoyle popped into its other
+        // half the first time it changed and only shuffled from the second time on. Everything
+        // seeded here is drawn in its plain half, which is what `anims` above already assumes.
+        altModel: false,
         moveHeight: lift(def?.moveHeight ?? 0),
         footHalfW: 0, // creeps are mobile — centre-sampled ground, no footprint seat
         footHalfH: 0,
@@ -2279,6 +2285,7 @@ export class RtsController {
       simId,
       unit,
       anims: buildAnimSet(unit.instance.model.sequences, def?.animProps),
+      altModel: false, // the form baseline, stated — see the note on the creep seed above
       // A static neutral keeps its map-placed Z (tick() does not drive it); a mobile one is
       // drawn like any unit, so it needs the same flight lift its sim unit carries.
       moveHeight: isBuilding ? 0 : lift(def?.moveHeight ?? 0),
