@@ -49,22 +49,41 @@ const UNITS = {
   ucrm: { id: "ucrm", acquireRange: 500, hitPoints: 550, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 0, abilities: ["Aspa", "Abur"], heroAbilities: [], autoAbility: "", weapons: [] },
   edoc: { id: "edoc", acquireRange: 500, hitPoints: 430, mana: 200, armor: 1, armorType: "large", sightDay: 1400, sightNight: 800, speed: 270, castPoint: 0.5, castBackswing: 1.17, abilities: ["Abrf", "Arej"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 18, dice: 1, sides: 4, cooldown: 1.5, damagePoint: 0.33, backswing: 0.53, range: 100, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
   edcm: { id: "edcm", acquireRange: 500, hitPoints: 810, mana: 200, armor: 3, armorType: "large", sightDay: 1400, sightNight: 800, speed: 270, castPoint: 0.3, castBackswing: 0.51, abilities: ["Abrf", "Arej"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 26, dice: 1, sides: 6, cooldown: 1.5, damagePoint: 0.5, backswing: 0.83, range: 100, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
+  // The Alchemist and his three ogres — one per rank of Chemical Rage, which is the whole
+  // reason the toggle has to carry a rank at all. Everything the tooltip quotes lives on
+  // these rows: spd 290→405, cool1 2.5→2.0/1.42/1.11 (UnitBalance.slk / UnitWeapons.slk).
+  Nalc: { id: "Nalc", acquireRange: 500, hitPoints: 725, mana: 270, armor: 0, armorType: "hero", sightDay: 1800, sightNight: 800, speed: 290, abilities: [], heroAbilities: ["ANcr"], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 3, dice: 3, sides: 10, cooldown: 2.5, damagePoint: 0.35, backswing: 0.65, range: 100, weaponType: "normal", attackType: "hero", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
+  Nalm: { id: "Nalm", acquireRange: 500, hitPoints: 725, mana: 270, armor: 0, armorType: "hero", sightDay: 1800, sightNight: 800, speed: 405, abilities: [], heroAbilities: ["ANcr"], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 3, dice: 3, sides: 10, cooldown: 2.0, damagePoint: 0.35, backswing: 0.65, range: 100, weaponType: "normal", attackType: "hero", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
+  Nal2: { id: "Nal2", acquireRange: 500, hitPoints: 725, mana: 270, armor: 0, armorType: "hero", sightDay: 1800, sightNight: 800, speed: 405, abilities: [], heroAbilities: ["ANcr"], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 3, dice: 3, sides: 10, cooldown: 1.42, damagePoint: 0.35, backswing: 0.65, range: 100, weaponType: "normal", attackType: "hero", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
+  Nal3: { id: "Nal3", acquireRange: 500, hitPoints: 725, mana: 270, armor: 0, armorType: "hero", sightDay: 1800, sightNight: 800, speed: 405, abilities: [], heroAbilities: ["ANcr"], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 3, dice: 3, sides: 10, cooldown: 1.11, damagePoint: 0.35, backswing: 0.65, range: 100, weaponType: "normal", attackType: "hero", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
 };
 const unitReg = { get: (id) => UNITS[id] };
 
 // Only the two columns the toggle reads. `summon` is UnitID1 — that is where the parser puts
 // it (str(r, `unitid${L}`)), which is why the alternate form arrives under that name.
+// `unOrder` is the ability's `Unorder` field, and its PRESENCE is what says a form can be
+// switched off by pressing the button again (SimWorld.morphToggle). All three of these rows
+// carry one — `[Abur] Unorder=unburrow`, `[Amil] Unorder=militiaoff`, `[Abrf] Unorder=unbearform`
+// — where the two timed hero forms (Chemical Rage, Metamorphosis) carry none at all.
 const ABILS = {
-  Abur: { id: "Abur", code: "Abur", levelData: [lvl({ dataStr: ["ucry"], summon: "ucrm" })] },
+  Abur: { id: "Abur", code: "Abur", unOrder: "unburrow", levelData: [lvl({ dataStr: ["ucry"], summon: "ucrm" })] },
   // Call to Arms puts its alternate form in DataB and is TIMED — the two ways it differs
   // from Burrow, and the two things altFormOf/tickAltForm exist for. Both of its duration
   // columns read 40 in 1.30's AbilityData.slk (`Amil Dur1 = HeroDur1 = 40`), and it is
   // **HeroDur** the toggle counts: on a morph row `Dur` is the transition between models
   // (Burrow 1.45, Ethereal Form 0.7, Robo-Goblin 1.5 — none of them a form duration) while
   // HeroDur is how long the form lasts. See SimWorld.morphToggle.
-  Amil: { id: "Amil", code: "Amil", levelData: [lvl({ dataStr: ["hpea", "hmil"], duration: 40, heroDuration: 40 })] },
+  Amil: { id: "Amil", code: "Amil", unOrder: "militiaoff", levelData: [lvl({ dataStr: ["hpea", "hmil"], duration: 40, heroDuration: 40 })] },
   // Bear Form — the same two columns again, on a pair that carries mana.
-  Abrf: { id: "Abrf", code: "Abrf", levelData: [lvl({ dataStr: ["edoc"], summon: "edcm" })] },
+  Abrf: { id: "Abrf", code: "Abrf", unOrder: "unbearform", levelData: [lvl({ dataStr: ["edoc"], summon: "edcm" })] },
+  // Chemical Rage — the counter-example, and the only shape in the family that has BOTH a
+  // per-rank alternate form and no way out but the clock. `[ANcr]` carries no Unorder, no
+  // Unart and no Untip: one order, one icon, 15 seconds.
+  ANcr: { id: "ANcr", code: "ANcr", unOrder: "", levelData: [
+    lvl({ dataStr: ["Nalc"], summon: "Nalm", heroDuration: 15 }),
+    lvl({ dataStr: ["Nalc"], summon: "Nal2", heroDuration: 15 }),
+    lvl({ dataStr: ["Nalc"], summon: "Nal3", heroDuration: 15 }),
+  ] },
 };
 const abilReg = { get: (id) => ABILS[id] };
 
@@ -270,6 +289,38 @@ function druid(id, typeId = "edoc") {
   world.morphToggle(u, ABILS.Amil);
   check("ringing off reverts early", u.typeId, "hpea");
   check("…with no clock left running", u.altFormLeft, 0);
+}
+
+// --- a TIMED form, which is a different animal from a toggle -----------------------------
+//
+// Chemical Rage names a different ogre per rank and has no `Unorder`, and both of those are
+// load-bearing. The rank picks which ogre (each carries the attack cooldown its level's
+// tooltip quotes), and the missing Unorder means the button cannot take the form OFF — only
+// the clock can. Read as a toggle, a second press UN-raged the Alchemist, which looks exactly
+// like the ability doing nothing and leaves every other press working.
+{
+  const u = fiend("Nalc");
+  u.abilities = [{ id: "ANcr", code: "ANcr", level: 3, cooldownLeft: 0, autocastOn: false }];
+  u.baseSpeed = UNITS.Nalc.speed;
+  world.recomputeStats(u);
+  check("rank 3 rages into rank 3's ogre", [world.morphToggle(u, ABILS.ANcr, 3), u.typeId], [true, "Nal3"]);
+  check("…which is where the attack rate lives (2.5 → 1.11)", u.weapon.cooldown, 1.11);
+  check("…and the movement rate (290 → 405)", u.speed, 405);
+  check("…for HeroDur, not Dur", u.altFormLeft, 15);
+
+  // The press that used to cancel it. Chemical Rage's 30s cooldown outlives its 15s form, so
+  // the real game can never ask — but anything that shortens the cooldown can.
+  u.altFormLeft = 4;
+  check("pressing it again does NOT un-rage him", [world.morphToggle(u, ABILS.ANcr, 3), u.typeId], [true, "Nal3"]);
+  check("…it re-arms the clock", u.altFormLeft, 15);
+
+  // …and the clock still gets him out — back to the ALCHEMIST, not into rank 1's ogre, which
+  // is what "a press can't end it" turns into if the timer isn't told it is the exception.
+  // …exactly as tickAltForm calls it when the clock runs out: rank 1 (the revert reads the
+  // NORMAL form, which is Nalc at every rank) and `byTimer`. Without that flag the rule above
+  // sends an expiring rank-3 rage into rank 1's OGRE with a fresh 15 seconds, for ever.
+  check("the clock reverts him to the Alchemist", [world.morphToggle(u, ABILS.ANcr, 1, true), u.typeId], [true, "Nalc"]);
+  check("…with the rage's stats gone with it", [u.speed, u.weapon.cooldown, u.altFormLeft], [290, 2.5, 0]);
 }
 
 console.log(`

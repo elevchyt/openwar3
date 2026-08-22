@@ -141,6 +141,14 @@ export interface AbilityDef {
    *
    *  Empty strings / -1 when the row names none, which is the overwhelming majority. */
   unIcon: string;
+  /** The `Unorder` half itself — the order that switches the ability OFF ("unburrow",
+   *  "unrobogoblin", "militiaoff"). Its PRESENCE is the fact worth reading: an ability with
+   *  one can be switched off by pressing it again, and one without cannot. That is the line
+   *  between a form TOGGLE and a TIMED form — `[Abur]`, `[ANrg]`, `[Aetf]`, `[Astn]`,
+   *  `[Arav]`, `[Asb1]` and `[Amil]` all carry an Unorder, while the two hero forms `[ANcr]`
+   *  (Chemical Rage) and `[AEme]` (Metamorphosis) carry none at all and run themselves out
+   *  instead. See SimWorld.morphToggle. */
+  unOrder: string;
   unHotkey: string;
   unTip: string;
   unUberTip: string;
@@ -726,6 +734,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       researchTip: rawTip(s ? str(s, "Researchtip") : ""),
       researchUberTip: rawTip(s ? str(s, "Researchubertip") : ""),
       unIcon: f ? str(f, "Unart") : "",
+      unOrder: f ? str(f, "Unorder") : "",
       unHotkey: (s ? (str(s, "Unhotkey").trim()[0] ?? "") : "").toUpperCase(),
       unTip: rawTip(s ? str(s, "Untip") : ""),
       unUberTip: rawTip(s ? str(s, "Unubertip") : ""),
@@ -841,6 +850,7 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     researchTip: "",
     researchUberTip: "",
     unIcon: "",
+    unOrder: "",
     unHotkey: "",
     unTip: "",
     unUberTip: "",

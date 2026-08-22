@@ -4166,7 +4166,7 @@ export class SimWorld {
    * pair can be entered from either side, which matters because several of these units are
    * TRAINED in their alternate form (the Spirit Walker arrives ethereal).
    */
-  morphToggle(u: SimUnit, def: AbilityDef, rank = 1): boolean {
+  morphToggle(u: SimUnit, def: AbilityDef, rank = 1, byTimer = false): boolean {
     const lvl = def.levelData[Math.min(Math.max(1, rank), def.levelData.length) - 1];
     const normal = lvl?.dataStr[0] ?? ""; // DataA "Normal Form Unit" — the same for all of them
     const alternate = altFormOf(lvl);
@@ -4179,9 +4179,31 @@ export class SimWorld {
     // finds — would otherwise read "not Nalm, so morph FORWARD" and turn an ogre into a
     // smaller ogre instead of back into the Alchemist.
     const inAlt = def.levelData.some((l) => altFormOf(l) === u.typeId);
-    const to = inAlt ? normal : alternate;
+    // …and going BACK is only a thing for an ability that has an off-switch. `Unorder` is it,
+    // and it splits the family cleanly: `unburrow`, `unrobogoblin`, `unstoneform`,
+    // `unravenform`, `unetherealform`, `unsubmerge` and `militiaoff` are seven abilities you
+    // press a second time to end, while the two TIMED HERO FORMS — `[ANcr]` Chemical Rage and
+    // `[AEme]` Metamorphosis — carry no Unorder, no Unart and no Untip at all. One order, one
+    // icon: the duration is the only way out of them, which is the whole reason they are worth
+    // a hero's mana.
+    //
+    // The real game never has to answer this, because it cannot be asked: Chemical Rage's 30s
+    // cooldown outlives its 15s form and Metamorphosis' 180 outlives its 45, so the button is
+    // never live while the hero is still in the form. Anything that shortens the cooldown makes
+    // it askable — the debug panel's Reset Cooldown, an item, a map's own cooldown — and the
+    // answer this gave was to UN-rage the Alchemist. That reads as "the ability did nothing",
+    // and it leaves every OTHER press working, which is exactly how it was reported.
+    //
+    // The CLOCK is the exception, and it has to be: a timed form's duration is its only way
+    // out, so `byTimer` (tickAltForm) always goes back. Without that carve-out an expiring
+    // Chemical Rage re-entered the form instead of leaving it — rank 3's ogre ran out and
+    // became rank 1's, with a fresh 15 seconds, for ever.
+    const to = inAlt && (byTimer || def.unOrder) ? normal : alternate;
     if (!this.unitReg?.get(to)) return false; // this install doesn't ship the other form
-    this.morphUnit(u, to);
+    // Re-casting a form the unit is ALREADY wearing is not a morph, it is a re-arming: the
+    // clock below goes back to full and nothing else about the body changes. Skipped rather
+    // than run as a from===to morph so the renderer isn't asked to re-skin a unit into itself.
+    if (to !== u.typeId) this.morphUnit(u, to);
     // Both forms share one MDX (ucrm is CryptFiend.mdx too), so the alternate FORM also wears
     // the alternate half of the model — the burrowed pose is "Stand Alternate", reached
     // through the same Morph clip an Ancient uses. See SimUnit.altModel.
@@ -4279,7 +4301,7 @@ export class SimWorld {
     if (u.altFormLeft <= 0) return;
     if ((u.altFormLeft -= dt) > 0) return;
     const def = this.abilities?.get(u.altFormAbil);
-    if (def) this.morphToggle(u, def);
+    if (def) this.morphToggle(u, def, 1, true); // byTimer: the clock always goes back
     else u.altFormLeft = 0; // ability gone (custom data reload) — just stop counting
   }
 
