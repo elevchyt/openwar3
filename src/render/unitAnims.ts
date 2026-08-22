@@ -266,9 +266,30 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
    */
   const MELEE_ATTACK = /attack/i;
   const NOT_A_SWING = /spell|defend|swim|gold|lumber|alternate/i;
-  const attackVariants = indices(PLAIN_ATTACK).length
+  const allSwings = indices(PLAIN_ATTACK).length
     ? indices(PLAIN_ATTACK)
     : indices(MELEE_ATTACK).filter((i) => !NOT_A_SWING.test(seqs[i].name));
+  /**
+   * …and while the unit wears the ALTERNATE half of its model, only that half's swings —
+   * the same sentence `ownStands` is written from, for the same reason: an alternate half is
+   * a COMPLETE set of poses for a form the unit is genuinely in, so anything left over from
+   * the other half is never a legitimate swing for it.
+   *
+   * HeroGoblinAlchemist.mdx is what needs it said out loud. Its two halves name the same
+   * action three and two times over —
+   *
+   *     "attack one alternate" | "Attack One alternate - 2" | "Attack One Alternate - 3"
+   *     "attack one -1 NEW"    | "attack one - 2 NEW"
+   *
+   * — but that stray "NEW" is a BASE token the alternate names have not got, so
+   * applyAnimProps' override test (an unordered set of base tokens, deliberately blind to the
+   * numbering) could not see the pair as one action and left the walking form's two standing.
+   * They then won a place in the swing pool alongside the alternate's three, and a raging
+   * Alchemist threw punches with his goblin-form arms every other blow.
+   */
+  const attackVariants = alternateForm && allSwings.some((i) => seqs[i].mine)
+    ? allSwings.filter((i) => seqs[i].mine)
+    : allSwings;
   const stand = standVariants.length
     ? standVariants[0]
     : find(/^stand(\s|$|-)/i) >= 0

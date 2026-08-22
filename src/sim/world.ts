@@ -8181,7 +8181,7 @@ export class SimWorld {
       // (wind-up + backswing, or wind-up + channel — looped for a channel). A
       // spin-for-the-duration ability (Bladestorm) holds and loops the same way without
       // being a channel; see ANIM_FOR_DURATION.
-      const animLen = ANIM_FOR_DURATION.has(pc.code) ? (lvl.heroDuration || lvl.duration || 0) : 0;
+      const animLen = ANIM_FOR_DURATION.has(pc.code) ? lvl.heroDuration || lvl.duration || 0 : this.loopingCastLength(def, lvl);
       const hold = pc.castLeft + (channelLen > 0 ? channelLen : animLen > 0 ? animLen : u.castBackswing);
       const warnArt = PRECAST_WARNING.has(pc.code) ? def.effectArt : "";
       // tx/ty/targetId let the renderer aim cast-triggered visuals at the target —
@@ -8274,6 +8274,28 @@ export class SimWorld {
     if (!pc) return;
     u.pendingCast = null;
     if (pc.started && !pc.ended) this.noteSpell(u, pc, "endcast");
+  }
+
+  /**
+   * How long a LOOPING cast GESTURE runs when the ability is not a channel.
+   *
+   * `Animnames` draws the distinction and the two Alchemist rows sit either side of it:
+   * `[ANhs] Animnames = spell,looping` against a channel's `stand,channel`. Looping means the
+   * caster keeps performing — HeroGoblinAlchemist.mdx authors that pose as "Spell Channel",
+   * 2.0s and flagged looping — but nothing locks him in place, so he may walk out of it.
+   *
+   * How long he performs for is how long the SPRAY lasts, and that is `DataF` waves one
+   * `DataB` second apart (3/4/5 seconds by rank) — the same schedule the handler hands the
+   * field, so the loop stops with the last bottle. Read off the ordinary cast timeline it is
+   * not: `Dur1`/`HeroDur1` are both 0 on this row, and the caster's own backswing would have
+   * released the pose 0.9s in, a third of the way through one turn of the clip.
+   *
+   * 0 for everything else: a one-shot gesture ends with the cast, and a real channel is sized
+   * by channelDuration instead.
+   */
+  private loopingCastLength(def: AbilityDef, lvl: AbilityLevel): number {
+    if (def.code !== "ANhs") return 0;
+    return Math.max(1, this.dataOf(lvl, 5, 3)) * (this.dataOf(lvl, 1, 1) || 1);
   }
 
   /** How long a channelled spell locks its caster (0 = not a channel). Matches the

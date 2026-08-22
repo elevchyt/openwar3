@@ -254,6 +254,12 @@ interface Entry {
   /** The held clip outlives the CAST: it neither ends with the order nor breaks on movement
    *  (Bladestorm — see ANIM_FOR_DURATION). Cleared when castAnimT runs out. */
   castAnimSticky: boolean;
+  /** The held clip LOOPS, and so outlives the cast for as long as its effect runs — but only
+   *  while the caster stands still. This is the softer half of `castAnimSticky`, and the
+   *  difference is what `Animnames` draws: `spell,looping` (Healing Spray) is a caster who
+   *  keeps performing and stops the moment he walks off, where Bladestorm's spin IS the
+   *  ability and holds through anything. Cleared when castAnimT runs out. */
+  castAnimLoop: boolean;
   /** The TARGET tier's Birth clip while this building is upgrading into it (Scout Tower →
    *  Guard Tower). Resolved once per target and cached here because it costs a sequence-name
    *  pass; `seq` -1 means "this pair has no upgrade clip to play". See upgradeBirthFor. */
@@ -2177,6 +2183,7 @@ export class RtsController {
         lastChopSeq: -1,
         castAnimT: 0,
         castAnimSticky: false,
+        castAnimLoop: false,
         moveEma: 1,
         prevDrawnX: NaN,
         prevDrawnY: NaN,
@@ -2304,6 +2311,7 @@ export class RtsController {
       lastChopSeq: -1,
       castAnimT: 0,
         castAnimSticky: false,
+        castAnimLoop: false,
       moveEma: 1,
       prevDrawnX: NaN,
       prevDrawnY: NaN,
@@ -2607,6 +2615,7 @@ export class RtsController {
       lastChopSeq: -1,
       castAnimT: 0,
         castAnimSticky: false,
+        castAnimLoop: false,
       moveEma: 1,
       prevDrawnX: NaN,
       prevDrawnY: NaN,
@@ -2740,6 +2749,7 @@ export class RtsController {
       // Reset: back to the idle stand, released to the normal animation picker.
       e.castAnimT = 0;
       e.castAnimSticky = false;
+      e.castAnimLoop = false;
       e.unit.state = WidgetState.IDLE;
       if (e.anims.stand >= 0) {
         e.unit.instance.setSequence(e.anims.stand);
@@ -2757,6 +2767,7 @@ export class RtsController {
     e.curSeq = seq;
     e.unit.state = WidgetState.WALK; // hold it against the idle picker
     e.castAnimSticky = false;
+    e.castAnimLoop = false;
     e.castAnimT = seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
   }
 
@@ -3079,7 +3090,11 @@ export class RtsController {
         // channel — the Blademaster keeps walking and killing), and its clip is authored for
         // exactly that ("Attack Walk Stand Spin"). Answering to `order === "cast"` dropped
         // the spin a frame after it began. See SimWorld.ANIM_FOR_DURATION.
-        if (e.castAnimSticky || (u.order === "cast" && !u.moving)) {
+        // `castAnimLoop` is the same test one notch softer: hold while the caster stands
+        // there, whatever the order says. A looping gesture is sized to its EFFECT rather
+        // than to the cast (Healing Spray keeps spraying after the order is done), so
+        // answering only to `order === "cast"` cut it off at the backswing.
+        if (e.castAnimSticky || ((u.order === "cast" || e.castAnimLoop) && !u.moving)) {
           setAnimRate(e, 1); // a cast gesture plays at its authored rate, unhasted
           continue;
         }
@@ -3427,6 +3442,10 @@ export class RtsController {
     e.unit.state = WidgetState.WALK; // don't let the idle picker immediately override the cast
     e.castAnimT = hold > 0 ? hold : CAST_ANIM_HOLD; // hold the clip for the whole cast
     e.castAnimSticky = ANIM_FOR_DURATION.has(code); // …and Bladestorm keeps it past the cast
+    // A LOOPING gesture keeps it past the cast too, but yields to a walk. The sim has already
+    // sized `hold` to the effect it accompanies — Healing Spray's 3/4/5 seconds of falling
+    // bottles — so the Alchemist sprays for the whole spray instead of a third of one clip.
+    e.castAnimLoop = loops;
   }
 
   private abilityDefByCode(code: string): AbilityDef | undefined {
