@@ -3,7 +3,9 @@ import type { MapInfo } from "../world/mapInfo";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
-import { MapBrowser, adopt, arg, findFrame, layoutInfoPane, nudgeX, num, setProp, str } from "./mapBrowser";
+import {
+  BLURB_SCROLLBAR_FDF, MapBrowser, adopt, arg, findFrame, layoutInfoPane, nudgeX, num, setProp, str,
+} from "./mapBrowser";
 import { savedPlayerName } from "./fdfLan";
 
 // "Create Game" on the LAN screen, built from UI\FrameDef\Glue\LocalMultiplayerCreate.fdf:
@@ -56,7 +58,7 @@ export async function mountLanCreateScreen(
     vfs,
     fdfPath: "UI\\FrameDef\\Glue\\LocalMultiplayerCreate.fdf",
     rootFrame: "LocalMultiplayerCreate",
-    includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF],
+    includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, BLURB_SCROLLBAR_FDF],
     buildRoot: (lib) => {
       browser.useStrings(lib);
       gameName = lib.string("GAMENAME").replace("%s", savedPlayerName());
@@ -107,7 +109,7 @@ function buildCreateRoot(lib: FdfLibrary): FdfFrame {
   // This screen's own MapInfoPaneContainer is TALLER than Skirmish's (0.323125 against
   // 0.2875) — hence passing the box rather than letting the pane assume one.
   const pane = lib.resolveRoot("MapInfoPane");
-  if (pane) adopt(root, "MapInfoPaneContainer", [layoutInfoPane(pane, { w: PANE_W, h: PANE_H })]);
+  if (pane) adopt(root, "MapInfoPaneContainer", [layoutInfoPane(pane, { w: PANE_W, h: PANE_H, lib })]);
 
   // …and the map-info panel moves left to sit inside the 3D chrome that frames it, the same
   // correction (and the same distance) the Custom Game and LAN screens make — see nudgeX.

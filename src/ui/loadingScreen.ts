@@ -8,6 +8,7 @@ import { RACE_LABEL, type Race } from "../data/races";
 import type { DataSource } from "../vfs/types";
 import type { MapInfo } from "../world/mapInfo";
 import { cloneNamespaced, FdfLibrary } from "./fdf/library";
+import { UI_HEIGHT } from "./fdf/layout";
 import type { FdfFrame } from "./fdf/parser";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { MapPreview } from "../world/mapPreview";
@@ -64,6 +65,32 @@ const HEADING_PITCH = 0.0175;
  * a fraction of the FONT rather than a pixel count it holds at every resolution.
  */
 const BAR_TEXT_NUDGE = 0.2 * 0.013; // 0.013 is StandardLabelTextTemplate's own FrameFont size
+
+/**
+ * The blurb's type size — `StandardValueTextTemplate`'s own `FrameFont`, which is the only one
+ * `LoadingText` ever gets (Loading.fdf declares none of its own). `fitBlurb` starts here every
+ * build and only ever goes DOWN from it, so a chapter whose text fits is set at the file's size
+ * exactly as it always was.
+ */
+const BLURB_FONT = 0.013;
+/** …and how far down it may be taken to fit. Two thirds of the file's size is still readable
+ *  type; below that the screen would be lying about what a loading screen looks like, and no
+ *  shipped chapter comes close to needing it. */
+const BLURB_FONT_MIN = 0.0087;
+
+/**
+ * The top edge of the load bar, in world units up from the bottom of the screen — the line the
+ * blurb may not cross.
+ *
+ * MEASURED, because no frame carries it: the bar is ART (`LoadBar.mdx`, drawn into the canvas
+ * by render/loadingScene.ts), and `Loading.fdf`'s `LoadingBar` sprite declares neither Width
+ * nor Height. Off the running screen at 1600×813, the bar's metal frame begins at y ≈ 705
+ * against a 1355 px/unit scale: (813 − 705) / 1355 = 0.0797, rounded up a hair.
+ */
+const BAR_TOP = 0.08;
+/** The gap the blurb keeps above that edge — text that stops flush on the bar reads as though
+ *  it ran out of room, which is precisely what `fitBlurb` exists to avoid the look of. */
+const BLURB_CLEARANCE = 0.012;
 
 export interface LoadingScreenOptions {
   container: HTMLElement;
@@ -182,6 +209,7 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
      */
     textOverrides: overrides,
     onBuild: (s) => {
+      fitBlurb(s); // custom panel only — it finds no blurb frame on a melee screen
       if (!melee) return;
       paintMinimap(s, info, preview, icons);
       paintReady(s, ready);
@@ -278,6 +306,57 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
     },
   };
 }
+
+/**
+ * Set the chapter's blurb small enough to clear the load bar — and no smaller.
+ *
+ * `LoadingText` is the one frame on this screen with a Width and no Height: it wraps to 0.36
+ * and is as tall as the wrap makes it, growing DOWN from the subtitle. So its length is the
+ * map's business, not the file's, and a wordy chapter runs off the bottom of the picture and
+ * through the bar. (`Rise of the Naga`'s five lines are comfortable; there is nothing in the
+ * frame definition that says the next one has to be.)
+ *
+ * The type is stepped down rather than the box clipped, so that "never overlap the bar" and
+ * "never lose a word" both hold — and stepped in SMALL increments rather than scaled in one
+ * proportional jump, because wrapped text is a staircase in the type size and not a line through
+ * the origin: one guess overshoots in whichever direction the last line happens to break. Only
+ * past `BLURB_FONT_MIN`, where no size left is worth reading, does the second promise give.
+ *
+ * It starts from the file's own size on every build, so this only ever costs a chapter that
+ * needs it — and a resize re-decides from scratch rather than compounding the last decision.
+ */
+function fitBlurb(s: FdfScreen): void {
+  const el = s.frame("LoadingText");
+  if (!el) return;
+  const scale = s.element.clientHeight / UI_HEIGHT;
+
+  // The blurb is the LAST thing on the panel — nothing is anchored beneath it — so its box may
+  // hug its own type instead of keeping the height the layout measured at the file's size.
+  // Both lines matter: without the auto height a smaller font is CENTRED in the old, too-tall
+  // box (StandardValueTextTemplate's JUSTIFYMIDDLE) and drifts away from the subtitle above it.
+  el.style.height = "auto";
+  el.style.alignItems = "flex-start";
+
+  const top = el.getBoundingClientRect().top;
+  const room = s.element.clientHeight - (BAR_TOP + BLURB_CLEARANCE) * scale - top;
+  if (room <= 0) return; // no room to fit into; leave the file's own size alone
+
+  let size = BLURB_FONT;
+  el.style.fontSize = `${size * scale}px`;
+  while (el.getBoundingClientRect().height > room && size > BLURB_FONT_MIN) {
+    size = Math.max(BLURB_FONT_MIN, size - BLURB_FONT_STEP);
+    el.style.fontSize = `${size * scale}px`;
+  }
+  // Past the floor the box is CLIPPED to the room instead — of the two promises, "the bar is
+  // never written over" is the one that has to hold unconditionally, and illegible type would
+  // have kept neither. No shipped chapter's blurb gets here (Rise of the Naga's, the longest of
+  // them, still fits at the file's own size); a custom campaign's could.
+  if (el.getBoundingClientRect().height > room) el.style.height = `${room}px`;
+}
+
+/** One notch of `fitBlurb`'s search — small enough that the fitted size is never much under
+ *  the largest one that would have fitted, big enough to bottom out in a handful of reflows. */
+const BLURB_FONT_STEP = 0.00025;
 
 /** Put the green band on the seats in `ready` and take it off the rest. */
 function paintReady(s: FdfScreen, ready: ReadonlySet<number>): void {

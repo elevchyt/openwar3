@@ -279,7 +279,16 @@ export class MapBrowser {
  *  badge, name, author badge) and the value half of each stat row. Until one is picked the
  *  pane is only its frame and its labels. */
 const NAME_ROW = ["MaxPlayersIcon", "MapNameValue", "AuthIcon"];
-const VALUES = ["SuggestedPlayersValue", "MapSizeValue", "MapTilesetValue", "MapDescValue"];
+const VALUES = ["SuggestedPlayersValue", "MapSizeValue", "MapTilesetValue"];
+
+/** Write the blurb. On a pane that made it scrollable (`makeBlurbScrollable`) it is a TEXTAREA
+ *  and takes LINES, not `setText` — one line, being one paragraph that wraps. A pane that did
+ *  not is still a plain TEXT frame, and takes the text. */
+function setDescription(s: FdfScreen, text: string): void {
+  const area = s.textArea("MapDescValue");
+  if (area) area.setLines(text ? [text] : []);
+  else s.setText("MapDescValue", text);
+}
 
 /** No map picked: an empty minimap box under bare labels — nothing of a map is on show, so
  *  the badges that describe one are not either (they are frames, not text, so they are
@@ -290,6 +299,7 @@ export function clearMapInfo(s: FdfScreen): void {
     if (el) el.style.display = "none";
   }
   for (const name of VALUES) s.setText(name, "");
+  setDescription(s, "");
   const minimap = s.frame("MinimapImage");
   if (minimap) minimap.style.background = "none"; // the cover frame's empty box, not a black one
 }
@@ -307,7 +317,7 @@ export function fillMapInfo(s: FdfScreen, info: MapInfo, preview: MapPreview | n
   // (UI\MiscData.txt [BattleNetCustomFilter]), which is how a 1v1 reads "Small".
   s.setText("MapSizeValue", mapSizeLabel(info.maxPlayers));
   s.setText("MapTilesetValue", TILESETS[info.tileset] ?? info.tileset ?? "—");
-  s.setText("MapDescValue", info.description || "");
+  setDescription(s, info.description || "");
   centreNameRow(s);
 
   // The minimap comes out of the MAP's own archive, not the install's, so it can't go
@@ -596,6 +606,10 @@ export interface PaneBox {
   /** How far past the pane's own bottom the blurb may run, into whatever gap the screen
    *  leaves under it. Skirmish leaves a shade before the Advanced Options base. */
   descOverhang?: number;
+  /** The screen's own FDF library, for the blurb's scrollbar — a pane whose `rows` carry the
+   *  description needs it to resolve `EscMenuScrollBarTemplate` (see `makeBlurbScrollable`).
+   *  Without one the blurb is still drawn, it just clips instead of scrolling. */
+  lib?: FdfLibrary;
 }
 
 /**
@@ -671,14 +685,61 @@ export function layoutInfoPane(pane: FdfFrame, box: PaneBox): FdfFrame {
   // The blurb wraps under its label (the FDF anchors it there itself) and fills what is left
   // of the pane — no more. The pane ENDS where whatever sits under it begins, so a box any
   // deeper would spill the map's description over it (a long one, like Turtle Rock's, runs to
-  // eight lines). A word too many is clipped, exactly as the engine's FIXEDSIZE text frames
-  // clip: the size of the type is not up for negotiation.
+  // eight lines). What does not fit SCROLLS rather than being clipped away — see
+  // `makeBlurbScrollable`; the size of the type is not up for negotiation.
   const desc = findFrame(pane, "MapDescValue");
   const room = box.h + (box.descOverhang ?? 0) - bottom - DESC_GAP;
-  size(desc, rowW, Math.max(0, room));
+  // The box takes a WHOLE number of lines of that room. Sized to the raw remainder it ends
+  // mid-glyph, and a scrolled paragraph then shows a sliced half-line along its bottom edge;
+  // the game's own text areas are a stack of `TextAreaLineHeight` rows and never do. The odd
+  // fraction of a line goes back to the gap under the pane rather than being half-drawn.
+  const lines = Math.max(1, Math.floor(room / DESC_LINE));
+  size(desc, rowW, Math.max(0, Math.min(room, lines * DESC_LINE)));
   setProp(desc, "FrameFont", [str("MasterFont"), num(DESC_FONT), str("")]);
+  if (box.lib && rows.some(([name]) => name === "MapDescLabel")) makeBlurbScrollable(desc, box.lib);
   return pane;
 }
+
+/**
+ * Turn the blurb from a TEXT frame into a scrolling one — a TEXTAREA with the game's own
+ * scrollbar down its right — so a description longer than the pane can be READ rather than
+ * cut off at whatever word the box ends on.
+ *
+ * A TEXTAREA is what the engine itself uses for every paragraph it lets you scroll: a quest's
+ * description, the chat history, the Help pages. And the bar is the same one those wear —
+ * `EscMenuScrollBarTemplate`, a bare track and a round knob with no stepper buttons (its two
+ * button blocks are commented out in the shipped file). That is the right bar here for the
+ * reason the engine picked it there: the glue's `StandardScrollBarTemplate` spends 0.03 of its
+ * length on two arrow buttons, and this box is barely 0.055 tall to begin with — they would eat
+ * more than half of it. `DecoratedMapListBox.fdf` is the game making the same swap on a glue
+ * screen.
+ *
+ * The bar goes away entirely when there is nothing to scroll, and the lines take its strip of
+ * width back with it (ui/fdf/widgets.ts `buildScrollBar.sync`) — so a one-line description is
+ * laid out exactly as it was before there was a bar at all.
+ */
+function makeBlurbScrollable(desc: FdfFrame | undefined, lib: FdfLibrary): void {
+  if (!desc) return;
+  const bar = lib.resolveRoot(BLURB_SCROLLBAR);
+  if (!bar) return; // the template's file was not included — leave it a plain, clipping TEXT
+  desc.type = "TEXTAREA";
+  // A TEXTAREA's own metrics, and all three are OURS rather than the file's: MapDescValue is a
+  // TEXT frame in MapInfoPane.fdf and declares none of them. The box is already the paragraph's
+  // box (`layoutInfoPane` sized it to the room left in the pane), so it takes no inset; the
+  // pitch is the type's own size, since one wrapped paragraph is a single "line" that grows;
+  // and there is no gap between lines because there is only ever the one.
+  setProp(desc, "TextAreaInset", [num(0)]);
+  setProp(desc, "TextAreaLineHeight", [num(DESC_FONT)]);
+  setProp(desc, "TextAreaLineGap", [num(0)]);
+  bar.name = "MapDescScrollBar";
+  desc.children.push(bar);
+}
+
+/** The blurb's scrollbar: the in-game bar (bare track, round knob). Its template lives in
+ *  EscMenuTemplates.fdf, so a screen that shows a description must name that file in its
+ *  `includeFdf` — the glue's own StandardTemplates.fdf does not carry this one. */
+const BLURB_SCROLLBAR = "EscMenuScrollBarTemplate";
+export const BLURB_SCROLLBAR_FDF = "UI\\FrameDef\\UI\\EscMenuTemplates.fdf";
 
 /** The minimap, and the stat rows under it — both a little higher than the FDF's own
  *  geometry puts them, to leave the blurb the room a Blizzard-length one needs. */
@@ -690,10 +751,18 @@ const ROW_MARGIN = 0.0009375;
  *  of "Suggested Players:" (our text frames clip; they do not spill). */
 const ROW_H = 0.019;
 const DESC_GAP = 0.002; // MapDescValue's own SetPoint TOP, MapDescLabel BOTTOM, 0, -0.002
-/** The blurb's type size. The FDF's StandardSmallTextTemplate says 0.011, but that is sized
- *  for WC3's own font; ours sets wider, so a Blizzard-length description would not fit the
- *  box the game gives it. Smaller type, same box — the reference's proportions survive. */
-const DESC_FONT = 0.0085;
+/** The blurb's type size: the FDF's own, off `StandardSmallTextTemplate`.
+ *
+ *  It used to be 0.0085 — shrunk because our font sets wider than WC3's, so a Blizzard-length
+ *  description did not fit the box the game gives it. Now that what does not fit scrolls
+ *  (`makeBlurbScrollable`) there is nothing to buy with smaller type, and there was a price:
+ *  the FDF's drop shadow is a flat 0.001 whatever the font, so undersized type wore a shadow
+ *  nearly as thick as its own stroke and read as bold beside the labels above it. At the
+ *  file's own size the shadow is back in the game's own proportion to it. */
+const DESC_FONT = 0.011;
+/** The pitch of one wrapped line of it — the type's size times the leading `.fdf-textarea-line`
+ *  sets (style.css). The blurb's box is a whole number of these; see `layoutInfoPane`. */
+const DESC_LINE = DESC_FONT * 1.15;
 
 // --- small FdfFrame helpers ---------------------------------------------------------
 //

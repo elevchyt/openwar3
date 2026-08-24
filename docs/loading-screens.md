@@ -106,6 +106,31 @@ on every gold mine, a house on every neutral building the unit table flags (`nbm
 each start location as a cross in that player's colour. They are read from the map's bytes, so
 the screen takes them a beat after it mounts (`setMinimapPreview`) rather than at build time.
 
+## 3c. The blurb's length is the MAP's business, so it is fitted rather than trusted
+
+`LoadingText` is the one frame on the screen with a `Width` and no `Height`: it wraps to 0.36
+and is as tall as the wrap makes it, growing DOWN from the subtitle. Nothing in the file bounds
+it, and what it holds comes out of the map — so a wordy chapter runs off the bottom of the
+picture and straight through the load bar.
+
+`fitBlurb` (`src/ui/loadingScreen.ts`, run from `onBuild`, so a resize re-decides) steps the
+type DOWN from the file's own 0.013 until the paragraph clears the bar:
+
+- The bar's top edge is a **measured** constant, `BAR_TOP` — no frame carries it, because the
+  bar is art (`LoadBar.mdx`, drawn into the canvas) and `Loading.fdf`'s `LoadingBar` sprite
+  declares neither Width nor Height. Off the running screen at 1600×813 the bar's metal frame
+  begins at y ≈ 705 against a 1355 px/unit scale: (813 − 705) / 1355 ≈ 0.0797.
+- The box gets `height: auto` and `align-items: flex-start` first. Without both, smaller type is
+  CENTRED in the box the layout measured at the file's size (StandardValueTextTemplate is
+  `JUSTIFYMIDDLE`) and drifts away from the subtitle above it.
+- It steps in small increments rather than taking one proportional jump, because wrapped text is
+  a staircase in the type size and not a line through the origin — a single guess overshoots in
+  whichever direction the last line happens to break.
+- Past `BLURB_FONT_MIN` the box is clipped to the room instead. Of the two promises, *the bar is
+  never written over* is the one that holds unconditionally; illegible type would have kept
+  neither. No shipped chapter reaches either branch — Rise of the Naga's blurb, the longest of
+  them, still fits at the file's own size — but a custom campaign's could.
+
 ## 4. It is a full-WINDOW screen, and `#ui` stops being one mid-load
 
 `body.in-game` puts a **`transform`** on `#ui` to re-box it to the 16:9 game frame — and a

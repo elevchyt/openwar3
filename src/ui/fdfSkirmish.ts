@@ -8,7 +8,8 @@ import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { savedPlayerName } from "./fdfLan";
 import type { Controller, MeleeConfig, SlotConfig } from "./lobby";
 import {
-  MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, nudgeY, num, setProp, size, str,
+  BLURB_SCROLLBAR_FDF, MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, nudgeY, num,
+  setProp, size, str,
 } from "./mapBrowser";
 import {
   CONTROLLERS, HANDICAPS, PLAYER_SLOT_FDF, buildSlotRows, dropdownButtonNames, fillForceLabels,
@@ -98,7 +99,7 @@ export async function mountSkirmish(
     vfs,
     fdfPath: "UI\\FrameDef\\Glue\\Skirmish.fdf",
     rootFrame: "Skirmish",
-    includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, PLAYER_SLOT_FDF],
+    includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, PLAYER_SLOT_FDF, BLURB_SCROLLBAR_FDF],
     // The engine composes this screen from four files; so do we.
     buildRoot: (lib) => { browser.useStrings(lib); return buildSkirmishRoot(lib, groups); },
     // "Advanced Options" is one of two mutually exclusive panels in the FDF (the other
@@ -227,7 +228,7 @@ function buildSkirmishRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   // Skirmish.fdf's own MapInfoPaneContainer box, and the shade of the gap under it the
   // blurb may run into before the Advanced Options base begins (Echo Isles' five lines
   // want it; the button still sits clear underneath).
-  if (pane) adopt(root, "MapInfoPaneContainer", [layoutInfoPane(pane, { w: 0.234375, h: 0.2875, descOverhang: 0.014 })]);
+  if (pane) adopt(root, "MapInfoPaneContainer", [layoutInfoPane(pane, { w: 0.234375, h: 0.2875, descOverhang: 0.014, lib })]);
 
   // The player rows, stacked down the team-setup frame under the map's own force headings
   // (ui/playerSlots.ts — the LAN game lobby builds the same rows out of the same file).
