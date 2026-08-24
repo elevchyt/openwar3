@@ -434,8 +434,8 @@ export interface PendingCast {
   // player asked for it.
   auto: boolean;
   // The order to resume after the cast (so an autocast/manual cast mid attack-move,
-  // follow or COMMANDED attack continues afterward instead of falling idle).
-  resume: { kind: "attackmove"; x: number; y: number } | { kind: "follow"; id: number } | { kind: "attack"; id: number; force: boolean } | null;
+  // follow, HOLD or COMMANDED attack continues afterward instead of falling idle).
+  resume: { kind: "attackmove"; x: number; y: number } | { kind: "follow"; id: number } | { kind: "attack"; id: number; force: boolean } | { kind: "hold" } | null;
 }
 
 /** A corpse left by a dead unit (Liquipedia: Corpse). Persists on the ground,
@@ -8212,7 +8212,12 @@ export class SimWorld {
               // non-hostile (issueAttack's `force`), and a resume that dropped it would
               // silently refuse to pick the fight back up.
               { kind: "attack", id: u.targetId, force: !this.hostile(u, this.units.get(u.targetId)!) }
-            : null;
+            : u.order === "hold"
+              ? // A holding caster is STILL HOLDING when the heal is done. Without this he
+                // fell idle the moment the cast ended, and an idle unit chases — which is
+                // precisely the thing the player pressed Hold Position to prevent.
+                { kind: "hold" }
+              : null;
     // Re-task away from whatever it was doing.
     this.detachBuilder(unitId);
     this.cancelSwing(u);
@@ -8492,7 +8497,7 @@ export class SimWorld {
     if (pc.channelLeft <= 0 && pc.backLeft <= 0) this.endCast(u, pc); // instant, no recovery
   }
 
-  /** End a cast: resume the pre-cast attack-move/follow/commanded attack, else fall idle. */
+  /** End a cast: resume the pre-cast attack-move/follow/hold/commanded attack, else fall idle. */
   private endCast(u: SimUnit, pc: PendingCast): void {
     // The cast ran its course: SPELL_FINISH (the channel/recovery is over) then
     // SPELL_ENDCAST (the caster has stopped casting). `ended` marks it done so the
@@ -8503,6 +8508,7 @@ export class SimWorld {
     pc.ended = true;
     if (pc.resume?.kind === "attackmove") this.issueAttackMove(u.id, pc.resume.x, pc.resume.y);
     else if (pc.resume?.kind === "follow") this.issueFollow(u.id, pc.resume.id);
+    else if (pc.resume?.kind === "hold") this.issueHold(u.id); // back to the line he was told to hold
     // Back to the fight he was told to join — still ORDERED, so it keeps its commitment
     // (the leash, the walk-past-others rule) exactly as before the heal. A target that
     // died while he cast simply refuses, and he falls idle and re-acquires like anyone.
@@ -8570,8 +8576,14 @@ export class SimWorld {
   }
 
   /** Idle autocast: a unit with a toggled-on autocast ability picks a valid
-   *  target and casts. Returns true if a cast started. */
-  private tickAutocast(u: SimUnit): boolean {
+   *  target and casts. Returns true if a cast started.
+   *
+   *  `inPlace` drops the WALK. Normally an autocast looks as far as the caster's own eyes and
+   *  trots over to what it finds (see autocastSearchRange) — but Hold Position's entire
+   *  content is "do not move", so a holding caster may only take work that is already inside
+   *  the spell's own cast range. Same for the corpse family: a Meat Wagon on hold raises what
+   *  it is standing over and does not drive off after the rest of the field. */
+  private tickAutocast(u: SimUnit, inPlace = false): boolean {
     // NOT gated on having mana. That was a fast path for the casters, and it is wrong for the
     // autocasts that cost nothing: a Meat Wagon has no mana pool at all, so Get Corpse
     // (`[Amel] Cost1 = 0`) could never fire and the wagon sat next to a field of bodies doing
@@ -8615,6 +8627,8 @@ export class SimWorld {
         if (!this.corpseAutocastWants(u, def, lvl, reach)) {
           // Nothing in reach — but if there is a body it can SEE, go and stand over it. A
           // plain move order, not a cast: arriving is what makes the next idle tick fire.
+          // Never on Hold: the walk is the one thing that order forbids.
+          if (inPlace) continue;
           if (!this.corpseAutocastWants(u, def, lvl, look)) continue;
           const [body] = this.corpsesFor(u, def, u.x, u.y, look, { forLoad: CORPSE_LOADERS.has(def.code) });
           if (!body) continue;
@@ -8632,7 +8646,7 @@ export class SimWorld {
       // (Heal/Inner Fire/Frost Armor all carry it — verified in the 1.27 MPQ).
       const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
       const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
-      const range = this.autocastSearchRange(u, lvl.castRange);
+      const range = inPlace ? lvl.castRange : this.autocastSearchRange(u, lvl.castRange);
       const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags);
       if (target) return this.issueCast(u.id, def.code, target.id, 0, 0, true);
     }
@@ -10422,7 +10436,13 @@ export class SimWorld {
           if (!this.tickAutocast(u)) this.tickAcquire(u, dt); // else engage enemies en route
           break;
         case "hold":
-          this.tickHold(u, dt); // attack enemies in range, but never chase
+          // Autocast gets first refusal here too: Liquipedia's Autocast page lists hold
+          // position among the orders that do NOT suppress it, so a Priest told to hold a
+          // line still heals the Footmen holding it beside him. IN PLACE — he takes only what
+          // is already within Heal's own 250 and never walks out to find work, because not
+          // moving is the whole of what the order says (see tickAutocast's `inPlace`).
+          // A committed swing lands first, exactly as in tickAttack.
+          if (u.swingLeft >= 0 || !this.tickAutocast(u, true)) this.tickHold(u, dt); // else attack enemies in range, but never chase
           break;
         case "idle":
           // Autocast (toggled-on Heal/Slow/…) gets first refusal, then auto-attack.
