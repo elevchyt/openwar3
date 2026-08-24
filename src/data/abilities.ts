@@ -595,6 +595,11 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // Avatar finds one inside `Rng1` = 600 by itself (Liquipedia "Avatar of Vengeance": Cast
   // Type Autocast, Target Type No Target, Targets Allowed Dead).
   Avng: { target: "none", autocast: true },
+  // Raise Dead (Necromancer) — the same shape, the same `targs1 = dead` with no target to
+  // click, and autocast like the Avatar's. OFF by default (`unec` has `auto = _`), which is
+  // the difference: the Avatar starts raising the moment it lands, a Necromancer waits to be
+  // told. `ACrd` (creep) and `AIrd` (the Rod of Necromancy) carry this same base code.
+  Arai: { target: "none", autocast: true },
   // `Adet` "Detect (Sentry Ward)" (Rng1 1100) is in AbilityData.slk but NO unit lists it in
   // 1.27a's UnitAbilities.slk — it is a dead row. It stays out of this table (nothing would
   // ever carry it) while the sim's detect derivation still honours the code, so a custom map

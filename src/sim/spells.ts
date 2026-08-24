@@ -1,5 +1,6 @@
 import type { AbilityDef, AbilityLevel, BuffFx } from "../data/abilities";
-import type { SimUnit, BuffKind } from "./world";
+import type { SimUnit, BuffKind, ClaimedCorpse } from "./world";
+import type { CorpseOrder } from "./corpses";
 
 // Spell effect handlers, dispatched on an ability's base `code` (data/abilities).
 // This is the modular seam: the sim executes a cast by looking up the handler for
@@ -60,16 +61,24 @@ export interface SpellApi {
    *  and only for an ability that says so: the Avatar of Vengeance's Spirits last "50 seconds
    *  or until the avatar dies", while an Archmage's Water Elemental outlives him. */
   requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number, art?: { summon: string; unsummon: string }, atPoint?: boolean, bound?: boolean): void;
-  /** Raise up to `max` corpses near a point back onto their feet.
+  /**
+   * TAKE up to `max` corpses within `radius` — the one door onto the corpse pool, shared by
+   * every ability that spends bodies (see sim/corpses.ts for the family and the filter).
    *
-   *  Resurrection calls it bare, and what comes back is the unit itself. Animate Dead passes
-   *  `opts`, and what comes back is a SUMMON: a timed, optionally invulnerable body that
-   *  keeps its weapon and loses everything it knew (see world.ts raiseNearbyCorpsesInternal). */
-  raiseNearbyCorpses(x: number, y: number, radius: number, owner: number, team: number, max: number, opts?: RaiseOptions): number;
-  /** Consume ONE corpse within `radius` — the Ghoul's meal. Returns false when there is
-   *  nothing to eat, which is the difference between raising (take what you can, any number)
-   *  and cannibalising (one body, and no ability without it). */
-  consumeCorpse(x: number, y: number, radius: number): boolean;
+   * Which bodies it may have comes off the ability's OWN row: `def.targetFlags` is `targs1`,
+   * whose `friend`/`player` half is why Resurrection raises only your dead while Animate Dead
+   * takes anyone's. `needsType = false` for a consumer that spends the body on something
+   * other than rebuilding it (Cannibalize does not care what died).
+   *
+   * The bodies are marked spent before this returns — a corpse goes to exactly one caster.
+   */
+  claimCorpses(caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, max: number, order?: CorpseOrder, needsType?: boolean): ClaimedCorpse[];
+  /** …and the RAISE-AS-THEMSELVES half: stand claimed bodies back up as what they were.
+   *
+   *  Resurrection calls it bare and gives the unit back whole. Animate Dead passes `opts`,
+   *  and what comes back is a SUMMON: a timed, optionally invulnerable SHELL that keeps its
+   *  weapon and loses everything it knew. */
+  raiseClaimed(taken: ClaimedCorpse[], owner: number, team: number, opts?: RaiseOptions): number;
   /** Spirit Link: mark `unit` as sharing `share` of its damage across the `group` unit ids
    *  for `durationSec`. Applied to every member so the split is symmetric. */
   linkSpirits(unit: SimUnit, group: number[], durationSec: number, share: number): void;
@@ -151,9 +160,6 @@ export interface SpellApi {
    *  Nature is the reason it returns the spots rather than a count: its `targs1` is `tree`
    *  and each treant it makes stands in the hole its own tree left. */
   fellTrees(x: number, y: number, radius: number, max: number): Array<{ x: number; y: number }>;
-  /** Consume the nearest corpse within `radius` and hand back what it was — the raise-from-
-   *  a-body abilities that TAKE NO TARGET (Carrion Beetles, Animate Dead) find their own. */
-  takeCorpse(x: number, y: number, radius: number): { x: number; y: number; facing: number; unitId: string } | null;
   /** Immolation (`AEim`): light the caster, or put him out. The burn itself runs on the
    *  caster's own tick (world.ts tickImmolation) because it has to follow him around. */
   toggleImmolation(unit: SimUnit): void;
@@ -326,7 +332,7 @@ export interface WaveOptions {
   trail?: { art: string; step: number };
 }
 
-/** Animate Dead's half of a raise (see SpellApi.raiseNearbyCorpses). */
+/** Animate Dead's half of a raise (see SpellApi.raiseClaimed). */
 export interface RaiseOptions {
   durationSec: number; // 0 = permanent (Resurrection)
   invulnerable?: boolean; // `Hre2 "Raised Units Are Invulnerable"`
@@ -697,9 +703,11 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Resurrection (Paladin ultimate) — raise up to dataA dead friendly units near
   // the caster back to life from their corpses.
   AHre: (api, caster, def, rank, ctx) => {
-    const lvl = def.levelData[rank - 1];
     if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
-    api.raiseNearbyCorpses(ctx.x, ctx.y, lvl.area || 900, caster.owner, caster.team, Math.max(1, d(lvl, 0, 6)));
+    // Bare options: what comes back is the unit ITSELF, whole and permanent. And only YOUR
+    // dead — `targs1 = air,ground,dead,friend`, which the shared claim now enforces (it did
+    // not before, so a Paladin stood up whatever the enemy had lost nearby and kept it).
+    raiseCorpses(api, caster, def, rank, ctx.x, ctx.y);
   },
 
   // Summon Water Elemental — spawn the summoned unit (unitid) beside the caster
@@ -840,9 +848,11 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // Ancestral Spirit (Spirit Walker) — raise ONE fallen non-hero Tauren from its corpse at
-  // the point, back at full strength (dataA = HP fraction restored ≈ 1).
+  // the point, back at full strength (dataA = HP fraction restored ≈ 1). Shape B with a max
+  // of one, and its `targs1 = ground,player,dead` is the tightest allegiance in the family:
+  // `player` means the caster's OWN dead, not an ally's.
   Aast: (api, caster, def, _rank, ctx) => {
-    api.raiseNearbyCorpses(ctx.x, ctx.y, 250, caster.owner, caster.team, 1);
+    api.raiseClaimed(api.claimCorpses(caster, def, ctx.x, ctx.y, 250, 1, "nearest"), caster.owner, caster.team);
     if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0);
   },
 
@@ -978,7 +988,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   Acan: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     const reach = lvl.castRange || 50;
-    if (!api.consumeCorpse(ctx.x || caster.x, ctx.y || caster.y, reach)) return;
+    // `needsType = false`: a meal does not care what died, only that something did. Every
+    // other consumer rebuilds the unit and so needs its type.
+    if (!api.claimCorpses(caster, def, ctx.x || caster.x, ctx.y || caster.y, reach, 1, "nearest", false).length) return;
     api.applyBuff(caster, {
       kind: "hot", group: "cannibalize", timeLeft: dur(lvl, caster) || 33,
       sourceId: caster.id, value: d(lvl, 0, 10), ...fx(def),
@@ -2201,26 +2213,18 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     }
   },
   // Carrion Beetles (Crypt Lord) — `targs1 = dead`: the ability eats a CORPSE. Pressing it
-  // takes no aiming at all; the Crypt Lord finds the nearest body inside `Rng1` = 900 and
-  // a beetle climbs out of it. Columns (the shared raise-from-corpse row Rai1..Rai4 plus
-  // two of its own):
-  //   DataA "Units Summoned (Type One)"  1
-  //   DataC "Unit Type One"              ucs1/ucs2/ucs3   ← a RAWCODE, hence dataStr
-  //   DataE "Max Units Summoned"         5
-  // Beetles are permanent ("Beetles are permanent until killed" — Ubertip), so no timer.
-  AUcb: (api, caster, def, rank) => {
-    const lvl = def.levelData[rank - 1];
-    const unit = lvl.dataStr[2] || lvl.summon || SUMMON_FALLBACK[def.code] || "";
-    if (!unit) return;
-    const cap = d(lvl, 4, 5);
-    if (cap > 0 && api.countOwned(caster.owner, unit) >= cap) return;
-    const corpse = api.takeCorpse(caster.x, caster.y, lvl.castRange || lvl.area || 900);
-    if (!corpse) return;
-    const art = summonArt(def);
-    for (let i = 0; i < Math.max(1, d(lvl, 0, 1)); i++) {
-      api.requestSummon(unit, corpse.x, corpse.y, corpse.facing, caster.owner, caster.team, 0, caster.id, art, true);
-    }
-  },
+  // takes no aiming at all; the Crypt Lord finds the nearest body inside `Rng1` = 900 and a
+  // beetle climbs out of it. Shape A (see summonFromCorpse for the family and its columns);
+  // beetles carry no `Dur1`, and "Beetles are permanent until killed" (Ubertip) is what that
+  // zero means.
+  AUcb: (api, caster, def, rank) => summonFromCorpse(api, caster, def, rank),
+  // Raise Dead (Necromancer) — the family's plainest member and the one it is named after:
+  // `Rai1` = 2 skeleton warriors (`uske`) out of one body, for `Dur1` = 45 seconds. Autocast,
+  // and OFF by default — `Units\UnitAbilities.slk` gives `unec` `abilList = Acri,Arai,Auhf,
+  // Aiun` with `auto = _`, so a Necromancer raises nothing until the player turns it on.
+  // `ACrd` is the creep copy (40s) and `AIrd` the Rod of Necromancy (65s); all three share
+  // this code, so all three arrive here with their own numbers.
+  Arai: (api, caster, def, rank) => summonFromCorpse(api, caster, def, rank),
   // Spirit of Vengeance — the AVATAR of Vengeance's own ability, not the Warden's ultimate
   // that made the Avatar (`AEsv`, above). "Raises an invulnerable feral spirit from a corpse.
   // Lasts 50 seconds or until the avatar dies." (Liquipedia / Wowpedia, Avatar of Vengeance.)
@@ -2241,20 +2245,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // gives `even` the whole ability list `Avul` — "Invulnerable (Neutral)" — which the spawn
   // path already reads as `baseInvulnerable`. The ability that raises them says nothing about
   // it, and neither should this.
-  Avng: (api, caster, def, rank) => {
-    const lvl = def.levelData[rank - 1];
-    const unit = lvl.dataStr[2] || lvl.summon || "";
-    if (!unit) return;
-    const cap = d(lvl, 4, 6);
-    if (cap > 0 && api.countOwned(caster.owner, unit) >= cap) return;
-    const corpse = api.takeCorpse(caster.x, caster.y, lvl.castRange || 600);
-    if (!corpse) return;
-    const art = summonArt(def); // `[Avng] Targetart` / `[Bvng] Effectart` — both feralspiritdone
-    const life = lvl.heroDuration || lvl.duration || 50;
-    for (let i = 0; i < Math.max(1, d(lvl, 0, 1)); i++) {
-      api.requestSummon(unit, corpse.x, corpse.y, corpse.facing, caster.owner, caster.team, life, caster.id, art, true, true);
-    }
-  },
+  Avng: (api, caster, def, rank) => summonFromCorpse(api, caster, def, rank, { bound: true }),
   // Summon Bear / Quilbeast / Hawk (Beastmaster) — one beast beside the caster.
   ANsg: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
   ANsq: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
@@ -2318,13 +2309,13 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   //           run out (`Dur1` = 40s at rank 1, 120 after) — which is the whole ultimate.
   // What comes back is a SUMMON, not the unit that died: it keeps the corpse's body and its
   // weapon and loses everything else it once knew (spells, autocast, its own abilities), and
-  // it leaves no second corpse behind. That is what `raiseNearbyCorpses` builds.
+  // it leaves no second corpse behind. That is what `raiseCorpses` builds.
   //
   // The burst each body rises in is `Specialart = …\Undead\AnimateDead\AnimateDeadTarget.mdl`
   // (the ability row has no Casterart at all, so the old read drew nothing).
   AUan: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    api.raiseNearbyCorpses(caster.x, caster.y, lvl.area || 900, caster.owner, caster.team, Math.max(1, d(lvl, 0, 6)), {
+    raiseCorpses(api, caster, def, rank, caster.x, caster.y, {
       durationSec: lvl.heroDuration || lvl.duration || 40,
       invulnerable: d(lvl, 1, 0) !== 0,
       art: def.specialArt || def.casterArt,
@@ -2336,6 +2327,66 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 /** Level-data of the ability being cast (rank is 1-based). */
 function lv(def: AbilityDef, rank: number): AbilityLevel {
   return def.levelData[Math.min(rank, def.levelData.length) - 1];
+}
+
+/**
+ * SHAPE A of the corpse family — **one body becomes N of a FIXED type**.
+ *
+ * These rows share a field group and therefore a reading; AbilityMetaData declares
+ * `Rai1..Rai4` as `useSpecific=Arai,ACrd,AUcb,AIrd,Avng`, and those five rows are the whole
+ * shape. Only the numbers differ:
+ *
+ *   Raise Dead          `Arai`  DataA 2  DataC uske  Dur 45   Rng 600  — 2 skeletons a body
+ *   Raise Dead (creep)  `ACrd`  DataA 2  DataC uske  Dur 40   Rng 600
+ *   Rod of Necromancy   `AIrd`  DataA 2  DataC uske  Dur 65   Rng 600  — the item that copies it
+ *   Carrion Scarabs     `AUcb`  DataA 1  DataC ucs1  Dur 0    Rng 900  DataE 5 — permanent
+ *   Spirit of Vengeance `Avng`  DataA 1  DataC even  Dur 50   Rng 600  DataE 6 — bound
+ *
+ *   DataA `Rai1` "Units Raised"      how many climb out of the ONE body
+ *   DataC `Rai3` "Unit Type"         a RAWCODE, hence dataStr — not the SLK `unitid` column
+ *   DataE `Ucb5` "Max Summoned"      a live cap on the caster's total, 0 = uncapped
+ *
+ * `bound` is Vengeance's alone (its Spirits die with the Avatar). Everything else is data.
+ */
+function summonFromCorpse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, o: { bound?: boolean } = {}): void {
+  const lvl = lv(def, rank);
+  const unit = lvl.dataStr[2] || lvl.summon || SUMMON_FALLBACK[def.code] || "";
+  if (!unit) return;
+  const cap = d(lvl, 4, 0);
+  if (cap > 0 && api.countOwned(caster.owner, unit) >= cap) return;
+  // Nearest: you raise the body you are standing over, not the freshest one on the map.
+  const [corpse] = api.claimCorpses(caster, def, caster.x, caster.y, lvl.castRange || lvl.area || 600, 1, "nearest");
+  if (!corpse) return;
+  const art = summonArt(def);
+  const life = lvl.heroDuration || lvl.duration || 0;
+  const n = Math.max(1, d(lvl, 0, 1));
+  // …and they climb out of the body, so they land ON it (atPoint) rather than a step in
+  // front of the caster — who, for Raise Dead, is 600 units away.
+  for (let i = 0; i < n; i++) {
+    api.requestSummon(unit, corpse.x, corpse.y, corpse.facing, caster.owner, caster.team, life, caster.id, art, true, o.bound);
+  }
+}
+
+/**
+ * SHAPE B of the corpse family — **up to N bodies get back up AS THEMSELVES**.
+ *
+ * The Hre1/Hre2 group: Resurrection and the two Runes, Animate Dead and its creep and item
+ * copies. `DataA "Number of Corpses Raised"`, and the difference between the two halves of
+ * the family is entirely in what comes back —
+ *
+ *   Resurrection `AHre`  Dur 0                    the unit itself, whole and permanent
+ *   Animate Dead `AUan`  Dur 40, DataB 1          a timed, invulnerable SHELL
+ *
+ * — which `RaiseOptions` carries and world.ts honours. `targs1` decides WHOSE dead: `[AHre]
+ * air,ground,dead,friend` is your own, `[AUan] air,ground,dead` is anybody's.
+ *
+ * Freshest first, because this one sweeps and takes SEVERAL: the bodies that have been lying
+ * longest are the ones a six-corpse Resurrection should leave behind.
+ */
+function raiseCorpses(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, x: number, y: number, opts?: RaiseOptions): number {
+  const lvl = lv(def, rank);
+  const taken = api.claimCorpses(caster, def, x, y, lvl.area || 900, Math.max(1, d(lvl, 0, 6)), "freshest");
+  return api.raiseClaimed(taken, caster.owner, caster.team, opts);
 }
 
 /** Generic summon: place `count` (0 ⇒ read dataA/dataB) copies of the ability's

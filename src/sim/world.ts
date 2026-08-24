@@ -1,6 +1,7 @@
 import { BUILD_CELL, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { targsKindError } from "./targeting";
+import { corpseAdmits, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
@@ -474,6 +475,17 @@ export interface IllusionInit {
 
 /** A unit a spell asked to be brought into the world this tick. The sim owns no model
  *  instances, so spawning is deferred to the renderer exactly like training is. */
+/** A corpse a cast has TAKEN — where it lay, which way it faced, and what it used to be.
+ *  Everything a raise needs and nothing a corpse still on the ground would carry: by the
+ *  time a handler sees one of these the body is already spent. */
+export interface ClaimedCorpse {
+  x: number;
+  y: number;
+  facing: number;
+  unitId: string;
+  owner: number;
+}
+
 export interface SummonRequest {
   unitId: string;
   x: number;
@@ -8511,13 +8523,13 @@ export class SimWorld {
       // A CORPSE autocast: no target to click, and what it wants is a body. The Avatar of
       // Vengeance is the one row in 1.30 (`Avng`, on by default), and the data alone says so
       // — `targs1 = air,ground,dead` on a no-target ability. It casts on the spot, because
-      // `takeCorpse` does its own searching inside `Rng1`; there is nothing to walk to and no
+      // `claimCorpses` does its own searching inside `Rng1`; there is nothing to walk to and no
       // living target to re-check on arrival. Its own guards (a corpse in reach, and fewer
       // than `DataE` spirits alive) live in the handler, so a cast that finds nothing simply
       // does nothing — and the cooldown, 2 seconds, is what keeps it from re-asking every
       // tick for the rest of the match.
       if (def.target === "none" && def.targetFlags.some((f) => f.toLowerCase() === "dead")) {
-        if (!this.corpseAutocastWants(u, lvl)) continue;
+        if (!this.corpseAutocastWants(u, def, lvl)) continue;
         return this.issueCast(u.id, def.code, 0, u.x, u.y, true);
       }
       if (def.target !== "unit") continue;
@@ -8544,25 +8556,19 @@ export class SimWorld {
   }
 
   /** Would a corpse autocast actually do something right now? Asked BEFORE the order, because
-   *  mana is spent when the cast commits and a spell that fires into nothing still pays: an
-   *  Avatar standing at its six-Spirit cap, or on ground with no bodies on it, would otherwise
-   *  bleed 25 mana every 2 seconds for the rest of its life.
+   *  mana is spent when the cast commits and a spell that fires into nothing still pays: a
+   *  Necromancer on ground with no bodies on it, or an Avatar already at its six-Spirit cap,
+   *  would otherwise bleed its mana away a cast at a time for the rest of the match.
    *
-   *  The two guards mirror the handler's exactly (spells.ts `Avng`) — a corpse `takeCorpse`
-   *  would accept, and room under `DataE "Max Summoned"` for another of `DataC`. Kept
-   *  together here rather than reusing `corpsesNear`, which answers a slightly different
-   *  question (it excludes hero corpses and admits mechanical ones). */
-  private corpseAutocastWants(u: SimUnit, lvl: AbilityLevel): boolean {
+   *  The guards are the handler's own, asked without spending anything: `corpsesFor` is the
+   *  same look `claimCorpses` takes from (so the two cannot drift), and the cap is `DataE
+   *  "Max Summoned"` against the caster's live count of `DataC`. */
+  private corpseAutocastWants(u: SimUnit, def: AbilityDef, lvl: AbilityLevel): boolean {
     const unit = lvl.dataStr[2] || lvl.summon || "";
     if (!unit) return false;
     const cap = lvl.data[4];
     if (cap > 0 && this.countOwnedOf(u.owner, unit) >= cap) return false;
-    const radius = lvl.castRange || lvl.area || 600;
-    for (const c of this.corpses.values()) {
-      if (c.raised || c.mechanical || !c.unitId) continue;
-      if (Math.hypot(c.x - u.x, c.y - u.y) <= radius) return true;
-    }
-    return false;
+    return this.corpsesFor(u, def, u.x, u.y, lvl.castRange || lvl.area || 600, "nearest").length > 0;
   }
 
   /** How far an autocast LOOKS for work — the caster's own acquisition range, not the
@@ -9573,61 +9579,65 @@ export class SimWorld {
     }
   }
 
-  /** Corpses within `radius` of a point, freshest first, excluding hero corpses
-   *  and already-raised ones (used by Resurrection / Raise Dead / Cannibalize). */
-  corpsesNear(x: number, y: number, radius: number): SimCorpse[] {
+  /**
+   * THE corpse query — every corpse-spending ability in the game starts here.
+   *
+   * One filter (see sim/corpses.ts) and one ordering, parameterised by the ability's OWN row
+   * rather than by whoever is calling. This replaced four hand-written scans that had drifted
+   * apart: one excluded hero corpses and admitted machines, another did the reverse, a third
+   * excluded both but ignored allegiance entirely, and the fourth was a copy of the third
+   * written to pre-check an autocast. Between them, Carrion Scarabs could hatch out of a dead
+   * Archmage and a Paladin's Resurrection stood up the enemy's dead for him.
+   *
+   * Nothing is claimed here — this is the LOOK. `claimCorpses` is the take.
+   */
+  corpsesFor(caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, order: CorpseOrder = "nearest", needsType = true): SimCorpse[] {
     const out: SimCorpse[] = [];
     for (const c of this.corpses.values()) {
-      if (c.raised || c.isHero) continue;
       if (Math.hypot(c.x - x, c.y - y) > radius) continue;
+      // The allegiance the ability's `friend`/`enemy` flags are measured against. A corpse
+      // has no team of its own any more, so it answers for the player who owned it.
+      const allied = this.alliedPlayers(caster.owner, c.owner);
+      const stance = (allied === null ? caster.owner === c.owner : allied) ? "ally" : "enemy";
+      if (!corpseAdmits(c, def.targetFlags, stance, needsType)) continue;
       out.push(c);
     }
-    return out.sort((a, b) => b.decayLeft - a.decayLeft);
+    return order === "freshest"
+      ? out.sort((a, b) => b.decayLeft - a.decayLeft)
+      : out.sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y));
   }
 
-  /** Mark up to `max` friendly corpses near a point as raised, emitting a summon
-   *  request to re-create each as a living unit for `owner`. Returns the count. */
-  raiseNearbyCorpsesInternal(x: number, y: number, radius: number, owner: number, team: number, max: number, opts?: RaiseOptions): number {
-    let raised = 0;
-    for (const c of this.corpses.values()) {
-      if (raised >= max) break;
-      if (c.raised || c.isHero || c.mechanical || !c.unitId) continue;
-      if (Math.hypot(c.x - x, c.y - y) > radius) continue;
-      c.raised = true; // the renderer hides the corpse model once raised
-      // A raised corpse stands back up where it fell, not a step in front of the caster.
+  /** …and the TAKE: up to `max` of them, marked spent so nothing can have them twice. A body
+   *  is spent once, whether it was raised, eaten or loaded — which is why one flag serves
+   *  all of them. Returns what was taken, in the order it was chosen. */
+  claimCorpses(caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, max: number, order: CorpseOrder = "nearest", needsType = true): ClaimedCorpse[] {
+    const taken: ClaimedCorpse[] = [];
+    for (const c of this.corpsesFor(caster, def, x, y, radius, order, needsType)) {
+      if (taken.length >= max) break;
+      c.raised = true; // the renderer hides the corpse model once it is spent
+      taken.push({ x: c.x, y: c.y, facing: c.facing, unitId: c.unitId, owner: c.owner });
+    }
+    return taken;
+  }
+
+  /** Stand claimed bodies back up AS THEMSELVES — the Hre1/Hre2 shape (Resurrection, the two
+   *  Runes, Animate Dead and its copies). The claiming already happened; this is only what
+   *  comes back, so it takes corpses rather than a point and knows nothing about who may
+   *  have them. Each rises where it FELL, not a step in front of the caster. */
+  raiseClaimedCorpses(taken: ClaimedCorpse[], owner: number, team: number, opts?: RaiseOptions): number {
+    for (const c of taken) {
       this.summonRequests.push({
         unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner, team,
         // Resurrection gives the unit back (summonLeft 0, permanent, itself again). Animate
-        // Dead does not: what stands up is a SUMMON on a clock, and `summonLeft > 0` is what
-        // the spawn path reads to strip it — see MapViewerScene's summon handling, which
-        // gives a timed raise no abilities and no corpse of its own.
+        // Dead does not: what stands up is a SUMMON on a clock, and it is a SHELL — see
+        // `stripped`, which is what strips it.
         summonLeft: opts?.durationSec ?? 0,
         stripped: (opts?.durationSec ?? 0) > 0, // a TIMED raise is a shell; Resurrection gives the unit back whole
         invulnerable: opts?.invulnerable ?? false,
         sourceId: 0, summonArt: opts?.art ?? "", unsummonArt: opts?.unsummonArt ?? "", atPoint: true,
       });
-      raised++;
     }
-    return raised;
-  }
-
-  /** Eat the nearest corpse within `radius` (Cannibalize). Reuses the same `raised` flag
-   *  raising does — from the corpse's point of view being eaten and being raised are the
-   *  same fate, and the renderer already hides a corpse the moment it is set. Nearest
-   *  first, so a Ghoul standing between two bodies takes the one it is on. */
-  consumeCorpseInternal(x: number, y: number, radius: number): boolean {
-    let best: SimCorpse | undefined;
-    let bestDist = Infinity;
-    for (const c of this.corpses.values()) {
-      if (c.raised || c.mechanical) continue; // a mechanical wreck is not a meal
-      const dist = Math.hypot(c.x - x, c.y - y);
-      if (dist > radius || dist >= bestDist) continue;
-      best = c;
-      bestDist = dist;
-    }
-    if (!best) return false;
-    best.raised = true;
-    return true;
+    return taken.length;
   }
 
   private unitsInAreaInternal(x: number, y: number, radius: number): SimUnit[] {
@@ -9673,8 +9683,8 @@ export class SimWorld {
     requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint, bound) => {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint, bound: !!bound });
     },
-    raiseNearbyCorpses: (x, y, r, owner, team, max, opts) => this.raiseNearbyCorpsesInternal(x, y, r, owner, team, max, opts),
-    consumeCorpse: (x, y, r) => this.consumeCorpseInternal(x, y, r),
+    claimCorpses: (caster, def, x, y, radius, max, order, needsType) => this.claimCorpses(caster, def, x, y, radius, max, order, needsType),
+    raiseClaimed: (taken, owner, team, opts) => this.raiseClaimedCorpses(taken, owner, team, opts),
     linkSpirits: (unit, group, durationSec, share) => {
       unit.linkGroup = [...group];
       unit.linkT = durationSec;
@@ -9743,7 +9753,6 @@ export class SimWorld {
     killUnit: (u) => this.kill(u),
     transmute: (target, caster, goldFactor, lumberFactor) => this.transmuteInternal(target, caster, goldFactor, lumberFactor),
     fellTrees: (x, y, radius, max) => this.fellTreesInternal(x, y, radius, max),
-    takeCorpse: (x, y, radius) => this.takeCorpseInternal(x, y, radius),
     toggleImmolation: (u) => this.toggleImmolation(u),
     markDoom: (t, caster, def, rank) => {
       t.doomed = { abilityId: def.id, rank, sourceId: caster.id, owner: caster.owner, team: caster.team };
@@ -9771,23 +9780,9 @@ export class SimWorld {
   }
 
   /** Take the nearest corpse within `radius` and say what it was. The corpse-eating abilities
-   *  that TAKE NO TARGET (Carrion Beetles, and Animate Dead through raiseNearbyCorpses) find
+   *  that TAKE NO TARGET (Carrion Beetles, Raise Dead, Animate Dead) find
    *  their own body this way; `raised` is the same flag a raise or a Cannibalize sets, which
    *  is what stops two beetles climbing out of one Footman. */
-  private takeCorpseInternal(x: number, y: number, radius: number): { x: number; y: number; facing: number; unitId: string } | null {
-    let best: SimCorpse | undefined;
-    let bestDist = Infinity;
-    for (const c of this.corpses.values()) {
-      if (c.raised || c.mechanical || !c.unitId) continue;
-      const dist = Math.hypot(c.x - x, c.y - y);
-      if (dist > radius || dist >= bestDist) continue;
-      best = c;
-      bestDist = dist;
-    }
-    if (!best) return null;
-    best.raised = true;
-    return { x: best.x, y: best.y, facing: best.facing, unitId: best.unitId };
-  }
 
   /** SetUnitOwner: hand a unit to another player (Charm, and the JASS native). The COLOUR
    *  has to move with it — a Charmed Knight fighting for the blue player is blue, and a
@@ -13500,6 +13495,19 @@ export class SimWorld {
         }
         case "AIvu": // Potion of Invulnerability → brief invulnerability (`Bvul`, "Invulnerable")
           this.applyBuffInternal(u, { kind: "invuln", group: "item:invuln", timeLeft: lvl?.duration || 15, sourceId: u.id, value: 0, value2: 0, buffId: buffIdOf(ad) });
+          fired = true;
+          break;
+        // The corpse-spending items are not item behaviour at all — they are the SPELL, with
+        // the item's own numbers on it, so they run the spell's handler rather than a second
+        // copy of it here. The Rod of Necromancy IS Raise Dead (`AIrd` carries `code = AIrd`
+        // but the identical Rai1..Rai4 columns: 2 skeletons of `uske` a body, for 65 seconds
+        // instead of the Necromancer's 45), and the two Runes of Resurrection ARE Resurrection
+        // (`APrl`/`APrr` carry `code = AHre` outright, DataA 1 and 3). Wiring them through
+        // applySpellEffect is what keeps the corpse rules — whose dead, hero corpses, one
+        // taker per body — in the one place that owns them (see sim/corpses.ts).
+        case "AIrd":
+        case "AHre":
+          this.applySpellEffect(ad.code === "AIrd" ? "Arai" : ad.code, 1, u, { targetId: 0, x, y }, ad);
           fired = true;
           break;
         case "AEbl": { // Kelen's Dagger of Escape → blink to a point within range
