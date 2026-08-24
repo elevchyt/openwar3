@@ -3435,6 +3435,20 @@ export class RtsController {
     // held pose as "Spell Channel", 2.0s and flagged looping, alongside a one-shot "Attack two
     // Spell - New" for his throws. Matching on the tag alone found the throw.
     const loops = loop || (def?.animNames ?? []).includes("looping");
+    // What LOOPING looks like was confirmed in the original game (observed 2026-08-24): the
+    // clip simply repeats for as long as the channel runs. There is no special "wind up, hold,
+    // release" structure to model — one clip, looped, for the duration, which is what `hold`
+    // (wind-up + channel, sized by the sim) and SequenceLoopMode.Loop below already do.
+    //
+    // Which clip depends on whether the caster's model author wrote one for it, and the data
+    // splits cleanly down that line across all 47 looping/channelled caster pairs:
+    //   • a dedicated channel clip, where one exists — the Archmage and Antonidas hold "Stand
+    //     Channel" through Blizzard, the Lich through Death and Decay, the Shadow Hunter
+    //     through Big Bad Voodoo, the Alchemist and Blood Mage "Spell Channel";
+    //   • else the plain "Spell", looped — the Far Seer and Thrall through Earthquake, the
+    //     Beastmaster through Stampede, the Priestess through Starfall, Varimathras through
+    //     Rain of Fire. These are the rows the best-match rule rescued: "Spell Chain
+    //     Lightning" and "Spell Slam" also contain the word `spell` and were being taken first.
     /**
      * The clip that BEST matches a token list: every requested token present, and among
      * those the one carrying the fewest EXTRA words.
