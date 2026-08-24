@@ -9730,8 +9730,18 @@ export class SimWorld {
     return taken;
   }
 
-  /** Put a carrier's whole cargo back on the ground where it now stands (`Amed` "Meat Drop",
-   *  and what a destroyed wagon spills). Returns how many bodies were dropped. */
+  /**
+   * Put a carrier's whole cargo back on the ground where it now stands (`Amed` "Meat Drop",
+   * and what a destroyed wagon spills). Returns how many bodies were dropped.
+   *
+   * A dropped body comes back FRESH: its decay clock is returned to the full
+   * `BoneDecayTime`, however long it had left when it was picked up (observed in the original
+   * game). That is what makes hauling worth doing — "an advanced strategy is to collect
+   * corpses then dump them in front of enemy towns to make Skeleton Warriors" (Liquipedia,
+   * Meat Wagon), and a body that arrived with four seconds left on it would be no use to
+   * anyone. It also means the wagon cannot be out-waited: the bodies it carries are as good
+   * the moment they land as the moment they fell.
+   */
   dropHeldCorpses(holderId: number, x: number, y: number): number {
     let dropped = 0;
     for (const c of this.corpses.values()) {
@@ -9739,6 +9749,7 @@ export class SimWorld {
       c.heldBy = 0;
       c.x = x;
       c.y = y;
+      c.decayLeft = CORPSE_TOTAL_TIME; // dropped bodies are fresh again — see above
       dropped++;
     }
     return dropped;

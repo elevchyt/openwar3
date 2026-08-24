@@ -108,7 +108,14 @@ function pool(corpses, owned = {}) {
     cargoCapacity: () => 8, // [Amtc] DataA on the Meat Wagon
     dropHeldCorpses: (id, x, y) => {
       let n = 0;
-      for (const k of corpses) if (k.heldBy === id) { k.heldBy = 0; k.x = x; k.y = y; n++; }
+      for (const k of corpses) {
+        if (k.heldBy !== id || k.raised) continue;
+        k.heldBy = 0;
+        k.x = x;
+        k.y = y;
+        k.decayLeft = 88; // MiscData BoneDecayTime — a dropped body is fresh again
+        n++;
+      }
       return n;
     },
   };
@@ -213,12 +220,14 @@ TARGS.Amed = [];
   ok("…while a free one can", corpseAdmits(corpse(), TARGS.Amel, "enemy", { forLoad: true }));
 }
 {
-  const held = [corpse({ x: 0, y: 0, heldBy: 9, decayLeft: 88 }), corpse({ x: 0, y: 0, heldBy: 9, decayLeft: 88 })];
+  // Part-decayed on purpose: these were picked up with 12 and 30 seconds left on them.
+  const held = [corpse({ x: 0, y: 0, heldBy: 9, decayLeft: 12 }), corpse({ x: 0, y: 0, heldBy: 9, decayLeft: 30 })];
   const wagon = { id: 9, owner: 0, team: 0, x: 700, y: 300, facing: 0 };
   const { api } = pool(held);
   SPELL_HANDLERS.Amed(api, wagon, def("Amed"), 1);
   eq("Drop All Corpses empties the hold", held.map((k) => k.heldBy), [0, 0]);
   eq("…where the wagon now stands, not where they fell", held.map((k) => [k.x, k.y]), [[700, 300], [700, 300]]);
+  eq("…and FRESH: the decay clock goes back to full", held.map((k) => k.decayLeft), [88, 88]);
 }
 {
   // Raising OUT of the hold frees the slot. Without this the wagon counted bodies it no longer
