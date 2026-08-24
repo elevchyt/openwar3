@@ -600,6 +600,19 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // the difference: the Avatar starts raising the moment it lands, a Necromancer waits to be
   // told. `ACrd` (creep) and `AIrd` (the Rod of Necromancy) carry this same base code.
   Arai: { target: "none", autocast: true },
+  // The Meat Wagon's corpse cargo — three rows for one job (see spells.ts, the `Amel`/`Amed`
+  // pair). `Amtc` is the HOLD and nothing else: no order, no button, just `DataA` = 8, the
+  // capacity. It is listed here so the wagon actually carries the row — `buildInitialAbilities`
+  // keeps only what this table names, and a capacity nothing carries is a capacity nobody can
+  // read (the same trap the Fountains fell into, above).
+  Amtc: { target: "passive" }, // Cargo Hold (Meat Wagon) — capacity 8
+  Amel: { target: "none", autocast: true }, // Meat Load / "Get Corpse" — one body into the hold
+  Amed: { target: "none" }, // Meat Drop / "Drop All Corpses" — the whole hold, where it stands
+  // Exhume Corpses — passive, and gated: `[Aexh] Requires = Ruex`, the Slaughterhouse upgrade.
+  // "Generates a Crypt Fiend corpse within the Meat Wagon every 15 seconds" (Liquipedia), and
+  // the row says both halves — `Dur1` = 15 is the interval, `UnitID1 = ucry` the body. (It was
+  // a Ghoul before 1.30.0 changed it; 1.30.4 data says Crypt Fiend.)
+  Aexh: { target: "passive" },
   // `Adet` "Detect (Sentry Ward)" (Rng1 1100) is in AbilityData.slk but NO unit lists it in
   // 1.27a's UnitAbilities.slk — it is a dead row. It stays out of this table (nothing would
   // ever carry it) while the sim's detect derivation still honours the code, so a custom map

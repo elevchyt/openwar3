@@ -343,8 +343,11 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
       if (rec) {
         rec.decayLeft = c.decayLeft;
         rec.raised = c.raised;
+        rec.heldBy = c.heldBy ?? 0; // loaded/dropped is host state, like `raised`
+        rec.x = c.x;
+        rec.y = c.y; // …and a dropped body lands somewhere new
       } else {
-        world.corpses.set(c.id, { ...c });
+        world.corpses.set(c.id, { ...c, heldBy: c.heldBy ?? 0 });
       }
     }
     for (const id of [...world.corpses.keys()]) if (!sentCorpses.has(id)) world.corpses.delete(id);

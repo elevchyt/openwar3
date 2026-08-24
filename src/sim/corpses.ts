@@ -1,7 +1,7 @@
 // Corpses as a RESOURCE — the one place "may this ability use that body?" is answered.
 //
-// WC3 has a whole family of abilities that spend corpses, and they arrive in three shapes
-// that share everything except what stands up at the end:
+// WC3 has a whole family of abilities built on corpses, and they arrive in four shapes that
+// share everything except what happens to the body at the end:
 //
 //   • SUMMON FROM A CORPSE — one body becomes N of a FIXED type. The Rai1..Rai4 field group
 //     (AbilityMetaData `useSpecific=Arai,ACrd,AUcb,AIrd,Avng`) is these rows and only these:
@@ -12,8 +12,12 @@
 //     item copies.
 //   • CONSUME FOR AN EFFECT — the body is spent on something that is not a unit at all:
 //     Cannibalize eats it for hit points.
+//   • CARRY — the Meat Wagon, which spends nothing: it picks bodies up (`Amel`, autocast),
+//     drives them somewhere, and drops them again (`Amed`). Its cargo stays usable the whole
+//     time; the corpses simply travel with it. That is the fourth shape, and the reason the
+//     query above has to know about `heldBy` at all.
 //
-// All three ask the same two questions first — WHICH bodies are in reach, and WHICH of them
+// All four ask the same two questions first — WHICH bodies are in reach, and WHICH of them
 // this ability is allowed to have — and the answers had drifted into four hand-written
 // filters that disagreed with each other. This module is the single answer; SimWorld.
 // corpsesFor / claimCorpses are its only callers, and every ability goes through those.
@@ -23,9 +27,9 @@
 
 /** The corpse fields a "may I use this?" decision reads. */
 export interface CorpseKind {
-  /** Already raised, eaten or loaded. A body is spent ONCE — the flag is shared by every
-   *  consumer for exactly that reason (from the corpse's point of view being raised and
-   *  being eaten are the same fate). */
+  /** SPENT: raised or eaten, and gone for good. One flag for every consumer, because from the
+   *  corpse's point of view being raised and being eaten are the same fate. Loading is NOT
+   *  this — see `heldBy`; a wagon borrows a body, it does not use it up. */
   raised: boolean;
   /** A HERO's corpse. Never usable by anything: a fallen hero goes to the altar, and no
    *  spell in the game may raise, eat, or load one. This is the rule the old filters
@@ -41,6 +45,26 @@ export interface CorpseKind {
   /** The player who owned the unit when it fell — what `friend`/`enemy` in the ability's own
    *  Targets Allowed is measured against. */
   owner: number;
+  /** The unit CARRYING this body (0 = it is lying on the ground). A Meat Wagon's cargo.
+   *
+   *  Being carried is not the same as being spent: a held corpse is still perfectly good, and
+   *  WC3 is explicit that it stays usable where it is — "Dropping corpses is not required for
+   *  Necromancers to cast Raise Dead" (Liquipedia, Meat Wagon). What changes is only WHERE it
+   *  is: it answers at the wagon's position, so a Necromancer beside the wagon can raise out
+   *  of it, and the wagon can be driven to where the bodies are wanted.
+   *
+   *  The one thing it does forbid is being loaded a second time — see `forLoad`. */
+  heldBy: number;
+}
+
+/** What a claim intends to do with the bodies it takes. */
+export interface CorpseNeed {
+  /** Only bodies that can be LOADED: not already in someone's cargo. Everything else may use
+   *  a held corpse exactly as it would one on the ground. */
+  forLoad?: boolean;
+  /** The taker rebuilds the unit that died, so it needs to know what that was. False for a
+   *  consumer that spends the body on something else (Cannibalize does not care). */
+  needsType?: boolean;
 }
 
 /** How the caster stands toward the corpse's owner, resolved by the caller (the alliance
@@ -62,19 +86,20 @@ export type CorpseAllegiance = "ally" | "enemy";
  * Without it a Paladin's Resurrection stood the ENEMY's dead up and handed them to him, which
  * is not an ultimate anyone would have to think about using.
  *
- * `needsType` is for the shapes that rebuild the unit that died (raise-as-themselves) as
- * opposed to spending the body on something else (Cannibalize, a Meat Wagon's cargo).
+ * `need` is what the taker intends: whether it must know what died (it is rebuilding that
+ * unit) and whether the body has to be free to LOAD (see CorpseNeed).
  */
 export function corpseUseError(
   c: CorpseKind,
   flags: readonly string[] = [],
   allegiance: CorpseAllegiance = "ally",
-  needsType = true,
+  need: CorpseNeed = {},
 ): string | null {
   if (c.raised) return "spent";
   if (c.isHero) return "hero";
   if (c.mechanical) return "mechanical";
-  if (needsType && !c.unitId) return "notype";
+  if (need.forLoad && c.heldBy) return "held"; // already in a wagon — one cargo at a time
+  if (need.needsType !== false && !c.unitId) return "notype";
   const F = new Set(flags.map((f) => f.toLowerCase()));
   // `player` is WC3's "own units" flag (Death Pact, Dark Ritual read it the same way) and
   // sits beside `friend` here; Ancestral Spirit is the row that carries it
@@ -91,9 +116,9 @@ export function corpseAdmits(
   c: CorpseKind,
   flags: readonly string[] = [],
   allegiance: CorpseAllegiance = "ally",
-  needsType = true,
+  need: CorpseNeed = {},
 ): boolean {
-  return corpseUseError(c, flags, allegiance, needsType) === null;
+  return corpseUseError(c, flags, allegiance, need) === null;
 }
 
 /** How a claim picks when more bodies are in reach than it wants.

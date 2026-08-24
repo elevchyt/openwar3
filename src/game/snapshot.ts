@@ -413,6 +413,10 @@ export interface CorpseSnapshot {
   mechanical: boolean;
   decayLeft: number;
   raised: boolean;
+  /** The unit carrying it (0 = on the ground). A Meat Wagon's cargo travels with the wagon,
+   *  so a client has to know which bodies are aboard to draw them off the ground — and to
+   *  answer the same "is there a corpse here?" question the host does. */
+  heldBy: number;
 }
 
 /** One in-flight missile, as a client that did not simulate it draws one: where it is, what
@@ -832,7 +836,7 @@ export function snapshotFor(
   const corpses: CorpseSnapshot[] = [];
   for (const c of world.corpses?.values() ?? []) {
     if (viewer.fogBlocksAt(c)) continue;
-    corpses.push({ id: c.id, deadId: c.deadId, unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner: c.owner, isHero: c.isHero, mechanical: c.mechanical, decayLeft: c.decayLeft, raised: c.raised });
+    corpses.push({ id: c.id, deadId: c.deadId, unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner: c.owner, isHero: c.isHero, mechanical: c.mechanical, decayLeft: c.decayLeft, raised: c.raised, heldBy: c.heldBy });
   }
 
   // Copied, not referenced: the payload must be a frozen reading, not a live handle the

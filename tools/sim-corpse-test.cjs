@@ -1,5 +1,5 @@
 // Headless check of the CORPSE family — the shared detect + claim layer (src/sim/corpses.ts)
-// and the two shapes every corpse-spending ability is built out of (src/sim/spells.ts).
+// and the four shapes every corpse ability is built out of (src/sim/spells.ts).
 //
 // What is being verified is the thing four hand-written filters used to disagree about: which
 // bodies an ability may have. The real predicate is exercised — not a stub of it — with the
@@ -32,7 +32,7 @@ function eq(name, got, want) {
 }
 
 function corpse(over = {}) {
-  return { raised: false, isHero: false, mechanical: false, unitId: "hfoo", owner: 0, ...over };
+  return { raised: false, isHero: false, mechanical: false, unitId: "hfoo", owner: 0, heldBy: 0, ...over };
 }
 
 // The real Targets Allowed strings, from Units\AbilityData.slk.
@@ -51,10 +51,10 @@ eq("a plain body is fair game", corpseUseError(corpse(), TARGS.AUcb, "ally"), nu
 eq("…a spent one is not", corpseUseError(corpse({ raised: true }), TARGS.AUcb, "ally"), "spent");
 eq("a HERO corpse is never usable", corpseUseError(corpse({ isHero: true }), TARGS.AUcb, "ally"), "hero");
 eq("…not by Animate Dead either", corpseUseError(corpse({ isHero: true }), TARGS.AUan, "ally"), "hero");
-eq("…nor eaten", corpseUseError(corpse({ isHero: true }), TARGS.Acan, "ally", false), "hero");
+eq("…nor eaten", corpseUseError(corpse({ isHero: true }), TARGS.Acan, "ally", { needsType: false }), "hero");
 eq("a machine leaves a wreck, not a body", corpseUseError(corpse({ mechanical: true }), TARGS.AUan, "ally"), "mechanical");
 eq("no type = nothing to rebuild", corpseUseError(corpse({ unitId: "" }), TARGS.AUan, "ally"), "notype");
-ok("…but a meal does not care what died", corpseAdmits(corpse({ unitId: "" }), TARGS.Acan, "ally", false));
+ok("…but a meal does not care what died", corpseAdmits(corpse({ unitId: "" }), TARGS.Acan, "ally", { needsType: false }));
 
 console.log("whose dead — read off the ability's own targs1");
 ok("Resurrection takes an ally's", corpseAdmits(corpse(), TARGS.AHre, "ally"));
@@ -65,7 +65,7 @@ ok("Animate Dead takes the enemy's", corpseAdmits(corpse(), TARGS.AUan, "enemy")
 ok("…and Carrion Scarabs too", corpseAdmits(corpse(), TARGS.AUcb, "enemy"));
 ok("…and the Avatar's Spirits", corpseAdmits(corpse(), TARGS.Avng, "enemy"));
 
-// --- the two shapes, driven through the real handlers over a stub SpellApi ---
+// --- the shapes, driven through the real handlers over a stub SpellApi ---
 function def(code, over = {}) {
   const { data = [], duration = 0, area = 0, castRange = 0, dataStr = [], summon = "", ...rest } = over;
   return {
@@ -83,13 +83,17 @@ function pool(corpses, owned = {}) {
   const log = { summons: [], raised: [], buffs: [] };
   const api = {
     countOwned: (_o, typeId) => owned[typeId] || 0,
-    claimCorpses: (c, d, x, y, radius, max, order = "nearest", needsType = true) => {
+    claimCorpses: (c, d, x, y, radius, max, o = {}) => {
+      const order = o.order || "nearest";
       const live = corpses
         .filter((k) => Math.hypot(k.x - x, k.y - y) <= radius)
-        .filter((k) => corpseAdmits(k, d.targetFlags, k.owner === c.owner ? "ally" : "enemy", needsType));
+        .filter((k) => corpseAdmits(k, d.targetFlags, k.owner === c.owner ? "ally" : "enemy", o));
       live.sort((a, b) => (order === "freshest" ? b.decayLeft - a.decayLeft : Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y)));
       const taken = live.slice(0, max);
-      for (const k of taken) k.raised = true; // spent — one taker per body
+      for (const k of taken) {
+        if (o.hold) k.heldBy = c.id; // loaded — borrowed, not used up
+        else { k.raised = true; k.heldBy = 0; } // spent — and it leaves whatever hold it was in
+      }
       return taken.map((k) => ({ x: k.x, y: k.y, facing: k.facing || 0, unitId: k.unitId, owner: k.owner }));
     },
     raiseClaimed: (taken, owner, team, opts) => {
@@ -100,6 +104,13 @@ function pool(corpses, owned = {}) {
       log.summons.push({ unitId, x, dur, atPoint: !!atPoint, bound: !!bound }),
     applyBuff: (t, b) => log.buffs.push({ kind: b.kind, value: b.value, timeLeft: b.timeLeft }),
     emitEffect: () => {},
+    heldCorpseCount: (id) => corpses.filter((k) => k.heldBy === id && !k.raised).length,
+    cargoCapacity: () => 8, // [Amtc] DataA on the Meat Wagon
+    dropHeldCorpses: (id, x, y) => {
+      let n = 0;
+      for (const k of corpses) if (k.heldBy === id) { k.heldBy = 0; k.x = x; k.y = y; n++; }
+      return n;
+    },
   };
   return { api, log };
 }
@@ -177,6 +188,56 @@ console.log("shape C — the body spent on something that is not a unit");
   const { api, log } = pool([]);
   SPELL_HANDLERS.Acan(api, caster, def("Acan", { data: [10, 800], duration: 33, castRange: 50 }), 1, { targetId: 0, x: 0, y: 0 });
   eq("no corpse, no meal — and no buff either", log.buffs, []);
+}
+
+console.log("shape D — the Meat Wagon carries, and spends nothing");
+TARGS.Amel = ["ground", "dead", "nonhero"];
+TARGS.Amed = [];
+{
+  // [Amel] Rng1 100 — one body a cast, into a hold of [Amtc] DataA = 8.
+  const near = corpse({ x: 60, y: 0, decayLeft: 88 });
+  const far = corpse({ x: 500, y: 0, decayLeft: 88 });
+  const wagon = { id: 9, owner: 0, team: 0, x: 0, y: 0, facing: 0 };
+  const { api } = pool([near, far]);
+  SPELL_HANDLERS.Amel(api, wagon, def("Amel", { castRange: 100, area: 600 }), 1);
+  eq("Get Corpse loads the body in reach", near.heldBy, 9);
+  ok("…and it is NOT spent — a borrowed body is still a body", !near.raised);
+  eq("…the one it can only see is left alone", far.heldBy, 0);
+}
+{
+  // A held body still answers a raiser — "Dropping corpses is not required for Necromancers
+  // to cast Raise Dead" (Liquipedia, Meat Wagon).
+  const aboard = corpse({ x: 0, y: 0, heldBy: 9, decayLeft: 88 });
+  ok("a loaded corpse is still raisable", corpseAdmits(aboard, TARGS.Arai, "enemy"));
+  eq("…but cannot be loaded a second time", corpseUseError(aboard, TARGS.Amel, "enemy", { forLoad: true }), "held");
+  ok("…while a free one can", corpseAdmits(corpse(), TARGS.Amel, "enemy", { forLoad: true }));
+}
+{
+  const held = [corpse({ x: 0, y: 0, heldBy: 9, decayLeft: 88 }), corpse({ x: 0, y: 0, heldBy: 9, decayLeft: 88 })];
+  const wagon = { id: 9, owner: 0, team: 0, x: 700, y: 300, facing: 0 };
+  const { api } = pool(held);
+  SPELL_HANDLERS.Amed(api, wagon, def("Amed"), 1);
+  eq("Drop All Corpses empties the hold", held.map((k) => k.heldBy), [0, 0]);
+  eq("…where the wagon now stands, not where they fell", held.map((k) => [k.x, k.y]), [[700, 300], [700, 300]]);
+}
+{
+  // Raising OUT of the hold frees the slot. Without this the wagon counted bodies it no longer
+  // had, reported itself full, and never picked up another for the rest of the match.
+  const aboard = [corpse({ x: 0, y: 0, heldBy: 9, decayLeft: 88 }), corpse({ x: 0, y: 0, heldBy: 9, decayLeft: 88 })];
+  const nec = { id: 3, owner: 1, team: 1, x: 40, y: 0, facing: 0 };
+  const { api, log } = pool(aboard);
+  SPELL_HANDLERS.Arai(api, nec, def("Arai", { data: [2, 0], dataStr: [, , "uske"], duration: 45, castRange: 600 }), 1);
+  eq("a Necromancer raises straight out of the wagon", log.summons.length, 2);
+  ok("…the body is spent", aboard[0].raised);
+  eq("…and the slot is free again", api.heldCorpseCount(9), 1);
+}
+{
+  const wagon = { id: 9, owner: 0, team: 0, x: 0, y: 0, facing: 0 };
+  const full = Array.from({ length: 8 }, () => corpse({ x: 0, y: 0, heldBy: 9, decayLeft: 88 }));
+  const spare = corpse({ x: 60, y: 0, decayLeft: 88 });
+  const { api } = pool([...full, spare]);
+  SPELL_HANDLERS.Amel(api, wagon, def("Amel", { castRange: 100, area: 600 }), 1);
+  eq("a full wagon (8) picks up nothing more", spare.heldBy, 0);
 }
 
 console.log(failed ? `\ncorpses: ${failed} FAILED` : "\ncorpses: all checks passed");

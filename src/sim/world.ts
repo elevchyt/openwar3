@@ -1,7 +1,7 @@
 import { BUILD_CELL, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { targsKindError } from "./targeting";
-import { corpseAdmits, type CorpseOrder } from "./corpses";
+import { corpseAdmits, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
@@ -452,6 +452,9 @@ export interface SimCorpse {
   isHero: boolean; // hero corpses can't be raised (they revive at an altar instead)
   mechanical: boolean; // mechanical/summoned units leave no raisable corpse
   decayLeft: number; // seconds until the corpse fully decays and is removed
+  /** The unit CARRYING this body, or 0 for one lying on the ground (see corpses.ts). Only the
+   *  Meat Wagon does this; its cargo stays usable where it stands. */
+  heldBy: number;
   raised: boolean; // consumed by a spell (renderer hides it immediately)
 }
 
@@ -478,6 +481,14 @@ export interface IllusionInit {
 /** A corpse a cast has TAKEN — where it lay, which way it faced, and what it used to be.
  *  Everything a raise needs and nothing a corpse still on the ground would carry: by the
  *  time a handler sees one of these the body is already spent. */
+/** How a claim is being made: which bodies qualify, how to choose between them, and whether
+ *  the taker is spending them or carrying them. */
+export interface CorpseClaim extends CorpseNeed {
+  order?: CorpseOrder;
+  /** Load into the caster's cargo rather than consume (the Meat Wagon, and only it). */
+  hold?: boolean;
+}
+
 export interface ClaimedCorpse {
   x: number;
   y: number;
@@ -1420,6 +1431,9 @@ export interface SimUnit {
    *  instant: the well spends its mana into ONE unit at a rate, so the pour has to be state
    *  rather than a one-shot effect. See tickReplenish. */
   replenishTargetId: number;
+  /** Seconds until this unit's Exhume Corpses passive grows its next body (`Aexh`, the Meat
+   *  Wagon's upgrade). 0 on everything else, and reset to `Dur1` each time it fires. */
+  exhumeLeft: number;
   isSummon: boolean; // a summoned unit (Water Elemental) — leaves no corpse, ×0.5 XP
   spawning: number; // >0: materializing (playing its birth clip) — cannot act yet
   summonLeft: number; // >0: a temporary summon that expires (Water Elemental); else 0
@@ -1814,6 +1828,12 @@ const PRECAST_WARNING = new Set(["AHfs"]);
  * the burst for a sound it hasn't got would fall through to "any WAV in the effect folder",
  * and the only WAVs there are the three MissileHit clips.
  */
+/** The corpse abilities that CARRY rather than spend — the Meat Wagon's Get Corpse, and only
+ *  it in 1.30. They are bounded by a cargo hold instead of a summon count, and they need a
+ *  body that is FREE (one already aboard is still a corpse, and would otherwise read as work
+ *  forever). Everything else in the family may use a held body exactly as it would one on the
+ *  ground — see sim/corpses.ts. */
+const CORPSE_LOADERS = new Set(["Amel"]);
 const CAST_START_ART: Record<string, (d: AbilityDef) => { art: string; follow: boolean; sound: boolean }> = {
   AEbl: (d) => ({ art: d.specialArt, follow: false, sound: true }),
   AEfk: (d) => ({ art: d.effectArt, follow: true, sound: false }),
@@ -4501,6 +4521,40 @@ export class SimWorld {
     }
   }
 
+  /**
+   * EXHUME CORPSES (`Aexh`) — a Meat Wagon that makes its own supply.
+   *
+   * "Generates a Crypt Fiend corpse within the Meat Wagon every 15 seconds" (Liquipedia), and
+   * the row states both halves: `Dur1` = 15 is the interval and `UnitID1` = `ucry` the body.
+   * WITHIN the wagon, not beside it — so the corpse is born already loaded, which is also why
+   * it is bounded by the hold rather than by a number of its own: a full wagon stops growing
+   * and starts again the moment something is raised out of it.
+   *
+   * Gated on `Requires = Ruex` like any researched passive, so an un-upgraded wagon simply
+   * never starts the clock. (`DataA` = 5 is left alone: the ability's own capacity field is
+   * `Amtc`'s 8, the tooltip quotes no second number, and inventing a meaning for a column
+   * that never visibly binds would be guessing.)
+   */
+  private tickExhume(u: SimUnit, dt: number): void {
+    const ab = u.abilities.find((a) => a.code === "Aexh");
+    if (!ab || ab.level < 1 || !this.techMeets(u.owner, ab.id)) {
+      u.exhumeLeft = 0;
+      return;
+    }
+    const def = this.abilities?.get(ab.id);
+    const lvl = def?.levelData[Math.max(0, Math.min(ab.level, def.levelData.length) - 1)];
+    const interval = lvl?.duration || 15;
+    const body = lvl?.summon || "";
+    if (!body) return;
+    if (u.exhumeLeft <= 0) u.exhumeLeft = interval; // first tick after the research lands
+    u.exhumeLeft -= dt;
+    if (u.exhumeLeft > 0) return;
+    u.exhumeLeft = interval;
+    const cap = this.cargoCapacityOf(u);
+    if (cap > 0 && this.heldCorpseCount(u.id) >= cap) return; // a full wagon grows nothing
+    this.spawnCorpseOf(body, u.x, u.y, u.owner, u.id);
+  }
+
   /** Is this unit type an ETHEREAL form, as opposed to merely a weaponless one? A burrowed
    *  Crypt Fiend has no weapon either and is emphatically not ethereal — it is underground,
    *  not on another plane. Only the Spirit Walker's form pair carries the ethereal rules
@@ -4591,6 +4645,7 @@ export class SimWorld {
     this.removals.push(u.id);
     this.unitDrops.delete(u.id);
     this.dismissBoundSummons(u.id);
+    this.dropHeldCorpses(u.id, u.x, u.y); // …and a carrier puts its cargo down before it goes
     return true;
   }
 
@@ -4795,6 +4850,7 @@ export class SimWorld {
       | "summonLeft"
       | "summonMax"
       | "summonerId"
+      | "exhumeLeft"
       | "unsummonArt"
       | "vanished"
       | "isIllusion"
@@ -5012,6 +5068,7 @@ export class SimWorld {
       summonLeft: 0,
       summonMax: 0,
       summonerId: 0,
+      exhumeLeft: 0,
       unsummonArt: "",
       vanished: false,
       isIllusion: false,
@@ -8499,7 +8556,11 @@ export class SimWorld {
   /** Idle autocast: a unit with a toggled-on autocast ability picks a valid
    *  target and casts. Returns true if a cast started. */
   private tickAutocast(u: SimUnit): boolean {
-    if (!this.abilities || u.mana <= 0) return false;
+    // NOT gated on having mana. That was a fast path for the casters, and it is wrong for the
+    // autocasts that cost nothing: a Meat Wagon has no mana pool at all, so Get Corpse
+    // (`[Amel] Cost1 = 0`) could never fire and the wagon sat next to a field of bodies doing
+    // nothing. Affordability is per-ability a few lines down, where it belongs.
+    if (!this.abilities) return false;
     for (const ab of u.abilities) {
       if (!ab.autocastOn || ab.level < 1 || ab.cooldownLeft > 0) continue;
       // An attack modifier is a unit-target autocast that must NOT be sought out: its
@@ -8520,16 +8581,31 @@ export class SimWorld {
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (u.mana < lvl.cost) continue;
-      // A CORPSE autocast: no target to click, and what it wants is a body. The Avatar of
-      // Vengeance is the one row in 1.30 (`Avng`, on by default), and the data alone says so
-      // — `targs1 = air,ground,dead` on a no-target ability. It casts on the spot, because
-      // `claimCorpses` does its own searching inside `Rng1`; there is nothing to walk to and no
-      // living target to re-check on arrival. Its own guards (a corpse in reach, and fewer
-      // than `DataE` spirits alive) live in the handler, so a cast that finds nothing simply
-      // does nothing — and the cooldown, 2 seconds, is what keeps it from re-asking every
-      // tick for the rest of the match.
+      // A CORPSE autocast: no target to click, and what it wants is a body. The data alone
+      // says which abilities these are — `targs1` naming `dead` on a no-target row — and in
+      // 1.30 that is Raise Dead (`Arai` and its copies), the Avatar of Vengeance's Spirits
+      // (`Avng`), and the Meat Wagon's Get Corpse (`Amel`).
+      //
+      // Two ranges, and the family reads them the same way the rest of the autocast code
+      // does: `Rng1` is how far it can REACH and `Area1` how far it LOOKS. A body inside the
+      // reach is raised on the spot; one it can only see is walked to, which is the doctrine
+      // already stated for the unit-target autocasts (see autocastSearchRange, and
+      // Liquipedia's Autocast: an autocast "can cause it to move in order to cast their
+      // spell"). It is what makes Get Corpse work at all — `[Amel] Rng1 = 100, Area1 = 600`,
+      // and Liquipedia prints both, because the wagon drives to the body.
       if (def.target === "none" && def.targetFlags.some((f) => f.toLowerCase() === "dead")) {
-        if (!this.corpseAutocastWants(u, def, lvl)) continue;
+        const reach = lvl.castRange || lvl.area || 600;
+        const look = Math.max(reach, lvl.area || 0);
+        if (!this.corpseAutocastWants(u, def, lvl, reach)) {
+          // Nothing in reach — but if there is a body it can SEE, go and stand over it. A
+          // plain move order, not a cast: arriving is what makes the next idle tick fire.
+          if (!this.corpseAutocastWants(u, def, lvl, look)) continue;
+          const [body] = this.corpsesFor(u, def, u.x, u.y, look, { forLoad: CORPSE_LOADERS.has(def.code) });
+          if (!body) continue;
+          const [bx, by] = this.corpseAt(body);
+          this.chasePoint(u, bx, by);
+          return true;
+        }
         return this.issueCast(u.id, def.code, 0, u.x, u.y, true);
       }
       if (def.target !== "unit") continue;
@@ -8563,12 +8639,20 @@ export class SimWorld {
    *  The guards are the handler's own, asked without spending anything: `corpsesFor` is the
    *  same look `claimCorpses` takes from (so the two cannot drift), and the cap is `DataE
    *  "Max Summoned"` against the caster's live count of `DataC`. */
-  private corpseAutocastWants(u: SimUnit, def: AbilityDef, lvl: AbilityLevel): boolean {
+  private corpseAutocastWants(u: SimUnit, def: AbilityDef, lvl: AbilityLevel, radius: number): boolean {
+    // A LOADER is bounded by its hold, not by a summon count: the Meat Wagon raises nothing,
+    // it fills up. Full wagon, nothing wanted — and it must look for a FREE body, since the
+    // ones already aboard are still corpses and would otherwise read as work forever.
+    if (CORPSE_LOADERS.has(def.code)) {
+      const cap = this.cargoCapacityOf(u);
+      if (cap > 0 && this.heldCorpseCount(u.id) >= cap) return false;
+      return this.corpsesFor(u, def, u.x, u.y, radius, { forLoad: true }).length > 0;
+    }
     const unit = lvl.dataStr[2] || lvl.summon || "";
     if (!unit) return false;
     const cap = lvl.data[4];
     if (cap > 0 && this.countOwnedOf(u.owner, unit) >= cap) return false;
-    return this.corpsesFor(u, def, u.x, u.y, lvl.castRange || lvl.area || 600, "nearest").length > 0;
+    return this.corpsesFor(u, def, u.x, u.y, radius).length > 0;
   }
 
   /** How far an autocast LOOKS for work — the caster's own acquisition range, not the
@@ -9568,6 +9652,7 @@ export class SimWorld {
       mechanical: u.mechanical,
       decayLeft: CORPSE_TOTAL_TIME,
       raised: false,
+      heldBy: 0,
     });
     this.nextCorpseId++;
   }
@@ -9591,33 +9676,108 @@ export class SimWorld {
    *
    * Nothing is claimed here — this is the LOOK. `claimCorpses` is the take.
    */
-  corpsesFor(caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, order: CorpseOrder = "nearest", needsType = true): SimCorpse[] {
+  corpsesFor(caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, o: CorpseClaim = {}): SimCorpse[] {
     const out: SimCorpse[] = [];
     for (const c of this.corpses.values()) {
-      if (Math.hypot(c.x - x, c.y - y) > radius) continue;
+      const [cx, cy] = this.corpseAt(c);
+      if (Math.hypot(cx - x, cy - y) > radius) continue;
       // The allegiance the ability's `friend`/`enemy` flags are measured against. A corpse
       // has no team of its own any more, so it answers for the player who owned it.
       const allied = this.alliedPlayers(caster.owner, c.owner);
       const stance = (allied === null ? caster.owner === c.owner : allied) ? "ally" : "enemy";
-      if (!corpseAdmits(c, def.targetFlags, stance, needsType)) continue;
+      if (!corpseAdmits(c, def.targetFlags, stance, o)) continue;
       out.push(c);
     }
-    return order === "freshest"
+    return o.order === "freshest"
       ? out.sort((a, b) => b.decayLeft - a.decayLeft)
-      : out.sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y));
+      : out.sort((a, b) => this.corpseDist(a, x, y) - this.corpseDist(b, x, y));
   }
 
-  /** …and the TAKE: up to `max` of them, marked spent so nothing can have them twice. A body
-   *  is spent once, whether it was raised, eaten or loaded — which is why one flag serves
-   *  all of them. Returns what was taken, in the order it was chosen. */
-  claimCorpses(caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, max: number, order: CorpseOrder = "nearest", needsType = true): ClaimedCorpse[] {
+  /** WHERE a corpse is — its own spot, or the wagon carrying it. Loading does not move the
+   *  record (it is dropped back where the wagon stands), so the cargo's position is the
+   *  holder's, live: drive the wagon and its bodies come along. */
+  private corpseAt(c: SimCorpse): [number, number] {
+    const holder = c.heldBy ? this.units.get(c.heldBy) : undefined;
+    return holder ? [holder.x, holder.y] : [c.x, c.y];
+  }
+
+  private corpseDist(c: SimCorpse, x: number, y: number): number {
+    const [cx, cy] = this.corpseAt(c);
+    return Math.hypot(cx - x, cy - y);
+  }
+
+  /** …and the TAKE: up to `max` of them.
+   *
+   *  `hold` is the Meat Wagon's: the bodies go into its cargo instead of being used up, so
+   *  they stay perfectly good — a Necromancer beside the wagon raises straight out of it.
+   *  Everything else SPENDS what it takes, and a spent body is gone for good. */
+  claimCorpses(caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, max: number, o: CorpseClaim = {}): ClaimedCorpse[] {
     const taken: ClaimedCorpse[] = [];
-    for (const c of this.corpsesFor(caster, def, x, y, radius, order, needsType)) {
+    for (const c of this.corpsesFor(caster, def, x, y, radius, o)) {
       if (taken.length >= max) break;
-      c.raised = true; // the renderer hides the corpse model once it is spent
-      taken.push({ x: c.x, y: c.y, facing: c.facing, unitId: c.unitId, owner: c.owner });
+      const [cx, cy] = this.corpseAt(c);
+      if (o.hold) {
+        c.heldBy = caster.id; // loaded, not consumed — the renderer takes it off the ground
+      } else {
+        c.raised = true; // spent; the renderer drops the model
+        // …and it leaves the hold it was in, if it was in one. A Necromancer raising out of a
+        // Meat Wagon empties that slot: without this the wagon went on counting bodies it no
+        // longer had, reported itself full, and never picked up another.
+        c.heldBy = 0;
+      }
+      taken.push({ x: cx, y: cy, facing: c.facing, unitId: c.unitId, owner: c.owner });
     }
     return taken;
+  }
+
+  /** Put a carrier's whole cargo back on the ground where it now stands (`Amed` "Meat Drop",
+   *  and what a destroyed wagon spills). Returns how many bodies were dropped. */
+  dropHeldCorpses(holderId: number, x: number, y: number): number {
+    let dropped = 0;
+    for (const c of this.corpses.values()) {
+      if (c.heldBy !== holderId || c.raised) continue;
+      c.heldBy = 0;
+      c.x = x;
+      c.y = y;
+      dropped++;
+    }
+    return dropped;
+  }
+
+  /** How many bodies a carrier is holding — the cargo count its capacity is measured against. */
+  heldCorpseCount(holderId: number): number {
+    let n = 0;
+    for (const c of this.corpses.values()) if (c.heldBy === holderId && !c.raised) n++;
+    return n;
+  }
+
+  /** A carrier's corpse CAPACITY — `Amtc "Cargo Hold"` DataA, which is 8 on the Meat Wagon.
+   *  Read off the unit's own ability list rather than a constant, and off the ability that
+   *  actually states it rather than the one doing the loading: `umtw` carries `Sch2` (the
+   *  hold) and `Amel` (the loading) as two separate rows, and a custom map that widens the
+   *  wagon widens the hold. 0 = this unit has no corpse hold at all. */
+  private cargoCapacityOf(u: SimUnit): number {
+    for (const ab of u.abilities) {
+      if (ab.code !== "Amtc") continue;
+      const def = this.abilities?.get(ab.id);
+      const lvl = def?.levelData[Math.max(0, Math.min(ab.level, def.levelData.length) - 1)];
+      const cap = lvl?.data[0];
+      return cap === undefined || Number.isNaN(cap) ? 0 : cap;
+    }
+    return 0;
+  }
+
+  /** Make a corpse from nothing, of a named type — Exhume Corpses, which is the only thing in
+   *  the game that does it. `heldBy` puts it straight into a hold: the upgrade "generates a
+   *  Crypt Fiend corpse WITHIN the Meat Wagon" (Liquipedia), not on the ground beside it. */
+  spawnCorpseOf(unitId: string, x: number, y: number, owner: number, heldBy = 0): void {
+    const def = this.unitReg?.get(unitId);
+    this.corpses.set(this.nextCorpseId, {
+      id: this.nextCorpseId, deadId: 0, unitId, x, y, facing: 0, owner,
+      isHero: false, mechanical: !!def?.classification.includes("mechanical"),
+      decayLeft: CORPSE_TOTAL_TIME, raised: false, heldBy,
+    });
+    this.nextCorpseId++;
   }
 
   /** Stand claimed bodies back up AS THEMSELVES — the Hre1/Hre2 shape (Resurrection, the two
@@ -9683,7 +9843,11 @@ export class SimWorld {
     requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint, bound) => {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint, bound: !!bound });
     },
-    claimCorpses: (caster, def, x, y, radius, max, order, needsType) => this.claimCorpses(caster, def, x, y, radius, max, order, needsType),
+    claimCorpses: (caster, def, x, y, radius, max, o) => this.claimCorpses(caster, def, x, y, radius, max, o),
+    dropHeldCorpses: (holderId, x, y) => this.dropHeldCorpses(holderId, x, y),
+    heldCorpseCount: (holderId) => this.heldCorpseCount(holderId),
+    cargoCapacity: (unit) => this.cargoCapacityOf(unit),
+    spawnCorpseOf: (unitId, x, y, owner, heldBy) => this.spawnCorpseOf(unitId, x, y, owner, heldBy),
     raiseClaimed: (taken, owner, team, opts) => this.raiseClaimedCorpses(taken, owner, team, opts),
     linkSpirits: (unit, group, durationSec, share) => {
       unit.linkGroup = [...group];
@@ -10141,6 +10305,7 @@ export class SimWorld {
       this.tickAltForm(u, dt); // a timed form (militia) running out and reverting
       this.tickImmolation(u, dt); // Immolation burns whatever it is standing next to, and pays for it
       this.tickVoodoo(u, dt); // …and Big Bad Voodoo renews its circle for as long as the ritual holds
+      this.tickExhume(u, dt); // …and a Meat Wagon with the upgrade grows its own bodies
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u); // a Moon Well pouring itself into whoever is drinking
@@ -13001,6 +13166,11 @@ export class SimWorld {
     this.awardKillXp(u, killerId); // enemy heroes near the kill gain experience
     this.rollCreepDrops(u); // creeps scatter their dropped-item table on death
     this.dropInventory(u); // a dying non-hero inventory-unit drops its held items
+    // A carrier that dies SPILLS: the bodies it was hauling land where the wreck does. They
+    // were never consumed — a Meat Wagon borrows corpses, it does not use them up — so
+    // deleting them with it would destroy something that still belongs to the field. (The
+    // same call covers a wagon removed outright; see removeUnit.)
+    this.dropHeldCorpses(u.id, u.x, u.y);
     this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
     // A hero has fallen, and the whole army is told. Raised HERE rather than off the death
     // event stream because that one only runs when a script is listening (captureDeaths) —

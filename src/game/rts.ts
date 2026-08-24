@@ -589,7 +589,7 @@ export class RtsController {
   // decays (88s). `corpseId` links to the sim corpse so a spell that raises it
   // (Resurrection/Raise Dead) can remove the model at once; -1 = no corpse, so the
   // model just vanishes when its Death clip ends. `phaseT` = seconds in the phase.
-  private corpses: Array<{ instance: Instance; corpseId: number; anims: AnimSet; phaseT: number; phase: "death" | "flesh" | "bone" }> = [];
+  private corpses: Array<{ instance: Instance; corpseId: number; anims: AnimSet; phaseT: number; phase: "death" | "flesh" | "bone"; held?: boolean }> = [];
   private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number]; sizeToRadius: boolean }> = [];
   private treePulses: Array<{ x: number; y: number }> = []; // trees to flash yellow on harvest
   // scratch buffers to avoid per-frame allocation
@@ -3346,6 +3346,27 @@ export class RtsController {
         c.instance.hide();
         this.corpses.splice(i, 1);
         continue;
+      }
+      // LOADED into a Meat Wagon: off the ground, but not gone. The body is still a corpse in
+      // every sense — it can be raised out of the wagon where it stands — so the model is only
+      // hidden, and the entry is kept so that dropping it puts it back down. Decay carries on
+      // underneath, which is what stops a wagon hoarding bodies forever.
+      if (sc && sc.heldBy) {
+        if (!c.held) {
+          c.instance.hide();
+          c.held = true;
+        }
+        continue;
+      }
+      if (c.held) {
+        // Dropped: it lands where the wagon was standing, so the model has to be moved before
+        // it is shown again — it has not been where it fell for some time.
+        c.held = false;
+        this.loc[0] = sc ? sc.x : 0;
+        this.loc[1] = sc ? sc.y : 0;
+        this.loc[2] = this.groundHeightAt(this.loc[0], this.loc[1]);
+        c.instance.setLocation(this.loc);
+        c.instance.show();
       }
       this.fogCorpse(c);
       c.phaseT += dt;

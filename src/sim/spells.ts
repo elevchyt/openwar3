@@ -1,6 +1,5 @@
 import type { AbilityDef, AbilityLevel, BuffFx } from "../data/abilities";
-import type { SimUnit, BuffKind, ClaimedCorpse } from "./world";
-import type { CorpseOrder } from "./corpses";
+import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim } from "./world";
 
 // Spell effect handlers, dispatched on an ability's base `code` (data/abilities).
 // This is the modular seam: the sim executes a cast by looking up the handler for
@@ -72,7 +71,20 @@ export interface SpellApi {
    *
    * The bodies are marked spent before this returns — a corpse goes to exactly one caster.
    */
-  claimCorpses(caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, max: number, order?: CorpseOrder, needsType?: boolean): ClaimedCorpse[];
+  claimCorpses(caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, max: number, o?: CorpseClaim): ClaimedCorpse[];
+  /** Put a carrier's whole cargo back on the ground where it now stands ("Drop All Corpses").
+   *  Returns how many bodies were dropped. */
+  dropHeldCorpses(holderId: number, x: number, y: number): number;
+  /** How many bodies a carrier is holding — what its Cargo Hold capacity is measured against. */
+  heldCorpseCount(holderId: number): number;
+  /** A carrier's corpse CAPACITY, read off its own Cargo Hold ability (`Amtc` DataA = 8 on
+   *  the Meat Wagon). Looked up on the unit rather than passed in, because the ability that
+   *  states the capacity is not the ability doing the loading. 0 = no hold at all. */
+  cargoCapacity(unit: SimUnit): number;
+  /** Make a corpse out of thin air, at a point, of a named unit type. Exhume Corpses is the
+   *  only thing in the game that does this: a Meat Wagon with the upgrade grows a Crypt Fiend
+   *  body in its own hold every 15 seconds, from nothing that ever died. */
+  spawnCorpseOf(unitId: string, x: number, y: number, owner: number, heldBy?: number): void;
   /** …and the RAISE-AS-THEMSELVES half: stand claimed bodies back up as what they were.
    *
    *  Resurrection calls it bare and gives the unit back whole. Animate Dead passes `opts`,
@@ -852,7 +864,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // of one, and its `targs1 = ground,player,dead` is the tightest allegiance in the family:
   // `player` means the caster's OWN dead, not an ally's.
   Aast: (api, caster, def, _rank, ctx) => {
-    api.raiseClaimed(api.claimCorpses(caster, def, ctx.x, ctx.y, 250, 1, "nearest"), caster.owner, caster.team);
+    api.raiseClaimed(api.claimCorpses(caster, def, ctx.x, ctx.y, 250, 1), caster.owner, caster.team);
     if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0);
   },
 
@@ -990,7 +1002,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const reach = lvl.castRange || 50;
     // `needsType = false`: a meal does not care what died, only that something did. Every
     // other consumer rebuilds the unit and so needs its type.
-    if (!api.claimCorpses(caster, def, ctx.x || caster.x, ctx.y || caster.y, reach, 1, "nearest", false).length) return;
+    if (!api.claimCorpses(caster, def, ctx.x || caster.x, ctx.y || caster.y, reach, 1, { needsType: false }).length) return;
     api.applyBuff(caster, {
       kind: "hot", group: "cannibalize", timeLeft: dur(lvl, caster) || 33,
       sourceId: caster.id, value: d(lvl, 0, 10), ...fx(def),
@@ -2246,6 +2258,33 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // path already reads as `baseInvulnerable`. The ability that raises them says nothing about
   // it, and neither should this.
   Avng: (api, caster, def, rank) => summonFromCorpse(api, caster, def, rank, { bound: true }),
+  // === the Meat Wagon's cargo =============================================================
+  // The fourth corpse shape (see sim/corpses.ts): the wagon SPENDS nothing. It picks bodies
+  // up, drives them somewhere, and puts them down again — and its cargo stays usable the
+  // whole time, which is the point of the unit. Liquipedia is explicit: "Dropping corpses is
+  // not required for Necromancers to cast Raise Dead."
+  //
+  // Three rows on `umtw` (`abilList = Sch2,Amel,Amed,Apts,Aexh`) split the job:
+  //   `Sch2` (code `Amtc`) "Cargo Hold"  DataA 8 — the CAPACITY, and nothing else
+  //   `Amel`               "Meat Load"   Rng1 100, Area1 600, `Order=loadcorpse`, autocast
+  //   `Amed`               "Meat Drop"   no target at all, `Order=unloadcorpse`
+  //
+  // Get Corpse: one body into the hold, and the capacity comes off the wagon's OWN Cargo Hold
+  // row rather than a constant here — a custom map that widens the wagon widens it there.
+  Amel: (api, caster, def, rank) => {
+    const lvl = def.levelData[rank - 1];
+    const cap = api.cargoCapacity(caster);
+    if (cap > 0 && api.heldCorpseCount(caster.id) >= cap) return;
+    // `Rng1` = 100 is how close it has to be, not how far it can see — see the autocast's own
+    // walk (world.ts tickAutocast), which drives the wagon the rest of the way.
+    api.claimCorpses(caster, def, caster.x, caster.y, lvl.castRange || 100, 1, { hold: true, forLoad: true });
+  },
+  // Drop All Corpses: the whole hold, where the wagon now stands. `targs1` is bare `_` and
+  // there is no range, no cost and no cooldown — it is a door being opened.
+  Amed: (api, caster) => {
+    api.dropHeldCorpses(caster.id, caster.x, caster.y);
+  },
+
   // Summon Bear / Quilbeast / Hawk (Beastmaster) — one beast beside the caster.
   ANsg: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
   ANsq: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
@@ -2355,7 +2394,7 @@ function summonFromCorpse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank:
   const cap = d(lvl, 4, 0);
   if (cap > 0 && api.countOwned(caster.owner, unit) >= cap) return;
   // Nearest: you raise the body you are standing over, not the freshest one on the map.
-  const [corpse] = api.claimCorpses(caster, def, caster.x, caster.y, lvl.castRange || lvl.area || 600, 1, "nearest");
+  const [corpse] = api.claimCorpses(caster, def, caster.x, caster.y, lvl.castRange || lvl.area || 600, 1);
   if (!corpse) return;
   const art = summonArt(def);
   const life = lvl.heroDuration || lvl.duration || 0;
@@ -2385,7 +2424,7 @@ function summonFromCorpse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank:
  */
 function raiseCorpses(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, x: number, y: number, opts?: RaiseOptions): number {
   const lvl = lv(def, rank);
-  const taken = api.claimCorpses(caster, def, x, y, lvl.area || 900, Math.max(1, d(lvl, 0, 6)), "freshest");
+  const taken = api.claimCorpses(caster, def, x, y, lvl.area || 900, Math.max(1, d(lvl, 0, 6)), { order: "freshest" });
   return api.raiseClaimed(taken, caster.owner, caster.team, opts);
 }
 
