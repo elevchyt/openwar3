@@ -780,7 +780,11 @@ export type QueuedOrder =
   // path can go through the one funnel (docs/multiplayer.md Phase C) — not because you would
   // ever shift-queue one; `issueOrder` clears the queue before dispatching it either way.
   | { kind: "stop" }
-  | { kind: "attack"; targetId: number; force?: boolean }
+  // `solo`: this attack was commanded to this unit ALONE — the player had it solo-selected
+  // when the click went out — rather than handed to it as one of a group. It changes nothing
+  // about the attack itself; it decides whether an autocast may interrupt it (see
+  // SimUnit.attackSolo).
+  | { kind: "attack"; targetId: number; force?: boolean; solo?: boolean }
   // offX/offY: optional formation offset from the leader's centre, so a group told
   // to follow one unit fans into distinct slots instead of stacking on its centre.
   | { kind: "follow"; targetId: number; offX?: number; offY?: number }
@@ -1143,6 +1147,14 @@ export interface SimUnit {
   // back to another target once the pathfinder says the ordered one is genuinely unreachable
   // (issue #83). Cleared by every automatic re-target, so the commitment doesn't outlive the order.
   attackOrdered: boolean;
+  // …and it was ordered to THIS unit alone: the player had it solo-selected, so the click was
+  // aimed at it and nothing else. A commanded attack normally still lets an autocast take over
+  // once the caster is in the fight (issue #94 — an army's Priest is not an archer), but a
+  // Priest you picked out by himself and pointed at something is a player micro-ing one unit,
+  // and he must do as he is told: Liquipedia's Autocast rule is that an ORDER suppresses
+  // autocast, and with one unit selected there is no group for him to be the healer of.
+  // Only ever true alongside `attackOrdered`, and cleared by the same automatic re-targets.
+  attackSolo: boolean;
   stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
   stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
@@ -4736,6 +4748,7 @@ export class SimWorld {
       | "gaveUpGap"
       | "attackStalls"
       | "attackOrdered"
+      | "attackSolo"
       | "stuckAnchorX"
       | "stuckAnchorY"
       | "repathT"
@@ -4953,6 +4966,7 @@ export class SimWorld {
       gaveUpGap: 0,
       attackStalls: 0,
       attackOrdered: false,
+      attackSolo: false,
       stuckAnchorX: unit.x,
       stuckAnchorY: unit.y,
       repathT: 0,
@@ -5816,8 +5830,9 @@ export class SimWorld {
    *  `force` (the deliberate Attack command) lets you attack allies/own units too.
    *  `ordered` marks the attack as EXPLICITLY commanded (player right-click / Attack
    *  command / trigger order) rather than picked up by the unit itself — see
-   *  `attackOrdered`. Every internal re-target leaves it false on purpose. */
-  issueAttack(id: number, targetId: number, force = false, ordered = false): boolean {
+   *  `attackOrdered`. Every internal re-target leaves it false on purpose. `solo` narrows
+   *  that further: the order named this unit and nothing else (see `attackSolo`). */
+  issueAttack(id: number, targetId: number, force = false, ordered = false, solo = false): boolean {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
     if (!u || !t || u === t || !u.weapon || u.ethereal || (!force && !this.hostile(u, t))) return false; // ethereal (Banished) → weapon disabled (issue #49)
@@ -5849,6 +5864,7 @@ export class SimWorld {
     u.gaveUp = false; // no longer holding — a new target may well be reachable
     u.attackStalls = 0;
     u.attackOrdered = ordered; // an automatic re-target ends the previous order's commitment
+    u.attackSolo = ordered && solo; // …and so ends the "you, personally" of a solo-selected one
     u.repathT = 0; // clear any lingering hold/repath cooldown so we chase the new target
     // NOW — otherwise a freshly re-acquired enemy (e.g. after the first kill) inherited
     // the previous target's multi-second hold cooldown and the unit just stood there.
@@ -6288,7 +6304,7 @@ export class SimWorld {
       case "patrol": return this.issuePatrol(id, o.x, o.y);
       case "hold": return this.issueHold(id);
       case "stop": this.stop(id); return true;
-      case "attack": return this.issueAttack(id, o.targetId, o.force, true); // a QueuedOrder is always a commanded attack (issue #83)
+      case "attack": return this.issueAttack(id, o.targetId, o.force, true, o.solo); // a QueuedOrder is always a commanded attack (issue #83)
       case "follow": return this.issueFollow(id, o.targetId, o.offX, o.offY);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);
       case "buildresume": this.assignBuilder(id, o.buildingId, o.ax, o.ay); return true;
@@ -10730,8 +10746,16 @@ export class SimWorld {
     //
     // The strike-band test is the same one engage() uses to decide it has arrived, so "in
     // combat" means the same thing to both.
+    //
+    // NOT when the order was aimed at HIM ALONE (`attackSolo`). All of the above is about a
+    // caster who came along with an army: the group was pointed at something, and inside a
+    // group the healer heals. Select the Priest by himself and click an enemy and there is no
+    // group — that is a player micro-ing one unit, and the general rule applies instead:
+    // Liquipedia's Autocast page has an ORDER suppressing autocast, and this is as explicit as
+    // an order gets. He swings until he is told otherwise (and goes straight back to healing
+    // the moment the order ends — `attackSolo` dies with `attackOrdered`).
     const inBand = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius <= w.range + ATTACK_LEASH;
-    if (u.attackOrdered && u.swingLeft < 0 && inBand && this.tickAutocast(u)) return;
+    if (u.attackOrdered && !u.attackSolo && u.swingLeft < 0 && inBand && this.tickAutocast(u)) return;
     this.engage(u, t);
     // Combat-approach watchdog (issue #24). Reset the moment we're within the strike
     // band (range + leash) — genuinely fighting — rather than on engage()'s inCombat

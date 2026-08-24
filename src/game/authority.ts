@@ -139,8 +139,12 @@ export class Authority {
       const u = this.sim.units.get(unitId);
       const t = this.sim.units.get(targetId);
       // `ordered`: a trigger order is as deliberate as a player's click — the unit commits to
-      // this target and won't wander off onto whatever it passes (issue #83).
-      if (s === "attack") ok = this.sim.issueAttack(unitId, targetId, true, true);
+      // this target and won't wander off onto whatever it passes (issue #83). And `solo`: a
+      // trigger names ONE unit (`IssueTargetOrder(u, "attack", t)`), so it is the same "you,
+      // personally" a solo-selected click is — an autocast doesn't get to override it
+      // (SimUnit.attackSolo). A GROUP order is the JASS group loop calling this once per
+      // member, which is a script pointing at each unit in turn, not a selection.
+      if (s === "attack") ok = this.sim.issueAttack(unitId, targetId, true, true, true);
       // smart on a unit: attack a hostile (incl. team -1 creeps), else follow (ally/neutral).
       // A DESTRUCTIBLE is the exception that isn't hostile and isn't followable: right-click
       // a gate or a crate and you attack it, which is how WC3 has it (the cursor even turns
@@ -149,8 +153,8 @@ export class Authority {
       // that says "this widget is a destructable" (RtsController.addDestructible); the local
       // player's own right-click already routes this way, and this is the same rule for a
       // trigger's `IssueTargetOrder(u, "smart", …)` and for a networked command.
-      else if (u && t?.targetKey) ok = this.sim.issueAttack(unitId, targetId, true, true);
-      else if (u && t) ok = this.sim.hostile(u, t) ? this.sim.issueAttack(unitId, targetId, false, true) : this.sim.issueFollow(unitId, targetId);
+      else if (u && t?.targetKey) ok = this.sim.issueAttack(unitId, targetId, true, true, true);
+      else if (u && t) ok = this.sim.hostile(u, t) ? this.sim.issueAttack(unitId, targetId, false, true, true) : this.sim.issueFollow(unitId, targetId);
     } else {
       if (s === "stop") (this.sim.stop(unitId), (ok = true));
       else if (s === "holdposition") ok = this.sim.issueHold(unitId);

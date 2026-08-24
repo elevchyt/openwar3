@@ -1751,7 +1751,7 @@ export class RtsController {
       const t = this.sim.units.get(simId);
       if (t && simId !== this.primary) {
         let any = false;
-        for (const id of this.selected) if (id !== simId && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: simId, force: true }, queued: false })) any = true;
+        for (const id of this.selected) if (id !== simId && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: simId, force: true, solo: this.soloOrder(simId) }, queued: false })) any = true;
         // Refused for everyone — a tower aimed past its range — says why and stays armed,
         // exactly as the same click on the MAP does (orderClickAt). The console is another
         // way to name a target, not another rule about what may be attacked.
@@ -3996,7 +3996,7 @@ export class RtsController {
         // The Attack command FORCE-attacks whatever is under the cursor — including
         // friendly/own units and buildings (WC3 force attack).
         let any = false;
-        for (const id of this.selected) if (id !== picked && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true }, queued: queued })) any = true;
+        for (const id of this.selected) if (id !== picked && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true, solo: this.soloOrder(picked) }, queued: queued })) any = true;
         if (any) {
           this.orderMode = null;
           this.ack(true);
@@ -5800,7 +5800,7 @@ export class RtsController {
         if (enemy && !target.building) {
           // Hostile UNIT: attack + red flash (constant ring, matching its hover).
           let any = false;
-          for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked }, queued: queued })) any = true;
+          for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, solo: this.soloOrder() }, queued: queued })) any = true;
           if (any) {
             this.flashRing(target.x, target.y, selR, FLASH_RED, false, lift);
             return;
@@ -5812,7 +5812,7 @@ export class RtsController {
           // FORCED — the same "attack that anyway" a force-attack command issues. Red flash,
           // because breaking it is what the click means.
           let any = false;
-          for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true }, queued: queued })) any = true;
+          for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true, solo: this.soloOrder() }, queued: queued })) any = true;
           if (any) {
             this.flashRing(target.x, target.y, selR, FLASH_RED, false, lift);
             return;
@@ -6011,7 +6011,7 @@ export class RtsController {
     const destructible = !!target.targetKey;
     if (!destructible && !this.sim.hostile(prim, target)) return;
     let any = false;
-    for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: destructible }, queued })) any = true;
+    for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: destructible, solo: this.soloOrder() }, queued })) any = true;
     if (any) {
       const e = this.byId.get(picked);
       this.flashRing(target.x, target.y, e?.selRadius ?? target.radius, FLASH_RED, !!target.building, e?.moveHeight ?? 0);
@@ -6053,12 +6053,23 @@ export class RtsController {
     }
   }
 
+  /** Is this click an order to ONE unit — the player had it solo-selected — rather than an
+   *  order handed to a group? It rides along on the attack orders below because a caster
+   *  obeys a solo order that a group order lets its autocast override (see
+   *  SimUnit.attackSolo). `except` is the unit under the cursor at a force-attack site: the
+   *  loops there skip it, so it is not one of the recipients being counted. */
+  private soloOrder(except?: number): boolean {
+    let n = 0;
+    for (const id of this.selected) if (id !== except) n++;
+    return n === 1;
+  }
+
   /** Right-clicked a building: issue the fitting order and flash its footprint
    *  circle (no ground arrow). Hostile → attack + red; own → resume/repair (if a
    *  worker) else move, green; allied/neutral → move, yellow. */
   private orderOnBuilding(target: SimUnit, picked: number, enemy: boolean, selR: number, queued: boolean): void {
     if (enemy) {
-      for (const id of this.selected) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked }, queued: queued });
+      for (const id of this.selected) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, solo: this.soloOrder() }, queued: queued });
       this.flashRing(target.x, target.y, selR, FLASH_RED);
       return;
     }
