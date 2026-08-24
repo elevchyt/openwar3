@@ -3410,6 +3410,20 @@ export class RtsController {
     // what this did — hands `spell,slam` the Warden's "Attack Slam" instead, so Fan of
     // Knives made her swing her glaives. So: require EVERY token, then fall back by
     // dropping tokens from the right, then to a plain "Spell".
+    //
+    // Dropping from the RIGHT is the engine's own rule, not a guess — and the Dreadlord is
+    // the witness, because he is the case where it costs something. `[AUcs] Animnames =
+    // attack,slam` and HeroDreadLord.mdx authors
+    //
+    //     Stand · Stand Ready · Stand - 2 · Stand - 3 · Spell · Walk
+    //     Spell Slam · Death · Dissipate · Attack - 1 · Attack - 2
+    //
+    // — no "Attack Slam" anywhere, but a "Spell Slam" sitting right there that keeps the
+    // `slam` and looks far more like a spell. The real client plays "Attack - 1" (observed
+    // 2026-08-24). So the engine narrows the list left-to-right and takes what survives; it
+    // does NOT score the tokens across the whole set and let a later word outvote the first.
+    // That settles the whole family of rows whose caster has no clip for their full list —
+    // Shock Wave on the Naga heroes, Death and Decay's `stand,channel`, and ~60 others.
     const tags = (def?.animNames ?? []).filter((t) => !ANIM_MODIFIERS.has(t));
     const names = e.anims.seqNames;
     const pick = (re: RegExp) => names.findIndex((n) => re.test(n));
