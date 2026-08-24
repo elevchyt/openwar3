@@ -586,6 +586,15 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Atru: { target: "passive" }, // True Sight — the Shade (`ushd`), Rng1 900
   Adts: { target: "passive" }, // Magic Sentry — the four Human towers, Rng1 900, gated on `Rhse`
   Amim: { target: "passive" }, // Magic Immunity — Dryad, Faerie Dragon, Spirit Walker, nbel
+  Arsk: { target: "passive" }, // Resistant Skin — Mountain Giant, Avatar of Vengeance, creeps
+  // Spirit of Vengeance — the AVATAR of Vengeance's own ability, not the Warden's ultimate
+  // that creates the Avatar (`AEsv`). AUTOCAST, and on by default: `Units\UnitAbilities.slk`
+  // gives `espv` `abilList = ACmi,Asp1,ACrk,Avng` and `auto = Avng`, so the Avatar starts
+  // raising spirits the moment it arrives without being told to. No target — `targs1 =
+  // air,ground,dead` and the thing it wants is a CORPSE, which the player never clicks: the
+  // Avatar finds one inside `Rng1` = 600 by itself (Liquipedia "Avatar of Vengeance": Cast
+  // Type Autocast, Target Type No Target, Targets Allowed Dead).
+  Avng: { target: "none", autocast: true },
   // `Adet` "Detect (Sentry Ward)" (Rng1 1100) is in AbilityData.slk but NO unit lists it in
   // 1.27a's UnitAbilities.slk — it is a dead row. It stays out of this table (nothing would
   // ever carry it) while the sim's detect derivation still honours the code, so a custom map

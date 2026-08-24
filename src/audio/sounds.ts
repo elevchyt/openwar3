@@ -229,6 +229,10 @@ interface ModelSounds {
   impact: Clip[]; // M events whose label is a "…Hit"/"…Impact" (or a single generic missile sound)
   ability: Clip[]; // A events — the sound the effect model itself plays when it appears
   death: Clip[]; // D events — what the model itself crashes with (a gate's SNDXDGAT → GateDeath)
+  /** The A events again, keyed by their 4-char event code — because for a CAST the code is
+   *  the ability's own, uppercased (`SNDXAEFK` on HeroWarden.mdx is `[AEfk]` Fan of Knives),
+   *  and a model that carries several of them must be asked for the right one. */
+  abilityByCode: Map<string, Clip>;
 }
 
 /** A live `sound` handle the script started (StartSound). The nodes arrive a tick late —
@@ -616,6 +620,31 @@ export class SoundBoard {
     return true;
   }
 
+  /**
+   * Play the SND event a model carries FOR ONE NAMED ABILITY, if it carries it.
+   *
+   * WC3 fires a cast's sound off an event object keyed into the animation that is playing it,
+   * and the event's 4-char code IS the ability's code, uppercased — `SNDXAEFK` on
+   * HeroWarden.mdx is `[AEfk]`, `SNDXAEBL` on BlinkCaster.mdx is `[AEbl]`. That matters
+   * because the event does not always live on the SPELL's art: Fan of Knives keys it into
+   * the Warden HERSELF, and its WAV lives with her rather than with the spell —
+   *
+   *     AnimLookups.slk  AEFK        → SoundLabel "FanOfKnives"
+   *     AnimSounds.slk   FanOfKnives → FanOfKnives.wav, DirectoryBase Units\NightElf\HeroWarden\
+   *
+   * — so no amount of scanning `Abilities\Spells\NightElf\FanOfKnives\` can reach it. That
+   * folder holds only the three MissileHit WAVs, and "any wav in the effect folder" (the last
+   * resort in playSpellSound) was handing one of those to the cast: Fan of Knives announced
+   * itself with the sound of a knife landing.
+   */
+  playModelAbilityEvent(modelArt: string, code: string, at?: SoundPos): boolean {
+    if (!modelArt || !code) return false;
+    const clip = this.resolveModelSounds(modelArt).abilityByCode.get(code.toUpperCase());
+    if (!clip) return false;
+    this.playPool(clip, "spell", at);
+    return true;
+  }
+
   /** Play a spell's cast/effect sound. Prefers the effect model's own embedded SND "A"
    *  event (see playModelSound), and only then falls back to a WAV that ships in the
    *  effect model's folder (HolyBoltSpecialArt.mdx → HolyBolt.wav, HealTarget.mdx →
@@ -693,7 +722,7 @@ export class SoundBoard {
     const key = modelArt.toLowerCase();
     const cached = this.modelSounds.get(key);
     if (cached) return cached;
-    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [] };
+    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map() };
     this.modelSounds.set(key, out); // memoize up-front so a missing/broken model isn't re-parsed
     const bytes = this.vfs.rawBytes(modelArt);
     if (!bytes) return out;
@@ -716,7 +745,10 @@ export class SoundBoard {
       if (!clip) continue;
       if (cat === "K") out.attack.push(clip);
       else if (cat === "D") out.death.push(clip);
-      else if (cat === "A") out.ability.push(clip);
+      else if (cat === "A") {
+        out.ability.push(clip);
+        out.abilityByCode.set(id.toUpperCase(), clip);
+      }
       else if (/launch/i.test(label)) out.launch.push(clip);
       else out.impact.push(clip); // "…Hit"/"…Impact", or a single generic missile sound
     }

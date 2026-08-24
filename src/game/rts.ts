@@ -3429,7 +3429,14 @@ export class RtsController {
     // and blanked the walking form's, so a raging Alchemist sprays from his ogre body.
     if (loops) seq = pick(/channel/i);
     for (let n = tags.length; seq < 0 && n > 0; n--) seq = pickAll(tags.slice(0, n));
-    if (seq < 0) seq = pick(/spell/i);
+    // …else the plain "Spell" clip, and it has to be the clip actually CALLED "Spell" —
+    // matching loosely on /spell/ takes whichever spell clip the model happens to author
+    // first. HeroWarden.mdx lists "Spell Slam" (index 6) before "Spell" (index 7), so every
+    // ability of hers that names no Animnames — Shadow Strike and Vengeance, both bare rows
+    // in NightElfAbilityFunc.txt — cast with the Fan of Knives slam. WC3's own numbered
+    // variants of one clip ("Spell - 1", "Spell - 2") are the same clip and still count.
+    if (seq < 0) seq = pick(/^\s*spell\s*(-\s*\d+)?\s*$/i);
+    if (seq < 0) seq = pick(/spell/i); // a model with only compound spell clips still casts
     // …and last, the ability's own named clip for the handful whose AbilityFunc row carries
     // no Animnames at all yet whose caster has a dedicated animation waiting (see
     // CAST_ANIM_FALLBACK). Bladestorm is the one that matters: `[AOww]` names nothing, the

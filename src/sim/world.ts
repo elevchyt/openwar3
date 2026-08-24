@@ -494,6 +494,16 @@ export interface SummonRequest {
    *  Invulnerable"` = 1 is the only setter, and it is what the ultimate IS: six bodies that
    *  cannot be killed, only waited out. */
   invulnerable?: boolean;
+  /** A RAISED SHELL, not a summoned creature: it stands up with its weapon and nothing else
+   *  ("the raised units keep their attacks but lose all abilities and spells" — Animate
+   *  Dead). Only the raise path sets it. It used to be inferred from `summonLeft > 0`, which
+   *  is not the same fact at all — EVERY timed summon has one, so the Phoenix lost Phoenix
+   *  Fire and the Avatar of Vengeance arrived with an empty command card. */
+  stripped?: boolean;
+  /** The summon lives only as long as its summoner does. Rare — a Water Elemental outlives
+   *  the Archmage — and stated by the ability that says so: "Lasts 50 seconds or until the
+   *  avatar dies" (`Avng`, the Avatar of Vengeance's Spirits). */
+  bound?: boolean;
   illusion?: IllusionInit;
 }
 
@@ -1242,6 +1252,12 @@ export interface SimUnit {
    *  Spell Breaker, the Destroyer, the Faerie Dragon, the Phoenix and the Serpent Wards
    *  (Units\UnitAbilities.slk). Derived from the ability, like `ethereal` from its buff. */
   magicImmune: boolean;
+  /** RESISTANT SKIN (`Arsk`, and the ungated creep copy `ACrk` that shares its code) —
+   *  "resistant units are treated as if they were heroes" for TARGETING (a `nonhero` spell
+   *  refuses them, a hero-only one accepts them: see targeting.ts) and for DURATION (they
+   *  get `HeroDur`, so Ensnare lasts 3 seconds on a Mountain Giant and not 9). Not immunity
+   *  to a list of spells — the same one rule produces both halves. */
+  resistant: boolean;
   /** True Sight radius — how far this unit reveals invisible enemies, or 0 for the vast
    *  majority that reveal nothing. Rng1 of `Atru` (the Shade, the general detector and the
    *  War Eagle, 900), `Adet` (the Sentry Ward, 1100) or `Adts` (Magic Sentinel, 900).
@@ -1396,6 +1412,11 @@ export interface SimUnit {
   spawning: number; // >0: materializing (playing its birth clip) — cannot act yet
   summonLeft: number; // >0: a temporary summon that expires (Water Elemental); else 0
   summonMax: number; // the summon's full duration (for the "Summoned Unit" bar fill)
+  /** The summoner this summon is BOUND to (0 = none, which is almost everything). A bound
+   *  summon leaves the moment its summoner does — "Lasts 50 seconds or until the avatar
+   *  dies" (`Avng`). Provenance alone is not enough to set this: an Archmage dying does not
+   *  take his Water Elemental with him, so only an ability that says so binds. */
+  summonerId: number;
   /** A Mirror Image illusion: a copy of the caster that fights but cannot hurt anything.
    *  Its factors come from AOmi's own data (AbilityMetaData names the columns):
    *  DataB "Damage Dealt (%)" = 0 and DataC "Damage Taken (%)" = 2. The unit is otherwise
@@ -1772,13 +1793,18 @@ const PRECAST_WARNING = new Set(["AHfs"]);
  * which is what Blink's plume needs — it is "art to LEAVE BEHIND at old coordinate" and the
  * caster is about to be somewhere else.
  *
- * The model carries the cast SOUND with it (`sound: true` below) — BlinkCaster's folder WAV
- * is BlinkBirth1.wav, the departure — so the pair does not split across the wind-up. What
- * still sounds at the cast point is the OTHER half (see SPELL_SOUND_ART: Blink's arrival).
+ * `sound` = the model brings the cast sound with it. True only where the model actually
+ * CARRIES one: BlinkCaster.mdx keys `SNDXAEBL` (→ BlinkBirth1.wav, the departure), so the
+ * pair does not split across the wind-up and the OTHER half — Blink's arrival — is what
+ * still sounds at the cast point (see SPELL_SOUND_ART). FanOfKnivesCaster.mdx keys no such
+ * event: Fan of Knives puts its cast sound on the WARDEN (`SNDXAEFK` on HeroWarden.mdx →
+ * FanOfKnives.wav), which the renderer asks for by ability code at the cast point. Asking
+ * the burst for a sound it hasn't got would fall through to "any WAV in the effect folder",
+ * and the only WAVs there are the three MissileHit clips.
  */
-const CAST_START_ART: Record<string, (d: AbilityDef) => { art: string; follow: boolean }> = {
-  AEbl: (d) => ({ art: d.specialArt, follow: false }),
-  AEfk: (d) => ({ art: d.effectArt, follow: true }),
+const CAST_START_ART: Record<string, (d: AbilityDef) => { art: string; follow: boolean; sound: boolean }> = {
+  AEbl: (d) => ({ art: d.specialArt, follow: false, sound: true }),
+  AEfk: (d) => ({ art: d.effectArt, follow: true, sound: false }),
 };
 /**
  * Abilities whose `Cast` column is NOT a casting time.
@@ -4552,7 +4578,25 @@ export class SimWorld {
     this.units.delete(u.id);
     this.removals.push(u.id);
     this.unitDrops.delete(u.id);
+    this.dismissBoundSummons(u.id);
     return true;
+  }
+
+  /** Everything BOUND to a departing summoner leaves with it (see SimUnit.summonerId). The
+   *  Avatar of Vengeance is the case: its Spirits last "50 seconds or until the avatar dies",
+   *  so the Avatar's own 180-second timer running out ends them too, not just its death.
+   *  Collected first, then dismissed — this runs from inside removeUnit, which each dismissal
+   *  re-enters. The bond is one-way and one level deep (a Spirit summons nothing), and
+   *  clearing it up front means a cycle could not loop even if one were ever authored. */
+  private dismissBoundSummons(summonerId: number): void {
+    if (!summonerId) return;
+    const bound: SimUnit[] = [];
+    for (const u of this.units.values()) if (u.summonerId === summonerId) bound.push(u);
+    for (const u of bound) {
+      u.summonerId = 0;
+      if (u.unsummonArt) this.unsummon(u);
+      else this.kill(u);
+    }
   }
 
   /** An Entangled Gold Mine is leaving the world: give the SimMine under it back, so it can be
@@ -4708,6 +4752,7 @@ export class SimWorld {
       | "silenced"
       | "ethereal"
       | "magicImmune"
+      | "resistant"
       | "detectRadius"
       | "uprooted"
       | "rootedFootprint"
@@ -4737,6 +4782,7 @@ export class SimWorld {
       | "spawning"
       | "summonLeft"
       | "summonMax"
+      | "summonerId"
       | "unsummonArt"
       | "vanished"
       | "isIllusion"
@@ -4923,6 +4969,7 @@ export class SimWorld {
       silenced: false,
       ethereal: false,
       magicImmune: false, // recomputeStats derives it from the unit's ability list
+      resistant: false, // …and Resistant Skin beside it
       detectRadius: 0, // …and True Sight likewise
       uprooted: false, // an Ancient is built rooted (Aroo)
       rootedFootprint: 0, // set when it uproots, spent when it plants
@@ -4952,6 +4999,7 @@ export class SimWorld {
       spawning: 0,
       summonLeft: 0,
       summonMax: 0,
+      summonerId: 0,
       unsummonArt: "",
       vanished: false,
       isIllusion: false,
@@ -7021,6 +7069,13 @@ export class SimWorld {
     // no Requires, so the tech gate below is a formality for it — it is the tower detection
     // that actually needs one.)
     u.magicImmune = u.abilities.some((a) => a.code === "Amim" && a.level >= 1 && this.techMeets(u.owner, a.id));
+    // …and RESISTANT SKIN (`Arsk`) the same way, with one difference that matters: it DOES
+    // carry a `Requires` (`[Arsk] Requires=Rers`, the Ancient of Lore upgrade), which is what
+    // makes a Mountain Giant resistant only once the research is in — while the units that
+    // are born with it (Tauren, Spirit Walker, Infernal, Phoenix, Avatar of Vengeance) list
+    // the ungated creep copy `ACrk`, whose row has no requirement at all. Both share `code =
+    // Arsk`, so one derivation covers them and `techMeets` tells them apart.
+    u.resistant = u.abilities.some((a) => a.code === "Arsk" && a.level >= 1 && this.techMeets(u.owner, a.id));
     // True Sight, likewise a property of the ability list. Three separate base codes do the
     // one job, so all three are read and the widest wins if a unit somehow carries more than
     // one. AbilityData.slk names them plainly:
@@ -8300,7 +8355,7 @@ export class SimWorld {
       // to what the gesture throws (see CAST_START_ART): Blink's plume and Fan of Knives'
       // burst play here, at the button press, not half a second later with the effect.
       const startFx = CAST_START_ART[pc.code]?.(def);
-      if (startFx?.art) this.spellEffects.push({ art: startFx.art, x: u.x, y: u.y, targetId: startFx.follow ? u.id : 0, z: 0, sound: true });
+      if (startFx?.art) this.spellEffects.push({ art: startFx.art, x: u.x, y: u.y, targetId: startFx.follow ? u.id : 0, z: 0, sound: startFx.sound });
       // Delayed-strike "beware" warning (see PRECAST_WARNING): drop the ability's
       // Effectart at the target NOW, as the wind-up begins, so Flame Strike's smoke
       // vortex charges in place and lingers even if the cast is interrupted before
@@ -8450,9 +8505,22 @@ export class SimWorld {
       // (see KNOWN_ABILITIES). tickRenew hands out the work.
       if (isRepairCode(ab.code)) continue;
       const def = this.abilities.get(ab.id);
-      if (!def || def.target !== "unit") continue;
+      if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (u.mana < lvl.cost) continue;
+      // A CORPSE autocast: no target to click, and what it wants is a body. The Avatar of
+      // Vengeance is the one row in 1.30 (`Avng`, on by default), and the data alone says so
+      // — `targs1 = air,ground,dead` on a no-target ability. It casts on the spot, because
+      // `takeCorpse` does its own searching inside `Rng1`; there is nothing to walk to and no
+      // living target to re-check on arrival. Its own guards (a corpse in reach, and fewer
+      // than `DataE` spirits alive) live in the handler, so a cast that finds nothing simply
+      // does nothing — and the cooldown, 2 seconds, is what keeps it from re-asking every
+      // tick for the rest of the match.
+      if (def.target === "none" && def.targetFlags.some((f) => f.toLowerCase() === "dead")) {
+        if (!this.corpseAutocastWants(u, lvl)) continue;
+        return this.issueCast(u.id, def.code, 0, u.x, u.y, true);
+      }
+      if (def.target !== "unit") continue;
       // Friendly vs hostile autocast is decided by the ability's real Targets
       // Allowed flags (targs1), not a hard-coded code list: a spell allowing
       // `friend`/`self`/`player` (and not `enemy`) buffs/heals allies; `enemy`
@@ -8463,6 +8531,36 @@ export class SimWorld {
       const range = this.autocastSearchRange(u, lvl.castRange);
       const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags);
       if (target) return this.issueCast(u.id, def.code, target.id, 0, 0, true);
+    }
+    return false;
+  }
+
+  /** How many live units of a type a player has — the cap check behind Carrion Beetles'
+   *  `DataE` and the Avatar of Vengeance's six Spirits. */
+  private countOwnedOf(owner: number, typeId: string): number {
+    let n = 0;
+    for (const u of this.units.values()) if (u.hp > 0 && u.owner === owner && u.typeId === typeId) n++;
+    return n;
+  }
+
+  /** Would a corpse autocast actually do something right now? Asked BEFORE the order, because
+   *  mana is spent when the cast commits and a spell that fires into nothing still pays: an
+   *  Avatar standing at its six-Spirit cap, or on ground with no bodies on it, would otherwise
+   *  bleed 25 mana every 2 seconds for the rest of its life.
+   *
+   *  The two guards mirror the handler's exactly (spells.ts `Avng`) — a corpse `takeCorpse`
+   *  would accept, and room under `DataE "Max Summoned"` for another of `DataC`. Kept
+   *  together here rather than reusing `corpsesNear`, which answers a slightly different
+   *  question (it excludes hero corpses and admits mechanical ones). */
+  private corpseAutocastWants(u: SimUnit, lvl: AbilityLevel): boolean {
+    const unit = lvl.dataStr[2] || lvl.summon || "";
+    if (!unit) return false;
+    const cap = lvl.data[4];
+    if (cap > 0 && this.countOwnedOf(u.owner, unit) >= cap) return false;
+    const radius = lvl.castRange || lvl.area || 600;
+    for (const c of this.corpses.values()) {
+      if (c.raised || c.mechanical || !c.unitId) continue;
+      if (Math.hypot(c.x - u.x, c.y - u.y) <= radius) return true;
     }
     return false;
   }
@@ -9504,6 +9602,7 @@ export class SimWorld {
         // the spawn path reads to strip it — see MapViewerScene's summon handling, which
         // gives a timed raise no abilities and no corpse of its own.
         summonLeft: opts?.durationSec ?? 0,
+        stripped: (opts?.durationSec ?? 0) > 0, // a TIMED raise is a shell; Resurrection gives the unit back whole
         invulnerable: opts?.invulnerable ?? false,
         sourceId: 0, summonArt: opts?.art ?? "", unsummonArt: opts?.unsummonArt ?? "", atPoint: true,
       });
@@ -9571,8 +9670,8 @@ export class SimWorld {
       this.applyBuffInternal(t, buff.buffId === undefined && this.casting ? { ...buff, buffId: buffIdOf(this.casting.def, this.casting.rank) } : buff);
     },
     dispel: (t) => this.dispelUnit(t),
-    requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint) => {
-      this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint });
+    requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint, bound) => {
+      this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint, bound: !!bound });
     },
     raiseNearbyCorpses: (x, y, r, owner, team, max, opts) => this.raiseNearbyCorpsesInternal(x, y, r, owner, team, max, opts),
     consumeCorpse: (x, y, r) => this.consumeCorpseInternal(x, y, r),
@@ -9653,11 +9752,7 @@ export class SimWorld {
       caster.voodooLeft = def.levelData[Math.min(rank, def.levelData.length) - 1]?.duration || 30;
       caster.voodooAbil = def.id;
     },
-    countOwned: (owner, typeId) => {
-      let n = 0;
-      for (const u of this.units.values()) if (u.hp > 0 && u.owner === owner && u.typeId === typeId) n++;
-      return n;
-    },
+    countOwned: (owner, typeId) => this.countOwnedOf(owner, typeId),
   };
 
   /** Fell up to `max` trees within `radius` of a point, nearest first, and say where each
@@ -12928,6 +13023,10 @@ export class SimWorld {
     this.releaseEntangled(u); // an Entangled Gold Mine knocked down hands the mine back
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
+    // …and anything BOUND to it goes with it — "Lasts 50 seconds or until the avatar dies".
+    // Death does not run through removeUnit (a corpse stays behind, a hero goes to the
+    // altar), so the sweep has to be asked for on both paths.
+    this.dismissBoundSummons(u.id);
     // A structure is kept WHOLE, not just as an id: a player who cannot see this spot must go
     // on being shown the building until they re-scout it, and the id above resolves to nothing
     // the moment the delete on the previous line runs. See drainDeadStructures.

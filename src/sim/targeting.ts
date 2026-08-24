@@ -26,6 +26,14 @@ export interface TargetKind {
   building: unknown; // truthy for a structure (the sim carries the building state object)
   flying: boolean;
   ancient?: boolean;
+  /** RESISTANT SKIN (`Arsk`) — Mountain Giant, Tauren, Spirit Walker, Infernal, Phoenix,
+   *  Avatar of Vengeance. "Resistant units are treated as if they were heroes. They follow
+   *  the same targeting behavior as heroes and effects last on resistant units as long as
+   *  they would last on heroes." (Liquipedia, Resistant Skin.) So it is not a list of
+   *  blocked spells: it is the `hero`/`nonhero` flags reading true for a unit that is not
+   *  one — Charm and Polymorph name `nonhero` and refuse it, and anything hero-only accepts
+   *  it. The DURATION half of the same rule is `dur()` in spells.ts. */
+  resistant?: boolean;
 }
 
 /**
@@ -35,8 +43,9 @@ export interface TargetKind {
 export function targsKindError(target: TargetKind, flags: readonly string[] = []): string | null {
   const F = new Set((flags ?? []).map((f) => f.toLowerCase()));
   // Clear-cut unit-type gates.
-  if (F.has("nonhero") && target.isHero) return "Nohero";
-  if (F.has("hero") && !target.isHero) return "Targethero";
+  const heroLike = target.isHero || !!target.resistant; // Resistant Skin — see TargetKind.resistant
+  if (F.has("nonhero") && heroLike) return "Nohero";
+  if (F.has("hero") && !heroLike) return "Targethero";
   // "organic" is the absence of the two inorganic kinds — WC3 has no organic flag on the
   // unit, it has `mechanical` in UnitData and buildings, and everything else is flesh.
   if (F.has("organic") && (target.mechanical || target.building)) return "Notmechanical"; // "Must target organic units."

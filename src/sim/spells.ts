@@ -54,8 +54,12 @@ export interface SpellApi {
    *  timer runs out or it is dismissed (see summonArt/unsummonArt).
    *  `atPoint` says (x, y) is a TARGETED point the unit must land ON — a ward goes where
    *  you clicked. Without it (x, y) is the caster's own position and the unit is placed a
-   *  step in front of them, WC3-style (see MapViewerScene.summonSpot). */
-  requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number, art?: { summon: string; unsummon: string }, atPoint?: boolean): void;
+   *  step in front of them, WC3-style (see MapViewerScene.summonSpot).
+   *
+   *  `bound` ties the summon's life to the caster's — it leaves when the caster does. Rare,
+   *  and only for an ability that says so: the Avatar of Vengeance's Spirits last "50 seconds
+   *  or until the avatar dies", while an Archmage's Water Elemental outlives him. */
+  requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number, art?: { summon: string; unsummon: string }, atPoint?: boolean, bound?: boolean): void;
   /** Raise up to `max` corpses near a point back onto their feet.
    *
    *  Resurrection calls it bare, and what comes back is the unit itself. Animate Dead passes
@@ -386,7 +390,10 @@ const FLAMESTRIKE_EMBERS = "Abilities\\Spells\\Human\\FlameStrike\\FlameStrikeEm
 
 /** Effect duration on a target: heroes resist longer effects (herodur). */
 function dur(lvl: AbilityLevel, target: SimUnit): number {
-  return target.isHero && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration;
+  // …and a RESISTANT unit takes the hero duration too — that is what Resistant Skin IS:
+  // "effects last on resistant units as long as they would last on heroes" (Liquipedia).
+  // Ensnare's 9 seconds become 3 on a Mountain Giant, a Tauren, an Avatar of Vengeance.
+  return (target.isHero || target.resistant) && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration;
 }
 /** Read dataX (a=0..i=8); NaN-safe default. */
 function d(lvl: AbilityLevel, i: number, def = 0): number {
@@ -2212,6 +2219,40 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const art = summonArt(def);
     for (let i = 0; i < Math.max(1, d(lvl, 0, 1)); i++) {
       api.requestSummon(unit, corpse.x, corpse.y, corpse.facing, caster.owner, caster.team, 0, caster.id, art, true);
+    }
+  },
+  // Spirit of Vengeance — the AVATAR of Vengeance's own ability, not the Warden's ultimate
+  // that made the Avatar (`AEsv`, above). "Raises an invulnerable feral spirit from a corpse.
+  // Lasts 50 seconds or until the avatar dies." (Liquipedia / Wowpedia, Avatar of Vengeance.)
+  //
+  // It is a RAISE-FROM-CORPSE row, and AbilityMetaData says so by sharing Raise Dead's own
+  // field group with it — `Rai1..Rai4` are declared `useSpecific=Arai,ACrd,AUcb,AIrd,Avng`,
+  // and `Ucb5`/`Ucb6` are shared with Carrion Beetles alone. So the columns read:
+  //   DataA "Units Raised"    1
+  //   DataC "Unit Type"       even   ← a RAWCODE, hence dataStr (the Spirit of Vengeance)
+  //   DataE "Max Summoned"    6      ← Liquipedia's "Max Units Summoned: 6"
+  //   Rng1                    600    Dur1 50    Cool1 2    Cost1 25    targs1 air,ground,dead
+  //
+  // Same shape as Carrion Beetles (which is why the two share those last two columns), with
+  // two differences: the Spirits are on a CLOCK rather than permanent, and they are BOUND —
+  // the Avatar's death (or its own 180s expiring) takes every one of them with it.
+  //
+  // Nothing here makes them invulnerable: they carry it themselves. `Units\UnitAbilities.slk`
+  // gives `even` the whole ability list `Avul` — "Invulnerable (Neutral)" — which the spawn
+  // path already reads as `baseInvulnerable`. The ability that raises them says nothing about
+  // it, and neither should this.
+  Avng: (api, caster, def, rank) => {
+    const lvl = def.levelData[rank - 1];
+    const unit = lvl.dataStr[2] || lvl.summon || "";
+    if (!unit) return;
+    const cap = d(lvl, 4, 6);
+    if (cap > 0 && api.countOwned(caster.owner, unit) >= cap) return;
+    const corpse = api.takeCorpse(caster.x, caster.y, lvl.castRange || 600);
+    if (!corpse) return;
+    const art = summonArt(def); // `[Avng] Targetart` / `[Bvng] Effectart` — both feralspiritdone
+    const life = lvl.heroDuration || lvl.duration || 50;
+    for (let i = 0; i < Math.max(1, d(lvl, 0, 1)); i++) {
+      api.requestSummon(unit, corpse.x, corpse.y, corpse.facing, caster.owner, caster.team, life, caster.id, art, true, true);
     }
   },
   // Summon Bear / Quilbeast / Hawk (Beastmaster) — one beast beside the caster.

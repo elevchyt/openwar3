@@ -198,12 +198,9 @@ const SPELL_SOUND_FALLBACK: Record<string, string> = {
 // which for Blink is the far end of the hop, the pair the folder ships:
 //   BlinkCaster.mdx  → BlinkBirth1.wav    (departure, at the wind-up)
 //   BlinkTarget.mdx  → BlinkArrival1.wav  (arrival, here)
-// Fan of Knives keeps only the blades: its burst already sounded, and the missile is all
-// that leaves the Warden at the cast point.
 const SPELL_SOUND_ART: Record<string, (d: AbilityDef) => string[]> = {
   AOmi: (d) => [d.specialArt],
   AEbl: (d) => [d.areaArt],
-  AEfk: (d) => [d.missileArt],
 };
 // The looping bed a channelled area field lays down for as long as it runs. This is DATA,
 // not a hardcode: the label rides on the field (SpellFieldInit.loopSound), taken from the
@@ -8477,11 +8474,20 @@ export class MapViewerScene {
           su.summonLeft = summonLeft;
           su.summonMax = summonLeft;
           su.isSummon = true; // temporary summon — expires, leaves no corpse, ×0.5 XP
-          // A RAISED body is a shell, not the unit that fell: "the raised units keep their
-          // attacks but lose all abilities and spells" (Animate Dead). It walks and swings
-          // and nothing else — no autocast, no casting, no Web, no Burrow.
-          if (su.abilities.length) su.abilities = [];
         }
+        // A RAISED body is a shell, not the unit that fell: "the raised units keep their
+        // attacks but lose all abilities and spells" (Animate Dead). It walks and swings and
+        // nothing else — no autocast, no casting, no Web, no Burrow.
+        //
+        // Gated on `stripped`, which only the RAISE path sets. It used to be gated on
+        // `summonLeft > 0`, i.e. on being temporary at all — and every summon in the game is
+        // temporary. So the Phoenix arrived without Phoenix Fire, and the Avatar of Vengeance
+        // (`espv`, `abilList = ACmi,Asp1,ACrk,Avng`) arrived with no Spell Immunity, no
+        // Resistant Skin, and no way to raise a single Spirit: an empty command card on a
+        // 180-second ultimate whose whole job is that autocast.
+        if (su && s.stripped && su.abilities.length) su.abilities = [];
+        // …and a BOUND summon goes when its summoner does (see SimUnit.summonerId).
+        if (su && s.bound) su.summonerId = s.sourceId;
         // …and Animate Dead's raise cannot be hurt at all (`Hre2 "Raised Units Are
         // Invulnerable"`), which is why the ultimate is six bodies you can only wait out.
         if (su && s.invulnerable) {
@@ -8804,6 +8810,12 @@ export class MapViewerScene {
           // its BUFF's worn model, which for Sleep is the only art in the whole chain
           // (`[BUsl] Targetart = …\Undead\Sleep\SleepTarget.mdl` → SleepBirth1.wav).
           // Without these three, those spells cast in silence.
+          // FIRST, though: the ability's OWN event, wherever it is keyed. A cast sound is an
+          // SND event named after the ability (`SNDXAEFK` = `[AEfk]`), and WC3 keys it into
+          // whichever model plays the gesture — which for Fan of Knives is the WARDEN, not the
+          // spell's art (see playModelAbilityEvent). Asking her model by code is exact; the
+          // art chain below is the guess we fall back to.
+          if (this.sounds?.playModelAbilityEvent(this.rts!.renderedModelPath(c.casterId), c.code, at)) continue;
           const arts = SPELL_SOUND_ART[c.code]?.(def) ?? [def.targetArt, def.casterArt, def.specialArt, def.effectArt, def.areaArt, def.fxArt, def.fxSpecialArt, def.buffArt];
           this.sounds?.playSpellSound(arts, SPELL_SOUND_FALLBACK[c.code], at);
         }
