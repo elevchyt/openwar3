@@ -3413,8 +3413,6 @@ export class RtsController {
     const tags = (def?.animNames ?? []).filter((t) => !ANIM_MODIFIERS.has(t));
     const names = e.anims.seqNames;
     const pick = (re: RegExp) => names.findIndex((n) => re.test(n));
-    const pickAll = (want: string[]) => (want.length ? names.findIndex((n) => want.every((t) => new RegExp(`\\b${t}\\b`, "i").test(n))) : -1);
-    let seq = -1;
     // `looping` in an Animnames list is the OTHER half of the same fact the sim's `loop` flag
     // carries: the gesture is held and repeated for the cast rather than played once. Healing
     // Spray is the row that needs it said here — `[ANhs] Animnames = spell,looping` while the
@@ -3423,20 +3421,63 @@ export class RtsController {
     // held pose as "Spell Channel", 2.0s and flagged looping, alongside a one-shot "Attack two
     // Spell - New" for his throws. Matching on the tag alone found the throw.
     const loops = loop || (def?.animNames ?? []).includes("looping");
+    /**
+     * The clip that BEST matches a token list: every requested token present, and among
+     * those the one carrying the fewest EXTRA words.
+     *
+     * Best, not first — that is the whole point, and matching on "does the name contain
+     * these words" and taking the first hit is what went wrong twice over. HeroWarden.mdx
+     * lists "Spell Slam" (6) before "Spell" (7), so a request narrowed to `spell` took the
+     * Fan of Knives slam; the Far Seer's Earthquake (`spell,looping`) took "Spell Chain
+     * Lightning"; the Beastmaster's Stampede took "Spell Slam". Scoring by the leftovers
+     * gives all three the plain "Spell" they asked for, and leaves an exact request alone —
+     * `spell,slam` still finds "Spell Slam" whatever else the model authors.
+     *
+     * A trailing numeric variant is not an extra word: WC3 writes the alternates of ONE clip
+     * as "Attack - 1" / "Spell - 2", and the number is which take, not a different gesture.
+     *
+     * Two whole classes of clip are never a legitimate answer unless they were asked for by
+     * name. A `swim` clip is a state we never enter (water is unwalkable — the rest of the
+     * animation code excludes them outright, see unitAnims; only playCastAnim did not, so a
+     * Sea Giant's Carrion Swarm swung an "Attack Swim"). And a `channel` clip belongs to a
+     * cast that is HELD: `loops` already reaches for one first when the ability is one, so
+     * for anything else it is the wrong pose by construction.
+     */
+    const words = (n: string) => n.toLowerCase().split(/[\s\-_]+/).filter((t) => t && !/^\d+$/.test(t));
+    const wordLists = names.map(words);
+    const best = (want: string[]): number => {
+      if (!want.length) return -1;
+      let bestIdx = -1;
+      let fewest = Infinity;
+      for (let i = 0; i < wordLists.length; i++) {
+        const w = wordLists[i];
+        if (!want.every((t) => w.includes(t))) continue;
+        if (w.includes("swim") && !want.includes("swim")) continue;
+        if (!loops && w.includes("channel") && !want.includes("channel")) continue;
+        const extra = w.length - want.length;
+        if (extra < fewest) {
+          fewest = extra;
+          bestIdx = i;
+        }
+      }
+      return bestIdx;
+    };
+    let seq = -1;
     // A looping/channelled cast prefers a dedicated "channel" clip (Blizzard, Starfall,
     // Healing Spray). Under the alternate half of a two-form model the lookup needs no help:
     // applyAnimProps has already renamed "Spell Channel Alternate" to a plain "spell channel"
     // and blanked the walking form's, so a raging Alchemist sprays from his ogre body.
     if (loops) seq = pick(/channel/i);
-    for (let n = tags.length; seq < 0 && n > 0; n--) seq = pickAll(tags.slice(0, n));
-    // …else the plain "Spell" clip, and it has to be the clip actually CALLED "Spell" —
-    // matching loosely on /spell/ takes whichever spell clip the model happens to author
-    // first. HeroWarden.mdx lists "Spell Slam" (index 6) before "Spell" (index 7), so every
-    // ability of hers that names no Animnames — Shadow Strike and Vengeance, both bare rows
-    // in NightElfAbilityFunc.txt — cast with the Fan of Knives slam. WC3's own numbered
-    // variants of one clip ("Spell - 1", "Spell - 2") are the same clip and still count.
-    if (seq < 0) seq = pick(/^\s*spell\s*(-\s*\d+)?\s*$/i);
-    if (seq < 0) seq = pick(/spell/i); // a model with only compound spell clips still casts
+    for (let n = tags.length; seq < 0 && n > 0; n--) seq = best(tags.slice(0, n));
+    // …else the plain "Spell" clip, which is what a row with NO `Animnames` means — Shadow
+    // Strike and Vengeance are both bare rows in NightElfAbilityFunc.txt. Asked for as a
+    // token so the same best-match rule applies: the Warden has a clip called exactly
+    // "Spell" and that is the one she should cast with.
+    if (seq < 0) seq = best(["spell"]);
+    // …and only then loosely, for a model whose spell clips are ALL compound and so match no
+    // token cleanly — the Priest's "Spell Attack", the Spirit Walker's "Spell Morph", the
+    // Sea Elemental's "blaSpell".
+    if (seq < 0) seq = pick(/spell/i);
     // …and last, the ability's own named clip for the handful whose AbilityFunc row carries
     // no Animnames at all yet whose caster has a dedicated animation waiting (see
     // CAST_ANIM_FALLBACK). Bladestorm is the one that matters: `[AOww]` names nothing, the
