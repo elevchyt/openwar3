@@ -1210,9 +1210,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // — so reaching for `casterArt` drew neither. The blades are not real projectiles (the
   // damage is instant and uncapped by travel), so each one is dropped as a one-shot on the
   // unit it is meant for, which is where WC3's land too.
+  //
+  // The BURST is not emitted here: it is the Warden's own spin-up, so it plays at the start
+  // of the wind-up with the gesture (world.ts CAST_START_ART), a Cast Point ahead of the
+  // blades it throws. Only the blades belong to this instant.
   AEfk: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    if (def.effectArt) api.emitEffect(def.effectArt, caster.x, caster.y, caster.id);
     const hit = enemiesInArea(api, caster, def, caster.x, caster.y, lvl.area || 400);
     const per = d(lvl, 0, 75);
     const cap = d(lvl, 1, 0);
@@ -2019,7 +2022,11 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     // Neither is TargetArt or Casterart — both of those are empty on `[AEbl]`, which is why
     // Blink used to teleport with no smoke at either end (and, with no model to resolve a
     // WAV off, in silence: BlinkBirth1.wav / BlinkArrival1.wav live beside them).
-    if (def.specialArt) api.emitEffect(def.specialArt, caster.x, caster.y, 0);
+    //
+    // Only the ARRIVAL is emitted here. The departure plume is the Warden's own gesture and
+    // already went up at the start of the wind-up, where she still stood (world.ts
+    // CAST_START_ART) — it is art to leave BEHIND, so it is left behind unattached and this
+    // teleport walks out of it.
     api.teleport(caster, caster.x + (dx / dist) * r, caster.y + (dy / dist) * r);
     if (def.areaArt) api.emitEffect(def.areaArt, caster.x, caster.y, 0);
   },

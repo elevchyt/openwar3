@@ -192,8 +192,18 @@ const SPELL_SOUND_FALLBACK: Record<string, string> = {
 // carries SND…AHER → Levelupcaster.wav. So every Mirror Image announced itself with the
 // hero LEVEL-UP chime. What it plays is Specialart (MirrorImageCaster → SND…AOMC →
 // MirrorImage.wav), so name that here and let the sound follow the model on screen.
+// The other case this table answers: an ability whose art plays at the WIND-UP (world.ts
+// CAST_START_ART) took its own sound with it, so the default order would sound the same WAV
+// a second time at the cast point. Name the art that belongs to THIS instant instead —
+// which for Blink is the far end of the hop, the pair the folder ships:
+//   BlinkCaster.mdx  → BlinkBirth1.wav    (departure, at the wind-up)
+//   BlinkTarget.mdx  → BlinkArrival1.wav  (arrival, here)
+// Fan of Knives keeps only the blades: its burst already sounded, and the missile is all
+// that leaves the Warden at the cast point.
 const SPELL_SOUND_ART: Record<string, (d: AbilityDef) => string[]> = {
   AOmi: (d) => [d.specialArt],
+  AEbl: (d) => [d.areaArt],
+  AEfk: (d) => [d.missileArt],
 };
 // The looping bed a channelled area field lays down for as long as it runs. This is DATA,
 // not a hardcode: the label rides on the field (SpellFieldInit.loopSound), taken from the

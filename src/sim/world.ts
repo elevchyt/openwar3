@@ -1756,6 +1756,31 @@ const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq
 // strike itself (pillar + burn) still needs the wind-up to finish (see spells AHfs).
 const PRECAST_WARNING = new Set(["AHfs"]);
 /**
+ * Abilities whose OWN art plays at the moment the button is pressed — at the start of the
+ * wind-up, on the caster — rather than at the cast point with the effect. Not a warning like
+ * PRECAST_WARNING (which paints the target's ground and charges the cast up front): this is
+ * the caster's own flourish, which in WC3 begins with the gesture and not with what the
+ * gesture throws. The Warden is both cases:
+ *
+ *   [AEbl] Specialart = …\Blink\BlinkCaster.mdl   the smoke she goes out in
+ *   [AEfk] Effectart  = …\FanOfKnives\FanOfKnivesCaster.mdl   the burst she spins up
+ *
+ * Her Cast Point is 0.5s (UnitWeapons.slk Ewar castpt), so held to the effect both read as
+ * half a second LATE — the blades are already out before the burst that threw them.
+ *
+ * `follow` = ride the caster (the burst spins with her); false = stand where it was struck,
+ * which is what Blink's plume needs — it is "art to LEAVE BEHIND at old coordinate" and the
+ * caster is about to be somewhere else.
+ *
+ * The model carries the cast SOUND with it (`sound: true` below) — BlinkCaster's folder WAV
+ * is BlinkBirth1.wav, the departure — so the pair does not split across the wind-up. What
+ * still sounds at the cast point is the OTHER half (see SPELL_SOUND_ART: Blink's arrival).
+ */
+const CAST_START_ART: Record<string, (d: AbilityDef) => { art: string; follow: boolean }> = {
+  AEbl: (d) => ({ art: d.specialArt, follow: false }),
+  AEfk: (d) => ({ art: d.effectArt, follow: true }),
+};
+/**
  * Abilities whose `Cast` column is NOT a casting time.
  *
  * AbilityData.slk's `Cast` is a wind-up for the spells that have one (Blizzard 1.0, Flame
@@ -8271,6 +8296,11 @@ export class SimWorld {
       // itself begins; the EFFECT below is the one most triggers actually listen for.
       this.noteSpell(u, pc, "channel");
       this.noteSpell(u, pc, "cast");
+      // The caster's own flourish, if this ability's art belongs to the GESTURE rather than
+      // to what the gesture throws (see CAST_START_ART): Blink's plume and Fan of Knives'
+      // burst play here, at the button press, not half a second later with the effect.
+      const startFx = CAST_START_ART[pc.code]?.(def);
+      if (startFx?.art) this.spellEffects.push({ art: startFx.art, x: u.x, y: u.y, targetId: startFx.follow ? u.id : 0, z: 0, sound: true });
       // Delayed-strike "beware" warning (see PRECAST_WARNING): drop the ability's
       // Effectart at the target NOW, as the wind-up begins, so Flame Strike's smoke
       // vortex charges in place and lingers even if the cast is interrupted before
@@ -8637,7 +8667,17 @@ export class SimWorld {
         w.budget = ctx.wave.budget; // the handler spends the wave's allowance (Carrion Swarm)
       }
     }
-    if (w.travelled >= w.dist) this.removeProjectile(p.id);
+    if (w.travelled >= w.dist) {
+      // The run is over — and a wave DIES at the end of it rather than blinking out. Its
+      // model is the spell (see spells AOsh), and ShockwaveMissile.mdx, like every missile,
+      // carries a Death clip for the moment it stops; skipping it snapped the wedge out of
+      // existence mid-sweep. Recorded as an IMPACT at the wave's own front, which is the
+      // path the renderer already plays a missile's Death clip down (impactProjectile) —
+      // and the path a frozen client has always taken for a wave, since its applier treats
+      // every removed projectile as one. Missiles with no Death clip still just detach.
+      this.projectileImpacts.push({ id: p.id, x: p.x, y: p.y, z: p.impactZ });
+      this.removeProjectile(p.id);
+    }
   }
 
   /** Run a spell's effect handler (dispatched on base `code`). Shared by instant
