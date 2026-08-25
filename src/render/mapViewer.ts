@@ -7221,6 +7221,13 @@ export class MapViewerScene {
   private techName(id: string): string {
     const own = this.registry.get(id);
     if (own?.name) return own.name;
+    // …an UPGRADE requirement (`[Acan] Requires=Ruac`, Cannibalize) is in neither the unit
+    // registry nor, necessarily, the tech graph: `loadTechRegistry` keeps only rows that say
+    // something about the tree, and an upgrade with no prerequisites of its OWN says nothing —
+    // so `Ruwb` (which needs a Crypt) is in it and `Ruac` (which needs nothing) is not, and the
+    // red line read "Requires: Ruac". Its name has always been there in
+    // <Race>UpgradeStrings.txt, which the upgrade registry reads; ask that before falling back.
+    if (this.upgrades.get(id)) return this.upgrades.name(id, 1);
     const def = this.tech.get(id);
     for (const alt of def.dependencyOr) {
       const d = this.registry.get(alt);
@@ -7669,10 +7676,20 @@ export class MapViewerScene {
     for (const ab of su.abilities) {
       if (ab.level < 1) continue; // unlearned hero abilities don't show as buttons
       // An ability can be gated by an upgrade — `[Adef] Requires=Rhde` (Defend), `[Acmg]
-      // Requires=Rhss` (Control Magic). It sits on the unit from birth and the RESEARCH is what
-      // reveals it, which is the whole job of the six Human upgrades that grant no stat at all.
-      // Abilities with no requirement (every hero spell) pass this untouched.
-      if (!this.rts.simView.techMeets(su.owner, ab.id)) continue;
+      // Requires=Rhss` (Control Magic), `[Aweb] Requires=Ruwb` (Web). It sits on the unit from
+      // birth and the RESEARCH is what unlocks it, which is the whole job of the six Human
+      // upgrades that grant no stat at all. Abilities with no requirement (every hero spell)
+      // are always met and this costs them nothing.
+      //
+      // UNAVAILABLE, NOT ABSENT (developer spec). A gated ability keeps its slot and goes
+      // inert wearing the DIS* art, with the game's own red "Requires:" line under its
+      // tooltip — the same three things a Guard Tower with no Lumber Mill already does on a
+      // worker's build page, a Knight with no Keep on an Altar's card and a Potion of
+      // Greater Healing with no tier-2 hall in a shop. So the player can see that Web exists,
+      // that the Crypt Fiend is the unit that gets it, and what to research for it, instead of
+      // having to know the tech tree by heart. (`disabled` is where the greying lives, and
+      // `cmd()` derives the DIS* twin from the icon — see disabledArt.)
+      const techMet = this.rts.simView.techMeets(su.owner, ab.id);
       // …and an Ancient's card depends on which way up it is: one short list of what only a
       // walker can reach (Eat Tree, Entangle Gold Mine). The rest of the split is structural —
       // the building card itself is withheld while it walks, see buildCommandCard. Asked only
@@ -7728,7 +7745,9 @@ export class MapViewerScene {
         name: reversed ? wc3ToPlain(def.unTip) || def.name : def.levels > 1 ? `${def.name} (Level ${ab.level})` : def.name,
         hotkey: reversed ? def.unHotkey || def.hotkey : def.hotkey,
         tip: reversed ? def.unTip || this.abilityTip(def, ab.level) : this.abilityTip(def, ab.level),
-        desc: reversed ? def.unUberTip || this.abilityDesc(def, ab.level) : this.abilityDesc(def, ab.level),
+        // …and the red line that says what to research for it, when it is not yours yet. Empty
+        // for everything already unlocked, which is almost every button on almost every card.
+        desc: (reversed ? def.unUberTip || this.abilityDesc(def, ab.level) : this.abilityDesc(def, ab.level)) + this.requirementLine(ab.id),
         mana: lvl.cost,
         col, row,
         // Mana is the ONE price WC3 draws: short of it, the icon goes deep blue (see
@@ -7739,10 +7758,11 @@ export class MapViewerScene {
         // off its own PASBTN art ([AOcr] Art=…\PassiveButtons\PASBTNCriticalStrike.blp);
         // it just isn't a button you press (see `passive` below).
         noMana,
-        // Silence IS unavailable, and it is the only thing here that is: the button goes
-        // inert and wears the DIS* art with no frame, so a silenced spellbook reads as
-        // unpressable at a glance.
-        disabled: muted || rootBlocked,
+        // Unavailable: the button goes inert and wears the DIS* art with no frame, so it reads
+        // as unpressable at a glance. Three things say so — a silenced or stunned caster, a
+        // planted Ancient with a queue that cannot pull itself up, and an ability whose
+        // research is not in.
+        disabled: muted || rootBlocked || !techMet,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and
