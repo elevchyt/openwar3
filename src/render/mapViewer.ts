@@ -40,7 +40,7 @@ import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, ty
 import { loadCommandStrings, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
-import { CAMERA, MELEE, MISC_DATA } from "../data/gameplayConstants";
+import { CAMERA, MELEE, MISC_DATA, TEXT_TAG } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
 import { makeMapFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
@@ -59,7 +59,6 @@ import { MetricsOverlay } from "../ui/metrics";
 import { wc3ToPlain } from "../ui/wc3Text";
 import { GameHud, isTyping, upkeepBand, PLAYER_COLORS, type HudDriver, type CommandButton } from "../ui/hud";
 import { GAME_WIDTH, GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
-import { UI_HEIGHT } from "../ui/fdf/layout";
 import { MatchOverDialog } from "../ui/gameMenu";
 import { EscMenu } from "../ui/escMenu";
 import { AllianceDialogOverlay } from "../ui/allianceDialog";
@@ -78,7 +77,7 @@ import { MultiboardOverlay } from "../ui/multiboard";
 import { TimerDialogOverlay } from "../ui/timerDialog";
 import { CinematicPanelOverlay } from "../ui/cinematicPanel";
 import { ScriptCamera, type CameraState } from "./scriptCamera";
-import { CombatTextTags, TextTagOverlay, type TextTagContext } from "./textTags";
+import { CombatTextTags, GOLD_TEXT_STYLE, TextTagOverlay, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
 import { loadTechRegistry, type TechRegistry } from "../data/techtree";
@@ -166,11 +165,17 @@ const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // h
 // palette gives slot 0. `Z` lifts the text off the victim's feet to roughly over its head; the
 // overlay adds the terrain and, for a flier, its altitude, so one offset serves ground and air.
 const CRIT_TEXT_COLOR = 0xffff0303;
-// Transmute's payout wears the game's own GOLD, the colour every tooltip in the install
-// gilds a hotkey and a price with (`|cffffcc00`) and the one the resource readout is drawn
-// in. It is not a player colour either — the number is the money, not whose money it is.
-const GOLD_TEXT_COLOR = 0xffffcc00;
+// A gold credit's colour is the game's own, and it is not the `|cffffcc00` a tooltip gilds a
+// price with: `UI\MiscData.txt` keeps a `GoldTextColor` for exactly this tag, ARGB, and it is
+// a paler, warmer gold (255,220,0). Not a player colour either — the number is the money,
+// not whose money it is.
+const GOLD_TEXT_COLOR = argbOfParts(TEXT_TAG.GoldTextColor);
 const COMBAT_TEXT_Z = 100;
+
+/** An `A,R,G,B` quadruple from the Misc files → the 0xAARRGGBB a text tag carries. */
+function argbOfParts([a, r, g, b]: readonly number[]): number {
+  return (((a & 255) << 24) | ((r & 255) << 16) | ((g & 255) << 8) | (b & 255)) >>> 0;
+}
 
 /** "#rrggbb" → the 0xAARRGGBB a text tag carries, opaque. */
 function argbOf(css: string): number {
@@ -2954,7 +2959,10 @@ export class MapViewerScene {
     return {
       // The FDF UI space is 0.6 tall (ui/fdf/layout.ts) and is fitted to the GAME frame, so a
       // text tag's size/offset scales with the stage — not with the window around it.
-      uiScale: (this.canvas.clientHeight || GAME_HEIGHT) / UI_HEIGHT,
+      // A text tag's height and drift are fractions of the WHOLE screen (a tag of height 1
+      // fills it), so this is the viewport height plain — not the FDF `/ UI_HEIGHT` scale
+      // the panels are laid out with, which over-set every tag by 1/0.6 (issue #120).
+      uiScale: this.canvas.clientHeight || GAME_HEIGHT,
       groundHeight: (x, y) => rts.groundHeightAt(x, y),
       unitAt: (simId) => {
         const u = rts.simView.units.get(simId);
@@ -8822,13 +8830,21 @@ export class MapViewerScene {
           const arts = SPELL_SOUND_ART[c.code]?.(def) ?? [def.targetArt, def.casterArt, def.specialArt, def.effectArt, def.areaArt, def.fxArt, def.fxSpecialArt, def.buffArt];
           this.sounds?.playSpellSound(arts, SPELL_SOUND_FALLBACK[c.code], at);
         }
-        // Floating COMBAT text: a Critical Strike's red "127!" over the unit it struck, and
-        // the "!" a deny leaves behind (see CombatText). Read off the CONTROLLER's queue like
-        // the four drains above, so a frozen client raises the same text off its payload.
+        // Floating COMBAT text: a Critical Strike's red "127!" over the unit it struck, the
+        // "!" a deny leaves behind, and a "+N" wherever the engine pays somebody (see
+        // CombatText). Read off the CONTROLLER's queue like the four drains above, so a
+        // frozen client raises the same text off its payload.
         for (const t of this.rts!.drainFxCombatTexts()) {
+          // …but only the text ADDRESSED to this machine. A crit and a deny are public facts
+          // and carry -1; a gold credit carries the player it paid, and belongs on nobody
+          // else's screen — not an opponent's, and not the HOST's while it watches somebody
+          // else's hero sell an item (issue #120). The host already keeps it out of the other
+          // payloads (MatchLink.tickHost); this is the same rule applied to the one client
+          // that reads the queue directly instead of off the wire.
+          if (t.forPlayer >= 0 && t.forPlayer !== this.localPlayer) continue;
           this.combatText.spawn({
             text: t.text,
-            // A crit is red for everyone and Transmute's payout is gold for everyone. A deny
+            // A crit is red for everyone and a gold credit is gold for everyone. A deny
             // wears the colour of the player whose unit died, resolved HERE and not in the
             // sim: `SetPlayerColor` can move a slot's colour mid-match, and the palette is
             // the client's (same one the minimap dots and a cinematic's speaker names use).
@@ -8842,6 +8858,9 @@ export class MapViewerScene {
             y: t.y,
             z: COMBAT_TEXT_Z,
             followUnit: t.unitId,
+            // A gold credit is the one kind the game keeps a full spec for that we honour —
+            // its own height, drift, lifetime and fade (GOLD_TEXT_STYLE).
+            style: t.kind === "gold" ? GOLD_TEXT_STYLE : undefined,
           });
         }
         // Hero level-up nova.

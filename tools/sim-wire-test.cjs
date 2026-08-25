@@ -169,10 +169,17 @@ function richSnapshot() {
     items: [{ id: 7001, itemId: "gold", x: 44, y: -12 }],
     projectiles: projectiles(),
     fx: {
-      effects: [{ art: "HolyBolt.mdx", x: 10, y: 20, targetId: 7, z: 0, life: 1.2, sound: true }],
+      // Two effects: one that sounds off its own art folder, and one that names its wav by
+      // AbilitySounds LABEL because the wav lives nowhere near the art (a shop's coins).
+      effects: [{ art: "HolyBolt.mdx", x: 10, y: 20, targetId: 7, z: 0, life: 1.2, sound: true },
+        { art: "UI\\Feedback\\GoldCredit\\GoldCredit.mdx", x: 10, y: 20, targetId: 7, z: 0, life: 1.334, soundLabel: "ReceiveGold" }],
       splats: [{ splatId: "THND", x: 50, y: 60 }],
       castStarts: [{ casterId: 1, code: "AOws", abilityId: "AOws", hold: 0.5, loop: false, tx: 1, ty: 2, targetId: 0, warnArt: "", x: 3, y: 4 }],
       castFires: [{ casterId: 1, code: "AOws", abilityId: "AOws", x: 3, y: 4 }],
+      // A public crit and a PRIVATE gold credit — `forPlayer` is the address the host filters
+      // recipients by, so it has to survive the wire intact (issue #120).
+      texts: [{ kind: "crit", unitId: 7, x: 10, y: 20, text: "127!", colorSlot: -1, forPlayer: -1 },
+        { kind: "gold", unitId: 7, x: 10, y: 20, text: "+250", colorSlot: -1, forPlayer: 2 }],
     },
     deaths: [{ id: 999, x: 100, y: 200 }],
     corpses: [{ id: 601, deadId: 999, unitId: "ogru", x: 100, y: 200, facing: 1.25, owner: 2, isHero: false, mechanical: false, decayLeft: 61.7, raised: false }],

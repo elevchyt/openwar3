@@ -2,9 +2,9 @@
 //
 //   pnpm data:verify
 //
-// Every key in MISC_GAME / MISC_DATA / MELEE / MINIMAP is looked up in the file it
-// claims to come from — Units\MiscGame.txt, Units\MiscData.txt, Scripts\Blizzard.j,
-// UI\MiscData.txt — and the values compared numerically. A transcription that drifts from the
+// Every key in MISC_GAME / MISC_DATA / MELEE / MINIMAP / GLUE / TEXT_TAG / MISC_UI is looked
+// up in the file it claims to come from — Units\MiscGame.txt, Units\MiscData.txt,
+// Scripts\Blizzard.j, UI\MiscData.txt, UI\MiscUI.txt — and the values compared numerically. A transcription that drifts from the
 // install (or a value a patch changed under us) fails here instead of quietly mis-simulating
 // the game.
 //
@@ -100,6 +100,10 @@ const files = {
   MINIMAP: { label: "UI\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "UI", "MiscData.txt"))) },
   // …as do the glue screens' own constants (the Custom Game map-size buckets).
   GLUE: { label: "UI\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "UI", "MiscData.txt"))) },
+  // …and the floating text tags' colours/drift/lifetimes. Their HEIGHTS are the odd one out:
+  // font sizes live in UI\MiscUI.txt, a third file again.
+  TEXT_TAG: { label: "UI\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "UI", "MiscData.txt"))) },
+  MISC_UI: { label: "UI\\MiscUI.txt", data: parseMiscIni(read(path.join(merged, "UI", "MiscUI.txt"))) },
 };
 
 // MELEE keys drop the `bj_` prefix; MELEE_UNIT_SPACING is a local, not a constant.

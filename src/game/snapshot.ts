@@ -393,7 +393,10 @@ export interface FxSnapshot {
   /** Casts whose effect fired (`drainCastFires`): the ability's cast sound. */
   castFires: Array<{ casterId: number; code: string; abilityId: string; x: number; y: number }>;
   /** Engine floating combat text (`drainCombatTexts`) — a Critical Strike's red number, a
-   *  deny's "!". Already carries its own `x`/`y` (the AoI test), so nothing is added here. */
+   *  deny's "!", a gold credit's "+N". Already carries its own `x`/`y` (the AoI test), so
+   *  nothing is added here. Unlike every other lane it is filtered by ADDRESS as well as by
+   *  eyes: a gold credit names the player it paid and reaches no other payload (see
+   *  `CombatText.forPlayer`). */
   texts: CombatText[];
 }
 

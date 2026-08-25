@@ -249,6 +249,8 @@ const COSTS = { get: (id) => ({ id, abilities: [], goldCost: id === "hrif" ? 205
   const texts = w.drainCombatTexts();
   check("...with a gold text over the victim", texts.length === 1 && texts[0].kind === "gold" && texts[0].text === "+256"
     && texts[0].x === victim.x && texts[0].y === victim.y && texts[0].unitId === 0);
+  // …addressed to the Alchemist's player alone. Being paid is not a public fact (issue #120).
+  check("...on the caster's player's screen only", texts[0].forPlayer === caster.owner);
 }
 
 // …and the cap. `[ANtm]`'s Ubertip names both the rule and the column it reads: "Transmute

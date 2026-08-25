@@ -108,6 +108,10 @@ function check(what, got, want) {
   check("…in gold, reading the payout", `${texts[0].kind}:${texts[0].text}`, "gold:+250");
   check("…ATTACHED to the seller, not placed", texts[0].unitId, h.id);
   check("…and the same red-or-slot colour a crit uses is not asked for", texts[0].colorSlot, -1);
+  // Your gold is yours: the tag names the player it paid, and the host declines to put it in
+  // anyone else's payload (MatchLink.tickHost) while every renderer drops one addressed
+  // elsewhere. A crit and a deny are public facts and carry -1.
+  check("…ADDRESSED to the seller's player alone", texts[0].forPlayer, 0);
 
   const fx = world.drainSpellEffects();
   check("one effect plays", fx.length, 1);
@@ -121,6 +125,17 @@ function check(what, got, want) {
   // which holds no wav at all, and the sale would go through in silence.
   check("…named by label, since its wav is not beside the art", fx[0].soundLabel, "ReceiveGold");
   check("…and not by folder", !!fx[0].sound, false);
+}
+
+// --- a second player's sale is addressed to HIM, not to player 0 -----------------------
+{
+  world = newWorld();
+  const h = hero("rat9", { owner: 3 });
+  const s = shop("ngme", 1200, 1000);
+  check("player 3 sells", world.pawnItem(h.id, 0, s.id), true);
+  check("…and it is player 3 who is paid", world.stashOf(3).gold, 250);
+  check("…player 0 is not", world.stashOf(0).gold, 0);
+  check("…and the tag is addressed to 3", world.drainCombatTexts()[0].forPlayer, 3);
 }
 
 // --- a refused sale is silent ----------------------------------------------------------

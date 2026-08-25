@@ -306,6 +306,46 @@ export const GLUE = {
   LargeMapRange: [9, 12],
 } as const;
 
+/**
+ * `UI\MiscData.txt` [Misc] — the ENGINE's own floating text tags, one spec per kind.
+ *
+ * The game does not eyeball these: it keeps a colour, a drift, a lifetime and a fade point
+ * for every number it floats over the world — `GoldText*`, `LumberText*`, `BountyText*`,
+ * `MissText*`, `CriticalStrikeText*`, `ShadowStrikeText*`, `ManaBurnText*`, `BashText*` —
+ * and the matching `…TextHeight` in `UI\MiscUI.txt` (see MISC_UI). Only the ones a system
+ * here actually raises are transcribed; the rest wait for the systems that raise them.
+ *
+ * Colours are the file's own **ARGB**, like MINIMAP's. `LumberTextColor = 255,0,200,80` is
+ * what proves the order — lumber is green, and read as RGBA that would be a red.
+ *
+ * A velocity is `x,y,?`: the drift in SCREEN units per second, with a third field that is
+ * 100 in every row in the file and is transcribed rather than guessed at. The drift is
+ * screen-relative like the height (see TEXT_TAG_SCALE) — a rising number climbs the SCREEN,
+ * it does not travel north through the world and shrink into the distance.
+ */
+export const TEXT_TAG = {
+  /** "// gold text data" — the "+N" the engine floats when it CREDITS a player gold: a shop
+   *  buying an item back, Transmute's payout. Distinct from `BountyText*` (a creep's bounty),
+   *  which lives three seconds rather than two. */
+  GoldTextColor: [255, 255, 220, 0],
+  GoldTextVelocity: [0, 0.03, 100],
+  GoldTextLifetime: 2,
+  GoldTextFadeStart: 1,
+} as const;
+
+/**
+ * `UI\MiscUI.txt` [Misc] — the heights of those same text tags.
+ *
+ * They live in the OTHER Misc file because they are font sizes, and the file says what the
+ * unit is: "All font heights are in Frame screen units." For a text TAG that is the 0..1
+ * screen, not the 0.8x0.6 FDF box the panels are laid out in — a tag of height 1 fills the
+ * screen top to bottom (see TEXT_TAG_SCALE, and Blizzard.j's `TextTagSize2Height`, which
+ * puts the GUI's "font size 10" at 0.023 — a hair under the 0.024 the engine uses here).
+ */
+export const MISC_UI = {
+  GoldTextHeight: 0.024,
+} as const;
+
 /** The word the Custom Game screen puts against "Map Size", from `GLUE.*MapRange`. */
 export function mapSizeLabel(players: number): string {
   if (players <= GLUE.SmallMapRange[1]) return "Small";

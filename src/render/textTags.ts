@@ -9,19 +9,24 @@
 // trick (see the TextTagObj comment in src/jass/runtime.ts):
 //   • x/y/z are world coordinates — the tag sticks to that spot on the ground (or to a
 //     unit, via SetTextTagPosUnit) and pans/zooms with the camera;
-//   • `size` and the velocity are screen-relative, in the same 0.8×0.6 space the FDF UI
-//     uses. Blizzard.j says so itself:
+//   • `size` and the velocity are screen-relative. Blizzard.j says so itself:
 //         TextTagSize2Height:    size * 0.023 / 10       (font size 10 → height 0.023)
 //         TextTagSpeed2Velocity: speed * 0.071 / 128     ("Screen-relative speeds are
 //                                                          hard to grasp.")
 //     So a rising damage number climbs the SCREEN at a steady rate; it does not travel
 //     north through the world and shrink into the distance.
 //
+//     Screen-relative here means the **0..1 screen**, NOT the 0.8×0.6 box the FDF panels
+//     are laid out in — a tag of height 1.0 fills the screen top to bottom. Reading these
+//     in the FDF space instead is a silent 1/0.6 = 1.67× everywhere, which is exactly what
+//     made a "+400" over a hero read like a headline (issue #120). See `ctx.uiScale`.
+//
 // Drawn as DOM over the canvas (like the HUD and the FDF screens) rather than as a GL
 // pass: the text is crisp at any zoom, WC3's |cAARRGGBB| colour codes come for free from
 // ui/wc3Text, and a text tag is always on top of the world anyway — it has no depth.
 
 import type { TextTagObj } from "../jass/runtime";
+import { MISC_UI, TEXT_TAG } from "../data/gameplayConstants";
 import { wc3ToHtml } from "../ui/wc3Text";
 
 /** What the overlay needs from the engine each frame — kept as a plain interface so this
@@ -38,8 +43,9 @@ export interface TextTagContext {
   unitAt(simId: number): { x: number; y: number; flyHeight: number } | null;
   /** Is that spot lit for the local player? Text under the fog is hidden, like the units. */
   visible(x: number, y: number): boolean;
-  /** CSS px per unit of the 0.8×0.6 UI space (viewport height / 0.6) — the scale that
-   *  turns a tag's screen-relative size and drift into pixels. */
+  /** CSS px per unit of the 0..1 SCREEN — i.e. the viewport height — which is the scale a
+   *  tag's height and drift are expressed in (see the header). Not the FDF panels' 0.8×0.6
+   *  scale; a tag is not a frame. */
   uiScale: number;
 }
 
@@ -158,26 +164,32 @@ export class CombatTextTags {
   private nextId = -1;
 
   /** Raise one piece of combat text over a world point. `followUnit` (> 0) makes it ride the
-   *  unit, which is what a crit number does; a deny's victim is already dead, so it stays put. */
-  spawn(t: { text: string; color: number; x: number; y: number; z: number; followUnit: number }): void {
+   *  unit, which is what a crit number does; a deny's victim is already dead, so it stays put.
+   *  `style` is the kind's own spec where the game keeps one (GOLD_TEXT_STYLE); omitted, the
+   *  tag takes the crit look every kind used to share. */
+  spawn(t: {
+    text: string; color: number; x: number; y: number; z: number; followUnit: number;
+    style?: CombatTextStyle;
+  }): void {
     // A brawl can raise these faster than they expire; cap the list rather than let a
     // long-running match accumulate DOM for text nobody is reading.
     if (this.tags.length >= MAX_COMBAT_TAGS) this.tags.splice(0, this.tags.length - MAX_COMBAT_TAGS + 1);
+    const st = t.style ?? CRIT_TEXT_STYLE;
     this.tags.push({
       handleId: this.nextId--,
       text: t.text,
       x: t.x,
       y: t.y,
       z: t.z,
-      size: COMBAT_TEXT_HEIGHT,
+      size: st.height,
       color: t.color,
       visible: true,
       permanent: false,
-      lifespan: COMBAT_TEXT_LIFESPAN,
-      fadepoint: COMBAT_TEXT_FADEPOINT,
+      lifespan: st.lifetime,
+      fadepoint: st.fadeStart,
       age: 0,
       velX: 0,
-      velY: COMBAT_TEXT_RISE,
+      velY: st.rise,
       offsetX: 0,
       offsetY: 0,
       suspended: false,
@@ -208,16 +220,45 @@ export class CombatTextTags {
   }
 }
 
-// The look, in Blizzard.j's own units so it reads the way the game states it (Blizzard.j
-// 6086-6099): `TextTagSize2Height` scales a font SIZE linearly such that size 10 is a screen
-// height of 0.023, and `TextTagSpeed2Velocity` scales a SPEED such that 128 is 0.071 — both
-// screen-relative, in the 0.8x0.6 UI space, which is why the text climbs the screen at a fixed
-// rate instead of travelling north through the world. Size and speed are matched to the
-// client's crit number by eye; the conversions are the game's.
-const COMBAT_TEXT_HEIGHT = (10 * 0.023) / 10; // font size 10
-const COMBAT_TEXT_RISE = (64 * 0.071) / 128; // speed 64, straight up
-const COMBAT_TEXT_LIFESPAN = 1.2; // seconds on screen
-const COMBAT_TEXT_FADEPOINT = 0.6; // ...of which the last 0.6s fades out
+/** How one KIND of engine text tag looks and behaves. The game keeps a row of exactly these
+ *  four per kind — `<Kind>TextHeight` in UI\MiscUI.txt, `<Kind>TextVelocity` /
+ *  `<Kind>TextLifetime` / `<Kind>TextFadeStart` in UI\MiscData.txt — so this mirrors the row
+ *  rather than inventing a shape. All screen-relative, in the 0..1 screen (see the header). */
+export interface CombatTextStyle {
+  /** Font height as a fraction of the screen. */
+  height: number;
+  /** Screen heights per second, upward. */
+  rise: number;
+  /** Seconds on screen. */
+  lifetime: number;
+  /** …after which it fades to nothing at `lifetime`. */
+  fadeStart: number;
+}
+
+/** The "+N" the engine floats when it CREDITS a player gold — a shop buying an item back
+ *  (issue #120), Transmute's payout. Straight off the game's own `GoldText*` row; nothing
+ *  here is by eye. Note it is a slower, longer-lived tag than a crit: two seconds with the
+ *  last one fading, drifting up at 0.03 screens/sec. */
+export const GOLD_TEXT_STYLE: CombatTextStyle = {
+  height: MISC_UI.GoldTextHeight,
+  rise: TEXT_TAG.GoldTextVelocity[1],
+  lifetime: TEXT_TAG.GoldTextLifetime,
+  fadeStart: TEXT_TAG.GoldTextFadeStart,
+};
+
+// The crit/deny look, in Blizzard.j's own units so it reads the way the game states it
+// (Blizzard.j 6086-6099): `TextTagSize2Height` scales a font SIZE linearly such that size 10
+// is a screen height of 0.023, and `TextTagSpeed2Velocity` scales a SPEED such that 128 is
+// 0.071. Size and speed are matched to the client's crit number by eye; the conversions are
+// the game's. (`CriticalStrikeText*` in the two Misc files is the real row for this one —
+// height 0.024, five seconds, fading from two — and worth adopting the day the crit tag gets
+// looked at properly; it is left alone here so a sizing fix does not silently retune combat.)
+const CRIT_TEXT_STYLE: CombatTextStyle = {
+  height: (10 * 0.023) / 10, // font size 10
+  rise: (64 * 0.071) / 128, // speed 64, straight up
+  lifetime: 1.2, // seconds on screen
+  fadeStart: 0.6, // ...of which the last 0.6s fades out
+};
 const MAX_COMBAT_TAGS = 64;
 
 /** How opaque a tag is right now. A PERMANENT tag never fades. Otherwise it holds full

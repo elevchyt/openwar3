@@ -484,7 +484,11 @@ export class MatchLink {
           lightningStops: this.fxBuf.lightningStops,
           castStarts: this.fxBuf.castStarts.filter((e) => !viewer.fogBlocksAt(e)),
           castFires: this.fxBuf.castFires.filter((e) => !viewer.fogBlocksAt(e)),
-          texts: this.fxBuf.texts.filter((e) => !viewer.fogBlocksAt(e)),
+          // Combat text passes the eyes-on-the-spot test like everything else here, AND an
+          // ADDRESS test: a `gold` credit is only ever the receiving player's business, so it
+          // never enters anyone else's payload (CombatText.forPlayer). A crit and a deny are
+          // public and carry -1.
+          texts: this.fxBuf.texts.filter((e) => (e.forPlayer < 0 || e.forPlayer === player) && !viewer.fogBlocksAt(e)),
         };
       }
       // Deaths ride EVERY send — the record's absence does too, and the death must never

@@ -233,6 +233,21 @@ export interface CombatText {
   /** `deny` only: the slot whose COLOUR the "!" wears (the dead unit's owner). -1 for a crit,
    *  which is red for everyone. */
   colorSlot: number;
+  /**
+   * Whose SCREEN this belongs on: a player slot, or -1 for "everyone who can see the spot".
+   *
+   * A blow is a public fact — the crit landed, the ally was denied, and every client watching
+   * that patch of ground saw it happen. **Being paid is not.** Your gold is yours: WC3 floats
+   * a resource credit on the receiving player's screen alone, and an opponent who happens to
+   * have vision of your hero learns nothing from watching him sell a Claws of Attack. So the
+   * `gold` texts carry the owner here, and it is enforced twice — the host declines to put the
+   * text in anyone else's payload (MatchLink.tickHost) and every client's renderer drops one
+   * addressed to a player it is not (see drainFxCombatTexts' consumer). Two gates because
+   * either one alone leaks: filtering only on the wire still shows it on the HOST's own
+   * screen, and filtering only at the renderer still ships the number to a machine that can
+   * read its own network traffic.
+   */
+  forPlayer: number;
 }
 
 /** A unit type's weapon slots as the sim wants them (see WeaponSlotDef for the data behind
@@ -2947,7 +2962,7 @@ export class SimWorld {
     // the coins land on the hero who handed the item over, not on the shop that took it.
     // Same "+N" the Alchemist's payout raises (transmuteInternal), but ATTACHED here rather
     // than placed: this unit is alive and will walk off, and the number goes with him.
-    if (gold > 0) this.combatTexts.push({ kind: "gold", unitId: u.id, x: u.x, y: u.y, text: `+${gold}`, colorSlot: -1 });
+    if (gold > 0) this.combatTexts.push({ kind: "gold", unitId: u.id, x: u.x, y: u.y, text: `+${gold}`, colorSlot: -1, forPlayer: u.owner });
     if (gold > 0 || lumber > 0)
       this.spellEffects.push({ art: PAWN_GOLD_ART, x: u.x, y: u.y, targetId: u.id, z: 0, life: PAWN_GOLD_FX_LIFE, soundLabel: PAWN_GOLD_SOUND });
     return true;
@@ -4314,7 +4329,7 @@ export class SimWorld {
     const stash = this.stashOf(caster.owner);
     stash.gold += gold;
     stash.lumber += lumber;
-    if (gold > 0) this.combatTexts.push({ kind: "gold", unitId: 0, x: target.x, y: target.y, text: `+${gold}`, colorSlot: -1 });
+    if (gold > 0) this.combatTexts.push({ kind: "gold", unitId: 0, x: target.x, y: target.y, text: `+${gold}`, colorSlot: -1, forPlayer: caster.owner });
     this.kill(target, caster.id);
     return gold;
   }
@@ -12206,7 +12221,7 @@ export class SimWorld {
     // armour — not the pre-mitigation roll. Nothing lands, nothing is printed: a swing the
     // target was invulnerable to (or that an evade ate before this) shows no number.
     if (attacker.swingCrit && dealt > 0) {
-      this.combatTexts.push({ kind: "crit", unitId: target.id, x: target.x, y: target.y, text: `${Math.round(dealt)}!`, colorSlot: -1 });
+      this.combatTexts.push({ kind: "crit", unitId: target.id, x: target.x, y: target.y, text: `${Math.round(dealt)}!`, colorSlot: -1, forPlayer: -1 });
     }
     // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
     if (dealt > 0) this.applyCleave(attacker, target, raw);
@@ -13196,7 +13211,7 @@ export class SimWorld {
     // killer must not be the victim — a unit that blows itself up denied nobody.
     const denier = killerId ? this.units.get(killerId) : undefined;
     if (denier && denier.id !== u.id && u.owner >= 0 && denier.owner >= 0 && !this.hostile(denier, u)) {
-      this.combatTexts.push({ kind: "deny", unitId: 0, x: u.x, y: u.y, text: "!", colorSlot: u.owner });
+      this.combatTexts.push({ kind: "deny", unitId: 0, x: u.x, y: u.y, text: "!", colorSlot: u.owner, forPlayer: -1 });
     }
     this.deathBlast(u); // `Adda` — goblin land mines and sappers take the neighbours with them
     this.orbDeathEffects(u); // Black Arrow raises its minion, Incinerate goes off
