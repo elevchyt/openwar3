@@ -254,12 +254,15 @@ interface Entry {
   /** The held clip outlives the CAST: it neither ends with the order nor breaks on movement
    *  (Bladestorm — see ANIM_FOR_DURATION). Cleared when castAnimT runs out. */
   castAnimSticky: boolean;
-  /** The held clip LOOPS, and so outlives the cast for as long as its effect runs — but only
-   *  while the caster stands still. This is the softer half of `castAnimSticky`, and the
-   *  difference is what `Animnames` draws: `spell,looping` (Healing Spray) is a caster who
-   *  keeps performing and stops the moment he walks off, where Bladestorm's spin IS the
-   *  ability and holds through anything. Cleared when castAnimT runs out. */
-  castAnimLoop: boolean;
+  /** Hold the clip for as long as the unit STANDS STILL, whatever its order says — and drop
+   *  it the moment it walks. This is the softer half of `castAnimSticky`, and the difference
+   *  is what `Animnames` draws: `spell,looping` (Healing Spray) is a caster who keeps
+   *  performing and stops the moment he walks off, where Bladestorm's spin IS the ability and
+   *  holds through anything. It is a rule about the HOLD, not about the loop mode — the same
+   *  rule a one-shot gesture that must play out needs (the Acolyte's summon, see
+   *  playWorkAnimOnce), which is set to ModelDefined and held by this all the same.
+   *  Cleared when castAnimT runs out. */
+  castAnimHeld: boolean;
   /** The TARGET tier's Birth clip while this building is upgrading into it (Scout Tower →
    *  Guard Tower). Resolved once per target and cached here because it costs a sequence-name
    *  pass; `seq` -1 means "this pair has no upgrade clip to play". See upgradeBirthFor. */
@@ -2189,7 +2192,7 @@ export class RtsController {
         lastChopSeq: -1,
         castAnimT: 0,
         castAnimSticky: false,
-        castAnimLoop: false,
+        castAnimHeld: false,
         moveEma: 1,
         prevDrawnX: NaN,
         prevDrawnY: NaN,
@@ -2318,7 +2321,7 @@ export class RtsController {
       lastChopSeq: -1,
       castAnimT: 0,
         castAnimSticky: false,
-        castAnimLoop: false,
+        castAnimHeld: false,
       moveEma: 1,
       prevDrawnX: NaN,
       prevDrawnY: NaN,
@@ -2622,7 +2625,7 @@ export class RtsController {
       lastChopSeq: -1,
       castAnimT: 0,
         castAnimSticky: false,
-        castAnimLoop: false,
+        castAnimHeld: false,
       moveEma: 1,
       prevDrawnX: NaN,
       prevDrawnY: NaN,
@@ -2756,7 +2759,7 @@ export class RtsController {
       // Reset: back to the idle stand, released to the normal animation picker.
       e.castAnimT = 0;
       e.castAnimSticky = false;
-      e.castAnimLoop = false;
+      e.castAnimHeld = false;
       e.unit.state = WidgetState.IDLE;
       if (e.anims.stand >= 0) {
         e.unit.instance.setSequence(e.anims.stand);
@@ -2774,7 +2777,7 @@ export class RtsController {
     e.curSeq = seq;
     e.unit.state = WidgetState.WALK; // hold it against the idle picker
     e.castAnimSticky = false;
-    e.castAnimLoop = false;
+    e.castAnimHeld = false;
     e.castAnimT = seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
   }
 
@@ -3097,11 +3100,12 @@ export class RtsController {
         // channel — the Blademaster keeps walking and killing), and its clip is authored for
         // exactly that ("Attack Walk Stand Spin"). Answering to `order === "cast"` dropped
         // the spin a frame after it began. See SimWorld.ANIM_FOR_DURATION.
-        // `castAnimLoop` is the same test one notch softer: hold while the caster stands
+        // `castAnimHeld` is the same test one notch softer: hold while the unit stands
         // there, whatever the order says. A looping gesture is sized to its EFFECT rather
         // than to the cast (Healing Spray keeps spraying after the order is done), so
-        // answering only to `order === "cast"` cut it off at the backswing.
-        if (e.castAnimSticky || ((u.order === "cast" || e.castAnimLoop) && !u.moving)) {
+        // answering only to `order === "cast"` cut it off at the backswing — and an Acolyte's
+        // summon is not a cast at all, so it has no other way to be held.
+        if (e.castAnimSticky || ((u.order === "cast" || e.castAnimHeld) && !u.moving)) {
           setAnimRate(e, 1); // a cast gesture plays at its authored rate, unhasted
           continue;
         }
@@ -3117,7 +3121,13 @@ export class RtsController {
       // Chopping is chop-driven, like the attack swing: re-trigger the "Attack
       // Lumber" clip ONCE per chop so the swing stays in phase with the chop SFX
       // (a free-running loop drifted out of sync with the sound).
-      const chopping = u.working && u.order === "harvest" && !u.moving && e.anims.chopLumber >= 0;
+      // …and a worker in a Haunted Gold Mine's RING is not chopping anything. It is kneeling
+      // at a mine, and `chopLumber` falls back to the plain attack swing for a model that
+      // authors no "Attack Lumber" — which the Acolyte does not — so this branch had it
+      // hacking at the rock on the chop clock instead of holding its "Stand Work Gold"
+      // (pickSequence's ring branch, which it never reached). `ringSlot` is the flag that
+      // says which of the two jobs the harvest order is.
+      const chopping = u.working && u.order === "harvest" && !u.moving && !u.ringSlot && e.anims.chopLumber >= 0;
       if (chopping) {
         setAnimRate(e, 1);
         if (u.chopSeq !== e.lastChopSeq || e.curSeq !== e.anims.chopLumber) {
@@ -3549,7 +3559,7 @@ export class RtsController {
     // A LOOPING gesture keeps it past the cast too, but yields to a walk. The sim has already
     // sized `hold` to the effect it accompanies — Healing Spray's 3/4/5 seconds of falling
     // bottles — so the Alchemist sprays for the whole spray instead of a third of one clip.
-    e.castAnimLoop = loops;
+    e.castAnimHeld = loops;
   }
 
   private abilityDefByCode(code: string): AbilityDef | undefined {
@@ -3573,6 +3583,35 @@ export class RtsController {
    *  gold mine) — so attached effects can hide/show along with it. */
   unitHidden(simId: number): boolean {
     return this.byId.get(simId)?.hidden ?? true;
+  }
+
+  /**
+   * The Acolyte's SUMMONING gesture: its one work pose, played once over the structure it has
+   * just laid down, and then done with.
+   *
+   * Once, not looped, and that is the shape of the whole race. Every other worker STAYS —
+   * a Peasant hammers, a Peon is inside — so its work clip runs for as long as the job does
+   * and the ordinary picker can drive it off `constructing`. An Acolyte hands the structure
+   * its own clock and walks away the same instant (SimWorld.assignBuilder, `selfBuilds`), so
+   * by the time the picker is next asked there is no job left to read: the gesture has to be
+   * fired here, at the moment it happens, and sized to the clip rather than to a job.
+   *
+   * `Acolyte.mdx` authors no "Stand Work" — "Stand Work Gold" is its only working pose, and
+   * WC3 plays that same kneel for all three of the things an Acolyte does with its hands
+   * (mine, repair, summon). Held by `castAnimHeld`, so it plays out where the Acolyte stands
+   * and breaks the instant the player walks it off, which is what the original shows.
+   */
+  playWorkAnimOnce(simId: number): void {
+    const e = this.byId.get(simId);
+    const seq = e?.anims.standWorkGold ?? -1;
+    if (!e || seq < 0) return;
+    e.curSeq = seq;
+    e.unit.state = WidgetState.WALK; // keep the idle picker off it
+    e.unit.instance.setSequence(seq);
+    e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined); // play once, hold the last frame
+    e.castAnimT = seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
+    e.castAnimSticky = false;
+    e.castAnimHeld = true; // hold while it stands there; a walk order drops it at once
   }
 
   /** A summoned/raised unit materializes: play its birth clip and lock it out of
@@ -3835,7 +3874,7 @@ export class RtsController {
   /** Armed command-card order; the next left-click executes it instead of
    *  selecting. "rally" sets a building's rally point; "repair" targets a
    *  damaged friendly building; "cast" targets a spell (see armedCast). */
-  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "cast" | "item" | "selectuser" | "load" | null = null;
+  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "harvest" | "cast" | "item" | "selectuser" | "load" | null = null;
   /** The shop awaiting a purchaser pick when orderMode === "selectuser" (WC3's "Select
    *  Hero"/"Select Unit"). Unlike every other armed order this one belongs to a building
    *  the player may not even own — a neutral Goblin Merchant — so it carries the shop's id
@@ -4047,6 +4086,10 @@ export class RtsController {
       this.repairAt(this.pickAt(cssX, cssY), queued);
       return true;
     }
+    if (mode === "harvest") {
+      this.harvestAt(cssX, cssY, queued);
+      return true;
+    }
     if (mode === "move") {
       // A Move command AIMED AT A UNIT OR BUILDING means "go to THAT thing", so its
       // destination is the target's CENTRE — not wherever the click ray happens to meet the
@@ -4136,10 +4179,11 @@ export class RtsController {
       }
       return "none";
     }
-    // A spell, an item, a repair or a shop's purchaser pick is aimed at a thing in the
-    // WORLD, never at the minimap — swallow the click and leave it armed (right-click,
-    // above, is how you back out of one).
-    if (mode === "cast" || mode === "item" || mode === "repair" || mode === "selectuser" || mode === "load") return "ignored";
+    // A spell, an item, a repair, a GATHER or a shop's purchaser pick is aimed at a thing in
+    // the WORLD, never at the minimap — swallow the click and leave it armed (right-click,
+    // above, is how you back out of one). A tree or a mine on the minimap is a pixel, not a
+    // node, and there is no picking either of them out of it.
+    if (mode === "cast" || mode === "item" || mode === "repair" || mode === "harvest" || mode === "selectuser" || mode === "load") return "ignored";
     if (mode === "rally") {
       this.orderMode = null;
       for (const id of this.selected) {
@@ -4985,7 +5029,9 @@ export class RtsController {
         return { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) };
       case "hold":
       case "stop":
-        return null; // neither has a destination/target to draw a marker for
+      case "returnresources":
+        return null; // none of these has a destination/target to draw a marker for — the
+        // depot a Return Goods walks to is picked at the moment it runs, not at the click
       case "attack":
       case "follow": {
         const t = this.sim.units.get(o.targetId);
@@ -5875,40 +5921,7 @@ export class RtsController {
           return;
         }
       }
-      // Fan the group around the mine's rim (distinct approach points) so they
-      // don't all path to the one entry point and pile up while they wait their
-      // turn — a mine takes one worker at a time. Nearest-slot keeps each worker
-      // on the side it walked up from; after the first trip the sim re-forms the
-      // usual mine→hall line (mineApproach), so this only cleans up the approach.
-      // A mine wrapped in roots is not mined, it is MANNED — there is no shaft to walk into
-      // and a wisp has no pick — so the click means the crew, and it means it while the roots
-      // are still closing (patch 1.10). The building covers the rock, so most clicks here are
-      // caught by `orderOnBuilding` above; this is the one that lands on the rim of the
-      // footprint instead, and without it those fell through `issueHarvest`'s refusal to a
-      // plain move and the wisps stood beside the mine doing nothing.
-      const host = mine.entangledBy > 0 ? this.sim.units.get(mine.entangledBy) : undefined;
-      if (host && prim && !this.sim.hostile(prim, host)) {
-        if (this.manHold(host, host.id)) {
-          this.flashRing(host.x, host.y, this.byId.get(host.id)?.selRadius ?? host.radius, FLASH_GREEN);
-          return;
-        }
-      }
-      const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker?.gold);
-      // A HAUNTED mine's rim click means the ring, and `issueHarvest` already knows: the
-      // order is the same one, and it is the mine's own state that decides whether the worker
-      // walks into a shaft or kneels outside it. Nothing extra to do here.
-      // A little extra breathing room on the approach ring so they don't bunch on
-      // one side of the mine (kept modest — miners must still land within entry reach).
-      const spread = ringTargets(this.sim, workers, mine.x, mine.y, mine.radius, MINE_APPROACH_SPREAD);
-      let any = false;
-      for (const id of workers) {
-        const p = spread.get(id);
-        if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "harvest", res: "gold", nodeId: mine.id, ax: p?.[0], ay: p?.[1] }, queued: queued })) any = true;
-      }
-      if (any) {
-        this.flashTarget(mine.x, mine.y, mine.radius * MINE_RING_SCALE); // match the mine's hover/selection ring
-        return;
-      }
+      if (this.sendToMine(mine, prim, queued)) return;
     }
     const treeHit = this.treePickPoint() ?? hit; // raised plane → clicking up the tree still hits
     const tree = this.sim.nearestTree(treeHit[0], treeHit[1], 140);
@@ -5942,48 +5955,124 @@ export class RtsController {
           return;
         }
       }
-      // Spread the group across nearby trees so they don't all crowd the one
-      // clicked trunk and shove each other. Gather the lumber workers, pull the
-      // N nearest trees to the click (N = worker count), then hand each worker
-      // the least-crowded candidate, breaking ties by which is closest to it.
-      const workers: number[] = [];
-      for (const id of this.selected) {
-        if (this.sim.units.get(id)?.worker?.lumber) workers.push(id);
-      }
-      if (workers.length) {
-        const trees = this.sim.nearestTrees(tree.x, tree.y, 220, workers.length);
-        const load = new Map<number, number>(trees.map((t) => [t.id, 0]));
-        let any = false;
-        const targeted = new Set<number>();
-        for (const id of workers) {
-          const w = this.sim.units.get(id)!;
-          // fill each tree once (load dominates) before doubling up; nearest wins ties.
-          let best = trees[0];
-          let bestScore = Infinity;
-          for (const t of trees) {
-            const score = load.get(t.id)! * 1e6 + Math.hypot(t.x - w.x, t.y - w.y);
-            if (score < bestScore) {
-              bestScore = score;
-              best = t;
-            }
-          }
-          if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "harvest", res: "lumber", nodeId: best.id }, queued: queued })) {
-            load.set(best.id, load.get(best.id)! + 1);
-            targeted.add(best.id);
-            any = true;
-          }
-        }
-        if (any) {
-          this.flashTarget(tree.x, tree.y, 76); // a bigger ring around the clicked tree
-          for (const t of trees) if (targeted.has(t.id)) this.treePulses.push({ x: t.x, y: t.y });
-          return;
-        }
-      }
+      if (this.sendToTrees(tree, queued)) return;
     }
     // …and the arrow only if somebody is actually going: `groupMove` reports whether any unit
     // took the order, and a selection that can't walk must not stamp a destination it will
     // never reach on the ground (see queueArrow).
     if (this.groupMove(hit[0], hit[1], queued)) this.queueArrow(hit[0], hit[1], MOVE_ARROW); // green move-order feedback
+  }
+
+  /**
+   * Send the selection's gold workers at a mine — the shared body of a right-click on the
+   * rock and of an armed Gather click on it. Returns whether anybody took the order.
+   *
+   * Fan the group around the mine's rim (distinct approach points) so they don't all path to
+   * the one entry point and pile up while they wait their turn — a mine takes one worker at a
+   * time. Nearest-slot keeps each worker on the side it walked up from; after the first trip
+   * the sim re-forms the usual mine→hall line (mineApproach), so this only cleans up the
+   * approach, with a little extra breathing room so they don't bunch on one side (kept
+   * modest — miners must still land within entry reach).
+   *
+   * A mine wrapped in ROOTS is not mined, it is MANNED — there is no shaft to walk into and a
+   * wisp has no pick — so the click means the crew, and it means it while the roots are still
+   * closing (patch 1.10). A HAUNTED one needs nothing extra: the order is the same harvest
+   * order, and it is the mine's own state that decides whether the worker walks into a shaft
+   * or kneels outside it.
+   */
+  private sendToMine(mine: SimMine, prim: SimUnit | undefined, queued: boolean): boolean {
+    const host = mine.entangledBy > 0 ? this.sim.units.get(mine.entangledBy) : undefined;
+    if (host && host.garrisonCap > 0 && prim && !this.sim.hostile(prim, host)) {
+      if (this.manHold(host, host.id)) {
+        this.flashRing(host.x, host.y, this.byId.get(host.id)?.selRadius ?? host.radius, FLASH_GREEN);
+        return true;
+      }
+    }
+    const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker?.gold);
+    const spread = ringTargets(this.sim, workers, mine.x, mine.y, mine.radius, MINE_APPROACH_SPREAD);
+    let any = false;
+    for (const id of workers) {
+      const p = spread.get(id);
+      if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "harvest", res: "gold", nodeId: mine.id, ax: p?.[0], ay: p?.[1] }, queued })) any = true;
+    }
+    if (any) this.flashTarget(mine.x, mine.y, mine.radius * MINE_RING_SCALE); // match the mine's hover/selection ring
+    return any;
+  }
+
+  /**
+   * Send the selection's lumber workers at a trunk — the shared body of a right-click on a
+   * tree and of an armed Gather click on one. Returns whether anybody took the order.
+   *
+   * Spread the group across nearby trees so they don't all crowd the one clicked trunk and
+   * shove each other: pull the N nearest trees to the click (N = worker count), then hand each
+   * worker the least-crowded candidate, breaking ties by which is closest to it.
+   */
+  private sendToTrees(tree: { id: number; x: number; y: number }, queued: boolean): boolean {
+    const workers: number[] = [];
+    for (const id of this.selected) {
+      if (this.sim.units.get(id)?.worker?.lumber) workers.push(id);
+    }
+    if (!workers.length) return false;
+    const trees = this.sim.nearestTrees(tree.x, tree.y, 220, workers.length);
+    const load = new Map<number, number>(trees.map((t) => [t.id, 0]));
+    let any = false;
+    const targeted = new Set<number>();
+    for (const id of workers) {
+      const w = this.sim.units.get(id)!;
+      // fill each tree once (load dominates) before doubling up; nearest wins ties.
+      let best = trees[0];
+      let bestScore = Infinity;
+      for (const t of trees) {
+        const score = load.get(t.id)! * 1e6 + Math.hypot(t.x - w.x, t.y - w.y);
+        if (score < bestScore) {
+          bestScore = score;
+          best = t;
+        }
+      }
+      if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "harvest", res: "lumber", nodeId: best.id }, queued })) {
+        load.set(best.id, load.get(best.id)! + 1);
+        targeted.add(best.id);
+        any = true;
+      }
+    }
+    if (any) {
+      this.flashTarget(tree.x, tree.y, 76); // a bigger ring around the clicked tree
+      for (const t of trees) if (targeted.has(t.id)) this.treePulses.push({ x: t.x, y: t.y });
+    }
+    return any;
+  }
+
+  /**
+   * The armed GATHER cursor's click (the harvest row's `Art` face — see isHarvestCode).
+   *
+   * The same two nodes a right-click would find, and NOTHING else: a Gather aimed at an enemy
+   * is not an attack and a Gather aimed at bare ground is not a move. Clicking a mine's
+   * BUILDING is clicking the mine, because the building covers the rock — that is the same
+   * redirection `orderOnBuilding` makes for a right-click on a Haunted Gold Mine.
+   */
+  private harvestAt(cssX: number, cssY: number, queued: boolean): void {
+    const prim = this.primary !== null ? this.sim.units.get(this.primary) ?? undefined : undefined;
+    const picked = this.pickAt(cssX, cssY);
+    const target = picked !== null ? this.sim.units.get(picked) : undefined;
+    let mine = target?.mineId ? this.sim.mines.get(target.mineId) ?? null : null;
+    const hit = this.groundPoint(cssX, cssY);
+    if (!mine && hit) mine = this.mineAt(hit[0], hit[1], 320); // …and you cannot mine what you cannot see
+    if (mine && this.sendToMine(mine, prim, queued)) { this.ack(false); return; }
+    const treeHit = this.treePickPoint() ?? hit; // raised plane → clicking up the tree still hits
+    const tree = treeHit ? this.sim.nearestTree(treeHit[0], treeHit[1], 140) : null;
+    if (tree && this.sendToTrees(tree, queued)) this.ack(false);
+  }
+
+  /** The Gather row's OTHER face: take what the selection is carrying to the nearest depot.
+   *  Returns whether anybody had a load to carry, so the caller can fall back to arming the
+   *  gather cursor for the workers that are empty-handed. */
+  returnResourcesSelected(): boolean {
+    let any = false;
+    for (const id of this.selected) {
+      if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "returnresources" }, queued: false })) any = true;
+    }
+    if (any) this.ack(false);
+    return any;
   }
 
   /** Is every unit in the selection a PLANTED building — nothing in it that could take a

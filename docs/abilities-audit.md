@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 322, **done** 194, **partial** 2, **passive** 13, **todo** 268.
+Totals: 799 rows — **alias** 323, **done** 195, **partial** 3, **passive** 13, **todo** 265.
 
 ## Art paths this install does not ship
 
@@ -83,7 +83,7 @@ Known gaps that are NOT ability rows, found while auditing:
 
 ## Unimplemented base codes, by alias fanout
 
-188 distinct base `code`s cover the 268 todo rows. Implementing one
+186 distinct base `code`s cover the 265 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -129,7 +129,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Aesn` | Sentinel | 2 | tree,vuln,invu | sentinel | `Aesn` `Aesr` |
 | `ACtc` | Slam | 2 | ground,neutral | creepthunderclap | `ACt2` `ACtc` |
 | `Atau` | Taunt | 2 | air,ground,enemy,vuln,invu | taunt | `ANta` `Atau` |
-| `Aweb` | Web | 2 | air,enemy,neutral | web | `ACwb` `Aweb` |
 | `Aimp` |  | 1 |  |  | `Aimp` |
 | `Ansp` |  | 1 |  |  | `Ansp` |
 | `Aabs` | Absorb Mana | 1 | player,vuln,invu | absorbmana | `Aabs` |
@@ -172,7 +171,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Afsh` | Fragmentation Shards | 1 | ground,enemy,neutral |  | `Afsh` |
 | `Afrz` | Freezing Breath | 1 | structure,enemy | freezingbreath | `Afrz` |
 | `Afzy` | Frenzy | 1 | air,ground,self | frenzy | `Afzy` |
-| `Aaha` | Gather | 1 |  | harvest | `Aaha` |
 | `Aeth` | Ghost | 1 |  |  | `Aeth` |
 | `Agho` | Ghost | 1 |  |  | `Agho` |
 | `Agld` | Gold Mine ability | 1 |  |  | `Agld` |
@@ -556,7 +554,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `Afrb` | `Afrb` | Frost Breath | undead |  |  | air,ground | 1 |  | Frost Breath |
 | ~ | `ACfn` | `AUfn` | Frost Nova | creeps |  |  | ground,enemy,air,neutral,organic | 1 | frostnova | Frost Nova (creep) |
 | x | `AUfn` | `AUfn` | Frost Nova | undead | H |  | ground,enemy,air,neutral,organic | 1 | frostnova | Lich - Frost Nova |
-|   | `Aaha` | `Aaha` | Gather | undead |  |  |  |  | harvest | Acolyte Harvest |
+| / | `Aaha` | `Aaha` | Gather | undead |  |  |  |  | harvest | Acolyte Harvest |
 | ~ | `Awh2` | `Awha` | Gather | creeps |  |  | tree,vuln,invu,alive,dead | 1 | harvest | Wisp Harvest (Invulnerable) |
 | x | `Awha` | `Awha` | Gather | nightelf |  |  | tree,alive,dead | 1 | harvest | Wisp Harvest |
 | ~ | `AIp1` | `AIrg` | Generic Item-Rejuv Effect | other |  | I |  |  |  | Potion of Rejuv I |
@@ -1076,7 +1074,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `AIwm` | `ANwm` | Watery Minion | other |  | I |  | 1 | wateryminion | Watery Minion (item) |
 |   | `ANwm` | `ANwm` | Watery Minion | creeps | H |  |  | 1 | wateryminion | Watery Minion |
 |   | `Awrp` | `Awrp` | Waygate ability | other |  |  |  |  |  | Warp |
-|   | `ACwb` | `Aweb` | Web | creeps |  |  | air,enemy,neutral | 1 | web | Web (creep) |
-|   | `Aweb` | `Aweb` | Web | undead |  |  | air,enemy,neutral | 1 | web | Web |
+| ~ | `ACwb` | `Aweb` | Web | creeps |  |  | air,enemy,neutral | 1 | web | Web (creep) |
+| x | `Aweb` | `Aweb` | Web | undead |  |  | air,enemy,neutral | 1 | web | Web |
 | ~ | `ANwk` | `AOwk` | Wind Walk | creeps | H |  |  |  | windwalk | Wind Walk |
 | x | `AOwk` | `AOwk` | Wind Walk | orc | H |  | air,ground,enemy,neutral |  | windwalk | Blade Master - Wind Walk |

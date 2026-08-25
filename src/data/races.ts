@@ -162,6 +162,25 @@ const WORKER_BY_HARVEST: Record<string, WorkerProfile> = Object.fromEntries(
   Object.values(WORKERS).map((w) => [w.harvestAbility, w]),
 );
 
+/**
+ * Is this base ability code a HARVEST row — `Ahar` Gather (Peasant / Peon), `Ahrl` Ghoul
+ * Harvest Lumber, `Aaha` Acolyte Harvest, `Awha` Wisp Harvest?
+ *
+ * Asked of the same map the worker profile is keyed off, so there is one list of harvest
+ * codes in the codebase rather than two that could drift. The COMMAND CARD is what asks: one
+ * BUTTON stands behind all four rows, and the data says so twice over — each carries the same
+ * `Art=BTNGatherGold` / `Unart=BTNReturnGoods` pair at the same `Buttonpos=3,1` with the same
+ * `Order=harvest`, and `[Ahrl]`'s entry in CommonAbilityFunc.txt is a comment saying it out
+ * loud: "Lumber Harvest uses button art and position from the [Ahar] Harvest ability."
+ *
+ * The `Un` half is not a toggle but a STATE: a worker carrying a load shows Return Goods,
+ * because returning is what the same button does next. A Wisp and an Acolyte never carry
+ * anything, so theirs never turns over — which is what the original shows too.
+ */
+export function isHarvestCode(code: string): boolean {
+  return Object.prototype.hasOwnProperty.call(WORKER_BY_HARVEST, code);
+}
+
 /** The worker profile for a type, by id first and then by the harvest ability it carries.
  *  `abilityCodes` is the unit's abilities resolved to their BASE codes (a custom map's
  *  `A000` based on `Ahar` is still `Ahar`) — the caller has the ability registry. */

@@ -345,6 +345,10 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     const t = workTokens(s.name);
     return t.includes("stand") && t.includes("work") && !t.includes("gold") && !t.includes("lumber") && !t.includes("alternate");
   });
+  // Anchored on the whole phrase: "Stand Work Gold" is deliberately excluded from
+  // `standWork` above (it is a mining pose, not a production one) and is found here instead.
+  // See the field's own note for why only the Acolyte has one.
+  const standWorkGold = find(/^stand work gold\s*$/i);
   return {
     stand,
     standVariants: standVariants.length ? standVariants : stand >= 0 ? [stand] : [],
@@ -365,13 +369,16 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     walkLumber: or(find(/walk lumber/i), walk),
     chopLumber: or(find(/attack lumber/i), attack),
     standWork,
-    // Anchored on the whole phrase: "Stand Work Gold" is deliberately excluded from
-    // `standWork` above (it is a mining pose, not a production one) and must be found here
-    // instead. See the field's own note for why only the Acolyte has one.
-    standWorkGold: find(/^stand work gold\s*$/i),
+    standWorkGold,
     // A worker with no work clip hammers with its attack swing — which is exactly what a
     // Peasant does, and why this fallback cannot be shared with `standWork` above.
-    build: or(standWork, attack),
+    //
+    // …but "no work clip" has to include the ACOLYTE's, and that is the middle rung. Its
+    // model authors no "Stand Work" at all — its one working pose is "Stand Work Gold", and
+    // WC3 plays that same kneel for all three of the jobs it has: mining a Haunted Gold Mine,
+    // repairing, and the summoning gesture it makes over a building it lays down. Falling
+    // straight through to `attack` had an Acolyte swing at everything it mended.
+    build: or(standWork, or(standWorkGold, attack)),
     decayFlesh: find(/decay flesh/i),
     decayBone: find(/decay bone/i),
     // Anchored: "Morph" must not pick up "Morph Alternate", which is the OTHER direction's

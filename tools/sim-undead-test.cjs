@@ -13,6 +13,9 @@
 //                     DataD 200 ring OUTSIDE the building. No load, no trip, no depot.
 //   Unsummon          `Auns` DataA "Salvage Cost Ratio" 0.5 — half the cost back, which is
 //                     what lets an Undead base be re-shaped rather than lived with.
+//   Web               `Aweb` — Ensnare aimed upward (they share AbilityMetaData's `Ens1..Ens3`
+//                     group): the target is pinned AND pulled out of the air, so ground units
+//                     can reach it.
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
@@ -45,6 +48,8 @@ const ABILITIES = {
   Aaha: { id: "Aaha", code: "Aaha", target: "none", targetFlags: [], levelData: [lvl({ castRange: 200, duration: 1 })] },
   // Unsummon: half the cost back, accumulated in steps of 50.
   Auns: { id: "Auns", code: "Auns", target: "unit", targetFlags: ["structure", "player"], levelData: [lvl({ data: [0.5, 50] })] },
+  // Web: `targs1 = air,enemy,neutral`, Dur1 12 / HeroDur1 7 — Ensnare's own columns, aimed up.
+  Aweb: { id: "Aweb", code: "Aweb", target: "unit", targetFlags: ["air", "enemy", "neutral"], buffArt: "", buffFx: [], targetArt: "", levelData: [lvl({ duration: 12, heroDuration: 7, castRange: 400, data: [0.6, 200, 128] })] },
 };
 const abilities = { get: (id) => ABILITIES[id] };
 
@@ -53,6 +58,8 @@ const UNITS = {
   uaco: { id: "uaco", abilities: ["Aaha"], moveType: "foot", upgradesUsed: [], buildTime: 15, goldCost: 75, lumberCost: 0, manaRegen: 0, regenType: "blight", hpRegen: 4, requirePlace: "" },
   unpl: { id: "unpl", abilities: ["Abgl"], moveType: "foot", upgradesUsed: [], buildTime: 90, goldCost: 225, lumberCost: 0, manaRegen: 0, regenType: "none", hpRegen: 0, requirePlace: "" },
   uzig: { id: "uzig", abilities: ["Abgs"], moveType: "foot", upgradesUsed: [], buildTime: 50, goldCost: 150, lumberCost: 50, manaRegen: 0, regenType: "none", hpRegen: 0, requirePlace: "blighted" },
+  ucry: { id: "ucry", abilities: ["Aweb"], moveType: "foot", upgradesUsed: [], buildTime: 0, goldCost: 215, lumberCost: 40, manaRegen: 0, regenType: "none", hpRegen: 0, requirePlace: "" },
+  ugar: { id: "ugar", abilities: [], moveType: "fly", upgradesUsed: [], buildTime: 0, goldCost: 220, lumberCost: 30, manaRegen: 0, regenType: "none", hpRegen: 0, requirePlace: "", moveHeight: 240 },
   ugol: { id: "ugol", abilities: ["Abgs", "Abgm"], moveType: "foot", upgradesUsed: [], buildTime: 100, goldCost: 225, lumberCost: 210, manaRegen: 0, regenType: "none", hpRegen: 0, requirePlace: "" },
   // A Human Farm — the dispel half of the same mechanism.
   hhou: { id: "hhou", abilities: ["Abds"], moveType: "foot", upgradesUsed: [], buildTime: 35, goldCost: 80, lumberCost: 20, manaRegen: 0, regenType: "none", hpRegen: 0, requirePlace: "" },
@@ -238,6 +245,83 @@ console.log("Unsummon (`Auns`) — half the cost back, in steps of 50");
   w2.add(base({ id: 2, typeId: "uzig", owner: 1, team: 1, x: 2000, y: 2000, hp: 600, maxHp: 600, speed: 0, radius: 48, isBuilding: true, name: "Ziggurat" }), BUILT(2000, 2000));
   check("an enemy's building is refused", !w2.unsummonBuilding(w2.units.get(1), w2.units.get(2), 0.5, 50));
   check("…and it is still standing", w2.units.has(2));
+}
+
+console.log("An Acolyte kneels ON its mark, not near it (the UndeadMineCircle stations)");
+{
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  const mine = world.addMine(4000, 4000, 12500, 128);
+  const host = world.add(base({ id: 50, typeId: "ugol", x: 4000, y: 4000, hp: 950, maxHp: 950, speed: 0, radius: 128, isBuilding: true, name: "Haunted Gold Mine" }), BUILT(4000, 4000));
+  world.attachEntangled(50, mine.id, 0);
+  const stations = world.mineRingStations(host);
+  // Five of them, because `Abgm` DataC1 says five — never a count typed into the renderer.
+  check("the mine publishes one station per miner", stations.length === 5, `${stations.length}`);
+  check("…each at the DataD1 = 200 ring (or pushed straight out of solid ground)", stations.every(([x, y]) => Math.hypot(x - 4000, y - 4000) >= 200 - 1e-6));
+  for (let i = 0; i < 3; i++) {
+    world.add(acolyte(60 + i, 4000 + 400, 4000 - 400 + i * 64));
+    world.issueHarvest(60 + i, "gold", mine.id);
+  }
+  for (let t = 0; t < 20 / 0.05; t++) world.tick(0.05);
+  const crew = [...world.units.values()].filter((u) => u.ringSlot > 0 && u.working);
+  check("three Acolytes arrived", crew.length === 3, `${crew.length}`);
+  // EXACTLY on it: the marks are drawn from these same coordinates, so "close enough" would
+  // read as three Acolytes standing beside three circles.
+  const off = crew.map((u) => Math.hypot(u.x - stations[u.ringSlot - 1][0], u.y - stations[u.ringSlot - 1][1]));
+  check("…each standing exactly on its own station", off.every((d) => d < 1e-6), off.map((d) => d.toFixed(1)).join(", "));
+}
+
+console.log("A worker RALLIED at a Haunted Gold Mine mines it (a ring is not a cargo hold)");
+{
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  const mine = world.addMine(4000, 4000, 12500, 128);
+  world.add(base({ id: 50, typeId: "ugol", x: 4000, y: 4000, hp: 950, maxHp: 950, speed: 0, radius: 128, isBuilding: true, name: "Haunted Gold Mine" }), BUILT(4000, 4000));
+  world.attachEntangled(50, mine.id, 0);
+  world.add(acolyte(60, 4000 + 600, 4000));
+  // The rally path (renderer `applyRally`) comes through here, and it used to answer a
+  // building-over-a-mine with `issueGarrison` whatever kind of building it was — which a
+  // Haunted Gold Mine, having no hold, refuses. The Acolyte then walked to a flag and stood.
+  check("the rally order is taken", world.issueGoldWork(60, mine.id));
+  check("…as a HARVEST", world.units.get(60).order === "harvest", world.units.get(60).order);
+  for (let t = 0; t < 20 / 0.05; t++) world.tick(0.05);
+  check("…and the Acolyte is kneeling in the ring", world.units.get(60).ringSlot > 0 && world.units.get(60).working);
+  check("…with gold arriving", world.stashOf(0).gold > 0, `${Math.round(world.stashOf(0).gold)}`);
+}
+
+console.log("Return Resources — the Gather button's other face");
+{
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  world.add(base({ id: 1, typeId: "unpl", x: 2000, y: 2000, hp: 1500, maxHp: 1500, speed: 0, radius: 64, isBuilding: true, depotGold: true, depotLumber: true, name: "Necropolis" }), BUILT(2000, 2000));
+  const w = world.add(acolyte(2, 2400, 2000));
+  check("an empty-handed worker has nothing to return", !world.issueReturnResources(2));
+  w.worker.carryGold = 10;
+  check("…and a loaded one does", world.issueReturnResources(2));
+  check("…heading home", world.units.get(2).order === "return", world.units.get(2).order);
+}
+
+console.log("Web (`Aweb`) — Ensnare aimed upward: pinned AND pulled to the ground");
+{
+  const world = newWorld();
+  const fiend = world.add(
+    base({ id: 1, typeId: "ucry", x: 2000, y: 2000, hp: 550, maxHp: 550, speed: 220, radius: 16, name: "Crypt Fiend" }),
+    null,
+    { abilities: [{ id: "Aweb", code: "Aweb", level: 1, cooldownLeft: 0, autocastOn: false }] },
+  );
+  const gar = world.add(base({ id: 2, typeId: "ugar", owner: 1, team: 1, x: 2200, y: 2000, hp: 500, maxHp: 500, speed: 250, radius: 16, flying: true, flyHeight: 240, targetedAs: "air", name: "Gargoyle" }));
+  check("it starts in the air", gar.flying && gar.flyHeight === 240 && !gar.webbed);
+  check("the handler is wired", typeof SPELL_HANDLERS.Aweb === "function");
+  check("the cast lands", world.issueCast(1, "Aweb", 2, 0, 0));
+  for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05);
+  check("the Gargoyle is webbed", gar.webbed === true);
+  check("…pulled down to the floor", gar.flyHeight === 0, `${gar.flyHeight}`);
+  check("…and pinned where it stands", gar.speed === 0 || !gar.moving, `speed ${gar.speed}`);
+  // …and it goes back up when the web expires (Dur1 = 12).
+  for (let t = 0; t < 12 / 0.05; t++) world.tick(0.05);
+  check("the web wears off", gar.webbed === false);
+  check("…and it takes to the air again", gar.flyHeight === 240, `${gar.flyHeight}`);
+  void fiend;
 }
 
 console.log(failed ? `\nsim-undead: ${failed} FAILED` : "\nall passed");

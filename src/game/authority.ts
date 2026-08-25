@@ -1,6 +1,7 @@
 import { isOffField, type SimWorld, type QueuedOrder } from "../sim/world";
 import type { UnitRegistry } from "../data/units";
 import type { AbilityRegistry } from "../data/abilities";
+import { isHarvestCode } from "../data/races";
 import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
@@ -339,6 +340,12 @@ export class Authority {
     const u = this.sim.units.get(unitId);
     if (!u) return null;
     for (const ab of u.abilities) {
+      // GATHER is on a worker's ability list now (isHarvestCode — that is where its command
+      // card button comes from), but it is not a CAST: its target is a resource node, which is
+      // not a unit and is not something `issueCast` could ever be handed. Left in, a script's
+      // `IssueTargetOrder(u, "harvest", …)` would be answered here with a refusal instead of
+      // falling through to the generic handling below, where it has always gone.
+      if (isHarvestCode(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       if (def.order === order) return this.sim.issueCast(unitId, ab.code, targetId, x, y);

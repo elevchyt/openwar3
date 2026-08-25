@@ -825,6 +825,32 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(t, { kind: "root", group: "ensnare", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: 1, ...fx(def) });
   },
 
+  /**
+   * Web (`Aweb`, the Crypt Fiend) — Ensnare aimed upward.
+   *
+   * The two are ONE ability in the data: AbilityMetaData.slk declares the `Ens1..Ens3` field
+   * group `useSpecific = "Aens,ACen,Aweb,ACwb,AIwb"`, so a Web's Data columns are an
+   * Ensnare's columns, and the numbers agree too (both `DataA` 0.6, `DataB` 200). What is not
+   * shared is `targs1`: Ensnare takes `ground,air,enemy,neutral` and Web takes
+   * **`air,enemy,neutral`** — it is the half of Ensnare that only ever points at a flyer.
+   *
+   * Which is why it does the one thing Ensnare's handler does not have to: the target is
+   * pulled DOWN. `group: "web"` is what says so — recomputeStats reads it back and drops the
+   * unit's `flyHeight` to the floor and its target class from `air` to `ground`, so melee
+   * units can reach a webbed Gargoyle for as long as it holds. The root itself is the same
+   * full pin Ensnare applies (value 1: it cannot move, it can still shoot), and the duration
+   * is the same `dur()` — 12 seconds, 7 on a hero or anything with Resistant Skin.
+   *
+   * The button is gated by `[Aweb] Requires=Ruwb` (the Crypt's Web upgrade) through the
+   * ordinary tech check, so nothing here has to know the research exists.
+   */
+  Aweb: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.hostile(caster, t)) return;
+    const lvl = def.levelData[rank - 1];
+    api.applyBuff(t, { kind: "root", group: "web", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: 1, ...fx(def) });
+  },
+
   // Lightning Shield (Shaman) — a shield of electricity around the TARGET: the target is
   // unharmed, but every unit around it takes dataA dps (area = radius). Cast it on an enemy
   // (hurts them + their neighbours) or an expendable own unit. See tickLightningShields.

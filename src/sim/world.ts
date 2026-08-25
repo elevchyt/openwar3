@@ -827,6 +827,11 @@ export type QueuedOrder =
   // ax/ay: optional distinct approach point around the node, so a group ordered
   // together fans over the mine's rim instead of all pathing to its centre.
   | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number; ax?: number; ay?: number }
+  // The other half of the Gather button. Every harvest row carries a pair of faces —
+  // `Art=BTNGatherGold` / `Unart=BTNReturnGoods` (see isHarvestCode) — and this is what the
+  // second one orders: take what you are carrying to the nearest depot, now. It takes no
+  // target, because the depot is not a thing the player picks.
+  | { kind: "returnresources" }
   // `paid` is whether the cost has already left the stash. A build placed outright is paid at
   // the click (the gold drops the instant you put the ghost down); a SHIFT-queued one is not —
   // it is priced when its turn in the queue comes round, because a building queued behind two
@@ -1318,6 +1323,11 @@ export interface SimUnit {
   waygate?: WaygateState | null; // JASS WaygateSetDestination/Activate — a Way Gate ('nwgt'), 7.22
   silenced: boolean; // derived from buffs (cannot cast spells)
   ethereal: boolean; // derived from buffs (Banish): can't attack, immune to physical damage
+  /** Pulled out of the air and stuck to the ground — derived from a `web` root buff the way
+   *  `ethereal` is derived from Banish's. While it is set the unit answers to `ground` rather
+   *  than `air` (targetKeyOf) and is drawn on the floor (flyHeight 0), which is the whole of
+   *  what Web does that Ensnare does not. False for everything that never flew. */
+  webbed: boolean;
   /** Magic Immunity (`Amim`, and the creep copies that share its code) — the unit cannot be
    *  the target of a spell at all, and takes no spell damage. Carried by the Dryad, the
    *  Spell Breaker, the Destroyer, the Faerie Dragon, the Phoenix and the Serpent Wards
@@ -1805,7 +1815,7 @@ function speedBuilds(u: SimUnit): boolean {
  *
  *  Nothing else in the game works this way except the Entangled Gold Mine, which arrives at
  *  the same flag from the other end (nobody CAN be put on it). */
-function summonsBuildings(u: SimUnit): boolean {
+export function summonsBuildings(u: SimUnit): boolean {
   return u.race === "undead";
 }
 /** The grid domain a unit searches — see SimUnit.waterborne. */
@@ -3355,6 +3365,14 @@ export class SimWorld {
     if (summonsBuildings(w)) {
       b.building.selfBuilds = true;
       this.detachBuilder(workerId);
+      // …but step OUT from under it first. The Acolyte walked to the site's centre (the
+      // building did not exist to path around while it was walking), and the footprint is
+      // stamped the instant the structure rises — so the summoner is left standing inside its
+      // own foundation, on cells nothing can walk off. Every consequence of that reads as a
+      // different bug: it kneels in the middle of the model, a repair order aimed at the new
+      // building starts from the centre, and the Acolyte cannot leave. The Peasant has always
+      // done this (below); the difference is only that the Undead branch returns before it.
+      this.stepOffFootprint(w);
       w.order = "idle";
       w.moving = false;
       w.path = [];
@@ -3364,17 +3382,27 @@ export class SimWorld {
     // Human peasant: snap to the nearest free tile outside the building's (now
     // stamped) footprint, so it stands beside the site hammering rather than
     // being trapped inside the under-construction model.
-    this.unsettle(w);
-    const [cx, cy] = this.grid.worldToCell(w.x, w.y);
-    const free = this.grid.nearestWalkable(cx, cy, 8);
-    if (free && (free[0] !== cx || free[1] !== cy)) {
-      [w.x, w.y] = this.grid.cellToWorld(free[0], free[1]);
-    }
+    this.stepOffFootprint(w);
     w.order = "idle";
     w.moving = false;
     w.path = [];
-    this.settle(w);
     w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x); // face the build site
+  }
+
+  /** Put a worker that is standing INSIDE the structure it has just started onto a free block
+   *  beside it. Both races that build from OUTSIDE need this, and for the same reason: the
+   *  worker walked to the SITE (there was no footprint to path around while it walked) and the
+   *  stamp lands under its feet the instant the foundation rises. Measured against the
+   *  worker's whole footprint rather than the single cell it stands on, so a two-cell body
+   *  ends up clear rather than half in — the same move emergeBuilder makes for the peon
+   *  coming back out, which is why it is written the same way. */
+  private stepOffFootprint(w: SimUnit): void {
+    this.unsettle(w);
+    const n = Math.max(w.footprint || footprintCells(w.radius), 1);
+    const [cx, cy] = this.grid.footprintAnchor(w.x, w.y, n);
+    const fit = this.grid.nearestFit(cx, cy, n) ?? this.grid.nearestWalkable(cx, cy);
+    if (fit) [w.x, w.y] = this.grid.footprintCenter(fit[0], fit[1], n);
+    this.settle(w);
   }
 
   /** Orc peon disappearing INTO the structure it's building: parked at the site centre,
@@ -4153,6 +4181,18 @@ export class SimWorld {
     return [mine.x + dx * radius, mine.y + dy * radius];
   }
 
+  /** Where each of a Haunted Gold Mine's miners kneels — the same stations tickRingHarvest
+   *  walks them to. The renderer draws WC3's ground mark on every one of them
+   *  (MapViewerScene.collectMineCircles), so the marks and the Acolytes are placed by one
+   *  answer rather than two that have to agree. Empty for anything that is not a ring mine. */
+  mineRingStations(mineUnit: SimUnit): Array<[number, number]> {
+    const rules = this.mineCrewOf(mineUnit);
+    if (!rules?.ring) return [];
+    const out: Array<[number, number]> = [];
+    for (let i = 1; i <= rules.max; i++) out.push(this.ringStation(mineUnit, i, rules.max, rules.ring));
+    return out;
+  }
+
   /**
    * A free ring slot for this worker — the NEAREST one, or 0 when the ring is full ([Errors]
    * `Blightringfull` = "That gold mine can't support any more Acolytes.").
@@ -4223,6 +4263,20 @@ export class SimWorld {
     if (!this.arriveAtNode(u, sx, sy, u.radius + PATHING_CELL, () => this.pathTo(u, sx, sy))) {
       u.working = false;
       return;
+    }
+    // SNAP ONTO THE STATION. The ring is not a vague neighbourhood — WC3 paints a mark on the
+    // ground for every one of the five slots (`Abilities\Spells\Undead\UndeadMine\
+    // UndeadMineCircle.mdx`, see MapViewerScene.collectMineCircles) and an Acolyte kneels ON
+    // its mark. Left where its walk happened to stop, a crew reads as five Acolytes standing
+    // NEXT TO five circles, which is what the marks make impossible to miss. The station is
+    // walkable by construction (ringStation pushes out along its own ray until it is), so this
+    // is the last step of the approach rather than a teleport, and it happens once: from here
+    // on the worker is already there.
+    if (u.x !== sx || u.y !== sy) {
+      this.unsettle(u);
+      u.x = sx;
+      u.y = sy;
+      this.settle(u, false); // snap=false: the station IS the spot, not the nearest grid cell
     }
     u.working = true;
     u.moving = false;
@@ -5174,6 +5228,7 @@ export class SimWorld {
       | "paused"
       | "silenced"
       | "ethereal"
+      | "webbed"
       | "magicImmune"
       | "resistant"
       | "detectRadius"
@@ -5394,6 +5449,7 @@ export class SimWorld {
       paused: false,
       silenced: false,
       ethereal: false,
+      webbed: false,
       magicImmune: false, // recomputeStats derives it from the unit's ability list
       resistant: false, // …and Resistant Skin beside it
       detectRadius: 0, // …and True Sight likewise
@@ -6695,6 +6751,7 @@ export class SimWorld {
       case "attack": return this.issueAttack(id, o.targetId, o.force, true, o.solo); // a QueuedOrder is always a commanded attack (issue #83)
       case "follow": return this.issueFollow(id, o.targetId, o.offX, o.offY);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);
+      case "returnresources": return this.issueReturnResources(id);
       case "buildresume": this.assignBuilder(id, o.buildingId, o.ax, o.ay); return true;
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
       case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber, o.paid); return true;
@@ -6792,7 +6849,14 @@ export class SimWorld {
   issueGoldWork(id: number, mineId: number): boolean {
     const mine = this.mines.get(mineId);
     if (!mine) return false;
-    if (mine.entangledBy > 0 && this.units.has(mine.entangledBy)) return this.issueGarrison(id, mine.entangledBy);
+    // Which building stands over it decides which order "go and mine" is, and the two are
+    // opposites: an ENTANGLED mine is a cargo hold (the wisp climbs INSIDE — issueGarrison),
+    // a HAUNTED one is a ring (the Acolyte kneels OUTSIDE and the ordinary harvest order is
+    // what puts it there — tickRingHarvest). `garrisonCap` is the question asked in the same
+    // terms `mineCrewOf` reads them in: a hold, or a ring. Sending an Acolyte at a garrison
+    // it can never enter is what left a rallied one standing at the rock doing nothing.
+    const host = mine.entangledBy > 0 ? this.units.get(mine.entangledBy) : undefined;
+    if (host && host.garrisonCap > 0) return this.issueGarrison(id, host.id);
     return this.issueHarvest(id, "gold", mineId);
   }
 
@@ -6936,6 +7000,28 @@ export class SimWorld {
       }
     }
     return depot;
+  }
+
+  /** Return Goods — the second face of the Gather button (`Unart=BTNReturnGoods` on every
+   *  harvest row). Refused when there is nothing to carry home, which is exactly when WC3
+   *  draws the button as Gather instead: the two are one button showing whichever of its two
+   *  jobs is available. The worker keeps its node in `resKind`/`resId`, so tickReturn sends
+   *  it straight back to the same tree or mine after it has dropped the load. */
+  issueReturnResources(id: number): boolean {
+    const u = this.units.get(id);
+    const w = u?.worker;
+    if (!u || !w || this.castLocked(u)) return false;
+    if (w.carryGold <= 0 && w.carryLumber <= 0) return false;
+    this.detachBuilder(id);
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.cancelSwing(u);
+    u.stuckT = 0;
+    u.stuckRetries = 0;
+    u.waitT = 0;
+    this.startReturn(u);
+    return true;
   }
 
   /** Send a loaded worker back to deposit: path to the nearest depot ONCE, then
@@ -7518,6 +7604,7 @@ export class SimWorld {
     let stun = false;
     let silence = false;
     let ethereal = false;
+    let webbed = false;
     let invisible = false;
     let cloaked = false;
     let invuln = false;
@@ -7536,7 +7623,12 @@ export class SimWorld {
       } else if (b.kind === "haste") {
         hasteMove = Math.max(hasteMove, b.value);
         hasteAttack = Math.max(hasteAttack, b.value2);
-      } else if (b.kind === "root") slowMove = Math.max(slowMove, b.value); // pins movement (can still attack)
+      } else if (b.kind === "root") {
+        slowMove = Math.max(slowMove, b.value); // pins movement (can still attack)
+        // WEB is Ensnare with one extra clause, and the group is what tells them apart: the
+        // target is not merely held, it is pulled DOWN. See SimUnit.webbed.
+        if (b.group === "web") webbed = true;
+      }
       else if (b.kind === "ethereal") {
         ethereal = true;
         slowMove = Math.max(slowMove, b.value); // Banish's Movement Speed Reduction (DataA)
@@ -7704,6 +7796,14 @@ export class SimWorld {
     u.stunned = stun;
     u.silenced = silence;
     u.ethereal = ethereal || u.etherealForm; // Banish (timed) OR the Spirit Walker's ethereal FORM (persistent)
+    // Web, landing and letting go. The altitude it returns to is the TYPE's own `moveheight`
+    // — the same number the spawner starts it at — rather than one stashed at cast time: a
+    // buff carries no expiry hook to restore from, and "back to its default flight height" is
+    // both what the original shows and the only answer that survives the buff being dispelled,
+    // expiring, or the caster dying. Touched only on the CHANGE, so a script's
+    // SetUnitFlyHeight is left alone for every unit that is not being webbed right now.
+    if (webbed !== u.webbed) u.flyHeight = webbed ? 0 : (this.unitReg?.get(u.typeId)?.moveHeight ?? 0);
+    u.webbed = webbed;
     // Magic Immunity is a plain property of the unit's ability list, not a buff — nothing
     // grants or removes it mid-life, so it is derived here alongside the rest. (`Amim` carries
     // no Requires, so the tech gate below is a formality for it — it is the tower detection
@@ -15628,6 +15728,12 @@ export class SimWorld {
     }
     for (const u of this.units.values()) {
       if (!u.moving || !u.path.length) continue; // parked units hold a claim but walk nowhere
+      // Still materializing: a raised Skeleton is climbing out of the ground and has no feet
+      // to walk on yet. The order switch already skips a `spawning` unit (tickUnits), but an
+      // order given DURING the birth sets `moving` and this pass would have honoured it —
+      // so a Rod of Necromancy's pair slid across the map while still half-buried. The order
+      // is kept, not refused: WC3 lets you queue one and the unit leaves the instant it is up.
+      if (u.spawning > 0) continue;
       // Proactively reroute around units that have stopped across our path since
       // it was computed (issue #6), before we grind into them (checkStuck backstop).
       this.repathPoll(u, dt);
@@ -15983,7 +16089,12 @@ function launchPoint(u: SimUnit, lx: number, ly: number, lz: number): [number, n
  *  `targType` (a gate is `debris`, never a "structure"). Shared by the weapon-slot pick and
  *  by an artillery burst's `splashTargs` list. */
 function targetKeyOf(t: SimUnit): string {
-  return t.targetKey || (t.building ? "structure" : t.flying ? "air" : "ground");
+  // …and a WEBBED flyer answers to `ground`, because that is where it is. Web's whole point is
+  // that it "forces the target to the ground, where it can be attacked by melee units"
+  // ([Aweb], the Crypt Fiend's) — the swap is not a side-effect of the ability, it IS the
+  // ability, and it belongs here rather than in the handler because every question about what
+  // may hit the unit comes through this one function.
+  return t.targetKey || (t.building ? "structure" : t.flying && !t.webbed ? "air" : "ground");
 }
 
 function turnSpeed(turnRate: number): number {

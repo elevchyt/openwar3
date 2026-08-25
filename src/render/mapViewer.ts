@@ -10,7 +10,7 @@ import { collectMapDestructibles, findDestructibleAt, type MapDestructible } fro
 import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { AllianceType } from "../sim/alliances";
-import { type Alert, type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
+import { summonsBuildings, type Alert, type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -52,7 +52,7 @@ interface CreepSeed {
   aggro: number;
   drops: Array<{ items: Array<{ id: string; chance: number }> }>;
 }
-import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
+import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, isHarvestCode, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
 import { ModelViewerScene } from "./modelViewer";
 import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
@@ -192,6 +192,15 @@ function argbOf(css: string): number {
  *  `Targetattach=overhead` in the ability data, hence the attach token. See collectShopArrows
  *  for why this is AneuTarget and not the AneuCaster the data names first. */
 const SHOP_ARROW_FX: BuffFx = { path: "Abilities\\Spells\\Other\\Aneu\\AneuTarget.mdx", attach: ["overhead"] };
+/** The mark a Haunted Gold Mine paints for each Acolyte of its crew — the rune circle the
+ *  five of them kneel on (`Abgm` DataC1 = 5 stations at DataD1 = 200; docs/undead.md §4).
+ *  Its own file is where the whole lifecycle is written: `UndeadMineCircle.mdx` authors
+ *  exactly Birth · Stand · Death, which is the three-act shape the persistent-FX pool already
+ *  plays — so the marks bloom when the mine finishes being haunted, sit while it is worked,
+ *  and die with it, whether it runs dry or is knocked down (see collectMineCircles). Placed by
+ *  hand rather than attached: they belong on the GROUND at the stations, not on the building's
+ *  origin bone. */
+const MINE_CIRCLE_FX: BuffFx = { path: "Abilities\\Spells\\Undead\\UndeadMine\\UndeadMineCircle.mdx", attach: [] };
 // Cast sounds for spells whose effect model doesn't sit next to a folder WAV
 // (e.g. Divine Shield has no target/caster art), by base ability code.
 const SPELL_SOUND_FALLBACK: Record<string, string> = {
@@ -3487,6 +3496,17 @@ export class MapViewerScene {
     this.cancelPlacement();
   }
 
+  /** The Acolyte's summoning kneel, played once over the structure it has just laid down.
+   *
+   *  Fired at the raise rather than driven by the picker because there is no job left to
+   *  read: `assignBuilder` has already handed the building its own clock and released the
+   *  Acolyte (`summonsBuildings`). Asked of every race and answered only by the one that
+   *  summons, so the rule stays where the sim keeps it. */
+  private playSummonGesture(workerId: number): void {
+    const w = this.rts?.simWorld.units.get(workerId);
+    if (w && summonsBuildings(w)) this.rts?.playWorkAnimOnce(workerId);
+  }
+
   /** When a worker walking to raise a new building (`buildPending`) reaches its
    *  site, clear any of our own units off the footprint, then spawn the
    *  foundation (under construction) and attach it as builder. If the site can't
@@ -3564,6 +3584,7 @@ export class MapViewerScene {
           world.attachEntangled(simId, mineId, 0);
           this.claimMineWidget(simId, mineId, widget);
           world.assignBuilder(workerId, simId); // clears buildPending, and lets the Acolyte go
+          this.playSummonGesture(workerId);
         });
         continue;
       }
@@ -3578,8 +3599,10 @@ export class MapViewerScene {
         // the second half of the localPlayer disease (see the gate above, and bug 4).
         void this.spawnUnit(def, pb.x, pb.y, w.owner, this.teamOf(w.owner), def.buildTime || 60).then((simId) => {
           this.buildSpawning.delete(workerId);
-          if (simId !== null) world.assignBuilder(workerId, simId); // clears buildPending
-          else world.cancelPendingBuild(workerId); // model failed to load → refund
+          if (simId !== null) {
+            world.assignBuilder(workerId, simId); // clears buildPending
+            this.playSummonGesture(workerId);
+          } else world.cancelPendingBuild(workerId); // model failed to load → refund
         });
         continue;
       }
@@ -4141,6 +4164,7 @@ export class MapViewerScene {
     this.collectShopArrows(active);
     this.collectOrbAttachments(active);
     this.collectMoonWellWater(active);
+    this.collectMineCircles(active);
     for (const [key, inst] of this.buffFx) {
       if (!active.has(key)) this.dropBuffFx(key, inst);
     }
@@ -4172,6 +4196,48 @@ export class MapViewerScene {
     for (const u of world.units.values()) {
       if (u.hp <= 0 || !u.inventory.length) continue;
       world.orbAttachments(u).forEach((fx, i) => this.trackBuffFx(active, `orb|${u.id}|${i}|${fx.path}`, fx, u.id));
+    }
+  }
+
+  /**
+   * The five marks a Haunted Gold Mine paints on the ground for its crew.
+   *
+   * The ring is not an invisible convention: WC3 draws a rune circle on every one of the
+   * stations an Acolyte may kneel at, which is what makes a mine with three of the five taken
+   * legible at a glance — and what makes a crew that stops *near* its spots read as broken.
+   * They are placed from `SimWorld.mineRingStations`, the same answer `tickRingHarvest` walks
+   * the Acolytes to, so the mark and the miner cannot disagree.
+   *
+   * How many and how far out is `Abgm`'s own data (`DataC1` = 5 Max Number of Miners,
+   * `DataD1` = 200 Radius of Mining Ring), never a count typed in here — a map that widens
+   * the ring or seats a sixth Acolyte gets the marks to match for free. The Entangled Gold
+   * Mine has none, and its row says why: its crew is CARGO, so `mineCrewOf` gives it ring 0
+   * and `mineRingStations` hands back nothing.
+   *
+   * The lifecycle comes from the model. `UndeadMineCircle.mdx` authors Birth · Stand · Death
+   * and nothing else, which is exactly the three acts the persistent-FX pool plays: the
+   * circles bloom as the haunting finishes (they are withheld while the structure is still
+   * rising), hold while it stands, and play their Death when the record goes — mined out, or
+   * knocked down by an enemy and left as the bare rock it was.
+   */
+  private collectMineCircles(active: Set<string>): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || !u.mineId) continue;
+      if (u.building && u.building.constructionLeft > 0) continue; // still being haunted
+      const stations = world.mineRingStations(u);
+      for (let i = 0; i < stations.length; i++) {
+        const key = `minering|${u.id}|${i}`;
+        this.trackBuffFx(active, key, MINE_CIRCLE_FX, u.id, undefined, true);
+        const inst = this.buffFx.get(key);
+        if (!inst) continue;
+        const [sx, sy] = stations[i];
+        this.loc3[0] = sx;
+        this.loc3[1] = sy;
+        this.loc3[2] = this.rts!.groundHeightAt(sx, sy);
+        inst.setLocation(this.loc3);
+      }
     }
   }
 
@@ -7461,18 +7527,24 @@ export class MapViewerScene {
     out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 2, row: 0, active: active === "hold" }));
     out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 3, row: 0, active: active === "attack" }));
     out.push(this.cmd({ id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", desc: "Patrols between here and a target point.", col: 0, row: 1, active: active === "patrol" }));
-    if (sel.isWorker) {
-      // Build sits at the bottom-left of a worker's card (developer spec); Repair
-      // next to it. Repair = 35% of build cost / 150% of build time to full HP.
+    // Build sits at the bottom-left of a worker's card (developer spec) — but only on a worker
+    // that HAS something to build. `Builds` is a per-unit column (`[hpea] Builds=htow,hhou,
+    // hbar,…`) and the GHOUL's is empty: it gathers lumber and does nothing else, so WC3 gives
+    // it no Build button, and behind the one it had was an empty page.
+    //
+    // REPAIR is gone from here entirely, for the same reason and with the same evidence.
+    // Repairing is an ABILITY — `Ahrp` on the Peasant, `Arep` on the Peon, `Arst` on the
+    // Acolyte, `Aren` on the Wisp — drawn by pushAbilityButtons off its own row's art, hotkey,
+    // slot (`Buttonpos=1,1`) and autocast toggle. All four stock workers carry one, so this
+    // generic fallback could only ever fire for a worker that carries NONE, i.e. the Ghoul —
+    // and the sim refuses that unit anyway (`repairRefusal`: "no repair row on the type").
+    // It was a button whose only possible press was a refusal.
+    //
+    // What a worker gets instead is its GATHER button, and that arrives through the ability
+    // path too now (isHarvestCode) — one row, `Buttonpos=3,1`, showing Return Goods while
+    // there is a load to carry home.
+    if (sel.isWorker && this.tech.builds(sel.typeId).length) {
       out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2, active: active === "build" }));
-      // Repair, unless the worker's OWN repair row is already drawing the button. A Wisp
-      // carries `Aren` (Renew) in its ability list, so pushAbilityButtons gives it that row's
-      // art, hotkey and slot — and its autocast toggle, which this generic one has no notion
-      // of. Two repair buttons on one card is the alternative.
-      const su = world.units.get(sel.id);
-      if (!su?.abilities.some((a) => isRepairCode(a.code))) {
-        out.push(this.cmd({ id: "repair", icon: btnIcon("BTNRepair"), name: "Repair", hotkey: "R", desc: "Repairs a damaged building (costs 35% of its build cost).", col: 1, row: 2, active: active === "repair" }));
-      }
     }
     this.pushAbilityButtons(sel, out); // learned spells + a hero's Learn Skill button
     return out;
@@ -7504,6 +7576,9 @@ export class MapViewerScene {
     const own = su.abilities.find((a) => isRepairCode(a.code));
     const repairButton = own ? `ability:${own.code}` : "repair";
     if (su.repair) return repairButton;
+    // …and a worker at work lights its OWN Gather row, whichever way round the button is
+    // showing: gathering and carrying home are one button and one job (isHarvestCode).
+    const gather = su.abilities.find((a) => isHarvestCode(a.code));
     switch (su.order) {
       case "move": return "move";
       // Attack-move and a forced attack share the Attack button, as in the game.
@@ -7512,9 +7587,11 @@ export class MapViewerScene {
       case "patrol": return "patrol";
       case "hold": return "hold";
       case "repair": return repairButton;
+      case "harvest":
+      case "return": return gather ? `ability:${gather.code}` : "stop";
       case "cast": return su.pendingCast ? `ability:${su.pendingCast.code}` : null;
-      // Idle, and every order with no button behind it (harvest, follow, walking to
-      // an item), rest on Stop.
+      // Idle, and every order with no button behind it (follow, walking to an item),
+      // rest on Stop.
       default: return "stop";
     }
   }
@@ -7561,6 +7638,12 @@ export class MapViewerScene {
    *  Autocast toggles are NOT here: their on/off is the green autocast border, not a
    *  different icon, and both directions of those rows carry the same `Art`. */
   private toggleIsOn(su: SimUnit, code: string, def: AbilityDef): boolean {
+    // GATHER's second face is not a toggle, it is a STATE: `Unart=BTNReturnGoods` is what the
+    // one harvest row shows while the worker has something to carry home, because that is the
+    // job the same button does next. A Wisp and an Acolyte never carry anything (their gold
+    // and lumber are credited where they stand — docs/night-elf.md, docs/undead.md), so their
+    // button simply never turns over, which is what the original shows too.
+    if (isHarvestCode(code)) return (su.worker?.carryGold ?? 0) > 0 || (su.worker?.carryLumber ?? 0) > 0;
     if (code === "Aroo") return !su.uprooted;
     if (code === "AEim") return !!su.immolation;
     if (code === "ANms") return su.buffs.some((b) => b.kind === "manaShield");
@@ -7706,6 +7789,19 @@ export class MapViewerScene {
       // the generic Repair button does, so a wisp's click resolves through repairAt.
       if (isRepairCode(code)) {
         this.rts.orderMode = "repair";
+        this.hud?.setArmed(true);
+        return;
+      }
+      // GATHER is drawn as an ability (it is one — `Ahar`/`Ahrl`/`Aaha`/`Awha`, each with its
+      // own art, hotkey and `Buttonpos=3,1`) but ORDERED against a RESOURCE NODE, which is not
+      // a unit and so cannot go through the cast path at all. Same shape as repair above.
+      //
+      // Which of the row's two faces was pressed is read from the worker, not from the click:
+      // carrying a load, the button is Return Goods and there is nothing to aim — the depot is
+      // chosen when the order runs. Empty-handed it arms the cursor for a tree or a mine.
+      if (isHarvestCode(code)) {
+        if (this.rts.returnResourcesSelected()) return;
+        this.rts.orderMode = "harvest";
         this.hud?.setArmed(true);
         return;
       }

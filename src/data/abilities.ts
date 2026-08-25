@@ -567,12 +567,33 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   /** Unsummon (`Auns`) — targets `structure,player`, i.e. one of YOUR OWN buildings. Not an
    *  autocast: an Acolyte does not decide to dismantle your base. */
   Auns: { target: "unit" },
+  // === Gather (issue: the Ghoul's card) ===============================================
+  // The four harvest rows (isHarvestCode, data/races.ts). They are listed here for the same reason the
+  // Fountains' auras are: `buildInitialAbilities` keeps only what this table names, so a
+  // worker that does not carry its own harvest row has no button to draw — which is exactly
+  // what left the GHOUL with a Build and a Repair it does not own and no Gather it does.
+  //
+  // `targs1` is `tree,alive,dead` (a trunk) for three of them and literally `_` for the
+  // Acolyte's, whose target is a gold mine and not a unit at all — so the click is resolved
+  // against the RESOURCE NODES rather than through the ordinary cast path, exactly as the
+  // repair rows are resolved against buildings (mapViewer.runCommand → harvestAt).
+  Ahar: { target: "unit" }, // Gather — Peasant, Peon: gold AND lumber
+  Ahrl: { target: "unit" }, // Harvest Lumber — the Ghoul, lumber only
+  Aaha: { target: "unit" }, // Acolyte Harvest — gold only, and only in a Haunted mine's ring
+  Awha: { target: "unit" }, // Wisp Harvest — lumber in place, gold from inside the mine
   Aren: { target: "unit", autocast: true },
   // Call to Arms — the Human militia. `Amil` is the Peasant's own form toggle
   // (`Order=militia` / `Unorder=militiaoff`); `Amic` is the town bell on the hall
   // (`townbellon` / `townbelloff`) that rings for every Peasant within 2000. Both self-cast.
   Amil: { target: "none" },
   Amic: { target: "none" },
+  // Web (`Aweb`) — the Crypt Fiend's, and the ONLY reason it needs saying here is that
+  // without it there is no button: `Requires=Ruwb` already gates it (techMeets), the row
+  // already sits on `ucry` from birth (`[ucry] abilList = Aweb,Aspa,Abur,Aiun`), and the
+  // research was landing on an ability the card had been told to ignore. `Orderon=webon` /
+  // `Orderoff=weboff` alongside `Order=web` make it an autocast with a manual aim, the Heal
+  // shape. `ACwb` (creep) carries the same code. See the handler in spells.ts.
+  Aweb: { target: "unit", autocast: true },
   // Burrow — the Crypt Fiend digs in (`Order=burrow` / `Unorder=unburrow`). A form toggle
   // between the two units the ability names; Abu2/Abu3/Abu5 alias it for the scarabs and the
   // Barbed Arachnathid. See the handler for why its sibling morphs are not listed here yet.

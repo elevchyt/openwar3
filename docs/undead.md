@@ -10,17 +10,20 @@ piece is a rule, and each rule is stated by a column.
 This is that list, so the next person does not have to rediscover which column says what.
 
 Implementation: `tickBlight` / `blightPaintOf` / `reassertBlight` / `footprintBlighted` /
-`mineCrewOf` / `hauntedMine` / `ringStation` / `freeRingSlot` / `tickRingHarvest` /
-`tickMineCrews` / `hauntTarget` / `hauntMine` / `unsummonBuilding` / `summonsBuildings` in
+`mineCrewOf` / `hauntedMine` / `ringStation` / `mineRingStations` / `freeRingSlot` /
+`tickRingHarvest` / `tickMineCrews` / `hauntTarget` / `hauntMine` / `issueGoldWork` /
+`stepOffFootprint` / `unsummonBuilding` / `summonsBuildings` in
 [`src/sim/world.ts`](../src/sim/world.ts), the grid itself in
-[`src/sim/blight.ts`](../src/sim/blight.ts), the `Auns` handler in
+[`src/sim/blight.ts`](../src/sim/blight.ts), the `Auns` and `Aweb` handlers in
 [`src/sim/spells.ts`](../src/sim/spells.ts), the Acolyte's profile in
 [`src/data/races.ts`](../src/data/races.ts), `requirePlace` in
 [`src/data/units.ts`](../src/data/units.ts), `syncBlight` / `groundSuitsBuilding` /
-`snapPlacement` and the haunt branch of `tickPendingBuild` in
-[`src/render/mapViewer.ts`](../src/render/mapViewer.ts), the `SetBlight*` natives in
-[`src/jass/natives/melee.ts`](../src/jass/natives/melee.ts), and `standWorkGold` in
-[`src/render/unitAnims.ts`](../src/render/unitAnims.ts). Checked by `tools/sim-undead-test.cjs`
+`snapPlacement` / `collectMineCircles` / `playSummonGesture` and the haunt branch of
+`tickPendingBuild` in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts), the
+`SetBlight*` natives in [`src/jass/natives/melee.ts`](../src/jass/natives/melee.ts), and
+`standWorkGold` / `playWorkAnimOnce` in
+[`src/render/unitAnims.ts`](../src/render/unitAnims.ts) and
+[`src/game/rts.ts`](../src/game/rts.ts). Checked by `tools/sim-undead-test.cjs`
 and `tools/sim-regen-test.cjs` (`pnpm sim:test`).
 
 ## 1. Blight is TERRAIN, and every building in the game has an opinion about it
@@ -132,6 +135,22 @@ Per-race construction style now reads:
 | orc / night elf | from INSIDE the shell | one, and it is hidden |
 | **undead** | **summons, then leaves** | **nobody, and nobody is needed** |
 
+Two things "then leaves" has to mean literally, and both were missing:
+
+* **It steps out from under what it raised.** The Acolyte walks to the SITE — there is no
+  footprint to path around while it is walking — and the stamp lands the instant the structure
+  rises, so the summoner is left standing inside its own foundation, on cells nothing can walk
+  off. Every consequence of that reads as a different bug: it kneels in the middle of the
+  model, a repair order aimed at the new building starts from the centre, and the Acolyte
+  cannot leave at all. `stepOffFootprint` is the move the Peasant has always made and the one
+  `emergeBuilder` makes for a peon coming back out; the Undead branch simply returned before
+  reaching it.
+* **The summoning gesture is played ONCE, at the raise.** Every other worker STAYS, so its
+  work clip can be driven by the ordinary picker off `constructing`; by the time the picker is
+  next asked about an Acolyte there is no job left to read. So the kneel is fired where it
+  happens (`playSummonGesture` → `playWorkAnimOnce`) and sized to the clip — held while the
+  Acolyte stands there, dropped the moment the player walks it off.
+
 ## 4. The Haunted Gold Mine: a crew, a clock, and no round trip
 
 `Abgm` "Blighted Gold mine" carries the whole arrangement in four columns:
@@ -185,6 +204,35 @@ Three practical rules the geometry forces:
 * **An Acolyte cannot mine a BARE mine at all.** There is no ring until the mine is haunted:
   `[Errors] Blightminefirst` = "Must haunt gold mine first." The mirror of a Wisp having no pick.
 
+**And the ring is DRAWN.** WC3 paints a rune circle on the ground at every one of the five
+stations — `Abilities\Spells\Undead\UndeadMine\UndeadMineCircle.mdx` — which is what makes a
+mine with three of the five taken legible at a glance. The model authors exactly
+**Birth · Stand · Death** and nothing else, and that is the whole lifecycle stated by the art:
+the marks bloom as the haunting finishes, hold while the building stands, and play their Death
+when the record goes — mined out, or knocked down by an enemy and left as the bare rock it was.
+They ride the persistent-FX pool buff art uses (`collectMineCircles`), so all three acts come
+for free.
+
+Two things follow from the marks existing, and neither is cosmetic:
+
+* **The stations are ONE answer, not two that have to agree.** `mineRingStations` is what the
+  renderer places the marks from and what `tickRingHarvest` walks the Acolytes to, so a map
+  that widens the ring or seats a sixth Acolyte gets the circles to match with no second
+  reading of `Abgm`.
+* **An Acolyte SNAPS onto its mark.** `arriveAtNode` stops a worker within a body's width of
+  where it was sent, which is invisible at a tree and unmissable here: five Acolytes standing
+  *beside* five circles. The station is walkable by construction (`ringStation` pushes out
+  along its own ray until it is), so the snap is the last step of the approach rather than a
+  teleport, and it happens once.
+
+**A ring is not a cargo hold, and the rally path has to know it.** "Go and mine" aimed at a mine
+with a building over it (`issueGoldWork` — a right-click on the rock, and a rally flag planted
+on it) used to answer with `issueGarrison` whatever the building was. That is right for an
+ENTANGLED mine, whose crew climbs inside, and wrong for a HAUNTED one, which has no hold to
+enter: the order was refused and the Acolyte fell through to a plain move and stood at the rock
+doing nothing. `garrisonCap` is the question, asked in the same terms `mineCrewOf` reads the two
+rows in — a hold, or a ring.
+
 **Placement snaps to the mine.** A building carrying `Abgm` is valid exactly where a free gold
 mine is and nowhere else, so the ghost jumps from mine to mine rather than sliding over the
 ground — and the ordinary footprint test is bypassed, because the mine's own cells are stamped
@@ -221,6 +269,72 @@ once here rather than collapsing over a few seconds as the real client shows. Wh
 and a trickle needs the duration the row does not give — so it is applied as the rounding of the
 payout.
 
+## 6. The Acolyte has ONE work pose, and the Ghoul has no hammer
+
+Two card-and-clip facts that belong here because both are read straight off the same rows.
+
+**One pose, three jobs.** `Acolyte.mdx` authors no "Stand Work" at all — its only working clip
+is **"Stand Work Gold"**, and WC3 plays that same kneel for every one of the three things an
+Acolyte does with its hands: mining a Haunted Gold Mine, repairing (`Arst` Restoration), and the
+summoning gesture over a building it lays down. So `AnimSet.build` falls through `standWork` →
+**`standWorkGold`** → the attack swing, in that order; without the middle rung an Acolyte swung
+its blade at everything it mended. Looped for the two jobs that last (mine, repair), once for
+the one that does not (summon — see §3).
+
+The mining kneel needed one more thing said. `chopLumber` falls back to the plain attack clip
+for a model that authors no "Attack Lumber", which the Acolyte does not — so the renderer's
+chop-driven branch had it hacking at the rock on the chop clock and `pickSequence`'s ring branch
+was never reached. `ringSlot` is the flag that tells the two harvests apart: a swing at a tree,
+or a channel at a mine.
+
+**Gather is a BUTTON, and the data says so four times.** `Ahar` (Peasant/Peon), `Ahrl` (Ghoul),
+`Aaha` (Acolyte) and `Awha` (Wisp) each carry the same pair of faces at the same slot —
+
+    Art=ReplaceableTextures\CommandButtons\BTNGatherGold.blp
+    Unart=ReplaceableTextures\CommandButtons\BTNReturnGoods.blp
+    Buttonpos=3,1        Order=harvest
+
+— and `[Ahrl]`'s entry in `CommonAbilityFunc.txt` is a comment saying it out loud: "Lumber
+Harvest uses button art and position from the [Ahar] Harvest ability." The `Un` half is not a
+toggle but a STATE: a worker with a load shows Return Goods, because that is what the same
+button does next (`isHarvestCode` in `data/races.ts`, `toggleIsOn` → `carryGold || carryLumber`; the order is `returnresources`). A
+Wisp and an Acolyte never carry anything, so theirs never turns over — which is what the
+original shows too.
+
+That makes the GHOUL's card fall out of the data rather than out of a list of ids:
+
+| | Ghoul | why |
+| --- | --- | --- |
+| Build Structure | **no** | `[ugho] Builds` is empty — it gathers lumber and nothing else |
+| Repair | **no** | its `abilList` is `Acan,Ahrl,Aiun` — no `Arep`/`Arst`/`Aren` anywhere, and `repairRefusal` was already refusing every press |
+| Gather / Return | **yes** | `Ahrl`, at the same `Buttonpos=3,1` as everyone else's |
+| Cannibalize | once researched | `[Acan] Requires=Ruac` |
+
+The Build button now asks the worker's own `Builds` list (an empty one used to open an empty
+page) and the generic Repair fallback is gone: repairing is an ability, and all four stock
+workers carry their own row for it.
+
+## 7. Web (`Aweb`) — Ensnare aimed upward
+
+The Crypt Fiend's, and the two abilities are ONE ability in the data: `AbilityMetaData.slk`
+declares the `Ens1..Ens3` field group `useSpecific = "Aens,ACen,Aweb,ACwb,AIwb"`, so a Web's
+Data columns ARE an Ensnare's, and the numbers agree (both `DataA` 0.6, `DataB` 200). What is
+not shared is `targs1`: Ensnare takes `ground,air,enemy,neutral` and Web takes
+**`air,enemy,neutral`** — it is the half of Ensnare that only ever points at a flyer.
+
+Which is why it does the one thing Ensnare does not have to: the target is pulled DOWN.
+`SimUnit.webbed` is derived from the buff's group the way `ethereal` is derived from Banish's,
+and it changes two answers — `targetKeyOf` reports `ground` instead of `air` (melee units can
+reach a webbed Gargoyle, which is the whole point of the ability) and `flyHeight` drops to the
+floor and back to the type's own `moveheight` when it wears off. The pin itself is Ensnare's
+full root: it cannot move, it can still shoot. Duration `Dur1` 12, `HeroDur1` 7.
+
+The BUTTON is the part that needed no code at all, and that was the bug: `[Aweb] Requires=Ruwb`
+already gates it through the ordinary tech check and the row already sits on `ucry` from birth
+(`[ucry] abilList = Aweb,Aspa,Abur,Aiun`), so the research was landing on an ability
+`KNOWN_ABILITIES` had never been told about. Adding the row is what makes the Web upgrade
+visible.
+
 ## What is still missing
 
 This milestone is the ECONOMY. The rest of the race is data-driven and largely arrives for free
@@ -231,7 +345,7 @@ This milestone is the ECONOMY. The rest of the race is data-driven and largely a
 * **Ziggurat towers** — `uzg1`/`uzg2` upgrade through the ordinary building-upgrade path, but
   `Afra` Frost Attack (the Nerubian Tower's) is an ORB effect and belongs with [`orbs.md`](./orbs.md).
 * The Obsidian Statue's `Arpl`/`Arpm`/`Arpb`, the Destroyer's `Aave`/`Advm`/`Aabs`, the Banshee's
-  `Acrs`/`Aams`/`Apos`, the Necromancer's `Arai`, the Crypt Fiend's `Aweb`, the Meat Wagon's
-  `Amel`/`Amed`/`Aexh`, the Graveyard's `Agyd`, the Gargoyle's `Astn`, the Shade's `Agho` — all
-  still `todo`; see the audit for the full list.
+  `Acrs`/`Aams`/`Apos`, the Necromancer's `Arai`, the Meat Wagon's `Amel`/`Amed`/`Aexh`, the
+  Graveyard's `Agyd`, the Gargoyle's `Astn`, the Shade's `Agho` — all still `todo`; see the
+  audit for the full list. (The Crypt Fiend's `Aweb` came off it — see §7.)
 * Blight on TREES, and the blight doodads (see §1).
