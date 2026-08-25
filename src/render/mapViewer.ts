@@ -171,6 +171,13 @@ const CRIT_TEXT_COLOR = 0xffff0303;
 // not whose money it is.
 const GOLD_TEXT_COLOR = argbOfParts(TEXT_TAG.GoldTextColor);
 const COMBAT_TEXT_Z = 100;
+// A gold credit starts HIGHER, above the floating status bar rather than behind it. The bar
+// is drawn at the unit's overhead (`WorldOverlays.syncBars`: the projected selection radius
+// plus a fixed 24px), and a tag spawned at chest height rises THROUGH it — so the first
+// third of a two-second "+400", the part the eye actually catches, was reading out from
+// behind a health bar. A crit is left where it is: it belongs ON the unit it struck, and it
+// is the blow that is being reported, not a number you are meant to sit and read.
+const GOLD_TEXT_Z = 220;
 
 /** An `A,R,G,B` quadruple from the Misc files → the 0xAARRGGBB a text tag carries. */
 function argbOfParts([a, r, g, b]: readonly number[]): number {
@@ -8856,7 +8863,7 @@ export class MapViewerScene {
                   : CRIT_TEXT_COLOR,
             x: t.x,
             y: t.y,
-            z: COMBAT_TEXT_Z,
+            z: t.kind === "gold" ? GOLD_TEXT_Z : COMBAT_TEXT_Z,
             followUnit: t.unitId,
             // A gold credit is the one kind the game keeps a full spec for that we honour —
             // its own height, drift, lifetime and fade (GOLD_TEXT_STYLE).
