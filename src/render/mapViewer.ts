@@ -8767,6 +8767,9 @@ export class MapViewerScene {
           // A wave field asked for its shard-fall sound (Blizzard): the WAV lives in
           // the effect model's own folder, so resolve it off the art like a cast sound.
           if (fx.sound) this.sounds?.playSpellSound([fx.art], undefined, { x, y, z });
+          // …and the cue that names its WAV by LABEL instead, because the wav does not live
+          // beside the art it plays with (a shop's `ReceiveGold` under the coin pile).
+          if (fx.soundLabel) this.sounds?.playAbilitySound(fx.soundLabel, { x, y, z });
         }
         // Ground decals a spell painted this frame (Thunder Clap's scorch, THND).
         for (const s of this.rts!.drainFxSplats()) this.addSpellSplat(s.splatId, s.x, s.y);

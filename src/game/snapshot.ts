@@ -372,8 +372,10 @@ export interface GroundItemSnapshot {
  * still crosses as state; this is only what it looked and sounded like.
  */
 export interface FxSnapshot {
-  /** One-shot effect models (`drainSpellEffects`): follow `targetId`'s record when > 0. */
-  effects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }>;
+  /** One-shot effect models (`drainSpellEffects`): follow `targetId`'s record when > 0.
+   *  `soundLabel` is an AbilitySounds label fired with the model, for a cue whose WAV does
+   *  not live beside its art (a shop's `ReceiveGold` — see the sim's `spellEffects`). */
+  effects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string }>;
   /** Spell ground decals (`drainSpellSplats`) — Thunder Clap's scorch and kin. */
   splats: Array<{ splatId: string; x: number; y: number }>;
   /** Lightning bolts (`drainSpellLightnings`) — Chain Lightning, Healing Wave, the Drains

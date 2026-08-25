@@ -207,12 +207,15 @@ export interface SimLightning {
 /**
  * One piece of floating COMBAT text — the world-space number the engine itself puts over a
  * unit, as opposed to the `texttag` a script asks for with CreateTextTag (7.19). WC3 raises
- * two of these off its own combat resolution and neither is scriptable:
+ * these off its own resolution and none of them is scriptable:
  *
  *  • `crit` — a Critical Strike's blow, drawn in red as the damage dealt with an exclamation
  *    mark after it ("127!"), over the unit that was struck. It follows the victim.
  *  • `deny` — a bare "!" over one of YOUR OWN or an ALLY's units that a friendly killed, in
  *    the colour of the player the dead unit belonged to. It is why a deny reads as a deny.
+ *  • `gold` — a "+N" in the game's own gold, wherever the engine pays you where you can see
+ *    it: Transmute's payout over the body it melted (transmuteInternal) and a shop's over the
+ *    hero it just bought an item back from (pawnItem, issue #120).
  *
  * The colour of a deny is a SLOT, not an RGB: `SetPlayerColor` can move a slot's colour under
  * the match (see RtsController.playerColor), and the sim does not track that — the client
@@ -1597,6 +1600,32 @@ const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
 const ITEM_PICKUP_RANGE = MISC_GAME.PickupItemRange;
 const ITEM_GIVE_RANGE = MISC_GAME.GiveItemRange;
 const ITEM_DROP_RANGE = MISC_GAME.DropItemRange;
+// Being PAID for an item: the coins that land on the seller, the label of the sound they
+// land with, and how long they last (issue #120).
+//
+// Neither is a choice — the game keeps a purpose-built pair for "you were just credited
+// gold" and names both halves in its own data:
+//
+//  • the SOUND is what makes a building a shop in the first place. `[Apit] Effectsound =
+//    ReceiveGold` (1.27a Units\CommonAbilityFunc.txt) — "Shop Purchase Item", the very
+//    ability canPawnAt() looks for — and it is the same coin "cha-ching" a Chest of Gold
+//    pays out with (`[AIgo] Effectsound = ReceiveGold`, Units\ItemAbilityFunc.txt). It is
+//    a LABEL, not a path: AbilitySounds.slk row Y38 carries the wav and its 3D metadata.
+//  • the ART is UI\Feedback\GoldCredit — coins (Textures\gold.blp) over a star sparkle,
+//    filed under the interface FEEDBACK models rather than with any one spell, because it
+//    belongs to no spell: it is what a credit LOOKS like. The Chest of Gold reaches it the
+//    long way round, through the `SPN…GDCR` spawn event on its ground model's death track
+//    (see removeItemModel), which is why nothing names it in a Func file.
+//
+// Its lone clip runs 1.334 s (read off the MDX), so the coins are reaped on that rather
+// than on the flat 2 s an effect with nothing to say about its own length gets.
+//
+// NOT Transmute's `[BNtm] Specialart` PileofGold.mdx, which the issue reached for: that one
+// is a 6.3-second pile settling where a body melted, art for the corpse rather than for the
+// payment, and it lingers under the hero long after the sale is over.
+const PAWN_GOLD_ART = "UI\\Feedback\\GoldCredit\\GoldCredit.mdx";
+const PAWN_GOLD_SOUND = "ReceiveGold";
+const PAWN_GOLD_FX_LIFE = 1.334;
 // A move ordered within this distance of the unit only turns it in place (WC3
 // doesn't shuffle a unit a few pixels — it just pivots to face the point).
 const MOVE_MIN_DIST = 40;
@@ -2170,8 +2199,12 @@ export class SimWorld {
   // Per-unit creep drop tables, seeded at spawn (map .doo), rolled on death.
   private unitDrops = new Map<number, ItemDropSet[]>();
   // --- spell / ability event channels drained by the renderer each frame ---
-  // Spell effect models to play at a unit/point (targetArt/casterArt/areaArt).
-  private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }> = [];
+  // Spell effect models to play at a unit/point (targetArt/casterArt/areaArt). `soundLabel`
+  // is an AbilitySounds.slk LABEL to fire with the model — for the cue whose WAV does NOT
+  // live beside its art (a shop paying you names `ReceiveGold`, which sits in
+  // Abilities\Spells\Items\ResourceItems while the coins it plays with are a UI\Feedback
+  // model; `sound` alone, which resolves off the art's own folder, would find nothing).
+  private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string }> = [];
   // Temporary ground decals a spell paints (Thunder Clap's scorch): an UberSplatData
   // row id + where. The row carries the texture, half-width and fade timings.
   private spellSplats: Array<{ splatId: string; x: number; y: number }> = [];
@@ -2906,8 +2939,17 @@ export class SimWorld {
     if (!this.inPawnRange(u, shop)) return false;
     u.inventory[slot] = null;
     const stash = this.stashOf(u.owner);
-    stash.gold += Math.floor(def.gold * MISC_GAME.PawnItemRate);
-    stash.lumber += Math.floor(def.lumber * MISC_GAME.PawnItemRate);
+    const gold = Math.floor(def.gold * MISC_GAME.PawnItemRate);
+    const lumber = Math.floor(def.lumber * MISC_GAME.PawnItemRate);
+    stash.gold += gold;
+    stash.lumber += lumber;
+    // Being paid is a thing you SEE (issue #120), and the seller is where you are looking —
+    // the coins land on the hero who handed the item over, not on the shop that took it.
+    // Same "+N" the Alchemist's payout raises (transmuteInternal), but ATTACHED here rather
+    // than placed: this unit is alive and will walk off, and the number goes with him.
+    if (gold > 0) this.combatTexts.push({ kind: "gold", unitId: u.id, x: u.x, y: u.y, text: `+${gold}`, colorSlot: -1 });
+    if (gold > 0 || lumber > 0)
+      this.spellEffects.push({ art: PAWN_GOLD_ART, x: u.x, y: u.y, targetId: u.id, z: 0, life: PAWN_GOLD_FX_LIFE, soundLabel: PAWN_GOLD_SOUND });
     return true;
   }
 
@@ -10240,7 +10282,7 @@ export class SimWorld {
   }
 
   /** Spell/effect models to play this frame (targetId>0 = follow that unit). */
-  drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }> {
+  drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string }> {
     if (!this.spellEffects.length) return this.spellEffects;
     const out = this.spellEffects;
     this.spellEffects = [];

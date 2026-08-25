@@ -5327,7 +5327,7 @@ export class RtsController {
    *  from the sim's drains where the sim steps, from the payload's `fx` on a frozen client.
    *  Capped so a hidden window (rAF stopped, pump stepping the sim) cannot grow them without
    *  bound — flushing stale bursts on refocus would be worse than dropping them. */
-  private fxEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }> = [];
+  private fxEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string }> = [];
   private fxSplats: Array<{ splatId: string; x: number; y: number }> = [];
   private fxLightnings: SimLightning[] = [];
   private fxLightningStops: string[] = [];
