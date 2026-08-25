@@ -157,6 +157,9 @@ export interface RenderUnit {
    *  compares it, so the wider type is the honest one here. */
   readonly order: string;
   readonly working: boolean;
+  /** Station this worker holds in a Haunted Gold Mine's mining ring (0 = none). Read only for
+   *  the pose: an Acolyte kneeling at a mine wears "Stand Work Gold" (see pickSequence). */
+  readonly ringSlot: number;
   /** Building id this worker is constructing (0 = none) — the renderer only asks truthiness. */
   readonly constructing: number;
   /** Which HALF of a two-form model is showing (a rooted Ancient, a burrowed Crypt Fiend). */

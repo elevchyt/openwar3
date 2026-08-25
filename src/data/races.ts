@@ -81,6 +81,13 @@ export const MELEE_WORKER_CLUSTERS: Record<PlayableRace, WorkerCluster[]> = {
 //   ewsp      `Awha` "Wisp Harvest"    DataA 5 lumber,                                   Dur 8s
 //   uaco      `Aaha` "Acolyte Harvest" gold only — the row carries no rate at all,       Dur 1s
 //
+// …and the fourth row's SILENCE is itself the datum. `Aaha` has no capacity, no gold per
+// trip and no damage to a tree, because an Acolyte never carries anything: it kneels in a
+// Haunted Gold Mine's ring and the BUILDING pays (`Abgm`, see SimWorld.tickMineCrews). Its
+// one number says so — `Rng1` = **200**, which is exactly `Abgm`'s DataD "Radius of Mining
+// Ring". Compare `Ahar`/`Ahrl` at 116 (an arm's length, the reach to a shaft or a trunk) and
+// `Awha` at 900 (how far a wisp looks for a tree). Two rows, one distance, one mechanism.
+//
 // (Har1/Har2/Har3 mean the same three things for `Ahrl` and `Awha` as for `Ahar`, which is what
 // makes one reader serve all four: a Peasant's 10-lumber load and a Ghoul's 20 are the same
 // column, and the Wisp simply has no use for it.)
@@ -89,8 +96,10 @@ export const MELEE_WORKER_CLUSTERS: Record<PlayableRace, WorkerCluster[]> = {
 // CLASS, with no depot leg at all — the lumber is credited where it is cut (`deliversInPlace`).
 // 5 per 8s is 0.63 lumber/sec, which lands within a rounding error of a Peasant's 10-per-trip
 // round trip; the wisp buys that parity by being stuck in the tree. Its DataB = 5 and DataC =
-// 150 have field ids of their own (Wha2/Wha3) and no source that names them, so they are left
-// unspent rather than guessed at (CLAUDE.md).
+// 150 DO have names — AbilityMetaData.slk's field ids Wha2/Wha3 resolve through
+// UI\WorldEditStrings.txt to "Intervals Before Changing Trees" and "Art Attachment Height" —
+// and both are still left unspent: the first is a WC3 AI convenience (a wisp moves itself on
+// after five payouts) we do not imitate, and the second is where the glow model hangs.
 //
 // `damagesTree: false` is the night elf's signature and it is literal: a wisp-worked tree
 // never falls, so night elf lumber is bounded only by how many wisps are in the forest.
@@ -104,21 +113,32 @@ export interface WorkerProfile {
   lumberCapacity: number;
   lumberPerChop: number;
   chopPeriod: number; // seconds between chops
-  /** Gold carried out of a classic gold mine per trip (`Ahar` DataC). Unused by the Wisp,
-   *  whose gold never leaves the mine building (`Aegm`, see SimWorld.tickEntangledMines). */
+  /** Gold carried out of a classic gold mine per trip (`Ahar` DataC). 0 for the two races
+   *  whose gold never leaves the mine building at all — the Wisp inside an `Aegm` Entangled
+   *  Gold Mine and the Acolyte around an `Abgm` Haunted one (SimWorld.tickMineCrews). */
   goldPerTrip: number;
   damagesTree: boolean;
   /** Credit the load at the tree instead of hauling it to a depot — the Wisp, and only the
    *  Wisp. See SimWorld.tickHarvest. */
   deliversInPlace: boolean;
+  /** Gold is worked from a RING around a Haunted Gold Mine rather than out of the shaft — the
+   *  Acolyte, and only the Acolyte. There is no load, no trip and no depot: the building's
+   *  own `Abgm` clock credits the gold while the crew kneels (SimWorld.tickRingHarvest).
+   *
+   *  A worker with this flag cannot mine a BARE mine at all, which is the game's own
+   *  [Errors] `Blightminefirst` = "Must haunt gold mine first." — an Acolyte at an
+   *  unclaimed mine has no way in, exactly as a Wisp at one has no pick
+   *  (`deliversInPlace`). The two flags are the same kind of statement about the same
+   *  column: what this worker's harvest ability does NOT carry. */
+  minesInRing: boolean;
 }
 
 export const WORKERS: Record<string, WorkerProfile> = {
-  hpea: { gold: true, lumber: true, harvestAbility: "Ahar", lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1.1, goldPerTrip: 10, damagesTree: true, deliversInPlace: false },
-  opeo: { gold: true, lumber: true, harvestAbility: "Ahar", lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1.1, goldPerTrip: 10, damagesTree: true, deliversInPlace: false },
-  uaco: { gold: true, lumber: false, harvestAbility: "Aaha", lumberCapacity: 0, lumberPerChop: 0, chopPeriod: 1, goldPerTrip: 10, damagesTree: false, deliversInPlace: false },
-  ugho: { gold: false, lumber: true, harvestAbility: "Ahrl", lumberCapacity: 20, lumberPerChop: 2, chopPeriod: 1.35, goldPerTrip: 0, damagesTree: true, deliversInPlace: false },
-  ewsp: { gold: true, lumber: true, harvestAbility: "Awha", lumberCapacity: 0, lumberPerChop: 5, chopPeriod: 8, goldPerTrip: 0, damagesTree: false, deliversInPlace: true },
+  hpea: { gold: true, lumber: true, harvestAbility: "Ahar", lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1.1, goldPerTrip: 10, damagesTree: true, deliversInPlace: false, minesInRing: false },
+  opeo: { gold: true, lumber: true, harvestAbility: "Ahar", lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1.1, goldPerTrip: 10, damagesTree: true, deliversInPlace: false, minesInRing: false },
+  uaco: { gold: true, lumber: false, harvestAbility: "Aaha", lumberCapacity: 0, lumberPerChop: 0, chopPeriod: 1, goldPerTrip: 0, damagesTree: false, deliversInPlace: false, minesInRing: true },
+  ugho: { gold: false, lumber: true, harvestAbility: "Ahrl", lumberCapacity: 20, lumberPerChop: 2, chopPeriod: 1.35, goldPerTrip: 0, damagesTree: true, deliversInPlace: false, minesInRing: false },
+  ewsp: { gold: true, lumber: true, harvestAbility: "Awha", lumberCapacity: 0, lumberPerChop: 5, chopPeriod: 8, goldPerTrip: 0, damagesTree: false, deliversInPlace: true, minesInRing: false },
 };
 
 /**
@@ -201,16 +221,17 @@ export const RACE_INDEX: Record<PlayableRace, number> = {
  * lumber had to be walked all the way back to the hall.
  *
  * The one place we depart from the data, and deliberately: **a `TownHall`-classified building
- * accepts GOLD even when its `Artn` row does not say so.** The Necropolis and Tree of Life
- * chains carry only `Arlm`, because in the real game neither race's gold ever leaves the mine
- * — undead acolytes and night elf wisps stand INSIDE a haunted/entangled mine and the gold is
- * credited where it is dug, so there is nothing to return. We model the night elf's version
- * (SimWorld.tickEntangledMines) but not the undead's (see the "we do not model a Haunted Gold
- * Mine" note in world.ts), so our acolytes shuttle gold like a peasant and need somewhere to
- * put it. `UnitBalance.slk`'s `type` column carries the classification and a clone inherits
- * it, so this stays as data-driven as the rest — and it applies to exactly the seventeen
- * TownHall-classified types (the twelve halls, the three corrupted trees, the Draenei Haven
- * and the Temple of Tides). Drop this clause when the Haunted Gold Mine is modelled.
+ * accepts GOLD even when its `Artn` row does not say so.**
+ *
+ * The Necropolis and Tree of Life chains carry only `Arlm`, and the data is right: neither
+ * race's gold ever leaves the mine. A Wisp stands INSIDE an Entangled Gold Mine and an Acolyte
+ * kneels in a Haunted one's ring, and both are credited where the gold is dug, so there is
+ * nothing to return. **Both are now modelled** (SimWorld.tickMineCrews), so for those two
+ * chains this clause is inert — nothing ever walks gold to them.
+ *
+ * What it still covers is the CAMPAIGN halls whose own rows carry no return ability at all:
+ * the Draenei Hut/Haven (`ndh0`/`ndh1`), which a campaign map's workers do haul to. Keyed off
+ * `UnitBalance.slk`'s `type` column, so a clone inherits it like everything else.
  */
 export const RETURN_RESOURCES_CODE = "Artn";
 
@@ -232,7 +253,7 @@ export function depotRoleFor(classification: string[], abilities: Array<{ code: 
     if (a.data[0]) role.gold = true; // Rtn1 — accepts gold
     if (a.data[1]) role.lumber = true; // Rtn2 — accepts lumber
   }
-  // The Haunted Gold Mine stand-in — see the block comment above.
+  // The campaign halls whose `Artn` row says nothing — see the block comment above.
   if (!role.gold && classification.includes("townhall")) role.gold = true;
   return role;
 }

@@ -362,6 +362,9 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
     w.u8((s.worker.gold ? 1 : 0) | (s.worker.lumber ? 2 : 0));
     w.u8(Math.min(255, Math.round(s.worker.carryGold)));
     w.u8(Math.min(255, Math.round(s.worker.carryLumber)));
+    // …and which station it holds in a Haunted Gold Mine's ring. Rides inside the WORKER
+    // block because only a worker can ever have one, and `Abgm`'s crew cap is 5.
+    w.u8(Math.min(255, s.ringSlot));
   }
 
   if (s.building) {
@@ -456,6 +459,7 @@ function readUnit(r: Reader): UnitSnapshot {
     moving: (flags & F_MOVING) !== 0,
     inCombat: (flags & F_IN_COMBAT) !== 0,
     working: (flags & F_WORKING) !== 0,
+    ringSlot: 0, // …read below, inside the worker block that is the only thing that has one
     swingSeq: 0,
     chopSeq: 0,
     swingBroken: (flags & F_SWING_BROKEN) !== 0,
@@ -563,6 +567,7 @@ function readUnit(r: Reader): UnitSnapshot {
   if (flags & F_HAS_WORKER) {
     const wf = r.u8();
     s.worker = { gold: (wf & 1) !== 0, lumber: (wf & 2) !== 0, carryGold: r.u8(), carryLumber: r.u8() };
+    s.ringSlot = r.u8();
   }
 
   if (flags & F_HAS_BUILDING) {

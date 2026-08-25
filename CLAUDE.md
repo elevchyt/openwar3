@@ -95,6 +95,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `type` = "Ancient") and released by a Moon Well, its lumber is credited in the tree with no
   round trip at all, gold is a crew of five sitting inside a building rather than a queue, and
   an Ancient is the one building in the game that picks up its own stamped footprint and walks.
+- **Undead:** read [`docs/undead.md`](docs/undead.md) before touching blight, the Acolyte, the
+  Haunted Gold Mine or any undead structure's placement. Blight is TERRAIN — one grid the
+  buildings paint (`Abgs`/`Abgl` grow, `Abds`/`Abdl` on every OTHER race's buildings scrub, all
+  four the same row shape with one `Creates Blight` boolean between them) — and it OUTLIVES what
+  grew it. `UnitBalance.requirePlace` = "blighted" is the whole placement rule and names exactly
+  the eleven structures that need it. An Acolyte summons and WALKS AWAY (the building keeps its
+  own clock), never carries gold, and kneels in a `Abgm` 200-unit ring around a Haunted Gold
+  Mine — whose crew of five is paid where the gold is dug.
 - **Illusions:** read [`docs/illusions.md`](docs/illusions.md) before touching Mirror Image (`AOmi`), the Wand of
   Illusion (`AIil`), or anything that copies a unit. An illusion's whole point is that the ENEMY can't tell it from
   the original, so every tell (blue wash, summon timer, portrait) is gated on the LOCAL viewpoint, and its

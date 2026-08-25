@@ -309,6 +309,11 @@ const ERROR_VOICE: Record<string, string> = {
   Nolumber: "NoLumber",
   Nofood: "NoFood",
   Cantplace: "CantPlace",
+  // The Undead's own refusal, and the one race that has a SECOND one: UISounds.slk gives
+  // "Must summon structures upon Blight." its own row, `OffBlightUndead` →
+  // AcolytePlacedOffBlight1.wav, distinct from the CantPlace* the four races share. No
+  // other race has an OffBlight row, and none needs one.
+  Offblight: "OffBlight",
 };
 
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
@@ -478,6 +483,10 @@ interface W3xMap {
   // ground → cliffs → opaque instances → water → translucent instances; we replay that
   // sequence ourselves to insert the ubersplat pass before the translucent one (issue #16).
   anyReady: boolean;
+  /** OpenWar3 patch hook: mark one terrain CORNER blighted / clean, and push every tile
+   *  changed since the last push. See src/sim/blight.ts for what drives it. */
+  setBlight(column: number, row: number, on: boolean): boolean;
+  flushBlight(): void;
   renderGround(): void;
   renderCliffs(): void;
   renderWater(): void;
@@ -3290,13 +3299,7 @@ export class MapViewerScene {
           return;
         }
         world.attachEntangled(simId, mineId, e.casterId);
-        if (widget) {
-          widget.instance.hide();
-          this.entangledMines.set(simId, { widget, mineId });
-        }
-        // The mine's own NGOL foundation decal comes up with it: `egol` paints EMDB (roots)
-        // in the same place, and two ubersplats in one spot blend to a dark smear.
-        this.splats?.remove(`m${mineId}`);
+        this.claimMineWidget(simId, mineId, widget);
       });
     }
     // …and the way back. The building has left the world (destroyed, or the mine ran dry and
@@ -3312,6 +3315,18 @@ export class MapViewerScene {
         if (mineDef) this.addBuildingSplat(`m${held.mineId}`, mineDef, m.x, m.y);
       }
     }
+  }
+
+  /** A building has taken a gold mine over (entangled or haunted): hide the mine's own model
+   *  under it, remember the pair so the mine can be un-hidden when the building goes, and take
+   *  the mine's foundation decal away — `egol` paints EMDB and `ugol` UGOL in the same place,
+   *  and two ubersplats in one spot blend to a dark smear. */
+  private claimMineWidget(simId: number, mineId: number, widget: HideableWidget | null): void {
+    if (widget) {
+      widget.instance.hide();
+      this.entangledMines.set(simId, { widget, mineId });
+    }
+    this.splats?.remove(`m${mineId}`);
   }
 
   private async spawnUnit(
@@ -3414,8 +3429,7 @@ export class MapViewerScene {
     if (!p || !this.rts || !this.grid) return;
     const hit = this.rts.groundPoint(cssX, cssY);
     if (!hit) return;
-    let [x, y] = hit;
-    if (p.fp) [x, y] = this.grid.snapForBuildingRect(x, y, p.fp.w, p.fp.h);
+    let [x, y] = this.snapPlacement(p.def, hit[0], hit[1], p.fp);
     // A refused placement keeps the building on the cursor, exactly like a refused cast
     // keeps the reticle: the player gets told why and clicks again, without re-picking the
     // building off the card. Asked against the grid AND this player's own pending build
@@ -3440,7 +3454,9 @@ export class MapViewerScene {
       return;
     }
     if (!this.placementValid(x, y, this.pendingBuildCells(queued ? 0 : p.workerId))) {
-      this.refuse("Cantplace"); // "Unable to build there." — the worker says so out loud
+      // Which refusal depends on WHY: clear ground that simply is not rotted gets the
+      // Undead's own line, everything else the shared one.
+      this.refuse(this.groundSuitsBuilding(p.def, x, y) ? "Cantplace" : "Offblight");
       return;
     }
     // Feedback only, and deliberately duplicated (same contract as trainUnit): `execute`
@@ -3519,6 +3535,36 @@ export class MapViewerScene {
         this.buildWait.delete(w.id);
         const short = world.dropUnpaidBuilds(w.id);
         if (short && w.owner === this.localPlayer) this.refuse(short === "gold" ? ERR_NOGOLD : ERR_NOLUMBER);
+        continue;
+      }
+      // A Haunted Gold Mine rises on the mine itself. The mine's own cells are already
+      // stamped (they are the mine's footprint, and `ugol` carries the very same
+      // 16x16Goldmine pathTex), so there is nothing to clear and nothing to wait for — but
+      // the mine has to be CLAIMED here, at the raise, or two Acolytes walking to the same
+      // one would each raise their own.
+      if (pb.mineId !== undefined) {
+        const mine = world.mines.get(pb.mineId);
+        if (!mine || mine.entangledBy) { world.cancelPendingBuild(w.id); continue; } // gone, or beaten to it
+        mine.entangledBy = -1; // claimed while the model is in flight (see SimWorld.entangleMine)
+        const workerId = w.id;
+        const mineId = pb.mineId;
+        const vmap = this.viewer.map;
+        const widget = vmap ? this.nearestDoodadWidget(mine.x, mine.y, vmap.units as unknown as HideableWidget[]) : null;
+        this.buildSpawning.add(workerId);
+        void this.spawnUnit(def, mine.x, mine.y, w.owner, this.teamOf(w.owner), def.buildTime || 60).then((simId) => {
+          this.buildSpawning.delete(workerId);
+          if (simId === null) {
+            mine.entangledBy = 0; // the model never arrived — leave the mine as it was
+            world.cancelPendingBuild(workerId);
+            return;
+          }
+          // `entangler` 0: nothing HOLDS a haunted mine. An Entangled Gold Mine is released
+          // the moment its Tree uproots; a Haunted one outlives the Acolyte that summoned it,
+          // like every other Undead structure (see summonsBuildings).
+          world.attachEntangled(simId, mineId, 0);
+          this.claimMineWidget(simId, mineId, widget);
+          world.assignBuilder(workerId, simId); // clears buildPending, and lets the Acolyte go
+        });
         continue;
       }
       const fp = def.pathTex ? this.footprintFor(def.pathTex) : null;
@@ -5664,7 +5710,36 @@ export class MapViewerScene {
   private placementValid(x: number, y: number, reserved: ReadonlySet<number>): boolean {
     const p = this.placement;
     if (!p || !this.grid || !p.fp) return true;
-    return footprintBuildable(this.grid, p.fp, x, y, reserved);
+    // A building that stands ON a gold mine is valid exactly where a free mine is, and
+    // nowhere else — the mine's own cells are stamped unbuildable, so the ordinary footprint
+    // test would refuse the one site it belongs on. See SimWorld.hauntTarget.
+    if (this.rts?.simWorld.hauntsMines(p.def.id)) return !!this.rts.simWorld.hauntTarget(p.def.id, x, y);
+    return footprintBuildable(this.grid, p.fp, x, y, reserved) && this.groundSuitsBuilding(p.def, x, y);
+  }
+
+  /** Where a placement ghost actually sits: on the build grid, except for a building that
+   *  stands on a gold mine, which snaps onto the mine itself (WC3's Haunted Gold Mine ghost
+   *  jumps from mine to mine rather than sliding over the ground). */
+  private snapPlacement(def: UnitDef, x: number, y: number, fp: Footprint | null): [number, number] {
+    const mine = this.rts?.simWorld.hauntTarget(def.id, x, y);
+    if (mine) return [mine.x, mine.y];
+    return fp && this.grid ? this.grid.snapForBuildingRect(x, y, fp.w, fp.h) : [x, y];
+  }
+
+  /** The second half of "may this go here": not whether the ground is CLEAR, but whether it
+   *  is the right KIND of ground — `UnitBalance.requirePlace`. See SimWorld.footprintBlighted
+   *  for why that column is the whole Undead placement rule and why nothing here names an id.
+   *
+   *  Split from `footprintBuildable` because the two refusals are different sentences in the
+   *  game's own voice: a blocked site says "Unable to build there." in the local race's
+   *  worker's voice, while off-blight says "Must summon structures upon Blight." over an
+   *  Acolyte's own AcolytePlacedOffBlight1.wav ([Errors] Cantplace / Offblight). */
+  private groundSuitsBuilding(def: UnitDef, x: number, y: number): boolean {
+    if (def.requirePlace !== "blighted") return true;
+    const world = this.rts?.simWorld;
+    if (!world) return true;
+    const fp = def.pathTex ? this.footprintFor(def.pathTex) : null;
+    return world.footprintBlighted(x, y, fp?.w ?? 0, fp?.h ?? 0);
   }
 
   /**
@@ -5707,7 +5782,15 @@ export class MapViewerScene {
    *  no business minting a closure each time. */
   private readonly siteBlocked = (defId: string, x: number, y: number): boolean => {
     const def = this.registry.get(defId);
-    const fp = def?.pathTex ? this.footprintFor(def.pathTex) : null;
+    if (!def) return false;
+    // Blight is not a fixed property of the ground: a shift-queued Ziggurat can be authorised
+    // on rot that a Human expansion scrubs away before the Acolyte walks over, so the
+    // requirement is re-asked here with everything else rather than only at the click.
+    if (!this.groundSuitsBuilding(def, x, y)) return true;
+    // A mine-standing building's site is the mine, whose own cells are unbuildable; it is
+    // blocked only if the mine has gone or somebody else got there first.
+    if (this.rts?.simWorld.hauntsMines(defId)) return !this.rts.simWorld.hauntTarget(defId, x, y);
+    const fp = def.pathTex ? this.footprintFor(def.pathTex) : null;
     return !!fp && !!this.grid && !footprintBuildable(this.grid, fp, x, y);
   };
 
@@ -5729,9 +5812,8 @@ export class MapViewerScene {
       this.placeCellVerts = 0;
       return;
     }
-    let [x, y] = hit;
     const fp = this.placement.fp;
-    if (fp) [x, y] = this.grid.snapForBuildingRect(x, y, fp.w, fp.h);
+    const [x, y] = this.snapPlacement(this.placement.def, hit[0], hit[1], fp);
     // What this player's own pending builds have already claimed, in the same view the CLICK
     // will take: an unshifted placement retires its worker's own orders, so those cells are
     // free to it and the squares must not be drawn red over them. Shift is read from the
@@ -5768,6 +5850,40 @@ export class MapViewerScene {
     return this.rts?.groundHeightAt(x, y) ?? 0;
   }
 
+  /**
+   * Push the sim's blight onto the terrain.
+   *
+   * Blight is the one thing in the game that repaints the GROUND ITSELF: it is not a decal
+   * laid over the grass (an ubersplat) and not a tint, it is the tileset's own
+   * `TerrainArt\Blight\<Tileset>_Blight.blp` re-sorted into the tile's texture stack, which
+   * is why it blends with the neighbouring grass the way any two tiles do instead of ending
+   * at a hard circle. mdx-m3-viewer already loads that texture and already honours a
+   * `corner.blight` flag; what it had no way to do was change one after load, so the patch
+   * adds `setBlight`/`flushBlight` and this is the only caller.
+   *
+   * Driven off the sim's own lattice, which IS the terrain corner lattice (BlightGrid), so
+   * there is no resampling step and nothing to drift. Cheap by construction: the sim hands
+   * over only the corners that CHANGED, so a settled base costs one empty array a frame.
+   */
+  private syncBlight(map: W3xMap): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    const { all, cells } = world.drainBlightUpdates();
+    if (all) {
+      // The change list overflowed (a map script blighting a whole region). Re-ask the grid
+      // for everything rather than trying to reconstruct what was dropped.
+      const grid = world.blight;
+      if (!grid) return;
+      for (let row = 0; row < grid.rows; row++) {
+        for (let col = 0; col < grid.columns; col++) map.setBlight(col, row, grid.atCorner(col, row));
+      }
+    } else {
+      if (!cells.length) return;
+      for (const [col, row, on] of cells) map.setBlight(col, row, on);
+    }
+    map.flushBlight();
+  }
+
   /** Rebuild the placement footprint grid batch centred on world (x, y): one terrain-
    *  hugging quad per BUILD cell (64u — WC3's placement square, 2×2 pathing cells) of
    *  the building's full (blue) footprint, green where buildable and red where
@@ -5785,6 +5901,10 @@ export class MapViewerScene {
     }
     const fp = p.fp;
     const [ox, oy] = this.grid.origin;
+    // Ground the building needs to BE something (`requirePlace`) rather than merely be clear:
+    // the Undead's blight. Read per build square below, on the same 64-unit lattice
+    // SimWorld.footprintBlighted decides on, so the red squares are exactly the refusal.
+    const needsBlight = p.def.requirePlace === "blighted" ? this.rts?.simWorld ?? null : null;
     // Low-corner cell of the footprint — same centring as placementValid / stampFootprint.
     // snapForBuildingRect keeps it even, so build squares tile the footprint exactly.
     const [bx, by] = this.grid.worldToCell(x - (fp.w * PATHING_CELL) / 2, y - (fp.h * PATHING_CELL) / 2);
@@ -5805,8 +5925,9 @@ export class MapViewerScene {
           }
         }
         if (!reserved) continue;
-        const color = blocked ? COLLIDER_COLORS.unbuildable : COLLIDER_COLORS.buildable;
         const x0 = ox + (bx + sx) * PATHING_CELL, y0 = oy + (by + sy) * PATHING_CELL;
+        if (needsBlight && !needsBlight.isBlighted(x0 + BUILD_CELL / 2, y0 + BUILD_CELL / 2)) blocked = true;
+        const color = blocked ? COLLIDER_COLORS.unbuildable : COLLIDER_COLORS.buildable;
         pushColliderQuad(cells, x0, y0, x0 + BUILD_CELL, y0 + BUILD_CELL, h, color);
       }
     }
@@ -9010,6 +9131,7 @@ export class MapViewerScene {
       if (this.shadows) this.updateShadowBatch();
       if (map && fogScene && map.anyReady) {
         fogScene.startFrame();
+        this.syncBlight(map); // the Undead's rot, painted onto the ground before it is drawn
         map.renderGround();
         map.renderCliffs();
         // Unit shadows draw BEFORE the opaque units: the top-right cast falls north (away

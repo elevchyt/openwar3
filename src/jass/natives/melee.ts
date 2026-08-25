@@ -149,9 +149,12 @@ export function registerMeleeNatives(rt: Runtime): void {
   });
   // The Undead start haunts the nearest mine: BlightGoldMineForPlayerBJ saves the mine's
   // gold, RemoveUnit's the mine, and calls this to raise a Haunted Gold Mine in its place.
-  // We don't model haunted mines (every race mines the plain one), so the bridge hands back
-  // the mine still standing there — the swap becomes a no-op that keeps the mine, its gold
-  // and its handle. Without it the acolytes would spawn around a null location (0,0).
+  //
+  // The hook raises a real `ugol` over the mine (SimWorld.hauntMine) — but the HANDLE it
+  // hands back is still the mine's own, and deliberately. Our mine is not a unit (see
+  // MINE_ID_BASE): the gold lives on the mine record, the building merely stands over it, and
+  // the two things Blizzard.j does with this return value are `SetResourceAmount(newMine,
+  // mineGold)` and `GetUnitLoc(nearestMine)` — both of which are questions about the MINE.
   def(rt, "CreateBlightedGoldmine", (c, a) => {
     const x = asNum(a[1]), y = asNum(a[2]), facing = asNum(a[3]);
     const simId = c.rt.hooks?.createBlightedGoldMine?.(playerIndex(c, a[0]), x, y, facing) ?? -1;
@@ -159,9 +162,40 @@ export function registerMeleeNatives(rt: Runtime): void {
     return c.rt.unitForSim({ id: simId, typeId: "ngol", owner: PLAYER_NEUTRAL_PASSIVE, x, y, facing });
   });
 
-  // --- blight (Undead) — the sim tracks WHERE blight is (the Undead regenerate only on it),
-  // but we paint no purple ground, so the SetBlight* painters stay no-ops.
-  for (const name of ["SetBlight", "SetBlightRect", "SetBlightPoint", "SetBlightLoc"]) def(rt, name, () => JNULL);
+  // --- blight (Undead) -------------------------------------------------------------------
+  //
+  // These paint the ground, and the melee opening is the reason they have to: every Undead
+  // start ends with `SetBlightLoc(whichPlayer, nearMineLoc, 768, true)` (Blizzard.j,
+  // MeleeStartingUnitsUndead) — the patch of rot around the haunted mine, which is what the
+  // three Acolytes standing there regenerate on. As no-ops the race began its game off
+  // blight.
+  //
+  // `whichPlayer` is ignored, because blight is not owned: it is one property of the terrain,
+  // and the native takes a player only so the engine knows whose sight to reveal it in.
+  def(rt, "SetBlight", (c, a) => {
+    c.rt.hooks?.setBlight?.(asNum(a[1]), asNum(a[2]), asNum(a[3]), truthy(a[4]));
+    return JNULL;
+  });
+  def(rt, "SetBlightPoint", (c, a) => {
+    // No radius: one point, which is one terrain corner (BlightGrid's lattice is 128 apart).
+    c.rt.hooks?.setBlight?.(asNum(a[1]), asNum(a[2]), 1, truthy(a[3]));
+    return JNULL;
+  });
+  def(rt, "SetBlightLoc", (c, a) => {
+    const loc = c.rt.data<{ x: number; y: number }>(a[1]);
+    if (loc) c.rt.hooks?.setBlight?.(loc.x, loc.y, asNum(a[2]), truthy(a[3]));
+    return JNULL;
+  });
+  def(rt, "SetBlightRect", (c, a) => {
+    const r = c.rt.data<{ minX: number; minY: number; maxX: number; maxY: number }>(a[1]);
+    if (!r) return JNULL;
+    // A rect, painted as the disc that covers it from its own centre — the grid paints discs
+    // and nothing in the stock scripts uses this one, so a corner-exact rect would be
+    // machinery with no caller. Recorded rather than silently approximated.
+    const cx = (r.minX + r.maxX) / 2, cy = (r.minY + r.maxY) / 2;
+    c.rt.hooks?.setBlight?.(cx, cy, Math.hypot(r.maxX - cx, r.maxY - cy), truthy(a[2]));
+    return JNULL;
+  });
   def(rt, "IsPointBlighted", (c, a) => jBool(c.rt.hooks?.isPointBlighted?.(asNum(a[0]), asNum(a[1])) ?? false));
 
   // --- melee AI (MeleeStartingAI) — no AI scripts yet, so a computer slot just sits there ---

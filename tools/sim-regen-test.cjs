@@ -8,9 +8,11 @@
 //   earc Archer       night  0.5       Hpal Paladin     always 0.25 (+ Strength regen)
 //   ugho Ghoul        blight 2         hphx Phoenix     always -25  (it burns down)
 //
-// Blight itself is not a terrain type: it is the union of the Undead structures' Blight
-// Growth discs, whose radii come from Units\AbilityData.slk — `Abgs` (Ziggurat, Crypt)
-// Area1 768 and `Abgl` (Necropolis, halls, haunted mine) Area1 960.
+// Blight IS a terrain type — a per-corner grid the Undead structures paint (src/sim/blight.ts).
+// Each building lays its disc ONCE, when it finishes, at the radius its Blight Growth ability
+// gives it: Units\AbilityData.slk `Abgs` (Ziggurat, Crypt) Area1 768 and `Abgl` (Necropolis,
+// halls, haunted mine) Area1 960, both growing outward by DataA = 64 every Dur1 = 0.08s. What
+// it paints STAYS painted, which is checked below: a razed Necropolis leaves its rot behind.
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
@@ -29,11 +31,22 @@ const DEFS = {
   hphx: { hpRegen: -25, regenType: "always", abilities: [] },
   uzig: { hpRegen: 0, regenType: "none", abilities: ["Abgs"] }, // Ziggurat — small blight
   unpl: { hpRegen: 0, regenType: "none", abilities: ["Abgl"] }, // Necropolis — large blight
+  hbar2: { hpRegen: 0, regenType: "none", abilities: ["Abdl"] }, // a Human hall — large DISPEL
 };
-const ABILS = { Abgs: { levelData: [{ area: 768 }] }, Abgl: { levelData: [{ area: 960 }] } };
+// DataA "Expansion Amount" 64, DataB "Creates Blight" 1 on the growth rows and 0 on the
+// dispel ones — the one column that tells the four rows apart.
+const lvl = (area, creates) => ({ area, duration: 0.08, data: [64, creates] });
+const ABILS = {
+  Abgs: { levelData: [lvl(768, 1)] },
+  Abgl: { levelData: [lvl(960, 1)] },
+  Abdl: { levelData: [lvl(960, 0)] },
+};
 
+// The blight grid is derived from the PATHING grid (4 cells to a terrain corner), so the stub
+// needs real dimensions and an origin: 256 cells a side from (-4096, -4096) covers every disc
+// the checks below paint.
 const world = new SimWorld(
-  { width: 4, height: 4, cell: 128, blocked: new Uint8Array(16) },
+  { width: 256, height: 256, cell: 128, blocked: new Uint8Array(16), origin: [-4096, -4096] },
   1,
   { get: (id) => ABILS[id] }, // abilities
   undefined, // items
@@ -66,9 +79,13 @@ function check(what, got, want, tol = 0.001) {
 /** Regen the sim derives for a unit at the given hour. */
 function regenAt(u, hour) {
   world.timeOfDay = hour;
-  world.rebuildBlight();
   world.recomputeStats(u);
   return u.hpRegen;
+}
+
+/** Run a building's blight bloom to completion — `Abgl`'s 960 is 15 steps of 64 at 0.08s. */
+function bloom() {
+  for (let i = 0; i < 40; i++) world.tickBlight(0.08);
 }
 
 const DAY = 12, NIGHT = 0;
@@ -101,19 +118,36 @@ check("Barracks never regenerates", regenAt(unit("hbar"), NIGHT), 0);
   const ghoul = unit("ugho");
   check("Ghoul on bare ground regenerates nothing", regenAt(ghoul, DAY), 0);
 
-  const zig = unit("uzig", { x: 0, y: 0, building: {} });
-  ghoul.x = 700; // inside the Ziggurat's 768
+  const zig = unit("uzig", { x: 0, y: 0, building: { constructionLeft: 0 } });
+  bloom();
+  ghoul.x = 640; // inside the Ziggurat's 768 (and on a corner of the 128 lattice)
   check("Ghoul inside a Ziggurat's blight regenerates", regenAt(ghoul, DAY), 2);
-  ghoul.x = 800; // outside 768, inside a Necropolis' 960
-  check("…and steps off it at 800", regenAt(ghoul, DAY), 0);
+  ghoul.x = 896; // outside 768, inside a Necropolis' 960
+  check("…and steps off it at 896", regenAt(ghoul, DAY), 0);
 
-  zig.typeId = "unpl"; // same spot, the larger disc
-  check("…the Necropolis' larger disc reaches 800", regenAt(ghoul, DAY), 2);
-  check("IsPointBlighted agrees", world.isBlighted(800, 0), true);
-  check("…and stops at 960", world.isBlighted(1000, 0), false);
+  // A SECOND structure with the larger disc, beside the first. (The Ziggurat's own rot is
+  // already in the ground and stays there — blight is painted, not projected, so re-typing
+  // the building that laid it would prove nothing.)
+  unit("unpl", { x: 0, y: 0, building: { constructionLeft: 0 } });
+  bloom();
+  check("…the Necropolis' larger disc reaches 896", regenAt(ghoul, DAY), 2);
+  check("IsPointBlighted agrees", world.isBlighted(896, 0), true);
+  check("…and stops past 960", world.isBlighted(1152, 0), false);
 
-  zig.hp = 0; // a razed structure spreads nothing
-  check("Ghoul loses the blight when the building dies", regenAt(ghoul, DAY), 0);
+  // The rot OUTLIVES what grew it: "blight can be dispelled by your enemies ONCE the building
+  // that generated it has been destroyed" (classic.battle.net/war3/undead/basics.shtml) — so
+  // razing the base is not itself the dispel.
+  for (const u of world.units.values()) if (u.building) u.hp = 0;
+  bloom();
+  check("…and it stays when the buildings die", world.isBlighted(896, 0), true);
+  check("Ghoul still regenerates on the leftover rot", regenAt(ghoul, DAY), 2);
+
+  // A NON-Undead building is the dispel, and it is the same mechanism with DataB = 0:
+  // `Abds`/`Abdl` "Blight Dispel", carried by every Human / Orc / Night Elf structure.
+  unit("hbar2", { x: 0, y: 0, building: { constructionLeft: 0 } });
+  bloom();
+  check("A Barracks finishing on it scrubs the rot", world.isBlighted(640, 0), false);
+  check("Ghoul stops regenerating", regenAt(ghoul, DAY), 0);
 }
 
 // --- heroes: the type's own regen ADDS to the Strength regen (MiscGame StrRegenBonus 0.05) ---

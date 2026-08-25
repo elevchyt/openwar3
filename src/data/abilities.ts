@@ -564,6 +564,9 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // `nonancient` and `Aren` does not, so only a Wisp may mend an Ancient (repairRefusal).
   Arep: { target: "unit", autocast: true },
   Arst: { target: "unit", autocast: true },
+  /** Unsummon (`Auns`) — targets `structure,player`, i.e. one of YOUR OWN buildings. Not an
+   *  autocast: an Acolyte does not decide to dismantle your base. */
+  Auns: { target: "unit" },
   Aren: { target: "unit", autocast: true },
   // Call to Arms — the Human militia. `Amil` is the Peasant's own form toggle
   // (`Order=militia` / `Unorder=militiaoff`); `Amic` is the town bell on the hall

@@ -88,6 +88,7 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   u.moving = s.moving;
   u.inCombat = s.inCombat;
   u.working = s.working;
+  u.ringSlot = s.ringSlot;
   u.swingSeq = s.swingSeq;
   u.chopSeq = s.chopSeq;
   u.swingBroken = s.swingBroken;

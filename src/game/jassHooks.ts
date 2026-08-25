@@ -110,10 +110,12 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
       const mine = mineForScript(sim, id);
       if (mine) mine.gold = amount;
     },
-    // The Undead start's mine swap: our engine has no haunted mine, so hand back the one still
-    // standing at (x, y) — `RemoveUnit` deliberately left it alone (see the renderer's
-    // removeUnit). Acolytes then clump around a real mine instead of a null location.
-    createBlightedGoldMine: (_player, x, y) => {
+    // The Undead start's mine swap: raise a real Haunted Gold Mine over the nearest mine and
+    // hand back the MINE's handle. `RemoveUnit` deliberately left the mine alone (see the
+    // renderer's removeUnit) because the mine is still where the gold is — the building only
+    // stands over it (SimWorld.hauntMine), and everything Blizzard.j asks this return value
+    // (its gold, its location) is a question about the mine.
+    createBlightedGoldMine: (player, x, y) => {
       let best: SimMine | undefined;
       let bestD = MELEE.MELEE_MINE_SEARCH_RADIUS ** 2;
       for (const m of sim.mines.values()) {
@@ -123,9 +125,12 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
           best = m;
         }
       }
-      return best ? MINE_ID_BASE + best.id : -1;
+      if (!best) return -1;
+      sim.hauntMine(player, teamOf(player), best.x, best.y);
+      return MINE_ID_BASE + best.id;
     },
     isPointBlighted: (x, y) => sim.isBlighted(x, y),
+    setBlight: (x, y, radius, add) => sim.setBlight(x, y, radius, add),
     // Unit state: SetUnitState/GetUnitState → sim HP/mana. state: 0=life 1=maxlife 2=mana 3=maxmana.
     setUnitState: (id, state, value) => {
       const u = sim.units.get(id);

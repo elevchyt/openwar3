@@ -731,6 +731,11 @@ export interface EngineHooks {
    *  the Undead structures' Blight Growth discs (SimWorld.isBlighted), which is enough for
    *  the question a script actually asks even though we paint no purple ground. */
   isPointBlighted?(x: number, y: number): boolean;
+  /** SetBlight / SetBlightPoint / SetBlightLoc / SetBlightRect — paint or clear the rot in a
+   *  disc. The melee opening's own last act for the Undead (Blizzard.j
+   *  `SetBlightLoc(whichPlayer, nearMineLoc, 768, true)`); no player, because blight belongs
+   *  to the ground rather than to anybody (see SimWorld.setBlight). */
+  setBlight?(x: number, y: number, radius: number, add: boolean): void;
   /** GetPlayerStructureCount / GetPlayerUnitCount — melee defeat is "my team owns no
    *  structures", so these decide who has lost (MeleeCheckForLosersAndVictors). */
   playerStructureCount?(player: number, includeIncomplete: boolean): number;

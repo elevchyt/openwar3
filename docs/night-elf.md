@@ -9,7 +9,7 @@ difference is a tuning value — each piece is a rule, and each rule is stated b
 This is that list, so the next person does not have to rediscover which column says what.
 
 Implementation: `tickHarvest` / `applyHarvestData` / `popFromCanopy` / `finishConstruction` /
-`tickEntangledMines` / `tickReplenish` / `tickRenew` / `toggleRoot` / `issueRootAt` /
+`tickMineCrews` / `tickReplenish` / `tickRenew` / `toggleRoot` / `issueRootAt` /
 `tickRootSettle` / `issueEntangleInstant` / `issueEntangleAt` / `entangleSite` / `tickEntangleAt` /
 `issueDrink` in
 [`src/sim/world.ts`](../src/sim/world.ts), the `Aent` / `Ambt` / `Adtn` / `Aeat` handlers in
@@ -29,7 +29,7 @@ difference:
 | --- | --- | --- |
 | `DataA1` | 5 | lumber per interval |
 | `Dur1` | 8 | the interval, seconds |
-| `DataB1` / `DataC1` | 5 / 150 | field ids Wha2/Wha3 — **unspent**, no source names them |
+| `DataB1` / `DataC1` | 5 / 150 | Wha2/Wha3 — "Intervals Before Changing Trees" / "Art Attachment Height" (**unspent**) |
 | `Targetart` | `TargetArtLumber.mdl` | the glow on the worked tree |
 | `Effectsoundlooped` | `WispHarvestLoop` | not a per-hit sound: a loop |
 
@@ -327,8 +327,9 @@ tree is the cost: it is destroyed outright and nobody gets its lumber.
 It is aimed at a POINT here rather than at a tree handle, because a tree is not a unit in this
 sim; the handler eats the nearest one to the click that the Ancient can actually reach
 (`Rng1` = 32, measured from its hull — which for a 12×12 Ancient of War is most of the reason
-that number can be so small). `DataA1` 0.8 and `DataB1` 2.5 have field ids of their own and no
-source that names them, so they stay unspent.
+that number can be so small). `DataA1` 0.8 and `DataB1` 2.5 are "Rip Delay" and "Eat Delay"
+(AbilityMetaData `eat1`/`eat2` through `UI\WorldEditStrings.txt`) — the two beats of the
+animation, not of the heal — and stay unspent.
 
 An uprooted Ancient trains and researches nothing — WC3 halts the queue rather than cancelling
 it, so it resumes where it stopped when the Ancient plants.

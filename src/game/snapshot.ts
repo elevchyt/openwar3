@@ -257,6 +257,10 @@ export interface UnitSnapshot {
   moving: boolean;
   inCombat: boolean;
   working: boolean;
+  /** The Acolyte's station in a Haunted Gold Mine's ring — sent because the POSE hangs off it
+   *  (unitAnims: "Stand Work Gold"), and a client that only knew `working` would draw a
+   *  mining Acolyte standing idle. */
+  ringSlot: number;
   /** Swing/chop counters. They are sent as the plain running totals they are: the renderer
    *  re-triggers a clip when the number CHANGES, so a client that missed a snapshot re-syncs
    *  on the next one instead of replaying a swing it already drew. */
@@ -573,6 +577,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     moving: false,
     inCombat: false,
     working: false,
+    ringSlot: 0,
     swingSeq: 0,
     chopSeq: 0,
     swingBroken: false,
@@ -703,6 +708,7 @@ export function snapshotFor(
       moving: u.moving,
       inCombat: u.inCombat,
       working: u.working,
+      ringSlot: u.ringSlot,
       swingSeq: u.swingSeq,
       chopSeq: u.chopSeq,
       swingBroken: u.swingBroken,

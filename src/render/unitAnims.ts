@@ -66,6 +66,16 @@ export interface AnimSet {
    *  to the form the unit is NOT in: an uprooted Ancient (whose queue is halted, not
    *  cancelled) was standing in the planted tree's working pose while it walked. */
   standWork: number;
+  /** "Stand Work Gold" — a worker MINING, in place. Exactly one unit in the game authors it,
+   *  and its clip list is the argument for the whole Undead economy:
+   *
+   *      Acolyte.mdx: Stand · Stand 2 · Walk · Attack · **Stand Work Gold** · Death · Decay …
+   *
+   *  There is no "Stand Gold" and no "Walk Gold" — an Acolyte never CARRIES gold, so no pose
+   *  for carrying it was ever drawn — and in their place is one clip for kneeling at a mine
+   *  and working it where it stands. -1 for everyone else, including the Peasant and Peon,
+   *  whose mining happens out of sight inside the shaft and needs no pose at all. */
+  standWorkGold: number;
   build: number; // a WORKER's hammering pose: its "Stand Work", else its attack swing
   decayFlesh: number; // corpse decay — flesh rots (heroes lack this)
   decayBone: number; // corpse decay — bones linger, then vanish
@@ -355,6 +365,10 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     walkLumber: or(find(/walk lumber/i), walk),
     chopLumber: or(find(/attack lumber/i), attack),
     standWork,
+    // Anchored on the whole phrase: "Stand Work Gold" is deliberately excluded from
+    // `standWork` above (it is a mining pose, not a production one) and must be found here
+    // instead. See the field's own note for why only the Acolyte has one.
+    standWorkGold: find(/^stand work gold\s*$/i),
     // A worker with no work clip hammers with its attack swing — which is exactly what a
     // Peasant does, and why this fallback cannot be shared with `standWork` above.
     build: or(standWork, attack),
@@ -491,6 +505,11 @@ export function pickSequence(a: AnimSet, u: RenderUnit, moving: boolean): number
   // the hammering it does to build and to Renew (a repair — see the `u.repair` line above), and
   // wearing that one in the canopy is what made the harvest read as an animation of our own
   // rather than the one the model ships.
+  // An Acolyte kneeling in a Haunted Gold Mine's ring works the mine WHERE IT STANDS, and
+  // Acolyte.mdx authors the pose for exactly that ("Stand Work Gold"). Asked before the chop
+  // below because the two are different jobs: the chop is a swing at a tree, this is a
+  // channel at a mine, and the Acolyte has no swing to lend.
+  if (u.working && u.order === "harvest" && u.ringSlot > 0 && a.standWorkGold >= 0) return a.standWorkGold;
   if (u.working && u.order === "harvest") return a.chopLumber >= 0 ? a.chopLumber : a.standLumber;
   // NOTE: no `inCombat → attack` here. The attack clip is owned entirely by the
   // swing-driven block above (triggered per swing). Reaching pickSequence while in

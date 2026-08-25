@@ -303,7 +303,7 @@ console.log("the payload is JSON, by decision");
   // The shop shelf CROSSES now (protocol 5) — but re-encoded as a plain array, never as the
   // sim's Map, which is the concrete thing that would have gone through as `{}`.
   check("the shelf crosses as plain data, not the sim's Map", Array.isArray(snap.units[0].building.stock), true);
-  check("…carrying the card's fields", snap.units[0].building.stock[0], { id: "ratf", count: 1, max: 3, timer: 5, period: 30, kind: "item" });
+  check("…carrying the card's fields", snap.units[0].building.stock[0], { id: "ratf", count: 1, max: 3, timer: 5, period: 30, kind: "item", unlimited: false });
   check("nor the speed-build accounting", ["builderIds", "goldCost", "lumberCost"].filter((k) => k in snap.units[0].building), []);
 }
 

@@ -39,7 +39,7 @@ const EXPECTED = [
   "getHeroSkillPoints", "getHeroXp", "getResourceAmount", "killUnit", "removeUnit",
   "getTimeOfDay", "getUnitAbilityLevel", "getUnitFacing", "getUnitFlyHeight", "getUnitLevel",
   "getUnitMoveSpeed", "getUnitState", "getUnitX", "getUnitY",
-  "isDawnDuskEnabled", "isPointBlighted", "isUnitPaused", "itemInfo",
+  "isDawnDuskEnabled", "isPointBlighted", "setBlight", "isUnitPaused", "itemInfo",
   "modifySkillPoints", "pauseUnit", "playerTechCount", "removeFromStock", "removeItem",
   "resetUnitCooldown", "selectHeroSkill", "setAllTypeSlots", "setDawnDusk", "setHeroLevel",
   "setResourceAmount",
@@ -72,7 +72,7 @@ const teamOf = (p) => TEAMS[p] ?? p;
 const hooks = simHooks(world, teamOf);
 const got = Object.keys(hooks).sort();
 check("every expected native is present, and no extra", got, EXPECTED);
-check("all 65 of them are functions", got.filter((k) => typeof hooks[k] !== "function"), []);
+check("all 66 of them are functions", got.filter((k) => typeof hooks[k] !== "function"), []);
 check("setPlayerState is NOT here — it is the authority's", got.includes("setPlayerState"), false);
 
 // Not just present — actually wired to THIS world. A hook bound to the wrong object, or to a

@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 305, **done** 161, **passive** 14, **todo** 319.
+Totals: 799 rows — **alias** 322, **done** 194, **partial** 2, **passive** 13, **todo** 268.
 
 ## Art paths this install does not ship
 
@@ -35,8 +35,14 @@ How to add one, end to end:
    MEAN — `Units\AbilityMetaData.slk` `useSpecific` names them through
    `UI\WorldEditStrings.txt`. Never infer a column from behaviour: Finger of Death's
    damage is dataC, and reading dataA the way other nukes do would deal 0.25.
-2. Add a `KNOWN_ABILITIES` entry in `src/data/abilities.ts` (target type from `Rng1`/
-   `Area1`; autocast iff its AbilityFunc row has `Orderon`/`Orderoff`).
+2. Add a `KNOWN_ABILITIES` entry in `src/data/abilities.ts` (autocast iff its AbilityFunc
+   row has `Orderon`/`Orderoff`). **The target type is not in the tables**: `Rng1` and
+   `Area1` cannot tell a point-target spell from a unit-target one — Forked Lightning
+   has both and is cast on a unit, and reading them as "point" is exactly how it ended
+   up aimable at bare ground. The ability's own **Ubertip** is what says so, in words:
+   `[ANfl]` reads "a cone of lightning on a target enemy unit". Read it before you
+   choose. What IS data is who may be struck — `targs1`, read in one place
+   (`src/sim/targeting.ts`), never re-transcribed as an `if (t.flying)` in a handler.
 3. Add the handler to `SPELL_HANDLERS` (or `AURA_BUFFS`, or the passive path in
    `world.ts`) — dispatch is on the base `code`, never the alias.
 4. Add assertions to `tools/sim-*-test.cjs` and run `pnpm sim:test`; re-run
@@ -77,7 +83,7 @@ Known gaps that are NOT ability rows, found while auditing:
 
 ## Unimplemented base codes, by alias fanout
 
-223 distinct base `code`s cover the 319 todo rows. Implementing one
+188 distinct base `code`s cover the 268 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -90,12 +96,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `AImm` | Item Mana Bonus | 5 |  |  | `AIbm` `AImb` `AImz` `AI2m` `AImv` |
 | `Abli` | Blight Dispel Large | 4 |  |  | `Abdl` `Abds` `Abgl` `Abgs` |
 | `ANde` | Demolish | 4 | enemy,structure | demolish | `ANd1` `ANd2` `ANd3` `ANde` |
-| `AIsb` | Item Attack Black Arrow Bonus | 4 | ground,air,ward |  | `AIdf` `AIlx` `AIll` `AIsb` |
 | `Aams` | Anti-magic Shell | 3 | air,ground,vuln,invu,friend,self | antimagicshell | `Aam2` `Aams` `ACam` |
-| `Afbk` | Feedback | 3 | air,ground,enemy,neutral |  | `Afbb` `Afbk` `Afbt` |
-| `Aoar` | Healing Ward Aura | 3 | ground,air,organic,vuln,invu,friend,neutral |  | `Aoar` `ACnr` `AIgx` |
 | `AIdi` | Item Dispel | 3 | air,ground,ward,invu,vuln,tree |  | `AIdi` `AIds` `APdi` |
-| `Arsk` | Resistant Skin | 3 |  |  | `ACrk` `ACsk` `Arsk` |
 | `Aspd` | Spawn Hydra | 3 |  |  | `Aspy` `Aspt` `Aspd` |
 | `ANsu` | Submerge | 3 |  | submerge | `Asb1` `Asb2` `Asb3` |
 | `ANwm` | Summon Prawns | 3 |  | wateryminion | `Aslp` `AIwm` `ANwm` |
@@ -105,15 +107,12 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Arav` | Crow Form | 2 |  | ravenform | `Amrf` `Arav` |
 | `Acrs` | Curse | 2 | air,ground,enemy,organic,neutral | curse | `ACcs` `Acrs` |
 | `ANdc` | Dark Conversion | 2 | air,ground,organic,nonhero | darkconversion | `ANdc` `SNdc` |
+| `AIdd` | Defend, Passive Defense | 2 | vuln,invu | defend | `AIdd` `Aegr` |
 | `Advm` | Devour Magic | 2 | air,ground,ward,invu,vuln,tree |  | `ACde` `Advm` |
-| `AIdd` | Elune's Grace | 2 | vuln,invu |  | `Aegr` `AIdd` |
-| `Aven` | Envenomed Spears | 2 | air,ground,organic |  | `Aven` `ACvs` |
 | `AUfa` | Frost Armor | 2 | air,ground,friend,self,neutral | frostarmor | `ACfa` `AUfa` |
-| `Afra` | Frost Attack | 2 | air,ground |  | `Afr2` `Afra` |
 | `AIgl` | Glyph of Fortification | 2 |  |  | `AIgf` `AIgu` |
 | `Assk` | Hardened Skin | 2 | enemy,ally |  | `Ansk` `Assk` |
 | `AIta` | Item Area Detection | 2 |  |  | `AIta` `AHta` |
-| `AIob` | Item Attack Frost Bonus | 2 | ground,air,ward |  | `AIob` `AIft` |
 | `AIfl` | Item Capture The Flag | 2 |  |  | `AIfl` `AIfx` |
 | `AIdc` | Item Chain Dispel | 2 | air,ground,friend,self,enemy,invu,vuln |  | `AIdc` `Ache` |
 | `AIda` | Item Temporary Area Armor Bonus | 2 | ground,air,friend,self,invu,vuln |  | `AIda` `AIdb` |
@@ -121,18 +120,14 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `ANmo` | Monsoon | 2 | air,ground,structure,enemy,neutral | monsoon | `ACmo` `ANmo` |
 | `Amgl` | Moon Glaive | 2 |  |  | `Amgl` `Amgr` |
 | `Acoi` | Mount Hippogryph | 2 | vuln,invu |  | `Aco2` `Aco3` |
-| `Afak` | Orb of Annihilation | 2 | air,ground,structure,enemy,neutral |  | `Afak` `ANak` |
 | `ANpa` | Parasite | 2 | air,ground,enemy,organic,neutral,nonhero | parasite | `ACpa` `ANpa` |
 | `ANpi` | Permanent Immolation | 2 | ground,enemy,neutral,organic |  | `ANpi` `Apmf` |
 | `Aply` | Polymorph | 2 | air,ground,nonhero,enemy,organic,neutral | polymorph | `ACpy` `Aply` |
 | `Apos` | Possession | 2 | ground,nonhero,enemy,organic,neutral | possession | `ACps` `Apos` |
 | `ANrc` | Rain of Chaos | 2 |  |  | `ANr3` `ANrc` |
-| `Arai` | Raise Dead | 2 | dead | raisedead | `ACrd` `Arai` |
-| `Ambt` | Replenish Mana | 2 | air,ground,invu,vuln,friend | recharge | `Amb2` `Ambt` |
 | `AIsa` | Rune of Speed | 2 | air,ground,friend,self,vuln,invu |  | `APsa` `AIsa` |
 | `Aesn` | Sentinel | 2 | tree,vuln,invu | sentinel | `Aesn` `Aesr` |
 | `ACtc` | Slam | 2 | ground,neutral | creepthunderclap | `ACt2` `ACtc` |
-| `Aspo` | Slow Poison | 2 | air,ground,organic |  | `AIsz` `Aspo` |
 | `Atau` | Taunt | 2 | air,ground,enemy,vuln,invu | taunt | `ANta` `Atau` |
 | `Aweb` | Web | 2 | air,enemy,neutral | web | `ACwb` `Aweb` |
 | `Aimp` |  | 1 |  |  | `Aimp` |
@@ -141,7 +136,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Amls` | Aerial Shackles | 1 | air,enemy,organic | magicleash | `Amls` |
 | `Aalr` | Alarm | 1 | air,ground,enemy,vuln,invu |  | `Aalr` |
 | `Aamk` | Attribute Bonus | 1 |  | attributemodskill | `Aamk` |
-| `Aabr` | Aura of Blight | 1 | ground,air,organic,vuln,invu,friend,neutral |  | `Aabr` |
 | `ANbr` | Battle Roar | 1 | air,ground,friend,self | battleroar | `ANbr` |
 | `Abrf` | Bear Form | 1 |  | bearform | `Abrf` |
 | `Ablp` | Blight Placement | 1 |  |  | `Ablp` |
@@ -160,22 +154,17 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `ANdp` | Dark Portal | 1 |  |  | `ANdp` |
 | `AUds` | Dark Summoning | 1 | air,ground,vuln,invu,player | darksummoning | `AUds` |
 | `Aave` | Destroyer Form | 1 |  | sphinxform | `Aave` |
-| `Adtn` | Detonate | 1 | air,ground,ward,invu,vuln,tree | detonate | `Adtn` |
 | `ACdv` | Devour | 1 | ground,nonhero,enemy,organic,neutral | creepdevour | `ACdv` |
 | `Advc` | Devour Cargo | 1 | ground,enemy,neutral,vuln,invu |  | `Advc` |
 | `Apts` | Disease Cloud | 1 | ground,enemy,structure,debris,tree,wall,organic,neutral |  | `Apts` |
 | `Adch` | Disenchant | 1 | air,ground,ward,invu,vuln,enemy |  | `Adch` |
 | `Adec` | Dismount | 1 |  | decouple | `Adec` |
-| `Amed` | Drop Corpse | 1 |  | unloadcorpse | `Amed` |
 | `Atdp` | Drop Pilot | 1 |  |  | `Atdp` |
 | `AItb` | Dust of Appearance | 1 | air,ground,ward,enemy,neutral,vuln,invu |  | `AItb` |
-| `Aeat` | Eat Tree | 1 | tree | eattree | `Aeat` |
-| `Aent` | Entangle Gold Mine | 1 |  | entangle | `Aent` |
 | `Aegm` | Entangled Gold Mine Ability | 1 |  |  | `Aegm` |
 | `Arpl` | Essence of Blight | 1 | ground,air,friend,self,organic,vuln,invu | replenishlife | `Arpl` |
 | `Aetl` | Ethereal | 1 |  |  | `Aetl` |
 | `Aetf` | Ethereal Form | 1 |  | etherealform | `Aetf` |
-| `Aexh` | Exhume Corpses | 1 |  |  | `Aexh` |
 | `ANfy` | Factory | 1 |  |  | `ANfy` |
 | `Aflk` | Flak Cannons | 1 | air,enemy,neutral |  | `Aflk` |
 | `Afla` | Flare | 1 |  | flare | `Afla` |
@@ -183,23 +172,18 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Afsh` | Fragmentation Shards | 1 | ground,enemy,neutral |  | `Afsh` |
 | `Afrz` | Freezing Breath | 1 | structure,enemy | freezingbreath | `Afrz` |
 | `Afzy` | Frenzy | 1 | air,ground,self | frenzy | `Afzy` |
-| `Afrb` | Frost Breath | 1 | air,ground |  | `Afrb` |
 | `Aaha` | Gather | 1 |  | harvest | `Aaha` |
-| `Amel` | Get Corpse | 1 | ground,dead,nonhero | loadcorpse | `Amel` |
 | `Aeth` | Ghost | 1 |  |  | `Aeth` |
 | `Agho` | Ghost | 1 |  |  | `Agho` |
 | `Agld` | Gold Mine ability | 1 |  |  | `Agld` |
 | `AHer` | Hero | 1 |  |  | `AHer` |
 | `ACtb` | Hurl Boulder | 1 | air,ground,organic,enemy,neutral | creepthunderbolt | `ACtb` |
-| `ANic` | Incinerate | 1 | enemy,neutral,organic,nonancient | incinerate | `ANic` |
 | `ANin` | Inferno | 1 | ground,structure,debris,enemy,neutral | inferno | `ANin` |
 | `Aivs` | Invisibility | 1 | air,ground,organic,friend,nonsapper,neutral | invisibility | `Aivs` |
 | `Avul` | Invulnerable | 1 |  |  | `Avul` |
 | `AIan` | Item Animate Dead | 1 | air,ground,dead | animatedead | `AIan` |
 | `Aami` | Item Anti-Magic Shell | 1 | air,ground | antimagicshell | `AIxs` |
 | `AIdm` | Item Area tree/wall damage | 1 |  |  | `AIdm` |
-| `AIcb` | Item Attack Corruption Bonus | 1 | ground,air,ward |  | `AIcb` |
-| `AIaa` | Item Attack Damage Gain | 1 |  |  | `AIaa` |
 | `AIlb` | Item Attack Lightning Bonus | 1 | ground,air,ward |  | `AIlb` |
 | `AIpb` | Item Attack Poison Bonus | 1 | ground,air,organic |  | `AIpb` |
 | `AIfe` | Item Capture The Flag | 1 |  |  | `AIfe` |
@@ -212,8 +196,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `AIil` | Item Illusions | 1 | ground,air,friend,self |  | `AIil` |
 | `AIcf` | Item Immolation | 1 | ground,enemy,neutral |  | `AIcf` |
 | `AIlm` | Item Level Gain | 1 |  |  | `AIlm` |
+| `AIaa` | Item Permanent Damage Gain, Item Attack Damage Gain | 1 |  |  | `AIaa` |
 | `AIpm` | Item Place Goblin Land Mine | 1 |  |  | `AIpm` |
-| `AIlp` | Item Purge | 1 | ground,air,ward |  | `AIlp` |
 | `AIrt` | Item Recall | 1 | ground,air,player,vuln,invu,nonancient |  | `AIrt` |
 | `AIrc` | Item Reincarnation | 1 |  |  | `AIrc` |
 | `AIrs` | Item Resurrection | 1 | air,ground,dead,friend | resurrection | `AIrs` |
@@ -224,9 +208,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `AIsp` | Item Temporary Speed Bonus | 1 |  |  | `AIsp` |
 | `AItp` | Item Town Portal | 1 | structure,vuln,invu |  | `AItp` |
 | `AIwb` | Item Web | 1 | air,enemy,neutral |  | `AIwb` |
-| `Aarm` | Life Regeneration Aura | 1 | ground,air,organic,vuln,invu |  | `ANre` |
 | `Alit` | Lightning Attack | 1 | air,ground,structure,ward,item,debris |  | `Alit` |
-| `Aenc` | Load | 1 | ground,player,invu,vuln |  | `Aenc` |
 | `Atlp` | Load Pilot | 1 | ground,player,invu,vuln |  | `Atlp` |
 | `Aloc` | Locust | 1 |  |  | `Aloc` |
 | `Amdf` | Magic Defense | 1 |  | magicdefense | `Amdf` |
@@ -242,26 +224,19 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Afin` | On Fire (Night Elf) | 1 |  |  | `Afin` |
 | `Afio` | On Fire (Orc) | 1 |  |  | `Afio` |
 | `Afiu` | On Fire (Undead) | 1 |  |  | `Afiu` |
-| `ANbs` | Orb of Darkness | 1 | air,ground,enemy,organic,neutral | blackarrow | `ANbs` |
 | `Apig` | Permanent Immolation | 1 | ground,enemy,neutral,organic |  | `Apig` |
 | `Apiv` | Permanent Invisibility | 1 |  |  | `Apiv` |
 | `Apsh` | Phase Shift | 1 |  | phaseshift | `Apsh` |
 | `Apxf` | Phoenix Fire | 1 | ground,air,enemy |  | `Apxf` |
 | `Aphx` | Phoenix Morphing (Egg Related) | 1 |  |  | `Aphx` |
 | `Acoh` | Pick up Archer | 1 |  |  | `Acoh` |
-| `AEpa` | Poison Arrows | 1 | air,ground,organic | poisonarrowstarg | `AEpa` |
-| `Apo2` | Poison Sting | 1 | ground,air,organic |  | `Apo2` |
-| `Apoi` | Poison Sting | 1 | air,ground,organic |  | `Apoi` |
 | `Aps2` | Possession | 1 | ground,nonhero,enemy,organic,neutral | possession | `Aps2` |
-| `AIrd` | Raise Dead (Item) | 1 | dead |  | `AIrd` |
 | `ARal` | Rally | 1 |  |  | `ARal` |
 | `AIri` | Random Item | 1 | item |  | `AIri` |
 | `AIrb` | Rebirth | 1 |  |  | `AIrb` |
 | `ACrn` | Reincarnation | 1 |  |  | `ACrn` |
 | `Arbr` | Reinforced Burrows Upgrade | 1 |  |  | `Arbr` |
-| `Aren` | Renew | 1 | friend,ground,air,structure,bridge,alive,dead,invu,vuln | renew | `Aren` |
 | `Arpb` | Replenish | 1 | ground,air,friend,self,organic,vuln,invu | replenish | `Arpb` |
-| `Arst` | Restore | 1 | mechanical,friend,nonancient,ground,air,structure,bridge,alive,dead,invu,vuln | restoration | `Arst` |
 | `Andt` | Reveal | 1 |  |  | `Andt` |
 | `Arng` | Revenge | 1 |  |  | `Arng` |
 | `Arev` | Revive Hero | 1 |  | revive | `Arev` |
@@ -284,10 +259,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Asps` | Spell Steal | 1 | air,ground,friend,enemy,neutral,self,vuln,invu | spellsteal | `Asps` |
 | `Aspa` | Spider Attack | 1 | ground,ward,item,structure,debris,enemy |  | `Aspa` |
 | `Aspi` | Spiked Barricades | 1 | enemy |  | `Aspi` |
-| `Avng` | Spirit of Vengeance | 1 | air,ground,dead | Vengeance | `Avng` |
 | `Arpm` | Spirit Touch | 1 | ground,air,friend,self,organic,vuln,invu | replenishmana | `Arpm` |
-| `ANpr` | Staff of Preservation | 1 | ground,air,vuln,invu,player,neutral |  | `ANpr` |
-| `ANsa` | Staff of Sanctuary | 1 | ground,air,vuln,invu,player,neutral |  | `ANsa` |
 | `Astd` | Stand Down | 1 |  | standdown | `Astd` |
 | `Aste` | Steal | 1 | notself |  | `Aste` |
 | `Astn` | Stone Form | 1 |  | stoneform | `Astn` |
@@ -299,7 +271,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Agyv` | True Sight | 1 | vuln,invu |  | `Agyv` |
 | `Attu` | Turret | 1 |  |  | `Attu` |
 | `Adri` | Unload Instant | 1 |  | unload | `Adri` |
-| `Auns` | Unsummon Building | 1 | structure,player | unsummon | `Auns` |
 | `AIpv` | Vampiric Potion | 1 | air,ground,enemy,organic |  | `AIpv` |
 | `Ashs` | Wand of Shadowsight | 1 | air,ground,enemy,neutral |  | `Ashs` |
 | `Awan` | Wander | 1 |  |  | `Awan` |
@@ -343,7 +314,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `Amnz` | `Adda` | AOE damage upon death | other |  |  | ground,structure,debris,enemy |  |  | Death Damage (mine BIG) |
 | x | `Aatk` | `Aatk` | Attack | other |  |  |  |  |  | Attack |
 |   | `Aamk` | `Aamk` | Attribute Bonus | creeps | H |  |  |  | attributemodskill | Attribute Modifier Skill |
-|   | `Aabr` | `Aabr` | Aura of Blight | undead |  |  | ground,air,organic,vuln,invu,friend,neutral | 1 |  | Aura - Regeneration (Statue) |
+| x | `Aabr` | `Aabr` | Aura of Blight | undead |  |  | ground,air,organic,vuln,invu,friend,neutral | 1 |  | Aura - Regeneration (Statue) |
 | x | `AHav` | `AHav` | Avatar | human | H |  |  | 1 | avatar | Mountain King - Avatar |
 | ~ | `ANav` | `AHav` | Avatar | other | H |  |  |  | avatar | Avatar(Garithos) |
 | ~ | `ACbn` | `AHbn` | Banish | creeps |  |  | air,ground,nonsapper,organic |  | banish | Banish(Creep) |
@@ -419,7 +390,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Achd` | `Achd` | Cargo Hold Death | other |  |  | air,ground,ward,vuln,invu |  |  | Cargo Hold Death |
 | x | `AUcb` | `AUcb` | Carrion Beetles | undead | H |  | dead |  | Carrionscarabs | Crypt Lord - Carrion Scarabs |
 | ~ | `ACca` | `AUcs` | Carrion Swarm | creeps |  |  | ground,air | 2 | carrionswarm | Carrion Swarm (creep) |
-| x | `AUcs` | `AUcs` | Carrion Swarm | undead | H |  | ground,air,organic | 2 | carrionswarm | Dreadlord - Carrion Swarm |
+| x | `AUcs` | `AUcs` | Carrion Swarm | undead | H |  | ground,air | 2 | carrionswarm | Dreadlord - Carrion Swarm |
 | ~ | `ACcl` | `AOcl` | Chain Lightning | creeps |  |  | air,ground,enemy,neutral,organic | 2 | chainlightning | Chain Lightning (creep) |
 | ~ | `AIcl` | `AOcl` | Chain Lightning | other |  | I | air,ground,enemy,neutral,organic | 2 | chainlightning | Chain Lightning (item) |
 | x | `AOcl` | `AOcl` | Chain Lightning | orc | H |  | air,ground,enemy,neutral,organic | 2 | chainlightning | Farseer - Chain Lightning |
@@ -436,10 +407,10 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `ANca` | `ANca` | Cleaving Attack | creeps | H |  | ground,enemy,neutral | 1 |  | Pit Lord - Cleaving Attack |
 |   | `Aclf` | `Aclf` | Cloud | human |  |  | vuln,invu,structure |  | cloudoffog | Cloud of Fog |
 |   | `AIfg` | `Aclf` | Cloud of Fog | other |  | I | vuln,invu,structure |  | cloudoffog | Cloud of Fog (Item) |
-| ~ | `ANc1` | `ANcs` | Cluster Rockets | creeps | H |  | ground,enemy,neutral,structure | 1 | clusterrockets | Tinkerer - Cluster Rockets (Level 1) |
-| ~ | `ANc2` | `ANcs` | Cluster Rockets | creeps | H |  | ground,enemy,neutral,structure | 1 | clusterrockets | Tinkerer - Cluster Rockets (Level 2) |
-| ~ | `ANc3` | `ANcs` | Cluster Rockets | creeps | H |  | ground,enemy,neutral,structure | 1 | clusterrockets | Tinkerer - Cluster Rockets (Level 3) |
-| x | `ANcs` | `ANcs` | Cluster Rockets | creeps | H |  | ground,enemy,neutral,structure | 1 | clusterrockets | Tinkerer - Cluster Rockets (Level 0) |
+| ~ | `ANc1` | `ANcs` | Cluster Rockets | creeps | H |  | air,ground,enemy,neutral,structure | 1 | clusterrockets | Tinkerer - Cluster Rockets (Level 1) |
+| ~ | `ANc2` | `ANcs` | Cluster Rockets | creeps | H |  | air,ground,enemy,neutral,structure | 1 | clusterrockets | Tinkerer - Cluster Rockets (Level 2) |
+| ~ | `ANc3` | `ANcs` | Cluster Rockets | creeps | H |  | air,ground,enemy,neutral,structure | 1 | clusterrockets | Tinkerer - Cluster Rockets (Level 3) |
+| x | `ANcs` | `ANcs` | Cluster Rockets | creeps | H |  | air,ground,enemy,neutral,structure | 1 | clusterrockets | Tinkerer - Cluster Rockets (Level 0) |
 | ~ | `ACcw` | `AHca` | Cold Arrows | creeps |  |  | air,ground,enemy,neutral | 1 |  | Cold Arrows (creep) |
 | x | `AHca` | `AHca` | Cold Arrows | creeps | H |  | air,ground,enemy,neutral | 1 |  | Cold Arrows |
 | ~ | `ACac` | `AOac` | Command Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Aura - Command (Creep) |
@@ -477,13 +448,14 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AIdp` | `AUdp` | Death Pact | other |  | I | air,ground,player,nonhero,invu,vuln | 2 | deathpact | Death Pact (item) |
 | x | `AUdp` | `AUdp` | Death Pact | undead | H |  | air,ground,player,nonhero,invu,vuln | 2 | deathpact | Death Knight - Death Pact |
 | x | `Adef` | `Adef` | Defend | human |  |  | air,ground,structure,debris,neutral,enemy,ward,vuln,invu | 1 | defend | Defend |
+|   | `AIdd` | `AIdd` | Defend, Passive Defense | other |  | I | vuln,invu | 1 | defend | Defend (Item) |
 |   | `ANd1` | `ANde` | Demolish | creeps | H |  | enemy,structure |  | demolish | Tinkerer - Demolish (Level 1) |
 |   | `ANd2` | `ANde` | Demolish | creeps | H |  | enemy,structure |  | demolish | Tinkerer - Demolish (Level 2) |
 |   | `ANd3` | `ANde` | Demolish | creeps | H |  | enemy,structure |  | demolish | Tinkerer - Demolish (Level 3) |
 |   | `ANde` | `ANde` | Demolish | creeps | H |  | enemy,structure |  | demolish | Tinkerer - Demolish (Level 0) |
 |   | `Aave` | `Aave` | Destroyer Form | undead |  |  |  |  | sphinxform | Avenger Form |
 | ~ | `Adt1` | `Adet` | Detector | orc |  |  | vuln,invu |  |  | Detect (Sentry Ward) |
-|   | `Adtn` | `Adtn` | Detonate | nightelf |  |  | air,ground,ward,invu,vuln,tree | 2 | detonate | Detonate |
+| x | `Adtn` | `Adtn` | Detonate | nightelf |  |  | air,ground,ward,invu,vuln,tree | 2 | detonate | Detonate |
 | ~ | `ACav` | `AHad` | Devotion Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Aura - Devotion (Creep) |
 | x | `AHad` | `AHad` | Devotion Aura | human | H |  | air,ground,friend,self,vuln,invu | 1 |  | Paladin - Devotion Aura |
 |   | `ACdv` | `ACdv` | Devour | creeps |  |  | ground,nonhero,enemy,organic,neutral |  | creepdevour | Devour (Dragon Creep) |
@@ -504,7 +476,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACds` | `AHds` | Divine Shield | creeps |  |  | vuln,invu |  | divineshield | Divine Shield (creep) |
 | x | `AHds` | `AHds` | Divine Shield | human | H |  | invu,vuln |  | divineshield | Paladin - Divine Shield |
 | x | `ANdo` | `ANdo` | Doom | creeps | H |  | air,ground,nonhero,organic |  | doom | Pit Lord - Doom |
-|   | `Amed` | `Amed` | Drop Corpse | undead |  |  |  |  | unloadcorpse | Meat Drop |
+| x | `Amed` | `Amed` | Drop Corpse | undead |  |  |  |  | unloadcorpse | Meat Drop |
 |   | `Atdp` | `Atdp` | Drop Pilot | human |  |  |  |  |  | Drop Pilot |
 | ~ | `Acdb` | `ANdb` | Drunken Brawler | creeps | H |  |  |  |  | Chen- Drunken Brawler |
 | x | `ANdb` | `ANdb` | Drunken Brawler | creeps | H |  |  |  |  | Brewmaster - Drunken Brawler |
@@ -513,7 +485,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `AItb` | `AItb` | Dust of Appearance | other |  | I | air,ground,ward,enemy,neutral,vuln,invu | 1 |  | Dust of Appearance |
 | x | `AOeq` | `AOeq` | Earthquake | orc | H |  | ground,structure,debris,tree |  | earthquake | Farseer - Earthquake |
 | ~ | `SNeq` | `AOeq` | Earthquake | creeps | H |  | ground,structure,debris,tree |  | earthquake | Super Earthquake |
-|   | `Aeat` | `Aeat` | Eat Tree | nightelf |  |  | tree | 1 | eattree | Eat Tree |
+| x | `Aeat` | `Aeat` | Eat Tree | nightelf |  |  | tree | 1 | eattree | Eat Tree |
 |   | `Aegr` | `AIdd` | Elune's Grace | nightelf |  |  | vuln,invu |  |  | Elune's Grace |
 | x | `AOae` | `AOae` | Endurance Aura | orc | H |  | air,ground,friend,self,vuln,invu | 1 |  | Chieftain - Endurance Aura |
 | ~ | `AOr2` | `AOae` | Endurance Aura | orc | H |  | air,ground,friend,self,vuln,invu | 1 |  | Cairne - Endurance Aura |
@@ -522,13 +494,13 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACen` | `Aens` | Ensnare | creeps |  |  | ground,air,enemy,nonhero,neutral | 1 | ensnare | Ensnare (Creep) |
 | x | `Aens` | `Aens` | Ensnare | orc |  |  | ground,air,enemy,neutral | 1 | ensnare | Ensnare |
 | ~ | `ANen` | `Aens` | Ensnare | naga |  |  | ground,air,enemy,neutral | 1 | ensnare | Ensnare(Naga) |
-|   | `Aent` | `Aent` | Entangle Gold Mine | nightelf |  |  |  | 1 | entangle | Entangle |
+| x | `Aent` | `Aent` | Entangle Gold Mine | nightelf |  |  |  | 1 | entangle | Entangle |
 |   | `Aegm` | `Aegm` | Entangled Gold Mine Ability | nightelf |  |  |  |  |  | Entangled Gold Mine |
 | x | `AEer` | `AEer` | Entangling Roots | nightelf | H |  | ground,enemy,neutral,organic |  | entanglingroots | Keeper - Entangling Roots |
 | ~ | `Aenr` | `AEer` | Entangling Roots | creeps |  |  | ground,enemy,neutral,nonhero,organic |  | entanglingroots | Entangling Roots (creep) |
 | ~ | `Aenw` | `AEer` | Entangling Roots | creeps |  |  | ground,enemy,neutral,nonhero,organic |  | entanglingroots | Entangling Seaweed |
-|   | `Aven` | `Aven` | Envenomed Spears | orc |  |  | air,ground,organic |  |  | Venom Spears |
-|   | `ACvs` | `Aven` | Envenomed Weapons | creeps |  |  | air,ground,organic |  |  | Venom Spears (Creep) |
+| x | `Aven` | `Aven` | Envenomed Spears | orc |  |  | air,ground,organic |  |  | Venom Spears |
+| ~ | `ACvs` | `Aven` | Envenomed Weapons | creeps |  |  | air,ground,organic |  |  | Venom Spears (Creep) |
 |   | `Arpl` | `Arpl` | Essence of Blight | undead |  |  | ground,air,friend,self,organic,vuln,invu | 3 | replenishlife | Replenish (Life) |
 |   | `Aetl` | `Aetl` | Ethereal | nightelf |  |  |  |  |  | Ethereal |
 |   | `Aetf` | `Aetf` | Ethereal Form | orc |  |  |  | 1 | etherealform | Ethereal Form |
@@ -536,16 +508,16 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACev` | `AEev` | Evasion | creeps |  |  |  |  |  | Evasion (creep) |
 | x | `AEev` | `AEev` | Evasion | nightelf | H |  |  |  |  | Demon Hunter - Evasion |
 | ~ | `AIev` | `AEev` | Evasion | other |  | I |  |  |  | Evasion |
-|   | `Aexh` | `Aexh` | Exhume Corpses | undead |  |  |  |  |  | Exhume |
+| x | `Aexh` | `Aexh` | Exhume Corpses | undead |  |  |  |  |  | Exhume |
 |   | `ANfy` | `ANfy` | Factory | creeps |  |  |  |  |  | Factory |
 | ~ | `ACff` | `Afae` | Faerie Fire | creeps |  |  | air,ground,enemy,neutral |  | faeriefire | Faerie Fire (creep) |
 | ~ | `Afa2` | `Afae` | Faerie Fire | nightelf |  |  | air,ground,enemy,neutral |  | faeriefire | Faerie Fire |
 | x | `Afae` | `Afae` | Faerie Fire | nightelf |  |  | air,ground,enemy,neutral |  | faeriefire | Faerie Fire |
 | x | `AEfk` | `AEfk` | Fan of Knives | nightelf | H |  | air,ground,enemy,organic | 2 | fanofknives | Warden - Fan of Knives |
 | x | `AOfs` | `AOfs` | Far Sight | orc | H |  |  |  | farsight | Farseer - Far Sight |
-|   | `Afbb` | `Afbk` | Feedback | creeps |  |  | air,ground,enemy,neutral | 1 |  | Feedback (Spirit Beast) |
-|   | `Afbk` | `Afbk` | Feedback | human |  |  | air,ground,enemy,neutral | 1 |  | Feedback |
-|   | `Afbt` | `Afbk` | Feedback | human |  |  | air,ground,enemy,neutral | 1 |  | Feedback(Arcane Tower) |
+| ~ | `Afbb` | `Afbk` | Feedback | creeps |  |  | air,ground,enemy,neutral | 1 |  | Feedback (Spirit Beast) |
+| x | `Afbk` | `Afbk` | Feedback | human |  |  | air,ground,enemy,neutral | 1 |  | Feedback |
+| ~ | `Afbt` | `Afbk` | Feedback | human |  |  | air,ground,enemy,neutral | 1 |  | Feedback(Arcane Tower) |
 | ~ | `ACs7` | `AOsf` | Feral Spirit | creeps | H |  |  | 1 | spiritwolf | Feral Spirit (Akama) |
 | ~ | `ACs9` | `AOsf` | Feral Spirit | creeps |  |  |  | 1 | spiritwolf | Feral Spirit (creep - pig) |
 | ~ | `ACsf` | `AOsf` | Feral Spirit | creeps |  |  |  | 1 | spiritwolf | Feral Spirit (creep) |
@@ -578,10 +550,10 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `AUfa` | `AUfa` | Frost Armor | undead | H |  | air,ground,friend,self,neutral |  | frostarmor | Lich - Frost Armor |
 | x | `AUfu` | `AUfu` | Frost Armor | undead | H |  | air,ground,friend,self,neutral |  | frostarmor | Lich - Frost Armor (Autocast) |
 | ~ | `ANfa` | `AHca` | Frost Arrows | creeps | H |  | air,ground,enemy,neutral | 1 |  | Sea Witch - Frost Arrows |
-|   | `Afr2` | `Afra` | Frost Attack | undead |  |  | air,ground | 1 |  | Frost Attack (1,2) |
-|   | `Afra` | `Afra` | Frost Attack | undead |  |  | air,ground | 1 |  | Frost Attack |
+| ~ | `Afr2` | `Afra` | Frost Attack | undead |  |  | air,ground | 1 |  | Frost Attack (1,2) |
+| x | `Afra` | `Afra` | Frost Attack | undead |  |  | air,ground | 1 |  | Frost Attack |
 | ~ | `ACcb` | `AHtb` | Frost Bolt | creeps |  |  | air,ground,structure,enemy,neutral | 1 | thunderbolt | Frost Bolt |
-|   | `Afrb` | `Afrb` | Frost Breath | undead |  |  | air,ground | 1 |  | Frost Breath |
+| x | `Afrb` | `Afrb` | Frost Breath | undead |  |  | air,ground | 1 |  | Frost Breath |
 | ~ | `ACfn` | `AUfn` | Frost Nova | creeps |  |  | ground,enemy,air,neutral,organic | 1 | frostnova | Frost Nova (creep) |
 | x | `AUfn` | `AUfn` | Frost Nova | undead | H |  | ground,enemy,air,neutral,organic | 1 | frostnova | Lich - Frost Nova |
 |   | `Aaha` | `Aaha` | Gather | undead |  |  |  |  | harvest | Acolyte Harvest |
@@ -593,7 +565,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AIp4` | `AIrg` | Generic Item-Rejuv Effect | other |  | I |  |  |  | Potion of Rejuv IV |
 | ~ | `AIp5` | `AIrg` | Generic Item-Rejuv Effect | other |  | I | air,ground,friend,self,organic,vuln,invu | 1 |  | Scroll of Rejuv I |
 | ~ | `AIp6` | `AIrg` | Generic Item-Rejuv Effect | other |  | I | air,ground,friend,self,organic,vuln,invu | 1 |  | Scroll of Rejuv II |
-|   | `Amel` | `Amel` | Get Corpse | undead |  |  | ground,dead,nonhero |  | loadcorpse | Meat Load |
+| x | `Amel` | `Amel` | Get Corpse | undead |  |  | ground,dead,nonhero |  | loadcorpse | Meat Load |
 |   | `Aeth` | `Aeth` | Ghost | undead |  |  |  |  |  | Ghost (Visible) |
 |   | `Agho` | `Agho` | Ghost | undead |  |  |  |  |  | Ghost |
 |   | `AIgf` | `AIgl` | Glyph of Fortification | other |  | I |  |  |  | FortificationGlyph |
@@ -612,11 +584,11 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `Anh2` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep High) |
 | x | `Anhe` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep Normal) |
 | ~ | `AIrl` | `AIrg` | Healing Salve | other |  | I | air,ground,friend,self,organic,vuln,invu | 2 |  | Potion of Life Regen |
-| x | `ANhs` | `ANhs` | Healing Spray | creeps | H |  | ground,air,organic | 1 | healingspray | Alchemist - Healing Spray |
+| x | `ANhs` | `ANhs` | Healing Spray | creeps | H |  | friend,self,ground,air,organic,vuln,invu | 1 | healingspray | Alchemist - Healing Spray |
 | ~ | `AChw` | `Ahwd` | Healing Ward | creeps |  |  |  |  | healingward | Healing Ward (creep) |
 | x | `Ahwd` | `Ahwd` | Healing Ward | orc |  |  |  |  | healingward | Healing Ward |
 | ~ | `AIhw` | `Ahwd` | Healing Ward | other |  | I |  |  | healingward | Healing Ward |
-|   | `Aoar` | `Aoar` | Healing Ward Aura | orc |  |  | ground,air,organic,vuln,invu,friend,neutral |  |  | Aura - Regeneration (Ward) |
+| x | `Aoar` | `Aoar` | Healing Ward Aura | orc |  |  | ground,air,organic,vuln,invu,friend,neutral |  |  | Aura - Regeneration (Ward) |
 | ~ | `AChv` | `AOhw` | Healing Wave | creeps |  |  | air,ground,friend,self,vuln,invu,organic |  |  | Healing Wave(Creep) |
 | ~ | `ANhw` | `AOhw` | Healing Wave | orc | H |  | air,ground,friend,self,vuln,invu,organic | 1 | healingwave | Rokhan - Healing Wave |
 | x | `AOhw` | `AOhw` | Healing Wave | orc | H |  | air,ground,friend,self,vuln,invu,organic | 1 | healingwave | Shadow Hunter - Healing Wave |
@@ -634,7 +606,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACmp` | `AUim` | Impale | creeps |  |  | ground,enemy,neutral,organic | 1 | impale | Impale(Creep) |
 | x | `AUim` | `AUim` | Impale | undead | H |  | ground,enemy,neutral,organic | 1 | impale | Crypt Lord - Impale |
 | x | `ANia` | `ANia` | Incinerate | creeps | H |  | enemy,neutral,organic,nonancient | 1 | incineratearrow | Firelord - Incinerate |
-|   | `ANic` | `ANic` | Incinerate | creeps | H |  | enemy,neutral,organic,nonancient | 1 | incinerate | Firelord - Incinerate |
+| x | `ANic` | `ANic` | Incinerate | creeps | H |  | enemy,neutral,organic,nonancient | 1 | incinerate | Firelord - Incinerate |
 |   | `ANin` | `ANin` | Inferno | creeps | H |  | ground,structure,debris,enemy,neutral | 1 | inferno | Inferno |
 | x | `AUin` | `AUin` | Inferno | undead | H |  | ground,structure,debris,enemy,neutral | 1 | inferno | Dreadlord - Inferno |
 | ~ | `SNin` | `AUin` | Inferno | creeps | H |  | ground,structure,debris,enemy,neutral | 1 | inferno | Tichondrius - Inferno |
@@ -661,12 +633,11 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AId5` | `AIde` | Item Armor Bonus | other |  | I |  |  |  | DefenseBonus (+5) |
 | ~ | `AId7` | `AIde` | Item Armor Bonus | other |  | I |  |  |  | DefenseBonus (+7) |
 | ~ | `AId8` | `AIde` | Item Armor Bonus | other |  | I |  |  |  | DefenseBonus (+8) |
-|   | `AIdf` | `AIsb` | Item Attack Black Arrow Bonus | other |  | I | ground,air,ward | 2 |  | Orb of Darkness |
-|   | `AIcb` | `AIcb` | Item Attack Corruption Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Corruption |
-|   | `AIaa` | `AIaa` | Item Attack Damage Gain | other |  | I |  | 1 |  | AttackMod |
+| ~ | `AIdf` | `AIsb` | Item Attack Black Arrow Bonus | other |  | I | ground,air,ward | 2 |  | Orb of Darkness |
+| x | `AIcb` | `AIcb` | Item Attack Corruption Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Corruption |
 | x | `AIfb` | `AIfb` | Item Attack Fire Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Fire |
 | ~ | `AIgd` | `AIfb` | Item Attack Fire Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Guldan |
-|   | `AIob` | `AIob` | Item Attack Frost Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Frost |
+| x | `AIob` | `AIob` | Item Attack Frost Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Frost |
 |   | `AIlb` | `AIlb` | Item Attack Lightning Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Lightning(old) |
 |   | `AIpb` | `AIpb` | Item Attack Poison Bonus | other |  | I | ground,air,organic | 3 |  | Orb of Venom |
 | ~ | `AIs2` | `AIas` | Item Attack Speed Bonus | other |  | I |  |  |  | Attack Speed Increase(greater) |
@@ -744,10 +715,11 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `AIrm` | `AIrm` | Item Mana Regeneration | other |  | I |  |  |  | ItemRegenMana        |
 | x | `AIms` | `AIms` | Item Move Speed Bonus | other |  | I |  |  |  | MoveSpeedBonus       |
 |   | `AIfx` | `AIfl` | Item Orcish Battle Standard | other |  | I |  | 1 |  | Flag (Orc Battle Standard) |
+|   | `AIaa` | `AIaa` | Item Permanent Damage Gain, Item Attack Damage Gain | other |  | I |  | 1 |  | AttackMod |
 | ~ | `AImh` | `AImi` | Item Permanent Life Gain | other |  | I |  | 1 |  | Permanent Hit point Bonus |
 | ~ | `AIpx` | `AImi` | Item Permanent Life Gain | other |  | I |  | 1 |  | Permanent Hit point Bonus (small) |
 |   | `AIpm` | `AIpm` | Item Place Goblin Land Mine | other |  | I |  |  |  | ItemPlaceMine        |
-|   | `AIlp` | `AIlp` | Item Purge | other |  | I | ground,air,ward |  |  | LightningPurge |
+| x | `AIlp` | `AIlp` | Item Purge | other |  | I | ground,air,ward |  |  | LightningPurge |
 | ~ | `AIpg` | `Aprg` | Item Purge | other |  | I | air,ground,ward |  | purge | Purge(orb) |
 | ~ | `AIps` | `Aprg` | Item Purge | other |  | I | air,ground,ward | 1 | purge | Purge(Totem, SP) |
 |   | `AIrt` | `AIrt` | Item Recall | other |  | I | ground,air,player,vuln,invu,nonancient | 3 |  | ItemRecall |
@@ -783,15 +755,14 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `APrl` | `AHre` | Lesser Rune Resurrection | other |  | I | air,ground,dead,friend | 2 | resurrection | Rune of Lesser Resurrection |
 | ~ | `ACdr` | `AHdr` | Life Drain | creeps |  |  | air,ground,organic |  |  | Drain Life(Creep) |
 | ~ | `ANdr` | `AHdr` | Life Drain | creeps | H |  | air,ground,organic |  |  | Dark Ranger - Drain |
-|   | `ACnr` | `Aoar` | Life Regeneration Aura | creeps |  |  | ground,air,organic,vuln,invu |  |  | Neutral Regen (health only) |
-|   | `ANre` | `Aarm` | Life Regeneration Aura | creeps |  |  | ground,air,organic,vuln,invu |  |  | Neutral Regen (mana only) |
+| ~ | `ACnr` | `Aoar` | Life Regeneration Aura | creeps |  |  | ground,air,organic,vuln,invu |  |  | Neutral Regen (health only) |
 | ~ | `SCva` | `AIva` | Life Steal | creeps |  |  | air,ground,enemy | 2 |  | Vampiric attack |
 |   | `Alit` | `Alit` | Lightning Attack | nightelf |  |  | air,ground,structure,ward,item,debris | 2 |  | Lightning Attack |
 | ~ | `ACls` | `Alsh` | Lightning Shield | creeps |  |  | ground,friend,enemy,neutral |  | lightningshield | Lightning Shield (creep) |
-| ~ | `AIls` | `Alsh` | Lightning Shield | other |  | I | ground,friend,enemy,neutral |  | lightningshield | Lightning Shield |
+| ~ | `AIls` | `Alsh` | Lightning Shield | other |  | I | ground,friend,enemy,neutral |  | lightningshield | Lightning Shield (item) |
 | x | `Alsh` | `Alsh` | Lightning Shield | orc |  |  | ground,friend,enemy,neutral |  | lightningshield | Lightning Shield |
 | x | `Aliq` | `Aliq` | Liquid Fire | orc |  |  | structure,enemy,neutral |  |  | Liquid Fire |
-|   | `Aenc` | `Aenc` | Load | nightelf |  |  | ground,player,invu,vuln |  |  | Cargo Hold (Gold Mine) |
+| x | `Aenc` | `Aenc` | Load | nightelf |  |  | ground,player,invu,vuln |  |  | Cargo Hold (Gold Mine) |
 | x | `Aloa` | `Aloa` | Load | other |  |  | ground,friend,invu,vuln |  | load | Load |
 | ~ | `Slo3` | `Aloa` | Load | other |  |  | ground,friend,invu,vuln |  | load | Load (Navies) |
 | ~ | `Sloa` | `Aloa` | Load | orc |  |  | ground,friend,invu,vuln |  | load | Load (Burrow) |
@@ -806,14 +777,15 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `Ambd` | `AEmb` | Mana Burn | creeps |  |  | air,ground,enemy,neutral | 1 | manaburn | Mana Burn (demon) |
 | ~ | `Amnb` | `AEmb` | Mana Burn | creeps |  |  | air,ground,enemy,neutral | 1 | manaburn | Mana Burn (demon) |
 |   | `Amfl` | `Amfl` | Mana Flare | nightelf |  |  | air,ground,enemy |  | manaflareon | Mana Flare |
+| ~ | `ANre` | `Aarm` | Mana Regeneration, Life Regeneration Aura | creeps |  |  | ground,air,organic,vuln,invu |  |  | Neutral Regen (mana only) |
 | ~ | `ACmf` | `ANms` | Mana Shield | creeps |  |  | ground,friend,vuln,invu |  | manashield | Mana Shield(Creep) |
 | x | `ANms` | `ANms` | Mana Shield | creeps | H |  | self |  | manashieldon | Sea Witch - Mana Shield |
 | x | `AHmt` | `AHmt` | Mass Teleport | human | H |  | ground,structure,vuln,invu,player,neutral,ally | 3 | massteleport | Arch Mage - Mass Teleport |
 | ~ | `ANb2` | `AHbh` | Maul | creeps |  |  | ground |  | bash | Bash (maul , SP Bear, level 3) |
 |   | `Amec` | `Amec` | Mechanical Critter | other |  | I |  | 1 |  | MechanicalCritter |
-|   | `AIft` | `AIob` | Melee Cold Damage Bonus | other |  | I | ground,ward | 3 |  | Frostguard - frost melee |
+| ~ | `AIft` | `AIob` | Melee Cold Damage Bonus | other |  | I | ground,ward | 3 |  | Frostguard - frost melee |
 | ~ | `AIfw` | `AIfb` | Melee Fire Damage Bonus | other |  | I | ground,ward | 3 |  | Searing Blade - fire melee |
-|   | `AIlx` | `AIsb` | Melee Lightning Damage Bonus | other |  | I | ground,ward | 3 |  | Shaman Claws - lightning melee |
+| ~ | `AIlx` | `AIsb` | Melee Lightning Damage Bonus | other |  | I | ground,ward | 3 |  | Shaman Claws - lightning melee |
 | ~ | `AEIl` | `AEme` | Metamorphosis | creeps | H |  |  |  | metamorphosis | Illidan - Metamorphosis |
 | x | `AEme` | `AEme` | Metamorphosis | nightelf | H |  |  |  | metamorphosis | Demon Hunter - Metamorphosis |
 | ~ | `AEvi` | `AEme` | Metamorphosis | creeps | H |  |  |  | metamorphosis | Evil Illidan - Metamorphosis |
@@ -833,14 +805,13 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Afin` | `Afin` | On Fire (Night Elf) | nightelf |  |  |  |  |  | On Fire (Night Elf) |
 |   | `Afio` | `Afio` | On Fire (Orc) | orc |  |  |  |  |  | On Fire (Orc) |
 |   | `Afiu` | `Afiu` | On Fire (Undead) | undead |  |  |  |  |  | On Fire (Undead) |
-|   | `Afak` | `Afak` | Orb of Annihilation | undead |  |  | air,ground,structure,enemy,neutral | 1 |  | Orb of Annihilation |
-|   | `ANbs` | `ANbs` | Orb of Darkness | other |  | I | air,ground,enemy,organic,neutral | 1 | blackarrow | Orb of Darkness (Black Arrow) |
-|   | `AIll` | `AIsb` | Orb of Lightning (new) | other |  | I | ground,air,ward | 3 |  | Orb of Lightning |
-|   | `AIsb` | `AIsb` | Orb of Slow | other |  | I | ground,air,ward | 2 |  | Orb of Spells |
+| x | `Afak` | `Afak` | Orb of Annihilation | undead |  |  | air,ground,structure,enemy,neutral | 1 |  | Orb of Annihilation |
+| x | `ANbs` | `ANbs` | Orb of Darkness | other |  | I | air,ground,enemy,organic,neutral | 1 | blackarrow | Orb of Darkness (Black Arrow) |
+| ~ | `AIll` | `AIsb` | Orb of Lightning (new) | other |  | I | ground,air,ward | 3 |  | Orb of Lightning |
+| x | `AIsb` | `AIsb` | Orb of Slow | other |  | I | ground,air,ward | 2 |  | Orb of Spells |
 | ~ | `Apak` | `AInv` | Pack Mule | orc |  |  |  |  |  | Inventory (Pack Mule) |
 |   | `ACpa` | `ANpa` | Parasite | creeps |  |  | air,ground,enemy,organic,neutral,nonhero | 1 | parasite | Parasite(eredar) |
 |   | `ANpa` | `ANpa` | Parasite | naga |  |  | air,ground,enemy,organic,neutral,nonhero | 1 | parasite | Parasite |
-|   | `AIdd` | `AIdd` | Passive Defense | other |  | I | vuln,invu | 1 | defend | Defend (Item) |
 | ~ | `AIpz` | `AIha` | Penguin Squeek | other |  | I |  |  |  | Penguin Squeek |
 |   | `ANpi` | `ANpi` | Permanent Immolation | other |  |  | ground,enemy,neutral,organic |  |  | Permanent Immolation |
 |   | `Apig` | `Apig` | Permanent Immolation | other |  |  | ground,enemy,neutral,organic |  |  | Permanent Immolation (graphic) |
@@ -857,9 +828,9 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ANs2` | `ANsy` | Pocket Factory | creeps | H |  |  | 1 | summonfactory | Tinkerer - Summon Factory (Level 2) |
 | ~ | `ANs3` | `ANsy` | Pocket Factory | creeps | H |  |  | 1 | summonfactory | Tinkerer - Summon Factory (Level 3) |
 | x | `ANsy` | `ANsy` | Pocket Factory | creeps | H |  |  | 1 | summonfactory | Tinkerer - Summon Factory (Level 0) |
-|   | `AEpa` | `AEpa` | Poison Arrows | creeps | H |  | air,ground,organic | 1 | poisonarrowstarg | Poison Arrows |
-|   | `Apo2` | `Apo2` | Poison Sting | other |  | I | ground,air,organic | 1 |  | Orb of Venom (Poison Attack) |
-|   | `Apoi` | `Apoi` | Poison Sting | other |  |  | air,ground,organic | 1 |  | Poison Attack |
+| x | `AEpa` | `AEpa` | Poison Arrows | creeps | H |  | air,ground,organic | 1 | poisonarrowstarg | Poison Arrows |
+| x | `Apo2` | `Apo2` | Poison Sting | other |  | I | ground,air,organic | 1 |  | Orb of Venom (Poison Attack) |
+| x | `Apoi` | `Apoi` | Poison Sting | other |  |  | air,ground,organic | 1 |  | Poison Attack |
 |   | `ACpy` | `Aply` | Polymorph | creeps |  |  | air,ground,nonhero,enemy,organic,neutral | 2 | polymorph | Polymorph (creep) |
 |   | `Aply` | `Aply` | Polymorph | human |  |  | air,ground,nonhero,enemy,organic,neutral | 2 | polymorph | Polymorph |
 |   | `ACps` | `Apos` | Possession | creeps |  |  | ground,nonhero,enemy,organic,neutral | 1 | possession | Possession (creep) |
@@ -870,25 +841,25 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `APh1` | `AIha` | Powerup Area Healing Lesser | other |  | I | ground,air,friend,self,organic,vuln,invu | 1 |  | PowerupHealAoeLesser |
 |   | `APdi` | `AIdi` | Powerup Dispel | other |  | I | air,ground,ward,invu,vuln,tree | 2 |  | PowerupDispelAoe        |
 | ~ | `ACpv` | `Awar` | Pulverize | creeps |  |  | ground,enemy,neutral |  |  | Pulverize (Sea Giant) |
-| x | `Awar` | `Awar` | Pulverize | orc |  |  | ground,enemy,neutral |  |  | Pulverize |
+| x | `Awar` | `Awar` | Pulverize,Pulverize | orc |  |  | ground,enemy,neutral |  |  | Pulverize |
 | ~ | `ACpu` | `Aprg` | Purge | creeps |  |  | air,ground,ward,vuln,invu,tree | 1 | purge | Purge (Creep) |
 | ~ | `Apg2` | `Aprg` | Purge | orc |  |  | air,ground,ward,vuln,invu,tree | 1 | purge | Purge |
 | x | `Aprg` | `Aprg` | Purge | orc |  |  | air,ground,ward,vuln,invu,tree | 1 | purge | Purge |
-|   | `ANak` | `Afak` | Quill Spray | creeps |  |  | air,ground,structure,enemy,neutral | 1 |  | Orb of Annihilation (Quill Spray) |
+| ~ | `ANak` | `Afak` | Quill Spray | creeps |  |  | air,ground,structure,enemy,neutral | 1 |  | Orb of Annihilation (Quill Spray) |
 |   | `ANr3` | `ANrc` | Rain of Chaos | creeps | H |  |  |  |  | Rain of Chaos(Button 0,2) |
 |   | `ANrc` | `ANrc` | Rain of Chaos | creeps | H |  |  |  |  | Rain of Chaos |
 | ~ | `ACrf` | `ANrf` | Rain of Fire | creeps |  |  |  |  | rainoffire | Rain of Fire (creep) |
 | ~ | `ACrg` | `ANrf` | Rain of Fire | creeps |  |  |  |  | rainoffire | Rain of Fire (creep,greater) |
 | x | `ANrf` | `ANrf` | Rain of Fire | creeps | H |  |  |  | rainoffire | Pit Lord - Rain of Fire |
-|   | `ACrd` | `Arai` | Raise Dead | creeps |  |  | dead | 1 | raisedead | Raise Dead (Creep) |
-|   | `Arai` | `Arai` | Raise Dead | undead |  |  | dead | 1 | raisedead | Raise Dead |
-|   | `AIrd` | `AIrd` | Raise Dead (Item) | other |  | I | dead |  |  | Raise Dead (Item) |
+| ~ | `ACrd` | `Arai` | Raise Dead | creeps |  |  | dead | 1 | raisedead | Raise Dead (Creep) |
+| x | `Arai` | `Arai` | Raise Dead | undead |  |  | dead | 1 | raisedead | Raise Dead |
+| x | `AIrd` | `AIrd` | Raise Dead (Item) | other |  | I | dead |  |  | Raise Dead (Item) |
 |   | `ARal` | `ARal` | Rally | other |  |  |  |  |  | Rally |
 |   | `AIri` | `AIri` | Random Item | other |  | I | item |  |  | ItemRandomItem |
 |   | `Ache` | `AIdc` | Ray of Disruption | creeps |  |  | air,ground,friend,self,enemy,invu,vuln | 1 |  | Chain Dispel |
 |   | `AInd` | `ACad` | Reanimation | other |  | I | air,ground,dead | 1 | animatedead | Animate Dead (item, special) |
 |   | `AIrb` | `AIrb` | Rebirth | other |  | I |  |  |  | Rune of Rebirth |
-|   | `AIgx` | `Aoar` | Regeneration Aura | other |  | I | ground,air,organic,vuln,invu,friend,neutral,self |  |  | Aura - Regeneration (item) |
+| ~ | `AIgx` | `Aoar` | Regeneration Aura | other |  | I | ground,air,organic,vuln,invu,friend,neutral,self |  |  | Aura - Regeneration (item) |
 |   | `ACrn` | `ACrn` | Reincarnation | creeps |  |  |  | 1 |  | Reincarnation (creep) |
 | ~ | `ANr2` | `AOre` | Reincarnation | creeps | H |  |  | 1 |  | Reincarnation (generic) |
 | ~ | `ANrn` | `AOre` | Reincarnation | creeps | H |  |  | 1 |  | Mannoroth - Reincarnation |
@@ -898,16 +869,16 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACr2` | `Arej` | Rejuvenation | creeps |  |  | air,ground,friend,vuln,invu,self,organic,neutral |  | rejuvination | Rejuvination (Furbolg) |
 | ~ | `ACrj` | `Arej` | Rejuvenation | creeps |  |  | air,ground,friend,vuln,invu,self,organic,neutral |  | rejuvination | Rejuvination (creep) |
 | x | `Arej` | `Arej` | Rejuvenation | nightelf |  |  | air,ground,friend,vuln,invu,self,organic,neutral |  | rejuvination | Rejuvination |
-|   | `Aren` | `Aren` | Renew | nightelf |  |  | friend,ground,air,structure,bridge,alive,dead,invu,vuln |  | renew | Renew |
+| / | `Aren` | `Aren` | Renew | nightelf |  |  | friend,ground,air,structure,bridge,alive,dead,invu,vuln |  | renew | Renew |
 | ~ | `Ahrp` | `Arep` | Repair | human |  |  | mechanical,friend,nonancient,ground,air,structure,bridge,alive,dead,invu,vuln |  | repair | Repair (Human) |
 | x | `Arep` | `Arep` | Repair | orc |  |  | mechanical,friend,nonancient,ground,air,structure,bridge,alive,dead,invu,vuln |  | repair | Repair (Orc) |
 |   | `Arpb` | `Arpb` | Replenish | undead |  |  | ground,air,friend,self,organic,vuln,invu | 3 | replenish | Replenish (Life & Mana) |
-|   | `Amb2` | `Ambt` | Replenish Mana | undead |  |  | air,ground,invu,vuln,friend | 2 | recharge | Mana Battery (Obsidian Statue) |
-|   | `Ambt` | `Ambt` | Replenish Mana and Life | nightelf |  |  | air,ground,invu,vuln,friend,organic | 3 | recharge | Mana Battery |
-|   | `ACrk` | `Arsk` | Resistant Skin | creeps |  |  |  |  |  | Resistant Skin (creep) |
-|   | `ACsk` | `Arsk` | Resistant Skin | creeps |  |  |  |  |  | Resistant Skin(3,1 pos, creep) |
-|   | `Arsk` | `Arsk` | Resistant Skin | nightelf |  |  |  |  |  | Resistant Skin |
-|   | `Arst` | `Arst` | Restore | undead |  |  | mechanical,friend,nonancient,ground,air,structure,bridge,alive,dead,invu,vuln |  | restoration | Restoration |
+| ~ | `Amb2` | `Ambt` | Replenish Mana | undead |  |  | air,ground,invu,vuln,friend | 2 | recharge | Mana Battery (Obsidian Statue) |
+| x | `Ambt` | `Ambt` | Replenish Mana and Life | nightelf |  |  | air,ground,invu,vuln,friend,organic | 3 | recharge | Mana Battery |
+| ~ | `ACrk` | `Arsk` | Resistant Skin | creeps |  |  |  |  |  | Resistant Skin (creep) |
+| ~ | `ACsk` | `Arsk` | Resistant Skin | creeps |  |  |  |  |  | Resistant Skin(3,1 pos, creep) |
+| x | `Arsk` | `Arsk` | Resistant Skin | nightelf |  |  |  |  |  | Resistant Skin |
+| / | `Arst` | `Arst` | Restore | undead |  |  | mechanical,friend,nonancient,ground,air,structure,bridge,alive,dead,invu,vuln |  | restoration | Restoration |
 | x | `AHre` | `AHre` | Resurrection | human | H |  | air,ground,dead,friend | 2 | resurrection | Paladin - Resurrection |
 | ~ | `Argd` | `Artn` | Return Gold | other |  |  |  |  |  | Return (Gold) |
 | ~ | `Argl` | `Artn` | Return Gold and Lumber | other |  |  |  |  |  | Return (Gold & Lumber) |
@@ -942,7 +913,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Sca5` | `Acha` |  | orc |  |  |  |  |  | Chaos (Peon) |
 |   | `Sca6` | `Acha` |  | orc |  |  |  |  |  | Chaos (Grom) |
 | x | `AEst` | `AEst` | Scout | nightelf | H |  |  | 1 | scout | Priestess - Scout |
-|   | `AIsa` | `AIsa` | Scroll of Haste | other |  | I | air,ground,friend,self,vuln,invu |  |  | ItemSpeedAoe |
+|   | `AIsa` | `AIsa` | Scroll of Haste | other |  | I | air,ground,friend,self,vuln,invu,nonsapper |  |  | ItemSpeedAoe |
 | ~ | `AIsl` | `AIrg` | Scroll of Regeneration | other |  | I | air,ground,friend,self,organic,vuln,invu | 1 |  | Scroll of Life Regen |
 | ~ | `ACsa` | `AHfa` | Searing Arrows | creeps |  |  | air,ground,structure,enemy,neutral | 1 | flamingarrows | Searing Arrows (creep) |
 | x | `AHfa` | `AHfa` | Searing Arrows | nightelf | H |  | air,ground,structure,enemy,neutral | 1 | flamingarrows | Priestess - Searing Arrows |
@@ -982,8 +953,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AIos` | `Aslo` | Slow | other |  | I | ground,air,ward | 1 | slow | Slow |
 | x | `Aslo` | `Aslo` | Slow | human |  |  | air,ground,enemy | 1 | slow | Slow |
 |   | `Aasl` | `Aasl` | Slow Aura | naga |  |  | air,ground,enemy,vuln,invu |  |  | Aura - Slow |
-|   | `AIsz` | `Aspo` | Slow Poison | other |  | I | air,ground,organic |  |  | Slow Poison (item) |
-|   | `Aspo` | `Aspo` | Slow Poison | nightelf |  |  | air,ground,organic |  |  | Slow Poison |
+| ~ | `AIsz` | `Aspo` | Slow Poison | other |  | I | air,ground,organic |  |  | Slow Poison (item) |
+| x | `Aspo` | `Aspo` | Slow Poison | nightelf |  |  | air,ground,organic |  |  | Slow Poison |
 | x | `ANso` | `ANso` | Soul Burn | creeps | H |  | air,ground,enemy,neutral,organic |  | soulburn | Firelord - Soul Burn |
 |   | `ANsl` | `ANsl` | Soul Preservation | creeps | H |  | air,ground,organic,nonhero |  | soulpreservation | Malganis - Soul Preservation |
 |   | `Aspy` | `Aspd` | Spawn Hydra | creeps |  |  |  |  |  | Spawn Hydra |
@@ -994,11 +965,11 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACtn` | `AOwd` | Spawn Tentacle | creeps |  |  |  |  | Serpentward | Serpent Ward (tentacle, Forgotten one) |
 |   | `Aspb` | `Aspb` | Spell Book | other |  | I |  |  |  | Spell Book |
 |   | `AIsr` | `AIsr` | Spell Damage Reduction | other |  | I |  |  |  | Runed Bracers |
-| ~ | `ACm2` | `Amim` | Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Archimonde) |
-| ~ | `ACm3` | `Amim` | Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Dragons) |
 | ~ | `ACmi` | `Amim` | Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Creep) |
 | ~ | `AImx` | `Amim` | Spell Immunity | other |  | I |  |  |  | Magic Immunity |
 | x | `Amim` | `Amim` | Spell Immunity | nightelf |  |  |  |  |  | Magic Immunity |
+| ~ | `ACm2` | `Amim` | Spell Immunity, Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Archimonde) |
+| ~ | `ACm3` | `Amim` | Spell Immunity, Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Dragons) |
 |   | `ANse` | `ANse` | Spell Shield | other |  | I | air,ground,friend,invu,vuln,self |  |  | Spell Shield AOE |
 |   | `ANss` | `ANss` | Spell Shield | other |  | I |  | 1 |  | Spell Shield |
 |   | `Asps` | `Asps` | Spell Steal | human |  |  | air,ground,friend,enemy,neutral,self,vuln,invu | 2 | spellsteal | Spell Steal |
@@ -1017,11 +988,11 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACs8` | `AOsf` | Spirit Beast | creeps | H |  |  | 1 | spiritwolf | Feral Spirit (Spirit Beast) |
 | x | `Aspl` | `Aspl` | Spirit Link | orc |  |  | air,ground,friend,self,organic | 2 | spiritlink | Spirit Link |
 | ~ | `Aspp` | `Aspl` | Spirit Link | other |  | I | air,ground,friend,self,organic |  | spiritlinkaoe | Rune of Spirit Link |
-|   | `Avng` | `Avng` | Spirit of Vengeance | nightelf |  |  | air,ground,dead | 1 | Vengeance | Vengeance |
+| x | `Avng` | `Avng` | Spirit of Vengeance | nightelf |  |  | air,ground,dead | 1 | Vengeance | Vengeance |
 |   | `Arpm` | `Arpm` | Spirit Touch | undead |  |  | ground,air,friend,self,organic,vuln,invu | 3 | replenishmana | Replenish (Mana) |
 |   | `Srtt` | `Acha` |  | human |  |  |  |  |  | Tank Upgrade |
-|   | `ANpr` | `ANpr` | Staff of Preservation | other |  | I | ground,air,vuln,invu,player,neutral | 3 |  | Preservation |
-|   | `ANsa` | `ANsa` | Staff of Sanctuary | other |  | I | ground,air,vuln,invu,player,neutral | 3 |  | Sanctuary |
+| x | `ANpr` | `ANpr` | Staff of Preservation | other |  | I | ground,air,vuln,invu,player,neutral | 3 |  | Preservation |
+| x | `ANsa` | `ANsa` | Staff of Sanctuary | other |  | I | ground,air,vuln,invu,player,neutral | 3 |  | Sanctuary |
 | ~ | `AImt` | `AHmt` | Staff of Teleportation | other |  | I | ground,structure,vuln,invu,player,neutral,ally | 3 |  | Staff o' Teleportation |
 | x | `ANst` | `ANst` | Stampede | creeps | H |  | ground,structure,debris,enemy,neutral | 2 | stampede | Beast Master - Stampede |
 | ~ | `Arsp` | `ANst` | Stampede | creeps | H |  | ground,structure,enemy,neutral | 2 | stampede | Rexxar - Stampede |
@@ -1086,7 +1057,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `Sdro` | `Adro` | Unload | other |  |  |  |  | unload | Drop |
 |   | `Adri` | `Adri` | Unload Instant | other |  |  |  |  | unload | Drop Instant |
 | x | `Auco` | `Auco` | Unstable Concoction | orc |  |  | air,neutral,enemy |  | unstableconcoction | Unstable Concoction |
-|   | `Auns` | `Auns` | Unsummon Building | undead |  |  | structure,player |  | unsummon | Unsummon |
+| x | `Auns` | `Auns` | Unsummon Building | undead |  |  | structure,player |  | unsummon | Unsummon |
 | ~ | `ACvp` | `AUav` | Vampiric Aura | creeps |  |  | air,ground,friend,self,vuln,invu,organic | 1 |  | Vampiric Aura (creep) |
 | x | `AUav` | `AUav` | Vampiric Aura | undead | H |  | air,ground,friend,self,vuln,invu,organic | 1 |  | Dreadlord - Vampiric Aura |
 |   | `AIpv` | `AIpv` | Vampiric Potion | other |  | I | air,ground,enemy,organic | 1 |  | ItemPotionVampirism |

@@ -161,6 +161,10 @@ export interface SpellApi {
   teleport(unit: SimUnit, x: number, y: number): void;
   /** Change a unit's controller (Charm): new owner + team. */
   changeOwner(unit: SimUnit, owner: number, team: number): void;
+  /** Take a friendly STRUCTURE off the map and pay its salvage back (`Auns` Unsummon).
+   *  `ratio` is DataA "Salvage Cost Ratio" and `step` DataB "Accumulation Step". Returns
+   *  false when the target is not something this player may unsummon. */
+  unsummonBuilding(caster: SimUnit, target: SimUnit, ratio: number, step: number): boolean;
   /** Kill a unit outright (Death Pact / Dark Ritual sacrifice, Transmute). */
   killUnit(unit: SimUnit): void;
   /** Transmute (`ANtm`): melt a unit down for its owner-facing cost and pay the CASTER's
@@ -2091,6 +2095,28 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     api.voodoo(caster, def, rank);
     if (def.buffFx.length) api.emitEffect(def.buffArt, caster.x, caster.y, caster.id, lvl.duration || 30);
+  },
+
+  /**
+   * Unsummon (`Auns`) — the Acolyte takes one of its own buildings back.
+   *
+   * "Converts buildings back into resources, recovering 50% of construction costs"
+   * (classic.battle.net/war3/undead/units/acolyte.shtml), and the row says the same: DataA
+   * "Salvage Cost Ratio" = **0.5**, DataB "Accumulation Step" = **50**. It is the mirror of
+   * summoning and it is why an Undead player can re-shape a base rather than living with it —
+   * a Ziggurat put down in the wrong place is half its gold back, not a total loss.
+   *
+   * The row carries NO duration (`Dur1` and `Cast1` are both 0), so the building goes at once
+   * here rather than collapsing over a few seconds as the real client shows. What the step of
+   * 50 measures is unrecorded — the granularity the salvage trickles in at is the obvious
+   * reading, and a trickle needs the duration the row does not give — so it is applied as the
+   * roundING of the payout and flagged in docs/undead.md rather than guessed at.
+   */
+  Auns: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = def.levelData[rank - 1];
+    api.unsummonBuilding(caster, t, d(lvl, 0, 0.5), d(lvl, 1, 50));
   },
 
   // --- drains / sacrifices ---

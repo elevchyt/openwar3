@@ -1,8 +1,9 @@
-import { BUILD_CELL, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
+import { BUILD_CELL, BUILD_CELL_CELLS, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { targsKindError } from "./targeting";
 import { corpseAdmits, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
+import { BlightGrid } from "./blight";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { slotMissileArt, type UnitDef, type UnitRegistry } from "../data/units";
@@ -675,6 +676,10 @@ export interface WorkerState {
    *  difference between them. It is also why `Awha` has no "Lumber Capacity" that means
    *  anything: with no trip there is nothing to fill. See tickHarvest. */
   deliversInPlace: boolean;
+  /** No haul the other way round: the gold never leaves the mine at all, and this worker
+   *  kneels in a ring around the building that stands on it. TRUE for the Undead Acolyte and
+   *  nothing else — see WorkerProfile.minesInRing and SimWorld.tickRingHarvest. */
+  minesInRing: boolean;
   carryGold: number;
   carryLumber: number;
 }
@@ -705,14 +710,27 @@ export type BuildJob =
   | { kind: "research"; unitId: string; level: number; timeLeft: number; buildTime: number }
   | { kind: "upgrade"; unitId: string; timeLeft: number; buildTime: number };
 
+/** What a finished structure does to the ground under it — see SimWorld.blightPaintOf. */
+interface BlightPaint {
+  radius: number; // Area1 — 768 "(Small)" / 960 "(Large)"
+  blights: boolean; // DataB "Creates Blight" — 1 = grow, 0 = dispel
+  step: number; // DataA "Expansion Amount" — world units the ring gains per period
+  period: number; // Dur1 — seconds between those steps
+}
+
 /** Per-building state: construction progress + a production queue. */
 export interface BuildingState {
   constructionLeft: number; // seconds until built (0 = complete)
   buildTimeTotal: number; // full construction time (for the progress fraction)
-  /** This structure raises ITSELF — no worker is assigned, none can be, and construction
-   *  advances on its own clock. The Entangled Gold Mine is the case: `Aent` creates it, the
-   *  Tree's roots hold it up, and there is no Build order anywhere that would put a Wisp on
-   *  it (see attachEntangled). Everything else halts the moment its builder walks off. */
+  /** This structure raises ITSELF: construction advances on its own clock, with nobody
+   *  standing over it. Two things arrive here, from opposite directions.
+   *
+   *  The Entangled Gold Mine can never have a worker — `Aent` creates it, the Tree's roots
+   *  hold it up, and there is no Build order anywhere that would put a Wisp on it (see
+   *  attachEntangled). Every UNDEAD structure has one and then lets it GO: an Acolyte summons
+   *  and walks away, which is the race's whole build rhythm (see summonsBuildings).
+   *
+   *  Everything else halts the moment its builder walks off. */
   selfBuilds?: boolean;
   builderIds: number[]; // workers constructing (empty → progress halts). Extra
   // builders past the first "speed build" it (human peasants): faster, but they
@@ -1244,7 +1262,7 @@ export interface SimUnit {
   // Walking to raise a new building; gold/lumber are its cost, refunded if the build is
   // abandoned before construction starts — but only once `paid` says the stash actually
   // gave it up (see the QueuedOrder note: a queued build is priced when its turn comes).
-  buildPending: { defId: string; x: number; y: number; gold: number; lumber: number; paid: boolean } | null;
+  buildPending: { defId: string; x: number; y: number; gold: number; lumber: number; paid: boolean; mineId?: number } | null;
   // --- hero / abilities / buffs (spells slice) ---
   isHero: boolean;
   properName: string; // hero's drawn name ("Painkiller"); "" for non-heroes
@@ -1387,7 +1405,7 @@ export interface SimUnit {
    *     list it), so this is the data's own idea of the category rather than ours. */
   ancient: boolean;
   /** For an Entangled Gold Mine (`egol`), the SimMine it stands on — the gold its crew pulls
-   *  out. 0 for everything else. See tickEntangledMines. */
+   *  out. 0 for everything else. See tickMineCrews. */
   mineId: number;
   /** For an Entangled Gold Mine (`egol`), the Tree of Life whose roots are holding it — the
    *  unit that cast `Aent`. 0 for everything else.
@@ -1398,6 +1416,19 @@ export interface SimUnit {
    *  Tree does NOT release it — an Entangled Gold Mine is its own building with its own 800
    *  hit points, and knocking it down is a separate job.) */
   entangler: number;
+  /** The station this worker holds in a Haunted Gold Mine's MINING RING, 1-based, or 0.
+   *
+   *  `Abgm` "Blighted Gold mine" carries the whole arrangement: DataC "Max Number of Miners"
+   *  = **5**, DataD "Radius of Mining Ring" = **200**. Undead gold is not a round trip and
+   *  not a garrison either — the Acolytes kneel in a ring OUTSIDE the building, in the open,
+   *  where anything can reach them. That is the trade the race makes for never walking its
+   *  gold home: "up to five Acolytes may gather around the Haunted Gold Mine and begin adding
+   *  gold to your reserves, without having to carry it back to the Necropolis"
+   *  (classic.battle.net/war3/undead/basics.shtml).
+   *
+   *  Held rather than derived, because it is what keeps two Acolytes off one spot — and it is
+   *  released everywhere a harvest job is (stop, a new order, death, the mine running out). */
+  ringSlot: number;
   /** Seconds left of a root/unroot transition (`Aroo` `Dur1` = 2.5), or 0.
    *
    *  An Ancient is neither thing while it hauls its roots up or settles them back down, and
@@ -1761,6 +1792,22 @@ function buildsFromInside(u: SimUnit): boolean {
 function speedBuilds(u: SimUnit): boolean {
   return u.race === "human";
 }
+/** The Undead do not BUILD, they summon — and the difference is that nobody has to stay.
+ *
+ *  "Acolytes do not need to maintain buildings under construction. Buildings will continue
+ *  construction on their own (like Protoss) so start a building summoning then move the
+ *  Acolyte to another task" (classic.battle.net/war3/undead/basics.shtml). So an Acolyte that
+ *  reaches its site hands the structure its own clock (`BuildingState.selfBuilds`) and is
+ *  released on the spot: it can be sent back to a mine, or on to the next building, while the
+ *  first is still rising. That is the whole of the Undead build order — one Acolyte lays a
+ *  Ziggurat, a Crypt and an Altar in the time a Peasant lays one — and it is why nothing can
+ *  interrupt an Undead building by killing its worker.
+ *
+ *  Nothing else in the game works this way except the Entangled Gold Mine, which arrives at
+ *  the same flag from the other end (nobody CAN be put on it). */
+function summonsBuildings(u: SimUnit): boolean {
+  return u.race === "undead";
+}
 /** The grid domain a unit searches — see SimUnit.waterborne. */
 function pathDomain(u: SimUnit): PathDomain {
   return u.waterborne ? "water" : "ground";
@@ -1778,6 +1825,17 @@ const REPATH_LOOKAHEAD = PATHING_CELL * 5; // ~5 cells (160 world units) ahead
  *  carries no columns at all). Every worker that DOES say — `Ahar` DataC = 10 — is read off
  *  the row instead (WorkerState.goldPerTrip, applyHarvestData). */
 const GOLD_PER_TRIP = 10;
+/** How far off a gold mine's own hull a Haunted Gold Mine placement still snaps to it. One
+ *  build square past the mine's radius — enough that the ghost latches on as the cursor
+ *  crosses the mine, and not so much that a click on open ground beside it is silently
+ *  redirected. (WC3 states no number; the mine is 16×16 pathing cells, so its own body is by
+ *  far the larger half of this.) */
+const HAUNT_SNAP = BUILD_CELL;
+/** How far out along its own ray a mining-ring station may be pushed to find walkable ground.
+ *  A gold mine's `16x16Goldmine` footprint is 512 units across — 256 from its centre, past
+ *  `Abgm`'s 200 ring — so on those sides the station has to clear the building itself. See
+ *  SimWorld.ringStation. */
+const RING_PUSH = 256;
 // Gold Mine ability `Agld` in AbilityData.slk — its unlabelled Data columns are named by
 // AbilityMetaData.slk + UI\WorldEditStrings.txt: DataA "Max Gold" 12500, DataB "Mining
 // Duration" 1, DataC "Mining Capacity" 1. Capacity 1 is the `SimMine.busy` latch: a classic
@@ -2081,10 +2139,20 @@ export class SimWorld {
   private deaths: number[] = [];
   /** Dead STRUCTURES, kept whole for the ghost path — see drainDeadStructures. */
   private deadStructures: SimUnit[] = [];
-  /** The blighted discs this tick — one per living Undead structure (see rebuildBlight). */
-  private blight: { x: number; y: number; r2: number }[] = [];
-  /** typeId → blight radius, resolved once per type from its ability list. */
-  private blightRadii = new Map<string, number>();
+  /** The rotted ground itself, kept per terrain corner and painted ONCE by whatever grew
+   *  it (see BlightGrid / tickBlight). Built lazily: three of the four races never blight
+   *  anything, and a headless combat test has no reason to carry the array. */
+  private blightGrid: BlightGrid | null = null;
+  /** typeId → the Blight Growth / Blight Dispel row it carries, resolved once per type. */
+  private blightRadii = new Map<string, BlightPaint | null>();
+  /** Blight discs still growing outward (`Abgs`'s DataA = 64 units every Dur1 = 0.08s).
+   *  Keyed by the unit that owns each, so a source only ever has one and a building
+   *  knocked down mid-bloom stops where it got to. */
+  private blightGrowth = new Map<number, { x: number; y: number; r: number; max: number; step: number; period: number; t: number; on: boolean }>();
+  /** Buildings whose blight has already been laid. A source paints when it FINISHES, not
+   *  while it is a foundation — "whenever a building is finished, it instantly generates
+   *  more blighted area around it" (Warcraft Wiki, Blight). */
+  private blightPainted = new Set<number>();
   /** Whether to record death/damage/attack events for the trigger engine (the host
    *  sets each only when the loaded script actually registers that event kind — off
    *  for melee and for maps that don't listen, so nothing accumulates unread). */
@@ -3281,6 +3349,18 @@ export class SimWorld {
       this.enterBuildSite(w, b);
       return;
     }
+    // Undead acolyte: the summoning is done the moment it gets here. Hand the structure
+    // its own clock and let the Acolyte go (summonsBuildings) — it keeps standing where it
+    // is, as the real game leaves it, but it holds no job and takes any order at once.
+    if (summonsBuildings(w)) {
+      b.building.selfBuilds = true;
+      this.detachBuilder(workerId);
+      w.order = "idle";
+      w.moving = false;
+      w.path = [];
+      w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x); // …facing what it raised
+      return;
+    }
     // Human peasant: snap to the nearest free tile outside the building's (now
     // stamped) footprint, so it stands beside the site hammering rather than
     // being trapped inside the under-construction model.
@@ -3997,34 +4077,199 @@ export class SimWorld {
     return out;
   }
 
-  /** Pay out every entangled mine with a crew aboard, and collapse one that runs dry. */
-  private tickEntangledMines(dt: number): void {
+  /**
+   * The crew arrangement a building standing on a gold mine runs, or null.
+   *
+   * TWO races replace the round trip with a building and a crew, and their two rows say the
+   * same three things in the same columns — so one reader serves both and the difference is
+   * only WHERE the crew stands:
+   *
+   *     `Aegm` Entangled Gold Mine   DataA 10 gold  DataB 1s  crew INSIDE  (`Aenc` Car1 = 5)
+   *     `Abgm` Blighted Gold mine    DataA 10 gold  DataB 1s  DataC 5      DataD 200 ring
+   *
+   * Ten gold a second at a full crew, both of them, which is one worker's two gold a second —
+   * exactly a Peasant's 10-per-trip round trip, and the reason neither race is simply richer.
+   * What each buys with it is different: a Wisp is SAFE and stuck (it is inside a building
+   * with 800 hit points), an Acolyte is exposed and free (it kneels in the open and can be
+   * pulled off to summon something without losing its place in a queue).
+   *
+   * `ring` is 0 for the entangled mine — the crew has nowhere to stand, it is cargo.
+   */
+  private mineCrewOf(u: SimUnit): { gold: number; interval: number; max: number; ring: number } | null {
+    // Read off the TYPE's own `abilList` and the registry row, not off `SimUnit.abilities` —
+    // the same route blightPaintOf takes, and for the same reason: these are structural
+    // properties of a building rather than buttons, and nothing should have to add them to
+    // KNOWN_ABILITIES for the mine to pay out.
+    const list = this.unitReg?.get(u.typeId)?.abilities ?? [];
+    if (list.includes("Abgm")) {
+      const lvl = this.abilities?.get("Abgm")?.levelData[0] ?? emptyAbilityLevel();
+      return {
+        gold: this.dataOf(lvl, 0, 10), // DataA "Gold per Interval"
+        interval: this.dataOf(lvl, 1, 1) || 1, // DataB "Interval Duration"
+        max: Math.max(1, Math.round(this.dataOf(lvl, 2, 5))), // DataC "Max Number of Miners"
+        ring: this.dataOf(lvl, 3, 200) || 200, // DataD "Radius of Mining Ring"
+      };
+    }
+    if (list.includes("Aegm") && u.garrisonCap > 0) {
+      const lvl = this.abilities?.get("Aegm")?.levelData[0] ?? emptyAbilityLevel();
+      return { gold: this.dataOf(lvl, 0, 10), interval: this.dataOf(lvl, 1, 1) || 1, max: u.garrisonCap, ring: 0 };
+    }
+    return null;
+  }
+
+  /** The finished building standing over this mine that a WORKER may work — a Haunted Gold
+   *  Mine with a mining ring. Null for a bare mine, for one still rising, and for an
+   *  Entangled Gold Mine (whose crew climbs INSIDE it instead — issueGarrison). */
+  hauntedMine(mineId: number): SimUnit | null {
+    const id = this.mines.get(mineId)?.entangledBy ?? 0;
+    if (id <= 0) return null;
+    const u = this.units.get(id);
+    if (!u || u.hp <= 0 || (u.building && u.building.constructionLeft > 0)) return null;
+    return this.mineCrewOf(u)?.ring ? u : null;
+  }
+
+  /**
+   * Where the `slot`-th miner of `n` kneels around a Haunted Gold Mine.
+   *
+   * Slots are 1-based and fixed, so an Acolyte pulled off and sent back takes the first FREE
+   * spot rather than shuffling everyone along — and the first one sits due south, where
+   * `bj_UNIT_FACING` (270°) puts everything else the game places.
+   *
+   * `Abgm`'s 200 is a radius from the mine's CENTRE, and a gold mine is a 16×16-cell building
+   * — so on the sides where its footprint reaches past 200 the station lands inside solid
+   * ground. The fix is to walk OUT along the slot's own ray until the ground is walkable,
+   * rather than to the nearest free cell in any direction: pushed radially the ring keeps its
+   * shape and its slots stay distinct, where a nearest-cell search would collapse two
+   * neighbours onto the same doorstep.
+   */
+  private ringStation(mine: SimUnit, slot: number, n: number, radius: number): [number, number] {
+    const a = -Math.PI / 2 + ((slot - 1) / n) * Math.PI * 2;
+    const dx = Math.cos(a), dy = Math.sin(a);
+    for (let r = radius; r <= radius + RING_PUSH; r += PATHING_CELL) {
+      const x = mine.x + dx * r, y = mine.y + dy * r;
+      const [cx, cy] = this.grid.worldToCell(x, y);
+      if (this.grid.walkable(cx, cy)) return [x, y];
+    }
+    return [mine.x + dx * radius, mine.y + dy * radius];
+  }
+
+  /**
+   * A free ring slot for this worker — the NEAREST one, or 0 when the ring is full ([Errors]
+   * `Blightringfull` = "That gold mine can't support any more Acolytes.").
+   *
+   * Nearest rather than lowest-numbered, and that is not cosmetic. Acolytes arrive at a mine
+   * as a clump from one side (the melee opening literally spawns three of them together), and
+   * handing out slots in index order sends some of them round the far side of a 16×16-cell
+   * building, through the two who have already sat down. They wedge, and the ring never
+   * fills. Taking the near side keeps each one on the arc it walked up to, which is also what
+   * the original looks like.
+   */
+  private freeRingSlot(mineUnit: SimUnit, max: number, worker: SimUnit, radius: number): number {
+    const taken = new Set<number>();
+    for (const o of this.units.values()) {
+      if (o.id === worker.id || o.hp <= 0 || !o.ringSlot) continue;
+      if (this.mines.get(o.resId)?.entangledBy === mineUnit.id) taken.add(o.ringSlot);
+    }
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 1; i <= max; i++) {
+      if (taken.has(i)) continue;
+      const [sx, sy] = this.ringStation(mineUnit, i, max, radius);
+      const d = (sx - worker.x) ** 2 + (sy - worker.y) ** 2;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+  }
+
+  /** How many workers are actually kneeling at this mine right now. */
+  private ringCrew(mineUnit: SimUnit): number {
+    let n = 0;
+    for (const o of this.units.values()) {
+      if (o.hp <= 0 || !o.ringSlot || !o.working) continue;
+      if (this.mines.get(o.resId)?.entangledBy === mineUnit.id) n++;
+    }
+    return n;
+  }
+
+  /**
+   * One tick of an Acolyte working a Haunted Gold Mine: claim a station, walk to it, kneel.
+   *
+   * This is the whole of Undead gold, and what is NOT here is the point — no shaft, no load,
+   * no depot, no queue at the entrance. The Acolyte simply stands in the ring and the
+   * building pays while it does. The consequences are the ones players plan around: gold
+   * arrives continuously rather than in 10-gold lumps, a fifth Acolyte is worth exactly as
+   * much as the first, and the whole crew is standing in the open where a raid can reach it.
+   *
+   * The slot is claimed at ARRIVAL, not at the order, for the same reason a wisp's tree is
+   * (see tickHarvest): five Acolytes sent at one mine in the same breath must not all believe
+   * they hold slot 1, and one that is walking is not yet working.
+   */
+  private tickRingHarvest(u: SimUnit, mine: SimUnit): void {
+    const rules = this.mineCrewOf(mine);
+    if (!rules?.ring) return;
+    if (!u.ringSlot) {
+      const slot = this.freeRingSlot(mine, rules.max, u, rules.ring);
+      if (!slot) {
+        // "That gold mine can't support any more Acolytes." — the ring is full, so this one
+        // has no business here. Stopping (rather than queueing at the rim, as a classic mine
+        // makes a worker do) is the honest answer: there is no queue, and a body parked
+        // against the ring would just crowd the crew.
+        this.stop(u.id);
+        return;
+      }
+      u.ringSlot = slot;
+    }
+    const [sx, sy] = this.ringStation(mine, u.ringSlot, rules.max, rules.ring);
+    if (!this.arriveAtNode(u, sx, sy, u.radius + PATHING_CELL, () => this.pathTo(u, sx, sy))) {
+      u.working = false;
+      return;
+    }
+    u.working = true;
+    u.moving = false;
+    u.path = [];
+    u.desiredFacing = Math.atan2(mine.y - u.y, mine.x - u.x); // kneeling toward the mine
+  }
+
+  /** Give up a mining-ring station. Called from every path a worker leaves a job by, so a
+   *  slot can never be held by a body that has walked away (the shape of bug the classic
+   *  mine's `busy` latch cost us once — see popFromMine). */
+  private popFromRing(u: SimUnit): void {
+    if (!u.ringSlot) return;
+    u.ringSlot = 0;
+    u.working = false;
+  }
+
+  /** Pay out every mine with a crew — wisps inside, Acolytes around — and collapse one that
+   *  runs dry. */
+  private tickMineCrews(dt: number): void {
     for (const u of this.units.values()) {
       if (!u.mineId || u.hp <= 0 || (u.building && u.building.constructionLeft > 0)) continue;
       const mine = this.mines.get(u.mineId);
       if (!mine) continue;
-      const crew = u.garrison.length;
+      const rules = this.mineCrewOf(u);
+      if (!rules) continue;
+      const crew = rules.ring ? this.ringCrew(u) : u.garrison.length;
       // An empty mine simply stops paying; its clock is left where it is rather than reset, so
       // marching wisps in and out cannot buy a fresh payout on every entry.
-      if (crew <= 0 || u.garrisonCap <= 0) continue;
-      const lvl = this.passiveLevelData(u, "Aegm");
-      const perInterval = lvl ? this.dataOf(lvl, 0, 10) : 10;
-      const interval = (lvl ? this.dataOf(lvl, 1, 1) : 1) || 1;
+      if (crew <= 0) continue;
       // The clock runs on the BUILDING (`workT` is free on a structure), so a crew that
       // changes mid-interval simply changes what the next payout is worth.
       u.workT -= dt;
       if (u.workT > 0) continue;
-      u.workT += interval;
-      const gold = Math.min(mine.gold, Math.round(perInterval * (crew / u.garrisonCap)));
+      u.workT += rules.interval;
+      const gold = Math.min(mine.gold, Math.round(rules.gold * (Math.min(crew, rules.max) / rules.max)));
       mine.gold -= gold;
       this.stashOf(u.owner).gold += gold;
       if (mine.gold <= 0) {
         this.mines.delete(mine.id);
         this.depleted.push(mine);
         this.alerts.push({ kind: "minedestroyed", player: u.owner, x: mine.x, y: mine.y });
-        // The roots have nothing left to hold. WC3 collapses the entangled mine with the mine
-        // — the crew is turned out (unloadBurrow) rather than buried, and the building goes
-        // the way a cancelled one does: no death, no corpse, no kill credit.
+        // Nothing left to hold, or to haunt. WC3 collapses the building with the mine — the
+        // crew is turned out (unloadBurrow / the ring is dropped below) rather than buried,
+        // and the building goes the way a cancelled one does: no death, no corpse, no kill
+        // credit. For the Undead that IS the documented behaviour rather than an analogy:
+        // "Acolytes automatically Unsummon Haunted Gold mines after they are empty"
+        // (classic.battle.net/war3/undead/units/acolyte.shtml).
         this.unloadBurrow(u.id);
         this.removeUnit(u.id);
       } else if (mine.gold < MISC_DATA.LowGoldAmount && !this.minesRunningLow.has(mine.id)) {
@@ -4121,8 +4366,9 @@ export class SimWorld {
           if (b.constructionLeft === 0) this.finishConstruction(u, b);
           continue;
         }
-        // An Entangled Gold Mine has nobody hammering it and never will (selfBuilds): the
-        // roots are what raises it, so its 60 seconds run whether anyone is watching or not.
+        // Nobody is hammering this one and nobody needs to (selfBuilds): an Entangled Gold
+        // Mine is held up by the Tree's roots, and every Undead structure was SUMMONED and
+        // then left to rise on its own. Either way the clock runs unattended.
         if (b.selfBuilds) {
           b.constructionLeft = Math.max(0, b.constructionLeft - dt);
           u.hp = u.maxHp * (0.1 + 0.9 * (1 - b.constructionLeft / b.buildTimeTotal));
@@ -4673,6 +4919,46 @@ export class SimWorld {
     }
   }
 
+  /**
+   * Unsummon a friendly structure and pay half of it back (`Auns`, the Acolyte's fourth
+   * button — see the handler in spells.ts for the row).
+   *
+   * The building leaves the way a CANCELLED one does — `cancelBuilding`, so no death, no
+   * corpse, no kill credit for anyone, and the renderer plays the race's own cancel
+   * explosion over the spot. That is not an approximation: an unsummoning is a building being
+   * un-made by its owner, which is precisely what a cancel already models.
+   *
+   * A building still UNDER construction is not exempt. WC3 offers cancel for that case and
+   * cancel refunds in full, but nothing forbids the ability, and the ratio is what decides
+   * what comes back either way.
+   *
+   * Refuses anything that is not this player's own structure, which is the row's own
+   * `targs1 = structure,player` spelled out — and a HAUNTED GOLD MINE is deliberately not
+   * special-cased out of it: unsummoning an empty one is the documented behaviour
+   * ("Acolytes automatically Unsummon Haunted Gold mines after they are empty").
+   */
+  unsummonBuilding(caster: SimUnit, target: SimUnit, ratio: number, step: number): boolean {
+    if (!target.building || target.owner !== caster.owner || target.hp <= 0) return false;
+    const def = this.unitReg?.get(target.typeId);
+    const salvage = (cost: number): number => {
+      const raw = cost * ratio;
+      // "Accumulation Step" — the salvage is paid in whole units of it. With no duration on
+      // the row there is nothing to trickle, so what survives of the step is the granularity.
+      return step > 0 ? Math.round(raw / step) * step : Math.round(raw);
+    };
+    const stash = this.stashOf(target.owner);
+    stash.gold += salvage(def?.goldCost ?? 0);
+    stash.lumber += salvage(def?.lumberCost ?? 0);
+    // A mine under a building it is losing goes back to being a plain gold mine; the renderer
+    // un-hides the rock when the record disappears (raiseEntangledMines).
+    if (target.mineId) {
+      const mine = this.mines.get(target.mineId);
+      if (mine) mine.entangledBy = 0;
+      this.unloadBurrow(target.id); // …and any crew it was holding walks out
+    }
+    return this.cancelBuilding(target.id);
+  }
+
   /** Cancel a building (manual cancel of an under-construction structure): free
    *  its builder and remove it WITHOUT a death animation — a cancelled building
    *  isn't destroyed in combat, it simply vanishes (the caller plays the race's
@@ -4907,6 +5193,7 @@ export class SimWorld {
       | "ancient"
       | "mineId"
       | "entangler"
+      | "ringSlot"
       | "morphT"
       | "builtFacing"
       | "rootPending"
@@ -5126,6 +5413,7 @@ export class SimWorld {
       ancient: !!opts?.ancient,
       mineId: 0, // set by entangleMine for an egol
       entangler: 0, // …and the Tree of Life that grew it (attachEntangled)
+      ringSlot: 0,
       morphT: 0,
       builtFacing: unit.facing,
       rootPending: null,
@@ -6120,6 +6408,7 @@ export class SimWorld {
       u.acquireT = 0; // scan for a new target on the very next idle tick (no ½s lag)
       this.cancelSwing(u);
       this.detachBuilder(id);
+      u.ringSlot = 0; // an Acolyte told to stop gives up its station in the mining ring
       this.settle(u);
       // Any errand the unit was walking to finish is off: a Stop cancels a pending drop, hand-
       // over or sale as it cancels everything else.
@@ -6285,9 +6574,50 @@ export class SimWorld {
   issueBuildNew(id: number, defId: string, x: number, y: number, gold: number, lumber: number, paid: boolean): void {
     const u = this.units.get(id);
     if (!u || this.castLocked(u)) return;
+    // A Haunted Gold Mine is not placed on GROUND, it is placed on a MINE — so the site is
+    // whatever mine the player aimed at, not the pixel they clicked.
+    const mine = this.hauntTarget(defId, x, y);
+    if (mine) {
+      u.buildPending = { defId, x: mine.x, y: mine.y, gold, lumber, paid, mineId: mine.id };
+      if (!paid) this.payPendingBuild(id);
+      if (!this.issueMove(id, mine.x, mine.y)) u.moving = false;
+      return;
+    }
     u.buildPending = { defId, x, y, gold, lumber, paid };
     if (!paid) this.payPendingBuild(id);
     if (!this.issueMove(id, x, y)) u.moving = false; // already at the site → raise now
+  }
+
+  /**
+   * The gold mine a build order means, when the thing being built is one that stands ON a
+   * mine — i.e. when its type carries `Abgm` "Blighted Gold mine". The Haunted Gold Mine is
+   * the only stock building that does, and asking the ABILITY rather than the id is what makes
+   * a custom map's own version work.
+   *
+   * Snapping to the mine is the actual UI: WC3's Haunted Gold Mine ghost jumps onto whichever
+   * mine you wave it over and refuses everywhere else, because the building's job is to BE the
+   * mine's entrance. A mine already carrying a building is refused ([Errors]
+   * `Alreadyblightedmine` = "That gold mine is already haunted.").
+   */
+  hauntTarget(defId: string, x: number, y: number): SimMine | null {
+    if (!this.hauntsMines(defId)) return null;
+    let best: SimMine | null = null;
+    let bestD = Infinity;
+    for (const m of this.mines.values()) {
+      if (m.entangledBy) continue;
+      const d = (m.x - x) ** 2 + (m.y - y) ** 2;
+      const reach = m.radius + HAUNT_SNAP;
+      if (d > reach * reach || d >= bestD) continue;
+      bestD = d;
+      best = m;
+    }
+    return best;
+  }
+
+  /** Does this building type stand on a gold mine (`Abgm`)? Cached with the blight paints,
+   *  which are asked of the same rows at the same moments. */
+  hauntsMines(defId: string): boolean {
+    return (this.unitReg?.get(defId)?.abilities ?? []).includes("Abgm");
   }
 
   /** Execute an order right now, replacing whatever the unit is doing and its
@@ -6304,6 +6634,7 @@ export class SimWorld {
     // clearing it, and the mine's one-worker `busy` latch wedged shut with it.
     if (u) this.popFromMine(u);
     if (u) this.popFromCanopy(u); // …and a wisp told to do something else drifts out of its tree
+    if (u) this.popFromRing(u); // …and an Acolyte given anything else stands up out of its ring
     // Commanded: this unit is no longer merely holding the ground the map put it on. Placed
     // here because `issueOrder` is the funnel every fresh, non-shift order comes through —
     // a player's click, a network command, and a trigger's IssueXOrder alike.
@@ -6474,14 +6805,27 @@ export class SimWorld {
     if (!u || !u.worker || this.castLocked(u)) return false;
     if (kind === "gold" && (!u.worker.gold || !this.mines.has(nodeId))) return false;
     if (kind === "lumber" && (!u.worker.lumber || !this.trees.has(nodeId))) return false;
-    // An ENTANGLED mine has no shaft to walk into: the roots close it, and the only way at the
-    // gold is to be a wisp and climb inside the building (issueGarrison). That is the same
-    // refusal for both sides of it — a night elf cannot classic-mine its own entangled mine,
-    // and an enemy peasant cannot mine it at all without knocking the roots down first.
-    if (kind === "gold" && this.mines.get(nodeId)?.entangledBy) return false;
-    // …and the mirror: a wisp has no pick. Night elf gold starts with Entangle (`Aent`), so a
-    // wisp sent at a bare gold mine is not a miner, it is a wisp standing next to a hole.
-    if (kind === "gold" && u.worker.deliversInPlace) return false;
+    // A mine with a building over it has no shaft to walk into. Which of the two buildings it
+    // is decides whether there is any other way at the gold:
+    //
+    //  • ENTANGLED — the roots close it, and the only way in is to BE a wisp and climb inside
+    //    (issueGarrison). Refused for both sides of it: a night elf cannot classic-mine its
+    //    own entangled mine, and an enemy peasant cannot mine it at all without knocking the
+    //    roots down first.
+    //  • HAUNTED — the ring outside is the way in, and it is open to a worker of the owning
+    //    side and to nobody else ([Errors] `Notblightedmine` = "Unable to use a Haunted Gold
+    //    Mine."). Every Undead worker in the game is a `Aaha` Acolyte, so no further test is
+    //    needed than whose mine it is.
+    if (kind === "gold" && this.mines.get(nodeId)?.entangledBy) {
+      const haunt = this.hauntedMine(nodeId);
+      if (!haunt || !this.allied(u, haunt)) return false;
+    }
+    // …and the mirror, for both races whose gold stays in the ground. A wisp has no pick:
+    // night elf gold starts with Entangle (`Aent`), so a wisp sent at a bare mine is not a
+    // miner, it is a wisp standing next to a hole. An Acolyte has no pick either — it has a
+    // ring to kneel in, and there is no ring until the mine is haunted ([Errors]
+    // `Blightminefirst` = "Must haunt gold mine first.").
+    if (kind === "gold" && (u.worker.deliversInPlace || (u.worker.minesInRing && !this.hauntedMine(nodeId)))) return false;
     // ONE WISP TO A TREE. A wisp does not chop from outside, it goes IN — so an occupied tree
     // is not a queue you join, it is a seat that is taken, and WC3 sends the second wisp to a
     // neighbouring tree rather than stacking two inside one trunk. Sent at a taken tree, take
@@ -6703,53 +7047,207 @@ export class SimWorld {
     return this.timeOfDay >= DAY_START && this.timeOfDay < DAY_END;
   }
 
-  /** The blight radius an Undead structure spreads, or 0 for everything else.
+  /**
+   * What a finished structure does to the ground under it — grow blight, dispel it, or
+   * neither.
    *
-   *  Blight is not a property of the building's own row — it is an ability the building
-   *  carries in Units\UnitAbilities.slk, and AbilityData.slk gives that ability the radius:
-   *  `Abgs` "Blight Growth (Small)" Area1 **768** on the Ziggurat and the Crypt, `Abgl`
-   *  "(Large)" Area1 **960** on the Necropolis/Halls/Black Citadel, the Altar, the Graveyard,
-   *  the Slaughterhouse and the haunted gold mine. (Their sibling rows `Abds`/`Abdl` share the
-   *  same base code `Abli` but are blight DISPEL, carried by non-Undead builders — so match
-   *  the ability id, not the code.) Cached per type: an ability list never changes under us. */
-  private blightRadiusOf(typeId: string): number {
-    let r = this.blightRadii.get(typeId);
-    if (r === undefined) {
-      r = 0;
+   * **Every building in the game carries one of these**, and that is the discovery worth
+   * writing down: this is ONE mechanism with a boolean, not an Undead feature with a
+   * counter-feature bolted on. `Units\UnitAbilities.slk` gives the four rows out like this —
+   *
+   *     Abgs  "Blight Growth (Small)"   Area1 768   DataB "Creates Blight" = 1
+   *     Abgl  "Blight Growth (Large)"   Area1 960   DataB "Creates Blight" = 1
+   *     Abds  "Blight Dispel (Small)"   Area1 768   DataB "Creates Blight" = 0
+   *     Abdl  "Blight Dispel (Large)"   Area1 960   DataB "Creates Blight" = 0
+   *
+   * — with the *Growth* pair on the 20 Undead structures and the *Dispel* pair on all 60-odd
+   * Human / Orc / Night Elf / neutral ones, Large on each race's main hall and Small on
+   * everything else. So a Human player expanding onto a dead Undead base scrubs the rot off
+   * simply by finishing a Farm there, and no code has to say so.
+   *
+   * All four share `DataA` "Expansion Amount" = 64 and `Dur1` = 0.08: the disc does not
+   * appear, it GROWS, 64 units every twelfth of a second, so a 768 bloom takes 0.96s and a
+   * 960 one 1.2s. That is the purple wash players watch spread out from a new Ziggurat.
+   *
+   * Matched on the ABILITY ID and not on the base `code`, because all four share `Abli`.
+   * Cached per type — an ability list never changes under us.
+   *
+   * (`Units\MiscData.txt` also carries `BuildingUnblightRadius=350`, commented "Radius of
+   * building blight dispel". It disagrees with `Abds`/`Abdl`'s own 768/960 and nothing says
+   * which event it belongs to; the per-building row is the more specific data and the one
+   * that has a mechanism attached, so that is what is implemented. See docs/undead.md.)
+   */
+  private blightPaintOf(typeId: string): BlightPaint | null {
+    let paint = this.blightRadii.get(typeId);
+    if (paint === undefined) {
+      paint = null;
       const def = this.unitReg?.get(typeId);
       for (const id of def?.abilities ?? []) {
-        if (id !== "Abgs" && id !== "Abgl") continue;
-        r = Math.max(r, this.abilities?.get(id)?.levelData[0]?.area ?? 0);
+        if (id !== "Abgs" && id !== "Abgl" && id !== "Abds" && id !== "Abdl") continue;
+        const lvl = this.abilities?.get(id)?.levelData[0] ?? emptyAbilityLevel();
+        const large = id === "Abgl" || id === "Abdl";
+        const radius = lvl.area || (large ? 960 : 768);
+        if (paint && radius <= paint.radius) continue;
+        paint = {
+          radius,
+          // DataB "Creates Blight" — 1 on the growth rows, 0 on the dispel ones.
+          blights: this.dataOf(lvl, 1, id === "Abgs" || id === "Abgl" ? 1 : 0) > 0,
+          step: this.dataOf(lvl, 0, 64) || 64, // DataA "Expansion Amount"
+          period: lvl.duration || 0.08, // Dur1
+        };
       }
-      this.blightRadii.set(typeId, r);
+      this.blightRadii.set(typeId, paint);
     }
-    return r;
+    return paint;
   }
 
-  /** Recompute the blighted region: the union of every living Undead structure's disc.
+  /** The blight map, made on first use. See BlightGrid for why the lattice is the terrain's
+   *  own and how it is derived from the pathing grid. */
+  private blightMap(): BlightGrid {
+    if (!this.blightGrid) {
+      const [ox, oy] = this.grid.origin;
+      this.blightGrid = new BlightGrid(this.grid.width, this.grid.height, ox, oy);
+    }
+    return this.blightGrid;
+  }
+
+  /** Blight the renderer has not drawn yet. Drained by the terrain overlay each frame; a
+   *  headless sim simply never asks and the list is capped rather than growing (BlightGrid). */
+  drainBlightUpdates(): { all: boolean; cells: Array<[number, number, boolean]> } {
+    return this.blightGrid ? this.blightGrid.drainDirty() : { all: false, cells: [] };
+  }
+
+  /** The blight lattice itself, for a renderer doing a full resync (`all`). */
+  get blight(): BlightGrid | null {
+    return this.blightGrid;
+  }
+
+  /**
+   * Start each newly-finished structure's disc growing, and advance the ones already going.
    *
-   *  We model blight only as far as the sim needs it — as the ground most Undead units must
-   *  stand on to regenerate at all (UnitBalance.slk `regenType` = blight). Deliberately NOT
-   *  modelled: the purple ground texture, and the way real blight OUTLIVES its building and
-   *  decays back to grass (the `BuildingUnblightRadius` 350 in Units\MiscData.txt is a
-   *  different thing again — the hole a non-Undead structure punches in it). Cheap enough to
-   *  redo each tick: a player owns a few dozen structures at most. */
-  private rebuildBlight(): void {
-    this.blight.length = 0;
+   * A building paints ONCE, on completion, and what it paints stays: blight is ground, not
+   * an aura, so knocking the Ziggurat down leaves the rot behind (see BlightGrid). The one
+   * thing a LIVE source still does is re-assert itself — when a dispel disc has just scrubbed
+   * ground out from under a standing Undead building, that building paints again, which is
+   * the mechanical form of "blight can be dispelled once the building that generated it has
+   * been destroyed" (classic.battle.net/war3/undead/basics.shtml). Re-assertion is driven off
+   * the dispel event and not polled, so an ordinary tick with nothing new finished does no
+   * work at all.
+   */
+  private tickBlight(dt: number): void {
     for (const u of this.units.values()) {
-      if (u.hp <= 0 || !u.building) continue;
-      const r = this.blightRadiusOf(u.typeId);
-      if (r > 0) this.blight.push({ x: u.x, y: u.y, r2: r * r });
+      if (u.hp <= 0 || !u.building || u.building.constructionLeft > 0) continue;
+      if (this.blightPainted.has(u.id)) continue;
+      const paint = this.blightPaintOf(u.typeId);
+      this.blightPainted.add(u.id); // …including the `null` case, so it is asked once per building
+      if (!paint) continue;
+      // A DISPEL with nothing to dispel is not deferred, it is skipped: the scrub happens when
+      // the building finishes and at no other time, so a Human Farm raised on clean grass has
+      // nothing to do now and nothing to do later either. (Which makes a match with no Undead
+      // player in it cost nothing at all here, rather than blooming ~60 empty discs.)
+      if (!paint.blights && (!this.blightGrid || this.blightGrid.empty)) continue;
+      this.blightGrowth.set(u.id, {
+        x: u.x, y: u.y, r: 0, max: paint.radius, step: paint.step, period: paint.period, t: 0, on: paint.blights,
+      });
+    }
+    if (!this.blightGrowth.size) return;
+    for (const [id, g] of this.blightGrowth) {
+      g.t += dt;
+      // Catch the ring up in whole `step`s: a slow frame must not stretch the bloom out.
+      while (g.t >= g.period && g.r < g.max) {
+        g.t -= g.period;
+        g.r = Math.min(g.max, g.r + g.step);
+        this.blightMap().paintDisc(g.x, g.y, g.r, g.on);
+      }
+      if (g.r >= g.max) {
+        this.blightGrowth.delete(id);
+        // A dispel that has finished scrubbing may have taken ground a LIVING Undead
+        // building is still holding. Give those their disc back — at once, not as a fresh
+        // bloom, since that ground was theirs all along.
+        if (!g.on) this.reassertBlight(g.x, g.y, g.max);
+      }
+    }
+  }
+
+  /** Re-paint every live blight SOURCE whose disc overlaps a patch just dispelled. */
+  private reassertBlight(x: number, y: number, radius: number): void {
+    for (const u of this.units.values()) {
+      if (u.hp <= 0 || !u.building || u.building.constructionLeft > 0) continue;
+      const paint = this.blightPaintOf(u.typeId);
+      if (!paint?.blights) continue;
+      const reach = paint.radius + radius;
+      if ((u.x - x) ** 2 + (u.y - y) ** 2 > reach * reach) continue;
+      this.blightMap().paintDisc(u.x, u.y, paint.radius, true);
     }
   }
 
   /** Is this point on blight? */
   isBlighted(x: number, y: number): boolean {
-    for (const b of this.blight) {
-      const dx = x - b.x, dy = y - b.y;
-      if (dx * dx + dy * dy <= b.r2) return true;
+    return this.blightGrid ? this.blightGrid.at(x, y) : false;
+  }
+
+  /** Paint or clear a disc of blight outright — the `SetBlight*` natives, and nothing else.
+   *  No growth animation: a script asking for blight is stating a fact about the ground, not
+   *  raising a building. */
+  setBlight(x: number, y: number, radius: number, add: boolean): void {
+    this.blightMap().paintDisc(x, y, radius, add);
+  }
+
+  /**
+   * Raise a Haunted Gold Mine over an existing gold mine, with no Acolyte and no build time —
+   * `CreateBlightedGoldmine`, i.e. the Undead melee opening (Blizzard.j's
+   * `BlightGoldMineForPlayerBJ`, called from `MeleeStartingUnitsUndead`).
+   *
+   * The same request the renderer already serves for an Entangled Gold Mine, because it is
+   * the same event: a race's own building appearing over a mine, with a model to load first.
+   * `instant` skips `ugol`'s 100-second `bldtm` — a melee player starts with a finished mine,
+   * not a foundation.
+   *
+   * Returns the MINE's id, which is what the caller wants a handle for (see the native).
+   */
+  hauntMine(owner: number, team: number, x: number, y: number, unitId = "ugol"): number {
+    let best: SimMine | null = null;
+    let bestD = Infinity;
+    for (const m of this.mines.values()) {
+      if (m.entangledBy) continue;
+      const d = (m.x - x) ** 2 + (m.y - y) ** 2;
+      if (d >= bestD) continue;
+      bestD = d;
+      best = m;
     }
-    return false;
+    if (!best) return -1;
+    best.entangledBy = -1; // claimed while the model is in flight (see entangleMine)
+    this.entangleRequests.push({ mineId: best.id, unitId, x: best.x, y: best.y, owner, team, casterId: 0, instant: true });
+    return best.id;
+  }
+
+  /** Is every corner under an `n`-cell footprint at (x, y) blighted?
+   *
+   *  What `UnitBalance.slk`'s **`requirePlace` = "blighted"** asks, and the reason the Undead
+   *  build the way they do. Exactly eleven types carry it — the Ziggurat and both its towers,
+   *  the Crypt, Graveyard, Altar of Darkness, Temple of the Damned, Slaughterhouse, Boneyard,
+   *  Tomb of Relics and Sacrificial Pit — and the two that do NOT are the Necropolis chain and
+   *  the Haunted Gold Mine, which is precisely the manual's "only the Necropolis and a Haunted
+   *  Gold Mine may be placed on normal land" (classic.battle.net/war3/undead/basics.shtml).
+   *  Nothing here is a list of ids: the column is the rule.
+   *
+   *  Asked of every BUILD SQUARE the footprint covers rather than of its centre, because a
+   *  12×12 Temple of the Damned is 384 units across and half of it hanging off the edge of
+   *  the rot is exactly the placement the real client refuses. The square (64 units — WC3's
+   *  own placement grid) is also the resolution the green/red ghost draws at, so what the
+   *  player sees refused and what this refuses are the same squares. */
+  footprintBlighted(wx: number, wy: number, cellsW: number, cellsH = cellsW): boolean {
+    if (!this.blightGrid) return false;
+    const x0 = wx - (cellsW * PATHING_CELL) / 2;
+    const y0 = wy - (cellsH * PATHING_CELL) / 2;
+    const cols = Math.max(1, Math.round(cellsW / BUILD_CELL_CELLS));
+    const rows = Math.max(1, Math.round(cellsH / BUILD_CELL_CELLS));
+    for (let sy = 0; sy < rows; sy++) {
+      for (let sx = 0; sx < cols; sx++) {
+        if (!this.blightGrid.at(x0 + (sx + 0.5) * BUILD_CELL, y0 + (sy + 0.5) * BUILD_CELL)) return false;
+      }
+    }
+    return true;
   }
 
   /** The unit TYPE's own hit-point regeneration (UnitBalance.slk `regenHP`), gated by the
@@ -9958,6 +10456,7 @@ export class SimWorld {
     holdPosition: (unit) => { this.issueHold(unit.id); },
     toggleRoot: (unit) => this.toggleRoot(unit),
     entangleMine: (unit, def) => this.entangleMine(unit, def),
+    unsummonBuilding: (caster, target, ratio, step) => this.unsummonBuilding(caster, target, ratio, step),
     eatTree: (eater, x, y, reach) => {
       // The nearest tree to the CLICK, but only if the eater can actually reach it — the
       // point is where the player aimed and the range is the Ancient's arm.
@@ -10392,11 +10891,11 @@ export class SimWorld {
     this.tech?.invalidate();
     this.tickAttackReveals(dt);
     this.tickBuildings(dt);
-    this.tickEntangledMines(dt); // night elf gold: no round trip, just a crew and a clock
+    this.tickMineCrews(dt); // night elf and undead gold: no round trip, just a crew and a clock
     this.tickShops(dt);
     this.tickShopBuyers(); // adopt a purchaser for whoever has just walked one up to a shop
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
-    this.rebuildBlight(); // where the Undead may regenerate at all (before recompute)
+    this.tickBlight(dt); // the rot spreading out from each new structure (before recompute)
     for (const u of this.units.values()) {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
       this.tickMeld(u); // Shadow Meld holds only while the unit is still and the sun is down
@@ -11951,6 +12450,14 @@ export class SimWorld {
       const mine = this.mines.get(u.resId);
       if (!mine) {
         this.stop(u.id);
+        return;
+      }
+      // A HAUNTED mine is worked from outside: take a station in its ring and stay there.
+      // There is no shaft, no load and no walk home — the gold is credited off the building's
+      // own clock (tickMineCrews) for as long as anyone is kneeling.
+      const haunt = this.hauntedMine(mine.id);
+      if (haunt) {
+        this.tickRingHarvest(u, haunt);
         return;
       }
       // Walk up to the mine and duck inside from WHATEVER side we reached — the reach

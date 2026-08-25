@@ -5894,6 +5894,9 @@ export class RtsController {
         }
       }
       const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker?.gold);
+      // A HAUNTED mine's rim click means the ring, and `issueHarvest` already knows: the
+      // order is the same one, and it is the mine's own state that decides whether the worker
+      // walks into a shaft or kneels outside it. Nothing extra to do here.
       // A little extra breathing room on the approach ring so they don't bunch on
       // one side of the mine (kept modest — miners must still land within entry reach).
       const spread = ringTargets(this.sim, workers, mine.x, mine.y, mine.radius, MINE_APPROACH_SPREAD);
@@ -6094,6 +6097,22 @@ export class RtsController {
       if (mending && this.repairAt(picked, queued)) any = true; // issueRepair refuses non-workers
       if (any) {
         this.ack(false); // the drinkers answer, as they do for any move order
+        this.flashRing(target.x, target.y, selR, FLASH_GREEN);
+        return;
+      }
+    }
+    // Own (or an ally's) HAUNTED GOLD MINE: the building covers the rock, so a right-click
+    // meaning "go and mine" lands on it rather than on the mine. Aim the order at the mine
+    // UNDERNEATH — that is what an Acolyte harvests (SimWorld.tickRingHarvest) — and let
+    // anything that is not a ring miner fall through to the ordinary walk-up. Mirrors the
+    // Entangled Gold Mine's branch below, where the same click means the crew instead.
+    if (!enemy && target.mineId && this.sim.hauntedMine(target.mineId)) {
+      let any = false;
+      for (const id of this.selected) {
+        if (!this.sim.units.get(id)?.worker?.minesInRing) continue;
+        if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "harvest", res: "gold", nodeId: target.mineId }, queued })) any = true;
+      }
+      if (any) {
         this.flashRing(target.x, target.y, selR, FLASH_GREEN);
         return;
       }

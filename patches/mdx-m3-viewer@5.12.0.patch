@@ -403,7 +403,7 @@ index 5c2629bdcf279decae84d9fddfc523d5548192e8..4a65c029e233f1a4f11a092c6bb76e49
  }
  exports.default = War3MapW3d;
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index 7fe06bd7314e83b578dc8987e819b08cea287dfb..9b3726c4e3fb9fb127e0ad9eaef0b5b695dad65e 100644
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..fc18a44dddf0006fe8b5ed4e2315fb4780a47842 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
 @@ -45,6 +45,52 @@ class BatchGroup {
@@ -459,7 +459,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..9b3726c4e3fb9fb127e0ad9eaef0b5b6
          gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
          if (isHd) {
-@@ -115,6 +156,14 @@ class BatchGroup {
+@@ -115,6 +161,14 @@ class BatchGroup {
              const uvAnims = instance.uvAnims;
              gl.uniform4fv(uniforms['u_vertexColor'], instance.vertexColor);
              gl.uniform1i(uniforms['u_texture'], 0);
@@ -474,7 +474,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..9b3726c4e3fb9fb127e0ad9eaef0b5b6
              for (const object of this.objects) {
                  const batch = batches[object];
                  const geoset = batch.geoset;
-@@ -133,7 +182,7 @@ class BatchGroup {
+@@ -133,7 +187,7 @@ class BatchGroup {
                      gl.uniform2f(uniforms['u_uvTrans'], uvAnim[0], uvAnim[1]);
                      gl.uniform2f(uniforms['u_uvRot'], uvAnim[2], uvAnim[3]);
                      gl.uniform1f(uniforms['u_uvScale'], uvAnim[4]);
@@ -749,7 +749,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499
          const model = this.model;
          if (this.sequence === -1) {
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-index 235f29101256617d34587316e8f40984a8f95685..df64fc5532e9044a63eb59621a0dbbb5db3b1650 100644
+index 235f29101256617d34587316e8f40984a8f95685..c655ef2ae952dcd1cd2c5822bf91958ffc0e10b9 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 @@ -11,12 +11,94 @@ uniform sampler2D u_texture;
@@ -847,7 +847,7 @@ index 235f29101256617d34587316e8f40984a8f95685..df64fc5532e9044a63eb59621a0dbbb5
  
  vec4 getDiffuseColor() {
    vec2 uv = v_uv;
-@@ -43,7 +113,7 @@ vec4 getDiffuseColor() {
+@@ -43,7 +125,7 @@ vec4 getDiffuseColor() {
      discard;
    }
  
@@ -856,7 +856,7 @@ index 235f29101256617d34587316e8f40984a8f95685..df64fc5532e9044a63eb59621a0dbbb5
  }
  
  void onlyTexCoords() {
-@@ -55,19 +125,44 @@ void onlyNormals() {
+@@ -55,19 +137,44 @@ void onlyNormals() {
  }
  
  void onlyDiffuse() {
@@ -937,11 +937,32 @@ index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb04739275 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..c22270cc71612b064a0bc2e187fab9bbe1b11f9e 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
-@@ -168,7 +168,11 @@ class War3MapViewerMap {
-         this.blightTextureIndex = this.tilesetTextures.length;
+@@ -44,6 +44,13 @@ class War3MapViewerMap {
+         this.mapSize = new Int32Array(2);
+         this.tilesets = [];
+         this.blightTextureIndex = -1;
++        // OpenWar3 (blight): the terrain's per-tile texture/variation bytes, kept after
++        // load so the ground can be re-textured at runtime. `romp` marks tiles a cliff-ramp
++        // model covers -- those render no ground at all and must stay zeroed.
++        this.cornerTextures = null;
++        this.cornerVariations = null;
++        this.rompFlags = null;
++        this.blightDirty = null;
+         this.cliffTilesets = [];
+         this.columns = 0;
+         this.rows = 0;
+@@ -165,10 +172,17 @@ class War3MapViewerMap {
+             Y: 'Village',
+             Z: 'Ruins',
+         };
+-        this.blightTextureIndex = this.tilesetTextures.length;
++        // OpenWar3 fix: the blight texture is appended to the LOCAL list being built here;
++        // `this.tilesetTextures` is still the previous map's (or the constructor's empty
++        // array), so upstream's index pointed at ground tileset 0 and blight drew as dirt.
++        this.blightTextureIndex = tilesetTextures.length;
          tilesetTextures.push(this.load(`TerrainArt\\Blight\\${blights[tileset]}_Blight${texturesExt}`));
          for (const cliffTileset of parser.cliffTilesets) {
 -            const row = viewer.cliffTypesData.getRow(cliffTileset);
@@ -953,7 +974,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
              this.cliffTilesets.push(row);
              cliffTextures.push(this.load(`${row.string('texDir')}\\${row.string('texFile')}${texturesExt}`));
          }
-@@ -199,6 +203,99 @@ class War3MapViewerMap {
+@@ -199,6 +213,99 @@ class War3MapViewerMap {
          const cliffs = {};
          this.columns = columns - 1;
          this.rows = rows - 1;
@@ -1053,7 +1074,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
          for (let y = 0; y < rows; y++) {
              for (let x = 0; x < columns; x++) {
                  const bottomLeft = corners[y][x];
-@@ -209,8 +306,12 @@ class War3MapViewerMap {
+@@ -209,8 +316,12 @@ class War3MapViewerMap {
                  if (y < rows - 1 && x < columns - 1) {
                      // Water can be used with cliffs and normal corners, so store water state regardless.
                      waterFlags[instance] = this.isWater(x, y);
@@ -1068,7 +1089,42 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
                          const bottomLeftLayer = bottomLeft.layerHeight;
                          const bottomRightLayer = corners[y][x + 1].layerHeight;
                          const topLeftLayer = corners[y + 1][x].layerHeight;
-@@ -266,6 +367,22 @@ class War3MapViewerMap {
+@@ -234,38 +345,30 @@ class War3MapViewerMap {
+                         }
+                     }
+                     else {
+-                        const bottomLeftTexture = this.cornerTexture(x, y);
+-                        const bottomRightTexture = this.cornerTexture(x + 1, y);
+-                        const topLeftTexture = this.cornerTexture(x, y + 1);
+-                        const topRightTexture = this.cornerTexture(x + 1, y + 1);
+-                        const textures = (0, arrayunique_1.default)([bottomLeftTexture, bottomRightTexture, topLeftTexture, topRightTexture]).sort();
+-                        let texture = textures[0];
+-                        cornerTextures[instance * 4] = texture + 1;
+-                        cornerVariations[instance * 4] = this.getVariation(texture, bottomLeft.groundVariation);
+-                        textures.shift();
+-                        for (let i = 0, l = textures.length; i < l; i++) {
+-                            let bitset = 0;
+-                            texture = textures[i];
+-                            if (bottomRightTexture === texture) {
+-                                bitset |= 0b0001;
+-                            }
+-                            if (bottomLeftTexture === texture) {
+-                                bitset |= 0b0010;
+-                            }
+-                            if (topRightTexture === texture) {
+-                                bitset |= 0b0100;
+-                            }
+-                            if (topLeftTexture === texture) {
+-                                bitset |= 0b1000;
+-                            }
+-                            cornerTextures[instance * 4 + 1 + i] = texture + 1;
+-                            cornerVariations[instance * 4 + 1 + i] = bitset;
+-                        }
++                        // OpenWar3 (blight): shared with flushBlight, which re-runs exactly
++                        // this for a tile whose corners have just been blighted or scrubbed.
++                        this.writeTileTextures(x, y, instance, cornerTextures, cornerVariations);
+                     }
+                     instance += 1;
                  }
              }
          }
@@ -1091,7 +1147,27 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
          const gl = this.viewer.gl;
          const webgl = this.viewer.webgl;
          this.vertexBuffer = gl.createBuffer();
-@@ -358,7 +475,25 @@ class War3MapViewerMap {
+@@ -291,10 +394,17 @@ class War3MapViewerMap {
+         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(instanceCount).map((currentValue, index) => index), gl.STATIC_DRAW);
+         this.textureBuffer = gl.createBuffer();
+         gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
+-        gl.bufferData(gl.ARRAY_BUFFER, cornerTextures, gl.STATIC_DRAW);
++        gl.bufferData(gl.ARRAY_BUFFER, cornerTextures, gl.DYNAMIC_DRAW);
+         this.variationBuffer = gl.createBuffer();
+         gl.bindBuffer(gl.ARRAY_BUFFER, this.variationBuffer);
+-        gl.bufferData(gl.ARRAY_BUFFER, cornerVariations, gl.STATIC_DRAW);
++        gl.bufferData(gl.ARRAY_BUFFER, cornerVariations, gl.DYNAMIC_DRAW);
++        // OpenWar3 (blight): hold on to the CPU-side copies and the ramp mask so
++        // setBlight/flushBlight can re-derive a tile's four texture slots and patch just
++        // those bytes back into the buffers. DYNAMIC_DRAW above says so to the driver.
++        this.cornerTextures = cornerTextures;
++        this.cornerVariations = cornerVariations;
++        this.rompFlags = romp;
++        this.blightDirty = new Set();
+         this.waterBuffer = gl.createBuffer();
+         gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
+         gl.bufferData(gl.ARRAY_BUFFER, waterFlags, gl.STATIC_DRAW);
+@@ -358,7 +468,25 @@ class War3MapViewerMap {
                          }
                          promise.then((model) => {
                              if (model) {
@@ -1118,7 +1194,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
                              }
                          });
                      }
-@@ -503,6 +638,8 @@ class War3MapViewerMap {
+@@ -503,6 +631,8 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1127,7 +1203,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 15);
-@@ -558,11 +695,17 @@ class War3MapViewerMap {
+@@ -558,11 +688,17 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1145,7 +1221,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
              gl.uniform1f(uniforms['u_offsetHeight'], this.waterHeightOffset);
              gl.uniform4fv(uniforms['u_maxDeepColor'], this.maxDeepColor);
              gl.uniform4fv(uniforms['u_minDeepColor'], this.minDeepColor);
-@@ -599,6 +742,8 @@ class War3MapViewerMap {
+@@ -599,6 +735,8 @@ class War3MapViewerMap {
              gl.disable(gl.BLEND);
              shader.use();
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1154,7 +1230,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
              gl.uniform1i(uniforms['u_heightMap'], 0);
              gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
              gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
-@@ -612,6 +757,9 @@ class War3MapViewerMap {
+@@ -612,6 +750,9 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
@@ -1164,7 +1240,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +819,86 @@ class War3MapViewerMap {
+@@ -671,6 +812,86 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -1251,7 +1327,116 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
      /**
       * Is the tile at the given column and row water?
       */
-@@ -730,17 +957,37 @@ class War3MapViewerMap {
+@@ -692,6 +913,108 @@ class War3MapViewerMap {
+         }
+         return 0;
+     }
++    /**
++     * OpenWar3 (blight): write the four texture/variation slots of one ground tile.
++     *
++     * Lifted verbatim out of the terrain-load loop so that runtime blight can re-run it.
++     * WC3's ground shader draws a tile as up to four stacked layers: slot 0 is the base
++     * texture (lowest tileset index wins) with a VARIATION byte, slots 1-3 are the other
++     * distinct corner textures with a 4-bit corner mask telling the shader which corners to
++     * blend them into. `blightTextureIndex` is just another tileset index, so a blighted
++     * corner needs no special case anywhere -- it re-sorts into the stack like any tile.
++     */
++    writeTileTextures(x, y, instance, cornerTextures, cornerVariations) {
++        const bottomLeft = this.corners[y][x];
++        const bottomLeftTexture = this.cornerTexture(x, y);
++        const bottomRightTexture = this.cornerTexture(x + 1, y);
++        const topLeftTexture = this.cornerTexture(x, y + 1);
++        const topRightTexture = this.cornerTexture(x + 1, y + 1);
++        const textures = (0, arrayunique_1.default)([bottomLeftTexture, bottomRightTexture, topLeftTexture, topRightTexture]).sort();
++        let texture = textures[0];
++        cornerTextures[instance * 4] = texture + 1;
++        cornerVariations[instance * 4] = this.getVariation(texture, bottomLeft.groundVariation);
++        cornerTextures[instance * 4 + 1] = 0;
++        cornerTextures[instance * 4 + 2] = 0;
++        cornerTextures[instance * 4 + 3] = 0;
++        cornerVariations[instance * 4 + 1] = 0;
++        cornerVariations[instance * 4 + 2] = 0;
++        cornerVariations[instance * 4 + 3] = 0;
++        textures.shift();
++        for (let i = 0, l = textures.length; i < l; i++) {
++            let bitset = 0;
++            texture = textures[i];
++            if (bottomRightTexture === texture) {
++                bitset |= 0b0001;
++            }
++            if (bottomLeftTexture === texture) {
++                bitset |= 0b0010;
++            }
++            if (topRightTexture === texture) {
++                bitset |= 0b0100;
++            }
++            if (topLeftTexture === texture) {
++                bitset |= 0b1000;
++            }
++            cornerTextures[instance * 4 + 1 + i] = texture + 1;
++            cornerVariations[instance * 4 + 1 + i] = bitset;
++        }
++    }
++    /**
++     * OpenWar3 (blight): set one terrain CORNER blighted or clean.
++     *
++     * Marks the (up to) four tiles that corner belongs to for re-texturing; call flushBlight
++     * once per frame to push them to the GPU. Returns true if the corner actually changed.
++     */
++    setBlight(column, row, on) {
++        const corners = this.corners;
++        const rowArr = corners[row];
++        if (!rowArr) {
++            return false;
++        }
++        const corner = rowArr[column];
++        if (!corner || !!corner.blight === !!on) {
++            return false;
++        }
++        corner.blight = !!on;
++        // cornerTexture() also reads a corner's NEIGHBOURS (a cliff within one tile wins over
++        // the ground), so the dirty span is the 2x2 block of tiles that touch this corner.
++        for (let y = row - 1; y <= row; y++) {
++            for (let x = column - 1; x <= column; x++) {
++                if (x >= 0 && y >= 0 && x < this.columns && y < this.rows) {
++                    this.blightDirty.add(y * this.columns + x);
++                }
++            }
++        }
++        return true;
++    }
++    /** OpenWar3 (blight): push every tile marked by setBlight to the GPU. */
++    flushBlight() {
++        if (!this.terrainReady || !this.blightDirty || this.blightDirty.size === 0) {
++            return;
++        }
++        const gl = this.viewer.gl;
++        const cornerTextures = this.cornerTextures;
++        const cornerVariations = this.cornerVariations;
++        const romp = this.rompFlags;
++        for (const instance of this.blightDirty) {
++            const x = instance % this.columns;
++            const y = (instance / this.columns) | 0;
++            // A tile under a cliff or a ramp model draws no ground; leave its slots zeroed,
++            // exactly as the load pass left them.
++            if (romp && romp[instance]) {
++                continue;
++            }
++            if (this.isCliff(x, y) && !this.isRampEntrance(x, y)) {
++                continue;
++            }
++            this.writeTileTextures(x, y, instance, cornerTextures, cornerVariations);
++            gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
++            gl.bufferSubData(gl.ARRAY_BUFFER, instance * 4, cornerTextures.subarray(instance * 4, instance * 4 + 4));
++            gl.bindBuffer(gl.ARRAY_BUFFER, this.variationBuffer);
++            gl.bufferSubData(gl.ARRAY_BUFFER, instance * 4, cornerVariations.subarray(instance * 4, instance * 4 + 4));
++        }
++        this.blightDirty.clear();
++    }
+     /**
+      * Get the ground texture of a corner, whether it's normal ground, a cliff, or a blighted corner.
+      */
+@@ -730,17 +1053,37 @@ class War3MapViewerMap {
      applyModificationTable(dataMap, metadataMap, modificationTable) {
          for (const modificationObject of modificationTable.objects) {
              let row;
@@ -1294,7 +1479,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
                  const metadata = metadataMap.getRow(modification.id);
                  if (metadata) {
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
-index c2a27060799ff26b5c86ccedd0bedda2d6a54746..d751e671164bc972aff80d3a7e1cfa77e6c74119 100644
+index c2a27060799ff26b5c86ccedd0bedda2d6a54746..989091fe2afb0a3f2aeb2700f92009cf1843d87a 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 @@ -9,6 +9,33 @@ ${precision_glsl_1.default}
@@ -1331,7 +1516,7 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..d751e671164bc972aff80d3a7e1cfa77
  varying vec3 v_normal;
  varying vec2 v_uv;
  varying float v_texture;
-@@ -35,6 +61,24 @@ void main() {
+@@ -35,6 +62,24 @@ void main() {
  
    // color *= clamp(dot(normal, lightDirection) + 0.45, 0.1, 1.0);
  
@@ -1357,7 +1542,7 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..d751e671164bc972aff80d3a7e1cfa77
  }
  `;
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
-index 70449d8d52f46ac83662d302c94dcee8e29147e7..7a855a22ef9cb7a1a3f39eb183aecef834869ed6 100644
+index 70449d8d52f46ac83662d302c94dcee8e29147e7..2937a00fba90d58c7ddbc23bda774d13327aef38 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
 @@ -6,11 +6,36 @@ ${precision_glsl_1.default}
@@ -1398,7 +1583,7 @@ index 70449d8d52f46ac83662d302c94dcee8e29147e7..7a855a22ef9cb7a1a3f39eb183aecef8
  
  vec4 sample(float tileset, vec2 uv) {
    // 1.0 - 1.0 == 0.0 is not always true.
-@@ -70,9 +94,16 @@ void main() {
+@@ -70,9 +95,16 @@ void main() {
      color = blend(color, v_tilesets[3], v_uv[3]);
    }
  
@@ -1442,7 +1627,7 @@ index 26a5b4c8758bfb80c62f458fbc4a85293c18060b..a611f04f49f48bf98e308e50653c6f7c
      v_uv[0] = vec2(0.0);
      v_uv[1] = vec2(0.0);
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
-index 6f31791753b2bf146060b8adfb44767cc468be55..2cd00484ad61505a2b1433d34dfc882341d9c4ca 100644
+index 6f31791753b2bf146060b8adfb44767cc468be55..b1bb5154a032f74d93e0b7fe4e876a7d63f9495f 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
 @@ -6,11 +6,58 @@ ${precision_glsl_1.default}

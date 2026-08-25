@@ -172,6 +172,18 @@ export interface UnitDef {
   moveType: MoveType; // UnitData `movetp` (None for buildings/immovable units)
   isBuilding: boolean;
   pathTex: string; // pathing-footprint texture (buildings); "" for units
+  /** UnitBalance `requirePlace` — "Pathing - Placement Requires". The ONE thing the ground a
+   *  building goes on has to be, over and above being buildable at all. Only one value is
+   *  used in the whole stock table: **`blighted`**, on exactly eleven Undead structures — the
+   *  Ziggurat and both its towers, the Crypt, Graveyard, Altar of Darkness, Temple of the
+   *  Damned, Slaughterhouse, Boneyard, Tomb of Relics and Sacrificial Pit.
+   *
+   *  What is NOT in that list is the point: the Necropolis chain and the Haunted Gold Mine,
+   *  which is precisely the manual's "the Necropolis and a Haunted Gold Mine can be placed on
+   *  normal land" (classic.battle.net/war3/undead/basics.shtml). The column IS the rule, so
+   *  nothing anywhere needs a list of ids, and a custom map's own blight-bound building works
+   *  for free. Lowercased; "" when the row says none. See SimWorld.footprintBlighted. */
+  requirePlace: string;
   // Art - Ground Texture (unitUI "uberSplat"): a 4-char UberSplatData.slk code
   // (e.g. HTOW, HMED) for the dirt/foundation decal painted on the terrain under a
   // building. "" (SLK "_") = no splat. Resolved to a texture + scale via
@@ -491,6 +503,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       moveType: toMoveType(d ? str(d, "movetp") : ""),
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       pathTex: d ? str(d, "pathTex") : "",
+      requirePlace: ((b ? str(b, "requirePlace") : "") || "").toLowerCase().trim().replace(/^[-_]$/, ""),
       uberSplat: u ? str(u, "uberSplat") : "", // building ground-texture code (UberSplatData.slk)
       minimapIcon: (u ? num(u, "nbmmIcon", 0) : 0) === 1,
       // Shadow decal art + geometry (see UnitDef). "_" (SLK "none") → "".
@@ -846,6 +859,7 @@ export function destructibleUnitDef(d: {
     // comes from MoveType.None and speed 0 instead, and the target key from `targType`.
     isBuilding: false,
     pathTex: "", // the map loader already stamped the destructible's own footprint
+    requirePlace: "", // a destructible is never PLACED by a player
     uberSplat: "",
     minimapIcon: false,
     unitShadow: "",
