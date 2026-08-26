@@ -324,13 +324,29 @@ export const GLUE = {
  * it does not travel north through the world and shrink into the distance.
  */
 export const TEXT_TAG = {
-  /** "// gold text data" — the "+N" the engine floats when it CREDITS a player gold: a shop
-   *  buying an item back, Transmute's payout. Distinct from `BountyText*` (a creep's bounty),
-   *  which lives three seconds rather than two. */
+  /** "// gold text data" — the "+N" the engine floats when it CREDITS a player gold: a worker
+   *  delivering a load from the mine, a shop buying an item back, Transmute's payout. Distinct
+   *  from `BountyText*` (a creep's bounty), which lives three seconds rather than two. */
   GoldTextColor: [255, 255, 220, 0],
   GoldTextVelocity: [0, 0.03, 100],
   GoldTextLifetime: 2,
   GoldTextFadeStart: 1,
+
+  /** "// lumber text data" — the same tag for the other resource, and the one that settles the
+   *  channel order (see above): lumber is GREEN, so `0,200,80` can only be the RGB of an ARGB.
+   *  It is emphatically not gold-coloured; the two credits are told apart by their colour. */
+  LumberTextColor: [255, 0, 200, 80],
+  LumberTextVelocity: [0, 0.03, 100],
+  LumberTextLifetime: 2,
+  LumberTextFadeStart: 1,
+
+  /** "// bounty text data" — the "+N" a slain creep leaves behind. Same gold as `GoldText*`
+   *  down to the byte (it is the same money), but it hangs around half again as long — three
+   *  seconds, fading from two — because a bounty is raised in a fight and has to survive it. */
+  BountyTextColor: [255, 255, 220, 0],
+  BountyTextVelocity: [0, 0.03, 100],
+  BountyTextLifetime: 3,
+  BountyTextFadeStart: 2,
 } as const;
 
 /**
@@ -344,6 +360,8 @@ export const TEXT_TAG = {
  */
 export const MISC_UI = {
   GoldTextHeight: 0.024,
+  LumberTextHeight: 0.024,
+  BountyTextHeight: 0.024,
 } as const;
 
 /** The word the Custom Game screen puts against "Map Size", from `GLUE.*MapRange`. */

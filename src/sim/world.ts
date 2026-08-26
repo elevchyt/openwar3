@@ -214,9 +214,17 @@ export interface SimLightning {
  *    mark after it ("127!"), over the unit that was struck. It follows the victim.
  *  • `deny` — a bare "!" over one of YOUR OWN or an ALLY's units that a friendly killed, in
  *    the colour of the player the dead unit belonged to. It is why a deny reads as a deny.
- *  • `gold` — a "+N" in the game's own gold, wherever the engine pays you where you can see
- *    it: Transmute's payout over the body it melted (transmuteInternal) and a shop's over the
- *    hero it just bought an item back from (pawnItem, issue #120).
+ *  • `gold` / `lumber` — a "+N" in the game's own gold or green, wherever the engine CREDITS
+ *    you where you can see it: a worker laying its load down at the hall (depositLoad — the
+ *    commonest one by far, and the pair of `GoldText*`/`LumberText*` rows exists for it),
+ *    Transmute's payout over the body it melted (transmuteInternal) and a shop's over the hero
+ *    it just bought an item back from (pawnItem, issue #120).
+ *  • `bounty` — a slain creep's payout, over the body (awardBounty). The same gold as a `gold`
+ *    credit down to the byte, but its own longer-lived row (`BountyText*`): a bounty is raised
+ *    mid-fight and has to outlast it.
+ *  • `xp` — the experience a kill hands a hero, over that hero (awardKillXp). The one kind
+ *    the 1.30.4 client does NOT raise: it arrived with Reforged, which is also why it is the
+ *    one with no row of its own in `UI\MiscData.txt`. Requested in issue #116.
  *
  * The colour of a deny is a SLOT, not an RGB: `SetPlayerColor` can move a slot's colour under
  * the match (see RtsController.playerColor), and the sim does not track that — the client
@@ -225,7 +233,7 @@ export interface SimLightning {
  * anyone draws it) and the area-of-interest test the host filters recipients by.
  */
 export interface CombatText {
-  kind: "crit" | "deny" | "gold";
+  kind: "crit" | "deny" | "gold" | "lumber" | "bounty" | "xp";
   /** The unit the text floats over, and follows. 0 for a deny — the victim is dead. */
   unitId: number;
   x: number;
@@ -240,8 +248,10 @@ export interface CombatText {
    * A blow is a public fact — the crit landed, the ally was denied, and every client watching
    * that patch of ground saw it happen. **Being paid is not.** Your gold is yours: WC3 floats
    * a resource credit on the receiving player's screen alone, and an opponent who happens to
-   * have vision of your hero learns nothing from watching him sell a Claws of Attack. So the
-   * `gold` texts carry the owner here, and it is enforced twice — the host declines to put the
+   * have vision of your hero learns nothing from watching him sell a Claws of Attack. The same
+   * goes for what a kill paid you, in gold or in experience. So every CREDIT kind (`gold`,
+   * `lumber`, `bounty`, `xp`) carries the owner here, and it is enforced twice — the host
+   * declines to put the
    * text in anyone else's payload (MatchLink.tickHost) and every client's renderer drops one
    * addressed to a player it is not (see drainFxCombatTexts' consumer). Two gates because
    * either one alone leaks: filtering only on the wire still shows it on the HOST's own
@@ -2413,6 +2423,26 @@ export class SimWorld {
     return s;
   }
 
+  /**
+   * Float a "+N" over the world for the ONE player it belongs to — the single door every
+   * credit the engine reports goes through (issue #116).
+   *
+   * Being paid is a thing you SEE, and WC3 says so four different ways: the gold a worker
+   * lays down, the lumber it lays down, a creep's bounty, the experience a kill hands a hero.
+   * They differ only in the row of `UI\MiscData.txt` the client styles them from — which is
+   * exactly why they are one call here and one `kind` on the wire, rather than four hand-rolled
+   * pushes drifting apart. (Two of them, Transmute's payout and a shop's buy-back, were the
+   * hand-rolled pushes this replaced.)
+   *
+   * `unitId` ATTACHES the number to a unit that will walk off with it; 0 leaves it where it was
+   * raised, which is what a bounty wants — a moment later there is nothing left to follow.
+   * A credit of nothing is not reported: the game floats no "+0".
+   */
+  private floatCredit(kind: "gold" | "lumber" | "bounty" | "xp", amount: number, forPlayer: number, at: { x: number; y: number }, unitId = 0): void {
+    if (amount <= 0) return;
+    this.combatTexts.push({ kind, unitId, x: at.x, y: at.y, text: `+${Math.round(amount)}`, colorSlot: -1, forPlayer });
+  }
+
   nearestTree(x: number, y: number, maxDist: number): SimTree | null {
     let best: SimTree | null = null;
     let bestD = maxDist;
@@ -3050,7 +3080,8 @@ export class SimWorld {
     // the coins land on the hero who handed the item over, not on the shop that took it.
     // Same "+N" the Alchemist's payout raises (transmuteInternal), but ATTACHED here rather
     // than placed: this unit is alive and will walk off, and the number goes with him.
-    if (gold > 0) this.combatTexts.push({ kind: "gold", unitId: u.id, x: u.x, y: u.y, text: `+${gold}`, colorSlot: -1, forPlayer: u.owner });
+    this.floatCredit("gold", gold, u.owner, u, u.id);
+    this.floatCredit("lumber", lumber, u.owner, u, u.id); // 0 for every stock item; a custom one can price in wood
     if (gold > 0 || lumber > 0)
       this.spellEffects.push({ art: PAWN_GOLD_ART, x: u.x, y: u.y, targetId: u.id, z: 0, life: PAWN_GOLD_FX_LIFE, soundLabel: PAWN_GOLD_SOUND });
     return true;
@@ -4357,6 +4388,9 @@ export class SimWorld {
       const gold = Math.min(mine.gold, Math.round(rules.gold * (Math.min(crew, rules.max) / rules.max)));
       mine.gold -= gold;
       this.stashOf(u.owner).gold += gold;
+      // Paid where the gold is dug — the crewed mine IS the drop-off for both races that work
+      // one, so the "+N" belongs on it and not on some hall the money never travels to.
+      this.floatCredit("gold", gold, u.owner, u);
       if (mine.gold <= 0) {
         this.mines.delete(mine.id);
         this.depleted.push(mine);
@@ -4668,7 +4702,8 @@ export class SimWorld {
     const stash = this.stashOf(caster.owner);
     stash.gold += gold;
     stash.lumber += lumber;
-    if (gold > 0) this.combatTexts.push({ kind: "gold", unitId: 0, x: target.x, y: target.y, text: `+${gold}`, colorSlot: -1, forPlayer: caster.owner });
+    this.floatCredit("gold", gold, caster.owner, target);
+    this.floatCredit("lumber", lumber, caster.owner, target);
     this.kill(target, caster.id);
     return gold;
   }
@@ -9795,8 +9830,54 @@ export class SimWorld {
       let amount = share;
       const isCreep = victim.team === -1; // Neutral Hostile
       if (isCreep) amount *= creepXpFactor(h.level);
+      const before = h.xp;
       this.gainXp(h, amount, isCreep);
+      // What the hero ACTUALLY banked, floated over the hero (issue #116). Reading the pool
+      // rather than echoing `amount` is what makes the number honest: gainXp turns a share
+      // away at max level, and drops the overshoot when a creep kill pushes a hero past the
+      // level where creeps stop counting (HeroFactorXP=0) — so the "+0" cases report nothing
+      // at all, which is also what the client does.
+      this.floatCredit("xp", h.xp - before, h.owner, h, h.id);
     }
+  }
+
+  /**
+   * Pay the killer's player the bounty on a body — the "+N" gold a slain creep leaves behind.
+   *
+   * The amount is the victim TYPE's own roll (UnitDef.bountyDice/Sides/Plus): a flat base plus
+   * dice, the same shape as a weapon's damage, off the sim's own RNG so every client rolls the
+   * same coins. Whether a body pays at all is not a property of the body, though — it is
+   * `PLAYER_STATE_GIVES_BOUNTY` on the player that owned it, which is why a Footman carries a
+   * 20 + 6d3 bounty that nobody in a melee game ever collects. Blizzard.j names the default by
+   * what it bothers to change: `ConfigureNeutralVictim` explicitly zeroes the state for Neutral
+   * Victim ("Neutral Victim does not give bounties", Blizzard.j 5044) and touches no other
+   * player — so the neutrals give bounty and the twelve human slots do not. In a melee match
+   * that reduces to exactly the rule everyone knows: creeps pay, players don't.
+   */
+  private awardBounty(victim: SimUnit, killerId: number): void {
+    if (victim.team !== -1) return; // not Neutral Hostile — nobody is paying (see above)
+    const killer = killerId ? this.units.get(killerId) : undefined;
+    if (!killer || !this.hostile(killer, victim)) return; // unattributed, or your own doing
+    const def = this.unitReg?.get(victim.typeId);
+    if (!def) return;
+    const gold = this.rollBounty(def.bountyPlus, def.bountyDice, def.bountySides);
+    const lumber = this.rollBounty(def.lumberBountyPlus, def.lumberBountyDice, def.lumberBountySides);
+    const stash = this.stashOf(killer.owner);
+    stash.gold += gold;
+    stash.lumber += lumber;
+    // Over the BODY, not over the killer: it is the corpse that turned into the money, and
+    // that is where the player is looking. Placed rather than attached, for the same reason a
+    // deny's "!" is — a moment later there is nothing left to follow.
+    this.floatCredit("bounty", gold, killer.owner, victim);
+    this.floatCredit("lumber", lumber, killer.owner, victim);
+  }
+
+  /** `plus` + `dice`×d`sides`, off the sim RNG — the bounty roll, identical in shape to the
+   *  damage roll (see rollDamage's `1 + floor(rng * sides)`). */
+  private rollBounty(plus: number, dice: number, sides: number): number {
+    let n = Math.max(0, Math.round(plus));
+    for (let i = 0; i < dice && sides > 0; i++) n += 1 + Math.floor(this.rng() * sides);
+    return n;
   }
 
   /** Add XP to a hero, leveling it up (with stat growth) across thresholds. */
@@ -12817,6 +12898,9 @@ export class SimWorld {
     // lumber has no round trip to optimise and why a wisp on a tree is worth what it is.
     if (w.deliversInPlace) {
       this.stashOf(u.owner).lumber += w.lumberPerChop;
+      // The credit floats on the TREE, because for a Wisp the tree is the whole delivery
+      // (see docs/night-elf.md) — there is no hall for it to arrive at later.
+      this.floatCredit("lumber", w.lumberPerChop, u.owner, tree);
       // `Awha` Targetart, attached at `origin` — the green glow that says the tree is
       // being worked. It stands in for the axe SFX every other worker's chop plays: there
       // is no axe here (NightElfAbilityFunc [Awha] has an Effectsoundlooped, not a hit).
@@ -12910,6 +12994,18 @@ export class SimWorld {
     const stash = this.stashOf(u.owner);
     stash.gold += w.carryGold;
     stash.lumber += w.carryLumber;
+    // The load lands where you can SEE it land (issue #116) — the credit the game's
+    // `GoldText*`/`LumberText*` rows were written for in the first place.
+    //
+    // It is raised on the WORKER's spot rather than the depot's, and that is not cosmetic: a
+    // hall is served by five of these and they arrive in a clump, so anchoring on the building
+    // prints every "+10" at one pixel and three of them mash into an unreadable smear. The
+    // workers stand at their own approach points around the near edge (depotApproach), so
+    // anchoring on them spreads the numbers out the way the real client's do. Placed, not
+    // attached: the worker turns straight back around for another load, and the number is a
+    // report of what just happened here, not a label that follows him to the trees.
+    this.floatCredit("gold", w.carryGold, u.owner, u);
+    this.floatCredit("lumber", w.carryLumber, u.owner, u);
     w.carryGold = 0;
     w.carryLumber = 0;
     // Head back to the same node (or the nearest remaining tree), WC3-style.
@@ -14018,6 +14114,7 @@ export class SimWorld {
       }
     }
     this.awardKillXp(u, killerId); // enemy heroes near the kill gain experience
+    this.awardBounty(u, killerId); // ...and the killer's player is paid the body's bounty
     this.rollCreepDrops(u); // creeps scatter their dropped-item table on death
     this.dropInventory(u); // a dying non-hero inventory-unit drops its held items
     // A carrier that dies SPILLS: the bodies it was hauling land where the wreck does. They

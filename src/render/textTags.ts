@@ -246,6 +246,45 @@ export const GOLD_TEXT_STYLE: CombatTextStyle = {
   fadeStart: TEXT_TAG.GoldTextFadeStart,
 };
 
+/** The same credit for the other resource — a worker laying a load of wood down, a Wisp paid
+ *  in the tree it is working. Identical timing to the gold one; the colour is what tells them
+ *  apart (`LumberTextColor`, green — see TEXT_TAG). */
+export const LUMBER_TEXT_STYLE: CombatTextStyle = {
+  height: MISC_UI.LumberTextHeight,
+  rise: TEXT_TAG.LumberTextVelocity[1],
+  lifetime: TEXT_TAG.LumberTextLifetime,
+  fadeStart: TEXT_TAG.LumberTextFadeStart,
+};
+
+/** A slain creep's payout (issue #116). The same gold and the same drift as a plain credit,
+ *  the same height as every other tag in the file (0.024) — but three seconds with the last
+ *  one fading, where a credit gets two. A bounty is raised in the middle of a fight and has
+ *  to survive it; a shop's buy-back is raised while you stand there reading it. */
+export const BOUNTY_TEXT_STYLE: CombatTextStyle = {
+  height: MISC_UI.BountyTextHeight,
+  rise: TEXT_TAG.BountyTextVelocity[1],
+  lifetime: TEXT_TAG.BountyTextLifetime,
+  fadeStart: TEXT_TAG.BountyTextFadeStart,
+};
+
+/** The experience a kill hands a hero (issue #116) — the ONE tag here with no row behind it.
+ *
+ * 1.30.4, the client this project targets, floats no XP number at all: it arrived with
+ * Reforged ("since the reforged update whenever an enemy unit dies in range for a hero to get
+ * experience there is a floating text with the number of experience gained next to the hero"
+ * — hiveworkshop.com/threads/321881, Jan 2020), and `UI\MiscData.txt` in 1.30.4 accordingly
+ * has GoldText/LumberText/BountyText/MissText/CriticalStrikeText/ShadowStrikeText/ManaBurnText/
+ * BashText and nothing for XP. So this row is BORROWED, not transcribed: it is the bounty's
+ * spec (it is raised by the same event, and has to outlive the same fight) at the same 0.024
+ * height as every other tag, wearing the violet the Reforged client shows. Swap it for the
+ * real values the day a client that ships them is readable. */
+export const XP_TEXT_STYLE: CombatTextStyle = {
+  height: MISC_UI.BountyTextHeight,
+  rise: TEXT_TAG.BountyTextVelocity[1],
+  lifetime: TEXT_TAG.BountyTextLifetime,
+  fadeStart: TEXT_TAG.BountyTextFadeStart,
+};
+
 // The crit/deny look, in Blizzard.j's own units so it reads the way the game states it
 // (Blizzard.j 6086-6099): `TextTagSize2Height` scales a font SIZE linearly such that size 10
 // is a screen height of 0.023, and `TextTagSpeed2Velocity` scales a SPEED such that 128 is

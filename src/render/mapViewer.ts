@@ -77,7 +77,7 @@ import { MultiboardOverlay } from "../ui/multiboard";
 import { TimerDialogOverlay } from "../ui/timerDialog";
 import { CinematicPanelOverlay } from "../ui/cinematicPanel";
 import { ScriptCamera, type CameraState } from "./scriptCamera";
-import { CombatTextTags, GOLD_TEXT_STYLE, TextTagOverlay, type TextTagContext } from "./textTags";
+import { BOUNTY_TEXT_STYLE, CombatTextTags, GOLD_TEXT_STYLE, LUMBER_TEXT_STYLE, TextTagOverlay, XP_TEXT_STYLE, type CombatTextStyle, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
 import { loadTechRegistry, type TechRegistry } from "../data/techtree";
@@ -178,6 +178,31 @@ const COMBAT_TEXT_Z = 100;
 // behind a health bar. A crit is left where it is: it belongs ON the unit it struck, and it
 // is the blow that is being reported, not a number you are meant to sit and read.
 const GOLD_TEXT_Z = 220;
+// The rest of the credit family (issue #116), same idea: the file's own ARGB, no eyeballing.
+// Lumber is GREEN (0,200,80) and a bounty is the identical gold to a credit's — the money does
+// not change colour depending on where it came from; only how long the number hangs around does
+// (see BOUNTY_TEXT_STYLE).
+const LUMBER_TEXT_COLOR = argbOfParts(TEXT_TAG.LumberTextColor);
+const BOUNTY_TEXT_COLOR = argbOfParts(TEXT_TAG.BountyTextColor);
+// ...and the one exception, the XP number, which 1.30.4 does not raise at all and therefore
+// keeps no colour for — see XP_TEXT_STYLE. A violet matched to the Reforged client that does.
+const XP_TEXT_COLOR = 0xffb478ff;
+// A bounty sits where a credit does; the XP goes one line above it. The two are raised by the
+// SAME event a step apart, and a hero that killed the creep in melee is standing on top of it
+// — at one height they would print over each other and neither would be readable. One line is
+// all the clearance it gets: this is a number over a hero's head, and lifted much further it
+// stops reading as HIS and starts floating in the trees behind him.
+const XP_TEXT_Z = 300;
+
+/** Colour, spec and height for one CREDIT kind — the four tags the engine raises to tell you
+ *  what you were just paid (see CombatText). A crit and a deny are not in here: they report a
+ *  blow, not a payment, and wear the victim's colour rather than the resource's. */
+const CREDIT_TEXT: Record<"gold" | "lumber" | "bounty" | "xp", { color: number; style: CombatTextStyle; z: number }> = {
+  gold: { color: GOLD_TEXT_COLOR, style: GOLD_TEXT_STYLE, z: GOLD_TEXT_Z },
+  lumber: { color: LUMBER_TEXT_COLOR, style: LUMBER_TEXT_STYLE, z: GOLD_TEXT_Z },
+  bounty: { color: BOUNTY_TEXT_COLOR, style: BOUNTY_TEXT_STYLE, z: GOLD_TEXT_Z },
+  xp: { color: XP_TEXT_COLOR, style: XP_TEXT_STYLE, z: XP_TEXT_Z },
+};
 
 /** An `A,R,G,B` quadruple from the Misc files → the 0xAARRGGBB a text tag carries. */
 function argbOfParts([a, r, g, b]: readonly number[]): number {
@@ -9123,31 +9148,32 @@ export class MapViewerScene {
         // frozen client raises the same text off its payload.
         for (const t of this.rts!.drainFxCombatTexts()) {
           // …but only the text ADDRESSED to this machine. A crit and a deny are public facts
-          // and carry -1; a gold credit carries the player it paid, and belongs on nobody
-          // else's screen — not an opponent's, and not the HOST's while it watches somebody
-          // else's hero sell an item (issue #120). The host already keeps it out of the other
-          // payloads (MatchLink.tickHost); this is the same rule applied to the one client
-          // that reads the queue directly instead of off the wire.
+          // and carry -1; every CREDIT — the gold, the lumber, a creep's bounty, a hero's XP —
+          // carries the player it paid, and belongs on nobody else's screen: not an opponent's,
+          // and not the HOST's while it watches somebody else's hero sell an item (issue #120).
+          // The host already keeps it out of the other payloads (MatchLink.tickHost); this is
+          // the same rule applied to the one client that reads the queue directly.
           if (t.forPlayer >= 0 && t.forPlayer !== this.localPlayer) continue;
+          // A credit is styled by its KIND, off the game's own row for it (CREDIT_TEXT). A
+          // crit and a deny are not credits: a crit is red for everyone, and a deny wears the
+          // colour of the player whose unit died — resolved HERE and not in the sim, because
+          // `SetPlayerColor` can move a slot's colour mid-match and the palette is the
+          // client's (the same one the minimap dots and a cinematic's speaker names use).
+          const credit = t.kind === "crit" || t.kind === "deny" ? undefined : CREDIT_TEXT[t.kind];
           this.combatText.spawn({
             text: t.text,
-            // A crit is red for everyone and a gold credit is gold for everyone. A deny
-            // wears the colour of the player whose unit died, resolved HERE and not in the
-            // sim: `SetPlayerColor` can move a slot's colour mid-match, and the palette is
-            // the client's (same one the minimap dots and a cinematic's speaker names use).
             color:
-              t.kind === "gold"
-                ? GOLD_TEXT_COLOR
-                : t.colorSlot >= 0
-                  ? argbOf(PLAYER_COLORS[this.rts!.playerColor(t.colorSlot) % PLAYER_COLORS.length])
-                  : CRIT_TEXT_COLOR,
+              credit?.color ??
+              (t.colorSlot >= 0
+                ? argbOf(PLAYER_COLORS[this.rts!.playerColor(t.colorSlot) % PLAYER_COLORS.length])
+                : CRIT_TEXT_COLOR),
             x: t.x,
             y: t.y,
-            z: t.kind === "gold" ? GOLD_TEXT_Z : COMBAT_TEXT_Z,
+            z: credit?.z ?? COMBAT_TEXT_Z,
             followUnit: t.unitId,
-            // A gold credit is the one kind the game keeps a full spec for that we honour —
-            // its own height, drift, lifetime and fade (GOLD_TEXT_STYLE).
-            style: t.kind === "gold" ? GOLD_TEXT_STYLE : undefined,
+            // The credits are the kinds the game keeps a full spec for that we honour — their
+            // own height, drift, lifetime and fade. A crit falls back to CRIT_TEXT_STYLE.
+            style: credit?.style,
           });
         }
         // Hero level-up nova.

@@ -280,6 +280,25 @@ export interface UnitDef {
   goldCost: number;
   lumberCost: number;
   buildTime: number;
+  /**
+   * What killing this unit PAYS the killer — UnitBalance `bountyplus` + `bountydice`×d`bountysides`
+   * ("Stats - Bounty Awarded - Base / Number of Dice / Sides per Die" in the World Editor).
+   *
+   * A flat base plus a dice roll, exactly like a weapon's damage (`dmgplus1`/`dice1`/`sides1`),
+   * and the numbers say so: a Gnoll (`ngno`, level 1) is 3 + 1d3 = 4-6 gold, which is what a
+   * level-1 creep hands over in a real melee game.
+   *
+   * Every unit in the game carries a bounty — a Footman is 20 + 6d3 — but who actually PAYS is a
+   * per-player switch (`PLAYER_STATE_GIVES_BOUNTY`), and in melee only the creeps have it on;
+   * see SimWorld.awardBounty. The lumber trio is real too and is read for a custom map's sake,
+   * but no stock TFT unit sets it (verified: 0 non-zero `lumberbounty*` rows in UnitBalance.slk).
+   */
+  bountyDice: number;
+  bountySides: number;
+  bountyPlus: number;
+  lumberBountyDice: number;
+  lumberBountySides: number;
+  lumberBountyPlus: number;
   /** Every weapon slot the UnitWeapons row declares, in slot order. This is the real attack
    *  data; the flat `attack*` fields below are a summary of the PRIMARY slot for the HUD. */
   weapons: WeaponSlotDef[];
@@ -542,6 +561,12 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       goldCost: b ? num(b, "goldcost", 0) : 0,
       lumberCost: b ? num(b, "lumbercost", 0) : 0,
       buildTime: b ? num(b, "bldtm", 0) : 0,
+      bountyDice: b ? num(b, "bountydice", 0) : 0,
+      bountySides: b ? num(b, "bountysides", 0) : 0,
+      bountyPlus: b ? num(b, "bountyplus", 0) : 0,
+      lumberBountyDice: b ? num(b, "lumberbountydice", 0) : 0,
+      lumberBountySides: b ? num(b, "lumberbountysides", 0) : 0,
+      lumberBountyPlus: b ? num(b, "lumberbountyplus", 0) : 0,
       weapons: slots,
       // The eleven "Attack 1" summary fields below are a VIEW of the primary slot, filled in
       // by syncPrimaryWeapon() once the def exists — the same call a map's overrides run
@@ -891,6 +916,12 @@ export function destructibleUnitDef(d: {
     goldCost: 0,
     lumberCost: 0,
     buildTime: 0,
+    bountyDice: 0,
+    bountySides: 0,
+    bountyPlus: 0,
+    lumberBountyDice: 0,
+    lumberBountySides: 0,
+    lumberBountyPlus: 0,
     weapons: [],
     attackDamage: 0,
     attackDice: 0,
