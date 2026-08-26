@@ -7842,11 +7842,11 @@ export class MapViewerScene {
         // now — it is NOT the autocast toggle, which is a persistent setting and
         // gets its own indicator, so the two can never both claim the border.
         active: active === `ability:${ab.code}`,
-        // …and no autocast ring on a button that is not yours yet. The `auto` column arms the
-        // toggle from birth (`[ucry] auto = Aweb`) while the upgrade is what unlocks the row,
-        // so an un-researched Web read as "on" for an ability that could not fire. The sim
-        // agrees from the other side — tickAutocast skips it (and issueCast refuses it).
-        autocast: def.autocast && ab.autocastOn && techMet,
+        // …and no autocast sparkle on a button that is not yours yet. The `auto` column arms
+        // the toggle from birth (`[ucry] auto = Aweb`) while the upgrade is what unlocks the
+        // row, so an un-researched Web read as "on" for an ability that could not fire. The
+        // sim agrees from the other side — tickAutocast skips it (and issueCast refuses it).
+        modal: def.autocast && ab.autocastOn && techMet,
         cooldownLeft: onCd ? ab.cooldownLeft : 0,
         cooldownFrac: onCd && lvl.cooldown > 0 ? Math.max(0, Math.min(1, ab.cooldownLeft / lvl.cooldown)) : 0,
       }));
@@ -7865,6 +7865,9 @@ export class MapViewerScene {
         hotkey: "O",
         desc: "Opens the abilities menu and allows you to assign unused points to the Heroes' abilities.",
         col: 3, row: 1, count: su.skillPoints,
+        // The button only exists while there are points to spend, and while it does it stands
+        // ON: the game parks the same UI-ModalButtonOn.mdx over it that an autocast wears.
+        modal: true,
       }));
     }
   }
@@ -7938,7 +7941,14 @@ export class MapViewerScene {
       return;
     }
     if (id.startsWith("autocast:")) {
-      this.rts.toggleAutocast(id.slice(9)); // toggle Heal/Slow autocast on the selection
+      const code = id.slice(9);
+      this.rts.toggleAutocast(code); // toggle Heal/Slow autocast on the selection
+      // Switching one ON has a second sound over the click every button makes: UISounds.slk
+      // `AutoCastButtonClick` = Sound\Interface\AutoCastButtonClick1.wav. Read back off the
+      // unit rather than predicted, because a multi-unit selection toggles each one to its
+      // own new state and it is the primary's that the card is showing.
+      const su = this.rts.selectedSimUnit();
+      if (su?.abilities.some((a) => a.code === code && a.autocastOn)) this.sounds?.playUi("AutoCastButtonClick");
       return;
     }
     if (id === "learnpage") {

@@ -13,6 +13,7 @@ import { CHAT_MAX_LENGTH, sanitizeChat, type ChatTarget } from "../game/chat";
 import type { HeroBarEntry } from "../game/rts";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
+import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 
 /** WC3's upkeep bands, as the resource bar colours them. */
 const UPKEEP_COLORS = { none: "#5be05a", low: "#e0c146", high: "#e05046" };
@@ -91,7 +92,11 @@ export interface CommandButton {
   /** THE current command of the selected unit — the one button wearing the green
    *  active border. At most one button in a card ever has this set. */
   active: boolean;
-  autocast?: boolean; // autocast toggled on: a persistent setting, not the current order
+  /** The button is STANDING ON, and wears WC3's `UI-ModalButtonOn.mdx` sparkle to say so
+   *  (see ui/modalButtonFx.ts). Two things say it in the original and they share the model:
+   *  an autocast toggled on — a persistent setting, not the current order, which is why it
+   *  can never be `active` — and a hero's learn-skill button with a point left to spend. */
+  modal?: boolean;
   /** What a RIGHT-click on this button runs instead of `id`. An autocastable ability is the
    *  one button in WC3 that answers to both buttons: left casts it now, right flips whether
    *  the unit casts it by itself (issue #106). Absent on everything else. */
@@ -504,12 +509,10 @@ const HERO_BAR = {
   max: 7, // the most buttons the real bar holds
 } as const;
 
-/** The glow that lights a hero's button while it has unspent skill points — `war3skins.txt`
- *  `HeroBarPointModel` = `UI\Buttons\HeroLevel\HeroLevel.mdx`, whose one texture this is: a
- *  soft white rounded-square outline the model pulses (the engine calls the frame it drives
- *  ORIGIN_FRAME_HERO_BUTTON_INDICATOR). We pulse the texture in CSS instead of running the
- *  model — same tell, no scene. The count itself rides the corner, as issue #95 asks. */
-const HERO_GLOW = "UI\\Buttons\\HeroLevel\\HeroLevel-Border.blp";
+/** The one texture `UI\Feedback\Autocast\UI-ModalButtonOn.mdx` draws — the spark its four
+ *  corner emitters chase around a button that is standing ON. See ui/modalButtonFx.ts, which
+ *  is where the rest of that model lives. */
+const MODAL_SPARK = "Textures\\HeroLevel-Particle.blp";
 
 // The console's own widget art, named by `UI\war3skins.txt` KEY rather than by path so the
 // per-race entries take effect (the inventory cover is the one the four races differ on).
@@ -805,7 +808,7 @@ export class GameHud {
   private heroSlots: Array<{
     slot: HTMLDivElement;
     btn: HTMLButtonElement;
-    glow: HTMLDivElement;
+    fx: HTMLCanvasElement;
     points: HTMLDivElement;
     mana: HTMLDivElement;
     hpFill: HTMLDivElement;
@@ -827,6 +830,9 @@ export class GameHud {
   private invCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
   private invCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
   private invKey = "";
+  /** The `UI-ModalButtonOn.mdx` sparkle, simulated once and blitted onto every lit button. */
+  private modalFx!: ModalButtonFx;
+  private cmdFx: HTMLCanvasElement[] = []; // per command slot, shown while the button is on
   /** The crest drawn over the six slots when the selection has no inventory. */
   private invCover!: HTMLDivElement;
   private dotsT = 0;
@@ -852,6 +858,13 @@ export class GameHud {
   constructor(parent: HTMLElement, private driver: HudDriver) {
     this.root = document.createElement("div");
     this.root.className = "hud";
+    // The sparkle every "standing on" button wears — an autocast toggled on, a hero with a
+    // skill point waiting. Built before the console and the hero bar because both hang their
+    // overlays off it, and told once where its texture is.
+    this.modalFx = new ModalButtonFx(driver.blpCanvas(MODAL_SPARK));
+    // …and how far past a button's edge that effect reaches, so the stylesheet can inset the
+    // overlay by the model's own geometry instead of a number typed twice.
+    this.root.style.setProperty("--modal-fx-overhang", `${(MODAL_FX_OVERHANG * 100).toFixed(3)}%`);
     const skin = driver.consoleSkinned();
     this.root.append(
       this.buildConsole(skin),
@@ -895,12 +908,6 @@ export class GameHud {
       document.documentElement.style.setProperty("--hud-tooltip-fill", fill);
       document.body.classList.add("hud-tooltip-skinned");
       this.cmdTooltip.classList.add("skinned");
-    }
-    // The hero bar's skill-point glow, straight off HeroLevel.mdx's own texture.
-    const glow = this.driver.blpUrl(HERO_GLOW);
-    if (glow) {
-      this.root.style.setProperty("--hud-hero-glow", `url(${glow})`);
-      this.root.classList.add("hud-heroglow-skinned");
     }
     this.applyStatBarSkin();
     this.applyConsoleWidgetSkin();
@@ -1022,6 +1029,9 @@ export class GameHud {
     this.refreshInventory();
     this.refreshHeroBar();
     this.updateIdleWorkers();
+    // Last: the two refreshes above are what say which buttons are lit, and the effect is
+    // simulated once for all of them (see ModalButtonFx).
+    this.modalFx.tick(dtMs);
   }
 
   /** Redraw the selection-dependent panels right now rather than on the next
@@ -1672,11 +1682,13 @@ export class GameHud {
       slot.hidden = true;
       const btn = document.createElement("button");
       btn.className = "hud-hero-btn";
-      const glow = document.createElement("div"); // skill-point pulse (HeroLevel.mdx's texture)
-      glow.className = "hud-hero-glow";
+      // Unspent skill points: the same sparkle an autocast button wears, over the portrait of
+      // the hero that has one waiting (ui/modalButtonFx.ts), plus the count itself in the
+      // bottom-right corner, which is what issue #95 asks for.
+      const fx = this.modalFx.makeOverlay();
       const points = document.createElement("div"); // unspent skill points, bottom-right
       points.className = "hud-hero-points";
-      btn.append(glow, points);
+      btn.append(fx, points);
       const bars = document.createElement("div");
       bars.className = "hud-hero-bars";
       const hp = document.createElement("div");
@@ -1692,7 +1704,7 @@ export class GameHud {
       bars.append(hp, mana);
       slot.append(btn, bars);
       bar.appendChild(slot);
-      this.heroSlots.push({ slot, btn, glow, points, mana, hpFill, manaFill });
+      this.heroSlots.push({ slot, btn, fx, points, mana, hpFill, manaFill });
       // A click selects that hero, a double-click also jumps the camera to it — the mouse
       // half of F1/F2/F3, which count in this same order. Bound through `onPress` so the
       // button sinks under the press exactly as a command-card button does.
@@ -1754,7 +1766,7 @@ export class GameHud {
       s.hpFill.dataset.state = hpFrac > 0.6 ? "green" : hpFrac > 0.3 ? "yellow" : "red";
       s.mana.hidden = h.manaFrac < 0; // a hero with no pool shows no mana bar
       s.manaFill.style.width = `${Math.max(0, Math.min(1, h.manaFrac)) * 100}%`;
-      s.glow.hidden = h.skillPoints <= 0;
+      s.fx.hidden = h.skillPoints <= 0;
       s.points.hidden = h.skillPoints <= 0;
       if (h.skillPoints > 0) s.points.textContent = String(h.skillPoints);
     }
@@ -2153,6 +2165,7 @@ export class GameHud {
     this.cmdCdOverlay = [];
     this.cmdCdText = [];
     this.cmdCount = [];
+    this.cmdFx = [];
     for (let i = 0; i < 12; i++) {
       const btn = document.createElement("button");
       btn.className = "hud-slot hud-cmd";
@@ -2169,7 +2182,11 @@ export class GameHud {
       // child so a card rebuild never wipes it, like the label/cooldown nodes.
       const count = document.createElement("span");
       count.className = "hud-cmd-count";
-      btn.append(label, cd, count);
+      // …and the "standing on" sparkle, likewise persistent. Last child so it draws over the
+      // icon and the cooldown sweep, exactly as the model does over the button in the game.
+      const fx = this.modalFx.makeOverlay();
+      btn.append(label, cd, count, fx);
+      this.cmdFx.push(fx);
       card.appendChild(btn);
       this.cmdSlots.push(btn);
       this.cmdLabels.push(label);
@@ -2189,7 +2206,7 @@ export class GameHud {
     // TEXT — a tavern hero stays greyed while its red "Requires:" line goes from "Altar of
     // Storms, Stronghold" to "Stronghold" the moment the altar goes up. Leave it out and the
     // tooltip keeps showing the requirement the player has just met.
-    const key = cmds.map((c) => `${c.id}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.autocast}:${c.count ?? 0}:${c.desc}`).join("|");
+    const key = cmds.map((c) => `${c.id}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${c.desc}`).join("|");
     if (key === this.cmdKey) return;
     this.cmdKey = key;
     // The card changed (e.g. a building was cancelled and its buttons vanished):
@@ -2201,7 +2218,8 @@ export class GameHud {
       const btn = this.cmdSlots[i];
       btn.disabled = true;
       btn.style.backgroundImage = "";
-      btn.classList.remove("armed", "autocast", "dis-art", "unavailable", "passive", "no-mana");
+      btn.classList.remove("armed", "modal", "dis-art", "unavailable", "passive", "no-mana");
+      this.cmdFx[i].hidden = true;
       this.cmdLabels[i].textContent = "";
       this.cmdCount[i].textContent = "";
       onPress(btn, null);
@@ -2214,7 +2232,10 @@ export class GameHud {
       if (!btn) continue;
       btn.disabled = false;
       btn.classList.toggle("armed", c.active);
-      btn.classList.toggle("autocast", !!c.autocast);
+      // The sparkle reaches a little past the icon (the model's emitters walk the button's own
+      // edge), so a lit slot stops clipping its children for as long as it is lit.
+      btn.classList.toggle("modal", !!c.modal);
+      this.cmdFx[idx].hidden = !c.modal;
       // Only ONE of the two unavailable states shows at all. `disabled` — a prerequisite
       // is missing — is a texture swap in the original, not a tint: the engine draws the
       // icon's `CommandButtonsDisabled\DIS*` twin, desaturated and with no gold button

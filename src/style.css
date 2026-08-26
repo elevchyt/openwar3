@@ -745,26 +745,9 @@ body.in-game .menu-panel { display: none; }
 .hud-hero-btn:hover { filter: brightness(1.12); }
 /* Sink under the press, exactly as a command-card button does. */
 .hud-hero-btn.pressed { transform: scale(0.98); }
-/* Unspent skill points: the pulsing glow the game drives with HeroLevel.mdx (its texture
-   is white-on-black additive art, so it goes on with `screen`), plus the count itself in
-   the bottom-right corner, which is what issue #95 asks for. */
-.hud-hero-glow {
-  position: absolute;
-  inset: calc(var(--hero-btn) * -2 / 68);
-  pointer-events: none;
-  background: var(--hud-hero-glow, none) 0 0 / 100% 100% no-repeat;
-  mix-blend-mode: screen;
-  animation: hero-glow-pulse 1.1s ease-in-out infinite alternate;
-}
-/* With no install mounted there is no texture to pulse — fall back to a soft ring so the
-   "you have a skill point" tell still reads. */
-.hud:not(.hud-heroglow-skinned) .hud-hero-glow {
-  box-shadow: inset 0 0 6px 2px rgba(255, 255, 255, 0.85);
-}
-@keyframes hero-glow-pulse {
-  from { opacity: 0.35; }
-  to { opacity: 1; }
-}
+/* Unspent skill points: the `UI-ModalButtonOn.mdx` sparkle (`.hud-modal-fx`, below) chasing
+   the portrait's frame, plus the count itself in the bottom-right corner, which is what
+   issue #95 asks for. */
 .hud-hero-points {
   position: absolute;
   right: calc(var(--hero-btn) * 4 / 68);
@@ -1822,12 +1805,30 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
 }
 .hud-activebutton-skinned .hud-cmd.armed::before { opacity: 1; }
 
-/* Autocast left ON is a standing setting, not the current order, so it can't wear
-   the green border (only one command is current). It gets its own quieter ring. */
-.hud-cmd.autocast:not(.armed) {
-  border-color: #6fe06a;
-  box-shadow: 0 0 4px rgba(70, 224, 90, 0.35) inset;
+/* A button STANDING ON — an autocast toggled on, a hero's learn-skill button with a point
+   waiting — wears no border at all in the original: the engine parks a MODEL on top of it
+   (war3skins `CommandButtonAutocast` = UI\Feedback\Autocast\UI-ModalButtonOn.mdl), four
+   emitters chasing gold sparks around the icon's edge. ui/modalButtonFx.ts draws that; all
+   the stylesheet does is give its canvas the box.
+
+   The overlay hangs a little way OUTSIDE the button — the emitters walk the button's own
+   edge, so half of every spark is past it — which is why a lit slot stops clipping. The
+   overhang is the model's, handed down as `--modal-fx-overhang` by ui/hud.ts. */
+.hud-modal-fx {
+  position: absolute;
+  /* Sized rather than stretched between insets: a canvas is a REPLACED element, and an
+     absolutely positioned replaced box with `width: auto` takes its intrinsic width (128)
+     and drops the opposite offset on the floor. */
+  left: calc(-1 * var(--modal-fx-overhang, 6%));
+  top: calc(-1 * var(--modal-fx-overhang, 6%));
+  width: calc(100% + 2 * var(--modal-fx-overhang, 6%));
+  height: calc(100% + 2 * var(--modal-fx-overhang, 6%));
+  pointer-events: none;
+  /* Additive over the icon, the way filterMode 1 composites in the game. The canvas is
+     transparent everywhere the sparks are not, so nothing else on the button is touched. */
+  mix-blend-mode: screen;
 }
+.hud-cmd.modal { overflow: visible; }
 
 /* No crosshair when an order is armed — the WC3 cursor is forced everywhere
    in-game (see applyRaceCursor), so we never override it here. */
