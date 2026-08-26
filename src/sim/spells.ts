@@ -162,6 +162,11 @@ export interface SpellApi {
   teleport(unit: SimUnit, x: number, y: number): void;
   /** Change a unit's controller (Charm): new owner + team. */
   changeOwner(unit: SimUnit, owner: number, team: number): void;
+  /** Start a Possession (`Aps2`): after `seconds`, IF both bodies are still standing, the
+   *  target changes hands permanently and the caster is destroyed. The stuns and the
+   *  vulnerability that hold the two of them there are the handler's; this is the clock, and
+   *  it lives on the world because either end can die inside it. */
+  possess(casterId: number, targetId: number, seconds: number): void;
   /** Take a friendly STRUCTURE off the map and pay its salvage back (`Auns` Unsummon).
    *  `ratio` is DataA "Salvage Cost Ratio" and `step` DataB "Accumulation Step". Returns
    *  false when the target is not something this player may unsummon. */
@@ -566,6 +571,10 @@ export function drainTag(casterId: number): string {
 /** The buff group every drain effect shares — the handle world.ts uses to strip a broken
  *  channel's damage-over-time, heal-over-time and buff art off both ends at once. */
 export const DRAIN_GROUP = "drain";
+/** The non-stacking key the two halves of a Possession wear — the stun on the body and the
+ *  vulnerability on the Banshee. One key so `SimWorld.stripPossession` can lift both off in a
+ *  single pass when the soul changes hands. */
+export const POSSESSION_GROUP = "possession";
 
 /** Seconds between a chain's bounces. Chain Lightning and Healing Wave visibly WALK down
  *  their chain rather than lighting every link at once, but — unlike Finger of Death
@@ -2224,6 +2233,75 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
     if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
     api.killUnit(t);
+  },
+
+  // === the Banshee ========================================================================
+  // Three rows on `uban` (`abilList = Aam2,Acrs,Aps2,Aiun`), and two of them are gated on the
+  // Temple of the Damned's Banshee Training: `[Aam2] Requires=Ruba` and `[Aps2] Requires=Ruba`
+  // with `Requiresamount=2`, so the shell comes with Adept and Possession with Master.
+  //
+  // Curse (`Acrs`) — the enemy it lands on starts MISSING. Autocast, and on by default
+  // (`[uban] auto = Acrs`), which is why a Banshee walked into a fight curses without being
+  // told. One column and one duration pair:
+  //   DataA "Chance to Miss (%)"  0.33      Dur1 120 / HeroDur1 60      Rng1 700
+  // Not a slow and not a damage cut — the blow is rolled and thrown away, which is exactly
+  // what the `miss` buff already means for Drunken Haze, so it is the same buff.
+  Acrs: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = lv(def, rank);
+    api.applyBuff(t, { kind: "miss", group: "curse", timeLeft: dur(lvl, t) || 120, sourceId: caster.id, value: d(lvl, 0, 0.33), ...fx(def) });
+  },
+
+  // Anti-magic Shell (`Aams`) — a POOL, not a duration: "Creates a barrier that stops
+  // <Aam2,DataC1> points of spell damage from affecting a target unit." The 90 seconds is only
+  // how long the barrier is offered for; what ends it in a real fight is spending it. That is
+  // the `spellAbsorb` buff, drained at SimWorld's own spell-damage seam.
+  //
+  //   DataC "Max Damage Absorbed"  300      Dur1 90      Rng1 500      targs1 …,friend,self
+  //
+  // `Aam2` is the TFT row the Banshee carries. The two older rows on this same code
+  // (`Aams`, `ACam`) read DataC = 0 — they are the Reign of Chaos shell, whose buff tip says
+  // something else entirely ("it cannot be targeted by spells") and which is not modelled: a
+  // zero pool grants nothing rather than quietly granting an infinite one.
+  Aams: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId) ?? caster;
+    const lvl = lv(def, rank);
+    const pool = d(lvl, 2, 0);
+    if (pool <= 0) return;
+    api.applyBuff(t, { kind: "spellAbsorb", group: "antimagic", timeLeft: dur(lvl, t) || 90, sourceId: caster.id, value: pool, ...fx(def) });
+  },
+
+  // Possession (`Aps2`) — the ultimate, and the only spell in the game that spends the CASTER.
+  // Its tooltip is the whole specification: "Stuns a target unit and the Banshee for
+  // <Aps2,Dur1> seconds, during which the Banshee takes extra damage from attacks. She then
+  // displaces the soul of the enemy, giving you permanent control of it, but destroying the
+  // caster's body. Possession cannot be used on flying units, Heroes, or creeps above level
+  // <Aps2,DataA1>."
+  //
+  //   DataA "Max Creep Level"      5       ← the level cap, below
+  //   DataB "Damage Multiplier"    1.66    ← what she takes while she is doing it
+  //   Dur1                         4.5     Rng1 350     targs1 ground,nonhero,enemy,organic
+  //
+  // `ground` and `nonhero` in the flags already refuse a flier and a hero, so only the creep
+  // cap needs saying here. The stuns are the spell's OWN effect and land now; the handover is
+  // four and a half seconds away and belongs to the world, because the answer depends on
+  // whether both bodies are still standing when it arrives (api.possess → tickPossessions).
+  Aps2: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = lv(def, rank);
+    const cap = d(lvl, 0, 5);
+    if (t.isHero || (t.isCreep && t.level > cap)) return;
+    const hold = lvl.duration || 4.5;
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+    api.applyBuff(t, { kind: "stun", group: POSSESSION_GROUP, timeLeft: hold, sourceId: caster.id, ...fx(def) });
+    api.applyBuff(caster, { kind: "stun", group: POSSESSION_GROUP, timeLeft: hold, sourceId: caster.id });
+    // DataB is a MULTIPLIER (1.66×), and `vuln` is the fraction of EXTRA damage taken — so it
+    // is the multiplier minus one, the same reading Berserk's +50% gets. This is what makes
+    // killing her inside the channel the counterplay it is meant to be.
+    api.applyBuff(caster, { kind: "vuln", group: POSSESSION_GROUP, timeLeft: hold, sourceId: caster.id, value: Math.max(0, d(lvl, 1, 1.66) - 1) });
+    api.possess(caster.id, t.id, hold);
   },
 
   // Charm (Dark Ranger, ult) — take control of a non-hero enemy of level ≤ dataA.

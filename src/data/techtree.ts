@@ -257,11 +257,70 @@ const STRING_FILES = [
   "Units\\ItemStrings.txt",
 ];
 
+/**
+ * The tech keys whose value is a COMMA LIST, and which therefore ADD UP when a section names
+ * one twice — see `mergeRepeatedLists`.
+ */
+const LIST_KEYS = new Set([
+  "requires", "requires1", "requires2", "requires3", "requiresamount", "dependencyor",
+  "trains", "researches", "builds", "upgrade", "makeitems", "sellitems", "sellunits",
+]);
+
+/**
+ * Fold a section's REPEATED list keys into one line, because the game's own files repeat them
+ * and mean the union.
+ *
+ * Two rows in the melee data do it, and both of them lose something real to a last-one-wins
+ * INI reader (which is what every INI parser is, ours included — `IniFile.load` calls
+ * `section.set(key, value)`):
+ *
+ *     [utod]  Researches=Rune,Ruba   …four lines later…   Researches=Rusm
+ *     [Rhcd]  Requires=hcas          …two lines later…    Requires=hvlt
+ *
+ * So the Temple of the Damned advertised Skeletal Mastery and NOTHING ELSE — no Necromancer
+ * Training, no Banshee Training — which in turn is why the Banshee never got Anti-magic Shell
+ * or Possession, both of which are gated on `Ruba` (`[Aam2] Requires=Ruba`, `[Aps2]
+ * Requires=Ruba Requiresamount=2`). And Cloud asked for an Arcane Vault but not the Castle.
+ *
+ * Only the list keys are merged. Everything else in these files is a single value (`Art`,
+ * `Buttonpos`, a tooltip) where a repeat really does mean "replace", so last-one-wins stays
+ * the rule for them.
+ */
+function mergeRepeatedLists(text: string): string {
+  const out: string[] = [];
+  // Where in `out` this section's first line for a given key sits, so the second can be
+  // appended to it and dropped. Cleared at every section header.
+  let firstAt = new Map<string, number>();
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*\[/.test(line)) {
+      firstAt = new Map();
+      out.push(line);
+      continue;
+    }
+    const m = /^([^=/;]+?)=(.*)$/.exec(line);
+    const key = m?.[1].trim().toLowerCase();
+    if (!m || !key || !LIST_KEYS.has(key)) {
+      out.push(line);
+      continue;
+    }
+    const at = firstAt.get(key);
+    if (at === undefined) {
+      firstAt.set(key, out.length);
+      out.push(line);
+    } else {
+      // Quoted values are unwrapped by the parser, not here — the repeated tech lists in the
+      // stock files are bare, and a comma is what joins them either way.
+      out[at] = `${out[at]},${m[2].trim()}`;
+    }
+  }
+  return out.join("\r\n");
+}
+
 export function loadTechRegistry(vfs: DataSource): TechRegistry {
   const funcs = new MappedData();
   for (const path of FUNC_FILES) {
     const bytes = vfs.rawBytes(path);
-    if (bytes) funcs.load(new TextDecoder("windows-1252").decode(bytes));
+    if (bytes) funcs.load(mergeRepeatedLists(new TextDecoder("windows-1252").decode(bytes)));
   }
   const strs = new MappedData();
   for (const path of STRING_FILES) {

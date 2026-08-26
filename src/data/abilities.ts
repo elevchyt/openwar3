@@ -401,6 +401,18 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   ANsi: { target: "point" }, // Silence — area silence
   ANba: { target: "unit", autocast: true }, // Black Arrow — bonus damage on attack
   ANch: { target: "unit" }, // Charm — take control of a target
+  // === the Banshee (`uban` abilList = Aam2,Acrs,Aps2,Aiun) ===
+  // Curse — an autocast with a manual aim (the Heal shape): `[Acrs] Order=curse` plus the
+  // `Orderon=curseon`/`Orderoff=curseoff` pair, and `[uban] auto = Acrs` starts it switched ON.
+  Acrs: { target: "unit", autocast: true },
+  // Anti-magic Shell — the BASE CODE is `Aams`, not the `Aam2` rawcode the Banshee carries
+  // (three rows share it: the two Reign of Chaos ones and the TFT pool). Cast on a friendly
+  // unit or on herself (`targs1 = …,friend,self`). Gated on `Requires=Ruba`.
+  Aams: { target: "unit" },
+  // Possession — the ultimate. `Requires=Ruba` with `Requiresamount=2`, so it is the SECOND
+  // level of Banshee Training that unlocks it. Its missile is real (`Missileart=…\\Possession\\
+  // PossessionMissile.mdl`, homing at 1500), so the effect lands on impact like Storm Bolt's.
+  Aps2: { target: "unit" },
   // -- Pandaren Brewmaster --
   ANbf: { target: "point" }, // Breath of Fire — line nuke
   // Drunken Haze is thrown AT A UNIT and splashes: `targs1 = air,ground,enemy,organic,neutral`

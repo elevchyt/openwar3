@@ -135,10 +135,16 @@ export type CorpseOrder = "nearest" | "freshest";
  * They are the ones the game itself groups: AbilityMetaData declares `Rai1..Rai4` as
  * `useSpecific=Arai,ACrd,AUcb,AIrd,Avng` (shape A) and `Hre1`/`Hre2` as
  * `useSpecific=AHre,AIrs` / `AUan,AHre,ACad,AIan,AIrs,APrl,APrr` (shape B), plus the Spirit
- * Walker's Ancestral Spirit, which is its own row. Only the codes an ability actually
- * DISPATCHES on are listed — the creep and item copies (`ACrd`, `AIrd`, `APrl`, `APrr`) reach
- * their handler under one of these, so listing them again would be listing a key that never
- * arrives (see world.ts's item path, which maps `AIrd` → `Arai`).
+ * Walker's Ancestral Spirit, which is its own row.
+ *
+ * Keyed by the BASE CODE (AbilityData's `code` column), which is not the rawcode and is the
+ * whole trap: several rows collapse onto one code and several deliberately do not. `ACrd`
+ * (the creep Raise Dead) answers to `Arai`, and `AIrx`/`APrl`/`APrr` (the Scroll and the two
+ * Runes of Resurrection) answer to `AHre` — so those need no entry. But `AIrd`, the ROD OF
+ * NECROMANCY, keeps its own code even though it is Raise Dead in every other respect, and
+ * leaving it out is exactly how it went on animating nothing out of bare ground while
+ * spending a charge and starting its cooldown. `ACad`/`AIan`/`AIrs` keep their own codes the
+ * same way. List the code, not the family, and check the column rather than assuming.
  *
  * Cannibalize and the Meat Wagon are deliberately NOT here. Neither spawns anything: one eats
  * the body for hit points and the other borrows it, so "there is nothing to raise" is not what
@@ -155,10 +161,14 @@ const CORPSE_SPAWNERS: ReadonlyMap<string, (lvl: CorpseSpellRow) => number> = ne
   ["Arai", (l: CorpseSpellRow) => l.castRange || l.area || 600],
   ["AUcb", (l: CorpseSpellRow) => l.castRange || l.area || 600],
   ["Avng", (l: CorpseSpellRow) => l.castRange || l.area || 600],
+  ["AIrd", (l: CorpseSpellRow) => l.castRange || l.area || 600], // the Rod of Necromancy's own code
   // Shape B — up to N bodies get back up as themselves. This one SWEEPS, so it is `Area1`
   // (900) that says how far, not the cast range.
   ["AHre", (l: CorpseSpellRow) => l.area || 900],
   ["AUan", (l: CorpseSpellRow) => l.area || 900],
+  ["ACad", (l: CorpseSpellRow) => l.area || 900], // Animate Dead (creep), and the `stre` scroll's `AInd`
+  ["AIan", (l: CorpseSpellRow) => l.area || 900], // Scroll of Animate Dead
+  ["AIrs", (l: CorpseSpellRow) => l.area || 900], // Scroll of Resurrection
   // …and Ancestral Spirit, the one member the player actually aims: a point-target raise of a
   // single body, at the 250 its handler takes.
   ["Aast", () => 250],

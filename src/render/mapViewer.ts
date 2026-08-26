@@ -7798,13 +7798,20 @@ export class MapViewerScene {
         // by itself. It used to answer only the toggle, which left Heal, Slow, Abolish Magic
         // and every other one of them with no way to be aimed at all (issue #106).
         //
-        // …unless there is nothing to aim. An attack modifier — Searing Arrows, Cold Arrows,
-        // Black Arrow — is autocast over a NO-TARGET ability HERE (data/abilities.ts), so its
-        // button has only the one meaning and both buttons flip it rather than the left one
-        // firing a cast at nobody. The original lets those be aimed by hand as well; the day
-        // our table gives one a target, this reads it and the button gains its left-click
-        // with no change needed.
-        id: passive ? "noop" : def.autocast && KNOWN_ABILITIES[ab.code]?.target === "none" ? `autocast:${ab.code}` : `ability:${ab.code}`,
+        // …unless the button is a STANCE rather than an autocast, in which case the toggle IS
+        // the only meaning it has and both buttons flip it.
+        //
+        // The data draws that line itself, and drawing it any other way gets it wrong. An
+        // autocast row carries the PAIR `Orderon`/`Orderoff` beside its plain `Order`
+        // (`[Arai] Order=raisedead / Orderon=raisedeadon / Orderoff=raisedeadoff`); a stance
+        // carries `Unorder` instead (`[Adef] Order=defend / Unorder=undefend`) and has no
+        // autocast at all — it rides `def.autocast` here only because on/off is the same
+        // SHAPE. Asking "is it no-target?" instead lumped the two together and cost Raise Dead
+        // and the Avatar's Spirit of Vengeance their manual cast: left-clicking Raise Dead
+        // flipped the autocast rather than raising anything, which is not what either button
+        // does in the original. `Amel` (the Meat Wagon's Get Corpse) carries neither pair and
+        // stays a toggle, as it is in the game.
+        id: passive ? "noop" : def.autocast && !def.orderOn ? `autocast:${ab.code}` : `ability:${ab.code}`,
         altId: passive || !def.autocast ? undefined : `autocast:${ab.code}`,
         icon: this.blpIcon(reversed ? def.unIcon : def.icon),
         // The reverse direction has no `Unname` of its own — the row carries one Name — so

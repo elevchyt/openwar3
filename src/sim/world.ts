@@ -36,7 +36,7 @@ import {
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
-import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -418,6 +418,14 @@ export type BuffKind =
   //          healthy as the Demon Hunter was.
   | "mark" // no effect of its own: a timed FLAG the holder wears (Black Arrow's, whose whole
   //          point is what happens if the holder dies before it expires — see orbDeathEffects)
+  | "spellAbsorb" // Anti-magic Shell (`Aam2` DataC "Max Damage Absorbed" = 300): value = the
+  //                 POOL of spell damage still left to soak. Unlike every other buff here it
+  //                 is SPENT rather than merely read — each point of spell damage it eats
+  //                 comes off `value`, and the buff goes when the pool does, whatever its
+  //                 clock says. See SpellApi.spellDamage, the one seam every spell's damage
+  //                 passes through. (The pre-TFT rows `Aams`/`ACam` carry DataC = 0: a
+  //                 different shell entirely — "cannot be targeted by spells" — which this
+  //                 does not model, so a zero pool simply grants nothing.)
   | "shield" // Lightning Shield: value = dps dealt to units around the holder, value2 = radius
   | "ethereal" // Banish: value = move-slow fraction; can't attack, immune to physical
   //            damage but takes +66% from Magic/Spells (see u.ethereal, EtherealDamageBonus)
@@ -1972,6 +1980,23 @@ const PRECAST_WARNING = new Set(["AHfs"]);
  *  forever). Everything else in the family may use a held body exactly as it would one on the
  *  ground — see sim/corpses.ts. */
 const CORPSE_LOADERS = new Set(["Amel"]);
+/**
+ * The corpse ITEMS, and the spell each of them actually is.
+ *
+ * These rows keep their own base code (AbilityData's `code` column) rather than collapsing
+ * onto the spell they copy — `[AIrd] code = AIrd` even though the Rod of Necromancy is Raise
+ * Dead down to the field group, and `[AIan] code = AIan` for the Scroll of Animate Dead. Only
+ * the two Runes and the Scroll of Resurrection go the other way (`[APrl]`/`[APrr]`/`[AIrx]`
+ * carry `code = AHre` outright and so need no entry here). The mapping is what lets the item
+ * run the SPELL — one set of corpse rules, in the one place that owns them (sim/corpses.ts) —
+ * with the item's own numbers on it: 65 seconds of skeleton against the Necromancer's 45.
+ */
+const ITEM_CORPSE_SPELL: Record<string, string> = {
+  AIrd: "Arai", // Rod of Necromancy → Raise Dead
+  ACad: "AUan", // `stre` Scroll of the Dead / the creep row → Animate Dead
+  AIan: "AUan", // Scroll of Animate Dead → Animate Dead
+  AIrs: "AHre", // Scroll of Resurrection → Resurrection
+};
 const CAST_START_ART: Record<string, (d: AbilityDef) => { art: string; follow: boolean; sound: boolean }> = {
   AEbl: (d) => ({ art: d.specialArt, follow: false, sound: true }),
   AEfk: (d) => ({ art: d.effectArt, follow: true, sound: false }),
@@ -9794,6 +9819,88 @@ export class SimWorld {
    *  buffs expire on their own clock the same tick, so they are left alone. */
   private drains: Array<{ casterId: number; targetId: number }> = [];
 
+  /**
+   * Spend an Anti-magic Shell's pool against incoming SPELL damage and return what is left to
+   * actually land.
+   *
+   * On this seam and nowhere else, for the same reason Magic Immunity sits here: `landDamage`
+   * is also the ATTACK path, and a shielded unit is hit by weapons perfectly normally — the
+   * barrier "stops <Aam2,DataC1> points of SPELL damage" and nothing else. A unit can wear
+   * more than one (they are separate casts on separate buff instances), so they are drained in
+   * turn until the blow is used up; each one dies the moment its pool does, which is what makes
+   * the shell a quantity rather than a duration.
+   */
+  private absorbSpellDamage(t: SimUnit, amount: number): number {
+    let left = amount;
+    for (let i = t.buffs.length - 1; i >= 0 && left > 0; i--) {
+      const b = t.buffs[i];
+      if (b.kind !== "spellAbsorb" || b.value <= 0) continue;
+      const eaten = Math.min(b.value, left);
+      b.value -= eaten;
+      left -= eaten;
+      if (b.value <= 0) t.buffs.splice(i, 1); // the pool is the buff: spent is expired
+    }
+    return left;
+  }
+
+  /**
+   * Possessions in progress (`Aps2`) — the Banshee's ultimate, mid-flight.
+   *
+   * Held here rather than on either unit for the reason the drains above are: it is a fact
+   * about a PAIR, and both ends can be destroyed independently. The tooltip is the spec —
+   * "Stuns a target unit and the Banshee for <Aps2,Dur1> seconds, during which the Banshee
+   * takes extra damage from attacks. She then displaces the soul of the enemy, giving you
+   * permanent control of it, but destroying the caster's body." — so the cast lands two stuns
+   * and a vulnerability and leaves this behind; `tickPossessions` is what "she then" means.
+   *
+   * Both ends are also the counterplay: kill the Banshee inside those 4.5 seconds (which the
+   * +66% she is wearing is there to make possible) and the soul stays where it is.
+   */
+  private possessions: Array<{ casterId: number; targetId: number; left: number }> = [];
+
+  /** Begin one (SpellApi.possess). The buffs are the handler's; this is the clock. */
+  beginPossession(casterId: number, targetId: number, seconds: number): void {
+    this.possessions = this.possessions.filter((p) => p.casterId !== casterId);
+    this.possessions.push({ casterId, targetId, left: seconds });
+  }
+
+  private tickPossessions(dt: number): void {
+    if (!this.possessions.length) return;
+    let w = 0;
+    for (const p of this.possessions) {
+      const caster = this.units.get(p.casterId);
+      const target = this.units.get(p.targetId);
+      p.left -= dt;
+      // Either body destroyed before the clock ran out and nothing happens: the soul stays
+      // where it is and the survivor simply loses the stun with the buff. No cleanup needed
+      // for the dead end, and the live one's stun expires on its own — it was given the same
+      // duration as this clock, so it has at most a tick left anyway.
+      if (!caster || caster.hp <= 0 || !target || target.hp <= 0) continue;
+      if (p.left > 0) {
+        this.possessions[w++] = p;
+        continue;
+      }
+      // …and the trade completes. The soul changes hands PERMANENTLY (this is not a Charm
+      // with a timer), the stun that held the body goes with the possession that placed it,
+      // and the Banshee's body is destroyed — killed rather than removed, so it dies the way
+      // anything dies: a death animation, a corpse, and the kill credited to nobody.
+      this.stripPossession(target);
+      this.changeUnitOwner(target, caster.owner, caster.team);
+      this.recomputeStats(target);
+      this.kill(caster, 0);
+    }
+    this.possessions.length = w;
+  }
+
+  /** Take the possession's own buffs off a unit (the stun that held it, the vulnerability the
+   *  Banshee wore). Keyed by the buff GROUP the handler stamps, so nothing else is touched. */
+  private stripPossession(u: SimUnit): void {
+    if (!u.buffs.length) return;
+    const before = u.buffs.length;
+    u.buffs = u.buffs.filter((b) => b.group !== POSSESSION_GROUP);
+    if (u.buffs.length !== before) this.recomputeStats(u);
+  }
+
   /** The ability whose handler is running right now, if any — see applySpellEffect. Only
    *  the SpellApi's applyBuff reads it, to fill in the buff row a handler didn't name. */
   private casting: { def: AbilityDef; rank: number } | null = null;
@@ -10755,7 +10862,7 @@ export class SimWorld {
     // Dryad walk through a Blizzard. It belongs on this seam and not in landDamage, because
     // landDamage is also the ATTACK path and a magic-immune unit is hit by weapons normally.
     spellDamage: (t, amount, src) =>
-      t.magicImmune ? 0 : this.landDamage(t, t.ethereal ? amount * ETHEREAL_SPELL_BONUS : amount, src, false),
+      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, t.ethereal ? amount * ETHEREAL_SPELL_BONUS : amount), src, false),
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
@@ -10844,6 +10951,7 @@ export class SimWorld {
     teleport: (u, x, y) => this.teleportUnit(u, x, y),
     mirrorImage: (caster, def, rank) => this.startMirrorImage(caster, def, rank),
     changeOwner: (u, owner, team) => this.changeUnitOwner(u, owner, team),
+    possess: (casterId, targetId, seconds) => this.beginPossession(casterId, targetId, seconds),
     killUnit: (u) => this.kill(u),
     transmute: (target, caster, goldFactor, lumberFactor) => this.transmuteInternal(target, caster, goldFactor, lumberFactor),
     fellTrees: (x, y, radius, max) => this.fellTreesInternal(x, y, radius, max),
@@ -11347,6 +11455,7 @@ export class SimWorld {
     this.tickProjectiles(dt);
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
     this.tickDrains(); // a broken Drain channel takes its buffs and its beam down with it
+    this.tickPossessions(dt); // …and a Possession that survived its 4.5s changes hands
     this.tickMirrorImage(dt); // Mirror Image's caster effect -> missiles -> illusions
     this.tickLightningShields(dt); // Lightning Shield: damage units around each shielded unit
     this.tickWards(); // Stasis Trap proximity stun (the Healing Ward is an aura — see AURA_BUFFS)
@@ -14671,12 +14780,15 @@ export class SimWorld {
         // (`APrl`/`APrr` carry `code = AHre` outright, DataA 1 and 3). Wiring them through
         // applySpellEffect is what keeps the corpse rules — whose dead, hero corpses, one
         // taker per body — in the one place that owns them (see sim/corpses.ts).
-        case "AIrd":
-        case "AHre": {
+        case "AIrd": // Rod of Necromancy         → Raise Dead
+        case "ACad": // Scroll of the Dead (`stre`) → Animate Dead
+        case "AIan": // Scroll of Animate Dead      → Animate Dead
+        case "AIrs": // Scroll of Resurrection      → Resurrection
+        case "AHre": { // …and the two Runes, which carry `code = AHre` outright
           // …including the corpse gate itself. No body, no cast and NO CHARGE: `fired` is left
           // false, so consumeItemUse below never runs and a Rod of Necromancy waved over bare
           // ground still has all its charges (the UI says why — see itemUseError).
-          const code = ad.code === "AIrd" ? "Arai" : ad.code;
+          const code = ITEM_CORPSE_SPELL[ad.code] ?? ad.code;
           if (this.corpseRefusal(u, ad, ad.levelData[0], u.x, u.y)) break;
           this.applySpellEffect(code, 1, u, { targetId: 0, x, y }, ad);
           fired = true;
