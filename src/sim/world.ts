@@ -867,6 +867,10 @@ export type QueuedOrder =
 /** Fallback length of a root/unroot transition, seconds — `Aroo`'s own `Dur1` when the data is
  *  there (2.5), which is also what Liquipedia lists as Root/Uproot's "Animation Duration". */
 const ROOT_MORPH_TIME = 2.5;
+/** Ceiling on a form toggle's transition lock (`Dur1`, see morphToggle). A lock is a unit
+ *  standing helpless, and every authored transition in the stock data is under two seconds —
+ *  so this only ever bites a custom row that means something else by the column. */
+const MAX_MORPH_TRANSITION = 3;
 
 /** How much faster than the settle itself a planting Ancient TURNS back to `builtFacing`
  *  (developer request: "double speed").
@@ -4745,6 +4749,26 @@ export class SimWorld {
     // out and Robo-Goblin reverted before the animation finished.
     u.altFormLeft = to === alternate ? lvl?.heroDuration ?? 0 : 0;
     u.altFormAbil = to === alternate ? def.id : "";
+    // …and `Dur` is the TRANSITION, so it is also the LOCK. A unit changing shape is neither
+    // thing while it does it — a Crypt Fiend halfway into the ground is not burrowed and not
+    // standing — and the models author the pair of clips that say so (applyFormAnims holds
+    // the Morph clip for its own length). Without the lock the sim's half was instantaneous:
+    // Burrow flipped the type on the tick it was pressed and Unburrow was live in the same
+    // frame, so the two could be alternated faster than either animation could play and the
+    // Crypt Fiend twitched in place.
+    //
+    // Set the same way the Ancient's root transition sets it (`SimUnit.morphT`), which buys
+    // the whole behaviour: `castLocked` refuses new orders for the duration, `recomputeStats`
+    // zeroes the speed, and the button answers a press with the silent refusal WC3 greys out.
+    //
+    // MILITIA is the row that must not be read this way, and it says so itself: `[Amil]` has
+    // `Dur 40` and `HeroDur 40`, the same number twice, because it spends both columns on how
+    // long the form lasts and has no transition to name. Every row that DOES name one splits
+    // them — Burrow 1.45/0, Robo-Goblin 1.5/0, Chemical Rage 0.35/15, Metamorphosis 1.5/45 —
+    // so "the two columns disagree" is exactly "Dur is a transition". Capped, because a lock
+    // is a unit standing helpless and no authored transition is anywhere near it.
+    const transition = lvl && lvl.duration !== lvl.heroDuration ? Math.min(lvl.duration, MAX_MORPH_TRANSITION) : 0;
+    if (transition > 0) u.morphT = transition;
     // The stats the ABILITY adds on top of whatever the alternate unit already carries.
     // DataE/DataF are NOT one meaning across the family — AbilityMetaData scopes each pair
     // to the rows that own it, so the column has to be read against the base code:
@@ -8834,6 +8858,10 @@ export class SimWorld {
     // …and neither does an ability whose upgrade is not researched (`[Aweb] Requires=Ruwb`).
     // Same shape, same silence: WC3 greys the button, so there is nothing to say.
     if (!this.techMeets(u.owner, ab.id)) return SILENT_REFUSAL;
+    // …nor a unit halfway through changing shape (SimUnit.morphT). `castLocked` already
+    // refuses the order; this is the half that lets the CARD know, so Unburrow reads as
+    // unpressable until the Crypt Fiend is actually underground.
+    if (u.morphT > 0) return SILENT_REFUSAL;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     if (ab.cooldownLeft > 0) return "Cooldown"; // "Spell is not ready yet."
     if (u.mana < lvl.cost) return "Nomana"; // "Not enough mana."
@@ -12735,11 +12763,8 @@ export class SimWorld {
     // is latched by then, so the clock is not restarted by a wisp merely sitting there.)
     //
     // A chopper's clock is the SWING CYCLE, and it starts here too — on the tick it parks,
-    // with the first axe going up at once (`chopSeq`). What lands at the end of that cycle is
-    // the wood the swing cut: the two used to happen on the same tick, so a worker was
-    // credited as the axe went UP rather than when it came down, and the very first chip
-    // arrived before the arm had moved at all. `Dur1` (1.1s for `Ahar`, 1.35s for `Ahrl`) is
-    // the length of one blow, so paying at its end is what the column already says.
+    // with the first axe going up at once (`chopSeq`). What that swing cuts arrives partway
+    // through it rather than with it; see the damage point below.
     if (!u.working) {
       u.workT = w.chopPeriod;
       if (!w.deliversInPlace) u.chopSeq++; // the first swing goes up now; its wood lands later
@@ -12759,9 +12784,33 @@ export class SimWorld {
     } else {
       u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x);
     }
+    // WHERE IN THE SWING THE WOOD LANDS is the weapon's own DAMAGE POINT — the same `dmgpt1`
+    // that decides when a blow deals its damage (Peasant 0.433, Ghoul 0.39), read through the
+    // same `SimWeapon.damagePoint` an attack uses, hasted and all. A chop IS an attack: the
+    // clip is "Attack Lumber" and the axe connects a third of the way through it, not at the
+    // end. Crediting at the END of the cycle put the wood, the chop sound and the trunk's
+    // wobble on the tick the NEXT axe went up — a full `Dur1` after the blow that cut it, so
+    // the tree shook while the arm was already swinging again. The cycle is `chopPeriod` long
+    // and the blow lands `damagePoint` into it, which is what both columns have said all along.
+    //
+    // Read as a CROSSING rather than latched on a flag, so nothing has to be carried between
+    // ticks: `landAt` is the `workT` value the axe connects at, and exactly one tick per cycle
+    // straddles it.
+    //
+    // No weapon, no swing: a Wisp (`Awha` gives it none) and any map's own weaponless builder
+    // fall back to the whole period, which puts `landAt` at 0 and credits them at the interval
+    // END — which for the Wisp is not a fallback at all but its actual rule, a wage for eight
+    // seconds of work (see the clock's start above).
+    const dmgPoint = Math.min(u.weapon?.damagePoint || w.chopPeriod, w.chopPeriod);
+    const landAt = w.chopPeriod - dmgPoint;
+    const before = u.workT;
     u.workT -= dt;
-    if (u.workT > 0) return;
-    u.workT = w.chopPeriod;
+    const landed = before >= landAt && u.workT < landAt;
+    if (u.workT <= 0) {
+      u.workT = w.chopPeriod;
+      if (!w.deliversInPlace) u.chopSeq++; // the cycle rolled over — the next axe goes up
+    }
+    if (!landed) return;
     // The load, and how it gets home. Everyone else fills a sack and walks it to a depot;
     // the Wisp has no sack and no walk — Wisp Harvest (`Awha`) pays straight into the stash
     // every interval, for as long as it is left alone in the tree. That is why night elf
@@ -12774,12 +12823,9 @@ export class SimWorld {
       if (this.harvestArt) this.spellEffects.push({ art: this.harvestArt, x: tree.x, y: tree.y, targetId: 0, z: 0 });
       return;
     }
-    // The blow that has been swinging for the last `chopPeriod` has just LANDED: the sound,
-    // the wood and the trunk's wobble all belong to this instant. The next axe goes up with
-    // them (`chopSeq`), so the clip the renderer re-triggers is the one whose wood arrives a
-    // cycle from now — see the swing-start above.
+    // The axe has just CONNECTED: the sound, the wood and the trunk's wobble all belong to
+    // this instant, which is `damagePoint` into the swing the renderer is already playing.
     this.chops.push(u.id); // axe landed → renderer plays the chop SFX
-    u.chopSeq++; // …and the next swing starts, in phase with the SFX
     this.dropOtherLoad(w, "lumber"); // the first chip of wood costs it the gold in its hands
     w.carryLumber = Math.min(w.lumberCapacity, w.carryLumber + w.lumberPerChop);
     if (w.damagesTree) {

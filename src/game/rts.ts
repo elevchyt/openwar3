@@ -1785,6 +1785,14 @@ export class RtsController {
   /** A worker of the local player that's doing nothing (not gathering, building,
    *  moving, or constructing) — the ones the idle-worker button/F8/~ cycle.
    *
+   *  A WORKER is the `peon` classification, not "can harvest", and the Ghoul is the whole
+   *  reason to say so: it chops lumber, but `UnitBalance.slk`'s `type` column reads `Peon` on
+   *  the Peasant, the Peon, the Wisp and the Acolyte (`Peon,undead`) and plain `undead` on the
+   *  Ghoul. A Ghoul standing around is a soldier standing around — it is army, not economy,
+   *  and an army idles by design. Counted, it kept the badge lit through every fight and sent
+   *  F8 to a unit nobody wants to send back to work. `SimUnit.isPeon` already keys the other
+   *  half of the same fact (workers never auto-acquire; a Ghoul fights like any soldier).
+   *
    *  A worker walking to a job is not idle: `order` is `garrison`/`harvest`/`build` for the
    *  whole walk, so a wisp on its way into an Entangled Gold Mine — including one standing at
    *  the door of one that is still closing its roots, which is a wait, not an idleness — is
@@ -1796,7 +1804,7 @@ export class RtsController {
    *  fly the camera to them is offering to select a unit that is not on the map. `inMine` was
    *  the only off-field state tested for; `isOffField` is all of them. */
   private isIdleWorker(u: SimUnit | undefined): u is SimUnit {
-    return !!u && u.owner === this.localPlayer && !!u.worker && u.order === "idle" && !u.buildPending && u.constructing === 0 && !isOffField(u);
+    return !!u && u.owner === this.localPlayer && u.isPeon && u.order === "idle" && !u.buildPending && u.constructing === 0 && !isOffField(u);
   }
 
   private idleWorkerIds(): number[] {

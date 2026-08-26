@@ -4250,9 +4250,13 @@ export class MapViewerScene {
         // ring whose open side — the straight bar the runes hang off — is the side the
         // Acolyte kneels on, so every one of the five has to be rolled around the building
         // like numbers on a clock face. Unrotated they all pointed the same way and four of
-        // the five read as litter dropped on the ground. WC3 models face +X, so the heading
-        // from the station to the mine's centre IS the rotation.
-        const face = Math.atan2(u.y - sy, u.x - sx);
+        // the five read as litter dropped on the ground.
+        //
+        // The half-turn is the model's own zero: `UndeadMineCircle.mdx` is authored with its
+        // bar along −X, so the heading that puts the bar INTO the mine is the one pointing
+        // away from it. Measured against the real client rather than assumed from the usual
+        // "models face +X".
+        const face = Math.atan2(sy - u.y, sx - u.x);
         this.mq[0] = 0;
         this.mq[1] = 0;
         this.mq[2] = Math.sin(face / 2);
@@ -7377,9 +7381,17 @@ export class MapViewerScene {
     // tree still visibly walking the structure card, for the whole length of the animation.
     // The sim is already of the same mind — `castLocked` refuses every order while `morphT`
     // runs — so an empty card is simply the honest picture of a unit that can be told
-    // nothing. (`morphT` is only ever set by toggleRoot, so this is the root transition and
-    // nothing else.)
-    if ((world.units.get(sel.id)?.morphT ?? 0) > 0) return [];
+    // nothing.
+    //
+    // The ROOT transition and nothing else, which is why it asks whether this unit can root.
+    // Every other form toggle sets `morphT` too now (a Crypt Fiend takes `[Abur] Dur1` = 1.45s
+    // to get underground), and for those the card is the SAME card on both sides of the
+    // change — one Burrow button that becomes one Unburrow button — so blanking it would be
+    // a flicker rather than a picture. Those grey instead; see `morphing` in
+    // pushAbilityButtons. The Ancient is the case where the two cards are genuinely different
+    // objects, and that is what makes emptying it the right answer there.
+    const morphingUnit = world.units.get(sel.id);
+    if ((morphingUnit?.morphT ?? 0) > 0 && morphingUnit!.abilities.some((a) => a.code === "Aroo")) return [];
     // An UPROOTED Ancient is a building that is currently a unit, and its card says so: WC3
     // gives it the mobile order set and takes the whole structure card away. That is not a
     // cosmetic swap — everything the building card offers is something a walking Ancient
@@ -7730,6 +7742,12 @@ export class MapViewerScene {
       // have nowhere to go. The sim refuses it too (SimWorld.rootRefusal) — this is the half
       // that SHOWS it, so the button reads as unpressable instead of silently doing nothing.
       const rootBlocked = ab.code === "Aroo" && this.rts.simView.rootRefusal(su) !== null;
+      // …and a unit halfway through CHANGING SHAPE presses nothing at all, because it is
+      // neither form yet (SimUnit.morphT — `[Abur] Dur1` = 1.45s of Crypt Fiend going into
+      // the ground). The sim refuses every cast for the duration (castLocked); this is the
+      // half that lets the card say so, which is what stops Unburrow reading as available
+      // the instant Burrow was pressed.
+      const morphing = su.morphT > 0;
       const col = reversed ? def.unButtonX : def.buttonX; // the ability's real WC3 card slot
       const row = reversed ? def.unButtonY : def.buttonY;
       const passive = def.target === "passive";
@@ -7780,10 +7798,10 @@ export class MapViewerScene {
         // it just isn't a button you press (see `passive` below).
         noMana,
         // Unavailable: the button goes inert and wears the DIS* art with no frame, so it reads
-        // as unpressable at a glance. Three things say so — a silenced or stunned caster, a
-        // planted Ancient with a queue that cannot pull itself up, and an ability whose
-        // research is not in.
-        disabled: muted || rootBlocked || !techMet,
+        // as unpressable at a glance. Four things say so — a silenced or stunned caster, a
+        // planted Ancient with a queue that cannot pull itself up, a unit mid-morph, and an
+        // ability whose research is not in.
+        disabled: muted || rootBlocked || morphing || !techMet,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and

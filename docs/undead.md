@@ -231,8 +231,9 @@ Two things follow from the marks existing, and neither is cosmetic:
 * **The marks are TURNED to face the mine.** The circle is not radially symmetric: it is a
   broken ring whose open side — the straight bar the runes hang off — is the side the Acolyte
   kneels on. Unrotated, all five point the same way and four of them read as litter on the
-  ground. WC3 models face +X, so the heading from the station to the mine's centre IS the
-  rotation.
+  ground. The model is authored with its bar along **−X**, so the heading that puts the bar
+  INTO the mine is the one pointing AWAY from it — a half-turn off the usual "models face +X",
+  measured against the real client rather than assumed.
 
 **A ring is not a cargo hold, and the rally path has to know it.** "Go and mine" aimed at a mine
 with a building over it (`issueGoldWork` — a right-click on the rock, and a rally flag planted
