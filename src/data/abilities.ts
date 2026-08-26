@@ -1013,10 +1013,37 @@ function rawTip(v: string): string {
 
 /** A buff's `[B….]` section in the same AbilityFunc files (buffs live alongside
  *  abilities there). `buffId` may be a comma-list (multi-buff abilities); we take
- *  the first. */
+ *  the first.
+ *
+ *  Matched CASE-INSENSITIVELY, because Blizzard's own data does not agree with itself about
+ *  three of these ids — `AbilityData.slk` spells them one way and the section that defines
+ *  them another, and an exact-case lookup silently returns nothing:
+ *
+ *    Unholy Frenzy   buffID1 = `BUhf`  →  `[Buhf]`   UnholyFrenzyTarget.mdl, overhead
+ *    Sleep           buffID1 = `Bust`  →  `[BUst]`   SleepSpecialArt.mdl
+ *    Spell Shield    buffID1 = `BNss`  →  `[Bnss]`   SpellShieldCaster.mdl, origin
+ *
+ *  Those Targetarts are the ONLY art each of those three spells has — the ability rows
+ *  (`[Auhf]`, `[AUsl]`, `[ANss]`) name none at all — so a frenzied unit wore nothing over its
+ *  head, a sleeping one had no Zzz and a shielded one no bubble. `AbilityRegistry.buff`
+ *  already lowercases for exactly this reason; this is the other half of it. */
 function buffRow(func: MappedData, buffId: string): Row | undefined {
   const first = (buffId || "").split(",")[0]?.trim();
-  return first ? (func.getRow(first) as Row | undefined) : undefined;
+  if (!first) return undefined;
+  return (func.getRow(first) ?? func.getRow(funcKey(func, first) ?? "")) as Row | undefined;
+}
+
+/** The real, correctly-cased section id for `id` in an AbilityFunc file, or undefined. The
+ *  lowercase index behind it is built on the first miss and cached against the `MappedData`
+ *  itself — every FUNC_FILES load has already happened by the time any row is read. */
+const FUNC_KEYS = new WeakMap<MappedData, Map<string, string>>();
+function funcKey(func: MappedData, id: string): string | undefined {
+  let keys = FUNC_KEYS.get(func);
+  if (!keys) {
+    keys = new Map(Object.keys(func.map).map((k) => [k.toLowerCase(), k]));
+    FUNC_KEYS.set(func, keys);
+  }
+  return keys.get(id.toLowerCase());
 }
 
 /** One art field off a buff's own row ("" if the buff or the field is absent). */

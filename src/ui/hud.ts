@@ -2269,17 +2269,19 @@ export class GameHud {
       // Strike does, or which building the Guard Tower is waiting on, is the whole
       // reason the button is on the card at all. A `cantAfford` button is NOT inert —
       // its click is what earns the "Not enough gold." line.
-      onPress(btn, c.passive || c.disabled ? null : () => this.driver.runCommand(c.id));
-      // …and the right button, for the one kind of button that has a second meaning. It is
-      // bound on `contextmenu` rather than pointerup so the menu is suppressed on the button
-      // itself, and it takes NO click sound and no sink: WC3 flips the little autocast glow
-      // and says nothing (issue #106).
-      btn.oncontextmenu = c.altId && !c.passive && !c.disabled
-        ? (e) => {
-            e.preventDefault();
-            this.driver.runCommand(c.altId!);
-          }
-        : (e) => e.preventDefault();
+      //
+      // The RIGHT button is bound through the same call, because on the one kind of button
+      // that has a second meaning it is the same kind of gesture: an autocast toggle sinks
+      // under the press and flips when you let go (issue #106). `contextmenu` still fires on
+      // a right-press and still has to be swallowed, or the browser's menu opens over the
+      // card and eats the release that was going to confirm it.
+      const inert = c.passive || c.disabled;
+      onPress(
+        btn,
+        inert ? null : () => this.driver.runCommand(c.id),
+        inert || !c.altId ? null : () => this.driver.runCommand(c.altId!),
+      );
+      btn.oncontextmenu = (e) => e.preventDefault();
       btn.onpointerenter = () => this.showTooltip(c);
       btn.onpointerleave = () => (this.cmdTooltip.hidden = true);
     }
@@ -2865,10 +2867,13 @@ function attrIcon(kind: "str" | "agi" | "int"): string {
   return `UI\\Widgets\\Console\\Human\\infocard-heroattributes-${kind}.blp`;
 }
 
-/** The console button currently held down with the left button, if any. Kept here
- *  rather than as per-element state so that a card rebuild mid-hold (onPress is
- *  re-bound every time the command list changes) can't lose track of the press. */
+/** The console button currently held down, if any. Kept here rather than as per-element
+ *  state so that a card rebuild mid-hold (onPress is re-bound every time the command list
+ *  changes) can't lose track of the press. */
 let pressedEl: HTMLElement | null = null;
+/** Which mouse button began that press — 0 (left) or 2 (right). Only the button that started
+ *  it can finish it: with both down, letting go of one must not fire the other's meaning. */
+let pressedButton = 0;
 
 /** Watch for the release that ENDS a console-button press, for the length of one console.
  *
@@ -2904,24 +2909,39 @@ function setPressed(el: HTMLElement | null): void {
  *  point is checked. Let go anywhere else and the press is abandoned (the standard
  *  way to back out of a misclick), which `watchPress` above handles.
  *  preventDefault keeps the press from focusing the button, so a later Space/Enter
- *  can't re-fire it. Pass null to unbind a slot. */
-function onPress(el: HTMLElement, fn: ((e: PointerEvent) => void) | null): void {
-  if (!fn) {
+ *  can't re-fire it. Pass null to unbind a slot.
+ *
+ *  `alt` is the RIGHT button's meaning, and it is a press in exactly the same sense: an
+ *  autocast button sinks under a right-press and flips on the release, so the toggle can be
+ *  backed out of by sliding off it, just like an order. It used to hang off `contextmenu`
+ *  instead, which is neither — the browser fires that at the press (and on some platforms at
+ *  the release), so the flip happened at whichever end of the click the platform chose and
+ *  the button never moved. The menu itself is still suppressed at the call site; that is all
+ *  `contextmenu` is for. */
+function onPress(
+  el: HTMLElement,
+  fn: ((e: PointerEvent) => void) | null,
+  alt: ((e: PointerEvent) => void) | null = null,
+): void {
+  if (!fn && !alt) {
     el.onpointerdown = null;
     el.onpointerup = null;
     if (pressedEl === el) setPressed(null); // the slot's command went away mid-hold
     return;
   }
+  const forButton = (b: number): ((e: PointerEvent) => void) | null => (b === 0 ? fn : b === 2 ? alt : null);
   el.onpointerdown = (e) => {
-    if (e.button !== 0) return; // right-click has its own (contextmenu) meaning
+    if (!forButton(e.button)) return; // a button with no meaning here takes no press
     e.preventDefault();
+    pressedButton = e.button;
     setPressed(el);
   };
   el.onpointerup = (e) => {
-    if (e.button !== 0 || pressedEl !== el) return; // released on a button we never pressed
+    // Released on a button we never pressed, or with the other mouse button.
+    if (pressedEl !== el || e.button !== pressedButton) return;
     e.preventDefault();
     setPressed(null);
-    fn(e);
+    forButton(e.button)?.(e);
   };
 }
 
