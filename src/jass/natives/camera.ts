@@ -36,7 +36,7 @@
 // out to the same sin/cos as -56° with no normalisation needed.
 
 import type { CameraMove, JassUnit, NativeCtx, Runtime } from "../runtime";
-import { asNum, jHandle, jReal, JNULL, truthy, type JassValue } from "../values";
+import { asInt, asNum, jHandle, jReal, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -232,13 +232,25 @@ export function registerCameraNatives(rt: Runtime): void {
     return jHandle(c.rt.handles.alloc({ x: e.x, y: e.y } satisfies LocObj), "location");
   });
 
-  // Camera BOUNDS — the rect the focus is confined to (our mapBounds). SetCameraBounds is
-  // called by every one of the 165 maps' main(), always with the map's own playable rect,
-  // which the renderer already derives from the terrain: we keep owning it, so the setter
-  // stays a no-op while the getters answer honestly. (GetCameraMargin is the editor's
-  // per-side camera padding; we apply none, hence 0.)
-  def(rt, "SetCameraBounds", () => JNULL);
-  def(rt, "GetCameraMargin", () => jReal(0));
+  // Camera BOUNDS — the rect the focus is confined to (our mapBounds). Every one of the 165
+  // maps' main() calls SetCameraBounds, always with its own playable rect ± GetCameraMargin,
+  // and the renderer derives the same rect from the terrain's boundary flags before the
+  // script ever runs (world/terrain.ts cameraBoundsOf, issue #117). So the two agree on
+  // arrival — but the setter is honoured all the same, because a map that NARROWS the bounds
+  // mid-cinematic means it, and because the map is the authority on its own camera.
+  //
+  // The eight reals are four CORNERS (bottom-left, top-right, top-left, bottom-right), not a
+  // rect: the first four already carry min/max on both axes, and the last four repeat them.
+  // WC3's bounds are axis-aligned, so the first pair is the whole of it.
+  def(rt, "SetCameraBounds", (c, a) => {
+    c.rt.hooks?.setCameraBounds?.({ minX: asNum(a[0]), minY: asNum(a[1]), maxX: asNum(a[2]), maxY: asNum(a[3]) });
+    return JNULL;
+  });
+  // CAMERA_MARGIN_LEFT/RIGHT/TOP/BOTTOM = 0..3 — and they are plain `constant integer`s in
+  // common.j, not converted handles like the camerafields above, so this reads the INT.
+  // (`enumIndex` on an integer answers -1, which silently made every margin 0 and left every
+  // map's camera bounds a margin too wide.)
+  def(rt, "GetCameraMargin", (c, a) => jReal(c.rt.hooks?.cameraMargin?.(asInt(a[0])) ?? 0));
   const bounds = (pick: (b: { minX: number; minY: number; maxX: number; maxY: number }) => number) => (c: NativeCtx): JassValue =>
     jReal(pick(c.rt.hooks?.cameraBounds?.() ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 }));
   def(rt, "GetCameraBoundMinX", bounds((b) => b.minX));

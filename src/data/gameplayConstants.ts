@@ -292,6 +292,46 @@ export const MINIMAP = {
   FogColorCreepNormal: [255, 0, 0, 50],
 } as const;
 
+/**
+ * `UI\MiscData.txt` [FogOfWar] — the veils the game lays over the world, as **ARGB**.
+ *
+ * Two axes, not one. The first is what the player KNOWS about a spot: never seen
+ * (`BlackMasked*`), seen and remembered (`Fogged*`), or in sight now (no veil at all). The
+ * second is whether the spot is part of the map at all — the UNPLAYABLE area, the black
+ * border every map carries plus any "Nothing" tile painted inside it (issue #117). That is
+ * a separate mask with its own pair of rows, and its existence in THIS section is the
+ * statement that WC3 treats the boundary as a kind of fog: the JASS native that turns it
+ * off is `EnableWorldFogBoundary`, which `TriggerStrings.txt` names "Enable/Disable
+ * **Boundary Tinting**" and Blizzard.j drops for the length of a cinematic.
+ *
+ * What the pair says: a boundary tile IN SIGHT is not shown — it takes `BoundaryTerrain`,
+ * black at 230/255, so a sliver of shape survives and nothing else. A boundary tile that is
+ * merely fogged takes the ORDINARY fog tint (`FoggedBoundaryTerrain` is `FoggedTerrain` to
+ * the byte), because fog is already the stronger statement. So the boundary is a FLOOR on
+ * darkness, never a ceiling — which is exactly how src/render/fogOverlay.ts applies it.
+ *
+ * The `*Object` twin is the same rule for the things standing on the ground rather than the
+ * ground itself, and it is harsher: a unit or doodad inside the boundary is a full-alpha
+ * black silhouette.
+ */
+export const FOG_OF_WAR = {
+  /** Explored, not currently seen — the blue-grey veil over remembered ground. */
+  FoggedTerrain: [170, 16, 16, 32],
+  /** Never explored. */
+  BlackMaskedTerrain: [255, 0, 0, 0],
+  DarkMaskedTerrain: [230, 0, 0, 0],
+  /** Unplayable ground the player can see: black, but not QUITE opaque. */
+  BoundaryTerrain: [230, 0, 0, 0],
+  /** …and unplayable ground under fog, which is just fog. */
+  FoggedBoundaryTerrain: [170, 16, 16, 32],
+  FoggedObject: [255, 64, 64, 96],
+  BlackMaskedObject: [255, 0, 0, 0],
+  DarkMaskedObject: [255, 32, 32, 48],
+  /** A unit or doodad standing in the unplayable area: a black silhouette. */
+  BoundaryObject: [255, 0, 0, 0],
+  FoggedBoundaryObject: [255, 64, 64, 96],
+} as const;
+
 /** `UI\MiscData.txt` — the glue (menu) screens' own constants. Not gameplay: this is the
  *  file the MENU reads, which is why the keys live under their real section names.
  *

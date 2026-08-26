@@ -8975,6 +8975,21 @@ export class SimWorld {
     return corpseMissingError(def.targetFlags);
   }
 
+  /**
+   * Is this world point part of the map — inside the PLAYABLE area rather than the black
+   * unplayable border, or a patch of "Nothing" painted inside it (issue #117)?
+   *
+   * Asked of the pathing grid's `Unflyable` bit, which war3map.wpm sets on the boundary and
+   * on nothing else (see PathingFlag.Unflyable). Using the GRID rather than a rect is what
+   * makes a non-rectangular boundary work — BootyBay's is a shaped coastline, not a frame.
+   *
+   * A world with no grid (the headless sim tests) has no border to be outside of, so
+   * everything is inside it.
+   */
+  inPlayableArea(x: number, y: number): boolean {
+    return !this.grid || this.grid.playableAt(x, y);
+  }
+
   /** WHY this unit can't cast this ability at this target right now — a commandstrings.txt
    *  [Errors] key, or null if it can. This is the click-time gate: the UI asks before it
    *  spends the order, so the player gets told and the cursor stays armed rather than the
@@ -8991,6 +9006,12 @@ export class SimWorld {
     const ab = this.findAbility(u, code)!;
     const def = this.abilities!.get(ab.id)!;
     if (def.target === "point") {
+      // "Targeted location is outside of the map boundary." — the engine keeps a line for
+      // exactly this (`Units\CommandStrings.txt` [Errors] `Outofbounds`), and this is where
+      // it is earned: a point aimed into the unplayable black is not a place, so nothing may
+      // be aimed at it — a Blink, a Blizzard, a Stampede (issue #117). Ahead of the corpse
+      // gate because it is the more fundamental "no" of the two.
+      if (!this.inPlayableArea(x, y)) return "Outofbounds";
       // The aimed half of the corpse gate: Ancestral Spirit sweeps around the POINT, so this
       // is the first moment it can be answered at all (castUseError took the other five, whose
       // sweep is centred on the caster). Silent for every other point spell.
@@ -9060,6 +9081,11 @@ export class SimWorld {
     // do it again, and `toggleRoot`'s own rootRefusal is not the only thing that should
     // say so.
     if (code === "Aroo") return this.castImmediate(u, ab, def, lvl);
+    // The point twin of the target test below, and gated at the same door for the same
+    // reason: a spot in the unplayable black is not a spot (issue #117), and `castError` only
+    // speaks to the local player's click. A trigger's IssuePointOrder, an order off the wire
+    // and an autocast all arrive here.
+    if (def.target === "point" && !this.inPlayableArea(x, y)) return false;
     const t = def.target === "unit" ? this.units.get(targetId) : undefined;
     if (def.target === "unit" && (!t || !this.castableTarget(u, t, def.targetFlags, code))) return false;
     // An attack modifier aimed by hand: not a cast at all, but an ATTACK carrying one
@@ -11032,6 +11058,13 @@ export class SimWorld {
       const [cx, cy] = this.grid.footprintAnchor(x, y, u.footprint);
       const spot = this.grid.nearestFit(cx, cy, u.footprint, 12) ?? this.grid.nearestWalkable(cx, cy, 12);
       if (spot) [x, y] = this.grid.footprintCenter(spot[0], spot[1], u.footprint);
+    } else if (this.grid && u.flying && !this.grid.playableAt(x, y)) {
+      // A flyer skips the walkability snap above — it may stand on a cliff or over water —
+      // but not the map's edge (issue #117). Mass Teleport is the way one gets here: a
+      // Gyrocopter caught in the circle would otherwise be set down in the black.
+      const [cx, cy] = this.grid.worldToCell(x, y);
+      const spot = this.grid.nearestPlayable(cx, cy, 12);
+      if (spot) [x, y] = this.grid.cellToWorld(spot[0], spot[1]);
     }
     u.x = x;
     u.y = y;
@@ -14811,6 +14844,9 @@ export class SimWorld {
           break;
         }
         case "AEbl": { // Kelen's Dagger of Escape → blink to a point within range
+          // The same rule the spell keeps: the unplayable black is not a place to land, and
+          // a dagger waved at it keeps its charge (issue #117 — `fired` stays false below).
+          if (!this.inPlayableArea(x, y)) break;
           const range = d(0) || 1000;
           const dist = Math.hypot(x - u.x, y - u.y);
           const s = dist > range ? range / dist : 1;
@@ -15848,6 +15884,20 @@ export class SimWorld {
     // how two units out of six ended up hiking round to the far face.
     if (!approach && u.chaseHX > 0 && tx === u.chaseX && ty === u.chaseY) {
       approach = { hx: u.chaseHX, hy: u.chaseHY };
+    }
+    // The black border is the ONE thing a flyer may not cross (issue #117): war3map.wpm sets
+    // `Unflyable` on the unplayable area and on nothing else, which is exactly the difference
+    // between it and a cliff. A ground unit already has this — the same cells are Unwalkable
+    // and findPath snaps the goal to the nearest walkable one — so it is only the straight
+    // line below that needs telling, and it is told the same way: aim at the nearest cell
+    // inside the map instead. (The LINE is still straight, so a flyer sent across a strip of
+    // "Nothing" painted mid-map crosses it rather than routing round; the border itself is a
+    // frame, and no straight line between two points inside a frame leaves it.)
+    if (u.flying && this.grid && !this.grid.playableAt(tx, ty)) {
+      const [bx, by] = this.grid.worldToCell(tx, ty);
+      const spot = this.grid.nearestPlayable(bx, by);
+      if (!spot) return false;
+      [tx, ty] = this.grid.cellToWorld(spot[0], spot[1]);
     }
     u.chaseX = tx;
     u.chaseY = ty;

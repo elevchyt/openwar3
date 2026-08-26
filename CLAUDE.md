@@ -124,6 +124,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   and progress is just where you park the playhead. It is also the one screen laid out **stretched** rather than
   height-scaled (it is a picture with things printed on it) and the one that must live OUTSIDE `#ui`, which a match
   re-boxes to the 16:9 game frame while the bar is still moving.
+- **Unplayable area:** read [`docs/unplayable-area.md`](docs/unplayable-area.md) before touching the map border, the
+  camera clamp, `GetCameraMargin`/`GetPlayableMapRect`, or anything that asks "is this point on the map". A map
+  states its boundary FOUR times over (two w3e flags that mean the same thing, one wpm bit, `SetCameraBounds` in its
+  own `main()`, and the w3i) and they agree exactly — so nothing here needs guessing. The bit is `0x04`
+  **Unflyable**, one bit away from a cliff's `0xca`, and it is why the border is the one thing a flyer cannot cross;
+  the tint is `UI\MiscData.txt` **[FogOfWar]** `BoundaryTerrain` = 230,0,0,0, a FLOOR on fog rather than a colour;
+  and the three rects (world bounds ⊃ playable area ⊃ camera bounds) are 512/256 apart and not interchangeable.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

@@ -26,12 +26,21 @@ export const BUILD_CELL_CELLS = BUILD_CELL / PATHING_CELL; // pathing cells per 
  *  `NoWater` is the third domain, and the one that makes a SEA a place rather than a wall.
  *  Counted over Rise of the Naga's own wpm (384×512): 67,768 cells are a bare 0x40 (open
  *  land), 46,304 are 0x0a — Unwalkable + Unbuildable with NoWater CLEAR, which is its ocean —
- *  and 40,328 are 0xce / 12,516 0xca, Unwalkable WITH NoWater set: cliffs, which are not water
- *  and no boat sails over them. So a ground unit asks "is Unwalkable clear?" and a floating one
- *  asks "is NoWater clear?", and the map's shallows (0x00) answer yes to both, exactly as WC3
- *  has it — a Footman wades where a transport can also sail. */
+ *  and 40,328 are 0xce / 12,516 0xca, Unwalkable WITH NoWater set: no boat sails over either.
+ *  (The 0xca half of that is the cliffs; the 0xce half is the map's unplayable border, which
+ *  only the `Unflyable` bit below tells apart.) So a ground unit asks "is Unwalkable clear?"
+ *  and a floating one asks "is NoWater clear?", and the map's shallows (0x00) answer yes to
+ *  both, exactly as WC3 has it — a Footman wades where a transport can also sail. */
 export enum PathingFlag {
   Unwalkable = 0x02,
+  /** The UNPLAYABLE area, and nothing else in a real map (issue #117). Cross-tabulated
+   *  against war3map.w3e over (2)EchoIsles, (2)BootyBay and a hand-made boundary test map,
+   *  `0x04` is set on exactly the cells whose terrain tile carries a w3e boundary flag
+   *  (`isBoundaryTile`) and on no other cell — which also settles what the bit means, since
+   *  the one thing the black border stops that a cliff does not is a FLYER. Do not read it
+   *  as "a cliff": EchoIsles' cliffs are `0xca` and its border `0xce`, and the single bit
+   *  between those two is this one. */
+  Unflyable = 0x04,
   Unbuildable = 0x08,
   NoWater = 0x40,
 }
@@ -295,6 +304,56 @@ export class PathingGrid {
 
   cellToWorld(cx: number, cy: number): [number, number] {
     return [this.originX + (cx + 0.5) * PATHING_CELL, this.originY + (cy + 0.5) * PATHING_CELL];
+  }
+
+  /**
+   * Is this cell part of the map at all — inside the PLAYABLE area rather than the black
+   * unplayable border (issue #117)?
+   *
+   * Read off the terrain baseline only, never the stamps: a building standing on a cell does
+   * not move the edge of the world, and this answer has to be the same for the whole match.
+   * Off the grid entirely counts as unplayable, which is the honest answer for a point past
+   * the last cell.
+   *
+   * This is the one question a FLYER can be refused with. Everything else it ignores — it
+   * crosses cliffs, trees and buildings — but `Unflyable` is set on nothing except the
+   * boundary, so "can I fly there" and "is that inside the map" are the same test.
+   */
+  playable(cx: number, cy: number): boolean {
+    if (!this.inBounds(cx, cy)) return false;
+    return (this.flags[cy * this.width + cx] & PathingFlag.Unflyable) === 0;
+  }
+
+  /** `playable` for a world point — the form every caller outside the pathfinder wants. */
+  playableAt(wx: number, wy: number): boolean {
+    const [cx, cy] = this.worldToCell(wx, wy);
+    return this.playable(cx, cy);
+  }
+
+  /** Nearest playable cell, searched in growing rings (the twin of `nearestWalkable`, for
+   *  the air domain). Null when nothing within `maxRadius` is inside the map.
+   *
+   *  Takes the CLOSEST cell on the first ring that has one rather than the first it walks
+   *  into. A ring is a square, so its corner is half again as far as its middle — and a
+   *  flyer sent at the map's west edge would visibly drift south-west on its way to being
+   *  turned back. */
+  nearestPlayable(cx: number, cy: number, maxRadius = 32): [number, number] | null {
+    if (this.playable(cx, cy)) return [cx, cy];
+    for (let r = 1; r <= maxRadius; r++) {
+      let best: [number, number] | null = null;
+      let bestD = Infinity;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
+          const d = dx * dx + dy * dy;
+          if (d >= bestD || !this.playable(cx + dx, cy + dy)) continue;
+          best = [cx + dx, cy + dy];
+          bestD = d;
+        }
+      }
+      if (best) return best;
+    }
+    return null;
   }
 
   /** Nearest cell this domain can stand on, searched in growing rings. Null if none near. */

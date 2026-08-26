@@ -33,6 +33,7 @@ export function makePlaceholderTerrain(cols = 64, rows = 64): TerrainData {
         rampAdjust: 0,
         water: inPool,
         boundary: x === 0 || y === 0 || x === cols - 1 || y === rows - 1,
+        mapEdge: false, // the editor's own margin flag — a hand-made grid has no editor
       };
     }
   }

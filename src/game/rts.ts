@@ -313,7 +313,7 @@ const AOE_TARGET_TINT = [0.25, 1.0, 0.25] as const;
 // target-rule keys (Targetenemy, Holybolttarget, …) aren't listed and outrank all of
 // these — the player aimed at something specific, so naming what's wrong with it is
 // always the most useful thing to say.
-const CAST_ERROR_RANK = [SimWorld.SILENT_REFUSAL, "Notthisunit", "Targetunit", "Canttargetloc", "Cooldown", "Nomana"];
+const CAST_ERROR_RANK = [SimWorld.SILENT_REFUSAL, "Notthisunit", "Targetunit", "Canttargetloc", "Cooldown", "Nomana", "Outofbounds"];
 const castErrorRank = (key: string): number => {
   const i = CAST_ERROR_RANK.indexOf(key);
   return i < 0 ? CAST_ERROR_RANK.length : i;
@@ -4034,6 +4034,10 @@ export class RtsController {
       if (err !== null) return this.refuseOrder(err);
       const hit = point ? this.groundHitAt(cssX, cssY) : null;
       if (point && !hit) return this.refuseOrder("Canttargetloc"); // "Unable to target there."
+      // …and the unplayable black is a spot the ray CAN hit and the map still has no room in
+      // (issue #117). Same line the spells get — a Dagger of Escape aimed past the edge is
+      // "Targeted location is outside of the map boundary.", and keeps its charge.
+      if (hit && !this.sim.inPlayableArea(hit[0], hit[1])) return this.refuseOrder("Outofbounds");
       this.orderMode = null;
       this.armedItem = null;
       this.execute(this.localPlayer, {

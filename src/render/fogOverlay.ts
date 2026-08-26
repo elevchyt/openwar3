@@ -23,7 +23,8 @@
 
 import { FogState, type VisionMap } from "../sim/vision";
 import { pipelineState } from "./glPipelineState";
-import { CELL, cornerHeight, type TerrainData } from "../world/terrain";
+import { boundaryCorners, CELL, cornerHeight, type TerrainData } from "../world/terrain";
+import { FOG_OF_WAR } from "../data/gameplayConstants";
 
 const VERT_SRC = `
 attribute vec3 aPos;
@@ -46,6 +47,19 @@ void main() {
 }`;
 
 const EXPLORED_DARK = 0.5; // grey veil over remembered-but-not-seen terrain
+/**
+ * How dark the UNPLAYABLE area is at its LIGHTEST (issue #117) — `UI\MiscData.txt`
+ * [FogOfWar] `BoundaryTerrain = 230,0,0,0`, an ARGB whose alpha is the whole of it.
+ *
+ * A floor, not a value: the game's own pair of rows says a boundary tile in sight takes this
+ * black-at-230 tint while one under fog takes the ordinary fog tint, so the boundary can only
+ * ever make a corner darker than vision already made it. Applied AFTER the softening blur,
+ * because unlike a sight edge this is not a vision boundary that wants easing — it is a fixed
+ * property of the ground, and a blur would dissolve a one-tile strip of "Nothing" (weight
+ * 1/5 at radius 2) into almost nothing at all. The per-tile mask is dilated to the corner
+ * grid instead (`boundaryCorners`), which spends the falloff on the playable side.
+ */
+const BOUNDARY_DARK = FOG_OF_WAR.BoundaryTerrain[0] / 255;
 // The vision map is a coarse grid with HARD per-cell states, so a cliff's line-of-sight
 // shadow or a sight-radius edge renders as a razor-sharp, geometric dark wedge — reads as
 // an artifact, not fog. Blur the per-corner darkness (separable box, radius in corners at
@@ -89,6 +103,12 @@ export class FogOverlay {
   private bright: Uint8Array; // per-corner luminance byte, uploaded each update
   private rawDark: Float32Array; // per-corner darkness before the softening blur
   private blurTmp: Float32Array; // scratch for the separable blur's horizontal pass
+  /** 1 on every corner of an unplayable tile — the boundary mask (see BOUNDARY_DARK). */
+  private boundary: Uint8Array;
+  /** `EnableWorldFogBoundary` — the map's own switch for the tint above. Blizzard.j drops it
+   *  for the length of a cinematic (CinematicModeExBJ) so a flythrough can leave the playable
+   *  area, and puts it back on the way out. */
+  boundaryTint = true;
   private gridW: number;
   private gridH: number;
   readonly fogParams: Float32Array; // world→UV: originX, originY, invSpanX, invSpanY
@@ -152,6 +172,7 @@ export class FogOverlay {
     this.gridW = width;
     this.gridH = height;
     this.bright = new Uint8Array(n); // 0 everywhere = start fully unexplored (black)
+    this.boundary = boundaryCorners(terrain);
     this.rawDark = new Float32Array(n);
     this.blurTmp = new Float32Array(n);
     this.fogParams = new Float32Array([
@@ -184,7 +205,16 @@ export class FogOverlay {
     }
     // 2) Soften the hard cell edges into gradients (separable box blur) → this.dark.
     this.blurDark();
-    // 3) Cliff-shader luminance from the same softened field, so cliff & ground agree.
+    // 3) …then floor the unplayable area at BoundaryTerrain's alpha. After the blur (see
+    //    BOUNDARY_DARK) and as a MAX, so fog that is already blacker than the boundary tint
+    //    stays that way — `FoggedBoundaryTerrain` is the ordinary fog tint to the byte.
+    if (this.boundaryTint) {
+      for (let i = 0; i < this.dark.length; i++) {
+        if (this.boundary[i] && this.dark[i] < BOUNDARY_DARK) this.dark[i] = BOUNDARY_DARK;
+      }
+    }
+    // 4) Cliff-shader luminance from the same field, so cliff, water and ground agree — which
+    //    is also what darkens the CLIFF FACES and the water sheet inside the boundary.
     for (let i = 0; i < this.dark.length; i++) this.bright[i] = (1 - this.dark[i]) * 255;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.darkBuf);

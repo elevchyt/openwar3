@@ -57,12 +57,13 @@ export function registerCinematicNatives(rt: Runtime): void {
   def(rt, "GetGameDifficulty", (c) => c.rt.enumHandle("GameDifficulty", c.rt.hooks?.getGameDifficulty?.() ?? 1));
   def(rt, "SetGameDifficulty", (c, a) => (c.rt.hooks?.setGameDifficulty?.(c.rt.enumIndex(a[0])), JNULL));
   def(rt, "SetRandomSeed", (c, a) => (c.rt.setRandomSeed(asInt(a[0])), JNULL));
-  // EnableOcclusion draws the "unit behind a cliff" x-ray silhouettes and EnableWorldFogBoundary
-  // the black wall at the map edge — two things we don't render at all. Explicit no-ops: the
-  // behaviour is identical to an unimplemented native, but it says so out loud and keeps the
-  // cinematic path free of "not implemented" noise.
+  // EnableOcclusion draws the "unit behind a cliff" x-ray silhouettes — something we don't
+  // render at all. An explicit no-op: the behaviour is identical to an unimplemented native,
+  // but it says so out loud and keeps the cinematic path free of "not implemented" noise.
   def(rt, "EnableOcclusion", () => JNULL);
-  def(rt, "EnableWorldFogBoundary", () => JNULL);
+  // EnableWorldFogBoundary is the black wall at the map edge (issue #117) — real, and the
+  // reason a cinematic may fly out over the unplayable area and still see ground.
+  def(rt, "EnableWorldFogBoundary", (c, a) => (c.rt.hooks?.enableWorldFogBoundary?.(truthy(a[0])), JNULL));
   // ForceCinematicSubtitles(true) forces subtitles on even when the player has them off in
   // Options. We have no such option — subtitles always show — so this is already true.
   def(rt, "ForceCinematicSubtitles", () => JNULL);

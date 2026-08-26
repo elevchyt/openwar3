@@ -2,7 +2,7 @@
 //
 //   pnpm data:verify
 //
-// Every key in MISC_GAME / MISC_DATA / MELEE / MINIMAP / GLUE / TEXT_TAG / MISC_UI is looked
+// Every key in MISC_GAME / MISC_DATA / MELEE / MINIMAP / FOG_OF_WAR / GLUE / TEXT_TAG / MISC_UI is looked
 // up in the file it claims to come from — Units\MiscGame.txt, Units\MiscData.txt,
 // Scripts\Blizzard.j, UI\MiscData.txt, UI\MiscUI.txt — and the values compared numerically. A transcription that drifts from the
 // install (or a value a patch changed under us) fails here instead of quietly mis-simulating
@@ -98,6 +98,8 @@ const files = {
   MELEE: { label: "Scripts\\Blizzard.j", data: parseJassConstants(read(path.join(merged, "Scripts", "Blizzard.j"))) },
   // Note the different MiscData.txt: the minimap's palette lives in the *UI* one.
   MINIMAP: { label: "UI\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "UI", "MiscData.txt"))) },
+  // …and the fog-of-war / boundary veils, in the same UI file.
+  FOG_OF_WAR: { label: "UI\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "UI", "MiscData.txt"))) },
   // …as do the glue screens' own constants (the Custom Game map-size buckets).
   GLUE: { label: "UI\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "UI", "MiscData.txt"))) },
   // …and the floating text tags' colours/drift/lifetimes. Their HEIGHTS are the odd one out:

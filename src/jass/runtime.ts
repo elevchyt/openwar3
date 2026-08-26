@@ -840,6 +840,12 @@ export interface EngineHooks {
   fogEnable?(flag: boolean): void;
   /** FogMaskEnable(flag) — the black "never explored" mask. */
   fogMaskEnable?(flag: boolean): void;
+  /** EnableWorldFogBoundary(flag) — the third veil in `UI\MiscData.txt` [FogOfWar], and the
+   *  only one that is not about what the player has SEEN: the tint over the map's unplayable
+   *  area (issue #117). `TriggerStrings.txt` calls it "Boundary Tinting". A pure render
+   *  switch — Blizzard.j's CinematicModeExBJ drops it alongside the two above so a flythrough
+   *  may leave the playable area, and restores it on the way out. */
+  enableWorldFogBoundary?(flag: boolean): void;
   // --- the atmospheric distance haze — a DIFFERENT system from the fog above (7.22) ---
   /** SetTerrainFogEx(style, zstart, zend, density, r, g, b) — the map's environment fog
    *  (what the w3i's own fog fields configure), rgb in 0–1. Nothing to do with the fog of
@@ -895,6 +901,14 @@ export interface EngineHooks {
   cameraEye?(): { x: number; y: number; z: number };
   /** GetCameraBoundMin/MaxX/Y — the rect the camera focus is confined to. */
   cameraBounds?(): JassRect;
+  /** SetCameraBounds — MOVE that rect. Every World-Editor `main()` opens with one, stating
+   *  the map's own playable area; a cinematic may narrow it and hand it back later. */
+  setCameraBounds?(bounds: JassRect): void;
+  /** GetCameraMargin(CAMERA_MARGIN_LEFT|RIGHT|TOP|BOTTOM) — how far inside the playable area
+   *  the camera bounds sit. An engine constant, not a data field; see world/terrain.ts's
+   *  CAMERA_MARGIN for where the numbers were read off. Blizzard.j widens the camera bounds
+   *  by these to get `bj_mapInitialPlayableArea`, so it is also half of GetPlayableMapRect. */
+  cameraMargin?(field: number): number;
   /** SetCameraTargetController(u, xoff, yoff, inheritOrientation) — the camera rides a
    *  unit. `unitId` < 0 releases it. */
   setCameraTargetUnit?(unitId: number, xOffset: number, yOffset: number, inheritOrientation: boolean): void;

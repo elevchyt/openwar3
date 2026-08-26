@@ -4,7 +4,7 @@ import type { DataSource } from "../vfs/types";
 import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
-import { parseW3E, type TerrainData } from "../world/terrain";
+import { CAMERA_MARGIN, cameraBoundsOf, parseW3E, type TerrainData, type WorldRect } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { collectMapDestructibles, findDestructibleAt, type MapDestructible } from "../world/mapDestructibles";
 import { destructibleUnitDef } from "../data/units";
@@ -741,9 +741,12 @@ export class MapViewerScene {
   // ease for the frame after a teleport (map load, minimap jump, a script camera apply).
   private groundZ = 0;
   private groundSnap = true;
-  // Terrain extent the camera focus is kept inside so it can't scroll off into the
-  // black void (issue #5). Set on map load from centerOffset + mapSize; null = no map.
-  private mapBounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
+  /** The rect the camera focus is kept inside so it can't scroll off into the black void
+   *  (issue #5) — the map's CAMERA BOUNDS, which is neither the terrain grid nor the playable
+   *  area but a camera margin inside the latter (issue #117, docs/unplayable-area.md). Set on
+   *  map load from the terrain's boundary flags, and a map's own SetCameraBounds may then
+   *  move it. Null = no map. */
+  private mapBounds: WorldRect | null = null;
   private distance = 4000;
   // Look from the south toward +Y (north up), matching WC3's default camera so
   // units/buildings (which default to facing 270° = south) face the viewer.
@@ -1303,7 +1306,13 @@ export class MapViewerScene {
     const [ox, oy] = map.centerOffset;
     // Terrain spans centerOffset → centerOffset + (n-1) tiles, 128 world units per
     // tile (CELL); the map centre lands on world origin. Keep the camera focus
-    // clamped to this rect so it can't drift into the void beyond the map (issue #5).
+    // clamped so it can't drift into the void beyond the map (issue #5).
+    //
+    // The rect it is clamped to is the map's CAMERA BOUNDS, not the terrain grid (issue
+    // #117): the whole grid includes the unplayable black border, and WC3 stops the focus a
+    // camera margin short of even the playable part of it. The real value comes off the
+    // terrain's own boundary flags a few lines down (cameraBoundsOf), once the w3e is
+    // parsed; this is the fallback for a map with no readable terrain at all.
     const CELL = 128;
     this.mapBounds = { minX: ox, maxX: ox + (cols - 1) * CELL, minY: oy, maxY: oy + (rows - 1) * CELL };
     this.target = new Float32Array([ox + (cols - 1) * 64, oy + (rows - 1) * 64, 0]);
@@ -1352,6 +1361,10 @@ export class MapViewerScene {
     if (w3e && wpm) {
       const terrain = parseW3E(w3e);
       this.fogTerrain = terrain; // corner grid for the fog overlay mesh
+      // …and where the camera focus may go: the map's camera bounds, off the terrain's own
+      // boundary flags (issue #117). A map's `main()` re-states this through SetCameraBounds
+      // the moment it runs, with values cameraBoundsOf reproduces exactly.
+      this.mapBounds = cameraBoundsOf(terrain);
       // The tileset picks which DNC light models shade this map (WorldEditData.txt).
       this.dayNight = DayNightCycle.load(this.vfs, lightEnvironment(archive, terrain.tileset));
       // Building ground-texture (ubersplat) overlay — needs only terrain + the GL
@@ -2299,6 +2312,12 @@ export class MapViewerScene {
         void this.loadCinematicPortrait(scene?.portraitUnitId ?? "", scene?.playerColor ?? 0, scene?.voiceoverDuration ?? 0);
       },
       pingMinimap: (ping) => this.hud?.ping(ping),
+      // SetCameraBounds: the map moving the wall the focus stops at. A WRITER of this
+      // machine's view, hence here — and it arrives with the same rect the terrain's boundary
+      // flags already gave us (issue #117), so a muzzled one costs nothing.
+      setCameraBounds: (b) => {
+        this.mapBounds = { minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY };
+      },
       // --- melee from the script (7.3) ---
       // MeleeStartingUnits* frames the view on the starting WORKERS, not the hall.
       setCameraPosition: (x, y) => {
@@ -2489,6 +2508,16 @@ export class MapViewerScene {
       resetTerrainFog: () => {
         this.mapFog = this.w3iFog;
       },
+      // --- the boundary tint: the veil over the unplayable area (issue #117) ---
+      // Purely this machine's picture, like the two fog switches it travels with in
+      // CinematicModeExBJ — the sim's vision map never hears about it. Resampled at once so
+      // a cinematic that toggles it and cuts to its first shot in the same frame is not
+      // still looking at a black wall for the 100 ms until the next fog tick.
+      enableWorldFogBoundary: (flag) => {
+        if (!this.fog) return;
+        this.fog.boundaryTint = flag;
+        this.updateFog();
+      },
       // --- weather: the map's atmosphere (7.23) ---
       addWeatherEffect: (effectId, area) => {
         this.weatherDefs ??= loadWeatherRegistry(this.vfs);
@@ -2526,6 +2555,9 @@ export class MapViewerScene {
         const b = this.mapBounds ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
         return { minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY };
       },
+      // …and the constant Blizzard.j widens them by to get `bj_mapInitialPlayableArea`.
+      // A reader of an engine constant, so it belongs with the readers (see above).
+      cameraMargin: (field) => CAMERA_MARGIN[field] ?? 0,
       // SetGameSpeed is RECORDED, not applied: WC3's five speeds are engine constants that
       // live in no data file we have, and guessing a multiplier would be exactly the kind of
       // invented number CLAUDE.md forbids. Recording it is still load-bearing — cinematic
