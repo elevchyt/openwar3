@@ -126,3 +126,78 @@ export function corpseAdmits(
  *  `freshest` — most decay left, which is how a sweep that takes SEVERAL should choose
  *  (Resurrection, Animate Dead): the ones that have been dead longest go last. */
 export type CorpseOrder = "nearest" | "freshest";
+
+/**
+ * The corpse abilities that BUILD SOMETHING OUT OF A BODY — shapes A and B above — and
+ * therefore the ones that must REFUSE when there is no body to build from (issue #116
+ * follow-up).
+ *
+ * They are the ones the game itself groups: AbilityMetaData declares `Rai1..Rai4` as
+ * `useSpecific=Arai,ACrd,AUcb,AIrd,Avng` (shape A) and `Hre1`/`Hre2` as
+ * `useSpecific=AHre,AIrs` / `AUan,AHre,ACad,AIan,AIrs,APrl,APrr` (shape B), plus the Spirit
+ * Walker's Ancestral Spirit, which is its own row. Only the codes an ability actually
+ * DISPATCHES on are listed — the creep and item copies (`ACrd`, `AIrd`, `APrl`, `APrr`) reach
+ * their handler under one of these, so listing them again would be listing a key that never
+ * arrives (see world.ts's item path, which maps `AIrd` → `Arai`).
+ *
+ * Cannibalize and the Meat Wagon are deliberately NOT here. Neither spawns anything: one eats
+ * the body for hit points and the other borrows it, so "there is nothing to raise" is not what
+ * a failed press means for either. The mechanism generalises to them the day that is wanted.
+ *
+ * The number is the radius the ability's own handler sweeps, so the gate and the effect cannot
+ * disagree about what "nearby" means. The sweep is centred where the cast is AIMED, which for
+ * the five no-target members (`target: "none"` — the button IS the cast) is the caster itself.
+ */
+const CORPSE_SPAWNERS: ReadonlyMap<string, (lvl: CorpseSpellRow) => number> = new Map([
+  // Shape A — one body becomes N of a fixed type. `Rng1` is the reach (600 for Raise Dead,
+  // 900 for Carrion Beetles); `Area1` and the literal are the fallbacks a stripped custom row
+  // falls back through, exactly as summonFromCorpse reads them.
+  ["Arai", (l: CorpseSpellRow) => l.castRange || l.area || 600],
+  ["AUcb", (l: CorpseSpellRow) => l.castRange || l.area || 600],
+  ["Avng", (l: CorpseSpellRow) => l.castRange || l.area || 600],
+  // Shape B — up to N bodies get back up as themselves. This one SWEEPS, so it is `Area1`
+  // (900) that says how far, not the cast range.
+  ["AHre", (l: CorpseSpellRow) => l.area || 900],
+  ["AUan", (l: CorpseSpellRow) => l.area || 900],
+  // …and Ancestral Spirit, the one member the player actually aims: a point-target raise of a
+  // single body, at the 250 its handler takes.
+  ["Aast", () => 250],
+]);
+
+/** The two columns a sweep's reach is read out of (`Rng1` / `Area1`). Structural, like the
+ *  rest of this module — a test's plain object satisfies it. */
+export interface CorpseSpellRow {
+  castRange: number;
+  area: number;
+}
+
+/**
+ * WHICH refusal the game prints when one of them finds nothing — and it ships both lines,
+ * `Units\CommandStrings.txt` [Errors]:
+ *
+ *     Cantfindcorpse          = There are no usable corpses nearby.
+ *     Cantfindfriendlycorpse  = There are no corpses of friendly units nearby.
+ *
+ * Two lines because the family splits on WHOSE dead it may have, and the split is already in
+ * the row: `[AHre] targs1 = air,ground,dead,friend` and `[Aast] ground,player,dead` may only
+ * have your own, so those get the second line; `[AUan] air,ground,dead` and `[Arai] dead` may
+ * have anybody's and get the first. Read off the same two flags `corpseUseError` measures
+ * allegiance with, so a row that changes its mind changes both together.
+ */
+export function corpseMissingError(flags: readonly string[] = []): string {
+  const F = new Set(flags.map((f) => f.toLowerCase()));
+  const friendOnly = (F.has("friend") || F.has("player")) && !F.has("enemy");
+  return friendOnly ? "Cantfindfriendlycorpse" : "Cantfindcorpse";
+}
+
+/** How far one of them sweeps for bodies — the ONE answer both its handler and the
+ *  can-this-be-cast gate read, so the button and the effect cannot disagree about "nearby".
+ *  0 for any ability that does not build out of corpses. */
+export function corpseReach(code: string, lvl: CorpseSpellRow): number {
+  return CORPSE_SPAWNERS.get(code)?.(lvl) ?? 0;
+}
+
+/** Does this ability build something out of a body, and therefore need one? */
+export function spawnsFromCorpse(code: string): boolean {
+  return CORPSE_SPAWNERS.has(code);
+}

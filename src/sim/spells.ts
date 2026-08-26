@@ -1,4 +1,5 @@
 import type { AbilityDef, AbilityLevel, BuffFx } from "../data/abilities";
+import { corpseReach } from "./corpses";
 import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim } from "./world";
 
 // Spell effect handlers, dispatched on an ability's base `code` (data/abilities).
@@ -894,7 +895,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // of one, and its `targs1 = ground,player,dead` is the tightest allegiance in the family:
   // `player` means the caster's OWN dead, not an ally's.
   Aast: (api, caster, def, _rank, ctx) => {
-    api.raiseClaimed(api.claimCorpses(caster, def, ctx.x, ctx.y, 250, 1), caster.owner, caster.team);
+    api.raiseClaimed(api.claimCorpses(caster, def, ctx.x, ctx.y, corpseReach(def.code, lv(def, 1)), 1), caster.owner, caster.team);
     if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0);
   },
 
@@ -2446,7 +2447,7 @@ function summonFromCorpse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank:
   const cap = d(lvl, 4, 0);
   if (cap > 0 && api.countOwned(caster.owner, unit) >= cap) return;
   // Nearest: you raise the body you are standing over, not the freshest one on the map.
-  const [corpse] = api.claimCorpses(caster, def, caster.x, caster.y, lvl.castRange || lvl.area || 600, 1);
+  const [corpse] = api.claimCorpses(caster, def, caster.x, caster.y, corpseReach(def.code, lvl), 1);
   if (!corpse) return;
   const art = summonArt(def);
   const life = lvl.heroDuration || lvl.duration || 0;
@@ -2476,7 +2477,7 @@ function summonFromCorpse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank:
  */
 function raiseCorpses(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, x: number, y: number, opts?: RaiseOptions): number {
   const lvl = lv(def, rank);
-  const taken = api.claimCorpses(caster, def, x, y, lvl.area || 900, Math.max(1, d(lvl, 0, 6)), { order: "freshest" });
+  const taken = api.claimCorpses(caster, def, x, y, corpseReach(def.code, lvl), Math.max(1, d(lvl, 0, 6)), { order: "freshest" });
   return api.raiseClaimed(taken, caster.owner, caster.team, opts);
 }
 

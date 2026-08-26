@@ -1,7 +1,7 @@
 import { BUILD_CELL, BUILD_CELL_CELLS, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { targsKindError } from "./targeting";
-import { corpseAdmits, type CorpseNeed, type CorpseOrder } from "./corpses";
+import { corpseAdmits, corpseMissingError, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { BlightGrid } from "./blight";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
@@ -8900,7 +8900,38 @@ export class SimWorld {
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     if (ab.cooldownLeft > 0) return "Cooldown"; // "Spell is not ready yet."
     if (u.mana < lvl.cost) return "Nomana"; // "Not enough mana."
+    // …and last, for the corpse family: nothing to raise is a refusal with a sentence of its
+    // own. Last because it is the least fundamental of the four — a Necromancer short of mana
+    // is short of mana whether or not there is a body — and because it is the only one of them
+    // that can change while you stand still. Only the NO-TARGET members are answerable here
+    // (which is five of the six: the button IS the cast, so the sweep is centred on the caster
+    // and there is nothing left to aim). Ancestral Spirit is the aimed one and is checked in
+    // castError, where the point exists. See sim/corpses.ts.
+    if (def.target === "none") {
+      const missing = this.corpseRefusal(u, def, lvl, u.x, u.y);
+      if (missing) return missing;
+    }
     return null;
+  }
+
+  /**
+   * "There are no usable corpses nearby." — the refusal for an ability that builds something
+   * out of a body when there is no body to build from, or null when there is one.
+   *
+   * Both lines are the game's own (`Units\CommandStrings.txt` [Errors] `Cantfindcorpse` /
+   * `Cantfindfriendlycorpse`), and which of the two it is comes off the ability's own `targs1`
+   * — see corpseMissingError. The LOOK is `corpsesFor`, the same query the handler will take
+   * from, at the same radius (`corpseReach`), so the answer the player is given and the answer
+   * the cast gets cannot disagree.
+   *
+   * Without this the cast fired, paid its mana and its cooldown, and produced nothing at all:
+   * the handlers each opened with a silent `if (!corpse) return`, which is a correct effect
+   * and a terrible answer.
+   */
+  private corpseRefusal(u: SimUnit, def: AbilityDef, lvl: AbilityLevel | undefined, x: number, y: number): string | null {
+    if (!lvl || !spawnsFromCorpse(def.code)) return null;
+    if (this.corpsesFor(u, def, x, y, corpseReach(def.code, lvl)).length > 0) return null;
+    return corpseMissingError(def.targetFlags);
   }
 
   /** WHY this unit can't cast this ability at this target right now — a commandstrings.txt
@@ -8912,12 +8943,19 @@ export class SimWorld {
    *  says "Not enough mana." the instant you click, it doesn't walk the caster into range
    *  first and then quietly give up. tickCast still re-checks both, because the walk takes
    *  time and a cheaper spell may drain the mana in the meantime. */
-  castError(unitId: number, code: string, targetId = 0): string | null {
+  castError(unitId: number, code: string, targetId = 0, x = 0, y = 0): string | null {
     const use = this.castUseError(unitId, code);
     if (use !== null) return use;
     const u = this.units.get(unitId)!;
     const ab = this.findAbility(u, code)!;
     const def = this.abilities!.get(ab.id)!;
+    if (def.target === "point") {
+      // The aimed half of the corpse gate: Ancestral Spirit sweeps around the POINT, so this
+      // is the first moment it can be answered at all (castUseError took the other five, whose
+      // sweep is centred on the caster). Silent for every other point spell.
+      const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      return this.corpseRefusal(u, def, lvl, x, y);
+    }
     if (def.target !== "unit") return null;
     const t = this.units.get(targetId);
     if (!t) return "Targetunit"; // "Must target a unit with this action." — clicked bare ground
@@ -8952,6 +8990,13 @@ export class SimWorld {
     // planted tree.)
     if (code === "Aent" && u.uprooted) return this.issueEntangleAt(unitId, 0);
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+    // Nothing to raise, no cast. Refused HERE as well as at the button so that every route in
+    // shares the gate — a trigger's IssueImmediateOrder, a command off the wire, an autocast —
+    // and, more to the point, so the cast never reaches the effect: mana and cooldown are
+    // committed there (see tickCast), and the handler's own `if (!corpse) return` was spending
+    // both on nothing. An `auto` cast lands here too and simply doesn't fire, which is exactly
+    // what an autocast with no work to do should do.
+    if (spawnsFromCorpse(code) && this.corpseRefusal(u, def, lvl, def.target === "point" ? x : u.x, def.target === "point" ? y : u.y)) return false;
     // Immediate abilities (see IMMEDIATE) fire here and now: pay, run the effect, done.
     // They take no order and touch none of the unit's state below, so they neither need
     // the castLocked gate nor interrupt a swing, a walk, or another spell's wind-up.
@@ -14627,10 +14672,16 @@ export class SimWorld {
         // applySpellEffect is what keeps the corpse rules — whose dead, hero corpses, one
         // taker per body — in the one place that owns them (see sim/corpses.ts).
         case "AIrd":
-        case "AHre":
-          this.applySpellEffect(ad.code === "AIrd" ? "Arai" : ad.code, 1, u, { targetId: 0, x, y }, ad);
+        case "AHre": {
+          // …including the corpse gate itself. No body, no cast and NO CHARGE: `fired` is left
+          // false, so consumeItemUse below never runs and a Rod of Necromancy waved over bare
+          // ground still has all its charges (the UI says why — see itemUseError).
+          const code = ad.code === "AIrd" ? "Arai" : ad.code;
+          if (this.corpseRefusal(u, ad, ad.levelData[0], u.x, u.y)) break;
+          this.applySpellEffect(code, 1, u, { targetId: 0, x, y }, ad);
           fired = true;
           break;
+        }
         case "AEbl": { // Kelen's Dagger of Escape → blink to a point within range
           const range = d(0) || 1000;
           const dist = Math.hypot(x - u.x, y - u.y);
@@ -14812,7 +14863,13 @@ export class SimWorld {
     if (!this.abilities) return "Cantuseitem";
     for (const abilId of def.abilities) {
       const ad = this.abilities.get(abilId);
-      if (!ad || (ad.code !== "ANpr" && ad.code !== "ANsa")) continue;
+      if (!ad) continue;
+      // The corpse items — the Rod of Necromancy and the two Runes of Resurrection — refuse
+      // exactly as the spells they ARE do, and for the same reason: pressing one with nothing
+      // to raise would otherwise burn a charge on nothing. Same line, same query.
+      const missing = this.corpseRefusal(u, ad, ad.levelData[0], u.x, u.y);
+      if (missing) return missing;
+      if (ad.code !== "ANpr" && ad.code !== "ANsa") continue;
       const t = this.units.get(targetId);
       if (!t) return "Targetunit"; // "Must target a unit with this action." — clicked bare ground
       const err = this.staffTargetError(u, ad, t);

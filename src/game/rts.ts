@@ -4001,7 +4001,10 @@ export class RtsController {
       }
       const hit = this.groundHitAt(cssX, cssY); // point-target spell
       if (!hit) return this.refuseOrder("Canttargetloc"); // "Unable to target there."
-      const err = this.castRefusal(cast.code, 0);
+      // The POINT goes with the question: a refusal can depend on what is at the spot you
+      // clicked, not just on the caster (an Ancestral Spirit aimed where nobody fell answers
+      // "There are no corpses of friendly units nearby."). Every other point spell ignores it.
+      const err = this.castRefusal(cast.code, 0, hit[0], hit[1]);
       if (err !== null) return this.refuseOrder(err);
       this.orderMode = null;
       this.armedCast = null;
@@ -4255,8 +4258,8 @@ export class RtsController {
    *  reason, and the one that gets furthest through the checks is the informative one
    *  ("Not enough mana." beats "Must target an enemy unit." from a unit that lacks the
    *  spell entirely). CAST_ERROR_RANK orders them; the last is the most specific. */
-  private castRefusal(code: string, targetId: number): string | null {
-    return this.bestRefusal((id) => this.sim.castError(id, code, targetId));
+  private castRefusal(code: string, targetId: number, x = 0, y = 0): string | null {
+    return this.bestRefusal((id) => this.sim.castError(id, code, targetId, x, y));
   }
 
   /** The same question one step earlier: can ANY unit in the selection USE this ability at

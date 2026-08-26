@@ -187,12 +187,15 @@ const BOUNTY_TEXT_COLOR = argbOfParts(TEXT_TAG.BountyTextColor);
 // ...and the one exception, the XP number, which 1.30.4 does not raise at all and therefore
 // keeps no colour for — see XP_TEXT_STYLE. A violet matched to the Reforged client that does.
 const XP_TEXT_COLOR = 0xffb478ff;
-// A bounty sits where a credit does; the XP goes one line above it. The two are raised by the
-// SAME event a step apart, and a hero that killed the creep in melee is standing on top of it
-// — at one height they would print over each other and neither would be readable. One line is
-// all the clearance it gets: this is a number over a hero's head, and lifted much further it
-// stops reading as HIS and starts floating in the trees behind him.
-const XP_TEXT_Z = 300;
+// A bounty sits where a credit does; the XP goes a hair above it. The two are raised by the
+// SAME event a step apart, and a hero that killed the creep in melee is standing on top of it,
+// so at one identical height they would print over each other.
+//
+// A HAIR, though, and not a clear line: the floor here is the status bar (the credit height is
+// what it is because issue #120 tuned it to clear the bar rather than rise through it), and the
+// ceiling is that this is a number over a hero's HEAD — lifted much further it stops reading as
+// his and starts floating in the trees behind him. 300 was over that ceiling.
+const XP_TEXT_Z = 240;
 
 /** Colour, spec and height for one CREDIT kind — the four tags the engine raises to tell you
  *  what you were just paid (see CombatText). A crit and a deny are not in here: they report a
