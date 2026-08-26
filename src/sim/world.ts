@@ -4332,15 +4332,31 @@ export class SimWorld {
     const rules = this.mineCrewOf(mine);
     if (!rules?.ring) return;
     if (!u.ringSlot) {
-      // Walk up to the RING, and only then take a mark. The mark it is heading FOR is the
-      // walk's target rather than the mine's centre, because the stations are pushed clear of
-      // the building's own 16×16-cell footprint — "within `Abgm`'s 200 of the centre" is
-      // ground no Acolyte can stand on. A whole ring's width of slack on the arrival, since
-      // the approach aims at the rim (pathToNode) and the nearest mark is a stride to one side
-      // of wherever that lands.
-      const want = this.freeRingSlot(mine, rules.max, u, rules.ring);
-      const [tx, ty] = want ? this.ringStation(mine, want, rules.max, rules.ring) : [mine.x, mine.y];
-      if (!this.arriveAtNode(u, tx, ty, u.radius + rules.ring, () => this.pathToNode(u))) {
+      // Walk up to the RING, and only then take a mark — so the arrival is tested against the
+      // RING, which is the thing being walked to. It used to be tested against the mark the
+      // Acolyte hoped to take, and the walk is not aimed there and never can be: pathToNode
+      // sends a gold worker to `mineStandSpot`, the rim point facing it. While the near marks
+      // were free the two agreed by luck (the nearest mark is a stride to one side of where
+      // the approach lands), but the moment they were taken the nearest FREE one was across
+      // the mine, ~350 away — a distance the walk was never going to close, so the test said
+      // "not there yet" forever. The Acolyte ground against the crew already kneeling, held
+      // `moving` (which is what stops arriveAtNode from ever re-pathing), and simply stood
+      // there. Two of a crew of five never sat down, and Undead gold came in at half rate.
+      //
+      // Measured from the mine's CENTRE: `Abgm`'s DataD is a radius from there, and the rim
+      // the approach aims at (mine footprint + a block + half a cell) is comfortably inside
+      // it, so the test is one the walk can actually satisfy from any side.
+      //
+      // …and a late Acolyte cannot always TOUCH the ring, because the crew already kneeling
+      // STANDS on it. Five sent at once walk up from one side, three sit down, and the last
+      // two are left leaning on a picket of their own colleagues with no way through to the
+      // rim. They have arrived all the same — they are at the mine, and the mark they are
+      // about to take is one they are PLACED on rather than walk to (see below), so nothing
+      // downstream needs them to have got any closer. `blockedT` is the mover's own "I am up
+      // against a body and not getting past" clock; half a repath cycle of it is a queue, not
+      // a stride, and the mover zeroes it at a full cycle so half is what can be observed.
+      const walled = u.blockedT >= BLOCKED_REPATH_TIME / 2;
+      if (!this.arriveAtNode(u, mine.x, mine.y, u.radius + rules.ring, () => this.pathToNode(u)) && !walled) {
         u.working = false;
         return;
       }

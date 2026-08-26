@@ -72,7 +72,22 @@ const UPGRADES = {
   Rews: { id: "Rews", maxLevel: 1, effects: [{ effect: "rmnx", base: 125, mod: 0 }, { effect: "rmnr", base: 0.52, mod: 0 }] },
 };
 const upgradeReg = { get: (id) => UPGRADES[id], has: (id) => id in UPGRADES, all: () => Object.values(UPGRADES) };
-const techReg = { get: () => undefined, has: () => false, all: () => [] };
+// A tech registry that has never heard of anything. Not the same as passing NO registry:
+// handing SimWorld one is what gives it a live `world.tech`, which these tests need. So it
+// has to answer every question the sim actually asks of it — and the three it asks are not
+// the three a stub reaches for first. `satisfies` runs on every unit census, `requirements`
+// on every techMeets (so: every cast, and every autocast tick), and `producesUnits` when a
+// building morphs. Leave one out and nothing fails at construction; it throws mid-tick, deep
+// inside TechState. The answers below are what the real TechRegistry gives for an id it does
+// not know: nothing is gated, and a unit answers for itself alone.
+const techReg = {
+  requirements: () => [],
+  satisfies: (unitId) => [unitId],
+  producesUnits: () => false,
+  get: () => undefined,
+  has: () => false,
+  all: () => [],
+};
 
 const CELL = 32;
 function newWorld(w = 120, h = 120) {

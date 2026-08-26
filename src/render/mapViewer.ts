@@ -7864,10 +7864,11 @@ export class MapViewerScene {
         name: "Hero Abilities",
         hotkey: "O",
         desc: "Opens the abilities menu and allows you to assign unused points to the Heroes' abilities.",
+        // No `modal` sparkle here, deliberately: the button already says there are points to
+        // spend — it only exists while there are, and it wears the count. The hero's PORTRAIT
+        // up in the corner is where the model goes, because that is the one that has to catch
+        // your eye while you are looking somewhere else entirely.
         col: 3, row: 1, count: su.skillPoints,
-        // The button only exists while there are points to spend, and while it does it stands
-        // ON: the game parks the same UI-ModalButtonOn.mdx over it that an autocast wears.
-        modal: true,
       }));
     }
   }
