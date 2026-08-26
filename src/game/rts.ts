@@ -404,6 +404,10 @@ const FLASH_YELLOW: [number, number, number] = [1, 0.88, 0.2];
 // as aggressively red — matches the accentuated enemy hover/selection ring tint.
 const FLASH_RED: [number, number, number] = [1, 0.08, 0.05];
 const TREE_FLAG_HEIGHT = 180; // lift a queue flag to a tree's canopy top
+/** How far a rally flag is lifted when it is planted ON a building or a gold mine. Flat on
+ *  the terrain the flag stands inside the model and is invisible from most camera angles;
+ *  this clears the base without turning the flag into a landmark of its own. */
+const RALLY_TARGET_LIFT = 110;
 const TREE_COLLIDER_HEIGHT = 110; // pick trees against a raised plane so clicking up the trunk/canopy still selects them
 // Max world distance from the click's ground point to a pickable unit. Gates out
 // far/behind-camera units that screen-projection alone would wrongly match.
@@ -1413,6 +1417,15 @@ export class RtsController {
    */
   setFootprintReader(read: (texPath: string) => Footprint | null): void {
     this.footprintOf = read;
+    // …and the same reader, in the shape the SIM asks its one question in: how far from a
+    // site's centre its edge is, so a builder can be walked up to the EDGE rather than into
+    // the middle of what it is about to raise (SimWorld.buildApproach). The wider axis, so
+    // the stand-off clears an oblong footprint whichever way the worker comes at it.
+    this.sim.buildHalfExtent = (defId) => {
+      const tex = this.registry.get(defId)?.pathTex;
+      const fp = tex ? read(tex) : null;
+      return fp ? (Math.max(fp.w, fp.h) * PATHING_CELL) / 2 : 0;
+    };
   }
   private footprintOf: (texPath: string) => Footprint | null = () => null;
 
@@ -4997,7 +5010,28 @@ export class RtsController {
     // human, orc and night elf; the undead banner is bone and has none), so it must be
     // tinted with the OWNING player's colour — not left on the default slot 0, which is
     // red (issue #86).
-    return { x, y, z: this.heightAt(x, y), owner: bu.owner };
+    //
+    // …and it is LIFTED when it is planted ON something. A flag stands on the ground, which
+    // is the right answer for a point rally and the wrong one for a target: on a tree it is
+    // inside the trunk, on a building inside the wall, and from most camera angles it is not
+    // there at all. See rallyLift for how far — enough to clear the base, not enough to
+    // become a landmark of its own.
+    return { x, y, z: this.heightAt(x, y) + this.rallyLift(b.rallyKind, b.rallyTargetId), owner: bu.owner };
+  }
+
+  /** How far a rally flag stands off the ground, by what it was planted on. A plain point
+   *  rally is flat on the terrain, as it should be; everything else is a flag ON a thing.
+   *  A tree gets the canopy lift its queue flag already uses, so the two agree; a mine or a
+   *  building gets a shorter one that clears the base without floating. */
+  private rallyLift(kind: RallyKind, targetId: number): number {
+    if (kind === "tree") return TREE_FLAG_HEIGHT;
+    if (kind === "mine") return RALLY_TARGET_LIFT;
+    if (kind !== "unit") return 0;
+    const t = this.sim.units.get(targetId);
+    if (!t) return 0;
+    // A rally on a flying unit rides at its altitude — the flag marks where the thing IS.
+    if (!t.building) return this.byId.get(targetId)?.moveHeight ?? 0;
+    return RALLY_TARGET_LIFT;
   }
 
   /** World positions of every SELECTED unit's shift-queued orders, for the small
@@ -6123,11 +6157,44 @@ export class RtsController {
     const hit = this.groundPoint(cssX, cssY);
     if (!hit) return null;
     const mine = this.mineAt(hit[0], hit[1], 320);
-    if (mine) return { x: mine.x, y: mine.y, kind: "mine", targetId: mine.id };
+    if (mine && this.rallyCanHarvest("gold")) return { x: mine.x, y: mine.y, kind: "mine", targetId: mine.id };
     const treeHit = this.treePickPoint() ?? hit; // raised plane → clicking up the tree still hits
     const tree = this.sim.nearestTree(treeHit[0], treeHit[1], 140);
-    if (tree) return { x: tree.x, y: tree.y, kind: "tree", targetId: tree.id };
+    if (tree && this.rallyCanHarvest("lumber")) return { x: tree.x, y: tree.y, kind: "tree", targetId: tree.id };
     return { x: hit[0], y: hit[1], kind: "point", targetId: 0 };
+  }
+
+  /**
+   * May the building whose rally point is being set aim it at a RESOURCE — a tree, a gold
+   * mine — at all?
+   *
+   * Only if something it trains could work one. A smart rally is a standing harvest order
+   * handed to whoever comes out (applyRally), so a building that produces nobody who can
+   * take it has no business accepting the click: the flag would sit on a tree promising
+   * something, and every unit trained under it would walk over and stand there.
+   *
+   * The undead are what make it obvious, because the race splits the two resources between
+   * two units and two buildings. `[unpl] Trains=uaco` — an Acolyte has `Aaha`, which is gold
+   * and nothing else (docs/undead.md §4) — so a Necropolis may be rallied to a mine and not
+   * to a tree, while `[usep] Trains=ugho,…` gives the Crypt the Ghoul and its `Ahrl`, so the
+   * Crypt is the undead building that may. Every altar, barracks and workshop in the game
+   * fails both halves, which is the same answer for all four races.
+   *
+   * Read off the `Trains` list and the harvest ABILITY each trainee carries rather than off a
+   * list of building ids (workerProfileFor, data/races.ts) — the same rule that decides what
+   * a worker IS, so a custom map's own builder is covered by it too.
+   */
+  private rallyCanHarvest(kind: "gold" | "lumber"): boolean {
+    if (this.primary === null) return false;
+    const typeId = this.byId.get(this.primary)?.typeId;
+    if (!typeId) return false;
+    for (const uid of this.tech.trains(typeId)) {
+      const d = this.registry.get(uid);
+      if (!d) continue;
+      const p = workerProfileFor(uid, d.abilities.map((id) => this.abilities.get(id)?.code ?? id));
+      if (p && (kind === "gold" ? p.gold : p.lumber)) return true;
+    }
+    return false;
   }
 
   /** Feedback for a rally point: a tree/mine rally flashes the same yellow ring

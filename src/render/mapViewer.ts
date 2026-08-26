@@ -3542,9 +3542,18 @@ export class MapViewerScene {
       // bug 4 had). Single-player is unchanged: only the local player ever has one. A
       // frozen client never runs this at all (advanceSim's gate).
       if (!pb) continue;
-      if (Math.hypot(w.x - pb.x, w.y - pb.y) >= 160 || w.moving) { this.buildWait.delete(w.id); continue; } // not there yet
       const def = this.registry.get(pb.defId);
       if (!def) { world.cancelPendingBuild(w.id); this.buildWait.delete(w.id); continue; }
+      // "There yet" is measured against the site's EDGE, not a fixed 160 from its centre —
+      // which for anything bigger than a Farm was a circle INSIDE the footprint, so the only
+      // way to arrive was to walk into the middle of it. The worker is sent to the edge now
+      // (SimWorld.buildApproach) and this is the same stand-off read back, with a cell of
+      // slack for wherever the pathfinder actually parked it. Still gated on having STOPPED:
+      // a worker crossing the site on its way somewhere else is not building anything.
+      const siteFp = def.pathTex ? this.footprintFor(def.pathTex) : null;
+      const half = siteFp ? (Math.max(siteFp.w, siteFp.h) * PATHING_CELL) / 2 : 0;
+      const reach = Math.max(160, half + (w.radius || 16) + 2 * PATHING_CELL);
+      if (Math.hypot(w.x - pb.x, w.y - pb.y) >= reach || w.moving) { this.buildWait.delete(w.id); continue; } // not there yet
       // The worker is standing on the site, so this is the moment a shift-queued build is
       // asked for its money (it was queued without being asked — see Authority's `build`).
       // Short of it, the build is off: the order goes, every unpaid one queued behind it goes
@@ -4237,6 +4246,18 @@ export class MapViewerScene {
         this.loc3[1] = sy;
         this.loc3[2] = this.rts!.groundHeightAt(sx, sy);
         inst.setLocation(this.loc3);
+        // …and TURNED to face the mine. The mark is not radially symmetric: it is a broken
+        // ring whose open side — the straight bar the runes hang off — is the side the
+        // Acolyte kneels on, so every one of the five has to be rolled around the building
+        // like numbers on a clock face. Unrotated they all pointed the same way and four of
+        // the five read as litter dropped on the ground. WC3 models face +X, so the heading
+        // from the station to the mine's centre IS the rotation.
+        const face = Math.atan2(u.y - sy, u.x - sx);
+        this.mq[0] = 0;
+        this.mq[1] = 0;
+        this.mq[2] = Math.sin(face / 2);
+        this.mq[3] = Math.cos(face / 2);
+        inst.setRotation(this.mq);
       }
     }
   }
@@ -7768,7 +7789,11 @@ export class MapViewerScene {
         // now — it is NOT the autocast toggle, which is a persistent setting and
         // gets its own indicator, so the two can never both claim the border.
         active: active === `ability:${ab.code}`,
-        autocast: def.autocast && ab.autocastOn,
+        // …and no autocast ring on a button that is not yours yet. The `auto` column arms the
+        // toggle from birth (`[ucry] auto = Aweb`) while the upgrade is what unlocks the row,
+        // so an un-researched Web read as "on" for an ability that could not fire. The sim
+        // agrees from the other side — tickAutocast skips it (and issueCast refuses it).
+        autocast: def.autocast && ab.autocastOn && techMet,
         cooldownLeft: onCd ? ab.cooldownLeft : 0,
         cooldownFrac: onCd && lvl.cooldown > 0 ? Math.max(0, Math.min(1, ab.cooldownLeft / lvl.cooldown)) : 0,
       }));

@@ -219,11 +219,20 @@ Two things follow from the marks existing, and neither is cosmetic:
   renderer places the marks from and what `tickRingHarvest` walks the Acolytes to, so a map
   that widens the ring or seats a sixth Acolyte gets the circles to match with no second
   reading of `Abgm`.
-* **An Acolyte SNAPS onto its mark.** `arriveAtNode` stops a worker within a body's width of
-  where it was sent, which is invisible at a tree and unmissable here: five Acolytes standing
-  *beside* five circles. The station is walkable by construction (`ringStation` pushes out
-  along its own ray until it is), so the snap is the last step of the approach rather than a
-  teleport, and it happens once.
+* **An Acolyte STEPS ONTO its mark, it does not walk round to it.** The approach is one leg,
+  not two: it walks up to the RING (measured against the mark it is heading for, since the
+  stations are pushed clear of the building's 16×16-cell footprint and "within `Abgm`'s 200 of
+  the centre" is ground nobody can stand on), takes the nearest free mark on arrival, and is
+  placed on it. A second walk leg aimed at the station went straight through the building, so
+  the pathfinder took it the long way round the mine and past whoever was already kneeling —
+  and left where the walk happened to stop, a crew reads as five Acolytes standing *beside*
+  five circles. The station is walkable by construction (`ringStation` pushes out along its
+  own ray until it is), and this happens once.
+* **The marks are TURNED to face the mine.** The circle is not radially symmetric: it is a
+  broken ring whose open side — the straight bar the runes hang off — is the side the Acolyte
+  kneels on. Unrotated, all five point the same way and four of them read as litter on the
+  ground. WC3 models face +X, so the heading from the station to the mine's centre IS the
+  rotation.
 
 **A ring is not a cargo hold, and the rally path has to know it.** "Go and mine" aimed at a mine
 with a building over it (`issueGoldWork` — a right-click on the rock, and a rally flag planted

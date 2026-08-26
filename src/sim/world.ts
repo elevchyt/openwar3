@@ -2226,6 +2226,12 @@ export class SimWorld {
   /** Does anything (treeline, high ground) stand between these two points? Injected by
    *  rts from the VisionMap's height field; defaults to open ground for headless sims. */
   lineOfSight: (fromX: number, fromY: number, toX: number, toY: number, flying: boolean) => boolean = () => true;
+  /** Half the width of a building type's stamped footprint, in world units — how far from a
+   *  site's CENTRE its edge is. The pathing texture that decides it is a FILE, so only the
+   *  renderer can read one (MapViewerScene.footprintFor); installed by
+   *  RtsController.setFootprintReader. 0 when unknown, which reads as "aim at the centre" —
+   *  the behaviour buildApproach replaces. */
+  buildHalfExtent: (defId: string) => number = () => 0;
   /** Are two PLAYER slots allied? Injected by rts from the alliance matrix (7.22), so a
    *  script's `SetPlayerAlliance` can ally two players the lobby put on different teams —
    *  and un-ally two it put on the same one. `null` = "no opinion, use the teams", which
@@ -3341,7 +3347,7 @@ export class SimWorld {
     w.noCollision = false;
     w.stuckT = 0;
     w.stuckRetries = 0;
-    const gap = Math.max(Math.abs(w.x - b.x), Math.abs(w.y - b.y)) - b.radius - w.radius;
+    const gap = this.siteGap(w, b);
     if (gap >= 96) {
       // Far from the site (e.g. resuming a halted build): walk there. Progress
       // stays paused until the worker arrives (tickBuildings' nearby check). A
@@ -3387,6 +3393,24 @@ export class SimWorld {
     w.moving = false;
     w.path = [];
     w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x); // face the build site
+  }
+
+  /**
+   * How far a worker is from the EDGE of a building — chebyshev to its centre, less the
+   * building's own extent and the worker's body. Zero means "standing against it".
+   *
+   * Measured against the STAMPED FOOTPRINT where that is known (buildHalfExtent), not against
+   * `collision`: the collision column is a shove radius and is routinely SMALLER than the
+   * square the building actually occupies — a Barracks stamps 12×12 cells (192 either side of
+   * centre) and collides at 144. Since a builder now walks up to the stamp and stops
+   * (buildApproach), measuring from the smaller number put it "96 away" while it was pressed
+   * against the wall: assignBuilder decided it was still en route and sent it to the CENTRE,
+   * where it wedged inside the foundation and the build never started. Falls back to
+   * `collision` when the footprint is unknown, which is the behaviour this replaces.
+   */
+  private siteGap(w: SimUnit, b: SimUnit): number {
+    const half = Math.max(b.radius, this.buildHalfExtent(b.typeId));
+    return Math.max(Math.abs(w.x - b.x), Math.abs(w.y - b.y)) - half - w.radius;
   }
 
   /** Put a worker that is standing INSIDE the structure it has just started onto a free block
@@ -4248,6 +4272,21 @@ export class SimWorld {
     const rules = this.mineCrewOf(mine);
     if (!rules?.ring) return;
     if (!u.ringSlot) {
+      // Walk up to the RING, and only then take a mark. The mark it is heading FOR is the
+      // walk's target rather than the mine's centre, because the stations are pushed clear of
+      // the building's own 16×16-cell footprint — "within `Abgm`'s 200 of the centre" is
+      // ground no Acolyte can stand on. A whole ring's width of slack on the arrival, since
+      // the approach aims at the rim (pathToNode) and the nearest mark is a stride to one side
+      // of wherever that lands.
+      const want = this.freeRingSlot(mine, rules.max, u, rules.ring);
+      const [tx, ty] = want ? this.ringStation(mine, want, rules.max, rules.ring) : [mine.x, mine.y];
+      if (!this.arriveAtNode(u, tx, ty, u.radius + rules.ring, () => this.pathToNode(u))) {
+        u.working = false;
+        return;
+      }
+      // Claimed at ARRIVAL, not at the order (see the note above) — and re-asked here rather
+      // than reusing `want`, because the walk took time and the mark that was nearest when it
+      // set out may have been taken, or a nearer one freed, while it was on its way.
       const slot = this.freeRingSlot(mine, rules.max, u, rules.ring);
       if (!slot) {
         // "That gold mine can't support any more Acolytes." — the ring is full, so this one
@@ -4260,23 +4299,23 @@ export class SimWorld {
       u.ringSlot = slot;
     }
     const [sx, sy] = this.ringStation(mine, u.ringSlot, rules.max, rules.ring);
-    if (!this.arriveAtNode(u, sx, sy, u.radius + PATHING_CELL, () => this.pathTo(u, sx, sy))) {
-      u.working = false;
-      return;
-    }
-    // SNAP ONTO THE STATION. The ring is not a vague neighbourhood — WC3 paints a mark on the
-    // ground for every one of the five slots (`Abilities\Spells\Undead\UndeadMine\
-    // UndeadMineCircle.mdx`, see MapViewerScene.collectMineCircles) and an Acolyte kneels ON
-    // its mark. Left where its walk happened to stop, a crew reads as five Acolytes standing
-    // NEXT TO five circles, which is what the marks make impossible to miss. The station is
-    // walkable by construction (ringStation pushes out along its own ray until it is), so this
-    // is the last step of the approach rather than a teleport, and it happens once: from here
-    // on the worker is already there.
+    // STEP ONTO THE MARK, do not walk round to it. The station was chosen at arrival and it
+    // is the NEAREST free one (freeRingSlot), so it is a stride away on the arc the Acolyte
+    // walked up on — but a second walk leg aimed at it goes through the building's own
+    // 16×16-cell footprint, so the pathfinder took it the long way round the mine and past
+    // whoever was already kneeling. It is placed instead, which is also what the marks
+    // demand: WC3 paints a rune circle on every slot
+    // (`Abilities\Spells\Undead\UndeadMine\UndeadMineCircle.mdx`, see
+    // MapViewerScene.collectMineCircles) and an Acolyte kneels ON its mark, not beside it.
+    // The station is walkable by construction (ringStation pushes out along its own ray until
+    // it is), and this happens once: from here on the worker is already there.
     if (u.x !== sx || u.y !== sy) {
       this.unsettle(u);
       u.x = sx;
       u.y = sy;
       this.settle(u, false); // snap=false: the station IS the spot, not the nearest grid cell
+      u.atNode = true;
+      u.nodeRetries = 0;
     }
     u.working = true;
     u.moving = false;
@@ -4383,8 +4422,7 @@ export class SimWorld {
       this.stop(u.id); // repaired to full, or the building is gone
       return;
     }
-    const gap = Math.max(Math.abs(b.x - u.x), Math.abs(b.y - u.y)) - b.radius - u.radius;
-    if (u.moving && gap > 96) {
+    if (u.moving && this.siteGap(u, b) > 96) {
       r.active = false; // still walking to the site
       return;
     }
@@ -4439,13 +4477,10 @@ export class SimWorld {
           const builder = this.units.get(id)!;
           // Orc peon that has walked up to the site now vanishes inside to build
           // (hidden). Once inside it sits at the centre, so it reads as "present".
-          if (buildsFromInside(builder) && !builder.insideBuild && !builder.moving &&
-              Math.max(Math.abs(builder.x - u.x), Math.abs(builder.y - u.y)) - u.radius - builder.radius < 96) {
+          if (buildsFromInside(builder) && !builder.insideBuild && !builder.moving && this.siteGap(builder, u) < 96) {
             this.enterBuildSite(builder, u);
           }
-          const nearby =
-            !builder.moving &&
-            Math.max(Math.abs(builder.x - u.x), Math.abs(builder.y - u.y)) - u.radius - builder.radius < 96;
+          const nearby = !builder.moving && this.siteGap(builder, u) < 96;
           if (nearby) {
             if (!builder.insideBuild) builder.desiredFacing = Math.atan2(u.y - builder.y, u.x - builder.x); // face the site while hammering
             present++;
@@ -6641,7 +6676,37 @@ export class SimWorld {
     }
     u.buildPending = { defId, x, y, gold, lumber, paid };
     if (!paid) this.payPendingBuild(id);
-    if (!this.issueMove(id, x, y)) u.moving = false; // already at the site → raise now
+    const [ax, ay] = this.buildApproach(u, defId, x, y);
+    if (!this.issueMove(id, ax, ay)) u.moving = false; // already at the site → raise now
+  }
+
+  /**
+   * Where a worker walks to raise a building: the near EDGE of the site, not its centre.
+   *
+   * A builder sent to the centre is standing inside the foundation the moment it rises, and
+   * every race then deals with that differently and none of them well — the Peasant and the
+   * Acolyte are shoved back out (stepOffFootprint), which reads as the worker teleporting out
+   * of a building it is supposed to be laying down in front of itself. WC3 walks them up to
+   * the edge and they put it down from there.
+   *
+   * The stand-off is the site's own half-extent plus the worker's body, so it scales with
+   * what is being built: a 5×5 Farm is laid from much closer than a 12×12 Temple of the
+   * Damned. The DIRECTION is wherever the worker is standing when the order is given, which
+   * is the same "whichever side you came from" every other approach in the sim uses
+   * (mineApproach, depotApproach). Nothing enforces the side — the pathfinder may still round
+   * the site to reach the spot — and nothing needs to: stepOffFootprint stays as the backstop
+   * for the case the player creates deliberately, dropping the site on top of the worker.
+   */
+  private buildApproach(u: SimUnit, defId: string, x: number, y: number): [number, number] {
+    const half = this.buildHalfExtent(defId);
+    if (half <= 0) return [x, y]; // footprint unknown (a headless sim, a map's own texture)
+    const dx = u.x - x;
+    const dy = u.y - y;
+    const d = Math.hypot(dx, dy);
+    if (d < 1) return [x, y]; // standing on the site's own centre: there is no side to take
+    const reach = half + u.radius + PATHING_CELL;
+    if (d <= reach) return [u.x, u.y]; // already clear of it — don't walk backwards to a mark
+    return [x + (dx / d) * reach, y + (dy / d) * reach];
   }
 
   /**
@@ -8766,6 +8831,9 @@ export class SimWorld {
     // button out, so the click can't happen. We refuse with the error beep and no sentence
     // rather than borrow a line that means something else (Notdisabled is about movement).
     if (u.stunned || u.silenced) return SILENT_REFUSAL;
+    // …and neither does an ability whose upgrade is not researched (`[Aweb] Requires=Ruwb`).
+    // Same shape, same silence: WC3 greys the button, so there is nothing to say.
+    if (!this.techMeets(u.owner, ab.id)) return SILENT_REFUSAL;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     if (ab.cooldownLeft > 0) return "Cooldown"; // "Spell is not ready yet."
     if (u.mana < lvl.cost) return "Nomana"; // "Not enough mana."
@@ -8805,6 +8873,11 @@ export class SimWorld {
     if (u.isIllusion) return false;
     const ab = this.findAbility(u, code);
     if (!ab) return false;
+    // The upgrade gate, at the one door every route in shares — a player's click, an
+    // autocast, a JASS `IssueTargetOrder`, a networked command. The command card already
+    // refuses the press (the button is drawn unavailable), but a gate that only the UI keeps
+    // is not a gate: `[Aweb] Requires=Ruwb` has to mean the same thing to a trigger.
+    if (!this.techMeets(u.owner, ab.id)) return false;
     const def = this.abilities.get(ab.id);
     if (!def || def.target === "passive") return false;
     // Entangle pressed on a WALKING tree, which is the only card it is on (UPROOTED_ONLY).
@@ -9252,6 +9325,12 @@ export class SimWorld {
       // Arrows on would hunt down anything inside her acquisition range under a COMMANDED
       // attack — which outranks her guard post and would drag her off a march.
       if (isArrowOrb(ab.code)) continue;
+      // An ability whose RESEARCH is not in is not a standing order, it is a promise. The
+      // `auto` column arms a unit's autocast from birth (`[ucry] auto = Aweb`) and the
+      // upgrade is what unlocks the row — so a Crypt Fiend fresh from the Crypt would have
+      // been webbing gargoyles before the Web upgrade was ever paid for. The card shows the
+      // same thing from the other side: an unavailable button draws no autocast ring.
+      if (!this.techMeets(u.owner, ab.id)) continue;
       // The Moon Well's Replenish is autocast, but not through here: it is a POUR, held open
       // across seconds, and it is the caster's own tick that opens and closes it
       // (tickReplenish). Left in, this would re-issue a fresh cast every tick — and pick its
@@ -12655,10 +12734,16 @@ export class SimWorld {
     // Started here, on the tick it latches on, so the first 5 land 8 seconds later. (`atNode`
     // is latched by then, so the clock is not restarted by a wisp merely sitting there.)
     //
-    // A chopper is left alone: its timer is the swing cycle, and `chopSeq` plays the axe on
-    // the same tick the wood is credited — the wood arrives WITH the blow, which is exactly
-    // what the original shows.
-    if (w.deliversInPlace && !u.working) u.workT = w.chopPeriod;
+    // A chopper's clock is the SWING CYCLE, and it starts here too — on the tick it parks,
+    // with the first axe going up at once (`chopSeq`). What lands at the end of that cycle is
+    // the wood the swing cut: the two used to happen on the same tick, so a worker was
+    // credited as the axe went UP rather than when it came down, and the very first chip
+    // arrived before the arm had moved at all. `Dur1` (1.1s for `Ahar`, 1.35s for `Ahrl`) is
+    // the length of one blow, so paying at its end is what the column already says.
+    if (!u.working) {
+      u.workT = w.chopPeriod;
+      if (!w.deliversInPlace) u.chopSeq++; // the first swing goes up now; its wood lands later
+    }
     u.working = true;
     // …and a Wisp works from INSIDE the tree, not from a spot in front of it: it takes the
     // trunk's own position and hangs there. Everything that would ordinarily forbid standing
@@ -12677,7 +12762,6 @@ export class SimWorld {
     u.workT -= dt;
     if (u.workT > 0) return;
     u.workT = w.chopPeriod;
-    u.chopSeq++; // renderer re-triggers the chop swing so it stays in phase with the SFX
     // The load, and how it gets home. Everyone else fills a sack and walks it to a depot;
     // the Wisp has no sack and no walk — Wisp Harvest (`Awha`) pays straight into the stash
     // every interval, for as long as it is left alone in the tree. That is why night elf
@@ -12690,7 +12774,12 @@ export class SimWorld {
       if (this.harvestArt) this.spellEffects.push({ art: this.harvestArt, x: tree.x, y: tree.y, targetId: 0, z: 0 });
       return;
     }
+    // The blow that has been swinging for the last `chopPeriod` has just LANDED: the sound,
+    // the wood and the trunk's wobble all belong to this instant. The next axe goes up with
+    // them (`chopSeq`), so the clip the renderer re-triggers is the one whose wood arrives a
+    // cycle from now — see the swing-start above.
     this.chops.push(u.id); // axe landed → renderer plays the chop SFX
+    u.chopSeq++; // …and the next swing starts, in phase with the SFX
     this.dropOtherLoad(w, "lumber"); // the first chip of wood costs it the gold in its hands
     w.carryLumber = Math.min(w.lumberCapacity, w.carryLumber + w.lumberPerChop);
     if (w.damagesTree) {
