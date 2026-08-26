@@ -39,7 +39,9 @@ const ABILITIES = {
   Aro1: { id: "Aro1", code: "Aroo", target: "none", targetFlags: [], levelData: [lvl({ duration: 2.5, data: [1, 2, 0, 2] })] },
   Ambt: { id: "Ambt", code: "Ambt", target: "unit", autocast: true, targetFlags: ["air", "ground", "invu", "vuln", "friend", "organic"], levelData: [lvl({ castRange: 99999, area: 400, data: [2, 0.5, 10, 30, 1] })] },
   // Detonate: 50 mana burned, 225 to summons, in a 300 blast, and no allegiance flag at all.
-  Adtn: { id: "Adtn", code: "Adtn", target: "none", targetFlags: ["air", "ground", "ward", "invu", "vuln", "tree"], specialArt: "", targetArt: "", levelData: [lvl({ castRange: 100, area: 300, data: [50, 225] })] },
+  // `target: "point"` because TriggerData files `detonate` under `unitorderptarg` — the press
+  // aims it and `Rng1` = 100 is how close the Wisp walks before it goes off.
+  Adtn: { id: "Adtn", code: "Adtn", target: "point", targetFlags: ["air", "ground", "ward", "invu", "vuln", "tree"], specialArt: "", targetArt: "", levelData: [lvl({ castRange: 100, area: 300, data: [50, 225] })] },
   // Eat Tree: 500 hit points over 30 seconds, off a tree within 32 of the Ancient's hull.
   Aeat: { id: "Aeat", code: "Aeat", target: "point", targetFlags: ["tree"], specialArt: "", specialAttach: [], levelData: [lvl({ castRange: 32, duration: 30, data: [0.8, 2.5, 500], buffs: ["Beat"] })] },
   // The two repair rows that differ, and differ in exactly one flag.
@@ -701,6 +703,31 @@ console.log("Detonate (`Adtn`) — the Wisp spends itself");
   check("…but is dispelled anyway", world.units.get(32).buffs.length === 0);
   check("a summon takes 225", Math.abs(world.units.get(33).hp - 275) < 1, `${world.units.get(33)?.hp}`);
   check("outside the blast, nothing", world.units.get(34).mana === 200 && world.units.get(34).buffs.length === 1);
+}
+
+console.log("Detonate (`Adtn`) — the press AIMS it, it does not fire it");
+{
+  // `UI\\TriggerData.txt`: `UnitOrderDetonate=0,unitorderptarg,\`detonate\`` — a POINT order,
+  // and there is no `unitordernotarg` line for it the way there is for Roar and Cannibalize.
+  // So the button arms a cursor, the Wisp walks to within `Rng1` = 100 of the click, and only
+  // then spends itself. Firing it where the Wisp happened to be standing made the ability
+  // unusable for the one thing it is for: sending wisps INTO an enemy's casters.
+  const world = newWorld();
+  const detonate = [{ id: "Adtn", code: "Adtn", level: 1, cooldownLeft: 0, autocastOn: false }];
+  world.add(wisp(30, 2000, 2000), null, { abilities: detonate });
+  // A caster 700 away: outside the 300 blast from where the Wisp is standing, inside it once
+  // the Wisp has made the walk. Its mana is therefore the whole test.
+  world.add(base({ id: 31, typeId: "hkni", race: "human", x: 2700, y: 2000, hp: 500, maxHp: 500, mana: 200, maxMana: 200, speed: 0, radius: 16, name: "Caster" }));
+  check("the order is accepted", world.issueCast(30, "Adtn", 0, 2700, 2000));
+  check("…and nothing has gone off yet", world.units.has(30) && world.units.get(31).mana === 200);
+  world.tick(0.05);
+  const u = world.units.get(30);
+  check("the Wisp walks toward the click", !!u && u.x > 2000, `${u ? u.x.toFixed(0) : "gone"}`);
+  for (let t = 0; t < 10 / 0.05 && world.units.has(30); t++) world.tick(0.05);
+  check("…and spends itself when it gets there", !world.units.has(30));
+  // Centred on the WISP, not on the point — "an area around the Wisp" (Ubertip). Standing off
+  // by Rng1 + its own radius, the caster at the aim point is still well inside Area1 = 300.
+  check("the blast is centred on the Wisp", Math.abs(world.units.get(31).mana - 150) < 0.01, `${world.units.get(31).mana}`);
 }
 
 console.log("Eat Tree (`Aeat`) — the tree is the cost");

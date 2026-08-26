@@ -551,8 +551,24 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // (`Order=replenish`, Orderon/Orderoff make it autocast). See SimWorld.tickReplenish.
   Ambt: { target: "unit", autocast: true },
   // Detonate (`Order=detonate`) — the Wisp destroys itself, dispelling and burning mana in
-  // Area1. No target: it goes off where the wisp is standing.
-  Adtn: { target: "none" },
+  // Area1 (300) around wherever it is standing when it goes off.
+  //
+  // It is AIMED, and the game's own trigger table is what settles it: `UI\TriggerData.txt`
+  // files `detonate` under **`unitorderptarg`** — a point-target order —
+  //
+  //     UnitOrderDetonate=0,unitorderptarg,`detonate`,WESTRING_UNITORDERPTARG_DETONATE
+  //
+  // and it appears in NO `unitordernotarg` line, unlike the genuinely self-cast abilities
+  // beside it (`UnitOrderRoar=0,unitordernotarg,`roar``, `UnitOrderCannibalize`).
+  // AbilityData agrees from the other side: `Rng1` = 100 is a CAST RANGE, which a spell that
+  // fires where it stands has no use for, and `Area1` = 300 is the blast the cursor draws.
+  //
+  // So the press arms the AoE cursor, the wisp walks to within 100 of the click, and the
+  // blast is still centred on the WISP — "draining mana from each unit in an area around the
+  // Wisp" (NightElfAbilityStrings `[Adtn]` Ubertip), not around the point. That distinction
+  // is the whole ability: a pack of wisps sent at an enemy's casters arrives together, which
+  // is impossible if each one pops the instant the button is pressed.
+  Adtn: { target: "point" },
   // Eat Tree (`Order=eattree`) — an Ancient consumes a tree for a 500-hp heal over 30s.
   // Aimed at a POINT rather than at the tree itself: a tree is not a unit here, so the
   // handler takes the nearest one to the click that the Ancient can reach.

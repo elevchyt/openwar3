@@ -1930,7 +1930,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   //   DataA1  50   mana drained from every unit in the blast (`Dtn1`)
   //   DataB1  225  damage, to SUMMONED units only (`Dtn2`)
   //   Area1   300  the blast
+  //   Rng1    100  the cast range — Detonate is AIMED (see KNOWN_ABILITIES `Adtn`)
   //   targs1  air,ground,ward,invu,vuln,tree — no allegiance flag at all
+  //
+  // `ctx` is deliberately unread: the click only says where to WALK. The blast itself is
+  // "an area around the Wisp" (Ubertip), so it is centred on the caster's position at the
+  // moment it goes off, which after the walk is within Rng1 of the point.
   //
   // Two things follow from that target list and both are the ability, not an oversight.
   // There is no `enemy`, so Detonate burns FRIENDLY mana as readily as the enemy's — a wisp
