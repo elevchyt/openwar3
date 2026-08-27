@@ -1771,7 +1771,7 @@ export class RtsController {
         // Refused for everyone — a tower aimed past its range — says why and stays armed,
         // exactly as the same click on the MAP does (orderClickAt). The console is another
         // way to name a target, not another rule about what may be attacked.
-        if (!any && this.refuseAttackTarget(simId)) return true;
+        if (!any && this.refuseAttackTarget(simId, true)) return true;
         this.orderMode = null;
         if (any) this.ack(true);
         return true;
@@ -4070,7 +4070,7 @@ export class RtsController {
           this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius, this.byId.get(picked)?.moveHeight ?? 0);
           return true;
         }
-        if (this.refuseAttackTarget(picked)) return false; // a tower, pointed past its range
+        if (this.refuseAttackTarget(picked, true)) return false; // a tower pointed past its range, or an invulnerable target
       }
       // Nothing under the cursor: fall through to the attack-MOVE on the ground point below.
     }
@@ -4324,14 +4324,15 @@ export class RtsController {
     return false;
   }
 
-  /** Say why an attack order nobody took was refused, when the sim has a line for it. The
-   *  one that exists today is the TOWER's: it cannot walk to what you pointed at, so a target
-   *  outside its range answers "Target is outside range." rather than eating the click. Only
-   *  consulted once the order has already failed for everyone, so a mixed selection that DID
-   *  attack never hears it. Returns whether something was said. */
-  private refuseAttackTarget(targetId: number): boolean {
+  /** Say why an attack order nobody took was refused, when the sim has a line for it. Two
+   *  exist: the TOWER's — it cannot walk to what you pointed at, so a target outside its range
+   *  answers "Target is outside range." rather than eating the click — and the INVULNERABLE
+   *  target's, which only a deliberate Attack command hears (`commanded`; see attackRefusal).
+   *  Only consulted once the order has already failed for everyone, so a mixed selection that
+   *  DID attack never hears it. Returns whether something was said. */
+  private refuseAttackTarget(targetId: number, commanded = false): boolean {
     for (const id of this.selected) {
-      const err = this.sim.attackRefusal(id, targetId);
+      const err = this.sim.attackRefusal(id, targetId, commanded);
       if (err) {
         this.refuseOrder(err);
         return true;

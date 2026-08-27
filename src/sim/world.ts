@@ -6421,11 +6421,26 @@ export class SimWorld {
    * tower cannot walk to what you point it at, so a target outside its weapon range answers
    * "Target is outside range." rather than silently eating the click. Mirrors castRefusal /
    * itemUseError, which is where the rest of the card's refusals come from.
+   *
+   * `commanded` is the Attack COMMAND (the A-click / the card's Attack button), as opposed to
+   * a plain right-click. It is the only one that hears about an invulnerable target, and that
+   * asymmetry is the real game's: a right-click is a SMART order, and a smart click on
+   * something that cannot be attacked is simply not an attack — the cursor never turns red and
+   * the units walk over. Naming the target on purpose is a different act, and the engine keeps
+   * a line for exactly it.
    */
-  attackRefusal(id: number, targetId: number): string | null {
+  attackRefusal(id: number, targetId: number, commanded = false): string | null {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
-    if (!u || !t || !u.weapon || this.canPursue(u)) return null;
+    if (!u || !t) return null;
+    // "That target is invulnerable." — `Units\CommandStrings.txt` [Errors] `Notinvulnerable`.
+    // Ahead of every other gate here (and of the weapon/pursue tests below) because it is a
+    // fact about the TARGET rather than about this attacker: a Footman, a tower and a Wisp all
+    // get the same answer, so it never matters which member of the selection is asked. It is
+    // the spoken half of issueAttack's own `t.invulnerable` refusal (issue #26) — the order was
+    // already being turned down there, silently, and a click that vanishes reads as a bug.
+    if (commanded && t.invulnerable) return "Notinvulnerable";
+    if (!u.weapon || this.canPursue(u)) return null;
     // Nothing in the loadout may strike it at all (a ground tower pointed at a Gryphon):
     // that is a different refusal and not one this method has the line for — issueAttack
     // turns the order down on `canAttack` and the cursor never went red in the first place.

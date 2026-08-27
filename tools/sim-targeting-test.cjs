@@ -94,6 +94,18 @@ CASES.push(
   ["AEmb", MB, foeFootman, "Cantmanaburn", "but not a Footman, who has no mana at all"],
 );
 
+// Invulnerability — `Notinvulnerable` = "That target is invulnerable." It is checked ahead of
+// the flag list, so it answers for every ability alike rather than for the ones whose `targs1`
+// happens to name it, and it is one-directional: a hostile spell is refused, a friendly one is
+// not (the flags decide that half).
+const invuFoe = unit({ owner: 1, team: 1, invulnerable: true });
+const invuAlly = unit({ owner: 0, team: 0, invulnerable: true, hp: 40 }); // hurt, so the heal has work to do
+CASES.push(
+  ["AHtb", "air,ground,debris,enemy,neutral,organic", invuFoe, "Notinvulnerable", "no Storm Bolt on an invulnerable enemy"],
+  ["AUfn", "ground,enemy,air,neutral,organic", invuFoe, "Notinvulnerable", "…nor a Frost Nova"],
+  ["Ahea", "air,ground,friend,vuln,invu,self,organic,nonancient,neutral", invuAlly, null, "a friendly Heal still reaches one"],
+);
+
 let failed = 0;
 for (const [code, targs, target, want, what] of CASES) {
   const flags = targs.split(",").map((s) => s.trim()).filter((s) => s && s !== "_");
@@ -103,5 +115,26 @@ for (const [code, targs, target, want, what] of CASES) {
   console.log(`${ok ? "ok  " : "FAIL"}  ${code}  ${what}\n        want ${want ?? "(allowed)"}, got ${got ?? "(allowed)"}`);
 }
 
-console.log(`\n${CASES.length - failed}/${CASES.length} passed`);
+// The ATTACK half of the same rule (SimWorld.attackRefusal). issueAttack has always turned an
+// attack on an invulnerable target down; what is checked here is that the refusal now has WORDS
+// — and that only a deliberate Attack command hears them. A right-click is a smart order, and a
+// smart click on something that cannot be attacked is simply not an attack.
+const swinger = unit({
+  owner: 0, team: 0, abilities: [], baseSpeed: 270, uprooted: false,
+  weapon: { enabled: true, targets: ["ground", "air", "structure"], range: 90, ranged: false },
+});
+const ATTACK_CASES = [
+  [invuFoe, true, "Notinvulnerable", "the Attack command on an invulnerable enemy says so"],
+  [invuFoe, false, null, "a right-click on the same one says nothing"],
+  [enemyGround, true, null, "and a vulnerable enemy is attacked as before"],
+];
+for (const [target, commanded, want, what] of ATTACK_CASES) {
+  const got = world.attackRefusal(swinger.id, target.id, commanded);
+  const ok = got === want;
+  if (!ok) failed++;
+  console.log(`${ok ? "ok  " : "FAIL"}  attack  ${what}\n        want ${want ?? "(allowed)"}, got ${got ?? "(allowed)"}`);
+}
+
+const total = CASES.length + ATTACK_CASES.length;
+console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
