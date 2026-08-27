@@ -366,7 +366,10 @@ body.in-game .menu-panel { display: none; }
   position: absolute;
   /* left / bottom / width are set in ui/hud.ts */
   pointer-events: none;
-  z-index: 4;
+  /* One above the rest of the HUD's world-layer widgets (all z-index 4), because the column
+     runs down the hero bar's own strip (CHAT_AREA) and chat has to read over a portrait
+     rather than under it. */
+  z-index: 5;
 }
 .hud-chatlog {
   display: flex;
