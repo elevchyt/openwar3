@@ -130,6 +130,54 @@ console.log("\ndeath files the hero, it does not lose it");
   check("a CREEP hero is not filed — there is no altar behind it", world.fallen.has(8), false);
 }
 
+console.log("\nthe light a hero comes back in is picked by its race");
+{
+  // `[Arev]` "Revive Hero" carries FIVE models in one comma-separated `Targetart`, indexed by
+  // race with Demon on the end. An off-by-one here is invisible until somebody notices their
+  // Blademaster rising in a human light, so the mapping is pinned rather than eyeballed.
+  const ARTS = [
+    "Abilities\\Spells\\Human\\ReviveHuman\\ReviveHuman.mdx",
+    "Abilities\\Spells\\Orc\\ReviveOrc\\ReviveOrc.mdx",
+    "Abilities\\Spells\\Undead\\ReviveUndead\\ReviveUndead.mdx",
+    "Abilities\\Spells\\NightElf\\ReviveNightElf\\ReviveNightElf.mdx",
+    "Abilities\\Spells\\Demon\\ReviveDemon\\ReviveDemon.mdx",
+  ];
+  const abilities = { get: (id) => (id === "Arev" ? { targetArts: ARTS } : undefined) };
+
+  function burstFor(race) {
+    const grid = new PathingGrid({ width: 64, height: 64, flags: new Uint8Array(64 * 64) }, [0, 0]);
+    const world = new SimWorld(grid, 1, abilities);
+    const u = {
+      id: 3, owner: 0, team: 0, typeId: "X", race, isHero: true, properName: "",
+      level: 1, xp: 0, skillPoints: 0, abilities: [], inventory: [],
+      baseStr: 10, baseAgi: 10, baseInt: 10, baseMaxHp: 100,
+      hp: 100, maxHp: 100, mana: 0, maxMana: 0, x: 100, y: 200,
+      buffs: [], weapons: [], orderQueue: [], path: [], footprint: 0, hasReservation: false,
+      building: null, worker: null, order: "idle", targetId: null, moving: false,
+      isCreep: false, neutralPassive: false, isIllusion: false, radius: 16, facing: 0,
+    };
+    world.units.set(u.id, u);
+    world.fallen.set(u.id, {
+      id: u.id, owner: 0, team: 0, typeId: "X", properName: "", level: 1, xp: 0, skillPoints: 0,
+      abilities: [], inventory: [], baseStr: 10, baseAgi: 10, baseInt: 10, baseMaxHp: 100,
+      x: 0, y: 0, revivingAt: 0,
+    });
+    world.reviveFallenHero(u.id, u.id, "altar");
+    return world.drainSpellEffects();
+  }
+
+  const human = burstFor("human");
+  check("a human hero rises in ReviveHuman", human.map((e) => e.art), [ARTS[0]]);
+  check("…played ON the hero, so it walks off still glowing", human[0].targetId, 3);
+  check("…and asks for the model's own sound", human[0].sound, true);
+  check("an orc hero rises in ReviveOrc", burstFor("orc").map((e) => e.art), [ARTS[1]]);
+  check("an undead hero rises in ReviveUndead", burstFor("undead").map((e) => e.art), [ARTS[2]]);
+  check("a night elf hero rises in ReviveNightElf", burstFor("nightelf").map((e) => e.art), [ARTS[3]]);
+  // A Tavern's Naga or Pandaren reads `race` = "creeps", which the five-model list has no
+  // member for — it falls back rather than coming back in silence and darkness.
+  check("a neutral hero falls back to the first entry", burstFor("creeps").map((e) => e.art), [ARTS[0]]);
+}
+
 console.log("\nan enemy building's status is the owner's");
 {
   // The rule, and the pair that makes it not a guess: the same file answers the same question

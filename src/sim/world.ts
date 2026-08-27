@@ -8,6 +8,7 @@ import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, 
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { slotMissileArt, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
+import { RACE_INDEX, type PlayableRace } from "../data/races";
 import { type UpgradeRegistry } from "../data/upgrades";
 import { TechState } from "./tech";
 import {
@@ -3493,7 +3494,47 @@ export class SimWorld {
     const vitals = heroReviveVitals(mode, u.maxHp, u.maxMana, this.unitReg?.get(u.typeId)?.manaStart ?? 0);
     u.hp = Math.min(u.maxHp, vitals.hp);
     u.mana = vitals.mana;
+    this.emitReviveFx(u);
     return true;
+  }
+
+  /**
+   * The light a hero comes back in — `[Arev]` "Revive Hero"'s own `Targetart`, picked by the
+   * hero's RACE.
+   *
+   * The ability is not on any unit's `abilList` (an Altar carries only `Abds`); it is the
+   * engine's, which is why it lives in `Units\CommonAbilityFunc.txt` with `Order=revive` and
+   * why the art has to be fetched by id rather than found on the building. Its five models are
+   * indexed in `RACE_INDEX`'s order with Demon on the end, so the lookup is that table minus
+   * one — a Blademaster rises in `ReviveOrc.mdx`, an Archmage in `ReviveHuman.mdx`.
+   *
+   * The SOUND rides the model and needs no name here: `sound: true` sends the renderer through
+   * `playSpellSound`, which resolves the model's own SND event through AnimLookups/AnimSounds
+   * (`ReviveHuman` → `Abilities\Spells\Human\ReviveHuman\ReviveHuman.wav`) and, failing
+   * that, finds the WAV sitting beside the model in its own folder. Both routes land on the
+   * same four files, and neither is a path typed out here.
+   *
+   * `targetId` so the burst RIDES the hero: `Targetart` is art worn by the thing it is played
+   * on, and a revived hero walks off toward the altar's rally point while it is still playing.
+   *
+   * A hero whose race is none of the four — a Tavern's Naga or Pandaren, whose `race` column
+   * reads "creeps" — falls back to the first entry rather than going without: the list has no
+   * neutral member (its fifth is Demon, which nothing a player revives is), and a burst of the
+   * wrong colour is a smaller wrong than a hero appearing out of nothing.
+   *
+   * **A TAVERN gets this same art, which is a deliberate departure from the data.** The
+   * Tavern's own ability is `[Aawa]` "Revive Hero Instantly" (`[ntav] abilList=Ane2,Avul,Aawa`),
+   * and its `Targetart` is one race-neutral `Abilities\Spells\Other\Awaken\Awaken.mdl` — for
+   * which the install ships no WAV at all, so waking a hero there would be a different effect
+   * and a silent one. The race burst was asked for at both buildings; switching the Tavern back
+   * to its own art is `mode === "tavern" ? "Aawa" : "Arev"` on the line below.
+   */
+  private emitReviveFx(u: SimUnit): void {
+    const arts = this.abilities?.get("Arev")?.targetArts ?? [];
+    if (!arts.length) return;
+    const i = (RACE_INDEX[u.race as PlayableRace] ?? 1) - 1;
+    const art = arts[i] ?? arts[0];
+    if (art) this.spellEffects.push({ art, x: u.x, y: u.y, targetId: u.id, z: 0, sound: true });
   }
 
   /** Queue an upgrade for research at a building. Timing only — the caller has already

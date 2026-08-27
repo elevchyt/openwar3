@@ -162,6 +162,24 @@ export interface AbilityDef {
    *  wave spells: their missile is the spell, so its speed is how long the line takes to
    *  sweep and therefore when each unit along it is struck. 0 when the row names none. */
   missileSpeed: number;
+  /**
+   * EVERY model in `Targetart`, in the file's own order — `targetArt` is this list's first
+   * entry and nothing else changed.
+   *
+   * The field is a comma-separated LIST for a handful of abilities, and for two of them the
+   * order is a lookup rather than a set to play together. `[Arev]` "Revive Hero" is the clear
+   * case, and it is why this exists:
+   *
+   *     Targetart=…\Human\ReviveHuman\ReviveHuman.mdl,…\Orc\ReviveOrc\ReviveOrc.mdl,
+   *               …\Undead\ReviveUndead\ReviveUndead.mdl,…\NightElf\ReviveNightElf\…,
+   *               …\Demon\ReviveDemon\ReviveDemon.mdl
+   *
+   * — five models indexed BY RACE, in `RACE_INDEX`'s own order with Demon on the end. A hero
+   * standing back up at its altar wears the one for its race, so reading only the first (which
+   * is what `mdlPath` does, and rightly, for every other field) would raise every race's hero
+   * in a human light. See `SimWorld.reviveFallenHero`.
+   */
+  targetArts: string[];
   targetArt: string; // effect attached to the target (Holy Light burst, Heal); for an
   //                    aura this is the BIG model shown under its OWNER only.
   /** `Targetattach` — the attachment point `targetArt` rides, in the same token form as a
@@ -822,6 +840,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       levelData,
       missileArt: mdlPath(f ? str(f, "Missileart") : ""),
       missileSpeed: f ? Number(str(f, "Missilespeed")) || 0 : 0,
+      targetArts: mdlPathList(f ? str(f, "TargetArt") : ""),
       targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
       targetAttach: (f ? str(f, "Targetattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       casterArt: mdlPath(f ? str(f, "Casterart") : ""),
@@ -938,6 +957,7 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     levelData: [],
     missileArt: "",
     missileSpeed: 0,
+    targetArts: [],
     targetArt: "",
     targetAttach: [],
     casterArt: "",
@@ -1103,6 +1123,12 @@ function buffFxOf(func: MappedData, buffId: string): BuffFx[] {
 
 // Effect-art fields are ".mdl" model paths (comma-lists sometimes). Take the
 // first, normalise to the compiled ".mdx" the MPQ actually ships.
+/** Every model in a comma-separated art field, normalised the same way `mdlPath` normalises
+ *  the first one. See `AbilityDef.targetArts` for the field that needs the whole list. */
+export function mdlPathList(v: string): string[] {
+  return (v || "").split(",").map((p) => mdlPath(p)).filter(Boolean);
+}
+
 export function mdlPath(v: string): string {
   if (!v) return "";
   const pick = v.split(",")[0]?.trim();
