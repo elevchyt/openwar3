@@ -17,7 +17,7 @@
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
 import { rawcodeToInt } from "./lexer";
-import { Runtime, JassArray, ThreadAbort, unitStateHolds, type BoolExpr, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
+import { Runtime, JassArray, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
@@ -1352,6 +1352,32 @@ export class Interpreter {
       if (!trig || !u) continue;
       const handle = jHandle(u.handleId, "unit");
       this.fireTrigger(trig, this.withTrigger(new Map([["TriggerUnit", handle]]), trig));
+    }
+  }
+
+  /** Pump player-state threshold events — `TriggerRegisterPlayerStateEvent(trig, p,
+   *  PLAYER_STATE_RESOURCE_FOOD_USED, EQUAL, 0)`, i.e. EVENT_PLAYER_STATE_LIMIT. The
+   *  player-scoped twin of `pumpUnitStates` in every respect: polled per tick because nothing
+   *  in the sim announces "this player's food changed", fired on the RISING EDGE so it fires
+   *  once per crossing, and seeded at registration so a comparison that already holds when the
+   *  trigger is created is not news.
+   *
+   *  The edge is what makes it usable as a wave clock. Azure Tower Defense hangs its whole
+   *  round loop on "Player(10)'s food used == 0" — every creep dead — and that is true for the
+   *  entire gap between waves too, so a level-triggered version would re-run the round trigger
+   *  every tick of the countdown it just started. (The map guards that case itself with a
+   *  `udg_Spawner` flag, which is the tell that Blizzard's own designers expected an edge.) */
+  pumpPlayerStates(): void {
+    for (const reg of this.rt.triggerRegs) {
+      if (reg.kind !== "playerState") continue;
+      const now = playerStateHolds(this.rt, reg);
+      const was = reg.edge ?? now;
+      reg.edge = now;
+      if (!now || was) continue; // not a fresh crossing
+      const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+      const p = this.rt.data<JassPlayer>(reg.params[0] ?? JNULL);
+      if (!trig || !p) continue;
+      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerPlayer", this.rt.playerHandle(p.index)]]), trig));
     }
   }
 

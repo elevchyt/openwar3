@@ -14,7 +14,7 @@
 // the interpreter (it needs to call user functions) — see Interpreter.fireTrigger /
 // advanceTime. Registration here + firing there keeps natives free of the eval loop.
 
-import { ThreadAbort, unitStateHolds, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj, type TriggerReg } from "../runtime";
+import { playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj, type TriggerReg } from "../runtime";
 import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -103,6 +103,20 @@ export function registerEventNatives(rt: Runtime): void {
     if (!t) return jHandle(0, "event");
     const reg: TriggerReg = { kind: "unitState", trigId: t.handleId, params: a.slice(1) };
     reg.edge = unitStateHolds(c.rt, reg);
+    c.rt.triggerRegs.push(reg);
+    return jHandle(0, "event");
+  });
+  // TriggerRegisterPlayerStateEvent — EVENT_PLAYER_STATE_LIMIT, the player-scoped twin of the
+  // above and polled for the same reason (nothing in the sim announces "food used changed").
+  // Seeding the edge at registration matters even more here than for a unit: a map registers
+  // "Player(10)'s food used EQUALS 0" during init, when it trivially already holds, so without
+  // the seed the trigger would fire once at map start — a tower defence would run its round-1
+  // countdown before its own opening timer ever spawned anything.
+  def(rt, "TriggerRegisterPlayerStateEvent", (c, a) => {
+    const t = trig(c, a[0]);
+    if (!t) return jHandle(0, "event");
+    const reg: TriggerReg = { kind: "playerState", trigId: t.handleId, params: a.slice(1) };
+    reg.edge = playerStateHolds(c.rt, reg);
     c.rt.triggerRegs.push(reg);
     return jHandle(0, "event");
   });

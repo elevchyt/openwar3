@@ -28,7 +28,7 @@ const { join } = require("node:path");
 const { existsSync } = require("node:fs");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { buildAnimSet, animPropsFor } = require(join(REPO, ".sim-build", "src", "render", "unitAnims.js"));
+const { buildAnimSet, animPropsFor, findBirthFields } = require(join(REPO, ".sim-build", "src", "render", "unitAnims.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -67,6 +67,21 @@ const FALLBACK = {
   // A night elf building that is NOT an Ancient: no alternate half at all, and its production
   // pose is the plain "Stand Work" every other race's buildings use.
   "buildings\\nightelf\\ChimaeraRoost\\ChimaeraRoost.mdx": ["Birth", "stand", "Stand Work", "Portrait", "Death"],
+  // The four human towers in one file. Note there is no plain "Attack" ANYWHERE — every tier's
+  // armed idle and its swing are one and the same clip — and that the tier tokens are reordered
+  // from tier to tier, with a double space in the Cannon Tower's.
+  "buildings\\human\\HumanTower\\HumanTower.mdx": [
+    "Birth", "Stand Ready Attack", "Portrait", "Birth Upgrade First Second third",
+    "Stand Upgrade First Ready Attack", "Portrait Upgrade First", "Attack Stand  Ready Upgrade Second",
+    "Stand Upgrade Second", "Portrait Upgrade Second", "Stand Upgrade Third Attack Ready",
+    "Portrait Upgrade Third", "Death", "Decay",
+  ],
+  // A creep whose ONLY swing carries a tier token no unit in the game asks for. Nothing in
+  // NeutralUnitFunc.txt sets `Animprops=upgrade`, so if a propped clip were blanked outright
+  // for the base tier, every furbolg would be left swinging its "Attack spell" cast.
+  "units\\creeps\\Furbolg\\Furbolg.mdx": [
+    "Walk", "Stand", "Death", "Attack upgrade", "Attack spell", "StandHit", "Decay Flesh", "Decay Bone",
+  ],
 };
 
 /** A model's sequence names, read from the install when this machine has one. */
@@ -189,6 +204,68 @@ console.log("a night elf building that is NOT an Ancient has one half and one wo
   check("it stands", name(a.stand).toLowerCase(), "stand"); // the model's own casing varies
   check("…and produces in the plain \"Stand Work\"", name(a.standWork), "Stand Work");
   check("…with no morph to play", a.morph, -1);
+}
+
+console.log("the BASE tier is a tier: it does not borrow the ranks above it");
+{
+  // A rank-1 structure has no `Animprops` line at all (hwtw, htow, uzig, etol …), which is not
+  // "no opinion" — its clips are the ones authored WITHOUT tokens. Reading the empty list as
+  // "nothing to filter" let a Scout Tower see all four towers' clips at once; since
+  // HumanTower.mdx authors no plain "Attack", the swing picker's loose fallback swept up every
+  // name containing "attack" and rolled one per shot, so the tower popped into the Guard,
+  // Cannon and Arcane towers and back at every blow. Reported on Azure Tower Defense, whose
+  // "Azure Guard Tower" is a `hwtw` override; the stock Scout Tower did it too.
+  const HT = "buildings\\human\\HumanTower\\HumanTower.mdx";
+  const seqs = sequences(HT).map((name) => ({ name }));
+  const name = (i) => (i >= 0 && i < seqs.length ? seqs[i].name : null);
+  const tower = (props) => buildAnimSet(seqs, props);
+  check("the model still authors no plain Attack for anyone",
+    sequences(HT).filter((n) => /^attack(\s*-?\s*\d+)?\s*$/i.test(n)), []);
+  check("…and still names four attack-ish clips, one per tier",
+    sequences(HT).filter((n) => /attack/i.test(n)).length, 4);
+
+  const scout = tower([]); // hwtw — no Animprops
+  check("the Scout Tower has exactly ONE swing", scout.attackVariants.map(name), ["Stand Ready Attack"]);
+  check("…which is its own stand clip, so rts.ts loops it instead of re-triggering",
+    scout.standVariants.includes(scout.attackVariants[0]), true);
+  // findBirthFields reads the same filter, so the construction clip is picked per tier too.
+  const birth = (props) => name(findBirthFields(seqs, props).birthSeq);
+  check("…and it raises through its own untokened Birth", birth([]), "Birth");
+
+  // The three upgraded tiers were already confined to their own clips; they must stay so.
+  check("the Guard Tower swings its own", tower(["upgrade", "first"]).attackVariants.map(name),
+    ["Stand Upgrade First Ready Attack"]);
+  check("the Cannon Tower swings its own", tower(["upgrade", "second"]).attackVariants.map(name),
+    ["Attack Stand  Ready Upgrade Second"]);
+  check("the Arcane Tower swings its own", tower(["upgrade", "third"]).attackVariants.map(name),
+    ["Stand Upgrade Third Attack Ready"]);
+  check("…and all three still share the one Birth clip authored for them",
+    [["upgrade", "first"], ["upgrade", "second"], ["upgrade", "third"]].map(birth),
+    ["Birth Upgrade First Second third", "Birth Upgrade First Second third", "Birth Upgrade First Second third"]);
+}
+
+console.log("…but a propped clip the base tier has no answer for is still ITS clip");
+{
+  // The other half of the rule: props NARROW a choice, they do not leave a unit with nothing.
+  // Blanking every propped clip outright is the tempting fix and it breaks three models —
+  // hence the "loses only to a prop-free clip naming the same action" test.
+  const fur = "units\\creeps\\Furbolg\\Furbolg.mdx";
+  const fseqs = sequences(fur).map((name) => ({ name }));
+  const fname = (i) => (i >= 0 && i < fseqs.length ? fseqs[i].name : null);
+  check("nothing sets Animprops=upgrade, so the furbolg's tokened swing is all it has",
+    fname(buildAnimSet(fseqs, []).attack), "Attack upgrade");
+  check("…and its cast is still kept out of the rotation",
+    buildAnimSet(fseqs, []).attackVariants.map(fname), ["Attack upgrade"]);
+
+  // The Tree of Life (etol) carries no Animprops either, and its ONLY non-alternate stand is
+  // tokened for the two ranks above it. It must keep it — a base tier with no stand is never
+  // the answer. (The tiered/alternate readings of the same model are checked above.)
+  const TOL = "buildings\\nightelf\\TreeofLife\\TreeofLife.mdx";
+  const tseqs = sequences(TOL).map((name) => ({ name }));
+  const tname = (i) => (i >= 0 && i < tseqs.length ? tseqs[i].name : null);
+  const life = buildAnimSet(tseqs, animPropsFor({ animProps: [] }, false));
+  check("the Tree of Life still stands", tname(life.stand), "Stand Upgrade First Second");
+  check("…and dies its OWN death, not the planted half's", tname(life.death), "Death");
 }
 
 console.log(failed === 0 ? "\nancient animations: all checks passed" : `\nancient animations: ${failed} FAILED`);

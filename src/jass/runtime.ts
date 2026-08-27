@@ -1629,6 +1629,30 @@ export function unitStateHolds(rt: Runtime, reg: TriggerReg): boolean {
   return compareLimit(rt.enumIndex(reg.params[2] ?? JNULL), value, limit.k === "real" || limit.k === "int" ? limit.n : 0);
 }
 
+/** Does a player-state registration's comparison hold RIGHT NOW? (`TriggerRegisterPlayerStateEvent`
+ *  params: player, playerstate, limitop, limitval.) The mirror of `unitStateHolds`, and polled for
+ *  the same reason — nothing in the sim announces "this player's food changed".
+ *
+ *  This is how a TOWER DEFENCE knows a wave is over. Azure Tower Defense's whole round loop is
+ *
+ *      TriggerRegisterPlayerStateEvent( gg_trg_Monster_Spawning, Player(10),
+ *                                       PLAYER_STATE_RESOURCE_FOOD_USED, EQUAL, 0.00 )
+ *
+ *  — the monster player's food used falling back to zero IS "every creep is dead, start the next
+ *  round". With the native missing the registration was silently dropped and the map stopped
+ *  dead after wave 1, which is exactly what it looks like: the countdown for round 2 never
+ *  starts because nothing ever runs the trigger that starts it.
+ *
+ *  `getPlayerState` is the same hook GetPlayerState reads, so the poll and the script agree on
+ *  the number by construction (jassHooks: 1 gold, 2 lumber, 4 food cap, 5 food used). */
+export function playerStateHolds(rt: Runtime, reg: TriggerReg): boolean {
+  const p = rt.data<JassPlayer>(reg.params[0] ?? JNULL);
+  if (!p) return false;
+  const value = rt.hooks?.getPlayerState?.(p.index, rt.enumIndex(reg.params[1] ?? JNULL)) ?? 0;
+  const limit = reg.params[3] ?? JNULL;
+  return compareLimit(rt.enumIndex(reg.params[2] ?? JNULL), value, limit.k === "real" || limit.k === "int" ? limit.n : 0);
+}
+
 /** Context handed to every native: the runtime plus a way to call back into JASS
  *  (needed by ConditionalTriggerExecute, ForForce, TriggerEvaluate, Filter, …). */
 export interface NativeCtx {

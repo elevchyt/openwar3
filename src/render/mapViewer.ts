@@ -159,6 +159,15 @@ function randomSeed(): number {
   return 1 + Math.floor(Math.random() * 2147483645);
 }
 
+// Camera zoom limits (world units of camera distance), at module scope so an instance field can
+// open on them — a `static readonly` declared further down the class is not yet initialized when
+// the instance initializers run. See MapViewerScene.ZOOM_MIN/ZOOM_MAX/MELEE_START, which alias
+// these and carry the reasoning.
+const ZOOM_MIN_DISTANCE = 1250;
+const ZOOM_MAX_DISTANCE = 2400;
+/** The distance a match OPENS on: the far end of the wheel (zoom stop 0). */
+const OPENING_DISTANCE = ZOOM_MAX_DISTANCE;
+
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
 const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // hero level-up nova
 // Floating combat text (see CombatTextTags). A crit's number is red for EVERYONE — it is not a
@@ -780,7 +789,7 @@ export class MapViewerScene {
    * The camera's other fields have no player-facing control (see the block above), so for
    * those "the game camera" really is WC3's own defaults.
    */
-  private playerDistance: number = CAMERA.DEFAULT_DISTANCE;
+  private playerDistance: number = OPENING_DISTANCE;
   /** …and the tilt that goes with it. The wheel is the only thing that moves the game camera's
    *  angle of attack (see pitchForZoomStep), so the player's zoom is a distance AND a pitch, and
    *  both have to survive a cinematic for ResetToGameCamera to hand back the view you had. */
@@ -788,7 +797,7 @@ export class MapViewerScene {
   // The wheel's in-flight ease (see updatePlayerCamera). A notch does not jump the camera: it
   // starts a short tween from wherever the view currently is to the new step's distance+pitch,
   // so notching four times in a second reads as one smooth dolly rather than four snaps.
-  private zoomFromDistance: number = CAMERA.DEFAULT_DISTANCE;
+  private zoomFromDistance: number = OPENING_DISTANCE;
   private zoomFromPitch = MapViewerScene.GAME_PITCH;
   private zoomT = 1; // 0…1 through the current step's ease; 1 = settled
   /** Insert/Delete's yaw offset, in radians, CURRENTLY applied to `yaw`. Kept as a separate
@@ -922,6 +931,9 @@ export class MapViewerScene {
   /** Does the script watch a unit-state threshold (EVENT_UNIT_STATE_LIMIT)? That event is
    *  polled per tick rather than raised by the sim, so it needs its own gate (7.17). */
   private scriptWatchesUnitState = false;
+  /** Does the script watch a player-state threshold (EVENT_PLAYER_STATE_LIMIT)? Polled per tick
+   *  like the unit-state one, and the event a tower defence's round loop hangs on. */
+  private scriptWatchesPlayerState = false;
   /** Does the script watch SELECTION (EVENT_PLAYER_UNIT_SELECTED/…)? Raised by the RTS's own
    *  diff of the local selection rather than by the sim — see pumpSelectionEvents. */
   private scriptWatchesSelection = false;
@@ -1373,8 +1385,8 @@ export class MapViewerScene {
     this.zOffset = 0;
     this.lastFocus = null;
     this.groundSnap = true;
-    // Start near gameplay zoom rather than a whole-map overview — far better
-    // draw performance and closer to WC3's default camera.
+    // Open on the far end of the wheel (MELEE_START = ZOOM_MAX) — still a gameplay zoom, not a
+    // whole-map overview, so the draw cost stays bounded by the same ladder the wheel uses.
     this.distance = this.playerDistance = MapViewerScene.MELEE_START;
     this.pitch = this.playerPitch = MapViewerScene.GAME_PITCH; // …and its overhead angle
     this.zoomT = 1; // no wheel ease in flight across a map load
@@ -1897,7 +1909,7 @@ export class MapViewerScene {
     // Whose placed units hold their ground (see SimUnit.guarding). Set before seeding, since
     // that is when a unit is told whether it has a post.
     this.rts!.setAiPlayers(config.slots.filter((s) => s.controller === "computer").map((s) => s.id));
-    // Open on the local player's base at gameplay zoom.
+    // Open on the local player's base, at the wheel's far end (see MELEE_START).
     const home = config.slots.find((s) => s.id === this.localPlayer);
     if (home) {
       this.target[0] = home.startX;
@@ -2793,6 +2805,10 @@ export class MapViewerScene {
     this.scriptWatchesSelection = any("playerUnitEvent", 24, 25) || any("unitEvent", 57, 58);
     // EVENT_UNIT_STATE_LIMIT is polled, not raised by the sim (see pumpUnitStates).
     this.scriptWatchesUnitState = rt.triggerRegs.some((r) => r.kind === "unitState");
+    // …and EVENT_PLAYER_STATE_LIMIT the same way (see pumpPlayerStates). A tower defence's
+    // wave clock is this event and nothing else: "Player(10)'s food used == 0" is how Azure
+    // Tower Defense learns the round is over and starts the next one.
+    this.scriptWatchesPlayerState = rt.triggerRegs.some((r) => r.kind === "playerState");
     this.scriptRegCount = rt.triggerRegs.length;
 
     // A creep whose DEATH the script watches drops its loot through the SCRIPT, not through
@@ -2871,6 +2887,8 @@ export class MapViewerScene {
       // Unit-state thresholds (EVENT_UNIT_STATE_LIMIT) are POLLED — nothing in the sim
       // raises "life dropped below 100", so the interpreter tests each watched unit itself.
       if (this.scriptWatchesUnitState) engine.interp.pumpUnitStates();
+      // Player-resource thresholds (EVENT_PLAYER_STATE_LIMIT) — polled for the same reason.
+      if (this.scriptWatchesPlayerState) engine.interp.pumpPlayerStates();
       // Enter/leave-region — only snapshot the world if some trigger watches a region.
       if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) {
         engine.interp.pumpRegions(this.rts ? unitSnapshots(this.rts.simView) : []);
@@ -5670,13 +5688,24 @@ export class MapViewerScene {
   private static readonly HOVER_RING_DIM = 0.78;
   // Camera zoom limits (world units of camera distance). A distance means what it means in the
   // real game only because the lens does too (GAME_FOV, measured) — the two are one knob: what
-  // you see is distance × tan(fov/2). A match opens on WC3's own default distance, 1650
-  // (bj_CAMERA_DEFAULT_DISTANCE), which through the 32° lens IS the real client's opening view;
-  // the wheel then runs from a close 1250 out to 2400. (WC3's own wheel stops are not documented
-  // anywhere we trust, so the range is ours; the DEFAULT it opens on is not.)
-  private static readonly ZOOM_MIN = 1250;
-  private static readonly ZOOM_MAX = 2400;
-  private static readonly MELEE_START = CAMERA.DEFAULT_DISTANCE;
+  // you see is distance × tan(fov/2). The wheel runs from a close 1250 out to 2400. (WC3's own
+  // wheel stops are not documented anywhere we trust, so the range is ours; the distance the real
+  // client OPENS on is not — it is bj_CAMERA_DEFAULT_DISTANCE, 1650, which through the 32° lens
+  // is exactly the real client's opening view. We deliberately open elsewhere: see MELEE_START.)
+  private static readonly ZOOM_MIN = ZOOM_MIN_DISTANCE;
+  private static readonly ZOOM_MAX = ZOOM_MAX_DISTANCE;
+  /** What a match OPENS on — the far end of the wheel, i.e. zoom stop 0.
+   *
+   *  This is a deliberate departure from the real client, which opens on
+   *  `bj_CAMERA_DEFAULT_DISTANCE` (1650, rung 4). Ours opens all the way out because that is the
+   *  view the developer asked for; the constant is still 1650 and still means what it means, so
+   *  `SetCameraField(CAMERA_FIELD_TARGET_DISTANCE, …)` and every map camera are untouched — only
+   *  the rung the PLAYER's own wheel starts on moves. Expressed as ZOOM_MAX rather than as the
+   *  number 2400 so it stays pinned to the end of the ladder if the range is ever re-tuned.
+   *
+   *  (If this is ever reverted to match the original, `CAMERA.DEFAULT_DISTANCE` is the value to
+   *  come back to — do not re-tune GAME_FOV to chase the framing; see docs/camera.md.) */
+  private static readonly MELEE_START = OPENING_DISTANCE;
   // The wheel moves in STOPS, not continuously: WC3's zoom is a fixed ladder of camera
   // distances and one notch is one rung. The rungs are geometric (each is the same RATIO
   // closer than the last), because what a distance is worth on screen is a ratio — the same
@@ -5686,17 +5715,26 @@ export class MapViewerScene {
   private static readonly ZOOM_STEPS = 7;
   /** Seconds a single notch takes to settle. Every camera move in WC3 is interpolated; a notch
    *  eases OUT (fast off the mark, gliding into the stop), which is what makes a run of notches
-   *  read as one continuous dolly instead of a stutter. */
-  private static readonly ZOOM_EASE = 0.22;
+   *  read as one continuous dolly instead of a stutter.
+   *
+   *  Doubled from 0.22 at the developer's request — a longer, more deliberate glide. The ease
+   *  always restarts from where the camera IS (not from the rung it left), so a longer one does
+   *  not make a run of notches lag behind the wheel: four notches in a second are still one
+   *  continuous dolly, just a slower-settling one. */
+  private static readonly ZOOM_EASE = 0.44;
   // --- the close-zoom tilt -------------------------------------------------------------------
   // On the last rung the camera does not only come closer, it drops: the angle of attack
   // shallows out of the default 56°-above-the-horizon overhead view toward a low, third-person
   // shot, which is what turns the view into the deep trapezoid you get zoomed all the way in.
-  // 40° over the final notch alone, chosen off a sweep of 50/45/40/35/30 shot on Echo Isles:
-  // 45 barely reads, 30 tips the treeline and the map's far edge into the top of the frame, and
-  // spreading the drop over two rungs costs the ordinary mid-zoom view its stock 56°. Keeping it
-  // to the last notch also keeps the moment — the last rung is where the view changes character.
-  private static readonly TILT_FINAL_AOA_DEG = 40; // eye elevation above the focus, closest stop
+  // 30° over the final notch alone. The original sweep (50/45/40/35/30, shot on Echo Isles) picked
+  // 40 — 45 barely reads — and the developer then asked for MORE rotation on that last notch, so
+  // this is the bottom of that same sweep: it very nearly doubles the drop (56° → 30° is 26°,
+  // against 16° before) and is the most the sweep looked at. Its known cost is the one the sweep
+  // recorded: at 30 the treeline and the map's far edge come up into the top of the frame. Going
+  // further would be past anything measured. Spreading the drop over two rungs is still the wrong
+  // lever — it costs the ordinary mid-zoom view its stock 56° — so it stays on the last notch,
+  // which is also what keeps the moment: the last rung is where the view changes character.
+  private static readonly TILT_FINAL_AOA_DEG = 30; // eye elevation above the focus, closest stop
   private static readonly TILT_STEPS = 1; // rungs the tilt is spread over, from the closest
   /** Camera distance at a zoom stop. 0 = fully out (ZOOM_MAX) … ZOOM_STEPS = fully in. */
   private static zoomStopDistance(step: number): number {

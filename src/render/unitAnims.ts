@@ -140,10 +140,32 @@ export interface PropSeq {
  *  tier has its own version of the same action — compared as an unordered SET of base tokens,
  *  because "Stand Ready Attack" and "Stand Upgrade Third Attack Ready" name the same action in
  *  a different word order, and an order-sensitive test leaves the Arcane Tower wearing the
- *  Scout Tower's model. */
+ *  Scout Tower's model.
+ *
+ *  **The BASE tier carries no props at all, and that is a tier, not "no opinion".** `hwtw` (the
+ *  Scout Tower) has no `Animprops` line in HumanUnitFunc.txt — nor do `htow` (Town Hall), `ugol`
+ *  (Necropolis) or every other rank-1 structure — because its clips are the ones authored
+ *  without tokens. This function used to read an empty prop list as "nothing to filter" and hand
+ *  the list back untouched, which let the base tier see EVERY OTHER tier's clips. It is the same
+ *  bug the tiered case exists to prevent, just at rank 1, and the towers are where it shows:
+ *  HumanTower.mdx authors no plain "Attack" anywhere, so the swing picker falls through to its
+ *  loose "name contains attack" match and a Scout Tower drew all four of
+ *
+ *      "Stand Ready Attack" · "Stand Upgrade First Ready Attack"
+ *      "Attack Stand  Ready Upgrade Second" · "Stand Upgrade Third Attack Ready"
+ *
+ *  into one swing pool and rolled a random one per shot — visibly popping into the Guard, Cannon
+ *  and Arcane towers and back for the length of every attack. (Reported on Azure Tower Defense,
+ *  whose "Azure Guard Tower" is a `hwtw` override, but the stock Scout Tower does it too.)
+ *
+ *  An empty `tier` therefore filters too, by the mirror of the rule the tiered branch already
+ *  uses: a propped clip is somebody else's when the base tier has its own clip for that same
+ *  action, and is kept when it has none (a base tier with no stand at all is never the answer —
+ *  see the branch below for the three models that turn on it). The towers land on ONE swing,
+ *  which is their own stand clip, and `rts.ts` already knows what to do with that (see its
+ *  `standAttack` branch: keep looping the ready pose rather than re-trigger it per shot). */
 export function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[] = []): Array<PropSeq> {
   const tier = animProps.filter((p) => TIER_PROPS.has(p));
-  if (!tier.length) return seqs;
   const BLANK = "(none)"; // matches none of the sequence patterns below
   const tokens = (n: string) => n.toLowerCase().split(/[\s\-_]+/).filter(Boolean);
   const propsOf = (n: string) => tokens(n).filter((t) => TIER_PROPS.has(t));
@@ -167,11 +189,39 @@ export function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[
   // two-state model are mutually exclusive by definition: a clip carrying a state prop I do
   // not have is the OTHER form's, whatever else it carries.
   const wantState = tier.filter((t) => STATE_PROPS.has(t));
+  /** A clip carrying a STATE prop I have not got is the OTHER half of the model, always. */
+  const foreignState = (n: string) =>
+    propsOf(n).some((t) => STATE_PROPS.has(t) && !wantState.includes(t));
   const isMine = (n: string) => {
     const p = propsOf(n);
-    if (p.some((t) => STATE_PROPS.has(t) && !wantState.includes(t))) return false;
-    return p.length > 0 && tier.every((t) => p.includes(t));
+    if (foreignState(n)) return false;
+    return tier.length > 0 && p.length > 0 && tier.every((t) => p.includes(t));
   };
+  // The BASE tier (no props of its own — see the header). It owns the UNTOKENED clips, so a
+  // propped clip is another tier's… but only when the base actually HAS its own version of that
+  // action, which is where a blanket blank goes wrong. Three of the models say so outright:
+  //
+  //     TreeofLife.mdx  →  "Stand Upgrade First Second"   is the ONLY non-alternate stand
+  //     Furbolg.mdx     →  "Attack upgrade"               is the ONLY swing (no plain "Attack")
+  //     EntangledGoldMine.mdx → "Stand Work First…Fifth"  is the whole work set
+  //
+  // Blanking those leaves a Tree of Life with no stand at all and sends every furbolg into its
+  // "Attack spell" cast at each blow. WC3 degrades the other way: the props narrow a choice, and
+  // where they would leave the base tier with nothing they are simply not decisive. So the test
+  // is the mirror of the tiered branch's `overridden` — a propped clip loses to a prop-free clip
+  // naming the SAME action (same unordered base tokens), and survives when there is none.
+  //
+  // That is exactly enough to settle the towers: HumanTower.mdx's other three tiers all reduce
+  // to "attack ready stand", the same action as the Scout Tower's own "Stand Ready Attack", so
+  // all three lose it and the base tower is left holding only its own clip.
+  if (!tier.length) {
+    const ownActions = new Set(seqs.filter((s) => !propsOf(s.name).length).map((s) => baseKey(s.name)));
+    return seqs.map((s) => {
+      if (!propsOf(s.name).length) return s;
+      if (foreignState(s.name)) return { name: BLANK }; // the other half of the model
+      return ownActions.has(baseKey(s.name)) ? { name: BLANK } : s;
+    });
+  }
   return seqs.map((s) => {
     if (isMine(s.name)) return { name: baseOf(s.name).join(" "), mine: true };
     if (propsOf(s.name).length) return { name: BLANK }; // some other tier's clip

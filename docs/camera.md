@@ -17,13 +17,14 @@ and the field defaults are in [`src/data/gameplayConstants.ts`](../src/data/game
 |---|---|---|
 | **Rendered lens** | **32°** vertical FOV | Measured off the real client (below). NOT the FOV field |
 | FOV *field* | 70 | `Scripts\Blizzard.j` `bj_CAMERA_DEFAULT_FOV` — what a script SAYS; `fovFromWc3` puts it on the lens |
-| Default distance | 1650 | `bj_CAMERA_DEFAULT_DISTANCE` — what a match **opens on** |
+| Default distance | 1650 | `bj_CAMERA_DEFAULT_DISTANCE` — what a match opens on **in the real client** |
+| Distance we open on | **2400** | Ours, and a deliberate departure: the far end of the wheel (`MELEE_START` = `ZOOM_MAX`) |
 | Angle of attack | 304 (= −56°) | `bj_CAMERA_DEFAULT_AOA` |
 | Rotation / FarZ | 90 / 5000 | `bj_CAMERA_DEFAULT_ROTATION` / `_FARZ` |
 | Focus height | **the terrain under it** | The camera keeps its distance to the GROUND, not to z = 0 |
 | Our zoom range | 1250 – 2400 | Ours; brackets WC3's 1650 default. WC3's own wheel stops are not documented anywhere we trust |
-| Wheel | 7 stops, eased out over 0.22 s | Ours. Nothing about WC3's camera snaps — see "The wheel moves in stops" |
-| AOA on the closest stop | 40° above the horizon | Ours; the close-zoom tilt into the third-person view |
+| Wheel | 7 stops, eased out over 0.44 s | Ours. Nothing about WC3's camera snaps — see "The wheel moves in stops" |
+| AOA on the closest stop | 30° above the horizon | Ours; the close-zoom tilt into the third-person view |
 | Insert / Delete | ±90°, linear, ~0.45 s | Angle from the manual/wiki; the rate is ours |
 | Melee camera centre | the starting **workers** | `Blizzard.j:8299` — *not* the town hall |
 
@@ -134,23 +135,31 @@ to own your camera. That part is authentic; leave it alone.)
 
 ## Zoom
 
-`ZOOM_MIN = 1250`, `ZOOM_MAX = 2400`, and a match opens on **1650** —
-`bj_CAMERA_DEFAULT_DISTANCE`, which through the 32° lens *is* the real client's opening view.
-Because the lens is right, these distances mean what they mean in the real game.
+`ZOOM_MIN = 1250`, `ZOOM_MAX = 2400`, and a match opens **fully zoomed out** — `MELEE_START` is
+`ZOOM_MAX`, i.e. zoom stop 0. Because the lens is right, these distances mean what they mean in
+the real game.
 
 - **Never re-tune the lens to change how roomy the game feels.** The lever is `ZOOM_MAX`. Changing
   `GAME_FOV` silently redefines every distance constant and every map's camera.
-- WC3's own wheel stops have not been measured; 1250/2400 is our choice, not ground truth. The
-  *default* it opens on is ground truth.
+- WC3's own wheel stops have not been measured; 1250/2400 is our choice, not ground truth.
+- **The opening distance is a deliberate departure from the real client**, which opens on
+  `bj_CAMERA_DEFAULT_DISTANCE` (1650, about rung 4). Asked for by the developer; reverting means
+  pointing `MELEE_START` back at `CAMERA.DEFAULT_DISTANCE` and nothing else. The constant itself is
+  still 1650 and still means what it means — `SetCameraField(CAMERA_FIELD_TARGET_DISTANCE, …)`,
+  `CameraSetupApply` and every map's own camera are untouched. Only the rung the PLAYER's wheel
+  starts on moved, so a script that parks the camera and then hands it back
+  (`ResetToGameCamera`) still returns the player to whatever zoom they were actually on.
 
 ### The wheel moves in stops, and every move is interpolated
 
 Nothing about WC3's camera snaps. The wheel is a **ladder of fixed stops** (`ZOOM_STEPS = 7`,
 `zoomStopDistance`) and one notch is one rung; the camera then **eases out** onto that rung over
-`ZOOM_EASE` (0.22 s, cubic). The rungs are geometric — each is the same *ratio* closer than the
+`ZOOM_EASE` (**0.44 s**, cubic — doubled from 0.22 at the developer's request, for a longer, more
+deliberate glide). The rungs are geometric — each is the same *ratio* closer than the
 last — because that is what a distance is worth on screen: 150 units is a whole step zoomed in and
-a nudge zoomed out. Seven rungs across 2400 → 1250 also drops the default (1650) almost exactly on
-rung 4, so a match opens *on* a stop rather than between two.
+a nudge zoomed out. Seven rungs across 2400 → 1250 also drop WC3's own default (1650) almost
+exactly on rung 4, so a match that opened there would open *on* a stop rather than between two —
+and ours, opening on `ZOOM_MAX`, sits on rung 0 for the same reason.
 
 The ease always starts from **where the camera is now**, not from the rung it left, so notching
 four times in a second is one continuous dolly rather than four tweens fighting. `zoomStopOf`
@@ -160,13 +169,17 @@ parked the camera somewhere between two stops.
 ### The closest rung tilts the camera
 
 The last notch does not only come closer — it **drops the angle of attack** from the default 56°
-above the horizon to **40°** (`TILT_FINAL_AOA_DEG`), turning the overhead view into the deep
+above the horizon to **30°** (`TILT_FINAL_AOA_DEG`), turning the overhead view into the deep
 trapezoid / third-person shot you get zoomed all the way in. It rides the same ease as the
 distance, so the drop and the dolly are one motion, and it is confined to the final rung
 (`TILT_STEPS = 1`) so every other zoom level keeps WC3's exact 56°.
 
-Chosen off a sweep shot on Echo Isles (50/45/40/35/30): 45 barely reads, 30 tips the treeline and
-the map's far edge into the top of the frame.
+The original sweep (shot on Echo Isles: 50/45/40/35/30) picked **40** — 45 barely reads. The
+developer then asked for more rotation on the last notch, so it now sits at the bottom of that same
+sweep: 56° → 30° is a **26°** drop against 16° before. The cost is the one the sweep recorded — at
+30 the treeline and the map's far edge come up into the top of the frame — and anything past 30 is
+beyond what was ever looked at. Spreading the drop over more rungs is still the wrong lever: it
+costs the ordinary mid-zoom view its stock 56°.
 
 Because the wheel is now the one player control that moves the AOA, the player's camera is a
 distance **and** a pitch — `playerDistance` + `playerPitch`, both fed to `ScriptCamera`'s
