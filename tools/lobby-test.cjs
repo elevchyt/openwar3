@@ -332,6 +332,12 @@ const ME = { id: 2, name: "Joiner", host: false };
     check("a slot the host set to Computer plays as one", start.slots.map((s) => s.controller),
       ["user", "user", "computer"]);
     check("…with no peer of its own", start.slots[2].peer, undefined);
+    // WHICH computer is the host's choice too, and it has to reach every machine: the AI runs
+    // on the authority alone, but the config is the match's identity (docs/melee-ai.md).
+    check("…at the difficulty the row was left on", start.slots[2].aiDifficulty, 2); // MELEE_NORMAL
+    setup = { ...setup, slots: setup.slots.map((s, i) => (i === 2 ? { ...s, ai: 3 } : s)) };
+    check("…and Computer (Insane) crosses as MELEE_INSANE", buildStart(setup, 7).slots[2].aiDifficulty, 3);
+    check("a human's row carries no difficulty at all", buildStart(setup, 7).slots[0].aiDifficulty, undefined);
   }
 
   console.log(failed === 0 ? "\nlobby: all checks passed" : `\nlobby: ${failed} FAILED`);

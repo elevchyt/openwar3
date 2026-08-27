@@ -224,6 +224,7 @@ export function toConfig(msg: StartMatch, me: number | undefined): MeleeConfig {
     startX: s.startX,
     startY: s.startY,
     ...(s.peer === undefined ? {} : { peer: s.peer }),
+    ...(s.aiDifficulty === undefined ? {} : { aiDifficulty: s.aiDifficulty }),
     ...(s.name === undefined ? {} : { playerName: s.name }),
   }));
   return {

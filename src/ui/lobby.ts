@@ -38,6 +38,16 @@ export interface SlotConfig {
   /** In a LAN game, the relay peer sitting in this slot (src/net/protocol.ts). Absent in a
    *  single-player match, and absent on a computer slot in any match. */
   peer?: number;
+  /**
+   * WHICH computer this is — `MeleeDifficulty()`'s MELEE_NEWBIE / MELEE_NORMAL / MELEE_INSANE
+   * (src/ai/ids.ts), as the slot's name menu named it ("Computer (Easy)" / "(Normal)" /
+   * "(Insane)").
+   *
+   * Only a `computer` slot has one, and only in a MELEE match: a campaign chapter's computers
+   * are the mission's and take no melee AI at all. Omitted reads as NORMAL, which is what
+   * every seat was before the menu offered the other two.
+   */
+  aiDifficulty?: number;
 }
 
 /** Fog-of-war start mode chosen in the lobby:

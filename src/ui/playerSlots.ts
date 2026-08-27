@@ -1,3 +1,4 @@
+import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL } from "../ai/ids";
 import { MELEE } from "../data/gameplayConstants";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
@@ -20,20 +21,55 @@ import { arg, findFrame, num, setProp, size, str } from "./mapBrowser";
 
 export const PLAYER_SLOT_FDF = "UI\\FrameDef\\Glue\\PlayerSlot.fdf";
 
-/** The controllers an EMPTY slot can take. WC3 also offers three AI difficulties; we have one
- *  AI, so the menu says what it actually is rather than offering a choice that does nothing. */
-export const CONTROLLERS: Array<[Controller, string]> = [
-  ["open", "Open"],
-  ["closed", "Closed"],
-  ["computer", "Computer (Normal)"],
+/**
+ * What an EMPTY slot's name menu offers, in the reference's order.
+ *
+ * A computer appears three times over, once per `MeleeDifficulty()` (src/ai/ids.ts), and the
+ * labels are the game's own — `UI\FrameDef\Glue\GlobalStrings.fdf` writes them out as
+ * `COMPUTER_NEWBIE "Computer (Easy)"`, `COMPUTER_NORMAL "Computer (Normal)"` and
+ * `COMPUTER_INSANE "Computer (Insane)"`.
+ *
+ * The three share ONE controller. A difficulty is not a different kind of occupant — every
+ * check that asks "is somebody in this seat" (`seated`, the loading screen's roster, the
+ * config's filter) means the same thing at all three — so it rides alongside as `ai` rather
+ * than splitting `Controller` into three near-identical members.
+ */
+export interface SlotOption {
+  /** The menu's value, and what a row stores. */
+  value: string;
+  label: string;
+  controller: Controller;
+  /** `MeleeDifficulty()` for a computer row; absent on Open/Closed. */
+  ai?: number;
+}
+
+export const SLOT_OPTIONS: readonly SlotOption[] = [
+  { value: "open", label: "Open", controller: "open" },
+  { value: "closed", label: "Closed", controller: "closed" },
+  { value: "computer-easy", label: "Computer (Easy)", controller: "computer", ai: MELEE_NEWBIE },
+  { value: "computer", label: "Computer (Normal)", controller: "computer", ai: MELEE_NORMAL },
+  { value: "computer-insane", label: "Computer (Insane)", controller: "computer", ai: MELEE_INSANE },
 ];
+
+/** The option a (controller, difficulty) pair is showing — the row's menu value. Anything the
+ *  menu does not offer (a human's own seat, a map's neutral player) falls through to the
+ *  controller itself, which is what those rows print. */
+export function slotOptionValue(controller: Controller, ai?: number): string {
+  if (controller !== "computer") return controller;
+  return SLOT_OPTIONS.find((o) => o.controller === "computer" && o.ai === (ai ?? MELEE_NORMAL))?.value ?? "computer";
+}
+
+/** The option a menu value names. */
+export function slotOption(value: string): SlotOption | undefined {
+  return SLOT_OPTIONS.find((o) => o.value === value);
+}
 
 /** PlayerSlot.fdf's own HandicapPopupMenuMenu items, in its order. */
 export const HANDICAPS = [100, 90, 80, 70, 60, 50];
 
-/** The menu label a controller shows ("Computer (Normal)"). */
-export function labelOf(c: Controller): string {
-  return CONTROLLERS.find(([v]) => v === c)?.[1] ?? c;
+/** The menu label a slot-option value shows ("Computer (Normal)"). */
+export function labelOf(value: string): string {
+  return slotOption(value)?.label ?? value;
 }
 
 /** A run of player rows under one heading. A melee map has a single, unnamed group (its rows

@@ -1,3 +1,4 @@
+import { MELEE_NORMAL } from "../ai/ids";
 import type { DataSource } from "../vfs/types";
 import { RACES, RACE_LABEL, type Race } from "../data/races";
 import type { MapInfo } from "../world/mapInfo";
@@ -12,8 +13,8 @@ import {
   setProp, size, str,
 } from "./mapBrowser";
 import {
-  CONTROLLERS, HANDICAPS, PLAYER_SLOT_FDF, buildSlotRows, dropdownButtonNames, fillForceLabels,
-  forceGroups, labelOf, teamOptions, type Group,
+  HANDICAPS, PLAYER_SLOT_FDF, SLOT_OPTIONS, buildSlotRows, dropdownButtonNames, fillForceLabels,
+  forceGroups, labelOf, slotOption, slotOptionValue, teamOptions, type Group,
 } from "./playerSlots";
 
 // The Custom Game screen (issue #61), built from UI\FrameDef\Glue\Skirmish.fdf: the map
@@ -76,6 +77,9 @@ export interface SkirmishHandlers {
 interface Slot {
   id: number;
   controller: Controller;
+  /** `MeleeDifficulty()` for a computer row — the Easy/Normal/Insane the name menu picked
+   *  (src/ai/ids.ts). Meaningless on any other controller and left at NORMAL there. */
+  ai: number;
   race: Race;
   team: number;
   handicap: number;
@@ -157,6 +161,9 @@ export async function mountSkirmish(
       slots = info.slots.map((s, i) => ({
         id: s.id,
         controller: s.controller === "computer" ? "computer" : i === localIndex ? "user" : spare,
+        // A spare seat opens on the difficulty the reference opens on — the menu's own
+        // middle entry, which is also what a slot the MAP owns is greyed at.
+        ai: MELEE_NORMAL,
         race: s.defaultRace,
         team: s.team,
         handicap: 100,
@@ -251,10 +258,17 @@ export async function mountSkirmish(
         name.setOptions(
           mine ? [{ value: "user", label: "Player" }]
           : slot.locked ? [{ value: "computer", label: labelOf("computer") }]
-          : CONTROLLERS.map(([v, l]) => ({ value: v, label: l })),
+          : SLOT_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
         );
-        name.value = slot.controller;
-        name.onChange = (v) => { slot.controller = v as Controller; fill(s); }; // the row's other menus follow who is in it
+        name.value = slotOptionValue(slot.controller, slot.ai);
+        // The row's other menus follow who is in it — and a computer row carries the
+        // difficulty its menu entry named (Computer (Easy) / (Normal) / (Insane)).
+        name.onChange = (v) => {
+          const opt = slotOption(v);
+          slot.controller = opt?.controller ?? (v as Controller);
+          slot.ai = opt?.ai ?? MELEE_NORMAL;
+          fill(s);
+        };
         name.setEnabled(!mine && !slot.locked);
       }
       // An EMPTY slot has nothing to configure: on an Open/Closed row the real client greys
@@ -453,6 +467,8 @@ function toConfig(slots: Slot[], info: MapInfo, fog: FogMode): MeleeConfig {
         startX: mapSlot?.startX ?? 0,
         startY: mapSlot?.startY ?? 0,
         name: mapSlot?.name,
+        // Which computer the row picked. Only a computer has one — see MeleeConfig.
+        ...(s.controller === "computer" ? { aiDifficulty: s.ai } : {}),
         // The one seat a human is in on this screen is theirs, under the name the profile
         // saved — the loading screen's roster is the only thing that reads it.
         ...(s.controller === "user" ? { playerName: savedPlayerName() } : {}),

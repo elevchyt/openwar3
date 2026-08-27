@@ -49,6 +49,7 @@ import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
 import { WorldOverlays, type HoverLine, type BarSpec } from "../render/worldOverlays";
+import { INSANE_HARVEST_FACTOR, MELEE_INSANE } from "../ai/ids";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
 // seeds movable units from the loaded map, syncs sim state → model instances
@@ -712,8 +713,9 @@ export class RtsController {
     this.sim.reseed(seed);
   }
 
-  /** Player display names for the hover tooltip's owner line (set at match start
-   *  from the lobby seating: AI slots read "Computer (Normal)"). */
+  /** Player display names for the hover tooltip's owner line (set at match start from the
+   *  lobby seating: an AI slot reads the label of its own difficulty, "Computer (Easy)" /
+   *  "(Normal)" / "(Insane)"). */
   setPlayerNames(names: Map<number, string>): void {
     this.playerNames = names;
   }
@@ -776,8 +778,7 @@ export class RtsController {
    * no route by which it could.
    */
   startMeleeAI(
-    slots: ReadonlyArray<{ player: number; race: PlayableRace; startX: number; startY: number }>,
-    difficulty: number,
+    slots: ReadonlyArray<{ player: number; race: PlayableRace; startX: number; startY: number; difficulty: number }>,
     seed: number,
   ): void {
     // Built here rather than as a field: `this.sim` is assigned in the constructor BODY, so a
@@ -791,8 +792,28 @@ export class RtsController {
       footprintOf: (tex) => this.footprintOf(tex),
       coAllied: (a, b) => this.alliances.coAllied(a, b),
       creepCamps: () => this.creepCampView.all(),
+      // The computer's OWN eyes, not the local player's — every seat has a viewpoint from
+      // tick 0 (VisionSet.seat), so this is the same grid its units acquire through.
+      visible: (player, x, y) => this.viewpoints.viewpointFor(player).vision.stateAt(x, y) === FogState.Visible,
     });
-    for (const s of slots) this.meleeAi.add(s.player, s.race, difficulty, s.startX, s.startY, seed);
+    for (const s of slots) {
+      this.meleeAi.add(s.player, s.race, s.difficulty, s.startX, s.startY, seed);
+      // The one thing an INSANE computer gets that is the engine's rather than the script's:
+      // it is credited TWICE what its workers actually carried home. common.ai never mentions
+      // MELEE_INSANE — the difficulty is not in the strategy, it is in the till.
+      //
+      // "On insane difficulty in Warcraft III skirmishes, the AI receives twice the amount of
+      // gold and lumber as the player than what it actually harvested, whereas on easy and
+      // normal difficulty it only receives the normal amount" (TV Tropes, Not Playing Fair
+      // With Resources; the same doubling is described on the Hive thread "How to double
+      // resources workers harvest?" as the Insane AI banking +20 for a +10 load).
+      //
+      // Applied to the CREDIT and not to the load, which is why the multiplier lives on the
+      // stash rather than on the Harvest ability's gold capacity: the mine still gives up ten
+      // gold a trip and runs dry on the same schedule as everybody's. An insane computer is
+      // paid double for the same digging, not digging twice as fast.
+      if (s.difficulty === MELEE_INSANE) this.sim.setHarvestBonus(s.player, INSANE_HARVEST_FACTOR);
+    }
   }
 
   private meleeAi: MeleeAi | null = null;

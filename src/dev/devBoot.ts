@@ -12,6 +12,7 @@ import type { StartMatch as StartMatchMsg } from "../net/protocol";
 import { toConfig } from "../ui/fdfLan";
 import { buildStart, newSetup, seatPeers } from "../net/lobbySetup";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
+import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL } from "../ai/ids";
 
 /**
  * Scripted boot for automated testing — the load gate without the human
@@ -33,6 +34,7 @@ import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
  *   ?dev&map=EchoIsles&player=1&seed=7      …as slot 1, on a seed shared with the other client
  *   ?dev&map=EchoIsles&fog=unexplored       …with normal WC3 fog rather than start-explored
  *   ?dev&map=EchoIsles&race=nightelf        …with the local player seated as that race
+ *   ?dev&map=EchoIsles&ai=insane            …with every OTHER seat a computer at that difficulty
  *   ?dev&chapter=NightElfX01                start a CAMPAIGN chapter (&difficulty=easy|normal|hard)
  *
  * `player` and `seed` are what make two-client testing possible: point two browser contexts at
@@ -128,14 +130,27 @@ async function fetchCasc(manifest: CascManifest): Promise<CascFiles> {
  * screen's `toConfig`: that one rolls a fresh seed per match, and two clients that rolled
  * their own seeds are not in the same match. Here the seed is an input.
  */
-function meleeConfigFor(info: MapInfo, player: number, seed: number, fog: FogMode, race: Race | null): MeleeConfig {
+function meleeConfigFor(
+  info: MapInfo,
+  player: number,
+  seed: number,
+  fog: FogMode,
+  race: Race | null,
+  ai: number | null,
+): MeleeConfig {
   // …plus the map's neutral/rescuable players, which no seating ever covers (MapInfo.neutralPlayers).
   const slots: SlotConfig[] = [...info.slots, ...info.neutralPlayers].map((s) => ({
     id: s.id,
     // Every seat a human could take is filled by one, so a second client can walk into any of
     // them. Slots the MAP owns as computers stay computers — that is the map's call, not the
     // lobby's (see PlayerSlot.controller).
-    controller: s.controller,
+    //
+    // `?ai=` is the exception, and it exists because the melee AI is otherwise unreachable
+    // from this boot: a melee map declares every slot a USER slot, so seating them all as
+    // humans leaves nobody for src/ai/ to drive. It seats every seat but yours as a computer
+    // at the named difficulty — the Custom Game screen's choice, without the screen.
+    controller: ai !== null && s.controller === "user" && s.id !== player ? "computer" : s.controller,
+    ...(ai !== null && s.controller === "user" && s.id !== player ? { aiDifficulty: ai } : {}),
     // `?race=` forces the PLAYABLE seats to one race. A melee map hands every slot
     // "random", so without this there is no way to boot straight into the race you are
     // working on — you reload until the dice agree. Neutral/rescuable seats keep theirs.
@@ -166,6 +181,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // `?race=nightelf` — seat the local player as that race instead of the map's default.
   const wantRace = params.get("race");
   const race: Race | null = wantRace && (RACES as string[]).includes(wantRace) ? (wantRace as Race) : null;
+  // `?ai=easy|normal|insane` — seat every OTHER slot as a computer at that `MeleeDifficulty()`
+  // (src/ai/ids.ts), which is the only way to reach the melee AI without the lobby screen.
+  const AI_DIFFICULTIES: Record<string, number> = {
+    easy: MELEE_NEWBIE, normal: MELEE_NORMAL, insane: MELEE_INSANE,
+  };
+  const ai = AI_DIFFICULTIES[params.get("ai") ?? ""] ?? null;
 
   log("fetching manifest…");
   const res = await fetch("/wc3/manifest.json");
@@ -251,7 +272,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const mapFile = path ? load.maps.get(path) : undefined;
     if (!mapFile) throw new Error(`no mounted map matching "${name}" — mount it with ?maps=`);
     const info = parseMapInfo(new Uint8Array(await mapFile.arrayBuffer()), path!);
-    await hooks.startGame(mapFile, info, meleeConfigFor(info, player, seed, fog, race));
+    await hooks.startGame(mapFile, info, meleeConfigFor(info, player, seed, fog, race, ai));
   };
 
   // A campaign chapter comes out of the archives we just mounted, so it needs no map file and
@@ -282,7 +303,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   }
 
   log(`starting ${info.name} as player ${player}, seed ${seed}`);
-  await hooks.startGame(file, info, meleeConfigFor(info, player, seed, fog, race));
+  await hooks.startGame(file, info, meleeConfigFor(info, player, seed, fog, race, ai));
 }
 
 /** Resolve once the lobby's state satisfies `ready`, or reject after `timeoutMs`. */

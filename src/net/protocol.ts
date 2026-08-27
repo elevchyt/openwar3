@@ -110,6 +110,9 @@ export interface StartMatch {
     startX: number;
     startY: number;
     peer?: number;
+    /** WHICH computer, on a computer slot — `MeleeDifficulty()` (src/ai/ids.ts). Absent on a
+     *  human's slot; absent on a computer's reads as MELEE_NORMAL. */
+    aiDifficulty?: number;
     /** The person in the seat, by name — what the LOADING SCREEN's roster prints (issue #78).
      *  Absent on a computer slot, which is named by what it is. */
     name?: string;
@@ -139,7 +142,7 @@ export type GameMessage =
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */
-export const PROTOCOL_VERSION = 11; // 11: the pause (`pausereq`/`pause`) — 10: binary hot lane (`snapw`), 60 Hz
+export const PROTOCOL_VERSION = 12; // 12: per-slot AI difficulty — 11: the pause (`pausereq`/`pause`)
 
 /** Default relay port. Overridable via PORT (the env var Railway/Render both inject). */
 export const DEFAULT_RELAY_PORT = 8787;

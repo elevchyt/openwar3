@@ -1,3 +1,4 @@
+import { MELEE_NORMAL } from "../ai/ids";
 import type { PeerInfo, StartMatch } from "./protocol";
 
 // The GAME LOBBY's seating — the model behind UI\FrameDef\Glue\GameChatroom.fdf (issue #77).
@@ -50,6 +51,10 @@ export interface LobbySlot {
   race: string;
   team: number;
   handicap: number;
+  /** On a `computer` slot, WHICH computer — `MeleeDifficulty()`'s MELEE_NEWBIE / MELEE_NORMAL
+   *  / MELEE_INSANE (src/ai/ids.ts), as the host's name menu named it. Absent everywhere else,
+   *  and absent reads as NORMAL. */
+  ai?: number;
   /** The MAP declared this slot a computer (w3i player type 2) — the row is greyed at
    *  Computer and no joiner is ever seated in it. See MapInfo's PlayerSlot. */
   locked: boolean;
@@ -234,6 +239,9 @@ export function buildStart(setup: LobbySetup, seed?: number): StartMatch {
         startX: s.startX,
         startY: s.startY,
         ...(s.peer === undefined ? {} : { peer: s.peer }),
+        // Which computer the host picked. Only a computer row has one, and every client is
+        // told: the AI runs on the AUTHORITY, but the config is the match's identity.
+        ...(s.kind === "computer" ? { aiDifficulty: s.ai ?? MELEE_NORMAL } : {}),
         // Who is sitting there, for the loading screen's roster. Only a PERSON has one —
         // a computer row's `name` is the lobby's label for an empty seat, not a player.
         ...(s.kind === "player" && s.name ? { name: s.name } : {}),

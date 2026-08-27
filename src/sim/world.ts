@@ -2524,6 +2524,24 @@ export class SimWorld {
     this.stash.set(owner, { gold, lumber });
   }
 
+  /**
+   * player → what a load DEPOSITED by that player's workers is multiplied by on its way into
+   * the till. 1 for everybody, and set only for an INSANE computer, which is paid twice what
+   * it carried (src/ai/ids.ts INSANE_HARVEST_FACTOR, and `RtsController.startMeleeAI` is the
+   * only caller).
+   *
+   * It sits on the DEPOSIT rather than on the load a worker picks up, which is the whole point:
+   * the mine hands over its usual ten gold and empties on the usual schedule. Nothing about the
+   * map's economy changes — only what one player's bank makes of the same trip.
+   */
+  private readonly harvestBonus = new Map<number, number>();
+
+  /** Pay this player `factor` times what its workers actually carry home. See harvestBonus. */
+  setHarvestBonus(player: number, factor: number): void {
+    if (factor === 1) this.harvestBonus.delete(player);
+    else this.harvestBonus.set(player, factor);
+  }
+
   stashOf(owner: number): { gold: number; lumber: number } {
     let s = this.stash.get(owner);
     if (!s) {
@@ -13551,8 +13569,14 @@ export class SimWorld {
     const [ax, ay] = this.depotApproach(u, depot);
     if (!this.arriveAtNode(u, ax, ay, u.radius + DEPOSIT_RANGE, () => this.pathTo(u, ax, ay))) return;
     const stash = this.stashOf(u.owner);
-    stash.gold += w.carryGold;
-    stash.lumber += w.carryLumber;
+    // What the load is WORTH to this owner — the carried amount for everyone, doubled for an
+    // insane computer (see harvestBonus). The floats below report what was banked, because
+    // what the player is told is what the player got.
+    const factor = this.harvestBonus.get(u.owner) ?? 1;
+    const gold = Math.floor(w.carryGold * factor);
+    const lumber = Math.floor(w.carryLumber * factor);
+    stash.gold += gold;
+    stash.lumber += lumber;
     // The load lands where you can SEE it land (issue #116) — the credit the game's
     // `GoldText*`/`LumberText*` rows were written for in the first place.
     //
@@ -13563,8 +13587,8 @@ export class SimWorld {
     // anchoring on them spreads the numbers out the way the real client's do. Placed, not
     // attached: the worker turns straight back around for another load, and the number is a
     // report of what just happened here, not a label that follows him to the trees.
-    this.floatCredit("gold", w.carryGold, u.owner, u);
-    this.floatCredit("lumber", w.carryLumber, u.owner, u);
+    this.floatCredit("gold", gold, u.owner, u);
+    this.floatCredit("lumber", lumber, u.owner, u);
     w.carryGold = 0;
     w.carryLumber = 0;
     // Head back to the same node (or the nearest remaining tree), WC3-style.

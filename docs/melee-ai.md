@@ -123,9 +123,52 @@ Each of these is engine machinery rather than a line of script, and each is mark
 - **`SetPeonsRepair`, `SetHeroesBuyItems`, `SetHeroesTakeItems`, `SetSmartArtillery`** — the
   `StandardAI` behaviour switches.
 - **`MergeUnits` / `ConvertUnits`** — Hippogryph Riders and Obsidian Statues → Destroyers.
-- **The difficulty spread.** Every `MeleeDifficulty()` branch is ported and the whole ladder
-  works, but the Custom Game screen only offers "Computer (Normal)", so `MELEE_NORMAL` is what
-  every slot is seated at today.
+
+## The difficulty spread
+
+A slot picks one of three computers, from the same menu on both screens that build player rows
+(`SLOT_OPTIONS` in [`src/ui/playerSlots.ts`](../src/ui/playerSlots.ts)). The labels are the
+game's own — `UI\FrameDef\Glue\GlobalStrings.fdf` writes `COMPUTER_NEWBIE "Computer (Easy)"`,
+`COMPUTER_NORMAL "Computer (Normal)"`, `COMPUTER_INSANE "Computer (Insane)"` — and the value
+that rides through the lobby to `MeleeAi.add` is `MeleeDifficulty()` itself: common.ai's
+`MELEE_NEWBIE` 1 / `MELEE_NORMAL` 2 / `MELEE_INSANE` 3.
+
+**The interesting part is where each difficulty actually lives, because it is not one place.**
+
+**Easy is entirely in the SCRIPT**, and it is the only one that is. `MeleeDifficulty()` is called
+40 times across the five files (common.ai 7, human.ai 7, orc.ai 10, elf.ai 10, undead.ai 6) and
+**every single one of them tests `MELEE_NEWBIE`**. What they buy:
+
+| what an easy computer gives up | where |
+|---|---|
+| `SetGroupsFlee` / `SetHeroesBuyItems` / `SetSmartArtillery` / `SetTargetHeroes` / `SetUnitsFlee`, all of them `not isNewbie` | `StandardAI`, common.ai 781. The switches themselves are [not ported](#what-is-deliberately-not-ported), so this row is the one place easy is not yet a difference |
+| every upgrade past rank 1 — `SetBuildUpgr` drops the row outright | common.ai 1024 → `AiPlayer.setBuildUpgr` |
+| its second hero, until a Keep/Stronghold/Castle/Tomb stands (and, night elf, four Moon Wells) — plus the night elf's third hero | the `heroId2`/`heroId3` rows of all four race files → the `newbie` flag in [`human.ts`](../src/ai/human.ts) and its three siblings |
+| its towers, its tier-2/3 production and its extra barracks — the bulk of the 40, each a `!= MELEE_NEWBIE` around a build row | the same four files |
+| denying an expansion promptly: it must see one three times first (normal-with-allies once; everyone else acts immediately) | common.ai 2220 → `MeleeAi.pickTarget` |
+| its opening four minutes, and a minute between every wave after | common.ai's `Sleep(240)`/`Sleep(60)` → `NEWBIE_FIRST_WAVE_DELAY`/`NEWBIE_WAVE_GAP` |
+
+**Insane is entirely in the ENGINE.** `MELEE_INSANE` appears exactly ONCE in all five files —
+the line that declares the constant (common.ai 664). Nothing ever tests it. That is the tell: an
+insane computer runs the same build order and the same attack ladder as a normal one. Everything
+it gets is outside the script, and there are two things — both long documented by the community
+rather than by any file in the install (see the citations at
+[`INSANE_HARVEST_FACTOR`](../src/ai/ids.ts)):
+
+1. **It is paid double.** A load its workers carry home is credited twice over —
+   `SimWorld.setHarvestBonus`, applied at the DEPOSIT. Not at the pickup: the mine gives up its
+   usual ten gold and runs dry on everyone's schedule. An insane computer is paid double for the
+   same digging, it does not dig faster.
+2. **It ignores the fog of war.** `AiPlayer.knows` is the gate, and an insane player passes it
+   unconditionally while everyone else must have the spot under their own viewpoint's eyes right
+   now. Two questions go through it: *has an enemy hall appeared somewhere the map never
+   promised one* (`enemyExpansion`) and *is that hall under towers* (`isTowered`). What is
+   **not** gated is not an oversight — the enemy's MAIN base and the creep camps are map data
+   every melee player is handed, which is why every computer creeps from the first minute and
+   why its waves have always known where to walk.
+
+**Normal is the absence of both**, which is why it is the middle rung and why it was the only one
+seated for so long.
 
 ## Hero spells — not done, and what it would take
 

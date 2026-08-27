@@ -54,6 +54,7 @@ interface CreepSeed {
 }
 import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, isHarvestCode, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
 import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
+import { labelOf, slotOptionValue } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
 import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
@@ -1894,15 +1895,19 @@ export class MapViewerScene {
     // (Normal)" over every one of them is a melee lobby's answer given to a mission, and it
     // erases the one thing the line is there to tell you: WHOSE that unit is.
     //
-    // Only a slot the map left unnamed falls back — an AI slot to "Computer (Normal)" (the
-    // one difficulty we model, matching the Custom Game screen's label), a human slot to a
-    // generic "Player N". The local player never shows an owner line, so its own label is
-    // never seen. Neutral and rescuable players are in this map too and only ever take the
-    // map's name: nobody is playing them, so "Computer (Normal)" would be a lie about them.
+    // Only a slot the map left unnamed falls back — an AI slot to the label its own difficulty
+    // wears on the lobby's slot menu ("Computer (Easy)" / "(Normal)" / "(Insane)", which are
+    // GlobalStrings.fdf's own COMPUTER_NEWBIE/NORMAL/INSANE), a human slot to a generic
+    // "Player N". The local player never shows an owner line, so its own label is never seen.
+    // Neutral and rescuable players are in this map too and only ever take the map's name:
+    // nobody is playing them, so "Computer (Normal)" would be a lie about them.
     this.playerNames = new Map(
       config.slots.map((s) => [
         s.id,
-        s.name?.trim() || (s.controller === "computer" ? "Computer (Normal)" : `Player ${s.id + 1}`),
+        s.name?.trim()
+          || (s.controller === "computer"
+            ? labelOf(slotOptionValue("computer", s.aiDifficulty))
+            : `Player ${s.id + 1}`),
       ]),
     );
     this.humanPlayers = config.slots.filter((s) => s.controller === "user").length;
@@ -1942,14 +1947,20 @@ export class MapViewerScene {
     // `MeleeStartingAI` — every computer slot gets Blizzard's own melee AI for the race it
     // resolved to (issue #119; src/ai/). Only a MELEE match: a campaign chapter's computers
     // are the mission's, driven by its own triggers, and handing them a build order would
-    // have Illidan's Naga putting up Moon Wells. Difficulty is MELEE_NORMAL because that is
-    // the one the Custom Game screen offers ("Computer (Normal)").
+    // have Illidan's Naga putting up Moon Wells. Each slot brings its OWN `MeleeDifficulty()`
+    // — the Easy/Normal/Insane its name menu named — and a config that names none (an older
+    // LAN peer, a dev boot) reads as the middle one, which is what every seat used to be.
     if (!this.campaign) {
       this.rts!.startMeleeAI(
         config.slots
           .filter((s) => s.controller === "computer")
-          .map((s) => ({ player: s.id, race: races.get(s.id) ?? "human", startX: s.startX, startY: s.startY })),
-        MELEE_AI_NORMAL,
+          .map((s) => ({
+            player: s.id,
+            race: races.get(s.id) ?? "human",
+            startX: s.startX,
+            startY: s.startY,
+            difficulty: s.aiDifficulty ?? MELEE_AI_NORMAL,
+          })),
         config.seed ?? 1,
       );
     }

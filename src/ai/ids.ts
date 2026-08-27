@@ -323,13 +323,35 @@ export const UPG_WELL_SPRING = "Rews";
 //  Scalars
 // --------------------------------------------------------------------------------------
 
-/** `MeleeDifficulty()` — the lobby's Computer (Easy/Normal/Insane) as common.ai numbers it.
- *  The Custom Game screen only offers "Computer (Normal)" today, so NORMAL is what every
- *  slot gets; the two others are wired because the scripts branch on them heavily
- *  (`MeleeDifficulty() != MELEE_NEWBIE` guards every tower, second hero and upgrade tier). */
+/** `MeleeDifficulty()` — the lobby's Computer (Easy/Normal/Insane) as common.ai numbers it
+ *  (Scripts\common.ai 662-664). Each slot is seated at one of these on the Custom Game and
+ *  LAN lobby screens, under GlobalStrings.fdf's own labels (COMPUTER_NEWBIE / COMPUTER_NORMAL
+ *  / COMPUTER_INSANE) — see ui/playerSlots.ts.
+ *
+ *  The scripts branch on NEWBIE heavily (`MeleeDifficulty() != MELEE_NEWBIE` guards every
+ *  tower, second hero and upgrade tier); INSANE they never mention, because everything it
+ *  gets is the ENGINE's rather than the script's — see docs/melee-ai.md "The difficulty
+ *  spread". */
 export const MELEE_NEWBIE = 1;
 export const MELEE_NORMAL = 2;
 export const MELEE_INSANE = 3;
+
+/**
+ * What an INSANE computer is paid for a load its workers actually carried home.
+ *
+ * Not a value in any of the game's files — it is engine behaviour, and this is the one number
+ * on the ladder that had to be sourced from outside the install. Empirically documented in the
+ * community for as long as the difficulty has existed: an insane AI banks **twice** what it
+ * harvested (a +10 gold trip credits +20), while easy and normal are paid the flat rate. See
+ * TV Tropes' "Not Playing Fair With Resources" (Warcraft III entry) and the Hive Workshop
+ * thread "How to double resources workers harvest?", which describes the same doubling in
+ * terms of the Harvest ability's gold/lumber capacity.
+ *
+ * Applied by `RtsController.startMeleeAI` to the CREDIT (SimWorld.setHarvestBonus), never to
+ * the load: the mine gives up the same ten gold and runs dry on the same schedule for
+ * everyone. An insane computer is paid double for the same digging.
+ */
+export const INSANE_HARVEST_FACTOR = 2;
 
 /** The food counts the scripts throttle themselves at — common.ai's own
  *  `UPKEEP_TIER1`/`UPKEEP_TIER2`, the same 50/80 the resource bar's `upkeepBand` colours. */

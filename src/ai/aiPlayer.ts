@@ -6,7 +6,7 @@ import type { SimMine, SimUnit, SimWorld } from "../sim/world";
 import { footprintBuildable, footprintCellsAt, type Footprint } from "../sim/destructibles";
 import { PATHING_CELL } from "../sim/pathing";
 import {
-  BUILD_EXPAND, BUILD_UNIT, BUILD_UPGRADE, ELF_MINE, MELEE_NEWBIE, TOWN_COUNT_EQUIVALENTS,
+  BUILD_EXPAND, BUILD_UNIT, BUILD_UPGRADE, ELF_MINE, MELEE_INSANE, MELEE_NEWBIE, TOWN_COUNT_EQUIVALENTS,
 } from "./ids";
 
 // The melee AI engine: `Scripts\common.ai`'s library, plus the ~150 AI natives that library
@@ -57,6 +57,10 @@ export interface AiHost {
   coAllied(a: number, b: number): boolean;
   /** The clustered creep camps — `GetCreepCamp`'s haystack. */
   creepCamps(): ReadonlyArray<{ x: number; y: number; level: number; members: number[] }>;
+  /** Is that spot under this player's side's eyes RIGHT NOW — the fog of war, asked of the
+   *  computer's own viewpoint (game/viewpoint.ts) rather than the local one. What
+   *  `AiPlayer.knows` is built on. */
+  visible(player: number, x: number, y: number): boolean;
 }
 
 /** One row of the build array — `build_qty`/`build_type`/`build_item`/`build_town`. */
@@ -208,6 +212,25 @@ export class AiPlayer {
   /** `MeleeDifficulty()`. */
   meleeDifficulty(): number {
     return this.difficulty;
+  }
+
+  /**
+   * Does this computer KNOW about that enemy thing?
+   *
+   * The one advantage an INSANE computer has that is not a number: it is told everything, fog
+   * or no fog — "completely bypassing the fog of war to always know your base location and
+   * unit movements" is how the difficulty has been described for as long as it has existed.
+   * An easy or a normal computer has to have laid eyes on it.
+   *
+   * **What this deliberately does NOT gate**, because none of it is fog knowledge in WC3
+   * either: the enemy's MAIN base (every melee player is handed the start locations — that is
+   * what a melee map's start locations ARE, and the AI's waves have always walked to them),
+   * the CREEP CAMPS (map data too, which is why every computer creeps from the first minute),
+   * and the AI's own towns. What is gated is what you can only learn by looking: a hall that
+   * went up somewhere the map never promised one, and whether it has towers around it.
+   */
+  knows(u: SimUnit): boolean {
+    return this.difficulty === MELEE_INSANE || this.host.visible(this.player, u.x, u.y);
   }
 
   /** `GetRandomInt(low, high)`, off the AI's own stream. */
@@ -1182,7 +1205,7 @@ export class AiPlayer {
     const halls: Array<{ u: SimUnit; d: number }> = [];
     for (const u of this.host.world.units.values()) {
       if (u.hp <= 0 || !u.building || !u.depotGold || u.owner === this.player || u.owner < 0) continue;
-      if (!this.hostileTo(u)) continue;
+      if (!this.hostileTo(u) || !this.knows(u)) continue;
       halls.push({ u, d: Math.hypot(u.x - this.towns[0].x, u.y - this.towns[0].y) });
     }
     if (halls.length < 2) return null;
@@ -1196,7 +1219,7 @@ export class AiPlayer {
   isTowered(target: SimUnit): boolean {
     for (const u of this.host.world.units.values()) {
       if (u.hp <= 0 || !u.building || u.owner === this.player) continue;
-      if (!this.hostileTo(u) || u.weapons.length === 0) continue;
+      if (!this.hostileTo(u) || u.weapons.length === 0 || !this.knows(u)) continue;
       if (Math.hypot(u.x - target.x, u.y - target.y) <= 900) return true;
     }
     return false;

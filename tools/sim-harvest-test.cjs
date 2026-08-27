@@ -33,8 +33,9 @@ const HALL_DIST = 900;
 const GOLD_PER_TRIP = 10;
 const MINE_TIME = 1.0; // Agld "Mining Duration" — the mine issues at most one load a second
 
-/** A mine + town hall `angle` degrees apart, `n` peasants ordered onto the mine. */
-function harvestRun(angleDeg, n, seconds) {
+/** A mine + town hall `angle` degrees apart, `n` peasants ordered onto the mine.
+ *  `bonus` is `setHarvestBonus`'s factor — 2 is an insane computer (src/ai/ids.ts). */
+function harvestRun(angleDeg, n, seconds, bonus = 1) {
   const W = 160, H = 160;
   const grid = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [0, 0]);
   const a = (angleDeg * Math.PI) / 180;
@@ -62,6 +63,8 @@ function harvestRun(angleDeg, n, seconds) {
     },
     { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: hall[0], rallyY: hall[1], rallyKind: "point", rallyTargetId: 0, producesUnits: true },
   );
+
+  if (bonus !== 1) world.setHarvestBonus(0, bonus);
 
   const ids = [];
   for (let i = 0; i < n; i++) {
@@ -93,7 +96,7 @@ function harvestRun(angleDeg, n, seconds) {
       walked.set(id, walked.get(id) + Math.hypot(u.x - was[i][0], u.y - was[i][1]));
     });
   }
-  return { gold: world.stashOf(0).gold, walked, hall, seconds };
+  return { gold: world.stashOf(0).gold, mined: 125000 - mine.gold, walked, hall, seconds };
 }
 
 // The mine→hall gap the loads have to cross. Both ends stop at their footprint's edge, so
@@ -124,6 +127,20 @@ console.log("\nthe mine is the bottleneck, not the pathing (Agld Mining Capacity
   check("12 workers cannot out-earn the mine's issue rate", gold <= ceiling, `${gold} <= ${ceiling}`);
   const share = (gold / GOLD_PER_TRIP / walked.size) * LEG;
   check("…and every one of them still walks", Math.min(...walked.values()) > share, `min ${Math.min(...walked.values()).toFixed(0)} of ${share.toFixed(0)} units`);
+}
+
+console.log("\nan INSANE computer is paid double for the same digging (docs/melee-ai.md)");
+{
+  // The one thing MELEE_INSANE gets that is not in common.ai — it never tests for the
+  // constant it declares. The doubling is on the CREDIT, so the same run must take the same
+  // gold OUT of the mine and put twice as much in the bank.
+  const plain = harvestRun(45, 5, 60);
+  const insane = harvestRun(45, 5, 60, 2);
+  check("the same five workers bank twice as much", insane.gold === plain.gold * 2, `${insane.gold} vs ${plain.gold}`);
+  check("…having taken exactly the same gold out of the mine", insane.mined === plain.mined, `${insane.mined} vs ${plain.mined}`);
+  check("…so the mine runs dry on everybody's schedule", insane.mined < insane.gold, `mined ${insane.mined}, banked ${insane.gold}`);
+  const normal = harvestRun(45, 5, 60, 1);
+  check("everyone else is paid the flat rate", normal.gold === plain.gold, `${normal.gold} vs ${plain.gold}`);
 }
 
 // --- one pair of hands, one load ------------------------------------------------------

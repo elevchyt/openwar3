@@ -20,8 +20,8 @@ import {
   paneRowsToHide, readMapPreviewFor, setProp, size, type MinimapIcons,
 } from "./mapBrowser";
 import {
-  CONTROLLERS, HANDICAPS, PLAYER_SLOT_FDF, buildSlotRows, dropdownButtonNames, fillForceLabels,
-  forceGroups, labelOf, teamOptions, type Group,
+  HANDICAPS, PLAYER_SLOT_FDF, SLOT_OPTIONS, buildSlotRows, dropdownButtonNames, fillForceLabels,
+  forceGroups, labelOf, slotOption, slotOptionValue, teamOptions, type Group,
 } from "./playerSlots";
 import { toConfig } from "./fdfLan";
 
@@ -340,10 +340,10 @@ export async function mountLanLobbyScreen(
         name.setOptions(
           slot.kind === "player" ? [{ value: "player", label: slot.name ?? "Player" }]
           : slot.locked ? [{ value: "computer", label: labelOf("computer") }]
-          : CONTROLLERS.map(([v, l]) => ({ value: v, label: l })),
+          : SLOT_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
         );
-        name.value = slot.kind;
-        name.onChange = (v) => hostSetKind(i, v as Exclude<SlotKind, "player">);
+        name.value = slot.kind === "computer" ? slotOptionValue("computer", slot.ai) : slot.kind;
+        name.onChange = (v) => hostSetKind(i, v);
         name.setEnabled(isHost() && slot.kind !== "player" && !slot.locked);
       }
 
@@ -405,11 +405,14 @@ export async function mountLanLobbyScreen(
     if (screen) render(screen);
   }
 
-  /** Host only: what an empty row's slot menu does — Open / Closed / Computer. */
-  function hostSetKind(index: number, kind: Exclude<SlotKind, "player">): void {
+  /** Host only: what an empty row's slot menu does — Open / Closed / one of the three
+   *  computers (ui/playerSlots.ts, which owns the menu the two screens share). */
+  function hostSetKind(index: number, value: string): void {
     const slot = setup?.slots[index];
     if (!isHost() || !setup || !slot || slot.kind === "player" || slot.locked) return;
-    setup = { ...setup, slots: setup.slots.map((s, i) => (i === index ? { ...s, kind } : s)) };
+    const opt = slotOption(value);
+    const kind = (opt?.controller ?? value) as Exclude<SlotKind, "player">;
+    setup = { ...setup, slots: setup.slots.map((s, i) => (i === index ? { ...s, kind, ai: opt?.ai } : s)) };
     broadcast();
     if (screen) render(screen);
   }
