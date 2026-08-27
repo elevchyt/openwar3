@@ -11729,6 +11729,27 @@ export class SimWorld {
       this.reacquireOrStop(u);
       return;
     }
+    // It went UNTOUCHABLE mid-fight — a Divine Shield, a Big Bad Voodoo, a trigger's
+    // SetUnitInvulnerable — and the same thing happens: lose it. An attack on an invulnerable
+    // unit is one `issueAttack` refuses outright (issue #26), so an order aimed at one cannot
+    // be GIVEN; an order that outlived its target's vulnerability is the same illegal state
+    // arrived at by waiting, and it left a unit swinging forever at something it cannot hurt.
+    //
+    // The sibling order paths have always known this — attack-move and Hold Position both drop
+    // a target that "went invulnerable (Divine Shield resets aggro)", and `acquireTarget`
+    // refuses to pick one up — so this is the single-target attack order catching up with the
+    // rule the rest of the sim already keeps. That is also what makes it safe to do every
+    // tick: the re-acquire cannot hand the same unit back (acquireTarget skips it), so the
+    // attacker rolls onto another enemy or stands down, once.
+    //
+    // The community's own workaround for "make my units ignore that one and go hit something
+    // else" is to make it invulnerable, which is only a workaround if this is what the engine
+    // does with it (hiveworkshop thread 359769, "How to make units ignore attacking a unit
+    // with a specific buff?").
+    if (t.invulnerable) {
+      this.reacquireOrStop(u);
+      return;
+    }
     // A TOWER HOLDS NO GRUDGE. It cannot walk after what you pointed it at, so the moment an
     // ORDERED target steps outside the weapon it would answer with, the order is finished:
     // let go and look again, rather than standing there aimed at something that is never
@@ -12305,6 +12326,14 @@ export class SimWorld {
     let bestGap = range;
     for (const t of this.units.values()) {
       if (t === u || !this.hostile(u, t)) continue;
+      // Untouchable is not a target — the same line `acquireTarget` keeps, and it has to be
+      // kept HERE too or the attack-move that reads this loops: tickAttackMove drops an
+      // invulnerable target, zeroes its scan timer because it just lost one, and is handed the
+      // same unit straight back, every tick, for as long as it stands there. An A-move walked
+      // into a Divine Shield stopped dead beside it and never reached its destination. The
+      // creep uses (wake, go-home) want the same answer: a unit nothing in the camp can hurt
+      // is not a reason to get up.
+      if (t.invulnerable) continue;
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap >= bestGap) continue;
       if (!this.canAttack(u, t)) continue; // nothing in hand that can hit it (air/ground/structure)

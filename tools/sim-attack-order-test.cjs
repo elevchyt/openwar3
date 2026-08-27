@@ -308,5 +308,64 @@ console.log("a player's cast replaces the order it interrupted; an autocast resu
   check("an AUTOCAST goes back to it", auto.u.order === "attack" && auto.u.targetId === auto.foe.id);
 }
 
+// ── A target that goes INVULNERABLE mid-fight is let go ─────────────────────────────────
+// `issueAttack` has always refused an attack on an invulnerable unit (issue #26), so an order
+// aimed at one cannot be GIVEN — but an order that outlived its target's vulnerability was the
+// same illegal state arrived at by waiting, and it left the attacker swinging forever at
+// something it cannot hurt. A Divine Shield, a Big Bad Voodoo, a trigger's SetUnitInvulnerable.
+//
+// The sibling order paths already knew: attack-move and Hold Position both drop a target that
+// went invulnerable, and `acquireTarget` will not pick one up. This is the single-target attack
+// order keeping the same rule — which is also what makes it safe to ask every tick.
+console.log("an attack order whose target goes invulnerable");
+{
+  // Alone on the field: the attacker lets go and stands down.
+  const w = new SimWorld(grid(), 1);
+  const u = addUnit(w, 1, 0, 500, 500);
+  const shielded = addUnit(w, 2, 1, 620, 500, { weapons: [] }); // weaponless: it never pulls us back itself
+  w.issueOrder(1, { kind: "attack", targetId: shielded.id, force: false });
+  run(w, 1.5);
+  check(`is fighting it (order ${u.order}, hp ${shielded.hp})`, u.order === "attack" && u.targetId === shielded.id && shielded.hp < shielded.maxHp);
+  const hpWhenShielded = shielded.hp;
+  w.setInvulnerable(shielded.id, true);
+  run(w, 1);
+  check(`let it go (targetId ${u.targetId})`, u.targetId !== shielded.id);
+  check(`and stopped swinging at it (hp ${shielded.hp}, was ${hpWhenShielded})`, shielded.hp === hpWhenShielded);
+  // The re-acquire must not hand the same unit straight back — that would be a per-tick
+  // drop/re-target loop rather than a unit standing down.
+  let grabbedAgain = false;
+  for (let i = 0; i < Math.round(4 / SIM_DT); i++) {
+    w.tick(SIM_DT);
+    if (u.targetId === shielded.id) grabbedAgain = true;
+  }
+  check("and never picks it back up", !grabbedAgain);
+}
+{
+  // With another enemy in reach it rolls onto that one, exactly as it does when a target dies.
+  const w = new SimWorld(grid(), 1);
+  const u = addUnit(w, 1, 0, 500, 500);
+  const shielded = addUnit(w, 2, 1, 620, 500, { weapons: [] });
+  const other = addUnit(w, 3, 1, 860, 500, { weapons: [] });
+  w.issueOrder(1, { kind: "attack", targetId: shielded.id, force: false });
+  run(w, 1.5);
+  w.setInvulnerable(shielded.id, true);
+  run(w, 4);
+  check(`rolled onto the other enemy (targetId ${u.targetId}, other ${other.id})`, u.targetId === other.id);
+  check(`…and is hitting it (hp ${other.hp})`, other.hp < other.maxHp);
+}
+{
+  // The same rule on the AUTOMATIC side, where the thrash would show: an attack-move walks
+  // PAST an untouchable enemy to its destination instead of re-engaging it every tick.
+  // `nearestEnemy` skips it, so the A-move never stops to fight what it cannot hurt.
+  const w = new SimWorld(grid(), 1);
+  const u = addUnit(w, 1, 0, 300, 500);
+  const shielded = addUnit(w, 2, 1, 900, 500, { weapons: [] });
+  w.setInvulnerable(shielded.id, true);
+  w.issueOrder(1, { kind: "attackmove", x: 2400, y: 500 });
+  run(w, 12);
+  check(`advanced past it (x ${u.x.toFixed(0)}, it stands at 900, destination 2400)`, u.x > 2000);
+  check(`never engaged it (targetId ${u.targetId}, hp ${shielded.hp})`, shielded.hp === shielded.maxHp);
+}
+
 console.log(failures === 0 ? "\nattack-order: all checks passed" : `\nattack-order: ${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);
