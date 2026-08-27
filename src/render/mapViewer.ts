@@ -994,7 +994,8 @@ export class MapViewerScene {
   /** The dim over the battlefield while the world is stopped (`.pause-veil`). */
   private pauseVeil: HTMLElement | null = null;
   /** A script's own dialog (`DialogDisplay`) is on screen. Modal, like the four console
-   *  panels — see `deadPanels`. */
+   *  panels — see `deadPanels` — and in single-player it stops the world with them
+   *  (`syncPanelPause`). */
   private dialogUp = false;
   /** The dead-panel set the console was last dressed for, as a comparable string. */
   private deadPanelKey = "";
@@ -6389,6 +6390,25 @@ export class MapViewerScene {
     return this.humanPlayers > 1;
   }
 
+  /**
+   * **`bj_isSinglePlayer`** — the line every "…in single player" rule in this file is drawn on,
+   * and the game's own definition of it. `Blizzard.j` computes it once at init and by exactly
+   * this count:
+   *
+   *     if (GetPlayerController(Player(index)) == MAP_CONTROL_USER and
+   *         GetPlayerSlotState(Player(index)) == PLAYER_SLOT_STATE_PLAYING) then
+   *         set userControlledPlayers = userControlledPlayers + 1
+   *     …
+   *     set bj_isSinglePlayer = (userControlledPlayers == 1)
+   *
+   * So it is HUMAN SEATS, not the wire and not the slot count: a skirmish against three
+   * computers is single-player and may stop the world whenever it likes, because nobody else
+   * is waiting on the clock.
+   */
+  private get singlePlayer(): boolean {
+    return !this.multiplayerMatch;
+  }
+
   /** A player's display label — the lobby name, as the owner line and the Allies rows use. */
   private playerLabel(player: number): string {
     return this.playerNames.get(player) ?? `Player ${player + 1}`;
@@ -6877,14 +6897,47 @@ export class MapViewerScene {
     // held, so releasing steps forward from now rather than replaying the whole wait at once.
   }
 
-  /** **The Quest Log stops the world, exactly as the Game Menu does.** Single-player WC3
-   *  pauses behind both — they are the two panels you READ, and the mission is not allowed to
-   *  move on while you do. The Allies and Chat dialogs do not pause: those are things you do
-   *  while the match runs. Recomputed from what is actually open rather than tracked per
-   *  keypress, so the "one at a time" rule above can't leave the world stopped behind a panel
-   *  that is no longer there. */
+  /**
+   * **Three things you READ stop the world, and only in single player.**
+   *
+   * The Game Menu, the Quest Log and a script's own dialog. The mission is not allowed to move
+   * on while you are reading one of them — but that is a rule about a game NOBODY ELSE is
+   * waiting on, and `Blizzard.j` writes the condition out in as many words at the victory
+   * screen:
+   *
+   *     if (GetLocalPlayer() == whichPlayer) then
+   *         call EnableUserControl( true )
+   *         if bj_isSinglePlayer then
+   *             call PauseGame( true )
+   *         endif
+   *         call EnableUserUI(false)
+   *     endif
+   *     call DialogDisplay( whichPlayer, d, true )
+   *
+   * Two things fall out of those six lines. `DialogDisplay` does NOT pause by itself — if it
+   * did, the `PauseGame` above it would be redundant — so a dialog stopping the world is a
+   * DELIBERATE departure here, on the developer's call: WC3's own convention is that the
+   * script asks for it at each site, and most maps simply never write the guard. And the guard
+   * it does write is `bj_isSinglePlayer`, which is exactly the rule we apply to all three: in a
+   * LAN game one player reading their Quest Log must not stop everybody else's match, and the
+   * F10 panel's Pause Game button (with its counted timeouts) is what exists for that instead.
+   *
+   * The Allies and Chat dialogs never pause, single-player or not: those are things you DO
+   * while the match runs.
+   *
+   * **One caveat worth knowing**, and it is the same one `PauseGame` has always carried: a
+   * stopped world does not pump the map's script, so a dialog that no click can dismiss and
+   * that a `TriggerSleepAction` was meant to take down would never come down. Every dialog we
+   * put up is dismissed by ANY click (the engine's own rule — see the GameDialogOverlay
+   * handler), so the click path is safe; a purely timed one is the shape to watch for.
+   *
+   * Recomputed each frame from what is actually on screen rather than tracked per keypress, so
+   * nothing here can leave the world stopped behind something that is no longer there.
+   */
   private syncPanelPause(): void {
-    this.panelPaused = this.gameMenu?.visible === true || this.questLog?.visible === true;
+    this.panelPaused =
+      this.singlePlayer &&
+      (this.gameMenu?.visible === true || this.questLog?.visible === true || this.dialogUp);
   }
 
   // --- the player's pause (F10 → Pause Game) ------------------------------------------
@@ -6993,6 +7046,9 @@ export class MapViewerScene {
    * be REMEMBERED at each of them is a sync that will be forgotten at one of them.
    */
   private syncPauseUi(): void {
+    // From what is on screen THIS frame — a script's dialog comes and goes without anybody
+    // touching a key, so the panel pause cannot be left to the two call sites that toggle one.
+    this.syncPanelPause();
     const on = this.paused;
     if (on !== this.pauseUiOn) {
       this.pauseUiOn = on;

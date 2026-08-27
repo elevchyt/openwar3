@@ -39,12 +39,12 @@ Four things fall out of that block, and all four are implemented:
 `MapViewerScene` keeps the pause in four independent fields because it has four independent
 owners, and folding them into one flag makes them clobber each other:
 
-| field          | written by                                                        |
-|----------------|-------------------------------------------------------------------|
-| `panelPaused`  | the F10 Game Menu or the F9 Quest Log being open (single-player)  |
-| `scriptPaused` | the map's own `PauseGame` native (CustomVictoryDialogBJ uses it)   |
-| `playerPaused` | a PLAYER — the Pause Game button, and over the wire in a LAN match |
-| `matchPaused`  | the match ending out from under us (v1: the host left)             |
+| field          | written by                                                              |
+|----------------|-------------------------------------------------------------------------|
+| `panelPaused`  | something you READ is open, in single-player: the F10 Game Menu, the F9 Quest Log, a script's dialog |
+| `scriptPaused` | the map's own `PauseGame` native (CustomVictoryDialogBJ uses it)          |
+| `playerPaused` | a PLAYER — the Pause Game button, and over the wire in a LAN match        |
+| `matchPaused`  | the match ending out from under us (v1: the host left)                   |
 
 `paused` is any of them, and it is what stops the world and raises the veil. `hardPaused` is
 all of them EXCEPT `panelPaused` — the state where the mouse stops issuing orders, the camera
@@ -67,7 +67,8 @@ dead key can never disagree. Three reasons put a panel on the list:
 - **a CAMPAIGN chapter** — no allies, nobody to chat with, all mission long;
 - **something MODAL is up** — one of the four panels, a script's own `DialogDisplay`, the
   match-over screen. All four go grey, the open one included: its button sits behind that
-  panel's scrim and cannot be clicked at all, so drawing it live would be a lie;
+  panel's scrim and cannot be clicked at all, so drawing it live would be a lie. (This one is
+  NOT gated on single-player: a modal covers the console whoever else is playing.);
 - **the match is STOPPED** — everything on the strip is a thing you do while a game runs. The
   Game Menu survives this reason alone, because `KEY_RESUME_GAME` lives inside it.
 
@@ -79,6 +80,40 @@ not open the Allies dialog. Same for every F-key while a trigger dialog is on sc
 **Every door out of a panel has to say so.** The Quest Log has two the host never hears about
 otherwise (its own Done button and Escape), which is the whole of the "Done leaves the game
 frozen" bug: `QuestDialogOverlay.hide` now calls `QuestModel.onClose`, and the host recomputes.
+
+## What stops for a PANEL, and why only in single player
+
+`CustomVictoryDialogBJ` writes both halves of this rule out in six lines:
+
+```jass
+if (GetLocalPlayer() == whichPlayer) then
+    call EnableUserControl( true )
+    if bj_isSinglePlayer then
+        call PauseGame( true )
+    endif
+    call EnableUserUI(false)
+endif
+call DialogDisplay( whichPlayer, d, true )
+```
+
+- **`DialogDisplay` does not pause by itself** — if it did, the `PauseGame` above it would be
+  redundant. A dialog stopping the world here is therefore a DELIBERATE departure, taken on the
+  developer's call: WC3's convention is that the script asks at each site, and most maps never
+  write the guard. The Game Menu and the Quest Log join it; the Allies and Chat dialogs never
+  do, because those are things you DO while the match runs.
+- **The guard is `bj_isSinglePlayer`**, and that is the gate all three take. In a LAN game one
+  player reading their Quest Log must not stop everybody else's match — the F10 panel's Pause
+  Game button, with its counted timeouts, is what exists for that instead.
+
+`bj_isSinglePlayer` is HUMAN SEATS, not the wire and not the slot count. Blizzard.j computes it
+once at init as `userControlledPlayers == 1`, counting slots that are both `MAP_CONTROL_USER`
+and `PLAYER_SLOT_STATE_PLAYING` — so a skirmish against three computers is single-player.
+`MapViewerScene.singlePlayer` is that same count.
+
+**One caveat**, and it is the one `PauseGame` has always carried: a stopped world does not pump
+the map's script, so a dialog that no click can dismiss and that a `TriggerSleepAction` was
+meant to take down would never come down. Every dialog we put up is dismissed by ANY click (the
+engine's own rule), so the click path is safe; a purely timed one is the shape to watch for.
 
 ## A stopped world is a still picture
 
