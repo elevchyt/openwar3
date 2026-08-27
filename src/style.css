@@ -461,7 +461,8 @@ body.hud-tooltip-skinned .hud-chatbar::after {
   text-shadow: 0 1px 2px #000, 0 0 3px #000;
   white-space: pre-wrap;
   word-break: break-word;
-  animation: hud-msg-in 140ms ease-out;
+  /* No entry animation, unlike the message line above: chat is a live conversation and a
+     140 ms slide in front of it reads as lag. It appears the instant it is said. */
 }
 @keyframes hud-msg-in {
   from { opacity: 0; transform: translateY(-3px); }
