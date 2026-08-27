@@ -141,7 +141,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   STILL PICTURE — every clock that ages the world reads `wdt`, not the frame's `dt` — and the
   whole feature documents itself in `GlobalStrings.fdf`: `KEY_RESUME_GAME` sits next to
   `KEY_PAUSE_GAME` for one and the same button, and pauses are counted in TIMEOUTS, three per
-  player, which anybody may lift.
+  player, which anybody may lift. `deadPanels()` is the ONE answer to "which console buttons
+  are dead now" that both the strip's greying and the F-keys ask, and no key ever swaps one
+  modal for another — a panel's own key closes it, every other key does nothing.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

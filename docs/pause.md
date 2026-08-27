@@ -46,15 +46,35 @@ owners, and folding them into one flag makes them clobber each other:
 | `playerPaused` | a PLAYER — the Pause Game button, and over the wire in a LAN match |
 | `matchPaused`  | the match ending out from under us (v1: the host left)             |
 
-`paused` is any of them. `hardPaused` is all of them EXCEPT `panelPaused` — the state where the
-console's Quests/Allies/Chat buttons go dead, the F-keys stop opening them, the mouse stops
-issuing orders and the camera stops moving. Panel pause is excluded from that on purpose: the
-panel that caused it is already covering those buttons with its own `.fdf-dialog-scrim`, and
-keying them on it would mean F11 could not swap an open Quest Log for the Allies dialog.
+`paused` is any of them, and it is what stops the world and raises the veil. `hardPaused` is
+all of them EXCEPT `panelPaused` — the state where the mouse stops issuing orders, the camera
+stops moving and the HUD's own hotkeys stand down (`body.game-paused`). Panel pause is left out
+of that one because a panel already covers the screen with its own `.fdf-dialog-scrim`, which
+swallows the same input by itself.
 
 The bug this split exists to prevent, twice over: `syncPanelPause` recomputes from what is
 actually on screen, so with one flag it wiped out a player's own pause the moment any panel
 closed — and closing the Quest Log un-paused a game the MAP had stopped.
+
+## One modal at a time, and whatever is in front of you is what answers
+
+`deadPanels()` is the single answer to "which of the four console buttons are dead right now",
+and BOTH halves of the interface ask it: the strip greys itself from it (`ConsoleUi
+.refreshEnabled`, applied in place — a rebuild would decode the strip's textures again for two
+CSS classes) and `togglePanel` refuses the F-key from it. One answer, so a grey button and a
+dead key can never disagree. Three reasons put a panel on the list:
+
+- **a CAMPAIGN chapter** — no allies, nobody to chat with, all mission long;
+- **something MODAL is up** — one of the four panels, a script's own `DialogDisplay`, the
+  match-over screen. All four go grey, the open one included: its button sits behind that
+  panel's scrim and cannot be clicked at all, so drawing it live would be a lie;
+- **the match is STOPPED** — everything on the strip is a thing you do while a game runs. The
+  Game Menu survives this reason alone, because `KEY_RESUME_GAME` lives inside it.
+
+A panel's own key still CLOSES it — `togglePanel` tests that before consulting the list, and a
+panel that is up must never become unclosable — but **no key swaps one modal for another**.
+Pressing F11 over an open Quest Log does nothing at all; it does not close the log, and it does
+not open the Allies dialog. Same for every F-key while a trigger dialog is on screen.
 
 **Every door out of a panel has to say so.** The Quest Log has two the host never hears about
 otherwise (its own Done button and Escape), which is the whole of the "Done leaves the game
@@ -89,6 +109,10 @@ bottom of it darkens terrain, units, floating health bars and combat text togeth
 piece of interface built into `#ui` after it paints over it untouched. It carries no z-index of
 its own on purpose — DOM order is what keeps it under the console, the panels and their scrims —
 and no pointer events, because the panels' own scrims are what make a pause modal.
+
+It is INSTANT in both directions (`display`, not an opacity transition). A pause is a hard edge
+— the world stops between one frame and the next — and a fade made stopping and starting feel
+like something the interface was thinking about.
 
 Note this is a deliberate departure: WC3 does **not** dim the map under the Esc menu (see the
 comment on `EscMenu`'s invisible scrim). The dim is tied to the world being STOPPED, not to a

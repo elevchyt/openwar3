@@ -838,16 +838,19 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
    the map canvas and the world overlays — so it darkens the battlefield, the floating health
    bars and the combat text together, and every piece of interface built into #ui after it
    paints over it untouched. No z-index of its own on purpose: DOM order is what keeps it
-   under the console, the panels and their scrims. */
+   under the console, the panels and their scrims.
+
+   INSTANT in both directions — no transition. A pause is a hard edge (the world stops between
+   one frame and the next), and a fade made stopping and starting feel like something the
+   interface was thinking about. */
 .pause-veil {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.45);
   pointer-events: none; /* the panels' own scrims are what make a pause modal */
-  opacity: 0;
-  transition: opacity 120ms linear;
+  display: none;
 }
-.pause-veil.on { opacity: 1; }
+.pause-veil.on { display: block; }
 
 /* F10 Game Menu — centred modal that dims the paused battlefield. */
 .game-menu-overlay {

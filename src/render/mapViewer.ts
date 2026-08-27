@@ -993,6 +993,11 @@ export class MapViewerScene {
   private pauseUiHard = false;
   /** The dim over the battlefield while the world is stopped (`.pause-veil`). */
   private pauseVeil: HTMLElement | null = null;
+  /** A script's own dialog (`DialogDisplay`) is on screen. Modal, like the four console
+   *  panels — see `deadPanels`. */
+  private dialogUp = false;
+  /** The dead-panel set the console was last dressed for, as a comparable string. */
+  private deadPanelKey = "";
   /** The world is standing at the gate: built, but not yet begun — a campaign chapter whose
    *  loading screen is still holding for "PRESS ANY KEY TO CONTINUE" (see `holdAtStart`). */
   private startHeld = false;
@@ -6766,7 +6771,7 @@ export class MapViewerScene {
    * the Allies dialog (F11) and the Chat dialog (F12).
    *
    * BOTH routes to them come through here — the console's own buttons and the F-keys — and
-   * three rules live here because all three are about the panels as a GROUP:
+   * two rules live here because both are about the panels as a GROUP:
    *
    *  • **Not during a cinematic.** WC3 takes the whole interface away for the length of one
    *    (`ShowInterface(false)` IS the letterbox), and these panels are interface: the key does
@@ -6774,28 +6779,27 @@ export class MapViewerScene {
    *    rather than floating over the film (see syncHudVisible). Keyed on the letterbox alone,
    *    like the cursor and like ESC-skips-the-cinematic: `EnableUserUI(false)` is the momentary
    *    blackout blizzard.j flicks around each cinematic FADE, and a panel must not blink for it.
-   *  • **One at a time.** They are all modal (each mounts its own scrim), so two at once is two
-   *    scrims and a panel buried under a panel. Opening any of them shuts the rest.
-   *  • **Some are dead in a campaign** (see panelDead).
-   *  • **Three of them are dead while the match is STOPPED.** The Quest Log, the Allies
-   *    dialog and the Chat dialog are all things you do while a game runs; the console greys
-   *    them from the same rule (ConsoleUi's PAUSE_DEAD_PANELS), and this is the F-key half of
-   *    it. The Game Menu stays live because `KEY_RESUME_GAME` lives inside it — it is the way
-   *    out. CLOSING is always allowed: a panel that is already up must never become
-   *    unclosable, and the Quest Log's own pause is not counted here (`hardPaused`) so F11
-   *    can still swap it for the Allies dialog.
+   *  • **Whatever is in front of you is what answers.** A panel's own key CLOSES it — one that
+   *    is up must never become unclosable — and every other key does NOTHING while it is up.
+   *    Not "close that one and open this one": these are modal screens, and WC3 does not swap
+   *    one modal for another. `deadPanels` is the whole of that rule and the console greys
+   *    itself from the same answer, so the buttons and the keys can never disagree.
    */
   private togglePanel(panel: ConsolePanel): void {
-    if (!this.interfaceShown || this.panelDead(panel)) return;
-    const wasOpen = this.panelOpen(panel);
-    if (!wasOpen && this.hardPaused && panel !== "menu") return;
-    this.closePanels(); // one at a time — and this is also how a toggle CLOSES its own panel
-    if (!wasOpen) {
-      if (panel === "quests") this.questLog?.show();
-      else if (panel === "menu") this.gameMenu?.show();
-      else if (panel === "allies") this.allies?.show();
-      else this.chatDialog?.show();
+    if (!this.interfaceShown) return;
+    // The one thing that is always allowed. Ahead of `deadPanels`, which lists the OPEN panel
+    // among the dead ones (its button is behind the panel's own scrim and cannot be clicked;
+    // the key is what is left).
+    if (this.panelOpen(panel)) {
+      this.closePanels();
+      return;
     }
+    if (this.deadPanels().has(panel)) return;
+    this.closePanels(); // belt and braces — by here nothing else is open
+    if (panel === "quests") this.questLog?.show();
+    else if (panel === "menu") this.gameMenu?.show();
+    else if (panel === "allies") this.allies?.show();
+    else this.chatDialog?.show();
     this.syncPanelPause();
   }
 
@@ -6807,20 +6811,41 @@ export class MapViewerScene {
     return this.chatDialog?.visible === true;
   }
 
-  /** Panels this match has no use for: a CAMPAIGN chapter is single-player against the map's
-   *  own AI, so there is nobody to ally with and nobody to talk to — WC3 leaves the Allies and
-   *  Chat buttons dead through a mission, and the F-keys with them. The console greys the same
-   *  two from the same answer (ConsoleUiActions.disabledPanels). */
-  private panelDead(panel: ConsolePanel): boolean {
-    return this.campaign && (panel === "allies" || panel === "chat");
+  /** Is anything MODAL on screen — one of the four panels, a script's own dialog
+   *  (`DialogDisplay`, see showDialog), or the match-over screen? */
+  private get modalUp(): boolean {
+    return this.dialogUp || this.matchOver !== null || MapViewerScene.ALL_PANELS.some((p) => this.panelOpen(p));
   }
+  private static readonly ALL_PANELS: readonly ConsolePanel[] = ["quests", "menu", "allies", "chat"];
 
-  /** The panels a campaign kills — the console's own copy of `panelDead`. */
+  /**
+   * The panels that are dead RIGHT NOW — greyed on the console (with the FDF's own disabled
+   * face and caption) and deaf to their F-key. ONE answer, asked by both, so a grey button and
+   * a dead key are always the same fact.
+   *
+   * Three reasons, and two of them are "there is already something in front of you":
+   *
+   *  • **A CAMPAIGN chapter** is single-player against the map's own AI, so there is nobody to
+   *    ally with and nobody to talk to. WC3 leaves Allies and Chat dead for the whole mission.
+   *  • **Something MODAL is up** — a panel, a script's dialog, the match-over screen. All four
+   *    go grey, the open one included: its button is behind that panel's own scrim and cannot
+   *    be clicked at all, so drawing it live would be a lie. Its KEY still closes it
+   *    (`togglePanel` tests that first), and so do Done, Escape and Return to Game.
+   *  • **The match is STOPPED.** Everything on this strip is a thing you do while a game runs.
+   *    The Game Menu survives this one alone, because `GlobalStrings.fdf` keeps
+   *    `KEY_RESUME_GAME` next to `KEY_PAUSE_GAME` for one and the same `PauseButton` — the only
+   *    way out of a pause is inside that panel, and greying it would strand the match.
+   */
   private deadPanels(): ReadonlySet<ConsolePanel> {
-    return this.campaign ? MapViewerScene.CAMPAIGN_DEAD_PANELS : MapViewerScene.NO_DEAD_PANELS;
+    const dead = new Set<ConsolePanel>();
+    if (this.campaign) {
+      dead.add("allies");
+      dead.add("chat");
+    }
+    if (this.modalUp) for (const p of MapViewerScene.ALL_PANELS) dead.add(p);
+    else if (this.hardPaused) for (const p of MapViewerScene.ALL_PANELS) if (p !== "menu") dead.add(p);
+    return dead;
   }
-  private static readonly CAMPAIGN_DEAD_PANELS: ReadonlySet<ConsolePanel> = new Set(["allies", "chat"] as const);
-  private static readonly NO_DEAD_PANELS: ReadonlySet<ConsolePanel> = new Set();
 
   /** Shut every console panel. Idempotent — each panel's own `hide` is. */
   private closePanels(): void {
@@ -6969,21 +6994,31 @@ export class MapViewerScene {
    */
   private syncPauseUi(): void {
     const on = this.paused;
+    if (on !== this.pauseUiOn) {
+      this.pauseUiOn = on;
+      this.pauseVeil?.classList.toggle("on", on);
+      // The portrait bust runs a rAF loop of its OWN (render/modelViewer.ts), on its own canvas
+      // and its own viewer, so zeroing the world's step does not reach it — the head went on
+      // breathing over a stopped battlefield. `stop` is already a pause there rather than a
+      // teardown ("fresh dt on resume"), so the clip picks up mid-breath when the match does.
+      if (on) this.portraitViewer?.stop();
+      else if (this.portraitFor !== null) this.portraitViewer?.start();
+    }
     const hard = this.hardPaused;
-    if (on === this.pauseUiOn && hard === this.pauseUiHard) return;
-    this.pauseUiOn = on;
-    this.pauseUiHard = hard;
-    this.pauseVeil?.classList.toggle("on", on);
-    this.consoleUi?.setPaused(hard);
-    // The keyboard goes with the mouse: the HUD's own hotkeys (control groups, the command
-    // card's letters, the chat key) read this class the way they read `game-menu-open`.
-    document.body.classList.toggle("game-paused", hard);
-    // The portrait bust runs a rAF loop of its OWN (render/modelViewer.ts), on its own canvas
-    // and its own viewer, so zeroing the world's step does not reach it — the head went on
-    // breathing over a stopped battlefield. `stop` is already a pause there rather than a
-    // teardown ("fresh dt on resume"), so the clip picks up mid-breath when the match does.
-    if (on) this.portraitViewer?.stop();
-    else if (this.portraitFor !== null) this.portraitViewer?.start();
+    if (hard !== this.pauseUiHard) {
+      this.pauseUiHard = hard;
+      // The keyboard goes with the mouse: the HUD's own hotkeys (control groups, the command
+      // card's letters, the chat key) read this class the way they read `game-menu-open`.
+      document.body.classList.toggle("game-paused", hard);
+    }
+    // The console's greying answers to more than the pause — a panel, a script's dialog — so
+    // it is keyed on the SET `deadPanels` returns rather than on any one flag, and refreshed
+    // in place (a rebuild would decode the strip's textures again for two CSS classes).
+    const key = [...this.deadPanels()].sort().join(",");
+    if (key !== this.deadPanelKey) {
+      this.deadPanelKey = key;
+      this.consoleUi?.refreshEnabled();
+    }
   }
 
   /** The HUD is on screen only when the interface (ShowInterface) AND the UI (EnableUserUI)
@@ -7028,6 +7063,7 @@ export class MapViewerScene {
    *  over the whole screen, not clipped to the panel. */
   private showDialog(d: DialogObj | null): void {
     this.dialog?.update(d);
+    this.dialogUp = !!d;
     document.body.classList.toggle("dialog-on", !!d);
   }
 
@@ -9821,6 +9857,8 @@ export class MapViewerScene {
     this.disposeFog(); // the veil mesh and its GL texture — loadMap dropped these, exit didn't
     document.body.classList.remove("reticle-on", "armed-on", "carrying-item", "game-paused");
     this.pauseUiOn = this.pauseUiHard = false;
+    this.dialogUp = false;
+    this.deadPanelKey = "";
     document.body.style.cursor = ""; // restore the default cursor off the map
     // The last three things the match wrote to the PAGE rather than to itself: the edge-scroll
     // arrow and the world-anchored overlay layer, both parented to `document.body`, and the

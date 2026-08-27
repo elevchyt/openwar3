@@ -132,21 +132,6 @@ export type ConsolePanel = "quests" | "menu" | "allies" | "chat";
 
 const EMPTY_PANELS: ReadonlySet<ConsolePanel> = new Set();
 
-/**
- * The buttons a PAUSED game takes away.
- *
- * Everything on this strip is a thing you do while the match runs, and a stopped match is not
- * running — so the three panels go grey (the FDF ships the face for it:
- * `UpperMenuButtonDisabledBackground`, plus a `DisabledText` caption per button, and
- * `ControlDisabledBackdrop`'s CSS twin stops the click).
- *
- * **Menu is not on the list, and must never be.** `GlobalStrings.fdf` keeps
- * `KEY_RESUME_GAME` next to `KEY_PAUSE_GAME` for one and the same `PauseButton`, which puts
- * the only way OUT of a pause inside the F10 panel — grey the button that opens it and the
- * match can never be restarted.
- */
-const PAUSE_DEAD_PANELS: ReadonlySet<ConsolePanel> = new Set(["quests", "allies", "chat"] as const);
-
 const BUTTONS: Array<{ frame: string; panel: ConsolePanel }> = [
   { frame: "UpperButtonBarQuestsButton", panel: "quests" },
   { frame: "UpperButtonBarMenuButton", panel: "menu" },
@@ -156,9 +141,16 @@ const BUTTONS: Array<{ frame: string; panel: ConsolePanel }> = [
 
 export interface ConsoleUiActions {
   openPanel(panel: ConsolePanel): void;
-  /** Which of the four buttons are dead in this match — greyed and unclickable. A CAMPAIGN
-   *  kills Allies and Chat: a mission has nobody to ally with and nobody to talk to. Asked
-   *  on every build rather than passed once, because a resize rebuilds the whole strip. */
+  /**
+   * Which of the four buttons are dead RIGHT NOW — greyed with the FDF's own disabled face
+   * (`UpperMenuButtonDisabledBackground` plus each button's `DisabledText` caption) and
+   * unclickable with it.
+   *
+   * The reasons are the host's (a campaign, a modal panel, a script's dialog, a stopped
+   * match — see mapViewer.deadPanels); the strip only draws the answer. Asked rather than
+   * passed, and re-asked on every build AND every `refreshEnabled`, because the answer moves
+   * mid-match and a resize rebuilds every frame from the FDF.
+   */
   disabledPanels?(): ReadonlySet<ConsolePanel>;
   /** Put the day/night medallion in the slot the strip leaves for it (render/timeIndicator.ts).
    *  Returns false when there is no install to render the model from. */
@@ -180,9 +172,6 @@ export class ConsoleUi {
   private mounting = false;
   private shown = true;
   private last: ConsoleResources | null = null;
-  /** Is the match stopped? Kept here rather than asked for through `actions`, because it
-   *  changes mid-life and the strip is not rebuilt for it — see `setPaused`. */
-  private paused = false;
 
   /** `skin` is the war3skins.txt section the chrome is decorated from — the console art and
    *  the button atlas are per-RACE (`orc-console-buttonstates2.blp`, `OrcUITile01`). */
@@ -206,23 +195,19 @@ export class ConsoleUi {
     if (el) el.style.display = on ? "" : "none";
   }
 
-  /** The match stopped (or started again). Applied in place — a rebuild would decode the
-   *  strip's textures again for a state change that is two CSS classes. */
-  setPaused(on: boolean): void {
-    if (this.paused === on) return;
-    this.paused = on;
+  /** Re-ask `disabledPanels` and redress the four buttons. Applied in place — a rebuild would
+   *  decode the strip's textures again for a state change that is two CSS classes. */
+  refreshEnabled(): void {
     this.applyEnabled();
   }
 
-  /** Grey whichever of the four buttons this match and this moment have no use for. Called
-   *  on every BUILD as well as on every pause, because a resize rebuilds every frame from the
-   *  FDF and hands them all back enabled. */
+  /** Grey whichever of the four buttons this moment has no use for. Called on every BUILD as
+   *  well as on every refresh, because a resize rebuilds every frame from the FDF and hands
+   *  them all back enabled. */
   private applyEnabled(screen: FdfScreen | null = this.screen): void {
     if (!screen) return;
     const dead = this.actions.disabledPanels?.() ?? EMPTY_PANELS;
-    for (const b of BUTTONS) {
-      screen.setEnabled(b.frame, !dead.has(b.panel) && !(this.paused && PAUSE_DEAD_PANELS.has(b.panel)));
-    }
+    for (const b of BUTTONS) screen.setEnabled(b.frame, !dead.has(b.panel));
   }
 
   /** Push the current resource figures. Cheap to call every frame: it only writes the four
