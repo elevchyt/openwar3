@@ -786,6 +786,7 @@ export class RtsController {
     this.meleeAi = new MeleeAi({
       world: this.sim,
       registry: this.registry,
+      abilities: this.abilities,
       tech: this.tech,
       upgrades: this.upgrades,
       execute: (player, cmd) => this.execute(player, cmd),

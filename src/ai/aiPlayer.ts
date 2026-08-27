@@ -1,4 +1,5 @@
 import type { Command } from "../game/commands";
+import type { AbilityRegistry } from "../data/abilities";
 import type { UnitDef, UnitRegistry } from "../data/units";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
@@ -48,6 +49,10 @@ import {
 export interface AiHost {
   world: SimWorld;
   registry: UnitRegistry;
+  /** Every ability's row — what `AiCaster` reads a spell's reach, area, targets and buffs
+   *  off (src/ai/casting.ts). The sim keeps its own copy privately, so the caster is handed
+   *  the registry rather than digging for it. */
+  abilities: AbilityRegistry;
   tech: TechRegistry;
   upgrades: UpgradeRegistry;
   /** The one door out: every AI decision is a player command, judged by the authority. */

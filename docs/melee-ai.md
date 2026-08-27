@@ -170,54 +170,93 @@ rather than by any file in the install (see the citations at
 **Normal is the absence of both**, which is why it is the middle rung and why it was the only one
 seated for so long.
 
-## Hero spells — not done, and what it would take
+## Spells — the one part with no script to port
 
-**The AI's heroes learn their spells and never cast them.** `SetHeroLevels(SkillArrays)` spends
-the points down each race's own `set skill[N] = …` list, so an AI Archmage really does end up
-with Blizzard at rank 3 — it simply never presses it. Deferred deliberately; this section is the
-handover.
-
-**There is no script to port, and that is the whole difficulty.** The four race files decide
-what a hero LEARNS and then say nothing about using it. Casting is the engine's:
+**A computer's units cast.** [`casting.ts`](../src/ai/casting.ts) is the chooser, on its own
+half-second clock beside the 2s build pass and the 1s attack pass, and it is the one thread of
+`src/ai/` that is **not** a transcription — because there is nothing to transcribe. The four
+race files decide what a hero LEARNS (`set skill[1] = HOLY_BOLT`, spent by `SetHeroLevels`) and
+then say nothing about using it. Casting is the engine's:
 [`tinkerworx-repos.md`](reverse-engineering/tinkerworx-repos.md) has it as a `heroAbility`
 object hung off `CUnit` beside `attackAbility`/`moveAbility`/`buildAbility`, i.e. C++ in
-`Game.dll`. So this one has to be **designed**, which is exactly why it is not in yet — the
-rest of `src/ai/` is a transcription with the file's own numbers behind every branch, and this
-would be the first part with none.
+`Game.dll`.
 
-What the sources do give:
+So it is reconstructed from OBSERVATION of the real client, and there is one systematic record
+of that observation:
 
-- **`StandardAI` sets `SetTargetHeroes(not isNewbie)`** (common.ai 779–810). A computer above
-  Easy aims at HEROES first. That is the only targeting preference the scripts state out loud,
-  and it should be the one this obeys.
-- **`SetSmartArtillery`, `SetIgnoreInjured`, `SetHeroesFlee`** sit in the same block and are the
-  neighbours of the same behaviour. `SetHeroesFlee(true)` in particular pairs with any
-  panic-cast rule — a hero that runs and a hero that shields are the same decision.
-- **Everything about WHEN a spell is legal is already in the ability's row**, in the same terms
-  `SimWorld.tickAutocast` reads them: `targs1` separates friend from foe (and `self` lets the
-  caster be its own target), `Rng1` is reach, `Area1` is the patch, `Cost1` and `Cool1` are the
-  gates. `tickAutocast` is the model to follow — it is a working, data-driven "should this unit
-  cast right now" that hard-codes no ability list.
+> **Boris_Spider, "Base Abilities for Custom Spells used by AI Casters"** —
+> <https://www.hiveworkshop.com/threads/base-abilities-for-custom-spells-cast-by-melee-game-ai-units.193280/>
+> (approved tutorial, last updated 2014-08-16, eleven named contributors)
 
-A sketch that got as far as compiling, kept here so the next attempt starts past it:
+Every row of `CAST_RULES` quotes the line it came from. **This is a weaker source than the rest
+of `src/ai/`** — a thread of careful observations rather than Blizzard's own file — and the code
+says so at each site, so a later correction knows what it is correcting.
 
-- Classify each learned ability from its own row rather than from a per-spell table (which
-  would be a second copy of `KNOWN_ABILITIES` that could drift): `unitid1` set → a **summon**;
-  `targs1` naming `dead` → a **raise** (Resurrection, Animate Dead — and these must count
-  `SimWorld.corpses` through `corpseAdmits` first, or the ultimate is spent on empty ground);
-  friend-only flags or a `POLARITY_SPELLS`/`HEAL_SPELLS` entry → a **heal**; an `Area1` with a
-  non-unit target → an **AoE**; a unit target → a **nuke**; the rest → a **self-buff**.
-- Gate the lot on an enemy actually being within the hero's own `acquire` — a hero crossing the
-  map must not open with Avatar, and one standing at home must not summon wolves to watch it
-  mine.
-- **Skip a hero whose `order` is already `"cast"`.** Blizzard, Starfall, Tranquility and Death
-  and Decay are CHANNELLED, and a fresh order is what cancels a channel: a chooser that runs
-  twice a second would start Starfall repeatedly and finish it never. This is the trap.
-- One cast per hero per pass, on a clock of its own (~0.5s) rather than the 2s build rhythm.
+### What the thread establishes, and why the file is shaped the way it is
 
-The two judgement calls with no data behind them, which is where it should be argued rather
-than guessed: how many bodies an AoE wants under it before it is worth the mana, and how hurt a
-hero has to be before it spends a Divine Shield on itself.
+1. **The AI casts a BASE ABILITY, not a spell.** That is the thread's whole subject: a custom
+   map's "Thunderwrath" based on Carrion Swarm is cast exactly when Carrion Swarm is, because
+   the engine only ever sees `code`. So `CAST_RULES` is keyed on `code` — the same seam
+   `SPELL_HANDLERS` and `KNOWN_ABILITIES` already use, and the reason a custom map gets AI
+   casting for free.
+2. **An ability the engine has no rule for is never cast** — "the AI will never cast spells
+   based on Channel-Special". A code that reaches `classDefault` with nothing to derive is left
+   alone rather than guessed at.
+3. **Autocast is the same code path.** "Autocast spells have the same 'event for firing' for
+   their autocast and for their AI use (which means their autocast doesn't have to be enabled
+   for IAs)" (post 20). We already have that path — `SimWorld.tickAutocast`, a working,
+   data-driven "should this unit cast right now" — so the AI **arms** every autocast it owns and
+   lets the sim run them. That is Heal, Inner Fire, Slow, Bloodlust, Curse, Faerie Fire, Frost
+   Armor, Abolish Magic, Ensnare, Web, Raise Dead, Get Corpse and every arrow orb, with none of
+   it restated here. Three are held back and each says why in `HAND_AUTOCAST`/`NEVER`.
+4. **Transform abilities are the one blanket exclusion** — "except for transform abilities like
+   Destroyer Form/Bear Form/Crow Form", and post 44 gives the reason: a morph is a different
+   unit type and the AI "would think he lost a unit".
+
+### The traps, all of them real
+
+- **A unit already casting is skipped.** Blizzard, Starfall, Tranquility and Death and Decay are
+  CHANNELLED, and a fresh order is what cancels a channel — a chooser running twice a second
+  without this would start Starfall forever and finish it never.
+- **A buff already in force is not re-applied**, to the caster (Immolation, Divine Shield,
+  Avatar, Mana Shield) or to anybody else (Shadow Strike, whose thread entry states the rule
+  outright). This is the sim's own autocast doctrine (`autocastWants` → `findBuffFrom`), matched
+  on the ability's own `buffid` list. **Immolation is why it matters on the caster**: `AEim` is
+  a TOGGLE, so re-pressing it puts it out.
+- **Workers are the economy's.** `isPeon` and anyone mid-harvest/build/repair is left alone.
+- **Legality is asked of the sim.** `castUseError`/`castError` — the click-time gate — decide
+  mana, cooldown, the upgrade requirement, Targets Allowed, spell polarity and "is there even a
+  corpse". The chooser only decides WHICH of the legal targets, so it can never be more
+  permissive than the button, and every cast still leaves through `RtsController.execute`.
+
+### The two judgement calls, argued rather than guessed
+
+- **How many bodies an AoE wants: 2** (`CLUSTER`). The thread states it for every area spell it
+  describes and never varies — "at least 2 to 3 units in a group", "2+ enemies standing in the
+  AoE", "2 or more enemy units close". The LOW end, because the same thread reports single-target
+  casts slipping through ("I've had breath of fire casted when I was fighting 1 unit vs 1 unit").
+- **How hurt a caster has to be to panic: it doesn't.** "~Divine Shield - Casts when attacked …
+  The health of the unit isn't a factor for it's casting", so the trigger is *taking damage*, not
+  a health bar. The one health number the thread does give is Cannibalize's "usually around 50%
+  HP or less", and that is `NEAR_DEATH`, shared with Wind Walk's "near death". Heals use a
+  separate `HURT` = 0.75, which IS ours — the thread says only "significant/moderate damage".
+
+### What is deliberately not cast
+
+`NEVER` lists them with a reason each: the transforms, Far Sight ("Unused") and Death Pact
+("Never"), the economy errands that belong to other parts of `src/ai/` (Entangle is
+`MeleeAi.entangleMines`', Renew is the worker's job), and — flagged as OUR call rather than the
+thread's — the abilities that trade a whole unit for one cast (Kaboom!, Unstable Concoction) and
+the army-logistics spells the thread records nothing about (Blink, Mass Teleport, the staves).
+
+### Verifying it
+
+[`tools/ai-casting-test.cjs`](../tools/ai-casting-test.cjs) (`pnpm sim:test`) drives the chooser
+over a real `SimWorld` — the legality gate has to be the real one or the test tests nothing —
+and each case quotes the thread line it checks. Live, `?dev&map=EchoIsles&ai=insane` plus a
+staged fight shows Purge, Sentry Ward, Shock Wave, War Stomp and Feral Spirit going off inside
+the first seconds, and every caster dry a few seconds later: **mana is what paces this**, not the
+clock.
 
 ## Where it runs, and why it cannot cheat
 

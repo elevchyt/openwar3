@@ -156,7 +156,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   also why `SetBuildUnit(1, KEEP)` means *upgrade the hall* and never *found a Keep*. Every
   decision leaves through `RtsController.execute`, so a computer is gated exactly as your own
   click is and cannot cheat. A campaign chapter gets no melee AI: its computers are the
-  mission's.
+  mission's. **SPELLS are the exception to "a number here is the game's"**: the race scripts say
+  what a hero LEARNS and nothing about using it, so [`casting.ts`](src/ai/casting.ts) is built on
+  Boris_Spider's observation thread (hiveworkshop 193280) instead — every rule quotes its line,
+  and it is keyed on the BASE ability code, which is the thread's own point.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

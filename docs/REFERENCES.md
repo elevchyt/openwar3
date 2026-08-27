@@ -28,6 +28,21 @@ semantics came from
 [How does Turn Rate work? (thread 129619)](https://www.hiveworkshop.com/threads/how-does-turn-rate-work.129619/)
 — the object-editor value is radians per 0.03 s internal frame, capped at ~0.2 rad/frame.
 
+**When the AI casts a spell** is documented in exactly one place, and it is an observation
+thread rather than a file: [Base Abilities for Custom Spells used by AI Casters (thread
+193280)](https://www.hiveworkshop.com/threads/base-abilities-for-custom-spells-cast-by-melee-game-ai-units.193280/)
+by **Boris_Spider** (approved tutorial, eleven contributors, last updated 2014-08-16). It lists
+~70 BASE abilities with the trigger the melee AI is observed casting each on — "Storm Bolt …
+has preference to target heroes", "Blizzard/Rain of Fire … at least 2 to 3 units in a group",
+"Divine Shield - Casts when attacked … the health of the unit isn't a factor", "Death Pact -
+Never", "Farsight - Unused" — plus the one blanket exclusion (transform abilities) and the
+observation that an autocast's AI use and its autocast are the same event. It is the whole
+source behind [`src/ai/casting.ts`](../src/ai/casting.ts); see [`melee-ai.md`](melee-ai.md).
+**Gotchas:** several entries are listed with no trigger recorded (a bare dash) and a few are
+disputed in the replies (Frost Nova's "every cool down", Breath of Fire's cone quorum), so it is
+weaker evidence than a data file — treat a rule from it as a hypothesis and say in the code that
+it came from here.
+
 **[Liquipedia Warcraft](https://liquipedia.net/warcraft/Main_Page) is a top-tier source for how the
 engine behaves** — attributes, experience, damage/armor tables, upkeep, day/night, and per-ability
 mechanics are all documented with exact numbers. Especially useful pages:

@@ -1,6 +1,7 @@
 import type { PlayableRace } from "../data/races";
 import type { SimUnit } from "../sim/world";
 import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, RETREAT_HP_FRACTION, TOWN_RADIUS } from "./aiPlayer";
+import { AiCaster, CAST_PERIOD } from "./casting";
 import type { MeleeScript } from "./script";
 import { HUMAN_AI } from "./human";
 import { ORC_AI } from "./orc";
@@ -59,8 +60,12 @@ type CaptainMode = "idle" | "forming" | "attacking" | "home";
 interface Brain {
   ai: AiPlayer;
   script: MeleeScript;
+  /** The spell chooser — `casting.ts`, on a clock of its own (see CAST_PERIOD). It is the
+   *  one thread of the AI with no script behind it; docs/melee-ai.md says why. */
+  caster: AiCaster;
   buildIn: number;
   attackIn: number;
+  castIn: number;
   /** The opening `loop exitwhen c_hero1_done > 0 and …` has been passed once. */
   started: boolean;
   /** `Sleep(240)` / `Sleep(60)` — an easy computer's enforced idleness. */
@@ -113,10 +118,20 @@ export class MeleeAi {
     ai.captainHeld = members;
     this.brains.push({
       ai, script,
+      caster: new AiCaster({
+        world: this.host.world,
+        player,
+        def: (id) => this.host.abilities.get(id),
+        hostile: (u) => ai.hostileTo(u),
+        order: (cmd) => ai.order(cmd),
+      }),
       // `StaggerSleep(1, 2)` — the computers' passes are spread across the interval rather
       // than all landing on the same frame.
       buildIn: 1 + (2 * player) / 12,
       attackIn: ATTACK_PERIOD,
+      // Staggered like the build pass, and for the same reason: twelve computers whose
+      // casters all thought on the same frame would spike one frame in every four.
+      castIn: CAST_PERIOD * (1 + player / 12),
       started: false,
       waveDelay: 0,
       mode: "idle",
@@ -151,6 +166,11 @@ export class MeleeAi {
       if (b.attackIn <= 0) {
         b.attackIn = ATTACK_PERIOD;
         this.attackPass(b, ATTACK_PERIOD);
+      }
+      b.castIn -= dt;
+      if (b.castIn <= 0) {
+        b.castIn = CAST_PERIOD;
+        b.caster.pass();
       }
     }
   }
