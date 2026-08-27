@@ -39,6 +39,7 @@ import {
   xpToReachLevel,
   type ReviveMode,
 } from "../data/gameplayConstants";
+import { simProfile } from "./profile";
 import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
@@ -11717,6 +11718,9 @@ export class SimWorld {
     // a *missed* invalidation site would leave a player's requirements silently stale,
     // which is a far nastier bug than one cheap pass.
     this.tech?.invalidate();
+    // Sub-phases of `sim.world`, for the log (src/sim/profile.ts). Six spans a step, on a
+    // profiler that is a no-op unless a match plugged one in.
+    simProfile.begin("sim.world.pre");
     this.tickAttackReveals(dt);
     this.tickBuildings(dt);
     this.tickMineCrews(dt); // night elf and undead gold: no round trip, just a crew and a clock
@@ -11724,6 +11728,8 @@ export class SimWorld {
     this.tickShopBuyers(); // adopt a purchaser for whoever has just walked one up to a shop
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
     this.tickBlight(dt); // the rot spreading out from each new structure (before recompute)
+    simProfile.end("sim.world.pre");
+    simProfile.begin("sim.world.units");
     for (const u of this.units.values()) {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
       this.tickMeld(u); // Shadow Meld holds only while the unit is still and the sun is down
@@ -11834,12 +11840,24 @@ export class SimWorld {
           break;
       }
     }
+    simProfile.end("sim.world.units");
+    simProfile.begin("sim.world.move");
+    simProfile.begin("sim.world.move.walk");
     this.tickMovement(dt);
     this.carryPassengers(); // a transport's cargo moves with it
+    simProfile.end("sim.world.move.walk");
+    simProfile.begin("sim.world.move.collide");
     this.resolveCollisions();
+    simProfile.end("sim.world.move.collide");
     this.tickWaygates(); // anything now standing in a gate's box comes out the far end
+    simProfile.begin("sim.world.move.air");
     this.resolveAirSeparation(dt);
+    simProfile.end("sim.world.move.air");
+    simProfile.end("sim.world.move");
+    simProfile.begin("sim.world.projectiles");
     this.tickProjectiles(dt);
+    simProfile.end("sim.world.projectiles");
+    simProfile.begin("sim.world.spells");
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
     this.tickDrains(); // a broken Drain channel takes its buffs and its beam down with it
     this.tickPossessions(dt); // …and a Possession that survived its 4.5s changes hands
@@ -11848,6 +11866,8 @@ export class SimWorld {
     this.tickWards(); // Stasis Trap proximity stun (the Healing Ward is an aura — see AURA_BUFFS)
     this.tickDevour(dt); // Kodo digests any swallowed unit
     this.tickCorpses(dt); // decay flesh→bone→gone
+    simProfile.end("sim.world.spells");
+    simProfile.begin("sim.world.post");
     for (const u of this.units.values()) {
       // Turning runs every tick, independent of movement: a unit that arrived
       // (or stands attacking) still finishes rotating to its desired heading —
@@ -11872,6 +11892,7 @@ export class SimWorld {
         this.startNextQueued(u);
       }
     }
+    simProfile.end("sim.world.post");
   }
 
   // A moving unit that barely progresses (blocked by units it may not push) gives

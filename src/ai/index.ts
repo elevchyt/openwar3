@@ -8,6 +8,7 @@ import { ORC_AI } from "./orc";
 import { UNDEAD_AI } from "./undead";
 import { ELF_AI } from "./elf";
 import { MELEE_NEWBIE, MELEE_NORMAL } from "./ids";
+import { simProfile, perfNow } from "../sim/profile";
 
 // The melee AI's scheduler — `StandardAI`'s three threads, plus the CAPTAIN they feed
 // (issue #119). `AiPlayer` is the library and the natives; the four race files are the
@@ -160,17 +161,34 @@ export class MeleeAi {
       b.buildIn -= dt;
       if (b.buildIn <= 0) {
         b.buildIn = BUILD_PERIOD;
+        // Each of the three passes is timed separately for the session log
+        // (docs/perf-logging.md). They run on their own periods and cost wildly different
+        // amounts, so one "the AI" number would say nothing about which of them to look at —
+        // and a `worst` gauge as well as the span, because a pass that fires every two
+        // seconds is averaged into invisibility by a per-frame mean.
+        simProfile.begin("sim.ai.build");
+        const t0 = perfNow();
         this.buildPass(b);
+        simProfile.end("sim.ai.build");
+        simProfile.gauge("aiBuildPass", perfNow() - t0);
       }
       b.attackIn -= dt;
       if (b.attackIn <= 0) {
         b.attackIn = ATTACK_PERIOD;
+        simProfile.begin("sim.ai.attack");
+        const t0 = perfNow();
         this.attackPass(b, ATTACK_PERIOD);
+        simProfile.end("sim.ai.attack");
+        simProfile.gauge("aiAttackPass", perfNow() - t0);
       }
       b.castIn -= dt;
       if (b.castIn <= 0) {
         b.castIn = CAST_PERIOD;
+        simProfile.begin("sim.ai.cast");
+        const t0 = perfNow();
         b.caster.pass();
+        simProfile.end("sim.ai.cast");
+        simProfile.gauge("aiCastPass", perfNow() - t0);
       }
     }
   }

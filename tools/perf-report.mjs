@@ -179,7 +179,11 @@ export function renderReport(text) {
   push("");
 
   // --- where the frame time went -----------------------------------------------
-  const phases = [...new Set(samples.flatMap((r) => Object.keys(r.phase ?? {})))];
+  const allPhases = [...new Set(samples.flatMap((r) => Object.keys(r.phase ?? {})))];
+  // Dotted names are a BREAKDOWN of the span they sit inside (`sim.world.units` inside
+  // `sim.world`), so only the dotless ones partition the frame and only they may be summed.
+  // Counting a child alongside its parent would double every millisecond it measured.
+  const phases = allPhases.filter((p) => !p.includes("."));
   const phaseRows = phases
     .map((p) => {
       const series = samples.map((r) => num(r.phase?.[p]));
@@ -203,6 +207,38 @@ export function renderReport(text) {
     ],
   ));
   push("");
+
+  // --- inside a phase ------------------------------------------------------------
+  // One table per parent that has children, so a phase that grew can be opened up without
+  // leaving the report. Each is printed with its parent's own total on the last row: what the
+  // children do NOT add up to is that span's own overhead, and worth seeing.
+  const parents = [...new Set(allPhases.filter((p) => p.includes(".")).map((p) => p.slice(0, p.lastIndexOf("."))))];
+  if (parents.length) {
+    push("INSIDE EACH PHASE  (ms per frame, averaged)", "─".repeat(60));
+    for (const parent of parents.sort()) {
+      const kids = allPhases.filter((p) => p.startsWith(parent + ".") && !p.slice(parent.length + 1).includes("."));
+      if (!kids.length) continue;
+      const row = (k, label) => {
+        const a = avg(early.map((r) => num(r.phase?.[k])));
+        const b = avg(late.map((r) => num(r.phase?.[k])));
+        const r = correlate(samples.map((s) => num(s.phase?.[k])), samples.map((s) => num(s.p50)));
+        return { label, a, b, d: b - a, r };
+      };
+      const rows = kids.map((k) => row(k, k.slice(parent.length + 1))).sort((x, y) => y.d - x.d);
+      const whole = row(parent, parent);
+      const rest = { label: "(the rest of it)", a: whole.a - rows.reduce((s, r) => s + r.a, 0), b: whole.b - rows.reduce((s, r) => s + r.b, 0) };
+      push(`  ${parent}:`);
+      push(...table(
+        ["", "first", "last", "change", "r vs frame"],
+        [
+          ...rows.map((r) => [r.label, fixed(r.a, 2), fixed(r.b, 2), signed(r.d, 2), fixed(r.r, 2)]),
+          [rest.label, fixed(rest.a, 2), fixed(rest.b, 2), signed(rest.b - rest.a, 2), ""],
+          [`= ${parent}`, fixed(whole.a, 2), fixed(whole.b, 2), signed(whole.d, 2), ""],
+        ],
+      ));
+      push("");
+    }
+  }
 
   // --- rates (things counted per second) ---------------------------------------
   const rates = [...new Set(samples.flatMap((r) => Object.keys(r.rate ?? {})))];

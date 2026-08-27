@@ -28,6 +28,7 @@ import { GhostMemory } from "./ghosts";
 import { MatchLink, SNAPSHOT_INTERVAL, type DialogMessage, type MatchLinkSetup } from "./matchLink";
 import type { ChatLine } from "./chat";
 import { applyWorldSnapshot } from "./snapshotApply";
+import { perfLog } from "../dev/perfLog";
 import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot, FxSnapshot } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
@@ -3066,8 +3067,15 @@ export class RtsController {
       // frozen client must never run a second, divergent copy of the AI (docs/multiplayer.md).
       // Gated on seeding, because until the .doo has settled there are no units to command
       // and no gold mine for `MeleeFindNearestMine` to have found.
+      // Sub-phases of `sim`, for the session log (src/dev/perfLog.ts). Dotted, so they are a
+      // breakdown of the span they sit inside rather than siblings of it.
+      perfLog.begin("sim.ai");
       if (this.meleeAi?.active && this.seeded) this.meleeAi.tick(dt);
+      perfLog.end("sim.ai");
+      perfLog.begin("sim.world");
       this.sim.tick(dt);
+      perfLog.end("sim.world");
+      perfLog.begin("sim.fx");
       // The spell/ability PRESENTATION drains — ONE consumer of the sim's queues (this),
       // two audiences: this machine's own renderer (via the drainFx* methods the renderer
       // now reads instead of the sim's), and, when hosting a wire, the recipients' payloads
@@ -3106,7 +3114,9 @@ export class RtsController {
           this.wireFx.castFires.push({ ...c, x: u?.x ?? 0, y: u?.y ?? 0 });
         }
       }
+      perfLog.end("sim.fx");
     }
+    perfLog.begin("sim.deaths");
     this.playImpacts(); // BEFORE deaths — a killed target's entry is still around to read its armour
     for (const id of this.sim.drainDeaths()) {
       // Hosting a wire: the recipients must be TOLD a unit died — its absence from the next
@@ -3133,6 +3143,7 @@ export class RtsController {
     // gains this tick. A viewpoint that was watching keeps no image — it saw the collapse.
     for (const u of this.sim.drainDeadStructures()) this.ghosts.noteDestroyed(u, this.viewpoints.viewerSeats());
     this.tickCorpses(dt);
+    perfLog.end("sim.deaths");
     if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;
     if (this.hoveredMine !== null && !this.sim.mines.has(this.hoveredMine)) this.hoveredMine = null;
     if (this.hoveredItem !== null && !this.sim.items.has(this.hoveredItem)) this.hoveredItem = null;
@@ -3141,6 +3152,7 @@ export class RtsController {
     // cheap. The initial accumulator > interval forces a rebuild on the first tick.
     // Every viewpoint keeps its own 10 Hz clock. Only the LOCAL one's rebuild re-prunes the
     // selection, because the selection is this machine's, not the match's.
+    perfLog.begin("sim.fog");
     const rebuilt = this.viewpoints.tick(dt);
     // A ghost is forgotten by SIGHT, not by a clock (measured against the real 1.27a client),
     // and the moment a viewpoint's sight changes is exactly when it rebuilt.
@@ -3148,10 +3160,14 @@ export class RtsController {
     if (rebuilt.includes(this.local)) {
       this.pruneFogged(); // whatever the new fog swallowed leaves the selection (issue #62)
     }
+    perfLog.end("sim.fog");
+    perfLog.begin("sim.link");
     this.driveMatchLink(dt);
     // Adopt the newest payload once per tick. On a client this is where "what may I see" stops
     // being a question we answer and becomes one we were answered (`modelHidden`).
     this.snapshot.update(this.matchLink?.latest() ?? null);
+    perfLog.end("sim.link");
+    perfLog.begin("sim.entries");
     for (const e of this.entries) {
       // The FRAME's record: the local sim on the host and in single-player, the received
       // snapshot on a client (item 10c-2c-2). `undefined` means there is nothing to draw —
@@ -3415,8 +3431,11 @@ export class RtsController {
       for (const e of this.forgotten) this.dropEntry(e);
       this.forgotten.length = 0;
     }
+    perfLog.end("sim.entries");
+    perfLog.begin("sim.overlays");
     this.updateHealthBars();
     this.overlays.syncHoverTip(this.computeHoverTip());
+    perfLog.end("sim.overlays");
   }
 
   /** The sim removed this unit: play its death animation, then decay the corpse

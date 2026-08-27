@@ -159,7 +159,16 @@ class PerfLog {
     this.push({ t: "note", ms: this.now(), name, ...extra });
   }
 
-  /** Open a timed span. Nesting is not tracked: phases are meant to partition the frame. */
+  /**
+   * Open a timed span.
+   *
+   * **Top-level phases must PARTITION the frame** — they are summed and subtracted from the
+   * frame time to get what nothing accounted for, so two overlapping ones make that number a
+   * lie. To go INSIDE a phase, give the span a dotted name (`sim.world.units`): the report
+   * reads anything with a dot as a breakdown of the name before its last dot, and leaves it
+   * out of the partition. So `sim` and `render` are siblings that must not overlap, while
+   * `sim.ai` may sit inside `sim` freely, and `sim.world.units` inside `sim.world`.
+   */
   begin(phase: string): void {
     if (!ON) return;
     this.spans[phase] = performance.now();

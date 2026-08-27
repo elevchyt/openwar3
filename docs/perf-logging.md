@@ -37,6 +37,7 @@ recording off for one boot.
 | [`tools/dev-log.mjs`](../tools/dev-log.mjs) | `pnpm dev:log` — Vite with `OPENWAR3_PERF` set |
 | [`tools/vite-plugin-perf-log.ts`](../tools/vite-plugin-perf-log.ts) | the dev server's `/perf/*` endpoints, which own `.logs/` |
 | [`tools/perf-report.mjs`](../tools/perf-report.mjs) | all of the analysis, off the file |
+| [`src/sim/profile.ts`](../src/sim/profile.ts) | the hole the sim calls, because it may not import the recorder |
 
 **Why the dev server writes the file.** A browser cannot append to a file in the project, and
 everything it *can* write to (localStorage, IndexedDB, a download) is somewhere you cannot
@@ -111,13 +112,28 @@ first-time console error within 15 s.
 ## Adding to it
 
 - **A new phase**: `perfLog.begin("name")` / `perfLog.end("name")` around a stretch of the
-  frame loop in `src/render/mapViewer.ts`. Phases are meant to **partition** the frame — do not
-  nest them, or the `(unaccounted)` row stops meaning anything.
+  frame loop in `src/render/mapViewer.ts`. Top-level phases must **partition** the frame — they
+  are summed and subtracted from the frame time, so two that overlap make `(unaccounted)` a
+  lie.
+- **A phase INSIDE a phase**: give the span a dotted name. The report reads anything with a dot
+  as a breakdown of the name before its last dot and leaves it out of the partition, so
+  `sim.ai` may sit inside `sim` and `sim.world.move.walk` inside `sim.world.move`, nested as
+  deep as is useful. Each parent gets its own table under `INSIDE EACH PHASE`, with a
+  `(the rest of it)` row for what its children do not account for. This is how the AI was
+  caught: `sim` said "the sim", `sim.ai.attack` said which pass.
+- **From inside the sim**: `src/sim/world.ts` must keep compiling **standalone to CommonJS**
+  for the headless tests, and `perfLog.ts` reads `import.meta.env`, which is not even syntax
+  there. So the sim calls `simProfile.begin/end/gauge` from `src/sim/profile.ts` — a no-op the
+  renderer plugs the real recorder into when a match starts. Never import the recorder into
+  `src/sim/`.
 - **A new counter**: one line in `MapViewerScene.perfCounts()`. The bar is "can this grow?" —
   a collection that only ever holds one thing tells you nothing, and a counter that costs more
   than a `.size` read does not belong in something sampled every second.
 - **A snapshot field**: one line in `MapViewerScene.perfSnapshot()`. This is where anything
   that needs a *walk* belongs — "which model", "which type", "whose".
-- **A worst case**: `perfLog.gauge("name", ms)` keeps the window's maximum rather than its sum.
+- **A worst case**: `perfLog.gauge("name", ms)` keeps the window's maximum rather than its
+  sum. Reach for this for anything that runs on its OWN period rather than per frame — a pass
+  that fires once a second is averaged into invisibility by a per-frame mean, and its real
+  cost (one 400 ms stall) only shows up as a maximum.
 - **A marker**: `perfLog.note("what happened")`. Cheap, and it is what turns a flat stretch in
   the timeline from a mystery into "that was the pause".

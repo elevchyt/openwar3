@@ -59,6 +59,7 @@ import { ModelViewerScene } from "./modelViewer";
 import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { perfLog } from "../dev/perfLog";
+import { setSimProfiler } from "../sim/profile";
 import { wc3ToPlain } from "../ui/wc3Text";
 import { GameHud, isTyping, upkeepBand, PLAYER_COLORS, type HudDriver, type CommandButton } from "../ui/hud";
 import { GAME_WIDTH, GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
@@ -9525,9 +9526,27 @@ export class MapViewerScene {
     const scene = this.viewer.map?.worldScene as unknown as
       | { instances?: unknown[]; emittedObjectUpdater?: { objects?: unknown[]; alive?: number } }
       | undefined;
+    // Per-unit totals: one pass at 1 Hz, and the shape of "the sim got more expensive but the
+    // unit count barely moved". A route that is never trimmed, a shift-queue that never
+    // drains and a buff list that only grows all cost time every tick while leaving `units`
+    // exactly where it was.
+    let pathNodes = 0;
+    let queuedOrders = 0;
+    let buffs = 0;
+    let moving = 0;
+    for (const u of world?.units.values() ?? []) {
+      pathNodes += u.path.length;
+      queuedOrders += u.orderQueue.length;
+      buffs += u.buffs.length;
+      if (u.moving) moving++;
+    }
     return {
       // --- the simulation ---
       units: world?.units.size ?? 0,
+      moving,
+      pathNodes,
+      queuedOrders,
+      buffs,
       projectiles: world?.projectiles.size ?? 0,
       corpses: world?.corpses.size ?? 0,
       items: world?.items.size ?? 0,
@@ -9616,6 +9635,9 @@ export class MapViewerScene {
     // Record this match to `.logs/` (dev only — the whole recorder folds away in a build).
     perfLog.counters(() => this.perfCounts());
     perfLog.snapshots(() => this.perfSnapshot());
+    // The sim cannot import the recorder — it has to keep compiling standalone for the
+    // headless tests — so it calls a hole, and this is what plugs it (src/sim/profile.ts).
+    setSimProfiler(perfLog.enabled ? perfLog : null);
     perfLog.open({
       map: this.mapDisplayName || "match",
       mode: this.rts?.networked ? "lan" : "single",
@@ -10127,6 +10149,7 @@ export class MapViewerScene {
     // The match is over as far as the frame loop is concerned — close the log and let the
     // dev server render its digest beside it.
     perfLog.close();
+    setSimProfiler(null);
     this.metrics.hide();
     this.hud?.hide();
     this.portraitViewer?.stop();
