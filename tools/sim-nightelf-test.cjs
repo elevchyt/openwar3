@@ -54,10 +54,10 @@ const abilities = { get: (id) => ABILITIES[id] };
 const UNITS = {
   // `abilities` here is UnitAbilities.slk's abilList — what cargoHold/computeGarrisonCap read.
   egol: { id: "egol", abilities: ["Aenc", "Aegm"], moveType: "foot", upgradesUsed: [], buildTime: 60, goldCost: 0, lumberCost: 0, manaRegen: 0, regenType: "none", hpRegen: 0 },
-  emow: { id: "emow", abilities: ["Ambt"], moveType: "foot", upgradesUsed: ["Rews"], buildTime: 60, goldCost: 180, lumberCost: 40, manaStart: 100, manaRegen: 1.5, regenType: "none", hpRegen: 0 },
+  emow: { id: "emow", abilities: ["Ambt"], moveType: "foot", upgradesUsed: ["Rews"], buildTime: 60, goldCost: 180, lumberCost: 40, goldRep: 180, lumberRep: 40, repairTime: 50, manaStart: 100, manaRegen: 1.5, regenType: "none", hpRegen: 0 },
   ewsp: { id: "ewsp", abilities: [], moveType: "hover", upgradesUsed: [], buildTime: 60, goldCost: 0, lumberCost: 0, manaRegen: 0, regenType: "none", hpRegen: 0 },
-  eaom: { id: "eaom", abilities: [], moveType: "foot", upgradesUsed: [], buildTime: 60, goldCost: 150, lumberCost: 60, manaRegen: 0, regenType: "night", hpRegen: 0.25 },
-  etol: { id: "etol", abilities: ["Aent", "Aro1"], moveType: "foot", upgradesUsed: [], buildTime: 60, goldCost: 200, lumberCost: 0, manaRegen: 0, regenType: "night", hpRegen: 0.25 },
+  eaom: { id: "eaom", abilities: [], moveType: "foot", upgradesUsed: [], buildTime: 60, goldCost: 150, lumberCost: 60, goldRep: 150, lumberRep: 60, repairTime: 60, manaRegen: 0, regenType: "night", hpRegen: 0.25 },
+  etol: { id: "etol", abilities: ["Aent", "Aro1"], moveType: "foot", upgradesUsed: [], buildTime: 60, goldCost: 200, lumberCost: 0, goldRep: 340, lumberRep: 185, repairTime: 120, manaRegen: 0, regenType: "night", hpRegen: 0.25 },
   // The drinker, with its own regeneration turned as far down as the column allows. A
   // target topping itself up would mean the well spent less on its mana and more on its
   // life, and the arithmetic below would stop being the ability's. (Not a flat 0: an absent

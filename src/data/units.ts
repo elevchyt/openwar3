@@ -82,6 +82,17 @@ export interface WeaponSlotDef {
   areaFull: number;
   areaHalf: number;
   areaQuarter: number;
+  /**
+   * What FRACTION of the damage each outer ring gets — `Hfact`/`Qfact` (the Object Editor's
+   * "Damage Factor - Medium/Small Damage"). The names of the rings are a trap: they are NOT
+   * fixed at a half and a quarter, and 26 of the 73 splashing slots in the game say so. The
+   * Demolisher and every catapult are 0.4/0.25, the Mortar Team 0.4/0.1, the Cannon Tower
+   * 0.5/0.1, the Frost Wyrm 0.2/0.1, the Glaive Thrower 0.4/0.25, the Chimaera 0.5/0.1 —
+   * i.e. the entire siege roster. Two slots state no factor at all and take the half/quarter
+   * the ring is named for, which is the only case the old hard-coded pair was right about.
+   */
+  areaHalfFactor: number;
+  areaQuarterFactor: number;
   splashTargets: string[]; // `splashTargs` — what the AREA may catch (vs `targets`, what it may aim at)
   /**
    * `showUI` — "Attack N - Show UI". Whether this attack gets an ATTACK COMMAND on the card.
@@ -126,6 +137,25 @@ export interface UnitDef {
   // Tower `upgrade,third`. Without this, every tier renders as tier 1. See applyAnimProps().
   animProps: string[];
   soundSet: string; // unitUI "unitSound" label (e.g. "Footman") → UI\SoundInfo lookups
+  /**
+   * UnitUI `red`/`green`/`blue` — "Art - Tinting Color", the model's own vertex colour as
+   * 0..1 multipliers (the SLK writes 0–255, and 255,255,255 = untinted). WC3 uses it for the
+   * recoloured variants it did not author a texture for (the Ghoul/Abomination greens, the
+   * Chaos units), and a custom map uses it constantly: Azure Tower Defense tints 38 of its
+   * types. It multiplies the model exactly as JASS `SetUnitVertexColor` does, which is the
+   * same channel our fog dimming composes over — see rts.ts applyFogTint.
+   */
+  tint: readonly [number, number, number];
+  /**
+   * UnitData `targType` — "Combat - Targeted As", the class this unit answers to in another
+   * unit's "Targets Allowed" list. Every row declares exactly one of `ground` / `structure` /
+   * `air` / `ward`, so it is data rather than a derivation, and 17 rows disagree with the
+   * obvious guess: the twelve WARDS (Serpent/Healing/Sentry/Plague/Stasis) are `ward` and not
+   * `ground`, the Fountains of Health/Mana are `structure` while carrying `isbldg=0`, and one
+   * flyer (`zjug`) is targeted as `ground`. See sim/world.ts targetKeyOf, which prefers this
+   * over its own building/flying fallback.
+   */
+  targType: string;
   /** The PRIMARY slot's weapon-impact base ("MetalMediumSlice"), a view of `weapons` filled
    *  in by syncPrimaryWeapon; "" = a silent blow. Its source is the slot's own
    *  `weapType1/2`, not `UnitUI.weap1` — see WeaponSlotDef.weaponSound and weaponSlots(). */
@@ -169,6 +199,15 @@ export interface UnitDef {
    *  Hunter's Hall or Chimaera Roost carries none — which is exactly Liquipedia's
    *  "cannot be teleported to" list, for both races it documents. */
   buffType: string;
+  /**
+   * UnitData `cargoSize` — "Stats - Transported Size", how many SEATS this unit takes in a
+   * cargo hold. Not a headcount: a transport ship's hold is 10 and a Demolisher, Mortar Team,
+   * Kodo Beast, Glaive Thrower, Meat Wagon, Sea Giant or Goblin Sapper each cost 2 of it,
+   * while a Siege Engine, Rocket Engine or Mountain Giant costs 4 — so one ship carries five
+   * Demolishers or two Siege Engines, not ten of either. 1 for everything else, which is what
+   * a row that states none means. See SimWorld.garrisonLoad.
+   */
+  cargoSize: number;
   moveType: MoveType; // UnitData `movetp` (None for buildings/immovable units)
   isBuilding: boolean;
   pathTex: string; // pathing-footprint texture (buildings); "" for units
@@ -280,6 +319,19 @@ export interface UnitDef {
   goldCost: number;
   lumberCost: number;
   buildTime: number;
+  /**
+   * What a full repair is priced and timed AGAINST — UnitBalance `goldRep` / `lumberRep` /
+   * `reptm` ("Stats - Repair Gold/Lumber Cost", "Stats - Repair Time"). The repair ABILITY
+   * then takes its cut of them (`Arep` DataA = 0.35 of the cost, DataB = 1.5 of the time).
+   *
+   * Not the same as the build cost and time, which is what the engine used to substitute:
+   * an upgraded tier states its own basis, so a Keep, a Castle and a Stronghold all repair
+   * in 120 seconds where they were BUILT in 140, and a Scout Tower repairs in 20 where it
+   * was built in 25. A custom map may move any of the three on its own.
+   */
+  goldRep: number;
+  lumberRep: number;
+  repairTime: number;
   /**
    * What killing this unit PAYS the killer — UnitBalance `bountyplus` + `bountydice`×d`bountysides`
    * ("Stats - Bounty Awarded - Base / Number of Dice / Sides per Die" in the World Editor).
@@ -501,6 +553,9 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       animBlend: u ? num(u, "blend", 0.15) : 0.15,
       animProps,
       soundSet: u ? str(u, "unitSound") : "",
+      // "Art - Tinting Color": three 0–255 columns, absent on an untinted row. See UnitDef.tint.
+      tint: u ? [num(u, "red", 255) / 255, num(u, "green", 255) / 255, num(u, "blue", 255) / 255] : [1, 1, 1],
+      targType: (d ? str(d, "targType") : "").toLowerCase().trim(),
       weaponSound: "", // a view of the primary slot — syncPrimaryWeapon fills it below
       lumberSound: soundBase(u ? str(u, "weap2") : ""),
       armorSound: soundBase(u ? str(u, "armor") : ""),
@@ -519,6 +574,8 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
         : [],
       priority: d ? num(d, "prio", 0) : 0, // UnitData `prio` — WC3 selection-order priority
       buffType: ((d ? str(d, "buffType") : "") || "").toLowerCase().trim().replace(/^[-_]$/, ""),
+      // A row that states no size takes ONE seat — the reading 518 of the 836 rows write out.
+      cargoSize: Math.max(1, d ? num(d, "cargoSize", 1) : 1),
       moveType: toMoveType(d ? str(d, "movetp") : ""),
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       pathTex: d ? str(d, "pathTex") : "",
@@ -561,6 +618,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       goldCost: b ? num(b, "goldcost", 0) : 0,
       lumberCost: b ? num(b, "lumbercost", 0) : 0,
       buildTime: b ? num(b, "bldtm", 0) : 0,
+      // The repair basis, which defaults to the BUILD basis only when the row states none —
+      // every structure states all three. See UnitDef.goldRep.
+      goldRep: b ? num(b, "goldRep", num(b, "goldcost", 0)) : 0,
+      lumberRep: b ? num(b, "lumberRep", num(b, "lumbercost", 0)) : 0,
+      repairTime: b ? num(b, "reptm", num(b, "bldtm", 0)) : 0,
       bountyDice: b ? num(b, "bountydice", 0) : 0,
       bountySides: b ? num(b, "bountysides", 0) : 0,
       bountyPlus: b ? num(b, "bountyplus", 0) : 0,
@@ -743,6 +805,9 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
       areaFull: num(w, `Farea${n}`, 0),
       areaHalf: num(w, `Harea${n}`, 0),
       areaQuarter: num(w, `Qarea${n}`, 0),
+      // …and only when the row states NOTHING does a ring take the fraction it is named for.
+      areaHalfFactor: num(w, `Hfact${n}`, 0.5),
+      areaQuarterFactor: num(w, `Qfact${n}`, 0.25),
       splashTargets: list(str(w, `splashTargs${n}`)),
       // The column is missing on a custom row that never thought about it; an attack that
       // exists is one you can aim, so "not stated" reads as shown — only an explicit 0 hides it.
@@ -865,6 +930,11 @@ export function destructibleUnitDef(d: {
     animBlend: 0.15,
     animProps: [],
     soundSet: "",
+    tint: [1, 1, 1],
+    // A destructible's own weapon-target class is carried in `classification` (see the tail of
+    // this def) because that is where SimUnit.targetKey reads it from; this field is the UNIT
+    // table's column and a destructible has no row in it.
+    targType: "",
     weaponSound: "",
     lumberSound: "",
     armorSound: d.armorSound,
@@ -878,6 +948,7 @@ export function destructibleUnitDef(d: {
     properNames: [],
     priority: 0,
     buffType: "",
+    cargoSize: 1, // a destructible is never carried
     moveType: MoveType.None,
     // Not a BUILDING: `isBuilding` carries a tail of building behaviour with it (rally
     // points, a production queue, repair, the "structure" weapon-target key). Immobility
@@ -916,6 +987,9 @@ export function destructibleUnitDef(d: {
     goldCost: 0,
     lumberCost: 0,
     buildTime: 0,
+    goldRep: 0, // a destructible is never repaired
+    lumberRep: 0,
+    repairTime: 0,
     bountyDice: 0,
     bountySides: 0,
     bountyPlus: 0,

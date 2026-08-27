@@ -169,6 +169,7 @@ console.log("\na map's own units obey the same rule");
       slot({ weaponType: "missile", range: 500, targets: AIR_TARGETS, enabled: false, missileArt: "WardenMissile.mdx" }),
     ],
     abilities: [], heroAbilities: [], classification: [], properNames: [],
+    animProps: [], upgradesUsed: [], tint: [1, 1, 1], targType: "ground",
     attackDamage: 0, attackDice: 0, attackSides: 0, attackCooldown: 0, attackDamagePoint: 0,
     attackBackswing: 0, attackRange: 0, weaponType: "", attackType: "", missileArt: "",
     missileSpeed: 900, primaryAttr: "", strength: 0, agility: 0, intelligence: 0,

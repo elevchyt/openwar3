@@ -324,7 +324,7 @@ if (existsSync(warchasers)) {
   const base = {
     id: 'Emoo', name: 'Base', model: 'units\\base.mdx', isHero: true, primaryAttr: 0,
     strength: 20, agility: 20, intelligence: 20, abilities: [], heroAbilities: [], classification: [],
-    weapons: [], properNames: [],
+    weapons: [], properNames: [], animProps: [], upgradesUsed: [], tint: [1, 1, 1], targType: 'ground',
   };
   const reg = new UnitRegistry(new Map([['Emoo', base]]));
   const count = applyMapUnitData(reg, w3u, wts);

@@ -86,6 +86,11 @@ export interface SimWeapon {
   areaFull: number;
   areaHalf: number;
   areaQuarter: number;
+  /** …and what SHARE of the damage each outer ring gets (`Hfact`/`Qfact`). Not a half and a
+   *  quarter: 26 of the 73 splashing slots say otherwise, the whole siege roster among them.
+   *  See WeaponSlotDef.areaHalfFactor. */
+  areaHalfFactor: number;
+  areaQuarterFactor: number;
   splashTargets: string[]; // `splashTargs` — what the area may catch
   /** `weapTp` — artillery shots fly at the GROUND, everything else homes (see spawnProjectile). */
   weaponType: WeaponType;
@@ -144,7 +149,15 @@ export interface SimProjectile {
    * out of the way, while a Guard Tower's homing arrow cannot. On arrival it damages
    * everything in its rings rather than the one unit it was aimed at (see applyAreaSplash).
    */
-  area?: { aimX: number; aimY: number; full: number; half: number; quarter: number; targets: string[] };
+  area?: {
+    aimX: number; aimY: number;
+    /** The three rings, and the fraction of the damage each of the outer two gets. The
+     *  fractions travel with the shot because they are the SLOT's (`Hfact`/`Qfact`) and not
+     *  a rule — see WeaponSlotDef.areaHalfFactor. */
+    full: number; half: number; quarter: number;
+    halfFactor: number; quarterFactor: number;
+    targets: string[];
+  };
   /**
    * A WAVE: the travelling front of a line spell (Shock Wave, Carrion Swarm, Breath of
    * Fire). Aimed at a direction rather than a unit, and unlike every other projectile it
@@ -298,6 +311,8 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
       areaFull: s.areaFull,
       areaHalf: s.areaHalf,
       areaQuarter: s.areaQuarter,
+      areaHalfFactor: s.areaHalfFactor,
+      areaQuarterFactor: s.areaQuarterFactor,
       splashTargets: s.splashTargets,
       weaponType: s.weaponType,
       showUI: s.showUI,
@@ -1091,6 +1106,21 @@ export interface SimUnit {
    *  gates and crates, `wall` for barricades — the very words every melee unit's Targets
    *  Allowed already lists.  for everything else. */
   targetKey: string;
+  /** The unit type's OWN `targType` (UnitData "Combat - Targeted As"), derived at spawn from
+   *  the registry the way `waterborne` is. It answers the same question `targetKey` does and
+   *  is a separate field for one reason: `targetKey` doubles as the marker for "this is a
+   *  destructible" (rts.ts reads it that way in two places), so a unit must not fill it in.
+   *
+   *  It matters because the derivation it replaces is WRONG for 17 stock rows — the twelve
+   *  wards are `ward` rather than `ground`, the Fountains of Health/Mana are `structure`
+   *  without being buildings, and `zjug` flies while being targeted as `ground` — and for
+   *  every custom type whose map states one (`utar`). "" when the registry has no row.
+   *  See UnitDef.targType. */
+  targClass: string;
+  /** How many SEATS this unit takes in a cargo hold (`cargoSize`) — 2 for the siege roster,
+   *  4 for a Siege Engine or Mountain Giant, 1 for everything else. Derived at spawn from the
+   *  registry alongside `waterborne` and `targClass`. See UnitDef.cargoSize / garrisonLoad. */
+  cargoSize: number;
   x: number;
   y: number;
   facing: number; // radians
@@ -2109,6 +2139,13 @@ const MAGIC_IMMUNE_EXEMPT = new Set(["Adis", "Aadm", "Adcn"]);
 // window — and is then removed. The flesh stage is an early sub-phase, not added
 // on top; 88s is the full lifetime from the moment of death.
 const CORPSE_TOTAL_TIME = MISC_DATA.BoneDecayTime;
+
+// Repair's share of the target's repair cost and repair time, for a worker whose repair
+// ability row could not be read (a bare test world with no ability registry). The live values
+// are the ability's own DataA/DataB and are read per worker — see SimWorld.repairRates. Every
+// stock repair row in 1.30.4 carries exactly these: Ahrp/Arep/Aren DataA1 0.35, DataB1 1.5.
+const REPAIR_COST_RATIO = 0.35;
+const REPAIR_TIME_RATIO = 1.5;
 
 // WC3 day/night (Units\MiscData.txt): a full cycle is DayLength=480 real seconds =
 // DayHours=24 game hours (so one game hour = 20 real seconds); daytime runs from
@@ -3585,13 +3622,29 @@ export class SimWorld {
     return hold.code === "Abun" ? 4 : hold.code === "Aenc" ? 5 : 8;
   }
 
-  /** Whether `host` can take another passenger right now. */
-  private hostHasRoom(host: SimUnit): boolean {
+  /**
+   * How much of a hold is SPENT — the passengers' `cargoSize`s summed, not their number.
+   *
+   * A cargo hold is measured in seats and the siege roster costs more than one of them
+   * (UnitDef.cargoSize): a transport ship's ten seats take five Demolishers or two Siege
+   * Engines, and counting heads let it swallow ten of either. The Orc Burrow and the
+   * Entangled Gold Mine only ever hold WORKERS, which are one seat each, so the two readings
+   * agree there and nothing about either changes.
+   */
+  private garrisonLoad(host: SimUnit): number {
+    let load = 0;
+    for (const id of host.garrison) load += this.units.get(id)?.cargoSize ?? 1;
+    return load;
+  }
+
+  /** Whether `host` can take a passenger right now — `passenger` when it is a particular
+   *  one, since what "room" means depends on how many seats it needs. */
+  private hostHasRoom(host: SimUnit, passenger?: SimUnit): boolean {
     return (
       host.garrisonCap > 0 &&
       host.hp > 0 &&
       (!host.building || host.building.constructionLeft <= 0) &&
-      host.garrison.length < host.garrisonCap
+      this.garrisonLoad(host) + (passenger?.cargoSize ?? 1) <= host.garrisonCap
     );
   }
 
@@ -3629,7 +3682,7 @@ export class SimWorld {
       // A shut hold is not a refusal of the ORDER: it keeps it and waits where it stands,
       // exactly as one that walked up does — tickGarrison boards it when the roots close, or
       // stands it down if the hold was merely full.
-      if (this.hostHasRoom(b)) {
+      if (this.hostHasRoom(b, p)) {
         this.enterHost(p, b);
         return true;
       }
@@ -3711,13 +3764,13 @@ export class SimWorld {
     }
     if (u.moving) return; // still walking up
     if (this.inHostReach(u, b)) {
-      if (this.hostHasRoom(b)) this.enterHost(u, b);
+      if (this.hostHasRoom(b, u)) this.enterHost(u, b);
       // A hold that is still going UP is not a refusal — it is not open yet. Patch 1.10:
       // "Wisps rallied to an incomplete Entangled Gold Mine will automatically begin to mine
       // once the structure is completed." Which is the ordinary case now that entangling a
       // mine takes `egol`'s 60 seconds: the crew walks over while the roots are closing and
       // stands at the door. Only a hold that is genuinely FULL sends anybody home.
-      else if (b.building && b.building.constructionLeft > 0 && b.garrison.length < b.garrisonCap) return;
+      else if (b.building && b.building.constructionLeft > 0 && this.garrisonLoad(b) + u.cargoSize <= b.garrisonCap) return;
       else this.stop(u.id); // full while we walked — give up
       u.nodeRetries = 0;
     } else {
@@ -3858,7 +3911,7 @@ export class SimWorld {
     const dispatched = new Map<number, number>();
     const roomFor = (bur: SimUnit): boolean =>
       bur.hp > 0 && (!bur.building || bur.building.constructionLeft <= 0) &&
-      bur.garrison.length + (dispatched.get(bur.id) ?? 0) < bur.garrisonCap;
+      this.garrisonLoad(bur) + (dispatched.get(bur.id) ?? 0) < bur.garrisonCap;
     let sent = 0;
     for (const p of peons) {
       let target: SimUnit | null = roomFor(b) ? b : null;
@@ -5238,6 +5291,8 @@ export class SimWorld {
       SimUnit,
       | "desiredFacing"
       | "waterborne" // derived from the type's movetype, below
+      | "targClass" // …and from the type's targType, alongside it
+      | "cargoSize" // …and its transported size
       | "path"
       | "waypoint"
       | "moving"
@@ -5452,6 +5507,10 @@ export class SimWorld {
       // SimUnit.waterborne. Derived rather than passed because it is a fact about the TYPE,
       // and every caller that spawns a unit would otherwise have to remember to look it up.
       waterborne: this.unitReg?.get(unit.typeId)?.moveType === MoveType.Float,
+      // …and which class another unit's "Targets Allowed" list has to name to reach it. Same
+      // reasoning as waterborne: a fact about the TYPE, so no caller has to remember it.
+      targClass: this.unitReg?.get(unit.typeId)?.targType ?? "",
+      cargoSize: Math.max(1, this.unitReg?.get(unit.typeId)?.cargoSize ?? 1),
       // Pre-upgrade vision baselines. recomputeStats() rebuilds the live values from these
       // every tick, so researching Forged Swords mid-game lifts every existing Footman (the
       // weapon baselines live on each SimWeapon — see SimWeapon.base*).
@@ -8558,17 +8617,45 @@ export class SimWorld {
       best = b;
     }
     if (!best) return;
-    const def = this.unitReg?.get(best.typeId);
-    const maxHp = Math.max(1, best.maxHp);
-    const lvl = this.abilities?.get(ab.id)?.levelData[0];
-    const costRatio = lvl ? this.dataOf(lvl, 0, 0.35) : 0.35;
-    const timeRatio = lvl ? this.dataOf(lvl, 1, 1.5) : 1.5;
-    this.issueRepair(
-      u.id, best.id,
-      maxHp / Math.max(1, (def?.buildTime || 60) * timeRatio),
-      ((def?.goldCost ?? 0) * costRatio) / maxHp,
-      ((def?.lumberCost ?? 0) * costRatio) / maxHp,
-    );
+    const r = this.repairRates(u.id, best.id);
+    if (r) this.issueRepair(u.id, best.id, r.hpPerSec, r.goldPerHp, r.lumberPerHp);
+  }
+
+  /**
+   * What one worker mending one building costs and how fast it goes — **the one place** the
+   * rates are derived, shared by the ordered repair (authority.ts) and by Renew's autocast
+   * above, which used to each carry their own copy of the arithmetic and disagree about it.
+   *
+   * Both halves come from data rather than from a rule:
+   *
+   *   • The BASIS is the target's own `goldRep` / `lumberRep` / `reptm` — "Stats - Repair
+   *     Gold Cost / Lumber Cost / Time". Substituting the BUILD cost and time (which is what
+   *     both call sites did) is right for a from-scratch structure and wrong for every
+   *     upgraded tier: a Keep, Castle, Stronghold and Fortress each repair in 120 seconds
+   *     having been built in 140, and a Scout Tower repairs in 20 having been built in 25.
+   *   • The RATIO is the repair ABILITY's, per level — `Arep`/`Aren` DataA = 0.35 of the
+   *     cost, DataB = 1.5 of the time. It is a per-ability number, not a constant of the
+   *     game, which is why it is read off the worker's own row.
+   *
+   * Null when the worker cannot mend that target at all (see repairRefusal).
+   */
+  repairRates(workerId: number, buildingId: number): { hpPerSec: number; goldPerHp: number; lumberPerHp: number } | null {
+    const w = this.units.get(workerId);
+    const b = this.units.get(buildingId);
+    if (!w || !b || this.repairRefusal(workerId, buildingId) !== null) return null;
+    const def = this.unitReg?.get(b.typeId);
+    const maxHp = Math.max(1, b.maxHp);
+    const lvl = this.abilities?.get(this.repairAbility(w)?.id ?? "")?.levelData[0];
+    const costRatio = lvl ? this.dataOf(lvl, 0, REPAIR_COST_RATIO) : REPAIR_COST_RATIO;
+    const timeRatio = lvl ? this.dataOf(lvl, 1, REPAIR_TIME_RATIO) : REPAIR_TIME_RATIO;
+    // `|| 60` is the same guard both call sites already carried: a type with no repair time
+    // at all (a map's own building that states none) still has to mend in FINITE time.
+    const secs = Math.max(1, (def?.repairTime || def?.buildTime || 60) * timeRatio);
+    return {
+      hpPerSec: maxHp / secs,
+      goldPerHp: ((def?.goldRep ?? 0) * costRatio) / maxHp,
+      lumberPerHp: ((def?.lumberRep ?? 0) * costRatio) / maxHp,
+    };
   }
 
   /** Witch Doctor wards, ticked off their own data. Only the Stasis Trap (`otot`) needs a
@@ -12604,7 +12691,12 @@ export class SimWorld {
       // only `weapTp` is the one the engine sorts missiles by: the Cannon Tower's slot 1 is
       // `artillery` with 50/100/125 rings, its slot 2 is a plain homing `missile` at buildings.
       area: w.weaponType === WeaponType.Artillery || w.weaponType === WeaponType.ArtilleryLine
-        ? { aimX: t.x, aimY: t.y, full: w.areaFull, half: w.areaHalf, quarter: w.areaQuarter, targets: w.splashTargets }
+        ? {
+            aimX: t.x, aimY: t.y,
+            full: w.areaFull, half: w.areaHalf, quarter: w.areaQuarter,
+            halfFactor: w.areaHalfFactor, quarterFactor: w.areaQuarterFactor,
+            targets: w.splashTargets,
+          }
         : undefined,
     };
     this.projectiles.set(id, proj);
@@ -12760,7 +12852,9 @@ export class SimWorld {
       if (!source || !this.hostile(source, t)) continue;
       if (a.targets.length && !a.targets.includes(targetKeyOf(t))) continue;
       const gap = Math.hypot(t.x - a.aimX, t.y - a.aimY) - t.radius;
-      const frac = gap <= a.full ? 1 : gap <= a.half ? 0.5 : gap <= a.quarter ? 0.25 : 0;
+      // The outer rings' shares are the SLOT's own — a Mortar Team's "half" ring is 0.4 and
+      // its "quarter" ring 0.1. Only a row that states neither takes the names literally.
+      const frac = gap <= a.full ? 1 : gap <= a.half ? a.halfFactor : gap <= a.quarter ? a.quarterFactor : 0;
       if (frac <= 0) continue;
       const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "");
       if (source) this.applyPillage(source, t, dealt); // a Demolisher with Pillage loots what it shells
@@ -16646,7 +16740,11 @@ function targetKeyOf(t: SimUnit): string {
   // ([Aweb], the Crypt Fiend's) — the swap is not a side-effect of the ability, it IS the
   // ability, and it belongs here rather than in the handler because every question about what
   // may hit the unit comes through this one function.
-  return t.targetKey || (t.building ? "structure" : t.flying && !t.webbed ? "air" : "ground");
+  if (t.targetKey) return t.targetKey; // a destructible carries its own (`debris`, `wall`)
+  if (t.flying && t.webbed) return "ground"; // …and Web overrides even the type's own answer
+  // The type's own `targType` where the registry has one, and only then the guess — which is
+  // right for 819 of the 836 stock rows and wrong for every ward.
+  return t.targClass || (t.building ? "structure" : t.flying ? "air" : "ground");
 }
 
 function turnSpeed(turnRate: number): number {

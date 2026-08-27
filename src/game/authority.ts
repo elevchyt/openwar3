@@ -531,19 +531,19 @@ export class Authority {
         // `nonancient` except the night elf's Renew, so a Wisp may mend an Ancient of War and
         // an allied Peasant may not. See SimWorld.repairRefusal.
         if (this.sim.repairRefusal(cmd.unitId, cmd.buildingId) !== null) return false;
-        // The def comes off the SIM unit's own typeId, not the render Entry — a headless
-        // authority has no Entry, and reaching through one would silently return undefined
-        // and refuse every repair rather than failing loudly.
-        const def = this.registry.get(target.typeId);
-        if (!def) return false;
-        // WC3 repair rates: 35% of the build cost and 150% of the build time, 1 HP -> full.
-        const maxHp = Math.max(1, target.maxHp);
+        // The rates come from the sim, which derives them from the target's own repair basis
+        // (`goldRep`/`lumberRep`/`reptm`) and the worker's repair ABILITY (`Arep` DataA/DataB)
+        // — see SimWorld.repairRates. They used to be computed here from the BUILD cost and
+        // time with the two ratios written out as literals, and Renew's autocast carried a
+        // second, differently-wrong copy of the same arithmetic.
+        const rates = this.sim.repairRates(cmd.unitId, cmd.buildingId);
+        if (!rates) return false;
         return this.applyOrder(player, cmd.unitId, {
           kind: "repair",
           buildingId: cmd.buildingId,
-          hpPerSec: maxHp / Math.max(1, (def.buildTime || 60) * 1.5),
-          goldPerHp: (def.goldCost * 0.35) / maxHp,
-          lumberPerHp: (def.lumberCost * 0.35) / maxHp,
+          hpPerSec: rates.hpPerSec,
+          goldPerHp: rates.goldPerHp,
+          lumberPerHp: rates.lumberPerHp,
         }, cmd.queued);
       }
       case "train": {

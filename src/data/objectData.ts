@@ -12,13 +12,22 @@
 // The overrides are keyed by 4-char META field codes (`umdl` = model file, `unam` =
 // name, `uhpm` = HP, …). We map each to its UnitDef field directly — the codes and
 // their meaning are verified against Units\UnitMetaData.slk (its `field`/`type`
-// columns). Unmapped codes are ignored (the base type's value carries through), which
-// is safe: an unhandled tint or tooltip field never stops the unit from spawning.
+// columns).
+//
+// **Every one of the 236 unit-usable codes is accounted for**, and that is enforced rather
+// than hoped for: `UNIT_FIELD_NOTES` below names, with a reason, each code this file does not
+// write, and tools/unit-fields-test.cjs walks UnitMetaData.slk and fails if a code is in
+// neither table. A silently-dropped field is exactly the bug this closes — Azure Tower
+// Defense's Azure Wisp is an ORIGINAL-table override of the Acolyte (`uaco`) that renames it,
+// gives it the Wisp model and sets `usnd` = "Wisp", and it kept the Acolyte's voice because
+// nothing here read `usnd`. Fifty-odd other codes were being dropped the same way, on both
+// tables — an edited stock unit and a brand-new custom one go through this identical path.
 
 import War3MapW3u from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file";
 import War3MapW3d from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3d/file";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
-import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toRegenType, toWeaponType } from "./enums";
+import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toPrimaryAttribute, toRegenType, toWeaponType } from "./enums";
+import { MISC_GAME } from "./gameplayConstants";
 import { syncPrimaryWeapon, type UnitDef, type UnitRegistry, type WeaponSlotDef } from "./units";
 import { emptyAbilityLevel, mdlPath, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import type { ItemDef, ItemRegistry } from "./items";
@@ -65,26 +74,101 @@ function primaryVal(d: UnitDef): number {
     : 0;
 }
 
-/** The unit's primary weapon slot — what the `ua1*` overrides address. A map that retunes
- *  "Attack 1" must reach the slot the sim actually swings with, not just the flat summary
- *  the HUD prints, or a custom Footman would show 40 damage and deal 12. */
-function slot1(d: UnitDef): WeaponSlotDef | undefined {
-  return d.weapons[0];
-}
-
 /** "Targets Allowed" as the sim wants it: lowercase tokens, minus the SLK's empties. */
 function targetList(v: string): string[] {
   return v.split(",").map((x) => x.trim().toLowerCase()).filter((x) => x && x !== "_" && x !== "-");
 }
 
-// Field-code → UnitDef setter. `ua1b` (base attack damage) is handled specially
-// after the loop because it folds in the primary attribute. Verified field codes /
-// meaning against Units\UnitMetaData.slk.
-const SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
+/** A comma list kept verbatim (case and all) — an id list, not a token list. */
+function idList(v: string): string[] {
+  return v.split(",").map((x) => x.trim()).filter((x) => x && x !== "_" && x !== "-");
+}
+
+/** A single SLK token: lowercased, with the table's three spellings of "none" ("", "_", "-")
+ *  all collapsing to "". Matches loadUnitRegistry's reading of the same columns. */
+function token(v: string): string {
+  const t = v.trim().toLowerCase();
+  return t === "_" || t === "-" ? "" : t;
+}
+
+/** A weapon/armour SOUND base, which is a row KEY rather than a token, so its case survives.
+ *  "_"/"-" is the SLK's "this row names none" and must become "" — see units.ts soundBase(). */
+function soundName(v: string): string {
+  const t = v.trim();
+  return t === "_" || t === "-" ? "" : t;
+}
+
+/** A shadow texture name; "_" is UnitUI's "none" sentinel (units.ts shadowName()). */
+function shadowName(v: string): string {
+  const t = v.trim();
+  return t === "_" ? "" : t;
+}
+
+const bool01 = (v: Val): boolean => n(v) === 1;
+
+/** One weapon SLOT, addressed the way the `ua1*` / `ua2*` code families do. A row that
+ *  declares no such slot simply ignores the override, exactly as the SLK loader does. */
+function slot(d: UnitDef, i: 0 | 1): WeaponSlotDef | undefined {
+  return d.weapons[i];
+}
+/** Write one field on both slots' worth of codes with one line each. `w1`/`w2` below. */
+function w1<T>(conv: (v: Val) => T, set: (w: WeaponSlotDef, v: T) => void) {
+  return (d: UnitDef, v: Val): void => { const w = slot(d, 0); if (w) set(w, conv(v)); };
+}
+function w2<T>(conv: (v: Val) => T, set: (w: WeaponSlotDef, v: T) => void) {
+  return (d: UnitDef, v: Val): void => { const w = slot(d, 1); if (w) set(w, conv(v)); };
+}
+
+/**
+ * Field-code → UnitDef setter, grouped by the OBJECT EDITOR's own categories (which are
+ * UnitMetaData.slk's `category` column: abil / art / combat / editor / move / path / sound /
+ * stats / tech / text) so a field can be found here the way the developer sees it there.
+ *
+ * Five codes are NOT here and are folded in by `applyMods` after the loop instead, because
+ * each writes a column the game PRECOMPUTES an attribute into and the attribute may be
+ * retuned by the same object: `uhpm`/`umpm`/`udef` (a hero's realhp/realm/realdef) and
+ * `ua1b`/`ua2b` (base damage + the primary attribute). Order in the modification list is the
+ * map author's, not ours, so they cannot be settled until every attribute has landed.
+ *
+ * Codes deliberately left out entirely are in `UNIT_FIELD_NOTES`, each with its reason.
+ */
+export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
+  // --- Abilities ------------------------------------------------------------------
+  uabi: (d, v) => { d.abilities = idList(s(v)); },
+  uhab: (d, v) => { d.heroAbilities = idList(s(v)); },
+  // "Abilities - Default Active Ability" (UnitAbilities `auto`) — which of the unit's
+  // autocastable abilities starts switched ON. The Priest is trained with Heal already
+  // autocasting because his row names it here; a map that moves the autocast to another
+  // ability (or clears it) is writing this one field.
+  udaa: (d, v) => { d.autoAbility = token(s(v)) ? s(v).trim() : ""; },
+
+  // --- Art ------------------------------------------------------------------------
   umdl: (d, v) => { d.model = normModel(s(v)); },
   usca: (d, v) => { d.modelScale = n(v); },
+  // "Art - Selection Scale" (unitUI `scale`) — the SELECTION CIRCLE's size, which is a
+  // different column from the model scale above and the one the click radius is measured in
+  // (SEL_RADIUS_PER_SCALE). Azure Tower Defense sets it on 37 of its types.
+  ussc: (d, v) => { d.selScale = n(v); },
   uble: (d, v) => { d.animBlend = n(v); },
+  // "Art - Animation - Walk/Run Speed": the gait the walk clips were AUTHORED at, which the
+  // renderer re-rates the cycle against — see UnitDef.animWalkSpeed. A model swapped in by
+  // `umdl` almost always wants these swapped with it, or its feet skate.
+  uwal: (d, v) => { d.animWalkSpeed = n(v); },
+  urun: (d, v) => { d.animRunSpeed = n(v); },
+  // "Art - Required Animation Names" (`Animprops`) — which set of a multi-tier model's
+  // sequences is this type's own (the Keep is `upgrade,first`). A custom building that names
+  // its tier here rendered as tier 1 without this. Note this arrives too late to re-pick the
+  // `_V1` model variant (units.ts unitModelPath), which only the SLK path does.
+  uani: (d, v) => { d.animProps = targetList(s(v)); },
   uico: (d, v) => { d.icon = normIcon(s(v)); },
+  ubpx: (d, v) => { d.buttonX = n(v); },
+  ubpy: (d, v) => { d.buttonY = n(v); },
+  // "Art - Tinting Color" — three 0–255 channels written as three separate codes. Each lands
+  // on its own channel of the def's tint triple, so a map that reddens a unit with `uclg`
+  // and `uclb` alone (which is how the editor writes it) still gets the other two.
+  uclr: (d, v) => { d.tint = [n(v) / 255, d.tint[1], d.tint[2]]; },
+  uclg: (d, v) => { d.tint = [d.tint[0], n(v) / 255, d.tint[2]]; },
+  uclb: (d, v) => { d.tint = [d.tint[0], d.tint[1], n(v) / 255]; },
   // "Art - Ground Texture" (unitUI `uberSplat`) — the dirt/foundation decal under a building,
   // a 4-char UberSplatData.slk code. CLEARING it is the point: a map that stands a building on
   // ground it doesn't want scarred empties the field, and an empty field is a real value ("no
@@ -92,81 +176,203 @@ const SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // are Human Farms wearing other models, and every one of them was drawing the Farm's
   // foundation ring on the grass underneath.
   uubs: (d, v) => { d.uberSplat = s(v).trim(); },
-  // Movement / geometry.
-  ucol: (d, v) => { d.collision = n(v); },
-  umvt: (d, v) => { d.moveType = toMoveType(s(v)); },
-  umvs: (d, v) => { d.speed = n(v); },
-  umvh: (d, v) => { d.moveHeight = n(v); },
-  umvr: (d, v) => { d.turnRate = n(v); },
-  usid: (d, v) => { d.sightDay = n(v); },
-  usin: (d, v) => { d.sightNight = n(v); },
-  // Combat / vitals.
-  uhpm: (d, v) => { d.hitPoints = n(v); },
-  // Passive regeneration — the rate and the rule that says when it runs (UnitMetaData.slk
-  // `uhpr` → regenHP, `uhrt` → regenType). A custom unit that heals in daylight is a map
-  // rewriting the second of these, not the first.
-  uhpr: (d, v) => { d.hpRegen = n(v); },
-  uhrt: (d, v) => { d.regenType = toRegenType(s(v)); },
-  umpm: (d, v) => { d.mana = n(v); },
-  udef: (d, v) => { d.armor = Math.round(n(v)); },
-  udty: (d, v) => { d.armorType = toArmorType(s(v)); },
-  uacq: (d, v) => { d.acquireRange = n(v); },
-  // Attack 1. These write the SLOT and nothing else — the flat attack* summary on the def is
-  // re-derived from the slots by syncPrimaryWeapon() once every override has landed. Writing
-  // both by hand is what let `missileArt` end up stating something `weapTp` disagreed with.
-  ua1r: (d, v) => { const w = slot1(d); if (w) w.range = n(v); },
-  ua1t: (d, v) => { const w = slot1(d); if (w) w.attackType = toAttackType(s(v)); },
-  ua1c: (d, v) => { const w = slot1(d); if (w) w.cooldown = n(v); },
-  ua1d: (d, v) => { const w = slot1(d); if (w) w.dice = n(v); },
-  ua1s: (d, v) => { const w = slot1(d); if (w) w.sides = n(v); },
-  udp1: (d, v) => { const w = slot1(d); if (w) w.damagePoint = n(v); },
+  // The shadow BLOB and its quad (see UnitDef.unitShadow). A custom unit wearing a model three
+  // times the size of its base's kept the base's shadow footprint without these.
+  ushu: (d, v) => { d.unitShadow = shadowName(s(v)); },
+  ushb: (d, v) => { d.buildingShadow = shadowName(s(v)); },
+  ushw: (d, v) => { d.shadowW = n(v); },
+  ushh: (d, v) => { d.shadowH = n(v); },
+  ushx: (d, v) => { d.shadowX = n(v); },
+  ushy: (d, v) => { d.shadowY = n(v); },
+  // Cast wind-up / follow-through (UnitWeapons castpt/castbsw). Both are per-UNIT, not
+  // per-ability — see UnitDef.castPoint. `ucbs` was already here; `ucpt` was not, so a custom
+  // caster given a 0-second cast point still played the base type's wind-up before the spell.
+  ucpt: (d, v) => { d.castPoint = n(v); },
   ucbs: (d, v) => { d.castBackswing = n(v); },
+  // Projectile launch offset / impact height (UnitWeapons launchx/y/z, impactz) — where the
+  // missile leaves the body and how high up it lands. A custom unit on a taller model fires
+  // from its base's rod height without these.
+  ulpx: (d, v) => { d.launchX = n(v); },
+  ulpy: (d, v) => { d.launchY = n(v); },
+  ulpz: (d, v) => { d.launchZ = n(v); },
+  uimz: (d, v) => { d.impactZ = n(v); },
+
+  // --- Combat ---------------------------------------------------------------------
+  // The `ua1*`/`ua2*` families write the SLOT and nothing else — the flat attack* summary on
+  // the def is re-derived from the slots by syncPrimaryWeapon() once every override has
+  // landed. Writing both by hand is what let `missileArt` state something `weapTp` disagreed
+  // with. A unit that declares no second slot simply ignores every `*2` code.
+  ua1r: w1(n, (w, v) => { w.range = v; }),
+  ua2r: w2(n, (w, v) => { w.range = v; }),
+  ua1t: w1((v) => toAttackType(s(v)), (w, v) => { w.attackType = v; }),
+  ua2t: w2((v) => toAttackType(s(v)), (w, v) => { w.attackType = v; }),
+  ua1c: w1(n, (w, v) => { w.cooldown = v; }),
+  ua2c: w2(n, (w, v) => { w.cooldown = v; }),
+  ua1d: w1(n, (w, v) => { w.dice = v; }),
+  ua2d: w2(n, (w, v) => { w.dice = v; }),
+  ua1s: w1(n, (w, v) => { w.sides = v; }),
+  ua2s: w2(n, (w, v) => { w.sides = v; }),
+  udp1: w1(n, (w, v) => { w.damagePoint = v; }),
+  udp2: w2(n, (w, v) => { w.damagePoint = v; }),
+  // "Animation Backswing Point" — the follow-through after the strike. Half of the pair the
+  // renderer rates the swing clip by (see WeaponSlotDef.backswing), so retuning the damage
+  // point alone left a custom unit's attack animation playing at the base type's speed.
+  ubs1: w1(n, (w, v) => { w.backswing = v; }),
+  ubs2: w2(n, (w, v) => { w.backswing = v; }),
   // `weapTp` — the column that says melee / instant / which missile kind. A map retuning it is
   // retuning whether the unit throws anything at all, so it has to reach the slot the sim
   // swings with; without this setter a custom "ranged Footman" stayed melee and a custom melee
   // Archer kept flying arrows.
-  ua1w: (d, v) => { const w = slot1(d); if (w) w.weaponType = toWeaponType(s(v)); },
-  ua2w: (d, v) => { const w = d.weapons[1]; if (w) w.weaponType = toWeaponType(s(v)); },
+  ua1w: w1((v) => toWeaponType(s(v)), (w, v) => { w.weaponType = v; }),
+  ua2w: w2((v) => toWeaponType(s(v)), (w, v) => { w.weaponType = v; }),
   // `Missileart` — the Profile's, per slot. A custom unit that ships its own projectile art
   // (every third custom map does) was dropping it on the floor before this.
-  ua1m: (d, v) => { const w = slot1(d); if (w) w.missileArt = mdlPath(s(v)); },
-  ua2m: (d, v) => { const w = d.weapons[1]; if (w) w.missileArt = mdlPath(s(v)); },
-  ua1z: (d, v) => { const w = slot1(d); if (w) w.missileSpeed = n(v); },
-  ua2z: (d, v) => { const w = d.weapons[1]; if (w) w.missileSpeed = n(v); },
+  ua1m: w1((v) => mdlPath(s(v)), (w, v) => { w.missileArt = v; }),
+  ua2m: w2((v) => mdlPath(s(v)), (w, v) => { w.missileArt = v; }),
+  ua1z: w1(n, (w, v) => { w.missileSpeed = v; }),
+  ua2z: w2(n, (w, v) => { w.missileSpeed = v; }),
   // "Attack N - Weapon Sound" (`weapType1/2`) — the clang, per slot. Named one letter apart
   // from `ua1w` above and meaning something else entirely; see WeaponSlotDef.weaponSound.
-  ucs1: (d, v) => { const w = slot1(d); if (w) w.weaponSound = s(v); },
-  ucs2: (d, v) => { const w = d.weapons[1]; if (w) w.weaponSound = s(v); },
+  ucs1: w1((v) => soundName(s(v)), (w, v) => { w.weaponSound = v; }),
+  ucs2: w2((v) => soundName(s(v)), (w, v) => { w.weaponSound = v; }),
+  ua1g: w1((v) => targetList(s(v)), (w, v) => { w.targets = v; }),
+  ua2g: w2((v) => targetList(s(v)), (w, v) => { w.targets = v; }),
+  // Line-splash ("spill"), both slots. Only slot 1 was reachable before.
+  usd1: w1(n, (w, v) => { w.spillDist = v; }),
+  usd2: w2(n, (w, v) => { w.spillDist = v; }),
+  usr1: w1(n, (w, v) => { w.spillRadius = v; }),
+  usr2: w2(n, (w, v) => { w.spillRadius = v; }),
+  udl1: w1(n, (w, v) => { w.damageLoss = v; }),
+  udl2: w2(n, (w, v) => { w.damageLoss = v; }),
+  // AREA splash — the three concentric rings an artillery shot lands in (`Farea`/`Harea`/
+  // `Qarea`) and what the burst may CATCH (`splashTargs`, which is not the same list as what
+  // the shot may be aimed at). A custom tower given an area of effect had none of it: 42 of
+  // Azure Tower Defense's overrides are these five codes.
+  ua1f: w1(n, (w, v) => { w.areaFull = v; }),
+  ua2f: w2(n, (w, v) => { w.areaFull = v; }),
+  ua1h: w1(n, (w, v) => { w.areaHalf = v; }),
+  ua2h: w2(n, (w, v) => { w.areaHalf = v; }),
+  ua1q: w1(n, (w, v) => { w.areaQuarter = v; }),
+  ua2q: w2(n, (w, v) => { w.areaQuarter = v; }),
+  // …and the FRACTION each outer ring gets, which is not fixed at a half and a quarter — see
+  // WeaponSlotDef.areaHalfFactor.
+  uhd1: w1(n, (w, v) => { w.areaHalfFactor = v; }),
+  uhd2: w2(n, (w, v) => { w.areaHalfFactor = v; }),
+  uqd1: w1(n, (w, v) => { w.areaQuarterFactor = v; }),
+  uqd2: w2(n, (w, v) => { w.areaQuarterFactor = v; }),
+  ua1p: w1((v) => targetList(s(v)), (w, v) => { w.splashTargets = v; }),
+  ua2p: w2((v) => targetList(s(v)), (w, v) => { w.splashTargets = v; }),
+  // "Attack N - Show UI" — whether this attack gets an ATTACK COMMAND on the card. What
+  // separates a tower you can aim from a Necropolis you cannot; see WeaponSlotDef.showUI.
+  uwu1: w1(bool01, (w, v) => { w.showUI = v; }),
+  uwu2: w2(bool01, (w, v) => { w.showUI = v; }),
   // "Attacks Enabled" (weapsOn). A custom unit may switch a slot on or off outright — the
   // same mask the `renw` upgrades write. 1 = slot 1, 2 = slot 2, 3 = both. This can MOVE which
   // slot is primary, which is the other reason the summary is re-derived rather than patched.
   uaen: (d, v) => { d.weapons.forEach((w, i) => { w.enabled = (n(v) & (1 << i)) !== 0; }); },
-  ua1g: (d, v) => { const w = slot1(d); if (w) w.targets = targetList(s(v)); },
-  usd1: (d, v) => { const w = slot1(d); if (w) w.spillDist = n(v); },
-  usr1: (d, v) => { const w = slot1(d); if (w) w.spillRadius = n(v); },
-  udl1: (d, v) => { const w = slot1(d); if (w) w.damageLoss = n(v); },
-  // Attack 2. Reaches the second slot only — a unit that declares none simply ignores these.
-  ua2r: (d, v) => { const w = d.weapons[1]; if (w) w.range = n(v); },
-  ua2t: (d, v) => { const w = d.weapons[1]; if (w) w.attackType = toAttackType(s(v)); },
-  ua2c: (d, v) => { const w = d.weapons[1]; if (w) w.cooldown = n(v); },
-  ua2d: (d, v) => { const w = d.weapons[1]; if (w) w.dice = n(v); },
-  ua2s: (d, v) => { const w = d.weapons[1]; if (w) w.sides = n(v); },
-  ua2b: (d, v) => { const w = d.weapons[1]; if (w) w.damage = n(v) + primaryVal(d); },
-  ua2g: (d, v) => { const w = d.weapons[1]; if (w) w.targets = targetList(s(v)); },
-  udp2: (d, v) => { const w = d.weapons[1]; if (w) w.damagePoint = n(v); },
-  // Abilities.
-  uabi: (d, v) => { d.abilities = s(v).split(",").map((x) => x.trim()).filter(Boolean); },
-  uhab: (d, v) => { d.heroAbilities = s(v).split(",").map((x) => x.trim()).filter(Boolean); },
-  // Hero attributes / level.
+  uacq: (d, v) => { d.acquireRange = n(v); },
+  udty: (d, v) => { d.armorType = toArmorType(s(v)); },
+  // "Combat - Armor Sound Type" (unitUI `armor`) — the MATERIAL struck (Flesh/Metal/Wood),
+  // which pairs with the attacker's weapon sound to name a UnitCombatSounds row. Not the
+  // damage-table armour class, which is `udty` right above.
+  uarm: (d, v) => { d.armorSound = soundName(s(v)); },
+  // "Combat - Defense Upgrade Bonus" — what ONE level of an armour upgrade is worth to this
+  // type (2 for a unit, 1 for a building), because WC3 leaves the magnitude off the upgrade.
+  udup: (d, v) => { d.defUp = n(v); },
+  // "Combat - Targeted As" — the class this unit answers to in a Targets Allowed list. See
+  // UnitDef.targType: it is data, and the obvious derivation gets 17 stock rows wrong.
+  utar: (d, v) => { d.targType = targetList(s(v))[0] ?? ""; },
+
+  // --- Movement -------------------------------------------------------------------
+  umvt: (d, v) => { d.moveType = toMoveType(s(v)); },
+  umvs: (d, v) => { d.speed = n(v); },
+  umvh: (d, v) => { d.moveHeight = n(v); },
+  umvr: (d, v) => { d.turnRate = n(v); },
+
+  // --- Pathing --------------------------------------------------------------------
+  ucol: (d, v) => { d.collision = n(v); },
+  // "Pathing - Pathing Map" — the building FOOTPRINT texture. A custom building on a bigger
+  // model kept its base's footprint, so it could be squeezed into a gap it does not fit.
+  upat: (d, v) => { d.pathTex = s(v).trim(); },
+  // "Pathing - Placement Requires" — the one thing the ground has to BE (`blighted`, and in
+  // stock data nothing else). See UnitDef.requirePlace: the column IS the rule, so a custom
+  // map's own blight-bound building works for free once this is read.
+  upar: (d, v) => { d.requirePlace = token(s(v)); },
+  // "Pathing - AI Placement Type" (UnitData `buffType`) — the building's PICK CATEGORY
+  // (townhall/resource/factory/buffer), which is what a Staff of Preservation's "Building
+  // Types Allowed" mask is a mask over. Nothing to do with buffs; see UnitDef.buffType.
+  uabt: (d, v) => { d.buffType = token(s(v)); },
+
+  // --- Sound ----------------------------------------------------------------------
+  // "Sound - Unit Sound Set" (unitUI `unitSound`) — the label every voice line, the death
+  // sound and the portrait's talking head are looked up under (UI\SoundInfo\*). THE reported
+  // bug: Azure Tower Defense's Azure Wisp is `uaco` (the Acolyte) wearing the Wisp model, and
+  // it kept answering in the Acolyte's voice because this code was not read.
+  usnd: (d, v) => { d.soundSet = s(v).trim(); },
+
+  // --- Stats ----------------------------------------------------------------------
+  // Hero attributes and their per-level growth. The base values feed back into hit points,
+  // mana, armour and attack damage — folded in by applyMods once the whole list has landed.
   ustr: (d, v) => { d.strength = n(v); },
   uagi: (d, v) => { d.agility = n(v); },
   uint: (d, v) => { d.intelligence = n(v); },
+  ustp: (d, v) => { d.strPerLevel = n(v); },
+  uagp: (d, v) => { d.agiPerLevel = n(v); },
+  uinp: (d, v) => { d.intPerLevel = n(v); },
+  // "Stats - Primary Attribute" — which attribute carries the hero's attack damage. Moving it
+  // moves the damage with it (see the fold in applyMods).
+  upra: (d, v) => { d.primaryAttr = toPrimaryAttribute(s(v)); },
   ulev: (d, v) => { if (!d.isHero) d.level = n(v); }, // heroes stay level 1 (no XP system yet)
+  // Vitals. `uhpm`/`umpm`/`udef` are folded in by applyMods (see the header) — these are the
+  // rest of the block.
+  uhpr: (d, v) => { d.hpRegen = n(v); },
+  // Passive regeneration's RULE, not its rate (UnitBalance `regenType`): a custom unit that
+  // heals in daylight is a map rewriting this, not `uhpr`.
+  uhrt: (d, v) => { d.regenType = toRegenType(s(v)); },
+  umpi: (d, v) => { d.manaStart = n(v); }, // the mana a caster is BORN with, not its maximum
+  umpr: (d, v) => { d.manaRegen = n(v); }, // mana/sec for a NON-hero caster
+  usid: (d, v) => { d.sightDay = n(v); },
+  usin: (d, v) => { d.sightNight = n(v); },
+  // "Stats - Is a Building". A custom unit that becomes (or stops being) a building changes
+  // rally points, repair, the `structure` target key and its whole command card with it.
+  ubdg: (d, v) => { d.isBuilding = bool01(v); },
+  // "Stats - Can Sleep" — whether a Neutral Hostile creep of this type sleeps at night.
+  usle: (d, v) => { d.canSleep = bool01(v); },
+  // "Stats - Transported Size" — how many SEATS this unit takes in a cargo hold, which is not
+  // one for the siege roster. See UnitDef.cargoSize.
+  ucar: (d, v) => { d.cargoSize = Math.max(1, n(v)); },
+  // "Stats - Race" — which race's tech tree, upkeep and AI this type belongs to.
+  urac: (d, v) => { d.race = token(s(v)); },
+  // "Stats - Unit Classification" — mechanical / undead / peon / ancient / ward / summoned…
+  // Far more than a label: it decides whether the unit leaves a raisable corpse, whether Heal
+  // touches it, whether a Wisp is consumed by it. Azure Tower Defense re-classes 12 types.
+  utyp: (d, v) => { d.classification = targetList(s(v)); },
+  // "Stats - Priority" — selection sub-group order, i.e. which unit of a mixed selection the
+  // portrait and the voice belong to.
+  upri: (d, v) => { d.priority = n(v); },
+  // "Stats - Hide Minimap Display" is the OTHER neutral-building flag; this one is
+  // "Show Neutral Building Icon" — the house glyph a usable neutral building wears.
+  unbm: (d, v) => { d.minimapIcon = bool01(v); },
   // Economy.
   ufoo: (d, v) => { d.foodUsed = n(v); },
+  ufma: (d, v) => { d.foodMade = n(v); }, // a custom Farm that supplies nothing was this
   ugol: (d, v) => { d.goldCost = n(v); },
   ulum: (d, v) => { d.lumberCost = n(v); },
   ubld: (d, v) => { d.buildTime = n(v); },
+  // What a REPAIR is priced and timed against, which is its own basis and not the build one —
+  // see UnitDef.goldRep. The repair ability takes its 35%/150% cut of these.
+  ugor: (d, v) => { d.goldRep = n(v); },
+  ulur: (d, v) => { d.lumberRep = n(v); },
+  urtm: (d, v) => { d.repairTime = n(v); },
+  // Bounty — what killing this unit PAYS (a flat base plus a dice roll, exactly like weapon
+  // damage). The single most-overridden family in a tower-defence map: Azure Tower Defense
+  // writes these 312 times, and every creep was paying its BASE type's bounty instead.
+  ubdi: (d, v) => { d.bountyDice = n(v); },
+  ubsi: (d, v) => { d.bountySides = n(v); },
+  ubba: (d, v) => { d.bountyPlus = n(v); },
+  ulbd: (d, v) => { d.lumberBountyDice = n(v); },
+  ulbs: (d, v) => { d.lumberBountySides = n(v); },
+  ulba: (d, v) => { d.lumberBountyPlus = n(v); },
   // Shop SHELF (UnitBalance stockMax/stockRegen/stockStart) — what a `Sellunits` ware costs in
   // TIME rather than gold. A unit with `stockMax` 0 is not stocked at all, which the sim reads
   // as "not stock-limited"; a tester map that puts every creep in the game on a shelf sets
@@ -175,41 +381,191 @@ const SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   usma: (d, v) => { d.stockMax = n(v); },
   usrg: (d, v) => { d.stockRegen = n(v); },
   usst: (d, v) => { d.stockStart = n(v); },
+
+  // --- Techtree -------------------------------------------------------------------
+  // Everything a building OFFERS (Trains/Builds/Researches/Requires/…) is a tech-GRAPH field
+  // and is applied by applyMapTechData at the bottom of this file, off the same .w3u. This is
+  // the one tech-category code that is a UnitDef field instead: "Techtree - Upgrades Used",
+  // the list of upgrades that may touch this unit at all. Forged Swords arms Footmen and not
+  // Riflemen because of this column, so a custom unit that lists none is a custom unit no
+  // upgrade reaches.
+  upgr: (d, v) => { d.upgradesUsed = idList(s(v)); },
 };
 
-/** Apply one modified object's field overrides onto a UnitDef (mutated in place). */
+/**
+ * Unit field codes this file does NOT write, and why. Kept as data rather than as prose so
+ * tools/unit-fields-test.cjs can assert that `UNIT_SETTERS` ∪ these ∪ the text/vitals codes cover
+ * every unit-usable row of UnitMetaData.slk — an override that goes missing again fails a
+ * test instead of quietly reverting a unit to its base type.
+ *
+ * Three kinds live here: fields the WORLD EDITOR keeps for itself (which palette a type shows
+ * in), fields the tech GRAPH owns (applied by applyMapTechData off this same file), and
+ * fields naming an engine behaviour this project has not built yet. The last group is the
+ * to-do list: give the behaviour a UnitDef field and it moves up into UNIT_SETTERS.
+ */
+export const UNIT_FIELD_NOTES: Record<string, string> = {
+  // Owned by the tech graph — applyMapTechData reads these off the same war3map.w3u.
+  ubui: "tech graph (Builds)", udep: "tech graph (DependencyOr)", umki: "tech graph (Makeitems)",
+  ureq: "tech graph (Requires)", ures: "tech graph (Researches)", urev: "tech graph (Revive)",
+  urq1: "tech graph (Requires1)", urq2: "tech graph (Requires2)", urq3: "tech graph (Requires3)",
+  urq4: "tech graph (Requires4)", urq5: "tech graph (Requires5)", urq6: "tech graph (Requires6)",
+  urq7: "tech graph (Requires7)", urq8: "tech graph (Requires8)", urqa: "tech graph (Requiresamount)",
+  urqc: "tech graph (Requirescount)", usei: "tech graph (Sellitems)", useu: "tech graph (Sellunits)",
+  utra: "tech graph (Trains)", uupt: "tech graph (Upgrade)",
+
+  // World-Editor-only: which palette/tileset a type is offered under, and whether the editor
+  // draws a placement helper for it. None of it survives into a running match.
+  ucam: "editor palette only (campaign)", udro: "editor palette only (dropItems)",
+  uhos: "editor palette only (hostilePal)", uine: "editor palette only (inEditor)",
+  uspe: "editor palette only (special)", util: "editor palette only (tilesets)",
+  utss: "editor palette only (tilesetSpecific)", uuch: "editor placement helper (useClickHelper)",
+  unsf: "editor palette only (EditorSuffix)",
+
+  // Art we do not drive yet. Each names a real WC3 behaviour; the note is the feature that
+  // has to exist before the field has anywhere to land.
+  uaap: "no attachment system (Attachmentanimprops)", ualp: "no attachment system (Attachmentlinkprops)",
+  ubpr: "no per-bone art overrides (Boneprops)",
+  ucua: "no caster-upgrade art (Casterupgradeart)", ussi: "no score screen (ScoreScreenIcon)",
+  uspa: "no per-unit Specialart hook", utaa: "no per-unit Targetart hook",
+  udtm: "no per-type death-clip length yet (death) — the renderer times the Death clip off the MDX",
+  uept: "no elevation sampling (elevPts)", uerd: "no elevation sampling (elevRad)",
+  ufrd: "fog radius is taken from sight, not fogRad", uocc: "no occluder height (occH)",
+  ulos: "no fat line-of-sight (fatLOS)", uver: "no SD/HD asset split (fileVerFlags)",
+  umxp: "no terrain pitch/roll on models (maxPitch)", umxr: "no terrain pitch/roll on models (maxRoll)",
+  uori: "orientInterp — turnRate carries the turn; no interpolation mode",
+  uprw: "no propulsion window (propWin)", uscb: "no bull-scaling (scaleBull)",
+  usew: "no selection circle on water flag", ushr: "no shadow-on-water flag",
+  uslz: "no selection-circle Z offset (selZ)",
+  utcc: "no custom team colour (customTeamColor)", utco: "no team-colour override (teamColor)",
+  uisz: "no swim launch/impact heights (impactSwimZ)", ulsz: "no swim launch/impact heights (launchSwimZ)",
+
+  // Combat we do not model yet.
+  // `deathType` is a two-bit field (1 = raisable, 2 = decays), and it IS the game's answer to
+  // "does this leave a corpse". The sim reaches the same answer a different way — through the
+  // classification (utyp, which is applied), the hero flag and the air/ground split, each with
+  // its own citation in world.ts — so wiring this in means replacing that rule wholesale
+  // rather than adding a field. Left for that change, not for this one.
+  udea: "deathType — corpse rules come from classification + hero/air instead; see world.ts",
+  udu1: "dmgUp1 — every one of the 837 stock rows leaves it empty", udu2: "dmgUp2 — likewise empty on every stock row",
+  uamn: "minRange — no minimum attack range; 6 stock rows carry one (the mortar/siege pair)",
+  uma1: "no missile arc (Missilearc)", uma2: "no missile arc (Missilearc)",
+  umh1: "missiles always home (MissileHoming)", umh2: "missiles always home (MissileHoming)",
+  urb1: "no ranged range buffer (RngBuff1)", urb2: "no ranged range buffer (RngBuff2)",
+  utc1: "no multi-target attacks (targCount1)", utc2: "no multi-target attacks (targCount2)",
+
+  // Movement / pathing we do not model yet.
+  umas: "maxSpd — no speed clamp of either kind is applied yet, per-type or global",
+  umis: "minSpd — no speed clamp of either kind is applied yet, per-type or global",
+  umvf: "no move floor (moveFloor)", uabr: "no AI buffer radius (buffRadius)",
+  upap: "no placement-prevention list (preventPlace)", upaw: "no water-radius placement (requireWaterRadius)",
+  urpo: "no unit repulsion (repulse)", urpg: "no unit repulsion (repulseGroup)",
+  urpp: "no unit repulsion (repulseParam)", urpr: "no unit repulsion (repulsePrio)",
+
+  // Sound labels we do not drive yet. `usnd` (the sound SET) is applied; these four are the
+  // per-type one-off labels beside it.
+  ubsl: "no per-building looping sound (BuildingSoundLabel)",
+  umsl: "no movement sound (MovementSoundLabel)", ursl: "no ambient random sound (RandomSoundLabel)",
+  ulfi: "no looping-sound fades (LoopingSoundFadeIn)", ulfo: "no looping-sound fades (LoopingSoundFadeOut)",
+
+  // Stats we do not model yet.
+  ucbo: "no build-on-top (canBuildOn)", uibo: "no build-on-top (isBuildOn)",
+  ufle: "canFlee — no creep flee behaviour (and only 2 stock rows clear it)", ufor: "no formation ranks (formation)",
+  upoi: "no score screen (points)",
+  uhhb: "no hero bar hiding (hideHeroBar)", uhhd: "no hero death message (hideHeroDeathMsg)",
+  uhhm: "no hero minimap glyph hiding (hideHeroMinimap)", uhom: "hideOnMinimap — 0 on all 836 stock rows; no engine hook",
+  unbr: "no random neutral-building rolls (nbrandom)",
+  urva: "no altar revive-at list (Reviveat)",
+
+  // Text we do not print yet.
+  ides: "Description — the HUD prints Ubertip (utub), which IS applied",
+  uawt: "no sleeping-creep awaken tip (Awakentip)", utpr: "no hero revive tip (Revivetip)",
+  ucun: "no caster-upgrade name (Casterupgradename)", ucut: "no caster-upgrade tip (Casterupgradetip)",
+  upru: "nameCount — the proper-name pool's length is taken from upro itself",
+};
+
+/** The five codes `applyMods` folds in after the loop, plus the text codes it resolves
+ *  through the .wts. Listed for the coverage test — they are handled, just not in UNIT_SETTERS. */
+export const UNIT_DEFERRED_FIELDS = ["uhpm", "umpm", "udef", "ua1b", "ua2b", "unam", "upro", "utip", "utub", "uhot"];
+
+/**
+ * Apply one modified object's field overrides onto a UnitDef (mutated in place).
+ *
+ * Two things happen after the loop rather than inside it, because both depend on values the
+ * loop may still be changing and the modification ORDER is the map author's:
+ *
+ *  1. **The attribute fold.** UnitBalance ships a hero's level-1 stats PRECOMPUTED —
+ *     `realhp` = hp + STR×25, `realm` = manaN + INT×15, `realdef` = def − 2 + AGI×0.3, and
+ *     `dmgplus1` + the primary attribute — and loadUnitRegistry stores those folded values.
+ *     The object editor exposes only the BASE column, so `uhpm` = 500 on a hero means 500
+ *     *before* its Strength. Applying it raw is how a custom hero came out with a fraction of
+ *     the hit points the map gave it; and a bare `ustr` override has to move hp and damage
+ *     with it even though it names neither.
+ *  2. **syncPrimaryWeapon**, which re-derives the flat attack* summary from the slots. Doing
+ *     it once, HERE, is what makes a custom unit obey exactly the rules a stock one does —
+ *     including "a melee slot shows no missile art", which the base row may satisfy and an
+ *     override then break (`ua1w` = normal on an Archer) or the other way about.
+ */
 function applyMods(def: UnitDef, mods: Array<{ id: string; value: Val }>, trigStr: (v: string) => string): void {
-  let dmgOverride: number | undefined;
+  // What the clone's folded values already contain, before any of this object's overrides.
+  const was = { str: def.strength, agi: def.agility, int: def.intelligence, primary: primaryVal(def) };
+  // The RAW (un-folded) values an override states, if it states them at all.
+  let rawHp: number | undefined;
+  let rawMana: number | undefined;
+  let rawArmor: number | undefined;
+  const rawDmg: Array<number | undefined> = [undefined, undefined];
+
   for (const m of mods) {
-    if (m.id === "unam") { def.name = trigStr(s(m.value)); continue; }
-    // Proper Names (`upro` → the Profile's `Propernames`, a stringList): the pool a HERO draws
-    // its given name from, which is the name the HUD and the hover label actually print for one
-    // (hud.ts prefers properName over the type name). A custom hero that ships its own name —
-    // WarChasers' "Snake Aes" on a Priestess of the Moon — otherwise inherits the base hero's
-    // pool and rolls a Priestess name at spawn. Resolved BEFORE splitting: the whole list is one
-    // TRIGSTR_ reference, so splitting first would hand the .wts a key it can't find.
-    if (m.id === "upro") { def.properNames = trigStr(s(m.value)).split(",").map((x) => x.trim()).filter(Boolean); continue; }
-    if (m.id === "utip") { def.tip = trigStr(s(m.value)); continue; }
-    if (m.id === "utub") { def.description = trigStr(s(m.value)); continue; }
-    if (m.id === "uhot") { def.hotkey = (s(m.value).trim()[0] ?? "").toUpperCase(); continue; }
-    if (m.id === "ua1b") { dmgOverride = n(m.value); continue; }
-    SETTERS[m.id]?.(def, m.value);
+    switch (m.id) {
+      case "unam": def.name = trigStr(s(m.value)); continue;
+      // Proper Names (`upro` → the Profile's `Propernames`, a stringList): the pool a HERO draws
+      // its given name from, which is the name the HUD and the hover label actually print for one
+      // (hud.ts prefers properName over the type name). A custom hero that ships its own name —
+      // WarChasers' "Snake Aes" on a Priestess of the Moon — otherwise inherits the base hero's
+      // pool and rolls a Priestess name at spawn. Resolved BEFORE splitting: the whole list is one
+      // TRIGSTR_ reference, so splitting first would hand the .wts a key it can't find.
+      case "upro": def.properNames = idList(trigStr(s(m.value))); continue;
+      case "utip": def.tip = trigStr(s(m.value)); continue;
+      case "utub": def.description = trigStr(s(m.value)); continue;
+      case "uhot": def.hotkey = (trigStr(s(m.value)).trim()[0] ?? "").toUpperCase(); continue;
+      case "uhpm": rawHp = n(m.value); continue;
+      case "umpm": rawMana = n(m.value); continue;
+      case "udef": rawArmor = n(m.value); continue;
+      case "ua1b": rawDmg[0] = n(m.value); continue;
+      case "ua2b": rawDmg[1] = n(m.value); continue;
+      default: UNIT_SETTERS[m.id]?.(def, m.value);
+    }
   }
-  // Base attack damage folds in the hero's primary attribute (as loadUnitRegistry does).
-  if (dmgOverride !== undefined) {
-    const w = slot1(def);
-    if (w) w.damage = dmgOverride + primaryVal(def);
+
+  // 1. The attribute fold. A stated base is re-folded against the FINAL attributes; an
+  //    unstated one keeps the clone's already-folded value and moves by the attribute delta.
+  //    Non-heroes carry no attributes, so both arms collapse to "use what was stated".
+  const hero = def.isHero;
+  if (rawHp !== undefined) def.hitPoints = rawHp + (hero ? def.strength * MISC_GAME.StrHitPointBonus : 0);
+  else if (hero) def.hitPoints += (def.strength - was.str) * MISC_GAME.StrHitPointBonus;
+  if (rawMana !== undefined) def.mana = rawMana + (hero ? def.intelligence * MISC_GAME.IntManaBonus : 0);
+  else if (hero) def.mana += (def.intelligence - was.int) * MISC_GAME.IntManaBonus;
+  if (rawArmor !== undefined) {
+    def.armor = Math.round(rawArmor + (hero ? MISC_GAME.AgiDefenseBase + def.agility * MISC_GAME.AgiDefenseBonus : 0));
+  } else if (hero) {
+    def.armor = Math.round(def.armor + (def.agility - was.agi) * MISC_GAME.AgiDefenseBonus);
   }
-  // The slots are settled; re-derive the flat attack* view from them. Doing it once, HERE,
-  // is what makes a custom unit obey exactly the rules a stock one does — including "a melee
-  // slot shows no missile art", which the base row may satisfy and an override then break
-  // (`ua1w` = normal on an Archer) or the other way about (`ua1w` = missile + `ua1m`).
+  const primary = primaryVal(def);
+  def.weapons.forEach((w, i) => {
+    if (rawDmg[i] !== undefined) w.damage = rawDmg[i]! + primary;
+    else w.damage += primary - was.primary;
+  });
+
+  // 2. The slots are settled; re-derive the flat attack* view from them.
   syncPrimaryWeapon(def);
 }
 
 /** A fresh clone of a UnitDef under a new id (arrays copied so overrides don't alias). The
  *  weapon slots are OBJECTS, so they need copying one level deeper — a shallow spread would
- *  leave a custom unit retuning the stock type's attack for every other player on the map. */
+ *  leave a custom unit retuning the stock type's attack for every other player on the map.
+ *  Every array on the def is copied, including the ones only the newer setters reach
+ *  (`animProps`, `upgradesUsed`, a slot's `splashTargets`): a setter that REPLACES its array
+ *  is safe either way, but one that is ever changed to mutate in place would otherwise reach
+ *  through into the install's own def. */
 function cloneDef(base: UnitDef, id: string): UnitDef {
   return {
     ...base,
@@ -218,7 +574,10 @@ function cloneDef(base: UnitDef, id: string): UnitDef {
     heroAbilities: [...base.heroAbilities],
     classification: [...base.classification],
     properNames: [...base.properNames],
-    weapons: base.weapons.map((w) => ({ ...w, targets: [...w.targets] })),
+    animProps: [...base.animProps],
+    upgradesUsed: [...base.upgradesUsed],
+    tint: [base.tint[0], base.tint[1], base.tint[2]],
+    weapons: base.weapons.map((w) => ({ ...w, targets: [...w.targets], splashTargets: [...w.splashTargets] })),
   };
 }
 

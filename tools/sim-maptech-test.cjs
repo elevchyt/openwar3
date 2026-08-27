@@ -231,7 +231,7 @@ console.log("\n[map data] a map can CLEAR a building's ground texture, and empty
   // drawing the Farm's foundation ring on the grass.
   const { applyMapUnitData } = require(join(REPO, ".sim-build", "src", "data", "objectData.js"));
   const { UnitRegistry } = require(join(REPO, ".sim-build", "src", "data", "units.js"));
-  const farm = { id: "hhou", name: "Farm", isBuilding: true, uberSplat: "HSMA", abilities: [], heroAbilities: [], classification: [], properNames: [], weapons: [] };
+  const farm = { id: "hhou", name: "Farm", isBuilding: true, uberSplat: "HSMA", abilities: [], heroAbilities: [], classification: [], properNames: [], animProps: [], upgradesUsed: [], tint: [1, 1, 1], targType: "structure", weapons: [] };
   const registry = new UnitRegistry(new Map([["hhou", farm]]));
   const w3u = build(
     W3u,

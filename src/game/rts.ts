@@ -2630,6 +2630,12 @@ export class RtsController {
       modelPath: def.model,
       baseScale: def.modelScale || 1,
       curScale: def.modelScale || 1,
+      // The TYPE's own "Art - Tinting Color" (UnitUI red/green/blue) as the model's base
+      // colour, which fog dimming then multiplies — the same channel JASS SetUnitVertexColor
+      // writes, so a trigger recolouring the unit later simply replaces this. Stated here
+      // rather than left for applyFogTint to sample off the instance, because that samples
+      // only ONCE and would bake in whatever the model happened to be wearing.
+      baseColor: tintColor(def),
       ...findBirthFields(instance.model.sequences, def.animProps),
       hidden: false,
       inMine: false,
@@ -2653,6 +2659,7 @@ export class RtsController {
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
+    if (entry.baseColor) instance.setVertexColor?.(entry.baseColor); // a tinted type, worn now
     if (anims.stand >= 0) {
       // Play an idle stand on spawn; leave curSeq unset (-1) so the first idle tick starts the
       // fidget cycle (pickSequence → the idle branch rolls the next variant). PlayOnce so a
@@ -2698,6 +2705,13 @@ export class RtsController {
     entry.curScale = def.modelScale || 1;
     entry.selRadius = (def.selScale || 1) * SEL_RADIUS_PER_SCALE;
     entry.moveHeight = lift(def.moveHeight);
+    // The new type's tint, STATED rather than left undefined — a morph between two types that
+    // share one model (Nalc→Nalm) keeps its instance, so an untinted new type would otherwise
+    // fall through to applyFogTint sampling the body, and sample the OLD type's colour (already
+    // fog-dimmed) as its base. A retype always knows the answer, so it gives it.
+    entry.baseColor = tintColor(def) ?? new Float32Array([1, 1, 1, 1]);
+    entry.fogTintB = NaN; // …and force the next fog pass to re-emit from it
+    entry.unit.instance.setVertexColor?.(entry.baseColor);
     return true;
   }
 
@@ -6669,6 +6683,19 @@ export class RtsController {
 // 30–50. No fudge — this is the authentic Z the game floats each unit at.
 function lift(moveHeight: number): number {
   return moveHeight > 0 ? moveHeight : 0;
+}
+
+/**
+ * A unit type's "Art - Tinting Color" (UnitUI red/green/blue) as an RGBA base colour, or
+ * `undefined` for an untinted type.
+ *
+ * `undefined` is not the same as white here: an Entry with no `baseColor` makes applyFogTint
+ * sample the instance's own colour the first time it fogs it, which is the behaviour every
+ * untinted unit has always had. Only a type that actually states a tint states one.
+ */
+function tintColor(def: UnitDef): Float32Array | undefined {
+  const [r, g, b] = def.tint;
+  return r === 1 && g === 1 && b === 1 ? undefined : new Float32Array([r, g, b, 1]);
 }
 
 // How far along a tier upgrade is, 0..1 — the playhead of the target's Birth clip while the
