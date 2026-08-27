@@ -584,6 +584,35 @@ const SEL_GRID_MAX = SEL_GRID_TIERS[SEL_GRID_TIERS.length - 1].max;
 // left, right, top, bottom, then the four corners. The two horizontal edges are
 // stored as VERTICAL bars and the engine rotates them a quarter-turn clockwise —
 // re-slice the strip into a 3×3 nine-patch CSS can drive with `border-image`.
+/**
+ * The on-screen message area — the engine's **WorldFrameUnitMessage**, which `UI\MiscUI.txt`
+ * [FontHeights] describes in its own words as "small text that is used for in-game trigger
+ * based dialog": what `DisplayTextToPlayer` / `DisplayTimedTextToPlayer` write, and what
+ * `ClearTextMessages` wipes. It is NOT the upper-left corner — that was our guess, and it is
+ * wrong; every number below is either the game's own or measured off a shot of the real
+ * client (Azure Glade Tower Defense's welcome message, 16:9), and all of them are fractions
+ * of the 0.6-tall UI space so the block scales with the frame like the console does.
+ *
+ * Three of the four `WorldFrame*Message` frames are separate things; keep them straight:
+ * `WorldFrameMessage` is the one gold line above the console (`showError`), `WorldFrameTop-
+ * Message` is the big upkeep text under the clock, and this one is the trigger dialog.
+ *
+ * `left` is measured from the left edge of the file's 0.8-wide box, not from the screen —
+ * in the 16:9 shot the text sits 0.184 of a UI space in from the screen's edge, which is
+ * 0.05 in from where the centred 0.8 box begins (the same box the console is held in).
+ *
+ * `bottom` is the bottom of the BLOCK, not of the first line: the stack is pinned there and
+ * grows UPWARD, newest line at the bottom. That is what keeps the chat entry line at one
+ * fixed spot in the real game no matter how much has been said, which it plainly does.
+ */
+const MSG_AREA = {
+  left: 0.05, // from the 0.8 box's left edge
+  bottom: 0.255, // above the bottom of the frame
+  width: 0.5, // where a long line wraps (the shot wraps between 0.491 and 0.517)
+  font: 0.015, // MiscUI.txt [FontHeights] WorldFrameUnitMessage
+  chatFont: 0.013, // MiscUI.txt [FontHeights] WorldFrameChatMessage
+} as const;
+
 // On-screen message log tuning.
 const MSG_MAX = 16; // max lines kept on screen at once (WC3 scrolls the oldest off)
 const MSG_DEFAULT_SECS = 12; // how long an untimed DisplayTextToPlayer line lingers
@@ -1400,12 +1429,12 @@ export class GameHud {
     return panel;
   }
 
-  /** The upper-left message stack that the map's "Game - Display text" trigger
-   *  actions write into (via the JASS text natives → the engine `displayText` hook). */
   /**
-   * The upper-left message column: the lines the game has shown, and under them the chat
-   * entry line the player types into. One column so the prompt arrives where the next message
-   * will, rather than floating somewhere of its own.
+   * The message column (`WorldFrameUnitMessage`, see MSG_AREA for where it sits and why):
+   * the lines the game has shown, and under them the chat entry line the player types into.
+   * One column so the prompt arrives where the next message will, rather than floating
+   * somewhere of its own — and the prompt hangs OUT of the flow, so opening chat cannot
+   * shove the messages up off their pinned bottom edge.
    *
    * The entry line is NOT in any .fdf — WC3 draws it from `Game.dll` (CGameUI) like the command
    * card and the minimap, so there is no frame to mount. Its WORDS are the game's, though:
@@ -1414,6 +1443,16 @@ export class GameHud {
   private buildMessageLog(): HTMLDivElement {
     const column = document.createElement("div");
     column.className = "hud-msgcol";
+    // Every length the block uses, as a fraction of the game's 0.6-tall UI space mapped onto
+    // --stage-h — so the text is the size the engine's font height asks for at any window
+    // size, rather than a pixel count that is right on one monitor. `left` is measured from
+    // the centre because the 0.8 box is what it is anchored to (MSG_AREA).
+    const px = (v: number): string => `calc(var(--stage-h) * ${v / UI_HEIGHT})`;
+    column.style.left = `calc(50% - ${px(UI_WIDTH / 2 - MSG_AREA.left)})`;
+    column.style.bottom = px(MSG_AREA.bottom);
+    column.style.width = px(MSG_AREA.width);
+    column.style.setProperty("--msg-font", px(MSG_AREA.font));
+    column.style.setProperty("--msg-chat-font", px(MSG_AREA.chatFont));
 
     this.msgLog = document.createElement("div");
     this.msgLog.className = "hud-msglog";

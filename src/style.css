@@ -337,38 +337,39 @@ body.in-game .menu-panel { display: none; }
    ConsoleUI.fdf via ui/hud.ts, which writes them here — 0.176 and 0.8 of the file's 0.6-tall
    UI space — so nothing about the console's size is stated twice. */
 
-/* On-screen message log — the "Game - Display text" trigger action target.
-   WC3 shows these in the upper-left, below the resource bar, oldest on top. */
-/* The upper-left message column: the lines the game has shown, and under them the chat entry
-   line — so the prompt appears where the next message will, rather than off on its own. */
+/* On-screen message log — the "Game - Display text" trigger action target, i.e. the engine's
+   WorldFrameUnitMessage. It is NOT in the upper-left corner: it sits left-of-centre and about
+   two fifths of the way up the frame, pinned by its BOTTOM edge so the stack grows upward with
+   the newest line last. Position, width and font height all come from ui/hud.ts (MSG_AREA),
+   which writes them here as lengths off --stage-h — so nothing about this block is a pixel
+   count that only holds on one monitor. */
 .hud-msgcol {
   position: absolute;
-  top: 60px;
-  left: 16px;
-  max-width: 46%;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  /* left / bottom / width / --msg-font / --msg-chat-font are set in ui/hud.ts */
   pointer-events: none;
   z-index: 4;
 }
 .hud-msglog {
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 
 /* The chat entry line. WC3 draws this in engine code, not FDF (there is no frame for it),
    so the look is ours; the PROMPT is the game's own COLON_MESSAGE_* string. It takes the
    pointer back from the column so the field can actually be clicked and typed into. */
 .hud-chatbar {
+  /* Hung below the column's pinned bottom edge rather than laid out inside it: in the real
+     game the entry line has one fixed home, and opening it does not shove the messages up. */
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: baseline;
   gap: 6px;
-  margin-top: 4px;
   pointer-events: auto;
   font-family: var(--game-font);
-  font-size: 13px;
+  font-size: var(--msg-chat-font); /* MiscUI.txt WorldFrameChatMessage=0.013 */
   line-height: 1.35;
   text-shadow: 0 1px 2px #000, 0 0 3px #000;
 }
@@ -392,8 +393,10 @@ body.in-game .menu-panel { display: none; }
 }
 .hud-msgline {
   font-family: var(--game-font);
-  font-size: 13px;
-  line-height: 1.35;
+  font-size: var(--msg-font);
+  /* One line of the real client is exactly its font height tall — the shot's lines are pitched
+     ~23.7px apart at a 23.3px em — so there is no leading here to add. */
+  line-height: 1;
   color: #f4f0e0;
   text-shadow: 0 1px 2px #000, 0 0 3px #000;
   white-space: pre-wrap;
