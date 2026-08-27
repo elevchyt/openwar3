@@ -2030,6 +2030,12 @@ export class MapViewerScene {
   private async startMeleeFallback(config: MeleeConfig, races: Map<number, PlayableRace>): Promise<void> {
     if (!this.rts) return;
     for (const slot of config.slots) this.rts.simWorld.initStash(slot.id, MELEE.MELEE_STARTING_GOLD_V1, MELEE.MELEE_STARTING_LUMBER_V1);
+    // …and the free-hero token, which is a melee STARTING RESOURCE like the gold and the lumber
+    // (Blizzard.j MeleeStartingUnits*: `SetPlayerState(p, PLAYER_STATE_RESOURCE_HERO_TOKENS,
+    // bj_MELEE_STARTING_HERO_TOKENS)`). The scripted melee path gets it through that very call;
+    // this fallback stands in for the script, so it has to grant it too — and a CUSTOM map, which
+    // runs neither, correctly gets none. See Authority.heroTokens.
+    for (const slot of config.slots) this.rts.setHeroTokens(slot.id, MELEE.MELEE_STARTING_HERO_TOKENS);
     // Clear the creep camps on each USED start location so bases spawn on clean ground
     // (what MeleeClearExcessUnits does from the script). Unused start locations keep theirs.
     this.rts.setStartLocationClearZones(config.slots.map((s) => ({ x: s.startX, y: s.startY })));

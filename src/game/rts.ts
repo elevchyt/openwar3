@@ -5689,6 +5689,10 @@ export class RtsController {
         stashFor: (o) => this.authority.stashFor(o),
         foodFor: (o) => this.authority.foodFor(o),
         setPlayerResource: (p, r, v) => this.authority.setPlayerResource(p, r, v),
+        // PLAYER_STATE_RESOURCE_HERO_TOKENS — the free-hero allowance, which the melee opening
+        // grants through SetPlayerState like any other starting resource.
+        heroTokensFor: (p) => this.authority.heroTokensFor(p),
+        setHeroTokens: (p, v) => this.authority.setHeroTokens(p, v),
         currentOrderId: (id) => this.authority.currentOrderId(id),
         issueUnitOrder: (id, oid, o, k, x, y, t) => this.authority.issueUnitOrder(id, oid, o, k, x, y, t),
         // The mine handle is a JASS fiction (MINE_ID_BASE), so it is resolved here, on the
@@ -5742,6 +5746,12 @@ export class RtsController {
   /** @see Authority.foodFor */
   foodFor(owner: number): { used: number; made: number } {
     return this.authority.foodFor(owner);
+  }
+
+  /** @see Authority.setHeroTokens — the melee opening's free-hero grant, which on the scripted
+   *  path arrives as `SetPlayerState(…, PLAYER_STATE_RESOURCE_HERO_TOKENS, …)` instead. */
+  setHeroTokens(player: number, value: number): void {
+    this.authority.setHeroTokens(player, value);
   }
 
   /** @see Authority.hasFreeHero */

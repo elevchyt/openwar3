@@ -245,5 +245,38 @@ console.log("\nan unpaid build refunds nothing, having never been charged");
     [w2.buildPending, world.stashOf(5).gold], [null, 0]);
 }
 
+console.log("\nthe free first hero is a melee RESOURCE, not a rule about heroes");
+{
+  // WC3's "first hero is free" is `PLAYER_STATE_RESOURCE_HERO_TOKENS`, and the ONLY thing in
+  // the game that hands one out is the melee opening — five `SetPlayerState(…, HERO_TOKENS,
+  // bj_MELEE_STARTING_HERO_TOKENS)` calls, all inside Blizzard.j's `MeleeStartingUnits*`, and
+  // every one of them a SET rather than an add. A CUSTOM map runs none of them, so its heroes
+  // cost full price. We used to model this as a boolean defaulting to "you have one", which
+  // made hero #1 free on every map ever loaded — reported on Azure Tower Defense, where the
+  // first hero out of the Altar of Summoning came out for nothing.
+  const { Authority } = require(join(REPO, ".sim-build", "src", "game", "authority.js"));
+  const auth = new Authority(world, { get: () => undefined }, {}, { builds: () => [] }, {});
+
+  check("a player starts with NO free hero — a custom map never grants one", auth.hasFreeHero(3), false);
+  check("…and reads back as zero tokens through GetPlayerState", auth.heroTokensFor(3), 0);
+
+  // The melee opening grants exactly one, however many times it runs (SetPlayerState is a SET).
+  auth.setHeroTokens(3, 1);
+  auth.setHeroTokens(3, 1);
+  check("the melee grant is idempotent", auth.heroTokensFor(3), 1);
+  check("…and that player's first hero is free", auth.hasFreeHero(3), true);
+
+  auth.takeFreeHero(3);
+  check("spending it leaves none", [auth.heroTokensFor(3), auth.hasFreeHero(3)], [0, false]);
+  check("…and spending again cannot go negative", (auth.takeFreeHero(3), auth.heroTokensFor(3)), 0);
+
+  // A cancelled hero train refunds the token with the gold.
+  auth.restoreFreeHero(3);
+  check("a cancelled hero hands the token back", [auth.heroTokensFor(3), auth.hasFreeHero(3)], [1, true]);
+
+  // The grant is per player: nobody else got one.
+  check("the grant is per player", auth.hasFreeHero(4), false);
+}
+
 console.log(failed === 0 ? "\nbuild orders: all checks passed" : `\nbuild orders: ${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);

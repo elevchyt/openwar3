@@ -253,6 +253,8 @@ export function authorityHooks(authority: {
   stashFor(owner: number): Readonly<{ gold: number; lumber: number }>;
   foodFor(owner: number): { used: number; made: number };
   setPlayerResource(player: number, resource: "gold" | "lumber", value: number): void;
+  heroTokensFor(player: number): number;
+  setHeroTokens(player: number, value: number): void;
   currentOrderId(unitId: number): number;
   createScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number): number;
   issueUnitOrder(
@@ -301,14 +303,21 @@ export function authorityHooks(authority: {
     // SetPlayerState → the live stash, via the authority's named setter. This is what grants a
     // custom map its starting gold/lumber (its init triggers set it). Food is derived from
     // units, so states 4 and 5 are read-only and a write to them is ignored rather than
-    // invented. state: 1=gold 2=lumber 4=cap 5=used.
+    // invented. state: 1=gold 2=lumber 3=hero tokens 4=cap 5=used.
+    //
+    // HERO_TOKENS (3) is the "first hero is free" allowance, and it is a real resource the
+    // SCRIPT hands out — `MeleeStartingUnits*` is the only thing in Blizzard.j that ever grants
+    // one, which is exactly why a custom map's heroes cost full price. Dropping this write was
+    // half of why they did not: see Authority.heroTokens.
     setPlayerState: (p, state, value) => {
       if (state === 1) authority.setPlayerResource(p, "gold", value);
       else if (state === 2) authority.setPlayerResource(p, "lumber", value);
+      else if (state === 3) authority.setHeroTokens(p, value);
     },
     getPlayerState: (p, state) => {
       if (state === 1) return Math.floor(authority.stashFor(p).gold);
       if (state === 2) return Math.floor(authority.stashFor(p).lumber);
+      if (state === 3) return authority.heroTokensFor(p); // HERO_TOKENS — the free-hero allowance
       if (state === 4) return authority.foodFor(p).made; // FOOD_CAP
       if (state === 5) return authority.foodFor(p).used; // FOOD_USED
       return 0;

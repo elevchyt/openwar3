@@ -31,9 +31,26 @@ import { MELEE, MISC_GAME } from "../data/gameplayConstants";
 const SHOP_HIRE_TIME = 0;
 
 export class Authority {
-  /** Players who have already taken their free first hero. Lives here, not on a client:
-   *  a client that kept this set could hire a hero a game for free. */
-  private freeHeroUsed = new Set<number>();
+  /**
+   * `PLAYER_STATE_RESOURCE_HERO_TOKENS` — how many heroes this player may still take for free.
+   *
+   * WC3's "first hero is free" is not a rule about heroes at all: it is a **resource**, and one
+   * that **only the melee opening hands out**. Blizzard.j spends five lines on it, all inside
+   * `MeleeStartingUnits*`, and all of them a SET rather than an add:
+   *
+   *     // Otherwise, give them a "free hero" token.
+   *     call SetPlayerState(whichPlayer, PLAYER_STATE_RESOURCE_HERO_TOKENS, bj_MELEE_STARTING_HERO_TOKENS)
+   *
+   * A CUSTOM map never runs that path, so its players have **no tokens** and every hero costs
+   * full price. We used to model this as a boolean that defaulted to "yes, you have one", which
+   * made the first hero free on every map ever loaded — reported on Azure Tower Defense, where
+   * the first hero out of the Altar of Summoning cost nothing and the map's own economy is the
+   * entire game. Starting at zero and letting the melee path grant it is both the authentic
+   * mechanic and the fix.
+   *
+   * Lives here, not on a client: a client that kept this count could hire a free hero a game.
+   */
+  private heroTokens = new Map<number, number>();
   /** Debug "add food" cheat: extra supply cap per player. */
   private cheatFoodBonus = new Map<number, number>();
 
@@ -231,19 +248,31 @@ export class Authority {
     this.cheatFoodBonus.set(player, (this.cheatFoodBonus.get(player) ?? 0) + amount);
   }
 
-  /** Has this player still got their free first hero? WC3 gives hero #1 away. */
+  /** Has this player got a free hero to spend? True only where something granted a hero token —
+   *  in practice the melee opening, since that is the only thing in the game that grants one. */
   hasFreeHero(player: number): boolean {
-    return !this.freeHeroUsed.has(player);
+    return this.heroTokensFor(player) > 0;
   }
 
-  /** Spend the free-hero allowance. */
+  /** Spend one token. */
   takeFreeHero(player: number): void {
-    this.freeHeroUsed.add(player);
+    this.setHeroTokens(player, this.heroTokensFor(player) - 1);
   }
 
-  /** Give it back (a cancelled hero train refunds the allowance along with the gold). */
+  /** Give it back (a cancelled hero train refunds the token along with the gold). */
   restoreFreeHero(player: number): void {
-    this.freeHeroUsed.delete(player);
+    this.setHeroTokens(player, this.heroTokensFor(player) + 1);
+  }
+
+  /** `GetPlayerState(p, PLAYER_STATE_RESOURCE_HERO_TOKENS)` — 0 unless something granted one. */
+  heroTokensFor(player: number): number {
+    return this.heroTokens.get(player) ?? 0;
+  }
+
+  /** `SetPlayerState(p, PLAYER_STATE_RESOURCE_HERO_TOKENS, n)`. A SET, like Blizzard.j's own
+   *  calls — granting the melee token twice still leaves exactly one. Never negative. */
+  setHeroTokens(player: number, value: number): void {
+    this.heroTokens.set(player, Math.max(0, Math.floor(value)));
   }
 
   /** Hero types the player already fields or has queued — at their own altars AND at any
