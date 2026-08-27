@@ -354,6 +354,23 @@ body.in-game .menu-panel { display: none; }
   flex-direction: column;
 }
 
+/* In-game CHAT — its own stack in its own corner, which is the point of it. The engine keeps
+   chat and trigger text in two different frames (CChatDisplay next to CMessageFrame in the
+   Game.dll dump; ORIGIN_FRAME_CHAT_MSG next to ORIGIN_FRAME_UNIT_MSG in the frame natives),
+   so what a player says can't move the map's own messages. Hard against the frame's top-left,
+   right of the hero bar, growing DOWNWARD with the newest line last — left/top/width come
+   from ui/hud.ts (CHAT_AREA). */
+.hud-chatcol {
+  position: absolute;
+  /* left / top / width are set in ui/hud.ts */
+  pointer-events: none;
+  z-index: 4;
+}
+.hud-chatlog {
+  display: flex;
+  flex-direction: column;
+}
+
 /* The chat entry line. WC3 draws this in engine code, not FDF (there is no frame for it), so
    it has no frame to mount and no skin key of its own — but the PROMPT is the game's own
    COLON_MESSAGE_* string and the backdrop is the game's own tooltip art. It takes the pointer
@@ -430,9 +447,20 @@ body.hud-tooltip-skinned .hud-chatbar::after {
   word-break: break-word;
   animation: hud-msg-in 140ms ease-out;
 }
-/* A received chat line is the same area at the OTHER of its two font heights — MiscUI gives
-   the message area both WorldFrameUnitMessage (trigger dialog) and WorldFrameChatMessage. */
-.hud-msgline-chat { font-size: var(--font-WorldFrameChatMessage); }
+/* A chat line is the same text at the OTHER of the two font heights MiscUI states —
+   WorldFrameChatMessage ("in-game chat text") against the message area's
+   WorldFrameUnitMessage. Everything else it wears is the message line's, so the two stacks
+   read as one voice even though they live in different frames. */
+.hud-chatline {
+  font-family: var(--game-font);
+  font-size: var(--font-WorldFrameChatMessage);
+  line-height: 1;
+  color: #f4f0e0;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: hud-msg-in 140ms ease-out;
+}
 @keyframes hud-msg-in {
   from { opacity: 0; transform: translateY(-3px); }
   to { opacity: 1; transform: none; }

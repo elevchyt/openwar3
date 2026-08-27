@@ -616,6 +616,35 @@ const MSG_AREA = {
 } as const;
 
 /**
+ * The in-game CHAT display — a **different frame from the message area above**, and that is
+ * the whole point of this block.
+ *
+ * The engine says so twice over. `Game.dll` has `.\CChatDisplay.cpp` sitting next to
+ * `.\CMessageFrame.cpp` (docs/reverse-engineering/game-dll-thread.md), and the frame natives
+ * expose the two separately: `ORIGIN_FRAME_CHAT_MSG` is what a map hides to silence player
+ * chat while trigger text keeps coming (hiveworkshop "Hiding ingame chat", thread 321746),
+ * and `ORIGIN_FRAME_UNIT_MSG` is the trigger dialog. We had chat and trigger text sharing one
+ * DOM column, so a line of chat SHOVED the map's own messages up the screen — which the real
+ * client never does, because the two stacks do not know about each other.
+ *
+ * Where it goes: hard against the game frame's **top-left**, immediately right of the hero
+ * bar (which owns that corner — HERO_BAR), growing DOWNWARD with the newest line at the
+ * bottom. No file states this position — like the hero bar and the chat entry line, the chat
+ * display is one of `CGameUI`'s programmatic frames and no .fdf declares it — so this is the
+ * developer's call rather than a measurement, and it is written here as one number so it can
+ * be moved in one place if a capture of the real client ever settles it.
+ *
+ * `left` is measured from the SCREEN's left edge (not the 0.8 box's), because "far left" is
+ * the point of it; the hero bar's slot ends at `HERO_BAR.left + HERO_BAR.slot`, so the column
+ * begins a slot-gap past that and never runs under a hero's portrait.
+ */
+const CHAT_AREA = {
+  left: 0.055, // clear of the hero bar (3 px + a 76 px slot at 1080p ≈ 0.044) and then some
+  top: 0.032 + 2 * HERO_PX, // level with the hero bar, under the upper button bar's strip
+  width: 0.42, // where a long line wraps
+} as const;
+
+/**
  * `UI\MiscUI.txt` **[FontHeights]**, by its own keys — the sizes for the frames the engine
  * builds in code rather than out of a .fdf, which is why they are in a text file at all
  * ("To change the font height of a frame created in the FrameDef files, you will need to
@@ -669,6 +698,9 @@ const CHAT_BAR = {
 
 // On-screen message log tuning.
 const MSG_MAX = 16; // max lines kept on screen at once (WC3 scrolls the oldest off)
+// The chat display holds fewer: it hangs DOWN from the top-left corner (CHAT_AREA), so a tall
+// stack would reach the middle of the screen instead of scrolling off it.
+const CHAT_MAX = 8;
 const MSG_DEFAULT_SECS = 12; // how long an untimed DisplayTextToPlayer line lingers
 const ERROR_SECS = 2.5; // how long the gold command-error line above the console holds
 
@@ -923,9 +955,12 @@ export class GameHud {
   private dotsT = 0;
   private textT = TEXT_PERIOD; // render immediately on first frame
   private lastSelId: number | null = null; // force a text refresh when selection changes
-  // On-screen message area (the "Game - Display text" trigger action target) — a
-  // stack of chat/quest lines in the upper-left, oldest scrolling off the top.
+  // On-screen message area (the "Game - Display text" trigger action target) — the map's own
+  // lines, oldest scrolling off the top. Chat is NOT in here; see chatLog.
   private msgLog!: HTMLDivElement;
+  // The in-game chat display (CChatDisplay / ORIGIN_FRAME_CHAT_MSG) — its own stack in its own
+  // corner, so a line of chat never moves the map's messages. See CHAT_AREA.
+  private chatLog!: HTMLDivElement;
   // The chat entry line under the message column (WC3 draws this one in engine code, not FDF).
   private chatBar!: HTMLDivElement;
   private chatPromptEl!: HTMLSpanElement;
@@ -938,6 +973,7 @@ export class GameHud {
    *  player who has allies is addressing them by default (`defaultChatTarget`). */
   private chatDefault: ChatTarget | null = null;
   private msgTimers = new Set<number>(); // pending auto-remove timeouts, cleared on dispose
+  private chatTimers = new Set<number>(); // the same, for the chat display's own lines
   // The gold error line just above the console (WC3's SimpleMessage frame).
   private errLine!: HTMLDivElement;
   private errTimer = 0;
@@ -964,6 +1000,7 @@ export class GameHud {
       this.buildHeroBar(),
       this.buildCheatPanel(),
       this.buildMessageLog(),
+      this.buildChatLog(),
       this.buildChatBar(),
       this.buildErrorLine(),
     );
@@ -1067,6 +1104,8 @@ export class GameHud {
     this.minimapResize?.disconnect();
     for (const id of this.msgTimers) clearTimeout(id);
     this.msgTimers.clear();
+    for (const id of this.chatTimers) clearTimeout(id);
+    this.chatTimers.clear();
     clearTimeout(this.errTimer);
     this.root.remove();
     // Removing the root is not enough: the skin classes and the art behind them were written
@@ -1502,8 +1541,8 @@ export class GameHud {
 
   /**
    * The message column (`WorldFrameUnitMessage`, see MSG_AREA for where it sits and why):
-   * the lines the game has shown — trigger dialog and received chat alike, which is the one
-   * area MiscUI gives both a font height for.
+   * the lines the MAP has shown — trigger dialog, quest updates, the engine's own reports.
+   * Player chat is not in here: it has a display of its own (buildChatLog / CHAT_AREA).
    */
   private buildMessageLog(): HTMLDivElement {
     const column = document.createElement("div");
@@ -1519,6 +1558,26 @@ export class GameHud {
     this.msgLog = document.createElement("div");
     this.msgLog.className = "hud-msglog";
     column.append(this.msgLog);
+    return column;
+  }
+
+  /**
+   * The chat display (`ORIGIN_FRAME_CHAT_MSG` / `CChatDisplay`, see CHAT_AREA): what players
+   * say, in its own column in the frame's top-left corner. Its independence from the message
+   * column is the feature — neither stack can push the other around.
+   */
+  private buildChatLog(): HTMLDivElement {
+    const column = document.createElement("div");
+    column.className = "hud-chatcol";
+    // Anchored to the frame's own left edge — this column is the one thing on screen measured
+    // from there rather than from the centred 0.8 box, because "hard left" is what it is.
+    column.style.left = uiPx(CHAT_AREA.left);
+    column.style.top = uiPx(CHAT_AREA.top);
+    column.style.width = uiPx(CHAT_AREA.width);
+
+    this.chatLog = document.createElement("div");
+    this.chatLog.className = "hud-chatlog";
+    column.append(this.chatLog);
     return column;
   }
 
@@ -1666,21 +1725,41 @@ export class GameHud {
    *  in WC3 lingers, so we give it a generous default and let it scroll off. WC3
    *  colour codes (`|cAARRGGBB…|r`, `|n`) are honoured. Newest line sits at the
    *  bottom; we keep the last MSG_MAX so the stack can't grow without bound. */
-  showMessage(text: string, duration: number, chat = false): void {
+  showMessage(text: string, duration: number): void {
+    this.pushLine(this.msgLog, this.msgTimers, "hud-msgline", MSG_MAX, text, duration);
+  }
+
+  /** Show one line of player chat. It goes to the CHAT display, never to the message area —
+   *  two frames in the engine (CChatDisplay vs CMessageFrame, ORIGIN_FRAME_CHAT_MSG vs
+   *  ORIGIN_FRAME_UNIT_MSG), so what a player says cannot shove the map's own text around.
+   *  MiscUI sizes them apart too: WorldFrameChatMessage (0.013) against the message area's
+   *  WorldFrameUnitMessage (0.015). */
+  showChatMessage(text: string, duration: number): void {
+    this.pushLine(this.chatLog, this.chatTimers, "hud-chatline", CHAT_MAX, text, duration);
+  }
+
+  /** One line into one of the two stacks: newest at the bottom, oldest scrolled off past
+   *  `max`, and removed again on its own timer. WC3 colour codes are honoured. */
+  private pushLine(
+    log: HTMLDivElement,
+    timers: Set<number>,
+    cls: string,
+    max: number,
+    text: string,
+    duration: number,
+  ): void {
     if (!text) return;
     const line = document.createElement("div");
-    // Chat and trigger dialog share this area but not their size: MiscUI gives the area TWO
-    // font heights, WorldFrameChatMessage (0.013) and WorldFrameUnitMessage (0.015).
-    line.className = chat ? "hud-msgline hud-msgline-chat" : "hud-msgline";
+    line.className = cls;
     line.innerHTML = formatColorCodes(text);
-    this.msgLog.append(line);
-    while (this.msgLog.childElementCount > MSG_MAX) this.msgLog.firstElementChild?.remove();
+    log.append(line);
+    while (log.childElementCount > max) log.firstElementChild?.remove();
     const secs = duration >= 0 ? duration : MSG_DEFAULT_SECS;
     const id = window.setTimeout(() => {
       line.remove();
-      this.msgTimers.delete(id);
+      timers.delete(id);
     }, Math.max(0.5, secs) * 1000);
-    this.msgTimers.add(id);
+    timers.add(id);
   }
 
   /** The single gold line the engine flashes above the console when a command is
@@ -1704,7 +1783,9 @@ export class GameHud {
     this.errTimer = window.setTimeout(() => this.errLine.classList.remove("hud-error-on"), ERROR_SECS * 1000);
   }
 
-  /** Clear every on-screen message (the ClearTextMessages action). */
+  /** Clear every on-screen message (the ClearTextMessages action). The chat display is left
+   *  alone: it is a separate frame the action does not name, and a map wiping its own text
+   *  has no business deleting what the players said to each other. */
   clearMessages(): void {
     for (const id of this.msgTimers) clearTimeout(id);
     this.msgTimers.clear();
