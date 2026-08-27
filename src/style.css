@@ -2237,13 +2237,20 @@ body.in-game .fdf-screen.fdf-ingame {
 /* --- FDF SIMPLEBUTTON (the console's own buttons — the upper Quests/Menu/Allies/Chat bar).
    Its four faces are rows of one atlas and its three captions are the same words in three
    colours, all stacked; the state picks which of each is visible. */
-.fdf-simple-face,
+.fdf-simple-layer,
 .fdf-simple-text {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
+/* The state faces stack over the normal one, which is the bottom of the button. (Only ever
+   one of them is at opacity 1 — the engine shows a single face per state — but the order
+   still has to be right, because `.fdf-simple-face` claims a z-index and an `auto` sibling
+   would lose to it.) The captions are z-index 2, above all four. */
 .fdf-simple-face { z-index: 0; }
+.fdf-simple-layer.fdf-pushed,
+.fdf-simple-layer.fdf-disabled-face,
+.fdf-simple-layer.fdf-button-glow { z-index: 1; }
 .fdf-simple-text {
   z-index: 2;
   display: flex;

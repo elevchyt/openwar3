@@ -461,7 +461,16 @@ function renderSimpleButtonLayers(el: HTMLElement, f: FdfFrame, ctx: RenderCtx):
     const art = tex ? textureImage(tex, ctx) : null;
     if (!art) return;
     const layer = document.createElement("div");
-    layer.className = cls;
+    // `fdf-simple-layer` on ALL FOUR, because all four are the same thing: an empty div that
+    // has to be stretched over the button to show its slice of the atlas. Only the normal face
+    // and the highlight used to get that (from `.fdf-simple-face` and `.fdf-button-glow`,
+    // which have positioning of their own for other reasons) — the pushed and DISABLED faces
+    // were laid out in normal flow, where an empty div is zero pixels tall, so they were
+    // revealed at full opacity and painted nothing. That is why a greyed console button kept
+    // its live blue face and only its CAPTION changed. The glue screens' buttons take the same
+    // two class names on CANVAS elements, which carry their own intrinsic size and never had
+    // the bug, so the fix belongs on this class rather than on those.
+    layer.className = `fdf-simple-layer ${cls}`;
     layer.style.background = `url(${art}) center/100% 100% no-repeat`;
     el.appendChild(layer);
   };
