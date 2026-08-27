@@ -354,15 +354,17 @@ body.in-game .menu-panel { display: none; }
   flex-direction: column;
 }
 
-/* In-game CHAT — its own stack in its own corner, which is the point of it. The engine keeps
+/* In-game CHAT — its own stack in its own place, which is the point of it. The engine keeps
    chat and trigger text in two different frames (CChatDisplay next to CMessageFrame in the
    Game.dll dump; ORIGIN_FRAME_CHAT_MSG next to ORIGIN_FRAME_UNIT_MSG in the frame natives),
-   so what a player says can't move the map's own messages. Hard against the frame's top-left,
-   right of the hero bar, growing DOWNWARD with the newest line last — left/top/width come
-   from ui/hud.ts (CHAT_AREA). */
+   so what a player says can't move the map's own messages. It runs down the frame's left
+   edge, resting just above the idle-worker button and — like the message column — pinned by
+   its BOTTOM so the stack grows upward: left/bottom/width come from ui/hud.ts (CHAT_AREA).
+   The two stacks may overlap when both are deep; they are drawn over each other, never
+   through each other. */
 .hud-chatcol {
   position: absolute;
-  /* left / top / width are set in ui/hud.ts */
+  /* left / bottom / width are set in ui/hud.ts */
   pointer-events: none;
   z-index: 4;
 }

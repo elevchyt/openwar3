@@ -627,20 +627,28 @@ const MSG_AREA = {
  * DOM column, so a line of chat SHOVED the map's own messages up the screen — which the real
  * client never does, because the two stacks do not know about each other.
  *
- * Where it goes: hard against the game frame's **top-left**, immediately right of the hero
- * bar (which owns that corner — HERO_BAR), growing DOWNWARD with the newest line at the
- * bottom. No file states this position — like the hero bar and the chat entry line, the chat
- * display is one of `CGameUI`'s programmatic frames and no .fdf declares it — so this is the
- * developer's call rather than a measurement, and it is written here as one number so it can
- * be moved in one place if a capture of the real client ever settles it.
+ * Where it goes: down the game frame's LEFT edge, resting just above the idle-worker button,
+ * and — like the message area — pinned by its BOTTOM so the stack grows upward and the newest
+ * line stays at one fixed spot. No file states this position: like the hero bar and the chat
+ * entry line, the chat display is one of `CGameUI`'s programmatic frames and no .fdf declares
+ * it. So this is the developer's call rather than a measurement, written here as two numbers
+ * so it can be moved in one place if a capture of the real client ever settles it.
  *
- * `left` is measured from the SCREEN's left edge (not the 0.8 box's), because "far left" is
- * the point of it; the hero bar's slot ends at `HERO_BAR.left + HERO_BAR.slot`, so the column
- * begins a slot-gap past that and never runs under a hero's portrait.
+ * It may well overlap the message area once both stacks are deep, and that is fine — they are
+ * two frames drawn over the same world, not two halves of one column. What must never happen
+ * again is one of them MOVING the other.
+ *
+ * `left` is measured from the SCREEN's left edge (not the 0.8 box's), because hard left is the
+ * point of it; the hero bar's slot ends at `HERO_BAR.left + HERO_BAR.slot` ≈ 0.044, so the
+ * column begins past that and never runs under a hero's portrait.
  */
 const CHAT_AREA = {
   left: 0.055, // clear of the hero bar (3 px + a 76 px slot at 1080p ≈ 0.044) and then some
-  top: 0.032 + 2 * HERO_PX, // level with the hero bar, under the upper button bar's strip
+  /** Just over the idle-worker button — the one thing standing in this strip. `style.css`
+   *  hangs it 42 px above the minimap socket and draws it 68 px tall (1080p pixels, the same
+   *  unit the hero bar is stated in), and the socket's own top is where `ConsoleUI.fdf` puts
+   *  it; 20 px more is the breath between the button and the lowest line of chat. */
+  bottom: CONSOLE_ZONES.minimap.y + CONSOLE_ZONES.minimap.h + (42 + 68 + 20) * HERO_PX,
   width: 0.42, // where a long line wraps
 } as const;
 
@@ -698,8 +706,8 @@ const CHAT_BAR = {
 
 // On-screen message log tuning.
 const MSG_MAX = 16; // max lines kept on screen at once (WC3 scrolls the oldest off)
-// The chat display holds fewer: it hangs DOWN from the top-left corner (CHAT_AREA), so a tall
-// stack would reach the middle of the screen instead of scrolling off it.
+// The chat display holds fewer: it starts low on the screen (CHAT_AREA) and grows up, so a
+// deep stack climbs towards the top of the frame instead of scrolling off it.
 const CHAT_MAX = 8;
 const MSG_DEFAULT_SECS = 12; // how long an untimed DisplayTextToPlayer line lingers
 const ERROR_SECS = 2.5; // how long the gold command-error line above the console holds
@@ -1563,16 +1571,17 @@ export class GameHud {
 
   /**
    * The chat display (`ORIGIN_FRAME_CHAT_MSG` / `CChatDisplay`, see CHAT_AREA): what players
-   * say, in its own column in the frame's top-left corner. Its independence from the message
+   * say, in its own column down the frame's left edge. Its independence from the message
    * column is the feature — neither stack can push the other around.
    */
   private buildChatLog(): HTMLDivElement {
     const column = document.createElement("div");
     column.className = "hud-chatcol";
     // Anchored to the frame's own left edge — this column is the one thing on screen measured
-    // from there rather than from the centred 0.8 box, because "hard left" is what it is.
+    // from there rather than from the centred 0.8 box, because hard left is what it is. Pinned
+    // by its bottom, like the message column: the stack grows upward, newest line last.
     column.style.left = uiPx(CHAT_AREA.left);
-    column.style.top = uiPx(CHAT_AREA.top);
+    column.style.bottom = uiPx(CHAT_AREA.bottom);
     column.style.width = uiPx(CHAT_AREA.width);
 
     this.chatLog = document.createElement("div");
