@@ -127,6 +127,55 @@ Each of these is engine machinery rather than a line of script, and each is mark
   works, but the Custom Game screen only offers "Computer (Normal)", so `MELEE_NORMAL` is what
   every slot is seated at today.
 
+## Hero spells — not done, and what it would take
+
+**The AI's heroes learn their spells and never cast them.** `SetHeroLevels(SkillArrays)` spends
+the points down each race's own `set skill[N] = …` list, so an AI Archmage really does end up
+with Blizzard at rank 3 — it simply never presses it. Deferred deliberately; this section is the
+handover.
+
+**There is no script to port, and that is the whole difficulty.** The four race files decide
+what a hero LEARNS and then say nothing about using it. Casting is the engine's:
+[`tinkerworx-repos.md`](reverse-engineering/tinkerworx-repos.md) has it as a `heroAbility`
+object hung off `CUnit` beside `attackAbility`/`moveAbility`/`buildAbility`, i.e. C++ in
+`Game.dll`. So this one has to be **designed**, which is exactly why it is not in yet — the
+rest of `src/ai/` is a transcription with the file's own numbers behind every branch, and this
+would be the first part with none.
+
+What the sources do give:
+
+- **`StandardAI` sets `SetTargetHeroes(not isNewbie)`** (common.ai 779–810). A computer above
+  Easy aims at HEROES first. That is the only targeting preference the scripts state out loud,
+  and it should be the one this obeys.
+- **`SetSmartArtillery`, `SetIgnoreInjured`, `SetHeroesFlee`** sit in the same block and are the
+  neighbours of the same behaviour. `SetHeroesFlee(true)` in particular pairs with any
+  panic-cast rule — a hero that runs and a hero that shields are the same decision.
+- **Everything about WHEN a spell is legal is already in the ability's row**, in the same terms
+  `SimWorld.tickAutocast` reads them: `targs1` separates friend from foe (and `self` lets the
+  caster be its own target), `Rng1` is reach, `Area1` is the patch, `Cost1` and `Cool1` are the
+  gates. `tickAutocast` is the model to follow — it is a working, data-driven "should this unit
+  cast right now" that hard-codes no ability list.
+
+A sketch that got as far as compiling, kept here so the next attempt starts past it:
+
+- Classify each learned ability from its own row rather than from a per-spell table (which
+  would be a second copy of `KNOWN_ABILITIES` that could drift): `unitid1` set → a **summon**;
+  `targs1` naming `dead` → a **raise** (Resurrection, Animate Dead — and these must count
+  `SimWorld.corpses` through `corpseAdmits` first, or the ultimate is spent on empty ground);
+  friend-only flags or a `POLARITY_SPELLS`/`HEAL_SPELLS` entry → a **heal**; an `Area1` with a
+  non-unit target → an **AoE**; a unit target → a **nuke**; the rest → a **self-buff**.
+- Gate the lot on an enemy actually being within the hero's own `acquire` — a hero crossing the
+  map must not open with Avatar, and one standing at home must not summon wolves to watch it
+  mine.
+- **Skip a hero whose `order` is already `"cast"`.** Blizzard, Starfall, Tranquility and Death
+  and Decay are CHANNELLED, and a fresh order is what cancels a channel: a chooser that runs
+  twice a second would start Starfall repeatedly and finish it never. This is the trap.
+- One cast per hero per pass, on a clock of its own (~0.5s) rather than the 2s build rhythm.
+
+The two judgement calls with no data behind them, which is where it should be argued rather
+than guessed: how many bodies an AoE wants under it before it is worth the mana, and how hurt a
+hero has to be before it spends a Divine Shield on itself.
+
 ## Where it runs, and why it cannot cheat
 
 `RtsController.tick` drives `MeleeAi` inside the branch a frozen LAN client never enters, so
