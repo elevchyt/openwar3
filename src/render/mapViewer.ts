@@ -67,7 +67,7 @@ import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
 import { ConsoleUi, type ConsolePanel } from "../ui/consoleUi";
 import { parseMapInfo } from "../world/mapInfo";
 import {
-  chatPrompt, chatRecipients, formatChatLine,
+  chatPrompt, chatRecipients, formatChatLine, hasChatAllies,
   type ChatLine, type ChatTarget, type ChatWorld,
 } from "../game/chat";
 import { teamColorHex, teamColorRgb } from "./teamColor";
@@ -6157,6 +6157,7 @@ export class MapViewerScene {
       chatPrompt: (target) =>
         chatPrompt(target, this.multiplayerMatch, (p) => this.playerLabel(p), (k) => this.globalStrings?.strings.get(k)),
       sendChat: (text, target) => this.sendChat(text, target),
+      chatHasAllies: () => hasChatAllies(this.localPlayer, this.chatWorld()),
       setResources: (next) => this.consoleUi?.update(next),
       dayNight: () => this.rts?.timeOfDay() ?? { hour: MELEE.MELEE_STARTING_TOD, isDay: true },
       mountClock: (slot) => this.mountClock(slot),

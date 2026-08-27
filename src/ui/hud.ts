@@ -278,6 +278,10 @@ export interface HudDriver {
   /** A line the local player typed and sent. */
   sendChat(text: string, target: ChatTarget): void;
 
+  /** Has the local player anyone to address as "Allies"? Decides whether the entry line has
+   *  two modes to Tab between or only one (see `defaultChatTarget`). */
+  chatHasAllies(): boolean;
+
   /** Push the resource readout to the FDF top bar (ui/consoleUi.ts), which owns that text now. */
   setResources(next: ConsoleResources): void;
 
@@ -926,9 +930,11 @@ export class GameHud {
   private chatInput!: HTMLInputElement;
   private chatTarget: ChatTarget = { scope: "all" };
   private questsBtn?: HTMLButtonElement; // glows on FlashQuestDialogButton until pressed
-  /** Who plain Enter talks to. "All" until the F12 dialog says otherwise — that dialog's
-   *  whole job is choosing this (ui/chatDialog.ts). Ctrl+Enter always overrides it. */
-  private chatDefault: ChatTarget = { scope: "all" };
+  /** Who plain Enter talks to, once somebody has SAID so — the F12 dialog (ui/chatDialog.ts),
+   *  whose whole job is choosing this, or a Tab in the entry line. Null until then, which is
+   *  not the same as "all": with nothing chosen the audience follows the alliances, and a
+   *  player who has allies is addressing them by default (`defaultChatTarget`). */
+  private chatDefault: ChatTarget | null = null;
   private msgTimers = new Set<number>(); // pending auto-remove timeouts, cleared on dispose
   // The gold error line just above the console (WC3's SimpleMessage frame).
   private errLine!: HTMLDivElement;
@@ -1222,7 +1228,7 @@ export class GameHud {
     // is the binding: there is no "switch target" step in the middle.
     if (e.key === "Enter") {
       e.preventDefault();
-      this.openChat(e.ctrlKey ? { scope: "allies" } : this.chatDefault);
+      this.openChat(e.ctrlKey ? { scope: "allies" } : this.defaultChatTarget());
       return;
     }
     if (e.key === "Tab") {
@@ -1546,17 +1552,50 @@ export class GameHud {
         e.preventDefault();
         e.stopPropagation();
         this.closeChat();
+      } else if (e.key === "Tab") {
+        // Tab belongs to the entry line while the entry line is up: it switches audience.
+        // Outside it, the same key cycles the selection's sub-group — hence stopPropagation,
+        // and preventDefault so the browser doesn't walk focus to the next element instead.
+        e.preventDefault();
+        e.stopPropagation();
+        this.toggleChatTarget();
       }
     });
-    // Clicking away abandons the line, as it does in the game.
-    this.chatInput.addEventListener("blur", () => this.closeChat());
+    // An open entry line CANNOT be unfocused. Clicking the map, a command button or anything
+    // else does not abandon what was typed — only Escape (throw it away) and Enter (send it)
+    // close the line, so a stray click mid-sentence costs nothing. The focus is taken back
+    // after the blur has finished dispatching, which is the point a browser will accept it.
+    this.chatInput.addEventListener("blur", () => {
+      if (this.chatBar.hidden) return; // closeChat() hides FIRST, so its own blur lands here
+      setTimeout(() => {
+        if (!this.chatBar.hidden) this.chatInput.focus();
+      }, 0);
+    });
     return this.chatBar;
   }
 
-  /** Open the chat entry line addressed at `target` (Enter → all, Ctrl+Enter → allies). */
+  /**
+   * Who plain Enter talks to right now.
+   *
+   * Nobody having chosen, the alliances choose: a player WITH allies is talking to them —
+   * that is who you are playing with, and it is the audience you want by default — and a
+   * player with none has only one audience there is to have. An explicit choice (F12, or a
+   * Tab in the entry line) stands, but is still clamped: an allied target you were left
+   * holding when the last ally dropped is no target at all.
+   */
+  private defaultChatTarget(): ChatTarget {
+    return this.clampChatTarget(this.chatDefault ?? { scope: this.driver.chatHasAllies() ? "allies" : "all" });
+  }
+
+  /** "To Allies" with nobody allied is not a thing the entry line can be — fall back to All. */
+  private clampChatTarget(target: ChatTarget): ChatTarget {
+    return target.scope === "allies" && !this.driver.chatHasAllies() ? { scope: "all" } : target;
+  }
+
+  /** Open the chat entry line addressed at `target` (Enter → the default, Ctrl+Enter → allies). */
   openChat(target: ChatTarget): void {
-    this.chatTarget = target;
-    this.chatPromptEl.textContent = this.driver.chatPrompt(target);
+    this.chatTarget = this.clampChatTarget(target);
+    this.chatPromptEl.textContent = this.driver.chatPrompt(this.chatTarget);
     this.chatBar.hidden = false;
     this.chatInput.value = "";
     this.chatInput.focus();
@@ -1579,7 +1618,23 @@ export class GameHud {
 
   /** Who plain Enter currently talks to, so the F12 dialog can open showing it. */
   chatTargetNow(): ChatTarget {
-    return this.chatDefault;
+    return this.defaultChatTarget();
+  }
+
+  /**
+   * Tab, while typing: switch the line between the two audiences everyone always has — the
+   * game's own pair, "To All:" and "To Allies:". With no allies there is no second mode, so
+   * Tab is nothing and the line stays where it is.
+   *
+   * The switch STICKS: it is the mode you are now in, so the next Enter opens there too,
+   * exactly as if the F12 dialog had been used. What was typed is kept — you are changing
+   * who hears the sentence, not abandoning it.
+   */
+  private toggleChatTarget(): void {
+    if (!this.driver.chatHasAllies()) return;
+    this.chatTarget = { scope: this.chatTarget.scope === "allies" ? "all" : "allies" };
+    this.chatDefault = this.chatTarget;
+    this.chatPromptEl.textContent = this.driver.chatPrompt(this.chatTarget);
   }
 
   private closeChat(): void {

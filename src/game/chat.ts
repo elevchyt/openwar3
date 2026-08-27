@@ -70,6 +70,18 @@ export function chatRecipients(line: ChatLine, world: ChatWorld): number[] {
   }
 }
 
+/**
+ * Has this player anyone to address as "Allies"?
+ *
+ * The same question `chatRecipients` asks, over everyone but themselves — so a lone player,
+ * or one in a free-for-all, has no allied audience at all and the entry line has only one
+ * mode to be in. Asked of the alliance matrix rather than of team numbers, for the reason at
+ * the top of this file: a one-way passive grant is not an alliance.
+ */
+export function hasChatAllies(player: number, world: ChatWorld): boolean {
+  return world.players().some((p) => p !== player && world.coAllied(player, p));
+}
+
 /** The GlobalStrings this module speaks with — passed in, never spelled out. */
 export interface ChatStrings {
   (key: string): string | undefined;
