@@ -506,6 +506,26 @@ export class SoundBoard {
     }
   }
 
+  /**
+   * A cheap census for the session performance log (src/dev/perfLog.ts), read once a second.
+   *
+   * Audio earns its own row there because it is one of the few things a long match can
+   * accumulate SILENTLY: `buffers` is a decoded-PCM cache that only ever grows, and a voice
+   * or a loop that is never retired holds a live graph node the mixer keeps summing. Neither
+   * is visible in a frame breakdown — the cost lands on the audio thread — so the only way to
+   * see it is to count it.
+   */
+  perfCounts(): Record<string, number> {
+    let pooled = 0;
+    for (const v of this.channelVoices.values()) pooled += v.length;
+    return {
+      voices: this.voices.size + pooled,
+      loops: this.loops.size + this.scripts.size,
+      playing: this.playing.size,
+      audioBuffers: this.buffers.size,
+    };
+  }
+
   setMuted(muted: boolean): void {
     this.muted = muted;
     if (this.master) this.master.gain.value = muted ? 0 : this.volume;

@@ -58,6 +58,7 @@ import { labelOf, slotOptionValue } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
 import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
+import { perfLog } from "../dev/perfLog";
 import { wc3ToPlain } from "../ui/wc3Text";
 import { GameHud, isTyping, upkeepBand, PLAYER_COLORS, type HudDriver, type CommandButton } from "../ui/hud";
 import { GAME_WIDTH, GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
@@ -7145,6 +7146,9 @@ export class MapViewerScene {
     const on = this.paused;
     if (on !== this.pauseUiOn) {
       this.pauseUiOn = on;
+      // A stopped world skews every average in the log — mark both edges so the report's
+      // timeline says which flat stretch was a pause and which was a stall.
+      perfLog.note(on ? "paused" : "resumed");
       this.pauseVeil?.classList.toggle("on", on);
       // The portrait bust runs a rAF loop of its OWN (render/modelViewer.ts), on its own canvas
       // and its own viewer, so zeroing the world's step does not reach it — the head went on
@@ -9414,6 +9418,8 @@ export class MapViewerScene {
       // position is the HOST's answer arriving at 10 Hz, and the host runs the real
       // tickPendingBuild — a local start here would mint a local id, which is the
       // collision family this whole phase removes.
+      perfLog.begin("sim"); // …the world's own step, timed apart from the map script's (dev/perfLog.ts)
+      const stepAt = performance.now();
       if (!this.rts?.frozenClient) this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
       this.rts?.tick(SIM_DT); // sim runs in seconds; advance + sync before render
       // Engine combat text ages on the SIM clock, like a script's text tags do inside the
@@ -9429,20 +9435,34 @@ export class MapViewerScene {
       // the rect the shops stand in, `SetUnitPositionLoc` to the arena), and the same gap
       // delayed every EVENT_PLAYER_UNIT_TRAIN_FINISH by a frame. Drain-once, so the render and
       // background-pump callers that also ask are harmless.
+      perfLog.end("sim");
+      // The single most expensive STEP of the window, which a per-frame mean cannot show: a
+      // frame that retired five steps averages away the one of them that cost 20 ms.
+      perfLog.gauge("simStep", performance.now() - stepAt);
+      perfLog.begin("spawns");
       const spawnWorld = this.rts?.simWorld;
       if (spawnWorld) this.drainWorldSpawns(spawnWorld);
       this.reapDestructibles(); // a gate the sim just broke opens the way a script-killed one does
+      perfLog.end("spawns");
       // A frozen client runs the script INIT (config/main — the melee starting bases are
       // born there, under ids every machine allocates identically) but never PUMPS it:
       // its world is an AoI subset the authority wrote, and a victory check read against
       // it sees an opponent with no units and ends the match on the spot (the 2e fork,
       // decided by that live failure). What the script would have shown arrives over the
       // wire instead — dialogs and the verdict are already relayed (items F7/G1).
+      // The script gets a phase of its own: a map whose triggers pile up is the one cause of
+      // a dying framerate that looks nothing like ours, and folding it into "sim" would hide it.
+      perfLog.begin("script");
       if (!this.rts?.frozenClient) this.pumpMapScript(SIM_DT); // Phase 7: the map's timers + enter/leave-region triggers
+      perfLog.end("script");
       this.simTick++;
       this.simAccum -= SIM_DT;
       steps++;
     }
+    perfLog.tally("simSteps", steps);
+    // Steps the frame could not afford. A sim falling behind wall time is the difference
+    // between "the game is slow" and "the game is slow AND running in slow motion".
+    if (steps === MAX_STEPS_PER_FRAME) perfLog.tally("simClamped");
     if (steps === MAX_STEPS_PER_FRAME) this.simAccum = 0;
     this.lastSimStep = steps * SIM_DT * 1000; // the clock the held-key camera follow runs on
     // How much GAME time this pass actually bought. The two clocks are not the same clock —
@@ -9479,8 +9499,128 @@ export class MapViewerScene {
     };
   }
 
+  /**
+   * The census the session performance log takes once a second (src/dev/perfLog.ts).
+   *
+   * Every entry is a collection this scene, the sim or the viewer can GROW, because the bug
+   * this is for — a match that settles at 5 fps and stays there — is almost always something
+   * that was added and never retired. A counter is cheap here on purpose: `.size`/`.length`
+   * reads and one DOM count, at 1 Hz.
+   *
+   * The viewer's own tallies come off fields that our minimal local typings (see W3xViewer /
+   * Scene above) deliberately do not carry — they are mdx-m3-viewer's, read through a cast
+   * rather than by widening interfaces the rest of the file has no use for. `emitted` is the
+   * one to watch: EmittedObjectUpdater keeps a dead object in `objects` forever and only
+   * counts the live ones in `alive`, so the two diverging is a particle system's own leak
+   * rather than ours.
+   */
+  private perfCounts(): Record<string, number> {
+    const world = this.rts?.simWorld;
+    const v = this.viewer as unknown as {
+      resources?: unknown[];
+      updatedParticles?: number;
+      visibleInstances?: number;
+      promiseMap?: Map<string, unknown>;
+    };
+    const scene = this.viewer.map?.worldScene as unknown as
+      | { instances?: unknown[]; emittedObjectUpdater?: { objects?: unknown[]; alive?: number } }
+      | undefined;
+    return {
+      // --- the simulation ---
+      units: world?.units.size ?? 0,
+      projectiles: world?.projectiles.size ?? 0,
+      corpses: world?.corpses.size ?? 0,
+      items: world?.items.size ?? 0,
+      trees: world?.trees.size ?? 0,
+      // --- what this scene is holding on the screen ---
+      effects: this.effects.length,
+      specialFx: this.specialFx.size,
+      dyingFx: this.dyingFx.length,
+      buffFx: this.buffFx.size,
+      orderArrows: this.orderArrows.length,
+      flashRings: this.flashRings.length,
+      treePulses: this.treePulses.length,
+      spellSplats: this.spellSplats.length,
+      mirrorMissiles: this.mirrorMissiles.length,
+      itemModels: this.itemInstances.size,
+      projModels: this.projectileInsts.size,
+      doodadActors: this.doodadActors.size,
+      combatText: this.combatText.count,
+      lightning: this.lightning?.count ?? 0,
+      // --- the renderer underneath us ---
+      instances: scene?.instances?.length ?? 0,
+      visible: v.visibleInstances ?? 0,
+      particles: v.updatedParticles ?? 0,
+      emitted: scene?.emittedObjectUpdater?.objects?.length ?? 0,
+      emittedAlive: scene?.emittedObjectUpdater?.alive ?? 0,
+      resources: v.resources?.length ?? 0,
+      loading: v.promiseMap?.size ?? 0,
+      // --- the page ---
+      domNodes: document.getElementsByTagName("*").length,
+      // --- audio (see SoundBoard.perfCounts) ---
+      ...(this.sounds?.perfCounts() ?? {}),
+    };
+  }
+
+  /**
+   * The DEEP census — taken every snapshot period (`pnpm dev:log`) (15 s by default) rather than
+   * every second, so it is allowed to WALK collections the per-second one only measures.
+   *
+   * The per-second counters answer "how much"; these answer "of what". Once a count has
+   * clearly run away, the next question is always which model, which unit type, whose army —
+   * and each of those is a pass over a few hundred or few thousand entries, which is nothing
+   * once every fifteen seconds and unaffordable sixty times a second.
+   */
+  private perfSnapshot(): Record<string, unknown> {
+    const world = this.rts?.simWorld;
+    const scene = this.viewer.map?.worldScene as unknown as { instances?: Array<{ model?: { name?: string; fetchUrl?: string } }> } | undefined;
+    const v = this.viewer as unknown as { resources?: Array<object> };
+    // Live instances by the model they came from — the one question worth asking when
+    // `instances` has quietly grown into the thousands.
+    //
+    // By the model's OWN name ("Footman"), never its `fetchUrl`: every asset here is served
+    // through a blob URL minted by the resolver, so the url is a fresh uuid per load and a
+    // census keyed on it would name nothing and never group two instances of one model.
+    const models = new Map<string, number>();
+    for (const inst of scene?.instances ?? []) {
+      models.set(inst.model?.name || "?", (models.get(inst.model?.name || "?") ?? 0) + 1);
+    }
+    // …and the same for what the sim is holding: which TYPE multiplied, and whose it is.
+    const types = new Map<string, number>();
+    const owners = new Map<number, number>();
+    for (const u of world?.units.values() ?? []) {
+      types.set(u.typeId, (types.get(u.typeId) ?? 0) + 1);
+      owners.set(u.owner, (owners.get(u.owner) ?? 0) + 1);
+    }
+    // Loaded resources by KIND (MdxModel / Texture / …) — again not by url, which is a blob
+    // uuid, and not by extension, which a blob url does not have. A kind still climbing long
+    // after a map has settled is streaming that never stopped, which no per-frame timing
+    // would ever show. (Class names survive because this only ever runs unminified.)
+    const files = new Map<string, number>();
+    for (const r of v.resources ?? []) {
+      const kind = r.constructor?.name || "?";
+      files.set(kind, (files.get(kind) ?? 0) + 1);
+    }
+    const top = (m: Map<string | number, number>, n: number): Record<string, number> =>
+      Object.fromEntries([...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, c]) => [String(k), c]));
+    return {
+      models: top(models, 12),
+      unitTypes: top(types, 12),
+      owners: top(owners, 16),
+      files: top(files, 8),
+    };
+  }
+
   start(): void {
     if (this.raf) return;
+    // Record this match to `.logs/` (dev only — the whole recorder folds away in a build).
+    perfLog.counters(() => this.perfCounts());
+    perfLog.snapshots(() => this.perfSnapshot());
+    perfLog.open({
+      map: this.mapDisplayName || "match",
+      mode: this.rts?.networked ? "lan" : "single",
+      canvas: `${this.canvas.width}x${this.canvas.height}`,
+    });
     const frame = (t: number) => {
       const dt = this.last ? t - this.last : 1000 / 60;
       this.last = t;
@@ -9512,6 +9652,7 @@ export class MapViewerScene {
       // `dt` itself still goes to the interface (the HUD's own animation, the metrics
       // counter) and to the debug overlays: those are not the world, and freezing them would
       // only make a paused game look broken.
+      perfLog.begin("ui");
       this.syncPauseUi();
       const wdt = this.paused ? 0 : dt;
       this.updateCamera(dt);
@@ -9542,6 +9683,7 @@ export class MapViewerScene {
       // stepped nothing ages nothing — which is also what a paused game should do.)
       this.cinematic?.update(this.simAdvanced);
       this.simAdvanced = 0;
+      perfLog.end("ui");
       // Map units load async — hide the start-location props as they stream in.
       // Re-scan whenever the unit count grows so `sloc` markers that finish
       // loading a frame or two after `unitsReady` are still hidden (see the
@@ -9553,6 +9695,7 @@ export class MapViewerScene {
           this.hideStartLocations();
         }
       }
+      perfLog.begin("fx");
       this.updateSelectionCircles(wdt / 1000);
       this.updateOrderArrows(wdt / 1000);
       this.updateEffects(wdt / 1000);
@@ -9571,8 +9714,10 @@ export class MapViewerScene {
       // lastMouse is CANVAS space (it unprojects into the world); the reticle is a body-fixed
       // overlay, so it rides the VIEWPORT cursor. Letterboxed, the two are a black bar apart.
       this.updateReticle(this.lastCursor.x, this.lastCursor.y);
+      perfLog.end("fx");
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
+      perfLog.begin("drains");
       if (world && map) {
         // The drains that CREATE OR CHANGE world state (trained units, summons, felled
         // trees) live in drainWorldSpawns so the background pump can run them while this
@@ -9782,6 +9927,7 @@ export class MapViewerScene {
         this.updateItemAnims();
         this.updateItemFog();
       }
+      perfLog.end("drains");
       // Reset the command page + placement when the selection changes.
       if (this.rts && this.rts.selectedId !== this.lastSelected) {
         this.lastSelected = this.rts.selectedId;
@@ -9797,13 +9943,16 @@ export class MapViewerScene {
       // it was. `map.update()` is skipped outright instead: all it does is roll the water
       // texture on and hand a finished Stand clip its next one, both of which are the world
       // moving.
+      perfLog.begin("anim");
       baseUpdate.call(this.viewer, wdt);
       if (!this.paused) this.viewer.map?.update();
       // Re-pin under-construction buildings AFTER the animation advance so a
       // halted build's Birth animation truly freezes (and resumes with progress).
       this.rts?.repinConstructionFrames();
+      perfLog.end("anim");
       // Fog of war: build it once the map is ready, resample a few times a second,
       // and draw it as our own pass over the freshly-rendered world.
+      perfLog.begin("fog");
       this.ensureFog();
       if (this.fog) {
         this.fogAccum += dt;
@@ -9812,6 +9961,8 @@ export class MapViewerScene {
           this.updateFog();
         }
       }
+      perfLog.end("fog");
+      perfLog.begin("render");
       this.viewer.startFrame();
       const fogScene = map?.worldScene;
       if (fogScene) this.applyDayNight(fogScene);
@@ -9951,10 +10102,16 @@ export class MapViewerScene {
       if (this.showColliders && fogScene) this.renderColliders(fogScene.camera.viewProjectionMatrix, dt);
       if (this.showPathing && fogScene) this.renderPathing(fogScene.camera.viewProjectionMatrix, dt);
       if (this.showRegions && fogScene) this.renderRegions(fogScene.camera.viewProjectionMatrix);
+      perfLog.end("render");
       // The script's on-screen output (7.19) — floating text projected onto this frame's
       // camera, plus the leaderboard/dialog panels. After the world is drawn: it's DOM.
+      perfLog.begin("overlay");
       this.updateFloatingText();
       this.updateScriptUi();
+      perfLog.end("overlay");
+      // …and the frame is closed out: every span above is now this frame's split, which is
+      // what a spike record carries (src/dev/perfLog.ts).
+      perfLog.frame(dt);
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);
@@ -9967,6 +10124,9 @@ export class MapViewerScene {
     this.bgPump?.terminate();
     this.bgPump = null;
     this.rts?.pause();
+    // The match is over as far as the frame loop is concerned — close the log and let the
+    // dev server render its digest beside it.
+    perfLog.close();
     this.metrics.hide();
     this.hud?.hide();
     this.portraitViewer?.stop();

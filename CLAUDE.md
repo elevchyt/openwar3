@@ -73,6 +73,15 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `SendUserFile` to deliver the images. Send **multiple** shots — a framed overview plus tight close-ups (crop/upscale
   with ffmpeg), before/after when you change a value, and a fresh shot after each meaningful tweak — rather than one
   final image. Keep the developer in the loop visually throughout the task, not only at the end.
+- **Performance:** `pnpm dev:log` records every match to `.logs/` (gitignored; plain `pnpm dev`
+  records nothing) — frame times, where in the frame they went, and a census of everything a
+  match can grow. Read
+  [`docs/perf-logging.md`](docs/perf-logging.md) before investigating "it gets slower the longer
+  you play", and start from `pnpm perf:report` rather than from a profiler: the report already
+  separates *a phase got more expensive* from *something is accumulating* from *the cost is
+  outside our loop*. The recorder is dev-server-only in both halves (`apply: "serve"` +
+  `import.meta.env.DEV`), and phases must PARTITION the frame — nesting two `perfLog.begin`
+  spans makes the report's `(unaccounted)` row meaningless.
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
   in `src/render/mapViewer.ts`, HUD DOM in `src/ui/hud.ts`, data tables in `src/data/` (units, techtree, `abilities.ts`),
   audio in `src/audio/`, styles in `src/style.css`.

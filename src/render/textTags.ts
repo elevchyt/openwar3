@@ -215,6 +215,11 @@ export class CombatTextTags {
     return this.tags;
   }
 
+  /** How many are up right now — the session performance log's census (src/dev/perfLog.ts). */
+  get count(): number {
+    return this.tags.length;
+  }
+
   clear(): void {
     this.tags = [];
   }
