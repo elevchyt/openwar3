@@ -609,8 +609,58 @@ const MSG_AREA = {
   left: 0.05, // from the 0.8 box's left edge
   bottom: 0.255, // above the bottom of the frame
   width: 0.5, // where a long line wraps (the shot wraps between 0.491 and 0.517)
-  font: 0.015, // MiscUI.txt [FontHeights] WorldFrameUnitMessage
-  chatFont: 0.013, // MiscUI.txt [FontHeights] WorldFrameChatMessage
+} as const;
+
+/**
+ * `UI\MiscUI.txt` **[FontHeights]**, by its own keys — the sizes for the frames the engine
+ * builds in code rather than out of a .fdf, which is why they are in a text file at all
+ * ("To change the font height of a frame created in the FrameDef files, you will need to
+ * look in the appropriate .fdf file"). All four are fractions of the 0.6-tall UI space, so
+ * each becomes a length off --stage-h and none of them is a pixel count.
+ */
+const FONT_HEIGHTS = {
+  /** "single line of error text that appears above the console" — the gold refusal line. */
+  WorldFrameMessage: 0.015,
+  /** "small text that is used for in-game trigger based dialog" — the message area. */
+  WorldFrameUnitMessage: 0.015,
+  /** "in-game chat text" — what a received chat line is drawn at, in that same area. */
+  WorldFrameChatMessage: 0.013,
+  /** "chat edit bar text" — the line being typed. */
+  ChatEditBar: 0.013,
+} as const;
+
+/** A length stated in the game's 0.6-tall UI space, as CSS that scales with the game frame
+ *  (--stage-h IS that 0.6) rather than a pixel count that only holds on one monitor. */
+const uiPx = (v: number): string => `calc(var(--stage-h) * ${v / UI_HEIGHT})`;
+
+/**
+ * The chat ENTRY line — the box the player types into, prompted "Message:" / "To All:".
+ *
+ * It is not part of the message column, which is what we had assumed: in the real client it
+ * is a box of its own, **centred** on the frame and sitting on the console's top edge, while
+ * the messages stay over on the left. Measured off a shot of the real client (a single-player
+ * match, so the prompt is `COLON_MESSAGE_SINGLEPLAYER`), scaled by the minimap socket the
+ * console art punches (CONSOLE_ZONES.minimap, 0.139 wide) and expressed in the same 0.6-tall
+ * UI space as everything else here:
+ *
+ *   • 0.4 wide — exactly half the console's 0.8 — with its edges landing on 0.201 and 0.603
+ *     of that box, i.e. centred to within a measuring error.
+ *   • its bottom edge at 0.142, which is where the console's MIDDLE slice stops being drawn
+ *     (ConsoleUI.fdf gives that slice `Height 0.15`, and its top texels fade out) — so the
+ *     box rests on the console rather than floating over it.
+ *
+ * The art is the tooltip backdrop: `war3skins.txt` has no chat-edit-box key at all, and the
+ * frame is one of `CGameUI`'s programmatic ones (no .fdf declares it), so it borrows
+ * `ToolTipBorder` + `ToolTipBackground` — `human-tooltip-border.blp` and its background twin.
+ * Despite the name those are not per-race: both keys live in war3skins' **[Default]** section
+ * and no race section overrides them, so every race types into the human frame.
+ */
+const CHAT_BAR = {
+  width: 0.4,
+  height: 0.029,
+  bottom: 0.142,
+  border: 0.004, // the gold frame's drawn thickness
+  padX: 0.004, // the prompt's inset from the frame (measured: 6px of a 1532 px/unit shot)
 } as const;
 
 // On-screen message log tuning.
@@ -894,12 +944,19 @@ export class GameHud {
     // …and how far past a button's edge that effect reaches, so the stylesheet can inset the
     // overlay by the model's own geometry instead of a number typed twice.
     this.root.style.setProperty("--modal-fx-overhang", `${(MODAL_FX_OVERHANG * 100).toFixed(3)}%`);
+    // The four font heights `UI\MiscUI.txt` states for the frames the engine builds in code,
+    // handed to the stylesheet as lengths (FONT_HEIGHTS). On the ROOT because the frames that
+    // read them are siblings, not one widget.
+    for (const [key, height] of Object.entries(FONT_HEIGHTS)) {
+      this.root.style.setProperty(`--font-${key}`, uiPx(height));
+    }
     const skin = driver.consoleSkinned();
     this.root.append(
       this.buildConsole(skin),
       this.buildHeroBar(),
       this.buildCheatPanel(),
       this.buildMessageLog(),
+      this.buildChatBar(),
       this.buildErrorLine(),
     );
     parent.appendChild(this.root);
@@ -1431,14 +1488,8 @@ export class GameHud {
 
   /**
    * The message column (`WorldFrameUnitMessage`, see MSG_AREA for where it sits and why):
-   * the lines the game has shown, and under them the chat entry line the player types into.
-   * One column so the prompt arrives where the next message will, rather than floating
-   * somewhere of its own — and the prompt hangs OUT of the flow, so opening chat cannot
-   * shove the messages up off their pinned bottom edge.
-   *
-   * The entry line is NOT in any .fdf — WC3 draws it from `Game.dll` (CGameUI) like the command
-   * card and the minimap, so there is no frame to mount. Its WORDS are the game's, though:
-   * `chatPrompt` resolves the `COLON_MESSAGE_*` GlobalStrings for whichever target is armed.
+   * the lines the game has shown — trigger dialog and received chat alike, which is the one
+   * area MiscUI gives both a font height for.
    */
   private buildMessageLog(): HTMLDivElement {
     const column = document.createElement("div");
@@ -1447,19 +1498,32 @@ export class GameHud {
     // --stage-h — so the text is the size the engine's font height asks for at any window
     // size, rather than a pixel count that is right on one monitor. `left` is measured from
     // the centre because the 0.8 box is what it is anchored to (MSG_AREA).
-    const px = (v: number): string => `calc(var(--stage-h) * ${v / UI_HEIGHT})`;
-    column.style.left = `calc(50% - ${px(UI_WIDTH / 2 - MSG_AREA.left)})`;
-    column.style.bottom = px(MSG_AREA.bottom);
-    column.style.width = px(MSG_AREA.width);
-    column.style.setProperty("--msg-font", px(MSG_AREA.font));
-    column.style.setProperty("--msg-chat-font", px(MSG_AREA.chatFont));
+    column.style.left = `calc(50% - ${uiPx(UI_WIDTH / 2 - MSG_AREA.left)})`;
+    column.style.bottom = uiPx(MSG_AREA.bottom);
+    column.style.width = uiPx(MSG_AREA.width);
 
     this.msgLog = document.createElement("div");
     this.msgLog.className = "hud-msglog";
+    column.append(this.msgLog);
+    return column;
+  }
 
+  /**
+   * The chat ENTRY line: the box the player types into, centred on the console's top edge
+   * (CHAT_BAR). It is NOT in any .fdf — WC3 draws it from `Game.dll` (CGameUI) like the
+   * command card and the minimap, so there is no frame to mount, and its backdrop is the
+   * tooltip's. Its WORDS are the game's, though: `chatPrompt` resolves the `COLON_MESSAGE_*`
+   * GlobalStrings for whichever target is armed.
+   */
+  private buildChatBar(): HTMLDivElement {
     this.chatBar = document.createElement("div");
     this.chatBar.className = "hud-chatbar";
     this.chatBar.hidden = true;
+    this.chatBar.style.width = uiPx(CHAT_BAR.width);
+    this.chatBar.style.height = uiPx(CHAT_BAR.height);
+    this.chatBar.style.bottom = uiPx(CHAT_BAR.bottom);
+    this.chatBar.style.setProperty("--chat-border", uiPx(CHAT_BAR.border));
+    this.chatBar.style.setProperty("--chat-pad", uiPx(CHAT_BAR.padX));
     this.chatPromptEl = document.createElement("span");
     this.chatPromptEl.className = "hud-chat-prompt";
     this.chatInput = document.createElement("input");
@@ -1486,9 +1550,7 @@ export class GameHud {
     });
     // Clicking away abandons the line, as it does in the game.
     this.chatInput.addEventListener("blur", () => this.closeChat());
-
-    column.append(this.msgLog, this.chatBar);
-    return column;
+    return this.chatBar;
   }
 
   /** Open the chat entry line addressed at `target` (Enter → all, Ctrl+Enter → allies). */
@@ -1541,10 +1603,12 @@ export class GameHud {
    *  in WC3 lingers, so we give it a generous default and let it scroll off. WC3
    *  colour codes (`|cAARRGGBB…|r`, `|n`) are honoured. Newest line sits at the
    *  bottom; we keep the last MSG_MAX so the stack can't grow without bound. */
-  showMessage(text: string, duration: number): void {
+  showMessage(text: string, duration: number, chat = false): void {
     if (!text) return;
     const line = document.createElement("div");
-    line.className = "hud-msgline";
+    // Chat and trigger dialog share this area but not their size: MiscUI gives the area TWO
+    // font heights, WorldFrameChatMessage (0.013) and WorldFrameUnitMessage (0.015).
+    line.className = chat ? "hud-msgline hud-msgline-chat" : "hud-msgline";
     line.innerHTML = formatColorCodes(text);
     this.msgLog.append(line);
     while (this.msgLog.childElementCount > MSG_MAX) this.msgLog.firstElementChild?.remove();
@@ -1711,10 +1775,9 @@ export class GameHud {
     bar.className = "hud-herobar";
     // Every size the bar uses, handed to the stylesheet as a length so the whole thing scales
     // with the game's box (the 0.6-tall UI space maps to --stage-h) instead of the window.
-    const px = (v: number): string => `calc(var(--stage-h) * ${v / UI_HEIGHT})`;
-    bar.style.setProperty("--hero-left", px(HERO_BAR.left));
-    bar.style.setProperty("--hero-top", px(HERO_BAR.top));
-    bar.style.setProperty("--hero-slot", px(HERO_BAR.slot)); // the widget's ONE size (see HERO_BAR)
+    bar.style.setProperty("--hero-left", uiPx(HERO_BAR.left));
+    bar.style.setProperty("--hero-top", uiPx(HERO_BAR.top));
+    bar.style.setProperty("--hero-slot", uiPx(HERO_BAR.slot)); // the widget's ONE size (see HERO_BAR)
     for (let i = 0; i < HERO_BAR.max; i++) {
       const slot = document.createElement("div");
       slot.className = "hud-hero-slot";

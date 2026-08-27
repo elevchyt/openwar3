@@ -119,8 +119,16 @@ export function chatRecipientTag(target: ChatTarget, multiplayer: boolean, strin
 }
 
 /**
- * One line as WC3 markup, ready for the message area and the log: the speaker's name in the
- * speaker's own colour, the audience tag, then the text.
+ * One line as WC3 markup, ready for the message area and the log: the audience tag, then the
+ * speaker's name in the speaker's own colour, then the text.
+ *
+ *     [All] Player 2: gl hf
+ *
+ * The TAG LEADS — that is the order the real client draws (a multiplayer shot the developer
+ * measured this against: `[All]` in plain white at the head of every line, the name after it
+ * carrying the only colour). Reading the pieces off GlobalStrings is not enough to get this
+ * right: `CHAT_RECIPIENT_ALL` is just "[All]" and nothing in any data file says where it goes,
+ * because the engine composes the line in code.
  *
  * The name carries the colour and the message does NOT — a player cannot colour their own
  * chat by typing `|cff...` into it, because the text is escaped by the renderer's markup pass
@@ -137,9 +145,9 @@ export function formatChatLine(
 ): string {
   const tag = chatRecipientTag(line.target, multiplayer, strings);
   const color = colorOf(line.from);
-  const name = `${nameOf(line.from)}${tag ? ` ${tag}` : ""}`;
-  const head = color ? `|c${color}${name}|r` : name;
-  return `${head}: ${stripMarkup(line.text)}`;
+  const name = nameOf(line.from);
+  const said = color ? `|c${color}${name}|r` : name;
+  return `${tag ? `${tag} ` : ""}${said}: ${stripMarkup(line.text)}`;
 }
 
 /** Strip WC3 markup codes from player-typed text — see formatChatLine. */

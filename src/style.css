@@ -354,24 +354,47 @@ body.in-game .menu-panel { display: none; }
   flex-direction: column;
 }
 
-/* The chat entry line. WC3 draws this in engine code, not FDF (there is no frame for it),
-   so the look is ours; the PROMPT is the game's own COLON_MESSAGE_* string. It takes the
-   pointer back from the column so the field can actually be clicked and typed into. */
+/* The chat entry line. WC3 draws this in engine code, not FDF (there is no frame for it), so
+   it has no frame to mount and no skin key of its own — but the PROMPT is the game's own
+   COLON_MESSAGE_* string and the backdrop is the game's own tooltip art. It takes the pointer
+   back from the HUD so the field can actually be clicked and typed into. */
 .hud-chatbar {
-  /* Hung below the column's pinned bottom edge rather than laid out inside it: in the real
-     game the entry line has one fixed home, and opening it does not shove the messages up. */
+  /* A box of its own, centred on the frame and resting on the console's top edge — NOT part
+     of the message column. Width/height/bottom and the two --chat-* lengths come from
+     ui/hud.ts (CHAT_BAR), measured off the real client. */
   position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
+  padding: 0 var(--chat-pad);
   pointer-events: auto;
   font-family: var(--game-font);
-  font-size: var(--msg-chat-font); /* MiscUI.txt WorldFrameChatMessage=0.013 */
-  line-height: 1.35;
+  font-size: var(--font-ChatEditBar); /* MiscUI.txt [FontHeights] ChatEditBar=0.013 */
+  line-height: 1;
   text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  z-index: 4;
+  /* Placeholder chrome, for a session with no install mounted; the real art replaces it. */
+  background: rgba(10, 14, 22, 0.72);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+/* With the real art: the tooltip backdrop, which is what the engine gives this frame — it has
+   no skin key of its own (ui/hud.ts CHAT_BAR). Same nine-patch the command-card tooltip wears,
+   on a pseudo-element pulled outside the fill so the border art's arcs sit over the corners. */
+body.hud-tooltip-skinned .hud-chatbar {
+  background: var(--hud-tooltip-fill);
+  border: none;
+  border-radius: 4px;
+}
+body.hud-tooltip-skinned .hud-chatbar::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--chat-border) * -0.75);
+  border: var(--chat-border) solid transparent;
+  border-image: var(--hud-tooltip-border) 16 / var(--chat-border) stretch;
+  pointer-events: none;
 }
 .hud-chat-prompt {
   flex: 0 0 auto;
@@ -393,7 +416,7 @@ body.in-game .menu-panel { display: none; }
 }
 .hud-msgline {
   font-family: var(--game-font);
-  font-size: var(--msg-font);
+  font-size: var(--font-WorldFrameUnitMessage);
   /* One line of the real client is exactly its font height tall — the shot's lines are pitched
      ~23.7px apart at a 23.3px em — so there is no leading here to add. */
   line-height: 1;
@@ -403,6 +426,9 @@ body.in-game .menu-panel { display: none; }
   word-break: break-word;
   animation: hud-msg-in 140ms ease-out;
 }
+/* A received chat line is the same area at the OTHER of its two font heights — MiscUI gives
+   the message area both WorldFrameUnitMessage (trigger dialog) and WorldFrameChatMessage. */
+.hud-msgline-chat { font-size: var(--font-WorldFrameChatMessage); }
 @keyframes hud-msg-in {
   from { opacity: 0; transform: translateY(-3px); }
   to { opacity: 1; transform: none; }
@@ -421,7 +447,7 @@ body.in-game .menu-panel { display: none; }
   bottom: calc(var(--console-h) + 14px);
   text-align: center;
   font-family: var(--game-font);
-  font-size: 15px;
+  font-size: var(--font-WorldFrameMessage); /* MiscUI.txt [FontHeights] WorldFrameMessage=0.015 */
   color: #ffcc00; /* the game's warning gold */
   text-shadow: 0 1px 2px #000, 0 0 4px #000;
   pointer-events: none;

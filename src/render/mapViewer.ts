@@ -6400,7 +6400,7 @@ export class MapViewerScene {
     if (this.chatHistory.length > MapViewerScene.CHAT_HISTORY_MAX) this.chatHistory.shift();
     // Chat rides the same on-screen message area the trigger text does, and expires the same
     // way — WC3 keeps it there for a while and then lets it go.
-    this.hud?.showMessage(rendered, MapViewerScene.CHAT_MESSAGE_SECS);
+    this.hud?.showMessage(rendered, MapViewerScene.CHAT_MESSAGE_SECS, true);
   }
 
   /**
