@@ -134,7 +134,17 @@ Two things about the implementation are worth knowing before touching it:
   of the model, so it lives in `BackdropTuning.lightAmbient` with its own `?menudebug` slider
   rather than being smuggled in as a constant that looks like data.
 
-The uniforms (`u_omni*`, `u_dnc*`, `u_distFog*`) are all added by
-`patches/mdx-m3-viewer@5.12.0.patch`. **After editing that patch, restart the dev server and
-delete `node_modules/.vite`** — Vite pre-bundles the dependency, so a running server keeps
-serving the pre-patch copy and your shader change will appear to do nothing at all.
+The uniforms (`u_omni*`, `u_dnc*`, `u_distFog*`, `u_boundary*`) are all added by
+`patches/mdx-m3-viewer@5.12.0.patch`. Two traps live there, and both cost real time:
+
+**After editing that patch, restart the dev server and delete `node_modules/.vite`** — Vite
+pre-bundles the dependency, so a running server keeps serving the pre-patch copy and your
+shader change will appear to do nothing at all.
+
+**The shader source is a JS TEMPLATE LITERAL.** A backtick in a comment you add inside it ends
+the string, and whatever follows lands in JS — a backslash there is an esbuild syntax error and
+a dev server that starts and then serves nothing. So no backticks around `UI\MiscData.txt` or
+around a constant's name, however much the rest of the codebase writes them that way; and
+double any backslash you do keep, since the literal eats one. The failure looks like
+`✘ [ERROR] Syntax error "\"` pointing at a COMMENT, which reads as impossible until you notice
+what the file really is (issue #117).
