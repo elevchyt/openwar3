@@ -124,10 +124,11 @@ export interface LoadingScreen {
    * the game's own `LOADING_PRESS_A_KEY` ("PRESS ANY KEY TO CONTINUE",
    * `UI\FrameDef\GlobalStrings.fdf`).
    *
-   * This is how a SINGLE-PLAYER CAMPAIGN chapter ends its load in the reference — the chapter's
-   * title and its blurb are on screen to be read, and the mission does not begin until the
-   * player is done reading. Nothing else waits: a custom game, a skirmish and a multiplayer
-   * match all drop straight into the map (see `startGame`).
+   * This is how EVERY SINGLE-PLAYER load ends in the reference — a campaign chapter, whose
+   * title and blurb are on screen to be read, and a Custom Game off the Single Player menu
+   * alike. Only a MULTIPLAYER match drops straight into the map: it has other machines waiting
+   * on the far end of a wire, and none of them can be held on one player's keyboard, so it
+   * takes the load gate and a timed beat instead (see `startGame`).
    */
   waitForKey(): Promise<void>;
   /** A remote machine reported in (src/game/loadGate.ts): light the seat its peer sits in, and

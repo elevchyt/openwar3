@@ -613,12 +613,16 @@ async function startGame(
       gate.announce();
       await gate.waitForAll();
     }
-    // A single-player CAMPAIGN chapter does not begin on its own. The reference holds the
-    // finished screen on `LOADING_PRESS_A_KEY` ("PRESS ANY KEY TO CONTINUE") and starts the
-    // mission on the player's key: the chapter's title and its blurb are on that screen to be
-    // read, and how long that takes is the player's business. Nothing else waits — a custom
-    // game, a skirmish and a LAN match all drop into the map on their own.
-    if (config.campaign && !link && loading) await loading.waitForKey();
+    // A SINGLE-PLAYER game does not begin on its own. The reference holds the finished screen
+    // on `LOADING_PRESS_A_KEY` ("PRESS ANY KEY TO CONTINUE") and starts the match on the
+    // player's key — a campaign chapter, whose title and blurb are on that screen to be read,
+    // and a Custom Game off the Single Player menu alike. How long that takes is the player's
+    // business, and nobody else is waiting on them.
+    //
+    // `link` is the whole test, and it is the right one: a match with a wire has other machines
+    // on the far end of it, and none of them can be held on one player's keyboard. Multiplayer
+    // keeps the gate above and the timed beat below.
+    if (!link && loading) await loading.waitForKey();
     else await wait(Math.max(MIN_FULL_BAR_MS, START_HOLD_MS - (performance.now() - tailStart)));
     // Taken away only once the match has actually DRAWN a frame behind it, so the first thing the
     // player sees is the map and never the black canvas it was on a moment ago.
@@ -635,13 +639,16 @@ async function startGame(
 }
 
 /**
- * How long the tail of the load lasts — the preload, and then a beat on the full bar.
+ * How long the tail of a MULTIPLAYER load lasts — the preload, and then a beat on the full bar.
  *
  * OURS, not the game's: the developer asked for it, because a load that ends the instant the
  * bar fills never shows the player the screen they were waiting on. Measured from the START of
  * the preload rather than added after it, so the three seconds are spent LOADING on a cold
  * machine and idling on a warm one — either way the screen is up for the same three seconds
  * and the match begins when it comes down.
+ *
+ * A single-player load does not use it at all: that screen waits for a key instead, which is
+ * the reference's own answer to the same problem and needs no number.
  */
 const START_HOLD_MS = 3000;
 

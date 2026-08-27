@@ -185,21 +185,28 @@ Then a deliberate **3-second hold** on the finished screen before the match appe
 is OURS and is not measured off anything — a load that ends the instant the bar fills never
 shows the player the screen they were waiting on.
 
-## A campaign chapter waits for the player instead
+## A single-player game waits for the player instead
 
-A single-player CAMPAIGN chapter does not start itself. Its bar fills and its caption becomes
+A SINGLE-PLAYER load does not start itself. Its bar fills and its caption becomes
 `LOADING_PRESS_A_KEY` — "PRESS ANY KEY TO CONTINUE", one of the loading captions
 `GlobalStrings.fdf` already carries next to `LOADING_LOADING` and `LOADING_WAITING_FOR_PLAYERS` —
-and the mission begins on the player's key. The chapter's title and its blurb are on that screen
-to be read, and how long that takes is the player's business. Nothing else waits: a custom game, a
-skirmish and a LAN match all get the 3-second beat above (`LoadingScreen.waitForKey`, chosen in
-`startGame` on `config.campaign && !link`).
+and the match begins on the player's key. That covers both ways into a single-player game: a
+campaign chapter, whose title and blurb are on that screen to be read, and a Custom Game off the
+Single Player menu.
+
+The test is **`link`**, not "is this a campaign" (`LoadingScreen.waitForKey`, chosen in
+`startGame` on `!link`). A `MatchLinkSetup` is the match's end of the wire, so a game that has one
+has other machines on the far end of it — and none of them can be held on one player's keyboard.
+Multiplayer therefore keeps the load gate and the 3-second beat above; single player uses neither,
+because a screen that waits for a key needs no timing of its own.
 
 Two things fall out of it, both of them a bug if you skip them:
 
 - **The world is held with the screen** (`MapViewerScene.holdAtStart`). The match is standing
   behind the loading screen by then — the map is built and its script's init has run — and a
-  chapter opens on a CINEMATIC, which the reference does not play to a loading screen. Held for
+  chapter opens on a CINEMATIC, which the reference does not play to a loading screen. (It is
+  held for every game, multiplayer included; the wait is just longer when it is a player being
+  waited on.) Held for
   three seconds nobody notices; held for however long a player takes to read, the intro is half
   over before they see it (measured on Rise of the Naga: the sim tick stands still across the
   whole wait, then steps on from where it stopped). It is a flag of its own rather than `paused`,
