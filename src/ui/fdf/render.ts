@@ -60,6 +60,18 @@ export function setFdfClickSound(play: (() => void) | null): void {
   clickSound = play;
 }
 
+/**
+ * Make that same sound for something that was NOT a click.
+ *
+ * A screen has two doors and the game does not tell them apart: F9 opens the Quest Log and
+ * Escape shuts it with exactly the click its Done button makes. So the keyboard routes call
+ * this rather than reaching for a sound of their own — whatever the buttons are playing, they
+ * play, and the two can never drift apart.
+ */
+export function playFdfClick(): void {
+  clickSound?.();
+}
+
 /** Any of the behaviour controllers a widget frame gets (ui/fdf/widgets.ts). */
 type FdfControl = EditBoxControl | PopupControl | ListControl | CheckBoxControl | TextAreaControl | SliderControl;
 

@@ -29,7 +29,7 @@ import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { cloneNamespaced, strProp, type FdfLibrary } from "./fdf/library";
 import { UI_HEIGHT } from "./fdf/layout";
-import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { mountFdfScreen, playFdfClick, type FdfScreen } from "./fdf/render";
 import { fitLine } from "./fdf/widgets";
 import { wc3ToHtml } from "./wc3Text";
 
@@ -127,6 +127,7 @@ export class QuestDialogOverlay {
       if (e.key !== "Escape" || !this.shown) return;
       e.preventDefault();
       e.stopPropagation();
+      playFdfClick(); // Escape is the Done button by another route, and it sounds like one
       this.hide();
     };
   }

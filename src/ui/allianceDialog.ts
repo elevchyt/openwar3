@@ -30,7 +30,7 @@ import { teamColorCss } from "../render/teamColor";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { cloneNamespaced, type FdfLibrary } from "./fdf/library";
-import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { mountFdfScreen, playFdfClick, type FdfScreen } from "./fdf/render";
 
 const ALLIANCE_FDF = "UI\\FrameDef\\UI\\AllianceDialog.fdf";
 const ALLIANCE_SLOT_FDF = "UI\\FrameDef\\UI\\AllianceSlot.fdf";
@@ -108,6 +108,7 @@ export class AllianceDialogOverlay {
       if (e.key !== "Escape" || !this.shown) return;
       e.preventDefault();
       e.stopPropagation();
+      playFdfClick(); // …and it sounds like the Cancel button it stands in for
       this.hide(); // Escape is Cancel: the pending edits are dropped with the dialog
     };
   }

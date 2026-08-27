@@ -31,7 +31,7 @@ import { loadHelpText, loadTips } from "../data/uiStrings";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { numProp, type FdfLibrary } from "./fdf/library";
-import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { mountFdfScreen, playFdfClick, type FdfScreen } from "./fdf/render";
 
 const ESC_MENU_FDF = "UI\\FrameDef\\UI\\EscMenuMainPanel.fdf";
 
@@ -89,6 +89,9 @@ export class EscMenu {
       if (e.key !== "Escape" || !this.shown) return;
       e.preventDefault();
       e.stopPropagation();
+      // Whichever button this key is standing in for — Return to Game on the main panel,
+      // Previous Menu / Cancel on a sub-panel — it makes that button's sound.
+      playFdfClick();
       if (this.panel === "main") this.actions.onReturn();
       else this.go(this.panel === "confirmquit" ? "endgame" : "main");
     };

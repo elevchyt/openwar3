@@ -79,6 +79,7 @@ import { CinematicPanelOverlay } from "../ui/cinematicPanel";
 import { ScriptCamera, type CameraState } from "./scriptCamera";
 import { BOUNTY_TEXT_STYLE, CombatTextTags, GOLD_TEXT_STYLE, LUMBER_TEXT_STYLE, TextTagOverlay, XP_TEXT_STYLE, type CombatTextStyle, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
+import { playFdfClick } from "../ui/fdf/render";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
 import { loadTechRegistry, type TechRegistry } from "../data/techtree";
 import { loadUpgradeRegistry, type UpgradeRegistry } from "../data/upgrades";
@@ -6804,23 +6805,38 @@ export class MapViewerScene {
    *    Not "close that one and open this one": these are modal screens, and WC3 does not swap
    *    one modal for another. `deadPanels` is the whole of that rule and the console greys
    *    itself from the same answer, so the buttons and the keys can never disagree.
+   *
+   * Returns whether anything actually HAPPENED — which is what the F-keys use to decide
+   * whether to make the click (see `togglePanelByKey`). The console's own buttons need no such
+   * test: their sound is the button's own, and a refused key must stay silent, because nothing
+   * was pressed and nothing moved.
    */
-  private togglePanel(panel: ConsolePanel): void {
-    if (!this.interfaceShown) return;
+  private togglePanel(panel: ConsolePanel): boolean {
+    if (!this.interfaceShown) return false;
     // The one thing that is always allowed. Ahead of `deadPanels`, which lists the OPEN panel
     // among the dead ones (its button is behind the panel's own scrim and cannot be clicked;
     // the key is what is left).
     if (this.panelOpen(panel)) {
       this.closePanels();
-      return;
+      return true;
     }
-    if (this.deadPanels().has(panel)) return;
+    if (this.deadPanels().has(panel)) return false;
     this.closePanels(); // belt and braces — by here nothing else is open
     if (panel === "quests") this.questLog?.show();
     else if (panel === "menu") this.gameMenu?.show();
     else if (panel === "allies") this.allies?.show();
     else this.chatDialog?.show();
     this.syncPanelPause();
+    return true;
+  }
+
+  /** A panel's F-KEY, as opposed to its button on the console strip. Same effect and the same
+   *  SOUND: WC3 does not tell a screen's two doors apart, so F9 opens the Quest Log with
+   *  exactly the click the Quests button makes, and F9 again shuts it with the click of Done.
+   *  (The Escape half of that lives on each panel's own key handler.) Silent when the key was
+   *  refused — nothing was pressed and nothing moved. */
+  private togglePanelByKey(panel: ConsolePanel): void {
+    if (this.togglePanel(panel)) playFdfClick();
   }
 
   /** Is this panel on screen right now? */
@@ -11086,7 +11102,7 @@ export class MapViewerScene {
       // is running.
       if (e.key === "F10") {
         e.preventDefault(); // F10 opens WC3's game menu, not the browser's
-        this.togglePanel("menu");
+        this.togglePanelByKey("menu");
         return;
       }
       // F9 is the Quest Log ("F9 - Toggle the Quest Log on/off"). It STOPS a single-player
@@ -11094,21 +11110,21 @@ export class MapViewerScene {
       // other two.
       if (e.key === "F9") {
         e.preventDefault();
-        this.togglePanel("quests");
+        this.togglePanelByKey("quests");
         return;
       }
       // F11 is the Allies dialog (UI\HelpStrings.txt: "F11 - Toggle the Allies menu on/off").
       // Unlike F10 it does NOT pause: WC3 keeps the match running behind it.
       if (e.key === "F11") {
         e.preventDefault(); // and not the browser's full-screen toggle
-        this.togglePanel("allies");
+        this.togglePanelByKey("allies");
         return;
       }
       // F12 is the Messaging dialog ("F12 - Toggle the Chat menu on/off"). It picks who the
       // entry line talks to and shows the history; it does not pause either.
       if (e.key === "F12") {
         e.preventDefault(); // and not the browser's devtools
-        this.togglePanel("chat");
+        this.togglePanelByKey("chat");
         return;
       }
       // Same rule as the HUD's own hotkeys (ui/hud.ts isTyping): a keystroke aimed at a text

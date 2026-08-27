@@ -77,6 +77,15 @@ panel that is up must never become unclosable — but **no key swaps one modal f
 Pressing F11 over an open Quest Log does nothing at all; it does not close the log, and it does
 not open the Allies dialog. Same for every F-key while a trigger dialog is on screen.
 
+And a screen's two doors SOUND the same. WC3 does not tell them apart, so F9 opens the Quest Log
+with exactly the click the Quests button makes and Escape shuts it with the click of Done —
+`UISounds.slk` gives the in-game row (`MenuButtonClick`) and the menus' (`GlueScreenClick`) the
+same `Sound\Interface\BigButtonClick.wav`. The keyboard routes call `playFdfClick`, the one hook
+the buttons themselves already play through, so the two can never drift apart. A key the list
+above REFUSED stays silent: nothing was pressed and nothing moved. `togglePanel` returns whether
+it acted, which is how the F-keys know; the buttons need no such test, because a click that
+reaches a live button always did something.
+
 **Every door out of a panel has to say so.** The Quest Log has two the host never hears about
 otherwise (its own Done button and Escape), which is the whole of the "Done leaves the game
 frozen" bug: `QuestDialogOverlay.hide` now calls `QuestModel.onClose`, and the host recomputes.

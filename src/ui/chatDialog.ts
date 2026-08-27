@@ -21,7 +21,7 @@
 
 import type { ChatTarget } from "../game/chat";
 import type { DataSource } from "../vfs/types";
-import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { mountFdfScreen, playFdfClick, type FdfScreen } from "./fdf/render";
 
 const CHAT_FDF = "UI\\FrameDef\\UI\\ChatDialog.fdf";
 
@@ -65,6 +65,7 @@ export class ChatDialogOverlay {
       if (e.key !== "Escape" || !this.shown) return;
       e.preventDefault();
       e.stopPropagation();
+      playFdfClick(); // the same click the Cancel button makes — see ui/fdf/render.ts
       this.hide();
     };
   }
