@@ -1214,12 +1214,13 @@ export class GameHud {
     // open — the scrim test below is what covers those.
     if (document.body.classList.contains("game-paused")) return;
     // So is every other in-game dialog — the Allies and Messaging panels, and a script's own.
-    // None of them PAUSE (only F10 does), so the flag above does not cover them; what they all
-    // put up is the modal scrim, and that is the thing to ask about. Without this, Enter over
-    // an open Messaging panel opens a chat line behind it.
+    // The two flags above do not cover them (`game-menu-open` is the F10 panel's alone, and
+    // `game-paused` is deliberately not set for a pause that is only a panel being open); what
+    // they ALL put up is the modal scrim, and that is the thing to ask about. Without this,
+    // Enter over an open Messaging panel opens a chat line behind it.
     if (document.querySelector(".fdf-dialog-scrim")) return;
     // Typing into an in-game field is TYPING, not commanding. The Allies dialog's gift
-    // boxes are the first of these (F11 does not pause, unlike F10), and without this every
+    // boxes are the first of these, and without this every
     // digit of "200" also recalls a control group and every letter fires a command-card
     // hotkey. The FDF screens' own accelerators already stand down the same way.
     if (isTyping(e.target)) return;

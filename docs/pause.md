@@ -41,7 +41,7 @@ owners, and folding them into one flag makes them clobber each other:
 
 | field          | written by                                                              |
 |----------------|-------------------------------------------------------------------------|
-| `panelPaused`  | something you READ is open, in single-player: the F10 Game Menu, the F9 Quest Log, a script's dialog |
+| `panelPaused`  | something MODAL is open, in single-player: any of the four console panels, or a script's dialog |
 | `scriptPaused` | the map's own `PauseGame` native (CustomVictoryDialogBJ uses it)          |
 | `playerPaused` | a PLAYER — the Pause Game button, and over the wire in a LAN match        |
 | `matchPaused`  | the match ending out from under us (v1: the host left)                   |
@@ -106,13 +106,19 @@ call DialogDisplay( whichPlayer, d, true )
 ```
 
 - **`DialogDisplay` does not pause by itself** — if it did, the `PauseGame` above it would be
-  redundant. A dialog stopping the world here is therefore a DELIBERATE departure, taken on the
-  developer's call: WC3's convention is that the script asks at each site, and most maps never
-  write the guard. The Game Menu and the Quest Log join it; the Allies and Chat dialogs never
-  do, because those are things you DO while the match runs.
-- **The guard is `bj_isSinglePlayer`**, and that is the gate all three take. In a LAN game one
+  redundant. WC3's convention is that the script asks at each site, and most maps never write
+  the guard.
+- **The guard is `bj_isSinglePlayer`**, and that is the gate taken here. In a LAN game one
   player reading their Quest Log must not stop everybody else's match — the F10 panel's Pause
   Game button, with its counted timeouts, is what exists for that instead.
+
+**How WIDE the rule is drawn is a departure, and a deliberate one.** WC3 stops the world only
+where a script asks it to, and the Allies and Chat dialogs in particular are things you DO while
+a match runs — the real client keeps playing behind them. Here EVERY modal screen stops a
+single-player world: the four console panels and a script's dialog alike. `panelPaused` is
+therefore just `singlePlayer && modalUp`, off the same predicate `deadPanels` greys the console
+from, so "something is in front of you" means one thing to the whole interface instead of a list
+of exceptions to remember.
 
 `bj_isSinglePlayer` is HUMAN SEATS, not the wire and not the slot count. Blizzard.j computes it
 once at init as `userControlledPlayers == 1`, counting slots that are both `MAP_CONTROL_USER`

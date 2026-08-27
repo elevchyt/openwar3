@@ -6914,11 +6914,11 @@ export class MapViewerScene {
   }
 
   /**
-   * **Three things you READ stop the world, and only in single player.**
+   * **Anything MODAL stops the world, and only in single player.**
    *
-   * The Game Menu, the Quest Log and a script's own dialog. The mission is not allowed to move
-   * on while you are reading one of them — but that is a rule about a game NOBODY ELSE is
-   * waiting on, and `Blizzard.j` writes the condition out in as many words at the victory
+   * All four console panels and a script's own dialog: whatever is in front of you, the
+   * mission is not allowed to move on behind it — but that is a rule about a game NOBODY ELSE
+   * is waiting on, and `Blizzard.j` writes the condition out in as many words at the victory
    * screen:
    *
    *     if (GetLocalPlayer() == whichPlayer) then
@@ -6931,15 +6931,17 @@ export class MapViewerScene {
    *     call DialogDisplay( whichPlayer, d, true )
    *
    * Two things fall out of those six lines. `DialogDisplay` does NOT pause by itself — if it
-   * did, the `PauseGame` above it would be redundant — so a dialog stopping the world is a
-   * DELIBERATE departure here, on the developer's call: WC3's own convention is that the
-   * script asks for it at each site, and most maps simply never write the guard. And the guard
-   * it does write is `bj_isSinglePlayer`, which is exactly the rule we apply to all three: in a
-   * LAN game one player reading their Quest Log must not stop everybody else's match, and the
-   * F10 panel's Pause Game button (with its counted timeouts) is what exists for that instead.
+   * did, the `PauseGame` above it would be redundant. And the guard it does write is
+   * `bj_isSinglePlayer`, which is exactly the rule applied here: in a LAN game one player
+   * reading their Quest Log must not stop everybody else's match, and the F10 panel's Pause
+   * Game button (with its counted timeouts) is what exists for that instead.
    *
-   * The Allies and Chat dialogs never pause, single-player or not: those are things you DO
-   * while the match runs.
+   * **How WIDE the rule is drawn is a departure, and a deliberate one.** WC3 stops the world
+   * only where a script asks it to; the Allies and Chat dialogs in particular are things you
+   * DO while a match runs, and the real client keeps playing behind them. Here every modal
+   * screen stops it, on the developer's call — the same predicate `deadPanels` greys the
+   * console from, so "something is in front of you" means one thing to the whole interface
+   * rather than a list of exceptions to remember.
    *
    * **One caveat worth knowing**, and it is the same one `PauseGame` has always carried: a
    * stopped world does not pump the map's script, so a dialog that no click can dismiss and
@@ -6951,9 +6953,7 @@ export class MapViewerScene {
    * nothing here can leave the world stopped behind something that is no longer there.
    */
   private syncPanelPause(): void {
-    this.panelPaused =
-      this.singlePlayer &&
-      (this.gameMenu?.visible === true || this.questLog?.visible === true || this.dialogUp);
+    this.panelPaused = this.singlePlayer && this.modalUp;
   }
 
   // --- the player's pause (F10 → Pause Game) ------------------------------------------
@@ -11114,14 +11114,16 @@ export class MapViewerScene {
         return;
       }
       // F11 is the Allies dialog (UI\HelpStrings.txt: "F11 - Toggle the Allies menu on/off").
-      // Unlike F10 it does NOT pause: WC3 keeps the match running behind it.
+      // Modal like the rest, so in single-player it stops the world with them (see
+      // syncPanelPause — WC3 itself keeps the match running behind this one).
       if (e.key === "F11") {
         e.preventDefault(); // and not the browser's full-screen toggle
         this.togglePanelByKey("allies");
         return;
       }
       // F12 is the Messaging dialog ("F12 - Toggle the Chat menu on/off"). It picks who the
-      // entry line talks to and shows the history; it does not pause either.
+      // entry line talks to and shows the history. Modal, so it stops a single-player world
+      // like the other three (a departure — see syncPanelPause).
       if (e.key === "F12") {
         e.preventDefault(); // and not the browser's devtools
         this.togglePanelByKey("chat");
