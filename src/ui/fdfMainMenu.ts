@@ -78,7 +78,19 @@ export function mountFdfMainMenu(
     buttonWidthScale: 1.35,
     // "Battle.net" is intentionally "Online": OpenWar3 multiplayer targets our own
     // server, not Blizzard's (matches the flat-menu note in mainMenu.ts / plan §10.1).
-    textOverrides: { BattleNetButtonText: "Online" },
+    //
+    // Renaming a button renames its ACCELERATOR with it. The FDF's caption carries the
+    // gilded letter inside the string ("|CffffffffB|Rattle.net") and `KEY_BATTLE_NET_SHORTCUT`
+    // holds the same B beside it, so an override that drops the markup leaves this one button
+    // with no white letter on a screen where every other button has one — and a B that answers
+    // nothing the label shows. So the override carries its own markup, and the shortcut moves
+    // to match it.
+    //
+    // The letter is N, not O: Options already owns O, and picking a LATER letter of the word is
+    // the game's own answer to a collision rather than ours — the same table gilds "C|Cffffffffa|Rncel",
+    // "E|Cffffffffx|Rit" and "Repla|Cffffffffy|R" for exactly this reason.
+    textOverrides: { BattleNetButtonText: "O|Cffffffffn|Rline" },
+    shortcutOverrides: { BattleNetButton: "N" },
     handlers: {
       SinglePlayerButton: h.onSinglePlayer,
       BattleNetButton: h.onOnline ?? log("Online"),

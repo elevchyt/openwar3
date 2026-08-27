@@ -102,6 +102,11 @@ export interface FdfScreenOptions {
   handlers?: FdfScreenHandlers;
   /** frameName → literal text, overriding the FDF (e.g. "Battle.net" → "Online"). */
   textOverrides?: Record<string, string>;
+  /** BUTTON frameName → accelerator letter, overriding its `ControlShortcutKey`. The
+   *  accelerator and the gilded letter in the caption are one thing to the player, so a
+   *  screen that renames a button with `textOverrides` has to re-point its shortcut too —
+   *  "Battle.net" answers B, and "Online" has no B in it to gild. */
+  shortcutOverrides?: Record<string, string>;
   /** Optional SPRITE frameName → BLP path, to draw a static stand-in for a 3D sprite. */
   sprites?: Record<string, string>;
   /** Frame names to skip (WC3's glue scripts hide these sub-panels initially). */
@@ -238,6 +243,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
       lib, fit, blpCanvas, overlay,
       handlers: opts.handlers ?? {},
       textOverrides: opts.textOverrides ?? {},
+      shortcutOverrides: opts.shortcutOverrides ?? {},
       sprites: opts.sprites ?? {},
       hidden: new Set(opts.hidden ?? []),
       dropdownButtons: new Set(opts.dropdownButtons ?? []),
@@ -358,6 +364,7 @@ interface RenderCtx {
   blpCanvas: (path: string) => HTMLCanvasElement | null;
   handlers: FdfScreenHandlers;
   textOverrides: Record<string, string>;
+  shortcutOverrides: Record<string, string>;
   sprites: Record<string, string>;
   hidden: Set<string>;
   /** BUTTON frames the screen wants treated as dropdowns (PlayerSlot's Team/Colour). */
@@ -1152,9 +1159,21 @@ function wireButton(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
     el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
   }
 
-  // ControlShortcutKey "S" → global accelerator.
-  const key = strProp(f, "ControlShortcutKey");
-  if (key && handler) ctx.shortcuts.set(key.toLowerCase(), fire);
+  // ControlShortcutKey → global accelerator.
+  //
+  // What the property holds is a STRING-TABLE KEY, exactly as `Text` does — every
+  // ControlShortcutKey in the game's whole FrameDef tree names a `KEY_*_SHORTCUT` entry
+  // (`ControlShortcutKey "KEY_SINGLE_PLAYER_SHORTCUT"`), and GlobalStrings.fdf holds the
+  // letter beside the caption that gilds it:
+  //     KEY_SINGLE_PLAYER          "|CffffffffS|Ringle Player",
+  //     KEY_SINGLE_PLAYER_SHORTCUT "S",
+  // Read literally, every accelerator on every glue screen was registered under the name of
+  // its string rather than under a letter, so no keystroke could ever match one and none of
+  // them fired (issue #122). All 102 of the table's *_SHORTCUT entries are a single
+  // character, so anything else here is a key that did not resolve — ignore it rather than
+  // bind a whole word.
+  const key = ctx.shortcutOverrides[f.name] ?? ctx.lib.string(strProp(f, "ControlShortcutKey") ?? "");
+  if (key.length === 1 && handler) ctx.shortcuts.set(key.toLowerCase(), fire);
 }
 
 /** Append the mouse-over highlight (ControlMouseOverHighlight → HighlightAlphaFile). */
