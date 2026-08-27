@@ -159,24 +159,31 @@ export class Viewpoint {
   // --- what this viewpoint may see ---------------------------------------------------
 
   /** Should this unit's model be hidden by the fog right now? Your own team is always
-   *  visible. Enemy/neutral STRUCTURES persist once SEEN (WC3 leaves the last-seen building
-   *  greyed in fog); mobile units and critters vanish unless currently in sight —
-   *  "concealing enemy movements". "Seen", not "explored": see VisionMap.hasSeen. */
+   *  visible. A PLAYER's structures persist once SEEN (WC3 leaves the last-seen building
+   *  greyed in fog) and the map's neutral FURNITURE once the ground is EXPLORED; mobile units
+   *  and critters vanish unless currently in sight — "concealing enemy movements". Seen vs
+   *  explored is a real distinction and both halves are used here: see VisionMap.hasSeen. */
   fogHides(u: SimUnit): boolean {
     if (this.vision.revealed) return false;
     if (this.isOurs(u) && !u.neutralPassive) return false;
     if (this.isExposed(u)) return false;
     if (u.building != null) {
-      // EVERY structure, including the map's furniture, has to be SEEN before it is drawn.
+      // A PLAYER's structure has to be SEEN before it is drawn — a town hall in start-explored
+      // grey is somebody's base you have not scouted, and handing it over was the bug
+      // `VisionMap`'s `seen` layer exists to prevent.
       //
-      // The neutral-passive ones — a shop, a tavern, a fountain — used to be exempt, on the
-      // argument that a player "knows them from the loading screen" because their minimap
-      // glyphs paint over unexplored ground in the real client. That was wrong twice over:
-      // issue #71 already made the GLYPH explored-gated (minimapView.minimapIcons), and the
-      // exemption was never about glyphs anyway — it put the fountain's MODEL, water splash
-      // and all, floating in pitch-black terrain nobody had walked. Unexplored ground shows
-      // nothing in WC3, furniture included. (`visibilityFor` matches this: an undiscovered
-      // one is omitted from a client's payload rather than sent as a memory.)
+      // The map's FURNITURE — a shop, a tavern, a fountain, a mercenary camp — is gated on
+      // EXPLORED instead. Under normal WC3 fog that is the same test: the eyes that see a cell
+      // are what explore it, so an undiscovered fountain still shows nothing (issue #71's rule
+      // — unexplored ground has no furniture on it either — is untouched, and this is not the
+      // blanket fog exemption that predated it). The two only come apart where knowledge of
+      // the ground is handed out with nobody looking, and there the furniture is precisely
+      // what is being handed out: the lobby's start-explored option gives you the MAP, and a
+      // map you have been given includes the shops standing on it. It is also what the minimap
+      // has been saying all along — `minimapIcons` gates the tavern/shop glyph on
+      // `hasExplored` (issue #71) — so a start-explored match drew the house glyph on the
+      // minimap with nothing but bare grass under the camera.
+      if (u.neutralPassive) return !this.hasExplored(u);
       const [cx, cy] = this.vision.worldToCell(u.x, u.y);
       return !this.vision.hasSeen(cx, cy);
     }

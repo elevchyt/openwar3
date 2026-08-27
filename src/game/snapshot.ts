@@ -143,9 +143,12 @@ export function visibilityFor(viewer: SnapshotViewer, u: SimUnit): Visibility {
   // shop, a tavern, a fountain — used to be promoted to "remembered" here even where fog
   // omitted a player's building, on the argument that its identity and pose were never
   // secrets (its minimap glyph paints over unexplored ground in the real client). Issue #71
-  // retired that for the glyph, and `fogHides` has now retired it for the model too: an
-  // UNDISCOVERED fountain is not drawn, so sending it bought nothing and cost the fog its
-  // meaning. What the promotion was really load-bearing for — keeping a frozen client's copy
+  // retired that for the glyph, and `fogHides` has now retired it for the model too: a
+  // fountain on ground this player has not EXPLORED is not drawn, so sending it bought nothing
+  // and cost the fog its meaning. ("Discovered" is the glyph's own gate, explored rather than
+  // seen, so a start-explored match hands over the furniture on both surfaces at once and the
+  // minimap and the terrain cannot disagree — `Viewpoint.fogHides`.) What the promotion was
+  // really load-bearing for — keeping a frozen client's copy
   // of the furniture standing instead of letting its applier delete it — is untouched: a
   // fountain the player HAS discovered still comes through the `fogBlocksClick` line below as
   // remembered, which is every fountain that was ever on screen. Its DESTRUCTION is still

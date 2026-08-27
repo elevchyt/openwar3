@@ -123,6 +123,25 @@ console.log("\nworld setup reaches viewpoints created AFTER it  (the boot-order 
   check("…and is still not SEEN there", late.vision.hasSeen(cellOf(900), cellOf(900)), false);
 }
 
+// The other half of the seen/explored split, and the one it is easy to get backwards: a map
+// handed to you INCLUDES the furniture standing on it. Start-explored draws the shops and the
+// taverns (the minimap has always drawn their glyphs — minimapIcons gates on `hasExplored`)
+// while the opponent's base stays exactly as unscouted as it was.
+console.log("\nstart-explored hands over the FURNITURE, not the enemy  (Viewpoint.fogHides)");
+{
+  const shop = { id: 1, owner: -1, team: -2, x: 900, y: 900, building: {}, neutralPassive: true };
+  const foeHall = { id: 2, owner: 1, team: 1, x: 900, y: 900, building: {}, neutralPassive: false };
+  const set = setOf();
+  const vp = set.viewpointFor(0);
+  vp.setTeam(0);
+  check("normal fog: the shop is not drawn on ground nobody explored", vp.fogHides(shop), true);
+  set.setStartFog("explored");
+  check("start-explored: the shop IS drawn", vp.fogHides(shop), false);
+  check("…but there are still no eyes on it — you cannot shop there", vp.fogBlocksClick(shop), true);
+  check("…and it is drawn from MEMORY, so it is greyed like the ground", vp.showsFromMemory(shop), true);
+  check("the enemy's town hall on the same cell stays hidden", vp.fogHides(foeHall), true);
+}
+
 console.log("\nreveal-all is set both ways, so clearing it clears it");
 {
   const set = setOf();
