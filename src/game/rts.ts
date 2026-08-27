@@ -961,11 +961,7 @@ export class RtsController {
    *  terrain height — only real cliff levels block WC3 sight, not rolling groundHeight
    *  (see hiveworkshop "About high ground advantage" #255594). */
   initVisionBlockers(cliffHeightAt: HeightSampler): void {
-    // …and the map's unplayable area, which blocks sight outright rather than by height
-    // (issue #117): the black border, and any "Nothing" a mapmaker painted mid-field, is a
-    // wall to eyes as much as to feet. Read through the sim's own query so the answer the
-    // fog gives and the answer an order gets cannot disagree.
-    this.viewpoints.initBlockers(cliffHeightAt, (x, y) => !this.sim.inPlayableArea(x, y));
+    this.viewpoints.initBlockers(cliffHeightAt);
   }
 
   /** A tree was felled — it stops blocking sight (harvesting can open a sight line).

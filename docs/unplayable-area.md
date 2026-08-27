@@ -14,8 +14,7 @@ Implementation: `isBoundaryTile` / `boundaryCorners` / `playableRect` / `cameraB
 `playable` / `playableAt` / `nearestPlayable` in [`src/sim/pathing.ts`](../src/sim/pathing.ts),
 `FOG_OF_WAR` in [`src/data/gameplayConstants.ts`](../src/data/gameplayConstants.ts),
 `BOUNDARY_DARK` / `boundaryTint` / `boundaryMask` in
-[`src/render/fogOverlay.ts`](../src/render/fogOverlay.ts), `BOUNDARY_BLOCK` / `AIR_EYE` /
-`setBoundaryField` in [`src/sim/vision.ts`](../src/sim/vision.ts), `inPlayableArea` +
+[`src/render/fogOverlay.ts`](../src/render/fogOverlay.ts), `inPlayableArea` +
 `airPath` + the flying branch of `pathTo` + `teleportUnit` in
 [`src/sim/world.ts`](../src/sim/world.ts), `SetCameraBounds` / `GetCameraMargin` in
 [`src/jass/natives/camera.ts`](../src/jass/natives/camera.ts), and `applyBoundaryTint` in the
@@ -131,7 +130,6 @@ map never hears about it.
 | a flyer | the destination is pulled inside the map, and the flight itself is ROUTED round — see §6 | `pathTo` / `airPath`, `teleportUnit` |
 | a builder | the cells are `Unbuildable` too | `PathingGrid.buildable` |
 | a point-target ability (Blink, Blizzard, a Dagger of Escape…) | refused outright with the engine's own line: `Units\CommandStrings.txt` [Errors] **`Outofbounds`** — "Targeted location is outside of the map boundary." The click is not spent and the reticle stays armed. | `castError` / `issueCast` / `useItem` |
-| an EYE | the boundary blocks sight outright, at any height — see §7 | `sim/vision.ts` |
 | the camera | the focus clamps to the camera bounds | `clampTarget` |
 
 `castError` is the click-time answer and `issueCast` is the gate every route shares — a
@@ -155,36 +153,7 @@ runs rather than stepping a 45° staircase.
 On an ordinary map nothing is ever in the way, `segmentPlayable` says so in a few dozen cell
 reads, and air movement costs exactly what it always did.
 
-## 7. The boundary blocks sight, and no height sees over it
-
-Vision already has the mechanism: `sim/vision.ts` keeps a per-cell `block` height, a tree
-raises it by `TREE_BLOCK`, and a ray-cast keeps a running horizon along each ray. The boundary
-joins it as `BOUNDARY_BLOCK = Infinity` — which is the whole statement. A cliff and a treeline
-are things you can see OVER from higher ground or from the air; the edge of the world is not a
-thing at all, so nothing finite is above it.
-
-Three details are load-bearing:
-
-- **It is its own mask, not just a value in `block`.** Map borders are full of trees — WTii's
-  Unit Tester has 614 of them in its — and `removeTreeBlocker` puts a cell back to bare
-  ground. Without `VisionMap.boundary` to fall back on, felling a tree in the border would
-  punch a window through the edge of the world.
-- **Flyers are not exempt.** A flyer looks over a treeline and is seen over one, so
-  `hasLineOfSight`'s `flying` used to return true without walking the ray at all. It now walks
-  it from `AIR_EYE` — an eye height above every finite blocker — which leaves terrain and
-  trees unable to shadow anything while the infinite blocker still wins. The same trick lets a
-  flyer's REVEAL reuse the ground unit's ray-cast instead of needing a second one: from a
-  kilometre up, every cell's angle rises monotonically with distance, so the result is the
-  flat circle a flyer has always had with the boundary's shadow cut out of it.
-- **The circle is kept when nothing is near.** `reveal` only takes the cast for a flyer when
-  `boundaryWithin` finds an unplayable cell inside the disk — a byte scan with an early exit,
-  far cheaper than the cast it decides against, and false for most units most of the time.
-
-The consequence the issue was really about: two units on opposite sides of a painted strip
-cannot see each other, so they cannot acquire or shoot each other either — `hasLineOfSight` is
-what the acquisition gate reads (issue #45).
-
-## 8. …and the things standing in it are black silhouettes
+## 7. The things standing in it are black silhouettes
 
 `BoundaryObject = 255,0,0,0` and `FoggedBoundaryObject = 255,64,64,96` are the object twins of
 §4's terrain rows, and they follow the same shape: `BoundaryObject` is `BlackMaskedObject` to
@@ -211,9 +180,24 @@ R cannot answer G's question: it has already been flattened to ~0.1 wherever the
 whatever the fog says. `EnableWorldFogBoundary(false)` clears both R's floor and B, which is
 how one switch gives a cinematic back its unlit border *and* its unblackened doodads.
 
-### One thing still not modelled
+## 8. What the boundary is NOT
 
-**A flyer's sight disk snaps to whole vision cells when the cast is taken.** `revealRadial`
-uses the exact float radius and `revealLineOfSight` rounds it to cells, so a flyer within
-reach of a boundary has a sight circle up to half a cell (32 world units) different from one
-in open ground. Ground units have always had this; it is only newly visible on air.
+**It does not block line of sight.** Two units on opposite sides of a painted "Nothing" strip
+can see, acquire and shoot each other exactly as if the strip were open ground. This was tried
+and then taken back out at the developer's call, so it is worth being explicit about why the
+data does not ask for it either:
+
+- The boundary's rows live in `[FogOfWar]` and every one of them is a **colour**. Nothing in
+  `UI\MiscData.txt` says anything about what can be seen THROUGH the boundary, only about how
+  what is there is painted.
+- A boundary tile carries ordinary terrain height, and terrain height is what WC3's sight is
+  blocked by (`sim/vision.ts`'s `block` field, the cliffs-and-treelines rule). A tile that is
+  flat is not a wall to an eye.
+- The near-black tint is already the whole visible effect at the map's edge: a unit standing
+  against the border lights the border cells, and they render at `BoundaryTerrain`'s 230/255
+  black anyway. Nothing needed a second mechanism to explain what the border looks like.
+
+So the boundary stops feet, wings, builders and aimed spells — everything that is a POSITION —
+and nothing that is a line of sight. If the real client ever proves otherwise, the mechanism it
+would want is an infinite `block` height with its own mask (a tree in the border must not clear
+it when felled) — but that is a change to make on evidence, not on symmetry.

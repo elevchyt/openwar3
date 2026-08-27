@@ -30,7 +30,6 @@ const {
   CELL, CAMERA_MARGIN, isBoundaryTile, boundaryCorners, playableRect, cameraBoundsOf, parseW3E,
 } = require(join(REPO, ".sim-build", "src", "world", "terrain.js"));
 const { PathingGrid, PathingFlag, PATHING_CELL } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
-const { VisionMap, VISION_CELL, FogState } = require(join(REPO, ".sim-build", "src", "sim", "vision.js"));
 
 let failures = 0;
 function check(name, cond, detail) {
@@ -159,63 +158,6 @@ console.log("\nthe air domain is the ABSENCE of rules, minus one");
   expect("…and one through the border is not", grid.segmentPlayable(0.5 * C, 2.5 * C, 7.5 * C, 2.5 * C) === false);
   expect("a line over the CLIFF is still clear — a flyer is not a Footman",
     grid.segmentPlayable(0.5 * C, 2.5 * C, 2.9 * C, 2.5 * C));
-}
-
-console.log("\nthe boundary blocks SIGHT, and no height sees over it");
-{
-  // A 24×24-cell vision grid (VISION_CELL each) with a wall of unplayable cells down x = 12.
-  const span = 24 * VISION_CELL;
-  const wall = (wx) => Math.floor(wx / VISION_CELL) === 12;
-  const make = (groundAt) => {
-    const v = new VisionMap(0, 0, span, span);
-    v.setHeightField(groundAt);
-    v.setBoundaryField((wx) => wall(wx));
-    return v;
-  };
-  const at = (c) => (c + 0.5) * VISION_CELL;
-  const flat = make(() => 0);
-  flat.beginFrame();
-  flat.reveal(at(8), at(12), 10 * VISION_CELL);
-  expect("a ground unit sees its own side", flat.stateAt(at(11), at(12)) === FogState.Visible);
-  expect("…and not across the wall", flat.stateAt(at(14), at(12)) !== FogState.Visible);
-  expect("a unit cannot SEE a unit on the far side",
-    flat.hasLineOfSight(at(8), at(12), at(16), at(12)) === false);
-  expect("…while one on its own side is in plain view",
-    flat.hasLineOfSight(at(8), at(12), at(11), at(12)) === true);
-  // Height is the whole of what a cliff is, and it buys nothing here: the border is not a
-  // thing you can be above.
-  const hill = make((wx) => (Math.floor(wx / VISION_CELL) < 12 ? 1024 : 0));
-  hill.beginFrame();
-  hill.reveal(at(8), at(12), 10 * VISION_CELL);
-  expect("standing 8 cliff levels up does not see over it",
-    hill.stateAt(at(14), at(12)) !== FogState.Visible);
-  // …and neither does flying, which is the one WC3 rule that DOES beat a treeline.
-  const air = make(() => 0);
-  air.beginFrame();
-  air.reveal(at(8), at(12), 10 * VISION_CELL, true);
-  expect("a flyer's circle stops at the boundary", air.stateAt(at(14), at(12)) !== FogState.Visible);
-  expect("…but is otherwise the whole circle it always was",
-    air.stateAt(at(8), at(4)) === FogState.Visible && air.stateAt(at(3), at(12)) === FogState.Visible);
-  expect("a flyer cannot see a unit across it",
-    air.hasLineOfSight(at(8), at(12), at(16), at(12), true) === false);
-  // A tree standing IN the border is the trap: felling it must put the cell back to "edge of
-  // the world", not to bare ground.
-  const treed = make(() => 0);
-  treed.addTreeBlocker(at(12), at(12), VISION_CELL / 2);
-  treed.removeTreeBlocker(at(12), at(12), VISION_CELL / 2);
-  treed.beginFrame();
-  treed.reveal(at(8), at(12), 10 * VISION_CELL);
-  expect("felling a tree in the border does not open a window through it",
-    treed.stateAt(at(14), at(12)) !== FogState.Visible);
-  // With no boundary installed nothing above changes for anyone — the unit tests and every
-  // map without a border must behave exactly as they did.
-  const plain = new VisionMap(0, 0, span, span);
-  plain.setHeightField(() => 0);
-  plain.beginFrame();
-  plain.reveal(at(8), at(12), 10 * VISION_CELL);
-  expect("no boundary installed, no shadow", plain.stateAt(at(14), at(12)) === FogState.Visible);
-  expect("…and a flyer's line of sight is not even walked",
-    plain.hasLineOfSight(at(8), at(12), at(16), at(12), true) === true);
 }
 
 // --- and the same rules against the real files, when this machine has an install -----------

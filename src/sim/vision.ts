@@ -38,21 +38,6 @@ function spanHi(hi: number, origin: number, limit: number): number {
 const EYE_BONUS = 20;
 const TREE_BLOCK = 250;
 const ANGLE_EPS = 1e-4; // slack so a cell isn't shadowed by its own block height
-/** The UNPLAYABLE area's block height (issue #117). Infinite, and that is the point: a cliff
- *  and a treeline are things you can see OVER from higher ground or from the air, and the
- *  edge of the world is not a thing at all. Nothing sees past it, from any height. */
-const BOUNDARY_BLOCK = Infinity;
-/**
- * The eye height a FLYER looks from — high enough that no terrain and no treeline is above
- * it, so the only thing that can raise its horizon is `BOUNDARY_BLOCK`.
- *
- * This is the trick that lets a flyer share the ground unit's ray-cast instead of needing a
- * second one. The horizon test compares angles from the eye, and from a plane a kilometre up
- * every cell's angle rises monotonically with distance — so a nearer cliff can never shadow a
- * farther one, and a flyer's sight stays the flat circle it has always been. An infinite
- * blocker still wins, because nothing finite is above infinity.
- */
-const AIR_EYE = 1e6;
 
 export enum FogState {
   Unexplored = 0,
@@ -123,11 +108,6 @@ export class VisionMap {
   private ground: Float32Array | null = null;
   private block: Float32Array | null = null;
   private treeCount: Uint16Array | null = null;
-  // The map's UNPLAYABLE cells (issue #117), installed by setBoundaryField. Kept as its own
-  // mask rather than folded into `block` alone because it is PERMANENT and a tree is not:
-  // map borders are full of trees, and felling one must put the cell back to "edge of the
-  // world", not to bare ground. Null on a map with no boundary and in the unit tests.
-  private boundary: Uint8Array | null = null;
 
   constructor(originX: number, originY: number, worldWidth: number, worldHeight: number) {
     this.originX = originX;
@@ -158,38 +138,6 @@ export class VisionMap {
     }
   }
 
-  /**
-   * Install the map's unplayable area as an absolute sight blocker (issue #117). Sampled per
-   * cell centre like the height field, and call it AFTER `setHeightField` (which allocates
-   * the arrays) and BEFORE any tree blocker, exactly as a map load does.
-   *
-   * The black border is not terrain you cannot climb, it is ground that is not part of the
-   * world — so it blocks sight outright, for a flyer as much as for a Footman, and no height
-   * sees over it. That also settles the "Nothing" strip a mapmaker paints mid-field: it is a
-   * wall to eyes as well as to feet.
-   */
-  setBoundaryField(isBoundary: (wx: number, wy: number) => boolean): void {
-    if (!this.ground || !this.block) return;
-    const mask = new Uint8Array(this.width * this.height);
-    for (let cy = 0; cy < this.height; cy++) {
-      for (let cx = 0; cx < this.width; cx++) {
-        const i = cy * this.width + cx;
-        const wx = this.originX + (cx + 0.5) * VISION_CELL;
-        const wy = this.originY + (cy + 0.5) * VISION_CELL;
-        if (!isBoundary(wx, wy)) continue;
-        mask[i] = 1;
-        this.block[i] = BOUNDARY_BLOCK;
-      }
-    }
-    this.boundary = mask;
-  }
-
-  /** The block height a cell falls back to with nothing standing on it — the terrain, or
-   *  the edge of the world where the cell is unplayable. */
-  private baseBlock(i: number): number {
-    return this.boundary && this.boundary[i] ? BOUNDARY_BLOCK : this.ground![i];
-  }
-
   /** Mark a vision-blocking tree of half-extent `radius` centred at (wx, wy) — a
    *  treeline shadows the ground behind it. A tree is NOT a point: harvestable trees
    *  carry `PathTextures\4x4Default.tga` (128×128 world units) or `2x2Default.tga`
@@ -200,9 +148,7 @@ export class VisionMap {
   addTreeBlocker(wx: number, wy: number, radius = VISION_CELL / 2): void {
     this.forEachBlockerCell(wx, wy, radius, (i) => {
       this.treeCount![i]++;
-      // Max, not assignment: a tree standing in the map's border must not LOWER the block
-      // there from "edge of the world" to 250 units of foliage.
-      this.block![i] = Math.max(this.ground![i] + TREE_BLOCK, this.baseBlock(i));
+      this.block![i] = this.ground![i] + TREE_BLOCK;
     });
   }
 
@@ -210,7 +156,7 @@ export class VisionMap {
    *  same radius it was added with, so the exact cells it stamped are released. */
   removeTreeBlocker(wx: number, wy: number, radius = VISION_CELL / 2): void {
     this.forEachBlockerCell(wx, wy, radius, (i) => {
-      if (this.treeCount![i] > 0 && --this.treeCount![i] === 0) this.block![i] = this.baseBlock(i);
+      if (this.treeCount![i] > 0 && --this.treeCount![i] === 0) this.block![i] = this.ground![i];
     });
   }
 
@@ -288,38 +234,11 @@ export class VisionMap {
 
   /** Reveal a unit's sight of world radius `radius` centred at (wx, wy). With a
    *  height field installed and a ground unit, this is line-of-sight (higher ground
-   *  and trees cast shadows); flyers and the no-field fallback reveal a full circle.
-   *
-   *  A flyer's circle has ONE hole in it: the map's unplayable area, which is not a thing to
-   *  fly over but the edge of the world (issue #117). Rather than pay for a ray-cast on every
-   *  flyer everywhere, the circle is kept for the ordinary case and the cast is taken only
-   *  when a boundary cell is actually inside the disk — which, `AIR_EYE` being what it is,
-   *  gives back the same circle with the boundary's shadow cut out of it. */
+   *  and trees cast shadows); flyers and the no-field fallback reveal a full circle. */
   reveal(wx: number, wy: number, radius: number, flying = false): void {
     if (radius <= 0) return;
-    if (!this.ground || !this.block) return this.revealRadial(wx, wy, radius);
-    if (!flying) return this.revealLineOfSight(wx, wy, radius, null);
-    if (this.boundary && this.boundaryWithin(wx, wy, radius)) return this.revealLineOfSight(wx, wy, radius, AIR_EYE);
-    this.revealRadial(wx, wy, radius);
-  }
-
-  /** Is any unplayable cell inside the sight disk at all? A byte scan of the bounding box
-   *  with an early exit — far cheaper than the ray-cast it decides against, and false for
-   *  every unit that is not near the map's edge, which is most of them most of the time. */
-  private boundaryWithin(wx: number, wy: number, radius: number): boolean {
-    const mask = this.boundary!;
-    const cx = (wx - this.originX) / VISION_CELL;
-    const cy = (wy - this.originY) / VISION_CELL;
-    const r = radius / VISION_CELL;
-    const x0 = Math.max(0, Math.floor(cx - r));
-    const x1 = Math.min(this.width - 1, Math.ceil(cx + r));
-    const y0 = Math.max(0, Math.floor(cy - r));
-    const y1 = Math.min(this.height - 1, Math.ceil(cy + r));
-    for (let y = y0; y <= y1; y++) {
-      const row = y * this.width;
-      for (let x = x0; x <= x1; x++) if (mask[row + x]) return true;
-    }
-    return false;
+    if (this.ground && this.block && !flying) this.revealLineOfSight(wx, wy, radius);
+    else this.revealRadial(wx, wy, radius);
   }
 
   /** A plain filled circle: every cell whose centre falls inside becomes Visible
@@ -352,15 +271,13 @@ export class VisionMap {
    *  is visible only if it rises to (or above) that running horizon. Higher ground /
    *  trees raise the horizon and so shadow the lower ground behind them — while a unit
    *  standing ON high ground looks down over everything. O(radius²) per unit. */
-  private revealLineOfSight(wx: number, wy: number, radius: number, eyeOverride: number | null): void {
+  private revealLineOfSight(wx: number, wy: number, radius: number): void {
     const ground = this.ground!;
     const ucx = Math.floor((wx - this.originX) / VISION_CELL);
     const ucy = Math.floor((wy - this.originY) / VISION_CELL);
     if (!this.inBounds(ucx, ucy)) return;
     const R = Math.round(radius / VISION_CELL);
-    // `eyeOverride` is AIR_EYE for a flyer — an eye above every finite blocker, so only the
-    // unplayable area shadows anything. See AIR_EYE.
-    const eyeH = eyeOverride ?? ground[ucy * this.width + ucx] + EYE_BONUS;
+    const eyeH = ground[ucy * this.width + ucx] + EYE_BONUS;
     // The unit always sees its own cell.
     this.visible[ucy * this.width + ucx] = 1;
     this.explored[ucy * this.width + ucx] = 1;
@@ -419,24 +336,18 @@ export class VisionMap {
    *  aggroing a hero through a treeline — the fog already hid him, now the creep is
    *  blind to him too (issue #45 follow-up).
    *
-   *  `flying` (either end airborne) skips the terrain: a flyer looks over the treeline, and
-   *  a flyer is seen over it. It does NOT skip the map's unplayable area (issue #117) — that
-   *  is the edge of the world rather than something to fly over, and it is what stops two
-   *  units on opposite sides of a painted "Nothing" strip from seeing (and so shooting) each
-   *  other whether they walk or fly. The flying case is the same ray from a very high eye,
-   *  so only an infinite blocker can stand in it (see AIR_EYE).
-   *
-   *  With no height field installed (headless sim, no terrain) nothing blocks. */
+   *  `flying` (either end airborne) skips the test: a flyer looks over the treeline,
+   *  and a flyer is seen over it. With no height field installed (headless sim, no
+   *  terrain) nothing blocks. */
   hasLineOfSight(fromX: number, fromY: number, toX: number, toY: number, flying = false): boolean {
     const ground = this.ground;
     const block = this.block;
-    if (!ground || !block) return true;
-    if (flying && !this.boundary) return true; // nothing absolute in the way — skip the walk
+    if (flying || !ground || !block) return true;
     const [ox, oy] = this.worldToCell(fromX, fromY);
     const [tcx, tcy] = this.worldToCell(toX, toY);
     if (!this.inBounds(ox, oy) || !this.inBounds(tcx, tcy)) return true;
     if (ox === tcx && oy === tcy) return true; // same cell — always sees itself
-    const eyeH = flying ? AIR_EYE : ground[oy * this.width + ox] + EYE_BONUS;
+    const eyeH = ground[oy * this.width + ox] + EYE_BONUS;
     const dx = tcx - ox;
     const dy = tcy - oy;
     const steps = Math.max(Math.abs(dx), Math.abs(dy));

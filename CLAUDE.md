@@ -131,9 +131,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   **Unflyable**, one bit away from a cliff's `0xca`, and it is why the border is the one thing a flyer cannot cross —
   in the air it is also the ONLY thing `PathDomain`'s `"air"` asks about, and the only thing that makes an air unit
   path at all. The tint is `UI\MiscData.txt` **[FogOfWar]** `BoundaryTerrain` = 230,0,0,0, a FLOOR on fog rather than
-  a colour, with an OBJECT twin (`BoundaryObject`, a black silhouette) that lives in the mdx SD shader. The boundary
-  also blocks SIGHT outright — an infinite blocker in the vision grid, which no height and no flyer sees over. And
-  the three rects (world bounds ⊃ playable area ⊃ camera bounds) are 512/256 apart and not interchangeable.
+  a colour, with an OBJECT twin (`BoundaryObject`, a black silhouette) that lives in the mdx SD shader. It does NOT
+  block line of sight — that was tried and taken back out; see the doc's last section before reaching for it again.
+  And the three rects (world bounds ⊃ playable area ⊃ camera bounds) are 512/256 apart and not interchangeable.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

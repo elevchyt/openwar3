@@ -291,18 +291,9 @@ export class Viewpoint {
 
   /** Install the fog's line-of-sight height field + tree blockers, so vision is shadowed by
    *  high ground and treelines. `cliffHeightAt` is the CLIFF-LEVEL sampler, not the full
-   *  terrain height — only real cliff levels block WC3 sight, not rolling groundHeight.
-   *
-   *  `isBoundaryAt` adds the map's unplayable area as an ABSOLUTE blocker (issue #117).
-   *  Order is load-bearing: the height field allocates the arrays, the boundary writes into
-   *  them, and the trees are stamped last so each can take the higher of the two. */
-  initBlockers(
-    cliffHeightAt: HeightSampler,
-    trees: Iterable<{ x: number; y: number; blockRadius: number }>,
-    isBoundaryAt?: (wx: number, wy: number) => boolean,
-  ): void {
+   *  terrain height — only real cliff levels block WC3 sight, not rolling groundHeight. */
+  initBlockers(cliffHeightAt: HeightSampler, trees: Iterable<{ x: number; y: number; blockRadius: number }>): void {
     this.vision.setHeightField((x, y) => cliffHeightAt(x, y));
-    if (isBoundaryAt) this.vision.setBoundaryField(isBoundaryAt);
     for (const tree of trees) this.vision.addTreeBlocker(tree.x, tree.y, tree.blockRadius);
   }
   onTreeFelled(x: number, y: number, radius: number): void {
@@ -371,10 +362,6 @@ export class Viewpoint {
 export class VisionSet {
   private readonly byPlayer = new Map<number, Viewpoint>();
   private cliffHeight: HeightSampler | null = null;
-  /** The map's unplayable area, as a predicate — kept beside `cliffHeight` and for the same
-   *  reason: a viewpoint created later (a rescued player, a creep team) must get the same
-   *  blockers the first one did. */
-  private isBoundaryAt: ((wx: number, wy: number) => boolean) | undefined;
   private startFog: StartFog = null;
   /** recipient → the players revealed to them (CripplePlayer). Held here rather than only on
    *  the viewpoints so a viewpoint created later inherits it. */
@@ -419,7 +406,7 @@ export class VisionSet {
       (p) => this.seats.get(p),
     );
     vp.setTeam(vp.teamOfPlayer(player));
-    if (this.cliffHeight) vp.initBlockers(this.cliffHeight, this.trees(), this.isBoundaryAt);
+    if (this.cliffHeight) vp.initBlockers(this.cliffHeight, this.trees());
     if (this.startFog === "explored") vp.exploreAll();
     else if (this.startFog === "revealall") vp.setRevealAll(true);
     for (const exposed of this.exposures.get(player) ?? []) vp.setExposed(exposed, true);
@@ -485,7 +472,7 @@ export class VisionSet {
     const existing = this.byTeam.get(team);
     if (existing) return existing;
     const vp = new Viewpoint(-1, team, this.world, this.alliances, this.originX, this.originY, this.worldWidth, this.worldHeight);
-    if (this.cliffHeight) vp.initBlockers(this.cliffHeight, this.trees(), this.isBoundaryAt);
+    if (this.cliffHeight) vp.initBlockers(this.cliffHeight, this.trees());
     if (this.startFog === "revealall") vp.setRevealAll(true);
     // NOT exploreAll: the lobby's start-explored is a courtesy to HUMANS looking at a minimap.
     // Handing it to the creep team would explore ground no creep has walked, and `explored` is
@@ -494,12 +481,10 @@ export class VisionSet {
     return vp;
   }
 
-  /** Install the fog's line-of-sight height field — and the map's unplayable area, which
-   *  blocks sight outright (issue #117) — on every viewpoint, present and future. */
-  initBlockers(cliffHeightAt: HeightSampler, isBoundaryAt?: (wx: number, wy: number) => boolean): void {
+  /** Install the fog's line-of-sight height field on every viewpoint, present and future. */
+  initBlockers(cliffHeightAt: HeightSampler): void {
     this.cliffHeight = cliffHeightAt;
-    this.isBoundaryAt = isBoundaryAt;
-    for (const vp of this.byPlayer.values()) vp.initBlockers(cliffHeightAt, this.trees(), isBoundaryAt);
+    for (const vp of this.byPlayer.values()) vp.initBlockers(cliffHeightAt, this.trees());
   }
 
   /** A tree was felled — it stops blocking sight for everyone. */
