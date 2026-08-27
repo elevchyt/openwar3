@@ -639,16 +639,17 @@ const MSG_AREA = {
  * again is one of them MOVING the other.
  *
  * `left` is measured from the SCREEN's left edge (not the 0.8 box's), because hard left is the
- * point of it; the hero bar's slot ends at `HERO_BAR.left + HERO_BAR.slot` ≈ 0.044, so the
- * column begins past that and never runs under a hero's portrait.
+ * point of it. It is far enough left to run down the hero bar's own column (which ends at
+ * `HERO_BAR.left + HERO_BAR.slot` ≈ 0.044) — asked for, and the same trade as the overlap
+ * with the message area: a hero's portrait may end up behind a line of chat.
  */
 const CHAT_AREA = {
-  left: 0.055, // clear of the hero bar (3 px + a 76 px slot at 1080p ≈ 0.044) and then some
-  /** Just over the idle-worker button — the one thing standing in this strip. `style.css`
-   *  hangs it 42 px above the minimap socket and draws it 68 px tall (1080p pixels, the same
-   *  unit the hero bar is stated in), and the socket's own top is where `ConsoleUI.fdf` puts
-   *  it; 20 px more is the breath between the button and the lowest line of chat. */
-  bottom: CONSOLE_ZONES.minimap.y + CONSOLE_ZONES.minimap.h + (42 + 68 + 20) * HERO_PX,
+  left: 0.022, // hard against the frame's edge, hero bar or no hero bar
+  /** Clear of the idle-worker button — the one thing standing in this strip. `style.css` hangs
+   *  it 42 px above the minimap socket and draws it 68 px tall (1080p pixels, the same unit the
+   *  hero bar is stated in), and the socket's own top is where `ConsoleUI.fdf` puts it; the
+   *  90 px on top of that is how far above the button the lowest line of chat rides. */
+  bottom: CONSOLE_ZONES.minimap.y + CONSOLE_ZONES.minimap.h + (42 + 68 + 90) * HERO_PX,
   width: 0.42, // where a long line wraps
 } as const;
 
