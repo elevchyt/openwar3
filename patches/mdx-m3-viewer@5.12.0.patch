@@ -403,10 +403,10 @@ index 5c2629bdcf279decae84d9fddfc523d5548192e8..4a65c029e233f1a4f11a092c6bb76e49
  }
  exports.default = War3MapW3d;
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index 7fe06bd7314e83b578dc8987e819b08cea287dfb..fc18a44dddf0006fe8b5ed4e2315fb4780a47842 100644
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..ccaf93519a59b78b909a15a36d6bad88b8db986f 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-@@ -45,6 +45,52 @@ class BatchGroup {
+@@ -45,6 +45,70 @@ class BatchGroup {
              gl.uniform1f(uniforms['u_hasBones'], 0);
          }
          gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
@@ -456,10 +456,28 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..fc18a44dddf0006fe8b5ed4e2315fb47
 +        else {
 +            gl.uniform1f(uniforms['u_distFogEnabled'], 0);
 +        }
++        // OpenWar3: the unplayable area's OBJECT tint (issue #117; see sd.frag). Same no-op
++        // rule as dnc/distFog. Texture unit 14 is free in this pipeline -- SD uses 0, HD 0..5,
++        // and the bone texture 15 -- and the active unit is put back to 0 afterwards, because
++        // the overlays we draw after the world bind their textures without naming one.
++        const boundaryMask = scene.boundaryMask;
++        if (boundaryMask) {
++            gl.uniform1f(uniforms['u_boundaryEnabled'], 1);
++            gl.activeTexture(gl.TEXTURE0 + 14);
++            gl.bindTexture(gl.TEXTURE_2D, boundaryMask.texture);
++            gl.activeTexture(gl.TEXTURE0);
++            gl.uniform1i(uniforms['u_boundaryTexture'], 14);
++            gl.uniform4fv(uniforms['u_boundaryParams'], boundaryMask.params);
++            gl.uniform3fv(uniforms['u_boundaryLit'], boundaryMask.lit);
++            gl.uniform3fv(uniforms['u_boundaryFogged'], boundaryMask.fogged);
++        }
++        else {
++            gl.uniform1f(uniforms['u_boundaryEnabled'], 0);
++        }
          gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
          if (isHd) {
-@@ -115,6 +161,14 @@ class BatchGroup {
+@@ -115,6 +179,14 @@ class BatchGroup {
              const uvAnims = instance.uvAnims;
              gl.uniform4fv(uniforms['u_vertexColor'], instance.vertexColor);
              gl.uniform1i(uniforms['u_texture'], 0);
@@ -474,7 +492,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..fc18a44dddf0006fe8b5ed4e2315fb47
              for (const object of this.objects) {
                  const batch = batches[object];
                  const geoset = batch.geoset;
-@@ -133,7 +187,7 @@ class BatchGroup {
+@@ -133,7 +205,7 @@ class BatchGroup {
                      gl.uniform2f(uniforms['u_uvTrans'], uvAnim[0], uvAnim[1]);
                      gl.uniform2f(uniforms['u_uvRot'], uvAnim[2], uvAnim[3]);
                      gl.uniform1f(uniforms['u_uvScale'], uvAnim[4]);
@@ -749,10 +767,10 @@ index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499
          const model = this.model;
          if (this.sequence === -1) {
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-index 235f29101256617d34587316e8f40984a8f95685..c655ef2ae952dcd1cd2c5822bf91958ffc0e10b9 100644
+index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e15e90b99 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-@@ -11,12 +11,94 @@ uniform sampler2D u_texture;
+@@ -11,12 +11,131 @@ uniform sampler2D u_texture;
  uniform float u_filterMode;
  uniform bool u_unshaded;
  
@@ -812,6 +830,25 @@ index 235f29101256617d34587316e8f40984a8f95685..c655ef2ae952dcd1cd2c5822bf91958f
 +// evened out rather than simply turned down.
 +uniform vec3 u_distFogDir;
 +
++// OpenWar3: the map's UNPLAYABLE area, as it applies to the things STANDING on the ground
++// rather than to the ground itself (issue #117). UI\\MiscData.txt [FogOfWar] keeps a pair of
++// rows for exactly this, and they are harsher than the terrain's: BoundaryObject = 255,0,0,0,
++// so a unit or doodad inside the boundary is a full-alpha BLACK SILHOUETTE, and
++// FoggedBoundaryObject = 255,64,64,96 where the player only remembers the spot. Alpha 255 on
++// both, which is what makes this a REPLACEMENT rather than the dimming the terrain gets.
++//
++// u_boundaryTexture is FogOverlay's per-corner RGBA mask: B says the corner is unplayable and
++// G carries the FOG-only brightness there (1 in sight, ~0.5 remembered, 0 never seen) — the
++// R channel the terrain shaders read has already been flattened to near-black by the boundary
++// itself, so it cannot answer which of the two rows applies. u_boundaryParams maps world XY to
++// mask UV. u_boundaryEnabled is 0 off the map (menus, portrait busts) and while a cinematic
++// holds EnableWorldFogBoundary(false).
++uniform float u_boundaryEnabled;
++uniform sampler2D u_boundaryTexture;
++uniform vec4 u_boundaryParams;
++uniform vec3 u_boundaryLit;    // BoundaryObject, rgb 0..1
++uniform vec3 u_boundaryFogged; // FoggedBoundaryObject, rgb 0..1
++
  varying vec2 v_uv;
  varying vec3 v_normal;
  varying vec4 v_color;
@@ -844,10 +881,28 @@ index 235f29101256617d34587316e8f40984a8f95685..c655ef2ae952dcd1cd2c5822bf91958f
 +  else color.a *= u_instanceAlpha;
 +  return color;
 +}
++
++// Replace a fragment standing in the unplayable area with its [FogOfWar] object tint.
++// Sampled by world XY, so a flyer three hundred units up over the black is blacked out like
++// anything else. Applied LAST, after lighting and distance fog, because it is not a shade of
++// the model but the statement that the model is not somewhere anyone can see.
++vec3 applyBoundaryTint(vec3 rgb, float filterMode) {
++  if (u_boundaryEnabled < 0.5) return rgb;
++  vec2 uv = (v_worldPos.xy - u_boundaryParams.xy) * u_boundaryParams.zw;
++  vec4 mask = texture2D(u_boundaryTexture, uv);
++  if (mask.b < 0.5) return rgb; // not in the unplayable area — leave it alone
++  // Additive layers (3/4) have BLACK as their identity, so a glow inside the boundary has to
++  // stop adding rather than add a black — the same reasoning applyDistFog uses above.
++  if (filterMode >= 3.0 && filterMode <= 4.0) return vec3(0.0);
++  // Remembered-but-not-seen is the middle of the fog range. In sight and never seen are the
++  // same flat black at either end of it — BlackMaskedObject is BoundaryObject to the byte.
++  float fogged = step(0.25, mask.g) * (1.0 - step(0.75, mask.g));
++  return mix(u_boundaryLit, u_boundaryFogged, fogged);
++}
  
  vec4 getDiffuseColor() {
    vec2 uv = v_uv;
-@@ -43,7 +125,7 @@ vec4 getDiffuseColor() {
+@@ -43,7 +162,7 @@ vec4 getDiffuseColor() {
      discard;
    }
  
@@ -856,13 +911,13 @@ index 235f29101256617d34587316e8f40984a8f95685..c655ef2ae952dcd1cd2c5822bf91958f
  }
  
  void onlyTexCoords() {
-@@ -55,19 +137,44 @@ void onlyNormals() {
+@@ -55,19 +174,44 @@ void onlyNormals() {
  }
  
  void onlyDiffuse() {
 -  gl_FragColor = getDiffuseColor();
 +  vec4 color = getDiffuseColor();
-+  color.rgb = applyDistFog(color.rgb, u_filterMode);
++  color.rgb = applyBoundaryTint(applyDistFog(color.rgb, u_filterMode), u_filterMode);
 +  gl_FragColor = color;
  }
  
@@ -902,7 +957,7 @@ index 235f29101256617d34587316e8f40984a8f95685..c655ef2ae952dcd1cd2c5822bf91958f
 +    }
    }
  
-+  color.rgb = applyDistFog(color.rgb, u_filterMode);
++  color.rgb = applyBoundaryTint(applyDistFog(color.rgb, u_filterMode), u_filterMode);
    gl_FragColor = color;
  }
  
@@ -937,7 +992,7 @@ index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..c22270cc71612b064a0bc2e187fab9bbe1b11f9e 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d669aef649 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -44,6 +44,13 @@ class War3MapViewerMap {

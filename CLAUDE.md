@@ -128,9 +128,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   camera clamp, `GetCameraMargin`/`GetPlayableMapRect`, or anything that asks "is this point on the map". A map
   states its boundary FOUR times over (two w3e flags that mean the same thing, one wpm bit, `SetCameraBounds` in its
   own `main()`, and the w3i) and they agree exactly — so nothing here needs guessing. The bit is `0x04`
-  **Unflyable**, one bit away from a cliff's `0xca`, and it is why the border is the one thing a flyer cannot cross;
-  the tint is `UI\MiscData.txt` **[FogOfWar]** `BoundaryTerrain` = 230,0,0,0, a FLOOR on fog rather than a colour;
-  and the three rects (world bounds ⊃ playable area ⊃ camera bounds) are 512/256 apart and not interchangeable.
+  **Unflyable**, one bit away from a cliff's `0xca`, and it is why the border is the one thing a flyer cannot cross —
+  in the air it is also the ONLY thing `PathDomain`'s `"air"` asks about, and the only thing that makes an air unit
+  path at all. The tint is `UI\MiscData.txt` **[FogOfWar]** `BoundaryTerrain` = 230,0,0,0, a FLOOR on fog rather than
+  a colour, with an OBJECT twin (`BoundaryObject`, a black silhouette) that lives in the mdx SD shader. The boundary
+  also blocks SIGHT outright — an infinite blocker in the vision grid, which no height and no flyer sees over. And
+  the three rects (world bounds ⊃ playable area ⊃ camera bounds) are 512/256 apart and not interchangeable.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

@@ -17,7 +17,7 @@ import { loadMapScript, type MapScriptEngine } from "../jass/index";
 import { EVENT_PLAYER_END_CINEMATIC } from "../jass/interpreter";
 import { MAP_CONTROL, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
-import { FogOverlay } from "./fogOverlay";
+import { FogOverlay, type BoundaryMask } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
 import { ShadowOverlay } from "./shadowOverlay";
 import { parseTerrainShadows, TerrainShadowOverlay } from "./terrainShadowOverlay";
@@ -490,6 +490,10 @@ interface Scene {
   // OpenWar3 patch hook: linear distance fog (the map's w3i environment haze) that the
   // ground/cliff/water and model shaders read (src/render/fog.ts). Undefined = no fog.
   distFog?: DistFog;
+  // OpenWar3 patch hook: the map's unplayable area, which the MODEL shader paints its
+  // [FogOfWar] object tint over (issue #117; src/render/fogOverlay.ts). Undefined off the
+  // map — a menu backdrop and a portrait bust have no boundary to stand in.
+  boundaryMask?: BoundaryMask;
 }
 interface HideableWidget {
   instance: {
@@ -6584,6 +6588,11 @@ export class MapViewerScene {
    *  opening hour, 08:00 (Blizzard.j bj_MELEE_STARTING_TOD). */
   private applyDayNight(scene: Scene): void {
     scene.distFog = this.mapFog ?? undefined; // the map's environment fog (w3i)
+    // …and the unplayable area, so a doodad standing in the black is a black silhouette
+    // rather than a lit tree floating in it (issue #117). Read fresh each frame like the fog
+    // above, which is what makes EnableWorldFogBoundary land with no extra plumbing: the
+    // mask's own boundary channel goes to zero and the tint stops applying.
+    scene.boundaryMask = this.fog?.boundaryMask;
     if (!this.dayNight) {
       scene.dncEnabled = 0;
       return;

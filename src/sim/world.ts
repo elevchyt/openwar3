@@ -15856,6 +15856,31 @@ export class SimWorld {
     return false;
   }
 
+  /**
+   * Route a FLYER around the unplayable area (issue #117) — the only obstacle air movement
+   * has. Returns the waypoints, or null when there is no way round at all (in which case the
+   * caller keeps the straight line and the destination clamp has already pulled the target
+   * inside the map).
+   *
+   * No `blocked` predicate and no footprint: a flyer is not stopped by a crowd, and the air
+   * domain reads no stamps. Smoothed with the same string-pull the ground path gets, so the
+   * result is a couple of long straight runs around the strip rather than a 45° staircase —
+   * which for something that visibly banks and turns matters more than it does for a Footman.
+   * The last waypoint is replaced with the ORDERED point so the flyer finishes exactly where
+   * it was sent rather than on a cell centre.
+   */
+  private airPath(u: SimUnit, tx: number, ty: number, maxExpansions?: number): Array<[number, number]> | null {
+    const start = this.grid.worldToCell(u.x, u.y);
+    const goal = this.grid.worldToCell(tx, ty);
+    const cells = findPath(this.grid, start, goal, undefined, maxExpansions, "air");
+    if (!cells || cells.length <= 1) return null;
+    const smoothed = smoothPath(this.grid, cells, undefined, "air");
+    const pts = smoothed.slice(1).map(([cx, cy]) => this.grid.cellToWorld(cx, cy)) as Array<[number, number]>;
+    if (!pts.length) return null;
+    pts[pts.length - 1] = [tx, ty];
+    return pts;
+  }
+
   /** Set a path toward a world point (straight line for air units). False when
    *  no movement toward the point is possible at all.
    *
@@ -15904,8 +15929,24 @@ export class SimWorld {
     u.chaseHX = approach?.hx ?? 0;
     u.chaseHY = approach?.hy ?? 0;
     if (u.flying) {
-      // Air units ignore the pathing grid (fly over trees/cliffs/buildings) —
-      // straight line to the target. Height is applied by the renderer.
+      // Air units ignore the pathing grid (fly over trees/cliffs/buildings) — straight line
+      // to the target. Height is applied by the renderer.
+      //
+      // With ONE exception, and it is the whole of air pathing: the unplayable area (issue
+      // #117). A flyer may not cross the black, so when the straight line would, it searches
+      // instead — the same A* every ground unit runs, over the same grid, read through the
+      // air domain (`Unflyable` alone: no cliffs, no trees, no buildings, no crowd). The
+      // segment test is what keeps that off the hot path: on an ordinary map nothing is in
+      // the way and the line stands, which is what it costs to fly across open ground.
+      if (!this.grid.segmentPlayable(u.x, u.y, tx, ty)) {
+        const air = this.airPath(u, tx, ty, maxExpansions);
+        if (air) {
+          u.path = air;
+          u.waypoint = 0;
+          u.moving = true;
+          return true;
+        }
+      }
       u.path = [[tx, ty]];
       u.waypoint = 0;
       u.moving = true;

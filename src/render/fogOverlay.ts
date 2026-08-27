@@ -60,6 +60,21 @@ const EXPLORED_DARK = 0.5; // grey veil over remembered-but-not-seen terrain
  * grid instead (`boundaryCorners`), which spends the falloff on the playable side.
  */
 const BOUNDARY_DARK = FOG_OF_WAR.BoundaryTerrain[0] / 255;
+/** The [FogOfWar] rows for the things STANDING in the unplayable area, as rgb 0..1. Their
+ *  ARGB alpha is dropped on purpose: both are 255, which is the file saying "replace the
+ *  colour", not "blend by this much" — so what the shader needs is only the colour. */
+const rgbOf = (argb: readonly number[]): Float32Array => new Float32Array([argb[1] / 255, argb[2] / 255, argb[3] / 255]);
+
+/** What the patched MODEL shader (mdx sd.frag) reads to black out a unit or doodad standing
+ *  in the unplayable area. Handed to the world scene as `scene.boundaryMask`. */
+export interface BoundaryMask {
+  /** The per-corner RGBA mask — B is the boundary flag, G the fog-only brightness. */
+  texture: WebGLTexture;
+  /** World XY → mask UV: originX, originY, invSpanX, invSpanY. */
+  params: Float32Array;
+  lit: Float32Array; // BoundaryObject
+  fogged: Float32Array; // FoggedBoundaryObject
+}
 // The vision map is a coarse grid with HARD per-cell states, so a cliff's line-of-sight
 // shadow or a sight-radius edge renders as a razor-sharp, geometric dark wedge — reads as
 // an artifact, not fog. Blur the per-corner darkness (separable box, radius in corners at
@@ -92,15 +107,25 @@ export class FogOverlay {
   private vx: Float32Array; // per-vertex world X (for sampling the vision map)
   private vy: Float32Array;
   private dark: Float32Array; // per-vertex darkness (uploaded each update)
-  // Fog mask handed to the viewer's patched CLIFF shader (see below). The ground veil
+  // Fog mask handed to the viewer's patched CLIFF, WATER and MODEL shaders. The ground veil
   // is a mesh; cliff FACES are batched instanced models inside the viewer's own terrain
   // pass, whose rocky overhang pokes through the veil's diagonal from the WC3 camera —
-  // so cliffs stayed fully lit in fog. Instead the cliff shader multiplies its colour by
+  // so cliffs stayed fully lit in fog. Instead those shaders multiply their colour by
   // this per-corner BRIGHTNESS texture (1=in sight, 0.5=explored grey, 0=unexplored),
   // dimming cliffs exactly like the ground. Same per-corner data as the mesh (1 - dark),
   // so cliff and ground fog agree at every shared corner.
+  //
+  // RGBA rather than one luminance byte, because the boundary needs three facts told apart
+  // (issue #117) and folding them into one channel loses two of them:
+  //   R — terrain brightness WITH the boundary floor. What the cliff/water shaders sample
+  //       (`.r`), and what the ground mesh's own darkness agrees with.
+  //   G — fog brightness WITHOUT it. An OBJECT standing in the boundary needs to know
+  //       whether the player can see that spot, and R has already been flattened to ~0.1
+  //       there whatever the fog says.
+  //   B — the boundary mask itself, 0 or 255. `BoundaryObject` vs `FoggedBoundaryObject` is
+  //       a REPLACEMENT colour, not a dimming, so the model shader has to know it applies.
   private fogTex: WebGLTexture;
-  private bright: Uint8Array; // per-corner luminance byte, uploaded each update
+  private bright: Uint8Array; // per-corner RGBA, uploaded each update
   private rawDark: Float32Array; // per-corner darkness before the softening blur
   private blurTmp: Float32Array; // scratch for the separable blur's horizontal pass
   /** 1 on every corner of an unplayable tile — the boundary mask (see BOUNDARY_DARK). */
@@ -171,7 +196,7 @@ export class FogOverlay {
     // a cliff face reads a smooth brightness across the tile it spans; CLAMP at edges.
     this.gridW = width;
     this.gridH = height;
-    this.bright = new Uint8Array(n); // 0 everywhere = start fully unexplored (black)
+    this.bright = new Uint8Array(n * 4); // 0 everywhere = start fully unexplored (black)
     this.boundary = boundaryCorners(terrain);
     this.rawDark = new Float32Array(n);
     this.blurTmp = new Float32Array(n);
@@ -180,20 +205,29 @@ export class FogOverlay {
     ]);
     this.fogTex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.fogTex);
-    // Row length = width bytes (not a multiple of 4), so unpack one byte at a time.
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, this.bright);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4); // restore the viewer's default
+    // RGBA rows are 4·width bytes, so the viewer's default 4-byte unpack alignment already
+    // fits — no pixelStorei dance (the LUMINANCE version needed one).
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.bright);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.boundaryMask = {
+      texture: this.fogTex,
+      params: this.fogParams,
+      lit: rgbOf(FOG_OF_WAR.BoundaryObject),
+      fogged: rgbOf(FOG_OF_WAR.FoggedBoundaryObject),
+    };
   }
 
   /** The per-corner fog brightness texture, for the viewer's patched cliff shader. */
   get fogTexture(): WebGLTexture {
     return this.fogTex;
   }
+
+  /** The same texture read the OTHER way — as the unplayable-area mask the model shader
+   *  needs (issue #117). Built once: the object is stable, its contents refresh in update(). */
+  readonly boundaryMask: BoundaryMask;
 
   /** Re-sample the vision map into the per-vertex darkness and upload it. Throttle
    *  the caller — the vision itself only changes a few times a second. */
@@ -205,24 +239,33 @@ export class FogOverlay {
     }
     // 2) Soften the hard cell edges into gradients (separable box blur) → this.dark.
     this.blurDark();
-    // 3) …then floor the unplayable area at BoundaryTerrain's alpha. After the blur (see
+    // 3) The FOG-only brightness, banked before the boundary touches it (channel G): what an
+    //    object standing in the unplayable area needs in order to pick between
+    //    `BoundaryObject` and `FoggedBoundaryObject`.
+    for (let i = 0; i < this.dark.length; i++) this.bright[i * 4 + 1] = (1 - this.dark[i]) * 255;
+    // 4) …then floor the unplayable area at BoundaryTerrain's alpha. After the blur (see
     //    BOUNDARY_DARK) and as a MAX, so fog that is already blacker than the boundary tint
     //    stays that way — `FoggedBoundaryTerrain` is the ordinary fog tint to the byte.
-    if (this.boundaryTint) {
+    const tinting = this.boundaryTint;
+    if (tinting) {
       for (let i = 0; i < this.dark.length; i++) {
         if (this.boundary[i] && this.dark[i] < BOUNDARY_DARK) this.dark[i] = BOUNDARY_DARK;
       }
     }
-    // 4) Cliff-shader luminance from the same field, so cliff, water and ground agree — which
-    //    is also what darkens the CLIFF FACES and the water sheet inside the boundary.
-    for (let i = 0; i < this.dark.length; i++) this.bright[i] = (1 - this.dark[i]) * 255;
+    // 5) Terrain brightness (R) from the floored field, so cliff, water and ground agree —
+    //    which is also what darkens the CLIFF FACES and the water sheet inside the boundary —
+    //    and the mask itself (B). `EnableWorldFogBoundary(false)` clears both, which is how a
+    //    cinematic gets its unlit border AND its unblackened doodads back in one switch.
+    for (let i = 0; i < this.dark.length; i++) {
+      this.bright[i * 4] = (1 - this.dark[i]) * 255;
+      this.bright[i * 4 + 2] = tinting && this.boundary[i] ? 255 : 0;
+      this.bright[i * 4 + 3] = 255;
+    }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.darkBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.dark);
     gl.bindTexture(gl.TEXTURE_2D, this.fogTex);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gridW, this.gridH, gl.LUMINANCE, gl.UNSIGNED_BYTE, this.bright);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gridW, this.gridH, gl.RGBA, gl.UNSIGNED_BYTE, this.bright);
   }
 
   /** Separable box blur of `rawDark` → `dark` (edges clamped). Radius is in corners,

@@ -45,8 +45,14 @@ export enum PathingFlag {
   NoWater = 0x40,
 }
 
-/** Which domain a unit moves through — the question `walkable` is really asking. */
-export type PathDomain = "ground" | "water";
+/** Which domain a unit moves through — the question `walkable` is really asking.
+ *
+ *  `air` is the odd one out and deliberately so: it is not a third terrain flag but the
+ *  ABSENCE of almost every rule. A flyer crosses cliffs, water, trees, buildings and other
+ *  units, so the only thing left to ask it is whether the cell is part of the map at all
+ *  (`PathingFlag.Unflyable`, issue #117) — which is why a flyer flies straight nearly always
+ *  and searches only when a strip of unplayable ground is in the way. */
+export type PathDomain = "ground" | "water" | "air";
 
 export interface PathingData {
   width: number;
@@ -249,6 +255,9 @@ export class PathingGrid {
    *  stops both — a pier is in the way of a boat as much as of a Footman. */
   walkable(cx: number, cy: number, domain: PathDomain = "ground"): boolean {
     if (!this.inBounds(cx, cy)) return false;
+    // The air domain asks a different question and reads no stamps: a flyer passes over the
+    // pier as readily as over the trees under it (see PathDomain).
+    if (domain === "air") return this.playable(cx, cy);
     const i = cy * this.width + cx;
     const flag = domain === "water" ? PathingFlag.NoWater : PathingFlag.Unwalkable;
     return (this.flags[i] & flag) === 0 && !(this.blockStamps && this.blockStamps[i] > 0);
@@ -328,6 +337,25 @@ export class PathingGrid {
   playableAt(wx: number, wy: number): boolean {
     const [cx, cy] = this.worldToCell(wx, wy);
     return this.playable(cx, cy);
+  }
+
+  /**
+   * Does the straight line from (x0,y0) to (x1,y1) stay inside the map — i.e. may a FLYER
+   * simply go there, or does the unplayable area stand in the way (issue #117)?
+   *
+   * This is the cheap test that keeps air movement a straight line in the ordinary case. It
+   * samples every half cell rather than walking a supercover DDA, which can in principle miss
+   * a line that only clips one cell's corner; the smallest unplayable region a map can have is
+   * a whole terrain TILE — four cells on a side — so nothing a real map contains slips through.
+   */
+  segmentPlayable(x0: number, y0: number, x1: number, y1: number): boolean {
+    const steps = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (PATHING_CELL / 2));
+    if (steps <= 0) return this.playableAt(x0, y0);
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      if (!this.playableAt(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return false;
+    }
+    return true;
   }
 
   /** Nearest playable cell, searched in growing rings (the twin of `nearestWalkable`, for
