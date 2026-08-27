@@ -3494,46 +3494,55 @@ export class SimWorld {
     const vitals = heroReviveVitals(mode, u.maxHp, u.maxMana, this.unitReg?.get(u.typeId)?.manaStart ?? 0);
     u.hp = Math.min(u.maxHp, vitals.hp);
     u.mana = vitals.mana;
-    this.emitReviveFx(u);
+    this.emitReviveFx(u, mode);
     return true;
   }
 
   /**
-   * The light a hero comes back in — `[Arev]` "Revive Hero"'s own `Targetart`, picked by the
-   * hero's RACE.
+   * The light a hero comes back in — and the two buildings do it differently, because the two
+   * buildings carry different abilities.
    *
-   * The ability is not on any unit's `abilList` (an Altar carries only `Abds`); it is the
+   * **An ALTAR plays `[Arev]` "Revive Hero", by RACE.** Its `Targetart` is five models in one
+   * comma-separated list, and that list is a LOOKUP rather than a set to play together: the
+   * order is `RACE_INDEX`'s own with Demon on the end, so the index is that table minus one
+   * and a Blademaster rises in `ReviveOrc.mdx` where an Archmage rises in `ReviveHuman.mdx`.
+   * The ability is on no unit's `abilList` (an Altar carries only `Abds`) — it is the
    * engine's, which is why it lives in `Units\CommonAbilityFunc.txt` with `Order=revive` and
-   * why the art has to be fetched by id rather than found on the building. Its five models are
-   * indexed in `RACE_INDEX`'s order with Demon on the end, so the lookup is that table minus
-   * one — a Blademaster rises in `ReviveOrc.mdx`, an Archmage in `ReviveHuman.mdx`.
+   * why the art is fetched by id rather than found on the building.
+   *
+   * **A TAVERN plays `[Aawa]` "Revive Hero Instantly", which it actually carries** —
+   * `[ntav] abilList=Ane2,Avul,Aawa` — and whose `Targetart` is one race-neutral
+   * `Abilities\Spells\Other\Awaken\Awaken.mdl`. So waking a hero at a Tavern does not look
+   * like raising one at an altar, and it is SILENT: the install ships an `Awaken.mdx` and no
+   * `Awaken.wav` beside it, and `AnimSounds.slk` has no `Awaken` row either. That silence is
+   * the original's rather than a gap here — the two revivals are different acts, and the data
+   * says so three times over: a different ability, a different model, and a different button
+   * caption (a hero's `Revivetip` is the altar's, its `Awakentip` the Tavern's).
    *
    * The SOUND rides the model and needs no name here: `sound: true` sends the renderer through
    * `playSpellSound`, which resolves the model's own SND event through AnimLookups/AnimSounds
-   * (`ReviveHuman` → `Abilities\Spells\Human\ReviveHuman\ReviveHuman.wav`) and, failing
-   * that, finds the WAV sitting beside the model in its own folder. Both routes land on the
-   * same four files, and neither is a path typed out here.
+   * (`ReviveHuman` → `Abilities\Spells\Human\ReviveHuman\ReviveHuman.wav`) and, failing that,
+   * finds the WAV sitting beside the model in its own folder. Both routes land on the same
+   * four files, and neither is a path typed out here. Asked of the Tavern's art too, where
+   * both routes correctly come back with nothing.
    *
    * `targetId` so the burst RIDES the hero: `Targetart` is art worn by the thing it is played
-   * on, and a revived hero walks off toward the altar's rally point while it is still playing.
+   * on, and a revived hero walks off toward the building's rally point while it is still
+   * playing.
    *
-   * A hero whose race is none of the four — a Tavern's Naga or Pandaren, whose `race` column
-   * reads "creeps" — falls back to the first entry rather than going without: the list has no
-   * neutral member (its fifth is Demon, which nothing a player revives is), and a burst of the
-   * wrong colour is a smaller wrong than a hero appearing out of nothing.
-   *
-   * **A TAVERN gets this same art, which is a deliberate departure from the data.** The
-   * Tavern's own ability is `[Aawa]` "Revive Hero Instantly" (`[ntav] abilList=Ane2,Avul,Aawa`),
-   * and its `Targetart` is one race-neutral `Abilities\Spells\Other\Awaken\Awaken.mdl` — for
-   * which the install ships no WAV at all, so waking a hero there would be a different effect
-   * and a silent one. The race burst was asked for at both buildings; switching the Tavern back
-   * to its own art is `mode === "tavern" ? "Aawa" : "Arev"` on the line below.
+   * A hero whose race is none of the four — a Naga or a Pandaren, whose `race` column reads
+   * "creeps" — falls back to the list's first entry rather than going without. It can only
+   * reach that at an ALTAR, which no neutral hero is revived at in the stock game; the list
+   * has no neutral member either (its fifth is Demon, which nothing a player revives is), and
+   * a burst of the wrong colour is a smaller wrong than a hero appearing out of nothing.
    */
-  private emitReviveFx(u: SimUnit): void {
-    const arts = this.abilities?.get("Arev")?.targetArts ?? [];
+  private emitReviveFx(u: SimUnit, mode: ReviveMode): void {
+    // Each building's OWN ability, which is the whole of the difference between them.
+    const arts = this.abilities?.get(mode === "tavern" ? "Aawa" : "Arev")?.targetArts ?? [];
     if (!arts.length) return;
-    const i = (RACE_INDEX[u.race as PlayableRace] ?? 1) - 1;
-    const art = arts[i] ?? arts[0];
+    // A one-entry list is not a race table — the Tavern's Awaken is the same model whoever
+    // stands up in it — so the race index only applies where there is something to index.
+    const art = arts.length > 1 ? (arts[(RACE_INDEX[u.race as PlayableRace] ?? 1) - 1] ?? arts[0]) : arts[0];
     if (art) this.spellEffects.push({ art, x: u.x, y: u.y, targetId: u.id, z: 0, sound: true });
   }
 

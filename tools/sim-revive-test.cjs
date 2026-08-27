@@ -142,9 +142,15 @@ console.log("\nthe light a hero comes back in is picked by its race");
     "Abilities\\Spells\\NightElf\\ReviveNightElf\\ReviveNightElf.mdx",
     "Abilities\\Spells\\Demon\\ReviveDemon\\ReviveDemon.mdx",
   ];
-  const abilities = { get: (id) => (id === "Arev" ? { targetArts: ARTS } : undefined) };
+  // `[Aawa]` "Revive Hero Instantly" is the TAVERN's own — one race-neutral model, and the
+  // install ships no `Awaken.wav` beside it, so a Tavern revival is a different effect and a
+  // silent one. That is the original's, not a gap.
+  const AWAKEN = "Abilities\\Spells\\Other\\Awaken\\Awaken.mdx";
+  const abilities = {
+    get: (id) => (id === "Arev" ? { targetArts: ARTS } : id === "Aawa" ? { targetArts: [AWAKEN] } : undefined),
+  };
 
-  function burstFor(race) {
+  function burstFor(race, mode = "altar") {
     const grid = new PathingGrid({ width: 64, height: 64, flags: new Uint8Array(64 * 64) }, [0, 0]);
     const world = new SimWorld(grid, 1, abilities);
     const u = {
@@ -162,7 +168,7 @@ console.log("\nthe light a hero comes back in is picked by its race");
       abilities: [], inventory: [], baseStr: 10, baseAgi: 10, baseInt: 10, baseMaxHp: 100,
       x: 0, y: 0, revivingAt: 0,
     });
-    world.reviveFallenHero(u.id, u.id, "altar");
+    world.reviveFallenHero(u.id, u.id, mode);
     return world.drainSpellEffects();
   }
 
@@ -176,6 +182,10 @@ console.log("\nthe light a hero comes back in is picked by its race");
   // A Tavern's Naga or Pandaren reads `race` = "creeps", which the five-model list has no
   // member for — it falls back rather than coming back in silence and darkness.
   check("a neutral hero falls back to the first entry", burstFor("creeps").map((e) => e.art), [ARTS[0]]);
+
+  // …and the Tavern is not the altar wearing a different hat.
+  check("a Tavern wakes a human hero in Awaken, not ReviveHuman", burstFor("human", "tavern").map((e) => e.art), [AWAKEN]);
+  check("…and an orc one in the very same model", burstFor("orc", "tavern").map((e) => e.art), [AWAKEN]);
 }
 
 console.log("\nan enemy building's status is the owner's");
