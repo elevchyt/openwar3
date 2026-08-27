@@ -386,12 +386,16 @@ body.in-game .menu-panel { display: none; }
 body.hud-tooltip-skinned .hud-chatbar {
   background: var(--hud-tooltip-fill);
   border: none;
-  border-radius: 4px;
+  border-radius: 2px;
 }
+/* Flush — inset 0, so the frame's band lies ON the fill's edge. The command-card tooltip
+   pulls its nine-patch a few px OUTSIDE the fill, because the engine insets a backdrop's
+   background from its border (BackdropBackgroundInsets); this frame has no backdrop and no
+   insets, and borrowing that offset here just opened a gap of bare map between the two. */
 body.hud-tooltip-skinned .hud-chatbar::after {
   content: "";
   position: absolute;
-  inset: calc(var(--chat-border) * -0.75);
+  inset: 0;
   border: var(--chat-border) solid transparent;
   border-image: var(--hud-tooltip-border) 16 / var(--chat-border) stretch;
   pointer-events: none;
