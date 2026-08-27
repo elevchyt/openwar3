@@ -955,7 +955,44 @@ export class MapViewerScene {
   /** Shown when the match ends out from under the player — v1's only cause is the host
    *  leaving, since there is no migration (docs/multiplayer.md Phase F item 6). */
   private matchOver: MatchOverDialog | null = null;
-  private paused = false; // F10 game menu freezes the sim (rendering continues)
+  /**
+   * **The pause, in four independent sources.**
+   *
+   * They are separate fields and not one boolean because they overlap and each has its own
+   * owner: the map's script writes `scriptPaused` (`PauseGame`, which CustomVictoryDialogBJ
+   * uses to freeze a single-player game under its dialog), a modal panel writes `panelPaused`,
+   * a PLAYER writes `playerPaused`, and a match that ended out from under us writes
+   * `matchPaused`. Folded into one flag they clobbered each other — closing the Quest Log
+   * un-paused a game the map itself had stopped, and `syncPanelPause` recomputing from what
+   * was on screen wiped out a player's own pause the moment any panel closed.
+   */
+  private panelPaused = false;
+  /** The map's own `PauseGame` — see the block above. */
+  private scriptPaused = false;
+  /** A PLAYER stopped the match (the F10 panel's Pause Game button; in a LAN match,
+   *  anybody's). STICKY: it outlives the menu that set it, which is the whole difference
+   *  between that button and Return to Game. */
+  private playerPaused = false;
+  /** The match is over out from under us (v1: the host left). */
+  private matchPaused = false;
+  /** Anything at all stopping the world. */
+  private get paused(): boolean {
+    return this.panelPaused || this.scriptPaused || this.playerPaused || this.matchPaused;
+  }
+  /** Stopped for a reason that is NOT "a panel is open on top of it" — the state the console's
+   *  buttons and the F-keys go dead for. Panel pause is excluded on purpose: the panel that
+   *  caused it is covering those buttons anyway (`.fdf-dialog-scrim`), and keying them on it
+   *  would mean F11 could not swap the open Quest Log for the Allies dialog. */
+  private get hardPaused(): boolean {
+    return this.scriptPaused || this.playerPaused || this.matchPaused;
+  }
+  /** The two paused-nesses the UI was last dressed for, so `syncPauseUi` is free to call per
+   *  frame. Both, because they move independently: opening the F10 panel over an already
+   *  paused match changes one and not the other. */
+  private pauseUiOn = false;
+  private pauseUiHard = false;
+  /** The dim over the battlefield while the world is stopped (`.pause-veil`). */
+  private pauseVeil: HTMLElement | null = null;
   /** The world is standing at the gate: built, but not yet begun — a campaign chapter whose
    *  loading screen is still holding for "PRESS ANY KEY TO CONTINUE" (see `holdAtStart`). */
   private startHeld = false;
@@ -2396,7 +2433,7 @@ export class MapViewerScene {
       // paths simply leave the match.
       endGame: () => {
         this.showDialog(null);
-        this.paused = false;
+        this.scriptPaused = false; // CustomVictoryDialogBJ's own PauseGame, released with it
         this.onExit?.();
       },
       // RemovePlayer(p, PLAYER_GAME_RESULT_*) — blizzard.j's own "this player's game is over",
@@ -2417,7 +2454,7 @@ export class MapViewerScene {
         // player the winner — the same signal, read for a different reason.
         if (result === PLAYER_GAME_RESULT_VICTORY && player === this.localPlayer) this.onLocalVictory?.();
       },
-      pauseGame: (flag) => (this.paused = flag),
+      pauseGame: (flag) => (this.scriptPaused = flag),
       // EnableUserUI hides EVERYTHING, interface and all — blizzard.j calls it before each
       // cinematic fade (the filter covers the world, not the UI, so the UI has to go). It is
       // a different switch from ShowInterface's letterbox, and the HUD needs both to be on.
@@ -2888,7 +2925,12 @@ export class MapViewerScene {
         // On the HOST this is a client asking to be heard, so it goes through the full
         // routing. On a CLIENT it is the host's ruling, already routed — just show it.
         this.rts?.frozenClient ? this.showChat(line) : this.deliverChat(line);
+      // …and the same split for the pause: the host judges an ask, a client obeys a ruling.
+      this.rts.onPauseAsked = (player, on) => this.rulePause(player, on);
+      this.rts.onPauseRuled = (on, by, left, denied) => this.takePauseRuling(on, by, left, denied);
     }
+    // Everybody starts the match with a full allowance of pause timeouts.
+    this.pauseTimeouts.clear();
     // WC3 skins the in-game panels with the LOCAL player's race (an Orc player's dialog is
     // Orc-bordered) — that's what the war3skins.txt section names are (see fdf/library.ts).
     // The same sections hold the MUSIC playlists, which is how melee gives an Orc player
@@ -2924,7 +2966,7 @@ export class MapViewerScene {
         this.showDialog(null);
         engine?.interp.fireDialogClick(button.handleId, button.dialogId, this.localPlayer);
         if (button.quit) {
-          this.paused = false;
+          this.scriptPaused = false; // as above: the dialog's own PauseGame goes with it
           this.onExit?.();
         }
       },
@@ -6094,6 +6136,15 @@ export class MapViewerScene {
   private mountHud(): void {
     this.hud?.dispose();
     const ui = document.getElementById("ui") ?? document.body;
+    // The dim that says "stopped", laid down BEFORE anything else goes into `#ui` so every
+    // piece of interface built below paints over it. `#ui` is the layer above both the map
+    // canvas and the world overlays (z-index 3 vs 0 and 2), so one element parked at the
+    // bottom of it darkens the whole battlefield — terrain, units, health bars, floating
+    // text — and touches no part of the console.
+    this.pauseVeil?.remove();
+    this.pauseVeil = document.createElement("div");
+    this.pauseVeil.className = "pause-veil";
+    ui.prepend(this.pauseVeil);
     const driver: HudDriver = {
       resources: () => {
         const food = this.rts?.foodFor(this.localPlayer) ?? { used: 0, made: 0 };
@@ -6251,21 +6302,27 @@ export class MapViewerScene {
     this.mountScriptUi(ui);
     this.gameMenu?.dispose();
     this.gameMenu = new EscMenu(ui, this.vfs, SKIN_SECTION[this.localRace], {
+      // Return to Game puts back only what OPENING the menu took away. A match somebody
+      // deliberately stopped stays stopped — that pause is not this panel's to lift, and the
+      // button that does lift it is sitting right above this one wearing KEY_RESUME_GAME.
       onReturn: () => {
         this.gameMenu?.hide();
-        this.paused = false;
+        this.syncPanelPause();
       },
       onEndGame: () => {
         this.gameMenu?.hide();
-        this.paused = false;
+        this.playerPaused = false;
+        this.syncPanelPause();
         this.onExit?.();
       },
-      // "Pause Game" closes the menu and leaves the world stopped — the one button on the
-      // panel that does NOT resume, which is the whole difference from Return to Game.
+      // Pause Game / Resume Game — ONE button, and in a LAN match the request crosses the
+      // wire before anything here moves (see `askPause`).
       onPause: () => {
         this.gameMenu?.hide();
-        this.paused = true;
+        this.syncPanelPause();
+        this.askPause(!this.playerPaused);
       },
+      isPaused: () => this.playerPaused,
     });
     this.allies?.dispose();
     this.allies = new AllianceDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
@@ -6291,6 +6348,9 @@ export class MapViewerScene {
       // table that resolves it (empty until a script loads one, which resolves to itself).
       mapName: () => this.mapScript?.interp.rt.resolveTrigStr(this.mapDisplayName) ?? this.mapDisplayName,
       revision: () => this.mapScript?.interp.rt.questsRevision ?? 0,
+      // Done, and Escape: both are doors out of the log that `togglePanel` never sees, and in
+      // single-player this panel STOPS THE WORLD. Recompute from what is actually open.
+      onClose: () => this.syncPanelPause(),
     });
     this.chatDialog?.dispose();
     this.chatDialog = new ChatDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
@@ -6521,7 +6581,7 @@ export class MapViewerScene {
     // is news about a wire nobody needs any more, not about the match.
     if (this.matchEnded) return;
     if (this.matchOver) return; // already said; a second `room-closed` is not a second dialog
-    this.paused = true;
+    this.matchPaused = true;
     const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
     // The same root the HUD and the F10 menu mount into (`mountHud`).
     const ui = document.getElementById("ui") ?? document.body;
@@ -6537,7 +6597,7 @@ export class MapViewerScene {
       () => {
         this.matchOver?.dispose();
         this.matchOver = null;
-        this.paused = false;
+        this.matchPaused = false;
         this.onExit?.();
       },
     );
@@ -6717,10 +6777,18 @@ export class MapViewerScene {
    *  • **One at a time.** They are all modal (each mounts its own scrim), so two at once is two
    *    scrims and a panel buried under a panel. Opening any of them shuts the rest.
    *  • **Some are dead in a campaign** (see panelDead).
+   *  • **Three of them are dead while the match is STOPPED.** The Quest Log, the Allies
+   *    dialog and the Chat dialog are all things you do while a game runs; the console greys
+   *    them from the same rule (ConsoleUi's PAUSE_DEAD_PANELS), and this is the F-key half of
+   *    it. The Game Menu stays live because `KEY_RESUME_GAME` lives inside it — it is the way
+   *    out. CLOSING is always allowed: a panel that is already up must never become
+   *    unclosable, and the Quest Log's own pause is not counted here (`hardPaused`) so F11
+   *    can still swap it for the Allies dialog.
    */
   private togglePanel(panel: ConsolePanel): void {
     if (!this.interfaceShown || this.panelDead(panel)) return;
     const wasOpen = this.panelOpen(panel);
+    if (!wasOpen && this.hardPaused && panel !== "menu") return;
     this.closePanels(); // one at a time — and this is also how a toggle CLOSES its own panel
     if (!wasOpen) {
       if (panel === "quests") this.questLog?.show();
@@ -6791,7 +6859,131 @@ export class MapViewerScene {
    *  keypress, so the "one at a time" rule above can't leave the world stopped behind a panel
    *  that is no longer there. */
   private syncPanelPause(): void {
-    this.paused = this.gameMenu?.visible === true || this.questLog?.visible === true;
+    this.panelPaused = this.gameMenu?.visible === true || this.questLog?.visible === true;
+  }
+
+  // --- the player's pause (F10 → Pause Game) ------------------------------------------
+
+  /**
+   * How many times one player may stop the match. WC3 calls them TIMEOUTS, in as many words:
+   * `GlobalStrings.fdf` `PAUSE_GAME_NOTIFY` = "%s paused the game. <%u timeouts remaining>",
+   * and `OUT_OF_TIMEOUTS` = "Out of pause timeouts" is what you get when they run out. Three
+   * is the shipped allowance.
+   */
+  private static readonly PAUSE_TIMEOUTS = 3;
+  /** Timeouts each player has LEFT. Missing = untouched = the full allowance. On the host
+   *  this is the ledger; on a client it is a copy of whatever the host last ruled. */
+  private readonly pauseTimeouts = new Map<number, number>();
+
+  private timeoutsFor(player: number): number {
+    return this.pauseTimeouts.get(player) ?? MapViewerScene.PAUSE_TIMEOUTS;
+  }
+
+  /**
+   * The local player wants the match stopped (or started again).
+   *
+   * **Authoritative, never optimistic.** A pause is the one piece of state that must be the
+   * same on every machine at the same instant — a client that stopped its own world a round
+   * trip before the host stopped its would spend that round trip diverging from a world it is
+   * no longer being sent, and a REFUSED pause (out of timeouts) would leave it frozen alone.
+   * So a client only asks; what actually stops the game is the host's ruling coming back.
+   */
+  private askPause(on: boolean): void {
+    const link = this.rts?.matchLinkHandle;
+    if (link && this.rts?.frozenClient) {
+      link.askToPause(on);
+      return;
+    }
+    this.rulePause(this.localPlayer, on);
+  }
+
+  /**
+   * The AUTHORITY's decision (host, or a single-player game, which is its own host): spend a
+   * timeout, stop or restart the world, tell the room.
+   *
+   * Anybody may lift anybody's pause — that is the WC3 rule and it is deliberate: a player
+   * who paused and then dropped their connection must not be able to hold the match hostage.
+   * Only PAUSING costs a timeout, for the same reason.
+   */
+  private rulePause(player: number, on: boolean): void {
+    if (on === this.playerPaused) return; // already there; a second ask is not a second pause
+    // Timeouts are counted only where somebody else is waiting on you. A solo match spends
+    // none — which is why the game ships a second notify line with no tally in it
+    // (`PAUSE_GAME_NOTIFY_NO_TIMEOUT`) for exactly that case.
+    if (on && this.multiplayerMatch) {
+      const left = this.timeoutsFor(player);
+      if (left <= 0) {
+        // The asker is told, and nobody else — an opponent's spent allowance is not news.
+        if (player === this.localPlayer) this.sayOutOfTimeouts();
+        else this.rts?.matchLinkHandle?.denyPause(player, { k: "pause", on: this.playerPaused, by: player, left: 0, denied: true });
+        return;
+      }
+      this.pauseTimeouts.set(player, left - 1);
+    }
+    this.playerPaused = on;
+    this.rts?.matchLinkHandle?.rulePause({ k: "pause", on, by: player, left: this.timeoutsFor(player) });
+    this.notePause(player, on, this.timeoutsFor(player));
+  }
+
+  /** The host ruled (client side): take the state as given, and keep its ledger for the line
+   *  the next pause prints. */
+  private takePauseRuling(on: boolean, by: number, left: number, denied: boolean): void {
+    if (denied) {
+      this.pauseTimeouts.set(by, 0);
+      this.sayOutOfTimeouts();
+      return;
+    }
+    this.pauseTimeouts.set(by, left);
+    if (on === this.playerPaused) return;
+    this.playerPaused = on;
+    this.notePause(by, on, left);
+  }
+
+  /** "Out of pause timeouts" — the game's own line for an allowance that is spent. */
+  private sayOutOfTimeouts(): void {
+    this.hud?.showError(this.globalStrings?.strings.get("OUT_OF_TIMEOUTS") ?? "Out of pause timeouts");
+    this.sounds?.playUi("InterfaceError");
+  }
+
+  /**
+   * Say who did it, in the game's own words.
+   *
+   * Three shipped strings and the choice between the first two is the whole of it: WC3 counts
+   * timeouts only where there is somebody to count them against, so a solo match gets
+   * `PAUSE_GAME_NOTIFY_NO_TIMEOUT` ("%s paused the game.") and a room full of people gets the
+   * one with the tally.
+   */
+  private notePause(player: number, on: boolean, left: number): void {
+    const key = on ? (this.multiplayerMatch ? "PAUSE_GAME_NOTIFY" : "PAUSE_GAME_NOTIFY_NO_TIMEOUT") : "RESUME_GAME_NOTIFY";
+    const fallback = on ? (this.multiplayerMatch ? "%s paused the game. <%u timeouts remaining>" : "%s paused the game.") : "%s has resumed the game.";
+    const text = (this.globalStrings?.strings.get(key) ?? fallback)
+      .replace("%s", this.playerLabel(player))
+      .replace("%u", String(left));
+    this.announce(text);
+  }
+
+  /**
+   * Dress the interface for however the world now stands. Called once a frame — the pause has
+   * five writers between the script, the panels, the menu and the wire, and a sync that has to
+   * be REMEMBERED at each of them is a sync that will be forgotten at one of them.
+   */
+  private syncPauseUi(): void {
+    const on = this.paused;
+    const hard = this.hardPaused;
+    if (on === this.pauseUiOn && hard === this.pauseUiHard) return;
+    this.pauseUiOn = on;
+    this.pauseUiHard = hard;
+    this.pauseVeil?.classList.toggle("on", on);
+    this.consoleUi?.setPaused(hard);
+    // The keyboard goes with the mouse: the HUD's own hotkeys (control groups, the command
+    // card's letters, the chat key) read this class the way they read `game-menu-open`.
+    document.body.classList.toggle("game-paused", hard);
+    // The portrait bust runs a rAF loop of its OWN (render/modelViewer.ts), on its own canvas
+    // and its own viewer, so zeroing the world's step does not reach it — the head went on
+    // breathing over a stopped battlefield. `stop` is already a pause there rather than a
+    // teardown ("fresh dt on resume"), so the clip picks up mid-breath when the match does.
+    if (on) this.portraitViewer?.stop();
+    else if (this.portraitFor !== null) this.portraitViewer?.start();
   }
 
   /** The HUD is on screen only when the interface (ShowInterface) AND the UI (EnableUserUI)
@@ -9011,10 +9203,25 @@ export class MapViewerScene {
       // retire. Deriving it here instead means the focus and the positions the frame is about
       // to DRAW come from the same instant of game time.
       this.advanceSim(t);
+      // **How much time the WORLD is worth this frame — zero while it is stopped.**
+      //
+      // A pause used to stop the SIM and nothing else: units held their ground while their
+      // Stand clips played on, wounds bled particles, the water rolled and a Death animation
+      // ran itself out over a corpse the sim had frozen mid-fall. What the player asked for by
+      // pausing is a still picture, so every clock that ages the world reads this instead of
+      // the frame's own `dt` — the model animations (`baseUpdate`), the effects, the decals,
+      // the projectiles, the weather, the day/night medallion. None of them RESET at zero:
+      // they simply do not advance, so unpausing carries on from the exact frame it stopped.
+      //
+      // `dt` itself still goes to the interface (the HUD's own animation, the metrics
+      // counter) and to the debug overlays: those are not the world, and freezing them would
+      // only make a paused game look broken.
+      this.syncPauseUi();
+      const wdt = this.paused ? 0 : dt;
       this.updateCamera(dt);
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.hud?.frame(dt);
-      this.updateClock(dt);
+      this.updateClock(wdt);
       this.updatePortrait();
 
       // Re-scan for new on-map unit types (trained units, scouted enemies) a couple
@@ -9050,19 +9257,19 @@ export class MapViewerScene {
           this.hideStartLocations();
         }
       }
-      this.updateSelectionCircles(dt / 1000);
-      this.updateOrderArrows(dt / 1000);
-      this.updateEffects(dt / 1000);
-      this.updateSpellSplats(dt / 1000); // Thunder Clap's scorch fading in/out on the ground
-      this.lightning?.update(dt / 1000); // age the live bolts; expired ones retire themselves
-      this.updateMirrorMissiles(dt / 1000);
+      this.updateSelectionCircles(wdt / 1000);
+      this.updateOrderArrows(wdt / 1000);
+      this.updateEffects(wdt / 1000);
+      this.updateSpellSplats(wdt / 1000); // Thunder Clap's scorch fading in/out on the ground
+      this.lightning?.update(wdt / 1000); // age the live bolts; expired ones retire themselves
+      this.updateMirrorMissiles(wdt / 1000);
       this.updateAuraEffects();
-      this.updateSpecialFx(dt / 1000); // script effects: age them, settle Birth→Stand, fog-gate
-      this.updateDyingFx(dt / 1000); // buff art + script effects playing out their Death clip
-      this.updateTreePulses(dt / 1000);
-      this.updateTreeActors(dt / 1000); // per-chop "stand hit" wobble + off-camera clip catch-up
+      this.updateSpecialFx(wdt / 1000); // script effects: age them, settle Birth→Stand, fog-gate
+      this.updateDyingFx(wdt / 1000); // buff art + script effects playing out their Death clip
+      this.updateTreePulses(wdt / 1000);
+      this.updateTreeActors(wdt / 1000); // per-chop "stand hit" wobble + off-camera clip catch-up
       this.updateProjectiles();
-      this.updateBloodMageSpheres(dt / 1000); // Blood Mage orbiting spheres + thrown balls
+      this.updateBloodMageSpheres(wdt / 1000); // Blood Mage orbiting spheres + thrown balls
       this.updatePendingBuildGhosts(); // dark-blue ghosts of queued-but-not-started builds
       if (this.placement) this.updateGhost(this.lastMouse.x, this.lastMouse.y); // show/position the ghost each frame (not only on mouse move)
       // lastMouse is CANVAS space (it unprojects into the world); the reticle is a body-fixed
@@ -9287,8 +9494,15 @@ export class MapViewerScene {
       }
       // Advance animations by REAL elapsed time (fixes 2x speed on high-refresh
       // displays), replicating War3MapViewer.update() = super.update() + map.update().
-      baseUpdate.call(this.viewer, dt);
-      this.viewer.map?.update();
+      //
+      // At `wdt` = 0 the scene is still WALKED — that pass is what collects this frame's
+      // visible instances for the renderer, so skipping it draws nothing — but every clip,
+      // every node and every particle emitter is handed a zero step and stays exactly where
+      // it was. `map.update()` is skipped outright instead: all it does is roll the water
+      // texture on and hand a finished Stand clip its next one, both of which are the world
+      // moving.
+      baseUpdate.call(this.viewer, wdt);
+      if (!this.paused) this.viewer.map?.update();
       // Re-pin under-construction buildings AFTER the animation advance so a
       // halted build's Birth animation truly freezes (and resumes with progress).
       this.rts?.repinConstructionFrames();
@@ -9417,9 +9631,10 @@ export class MapViewerScene {
       if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
       // Weather LAST of the world passes — after the fog-of-war veil, because rain and snow
       // fall between the eye and the world rather than being part of it: WC3 shows you the
-      // storm over ground you have never explored. Not paused with the sim (the weather keeps
-      // blowing while the game is paused, as it does in the real client) — it advances on the
-      // RENDER clock.
+      // storm over ground you have never explored. It advances on the RENDER clock rather
+      // than the sim's (a dropped sim step must not stutter the rain), but that clock is
+      // `wdt`: a pause is meant to be a still picture, and a storm blowing through one is the
+      // loudest possible way to say the game did not actually stop.
       if (this.weather && fogScene) {
         const cam = fogScene.camera;
         // `dt` in this loop is MILLISECONDS (see portraitWarmAccum > 2000); the emitter's
@@ -9427,7 +9642,7 @@ export class MapViewerScene {
         // made every particle outlive its lifespan on its very first frame and respawn on
         // the spot — a field of age-0 particles, re-randomised each frame, that looked like
         // falling snow in a still screenshot and never actually moved.
-        this.weather.update(dt / 1000, { targetX: this.target[0], targetY: this.target[1], distance: this.distance });
+        this.weather.update(wdt / 1000, { targetX: this.target[0], targetY: this.target[1], distance: this.distance });
         this.weather.render(cam.viewProjectionMatrix, cam.location, cam.directionX, cam.directionY);
       }
       // Building-placement footprint grid (green = buildable, red = obstructed) — drawn
@@ -9567,7 +9782,9 @@ export class MapViewerScene {
     this.consoleUi = null;
     this.matchOver?.dispose();
     this.matchOver = null;
-    this.paused = false;
+    this.panelPaused = this.scriptPaused = this.playerPaused = this.matchPaused = false;
+    this.pauseVeil?.remove();
+    this.pauseVeil = null;
     this.ghost?.remove();
     this.ghost = null;
     this.selectBoxEl?.remove();
@@ -9602,7 +9819,8 @@ export class MapViewerScene {
     this.reticleUrls.clear();
     this.handUrls.clear();
     this.disposeFog(); // the veil mesh and its GL texture — loadMap dropped these, exit didn't
-    document.body.classList.remove("reticle-on", "armed-on", "carrying-item");
+    document.body.classList.remove("reticle-on", "armed-on", "carrying-item", "game-paused");
+    this.pauseUiOn = this.pauseUiHard = false;
     document.body.style.cursor = ""; // restore the default cursor off the map
     // The last three things the match wrote to the PAGE rather than to itself: the edge-scroll
     // arrow and the world-anchored overlay layer, both parented to `document.body`, and the
@@ -10188,7 +10406,10 @@ export class MapViewerScene {
     const speed = this.distance * 0.9 * (1 / 60);
     const fwd: [number, number] = [Math.cos(this.yaw), Math.sin(this.yaw)];
     const right: [number, number] = [fwd[1], -fwd[0]];
-    if (this.userControl) {
+    // …and a STOPPED match has no camera either: the arrow keys and the screen edges are the
+    // player moving through a world, and there is no moving through one that is not running.
+    // (`updateEdgeScroll` tests the pause a second time for its own arrow cursor.)
+    if (this.userControl && !this.hardPaused) {
       if ((letters && this.keys.has("w")) || this.keys.has("arrowup")) this.pan(fwd, speed);
       if ((letters && this.keys.has("s")) || this.keys.has("arrowdown")) this.pan(fwd, -speed);
       if ((letters && this.keys.has("d")) || this.keys.has("arrowright")) this.pan(right, speed);
@@ -10774,7 +10995,9 @@ export class MapViewerScene {
         this.togglePanel("menu");
         return;
       }
-      // F9 is the Quest Log ("F9 - Toggle the Quest Log on/off"). No pause, as in the game.
+      // F9 is the Quest Log ("F9 - Toggle the Quest Log on/off"). It STOPS a single-player
+      // match while it is up, as F10 does — see syncPanelPause for why those two and not the
+      // other two.
       if (e.key === "F9") {
         e.preventDefault();
         this.togglePanel("quests");
@@ -10817,6 +11040,11 @@ export class MapViewerScene {
       // EnableUserControl(false) — a cinematic owns the mouse (7.24). No selecting, no
       // orders, no drag-pan; the shot is the script's to compose.
       if (!this.userControl) return;
+      // A STOPPED match owns it too. There is nothing to select in a still picture and
+      // nothing to order about in a world that is not running — and in a LAN match the order
+      // would be judged by a host whose sim is stopped as well. (`hardPaused`, so the panel
+      // pauses are left to their own scrims, which already swallow this.)
+      if (this.hardPaused) return;
       if (e.button === 1) {
         // Middle mouse (scroll-wheel click) held: drag-pan the camera, WC3-style.
         // preventDefault suppresses the browser's middle-click autoscroll cursor.

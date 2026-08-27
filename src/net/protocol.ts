@@ -131,13 +131,15 @@ export type { LobbySetup, LobbyRequest, LobbyChat } from "./lobbySetup";
 export type GameMessage =
   | StartMatch
   | import("./commandLink").CommandMessage
+  | import("../game/matchLink").PauseRequestMessage
+  | import("../game/matchLink").PauseStateMessage
   | import("./lobbySetup").LobbySetup
   | import("./lobbySetup").LobbyRequest
   | import("./lobbySetup").LobbyChat;
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */
-export const PROTOCOL_VERSION = 10; // 10: binary hot lane (`snapw`), 60 Hz (9: deaths + corpses + morphs)
+export const PROTOCOL_VERSION = 11; // 11: the pause (`pausereq`/`pause`) — 10: binary hot lane (`snapw`), 60 Hz
 
 /** Default relay port. Overridable via PORT (the env var Railway/Render both inject). */
 export const DEFAULT_RELAY_PORT = 8787;

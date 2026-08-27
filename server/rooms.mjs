@@ -19,7 +19,7 @@
 // data, no match state beyond this table. Keep it that way — it is what makes a free tier
 // viable and what keeps us clear of hosting Blizzard content.
 
-export const PROTOCOL_VERSION = 10; // 10: binary hot lane (`snapw`), 60 Hz — src/net/protocol.ts
+export const PROTOCOL_VERSION = 11; // 11: the pause (`pausereq`/`pause`) — src/net/protocol.ts
 
 /** The game list entry, as LocalMultiplayerJoin.fdf wants it. */
 const roomInfo = (r) => ({

@@ -185,6 +185,46 @@ export function isChatSaidMessage(data: unknown): data is ChatSaidMessage {
   return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "chats";
 }
 
+/**
+ * **The pause, both directions.** A player asked to stop or restart the match; the host ruled.
+ *
+ * Two messages, and the split is the same one chat and commands make: `pausereq` says only
+ * WHAT was asked (stop, or start again) and carries no sender, because a client controls every
+ * byte it sends and a `player` field in the payload would let anybody spend anybody else's
+ * pause allowance. The host stamps the asker from the relay's `deliver.from`.
+ *
+ * `pause` is the ruling, broadcast to the whole room. It is **authoritative and never
+ * optimistic**: a pause is the one piece of state that has to take effect on every machine at
+ * the same instant, so a client stops when this arrives and not when it asked. It carries the
+ * asker (for "%s paused the game.") and that asker's remaining timeouts, because the room is
+ * told the tally — `PAUSE_GAME_NOTIFY` = "%s paused the game. <%u timeouts remaining>".
+ */
+export interface PauseRequestMessage {
+  k: "pausereq";
+  on: boolean;
+}
+
+export function isPauseRequestMessage(data: unknown): data is PauseRequestMessage {
+  return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "pausereq";
+}
+
+export interface PauseStateMessage {
+  k: "pause";
+  on: boolean;
+  /** Who asked. The room is told by name. */
+  by: number;
+  /** How many timeouts that player has left, after this. */
+  left: number;
+  /** The ask was REFUSED — this player is out of timeouts. Sent to the asker alone (the rest
+   *  of the room has no stake in somebody else's spent allowance) and carries the state
+   *  unchanged, so it is news rather than an instruction. */
+  denied?: boolean;
+}
+
+export function isPauseStateMessage(data: unknown): data is PauseStateMessage {
+  return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "pause";
+}
+
 /** One seated slot: the player number and, for a human, the relay peer sitting in it. Same
  *  shape `CommandRouter` takes, and for the same reason — it comes straight off `StartMatch`. */
 export interface LinkSeat {
@@ -320,6 +360,14 @@ export class MatchLink {
    *  — the host has already decided this machine was meant to hear it. */
   onChatSaid: (line: ChatLine) => void = () => {};
 
+  /** Host side: this player asked to stop or restart the match. The sender is the relay's
+   *  stamp, never the payload's. Whether they may is the authority's ruling, not this
+   *  module's — it only says who asked. */
+  onPauseAsked: (player: number, on: boolean) => void = () => {};
+
+  /** Client side: the host's ruling on the pause. Take it as given. */
+  onPauseRuled: (msg: PauseStateMessage) => void = () => {};
+
   /** Host side: tell a peer its command was refused, and with which `[Errors]` voice. */
   sendRefusal(peer: number, key: string): void {
     this.channel.send({ k: "ref", key } satisfies RefusalMessage, peer);
@@ -368,6 +416,13 @@ export class MatchLink {
       }
       // Client side: the host's ruling on something somebody said.
       else if (isChatSaidMessage(data)) this.onChatSaid({ from: data.from, text: data.text, target: data.target });
+      // Host side: somebody wants the match stopped (or started again). Stamped, like chat.
+      else if (isPauseRequestMessage(data)) {
+        const player = this.seats.find((s) => s.peer === from)?.id;
+        if (player !== undefined) this.onPauseAsked(player, data.on);
+      }
+      // Client side: it IS stopped (or running again), and here is who did it.
+      else if (isPauseStateMessage(data)) this.onPauseRuled(data);
       else previous(from, data);
     };
     // A returning peer is owed the world it missed, and owed it NOW rather than whenever the
@@ -406,6 +461,25 @@ export class MatchLink {
    *  who hears it, ourselves included, and its ruling comes back as `chats`. */
   askToSay(text: string, target: ChatTarget): void {
     this.channel.send({ k: "chat", text, target } satisfies ChatMessage, this.hostPeer);
+  }
+
+  /** Client side: ask the host to stop or restart the match. Nothing stops here until the
+   *  ruling comes back — see `PauseStateMessage`. */
+  askToPause(on: boolean): void {
+    this.channel.send({ k: "pausereq", on } satisfies PauseRequestMessage, this.hostPeer);
+  }
+
+  /** Host side: tell the whole room how the match now stands. Broadcast, unlike a dialog or a
+   *  refusal: a pause is the one thing everybody is inside of at once. */
+  rulePause(msg: PauseStateMessage): void {
+    this.channel.send(msg);
+  }
+
+  /** Host side: tell ONE player their pause was refused. Addressed, like a dialog — being out
+   *  of timeouts is that player's business and nobody else's. */
+  denyPause(player: number, msg: PauseStateMessage): void {
+    const peer = this.peerFor(player);
+    if (peer !== undefined) this.channel.send(msg, peer);
   }
 
   /** Host side: tell one player what was said. Skips the host's own seat and computer slots —

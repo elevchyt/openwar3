@@ -5158,6 +5158,11 @@ export class RtsController {
     // sender; on a client the host's ruling that we were meant to hear this. Both end up at
     // the same renderer callback, which routes (host) or just shows it (client).
     link.onChatSaid = (line) => this.onChatSaid?.(line);
+    // The pause, both ways round: on the host a player's request to judge, on a client the
+    // ruling to obey. Neither is state this controller keeps — the pause belongs to the
+    // renderer, which owns the world's clock — so both are passed straight through.
+    link.onPauseAsked = (player, on) => this.onPauseAsked?.(player, on);
+    link.onPauseRuled = (msg) => this.onPauseRuled?.(msg.on, msg.by, msg.left, msg.denied === true);
     if (setup.isHost) {
       // The host is the only party that judges an arriving command. `CommandRouter` resolves
       // the relay's `from` stamp — which no client can forge — to a slot, and a command whose
@@ -5196,6 +5201,13 @@ export class RtsController {
 
   /** A chat line arrived over the wire. The renderer fills this in; see mapViewer.deliverChat. */
   onChatSaid: ((line: ChatLine) => void) | null = null;
+
+  /** HOST: a client asked for the match to stop or start again (already stamped with a real
+   *  sender). The renderer rules on it — see mapViewer.rulePause. */
+  onPauseAsked: ((player: number, on: boolean) => void) | null = null;
+
+  /** CLIENT: the host ruled. See mapViewer.takePauseRuling. */
+  onPauseRuled: ((on: boolean, by: number, left: number, denied: boolean) => void) | null = null;
 
   /** Is a LAN match's wire attached? The renderer's background pump keys on this: a
    *  networked match must keep simulating when its window is hidden (the authority owes

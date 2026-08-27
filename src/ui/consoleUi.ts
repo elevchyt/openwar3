@@ -132,6 +132,21 @@ export type ConsolePanel = "quests" | "menu" | "allies" | "chat";
 
 const EMPTY_PANELS: ReadonlySet<ConsolePanel> = new Set();
 
+/**
+ * The buttons a PAUSED game takes away.
+ *
+ * Everything on this strip is a thing you do while the match runs, and a stopped match is not
+ * running — so the three panels go grey (the FDF ships the face for it:
+ * `UpperMenuButtonDisabledBackground`, plus a `DisabledText` caption per button, and
+ * `ControlDisabledBackdrop`'s CSS twin stops the click).
+ *
+ * **Menu is not on the list, and must never be.** `GlobalStrings.fdf` keeps
+ * `KEY_RESUME_GAME` next to `KEY_PAUSE_GAME` for one and the same `PauseButton`, which puts
+ * the only way OUT of a pause inside the F10 panel — grey the button that opens it and the
+ * match can never be restarted.
+ */
+const PAUSE_DEAD_PANELS: ReadonlySet<ConsolePanel> = new Set(["quests", "allies", "chat"] as const);
+
 const BUTTONS: Array<{ frame: string; panel: ConsolePanel }> = [
   { frame: "UpperButtonBarQuestsButton", panel: "quests" },
   { frame: "UpperButtonBarMenuButton", panel: "menu" },
@@ -165,6 +180,9 @@ export class ConsoleUi {
   private mounting = false;
   private shown = true;
   private last: ConsoleResources | null = null;
+  /** Is the match stopped? Kept here rather than asked for through `actions`, because it
+   *  changes mid-life and the strip is not rebuilt for it — see `setPaused`. */
+  private paused = false;
 
   /** `skin` is the war3skins.txt section the chrome is decorated from — the console art and
    *  the button atlas are per-RACE (`orc-console-buttonstates2.blp`, `OrcUITile01`). */
@@ -186,6 +204,25 @@ export class ConsoleUi {
     this.shown = on;
     const el = this.screen?.element;
     if (el) el.style.display = on ? "" : "none";
+  }
+
+  /** The match stopped (or started again). Applied in place — a rebuild would decode the
+   *  strip's textures again for a state change that is two CSS classes. */
+  setPaused(on: boolean): void {
+    if (this.paused === on) return;
+    this.paused = on;
+    this.applyEnabled();
+  }
+
+  /** Grey whichever of the four buttons this match and this moment have no use for. Called
+   *  on every BUILD as well as on every pause, because a resize rebuilds every frame from the
+   *  FDF and hands them all back enabled. */
+  private applyEnabled(screen: FdfScreen | null = this.screen): void {
+    if (!screen) return;
+    const dead = this.actions.disabledPanels?.() ?? EMPTY_PANELS;
+    for (const b of BUTTONS) {
+      screen.setEnabled(b.frame, !dead.has(b.panel) && !(this.paused && PAUSE_DEAD_PANELS.has(b.panel)));
+    }
   }
 
   /** Push the current resource figures. Cheap to call every frame: it only writes the four
@@ -284,9 +321,12 @@ export class ConsoleUi {
     if (this.mounting) return;
     this.mounting = true;
     try {
-      const dead = this.actions.disabledPanels?.() ?? EMPTY_PANELS;
+      // Every button binds; which of them ANSWERS is `applyEnabled`'s business. A disabled
+      // frame takes no pointer events at all (`.fdf-disabled`), so a bound handler on a grey
+      // button is unreachable — and binding unconditionally is what lets the pause turn one
+      // off and back on without rebuilding the strip.
       const handlers: Record<string, () => void> = {};
-      for (const b of BUTTONS) if (!dead.has(b.panel)) handlers[b.frame] = () => this.actions.openPanel(b.panel);
+      for (const b of BUTTONS) handlers[b.frame] = () => this.actions.openPanel(b.panel);
       const prev = this.screen;
       const screen = await mountFdfScreen({
         container: this.container,
@@ -311,9 +351,7 @@ export class ConsoleUi {
           this.backing(built);
           this.paint(built);
           this.mountClock(built);
-          // …and grey the buttons this match has no use for. In onBuild, not after the mount:
-          // a resize rebuilds every frame from the FDF and would hand them back enabled.
-          for (const b of BUTTONS) if (dead.has(b.panel)) built.setEnabled(b.frame, false);
+          this.applyEnabled(built);
         },
       });
       prev?.dispose();

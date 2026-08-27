@@ -54,7 +54,7 @@ console.log("a client connects and is handshaked before anything else");
   check("nothing has arrived yet", c.inbox.length, 0);
   await tick();
   check("hello first, then the game list", c.seen().map((m) => m.t), ["hello", "rooms"]);
-  check("and it speaks our protocol", c.last("hello").protocol, 10);
+  check("and it speaks our protocol", c.last("hello").protocol, 11);
 }
 
 console.log("the room forms exactly as it does over a socket");
@@ -544,6 +544,40 @@ console.log("…and the AUTHORITY's own input ends it too, which a client cannot
   check("the count rides in the snapshot", peerLink.latest()?.commands, 3);
   check("a commanded authority ends it even though we issued nothing", peerLink.compare(worldAt(260), seer, [], 0), []);
   check("and it says so", peerLink.comparisonStopped, true);
+}
+
+console.log("the pause is asked for by a client and RULED by the host, in that order");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, 1);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
+  const asked = [];
+  const ruled = [];
+  hostLink.onPauseAsked = (player, on) => asked.push([player, on]);
+  peerLink.onPauseRuled = (m) => ruled.push([m.on, m.by, m.left, m.denied === true]);
+
+  peerLink.askToPause(true);
+  await tick();
+  // The asker is the RELAY's stamp resolved through the seating — never anything the client
+  // put in the payload, exactly as for a command or a chat line.
+  check("the host hears who asked, not who they said they were", asked, [[1, true]]);
+  check("and nothing has been ruled yet", ruled, []);
+
+  // The host's answer goes to the WHOLE room: a pause is the one thing everybody is inside of.
+  hostLink.rulePause({ k: "pause", on: true, by: 1, left: 2 });
+  await tick();
+  check("the ruling reaches the client with the tally", ruled, [[true, 1, 2, false]]);
+
+  // Anybody may lift anybody's pause — including the host lifting a client's.
+  hostLink.rulePause({ k: "pause", on: false, by: 0, left: 3 });
+  await tick();
+  check("and either side may lift it", ruled[1], [false, 0, 3, false]);
+
+  // Out of timeouts: addressed to the asker alone, and it carries the state UNCHANGED so it
+  // reads as news rather than as an instruction to un-pause.
+  hostLink.denyPause(1, { k: "pause", on: false, by: 1, left: 0, denied: true });
+  await tick();
+  check("a refusal is addressed and marked", ruled[2], [false, 1, 0, true]);
 }
 
 console.log("an out-of-order or mis-addressed snapshot is refused, not rendered");

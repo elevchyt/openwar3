@@ -78,6 +78,16 @@ export interface QuestModel {
   mapName(): string;
   /** The revision counter; the open dialog repaints when it moves. */
   revision(): number;
+  /**
+   * The log CLOSED — by its own Done button, or by Escape.
+   *
+   * The dialog has two doors of its own that the host never hears about otherwise, and in
+   * single-player this one **stops the world** (mapViewer.syncPanelPause): closing it from
+   * inside used to hide the panel and leave the match frozen behind it, with the F9 key the
+   * only way to get moving again (and only by opening the log a second time). So every close
+   * says so, and the host recomputes the pause from what is actually on screen.
+   */
+  onClose?(): void;
 }
 
 /** The four visual states a row can be in, keyed to the FDF's own backdrop templates. */
@@ -142,6 +152,7 @@ export class QuestDialogOverlay {
     this.shown = false;
     window.removeEventListener("keydown", this.onEscape, true);
     this.teardown();
+    this.model.onClose?.();
   }
 
   toggle(): boolean {

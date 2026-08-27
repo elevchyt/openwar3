@@ -134,6 +134,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   a colour, with an OBJECT twin (`BoundaryObject`, a black silhouette) that lives in the mdx SD shader. It does NOT
   block line of sight — that was tried and taken back out; see the doc's last section before reaching for it again.
   And the three rects (world bounds ⊃ playable area ⊃ camera bounds) are 512/256 apart and not interchangeable.
+- **The pause:** read [`docs/pause.md`](docs/pause.md) before touching `paused` in
+  `src/render/mapViewer.ts`, the F10 panel's Pause button or the Quest Log's Done button. The
+  pause has FOUR independent owners (a modal panel, the map's own `PauseGame`, a player, a dead
+  match) and folding them into one boolean makes them clobber each other. A stopped world is a
+  STILL PICTURE — every clock that ages the world reads `wdt`, not the frame's `dt` — and the
+  whole feature documents itself in `GlobalStrings.fdf`: `KEY_RESUME_GAME` sits next to
+  `KEY_PAUSE_GAME` for one and the same button, and pauses are counted in TIMEOUTS, three per
+  player, which anybody may lift.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

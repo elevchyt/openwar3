@@ -833,6 +833,22 @@ body.hud-statbar-skinned .hud-hero-fill[data-state="yellow"] { background-image:
 body.hud-statbar-skinned .hud-hero-fill[data-state="red"] { background-image: var(--statbar-red); }
 body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-mana); }
 
+/* The dim over a STOPPED match.
+   Parked at the bottom of #ui (mapViewer.mountHud prepends it), which is the layer above both
+   the map canvas and the world overlays — so it darkens the battlefield, the floating health
+   bars and the combat text together, and every piece of interface built into #ui after it
+   paints over it untouched. No z-index of its own on purpose: DOM order is what keeps it
+   under the console, the panels and their scrims. */
+.pause-veil {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none; /* the panels' own scrims are what make a pause modal */
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+.pause-veil.on { opacity: 1; }
+
 /* F10 Game Menu — centred modal that dims the paused battlefield. */
 .game-menu-overlay {
   position: fixed;

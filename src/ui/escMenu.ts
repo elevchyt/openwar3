@@ -54,8 +54,13 @@ export interface EscMenuActions {
   onReturn(): void;
   /** Leave the match for the main menu — Quit Mission, and the End Game button's point. */
   onEndGame(): void;
-  /** Pause Game: close the menu but leave the world stopped. */
+  /** Pause Game / Resume Game: close the menu and TOGGLE the match's own pause — the one
+   *  button on the panel that does not simply put the world back the way it found it. */
   onPause?(): void;
+  /** Is the match stopped by a PLAYER right now (as opposed to merely by this menu being
+   *  open)? Decides which of the file's two captions the button wears. Absent reads as
+   *  "never paused", which is what a screen with no pause to offer wants. */
+  isPaused?(): boolean;
 }
 
 export class EscMenu {
@@ -208,7 +213,7 @@ export class EscMenu {
         ],
       });
     }
-    children.push(...panel.children);
+    children.push(...panel.children.map((c) => this.captionPause(c)));
 
     return {
       type: "FRAME",
@@ -221,6 +226,31 @@ export class EscMenu {
       ],
       children,
     };
+  }
+
+  /**
+   * **One button, two captions.** `PauseButton` ships `Text "KEY_PAUSE_GAME"`, and
+   * `GlobalStrings.fdf` ships its twin right beside it:
+   *
+   *     KEY_PAUSE_GAME    "Pause Ga|Cffffffffm|Re"   KEY_PAUSE_GAME_SHORTCUT   "m"
+   *     KEY_RESUME_GAME   "Resume Ga|Cffffffffm|Re"  KEY_RESUME_GAME_SHORTCUT  "m"
+   *
+   * Same accelerator, same slot on the panel, no second button anywhere in the FDF — which is
+   * how we know the engine swaps the CAPTION rather than showing another control. So this
+   * rewrites the key on the way through `rootFrame`, leaving the string table to localize it
+   * exactly as it localizes the other one.
+   *
+   * Keyed on the PLAYER's pause, not on "is the world stopped": the menu being open stops it
+   * too in single-player, and a panel whose pause button read "Resume Game" the moment it
+   * appeared would offer to undo something nobody did.
+   */
+  private captionPause(f: FdfFrame): FdfFrame {
+    if (!this.actions.isPaused?.()) return f;
+    if (f.name === "PauseButtonText") {
+      return { ...f, props: f.props.map((p) => (p.key === "Text" ? prop("Text", { s: "KEY_RESUME_GAME", n: null, str: true }) : p)) };
+    }
+    if (!f.children.length) return f;
+    return { ...f, children: f.children.map((c) => this.captionPause(c)) };
   }
 
   /** Every button on every panel. A name that isn't on the panel currently built simply

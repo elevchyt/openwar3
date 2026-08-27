@@ -1208,6 +1208,11 @@ export class GameHud {
     // script still holds control.
     if (!this.driver.controlEnabled()) return;
     if (document.body.classList.contains("game-menu-open")) return; // F10 menu is modal
+    // …and a STOPPED match has no commands to give: control groups, the command card's
+    // letters and the chat key all stand down until it is running again. Set by
+    // mapViewer.syncPauseUi, and deliberately NOT set for a pause that is only a panel being
+    // open — the scrim test below is what covers those.
+    if (document.body.classList.contains("game-paused")) return;
     // So is every other in-game dialog — the Allies and Messaging panels, and a script's own.
     // None of them PAUSE (only F10 does), so the flag above does not cover them; what they all
     // put up is the modal scrim, and that is the thing to ask about. Without this, Enter over
