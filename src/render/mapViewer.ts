@@ -53,6 +53,7 @@ interface CreepSeed {
   drops: Array<{ items: Array<{ id: string; chance: number }> }>;
 }
 import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, isHarvestCode, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
+import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { ModelViewerScene } from "./modelViewer";
 import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
@@ -1938,6 +1939,20 @@ export class MapViewerScene {
     if (config.fog === "explored") this.rts!.exploreAll();
     else if (config.fog === "revealall") this.rts!.setRevealAll(true);
     this.applyRaceCursor();
+    // `MeleeStartingAI` — every computer slot gets Blizzard's own melee AI for the race it
+    // resolved to (issue #119; src/ai/). Only a MELEE match: a campaign chapter's computers
+    // are the mission's, driven by its own triggers, and handing them a build order would
+    // have Illidan's Naga putting up Moon Wells. Difficulty is MELEE_NORMAL because that is
+    // the one the Custom Game screen offers ("Computer (Normal)").
+    if (!this.campaign) {
+      this.rts!.startMeleeAI(
+        config.slots
+          .filter((s) => s.controller === "computer")
+          .map((s) => ({ player: s.id, race: races.get(s.id) ?? "human", startX: s.startX, startY: s.startY })),
+        MELEE_AI_NORMAL,
+        config.seed ?? 1,
+      );
+    }
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     this.mountHud();
     void this.loadSelectionCircles();

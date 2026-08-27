@@ -6,7 +6,7 @@ import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { savedPlayerName } from "./fdfLan";
-import type { Controller, MeleeConfig, SlotConfig } from "./lobby";
+import type { Controller, FogMode, MeleeConfig, SlotConfig } from "./lobby";
 import {
   BLURB_SCROLLBAR_FDF, MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, nudgeY, num,
   setProp, size, str,
@@ -31,6 +31,42 @@ import {
 
 const MAP_LIST_FDF = "UI\\FrameDef\\Glue\\MapListBox.fdf";
 const MAP_INFO_FDF = "UI\\FrameDef\\Glue\\MapInfoPane.fdf";
+const ADVANCED_OPTIONS_FDF = "UI\\FrameDef\\Glue\\AdvancedOptionsPane.fdf";
+
+/**
+ * The right-hand column's two faces.
+ *
+ * Skirmish.fdf declares MapInfoPanel and AdvancedOptionsPanel as two frames in the same
+ * place, each with a button that names the OTHER one: MapInfoPanel's button reads
+ * `KEY_ADVANCED_OPTIONS` and AdvancedOptionsPanel's reads `KEY_MAP_INFO`. So the "Advanced
+ * Options" button is not a button on the options screen — it IS the swap, and the screen has
+ * no third state. (Their frame names say the opposite of what they show, which is the one
+ * thing to keep straight while reading this file: `MapInfoButton` is the button ON the map
+ * info panel, and the word on it is "Advanced Options".)
+ */
+const PANEL_FACES = { info: "MapInfoPanel", advanced: "AdvancedOptionsPanel" } as const;
+
+/** Map Visibility, as `AdvancedOptionsPane.fdf`'s own `MapVisibilityPopupMenuMenu` lists it —
+ *  four `MenuItem`s whose labels are GlobalStrings keys. The value each one carries into the
+ *  match is a `FogMode`; see `visibilityFog`. */
+const VISIBILITY_ITEMS = ["DEFAULT", "HIDE_TERRAIN", "MAP_EXPLORED", "ALWAYS_VISIBLE"] as const;
+type Visibility = (typeof VISIBILITY_ITEMS)[number];
+
+/**
+ * What each visibility choice means to the match.
+ *
+ * `HIDE_TERRAIN` and `DEFAULT` land on the same `FogMode` because we model one unexplored
+ * state, not two: WC3's Hide Terrain additionally blanks the terrain in the minimap preview
+ * and the loading screen, which is a presentation difference on ground that is black either
+ * way while you play.
+ */
+function visibilityFog(v: Visibility): FogMode {
+  switch (v) {
+    case "MAP_EXPLORED": return "explored";
+    case "ALWAYS_VISIBLE": return "revealall";
+    default: return "unexplored";
+  }
+}
 
 export interface SkirmishHandlers {
   onStart: (map: File, info: MapInfo, config: MeleeConfig) => void;
@@ -64,6 +100,46 @@ export async function mountSkirmish(
   let groups: Group[] = []; // the player rows, under the map's own force headings
   let maxSlots = 0;
   let localIndex = 0; // which row is YOU — the first slot the map lets a human take
+  /**
+   * Which of the right-hand column's two faces is up — the array `mountFdfScreen` reads its
+   * `hidden` set out of on every build, so swapping its contents and asking for a relayout IS
+   * the panel swap. (It has to be the same array object: `build()` re-reads `opts.hidden`, and
+   * a fresh one would never be seen.)
+   */
+  const hiddenPanels: string[] = [PANEL_FACES.advanced];
+  /** The FDF library, captured on build so the panel's own MenuItem labels resolve through
+   *  GlobalStrings ("Always Visible", "Map Explored") rather than being re-typed here. */
+  let lib: FdfLibrary | null = null;
+  /**
+   * The Advanced Options state.
+   *
+   * Only `visibility` reaches the match. The other five are the real controls off
+   * `AdvancedOptionsPane.fdf` and they are drawn greyed, because each needs something the
+   * match setup does not have yet rather than a line of wiring here:
+   *
+   *  · Lock Teams / Teams Together — the first is a lobby rule about who may change a team
+   *    menu after the host has set it (there is no second person on this screen to stop), the
+   *    second re-seats allied players onto ADJACENT start locations, and a slot takes the
+   *    map's own start location by index (see `toConfig`).
+   *  · Full Shared Unit Control — `AllianceType.SharedControl` between team-mates at seed
+   *    time. `MeleeConfig.forces` carries `allied` and `sharedVision` and nothing else, so
+   *    this is a change to the alliance seeding rather than to the screen.
+   *  · Random Races / Random Hero — both are `IsMapFlagSet` flags that Blizzard.j's melee
+   *    initialisation reads (`MAP_RANDOM_HERO` swaps the free-hero token for a rolled hero),
+   *    and that native answers false to everything today (jass/natives/melee.ts).
+   *  · Observers — there is no observer seat in the lobby at all.
+   */
+  const advanced = {
+    lockTeams: false,
+    teamsTogether: false,
+    sharedControl: false,
+    randomRaces: false,
+    randomHero: false,
+    /** Opens on Map Explored, which is what this screen has always started a match with —
+     *  the whole map as grey terrain memory, live fog still hiding enemy movement. DEFAULT is
+     *  a real fourth choice here (WC3's normal pitch-black fog), not a rename of that one. */
+    visibility: "MAP_EXPLORED" as Visibility,
+  };
 
   /** A map was picked (or its folder finished reading): reseat the player rows on it. */
   browser.onChange = () => {
@@ -99,14 +175,14 @@ export async function mountSkirmish(
     vfs,
     fdfPath: "UI\\FrameDef\\Glue\\Skirmish.fdf",
     rootFrame: "Skirmish",
-    includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, PLAYER_SLOT_FDF, BLURB_SCROLLBAR_FDF],
-    // The engine composes this screen from four files; so do we.
-    buildRoot: (lib) => { browser.useStrings(lib); return buildSkirmishRoot(lib, groups); },
-    // "Advanced Options" is one of two mutually exclusive panels in the FDF (the other
-    // shows the map info); the map info is the one on screen, so its twin stays hidden.
-    hidden: ["AdvancedOptionsPanel"],
+    includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, ADVANCED_OPTIONS_FDF, PLAYER_SLOT_FDF, BLURB_SCROLLBAR_FDF],
+    // The engine composes this screen from five files; so do we.
+    buildRoot: (l) => { lib = l; browser.useStrings(l); return buildSkirmishRoot(l, groups); },
+    // Advanced Options and the map info are one column with two faces, and exactly one of
+    // them is on screen at a time (see PANEL_FACES). `hiddenPanels` is which.
+    hidden: hiddenPanels,
     dropdownButtons: dropdownButtonNames(),
-    panels: ["GameSettingsLabel", "GameSettingsPanel", "TeamSetupPanel", "MapInfoPanel", "PlayGameBackdrop", "CancelBackdrop"],
+    panels: ["GameSettingsLabel", "GameSettingsPanel", "TeamSetupPanel", "MapInfoPanel", "AdvancedOptionsPanel", "PlayGameBackdrop", "CancelBackdrop"],
     // The two panels that hold what the screen is FOR — the map list, and the details of the
     // map picked out of it — are not part of the furniture the screen arrives with. They come
     // in after the chrome has landed, so the screen reads as filling itself in.
@@ -114,17 +190,29 @@ export async function mountSkirmish(
     // the pane AND the Advanced Options button under it, and they arrive together.
     // The "Game Settings" title comes with them — it names the map list, so it belongs to
     // what the screen fills in rather than to the chrome the screen arrives wearing.
-    latePanels: ["GameSettingsLabel", "GameSettingsPanel", "MapInfoPanel"],
+    latePanels: ["GameSettingsLabel", "GameSettingsPanel", "MapInfoPanel", "AdvancedOptionsPanel"],
     handlers: {
       PlayGameButton: () => start(),
       CancelButton: h.onCancel,
+      // The two buttons that swap the column over. Each lives on the panel it is leaving and
+      // is captioned with the one it goes to — MapInfoButton reads "Advanced Options".
+      MapInfoButton: () => showFace("advanced"),
+      AdvancedOptionsButton: () => showFace("info"),
     },
     onBuild: (s) => fill(s),
   });
 
+  /** Swap the right-hand column's face. The panel is a frame the build either renders or
+   *  skips, so this is one line of state and a rebuild. */
+  function showFace(face: keyof typeof PANEL_FACES): void {
+    hiddenPanels.length = 0;
+    hiddenPanels.push(face === "advanced" ? PANEL_FACES.info : PANEL_FACES.advanced);
+    screen.relayout();
+  }
+
   function start(): void {
     const picked = browser.selected;
-    if (picked) h.onStart(picked.file, picked.info, toConfig(slots, picked.info));
+    if (picked) h.onStart(picked.file, picked.info, toConfig(slots, picked.info, visibilityFog(advanced.visibility)));
   }
 
   // Leaving the screen must stop the browser's background read — it walks the whole install.
@@ -141,9 +229,10 @@ export async function mountSkirmish(
     const picked = browser.selected;
     // Nothing picked yet: no map to start.
     s.setEnabled("PlayGameButton", !!picked);
-    // Advanced Options (handicaps, random races, tournament rules…) is a screen of its own
-    // that we don't have. Grey it out rather than leave a button that answers to nothing.
-    s.setEnabled("MapInfoButton", false);
+    // …and nothing to configure either: the options are the MATCH's, so the button that
+    // opens them is dead until there is a map to play.
+    s.setEnabled("MapInfoButton", !!picked);
+    fillAdvanced(s);
     if (!picked) return;
 
     // The map names its own forces ("Forest Task Force", "Monolithic Creeps"); the frames are
@@ -209,6 +298,48 @@ export async function mountSkirmish(
       }
     });
   }
+
+  /**
+   * The Advanced Options pane — the five checkboxes, the two menus and the button back.
+   *
+   * Called on every build whether the pane is up or not: when it is hidden none of these
+   * frames exist and every lookup answers null, which is exactly the right no-op.
+   */
+  function fillAdvanced(s: FdfScreen): void {
+    const text = (key: string): string => lib?.string(key) ?? key;
+
+    // The five that answer to nothing yet — see `advanced` for what each one is waiting on.
+    // Drawn with the state they would carry so the pane reads as a real screen, and greyed so
+    // it does not lie about being live.
+    const dead: Array<[string, boolean]> = [
+      ["LockTeamsCheckBox", advanced.lockTeams],
+      ["TeamsTogetherCheckBox", advanced.teamsTogether],
+      ["AdvSharedControlCheckBox", advanced.sharedControl],
+      ["RandomRacesCheckBox", advanced.randomRaces],
+      ["RandomHeroCheckBox", advanced.randomHero],
+    ];
+    for (const [name, value] of dead) {
+      const box = s.checkBox(name);
+      if (!box) continue;
+      box.checked = value;
+      box.setEnabled(false);
+    }
+    const observers = s.popup("ObserversMenu");
+    if (observers) {
+      observers.setOptions([{ value: "NO_OBSERVERS", label: text("NO_OBSERVERS") }]);
+      observers.value = "NO_OBSERVERS";
+      observers.setEnabled(false);
+    }
+
+    // …and the one that does. Its four items are the FDF's own MenuItem list, under the
+    // GlobalStrings names the game prints them by.
+    const visibility = s.popup("MapVisibilityMenu");
+    if (visibility) {
+      visibility.setOptions(VISIBILITY_ITEMS.map((v) => ({ value: v, label: text(v) })));
+      visibility.value = advanced.visibility;
+      visibility.onChange = (v) => { advanced.visibility = v as Visibility; };
+    }
+  }
 }
 
 // --- composing the screen out of the game's templates ------------------------------
@@ -230,6 +361,14 @@ function buildSkirmishRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   // want it; the button still sits clear underneath).
   if (pane) adopt(root, "MapInfoPaneContainer", [layoutInfoPane(pane, { w: 0.234375, h: 0.2875, descOverhang: 0.014, lib })]);
 
+  // …and the same container's OTHER face, out of AdvancedOptionsPane.fdf. Like the map list
+  // it is a bare `FRAME` whose children anchor to it, so it takes the container's own box.
+  const advanced = lib.resolveRoot("AdvancedOptionsPane");
+  if (advanced) {
+    setProp(advanced, "SetAllPoints", []);
+    adopt(root, "AdvancedOptionsPaneContainer", [advanced]);
+  }
+
   // The player rows, stacked down the team-setup frame under the map's own force headings
   // (ui/playerSlots.ts — the LAN game lobby builds the same rows out of the same file).
   adopt(root, "TeamSetupContainer", buildSlotRows(lib, groups, "TeamSetupContainer"));
@@ -244,8 +383,12 @@ function buildSkirmishRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   //  · Start Game / Cancel grow to fill their slot — the FDF's 0.24-wide button base is
   //    narrower than the slot the chrome leaves for it. Both grow together, keeping the
   //    file's own base:button ratio (0.24 : 0.168), so the ornate ends still frame the button.
+  //    …and its twin the same way, since the two faces of the column have to land on the
+  //    same spot for the swap to read as a swap rather than a jump.
   nudgeX(findFrame(root, "MapInfoPaneContainer"), -MAP_INFO_NUDGE);
   nudgeX(findFrame(root, "MapInfoBackdrop"), -MAP_INFO_NUDGE);
+  nudgeX(findFrame(root, "AdvancedOptionsPaneContainer"), -MAP_INFO_NUDGE);
+  nudgeX(findFrame(root, "AdvancedOptionsBackdrop"), -MAP_INFO_NUDGE);
   // …and the map list rides up off the panel's bottom rail, which its lower border was
   // resting on, to sit centred between the two.
   nudgeY(findFrame(root, "MapListContainer"), MAP_LIST_NUDGE);
@@ -297,7 +440,7 @@ function renameFrame(root: FdfFrame, from: string, to: string): void {
 
 /** The lobby config the melee initializer consumes (ui/lobby.ts). Start locations come
  *  from the MAP — the lobby only seats players, it doesn't place them. */
-function toConfig(slots: Slot[], info: MapInfo): MeleeConfig {
+function toConfig(slots: Slot[], info: MapInfo, fog: FogMode): MeleeConfig {
   const playing: SlotConfig[] = slots
     .filter((s) => s.controller === "user" || s.controller === "computer")
     .map((s) => {
@@ -327,7 +470,10 @@ function toConfig(slots: Slot[], info: MapInfo): MeleeConfig {
   // none and the seeding falls back to the lobby's own promise (MapInfo.ForceGrants).
   return {
     slots: playing,
-    fog: "explored",
+    // Advanced Options → Visibility. Was hardcoded to "explored" while there was no screen
+    // to say otherwise; the pane's own default still opens on Map Explored, so a match
+    // started without touching it plays exactly as it did before.
+    fog,
     forces: info.forces.map((f) => ({ allied: f.allied, sharedVision: f.sharedVision })),
     seed: 1 + Math.floor(Math.random() * 2147483645),
   };

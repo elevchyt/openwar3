@@ -244,6 +244,21 @@ export class CreepCamps {
    * viewpoint can currently SEE gets no marker — the creep speaks for itself through `dots()`,
    * and the marker stands in for camps you know are there but cannot presently see.
    */
+  /**
+   * Every camp on the map, clustered — no viewpoint, no fog.
+   *
+   * This is what the melee AI picks its creeping targets out of (`GetCreepCamp(min, max,
+   * flyers_ok)`, src/ai/). Deliberately NOT the same question `markers` answers: that one is
+   * "what may this player be shown", and the AI is on the authority's side of the fog, where
+   * the engine's own creep-camp table always was. Members that have died are left in the list
+   * — callers filter them, exactly as `markers` does, because a camp is gone when its last
+   * creep is and the clustering itself never changes.
+   */
+  all(): ReadonlyArray<{ x: number; y: number; level: number; members: number[] }> {
+    this.camps ??= this.build();
+    return this.camps;
+  }
+
   markers(vp: Viewpoint): Array<{ x: number; y: number; level: number }> {
     if (!vp.knowsWholeMap) return [];
     this.camps ??= this.build();

@@ -144,6 +144,19 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   player, which anybody may lift. `deadPanels()` is the ONE answer to "which console buttons
   are dead now" that both the strip's greying and the F-keys ask, and no key ever swaps one
   modal for another — a panel's own key closes it, every other key does nothing.
+- **Melee AI:** read [`docs/melee-ai.md`](docs/melee-ai.md) before touching anything in
+  [`src/ai/`](src/ai/), `MeleeStartingAI`, or a computer player's behaviour. WC3's computer
+  players are Blizzard's own JASS — `Scripts\human.ai` / `orc.ai` / `elf.ai` / `undead.ai` on
+  the `common.ai` library, all four in the install — and the four race files here are ported
+  from them function for function, so **a number in them is the game's** unless a comment says
+  otherwise. The BUILD ARRAY is the whole strategy layer and reads backwards until you know it:
+  `SetBuildUnit(n, X)` means "have at least n of X" (counting queues and orders in flight, not
+  just what is standing), the list is a PRIORITY LADDER whose running gold budget stops dead at
+  the first row it cannot afford, and `TownCount` folds a Castle into "a Town Hall" — which is
+  also why `SetBuildUnit(1, KEEP)` means *upgrade the hall* and never *found a Keep*. Every
+  decision leaves through `RtsController.execute`, so a computer is gated exactly as your own
+  click is and cannot cheat. A campaign chapter gets no melee AI: its computers are the
+  mission's.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

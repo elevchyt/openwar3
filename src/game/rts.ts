@@ -42,7 +42,8 @@ import { MELEE, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
 import { type ItemRegistry } from "../data/items";
-import { workerProfileFor, depotRoleFor } from "../data/races";
+import { workerProfileFor, depotRoleFor, type PlayableRace } from "../data/races";
+import { MeleeAi } from "../ai";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -738,6 +739,41 @@ export class RtsController {
   setAiPlayers(players: Iterable<number>): void {
     this.aiPlayers = new Set(players);
   }
+
+  /**
+   * Put Blizzard's own melee AI behind the lobby's computer slots (issue #119; src/ai/).
+   *
+   * `MeleeStartingAI` is where the real game does this — the map's own Melee Initialization
+   * trigger calls it, and the engine loads `Scripts\<race>.ai` for each computer. Ours is
+   * called from the same place for the same slots (see MapViewerScene.beginMatch); the
+   * native stays a no-op, because what it would have loaded is a JASS file we do not run.
+   *
+   * AUTHORITY-SIDE ONLY, by construction: `tick` drives it inside the branch a frozen client
+   * never enters, and every decision leaves through `execute`, which is the same door and the
+   * same judgement a human player's click gets. A computer cannot cheat here because there is
+   * no route by which it could.
+   */
+  startMeleeAI(
+    slots: ReadonlyArray<{ player: number; race: PlayableRace; startX: number; startY: number }>,
+    difficulty: number,
+    seed: number,
+  ): void {
+    // Built here rather than as a field: `this.sim` is assigned in the constructor BODY, so a
+    // field initializer that reached for it would capture `undefined`.
+    this.meleeAi = new MeleeAi({
+      world: this.sim,
+      registry: this.registry,
+      tech: this.tech,
+      upgrades: this.upgrades,
+      execute: (player, cmd) => this.execute(player, cmd),
+      footprintOf: (tex) => this.footprintOf(tex),
+      coAllied: (a, b) => this.alliances.coAllied(a, b),
+      creepCamps: () => this.creepCampView.all(),
+    });
+    for (const s of slots) this.meleeAi.add(s.player, s.race, difficulty, s.startX, s.startY, seed);
+  }
+
+  private meleeAi: MeleeAi | null = null;
 
   /** The owner-line label for a player slot — the lobby name, or a generic
    *  "Player N" fallback so an un-seeded slot still reads sensibly. */
@@ -2925,6 +2961,12 @@ export class RtsController {
       this.tickPoseLerp(dt);
       this.tickClientProjectiles(dt);
     } else {
+      // The computer players think BEFORE the step, so an order given this tick is acted on
+      // in it rather than a frame late. Only here: this branch is the authority's, and a
+      // frozen client must never run a second, divergent copy of the AI (docs/multiplayer.md).
+      // Gated on seeding, because until the .doo has settled there are no units to command
+      // and no gold mine for `MeleeFindNearestMine` to have found.
+      if (this.meleeAi?.active && this.seeded) this.meleeAi.tick(dt);
       this.sim.tick(dt);
       // The spell/ability PRESENTATION drains — ONE consumer of the sim's queues (this),
       // two audiences: this machine's own renderer (via the drainFx* methods the renderer
