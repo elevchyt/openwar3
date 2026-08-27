@@ -20,10 +20,8 @@ import { ArmorType, AttackType } from "./enums";
 // govern exist, so a stray constant never reads as "implemented" when it isn't:
 //   • ability-system toggles — the ~20 `CanDeactivate*`, the `Illusions*` block,
 //     `MagicImmunesResist*`, the `Drain*`/`*Cluster`/`Morph*` behaviour flags;
-//   • hero altar/tavern economics — `HeroMaxAwakenCost*`, `Awaken*Factor`,
-//     `HeroRevive*`/`HeroAwaken*` start-life/mana factors (no altar revival yet);
 //   • misc combat flags — `DefendDeflection`, `AbolishMagicDispelSmart`,
-//     `UnitSaleAggroRange`, `RelativeUpgradeCost`, `DisplayEnemyInventory`.
+//     `UnitSaleAggroRange`, `RelativeUpgradeCost`.
 // Everything the sim, renderer, or HUD reads should live here rather than as a
 // literal in place.
 
@@ -178,9 +176,43 @@ export const MISC_GAME = {
   HeroMaxReviveTime: 150,
   ReviveBaseFactor: 0.4,
   ReviveLevelFactor: 0.1,
+  ReviveBaseLumberFactor: 0,
+  ReviveLumberLevelFactor: 0,
   ReviveMaxFactor: 4.0,
   ReviveTimeFactor: 0.65,
   ReviveMaxTimeFactor: 2.0,
+
+  // …and the TAVERN's, which is the same arithmetic at twice the rate and no timer at all
+  // ("Awaken"). The two ladders are what make the choice a choice: the altar is cheap and
+  // slow, the tavern is instant and costs about double — and charges LUMBER, which the altar
+  // never does (ReviveBaseLumberFactor is 0 and the altar's lumber cap is 0 with it).
+  HeroMaxAwakenCostGold: 1400,
+  HeroMaxAwakenCostLumber: 350,
+  AwakenBaseFactor: 0.8,
+  AwakenLevelFactor: 0.2,
+  AwakenBaseLumberFactor: 0.8,
+  AwakenLumberLevelFactor: 0.2,
+  AwakenMaxFactor: 8.0,
+
+  // What a hero comes BACK with. `*ManaStart` scales the unit type's own starting mana
+  // (`manaN`) and `*ManaFactor` its maximum, so an altar hero returns at full health and its
+  // opening 100 mana while a tavern one returns at half health with none — which is exactly
+  // how the classic manual states it ("restored to full hit points and 100 Mana" / "brought
+  // back to life with 0 mana and 50% health").
+  HeroReviveManaStart: 1,
+  HeroReviveManaFactor: 0.0,
+  HeroReviveLifeFactor: 1.0,
+  HeroAwakenManaStart: 0,
+  HeroAwakenManaFactor: 0.0,
+  HeroAwakenLifeFactor: 0.5,
+
+  /** Whether an ENEMY building's status — its construction timer and its production queue —
+   *  is shown when you click it. Zero, and it is the whole of the rule: what a structure is
+   *  making, and how many seconds it has left, is the owner's business. Its neighbour
+   *  `DisplayEnemyInventory` is 1, which is the same question answered the other way for a
+   *  hero's items, and the pair is why neither is a guess. */
+  DisplayBuildingStatus: 0,
+  DisplayEnemyInventory: 1,
 } as const;
 
 /** `Units\MiscData.txt` [Misc]. Timing, ranges, day/night, decay, gold mines. */
@@ -576,6 +608,80 @@ function expandLevelTable(
     else out.push(a * out[level - 1] + b * level + c);
   }
   return out;
+}
+
+/**
+ * Where a fallen hero comes back, and what it costs to bring it — the two ladders
+ * `Units\MiscGame.txt` writes out in its own comment, in its own words:
+ *
+ *     goldRevivalCost   = originalCost * (ReviveBaseFactor + (ReviveLevelFactor*(level-1)))
+ *         but not exceeding originalCost * ReviveMaxFactor
+ *     lumberRevivalCost = originalCost * (ReviveBaseLumberFactor + (ReviveLumberLevelFactor*(level-1)))
+ *         but not exceeding originalCost * ReviveMaxFactor
+ *     revivalTime       = originalTime * level * ReviveTimeFactor
+ *         but not exceeding originalTime * ReviveMaxTimeFactor
+ *
+ * …plus the flat `HeroMaxRevive*` ceilings on top. Computed rather than transcribed, so the
+ * numbers cannot drift from the file: they come out as the reference states them, which is
+ * how the reading of the file was CHECKED. An Archmage (425g / 100l / 55s) at level 10 revives
+ * for 425 × 1.3 = **552** gold and 0 lumber in 55 × 2.0 = **110** seconds — the classic
+ * manual's "maximum cost … 550 Gold and 0 Lumber at an Altar" and "revive time is capped at
+ * 110 seconds" — and awakens at a Tavern for 425 × 2.6 = **1105** gold and 100 × 2.6 = **260**
+ * lumber, which is that page's "1105 Gold 260 Lumber" to the coin.
+ *
+ * `mode` is which building is doing it: an **altar** revives (slow, cheap, full health), a
+ * **tavern** awakens (instant, dear, half health and no mana). The two differ only in which
+ * set of constants they read, which is why one function serves both.
+ */
+export type ReviveMode = "altar" | "tavern";
+
+export function heroReviveCost(
+  mode: ReviveMode,
+  goldCost: number,
+  lumberCost: number,
+  buildTime: number,
+  level: number,
+): { gold: number; lumber: number; time: number } {
+  const lv = Math.max(1, level) - 1;
+  if (mode === "tavern") {
+    const factor = Math.min(MISC_GAME.AwakenBaseFactor + MISC_GAME.AwakenLevelFactor * lv, MISC_GAME.AwakenMaxFactor);
+    const lumberFactor = Math.min(MISC_GAME.AwakenBaseLumberFactor + MISC_GAME.AwakenLumberLevelFactor * lv, MISC_GAME.AwakenMaxFactor);
+    return {
+      gold: Math.min(Math.floor(goldCost * factor), MISC_GAME.HeroMaxAwakenCostGold),
+      lumber: Math.min(Math.floor(lumberCost * lumberFactor), MISC_GAME.HeroMaxAwakenCostLumber),
+      time: 0, // "you can also use it to INSTANTLY revive your Heroes"
+    };
+  }
+  const factor = Math.min(MISC_GAME.ReviveBaseFactor + MISC_GAME.ReviveLevelFactor * lv, MISC_GAME.ReviveMaxFactor);
+  const lumberFactor = Math.min(MISC_GAME.ReviveBaseLumberFactor + MISC_GAME.ReviveLumberLevelFactor * lv, MISC_GAME.ReviveMaxFactor);
+  // The TIME ladder is the one that reads differently from the two cost ones: it is
+  // `level * ReviveTimeFactor`, not `base + step*(level-1)`, so it starts at 0.65 of the
+  // build time rather than at a base factor and reaches its 2.0 ceiling at level 4.
+  const timeFactor = Math.min(Math.max(1, level) * MISC_GAME.ReviveTimeFactor, MISC_GAME.ReviveMaxTimeFactor);
+  return {
+    gold: Math.min(Math.floor(goldCost * factor), MISC_GAME.HeroMaxReviveCostGold),
+    lumber: Math.min(Math.floor(lumberCost * lumberFactor), MISC_GAME.HeroMaxReviveCostLumber),
+    time: Math.min(buildTime * timeFactor, MISC_GAME.HeroMaxReviveTime),
+  };
+}
+
+/** The health and mana a revived hero stands up with. `manaStart` is the unit type's own
+ *  `manaN` (its opening pool), which is what makes an altar hero's 100 mana the game's
+ *  number rather than ours — see the constants. */
+export function heroReviveVitals(
+  mode: ReviveMode,
+  maxHp: number,
+  maxMana: number,
+  manaStart: number,
+): { hp: number; mana: number } {
+  const tavern = mode === "tavern";
+  const life = tavern ? MISC_GAME.HeroAwakenLifeFactor : MISC_GAME.HeroReviveLifeFactor;
+  const start = tavern ? MISC_GAME.HeroAwakenManaStart : MISC_GAME.HeroReviveManaStart;
+  const factor = tavern ? MISC_GAME.HeroAwakenManaFactor : MISC_GAME.HeroReviveManaFactor;
+  return {
+    hp: Math.max(1, Math.round(maxHp * life)),
+    mana: Math.min(maxMana, Math.round(manaStart * start + maxMana * factor)),
+  };
 }
 
 /** XP a kill grants, indexed by the VICTIM's level. Normal units follow GrantNormalXP

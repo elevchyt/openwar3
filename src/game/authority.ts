@@ -6,7 +6,7 @@ import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
 import type { Command } from "./commands";
-import { MELEE, MISC_GAME } from "../data/gameplayConstants";
+import { MELEE, MISC_GAME, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
 
 // The authority half of the bridge (docs/multiplayer.md Phase B): the questions whose
 // answers are THE GAME'S, not one machine's view of it — who owns what, what a player can
@@ -300,6 +300,11 @@ export class Authority {
     for (const t of this.sim.pendingTrained()) {
       if (t.owner === player && this.registry.get(t.unitId)?.isHero) set.add(t.unitId);
     }
+    // …and the DEAD. A hero lying on the altar roster is still yours and still one of your
+    // three: WC3 offers you its revive button, never a second copy of it at full price. This
+    // is what turns "train Archmage" back into "revive Archmage" on the card, and what stops
+    // the hero cap being reset by dying.
+    for (const f of this.sim.fallen.values()) if (f.owner === player) set.add(f.typeId);
     return set;
   }
 
@@ -629,6 +634,47 @@ export class Authority {
         // requirement tier) has no other way to tell whose queued hero this is.
         return this.sim.enqueueTrain(cmd.buildingId, cmd.unitId, hireTime, freeHero, player);
       }
+      case "revive": {
+        // Ownership, or a SHOP you may trade at — a Tavern is Neutral Passive and nobody owns
+        // the building your hero wakes up in, exactly as nobody owns the one you hired her
+        // from. Same carve-out, same reason (see `train`).
+        const b = this.sim.units.get(cmd.buildingId);
+        if (!b?.building || b.hp <= 0) return false;
+        const tavern = this.sim.isShopUnit(cmd.buildingId);
+        if (b.owner !== player && !tavern) return false;
+        if (b.building.constructionLeft > 0) return false; // a half-built altar revives nothing
+        const t = this.tech.get(b.typeId);
+        const f = this.sim.fallen.get(cmd.heroId);
+        if (!f || f.owner !== player) return false; // not yours, or not dead
+        if (f.revivingAt) return false; // already on its way back — two altars must not both pay
+        // WHICH heroes this building may bring back. `Reviveat` is the per-hero column that
+        // would say so outright and every stock hero leaves it empty, so the engine's default
+        // is the rule, and it is two rules:
+        //
+        //   · an ALTAR (`Revive=1`) takes its OWN race's heroes — expressed as the ones it
+        //     TRAINS, which for `[halt]` is exactly Hamg/Hmkg/Hpal/Hblm. A Human altar does
+        //     not raise the Naga Sea Witch you hired from a Tavern.
+        //   · a TAVERN takes anything of yours. The classic manual is explicit that this is
+        //     not limited to its own shelf: "you can also use it to instantly revive your
+        //     Heroes (neutral and race specific ones)".
+        if (!(tavern ? t.sellunits.length > 0 : t.revive && t.trains.includes(f.typeId))) return false;
+        if (this.sim.queueFull(cmd.buildingId)) return false; // before charging
+        const def = this.registry.get(f.typeId);
+        if (!def) return false;
+        // Everything below is DERIVED, never sent: which ladder (altar or tavern), and the
+        // gold/lumber/seconds that ladder puts on a hero of this level. See heroReviveCost.
+        const mode: ReviveMode = tavern ? "tavern" : "altar";
+        const cost = heroReviveCost(mode, def.goldCost, def.lumberCost, def.buildTime || 1, f.level);
+        const stash = this.sim.stashOf(player);
+        if (stash.gold < cost.gold || stash.lumber < cost.lumber) return false;
+        // A hero costs food again on the way back — it stopped costing any the moment it
+        // died, and WC3 takes it when the job STARTS, like gold and like training.
+        const food = this.foodFor(player);
+        if (food.used + def.foodUsed > food.made) return false;
+        stash.gold -= cost.gold;
+        stash.lumber -= cost.lumber;
+        return this.sim.enqueueRevive(cmd.buildingId, cmd.heroId, cost.time, tavern ? player : undefined);
+      }
       case "research": {
         // Ownership was never checked at this call site at all — the command card was, in
         // effect, the check, because you are only ever shown your own building's card.
@@ -703,7 +749,8 @@ export class Authority {
         // cancel it. Checked against the job that is actually there, before removing it.
         const slot = cmd.index < 0 ? b.building.queue[b.building.queue.length - 1] : b.building.queue[cmd.index];
         if (!slot) return false;
-        const owns = b.owner === player || (slot.kind === "unit" && slot.buyer === player);
+        const owns = b.owner === player
+          || ((slot.kind === "unit" || slot.kind === "revive") && slot.buyer === player);
         if (!owns) return false;
         const job = cmd.index < 0
           ? this.sim.cancelLastTrain(cmd.buildingId)
@@ -718,6 +765,21 @@ export class Authority {
           const c = this.upgrades.cost(job.unitId, job.level);
           stash.gold += Math.round(c.gold * MISC_GAME.ResearchRefundRate);
           stash.lumber += Math.round(c.lumber * MISC_GAME.ResearchRefundRate);
+          return true;
+        }
+        // A cancelled REVIVAL comes back in full (ReviveRefundRate = 1.0) — and off the same
+        // ladder that charged it, because what was paid was the LEVEL's price and the hero's
+        // unit-type cost is a different (smaller) number. The record is still on the roster:
+        // `dropJob` only cleared its `revivingAt`, so its level is still there to price.
+        if (job.kind === "revive") {
+          const f = this.sim.fallen.get(job.heroId);
+          const rd = this.registry.get(job.unitId);
+          if (f && rd) {
+            const mode: ReviveMode = this.sim.isShopUnit(cmd.buildingId) ? "tavern" : "altar";
+            const c = heroReviveCost(mode, rd.goldCost, rd.lumberCost, rd.buildTime || 1, f.level);
+            stash.gold += Math.round(c.gold * MISC_GAME.ReviveRefundRate);
+            stash.lumber += Math.round(c.lumber * MISC_GAME.ReviveRefundRate);
+          }
           return true;
         }
         // The melee free first hero cost nothing, so it refunds nothing — otherwise queueing

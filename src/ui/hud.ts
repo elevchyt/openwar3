@@ -893,6 +893,8 @@ export class GameHud {
     btn: HTMLButtonElement;
     fx: HTMLCanvasElement;
     points: HTMLDivElement;
+    bars: HTMLDivElement;
+    hp: HTMLDivElement;
     mana: HTMLDivElement;
     hpFill: HTMLDivElement;
     manaFill: HTMLDivElement;
@@ -1867,7 +1869,7 @@ export class GameHud {
       bars.append(hp, mana);
       slot.append(btn, bars);
       bar.appendChild(slot);
-      this.heroSlots.push({ slot, btn, fx, points, mana, hpFill, manaFill });
+      this.heroSlots.push({ slot, btn, fx, points, bars, hp, mana, hpFill, manaFill });
       // A click selects that hero, a double-click also jumps the camera to it — the mouse
       // half of F1/F2/F3, which count in this same order. Bound through `onPress` so the
       // button sinks under the press exactly as a command-card button does.
@@ -1921,17 +1923,35 @@ export class GameHud {
         continue;
       }
       s.slot.hidden = false;
-      const url = h.icon ? this.driver.blpUrl(h.icon) : null;
+      // A DEAD hero keeps its slot and wears the icon's own greyed twin — the same texture
+      // swap a command button makes, and for the same reason (see disabledIconPath): the twin
+      // is desaturated AND frameless, and losing the gold frame is most of what reads as
+      // "you can't press this". Falls back to the live art for the icons that ship no twin.
+      const art = h.dead ? (h.disabledIcon ?? h.icon) : h.icon;
+      const url = art ? this.driver.blpUrl(art) : null;
       s.btn.style.backgroundImage = url ? `url(${url})` : "";
-      const hpFrac = Math.max(0, Math.min(1, h.hpFrac));
-      s.hpFill.style.width = `${hpFrac * 100}%`;
-      // WC3 tints every status bar green→yellow→red by fraction, the hero bar's included.
-      s.hpFill.dataset.state = hpFrac > 0.6 ? "green" : hpFrac > 0.3 ? "yellow" : "red";
-      s.mana.hidden = h.manaFrac < 0; // a hero with no pool shows no mana bar
-      s.manaFill.style.width = `${Math.max(0, Math.min(1, h.manaFrac)) * 100}%`;
+      s.slot.dataset.dead = h.dead ? "1" : "";
+      // Its bars are gone with it — the whole CONTAINER, not the two bars inside it. A corpse
+      // has no health to report (a bar sitting at zero reads as a hero about to die rather
+      // than one already dead), and the frame the bars sit in is painted, so hiding only its
+      // contents leaves an empty black box hanging under the portrait.
+      s.bars.hidden = h.dead;
+      s.hp.hidden = h.dead;
+      s.mana.hidden = h.dead || h.manaFrac < 0; // a hero with no pool shows no mana bar
+      if (!h.dead) {
+        const hpFrac = Math.max(0, Math.min(1, h.hpFrac));
+        s.hpFill.style.width = `${hpFrac * 100}%`;
+        // WC3 tints every status bar green→yellow→red by fraction, the hero bar's included.
+        s.hpFill.dataset.state = hpFrac > 0.6 ? "green" : hpFrac > 0.3 ? "yellow" : "red";
+        s.manaFill.style.width = `${Math.max(0, Math.min(1, h.manaFrac)) * 100}%`;
+      }
+      // The revival countdown stands where the skill-point badge does — they cannot both be
+      // true (a dead hero spends nothing), so one element says whichever is.
+      const reviving = h.dead && h.reviveSecondsLeft > 0;
       s.fx.hidden = h.skillPoints <= 0;
-      s.points.hidden = h.skillPoints <= 0;
-      if (h.skillPoints > 0) s.points.textContent = String(h.skillPoints);
+      s.points.hidden = h.skillPoints <= 0 && !reviving;
+      if (reviving) s.points.textContent = String(h.reviveSecondsLeft);
+      else if (h.skillPoints > 0) s.points.textContent = String(h.skillPoints);
     }
   }
 

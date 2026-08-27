@@ -1,4 +1,4 @@
-import type { SimItem, SimUnit, ShopStock, SimProjectile, SimCorpse } from "../sim/world";
+import type { SimItem, SimUnit, ShopStock, SimProjectile, SimCorpse, FallenHero } from "../sim/world";
 import { decodeStockTime, type BuildingSnapshot, type UnitSnapshot, type WorldSnapshot } from "./snapshot";
 
 /**
@@ -47,6 +47,9 @@ export interface ApplyWorld {
    *  stub worlds tests pass); `setResearchLevel` is pure bookkeeping — upgrade EFFECTS never
    *  re-derive on a client, its unit stats arrive already-upgraded in each unit's payload. */
   readonly tech?: { setResearchLevel(player: number, id: string, level: number): void } | null;
+  /** The altar roster the payload's `fallen` is reconciled into. Optional so the stub worlds
+   *  tests pass keep compiling; the real `SimWorld` always has it. */
+  readonly fallen?: Map<number, FallenHero>;
   /** The sim's own clean removal (unstamps footprints, frees cells, queues the render-side
    *  drop) — NOT a bare `units.delete`, or a removed building would leave its collision
    *  stamped on the client's grid forever. */
@@ -367,6 +370,33 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
   // real one. Levels only ever rise, so writing what was sent needs no removal pass.
   if (world.tech) {
     for (const [id, level] of Object.entries(snap.research)) world.tech.setResearchLevel(snap.recipient, id, level);
+  }
+  // The recipient's altar roster, reconciled WHOLESALE for that player: present = dead,
+  // absent = back on its feet (or never fell). Unlike research, this one shrinks — a revived
+  // hero has to leave the roster or its greyed portrait would sit in the hero bar forever
+  // beside the live one — so the removal pass is not optional. Scoped to the recipient's own
+  // ids: nobody else's fallen heroes are ever sent, and a blanket clear would be this client
+  // deciding something about a player it is told nothing about.
+  if (world.fallen) {
+    const sent = new Set(snap.fallen.map((f) => f.id));
+    for (const [id, f] of world.fallen) if (f.owner === snap.recipient && !sent.has(id)) world.fallen.delete(id);
+    for (const f of snap.fallen) {
+      const have = world.fallen.get(f.id);
+      if (have) {
+        have.level = f.level;
+        have.revivingAt = f.revivingAt;
+        continue;
+      }
+      // A client's record is the DRAWABLE half only. It never revives anything itself — the
+      // command goes to the host and the hero comes back as an ordinary unit record — so the
+      // saved life (abilities, inventory, base attributes) has no client-side reader and is
+      // deliberately not on the wire. The empties keep the shape one type.
+      world.fallen.set(f.id, {
+        id: f.id, owner: snap.recipient, team: 0, typeId: f.typeId, properName: f.properName,
+        level: f.level, xp: 0, skillPoints: 0, abilities: [], inventory: [],
+        baseStr: 0, baseAgi: 0, baseInt: 0, baseMaxHp: 0, x: 0, y: 0, revivingAt: f.revivingAt,
+      });
+    }
   }
   return { created, removed, morphed, createdItems, removedItems, createdProjectiles, removedProjectiles };
 }

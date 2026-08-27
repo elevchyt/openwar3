@@ -172,6 +172,12 @@ export interface UnitDef {
   // carries the Train/Build verb and gilds the hotkey letter, so the HUD renders
   // it verbatim rather than re-deriving either.
   tip: string;
+  /** The same title for the REVIVE button an altar puts up when this hero is dead
+   *  (UnitStrings "Revivetip"): "Revive |cffffcc00D|remon Hunter". A separate field from
+   *  `tip` because the game authors it separately — `tip` says "Train", this one says
+   *  "Revive", and the gilded hotkey letter can differ between them. Empty for everything
+   *  that is not a hero. */
+  reviveTip: string;
   hotkey: string; // command hotkey letter (UnitStrings "Hotkey")
   buttonX: number; // command-card grid column (0-3), from "buttonpos"
   buttonY: number; // command-card grid row (0-2)
@@ -565,6 +571,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // description was previously read from `fn` → always empty → generic fallback.
       description: strings ? rawTip(str(strings, "Ubertip")) : "",
       tip: strings ? rawTip(str(strings, "Tip")) : "",
+      reviveTip: strings ? rawTip(str(strings, "Revivetip")) : "",
       hotkey: strings ? (str(strings, "Hotkey").trim()[0] ?? "").toUpperCase() : "",
       buttonX: bx,
       buttonY: by,
@@ -941,6 +948,7 @@ export function destructibleUnitDef(d: {
     icon: "",
     description: "",
     tip: "",
+    reviveTip: "",
     hotkey: "",
     buttonX: 0,
     buttonY: 0,

@@ -550,6 +550,13 @@ export class AiPlayer {
   private setProduce(qty: number, id: string, town: number): boolean {
     const def = this.host.registry.get(id);
     if (!def) return false;
+    // A hero this player has lying DEAD is not trained again, it is brought back — which is
+    // what every race script's "always rebuild heroes for defense" branch has always meant.
+    // `GetUnitCountDone(hero_id)` reads 0 for a corpse, so the script asks for the hero by id
+    // exactly as it would for a fresh one, and the engine turns that request into a revival.
+    // Without this the AI would ask forever and be refused forever: the authority counts a
+    // fallen hero as one you already have.
+    if (def.isHero && this.reviveFallen(id)) return true;
     const made = !def.isBuilding ? this.trainUnits(qty, id)
       : this.upgradeExisting(id, town) || this.placeStructure(qty, id, town);
     // …and drop this type's cached count, so the REST of this same pass sees what was just
@@ -573,6 +580,23 @@ export class AiPlayer {
       if (this.host.execute(this.player, { c: "train", buildingId: b.id, unitId: id })) made++;
     }
     return made > 0;
+  }
+
+  /** Bring this hero type back, if we have one of it dead and an altar to do it at. */
+  private reviveFallen(typeId: string): boolean {
+    const fallen = this.host.world.fallenHeroesOf(this.player).find((f) => f.typeId === typeId && !f.revivingAt);
+    if (!fallen) return false;
+    for (const b of this.host.world.units.values()) {
+      if (b.owner !== this.player || b.hp <= 0 || !b.building) continue;
+      if (b.building.constructionLeft > 0 || b.building.queue.length > 0) continue;
+      // An altar of ours, and one that trains this hero — the same rule the authority applies
+      // (a Human altar does not raise an orc hero). The AI never uses a Tavern for this: its
+      // scripts ask for a hero by id and the altar is where their build order puts it.
+      const t = this.host.tech.get(b.typeId);
+      if (!t.revive || !t.trains.includes(typeId)) continue;
+      if (this.host.execute(this.player, { c: "revive", buildingId: b.id, heroId: fallen.id })) return true;
+    }
+    return false;
   }
 
   /** The tier route: a building of ours whose `Upgrade` list names `id`. */

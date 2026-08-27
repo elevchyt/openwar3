@@ -478,14 +478,14 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
 
   // Text we do not print yet.
   ides: "Description — the HUD prints Ubertip (utub), which IS applied",
-  uawt: "no sleeping-creep awaken tip (Awakentip)", utpr: "no hero revive tip (Revivetip)",
+  uawt: "no sleeping-creep awaken tip (Awakentip)",
   ucun: "no caster-upgrade name (Casterupgradename)", ucut: "no caster-upgrade tip (Casterupgradetip)",
   upru: "nameCount — the proper-name pool's length is taken from upro itself",
 };
 
 /** The five codes `applyMods` folds in after the loop, plus the text codes it resolves
  *  through the .wts. Listed for the coverage test — they are handled, just not in UNIT_SETTERS. */
-export const UNIT_DEFERRED_FIELDS = ["uhpm", "umpm", "udef", "ua1b", "ua2b", "unam", "upro", "utip", "utub", "uhot"];
+export const UNIT_DEFERRED_FIELDS = ["uhpm", "umpm", "udef", "ua1b", "ua2b", "unam", "upro", "utip", "utpr", "utub", "uhot"];
 
 /**
  * Apply one modified object's field overrides onto a UnitDef (mutated in place).
@@ -525,6 +525,7 @@ function applyMods(def: UnitDef, mods: Array<{ id: string; value: Val }>, trigSt
       // TRIGSTR_ reference, so splitting first would hand the .wts a key it can't find.
       case "upro": def.properNames = idList(trigStr(s(m.value))); continue;
       case "utip": def.tip = trigStr(s(m.value)); continue;
+      case "utpr": def.reviveTip = trigStr(s(m.value)); continue; // Revivetip — the altar's button title
       case "utub": def.description = trigStr(s(m.value)); continue;
       case "uhot": def.hotkey = (trigStr(s(m.value)).trim()[0] ?? "").toUpperCase(); continue;
       case "uhpm": rawHp = n(m.value); continue;

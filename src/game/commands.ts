@@ -94,6 +94,19 @@ export type Command =
    */
   | { c: "train"; buildingId: number; unitId: string }
   /**
+   * Bring a fallen hero back at an altar (or wake it at a Tavern). Intent only: which
+   * building, which HERO.
+   *
+   * `heroId` is the sim id the hero died under — its identity, not its type. That matters
+   * beyond bookkeeping: a player may have two dead heroes of the same type on a custom map,
+   * and naming the type would revive whichever one the authority happened to find first,
+   * with the other one's level and items. Nothing else is on the wire — the price and the
+   * time are both derived from the hero's LEVEL, which is the authority's record and not the
+   * caller's to state (a client that sent its own would revive a level 10 for a level 1's
+   * 170 gold).
+   */
+  | { c: "revive"; buildingId: number; heroId: number }
+  /**
    * Research an upgrade at a building. Intent only: which building, which upgrade.
    *
    * The LEVEL is not on the wire either, and that is the subtle one — an upgrade's price

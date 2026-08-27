@@ -1,4 +1,4 @@
-import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning, type CombatText } from "../sim/world";
+import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning, type CombatText, type FallenHero } from "../sim/world";
 
 /**
  * What one client is TOLD about the world (docs/multiplayer.md Phase E item 5).
@@ -92,6 +92,9 @@ export interface SnapshotWorld {
    *  absent on the hand-built worlds tests pass. The CENSUS half of tech state needs no
    *  lane of its own — it is derived live from the unit records, which already cross. */
   readonly tech?: { researchedBy(player: number): ReadonlyMap<string, number> } | null;
+  /** The altar roster (`SimWorld.fallen`). Optional for the same reason as `tech`: a
+   *  hand-built test world has none. */
+  readonly fallen?: ReadonlyMap<number, FallenHero>;
 }
 
 /** The per-recipient half. `Viewpoint` satisfies it; a test can pass a five-line stub.
@@ -453,6 +456,23 @@ export interface ProjectileSnapshot {
 }
 
 /** One frame of world, addressed to one player. */
+/** One entry of the recipient's altar roster. The hero's whole saved life is NOT sent — a
+ *  client never revives anything itself, and the authority holds the real record. What crosses
+ *  is exactly what the client DRAWS: which hero, at what level (the button's price), and how
+ *  far along its revival is. */
+export interface FallenHeroSnapshot {
+  id: number;
+  typeId: string;
+  properName: string;
+  level: number;
+  /** The building bringing it back, or 0 while it lies dead. The BUILDING and not the clock:
+   *  a client already holds its own buildings' queues (its own status is never masked — see
+   *  `DisplayBuildingStatus`), and the job in there carries `heroId` and both times. Sending
+   *  the id instead of the seconds means the hero bar reads a revival the same way on both
+   *  sides of the wire rather than through a second, client-only path. */
+  revivingAt: number;
+}
+
 export interface WorldSnapshot {
   /** Who this was built for. Carried in the payload rather than inferred from the connection,
    *  so a mis-routed snapshot is a thing a client can NOTICE rather than silently render. */
@@ -479,6 +499,12 @@ export interface WorldSnapshot {
    *  census half (which buildings satisfy what) is derived from unit records and needs no
    *  lane. */
   research: Record<string, number>;
+  /** The RECIPIENT's own fallen heroes — the altar roster (`SimWorld.fallen`). Same lane and
+   *  same reasoning as `stash` and `research`: a hero dies only where the sim steps, so a
+   *  client's roster would otherwise be empty forever and its altar would offer to sell it a
+   *  second Archmage at full price. Only the recipient's own — WHICH of an opponent's heroes
+   *  are dead, at what level, carrying what, is scouting information of the purest kind. */
+  fallen: FallenHeroSnapshot[];
   /** Creep-camp difficulty markers, as THIS recipient's minimap should paint them — computed
    *  on the authority with the same `CreepCamps.markers(viewpoint)` rule the host's own map
    *  uses (map-public at match start, yields to a visible member, gone once cleared). Carried
@@ -857,5 +883,11 @@ export function snapshotFor(
   // sim keeps mutating while the message waits to serialize.
   const stash = world.stashOf(recipient);
   const research = Object.fromEntries(world.tech?.researchedBy(recipient) ?? []);
-  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, projectiles, corpses, fx: { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] }, deaths: [], commands };
+  // The recipient's own fallen heroes, and which building (if any) is bringing each back.
+  const fallen: FallenHeroSnapshot[] = [];
+  for (const f of world.fallen?.values() ?? []) {
+    if (f.owner !== recipient) continue;
+    fallen.push({ id: f.id, typeId: f.typeId, properName: f.properName, level: f.level, revivingAt: f.revivingAt });
+  }
+  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, fallen, creepCamps, units, mines, items, projectiles, corpses, fx: { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] }, deaths: [], commands };
 }

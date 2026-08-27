@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, ANIM_FOR_DURATION, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText } from "../sim/world";
+import { SimWorld, weaponsFromDef, isOffField, ANIM_FOR_DURATION, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -38,9 +38,10 @@ import { AllianceTable, AllianceType } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
 import { ArmorType, AttackType, MoveType, PlayerSlot, PrimaryAttribute } from "../data/enums";
-import { MELEE, xpToReachLevel } from "../data/gameplayConstants";
+import { MELEE, MISC_GAME, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
+import { disabledIconPath } from "../data/commandStrings";
 import { type ItemRegistry } from "../data/items";
 import { workerProfileFor, depotRoleFor, type PlayableRace } from "../data/races";
 import { MeleeAi } from "../ai";
@@ -447,6 +448,27 @@ export interface HeroBarEntry {
   hpFrac: number;
   manaFrac: number; // -1 when the hero has no mana pool (no bar drawn)
   skillPoints: number; // unspent skill points — >0 lights the button's glow
+  /**
+   * This hero is DEAD and waiting on an altar.
+   *
+   * It keeps its slot rather than leaving the bar, because the bar is your roster and the
+   * roster is what "your second hero" counts down — the same order the altar seats its revive
+   * buttons in. The button draws the icon's own `CommandButtonsDisabled\DIS*` twin while it
+   * is set (see `disabledIcon`), which is the original's way of saying "you can't press this":
+   * the twin is desaturated AND drawn without the gold frame, and the missing frame is most
+   * of what reads as unavailable.
+   */
+  dead: boolean;
+  /** The BLP path of the greyed art for `dead` — the icon's `CommandButtonsDisabled\\DIS*`
+   *  twin. A PATH, not a decoded URL: the HUD resolves every other icon it draws through its
+   *  own `blpUrl`, and this is one more of them. Null when the icon has no directory to
+   *  strip; the HUD then falls back to the live art. */
+  disabledIcon: string | null;
+  /** Seconds until it stands back up, and how far along that is (0..1) — the countdown the
+   *  original prints over a reviving hero's portrait. Both 0 while it merely lies dead with
+   *  nobody paying for it. */
+  reviveSecondsLeft: number;
+  reviveFrac: number;
 }
 
 // The floating name slab WC3 draws above the unit under the cursor. Colours
@@ -1964,11 +1986,36 @@ export class RtsController {
     return heroes.sort((a, b) => a - b);
   }
 
+  /** The hero bar's ROSTER: living heroes and fallen ones together, in hire order (a sim id
+   *  ascends with it, and a fallen hero keeps the id it died under). A dead hero holding its
+   *  place is the whole point — the bar is what "your second hero" counts, and the altar
+   *  seats its revive buttons off the same order. */
+  private localHeroRoster(): Array<{ id: number; fallen: FallenHero | null }> {
+    const out = this.localHeroes().map((id) => ({ id, fallen: null as FallenHero | null }));
+    for (const f of this.sim.fallen.values()) if (f.owner === this.localPlayer) out.push({ id: f.id, fallen: f });
+    return out.sort((a, b) => a.id - b.id);
+  }
+
   /** The hero-bar buttons (issue #95): one per living local hero, in hire order, with the
    *  two bars the button carries and the unspent skill points its glow is gated on. */
   heroBar(): HeroBarEntry[] {
     const out: HeroBarEntry[] = [];
-    for (const id of this.localHeroes()) {
+    for (const { id, fallen } of this.localHeroRoster()) {
+      if (fallen) {
+        const icon = this.registry.get(fallen.typeId)?.icon ?? "";
+        // The job bringing it back, if any — read off the building that is paying, since the
+        // roster entry only records WHICH building (one at a time; see FallenHero.revivingAt).
+        const job = this.reviveJobFor(fallen);
+        out.push({
+          simId: id, icon,
+          hpFrac: 0, manaFrac: -1, skillPoints: 0,
+          dead: true,
+          disabledIcon: icon ? disabledIconPath(icon) : null,
+          reviveSecondsLeft: job ? Math.max(0, Math.ceil(job.timeLeft)) : 0,
+          reviveFrac: job && job.buildTime > 0 ? 1 - job.timeLeft / job.buildTime : 0,
+        });
+        continue;
+      }
       const u = this.sim.units.get(id);
       if (!u) continue;
       out.push({
@@ -1977,9 +2024,38 @@ export class RtsController {
         hpFrac: u.maxHp > 0 ? u.hp / u.maxHp : 1,
         manaFrac: u.maxMana > 0 ? u.mana / u.maxMana : -1, // -1: no pool, so no mana bar
         skillPoints: u.skillPoints,
+        dead: false, disabledIcon: null, reviveSecondsLeft: 0, reviveFrac: 0,
       });
     }
     return out;
+  }
+
+  /**
+   * The LIVING hero behind hero-bar button `index`, or undefined.
+   *
+   * Indexed against the ROSTER (`localHeroRoster`), which is what the bar draws — a dead hero
+   * holds its slot, so counting the living alone would slide every button after it onto the
+   * wrong hero. A dead slot answers undefined, and each of the three gestures the bar
+   * supports (select, rally onto, hand an item to) then simply does nothing: none of them
+   * means anything aimed at a corpse.
+   */
+  private heroBarUnit(index: number): SimUnit | undefined {
+    const entry = this.localHeroRoster()[index];
+    if (!entry || entry.fallen) return undefined;
+    return this.sim.units.get(entry.id);
+  }
+
+  /** The queued revival that is bringing this fallen hero back, or null while it lies dead. */
+  private reviveJobFor(f: FallenHero): { timeLeft: number; buildTime: number } | null {
+    if (!f.revivingAt) return null;
+    const b = this.sim.units.get(f.revivingAt)?.building;
+    for (const j of b?.queue ?? []) if (j.kind === "revive" && j.heroId === f.id) return j;
+    return null;
+  }
+
+  /** Every fallen hero of a player, in roster order — the altar card reads this. */
+  fallenHeroesOf(player: number): FallenHero[] {
+    return this.sim.fallenHeroesOf(player);
   }
 
   /**
@@ -1996,8 +2072,8 @@ export class RtsController {
    * Returns false when the selection has nothing to rally, so the caller can fall back.
    */
   rallyToHero(index: number): boolean {
-    const heroId = this.localHeroes()[index];
-    const hero = heroId !== undefined ? this.sim.units.get(heroId) : undefined;
+    const hero = this.heroBarUnit(index);
+    const heroId = hero?.id;
     if (!hero) return false;
     if (this.primary === null || !this.sim.acceptsRally(this.primary)) return false;
     let any = false;
@@ -2024,7 +2100,7 @@ export class RtsController {
    */
   dropItemOnHero(index: number, slot?: number): boolean {
     const from = this.primary;
-    const heroId = this.localHeroes()[index];
+    const heroId = this.heroBarUnit(index)?.id;
     if (from === null || heroId === undefined || heroId === from || !this.controls(from)) return false;
     const armed = slot === undefined ? (this.orderMode === "item" && this.armedItem?.mode === "move" ? this.armedItem.slot : undefined) : slot;
     if (armed === undefined || !this.sim.units.get(from)?.inventory[armed]) return false;
@@ -2036,9 +2112,11 @@ export class RtsController {
   }
 
   /** F1/F2/F3: select the (index+1)-th of the local player's heroes (stable order),
-   *  independent of the numbered control groups. Returns false if there's none. */
+   *  independent of the numbered control groups. Returns false if there's none — which
+   *  includes a hero that is DEAD: it keeps its place in the roster (and its greyed portrait
+   *  in the bar) but there is nothing on the map to select. */
   selectHero(index: number): boolean {
-    const id = this.localHeroes()[index];
+    const id = this.heroBarUnit(index)?.id;
     if (id === undefined) return false;
     this.selected.clear();
     this.selected.add(id);
@@ -4703,6 +4781,28 @@ export class RtsController {
     const def = this.registry.get(e.typeId);
     const upgradeBoxes = this.upgradeBoxes(e.typeId);
     const builderId = b && b.constructionLeft > 0 ? this.builderInside(e.simId) : 0;
+    /**
+     * May this viewer read the building's STATUS — what it is making, and how many seconds
+     * are left on it?
+     *
+     * `Units\MiscGame.txt` answers it and names it: **`DisplayBuildingStatus=0`**, sitting
+     * next to `DisplayEnemyInventory=1`, which is the same question about a hero's items
+     * answered the other way. So an enemy's queue and its construction timer are not merely
+     * something we forgot to hide — the game has a switch for them and it is off.
+     *
+     * Masked HERE, at the panel, rather than redacted on the wire, and the reason is that the
+     * two facts are not equally secret: the SCAFFOLDING is public (you can see a half-built
+     * Barracks from across the map, and the renderer drives that animation off the very same
+     * `constructionLeft`), while the NUMBER under it is the owner's. Redacting the field would
+     * take the visual with it. This is the one place either becomes a readout.
+     *
+     * `seesFor` is the ally gate rather than plain ownership: a team-mate's Barracks shows you
+     * what it is training, which is what shared vision is for.
+     */
+    // (Widened: the constant is `as const` 0, so TypeScript would call the comparison dead.
+    //  It is read rather than folded away because it is the game's switch, not our policy —
+    //  a mod that turns it on turns this on.)
+    const status = (MISC_GAME.DisplayBuildingStatus as number) !== 0 || this.seesFor(u.owner);
     return {
       id: e.simId,
       typeId: e.typeId,
@@ -4748,15 +4848,15 @@ export class RtsController {
       model: e.modelPath,
       isWorker: !!u.worker,
       isBuilding: !!b,
-      underConstruction: !!b && b.constructionLeft > 0,
-      buildProgress: b && b.buildTimeTotal > 0 ? 1 - b.constructionLeft / b.buildTimeTotal : 1,
-      trainProgress: q.length && q[0].buildTime > 0 ? 1 - q[0].timeLeft / q[0].buildTime : 0,
-      secondsLeft: b && b.constructionLeft > 0 ? b.constructionLeft : q.length ? q[0].timeLeft : 0,
-      queueLength: q.length,
+      underConstruction: status && !!b && b.constructionLeft > 0,
+      buildProgress: status && b && b.buildTimeTotal > 0 ? 1 - b.constructionLeft / b.buildTimeTotal : 1,
+      trainProgress: status && q.length && q[0].buildTime > 0 ? 1 - q[0].timeLeft / q[0].buildTime : 0,
+      secondsLeft: !status ? 0 : b && b.constructionLeft > 0 ? b.constructionLeft : q.length ? q[0].timeLeft : 0,
+      queueLength: status ? q.length : 0,
       // A queue slot may hold a unit, a research or a structure upgrade — pull each one's icon
       // from the registry that owns it. Research uses the icon of the LEVEL being researched
       // (Steel Forged Swords has its own art), which is why the level rides on the job.
-      queue: q.map((j) => ({
+      queue: (status ? q : []).map((j) => ({
         // `level` is optional on `RenderBuildJob` because only a research slot carries one;
         // the `?? 0` is unreachable for `kind === "research"` and is here so the flattened
         // shape needs no cast back to the union it came from.

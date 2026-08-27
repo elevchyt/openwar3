@@ -34,7 +34,9 @@ import {
   etherealDamageMultiplier,
   ETHEREAL_SPELL_BONUS,
   grantedXp,
+  heroReviveVitals,
   xpToReachLevel,
+  type ReviveMode,
 } from "../data/gameplayConstants";
 import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
@@ -582,6 +584,44 @@ export interface SummonRequest {
   illusion?: IllusionInit;
 }
 
+/**
+ * A hero that has fallen — the whole of what an altar brings back.
+ *
+ * **A revived hero is the SAME hero, not a fresh one of the same type**, and that is the
+ * entire feature: it stands up with its level, its experience, its unspent skill points, the
+ * ranks it had learned, its inventory and its proper name. So the record is everything a
+ * `SimUnit` carries that death would otherwise take with it, plus the two things a hero's
+ * stats are derived from rather than stored as — its base attributes and base life, which is
+ * where every Tome it ever drank lives (see `applyPowerup`).
+ *
+ * Keyed by the hero's own sim id. That id is its identity across death: the hero bar orders by
+ * it, the revive job names it, and the button the player presses is the one that says which of
+ * three dead heroes is coming back.
+ */
+export interface FallenHero {
+  id: number;
+  owner: number;
+  team: number;
+  typeId: string;
+  properName: string;
+  level: number;
+  xp: number;
+  skillPoints: number;
+  abilities: SimAbility[];
+  inventory: (HeldItem | null)[];
+  baseStr: number;
+  baseAgi: number;
+  baseInt: number;
+  baseMaxHp: number;
+  /** Where it fell. Nothing reads it yet; the death alert already carries the same point, and
+   *  a "return to where you died" mode would want it. */
+  x: number;
+  y: number;
+  /** The building currently bringing it back, or 0 while it simply lies dead. One at a time:
+   *  two altars must not both be paid to revive the same hero. */
+  revivingAt: number;
+}
+
 export interface HeldItem {
   /** Entity id — the SAME id space (and the same id) the item had on the ground.
    *  An item in WC3 is one entity that moves between the ground and an inventory,
@@ -741,7 +781,12 @@ export type BuildJob =
   // tier ("your 2nd hero needs a Keep"). Harmless in 1v1, wrong the moment there are three.
   | { kind: "unit"; unitId: string; timeLeft: number; buildTime: number; free?: boolean; buyer?: number }
   | { kind: "research"; unitId: string; level: number; timeLeft: number; buildTime: number }
-  | { kind: "upgrade"; unitId: string; timeLeft: number; buildTime: number };
+  | { kind: "upgrade"; unitId: string; timeLeft: number; buildTime: number }
+  // A HERO coming back. `unitId` is the hero's TYPE (so the card and the queue draw its icon
+  // like any other job) and `heroId` is WHICH hero — the sim id it died under, which is the
+  // identity its level, items and name are filed against. `buyer` is the Tavern's rule again:
+  // a neutral shop's queue belongs to nobody, so the job says whose hero is being woken.
+  | { kind: "revive"; unitId: string; heroId: number; timeLeft: number; buildTime: number; buyer?: number };
 
 /** What a finished structure does to the ground under it — see SimWorld.blightPaintOf. */
 interface BlightPaint {
@@ -2193,6 +2238,8 @@ export interface AttackReveal {
 
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
+  /** Every hero of every player that is currently dead and revivable (see FallenHero). */
+  readonly fallen = new Map<number, FallenHero>();
   readonly mines = new Map<number, SimMine>();
   readonly trees = new Map<number, SimTree>();
   readonly projectiles = new Map<number, SimProjectile>();
@@ -2332,7 +2379,7 @@ export class SimWorld {
    *  sides at once gives itself away to each, and each fresh blow re-stamps the entry. */
   private attackReveals = new Map<string, AttackReveal>();
   // Trained units ready to spawn: the renderer creates the model + sim unit.
-  private trainCompletions: Array<{ buildingId: number; unitId: string; owner: number; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
+  private trainCompletions: Array<{ buildingId: number; unitId: string; owner: number; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number; reviveOf?: number; tavern?: boolean }> = [];
   // Finished research (renderer plays the "upgrade complete" sound + refreshes the card).
   private researchCompletions: Array<{ buildingId: number; upgradeId: string; level: number; owner: number }> = [];
   // Buildings that finished being BUILT this tick (renderer plays the "job's done" sound).
@@ -3338,6 +3385,117 @@ export class SimWorld {
     this.trainCompletions.push({ buildingId: u.id, unitId, owner, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
   }
 
+  /**
+   * File a dead hero on its owner's altar roster.
+   *
+   * A PLAYER's hero only. A neutral-hostile or map-owned hero has no altar behind it and
+   * nobody to press the button, so filing one would be a leak that grows for the whole match.
+   * Reincarnation and a popped illusion both returned long before `killUnit` reaches here, so
+   * neither is filed either: nothing has actually fallen.
+   */
+  private recordFallenHero(u: SimUnit): void {
+    if (u.owner < 0 || u.isCreep || u.neutralPassive || u.isIllusion) return;
+    this.fallen.set(u.id, {
+      id: u.id, owner: u.owner, team: u.team, typeId: u.typeId, properName: u.properName,
+      level: u.level, xp: u.xp, skillPoints: u.skillPoints,
+      // Copied, not referenced: the SimUnit is about to be dropped from `units` and its
+      // arrays would otherwise be the only thing keeping it alive.
+      abilities: u.abilities.map((a) => ({ ...a })),
+      inventory: u.inventory.map((it) => (it ? { ...it } : null)),
+      baseStr: u.baseStr, baseAgi: u.baseAgi, baseInt: u.baseInt, baseMaxHp: u.baseMaxHp,
+      x: u.x, y: u.y, revivingAt: 0,
+    });
+  }
+
+  /** This player's fallen heroes, in the order they were first hired (their sim ids ascend
+   *  with hire order) — which is the order the hero bar draws them in and the order the
+   *  altar's revive buttons are seated in. */
+  fallenHeroesOf(player: number): FallenHero[] {
+    return [...this.fallen.values()].filter((f) => f.owner === player).sort((a, b) => a.id - b.id);
+  }
+
+  /** Drop a fallen hero's record — a script that removes the unit outright, or a match
+   *  cleaning up. Also un-marks whatever building was reviving it. */
+  forgetFallenHero(heroId: number): void {
+    this.fallen.delete(heroId);
+  }
+
+  /**
+   * Queue a fallen hero's return at `buildingId`. Timing only — the caller has checked and
+   * charged (Authority.execute), exactly as `enqueueTrain` expects.
+   *
+   * `time` 0 is the TAVERN: waking a hero there is a purchase, not production, so it happens
+   * on the spot and nothing is ever queued — the same rule (and the same reason) as an
+   * instant hire in `enqueueTrain`.
+   */
+  enqueueRevive(buildingId: number, heroId: number, time: number, buyer?: number): boolean {
+    const u = this.units.get(buildingId);
+    const b = u?.building;
+    const f = this.fallen.get(heroId);
+    if (!u || !b || !f || f.revivingAt || b.queue.length >= MAX_BUILD_QUEUE) return false;
+    f.revivingAt = buildingId;
+    if (time <= 0) {
+      this.completeRevive(u, b, f, buyer);
+      return true;
+    }
+    b.queue.push({ kind: "revive", unitId: f.typeId, heroId, timeLeft: time, buildTime: time, buyer });
+    return true;
+  }
+
+  /** Hand a revived hero to the renderer, which owns the models — the SAME queue a trained
+   *  unit goes out on, because a revival is a birth in every way the birth path cares about
+   *  (spot beside the building, rally, "unit ready"). What makes it a revival rather than a
+   *  hire is `reviveOf`, which the caller feeds back to `restoreFallenHero`. */
+  private completeRevive(u: SimUnit, b: BuildingState, f: FallenHero, buyer?: number): void {
+    const owner = u.neutralPassive && buyer !== undefined ? buyer : u.owner;
+    this.trainCompletions.push({
+      buildingId: u.id, unitId: f.typeId, owner, x: u.x, y: u.y,
+      rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId,
+      reviveOf: f.id, tavern: u.neutralPassive,
+    });
+  }
+
+  /**
+   * Put a fallen hero's life back into the freshly-born unit standing at the altar.
+   *
+   * The order is `initIllusion`'s and for the same reason: the level and the base attributes
+   * have to land BEFORE `recomputeStats`, and hp/mana can only be written once that has run —
+   * a hero spawned at its type's level 1 otherwise stands there with a level-1 pool and looks
+   * wounded the moment the next tick recomputes it.
+   *
+   * `mode` picks which set of MiscGame factors the vitals come from: an altar hands the hero
+   * back whole (full life, its opening 100 mana), a tavern hands it back at half life with
+   * nothing in the tank.
+   */
+  reviveFallenHero(unitId: number, heroId: number, mode: ReviveMode): boolean {
+    const u = this.units.get(unitId);
+    const f = this.fallen.get(heroId);
+    if (!u || !f) return false;
+    this.fallen.delete(heroId);
+    u.properName = f.properName;
+    u.level = Math.max(1, f.level);
+    u.xp = f.xp;
+    u.skillPoints = f.skillPoints;
+    // The ranks it had learned, not the type's blank sheet. Matched by id so an ability the
+    // type no longer carries (a map that re-authored the hero mid-match) is simply dropped.
+    for (const learned of f.abilities) {
+      const ab = u.abilities.find((a) => a.id === learned.id);
+      if (ab) ab.level = learned.level;
+      else u.abilities.push({ ...learned });
+    }
+    u.inventory = f.inventory.map((it) => (it ? { ...it } : null));
+    // Tomes: permanent, and they live in the base attributes rather than in the level.
+    u.baseStr = f.baseStr;
+    u.baseAgi = f.baseAgi;
+    u.baseInt = f.baseInt;
+    u.baseMaxHp = f.baseMaxHp;
+    this.recomputeStats(u);
+    const vitals = heroReviveVitals(mode, u.maxHp, u.maxMana, this.unitReg?.get(u.typeId)?.manaStart ?? 0);
+    u.hp = Math.min(u.maxHp, vitals.hp);
+    u.mana = vitals.mana;
+    return true;
+  }
+
   /** Queue an upgrade for research at a building. Timing only — the caller has already
    *  checked the tech requirements and charged the cost. WC3 shares ONE queue between
    *  training and research, so a Barracks researching Defend cannot also train a Footman. */
@@ -3396,6 +3554,13 @@ export class SimWorld {
    *  normally reach this at all (it is instant, so it never enters the queue — see
    *  enqueueTrain); it is here for the queued case a mod's non-zero hire time would make. */
   private dropJob(buildingId: number, job: BuildJob): BuildJob {
+    // A cancelled revival puts the hero back on the roster as merely dead — otherwise its
+    // `revivingAt` stays pointing at a job that no longer exists and no altar will ever offer
+    // it again. (The gold goes back in full: ReviveRefundRate = 1.0.)
+    if (job.kind === "revive") {
+      const f = this.fallen.get(job.heroId);
+      if (f) f.revivingAt = 0;
+    }
     if (job.kind === "unit") {
       this.noteTrain(buildingId, job.unitId, "cancel");
       this.returnStock(buildingId, job.unitId);
@@ -4659,6 +4824,9 @@ export class SimWorld {
             this.applyUnitSwap(u.owner, job.unitId); // rtma: morph existing units (Headhunter→Berserker)
           } else if (job.kind === "upgrade") {
             this.morphUnit(u, job.unitId);
+          } else if (job.kind === "revive") {
+            const f = this.fallen.get(job.heroId);
+            if (f) this.completeRevive(u, b, f, job.buyer);
           } else {
             this.completeTrain(u, b, job.unitId, job.buyer);
           }
@@ -14476,6 +14644,7 @@ export class SimWorld {
         hero: { properName: u.properName, typeId: u.typeId, level: u.level },
         killer: killer?.isHero ? { properName: killer.properName, typeId: killer.typeId } : undefined,
       });
+      this.recordFallenHero(u);
     }
     this.releaseEntangled(u); // an Entangled Gold Mine knocked down hands the mine back
     this.units.delete(u.id); // Map delete during values() iteration is safe

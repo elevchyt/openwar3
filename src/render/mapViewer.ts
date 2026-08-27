@@ -37,10 +37,10 @@ import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplat
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
 import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
-import { loadCommandStrings, type CommandStrings } from "../data/commandStrings";
+import { loadCommandStrings, disabledIconPath, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
-import { CAMERA, MELEE, MISC_DATA, TEXT_TAG } from "../data/gameplayConstants";
+import { CAMERA, MELEE, MISC_DATA, TEXT_TAG, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
 import { makeMapFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
@@ -7369,7 +7369,87 @@ export class MapViewerScene {
     for (const t of world.pendingTrained()) {
       if (t.owner === player && this.registry.get(t.unitId)?.isHero) set.add(t.unitId);
     }
+    // …and the DEAD ones, which is what swaps a hero's TRAIN button for its REVIVE button:
+    // your Archmage lying on the altar roster is still your Archmage and still one of your
+    // three, so the altar offers to bring her back rather than to sell you another.
+    // (Authority.heroTypesInProduction draws the same line, and has to — the card is a
+    // picture of what is allowed, not the thing that allows it.)
+    for (const f of world.fallen.values()) if (f.owner === player) set.add(f.typeId);
     return set;
+  }
+
+  /**
+   * The REVIVE buttons on an altar (or a Tavern) — one per fallen hero of the local player.
+   *
+   * Seated by the hero's own position in your roster: 1st hero leftmost, then the 2nd, then
+   * the 3rd, along the card's top row. Not at the hero's `buttonpos`, which is where its
+   * TRAIN button lives (bottom row on every altar) and which would scatter three revive
+   * buttons across the card in whatever order the four hero types happen to be authored in.
+   * The roster order is the same one the hero bar draws in, so the second portrait in the
+   * top-left corner and the second button on the altar are the same hero.
+   *
+   * The cost and the wait are the LEVEL's, off MiscGame's own ladder (heroReviveCost) — an
+   * altar is slow and cheap, a Tavern is instant and about double. A hero already on its way
+   * back keeps its button, greyed: it is being revived somewhere, and the card should say so
+   * rather than silently drop the only thing that names it.
+   */
+  private pushReviveButtons(sel: SelectionInfo, out: CommandButton[]): void {
+    const world = this.rts!.simWorld;
+    const t = this.tech.get(sel.typeId);
+    const fallen = world.fallenHeroesOf(this.localPlayer);
+    if (!fallen.length) return;
+    const stash = this.rts!.stashFor(this.localPlayer);
+    const food = this.rts!.foodFor(this.localPlayer);
+    // Which heroes THIS building can bring back — the same two rules the authority applies
+    // (see its `revive` case): an ALTAR takes the heroes it trains, i.e. its own race's four;
+    // a TAVERN takes any of yours, neutral and race-specific alike.
+    const tavern = world.isShopUnit(sel.id);
+    const here = fallen.filter((f) => (tavern ? t.sellunits.length > 0 : t.revive && t.trains.includes(f.typeId)));
+    if (!here.length) return;
+    const mode: ReviveMode = tavern ? "tavern" : "altar";
+    for (const f of here) {
+      const d = this.registry.get(f.typeId);
+      if (!d) continue;
+      const cost = heroReviveCost(mode, d.goldCost, d.lumberCost, d.buildTime || 1, f.level);
+      // The hero's position in the WHOLE roster (living and dead), which is what "1st hero,
+      // 2nd hero" means — a dead 2nd hero keeps the second slot whether or not the 1st is
+      // alive. Ids ascend with hire order, so the sort is the order.
+      const index = this.heroRosterIndex(f.id);
+      const name = f.properName || d.name;
+      out.push(this.cmd({
+        id: `revive:${f.id}`,
+        icon: this.blpIcon(d.icon),
+        name: `Revive ${name}`,
+        hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
+        // `Revivetip` is the game's own title for this button — "Revive |cffffcc00D|remon
+        // Hunter" — and it is a different field from the hero's `Tip` ("Train …"), authored
+        // per hero in every race's UnitStrings. Falls back only for data that ships none.
+        tip: d.reviveTip || `Revive ${d.name}`,
+        desc: `Revives ${name}, restoring the Hero's level, experience and items.`,
+        gold: cost.gold, lumber: cost.lumber, food: d.foodUsed,
+        col: index % 4, row: Math.floor(index / 4),
+        // Already coming back: the button stays, inert, so the card still names the hero.
+        disabled: f.revivingAt !== 0,
+        cantAfford: stash.gold < cost.gold || stash.lumber < cost.lumber
+          || food.used + d.foodUsed > food.made,
+      }));
+    }
+  }
+
+  /** A hero's place in the local player's roster — living and fallen together, in hire order
+   *  (sim ids ascend with it). The hero bar and the altar's revive buttons both count from
+   *  this, so "your second hero" means one thing in both places. */
+  private heroRosterIndex(heroId: number): number {
+    const world = this.rts!.simWorld;
+    const ids: number[] = [];
+    for (const u of world.units.values()) {
+      if (u.owner !== this.localPlayer || u.isIllusion || u.hp <= 0) continue;
+      if (this.registry.get(u.typeId)?.isHero) ids.push(u.id);
+    }
+    for (const f of world.fallen.values()) if (f.owner === this.localPlayer) ids.push(f.id);
+    ids.sort((a, b) => a - b);
+    const i = ids.indexOf(heroId);
+    return i < 0 ? 0 : i;
   }
 
   /** Units this building trains (`Trains`) or SELLS (`Sellunits` — a Tavern's heroes, a
@@ -7843,6 +7923,7 @@ export class MapViewerScene {
       const wantsRally = !foreignShop && !!world.units.get(sel.id)?.building?.producesUnits;
       const reserved = [...(wantsRally ? ["3,1"] : []), ...(sel.queueLength ? ["3,2"] : [])];
       this.pushShopButtons(sel, out); // items a shop sells (Arcane Vault, Goblin Merchant)
+      this.pushReviveButtons(sel, out); // fallen heroes this altar/tavern can bring back
       this.pushTrainButtons(sel, out, reserved); // units it trains / sells (Barracks, Tavern, Merc Camp)
       this.pushResearchButtons(sel, out); // upgrades it researches (Blacksmith, Lumber Mill…)
       this.pushBuildingUpgradeButtons(sel, out); // what it can become (Town Hall → Keep)
@@ -8443,6 +8524,11 @@ export class MapViewerScene {
       if (sel) this.trainUnit(sel.id, id.slice(6));
       return;
     }
+    if (id.startsWith("revive:")) {
+      const sel = this.rts.selectedInfo();
+      if (sel) this.reviveHero(sel.id, Number(id.slice(7)));
+      return;
+    }
     if (id.startsWith("research:")) {
       const sel = this.rts.selectedInfo();
       if (sel) this.startResearch(sel.id, id.slice(9));
@@ -8588,6 +8674,27 @@ export class MapViewerScene {
       }
     }
     this.rts.execute(this.localPlayer, { c: "train", buildingId, unitId });
+  }
+
+  /** Bring a fallen hero back. Feedback only — the price and the wait are the LEVEL's and
+   *  `execute` derives both again; this is here so a refusal names what the player is short
+   *  of instead of the click doing nothing. */
+  private reviveHero(buildingId: number, heroId: number): void {
+    if (!this.rts) return;
+    const world = this.rts.simWorld;
+    const f = world.fallen.get(heroId);
+    const d = f ? this.registry.get(f.typeId) : undefined;
+    if (f && d) {
+      const mode: ReviveMode = world.isShopUnit(buildingId) ? "tavern" : "altar";
+      const cost = heroReviveCost(mode, d.goldCost, d.lumberCost, d.buildTime || 1, f.level);
+      if (!this.canAfford(cost.gold, cost.lumber)) return;
+      const food = this.rts.foodFor(this.localPlayer);
+      if (food.used + d.foodUsed > food.made) {
+        this.refuse(ERR_NOFOOD);
+        return;
+      }
+    }
+    this.rts.execute(this.localPlayer, { c: "revive", buildingId, heroId });
   }
 
   /** Start researching an upgrade at a building. Charges the level's own cost (Steel Forged
@@ -9003,24 +9110,15 @@ export class MapViewerScene {
    *  `CommandButtons\BTNFoo.blp` → `CommandButtonsDisabled\DISBTNFoo.blp`, and a passive's
    *  `PassiveButtons\PASBTNFoo.blp` → `CommandButtonsDisabled\DISPASBTNFoo.blp` (verified
    *  against the 1.30.4 store: 1,086 DISBTN + 59 DISPASBTN cover all but six icons). */
-  private static disabledIconPath(path: string): string | null {
-    const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
-    if (cut < 0) return null;
-    return `ReplaceableTextures\\CommandButtonsDisabled\\DIS${path.slice(cut + 1)}`;
-  }
-
-  /** The art WC3 draws for an unavailable command button. It is NOT the live icon tinted —
-   *  the engine swaps in a second texture, and that texture differs in two ways: it is
-   *  desaturated, and the gold button frame is GONE (the DIS* art fills the tile edge to
-   *  edge where the BTN art spends its outer pixels on the frame). Wearing the frame is
-   *  what makes a button look pressable, so a greyed one must not.
+  /** The greyed twin of a live card icon, as a data URL. The PATH rule is shared with the
+   *  hero bar (data/commandStrings.ts `disabledIconPath`); this is the decode around it.
    *
    *  Null for the six icons in 1.30.4 that ship no twin — the caller falls back to
    *  desaturating the live art, which is the closest we can get without one. */
   private disabledArt(iconUrl: string): string | null {
     const path = this.iconSource.get(iconUrl);
     if (!path) return null;
-    const dis = MapViewerScene.disabledIconPath(path);
+    const dis = disabledIconPath(path);
     return dis ? this.blpIcon(dis) : null;
   }
 
@@ -9044,7 +9142,7 @@ export class MapViewerScene {
     // prerequisite is missing — i.e. on the FIRST worker selected, for most of the build
     // card. Queued strictly behind the live art: a twin nobody has greyed yet must never
     // delay the icon that is on screen right now.
-    const queue = [...paths, ...[...paths].map(MapViewerScene.disabledIconPath).filter((p): p is string => !!p)].filter(
+    const queue = [...paths, ...[...paths].map(disabledIconPath).filter((p): p is string => !!p)].filter(
       (p) => !this.iconCache.has(p),
     );
 
@@ -9185,7 +9283,20 @@ export class MapViewerScene {
       // hired INSTANTLY, so that window IS the whole hire — the fresh hero counted for
       // neither the hero bar nor the hero limit, and the Altar happily offered a second
       // "first" hero at tier 1. Food and the requirement tier had the same hole.
-      const simId = this.rts!.addSimUnit(d, sx, sy, TRAINED_FACING, t.owner, team, 0, this.rts!.reserveUnitId());
+      // A REVIVED hero comes back under the id it DIED under, rather than a fresh one. That is
+      // not bookkeeping: in WC3 a revived hero is the same unit — the same handle a script
+      // took before it fell, still in the control group you put it in, still the second
+      // portrait in the hero bar. Minting a new id instead would slide it to the end of your
+      // roster (the bar and the altar's revive buttons both count in id order), so your first
+      // hero would come back as your third. The old id is free: `killUnit` deleted the unit,
+      // and ids are minted from a counter that never reuses on its own.
+      const simId = this.rts!.addSimUnit(d, sx, sy, TRAINED_FACING, t.owner, team, 0, t.reviveOf ?? this.rts!.reserveUnitId());
+      // A REVIVAL is a birth that is owed a life. The unit was just spawned at its type's
+      // level 1 with an empty sheet; this puts the hero that died back into it — level, XP,
+      // learned ranks, inventory, proper name — and sets the hit points and mana the altar
+      // (full / 100) or the tavern (half / none) hands back. Done here, on the tick the unit
+      // exists, so nothing ever sees the blank version of it.
+      if (t.reviveOf) world.reviveFallenHero(simId, t.reviveOf, t.tavern ? "tavern" : "altar");
       // …and walk it to the rally point, but ONLY if this building has one. A `Sellunits`
       // shop does not (see BuildingState.producesUnits): a hired mercenary appears beside the
       // camp and stands there. Sending it to the default point 200 south instead is not just

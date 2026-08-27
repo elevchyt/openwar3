@@ -84,3 +84,24 @@ export function loadCommandStrings(vfs: DataSource): CommandStrings {
   }
   return new CommandStrings(errors, commands);
 }
+
+/**
+ * The art WC3 draws for an unavailable command button: the icon's own
+ * `ReplaceableTextures\CommandButtonsDisabled\DIS<basename>` twin.
+ *
+ * It is NOT the live icon tinted — the engine swaps in a second TEXTURE, and that texture
+ * differs in two ways: it is desaturated, and the gold button frame is GONE (the DIS* art
+ * fills the tile edge to edge where the BTN art spends its outer pixels on the frame).
+ * Wearing the frame is what makes a button look pressable, so a greyed one must not. The rule
+ * is the same for a passive's `PASBTN*` as for a `BTN*`: DIS plus the basename.
+ *
+ * Here rather than on the renderer because two surfaces ask it — the command card's greyed
+ * buttons and the hero bar's DEAD heroes — and a second copy of a path convention is exactly
+ * how the two drift apart. Null for a path with no directory to strip, and for the handful of
+ * icons that ship no twin the caller falls back to desaturating the live art.
+ */
+export function disabledIconPath(path: string): string | null {
+  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  if (cut < 0) return null;
+  return `ReplaceableTextures\\CommandButtonsDisabled\\DIS${path.slice(cut + 1)}`;
+}
