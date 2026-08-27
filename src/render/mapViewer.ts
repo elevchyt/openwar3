@@ -6557,7 +6557,6 @@ export class MapViewerScene {
   private showChat(line: ChatLine): void {
     const rendered = formatChatLine(
       line,
-      this.multiplayerMatch,
       (p) => this.playerLabel(p),
       (p) => teamColorHex(this.vfs, this.rts?.playerColor(p) ?? p),
       (k) => this.globalStrings?.strings.get(k),

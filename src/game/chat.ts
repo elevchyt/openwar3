@@ -114,10 +114,18 @@ export function chatPrompt(
   }
 }
 
-/** The bracketed audience tag a received line wears. Empty for a plain all-chat line in a
- *  single-player game, where there is only one audience and naming it says nothing. */
-export function chatRecipientTag(target: ChatTarget, multiplayer: boolean, strings: ChatStrings): string {
-  if (!multiplayer) return "";
+/**
+ * The bracketed audience tag a received line wears — the CHANNEL it was said on, which is
+ * the only thing that decides it. An ally who types on the all-channel is `[All]`, not
+ * `[Allies]`: the tag reports where the line was sent, never what the sender is to you.
+ *
+ * Every line carries one, a skirmish against computers included. That last part is a
+ * DELIBERATE DEVIATION, asked for by the developer: the real client drops the tag when there
+ * is nobody else to address (which is also why the entry line reads a flat "Message:" —
+ * `chatPrompt` still does that). Here the channel is always named, so the two send keys can
+ * be told apart on screen wherever they are used.
+ */
+export function chatRecipientTag(target: ChatTarget, strings: ChatStrings): string {
   switch (target.scope) {
     case "allies":
       return strings("CHAT_RECIPIENT_ALLIES") ?? "[Allies]";
@@ -142,6 +150,9 @@ export function chatRecipientTag(target: ChatTarget, multiplayer: boolean, strin
  * right: `CHAT_RECIPIENT_ALL` is just "[All]" and nothing in any data file says where it goes,
  * because the engine composes the line in code.
  *
+ * The tag is the one piece that never takes a colour — it is the channel, not a speaker, and
+ * it stays the message area's own white while the name beside it wears the player's.
+ *
  * The name carries the colour and the message does NOT — a player cannot colour their own
  * chat by typing `|cff...` into it, because the text is escaped by the renderer's markup pass
  * only for the parts we build. So the message body is stripped of markup codes here: left in,
@@ -150,12 +161,11 @@ export function chatRecipientTag(target: ChatTarget, multiplayer: boolean, strin
  */
 export function formatChatLine(
   line: ChatLine,
-  multiplayer: boolean,
   nameOf: (player: number) => string,
   colorOf: (player: number) => string | null,
   strings: ChatStrings,
 ): string {
-  const tag = chatRecipientTag(line.target, multiplayer, strings);
+  const tag = chatRecipientTag(line.target, strings);
   const color = colorOf(line.from);
   const name = nameOf(line.from);
   const said = color ? `|c${color}${name}|r` : name;
