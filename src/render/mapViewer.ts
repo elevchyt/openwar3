@@ -1107,8 +1107,13 @@ export class MapViewerScene {
    *  `rootUnitId` makes it a ROOT rather than a build: an uprooted Ancient being told where to
    *  plant itself. Same silhouette, same green/red footprint grid, same click — what differs
    *  is that no worker is involved, nothing is paid for, and the order goes to the Ancient
-   *  itself (`{kind:"rootat"}`). See runCommand's `Aroo` branch. */
-  private placement: { def: UnitDef; fp: Footprint | null; workerId: number; rootUnitId?: number } | null = null;
+   *  itself (`{kind:"rootat"}`). See runCommand's `Aroo` branch.
+   *
+   *  `shiftQueued` records that this ghost is only still on the cursor because a SHIFT-click
+   *  queued a site and kept it there. That is what makes releasing shift end the placement
+   *  (see the keyup handler in attachControls) — a ghost that has queued nothing yet is a
+   *  building you picked off the card, and a stray tap of shift is not a cancel. */
+  private placement: { def: UnitDef; fp: Footprint | null; workerId: number; rootUnitId?: number; shiftQueued?: boolean } | null = null;
   private ghost: HTMLDivElement | null = null;
   // Translucent building-silhouette ghost that follows the cursor while placing.
   private buildGhosts = new Map<string, SpawnInstance>();
@@ -3570,7 +3575,7 @@ export class MapViewerScene {
         c: "order", unitId: p.rootUnitId, order: { kind: "rootat", x, y }, queued,
       })) return;
       this.sounds?.playUi("PlaceBuildingDefault");
-      if (queued) return;
+      if (queued) { p.shiftQueued = true; return; }
       this.cardPage = "root";
       this.cancelPlacement();
       return;
@@ -3602,9 +3607,11 @@ export class MapViewerScene {
     // rather than Build → pick the tower again → click (WC3 — it is how a line of towers or
     // a wall of Farms actually gets laid down). The armed ghost stays with the same worker
     // and the same building; it ends the way any placement does — an unshifted click, a
-    // right-click, Escape, or selecting something else. An unshifted click is unchanged:
-    // one building, cursor cleared, back to the root page.
-    if (queued) return;
+    // right-click, Escape, or selecting something else — or LETTING GO OF SHIFT, which is
+    // what actually ends it in the game: the ghost rides the cursor for as long as the
+    // modifier that queued it is held (issue #123, and the keyup handler in attachControls).
+    // An unshifted click is unchanged: one building, cursor cleared, back to the root page.
+    if (queued) { p.shiftQueued = true; return; }
     this.cardPage = "root";
     this.cancelPlacement();
   }
@@ -11137,7 +11144,21 @@ export class MapViewerScene {
       this.keys.add(e.key.toLowerCase());
       this.checkCheatCode(e.key);
     });
-    this.on(window, "keyup", (e: KeyboardEvent) => this.keys.delete(e.key.toLowerCase()));
+    this.on(window, "keyup", (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      this.keys.delete(k);
+      // Letting go of SHIFT ends a shift-queued placement (issue #123 — the original game
+      // does this). Holding shift is what keeps the building on the cursor across clicks, so
+      // a wall of Farms is "hold shift, click, click, click" and the ghost is put away by
+      // the same gesture that was sustaining it — no extra right-click or Escape.
+      // Only a placement that has actually queued a site ends this way (`shiftQueued`): a
+      // building just picked off the build page rides the cursor on its own, and a stray tap
+      // of shift over it is not a cancel.
+      if (k === "shift" && this.placement?.shiftQueued) {
+        this.cardPage = "root";
+        this.cancelPlacement();
+      }
+    });
     this.on(c, "contextmenu", (e: Event) => e.preventDefault());
     // Suppress the browser's middle-click autoscroll (it fires off mousedown, which
     // preventDefault on pointerdown doesn't reach) so button 1 is free to drag-pan.
