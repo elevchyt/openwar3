@@ -6,10 +6,11 @@ A browser-first recreation of the **Warcraft III: The Frozen Throne (1.30.4)** e
 
 Goal: liberate WC3 from legacy constraints. Modern features planned:
 
+- **Cross-platform** — Windows, Linux, macOS, anything with a browser
 - **Multiplayer reconnect** — no more dropped games lost
 - **Better animation processing** — smoother than original
-- **Cross-platform** — Windows, Linux, macOS, anything with a browser
-
+- **Better AI** — improved AI engine that is friendlier to newer players and exciting to experienced ones
+  
 Contributions welcome.
 
 ## Quick start
