@@ -974,10 +974,19 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
   white-space: nowrap;
   pointer-events: none;
 }
+/* The inventory: the six buttons ARE the art's six painted frames (CONSOLE_ZONES.inventory is
+   the block their gold centres bound), so — exactly as with the command card below — no
+   padding, border or backing of ours may push them off it. The gutters come from
+   INVENTORY_GAP, set inline by buildConsole; the rows are 1fr so the grid fills the block
+   rather than stacking three squares from its top edge. */
 .hud-console.hud-console-skinned .hud-inventory {
   background: none;
   border: none;
-  padding: 2px;
+  padding: 0;
+}
+.hud-console.hud-console-skinned .hud-inv-grid {
+  height: 100%;
+  grid-template-rows: repeat(3, 1fr);
 }
 /* Command card: the grid IS the art's grid — the card's rect is the window the art leaves
    (CONSOLE_ZONES.command) and the cells divide it the way the art's gutters do, so no
@@ -997,7 +1006,13 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
   border-radius: 2px;
   aspect-ratio: 1;
 }
-.hud-console.hud-console-skinned .hud-inventory .hud-slot { background: none; border: none; }
+/* …and an inventory cell is exactly the art's cell, for the same reason a command one is:
+   the grid's own rows size it, so an aspect-ratio would only fight them. */
+.hud-console.hud-console-skinned .hud-inventory .hud-slot {
+  background: none;
+  border: none;
+  aspect-ratio: auto;
+}
 /* …except a command cell, which must be exactly the art's cell. Those are 80 × 81 texels —
    near enough square that an aspect-ratio looks right, and wrong enough that enforcing it
    shrinks every row and walks the grid off the art. */
@@ -1246,7 +1261,7 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
 .carried-item { z-index: 9; }
 .carried-hand { z-index: 10; } /* in front of the icon — the fingers close OVER it */
 .order-reticle.reticle { transform: translate(-50%, -50%); } /* centred on the point */
-.order-reticle.hand { transform: translate(-3px, -3px); } /* hotspot near the tip */
+.order-reticle.hand { transform: translate(-3px, -3px); } /* CURSOR_HOTSPOT — near the tip */
 /* Pulse the COLOUR intensity only — never opacity, never size. brightness()
    glows the tint brighter and back; opacity stays 1 the whole time. */
 .order-reticle.pulse { animation: reticle-pulse 0.8s ease-in-out infinite; }

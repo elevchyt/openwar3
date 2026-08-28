@@ -360,8 +360,10 @@ export interface HudDriver {
  *              reason the console is held at 4:3 (ui/consoleUi.ts).
  *
  * The one thing the art cannot tell us is the inventory, whose six slots are painted dark
- * rather than cut out; its rows were measured from those dark centres instead (pitch 0.0384,
- * matching the command card's).
+ * rather than cut out — but it DOES paint a gold frame around each pocket, and those frames
+ * are as good as a cut socket: the block below is the box their gold centres bound (measured
+ * on a 2560-wide window, where the frames sit on a 90 × 87-px pitch with each cell 77.5 px
+ * square, so the six of them span 167.5 × 251.5). The gutters are INVENTORY_GAP.
  *
  * The `info` socket is the one place we are on our own: it is a single wide hole with no
  * internal divisions, so what goes IN it — the name, the XP bar, the stat lines, the build
@@ -377,7 +379,7 @@ const CONSOLE_ZONES = {
   /** The second strip — mana. Left empty by the art when the unit has none. */
   portraitMana: { x: 0.2157, y: 0.0020, w: 0.0747, h: 0.0115 },
   info: { x: 0.3022, y: 0.0000, w: 0.2017, h: 0.1150 },
-  inventory: { x: 0.5146, y: 0.0011, w: 0.0725, h: 0.1125 },
+  inventory: { x: 0.5133, y: 0.0033, w: 0.0743, h: 0.1116 },
   command: { x: 0.6165, y: 0.0060, w: 0.1705, h: 0.1275 },
 } as const;
 
@@ -385,6 +387,12 @@ const CONSOLE_ZONES = {
  *  in 341 and 6-texel row gutters in 255. Expressed here rather than in CSS so the grid and
  *  the rect it fills come from one measurement. */
 const COMMAND_GAP = { col: 8 / 341, row: 6 / 255 } as const;
+
+/** The inventory's gutters, the same way: what the art leaves BETWEEN its six painted frames,
+ *  as a fraction of the block they span (12.5 of 167.5 across, 9.5 of 251.5 down — the two
+ *  differ because the art's own do). Cells then come out square without being told to, which
+ *  is the check that the block above was measured right. */
+const INVENTORY_GAP = { col: 12.5 / 167.5, row: 9.5 / 251.5 } as const;
 
 /**
  * Where the inventory COVER goes — the crest the console wears in place of the six slots
@@ -2385,6 +2393,14 @@ export class GameHud {
     }
     const grid = document.createElement("div");
     grid.className = "hud-inv-grid";
+    if (skinned) {
+      // The six pockets are the art's six painted frames, divided the way its gutters do —
+      // the same rule the command card lives under, and for the same reason: an icon that
+      // does not sit ON its frame reads as a misprint. (This grid used to be a flat 4px gap
+      // on a pitch of its own, which walked every slot but the middle row off the art.)
+      grid.style.columnGap = `${INVENTORY_GAP.col * 100}%`;
+      grid.style.rowGap = `${INVENTORY_GAP.row * 100}%`;
+    }
     // 6 inventory slot buttons (2×3), each with a persistent icon background, a
     // charge-count badge and a radial cooldown overlay (kept as children so a
     // per-frame refresh never wipes them). Left-click uses/arms; right-click drops.

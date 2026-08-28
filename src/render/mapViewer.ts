@@ -278,13 +278,19 @@ const SPELL_SOUND_ART: Record<string, (d: AbilityDef) => string[]> = {
 // The item icon carried on the cursor while moving it, as a fraction of an inventory
 // slot: just under it, so the hand looks like it's holding that same icon.
 const CARRIED_ITEM_SCALE = 0.85;
-// Where the two halves of the carried cursor sit, both measured from the pointer's tip.
-// The icon is offset a few pixels the way the idle pointer already leans; the gauntlet is
-// then set DOWN and RIGHT of the icon by a fraction of the icon's own size, so its curled
-// fingers close over the icon's right-hand edge. Kept in px-of-the-icon rather than
-// absolute px because the icon scales with the console.
-const CARRIED_ITEM_OFFSET: [number, number] = [6, 8];
-const CARRIED_HAND_OFFSET: [number, number] = [0.6, 0.3];
+// The race cursor's hotspot inside its own 32-px cell — the texel that sits ON the pointer.
+// Named once because THREE things have to agree on it: the `cursor:` rule, the hover hand
+// (.order-reticle.hand) and the carried gauntlet below. A DOM stand-in that skips it moves
+// the aiming point out from under the player mid-gesture, which is the whole complaint.
+const CURSOR_HOTSPOT: [number, number] = [3, 3];
+// Where the carried item's icon sits against the gauntlet holding it, straight off
+// `UI\Cursor\<race>Cursor.mdx`: "HoldItem" shows geoset 1 — the replaceable-21 quad that is
+// the item's own icon — at model x[-0.020, 0.007] y[-0.0186, 0.008], BEHIND (z -0.0192) the
+// hand quad at x[-0.006, 0.019] y[-0.0239, 0]. So the icon's top-left corner sits 0.014 left
+// of the hand's and 0.008 above it, which against the icon's own 0.027 × 0.0266 is the pair
+// below. A fraction of the ICON rather than absolute px because the icon is sized off a live
+// inventory slot and the console scales with the window; the gauntlet never does.
+const CARRIED_ITEM_OFFSET: [number, number] = [-0.014 / 0.027, -0.008 / 0.0266];
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
 // Command-card icons that aren't tied to a specific unit/ability: the order row
 // (Move/Stop/Hold/Attack/Patrol), a worker's Build/Repair, Cancel, and the four
@@ -9076,7 +9082,7 @@ export class MapViewerScene {
     frame.getContext("2d")!.drawImage(sheet, 0, 0);
     const url = frame.toDataURL();
     // Hotspot near the gauntlet's fingertip (top-left).
-    const rule = `url(${url}) 3 3, auto`;
+    const rule = `url(${url}) ${CURSOR_HOTSPOT[0]} ${CURSOR_HOTSPOT[1]}, auto`;
     document.body.style.cursor = rule;
     // The other two states this sheet answers for, both read off `UI\Cursor\<race>Cursor.mdx`
     // rather than guessed at — the model names its sequences and drives the cell with a
@@ -11499,10 +11505,14 @@ export class MapViewerScene {
    *  (another slot, the ground, an allied hero); body-fixed like the reticle, so
    *  `clientX`/`clientY` are viewport coords.
    *
-   *  Two DOM elements rather than a `cursor:` and one element, because the gauntlet sits a
-   *  whole icon's width away from the pointer's tip and a cursor hotspot can only be a point
-   *  INSIDE its own image. `carrying-item` hides the OS pointer for exactly as long as this
-   *  pair stands in for it. */
+   *  Two DOM elements rather than a `cursor:` and one element, because the icon hangs a whole
+   *  icon's width off the pointer's tip and a cursor hotspot can only be a point INSIDE its
+   *  own image. `carrying-item` hides the OS pointer for exactly as long as this pair stands
+   *  in for it.
+   *
+   *  The GAUNTLET is placed exactly where the OS pointer it replaces was drawn — same cell of
+   *  the same sheet, offset by the same CURSOR_HOTSPOT — so picking an item up does not move
+   *  the point you are aiming with; the icon then hangs off it by the model's own offset. */
   private updateCarriedItem(slot: number, clientX: number, clientY: number): void {
     const icon = slot >= 0 ? this.rts?.inventorySlots()[slot]?.icon : "";
     const url = icon ? this.blpIcon(icon) : null;
@@ -11527,13 +11537,16 @@ export class MapViewerScene {
       const px = Math.max(12, Math.round(slotPx * CARRIED_ITEM_SCALE));
       this.carryEl.style.width = `${px}px`;
       this.carryEl.style.height = `${px}px`;
-      this.carryEl.dataset.px = `${px}`; // the hand's offset is a fraction of this
+      this.carryEl.dataset.px = `${px}`; // the icon's own offset is a fraction of this
     }
+    // The gauntlet's own top-left, which is where the idle pointer's art was: the pointer
+    // minus the hotspot. Both halves are laid out from THAT, never from the raw pointer.
+    const hx = clientX - CURSOR_HOTSPOT[0];
+    const hy = clientY - CURSOR_HOTSPOT[1];
+    const px = Number(this.carryEl.dataset.px) || 32;
     this.carryEl.hidden = false;
-    const ix = clientX + CARRIED_ITEM_OFFSET[0];
-    const iy = clientY + CARRIED_ITEM_OFFSET[1];
-    this.carryEl.style.left = `${ix}px`;
-    this.carryEl.style.top = `${iy}px`;
+    this.carryEl.style.left = `${hx + px * CARRIED_ITEM_OFFSET[0]}px`;
+    this.carryEl.style.top = `${hy + px * CARRIED_ITEM_OFFSET[1]}px`;
     this.carryEl.style.backgroundImage = `url(${url})`;
     if (!this.holdHandUrl) return; // no cursor sheet — the icon alone still reads
     if (!this.carryHandEl) {
@@ -11545,10 +11558,9 @@ export class MapViewerScene {
       this.carryHandEl.style.backgroundImage = `url(${this.holdHandUrl})`;
       document.body.appendChild(this.carryHandEl);
     }
-    const px = Number(this.carryEl.dataset.px) || 32;
     this.carryHandEl.hidden = false;
-    this.carryHandEl.style.left = `${ix + px * CARRIED_HAND_OFFSET[0]}px`;
-    this.carryHandEl.style.top = `${iy + px * CARRIED_HAND_OFFSET[1]}px`;
+    this.carryHandEl.style.left = `${hx}px`;
+    this.carryHandEl.style.top = `${hy}px`;
   }
 
   private hideCursorOverlay(): void {
