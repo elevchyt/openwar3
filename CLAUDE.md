@@ -180,7 +180,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   scripts a value there is OURS unless a comment cites something. Its army ceiling is enforced at
   PRODUCTION rather than at the wave, which is the whole of "must not mass"; and its concession
   leaves through `EVENT_PLAYER_LEAVE` so Blizzard's own `MeleeTriggerActionPlayerLeft` hands the
-  units over instead of the AI demolishing its own base.
+  units over instead of the AI demolishing its own base. A race is a TABLE of named builds, one
+  rolled per match, and **expanding belongs to the build order** (`PlusStrategy.expandAt`) rather
+  than to the difficulty — a fast expand is a build, not a setting. Countering reads the game's
+  own `DAMAGE_TABLE` against what the AI has SCOUTED, so never add a hand-written counter chart.
+  **AMAI is GPL** — it was studied for the shape of the strategy table and nothing else; never
+  lift its code or its numbers.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
   that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
   files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its

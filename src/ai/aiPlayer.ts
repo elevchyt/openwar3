@@ -114,11 +114,24 @@ const TOWN_RADIUS = 1600;
  *  against it still wedges the queue. */
 const MINE_CLEAR = 320;
 
-/** How far out an expansion hall may stand from its mine. Bounded from ABOVE by the night
- *  elf: `Aent` Entangle has `Rng1` = 500, so a Tree of Life planted further than that from
- *  the mine it came to take can never wrap it (docs/night-elf.md). 460 leaves room for the
- *  snap without ever crossing that line, and is a short haul for the other three races too. */
+/**
+ * How far out an expansion hall may stand from its mine.
+ *
+ * Bounded from ABOVE by the NIGHT ELF and by nothing else: `Aent` Entangle has `Rng1` = 500, so
+ * a Tree of Life planted further than that from the mine it came to take can never wrap it
+ * (docs/night-elf.md). 460 leaves room for the snap without ever crossing that line.
+ *
+ * The other three races have no such rule — their hall only needs its miners' walk to be short
+ * — and holding them to the elf's number is a real cost, because the search is RINGS: at
+ * `SITE_RING_STEP` = 96 a ceiling of 460 offers exactly two of them, 320 and 416, in a
+ * 140-unit band around a mine that on most maps is hemmed in by trees. Two rings is easily
+ * blocked outright, and a blocked expansion hall is silent — `startUnit` has already reserved
+ * its gold by the time placement fails, so the AI pays for a hall it never founds, every pass,
+ * and starves everything below it in the build order. Give the races that can afford it a
+ * wider search; 700 is still a shorter haul than the width of a base.
+ */
 const EXPANSION_HALL_RANGE = 460;
+const EXPANSION_HALL_RANGE_WIDE = 700;
 
 /** Placement search: rings this far apart, out to this far from the town centre. */
 const SITE_RING_STEP = 96;
@@ -718,8 +731,11 @@ export class AiPlayer {
     // `townhall` is UnitData's own classification, and the same column `depotRoleFor` falls
     // back to for the campaign halls whose `Artn` row says nothing.
     if (def.classification.includes("townhall") && town >= 0 && !this.townHasHall(town)) {
+      // The night elf's hall has to end up inside Entangle's reach; everyone else's only has to
+      // be near. See EXPANSION_HALL_RANGE.
+      const reach = this.race === "nightelf" ? EXPANSION_HALL_RANGE : EXPANSION_HALL_RANGE_WIDE;
       const mine = world.mines.get(t.mineId);
-      if (mine) return this.spiral(def, mine.x, mine.y, MINE_CLEAR, EXPANSION_HALL_RANGE, t);
+      if (mine) return this.spiral(def, mine.x, mine.y, MINE_CLEAR, reach, t);
     }
 
     // A tower belongs at the town's threat-facing edge.

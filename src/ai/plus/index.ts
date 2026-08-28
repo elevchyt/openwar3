@@ -1,14 +1,16 @@
+import { MELEE } from "../../data/gameplayConstants";
 import type { PlayableRace } from "../../data/races";
 import type { SimUnit } from "../../sim/world";
 import { simProfile, perfNow } from "../../sim/profile";
 import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, TOWN_RADIUS } from "../aiPlayer";
 import { PlusCaster } from "./casting";
+import { EnemyMemory, type EnemyRead } from "./counter";
 import {
   CONCEDE_NOT_BEFORE, CONCESSIONS, GREETINGS, GREET_AT, GREET_STAGGER, LEAVE_AFTER, hopeless,
 } from "./chatter";
 import { buildPlan, harvestPlan, type PlusCtx } from "./plan";
 import { plusProfile, type PlusProfile } from "./profile";
-import { PLUS_RACES, type PlusRaceTable } from "./races";
+import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from "./races";
 
 // Computer+ — the improved melee AI (issue #124). Start at docs/computer-plus.md.
 //
@@ -17,8 +19,16 @@ import { PLUS_RACES, type PlusRaceTable } from "./races";
 // a DIFFERENT PLAYER sitting at the same controls. It reuses the bottom two layers — `AiPlayer`
 // is the library and the natives, and it is race-neutral bookkeeping (a census, a build array,
 // placement, a harvest plan, hero skills) rather than a strategy — and replaces everything
-// above them: what to build (plus/plan.ts + plus/races.ts), how hard to play (plus/profile.ts),
-// when to cast (plus/casting.ts), and what to say (plus/chatter.ts).
+// above them: which build it is playing and what that build wants (plus/races.ts + plus/plan.ts),
+// how hard to play (plus/profile.ts), how to answer what the enemy turns out to be fielding
+// (plus/counter.ts), when to cast (plus/casting.ts), and what to say (plus/chatter.ts).
+//
+// **What AMAI contributed.** AMAI (github.com/SMUnlimited/AMAI) is GPL and ships as JASS inside
+// a map; it was STUDIED and never copied, which is the standing rule in CLAUDE.md. Two of its
+// ideas are here, both as shapes rather than as data: a race owns a weighted TABLE of named
+// builds and each build carries its own expansion clock (plus/races.ts), and a beaten AI says
+// so and leaves (plus/chatter.ts). Its personality profiles are deliberately not — issue #124
+// rules them out.
 //
 // **It never touches the classic AI.** `MeleeAi` and `ComputerPlusAi` are two objects with no
 // shared mutable state; `RtsController` seats a slot in exactly one of them, per seat, so a
@@ -47,10 +57,10 @@ export interface PlusHost extends AiHost {
    * melee script is already listening for.
    *
    * This is the answer to the one thing issue #124 asks us NOT to copy from AMAI: "when the AI
-   * leaves it destroys its buildings, which shouldn't be happening in our case". AMAI has to
-   * do that because a JASS script's only way to end its own player is to satisfy the defeat
-   * condition, and the defeat condition is "your team owns no structures". We are not
-   * constrained that way: raising the event runs Blizzard's own
+   * leaves it destroys its buildings, which shouldn't be happening in our case". AMAI has no
+   * choice — it ships as JASS inside a map, and a script's only way to end its own player is to
+   * satisfy the defeat condition, which is "your team owns no structures". We are not
+   * constrained that way, because the engine is ours: raising the event runs Blizzard's own
    * `MeleeTriggerActionPlayerLeft`, which hands the units to Neutral Passive
    * (`MakeUnitsPassiveForTeam`) and calls `MeleeDoLeave`. Nothing is destroyed, and the
    * remaining player is declared the winner by the map's own victory check rather than by us.
@@ -100,7 +110,13 @@ interface Brain {
   readonly ai: AiPlayer;
   readonly profile: PlusProfile;
   readonly table: PlusRaceTable;
+  /** The build it rolled at seat time and plays for the whole match (plus/races.ts). */
+  readonly strategy: PlusStrategy;
   readonly caster: PlusCaster;
+  /** What it has seen of the enemy army, and the read taken off it — the input to countering
+   *  (plus/counter.ts). Refreshed on the army pass, since that is when it is looking anyway. */
+  readonly memory: EnemyMemory;
+  enemy: EnemyRead;
   /** Seconds since this computer was seated. */
   clock: number;
   buildIn: number;
@@ -153,7 +169,11 @@ export class ComputerPlusAi {
     const ai = new AiPlayer(player, race, difficulty, this.host, startX, startY, seed);
     // No fog cheat at any difficulty — see the file header.
     ai.bypassFog = false;
-    this.pickHeroes(ai, table);
+    // WHICH BUILD this computer is playing, rolled once off its own stream and held for the
+    // match. Two Computer+ players on one map open differently; the same seat on the same seed
+    // opens the same way twice.
+    const strategy = rollStrategy(table, profile.techTier, (lo, hi) => ai.randomInt(lo, hi));
+    this.pickHeroes(ai, table, strategy);
     const squad = new Set<number>();
     // The harvest plan has to know who is spoken for, or an undead computer marches its attack
     // ghouls straight back into the forest a second after mustering them — and the scout would
@@ -161,7 +181,9 @@ export class ComputerPlusAi {
     const held = new Set<number>();
     ai.captainHeld = held;
     this.brains.push({
-      ai, profile, table,
+      ai, profile, table, strategy,
+      memory: new EnemyMemory(),
+      enemy: { seen: 0, air: 0, armor: {} },
       caster: new PlusCaster({
         world: this.host.world,
         player,
@@ -206,12 +228,13 @@ export class ComputerPlusAi {
    *
    * `PickMeleeHero` draws three of the four at random, which is common.ai's own behaviour and
    * is why the classic AI opens with a Blood Mage as often as an Archmage. A human opens with
-   * their race's standard hero, so Computer+ takes the list in order — with the SECOND and
-   * THIRD swapped at random, because two Computer+ players on one map opening identically
-   * every game reads worse than it plays.
+   * the hero their BUILD wants, so Computer+ takes the strategy's own order where it states one
+   * (a Tauren build opens Tauren Chieftain, a Bear build opens Keeper of the Grove) and the
+   * race's otherwise — with the SECOND and THIRD swapped at random, because two computers
+   * playing the same build should still not be identical.
    */
-  private pickHeroes(ai: AiPlayer, table: PlusRaceTable): void {
-    const [first, ...rest] = table.heroes;
+  private pickHeroes(ai: AiPlayer, table: PlusRaceTable, strategy: PlusStrategy): void {
+    const [first, ...rest] = strategy.heroes ?? table.heroes;
     if (ai.randomInt(0, 1) === 1 && rest.length >= 2) [rest[0], rest[1]] = [rest[1], rest[0]];
     ai.heroId = first ?? "";
     ai.heroId2 = rest[0] ?? "";
@@ -280,11 +303,14 @@ export class ComputerPlusAi {
       ai: b.ai,
       profile: b.profile,
       table: b.table,
+      strategy: b.strategy,
+      enemy: b.enemy,
       clock: b.clock,
       armyFood: this.armyFood(b),
       tier: this.tier(b),
       threatened: b.ai.townThreatened(),
       foodOf: (id) => this.host.registry.get(id)?.foodUsed ?? 0,
+      defOf: (id) => this.host.registry.get(id),
     };
   }
 
@@ -327,6 +353,7 @@ export class ComputerPlusAi {
 
   private armyPass(b: Brain): void {
     this.prune(b);
+    this.scoutEnemy(b);
     this.recruit(b);
     this.scoutPass(b);
     this.hold(b);
@@ -362,6 +389,32 @@ export class ComputerPlusAi {
       if (this.squadFood(b) >= b.profile.attackFood) break;
       b.squad.add(u.id);
     }
+  }
+
+  /**
+   * Look at the enemy — and remember it.
+   *
+   * Every hostile unit currently under this player's OWN eyes is noted (`AiPlayer.knows`, which
+   * for Computer+ is never the fog cheat), and the read taken off that memory is what
+   * `buildableMix` re-weights the army against. So the countering is only ever as good as the
+   * scouting: an opponent this computer has not looked at is an opponent it does not counter.
+   *
+   * Skipped entirely at a difficulty that does not counter, since nothing would read it.
+   */
+  private scoutEnemy(b: Brain): void {
+    if (b.profile.counterWeight <= 0) return;
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.owner === b.ai.player || u.building) continue;
+      // A PLAYER's army, not the map's. `hostileTo` is true of creeps too — and it should be,
+      // they are hostile — but a creep camp is not a build order to answer: reading them in
+      // made Echo Isles look like a seventy-unit Heavy-armour army before either player had
+      // made a soldier, and the whole mix would have been re-weighted against the map.
+      if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
+      if (!b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
+      b.memory.note(u, b.clock);
+    }
+    b.memory.forget(b.clock, b.profile.counterMemory);
+    b.enemy = b.memory.read(b.profile.counterShare, (id) => this.host.registry.get(id));
   }
 
   /** Who the economy may not touch: the army and the scout, in one live set. */
@@ -582,8 +635,14 @@ export class ComputerPlusAi {
   /**
    * What the wave is FOR.
    *
-   * Three rungs, in the order a player thinks about them, and two of the three are gated by
-   * the difficulty:
+   * Four rungs, in the order a player thinks about them:
+   *  0. whatever is SITTING ON the mine the build order has decided to take. `AiPlayer.takeExp`
+   *     is set by `startExpansion` when it wants a town it cannot found yet and `expansionFoe`
+   *     is what is in the way — which on a melee map is almost always a creep camp, since that
+   *     is what expansions are guarded by. Without this rung a strategy's expansion clock fires
+   *     for ever and the AI never takes a second mine at all (measured on Echo Isles: an insane
+   *     orc past its own expansion time, still on one mine, with nothing trying to clear it).
+   *     It is the classic captain's own second rung, for the same reason;
    *  1. a CREEP CAMP the army can handle, while the hero still has levels to gain from it
    *     (`PlusProfile.creeps` — an easy computer never creeps at all, which is most of why its
    *     hero stays level 1);
@@ -594,6 +653,13 @@ export class ComputerPlusAi {
    */
   private pickTarget(b: Brain): { id: number; x: number; y: number } | null {
     const { ai, profile } = b;
+    if (ai.takeExp) {
+      const foe = ai.expansionFoe();
+      if (foe) {
+        ai.takeExp = false; // asked and answered; `startExpansion` sets it again if still wanted
+        return { id: foe.id, x: foe.x, y: foe.y };
+      }
+    }
     if (profile.creeps && this.heroLevel(b) < CREEP_UNTIL_LEVEL) {
       const max = Math.floor((this.squadFood(b) * 4) / 5);
       const camp = ai.creepCamp(Math.max(0, max - CREEP_WINDOW), max, this.hasAir(b));
@@ -678,30 +744,50 @@ export class ComputerPlusAi {
   /** Enemy fighters standing in one of our towns. */
   private invaders(b: Brain): number {
     let n = 0;
-    for (let t = 0; t < b.ai.townCountTotal(); t++) {
-      const town = b.ai.townAtIndex(t);
-      if (!town) continue;
-      for (const u of this.host.world.units.values()) {
-        if (u.hp <= 0 || u.owner === b.ai.player || !b.ai.hostileTo(u)) continue;
-        if (u.building || u.isPeon) continue;
-        if (Math.hypot(u.x - town.x, u.y - town.y) <= TOWN_RADIUS) n++;
-      }
-    }
+    for (const u of this.host.world.units.values()) if (this.isInvader(b, u)) n++;
     return n;
   }
 
   private nearestThreat(b: Brain): SimUnit | null {
     let best: SimUnit | null = null;
     let bestD = Infinity;
+    for (const u of this.host.world.units.values()) {
+      if (!this.isInvader(b, u)) continue;
+      const d = this.townDistance(b, u);
+      if (d < bestD) { bestD = d; best = u; }
+    }
+    return best;
+  }
+
+  /**
+   * Is this something ATTACKING one of our towns?
+   *
+   * The distinction that matters, and it cost a whole game to find: a CREEP CAMP near the base
+   * is not an attack. `TOWN_RADIUS` is 1600, which on a small map reaches the nearest camp, and
+   * counting the creeps standing in it made an insane orc read as "under attack" from the first
+   * minute to the last — permanently in `defending`, never massing, and never expanding, since
+   * the plan will not found a second town during a raid.
+   *
+   * So a creep counts only when it is actually swinging at something of ours; a hostile PLAYER
+   * unit counts for being there at all, because a player standing in your base has walked there
+   * on purpose. Buildings and workers are neither.
+   */
+  private isInvader(b: Brain, u: SimUnit): boolean {
+    if (u.hp <= 0 || u.owner === b.ai.player || u.building || u.isPeon) return false;
+    if (!b.ai.hostileTo(u)) return false;
+    if (this.townDistance(b, u) > TOWN_RADIUS) return false;
+    if (!u.isCreep && u.owner >= 0 && u.owner < MELEE.MAX_PLAYERS) return true;
+    // A creep (or a neutral-hostile guard): only while it is fighting one of ours.
+    const target = u.targetId ? this.host.world.units.get(u.targetId) : null;
+    return !!target && target.owner === b.ai.player;
+  }
+
+  /** How far this unit is from the nearest of our towns. */
+  private townDistance(b: Brain, u: SimUnit): number {
+    let best = Infinity;
     for (let t = 0; t < b.ai.townCountTotal(); t++) {
       const town = b.ai.townAtIndex(t);
-      if (!town) continue;
-      for (const u of this.host.world.units.values()) {
-        if (u.hp <= 0 || u.owner === b.ai.player || !b.ai.hostileTo(u)) continue;
-        if (u.building || u.isPeon) continue;
-        const d = Math.hypot(u.x - town.x, u.y - town.y);
-        if (d <= TOWN_RADIUS && d < bestD) { bestD = d; best = u; }
-      }
+      if (town) best = Math.min(best, Math.hypot(u.x - town.x, u.y - town.y));
     }
     return best;
   }

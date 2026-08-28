@@ -1,12 +1,16 @@
 // Computer+ — what it says, and when it accepts that it has lost (issue #124).
 //
 // Two things the classic melee AI never does: it greets you at the start of the game, and it
-// concedes at the end of one. Both are asked for by the issue, and both are deliberately
-// PLAIN. AMAI — the reference this feature is measured against — gives its bots invented
-// names and a joke book; issue #124 rules both out in as many words ("we don't want AIs to
-// have custom names etc. … and we especially don't want star wars jokes"). So the vocabulary
-// below is six lines of ladder shorthand and nothing else, and the speaker is whatever the
-// lobby already calls that slot.
+// concedes at the end of one. Both are asked for by issue #124, which names AMAI as the AI
+// that does them.
+//
+// What we took from AMAI here is the BEHAVIOUR and one of its tables: it hangs a PROFILE on
+// each bot — `TFT/Profiles.txt`, rows called Hunter, Crazy_Rusher, Xerox, each with a taunt
+// rate and a surrender value — and issue #124 rules that whole idea out in as many words ("we
+// don't want AIs to have custom names etc. … and we especially don't want star wars jokes").
+// So a Computer+ player is anonymous: the vocabulary below is six lines of ladder shorthand,
+// there is no personality behind it, and the speaker is whatever the lobby already calls that
+// slot.
 //
 // The lines go out through the ordinary chat path — `RtsController.onChatSaid` →
 // `MapViewerScene.deliverChat` — so a computer's "glhf" is routed, tagged, coloured, logged

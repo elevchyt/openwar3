@@ -16,11 +16,42 @@ still towers, still masses, and still runs a build order a new player cannot ans
 first one: a different strategy layer, a different army manager, a different spell chooser and a
 different set of manners, seated per slot by a checkbox in Advanced Options.
 
+## What AMAI contributed, and what it did not
+
+[AMAI](https://github.com/SMUnlimited/AMAI) is the reference issue #124 names, and being honest
+about what was taken from it matters — it is **GPL**, and it ships as JASS inside a map, so the
+standing rule in [`CLAUDE.md`](../CLAUDE.md) applies: *study, don't lift*. It was read; nothing
+was copied. No AMAI code, no AMAI numbers.
+
+Two of its **shapes** are here, and both are ideas rather than data:
+
+* **A race is a weighted table of named builds, and each build owns its expansion clock.**
+  AMAI's `TFT/<Race>/Strategy.txt` is where this is legible — one row per strategy ("I'm going
+  gryphon riders", "I'm going mass crypt fiends"), each with its key units, the tier it aims at,
+  a roll weight, and an `expansion time` / `second expansion time` pair. That last column is the
+  insight worth having: *when you take a second mine is part of the build order*, not a property
+  of how good the player is. Our `PlusStrategy` is that idea with our own builds and timings.
+* **A beaten AI says so and leaves** — and the one thing issue #124 asks us explicitly *not* to
+  copy, its demolishing its own base on the way out, is the section below.
+
+Two of its ideas were deliberately rejected:
+
+* **Personality profiles.** AMAI's `TFT/Profiles.txt` gives each bot a name, a taunt rate and a
+  surrender value (Hunter, Crazy_Rusher, Xerox…). Issue #124 rules the whole idea out in as many
+  words. A Computer+ player is anonymous: the build decides the play and nothing decides a
+  personality.
+* **Mid-game strategy switching.** See below.
+
+One place we went further: AMAI names each strategy's key buildings by hand, which can disagree
+with the units the strategy actually asks for. Here a strategy names units and weights only, and
+its buildings and upgrades are derived — a build cannot be inconsistent with itself.
+
 ## The one-paragraph shape of it
 
 | Layer | Classic melee AI | Computer+ |
 | --- | --- | --- |
-| Strategy | four transcribed scripts, ~650 lines each | ONE build routine + four data tables ([`plan.ts`](../src/ai/plus/plan.ts), [`races.ts`](../src/ai/plus/races.ts)) |
+| Strategy | four transcribed scripts, one build order each | ONE build routine over a table of NAMED BUILDS per race, rolled per match ([`plan.ts`](../src/ai/plus/plan.ts), [`races.ts`](../src/ai/plus/races.ts)) |
+| Countering | none | reads the scouted enemy composition off the game's own damage table ([`counter.ts`](../src/ai/plus/counter.ts)) |
 | Difficulty | 40 `!= MELEE_NEWBIE` guards scattered across five files, plus two engine cheats | one table, [`profile.ts`](../src/ai/plus/profile.ts) |
 | Army | `common.ai`'s captain: a muster list, one wave at a time | one group, food-capped at production, with defend/attack/retreat states |
 | Spells | one hiveworkshop thread, transcribed ([`casting.ts`](../src/ai/casting.ts)) | roles + a priority ladder + target value ([`plus/casting.ts`](../src/ai/plus/casting.ts)) |
@@ -71,6 +102,7 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | retreats a broken army | **no** | at 35 % | at 40 % |
 | focus-fires / creeps / raids workers | no / no / no | no / yes / no | yes / yes / yes |
 | spell roles it uses | heal, nuke, summon, morph | + panic, disable, buff | all nine |
+| builds it can roll | tier-1 only | tier ≤ 2 | all of them |
 
 Read the Easy column as a description of a player: it makes eight workers and six food of
 tier-1 soldiers, never expands, never towers, never leaves its Town Hall, comes to find you
@@ -87,15 +119,90 @@ have produced an AI that builds twenty Grunts, attacks with six, and still has t
 standing when you walk into its base — which is exactly what "must NOT mass armies at all" rules
 out.
 
-## The build plan: one routine, four tables
+## Strategies: a race is a table of builds, not one build
+
+Each race owns several named builds ([`races.ts`](../src/ai/plus/races.ts)) — Human plays
+Footmen-and-Riflemen, Riflemen-and-Mortars, Knights, Sorceresses-and-Spell-Breakers or Gryphons;
+Night Elf plays Archers, Huntresses-and-Dryads, Dryads-and-Druids-of-the-Claw, Talons-and-Hippos
+or Chimaeras — and one is **rolled at seat time**, weighted, off the AI's own RNG stream. Two
+Computer+ players on one map open differently; the same seat on the same seed opens the same way
+twice.
+
+A strategy is a **weighted unit mix** and two clocks, and nothing else is written down:
+
+* the **buildings** it needs are derived from the units it names (`UnitRow.from` / `needs`);
+* the **upgrades** it takes are whichever its buildings can research — so a Gryphon build takes
+  the Aviary's upgrades and a Footman build does not, with no list to keep in step;
+* the **hero** it opens with is the build's own where it states one (a Tauren build opens Tauren
+  Chieftain, a Bear build opens Keeper of the Grove), the race's otherwise.
+
+**Difficulty picks which builds are on the menu.** A strategy declares the hall tier it aims at,
+and one above the difficulty's `techTier` is never offered — so an easy computer only ever rolls
+its race's simplest openings, and Insane can roll anything.
+
+We roll ONCE and hold it. AMAI switches strategy mid-game once its `strat_minimum_time` has
+passed; we do not, because a switch abandons half-built production and nothing here yet measures
+whether it was worth it. Countering (below) is the adaptive part instead.
+
+### Expanding is part of the BUILD ORDER
+
+Each strategy carries `expandAt` and `expandAgainAt`. A ranged line that holds ground takes its
+second mine at four minutes; a Raider build that intends to be somewhere else takes it at eight;
+an air build later still. **This is not a difficulty setting** — all the difficulty contributes
+is a ceiling on how many towns it will ever hold, and `expandDelay`, seconds added to whatever
+clock the build set.
+
+Three gates sit on top of the clock, and each answers a different question: *can it* (the
+difficulty's cap; a free mine; the gold; and creeps on the spot, which the attack ladder clears
+first — see rung 0 of `pickTarget`), *should it now* (the strategy's clock, **or** the ore in the
+mines it already owns running out — a build order is a plan, not a promise), and *is it safe*
+(never while something hostile is standing in one of its towns).
+
+The expansion row sits above the tier-up **and above the second hero** in the ladder, because
+both are things the AI SAVES for and a saved-for row halts everything under it. With the second
+hero above it, an insane orc past its own expansion time never founded a second town at all.
+
+## Countering: the damage table, read off what it has scouted
+
+Warcraft III's rock-paper-scissors is a table — `Units\MiscGame.txt`'s `DamageBonus*` lists, the
+same numbers Liquipedia's *Armor and Attack types* page and classic.battle.net's
+`armorandweapontypes.shtml` render. Piercing does 2.00 into Light and 0.35 into Fortified; Magic
+does 2.00 into Heavy; Siege does 1.50 into Fortified and 0.50 into Medium.
+
+So [`counter.ts`](../src/ai/plus/counter.ts) contains **no counter chart**. It reads
+`DAMAGE_TABLE[attackType][armorType]`, computed from the game's own raw lists, which means a
+custom map that re-tunes the matrix moves the AI with it.
+
+How it works:
+
+1. **It only counters what it has SEEN.** Every hostile *player* unit under this computer's own
+   eyes is remembered, with a timestamp — creeps are excluded, because a creep camp is not a
+   build order to answer (reading them in made Echo Isles look like a seventy-unit Heavy-armour
+   army before either player had made a soldier). Sightings age out, so the read is of the
+   army the enemy has *now*.
+2. **A couple of units is noise; a third of an army is a fact.** A share below the difficulty's
+   `counterShare` is dropped from the read entirely.
+3. **The mix is re-weighted, not rewritten.** Each candidate unit gets a score: its attack type
+   against the armour shares seen, plus a large premium or penalty for being able to shoot up at
+   all when the enemy is air-heavy — that second half is what turns "the enemy went Gryphons"
+   into "build Dragonhawks", and no damage multiplier expresses it. The score moves the
+   strategy's own weight by `1 + (score − 1) × counterWeight` and never below a floor, so the
+   computer is still visibly playing the build it opened with.
+
+**Easy never counters at all** — it builds what it opened with, whatever walks into its base.
+Normal wants a dozen units seen and half its army to be one thing before it believes it, moves
+its mix a third of the way, and forgets in ninety seconds. Insane reacts at six units and a
+quarter share, moves fully, and remembers four minutes.
+
+## The build ladder: one routine, one table per build
 
 A melee opening is the same game in four vocabularies, so [`plan.ts`](../src/ai/plus/plan.ts) is
 one routine and [`races.ts`](../src/ai/plus/races.ts) is four tables of ids, weights and gates.
 The block ORDER in `buildPlan` is the strategy, because `OneBuildLoop` reserves gold down the
 list **and returns at the first unit row it cannot afford**:
 
-> hall → workers → food → altar & barracks → heroes → **core army** → tech buildings → tier →
-> towers → upgrades → expansion → **the rest of the army**
+> hall → workers → food → altar & barracks → **first hero** → **core army** → tech buildings →
+> **expansion** → extra heroes → tier → towers → upgrades → **the rest of the army**
 
 Four rules run through it. The first two are the library's own behaviour; the last two are what
 that behaviour does to a naive ordering, and both were found by watching a match rather than by
@@ -145,6 +252,10 @@ utilize ALL abilities, especially things like Bear Form" — so
 
 Legality is still the sim's — `castUseError` / `castError`, the click-time gates — so Computer+
 can never be more permissive than the button a player presses.
+
+The Night Elf **Dryads and Druids of the Claw** build is the one that makes issue #124's named
+ability reachable in a normal game: `[Abrf]` is gated on `Redc` at rank TWO, so a build has to
+actually want Druids of the Claw for the AI to research far enough to have Bear Form at all.
 
 **Bear Form was not implemented at all**, which is how issue #124's example turned into a sim
 change: `[Abrf]` (and `[Arav]`, Raven Form) were missing from `KNOWN_ABILITIES`, so

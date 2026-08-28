@@ -1,6 +1,8 @@
+import type { UnitDef } from "../../data/units";
 import type { AiPlayer } from "../aiPlayer";
+import { counterScore, type EnemyRead } from "./counter";
 import type { PlusProfile } from "./profile";
-import type { PlusRaceTable } from "./races";
+import type { PlusRaceTable, PlusStrategy } from "./races";
 
 // Computer+ — the build plan (issue #124).
 //
@@ -21,7 +23,11 @@ import type { PlusRaceTable } from "./races";
 //     it could not start, a row for a unit whose producer is missing silently starves every
 //     row under it. So every army/tech row is gated on its producer STANDING (`countDone`),
 //     never on "we intend to have one".
-//  2. **The army has a ceiling, and it is enforced here.** `PlusProfile.armyFood` is a food
+//  2. **The strategy names UNITS; everything else is derived.** A build says "Gryphon Riders,
+//     Dragonhawks, a few Riflemen" and the buildings it needs (`UnitRow.from` / `needs`) and
+//     the upgrades it takes (whichever its buildings can research) fall out of that. A strategy
+//     therefore cannot ask for a unit it has not built the producer for — see plus/races.ts.
+//  3. **The army has a ceiling, and it is enforced here.** `PlusProfile.armyFood` is a food
 //     budget spent down the race's mix; an easy computer asks for twelve food of soldiers and
 //     then stops asking. That is issue #124's "must NOT mass armies at all (must have
 //     constraints for this)", and it has to be at PRODUCTION — an AI that builds twenty Grunts
@@ -33,6 +39,11 @@ export interface PlusCtx {
   readonly ai: AiPlayer;
   readonly profile: PlusProfile;
   readonly table: PlusRaceTable;
+  /** The build this player rolled at seat time (plus/races.ts). */
+  readonly strategy: PlusStrategy;
+  /** The enemy army as this player has SCOUTED it — the input to countering. Empty until
+   *  something has been seen, which is the whole of "it only counters what it has seen". */
+  readonly enemy: EnemyRead;
   /** Seconds since this computer was seated. */
   readonly clock: number;
   /** Food currently spent on FIGHTERS — workers, buildings and the things they are building
@@ -44,6 +55,8 @@ export interface PlusCtx {
   readonly threatened: boolean;
   /** A unit type's food cost. */
   foodOf(id: string): number;
+  /** A unit type's whole row — what `counterScore` reads its attack type and weapons off. */
+  defOf(id: string): UnitDef | undefined;
 }
 
 /** How much food headroom to keep. Six is one Farm's worth of slack, which is about how far
@@ -85,8 +98,9 @@ const TOWER_CLOCK = 480;
 const FACTORY_GOLD = 800;
 const FACTORY_ARMY = 40;
 
-/** Ore left in our own mines below which it is time to take another (the same question every
- *  race script asks as `c_gold_owned < 2000`, at the same number). */
+/** Ore left in our own mines below which it is time to take another whatever the build order
+ *  planned — the same question every race script asks as `c_gold_owned < 2000`, at the same
+ *  number. This is the NEED half of expanding; the strategy's clock is the PLAN half. */
 const EXPAND_GOLD = 2000;
 
 /**
@@ -104,11 +118,15 @@ const EXPAND_GOLD = 2000;
  *    the middle, and "full up with more troops in general" at the bottom;
  *  · a small CORE army sits high, so that saving for a Keep never means standing there with
  *    nothing on the field;
- *  · the support buildings come BEFORE the tier-up, because the tier-up is the one row the AI
- *    genuinely SAVES for and a saved-for row blocks everything under it. A Forge is two hundred
- *    gold and makes the army you already have better; a Stronghold is seven hundred. Put the
- *    Stronghold first and the Forge never gets built at all — measured, and it is also the
- *    order every real orc build writes down.
+ *  · the support buildings AND THE EXPANSION come before the tier-up, because the tier-up is
+ *    the one row the AI genuinely SAVES for and a saved-for row blocks everything under it. A
+ *    Forge is two hundred gold and makes the army you already have better; a Stronghold is
+ *    seven hundred. Put the Stronghold first and the Forge never gets built at all — measured,
+ *    and it is also the order every real orc build writes down. The expansion is above it for
+ *    the same reason and a second one: expanding INSTEAD of teching is what a fast-expand build
+ *    order is, and a strategy that has decided to take a second mine at four minutes must not
+ *    be held behind a Stronghold it is not saving for yet. It emits no row at all when its
+ *    clock has not come due, so this costs a build that is not expanding nothing.
  *
  * Read the list as a ladder player's priorities, top to bottom.
  */
@@ -124,13 +142,14 @@ export function buildPlan(c: PlusCtx): void {
   workers(c);
   supply(c);
   basics(c);
-  heroes(c);
+  firstHero(c);
   army(c, CORE_ARMY_FOOD); // enough not to die to the first raid, cheap enough not to block tech
   techBuildings(c);
+  expand(c);
+  extraHeroes(c);
   tierUp(c);
   towers(c);
   upgrades(c);
-  expand(c);
   army(c, c.profile.armyFood); // …and the rest of it, with everything above already paid for
 }
 
@@ -175,21 +194,35 @@ function basics(c: PlusCtx): void {
 }
 
 /**
- * As many heroes as the difficulty fields.
+ * The FIRST hero, which every build wants and wants early.
  *
- * One at a time and in preference order (the table's own, not a roll — see PlusRaceTable.
- * heroes), each gated on army food rather than on a clock: a second hero is what you buy when
- * the first one has soldiers to lead. A DEAD hero is handled for free — `SetProduce` turns a
- * request for a hero this player has lying dead into a revival, which is what "always rebuild
- * heroes for defense" has always meant.
+ * A dead hero is handled for free — `SetProduce` turns a request for a hero this player has
+ * lying dead into a revival, which is what "always rebuild heroes for defense" has always
+ * meant — and that is the reason this row sits high rather than being a one-off: replacing a
+ * lost hero outranks almost everything.
  */
-function heroes(c: PlusCtx): void {
-  const { ai, profile, armyFood } = c;
-  const { table } = c;
+function firstHero(c: PlusCtx): void {
+  const { ai, table } = c;
   if (ai.countDone(table.altar) < 1) return;
-  if (ai.count(ai.heroId) < 1) return void ai.setBuildUnit(1, ai.heroId);
-  if (profile.heroes >= 2 && ai.count(ai.heroId2) < 1) {
-    if (armyFood >= HERO2_ARMY) ai.setBuildUnit(1, ai.heroId2);
+  if (ai.count(ai.heroId) < 1) ai.setBuildUnit(1, ai.heroId);
+}
+
+/**
+ * …and the second and third, which are a LUXURY and are priced like one.
+ *
+ * They sit below the expansion deliberately. A hero is four hundred gold and, being a unit row,
+ * HALTS the build loop while the AI saves for it — so with the second hero above the expansion
+ * an insane orc past its own expansion time never founded a second town at all, because it was
+ * always saving for a Far Seer. A ladder player takes the mine first, and so does this.
+ *
+ * Each is gated on army food rather than on a clock: a second hero is what you buy when the
+ * first one has soldiers to lead.
+ */
+function extraHeroes(c: PlusCtx): void {
+  const { ai, profile, armyFood, table } = c;
+  if (ai.countDone(table.altar) < 1 || ai.count(ai.heroId) < 1) return;
+  if (ai.count(ai.heroId2) < 1) {
+    if (profile.heroes >= 2 && armyFood >= HERO2_ARMY) ai.setBuildUnit(1, ai.heroId2);
     return;
   }
   if (profile.heroes >= 3 && ai.count(ai.heroId3) < 1 && armyFood >= HERO3_ARMY) {
@@ -213,10 +246,9 @@ function heroes(c: PlusCtx): void {
  * by whatever the first bought, so the two never double-order.
  */
 function army(c: PlusCtx, budget: number): void {
-  const { ai, profile, table, tier } = c;
+  const { ai, profile } = c;
   const spend = Math.min(budget, profile.armyFood);
-  const cap = Math.min(profile.techTier, tier);
-  const rows = table.army.filter((r) => r.tier <= cap && producerReady(c, r.from, r.needs));
+  const rows = buildableMix(c);
   const total = rows.reduce((n, r) => n + r.weight, 0);
   if (total <= 0) return;
   for (const r of rows) {
@@ -230,6 +262,55 @@ function army(c: PlusCtx, budget: number): void {
   }
 }
 
+/**
+ * The strategy's mix, narrowed to what can be produced now and RE-WEIGHTED against what the
+ * enemy has been seen to field.
+ *
+ * The counter half is the difficulty's (`PlusProfile.counterWeight`, 0 on Easy) and is applied
+ * as a nudge rather than a rewrite: `1 + (score − 1) × weight` leaves a neutral matchup exactly
+ * where the build order put it and pushes a good or bad one by as much as the difficulty is
+ * willing to react. So an insane computer that has scouted an air army shifts its Riflemen up
+ * and its Footmen down without ever abandoning the build it is playing — which is what a
+ * player does, and is why this is not a strategy SWITCH.
+ */
+function buildableMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
+  const { profile, table, strategy, tier, enemy } = c;
+  const cap = Math.min(profile.techTier, tier);
+  const counter = profile.counterWeight > 0 && enemy.seen >= profile.counterSample;
+  const out: Array<{ unit: string; weight: number }> = [];
+  for (const [unit, weight] of Object.entries(strategy.mix)) {
+    const row = table.units[unit];
+    if (!row || row.tier > cap || !producerReady(c, row.from, row.needs)) continue;
+    let w = weight;
+    if (counter) {
+      const def = c.defOf(unit);
+      if (def) w *= Math.max(MIN_COUNTER_WEIGHT, 1 + (counterScore(def, enemy) - 1) * profile.counterWeight);
+    }
+    if (w > 0) out.push({ unit, weight: w });
+  }
+  return out;
+}
+
+/** A unit the enemy's composition answers well is built LESS, never not at all: a mix that
+ *  collapsed to one type would be countered in turn, and the build order still has a shape. */
+const MIN_COUNTER_WEIGHT = 0.2;
+
+/** The buildings the strategy's mix implies — every producer it names, and everything those
+ *  units need. Derived rather than listed, so a build cannot ask for a unit whose building it
+ *  forgot to put up (plus/races.ts explains why that mattered). */
+function mixBuildings(c: PlusCtx): Array<{ build: string; tier: number }> {
+  const { table, strategy } = c;
+  const seen = new Map<string, number>();
+  for (const unit of Object.keys(strategy.mix)) {
+    const row = table.units[unit];
+    if (!row) continue;
+    for (const b of [row.from, ...(row.needs ?? [])]) {
+      seen.set(b, Math.min(seen.get(b) ?? row.tier, row.tier));
+    }
+  }
+  return [...seen].map(([build, tier]) => ({ build, tier })).sort((a, b) => a.tier - b.tier);
+}
+
 /** Tier up — but only with an army on the field, and never past what the difficulty allows.
  *  A tier is an UPGRADE of the hall you own, and `SetProduce` tries that route first, which is
  *  why this reads as "have a Keep" rather than "found one". */
@@ -239,20 +320,52 @@ function tierUp(c: PlusCtx): void {
   if (profile.techTier >= 3 && tier >= 2 && armyFood >= TIER3_ARMY) ai.setBuildUnit(1, table.halls[2]);
 }
 
-/** The support buildings, each once its tier is standing and there is an army to justify it. */
+/**
+ * The buildings: the race's own support first, then whatever the strategy's mix implies.
+ *
+ * The support row is the smith every build wants whatever it is making (the Blacksmith, the
+ * Forge, the Graveyard, the Hunter's Hall) — without it a Gryphon build would take no armour
+ * upgrades at all, since `upgrades` gates on the researching building standing.
+ *
+ * A derived building waits on army food scaled by its TIER, which is the same "don't tech with
+ * nothing on the field" rule the support rows state by hand.
+ */
 function techBuildings(c: PlusCtx): void {
   const { ai, profile, table, tier, armyFood } = c;
-  for (const row of table.tech) {
-    if (row.tier > Math.min(profile.techTier, tier)) continue;
-    if (armyFood < (row.after ?? 0)) continue;
-    if (!producerReady(c, "", row.needs)) continue;
+  const cap = Math.min(profile.techTier, tier);
+  for (const row of table.support) {
+    if (row.tier > cap || armyFood < row.after) continue;
     ai.setBuildUnit(1, row.build);
   }
-  // …and a second copy of the ones that make the army, once the bank is deeper than the
-  // queue. This is the one thing that stops a rich computer sitting on 2000 gold.
-  if (armyFood >= FACTORY_ARMY && ai.gold() > FACTORY_GOLD) {
-    for (const f of table.factories) ai.buildFactory(f);
+  for (const row of mixBuildings(c)) {
+    if (row.tier > cap || armyFood < TECH_AFTER[row.tier - 1]) continue;
+    ai.setBuildUnit(1, row.build);
   }
+  // …and a second copy of the building that makes the bulk of the army, once the bank is
+  // deeper than the queue. The one thing that stops a rich computer sitting on 2000 gold.
+  if (armyFood >= FACTORY_ARMY && ai.gold() > FACTORY_GOLD) {
+    const main = mainProducer(c);
+    if (main) ai.buildFactory(main);
+  }
+}
+
+/** Army food a derived building waits for, by the tier of the unit that wants it. A tier-1
+ *  producer is the opening and comes almost at once; a tier-3 one is a commitment. */
+const TECH_AFTER = [0, 12, 24];
+
+/** The building that makes the heaviest share of this build's army — what a second copy of is
+ *  worth buying. Read off the mix rather than named, like everything else here. */
+function mainProducer(c: PlusCtx): string | null {
+  let best: string | null = null;
+  let bestWeight = 0;
+  for (const r of buildableMix(c)) {
+    if (r.weight <= bestWeight) continue;
+    const row = c.table.units[r.unit];
+    if (!row) continue;
+    bestWeight = r.weight;
+    best = row.from;
+  }
+  return best;
 }
 
 /** Towers: none at all on Easy, and never before something has actually gone wrong or the
@@ -286,18 +399,32 @@ function upgrades(c: PlusCtx): void {
 /**
  * A second (third, fourth) town.
  *
- * Gated on the CLOCK as well as on the gold, and that is the difficulty showing: Easy never
- * expands at all (`expansions` 0), Normal not before ten minutes, Insane from five. Issue
- * #124 asks for exactly this — "we must make sure that the easy AIs are not executing complex
- * strategies like fast expansions".
+ * **Expanding is part of the BUILD ORDER, not of the difficulty.** Each strategy carries its
+ * own two clocks (`expandAt` / `expandAgainAt`, plus/races.ts): a ranged line that holds ground
+ * takes its second mine at four minutes, a Raider build that intends to be somewhere else takes
+ * it at eight, and an air build later still. That is the model AMAI arrived at too — an
+ * `expansion time` column on the strategy row rather than on the player — and it is the reason
+ * a "fast expand" is a thing an AI can be seen to DO rather than a number somebody set.
+ *
+ * Three gates on top of the clock, and each answers a different question:
+ *
+ *  · CAN it? A cap from the difficulty (Easy expands never — issue #124 is explicit that an
+ *    easy computer must not run fast expansions), and `AiPlayer.startExpansion` itself refuses
+ *    when there is no free mine, when it cannot afford the hall, or when creeps are sitting on
+ *    the spot (the attack ladder clears those first).
+ *  · SHOULD it now? The strategy's clock — or, whatever the plan said, the ore in the mines it
+ *    already owns running out. A build order is a plan, not a promise.
+ *  · IS IT SAFE? Never while something hostile is standing in one of its towns. Founding a
+ *    second base during a raid is how an AI loses its first one.
  */
 function expand(c: PlusCtx): void {
-  const { ai, profile, table, clock } = c;
-  if (profile.expansions < 1 || clock < profile.expandAfter) return;
-  const owned = ai.minesOwned();
+  const { ai, profile, table, strategy, clock, threatened } = c;
+  if (profile.expansions < 1 || threatened) return;
+  const owned = Math.max(1, ai.minesOwned());
   if (owned >= 1 + profile.expansions) return;
-  // Either we are running out of ore, or we have the army to hold a second mine.
-  if (ai.goldOwned() >= EXPAND_GOLD && c.armyFood < profile.attackFood) return;
+  const planned = (owned === 1 ? strategy.expandAt : strategy.expandAgainAt) + profile.expandDelay;
+  const needed = ai.goldOwned() < EXPAND_GOLD;
+  if (clock < planned && !needed) return;
   ai.basicExpansion(true, table.halls[0]);
 }
 
