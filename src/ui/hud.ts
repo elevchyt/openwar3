@@ -1263,7 +1263,7 @@ export class GameHud {
     const n = this.driver.idleWorkerCount();
     this.idleWorkerBadge.hidden = n === 0;
     if (n === 0) return;
-    this.idleWorkerCount.textContent = String(n);
+    setCount(this.idleWorkerCount, String(n));
     if (!this.idleIconSet) {
       const path = this.driver.workerIcon();
       const url = path ? this.driver.blpUrl(path) : null;
@@ -1974,8 +1974,11 @@ export class GameHud {
     this.idleWorkerBadge.className = "hud-idle-worker hud-iconbtn";
     this.idleWorkerBadge.title = "Select idle worker (F8 / ~)";
     this.idleWorkerBadge.hidden = true;
-    this.idleWorkerCount = document.createElement("span");
-    this.idleWorkerCount.className = "hud-idle-count";
+    // Its count wears the same boxed badge every other count in the game does (countBadge).
+    // This button is OpenWar3's own — 1.30 has no idle-worker button to copy — so there is no
+    // original to match here; matching the rest of our own console is the whole argument.
+    this.idleWorkerCount = countBadge();
+    this.idleWorkerCount.classList.add("hud-idle-count");
     this.idleWorkerBadge.appendChild(this.idleWorkerCount);
     this.idleWorkerBadge.addEventListener("pointerdown", (e) => e.stopPropagation()); // never a minimap ping
     onPress(this.idleWorkerBadge, () => this.driver.cycleIdleWorker());

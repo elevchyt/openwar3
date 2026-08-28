@@ -20,8 +20,8 @@
 //   MTLS  one layer: filterMode 3 (Additive), Unshaded, texture 1 (the ring), and a KMTA on
 //         the 2000 ms GLOBAL sequence — alpha 0.25 → 1.0 at 1 s → 0.25, Hermite. The ring
 //         PULSES, on a clock of its own that the sequence never touches.
-//   GEOA  flags 2 (Color), colour 0.1412, 0.5569, 0.9529 — MDX stores colours **BGR**, so
-//         that is rgb(243, 142, 36), the hero-level gold.
+//   GEOA  flags 2 (Color), colour 0.1412, 0.5569, 0.9529 = rgb(36, 142, 243) — see the note
+//         on channel order below. The ring is BLUE.
 //   PRE2  BlizParticle01/03/04/05 — FOUR emitters, one per EDGE of that quad. Each is a strip
 //         (length 0.039 × width 0.001) laid along one edge by its pivot and its KGRT:
 //             01  pivot (0.0188, 0.0381)  rot −90° about Z → the strip runs along X  = TOP
@@ -30,9 +30,21 @@
 //             05  pivot (0.0383, 0.0189)  rot 180° about Z → along Y                = RIGHT
 //         Per emitter: speed 0.02, latitude 0, gravity 0, lifespan 1 s, emissionRate 20/s,
 //         filterMode 1 (Additive), headOrTail 2, time 0.5, and three-segment ramps:
-//             colour  (BGR→RGB) (.843,.239,0) → (.867,.431,.141) → (.914,.651,.416)
+//             colour   (0,.239,.843) → (.141,.431,.867) → (.416,.651,.914)
 //             alpha    255 → 255 → 0
 //             scaling  .0025 → .005 → .01     — it GROWS as it dies
+//
+// **The channel order, because it is the one thing here that is easy to get backwards.** The
+// community rule of thumb is "MDX colours are BGR", and mdx-m3-viewer even swizzles a static
+// GEOA colour on that basis (`geosetanimation.js`: "animated colors are stored as BGR"). Take
+// it and this whole effect comes out ORANGE, which is what it first did here. It is wrong,
+// and the model that proves it is the one next door: `UI-ModalButtonOn.mdx` carries
+// (1, .984, .6) → (.875, .796, .141) → (.769, .6, .149), and that sparkle is GOLD in the game
+// — cream to gold, which those triples only spell read straight as RGB. Read BGR they are
+// cyan, and no autocast button in Warcraft III has ever been cyan. So the file is RGB, and
+// HeroLevel is what it looks like in the real client: a BLUE ring with blue sparks that pale
+// out as they die. (The two chunks agree with each other under either reading — they are
+// authored to match — so only a colour you can name from outside the file can settle it.)
 //
 // **Why this is a 2D field and not an approximation of one.** Same reason the autocast
 // sparkle is: `latitude` is 0, so the emission cone has no width and every particle flies
@@ -63,15 +75,15 @@ const RING_ALPHA = [
   { t: 1000, v: 1.0, inTan: 1, outTan: 1 },
   { t: 2000, v: 0.25, inTan: 0.75, outTan: 0 },
 ] as const;
-/** GEOA colour, BGR→RGB. The ring texture is greyscale; this is what gilds it. */
-const RING_COLOR = [0.952941, 0.556863, 0.141176] as const;
+/** GEOA colour. The ring texture is greyscale; this is what colours it. */
+const RING_COLOR = [0.141176, 0.556863, 0.952941] as const;
 
-/** Colour / alpha / half-size at life fraction 0, `time` (0.5) and 1, all BGR→RGB. */
+/** Colour / alpha / half-size at life fraction 0, `time` (0.5) and 1. */
 const SEG_TIME = 0.5;
 const SEG_COLOR = [
-  [0.843137, 0.239216, 0.0],
-  [0.866667, 0.431373, 0.141176],
-  [0.913726, 0.65098, 0.415686],
+  [0.0, 0.239216, 0.843137],
+  [0.141176, 0.431373, 0.866667],
+  [0.415686, 0.65098, 0.913726],
 ] as const;
 const SEG_ALPHA = [1, 1, 0] as const;
 const SEG_SCALE = [0.0025, 0.005, 0.01] as const;

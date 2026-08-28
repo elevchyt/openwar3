@@ -819,10 +819,12 @@ body.hud-tooltip-skinned .hud-chatbar::after {
    than the button: this widget draws its own bevel (the padding above), so the button's
    corner is 4/68 outside the portrait the box belongs to. Half of that icon, matching the
    texel rule the badge is written to. */
-.hud-hero-points {
+/* Doubled class on purpose: `.hud-count-badge` states the same three properties and is
+   written further down the sheet, so a single class here would lose the cascade to it. */
+.hud-count-badge.hud-hero-points {
   --count-box: calc(var(--hero-btn) * 30 / 68);
   right: calc(var(--hero-btn) * 4 / 68);
-  bottom: calc(var(--hero-btn) * 4 / 68);
+  bottom: calc(var(--hero-btn) * 4 / 68 - var(--count-drop));
 }
 /* The two bars: one black block under the button, a 6/17 tall track each with a 2/17 gap,
    exactly as measured. The empty stretch of a bar IS the block showing through. */
@@ -933,16 +935,9 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
 }
 .game-menu-btn:hover:not(:disabled) { background: linear-gradient(#24365a, #14243e); border-color: #ffe08a; color: #ffe08a; }
 .game-menu-btn.danger:hover:not(:disabled) { border-color: #e06a5a; color: #ffb0a0; }
-.hud-idle-count {
-  position: absolute;
-  right: calc(var(--idle-btn) * 4 / 68);
-  bottom: calc(var(--idle-btn) * 2 / 68);
-  font: 700 max(11px, calc(var(--idle-btn) * 16 / 68))/1 ui-monospace, Menlo, Consolas, monospace;
-  color: #fff;
-  padding: 0 2px;
-  text-shadow: 0 0 3px #000, 0 0 3px #000, 1px 1px 1px #000;
-  pointer-events: none;
-}
+/* The idle-worker count: the same `.hud-count-badge` box every other count wears. The icon
+   fills this button edge to edge (`.hud-iconbtn` has no bevel), so the badge's own 50%
+   default is already half the icon and there is nothing to inset. */
 
 .hud-portrait-wrap {
   flex: none;
@@ -1148,9 +1143,12 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
    centred in the texture, so centring the numeral in the box lands it inside the frame. */
 .hud-count-badge {
   --count-box: 50%;
+  /* How far BELOW the icon's bottom edge the box hangs. One pixel, asked for by eye: the
+     art's own 4-texel bottom margin sits it a touch high against the icon's frame. */
+  --count-drop: 1px;
   position: absolute;
   right: 0;
-  bottom: 0;
+  bottom: calc(-1 * var(--count-drop));
   width: var(--count-box);
   aspect-ratio: 1;
   container-type: size;
