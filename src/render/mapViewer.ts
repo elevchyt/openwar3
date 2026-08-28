@@ -283,7 +283,7 @@ const CARRIED_ITEM_SCALE = 0.85;
 // — which point up-left — disappear behind the icon and only the closed fist reads. Kept
 // in px-of-the-icon rather than absolute px because the icon scales with the console.
 const CARRIED_ITEM_OFFSET: [number, number] = [6, 8];
-const CARRIED_HAND_OFFSET: [number, number] = [0.68, 0.4];
+const CARRIED_HAND_OFFSET: [number, number] = [0.65, 0.3];
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
 // Command-card icons that aren't tied to a specific unit/ability: the order row
 // (Move/Stop/Hold/Attack/Patrol), a worker's Build/Repair, Cancel, and the four
