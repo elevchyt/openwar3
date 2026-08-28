@@ -298,7 +298,6 @@ const EQ_MAGNITUDE = 30;
 const EQ_VELOCITY = 240;
 const DAWN_SOUND = "RoosterSound";
 const DUSK_SOUND = "WolfSound";
-const MAX_HEROES = MELEE.MELEE_HERO_LIMIT; // altars + tavern combined
 /** A unit walks out of its factory facing south, like a placed building (spawnUnit's own
  *  default). Named here because the sim unit and its model are now made in two steps and
  *  both have to be told the same thing. */
@@ -2064,6 +2063,21 @@ export class MapViewerScene {
     // this fallback stands in for the script, so it has to grant it too — and a CUSTOM map, which
     // runs neither, correctly gets none. See Authority.heroTokens.
     for (const slot of config.slots) this.rts.setHeroTokens(slot.id, MELEE.MELEE_STARTING_HERO_TOKENS);
+    // …and the HERO LIMITS, which are the script's too: MeleeStartingHeroLimit is a page of
+    // `SetPlayerTechMaxAllowed` — 'HERO' → bj_MELEE_HERO_LIMIT (3 across altars + tavern), then
+    // one line per stock hero → bj_MELEE_HERO_TYPE_LIMIT (1 of each). Nothing else in the game
+    // sets them, so a custom map has neither (issue #127) and this fallback, standing in for the
+    // script, has to. Blizzard names its 24 heroes one by one; every hero the registry knows is
+    // the same list plus whatever a map added, and on a melee map that difference is empty.
+    const tech = this.rts.simWorld.tech;
+    if (tech) {
+      for (const slot of config.slots) {
+        tech.setMaxAllowed(slot.id, "HERO", MELEE.MELEE_HERO_LIMIT);
+        for (const d of this.registry.all()) {
+          if (d.isHero) tech.setMaxAllowed(slot.id, d.id, MELEE.MELEE_HERO_TYPE_LIMIT);
+        }
+      }
+    }
     // Clear the creep camps on each USED start location so bases spawn on clean ground
     // (what MeleeClearExcessUnits does from the script). Unused start locations keep theirs.
     this.rts.setStartLocationClearZones(config.slots.map((s) => ({ x: s.startX, y: s.startY })));
@@ -7358,42 +7372,6 @@ export class MapViewerScene {
     return b;
   }
 
-  /** Hero types the local player already has or is producing — owned hero units,
-   *  plus heroes queued in the player's own buildings (altars) or in a neutral shop
-   *  (tavern). WC3 heroes are unique per player and capped at MAX_HEROES, so these
-   *  are removed from / disabled on the altar & tavern cards. */
-  private heroTypesInProduction(player: number): Set<string> {
-    const set = new Set<string>();
-    const world = this.rts?.simWorld;
-    if (!world) return set;
-    for (const u of world.units.values()) {
-      if (u.owner === player && this.registry.get(u.typeId)?.isHero) set.add(u.typeId);
-      // Altars the player owns + neutral shops (taverns) they hire from — and at a shop,
-      // only the jobs they are PAYING for (see Authority.heroTypesInProduction, which
-      // gates the training itself on the same rule).
-      if (u.building && (u.owner === player || u.neutralPassive)) {
-        for (const job of u.building.queue) {
-          if (job.kind !== "unit" || !this.registry.get(job.unitId)?.isHero) continue;
-          if (u.neutralPassive && u.owner !== player && job.buyer !== player) continue;
-          set.add(job.unitId);
-        }
-      }
-    }
-    // …and the ones finished but not yet born (SimWorld.pendingTrained). A hire never enters a
-    // queue, so this is the only thing keeping a just-bought Tavern hero on her own card for
-    // the tick before she exists.
-    for (const t of world.pendingTrained()) {
-      if (t.owner === player && this.registry.get(t.unitId)?.isHero) set.add(t.unitId);
-    }
-    // …and the DEAD ones, which is what swaps a hero's TRAIN button for its REVIVE button:
-    // your Archmage lying on the altar roster is still your Archmage and still one of your
-    // three, so the altar offers to bring her back rather than to sell you another.
-    // (Authority.heroTypesInProduction draws the same line, and has to — the card is a
-    // picture of what is allowed, not the thing that allows it.)
-    for (const f of world.fallen.values()) if (f.owner === player) set.add(f.typeId);
-    return set;
-  }
-
   /**
    * The REVIVE buttons on an altar (or a Tavern) — one per fallen hero of the local player.
    *
@@ -7482,10 +7460,20 @@ export class MapViewerScene {
     if (!list.length) return;
     const food = this.rts!.foodFor(this.localPlayer);
     const stash = this.rts!.stashFor(this.localPlayer);
-    // WC3 hero rules (shared by altars + taverns): a hero already owned or in production is
-    // removed from the card; once the player has MAX_HEROES the rest are disabled.
-    const heroesInProduction = this.heroTypesInProduction(this.localPlayer);
-    const atHeroCap = heroesInProduction.size >= MAX_HEROES;
+    // WC3's hero rules (shared by altars + taverns), and BOTH of them are tech caps a script
+    // set rather than engine law — Blizzard.j's MeleeStartingHeroLimit is the only thing that
+    // ever sets them (see TechState.heroLimit). Under them, a hero you already own or have in
+    // production is removed from the card and, at the roster limit, the rest go inert. On a
+    // custom map that sets neither, both limits read -1 and every hero stays buyable, over and
+    // over — which is what WTii's Unit Tester is for (issue #127).
+    //
+    // The roster itself is the AUTHORITY's — the card is a picture of what `execute` allows,
+    // and the two used to keep separate copies of the same walk.
+    const heroes = this.rts!.heroCensus(this.localPlayer);
+    let heroCount = 0;
+    for (const n of heroes.values()) heroCount += n;
+    const rosterLimit = world.tech?.heroLimit(this.localPlayer) ?? -1;
+    const atHeroCap = rosterLimit >= 0 && heroCount >= rosterLimit;
     // Some races share a buttonpos between two VISIBLE trainees (Orc's Grunt & Demolisher are
     // both 0,0; Shaman & Spirit Walker collide too), so when a slot is already taken the button
     // flows to the next free cell (WC3 packs them left-to-right). rtma-replaced units
@@ -7507,13 +7495,15 @@ export class MapViewerScene {
     for (const uid of list) {
       const d = this.registry.get(uid);
       if (!d) continue;
-      if (d.isHero && heroesInProduction.has(uid)) continue; // already have/queued this hero
+      // Already have/queued as many of THIS hero as the map allows — one, in a melee game.
+      const typeLimit = world.tech?.maxAllowed(this.localPlayer, uid) ?? -1;
+      if (d.isHero && typeLimit >= 0 && (heroes.get(uid) ?? 0) >= typeLimit) continue;
       // An `rtma` upgrade can make a unit unavailable outright — the plain Siege Engine
       // vanishes from the Workshop card the moment Barrage is researched, replaced by the
       // Barrage-equipped one. That's a hide, not a grey-out.
       if (world.tech && world.tech.maxAllowed(this.localPlayer, uid) === 0) continue;
 
-      const owned = this.trainTier(uid, heroesInProduction.size);
+      const owned = this.trainTier(uid, heroCount);
       const freeHero = d.isHero && this.rts!.hasFreeHero(this.localPlayer); // first hero is free
       const gold = freeHero ? 0 : d.goldCost;
       const lumber = freeHero ? 0 : d.lumberCost;

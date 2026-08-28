@@ -6,7 +6,7 @@ import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
 import type { Command } from "./commands";
-import { MELEE, MISC_GAME, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
+import { MISC_GAME, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
 
 // The authority half of the bridge (docs/multiplayer.md Phase B): the questions whose
 // answers are THE GAME'S, not one machine's view of it — who owns what, what a player can
@@ -29,6 +29,21 @@ import { MELEE, MISC_GAME, heroReviveCost, type ReviveMode } from "../data/gamep
  *  its Footman still keeps `buildTime` 20, yet clicking it in the real game produces a Footman
  *  on the spot. */
 const SHOP_HIRE_TIME = 0;
+
+/**
+ * The default supply CEILING: **100**, the food limit everybody knows off the melee HUD.
+ *
+ * It is the engine's own default rather than a melee rule — Blizzard.j never writes
+ * `PLAYER_STATE_FOOD_CAP_CEILING` anywhere, and the World Editor exposes the same number as the
+ * gameplay constant `FoodCeiling` (`fcap` in Units\MiscMetaData.slk: section "Misc", int, 1..999).
+ * A map may lower it (TFT's HumanX04 ships a war3mapMisc.txt whose entire content is
+ * `[Misc] FoodCeiling=30`) or raise it from its script, and that is exactly why WTii's Unit Tester
+ * writes the ceiling FIRST and the cap second: at the stock 100 the 300 it wants would be clamped
+ * straight back off.
+ *
+ * We do not read a map's war3mapMisc.txt yet, so only the JASS player state can move it.
+ */
+const FOOD_CEILING = 100;
 
 export class Authority {
   /**
@@ -53,6 +68,29 @@ export class Authority {
   private heroTokens = new Map<number, number>();
   /** Debug "add food" cheat: extra supply cap per player. */
   private cheatFoodBonus = new Map<number, number>();
+  /**
+   * `PLAYER_STATE_RESOURCE_FOOD_CAP` — the part of a player's supply cap that did NOT come from
+   * their buildings.
+   *
+   * WC3 keeps the cap as an ACCUMULATOR: a finished farm adds its `Foodmade`, a razed one takes
+   * it back, and a script writing the state sets the running total outright. We derive ours from
+   * the live units instead (see `foodFor`) — the same number on every map that never writes the
+   * state — so a script's write is stored here as an OFFSET against what the buildings were
+   * making at the moment of the write. The two readings then agree from there on: a farm raised
+   * afterwards still adds its 6, and one destroyed still takes it away.
+   *
+   * WTii's Unit Tester (issue #127) is the map that needs it. It opens with
+   *
+   *     call SetPlayerStateBJ( Player(0), PLAYER_STATE_FOOD_CAP_CEILING, 300 )
+   *     call SetPlayerStateBJ( Player(0), PLAYER_STATE_RESOURCE_FOOD_CAP, 300 )
+   *
+   * for each of its four players and carries no food-producing building anywhere on it, so with
+   * the write dropped every player sat at 0/300's worth of nothing — 0/0 — and could train
+   * nothing at all.
+   */
+  private foodCapAdjust = new Map<number, number>();
+  /** `PLAYER_STATE_FOOD_CAP_CEILING` — what the cap is clamped to. See FOOD_CEILING. */
+  private foodCapCeiling = new Map<number, number>();
 
   constructor(
     private sim: SimWorld,
@@ -239,8 +277,41 @@ export class Authority {
     // …and whatever is finished but not yet born (SimWorld.pendingTrained) — a shop hire is
     // never in a queue at all, so without this its food is free for the tick before it spawns.
     for (const t of this.sim.pendingTrained()) if (t.owner === owner) used += this.registry.get(t.unitId)?.foodUsed ?? 0;
+    // …plus whatever the SCRIPT wrote the cap to (see foodCapAdjust), under WC3's ceiling.
+    made = Math.max(0, Math.min(made + (this.foodCapAdjust.get(owner) ?? 0), this.foodCapCeilingOf(owner)));
+    // The cheat sits OUTSIDE the clamp on purpose: the ceiling is the rule it exists to break
+    // (WC3 spells its own version `pointbreak` — "removes food limit").
     made += this.cheatFoodBonus.get(owner) ?? 0; // debug "add food" cheat
     return { used, made };
+  }
+
+  /** What this player's own units MAKE — the half of the cap the world derives, without the
+   *  script's offset, the ceiling or the cheat. Only a script write needs it (see setFoodCap),
+   *  so it walks the units again rather than complicating the hot path above. */
+  private unitFoodMade(owner: number): number {
+    let made = 0;
+    for (const u of this.sim.units.values()) {
+      if (u.owner === owner) made += this.registry.get(u.typeId)?.foodMade ?? 0;
+    }
+    return made;
+  }
+
+  /** `SetPlayerState(p, PLAYER_STATE_RESOURCE_FOOD_CAP, n)` — stored as an offset on top of the
+   *  buildings' own contribution, which is what makes it behave like WC3's accumulator. Read it
+   *  back through `foodFor(p).made`. */
+  setFoodCap(player: number, value: number): void {
+    this.foodCapAdjust.set(player, Math.floor(value) - this.unitFoodMade(player));
+  }
+
+  /** `SetPlayerState(p, PLAYER_STATE_FOOD_CAP_CEILING, n)`. */
+  setFoodCapCeiling(player: number, value: number): void {
+    this.foodCapCeiling.set(player, Math.max(0, Math.floor(value)));
+  }
+
+  /** `GetPlayerState(p, PLAYER_STATE_FOOD_CAP_CEILING)` — FOOD_CEILING until a script says
+   *  otherwise. */
+  foodCapCeilingOf(player: number): number {
+    return this.foodCapCeiling.get(player) ?? FOOD_CEILING;
   }
 
   /** Debug "add food" cheat — raise a player's supply cap. */
@@ -275,13 +346,21 @@ export class Authority {
     this.heroTokens.set(player, Math.max(0, Math.floor(value)));
   }
 
-  /** Hero types the player already fields or has queued — at their own altars AND at any
-   *  neutral shop (a tavern) they are hiring from. WC3 heroes are unique per player, so this
-   *  is both the uniqueness check and the count the hero cap is measured against. */
-  heroTypesInProduction(player: number): Set<string> {
-    const set = new Set<string>();
+  /**
+   * The player's HERO ROSTER, by type: everything they field, have queued at their own altars
+   * or at a neutral shop (a tavern) they are hiring from, and everything of theirs lying dead.
+   *
+   * A COUNT per type rather than a set of types, because "one of each" is not a law of the
+   * engine — it is `SetPlayerTechMaxAllowed(p, <heroId>, 1)`, which only Blizzard.j's
+   * `MeleeStartingHeroLimit` ever calls. A custom map runs none of it and may hire the same
+   * hero over and over (issue #127), so the two limits are read off TechState where the script
+   * put them and measured against these counts. See TechState.heroLimit.
+   */
+  heroCensus(player: number): Map<string, number> {
+    const census = new Map<string, number>();
+    const add = (typeId: string): void => void census.set(typeId, (census.get(typeId) ?? 0) + 1);
     for (const u of this.sim.units.values()) {
-      if (u.owner === player && this.registry.get(u.typeId)?.isHero) set.add(u.typeId);
+      if (u.owner === player && this.registry.get(u.typeId)?.isHero) add(u.typeId);
       if (u.building && (u.owner === player || u.neutralPassive)) {
         for (const job of u.building.queue) {
           if (job.kind !== "unit" || !this.registry.get(job.unitId)?.isHero) continue;
@@ -290,7 +369,7 @@ export class Authority {
           // every player made the hero an enemy hired count against you — and struck it
           // off your own card while somebody else's gold was paying for it.
           if (u.neutralPassive && u.owner !== player && job.buyer !== player) continue;
-          set.add(job.unitId);
+          add(job.unitId);
         }
       }
     }
@@ -298,14 +377,22 @@ export class Authority {
     // INSTANTLY and so is never queued at all: without this, two clicks inside one tick both
     // find the hero unspoken for and the player ends up with two of her.
     for (const t of this.sim.pendingTrained()) {
-      if (t.owner === player && this.registry.get(t.unitId)?.isHero) set.add(t.unitId);
+      if (t.owner === player && this.registry.get(t.unitId)?.isHero) add(t.unitId);
     }
     // …and the DEAD. A hero lying on the altar roster is still yours and still one of your
     // three: WC3 offers you its revive button, never a second copy of it at full price. This
     // is what turns "train Archmage" back into "revive Archmage" on the card, and what stops
     // the hero cap being reset by dying.
-    for (const f of this.sim.fallen.values()) if (f.owner === player) set.add(f.typeId);
-    return set;
+    for (const f of this.sim.fallen.values()) if (f.owner === player) add(f.typeId);
+    return census;
+  }
+
+  /** How many heroes this player fields, has queued, or has lying dead — the roster the
+   *  'HERO' limit is measured against. */
+  heroCount(player: number): number {
+    let n = 0;
+    for (const c of this.heroCensus(player).values()) n += c;
+    return n;
   }
 
   /** Record a player-issued order on the sim as a generic order id, so
@@ -594,12 +681,19 @@ export class Authority {
         const isSold = this.tech.get(b.typeId).sellunits.includes(cmd.unitId);
         if (!isSold && !this.tech.trains(b.typeId).includes(cmd.unitId)) return false;
         if (this.sim.queueFull(cmd.buildingId)) return false; // 7-deep — before charging
-        // WC3 hero rules: unique per player, and MELEE_HERO_LIMIT across altars + tavern.
+        // WC3's hero rules — BOTH of which are tech caps a script sets, not engine law
+        // (issue #127). Blizzard.j's MeleeStartingHeroLimit is the only thing in the game that
+        // sets them: 'HERO' → 3 across altars + tavern, and each stock hero → 1 of its type. A
+        // custom map runs none of it, so on WTii's Unit Tester the same hero may be hired again
+        // and again — which is the map's whole point.
         let heroCount = 0;
         if (def.isHero) {
-          const inProduction = this.heroTypesInProduction(player);
-          if (inProduction.has(cmd.unitId) || inProduction.size >= MELEE.MELEE_HERO_LIMIT) return false;
-          heroCount = inProduction.size;
+          const census = this.heroCensus(player);
+          for (const n of census.values()) heroCount += n;
+          const typeLimit = this.sim.tech?.maxAllowed(player, cmd.unitId) ?? -1; // -1 = no limit
+          if (typeLimit >= 0 && (census.get(cmd.unitId) ?? 0) >= typeLimit) return false;
+          const rosterLimit = this.sim.tech?.heroLimit(player) ?? -1;
+          if (rosterLimit >= 0 && heroCount >= rosterLimit) return false;
         }
         // Tech gate. A hero indexes the requirement tier by how many HEROES the player has,
         // not how many of this hero — see the trainTier note in mapViewer. A unit the shop SELLS

@@ -159,6 +159,28 @@ export class TechState {
     return gatedOff ? 0 : -1;
   }
 
+  /**
+   * How many HEROES this player may field at once. -1 = no limit, which is where every player
+   * starts and where a custom map's players stay.
+   *
+   * `'HERO'` is a pseudo-tech: it names no unit, and the only thing in the game that writes it
+   * is Blizzard.j's melee opening —
+   *
+   *     function SetPlayerMaxHeroesAllowed takes integer maximum, player whichPlayer …
+   *         call SetPlayerTechMaxAllowed(whichPlayer, 'HERO', maximum)
+   *     function MeleeStartingHeroLimit …
+   *         call SetPlayerMaxHeroesAllowed(bj_MELEE_HERO_LIMIT, Player(index))   // 3
+   *         call ReducePlayerTechMaxAllowed(Player(index), 'Hamg', bj_MELEE_HERO_TYPE_LIMIT)
+   *         …one line per stock hero…                                            // 1 each
+   *
+   * — so the famous "3 heroes, one of each" is a MELEE rule written in JASS, not an engine
+   * law. A map that never calls it has neither limit (issue #127: WTii's Unit Tester, where
+   * re-hiring the same hero is the point). The per-type half is just `maxAllowed(p, heroId)`.
+   */
+  heroLimit(player: number): number {
+    return this.maxAllowed(player, "HERO");
+  }
+
   /** Whether the player may train/build `unitId` at all right now (cap + prerequisites).
    *  `owned` is how many they already have, which selects the requirement tier. */
   canMake(player: number, unitId: string, owned = 0): boolean {

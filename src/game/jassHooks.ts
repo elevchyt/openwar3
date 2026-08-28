@@ -253,6 +253,9 @@ export function authorityHooks(authority: {
   stashFor(owner: number): Readonly<{ gold: number; lumber: number }>;
   foodFor(owner: number): { used: number; made: number };
   setPlayerResource(player: number, resource: "gold" | "lumber", value: number): void;
+  setFoodCap(player: number, value: number): void;
+  setFoodCapCeiling(player: number, value: number): void;
+  foodCapCeilingOf(player: number): number;
   heroTokensFor(player: number): number;
   setHeroTokens(player: number, value: number): void;
   currentOrderId(unitId: number): number;
@@ -301,18 +304,25 @@ export function authorityHooks(authority: {
     // dual-writer trick from item 1c could not be used here.
     createUnit: (player, typeId, x, y, facing) => authority.createScriptUnit(player, typeId, x, y, facing),
     // SetPlayerState → the live stash, via the authority's named setter. This is what grants a
-    // custom map its starting gold/lumber (its init triggers set it). Food is derived from
-    // units, so states 4 and 5 are read-only and a write to them is ignored rather than
-    // invented. state: 1=gold 2=lumber 3=hero tokens 4=cap 5=used.
+    // custom map its starting gold/lumber (its init triggers set it).
+    // state: 1=gold 2=lumber 3=hero tokens 4=food cap 5=food used 6=food cap ceiling (common.j).
     //
     // HERO_TOKENS (3) is the "first hero is free" allowance, and it is a real resource the
     // SCRIPT hands out — `MeleeStartingUnits*` is the only thing in Blizzard.j that ever grants
     // one, which is exactly why a custom map's heroes cost full price. Dropping this write was
     // half of why they did not: see Authority.heroTokens.
+    //
+    // FOOD_CAP (4) and FOOD_CAP_CEILING (6) are writes too (issue #127). Our cap is DERIVED from
+    // the units — see Authority.foodFor — so the write used to be dropped on the floor, and
+    // WTii's Unit Tester, which has no food-producing building and simply states the cap it
+    // wants, opened at 0/0 with nothing trainable. FOOD_USED (5) is the one that really is
+    // read-only: it counts units, and WC3 refuses that write too.
     setPlayerState: (p, state, value) => {
       if (state === 1) authority.setPlayerResource(p, "gold", value);
       else if (state === 2) authority.setPlayerResource(p, "lumber", value);
       else if (state === 3) authority.setHeroTokens(p, value);
+      else if (state === 4) authority.setFoodCap(p, value);
+      else if (state === 6) authority.setFoodCapCeiling(p, value);
     },
     getPlayerState: (p, state) => {
       if (state === 1) return Math.floor(authority.stashFor(p).gold);
@@ -320,6 +330,7 @@ export function authorityHooks(authority: {
       if (state === 3) return authority.heroTokensFor(p); // HERO_TOKENS — the free-hero allowance
       if (state === 4) return authority.foodFor(p).made; // FOOD_CAP
       if (state === 5) return authority.foodFor(p).used; // FOOD_USED
+      if (state === 6) return authority.foodCapCeilingOf(p); // FOOD_CAP_CEILING
       return 0;
     },
   };

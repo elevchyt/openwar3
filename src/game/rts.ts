@@ -5941,6 +5941,11 @@ export class RtsController {
         stashFor: (o) => this.authority.stashFor(o),
         foodFor: (o) => this.authority.foodFor(o),
         setPlayerResource: (p, r, v) => this.authority.setPlayerResource(p, r, v),
+        // PLAYER_STATE_RESOURCE_FOOD_CAP / _FOOD_CAP_CEILING — a custom map states its own
+        // supply cap the same way it states its gold (issue #127). See Authority.foodCapAdjust.
+        setFoodCap: (p, v) => this.authority.setFoodCap(p, v),
+        setFoodCapCeiling: (p, v) => this.authority.setFoodCapCeiling(p, v),
+        foodCapCeilingOf: (p) => this.authority.foodCapCeilingOf(p),
         // PLAYER_STATE_RESOURCE_HERO_TOKENS — the free-hero allowance, which the melee opening
         // grants through SetPlayerState like any other starting resource.
         heroTokensFor: (p) => this.authority.heroTokensFor(p),
@@ -5998,6 +6003,12 @@ export class RtsController {
   /** @see Authority.foodFor */
   foodFor(owner: number): { used: number; made: number } {
     return this.authority.foodFor(owner);
+  }
+
+  /** @see Authority.heroCensus — the command card draws the hero buttons from the same roster
+   *  the authority gates them on, so there is one answer to "have I got this hero already". */
+  heroCensus(player: number): Map<string, number> {
+    return this.authority.heroCensus(player);
   }
 
   /** @see Authority.setHeroTokens — the melee opening's free-hero grant, which on the scripted

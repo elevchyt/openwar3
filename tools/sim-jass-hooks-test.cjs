@@ -193,6 +193,9 @@ const ah = authorityHooks({
   stashFor: (o) => authority.stashFor(o),
   foodFor: (o) => authority.foodFor(o),
   setPlayerResource: (p, r, v) => authority.setPlayerResource(p, r, v),
+  setFoodCap: (p, v) => authority.setFoodCap(p, v),
+  setFoodCapCeiling: (p, v) => authority.setFoodCapCeiling(p, v),
+  foodCapCeilingOf: (p) => authority.foodCapCeilingOf(p),
   currentOrderId: (id) => authority.currentOrderId(id),
   issueUnitOrder: (...a) => authority.issueUnitOrder(...a),
   createScriptUnit: (...a) => { created.push(a); return 909; },
@@ -213,12 +216,21 @@ ah.setPlayerState(0, 2, 310);
 check("lumber reached the live stash", world.stashOf(0).lumber, 310);
 check("…and reads back", ah.getPlayerState(0, 2), 310);
 
-// PLAYER_STATE 4/5 are FOOD_CAP/FOOD_USED — derived by walking units, never stored. A write
-// must be ignored rather than invented, and must not corrupt a neighbouring field.
-ah.setPlayerState(0, 4, 99);
-check("a write to FOOD_CAP is ignored", world.stashOf(0).gold, 750);
-check("…and lumber is untouched", world.stashOf(0).lumber, 310);
-check("food reads as derived (no units seeded)", [ah.getPlayerState(0, 4), ah.getPlayerState(0, 5)], [0, 0]);
+// PLAYER_STATE 4/5/6 are FOOD_CAP / FOOD_USED / FOOD_CAP_CEILING. The cap is DERIVED from the
+// units here (no food-producing building seeded → 0), but it is also WRITABLE: a custom map
+// states the supply it wants and has no farm anywhere (issue #127, WTii's Unit Tester). FOOD_USED
+// is the one that really is read-only — it counts units.
+check("food starts derived (no units seeded)", [ah.getPlayerState(0, 4), ah.getPlayerState(0, 5)], [0, 0]);
+check("the ceiling is the engine's stock 100 until a script moves it", ah.getPlayerState(0, 6), 100);
+ah.setPlayerState(0, 4, 300);
+check("…so a bare cap write is clamped by that ceiling", ah.getPlayerState(0, 4), 100);
+// The tester's own order: ceiling first, then the cap — the reason the first line is there.
+ah.setPlayerState(0, 6, 300);
+ah.setPlayerState(0, 4, 300);
+check("ceiling then cap gives the map the 0/300 it asks for",
+  [ah.getPlayerState(0, 6), ah.getPlayerState(0, 4), ah.getPlayerState(0, 5)], [300, 300, 0]);
+check("a write to FOOD_USED is still ignored", (ah.setPlayerState(0, 5, 42), ah.getPlayerState(0, 5)), 0);
+check("…and neither write touched the stash", [world.stashOf(0).gold, world.stashOf(0).lumber], [750, 310]);
 
 // The frozen copy is the whole reason `stashFor` exists — a reader must not be able to spend.
 console.log("\nthe read path cannot be used to spend");

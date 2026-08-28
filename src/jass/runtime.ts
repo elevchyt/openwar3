@@ -1277,9 +1277,12 @@ export class Runtime {
     return this.spawnDepth > 0;
   }
 
-  /** SetPlayerTechMaxAllowed / GetPlayerTechMaxAllowed — "player:tech" → cap. We have no
-   *  tech-limit system yet (MeleeStartingHeroLimit sets the 3-hero + 1-per-type caps), so
-   *  this just records what the script asked for; -1 means "no limit", as in WC3. */
+  /** SetPlayerTechMaxAllowed / GetPlayerTechMaxAllowed — "player:tech" → cap. The SCRIPT's own
+   *  copy, so that `ReducePlayerTechMaxAllowed` (which reads the cap back before lowering it)
+   *  sees what it wrote; the cap that decides anything is the one the same native hands the sim
+   *  (`setPlayerTechMaxAllowed` → TechState). Between them they carry MeleeStartingHeroLimit's
+   *  3-hero + 1-per-type caps, which is the whole of WC3's hero limit — see TechState.heroLimit.
+   *  -1 means "no limit", as in WC3. */
   readonly techMaxAllowed = new Map<string, number>();
 
   /** The seeded RNG behind GetRandomInt/Real. Indirected through `rng` so SetRandomSeed can
