@@ -1226,20 +1226,25 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
   z-index: 7;
   image-rendering: pixelated;
 }
-/* The item icon carried by the hand while moving it between inventory slots, tucked
-   just below/right of the gauntlet's grip so the hand looks like it's holding it. Its
-   size is set in JS from the live inventory slot (CARRIED_ITEM_SCALE), since the
-   console scales with the window. Never captures the pointer — the drop target does. */
-.carried-item {
+/* An item being moved between inventory slots: the icon, and the closed gauntlet that is
+   holding it. Both are DOM, and that is the point — the gauntlet has to be UNDER the icon,
+   and a CSS `cursor:` can never be under anything on the page, so while `carrying-item` is
+   on the OS pointer is hidden (see applyRaceCursor) and this pair is the cursor. Placed
+   entirely from JS (updateCarriedItem): the icon is sized off the live inventory slot,
+   since the console scales with the window, and the hand's offset is a fraction of that
+   size. Neither ever captures the pointer — the drop target does. */
+.carried-item,
+.carried-hand {
   position: fixed;
-  transform: translate(6px, 8px);
   background: center / contain no-repeat;
   pointer-events: none;
-  z-index: 9;
   image-rendering: pixelated;
-  border: 1px solid rgba(216, 180, 90, 0.7);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
 }
+/* No frame and no drop shadow: WC3's own carried icon is the bare art (its geoset is a
+   plain replaceable-texture quad), and a border or a cast shadow reads as a second,
+   floating UI element rather than as the thing in the gauntlet's fist. */
+.carried-item { z-index: 9; }
+.carried-hand { z-index: 8; } /* behind the icon, so the fingers vanish under it */
 .order-reticle.reticle { transform: translate(-50%, -50%); } /* centred on the point */
 .order-reticle.hand { transform: translate(-3px, -3px); } /* hotspot near the tip */
 /* Pulse the COLOUR intensity only — never opacity, never size. brightness()

@@ -277,6 +277,13 @@ const SPELL_SOUND_ART: Record<string, (d: AbilityDef) => string[]> = {
 // The item icon carried on the cursor while moving it, as a fraction of an inventory
 // slot: just under it, so the hand looks like it's holding that same icon.
 const CARRIED_ITEM_SCALE = 0.85;
+// Where the two halves of the carried cursor sit, both measured from the pointer's tip.
+// The icon is offset a few pixels the way the idle pointer already leans; the gauntlet is
+// then set DOWN and RIGHT of the icon by a fraction of the icon's own size, so its fingers
+// — which point up-left — disappear behind the icon and only the closed fist reads. Kept
+// in px-of-the-icon rather than absolute px because the icon scales with the console.
+const CARRIED_ITEM_OFFSET: [number, number] = [6, 8];
+const CARRIED_HAND_OFFSET: [number, number] = [0.56, 0.4];
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
 // Command-card icons that aren't tied to a specific unit/ability: the order row
 // (Move/Stop/Hold/Attack/Patrol), a worker's Build/Repair, Cancel, and the four
@@ -1200,6 +1207,8 @@ export class MapViewerScene {
   private cursorStyleEl: HTMLStyleElement | null = null;
   private reticleEl: HTMLDivElement | null = null; // follows the cursor while armed
   private carryEl: HTMLDivElement | null = null; // the item icon "held" by the hand while moving it
+  private carryHandEl: HTMLDivElement | null = null; // the closed gauntlet under that icon
+  private holdHandUrl = ""; // the model's "HoldItem" cell (see applyRaceCursor)
   private lastCursor = { x: 0, y: 0 }; // viewport cursor position, tracked everywhere (see trackCursor)
   private cursorSheet: HTMLCanvasElement | null = null; // race cursor sprite sheet
   private reticleUrls = new Map<string, string>(); // tinted WC3 reticle by colour key
@@ -9054,14 +9063,15 @@ export class MapViewerScene {
     // rather than guessed at — the model names its sequences and drives the cell with a
     // KTAT texture-translation, so the frames below are the ones the real cursor shows:
     //  - "HoldItem" (an item right-clicked out of the inventory) = row 3, col 4 — the
-    //    CLOSED gauntlet. The model keeps the same quad it uses for "Normal", so the
-    //    hotspot is the idle pointer's, and geoset 1 (a replaceable-21 quad — the item's
-    //    own icon) stays visible beside it, which is our `.carried-item`.
+    //    CLOSED gauntlet, shown together with geoset 1 (a replaceable-21 quad — the item's
+    //    own icon). It is drawn as DOM rather than set as a `cursor:`, because the icon has
+    //    to sit IN FRONT of the fist and nothing on the page can ever be in front of the
+    //    OS pointer (see .carried-hand / updateCarriedItem).
     //  - "Scroll *" (edge-panning) = row 3, cols 5/6/7 — the three chevron frames, stepped
     //    every 33ms (the model's keys sit 33 apart, interpolation NONE). All eight
     //    directions play THOSE SAME three cells and differ only by a Z rotation on the
     //    node, so one strip + a CSS rotate is the whole thing (see showScrollArrow).
-    const holdUrl = this.cursorCellUrl(3, 4);
+    this.holdHandUrl = this.cursorCellUrl(3, 4);
     this.scrollStripUrl = this.cursorStripUrl(3, 5, 3);
     // Force the WC3 cursor over the ENTIRE in-game UI — buttons, the map, the
     // minimap, everything — overriding the default pointer/crosshair cursors so
@@ -9083,16 +9093,14 @@ export class MapViewerScene {
     //    cinematic that raises one has just asked the player to click something — so the
     //    cursor comes back for as long as it is on screen, and goes again with it.
     //  - `carrying-item` is the model's "HoldItem": the gauntlet CLOSES around what you
-    //    picked up. Body-wide, because every drop target (another slot, the ground, an
-    //    allied hero) is somewhere else on the screen; same hotspot as the idle hand,
-    //    since the model animates the same quad.
+    //    picked up. Both halves of it are DOM, so this rule only has to get the OS pointer
+    //    out from in front of them. Body-wide, because every drop target (another slot,
+    //    the ground, an allied hero) is somewhere else on the screen.
     //  - `scroll-on` is the edge-pan chevron, which IS the cursor while it is up — the
     //    model hides every other geoset during its "Scroll *" sequences.
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
-      (holdUrl
-        ? `body.in-game.carrying-item, body.in-game.carrying-item * { cursor: url(${holdUrl}) 3 3, auto !important; }\n`
-        : "") +
+      `body.in-game.carrying-item, body.in-game.carrying-item * { cursor: none !important; }\n` +
       `body.in-game.reticle-on #map { cursor: none !important; }\n` +
       `body.in-game.armed-on, body.in-game.armed-on * { cursor: none !important; }\n` +
       `body.in-game.scroll-on, body.in-game.scroll-on * { cursor: none !important; }\n` +
@@ -10344,6 +10352,9 @@ export class MapViewerScene {
     this.reticleEl = null;
     this.carryEl?.remove();
     this.carryEl = null;
+    this.carryHandEl?.remove();
+    this.carryHandEl = null;
+    this.holdHandUrl = "";
     this.cursorStyleEl?.remove();
     this.cursorStyleEl = null;
     for (const g of this.buildGhosts.values()) g.hide();
@@ -11461,17 +11472,23 @@ export class MapViewerScene {
     el.className = `order-reticle ${kind} pulse`;
   }
 
-  /** Show/hide the half-size item icon that follows the hand while an inventory item
-   *  is armed for a move. `slot` < 0 hides it. It follows the cursor everywhere —
-   *  over the map AND the console — because every one of those is a legal drop
-   *  target (another slot, the ground, an allied hero); body-fixed like the reticle,
-   *  so `clientX`/`clientY` are viewport coords. */
+  /** Show/hide the carried cursor — the model's "HoldItem": the closed gauntlet with the
+   *  item's icon in front of it. `slot` < 0 hides both. They follow the pointer everywhere —
+   *  over the map AND the console — because every one of those is a legal drop target
+   *  (another slot, the ground, an allied hero); body-fixed like the reticle, so
+   *  `clientX`/`clientY` are viewport coords.
+   *
+   *  Two DOM elements rather than a `cursor:` and one element, because the ICON has to be in
+   *  front of the FIST and the OS pointer is always in front of the whole page — so the
+   *  gauntlet could never get behind the icon while it was the cursor. `carrying-item` hides
+   *  the OS pointer for exactly as long as this pair stands in for it. */
   private updateCarriedItem(slot: number, clientX: number, clientY: number): void {
     const icon = slot >= 0 ? this.rts?.inventorySlots()[slot]?.icon : "";
     const url = icon ? this.blpIcon(icon) : null;
     document.body.classList.toggle("carrying-item", slot >= 0);
     if (!url) {
       if (this.carryEl) this.carryEl.hidden = true;
+      if (this.carryHandEl) this.carryHandEl.hidden = true;
       return;
     }
     if (!this.carryEl) {
@@ -11489,11 +11506,28 @@ export class MapViewerScene {
       const px = Math.max(12, Math.round(slotPx * CARRIED_ITEM_SCALE));
       this.carryEl.style.width = `${px}px`;
       this.carryEl.style.height = `${px}px`;
+      this.carryEl.dataset.px = `${px}`; // the hand's offset is a fraction of this
     }
     this.carryEl.hidden = false;
-    this.carryEl.style.left = `${clientX}px`;
-    this.carryEl.style.top = `${clientY}px`;
+    const ix = clientX + CARRIED_ITEM_OFFSET[0];
+    const iy = clientY + CARRIED_ITEM_OFFSET[1];
+    this.carryEl.style.left = `${ix}px`;
+    this.carryEl.style.top = `${iy}px`;
     this.carryEl.style.backgroundImage = `url(${url})`;
+    if (!this.holdHandUrl) return; // no cursor sheet — the icon alone still reads
+    if (!this.carryHandEl) {
+      this.carryHandEl = document.createElement("div");
+      this.carryHandEl.className = "carried-hand";
+      const cell = Math.round((this.cursorSheet?.width ?? 256) / 8);
+      this.carryHandEl.style.width = `${cell}px`;
+      this.carryHandEl.style.height = `${cell}px`;
+      this.carryHandEl.style.backgroundImage = `url(${this.holdHandUrl})`;
+      document.body.appendChild(this.carryHandEl);
+    }
+    const px = Number(this.carryEl.dataset.px) || 32;
+    this.carryHandEl.hidden = false;
+    this.carryHandEl.style.left = `${ix + px * CARRIED_HAND_OFFSET[0]}px`;
+    this.carryHandEl.style.top = `${iy + px * CARRIED_HAND_OFFSET[1]}px`;
   }
 
   private hideCursorOverlay(): void {
