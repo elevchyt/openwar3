@@ -13,6 +13,8 @@ Goal: liberate WC3 from legacy constraints and bring the engine up to modern sta
   Advanced Options ([how it works](docs/computer-plus.md))
 - **Huge control groups** — dozens of units can be added to a single control group
 - **Select army hotkey** — select all combat units with a single hotkey (-)
+- **Voice control accessibility mode** — a gameplay option that allows people with disabilities to enjoy the game
+- **Voice chat in multiplayer** — push-to-talk voice chat implemented like in other games like DotA and Counter-Strike
   
 Contributions welcome.
 
