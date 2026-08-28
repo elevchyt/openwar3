@@ -231,32 +231,9 @@ export class MeleeAi {
     script.buildSequence(ai); // fills the build array
     ai.runBuildLoop(); // …and spends down it
     ai.spendSkillPoints(); // SetHeroLevels(SkillArrays)
-    this.entangleMines(ai); // the night elf's gold, which is a cast and not a build order
-  }
-
-  /**
-   * The one production step that is not a build order: a rooted Tree of Life beside a free
-   * gold mine wraps it (`Aent`).
-   *
-   * Night elf gold begins with Entangle and there is no "build an Entangled Gold Mine"
-   * anywhere — `egol` is what the ability CREATES — so a port that only ran the build array
-   * would leave every night elf computer with five wisps standing around a bare rock. The
-   * original engine does this inside its own expansion handling; here it is a pass over our
-   * own halls, which is the same rule stated where it can be seen. See docs/night-elf.md.
-   */
-  private entangleMines(ai: AiPlayer): void {
-    const world = this.host.world;
-    for (const u of world.units.values()) {
-      if (u.owner !== ai.player || u.hp <= 0 || !u.building || u.uprooted) continue;
-      if (u.building.constructionLeft > 0) continue;
-      if (!u.abilities.some((a) => a.code === "Aent")) continue;
-      if (u.order === "cast") continue; // already throwing its roots — a re-issue restarts it
-      // `Aent` is a no-target cast that takes the nearest un-entangled mine inside its own
-      // Rng1 — so the only question here is whether there is one.
-      const mine = world.nearestMine(u.x, u.y, 500);
-      if (!mine || mine.entangledBy > 0 || mine.gold <= 0) continue;
-      ai.order({ c: "cast", unitId: u.id, code: "Aent", targetId: 0, x: 0, y: 0, queued: false });
-    }
+    // The night elf's gold, which is a cast and not a build order. It lives on `AiPlayer`
+    // because Computer+ needs exactly the same step — see docs/night-elf.md.
+    ai.entangleMines();
   }
 
   // ======================================================================================

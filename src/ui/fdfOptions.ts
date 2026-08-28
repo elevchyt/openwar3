@@ -3,6 +3,7 @@ import type { SoundBoard } from "../audio/sounds";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { fadePanels } from "./fdf/anim";
 import type { FdfLibrary } from "./fdf/library";
+import { OPTIONS_MENU_OVERRIDE, OW3_STRINGS } from "../overrides";
 import {
   OPTION_DEFS,
   loadOptions,
@@ -99,6 +100,10 @@ export async function mountOptions(
       if (!root) throw new Error("OptionsMenu frame not found in OptionsMenu.fdf");
       return root;
     },
+    // Our own layer on the Gameplay panel (issue #124): the Game Port and Chat Support rows
+    // out, "Use Computer+ as default AI" in. Expressed as an FDF override rather than as DOM
+    // surgery here, so the panel stays one declarative file — see src/overrides/.
+    overrides: [OW3_STRINGS, OPTIONS_MENU_OVERRIDE],
     buttonWidthScale: 1.35, // the category + OK/Cancel buttons fill the widescreen chain slot
     handlers: {
       GameplayButton: () => void showPanel("gameplay"),

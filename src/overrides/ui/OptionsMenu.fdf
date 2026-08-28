@@ -1,0 +1,25 @@
+// OpenWar3 override — `UI\FrameDef\Glue\OptionsMenu.fdf`, Gameplay panel.
+//
+// Issue #124 asks for three changes to this panel, and all three are about options that mean
+// nothing to this engine being replaced by one that does:
+//
+//   · "Game Port:" + its edit box GO. There is no port to set — a LAN game here is a WebRTC
+//     relay (docs/multiplayer.md), not a socket on 6112.
+//   · "Chat Support:" + its dropdown GO. It chose a Battle.net chat gateway that no longer
+//     exists on any side.
+//   · a new checkbox arrives under "Automatically Save Replays": the default value of the
+//     Custom Game screen's Computer+ switch, remembered in localStorage like every other
+//     option (src/data/options.ts).
+//
+// The removals are listed in the manifest (src/overrides/index.ts) rather than written here,
+// because FDF has no syntax for deleting a frame — it is a declaration language. Nothing else
+// anchors to the four frames that go, so the panel simply ends one row earlier.
+
+Frame "GLUECHECKBOX" "ComputerPlusDefaultCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
+    SetPoint TOPLEFT, "AutosaveReplayCheckBox", BOTTOMLEFT, 0.0, -0.005,
+}
+
+Frame "TEXT" "ComputerPlusDefaultLabel" INHERITS "StandardInfoTextTemplate" {
+    SetPoint LEFT, "ComputerPlusDefaultCheckBox", RIGHT, 0.01, 0.0,
+    Text "COMPUTER_PLUS_DEFAULT",
+}

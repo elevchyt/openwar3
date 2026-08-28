@@ -196,6 +196,7 @@ export class AiPlayer {
     // and nowhere else. Seeded off the match seed and the slot so two computers on one map
     // still pick different heroes.
     this.rng = lcg(seed + player * 7919 + 1);
+    this.bypassFog = difficulty === MELEE_INSANE;
     const mine = host.world.nearestMine(startX, startY, 3000);
     this.towns.push({ x: startX, y: startY, mineId: mine?.id ?? 0 });
   }
@@ -235,8 +236,20 @@ export class AiPlayer {
    * went up somewhere the map never promised one, and whether it has towers around it.
    */
   knows(u: SimUnit): boolean {
-    return this.difficulty === MELEE_INSANE || this.host.visible(this.player, u.x, u.y);
+    return this.bypassFog || this.host.visible(this.player, u.x, u.y);
   }
+
+  /**
+   * Is this player told everything, fog or no fog?
+   *
+   * Defaults to "insane, and only insane", which is the classic computer's own rule (above).
+   * It is a FIELD rather than the test itself because Computer+ turns it off at every
+   * difficulty: an improved AI that plays better by seeing through walls is not an improved
+   * AI, and issue #124 asks for meaningful difficulties rather than bigger advantages. See
+   * src/ai/plus/ and docs/computer-plus.md. (Assigned in the constructor rather than here:
+   * `difficulty` is a parameter property and is not written until the constructor runs.)
+   */
+  bypassFog = false;
 
   /** `GetRandomInt(low, high)`, off the AI's own stream. */
   randomInt(low: number, high: number): number {
@@ -1280,10 +1293,42 @@ export class AiPlayer {
     }
   }
 
+  /**
+   * The one production step that is not a build order: a rooted Tree of Life beside a free
+   * gold mine wraps it (`Aent`).
+   *
+   * Night elf gold begins with Entangle and there is no "build an Entangled Gold Mine"
+   * anywhere — `egol` is what the ability CREATES — so a build loop on its own would leave
+   * every night elf computer with five wisps standing around a bare rock. The original engine
+   * does this inside its own expansion handling; here it is a pass over our own halls, which
+   * is the same rule stated where it can be seen. See docs/night-elf.md.
+   *
+   * It lives on `AiPlayer` — the LIBRARY layer — rather than on a scheduler because it is not
+   * a strategy decision at all: both the classic melee AI and Computer+ have to do it, and
+   * they have to do it identically.
+   */
+  entangleMines(): void {
+    const world = this.host.world;
+    for (const u of world.units.values()) {
+      if (u.owner !== this.player || u.hp <= 0 || !u.building || u.uprooted) continue;
+      if (u.building.constructionLeft > 0) continue;
+      if (!u.abilities.some((a) => a.code === "Aent")) continue;
+      if (u.order === "cast") continue; // already throwing its roots — a re-issue restarts it
+      // `Aent` is a no-target cast that takes the nearest un-entangled mine inside its own
+      // Rng1 — so the only question here is whether there is one.
+      const mine = world.nearestMine(u.x, u.y, ENTANGLE_RANGE);
+      if (!mine || mine.entangledBy > 0 || mine.gold <= 0) continue;
+      this.order({ c: "cast", unitId: u.id, code: "Aent", targetId: 0, x: 0, y: 0, queued: false });
+    }
+  }
+
   order(cmd: Command): boolean {
     return this.host.execute(this.player, cmd);
   }
 }
+
+/** `Aent` Entangle Gold Mine's own `Rng1`. The bound `EXPANSION_HALL_RANGE` is chosen under. */
+const ENTANGLE_RANGE = 500;
 
 /** A footprint one cell bigger on every side, with the whole border unbuildable. See
  *  `AiPlayer.spiral` for why placement is asked of this rather than of the real thing. */

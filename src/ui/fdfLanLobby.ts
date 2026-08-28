@@ -20,8 +20,8 @@ import {
   paneRowsToHide, readMapPreviewFor, setProp, size, type MinimapIcons,
 } from "./mapBrowser";
 import {
-  HANDICAPS, PLAYER_SLOT_FDF, SLOT_OPTIONS, buildSlotRows, dropdownButtonNames, fillForceLabels,
-  forceGroups, labelOf, slotOption, slotOptionValue, teamOptions, type Group,
+  HANDICAPS, PLAYER_SLOT_FDF, buildSlotRows, dropdownButtonNames, fillForceLabels,
+  forceGroups, labelOf, slotOption, slotOptionValue, slotOptionsFor, teamOptions, type Group,
 } from "./playerSlots";
 import { toConfig } from "./fdfLan";
 
@@ -340,7 +340,12 @@ export async function mountLanLobbyScreen(
         name.setOptions(
           slot.kind === "player" ? [{ value: "player", label: slot.name ?? "Player" }]
           : slot.locked ? [{ value: "computer", label: labelOf("computer") }]
-          : SLOT_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
+          // The CLASSIC three. Computer+ (issue #124) is chosen on the Custom Game screen's
+          // Advanced Options pane, and this screen — the game lobby, `GameChatroom.fdf` — has
+          // no such pane: there is nowhere on it to say which AI the match uses, and the
+          // choice is the MATCH's rather than the row's. A LAN game therefore plays the
+          // ported Blizzard scripts, as it always has.
+          : slotOptionsFor(false).map((o) => ({ value: o.value, label: o.label })),
         );
         name.value = slot.kind === "computer" ? slotOptionValue("computer", slot.ai) : slot.kind;
         name.onChange = (v) => hostSetKind(i, v);

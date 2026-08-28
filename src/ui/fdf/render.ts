@@ -9,6 +9,7 @@ import {
   type FitBox, type LaidOutFrame,
 } from "./layout";
 import { fadePanels, FADE_MS, LATE_PANEL_DELAY_MS, type PanelDirection } from "./anim";
+import { applyOverride, layer, type FdfOverride } from "../../overrides";
 import {
   buildCheckBox, buildEditBox, buildList, buildPopup, buildSlider, buildTextArea, widgetKind,
   type CheckBoxControl, type EditBoxControl, type ListControl, type PopupControl,
@@ -140,6 +141,15 @@ export interface FdfScreenOptions {
    *  can (re)fill its widgets from its own model. Widgets are DOM, and a rebuild throws
    *  the old DOM away; this is the hook that puts the contents back. */
   onBuild?: (screen: FdfScreen) => void;
+  /**
+   * OpenWar3's OWN FrameDef layers on top of this screen's files — see `src/overrides/`.
+   *
+   * The install's `UI\FrameDef\` belongs to the player and is never modified, so a control
+   * the 2003 UI has no frame for (the Computer+ checkbox of issue #124) arrives this way
+   * instead: the override's frames and strings go into the library once, at mount, and its
+   * add/remove edits are applied to the frame tree on every build.
+   */
+  overrides?: readonly FdfOverride[];
 }
 
 /** A mounted FDF screen: a full-viewport overlay that relayouts on resize. */
@@ -183,11 +193,17 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   if (opts.skin) lib.skin = opts.skin;
   await lib.load(opts.fdfPath);
   for (const path of opts.includeFdf ?? []) await lib.load(path);
+  // …and OUR layer last, so an override's frames and strings sit on top of every file the
+  // install supplied (src/overrides/).
+  for (const o of opts.overrides ?? []) layer(lib, o);
   // buildRoot runs per BUILD, not once: a composed screen's frame tree depends on state
   // that changes (the Custom Game screen grows a player row per slot in the chosen map).
   const makeRoot = (): FdfFrame => {
     const r = opts.buildRoot ? opts.buildRoot(lib) : lib.resolveRoot(opts.rootFrame);
     if (!r) throw new Error(`FDF: frame "${opts.rootFrame}" not found in ${opts.fdfPath}`);
+    // After `buildRoot`, so an override can edit a tree the screen composed for itself — the
+    // Custom Game screen's Advanced Options pane only exists once it has been adopted.
+    for (const o of opts.overrides ?? []) applyOverride(lib, r, o);
     propagateDecorate(r); // an ancestor's DecorateFileNames covers everything beneath it
     return r;
   };

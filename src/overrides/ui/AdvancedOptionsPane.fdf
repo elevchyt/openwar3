@@ -1,0 +1,21 @@
+// OpenWar3 override — `UI\FrameDef\Glue\AdvancedOptionsPane.fdf`.
+//
+// Adds the "Computer+ (Improved AI)" switch of issue #124 to the bottom of the Advanced
+// Options pane. It goes at the bottom because that is where the issue asks for it, and because
+// the pane's own layout chains every row off the one above it: the label follows
+// MapVisibilityLabel and the checkbox follows MapVisibilityMenu, so the new row inherits the
+// column positions of the eight rows already there without restating a single coordinate.
+//
+// The two frames are declared at top level (rather than inside an `AdvancedOptionsPane` block)
+// because that is what the layering mechanism wants: they are registered as templates and then
+// adopted into the pane by name — see src/overrides/index.ts.
+
+Frame "TEXT" "ComputerPlusLabel" INHERITS "StandardLabelTextTemplate" {
+    Height 0.024,
+    SetPoint TOPLEFT, "MapVisibilityLabel", BOTTOMLEFT, 0.0, -0.008,
+    Text "COLON_COMPUTER_PLUS",
+}
+
+Frame "GLUECHECKBOX" "ComputerPlusCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
+    SetPoint TOPRIGHT, "MapVisibilityMenu", BOTTOMRIGHT, -0.005, -0.008,
+}

@@ -2,6 +2,11 @@
 
 > Read this before touching anything in [`src/ai/`](../src/ai/), the `MeleeStartingAI` path, or
 > a computer player's behaviour. Issue #119.
+>
+> This is **Blizzard's** melee AI, ported. OpenWar3's own second one — Computer+, seated by a
+> checkbox in Advanced Options — is [`computer-plus.md`](computer-plus.md). The two share
+> `aiPlayer.ts` (the library and the natives) and nothing else; a seat is in exactly one of them,
+> and nothing in `src/ai/*.ts` imports from `src/ai/plus/`.
 
 Warcraft III's melee computer players are not C++ with a difficulty slider. They are **JASS
 scripts shipped in the game's own data** — `Scripts\human.ai`, `orc.ai`, `elf.ai`, `undead.ai`
@@ -87,7 +92,7 @@ kneels in a Haunted one's ring (a `harvest`, but only once the mine is haunted).
 ## Night elf gold is a CAST, not a build order
 
 `egol` (Entangled Gold Mine) is what `Aent` *creates*. It appears in no build array anywhere
-and must never be handed to the placement code, so `MeleeAi.entangleMines` walks the player's
+and must never be handed to the placement code, so `AiPlayer.entangleMines` walks the player's
 own rooted Trees each pass and casts Entangle on a free mine within `Rng1` = 500. That bound is
 why `EXPANSION_HALL_RANGE` is 460: a Tree of Life planted further from its mine than that can
 never wrap it. See [`night-elf.md`](night-elf.md).
@@ -127,7 +132,8 @@ Each of these is engine machinery rather than a line of script, and each is mark
 ## The difficulty spread
 
 A slot picks one of three computers, from the same menu on both screens that build player rows
-(`SLOT_OPTIONS` in [`src/ui/playerSlots.ts`](../src/ui/playerSlots.ts)). The labels are the
+(`SLOT_OPTIONS` in [`src/ui/playerSlots.ts`](../src/ui/playerSlots.ts) — which since issue #124
+holds Computer+'s three as well, and `slotOptionsFor` picks which trio a screen shows). The labels are the
 game's own — `UI\FrameDef\Glue\GlobalStrings.fdf` writes `COMPUTER_NEWBIE "Computer (Easy)"`,
 `COMPUTER_NORMAL "Computer (Normal)"`, `COMPUTER_INSANE "Computer (Insane)"` — and the value
 that rides through the lobby to `MeleeAi.add` is `MeleeDifficulty()` itself: common.ai's
@@ -245,7 +251,7 @@ says so at each site, so a later correction knows what it is correcting.
 
 `NEVER` lists them with a reason each: the transforms, Far Sight ("Unused") and Death Pact
 ("Never"), the economy errands that belong to other parts of `src/ai/` (Entangle is
-`MeleeAi.entangleMines`', Renew is the worker's job), and — flagged as OUR call rather than the
+`AiPlayer.entangleMines`', Renew is the worker's job), and — flagged as OUR call rather than the
 thread's — the abilities that trade a whole unit for one cast (Kaboom!, Unstable Concoction) and
 the army-logistics spells the thread records nothing about (Blink, Mass Teleport, the staves).
 

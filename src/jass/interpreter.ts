@@ -118,6 +118,18 @@ export interface SelectionEvent {
  *  (render/mapViewer.ts owns the keyboard); see `Interpreter.firePlayerEvent`. */
 export const EVENT_PLAYER_END_CINEMATIC = 17;
 
+/**
+ * common.j `constant playerevent EVENT_PLAYER_LEAVE = ConvertPlayerEvent(15)` — this player's
+ * game is over because they walked away from it, rather than because they were beaten.
+ *
+ * A melee map registers it for every playing slot inside `MeleeInitVictoryDefeat`, and its
+ * action (`MeleeTriggerActionPlayerLeft`) is the whole meaning of leaving: the leaver's units
+ * are shared with a surviving ally or handed to Neutral Passive — never destroyed — then
+ * `MeleeDoLeave` ends their game and `MeleeCheckForLosersAndVictors` decides whether that ends
+ * everyone's. Raised for a Computer+ player that has conceded (src/ai/plus/, issue #124).
+ */
+export const EVENT_PLAYER_LEAVE = 15;
+
 // common.j event enum indices (ConvertUnitEvent/ConvertPlayerUnitEvent values).
 const EVENT_UNIT_DEATH = 53;
 const EVENT_PLAYER_UNIT_DEATH = 20;

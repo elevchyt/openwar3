@@ -57,7 +57,12 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   { key: "customKeys", frame: "CustomKeysCheckBox", kind: "bool", panel: "gameplay", def: false, applied: false },
   { key: "healthBars", frame: "HealthBarsCheckBox", kind: "bool", panel: "gameplay", def: false, applied: false },
   { key: "autosaveReplay", frame: "AutosaveReplayCheckBox", kind: "bool", panel: "gameplay", def: true, applied: false },
-  { key: "gamePort", frame: "GamePortEditBox", kind: "text", panel: "gameplay", def: "6112", applied: false },
+  // Issue #124. The one gameplay option with a live backend: it is the DEFAULT value of the
+  // Custom Game screen's "Computer+ (Improved AI)" switch (ui/fdfSkirmish.ts), so ticking it
+  // here decides which AI a match starts with. Its frame is not the game's — no 2003 UI file
+  // has a row for a second melee AI — it comes from `src/overrides/ui/OptionsMenu.fdf`, which
+  // is also where the Game Port and Chat Support rows that used to sit under this one go.
+  { key: "computerPlusDefault", frame: "ComputerPlusDefaultCheckBox", kind: "bool", panel: "gameplay", def: false },
 
   // --- Video (remembered, not yet acted on — a WebGL client sizes to its canvas) ---
   { key: "gamma", frame: "GammaSlider", kind: "range", panel: "video", def: 50, applied: false },
@@ -151,6 +156,13 @@ const bool = (v: OptionValue): boolean => v === true;
  *
  * Turning "Sound" off zeroes every effect group (including the UI click — WC3 does the same).
  */
+/** Should a new Custom Game open with Computer+ switched on? Options → Gameplay → "Use
+ *  Computer+ as default AI", read straight from the committed store because the Custom Game
+ *  screen is mounted long after the Options screen has been closed. */
+export function computerPlusDefault(): boolean {
+  return loadOptions().computerPlusDefault === true;
+}
+
 export function applyAudioOptions(sounds: SoundBoard, opts: Options): void {
   const soundOn = bool(opts.soundEnabled);
   const sfx = soundOn ? num(opts.soundVolume, 100) / 100 : 0;

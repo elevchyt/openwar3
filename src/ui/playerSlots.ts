@@ -22,17 +22,16 @@ import { arg, findFrame, num, setProp, size, str } from "./mapBrowser";
 export const PLAYER_SLOT_FDF = "UI\\FrameDef\\Glue\\PlayerSlot.fdf";
 
 /**
- * What an EMPTY slot's name menu offers, in the reference's order.
+ * One entry of an empty slot's name menu.
  *
- * A computer appears three times over, once per `MeleeDifficulty()` (src/ai/ids.ts), and the
- * labels are the game's own — `UI\FrameDef\Glue\GlobalStrings.fdf` writes them out as
- * `COMPUTER_NEWBIE "Computer (Easy)"`, `COMPUTER_NORMAL "Computer (Normal)"` and
- * `COMPUTER_INSANE "Computer (Insane)"`.
+ * A computer appears once per `MeleeDifficulty()` (src/ai/ids.ts) — and, since issue #124,
+ * once per AI as well: Blizzard's ported melee scripts and OpenWar3's own Computer+
+ * (src/ai/plus/) are two different opponents at the same three difficulties.
  *
- * The three share ONE controller. A difficulty is not a different kind of occupant — every
- * check that asks "is somebody in this seat" (`seated`, the loading screen's roster, the
- * config's filter) means the same thing at all three — so it rides alongside as `ai` rather
- * than splitting `Controller` into three near-identical members.
+ * All of them share ONE controller. Neither the difficulty nor the AI is a different kind of
+ * occupant — every check that asks "is somebody in this seat" (`seated`, the loading screen's
+ * roster, the config's filter) means the same thing at all six — so both ride alongside as
+ * plain fields rather than splitting `Controller` into six near-identical members.
  */
 export interface SlotOption {
   /** The menu's value, and what a row stores. */
@@ -41,22 +40,52 @@ export interface SlotOption {
   controller: Controller;
   /** `MeleeDifficulty()` for a computer row; absent on Open/Closed. */
   ai?: number;
+  /** This computer runs **Computer+**, OpenWar3's own improved melee AI (src/ai/plus/), rather
+   *  than Blizzard's ported scripts. Six computer entries exist rather than three because the
+   *  Advanced Options checkbox swaps which trio a row's menu offers — see `slotOptionsFor`. */
+  plus?: boolean;
 }
 
+/**
+ * Every slot option, both AIs' worth.
+ *
+ * A screen never shows all six: `slotOptionsFor` picks the trio the Custom Game screen's
+ * "Computer+ (Improved AI)" checkbox has selected. They live in ONE table because everything
+ * that reads a stored row back — `slotOption`, `labelOf`, the owner line under a hovered enemy
+ * — has to resolve whichever value the row was saved with.
+ *
+ * The classic labels are the game's own (`UI\FrameDef\Glue\GlobalStrings.fdf` writes
+ * COMPUTER_NEWBIE "Computer (Easy)", COMPUTER_NORMAL, COMPUTER_INSANE). The Computer+ ones are
+ * OURS — no key in GlobalStrings names an AI Blizzard never shipped — and they are kept here
+ * beside the labels they mirror rather than in the FDF overrides layer (src/overrides/),
+ * because `labelOf` is asked for them by code that has no FDF library in scope: the owner line
+ * of a hover tooltip is drawn mid-match.
+ */
 export const SLOT_OPTIONS: readonly SlotOption[] = [
   { value: "open", label: "Open", controller: "open" },
   { value: "closed", label: "Closed", controller: "closed" },
   { value: "computer-easy", label: "Computer (Easy)", controller: "computer", ai: MELEE_NEWBIE },
   { value: "computer", label: "Computer (Normal)", controller: "computer", ai: MELEE_NORMAL },
   { value: "computer-insane", label: "Computer (Insane)", controller: "computer", ai: MELEE_INSANE },
+  { value: "computerplus-easy", label: "Computer+ (Easy)", controller: "computer", ai: MELEE_NEWBIE, plus: true },
+  { value: "computerplus", label: "Computer+ (Normal)", controller: "computer", ai: MELEE_NORMAL, plus: true },
+  { value: "computerplus-insane", label: "Computer+ (Insane)", controller: "computer", ai: MELEE_INSANE, plus: true },
 ];
 
-/** The option a (controller, difficulty) pair is showing — the row's menu value. Anything the
- *  menu does not offer (a human's own seat, a map's neutral player) falls through to the
+/** What a slot's name menu offers when Computer+ is (or is not) switched on: the two empty
+ *  states, then that AI's three difficulties and only those. Issue #124 — "replaces the
+ *  Computer player options with Computer+ options as well when the checkbox is ticked". */
+export function slotOptionsFor(plus: boolean): SlotOption[] {
+  return SLOT_OPTIONS.filter((o) => o.controller !== "computer" || !!o.plus === plus);
+}
+
+/** The option a (controller, difficulty, AI) triple is showing — the row's menu value. Anything
+ *  the menu does not offer (a human's own seat, a map's neutral player) falls through to the
  *  controller itself, which is what those rows print. */
-export function slotOptionValue(controller: Controller, ai?: number): string {
+export function slotOptionValue(controller: Controller, ai?: number, plus = false): string {
   if (controller !== "computer") return controller;
-  return SLOT_OPTIONS.find((o) => o.controller === "computer" && o.ai === (ai ?? MELEE_NORMAL))?.value ?? "computer";
+  const want = ai ?? MELEE_NORMAL;
+  return SLOT_OPTIONS.find((o) => o.controller === "computer" && o.ai === want && !!o.plus === plus)?.value ?? "computer";
 }
 
 /** The option a menu value names. */

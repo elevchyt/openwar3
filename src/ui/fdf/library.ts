@@ -73,14 +73,40 @@ export class FdfLibrary {
     for (const frame of file.frames) this.register(frame);
   }
 
-  /** Register a frame and its nested named frames as reusable templates. */
-  private register(frame: FdfFrame): void {
+  /**
+   * Lay one of OpenWar3's OWN FrameDef files over what the install supplied (src/overrides/).
+   *
+   * The install's `UI\FrameDef\` is the player's and is never written to, so a control the
+   * 2003 UI has no frame for is declared in a file of ours and registered here. Two
+   * differences from `loadFile`, and both are what makes it an override rather than another
+   * include:
+   *
+   *  · frames and strings WIN over anything already registered under the same name, where a
+   *    normal file's first definition wins (see `register`'s `force`);
+   *  · it takes source text rather than a VFS path, because these files ship with the engine
+   *    and are bundled, not mounted.
+   *
+   * Idempotent by `id`: a library outlives the builds that read it, and both of the screens
+   * that use this layer the same strings file.
+   */
+  loadOverride(id: string, source: string): void {
+    const key = `override:${id}`;
+    if (this.loaded.has(key)) return;
+    this.loaded.add(key);
+    const file = parseFdf(source);
+    for (const [k, v] of file.strings) this.strings.set(k, v);
+    for (const frame of file.frames) this.register(frame, true);
+  }
+
+  /** Register a frame and its nested named frames as reusable templates. The install's files
+   *  keep the FIRST definition of a name; an override (above) replaces it. */
+  private register(frame: FdfFrame, force = false): void {
     if (frame.name) {
-      if (!this.templates.has(frame.name)) this.templates.set(frame.name, frame);
+      if (force || !this.templates.has(frame.name)) this.templates.set(frame.name, frame);
       const lc = frame.name.toLowerCase();
-      if (!this.lowered.has(lc)) this.lowered.set(lc, frame);
+      if (force || !this.lowered.has(lc)) this.lowered.set(lc, frame);
     }
-    for (const child of frame.children) this.register(child);
+    for (const child of frame.children) this.register(child, force);
   }
 
   /** Find a named frame/template (case-insensitive fallback). */

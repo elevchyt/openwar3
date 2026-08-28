@@ -9,7 +9,9 @@ Goal: liberate WC3 from legacy constraints. Modern features planned:
 - **Cross-platform** — Windows, Linux, macOS, anything with a browser
 - **Multiplayer reconnect** — no more dropped games lost
 - **Better animation processing** — smoother than original
-- **Better AI** — improved AI engine that is friendlier to newer players and exciting to experienced ones
+- **Better AI** — **Computer+**, a second melee AI beside Blizzard's own: friendlier to newer
+  players, sharper against experienced ones, and it never cheats at any difficulty. Tick it in
+  Advanced Options ([how it works](docs/computer-plus.md))
   
 Contributions welcome.
 

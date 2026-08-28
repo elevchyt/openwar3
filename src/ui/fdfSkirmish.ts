@@ -1,4 +1,6 @@
 import { MELEE_NORMAL } from "../ai/ids";
+import { computerPlusDefault } from "../data/options";
+import { ADVANCED_OPTIONS_OVERRIDE, OW3_STRINGS } from "../overrides";
 import type { DataSource } from "../vfs/types";
 import { RACES, RACE_LABEL, type Race } from "../data/races";
 import type { MapInfo } from "../world/mapInfo";
@@ -13,8 +15,8 @@ import {
   setProp, size, str,
 } from "./mapBrowser";
 import {
-  HANDICAPS, PLAYER_SLOT_FDF, SLOT_OPTIONS, buildSlotRows, dropdownButtonNames, fillForceLabels,
-  forceGroups, labelOf, slotOption, slotOptionValue, teamOptions, type Group,
+  HANDICAPS, PLAYER_SLOT_FDF, buildSlotRows, dropdownButtonNames, fillForceLabels,
+  forceGroups, labelOf, slotOption, slotOptionValue, slotOptionsFor, teamOptions, type Group,
 } from "./playerSlots";
 
 // The Custom Game screen (issue #61), built from UI\FrameDef\Glue\Skirmish.fdf: the map
@@ -117,9 +119,10 @@ export async function mountSkirmish(
   /**
    * The Advanced Options state.
    *
-   * Only `visibility` reaches the match. The other five are the real controls off
-   * `AdvancedOptionsPane.fdf` and they are drawn greyed, because each needs something the
-   * match setup does not have yet rather than a line of wiring here:
+   * Two of these reach the match: `visibility`, and `computerPlus` (our own row — see below).
+   * The other five are the real controls off `AdvancedOptionsPane.fdf` and they are drawn
+   * greyed, because each needs something the match setup does not have yet rather than a line
+   * of wiring here:
    *
    *  · Lock Teams / Teams Together — the first is a lobby rule about who may change a team
    *    menu after the host has set it (there is no second person on this screen to stop), the
@@ -143,6 +146,19 @@ export async function mountSkirmish(
      *  the whole map as grey terrain memory, live fog still hiding enemy movement. DEFAULT is
      *  a real fourth choice here (WC3's normal pitch-black fog), not a rename of that one. */
     visibility: "MAP_EXPLORED" as Visibility,
+    /**
+     * **Computer+** — play the computer seats with OpenWar3's own improved melee AI
+     * (src/ai/plus/, docs/computer-plus.md) rather than Blizzard's ported scripts.
+     *
+     * The pane's ninth row, and the only one on it that is not the game's own (its frames come
+     * from `src/overrides/ui/AdvancedOptionsPane.fdf` — the install is never edited). It is one
+     * switch for the whole match rather than a per-row choice, which is why flipping it also
+     * swaps what every computer row's NAME menu offers: "Computer (Easy)" becomes "Computer+
+     * (Easy)" and so on (issue #124).
+     *
+     * Opens on whatever Options → Gameplay → "Use Computer+ as default AI" was left at.
+     */
+    computerPlus: computerPlusDefault(),
   };
 
   /** A map was picked (or its folder finished reading): reseat the player rows on it. */
@@ -183,6 +199,9 @@ export async function mountSkirmish(
     fdfPath: "UI\\FrameDef\\Glue\\Skirmish.fdf",
     rootFrame: "Skirmish",
     includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, ADVANCED_OPTIONS_FDF, PLAYER_SLOT_FDF, BLURB_SCROLLBAR_FDF],
+    // …and our own layer on the Advanced Options pane: the Computer+ switch, which the 2003 UI
+    // has no frame for. See src/overrides/.
+    overrides: [OW3_STRINGS, ADVANCED_OPTIONS_OVERRIDE],
     // The engine composes this screen from five files; so do we.
     buildRoot: (l) => { lib = l; browser.useStrings(l); return buildSkirmishRoot(l, groups); },
     // Advanced Options and the map info are one column with two faces, and exactly one of
@@ -219,7 +238,8 @@ export async function mountSkirmish(
 
   function start(): void {
     const picked = browser.selected;
-    if (picked) h.onStart(picked.file, picked.info, toConfig(slots, picked.info, visibilityFog(advanced.visibility)));
+    if (!picked) return;
+    h.onStart(picked.file, picked.info, toConfig(slots, picked.info, visibilityFog(advanced.visibility), advanced.computerPlus));
   }
 
   // Leaving the screen must stop the browser's background read — it walks the whole install.
@@ -255,12 +275,16 @@ export async function mountSkirmish(
         // Your own slot is you — WC3 shows your profile name there, not a menu of others. A
         // slot the MAP owns (a computer player it declared) shows what it is and takes no
         // choice: the real client greys WarChasers' "Dungeon Denizens" row at Computer.
+        // Which AI's three difficulties this row offers is the Advanced Options switch's
+        // (issue #124: "replaces the Computer player options with Computer+ options as well
+        // when the checkbox is ticked"). A slot the MAP owns still shows the plain label —
+        // there is no choice on that row to make.
         name.setOptions(
           mine ? [{ value: "user", label: "Player" }]
           : slot.locked ? [{ value: "computer", label: labelOf("computer") }]
-          : SLOT_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
+          : slotOptionsFor(advanced.computerPlus).map((o) => ({ value: o.value, label: o.label })),
         );
-        name.value = slotOptionValue(slot.controller, slot.ai);
+        name.value = slotOptionValue(slot.controller, slot.ai, advanced.computerPlus);
         // The row's other menus follow who is in it — and a computer row carries the
         // difficulty its menu entry named (Computer (Easy) / (Normal) / (Insane)).
         name.onChange = (v) => {
@@ -352,6 +376,14 @@ export async function mountSkirmish(
       visibility.setOptions(VISIBILITY_ITEMS.map((v) => ({ value: v, label: text(v) })));
       visibility.value = advanced.visibility;
       visibility.onChange = (v) => { advanced.visibility = v as Visibility; };
+    }
+
+    // …and OURS. Flipping it re-fills the whole screen, because the switch is not only about
+    // the match: every computer row's name menu changes with it.
+    const plus = s.checkBox("ComputerPlusCheckBox");
+    if (plus) {
+      plus.checked = advanced.computerPlus;
+      plus.onChange = (on) => { advanced.computerPlus = on; fill(s); };
     }
   }
 }
@@ -454,7 +486,7 @@ function renameFrame(root: FdfFrame, from: string, to: string): void {
 
 /** The lobby config the melee initializer consumes (ui/lobby.ts). Start locations come
  *  from the MAP — the lobby only seats players, it doesn't place them. */
-function toConfig(slots: Slot[], info: MapInfo, fog: FogMode): MeleeConfig {
+function toConfig(slots: Slot[], info: MapInfo, fog: FogMode, computerPlus: boolean): MeleeConfig {
   const playing: SlotConfig[] = slots
     .filter((s) => s.controller === "user" || s.controller === "computer")
     .map((s) => {
@@ -467,8 +499,9 @@ function toConfig(slots: Slot[], info: MapInfo, fog: FogMode): MeleeConfig {
         startX: mapSlot?.startX ?? 0,
         startY: mapSlot?.startY ?? 0,
         name: mapSlot?.name,
-        // Which computer the row picked. Only a computer has one — see MeleeConfig.
-        ...(s.controller === "computer" ? { aiDifficulty: s.ai } : {}),
+        // Which computer the row picked, and which AI plays it. Only a computer has either
+        // — see SlotConfig.
+        ...(s.controller === "computer" ? { aiDifficulty: s.ai, aiPlus: computerPlus } : {}),
         // The one seat a human is in on this screen is theirs, under the name the profile
         // saved — the loading screen's roster is the only thing that reads it.
         ...(s.controller === "user" ? { playerName: savedPlayerName() } : {}),

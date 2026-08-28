@@ -98,8 +98,8 @@ const NEVER = new Set<string>([
   "AOfs", // "~Farsight - Unused"
   "AUdp", // "~Death Pact - Never"
   // Economy and errands, which are not casts the AI decides — they belong to the parts of
-  // src/ai/ that own the economy (MeleeAi.entangleMines) or to the worker's own job.
-  "Aent", // Entangle Gold Mine — MeleeAi.entangleMines issues this one
+  // src/ai/ that own the economy (AiPlayer.entangleMines) or to the worker's own job.
+  "Aent", // Entangle Gold Mine — AiPlayer.entangleMines issues this one
   "Aeat", // Eat Tree
   "Adtn", // Detonate — a wisp trading itself for a dispel
   "Auns", // Unsummon
@@ -762,8 +762,14 @@ const SILENCE_MANA = 75;
 
 /** Is this ability aimed at friends? The same expression `SimWorld.tickAutocast` derives from
  *  `targs1`, and for the same reason: the ability's own Targets Allowed is the only thing that
- *  knows, and a hard-coded list would drift from it. */
-function friendlySpell(def: AbilityDef): boolean {
+ *  knows, and a hard-coded list would drift from it.
+ *
+ *  Exported, along with `waveDistance` and `near` below, because the Computer+ caster
+ *  (src/ai/plus/casting.ts) reads the same three facts off the same rows. They are the parts
+ *  of this file that are not a JUDGEMENT — a spell's polarity, a wave's reach and hull-to-hull
+ *  distance are the data's, and two casters disagreeing about them would be a bug in one of
+ *  them rather than a difference in how they play. */
+export function friendlySpell(def: AbilityDef): boolean {
   const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
   return !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
 }
@@ -771,7 +777,7 @@ function friendlySpell(def: AbilityDef): boolean {
 /** A wave's reach — `DataC` "Distance" for the Shock Wave / Carrion Swarm family, `DataA` for
  *  Impale, whose meta group numbers its columns differently (see the handlers in
  *  sim/spells.ts). Falls back to the cast range, then to the family's 700. */
-function waveDistance(lvl: AbilityLevel): number {
+export function waveDistance(lvl: AbilityLevel): number {
   const c = lvl.data[2];
   if (Number.isFinite(c) && c > 0) return c;
   const a = lvl.data[0];
@@ -780,7 +786,7 @@ function waveDistance(lvl: AbilityLevel): number {
 }
 
 /** Hull-to-hull, the way every range in the sim is measured. */
-function near(a: SimUnit, b: SimUnit, range: number): boolean {
+export function near(a: SimUnit, b: SimUnit, range: number): boolean {
   return Math.hypot(b.x - a.x, b.y - a.y) - a.radius - b.radius <= range;
 }
 

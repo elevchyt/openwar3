@@ -2060,6 +2060,18 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   ANrg: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
   ANcr: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
 
+  // …and the two DRUID forms, which are the same swap with the unit's whole identity in the
+  // alternate body rather than in a bonus column:
+  //   `[Abrf]` Bear Form   edoc → edcm — 430 life becomes 810 (UnitBalance.slk), and the
+  //                        alternate body carries Roar without Rejuvenation, which is why the
+  //                        form is a decision rather than an upgrade
+  //   `[Arav]` Raven Form  edot → edtm — the Druid of the Talon as a FLYER (the file calls it
+  //                        `ravenform`; the tooltips call it Storm Crow Form)
+  // Both carry an `Unorder` (`unbearform` / `unravenform`) and `HeroDur1` = 0, so both are
+  // toggles the player turns off rather than timed forms — `morphToggle` reads exactly that.
+  Abrf: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
+  Arav: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
+
   // Frost Armor (Lich) — buff a friendly unit with +armour (dataB) for the
   // duration (WC3 also slows melee attackers, which we don't model). Autocasts.
   AUfu: (api, caster, def, rank, ctx) => {

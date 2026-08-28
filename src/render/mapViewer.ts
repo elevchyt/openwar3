@@ -14,7 +14,7 @@ import { summonsBuildings, type Alert, type RallyKind, type ShopResult, type Sim
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
-import { EVENT_PLAYER_END_CINEMATIC } from "../jass/interpreter";
+import { EVENT_PLAYER_END_CINEMATIC, EVENT_PLAYER_LEAVE } from "../jass/interpreter";
 import { MAP_CONTROL, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay, type BoundaryMask } from "./fogOverlay";
@@ -1928,7 +1928,7 @@ export class MapViewerScene {
         s.id,
         s.name?.trim()
           || (s.controller === "computer"
-            ? labelOf(slotOptionValue("computer", s.aiDifficulty))
+            ? labelOf(slotOptionValue("computer", s.aiDifficulty, s.aiPlus === true))
             : `Player ${s.id + 1}`),
       ]),
     );
@@ -1987,6 +1987,8 @@ export class MapViewerScene {
           startX: s.startX,
           startY: s.startY,
           difficulty: s.aiDifficulty ?? MELEE_AI_NORMAL,
+          // …and WHICH AI, from the Custom Game screen's Advanced Options switch (issue #124).
+          plus: s.aiPlus === true,
         })),
       config.seed ?? 1,
     );
@@ -3070,6 +3072,14 @@ export class MapViewerScene {
         // On the HOST this is a client asking to be heard, so it goes through the full
         // routing. On a CLIENT it is the host's ruling, already routed — just show it.
         this.rts?.frozenClient ? this.showChat(line) : this.deliverChat(line);
+      // A Computer+ player conceding (issue #124). Raised as the ORDINARY player-left event on
+      // the map's own script, which is what makes the buildings survive: Blizzard.j's
+      // `MeleeTriggerActionPlayerLeft` shares the units with a surviving ally or hands them to
+      // Neutral Passive, calls `MeleeDoLeave`, and then runs the same victory check every other
+      // route runs. Nothing about "who won" is decided here — this only says somebody left.
+      // (AMAI has to destroy its own buildings to leave, because a JASS script's only way out
+      // is the defeat condition; we are not constrained that way.)
+      this.rts.onPlayerLeft = (player) => this.mapScript?.interp.firePlayerEvent(player, EVENT_PLAYER_LEAVE);
       // …and the same split for the pause: the host judges an ask, a client obeys a ruling.
       this.rts.onPauseAsked = (player, on) => this.rulePause(player, on);
       this.rts.onPauseRuled = (on, by, left, denied) => this.takePauseRuling(on, by, left, denied);

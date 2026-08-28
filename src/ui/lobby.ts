@@ -48,6 +48,17 @@ export interface SlotConfig {
    * every seat was before the menu offered the other two.
    */
   aiDifficulty?: number;
+  /**
+   * This computer is a **Computer+** — OpenWar3's own improved melee AI (src/ai/plus/,
+   * docs/computer-plus.md) rather than Blizzard's ported one.
+   *
+   * Set on every computer seat by the Custom Game screen's Advanced Options checkbox, which is
+   * one switch for the whole match; it rides per SLOT all the same, because that is the grain
+   * the two AIs are seated at (`RtsController.startMeleeAIFor`) and a lobby that mixed them
+   * would need no other change. Absent reads as false — the classic AI, which is what every
+   * seat was before the checkbox existed.
+   */
+  aiPlus?: boolean;
 }
 
 /** Fog-of-war start mode chosen in the lobby:

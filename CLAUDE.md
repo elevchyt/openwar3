@@ -169,6 +169,22 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   what a hero LEARNS and nothing about using it, so [`casting.ts`](src/ai/casting.ts) is built on
   Boris_Spider's observation thread (hiveworkshop 193280) instead — every rule quotes its line,
   and it is keyed on the BASE ability code, which is the thread's own point.
+- **Computer+:** read [`docs/computer-plus.md`](docs/computer-plus.md) before touching
+  [`src/ai/plus/`](src/ai/plus/), the Advanced Options pane's Computer+ switch, or
+  [`src/overrides/`](src/overrides/). It is a SECOND melee AI beside Blizzard's ported one, not a
+  difficulty setting on it: the two objects share no state, a seat is in exactly one of them, and
+  nothing in `src/ai/*.ts` may import from `src/ai/plus/`. The rule that makes it different is
+  that it does **not cheat** — neither the insane computer's doubled harvest nor its fog bypass —
+  so every difference between its three rungs is a number in `PlusProfile`, and **none of those
+  numbers are the game's**: nothing in the install describes an improved AI, so unlike the race
+  scripts a value there is OURS unless a comment cites something. Its army ceiling is enforced at
+  PRODUCTION rather than at the wave, which is the whole of "must not mass"; and its concession
+  leaves through `EVENT_PLAYER_LEAVE` so Blizzard's own `MeleeTriggerActionPlayerLeft` hands the
+  units over instead of the AI demolishing its own base.
+- **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
+  that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
+  files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its
+  README is the contract.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

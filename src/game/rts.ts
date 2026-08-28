@@ -46,6 +46,7 @@ import { disabledIconPath } from "../data/commandStrings";
 import { type ItemRegistry } from "../data/items";
 import { workerProfileFor, depotRoleFor, type PlayableRace } from "../data/races";
 import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
+import { ComputerPlusAi, type PlusHost } from "../ai/plus";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -792,14 +793,14 @@ export class RtsController {
    * no route by which it could.
    */
   prepareMeleeAI(
-    slots: ReadonlyArray<{ player: number; race: PlayableRace; startX: number; startY: number; difficulty: number }>,
+    slots: ReadonlyArray<{ player: number; race: PlayableRace; startX: number; startY: number; difficulty: number; plus?: boolean }>,
     seed: number,
   ): void {
     this.meleeSeats = new Map(slots.map((s) => [s.player, s]));
     this.meleeSeed = seed;
     // Built here rather than as a field: `this.sim` is assigned in the constructor BODY, so a
     // field initializer that reached for it would capture `undefined`.
-    this.meleeAi = new MeleeAi({
+    const host: PlusHost = {
       world: this.sim,
       registry: this.registry,
       abilities: this.abilities,
@@ -812,12 +813,20 @@ export class RtsController {
       // The computer's OWN eyes, not the local player's — every seat has a viewpoint from
       // tick 0 (VisionSet.seat), so this is the same grid its units acquire through.
       visible: (player, x, y) => this.viewpoints.viewpointFor(player).vision.stateAt(x, y) === FogState.Visible,
-    });
+      // The two things only Computer+ asks for (src/ai/plus/). Both leave through the SAME
+      // doors a person's would: a line of chat is routed and relayed exactly as a typed one,
+      // and "I have lost, I am leaving" is the ordinary player-left event the map's own melee
+      // script is already listening for.
+      say: (player, text) => this.onChatSaid?.({ from: player, text, target: { scope: "all" } }),
+      leave: (player) => this.onPlayerLeft?.(player),
+    };
+    this.meleeAi = new MeleeAi(host);
+    this.computerPlus = new ComputerPlusAi(host);
   }
 
-  /** The lobby's answer for each computer seat — where it starts and how hard it plays — held
-   *  until the map's script asks for it. Empty outside a match. */
-  private meleeSeats = new Map<number, { player: number; race: PlayableRace; startX: number; startY: number; difficulty: number }>();
+  /** The lobby's answer for each computer seat — where it starts, how hard it plays, and which
+   *  of the two AIs plays it — held until the map's script asks for it. Empty outside a match. */
+  private meleeSeats = new Map<number, { player: number; race: PlayableRace; startX: number; startY: number; difficulty: number; plus?: boolean }>();
   private meleeSeed = 1;
 
   /**
@@ -836,6 +845,16 @@ export class RtsController {
     const seat = this.meleeSeats.get(player);
     if (!this.meleeAi || !seat) return;
     const race = AI_SCRIPT_RACES[script.toLowerCase()] ?? seat.race;
+    // COMPUTER+ (issue #124) — the lobby's Advanced Options switch, arriving here as the seat's
+    // own flag. It is the same seam, the same moment and the same arguments: the map's melee
+    // script still decides WHO plays and as what, and only which of the two AI objects the seat
+    // lands in changes. The two share no state, so a match may hold both.
+    if (seat.plus) {
+      this.computerPlus?.add(player, race, seat.difficulty, seat.startX, seat.startY, this.meleeSeed);
+      // …and no harvest bonus, at any difficulty. Computer+ does not cheat — see
+      // docs/computer-plus.md and `AiPlayer.bypassFog`, which it also switches off.
+      return;
+    }
     this.meleeAi.add(player, race, seat.difficulty, seat.startX, seat.startY, this.meleeSeed);
     // The one thing an INSANE computer gets that is the engine's rather than the script's:
     // it is credited TWICE what its workers actually carried home. common.ai never mentions
@@ -855,6 +874,19 @@ export class RtsController {
   }
 
   private meleeAi: MeleeAi | null = null;
+  /** The Computer+ seats (issue #124, src/ai/plus/). A separate object from `meleeAi` on
+   *  purpose: the two AIs share no mutable state, and a seat is in exactly one of them. */
+  private computerPlus: ComputerPlusAi | null = null;
+
+  /**
+   * A player has LEFT the game — raised for a Computer+ seat that has conceded.
+   *
+   * Wired by the presentation side to `EVENT_PLAYER_LEAVE` on the map's own script, because
+   * that is where the meaning of leaving lives: Blizzard.j's `MeleeTriggerActionPlayerLeft`
+   * hands the units to Neutral Passive and calls `MeleeDoLeave`, and the victory check that
+   * follows is the map's. Nothing here decides any of it.
+   */
+  onPlayerLeft: ((player: number) => void) | null = null;
 
   /** The owner-line label for a player slot — the lobby name, or a generic
    *  "Player N" fallback so an un-seeded slot still reads sensibly. */
@@ -3107,6 +3139,7 @@ export class RtsController {
       // breakdown of the span they sit inside rather than siblings of it.
       perfLog.begin("sim.ai");
       if (this.meleeAi?.active && this.seeded) this.meleeAi.tick(dt);
+      if (this.computerPlus?.active && this.seeded) this.computerPlus.tick(dt);
       perfLog.end("sim.ai");
       perfLog.begin("sim.world");
       this.sim.tick(dt);

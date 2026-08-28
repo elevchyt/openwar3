@@ -644,6 +644,19 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // between the two units the ability names; Abu2/Abu3/Abu5 alias it for the scarabs and the
   // Barbed Arachnathid. See the handler for why its sibling morphs are not listed here yet.
   Abur: { target: "none" },
+  // The two DRUID forms, and they are the same row shape as every morph above — `DataA1` names
+  // the normal body and `UnitID1` the alternate, which is the whole of what `morphToggle`
+  // reads: `[Abrf]` edoc ⇄ edcm (Bear Form, `Order=bearform`, 25 mana, gated on `Redc` at rank
+  // TWO — the Druid of the Claw's second training upgrade is what grants it), `[Arav]` edot ⇄
+  // edtm (Raven Form, as the file spells its order; 50 mana, gated on `Redt`).
+  //
+  // They were missing, and their absence was invisible from the outside: `buildInitialAbilities`
+  // keeps only what this table names, so the button never appeared and the alternate unit — a
+  // Druid of the Claw in Bear Form, which is what the unit is FOR — could not be reached at
+  // all. Issue #124 named Bear Form as the example of an ability the AI must use, which is what
+  // turned it up.
+  Abrf: { target: "none" },
+  Arav: { target: "none" },
   // The three REGENERATION auras — and the two Fountains, which are nothing else. A Fountain
   // of Health's whole ability list is `Avul,ACnr` and a Fountain of Mana's `Avul,ANre`
   // (Units\UnitAbilities.slk); those rows' base codes are `Aoar` and `Aarm`, which are also
