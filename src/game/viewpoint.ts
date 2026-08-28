@@ -38,6 +38,10 @@ export interface VisionWorld {
   readonly units: ReadonlyMap<number, SimUnit>;
   readonly isDay: boolean;
   activeAttackReveals(): Iterable<{ team: number; x: number; y: number; radius: number; flying: boolean }>;
+  /** The sight units that have just died are still lending their own side (issue #126).
+   *  Carries `owner` as well as `team` because it is OUR unit's sight, so it reaches an ally
+   *  through the same shared-vision test the living unit went through. */
+  activeDeathReveals(): Iterable<{ team: number; owner: number; x: number; y: number; radius: number; flying: boolean }>;
   /** True Sight is a TEAM property in WC3 — one Shade uncovers a hero for the whole army —
    *  so this is the sim's own answer rather than one re-derived here. That keeps what you
    *  can shoot and what you can see the same answer. */
@@ -136,9 +140,16 @@ export class Viewpoint {
    * no slot to own anything, so team membership is what "ours" means there — and only there.
    */
   revealsFor(u: SimUnit): boolean {
-    if (this.player < 0) return u.team === this.team;
-    if (u.owner === this.player) return true;
-    return u.owner >= 0 && this.alliances.sharesVisionWith(u.owner, this.player);
+    return this.revealsForOwner(u.owner, u.team);
+  }
+
+  /** The same question asked of a bare owner/team pair, for sight that has outlived its unit:
+   *  a dying unit's reveal (issue #126) is filed as a record, not as a SimUnit, and must pass
+   *  exactly the test the unit itself passed a moment earlier. */
+  private revealsForOwner(owner: number, team: number): boolean {
+    if (this.player < 0) return team === this.team;
+    if (owner === this.player) return true;
+    return owner >= 0 && this.alliances.sharesVisionWith(owner, this.player);
   }
 
   /** Is this unit OURS — the one relationship that never needs an alliance or a sight line?
@@ -276,6 +287,13 @@ export class Viewpoint {
     // again if it stops. `flying` reveals over the treeline it fired through.
     for (const r of this.world.activeAttackReveals()) {
       if (r.team !== this.team) continue; // only OUR side learns where it came from
+      this.vision.reveal(r.x, r.y, r.radius, r.flying);
+    }
+    // A unit that has just fallen goes on seeing for its own death time, from where it fell,
+    // out to at most MiscData DyingRevealRadius (issue #126). It is OUR unit's sight, so it
+    // reaches whoever the living unit's sight reached — us, and any ally sharing vision.
+    for (const r of this.world.activeDeathReveals()) {
+      if (!this.revealsForOwner(r.owner, r.team)) continue;
       this.vision.reveal(r.x, r.y, r.radius, r.flying);
     }
     // Script-placed fog modifiers are stamped LAST, over everything the units revealed —

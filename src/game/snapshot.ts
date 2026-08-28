@@ -471,6 +471,11 @@ export interface FallenHeroSnapshot {
    *  the id instead of the seconds means the hero bar reads a revival the same way on both
    *  sides of the wire rather than through a second, client-only path. */
   revivingAt: number;
+  /** Seconds until the body has finished dissipating (`FallenHero.bodyLeft`, issue #126) —
+   *  what greys the altar's revive button while the hero is still lying there. The AUTHORITY's
+   *  clock: a client mints its roster records from this payload rather than from a death of
+   *  its own, so without it the button would come alive on a timer that never started. */
+  bodyLeft: number;
 }
 
 export interface WorldSnapshot {
@@ -887,7 +892,7 @@ export function snapshotFor(
   const fallen: FallenHeroSnapshot[] = [];
   for (const f of world.fallen?.values() ?? []) {
     if (f.owner !== recipient) continue;
-    fallen.push({ id: f.id, typeId: f.typeId, properName: f.properName, level: f.level, revivingAt: f.revivingAt });
+    fallen.push({ id: f.id, typeId: f.typeId, properName: f.properName, level: f.level, revivingAt: f.revivingAt, bodyLeft: f.bodyLeft });
   }
   return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, fallen, creepCamps, units, mines, items, projectiles, corpses, fx: { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] }, deaths: [], commands };
 }

@@ -240,7 +240,7 @@ check("writing the copy does not reach the world", world.stashOf(0).gold, 750);
 console.log("\nthe vision natives answer without a controller");
 const { VisionSet } = require(join(REPO, ".sim-build", "src", "game", "viewpoint.js"));
 const stubAlliances = { sharesVisionWith: () => false, coAllied: (a, b) => a === b, set: () => {}, get: () => false };
-const visionWorld = { units: new Map(), isDay: true, activeAttackReveals: () => [], teamDetects: () => false };
+const visionWorld = { units: new Map(), isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], teamDetects: () => false };
 const vset = new VisionSet(visionWorld, stubAlliances, () => [], 0, 0, 1024, 1024);
 vset.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }, { player: 2, team: 1 }]);
 const vh = visionHooks(vset, stubAlliances);

@@ -79,6 +79,10 @@ export interface AnimSet {
   build: number; // a WORKER's hammering pose: its "Stand Work", else its attack swing
   decayFlesh: number; // corpse decay — flesh rots (heroes lack this)
   decayBone: number; // corpse decay — bones linger, then vanish
+  /** "Dissipate" — the body going, rather than rotting. A HERO's model authors this and no
+   *  decay clips at all, which is the art saying what the rules say: a hero leaves no remains
+   *  (issue #126). Summons and a few creeps author one too. -1 when the model has none. */
+  dissipate: number;
   /** "Morph" — the clip a unit plays while CHANGING form. -1 for almost everything; the
    *  Ancients author it as a pair, and which of the pair this index lands on depends on the
    *  animProps the set was built with. A form's Morph is the clip it plays to LEAVE that
@@ -431,6 +435,7 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     build: or(standWork, or(standWorkGold, attack)),
     decayFlesh: find(/decay flesh/i),
     decayBone: find(/decay bone/i),
+    dissipate: find(/^dissipate/i),
     // Anchored: "Morph" must not pick up "Morph Alternate", which is the OTHER direction's
     // clip and is already renamed to a plain "Morph" whenever the alternate props are on.
     morph: find(/^morph(\s*-?\s*\d+)?\s*$/i),

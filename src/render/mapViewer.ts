@@ -7444,8 +7444,11 @@ export class MapViewerScene {
         desc: `Revives ${name}, restoring the Hero's level, experience and items.`,
         gold: cost.gold, lumber: cost.lumber, food: d.foodUsed,
         col: index % 4, row: Math.floor(index / 4),
-        // Already coming back: the button stays, inert, so the card still names the hero.
-        disabled: f.revivingAt !== 0,
+        // Inert, but still THERE — so the card names the hero either way. Two reasons it can
+        // be: the hero is already coming back (somewhere), or it has only just fallen and its
+        // body has not finished dissipating off the field yet (issue #126). WC3 puts the name
+        // on the altar the moment the hero dies and lights the button when the body is gone.
+        disabled: f.revivingAt !== 0 || f.bodyLeft > 0,
         cantAfford: stash.gold < cost.gold || stash.lumber < cost.lumber
           || food.used + d.foodUsed > food.made,
       }));

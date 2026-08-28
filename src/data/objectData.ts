@@ -333,6 +333,9 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   umpr: (d, v) => { d.manaRegen = n(v); }, // mana/sec for a NON-hero caster
   usid: (d, v) => { d.sightDay = n(v); },
   usin: (d, v) => { d.sightNight = n(v); },
+  // "Stats - Death Time (seconds)". Gameplay, not just art: it is how long a dying unit goes
+  // on seeing (SimWorld.kill) and how long a hero's body takes to start dissipating.
+  udtm: (d, v) => { d.deathTime = n(v); },
   // "Stats - Is a Building". A custom unit that becomes (or stops being) a building changes
   // rally points, repair, the `structure` target key and its whole command card with it.
   ubdg: (d, v) => { d.isBuilding = bool01(v); },
@@ -427,7 +430,6 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   ubpr: "no per-bone art overrides (Boneprops)",
   ucua: "no caster-upgrade art (Casterupgradeart)", ussi: "no score screen (ScoreScreenIcon)",
   uspa: "no per-unit Specialart hook", utaa: "no per-unit Targetart hook",
-  udtm: "no per-type death-clip length yet (death) — the renderer times the Death clip off the MDX",
   uept: "no elevation sampling (elevPts)", uerd: "no elevation sampling (elevRad)",
   ufrd: "fog radius is taken from sight, not fogRad", uocc: "no occluder height (occH)",
   ulos: "no fat line-of-sight (fatLOS)", uver: "no SD/HD asset split (fileVerFlags)",

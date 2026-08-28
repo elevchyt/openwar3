@@ -622,6 +622,22 @@ export interface FallenHero {
   /** The building currently bringing it back, or 0 while it simply lies dead. One at a time:
    *  two altars must not both be paid to revive the same hero. */
   revivingAt: number;
+  /**
+   * Seconds until this hero's BODY is finished with — its death clip, then its Dissipate (whose
+   * last second is the fade that takes the model off the field). See heroBodyTime. Counts down
+   * to 0 and stays there.
+   *
+   * The hero is on the altar's roster from the instant it falls — its name and its portrait
+   * are there at once, because a player must be able to see what they lost — but the revive
+   * button is DEAD until this reaches zero. So the button lighting up and the body vanishing
+   * are the same moment, which is what the original shows.
+   *
+   * Timed here rather than in the renderer because a match must play out the same with nothing
+   * drawing it: a headless sim, a computer player's altar and a replay all revive on the same
+   * clock as the screen does. Both of its terms are data values (UnitDef.deathTime + MiscData
+   * DissipateTime), so the sim's clock and the model's are the same clock.
+   */
+  bodyLeft: number;
 }
 
 export interface HeldItem {
@@ -2187,6 +2203,35 @@ const MAGIC_IMMUNE_EXEMPT = new Set(["Adis", "Aadm", "Adcn"]);
 // on top; 88s is the full lifetime from the moment of death.
 const CORPSE_TOTAL_TIME = MISC_DATA.BoneDecayTime;
 
+// A HERO's body instead of a corpse (issue #126). It plays its death clip — the type's own
+// `death` time — and then DISSIPATES, which `Units\MiscData.txt` states as a duration under
+// its own heading "death and decay impact gameplay, so duration is specified":
+// DissipateTime = 3.
+//
+// That window is the ENGINE's, not the model's, and the art says so: a hero's mdx animates no
+// alpha at all (HeroPaladin.mdx loads with an empty `geosetAnimations` and no layer anims —
+// read off the live model), so the going-away is ours to time and the clip is only the gesture
+// inside it. HeroPaladin's Dissipate runs 2.0s of the 3.
+export const HERO_DISSIPATE_TIME = MISC_DATA.DissipateTime;
+/** The fade at the TAIL of that window — the last second of the dissipate, once the clip has
+ *  played itself out, ramping the body away to nothing.
+ *
+ *  The tail rather than a fourth phase after it, and that is the whole reason it is written
+ *  down here: a second added ON TO DissipateTime would leave the altar's button greyed for a
+ *  second with nothing left on the field to justify it. No data file names a length for this
+ *  (nothing about it "impacts gameplay"), so the one number here that is ours is a second — as
+ *  issue #126 asks for. */
+export const HERO_FADE_TIME = 1;
+
+/** How long a fallen hero's body takes to leave the field altogether, given its type's death
+ *  time: it falls, then it dissipates (the fade being the tail of that). Exported so the
+ *  renderer sequences the model on the same clock the altar's revive button is gated on — the
+ *  body finishing and the button lighting are one moment, and one number is how they stay
+ *  one moment. */
+export function heroBodyTime(deathTime: number): number {
+  return Math.max(0, deathTime) + HERO_DISSIPATE_TIME;
+}
+
 // Repair's share of the target's repair cost and repair time, for a worker whose repair
 // ability row could not be read (a bare test world with no ability registry). The live values
 // are the ability's own DataA/DataB and are read per worker — see SimWorld.repairRates. Every
@@ -2227,6 +2272,45 @@ const SLEEP_WAKE_RANGE = 200; // a sleeping creep wakes if a hostile comes withi
 // re-stamped by every following blow.
 const FOGGED_ATTACK_REVEAL_RADIUS = MISC_DATA.FoggedAttackRevealRadius;
 const FOGGED_ATTACK_REVEAL_TIME = 1;
+
+// A DYING unit goes on seeing (issue #126). "Fog Reveal Radius - Dying Unit" is the World
+// Editor's name for `Units\MiscData.txt` [Misc] DyingRevealRadius = 500 — a CAP on the sight
+// the body keeps, not a radius handed to everything that falls: a unit already seeing less
+// than 500 dies seeing exactly what it saw, and everything else is cut down to 500. In stock
+// data that means almost every unit IS cut (a Footman sees 1400, a Peasant 800) and the
+// critters, on 350, are not. (DotA sets the same constant to 500 and the guide reads it the
+// same way — hiveworkshop "Vision guide" 290769.) How LONG it lasts is the type's own death
+// time (UnitData `death`, UnitDef.deathTime) — the body sees for as long as it takes to fall.
+const DYING_REVEAL_RADIUS = MISC_DATA.DyingRevealRadius;
+
+/**
+ * The sight a body keeps while it falls — a dying unit's own eyes, outliving it.
+ *
+ * Deliberately NOT a flag on the SimUnit: `kill()` deletes the unit from `units` in the same
+ * breath, and a record that outlives its unit is exactly what this is. Keeping the dead unit
+ * around instead would put a corpse back in every loop that walks `units` (targeting,
+ * pathing, auras, the tech census) to be filtered out again in each of them.
+ *
+ * It is also what keeps us out of the original's bug. WC3 caps the DYING UNIT'S OWN sight
+ * radius and restores it when the death timer runs out, so a hero revived faster than its
+ * death time (a Tavern, an early Ankh) never gets the restore and walks around with 500 sight
+ * for good — "he will permanently have incorrect vision until he respawns correctly". Here the
+ * cap lives on this record and nothing on the revived hero was ever touched, so there is
+ * nothing to restore and nothing to forget to restore.
+ */
+export interface DeathReveal {
+  x: number;
+  y: number;
+  radius: number;
+  /** The side that sees it — the DEAD unit's own, unlike an AttackReveal (which lights the
+   *  attacker up for the side that was hit). */
+  team: number;
+  /** …and the slot it belonged to, so an ally who is granted shared vision gets it too and
+   *  one who is not does not. Same test the living unit went through (Viewpoint.revealsFor). */
+  owner: number;
+  flying: boolean;
+  timeLeft: number;
+}
 
 /** A hidden attacker's position, given away to one team for a moment. */
 export interface AttackReveal {
@@ -2380,6 +2464,9 @@ export class SimWorld {
   /** Live fogged-attacker reveals, keyed `attackerId:victimTeam` so a unit shooting two
    *  sides at once gives itself away to each, and each fresh blow re-stamps the entry. */
   private attackReveals = new Map<string, AttackReveal>();
+  /** Sight left behind by units that have just died (see DeathReveal). A plain array: each
+   *  entry is born at one death, ages out on its own, and nothing ever refreshes one. */
+  private deathReveals: DeathReveal[] = [];
   // Trained units ready to spawn: the renderer creates the model + sim unit.
   private trainCompletions: Array<{ buildingId: number; unitId: string; owner: number; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number; reviveOf?: number; tavern?: boolean }> = [];
   // Finished research (renderer plays the "upgrade complete" sound + refreshes the card).
@@ -3424,6 +3511,7 @@ export class SimWorld {
       inventory: u.inventory.map((it) => (it ? { ...it } : null)),
       baseStr: u.baseStr, baseAgi: u.baseAgi, baseInt: u.baseInt, baseMaxHp: u.baseMaxHp,
       x: u.x, y: u.y, revivingAt: 0,
+      bodyLeft: heroBodyTime(this.unitReg?.get(u.typeId)?.deathTime ?? 0),
     });
   }
 
@@ -11039,13 +11127,22 @@ export class SimWorld {
 
   /** Leave a corpse for an organic, ground, non-mechanical unit (Liquipedia:
    *  Corpse). Buildings collapse, mechanical units explode, summons vanish, and
-   *  air units crash without leaving a raisable ground corpse — none of them do. */
+   *  air units crash without leaving a raisable ground corpse — none of them do.
+   *  Neither does a HERO: it dissipates and reports to its altar (see below). */
   private spawnCorpse(u: SimUnit): void {
     // A summon (isSummon) leaves no corpse even after its timer hits 0 at expiry.
     // Neutral Passive *buildings* (shops/fountains) are caught by `u.building`; their
     // mobile kin — critters — are organic and DO leave a decaying corpse (raiseable by
     // Raise Dead, edible by Cannibalize), just like any other ground unit (issue #39).
-    if (u.building || u.mechanical || u.isSummon || u.flying) return;
+    //
+    // A HERO leaves NO physical remains at all (issue #126): its body plays its death, then
+    // Dissipate, then fades out and is gone, and what it leaves behind is a name on an altar.
+    // That is why no corpse ability in the game can touch a fallen hero — Raise Dead and
+    // Resurrection have nothing to work with rather than a body they are forbidden to take.
+    // sim/corpses.ts refused a hero corpse from the other end (`isHero` → "hero"), which was
+    // the right answer to the wrong question: the body was still being filed, still occupying
+    // the renderer for 88 seconds, and still being shipped in every snapshot.
+    if (u.building || u.mechanical || u.isSummon || u.flying || u.isHero) return;
     this.corpses.set(this.nextCorpseId, {
       id: this.nextCorpseId,
       deadId: u.id,
@@ -11068,6 +11165,13 @@ export class SimWorld {
       c.decayLeft -= dt;
       if (c.decayLeft <= 0) this.corpses.delete(c.id);
     }
+  }
+
+  /** Run down each fallen hero's body clock (FallenHero.bodyLeft) — what the altar's revive
+   *  button waits on. The record itself is NOT dropped when it hits zero: the hero stays on
+   *  the roster until it is revived or the match ends. */
+  private tickFallenHeroes(dt: number): void {
+    for (const f of this.fallen.values()) if (f.bodyLeft > 0) f.bodyLeft = Math.max(0, f.bodyLeft - dt);
   }
 
   /**
@@ -11722,6 +11826,7 @@ export class SimWorld {
     // profiler that is a no-op unless a match plugged one in.
     simProfile.begin("sim.world.pre");
     this.tickAttackReveals(dt);
+    this.tickDeathReveals(dt); // …and the eyes a body keeps while it falls (issue #126)
     this.tickBuildings(dt);
     this.tickMineCrews(dt); // night elf and undead gold: no round trip, just a crew and a clock
     this.tickShops(dt);
@@ -11866,6 +11971,7 @@ export class SimWorld {
     this.tickWards(); // Stasis Trap proximity stun (the Healing Ward is an aura — see AURA_BUFFS)
     this.tickDevour(dt); // Kodo digests any swallowed unit
     this.tickCorpses(dt); // decay flesh→bone→gone
+    this.tickFallenHeroes(dt); // …and a hero's body, which dissipates instead (issue #126)
     simProfile.end("sim.world.spells");
     simProfile.begin("sim.world.post");
     for (const u of this.units.values()) {
@@ -14334,6 +14440,45 @@ export class SimWorld {
   }
 
   /**
+   * File the sight a unit keeps while it falls (issue #126, see DeathReveal).
+   *
+   * Called from `kill()` while the unit is still whole — its position, its team and its
+   * CURRENT sight radius are all read off the body before the record is dropped.
+   *
+   * Two things are deliberately not here. A structure gets none: it does not "die" on a
+   * clock, it collapses, and leaving a 500-radius eye on a razed base for three seconds would
+   * hand the attacker's own scouting back to the defender. And nothing is filed for a unit
+   * that never had eyes to begin with (radius 0), which is what keeps a match's stream of
+   * critter and summon deaths from filling this array with records that reveal nothing.
+   */
+  private revealDyingUnit(u: SimUnit): void {
+    if (u.building) return;
+    const life = this.unitReg?.get(u.typeId)?.deathTime ?? 0;
+    if (life <= 0) return;
+    // A CAP, not a replacement, and read LIVE: a Footman (1400 day / 800 night) is cut back to
+    // 500 either way, while a crab (350) dies seeing everything it saw in life.
+    const radius = Math.min(this.sightOf(u), DYING_REVEAL_RADIUS);
+    if (radius <= 0) return;
+    this.deathReveals.push({ x: u.x, y: u.y, radius, team: u.team, owner: u.owner, flying: u.flying, timeLeft: life });
+  }
+
+  /** Age out the dying-unit reveals. Swap-and-pop: order means nothing here and a match with
+   *  a big fight in it churns this array hard. */
+  private tickDeathReveals(dt: number): void {
+    for (let i = this.deathReveals.length - 1; i >= 0; i--) {
+      if ((this.deathReveals[i].timeLeft -= dt) <= 0) {
+        this.deathReveals[i] = this.deathReveals[this.deathReveals.length - 1];
+        this.deathReveals.pop();
+      }
+    }
+  }
+
+  /** The sight bodies on the ground are still lending their side, for the fog pass. */
+  activeDeathReveals(): Iterable<DeathReveal> {
+    return this.deathReveals;
+  }
+
+  /**
    * A blow landed on somebody's property: raise the under-attack warning, at most as often
    * as MiscData allows (see `attackNotify`).
    *
@@ -14742,6 +14887,9 @@ export class SimWorld {
       this.recordFallenHero(u);
     }
     this.releaseEntangled(u); // an Entangled Gold Mine knocked down hands the mine back
+    // The body goes on seeing while it falls — read off the unit here, one line before it
+    // stops existing (issue #126; see revealDyingUnit).
+    this.revealDyingUnit(u);
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
     // …and anything BOUND to it goes with it — "Lasts 50 seconds or until the avatar dies".

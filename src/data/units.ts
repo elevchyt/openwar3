@@ -272,6 +272,17 @@ export interface UnitDef {
   // same night penalty as everyone until that research lands. See recomputeStats.
   sightDay: number;
   sightNight: number;
+  /**
+   * UnitData.slk `death` — "Death Time (seconds)", the length of this type's death animation
+   * (Footman 3.04, Paladin 1.5, Phoenix 0.7). The World Editor calls it "Stats - Death Time"
+   * and the object-data field is `udtm`.
+   *
+   * It is a GAMEPLAY number, not just an art one: a unit goes on seeing for exactly this long
+   * after it falls (capped by MiscData `DyingRevealRadius` — see SimWorld.kill), and a hero's
+   * body is not finished with until its death clip and then its Dissipate have both run
+   * (see `heroBodyTime`), which is what the altar's revive button waits on.
+   */
+  deathTime: number;
   hitPoints: number;
   /** UnitBalance.slk `regenHP` — the unit type's own hit-point regeneration (hp/sec). The sim
    *  adds the attribute/buff/item regen on top of this (world.ts recomputeStats), so this is
@@ -608,6 +619,8 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // against the real 1.27 MPQ; buildings use the same fields (Town Hall 900/600).
       sightDay: b ? num(b, "sight", 0) : 0,
       sightNight: b ? num(b, "nsight", 0) : 0,
+      // UnitData.slk `death` — how long this type takes to die. See UnitDef.deathTime.
+      deathTime: d ? num(d, "death", 0) : 0,
       hitPoints: isHero && realhp > 0 ? realhp : b ? num(b, "hp", 0) : 0,
       hpRegen: b ? num(b, "regenHP", 0) : 0,
       regenType: toRegenType(b ? str(b, "regenType") : ""),
@@ -978,6 +991,7 @@ export function destructibleUnitDef(d: {
     collision: d.radius,
     sightDay: 0,
     sightNight: 0,
+    deathTime: 0,
     hitPoints: d.maxLife,
     hpRegen: 0,
     regenType: RegenType.None,

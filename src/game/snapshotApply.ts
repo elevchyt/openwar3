@@ -385,6 +385,7 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
       if (have) {
         have.level = f.level;
         have.revivingAt = f.revivingAt;
+        have.bodyLeft = f.bodyLeft; // the host's clock, not the one this client's own tick ran
         continue;
       }
       // A client's record is the DRAWABLE half only. It never revives anything itself — the
@@ -395,6 +396,7 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
         id: f.id, owner: snap.recipient, team: 0, typeId: f.typeId, properName: f.properName,
         level: f.level, xp: 0, skillPoints: 0, abilities: [], inventory: [],
         baseStr: 0, baseAgi: 0, baseInt: 0, baseMaxHp: 0, x: 0, y: 0, revivingAt: f.revivingAt,
+        bodyLeft: f.bodyLeft,
       });
     }
   }

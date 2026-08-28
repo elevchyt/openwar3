@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, ANIM_FOR_DURATION, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero } from "../sim/world";
+import { SimWorld, weaponsFromDef, isOffField, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -346,6 +346,11 @@ const POSE_SNAP_DIST = 400;
 // decays (88s after death; see world.ts CORPSE_TOTAL_TIME). Units that leave no
 // corpse (air/mechanical/buildings) simply vanish once the Death clip ends. Clip
 // lengths come from the MDX intervals; these are the fallbacks when unknown.
+/** Where a body is in its run off the field. The first three are an ordinary corpse rotting;
+ *  the last two are a HERO dissipating instead (issue #126). */
+type CorpsePhase = "death" | "flesh" | "bone" | "dissipate" | "fade";
+/** The tint a body fades from when its instance carries none of its own. */
+const WHITE_TINT = new Float32Array([1, 1, 1, 1]);
 const DEATH_CLIP_FALLBACK = 1.6; // seconds to hold a Death clip of unknown length
 const DECAY_CLIP_FALLBACK = 3; // seconds to hold a Decay Flesh clip of unknown length
 const CAST_ANIM_HOLD = 0.8; // seconds a cast animation is held from the picker
@@ -621,7 +626,11 @@ export class RtsController {
   // decays (88s). `corpseId` links to the sim corpse so a spell that raises it
   // (Resurrection/Raise Dead) can remove the model at once; -1 = no corpse, so the
   // model just vanishes when its Death clip ends. `phaseT` = seconds in the phase.
-  private corpses: Array<{ instance: Instance; corpseId: number; anims: AnimSet; phaseT: number; phase: "death" | "flesh" | "bone"; held?: boolean }> = [];
+  //
+  // A HERO's body is the same list and a different ending (issue #126): Death → Dissipate,
+  // whose last second fades the body away → gone. It never has a `corpseId`, because a hero
+  // leaves no remains for anything to raise, eat or carry — see SimWorld.spawnCorpse.
+  private corpses: Array<{ instance: Instance; corpseId: number; anims: AnimSet; phaseT: number; phase: CorpsePhase; hero?: boolean; held?: boolean; fadeFrom?: Float32Array }> = [];
   private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number]; sizeToRadius: boolean }> = [];
   private treePulses: Array<{ x: number; y: number }> = []; // trees to flash yellow on harvest
   // scratch buffers to avoid per-frame allocation
@@ -3490,7 +3499,10 @@ export class RtsController {
       // Link to the sim corpse this death created (if any) so a raise spell can
       // hide the model immediately and so the sim's 88s timer drives its removal.
       const corpse = [...this.sim.corpses.values()].find((c) => c.deadId === simId);
-      this.corpses.push({ instance: e.unit.instance, corpseId: corpse?.id ?? -1, anims: e.anims, phaseT: 0, phase: "death" });
+      // A hero has no sim corpse to find (spawnCorpse declines one) and does not want the
+      // "no corpse → blink out when the Death clip ends" ending either: it dissipates and
+      // fades. See tickCorpses.
+      this.corpses.push({ instance: e.unit.instance, corpseId: corpse?.id ?? -1, anims: e.anims, phaseT: 0, phase: "death", hero: def?.isHero });
     } else {
       e.unit.instance.hide();
     }
@@ -3577,15 +3589,48 @@ export class RtsController {
       this.fogCorpse(c);
       c.phaseT += dt;
       if (c.phase === "death") {
-        // Wait out the death animation, then either vanish (no corpse) or begin
-        // the flesh-decay stage.
+        // Wait out the death animation, then either dissipate (a hero), vanish (no corpse)
+        // or begin the flesh-decay stage.
         if (c.phaseT < seqDuration(c.instance, c.anims.death, DEATH_CLIP_FALLBACK)) continue;
+        if (c.hero) {
+          // "Because they leave no physical remains, abilities that rely on corpses cannot
+          // target a fallen Hero" — the body goes rather than rots. Every hero model authors
+          // a Dissipate clip and no decay clips at all, so the art already says this.
+          this.enterCorpsePhase(c, "dissipate");
+          continue;
+        }
         if (!leavesCorpse) {
           c.instance.hide();
           this.corpses.splice(i, 1);
           continue;
         }
         this.enterDecay(c, "flesh");
+      } else if (c.phase === "dissipate") {
+        // The clip plays at its own rate and then holds; what times this is MiscData's
+        // DissipateTime, which is the game's own choice of clock — the constant sits under
+        // "death and decay impact gameplay, so duration is specified", and it is the same
+        // number the sim gates the altar's revive button on (FallenHero.bodyLeft). One clock
+        // for the body and the button is the whole point: they have to end together.
+        //
+        // The fade is the LAST HERO_FADE_TIME of that window, not an extra phase after it —
+        // see the constants' own note. HeroPaladin's Dissipate is 2.0s and the window is 3, so
+        // for it the two line up exactly: the clip ends, the second of fade begins.
+        if (c.phaseT < HERO_DISSIPATE_TIME - HERO_FADE_TIME) continue;
+        this.enterCorpsePhase(c, "fade");
+      } else if (c.phase === "fade") {
+        // …and out. A plain alpha ramp on the instance's tint — nothing else writes a corpse's
+        // colour (fogCorpse only shows and hides), so this can own it outright.
+        const k = Math.min(1, c.phaseT / HERO_FADE_TIME);
+        const base = c.fadeFrom ?? WHITE_TINT;
+        c.instance.setVertexColor?.([base[0], base[1], base[2], base[3] * (1 - k)]);
+        if (k >= 1) {
+          // Put the colour back before letting go of it. The instance outlives this entry, and
+          // an instance handed on still wearing alpha 0 would be adopted as an invisible unit —
+          // `applyFogTint` caches whatever colour it finds as the model's own `baseColor`.
+          c.instance.setVertexColor?.(base);
+          c.instance.hide();
+          this.corpses.splice(i, 1);
+        }
       } else if (c.phase === "flesh") {
         // Play the flesh-rot clip at 2x: nudge the instance an extra frame-step
         // (the viewer's baseUpdate advances it once more the same frame → double
@@ -3602,10 +3647,34 @@ export class RtsController {
     }
   }
 
+  /**
+   * Move a HERO's body into its dissipate or fade stage (issue #126).
+   *
+   * `dissipate` plays the model's own clip once and holds the last frame; a model that
+   * authors none simply keeps the pose it died in for the same window, which is what the fade
+   * then takes away — the timing is the sim's, so it must not depend on the art.
+   *
+   * `fade` snapshots the colour the body is wearing right now (its team tint, dimmed by
+   * whatever the fog pass last applied) so the ramp multiplies that rather than replacing it
+   * with white.
+   */
+  private enterCorpsePhase(c: { instance: Instance; anims: AnimSet; phase: CorpsePhase; phaseT: number; fadeFrom?: Float32Array }, phase: "dissipate" | "fade"): void {
+    c.phase = phase;
+    c.phaseT = 0;
+    if (phase === "dissipate") {
+      if (c.anims.dissipate < 0) return;
+      c.instance.setSequence(c.anims.dissipate);
+      c.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined); // play once, then hold
+      return;
+    }
+    const cur = c.instance.vertexColor;
+    c.fadeFrom = cur ? new Float32Array([cur[0], cur[1], cur[2], cur[3]]) : new Float32Array(WHITE_TINT);
+  }
+
   /** Move a corpse into its flesh/bone decay stage, playing the matching clip if
    *  the model has one. A model missing the flesh clip skips straight to bone; a
    *  model missing both just holds whatever frame it ended on. */
-  private enterDecay(c: { instance: Instance; anims: AnimSet; phase: "death" | "flesh" | "bone"; phaseT: number }, stage: "flesh" | "bone"): void {
+  private enterDecay(c: { instance: Instance; anims: AnimSet; phase: CorpsePhase; phaseT: number }, stage: "flesh" | "bone"): void {
     const seq = stage === "flesh" ? c.anims.decayFlesh : c.anims.decayBone;
     if (seq >= 0) {
       c.instance.setSequence(seq);

@@ -647,6 +647,11 @@ export class Authority {
         const f = this.sim.fallen.get(cmd.heroId);
         if (!f || f.owner !== player) return false; // not yours, or not dead
         if (f.revivingAt) return false; // already on its way back — two altars must not both pay
+        // Still lying there. A hero is on the roster from the instant it falls — you can see
+        // whom you lost at once — but nothing may bring it back until its body has played out
+        // its death, dissipated and faded (issue #126). The card greys the button for the same
+        // reason; this is the half a hotkey, a script or a computer player cannot skip.
+        if (f.bodyLeft > 0) return false;
         // WHICH heroes this building may bring back. `Reviveat` is the per-hero column that
         // would say so outright and every stock hero leaves it empty, so the engine's default
         // is the rule, and it is two rules:
