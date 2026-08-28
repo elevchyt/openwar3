@@ -1193,16 +1193,29 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
      cursor while you're aiming, so nothing else may draw one underneath it.
    - .hand: the race hand cursor, tinted, shown while merely hovering a unit —
      map-only, so the HUD keeps the plain arrow (body.reticle-on, #map). */
-/* Directional edge-scroll cursor: an arrow at the pointer pointing the pan way. */
+/* Directional edge-scroll cursor: the game's own chevron at the pointer, pointing the pan
+   way. The art is a 3-cell strip cut from the race cursor sheet (row 3, cols 5-7 — see
+   applyRaceCursor), walked with steps(3); the model steps those keys 33ms apart, so the
+   loop is 100ms. The `rotate()` that aims it is written per-frame in JS, alongside the
+   centring translate. It replaces the pointer rather than sitting beside it (body.scroll-on
+   hides the OS cursor), which is what the model does — its Scroll sequences hide every
+   other geoset. */
 .scroll-arrow {
   position: fixed;
+  width: 32px;
+  height: 32px;
   transform: translate(-50%, -50%);
   pointer-events: none;
   z-index: 8;
-  font-size: 30px;
-  line-height: 1;
-  color: #fff8d8;
-  text-shadow: 0 0 3px #000, 0 1px 3px #000, 0 0 8px rgba(255, 220, 120, 0.6);
+  background: 0 0 / 300% 100% no-repeat;
+  image-rendering: pixelated;
+  animation: scroll-arrow-frames 0.1s steps(3) infinite;
+}
+@keyframes scroll-arrow-frames {
+  /* In px, not %: the box is 32px and the strip 96px, so the three stops land exactly on
+     0 / -32 / -64 (a % here would be measured against box-minus-image and slide off). */
+  from { background-position-x: 0; }
+  to { background-position-x: -96px; }
 }
 .order-reticle {
   position: fixed;

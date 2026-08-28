@@ -1204,6 +1204,7 @@ export class MapViewerScene {
   private cursorSheet: HTMLCanvasElement | null = null; // race cursor sprite sheet
   private reticleUrls = new Map<string, string>(); // tinted WC3 reticle by colour key
   private handUrls = new Map<string, string>(); // tinted race hand cursor by colour key
+  private scrollStripUrl = ""; // the three "Scroll *" frames laid side by side (see applyRaceCursor)
   private lastMouse = { x: 0, y: 0 };
   // Transient harvest-/attack-order ring flashes: a colour + lifetime; the ring itself
   // is (re)painted into ringSplats each frame it's "on" (see tickFlashCircles).
@@ -5846,6 +5847,7 @@ export class MapViewerScene {
     this.zoomT = 0;
   }
   private static readonly EDGE_MARGIN = 6; // px from a screen edge that triggers scrolling
+  private static readonly SCROLL_ARROW_PX = 32; // the edge-pan chevron's box, in step with .scroll-arrow
   private pointerInWindow = false; // the cursor is on the page at all — gates edge-scroll
   // The game frame's box in VIEWPORT coords, refreshed once a frame. Mouse input arrives in
   // viewport coords while everything that touches the world (picking, the ghost, the AoE
@@ -9048,6 +9050,19 @@ export class MapViewerScene {
     // Hotspot near the gauntlet's fingertip (top-left).
     const rule = `url(${url}) 3 3, auto`;
     document.body.style.cursor = rule;
+    // The other two states this sheet answers for, both read off `UI\Cursor\<race>Cursor.mdx`
+    // rather than guessed at — the model names its sequences and drives the cell with a
+    // KTAT texture-translation, so the frames below are the ones the real cursor shows:
+    //  - "HoldItem" (an item right-clicked out of the inventory) = row 3, col 4 — the
+    //    CLOSED gauntlet. The model keeps the same quad it uses for "Normal", so the
+    //    hotspot is the idle pointer's, and geoset 1 (a replaceable-21 quad — the item's
+    //    own icon) stays visible beside it, which is our `.carried-item`.
+    //  - "Scroll *" (edge-panning) = row 3, cols 5/6/7 — the three chevron frames, stepped
+    //    every 33ms (the model's keys sit 33 apart, interpolation NONE). All eight
+    //    directions play THOSE SAME three cells and differ only by a Z rotation on the
+    //    node, so one strip + a CSS rotate is the whole thing (see showScrollArrow).
+    const holdUrl = this.cursorCellUrl(3, 4);
+    this.scrollStripUrl = this.cursorStripUrl(3, 5, 3);
     // Force the WC3 cursor over the ENTIRE in-game UI — buttons, the map, the
     // minimap, everything — overriding the default pointer/crosshair cursors so
     // only the original WC3 cursor is ever shown (per feedback).
@@ -9067,11 +9082,43 @@ export class MapViewerScene {
     //    …UNLESS a dialog is up (`dialog-on`, issue #104). A dialog is buttons, and a
     //    cinematic that raises one has just asked the player to click something — so the
     //    cursor comes back for as long as it is on screen, and goes again with it.
+    //  - `carrying-item` is the model's "HoldItem": the gauntlet CLOSES around what you
+    //    picked up. Body-wide, because every drop target (another slot, the ground, an
+    //    allied hero) is somewhere else on the screen; same hotspot as the idle hand,
+    //    since the model animates the same quad.
+    //  - `scroll-on` is the edge-pan chevron, which IS the cursor while it is up — the
+    //    model hides every other geoset during its "Scroll *" sequences.
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
+      (holdUrl
+        ? `body.in-game.carrying-item, body.in-game.carrying-item * { cursor: url(${holdUrl}) 3 3, auto !important; }\n`
+        : "") +
       `body.in-game.reticle-on #map { cursor: none !important; }\n` +
       `body.in-game.armed-on, body.in-game.armed-on * { cursor: none !important; }\n` +
+      `body.in-game.scroll-on, body.in-game.scroll-on * { cursor: none !important; }\n` +
       `body.in-game.cine-on:not(.dialog-on), body.in-game.cine-on:not(.dialog-on) * { cursor: none !important; }`;
+  }
+
+  /** One cell of the race cursor sheet as a data URL — the sheet is an 8-column grid of
+   *  square frames, so `(row, col)` is all it takes. "" until the sheet loads. */
+  private cursorCellUrl(row: number, col: number): string {
+    return this.cursorStripUrl(row, col, 1);
+  }
+
+  /** `count` consecutive cells of the sheet's `row`, starting at `col`, laid side by side in
+   *  one image — a sprite strip a CSS `steps()` animation can walk. "" until the sheet loads. */
+  private cursorStripUrl(row: number, col: number, count: number): string {
+    const sheet = this.cursorSheet;
+    if (!sheet) return "";
+    const cell = Math.round(sheet.width / 8);
+    const c = document.createElement("canvas");
+    c.width = cell * count;
+    c.height = cell;
+    const ctx = c.getContext("2d")!;
+    for (let i = 0; i < count; i++) {
+      ctx.drawImage(sheet, (col + i) * cell, row * cell, cell, cell, i * cell, 0, cell, cell);
+    }
+    return c.toDataURL();
   }
 
   /** The real WC3 target reticle (row 2 of the race cursor sheet: a circle with
@@ -10322,8 +10369,9 @@ export class MapViewerScene {
     this.cursorSheet = null;
     this.reticleUrls.clear();
     this.handUrls.clear();
+    this.scrollStripUrl = "";
     this.disposeFog(); // the veil mesh and its GL texture — loadMap dropped these, exit didn't
-    document.body.classList.remove("reticle-on", "armed-on", "carrying-item", "game-paused");
+    document.body.classList.remove("reticle-on", "armed-on", "carrying-item", "scroll-on", "game-paused");
     this.pauseUiOn = this.pauseUiHard = false;
     this.dialogUp = false;
     this.deadPanelKey = "";
@@ -11113,9 +11161,16 @@ export class MapViewerScene {
     this.frame.bottom = r.bottom;
   }
 
+  /** The edge-pan cursor: the game's OWN three-frame chevron (row 3, cols 5-7 of the race
+   *  cursor sheet), spun to point the way the camera is going. `<race>Cursor.mdx` plays those
+   *  same three cells for all eight "Scroll *" sequences and turns the quad instead — so the
+   *  strip is drawn once (applyRaceCursor) and the direction is a CSS rotate, with the sprite
+   *  pointing right at 0deg. While it is up it IS the cursor (`scroll-on` hides the OS one),
+   *  which is what the model says too: every other geoset is hidden during a Scroll sequence. */
   private showScrollArrow(dx: number, dy: number): void {
     if (!dx && !dy) {
       if (this.scrollArrow) this.scrollArrow.hidden = true;
+      document.body.classList.remove("scroll-on");
       return;
     }
     if (!this.scrollArrow) {
@@ -11123,13 +11178,25 @@ export class MapViewerScene {
       this.scrollArrow.className = "scroll-arrow";
       document.body.appendChild(this.scrollArrow);
     }
-    // Directional glyph (8-way) placed at the cursor, pointing the scroll way. It is fixed to
-    // the BODY, so it is placed in viewport coords — lastCursor, not the canvas-space lastMouse.
-    const arrows: Record<string, string> = { "-1,-1": "↖", "0,-1": "↑", "1,-1": "↗", "-1,0": "←", "1,0": "→", "-1,1": "↙", "0,1": "↓", "1,1": "↘" };
-    this.scrollArrow.textContent = arrows[`${dx},${dy}`] ?? "";
-    this.scrollArrow.style.left = `${this.lastCursor.x}px`;
-    this.scrollArrow.style.top = `${this.lastCursor.y}px`;
+    // Fixed to the BODY, so it is placed in viewport coords — lastCursor, not the
+    // canvas-space lastMouse.
+    if (!this.scrollArrow.style.backgroundImage && this.scrollStripUrl) {
+      this.scrollArrow.style.backgroundImage = `url(${this.scrollStripUrl})`;
+    }
+    const rad = Math.atan2(dy, dx); // screen y grows downward
+    this.scrollArrow.style.transform = `translate(-50%, -50%) rotate(${Math.round((rad * 180) / Math.PI)}deg)`;
+    // Held CLEAR of the edge rather than centred on the pointer. Edge-scrolling means the
+    // cursor is by definition pressed into a border, so a chevron centred on it hangs half
+    // off the screen; WC3 keeps the whole arrow on. The half-extents are the ROTATED box's
+    // (a turned square is wider than 32 — |cos|+|sin| times its half-side, so 22.6 on the
+    // diagonals), and clamping is against the game FRAME, not the window: letterboxed, the
+    // black bar is off the map and the arrow belongs inside the picture.
+    const half = 0.5 * MapViewerScene.SCROLL_ARROW_PX * (Math.abs(Math.cos(rad)) + Math.abs(Math.sin(rad)));
+    const f = this.frame;
+    this.scrollArrow.style.left = `${clamp(this.lastCursor.x, f.left + half, f.right - half)}px`;
+    this.scrollArrow.style.top = `${clamp(this.lastCursor.y, f.top + half, f.bottom - half)}px`;
     this.scrollArrow.hidden = false;
+    document.body.classList.add("scroll-on");
   }
 
   private pan(dir: [number, number], amount: number): void {
