@@ -784,28 +784,33 @@ body.hud-tooltip-skinned .hud-chatbar::after {
   --hero-bar-gap: calc(var(--hero-slot) / 72); /* icon bottom → bars top */
   --hero-gap: calc(var(--hero-slot) * 8 / 72); /* between two slots: NOT measured (see hud.ts) */
 }
-.hud-hero-slot { width: var(--hero-slot); }
-/* The frame around the icon. `war3skins.txt` names one (HeroBarBorder =
-   human-hero-border.blp) that is NOT in the 1.27a archives at all, so the real client
-   falls back to its built-in grey bevel — a dark hairline, a light inner ring — which is
-   what the reference screenshot shows and what these two inset rings reproduce. */
+/* …and the box the skill-point effect is placed against: it hangs off the SLOT rather than
+   off the portrait, because it draws behind the portrait (see `.hud-herolevel-fx`). */
+.hud-hero-slot { width: var(--hero-slot); position: relative; }
+/* The art is the hero's `BTN*.blp` and NOTHING else, filling the button edge to edge — the
+   same rule the idle-worker button follows, and for the same reason: a command button in WC3
+   carries its frame IN the texture. BTNHeroArchMage.blp is a 64x64 portrait already inside a
+   bevelled grey frame, so a border of ours around it is a SECOND frame drawn around a shrunk
+   copy of the first, which is what this used to do (a 4/68 padding, a hairline border and two
+   inset rings, with `background-clip: content-box` holding the icon off them).
+
+   `war3skins.txt` does name a frame — HeroBarBorder = human-hero-border.blp — and it is worth
+   knowing that the file is not in the archives, in 1.27a or in the 1.30.4 store: the engine
+   has nothing to draw there either. The icon is the frame.
+
+   Death is likewise a TEXTURE SWAP and not a tint: `refreshHeroBar` puts up the icon's
+   `CommandButtonsDisabled\DIS*` twin, which is both desaturated and frameless. */
 .hud-hero-btn {
   box-sizing: border-box;
   display: block;
   width: var(--hero-btn);
   height: var(--hero-btn);
   position: relative;
-  /* 1 dark + 1 mid + 2 light rows of frame around a 68px button, kept as fractions of the
-     button so the bevel scales with the window instead of fattening at small sizes. */
-  padding: calc(var(--hero-btn) * 4 / 68);
-  border: 1px solid #08080a;
-  background-color: #000;
-  background-clip: content-box;
+  padding: 0;
+  border: none;
+  background-color: #000; /* the floor under an icon that failed to resolve */
   background-size: 100% 100%;
   background-repeat: no-repeat;
-  box-shadow:
-    inset 0 0 0 calc(var(--hero-btn) / 68) #6d6c69,
-    inset 0 0 0 calc(var(--hero-btn) * 3 / 68) #b3b4b6;
   cursor: pointer;
   pointer-events: auto;
 }
@@ -813,22 +818,17 @@ body.hud-tooltip-skinned .hud-chatbar::after {
 /* Sink under the press, exactly as a command-card button does. */
 .hud-hero-btn.pressed { transform: scale(0.98); }
 /* Unspent skill points: `HeroLevel.mdx` around the portrait (`.hud-herolevel-fx`, below),
-   plus the count itself in the bottom-right corner, which is what issue #95 asks for.
-
-   The badge is the shared `.hud-count-badge` box, sized and placed against the ICON rather
-   than the button: this widget draws its own bevel (the padding above), so the button's
-   corner is 4/68 outside the portrait the box belongs to. Half of that icon, matching the
-   texel rule the badge is written to. */
-/* Doubled class on purpose: `.hud-count-badge` states the same three properties and is
-   written further down the sheet, so a single class here would lose the cascade to it. */
-.hud-count-badge.hud-hero-points {
-  --count-box: calc(var(--hero-btn) * 30 / 68);
-  right: calc(var(--hero-btn) * 4 / 68);
-  bottom: calc(var(--hero-btn) * 4 / 68 - var(--count-drop));
-}
+   plus the count itself in the bottom-right corner, which is what issue #95 asks for. The
+   count needs no rule of its own — now that the icon fills the button, this is an ordinary
+   icon button and `.hud-count-badge` puts the box in exactly the corner it puts every other. */
 /* The two bars: one black block under the button, a 6/17 tall track each with a 2/17 gap,
    exactly as measured. The empty stretch of a bar IS the block showing through. */
 .hud-hero-bars {
+  /* Positioned only so it PAINTS above the skill-point overlay. That overlay is absolute and
+     reaches a quarter of a button below the portrait, which is over this block; a static box
+     paints under every positioned sibling, so without this the bars sit inside the glow. The
+     gap above them is margin, not box, so the model still spills through it. */
+  position: relative;
   width: var(--hero-bars-w);
   height: var(--hero-bars);
   margin-top: var(--hero-bar-gap);
@@ -1953,22 +1953,26 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
 }
 .hud-cmd.modal { overflow: visible; }
 
-/* `HeroLevel.mdx` over a hero-bar portrait whose hero has a skill point waiting — the hero
-   bar's OWN model (war3skins `HeroBarPointModel`), not the autocast sparkle above. Same
-   deal: ui/heroLevelFx.ts draws it, the stylesheet only gives its canvas the box. This one
-   reaches much further past the button — its sparks are born on the quad's edges and spend
-   their second GROWING — so its overhang is a variable of its own. `.hud-hero-btn` is
-   `overflow: visible` already, being a plain block. */
+/* `HeroLevel.mdx` around a hero-bar portrait whose hero has a skill point waiting — the hero
+   bar's OWN model (war3skins `HeroBarPointModel`), not the autocast sparkle above. Same deal:
+   ui/heroLevelFx.ts draws it, the stylesheet only gives its canvas the box. This one reaches
+   much further past the button — its sparks are born on the quad's edges and spend their
+   second GROWING — so its overhang is a variable of its own.
+
+   It draws BEHIND the portrait, so it is a SIBLING of the button rather than a child, laid
+   out against the SLOT (`.hud-hero-slot`, position: relative) and sized off `--hero-btn`
+   rather than off a percentage box it no longer has. The button sits at the slot's top-left,
+   so the overhang is simply subtracted from there. */
 .hud-herolevel-fx {
   position: absolute;
-  /* Sized rather than stretched between insets, for the reason `.hud-modal-fx` gives. */
-  left: calc(-1 * var(--herolevel-fx-overhang, 30%));
-  top: calc(-1 * var(--herolevel-fx-overhang, 30%));
-  width: calc(100% + 2 * var(--herolevel-fx-overhang, 30%));
-  height: calc(100% + 2 * var(--herolevel-fx-overhang, 30%));
+  left: calc(-1 * var(--hero-btn) * var(--herolevel-fx-overhang, 0.3));
+  top: calc(-1 * var(--hero-btn) * var(--herolevel-fx-overhang, 0.3));
+  width: calc(var(--hero-btn) * (1 + 2 * var(--herolevel-fx-overhang, 0.3)));
+  height: calc(var(--hero-btn) * (1 + 2 * var(--herolevel-fx-overhang, 0.3)));
   pointer-events: none;
-  /* Additive over the portrait, the way filterMode 1 and 3 composite in the game — which is
-     why the art underneath is never hidden by the ring sitting on top of it. */
+  /* Additive, the way filterMode 1 and 3 composite in the game. Behind an opaque portrait
+     that only shows in what reaches past its edge — which is the whole point of a model whose
+     quad is 6% wider than the button and whose sparks grow a quarter of a button past that. */
   mix-blend-mode: screen;
 }
 

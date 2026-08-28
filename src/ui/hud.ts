@@ -1052,7 +1052,10 @@ export class GameHud {
     // gold ring around the portrait with sparks spilling off all four of its edges. Same two
     // steps — build it with its textures, hand its overhang to the stylesheet.
     this.heroLevelFx = new HeroLevelFx(driver.blpCanvas(MODAL_SPARK), driver.blpCanvas(HERO_LEVEL_RING));
-    this.root.style.setProperty("--herolevel-fx-overhang", `${(HERO_LEVEL_FX_OVERHANG * 100).toFixed(3)}%`);
+    // Unitless, not a percentage: the overlay is a SIBLING of the portrait rather than a child
+    // of it (it draws behind), so it has no percentage box of its own to be inset from and the
+    // stylesheet multiplies this by `--hero-btn` instead.
+    this.root.style.setProperty("--herolevel-fx-overhang", HERO_LEVEL_FX_OVERHANG.toFixed(5));
     // The four font heights `UI\MiscUI.txt` states for the frames the engine builds in code,
     // handed to the stylesheet as lengths (FONT_HEIGHTS). On the ROOT because the frames that
     // read them are siblings, not one widget.
@@ -2013,8 +2016,7 @@ export class GameHud {
       // what issue #95 asks for.
       const fx = this.heroLevelFx.makeOverlay();
       const points = countBadge(); // unspent skill points, bottom-right
-      points.classList.add("hud-hero-points");
-      btn.append(fx, points);
+      btn.append(points);
       const bars = document.createElement("div");
       bars.className = "hud-hero-bars";
       const hp = document.createElement("div");
@@ -2028,7 +2030,12 @@ export class GameHud {
       manaFill.className = "hud-hero-fill mana";
       mana.appendChild(manaFill);
       bars.append(hp, mana);
-      slot.append(btn, bars);
+      // The effect goes in BEFORE the portrait and outside it, so it draws BEHIND: the button
+      // paints an opaque icon over its own box, and what is left of the model is the part that
+      // reaches past the portrait's edge — which is the whole of what the model is for. Two
+      // positioned siblings with no z-index paint in tree order, so the order of this one line
+      // is the entire mechanism.
+      slot.append(fx, btn, bars);
       bar.appendChild(slot);
       this.heroSlots.push({ slot, btn, fx, points, bars, hp, mana, hpFill, manaFill });
       // A click selects that hero, a double-click also jumps the camera to it — the mouse
