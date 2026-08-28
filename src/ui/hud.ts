@@ -13,6 +13,7 @@ import { CHAT_MAX_LENGTH, sanitizeChat, type ChatTarget } from "../game/chat";
 import type { HeroBarEntry } from "../game/rts";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
+import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 
 /** WC3's upkeep bands, as the resource bar colours them. */
@@ -518,6 +519,11 @@ const HERO_BAR = {
  *  is where the rest of that model lives. */
 const MODAL_SPARK = "Textures\\HeroLevel-Particle.blp";
 
+/** The second texture `UI\Buttons\HeroLevel\HeroLevel.mdx` draws — the soft ring its one
+ *  quad wears around a portrait whose hero has a skill point waiting. The model's OTHER
+ *  texture is the spark above, the same file both models emit. See ui/heroLevelFx.ts. */
+const HERO_LEVEL_RING = "UI\\Buttons\\HeroLevel\\HeroLevel-Border.blp";
+
 // The console's own widget art, named by `UI\war3skins.txt` KEY rather than by path so the
 // per-race entries take effect (the inventory cover is the one the four races differ on).
 // These are the keys the engine's SIMPLESTATUSBAR / backdrop frames use, out of the same
@@ -535,6 +541,8 @@ const MODAL_SPARK = "Textures\\HeroLevel-Particle.blp";
 //                                 human-buildprogressbar-*.blp  its fill ships already gold
 //   ConsoleInventoryCoverTexture  <Race>UITile-InventoryCover   the crest over the 2×3 when
 //                                                               the selection has no inventory
+//   CommandButtonNumberOverlay    human-button-lvls-overlay.blp the boxed number in an
+//                                                               icon's corner — see countBadge
 const CONSOLE_ART = {
   queueBorder: "BuildQueueBackdrop",
   bigBarBorder: "SimpleXpBarBorder",
@@ -542,6 +550,7 @@ const CONSOLE_ART = {
   buildBarBorder: "SimpleBuildTimeIndicatorBorder",
   buildBarFill: "SimpleBuildTimeIndicator",
   inventoryCover: "ConsoleInventoryCoverTexture",
+  numberOverlay: "CommandButtonNumberOverlay",
 } as const;
 
 /** What the engine tints `human-bigbar-fill.blp` with, read off the models that draw the
@@ -777,6 +786,45 @@ function cdSeconds(secondsLeft: number): string {
   return String(Math.ceil(secondsLeft));
 }
 
+/**
+ * A count badge: the boxed number WC3 stamps into the bottom-right corner of an icon
+ * whenever that icon stands for a QUANTITY of something — an item's charges, a shop's stock,
+ * a mercenary camp's, the unspent skill points on the hero-bar portrait and on the
+ * learn-skill button that opens the ability list.
+ *
+ * The box is the game's own art, and it is one art for all of them: `UI\war3skins.txt`
+ *
+ *     CommandButtonNumberOverlay=UI\Widgets\Console\Human\CommandButton\human-button-lvls-overlay.blp
+ *
+ * a 32×32 texture whose opaque part is a gold frame around a translucent black fill, inset
+ * 3-4 texels from every edge — the frame's own padding is what holds it off the icon's
+ * corner, so nothing here offsets it. Named by KEY rather than by path, like the rest of
+ * `CONSOLE_ART`, so a skin's override applies.
+ *
+ * **Its size is a texel count, not a taste call.** The overlay is 32 texels square and the
+ * command button it sits on is 64, so drawn at its own resolution the box is exactly HALF
+ * the button — which is what `.hud-count-badge` is written as. Its opaque frame is then
+ * 26/64 across and 24/64 tall, and its centre lands dead in the middle of the box, which is
+ * why the numeral is simply centred in it.
+ *
+ * The inner span is what carries the number: the box has to be able to hide itself when
+ * there is nothing to count (an empty gold frame is not something the game ever draws), and
+ * a bare `textContent` write on the box would take its background with it. Use `setCount`.
+ */
+function countBadge(): HTMLSpanElement {
+  const box = document.createElement("span");
+  box.className = "hud-count-badge";
+  box.hidden = true;
+  box.appendChild(document.createElement("span"));
+  return box;
+}
+
+/** Put `text` in a `countBadge`, hiding the whole box when there is nothing to say. */
+function setCount(box: HTMLElement, text: string): void {
+  box.firstElementChild!.textContent = text;
+  box.hidden = text === "";
+}
+
 /** Past this, a pool prints as the CURRENT value alone. See `poolReadout`. */
 const POOL_PAIR_MAX = 9999;
 
@@ -933,7 +981,7 @@ export class GameHud {
     slot: HTMLDivElement;
     btn: HTMLButtonElement;
     fx: HTMLCanvasElement;
-    points: HTMLDivElement;
+    points: HTMLSpanElement;
     bars: HTMLDivElement;
     hp: HTMLDivElement;
     mana: HTMLDivElement;
@@ -958,6 +1006,9 @@ export class GameHud {
   private invKey = "";
   /** The `UI-ModalButtonOn.mdx` sparkle, simulated once and blitted onto every lit button. */
   private modalFx!: ModalButtonFx;
+  /** …and `HeroLevel.mdx`, the hero bar's own — a different model for a different job
+   *  (war3skins `HeroBarPointModel` vs `CommandButtonAutocast`). See ui/heroLevelFx.ts. */
+  private heroLevelFx!: HeroLevelFx;
   private cmdFx: HTMLCanvasElement[] = []; // per command slot, shown while the button is on
   /** The crest drawn over the six slots when the selection has no inventory. */
   private invCover!: HTMLDivElement;
@@ -997,6 +1048,11 @@ export class GameHud {
     // …and how far past a button's edge that effect reaches, so the stylesheet can inset the
     // overlay by the model's own geometry instead of a number typed twice.
     this.root.style.setProperty("--modal-fx-overhang", `${(MODAL_FX_OVERHANG * 100).toFixed(3)}%`);
+    // The hero bar's indicator is a MODEL OF ITS OWN, not the same sparkle scaled: a pulsing
+    // gold ring around the portrait with sparks spilling off all four of its edges. Same two
+    // steps — build it with its textures, hand its overhang to the stylesheet.
+    this.heroLevelFx = new HeroLevelFx(driver.blpCanvas(MODAL_SPARK), driver.blpCanvas(HERO_LEVEL_RING));
+    this.root.style.setProperty("--herolevel-fx-overhang", `${(HERO_LEVEL_FX_OVERHANG * 100).toFixed(3)}%`);
     // The four font heights `UI\MiscUI.txt` states for the frames the engine builds in code,
     // handed to the stylesheet as lengths (FONT_HEIGHTS). On the ROOT because the frames that
     // read them are siblings, not one widget.
@@ -1078,6 +1134,15 @@ export class GameHud {
     }
     const cover = url(CONSOLE_ART.inventoryCover);
     if (cover) root.setProperty("--hud-inventory-cover", `url(${cover})`);
+    // The boxed number an icon wears in its corner (see countBadge). On :root and gated by a
+    // class of its own rather than by `hud-widget-skinned`, because the badge is worn by the
+    // HERO BAR too — which is not in the console, and is on screen with no console at all
+    // during a cinematic.
+    const number = url(CONSOLE_ART.numberOverlay);
+    if (number) {
+      root.setProperty("--hud-number-overlay", `url(${number})`);
+      document.body.classList.add("hud-number-skinned");
+    }
     document.body.classList.add("hud-widget-skinned");
   }
 
@@ -1174,6 +1239,7 @@ export class GameHud {
     // Last: the two refreshes above are what say which buttons are lit, and the effect is
     // simulated once for all of them (see ModalButtonFx).
     this.modalFx.tick(dtMs);
+    this.heroLevelFx.tick(dtMs);
   }
 
   /** Redraw the selection-dependent panels right now rather than on the next
@@ -1938,12 +2004,13 @@ export class GameHud {
       slot.hidden = true;
       const btn = document.createElement("button");
       btn.className = "hud-hero-btn";
-      // Unspent skill points: the same sparkle an autocast button wears, over the portrait of
-      // the hero that has one waiting (ui/modalButtonFx.ts), plus the count itself in the
-      // bottom-right corner, which is what issue #95 asks for.
-      const fx = this.modalFx.makeOverlay();
-      const points = document.createElement("div"); // unspent skill points, bottom-right
-      points.className = "hud-hero-points";
+      // Unspent skill points: `HeroLevel.mdx` over the portrait of the hero that has one
+      // waiting (ui/heroLevelFx.ts — war3skins names it `HeroBarPointModel`, which is this
+      // button and nothing else), plus the count itself in the bottom-right corner, which is
+      // what issue #95 asks for.
+      const fx = this.heroLevelFx.makeOverlay();
+      const points = countBadge(); // unspent skill points, bottom-right
+      points.classList.add("hud-hero-points");
       btn.append(fx, points);
       const bars = document.createElement("div");
       bars.className = "hud-hero-bars";
@@ -2040,9 +2107,11 @@ export class GameHud {
       // true (a dead hero spends nothing), so one element says whichever is.
       const reviving = h.dead && h.reviveSecondsLeft > 0;
       s.fx.hidden = h.skillPoints <= 0;
-      s.points.hidden = h.skillPoints <= 0 && !reviving;
-      if (reviving) s.points.textContent = String(h.reviveSecondsLeft);
-      else if (h.skillPoints > 0) s.points.textContent = String(h.skillPoints);
+      // …and only ONE of them wears the box. The count badge means "this many of a thing you
+      // have" (see countBadge); a revival is a clock, and WC3 boxes no clock, so the
+      // countdown keeps the bare numeral this slot used to draw for both.
+      s.points.classList.toggle("plain", reviving);
+      setCount(s.points, reviving ? String(h.reviveSecondsLeft) : h.skillPoints > 0 ? String(h.skillPoints) : "");
     }
   }
 
@@ -2324,8 +2393,7 @@ export class GameHud {
       const cdText = document.createElement("span");
       cdText.className = "hud-cmd-cd-text";
       cd.appendChild(cdText);
-      const count = document.createElement("span");
-      count.className = "hud-cmd-count";
+      const count = countBadge();
       btn.append(cd, count);
       onPress(btn, () => this.driver.useInventory(i));
       btn.oncontextmenu = (e) => {
@@ -2410,13 +2478,13 @@ export class GameHud {
         btn.classList.add("empty");
         btn.style.backgroundImage = "";
         btn.draggable = false; // nothing in the pocket to drag onto a hero's portrait
-        this.invCount[i].textContent = "";
+        setCount(this.invCount[i], "");
         continue;
       }
       btn.classList.remove("empty");
       btn.style.backgroundImage = s.icon ? `url(${s.icon})` : "";
       btn.draggable = true;
-      this.invCount[i].textContent = s.charges > 0 ? String(s.charges) : "";
+      setCount(this.invCount[i], s.charges > 0 ? String(s.charges) : "");
     }
     // The slot under the cursor just changed (a charge spent, the item swapped or
     // used up) — re-render its tooltip in place rather than leave a stale one.
@@ -2452,10 +2520,10 @@ export class GameHud {
       const cdText = document.createElement("span");
       cdText.className = "hud-cmd-cd-text";
       cd.appendChild(cdText);
-      // Corner count badge (e.g. a hero's unspent skill points) — a persistent
-      // child so a card rebuild never wipes it, like the label/cooldown nodes.
-      const count = document.createElement("span");
-      count.className = "hud-cmd-count";
+      // Corner count badge — the shop's stock, the mercenary camp's, the learn-skill
+      // button's unspent points. A persistent child so a card rebuild never wipes it, like
+      // the label/cooldown nodes.
+      const count = countBadge();
       // …and the "standing on" sparkle, likewise persistent. Last child so it draws over the
       // icon and the cooldown sweep, exactly as the model does over the button in the game.
       const fx = this.modalFx.makeOverlay();
@@ -2495,7 +2563,7 @@ export class GameHud {
       btn.classList.remove("armed", "modal", "dis-art", "unavailable", "passive", "no-mana");
       this.cmdFx[i].hidden = true;
       this.cmdLabels[i].textContent = "";
-      this.cmdCount[i].textContent = "";
+      setCount(this.cmdCount[i], "");
       onPress(btn, null);
       btn.onpointerenter = null;
       btn.onpointerleave = null;
@@ -2535,7 +2603,7 @@ export class GameHud {
       if (disArt || c.icon) btn.style.backgroundImage = `url(${disArt ?? c.icon})`;
       else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
 
-      if (c.count && c.count > 0) this.cmdCount[idx].textContent = String(c.count);
+      if (c.count && c.count > 0) setCount(this.cmdCount[idx], String(c.count));
       // A passive takes no press — it's an indicator, so it never sinks and never
       // fires. Nor does an UNAVAILABLE button: WC3's greyed DISBTN state is inert,
       // and letting the click through is how a Barracks you have no Great Hall for

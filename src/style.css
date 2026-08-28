@@ -812,19 +812,17 @@ body.hud-tooltip-skinned .hud-chatbar::after {
 .hud-hero-btn:hover { filter: brightness(1.12); }
 /* Sink under the press, exactly as a command-card button does. */
 .hud-hero-btn.pressed { transform: scale(0.98); }
-/* Unspent skill points: the `UI-ModalButtonOn.mdx` sparkle (`.hud-modal-fx`, below) chasing
-   the portrait's frame, plus the count itself in the bottom-right corner, which is what
-   issue #95 asks for. */
+/* Unspent skill points: `HeroLevel.mdx` around the portrait (`.hud-herolevel-fx`, below),
+   plus the count itself in the bottom-right corner, which is what issue #95 asks for.
+
+   The badge is the shared `.hud-count-badge` box, sized and placed against the ICON rather
+   than the button: this widget draws its own bevel (the padding above), so the button's
+   corner is 4/68 outside the portrait the box belongs to. Half of that icon, matching the
+   texel rule the badge is written to. */
 .hud-hero-points {
-  position: absolute;
+  --count-box: calc(var(--hero-btn) * 30 / 68);
   right: calc(var(--hero-btn) * 4 / 68);
-  bottom: calc(var(--hero-btn) * 2 / 68);
-  /* Scales with the button (14px against the reference's 68px one), with a floor so the
-     count stays readable in a small window. */
-  font: 700 max(9px, calc(var(--hero-btn) * 14 / 68)) / 1 var(--game-font);
-  color: #f5e7b8;
-  text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000;
-  pointer-events: none;
+  bottom: calc(var(--hero-btn) * 4 / 68);
 }
 /* The two bars: one black block under the button, a 6/17 tall track each with a 2/17 gap,
    exactly as measured. The empty stretch of a bar IS the block showing through. */
@@ -1135,19 +1133,42 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
   color: #fff;
   text-shadow: 0 1px 2px #000, 0 0 4px #000;
 }
-/* Corner count badge (e.g. a hero's unspent skill points), pinned bottom-right
-   over the icon like WC3's charge/skill-point number: a small cream numeral with
-   a hard black outline so it reads on any art. Empty span renders nothing. */
-.hud-cmd-count {
+/* The count badge WC3 stamps into the bottom-right corner of any icon that stands for a
+   QUANTITY — an item's charges, a shop's or a mercenary camp's stock, the unspent skill
+   points on a hero's portrait and on the learn-skill button. One box for all of them, and
+   it is the game's own art: `CommandButtonNumberOverlay` (see countBadge in ui/hud.ts).
+
+   THE SIZE IS THE TEXEL COUNT. The overlay texture is 32 square and a command button is 64,
+   so at its own resolution the box is exactly half the button — which is what `--count-box`
+   defaults to. A host whose ICON is smaller than its button (the hero bar insets its
+   portrait inside a bevel) overrides it with half of the icon instead.
+
+   The box is its own container so the numeral can be sized against it in `cqw` rather than
+   in pixels that would be wrong at every window size but one. The art's opaque frame is
+   centred in the texture, so centring the numeral in the box lands it inside the frame. */
+.hud-count-badge {
+  --count-box: 50%;
   position: absolute;
-  right: 1px;
+  right: 0;
   bottom: 0;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
+  width: var(--count-box);
+  aspect-ratio: 1;
+  container-type: size;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+body.hud-number-skinned .hud-count-badge:not(.plain) {
+  background: var(--hud-number-overlay) center / 100% 100% no-repeat;
+}
+/* The numeral. Cream with a hard black outline so it reads on the frame's translucent black
+   fill and, with no install mounted, straight on the art. 55% of the box puts a digit about
+   halfway up the frame's 24-of-32 interior, which is where the game's own sits. */
+.hud-count-badge > span {
+  font: 700 max(9px, 55cqw) / 1 var(--game-font);
   color: #f5e7b8;
   text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000;
-  pointer-events: none;
 }
 
 /* Build-placement ghost: a box under the cursor, green = valid, red = blocked. */
@@ -1821,7 +1842,7 @@ body.hud-widget-skinned .hud-queue-slot { color: transparent; }
 }
 
 /* Hero inventory slot: an icon-filled button (like a command button) with the
-   charge badge + cooldown sweep reused from .hud-cmd-count/.hud-cmd-cd. */
+   charge badge + cooldown sweep reused from .hud-count-badge/.hud-cmd-cd. */
 .hud-inv-slot {
   position: relative;
   overflow: hidden;
@@ -1915,6 +1936,25 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
   mix-blend-mode: screen;
 }
 .hud-cmd.modal { overflow: visible; }
+
+/* `HeroLevel.mdx` over a hero-bar portrait whose hero has a skill point waiting — the hero
+   bar's OWN model (war3skins `HeroBarPointModel`), not the autocast sparkle above. Same
+   deal: ui/heroLevelFx.ts draws it, the stylesheet only gives its canvas the box. This one
+   reaches much further past the button — its sparks are born on the quad's edges and spend
+   their second GROWING — so its overhang is a variable of its own. `.hud-hero-btn` is
+   `overflow: visible` already, being a plain block. */
+.hud-herolevel-fx {
+  position: absolute;
+  /* Sized rather than stretched between insets, for the reason `.hud-modal-fx` gives. */
+  left: calc(-1 * var(--herolevel-fx-overhang, 30%));
+  top: calc(-1 * var(--herolevel-fx-overhang, 30%));
+  width: calc(100% + 2 * var(--herolevel-fx-overhang, 30%));
+  height: calc(100% + 2 * var(--herolevel-fx-overhang, 30%));
+  pointer-events: none;
+  /* Additive over the portrait, the way filterMode 1 and 3 composite in the game — which is
+     why the art underneath is never hidden by the ring sitting on top of it. */
+  mix-blend-mode: screen;
+}
 
 /* No crosshair when an order is armed — the WC3 cursor is forced everywhere
    in-game (see applyRaceCursor), so we never override it here. */
