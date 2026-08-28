@@ -3,6 +3,7 @@ import type { SimUnit } from "../../sim/world";
 import { friendlySpell, near, waveDistance, type CasterView } from "../casting";
 import { MELEE_INSANE, MELEE_NEWBIE } from "../ids";
 import type { PlusProfile } from "./profile";
+import { aimCtx, spellFacts, spellValue, type AimCtx } from "./targeting";
 
 // Computer+ — when its units press their buttons (issue #124).
 //
@@ -22,11 +23,16 @@ import type { PlusProfile } from "./profile";
 //   2. a PRIORITY over those roles — a caster presses its most valuable legal button, not the
 //      first one on its command card, which is the single biggest difference in how the two
 //      read to play against;
-//   3. TARGET VALUE — heroes and casters over footmen, the wounded for a nuke and the healthy
-//      for a disable, workers when raiding;
+//   3. TARGET VALUE — casters over footmen, the wounded for a nuke and the healthy for a
+//      disable, workers when raiding, and a hero only when it can actually be finished. The
+//      ladder itself lives in plus/targeting.ts, because the ARMY aims by the same one: a
+//      Mountain King who stuns the Tauren while every Footman beside him swings at the Shaman
+//      is worse than either decision taken alone;
 //   4. a REACTION DELAY, because a human does not Storm Bolt on the first frame of a fight —
-//      and a smaller ROLE VOCABULARY at the lower difficulties, because a novice does not use
-//      half these buttons at all.
+//      a smaller ROLE VOCABULARY at the lower difficulties, because a novice does not use half
+//      these buttons at all, and a WORSE READ of the fight at those difficulties too
+//      (`PlusProfile.castTargeting`): an easy computer aims at the biggest body on the screen,
+//      which is how its Storm Bolt ends up on your Tauren.
 //
 // What it keeps from the classic caster, and must: LEGALITY is the sim's. `castUseError` /
 // `castError` are the click-time gates — mana, cooldown, the upgrade requirement, Targets
@@ -199,6 +205,21 @@ const NEVER = new Set<string>([
   "Aetf",
 ]);
 
+// ITEMS — NOT HANDLED HERE, AND DELIBERATELY. See docs/computer-plus.md "Items: not yet".
+//
+// Nothing in this file can reach an item even by accident: an item's granted abilities are not
+// in `SimUnit.abilities` at all (they hang off the inventory slot and dispatch through
+// `SimWorld.useItem`, gated by `itemReadyError` / `itemUseError`), so the ability walk in
+// `tryCast` never sees a Scroll of Healing. Buying is the other half and is not here either —
+// `{ c: "buyitem", shopId, itemId }` belongs in the build ladder beside the rest of the AI's
+// gold, not in a caster.
+//
+// This is a hole waiting on the sim rather than a decision about play: the item side is still
+// being filled in, and an AI written against a half-implemented inventory would encode the
+// half. When it lands, a Potion of Healing is a `panic`/`heal` row on the ladder above, a Scroll
+// of Healing is an area heal `pickSpot` already knows how to aim, and a Scroll of Town Portal
+// belongs to the army manager's retreat rather than to this file.
+
 /** Autocasts the AI must not simply switch on — the same two the classic caster holds back,
  *  for the same reasons (Defend costs 30% move speed and has a condition; Replenish is a job). */
 const HAND_AUTOCAST = new Set<string>(["Adef", "Ambt"]);
@@ -256,9 +277,21 @@ export class PlusCaster {
   private fightSince = new Map<number, number>();
   /** Seconds since the player was seated — the brain's clock, handed in each pass. */
   private now = 0;
+  /** How this player reads a fight (plus/targeting.ts), built once from the profile. */
+  private readonly aim0: AimCtx;
 
-  constructor(private readonly view: CasterView, private readonly profile: PlusProfile) {
+  /**
+   * `roll` is the AI's OWN random stream (`AiPlayer.randomInt`), not `Math.random` — a
+   * misclick has to be deterministic for the same seed like every other AI decision, or two
+   * replays of one match diverge.
+   */
+  constructor(
+    private readonly view: CasterView,
+    private readonly profile: PlusProfile,
+    private readonly roll: () => number,
+  ) {
     this.roles = rolesFor(profile);
+    this.aim0 = aimCtx(profile);
   }
 
   pass(now: number): void {
@@ -487,6 +520,10 @@ export class PlusCaster {
   ): SimUnit | null {
     const friendly = friendlySpell(def);
     const pool = friendly ? own : foes;
+    // Every LEGAL target is collected rather than only the best one, because the misclick
+    // below has to draw from the same set: a "mistake" that could land on something the click
+    // itself would refuse is not a mistake, it is a dropped cast.
+    const legal: SimUnit[] = [];
     let best: SimUnit | null = null;
     let bestScore = -Infinity;
     for (const t of pool) {
@@ -495,41 +532,40 @@ export class PlusCaster {
       if (role === "heal" && t.hp / Math.max(1, t.maxHp) > HURT) continue;
       if (!buffFree(t, lvl)) continue;
       if (this.view.world.castError(u.id, code, t.id) !== null) continue;
+      legal.push(t);
       // Worth first, distance only as the tie-break — and `bestScore` starts below every
       // possible score, because a cheap target at the edge of a long cast range scores
       // negative and would otherwise never be picked at all.
-      const s = this.value(t, role) * 1000 - Math.hypot(t.x - u.x, t.y - u.y);
+      const s = this.value(t, role, lvl) * 1000 - Math.hypot(t.x - u.x, t.y - u.y);
       if (s > bestScore) { bestScore = s; best = t; }
+    }
+    // …and then, sometimes, the wrong one. `castMistake` is ordinary sloppiness on top of a
+    // difficulty's READ of the fight (`castTargeting`), and the two compose: an easy computer
+    // aims at the biggest body most of the time and at whatever it happened to click on the
+    // rest of it. A heal is exempt — a player who means to heal somebody heals somebody, and
+    // the pool is already only the wounded.
+    if (best && role !== "heal" && legal.length > 1 && this.mistake()) {
+      return legal[Math.min(legal.length - 1, Math.floor(this.roll() * legal.length))] ?? best;
     }
     return best;
   }
 
+  /** Did this click go astray? Drawn off the AI's own stream, so a match replays identically. */
+  private mistake(): boolean {
+    return this.profile.castMistake > 0 && this.roll() < this.profile.castMistake;
+  }
+
   /**
-   * How much this target is worth to this kind of spell.
+   * How much this target is worth to this kind of spell — the shared ladder, plus this
+   * ability's own row.
    *
-   * The two halves are the "more human" part of the brief:
-   *
-   *  • WHAT it is. A hero is worth four ordinary soldiers, a spellcaster two and a half (kill
-   *    the support, not the meat), a summon almost nothing because it is leaving anyway. A
-   *    worker is worth very little — unless this computer is raiding, when it is the whole
-   *    point of being there (`PlusProfile.harass`).
-   *  • HOW HURT it is, and that depends on the spell. A nuke goes on the one that is nearly
-   *    dead, because finishing it removes a whole unit from the fight. A disable goes on the
-   *    HEALTHIEST one, because that is the one that will still be swinging in ten seconds.
-   *
-   * DISTANCE is deliberately not in here. A single-target pick breaks ties with it
-   * (`pickTarget`), but an AREA spell's score is the SUM of what its circle catches, and a
-   * distance term inside that sum would make a spell prefer a smaller pile of bodies for
-   * standing closer — and, since the sum could then go negative, would make `pickSpot`'s
-   * zero floor silently reject a legal cast.
+   * The ladder is `plus/targeting.ts` (read its header for what a difficulty changes about it);
+   * all this adds is `spellFacts`, the two columns of the ABILITY that change the aim. Today
+   * that is `dur1`/`herodur1`: every hard disable in the game has a shorter hero duration, so
+   * an expert prices a stun spent on a hero at what it actually buys.
    */
-  private value(t: SimUnit, role: Role): number {
-    const frac = t.hp / Math.max(1, t.maxHp);
-    let base = t.isHero ? 4 : t.isSummon ? 0.5 : t.isPeon ? (this.profile.harass ? 1.5 : 0.4) : t.maxMana > 0 ? 2.5 : 1;
-    if (role === "heal") base *= 1 + (1 - frac) * 2; // the most wounded, and heroes first
-    else if (role === "nuke") base *= 1 + (1 - frac);
-    else if (role === "disable") base *= 1 + frac;
-    return base;
+  private value(t: SimUnit, role: Role, lvl?: AbilityLevel): number {
+    return spellValue(t, role, this.aim0, lvl ? spellFacts(lvl.duration, lvl.heroDuration) : undefined);
   }
 
   /**
@@ -553,7 +589,11 @@ export class PlusCaster {
     const friendly = friendlySpell(def);
     const pool = friendly ? own : foes;
     const area = lvl.area > 0;
-    const need = area && !friendly ? CLUSTER : 1;
+    // A novice does not hold an area spell for a clump — they press it on whoever they are
+    // looking at. So the quorum is the difficulty's too, and an easy computer's Blizzard lands
+    // on one Footman.
+    const quorum = this.profile.castTargeting === "naive" ? 1 : CLUSTER;
+    const need = area && !friendly ? quorum : 1;
 
     if (def.target === "none") {
       if (!buffFree(u, lvl)) return null; // a self-buff already up is not re-pressed
@@ -564,15 +604,23 @@ export class PlusCaster {
 
     const wave = NO_AOE_CURSOR.has(def.code);
     const reach = wave ? waveDistance(lvl) : lvl.castRange;
+    const legal: Array<{ x: number; y: number }> = [];
     let best: { x: number; y: number } | null = null;
     let bestValue = 0;
     for (const t of pool) {
       if (!near(u, t, reach)) continue;
       const hits = wave ? this.corridor(u, t, def, lvl, role, pool, friendly) : this.catchment(u, t.x, t.y, def, lvl, role, pool, friendly);
-      if (hits.count < need || hits.value <= bestValue) continue;
+      if (hits.count < need) continue;
       if (this.view.world.castError(u.id, code, 0, t.x, t.y) !== null) continue;
+      legal.push({ x: t.x, y: t.y });
+      if (hits.value <= bestValue) continue;
       bestValue = hits.value;
       best = { x: t.x, y: t.y };
+    }
+    // The same misclick a single-target cast can make (`pickTarget`), on the same stream: the
+    // Blizzard that went down on the edge of the fight rather than on the middle of it.
+    if (best && legal.length > 1 && this.mistake()) {
+      return legal[Math.min(legal.length - 1, Math.floor(this.roll() * legal.length))] ?? best;
     }
     return best;
   }
@@ -589,7 +637,7 @@ export class PlusCaster {
       if (Math.hypot(t.x - x, t.y - y) > area) continue;
       if (!this.counts(u, t, def, role, friendly)) continue;
       count++;
-      value += this.value(t, role);
+      value += this.value(t, role, lvl);
     }
     return { count, value };
   }
@@ -614,7 +662,7 @@ export class PlusCaster {
       if (Math.abs(px * -uy + py * ux) > half + t.radius) continue;
       if (!this.counts(u, t, def, role, friendly)) continue;
       count++;
-      value += this.value(t, role);
+      value += this.value(t, role, lvl);
     }
     return { count, value };
   }

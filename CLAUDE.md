@@ -184,6 +184,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   rolled per match, and **expanding belongs to the build order** (`PlusStrategy.expandAt`) rather
   than to the difficulty — a fast expand is a build, not a setting. Countering reads the game's
   own `DAMAGE_TABLE` against what the AI has SCOUTED, so never add a hand-written counter chart.
+  **Aiming is ONE ladder** ([`targeting.ts`](src/ai/plus/targeting.ts)) shared by its casters and
+  its army — a hero who stuns the Tauren while every Footman beside him swings at the Shaman is
+  two decisions that undo each other — and a difficulty grades the READ, not only the reaction:
+  Easy aims by bulk (which is why its Storm Bolt lands on your Tauren), Insane prices what the
+  spell is FOR. It also **does not chase heroes**: a healthy hero is worth barely more than a
+  soldier and the army will not walk after one it cannot finish. **It does not touch ITEMS yet**
+  — no buying, no drinking, no shop — a hole waiting on the sim; the plan, the seams and the two
+  gates to check first are the doc's "Items: not yet" section.
   **AMAI is GPL** — it was studied for the shape of the strategy table and nothing else; never
   lift its code or its numbers.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs

@@ -10,6 +10,7 @@ import {
 } from "./chatter";
 import { buildPlan, harvestPlan, type PlusCtx } from "./plan";
 import { plusProfile, type PlusProfile } from "./profile";
+import { aimCtx, heroKillable, killValue } from "./targeting";
 import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from "./races";
 
 // Computer+ — the improved melee AI (issue #124). Start at docs/computer-plus.md.
@@ -92,11 +93,29 @@ const RALLY_SLACK = 320;
  *  this of it. */
 const CLEARED_RADIUS = 900;
 
+/**
+ * How far from the group a HEALTHY enemy hero may be and still be worth focusing.
+ *
+ * The anti-chase rule (`focusTarget`). A hero standing in the fight is a target like any other
+ * and the ladder prices it (plus/targeting.ts); a hero that has walked out of it is bait, and
+ * following it is exactly how Blizzard's own melee AI loses armies. About a screen's width at
+ * the game's own camera — close enough that the group is still fighting the same fight.
+ * A hero it can actually FINISH is exempt: that walk is worth taking.
+ */
+const HERO_CHASE = 700;
+
 /** When the scout goes out, and how close to a waypoint counts as having looked at it. */
 const SCOUT_AT = 60;
 const SCOUT_ARRIVED = 400;
 /** How many gold mines it checks after the enemy's main before coming home. */
 const SCOUT_LEGS = 3;
+
+// ITEMS — Computer+ does not buy or use any, and no code path here reaches one. Not an
+// oversight: see docs/computer-plus.md "Items: not yet, and what goes here when they land",
+// which names the seams (`buyitem` / `useitem`), the Goblin Merchant's own `Sellitems` line and
+// the shopping list, and the two gates to check first (item abilities are not in
+// `SimUnit.abilities`; item gold is gold `OneBuildLoop` was reserving). The item side of the
+// sim is still being filled in, and an AI built against half an inventory would encode the half.
 
 /** Creep camps: the window `AiPlayer.creepCamp` is asked for, derived from the army's food the
  *  way the race scripts derive theirs from `force_level` — four fifths of it, less ten. */
@@ -190,7 +209,9 @@ export class ComputerPlusAi {
         def: (id) => this.host.abilities.get(id),
         hostile: (u) => ai.hostileTo(u),
         order: (cmd) => ai.order(cmd),
-      }, profile),
+        // The AI's OWN random stream, so a misclick (`PlusProfile.castMistake`) is as
+        // deterministic as every other decision it takes.
+      }, profile, () => ai.randomInt(0, 9999) / 10000),
       clock: 0,
       // Staggered across the interval, so twelve computers never all think on one frame.
       buildIn: profile.buildPeriod * (1 + player / 12),
@@ -607,8 +628,23 @@ export class ComputerPlusAi {
     b.reissueIn = REISSUE_PERIOD;
   }
 
-  /** The enemy the group should kill first, from around where it is fighting. */
+  /**
+   * The enemy the group should kill first, from around where it is fighting.
+   *
+   * The ladder is `killValue` (plus/targeting.ts) — the same one its casters aim by, which is
+   * the point of that file: an army swinging at the Shaman while the Mountain King stuns the
+   * Tauren is two decisions that undo each other.
+   *
+   * The second clause here is the ANTI-CHASE rule, and it is the whole answer to Blizzard's own
+   * melee AI's worst habit: it drops everything to swing at the enemy hero, follows it out of
+   * the fight, and loses the army to the units it walked past. A hero this group cannot finish
+   * (`heroKillable`) and that has already pulled away from where the group is standing is not a
+   * target at all — the ladder's hero premium only applies to one that is standing IN the
+   * fight, or one that is nearly dead and worth the walk.
+   */
   private focusTarget(b: Brain, x: number, y: number): SimUnit | null {
+    const ctx = aimCtx(b.profile);
+    const centre = this.squadCentre(b);
     let best: SimUnit | null = null;
     // -Infinity, NOT 0: the score is `worth × 1000 − distance`, and a Peasant nine hundred
     // units away scores below zero. Starting at zero silently means "only pick something
@@ -619,17 +655,19 @@ export class ComputerPlusAi {
       if (u.building || u.invulnerable) continue;
       const d = Math.hypot(u.x - x, u.y - y);
       if (d > CLEARED_RADIUS) continue;
-      const s = this.worth(b, u) * 1000 - d;
+      if (u.isHero && !heroKillable(u) && centre && Math.hypot(u.x - centre.x, u.y - centre.y) > HERO_CHASE) continue;
+      const s = killValue(u, ctx) * 1000 - d;
       if (s > bestScore) { bestScore = s; best = u; }
     }
     return best;
   }
 
-  /** What an enemy unit is worth killing — the same ladder the Computer+ caster aims by. */
-  private worth(b: Brain, u: SimUnit): number {
-    const frac = u.hp / Math.max(1, u.maxHp);
-    const base = u.isHero ? 4 : u.isSummon ? 0.5 : u.isPeon ? (b.profile.harass ? 2 : 0.3) : u.maxMana > 0 ? 2.5 : 1;
-    return base * (1 + (1 - frac)); // …and finish what is nearly dead
+  /** Where the group actually is — the anti-chase rule measures from here rather than from the
+   *  wave's objective, because "has it pulled away from us" is a question about the ARMY. */
+  private squadCentre(b: Brain): { x: number; y: number } | null {
+    let n = 0, sx = 0, sy = 0;
+    for (const u of this.squadUnits(b)) { if (u.isPeon) continue; sx += u.x; sy += u.y; n++; }
+    return n ? { x: sx / n, y: sy / n } : null;
   }
 
   /**

@@ -1,4 +1,5 @@
 import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL, UPKEEP_TIER2 } from "../ids";
+import type { TargetSkill } from "./targeting";
 
 // Computer+ — what a difficulty MEANS (issue #124).
 //
@@ -40,6 +41,41 @@ export interface PlusProfile {
   /** How long a fight has to have been going before a spell is pressed. A human does not
    *  Storm Bolt on the first frame of an engagement. */
   readonly castDelay: number;
+
+  // --- aiming: how well it CHOOSES, as opposed to how fast it reacts ----------------------
+  /**
+   * How it reads a fight when it picks a target — for a spell and for the army alike
+   * (plus/targeting.ts).
+   *
+   * `castDelay` above is how fast this player sees the fight; this is how well they understand
+   * it, and the two are genuinely different axes. A `naive` player aims at the biggest body on
+   * the screen: Storm Bolt goes on the Tauren, Death Coil on the Abomination, and the Shaman
+   * behind them keeps casting. A `sound` one values what a unit IS. An `expert` also knows what
+   * the SPELL is for — a nuke where it finishes something, a disable on the highest damage per
+   * second, and never a full-length stun spent on a hero that only eats a third of it.
+   */
+  readonly castTargeting: TargetSkill;
+  /**
+   * Chance that a cast is aimed at a random legal target instead of at the best one.
+   *
+   * The other half of "aims badly": `castTargeting` is a consistently wrong MODEL of a fight,
+   * this is ordinary sloppiness on top of it — the click that went on the wrong unit. Kept
+   * small, because a computer that misclicks a third of its spells stops reading as a player
+   * and starts reading as broken.
+   */
+  readonly castMistake: number;
+  /**
+   * How hard the kill-priority ladder is allowed to pull onto an enemy HERO. 0 = a hero is
+   * just another soldier; 1 = the full curve in plus/targeting.ts.
+   *
+   * This is the knob on the single most-complained-about habit of Blizzard's own melee AI: it
+   * drops everything to swing at the enemy hero, follows it out of the fight, and loses the
+   * army to the units it walked past. Even at 1 the curve is conditional — a HEALTHY hero is
+   * worth barely more than a soldier and only a hero that can be finished (`heroKillable`)
+   * climbs — so a higher number here means "is better at spotting the kill", not "chases
+   * harder". The army adds a second gate on top: it will not walk after one (`HERO_CHASE`).
+   */
+  readonly heroFocus: number;
 
   // --- economy --------------------------------------------------------------------------
   /** Workers per town it aims for.
@@ -157,6 +193,10 @@ export interface PlusProfile {
 export const PLUS_EASY: PlusProfile = {
   difficulty: MELEE_NEWBIE,
   buildPeriod: 3, armyPeriod: 3, castPeriod: 2, defendDelay: 15, castDelay: 2.5,
+  // It aims like a new player: at whatever is biggest. This is the requested behaviour in one
+  // line — an easy computer's Storm Bolt lands on the Tauren and its Death Coil on the
+  // Abomination — and it is why its casters never feel like they are answering your army.
+  castTargeting: "naive", castMistake: 0.35, heroFocus: 0.3,
   workers: 8, expansions: 0, expandDelay: 0,
   // It does not counter at all: an easy computer builds what it opened with, whatever walks
   // into its base. This is the single biggest thing the top two difficulties do that it doesn't.
@@ -178,6 +218,10 @@ export const PLUS_EASY: PlusProfile = {
 export const PLUS_NORMAL: PlusProfile = {
   difficulty: MELEE_NORMAL,
   buildPeriod: 2, armyPeriod: 1.5, castPeriod: 1, defendDelay: 6, castDelay: 1,
+  // It knows what the units are and mostly aims at the right one, and misclicks about one
+  // spell in seven. It does not price a spell's effect — a nuke goes on whoever is lowest
+  // rather than on whoever it can finish.
+  castTargeting: "sound", castMistake: 0.15, heroFocus: 0.7,
   workers: 11, expansions: 1, expandDelay: 180,
   // It counters, badly: it wants to have seen a dozen enemy units and half its army to be one
   // thing before it believes it, it only moves its mix a third of the way, and it forgets in a
@@ -202,6 +246,9 @@ export const PLUS_NORMAL: PlusProfile = {
 export const PLUS_INSANE: PlusProfile = {
   difficulty: MELEE_INSANE,
   buildPeriod: 1, armyPeriod: 0.5, castPeriod: 0.35, defendDelay: 1, castDelay: 0,
+  // The whole ladder: kill shots, damage-per-second, and the game's own `herodur1` — so it
+  // saves the Hex for the Shaman rather than spending it on a hero that eats a third of it.
+  castTargeting: "expert", castMistake: 0, heroFocus: 1,
   workers: 14, expansions: 3, expandDelay: 0,
   // Full countering, off a small sample and a long memory: six units and a quarter of them one
   // type is enough to start shifting, and it remembers what it saw four minutes ago.
