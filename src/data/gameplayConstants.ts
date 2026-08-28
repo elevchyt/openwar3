@@ -302,6 +302,29 @@ export const MISC_DATA = {
   TradingIncLarge: 200,
 } as const;
 
+/**
+ * `Misc` gameplay constants whose base value the ENGINE holds — keys the World Editor's
+ * Gameplay Constants dialog exposes and a map may state in its own `war3mapMisc.txt`
+ * (src/data/mapMisc.ts), but which no shipped `MiscGame.txt` / `MiscData.txt` row carries. They
+ * are named here rather than at their use site so that "every number the game keeps in Misc is
+ * in this file" stays true, and so `pnpm data:verify` — which checks each block against the
+ * file it claims — is not asked to look for a row that does not exist.
+ */
+export const MISC_ENGINE = {
+  /**
+   * `FoodCeiling` (`fcap` in Units\MiscMetaData.slk: section "Misc", int, 1..999) — the ceiling
+   * a player's supply cap is clamped to. **100**, the food limit everybody knows off the melee
+   * HUD, and the engine's rather than a melee rule: Blizzard.j never writes
+   * `PLAYER_STATE_FOOD_CAP_CEILING` anywhere.
+   *
+   * A map moves it either way — TFT's HumanX04 ships a war3mapMisc.txt whose entire content is
+   * `[Misc] FoodCeiling=30`, and WTii's Unit Tester raises it from its script — which is why
+   * that map writes the ceiling FIRST and the cap second: at the stock 100 the 300 it wants
+   * would be clamped straight back off.
+   */
+  FoodCeiling: 100,
+} as const;
+
 /** `UI\MiscData.txt` [Minimap] + [FogOfWar]. The minimap's own palette: how a creep
  *  camp's marker is coloured and sized by the camp's combined level, and the colour
  *  every non-player unit's dot is drawn in. Colours are the file's own **ARGB**.

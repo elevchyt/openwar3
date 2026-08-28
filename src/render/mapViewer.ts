@@ -33,6 +33,7 @@ import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData } from "../data/objectData";
+import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/mapMisc";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
@@ -1160,6 +1161,8 @@ export class MapViewerScene {
   // local player has vision/control (issue #33) and runs the map's config() (Phase 7).
   private mapPlayerUnits: Array<{ x: number; y: number; owner: number }> = [];
   private mapArchive: MpqDataSource | null = null;
+  /** …and the map's own gameplay constants (war3mapMisc.txt), re-read per map. */
+  private mapMisc: MapMisc = NO_MAP_MISC;
   /** The viewer's object-data tables as the GAME ships them, snapshotted at the first map load
    *  so every map after it starts from the game's data rather than the last map's. Keyed by
    *  table name → row id → that row's raw values. See resetObjectData. */
@@ -1409,6 +1412,7 @@ export class MapViewerScene {
     // painted). Doing it here also means a MELEE map with object data finally gets it — the
     // startCustom call meant melee maps were reading their own .w3u nowhere.
     this.loadMapObjectData();
+    this.loadMapMisc();
     // …and mounted over the install for AUDIO, so a map's imported clips resolve: the paths
     // its CreateSound calls name (`war3mapImported\HalloweenMusic.wav`) are inside this
     // archive and nowhere else. See SoundBoard.mountMap.
@@ -1966,6 +1970,11 @@ export class MapViewerScene {
       );
     }
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
+    // …and the supply CEILING this map asks for, before a line of its script runs — a chapter
+    // that lowers it (HumanX04's `[Misc] FoodCeiling=30`) is stating the size of the army you
+    // are meant to fight it with, and a script's own `SetPlayerState(…, FOOD_CAP_CEILING, …)`
+    // is still free to overrule it per player afterwards.
+    this.rts!.setMapFoodCeiling(this.mapMisc.foodCeiling);
     this.mountHud();
     void this.loadSelectionCircles();
     // Warm portrait busts in the background so the first selection of a unit type
@@ -2757,6 +2766,29 @@ export class MapViewerScene {
       const nodes = applyMapTechData(this.tech, { w3u, w3t, w3a, w3q }, wts);
       console.info(`[jass] custom object data: ${nodes} map tech-tree node(s) (Trains/Sell*/Researches/Builds/Requires).`);
     }
+  }
+
+  /** The map's own GAMEPLAY CONSTANTS (`war3mapMisc.txt` — see src/data/mapMisc.ts). Read
+   *  beside the object data because it is the same kind of thing: the map's overlay on the
+   *  install's tables, cleared and re-read per map. Applied in `beginMatch`, which is the first
+   *  moment there is a match to apply it to. */
+  private loadMapMisc(): void {
+    this.mapMisc = NO_MAP_MISC;
+    const bytes = this.mapArchive?.rawBytes(MAP_MISC_FILE);
+    if (!bytes) return;
+    try {
+      this.mapMisc = parseMapMisc(new TextDecoder("latin1").decode(bytes));
+    } catch (err) {
+      console.warn(`[jass] ${MAP_MISC_FILE} failed (non-fatal):`, err);
+      return;
+    }
+    // Say what was read AND what was not: only FoodCeiling has a use site today, and a map
+    // whose MaxHeroLevel or DayLength we quietly ignored should be visible in the log rather
+    // than a puzzle later. See src/data/mapMisc.ts for the seven keys the stock maps use.
+    const stated = [...this.mapMisc.values].map(([k, v]) => `${k}=${v}`).join(", ");
+    const ignored = [...this.mapMisc.values.keys()].filter((k) => k !== "FoodCeiling");
+    console.info(`[jass] map gameplay constants (${MAP_MISC_FILE}): ${stated}`
+      + (ignored.length ? ` — not applied yet: ${ignored.join(", ")}` : ""));
   }
 
   /** Run the map's config() + main() through the JASS interpreter (Phase 7 — issue #33).

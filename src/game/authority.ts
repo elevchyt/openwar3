@@ -6,7 +6,7 @@ import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
 import type { Command } from "./commands";
-import { MISC_GAME, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
+import { MISC_ENGINE, MISC_GAME, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
 
 // The authority half of the bridge (docs/multiplayer.md Phase B): the questions whose
 // answers are THE GAME'S, not one machine's view of it — who owns what, what a player can
@@ -29,21 +29,6 @@ import { MISC_GAME, heroReviveCost, type ReviveMode } from "../data/gameplayCons
  *  its Footman still keeps `buildTime` 20, yet clicking it in the real game produces a Footman
  *  on the spot. */
 const SHOP_HIRE_TIME = 0;
-
-/**
- * The default supply CEILING: **100**, the food limit everybody knows off the melee HUD.
- *
- * It is the engine's own default rather than a melee rule — Blizzard.j never writes
- * `PLAYER_STATE_FOOD_CAP_CEILING` anywhere, and the World Editor exposes the same number as the
- * gameplay constant `FoodCeiling` (`fcap` in Units\MiscMetaData.slk: section "Misc", int, 1..999).
- * A map may lower it (TFT's HumanX04 ships a war3mapMisc.txt whose entire content is
- * `[Misc] FoodCeiling=30`) or raise it from its script, and that is exactly why WTii's Unit Tester
- * writes the ceiling FIRST and the cap second: at the stock 100 the 300 it wants would be clamped
- * straight back off.
- *
- * We do not read a map's war3mapMisc.txt yet, so only the JASS player state can move it.
- */
-const FOOD_CEILING = 100;
 
 export class Authority {
   /**
@@ -89,8 +74,17 @@ export class Authority {
    * nothing at all.
    */
   private foodCapAdjust = new Map<number, number>();
-  /** `PLAYER_STATE_FOOD_CAP_CEILING` — what the cap is clamped to. See FOOD_CEILING. */
+  /** `PLAYER_STATE_FOOD_CAP_CEILING` — what one player's cap is clamped to, where a script has
+   *  said. Everyone else takes `defaultFoodCeiling`. */
   private foodCapCeiling = new Map<number, number>();
+  /**
+   * The ceiling for a player no script has spoken for: `MISC_ENGINE.FoodCeiling` (100), unless
+   * THIS MAP states its own in `war3mapMisc.txt` `[Misc] FoodCeiling` — TFT's HumanX04 lowers it
+   * to 30, and every mission constant in that file is a per-match value rather than a per-player
+   * one. Set once at the start of a match (RtsController.setMapFoodCeiling), before a line of
+   * the map's script runs, so a `SetPlayerState(…, FOOD_CAP_CEILING, …)` still wins over it.
+   */
+  private defaultFoodCeiling: number = MISC_ENGINE.FoodCeiling;
 
   constructor(
     private sim: SimWorld,
@@ -308,10 +302,16 @@ export class Authority {
     this.foodCapCeiling.set(player, Math.max(0, Math.floor(value)));
   }
 
-  /** `GetPlayerState(p, PLAYER_STATE_FOOD_CAP_CEILING)` — FOOD_CEILING until a script says
-   *  otherwise. */
+  /** `GetPlayerState(p, PLAYER_STATE_FOOD_CAP_CEILING)` — this map's ceiling until a script
+   *  says otherwise for this player. */
   foodCapCeilingOf(player: number): number {
-    return this.foodCapCeiling.get(player) ?? FOOD_CEILING;
+    return this.foodCapCeiling.get(player) ?? this.defaultFoodCeiling;
+  }
+
+  /** The ceiling this MAP asks for (`war3mapMisc.txt` `[Misc] FoodCeiling`), or null for the
+   *  engine's own 100. Applies to every player who has not been given one of their own. */
+  setMapFoodCeiling(value: number | null): void {
+    this.defaultFoodCeiling = value === null ? MISC_ENGINE.FoodCeiling : Math.max(0, Math.floor(value));
   }
 
   /** Debug "add food" cheat — raise a player's supply cap. */

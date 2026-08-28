@@ -6005,6 +6005,11 @@ export class RtsController {
     return this.authority.foodFor(owner);
   }
 
+  /** @see Authority.setMapFoodCeiling — the map's own `war3mapMisc.txt` `[Misc] FoodCeiling`. */
+  setMapFoodCeiling(value: number | null): void {
+    this.authority.setMapFoodCeiling(value);
+  }
+
   /** @see Authority.heroCensus — the command card draws the hero buttons from the same roster
    *  the authority gates them on, so there is one answer to "have I got this hero already". */
   heroCensus(player: number): Map<string, number> {

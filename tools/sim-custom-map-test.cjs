@@ -31,6 +31,7 @@ const { TechRegistry } = require(join(REPO, ".sim-build", "src", "data", "techtr
 const { UpgradeRegistry } = require(join(REPO, ".sim-build", "src", "data", "upgrades.js"));
 const { UnitRegistry } = require(join(REPO, ".sim-build", "src", "data", "units.js"));
 const { Authority } = require(join(REPO, ".sim-build", "src", "game", "authority.js"));
+const { parseMapMisc, miscNumber } = require(join(REPO, ".sim-build", "src", "data", "mapMisc.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -141,6 +142,47 @@ console.log("\nthe supply cap a map states, and the ceiling that bounds it");
   check("a later write is the new total", authority.foodFor(p).made, 50);
   world.units.delete([...world.units.values()].find((u) => u.typeId === "hhou" && u.owner === p).id);
   check("…and the razed farm takes its 6 back off it", authority.foodFor(p).made, 44);
+}
+
+console.log("\nthe map's own gameplay constants (war3mapMisc.txt)");
+{
+  // HumanX04's file, byte for byte — the whole thing, and the only stock map that states a
+  // ceiling. CRLF, because that is how the editor writes it.
+  const humanX04 = parseMapMisc("[Misc]\r\nFoodCeiling=30\r\n\r\n");
+  check("the ceiling comes off the file", humanX04.foodCeiling, 30);
+  check("…and the raw block with it", [...humanX04.values], [["FoodCeiling", "30"]]);
+
+  // The other six keys the stock corpus uses. None is applied yet; all must PARSE, so that
+  // wiring one up later is a use site rather than a second parser.
+  const orcX03b = parseMapMisc([
+    "[Misc]", "MaxHeroLevel=15", "PawnItemRate=0.25", "HeroFactorXP=80,70,60,50", "BoneDecayTime=43.0",
+  ].join("\n"));
+  check("a map that states no ceiling says so", orcX03b.foodCeiling, null);
+  check("…and its four constants are all there",
+    [...orcX03b.values.keys()], ["MaxHeroLevel", "PawnItemRate", "HeroFactorXP", "BoneDecayTime"]);
+  check("ints, reals and comma lists all read as numbers (the list by its first field)",
+    ["MaxHeroLevel", "PawnItemRate", "HeroFactorXP", "BoneDecayTime"].map((k) => miscNumber(orcX03b.values, k)),
+    [15, 0.25, 80, 43]);
+  check("an absent key is null, not 0", miscNumber(orcX03b.values, "FoodCeiling"), null);
+
+  // The format's own edges: comments, blank lines, and anything outside [Misc].
+  const odd = parseMapMisc("// a comment\n[Other]\nFoodCeiling=7\n\n[Misc]\nFoodCeiling=42 // trailing\n");
+  check("a key outside [Misc] is not the map's misc block", odd.foodCeiling, 42);
+
+  // …and what it is FOR: the ceiling every player takes until a script speaks for one of them.
+  const p = 5;
+  world.initStash(p, 0, 0);
+  check("without a file it is the engine's own 100", authority.foodCapCeilingOf(p), 100);
+  authority.setMapFoodCeiling(humanX04.foodCeiling);
+  check("HumanX04's 30 is the ceiling now", authority.foodCapCeilingOf(p), 30);
+  authority.setFoodCap(p, 300);
+  check("…so a script asking for 300 gets 30", authority.foodFor(p).made, 30);
+  authority.setFoodCapCeiling(p, 100);
+  check("…and a script CAN still overrule it, for that player", authority.foodCapCeilingOf(p), 100);
+  check("…which the cap immediately shows", authority.foodFor(p).made, 100);
+  check("the other players keep the map's", authority.foodCapCeilingOf(6), 30);
+  authority.setMapFoodCeiling(orcX03b.foodCeiling); // a map with no FoodCeiling row
+  check("a map stating none falls back to 100", authority.foodCapCeilingOf(6), 100);
 }
 
 console.log(failed === 0 ? "\ncustom map: all checks passed" : `\ncustom map: ${failed} check(s) failed`);
