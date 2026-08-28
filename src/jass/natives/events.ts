@@ -226,8 +226,9 @@ export function registerEventNatives(rt: Runtime): void {
   // covers all four: the item that moved (GetManipulatedItem) and the unit that moved it
   // (GetManipulatingUnit — also GetTriggerUnit). A SALE additionally names the shop
   // (GetSellingUnit) and the buyer (GetBuyingUnit = the manipulating unit); GetSoldItem is
-  // the sold item. GetSoldUnit is the *unit*-sale response (a tavern hero) — nothing raises
-  // it yet, so it reads null.
+  // the sold item. GetSoldUnit is the *unit*-sale response — a Tavern hero, a Mercenary Camp's
+  // ogre — raised by EVENT_(PLAYER_)UNIT_SELL (269/286; see Interpreter.pumpSellUnitEvents),
+  // which is a different event from the SELL_ITEM above.
   def(rt, "GetManipulatedItem", (c) => resp(c, "ManipulatedItem"));
   def(rt, "GetManipulatingUnit", (c) => resp(c, "ManipulatingUnit"));
   def(rt, "GetSoldItem", (c) => resp(c, "ManipulatedItem"));

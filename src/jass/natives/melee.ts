@@ -198,9 +198,23 @@ export function registerMeleeNatives(rt: Runtime): void {
   });
   def(rt, "IsPointBlighted", (c, a) => jBool(c.rt.hooks?.isPointBlighted?.(asNum(a[0]), asNum(a[1])) ?? false));
 
-  // --- melee AI (MeleeStartingAI) — no AI scripts yet, so a computer slot just sits there ---
+  // --- melee AI (MeleeStartingAI) ---------------------------------------------------------
+  //
+  // `StartMeleeAI(p, "orc.ai")` is where a computer player is actually seated, and it is the
+  // MAP that gets there: Blizzard.j's MeleeStartingAI walks the slots, keeps the PLAYING ones
+  // whose controller is MAP_CONTROL_COMPUTER, and picks the .ai file for the race each
+  // resolved to. Ours are ports of those same four files (src/ai/, docs/melee-ai.md), so the
+  // filename names the race and nothing else has to be passed.
+  //
+  // Driving it from here rather than from the match setup is the whole point: a map whose
+  // Melee Initialization trigger omits "Run melee AI scripts", and every custom map (which
+  // runs none of the melee library at all), then gets exactly what the real game gives them —
+  // computer slots that sit still, driven by the map's own triggers if it has any.
+  def(rt, "StartMeleeAI", (c, a) => (c.rt.hooks?.startMeleeAI?.(playerIndex(c, a[0]), asStr(a[1])), JNULL));
+  // StartCampaignAI stays a no-op: a chapter's computers are the mission's, and what this
+  // would load is a per-campaign .ai file we do not run.
   for (const name of [
-    "StartMeleeAI", "StartCampaignAI", "CommandAI", "SetPlayerHandicap", "SetPlayerHandicapXP",
+    "StartCampaignAI", "CommandAI", "SetPlayerHandicap", "SetPlayerHandicapXP",
     "RecycleGuardPosition", "RemoveGuardPosition", "SetUnitCreepGuard", "Preloader", "Preload",
     "PreloadStart", "PreloadEnd", "PreloadEndEx", "PreloadRefresh", "PreloadGenClear", "PreloadGenStart",
   ]) {

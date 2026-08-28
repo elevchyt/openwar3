@@ -1133,6 +1133,15 @@ export interface TrainEvent {
   phase: "start" | "cancel" | "finish";
 }
 
+/** A unit BOUGHT from a shop — EVENT_(PLAYER_)UNIT_SELL, the unit twin of a sold ITEM. A
+ *  Tavern's heroes, a Mercenary Camp's creeps, a Goblin Laboratory's zeppelin: every one of
+ *  them arrives through the same queue a barracks trains from, so `noteTrainFinish` is where
+ *  the two part company — a `Sellunits` ware is a SALE, anything else a training. */
+export interface SellUnitEvent {
+  shop: EventUnitInfo; // GetSellingUnit (and GetTriggerUnit)
+  sold: EventUnitInfo; // GetSoldUnit
+}
+
 /** A hero gaining a level (EVENT_PLAYER_HERO_LEVEL) or learning a skill
  *  (EVENT_PLAYER_HERO_SKILL). `abilityId` is set only for "skill". */
 export interface HeroEvent {
@@ -2384,6 +2393,7 @@ export class SimWorld {
   captureTrain = false; // EVENT_(PLAYER_)UNIT_TRAIN_* (7.17)
   captureHeroEvents = false; // EVENT_PLAYER_HERO_LEVEL / _SKILL (7.17)
   captureItems = false; // EVENT_(PLAYER_)UNIT_PICKUP/DROP/USE/SELL_ITEM (7.18)
+  captureSellUnits = false; // EVENT_(PLAYER_)UNIT_SELL — a unit bought from a shop (269/286)
   captureLoads = false; // EVENT_UNIT_LOADED (88) / EVENT_PLAYER_UNIT_LOADED (51)
   private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
   private damageEvents: Array<{ target: EventUnitInfo; source: EventUnitInfo | null; amount: number }> = [];
@@ -2392,6 +2402,7 @@ export class SimWorld {
   private spellEvents: SpellEvent[] = [];
   private constructEvents: ConstructEvent[] = [];
   private trainEvents: TrainEvent[] = [];
+  private sellUnitEvents: SellUnitEvent[] = [];
   private heroEvents: HeroEvent[] = [];
   private itemEvents: ItemEvent[] = [];
   private loadEvents: LoadEvent[] = [];
@@ -6535,12 +6546,38 @@ export class SimWorld {
   }
   /** The engine spawned a trained unit: raise EVENT_(PLAYER_)UNIT_TRAIN_FINISH with it
    *  (GetTrainedUnit). Called from the renderer's drainTrained handler, once the model
-   *  is up and the sim unit exists. */
-  noteTrainFinish(buildingId: number, trainedId: number): void {
-    if (!this.captureTrain) return;
+   *  is up and the sim unit exists.
+   *
+   *  …unless the building SOLD it. A Tavern hero, a Mercenary Camp's ogre and a Goblin
+   *  Laboratory's zeppelin all ride the same queue as a barracks' footman, but WC3 does not
+   *  call buying training: they raise EVENT_(PLAYER_)UNIT_SELL instead, which is a different
+   *  event with a different response (GetSoldUnit, not GetTrainedUnit) and — because a shop is
+   *  Neutral Passive — filed under a different player. `Sellunits` is the whole test, and it
+   *  is the building's own data rather than anything about the transaction.
+   *
+   *  A REVIVE is neither: it comes back through this same drain, but the unit was not made
+   *  here and not bought here. It keeps the training event it has always raised (WC3's own
+   *  answer is EVENT_PLAYER_HERO_REVIVE_FINISH, which we don't raise yet) rather than being
+   *  mistaken for a sale — else waking a fallen hero at a Tavern would look like hiring a new
+   *  one, and melee's twinked-hero count would be spent on a hero that already had its scroll. */
+  noteTrainFinish(buildingId: number, trainedId: number, revive = false): void {
     const b = this.units.get(buildingId);
     const t = this.units.get(trainedId);
-    if (b && t) this.trainEvents.push({ building: eventInfo(b), unitTypeId: t.typeId, trained: eventInfo(t), phase: "finish" });
+    if (!b || !t) return;
+    if (!revive && this.shopWaresOf(buildingId).units.includes(t.typeId)) {
+      if (this.captureSellUnits) this.sellUnitEvents.push({ shop: eventInfo(b), sold: eventInfo(t) });
+      return;
+    }
+    if (!this.captureTrain) return;
+    this.trainEvents.push({ building: eventInfo(b), unitTypeId: t.typeId, trained: eventInfo(t), phase: "finish" });
+  }
+
+  /** Units bought from a shop since the last drain (`captureSellUnits`). */
+  drainSellUnitEvents(): SellUnitEvent[] {
+    if (!this.sellUnitEvents.length) return this.sellUnitEvents;
+    const out = this.sellUnitEvents;
+    this.sellUnitEvents = [];
+    return out;
   }
   /** Training events since the last drain (`captureTrain`). */
   drainTrainEvents(): TrainEvent[] {

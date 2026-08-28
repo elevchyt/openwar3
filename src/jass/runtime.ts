@@ -736,6 +736,15 @@ export interface EngineHooks {
    *  `SetBlightLoc(whichPlayer, nearMineLoc, 768, true)`); no player, because blight belongs
    *  to the ground rather than to anybody (see SimWorld.setBlight). */
   setBlight?(x: number, y: number, radius: number, add: boolean): void;
+  /** StartMeleeAI(p, "orc.ai") — seat a computer player behind Blizzard's own melee AI.
+   *
+   *  The SCRIPT decides this, and that is the point of the hook. `MeleeStartingAI` walks the
+   *  slots, keeps the ones that are PLAYING and MAP_CONTROL_COMPUTER, and hands each its
+   *  race's script through `PickMeleeAI` — so a map that leaves the action out of its Melee
+   *  Initialization trigger gets no computer opponents, and a custom map that never calls it
+   *  gets none either. `script` is the .ai filename the game would have loaded; ours are
+   *  ports of those four files (src/ai/, docs/melee-ai.md), so the name IS the race. */
+  startMeleeAI?(player: number, script: string): void;
   /** GetPlayerStructureCount / GetPlayerUnitCount — melee defeat is "my team owns no
    *  structures", so these decide who has lost (MeleeCheckForLosersAndVictors). */
   playerStructureCount?(player: number, includeIncomplete: boolean): number;

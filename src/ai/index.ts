@@ -56,6 +56,28 @@ const SCRIPTS: Record<PlayableRace, MeleeScript> = {
   nightelf: ELF_AI,
 };
 
+/** The `.ai` filenames Blizzard.j's MeleeStartingAI hands to `StartMeleeAI`, and the race each
+ *  one plays. These four ARE the four scripts above (`Scripts\human.ai` / `orc.ai` /
+ *  `undead.ai` / `elf.ai` in the install, ported function for function — see
+ *  docs/melee-ai.md), so the filename the map's script names is all we need to seat a
+ *  computer. Note the night elf's is `elf.ai`, not `nightelf.ai`. */
+export const AI_SCRIPT_RACES: Record<string, PlayableRace> = {
+  "human.ai": "human",
+  "orc.ai": "orc",
+  "undead.ai": "undead",
+  "elf.ai": "nightelf",
+};
+
+/** The same table read the other way — which file MeleeStartingAI would name for a race. Only
+ *  the no-script melee fallback needs it (MapViewerScene.startMeleeFallback stands in for the
+ *  trigger that would have picked the file). */
+export const AI_SCRIPT_FOR: Record<PlayableRace, string> = {
+  human: "human.ai",
+  orc: "orc.ai",
+  undead: "undead.ai",
+  nightelf: "elf.ai",
+};
+
 type CaptainMode = "idle" | "forming" | "attacking" | "home";
 
 interface Brain {

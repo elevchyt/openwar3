@@ -45,7 +45,7 @@ import { resolveTipRefs } from "../data/tipRefs";
 import { disabledIconPath } from "../data/commandStrings";
 import { type ItemRegistry } from "../data/items";
 import { workerProfileFor, depotRoleFor, type PlayableRace } from "../data/races";
-import { MeleeAi } from "../ai";
+import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -775,22 +775,28 @@ export class RtsController {
   }
 
   /**
-   * Put Blizzard's own melee AI behind the lobby's computer slots (issue #119; src/ai/).
+   * ARM Blizzard's own melee AI with the lobby's computer seats (issue #119; src/ai/).
    *
-   * `MeleeStartingAI` is where the real game does this — the map's own Melee Initialization
-   * trigger calls it, and the engine loads `Scripts\<race>.ai` for each computer. Ours is
-   * called from the same place for the same slots (see MapViewerScene.beginMatch); the
-   * native stays a no-op, because what it would have loaded is a JASS file we do not run.
+   * Arm, not start. `MeleeStartingAI` is what actually seats a computer in the real game — the
+   * map's own Melee Initialization trigger calls it, and the engine loads `Scripts\<race>.ai`
+   * for each slot that is PLAYING and MAP_CONTROL_COMPUTER — and that call now reaches us, one
+   * player at a time, as `StartMeleeAI` (→ `startMeleeAIFor`). So this only records what the
+   * LOBBY knows and the script does not: which seat sits where, at what difficulty, off which
+   * match seed. A map whose init trigger omits "Run melee AI scripts", and every custom map
+   * (which runs none of the melee library), gets no computer opponents at all — which is what
+   * the real game does with them, and used to be something we did anyway.
    *
    * AUTHORITY-SIDE ONLY, by construction: `tick` drives it inside the branch a frozen client
    * never enters, and every decision leaves through `execute`, which is the same door and the
    * same judgement a human player's click gets. A computer cannot cheat here because there is
    * no route by which it could.
    */
-  startMeleeAI(
+  prepareMeleeAI(
     slots: ReadonlyArray<{ player: number; race: PlayableRace; startX: number; startY: number; difficulty: number }>,
     seed: number,
   ): void {
+    this.meleeSeats = new Map(slots.map((s) => [s.player, s]));
+    this.meleeSeed = seed;
     // Built here rather than as a field: `this.sim` is assigned in the constructor BODY, so a
     // field initializer that reached for it would capture `undefined`.
     this.meleeAi = new MeleeAi({
@@ -807,24 +813,45 @@ export class RtsController {
       // tick 0 (VisionSet.seat), so this is the same grid its units acquire through.
       visible: (player, x, y) => this.viewpoints.viewpointFor(player).vision.stateAt(x, y) === FogState.Visible,
     });
-    for (const s of slots) {
-      this.meleeAi.add(s.player, s.race, s.difficulty, s.startX, s.startY, seed);
-      // The one thing an INSANE computer gets that is the engine's rather than the script's:
-      // it is credited TWICE what its workers actually carried home. common.ai never mentions
-      // MELEE_INSANE — the difficulty is not in the strategy, it is in the till.
-      //
-      // "On insane difficulty in Warcraft III skirmishes, the AI receives twice the amount of
-      // gold and lumber as the player than what it actually harvested, whereas on easy and
-      // normal difficulty it only receives the normal amount" (TV Tropes, Not Playing Fair
-      // With Resources; the same doubling is described on the Hive thread "How to double
-      // resources workers harvest?" as the Insane AI banking +20 for a +10 load).
-      //
-      // Applied to the CREDIT and not to the load, which is why the multiplier lives on the
-      // stash rather than on the Harvest ability's gold capacity: the mine still gives up ten
-      // gold a trip and runs dry on the same schedule as everybody's. An insane computer is
-      // paid double for the same digging, not digging twice as fast.
-      if (s.difficulty === MELEE_INSANE) this.sim.setHarvestBonus(s.player, INSANE_HARVEST_FACTOR);
-    }
+  }
+
+  /** The lobby's answer for each computer seat — where it starts and how hard it plays — held
+   *  until the map's script asks for it. Empty outside a match. */
+  private meleeSeats = new Map<number, { player: number; race: PlayableRace; startX: number; startY: number; difficulty: number }>();
+  private meleeSeed = 1;
+
+  /**
+   * `StartMeleeAI(p, "orc.ai")` — put ONE computer behind Blizzard's melee AI.
+   *
+   * Called from the map's own script (Blizzard.j MeleeStartingAI → PickMeleeAI), which is the
+   * only thing in the game that seats a melee computer. The RACE comes from the script's
+   * filename, exactly as it does in the original, so a map that asks for "orc.ai" gets an orc
+   * player whatever the lobby said; a name we don't recognise falls back to the seat's own race.
+   *
+   * The seat itself (start location, difficulty, the match seed) is the LOBBY's and was armed
+   * by `prepareMeleeAI` before a line of the script ran — the script names who plays, not
+   * where they sit.
+   */
+  startMeleeAIFor(player: number, script: string): void {
+    const seat = this.meleeSeats.get(player);
+    if (!this.meleeAi || !seat) return;
+    const race = AI_SCRIPT_RACES[script.toLowerCase()] ?? seat.race;
+    this.meleeAi.add(player, race, seat.difficulty, seat.startX, seat.startY, this.meleeSeed);
+    // The one thing an INSANE computer gets that is the engine's rather than the script's:
+    // it is credited TWICE what its workers actually carried home. common.ai never mentions
+    // MELEE_INSANE — the difficulty is not in the strategy, it is in the till.
+    //
+    // "On insane difficulty in Warcraft III skirmishes, the AI receives twice the amount of
+    // gold and lumber as the player than what it actually harvested, whereas on easy and
+    // normal difficulty it only receives the normal amount" (TV Tropes, Not Playing Fair
+    // With Resources; the same doubling is described on the Hive thread "How to double
+    // resources workers harvest?" as the Insane AI banking +20 for a +10 load).
+    //
+    // Applied to the CREDIT and not to the load, which is why the multiplier lives on the
+    // stash rather than on the Harvest ability's gold capacity: the mine still gives up ten
+    // gold a trip and runs dry on the same schedule as everybody's. An insane computer is
+    // paid double for the same digging, not digging twice as fast.
+    if (seat.difficulty === MELEE_INSANE) this.sim.setHarvestBonus(player, INSANE_HARVEST_FACTOR);
   }
 
   private meleeAi: MeleeAi | null = null;
@@ -5964,6 +5991,10 @@ export class RtsController {
       }),
       ...visionHooks(this.viewpoints, this.alliances),
       ...rosterHooks(this.sim, this.registry, teamOf),
+      // `StartMeleeAI` — the map's Melee Initialization trigger seating a computer player.
+      // Here rather than in a sub-module because the brains are the CONTROLLER's: they issue
+      // their orders through `execute`, the same door a click goes through.
+      startMeleeAI: (player, script) => this.startMeleeAIFor(player, script),
     };
   }
 

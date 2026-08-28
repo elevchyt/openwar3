@@ -76,6 +76,12 @@ export interface TrainEvent {
   trained: UnitSnapshot | null;
   phase: "start" | "cancel" | "finish";
 }
+/** A unit BOUGHT from a shop — EVENT_(PLAYER_)UNIT_SELL. `shop` is GetSellingUnit (and the
+ *  subject a unit-scoped registration watches, as with a sold ITEM), `sold` is GetSoldUnit. */
+export interface SellUnitEvent {
+  shop: UnitSnapshot;
+  sold: UnitSnapshot;
+}
 /** A hero levelling up or learning a skill (7.17). */
 export interface HeroEvent {
   hero: UnitSnapshot;
@@ -157,6 +163,13 @@ const EVENT_PLAYER_UNIT_DROP_ITEM = 48;
 const EVENT_UNIT_DROP_ITEM = 85;
 const EVENT_PLAYER_UNIT_SELL_ITEM = 271;
 const EVENT_UNIT_SELL_ITEM = 288;
+// A unit BOUGHT from a shop — a Tavern hero, a Mercenary Camp's ogre (common.j 269 player /
+// 286 unit). One event id apart from SELL_ITEM and a different event: this one hands the
+// script GetSoldUnit, and blizzard.j's melee opening is its headline caller
+// (MeleeGrantHeroItems registers it on Player(PLAYER_NEUTRAL_PASSIVE) so a hired hero gets
+// the same Scroll of Town Portal a trained one does).
+const EVENT_PLAYER_UNIT_SELL = 269;
+const EVENT_UNIT_SELL = 286;
 /** The three contiguous item phases, in common.j's order (phase index + base = event id). */
 const ITEM_PHASES = ["drop", "pickup", "use"] as const;
 // A unit loaded into a transport / burrow (common.j 51 player, 88 unit).
@@ -1216,8 +1229,16 @@ export class Interpreter {
       ]);
       const playerEvt = e.phase === "start" ? EVENT_PLAYER_UNIT_TRAIN_START : e.phase === "cancel" ? EVENT_PLAYER_UNIT_TRAIN_CANCEL : EVENT_PLAYER_UNIT_TRAIN_FINISH;
       const unitEvt = e.phase === "start" ? EVENT_UNIT_TRAIN_START : e.phase === "cancel" ? EVENT_UNIT_TRAIN_CANCEL : EVENT_UNIT_TRAIN_FINISH;
+      // The registration's FILTER, though, is asked about the unit that walked out — not
+      // about the building. blizzard.j is the proof: MeleeGrantHeroItems registers
+      // TRAIN_FINISH with `filterMeleeTrainedUnitIsHeroBJ`, whose whole body is
+      // `IsUnitType(GetFilterUnit(), UNIT_TYPE_HERO)`. Ask that of a Barracks and it is never
+      // true, so no melee hero was ever handed its Scroll of Town Portal; ask it of the unit
+      // that finished and the game's own rule falls out — heroes get one, footmen don't.
+      // A start/cancel has no trained unit yet (only a type), so there the building stands.
+      const filterSubject = e.trained ? (responses.get("TrainedUnit") as JassValue) : b;
       this.dispatchToRegs(responses, (reg) =>
-        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.building.owner, b)) ||
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.building.owner, b, filterSubject)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, b)));
     }
   }
@@ -1276,6 +1297,36 @@ export class Interpreter {
       this.dispatchToRegs(responses, (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, owner, subject)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, subject)));
+    }
+  }
+
+  /**
+   * Pump unit SALES — a hero hired at a Tavern, an ogre at a Mercenary Camp, a zeppelin at a
+   * Goblin Laboratory: EVENT_PLAYER_UNIT_SELL (269) / EVENT_UNIT_SELL (286).
+   *
+   * The event belongs to the SHOP, exactly as a sold ITEM's does: blizzard.j registers it on
+   * `Player(PLAYER_NEUTRAL_PASSIVE)` — a Tavern's owner — and the human who just paid 425 gold
+   * is nobody's neutral-passive unit. So the owner matched, the subject a unit-scoped
+   * registration watches and GetTriggerUnit are all the shop; what the sale is ABOUT — the
+   * unit that was bought, and what the registration's filter is asked about — is GetSoldUnit.
+   *
+   * This is the second half of MeleeGrantHeroItems: a melee player's first hero carries a
+   * Scroll of Town Portal whether it was trained at an Altar or woken at a Tavern.
+   */
+  pumpSellUnitEvents(events: ReadonlyArray<SellUnitEvent>): void {
+    for (const e of events) {
+      const shop = this.rt.unitForSim(e.shop);
+      const sold = this.rt.unitForSim(e.sold);
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", shop],
+        ["SellingUnit", shop],
+        ["SoldUnit", sold],
+        // GetBuyingUnit — for a UNIT sale WC3 has no patron standing at the counter (you hire
+        // a Tavern hero with the shop selected, not with a unit), so the buyer reads null.
+      ]);
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_SELL, e.shop.owner, shop, sold)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_SELL) && this.paramUnitIs(reg, shop)));
     }
   }
 
@@ -1489,11 +1540,16 @@ export class Interpreter {
     return this.rt.enumIndex(reg.params[1] ?? JNULL) === index;
   }
   /** A player-unit-event registration matches: right event index, the subject's owner,
-   *  and its optional boolexpr filter (params[2]) passes. */
-  private playerUnitEventMatches(reg: TriggerReg, eventIndex: number, owner: number, unit: JassValue): boolean {
+   *  and its optional boolexpr filter (params[2]) passes.
+   *
+   *  `filterUnit` is what GetFilterUnit answers inside that boolexpr, and it is NOT always
+   *  `unit`: an event filed under a building's owner can still be ABOUT the unit that left it
+   *  (a trained hero, a hired mercenary). Defaults to the subject, which is right everywhere
+   *  the two are the same thing. */
+  private playerUnitEventMatches(reg: TriggerReg, eventIndex: number, owner: number, unit: JassValue, filterUnit: JassValue = unit): boolean {
     return this.rt.enumIndex(reg.params[1] ?? JNULL) === eventIndex
       && this.rt.data<JassPlayer>(reg.params[0])?.index === owner
-      && this.eventFilterPasses(reg.params[2], unit);
+      && this.eventFilterPasses(reg.params[2], filterUnit);
   }
 }
 

@@ -258,6 +258,29 @@ staged fight shows Purge, Sentry Ward, Shock Wave, War Stomp and Feral Spirit go
 the first seconds, and every caster dry a few seconds later: **mana is what paces this**, not the
 clock.
 
+## Who seats a computer: the MAP does
+
+Nothing in the engine decides that a slot plays itself. `MeleeStartingAI` — the seventh action of
+a melee map's *Melee Initialization* trigger — walks the twelve slots, keeps the ones that are
+`PLAYER_SLOT_STATE_PLAYING` **and** `MAP_CONTROL_COMPUTER`, and hands each one its race's script
+through `PickMeleeAI` → `StartMeleeAI(p, "orc.ai")`. That native is our seam
+([`natives/melee.ts`](../src/jass/natives/melee.ts) → `EngineHooks.startMeleeAI` →
+`RtsController.startMeleeAIFor`), and the **filename names the race** — `elf.ai`, not
+`nightelf.ai` — because our four race files are ports of those four files.
+
+The lobby still owns what the script cannot know: where the seat starts, at what difficulty, off
+which match seed. `RtsController.prepareMeleeAI` records that during match setup and seats
+nobody; the script does the seating.
+
+This is not bookkeeping. It is what makes the melee AI a **melee** rule instead of an engine
+rule: a map that leaves the action out of its init trigger gets no computer opponents, a custom
+(use-map-settings) map — which runs none of the melee library — gets none either, and a campaign
+chapter gets none because its script never asks. We used to start the AI from `beginMatch` for
+every non-campaign map, so a custom map's computer slots were handed a melee build order the real
+game would never have given them. The one place that still seats a computer without a script is
+`MapViewerScene.startMeleeFallback`, and only because it stands in for a melee map's missing
+script wholesale (roster, purse, hero caps and all).
+
 ## Where it runs, and why it cannot cheat
 
 `RtsController.tick` drives `MeleeAi` inside the branch a frozen LAN client never enters, so
@@ -272,8 +295,9 @@ Two consequences worth keeping:
 - The AI never touches `SimWorld.random()`. That stream is part of the match's identity; an AI
   drawing from it would advance it on the host and nowhere else. It has its own Park–Miller
   stream, seeded from the match seed plus the slot index.
-- A campaign chapter gets **no** melee AI. Its computers are the mission's, driven by its own
-  triggers — handing them a build order would have Illidan's Naga putting up Moon Wells.
+- A campaign chapter gets **no** melee AI — and now for the game's own reason rather than ours:
+  its script never calls `MeleeStartingAI` (see above). Its computers are the mission's, driven by
+  its own triggers; handing them a build order would have Illidan's Naga putting up Moon Wells.
 
 ## Testing it
 

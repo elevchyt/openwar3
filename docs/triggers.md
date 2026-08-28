@@ -759,13 +759,29 @@ function Trig_Melee_Initialization_Actions takes nothing returns nothing
     call MeleeStartingResources(  )    // 500 gold / 150 lumber (the TFT _V1 constants)
     call MeleeClearExcessUnits(  )     // wipe the creeps camped on a USED start location
     call MeleeStartingUnits(  )        // the town hall + the 5 workers clumped by the nearest mine
-    call MeleeStartingAI(  )           // (no AI scripts yet — a computer slot just sits)
+    call MeleeStartingAI(  )           // every COMPUTER slot gets its race's .ai script
     call MeleeInitVictoryDefeat(  )    // no structures = defeated; no main hall = crippled
 endfunction
 ```
 
 All eight are **Blizzard's own JASS** (`Scripts\Blizzard.j` in the MPQs) — we *interpret* them, so the
-rules and the numbers are the game's, not our guess at them. `mapViewer.startMelee` now just brings the
+rules and the numbers are the game's, not our guess at them. **Including which ones happen at all**: an
+action a map leaves out of its init trigger does not happen, and a custom map — which runs none of this
+library — gets none of it. Two of the eight took a while to be true in that sense:
+
+- **`MeleeStartingAI` used to be ours.** `beginMatch` seated a melee AI behind every computer slot of
+  every non-campaign map, script or no script. It is now `StartMeleeAI(p, "orc.ai")`, called from the
+  map's own trigger — see [`melee-ai.md`](melee-ai.md) "Who seats a computer".
+- **`MeleeGrantHeroItems` ran and did nothing.** It arms two triggers rather than acting, and both carry
+  `filterMeleeTrainedUnitIsHeroBJ` — `IsUnitType(GetFilterUnit(), UNIT_TYPE_HERO)`. We were asking that
+  of the training BUILDING, which is never a hero, so no melee hero was ever handed the Scroll of Town
+  Portal that opens every melee game. A registration's **filter** is asked about the unit the event is
+  *about* (`GetTrainedUnit`, `GetSoldUnit`), even when the event is *filed under* the building's owner
+  and a unit-scoped registration watches the building. The other half of it — a hero **hired** at a
+  Tavern — needed `EVENT_(PLAYER_)UNIT_SELL` (269/286) to exist at all: a shop hire rides the same
+  queue a barracks trains from, so `SimWorld.noteTrainFinish` splits them on the building's own
+  `Sellunits` (buying is not training, and WC3 raises a different event with a different response for
+  it). `tools/jass-melee-test.cjs` pins all of it against the real `Blizzard.j`. `mapViewer.startMelee` now just brings the
 match up and runs the script; the hard-coded roster (`STARTING_UNITS` / `MELEE_WORKER_CLUSTERS`) survives
 only as `startMeleeFallback`, for a melee-flagged map that ships no script at all.
 

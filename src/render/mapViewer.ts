@@ -55,6 +55,7 @@ interface CreepSeed {
 }
 import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, isHarvestCode, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
 import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
+import { AI_SCRIPT_FOR } from "../ai";
 import { labelOf, slotOptionValue } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
 import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
@@ -1959,26 +1960,30 @@ export class MapViewerScene {
     if (config.fog === "explored") this.rts!.exploreAll();
     else if (config.fog === "revealall") this.rts!.setRevealAll(true);
     this.applyRaceCursor();
-    // `MeleeStartingAI` — every computer slot gets Blizzard's own melee AI for the race it
-    // resolved to (issue #119; src/ai/). Only a MELEE match: a campaign chapter's computers
-    // are the mission's, driven by its own triggers, and handing them a build order would
-    // have Illidan's Naga putting up Moon Wells. Each slot brings its OWN `MeleeDifficulty()`
-    // — the Easy/Normal/Insane its name menu named — and a config that names none (an older
-    // LAN peer, a dev boot) reads as the middle one, which is what every seat used to be.
-    if (!this.campaign) {
-      this.rts!.startMeleeAI(
-        config.slots
-          .filter((s) => s.controller === "computer")
-          .map((s) => ({
-            player: s.id,
-            race: races.get(s.id) ?? "human",
-            startX: s.startX,
-            startY: s.startY,
-            difficulty: s.aiDifficulty ?? MELEE_AI_NORMAL,
-          })),
-        config.seed ?? 1,
-      );
-    }
+    // ARM Blizzard's own melee AI with this lobby's computer seats (issue #119; src/ai/).
+    //
+    // Nothing is seated yet, and that is the change: `MeleeStartingAI` — the seventh action of
+    // a melee map's own Melee Initialization trigger — is what puts a computer behind a slot,
+    // and it now reaches us as `StartMeleeAI` per player (RtsController.startMeleeAIFor). So a
+    // CAMPAIGN chapter gets no melee AI because its script never asks for one, rather than
+    // because we refuse it here; a custom map's computers stay the mission's, driven by its own
+    // triggers, instead of being handed a build order that would have Illidan's Naga putting up
+    // Moon Wells. What this hands over is only what the lobby knows and the script cannot: each
+    // seat's start location and its OWN `MeleeDifficulty()` — the Easy/Normal/Insane its name
+    // menu named, with a config that names none (an older LAN peer, a dev boot) reading as the
+    // middle one, which is what every seat used to be.
+    this.rts!.prepareMeleeAI(
+      config.slots
+        .filter((s) => s.controller === "computer")
+        .map((s) => ({
+          player: s.id,
+          race: races.get(s.id) ?? "human",
+          startX: s.startX,
+          startY: s.startY,
+          difficulty: s.aiDifficulty ?? MELEE_AI_NORMAL,
+        })),
+      config.seed ?? 1,
+    );
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     // …and the supply CEILING this map asks for, before a line of its script runs — a chapter
     // that lowers it (HumanX04's `[Misc] FoodCeiling=30`) is stating the size of the army you
@@ -2096,6 +2101,14 @@ export class MapViewerScene {
           if (d.isHero) tech.setMaxAllowed(slot.id, d.id, MELEE.MELEE_HERO_TYPE_LIMIT);
         }
       }
+    }
+    // …and `MeleeStartingAI`, the seventh action, which is the script's too: with no script to
+    // call `StartMeleeAI` every computer slot would sit still for the whole match. The race
+    // each would have been named by (`human.ai` / `orc.ai` / `undead.ai` / `elf.ai`) is the one
+    // the lobby resolved, so hand the seat its own file back.
+    for (const slot of config.slots) {
+      if (slot.controller !== "computer") continue;
+      this.rts.startMeleeAIFor(slot.id, AI_SCRIPT_FOR[races.get(slot.id) ?? "human"]);
     }
     // Clear the creep camps on each USED start location so bases spawn on clean ground
     // (what MeleeClearExcessUnits does from the script). Unused start locations keep theirs.
@@ -2886,6 +2899,10 @@ export class MapViewerScene {
     // is 271 / 288.
     sw.captureItems = any("playerUnitEvent", 48, 50) || any("unitEvent", 85, 87)
       || any("playerUnitEvent", 271) || any("unitEvent", 288);
+    // …and a unit BOUGHT from a shop — SELL, 269 player / 286 unit, one id apart from
+    // SELL_ITEM and a separate event. Every melee map registers it: MeleeGrantHeroItems
+    // watches the neutral-passive shops so a Tavern hero gets the same starting scroll.
+    sw.captureSellUnits = any("playerUnitEvent", 269) || any("unitEvent", 286);
     // LOADED — 51 player / 88 unit. A campaign harbour scene is the case: the ship leaves the
     // moment its passenger is aboard, and it is a unit-scoped registration on the PASSENGER.
     sw.captureLoads = any("playerUnitEvent", 51) || any("unitEvent", 88);
@@ -2953,6 +2970,8 @@ export class MapViewerScene {
       if (construct.length) engine.interp.pumpConstructEvents(construct);
       const trains = sw.drainTrainEvents();
       if (trains.length) engine.interp.pumpTrainEvents(trains);
+      const sales = sw.drainSellUnitEvents();
+      if (sales.length) engine.interp.pumpSellUnitEvents(sales);
       const heroes = sw.drainHeroEvents();
       if (heroes.length) engine.interp.pumpHeroEvents(heroes);
       // 7.18: items picked up / dropped / used (a trigger's UnitAddItem and a hero walking
@@ -9405,7 +9424,7 @@ export class MapViewerScene {
       // EVENT_(PLAYER_)UNIT_TRAIN_FINISH (7.17) — raised HERE, not in the sim: the trained
       // unit is born in the renderer (the sim owns no models), and GetTrainedUnit must hand
       // the script the real unit. It fires on completion now, not a model-load later.
-      world.noteTrainFinish(buildingId, simId);
+      world.noteTrainFinish(buildingId, simId, !!t.reviveOf);
       void this.spawnUnit(d, sx, sy, t.owner, team, 0, TRAINED_FACING, simId);
     }
     this.raiseEntangledMines(world);
