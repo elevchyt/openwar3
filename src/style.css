@@ -1226,13 +1226,13 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
   z-index: 7;
   image-rendering: pixelated;
 }
-/* An item being moved between inventory slots: the icon, and the closed gauntlet that is
-   holding it. Both are DOM, and that is the point — the gauntlet has to be UNDER the icon,
-   and a CSS `cursor:` can never be under anything on the page, so while `carrying-item` is
-   on the OS pointer is hidden (see applyRaceCursor) and this pair is the cursor. Placed
-   entirely from JS (updateCarriedItem): the icon is sized off the live inventory slot,
-   since the console scales with the window, and the hand's offset is a fraction of that
-   size. Neither ever captures the pointer — the drop target does. */
+/* An item being moved between inventory slots: the icon, and the closed gauntlet gripping
+   it. Both are DOM, because the gauntlet is set a whole icon away from the pointer's tip
+   and a CSS `cursor:` can only offset itself by a hotspot inside its own image — so while
+   `carrying-item` is on the OS pointer is hidden (see applyRaceCursor) and this pair is the
+   cursor. Placed entirely from JS (updateCarriedItem): the icon is sized off the live
+   inventory slot, since the console scales with the window, and the hand's offset is a
+   fraction of that size. Neither ever captures the pointer — the drop target does. */
 .carried-item,
 .carried-hand {
   position: fixed;
@@ -1244,7 +1244,7 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
    plain replaceable-texture quad), and a border or a cast shadow reads as a second,
    floating UI element rather than as the thing in the gauntlet's fist. */
 .carried-item { z-index: 9; }
-.carried-hand { z-index: 8; } /* behind the icon, so the fingers vanish under it */
+.carried-hand { z-index: 10; } /* in front of the icon — the fingers close OVER it */
 .order-reticle.reticle { transform: translate(-50%, -50%); } /* centred on the point */
 .order-reticle.hand { transform: translate(-3px, -3px); } /* hotspot near the tip */
 /* Pulse the COLOUR intensity only — never opacity, never size. brightness()

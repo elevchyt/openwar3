@@ -279,11 +279,11 @@ const SPELL_SOUND_ART: Record<string, (d: AbilityDef) => string[]> = {
 const CARRIED_ITEM_SCALE = 0.85;
 // Where the two halves of the carried cursor sit, both measured from the pointer's tip.
 // The icon is offset a few pixels the way the idle pointer already leans; the gauntlet is
-// then set DOWN and RIGHT of the icon by a fraction of the icon's own size, so its fingers
-// — which point up-left — disappear behind the icon and only the closed fist reads. Kept
-// in px-of-the-icon rather than absolute px because the icon scales with the console.
+// then set DOWN and RIGHT of the icon by a fraction of the icon's own size, so its curled
+// fingers close over the icon's right-hand edge. Kept in px-of-the-icon rather than
+// absolute px because the icon scales with the console.
 const CARRIED_ITEM_OFFSET: [number, number] = [6, 8];
-const CARRIED_HAND_OFFSET: [number, number] = [0.65, 0.3];
+const CARRIED_HAND_OFFSET: [number, number] = [0.6, 0.3];
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
 // Command-card icons that aren't tied to a specific unit/ability: the order row
 // (Move/Stop/Hold/Attack/Patrol), a worker's Build/Repair, Cancel, and the four
@@ -9062,16 +9062,18 @@ export class MapViewerScene {
     // The other two states this sheet answers for, both read off `UI\Cursor\<race>Cursor.mdx`
     // rather than guessed at — the model names its sequences and drives the cell with a
     // KTAT texture-translation, so the frames below are the ones the real cursor shows:
-    //  - "HoldItem" (an item right-clicked out of the inventory) = row 3, col 4 — the
-    //    CLOSED gauntlet, shown together with geoset 1 (a replaceable-21 quad — the item's
-    //    own icon). It is drawn as DOM rather than set as a `cursor:`, because the icon has
-    //    to sit IN FRONT of the fist and nothing on the page can ever be in front of the
-    //    OS pointer (see .carried-hand / updateCarriedItem).
+    //  - "HoldItem" (an item right-clicked out of the inventory) = row 3, shown together
+    //    with geoset 1 (a replaceable-21 quad — the item's own icon). The sequence keys TWO
+    //    cells: col 4 (the finger still out) for its length and col 3 (the finger curled
+    //    shut) on its very last frame — so col 3 is the pose it comes to REST in, and the
+    //    one that reads as a grip. It is drawn as DOM rather than set as a `cursor:`
+    //    because it sits a whole icon away from the pointer's tip, which no cursor hotspot
+    //    can express (see .carried-hand / updateCarriedItem).
     //  - "Scroll *" (edge-panning) = row 3, cols 5/6/7 — the three chevron frames, stepped
     //    every 33ms (the model's keys sit 33 apart, interpolation NONE). All eight
     //    directions play THOSE SAME three cells and differ only by a Z rotation on the
     //    node, so one strip + a CSS rotate is the whole thing (see showScrollArrow).
-    this.holdHandUrl = this.cursorCellUrl(3, 4);
+    this.holdHandUrl = this.cursorCellUrl(3, 3);
     this.scrollStripUrl = this.cursorStripUrl(3, 5, 3);
     // Force the WC3 cursor over the ENTIRE in-game UI — buttons, the map, the
     // minimap, everything — overriding the default pointer/crosshair cursors so
@@ -11478,10 +11480,10 @@ export class MapViewerScene {
    *  (another slot, the ground, an allied hero); body-fixed like the reticle, so
    *  `clientX`/`clientY` are viewport coords.
    *
-   *  Two DOM elements rather than a `cursor:` and one element, because the ICON has to be in
-   *  front of the FIST and the OS pointer is always in front of the whole page — so the
-   *  gauntlet could never get behind the icon while it was the cursor. `carrying-item` hides
-   *  the OS pointer for exactly as long as this pair stands in for it. */
+   *  Two DOM elements rather than a `cursor:` and one element, because the gauntlet sits a
+   *  whole icon's width away from the pointer's tip and a cursor hotspot can only be a point
+   *  INSIDE its own image. `carrying-item` hides the OS pointer for exactly as long as this
+   *  pair stands in for it. */
   private updateCarriedItem(slot: number, clientX: number, clientY: number): void {
     const icon = slot >= 0 ? this.rts?.inventorySlots()[slot]?.icon : "";
     const url = icon ? this.blpIcon(icon) : null;
