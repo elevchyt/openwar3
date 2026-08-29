@@ -403,6 +403,15 @@ reached about a smaller group, and it is why a Computer+ hero does not die to a 
 have walked out of. Never from the doorstep of its own base, where it would be spent to travel no
 distance.
 
+It leaves at `ESCAPE_HP` (40 %) rather than at the panic line, and the reason is easy to get
+backwards: once the scroll is *pressed* the hero is invulnerable for the whole five seconds and
+**cannot die mid-channel**. The only window in which a hero holding one can be killed is the
+window *before* it presses, and the width of that window is the AI's own reaction — the belt is
+walked once per `castPeriod`, a whole second on Normal. A hero at 30 % with an army on it does not
+reliably survive a second, so a threshold set at the panic line is one that is sometimes read for
+the first time after the hero is already dead. 40 % is `HERO_KILL_HP`: the point the AI's own
+targeting would start treating this hero as a kill.
+
 It is aimed at **the hero itself**, which is the **double-click** — `itemTownPortal` resolves to
 the hall nearest the clicked point, so clicking the hero is "the user's own nearest hall"
 ([`items.md`](./items.md) § the one item that is not instant). Aiming at the main base instead is

@@ -1605,6 +1605,10 @@ export interface SimUnit {
    * is why the party is gathered when the clock runs out rather than when the scroll is
    * pressed — the army it saves is whatever is still standing five seconds later.
    *
+   * Note which way round the invulnerability cuts: once the scroll is pressed the hero **cannot
+   * die**, so the five seconds are the SAFE part and the channel is never a risk to take. The
+   * only window in which a hero holding one can be killed is the window BEFORE it presses.
+   *
    * Not routed through `pendingCast`: an item ability is not in `SimUnit.abilities` at all
    * (docs/items.md), so the spell pipeline has nothing to hang it on. This is its own small
    * clock, in the shape of `morphT` — which is the same kind of thing, a committed transition
@@ -9703,6 +9707,9 @@ export class SimWorld {
     // refuses the order; this is the half that lets the CARD know, so Unburrow reads as
     // unpressable until the Crypt Fiend is actually underground.
     if (u.morphT > 0) return SILENT_REFUSAL;
+    // …nor a hero channelling a Town Portal, which is the same kind of lock and is spelt out in
+    // the same breath as the item one: "cannot do any action … nor his spell".
+    if (u.portalLeft > 0) return SILENT_REFUSAL;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     if (ab.cooldownLeft > 0) return "Cooldown"; // "Spell is not ready yet."
     if (u.mana < lvl.cost) return "Nomana"; // "Not enough mana."
@@ -15780,6 +15787,12 @@ export class SimWorld {
     // charge would not come off the real hero's.
     const u = this.units.get(unitId);
     if (!u || u.isIllusion || !this.itemReg || !this.abilities) return false;
+    // …and neither can a hero mid-Town-Portal: "During the channeling, the Hero cannot do any
+    // action (such as move, attack, USE ANY OTHER ITEM nor his spell)" — Blizzard's own words,
+    // quoted in full at SimUnit.portalLeft. Here rather than only in `itemReadyError` because
+    // this is the door the AUTHORITY calls (it does not ask the error first), so a command off
+    // the wire would otherwise walk straight past the lock the order path already has.
+    if (u.portalLeft > 0) return false;
     const held = u.inventory[slot];
     if (!held || held.cooldownLeft > 0) return false;
     const def = this.itemReg.get(held.itemId);
@@ -16157,6 +16170,10 @@ export class SimWorld {
     if (!u || !this.itemReg) return "Cantuseitem";
     const held = u.inventory[slot];
     if (!held) return "Cantuseitem";
+    // Mid-Town-Portal: nothing may be pressed at all. Silent, in the shape `castUseError` uses
+    // for a morphing unit — WC3 greys the button rather than saying anything, so there is no
+    // line to borrow. `useItem` refuses it too; this is the half that lets the CARD know.
+    if (u.portalLeft > 0) return SILENT_REFUSAL;
     if (held.cooldownLeft > 0) return "Itemcooldown"; // "This item is cooling down."
     const def = this.itemReg.get(held.itemId);
     if (!def?.usable) return "Cantuseitem";

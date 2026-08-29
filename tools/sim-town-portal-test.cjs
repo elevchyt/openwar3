@@ -164,6 +164,28 @@ console.log("\n-- the five seconds ---------------------------------------------
   check("…and able to move again", h.speed > 0, true);
 }
 
+console.log("\n-- nothing else, while it is channelling ------------------------------------");
+
+{
+  // "During the channeling, the Hero cannot do any action (such as move, attack, USE ANY OTHER
+  // ITEM nor his spell)." The order lock (castLocked) is only a third of that sentence; the
+  // other two thirds are the item door and the spell door, and both are reachable WITHOUT
+  // going through an order — `Authority` calls `useItem` directly, and the command card asks
+  // `itemReadyError`.
+  world = newWorld();
+  const h = heroAt(6000, 6000);
+  h.inventory[0] = { id: nextId++, itemId: "stwp", charges: 1, cooldownLeft: 0 };
+  h.inventory[1] = { id: nextId++, itemId: "stwp", charges: 1, cooldownLeft: 0 }; // a second scroll
+  hall(1000, 1000);
+  world.useItem(h.id, 0, 0, h.x, h.y);
+  check("it is channelling", h.portalLeft, 5);
+  check("a second item cannot be pressed", world.useItem(h.id, 1, 0, h.x, h.y), false);
+  check("…and the card is told so, silently", world.itemReadyError(h.id, 1), "");
+  check("…and the second scroll is still in the belt", !!h.inventory[1], true);
+  step(5.2);
+  check("…and once it lands, the belt works again", world.itemReadyError(h.id, 1), null);
+}
+
 console.log("\n-- it takes the SURVIVING units --------------------------------------------");
 
 {

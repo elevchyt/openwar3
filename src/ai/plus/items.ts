@@ -169,15 +169,23 @@ const PANIC_HP = 0.3;
 /**
  * …and at which it LEAVES, which is a higher bar than the one at which it panics.
  *
- * A hero that waits for `PANIC_HP` to reach for a Town Portal is a hero that dies holding one:
- * the scroll takes FIVE SECONDS (docs/items.md), and five seconds is a long time at 30% of a
- * hero's life with an army on it. Reported, from a real game: "the AI didn't use the scroll of
- * town portal when its hero was low health and was about to die and died."
+ * Reported, from a real game: "the AI didn't use the scroll of town portal when its hero was
+ * low health and was about to die and died."
  *
- * 0.4 is not an arbitrary loosening — it is `HERO_KILL_HP`, the same line plus/targeting.ts
- * uses to decide a hero can be FINISHED. So the scroll now comes out at exactly the point the
- * AI's own targeting would start treating this hero as a kill, which is the point at which a
- * competent opponent commits to it.
+ * Be clear about what the risk actually is, because it is easy to get backwards. Once the
+ * scroll is PRESSED the hero is invulnerable for the whole five seconds (docs/items.md) — it
+ * cannot die mid-channel, and the channel is never a risk to take. **The only window in which
+ * a hero holding a Town Portal can be killed is the window before it presses**, and the width
+ * of that window is this AI's own reaction: the belt is walked once per `castPeriod`, which is
+ * two seconds on Easy and one on Normal. A hero at 30 % with an army on it does not reliably
+ * survive a second, so a threshold set AT the panic line is a threshold that is sometimes read
+ * for the first time after the hero is already dead.
+ *
+ * 0.4 is where that margin lands, and it is not an arbitrary number: it is `HERO_KILL_HP`, the
+ * same line plus/targeting.ts uses to decide a hero can be FINISHED. So the scroll comes out at
+ * exactly the point the AI's own targeting would start treating this hero as a kill — which is
+ * the point at which a competent opponent commits to it, and therefore the last moment at which
+ * leaving is still cheap.
  */
 const ESCAPE_HP = 0.4;
 /** …and at which it drinks. Higher, because a potion heals over time and a hero that waits for
