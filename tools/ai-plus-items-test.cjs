@@ -88,6 +88,8 @@ check("Easy never shops", PLUS_EASY.shopping, 0);
 check("Normal shops", PLUS_NORMAL.shopping > 0, true);
 check("Insane fills the whole belt", PLUS_INSANE.shopping, 6);
 check("Insane keeps a Town Portal", PLUS_INSANE.keepPortal, true);
+check("…and so does Normal, so both replace it", PLUS_NORMAL.keepPortal, true);
+check("Easy does not", PLUS_EASY.keepPortal, false);
 check("Insane parts with more gold than Normal", PLUS_INSANE.itemReserve < PLUS_NORMAL.itemReserve, true);
 
 // ==========================================================================================
@@ -187,12 +189,26 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
 
 // --- the Town Portal outranks everything -------------------------------------------------------
 {
-  const h = belt(hero({ hp: 200 }), "phea", "pnvl", "stwp");
-  const cmd = pressed([h, enemy({ x: 200 })], PLUS_INSANE, { ...AWAY, losing: true });
+  const h = belt(hero({ hp: 200, x: 4000, y: 4000 }), "phea", "pnvl", "stwp");
+  const cmd = pressed([h, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, { ...AWAY, losing: true });
   check("a lost fight: it scrolls out before it drinks anything", itemOf(cmd), 2);
-  // Where it goes is the whole question — itemTownPortal picks the hall nearest the CLICKED
-  // point, so clicking home is what sends it home rather than to whichever hall is nearest here.
-  check("…aimed at home, not at the fight", cmd && cmd.x === 9000 && cmd.y === 9000, true);
+  // THE DOUBLE-CLICK. `itemTownPortal` resolves nearestHall(owner, x, y), so aiming at the hero
+  // itself IS "the user's nearest hall" — which is what double-clicking the scroll does in the
+  // real game, and the only aim that cannot go out of date while the hero runs.
+  check("…aimed at the hero itself, which is the double-click", cmd && cmd.x === 4000 && cmd.y === 4000, true);
+  check("…and with no target unit", cmd && cmd.targetId, 0);
+}
+{
+  // THE HERO'S OWN SKIN, not just the army's. A hero about to die in a fight the army has not
+  // given up on still leaves — this is the same conclusion reached about a smaller group.
+  const h = belt(hero({ hp: 200 }), "stwp");
+  check("a hero about to die scrolls out even when the army is not retreating",
+    itemOf(pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
+}
+{
+  // …but a healthy hero in a fight the army is winning stays and fights.
+  const h = belt(hero({ hp: 950 }), "stwp");
+  check("…and a healthy one does not", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
 }
 {
   const h = belt(hero({ hp: 1000, x: 0, y: 0 }), "stwp");
@@ -279,7 +295,8 @@ function shopped(units, profile, opts = {}) {
     // -1 is "not stock-limited"; 0 is "sold out" — the sim's own distinction.
     shopStock: (_id, ware) => (opts.soldOut?.includes(ware) ? 0 : -1),
     missingForShop: (_id, ware) => (opts.needsTech?.includes(ware) ? ["TWN2"] : []),
-    isShopUnit: (id) => id === MERCHANT.id,
+    // Every building in the fixture is a shop; which one gets the sale is the ordering rule.
+    isShopUnit: () => true,
   };
   const items = new PlusItems({
     world, player: 0,
@@ -306,8 +323,8 @@ function shopped(units, profile, opts = {}) {
 }
 {
   const h = hero();
-  // Normal has no Town Portal habit, so the healing potion leads instead.
-  check("Normal buys the healing potion first", shopped([h, MERCHANT], PLUS_NORMAL).buy?.itemId, "phea");
+  // Normal keeps one too, so the scroll leads for it as well.
+  check("Normal buys the Town Portal first", shopped([h, MERCHANT], PLUS_NORMAL).buy?.itemId, "stwp");
 }
 {
   const h = hero();
@@ -364,6 +381,33 @@ function shopped(units, profile, opts = {}) {
 }
 {
   check("no hero, no shopping", shopped([unit(), MERCHANT], PLUS_INSANE).buy, null);
+}
+
+// OUR OWN SHOP FIRST, the Goblin Merchant as the last resort. A race shop is in the base (so
+// the errand is seconds, not a trek) and its shelf cannot be emptied by the other player.
+{
+  const h = hero();
+  // An Arcane Vault of ours, further from home than the Merchant, and it still wins.
+  const vault = unit({ owner: 0, typeId: "hvlt", x: 900, y: 0, building: { constructionLeft: 0, stock: null } });
+  const near = unit({ owner: 12, typeId: "ngme", x: 100, y: 0, building: { constructionLeft: 0, stock: null } });
+  const r = shopped([h, vault, near], PLUS_INSANE);
+  check("it replaces the Town Portal at its OWN shop", r.buy && r.buy.shopId, vault.id);
+}
+{
+  // …and falls back to the Merchant when we have no shop of our own.
+  const h = hero();
+  const r = shopped([h, MERCHANT], PLUS_INSANE);
+  check("…and at the Goblin Merchant when there is no shop of ours", r.buy && r.buy.shopId, MERCHANT.id);
+}
+{
+  // REPLACEMENT. Both top difficulties keep a scroll, so the moment one is spent the next trip
+  // buys another before it buys anything else.
+  for (const [name, p] of [["Normal", PLUS_NORMAL], ["Insane", PLUS_INSANE]]) {
+    check(`${name} keeps a Town Portal and replaces it first`, p.keepPortal, true);
+    const spent = hero(); // the scroll is gone; the belt has room
+    check(`…${name} buys the replacement before anything else`,
+      shopped([spent, MERCHANT], p).buy?.itemId, "stwp");
+  }
 }
 
 // The errand latch — what stops the army manager dragging a shopping hero back to the muster

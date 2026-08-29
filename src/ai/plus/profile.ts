@@ -208,9 +208,16 @@ export interface PlusProfile {
    * to be one: it is the surplus test, stated as a number.
    */
   readonly itemReserve: number;
-  /** Does it keep a Scroll of Town Portal on the hero for the retreat? The clearest "this
-   *  player has played before" tell there is, and the one item that changes how a lost fight
-   *  ends — see `PlusItems.escape`. */
+  /**
+   * Does it keep a Scroll of Town Portal on the hero, and REPLACE it as soon as it can?
+   *
+   * The clearest "this player has played before" tell there is, and the one item that changes
+   * how a lost fight ends. It puts the scroll at the top of the shopping list rather than the
+   * bottom, which is what makes the replacement prompt: the moment one is spent, the next
+   * shopping trip buys another before it buys anything else.
+   *
+   * Off only on Easy, where nothing is bought at all.
+   */
   readonly keepPortal: boolean;
 
   // --- manners ------------------------------------------------------------------------------
@@ -282,9 +289,10 @@ export const PLUS_NORMAL: PlusProfile = {
   // couple of soldiers and whatever else is standing around, which is what clears a green camp.
   focusFire: false, creeps: true, creepAt: 150, creepFood: 10,
   harass: false, scout: true,
-  // Half a belt, and it keeps 300 gold back for the build order. No Town Portal habit: it buys
-  // one when it is flush, but it does not plan around having one.
-  shopping: 3, itemReserve: 300, keepPortal: false,
+  // Half a belt, and it keeps 300 gold back for the build order. It DOES keep a Town Portal and
+  // replace it: a scroll is the difference between losing a fight and losing an army, and a
+  // player at this level has learnt that much.
+  shopping: 3, itemReserve: 300, keepPortal: true,
   concedeAfter: 30,
 };
 

@@ -278,7 +278,7 @@ export class PlusItems {
     const engaged = foes.some((f) => !f.building && near(u, f, LOOK));
     for (const card of cards) {
       if (!this.wants(u, card.use, own, foes, engaged, ctx)) continue;
-      if (this.aim(u, card.slot, card.def, card.use, own, ctx)) return true;
+      if (this.aim(u, card.slot, card.def, card.use, own)) return true;
     }
     return false;
   }
@@ -345,27 +345,33 @@ export class PlusItems {
    * Legality is the sim's, at the same door: `itemUseError` is what the HUD asks before it
    * spends a click, so this can never be more permissive than a player.
    */
-  private aim(u: SimUnit, slot: number, def: ItemDef, use: Use, own: SimUnit[], ctx: ItemCtx): boolean {
+  private aim(u: SimUnit, slot: number, def: ItemDef, use: Use, own: SimUnit[]): boolean {
     const target = def.abilities.map((aid) => this.view.def(aid)?.target).find((t) => t === "point" || t === "unit");
     let targetId = 0;
-    let x = u.x;
-    let y = u.y;
     if (target === "unit") {
       const t = use === "healOther" ? this.hurtest(u, own) : u;
       if (!t) return false;
       targetId = t.id;
-    } else if (target === "point") {
-      // The only point-aimed item on the ladder is the Town Portal, and where it goes is the
-      // whole question: `SimWorld.itemTownPortal` teleports the party to the hall nearest the
-      // CLICKED point, so clicking home is what sends it home rather than to whichever hall
-      // happens to be nearest the fight.
-      if (use === "escape") {
-        x = ctx.home.x;
-        y = ctx.home.y;
-      }
     }
+    // Note what is NOT done for a `point` item, and specifically for the Town Portal: the aim
+    // is left at the hero's own position.
+    //
+    // That is the DOUBLE-CLICK, which is how a player uses a scroll to escape and is the whole
+    // reason it works as one. Blizzard's own page: *"You can also double click on the Town
+    // Portal Scroll which will automatically select the highest (allied) Town Hall as a
+    // transport destination"*, and *"Don't double click on your Town Portal unless you want to
+    // go back to your Hall."* `SimWorld.itemTownPortal` resolves to `nearestHall(owner, x, y)`,
+    // so aiming at the hero IS "the nearest hall of the user" — no destination to choose, no
+    // hall to pick wrong, and nothing to get out of date while the hero runs.
+    //
+    // Aiming at the main base instead (which is what this used to do) is the one-click form,
+    // and it is worse for an escape in the case that matters: a hero fleeing a fight beside its
+    // own expansion would run PAST the hall that could save it to reach a hall across the map.
+    //
+    // Legality is the sim's, at the same door: `itemUseError` is what the HUD asks before it
+    // spends a click, so this can never be more permissive than a player's press.
     if (this.view.world.itemUseError(u.id, slot, targetId) !== null) return false;
-    return this.view.order({ c: "useitem", unitId: u.id, slot, targetId, x, y });
+    return this.view.order({ c: "useitem", unitId: u.id, slot, targetId, x: u.x, y: u.y });
   }
 
   /** How many of ours near this unit are below `frac` of their own maximum. */
@@ -501,9 +507,19 @@ export class PlusItems {
       if (Math.hypot(u.x - ctx.home.x, u.y - ctx.home.y) > SHOP_REACH) continue;
       out.push(u);
     }
-    // Nearest first: the same shelf twice over is a shorter walk at one of them.
+    // OUR OWN SHOP FIRST, then everything else nearest-first.
+    //
+    // A race shop is in the base, so the errand is a few seconds rather than a trek, and it is
+    // the one shelf that cannot be emptied by the other player — a Goblin Merchant is shared,
+    // and it restocks on the GAME clock rather than per buyer. So the Vault/Lounge/Ancient of
+    // Wonders/Tomb is where a Town Portal gets replaced, and the Merchant is the fallback for a
+    // map where there is one and we have not built ours (or it stocks something ours does not:
+    // the Scroll of Healing and the Potion of Lesser Invulnerability are Merchant-only for
+    // three of the four races).
+    const mine = (u: SimUnit): number => (u.owner === this.view.player ? 0 : 1);
     out.sort(
       (a, b) =>
+        mine(a) - mine(b) ||
         Math.hypot(a.x - ctx.home.x, a.y - ctx.home.y) - Math.hypot(b.x - ctx.home.x, b.y - ctx.home.y),
     );
     return out;

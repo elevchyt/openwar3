@@ -4733,6 +4733,34 @@ export class RtsController {
     // Kelen's Dagger, a unit for the staves, nothing at all for a potion — which is the
     // overwhelming majority and fires on this very click.
     const aim = def.abilities.map((aid) => this.abilities.get(aid)?.target).find((t) => t === "point" || t === "unit");
+    // DOUBLE-CLICK — a second press of an item that is already armed fires it on the user
+    // rather than waiting for a target. Reached from the button and from the numpad hotkey
+    // alike, because both funnel through here, which is what makes it "double click OR press
+    // the hotkey twice".
+    //
+    // The Scroll of Town Portal is what this is for, and Blizzard's own page says what it does:
+    // *"You can also double click on the Town Portal Scroll which will automatically select the
+    // highest (allied) Town Hall as a transport destination"* — and, more plainly, *"Don't
+    // double click on your Town Portal unless you want to go back to your Hall."*
+    // (classic.battle.net/war3/basics/townportalscrolls.shtml). `itemTownPortal` resolves to the
+    // hall nearest the clicked point, so clicking the hero IS "your own nearest hall".
+    //
+    // A UNIT-aimed item self-casts instead, which is the same gesture doing the same thing; if
+    // the item may not be aimed at its own bearer the sim says so and the cursor stays armed,
+    // so nothing is spent on a click that was never going to fire.
+    if (this.orderMode === "item" && this.armedItem?.slot === slot &&
+        (this.armedItem.mode === "usepoint" || this.armedItem.mode === "useunit")) {
+      const selfTarget = this.armedItem.mode === "useunit" ? id : 0;
+      const err = this.sim.itemUseError(id, slot, selfTarget);
+      if (err !== null) {
+        this.refuseOrder(err);
+        return;
+      }
+      this.armedItem = null;
+      this.orderMode = null;
+      this.execute(this.localPlayer, { c: "useitem", unitId: id, slot, targetId: selfTarget, x: u.x, y: u.y });
+      return;
+    }
     if (aim) {
       this.armedItem = { slot, mode: aim === "point" ? "usepoint" : "useunit" };
       this.orderMode = "item";

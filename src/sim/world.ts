@@ -1587,6 +1587,37 @@ export interface SimUnit {
    *  move (`recomputeStats` zeroes the speed). Without it a walking Ancient slid across the
    *  ground mid-morph, and a planting one was already a building before it had sat down. */
   morphT: number;
+  /**
+   * Seconds left on a Scroll of Town Portal's channel, or 0.
+   *
+   * `AItp` is the ONLY item ability in the game with a cast time — `Cast1 = 5` in
+   * AbilityData.slk, and the one item that is not instant — and Blizzard's own page says
+   * exactly what those five seconds are: *"When a Hero activates a Town Portal scroll they
+   * become invulnerable. During the channeling, the Hero cannot do any action (such as move,
+   * attack, use any other item nor his spell). Any nearby units are not invulnerable so they
+   * can still be destroyed. After a short casting period (5 sec. cast time) the Hero will then
+   * transport with the surviving units."*
+   * (classic.battle.net/war3/basics/townportalscrolls.shtml)
+   *
+   * Every clause of that is load-bearing and none of it is expressible as an instant teleport:
+   * the invulnerability is the whole reason a scroll is an escape rather than a gamble, the
+   * lock is why it cannot be used to dodge and then keep fighting, and **"the surviving units"**
+   * is why the party is gathered when the clock runs out rather than when the scroll is
+   * pressed — the army it saves is whatever is still standing five seconds later.
+   *
+   * Not routed through `pendingCast`: an item ability is not in `SimUnit.abilities` at all
+   * (docs/items.md), so the spell pipeline has nothing to hang it on. This is its own small
+   * clock, in the shape of `morphT` — which is the same kind of thing, a committed transition
+   * that takes no orders (`castLocked`) and does not move (`recomputeStats` zeroes the speed).
+   */
+  portalLeft: number;
+  /** Where the scroll was aimed, kept for the resolve: the destination hall is the one nearest
+   *  THIS point, not the one nearest wherever the hero has ended up. */
+  portalX: number;
+  portalY: number;
+  /** The ability id behind the channel, so the party rules (`Area1`, `DataA`) are read off the
+   *  row that started it rather than off a guess — a custom map may re-author them. */
+  portalAbil: string;
   /** The facing a building was RAISED with, in radians — what an Ancient turns back to when it
    *  plants itself again.
    *
@@ -5903,6 +5934,10 @@ export class SimWorld {
       | "entangler"
       | "ringSlot"
       | "morphT"
+      | "portalLeft"
+      | "portalX"
+      | "portalY"
+      | "portalAbil"
       | "builtFacing"
       | "rootPending"
       | "entanglePending"
@@ -6139,6 +6174,10 @@ export class SimWorld {
       entangler: 0, // …and the Tree of Life that grew it (attachEntangled)
       ringSlot: 0,
       morphT: 0,
+      portalLeft: 0,
+      portalX: 0,
+      portalY: 0,
+      portalAbil: "",
       builtFacing: unit.facing,
       rootPending: null,
       entanglePending: 0,
@@ -7153,6 +7192,10 @@ export class SimWorld {
     // An Ancient mid-root is locked for exactly the same reason a caster mid-wind-up is: it is
     // committed to something that takes time and cannot be re-tasked out of it.
     if (u.morphT > 0) return true;
+    // …and a hero mid-Town-Portal is the strongest lock in the game: "the Hero cannot do any
+    // action (such as move, attack, use any other item nor his spell)", and "under no
+    // circumstances can the town portal be aborted once started". See SimUnit.portalLeft.
+    if (u.portalLeft > 0) return true;
     const pc = u.pendingCast;
     return u.order === "cast" && pc !== null && pc.started && !pc.fired;
   }
@@ -8558,6 +8601,7 @@ export class SimWorld {
     // back down. The stance has already flipped by then (see SimUnit.morphT), so without this
     // a just-uprooted Ancient slid across the ground through its own morph clip.
     if (u.morphT > 0) u.speed = 0;
+    if (u.portalLeft > 0) u.speed = 0; // "the Hero cannot do any action" — including move
     if (root) u.altModel = !u.uprooted; // planted = the alternate half of the Ancient model
     u.manaRegen = this.manaRegenSuspended(u)
       ? 0
@@ -8641,6 +8685,11 @@ export class SimWorld {
     u.cloaked = cloaked;
     u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
     if (u.vanished) u.invulnerable = true; // whisked off the field mid-effect — nothing can reach it
+    // A hero channelling a Town Portal is invulnerable for the whole five seconds — Blizzard's
+    // own words, see SimUnit.portalLeft. It is still ON the field and still visible (unlike
+    // `vanished`); it simply cannot be hurt, which is exactly why the units standing around it
+    // CAN be, and why the scroll saves the hero more reliably than it saves the army.
+    if (u.portalLeft > 0) u.invulnerable = true;
     // An Orc peon building from INSIDE the site is off the field entirely (isOffField): it has
     // no position anything can aim at, so it is invulnerable for as long as it is in there.
     // It comes back out — and the flag with it — through detachBuilder: on completion, on a
@@ -12185,6 +12234,7 @@ export class SimWorld {
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u); // a Moon Well pouring itself into whoever is drinking
       if (u.morphT > 0) u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
+      if (u.portalLeft > 0) this.tickTownPortal(u, dt); // …and a hero mid-Town-Portal
       if (u.rootSettle) this.tickRootSettle(u); // …and one mid-ROOT is still lowering itself onto its site
       if (u.rootPending) this.tickRootAt(u); // an Ancient that walked to the spot it was told to plant on
       if (u.entanglePending) this.tickEntangleAt(u); // …and a Tree of Life that planted there to take a mine
@@ -16272,18 +16322,57 @@ export class SimWorld {
    *  describes. `Area1` 1100 is the circle of troops that come along and `DataA "Maximum
    *  Number of Units"` 90 the cap on them. Nothing to arrive at = no teleport and no charge. */
   private itemTownPortal(u: SimUnit, ad: AbilityDef, x: number, y: number): boolean {
+    if (!this.nearestHall(u.owner, x, y)) return false;
+    const lvl = ad.levelData[0] ?? emptyAbilityLevel();
+    // `Cast1` = 5. The scroll is the one item in the game that is not instant, and those five
+    // seconds are the whole character of it — see SimUnit.portalLeft for Blizzard's own
+    // description of what happens during them. The charge is spent HERE, on the press, because
+    // "under no circumstances can the town portal be aborted once started": there is no state
+    // in which the scroll is half-used and could be got back.
+    if (lvl.castTime > 0) {
+      u.portalLeft = lvl.castTime;
+      u.portalX = x;
+      u.portalY = y;
+      u.portalAbil = ad.id;
+      this.stop(u.id); // it stands for the channel; castLocked keeps it standing
+      this.emitEffectAt(ad.casterArt, u.x, u.y);
+      this.recomputeStats(u); // invulnerable from this instant, not from the next tick
+      return true;
+    }
+    // No cast time (a map that has edited `Cast1` away): the old instant behaviour.
+    this.resolveTownPortal(u, ad, x, y);
+    return true;
+  }
+
+  /** The channel, and what it ends in. Nothing here can cancel it: the only way out is the
+   *  hero dying, which cannot happen while it is invulnerable, or being removed from the
+   *  world — and `portalLeft` goes with the unit either way. */
+  private tickTownPortal(u: SimUnit, dt: number): void {
+    u.portalLeft = Math.max(0, u.portalLeft - dt);
+    if (u.portalLeft > 0) return;
+    const ad = this.abilities?.get(u.portalAbil);
+    const x = u.portalX;
+    const y = u.portalY;
+    u.portalAbil = "";
+    if (ad) this.resolveTownPortal(u, ad, x, y);
+    this.recomputeStats(u); // …and it is mortal again
+  }
+
+  /** Gather the party and go. Called when the channel runs out — which is why it is a separate
+   *  method: the units it takes are **"the surviving units"**, the ones still standing at the
+   *  END of the five seconds rather than the ones that were there at the start. An army wiped
+   *  out during the channel is an army the scroll does not save, and that is the point of it. */
+  private resolveTownPortal(u: SimUnit, ad: AbilityDef, x: number, y: number): void {
     const dest = this.nearestHall(u.owner, x, y);
-    if (!dest) return false;
+    if (!dest) return; // the hall died during the channel — the hero simply stays put
     const lvl = ad.levelData[0] ?? emptyAbilityLevel();
     const party = this.itemTeleportParty(u, ad, u.x, u.y, lvl.area || 1100, this.dataOf(lvl, 0, 90));
-    this.emitEffectAt(ad.casterArt, u.x, u.y);
     for (const t of party) {
       this.emitEffectAt(ad.targetArt, t.x, t.y, true);
       this.teleportUnit(t, dest.x, dest.y);
       this.stop(t.id);
       this.emitEffectAt(ad.specialArt, t.x, t.y, true);
     }
-    return true;
   }
 
   /** AMULET OF RECALL (`AIrt`) and DIAMOND OF SUMMONING (`AUds`) — the Town Portal run

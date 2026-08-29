@@ -115,7 +115,7 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | focus-fires / creeps / raids workers | no / no / no | no / yes / no | yes / yes / yes |
 | belt slots it shops for | **0** | 3 | 6 |
 | gold it keeps back from the shop | — | 300 | 200 |
-| keeps a Town Portal | no | no | **yes** |
+| keeps and replaces a Town Portal | no | **yes** | **yes** |
 | spell roles it uses | heal, nuke, summon, morph | + panic, disable, buff | all nine |
 | **aims at** | the **biggest body** (`naive`) | what a unit **is** (`sound`) | + what the **spell is for** (`expert`) |
 | misclicks a cast | 35 % | 15 % | never |
@@ -387,12 +387,26 @@ Healing Salve wants a unit, a Town Portal wants a point, and every potion in the
 press with its row's `Area1` deciding who it reaches. That is the same three-way split the items
 doc opens with.
 
-**The Town Portal is the retreat, in one press.** It fires on the army manager's own `losing`
-read rather than on a second opinion of its own — `mode === "retreating"` — so the scroll and the
-walk home are one decision instead of two that disagree, and it is aimed at **home** rather than
-at the fight, because `itemTownPortal` teleports the party to the hall nearest the *clicked*
-point. It takes the group standing around the hero with it, so it saves the army and not just the
-hero. Never from the doorstep of its own base, where it would be spent to travel no distance.
+**The Town Portal is the retreat, in one press**, and it saves two different things. It fires
+either on the army manager's own `losing` read — `mode === "retreating"`, so the scroll and the
+walk home are one decision instead of two that disagree — or on the **hero's own skin**, when it
+is about to die in a fight the army has not given up on. That second case is the same conclusion
+reached about a smaller group, and it is why a Computer+ hero does not die to a gank it could
+have walked out of. Never from the doorstep of its own base, where it would be spent to travel no
+distance.
+
+It is aimed at **the hero itself**, which is the **double-click** — `itemTownPortal` resolves to
+the hall nearest the clicked point, so clicking the hero is "the user's own nearest hall"
+([`items.md`](./items.md) § the one item that is not instant). Aiming at the main base instead is
+the one-click form and is worse for an escape in the case that matters: a hero fleeing beside its
+own expansion would run *past* the hall that could save it. The five-second channel is the sim's,
+and the hero is invulnerable for all of it — the units standing around it are not.
+
+**Normal and Insane both keep one and replace it**, at their **own** shop by preference and at a
+Goblin Merchant only as a fallback: a race shop is in the base (so the errand is seconds rather
+than a trek) and its shelf cannot be emptied by the other player. `keepPortal` is what makes the
+replacement prompt — it puts the scroll at the top of the shopping list, so the next trip after
+one is spent buys another before it buys anything else.
 
 **The shopping list** is [`items.ts`](../src/ai/plus/items.ts)'s `LIST`, and it belongs beside the
 strategy rather than in the difficulty for the same reason the expansion clock does: *what* to buy

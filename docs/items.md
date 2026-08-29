@@ -136,6 +136,46 @@ the Wand of Shadowsight — the only effects in the game that touch vision witho
 on the map) and `createIllusion` (the Wand of Illusion copies its **target**, where Mirror Image
 copies the caster).
 
+## The one item that is not instant
+
+Every item in the game fires on the press — except the **Scroll of Town Portal**. `AItp` is the
+only `AI*` row in the install with a cast time (`Cast1 = 5`; every other item ability is 0), and
+Blizzard's own page spells out what those five seconds are
+([classic.battle.net](http://classic.battle.net/war3/basics/townportalscrolls.shtml)):
+
+> When a Hero activates a Town Portal scroll they become invulnerable. During the channeling, the
+> Hero cannot do any action (such as move, attack, use any other item nor his spell). Any nearby
+> units are not invulnerable so they can still be destroyed. After a short casting period (5 sec.
+> cast time) the Hero will then transport with the surviving units.
+
+Four things follow, and an instant teleport gets all four wrong:
+
+* **The hero is invulnerable** for the whole channel — folded into `invulnerable` by
+  `recomputeStats`, beside `vanished` and `insideBuild`. It is still *on the field* and visible;
+  it simply cannot be hurt. That is the whole reason a scroll is an escape rather than a gamble.
+* **It cannot act.** `castLocked` gains `portalLeft > 0`, which closes every order path at once,
+  and `recomputeStats` zeroes the speed — the same two clauses an Ancient mid-root uses.
+* **It cannot be aborted.** "Under no circumstances", so the charge is spent on the press: there
+  is no state in which the scroll is half-used and refundable.
+* **It takes "the surviving units".** The party is gathered when the clock runs out, not when the
+  scroll is pressed — an army wiped out during the channel is an army the scroll does not save,
+  and the units standing around the hero are *not* covered by its invulnerability.
+
+It is **not** routed through `pendingCast`: an item ability is not in `SimUnit.abilities` at all
+(see above), so the spell pipeline has nothing to hang it on. `SimUnit.portalLeft` is its own
+small clock, in the shape of `morphT` — the same kind of thing, a committed transition that takes
+no orders and does not move.
+
+**Where it goes** is `nearestHall(owner, x, y)` — the hall nearest the *clicked* point, of the
+user's own. So the two ways of using it fall out of one rule: click a spot and you go to the hall
+nearest that spot; **double-click the item (or press its hotkey twice) and the click is on
+yourself**, which is your own nearest hall. That second form is `RtsController.useInventorySlot`'s
+re-press branch, and it is what Computer+ uses (`plus/items.ts`) — the only aim that cannot go out
+of date while the hero runs.
+
+`Cast1` is data like any other: a map that edits it to 0 gets the instant scroll back, and
+`itemTownPortal` still has that path.
+
 ## Charges, cooldowns and refusals
 
 * A charge is spent **only** on `true`, and `USE_ITEM` is raised *after* it — so
