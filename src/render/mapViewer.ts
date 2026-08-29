@@ -6641,6 +6641,10 @@ export class MapViewerScene {
     const heard = chatRecipients(line, this.chatWorld());
     const link = this.rts?.matchLinkHandle ?? null;
     if (link) for (const player of heard) link.relaySaid(player, line);
+    // The COMPUTERS are recipients too, and they are told the same thing the humans are: the
+    // routing above, not the raw line. A Computer+ player in a team game answers "help" from an
+    // ally (src/ai/plus/teamchat.ts), and it may only answer what was addressed to it.
+    this.rts?.heardChat(line, heard);
     if (heard.includes(this.localPlayer)) this.showChat(line);
   }
 

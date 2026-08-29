@@ -1,16 +1,23 @@
 import { MELEE } from "../../data/gameplayConstants";
+import type { ChatLine, ChatScope } from "../../game/chat";
 import type { PlayableRace } from "../../data/races";
+import type { UnitDef } from "../../data/units";
 import { ITEM_REGEN_GROUP, type SimUnit } from "../../sim/world";
 import { simProfile, perfNow } from "../../sim/profile";
 import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, TOWN_RADIUS } from "../aiPlayer";
 import { PlusCaster } from "./casting";
-import { EnemyMemory, type EnemyRead } from "./counter";
+import { EnemyMemory, counterScore, type EnemyRead } from "./counter";
 import {
   CONCEDE_NOT_BEFORE, CONCESSIONS, GREETINGS, GREET_AT, GREET_STAGGER, LEAVE_AFTER, hopeless,
   type Standing,
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
-import { buildPlan, harvestPlan, type PlusCtx } from "./plan";
+import { buildPlan, buildableMix, harvestPlan, type PlusCtx } from "./plan";
+import {
+  BUSY_LINES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP, HELP_CALLS, HELP_CALL_FOES,
+  HELP_CALL_GAP, HELP_TIMEOUT, OPENER_AT, OPENER_UNITS, PORTAL_LINES, PORTAL_WALK,
+  SWITCH_MARGIN, TALK_GAP, openerLine, readAllyCall, switchLine, type SwitchReason,
+} from "./teamchat";
 import { plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, heroKillable, killValue } from "./targeting";
 import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from "./races";
@@ -24,7 +31,9 @@ import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from 
 // placement, a harvest plan, hero skills) rather than a strategy — and replaces everything
 // above them: which build it is playing and what that build wants (plus/races.ts + plus/plan.ts),
 // how hard to play (plus/profile.ts), how to answer what the enemy turns out to be fielding
-// (plus/counter.ts), when to cast (plus/casting.ts), and what to say (plus/chatter.ts).
+// (plus/counter.ts), when to cast (plus/casting.ts), and what to say (plus/chatter.ts for the
+// manners, plus/teamchat.ts for a TEAM game — what it tells its allies, and what it does when
+// one of them asks it for help).
 //
 // **What AMAI contributed.** AMAI (github.com/SMUnlimited/AMAI) is GPL and ships as JASS inside
 // a map; it was STUDIED and never copied, which is the standing rule in CLAUDE.md. Two of its
@@ -51,10 +60,16 @@ import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from 
 /** What the brain needs beyond the ordinary AI host: a voice, and a way out of the game. */
 export interface PlusHost extends AiHost {
   /**
-   * Say something on the all-channel. Routed exactly like a human player's chat (see
-   * plus/chatter.ts) — there is no second channel for computers.
+   * Say something. Routed exactly like a human player's chat (see plus/chatter.ts) — there is
+   * no second channel for computers.
+   *
+   * The SCOPE is the ordinary chat channel and means what the two send keys mean: "all" is
+   * Enter, "allies" is Ctrl+Enter. Manners are said to everybody (a gg is for the person who
+   * beat you); everything in plus/teamchat.ts is said to allies, because that is who it is
+   * about and because a computer announcing its build to the enemy would be scouting them for
+   * free. Defaults to "all", so the two lines that predate teams are unchanged.
    */
-  say(player: number, text: string): void;
+  say(player: number, text: string, scope?: ChatScope): void;
   /**
    * Leave the game — the ORDINARY player-left path, `EVENT_PLAYER_LEAVE`, which the map's own
    * melee script is already listening for.
@@ -190,6 +205,14 @@ const CREEP_HEALTH = 0.65;
 /** …and the hero level past which creeping stops being worth the walk. */
 const CREEP_UNTIL_LEVEL = 5;
 
+/** How often the ally list is rebuilt. An alliance changes about as often as a player leaves,
+ *  and the answer costs a walk of the whole unit table — see `alliesOf`. */
+const ALLY_REFRESH = 5;
+
+/** The `buffType` category a town hall carries — UI\UnitEditorData.txt's pickFlags, the first
+ *  of the four, and the same one `SimWorld.nearestHall` ranks a Town Portal's destination by. */
+const HALL_CATEGORY = "townhall";
+
 type Mode = "massing" | "attacking" | "retreating" | "defending";
 
 interface Brain {
@@ -238,6 +261,37 @@ interface Brain {
   greeted: boolean;
   /** When the position first looked unwinnable (-1 = it doesn't). */
   hopelessSince: number;
+
+  // --- the team game (plus/teamchat.ts). All of it is inert in a 1v1: `allies` is empty and
+  // every branch below reads it first.
+  /** Who this computer is co-allied with, as of `alliesAt`. Refreshed on a slow clock of its
+   *  own because an alliance changes about as often as a player leaves, and the answer costs a
+   *  walk of the whole unit table. */
+  allies: number[];
+  alliesAt: number;
+  /** Has it told its allies what it is building yet (`openerLine`)? Once a match, near the top
+   *  of it — and only ever reached with an audience, since `teamPass` returns on an empty
+   *  `allies` before anything here runs. */
+  opened: boolean;
+  /** The unit at the top of the production mix as last ANNOUNCED, so a change is a change
+   *  rather than a re-statement. "" until it has said anything at all — and the opener SEEDS
+   *  it, so the first thing `mixTalk` reports is a change from the build rather than the build
+   *  said twice. */
+  said: string;
+  /** When it last said anything to its allies (TALK_GAP), last asked for help (HELP_CALL_GAP),
+   *  and last answered somebody else's call (HELP_ANSWER_GAP). */
+  spokeAt: number;
+  askedAt: number;
+  answeredAt: number;
+  /** An ally's call for help that has not been acted on yet (-1 = none).
+   *
+   *  Taken in by `heard` and acted on by the manners pass, never inside `heard` itself: that is
+   *  called from the middle of chat delivery, and answering there would re-enter `deliverChat`
+   *  from inside its own routing. */
+  called: number;
+  /** The ally this relief wave is for (-1 = none), and the clock it gives up on. */
+  helping: number;
+  helpUntil: number;
   /** When it said gg (-1 = it hasn't). It leaves LEAVE_AFTER seconds later. */
   /** Is the wave in the field a CREEPING party rather than an attack? The two end on
    *  different terms — a creep run is over the moment the captain is gone (see `attacking`). */
@@ -320,6 +374,16 @@ export class ComputerPlusAi {
       threatSince: -1,
       greeted: false,
       hopelessSince: -1,
+      allies: [],
+      alliesAt: -Infinity,
+      opened: false,
+      said: "",
+      spokeAt: -Infinity,
+      askedAt: -Infinity,
+      answeredAt: -Infinity,
+      called: -1,
+      helping: -1,
+      helpUntil: 0,
       creeping: false,
       concededAt: -1,
       gone: false,
@@ -328,6 +392,31 @@ export class ComputerPlusAi {
 
   get active(): boolean {
     return this.brains.some((b) => !b.gone);
+  }
+
+  /**
+   * A line was said, and `recipients` is who heard it — `RtsController.heardChat`, which is the
+   * routing `chatRecipients` already did rather than a second opinion.
+   *
+   * The ONE way anything from outside this player's own eyes reaches it, and it is fenced three
+   * ways so that stays true: the line must have been addressed to this computer (it cannot read
+   * chat it was not a recipient of, any more than it can see through the fog), it must come from
+   * somebody it is actually co-allied with (an enemy typing "help" on the all-channel is
+   * taunting), and it must not be its own (every line this file says is in the same vocabulary
+   * `readAllyCall` reads).
+   *
+   * Nothing is DONE here — the call is parked on the brain and answered by the manners pass. See
+   * `Brain.called` for why that separation is not optional.
+   */
+  heard(line: ChatLine, recipients: readonly number[]): void {
+    for (const b of this.brains) {
+      if (b.gone || b.concededAt >= 0) continue; // a computer on its way out answers nobody
+      const me = b.ai.player;
+      if (line.from === me || !recipients.includes(me)) continue;
+      if (!this.host.coAllied(me, line.from)) continue;
+      if (readAllyCall(line.text) !== "help") continue;
+      b.called = line.from;
+    }
   }
 
   reset(): void {
@@ -414,6 +503,10 @@ export class ComputerPlusAi {
     harvestPlan(ctx);
     ai.applyHarvest();
     buildPlan(ctx);
+    // What it is building is worth telling a TEAMMATE, and this is where the answer is already
+    // in hand. Said after the plan rather than before it, so the line and the build array are
+    // the same decision read twice.
+    this.mixTalk(b, ctx);
     ai.runBuildLoop();
     ai.spendSkillPoints();
     ai.entangleMines(); // the night elf's gold, which is a cast rather than a build order
@@ -558,6 +651,8 @@ export class ComputerPlusAi {
    */
   private scoutEnemy(b: Brain): void {
     if (b.profile.counterWeight <= 0) return;
+    // Who to pass a sighting on to, worked out once rather than per sighting — see `teammates`.
+    const team = this.teammates(b);
     for (const u of this.host.world.units.values()) {
       if (u.hp <= 0 || u.owner === b.ai.player || u.building) continue;
       // A PLAYER's army, not the map's. `hostileTo` is true of creeps too — and it should be,
@@ -567,9 +662,54 @@ export class ComputerPlusAi {
       if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
       if (!b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
       b.memory.note(u, b.clock);
+      for (const other of team) {
+        // A sighting is only news to somebody it is an enemy OF. Always true on a team, and
+        // not in a free-for-all with a lopsided matrix, where an ally's enemy may be our
+        // friend — countering a player we are not fighting is countering nothing.
+        if (other.ai.hostileTo(u)) other.memory.note(u, other.clock);
+      }
     }
     b.memory.forget(b.clock, b.profile.counterMemory);
     b.enemy = b.memory.read(b.profile.counterShare, (id) => this.host.registry.get(id));
+  }
+
+  /**
+   * SCOUTING INTELLIGENCE: what one ally has seen, the whole team has seen.
+   *
+   * Without this, every computer on a team pays for the same scout — three of them each walk a
+   * worker into the same base to learn the same thing, and the one that dies on the way (which
+   * latches `scoutDone`, see `Brain.scoutId`) plays the rest of the match against an opponent it
+   * never looked at. A team that shares what it knows is most of what a team IS, and it is what
+   * a person does the moment they see something: they say so.
+   *
+   * This is NOT a fog bypass, and the distinction is the one the whole file turns on. The
+   * sighting being passed on was made through somebody's own eyes — `knows`, and Computer+ never
+   * sets `bypassFog` — so what travels here is a fact one player LEARNED, exactly as a typed
+   * "they're going gryphons" would be. Nothing is learned that nobody saw.
+   *
+   * It only runs between COMPUTER+ players, because they are the only ones with a memory to pour
+   * into. A human teammate's scouting reaches an AI ally by the engine's own route instead: a
+   * melee force grants ALLIANCE_SHARED_VISION, so `AiPlayer.knows` is already looking through
+   * the human's units as well as its own, and the loop above notes what it finds there.
+   *
+   * Timestamped with the RECEIVER's clock rather than the sharer's. They are the same number
+   * today (every seat is seated on the same frame), and writing it this way means they do not
+   * have to be — a sighting always ages out on the clock of the memory holding it.
+   *
+   * This half is the ADDRESS BOOK — which computers a sighting travels to. The passing on itself
+   * is one line in `scoutEnemy`, where the sighting is made.
+   */
+  private teammates(b: Brain): Brain[] {
+    const me = b.ai.player;
+    const out: Brain[] = [];
+    for (const other of this.brains) {
+      if (other === b || other.gone) continue;
+      // A difficulty that does not counter has no use for a sighting and no memory to keep it
+      // in — `scoutEnemy` returns before reading one for the same reason (Easy, `counterWeight`).
+      if (other.profile.counterWeight <= 0) continue;
+      if (this.host.coAllied(me, other.ai.player)) out.push(other);
+    }
+    return out;
   }
 
   /** Who the economy may not touch: the army and the scout, in one live set. */
@@ -1253,6 +1393,9 @@ export class ComputerPlusAi {
       }
       return;
     }
+    // The TEAM game — after the concession check, so a computer that has already said gg does not
+    // then announce a build or promise to come and help (plus/teamchat.ts).
+    this.teamPass(b);
     if (b.clock < CONCEDE_NOT_BEFORE) return; // nothing is decided this early — see the constant
     if (!hopeless(this.standing(b), this.host.registry.get(b.table.halls[0])?.goldCost ?? 0)) {
       b.hopelessSince = -1;
@@ -1264,6 +1407,329 @@ export class ComputerPlusAi {
     if (b.clock - b.hopelessSince < profile.concedeAfter) return;
     b.concededAt = b.clock;
     this.host.say(ai.player, CONCESSIONS[ai.randomInt(0, CONCESSIONS.length - 1)]);
+  }
+
+  // ======================================================================================
+  //  The team game — what it tells its allies, and what it does when one of them calls
+  //
+  //  All of plus/teamchat.ts hangs off here. Every method reads `b.allies` first and does
+  //  nothing when it is empty, so a 1v1 and a free-for-all are exactly the game they were.
+  // ======================================================================================
+
+  /** Once a second, with the rest of the manners. */
+  private teamPass(b: Brain): void {
+    if (b.clock - b.alliesAt >= ALLY_REFRESH) {
+      b.allies = this.alliesOf(b);
+      b.alliesAt = b.clock;
+    }
+    if (!b.allies.length) {
+      b.called = -1; // nobody to have called; a stale one must not fire if a team forms later
+      return;
+    }
+    this.openerTalk(b);
+    this.helpWave(b);
+    this.answerCall(b);
+    this.callForHelp(b);
+  }
+
+  /**
+   * Who this computer counts as an ally: the players it is CO-ALLIED with that still have
+   * something on the map.
+   *
+   * `coAllied` rather than a team number, for the reason src/game/chat.ts states at length — an
+   * alliance is a directed matrix and a one-way passive grant is not an alliance. Derived from
+   * the units on the field rather than from a roster because that is also the useful question:
+   * a teammate who has been wiped out is not somebody to tell about your build.
+   */
+  private alliesOf(b: Brain): number[] {
+    const me = b.ai.player;
+    const out: number[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.owner === me) continue;
+      if (u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue; // creeps and the shops are nobody
+      if (out.includes(u.owner)) continue;
+      if (this.host.coAllied(me, u.owner)) out.push(u.owner);
+    }
+    return out;
+  }
+
+  /** Say something to the allies. The channel is the ALLIES channel — Ctrl+Enter's — because
+   *  a computer announcing its build on the all-channel would be scouting itself for the enemy. */
+  private tell(b: Brain, lines: readonly string[]): void {
+    if (!b.allies.length || !lines.length) return;
+    b.spokeAt = b.clock;
+    this.host.say(b.ai.player, lines[b.ai.randomInt(0, lines.length - 1)], "allies");
+  }
+
+  // --- what it is building --------------------------------------------------------------
+
+  /**
+   * "i'm going footmen and riflemen" — the build, stated once, near the top of the game.
+   *
+   * Off the STRATEGY rather than off the production mix, which is the whole difference between
+   * this and `mixTalk`: at twelve seconds there is no production to report and no producer to
+   * report it from, but the build has already been decided — it was rolled at seat time and is
+   * held for the match (plus/races.ts). So this is the plan, and `mixTalk` is the running
+   * commentary on carrying it out.
+   *
+   * It SEEDS `said` with the top of that mix. Without it the first thing `mixTalk` says is
+   * "going footmen" to an ally who was told "i'm going footmen and riflemen" a minute earlier,
+   * which reads as a computer with nothing to say rather than as a teammate.
+   */
+  private openerTalk(b: Brain): void {
+    if (b.opened || b.clock < OPENER_AT + GREET_STAGGER * b.ai.player) return;
+    b.opened = true;
+    const ranked = Object.entries(b.strategy.mix).sort((a, c) => c[1] - a[1]);
+    if (!ranked.length) return;
+    b.said = ranked[0][0];
+    const named = ranked.slice(0, OPENER_UNITS)
+      .map(([unit]) => this.host.registry.get(unit)?.name ?? "")
+      .filter(Boolean);
+    const line = openerLine(named);
+    if (line) this.tell(b, [line]);
+  }
+
+  /**
+   * "switching to knights", "going hippogryphs to counter their air units".
+   *
+   * The top of `buildableMix` is what this announces, and it is worth being precise about what
+   * that is: NOT a change of strategy — Computer+ plays the build it rolled for the whole match
+   * (plus/races.ts) — but the thing a player actually types, which is what the majority of their
+   * production has just become. Two things move it: the tech tree opening up (a Footman build
+   * becomes a Knight build the moment the Castle lands) and the counter re-weighting
+   * (plus/counter.ts). `switchReason` tells the ally which.
+   *
+   * `SWITCH_MARGIN` is what keeps this from being noise, and `said` is deliberately NOT updated
+   * when the line is held back by `TALK_GAP` — the change is still un-announced, so the next
+   * pass says it.
+   */
+  private mixTalk(b: Brain, ctx: PlusCtx): void {
+    if (!b.allies.length || b.concededAt >= 0) return;
+    const rows = buildableMix(ctx);
+    if (!rows.length) return;
+    let top = rows[0];
+    for (const r of rows) if (r.weight > top.weight) top = r;
+    if (top.unit === b.said) return;
+    // Hysteresis: the new top has to actually BEAT what was announced, not merely edge past it
+    // this pass. A row that has vanished from the mix altogether (untrainable now) does not get
+    // a vote, which is why this is looked up rather than remembered.
+    const said = rows.find((r) => r.unit === b.said);
+    if (said && top.weight < said.weight * SWITCH_MARGIN) return;
+    if (b.clock - b.spokeAt < TALK_GAP) return;
+    const def = this.host.registry.get(top.unit);
+    if (!def) return;
+    const first = b.said === "";
+    b.said = top.unit;
+    this.tell(b, [switchLine(def.name, this.switchReason(b, def), first)]);
+  }
+
+  /**
+   * Why the mix moved — the half of the announcement that is worth reading.
+   *
+   * Only ever the ENEMY, and only when this difficulty is actually countering at all
+   * (`counterWeight`, 0 on Easy) off a sample it believes (`counterSample`): a computer that
+   * blamed the enemy for a switch it made because its Castle finished is a computer talking
+   * nonsense to its teammate. The air clause is first because it is the one that is worth acting
+   * on — "they have air" is a fact about the whole team's game, not only about this player's.
+   */
+  private switchReason(b: Brain, def: UnitDef): SwitchReason {
+    if (b.profile.counterWeight <= 0 || b.enemy.seen < b.profile.counterSample) return null;
+    if (b.enemy.air > 0 && def.weapons.some((w) => w.enabled && w.targets.includes("air"))) return "air";
+    return counterScore(def, b.enemy) > COUNTER_TELL ? "counter" : null;
+  }
+
+  // --- asking ----------------------------------------------------------------------------
+
+  /**
+   * "help me, im getting attacked by two of them."
+   *
+   * The condition is the request's own: MULTIPLE OPPONENTS, counted as distinct enemy players
+   * with units in our towns (`isInvader`, so a creep camp next door is not an invasion and a
+   * creep's owner is nobody's anyway). One opponent in your base is a melee game; two at once is
+   * the thing a team is for.
+   *
+   * It does not ask while it is off answering somebody else's call — an army that is not at home
+   * is not a base that can be defended, and the honest thing at that point is to go back rather
+   * than to ask a third player to cover for it.
+   */
+  private callForHelp(b: Brain): void {
+    if (b.helping >= 0) return;
+    if (b.clock - b.askedAt < HELP_CALL_GAP) return;
+    if (b.clock - b.spokeAt < TALK_GAP) return;
+    if (this.attackers(b) < HELP_CALL_FOES) return;
+    b.askedAt = b.clock;
+    this.tell(b, HELP_CALLS);
+  }
+
+  /** How many distinct enemy PLAYERS have units in one of our towns right now. */
+  private attackers(b: Brain): number {
+    const seen = new Set<number>();
+    for (const u of this.host.world.units.values()) {
+      if (u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
+      if (this.isInvader(b, u)) seen.add(u.owner);
+    }
+    return seen.size;
+  }
+
+  // --- answering -------------------------------------------------------------------------
+
+  /**
+   * An ally asked for help. Go, or say why not.
+   *
+   * The DECLINE is as much of the feature as the relief wave is, and it is the honest half: an
+   * ally who is told "im under attack too" knows nobody is coming and can play the fight
+   * accordingly, where an ally who is told nothing waits for an army that never arrives. Every
+   * reason is a state the army manager is already in, so none of this is a second opinion about
+   * the position — `busyLines` reads the mode and nothing else.
+   *
+   * `HELP_ANSWER_GAP` is what stops a player spamming "help" from turning the army round three
+   * times: a second call inside it is the same emergency, and the army is already walking.
+   */
+  private answerCall(b: Brain): void {
+    const from = b.called;
+    b.called = -1;
+    if (from < 0 || !b.allies.includes(from)) return;
+    if (b.clock - b.answeredAt < HELP_ANSWER_GAP) return;
+    b.answeredAt = b.clock;
+    const spot = this.helpSpot(b, from);
+    // No fight we can see and no hall left standing is an ally there is nowhere to send an army
+    // TO. Nothing is said either: "you have no base" is not help.
+    if (!spot) return;
+    const busy = this.busyLines(b);
+    if (busy) return void this.tell(b, busy);
+    b.helping = from;
+    b.helpUntil = b.clock + HELP_TIMEOUT;
+    b.target = { id: 0, x: spot.x, y: spot.y };
+    b.creeping = false;
+    this.setMode(b, "attacking");
+    // ON FOOT, or by scroll when the walk is long enough that the fight would be over before the
+    // army arrived (PORTAL_WALK). The scroll takes the party standing around the hero, so the
+    // rest of the army walks and arrives late — which is exactly what happens when a player does
+    // this, and is why the hero is the one carrying it (`PlusProfile.keepPortal`).
+    const centre = this.squadCentre(b) ?? b.ai.home();
+    const far = Math.hypot(centre.x - spot.x, centre.y - spot.y) > PORTAL_WALK;
+    const hero = this.squadHero(b);
+    const tp = far && hero ? b.items.portalTo(hero, spot.x, spot.y) : false;
+    this.tell(b, tp ? PORTAL_LINES : COMING_LINES);
+    this.commit(b, spot.x, spot.y);
+  }
+
+  /** Why it cannot come, or null if it can. In the order a player would give them: my own base
+   *  first, then what is left of my army, then what I am in the middle of. */
+  private busyLines(b: Brain): readonly string[] | null {
+    if (b.mode === "defending" || b.ai.townThreatened()) return BUSY_LINES.attacked;
+    if (b.mode === "retreating") return BUSY_LINES.broken;
+    // Not enough to be a wave is not enough to be a rescue either — `attackFood` is this
+    // difficulty's own answer to "is this an army yet".
+    if (this.squadFood(b) < b.profile.attackFood) return BUSY_LINES.small;
+    if (b.mode === "attacking") return b.creeping ? BUSY_LINES.creeping : BUSY_LINES.fighting;
+    return null;
+  }
+
+  /**
+   * Where the relief wave goes.
+   *
+   * Two answers, in that order — the FIGHT if there is one to see, the ally's BASE otherwise —
+   * and the split is what keeps the whole thing honest about the fog.
+   *
+   *  · **The fight.** A teammate who says "help" while their army is dying somewhere is not
+   *    asking you to go and stand in their base. Where that is, though, is not public, so it is
+   *    asked of `AiPlayer.knows` — and in a melee team game the answer is usually yes without
+   *    any cheating, because a force grants ALLIANCE_SHARED_VISION and this computer is already
+   *    looking through its teammate's units. When it cannot see one, it does not invent one.
+   *  · **The base.** Public: a melee player is shown their teammates' start locations from the
+   *    first frame, and the message itself is the news that something is wrong. Which of their
+   *    halls is in trouble is not public, so that half is `knows` again — and with nothing
+   *    visible it simply sends the army to the ally's nearest base and lets it find the fight
+   *    when it arrives, which is what a person does.
+   */
+  private helpSpot(b: Brain, ally: number): { x: number; y: number } | null {
+    return this.allyFight(b, ally) ?? this.allyBase(b, ally);
+  }
+
+  /**
+   * The ally unit with the most enemies around it that we can see — "where the fight is".
+   *
+   * Enemy PLAYERS only. `hostileTo` is true of creeps as well, and it should be, but a creep
+   * camp a teammate chose to walk into is not what "help" means in a team game — it is the same
+   * distinction `isInvader` draws about our own towns, and reading them in would march the army
+   * across the map to somebody's creeping party. `CLEARED_RADIUS` is what the rest of this file
+   * already calls "this fight".
+   */
+  private allyFight(b: Brain, ally: number): { x: number; y: number } | null {
+    const theirs: SimUnit[] = [];
+    const foes: SimUnit[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.building || u.isPeon) continue;
+      if (u.owner === ally) { if (b.ai.knows(u)) theirs.push(u); continue; }
+      if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
+      if (b.ai.hostileTo(u) && b.ai.knows(u)) foes.push(u);
+    }
+    if (!theirs.length || !foes.length) return null;
+    let best: SimUnit | null = null;
+    let bestN = 0;
+    for (const t of theirs) {
+      let n = 0;
+      for (const f of foes) if (Math.hypot(f.x - t.x, f.y - t.y) <= CLEARED_RADIUS) n++;
+      if (n > bestN) { bestN = n; best = t; }
+    }
+    return best ? { x: best.x, y: best.y } : null;
+  }
+
+  /**
+   * The ally's town hall to go to: the one with a fight at it if we can see one, else the one
+   * nearest us.
+   *
+   * "Town hall" is UnitData's own `buffType` category (UI\UnitEditorData.txt's pickFlags, the
+   * same one `SimWorld.nearestHall` ranks a Town Portal's destination by), so a Great Hall, a
+   * Necropolis and a Tree of Life all answer to it without a per-race list. No hall at all means
+   * there is nowhere to send an army TO, and the caller says nothing: "you have no base" is not
+   * help.
+   */
+  private allyBase(b: Brain, ally: number): { x: number; y: number } | null {
+    const halls: SimUnit[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== ally || u.hp <= 0 || !u.building || u.building.constructionLeft > 0) continue;
+      if (this.host.registry.get(u.typeId)?.buffType === HALL_CATEGORY) halls.push(u);
+    }
+    if (!halls.length) return null;
+    const under = halls.filter((h) => this.fightAt(b, h));
+    const home = b.ai.home();
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const h of under.length ? under : halls) {
+      const d = Math.hypot(h.x - home.x, h.y - home.y);
+      if (d < bestD) { bestD = d; best = h; }
+    }
+    return best ? { x: best.x, y: best.y } : null;
+  }
+
+  /** Is there a fight at this building that we can SEE? Same test `isInvader` makes about our
+   *  own towns, asked about somebody else's and gated on our own eyes. */
+  private fightAt(b: Brain, hall: SimUnit): boolean {
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.building || u.isPeon || !b.ai.hostileTo(u)) continue;
+      if (Math.hypot(u.x - hall.x, u.y - hall.y) > TOWN_RADIUS) continue;
+      if (b.ai.knows(u)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The relief wave, once it is out.
+   *
+   * Two ends to it. Reaching the ally's base and clearing it is the ordinary one — `attacking`
+   * ends the wave the moment the group is standing on its objective with nothing hostile around
+   * it, exactly as it would at an enemy base — and this only has to notice that it happened.
+   * The other is `HELP_TIMEOUT`: an ally whose base fell while we were walking is an ally we
+   * cannot help, and standing in the wreckage of it is how the second base is lost as well.
+   */
+  private helpWave(b: Brain): void {
+    if (b.helping < 0) return;
+    if (b.mode !== "attacking") return void (b.helping = -1); // home, defending, or broken
+    if (b.clock <= b.helpUntil) return;
+    b.helping = -1;
+    this.endWave(b);
   }
 
   /** The numbers `hopeless` judges the position by. */

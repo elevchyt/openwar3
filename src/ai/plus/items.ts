@@ -160,6 +160,10 @@ const LIST: readonly Want[] = [
  *  it would have saved is dead. Without the habit it is merely the last thing it gets round to. */
 const PORTAL: Want = { id: "stwp", want: 1 };
 
+/** The Scroll of Town Portal's ability, keyed on the ABILITY rather than on the item id for the
+ *  same reason `USE_OF` is: a custom map's re-skinned scroll is still a Town Portal. */
+const PORTAL_ABILITY = "AItp";
+
 // --- when a button is pressed ---------------------------------------------------------------
 // All ours; see the file header. Stated as fractions of a unit's own maximum so they mean the
 // same thing on a Peasant and on a level-6 Tauren Chieftain.
@@ -461,6 +465,38 @@ export class PlusItems {
     if (!ctx.mayShop) return; // there is a wave out; the errand waits
     this.onErrand = hero.id;
     this.view.order({ c: "order", unitId: hero.id, order: { kind: "move", x: buy.x, y: buy.y }, queued: false });
+  }
+
+  /**
+   * Spend the Scroll of Town Portal on ARRIVING somewhere, rather than on leaving.
+   *
+   * The belt's own `escape` rung is a retreat: the aim is left at the hero's own feet, which is
+   * the DOUBLE-CLICK, and it resolves to the nearest hall it can reach (see `aim`). This is the
+   * other press — the ONE-CLICK, aimed at a spot — and it is called by the army manager rather
+   * than reached from the ladder, because it is not a reading of this hero's danger at all: it
+   * is a decision about where the whole army needs to be, and only the manager knows that
+   * (src/ai/plus/teamchat.ts — an ally's call for help from across the map).
+   *
+   * `SimWorld.nearestHall` resolves the aim to the nearest hall to that spot that this player
+   * may travel to, ALLIES INCLUDED, which is the item's stated behaviour and is what makes the
+   * trip land in the ally's base rather than back in ours.
+   *
+   * Legality is the sim's at the same two doors a press from the ladder uses, so this can never
+   * be more permissive than a player's click.
+   */
+  portalTo(u: SimUnit, x: number, y: number): boolean {
+    if (!this.canAct(u)) return false;
+    for (let slot = 0; slot < u.inventory.length; slot++) {
+      const held = u.inventory[slot];
+      if (!held) continue;
+      const def = this.view.item(held.itemId);
+      if (!def?.usable) continue;
+      if (!def.abilities.some((aid) => this.view.def(aid)?.code === PORTAL_ABILITY)) continue;
+      if (this.view.world.itemReadyError(u.id, slot) !== null) continue;
+      if (this.view.world.itemUseError(u.id, slot, 0) !== null) continue;
+      return this.view.order({ c: "useitem", unitId: u.id, slot, targetId: 0, x, y });
+    }
+    return false;
   }
 
   /** The unit on a shopping errand, or 0 — see `onErrand`. */

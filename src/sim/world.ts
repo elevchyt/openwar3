@@ -16421,15 +16421,29 @@ export class SimWorld {
     return [u, ...party].slice(0, cap);
   }
 
-  /** The owner's finished town hall nearest a point — what a Town Portal resolves to.
-   *  "Town hall" is UnitData's own `buffType` category (the first of the four the staves rank
-   *  by, see STAFF_PICK_CATEGORIES), so a Great Hall, a Necropolis and a Tree of Life all
-   *  answer to it without a per-race list. */
+  /**
+   * The finished town hall nearest a point that this player may travel to — what a Town Portal
+   * resolves to.
+   *
+   * "Town hall" is UnitData's own `buffType` category (the first of the four the staves rank by,
+   * see STAFF_PICK_CATEGORIES), so a Great Hall, a Necropolis and a Tree of Life all answer to
+   * it without a per-race list.
+   *
+   * An ALLY's hall counts, and that is the item's stated behaviour rather than a convenience:
+   * Blizzard's own page says the scroll *"will automatically select the highest (allied) Town
+   * Hall as a transport destination"*. It matters twice over. A player whose own halls are gone
+   * can still pull an army out to a teammate's base — which is the whole of what a scroll is for
+   * in a team game — and a Computer+ player answering an ally's call for help across the map
+   * arrives in five seconds instead of twenty (src/ai/plus/teamchat.ts). The alliance question is
+   * the matrix's, not the team's, and `alliedPlayers` is null only in a headless sim with no
+   * matrix installed, where this stays own-halls-only exactly as it was.
+   */
   private nearestHall(owner: number, x: number, y: number): SimUnit | null {
     let best: SimUnit | null = null;
     let bestDist = Infinity;
     for (const b of this.units.values()) {
-      if (b.owner !== owner || b.hp <= 0 || !b.building || b.building.constructionLeft > 0) continue;
+      if (b.hp <= 0 || !b.building || b.building.constructionLeft > 0) continue;
+      if (b.owner !== owner && this.alliedPlayers(owner, b.owner) !== true) continue;
       if (this.unitReg?.get(b.typeId)?.buffType !== STAFF_PICK_CATEGORIES[0]) continue;
       const dist = Math.hypot(b.x - x, b.y - y);
       if (dist < bestDist) { bestDist = dist; best = b; }

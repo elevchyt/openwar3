@@ -818,7 +818,7 @@ export class RtsController {
       // doors a person's would: a line of chat is routed and relayed exactly as a typed one,
       // and "I have lost, I am leaving" is the ordinary player-left event the map's own melee
       // script is already listening for.
-      say: (player, text) => this.onChatSaid?.({ from: player, text, target: { scope: "all" } }),
+      say: (player, text, scope) => this.onChatSaid?.({ from: player, text, target: { scope: scope ?? "all" } }),
       leave: (player) => this.onPlayerLeft?.(player),
     };
     this.meleeAi = new MeleeAi(host);
@@ -5557,6 +5557,20 @@ export class RtsController {
 
   /** A chat line arrived over the wire. The renderer fills this in; see mapViewer.deliverChat. */
   onChatSaid: ((line: ChatLine) => void) | null = null;
+
+  /**
+   * A line was said, and these are the players who HEARD it — the routing
+   * `MapViewerScene.deliverChat` has already done, handed straight on rather than re-derived.
+   *
+   * The one way a computer takes anything in from outside its own eyes, and the recipient list
+   * is what keeps that honest: a Computer+ player reads exactly the lines `chatRecipients`
+   * addressed to it and nothing else, so "help" typed to your OTHER ally is a message this one
+   * never saw (src/ai/plus/teamchat.ts). Authority-side only, like everything else the AI runs
+   * on — `deliverChat` is not reached on a frozen client.
+   */
+  heardChat(line: ChatLine, heard: readonly number[]): void {
+    this.computerPlus?.heard(line, heard);
+  }
 
   /** HOST: a client asked for the match to stop or start again (already stamped with a real
    *  sender). The renderer rules on it — see mapViewer.rulePause. */

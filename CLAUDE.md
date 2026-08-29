@@ -203,6 +203,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   soldier and the army will not walk after one it cannot finish. **It does not touch ITEMS yet**
   — no buying, no drinking, no shop — a hole waiting on the sim; the plan, the seams and the two
   gates to check first are the doc's "Items: not yet" section.
+  In a TEAM game it also TALKS ([`src/ai/plus/teamchat.ts`](src/ai/plus/teamchat.ts)) and shares
+  what it has scouted. Every line goes out on the ordinary chat path on the **allies** channel —
+  there is no second channel for computers — and everything it HEARS arrives the same way, gated
+  on the recipient list `deliverChat` already computed and on the alliance matrix, so it can no
+  more read chat it was not addressed than see through the fog. Two traps: the file's own
+  vocabulary is read by its own parser, so a decline that parses as a request makes two computers
+  answer each other for the rest of the match (`readAllyCall` tests the declines FIRST, and
+  `tools/ai-plus-teamchat-test.cjs` pins it); and nothing is acted on inside `heard`, which is
+  called from the middle of chat delivery. Scouting intel is NOT chat — a sighting is written
+  into every allied Computer+ player's `EnemyMemory` at the moment it is made — and it is not a
+  fog bypass, because what travels is what somebody's own eyes saw.
   **AMAI is GPL** — it was studied for the shape of the strategy table and nothing else; never
   lift its code or its numbers.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs

@@ -204,6 +204,10 @@ hero above it, an insane orc past its own expansion time never founded a second 
 
 ## Countering: the damage table, read off what it has scouted
 
+> In a TEAM game the "what it has scouted" is the **team's**, not this player's alone — see
+> [Scouting intelligence](#scouting-intelligence-the-team-scouts-once) below.
+
+
 Warcraft III's rock-paper-scissors is a table — `Units\MiscGame.txt`'s `DamageBonus*` lists, the
 same numbers Liquipedia's *Armor and Attack types* page and classic.battle.net's
 `armorandweapontypes.shtml` render. Piercing does 2.00 into Light and 0.35 into Fortified; Magic
@@ -578,6 +582,115 @@ killing them, and the victory that follows is the map's own ruling rather than o
 Note what this depends on: `MeleeInitVictoryDefeat` must have run, i.e. it is a melee map with a
 melee init trigger. On a map that never registered the event the concession is still said and the
 AI still stops playing — it simply stands there, like a player who alt-tabbed.
+
+## Team games: talking to your allies, and scouting once
+
+[`src/ai/plus/teamchat.ts`](../src/ai/plus/teamchat.ts). All of it is **inert in a 1v1** — every
+branch reads the ally list first, and in a free-for-all it is empty — and all of it goes out on
+the **allies channel** (Ctrl+Enter's, `ChatScope` `"allies"`), through the same
+`PlusHost.say` → `RtsController.onChatSaid` → `MapViewerScene.deliverChat` path the manners use.
+There is no second channel: the line is routed by `chatRecipients`, tagged `[Allies]`, coloured,
+logged, relayed to LAN clients and raised to the map's own chat triggers exactly like a typed one.
+
+An ally is asked of the **alliance matrix** (`coAllied`, PASSIVE in both directions), never of a
+team number — a one-way passive grant is not an alliance, and `src/game/chat.ts` explains at
+length why that distinction is load-bearing.
+
+### What it says
+
+* **Its build, once, near the top of the game** — *"i'm going footmen and riflemen"*. Off the
+  `PlusStrategy` it rolled at seat time rather than off what it has produced, so at twelve
+  seconds it is a plan rather than a report. The two heaviest units in the mix, named by the
+  **game's** own `UnitDef.name` so a localized install says what it says; only the pluralisation
+  is ours.
+* **When the top of that mix moves** — *"switching to knights"*, *"going hippogryphs to counter
+  their air units"*. Be precise about what this is: not a strategy switch (Computer+ holds its
+  build for the whole match) but the two things that genuinely move production — the tech tree
+  opening up, and the counter re-weighting. `switchReason` only blames the enemy when this
+  difficulty is actually countering and off a sample it believes, because a computer that blamed
+  the enemy for a switch caused by its own Castle finishing is a computer talking nonsense.
+  `SWITCH_MARGIN` is real hysteresis and is not optional: `buildableMix` is a continuous
+  re-weighting, so two near-equal rows trade places constantly and every trade would be a line.
+* **"help me"**, when **more than one opponent** has units in its towns at once (`isInvader`, so
+  a creep camp next door is not an invasion). One opponent in your base is a melee game.
+* **An answer to somebody else's call** — *"omw"*, *"coming, tping to you"*, or a decline that
+  says **why**: *"i can't come there right now, i'm under attack too"*. The decline is as much of
+  the feature as the relief wave: an ally told that nobody is coming can play the fight
+  accordingly, where an ally told nothing waits for an army that never arrives.
+
+### What it hears
+
+`readAllyCall` folds the text to lowercase and turns every non-letter into a space, then matches
+on **words**, so "HELP!!", "Help me.", "help-me" and "i'm dying" are one message and "helped",
+"helping" and "helpful" are not messages at all. The **declines are tested first**, because every
+one of them contains the word a request is recognised by — and so does every line this file
+itself says. Without that ordering two computers answer each other's answers for the rest of the
+match, which is why `tools/ai-plus-teamchat-test.cjs` runs the file's own vocabulary through its
+own parser and requires none of the answers to read as a call.
+
+A call is acted on only if it was **addressed to this computer** (the recipient list `deliverChat`
+already computed — it cannot read chat it was not a recipient of any more than it can see through
+the fog) and only from a player it is actually **co-allied** with: an enemy typing "help" on the
+all-channel is taunting. Nothing is *done* inside `heard` — the call is parked on the brain and
+answered by the manners pass, because `heard` is called from the middle of chat delivery and
+answering there would re-enter `deliverChat` from inside its own routing.
+
+### Coming to help
+
+The destination has two answers, in order, and the split is what keeps it honest about the fog.
+**The fight**, if there is one to see — a teammate whose army is dying somewhere is not asking you
+to go and stand in their base — asked of `AiPlayer.knows`, which in a melee team game usually says
+yes with no cheating at all, because a force grants `ALLIANCE_SHARED_VISION` and the computer is
+already looking through its teammate's units. Enemy *players* only: a creep camp an ally chose to
+walk into is not what "help" means. Otherwise **the base**: *where* an ally's base is is public — a
+melee player is shown their teammates' start locations from the first frame — and their message is
+the news that something is wrong with it, while *which* of their halls is in trouble is `knows`
+again. With nothing visible it simply sends the army to the ally's nearest base and lets it find
+the fight there, which is what a person does.
+
+It walks, unless the walk is longer than `PORTAL_WALK` (5400 — a Footman's `spd` is 270, so about
+twenty seconds of open ground, and a fight that has been going twenty seconds has been decided).
+Then the hero presses its **Scroll of Town Portal** aimed at that spot. That needed one fix in the
+sim: `SimWorld.nearestHall` now accepts an **allied** hall, which is the item's stated behaviour
+rather than a convenience — Blizzard's own page says the scroll *"will automatically select the
+highest (allied) Town Hall as a transport destination"* — and without it the trip landed back in
+our own base. `PlusItems.portalTo` is the press, and it is called by the army manager rather than
+reached from the belt's ladder, because it is not a reading of the hero's danger at all: the
+`escape` rung is a retreat aimed at the hero's own feet, and this is the same item aimed at a
+place the whole army needs to be.
+
+The relief wave is an ordinary `attacking` wave with the ally's base as its objective, so it ends
+the way every other wave does — the group standing on the objective with nothing hostile near it —
+and `HELP_TIMEOUT` (90 s) is the other end: an ally whose base fell while we were walking is an
+ally we cannot help, and standing in the wreckage is how the second base is lost too.
+
+### Scouting intelligence: the team scouts once
+
+Not chat, and it lives at the sighting instead (`ComputerPlusAi.scoutEnemy` / `teammates`): every
+hostile unit a Computer+ player sees is written into **every allied Computer+ player's**
+`EnemyMemory` as it is seen. Without it each computer on a team pays for the same scout — three
+of them walk a worker into the same base to learn the same thing, and the one whose scout dies
+(which latches `scoutDone`) plays the whole match against an opponent it never looked at.
+
+This is not a fog bypass either, and it is the same distinction as above: the sighting being
+passed on was made through somebody's **own** eyes (`knows`, and Computer+ never sets
+`bypassFog`), so what travels is a fact one player *learned*, exactly as a typed "they're going
+gryphons" would be. Each receiver still judges the pooled sightings by **its own** difficulty —
+its own `counterSample`, `counterShare` and `counterMemory` — so an Insane ally reacting to what
+a Normal ally saw still reacts like an Insane player. Easy neither shares nor receives, because it
+does not counter at all and has no memory to pour into.
+
+A **human** teammate's scouting reaches an AI ally by the engine's own route rather than this one:
+a melee force grants `ALLIANCE_SHARED_VISION`, so `AiPlayer.knows` is already looking through the
+human's units as well as its own.
+
+### The numbers
+
+None of them are Warcraft III's — nothing in the install describes a computer that talks — so
+every one is ours, which is this whole directory's standing rule. `TALK_GAP` 25 s between any two
+lines (a team game with three computers is three of these at once and the message area is small),
+`HELP_CALL_GAP` 60 s, `HELP_ANSWER_GAP` 30 s (a second "help" inside it is the same emergency and
+the army is already walking), `HELP_TIMEOUT` 90 s, `SWITCH_MARGIN` 1.25, `HELP_CALL_FOES` 2.
 
 ## The UI, and the overrides layer
 

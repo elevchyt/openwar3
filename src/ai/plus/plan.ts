@@ -274,7 +274,7 @@ function army(c: PlusCtx, budget: number): void {
  * and its Footmen down without ever abandoning the build it is playing — which is what a
  * player does, and is why this is not a strategy SWITCH.
  */
-function buildableMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
+export function buildableMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
   const { profile, table, strategy, tier, enemy } = c;
   const cap = Math.min(profile.techTier, tier);
   const counter = profile.counterWeight > 0 && enemy.seen >= profile.counterSample;
