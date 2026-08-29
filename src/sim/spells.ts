@@ -693,7 +693,7 @@ export const POLARITY_SPELLS: Record<string, { healsUndead: boolean; error: stri
  *  spells above heal too, but only their friendly half, so they're judged separately.
  *  A heal that would restore nothing is refused by WC3 rather than wasted (HPmaxed /
  *  UnitHPmaxed) — you cannot burn a Paladin's mana on an undamaged Footman. */
-export const HEAL_SPELLS = new Set(["Ahea"]); // Priest — Heal
+export const HEAL_SPELLS = new Set(["Ahea", "Arpl"]); // Priest — Heal; Obsidian Statue — Essence of Blight
 
 /** Spells that need the TARGET to have a mana pool, and the [Errors] line each says when
  *  it doesn't. Nothing in `targs1` can express this — Mana Burn's is
@@ -706,6 +706,10 @@ export const HEAL_SPELLS = new Set(["Ahea"]); // Priest — Heal
  *  Footman has no mana bar at all and the Demon Hunter simply may not pick him. */
 export const MANA_TARGET_SPELLS: Record<string, string> = {
   AEmb: "Cantmanaburn", // Demon Hunter — Mana Burn
+  // Spirit Touch restores mana, so a target with no mana bar is one it may not pick — the
+  // positive wording the same file ships for exactly this shape. Without it an autocasting
+  // Obsidian Statue spends its whole pool topping up Ghouls, which have no mana at all.
+  Arpm: "Targetmanauser", // Obsidian Statue — Spirit Touch
 };
 
 export const SPELL_HANDLERS: Record<string, Handler> = {
@@ -818,6 +822,31 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t) || t.mechanical) return;
     api.spellHeal(t, d(def.levelData[rank - 1], 0, 25));
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+  },
+
+  // Essence of Blight (`Arpl`) — the Obsidian Statue restores DataA hit points to a friendly
+  // living unit, one pulse per `Cool1`, for `Cost1` of its own mana. Its Targets Allowed is
+  // "ground,air,friend,self,organic,vuln,invu" (AbilityData) — `organic` is what keeps it off
+  // another statue and off a Meat Wagon, and `self` is why a statue can top ITSELF up.
+  //
+  // In HEAL_SPELLS, so the game's own rule applies: a heal that would restore nothing is
+  // REFUSED rather than wasted, which is what stops an autocasting statue emptying its mana
+  // into an undamaged Ghoul.
+  Arpl: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.ally(caster, t) || t.mechanical) return;
+    api.spellHeal(t, d(def.levelData[rank - 1], 0, 10));
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+  },
+
+  // Spirit Touch (`Arpm`) — the same row shape pointed at the other bar. The mana half of the
+  // Obsidian Statue, and the reason an undead player builds two of them: the abilities are
+  // separate autocasts on one mana pool, so a statue doing both does neither well.
+  Arpm: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.ally(caster, t) || t.mechanical || t.maxMana <= 0) return;
+    t.mana = Math.min(t.maxMana, t.mana + d(def.levelData[rank - 1], 0, 10));
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 

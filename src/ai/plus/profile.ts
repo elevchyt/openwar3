@@ -275,9 +275,11 @@ export const PLUS_EASY: PlusProfile = {
  * Computer+ (Normal) — "a bit of a faster reaction time and executes simple build orders, but
  * again, NO unit massing".
  *
- * Two heroes, a Keep, one expansion, a couple of towers, and an army it will actually pull out
- * of a lost fight. Thirty food is a real army and still half of what the map can feed, which is
- * the line the brief draws. It counters, but late and half-heartedly — see `counterWeight`.
+ * Two heroes, the whole tech tree, one expansion, a couple of towers, and an army it will
+ * actually pull out of a lost fight. Thirty food is a real army and still half of what the map
+ * can feed, which is the line the brief draws — and it is the FOOD ceiling, not the tech
+ * ceiling, that carries "no unit massing". It counters, but late and half-heartedly (see
+ * `counterWeight`), it upgrades only two ranks deep, and it is three minutes later to expand.
  */
 export const PLUS_NORMAL: PlusProfile = {
   difficulty: MELEE_NORMAL,
@@ -291,7 +293,13 @@ export const PLUS_NORMAL: PlusProfile = {
   // thing before it believes it, it only moves its mix a third of the way, and it forgets in a
   // minute and a half. That reads as a player who noticed late and over-corrected slightly.
   counterWeight: 0.35, counterSample: 12, counterShare: 0.4, counterMemory: 90,
-  armyFood: 30, towers: 2, heroes: 2, techTier: 2, upgradeRank: 2,
+  // TIER 3. It used to stop at a Keep, which is a bigger handicap than it reads as: `techTier`
+  // is also the filter on which BUILDS may be rolled (`rollStrategy`), so a tier-2 ceiling shut
+  // a Normal computer out of most of its race's table — no Knights, no Bears, no Frost Wyrms,
+  // no Tauren — and left it playing two or three openings for ever. A Normal player reaches
+  // tier 3; they just take longer over it and stop short of the whole tree, which is what
+  // `upgradeRank` and the clocks above already say.
+  armyFood: 30, towers: 2, heroes: 2, techTier: 3, upgradeRank: 2,
   firstAttack: 300, waveGap: 90, attackFood: 14, retreatHp: 0.35,
   // Creeps from two and a half minutes with the hero and ten food behind it — about a hero, a
   // couple of soldiers and whatever else is standing around, which is what clears a green camp.

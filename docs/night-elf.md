@@ -683,3 +683,18 @@ defeat the thing it is an upgrade to.
 * The Tree of Life's own `Atol` / `Arlm`.
 * The four races' repair rates are still written out at the call site (`0.35` / `1.5` in the
   authority) rather than read from Rep1/Rep2. The numbers are right; the source is not.
+
+## The Moon Well has to be ARMED, and a Burrow is asked for by its ability code
+
+Two bugs that both came from treating a night-elf building as something else, and both cost the
+race a lot:
+
+- **`Ambt` is on Computer+'s `HAND_AUTOCAST` list** — the short list of autocasts plus/casting.ts
+  deliberately does not switch on for itself — which left the decision to the army manager, and
+  the army manager never made it. So a night elf computer's wells poured into nobody but the units
+  it explicitly walked to them. `ComputerPlusAi.wellPass` now arms every replenisher it owns.
+- **The Entangled Gold Mine has a `garrisonCap`** (`Aegm` Car1 = 5), so any code that asks "does
+  this building have a cargo hold" rather than "is this an Orc Burrow" (`Abun`) picks it up.
+  Computer+'s burrow pass did, and stood the whole mine crew *down* every army pass — the wisps
+  went in and out of their own gold mine every two or three seconds, all match. Ask the hold's own
+  ability code; see [`computer-plus.md`](./computer-plus.md).

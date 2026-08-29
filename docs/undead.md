@@ -359,3 +359,22 @@ This milestone is the ECONOMY. The rest of the race is data-driven and largely a
   Graveyard's `Agyd`, the Gargoyle's `Astn`, the Shade's `Agho` — all still `todo`; see the
   audit for the full list. (The Crypt Fiend's `Aweb` came off it — see §7.)
 * Blight on TREES, and the blight doodads (see §1).
+
+## The Obsidian Statue is the race's only healer
+
+`uobs` carries two autocasts and **they are not the Moon Well's `Ambt`** — that is a battery a
+unit walks up to and drinks from, which is why a well stands in a base and a statue walks with the
+army. The statue's are ordinary unit-target autocasts it casts on somebody:
+
+- **`Arpl` Essence of Blight** — restores life. The important one: without it an undead army has
+  to go home between fights, which on a melee map *is* the fight.
+- **`Arpm` Spirit Touch** — restores mana.
+
+Both live on every statue and **both draw on the same mana pool**, so a statue with both switched
+on does neither job well. That is why an undead player builds two and splits them, and it is what
+`ComputerPlusAi.statuePass` does (life to the first — see [`computer-plus.md`](./computer-plus.md)).
+
+The tech gates are `[uslh] Requires=unp1,ugrv` (a Slaughterhouse needs a Halls of the Dead and a
+Graveyard — tier 2) and `[uobs] Requires=utom`, the **Tomb of Relics**, which is also the race's
+shop. `uobs` UnitAbilities is `"Arpl,Arpm,Aave"`; the `Amb2` row in AbilityData, whose base code
+*is* `Ambt` and whose comment says "Mana Battery (Obsidian Statue)", is not what the unit carries.

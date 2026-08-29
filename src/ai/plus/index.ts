@@ -12,7 +12,7 @@ import {
   type Standing,
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
-import { buildPlan, buildableMix, harvestPlan, type PlusCtx } from "./plan";
+import { LUMBER_FLOOR, buildPlan, buildableMix, harvestPlan, type PlusCtx } from "./plan";
 import {
   BUSY_LINES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP, HELP_ANSWER_STAGGER, HELP_CALLS,
   HELP_CALL_FOES, HELP_CALL_GAP, HELP_CLEAR, HELP_GRACE, HELP_TIMEOUT, OPENER_AT, OPENER_UNITS,
@@ -22,7 +22,7 @@ import {
 import { plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, heroKillable, killValue } from "./targeting";
 import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from "./races";
-import { canClearCamp, maxCampLevel, type CreepForce } from "./power";
+import { armyPower, maxCampLevel, type CreepForce, type Fighter } from "./power";
 
 // Computer+ — the improved melee AI (issue #124). Start at docs/computer-plus.md.
 //
@@ -258,6 +258,8 @@ const SCOUT_STUCK_AFTER = 8;
  *  `spd` is 190+ (UnitBalance.slk), so this is under two seconds' walk: generous enough that
  *  going round a cliff is not "stuck", short enough that standing still is. */
 const SCOUT_PROGRESS = 300;
+/** How many scouts this player will lose before it stops sending them. */
+const SCOUT_TRIES = 2;
 
 // ITEMS live in plus/items.ts, not here — an item ability is not in `SimUnit.abilities` (it
 // hangs off the inventory slot and dispatches through `useItem`), so neither this file's army
@@ -285,7 +287,8 @@ const LUMBER_PER_CHOPPER = 120;
  */
 export function lumberCrew(wood: number, choppers: number): number {
   if (choppers <= 0) return 0;
-  return Math.max(0, Math.min(LUMBER_CREW - Math.floor(wood / LUMBER_PER_CHOPPER), choppers));
+  const want = Math.max(LUMBER_FLOOR, LUMBER_CREW - Math.floor(wood / LUMBER_PER_CHOPPER));
+  return Math.max(0, Math.min(want, choppers));
 }
 
 /**
@@ -310,6 +313,18 @@ const COHESION_RADIUS = 600;
  */
 const COHESION_COMBAT = 500;
 /**
+ * …and how far behind the captain a unit has to be before it goes to the CAPTAIN rather than to
+ * the objective.
+ *
+ * The difference matters, and it is the one that was reported: within `COHESION_RADIUS` the
+ * army is one body and only the leaders are held; beyond THIS it is not one body at all, and a
+ * unit that far back walking to the objective under its own attack-move arrives at the fight
+ * alone and dies in it. Set well past `COHESION_RADIUS` so an ordinary marching column is not
+ * constantly re-aimed at its own hero — this is for the unit that was trained after the party
+ * left, or that fell behind killing something.
+ */
+const FOLLOW_RADIUS = 1400;
+/**
  * How much of the wave has to be AT the muster point before it may leave.
  *
  * A fraction of food rather than "everybody", so one straggler — a unit stuck behind a
@@ -320,6 +335,10 @@ const GATHER_SHARE = 0.8;
 /** …and how close to the muster point counts as gathered. Wider than `RALLY_SLACK`, which is
  *  the "stop nudging me" radius for one unit; this is a question about the whole group. */
 const GATHER_RADIUS = 700;
+/** How long it waits for the stragglers before going anyway. A player gives their army a few
+ *  seconds to bunch up at the rally point and then leaves with whatever came — see `gathered`
+ *  for the deadlock this exists to break. */
+const GATHER_PATIENCE = 12;
 
 /**
  * Creep camps: the window `AiPlayer.creepCamp` is asked for.
@@ -330,6 +349,16 @@ const GATHER_RADIUS = 700;
  * the game itself paints. See that file for what this used to be and what it cost.
  */
 const CREEP_FLOOR = 0;
+/**
+ * …and how far from home it will WALK to one, tried in order.
+ *
+ * Three rings rather than one sweep, so a camp beside the base is always taken before one
+ * across the map — the developer's "target nearby creep camps first before expanding their
+ * choices to further creep camps". The first is about the base and its own expansion, the
+ * second is the middle of a melee map, and the last is "anywhere" for the late game, when the
+ * army is big enough that the walk is affordable and the near camps are long gone.
+ */
+const CREEP_REACH = [3000, 6000, Infinity];
 /**
  * Hit-point fraction a unit heals up to before it is asked to fight again.
  *
@@ -349,6 +378,21 @@ const CREEP_HEALTH = 0.65;
 /** …and the hero level past which creeping stops being worth the walk. */
 const CREEP_UNTIL_LEVEL = 5;
 
+/**
+ * When a FIGHT is broken off — see `ComputerPlusAi.fightLost`, which explains why these are so
+ * much lower than the bars a creep run is STARTED at (plus/power.ts): that one asks "is this
+ * party good enough to begin", and a party is always weaker once it has, so re-asking it
+ * mid-fight would abort every run on the first scratch.
+ *
+ * All three are ours and all three are the developer's own numbers: leave when the group is
+ * under 40 % of its hit points, or when the captain is under 20 % and what it is fighting is
+ * still more than half up. They apply to a creep camp and to an opponent's army alike — only
+ * the way "still more than half up" is MEASURED differs (`oppositionHealthy`).
+ */
+const ABORT_GROUP_HP = 0.4;
+const ABORT_HERO_HP = 0.2;
+const CAMP_STILL_UP = 0.5;
+
 /** How often the ally list is rebuilt. An alliance changes about as often as a player leaves,
  *  and the answer costs a walk of the whole unit table — see `alliesOf`. */
 const ALLY_REFRESH = 5;
@@ -364,6 +408,13 @@ const BURROW_HOLD = "Abun";
 /** The `buffType` category a town hall carries — UI\UnitEditorData.txt's pickFlags, the first
  *  of the four, and the same one `SimWorld.nearestHall` ranks a Town Portal's destination by. */
 const HALL_CATEGORY = "townhall";
+
+/** The Moon Well / Obsidian Statue battery (`Ambt`, "Mana Battery"), and the statue's own two
+ *  autocasts — `Arpl` Essence of Blight (life) and `Arpm` Spirit Touch (mana), straight off
+ *  `uobs`'s UnitAbilities row. See `wellPass` and `statuePass`. */
+const REPLENISH_CODE = "Ambt";
+const STATUE_LIFE = "Arpl";
+const STATUE_MANA = "Arpm";
 
 type Mode = "massing" | "attacking" | "retreating" | "defending";
 
@@ -408,7 +459,15 @@ interface Brain {
    *  there since. The watchdog on a tour that only ever advanced on arrival — see `scoutPass`. */
   scoutWas: { x: number; y: number } | null;
   scoutStill: number;
+  /** How many scouts this player has already lost — see `scoutPass`. */
+  scoutsLost: number;
   mode: Mode;
+  /** When the wave first found itself short at the muster point (-1 = it is gathered). The
+   *  deadline on `gathered`, without which one stuck soldier holds the army at home for ever. */
+  gatherSince: number;
+  /** WHAT this retreat is running from, which is what decides whether the hero spends its
+   *  Scroll of Town Portal on it. Null while nothing is retreating. */
+  retreatFrom: "creeps" | "player" | null;
   target: { id: number; x: number; y: number } | null;
   reissueIn: number;
   /** When the last wave came home — `waveGap` is measured from it. */
@@ -543,7 +602,10 @@ export class ComputerPlusAi {
       scoutDone: false,
       scoutWas: null,
       scoutStill: 0,
+      scoutsLost: 0,
       mode: "massing",
+      gatherSince: -1,
+      retreatFrom: null,
       target: null,
       reissueIn: 0,
       lastWaveEnd: 0,
@@ -717,6 +779,10 @@ export class ComputerPlusAi {
       // Either the group is walking home broken, or this wave is already over and what is left
       // of it is standing in somebody else's base.
       losing: b.mode === "retreating",
+      // …and whether that retreat is worth a Scroll of Town Portal, which turns entirely on
+      // WHAT it is running from (see `ItemCtx.portalWorthIt` and `Brain.retreatFrom`). Creeps
+      // do not chase; an army does.
+      portalWorthIt: b.retreatFrom === "player",
       // MASSING only. "Defending" is the base under attack, which is the one moment a hero
       // walking off to buy a potion is worse than having no potion at all.
       mayShop: b.mode === "massing",
@@ -813,6 +879,10 @@ export class ComputerPlusAi {
     // after the wave has already been pointed at something.
     const threatened = !!this.nearestThreat(b);
     this.burrowPass(b, threatened);
+    // The statues are split EVERY pass, whatever the army is doing: a statue's job is to heal
+    // the fight it is standing in, so unlike the Moon Well trip below this is not a decision
+    // about being at home. (A statue trained mid-battle arrives with both autocasts off.)
+    this.statuePass(b);
     // Only while MASSING. A well trip replaces whatever the unit was doing, so running this
     // during a fight would walk a Grunt at 60 % out of the battle line and across the base —
     // which is not healing, it is leaving. "When it returned to the base" is the whole
@@ -997,7 +1067,14 @@ export class ComputerPlusAi {
     const scout = b.scoutId ? this.host.world.units.get(b.scoutId) : null;
     if (b.scoutId && (!scout || scout.hp <= 0 || scout.owner !== b.ai.player)) {
       b.scoutId = 0;
-      b.scoutDone = true; // it did not come back; nobody follows it
+      // ONE more, and then nobody follows it. The old rule was "a scout that did not come back
+      // is never replaced", which is what a player does with their THIRD worker and not with
+      // their first: a scout lost in the opening minute leaves the AI playing the whole match
+      // against an opponent it has never looked at, and countering, expanding and creeping all
+      // read off what it saw. A second worker is 75 gold; the map is worth more than that.
+      if (b.scoutsLost++ >= SCOUT_TRIES) b.scoutDone = true;
+      b.scoutGoal = null;
+      b.scoutWas = null;
       return;
     }
     if (!scout) {
@@ -1037,6 +1114,15 @@ export class ComputerPlusAi {
       b.scoutLeg++;
     }
     const goal = this.scoutWaypoint(b);
+    // NO WAYPOINT is two different things and only one of them ends the tour. A tour that has
+    // run off the end of its legs is finished; a tour that cannot name leg 0 because there is
+    // nothing to look at yet (no enemy building this player can find, a map with one start
+    // location) is simply not ready — and latching on THAT, which is what this used to do,
+    // switched scouting off for the whole match on the first pass it ran.
+    if (!goal && b.scoutLeg <= SCOUT_LEGS) {
+      b.scoutGoal = null;
+      return;
+    }
     if (!goal) {
       // Tour over: back to work — and WALKED home rather than merely released.
       //
@@ -1150,8 +1236,10 @@ export class ComputerPlusAi {
     const rally = this.rally(b);
     for (const u of this.squadUnits(b)) {
       // A hero walking to a shop is left alone. The errand is only re-issued every SHOP_PERIOD,
-      // so a rally order in between would send it back and it would arrive at neither.
-      if (u.id === b.items.errand) continue;
+      // so a rally order in between would send it back and it would arrive at neither. Same for
+      // one walking to a DROP (`getitem`): the loot pass re-issues on its own clock, and a
+      // rally order in between is what left the tomes on the grass.
+      if (u.id === b.items.errand || u.order === "getitem") continue;
       if (Math.hypot(u.x - rally.x, u.y - rally.y) <= RALLY_SLACK) continue;
       if (u.order === "move" || u.order === "attack") continue;
       b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: rally.x, y: rally.y }, queued: false });
@@ -1194,7 +1282,19 @@ export class ComputerPlusAi {
       total += food;
       if (Math.hypot(u.x - rally.x, u.y - rally.y) <= GATHER_RADIUS) here += food;
     }
-    return total > 0 && here >= total * GATHER_SHARE;
+    if (total <= 0) return false;
+    if (here >= total * GATHER_SHARE) {
+      b.gatherSince = -1;
+      return true;
+    }
+    // IT GIVES UP WAITING. A gate with no deadline is a deadlock, and this one deadlocked in
+    // the way that costs the most: a single soldier that cannot reach the muster point — stuck
+    // behind a building, walled in by its own base, chasing something — holds the WHOLE army at
+    // home, hero included, and the reported symptom was exactly that ("the AI is moving the
+    // hero to its base and locking it there instead of going out to creep"). A player waits a
+    // few seconds for their army to bunch up and then leaves with what came.
+    if (b.gatherSince < 0) b.gatherSince = b.clock;
+    return b.clock - b.gatherSince >= GATHER_PATIENCE;
   }
 
   /**
@@ -1245,7 +1345,18 @@ export class ComputerPlusAi {
   private creepTarget(b: Brain): { x: number; y: number; level: number } | null {
     const ceiling = maxCampLevel(this.creepForce(b));
     if (ceiling < 0) return null;
-    return b.ai.creepCamp(CREEP_FLOOR, ceiling, this.hasAir(b));
+    const air = this.hasAir(b);
+    // NEAREST FIRST, and the search widens rather than being one sweep of the whole map.
+    // `creepCamp` already answers with the nearest camp inside the level window, but "nearest"
+    // over the whole map still walks a party clean across it when the two camps beside home are
+    // one point too hard — and a party that is walking is a party that is neither creeping nor
+    // defending. Stepping the radius out means a camp next door is always taken first, and the
+    // long walk is only ever offered once nothing closer is left.
+    for (const reach of CREEP_REACH) {
+      const camp = b.ai.creepCamp(CREEP_FLOOR, ceiling, air, reach);
+      if (camp) return camp;
+    }
+    return null;
   }
 
   /**
@@ -1257,21 +1368,115 @@ export class ComputerPlusAi {
    * out of both would let a party heal itself by ignoring its casualties.
    */
   private creepForce(b: Brain): CreepForce {
-    let fighterFood = 0;
-    let heroLevel = 0;
+    const fighters: Fighter[] = [];
     let hp = 0;
     let maxHp = 0;
+    const captain = this.squadHero(b);
     for (const u of this.squadUnits(b)) {
       hp += Math.max(0, u.hp);
       maxHp += Math.max(1, u.maxHp);
-      if (u.isHero) {
-        heroLevel = Math.max(heroLevel, u.level);
-        continue;
-      }
-      if (this.recovering(u)) continue;
-      fighterFood += this.host.registry.get(u.typeId)?.foodUsed ?? 0;
+      if (u.isHero || this.recovering(u)) continue;
+      fighters.push({ dps: this.dpsOf(u), hp: Math.max(0, u.hp), maxHp: Math.max(1, u.maxHp) });
     }
-    return { fighterFood, heroLevel, health: maxHp > 0 ? hp / maxHp : 0 };
+    return {
+      fighters,
+      heroLevel: captain?.level ?? 0,
+      heroHealth: captain ? captain.hp / Math.max(1, captain.maxHp) : 0,
+      health: maxHp > 0 ? hp / maxHp : 0,
+    };
+  }
+
+  /**
+   * A unit's damage per second, as the party's power is priced from (plus/power.ts).
+   *
+   * The mean of the weapon's own roll (`damage` + `dice` × (`sides` + 1) / 2 — WC3's base plus
+   * NdS, which is why an upgrade that adds a DIE widens the spread) over its cooldown, off the
+   * unit's LIVE `SimWeapon`, so upgrades, auras and buffs are all already in it.
+   *
+   * The best enabled slot rather than the sum: a unit does not fire both weapons at once, and
+   * a Dragonhawk's dormant second attack is not damage it is dealing. A worker's harvest
+   * "weapon" scores near nothing on its own and needs no special case.
+   */
+  private dpsOf(u: SimUnit): number {
+    let best = 0;
+    for (const w of u.weapons) {
+      if (!w.enabled || w.cooldown <= 0) continue;
+      const mean = w.damage + (w.dice * (w.sides + 1)) / 2;
+      best = Math.max(best, mean / w.cooldown);
+    }
+    return best;
+  }
+
+  /**
+   * Is this creep run lost — break off and walk home?
+   *
+   * **A different question from `canClearCamp`, and deliberately a much lower bar.** That one
+   * asks "is this party good enough to START this fight", and re-asking it mid-fight aborts
+   * every run the moment the first soldier is scratched: a party is always weaker after it has
+   * begun, so a run judged by the starting bar can never be finished. This one asks the thing a
+   * player actually asks — *is this going badly enough to leave?* — and there are two ways to
+   * answer yes:
+   *
+   *  · **the GROUP is broken** (under `CREEP_ABORT_HP` of its hit points). At that point the
+   *    party is losing units rather than trading them, whatever the camp has left.
+   *  · **the CAPTAIN is nearly dead and the camp is not** — under `CREEP_ABORT_HERO` while the
+   *    camp still holds more than `CAMP_STILL_UP` of its own hit points. The second half is
+   *    what stops it running from a fight it has all but won: a hero at 15 % standing over the
+   *    last creep on a sliver finishes it and collects the experience, where the same hero at
+   *    15 % in front of a fresh camp is a dead hero. A dead hero is the most expensive thing on
+   *    a melee map, and it is also the whole reason the party was there.
+   */
+  private fightLost(b: Brain): boolean {
+    if (b.mode !== "attacking") return false;
+    const force = this.creepForce(b);
+    if (force.health < ABORT_GROUP_HP) return true;
+    // No captain at all: for a creep run `attacking` has already ended it; for an assault on a
+    // player this is a broken army in somebody else's base.
+    if (force.heroLevel < 1) return b.creeping;
+    if (force.heroHealth >= ABORT_HERO_HP) return false;
+    return this.oppositionHealthy(b);
+  }
+
+  /**
+   * Is what we are fighting still strong enough that leaving is the right answer?
+   *
+   * The second half of `fightLost`, and it is what stops the army running from a fight it has
+   * all but won: a hero at 15 % standing over the last creep on a sliver finishes it and
+   * collects the experience, where the same hero at 15 % in front of a fresh camp is a dead
+   * hero. Two ways of asking it, because the two kinds of opposition report themselves
+   * differently:
+   *
+   *  · a CREEP CAMP is a fixed roster, so it can be measured directly — `campHealthAt` is the
+   *    fraction of its own hit points still standing;
+   *  · a PLAYER's army is not a roster we can enumerate (their dead units are simply gone), so
+   *    it is priced instead: the enemy we can SEE around the group, through the same
+   *    `armyPower` metric the party itself is priced by (plus/power.ts). Still outgunning us is
+   *    what "still healthy" means about an opponent.
+   */
+  private oppositionHealthy(b: Brain): boolean {
+    if (b.creeping) {
+      const camp = b.target;
+      return !camp || b.ai.campHealthAt(camp.x, camp.y) > CAMP_STILL_UP;
+    }
+    const centre = this.squadCentre(b) ?? this.squadHero(b);
+    if (!centre) return true;
+    const foes: Fighter[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.building || u.owner === b.ai.player) continue;
+      if (!b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
+      if (Math.hypot(u.x - centre.x, u.y - centre.y) > CLEARED_RADIUS) continue;
+      foes.push({ dps: this.dpsOf(u), hp: Math.max(0, u.hp), maxHp: Math.max(1, u.maxHp) });
+    }
+    if (!foes.length) return false; // nothing left in front of us: the fight is over, not lost
+    return armyPower(foes) > armyPower(this.creepForce(b).fighters);
+  }
+
+  /** Break off, and REMEMBER WHAT FROM — the one thing the hero's Scroll of Town Portal turns
+   *  on (`itemCtx`). Creeps do not chase and will still be there in two minutes; an army does,
+   *  and a hero walking away from one usually does not get home. */
+  private retreat(b: Brain, from: "creeps" | "player"): void {
+    b.retreatFrom = from;
+    this.setMode(b, "retreating");
   }
 
   /** On the way, and once there. */
@@ -1280,20 +1485,25 @@ export class ComputerPlusAi {
     // A creep run is FOR the hero, so it is over the moment the hero is not in it — dead, or
     // pulled home by something else. Carrying on would be trading soldiers for experience
     // nobody is left to collect.
-    if (b.creeping && !this.squadHero(b)) return void this.endWave(b);
-    // …and it is over the moment the party STOPS being able to take the camp, which is the
-    // other half of not suiciding into one. `canClearCamp` is the same bar that let the party
-    // set off (plus/power.ts), asked again of what is left of it: a fight that has cost the
-    // party its soldiers or half its hit points is a fight it is now losing, and walking home
-    // with a hero costs a walk where staying costs the hero. Checked before `retreatHp`, which
-    // is a fraction of the group and says nothing about what the group is standing in front of
-    // — and which is 0 on the difficulty that never creeps anyway.
-    if (b.creeping && !canClearCamp(this.creepForce(b), b.creepLevel)) {
-      this.setMode(b, "retreating");
+    // THE CAPTAIN IS DEAD: fall back. A creep run is FOR the hero, so with the hero gone the
+    // party is trading soldiers for experience nobody is left to collect — and it is standing in
+    // a camp that has just proved it can kill a hero. `retreating` rather than `endWave`, which
+    // is the difference between WALKING HOME and merely being told the wave is over: `endWave`
+    // drops the party into `massing`, whose rally order is skipped for anything already fighting
+    // (`u.order === "attack"`), so the soldiers stayed in the camp and died in it one by one.
+    if (b.creeping && !this.squadHero(b)) {
+      this.retreat(b, "creeps");
+      return;
+    }
+    // …and it BREAKS OFF a fight that has gone badly — the other half of not suiciding into
+    // one. ONE rule for both kinds of fight (`fightLost`), and note it is a different question
+    // from `canClearCamp`, which is the bar for STARTING a creep run.
+    if (this.fightLost(b)) {
+      this.retreat(b, b.creeping ? "creeps" : "player");
       return;
     }
     if (b.profile.retreatHp > 0 && this.readiness(b) < b.profile.retreatHp) {
-      this.setMode(b, "retreating");
+      this.retreat(b, b.creeping ? "creeps" : "player");
       return;
     }
     const target = b.target;
@@ -1347,14 +1557,26 @@ export class ComputerPlusAi {
    */
   private commit(b: Brain, x: number, y: number): void {
     const focus = b.profile.focusFire ? this.focusTarget(b, x, y) : null;
+    // WHERE THE ARMY IS, for the cohesion rule below — and it is the CAPTAIN when there is one.
+    //
+    // "The army follows its hero" is the developer's own framing and it is a better anchor than
+    // a centre of mass for the reason a centroid always is: the centroid of a hero at a creep
+    // camp and six soldiers at home is a point in the middle of the map that nobody is standing
+    // on and nobody should walk to. Anchoring on the captain makes the same rule say the right
+    // thing — the soldiers close on the hero, and the hero itself is held back by it whenever
+    // IT is the one out in front, which is the case that gets a hero killed.
+    //
     // Cohesion holds a marching army together; it must NOT hold a defence back. Something is
-    // standing in the base, everyone who can reach it should be swinging at it, and a Grunt that
-    // is "ahead of the group" on the way home is a Grunt that got there first.
-    const centre = b.mode === "defending" ? null : this.squadCentre(b);
+    // standing in the base, everyone who can reach it should be swinging at it, and a Grunt
+    // that is "ahead of the group" on the way home is a Grunt that got there first.
+    const centre = b.mode === "defending" ? null : (this.squadHero(b) ?? this.squadCentre(b));
     for (const u of this.squadUnits(b)) {
       // A unit that is HEALING is not ordered anywhere. It is standing in the base with a Salve
       // on it or its head in a Moon Well, and marching it out is what makes the heal pointless.
-      if (this.recovering(u)) continue;
+      // Nor is one two steps from a drop it is walking to — the loot pass only ever sends a
+      // hero somewhere nothing hostile is standing (plus/items.ts `loot`), so this cannot leave
+      // one wandering into a fight.
+      if (this.recovering(u) || u.order === "getitem") continue;
       // THE ARMY MOVES AS ONE BODY. A unit that has pulled AHEAD of the group waits for it
       // instead of walking on — see `COHESION_RADIUS`, and note the two conditions that make
       // this a regroup rather than a leash: it only ever holds back the units in FRONT (the
@@ -1501,9 +1723,18 @@ export class ComputerPlusAi {
    * middle instead of each unit chasing the one in front.
    */
   private strayed(b: Brain, u: SimUnit, centre: { x: number; y: number }, x: number, y: number): boolean {
-    if (Math.hypot(u.x - centre.x, u.y - centre.y) <= COHESION_RADIUS) return false;
-    if (Math.hypot(u.x - x, u.y - y) >= Math.hypot(centre.x - x, centre.y - y)) return false;
-    return !this.enemyNear(b, u.x, u.y, COHESION_COMBAT);
+    const off = Math.hypot(u.x - centre.x, u.y - centre.y);
+    if (off <= COHESION_RADIUS) return false;
+    // A unit that is IN a fight is left in it — pulling it out is not cohesion.
+    if (this.enemyNear(b, u.x, u.y, COHESION_COMBAT)) return false;
+    // Far enough behind to be LOST rather than merely trailing: close on the captain instead of
+    // attack-moving to an objective the group has already left it behind for. This is the half
+    // that answers "army units stuck at base while the hero is out creeping alone" — a Grunt
+    // trained after the party set off is a straggler by every measure, and the objective's own
+    // attack-move walks it into the camp the party is already fighting in, one at a time.
+    if (off > FOLLOW_RADIUS) return true;
+    // …otherwise only the LEADERS wait: a unit nearer the objective than the anchor is.
+    return Math.hypot(u.x - x, u.y - y) < Math.hypot(centre.x - x, centre.y - y);
   }
 
   /** Where the group actually is — the anti-chase rule measures from here rather than from the
@@ -1563,6 +1794,7 @@ export class ComputerPlusAi {
   private endWave(b: Brain): void {
     b.target = null;
     b.creeping = false;
+    b.retreatFrom = null;
     b.lastWaveEnd = b.clock;
     this.setMode(b, "massing");
   }
@@ -1637,13 +1869,24 @@ export class ComputerPlusAi {
   private wellPass(b: Brain): void {
     const wells: SimUnit[] = [];
     for (const u of this.host.world.units.values()) {
-      if (u.owner !== b.ai.player || u.hp <= 0 || u.mana <= 0) continue;
+      if (u.owner !== b.ai.player || u.hp <= 0) continue;
       if (!this.host.world.isReplenisher(u.id)) continue;
-      wells.push(u);
+      // ARM IT. `Ambt` is in plus/casting.ts's `HAND_AUTOCAST` — the short list of autocasts
+      // that file deliberately does NOT switch on for itself — which left the decision here,
+      // and here never made it: a night elf's wells poured into nobody but the units this pass
+      // explicitly walked to them. With autocast on, `tickReplenish`'s third rung tops up
+      // whoever is standing at the well already, which is most of what a Moon Well does for a
+      // player and all of what it does for an army that just walked home.
+      this.arm(b, u, REPLENISH_CODE);
+      if (u.mana > 0) wells.push(u);
     }
     if (!wells.length) return;
-    for (const u of this.squadUnits(b)) {
-      if (u.hp / Math.max(1, u.maxHp) >= RECOVER_TO) continue;
+    // THE HERO FIRST, then the rest of the army. A well's mana is finite and a hero is worth
+    // more than a Grunt is — sending them in squad order gave the hero whatever the soldiers
+    // in front of it had not already drunk, which on one Moon Well is nothing.
+    const hurt = [...this.squadUnits(b)].filter((u) => u.hp / Math.max(1, u.maxHp) < RECOVER_TO);
+    hurt.sort((p, q) => (q.isHero ? 1 : 0) - (p.isHero ? 1 : 0));
+    for (const u of hurt) {
       if (u.drinkWellId > 0) continue; // already on its way to one
       let best: SimUnit | null = null;
       let bestD = WELL_WALK;
@@ -1656,6 +1899,53 @@ export class ComputerPlusAi {
       // arrives (SimWorld.issueDrink). Not a second channel — the same order a player gives.
       b.ai.order({ c: "drink", unitId: u.id, wellId: best.id });
     }
+  }
+
+  /**
+   * THE OBSIDIAN STATUES — one on life, one on mana.
+   *
+   * The undead's healing, and the reason `PlusRaceTable.always` exists (plus/races.ts). Both
+   * abilities live on every statue and both draw on the SAME mana pool, so a statue with both
+   * switched on does neither job well — which is why an undead player builds two and splits
+   * them, and why this is a pass rather than one more line in `armAutocasts`.
+   *
+   * **Life first.** `Arpl` Essence of Blight is what keeps an army alive; `Arpm` Spirit Touch
+   * only shortens the wait for the next spell. So the statues are walked in a stable order and
+   * the first one gets life, the second mana, the third life again — a player with one statue
+   * has it on Essence of Blight, always.
+   *
+   * The toggle is the ordinary autocast command, judged by the authority exactly as the
+   * player's click on the same button is.
+   */
+  private statuePass(b: Brain): void {
+    const statues: SimUnit[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== b.ai.player || u.hp <= 0 || u.building) continue;
+      if (!u.abilities.some((a) => a.code === STATUE_LIFE && a.level >= 1)) continue;
+      statues.push(u);
+    }
+    statues.sort((p, q) => p.id - q.id); // stable, so a statue does not swap jobs every pass
+    statues.forEach((u, i) => {
+      const wants = i % 2 === 0 ? STATUE_LIFE : STATUE_MANA;
+      const other = wants === STATUE_LIFE ? STATUE_MANA : STATUE_LIFE;
+      this.arm(b, u, wants);
+      this.disarm(b, u, other);
+    });
+  }
+
+  /** Switch an autocast ON if it is off. `{ c: "autocast" }` is a TOGGLE, so both of these
+   *  have to read the current state before pressing — an unconditional press every pass would
+   *  flip the button twice a second. */
+  private arm(b: Brain, u: SimUnit, code: string): void {
+    const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
+    if (!ab || ab.autocastOn) return;
+    b.ai.order({ c: "autocast", unitId: u.id, code });
+  }
+
+  private disarm(b: Brain, u: SimUnit, code: string): void {
+    const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
+    if (!ab || !ab.autocastOn) return;
+    b.ai.order({ c: "autocast", unitId: u.id, code });
   }
 
   /**
@@ -1714,17 +2004,32 @@ export class ComputerPlusAi {
     }
   }
 
-  /** The CAPTAIN — our hero in the group, if one is in it and alive. Every creeping decision
-   *  is gated on this: a creep camp is experience, and experience goes on a hero. */
+  /**
+   * The CAPTAIN — the hero the army is built around.
+   *
+   * **The FIRST hero this player bought, then the second, then the third.** Not the highest
+   * level, which is what this used to pick: the AI's own hero ORDER (`heroId`/`heroId2`/
+   * `heroId3`, rolled at seat time from the strategy — see `pickHeroes`) is the order they were
+   * trained in and therefore the order they are levelled and equipped in, so the first one is
+   * the one that is ahead and the one the camps are being farmed for. When it dies the second
+   * takes over, and when that dies the third — which is what the developer asked for, and it
+   * also stops the captaincy CHANGING HANDS mid-run every time a second hero happens to ding:
+   * `creepRun` gates on the captain's health and `attacking` ends the run when the captain is
+   * gone, and both of those become nonsense if "the captain" moves around.
+   *
+   * Falls back to any hero in the squad, so a hero this player was given rather than bought
+   * (a tavern hero, a map's gift) can still lead a party.
+   */
   private squadHero(b: Brain): SimUnit | null {
-    let best: SimUnit | null = null;
-    for (const u of this.squadUnits(b)) {
-      if (!u.isHero || u.hp <= 0) continue;
-      // The highest-level one leads: it is the one the camps are being farmed for, and the one
-      // whose health decides whether the party goes at all.
-      if (!best || u.level > best.level) best = u;
+    const alive: SimUnit[] = [];
+    for (const u of this.squadUnits(b)) if (u.isHero && u.hp > 0) alive.push(u);
+    if (!alive.length) return null;
+    for (const id of [b.ai.heroId, b.ai.heroId2, b.ai.heroId3]) {
+      if (!id) continue;
+      const found = alive.find((u) => u.typeId === id);
+      if (found) return found;
     }
-    return best;
+    return alive[0];
   }
 
   private hasAir(b: Brain): boolean {
@@ -1933,7 +2238,7 @@ export class ComputerPlusAi {
     // `greetingsDone` is the rest of it: the greetings are staggered per SLOT, so on a full map
     // the last one lands later than any fixed floor can know, and the two sets of lines
     // interleaved into one wall at the start of the match.
-    if (b.clock < Math.max(OPENER_AT, this.greetingsDone()) + GREET_STAGGER * b.ai.player) return;
+    if (b.clock < Math.max(OPENER_AT, this.greetingsDone()) + GREET_STAGGER * this.seatOrder(b)) return;
     b.opened = true;
     const ranked = Object.entries(b.strategy.mix).sort((a, c) => c[1] - a[1]);
     if (!ranked.length) return;
@@ -1956,6 +2261,14 @@ export class ComputerPlusAi {
     let last = 0;
     for (const other of this.brains) if (!other.gone) last = Math.max(last, other.ai.player);
     return GREET_AT + GREET_STAGGER * last;
+  }
+
+  /** This computer's place among the Computer+ seats (0, 1, 2 …) rather than its LOBBY SLOT.
+   *  What the openers are staggered by, so three computers speak three beats apart whether they
+   *  sit in slots 1-3 or in slots 2, 7 and 11 — staggering by the slot made the last one wait
+   *  most of a minute after the others for no reason a listener could see. */
+  private seatOrder(b: Brain): number {
+    return Math.max(0, this.brains.filter((o) => !o.gone).indexOf(b));
   }
 
   /**

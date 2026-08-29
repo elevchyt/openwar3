@@ -467,6 +467,14 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   ANtm: { target: "unit" }, // Transmute — kill a non-hero for gold
   // === Unit casters ===
   Ahea: { target: "unit", autocast: true }, // Priest Heal
+  // The Obsidian Statue's two autocasts (`uobs` UnitAbilities = "Arpl,Arpm,Aave"). They are
+  // NOT the Moon Well's `Ambt` — that is a battery a unit walks up to and drinks from, where
+  // these two are ordinary unit-target autocasts the statue casts on somebody, which is why the
+  // statue walks with the army and the well does not. Essence of Blight is the important one:
+  // it is the undead's only healing, and without it an undead army has to go home after every
+  // fight (see docs/computer-plus.md and the `always` row in plus/races.ts).
+  Arpl: { target: "unit", autocast: true }, // Essence of Blight — restore life
+  Arpm: { target: "unit", autocast: true }, // Spirit Touch — restore mana
   Adis: { target: "point" }, // Dispel Magic — clear buffs, damage summons
   Ainf: { target: "unit", autocast: true }, // Inner Fire — +armour +damage
   Aslo: { target: "unit", autocast: true }, // Slow (Sorceress)

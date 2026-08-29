@@ -80,8 +80,15 @@ check("with nothing banked, every ghoul chops", lumberCrew(0, 6), 6);
 check("…however many there are, up to the crew", lumberCrew(0, 20), 10);
 check("120 lumber banked releases one", lumberCrew(120, 20), 9);
 check("600 releases five", lumberCrew(600, 20), 5);
-check("…and a full bank sends them all to the wave", lumberCrew(1200, 20), 0);
-check("…and stays there", lumberCrew(5000, 20), 0);
+// …down to a FLOOR of two, which is ours and not undead.ai's. Taken literally the formula
+// reaches zero at 1200 lumber, which is a bank an undead player passes through in the middle of
+// every game: every ghoul joined the wave, the wood stopped, the bank drained back down with
+// nothing chopping, and the AI never noticed. Two ghouls on the trees is what a player keeps
+// back for exactly that reason and it costs the wave almost nothing.
+check("…a full bank leaves the FLOOR chopping", lumberCrew(1200, 20), 2);
+check("…and however full it gets, still two", lumberCrew(5000, 20), 2);
+check("…but never more ghouls than there are", lumberCrew(5000, 1), 1);
+check("…and none at all with no ghouls", lumberCrew(5000, 0), 0);
 // The self-regulating half, which is why the rule is worth taking whole: it can never ask for
 // more lumberjacks than there are ghouls, so a two-ghoul opening puts two in the forest and
 // leaves the wave to everything else.
@@ -174,6 +181,10 @@ function pressed(units, profile, ctx, opts = {}) {
   const orders = [];
   const world = {
     units: new Map(units.map((u) => [u.id, u])),
+    // Ground items — what the `loot` pass walks. Empty unless a case puts something on the
+    // grass, since every case here is about which BUTTON is pressed rather than what is picked
+    // up (see tools/ai-plus-army-test.cjs for the pricing side of the belt).
+    items: new Map((opts.ground ?? []).map((it) => [it.id, it])),
     itemReadyError: () => opts.notReady ?? null,
     itemUseError: () => opts.badTarget ?? null,
     shopReaches: () => false,
@@ -194,7 +205,7 @@ function pressed(units, profile, ctx, opts = {}) {
   return orders.find((c) => c.c === "useitem") ?? null;
 }
 
-const CTX = { home: { x: 0, y: 0 }, losing: false, mayShop: false };
+const CTX = { home: { x: 0, y: 0 }, losing: false, mayShop: false, portalWorthIt: true };
 const AWAY = { ...CTX, home: { x: 9000, y: 9000 } }; // the fight is far from home
 const enemy = (o = {}) => unit({ owner: 1, ...o });
 const itemOf = (cmd) => (cmd ? cmd.slot : null);
@@ -238,6 +249,22 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
   // real game, and the only aim that cannot go out of date while the hero runs.
   check("…aimed at the hero itself, which is the double-click", cmd && cmd.x === 4000 && cmd.y === 4000, true);
   check("…and with no target unit", cmd && cmd.targetId, 0);
+}
+{
+  // …BUT NOT TO LEAVE A CREEP CAMP. `portalWorthIt` is the army manager's answer to "what are
+  // we running from" (plus/index.ts `retreatFrom`): creeps do not chase, do not follow you
+  // home, and will still be standing there in two minutes, so a scroll spent to leave one buys
+  // a few seconds of walking and is then not in the belt for the fight that decides the game.
+  // A HEALTHY hero on a lost creep run walks.
+  const h = belt(hero({ hp: 900, x: 4000, y: 4000 }), "phea", "pnvl", "stwp");
+  const vsCreeps = { ...AWAY, losing: true, portalWorthIt: false };
+  check("a lost CREEP fight: the healthy hero walks home rather than scrolling",
+    pressed([h, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, vsCreeps), null);
+  // …and the hero's OWN skin is still unconditional: a hero about to die is a hero about to
+  // die, and a creep camp is not a reason to lose one.
+  const dying = belt(hero({ hp: 200, x: 4000, y: 4000 }), "phea", "pnvl", "stwp");
+  check("…but a DYING hero scrolls out of a creep camp all the same",
+    itemOf(pressed([dying, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, vsCreeps)), 2);
 }
 {
   // THE HERO'S OWN SKIN, not just the army's. A hero about to die in a fight the army has not
@@ -386,6 +413,7 @@ function shopped(units, profile, opts = {}) {
   const shelf = opts.shelf ?? ["stwp", "phea", "shea", "pnvl", "spro", "bspd"]; // [ngme] Sellitems
   const world = {
     units: new Map(units.map((u) => [u.id, u])),
+    items: new Map((opts.ground ?? []).map((it) => [it.id, it])), // ground drops — see `pressed`
     itemReadyError: () => null,
     itemUseError: () => null,
     shopReaches: () => opts.inRange ?? true,
@@ -404,7 +432,7 @@ function shopped(units, profile, opts = {}) {
     wares: () => shelf,
     gold: () => opts.gold ?? 5000,
   }, profile);
-  items.pass(opts.now ?? 500, { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true });
+  items.pass(opts.now ?? 500, { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, portalWorthIt: true });
   return {
     buy: orders.find((c) => c.c === "buyitem") ?? null,
     move: orders.find((c) => c.c === "order") ?? null,
@@ -526,6 +554,7 @@ function shopped(units, profile, opts = {}) {
   const orders = [];
   const world = {
     units: new Map([[h.id, h], [MERCHANT.id, MERCHANT]]),
+    items: new Map(), // no drops on the grass — see `pressed`
     itemReadyError: () => null, itemUseError: () => null,
     shopReaches: () => false, shopStock: () => -1, missingForShop: () => [],
     isShopUnit: (id) => id === MERCHANT.id,
@@ -537,18 +566,18 @@ function shopped(units, profile, opts = {}) {
   }, PLUS_INSANE);
 
   const walking = mk();
-  walking.pass(500, { home: { x: 0, y: 0 }, losing: false, mayShop: true });
+  walking.pass(500, { home: { x: 0, y: 0 }, losing: false, mayShop: true, portalWorthIt: true });
   check("a hero sent to a shop is flagged as on an errand", walking.errand, h.id);
 
   // …and the flag is dropped the instant the army has somewhere to be, so a wave never leaves
   // a hero permanently exempt from its own rally.
-  walking.pass(600, { home: { x: 0, y: 0 }, losing: false, mayShop: false });
+  walking.pass(600, { home: { x: 0, y: 0 }, losing: false, mayShop: false, portalWorthIt: true });
   check("…and released the moment a wave goes out", walking.errand, 0);
 
   // Arriving releases it too: the purchase is made and the hero belongs to the army again.
   const arriving = mk();
   world.shopReaches = () => true;
-  arriving.pass(500, { home: { x: 0, y: 0 }, losing: false, mayShop: true });
+  arriving.pass(500, { home: { x: 0, y: 0 }, losing: false, mayShop: true, portalWorthIt: true });
   check("…and on arrival, when it buys", arriving.errand, 0);
 }
 

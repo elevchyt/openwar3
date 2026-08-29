@@ -129,7 +129,7 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | **army food ceiling** | **12** | 30 | 80 (`UPKEEP_TIER2`) |
 | towers | **0** | 2 | 4 |
 | heroes | 1 | 2 | 3 |
-| hall tier | **1** | 2 | 3 |
+| hall tier | **1** | 3 | 3 |
 | upgrade rank | 1 | 2 | 3 |
 | first attack | 7 min | 5 min | 2½ min |
 | army food that makes a wave | 10 | 14 | 16 |
@@ -146,7 +146,15 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | **aims at** | the **biggest body** (`naive`) | what a unit **is** (`sound`) | + what the **spell is for** (`expert`) |
 | misclicks a cast | 35 % | 15 % | never |
 | hero focus | 0.3 | 0.7 | 1 |
-| builds it can roll | tier-1 only | tier ≤ 2 | all of them |
+| builds it can roll | tier-1 only | all of them | all of them |
+
+**Normal reaches tier 3.** It used to stop at a Keep, which is a bigger handicap than it reads
+as: `techTier` is also the filter on which *builds* may be rolled (`rollStrategy`), so a tier-2
+ceiling shut a Normal computer out of most of its race's table — no Knights, no Bears, no Frost
+Wyrms, no Tauren — and left it playing two or three openings for ever. A Normal player reaches
+tier 3; they just take longer over it and stop short of the whole tree, which is what
+`upgradeRank`, `expandDelay` and the clocks above already say. The **army food ceiling** is what
+carries issue #124's "no unit massing", not the tech ceiling.
 
 Note the creep row, because it is the one line in this table that was a *bug* rather than a
 setting. `creeps: true` did not use to produce a computer that creeps: creeping was a rung of
@@ -177,16 +185,57 @@ yellow/orange 10–19, red 20+ (the same table `game/minimapView.ts` paints from
 says how hard it is, in one number. What had to be invented is only what an army has to look like
 for each colour, and that is stated in units because that is how a player thinks about it:
 
-| camp | fighter food behind the hero | hero level |
-| --- | --- | --- |
-| green (≤ 9) | 4 — a soldier or two | 1 |
-| orange (10–19) | 10 — about four of them | 2 |
-| red (20+) | 24 — a real army | 4 |
+**FOOD IS NOT WHAT AN ARMY IS WORTH**, and that was the second lesson. The first version of the
+bars said "ten food of fighters clears an orange camp" — and ten food is four Grunts (16 dps, 700
+hp) or five Archers (11 dps, 245 hp), armies that lose to entirely different camps. So a party is
+priced by what it can actually *do*, which is the developer's own suggestion:
 
-…and, for all three, **75 % group health**. That last term is the one that stops the ordinary
-failure: a party that cleared an orange camp and walked straight into the next one on what was
-left of it. The same bar is re-asked *during* the fight — `attacking` breaks off a creep run the
-moment the party stops being able to win it, which is a walk home instead of a dead hero.
+> POWER = √ Σ (a unit's damage per second × its **current** hit points), × a hero factor of
+> `1 + 0.35 × level`
+
+That is the ordinary "effective health × output" figure a player is estimating when they look at
+an army and decide. It is quadratic in the right way — twice the army is four times the power —
+so the square root puts it back into readable "army size" units. Current hit points rather than
+maximum is the developer's "current health must be taken into account". Worked examples, on the
+game's own numbers:
+
+| party | power | clears |
+| --- | --- | --- |
+| 4 Grunts + a level-3 hero | ≈ 434 | orange |
+| 6 Footmen + a level-3 hero | ≈ 319 | orange, only just |
+| 4 Archers + a level-3 hero | ≈ 217 | green only |
+| 8 Grunts + a level-5 hero | ≈ 822 | red |
+
+The bars are **power 150 / hero level 1** (green), **300 / 3** (orange) and **620 / 5** (red),
+plus **75 % group health and 80 % hero health** for all three. Every one of them was *raised* off
+the report "the AI is attacking orange creep camps with very weak armies".
+
+### Breaking off is a different question from starting
+
+…and a much lower bar. Re-asking the starting bar mid-fight aborts every run on the first
+scratch, because a party is always weaker once it has begun. `fightLost` asks the thing a player
+asks — *is this going badly enough to leave?* — and there are two ways to answer yes: the
+**group** is under 40 % of its hit points, or the **captain** is under 20 % *while what it is
+fighting is still more than half up*. That second clause is what stops it running from a fight it
+has all but won: a hero at 15 % standing over the last creep on a sliver finishes it, where the
+same hero in front of a fresh camp is a dead hero.
+
+"Still more than half up" is measured differently for the two kinds of opposition, because they
+report themselves differently: a **creep camp** is a fixed roster, so `AiPlayer.campHealthAt`
+measures it directly; a **player's army** is not (their dead units are simply gone), so it is
+priced through the same `armyPower` metric — still outgunning us is what "still healthy" means
+about an opponent. The same rule serves both, which is why `fightLost` is not `creepLost`.
+
+**And the Scroll of Town Portal is only spent on one of the two.** `ItemCtx.portalWorthIt` is
+false when what the army is running from is a creep camp and true when it is a player: creeps do
+not chase, do not follow you home, and will still be standing there in two minutes, so a scroll
+spent to leave one buys a few seconds of walking and is then not in the belt for the fight that
+decides the game. The hero's **own skin** is exempt — a hero about to die scrolls out whatever it
+is fighting, and a camp is not a reason to lose one.
+
+**Nearest camps first.** `creepTarget` steps its search radius out (3000 → 6000 → the whole map)
+rather than sweeping once, so a camp beside the base is always taken before one across it: a
+party that is walking is neither creeping nor defending.
 
 `maxCampLevel` turns the party into a ceiling and hands it to `GetCreepCamp` exactly as the old
 food number did, so the AI still takes the **nearest** camp it can handle rather than shopping
@@ -212,13 +261,37 @@ Two rules, one at each end of the walk:
   where its absence actually hurt: `creepFood` is eight food on Insane, which is reached the moment
   the fourth soldier is *trained* — so the party set off from the production line rather than from
   the muster point, with the hero somewhere behind it.
-- **On the road, the leaders wait.** A unit further than `COHESION_RADIUS` from the group's centre
-  of mass **and nearer the objective than that centre is** is walked back to the centre instead of
-  onward. Only the ones in front — a straggler is already being carried the right way by the same
-  order — and never one with an enemy within `COHESION_COMBAT`, because pulling a unit out of a
-  fight is not cohesion. The hero is not exempt: a hero out in front of its army is the most
-  expensive thing on the map standing on its own. Defence is exempt in full: something is in the
-  base, and a soldier that got there first should be swinging.
+- **On the road, the army follows its CAPTAIN.** The anchor is the hero rather than a centre of
+  mass, because the centroid of a hero at a creep camp and six soldiers at home is a point in the
+  middle of the map that nobody is standing on. Two radii off it: past `COHESION_RADIUS` (600) a
+  unit *nearer the objective than the captain is* waits — only the leaders, since a straggler is
+  already being carried the right way by the same order — and past `FOLLOW_RADIUS` (1400) it
+  closes on the captain outright, whichever side of the objective it is on. That second one is
+  the answer to "army units stuck at base while the hero is out creeping alone": a Grunt trained
+  after the party set off is a straggler by every measure, and the objective's own attack-move
+  walks it into the camp the party is already fighting in, one at a time. Never a unit with an
+  enemy within `COHESION_COMBAT` — pulling one out of a fight is not cohesion — and defence is
+  exempt in full: something is in the base, and a soldier that got there first should be swinging.
+- **…and the gate GIVES UP WAITING.** A gate with no deadline is a deadlock, and this one
+  deadlocked in the way that costs most: a single soldier that cannot reach the muster point held
+  the whole army at home, hero included ("the AI is moving the hero to its base and locking it
+  there instead of going out to creep"). `GATHER_PATIENCE` is twelve seconds, after which it
+  leaves with what came.
+
+### The captain is the FIRST hero, then the second, then the third
+
+`squadHero` used to return the highest-level hero, and that is wrong twice over. The AI's own
+hero order (`heroId`/`heroId2`/`heroId3`, rolled at seat time) is the order they were *trained*
+in and therefore the order they are levelled and equipped in, so the first one is the one that is
+ahead — and picking by level lets the captaincy **change hands mid-run** every time a second hero
+dings, which makes nonsense of `creepRun` (which gates on the captain's health) and of
+`attacking` (which ends the run when the captain is gone). When the first dies the second takes
+over, and when that dies the third.
+
+**A dead captain is a fall-back, not a shrug.** `attacking` now puts the party into `retreating`
+rather than merely ending the wave: `endWave` drops it into `massing`, whose rally order is
+skipped for anything already fighting (`u.order === "attack"`), so the soldiers stayed in the
+camp and died in it one by one.
 
 Read the Easy column as a description of a player: it makes eight workers and six food of
 tier-1 soldiers, never expands, never towers, never leaves its Town Hall, comes to find you
@@ -254,7 +327,8 @@ A strategy is a **weighted unit mix** and two clocks, and nothing else is writte
 
 **Difficulty picks which builds are on the menu.** A strategy declares the hall tier it aims at,
 and one above the difficulty's `techTier` is never offered — so an easy computer only ever rolls
-its race's simplest openings, and Insane can roll anything.
+its race's simplest openings. Normal and Insane can both roll anything, which is what raising
+Normal to tier 3 was mostly *for*: at tier 2 it was shut out of most of every race's table.
 
 We roll ONCE and hold it. AMAI switches strategy mid-game once its `strat_minimum_time` has
 passed; we do not, because a switch abandons half-built production and nothing here yet measures
@@ -321,8 +395,30 @@ one routine and [`races.ts`](../src/ai/plus/races.ts) is four tables of ids, wei
 The block ORDER in `buildPlan` is the strategy, because `OneBuildLoop` reserves gold down the
 list **and returns at the first unit row it cannot afford**:
 
-> hall → workers → food → altar & barracks → **first hero** → **core army** → tech buildings →
-> **expansion** → extra heroes → tier → towers → upgrades → **the rest of the army**
+> hall → **gold crew** → food → **altar** → **first hero** → barracks → lumberjacks →
+> **core army** → tech buildings → **upgrades** → shop → always → **expansion** → extra heroes →
+> tier → towers → **the rest of the army**
+
+Four of those positions were moved after a live match said so, and each is worth stating:
+
+- **The gold crew is first and the lumberjacks are after the hero.** `workers` used to be one row
+  asking for the profile's full number (14 on Insane), and because it is a `SetBuildNext` row it
+  asks for one *more* every pass — so the ladder spent its gold a peon at a time, for ever, and
+  the altar underneath was reached with nothing left. Measured: an **Insane orc at 2:30 with
+  fourteen peons, no hero and no army**, its Blademaster finally out at nearly five minutes. Now
+  `mineCrew` (five per mine, plus one for building and scouting) is at the very top — it is also
+  the **dead-worker replacement, at the highest priority there is**, since a worker killed off a
+  mine is income that has stopped — and the rest of the workers wait behind the hero.
+- **The hero outranks the Barracks.** A Barracks is 160 gold reserved out of the 425 the altar is
+  saving for; measured, an Insane orc with its altar standing at 1:17 did not queue its
+  Blademaster until past 3:30. A ladder player buys the hero the moment the altar finishes.
+- **Upgrades sit with the tech buildings, above the tier-up.** An upgrade row cannot *halt* the
+  loop (only a unit or expansion row can) but it can be **unreachable**, and it was: `tierUp` and
+  `extraHeroes` halt the loop while the AI saves for a Castle or a second hero, and everything
+  below them goes unread for minutes. That is the whole of "the AI never upgrades anything".
+  Forged Swords is a hundred gold and makes the army you already have better; a Castle is a
+  thousand and makes nothing until it lands. (`startUpgrade` now also *reserves* what it spends,
+  which every other row already did.)
 
 ### The undead's lumber comes out of its army
 
@@ -370,6 +466,81 @@ make one at — and because **a hero row halts the build loop while the AI saves
 below it starved for the rest of the match. The undead Computer+ never built an altar, never
 fielded a hero, and never fielded an army; what it did instead was spend the whole game on the one
 row above the hero, which is workers.
+
+### An expansion is founded by ONE worker, and crewed by NEW ones
+
+"When an orc expands it takes **all** its peons to the expansion" — and it did. A new town's gold
+slice found five workers already crewing the main mine, they were the nearest able bodies, and
+`applyHarvest` moved every one of them: the main base's income stopped dead so the expansion's
+could start.
+
+A player never does that. They send **one** worker to put the hall up (that is `AiPlayer.freeWorker`,
+a different question), and the new mine is crewed by workers **trained at it** — which now happens
+by itself, because `plan.ts`'s `mineCrew` asks for five per mine *owned* and a new town raises
+that target the moment its hall lands. The rule that makes it true is one filter in
+`applyHarvest`: **a miner is never taken off another mine** (`onAnotherMine`, which also knows
+about a Wisp inside an Entangled Gold Mine, since its whole crew is cargo and shows no harvest
+order at all). Lumberjacks and idle workers are still fair game — they are not income that is
+already flowing, and walking one over is exactly what a player does while the hall goes up. It
+holds for all four races.
+
+### It picks things up
+
+The whole point of creeping, and the AI did not do it at all: it cleared a camp, walked away, and
+left the Tome of Strength and the Claws of Attack on the grass for the other player. `PlusItems.loot`
+sends the nearest hero with room, on the belt's own clock. Two kinds of thing, one rule:
+
+- a **powerup** (`ItemDef.powerup` — tomes, runes, a bag of gold) is consumed on contact and never
+  stored, so a full inventory is no obstacle and it is worth walking for whatever the hero carries.
+  It is also permanent, which is worth more than most of what a shop sells;
+- an ordinary **item** needs a free slot, so it is only worth the walk if the hero has one.
+
+Heroes only (only a hero has an inventory in melee WC3), bounded by `LOOT_WALK` (2200 — wider than
+a creep camp, so the loot of the camp just cleared is always inside it), and **never while
+something hostile is within `LOOT_DANGER` of the item**: a hero that walks into a live camp for a
+Ring of Protection is a hero that dies for one. That last test also means a camp's own drops are
+simply collected once the camp is dead, with no special case. The order is `getitem`, the ordinary
+right-click, and a unit walking to a drop is left alone by the rally and by `commit` exactly as a
+shopping hero is.
+
+### Obsidian Statues: one on life, one on mana
+
+The undead's only healer, and unlike a Moon Well it walks with the army — without one an undead
+force has to go home between fights, which on a melee map *is* the fight. Three of the five undead
+builds name no statue at all, so it is a `PlusRaceTable.always` row: **two, in every undead build
+there is**, and `mixBuildings` reads that list too, which is how "the undead always builds a
+Slaughterhouse at tier 2" is stated *nowhere* — it falls out of wanting the unit, like every other
+building here.
+
+Two data fixes came with it. `uobs` was listed at tier 3, and the undead's own tier-3 clock is past
+ten minutes, so the race's only healer arrived after the game was decided; its real gates are
+`[uslh] Requires=unp1,ugrv` (Halls of the Dead + Graveyard) and `[uobs] Requires=utom`, the Tomb of
+Relics — which is also this race's shop and was going up anyway.
+
+**Both abilities live on every statue and both draw on the same mana pool**, so a statue with both
+switched on does neither job well. `statuePass` walks the statues in a stable order and gives
+**life to the first** — `Arpl` Essence of Blight is what keeps an army alive, where `Arpm` Spirit
+Touch only shortens the wait for the next spell — mana to the second, life to the third. It runs
+every army pass rather than only at home, because a statue's job is to heal the fight it is
+standing in.
+
+Neither ability existed in the sim (`uobs` UnitAbilities is `"Arpl,Arpm,Aave"`, and they are *not*
+the Moon Well's `Ambt` — that is a battery a unit walks up to and drinks from). Both are now
+ordinary unit-target autocasts in `spells.ts`: `Arpl` joins `HEAL_SPELLS`, so the game's own rule
+applies and a heal that would restore nothing is refused rather than wasted, and `Arpm` joins
+`MANA_TARGET_SPELLS` under the game's own `Targetmanauser` string, without which an autocasting
+statue empties its pool topping up Ghouls.
+
+### Moon Wells: the well has to be ARMED
+
+`Ambt` is on plus/casting.ts's `HAND_AUTOCAST` — the short list of autocasts that file deliberately
+does not switch on for itself — which left the decision to the army manager, and the army manager
+never made it. So a night elf's wells poured into nobody but the units `wellPass` explicitly walked
+to them. It now arms every replenisher it owns, which lets `tickReplenish`'s third rung top up
+whoever is standing at the well already — most of what a Moon Well does for a player, and all of
+what it does for an army that has just walked home. The walk itself now sends **the hero first**: a
+well's mana is finite, and squad order gave the hero whatever the soldiers in front of it had not
+already drunk.
 
 ### Who builds it: not the worker down the hole
 

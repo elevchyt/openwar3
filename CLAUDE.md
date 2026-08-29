@@ -196,11 +196,20 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   than to the difficulty — a fast expand is a build, not a setting. Countering reads the game's
   own `DAMAGE_TABLE` against what the AI has SCOUTED, so never add a hand-written counter chart.
   CREEPING is PRICED, never measured in food ([`plus/power.ts`](src/ai/plus/power.ts)): a camp's
-  combined level already says how hard it is on the game's own green/orange/red scale, and what a
-  party must look like for each colour is the only invented part. Its army also moves as ONE
-  BODY — nothing leaves the muster point until four fifths of it is there, and on the road a unit
-  ahead of the group's centre waits for it (never one that is in a fight, and never while
-  defending). Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:
+  combined level already says how hard it is on the game's own green/orange/red scale, and a
+  party is priced by √Σ(dps × current hp) × a hero factor — FOOD is not what an army is worth,
+  three Grunts are not three Archers. STARTING a fight and BREAKING OFF one are different bars,
+  and the second is much lower (re-asking the first mid-fight aborts every run on the first
+  scratch); the same rule serves creeps and players, and only "is the opposition still healthy"
+  is measured differently. The Scroll of Town Portal is spent leaving a PLAYER and never a creep
+  camp. Its army also moves as ONE BODY anchored on the CAPTAIN — the first hero trained, then
+  the second — and nothing leaves the muster point until four fifths of it is there, with a
+  deadline, because a gate with no deadline locked the hero at home.
+  The BUILD LADDER's order is the strategy and four positions in it were measured: the gold crew
+  is first (it is also the dead-worker replacement, at the highest priority there is), the hero
+  outranks the Barracks, the rest of the workers wait behind the hero, and UPGRADES sit with the
+  tech buildings ABOVE the tier-up — below it they are simply never reached, which is the whole
+  of "the AI never upgrades anything". Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:
   the undead altar is **`uaod`** (Altar of Darkness), NOT `utod` (Temple of the Damned, which is
   the CASTER building) — naming the wrong one left the undead with no hero and, because a hero row
   halts the build loop, no army either; and a BURROW is asked for by its hold's ability code

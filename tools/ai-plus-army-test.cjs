@@ -23,7 +23,7 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const {
-  canClearCamp, maxCampLevel, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
+  canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
 const { safeLeg } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 
@@ -35,8 +35,16 @@ function check(what, got, want) {
   if (!ok) console.log(`        want ${JSON.stringify(want)}\n        got  ${JSON.stringify(got)}`);
 }
 
-/** A party, in the three terms plus/power.ts reads. Healthy unless said otherwise. */
-const force = (fighterFood, heroLevel, health = 1) => ({ fighterFood, heroLevel, health });
+// The three melee soldiers this file reasons in, on the GAME's own numbers (UnitBalance.slk /
+// UnitWeapons.slk): a Grunt hits hard and has a lot of hit points, an Archer neither.
+const GRUNT = { dps: 16, hp: 700, maxHp: 700 };
+const FOOTMAN = { dps: 9.6, hp: 420, maxHp: 420 };
+const ARCHER = { dps: 11, hp: 245, maxHp: 245 };
+const n = (unit, k) => Array.from({ length: k }, () => ({ ...unit }));
+
+/** A party, in the terms plus/power.ts reads. Healthy unless said otherwise. */
+const force = (fighters, heroLevel, health = 1, heroHealth = 1) =>
+  ({ fighters, heroLevel, health, heroHealth });
 
 // A camp of each colour, at the boundaries the minimap's own dot colours draw.
 const GREEN = 6;
@@ -44,38 +52,63 @@ const ORANGE = 14;
 const RED = 24;
 
 // ==========================================================================================
+console.log("\n-- FOOD IS NOT WHAT AN ARMY IS WORTH ------------------------------------");
+// ==========================================================================================
+
+// The whole reason this file replaced a food count. Three Grunts and three Archers are nine
+// food and six food of the same "three units", and they are not the same army.
+check("three grunts outrank three archers", armyPower(n(GRUNT, 3)) > armyPower(n(ARCHER, 3)), true);
+check("…by a lot", armyPower(n(GRUNT, 3)) > armyPower(n(ARCHER, 3)) * 1.5, true);
+check("a hurt army is worth less than a healthy one",
+  armyPower([{ dps: 16, hp: 200, maxHp: 700 }]) < armyPower([GRUNT]), true);
+check("nothing is worth nothing", armyPower([]), 0);
+check("a unit that cannot swing adds nothing", armyPower([{ dps: 0, hp: 900, maxHp: 900 }]), 0);
+// Quadrature: twice the army is not twice the power, it is √2 — which is what keeps the
+// thresholds readable as "about this many soldiers".
+check("power adds in quadrature", Math.round(armyPower(n(GRUNT, 4)) / armyPower([GRUNT])), 2);
+// The hero is a multiplier on the party, not another body.
+check("a levelled hero is worth more than a level-1 one",
+  forcePower(force(n(GRUNT, 2), 5)) > forcePower(force(n(GRUNT, 2), 1)), true);
+check("no hero, no power at all", forcePower(force(n(GRUNT, 4), 0)), 0);
+
+// ==========================================================================================
 console.log("\n-- a party is priced against the camp's colour ----------------------------");
 // ==========================================================================================
 
-// GREEN: the brief is "one hero and one or two fighters". Two Footmen is four food.
-check("hero + two footmen takes a green camp", canClearCamp(force(4, 1), GREEN), true);
-check("…the hero alone does not", canClearCamp(force(0, 1), GREEN), false);
-check("…and neither do the footmen alone", canClearCamp(force(8, 0), GREEN), false);
+// GREEN: the brief is "one hero and one or two fighters".
+check("hero + two grunts takes a green camp", canClearCamp(force(n(GRUNT, 2), 1), GREEN), true);
+check("…the hero alone does not", canClearCamp(force([], 1), GREEN), false);
+check("…and neither do the grunts alone", canClearCamp(force(n(GRUNT, 4), 0), GREEN), false);
 
-// ORANGE: "about four of those units with the hero".
-check("hero + two footmen does NOT take an orange camp", canClearCamp(force(4, 1), ORANGE), false);
-check("four footmen and a level-2 hero does", canClearCamp(force(10, 2), ORANGE), true);
-check("…but not on a level-1 hero", canClearCamp(force(10, 1), ORANGE), false);
+// ORANGE: "about four of those units with the hero" — and this is the bar that was RAISED,
+// because the AI was walking into orange camps with parties that had no chance.
+check("hero + two grunts does NOT take an orange camp", canClearCamp(force(n(GRUNT, 2), 1), ORANGE), false);
+check("four grunts and a level-3 hero does", canClearCamp(force(n(GRUNT, 4), 3), ORANGE), true);
+check("…but not on a level-1 hero", canClearCamp(force(n(GRUNT, 4), 1), ORANGE), false);
+check("…and four ARCHERS are not four grunts", canClearCamp(force(n(ARCHER, 4), 3), ORANGE), false);
 
 // RED: "a pretty big army with a level 3-4+ hero". This is the case the whole file exists for.
-check("a level-2 hero with four footmen does NOT take a red camp", canClearCamp(force(10, 2), RED), false);
-check("a lone hero never does, at any level", canClearCamp(force(0, 10), RED), false);
-check("twelve food and a level-4 hero does", canClearCamp(force(24, 4), RED), true);
+check("four grunts and a level-3 hero does NOT take a red camp", canClearCamp(force(n(GRUNT, 4), 3), RED), false);
+check("a lone hero never does, at any level", canClearCamp(force([], 10), RED), false);
+check("eight grunts and a level-5 hero does", canClearCamp(force(n(GRUNT, 8), 5), RED), true);
 
-// HEALTH — the third term, and the one that stops the party clearing a camp and walking
-// straight into the next one on what is left of it.
-check("a hurt party stays home", canClearCamp(force(24, 4, CAMP_HEALTH - 0.01), GREEN), false);
-check("…and a scratched one does not", canClearCamp(force(24, 4, CAMP_HEALTH + 0.01), GREEN), true);
+// HEALTH — the term that stops a party clearing a camp and walking into the next one on what
+// is left of it. Both halves: the army's, and the captain's own.
+check("a hurt party stays home", canClearCamp(force(n(GRUNT, 8), 5, CAMP_HEALTH - 0.01), GREEN), false);
+check("…a scratched one does not", canClearCamp(force(n(GRUNT, 8), 5, CAMP_HEALTH + 0.01), GREEN), true);
+check("a hurt CAPTAIN stays home too", canClearCamp(force(n(GRUNT, 8), 5, 1, 0.5), GREEN), false);
 
 // ==========================================================================================
 console.log("\n-- …and the ceiling that becomes GetCreepCamp's `max` ---------------------");
 // ==========================================================================================
 
-check("nothing at all: not creeping", maxCampLevel(force(0, 0)) < 0, true);
-check("hero + two footmen: green only", maxCampLevel(force(4, 1)), CAMP_GREEN_MAX);
-check("four footmen + level 2: up to orange", maxCampLevel(force(10, 2)), CAMP_ORANGE_MAX);
-check("an army + level 4: no ceiling", maxCampLevel(force(24, 4)), Infinity);
-check("…a hurt army has no ceiling because it is not going", maxCampLevel(force(24, 4, 0.4)) < 0, true);
+check("nothing at all: not creeping", maxCampLevel(force([], 0)) < 0, true);
+check("hero + two grunts: green only", maxCampLevel(force(n(GRUNT, 2), 1)), CAMP_GREEN_MAX);
+check("four grunts + level 3: up to orange", maxCampLevel(force(n(GRUNT, 4), 3)), CAMP_ORANGE_MAX);
+check("eight grunts + level 5: no ceiling", maxCampLevel(force(n(GRUNT, 8), 5)), Infinity);
+check("…a hurt army has no ceiling because it is not going", maxCampLevel(force(n(GRUNT, 8), 5, 0.4)) < 0, true);
+// Footmen are between the two, which is the point of pricing rather than counting.
+check("six footmen and a level-3 hero reach orange", maxCampLevel(force(n(FOOTMAN, 6), 3)), CAMP_ORANGE_MAX);
 
 // ==========================================================================================
 console.log("\n-- the scout walks ROUND a creep camp, not through it ---------------------");

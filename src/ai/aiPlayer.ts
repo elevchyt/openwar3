@@ -558,7 +558,14 @@ export class AiPlayer {
     const next = have + 1;
     const cost = this.host.upgrades.cost(id, next);
     if (this.totalGold < cost.gold || this.totalWood < cost.lumber) return false;
-    return this.setUpgrade(id);
+    if (!this.setUpgrade(id)) return false;
+    // An upgrade that STARTED has spent its gold, so the rows under it must not be told they
+    // still have it. Every other row in the loop reserves (`startUnit`, `startExpansion`) and
+    // this one did not — which let a pass buy an upgrade and then commit the same gold to a
+    // soldier, and the pass after it find the bank empty and stall.
+    this.totalGold = Math.max(0, this.totalGold - cost.gold);
+    this.totalWood = Math.max(0, this.totalWood - cost.lumber);
+    return true;
   }
 
   /** The research level counting jobs in progress — `GetUpgradeLevel` plus the queues. */
@@ -992,6 +999,19 @@ export class AiPlayer {
 
       const pool = free
         .filter((u) => !taken.has(u.id) && (slice.res === "gold" ? u.worker!.gold : u.worker!.lumber))
+        // A MINER IS NEVER TAKEN OFF ANOTHER MINE. This is the whole of "when an orc expands it
+        // takes ALL its peons to the expansion": a new town's gold slice found five workers
+        // already crewing the main mine, they were the nearest able bodies, and it moved every
+        // one of them — the main base's income stopped dead so the expansion's could start.
+        //
+        // A player never does that. They send ONE worker to put the hall up (that is
+        // `freeWorker`, and it is a different question), and the new mine is crewed by workers
+        // TRAINED AT IT — which happens by itself, because `plan.ts`'s `mineCrew` asks for five
+        // per mine owned and a new town raises that target the moment its hall lands.
+        //
+        // Lumberjacks and idle workers are still fair game: they are not income that is already
+        // flowing, and walking one over is exactly what a player does while the hall goes up.
+        .filter((u) => !(slice.res === "gold" && this.onAnotherMine(u, town.mineId)))
         .sort((a, b) => Math.hypot(a.x - ax, a.y - ay) - Math.hypot(b.x - ax, b.y - ay));
       for (const u of pool) {
         if (assigned >= slice.count) break;
@@ -1001,6 +1021,20 @@ export class AiPlayer {
         }
       }
     }
+  }
+
+  /** Is this worker currently paying into a DIFFERENT mine from the one being crewed? See the
+   *  filter in `applyHarvest` for why that makes it untouchable. */
+  private onAnotherMine(u: SimUnit, mineId: number): boolean {
+    if (u.inMineId && u.inMineId !== mineId) return true;
+    if (u.order === "harvest" && u.resKind === "gold" && u.resId && u.resId !== mineId) return true;
+    // A wisp inside an Entangled Gold Mine shows no harvest order at all — its whole crew is
+    // cargo (`Aegm` Car1 = 5, docs/night-elf.md) — so its host is the only thing that says so.
+    if (u.garrisonHost) {
+      const host = this.host.world.units.get(u.garrisonHost);
+      if (host && host.mineId > 0 && host.mineId !== mineId) return true;
+    }
+    return false;
   }
 
   private alreadyHarvesting(u: SimUnit, res: "gold" | "lumber", mineId: number): boolean {
@@ -1286,10 +1320,10 @@ export class AiPlayer {
   }
 
   /** `GetCreepCamp(min, max, flyers_ok)` — the nearest camp whose total level is in range. */
-  creepCamp(min: number, max: number, flyersOk: boolean): { x: number; y: number; level: number } | null {
+  creepCamp(min: number, max: number, flyersOk: boolean, maxDist = Infinity): { x: number; y: number; level: number } | null {
     const home = this.towns[0];
     let best: { x: number; y: number; level: number } | null = null;
-    let bestD = Infinity;
+    let bestD = maxDist;
     for (const camp of this.host.creepCamps()) {
       const alive = camp.members.filter((id) => {
         const u = this.host.world.units.get(id);
@@ -1303,9 +1337,45 @@ export class AiPlayer {
       // the camp is (green 1-9 / orange 10-19 / red 20+, the colours the minimap paints — see
       // game/minimapView.ts), and Computer+ prices its party against it both when it sets off
       // and while it is fighting (plus/power.ts). It is fixed map data and never re-derived.
+      // Nearest first, and never further than `maxDist` — the classic scripts pass Infinity and
+      // get the behaviour they always had; Computer+ walks its search outwards from home so a
+      // camp beside the base is always taken before one across the map (`creepTarget`).
       if (d < bestD) { bestD = d; best = { x: camp.x, y: camp.y, level: camp.level }; }
     }
     return best;
+  }
+
+  /**
+   * How much of the creep camp AT this spot is still standing, as a fraction of its hit points
+   * (1 = untouched, 0 = cleared or no camp there).
+   *
+   * The camp is the clustered one whose centre is nearest the point — the same table
+   * `creepCamp` picks out of, which is fixed map data — so this is asked of where the party was
+   * SENT rather than of what it happens to be swinging at. Hit points rather than bodies:
+   * "the camp is nearly dead" is a statement about how much fight is left in it, and a
+   * three-creep camp with one creep on 5 % left is nearly dead in a way "two of three alive"
+   * cannot say.
+   *
+   * Used by Computer+ to decide whether a run that has gone badly is worth finishing — see
+   * `ComputerPlusAi.creepLost`, which is a DIFFERENT question from whether to start one.
+   */
+  campHealthAt(x: number, y: number, radius = CAMP_MATCH): number {
+    let best: { members: number[] } | null = null;
+    let bestD = radius;
+    for (const camp of this.host.creepCamps()) {
+      const d = Math.hypot(camp.x - x, camp.y - y);
+      if (d < bestD) { bestD = d; best = camp; }
+    }
+    if (!best) return 0;
+    let hp = 0;
+    let maxHp = 0;
+    for (const id of best.members) {
+      const u = this.host.world.units.get(id);
+      if (!u) continue; // a corpse that has decayed away is simply gone from the world
+      maxHp += Math.max(1, u.maxHp);
+      hp += Math.max(0, u.hp);
+    }
+    return maxHp > 0 ? hp / maxHp : 0;
   }
 
   private nearestEnemyBuilding(x: number, y: number): SimUnit | null {
@@ -1372,6 +1442,11 @@ export class AiPlayer {
     return this.host.execute(this.player, cmd);
   }
 }
+
+/** How near a point has to be to a camp's centre to be "that camp" — `campHealthAt`. The
+ *  clustering's own `CAMP_LINK` is 600 (MiscGame CreepCallForHelp), so this is one camp's
+ *  radius plus the slack a party's objective is allowed to have drifted by. */
+const CAMP_MATCH = 900;
 
 /** `Aent` Entangle Gold Mine's own `Rng1`. The bound `EXPANSION_HALL_RANGE` is chosen under. */
 const ENTANGLE_RANGE = 500;

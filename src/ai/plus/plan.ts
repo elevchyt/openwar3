@@ -108,6 +108,18 @@ const MINE_CREW = 5;
 const LUMBER_UNITS = 5;
 
 /**
+ * …and how many of them the forest keeps NO MATTER WHAT the bank says.
+ *
+ * `ComputerPlusAi.lumberCrew` ports undead.ai's self-regulating split — ten choppers minus one
+ * per 120 lumber banked — and taken literally it reaches ZERO at 1200 wood, which is a bank an
+ * undead player passes through in the middle of every game. At that point every ghoul joined
+ * the wave, the wood stopped, and the bank drained back down with nothing chopping. Two ghouls
+ * is the floor a player keeps on the trees for exactly that reason, and it costs the wave
+ * almost nothing.
+ */
+export const LUMBER_FLOOR = 2;
+
+/**
  * …and how many workers such a race wants: a mine's crew per town, plus ONE.
  *
  * The plus is the builder — and the scout. An Acolyte is not a lumberjack, so every one past
@@ -172,18 +184,39 @@ export function buildPlan(c: PlusCtx): void {
   ai.meleeTownHall(0, table.halls[0]);
   ai.meleeTownHall(1, table.halls[0]);
 
-  workers(c);
+  // THE GOLD CREW, and only the gold crew, before anything else — see `mineCrew`. Everything
+  // that pays for the rest of this list comes out of a mine, so a dead miner is replaced ahead
+  // of a hero, a soldier and a building alike; and a worker past the fifth on a mine pays for
+  // nothing at all, which is why the rest of them wait until after the hero.
+  mineCrew(c);
   supply(c);
-  basics(c);
+  // The ALTAR, then the HERO, then somewhere to make a soldier. The order of those three is the
+  // opening, and the middle one moved: the Barracks used to sit above the hero, and a Barracks
+  // is 160 gold reserved out of the 425 the altar is saving for. Measured on Echo Isles: an
+  // INSANE orc with its altar standing at 1:17 did not queue its Blademaster until past 3:30.
+  // A ladder player buys the hero the moment the altar finishes and puts the Barracks up around
+  // it — the hero is the single biggest thing in the first five minutes of a melee game, and
+  // `army(CORE_ARMY_FOOD)` two rows down is what stops that becoming "no army at all".
+  altar(c);
   firstHero(c);
+  barracks(c);
+  // …and NOW the lumberjacks. This is the whole of the hero-delay fix: `workers` used to sit
+  // where `mineCrew` does and ask for the profile's full number (14 on Insane), and because it
+  // is a `SetBuildNext` row it asks for one more EVERY pass — so the ladder spent its gold a
+  // peon at a time, for ever, and the altar row underneath it was reached with nothing left.
+  // Measured before the fix: an INSANE orc at 2:30 with fourteen peons, no hero and no army,
+  // and its Blademaster finally out at nearly five minutes. A ladder player crews the mine,
+  // puts up the altar, buys the hero, and grows the lumber crew around it.
+  workers(c);
   army(c, CORE_ARMY_FOOD); // enough not to die to the first raid, cheap enough not to block tech
   techBuildings(c);
+  upgrades(c);
   shop(c);
+  always(c);
   expand(c);
   extraHeroes(c);
   tierUp(c);
   towers(c);
-  upgrades(c);
   army(c, c.profile.armyFood); // …and the rest of it, with everything above already paid for
 }
 
@@ -201,15 +234,36 @@ export function buildPlan(c: PlusCtx): void {
 function workers(c: PlusCtx): void {
   const { ai, profile, table } = c;
   if (ai.townCountDone(table.halls[0]) < 1) return; // nothing to make them at
+  // A race whose worker cannot chop wants a MINE'S CREW and no more, and `mineCrew` has already
+  // asked for it — see `SPARE_WORKERS`. The profile's number is a whole economy's worth of
+  // workers and only means that where a worker is also a lumberjack.
+  if (!c.workerChops) return void lumberUnits(c);
+  ai.setBuildNext(profile.workers * Math.max(1, ai.minesOwned()), table.worker);
+}
+
+/**
+ * The GOLD CREW: five workers per mine we own, at the very top of the ladder.
+ *
+ * Two jobs in one row, and both of them are "the mine must never be short".
+ *
+ *  · **It is the opening.** Five on gold is what every melee build opens with, and it is what
+ *    pays for the altar and the hero underneath it.
+ *  · **It is the dead-worker replacement, at the highest priority there is.** A worker killed
+ *    off a mine is income that has stopped, so it outranks a hero, a soldier and a building —
+ *    which is exactly where this row sits. Nothing special is needed to notice the death:
+ *    `SetBuildNext` is an absolute target ("have at least five per mine"), so the moment one
+ *    dies the row is short again and the next pass asks for one. The lumberjacks are replaced
+ *    the same way by `workers`, lower down, which is also the right order — a lost lumberjack
+ *    costs wood, a lost miner costs the game.
+ *
+ * `MINE_CREW` is five because that is what a WC3 gold mine takes at once; a sixth worker on a
+ * mine is a worker standing in a queue.
+ */
+function mineCrew(c: PlusCtx): void {
+  const { ai, table } = c;
+  if (ai.townCountDone(table.halls[0]) < 1) return;
   const towns = Math.max(1, ai.minesOwned());
-  // A race whose worker cannot chop wants a MINE'S CREW and no more — see `SPARE_WORKERS`.
-  // The profile's number is a whole economy's worth of workers and only means that where a
-  // worker is also a lumberjack.
-  const want = c.workerChops
-    ? profile.workers * towns
-    : MINE_CREW * towns + SPARE_WORKERS;
-  ai.setBuildNext(want, table.worker);
-  lumberUnits(c);
+  ai.setBuildNext(MINE_CREW * towns + SPARE_WORKERS, table.worker);
 }
 
 /**
@@ -239,15 +293,24 @@ function supply(c: PlusCtx): void {
 }
 
 /**
- * The two buildings every opening is the same shape around: somewhere to buy a hero and
- * somewhere to make a soldier.
- *
- * They come BEFORE the hero rather than after it, and the order matters because gold is
- * reserved down the list: a hero is four hundred gold, and a plan that saved for one before it
- * had asked for a Barracks would stand around with an Altar and nothing to defend it.
+ * Somewhere to buy a hero — the first thing built after the food, in every melee opening there
+ * is, and above the hero itself for the obvious reason.
  */
-function basics(c: PlusCtx): void {
+function altar(c: PlusCtx): void {
   c.ai.setBuildUnit(1, c.table.altar);
+}
+
+/**
+ * …and somewhere to make a soldier, BELOW the hero.
+ *
+ * It used to be above, and that is most of why the first hero was late: gold is reserved down
+ * the list, so a 160-gold Barracks row took its cut of every pass while the altar underneath it
+ * was trying to save 425 for a Blademaster. Below the hero, the same gold arrives in the same
+ * order a player spends it — and nothing is actually delayed by much, because the hero row stops
+ * reserving the instant the hero is QUEUED (`ai.count` counts a job in a queue), which is a
+ * minute before it walks out.
+ */
+function barracks(c: PlusCtx): void {
   c.ai.setBuildUnit(1, c.table.barracks);
 }
 
@@ -359,13 +422,23 @@ const MIN_COUNTER_WEIGHT = 0.2;
 function mixBuildings(c: PlusCtx): Array<{ build: string; tier: number }> {
   const { table, strategy } = c;
   const seen = new Map<string, number>();
-  for (const unit of Object.keys(strategy.mix)) {
+  // The `always` units drag their own producers up with them, which is how "the undead ALWAYS
+  // builds a Slaughterhouse at tier 2" is stated: nowhere. It falls out of wanting the statue,
+  // exactly as every other building here falls out of wanting the unit it makes (rule 2 at the
+  // top of the file). The same is true of the lumber unit's Crypt.
+  const wanted = [
+    ...Object.keys(strategy.mix),
+    ...(table.always ?? []).map((r) => r.unit),
+    ...(table.lumberUnit ? [table.lumberUnit] : []),
+  ];
+  for (const unit of wanted) {
     const row = table.units[unit];
     if (!row) continue;
     for (const b of [row.from, ...(row.needs ?? [])]) {
       seen.set(b, Math.min(seen.get(b) ?? row.tier, row.tier));
     }
   }
+  seen.delete("");
   return [...seen].map(([build, tier]) => ({ build, tier })).sort((a, b) => a.tier - b.tier);
 }
 
@@ -404,6 +477,28 @@ function techBuildings(c: PlusCtx): void {
   if (armyFood >= FACTORY_ARMY && ai.gold() > FACTORY_GOLD) {
     const main = mainProducer(c);
     if (main) ai.buildFactory(main);
+  }
+}
+
+/**
+ * The units this race wants WHATEVER build it rolled — `PlusRaceTable.always`.
+ *
+ * There is one today, and it is the undead's Obsidian Statue: the race's only healer, the thing
+ * that lets an undead army fight twice without walking home, and absent from three of the five
+ * undead builds. A build order is a plan for an ARMY; this is the support that plan assumed.
+ *
+ * Above the expansion and below the tech, in the same place the shop is and for the same
+ * reason: it is a want rather than an opening, and it must not out-rank the buildings that make
+ * the army. `setBuildUnit` (absolute) rather than `setBuildNext`, because "have two" is exactly
+ * what this means and two is small enough to ask for outright.
+ */
+function always(c: PlusCtx): void {
+  const { ai, profile, table, tier } = c;
+  const cap = Math.min(profile.techTier, tier);
+  for (const row of table.always ?? []) {
+    const unit = table.units[row.unit];
+    if (!unit || unit.tier > cap || !producerReady(c, unit.from, unit.needs)) continue;
+    ai.setBuildUnit(row.count, row.unit);
   }
 }
 
@@ -469,9 +564,22 @@ function towers(c: PlusCtx): void {
   }
 }
 
-/** Upgrades, capped twice over: by what the row is worth (armour is 3 ranks, Defend is 1) and
- *  by what the difficulty allows. `setBuildUpgr` applies common.ai's own third cap on top —
- *  an easy computer never buys rank 2 of anything. */
+/**
+ * Upgrades, capped twice over: by what the row is worth (armour is 3 ranks, Defend is 1) and by
+ * what the difficulty allows. `setBuildUpgr` applies common.ai's own third cap on top — an easy
+ * computer never buys rank 2 of anything.
+ *
+ * **It sits with the TECH BUILDINGS and above the tier-up, and that is the whole of why the AI
+ * was seen never to upgrade anything.** An upgrade row cannot halt the build loop (only a unit
+ * or an expansion row can — `runBuildLoop`), but it can be UNREACHABLE, and it was: `tierUp`
+ * and `extraHeroes` are unit rows that halt the loop while the AI saves for a Keep, a Castle or
+ * a second hero, and everything below them is therefore never read at all for minutes at a
+ * time. Down there, upgrades were reached only in the moments the AI happened to be rich.
+ *
+ * Above the tier-up is also where a player puts them, and for the reason the file header already
+ * gives about the support buildings: Forged Swords is a hundred gold and makes the army you
+ * ALREADY HAVE better, where a Castle is a thousand and makes nothing until it lands.
+ */
 function upgrades(c: PlusCtx): void {
   const { ai, profile, table, armyFood } = c;
   for (const row of table.upgrades) {

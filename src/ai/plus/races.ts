@@ -178,6 +178,18 @@ export interface PlusRaceTable {
    * player wants exactly a mine's crew of Acolytes and not one more (see `plan.ts` `workers`).
    */
   readonly lumberUnit?: string;
+  /**
+   * Units this race wants NO MATTER WHICH BUILD it rolled — the support every strategy needs
+   * and none of them should have to list.
+   *
+   * There is exactly one today and it is the undead's **Obsidian Statue**. A statue is not part
+   * of an army composition at all: it is the race's only healer, it is what lets an undead army
+   * fight twice without going home, and a build that left it out (three of the five do) fielded
+   * an army that had to walk back to base after every engagement. See UNDEAD below for the
+   * detail, and note the row also drags its own producer up with it — `mixBuildings` reads
+   * this list as well as the strategy's mix, so a Slaughterhouse goes up for it.
+   */
+  readonly always?: readonly { unit: string; count: number }[];
   /** Every unit this race's strategies may name. */
   readonly units: Readonly<Record<string, UnitRow>>;
   /** The race's whole upgrade list. A build takes the ones its own buildings can research. */
@@ -362,6 +374,22 @@ const UNDEAD: PlusRaceTable = {
   // undead.ai 205-219). `plan.ts` puts up the forest's crew off this row, and
   // `ComputerPlusAi.lumberCrew` decides how many of them the wave may take back.
   lumberUnit: GHOUL,
+  // TWO OBSIDIAN STATUES, in every undead build there is.
+  //
+  // The statue is the undead's ONLY healer — `Arpl` Essence of Blight restores 10 hit points a
+  // second and `Arpm` Spirit Touch restores mana (UndeadAbilityFunc, and see UnitAbilities
+  // `uobs` = "Arpl,Arpm,Aave") — and unlike a Moon Well it walks with the army. Without one an
+  // undead force has to go home between fights, which on a melee map is the fight.
+  //
+  // Two, because the two abilities are separate autocasts on separate mana bars: one statue
+  // pours life and one pours mana, which is exactly how the race is played and is why this is a
+  // count rather than a boolean. `ComputerPlusAi.statuePass` is the half that arms them, and it
+  // gives LIFE to the first — Essence of Blight is what keeps an army alive, where Spirit Touch
+  // only shortens the wait for the next spell.
+  //
+  // Its producer comes up with it: `mixBuildings` reads this list, so a Slaughterhouse is put
+  // up at tier 2 by every undead build whether or not its mix names a Meat Wagon.
+  always: [{ unit: OBSIDIAN_STATUE, count: 2 }],
   units: {
     [GHOUL]: { from: CRYPT, tier: 1 },
     [CRYPT_FIEND]: { from: CRYPT, tier: 2 },
@@ -370,7 +398,14 @@ const UNDEAD: PlusRaceTable = {
     [BANSHEE]: { from: DAMNED_TEMPLE, tier: 2 },
     [MEAT_WAGON]: { from: SLAUGHTERHOUSE, tier: 2, siege: true },
     [ABOMINATION]: { from: SLAUGHTERHOUSE, tier: 3 },
-    [OBSIDIAN_STATUE]: { from: SLAUGHTERHOUSE, tier: 3 },
+    // TIER TWO, and its own requirement is the TOMB OF RELICS. Both are straight off
+    // UndeadUnitFunc: `[uslh] Requires=unp1,ugrv` — a Slaughterhouse needs a Halls of the Dead
+    // (tier 2) and a Graveyard, which this race's `support` row already puts up — and
+    // `[uobs] Requires=utom`, the Tomb of Relics, which is also its SHOP and so is going up
+    // anyway. The row said tier 3, and that alone kept the statue out of almost every match:
+    // the undead's own tier-3 clock is past ten minutes, so the race's only healer arrived
+    // after the game had been decided.
+    [OBSIDIAN_STATUE]: { from: SLAUGHTERHOUSE, needs: [TOMB_OF_RELICS], tier: 2 },
     [FROST_WYRM]: { from: BONEYARD, tier: 3, air: true },
   },
   upgrades: [

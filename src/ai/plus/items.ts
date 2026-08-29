@@ -238,6 +238,21 @@ const HOME = 1200;
 /** Seconds between shopping trips. A player checks the shop occasionally; they do not stand in
  *  it. Also what keeps a hero from being re-ordered towards a shop every army pass. */
 const SHOP_PERIOD = 5;
+
+/** How often the ground is looked at for drops. Cheap — a melee map's loose-item table is a
+ *  handful of entries — but there is no reason to walk it four times a second. */
+const LOOT_PERIOD = 2;
+/**
+ * How far a hero will walk for a drop.
+ *
+ * Generously wider than a creep camp, so the loot of the camp it just cleared is always inside
+ * it, and short enough that the hero is not sent across the map for a Potion of Healing. A
+ * player picks up what is in front of them.
+ */
+const LOOT_WALK = 2200;
+/** …and how close something hostile may be to the item before it is left where it lies. A hero
+ *  that walks into a live camp for a Ring of Protection is a hero that dies for one. */
+const LOOT_DANGER = 700;
 /** How far from home a shop has to be before it is not worth the walk. A Goblin Merchant across
  *  the map is a hero out of the game for a minute, which is worse than having no potion. */
 const SHOP_REACH = 4000;
@@ -262,6 +277,21 @@ export interface ItemCtx {
    *  already decided on, so the scroll and the retreat are one decision rather than two that
    *  disagree. */
   losing: boolean;
+  /**
+   * Is the Scroll of Town Portal WORTH SPENDING on this retreat?
+   *
+   * False when what the army is running from is a CREEP CAMP, true when it is a player. Creeps
+   * do not chase far, they do not follow you home, and they will still be standing there in two
+   * minutes — so a scroll spent to leave one buys a few seconds of walking and is then not in
+   * the belt for the fight that decides the game. An opponent's army chases, and a hero that
+   * walks away from one usually does not get home; that is exactly the trip the item is for
+   * (docs/items.md).
+   *
+   * It gates only the `escape` rung's ARMY half. A hero that is personally about to die still
+   * scrolls out whatever it is fighting — a dead hero is a dead hero, and the camp is not a
+   * reason to lose one.
+   */
+  portalWorthIt: boolean;
   /** May a hero walk off to a shop right now? False while there is a wave in the field, so the
    *  trip never pulls the captain out of a fight. */
   mayShop: boolean;
@@ -276,6 +306,8 @@ export class PlusItems {
    *  `SHOP_PERIOD`, so a rally order in between would leave the hero walking back and forth
    *  between the shop and the rally point and never arriving at either. */
   private onErrand = 0;
+  /** When the ground was last looked at for drops — see `loot`. */
+  private lastLoot = -Infinity;
 
   constructor(
     private readonly view: ItemView,
@@ -294,7 +326,74 @@ export class PlusItems {
       if (!u.inventory.length || !this.canAct(u)) continue;
       this.press(u, own, foes, ctx);
     }
+    this.loot(now, own, foes);
     this.shop(now, own, ctx);
+  }
+
+  // ==========================================================================================
+  //  Picking things up
+  // ==========================================================================================
+
+  /**
+   * WHAT THE CREEPS DROPPED — and the tomes.
+   *
+   * The whole point of creeping, and the AI did not do it at all: it cleared a camp, walked
+   * away, and left the Tome of Strength and the Claws of Attack lying on the grass for the other
+   * player to collect. On a melee map that is most of the value of the fight it just paid for.
+   *
+   * Two kinds of thing, one rule, and the difference is worth naming because it decides who is
+   * sent:
+   *
+   *  · a **POWERUP** (`ItemDef.powerup` — the tomes, the runes, a bag of gold) is consumed on
+   *    contact and never stored, so a full inventory is no obstacle and a hero should walk over
+   *    one whatever it is carrying. It is also permanent: a Tome of Strength is +2 Strength for
+   *    the rest of the match, which is worth more than most of what a shop sells.
+   *  · an ordinary **ITEM** needs a free slot, so it is only worth walking for if the hero has
+   *    one.
+   *
+   * **Who goes** is the nearest hero with room — never a soldier. Only a hero has an inventory
+   * in melee WC3, and sending the one unit whose death loses the fight is exactly why this is
+   * bounded by `LOOT_WALK` and refused outright while enemies are near the item: a hero that
+   * walks into a live creep camp to pick up a drop is a hero that dies for a Ring of Protection.
+   * (The camp's OWN drops are picked up after the camp is dead, which is when nothing is near
+   * them any more — this needs no special case, it is just the same test.)
+   *
+   * It runs on the belt's own clock rather than a slower one because it is the same kind of
+   * decision the belt makes and it is cheap — the ground-item table is a handful of entries on
+   * a melee map.
+   */
+  private loot(now: number, own: SimUnit[], foes: SimUnit[]): void {
+    if (now - this.lastLoot < LOOT_PERIOD) return;
+    this.lastLoot = now;
+    const ground = [...this.view.world.items.values()];
+    if (!ground.length) return;
+    // Heroes only, and the errand runner is left alone — it is walking to a shop.
+    const heroes = own.filter((u) => u.isHero && u.inventory.length && !u.isIllusion && this.canAct(u));
+    if (!heroes.length) return;
+    const taken = new Set<number>();
+    for (const it of ground) {
+      const def = this.view.item(it.itemId);
+      if (!def) continue;
+      // Nothing is walked to while something hostile is standing over it. This is the whole of
+      // "do not feed the hero to the camp for a drop", and it also means a camp's own loot is
+      // simply collected once the camp is dead.
+      if (foes.some((f) => !f.building && Math.hypot(f.x - it.x, f.y - it.y) <= LOOT_DANGER)) continue;
+      let best: SimUnit | null = null;
+      let bestD = LOOT_WALK;
+      for (const u of heroes) {
+        if (taken.has(u.id)) continue;
+        // A powerup is consumed on contact and never stored, so a full belt is no obstacle.
+        if (!def.powerup && u.inventory.indexOf(null) < 0) continue;
+        const d = Math.hypot(u.x - it.x, u.y - it.y);
+        if (d < bestD) { bestD = d; best = u; }
+      }
+      if (!best) continue;
+      taken.add(best.id);
+      // `getitem` is the ordinary right-click on a ground item: the unit walks to it and picks
+      // it up on arrival (`SimWorld.issueGetItem`), and a powerup is consumed there. One hero
+      // per item per pass, so two heroes never race for the same drop.
+      this.view.order({ c: "getitem", unitId: best.id, itemId: it.id });
+    }
   }
 
   // ==========================================================================================
@@ -369,10 +468,15 @@ export class PlusItems {
       // manager's own read, so the scroll and the walk home are one decision) or this hero alone
       // is about to die in a fight — which is the same conclusion reached about a smaller group.
       // Never within sight of home, where it would be spent to travel no distance.
-      case "escape":
+      case "escape": {
         if (!engaged && !ctx.losing) return false;
         if (Math.hypot(u.x - ctx.home.x, u.y - ctx.home.y) <= HOME) return false;
-        return ctx.losing || hp < ESCAPE_HP;
+        // The hero's OWN skin is unconditional — see `portalWorthIt`. The ARMY's retreat only
+        // spends the scroll on a retreat worth spending it on, which is a player's army and
+        // never a creep camp.
+        if (hp < ESCAPE_HP) return true;
+        return ctx.losing && ctx.portalWorthIt;
+      }
       case "panic":
         return engaged && hp < PANIC_HP;
       case "healSelf":
