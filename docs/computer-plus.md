@@ -95,6 +95,24 @@ standing in the enemy's base was left standing in the enemy's base, idle, for th
 match — one worker of an eleven-worker economy, thrown away every game. The move order is what
 brings it back; the harvest plan then picks it up as an idle worker at home.
 
+**It walks round the creep camps, not through them** (`safeLeg`). A melee map's camps sit on
+exactly the ground between two bases, so the straight line from home to the enemy's front door
+usually runs through one — the scout was acquired, killed, `scoutDone` latched, and that walk was
+again the whole of what the AI ever learnt. The route is re-asked at every step, so this does not
+have to be a path: it has to be a next *step* that is not into a camp, and the pathfinder does the
+rest. The first camp within `CREEP_BERTH` (900 — wider than the creeps' own `AcquisitionRange` of
+500, so passing outside it is passing outside their notice) is stepped around perpendicular to the
+line, on whichever side the camp is not; a camp behind the scout or beyond its goal is not on the
+way at all. Only camps with something **alive** in them count — a cleared camp is ground.
+
+**And a scout that stops is noticed.** The tour only ever advanced on *arrival*, and `scoutPass`
+returned early while the order was still "move" — so a worker stopped by a cliff, wedged behind a
+building or turned round by a creep it survived stood there holding a stale order for the rest of
+the match, and nothing ever looked at it again. `SCOUT_STUCK_AFTER` (8 s with less than
+`SCOUT_PROGRESS`, 300 units, of movement) writes the waypoint off and takes the next one, measured
+against the last *position* rather than against the order — "has this order gone stale" is a
+question no order can answer about itself.
+
 ## The difficulties, and what each one gives up
 
 Everything below is in [`profile.ts`](../src/ai/plus/profile.ts). **None of it is Warcraft III's**
@@ -143,6 +161,64 @@ goes on a hero, so `squadHero` gates the run, and the run ends the moment the he
 without that the army creeps on alone, trading soldiers for experience nobody is left to collect.
 It also refuses to start on a hero below `CREEP_HEALTH`: a camp entered at a third life is a dead
 hero, and a dead hero is the most expensive thing on a melee map.
+
+### Which camp: the party is PRICED, not measured in food
+
+The other half, and it is [`plus/power.ts`](../src/ai/plus/power.ts). *Which* camp the party may
+walk into used to be four fifths of the army's **food** compared against a camp's combined creep
+**level** — two different units of measurement that happen to be numbers. At thirty food that
+reads "camps between 14 and 24", i.e. orange and red, and it sent whatever was standing around
+into them: a real match ended with a Computer+ player that had fed three separate parties to the
+same red camp and never reached the enemy at all.
+
+**The camp colours are the game's and they are the whole scale.** WC3 clusters Neutral Hostile
+creeps into camps and marks each with a dot coloured by the camp's combined level — green 1–9,
+yellow/orange 10–19, red 20+ (the same table `game/minimapView.ts` paints from). A camp already
+says how hard it is, in one number. What had to be invented is only what an army has to look like
+for each colour, and that is stated in units because that is how a player thinks about it:
+
+| camp | fighter food behind the hero | hero level |
+| --- | --- | --- |
+| green (≤ 9) | 4 — a soldier or two | 1 |
+| orange (10–19) | 10 — about four of them | 2 |
+| red (20+) | 24 — a real army | 4 |
+
+…and, for all three, **75 % group health**. That last term is the one that stops the ordinary
+failure: a party that cleared an orange camp and walked straight into the next one on what was
+left of it. The same bar is re-asked *during* the fight — `attacking` breaks off a creep run the
+moment the party stops being able to win it, which is a walk home instead of a dead hero.
+
+`maxCampLevel` turns the party into a ceiling and hands it to `GetCreepCamp` exactly as the old
+food number did, so the AI still takes the **nearest** camp it can handle rather than shopping
+around. Both places a camp is chosen (`creepRun` starting a run, `pickTarget` aiming a wave that
+has no better idea) ask the same function, so they cannot disagree — which they did, and which is
+how a party `creepRun` had refused to send was sent anyway a moment later.
+
+None of these numbers are Warcraft III's; the *scale* they are stated against is.
+
+### The army moves as one body
+
+Cohesion, and without it a wave is only a list of units that were all given the same destination.
+A Grunt walks at 270 and a Meat Wagon at 190 (`UnitBalance.slk` `spd`), a hero that stopped to
+kill something falls a screen behind, and what arrives at the camp — or at the enemy's base — is a
+file of ones and twos being killed in the order they turn up. It is the same mistake as chasing a
+hero, made by nobody in particular.
+
+Two rules, one at each end of the walk:
+
+- **Nothing leaves until the army is together.** `gathered` measures the wave at the muster point
+  in *food* (`GATHER_SHARE`, four fifths) rather than demanding everybody, so one straggler cannot
+  hold the army at home for ever. It gates the creep run as well as the wave, and the creep run is
+  where its absence actually hurt: `creepFood` is eight food on Insane, which is reached the moment
+  the fourth soldier is *trained* — so the party set off from the production line rather than from
+  the muster point, with the hero somewhere behind it.
+- **On the road, the leaders wait.** A unit further than `COHESION_RADIUS` from the group's centre
+  of mass **and nearer the objective than that centre is** is walked back to the centre instead of
+  onward. Only the ones in front — a straggler is already being carried the right way by the same
+  order — and never one with an enemy within `COHESION_COMBAT`, because pulling a unit out of a
+  fight is not cohesion. The hero is not exempt: a hero out in front of its army is the most
+  expensive thing on the map standing on its own. Defence is exempt in full: something is in the
+  base, and a soldier that got there first should be swinging.
 
 Read the Easy column as a description of a player: it makes eight workers and six food of
 tier-1 soldiers, never expands, never towers, never leaves its Town Hall, comes to find you
@@ -266,6 +342,34 @@ rather than only refusing to add more.
 Which race this applies to is asked of the DATA, never of a race list: if this player's ordinary
 workers can chop (`WorkerState.lumber` — a Peasant, a Peon, a Wisp) nothing is held back at all.
 Only the Acolyte (`uaco`, `lumber: false`) reaches the formula.
+
+That split decides how ghouls are *used*. Two more things follow from the same fact and both are
+in `plan.ts`:
+
+- **The forest has to be BUILT.** `lumberCrew` divides the ghouls a player has; it does not make
+  any. Two of the five undead builds (`aboms`, `gargoyles`) name no Ghoul in their mix at all, and
+  under those the race chopped nothing whatever — so `PlusRaceTable.lumberUnit` names the chopper
+  and `workers` puts up `LUMBER_UNITS` of them beside the workers, as economy rather than as army.
+- **An Acolyte is not a lumberjack, so five is the number.** Every worker past a mine's crew of
+  five is 75 gold standing in a queue — for three races the sixth goes to the trees, for the
+  undead it goes nowhere. `PlusProfile.workers` (11 on Normal, 14 on Insane) is an *economy's*
+  worth of workers and only means that where a worker can chop; a race that cannot gets
+  `MINE_CREW × towns + 1`, the plus one being the builder and the scout. Measured before the fix:
+  an undead Computer+ at nineteen minutes with **thirty-eight Acolytes**.
+
+### The undead altar is `uaod`, not `utod`
+
+A one-word row in `races.ts` that cost the undead its entire hero game, and it is worth writing
+down because the two names read alike in English: **`uaod` is the Altar of Darkness** (where a
+hero is bought) and **`utod` is the Temple of the Damned** (where Necromancers and Banshees are
+trained). The table named the second as its `altar`.
+
+Nothing about that fails loudly. `basics` put up a Temple of the Damned believing it was the
+altar; `firstHero` saw one standing and asked for a Death Knight; `SetProduce` had no altar to
+make one at — and because **a hero row halts the build loop while the AI saves for it**, every row
+below it starved for the rest of the match. The undead Computer+ never built an altar, never
+fielded a hero, and never fielded an army; what it did instead was spend the whole game on the one
+row above the hero, which is workers.
 
 ### Who builds it: not the worker down the hole
 
@@ -556,6 +660,15 @@ mid-fight walks a Grunt out of the battle line rather than healing it.
 A Burrow with peons in it shoots, which makes it the one structure in the game a worker turns into
 a tower. So when something is in the base, the workers go in — and **only the lumber ones**.
 
+**A burrow is asked for by its HOLD's ability code, not by "has a cargo hold".** `Abun` is Load
+(the Orc Burrow). The other worker-only hold in the game is `Aenc` — the **Entangled Gold Mine**,
+five wisps' worth of `garrisonCap` sitting on a finished building of yours ([`night-elf.md`](
+./night-elf.md)) — and `burrowPass` used to sweep it up as a burrow. Its un-threatened branch then
+stood the whole mine crew **down** every army pass, `applyHarvest` put them back on the next build
+pass, and a night elf computer spent the entire match marching its wisps in and out of its own
+gold mine every two or three seconds. That is not cosmetic: it is most of the race's income, since
+a wisp that is walking is not mining.
+
 That is why it is done a peon at a time (`{ c: "garrison" }`) rather than through the building's
 own Battle Stations button: `battleStations` gathers whatever workers are *nearest*, which on a
 threatened base means the gold crew, and a mine that stops paying for the fight it is funding is a
@@ -669,8 +782,15 @@ length why that distinction is load-bearing.
 
 ### What it says
 
+**Nothing before the greetings are done.** `OPENER_AT` is a fourteen-second floor, and
+`greetingsDone` is the rest of it: the "glhf"s are staggered per *slot* (`GREET_AT` +
+`GREET_STAGGER` × player), so on a full map the last one lands later than any fixed floor can
+know, and the openers used to interleave with them into one wall at the start of the match. It is
+worked out from the seats that actually exist, so a 1v1 does not hold its openers back for a
+lobby's worth of greetings nobody said.
+
 * **Its build, once, near the top of the game** — *"i'm going footmen and riflemen"*. Off the
-  `PlusStrategy` it rolled at seat time rather than off what it has produced, so at twelve
+  `PlusStrategy` it rolled at seat time rather than off what it has produced, so at fourteen
   seconds it is a plan rather than a report. The two heaviest units in the mix, named by the
   **game's** own `UnitDef.name` so a localized install says what it says; only the pluralisation
   is ours.
@@ -708,32 +828,59 @@ answering there would re-enter `deliverChat` from inside its own routing.
 
 ### Coming to help
 
-The destination has two answers, in order, and the split is what keeps it honest about the fog.
-**The fight**, if there is one to see — a teammate whose army is dying somewhere is not asking you
-to go and stand in their base — asked of `AiPlayer.knows`, which in a melee team game usually says
-yes with no cheating at all, because a force grants `ALLIANCE_SHARED_VISION` and the computer is
-already looking through its teammate's units. Enemy *players* only: a creep camp an ally chose to
-walk into is not what "help" means. Otherwise **the base**: *where* an ally's base is is public — a
-melee player is shown their teammates' start locations from the first frame — and their message is
-the news that something is wrong with it, while *which* of their halls is in trouble is `knows`
-again. With nothing visible it simply sends the army to the ally's nearest base and lets it find
-the fight there, which is what a person does.
+**It goes to the ally's ARMY.** Three answers, in order, and the first two are both "where their
+units are" — because that is what "help me" means. **The fight**, if there is one to see: the ally
+unit with the most enemies around it, which is where the help is needed rather than merely where
+the ally is. Otherwise **their army**: the centre of mass of their fighting units, workers and
+buildings left out. Only when they have nothing on the field at all does it fall through to
+**their base**, at which point their base genuinely is where they are.
 
-It walks, unless the walk is longer than `PORTAL_WALK` (5400 — a Footman's `spd` is 270, so about
-twenty seconds of open ground, and a fight that has been going twenty seconds has been decided).
-Then the hero presses its **Scroll of Town Portal** aimed at that spot. That needed one fix in the
-sim: `SimWorld.nearestHall` now accepts an **allied** hall, which is the item's stated behaviour
-rather than a convenience — Blizzard's own page says the scroll *"will automatically select the
-highest (allied) Town Hall as a transport destination"* — and without it the trip landed back in
-our own base. `PlusItems.portalTo` is the press, and it is called by the army manager rather than
-reached from the belt's ladder, because it is not a reading of the hero's danger at all: the
-`escape` rung is a retreat aimed at the hero's own feet, and this is the same item aimed at a
-place the whole army needs to be.
+The middle rung is new and the ordering used to be just fight-then-base, which was wrong far more
+often than it was right: `allyFight` needs enemies of theirs that *we* can see, which across a map
+usually means null — so the army walked to a base the ally was not standing in and the rescue
+arrived nowhere. A person asked for help walks to the friendly units on the minimap, not to the
+friendly buildings.
 
-The relief wave is an ordinary `attacking` wave with the ally's base as its objective, so it ends
-the way every other wave does — the group standing on the objective with nothing hostile near it —
-and `HELP_TIMEOUT` (90 s) is the other end: an ally whose base fell while we were walking is an
-ally we cannot help, and standing in the wreckage is how the second base is lost too.
+All of it is asked of `AiPlayer.knows`, which in a melee team game usually says yes with no
+cheating at all, because a force grants `ALLIANCE_SHARED_VISION` and the computer is already
+looking through its teammate's units. Enemy *players* only: a creep camp an ally chose to walk
+into is not what "help" means. Where an ally's *base* is is public — a melee player is shown their
+teammates' start locations from the first frame.
+
+**The scroll is for one thing: the ally's BASE being attacked.** It walks unless two things are
+both true — the walk is longer than `PORTAL_WALK` (5400; a Footman's `spd` is 270, so about twenty
+seconds of open ground, and a fight that has been going twenty seconds has been decided) *and*
+`baseUnderAttack` can see a fight at one of that ally's town halls. That second gate is not a
+policy, it is what the item is: a Town Portal's destination is a **town hall**
+([`items.md`](./items.md)), so a scroll spent on a field battle drops the army somewhere near the
+fight at best and is simply gone at worst — and gone is exactly when the base call comes.
+
+The press itself needed one fix in the sim: `SimWorld.nearestHall` accepts an **allied** hall,
+which is the item's stated behaviour rather than a convenience — Blizzard's own page says the
+scroll *"will automatically select the highest (allied) Town Hall as a transport destination"* —
+and without it the trip landed back in our own base. `PlusItems.portalTo` is called by the army
+manager rather than reached from the belt's ladder, because it is not a reading of the hero's
+danger at all: the `escape` rung is a retreat aimed at the hero's own feet, and this is the same
+item aimed at a place the whole army needs to be.
+
+**A rescue can be CALLED OFF.** It used to be a one-way commitment: the wave walked to where the
+fight had been, stood there until `attacking` decided the spot was clear or `HELP_TIMEOUT` (90 s)
+ran out, and only then remembered it had a game of its own. `helpWave` now re-asks
+`allyInDanger` — anything hostile *we can see* near any of that ally's units or halls — and two
+clocks keep it a decision rather than a twitch: `HELP_GRACE` (20 s), because the danger is judged
+through our own eyes and there is nothing to see for the first part of the walk, and `HELP_CLEAR`
+(8 s), because a fight ebbs. When it is called off, `dropHelp` puts the wave **back on the
+objective it was walking to when the call came** — a creep camp, an expansion, the enemy's base —
+rather than leaving it standing in the middle of the map. A wave pulled home to *defend* is the
+exception: `defendPass` has already given it a new job and must not have an old one pushed back
+onto it.
+
+**Every computer answers in its own turn.** One "help" reaches every allied Computer+ player on the
+same frame, and each of them typed "omw" onto that frame — three identical lines stacked on top of
+each other, which reads as one player with a stuck key rather than as a team. `heard` now parks the
+call with an `HELP_ANSWER_STAGGER` (2.5 s) offset per computer that actually heard it, so they
+answer in order — and the second one decides whether to come while the first one's army is already
+walking, which is also the honest order to decide in.
 
 ### Scouting intelligence: the team scouts once
 

@@ -1286,9 +1286,9 @@ export class AiPlayer {
   }
 
   /** `GetCreepCamp(min, max, flyers_ok)` — the nearest camp whose total level is in range. */
-  creepCamp(min: number, max: number, flyersOk: boolean): { x: number; y: number } | null {
+  creepCamp(min: number, max: number, flyersOk: boolean): { x: number; y: number; level: number } | null {
     const home = this.towns[0];
-    let best: { x: number; y: number } | null = null;
+    let best: { x: number; y: number; level: number } | null = null;
     let bestD = Infinity;
     for (const camp of this.host.creepCamps()) {
       const alive = camp.members.filter((id) => {
@@ -1299,7 +1299,11 @@ export class AiPlayer {
       if (camp.level < min || camp.level > max) continue;
       if (!flyersOk && alive.some((id) => this.host.world.units.get(id)!.flying)) continue;
       const d = Math.hypot(camp.x - home.x, camp.y - home.y);
-      if (d < bestD) { bestD = d; best = { x: camp.x, y: camp.y }; }
+      // The camp's own combined LEVEL travels with it: it is the one number that says how hard
+      // the camp is (green 1-9 / orange 10-19 / red 20+, the colours the minimap paints — see
+      // game/minimapView.ts), and Computer+ prices its party against it both when it sets off
+      // and while it is fighting (plus/power.ts). It is fixed map data and never re-derived.
+      if (d < bestD) { bestD = d; best = { x: camp.x, y: camp.y, level: camp.level }; }
     }
     return best;
   }

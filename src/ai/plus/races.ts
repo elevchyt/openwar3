@@ -27,7 +27,8 @@ import {
   UPG_ORC_ARMOR, UPG_ORC_BERSERKER, UPG_ORC_ENSNARE, UPG_ORC_MELEE, UPG_ORC_PULVERIZE,
   UPG_ORC_RANGED, UPG_ORC_SHAMAN, UPG_ORC_SPIKES, UPG_ORC_WAR_DRUMS, UPG_PRAYING, UPG_RANGED,
   UPG_SORCERY, UPG_STR_MOON, UPG_STR_WILD, UPG_UNHOLY_ARMOR, UPG_UNHOLY_STR, UPG_WOOD,
-  VAMP_AURA, VENGEANCE, VOODOO, WAR_STOMP, WARDEN, WATCH_TOWER, WATER_ELEMENTAL, WIND_WALK, WISP,
+  UNDEAD_ALTAR, VAMP_AURA, VENGEANCE, VOODOO, WAR_STOMP, WARDEN, WATCH_TOWER, WATER_ELEMENTAL,
+  WIND_WALK, WISP,
   WITCH_DOCTOR, WORKSHOP, WYVERN, ZIGGURAT_1, ZIGGURAT_2,
 } from "../ids";
 
@@ -167,6 +168,16 @@ export interface PlusRaceTable {
    *  Guard Tower and an undead Spirit Tower are both upgrades of something already standing). */
   readonly tower: string;
   readonly towerUpgrade?: string;
+  /**
+   * The unit that CHOPS, when this race's worker cannot — the undead's Ghoul, and nobody
+   * else's anything.
+   *
+   * Three races harvest both resources with one worker and leave this unset. The undead's
+   * Acolyte only ever kneels at a mine (`uaco` `lumber: false`, docs/undead.md), so its lumber
+   * has to be produced as a UNIT rather than as more workers — which is also why an undead
+   * player wants exactly a mine's crew of Acolytes and not one more (see `plan.ts` `workers`).
+   */
+  readonly lumberUnit?: string;
   /** Every unit this race's strategies may name. */
   readonly units: Readonly<Record<string, UnitRow>>;
   /** The race's whole upgrade list. A build takes the ones its own buildings can research. */
@@ -328,7 +339,15 @@ const UNDEAD: PlusRaceTable = {
   worker: ACOLYTE,
   halls: [NECROPOLIS_1, NECROPOLIS_2, NECROPOLIS_3],
   farm: ZIGGURAT_1,
-  altar: DAMNED_TEMPLE,
+  // `uaod` Altar of Darkness — NOT `utod`, the Temple of the Damned, which is the CASTER
+  // building (Necromancers and Banshees) and is what this row used to name. The two read alike
+  // in English and the mistake is invisible from here, but it cost the undead its whole hero
+  // game: `basics` put up a Temple of the Damned as "the altar", `firstHero` saw one standing
+  // and asked for a Death Knight, `SetProduce` had no altar to make one at — and because a hero
+  // row HALTS the build loop while the AI saves for it (plus/plan.ts), every row below it
+  // starved for the rest of the match. Measured: an undead Computer+ at nineteen minutes with
+  // thirty-eight Acolytes, no altar, no hero and no army.
+  altar: UNDEAD_ALTAR,
   barracks: CRYPT,
   support: [{ build: GRAVEYARD, tier: 1, after: 6 }],
   // The Spirit Tower is an UPGRADE of a Ziggurat, which is also the food building — so the
@@ -336,6 +355,13 @@ const UNDEAD: PlusRaceTable = {
   // separate base to raise, which is why `tower` names the upgraded form directly.
   shop: TOMB_OF_RELICS,
   tower: ZIGGURAT_2,
+  // THE GHOUL IS THE UNDEAD'S LUMBERJACK, and it is the only such row in the file. An Acolyte
+  // cannot chop (`uaco` `lumber: false` — docs/undead.md), so an undead player who builds only
+  // workers builds a race that never sees a stick of lumber; `undead.ai` itself opens with
+  // ghouls in the forest and splits them between the trees and the wave by hand (`AG`/`WG`,
+  // undead.ai 205-219). `plan.ts` puts up the forest's crew off this row, and
+  // `ComputerPlusAi.lumberCrew` decides how many of them the wave may take back.
+  lumberUnit: GHOUL,
   units: {
     [GHOUL]: { from: CRYPT, tier: 1 },
     [CRYPT_FIEND]: { from: CRYPT, tier: 2 },

@@ -195,6 +195,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   rolled per match, and **expanding belongs to the build order** (`PlusStrategy.expandAt`) rather
   than to the difficulty — a fast expand is a build, not a setting. Countering reads the game's
   own `DAMAGE_TABLE` against what the AI has SCOUTED, so never add a hand-written counter chart.
+  CREEPING is PRICED, never measured in food ([`plus/power.ts`](src/ai/plus/power.ts)): a camp's
+  combined level already says how hard it is on the game's own green/orange/red scale, and what a
+  party must look like for each colour is the only invented part. Its army also moves as ONE
+  BODY — nothing leaves the muster point until four fifths of it is there, and on the road a unit
+  ahead of the group's centre waits for it (never one that is in a fight, and never while
+  defending). Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:
+  the undead altar is **`uaod`** (Altar of Darkness), NOT `utod` (Temple of the Damned, which is
+  the CASTER building) — naming the wrong one left the undead with no hero and, because a hero row
+  halts the build loop, no army either; and a BURROW is asked for by its hold's ability code
+  **`Abun`**, never by "has a `garrisonCap`", because the Entangled Gold Mine (`Aenc`) has one too
+  and standing its crew down every pass is most of the night elf's income.
   **Aiming is ONE ladder** ([`targeting.ts`](src/ai/plus/targeting.ts)) shared by its casters and
   its army — a hero who stuns the Tauren while every Footman beside him swings at the Shaman is
   two decisions that undo each other — and a difficulty grades the READ, not only the reaction:

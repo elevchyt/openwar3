@@ -53,6 +53,16 @@ export interface PlusCtx {
   readonly tier: number;
   /** Is something hostile in one of our towns right now. */
   readonly threatened: boolean;
+  /**
+   * Can this player's ORDINARY worker chop? False for exactly one race, and it changes what a
+   * worker is FOR — see `workers`.
+   *
+   * Asked of the data (`WorkerState.lumber` off a worker actually standing on the field)
+   * rather than of the race, for the same reason `ComputerPlusAi.lumberCrew` asks it that way:
+   * a custom map that hands its Acolytes an axe is then answered correctly with no list of
+   * races anywhere.
+   */
+  readonly workerChops: boolean;
   /** A unit type's food cost. */
   foodOf(id: string): number;
   /** A unit type's whole row — what `counterScore` reads its attack type and weapons off. */
@@ -84,6 +94,29 @@ const CORE_ARMY_FOOD = 16;
 /** Workers on a mine. WC3 mines take five at a time, so a sixth is a peasant standing in a
  *  queue: five per town, everybody else in the trees. */
 const MINE_CREW = 5;
+
+/**
+ * The forest's crew for a race whose WORKER cannot chop — the undead, and only the undead.
+ *
+ * Five Ghouls, which is `undead.ai`'s own opening rounded to what a Crypt can actually keep
+ * coming (its `WG` ceiling is ten, and `ComputerPlusAi.lumberCrew` already lets the wave take
+ * back however many the bank says it may — undead.ai 205-219). It is deliberately stated as a
+ * PRODUCTION row rather than left to the army mix: two of the five undead builds
+ * (`aboms`, `gargoyles`) name no Ghoul at all, and under those the race chopped nothing
+ * whatever for the whole match.
+ */
+const LUMBER_UNITS = 5;
+
+/**
+ * …and how many workers such a race wants: a mine's crew per town, plus ONE.
+ *
+ * The plus is the builder — and the scout. An Acolyte is not a lumberjack, so every one past
+ * the fifth on a mine is 75 gold standing in a queue, which is exactly what the profile's
+ * `workers` (11 on Normal, 14 on Insane) bought: a real match ended with THIRTY-EIGHT of them.
+ * The sixth is the one a player keeps out of the mine to put up buildings with and to send to
+ * go and look, which is what an undead opening actually looks like.
+ */
+const SPARE_WORKERS = 1;
 
 /** Nobody's second hero before this much army is fielded — the altar's gold is the army's
  *  until there is an army. */
@@ -169,7 +202,31 @@ function workers(c: PlusCtx): void {
   const { ai, profile, table } = c;
   if (ai.townCountDone(table.halls[0]) < 1) return; // nothing to make them at
   const towns = Math.max(1, ai.minesOwned());
-  ai.setBuildNext(profile.workers * towns, table.worker);
+  // A race whose worker cannot chop wants a MINE'S CREW and no more — see `SPARE_WORKERS`.
+  // The profile's number is a whole economy's worth of workers and only means that where a
+  // worker is also a lumberjack.
+  const want = c.workerChops
+    ? profile.workers * towns
+    : MINE_CREW * towns + SPARE_WORKERS;
+  ai.setBuildNext(want, table.worker);
+  lumberUnits(c);
+}
+
+/**
+ * The forest, for the race that has to BUILD one.
+ *
+ * Sits with the workers because that is what it is: the undead's lumber comes out of the Crypt
+ * rather than out of the Necropolis, but it is still the economy and it still outranks the
+ * army. Gated on the producer STANDING, like every other row here (rule 1 at the top of the
+ * file) — and `setBuildNext` rather than `setBuildUnit`, so the ladder under it breathes while
+ * the crew fills up.
+ */
+function lumberUnits(c: PlusCtx): void {
+  const { ai, table } = c;
+  if (c.workerChops || !table.lumberUnit) return;
+  const row = table.units[table.lumberUnit];
+  if (!row || ai.countDone(row.from) < 1) return;
+  ai.setBuildNext(LUMBER_UNITS, table.lumberUnit);
 }
 
 /** Stay ahead of the food. One building at a time — `countDone + 1` is already satisfied by a

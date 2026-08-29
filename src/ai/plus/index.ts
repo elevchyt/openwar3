@@ -14,13 +14,15 @@ import {
 import { PlusItems, type ItemCtx } from "./items";
 import { buildPlan, buildableMix, harvestPlan, type PlusCtx } from "./plan";
 import {
-  BUSY_LINES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP, HELP_CALLS, HELP_CALL_FOES,
-  HELP_CALL_GAP, HELP_TIMEOUT, OPENER_AT, OPENER_UNITS, PORTAL_LINES, PORTAL_WALK,
-  SWITCH_MARGIN, TALK_GAP, openerLine, readAllyCall, switchLine, type SwitchReason,
+  BUSY_LINES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP, HELP_ANSWER_STAGGER, HELP_CALLS,
+  HELP_CALL_FOES, HELP_CALL_GAP, HELP_CLEAR, HELP_GRACE, HELP_TIMEOUT, OPENER_AT, OPENER_UNITS,
+  PORTAL_LINES, PORTAL_WALK, SWITCH_MARGIN, TALK_GAP, openerLine, readAllyCall, switchLine,
+  type SwitchReason,
 } from "./teamchat";
 import { plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, heroKillable, killValue } from "./targeting";
 import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from "./races";
+import { canClearCamp, maxCampLevel, type CreepForce } from "./power";
 
 // Computer+ — the improved melee AI (issue #124). Start at docs/computer-plus.md.
 //
@@ -177,6 +179,86 @@ export function scoutRing(
  *  then home. */
 const SCOUT_LEGS = SCOUT_RING_LEGS + 2;
 
+/**
+ * HOW WIDE THE SCOUT GIVES A CREEP CAMP A BERTH.
+ *
+ * A scout is one worker with no escort, and a melee map's creep camps sit on exactly the ground
+ * between two bases — so the straight line from home to the enemy's front door usually runs
+ * through one or two of them. It walked into them, got acquired, and died; and because a lost
+ * scout LATCHES (`Brain.scoutDone` — nobody follows it), that one walk was the whole of what the
+ * AI ever learnt about the map.
+ *
+ * Bigger than the creeps' own acquisition range (`MiscGame` AcquisitionRange is 500, and a guard
+ * chases `GuardDistance` past it) so that passing outside this is passing outside their notice
+ * rather than merely outside their reach.
+ */
+const CREEP_BERTH = 900;
+/** How far off the direct line a detour may be thrown to get round one. Enough to clear a camp
+ *  by its berth from a line that ran straight through the middle of it. */
+const CREEP_DETOUR = CREEP_BERTH;
+
+/**
+ * A waypoint on the way to `to` that does NOT walk through a creep camp, or `to` itself when the
+ * straight line is already clear.
+ *
+ * The route is re-asked at every step (`scoutPass` orders one leg at a time and re-issues on
+ * arrival), so this does not have to be a path — it has to be a next STEP that is not into a
+ * camp, and the pathfinder does the rest. The camp that matters is the FIRST one the line runs
+ * near, since going round it changes where everything after it lies; the detour is thrown out
+ * perpendicular to the line, on whichever side the camp is not.
+ *
+ * Pure, and exported, for the same reason `scoutRing` is: what actually matters about it — that
+ * the leg it hands back clears every camp it was given — is then pinned by a test rather than by
+ * reading it (tools/ai-plus-army-test.cjs).
+ */
+export function safeLeg(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  camps: ReadonlyArray<{ x: number; y: number }>,
+  berth = CREEP_BERTH,
+  detour = CREEP_DETOUR,
+): { x: number; y: number } {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) return to;
+  const ux = dx / len;
+  const uy = dy / len;
+  let worst: { along: number; side: number; gap: number } | null = null;
+  for (const c of camps) {
+    // Where the camp falls along the line, and how far off it — the ordinary point-to-segment
+    // decomposition. A camp BEHIND us or beyond the destination is not on the way.
+    const along = (c.x - from.x) * ux + (c.y - from.y) * uy;
+    if (along <= 0 || along >= len) continue;
+    const side = (c.x - from.x) * -uy + (c.y - from.y) * ux;
+    const gap = Math.abs(side);
+    if (gap >= berth) continue;
+    if (!worst || along < worst.along) worst = { along, side, gap };
+  }
+  if (!worst) return to;
+  // Step out to the side the camp is NOT on, level with it. `side` is signed, so a camp dead on
+  // the line (0) is passed on the left rather than being divided by zero.
+  const away = worst.side > 0 ? -1 : 1;
+  const push = detour + berth - worst.gap;
+  return {
+    x: from.x + ux * worst.along + -uy * away * push,
+    y: from.y + uy * worst.along + ux * away * push,
+  };
+}
+
+/** How long the scout may make no PROGRESS before its waypoint is written off (seconds).
+ *
+ *  The bug this exists for: `scoutPass` returns early while the scout's order is still "move",
+ *  so a worker that had been stopped by a cliff, wedged behind a building, or knocked off its
+ *  route by a creep it survived was left standing with a stale order and a goal it would never
+ *  reach — for the rest of the match, out of the economy, one worker of eleven. Nothing else
+ *  ever looked at it again, because the tour only advances on ARRIVAL. */
+const SCOUT_STUCK_AFTER = 8;
+/** …and how far it has to have moved in that time to count as making progress. A worker's own
+ *  `spd` is 190+ (UnitBalance.slk), so this is under two seconds' walk: generous enough that
+ *  going round a cliff is not "stuck", short enough that standing still is. */
+const SCOUT_PROGRESS = 300;
+
 // ITEMS live in plus/items.ts, not here — an item ability is not in `SimUnit.abilities` (it
 // hangs off the inventory slot and dispatches through `useItem`), so neither this file's army
 // manager nor plus/casting.ts's ability walk can see one. What this file owns is the CONTEXT the
@@ -206,9 +288,48 @@ export function lumberCrew(wood: number, choppers: number): number {
   return Math.max(0, Math.min(LUMBER_CREW - Math.floor(wood / LUMBER_PER_CHOPPER), choppers));
 }
 
-/** Creep camps: the window `AiPlayer.creepCamp` is asked for, derived from the army's food the
- *  way the race scripts derive theirs from `force_level` — four fifths of it, less ten. */
-const CREEP_WINDOW = 10;
+/**
+ * HOW FAR THE ARMY MAY SPREAD while it is walking.
+ *
+ * The army moves as ONE BODY, which is the thing every one of these constants is for. Without
+ * it a wave is only a list of units that were all given the same destination: a Grunt walks at
+ * 270 and a Meat Wagon at 190 (UnitBalance.slk `spd`), a hero that stopped to kill something
+ * falls a screen behind, and what arrives at the camp — or at the enemy's base — is a file of
+ * ones and twos being killed in the order they turn up. It is the same mistake as chasing a
+ * hero, made by nobody in particular.
+ *
+ * A unit further than this from the group's centre AND ahead of it is walked back to the centre
+ * instead of onward. Roughly a screen at the game's own camera (docs/camera.md), which is as
+ * spread out as an army can be and still be one fight.
+ */
+const COHESION_RADIUS = 600;
+/**
+ * …except when it is already fighting. A unit with an enemy this close is IN the battle, and
+ * pulling it back to a centre of mass is retreating one soldier at a time. Half the acquisition
+ * range of a ranged soldier: close enough that its own acquisition already has something.
+ */
+const COHESION_COMBAT = 500;
+/**
+ * How much of the wave has to be AT the muster point before it may leave.
+ *
+ * A fraction of food rather than "everybody", so one straggler — a unit stuck behind a
+ * building, a hero walking back from a shop — cannot hold the whole army at home for ever. Four
+ * fifths is an army with its tail still coming; anything less is half an army setting off.
+ */
+const GATHER_SHARE = 0.8;
+/** …and how close to the muster point counts as gathered. Wider than `RALLY_SLACK`, which is
+ *  the "stop nudging me" radius for one unit; this is a question about the whole group. */
+const GATHER_RADIUS = 700;
+
+/**
+ * Creep camps: the window `AiPlayer.creepCamp` is asked for.
+ *
+ * The floor is 0 — every camp this party can take is a camp worth taking, and the nearest of
+ * them is what `creepCamp` hands back. The CEILING is the whole decision and it is not a food
+ * number: it is `maxCampLevel` (plus/power.ts), which prices the party against the camp colours
+ * the game itself paints. See that file for what this used to be and what it cost.
+ */
+const CREEP_FLOOR = 0;
 /**
  * Hit-point fraction a unit heals up to before it is asked to fight again.
  *
@@ -231,6 +352,14 @@ const CREEP_UNTIL_LEVEL = 5;
 /** How often the ally list is rebuilt. An alliance changes about as often as a player leaves,
  *  and the answer costs a walk of the whole unit table — see `alliesOf`. */
 const ALLY_REFRESH = 5;
+
+/**
+ * The Orc Burrow's own cargo-hold ability — `Abun` Load, off its `abilList`.
+ *
+ * What tells a burrow from the other worker-only hold in the game, the Entangled Gold Mine's
+ * `Aenc`. See `burrowPass`, which is the one place it matters and the one place it cost a bug.
+ */
+const BURROW_HOLD = "Abun";
 
 /** The `buffType` category a town hall carries — UI\UnitEditorData.txt's pickFlags, the first
  *  of the four, and the same one `SimWorld.nearestHall` ranks a Town Portal's destination by. */
@@ -255,6 +384,9 @@ interface Brain {
   enemy: EnemyRead;
   /** Seconds since this computer was seated. */
   clock: number;
+  /** Can this player's ordinary worker chop? Null until one has been looked at — a property of
+   *  the unit data, so it is answered once and held (`ComputerPlusAi.workerChops`). */
+  chops: boolean | null;
   buildIn: number;
   armyIn: number;
   castIn: number;
@@ -272,6 +404,10 @@ interface Brain {
   scoutLeg: number;
   scoutGoal: { x: number; y: number } | null;
   scoutDone: boolean;
+  /** Where the scout was when it was last seen to have MOVED, and how long it has been standing
+   *  there since. The watchdog on a tour that only ever advanced on arrival — see `scoutPass`. */
+  scoutWas: { x: number; y: number } | null;
+  scoutStill: number;
   mode: Mode;
   target: { id: number; x: number; y: number } | null;
   reissueIn: number;
@@ -312,13 +448,27 @@ interface Brain {
    *  called from the middle of chat delivery, and answering there would re-enter `deliverChat`
    *  from inside its own routing. */
   called: number;
+  /** When that call may be ANSWERED. One "help" reaches every allied computer on the same
+   *  frame; `HELP_ANSWER_STAGGER` gives each of them its own turn to speak and to decide. */
+  answerAt: number;
   /** The ally this relief wave is for (-1 = none), and the clock it gives up on. */
   helping: number;
   helpUntil: number;
+  /** When this rescue set off (`HELP_GRACE` is measured from it) and when the ally last looked
+   *  to be in danger — the two clocks that let a rescue be CALLED OFF. See `helpWave`. */
+  helpSince: number;
+  helpDangerAt: number;
+  /** What the wave was doing when the call came, so a cancelled rescue can go back to it rather
+   *  than standing in the middle of the map wondering. Null when there was nothing to go back
+   *  to (it was at home). */
+  helpResume: { mode: Mode; target: { id: number; x: number; y: number } | null; creeping: boolean } | null;
   /** When it said gg (-1 = it hasn't). It leaves LEAVE_AFTER seconds later. */
   /** Is the wave in the field a CREEPING party rather than an attack? The two end on
    *  different terms — a creep run is over the moment the captain is gone (see `attacking`). */
   creeping: boolean;
+  /** …and the combined LEVEL of the camp it is on, which is what plus/power.ts prices the party
+   *  against — both to set off and, every pass after that, to decide it is still winning. */
+  creepLevel: number;
   concededAt: number;
   gone: boolean;
 }
@@ -379,6 +529,7 @@ export class ComputerPlusAi {
         gold: () => ai.gold(),
       }, profile),
       clock: 0,
+      chops: null,
       // Staggered across the interval, so twelve computers never all think on one frame.
       buildIn: profile.buildPeriod * (1 + player / 12),
       armyIn: profile.armyPeriod * (1 + player / 12),
@@ -390,6 +541,8 @@ export class ComputerPlusAi {
       scoutLeg: 0,
       scoutGoal: null,
       scoutDone: false,
+      scoutWas: null,
+      scoutStill: 0,
       mode: "massing",
       target: null,
       reissueIn: 0,
@@ -405,9 +558,14 @@ export class ComputerPlusAi {
       askedAt: -Infinity,
       answeredAt: -Infinity,
       called: -1,
+      answerAt: 0,
       helping: -1,
       helpUntil: 0,
+      helpSince: 0,
+      helpDangerAt: 0,
+      helpResume: null,
       creeping: false,
+      creepLevel: 0,
       concededAt: -1,
       gone: false,
     });
@@ -432,6 +590,12 @@ export class ComputerPlusAi {
    * `Brain.called` for why that separation is not optional.
    */
   heard(line: ChatLine, recipients: readonly number[]): void {
+    // How many computers have already taken a turn at this ONE line. Every allied Computer+
+    // player hears it on the same frame, so without a turn each they all typed "omw" onto the
+    // same frame as well — see `HELP_ANSWER_STAGGER`. Counted here rather than derived from the
+    // slot number so the offsets are 0, 1, 2 for whoever actually heard it, not 0, 3, 7 for
+    // wherever they happen to sit in the lobby.
+    let turn = 0;
     for (const b of this.brains) {
       if (b.gone || b.concededAt >= 0) continue; // a computer on its way out answers nobody
       const me = b.ai.player;
@@ -439,6 +603,7 @@ export class ComputerPlusAi {
       if (!this.host.coAllied(me, line.from)) continue;
       if (readAllyCall(line.text) !== "help") continue;
       b.called = line.from;
+      b.answerAt = b.clock + HELP_ANSWER_STAGGER * turn++;
     }
   }
 
@@ -570,9 +735,34 @@ export class ComputerPlusAi {
       armyFood: this.armyFood(b),
       tier: this.tier(b),
       threatened: b.ai.townThreatened(),
+      workerChops: this.workerChops(b),
       foodOf: (id) => this.host.registry.get(id)?.foodUsed ?? 0,
       defOf: (id) => this.host.registry.get(id),
     };
+  }
+
+  /**
+   * Can this player's ordinary worker CHOP?
+   *
+   * The same question `lumberCrew` asks and asked the same way — of a worker standing on the
+   * field (`WorkerState.lumber`) rather than of the race — so a custom map that hands its
+   * Acolytes an axe is answered correctly with no list of races anywhere. What it decides is how
+   * many workers the plan asks for at all, which for the undead is a mine's crew rather than an
+   * economy's worth (plus/plan.ts `workers`).
+   *
+   * CACHED once an answer has been seen, because it is a property of the unit DATA and cannot
+   * change — and because the alternative is a wrong answer at the one moment it matters most:
+   * with every worker dead or down a mine the scan finds nothing, and defaulting to "yes" would
+   * put an undead computer straight back onto its thirty-eight Acolytes.
+   */
+  private workerChops(b: Brain): boolean {
+    if (b.chops !== null) return b.chops;
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== b.ai.player || u.hp <= 0 || !u.worker || !u.isPeon) continue;
+      b.chops = u.worker.lumber;
+      return b.chops;
+    }
+    return true; // nothing seen yet: the ordinary case, and re-asked next pass
   }
 
   /**
@@ -817,9 +1007,31 @@ export class ComputerPlusAi {
       b.scoutId = worker.id;
       b.scoutLeg = 0;
       b.scoutGoal = null;
+      b.scoutWas = { x: worker.x, y: worker.y };
+      b.scoutStill = 0;
       return;
     }
-    if (b.scoutGoal && Math.hypot(scout.x - b.scoutGoal.x, scout.y - b.scoutGoal.y) > SCOUT_ARRIVED) {
+    // IS IT ACTUALLY MOVING? The tour only ever advanced on arrival, so a scout that stopped
+    // short of a waypoint — wedged behind a building, turned round by a creep it survived, left
+    // holding a stale order — stood there for the rest of the match. See `SCOUT_STUCK_AFTER`.
+    // Measured against the last position rather than against the order, because "has the order
+    // gone stale" is a question no order can answer about itself.
+    const moved = b.scoutWas ? Math.hypot(scout.x - b.scoutWas.x, scout.y - b.scoutWas.y) : Infinity;
+    if (moved >= SCOUT_PROGRESS) {
+      b.scoutWas = { x: scout.x, y: scout.y };
+      b.scoutStill = 0;
+    } else {
+      b.scoutStill += b.profile.armyPeriod;
+    }
+    const stuck = b.scoutStill >= SCOUT_STUCK_AFTER;
+    if (stuck) {
+      // Write the waypoint off and take the next one. A leg it cannot reach in eight seconds is
+      // a leg something is in the way of, and the tour's whole value is the ones after it.
+      b.scoutLeg++;
+      b.scoutGoal = null;
+      b.scoutWas = { x: scout.x, y: scout.y };
+      b.scoutStill = 0;
+    } else if (b.scoutGoal && Math.hypot(scout.x - b.scoutGoal.x, scout.y - b.scoutGoal.y) > SCOUT_ARRIVED) {
       if (scout.order === "move") return; // still walking
     } else if (b.scoutGoal) {
       b.scoutLeg++;
@@ -834,14 +1046,38 @@ export class ComputerPlusAi {
       // one worker of an eleven-worker economy, which is most of a Peon's worth of income
       // thrown away every game.) The move order is what actually brings it back; the harvest
       // plan then picks it up as an idle worker at home, which is what it is good at.
-      b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", x: b.ai.home().x, y: b.ai.home().y }, queued: false });
+      const home = b.ai.home();
+      b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...this.safeStep(scout, home) }, queued: false });
       b.scoutId = 0;
       b.scoutDone = true;
       b.scoutGoal = null;
+      b.scoutWas = null;
       return;
     }
     b.scoutGoal = goal;
-    b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", x: goal.x, y: goal.y }, queued: false });
+    // ROUND the creep camps, not through them — see `safeLeg`. The GOAL is unchanged (the tour
+    // still visits what it set out to visit); what is re-aimed is the step taken towards it,
+    // which is re-asked every time this pass re-issues, so the scout walks an arc round a camp
+    // rather than a line into one.
+    b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...this.safeStep(scout, goal) }, queued: false });
+  }
+
+  /**
+   * The next step towards `to` that does not walk into a creep camp.
+   *
+   * `safeLeg` does the geometry; this is the half that has the host and can say where the camps
+   * are. Only camps with something ALIVE in them count — a cleared camp is ground — and the
+   * positions are the camp centres the clustering already computed, which is map data rather
+   * than anything this player has had to see (the AI is on the authority's side of the fog for
+   * creep camps exactly as the engine always was; `AiPlayer.creepCamp` reads the same table).
+   */
+  private safeStep(from: { x: number; y: number }, to: { x: number; y: number }): { x: number; y: number } {
+    const camps: Array<{ x: number; y: number }> = [];
+    for (const camp of this.host.creepCamps()) {
+      if (!camp.members.some((id) => (this.host.world.units.get(id)?.hp ?? 0) > 0)) continue;
+      camps.push({ x: camp.x, y: camp.y });
+    }
+    return safeLeg(from, to, camps);
   }
 
   /**
@@ -920,6 +1156,13 @@ export class ComputerPlusAi {
       if (u.order === "move" || u.order === "attack") continue;
       b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: rally.x, y: rally.y }, queued: false });
     }
+    // NOTHING LEAVES UNTIL THE ARMY IS TOGETHER. This gate is above both the creep run and the
+    // wave because it is the same rule for both, and because the creep run is where its absence
+    // actually hurt: `creepFood` is eight food on Insane, which is reached the moment the
+    // fourth soldier is TRAINED — so the party set off from the production line rather than
+    // from the muster point, with the hero somewhere behind it, and walked into a camp in
+    // ones. See `COHESION_RADIUS` for the other half of the same idea, on the road.
+    if (!this.gathered(b, rally)) return;
     // Creeping is NOT an attack and does not wait behind the attack's clocks — see
     // `PlusProfile.creepAt` for what waiting behind them did to it.
     if (this.creepRun(b)) return;
@@ -935,6 +1178,26 @@ export class ComputerPlusAi {
   }
 
   /**
+   * Is enough of the wave standing at the muster point to set off?
+   *
+   * Measured in FOOD rather than in bodies, like every other size question here, and against
+   * the food that would actually leave (`squadFood` — the wounded are not in it, and neither is
+   * a unit that is still healing). A squad with nothing in it is not "gathered": the callers
+   * have their own size gates and this must not answer yes to an empty field.
+   */
+  private gathered(b: Brain, rally: { x: number; y: number }): boolean {
+    let total = 0;
+    let here = 0;
+    for (const u of this.squadUnits(b)) {
+      if (this.recovering(u)) continue;
+      const food = this.host.registry.get(u.typeId)?.foodUsed ?? 0;
+      total += food;
+      if (Math.hypot(u.x - rally.x, u.y - rally.y) <= GATHER_RADIUS) here += food;
+    }
+    return total > 0 && here >= total * GATHER_SHARE;
+  }
+
+  /**
    * Take the hero creeping.
    *
    * Everything here is a gate on the CAPTAIN, because that is what the run is for: a creep camp
@@ -945,25 +1208,70 @@ export class ComputerPlusAi {
    * entered at a third life is a dead hero, and a dead hero is the most expensive thing on a
    * melee map. It heals at home and goes again.
    *
-   * `creepCamp`'s window is the army's own food, exactly as the wave's is — the AI picks a
-   * camp it can handle rather than the nearest one.
+   * WHICH camp is `creepTarget`'s business, and it is priced rather than measured in food:
+   * a party is compared against the camp COLOUR the game itself paints (plus/power.ts), so a
+   * hero and two soldiers go to a green camp and nobody walks into a red one.
    */
   private creepRun(b: Brain): boolean {
-    const { ai, profile } = b;
+    const { profile } = b;
     if (!profile.creeps || b.clock < profile.creepAt) return false;
     const hero = this.squadHero(b);
     if (!hero || hero.level >= CREEP_UNTIL_LEVEL) return false;
     if (hero.hp / Math.max(1, hero.maxHp) < CREEP_HEALTH) return false;
-    const food = this.squadFood(b);
-    if (food < profile.creepFood) return false;
-    const max = Math.floor((food * 4) / 5);
-    const camp = ai.creepCamp(Math.max(0, max - CREEP_WINDOW), max, this.hasAir(b));
+    if (this.squadFood(b) < profile.creepFood) return false;
+    const camp = this.creepTarget(b);
     if (!camp) return false;
     b.target = { id: 0, x: camp.x, y: camp.y };
     b.creeping = true;
+    b.creepLevel = camp.level;
     this.setMode(b, "attacking");
     this.commit(b, camp.x, camp.y);
     return true;
+  }
+
+  /**
+   * The camp this party may actually take, or null.
+   *
+   * Two halves, and the second one is new. `creepForce` prices the party — fighter food behind
+   * the hero, the hero's level, and how healthy the whole thing is — and `maxCampLevel`
+   * (plus/power.ts) turns that into the hardest camp COLOUR it is allowed to walk into. The
+   * ceiling then goes to `AiPlayer.creepCamp` exactly as the old food number did, so the AI
+   * still takes the NEAREST camp it can handle rather than shopping around.
+   *
+   * Asked from both places a camp is chosen (`creepRun` starts a run, `pickTarget` aims a wave
+   * that has no better idea) so the two cannot disagree — which they did, and which is how a
+   * party that `creepRun` had refused to send was sent anyway a moment later.
+   */
+  private creepTarget(b: Brain): { x: number; y: number; level: number } | null {
+    const ceiling = maxCampLevel(this.creepForce(b));
+    if (ceiling < 0) return null;
+    return b.ai.creepCamp(CREEP_FLOOR, ceiling, this.hasAir(b));
+  }
+
+  /**
+   * The party, priced — what plus/power.ts reads.
+   *
+   * The wounded are left out of the food for the same reason `squadFood` leaves them out: a unit
+   * `commit` will not move is not in the party. They ARE in the health fraction, because a squad
+   * that is half-hurt is exactly the squad that should not be walking into a camp — leaving them
+   * out of both would let a party heal itself by ignoring its casualties.
+   */
+  private creepForce(b: Brain): CreepForce {
+    let fighterFood = 0;
+    let heroLevel = 0;
+    let hp = 0;
+    let maxHp = 0;
+    for (const u of this.squadUnits(b)) {
+      hp += Math.max(0, u.hp);
+      maxHp += Math.max(1, u.maxHp);
+      if (u.isHero) {
+        heroLevel = Math.max(heroLevel, u.level);
+        continue;
+      }
+      if (this.recovering(u)) continue;
+      fighterFood += this.host.registry.get(u.typeId)?.foodUsed ?? 0;
+    }
+    return { fighterFood, heroLevel, health: maxHp > 0 ? hp / maxHp : 0 };
   }
 
   /** On the way, and once there. */
@@ -973,6 +1281,17 @@ export class ComputerPlusAi {
     // pulled home by something else. Carrying on would be trading soldiers for experience
     // nobody is left to collect.
     if (b.creeping && !this.squadHero(b)) return void this.endWave(b);
+    // …and it is over the moment the party STOPS being able to take the camp, which is the
+    // other half of not suiciding into one. `canClearCamp` is the same bar that let the party
+    // set off (plus/power.ts), asked again of what is left of it: a fight that has cost the
+    // party its soldiers or half its hit points is a fight it is now losing, and walking home
+    // with a hero costs a walk where staying costs the hero. Checked before `retreatHp`, which
+    // is a fraction of the group and says nothing about what the group is standing in front of
+    // — and which is 0 on the difficulty that never creeps anyway.
+    if (b.creeping && !canClearCamp(this.creepForce(b), b.creepLevel)) {
+      this.setMode(b, "retreating");
+      return;
+    }
     if (b.profile.retreatHp > 0 && this.readiness(b) < b.profile.retreatHp) {
       this.setMode(b, "retreating");
       return;
@@ -1028,10 +1347,32 @@ export class ComputerPlusAi {
    */
   private commit(b: Brain, x: number, y: number): void {
     const focus = b.profile.focusFire ? this.focusTarget(b, x, y) : null;
+    // Cohesion holds a marching army together; it must NOT hold a defence back. Something is
+    // standing in the base, everyone who can reach it should be swinging at it, and a Grunt that
+    // is "ahead of the group" on the way home is a Grunt that got there first.
+    const centre = b.mode === "defending" ? null : this.squadCentre(b);
     for (const u of this.squadUnits(b)) {
       // A unit that is HEALING is not ordered anywhere. It is standing in the base with a Salve
       // on it or its head in a Moon Well, and marching it out is what makes the heal pointless.
       if (this.recovering(u)) continue;
+      // THE ARMY MOVES AS ONE BODY. A unit that has pulled AHEAD of the group waits for it
+      // instead of walking on — see `COHESION_RADIUS`, and note the two conditions that make
+      // this a regroup rather than a leash: it only ever holds back the units in FRONT (the
+      // ones behind are already being carried forward by the same order), and it never touches
+      // a unit that is in a fight. The hero is not exempt: a hero out in front of its army is
+      // the single most expensive thing on the map standing on its own.
+      if (centre && this.strayed(b, u, centre, x, y)) {
+        // Already walking back to about there: leave it alone. A move order RESTARTS the path
+        // search (the same cost the attack-move guard below is about), and the centre of mass
+        // drifts by a few units every pass — so without this the whole tail of the army would
+        // re-path every `REISSUE_PERIOD` for a destination that had not really moved. The end
+        // of its current path IS its destination, which is the only place a plain move records
+        // one.
+        const end = u.order === "move" && u.path.length ? u.path[u.path.length - 1] : null;
+        if (end && Math.hypot(end[0] - centre.x, end[1] - centre.y) <= REISSUE_SLACK) continue;
+        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: centre.x, y: centre.y }, queued: false });
+        continue;
+      }
       if (focus && !u.isPeon) {
         if (u.order === "attack" && u.targetId === focus.id) continue;
         b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: focus.id }, queued: false });
@@ -1146,6 +1487,25 @@ export class ComputerPlusAi {
     return best;
   }
 
+  /**
+   * Has this unit run out in front of the army?
+   *
+   * Three conditions, and all three are needed. It is FAR from the group's centre of mass; it is
+   * NEARER the objective than that centre is (so it is a leader rather than a straggler — a
+   * straggler is already walking the right way); and there is nothing hostile beside it, because
+   * a unit with an enemy in reach is fighting and pulling it out is not cohesion, it is
+   * abandoning the fight one soldier at a time.
+   *
+   * The distance is measured from the CENTRE rather than between pairs, which is what makes it
+   * a body rather than a chain: a group strung out along a road closes up towards its own
+   * middle instead of each unit chasing the one in front.
+   */
+  private strayed(b: Brain, u: SimUnit, centre: { x: number; y: number }, x: number, y: number): boolean {
+    if (Math.hypot(u.x - centre.x, u.y - centre.y) <= COHESION_RADIUS) return false;
+    if (Math.hypot(u.x - x, u.y - y) >= Math.hypot(centre.x - x, centre.y - y)) return false;
+    return !this.enemyNear(b, u.x, u.y, COHESION_COMBAT);
+  }
+
   /** Where the group actually is — the anti-chase rule measures from here rather than from the
    *  wave's objective, because "has it pulled away from us" is a question about the ARMY. */
   private squadCentre(b: Brain): { x: number; y: number } | null {
@@ -1187,10 +1547,10 @@ export class ComputerPlusAi {
     // sent to a camp from here without a hero is the very thing `creepRun` refuses to do.
     const captain = this.squadHero(b);
     if (profile.creeps && captain && captain.level < CREEP_UNTIL_LEVEL) {
-      const max = Math.floor((this.squadFood(b) * 4) / 5);
-      const camp = ai.creepCamp(Math.max(0, max - CREEP_WINDOW), max, this.hasAir(b));
+      const camp = this.creepTarget(b);
       if (camp) {
         b.creeping = true;
+        b.creepLevel = camp.level;
         return { id: 0, x: camp.x, y: camp.y };
       }
     }
@@ -1320,6 +1680,15 @@ export class ComputerPlusAi {
     for (const u of this.host.world.units.values()) {
       if (u.owner !== b.ai.player || u.hp <= 0 || !u.building) continue;
       if (u.building.constructionLeft > 0 || u.garrisonCap <= 0) continue;
+      // A BURROW, asked of the hold's own ability code rather than of "has a hold at all".
+      // `Abun` is Load (Orc Burrow); the other worker-only hold in the game is `Aenc`, the
+      // ENTANGLED GOLD MINE — five Wisps' worth of `garrisonCap` (`Aegm` Car1 = 5,
+      // docs/night-elf.md) sitting on a finished building of ours, which this used to sweep up
+      // as a burrow. The un-threatened branch below then stood the whole mine crew down every
+      // army pass, the next build pass put them back through `applyHarvest`, and a night elf
+      // computer spent the entire match marching its wisps in and out of its own gold mine
+      // twice a second — which is not a cosmetic bug, it is most of the race's income.
+      if (this.host.world.cargoHoldCode(u.typeId) !== BURROW_HOLD) continue;
       burrows.push(u);
     }
     if (!burrows.length) return;
@@ -1558,7 +1927,13 @@ export class ComputerPlusAi {
    * which reads as a computer with nothing to say rather than as a teammate.
    */
   private openerTalk(b: Brain): void {
-    if (b.opened || b.clock < OPENER_AT + GREET_STAGGER * b.ai.player) return;
+    if (b.opened) return;
+    // AFTER THE GREETINGS — every seat's, not only this one's. `OPENER_AT` is the floor the
+    // developer asked for (fourteen seconds, by which time the "glhf"s should be gone) and
+    // `greetingsDone` is the rest of it: the greetings are staggered per SLOT, so on a full map
+    // the last one lands later than any fixed floor can know, and the two sets of lines
+    // interleaved into one wall at the start of the match.
+    if (b.clock < Math.max(OPENER_AT, this.greetingsDone()) + GREET_STAGGER * b.ai.player) return;
     b.opened = true;
     const ranked = Object.entries(b.strategy.mix).sort((a, c) => c[1] - a[1]);
     if (!ranked.length) return;
@@ -1568,6 +1943,19 @@ export class ComputerPlusAi {
       .filter(Boolean);
     const line = openerLine(named);
     if (line) this.tell(b, [line]);
+  }
+
+  /**
+   * When the LAST seat's greeting goes out — `GREET_AT` plus the stagger of the highest slot
+   * that is actually seated (plus/chatter.ts `mannersPass` says it in the same terms).
+   *
+   * Off the seats that exist rather than off `MELEE.MAX_PLAYERS`, so a 1v1 does not hold its
+   * openers back for a lobby's worth of greetings that were never said.
+   */
+  private greetingsDone(): number {
+    let last = 0;
+    for (const other of this.brains) if (!other.gone) last = Math.max(last, other.ai.player);
+    return GREET_AT + GREET_STAGGER * last;
   }
 
   /**
@@ -1667,30 +2055,46 @@ export class ComputerPlusAi {
    * times: a second call inside it is the same emergency, and the army is already walking.
    */
   private answerCall(b: Brain): void {
+    if (b.called < 0) return;
+    // Its TURN to answer. Parked rather than dropped, so a computer whose turn has not come yet
+    // still answers — a beat later, which is the point (`HELP_ANSWER_STAGGER`).
+    if (b.clock < b.answerAt) return;
     const from = b.called;
     b.called = -1;
-    if (from < 0 || !b.allies.includes(from)) return;
+    if (!b.allies.includes(from)) return;
     if (b.clock - b.answeredAt < HELP_ANSWER_GAP) return;
     b.answeredAt = b.clock;
     const spot = this.helpSpot(b, from);
-    // No fight we can see and no hall left standing is an ally there is nowhere to send an army
-    // TO. Nothing is said either: "you have no base" is not help.
+    // No army of theirs we can see and no hall left standing is an ally there is nowhere to send
+    // an army TO. Nothing is said either: "you have no base" is not help.
     if (!spot) return;
     const busy = this.busyLines(b);
     if (busy) return void this.tell(b, busy);
+    // What this wave was doing, so calling the rescue off puts it back rather than leaving it
+    // standing in the middle of the map — see `helpWave`. Only a wave in the FIELD is worth
+    // remembering; a computer that was massing at home simply goes back to massing.
+    b.helpResume = b.mode === "attacking" && b.target
+      ? { mode: b.mode, target: { ...b.target }, creeping: b.creeping }
+      : null;
     b.helping = from;
     b.helpUntil = b.clock + HELP_TIMEOUT;
+    b.helpSince = b.clock;
+    b.helpDangerAt = b.clock;
     b.target = { id: 0, x: spot.x, y: spot.y };
     b.creeping = false;
     this.setMode(b, "attacking");
-    // ON FOOT, or by scroll when the walk is long enough that the fight would be over before the
-    // army arrived (PORTAL_WALK). The scroll takes the party standing around the hero, so the
-    // rest of the army walks and arrives late — which is exactly what happens when a player does
-    // this, and is why the hero is the one carrying it (`PlusProfile.keepPortal`).
+    // ON FOOT, or by scroll — and the scroll is spent on ONE thing: an ally whose BASE is being
+    // attacked. That is what a Town Portal is for and it is the only trip that pays for it. A
+    // teammate whose army is in trouble in the middle of the map is a teammate you walk to: the
+    // scroll goes to a town hall (`SimWorld.nearestHall`, docs/items.md), the fight is not at
+    // one, and a scroll spent on a field battle is a scroll that is not there for the base.
+    // `PORTAL_WALK` still applies on top — a base three seconds' walk away is a walk.
     const centre = this.squadCentre(b) ?? b.ai.home();
     const far = Math.hypot(centre.x - spot.x, centre.y - spot.y) > PORTAL_WALK;
     const hero = this.squadHero(b);
-    const tp = far && hero ? b.items.portalTo(hero, spot.x, spot.y) : false;
+    const tp = far && hero && this.baseUnderAttack(b, from)
+      ? b.items.portalTo(hero, spot.x, spot.y)
+      : false;
     this.tell(b, tp ? PORTAL_LINES : COMING_LINES);
     this.commit(b, spot.x, spot.y);
   }
@@ -1708,24 +2112,88 @@ export class ComputerPlusAi {
   }
 
   /**
-   * Where the relief wave goes.
+   * Where the relief wave goes: TO THE ALLY'S ARMY.
    *
-   * Two answers, in that order — the FIGHT if there is one to see, the ally's BASE otherwise —
-   * and the split is what keeps the whole thing honest about the fog.
+   * Three answers, in that order, and the first two are both "where their units are" — because
+   * that is what "help me" means. It used to be the FIGHT or, failing that, the ally's BASE, and
+   * the fallback was wrong far more often than the first rung was right: `allyFight` needs
+   * enemies of theirs that WE can see, which across a map usually means it answers null, and the
+   * army then walked to a base the ally was not standing in. A teammate under pressure is with
+   * their army; a person asked for help walks to the friendly units on the minimap, not to the
+   * friendly buildings.
    *
-   *  · **The fight.** A teammate who says "help" while their army is dying somewhere is not
-   *    asking you to go and stand in their base. Where that is, though, is not public, so it is
-   *    asked of `AiPlayer.knows` — and in a melee team game the answer is usually yes without
-   *    any cheating, because a force grants ALLIANCE_SHARED_VISION and this computer is already
-   *    looking through its teammate's units. When it cannot see one, it does not invent one.
-   *  · **The base.** Public: a melee player is shown their teammates' start locations from the
-   *    first frame, and the message itself is the news that something is wrong. Which of their
-   *    halls is in trouble is not public, so that half is `knows` again — and with nothing
-   *    visible it simply sends the army to the ally's nearest base and lets it find the fight
-   *    when it arrives, which is what a person does.
+   *  · **The fight**, when we can see one: the ally unit with the most enemies around it. This
+   *    is still the best answer when it exists, because it is where the help is needed rather
+   *    than merely where the ally is.
+   *  · **Their army**, otherwise: the centre of mass of their fighting units. Where that is is
+   *    not public, so it is asked of `AiPlayer.knows` — and in a melee team game the answer is
+   *    usually yes without any cheating, because a force grants ALLIANCE_SHARED_VISION and this
+   *    computer is already looking through its teammate's units.
+   *  · **The base**, only when they have no army left to find. Public: a melee player is shown
+   *    their teammates' start locations from the first frame. At this point the ally has nothing
+   *    on the field, so their base is genuinely where they are.
    */
   private helpSpot(b: Brain, ally: number): { x: number; y: number } | null {
-    return this.allyFight(b, ally) ?? this.allyBase(b, ally);
+    return this.allyFight(b, ally) ?? this.allyArmy(b, ally) ?? this.allyBase(b, ally);
+  }
+
+  /**
+   * Where the ally's ARMY is — the centre of mass of their fighting units that we can see.
+   *
+   * Workers and buildings are not in it: a teammate's peasants are their base, and their base is
+   * the rung below this one. A centre of mass rather than the nearest of them, for the same
+   * reason `squadCentre` is one — it is a question about a body of units, and picking any single
+   * one of them aims the rescue at whichever soldier happened to wander furthest.
+   */
+  private allyArmy(b: Brain, ally: number): { x: number; y: number } | null {
+    let n = 0, sx = 0, sy = 0;
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== ally || u.hp <= 0 || u.building || u.isPeon) continue;
+      if (!b.ai.knows(u)) continue;
+      sx += u.x; sy += u.y; n++;
+    }
+    return n ? { x: sx / n, y: sy / n } : null;
+  }
+
+  /**
+   * Is one of the ally's TOWN HALLS actually being attacked?
+   *
+   * The one question the Scroll of Town Portal is asked (`answerCall`), and the reason it is
+   * asked separately from `helpSpot`: the scroll's destination is a town hall, so it can only
+   * ever answer "their base is under attack" — spending it on a field battle drops the army
+   * somewhere near the fight at best and wastes the item at worst. Gated on our own eyes like
+   * everything else here.
+   */
+  private baseUnderAttack(b: Brain, ally: number): boolean {
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== ally || u.hp <= 0 || !u.building || u.building.constructionLeft > 0) continue;
+      if (this.host.registry.get(u.typeId)?.buffType !== HALL_CATEGORY) continue;
+      if (this.fightAt(b, u)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Is this ally still in trouble — the question a rescue is CALLED OFF by.
+   *
+   * Deliberately broader than `baseUnderAttack`: anything hostile we can see near any of their
+   * units or halls counts, because the rescue was sent for a fight and a fight moves. It is the
+   * same shape as `isInvader`, asked about somebody else's things.
+   */
+  private allyInDanger(b: Brain, ally: number): boolean {
+    const theirs: SimUnit[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== ally || u.hp <= 0 || u.isPeon) continue;
+      if (b.ai.knows(u)) theirs.push(u);
+    }
+    if (!theirs.length) return false;
+    for (const f of this.host.world.units.values()) {
+      if (f.hp <= 0 || f.building || f.isCreep) continue;
+      if (f.owner < 0 || f.owner >= MELEE.MAX_PLAYERS) continue;
+      if (!b.ai.hostileTo(f) || !b.ai.knows(f)) continue;
+      for (const t of theirs) if (Math.hypot(f.x - t.x, f.y - t.y) <= TOWN_RADIUS) return true;
+    }
+    return false;
   }
 
   /**
@@ -1799,18 +2267,57 @@ export class ComputerPlusAi {
   /**
    * The relief wave, once it is out.
    *
-   * Two ends to it. Reaching the ally's base and clearing it is the ordinary one — `attacking`
-   * ends the wave the moment the group is standing on its objective with nothing hostile around
-   * it, exactly as it would at an enemy base — and this only has to notice that it happened.
-   * The other is `HELP_TIMEOUT`: an ally whose base fell while we were walking is an ally we
-   * cannot help, and standing in the wreckage of it is how the second base is lost as well.
+   * THREE ends to it, and the middle one is the answer to "how does a rescue get called off":
+   *
+   *  · it ARRIVED and cleared the spot — `attacking` ends the wave the moment the group is
+   *    standing on its objective with nothing hostile around it, exactly as it would at an enemy
+   *    base, and this only has to notice that it happened;
+   *  · the ally is OUT OF DANGER, whether or not this army had anything to do with it. A rescue
+   *    used to be a one-way commitment: the wave walked to where the fight had been and stood
+   *    there until the spot read clear or `HELP_TIMEOUT` ran out, and only then remembered it had
+   *    a game of its own. `dropHelp` puts it back on what it was doing;
+   *  · `HELP_TIMEOUT`: an ally whose base fell while we were walking is an ally we cannot help,
+   *    and standing in the wreckage of it is how the second base is lost as well.
    */
   private helpWave(b: Brain): void {
     if (b.helping < 0) return;
-    if (b.mode !== "attacking") return void (b.helping = -1); // home, defending, or broken
+    if (b.mode !== "attacking") return void this.dropHelp(b, false); // home, defending, or broken
+    // THE RESCUE IS CALLED OFF when the ally is out of danger. Without this a relief wave was a
+    // one-way commitment: it walked to where the fight had been, stood there until `attacking`
+    // decided the spot was clear or `HELP_TIMEOUT` ran out, and only then remembered it had a
+    // game of its own. Two clocks make it a decision rather than a twitch — `HELP_GRACE`, because
+    // the danger is judged through OUR eyes and there is nothing to see for the first part of the
+    // walk, and `HELP_CLEAR`, because a fight ebbs.
+    if (this.allyInDanger(b, b.helping)) b.helpDangerAt = b.clock;
+    const settled = b.clock - b.helpSince >= HELP_GRACE;
+    if (settled && b.clock - b.helpDangerAt >= HELP_CLEAR) return void this.dropHelp(b, true);
+    // …and the other end: an ally whose base fell while we were walking is an ally we cannot
+    // help, and standing in the wreckage of it is how the second base is lost as well.
     if (b.clock <= b.helpUntil) return;
+    this.dropHelp(b, true);
+  }
+
+  /**
+   * Stop helping, and go back to what the wave was doing.
+   *
+   * `resume` is the difference between a rescue that ENDED and one that was interrupted by
+   * something bigger: a wave pulled home to defend has already been given a new job by
+   * `defendPass` and must not have an old objective pushed back onto it, so that path drops the
+   * memory instead. Otherwise the wave picks up the target it was walking to when the call came
+   * — a creep camp, an expansion, the enemy's base — which is what "returns to what it was
+   * doing" actually means. A remembered target that has since died falls through to `endWave`,
+   * i.e. home and re-decide, which is the honest answer when the plan has expired.
+   */
+  private dropHelp(b: Brain, resume: boolean): void {
+    const back = b.helpResume;
     b.helping = -1;
-    this.endWave(b);
+    b.helpResume = null;
+    if (!resume) return;
+    const still = back?.target && (!back.target.id || (this.host.world.units.get(back.target.id)?.hp ?? 0) > 0);
+    if (!back || !still) return void this.endWave(b);
+    b.target = back.target;
+    b.creeping = back.creeping;
+    this.setMode(b, back.mode);
   }
 
   /** The numbers `hopeless` judges the position by. */

@@ -161,10 +161,19 @@ export function openerLine(unitNames: readonly string[]): string {
 export const OPENER_UNITS = 2;
 
 /**
- * When it says it, in seconds. After the greeting (`GREET_AT` + its per-slot stagger) so the two
- * do not land on one frame, and early enough that it is still a plan rather than a report.
+ * When it says it, in seconds.
+ *
+ * A FLOOR of fourteen seconds, and then only once EVERY seat's greeting has gone out — not just
+ * this one's. The greetings are staggered per slot (`GREET_AT` + `GREET_STAGGER` × player,
+ * plus/chatter.ts), so on a full map the last "glhf" lands well after the twelve seconds this
+ * used to wait: the openers interleaved with the greetings and the opening of the game read as
+ * one scrolling wall. `ComputerPlusAi.openerTalk` works the second half out from the seats that
+ * actually exist rather than from a guess at how many there are.
+ *
+ * Still early enough that it is a plan rather than a report — nothing is producing at fourteen
+ * seconds either.
  */
-export const OPENER_AT = 12;
+export const OPENER_AT = 14;
 
 /** Why the top of the mix moved, which is the half of the announcement that is worth reading. */
 export type SwitchReason = "air" | "counter" | null;
@@ -220,6 +229,39 @@ export const HELP_CALL_GAP = 60;
 /** How long an answered call stays answered — a second "help" from the same ally inside this is
  *  the same emergency, and the army is already walking to it. */
 export const HELP_ANSWER_GAP = 30;
+
+/**
+ * Seconds between two computers ANSWERING the same call.
+ *
+ * One "help" is heard by every allied computer on the same frame, and without this every one of
+ * them typed "omw" into the message area on that frame — three identical lines stacked on top of
+ * each other, which reads as one player with a stuck key rather than as a team. It is the same
+ * problem `GREET_STAGGER` solves for the greeting and it is solved the same way: the answer is
+ * parked and each computer takes its turn.
+ *
+ * It is also the honest ORDER to answer in — the second computer decides whether to come while
+ * the first one's army is already walking, which is what a team does.
+ */
+export const HELP_ANSWER_STAGGER = 2.5;
+
+/**
+ * How long a relief wave sticks to the job before the danger is re-checked at all.
+ *
+ * A grace period, and it exists because the check is made through THIS computer's eyes: an ally
+ * calling from across the map is usually calling about a fight we cannot see yet, so a danger
+ * test run the instant the army sets off would answer "no danger" and cancel the rescue on its
+ * first step. Long enough to be most of the way there.
+ */
+export const HELP_GRACE = 20;
+
+/**
+ * …and how long the ally has to be OUT of danger before the rescue is called off.
+ *
+ * Not instant: a fight ebbs, and an army that turned around the moment the last visible enemy
+ * stepped behind a tree would arrive nowhere twice. See `ComputerPlusAi.helpWave`, which is
+ * where a cancelled rescue goes back to whatever the wave was doing before the call.
+ */
+export const HELP_CLEAR = 8;
 
 /** How long a relief wave will keep trying before it gives up and goes home. An ally whose base
  *  fell while we were walking is an ally we cannot help, and standing in the wreckage of it is
