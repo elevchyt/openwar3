@@ -1976,7 +1976,17 @@ function pathDomain(u: SimUnit): PathDomain {
 // bounds how far ahead (world units) the check scans — deliberately local, so a
 // distant block that may clear before arrival doesn't trigger a needless reroute.
 const REPATH_POLL = 0.25;
+/** How many sim steps a crowd's reroute polls are spread over — see `repollT`'s stagger.
+ *  REPATH_POLL is 15 steps at SIM_DT, so 15 phases puts at most one unit's poll on any one
+ *  step and no unit ever waits longer for its first poll than it would have anyway. */
+const REPATH_POLL_PHASES = 15;
 const REPATH_LOOKAHEAD = PATHING_CELL * 5; // ~5 cells (160 world units) ahead
+/** Reroutes (a full A* each) any ONE sim step may run. The stagger above is what normally
+ *  keeps this slack; this is the backstop for the case it cannot help — a hundred units
+ *  shoved into the same corridor by the same event, all blocked on the same step. A skipped
+ *  reroute is not a lost one: the poll comes round again in REPATH_POLL, and checkStuck() is
+ *  the backstop it always was. Deliberately generous — this must bite only pathologically. */
+const REPATH_BUDGET_PER_STEP = 4;
 /** What a trip is worth when the worker's own harvest row does not say (`Aaha`, the Acolyte's,
  *  carries no columns at all). Every worker that DOES say — `Ahar` DataC = 10 — is read off
  *  the row instead (WorkerState.goldPerTrip, applyHarvestData). */
@@ -6006,7 +6016,14 @@ export class SimWorld {
       stuckAnchorY: unit.y,
       repathT: 0,
       waitT: 0,
-      repollT: 0,
+      // Staggered, not zero. The poll is what makes a unit re-run A* around a crowd that has
+      // stopped across its route, and every unit used to start its clock at 0 — so an army
+      // ordered out together polled together, and every REPATH_POLL a whole wave's worth of
+      // full-map searches landed in ONE sim step. That is the periodic 100-420 ms hitch the
+      // session logs show as `sim.world.move.walk` (docs/perf-logging.md). Spreading the
+      // PHASE changes nothing about the poll itself and costs nothing; the id is the sim's
+      // own counter, so this is identical on every client (see sim-determinism-test).
+      repollT: (unit.id % REPATH_POLL_PHASES) * (REPATH_POLL / REPATH_POLL_PHASES),
       yieldT: 0,
       prevX: unit.x,
       prevY: unit.y,
@@ -17159,6 +17176,8 @@ export class SimWorld {
     u.repollT = REPATH_POLL;
     if (u.waypoint >= u.path.length) return; // nothing left to walk
     if (!this.pathAheadBlocked(u)) return;
+    if (this.repathsThisStep >= REPATH_BUDGET_PER_STEP) return; // …next poll, then
+    this.repathsThisStep++;
     this.pathTo(u, u.chaseX, u.chaseY); // reroute toward the same goal
   }
 
@@ -17563,7 +17582,13 @@ export class SimWorld {
     };
   }
 
+  /** Reroutes already spent this sim step — see REPATH_BUDGET_PER_STEP. Reset here rather
+   *  than in step() because tickMovement is the only pass that spends it, and a counter reset
+   *  next to what spends it cannot drift away from it. */
+  private repathsThisStep = 0;
+
   private tickMovement(dt: number): void {
+    this.repathsThisStep = 0;
     // Every walker takes the block it is standing on BEFORE anyone takes a step. Done in
     // its own pass because the claims have to be complete for the stepping pass to mean
     // anything: whoever ran first would otherwise walk straight over a unit that had not

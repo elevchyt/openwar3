@@ -75,6 +75,10 @@ const MANNERS_PERIOD = 1;
 
 /** How often an attacking squad re-states its order to a member that has drifted. */
 const REISSUE_PERIOD = 4;
+/** How far the wave's objective must have DRIFTED before re-stating the order is worth a
+ *  fresh search — see `commit`. Four pathing cells: a building's width, and below the
+ *  REPATH_LOOKAHEAD (five cells) at which the sim itself decides a route has gone stale. */
+const REISSUE_SLACK = 128;
 
 /**
  * How far in front of the base the army waits.
@@ -623,6 +627,16 @@ export class ComputerPlusAi {
       // A unit already swinging at something is left alone: re-aiming a melee fighter at the
       // far end of a base every few seconds is how an army walks past what is killing it.
       if (u.order === "attack" && u.targetId) continue;
+      // …and so is a unit already walking to this same spot. A re-issued attack-move
+      // RESTARTS the search (SimWorld.issueAttackMove calls pathTo), so re-stating an order
+      // nothing has changed about buys nothing and costs a full-map A* per soldier — the
+      // session logs had `aiAttackPass` at 100-420 ms every REISSUE_PERIOD, which is a whole
+      // wave re-pathing across the map inside ONE sim step (docs/perf-logging.md). A player
+      // does not re-drag their army onto the same pixel every four seconds either; what the
+      // re-issue is FOR is a target that has moved, and REISSUE_SLACK is how far it has to
+      // have moved to be worth a new route. En-route acquisition is unaffected — that is
+      // tickAttackMove's business and does not read the destination.
+      if (u.order === "attackmove" && Math.hypot(u.amDestX - x, u.amDestY - y) <= REISSUE_SLACK) continue;
       b.ai.order({ c: "order", unitId: u.id, order: { kind: "attackmove", x, y }, queued: false });
     }
     b.reissueIn = REISSUE_PERIOD;

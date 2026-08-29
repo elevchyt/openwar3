@@ -63,7 +63,7 @@ export interface Standing {
  * Is this position beyond saving?
  *
  * Deliberately conservative — an AI that concedes a game it could still play is worse than one
- * that never concedes at all — and both clauses are stated as "there is no MOVE from here",
+ * that never concedes at all — and every clause is stated as "there is no MOVE from here",
  * never as "this looks bad". Anything softer describes an opening as well as a defeat:
  *
  *  1. **No hall, and no way to put one back up** — nobody left to build it, or not enough gold
@@ -72,8 +72,25 @@ export interface Standing {
  *     has to happen while something is still standing or it would never happen at all.
  *  2. **The enemy army is in the base and there is nothing left to answer it with** — no army,
  *     no workers. A hall and a purse cannot save that, and it is the moment a human types gg.
+ *  3. **The enemy army is in the base, there is no army, and no hall to make one from.**
  *
- * `structures` is not tested by either clause and is kept for the same reason `invaders` is a
+ * Clause 3 is what makes the other two reachable, and it is here because without it the AI
+ * effectively never conceded at all: a player had to raze the base building by building to win
+ * a game that had been over for minutes. Both of the first two clauses are vetoed by a WORKER —
+ * clause 1 by "somebody could still build a hall", clause 2 by `workers === 0` — and a worker
+ * is precisely the last thing a player kills. Two Peons cowering in a corner with 900 gold
+ * banked held the whole concession open.
+ *
+ * It is still "no route back", not "this looks bad", and it says so in the three terms it is
+ * written in: with no hall there is nothing to train from, so the gold cannot be spent on an
+ * answer; a new hall takes the better part of a minute to raise with the enemy army already
+ * standing on the spot; and workers do not fight. What it deliberately does NOT claim is that a
+ * razing is lost while a hall still stands — that position can genuinely rebuild, and the AI
+ * plays it out. Note also how it un-latches: if the raiders die or move on `invaders` drops to
+ * 0, and if anything at all is trained `armyFood` rises, and either resets `hopelessSince` —
+ * so a position that recovers inside `concedeAfter` never says gg.
+ *
+ * `structures` is not tested by any clause and is kept for the same reason `invaders` is a
  * count: they are what a future reading of the position would be written in terms of, and they
  * are cheap. `hallCost` is the race's own tier-1 hall price, read from the registry rather than
  * typed here, so clause 1 asks the real question on every race.
@@ -81,5 +98,6 @@ export interface Standing {
 export function hopeless(s: Standing, hallCost: number): boolean {
   if (s.halls === 0 && (s.workers === 0 || s.gold < hallCost)) return true;
   if (s.invaders > 0 && s.armyFood === 0 && s.workers === 0) return true;
+  if (s.invaders > 0 && s.armyFood === 0 && s.halls === 0) return true;
   return false;
 }

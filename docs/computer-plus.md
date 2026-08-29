@@ -399,6 +399,19 @@ from here" — and the position has to *stay* hopeless for `concedeAfter` second
 on Insane: a weaker player takes longer to accept it). Then it says gg, waits five seconds, and
 **leaves**.
 
+The third clause — *raiders in the base, no army, and no hall to make one from* — is the one
+that makes the other two reachable, and it is worth knowing why it had to exist. The first two
+are both vetoed by a surviving **worker**: clause 1 by "somebody could still put a hall back
+up", clause 2 by `workers === 0`. A worker is the last thing a player kills, so two Peons in a
+corner with gold banked held the concession open for the whole game and you had to raze the base
+building by building to win one that had been decided minutes earlier. Note what clause 3 still
+refuses to say: a razing is **not** lost while a hall stands — that position can genuinely
+rebuild, and the AI plays it out. And it un-latches on its own, because `hopelessSince` resets
+the moment the raiders leave (`invaders`) or anything at all goes into production (`armyFood`).
+
+`tools/ai-plus-concede-test.cjs` pins both directions, and the "plays on" half is the half that
+matters: an AI that concedes a game it could still play is worse than one that never concedes.
+
 Leaving is `EVENT_PLAYER_LEAVE`, raised on the map's own script:
 
 ```

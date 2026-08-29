@@ -11,10 +11,12 @@ import type { PathDomain, PathingGrid } from "./pathing";
 type Cell = [number, number];
 
 
-const NEIGHBORS: Array<[number, number, number]> = [
-  [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
-  [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2],
-];
+// The eight steps, as three flat tables rather than an array of tuples — see the neighbour
+// walk in findPath for why. ORTHOGONALS FIRST: the loop tests `ni >= 4` to know whether the
+// step is diagonal and needs the corner-cutting check, so the order here is load-bearing.
+const NEIGHBOR_DX = [1, -1, 0, 0, 1, 1, -1, -1];
+const NEIGHBOR_DY = [0, 0, 1, -1, 1, -1, 1, -1];
+const NEIGHBOR_COST = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT2];
 
 // Search cap: keeps a fully-blocked goal from flooding the whole map. With
 // best-effort return semantics a capped search still yields a useful partial
@@ -27,6 +29,66 @@ const MAX_EXPANSIONS = 8192;
 // one may be a few expansions behind it. This buys that little bit of extra looking, and
 // nothing like the map flood a goal it can never occupy would otherwise provoke.
 const ARRIVE_EXTRA = 192;
+
+/**
+ * The search's working set, allocated ONCE for the map and reused by every call.
+ *
+ * A* used a `Map`/`Map`/`Set` triple keyed on the cell index. Measured on a 256×256 grid
+ * with a wave of 30 units pathing at once (the shape of Computer+'s `commit`, which is what
+ * the session logs blamed for 100–420 ms `aiAttackPass` frames): the Map churn is most of
+ * the cost, and all of the GARBAGE — the same logs show long tasks climbing from 32 ms/s to
+ * 268 ms/s with a flat heap, which is a collector kept busy by allocation rate rather than a
+ * leak. Parallel typed arrays hold the same three facts with no allocation at all.
+ *
+ * Nothing is cleared between searches. Each cell carries the `gen` of the search that last
+ * wrote it, so a stale value from the previous search reads as absent — an O(1) reset in
+ * place of an O(width×height) wipe, which on a 256×256 grid is 65k writes per path and
+ * would cost more than the search for a short one.
+ */
+class PathScratch {
+  size = 0;
+  gen = 0;
+  /** Generation that last wrote gScore/cameFrom for the cell. */
+  seen = new Int32Array(0);
+  gScore = new Float64Array(0);
+  cameFrom = new Int32Array(0);
+  /** Generation that CLOSED the cell (the old `closed` Set). */
+  closed = new Int32Array(0);
+  /** Memo for the clearance test — see `open` in findPath. */
+  openGen = new Int32Array(0);
+  openVal = new Uint8Array(0);
+  // The heap's parallel arrays, kept across calls and merely truncated. `length = 0` on a
+  // plain array keeps the backing store, so a steady stream of searches stops growing one.
+  heapF: number[] = [];
+  heapH: number[] = [];
+  heapK: number[] = [];
+
+  /** Ready the pool for one search over a grid of `size` cells, and return its generation. */
+  begin(size: number): number {
+    if (size > this.size) {
+      this.size = size;
+      this.seen = new Int32Array(size);
+      this.gScore = new Float64Array(size);
+      this.cameFrom = new Int32Array(size);
+      this.closed = new Int32Array(size);
+      this.openGen = new Int32Array(size);
+      this.openVal = new Uint8Array(size);
+      this.gen = 0; // fresh arrays are all-zero, so generations must restart above it
+    }
+    // Int32 wrap would make a stale stamp compare equal to the live one. Costs one wipe
+    // every two billion searches, which is never, and makes the stamp trick airtight.
+    if (++this.gen === 0x7fffffff) {
+      this.seen.fill(0); this.closed.fill(0); this.openGen.fill(0);
+      this.gen = 1;
+    }
+    this.heapF.length = 0;
+    this.heapH.length = 0;
+    this.heapK.length = 0;
+    return this.gen;
+  }
+}
+
+const scratch = new PathScratch();
 
 function octile(ax: number, ay: number, bx: number, by: number): number {
   const dx = Math.abs(ax - bx);
@@ -74,13 +136,34 @@ export function findPath(
   if (!from || !to) return null;
 
   const width = grid.width;
-  const key = (x: number, y: number) => y * width + x;
-  const goalKey = key(to[0], to[1]);
-  const open = (x: number, y: number) => grid.walkable(x, y, domain) && !(blocked && blocked(x, y));
+  const height = grid.height;
+  const gen = scratch.begin(width * height);
+  const { seen, gScore, cameFrom, closed, openGen, openVal, heapF, heapH, heapK } = scratch;
+  const goalKey = to[1] * width + to[0];
 
-  const cameFrom = new Map<number, number>();
-  const gScore = new Map<number, number>();
-  const closed = new Set<number>();
+  /**
+   * May the mover stand here — asked at most ONCE per cell per search.
+   *
+   * `blocked` is the clearance predicate (SimWorld.clearanceBlocker): for an n×n footprint
+   * it walks the whole block, so one call is up to 2n² grid reads. A* asks about the same
+   * cell over and over — every cell is a neighbour of up to eight expanded nodes, and the
+   * no-corner-cutting test asks about two more each time — so an unmemoized search paid that
+   * price ten to twenty-five times over for every cell it touched. This is the single
+   * biggest cost in the pass, and it is pure for the duration of a search: nothing reserves
+   * a cell or fells a tree while A* is running.
+   */
+  const open = (x: number, y: number): boolean => {
+    // Bounds first: the memo is indexed by y*width+x, which for a cell off the left edge
+    // would alias onto the row above. `grid.walkable` answers false out of bounds, and
+    // `blocked` is never consulted for one, so returning here is the same answer.
+    if (x < 0 || y < 0 || x >= width || y >= height) return false;
+    const i = y * width + x;
+    if (openGen[i] === gen) return openVal[i] === 1;
+    const ok = grid.walkable(x, y, domain) && !(blocked && blocked(x, y));
+    openGen[i] = gen;
+    openVal[i] = ok ? 1 : 0;
+    return ok;
+  };
 
   // Binary min-heap of open nodes keyed on f (parallel arrays: f-value + cell key).
   // Popping the lowest f was an O(open) linear scan, making a whole search O(n²) — a
@@ -88,19 +171,11 @@ export function findPath(
   // (often unreachable) attack targets it tanked the frame rate. The heap makes each
   // pop/push O(log n). Decrease-key is handled lazily: a relaxed node is pushed again and
   // any now-stale duplicate is skipped on pop via the closed set.
-  const heapF: number[] = [];
-  const heapH: number[] = []; // tie-break key: prefer the node closest to the goal
-  const heapK: number[] = [];
+  //
   // Ordered by f, then by h (lower h — nearer the goal — wins ties). The h tie-break is
   // the standard A* refinement: it drives the frontier straight at the goal, so a capped
   // or unreachable search's best-effort endpoint lands as close to the goal as possible
   // (and deterministically), rather than fanning out sideways.
-  const before = (a: number, b: number): boolean => heapF[a] < heapF[b] || (heapF[a] === heapF[b] && heapH[a] < heapH[b]);
-  const swap = (a: number, b: number): void => {
-    const tf = heapF[a]; heapF[a] = heapF[b]; heapF[b] = tf;
-    const th = heapH[a]; heapH[a] = heapH[b]; heapH[b] = th;
-    const tk = heapK[a]; heapK[a] = heapK[b]; heapK[b] = tk;
-  };
   const hpush = (k: number, g: number, h: number): void => {
     let i = heapF.length;
     heapF.push(g + h);
@@ -108,9 +183,12 @@ export function findPath(
     heapK.push(k);
     while (i > 0) {
       const p = (i - 1) >> 1;
-      if (!before(i, p)) break;
-      swap(i, p);
-      i = p;
+      if (heapF[i] < heapF[p] || (heapF[i] === heapF[p] && heapH[i] < heapH[p])) {
+        const tf = heapF[i]; heapF[i] = heapF[p]; heapF[p] = tf;
+        const th = heapH[i]; heapH[i] = heapH[p]; heapH[p] = th;
+        const tk = heapK[i]; heapK[i] = heapK[p]; heapK[p] = tk;
+        i = p;
+      } else break;
     }
   };
   const hpop = (): number => {
@@ -128,18 +206,22 @@ export function findPath(
         const l = 2 * i + 1;
         const r = l + 1;
         let m = i;
-        if (l < size && before(l, m)) m = l;
-        if (r < size && before(r, m)) m = r;
+        if (l < size && (heapF[l] < heapF[m] || (heapF[l] === heapF[m] && heapH[l] < heapH[m]))) m = l;
+        if (r < size && (heapF[r] < heapF[m] || (heapF[r] === heapF[m] && heapH[r] < heapH[m]))) m = r;
         if (m === i) break;
-        swap(m, i);
+        const tf = heapF[m]; heapF[m] = heapF[i]; heapF[i] = tf;
+        const th = heapH[m]; heapH[m] = heapH[i]; heapH[i] = th;
+        const tk = heapK[m]; heapK[m] = heapK[i]; heapK[i] = tk;
         i = m;
       }
     }
     return topK;
   };
 
-  const startKey = key(from[0], from[1]);
-  gScore.set(startKey, 0);
+  const startKey = from[1] * width + from[0];
+  seen[startKey] = gen;
+  gScore[startKey] = 0;
+  cameFrom[startKey] = -1;
   hpush(startKey, 0, octile(from[0], from[1], to[0], to[1]));
 
   // Closeness measure for the best-effort endpoint: distance to the goal CELL normally,
@@ -154,14 +236,14 @@ export function findPath(
 
   while (heapF.length) {
     const currentKey = hpop();
-    if (closed.has(currentKey)) continue; // stale duplicate from a decrease-key
+    if (closed[currentKey] === gen) continue; // stale duplicate from a decrease-key
     // An approach never "reaches" its goal — the goal is the thing itself, standing on
     // cells nobody may occupy — so it is `ring` + the closeness rule that end it.
-    if (!ring && currentKey === goalKey) return reconstruct(cameFrom, currentKey, width);
-    closed.add(currentKey);
+    if (!ring && currentKey === goalKey) return reconstruct(cameFrom, seen, gen, currentKey, width);
+    closed[currentKey] = gen;
     const cx = currentKey % width;
     const cy = (currentKey / width) | 0;
-    const cg = gScore.get(currentKey)!;
+    const cg = gScore[currentKey];
 
     const h = closeness(cx, cy);
     if (h < bestH || (h === bestH && cg < bestG)) {
@@ -176,34 +258,45 @@ export function findPath(
     }
     if (++expansions > limit) break;
 
-    for (const [dx, dy, cost] of NEIGHBORS) {
-      const nx = cx + dx;
-      const ny = cy + dy;
+    // Flat, indexed neighbour walk. `for (const [dx, dy, cost] of NEIGHBORS)` allocated an
+    // iterator result and destructured a tuple on EVERY expansion — thousands per search,
+    // hundreds of thousands per wave, and all of it garbage.
+    for (let ni = 0; ni < 8; ni++) {
+      const nx = cx + NEIGHBOR_DX[ni];
+      const ny = cy + NEIGHBOR_DY[ni];
       if (!open(nx, ny)) continue;
       // No corner-cutting through a blocked orthogonal neighbour.
-      if (dx !== 0 && dy !== 0 && (!open(cx + dx, cy) || !open(cx, cy + dy))) {
-        continue;
-      }
-      const nKey = key(nx, ny);
-      if (closed.has(nKey)) continue;
-      const tentative = cg + cost;
-      if (tentative < (gScore.get(nKey) ?? Infinity)) {
-        cameFrom.set(nKey, currentKey);
-        gScore.set(nKey, tentative);
+      if (ni >= 4 && (!open(nx, cy) || !open(cx, ny))) continue;
+      const nKey = ny * width + nx;
+      if (closed[nKey] === gen) continue;
+      const tentative = cg + NEIGHBOR_COST[ni];
+      if (seen[nKey] !== gen || tentative < gScore[nKey]) {
+        seen[nKey] = gen;
+        cameFrom[nKey] = currentKey;
+        gScore[nKey] = tentative;
         hpush(nKey, tentative, octile(nx, ny, to[0], to[1]));
       }
     }
   }
   // Goal unreachable (or search capped): walk as close as we got, WC3-style.
-  return reconstruct(cameFrom, bestKey, width);
+  return reconstruct(cameFrom, seen, gen, bestKey, width);
 }
 
-function reconstruct(cameFrom: Map<number, number>, endKey: number, width: number): Cell[] {
+/** Walk the parent chain back to the start. `seen`/`gen` stand in for the old Map's "has":
+ *  a cell this search never wrote carries a stale generation, and the start cell — the one
+ *  cell it writes with no parent — carries -1. */
+function reconstruct(
+  cameFrom: Int32Array,
+  seen: Int32Array,
+  gen: number,
+  endKey: number,
+  width: number,
+): Cell[] {
   const path: Cell[] = [];
-  let k: number | undefined = endKey;
-  while (k !== undefined) {
-    path.push([k % width, Math.floor(k / width)]);
-    k = cameFrom.get(k);
+  let k = endKey;
+  while (k >= 0 && seen[k] === gen) {
+    path.push([k % width, (k / width) | 0]);
+    k = cameFrom[k];
   }
   return path.reverse();
 }
