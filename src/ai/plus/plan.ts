@@ -145,6 +145,7 @@ export function buildPlan(c: PlusCtx): void {
   firstHero(c);
   army(c, CORE_ARMY_FOOD); // enough not to die to the first raid, cheap enough not to block tech
   techBuildings(c);
+  shop(c);
   expand(c);
   extraHeroes(c);
   tierUp(c);
@@ -348,6 +349,33 @@ function techBuildings(c: PlusCtx): void {
     if (main) ai.buildFactory(main);
   }
 }
+
+/**
+ * The race's own shop, once there is an army to spend on.
+ *
+ * A computer that shops needs somewhere to shop. Without this the AI's whole item side was
+ * theoretical: the shopping pass would run every five seconds, find no shop of ours, and fall
+ * back on a map's Goblin Merchant — which is shared, usually across the map, and on plenty of
+ * maps not there at all. Measured on Echo Isles: a Normal orc at ten minutes with a level-3
+ * hero, no Town Portal and no Healing Salve, because nothing had put up a Voodoo Lounge.
+ *
+ * Placed AFTER `techBuildings` and before `expand`: it is a want, not an opening, and it must
+ * not out-rank the tech that makes the army. `SHOP_AFTER` is the same kind of gate every
+ * derived building here carries — army food already on the field, so a computer never buys a
+ * shop instead of the soldiers that would have used it.
+ *
+ * Skipped entirely at a difficulty that does not shop, since nothing would ever buy from it.
+ */
+function shop(c: PlusCtx): void {
+  const { ai, profile, table } = c;
+  if (profile.shopping <= 0) return;
+  if (c.armyFood < SHOP_AFTER) return;
+  ai.setBuildUnit(1, table.shop);
+}
+
+/** Army food on the field before the shop goes up. Roughly the first wave: past the point where
+ *  a potion is worth more than another soldier, and well short of blocking the opening. */
+const SHOP_AFTER = 10;
 
 /** Army food a derived building waits for, by the tier of the unit that wants it. A tier-1
  *  producer is the opening and comes almost at once; a tier-3 one is a commitment. */

@@ -139,9 +139,13 @@ const LIST: readonly Want[] = [
   // The area heal. The Merchant's and the Tomb's; the reason a Computer+ push does not
   // evaporate the moment it is behind on the trade.
   { id: "shea", want: 1 },
-  // …and the cheap area heals, for the races whose own shop has one.
-  { id: "sreg", want: 1 }, // Scroll of Regeneration (Arcane Vault)
-  { id: "hslv", want: 1 }, // Healing Salve (Voodoo Lounge) — three charges, aimed at a unit
+  // The cheap AREA heals, and they are high on the list on purpose: this is what puts an army
+  // back together between creep camps, which is where a Computer+ hero spends its early game.
+  // A Healing Salve is 100 gold for three charges and the Scroll of Regeneration 100 for a
+  // whole group — the best hit points per gold in the game, and the reason a creeping computer
+  // does not have to walk home after every camp.
+  { id: "hslv", want: 2 }, // Healing Salve (Voodoo Lounge) — three charges, aimed at a unit
+  { id: "sreg", want: 1 }, // Scroll of Regeneration (Arcane Vault) — the area version
   // Mana, in descending order of what it costs to keep a caster hero casting.
   { id: "pman", want: 1 }, // Potion of Mana
   { id: "pclr", want: 1 }, // Clarity Potion
@@ -162,6 +166,20 @@ const PORTAL: Want = { id: "stwp", want: 1 };
 
 /** Hit-point fraction at which the hero reaches for the thing that stops it dying. */
 const PANIC_HP = 0.3;
+/**
+ * …and at which it LEAVES, which is a higher bar than the one at which it panics.
+ *
+ * A hero that waits for `PANIC_HP` to reach for a Town Portal is a hero that dies holding one:
+ * the scroll takes FIVE SECONDS (docs/items.md), and five seconds is a long time at 30% of a
+ * hero's life with an army on it. Reported, from a real game: "the AI didn't use the scroll of
+ * town portal when its hero was low health and was about to die and died."
+ *
+ * 0.4 is not an arbitrary loosening — it is `HERO_KILL_HP`, the same line plus/targeting.ts
+ * uses to decide a hero can be FINISHED. So the scroll now comes out at exactly the point the
+ * AI's own targeting would start treating this hero as a kill, which is the point at which a
+ * competent opponent commits to it.
+ */
+const ESCAPE_HP = 0.4;
 /** …and at which it drinks. Higher, because a potion heals over time and a hero that waits for
  *  `PANIC_HP` to drink one has usually waited too long. */
 const HURT_HP = 0.55;
@@ -311,7 +329,7 @@ export class PlusItems {
       case "escape":
         if (!engaged && !ctx.losing) return false;
         if (Math.hypot(u.x - ctx.home.x, u.y - ctx.home.y) <= HOME) return false;
-        return ctx.losing || hp < PANIC_HP;
+        return ctx.losing || hp < ESCAPE_HP;
       case "panic":
         return engaged && hp < PANIC_HP;
       case "healSelf":

@@ -1,6 +1,6 @@
 import { MELEE } from "../../data/gameplayConstants";
 import type { PlayableRace } from "../../data/races";
-import type { SimUnit } from "../../sim/world";
+import { ITEM_REGEN_GROUP, type SimUnit } from "../../sim/world";
 import { simProfile, perfNow } from "../../sim/profile";
 import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, TOWN_RADIUS } from "../aiPlayer";
 import { PlusCaster } from "./casting";
@@ -98,6 +98,10 @@ const RALLY_SLACK = 320;
 /** A wave is over when the group is standing on its objective and nothing hostile is within
  *  this of it. */
 const CLEARED_RADIUS = 900;
+/** How far a unit broken off a healthy hero will look for something else to hit. Deliberately
+ *  short: the point is to swing at what is standing in this fight, not to go and find a better
+ *  one somewhere else. */
+const SWAP_LOOK = 700;
 
 /**
  * How far from the group a HEALTHY enemy hero may be and still be worth focusing.
@@ -167,6 +171,18 @@ const SCOUT_LEGS = SCOUT_RING_LEGS + 2;
 /** Creep camps: the window `AiPlayer.creepCamp` is asked for, derived from the army's food the
  *  way the race scripts derive theirs from `force_level` — four fifths of it, less ten. */
 const CREEP_WINDOW = 10;
+/**
+ * Hit-point fraction a unit heals up to before it is asked to fight again.
+ *
+ * A Healing Salve, a Scroll of Regeneration and a Moon Well all pour over TIME — 45 seconds for
+ * the two scrolls — so a unit that walks back into a fight the moment it is dosed spends the
+ * whole effect being hit for more than it is regaining. The heal is the point of the errand;
+ * this is what makes the errand mean something.
+ */
+const RECOVER_TO = 0.65;
+/** How far a hurt unit will walk to a Moon Well. Beyond this the trip costs more than the pour
+ *  is worth and it heals where it stands. */
+const WELL_WALK = 2000;
 /** Hit-point fraction the CAPTAIN must have before the party goes to the next camp. A hero
  *  that walks into a second camp on a third of its life is a hero the camp kills, and a dead
  *  hero is the most expensive thing on a melee map. It heals up at home first. */
@@ -486,6 +502,16 @@ export class ComputerPlusAi {
     this.recruit(b);
     this.scoutPass(b);
     this.hold(b);
+    // The base's own defences, and the wounded, before anything is aimed anywhere: a peon in a
+    // burrow and a Grunt at a well are both decisions about home, and both are wrong to take
+    // after the wave has already been pointed at something.
+    const threatened = !!this.nearestThreat(b);
+    this.burrowPass(b, threatened);
+    // Only while MASSING. A well trip replaces whatever the unit was doing, so running this
+    // during a fight would walk a Grunt at 60 % out of the battle line and across the base —
+    // which is not healing, it is leaving. "When it returned to the base" is the whole
+    // condition, and `massing` is what that is called here.
+    if (b.mode === "massing" && !threatened) this.wellPass(b);
     if (this.defendPass(b)) return;
     switch (b.mode) {
       case "defending": return void this.setMode(b, "massing"); // the threat is gone
@@ -586,7 +612,15 @@ export class ComputerPlusAi {
     }
     const goal = this.scoutWaypoint(b);
     if (!goal) {
-      // Tour over: back to work. Dropping it out of `held` is what puts it back on a mine.
+      // Tour over: back to work — and WALKED home rather than merely released.
+      //
+      // Dropping it out of `held` is what lets the harvest plan have it again, but the plan
+      // assigns jobs, not journeys: a worker released standing in the enemy's base was left
+      // standing in the enemy's base, idle, for the rest of the match. (Observed. It is also
+      // one worker of an eleven-worker economy, which is most of a Peon's worth of income
+      // thrown away every game.) The move order is what actually brings it back; the harvest
+      // plan then picks it up as an idle worker at home, which is what it is good at.
+      b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", x: b.ai.home().x, y: b.ai.home().y }, queued: false });
       b.scoutId = 0;
       b.scoutDone = true;
       b.scoutGoal = null;
@@ -774,6 +808,9 @@ export class ComputerPlusAi {
   private commit(b: Brain, x: number, y: number): void {
     const focus = b.profile.focusFire ? this.focusTarget(b, x, y) : null;
     for (const u of this.squadUnits(b)) {
+      // A unit that is HEALING is not ordered anywhere. It is standing in the base with a Salve
+      // on it or its head in a Moon Well, and marching it out is what makes the heal pointless.
+      if (this.recovering(u)) continue;
       if (focus && !u.isPeon) {
         if (u.order === "attack" && u.targetId === focus.id) continue;
         b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: focus.id }, queued: false });
@@ -781,7 +818,25 @@ export class ComputerPlusAi {
       }
       // A unit already swinging at something is left alone: re-aiming a melee fighter at the
       // far end of a base every few seconds is how an army walks past what is killing it.
-      if (u.order === "attack" && u.targetId) continue;
+      //
+      // …UNLESS what it is swinging at is a healthy enemy HERO, in which case it is broken off.
+      // This is the anti-chase rule applied to the whole army rather than only to the focus-fire
+      // path, and it had to be: `focusTarget` is the only other place that knows about heroes,
+      // and it does not run below Insane (`focusFire`) — so on Normal nothing whatever stopped
+      // the group parking on a hero it could not finish while the army that came with it killed
+      // them. (Observed, and reported: "the AI units still focused the hero quite a lot".) The
+      // hero premium in plus/targeting.ts is deliberately conditional on `heroKillable` for
+      // exactly this reason; without this the ARMY had no such condition at all.
+      if (u.order === "attack" && u.targetId) {
+        const swap = this.stuckOnHero(b, u) ? this.besideHero(b, u) : null;
+        if (!swap) continue;
+        // Re-aimed at a BODY rather than merely released. An attack-move here would be
+        // answered by the sim's own acquisition, which takes the NEAREST enemy — and the hero
+        // it just walked away from is standing right there, so the group would pick it up
+        // again on the next tick and this would be a four-second loop instead of a decision.
+        b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: swap.id }, queued: false });
+        continue;
+      }
       // …and so is a unit already walking to this same spot. A re-issued attack-move
       // RESTARTS the search (SimWorld.issueAttackMove calls pathTo), so re-stating an order
       // nothing has changed about buys nothing and costs a full-map A* per soldier — the
@@ -795,6 +850,45 @@ export class ComputerPlusAi {
       b.ai.order({ c: "order", unitId: u.id, order: { kind: "attackmove", x, y }, queued: false });
     }
     b.reissueIn = REISSUE_PERIOD;
+  }
+
+  /**
+   * Is this unit swinging at a HEALTHY enemy hero — one it is not going to finish?
+   *
+   * `heroKillable` is the game's own line (plus/targeting.ts `HERO_KILL_HP`): below it a hero is
+   * the best target on the field and every blow is worth landing, above it a hero is a strong
+   * soldier with an escape and a healer, and hitting one is hitting the enemy's most expendable
+   * hit points. A unit stuck on the second kind is re-aimed by its caller.
+   *
+   * Not applied to a hero of OURS: our own hero picks its fights through the caster and the
+   * ordinary acquisition, and a duel is sometimes the right answer for it.
+   */
+  private stuckOnHero(b: Brain, u: SimUnit): boolean {
+    if (u.isHero) return false;
+    const t = u.targetId ? this.host.world.units.get(u.targetId) : null;
+    if (!t || !t.isHero || t.hp <= 0) return false;
+    return !heroKillable(t) && b.ai.hostileTo(t);
+  }
+
+  /** Something else to hit: the nearest enemy body beside the hero this unit is stuck on. A
+   *  building is a last resort rather than a target — walking off to punch a Farm while the
+   *  fight goes on behind you is its own mistake — so one is only taken when nothing else is
+   *  in reach at all, and a worker counts as somebody. */
+  private besideHero(b: Brain, u: SimUnit): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestD = SWAP_LOOK;
+    let fallback: SimUnit | null = null;
+    for (const t of this.host.world.units.values()) {
+      if (t.hp <= 0 || t.isHero || t.invulnerable || !b.ai.hostileTo(t)) continue;
+      const d = Math.hypot(t.x - u.x, t.y - u.y);
+      if (d > SWAP_LOOK) continue;
+      if (t.building) {
+        if (!fallback) fallback = t;
+        continue;
+      }
+      if (d < bestD) { bestD = d; best = t; }
+    }
+    return best ?? fallback;
   }
 
   /**
@@ -915,10 +1009,119 @@ export class ComputerPlusAi {
     }
   }
 
+  /** The food a wave would actually LEAVE with — the wounded are not in it. Counting a unit
+   *  that `commit` will not move is how a wave of four sets off believing it is a wave of ten. */
   private squadFood(b: Brain): number {
     let food = 0;
-    for (const u of this.squadUnits(b)) food += this.host.registry.get(u.typeId)?.foodUsed ?? 0;
+    for (const u of this.squadUnits(b)) {
+      if (this.recovering(u)) continue;
+      food += this.host.registry.get(u.typeId)?.foodUsed ?? 0;
+    }
     return food;
+  }
+
+  /**
+   * Is this unit HEALING, and so not to be walked into a fight?
+   *
+   * Three sources, one rule. A Healing Salve or a Scroll of Regeneration hangs a regeneration
+   * buff (the sim's own `ITEM_REGEN_GROUP`, which is one prefix precisely so a single filter
+   * catches the whole family — docs/items.md); a Moon Well pours into whoever it has been sent
+   * (`drinkWellId`). All three pour over TIME, so the unit has to be left alone for it: a
+   * soldier dosed and marched straight back out spends the effect being hit for more than it
+   * regains, which is the same as not having healed it at all.
+   *
+   * It ends the way the developer asked for it to end — when the effect does, or at
+   * `RECOVER_TO`, whichever comes first. The health test is checked FIRST because that is the
+   * one that releases a unit early: a Salve on a lightly-hurt Grunt is done in ten seconds and
+   * there is no reason to stand it in the base for the other thirty-five.
+   */
+  private recovering(u: SimUnit): boolean {
+    if (u.hp / Math.max(1, u.maxHp) >= RECOVER_TO) return false;
+    if (u.drinkWellId > 0) return true;
+    return u.buffs.some((f) => f.group.startsWith(ITEM_REGEN_GROUP));
+  }
+
+  /**
+   * Take the wounded to a Moon Well.
+   *
+   * The night elf's healing IS the Moon Well — there is no other source of it in the race — and
+   * it is an autocast on a BUILDING, which is why the caster now arms those too
+   * (plus/casting.ts). Arming is only half of it though: `Ambt`'s own `Area1` is 400, so a well
+   * pours into whoever is STANDING at it, and an army waiting at the rally point three hundred
+   * units in front of the base is not standing at it. This is the other half — the walk.
+   *
+   * Any race may do this: `isReplenisher` is the sim's own question and an Obsidian Statue
+   * answers to it as well as a Moon Well.
+   */
+  private wellPass(b: Brain): void {
+    const wells: SimUnit[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== b.ai.player || u.hp <= 0 || u.mana <= 0) continue;
+      if (!this.host.world.isReplenisher(u.id)) continue;
+      wells.push(u);
+    }
+    if (!wells.length) return;
+    for (const u of this.squadUnits(b)) {
+      if (u.hp / Math.max(1, u.maxHp) >= RECOVER_TO) continue;
+      if (u.drinkWellId > 0) continue; // already on its way to one
+      let best: SimUnit | null = null;
+      let bestD = WELL_WALK;
+      for (const w of wells) {
+        const d = Math.hypot(w.x - u.x, w.y - u.y);
+        if (d < bestD) { bestD = d; best = w; }
+      }
+      if (!best) continue;
+      // The ORDINARY right-click on a friendly well: it walks there and the well pours when it
+      // arrives (SimWorld.issueDrink). Not a second channel — the same order a player gives.
+      b.ai.order({ c: "drink", unitId: u.id, wellId: best.id });
+    }
+  }
+
+  /**
+   * ORC BURROWS — the town bell the orcs have instead of a bell.
+   *
+   * A Burrow with peons in it shoots, which makes it the one structure in the game that a
+   * worker turns into a tower. So when something is in the base, the workers go in.
+   *
+   * ONLY the LUMBER ones, and that is the whole point of doing it a peon at a time rather than
+   * through the building's own Battle Stations button: `battleStations` gathers whatever
+   * workers are nearest, which on a threatened base means the gold crew — and a gold mine that
+   * stops paying for the fight it is funding is a bad trade for a few arrows. `resKind` is the
+   * sim's own answer to "what is this worker on", and it outlives the trip home, so a peon
+   * walking a load of lumber back still counts as a lumberjack.
+   *
+   * They come back out through `standdown`, which is the door that REMEMBERS the job
+   * (`unloadBurrow(id, true)` → `resumeGarrisonJob`) — so a peon that went in chopping comes
+   * out chopping, at the same tree, with no re-planning at all.
+   */
+  private burrowPass(b: Brain, threatened: boolean): void {
+    const burrows: SimUnit[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== b.ai.player || u.hp <= 0 || !u.building) continue;
+      if (u.building.constructionLeft > 0 || u.garrisonCap <= 0) continue;
+      burrows.push(u);
+    }
+    if (!burrows.length) return;
+    if (!threatened) {
+      // The siege is over: everyone back to work, through the door that remembers the job.
+      for (const bur of burrows) {
+        if (bur.garrison.length) b.ai.order({ c: "standdown", buildingId: bur.id });
+      }
+      return;
+    }
+    for (const bur of burrows) {
+      let room = bur.garrisonCap - bur.garrison.length;
+      if (room <= 0) continue;
+      for (const p of this.host.world.units.values()) {
+        if (room <= 0) break;
+        if (p.owner !== b.ai.player || p.hp <= 0 || !p.worker || p.inBurrow) continue;
+        if (p.resKind !== "lumber") continue; // the gold crew keeps paying for the war
+        if (p.insideBuild || p.constructing || p.inMine) continue;
+        if (Math.hypot(p.x - bur.x, p.y - bur.y) > TOWN_RADIUS) continue;
+        b.ai.order({ c: "garrison", unitId: p.id, buildingId: bur.id });
+        room--;
+      }
+    }
   }
 
   /** The CAPTAIN — our hero in the group, if one is in it and alive. Every creeping decision

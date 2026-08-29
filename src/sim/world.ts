@@ -2248,7 +2248,7 @@ const CREEP_LEVEL_CAP = new Set(["ANtm"]);
 /** Buff group prefix worn by the regeneration items (`AIrg` — Healing Salve, Clarity
  *  Potion, Potion/Scroll of Rejuvenation). One prefix so a single filter drops both the
  *  life and the mana half together when the effect breaks. */
-const ITEM_REGEN_GROUP = "item:regen";
+export const ITEM_REGEN_GROUP = "item:regen";
 /** Damage that dispels a regeneration item's effect. Not in any data file — see landDamage. */
 const ITEM_REGEN_BREAK = 20;
 /** The four `pickFlags` values of UI\UnitEditorData.txt, **in bit order** — the domain a

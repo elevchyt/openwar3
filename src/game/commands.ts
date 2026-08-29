@@ -34,6 +34,10 @@ export type Command =
   | { c: "cast"; unitId: number; code: string; targetId: number; x: number; y: number; queued: boolean }
   /** Load a worker into a burrow / transport. */
   | { c: "garrison"; unitId: number; buildingId: number }
+  /** Send a unit to drink from a Moon Well (or an Obsidian Statue) — the ordinary right-click
+   *  on a friendly battery. It walks there and the well pours when it arrives; `SimWorld`
+   *  refuses one that would get nothing from it. */
+  | { c: "drink"; unitId: number; wellId: number }
   /** Walk over and pick up a ground item. */
   | { c: "getitem"; unitId: number; itemId: number }
   /** Use a carried item. Point-target items carry x/y; instant ones use the holder's own. */

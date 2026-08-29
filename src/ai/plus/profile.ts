@@ -221,8 +221,16 @@ export interface PlusProfile {
   readonly keepPortal: boolean;
 
   // --- manners ------------------------------------------------------------------------------
-  /** How long the position has to be hopeless before it says gg and leaves. A weaker player
-   *  takes longer to accept it. */
+  /**
+   * How long the position has to be hopeless before it says gg and leaves. A weaker player
+   * takes longer to accept it — the ORDERING is what carries the meaning here, not the
+   * absolute values.
+   *
+   * All three came down after a real game reported the wait as too long. The dwell is a guard
+   * against a position that recovers, and `hopeless` is already five clauses of "there is no
+   * move from here": a third of a minute of a decided game is a third of a minute nobody wants
+   * to play, and every clause un-latches the moment the position recovers anyway.
+   */
   readonly concedeAfter: number;
 }
 
@@ -260,7 +268,7 @@ export const PLUS_EASY: PlusProfile = {
   focusFire: false, creeps: false, creepAt: Infinity, creepFood: Infinity,
   harass: false, scout: false,
   shopping: 0, itemReserve: Infinity, keepPortal: false,
-  concedeAfter: 45,
+  concedeAfter: 35,
 };
 
 /**
@@ -293,7 +301,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // replace it: a scroll is the difference between losing a fight and losing an army, and a
   // player at this level has learnt that much.
   shopping: 3, itemReserve: 300, keepPortal: true,
-  concedeAfter: 30,
+  concedeAfter: 20,
 };
 
 /**
@@ -325,7 +333,7 @@ export const PLUS_INSANE: PlusProfile = {
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been
   // here before from one who has not.
   shopping: 6, itemReserve: 200, keepPortal: true,
-  concedeAfter: 20,
+  concedeAfter: 12,
 };
 
 /** The profile a lobby difficulty seats. Anything unrecognised plays Normal, which is what

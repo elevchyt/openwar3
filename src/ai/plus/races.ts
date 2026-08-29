@@ -1,5 +1,6 @@
 import type { PlayableRace } from "../../data/races";
 import {
+  ARCANE_VAULT, VOODOO_LOUNGE, TOMB_OF_RELICS, DEN_OF_WONDERS,
   ABOMINATION, ACOLYTE, ANCIENT_LORE, ANCIENT_PROTECT, ANCIENT_WAR, ANCIENT_WIND, ANIM_DEAD,
   ARCHER, ARCHMAGE, AVATAR, AVIARY, BALLISTA, BANISH, BANSHEE, BARRACKS, BASH, BATRIDER,
   BESTIARY, BLACKSMITH, BLADE_MASTER, BLADE_STORM, BLINK, BLIZZARD, BLOOD_MAGE, BONEYARD,
@@ -149,6 +150,19 @@ export interface PlusRaceTable {
   readonly barracks: string;
   /** Put up whatever the mix is: every race has a smith its whole army wants. */
   readonly support: readonly SupportRow[];
+  /**
+   * The race's own SHOP — Arcane Vault, Voodoo Lounge, Ancient of Wonders, Tomb of Relics.
+   *
+   * Without one the AI has nowhere to buy anything, and for most of a match that means nothing
+   * to press: a map's Goblin Merchant is shared, often far from home, and on plenty of maps not
+   * there at all. Measured on Echo Isles: a Normal orc reached ten minutes with a level-3 hero,
+   * no Town Portal and no Healing Salve — not because it would not buy them, but because the
+   * build order never put up a Voodoo Lounge for it to buy them at.
+   *
+   * All four sell the same three staples (`phea`, `pman`, `stwp` — read off `Makeitems`), so
+   * this is a shop in the sense the AI cares about whatever the race.
+   */
+  readonly shop: string;
   /** The defensive structure, and the upgrade of it worth taking when there is one (a Human
    *  Guard Tower and an undead Spirit Tower are both upgrades of something already standing). */
   readonly tower: string;
@@ -177,6 +191,7 @@ const HUMAN: PlusRaceTable = {
   altar: HUMAN_ALTAR,
   barracks: BARRACKS,
   support: [{ build: BLACKSMITH, tier: 1, after: 6 }, { build: LUMBER_MILL, tier: 1, after: 12 }],
+  shop: ARCANE_VAULT,
   tower: WATCH_TOWER,
   towerUpgrade: GUARD_TOWER,
   units: {
@@ -250,6 +265,7 @@ const ORC: PlusRaceTable = {
   altar: ORC_ALTAR,
   barracks: ORC_BARRACKS,
   support: [{ build: FORGE, tier: 1, after: 6 }],
+  shop: VOODOO_LOUNGE,
   tower: ORC_WATCH_TOWER,
   units: {
     [GRUNT]: { from: ORC_BARRACKS, tier: 1 },
@@ -318,6 +334,7 @@ const UNDEAD: PlusRaceTable = {
   // The Spirit Tower is an UPGRADE of a Ziggurat, which is also the food building — so the
   // undead's towers are paid for out of supply it was going to build anyway. There is no
   // separate base to raise, which is why `tower` names the upgraded form directly.
+  shop: TOMB_OF_RELICS,
   tower: ZIGGURAT_2,
   units: {
     [GHOUL]: { from: CRYPT, tier: 1 },
@@ -378,6 +395,7 @@ const NIGHT_ELF: PlusRaceTable = {
   altar: ELF_ALTAR,
   barracks: ANCIENT_WAR,
   support: [{ build: HUNTERS_HALL, tier: 1, after: 4 }],
+  shop: DEN_OF_WONDERS,
   tower: ANCIENT_PROTECT,
   units: {
     [ARCHER]: { from: ANCIENT_WAR, tier: 1 },

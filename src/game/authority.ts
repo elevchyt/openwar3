@@ -559,6 +559,12 @@ export class Authority {
         // the caller falls through to an ordinary move, which does queue.
         if (this.sim.units.get(cmd.unitId)?.insideBuild) return false;
         return this.ownedBy(player, cmd.unitId) && this.sim.issueGarrison(cmd.unitId, cmd.buildingId);
+      case "drink":
+        // No ownership gate on the WELL: an ally's Moon Well is drinkable, exactly as an ally's
+        // shop is shoppable. Who may drink from it is `issueDrink`'s own judgement — it checks
+        // the battery, the alliance and the ability's own `targs1` (which says `organic`, so a
+        // Mortar Team gets nothing from one).
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueDrink(cmd.unitId, cmd.wellId);
       case "getitem":
         return this.ownedBy(player, cmd.unitId) && this.sim.issueGetItem(cmd.unitId, cmd.itemId);
       case "useitem":

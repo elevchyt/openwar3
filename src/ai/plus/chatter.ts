@@ -83,6 +83,8 @@ export interface Standing {
  *     no workers. A hall and a purse cannot save that, and it is the moment a human types gg.
  *  3. **The enemy army is in the base, there is no army, and no hall to make one from.**
  *  4. **Our heroes are dead, theirs is not, and theirs is in our base.**
+ *  5. **Our heroes are dead, our army is gone, and they are in our base** — whether or not a
+ *     hero of theirs happens to be standing in it.
  *
  * Clause 3 is what makes the other two reachable, and it is here because without it the AI
  * effectively never conceded at all: a player had to raze the base building by building to win
@@ -119,8 +121,17 @@ export interface Standing {
  *    AI does revive: `AiPlayer.reviveFallen` is how every race script's "always rebuild heroes
  *    for defense" branch is answered.
  *
- * It is also the loosest of the four, and `concedeAfter` is what makes that safe rather than
- * the clause itself: the position has to hold for 20-45 s, and it un-latches if the raiders
+ * Clause 5 is clause 4 with the enemy hero taken out of it and the ARMY put in instead, and it
+ * exists because clause 4 turned out to be reachable only by accident. Reported from a real
+ * game: "it took quite a while for the AI to leave even though it lost its hero and didn't have
+ * an army." It had — but the player's hero was off somewhere else at the moment the rest of
+ * their army was razing the base, so `invaderHeroes` was 0 and nothing fired. No hero, no army,
+ * and them standing in your town is a lost game whoever is doing the standing; the enemy hero
+ * in clause 4 is what makes the position lost EARLY, while an army of ours is still on the
+ * field, which is why both are kept rather than one replacing the other.
+ *
+ * Clause 4 is also the loosest of the five, and `concedeAfter` is what makes that safe rather
+ * than the clause itself: the position has to hold for 20-45 s, and it un-latches if the raiders
  * die or leave (`invaders`), if their hero dies or walks out (`invaderHeroes`), or the moment
  * ours is back on the field. A defence that wins, or a revival that lands, resets the clock.
  * What it will NOT wait for is the last building — which is the whole point.
@@ -135,5 +146,6 @@ export function hopeless(s: Standing, hallCost: number): boolean {
   if (s.invaders > 0 && s.armyFood === 0 && s.workers === 0) return true;
   if (s.invaders > 0 && s.armyFood === 0 && s.halls === 0) return true;
   if (s.heroesLost > 0 && s.heroes === 0 && s.invaderHeroes > 0) return true;
+  if (s.heroesLost > 0 && s.heroes === 0 && s.armyFood === 0 && s.invaders > 0) return true;
   return false;
 }

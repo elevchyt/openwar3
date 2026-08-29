@@ -93,6 +93,28 @@ check("…nor when their hero is not in our base (invaderHeroes counts only the 
 check("a hero rush at the two-minute floor is NOT a lost game — we never had a hero to lose",
   hopeless(holding({ heroesLost: 0, invaders: 6, invaderHeroes: 1 }), HALL), false);
 
+console.log("\n-- clause 5: no hero, no army, and them in your base -----------------------");
+
+// The clause 4 case, minus the enemy hero — which is how a real game actually ends: the
+// player's hero is off elsewhere while the rest of their army razes the base. Reported as
+// "it took quite a while for the AI to leave even though it lost its hero and didn't have an
+// army", and before clause 5 nothing fired at all in that position.
+check("our hero dead, our army gone, and their ARMY (no hero) in our base",
+  hopeless(at({ halls: 2, structures: 8, workers: 4, gold: 700, heroesLost: 1, invaders: 7 }), HALL), true);
+check("…still true with a full purse and a base standing: there is nothing to spend it on",
+  hopeless(at({ halls: 3, structures: 15, workers: 9, gold: 4000, heroesLost: 2, invaders: 4 }), HALL), true);
+
+// …and the three ways out of it, each of which is a real route back.
+check("…but not while an army of ours is still on the field",
+  hopeless(at({ halls: 2, structures: 8, workers: 4, armyFood: 12, gold: 700, heroesLost: 1, invaders: 7 }), HALL), false);
+check("…nor once the raiders have left",
+  hopeless(at({ halls: 2, structures: 8, workers: 4, gold: 700, heroesLost: 1, invaders: 0 }), HALL), false);
+check("…nor while a hero of ours is up (or on the altar's clock)",
+  hopeless(at({ halls: 2, structures: 8, workers: 4, gold: 700, heroes: 1, heroesLost: 1, invaders: 7 }), HALL), false);
+// The same opening guard clause 4 carries: never having built a hero is not having lost one.
+check("…and a hero rush against a player who has no hero YET is not a lost game",
+  hopeless(at({ halls: 2, structures: 8, workers: 4, gold: 700, heroesLost: 0, invaders: 7 }), HALL), false);
+
 console.log("\n-- the rails ---------------------------------------------------------------");
 
 // The floor exists because the failure it guards actually happened — see the constant.

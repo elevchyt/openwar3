@@ -206,6 +206,18 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
     itemOf(pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
 }
 {
+  // THE THRESHOLD, which is the reported bug: a hero that waits for PANIC_HP (0.3) to reach for
+  // a FIVE-SECOND scroll dies holding it. 0.39 is above the panic line and below ESCAPE_HP.
+  const h = belt(hero({ hp: 390 }), "stwp", "phea");
+  check("it leaves at 39% — above the panic line, where the old rule kept fighting",
+    itemOf(pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
+}
+{
+  // …and not at half health, which is a fight, not a rout.
+  const h = belt(hero({ hp: 500 }), "stwp");
+  check("…and not at 50%", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+}
+{
   // …but a healthy hero in a fight the army is winning stays and fights.
   const h = belt(hero({ hp: 950 }), "stwp");
   check("…and a healthy one does not", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
@@ -383,6 +395,17 @@ function shopped(units, profile, opts = {}) {
   check("no hero, no shopping", shopped([unit(), MERCHANT], PLUS_INSANE).buy, null);
 }
 
+// THE ARMY'S HEALING. A creeping computer's problem is hit points, not mana, so the cheap area
+// heals sit above the mana potions — 100 gold for three Salve charges is the best hit points
+// per gold in the game, and it is what puts a party back together between camps. Reported:
+// "it crept its hero nicely up to level 3 … however it didn't buy healing salves".
+{
+  const h = belt(hero(), "stwp", "phea", "phea", "shea", "sreg");
+  const shelf = ["stwp", "phea", "shea", "sreg", "hslv", "pman", "pclr"];
+  check("with the portal and the potions bought, the Salve is next — before any mana",
+    shopped([h, MERCHANT], PLUS_INSANE, { shelf }).buy?.itemId, "hslv");
+}
+
 // OUR OWN SHOP FIRST, the Goblin Merchant as the last resort. A race shop is in the base (so
 // the errand is seconds, not a trek) and its shelf cannot be emptied by the other player.
 {
@@ -442,6 +465,22 @@ function shopped(units, profile, opts = {}) {
   world.shopReaches = () => true;
   arriving.pass(500, { home: { x: 0, y: 0 }, losing: false, mayShop: true });
   check("…and on arrival, when it buys", arriving.errand, 0);
+}
+
+// ==========================================================================================
+console.log("\n-- somewhere to shop ---------------------------------------------------------");
+// ==========================================================================================
+
+// The reason the whole item side was theoretical in a real game: the build order never put up a
+// shop, so the only shelf was a map's Goblin Merchant — shared, usually across the map, and on
+// plenty of maps not there at all. Measured on Echo Isles: a Normal orc at ten minutes with a
+// level-3 hero, no Town Portal and no Healing Salve.
+const { PLUS_RACES } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
+// The four race shops, off `Makeitems` in the install's own UnitFunc files.
+const SHOPS = { human: "hvlt", orc: "ovln", undead: "utom", nightelf: "eden" };
+for (const [race, id] of Object.entries(SHOPS)) {
+  const table = PLUS_RACES[race];
+  check(`${race} names its shop (${id})`, table && table.shop, id);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

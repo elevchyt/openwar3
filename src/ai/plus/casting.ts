@@ -305,8 +305,14 @@ export class PlusCaster {
     }
     this.townBell(own, foes);
     for (const u of own) {
+      // ARMING is asked of buildings as well, and `canAct` (which refuses one out of hand) is
+      // deliberately not consulted for it. The Moon Well is why: Replenish Life and Mana
+      // (`Ambt`) is an AUTOCAST on a BUILDING, and with it off a night elf's wells pour into
+      // nobody — a whole race's healing, silently absent, because the one walk that could have
+      // switched it on skipped every building in the game. The Obsidian Statue is the same row
+      // on a unit and was already reached; the well was not.
+      if (this.canArm(u)) this.armAutocasts(u);
       if (!this.canAct(u)) continue;
-      this.armAutocasts(u);
       this.tryCast(u, own, foes);
     }
     this.lastHp.clear();
@@ -318,6 +324,15 @@ export class PlusCaster {
     // `fightSince` is the one map that outlives a pass, so it is the one that has to be swept:
     // a unit that died mid-engagement would otherwise sit in it for the rest of the match.
     for (const id of this.fightSince.keys()) if (!alive.has(id)) this.fightSince.delete(id);
+  }
+
+  /** May this unit's autocasts be switched on? A much shorter list than `canAct`: arming is a
+   *  toggle rather than an action, so a building may do it, and the only things that stop it are
+   *  not being there yet and not being able to act at all. */
+  private canArm(u: SimUnit): boolean {
+    if (u.hp <= 0 || u.paused || u.isIllusion) return false;
+    if (u.building && u.building.constructionLeft > 0) return false; // still going up
+    return true;
   }
 
   private canAct(u: SimUnit): boolean {

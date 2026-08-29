@@ -55,7 +55,7 @@ its buildings and upgrades are derived — a build cannot be inconsistent with i
 | Difficulty | 40 `!= MELEE_NEWBIE` guards scattered across five files, plus two engine cheats | one table, [`profile.ts`](../src/ai/plus/profile.ts) |
 | Army | `common.ai`'s captain: a muster list, one wave at a time | one group, food-capped at production, with defend/attack/retreat states |
 | Spells | one hiveworkshop thread, transcribed ([`casting.ts`](../src/ai/casting.ts)) | roles + a priority ladder + target value ([`plus/casting.ts`](../src/ai/plus/casting.ts)) |
-| Items | none | shops, and presses what it carries |
+| Items | none | **builds a shop**, buys from it, and presses what it carries |
 | Manners | none | glhf, gg, and it leaves |
 | Library / natives | [`aiPlayer.ts`](../src/ai/aiPlayer.ts) | **the same file** |
 
@@ -89,6 +89,12 @@ did not come back, and that one walk is the whole of what the AI ever learns abo
 worker's day sight is 1400+ and a melee start's buildings sit well inside 900, so standing off
 sees the same thing and comes home. It is also what a player does, and for the same reason.
 
+And it comes home **walked**, not merely released. Dropping the scout out of `held` is what lets
+the harvest plan have it again, but the plan assigns jobs, not journeys: a worker released
+standing in the enemy's base was left standing in the enemy's base, idle, for the rest of the
+match — one worker of an eleven-worker economy, thrown away every game. The move order is what
+brings it back; the harvest plan then picks it up as an idle worker at home.
+
 ## The difficulties, and what each one gives up
 
 Everything below is in [`profile.ts`](../src/ai/plus/profile.ts). **None of it is Warcraft III's**
@@ -116,6 +122,8 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | belt slots it shops for | **0** | 3 | 6 |
 | gold it keeps back from the shop | — | 300 | 200 |
 | keeps and replaces a Town Portal | no | **yes** | **yes** |
+| builds its race's shop | no | **yes** | **yes** |
+| accepts a lost game after | 35 s | 20 s | 12 s |
 | spell roles it uses | heal, nuke, summon, morph | + panic, disable, buff | all nine |
 | **aims at** | the **biggest body** (`naive`) | what a unit **is** (`sound`) | + what the **spell is for** (`expert`) |
 | misclicks a cast | 35 % | 15 % | never |
@@ -439,6 +447,50 @@ Human town bell, and it is already rung by [`plus/casting.ts`](../src/ai/plus/ca
 `townBell` — the answer to "something is in my base and my army is somewhere else", and never on
 Easy.
 
+### The wounded, and where they heal
+
+A unit that is HEALING is not sent to fight. Three sources, one rule (`recovering`): a **Healing
+Salve** or a **Scroll of Regeneration** hangs a regeneration buff (`ITEM_REGEN_GROUP`, one prefix
+so a single filter catches the family), and a **Moon Well** pours into whoever it has been sent
+(`drinkWellId`). All three pour over *time* — 45 s for the two scrolls — so a soldier dosed and
+marched straight back out spends the effect being hit for more than it regains, which is the same
+as not having healed it. It is released when the effect ends **or** at `RECOVER_TO` (65 %),
+whichever comes first, and it does not count toward `squadFood` while it is out: counting a unit
+`commit` will not move is how a wave of four sets off believing it is a wave of ten.
+
+The **Moon Well** needed two separate things and had neither. Replenish (`Ambt`) is an autocast on
+a **building**, and the caster's `canAct` refuses a building out of hand — so a night elf's wells
+poured into nobody, all game, every game. Arming is now asked through `canArm`, a much shorter
+list (arming is a toggle, not an action). That is only half of it: `Ambt`'s `Area1` is 400, so a
+well pours into whoever is *standing at it*, and an army waiting at the rally point is not. The
+other half is `wellPass` — the ordinary right-click on a friendly well (`{ c: "drink" }`), issued
+only while **massing**, because a well trip replaces whatever the unit was doing and running it
+mid-fight walks a Grunt out of the battle line rather than healing it.
+
+### Burrows: the town bell the orcs have instead of a bell
+
+A Burrow with peons in it shoots, which makes it the one structure in the game a worker turns into
+a tower. So when something is in the base, the workers go in — and **only the lumber ones**.
+
+That is why it is done a peon at a time (`{ c: "garrison" }`) rather than through the building's
+own Battle Stations button: `battleStations` gathers whatever workers are *nearest*, which on a
+threatened base means the gold crew, and a mine that stops paying for the fight it is funding is a
+bad trade for a few arrows. `SimUnit.resKind` is the sim's own answer to "what is this worker on",
+and it outlives the trip home, so a peon walking a load of lumber back still counts as a
+lumberjack. They come back out through `standdown`, which is the door that *remembers* the job
+(`unloadBurrow(id, true)` → `resumeGarrisonJob`), so a peon that went in chopping comes out
+chopping at the same tree.
+
+### It does not park on a hero it cannot finish
+
+The anti-chase rule applies to the whole army, not only to the focus-fire path. `focusTarget` was
+the only thing that knew about heroes and it does not run below Insane, so on **Normal** nothing
+whatever stopped the group parking on a hero it could not kill while the army that came with it
+did the killing. `commit` now breaks a unit off a healthy enemy hero — `heroKillable`, the same
+`HERO_KILL_HP` line the targeting ladder uses — and **re-aims it at a body**. Re-aiming matters:
+an attack-move would be answered by the sim's own acquisition, which takes the *nearest* enemy,
+and the hero it just walked away from is standing right there.
+
 ## Manners: glhf, gg, and leaving
 
 Two things the classic AI never does, both asked for by the issue, and both deliberately plain —
@@ -452,8 +504,8 @@ relayed to LAN clients exactly like a typed one, and a map with a chat trigger s
 
 ### Conceding, without demolishing the base
 
-`hopeless()` is deliberately conservative — four clauses, and the position has to *stay*
-hopeless for `concedeAfter` seconds (45 on Easy, 20 on Insane: a weaker player takes longer to
+`hopeless()` is deliberately conservative — five clauses, and the position has to *stay*
+hopeless for `concedeAfter` seconds (35 on Easy, 12 on Insane: a weaker player takes longer to
 accept it). Then it says gg, waits five seconds, and **leaves**.
 
 The first three each mean "there is no route back from here" and are about **what is left
@@ -465,6 +517,14 @@ base is the position people type gg in long before the last building falls — s
 nothing about buildings or gold on purpose, and it is the loosest of the four. What makes that
 safe is `concedeAfter` rather than the clause: it un-latches if the raiders die or leave, if
 their hero dies or walks out, or the moment one of ours is back on the field.
+
+**Clause 5** is clause 4 with the enemy hero taken out and the **army** put in instead: *our
+heroes are dead, our army is gone, and they are in our base*, whoever is doing the standing. It
+exists because clause 4 turned out to be reachable only by accident — in a real game the player's
+hero is usually off somewhere else at the moment the rest of their army is razing the base, so
+`invaderHeroes` was 0 and nothing fired. Both are kept rather than one replacing the other: the
+enemy hero in clause 4 is what makes a position lost **early**, while an army of ours is still on
+the field.
 
 Two terms keep clause 4 honest. It asks `heroesLost > 0` as well as `heroes === 0`, because "we
 have no hero" is also true of every player who has not built one yet — without it an early hero
