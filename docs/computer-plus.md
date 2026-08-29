@@ -394,13 +394,31 @@ relayed to LAN clients exactly like a typed one, and a map with a chat trigger s
 
 ### Conceding, without demolishing the base
 
-`hopeless()` is deliberately conservative — three clauses that each mean "there is no route back
-from here" — and the position has to *stay* hopeless for `concedeAfter` seconds (45 on Easy, 20
-on Insane: a weaker player takes longer to accept it). Then it says gg, waits five seconds, and
-**leaves**.
+`hopeless()` is deliberately conservative — four clauses, and the position has to *stay*
+hopeless for `concedeAfter` seconds (45 on Easy, 20 on Insane: a weaker player takes longer to
+accept it). Then it says gg, waits five seconds, and **leaves**.
+
+The first three each mean "there is no route back from here" and are about **what is left
+standing** — no hall and no way to put one up; raiders in the base with no army and no workers;
+raiders in the base with no army and no hall to make one from. The fourth reads the **fight**
+instead: *our heroes are dead, theirs is not, and theirs is in our base.* A hero is the piece a
+melee army is built around, and being heroless against a live enemy hero already inside your
+base is the position people type gg in long before the last building falls — so this one says
+nothing about buildings or gold on purpose, and it is the loosest of the four. What makes that
+safe is `concedeAfter` rather than the clause: it un-latches if the raiders die or leave, if
+their hero dies or walks out, or the moment one of ours is back on the field.
+
+Two terms keep clause 4 honest. It asks `heroesLost > 0` as well as `heroes === 0`, because "we
+have no hero" is also true of every player who has not built one yet — without it an early hero
+rush reads as a lost game, which is the mistake `CONCEDE_NOT_BEFORE` exists to prevent. And a
+hero already on an altar's revival clock counts as one we *have*: it is coming back at full
+strength inside the minute, which is a move from here, and the AI does revive
+(`AiPlayer.reviveFallen`). "Part of the group that is attacking" is not a separate notion —
+`invaderHeroes` is counted off the very same `isInvader` predicate as `invaders`, so it can
+never exceed it.
 
 The third clause — *raiders in the base, no army, and no hall to make one from* — is the one
-that makes the other two reachable, and it is worth knowing why it had to exist. The first two
+that makes the first two reachable, and it is worth knowing why it had to exist. Those two
 are both vetoed by a surviving **worker**: clause 1 by "somebody could still put a hall back
 up", clause 2 by `workers === 0`. A worker is the last thing a player kills, so two Peons in a
 corner with gold banked held the concession open for the whole game and you had to raze the base

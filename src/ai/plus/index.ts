@@ -7,6 +7,7 @@ import { PlusCaster } from "./casting";
 import { EnemyMemory, type EnemyRead } from "./counter";
 import {
   CONCEDE_NOT_BEFORE, CONCESSIONS, GREETINGS, GREET_AT, GREET_STAGGER, LEAVE_AFTER, hopeless,
+  type Standing,
 } from "./chatter";
 import { buildPlan, harvestPlan, type PlusCtx } from "./plan";
 import { plusProfile, type PlusProfile } from "./profile";
@@ -800,6 +801,15 @@ export class ComputerPlusAi {
     return n;
   }
 
+  /** …and how many of the group standing in our towns are HEROES. Counted off the very same
+   *  `isInvader` predicate, so "part of the group that is attacking" means exactly what it
+   *  means everywhere else in this file, and the count can never exceed `invaders`. */
+  private invaderHeroes(b: Brain): number {
+    let n = 0;
+    for (const u of this.host.world.units.values()) if (u.isHero && this.isInvader(b, u)) n++;
+    return n;
+  }
+
   private nearestThreat(b: Brain): SimUnit | null {
     let best: SimUnit | null = null;
     let bestD = Infinity;
@@ -884,16 +894,23 @@ export class ComputerPlusAi {
     this.host.say(ai.player, CONCESSIONS[ai.randomInt(0, CONCESSIONS.length - 1)]);
   }
 
-  /** The six numbers `hopeless` judges the position by. */
-  private standing(b: Brain) {
+  /** The numbers `hopeless` judges the position by. */
+  private standing(b: Brain): Standing {
     let structures = 0;
     let workers = 0;
+    let heroes = 0;
     for (const u of this.host.world.units.values()) {
       if (u.owner !== b.ai.player || u.hp <= 0) continue;
       if (u.building) {
         if (u.building.constructionLeft <= 0) structures++;
       } else if (u.isPeon) workers++;
+      else if (u.isHero) heroes++;
     }
+    // A hero on an altar's clock is one we HAVE — it is coming back at full strength inside
+    // the minute, which is a move from here (see `hopeless` clause 4). `revivingAt` is the
+    // altar it was queued at, and 0 is "nobody is bringing this one back".
+    const fallen = this.host.world.fallenHeroesOf(b.ai.player);
+    for (const f of fallen) if (f.revivingAt) heroes++;
     return {
       halls: b.ai.townCountDone(b.table.halls[0]),
       structures,
@@ -901,6 +918,12 @@ export class ComputerPlusAi {
       armyFood: this.armyFood(b),
       gold: b.ai.gold(),
       invaders: this.invaders(b),
+      invaderHeroes: this.invaderHeroes(b),
+      heroes,
+      // Heroes of ours lying dead. The roster is authoritative for "right now": a hero is
+      // struck off it the instant it is actually revived (SimWorld.reviveFallenHero) and put
+      // back on if the revival is cancelled (dropJob), so this never lags the field.
+      heroesLost: fallen.length,
     };
   }
 }

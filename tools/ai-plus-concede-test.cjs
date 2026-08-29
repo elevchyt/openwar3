@@ -32,7 +32,11 @@ function check(what, got, want) {
 
 // The Great Hall's own price, which is what `mannersPass` reads off the registry for an orc.
 const HALL = 385;
-const at = (o) => ({ halls: 0, structures: 0, workers: 0, armyFood: 0, gold: 0, invaders: 0, ...o });
+const at = (o) => ({ halls: 0, structures: 0, workers: 0, armyFood: 0, gold: 0, invaders: 0,
+  invaderHeroes: 0, heroes: 0, heroesLost: 0, ...o });
+// A position with a base and an army standing — what clause 4's cases vary the HEROES of, so
+// that nothing in them can be passing for one of the first three clauses' reasons.
+const holding = (o) => at({ halls: 1, structures: 6, workers: 5, armyFood: 30, gold: 500, ...o });
 
 console.log("\n-- positions that are still games ------------------------------------------");
 
@@ -64,6 +68,30 @@ check("clause 1 still stands: no hall and not the gold for one",
   hopeless(at({ structures: 2, workers: 2, gold: 50 }), HALL), true);
 check("clause 2 still stands: raiders in the base, no army, no workers",
   hopeless(at({ halls: 1, structures: 4, gold: 900, invaders: 6 }), HALL), true);
+
+console.log("\n-- clause 4: heroless against a live enemy hero in the base ----------------");
+
+// The three parts of the rule, each removed in turn from a position that otherwise fires.
+check("our hero is dead, theirs is alive and in our base",
+  hopeless(holding({ heroesLost: 1, invaders: 9, invaderHeroes: 1 }), HALL), true);
+check("…still true with a whole base and army standing: this clause reads the FIGHT",
+  hopeless(holding({ halls: 3, structures: 14, armyFood: 60, gold: 2000, heroesLost: 3, invaders: 12, invaderHeroes: 2 }), HALL), true);
+
+check("…but not while one of ours is still on the field",
+  hopeless(holding({ heroes: 1, heroesLost: 1, invaders: 9, invaderHeroes: 1 }), HALL), false);
+// `standing()` counts a hero on an altar's clock into `heroes` — it is coming back, not gone.
+check("…nor while ours is on the altar's revival clock",
+  hopeless(holding({ heroes: 1, heroesLost: 1, invaders: 9, invaderHeroes: 1 }), HALL), false);
+check("…nor when the raid has no hero in it",
+  hopeless(holding({ heroesLost: 1, invaders: 9, invaderHeroes: 0 }), HALL), false);
+check("…nor when their hero is not in our base (invaderHeroes counts only the group attacking)",
+  hopeless(holding({ heroesLost: 1, invaders: 0, invaderHeroes: 0 }), HALL), false);
+
+// The guard that keeps clause 4 off the opening. "We have no hero" is also true of every
+// player who has not built one yet, so without `heroesLost` an early hero RUSH reads as a lost
+// game. The fallen roster is empty here because there is nothing on it to be empty of.
+check("a hero rush at the two-minute floor is NOT a lost game — we never had a hero to lose",
+  hopeless(holding({ heroesLost: 0, invaders: 6, invaderHeroes: 1 }), HALL), false);
 
 console.log("\n-- the rails ---------------------------------------------------------------");
 

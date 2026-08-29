@@ -41,8 +41,8 @@ export const LEAVE_AFTER = 5;
 export const CONCEDE_NOT_BEFORE = 120;
 
 /**
- * How a Computer+ player's position looks to it, in the six numbers that decide whether the
- * game is over.
+ * How a Computer+ player's position looks to it — the numbers that decide whether the game is
+ * over, and nothing else.
  */
 export interface Standing {
   /** Finished halls of any tier — `townCountDone(hall)` folds a Castle into a Town Hall. */
@@ -57,6 +57,15 @@ export interface Standing {
   gold: number;
   /** Enemy fighters standing in our towns. */
   invaders: number;
+  /** …and how many of THOSE are heroes. A subset of `invaders`, never larger. */
+  invaderHeroes: number;
+  /** Our own heroes still on the field — plus any already on an altar's revival clock, which
+   *  is a hero on the way back rather than a hero we no longer have. */
+  heroes: number;
+  /** Heroes of ours lying DEAD — the fallen roster (SimWorld.fallenHeroesOf), which a hero is
+   *  struck off the moment it is actually revived. So this is "one of ours is down right now",
+   *  and it is empty both for a player who has lost none and for one who never built any. */
+  heroesLost: number;
 }
 
 /**
@@ -73,6 +82,7 @@ export interface Standing {
  *  2. **The enemy army is in the base and there is nothing left to answer it with** — no army,
  *     no workers. A hall and a purse cannot save that, and it is the moment a human types gg.
  *  3. **The enemy army is in the base, there is no army, and no hall to make one from.**
+ *  4. **Our heroes are dead, theirs is not, and theirs is in our base.**
  *
  * Clause 3 is what makes the other two reachable, and it is here because without it the AI
  * effectively never conceded at all: a player had to raze the base building by building to win
@@ -90,6 +100,31 @@ export interface Standing {
  * 0, and if anything at all is trained `armyFood` rises, and either resets `hopelessSince` —
  * so a position that recovers inside `concedeAfter` never says gg.
  *
+ * Clause 4 is a different KIND of reading from the first three, and it is worth being honest
+ * about that. Those three are about what is left standing; this one is about the fight. It is
+ * the read a ladder player actually makes — a hero is the piece a melee army is built around,
+ * and being heroless against a live enemy hero that is already inside your base is the position
+ * people type gg in long before the last building falls. It says nothing about buildings or
+ * gold on purpose.
+ *
+ * Two things keep it honest, and neither is optional:
+ *
+ *  • It asks `heroesLost > 0`, not just `heroes === 0`. "We have no hero" is also true of
+ *    every player who has not built one yet — at the two-minute floor, most of them — so
+ *    without this the clause reads an early hero RUSH as a lost game, which is exactly the
+ *    mistake CONCEDE_NOT_BEFORE exists to make impossible. Together the two terms say what
+ *    the rule actually means: we have a hero down, and not one of ours is up.
+ *  • A hero already on an altar's revival clock counts as a hero we HAVE (see `heroes`). It
+ *    is coming back at full strength inside the minute, which is a move from here — and the
+ *    AI does revive: `AiPlayer.reviveFallen` is how every race script's "always rebuild heroes
+ *    for defense" branch is answered.
+ *
+ * It is also the loosest of the four, and `concedeAfter` is what makes that safe rather than
+ * the clause itself: the position has to hold for 20-45 s, and it un-latches if the raiders
+ * die or leave (`invaders`), if their hero dies or walks out (`invaderHeroes`), or the moment
+ * ours is back on the field. A defence that wins, or a revival that lands, resets the clock.
+ * What it will NOT wait for is the last building — which is the whole point.
+ *
  * `structures` is not tested by any clause and is kept for the same reason `invaders` is a
  * count: they are what a future reading of the position would be written in terms of, and they
  * are cheap. `hallCost` is the race's own tier-1 hall price, read from the registry rather than
@@ -99,5 +134,6 @@ export function hopeless(s: Standing, hallCost: number): boolean {
   if (s.halls === 0 && (s.workers === 0 || s.gold < hallCost)) return true;
   if (s.invaders > 0 && s.armyFood === 0 && s.workers === 0) return true;
   if (s.invaders > 0 && s.armyFood === 0 && s.halls === 0) return true;
+  if (s.heroesLost > 0 && s.heroes === 0 && s.invaderHeroes > 0) return true;
   return false;
 }
