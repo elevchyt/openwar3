@@ -248,6 +248,40 @@ list **and returns at the first unit row it cannot afford**:
 > hall → workers → food → altar & barracks → **first hero** → **core army** → tech buildings →
 > **expansion** → extra heroes → tier → towers → upgrades → **the rest of the army**
 
+### The undead's lumber comes out of its army
+
+`recruit` takes everything that fights, and a **Ghoul is not `isPeon`** — so it is a fighter by
+every test in the sim, and the wave claimed every ghoul the moment it was trained. `captainHeld`
+then kept `applyHarvest` off it, and an undead Computer+ chopped **no lumber for the entire
+match**. It is the one race whose lumber comes out of its army, and it has to say so.
+
+The rule and both numbers are Blizzard's — undead.ai 205–219, ported at `UNDEAD_AI.waveGate` in
+[`src/ai/undead.ts`](../src/ai/undead.ts): *the forest keeps 10 lumberjacks minus one per 120
+lumber in the bank, and everything left over attacks.* It self-regulates, which is why it is worth
+taking whole rather than picking a constant: with nothing banked every ghoul chops, and by the
+time there is 1200 lumber standing every ghoul fights. `recruit` states both directions against
+one number, so a crew that has gone short takes ghouls back **out** of the wave (newest first)
+rather than only refusing to add more.
+
+Which race this applies to is asked of the DATA, never of a race list: if this player's ordinary
+workers can chop (`WorkerState.lumber` — a Peasant, a Peon, a Wisp) nothing is held back at all.
+Only the Acolyte (`uaco`, `lumber: false`) reaches the formula.
+
+### Who builds it: not the worker down the hole
+
+`AiPlayer.freeWorker` picks the nearest worker that can raise the structure, and it used to stop
+there. A worker that is **off the field** — a Wisp inside an Entangled Gold Mine, a Peasant in a
+shaft, a Peon in a Burrow — stands at its host's own coordinates, which for a gold mine is the
+middle of the base and therefore nearer almost any build site than the workers actually free. So
+it won the distance test every time: every structure the plan placed pulled a miner out of the
+mine while free wisps stood in the trees beside it, `applyHarvest` sent one back on the next pass,
+and a night elf computer spent the whole match putting wisps in and out of its mine.
+
+It is now two passes rather than a distance penalty — on the field strictly beats closer — with
+the sunk workers still eligible last, so a player whose every worker is down the mine can still
+build. `ComputerPlusAi.freeWorker` (which picks the scout) had the same hole and asked only about
+`inMine`; both now ask the sim's own `isOffField`.
+
 Four rules run through it. The first two are the library's own behaviour; the last two are what
 that behaviour does to a naive ordering, and both were found by watching a match rather than by
 reasoning about the code:
@@ -374,6 +408,43 @@ from the caster, and the reason it has to is the first of the two gates this sec
 about: **item abilities are not in `SimUnit.abilities`**. They hang off the inventory slot and
 dispatch through `useItem`, so the caster's ability walk cannot see one — it is a second walk, not
 more rows in the caster's table.
+
+#### The alias/code trap, which broke almost the whole belt
+
+Reported from a real game: *"orc is not able to use healing salves (it buys them though)."* It was
+not the salve. `USE_OF` maps an ability to what pressing it is FOR, and `useOf` looks a card up by
+**`AbilityDef.code`** — the same thing `SimWorld.applyItemAbility` dispatches on — but the table
+had been written with `AbilityData.slk`'s **`alias`** column. For most of the potions those are
+different rows:
+
+| the item's `abilList` says | its real `code` is |
+|---|---|
+| `AIh1` / `AIh2` / `AIh3` — Potion of Healing, Greater Healing, Essence of Aszune | `AIhe` |
+| `AIm1` / `AIm2` — Potion of Mana, Greater Mana | `AIma` |
+| `AIvl` — Potion of Lesser Invulnerability | `AIvu` |
+| `AIdv` — Potion of Divinity | `AHds` (it *is* Divine Shield) |
+| `AIrr` — Scroll of the Beast | `Aroa` (it *is* Roar) |
+| `AIrl`, `AIsl`, `AIpr`, `AIpl`, `AIp1`–`AIp6` — Salve, both Clarity Potions, Scroll of Regeneration, the whole Replenishment family | `AIrg` |
+
+So the table matched almost nothing: of the shopping list, only the Town Portal, the Scroll of
+Healing and the Scroll of Restoration were ever pressable. A hero could carry a healing potion, a
+mana potion, a salve and a clarity potion and use none of the four.
+
+`AIrg` is the one that cannot be fixed by re-keying alone, because it is one code covering four
+different items — and that is [`docs/items.md`](./items.md)'s own headline example. `regenUse`
+splits them the way the sim already splits them when the button is pressed, off the row itself:
+`Area1` > 0 is an area heal, `Rng1` > 0 is one you point at somebody, and neither means the
+drinker — with `DataA`/`DataB` saying whether that drink is hit points or mana. The test stub in
+`tools/ai-plus-items-test.cjs` had encoded the same mistake (`code` set to the alias), which is
+why it passed the whole time; it now carries the real pairs.
+
+The two rungs aimed at somebody ELSE — `healArea` and `healOther` — are also the only two not
+gated on being in a fight, and that is deliberate. A Healing Salve and a Scroll of Regeneration
+pour over **forty-five seconds**; spending one while the blows are still landing is spending it
+into the damage. The moment they are worth is the moment the camp is dead and the party is about
+to walk to the next one, which is the job the shopping list says it bought them for.
+
+#### The rest of it
 
 Everything goes through the doors a player's click goes through, and there is no item path here a
 human does not have:

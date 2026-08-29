@@ -4,7 +4,7 @@ import type { ItemRegistry } from "../data/items";
 import type { UnitDef, UnitRegistry } from "../data/units";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
-import type { SimMine, SimUnit, SimWorld } from "../sim/world";
+import { isOffField, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
 import { footprintBuildable, footprintCellsAt, type Footprint } from "../sim/destructibles";
 import { PATHING_CELL } from "../sim/pathing";
 import {
@@ -836,17 +836,37 @@ export class AiPlayer {
   }
 
   /** The nearest worker that can build this and isn't already committed to something. */
+  /**
+   * Who builds it: the nearest worker that can, and that is NOT already down a hole.
+   *
+   * The second half is the whole method, and leaving it out cost a real bug. A worker that is
+   * off the field — a Wisp inside an Entangled Gold Mine, a Peasant in a shaft, a Peon in a
+   * Burrow — is standing at its HOST's own coordinates, which for a gold mine is the middle of
+   * the base and therefore nearer almost any build site than the workers actually available.
+   * So it won the distance test every single time, and every structure the plan placed pulled a
+   * miner out of the mine while free workers stood in the trees beside it. `applyHarvest` sent
+   * it straight back on the next pass, the next row pulled the next one out, and a night elf
+   * computer spent the whole match putting wisps in and out of its mine.
+   *
+   * They are still eligible, because a player with every worker down the mine must still be
+   * able to build — but only once nothing on the surface can do it. Two passes rather than a
+   * distance penalty, so "on the field" strictly beats "closer", which is the actual rule.
+   */
   private freeWorker(defId: string, x: number, y: number): SimUnit | null {
     let best: SimUnit | null = null;
     let bestD = Infinity;
+    let sunk: SimUnit | null = null;
+    let sunkD = Infinity;
     for (const u of this.host.world.units.values()) {
       if (u.owner !== this.player || u.hp <= 0 || !u.worker) continue;
       if (u.buildPending || u.insideBuild || u.constructing) continue;
       if (!this.host.tech.builds(u.typeId).includes(defId)) continue;
       const d = Math.hypot(u.x - x, u.y - y);
-      if (d < bestD) { bestD = d; best = u; }
+      if (isOffField(u)) {
+        if (d < sunkD) { sunkD = d; sunk = u; }
+      } else if (d < bestD) { bestD = d; best = u; }
     }
-    return best;
+    return best ?? sunk;
   }
 
   // ======================================================================================

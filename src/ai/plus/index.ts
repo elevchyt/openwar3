@@ -2,7 +2,7 @@ import { MELEE } from "../../data/gameplayConstants";
 import type { ChatLine, ChatScope } from "../../game/chat";
 import type { PlayableRace } from "../../data/races";
 import type { UnitDef } from "../../data/units";
-import { ITEM_REGEN_GROUP, type SimUnit } from "../../sim/world";
+import { ITEM_REGEN_GROUP, isOffField, type SimUnit } from "../../sim/world";
 import { simProfile, perfNow } from "../../sim/profile";
 import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, TOWN_RADIUS } from "../aiPlayer";
 import { PlusCaster } from "./casting";
@@ -182,6 +182,29 @@ const SCOUT_LEGS = SCOUT_RING_LEGS + 2;
 // manager nor plus/casting.ts's ability walk can see one. What this file owns is the CONTEXT the
 // belt cannot know for itself: where home is, whether the army has decided it is losing, and
 // whether a hero may walk off to a shop right now — see `itemCtx`.
+
+/**
+ * The forest's crew, and how fast a full bank returns it to the wave — `undead.ai`'s own two
+ * numbers (205-219, and `UNDEAD_AI.waveGate` in src/ai/undead.ts): ten lumberjacks, one fewer
+ * per 120 lumber standing in the bank.
+ */
+const LUMBER_CREW = 10;
+const LUMBER_PER_CHOPPER = 120;
+
+/**
+ * How many of `choppers` the forest keeps — `undead.ai`'s rule as arithmetic:
+ * *"the forest keeps however many the LUMBER stock says (10 minus a ghoul per 120 wood) and
+ * everything left over attacks."*
+ *
+ * Pure and exported for the same reason `scoutRing` is: the thing that actually matters about it
+ * — that it self-regulates, all of them chopping at zero lumber and none of them once the bank
+ * is full — is then pinned by a test rather than by reading it. See
+ * `ComputerPlusAi.lumberCrew` for who is counted.
+ */
+export function lumberCrew(wood: number, choppers: number): number {
+  if (choppers <= 0) return 0;
+  return Math.max(0, Math.min(LUMBER_CREW - Math.floor(wood / LUMBER_PER_CHOPPER), choppers));
+}
 
 /** Creep camps: the window `AiPlayer.creepCamp` is asked for, derived from the army's food the
  *  way the race scripts derive theirs from `force_level` — four fifths of it, less ten. */
@@ -633,10 +656,61 @@ export class ComputerPlusAi {
       if (u.worker) spare.push(u);
       else b.squad.add(u.id);
     }
+    const want = this.lumberCrew(b);
+    // Choppers currently OUTSIDE the wave. Both directions below are stated against this one
+    // number, so "let one go back to the forest" and "take one into the wave" are one rule
+    // rather than two that can disagree.
+    let free = 0;
+    for (const u of spare) if (u.worker?.lumber) free++;
+    // Short of the crew — take them back OUT of the wave. The squad is insertion-ordered, so
+    // the last one in is the one whose absence costs the least.
+    for (const id of [...b.squad].reverse()) {
+      if (free >= want) break;
+      const u = this.host.world.units.get(id);
+      if (!u?.worker?.lumber) continue;
+      b.squad.delete(id);
+      free++;
+    }
     for (const u of spare) {
+      // The forest's crew is not in the wave, whatever the wave is short of.
+      if (u.worker?.lumber && free <= want) continue;
       if (this.squadFood(b) >= b.profile.attackFood) break;
+      if (u.worker?.lumber) free--;
       b.squad.add(u.id);
     }
+  }
+
+  /**
+   * How many LUMBERJACKS the forest keeps back from the wave — the undead's Ghoul, and nobody
+   * else's anything.
+   *
+   * This is `undead.ai`'s own rule and the number is the game's: *"the forest keeps however many
+   * the LUMBER stock says (10 minus a ghoul per 120 wood) and everything left over attacks"*
+   * (undead.ai 205-219, ported at `UNDEAD_AI.waveGate` in src/ai/undead.ts). It self-regulates,
+   * which is why it is worth taking whole rather than picking a constant: with nothing banked
+   * every ghoul chops, and by the time there is a thousand lumber in the bank every ghoul
+   * fights.
+   *
+   * Without it Computer+ had NO ghoul split at all. `recruit` takes anything that fights, a
+   * Ghoul is not `isPeon` and so is a fighter by every test in the sim, and the undead opens
+   * with one — so the wave claimed every ghoul the moment it was trained, `captainHeld` kept
+   * `applyHarvest` off it, and an undead computer chopped no lumber for the entire match. It is
+   * the one race whose lumber comes out of its army, and the one race that has to say so.
+   *
+   * Asked of the DATA rather than of the race: if this player's ordinary workers can chop
+   * (`WorkerState.lumber` — a Peasant, a Peon, a Wisp), nothing has to be held back and the
+   * answer is zero. Only a race whose worker cannot — the Acolyte, `uaco` `lumber: false` — ever
+   * reaches the formula, so a custom map that gives its acolytes an axe is answered correctly
+   * without a list of races anywhere.
+   */
+  private lumberCrew(b: Brain): number {
+    let choppers = 0;
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== b.ai.player || u.hp <= 0 || !u.worker?.lumber) continue;
+      if (u.isPeon) return 0; // the ordinary workers chop — this is not that race's problem
+      choppers++;
+    }
+    return lumberCrew(b.ai.wood(), choppers);
   }
 
   /**
@@ -793,11 +867,18 @@ export class ComputerPlusAi {
     return mine ? { x: mine.x, y: mine.y } : null;
   }
 
-  /** A worker with nothing important in its hands. */
+  /**
+   * A worker with nothing important in its hands — who gets sent to go and look.
+   *
+   * "Off the field" rather than `inMine` alone (`isOffField`, the sim's own answer): a Wisp
+   * inside an Entangled Gold Mine and a Peon inside a Burrow are as busy as a Peasant down a
+   * shaft, and pulling one of THEM out to walk across the map is the same mistake
+   * `AiPlayer.freeWorker` made with the builder. A scout comes off the trees.
+   */
   private freeWorker(b: Brain): SimUnit | null {
     for (const u of this.host.world.units.values()) {
       if (u.owner !== b.ai.player || u.hp <= 0 || !u.isPeon) continue;
-      if (u.buildPending || u.insideBuild || u.constructing || u.inMine) continue;
+      if (u.buildPending || u.constructing || isOffField(u)) continue;
       return u;
     }
     return null;

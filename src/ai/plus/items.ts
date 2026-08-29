@@ -1,3 +1,4 @@
+import type { AbilityDef } from "../../data/abilities";
 import type { ItemDef } from "../../data/items";
 import type { SimUnit } from "../../sim/world";
 import { near, type CasterView } from "../casting";
@@ -50,9 +51,18 @@ const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "healArea", "heal
 const useRank = (u: Use): number => LADDER.indexOf(u);
 
 /**
- * Ability code → what pressing it is for. Every code here was read off `ItemData.slk`'s
- * `abilList` for an item that is `usable`; anything not listed is CARRIED and never pressed,
- * which is the safe direction to be wrong in.
+ * Ability CODE → what pressing it is for.
+ *
+ * **The key is the base `code`, never the alias**, and getting that wrong is a whole-feature
+ * bug rather than a typo. `AbilityData.slk` gives every row an `alias` and a `code`, and for
+ * most of the potions they are DIFFERENT: the Potion of Healing is alias `AIh1` on code `AIhe`,
+ * the Potion of Mana `AIm1` on `AIma`, the Potion of Lesser Invulnerability `AIvl` on `AIvu`,
+ * and every regeneration item — Healing Salve, Clarity Potion, Scroll of Regeneration, the
+ * Replenishment family — is an alias of the ONE code `AIrg`. `useOf` looks a card up by
+ * `AbilityDef.code`, which is what `SimWorld.applyItemAbility` dispatches on, so a table keyed
+ * on aliases matches nothing: an AI that bought a Healing Salve, a Potion of Healing, a Potion
+ * of Mana and a Clarity Potion could press none of the four, and the whole belt came down to
+ * the four rows below whose alias and code happen to coincide.
  *
  * Two families are deliberately absent. **The runes** (`APh1`, `APmr`, …) are `powerup` items —
  * consumed on pickup, never stored — so there is no button to press. And **Kelen's Dagger of
@@ -67,43 +77,62 @@ const USE_OF: Readonly<Record<string, Use>> = {
   AItp: "escape",
 
   // --- don't die ---------------------------------------------------------------------------
-  AIvl: "panic", // Potion of Lesser Invulnerability (the one the Goblin Merchant stocks)
-  AIvu: "panic", // Potion of Invulnerability
-  AIdv: "panic", // Potion of Divinity
+  AIvu: "panic", // Potion of Invulnerability — and `AIvl`, the Lesser one the Merchant stocks
+  AHds: "panic", // Potion of Divinity (`AIdv`) — it IS the Paladin's Divine Shield row
 
   // --- hit points, on the drinker ----------------------------------------------------------
-  AIh1: "healSelf", // Potion of Healing
-  AIh2: "healSelf", // Potion of Greater Healing / Health Stone
-  AIh3: "healSelf", // Essence of Aszune
+  AIhe: "healSelf", // Potion of Healing / of Greater Healing / Health Stone / Essence of Aszune
   AIre: "healSelf", // Potion of Restoration
-  AIp1: "healSelf", // Minor / Lesser / … Replenishment Potion — hit points AND mana, on the user
-  AIp2: "healSelf",
-  AIp3: "healSelf",
-  AIp4: "healSelf",
 
   // --- hit points, on an AREA around the user ----------------------------------------------
-  AIha: "healArea", // Scroll of Healing
-  AIsl: "healArea", // Scroll of Regeneration
-  AIra: "healArea", // Scroll of Restoration
-  AIp5: "healArea", // Lesser / Greater Scroll of Replenishment
-  AIp6: "healArea",
-
-  // --- hit points, on somebody you point at -------------------------------------------------
-  AIrl: "healOther", // Healing Salve — the one regeneration item you aim (docs/items.md)
+  AIha: "healArea", // Scroll of Healing (and the three Runes of Healing)
+  AIra: "healArea", // Scroll of Restoration (and its Rune)
 
   // --- mana ---------------------------------------------------------------------------------
-  AIm1: "mana", // Potion of Mana
-  AIm2: "mana", // Potion of Greater Mana / Mana Stone
-  AIpr: "mana", // Clarity Potion
-  AIpl: "mana", // Lesser Clarity Potion
-  AImr: "mana", // Scroll of Mana
+  AIma: "mana", // Potion of Mana / of Greater Mana / Mana Stone
+  AImr: "mana", // Scroll of Mana (and the two Runes of Mana)
+
+  // `AIrg` is NOT here: one code, four different answers. See `regenUse`.
 
   // --- make the fight better ----------------------------------------------------------------
   AIda: "buff", // Scroll of Protection
   AIsa: "buff", // Scroll of Speed
   AIsp: "buff", // Potion of Speed
-  AIrr: "buff", // Scroll of the Beast
+  Aroa: "buff", // Scroll of the Beast (`AIrr`) — it IS Roar
 };
+
+/** The one code that is four different items — see `regenUse`. */
+const REGEN = "AIrg";
+
+/**
+ * `AIrg` — one code, four different items, and the row itself is what says which.
+ *
+ * This is docs/items.md's own example of why an item's behaviour cannot be read off its code
+ * alone, and `SimWorld.applyItemAbility` already splits them exactly this way when the button is
+ * pressed. This is the same split asked one step earlier: what is this item FOR.
+ *
+ *     alias   item                        row                        reaches
+ *     AIsl    Scroll of Regeneration      Area1 600                  the AREA      -> healArea
+ *     AIp5/6  Scroll of Replenishment     Area1 600                  the AREA      -> healArea
+ *     AIrl    Healing Salve               Rng1 500, no Area1         a UNIT        -> healOther
+ *     AIpr    Clarity Potion              neither, DataB mana only   the drinker   -> mana
+ *     AIp1-4  Replenishment Potion        neither, DataA hp          the drinker   -> healSelf
+ *
+ * The last two are told apart by which column the row FILLS — a Clarity Potion is 200 mana and
+ * no hit points, a Replenishment Potion is both — because "what is it for" is the question the
+ * ladder sorts on, and a mana item pressed as a heal is pressed at the wrong moment.
+ *
+ * A blank SLK column parses to NaN, which fails `> 0` — so a row that fills neither says nothing
+ * and is left alone rather than guessed at.
+ */
+function regenUse(ad: AbilityDef): Use | null {
+  const lvl = ad.levelData[0];
+  if (!lvl) return null;
+  if (lvl.area > 0) return "healArea";
+  if (lvl.castRange > 0) return "healOther";
+  const hp = lvl.data[0];
+  return hp > 0 ? "healSelf" : lvl.data[1] > 0 ? "mana" : null;
+}
 
 /** One row of the shopping list: what to buy, and how many of it to carry. */
 interface Want {
@@ -314,11 +343,13 @@ export class PlusItems {
   }
 
   /** The item's own primary `Use`: the first ability in its `abilList` that names one. Keyed on
-   *  the ability rather than the item, so a custom map's re-skinned potion is played. */
+   *  the ability's base CODE rather than on the item, so a custom map's re-skinned potion is
+   *  played — and see `USE_OF` for why the code and not the alias. */
   private useOf(def: ItemDef): Use | null {
     for (const aid of def.abilities) {
       const ad = this.view.def(aid);
-      const use = ad && USE_OF[ad.code];
+      if (!ad) continue;
+      const use = ad.code === REGEN ? regenUse(ad) : USE_OF[ad.code];
       if (use) return use;
     }
     return null;
@@ -348,10 +379,18 @@ export class PlusItems {
         return engaged && hp < HURT_HP;
       // An area heal is worth a charge when it is healing a GROUP. Below `CLUSTER` it is being
       // spent to do a potion's job, and the potion is one rung down.
+      //
+      // These two are the ONLY rungs not gated on `engaged`, and it is deliberate: they are the
+      // ones aimed at somebody ELSE, and a Scroll of Regeneration or a Healing Salve pours over
+      // forty-five seconds. Spending one while the blows are still landing is spending it into
+      // the damage; the moment it is worth is the moment the camp is dead and the party is about
+      // to walk to the next one — which is the job the shopping list says it bought them for
+      // ("what puts an army back together between creep camps", see `LIST`). The bar is still a
+      // real one: `CLUSTER` of them under `HURT_HP`, or somebody under `ALLY_HP`.
       case "healArea":
-        return engaged && this.hurtNear(u, own, HURT_HP) >= CLUSTER;
+        return this.hurtNear(u, own, HURT_HP) >= CLUSTER;
       case "healOther":
-        return engaged && !!this.hurtest(u, own);
+        return !!this.hurtest(u, own);
       // Mana is topped up for the fight, not during the panic — a hero with no mana is a hero
       // whose spells are the reason the army is winning, so this fires as the fight starts as
       // well as inside one.

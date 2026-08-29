@@ -200,9 +200,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   two decisions that undo each other — and a difficulty grades the READ, not only the reaction:
   Easy aims by bulk (which is why its Storm Bolt lands on your Tauren), Insane prices what the
   spell is FOR. It also **does not chase heroes**: a healthy hero is worth barely more than a
-  soldier and the army will not walk after one it cannot finish. **It does not touch ITEMS yet**
-  — no buying, no drinking, no shop — a hole waiting on the sim; the plan, the seams and the two
-  gates to check first are the doc's "Items: not yet" section.
+  soldier and the army will not walk after one it cannot finish. It DOES shop and drink
+  ([`plus/items.ts`](src/ai/plus/items.ts)), and the trap there is the one that broke almost the
+  whole belt once: what a press is FOR is keyed on the ability's base **`code`**, never on
+  `AbilityData.slk`'s `alias` — `AIh1` is `AIhe`, `AIm1` is `AIma`, and the Salve, both Clarity
+  Potions, the Scroll of Regeneration and the Replenishment family are all one code `AIrg`, told
+  apart by their own `Area1`/`Rng1` exactly as the sim tells them apart (docs/items.md).
   In a TEAM game it also TALKS ([`src/ai/plus/teamchat.ts`](src/ai/plus/teamchat.ts)) and shares
   what it has scouted. Every line goes out on the ordinary chat path on the **allies** channel —
   there is no second channel for computers — and everything it HEARS arrives the same way, gated

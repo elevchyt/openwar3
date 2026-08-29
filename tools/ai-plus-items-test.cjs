@@ -23,7 +23,7 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { PlusItems } = require(join(REPO, ".sim-build", "src", "ai", "plus", "items.js"));
-const { scoutRing, SCOUT_RING_LEGS } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { scoutRing, SCOUT_RING_LEGS, lumberCrew } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -66,6 +66,29 @@ for (let leg = 0; leg < SCOUT_RING_LEGS; leg++) {
 }
 
 // ==========================================================================================
+console.log("\n-- the undead keeps ghouls in the forest -------------------------------------");
+// ==========================================================================================
+// The reported bug: "undead ai doesn't use the ghouls to gather lumber at all". A Ghoul is not
+// `isPeon`, so it is a fighter by every test in the sim, and `recruit` took every one of them
+// into the wave the moment it was trained — `captainHeld` then kept `applyHarvest` off it, and
+// an undead computer chopped nothing for the whole match. It is the one race whose lumber comes
+// out of its army, and undead.ai says so by name (`WG`, the wood ghouls).
+//
+// The rule and both numbers are BLIZZARD'S — undead.ai 205-219, ported at `UNDEAD_AI.waveGate`
+// — so what is pinned here is that we took it whole rather than picking a constant.
+check("with nothing banked, every ghoul chops", lumberCrew(0, 6), 6);
+check("…however many there are, up to the crew", lumberCrew(0, 20), 10);
+check("120 lumber banked releases one", lumberCrew(120, 20), 9);
+check("600 releases five", lumberCrew(600, 20), 5);
+check("…and a full bank sends them all to the wave", lumberCrew(1200, 20), 0);
+check("…and stays there", lumberCrew(5000, 20), 0);
+// The self-regulating half, which is why the rule is worth taking whole: it can never ask for
+// more lumberjacks than there are ghouls, so a two-ghoul opening puts two in the forest and
+// leaves the wave to everything else.
+check("it never asks for more choppers than exist", lumberCrew(0, 2), 2);
+check("a race with no ghoul-shaped fighter reserves nobody", lumberCrew(0, 0), 0);
+
+// ==========================================================================================
 console.log("\n-- Normal and Insane farm creep camps --------------------------------------");
 // ==========================================================================================
 
@@ -105,18 +128,36 @@ const ITEMS = {
   hslv: { id: "hslv", gold: 100, usable: true, abilities: ["AIrl"] }, // Healing Salve
   pclr: { id: "pclr", gold: 160, usable: true, abilities: ["AIpr"] }, // Clarity Potion
   spro: { id: "spro", gold: 150, usable: true, abilities: ["AIda"] }, // Scroll of Protection
+  pman: { id: "pman", gold: 200, usable: true, abilities: ["AIm1"] }, // Potion of Mana
+  sreg: { id: "sreg", gold: 100, usable: true, abilities: ["AIsl"] }, // Scroll of Regeneration
+  prep: { id: "prep", gold: 100, usable: true, abilities: ["AIp1"] }, // Replenishment Potion
   bspd: { id: "bspd", gold: 250, usable: false, abilities: ["AIms"] }, // Boots of Speed — passive
 };
-// And the ability rows' `target`, which is the whole of how an item is AIMED (items.ts `aim`).
+// The ability rows: the `target` that is the whole of how an item is AIMED (items.ts `aim`), the
+// base `code` that decides what pressing it is FOR (items.ts `USE_OF`), and — for the one code
+// that is four different items — the columns that tell them apart (items.ts `regenUse`).
+//
+// **`alias` and `code` are DIFFERENT, and this stub used to pretend they were not.** Every row
+// below is `AbilityData.slk`'s own pair, and the reason to spell them out is the bug this file
+// failed to catch: `USE_OF` was keyed on the aliases, `useOf` looks a card up by `code`, and a
+// stub that set `code` to the alias made all of it agree with itself while the real game could
+// press none of it. An AI that had bought a Potion of Healing, a Potion of Mana, a Healing Salve
+// and a Clarity Potion could use no single one of the four.
+const lvl = (o = {}) => ({ area: 0, castRange: 0, duration: 0, data: [NaN, NaN], ...o });
 const ABILS = {
-  AItp: { code: "AItp", target: "point" }, // click anywhere; the nearest hall answers
-  AIh1: { code: "AIh1", target: "" },
-  AIvl: { code: "AIvl", target: "" },
-  AIha: { code: "AIha", target: "" }, // Area1 600 — the area, not a click
-  AIrl: { code: "AIrl", target: "unit" }, // the one regeneration item you point at somebody
-  AIpr: { code: "AIpr", target: "" },
-  AIda: { code: "AIda", target: "" },
-  AIms: { code: "AIms", target: "" },
+  // alias   code            what the row carries
+  AItp: { code: "AItp", target: "point", levelData: [lvl({ area: 1100, castTime: 5 })] },
+  AIh1: { code: "AIhe", target: "", levelData: [lvl({ castRange: 100, data: [250, NaN] })] },
+  AIm1: { code: "AIma", target: "", levelData: [lvl({ castRange: 100, data: [150, NaN] })] },
+  AIvl: { code: "AIvu", target: "", levelData: [lvl({ duration: 7 })] },
+  AIha: { code: "AIha", target: "", levelData: [lvl({ area: 600, data: [250, NaN] })] },
+  // The `AIrg` family — one code, four answers, each read off its own row.
+  AIrl: { code: "AIrg", target: "unit", levelData: [lvl({ castRange: 500, duration: 45, data: [400, 0] })] },
+  AIsl: { code: "AIrg", target: "", levelData: [lvl({ area: 600, duration: 45, data: [225, 0] })] },
+  AIpr: { code: "AIrg", target: "", levelData: [lvl({ duration: 45, data: [0, 200] })] },
+  AIp1: { code: "AIrg", target: "", levelData: [lvl({ duration: 30, data: [100, 25] })] },
+  AIda: { code: "AIda", target: "", levelData: [lvl()] },
+  AIms: { code: "AIms", target: "", levelData: [lvl()] },
 };
 
 let nextId = 1;
@@ -262,6 +303,50 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
 {
   const h = belt(hero({ mana: 90, maxMana: 100 }), "pclr");
   check("…and a full one does not", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+}
+
+// --- the alias/code trap: everything it BUYS, it can press ---------------------------------------
+// The reported bug in one line: "orc is not able to use healing salves (it buys them though)".
+// It was not the salve — `USE_OF` was keyed on ALIASES and `useOf` looks a card up by `code`, so
+// most of the shopping list was unreachable. One case per shop row, so a future re-key of the
+// table cannot quietly take one of them out again.
+{
+  const h = belt(hero(), "hslv");
+  const wounded = unit({ hp: 200, maxHp: 1000, x: 150 });
+  const cmd = pressed([h, wounded], PLUS_INSANE, AWAY);
+  check("the Healing Salve (AIrl → AIrg, Rng1) reaches a hurt soldier", itemOf(cmd), 0);
+  check("…aimed at that unit", cmd && cmd.targetId, wounded.id);
+}
+{
+  // …and out of a FIGHT, which is where a 45-second pour is actually worth spending — the job
+  // the shopping list says it bought them for ("between creep camps").
+  const h = belt(hero(), "hslv");
+  const wounded = unit({ hp: 200, maxHp: 1000, x: 150 });
+  check("…with nothing attacking, which is when a 45s pour is worth it",
+    itemOf(pressed([h, wounded], PLUS_INSANE, AWAY)), 0);
+}
+{
+  const h = belt(hero(), "sreg");
+  const hurt = [1, 2, 3].map((i) => unit({ hp: 300, maxHp: 1000, x: 100 * i }));
+  const cmd = pressed([h, ...hurt], PLUS_INSANE, AWAY);
+  check("the Scroll of Regeneration (AIsl → AIrg, Area1 600) reads as an AREA heal", itemOf(cmd), 0);
+  check("…fired on the hero, not pointed at anybody", cmd && cmd.targetId, 0);
+}
+{
+  const h = belt(hero({ mana: 10, maxMana: 100 }), "pman");
+  check("the Potion of Mana (AIm1 → AIma) is drunk", itemOf(pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
+}
+{
+  const h = belt(hero({ hp: 400 }), "prep");
+  check("a Replenishment Potion (AIp1 → AIrg, no area, no range) is a heal on the drinker",
+    itemOf(pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
+}
+{
+  // The other half of `regenUse`: the same code, mana only, must NOT read as a heal — a mana
+  // item pressed as a heal is pressed at the wrong moment.
+  const h = belt(hero({ hp: 400, mana: 100, maxMana: 100 }), "pclr");
+  check("…and a Clarity Potion (same code, mana only) is not drunk by a hurt, full-mana hero",
+    pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
 }
 
 // --- refusals ----------------------------------------------------------------------------------
