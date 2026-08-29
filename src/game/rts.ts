@@ -804,6 +804,7 @@ export class RtsController {
       world: this.sim,
       registry: this.registry,
       abilities: this.abilities,
+      items: this.items,
       tech: this.tech,
       upgrades: this.upgrades,
       execute: (player, cmd) => this.execute(player, cmd),

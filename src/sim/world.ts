@@ -3077,6 +3077,19 @@ export class SimWorld {
     return Math.hypot(u.x - shop.x, u.y - shop.y) <= this.shopRadius(shop.typeId) + shop.radius;
   }
 
+  /** Is this unit standing close enough to that shop to take delivery?
+   *
+   *  The same test `purchaseItem` applies, exposed because a caller may need to WALK somebody
+   *  into range first and cannot otherwise know how far that is: the reach is the shop's own
+   *  interact ability (`Aneu`/`Aall`, 450 or 600 — see `shopInteract`), not a constant, so
+   *  guessing it means guessing which shop. Computer+ asks this before it orders a hero across
+   *  the map to buy a potion (src/ai/plus/items.ts). */
+  shopReaches(shopId: number, unitId: number): boolean {
+    const shop = this.units.get(shopId);
+    const u = this.units.get(unitId);
+    return !!shop && !!u && this.inShopRange(shop, u);
+  }
+
   /** The requirements `player` has NOT met for `itemId` AT THIS SHOP — the red "Requires:" line,
    *  and the gate on the purchase itself.
    *

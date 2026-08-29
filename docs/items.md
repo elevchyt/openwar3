@@ -185,4 +185,5 @@ And two deliberate simplifications, both noted at their handler:
 - [`abilities-audit.md`](./abilities-audit.md) — the generated coverage table (`pnpm data:audit`)
 - [`wc3-data-formats.md`](./wc3-data-formats.md) — where `ItemData.slk` / `ItemFunc.txt` /
   `ItemStrings.txt` / `ItemAbilityFunc.txt` live
-- [`computer-plus.md`](./computer-plus.md) § "Items: not yet" — the AI half, still to come
+- [`computer-plus.md`](./computer-plus.md) § "Items: buying them, and pressing them" — the AI half:
+  which button Computer+ presses and when, and what it buys

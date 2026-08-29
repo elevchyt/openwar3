@@ -1,5 +1,6 @@
 import type { Command } from "../game/commands";
 import type { AbilityRegistry } from "../data/abilities";
+import type { ItemRegistry } from "../data/items";
 import type { UnitDef, UnitRegistry } from "../data/units";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
@@ -53,6 +54,11 @@ export interface AiHost {
    *  off (src/ai/casting.ts). The sim keeps its own copy privately, so the caster is handed
    *  the registry rather than digging for it. */
   abilities: AbilityRegistry;
+  /** Every ITEM's row — cost, charges, and the ability ids it grants. Handed in for the same
+   *  reason `abilities` is: an item's behaviour is not in the item, it is the ability in its
+   *  `abilList` (docs/items.md), so shopping and pressing both need this and the ability
+   *  registry together. Only Computer+ reads it (src/ai/plus/items.ts). */
+  items: ItemRegistry;
   tech: TechRegistry;
   upgrades: UpgradeRegistry;
   /** The one door out: every AI decision is a player command, judged by the authority. */

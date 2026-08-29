@@ -9,6 +9,7 @@ import {
   CONCEDE_NOT_BEFORE, CONCESSIONS, GREETINGS, GREET_AT, GREET_STAGGER, LEAVE_AFTER, hopeless,
   type Standing,
 } from "./chatter";
+import { PlusItems, type ItemCtx } from "./items";
 import { buildPlan, harvestPlan, type PlusCtx } from "./plan";
 import { plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, heroKillable, killValue } from "./targeting";
@@ -112,19 +113,64 @@ const HERO_CHASE = 700;
 /** When the scout goes out, and how close to a waypoint counts as having looked at it. */
 const SCOUT_AT = 60;
 const SCOUT_ARRIVED = 400;
-/** How many gold mines it checks after the enemy's main before coming home. */
-const SCOUT_LEGS = 3;
+/**
+ * How far off the enemy's town centre the scout STOPS.
+ *
+ * A scout looks at a base; it does not walk into one. Aiming leg 0 at the base's own centre
+ * (which is what this used to do) marches a lone worker through the front door, past the
+ * towers and into the army — it dies, and `scoutDone` latches, so that one walk is the whole
+ * of what the AI ever learns. Standing off instead sees the same thing and comes back: a
+ * worker's day sight is 1400+ and a melee start location's buildings sit well inside 900, so
+ * from here the whole base is inside the scout's own vision (`AiPlayer.knows` is exactly
+ * that — see the fog note on `scoutPass`).
+ *
+ * It is also what a player does, and for the same reason.
+ */
+const SCOUT_STANDOFF = 900;
+/** Radians between the stops it makes AROUND the base. Roughly 63 degrees, so three stops
+ *  sweep an arc of about 126 and a base is looked at from three sides rather than one. */
+const SCOUT_ARC = 1.1;
+/** Stops on the standoff ring before the tour moves on to the gold mines. */
+export const SCOUT_RING_LEGS = 3;
 
-// ITEMS — Computer+ does not buy or use any, and no code path here reaches one. Not an
-// oversight: see docs/computer-plus.md "Items: not yet, and what goes here when they land",
-// which names the seams (`buyitem` / `useitem`), the Goblin Merchant's own `Sellitems` line and
-// the shopping list, and the two gates to check first (item abilities are not in
-// `SimUnit.abilities`; item gold is gold `OneBuildLoop` was reserving). The item side of the
-// sim is still being filled in, and an AI built against half an inventory would encode the half.
+/**
+ * Where leg `leg` of the ring puts the scout: a point `SCOUT_STANDOFF` from the enemy town
+ * centre, never the centre itself.
+ *
+ * The first stop is on the bearing the scout is already coming from (our home), because that is
+ * the side it reaches first and walking round to a far side to begin is a walk past the whole
+ * base. The next two step off it by `SCOUT_ARC` either way, so the base is looked at from three
+ * sides without the scout ever being inside it.
+ *
+ * Pure, and exported, so the one thing that actually matters about it — that every stop is
+ * OUTSIDE the base — is pinned by a test rather than by reading it (tools/ai-plus-items-test).
+ */
+export function scoutRing(
+  base: { x: number; y: number },
+  home: { x: number; y: number },
+  leg: number,
+): { x: number; y: number } {
+  const approach = Math.atan2(home.y - base.y, home.x - base.x);
+  const a = approach + (leg === 0 ? 0 : leg === 1 ? SCOUT_ARC : -SCOUT_ARC);
+  return { x: base.x + Math.cos(a) * SCOUT_STANDOFF, y: base.y + Math.sin(a) * SCOUT_STANDOFF };
+}
+/** Total legs: the ring, then the gold mines nearest the enemy (where an expansion would be),
+ *  then home. */
+const SCOUT_LEGS = SCOUT_RING_LEGS + 2;
+
+// ITEMS live in plus/items.ts, not here — an item ability is not in `SimUnit.abilities` (it
+// hangs off the inventory slot and dispatches through `useItem`), so neither this file's army
+// manager nor plus/casting.ts's ability walk can see one. What this file owns is the CONTEXT the
+// belt cannot know for itself: where home is, whether the army has decided it is losing, and
+// whether a hero may walk off to a shop right now — see `itemCtx`.
 
 /** Creep camps: the window `AiPlayer.creepCamp` is asked for, derived from the army's food the
  *  way the race scripts derive theirs from `force_level` — four fifths of it, less ten. */
 const CREEP_WINDOW = 10;
+/** Hit-point fraction the CAPTAIN must have before the party goes to the next camp. A hero
+ *  that walks into a second camp on a third of its life is a hero the camp kills, and a dead
+ *  hero is the most expensive thing on a melee map. It heals up at home first. */
+const CREEP_HEALTH = 0.65;
 /** …and the hero level past which creeping stops being worth the walk. */
 const CREEP_UNTIL_LEVEL = 5;
 
@@ -137,6 +183,10 @@ interface Brain {
   /** The build it rolled at seat time and plays for the whole match (plus/races.ts). */
   readonly strategy: PlusStrategy;
   readonly caster: PlusCaster;
+  /** What it buys and what it drinks (plus/items.ts). Separate from the caster because an item
+   *  ability is NOT in `SimUnit.abilities` — it hangs off the inventory slot and dispatches
+   *  through `useItem` — so the caster's ability walk cannot see one (docs/items.md). */
+  readonly items: PlusItems;
   /** What it has seen of the enemy army, and the read taken off it — the input to countering
    *  (plus/counter.ts). Refreshed on the army pass, since that is when it is looking anyway. */
   readonly memory: EnemyMemory;
@@ -173,6 +223,9 @@ interface Brain {
   /** When the position first looked unwinnable (-1 = it doesn't). */
   hopelessSince: number;
   /** When it said gg (-1 = it hasn't). It leaves LEAVE_AFTER seconds later. */
+  /** Is the wave in the field a CREEPING party rather than an attack? The two end on
+   *  different terms — a creep run is over the moment the captain is gone (see `attacking`). */
+  creeping: boolean;
   concededAt: number;
   gone: boolean;
 }
@@ -217,6 +270,21 @@ export class ComputerPlusAi {
         // The AI's OWN random stream, so a misclick (`PlusProfile.castMistake`) is as
         // deterministic as every other decision it takes.
       }, profile, () => ai.randomInt(0, 9999) / 10000),
+      items: new PlusItems({
+        world: this.host.world,
+        player,
+        def: (id) => this.host.abilities.get(id),
+        hostile: (u) => ai.hostileTo(u),
+        order: (cmd) => ai.order(cmd),
+        item: (id) => this.host.items.get(id),
+        // A shop's shelf from the buyer's side: `Makeitems` is a race shop's and `Sellitems` a
+        // neutral one's, and nothing that shops cares which column it came out of.
+        wares: (typeId) => {
+          const t = this.host.tech.get(typeId);
+          return [...t.makeitems, ...t.sellitems];
+        },
+        gold: () => ai.gold(),
+      }, profile),
       clock: 0,
       // Staggered across the interval, so twelve computers never all think on one frame.
       buildIn: profile.buildPeriod * (1 + player / 12),
@@ -236,6 +304,7 @@ export class ComputerPlusAi {
       threatSince: -1,
       greeted: false,
       hopelessSince: -1,
+      creeping: false,
       concededAt: -1,
       gone: false,
     });
@@ -297,6 +366,17 @@ export class ComputerPlusAi {
         b.caster.pass(b.clock);
         simProfile.end("sim.ai.cast");
         simProfile.gauge("aiCastPass", perfNow() - t0);
+        // The BELT, on the same clock as the buttons — it is the same kind of decision, and a
+        // hero whose spells and whose potions were considered at different rates would drink
+        // late in exactly the fights its casting is fast enough for. Its own span (and its own
+        // `worst` gauge) because it also does the shopping, which is a walk rather than a
+        // press and costs something quite different — see docs/perf-logging.md on why a pass
+        // that fires on its own period needs a maximum and not only a mean.
+        simProfile.begin("sim.ai.items");
+        const t1 = perfNow();
+        b.items.pass(b.clock, this.itemCtx(b));
+        simProfile.end("sim.ai.items");
+        simProfile.gauge("aiItemPass", perfNow() - t1);
       }
       if ((b.mannersIn -= dt) <= 0) {
         b.mannersIn = MANNERS_PERIOD;
@@ -321,6 +401,29 @@ export class ComputerPlusAi {
     ai.runBuildLoop();
     ai.spendSkillPoints();
     ai.entangleMines(); // the night elf's gold, which is a cast rather than a build order
+  }
+
+  /**
+   * What the belt needs to know that only the army manager does.
+   *
+   * `losing` is the manager's OWN read rather than a second opinion — it is the retreat it has
+   * already decided on. That matters: a Town Portal and a walk home are one decision, and a
+   * hero that judged the fight separately would scroll out of fights the army was winning, or
+   * stay in ones it had already given up on.
+   *
+   * `mayShop` is false whenever there is a wave in the field, which is what keeps the errand
+   * off the battlefield: a hero is only ever sent to a shop from the muster point.
+   */
+  private itemCtx(b: Brain): ItemCtx {
+    return {
+      home: b.ai.home(),
+      // Either the group is walking home broken, or this wave is already over and what is left
+      // of it is standing in somebody else's base.
+      losing: b.mode === "retreating",
+      // MASSING only. "Defending" is the base under attack, which is the one moment a hero
+      // walking off to buy a potion is worse than having no potion at all.
+      mayShop: b.mode === "massing",
+    };
   }
 
   /** The world as the plan reads it, assembled once per pass. */
@@ -493,18 +596,26 @@ export class ComputerPlusAi {
     b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", x: goal.x, y: goal.y }, queued: false });
   }
 
-  /** Leg 0 is the enemy's main base (map data every melee player is handed); the rest are the
-   *  gold mines nearest to it, which is where an expansion would be. */
+  /**
+   * The tour: around the OUTSIDE of the enemy's main base, then the gold mines nearest to it.
+   *
+   * The first `SCOUT_RING_LEGS` legs are points on a ring of `SCOUT_STANDOFF` about the base's
+   * centre — never the centre itself, which is the middle of somebody's army. The first is on
+   * the bearing the scout is already coming from (our home), because that is the side it
+   * reaches first and walking round to a far side to begin is a walk past the whole base; the
+   * next two step off it by `SCOUT_ARC` either way, so the base is looked at from three sides.
+   * Then the mines, which is where an expansion would be.
+   */
   private scoutWaypoint(b: Brain): { x: number; y: number } | null {
     if (b.scoutLeg > SCOUT_LEGS) return null;
     const base = b.ai.enemyBase();
     if (!base) return null;
-    if (b.scoutLeg === 0) return { x: base.x, y: base.y };
     const home = b.ai.home();
+    if (b.scoutLeg < SCOUT_RING_LEGS) return scoutRing(base, home, b.scoutLeg);
     const mines = [...this.host.world.mines.values()]
       .filter((m) => m.gold > 0 && Math.hypot(m.x - home.x, m.y - home.y) > TOWN_RADIUS)
       .sort((p, q) => Math.hypot(p.x - base.x, p.y - base.y) - Math.hypot(q.x - base.x, q.y - base.y));
-    const mine = mines[b.scoutLeg - 1];
+    const mine = mines[b.scoutLeg - SCOUT_RING_LEGS];
     return mine ? { x: mine.x, y: mine.y } : null;
   }
 
@@ -547,23 +658,66 @@ export class ComputerPlusAi {
     const { profile } = b;
     const rally = this.rally(b);
     for (const u of this.squadUnits(b)) {
+      // A hero walking to a shop is left alone. The errand is only re-issued every SHOP_PERIOD,
+      // so a rally order in between would send it back and it would arrive at neither.
+      if (u.id === b.items.errand) continue;
       if (Math.hypot(u.x - rally.x, u.y - rally.y) <= RALLY_SLACK) continue;
       if (u.order === "move" || u.order === "attack") continue;
       b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: rally.x, y: rally.y }, queued: false });
     }
+    // Creeping is NOT an attack and does not wait behind the attack's clocks — see
+    // `PlusProfile.creepAt` for what waiting behind them did to it.
+    if (this.creepRun(b)) return;
     if (b.clock < profile.firstAttack) return;
     if (b.clock - b.lastWaveEnd < profile.waveGap) return;
     if (this.squadFood(b) < profile.attackFood) return;
     const target = this.pickTarget(b);
     if (!target) return;
     b.target = target;
+    b.creeping = false;
     this.setMode(b, "attacking");
     this.commit(b, target.x, target.y);
+  }
+
+  /**
+   * Take the hero creeping.
+   *
+   * Everything here is a gate on the CAPTAIN, because that is what the run is for: a creep camp
+   * is experience, and experience goes on the hero. A party without one is a party trading
+   * soldiers for nothing, which is the state this used to reach whenever the hero was dead or
+   * still in the altar — so `squadHero` is required rather than merely preferred, and the run
+   * ends the moment it is gone (`attacking`). It also refuses to start on a hurt hero: a camp
+   * entered at a third life is a dead hero, and a dead hero is the most expensive thing on a
+   * melee map. It heals at home and goes again.
+   *
+   * `creepCamp`'s window is the army's own food, exactly as the wave's is — the AI picks a
+   * camp it can handle rather than the nearest one.
+   */
+  private creepRun(b: Brain): boolean {
+    const { ai, profile } = b;
+    if (!profile.creeps || b.clock < profile.creepAt) return false;
+    const hero = this.squadHero(b);
+    if (!hero || hero.level >= CREEP_UNTIL_LEVEL) return false;
+    if (hero.hp / Math.max(1, hero.maxHp) < CREEP_HEALTH) return false;
+    const food = this.squadFood(b);
+    if (food < profile.creepFood) return false;
+    const max = Math.floor((food * 4) / 5);
+    const camp = ai.creepCamp(Math.max(0, max - CREEP_WINDOW), max, this.hasAir(b));
+    if (!camp) return false;
+    b.target = { id: 0, x: camp.x, y: camp.y };
+    b.creeping = true;
+    this.setMode(b, "attacking");
+    this.commit(b, camp.x, camp.y);
+    return true;
   }
 
   /** On the way, and once there. */
   private attacking(b: Brain): void {
     if (!b.squad.size) return void this.endWave(b);
+    // A creep run is FOR the hero, so it is over the moment the hero is not in it — dead, or
+    // pulled home by something else. Carrying on would be trading soldiers for experience
+    // nobody is left to collect.
+    if (b.creeping && !this.squadHero(b)) return void this.endWave(b);
     if (b.profile.retreatHp > 0 && this.readiness(b) < b.profile.retreatHp) {
       this.setMode(b, "retreating");
       return;
@@ -713,10 +867,17 @@ export class ComputerPlusAi {
         return { id: foe.id, x: foe.x, y: foe.y };
       }
     }
-    if (profile.creeps && this.heroLevel(b) < CREEP_UNTIL_LEVEL) {
+    // The same rule `creepRun` states: no captain, no creeping. Reached when a wave is being
+    // aimed rather than when a creep run is being started, and it must agree with it — an army
+    // sent to a camp from here without a hero is the very thing `creepRun` refuses to do.
+    const captain = this.squadHero(b);
+    if (profile.creeps && captain && captain.level < CREEP_UNTIL_LEVEL) {
       const max = Math.floor((this.squadFood(b) * 4) / 5);
       const camp = ai.creepCamp(Math.max(0, max - CREEP_WINDOW), max, this.hasAir(b));
-      if (camp) return { id: 0, x: camp.x, y: camp.y };
+      if (camp) {
+        b.creeping = true;
+        return { id: 0, x: camp.x, y: camp.y };
+      }
     }
     const expansion = ai.enemyExpansion();
     if (expansion && !ai.isTowered(expansion)) return { id: expansion.id, x: expansion.x, y: expansion.y };
@@ -726,6 +887,7 @@ export class ComputerPlusAi {
 
   private endWave(b: Brain): void {
     b.target = null;
+    b.creeping = false;
     b.lastWaveEnd = b.clock;
     this.setMode(b, "massing");
   }
@@ -759,9 +921,16 @@ export class ComputerPlusAi {
     return food;
   }
 
-  private heroLevel(b: Brain): number {
-    let best = 0;
-    for (const u of this.squadUnits(b)) if (u.isHero) best = Math.max(best, u.level);
+  /** The CAPTAIN — our hero in the group, if one is in it and alive. Every creeping decision
+   *  is gated on this: a creep camp is experience, and experience goes on a hero. */
+  private squadHero(b: Brain): SimUnit | null {
+    let best: SimUnit | null = null;
+    for (const u of this.squadUnits(b)) {
+      if (!u.isHero || u.hp <= 0) continue;
+      // The highest-level one leads: it is the one the camps are being farmed for, and the one
+      // whose health decides whether the party goes at all.
+      if (!best || u.level > best.level) best = u;
+    }
     return best;
   }
 

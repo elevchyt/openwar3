@@ -164,11 +164,54 @@ export interface PlusProfile {
   readonly focusFire: boolean;
   /** Does it go and level its hero on creep camps? */
   readonly creeps: boolean;
+  /**
+   * Seconds before it will go creeping — its OWN clock, not `firstAttack`.
+   *
+   * This is the whole reason `creeps: true` used not to produce a computer that creeps.
+   * Creeping was a rung of `pickTarget`, and `pickTarget` is only reached once the wave gates
+   * have opened — `firstAttack` (300 s on Normal), `waveGap`, and `attackFood`. So a Normal
+   * computer's first creep camp came at FIVE MINUTES, by which time a ladder player has three
+   * camps and a level-4 hero, and its hero was still level 1 at the first fight.
+   *
+   * A creep camp is not an attack: it is the early game's other economy, it goes out with the
+   * hero and a couple of units rather than with a wave, and it starts about when the hero
+   * does. Hence a separate clock and a separate (much smaller) force — `creepFood`.
+   */
+  readonly creepAt: number;
+  /** Army food that makes a creeping party, as `attackFood` is for a wave. Small on purpose:
+   *  a hero and two soldiers clear a green camp, and waiting for a wave's worth is waiting
+   *  until creeping is pointless. */
+  readonly creepFood: number;
   /** In an enemy base, does it turn on the WORKERS rather than whatever swung first? */
   readonly harass: boolean;
   /** Does it send an early scout? (Only matters for finding expansions — a melee player is
    *  handed every start location, see AiPlayer.knows.) */
   readonly scout: boolean;
+
+  // --- items (plus/items.ts) ----------------------------------------------------------------
+  /**
+   * How many of a hero's six inventory slots it will fill by SHOPPING. 0 = it never shops,
+   * which is Easy: a novice knows the shop is there and forgets about it.
+   *
+   * A ceiling on the habit rather than on the wallet — `itemReserve` is the wallet — so the
+   * difference between the top two rungs is that one of them keeps a full belt.
+   */
+  readonly shopping: number;
+  /**
+   * Gold it will NOT spend on items.
+   *
+   * The gate docs/computer-plus.md warns about: item gold is gold `OneBuildLoop` was going to
+   * spend, so a shopping list needs a place in the build ladder rather than a side budget. A
+   * floor is that place expressed the only way a separate pass honestly can — the build loop
+   * still gets first call on everything below it, and the shop only ever sees the surplus a
+   * player would also be looking at. It is not a rung in the ladder, and it does not pretend
+   * to be one: it is the surplus test, stated as a number.
+   */
+  readonly itemReserve: number;
+  /** Does it keep a Scroll of Town Portal on the hero for the retreat? The clearest "this
+   *  player has played before" tell there is, and the one item that changes how a lost fight
+   *  ends — see `PlusItems.escape`. */
+  readonly keepPortal: boolean;
 
   // --- manners ------------------------------------------------------------------------------
   /** How long the position has to be hopeless before it says gg and leaves. A weaker player
@@ -203,7 +246,13 @@ export const PLUS_EASY: PlusProfile = {
   counterWeight: 0, counterSample: Infinity, counterShare: 1, counterMemory: 0,
   armyFood: 12, towers: 0, heroes: 1, techTier: 1, upgradeRank: 1,
   firstAttack: 420, waveGap: 150, attackFood: 10, retreatHp: 0,
-  focusFire: false, creeps: false, harass: false, scout: false,
+  // It never creeps and never shops, so neither clock nor purse below ever matters — the two
+  // booleans are the switch. They are still stated rather than left to a default, because a
+  // profile that only half-describes a difficulty is how one of them ends up playing another's
+  // game by accident.
+  focusFire: false, creeps: false, creepAt: Infinity, creepFood: Infinity,
+  harass: false, scout: false,
+  shopping: 0, itemReserve: Infinity, keepPortal: false,
   concedeAfter: 45,
 };
 
@@ -229,7 +278,13 @@ export const PLUS_NORMAL: PlusProfile = {
   counterWeight: 0.35, counterSample: 12, counterShare: 0.4, counterMemory: 90,
   armyFood: 30, towers: 2, heroes: 2, techTier: 2, upgradeRank: 2,
   firstAttack: 300, waveGap: 90, attackFood: 14, retreatHp: 0.35,
-  focusFire: false, creeps: true, harass: false, scout: true,
+  // Creeps from two and a half minutes with the hero and ten food behind it — about a hero, a
+  // couple of soldiers and whatever else is standing around, which is what clears a green camp.
+  focusFire: false, creeps: true, creepAt: 150, creepFood: 10,
+  harass: false, scout: true,
+  // Half a belt, and it keeps 300 gold back for the build order. No Town Portal habit: it buys
+  // one when it is flush, but it does not plan around having one.
+  shopping: 3, itemReserve: 300, keepPortal: false,
   concedeAfter: 30,
 };
 
@@ -255,7 +310,13 @@ export const PLUS_INSANE: PlusProfile = {
   counterWeight: 1, counterSample: 6, counterShare: 0.25, counterMemory: 240,
   armyFood: UPKEEP_TIER2, towers: 4, heroes: 3, techTier: 3, upgradeRank: 3,
   firstAttack: 150, waveGap: 30, attackFood: 16, retreatHp: 0.4,
-  focusFire: true, creeps: true, harass: true, scout: true,
+  // Creeping starts at ninety seconds with the hero and eight food — the ladder's own answer,
+  // which is "as soon as the hero walks out of the altar".
+  focusFire: true, creeps: true, creepAt: 90, creepFood: 8,
+  harass: true, scout: true,
+  // A full belt and a Town Portal on the hero. Both are what separates a player who has been
+  // here before from one who has not.
+  shopping: 6, itemReserve: 200, keepPortal: true,
   concedeAfter: 20,
 };
 

@@ -55,6 +55,7 @@ its buildings and upgrades are derived — a build cannot be inconsistent with i
 | Difficulty | 40 `!= MELEE_NEWBIE` guards scattered across five files, plus two engine cheats | one table, [`profile.ts`](../src/ai/plus/profile.ts) |
 | Army | `common.ai`'s captain: a muster list, one wave at a time | one group, food-capped at production, with defend/attack/retreat states |
 | Spells | one hiveworkshop thread, transcribed ([`casting.ts`](../src/ai/casting.ts)) | roles + a priority ladder + target value ([`plus/casting.ts`](../src/ai/plus/casting.ts)) |
+| Items | none | shops, and presses what it carries |
 | Manners | none | glhf, gg, and it leaves |
 | Library / natives | [`aiPlayer.ts`](../src/ai/aiPlayer.ts) | **the same file** |
 
@@ -79,6 +80,15 @@ That is also why Computer+ has a **scout** and the classic AI does not: with no 
 walking a worker past the enemy's base is the only way it can ever learn about an expansion
 (`AiPlayer.enemyExpansion` is gated on `knows`). One worker, one tour, not replaced when it dies.
 
+The tour goes **around** that base, never into it — `scoutRing`, three stops on a ring of
+`SCOUT_STANDOFF` about the enemy's town centre, starting on the side the scout is already coming
+from and stepping off it either way, then the gold mines nearest them. Aiming the first leg at
+the town centre (which is what it used to do) marches a lone worker through the front door, past
+the towers and into the army: it dies, `scoutDone` latches because nobody follows a scout that
+did not come back, and that one walk is the whole of what the AI ever learns about the map. A
+worker's day sight is 1400+ and a melee start's buildings sit well inside 900, so standing off
+sees the same thing and comes home. It is also what a player does, and for the same reason.
+
 ## The difficulties, and what each one gives up
 
 Everything below is in [`profile.ts`](../src/ai/plus/profile.ts). **None of it is Warcraft III's**
@@ -99,13 +109,32 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | upgrade rank | 1 | 2 | 3 |
 | first attack | 7 min | 5 min | 2½ min |
 | army food that makes a wave | 10 | 14 | 16 |
+| **first creep camp** | **never** | 2½ min | 1½ min |
+| army food that makes a creeping party | — | 10 | 8 |
 | retreats a broken army | **no** | at 35 % | at 40 % |
 | focus-fires / creeps / raids workers | no / no / no | no / yes / no | yes / yes / yes |
+| belt slots it shops for | **0** | 3 | 6 |
+| gold it keeps back from the shop | — | 300 | 200 |
+| keeps a Town Portal | no | no | **yes** |
 | spell roles it uses | heal, nuke, summon, morph | + panic, disable, buff | all nine |
 | **aims at** | the **biggest body** (`naive`) | what a unit **is** (`sound`) | + what the **spell is for** (`expert`) |
 | misclicks a cast | 35 % | 15 % | never |
 | hero focus | 0.3 | 0.7 | 1 |
 | builds it can roll | tier-1 only | tier ≤ 2 | all of them |
+
+Note the creep row, because it is the one line in this table that was a *bug* rather than a
+setting. `creeps: true` did not use to produce a computer that creeps: creeping was a rung of
+`pickTarget`, and `pickTarget` sits behind the WAVE gates — `firstAttack`, `waveGap` and
+`attackFood` — so a Normal computer's first creep camp came at **five minutes**, by which time a
+ladder player has three camps and a level-4 hero. Creeping is not an attack: it is the early
+game's other economy, it goes out with the hero and a couple of soldiers rather than with a wave,
+and it starts about when the hero does. Hence `creepAt` and `creepFood`, which are its own.
+
+The party never goes without the **captain**, either. A creep camp is experience and experience
+goes on a hero, so `squadHero` gates the run, and the run ends the moment the hero is gone —
+without that the army creeps on alone, trading soldiers for experience nobody is left to collect.
+It also refuses to start on a hero below `CREEP_HEALTH`: a camp entered at a third life is a dead
+hero, and a dead hero is the most expensive thing on a melee map.
 
 Read the Easy column as a description of a player: it makes eight workers and six food of
 tier-1 soldiers, never expands, never towers, never leaves its Town Hall, comes to find you
@@ -326,60 +355,75 @@ This is a Computer+ rule only. `src/ai/casting.ts` and `src/ai/index.ts` are a t
 Blizzard's AI, warts included (`docs/melee-ai.md`), and this is one of the warts — fixing it
 there would be un-fixing the port.
 
-### Items: not yet, and what goes here when they land
+### Items: buying them, and pressing them
 
-**Computer+ does not touch items at all today**, and that is a deliberate hole rather than an
-oversight: the item side of the sim is still being filled in, and an AI built against a
-half-implemented inventory would encode the half. Nothing in `src/ai/plus/` reads
-`SimUnit.inventory`, buys from a shop, or presses an item — a Computer+ hero picks up what it
-walks over and never drinks it.
+Computer+ shops and drinks. It lives in [`plus/items.ts`](../src/ai/plus/items.ts), separately
+from the caster, and the reason it has to is the first of the two gates this section used to warn
+about: **item abilities are not in `SimUnit.abilities`**. They hang off the inventory slot and
+dispatch through `useItem`, so the caster's ability walk cannot see one — it is a second walk, not
+more rows in the caster's table.
 
-The *effects* half has since landed (issue #130, [`items.md`](./items.md)): every item ability
-in the game is now dispatched, a pressed item reaches whoever its own `Area1` says it reaches,
-and a carried one feeds the passive derivations. What is still missing here is the AI's own
-half — going to a shop, choosing, and pressing.
-
-The seams it will use already exist and are the same ones a player's click goes through, so when
-the items land this is additive:
+Everything goes through the doors a player's click goes through, and there is no item path here a
+human does not have:
 
 | What | The door |
 | --- | --- |
 | buy | `Command` `{ c: "buyitem", shopId, itemId }` → `SimWorld.purchaseItem` |
 | use | `Command` `{ c: "useitem", unitId, slot, targetId, x, y }` → `SimWorld.useItem` |
 | may it | `SimWorld.itemReadyError` / `itemUseError` — the click-time gates, exactly as `castUseError` / `castError` are for a spell |
-| what is in stock | `TechRegistry`'s `makeitems` (a race shop: Arcane Vault, Voodoo Lounge) and `sellitems` (a neutral one: Goblin Merchant, Marketplace), plus `SimWorld.shopStock` |
-| who may hold it | `SimWorld` patron rules — a patron needs an inventory, which in melee means a hero |
+| what is in stock | `TechRegistry`'s `makeitems` / `sellitems`, plus `SimWorld.shopStock` and the shop's own `building.stock` (a Marketplace's shelf is the map's, not the game's) |
+| may this hero take delivery | `SimWorld.shopReaches` — the same test `purchaseItem` applies, exposed so a caller can walk somebody into range first |
 
-What it should do, in the order it matters:
+**What it presses** is a `Use` ladder in the shape of the caster's `Role` one — *escape, panic,
+healSelf, healArea, healOther, mana, buff* — and it is keyed on the item's **ability code**, never
+on the item id, because an item's behaviour is not in the item ([`items.md`](./items.md)). One
+entry therefore covers a Potion of Healing bought at a Vault and the same potion picked up off a
+dead ogre. Anything unlisted is carried and never pressed, which is the safe direction to be wrong
+in.
 
-* **Buy from a Goblin Merchant / Marketplace when one is on the map**, and from its own race shop
-  once that is up. The Goblin Merchant's stock is not a guess — it is one line of
-  `Units\NeutralUnitFunc.txt`, `[ngme] Sellitems=stwp,bspd,dust,tret,prvt,cnob,stel,pnvl,shea,spro,pinv`
-  — so a shopping list is a preference order over *that*; the Marketplace's stock is the map's
-  rather than the game's (`[nmrk]` carries no `Sellitems` at all) and has to be read off the shop
-  at run time. The list itself is the standard ladder one and belongs beside the strategy table
-  rather than in the difficulty: a **Scroll of Healing** (`shea`) early, a **Scroll of Town
-  Portal** (`stwp`) as soon as it can afford one, **Boots of Speed** (`bspd`) on the hero that
-  needs to be somewhere, a **Potion of Lesser Invulnerability** (`pnvl`) for a hero it expects to
-  lose, and the tomes with gold it cannot spend. (Watch the near-homographs: `pinv` is Potion of
-  *Invisibility*, `pnvu` Potion of Invulnerability, `pnvl` the Lesser one the Merchant actually
-  stocks.)
-* **Press them.** A healing potion is a `panic`/`heal` role and slots straight into the caster's
-  existing ladder; a Town Portal is the retreat the army manager already decides on
-  (`mode === "retreating"`); a Scroll of Healing is an area heal aimed by the same `pickSpot`.
-* **Difficulty grades it the way it grades everything else** — Easy buys almost nothing and
-  drinks late, Insane keeps a Town Portal on every hero. Those numbers go in `PlusProfile`
-  beside `castTargeting`, and like every number there they are **ours**.
+**Aiming is not a table.** It is the item's own ability `target`, read exactly as
+`RtsController.useInventorySlot` reads it to decide whether your click needs a second one: a
+Healing Salve wants a unit, a Town Portal wants a point, and every potion in the game fires on the
+press with its row's `Area1` deciding who it reaches. That is the same three-way split the items
+doc opens with.
 
-Two gates to check before writing any of it: item abilities are **not** in `SimUnit.abilities`
-(they hang off the inventory slot and dispatch through `useItem`), so the caster's ability walk
-will not find them; and gold spent on items is gold `OneBuildLoop` was reserving, so a shopping
-list needs a place in the build ladder rather than a side budget.
+**The Town Portal is the retreat, in one press.** It fires on the army manager's own `losing`
+read rather than on a second opinion of its own — `mode === "retreating"` — so the scroll and the
+walk home are one decision instead of two that disagree, and it is aimed at **home** rather than
+at the fight, because `itemTownPortal` teleports the party to the hall nearest the *clicked*
+point. It takes the group standing around the hero with it, so it saves the army and not just the
+hero. Never from the doorstep of its own base, where it would be spent to travel no distance.
 
-There is one button on a BUILDING, and it is very human: **Call to Arms**. `Amic` is the Human
-town bell, and it is the answer to "something is in my base and my army is somewhere else" —
-which is the situation an AI is worst at. Rung only when the raiders outnumber whatever is home,
-and never on Easy.
+**The shopping list** is [`items.ts`](../src/ai/plus/items.ts)'s `LIST`, and it belongs beside the
+strategy rather than in the difficulty for the same reason the expansion clock does: *what* to buy
+is what a melee player buys, not how good they are. Every id on it was read off a real shop row —
+`[ngme] Sellitems` for the Goblin Merchant, `Makeitems` for the four race shops — and all four
+race shops sell `phea`/`pman`/`stwp`, which is why those anchor it. (Watch the near-homographs:
+`pinv` is Potion of *Invisibility*, `pnvu` Potion of Invulnerability, and `pnvl` the *Lesser* one
+that is what the Merchant actually stocks.)
+
+A purchase needs the buyer **standing at the shop**, and the sim adopts whoever is in range as the
+patron by itself (`tickShopBuyers`) — so the whole of "select this hero as the buyer" is walking it
+there, exactly as it is for a player. That walk only ever starts while the army is massing, so the
+errand never pulls the captain out of a fight.
+
+**The difficulty grades it** the way it grades everything else, and those numbers are **ours**:
+`shopping` is how many belt slots it fills (Easy 0 — a novice knows the shop is there and forgets
+about it), `itemReserve` is gold it will not part with, and `keepPortal` is whether it plans around
+having a scroll (Insane only, which puts the Town Portal at the top of its list rather than the
+bottom).
+
+`itemReserve` is also the answer to the second gate this section used to warn about — item gold is
+gold `OneBuildLoop` was going to spend. A floor is the only way a separate pass can honestly give
+the build ladder first call: the shop sees the surplus and nothing else. It is not a rung in the
+ladder and does not pretend to be one.
+
+Still not touched: **Kelen's Dagger of Escape** (`AIbk`), a point-target blink that needs a
+decision about *where* the aiming above does not make — it is a drop, never shop stock, so it
+waits. And there is one button on a BUILDING which is very human: **Call to Arms**. `Amic` is the
+Human town bell, and it is already rung by [`plus/casting.ts`](../src/ai/plus/casting.ts)
+`townBell` — the answer to "something is in my base and my army is somewhere else", and never on
+Easy.
 
 ## Manners: glhf, gg, and leaving
 
