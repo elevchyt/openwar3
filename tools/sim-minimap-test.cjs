@@ -41,7 +41,7 @@ const unit = (o) => ({
 function worldOf(units) {
   const m = new Map();
   for (const u of units) m.set(u.id, u);
-  return { units: m, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], teamDetects: () => false };
+  return { units: m, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
 }
 
 console.log("the minimap answers for a viewpoint that has rendered nothing");

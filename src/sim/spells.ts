@@ -200,6 +200,49 @@ export interface SpellApi {
   /** Mirror Image: run the caster-vanishes -> missiles -> illusions sequence (AOmi).
    *  Staged over time in the world, so the handler only kicks it off. */
   mirrorImage(caster: SimUnit, def: AbilityDef, rank: number): void;
+
+  /**
+   * Light a patch of fog for a player, for a while — the ONE thing the scouting items do
+   * and the only effect in the game that touches vision without putting a unit on the map.
+   * A Crystal Ball's targeted circle, a Flare Gun's flare, Dust of Appearance around the
+   * hero, a Potion of Omniscience's whole map: same primitive, four radii.
+   *
+   * `detect` is the other half of what several of them buy — the reveal also strips
+   * INVISIBILITY inside it (`Bdet`, which is why Dust and the Crystal Ball both carry a
+   * "Detection Type" column). Without it the circle merely un-fogs ground.
+   *
+   * `follow` pins the circle to a unit instead of to a point (the Wand of Shadowsight's
+   * "vision of a target unit"); `untilBuffGone` ends it when that unit stops carrying the
+   * buff group, which is how "until that unit is dispelled" is expressed.
+   */
+  revealArea(owner: number, team: number, o: RevealOptions): void;
+
+  /**
+   * Put ONE illusion of `of` on the field beside it, owned by `owner` — the Wand of
+   * Illusion's whole effect. Mirror Image's own sequence is `mirrorImage` above: it copies
+   * the CASTER, vanishes him and throws missiles. This copies the TARGET and does none of
+   * that (see docs/illusions.md § Adding Wand of Illusion).
+   */
+  createIllusion(of: SimUnit, owner: number, team: number, sourceId: number, o: IllusionOptions): void;
+}
+
+/** See SpellApi.revealArea. */
+export interface RevealOptions {
+  x: number;
+  y: number;
+  radius: number;
+  seconds: number;
+  detect?: boolean;
+  follow?: number; // unit id the circle rides on (0 = a fixed point)
+  untilBuffGone?: string; // buff GROUP whose loss ends the reveal early
+}
+
+/** See SpellApi.createIllusion. */
+export interface IllusionOptions {
+  durationSec: number;
+  dealt: number; // "Damage Dealt (%)" — an illusion's blows are worth this much
+  taken: number; // "Damage Received Multiplier" — and it takes this much
+  unsummonArt: string;
 }
 
 export interface SimBuffInit {
@@ -519,8 +562,13 @@ function lineTargets(api: SpellApi, caster: SimUnit, def: AbilityDef, tx: number
 }
 
 /** Build a bounce chain of up to `count` targets, each the nearest unvisited valid
- *  unit within `jumpRange` of the previous (Chain Lightning, Healing Wave). */
-function chainFrom(api: SpellApi, caster: SimUnit, def: AbilityDef, first: SimUnit, count: number, jumpRange: number, wantHostile: boolean): SimUnit[] {
+ *  unit within `jumpRange` of the previous (Chain Lightning, Healing Wave).
+ *
+ *  `wantHostile` is the side the chain walks down: enemies (Chain Lightning), allies
+ *  (Healing Wave) — or `"any"`, which the Wand of Neutralization needs and which its own
+ *  `targs1` states outright (`air,ground,friend,self,enemy,invu,vuln`: a dispel stream does
+ *  not care whose magic it is bouncing through). */
+function chainFrom(api: SpellApi, caster: SimUnit, def: AbilityDef, first: SimUnit, count: number, jumpRange: number, wantHostile: boolean | "any"): SimUnit[] {
   const chain = [first];
   const visited = new Set<number>([first.id]);
   let cur = first;
@@ -529,7 +577,7 @@ function chainFrom(api: SpellApi, caster: SimUnit, def: AbilityDef, first: SimUn
     let bestD = Infinity;
     for (const t of api.unitsInArea(cur.x, cur.y, jumpRange)) {
       if (visited.has(t.id) || t === caster || !api.admits(def, t)) continue;
-      if (wantHostile ? !api.hostile(caster, t) || t.invulnerable : !api.ally(caster, t)) continue;
+      if (wantHostile !== "any" && (wantHostile ? !api.hostile(caster, t) || t.invulnerable : !api.ally(caster, t))) continue;
       const dd = Math.hypot(t.x - cur.x, t.y - cur.y);
       if (dd < bestD) {
         bestD = dd;
@@ -2509,7 +2557,347 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       unsummonArt: def.buffEffectArt,
     });
   },
+
+  // ======================================================================
+  //  ITEM abilities (issue #130)
+  //
+  //  An item's active is an ability row like any other — same `targs1`, same `Area1`,
+  //  `Dur1`, `Cool1` and Data columns — so it belongs in this table with the rest and is
+  //  dispatched on its base `code` exactly the same way (world.ts useItem). The Data column
+  //  names quoted below are the game's own, read out of `Units\AbilityMetaData.slk`'s
+  //  `useSpecific` rows through `UI\WorldEditStrings.txt`, and every number is the 1.30.4
+  //  row's. Where a row reuses another ability's metadata block (`Aste` borrows Death
+  //  Pact's Udp1..5) the item's own Ubertip is what the reading follows, and says so.
+  // ======================================================================
+
+  // Scroll of Protection (`AIda`, "ItemDefenseAoe") — "Increases the armor of all friendly
+  // units in an area around your Hero by <AIda,DataA1> for <AIda,Dur1> seconds."
+  //   DataA "Defense Bonus"     2      DataB "Hit Points Gained"   (Arcane Scroll: 150)
+  //   DataC "Mana Points Gained" (100) Area1 600, Dur1 30
+  // The Arcane Scroll (`AIdb`) is the same row with the two restore columns filled in —
+  // "restores 150 hit points, 100 mana, and grants 2 bonus armor" — which is why the heal
+  // is read here rather than given a code of its own.
+  AIda: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    for (const t of alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 600, { self: true })) {
+      api.applyBuff(t, { kind: "armor", group: "item:defense", timeLeft: dur(lvl, t) || 30, sourceId: caster.id, value: d(lvl, 0, 2), ...fx(def) });
+      if (d(lvl, 1) > 0) api.spellHeal(t, d(lvl, 1));
+      if (d(lvl, 2) > 0) t.mana = Math.min(t.maxMana, t.mana + d(lvl, 2));
+    }
+  },
+
+  // Scroll of Speed (`AIsa`) / Rune of Speed (`APsa`) — "Increases the movement speed of the
+  // Hero and nearby allied units to the maximum movement speed." DataA "Movement Speed
+  // Increase" is 2, i.e. +200%: the number is a factor large enough that everything it
+  // touches pins at the game's own speed cap, which is what "to the maximum" means. The
+  // clamp is UnitBalance's, applied in recomputeStats, so nothing here has to know it.
+  AIsa: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    for (const t of alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 600, { self: true })) {
+      api.applyBuff(t, { kind: "haste", group: "item:speed", timeLeft: dur(lvl, t) || 10, sourceId: caster.id, value: d(lvl, 0, 2), value2: 0, ...fx(def) });
+    }
+  },
+
+  // Potion of Speed (`AIsp`) — the same buff on the drinker alone (no Area1 at all):
+  // "+<AIsp,DataA1,%>% movement speed for <AIsp,Dur1> seconds", i.e. +60% for 45s.
+  AIsp: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    api.applyBuff(caster, { kind: "haste", group: "item:speed", timeLeft: dur(lvl, caster) || 45, sourceId: caster.id, value: d(lvl, 0, 0.6), value2: 0, ...fx(def) });
+  },
+
+  // Potion of Invisibility (`AIv1`, 120s) / of Greater Invisibility (`AIv2`, 180s). The row
+  // carries nothing but a duration and `Binv`: everything the tooltip describes —
+  // untargetable unless detected, and the fade breaking the moment the hero "attacks, uses
+  // an ability, or casts a spell" — is what the `invisible` buff already means (world.ts
+  // breakInvisibility). No transition delay: unlike Wind Walk this row has no DataA.
+  AIvi: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    api.applyBuff(caster, { kind: "invisible", group: "item:invis", timeLeft: dur(lvl, caster) || 120, sourceId: caster.id, ...fx(def) });
+  },
+
+  // Potion of Restoration (`AIre`) — DataA "Hit Points Restored" 500, DataB "Mana Points
+  // Restored" 200, both AT ONCE and on the drinker alone. (The over-time twin is `AIrg`,
+  // and the area twin `AIra`; three codes, three shapes, one family.)
+  AIre: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    api.spellHeal(caster, d(lvl, 0, 500));
+    caster.mana = Math.min(caster.maxMana, caster.mana + d(lvl, 1, 200));
+  },
+
+  // Vampiric Potion (`AIpv`) — "Adds <AIpv,DataA1> bonus damage and a life-stealing attack
+  // to the Hero" for 20 seconds.
+  //   DataA "Damage Bonus"    12
+  //   DataB "Life Steal Amount" 0.75   DataC "Amount Is Raw Value" (unset ⇒ a fraction)
+  // The life steal is the same `lifesteal` the Vampiric Aura grants, so a potion drunk under
+  // an aura does not stack two — the strongest wins, which is the buff system's own rule.
+  AIpv: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    const time = dur(lvl, caster) || 20;
+    api.applyBuff(caster, { kind: "damage", group: "item:vampiric", timeLeft: time, sourceId: caster.id, value: d(lvl, 0, 12), ...fx(def) });
+    api.applyBuff(caster, { kind: "lifesteal", group: "item:vampiric", timeLeft: time, sourceId: caster.id, value: d(lvl, 1, 0.75) });
+  },
+
+  // Anti-magic Potion (`AIxs`, code `Aami`) — "Gives the Hero immunity to magical spells for
+  // <AIxs,Dur1> seconds." Its buff pair is `Bams,Bam2`, the Anti-magic Shell's, but the row
+  // carries no "Max Damage Absorbed" column at all: this is the pre-TFT shell, the one that
+  // cannot be targeted by magic rather than the one that soaks a pool. That is exactly what
+  // `magicImmune` is, so it rides a timed `invuln`-shaped flag of its own.
+  Aami: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    api.applyBuff(caster, { kind: "magicImmune", group: "item:antimagic", timeLeft: dur(lvl, caster) || 15, sourceId: caster.id, ...fx(def) });
+  },
+
+  // Dust of Appearance (`AItb`) — "Reveals enemy invisible units in an area around the Hero",
+  // Area1 1000, Dur1 20. `DataA "Detection Type"` = 3 is the enum every detector in the game
+  // carries (True Sight's is 3 too); it is not a radius, which `Area1` is.
+  AItb: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    api.revealArea(caster.owner, caster.team, { x: caster.x, y: caster.y, radius: lvl.area || 1000, seconds: dur(lvl, caster) || 20, detect: true });
+    if (def.targetArt) api.emitEffect(def.targetArt, caster.x, caster.y, 0, dur(lvl, caster) || 20);
+  },
+
+  // Crystal Ball (`AIta`, "ItemDetectAoe") — "Reveals a targeted area. Invisible units are
+  // also revealed." Area1 900 is what it lights, `DataA "Detection Radius"` = 3 is the same
+  // enum again (the metadata calls this one a radius, but the value is the type — reading it
+  // as a distance gives a three-unit circle, which is the trap True Sight already fell into).
+  AIta: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    api.revealArea(caster.owner, caster.team, { x: ctx.x, y: ctx.y, radius: lvl.area || 900, seconds: dur(lvl, caster) || 10, detect: true });
+    if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0, dur(lvl, caster) || 10);
+  },
+
+  // Potion / Glyph of Omniscience (`AIrv`, "ItemRevealMap") — "Reveals the entire map for
+  // <AIrv,Dur1> seconds." No Area1: the area IS the map, so the radius is the one number
+  // here that cannot come off the row.
+  AIrv: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    api.revealArea(caster.owner, caster.team, { x: 0, y: 0, radius: WHOLE_MAP_RADIUS, seconds: dur(lvl, caster) || 5, detect: true });
+  },
+
+  // Flare Gun (`AIfa`) — "Reveals a target area on the map", Area1 1800, Dur1 45, Rng1 99999
+  // (anywhere). No detection: a flare lights ground, it does not see through invisibility —
+  // `DataA "Detection Type"` = 1 where every true detector carries 3.
+  AIfa: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    const time = dur(lvl, caster) || 45;
+    api.revealArea(caster.owner, caster.team, { x: ctx.x, y: ctx.y, radius: lvl.area || 1800, seconds: time });
+    if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0, time);
+  },
+
+  // Wand of Negation (`AIdi`) / Staff of Negation (`AIds`) / Rune of Dispel Magic (`APdi`) —
+  // "Dispels all magical effects in a target area", `DataB "Damage To Summoned Units"` = 200
+  // (250 on the rune). Dispel Magic (`Adis`) in every respect but the code, so it reads the
+  // same columns; the rune's larger Area1 (800 against the wand's 200) is the only real
+  // difference between the three.
+  AIdi: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0);
+    for (const t of api.unitsInArea(ctx.x, ctx.y, lvl.area || 200)) {
+      if (!api.admits(def, t)) continue;
+      api.dispel(t);
+      if (t.summonLeft > 0) api.spellDamage(t, d(lvl, 1, 200), caster.id);
+    }
+  },
+
+  // Wand of Neutralization (`AIdc`, "ItemDispelChain") — "Hurls forth a stream of neutralizing
+  // magic that bounces up to <AIdc,DataC1> times, dispelling units in its wake."
+  //   DataB "Summoned Unit Damage"   DataC "Maximum Dispelled Units" 8
+  // A CHAIN, not a circle: Area1 600 is how far each bounce may reach for its next link, the
+  // way Chain Lightning's is, and the link count is the cap. Same walk as chainFrom below.
+  AIdc: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    const first = api.getUnit(ctx.targetId);
+    if (!first) return;
+    const max = Math.max(1, Math.round(d(lvl, 2, 8)));
+    const chain = chainFrom(api, caster, def, first, max, lvl.area || 400, "any");
+    for (const t of chain) {
+      api.dispel(t);
+      if (t.summonLeft > 0) api.spellDamage(t, d(lvl, 1, 0), caster.id);
+      if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+    }
+  },
+
+  // The FIGURINES (`AIfs`) — Demonic Figurine, Ice Shard, Amulet/Talisman of the Wild,
+  // Spiked Collar, Red Drake Egg, Stone Token, Book of the Dead. One code, eight items, and
+  // the whole difference between them is four columns:
+  //   DataA "Summon 1 - Amount"   DataC "Summon 1 - Unit Type"
+  //   DataB "Summon 2 - Amount"   DataD "Summon 2 - Unit Type"
+  // Note the unit types are in the DATA columns as strings (`nba2`, `nsce`/`nsca`), NOT in
+  // `UnitID1` where a summon normally puts them — reading `lvl.summon` here finds nothing
+  // and the item summons air. Only the Book of the Dead fills the second pair (3 Skeleton
+  // Warriors AND 3 Skeleton Archers).
+  AIfs: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    for (const [countIdx, typeIdx] of [[0, 2], [1, 3]] as const) {
+      const typeId = lvl.dataStr[typeIdx] || "";
+      const count = Math.round(d(lvl, countIdx, 0));
+      if (!typeId || count <= 0) continue;
+      summonMany(api, caster, def, typeId, caster.x, caster.y, count, lvl.duration || 180);
+    }
+  },
+
+  // Scepter of the Sea (`AIwm`, "Watery Minion (item)") — `UnitID1` = nmrr on the item's own
+  // row (the base `ANwm` carries `ncfs`, which is why the summon is taken off the ROW BEING
+  // USED and never off the base code), DataA "Summoned Unit Count" = 2, Dur1 60. A plain
+  // summon; the count is in DataA rather than the usual DataB, hence the explicit argument.
+  ANwm: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    summonSpell(api, caster, def, rank, { count: Math.max(1, Math.round(d(lvl, 0, 2))), atPoint: false });
+  },
+
+  // Ancestral Staff (`AIsh`, "Summon Headhunter (item)") — `UnitID1` = otbk (Troll Berserker),
+  // DataB "Number of Summoned Units" = 2, Dur1 60. Same shape, the count one column further
+  // along — which is exactly what summonSpell's own default reads, so it needs no argument.
+  AIsh: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 0, atPoint: false }),
+
+  // Monster Lure (`AImo`) — "Creates a ward that draws nearby creeps to it." `UnitID1` = nlur,
+  // DataA "Number of Lures" = 1, Dur1 60, and the ward is placed WHERE YOU CLICK (Rng1 500).
+  // The drawing itself is the lure unit's own business, not the item's.
+  AImo: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true }, ctx),
+
+  // Goblin Land Mines (`AIpm`, "ItemPlaceMine") — `UnitID1` = nglm, dropped at the clicked
+  // point and permanent (no Dur1) until something walks into it.
+  AIpm: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true }, ctx),
+
+  // Wand of Illusion (`AIil`) — "Create an illusory double of the TARGETED unit." Mirror
+  // Image copies the caster; this copies whoever you point it at, and does none of the
+  // vanish-and-throw-missiles sequence (docs/illusions.md § Adding Wand of Illusion).
+  //   DataB "Damage Received Multiplier" 2      Dur1 60
+  // Note the shifted indices against `AOmi`: DataA there is "Number of Images", here it is
+  // "Damage Dealt (%)" — and it is EMPTY on this row, which is the 0 that makes the copy
+  // harmless. Reading DataB/DataC as Mirror Image does would give a double that hits for
+  // double and takes nothing.
+  AIil: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = lv(def, rank);
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+    api.createIllusion(t, caster.owner, caster.team, caster.id, {
+      durationSec: lvl.heroDuration || lvl.duration || 60,
+      dealt: d(lvl, 0, 0),
+      taken: d(lvl, 1, 2),
+      unsummonArt: def.buffSpecialArt,
+    });
+  },
+
+  // Cyclone (`AIcy`, Wand of the Wind) — "tosses a target enemy unit into the air, rendering
+  // it unable to attack, move or cast spells", 20 seconds, ground units only. The row's one
+  // Data column is `DataA "Can Be Dispelled"` = 1, so everything else about it is the engine's.
+  //
+  // Being IN THE AIR is what the buff models: a cycloned unit cannot act, and nothing on the
+  // ground can reach it. Both halves are carried as a stun plus an invulnerability rather
+  // than by changing what the unit IS — flipping `flying` would re-settle its pathing and
+  // hand it a flyer's collision for the duration. The simplification this leaves is that a
+  // real cyclone can still be shot at by AIR units; ours cannot be shot at by anything.
+  Acyc: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.hostile(caster, t)) return;
+    const lvl = lv(def, rank);
+    const time = dur(lvl, t) || 20;
+    api.applyBuff(t, { kind: "stun", group: "cyclone", timeLeft: time, sourceId: caster.id, ...fx(def) });
+    api.applyBuff(t, { kind: "invuln", group: "cyclone", timeLeft: time, sourceId: caster.id });
+  },
+
+  // Wand of Mana Stealing (`Aste`, "ManaSteal") — "Steals mana from a target unit and gives
+  // it to the Hero", DataA = 50, Rng1 650, Cool1 10.
+  //
+  // The metadata block this row borrows is Death Pact's (`Udp1..5`: "Life Converted to Mana",
+  // "Mana Conversion As Percent", …), which describes a different ability entirely — so the
+  // Ubertip is what the reading follows, and DataA is taken as a flat 50 mana rather than as
+  // a percentage of the target's pool. Flagged rather than guessed at silently: settling it
+  // wants a measurement against the real client.
+  Aste: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = lv(def, rank);
+    const stolen = api.burnMana(t, d(lvl, 0, 50));
+    caster.mana = Math.min(caster.maxMana, caster.mana + stolen);
+    api.emitLightning(def.lightning[0] ?? "", t, caster);
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+  },
+
+  // Wand of Shadowsight (`Ashs`) — "Gives the player vision of a target unit until that unit
+  // is dispelled." The row carries no Dur1 at all, which is the data saying exactly that: the
+  // reveal has no clock, it has a BUFF (`Bshs`), and losing the buff is what ends it.
+  Ashs: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = lv(def, rank);
+    api.applyBuff(t, { kind: "mark", group: "shadowsight", timeLeft: Infinity, sourceId: caster.id, ...fx(def) });
+    api.revealArea(caster.owner, caster.team, {
+      x: t.x, y: t.y, radius: lvl.castRange || 800, seconds: Infinity, follow: t.id, untilBuffGone: "shadowsight",
+    });
+  },
+
+  // Control Magic (`AIcm` on the Gloves of Spell Mastery; the Spell Breaker's own `Acmg`) —
+  // take an enemy SUMMONED unit for yourself. `DataA "Maximum Creep Level"` = 5 gates what
+  // may be taken; the summon test is the ability's whole point ("Grants the ability to
+  // control summoned units") and is not in `targs1`, which lists only kinds.
+  Acmg: (api, caster, def, _rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || t.summonLeft <= 0 || !api.hostile(caster, t)) return;
+    api.changeOwner(t, caster.owner, caster.team);
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+  },
+
+  // Scepter of Mastery (`AIco`, "ItemCommand") — "Transfers control of the targeted non-Hero
+  // unit to the player who uses the Scepter. The transfer of control is PERMANENT." Charm in
+  // everything but the code, and like Charm it is capped by `DataA "Maximum Creep Level"` = 5
+  // (enforced with the rest of the refusals, in itemUseError, so a click on something too big
+  // costs no charge).
+  AIco: (api, caster, def, _rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || t.isHero) return;
+    api.changeOwner(t, caster.owner, caster.team);
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+  },
+
+  // Horn of the Clouds (`AIfg`, "Cloud of Fog (Item)") — "stops an area of enemy towers from
+  // attacking for <AIfg,Dur1> seconds". `targs1 = vuln,invu,structure` is the whole targeting
+  // rule: buildings, nothing else. Area1 300, Dur1 30.
+  //
+  // Modelled with the `miss` buff at certainty rather than with a new disarmed state, because
+  // that is the shape the ability's own metadata block describes — its sibling column is
+  // `DataB "Chance To Miss (%)"`. A tower under the cloud swings and the blow goes nowhere,
+  // and its OTHER work (training, research, repair) is untouched, which a stun would have
+  // stopped as well.
+  Aclf: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 300)) {
+      api.applyBuff(t, { kind: "miss", group: "cloud", timeLeft: dur(lvl, t) || 30, sourceId: caster.id, value: 1, ...fx(def) });
+    }
+    if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0, lvl.duration || 30);
+  },
+
+  // Spider Silk Broach (`AIwb`, "ItemWeb") — "Binds a target enemy AIR unit in webbing,
+  // forcing the target to the ground." The Crypt Fiend's Web with an item's numbers
+  // (Dur1 20, Rng1 400), and the same `root` buff carries it: world.ts's `webbed` derivation
+  // is what actually brings the flyer down and lets ground units reach it.
+  AIwb: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.hostile(caster, t)) return;
+    const lvl = lv(def, rank);
+    api.applyBuff(t, { kind: "root", group: "web", timeLeft: dur(lvl, t) || 20, sourceId: caster.id, value: 1, ...fx(def) });
+  },
+
+  // Rune of Shielding (`ANse`, "Spell Shield AOE") — "Creates a shield on nearby friendly
+  // units that blocks the next negative spell that an enemy casts upon them." Area1 1400,
+  // buff `BNss` — the same shield the Amulet of Spell Shield wears, handed to a whole army
+  // at once. `DataA "Shield Cooldown Time"` is the amulet's regrow timer and is unset here:
+  // a rune's shield is ONE block and then it is gone.
+  ANse: (api, caster, def, rank) => {
+    const lvl = lv(def, rank);
+    for (const t of alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 1400, { self: true })) {
+      api.applyBuff(t, { kind: "spellShield", group: "spellshield", timeLeft: Infinity, sourceId: caster.id, ...fx(def) });
+    }
+  },
 };
+
+/** The radius that stands in for "the entire map" (Potion of Omniscience). Larger than any
+ *  world bound a `.w3e` can describe — 480 tiles of 128 is 61 440 units across at the
+ *  editor's maximum — so the circle always covers the whole grid whatever map is loaded. */
+const WHOLE_MAP_RADIUS = 200000;
+
 
 /** Level-data of the ability being cast (rank is 1-based). */
 function lv(def: AbilityDef, rank: number): AbilityLevel {

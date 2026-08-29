@@ -42,6 +42,9 @@ export interface VisionWorld {
    *  Carries `owner` as well as `team` because it is OUR unit's sight, so it reaches an ally
    *  through the same shared-vision test the living unit went through. */
   activeDeathReveals(): Iterable<{ team: number; owner: number; x: number; y: number; radius: number; flying: boolean }>;
+  /** Fog an ITEM is holding open (issue #130) — see SimWorld.ItemReveal. Owner-scoped for
+   *  the same reason a death reveal is: it is a player's sight, and shared vision carries it. */
+  activeItemReveals(): Iterable<{ team: number; owner: number; x: number; y: number; radius: number }>;
   /** True Sight is a TEAM property in WC3 — one Shade uncovers a hero for the whole army —
    *  so this is the sim's own answer rather than one re-derived here. That keeps what you
    *  can shoot and what you can see the same answer. */
@@ -295,6 +298,15 @@ export class Viewpoint {
     for (const r of this.world.activeDeathReveals()) {
       if (!this.revealsForOwner(r.owner, r.team)) continue;
       this.vision.reveal(r.x, r.y, r.radius, r.flying);
+    }
+    // Fog an ITEM is holding open (issue #130): a Crystal Ball's circle, a Flare Gun's flare,
+    // Dust of Appearance round the hero, a Potion of Omniscience's whole map, the Wand of
+    // Shadowsight's eye riding an enemy unit. Revealed as a FLYER sees — a flare hangs over
+    // the treeline and a crystal ball is not standing behind anything, so neither is shadowed
+    // by terrain the way a unit's own sight is.
+    for (const r of this.world.activeItemReveals()) {
+      if (!this.revealsForOwner(r.owner, r.team)) continue;
+      this.vision.reveal(r.x, r.y, r.radius, true);
     }
     // Script-placed fog modifiers are stamped LAST, over everything the units revealed —
     // that's what lets a running FOG_OF_WAR_VISIBLE modifier light ground nobody stands near

@@ -100,7 +100,7 @@ console.log("\niseedeadpeople still shows everything");
 // cliff and treeline on the map. So the SET replays world setup onto whatever it creates.
 const { VisionSet } = require(join(REPO, ".sim-build", "src", "game", "viewpoint.js"));
 
-const noWorld = { units: new Map(), isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], teamDetects: () => false };
+const noWorld = { units: new Map(), isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
 const noAlliances = { sharesVisionWith: () => false, coAllied: () => false };
 const trees = [{ x: 320, y: 320, blockRadius: 64 }];
 const setOf = () => new VisionSet(noWorld, noAlliances, () => trees, 0, 0, 1024, 1024);
@@ -172,7 +172,7 @@ console.log("\nexposure and one-shots resolve per RECIPIENT, not per 'local'");
     [1, { id: 1, owner: 0, team: 0, x: 0, y: 0 }],
     [2, { id: 2, owner: 1, team: 1, x: 900, y: 900 }],
   ]);
-  const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], teamDetects: () => false };
+  const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
   const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
   const zero = set.viewpointFor(0);
   zero.setTeam(0);
@@ -197,7 +197,7 @@ console.log("\nexposure and one-shots resolve per RECIPIENT, not per 'local'");
 
 console.log("\na one-shot SetFogState reaches whoever renders that player's fog");
 {
-  const world = { units: new Map(), isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], teamDetects: () => false };
+  const world = { units: new Map(), isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
   const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
   const zero = set.viewpointFor(0);
   const one = set.viewpointFor(1);
@@ -212,7 +212,7 @@ console.log("\nevery team gets asked of its OWN grid  (item 7)");
     [1, { id: 1, owner: 0, team: 0, x: 100, y: 100 }],
     [2, { id: 2, owner: -1, team: 9, x: 900, y: 900 }], // a creep, far away
   ]);
-  const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], teamDetects: () => false };
+  const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
   const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
   const mine = set.viewpointFor(0);
   mine.setTeam(0);
@@ -238,7 +238,7 @@ console.log("\nevery team gets asked of its OWN grid  (item 7)");
 console.log("\na team is never rebuilt twice");
 {
   const units = new Map([[1, { id: 1, owner: 0, team: 4, x: 100, y: 100 }]]);
-  const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], teamDetects: () => false };
+  const world = { units, isDay: true, activeAttackReveals: () => [], activeDeathReveals: () => [], activeItemReveals: () => [], teamDetects: () => false };
   const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
   // A team-only viewpoint appears FIRST (the sim asked before the lobby seated anyone)…
   set.viewpointForTeam(4);

@@ -499,6 +499,40 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // unit — `targs1 = ground,air,vuln,invu,player,neutral`, Rng1 700 — and send it home.
   ANpr: { target: "unit" }, // Staff of Preservation (`spre`) — teleport a unit to its own base
   ANsa: { target: "unit" }, // Staff of Sanctuary (`ssan`) — the same, plus a stun + heal-over-time
+  //
+  // …and the rest of them (issue #130). Every one of these aims was read out of the ITEM's
+  // own Ubertip, per the standing rule in docs/abilities-audit.md: `Rng1` and `Area1` cannot
+  // tell a point-target ability from a self-cast one, and two of these prove it — the Scroll
+  // of Healing (`Area1` 600, `Rng1` 250) is "around the Hero" while the Wand of Negation
+  // (`Area1` 200, `Rng1` 500) is "in a target area", and nothing but the words says which.
+  //
+  // A code NOT listed here loads as `passive`, and for an item that is exactly right: the
+  // overwhelming majority of item actives (every potion) are aimed at nothing and fire on the
+  // press. Only the ones the player must point at something need a row.
+  AItb: { target: "none" }, // Dust of Appearance — reveals invisibles AROUND the hero
+  AIta: { target: "point" }, // Crystal Ball — "Reveals a targeted area"
+  AIrv: { target: "none" }, // Potion / Glyph of Omniscience — the whole map
+  AIfa: { target: "point" }, // Flare Gun — "Reveals a target area on the map"
+  AIdi: { target: "point" }, // Wand / Staff of Negation — "Dispels all magical effects in a target area"
+  AIdc: { target: "unit" }, // Wand of Neutralization — a CHAIN, so it starts on a unit
+  AIil: { target: "unit" }, // Wand of Illusion — "a double of the targeted unit"
+  AIwb: { target: "unit" }, // Spider Silk Broach — "Binds a target enemy air unit"
+  AIso: { target: "unit" }, // Soul Gem — "Traps the targeted enemy Hero"
+  AIco: { target: "unit" }, // Scepter of Mastery — "the targeted non-Hero unit"
+  AIpm: { target: "point" }, // Goblin Land Mines — "at a target point"
+  AImo: { target: "point" }, // Monster Lure — the ward goes where you click
+  AIbl: { target: "point" }, // the eight "Tiny" buildings — "Creates a X at a target location"
+  Ablp: { target: "point" }, // Sacrificial Skull — "an area of Blight at a target location"
+  AItp: { target: "point" }, // Scroll of Town Portal — click anywhere; the nearest hall answers
+  AIrt: { target: "point" }, // Amulet of Recall — "units within the targeted area"
+  AUds: { target: "point" }, // Diamond of Summoning — the same, with Kel'Thuzad's numbers
+  Acyc: { target: "unit" }, // Wand of the Wind — Cyclone, "a target enemy unit"
+  Aste: { target: "unit" }, // Wand of Mana Stealing — "from a target unit"
+  Ashs: { target: "unit" }, // Wand of Shadowsight — "vision of a target unit"
+  Acmg: { target: "unit" }, // Gloves of Spell Mastery — Control Magic, one summoned unit
+  Aclf: { target: "point" }, // Horn of the Clouds — "an area of enemy towers"
+  Amec: { target: "none" }, // Mechanical Critter — it arrives beside you
+  Aret: { target: "none" }, // Tome of Retraining — nothing to aim at
   // === ORB EFFECTS the unit TYPE carries (src/sim/orbs.ts) ===
   // Attack modifiers, not casts: each rides the unit's own blows and competes with every
   // other orb for the one slot a blow has (see the priority ladder in orbs.ts). Listed here
@@ -699,7 +733,27 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // `Adet` "Detect (Sentry Ward)" (Rng1 1100) is in AbilityData.slk but NO unit lists it in
   // 1.27a's UnitAbilities.slk — it is a dead row. It stays out of this table (nothing would
   // ever carry it) while the sim's detect derivation still honours the code, so a custom map
-  // that hands it out gets the radius the data promises.
+  // that hands it out gets the radius the data promises. The Gem of True Seeing (`Adt1`) is
+  // what actually hands it out — an ITEM, which is why no unit does (see itemAbilityLevel).
+};
+
+/**
+ * Aiming overrides keyed by the ability's own ROW ID rather than by its base `code`.
+ *
+ * Almost nothing needs this: an ability's aim is a property of what it does, and what it does
+ * is its code. `AIrg` is the exception that forces the table, and it is a real one — the same
+ * code is worn by two items that are aimed differently, and both say so in words:
+ *
+ *   `AIrl` Healing Salve             "Regenerates A TARGET UNIT'S hit points"   Rng1 500
+ *   `AIsl` Scroll of Regeneration    "all friendly units IN AN AREA around your Hero"  Area1 600
+ *   `AIpr` Clarity Potion            "Regenerates THE HERO'S mana"              neither
+ *
+ * Keying `AIrg` as a whole would make the Clarity Potion demand a target, or the salve fire
+ * on the drinker. The sim resolves the same three shapes off `Area1`/`Rng1` at the effect end
+ * (see SimWorld.applyItemAbility `AIrg`); this is the HUD's half of the same fact.
+ */
+export const ALIAS_TARGETS: Record<string, { target: TargetType; autocast?: boolean }> = {
+  AIrl: { target: "unit" }, // Healing Salve — the one regeneration item you point at somebody
 };
 
 interface Row {
@@ -799,7 +853,10 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     const [bx, by] = f ? parseButtonPos(str(f, "buttonpos") || str(f, "researchbuttonpos")) : [0, 0];
     const [lx, ly] = f ? parseButtonPos(str(f, "researchbuttonpos") || str(f, "buttonpos")) : [0, 0];
     const [ux, uy] = f && str(f, "unbuttonpos") ? parseButtonPos(str(f, "unbuttonpos")) : [bx, by];
-    const known = KNOWN_ABILITIES[code];
+    // Aiming is a property of the CODE, with one family of exceptions: the item rows, where
+    // Blizzard hung two different aims on one code. `ALIAS_TARGETS` is that override, keyed
+    // by the row's own id — see its comment for the case that forces it.
+    const known = ALIAS_TARGETS[id] ?? KNOWN_ABILITIES[code];
     const buffFx = buffFxOf(func, str(r, "buffid1"));
 
     const levelData: AbilityLevel[] = [];

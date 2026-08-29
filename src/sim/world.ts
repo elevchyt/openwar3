@@ -448,6 +448,15 @@ export type BuffKind =
   | "shield" // Lightning Shield: value = dps dealt to units around the holder, value2 = radius
   | "ethereal" // Banish: value = move-slow fraction; can't attack, immune to physical
   //            damage but takes +66% from Magic/Spells (see u.ethereal, EtherealDamageBonus)
+  | "magicImmune" // TIMED magic immunity — the Anti-magic Potion's 15 seconds (`Aami`, whose
+  //                 buffs are `Bams,Bam2`). Distinct from `spellAbsorb`: this row carries no
+  //                 "Max Damage Absorbed" column at all, so it is the pre-TFT shell that
+  //                 cannot be TARGETED by magic rather than the one that soaks a pool. The
+  //                 permanent twin (a Necklace of Spell Immunity, a Spell Breaker) is a
+  //                 property of the ability list and needs no buff — see u.magicImmune.
+  | "spellShield" // Spell Shield (`ANss` on the Amulet, `ANse` on the Rune of Shielding):
+  //                 BLOCKS the next negative spell an enemy casts on the holder, then goes.
+  //                 Spent rather than merely read, like `spellAbsorb` — see spellShieldBlocks.
   | "invisible"; // Wind Walk/Invisibility: the holder renders half-faded (see u.invisible).
   //             CONCEALMENT is modelled — canSee() refuses an invisible unit, so it draws no
   //             aggro down any automatic path — and so is its counterpart, True Sight
@@ -1427,6 +1436,12 @@ export interface SimUnit {
   hpRegen: number; // hp per second
   lifesteal: number; // fraction of melee damage healed back (Vampiric Aura); derived
   thorns: number; // fraction of melee damage returned to attackers (Thorns Aura); derived
+  /** Fraction of SPELL damage this unit shrugs off — Runed Bracers' 33% (`AIsr` dataB) and
+   *  its two siblings. Derived from the inventory, not a buff, so it needs no expiry. */
+  magicReduction: number;
+  /** Fraction of RANGED-ATTACK damage this unit shrugs off — the Arcanite Shield's 30%
+   *  (`AIdd` dataA = 0.7, "reduces ranged damage TO 70%"). Same shape, different pipe. */
+  rangedReduction: number;
   bonusArmor: number; // buff/aura portion of armour (green "+N" in the HUD); derived
   bonusDamage: number; // buff/aura portion of attack damage (green "+N"); derived
   bonusStr: number; // item portion of Strength (green "+N" / red "-N" in the HUD); derived
@@ -1674,6 +1689,13 @@ export interface SimUnit {
    *  A toggle, not a cast — see tickImmolation for the mana it burns to stay lit. */
   immolation: string;
   immolationTick: number; // seconds accumulated toward the next burn (`Dur1` = 1s)
+  /** CLOAK OF FLAMES (`AIcf`) — the same accumulator for the CARRIED burn, kept apart from
+   *  Immolation's so the two clocks cannot interfere (they never run together anyway: the
+   *  cloak stands down while its wearer is alight — see tickCarriedItems). */
+  cloakBurnTick: number;
+  /** AMULET OF SPELL SHIELD (`ANss`) — seconds until the shield grows back after a block
+   *  (`Cool1` = 40). 0 = ready, or no amulet carried. */
+  spellShieldCooldown: number;
   /** BIG BAD VOODOO (`AOvd`): seconds of ritual left, and the ability running it. A CHANNEL,
    *  so this counts down only while the Shadow Hunter is still standing there casting — see
    *  tickVoodoo, which is also what hands the invulnerability out. */
@@ -2193,6 +2215,10 @@ const ITEM_REGEN_BREAK = 20;
  *  (see UnitDef.buffType and SimWorld.staffDestination). WorldEditStrings names them Hall,
  *  Resource, Factory and General; the index in this array IS the bit. */
 const STAFF_PICK_CATEGORIES = ["townhall", "resource", "factory", "buffer"];
+/** The race order the "Tiny" building items list their four unit ids in (`AIbl` UnitID1 =
+ *  `htow,ogre,unpl,etol` — Town Hall, Great Hall, Necropolis, Tree of Life). Read off the
+ *  Tiny Great Hall, which is the only one of the eight whose four entries differ. */
+const TINY_BUILDING_RACES = ["human", "orc", "undead", "nightelf"];
 /** What "crowd-controlled" means to the staves, which refuse to teleport a unit under any of
  *  it — "including with Purge" (Liquipedia), whose contribution is the plain `slow`. Every
  *  member is something holding the unit where it stands: a stun, a Sleep, Entangling Roots
@@ -2321,6 +2347,32 @@ export interface DeathReveal {
   timeLeft: number;
 }
 
+/**
+ * Ground an ITEM lit up for a player (issue #130) — the only effect in the game that touches
+ * vision without putting a unit on the map. A Crystal Ball's targeted circle, a Flare Gun's
+ * flare, Dust of Appearance around the hero, a Potion of Omniscience's whole map, and the
+ * Wand of Shadowsight's eye riding an enemy unit are all one record with different fields.
+ *
+ * Unlike an AttackReveal, this is the OWNER's sight, so an ally sharing vision gets it too
+ * (the same `revealsForOwner` test a living unit goes through).
+ */
+export interface ItemReveal {
+  x: number;
+  y: number;
+  radius: number;
+  owner: number;
+  team: number;
+  timeLeft: number; // Infinity for one that ends some other way (see untilBuffGone)
+  /** …and strips INVISIBILITY inside it, not merely fog: Dust of Appearance and the Crystal
+   *  Ball both buy detection, a Flare Gun does not. See teamDetects. */
+  detect: boolean;
+  /** >0: the circle rides this unit rather than sitting at (x, y) — the Wand of Shadowsight. */
+  unitId: number;
+  /** Non-empty: it also ends the moment `unitId` stops carrying this buff group, which is how
+   *  "until that unit is dispelled" is stated. */
+  untilBuffGone: string;
+}
+
 /** A hidden attacker's position, given away to one team for a moment. */
 export interface AttackReveal {
   x: number;
@@ -2381,6 +2433,12 @@ export class SimWorld {
    *  while it is a foundation — "whenever a building is finished, it instantly generates
    *  more blighted area around it" (Warcraft Wiki, Blight). */
   private blightPainted = new Set<number>();
+  /** MOONSTONE (`AIct`): the eclipse currently running, and the hour to give back when it
+   *  lifts. Null the rest of the time — see itemArtificialNight. */
+  private moonstone: { left: number; restore: number } | null = null;
+  /** SOUL GEMS holding a hero off the field: who is carrying which gem, and whose soul is
+   *  in it. See itemSoulGem / tickSoulGems. */
+  private soulGems: Array<{ carrierId: number; heroId: number; itemId: string }> = [];
   /** Whether to record death/damage/attack events for the trigger engine (the host
    *  sets each only when the loaded script actually registers that event kind — off
    *  for melee and for maps that don't listen, so nothing accumulates unread). */
@@ -2478,6 +2536,9 @@ export class SimWorld {
   /** Sight left behind by units that have just died (see DeathReveal). A plain array: each
    *  entry is born at one death, ages out on its own, and nothing ever refreshes one. */
   private deathReveals: DeathReveal[] = [];
+  /** Fog an ITEM is holding open (see ItemReveal). Also a plain array — a Crystal Ball
+   *  pressed twice lights two circles, it does not refresh one. */
+  private itemReveals: ItemReveal[] = [];
   // Trained units ready to spawn: the renderer creates the model + sim unit.
   private trainCompletions: Array<{ buildingId: number; unitId: string; owner: number; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number; reviveOf?: number; tavern?: boolean }> = [];
   // Finished research (renderer plays the "upgrade complete" sound + refreshes the card).
@@ -5386,6 +5447,47 @@ export class SimWorld {
   }
 
   /**
+   * The two carried items that need a CLOCK rather than a stat (issue #130) — everything
+   * else an item grants passively is derived in recomputeStats and needs nothing here.
+   *
+   * **Cloak of Flames** (`AIcf`, also the Shield of the Deathlord): "Engulfs the Hero in fire
+   * which deals <AIcf,DataA1> damage per second to nearby enemy land units." Immolation in
+   * everything but the mana — the row's columns are the same (`DataA "Damage Per Duration"`
+   * 10, `Dur1` 1 the tick interval, `Area1` 160) and its `targs1` is `ground,enemy,neutral`,
+   * which is where "land units" comes from. Its own Ubertip says it "does not stack with
+   * Immolation", so a lit Demon Hunter's cloak stays cold.
+   *
+   * **Amulet of Spell Shield** (`ANss`): "Blocks a negative spell that an enemy casts on the
+   * Hero once every <ANss,Cool1> seconds." The block itself is consumeSpellShield; this is
+   * the regrow — and the reason the amulet is worth wearing after the first block.
+   */
+  private tickCarriedItems(u: SimUnit, dt: number): void {
+    if (u.hp <= 0 || !u.inventory.length) return;
+    const cloak = this.itemAbility(u, "AIcf");
+    if (cloak && !u.immolation) {
+      const interval = cloak.level.duration || 1;
+      u.cloakBurnTick += dt;
+      if (u.cloakBurnTick >= interval) {
+        u.cloakBurnTick -= interval;
+        const dmg = this.dataOf(cloak.level, 0, 10);
+        for (const t of this.unitsInAreaInternal(u.x, u.y, cloak.level.area || 160)) {
+          if (t === u || t.hp <= 0 || t.invulnerable || !this.hostile(u, t) || !this.targsAdmit(t, cloak.def.targetFlags)) continue;
+          this.landDamage(t, dmg, u.id, false);
+          if (cloak.def.buffSpecialArt) this.spellEffects.push({ art: cloak.def.buffSpecialArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
+        }
+      }
+    }
+    const amulet = this.itemAbility(u, "ANss");
+    if (!amulet) { u.spellShieldCooldown = 0; return; }
+    if (u.spellShieldCooldown > 0) { u.spellShieldCooldown -= dt; return; }
+    // Ready and unshielded → put the shield back on. Infinite, because what ends it is being
+    // SPENT, not a clock (see consumeSpellShield).
+    if (!u.buffs.some((b) => b.kind === "spellShield")) {
+      this.applyBuffInternal(u, { kind: "spellShield", group: "spellshield", timeLeft: Infinity, sourceId: u.id, ...fx(amulet.def) });
+    }
+  }
+
+  /**
    * BIG BAD VOODOO (`AOvd`) — a ritual, not a blessing. `Animnames = stand,channel` makes it
    * a channel, and that is the entire balance of the ultimate: the Shadow Hunter stands in
    * his own circle for the full `Dur1` = 30 seconds, protected by nothing (`targs1` has no
@@ -5741,6 +5843,8 @@ export class SimWorld {
       | "hpRegen"
       | "lifesteal"
       | "thorns"
+      | "magicReduction"
+      | "rangedReduction"
       | "bonusArmor"
       | "bonusDamage"
       | "bonusStr"
@@ -5801,6 +5905,8 @@ export class SimWorld {
       | "doomed"
       | "immolation"
       | "immolationTick"
+      | "cloakBurnTick"
+      | "spellShieldCooldown"
       | "voodooLeft"
       | "voodooAbil"
       | "incinerate"
@@ -5966,6 +6072,8 @@ export class SimWorld {
       hpRegen: 0,
       lifesteal: 0,
       thorns: 0,
+      magicReduction: 0,
+      rangedReduction: 0,
       bonusArmor: 0,
       bonusDamage: 0,
       bonusStr: 0,
@@ -6026,6 +6134,8 @@ export class SimWorld {
       doomed: null,
       immolation: "",
       immolationTick: 0,
+      cloakBurnTick: 0,
+      spellShieldCooldown: 0,
       voodooLeft: 0,
       voodooAbil: "",
       incinerate: null,
@@ -8008,9 +8118,13 @@ export class SimWorld {
    *  buffs, so Dispel Magic (which wipes `u.buffs`) can never remove them. */
   private itemBonuses(u: SimUnit): {
     str: number; agi: number; int: number; damage: number; armor: number; attackSpeed: number; manaRegen: number;
-    speed: number; maxHp: number; hpRegen: number; weaponsOn: number;
+    speed: number; maxHp: number; maxMana: number; hpRegen: number; weaponsOn: number;
+    magicReduction: number; rangedReduction: number;
   } {
-    const b = { str: 0, agi: 0, int: 0, damage: 0, armor: 0, attackSpeed: 0, manaRegen: 0, speed: 0, maxHp: 0, hpRegen: 0, weaponsOn: 0 };
+    const b = {
+      str: 0, agi: 0, int: 0, damage: 0, armor: 0, attackSpeed: 0, manaRegen: 0, speed: 0,
+      maxHp: 0, maxMana: 0, hpRegen: 0, weaponsOn: 0, magicReduction: 0, rangedReduction: 0,
+    };
     if (!u.inventory.length || !this.itemReg || !this.abilities) return b;
     for (const held of u.inventory) {
       if (!held) continue;
@@ -8026,7 +8140,10 @@ export class SimWorld {
           case "AIde": b.armor += val(0); break; // Ring of Protection (+armour)
           case "AIab": b.agi += val(0); b.int += val(1); b.str += val(2); break; // stat items
           case "AIas": b.attackSpeed += val(0); break; // Gloves of Haste (+attack speed)
-          case "AHab": b.manaRegen += val(0); break; // Pipe of Insight (mana regen)
+          // (`AHab` — Khadgar's Pipe of Insight, the Ring of the Archmagi, the Mindstaff — is
+          // NOT here: it is Brilliance AURA, and each of those items says "and friendly
+          // nearby units" in its own tooltip. It goes out through applyAuras like the other
+          // thirteen aura items, whose `targs1` includes `self`, so the bearer gets it too.)
           // The two REGENERATION items, as distinct from the potions that restore over a
           // fixed duration (AIrg): these are permanent, passive rates while the item is
           // carried. Ring of Regeneration / Health Stone give dataA hp per second; the
@@ -8038,6 +8155,25 @@ export class SimWorld {
           // the Goblin Merchant's signature item, and the Periapt is the +HP staple.
           case "AIms": b.speed += val(0); break; // Boots of Speed (+60 movement)
           case "AIml": b.maxHp += val(0); break; // Periapt of Vitality (+150 max HP)
+          // …and its mana twin, which had no case at all: `AImm` "MaxManaBonus" is the
+          // Pendant of Energy's +150, the Pendant of Mana's +250 and the Mindstaff's +200
+          // (`AI2m`, the row whose comment is simply "200 mana bonus"). One code, one
+          // column, five aliases — the +max-mana staple of the shop.
+          case "AImm": b.maxMana += val(0); break;
+          // The two DAMAGE-REDUCTION items, which are neither armour nor a buff: each cuts
+          // one CLASS of incoming damage by a fraction, applied where that damage lands.
+          //
+          //   `AIsr` Runed Bracers      dataB 0.33 — "Reduces Magic damage dealt to the Hero
+          //                                          by <AIsr,DataB1,%>%" (also Frost Wyrm
+          //                                          Skull Shield, Drek'thar's Spellbook)
+          //   `AIdd` Defend (Item)      dataA 0.70 — Arcanite Shield: "Reduces damage from
+          //                                          ranged attacks to <AIdd,DataA1,%>%"
+          //
+          // Note the two columns are stated the opposite way round — the bracers name what
+          // they TAKE OFF, the shield what it LETS THROUGH — which is exactly what their
+          // tooltips print, so each is normalised here into "fraction removed".
+          case "AIsr": b.magicReduction = Math.max(b.magicReduction, val(1)); break;
+          case "AIdd": b.rangedReduction = Math.max(b.rangedReduction, 1 - val(0)); break;
         }
         // --- The two things an ORB gives simply by being CARRIED, neither of which is
         // subject to the one-orb-at-a-time rule (src/sim/orbs.ts). The on-hit EFFECT is,
@@ -8209,6 +8345,7 @@ export class SimWorld {
     let invisible = false;
     let cloaked = false;
     let invuln = false;
+    let magicImmuneBuff = false; // the TIMED kind (Anti-magic Potion); see BuffKind.magicImmune
     let maxHpBonus = 0;
     for (const b of u.buffs) {
       if (b.kind === "armor") armorBonus += b.value;
@@ -8240,12 +8377,13 @@ export class SimWorld {
         if (b.delay <= 0) invisible = true; // …but not actually faded until the transition elapses
       }
       else if (b.kind === "invuln") invuln = true;
+      else if (b.kind === "magicImmune") magicImmuneBuff = true; // Anti-magic Potion's 15 seconds
       else if (b.kind === "maxHp") maxHpBonus += b.value; // Metamorphosis' alternate-form pool
     }
     // Masonry-style `rhpo` is a PERCENTAGE of the base pool, applied before the flat `rhpx`
     // adds (Animal War Training's +150).
     const newMaxHp = (u.baseMaxHp + HP_PER_STR * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp + maxHpBonus;
-    const newMaxMana = u.baseMaxMana + MANA_PER_INT * dInt + upg.mana;
+    const newMaxMana = u.baseMaxMana + MANA_PER_INT * dInt + upg.mana + item.maxMana;
     // Moving the ceiling keeps the unit's RELATIVE pool, in both directions: "Increasing the
     // maximum amount of Hit Points of a unit does not change its relative Hit Points"
     // (Liquipedia, Hit_Points). The page's own item-drop trick proves the ratio (not a flat
@@ -8370,8 +8508,14 @@ export class SimWorld {
     // So until that research lands a night elf takes exactly the same night penalty as
     // everyone else (Archer 1400 day / 800 night), and afterwards it does not. Same
     // upgrade-gated-ability shape as Pillage (Ropg) and Defend (Rhde).
-    const ultravision = this.tech && this.tech.researchLevel(u.owner, "Reuv") > 0
-      && u.abilities.some((a) => a.code === "Ault" && a.level >= 1);
+    //
+    // …and the Goblin Night Scope (`AIuv`, `code = Ault`) is the same ability CARRIED, with
+    // one difference that matters: `Reuv` gates the night elf racial, not the item. The
+    // scope's own row has no `Requires`, and it is sold to every race in the game — a human
+    // hero carrying one sees at night without ever having built a Hunter's Hall.
+    const ultravision = (this.tech && this.tech.researchLevel(u.owner, "Reuv") > 0
+      && u.abilities.some((a) => a.code === "Ault" && a.level >= 1))
+      || this.itemAbilityLevel(u, "Ault") !== null;
     u.sightNight = ultravision ? u.sightDay : u.baseSightNight + upg.sight;
     u.speed = Math.max(0, (u.baseSpeed + upg.speed + item.speed) * (1 - slowMove) * (1 + hasteMove));
     // Root (`Aroo`) — an Ancient is a building that can decide to walk. UnitBalance already
@@ -8392,6 +8536,11 @@ export class SimWorld {
     // Vampiric Aura only — the Mask of Death's life steal is an ORB (exclusive with every
     // other orb, and it works on a ranged attack), so it is applied at the blow instead.
     u.lifesteal = lifesteal;
+    // The two carried damage cuts (Runed Bracers, Arcanite Shield). Derived like every other
+    // item stat; spent at the two places the damage they name arrives — spellDamage and the
+    // ranged half of dealDamage.
+    u.magicReduction = item.magicReduction;
+    u.rangedReduction = item.rangedReduction;
     // Spiked Carapace also returns a fraction of melee damage (dataA), like Thorns.
     u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
     u.stunned = stun;
@@ -8409,7 +8558,11 @@ export class SimWorld {
     // grants or removes it mid-life, so it is derived here alongside the rest. (`Amim` carries
     // no Requires, so the tech gate below is a formality for it — it is the tower detection
     // that actually needs one.)
-    u.magicImmune = u.abilities.some((a) => a.code === "Amim" && a.level >= 1 && this.techMeets(u.owner, a.id));
+    // (The Necklace of Spell Immunity's `AImx` is that same `Amim` in an inventory, so the
+    // carried half is asked too — see itemAbilityLevel.)
+    u.magicImmune = magicImmuneBuff
+      || u.abilities.some((a) => a.code === "Amim" && a.level >= 1 && this.techMeets(u.owner, a.id))
+      || this.itemAbilityLevel(u, "Amim") !== null;
     // …and RESISTANT SKIN (`Arsk`) the same way, with one difference that matters: it DOES
     // carry a `Requires` (`[Arsk] Requires=Rers`, the Ancient of Lore upgrade), which is what
     // makes a Mountain Giant resistant only once the research is in — while the units that
@@ -8444,6 +8597,14 @@ export class SimWorld {
       if (!this.techMeets(u.owner, a.id)) continue;
       const lvl = this.abilities?.get(a.id)?.levelData[Math.max(0, a.level - 1)];
       const r = lvl?.castRange;
+      if (r !== undefined && !Number.isNaN(r)) u.detectRadius = Math.max(u.detectRadius, r);
+    }
+    // …and the CARRIED detector: the Gem of True Seeing's `Adt1` is `code = Adet`, the row
+    // whose comment is literally "Detect (Sentry Ward)" and whose Rng1 = 1100. No unit in
+    // 1.27a lists `Adet` — the gem is the only thing in the game that hands it out, which is
+    // why the note above says the code is kept "for custom maps". It was the item's all along.
+    for (const code of ["Atru", "Adet", "Adts"] as const) {
+      const r = this.itemAbilityLevel(u, code)?.castRange;
       if (r !== undefined && !Number.isNaN(r)) u.detectRadius = Math.max(u.detectRadius, r);
     }
     u.invisible = invisible;
@@ -8671,14 +8832,48 @@ export class SimWorld {
 
   /** The level-data for a passive ability the unit has learned (by base code), or
    *  null. Shared by passive-effect derivations (Spiked Carapace, Critical Strike,
-   *  Evasion, Cleaving Attack). */
+   *  Evasion, Cleaving Attack).
+   *
+   *  An ability a hero CARRIES counts exactly as one it learned. That is the whole of what
+   *  a passive item is in WC3: the Talisman of Evasion's `AIev` is `code = AEev`, the Demon
+   *  Hunter's own Evasion, and Searing Blade's `AIcs` is `code = AOcr`, the Blademaster's
+   *  Critical Strike — same row shape, same columns, same handler. Looking only at
+   *  `u.abilities` here is what silently switched every passive item in the game off (issue
+   *  #130): the item was carried, its ability was loaded, and nothing ever asked it. */
   private passiveLevelData(u: SimUnit, code: string): AbilityLevel | null {
     if (!this.abilities) return null;
     const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
-    if (!ab) return null;
+    if (!ab) return this.itemAbilityLevel(u, code);
     const def = this.abilities.get(ab.id);
     if (!def) return null;
     return def.levelData[Math.min(ab.level, def.levelData.length) - 1] ?? null;
+  }
+
+  /** The def + level-data of the first ability in `u`'s INVENTORY whose base `code` matches
+   *  — the item half of passiveLevelData, split out because a few callers want the def too
+   *  (an item's Bash reaches for its own buff art the way the Mountain King's does).
+   *
+   *  Items have no ranks: every item ability row is `levels = 1`, so level 1 is the only
+   *  level there is. Slot order decides which of two copies answers, which is the same rule
+   *  the orbs already use (src/sim/orbs.ts) — WC3 does not stack two Talismans of Evasion. */
+  private itemAbility(u: SimUnit, code: string): { def: AbilityDef; level: AbilityLevel } | null {
+    if (!u.inventory.length || !this.itemReg || !this.abilities) return null;
+    for (const held of u.inventory) {
+      if (!held) continue;
+      const item = this.itemReg.get(held.itemId);
+      if (!item) continue;
+      for (const abilId of item.abilities) {
+        const def = this.abilities.get(abilId);
+        const level = def?.levelData[0];
+        if (def && def.code === code && level) return { def, level };
+      }
+    }
+    return null;
+  }
+
+  /** …and just its numbers, for the derivations that need nothing else. */
+  private itemAbilityLevel(u: SimUnit, code: string): AbilityLevel | null {
+    return this.itemAbility(u, code)?.level ?? null;
   }
 
   /** Read dataX (a=0..i=8) off an ability level, NaN-safe. */
@@ -9124,8 +9319,7 @@ export class SimWorld {
     if (!this.abilities) return;
     for (const src of this.units.values()) {
       if (src.hp <= 0) continue;
-      for (const ab of src.abilities) {
-        if (ab.level < 1) continue;
+      for (const ab of this.auraSources(src)) {
         const make = AURA_BUFFS[ab.code];
         if (!make) continue;
         const def = this.abilities.get(ab.id);
@@ -9177,6 +9371,31 @@ export class SimWorld {
             this.applyBuffInternal(t, { kind: e.kind, group: `${ab.code}:${e.kind}`, timeLeft: e.duration ?? AURA_REFRESH, sourceId: src.id, value, value2: e.value2, buffId: buffIdOf(def, ab.level) });
           }
         }
+      }
+    }
+  }
+
+  /** Everything on a unit that could be broadcasting an AURA: the abilities it has learned,
+   *  and the ones it is CARRYING (issue #130).
+   *
+   *  Fourteen items in the game are auras — Warsong Battle Drums (`AIcd` = `AOac`, Command),
+   *  the Ancient Janggo of Endurance (`AIae` = `AOae`, Endurance), the Legion Doom-Horn
+   *  (Unholy), Scourge Bone Chimes (Vampiric), Alleria's Flute (Trueshot), the Lion Horn of
+   *  Stormwind and Bladebane Armor (Devotion), Khadgar's Pipe of Insight and the Mindstaff
+   *  (Brilliance), the Thunderlizard Diamond (Lightning Shield's aura twin), the Sacred
+   *  Relic, the Ancestral Staff, the Shield of Honor and the Scepter of Healing. Every one of
+   *  them says "and friendly nearby units" in its own tooltip, and scanning only `abilities`
+   *  here made all fourteen do nothing whatever for anybody — including their bearer.
+   *
+   *  An item ability has no ranks (`levels = 1`), hence level 1. */
+  private *auraSources(u: SimUnit): Iterable<{ id: string; code: string; level: number }> {
+    for (const ab of u.abilities) if (ab.level >= 1) yield ab;
+    if (!u.inventory.length || !this.itemReg || !this.abilities) return;
+    for (const held of u.inventory) {
+      if (!held) continue;
+      for (const abilId of this.itemReg.get(held.itemId)?.abilities ?? []) {
+        const def = this.abilities.get(abilId);
+        if (def && AURA_BUFFS[def.code]) yield { id: abilId, code: def.code, level: 1 };
       }
     }
   }
@@ -9236,8 +9455,11 @@ export class SimWorld {
    *  damage and must go through the target's armour like the rest of the strike. */
   private applyBash(attacker: SimUnit, target: SimUnit): void {
     if (!this.abilities || target.invulnerable || target.hp <= 0) return;
+    // Learned first, then CARRIED — the Rusty Mining Pick's `AIbx` is `code = AHbh` with the
+    // same columns (15% for 25 damage and a 2s stun), so it wants the same lookup and the
+    // same buff art rather than a second copy of this method.
     const ab = this.findAbility(attacker, "AHbh");
-    const def = ab && this.abilities.get(ab.id);
+    const def = (ab && this.abilities.get(ab.id)) || this.itemAbility(attacker, "AHbh")?.def;
     const lvl = this.passiveLevelData(attacker, "AHbh");
     if (!def || !lvl) return;
     // Dur1=2 / HeroDur1=1 — the game gives heroes their own, shorter stun rather than
@@ -10271,12 +10493,38 @@ export class SimWorld {
     }
   }
 
+  /** Spend a Spell Shield on this cast, if the target is wearing one and the cast is an
+   *  enemy's. True = the spell was eaten and must not run.
+   *
+   *  The AMULET regrows its shield on `ANss` `Cool1` = 40 seconds ("once every <ANss,Cool1>
+   *  seconds"), which is what the re-arm below is: the wearer's own item puts the buff back.
+   *  The RUNE (`ANse`) grants no cooldown column at all, so its shield is one block and gone
+   *  — the same buff, told apart by whether the holder is still carrying an amulet. */
+  private consumeSpellShield(caster: SimUnit, targetId: number): boolean {
+    const t = this.units.get(targetId);
+    if (!t || t === caster || !t.buffs.some((b) => b.kind === "spellShield")) return false;
+    if (!this.hostile(caster, t)) return false;
+    t.buffs = t.buffs.filter((b) => b.kind !== "spellShield");
+    const amulet = this.itemAbility(t, "ANss");
+    if (amulet) t.spellShieldCooldown = amulet.level.cooldown || 40;
+    // The block's own flash — `BNss`'s art, worn where the spell would have landed.
+    const fxDef = amulet?.def ?? this.abilityByCode("ANse");
+    if (fxDef?.buffArt) this.spellEffects.push({ art: fxDef.buffArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
+    return true;
+  }
+
   /** Run a spell's effect handler (dispatched on base `code`). Shared by instant
    *  casts and spell-projectile impacts. */
   applySpellEffect(code: string, rank: number, caster: SimUnit, ctx: CastContext, def?: AbilityDef): void {
     const handler = SPELL_HANDLERS[code];
     const d = def ?? (this.abilities ? this.abilityByCode(code) : undefined);
     if (!handler || !d) return;
+    // Spell Shield (`ANss` on the Amulet, `ANse` on the Rune of Shielding): "Blocks a
+    // negative spell that an enemy casts on the Hero." It is spent on the CAST, before any
+    // of it lands — the shield is what the spell hit — and only by a spell that was aimed
+    // AT the wearer by somebody hostile: an area effect that happens to catch him is not a
+    // spell cast on him, and neither is a friendly one.
+    if (ctx.targetId && this.consumeSpellShield(caster, ctx.targetId)) return;
     // Which ability is casting, for the length of the handler. Every buff it applies belongs
     // to this ability's buff row unless it says otherwise, so `applyBuff` can fill `buffId`
     // in rather than each of the ~90 handlers repeating it — and a handler that applies a
@@ -10903,33 +11151,39 @@ export class SimWorld {
           caster.vanished = false;
           this.teleportUnit(caster, s.x, s.y);
         } else {
-          this.spawnIllusion(caster, s.x, s.y, m);
+          this.spawnIllusion(caster, caster.owner, caster.team, caster.id, s.x, s.y, m);
         }
       }
       if (all) this.mirrorCasts.splice(i, 1);
     }
   }
 
-  /** The illusion request itself — an exact copy of the caster's own type, flagged so the
-   *  sim knows it must not hurt anything and the renderer knows to tint it. */
-  private spawnIllusion(caster: SimUnit, x: number, y: number, m: { duration: number; dealt: number; taken: number; abilityId: string; mana: number }): void {
+  /** The illusion request itself — an exact copy of `of`, flagged so the sim knows it must
+   *  not hurt anything and the renderer knows to tint it.
+   *
+   *  `of` and the OWNER are separate arguments because the two abilities that make illusions
+   *  disagree about them: Mirror Image copies the caster and keeps him, while the Wand of
+   *  Illusion copies whoever you point it at — including an enemy — and hands the copy to
+   *  the player who waved the wand. Everything below is read off `of`, everything about
+   *  allegiance off the arguments. */
+  private spawnIllusion(of: SimUnit, owner: number, team: number, sourceId: number, x: number, y: number, m: { duration: number; dealt: number; taken: number; abilityId: string; mana: number; unsummonArt?: string }): void {
     const def = this.abilities?.get(m.abilityId);
     this.summonRequests.push({
-      unitId: caster.typeId,
+      unitId: of.typeId,
       x,
       y,
-      facing: caster.facing,
-      owner: caster.owner,
-      team: caster.team,
+      facing: of.facing,
+      owner,
+      team,
       summonLeft: m.duration,
-      sourceId: caster.id,
+      sourceId,
       summonArt: "",
       // Each image lands on the exact spot its missile flew to (the real hero teleports to
       // one of them), so the spot is final — never a step further along the caster's facing.
       atPoint: true,
       // An image popping is BOmi's Specialart (MirrorImageDeathCaster) — its folder-mate
       // MirrorImageDeath.wav rides it as a model SND event (AnimLookups AOMI).
-      unsummonArt: def?.buffSpecialArt ?? "",
+      unsummonArt: m.unsummonArt ?? def?.buffSpecialArt ?? "",
       // An image is an exact copy, and that includes the name over its head and the level
       // in its bar. Spawning rolls a fresh proper name per hero and starts it at the unit
       // TYPE's level (1), so a level-5 Blademaster would have conjured three level-1 copies
@@ -10938,14 +11192,14 @@ export class SimWorld {
       illusion: {
         dealt: m.dealt,
         taken: m.taken,
-        properName: caster.properName,
+        properName: of.properName,
         mana: m.mana,
-        level: caster.level,
-        baseStr: caster.baseStr,
-        baseAgi: caster.baseAgi,
-        baseInt: caster.baseInt,
-        baseMaxHp: caster.baseMaxHp,
-        inventory: caster.inventory.map((it) => (it ? { itemId: it.itemId, charges: it.charges } : null)),
+        level: of.level,
+        baseStr: of.baseStr,
+        baseAgi: of.baseAgi,
+        baseInt: of.baseInt,
+        baseMaxHp: of.baseMaxHp,
+        inventory: of.inventory.map((it) => (it ? { itemId: it.itemId, charges: it.charges } : null)),
       },
     });
   }
@@ -11383,8 +11637,13 @@ export class SimWorld {
     // Magic Immunity stops spell damage as well as spell targeting — that is what makes a
     // Dryad walk through a Blizzard. It belongs on this seam and not in landDamage, because
     // landDamage is also the ATTACK path and a magic-immune unit is hit by weapons normally.
+    // Runed Bracers (`AIsr`) sit BEFORE the Anti-magic Shell's pool rather than after it: the
+    // bracers reduce "Magic damage dealt to the Hero", so what reaches the shell to be
+    // absorbed is already the smaller number, and a hero wearing both spends his shell more
+    // slowly. Ethereal's +66% is applied first for the same reason — it is a property of what
+    // is being hit, not a second reduction to be netted off.
     spellDamage: (t, amount, src) =>
-      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, t.ethereal ? amount * ETHEREAL_SPELL_BONUS : amount), src, false),
+      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * ETHEREAL_SPELL_BONUS : amount) * (1 - t.magicReduction)), src, false),
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
@@ -11486,6 +11745,15 @@ export class SimWorld {
       caster.voodooAbil = def.id;
     },
     countOwned: (owner, typeId) => this.countOwnedOf(owner, typeId),
+    revealArea: (owner, team, o) => this.addItemReveal(owner, team, o),
+    // One copy beside the original, on the spot the summon placer finds for it (`atPoint`
+    // false — the wand names no destination, unlike a Mirror Image missile which does).
+    createIllusion: (of, owner, team, sourceId, o) => {
+      this.spawnIllusion(of, owner, team, sourceId, of.x, of.y, {
+        duration: o.durationSec, dealt: o.dealt, taken: o.taken,
+        abilityId: this.casting?.def.id ?? "", mana: of.mana, unsummonArt: o.unsummonArt,
+      });
+    },
   };
 
   /** Fell up to `max` trees within `radius` of a point, nearest first, and say where each
@@ -11864,6 +12132,9 @@ export class SimWorld {
     simProfile.begin("sim.world.pre");
     this.tickAttackReveals(dt);
     this.tickDeathReveals(dt); // …and the eyes a body keeps while it falls (issue #126)
+    this.tickItemReveals(dt); // …and the ground a Crystal Ball / flare / Dust is holding open
+    this.tickMoonstone(dt); // …and the eclipse a Moonstone is holding over the map
+    this.tickSoulGems(); // …and the hero a Soul Gem is holding off it
     this.tickBuildings(dt);
     this.tickMineCrews(dt); // night elf and undead gold: no round trip, just a crew and a clock
     this.tickShops(dt);
@@ -11879,6 +12150,7 @@ export class SimWorld {
       this.tickImmolation(u, dt); // Immolation burns whatever it is standing next to, and pays for it
       this.tickVoodoo(u, dt); // …and Big Bad Voodoo renews its circle for as long as the ritual holds
       this.tickExhume(u, dt); // …and a Meat Wagon with the upgrade grows its own bodies
+      this.tickCarriedItems(u, dt); // …and an Amulet of Spell Shield regrowing its shield
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u); // a Moon Well pouring itself into whoever is drinking
@@ -12860,6 +13132,13 @@ export class SimWorld {
       if (d.team !== team || d.hp <= 0 || d.detectRadius <= 0) continue;
       if (Math.hypot(d.x - x, d.y - y) <= d.detectRadius) return true;
     }
+    // …and detection an ITEM bought rather than a unit carries: Dust of Appearance and the
+    // Crystal Ball reveal invisible units inside their circle for as long as it lasts, with
+    // nothing standing there to do the seeing (see ItemReveal.detect).
+    for (const r of this.itemReveals) {
+      if (!r.detect || r.team !== team) continue;
+      if (Math.hypot(r.x - x, r.y - y) <= r.radius) return true;
+    }
     return false;
   }
 
@@ -13145,7 +13424,7 @@ export class SimWorld {
     for (const h of hits) {
       damage *= 1 - s.loss;
       if (damage <= 0) break;
-      this.applyDamage(h.t, damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "");
+      this.applyDamage(h.t, damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true);
     }
   }
 
@@ -13186,7 +13465,7 @@ export class SimWorld {
           // Orb of Corruption: "the armor reduction happens before the damage of the hero is
           // dealt"), so the debuff half of an orb goes on first and the rest after.
           this.applyOrbArmorFirst(this.units.get(p.sourceId), t, p.orb);
-          const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "");
+          const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true);
           this.applyOrbEffect(this.units.get(p.sourceId), t, p.orb, dealt); // the orb this arrow carried
           this.applyLiquidFire(this.units.get(p.sourceId), t); // Batrider: burn a struck building
           const shooter = this.units.get(p.sourceId);
@@ -13256,7 +13535,7 @@ export class SimWorld {
       // its "quarter" ring 0.1. Only a row that states neither takes the names literally.
       const frac = gap <= a.full ? 1 : gap <= a.half ? a.halfFactor : gap <= a.quarter ? a.quarterFactor : 0;
       if (frac <= 0) continue;
-      const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "");
+      const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true);
       if (source) this.applyPillage(source, t, dealt); // a Demolisher with Pillage loots what it shells
       if (frac === 1 && !nearest) nearest = t;
     }
@@ -13800,7 +14079,7 @@ export class SimWorld {
     // rather than at a launch — but the ordering inside the blow is the same (see above).
     const orb = this.resolveOrb(attacker, target);
     this.applyOrbArmorFirst(attacker, target, orb);
-    const dealt = this.applyDamage(target, raw, attacker.id, w.attackType, w.weaponSound);
+    const dealt = this.applyDamage(target, raw, attacker.id, w.attackType, w.weaponSound, w.ranged);
     // The crit's own tell: WC3 prints the blow over the victim in red with an exclamation
     // mark ("127!"), and it is the DAMAGE DEALT — what the health bar actually loses, after
     // armour — not the pre-mitigation roll. Nothing lands, nothing is printed: a swing the
@@ -14286,7 +14565,7 @@ export class SimWorld {
     return out;
   }
 
-  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number, attackType = AttackType.None, weaponSound = ""): number {
+  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number, attackType = AttackType.None, weaponSound = "", ranged = false): number {
     // A Mirror Image illusion swings, connects, and does nothing: AOmi's DataB ("Damage
     // Dealt (%)") is 0. Its sheet still reads like the Blademaster's — the deception is
     // the whole ability — so this is enforced here, at the blow, not by editing its stats.
@@ -14322,6 +14601,11 @@ export class SimWorld {
       }
       rawDamage *= this.dataOf(defend, 0, 0.5); // dataA — the fraction that gets through
     }
+    // The Arcanite Shield (`AIdd`, whose row is literally called "Defend (Item)") is the same
+    // idea worn rather than braced, and its Ubertip states the rule the same way round:
+    // "Reduces damage from ranged attacks to <AIdd,DataA1,%>%". No reflect, no stance, no
+    // research — just a standing cut on anything that arrives by projectile.
+    if (ranged && target.rangedReduction > 0) rawDamage *= 1 - target.rangedReduction;
     // WC3 damage table: the weapon's attack type vs the target's armor type scales
     // the hit (Normal +50% vs Medium, Pierce ×2 vs Light/Unarmored, Siege ×1.5 vs
     // Fortified, Magic ×2 vs Heavy, …). Applied before the armor-value reduction;
@@ -14515,6 +14799,41 @@ export class SimWorld {
     return this.deathReveals;
   }
 
+  /** Open a patch of fog for a player (see ItemReveal and SpellApi.revealArea). */
+  addItemReveal(owner: number, team: number, o: { x: number; y: number; radius: number; seconds: number; detect?: boolean; follow?: number; untilBuffGone?: string }): void {
+    if (o.radius <= 0 || o.seconds <= 0) return;
+    this.itemReveals.push({
+      x: o.x, y: o.y, radius: o.radius, owner, team, timeLeft: o.seconds,
+      detect: !!o.detect, unitId: o.follow ?? 0, untilBuffGone: o.untilBuffGone ?? "",
+    });
+  }
+
+  /** Age the item reveals, and drop the ones whose subject has gone. A following reveal
+   *  re-reads its unit's position every tick, which is the whole point of the Wand of
+   *  Shadowsight: the eye goes where the unit goes. */
+  private tickItemReveals(dt: number): void {
+    for (let i = this.itemReveals.length - 1; i >= 0; i--) {
+      const r = this.itemReveals[i];
+      r.timeLeft -= dt;
+      let done = r.timeLeft <= 0;
+      if (!done && r.unitId) {
+        const u = this.units.get(r.unitId);
+        // The unit died, or the buff that was holding the eye open was dispelled off it.
+        if (!u || u.hp <= 0 || (r.untilBuffGone && !u.buffs.some((b) => b.group === r.untilBuffGone))) done = true;
+        else { r.x = u.x; r.y = u.y; }
+      }
+      if (done) {
+        this.itemReveals[i] = this.itemReveals[this.itemReveals.length - 1];
+        this.itemReveals.pop();
+      }
+    }
+  }
+
+  /** The fog an item is holding open, for the vision pass. */
+  activeItemReveals(): Iterable<ItemReveal> {
+    return this.itemReveals;
+  }
+
   /**
    * A blow landed on somebody's property: raise the under-attack warning, at most as often
    * as MiscData allows (see `attackNotify`).
@@ -14675,6 +14994,7 @@ export class SimWorld {
    *  it in place at full HP/mana, put the ability on cooldown, and keep it alive. */
   private tryReincarnate(u: SimUnit): boolean {
     if (!u.isHero || u.hp > 0) return false;
+    if (this.tryAnkh(u)) return true;
     const ab = u.abilities.find((a) => a.code === "AOre" && a.level >= 1 && a.cooldownLeft <= 0);
     if (!ab || !this.abilities) return false;
     const def = this.abilities.get(ab.id);
@@ -14685,6 +15005,38 @@ export class SimWorld {
     u.mana = u.maxMana;
     u.buffs = u.buffs.filter((b) => b.kind === "manaShield"); // clear debuffs on revive
     if (def.targetArt || def.casterArt) this.spellEffects.push({ art: def.targetArt || def.casterArt, x: u.x, y: u.y, targetId: u.id, z: 0 });
+    return true;
+  }
+
+  /** ANKH OF REINCARNATION (`AIrc`, "ItemReincarnation") — "Automatically brings the Hero back
+   *  to life with <AIrc,DataB1> hit points when the Hero wearing the Ankh dies."
+   *
+   *  Reincarnation carried rather than learned, and its columns say the same things:
+   *    DataA "Delay After Death (seconds)"      7
+   *    DataB "Restored Life"                    500
+   *    DataC "Restored Mana (-1 for current)"   -1  ← keep whatever he had
+   *  The Ankh is `uses = 1` and `perishable = 1`, so it is SPENT: the item is gone and the
+   *  hero is standing where he fell. (Like the Tauren Chieftain's own `AOre` above, the
+   *  revive is immediate rather than after DataA — the delay is not modelled for either, and
+   *  modelling it for one only would make the item behave unlike the ability it is.)
+   *
+   *  Checked BEFORE `AOre` so a Tauren Chieftain wearing an Ankh spends the item and keeps
+   *  his ultimate off cooldown, which is the order that loses the player less. */
+  private tryAnkh(u: SimUnit): boolean {
+    const slot = u.inventory.findIndex((h) => {
+      const item = h && this.itemReg?.get(h.itemId);
+      return !!item && item.abilities.some((a) => this.abilities?.get(a)?.code === "AIrc");
+    });
+    if (slot < 0) return false;
+    const ankh = this.itemAbility(u, "AIrc");
+    if (!ankh) return false;
+    u.inventory[slot] = null; // spent — `uses` 1, `perishable` 1
+    u.hp = Math.min(u.maxHp, this.dataOf(ankh.level, 1, 500));
+    const mana = this.dataOf(ankh.level, 2, -1);
+    if (mana >= 0) u.mana = Math.min(u.maxMana, mana);
+    u.buffs = u.buffs.filter((b) => b.kind === "manaShield"); // clear debuffs on revive
+    this.recomputeStats(u);
+    if (ankh.def.fxArt || ankh.def.targetArt) this.spellEffects.push({ art: ankh.def.fxArt || ankh.def.targetArt, x: u.x, y: u.y, targetId: u.id, z: 0 });
     return true;
   }
 
@@ -15356,16 +15708,75 @@ export class SimWorld {
     for (const abilId of def.abilities) {
       const ad = this.abilities.get(abilId);
       if (!ad) continue;
+      const fired = this.applyItemAbility(u, ad, held, targetId, x, y);
+      if (fired === "unhandled") continue; // ability we don't handle — try the next one
+      if (!fired) return false; // handled code but nothing to do (already full) — no charge spent
+      this.consumeItemUse(u, slot, def, ad.levelData[0]?.cooldown || 0);
+      // USE_ITEM is raised AFTER the charge is spent: GetItemCharges inside a use trigger
+      // reports what's left, which is what the classic "give the item its charge back to
+      // make it infinite" JASS idiom relies on (SetItemCharges(GetManipulatedItem(), n+1)).
+      this.noteItem(u, held, "use");
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Run ONE item ability's effect on `u` — the single dispatcher behind both ways an item's
+   * effect can be reached (issue #130), because they are the same effect:
+   *
+   *   • PRESSED out of the inventory (useItem) — a potion, a scroll, a wand, a staff;
+   *   • CONSUMED on pickup (applyPowerup) — a tome, a rune, a glyph, a chest of gold.
+   *
+   * The game ships several abilities BOTH ways round and expects one behaviour from them:
+   * `AIha` is the Scroll of Healing and the three Runes of Healing, `AIsa` the Scroll and the
+   * Rune of Speed, `AIdi` the Wand of Negation and the Rune of Dispel Magic. Keeping a
+   * separate switch per path is what left the scroll half of each pair doing nothing at all.
+   *
+   * Returns `"unhandled"` when no code here (and no SPELL_HANDLERS entry) knows this ability,
+   * so the caller can try the item's next one; `false` when it was understood but there was
+   * nothing to do, which is what refuses a Potion of Healing at full health WITHOUT spending
+   * its charge; `true` when it fired.
+   */
+  private applyItemAbility(u: SimUnit, ad: AbilityDef, held: HeldItem | null, targetId: number, x: number, y: number): boolean | "unhandled" {
+    if (!this.abilities) return "unhandled";
+    {
       const lvl = ad.levelData[0];
       const d = (i: number) => (lvl?.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
       let fired = false;
       switch (ad.code) {
-        case "AIhe": // Potion of Healing / Health Stone / Scroll of Healing → restore HP
-          if (u.hp < u.maxHp) { u.hp = Math.min(u.maxHp, u.hp + d(0)); fired = true; }
+        // The four INSTANT restore codes, which differ only in which columns they fill and
+        // how far they reach — so one helper serves all of them and the reach comes off each
+        // row's own `Area1`/`targs1` rather than being assumed (see itemAreaTargets).
+        //
+        //   `AIhe` Potion of Healing, Health Stone, Essence of Aszune   DataA hp, no area
+        //   `AIma` Potion of Mana, Mana Stone                           DataA mana, no area
+        //   `AIha` Scroll of Healing (and the three Runes of Healing)   DataA hp, Area 600
+        //   `AImr` Scroll of Mana (and the two Runes of Mana)           DataA mana, Area 600
+        //   `AIra` Scroll of Restoration (and the Rune)                 DataA hp + DataB mana
+        //
+        // The last three used to exist only on the powerup path, so the three SCROLLS — a
+        // Scroll of Healing is on every shop's front row — did nothing at all when pressed
+        // (issue #130). They are the same ability as their runes and now share the handler.
+        // === The PERMANENT pickups — a tome is not an effect, it is a change ===
+        // Attribute tomes (dataA=agi, dataB=int, dataC=str) — permanent, so bump the BASE
+        // attribute. The HP/mana the new points confer needs no hand-adding: recomputeStats
+        // raises the ceiling and carries the current pool up with it in proportion, the same
+        // rule every other ceiling move obeys (see recomputeStats).
+        case "AIam": case "AIim": case "AIsm": case "AIxm":
+          u.baseAgi += d(0); u.baseInt += d(1); u.baseStr += d(2);
+          this.recomputeStats(u);
+          fired = true;
           break;
-        case "AIma": // Potion of Mana / Scroll of Mana → restore mana
-          if (u.mana < u.maxMana) { u.mana = Math.min(u.maxMana, u.mana + d(0)); fired = true; }
-          break;
+        case "AImi": u.baseMaxHp += d(0); this.recomputeStats(u); fired = true; break; // Manual of Health
+        case "AIem": if (u.isHero) { this.gainXp(u, d(0)); fired = true; } break; // Tome of Experience
+        case "AIgo": this.stashOf(u.owner).gold += d(0); fired = true; break; // Gold Coins
+        case "AIlu": this.stashOf(u.owner).lumber += d(0); fired = true; break; // Bundle of Lumber
+        case "AIhe": fired = this.itemRestore(u, ad, 0, -1); break;
+        case "AIma": fired = this.itemRestore(u, ad, -1, 0); break;
+        case "AIha": fired = this.itemRestore(u, ad, 0, -1); break;
+        case "AImr": fired = this.itemRestore(u, ad, -1, 0); break;
+        case "AIra": fired = this.itemRestore(u, ad, 0, 1); break;
         // Healing Salve / Clarity Potion / Potion & Scroll of Rejuvenation — restore over
         // TIME, not at once. DataA is the total hit points and DataB the total mana the
         // effect is worth across `Dur1`, so the per-second rate is the total over the
@@ -15375,33 +15786,55 @@ export class SimWorld {
         // Which buff the unit visibly wears is the ability's own choice among the three it
         // lists (`BuffID1 = BIrg,BIrl,BIrm`): life-and-mana, life alone, mana alone. So the
         // numbers pick it — a salve with no DataB wears BIrl and shows only the green swirl.
+        //
+        // WHO it lands on is the row's own business, and the three shapes it takes are the
+        // reason this reads its reach rather than assuming the user (issue #130):
+        //
+        //   `AIsl` Scroll of Regeneration  Area1 600, targs `…friend,self,organic…`  → the AREA
+        //   `AIrl` Healing Salve           Rng1 500,  same targs, no Area1           → a UNIT
+        //   `AIp*`/`AIpr`/`AIpl`           neither                                  → the user
+        //
+        // and each states it in words too: the scroll's Ubertip says "all friendly
+        // non-mechanical units in an area around your Hero", the salve's "a target unit's hit
+        // points", the Clarity Potion's "the Hero's mana". Applying every one of them to the
+        // drinker turned the scroll into a potion — which is the bug this issue opens with.
         case "AIrg": {
           const seconds = lvl?.duration || 0;
           const hp = d(0);
           const mana = d(1);
           if (seconds <= 0 || (hp <= 0 && mana <= 0)) break;
-          // Nothing to restore = nothing to spend. WC3 refuses a salve at full health.
-          if (hp > 0 && mana <= 0 && u.hp >= u.maxHp) break;
-          if (mana > 0 && hp <= 0 && u.mana >= u.maxMana) break;
-          if (hp > 0 && mana > 0 && u.hp >= u.maxHp && u.mana >= u.maxMana) break;
+          // A unit is only AIMED AT when the row carries a cast range to aim over. The Clarity
+          // Potion has neither `Area1` nor `Rng1`, so a stray target id (a click that happened
+          // to land on somebody) must not redirect the drink.
+          const aimed = targetId && (lvl?.castRange ?? 0) > 0 ? this.units.get(targetId) : undefined;
+          const targets = (lvl?.area ?? 0) > 0
+            ? this.itemAreaTargets(u, ad)
+            : [aimed && this.targetAllowed(u, aimed, ad.targetFlags) === null ? aimed : u];
           const buffId = hp > 0 && mana > 0 ? "BIrg" : hp > 0 ? "BIrl" : "BIrm";
           const fx = this.abilities.buffFx(buffId);
           // …and that same choice is the icon the info panel's Status line shows: a salve's
           // BTNHealingSalve, a Clarity Potion's BTNPotionOfClarity, a Rejuvenation scroll's
           // BTNGreaterRejuvScroll — one row, one art, one name ("Regeneration").
-          if (hp > 0) {
-            this.applyBuffInternal(u, {
-              kind: "hot", group: ITEM_REGEN_GROUP, timeLeft: seconds, sourceId: u.id,
-              value: hp / seconds, value2: 0, fx, buffId,
-            });
+          for (const t of targets) {
+            // Nothing to restore = nothing to spend. WC3 refuses a salve at full health — and
+            // for an area scroll that means refusing only when NOBODY in the circle wants it.
+            if (hp > 0 && mana <= 0 && t.hp >= t.maxHp) continue;
+            if (mana > 0 && hp <= 0 && t.mana >= t.maxMana) continue;
+            if (hp > 0 && mana > 0 && t.hp >= t.maxHp && t.mana >= t.maxMana) continue;
+            if (hp > 0) {
+              this.applyBuffInternal(t, {
+                kind: "hot", group: ITEM_REGEN_GROUP, timeLeft: seconds, sourceId: u.id,
+                value: hp / seconds, value2: 0, fx, buffId,
+              });
+            }
+            if (mana > 0) {
+              this.applyBuffInternal(t, {
+                kind: "manaRegen", group: `${ITEM_REGEN_GROUP}:mana`, timeLeft: seconds, sourceId: u.id,
+                value: mana / seconds, value2: 0, fx: hp > 0 ? [] : fx, buffId, // one set of models, not two
+              });
+            }
+            fired = true;
           }
-          if (mana > 0) {
-            this.applyBuffInternal(u, {
-              kind: "manaRegen", group: `${ITEM_REGEN_GROUP}:mana`, timeLeft: seconds, sourceId: u.id,
-              value: mana / seconds, value2: 0, fx: hp > 0 ? [] : fx, buffId, // one set of models, not two
-            });
-          }
-          fired = true;
           break;
         }
         case "AIvu": // Potion of Invulnerability → brief invulnerability (`Bvul`, "Invulnerable")
@@ -15498,18 +15931,66 @@ export class SimWorld {
           fired = true;
           break;
         }
-        default:
-          continue; // ability we don't handle — try the next granted ability
+        // === The WORLD-LEVEL items ===========================================
+        // Each of these reaches for something no spell handler can see — the clock, the
+        // terrain, the tech graph, the hero's own progression — so each keeps its own small
+        // method here rather than a place in SPELL_HANDLERS.
+        case "AIct": fired = this.itemArtificialNight(ad); break; // Moonstone
+        case "AItp": fired = this.itemTownPortal(u, ad, x, y); break; // Scroll of Town Portal
+        case "AIrt": // Amulet of Recall …
+        case "AUds": fired = this.itemRecall(u, ad, x, y); break; // …and the Diamond of Summoning
+        case "Ablp": fired = this.itemBlight(u, ad, x, y); break; // Sacrificial Skull
+        case "AIbl": fired = this.itemBuild(u, ad, x, y); break; // the eight "Tiny" buildings
+        case "AIlm": fired = this.itemLevelGain(u, ad); break; // Tome of Power
+        case "Aret": fired = this.itemRetrain(u); break; // Tome of Retraining
+        case "AIgl": fired = this.itemGlyph(u, ad); break; // Glyph of Fortification / Ultravision
+        // Soul Gem — the one item whose effect is recorded against the ITEM the user is
+        // holding, so it is only reachable from the press (a powerup has no held item).
+        case "AIso": fired = !!held && this.itemSoulGem(u, held, targetId); break;
+        // MECHANICAL CRITTER (`Amec`) — "Creates a player-controlled critter that can be used
+        // to scout enemies." `DataA "Number of Units Created"` = 1, no Dur1 at all (it is
+        // permanent, not a timed summon).
+        //
+        // Here rather than in SPELL_HANDLERS for one reason: its row names NO unit. `UnitID1`
+        // is empty and no "Mechanical Critter" unit type exists anywhere in the install — the
+        // engine picks the map's own critter and nothing in the data says which. So the item
+        // does nothing and KEEPS ITS ONE CHARGE (`mcri` is uses 1, perishable 1) rather than
+        // vanishing to summon something we invented. A custom map that fills the column in
+        // gets its critter.
+        case "Amec": fired = this.itemSummonUnits(u, ad, 0); break;
+        // The FLAGS (`AIfe`/`AIfl`/`AIfm`/`AIfn`/`AIfo`) — Human/Orc/Night Elf/Undead Flag and
+        // the orc Battle Standard. Their ability rows are EMPTY: no duration, no data, no
+        // buff, no targets. That is not a gap in our reading, it is what the item is — "an
+        // object that is often captured in special scenarios as a win condition", carried so
+        // a map's own triggers can ask who is holding it. Listed so the fall-through below
+        // does not go looking for a handler that was never meant to exist.
+        case "AIfe": case "AIfl": case "AIfm": case "AIfn": case "AIfo":
+          return "unhandled";
+        default: {
+          // === and everything else: the item IS the spell =====================
+          // An item ability row carries the same fields a unit's does — `targs1`, `Area1`,
+          // `Dur1`, the Data columns — so anything with a handler in SPELL_HANDLERS runs
+          // through the same dispatch a cast does, with the ITEM's numbers on it. That is
+          // what makes a Wand of the Wind a Cyclone, a Scroll of the Beast a Roar and the
+          // Legion Doom-Horn an Unholy Aura without any of them needing a case here.
+          //
+          // The corpse items above are not folded into this: they need their refusal checked
+          // BEFORE the charge is spent, which this path cannot express.
+          if (!SPELL_HANDLERS[ad.code]) return "unhandled";
+          // A unit-aimed item pressed at nothing (or at something its row refuses) keeps its
+          // charge. The HUD already asked itemUseError before spending the click, so this is
+          // the guard for the paths that do not — a trigger's UnitUseItemTarget, and the AI.
+          if (ad.target === "unit") {
+            const t = this.units.get(targetId);
+            if (!t || this.targetError(u, t, ad.targetFlags, ad.code) !== null) break;
+          }
+          this.applySpellEffect(ad.code, 1, u, { targetId, x, y }, ad);
+          fired = true;
+          break;
+        }
       }
-      if (!fired) return false; // handled code but nothing to do (already full) — no charge spent
-      this.consumeItemUse(u, slot, def, lvl?.cooldown || 0);
-      // USE_ITEM is raised AFTER the charge is spent: GetItemCharges inside a use trigger
-      // reports what's left, which is what the classic "give the item its charge back to
-      // make it infinite" JASS idiom relies on (SetItemCharges(GetManipulatedItem(), n+1)).
-      this.noteItem(u, held, "use");
-      return true;
+      return fired;
     }
-    return false;
   }
 
   /** Why a staff (`ANpr`/`ANsa`) may not be aimed at `t`, as a commandstrings.txt [Errors]
@@ -15620,14 +16101,39 @@ export class SimWorld {
       // to raise would otherwise burn a charge on nothing. Same line, same query.
       const missing = this.corpseRefusal(u, ad, ad.levelData[0], u.x, u.y);
       if (missing) return missing;
-      if (ad.code !== "ANpr" && ad.code !== "ANsa") continue;
+      if (ad.code === "ANpr" || ad.code === "ANsa") {
+        const t = this.units.get(targetId);
+        if (!t) return "Targetunit"; // "Must target a unit with this action." — clicked bare ground
+        const err = this.staffTargetError(u, ad, t);
+        if (err !== null) return err;
+        const lvl = ad.levelData[0];
+        const mask = lvl?.data[0] === undefined || Number.isNaN(lvl.data[0]) ? 0 : lvl.data[0];
+        return this.staffDestination(t.owner, mask) ? null : "Nopreservationtarget";
+      }
+      // A Scroll of Town Portal with nowhere to go. The game ships the line written for
+      // exactly this: `Notownportalhalls` = "There are no friendly Town Halls to Town Portal
+      // to." Answered on the CLICK so the scroll keeps its charge, as the staves are.
+      if (ad.code === "AItp") return this.nearestHall(u.owner, u.x, u.y) ? null : "Notownportalhalls";
+      // The UNIT-AIMED items. Each is refused by its own row's `targs1` and `Rng1` through the
+      // one shared test a spell goes through (targetError), plus the handful of rules the flag
+      // list cannot express — the same shape POLARITY_SPELLS and MANA_TARGET_SPELLS take.
+      if (ad.target !== "unit") continue;
       const t = this.units.get(targetId);
-      if (!t) return "Targetunit"; // "Must target a unit with this action." — clicked bare ground
-      const err = this.staffTargetError(u, ad, t);
-      if (err !== null) return err;
-      const lvl = ad.levelData[0];
-      const mask = lvl?.data[0] === undefined || Number.isNaN(lvl.data[0]) ? 0 : lvl.data[0];
-      return this.staffDestination(t.owner, mask) ? null : "Nopreservationtarget";
+      if (!t) return "Targetunit";
+      const flagErr = this.targetError(u, t, ad.targetFlags, ad.code);
+      if (flagErr !== null) return flagErr;
+      const range = ad.levelData[0]?.castRange ?? 0;
+      if (range > 0 && Math.hypot(t.x - u.x, t.y - u.y) > range + u.radius + t.radius) return "Notinrange";
+      // Control Magic (`Acmg`) takes SUMMONED units and nothing else — "Grants the ability to
+      // control summoned units", which no `targs1` value can say.
+      // (`Needsummoned` = "Must target summoned units." — the positive line, not `Notsummoned`,
+      // which is the refusal an ability that may NOT touch a summon gives.)
+      if (ad.code === "Acmg" && t.summonLeft <= 0) return "Needsummoned";
+      // The Scepter of Mastery (`AIco`) is Charm with an item's numbers, and carries Charm's
+      // one extra rule in `DataA "Maximum Creep Level"` = 5: "Cannot be used on Heroes or on
+      // creeps higher than level <AIco,DataA1>."
+      if (ad.code === "AIco" && t.isCreep && t.level > this.dataOf(ad.levelData[0] ?? emptyAbilityLevel(), 0, 5)) return "Creeptoopowerful";
+      return null;
     }
     return null; // not an aimed item — nothing to check here
   }
@@ -15653,17 +16159,295 @@ export class SimWorld {
     }
   }
 
-  /** Who a powerup actually lands on. An ability with no `Area1` is the picker's alone (a
-   *  tome, a chest of gold); one with a radius reaches every unit inside it that its own
-   *  `targs1` admits — which for the runes is the friendly, organic army standing around
-   *  the hero who stepped on it. The picker is always in the list: `self` is in those flags,
-   *  and a zero-area ability short-circuits to it. */
-  private powerupTargets(u: SimUnit, ad: AbilityDef): SimUnit[] {
+  /** Who an item's effect actually lands on. An ability with no `Area1` is the user's alone
+   *  (a tome, a chest of gold, a Potion of Healing); one with a radius reaches every unit
+   *  inside it that its own `targs1` admits — which for the runes and the scrolls is the
+   *  friendly, organic army standing around the hero. The user is always in the list:
+   *  `self` is in those flags, and a zero-area ability short-circuits to it.
+   *
+   *  This is the SAME question for a rune you walk over and a scroll you press, so it is
+   *  asked in one place for both (issue #130). Answering it only on the powerup path is why
+   *  a Scroll of Regeneration — `AIsl`, `Area1 = 600`, `targs1 = air,ground,friend,self,
+   *  organic,vuln,invu`, whose own Ubertip says "all friendly non-mechanical units in an
+   *  area around your Hero" — used to regenerate nobody but the hero holding it. */
+  private itemAreaTargets(u: SimUnit, ad: AbilityDef, x = u.x, y = u.y): SimUnit[] {
     const area = ad.levelData[0]?.area ?? 0;
     if (area <= 0) return [u];
-    const out = this.unitsInAreaInternal(u.x, u.y, area)
+    const out = this.unitsInAreaInternal(x, y, area)
       .filter((t) => t.hp > 0 && !t.building && this.targetAllowed(u, t, ad.targetFlags) === null);
     return out.includes(u) ? out : [u, ...out];
+  }
+
+  /** The RESTORE family — instant hit points and/or mana over `itemAreaTargets`. `hpIdx` /
+   *  `manaIdx` are which Data column each half is in (-1 = this half is not in this row), a
+   *  distinction the data insists on: `AIha` puts its hit points in DataA and `AImr` its
+   *  mana in DataA too, while `AIra` carries both (DataA life, DataB mana).
+   *
+   *  Returns whether anything was actually restored — which is what decides whether a CHARGE
+   *  is spent. WC3 refuses a Potion of Healing at full health rather than wasting it, and
+   *  the same rule holds for the area scrolls: a Scroll of Restoration pressed with a whole,
+   *  full army standing round the hero keeps its charge. */
+  private itemRestore(u: SimUnit, ad: AbilityDef, hpIdx: number, manaIdx: number): boolean {
+    const lvl = ad.levelData[0];
+    const val = (i: number) => (i < 0 || lvl?.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
+    const hp = val(hpIdx);
+    const mana = val(manaIdx);
+    let did = false;
+    for (const t of this.itemAreaTargets(u, ad)) {
+      if (hp > 0 && t.hp < t.maxHp) { t.hp = Math.min(t.maxHp, t.hp + hp); did = true; }
+      if (mana > 0 && t.mana < t.maxMana) { t.mana = Math.min(t.maxMana, t.mana + mana); did = true; }
+    }
+    return did;
+  }
+
+  // === the WORLD-LEVEL item actives (issue #130) ==========================================
+  // Everything an item can do that a SPELL_HANDLERS entry cannot see: the world clock, the
+  // terrain, the tech graph, a hero's own progression. Each is small, each is reached from
+  // exactly one `case` in useItem, and each returns whether it actually did something — which
+  // is what decides whether a charge is spent.
+
+  /** MOONSTONE (`AIct`, "ItemChangeTOD") — "Causes an eclipse that blocks out the sun and
+   *  creates an artificial night. Lasts <AIct,Dur1> seconds."
+   *
+   *  Its two columns are `DataA "New Time of Day - Hour"` and `DataB "New Time of Day -
+   *  Minute"`, both EMPTY on this row — which is the data saying midnight, and midnight is
+   *  what an eclipse looks like. The clock is not stopped while it runs (a suspended day
+   *  would owe the match 30 seconds back); it is wound to midnight and left going, and when
+   *  the eclipse lifts the time it would have reached is restored. */
+  private itemArtificialNight(ad: AbilityDef): boolean {
+    const lvl = ad.levelData[0] ?? emptyAbilityLevel();
+    const seconds = lvl.duration || 30;
+    if (seconds <= 0) return false;
+    const hour = this.dataOf(lvl, 0, 0) + this.dataOf(lvl, 1, 0) / 60;
+    this.moonstone = { left: seconds, restore: this.timeOfDay };
+    this.timeOfDay = ((hour % MISC_DATA.DayHours) + MISC_DATA.DayHours) % MISC_DATA.DayHours;
+    return true;
+  }
+
+  /** …and the sun coming back up where it would have been. */
+  private tickMoonstone(dt: number): void {
+    if (!this.moonstone) return;
+    this.moonstone.left -= dt;
+    if (this.moonstone.left > 0) return;
+    const owed = this.moonstone.restore;
+    this.moonstone = null;
+    this.timeOfDay = owed % MISC_DATA.DayHours;
+  }
+
+  /** SCROLL OF TOWN PORTAL (`AItp`) — "Teleports the Hero and any of its nearby troops to a
+   *  target friendly town hall."
+   *
+   *  Aimed at a POINT (Rng1 99999 — anywhere on the map, minimap included) and resolved to
+   *  the owner's nearest finished HALL, which is what its `targs1 = structure,vuln,invu`
+   *  describes. `Area1` 1100 is the circle of troops that come along and `DataA "Maximum
+   *  Number of Units"` 90 the cap on them. Nothing to arrive at = no teleport and no charge. */
+  private itemTownPortal(u: SimUnit, ad: AbilityDef, x: number, y: number): boolean {
+    const dest = this.nearestHall(u.owner, x, y);
+    if (!dest) return false;
+    const lvl = ad.levelData[0] ?? emptyAbilityLevel();
+    const party = this.itemTeleportParty(u, ad, u.x, u.y, lvl.area || 1100, this.dataOf(lvl, 0, 90));
+    this.emitEffectAt(ad.casterArt, u.x, u.y);
+    for (const t of party) {
+      this.emitEffectAt(ad.targetArt, t.x, t.y, true);
+      this.teleportUnit(t, dest.x, dest.y);
+      this.stop(t.id);
+      this.emitEffectAt(ad.specialArt, t.x, t.y, true);
+    }
+    return true;
+  }
+
+  /** AMULET OF RECALL (`AIrt`) and DIAMOND OF SUMMONING (`AUds`) — the Town Portal run
+   *  backwards: "Teleports <DataA> of the player's units within the targeted area to the
+   *  location of the Hero." Same columns (`DataA "Maximum Number of Units"` 12, `Area1` 700),
+   *  same party rule, opposite direction — so one method serves both. */
+  private itemRecall(u: SimUnit, ad: AbilityDef, x: number, y: number): boolean {
+    const lvl = ad.levelData[0] ?? emptyAbilityLevel();
+    const party = this.itemTeleportParty(u, ad, x, y, lvl.area || 700, this.dataOf(lvl, 0, 12))
+      .filter((t) => t !== u); // the hero is the destination, not part of the party
+    if (!party.length) return false;
+    for (const t of party) {
+      this.emitEffectAt(ad.targetArt, t.x, t.y, true);
+      this.teleportUnit(t, u.x, u.y);
+      this.stop(t.id);
+      this.emitEffectAt(ad.specialArt, t.x, t.y, true);
+    }
+    return true;
+  }
+
+  /** Who travels: the user's OWN units inside the circle that the ability's `targs1` admits,
+   *  nearest first, up to `max`. The user is always first in the list — a Town Portal that
+   *  left the hero behind because 90 Peasants stood closer would be a bad joke. */
+  private itemTeleportParty(u: SimUnit, ad: AbilityDef, x: number, y: number, radius: number, max: number): SimUnit[] {
+    const cap = Math.max(1, Math.round(max || 1));
+    const party = this.unitsInAreaInternal(x, y, radius)
+      .filter((t) => t !== u && t.hp > 0 && t.owner === u.owner && !t.building && this.targetAllowed(u, t, ad.targetFlags) === null)
+      .sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y));
+    return [u, ...party].slice(0, cap);
+  }
+
+  /** The owner's finished town hall nearest a point — what a Town Portal resolves to.
+   *  "Town hall" is UnitData's own `buffType` category (the first of the four the staves rank
+   *  by, see STAFF_PICK_CATEGORIES), so a Great Hall, a Necropolis and a Tree of Life all
+   *  answer to it without a per-race list. */
+  private nearestHall(owner: number, x: number, y: number): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestDist = Infinity;
+    for (const b of this.units.values()) {
+      if (b.owner !== owner || b.hp <= 0 || !b.building || b.building.constructionLeft > 0) continue;
+      if (this.unitReg?.get(b.typeId)?.buffType !== STAFF_PICK_CATEGORIES[0]) continue;
+      const dist = Math.hypot(b.x - x, b.y - y);
+      if (dist < bestDist) { bestDist = dist; best = b; }
+    }
+    return best;
+  }
+
+  /** SACRIFICIAL SKULL (`Ablp`, "BlightPlacement") — "Creates an area of Blight at a target
+   *  location." The same row shape every Undead building carries (see blightPaintOf): `DataA
+   *  "Expansion Amount"` 64 a step, `DataB "Creates Blight"` 1, `Dur1` 0.08 the beat, `Area1`
+   *  350 the disc. So it BLOOMS like a building's rather than appearing, through the very
+   *  same growth queue — the skull is simply a blight source with no building under it. */
+  private itemBlight(u: SimUnit, ad: AbilityDef, x: number, y: number): boolean {
+    const lvl = ad.levelData[0] ?? emptyAbilityLevel();
+    const max = lvl.area || 350;
+    if (max <= 0) return false;
+    this.blightGrowth.set(u.id, {
+      x, y, r: 0, max, step: this.dataOf(lvl, 0, 64) || 64, period: lvl.duration || 0.08,
+      t: 0, on: this.dataOf(lvl, 1, 1) > 0,
+    });
+    return true;
+  }
+
+  /** The eight "TINY" buildings (`AIbl`) — Tiny Great Hall / Castle / Scout Tower /
+   *  Blacksmith / Farm / Lumber Mill / Barracks / Altar of Kings. "Creates a X at a target
+   *  location", finished, free and instantly.
+   *
+   *  `UnitID1` is a FOUR-ENTRY list, not one id: `htow,ogre,unpl,etol` on the Tiny Great
+   *  Hall, in the fixed race order human / orc / undead / night elf — which is exactly what
+   *  its Ubertip promises ("Human, Night Elf, and Undead players will get their racial
+   *  equivalent town hall"). The seven others repeat one human id four times, so the same
+   *  read serves them all. */
+  private itemBuild(u: SimUnit, ad: AbilityDef, x: number, y: number): boolean {
+    const lvl = ad.levelData[0] ?? emptyAbilityLevel();
+    const ids = (lvl.summon || "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (!ids.length) return false;
+    const race = Math.max(0, TINY_BUILDING_RACES.indexOf(u.race));
+    const typeId = ids[Math.min(race, ids.length - 1)];
+    if (!typeId || !this.unitReg?.has(typeId)) return false;
+    // Through the summon queue like every other unit the sim conjures — with NO duration, so
+    // what arrives is a permanent building rather than a timed summon (see drainSummonRequests).
+    this.summonRequests.push({
+      unitId: typeId, x, y, facing: u.facing, owner: u.owner, team: u.team, summonLeft: 0,
+      sourceId: u.id, summonArt: ad.targetArt, unsummonArt: "", atPoint: true,
+    });
+    return true;
+  }
+
+  /** Summon whatever an item ability's own `UnitID1` names, `DataA`-many of them, beside the
+   *  user and for the row's own duration (0 = permanent). False when the row names nothing,
+   *  which is not a failure to read the data but the data declining to say (see `Amec`). */
+  private itemSummonUnits(u: SimUnit, ad: AbilityDef, countIdx: number): boolean {
+    const lvl = ad.levelData[0] ?? emptyAbilityLevel();
+    const typeId = (lvl.summon || "").split(",")[0]?.trim();
+    if (!typeId || !this.unitReg?.has(typeId)) return false;
+    const count = Math.max(1, Math.round(this.dataOf(lvl, countIdx, 1)));
+    for (let i = 0; i < count; i++) {
+      this.summonRequests.push({
+        unitId: typeId, x: u.x, y: u.y, facing: u.facing + (i - (count - 1) / 2) * 0.5,
+        owner: u.owner, team: u.team, summonLeft: lvl.duration || 0, sourceId: u.id,
+        summonArt: ad.specialArt || ad.targetArt, unsummonArt: ad.buffEffectArt, atPoint: false,
+      });
+    }
+    return true;
+  }
+
+  /** TOME OF POWER (`AIlm`, "LevelMod") — "Increases the level of the Hero by <AIlm,DataA1>."
+   *  Granted as EXPERIENCE up to the next threshold rather than by bumping the counter, so
+   *  everything a level-up entails (the skill point, the stat growth, the nova, the
+   *  HERO_LEVEL event, the images levelling with him) happens exactly once and in order. */
+  private itemLevelGain(u: SimUnit, ad: AbilityDef): boolean {
+    if (!u.isHero || u.level >= MAX_HERO_LEVEL) return false;
+    const levels = Math.max(1, Math.round(this.dataOf(ad.levelData[0] ?? emptyAbilityLevel(), 0, 1)));
+    for (let i = 0; i < levels && u.level < MAX_HERO_LEVEL; i++) {
+      this.gainXp(u, Math.max(1, xpToReachLevel(u.level + 1) - u.xp));
+    }
+    return true;
+  }
+
+  /** TOME OF RETRAINING (`Aret`) — "Unlearns all of the Hero's spells, allowing the Hero to
+   *  learn different skills." Every rank goes back into the pool: the points are what the
+   *  hero paid, so the refund is the sum of the ranks, and an ultimate learned at level 6
+   *  is one point like any other. */
+  private itemRetrain(u: SimUnit): boolean {
+    if (!u.isHero) return false;
+    let refunded = 0;
+    for (const a of u.abilities) {
+      // A LEARNABLE ability, which is the `hero` column on its own row — not "an ability a
+      // hero has". A Demon Hunter's Evasion and his Immolation sit side by side on the same
+      // unit and only one of them was ever paid for.
+      if (!this.abilities?.get(a.id)?.isHero || a.level < 1) continue;
+      refunded += a.level;
+      a.level = 0;
+      a.cooldownLeft = 0;
+    }
+    if (!refunded) return false;
+    u.skillPoints += refunded;
+    this.recomputeStats(u);
+    return true;
+  }
+
+  /** GLYPH OF FORTIFICATION (`AIgf` → `Rgfo`) and GLYPH OF ULTRAVISION (`AIgu` → `Rguv`) —
+   *  "Increases the armor and hit points of your buildings" / "Gives all of your units the
+   *  ability to see as far at night as they do during the day."
+   *
+   *  Neither is an effect at all: each is an UPGRADE the item researches outright, named in
+   *  its own `UnitID1`, and the tech graph does the rest. That is why a glyph is permanent
+   *  and why its benefit reaches units built afterwards — it is the research, not a buff. */
+  private itemGlyph(u: SimUnit, ad: AbilityDef): boolean {
+    const upgradeId = (ad.levelData[0]?.summon || "").split(",")[0]?.trim();
+    if (!upgradeId || !this.tech) return false;
+    if (this.tech.researchLevel(u.owner, upgradeId) > 0) return false; // already ours — keep the charge
+    this.tech.setResearchLevel(u.owner, upgradeId, 1);
+    this.tech.invalidate();
+    return true;
+  }
+
+  /** SOUL GEM (`AIso`, "SoulTrap") — "Traps the targeted enemy Hero inside the Soul Gem when
+   *  used. The enemy Hero is returned to play when the bearer of the Soul Gem is killed."
+   *  `targs1 = enemy,hero`, Rng1 500.
+   *
+   *  The trapped hero is taken OFF THE FIELD rather than killed — `vanished`, which is the
+   *  same state a Blademaster spends mid-Mirror-Image: hidden, untargetable, unorderable —
+   *  and held by whoever is carrying the gem. Kept on the world rather than on the HeldItem
+   *  so the record survives the item moving between slots, and released the moment the
+   *  carrier dies OR stops carrying a gem (which covers dropping and selling it too). */
+  private itemSoulGem(u: SimUnit, held: HeldItem, targetId: number): boolean {
+    const t = this.units.get(targetId);
+    if (!t || !t.isHero || t.hp <= 0 || !this.hostile(u, t) || t.vanished) return false;
+    if (this.soulGems.some((g) => g.heroId === t.id)) return false; // already in somebody's gem
+    this.stop(t.id);
+    t.vanished = true;
+    this.recomputeStats(t);
+    this.soulGems.push({ carrierId: u.id, heroId: t.id, itemId: held.itemId });
+    return true;
+  }
+
+  /** Let a trapped hero out — when the carrier falls, or stops carrying the gem. */
+  private tickSoulGems(): void {
+    if (!this.soulGems.length) return;
+    for (let i = this.soulGems.length - 1; i >= 0; i--) {
+      const g = this.soulGems[i];
+      const carrier = this.units.get(g.carrierId);
+      const stillHeld = !!carrier && carrier.hp > 0 && carrier.inventory.some((h) => h?.itemId === g.itemId);
+      if (stillHeld) continue;
+      this.soulGems.splice(i, 1);
+      const hero = this.units.get(g.heroId);
+      if (!hero) continue;
+      hero.vanished = false;
+      // Back where the gem was, which is where the story left him — beside the body of
+      // whoever was carrying him around.
+      if (carrier) this.teleportUnit(hero, carrier.x, carrier.y);
+      this.recomputeStats(hero);
+    }
   }
 
   /** Apply a powerup consumed on pickup (tomes, manuals, runes, gold/lumber),
@@ -15673,43 +16457,12 @@ export class SimWorld {
     for (const abilId of def.abilities) {
       const ad = this.abilities.get(abilId);
       if (!ad) continue;
-      const lvl = ad.levelData[0];
-      const dv = (i: number) => (lvl?.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
-      switch (ad.code) {
-        // Attribute tomes (dataA=agi, dataB=int, dataC=str) — permanent, so bump the BASE
-        // attribute. The HP/mana the new points confer needs no hand-adding here: the
-        // recomputeStats below raises the ceiling and carries the current pool up with it in
-        // proportion, the same rule every other ceiling move obeys (see recomputeStats).
-        case "AIam": case "AIim": case "AIsm": case "AIxm": {
-          u.baseAgi += dv(0); u.baseInt += dv(1); u.baseStr += dv(2);
-          break;
-        }
-        case "AImi": u.baseMaxHp += dv(0); break; // Manual of Health (+max HP)
-        case "AIem": if (u.isHero) this.gainXp(u, dv(0)); break; // Tome of Experience (+XP)
-        // The three RUNES, and the thing they all have that the tomes do not: an `Area1`.
-        //
-        // A tome is one hero's. A rune is the SQUAD's — that is what the whole family is
-        // for, and the data says so twice over. `Units\AbilityData.slk` gives each of them
-        // `Area1 = 600` and a `targs1` of `ground,air,friend,self,organic,vuln,invu` (the
-        // tomes carry neither), and their own `comments` column spells the names out:
-        // "ItemHealAoe", "ItemManaRestoreAoe", "ItemRestoreAoe". Applying only to the unit
-        // that walked over it turned a Rune of Restoration — 300 life and 150 mana across a
-        // whole army after a fight — into a single potion.
-        //
-        // `self` is in the list, so the picker is simply one of the units in range rather
-        // than a special case; `organic` keeps it off the Siege Engines, and `friend` off
-        // the enemy that was chasing you to it.
-        case "AIha": for (const t of this.powerupTargets(u, ad)) t.hp = Math.min(t.maxHp, t.hp + dv(0)); break; // Rune of Healing
-        case "AImr": for (const t of this.powerupTargets(u, ad)) t.mana = Math.min(t.maxMana, t.mana + dv(0)); break; // Rune of Mana
-        case "AIra": // Rune of Restoration — life AND mana
-          for (const t of this.powerupTargets(u, ad)) {
-            t.hp = Math.min(t.maxHp, t.hp + dv(0));
-            t.mana = Math.min(t.maxMana, t.mana + dv(1));
-          }
-          break;
-        case "AIgo": this.stashOf(u.owner).gold += dv(0); break; // Gold Coins
-        case "AIlu": this.stashOf(u.owner).lumber += dv(0); break; // Bundle of Lumber
-      }
+      // The SAME dispatcher a pressed item goes through (see applyItemAbility). A rune and
+      // the scroll beside it on the shop shelf are one ability with one set of numbers —
+      // `AIha` is the Rune of Healing AND the Scroll of Healing — and the only thing that
+      // differs is how the player reached it. A powerup aims at nothing: no target, no
+      // point, its own position.
+      this.applyItemAbility(u, ad, null, 0, u.x, u.y);
       // …and the pickup's LOOK, which is data, not per-code: the ability names a model to
       // play on the unit that took it. Which slot holds it is not consistent in the game's
       // own data — the tomes use `Targetart` (AIsm/AIam/AIim → …\AIsmTarget.mdl et al) but
@@ -15721,7 +16474,7 @@ export class SimWorld {
       // the flash over each of them is how the player can see who was in range.
       const art = ad.targetArt || ad.casterArt;
       if (art || ad.effectSound) {
-        for (const t of this.powerupTargets(u, ad)) {
+        for (const t of this.itemAreaTargets(u, ad)) {
           this.powerupPickups.push({ unitId: t.id, art, soundLabel: t === u ? ad.effectSound : "" });
         }
       }

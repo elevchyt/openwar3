@@ -116,6 +116,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   Illusion (`AIil`), or anything that copies a unit. An illusion's whole point is that the ENEMY can't tell it from
   the original, so every tell (blue wash, summon timer, portrait) is gated on the LOCAL viewpoint, and its
   no-damage rule is enforced at the blow — not by editing what it shows.
+- **Items:** read [`docs/items.md`](docs/items.md) before touching an item, an item ability, or
+  anything in `useItem`/`applyPowerup`/`itemBonuses`. An item's behaviour is NOT in the item —
+  it is an ability id in `abilList`, and that row has the same fields a hero spell's does, so it
+  is dispatched on its base `code` like one. Three doors (pressed, picked up, carried) share ONE
+  dispatcher, because the game ships the same ability both ways round: `AIha` is the Scroll of
+  Healing AND the three Runes of Healing. Who an effect reaches comes off its own `Area1` — a
+  Scroll of Regeneration is an AREA, a Healing Salve is a UNIT and a Clarity Potion is the
+  drinker, all three under one code — while the AIMING is not in the tables at all and has to be
+  read out of the item's Ubertip. And a CARRIED ability is an ability: the Talisman of Evasion's
+  row IS the Demon Hunter's Evasion, so the inventory has to be visible to `passiveLevelData`
+  and to `applyAuras` or fourteen aura items broadcast to nobody.
 - **Orb effects:** read [`docs/orbs.md`](docs/orbs.md) before touching any ATTACK MODIFIER — the orb items, the
   arrow abilities (Searing/Cold/Black/Incinerate), Slow Poison, Envenomed Spears, Feedback, Frost Attack or the
   Mask of Death. They are ONE family under one rule — only **one** orb effect may ride a blow, by a fixed priority

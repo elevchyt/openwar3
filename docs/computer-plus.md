@@ -334,6 +334,11 @@ half-implemented inventory would encode the half. Nothing in `src/ai/plus/` read
 `SimUnit.inventory`, buys from a shop, or presses an item — a Computer+ hero picks up what it
 walks over and never drinks it.
 
+The *effects* half has since landed (issue #130, [`items.md`](./items.md)): every item ability
+in the game is now dispatched, a pressed item reaches whoever its own `Area1` says it reaches,
+and a carried one feeds the passive derivations. What is still missing here is the AI's own
+half — going to a shop, choosing, and pressing.
+
 The seams it will use already exist and are the same ones a player's click goes through, so when
 the items land this is additive:
 
