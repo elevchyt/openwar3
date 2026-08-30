@@ -180,7 +180,7 @@ export function scoutRing(
 const SCOUT_LEGS = SCOUT_RING_LEGS + 2;
 
 /**
- * HOW WIDE THE SCOUT GIVES A CREEP CAMP A BERTH.
+ * HOW WIDE THE SCOUT GIVES A CREEP A BERTH.
  *
  * A scout is one worker with no escort, and a melee map's creep camps sit on exactly the ground
  * between two bases — so the straight line from home to the enemy's front door usually runs
@@ -190,33 +190,62 @@ const SCOUT_LEGS = SCOUT_RING_LEGS + 2;
  *
  * Bigger than the creeps' own acquisition range (`MiscGame` AcquisitionRange is 500, and a guard
  * chases `GuardDistance` past it) so that passing outside this is passing outside their notice
- * rather than merely outside their reach.
+ * rather than merely outside their reach. It also has to cover the ~1s between passes: this is
+ * re-asked once per `armyPeriod` and a worker walks 190-350 of it in that time.
+ *
+ * Measured from EVERY LIVE CREEP, never from a camp's centre — see `ComputerPlusAi.safeStep`.
  */
 const CREEP_BERTH = 900;
-/** How far off the direct line a detour may be thrown to get round one. Enough to clear a camp
- *  by its berth from a line that ran straight through the middle of it. */
-const CREEP_DETOUR = CREEP_BERTH;
+/** Extra margin thrown into a detour past what merely clearing the creep needs, so the arc is a
+ *  walk round rather than a graze. Widened a step at a time — see `safeLeg`. */
+const CREEP_DETOUR = 450;
+/** How many widths of detour are tried, each side, before the best of them is taken. */
+const DETOUR_TRIES = 4;
 
-/**
- * A waypoint on the way to `to` that does NOT walk through a creep camp, or `to` itself when the
- * straight line is already clear.
- *
- * The route is re-asked at every step (`scoutPass` orders one leg at a time and re-issues on
- * arrival), so this does not have to be a path — it has to be a next STEP that is not into a
- * camp, and the pathfinder does the rest. The camp that matters is the FIRST one the line runs
- * near, since going round it changes where everything after it lies; the detour is thrown out
- * perpendicular to the line, on whichever side the camp is not.
- *
- * Pure, and exported, for the same reason `scoutRing` is: what actually matters about it — that
- * the leg it hands back clears every camp it was given — is then pinned by a test rather than by
- * reading it (tools/ai-plus-army-test.cjs).
- */
-export function safeLeg(
+/** How near `p` comes to the SEGMENT `from`→`to` — the question "does this leg pass it". */
+function gapToLeg(
   from: { x: number; y: number },
   to: { x: number; y: number },
-  camps: ReadonlyArray<{ x: number; y: number }>,
-  berth = CREEP_BERTH,
-  detour = CREEP_DETOUR,
+  p: { x: number; y: number },
+): number {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1) return Math.hypot(p.x - from.x, p.y - from.y);
+  const t = Math.max(0, Math.min(1, ((p.x - from.x) * dx + (p.y - from.y) * dy) / len2));
+  return Math.hypot(from.x + dx * t - p.x, from.y + dy * t - p.y);
+}
+
+/** How near the WORST creep comes to this leg. `Infinity` when there are none. */
+function clearance(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  creeps: ReadonlyArray<{ x: number; y: number }>,
+): number {
+  let worst = Infinity;
+  for (const c of creeps) worst = Math.min(worst, gapToLeg(from, to, c));
+  return worst;
+}
+
+/**
+ * `to` pulled back along the approach until it is outside every creep's berth — or `to` itself
+ * when it already is.
+ *
+ * This is the half of the problem the old routine did not have at all, and it is where scouts
+ * actually died. It only ever looked at camps the line ran PAST (`along >= len` was skipped), so
+ * a waypoint that was ITSELF inside a camp was walked straight to. The tour's later legs are
+ * GOLD MINES, and every melee map's gold mines are guarded: the scout was aimed at the middle of
+ * the camp guarding the expansion, every game.
+ *
+ * Standing off instead is what a player does and it costs the tour nothing — a worker's day
+ * sight is 1400+ (UnitBalance.slk `sight`), so a look from the edge of the berth has seen the
+ * mine and whatever is sitting on it.
+ */
+function standOff(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  creeps: ReadonlyArray<{ x: number; y: number }>,
+  berth: number,
 ): { x: number; y: number } {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
@@ -224,10 +253,40 @@ export function safeLeg(
   if (len < 1) return to;
   const ux = dx / len;
   const uy = dy / len;
+  let stop = len;
+  for (const c of creeps) {
+    if (Math.hypot(c.x - to.x, c.y - to.y) >= berth) continue; // the destination is not in this one
+    const along = (c.x - from.x) * ux + (c.y - from.y) * uy;
+    const side = (c.x - from.x) * -uy + (c.y - from.y) * ux;
+    const gap = Math.abs(side);
+    if (gap >= berth) continue; // can't happen while `to` is inside it, but the sqrt below needs it
+    // Where the line first crosses this creep's berth. Negative when `from` is ALREADY inside
+    // it, which clamps to "do not move" below — and that is the right answer: this is as close
+    // as the leg may be approached, so there is nothing further to walk towards.
+    stop = Math.min(stop, along - Math.sqrt(berth * berth - gap * gap));
+  }
+  if (stop >= len) return to;
+  stop = Math.max(0, stop);
+  return { x: from.x + ux * stop, y: from.y + uy * stop };
+}
+
+/** The first creep the line `from`→`to` walks inside the berth of, in `(along, side)` terms. */
+function firstBlocker(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  creeps: ReadonlyArray<{ x: number; y: number }>,
+  berth: number,
+): { along: number; side: number; gap: number } | null {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) return null;
+  const ux = dx / len;
+  const uy = dy / len;
   let worst: { along: number; side: number; gap: number } | null = null;
-  for (const c of camps) {
-    // Where the camp falls along the line, and how far off it — the ordinary point-to-segment
-    // decomposition. A camp BEHIND us or beyond the destination is not on the way.
+  for (const c of creeps) {
+    // Where the creep falls along the line, and how far off it — the ordinary point-to-segment
+    // decomposition. One BEHIND us or beyond the destination is not on the way.
     const along = (c.x - from.x) * ux + (c.y - from.y) * uy;
     if (along <= 0 || along >= len) continue;
     const side = (c.x - from.x) * -uy + (c.y - from.y) * ux;
@@ -235,15 +294,88 @@ export function safeLeg(
     if (gap >= berth) continue;
     if (!worst || along < worst.along) worst = { along, side, gap };
   }
-  if (!worst) return to;
-  // Step out to the side the camp is NOT on, level with it. `side` is signed, so a camp dead on
-  // the line (0) is passed on the left rather than being divided by zero.
-  const away = worst.side > 0 ? -1 : 1;
-  const push = detour + berth - worst.gap;
+  return worst;
+}
+
+/** The waypoint thrown out to `away`'s side of the line `from`→`to`, level with `worst`. */
+function thrown(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  worst: { along: number; side: number; gap: number },
+  away: number,
+  push: number,
+): { x: number; y: number } {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
   return {
     x: from.x + ux * worst.along + -uy * away * push,
     y: from.y + uy * worst.along + ux * away * push,
   };
+}
+
+/**
+ * A waypoint on the way to `to` that does NOT walk into a creep's notice, or `to` itself when
+ * the straight line is already clear.
+ *
+ * The route is re-asked at every step (`scoutPass` orders one leg at a time and re-issues on
+ * arrival), so this does not have to be a path — it has to be a next STEP that is not into a
+ * camp, and the pathfinder does the rest.
+ *
+ * Three things it does, in the order they matter:
+ *
+ *  1. **The destination is stood off** when it is itself inside a camp — see `standOff`. That is
+ *     the case the old routine ignored, and the tour's gold-mine legs are all of them. Asked of
+ *     EVERY creep, including one already on top of us: standing still is then the honest answer
+ *     to "how much closer may I get", and `ComputerPlusAi.lookedAt` reads it as exactly that.
+ *  2. **Creeps already this close are not the DETOUR's problem.** A creep within the berth of
+ *     where we are standing has seen us or is about to; no arc changes that, and leaving them
+ *     in would make every candidate below score equally badly and cancel the detour outright.
+ *  3. **Then it goes round.** The creep that matters is the FIRST one the line runs near, since
+ *     clearing it changes where everything after it lies; the detour is thrown out perpendicular
+ *     to the line, preferring the side the creep is not on. The throw is then WIDENED a step at
+ *     a time and the resulting leg is re-measured against every creep, because a single fixed
+ *     push only ever cleared the one creep it was computed from — with the camp's other four
+ *     standing 600 either side of it (`CAMP_LINK`, minimapView.ts), the arc that missed the
+ *     centre walked into a flank. Both sides are tried at each width, so a camp against a cliff
+ *     is passed on the open side rather than on the geometrically prettier one.
+ *
+ * Pure, and exported, for the same reason `scoutRing` is: what actually matters about it — that
+ * the leg it hands back clears every creep it was given — is then pinned by a test rather than
+ * by reading it (tools/ai-plus-army-test.cjs).
+ */
+export function safeLeg(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  creeps: ReadonlyArray<{ x: number; y: number }>,
+  berth = CREEP_BERTH,
+  detour = CREEP_DETOUR,
+): { x: number; y: number } {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (Math.hypot(dx, dy) < 1) return to;
+  // (1)
+  const goal = standOff(from, to, creeps, berth);
+  // (2) — anything already inside the berth of where we stand is not avoidable from here.
+  const ahead = creeps.filter((c) => Math.hypot(c.x - from.x, c.y - from.y) >= berth);
+  // (3)
+  const worst = firstBlocker(from, goal, ahead, berth);
+  if (!worst) return goal;
+  const sides = worst.side > 0 ? [-1, 1] : [1, -1];
+  let best = goal;
+  let bestGap = clearance(from, goal, ahead);
+  for (let step = 1; step <= DETOUR_TRIES; step++) {
+    const push = berth - worst.gap + detour * step;
+    for (const away of sides) {
+      const aim = thrown(from, goal, worst, away, push);
+      const gap = clearance(from, aim, ahead);
+      if (gap >= berth) return aim; // clears everything: nothing wider to look for
+      if (gap > bestGap) { bestGap = gap; best = aim; }
+    }
+  }
+  return best;
 }
 
 /** How long the scout may make no PROGRESS before its waypoint is written off (seconds).
@@ -258,8 +390,21 @@ const SCOUT_STUCK_AFTER = 8;
  *  `spd` is 190+ (UnitBalance.slk), so this is under two seconds' walk: generous enough that
  *  going round a cliff is not "stuck", short enough that standing still is. */
 const SCOUT_PROGRESS = 300;
-/** How many scouts this player will lose before it stops sending them. */
-const SCOUT_TRIES = 2;
+/**
+ * HOW LONG THE WHOLE TOUR MAY TAKE (seconds from the moment the scout sets out).
+ *
+ * A scout is a WORKER, and a worker walking is a worker not harvesting. Every other way out of
+ * `scoutPass` is an EVENT — it arrived, it got stuck, it died — so a tour whose events simply
+ * never came (a leg it can approach but never reach, a stand-off it keeps re-deciding, an
+ * enemy base on the far side of a map it must walk round) kept one worker out of the economy
+ * for the rest of the match with nothing to show for it. That is the "fixated on scouting"
+ * report, and it costs the night elf most: a Wisp is a lumberjack whose lumber is credited in
+ * the tree (docs/night-elf.md), so the one the tour is holding is a chopper that has stopped.
+ *
+ * Generous — this is a backstop, not a schedule. A worker crosses a 128x128 melee map in about
+ * a minute, and the tour is worth its while at twice that.
+ */
+const SCOUT_TOUR = 150;
 
 // ITEMS live in plus/items.ts, not here — an item ability is not in `SimUnit.abilities` (it
 // hangs off the inventory slot and dispatches through `useItem`), so neither this file's army
@@ -535,9 +680,10 @@ interface Brain {
   /** Everyone the ECONOMY may not re-task: the army, plus the scout. Handed to
    *  `AiPlayer.captainHeld` once and mutated in place, so `applyHarvest` sees a live view. */
   readonly held: Set<number>;
-  /** The worker sent to go and look, and how far round its tour it is. `scoutDone` latches
-   *  when the tour ends (or the scout dies), because a player who loses a scout sends their
-   *  workers back to work rather than feeding a second one to the same creeps. */
+  /** The worker sent to go and look, and how far round its tour it is. ONE of them, ever:
+   *  `scoutDone` latches when the tour ends, when it runs out of time, and — this is the whole
+   *  rule — the moment the scout dies, because a player who loses a scout sends their workers
+   *  back to work rather than feeding a second one to the same creeps. */
   scoutId: number;
   scoutLeg: number;
   scoutGoal: { x: number; y: number } | null;
@@ -546,8 +692,8 @@ interface Brain {
    *  there since. The watchdog on a tour that only ever advanced on arrival — see `scoutPass`. */
   scoutWas: { x: number; y: number } | null;
   scoutStill: number;
-  /** How many scouts this player has already lost — see `scoutPass`. */
-  scoutsLost: number;
+  /** `b.clock` when the scout set out — the tour's own deadline (`SCOUT_TOUR`). */
+  scoutSince: number;
   mode: Mode;
   /** When the wave first found itself short at the muster point (-1 = it is gathered). The
    *  deadline on `gathered`, without which one stuck soldier holds the army at home for ever. */
@@ -700,7 +846,7 @@ export class ComputerPlusAi {
       scoutDone: false,
       scoutWas: null,
       scoutStill: 0,
-      scoutsLost: 0,
+      scoutSince: 0,
       mode: "massing",
       gatherSince: -1,
       retreatFrom: null,
@@ -1171,13 +1317,20 @@ export class ComputerPlusAi {
     if (!b.profile.scout || b.scoutDone) return;
     const scout = b.scoutId ? this.host.world.units.get(b.scoutId) : null;
     if (b.scoutId && (!scout || scout.hp <= 0 || scout.owner !== b.ai.player)) {
+      // NOBODY FOLLOWS IT. One scout is sent, ever, and a scout that does not come back is not
+      // replaced — which is what a player does, and what stops a computer feeding its economy
+      // to the same creep camp one worker at a time. This briefly allowed a second (the map is
+      // worth 75 gold, went the argument) and the second walked into whatever killed the first:
+      // the tour is the same tour, so the replacement dies at the same camp, and the cost is
+      // paid by whoever can least afford it. A WISP is a 120-hitpoint lumberjack whose lumber
+      // is credited in the tree it is standing at (docs/night-elf.md), so a night elf lost a
+      // third of its forest crew to a walk it had already learnt nothing from.
+      //
+      // What the AI loses by not looking again is countering, expanding and creeping running
+      // off an older read of the enemy — and that is `EnemyMemory`'s whole job, plus a
+      // teammate's sightings arriving through `shareIntel`.
       b.scoutId = 0;
-      // ONE more, and then nobody follows it. The old rule was "a scout that did not come back
-      // is never replaced", which is what a player does with their THIRD worker and not with
-      // their first: a scout lost in the opening minute leaves the AI playing the whole match
-      // against an opponent it has never looked at, and countering, expanding and creeping all
-      // read off what it saw. A second worker is 75 gold; the map is worth more than that.
-      if (b.scoutsLost++ >= SCOUT_TRIES) b.scoutDone = true;
+      b.scoutDone = true;
       b.scoutGoal = null;
       b.scoutWas = null;
       return;
@@ -1191,8 +1344,14 @@ export class ComputerPlusAi {
       b.scoutGoal = null;
       b.scoutWas = { x: worker.x, y: worker.y };
       b.scoutStill = 0;
+      b.scoutSince = b.clock;
       return;
     }
+    // THE TOUR HAS A DEADLINE — see `SCOUT_TOUR`. Every other way out of this routine is an
+    // event, so a tour whose events never arrive holds a worker out of the economy for the
+    // rest of the match. Written as "the tour is over" rather than as a special case, so it
+    // walks home and goes back to work exactly as a finished tour does.
+    if (b.clock - b.scoutSince >= SCOUT_TOUR) return this.tourOver(b, scout);
     // IS IT ACTUALLY MOVING? The tour only ever advanced on arrival, so a scout that stopped
     // short of a waypoint — wedged behind a building, turned round by a creep it survived, left
     // holding a stale order — stood there for the rest of the match. See `SCOUT_STUCK_AFTER`.
@@ -1213,10 +1372,9 @@ export class ComputerPlusAi {
       b.scoutGoal = null;
       b.scoutWas = { x: scout.x, y: scout.y };
       b.scoutStill = 0;
-    } else if (b.scoutGoal && Math.hypot(scout.x - b.scoutGoal.x, scout.y - b.scoutGoal.y) > SCOUT_ARRIVED) {
-      if (scout.order === "move") return; // still walking
     } else if (b.scoutGoal) {
-      b.scoutLeg++;
+      if (this.lookedAt(scout, b.scoutGoal)) b.scoutLeg++;
+      else if (scout.order === "move") return; // still walking
     }
     const goal = this.scoutWaypoint(b);
     // NO WAYPOINT is two different things and only one of them ends the tour. A tour that has
@@ -1228,23 +1386,7 @@ export class ComputerPlusAi {
       b.scoutGoal = null;
       return;
     }
-    if (!goal) {
-      // Tour over: back to work — and WALKED home rather than merely released.
-      //
-      // Dropping it out of `held` is what lets the harvest plan have it again, but the plan
-      // assigns jobs, not journeys: a worker released standing in the enemy's base was left
-      // standing in the enemy's base, idle, for the rest of the match. (Observed. It is also
-      // one worker of an eleven-worker economy, which is most of a Peon's worth of income
-      // thrown away every game.) The move order is what actually brings it back; the harvest
-      // plan then picks it up as an idle worker at home, which is what it is good at.
-      const home = b.ai.home();
-      b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...this.safeStep(scout, home) }, queued: false });
-      b.scoutId = 0;
-      b.scoutDone = true;
-      b.scoutGoal = null;
-      b.scoutWas = null;
-      return;
-    }
+    if (!goal) return this.tourOver(b, scout);
     b.scoutGoal = goal;
     // ROUND the creep camps, not through them — see `safeLeg`. The GOAL is unchanged (the tour
     // still visits what it set out to visit); what is re-aimed is the step taken towards it,
@@ -1254,21 +1396,74 @@ export class ComputerPlusAi {
   }
 
   /**
+   * Tour over: back to work — and WALKED home rather than merely released.
+   *
+   * Dropping it out of `held` is what lets the harvest plan have it again, but the plan assigns
+   * jobs, not journeys: a worker released standing in the enemy's base was left standing in the
+   * enemy's base, idle, for the rest of the match. (Observed. It is also one worker of an
+   * eleven-worker economy, which is most of a Peon's worth of income thrown away every game.)
+   * The move order is what actually brings it back; the harvest plan then picks it up as an
+   * idle worker at home, which is what it is good at.
+   */
+  private tourOver(b: Brain, scout: SimUnit): void {
+    const home = b.ai.home();
+    b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...this.safeStep(scout, home) }, queued: false });
+    b.scoutId = 0;
+    b.scoutDone = true;
+    b.scoutGoal = null;
+    b.scoutWas = null;
+  }
+
+  /**
+   * Has the scout LOOKED at this leg — which is not the same question as "has it stood on it".
+   *
+   * Two ways to have looked, and the second is the one the tour needs. Standing within
+   * `SCOUT_ARRIVED` of the waypoint is the obvious one. The other is standing as close to it as
+   * the creeps guarding it allow: `safeStep` stands the walk OFF a camp sitting on the
+   * destination rather than walking into it (see `standOff`), so a leg aimed at a guarded gold
+   * mine — which on a melee map is all of them — hands back a step of nowhere once the scout has
+   * reached the edge of the berth. Reading that as arrival is what makes standing off a decision
+   * instead of a stall: without it the scout stood at the edge of the camp doing nothing until
+   * `SCOUT_STUCK_AFTER` wrote the leg off eight seconds later, every leg, every game.
+   *
+   * A worker's day sight is 1400+ (UnitBalance.slk `sight`) and a berth is 900, so the edge of
+   * the berth has already seen the mine and whatever is sitting on it.
+   */
+  private lookedAt(scout: SimUnit, goal: { x: number; y: number }): boolean {
+    if (Math.hypot(scout.x - goal.x, scout.y - goal.y) <= SCOUT_ARRIVED) return true;
+    const step = this.safeStep(scout, goal);
+    return Math.hypot(scout.x - step.x, scout.y - step.y) <= SCOUT_ARRIVED;
+  }
+
+  /**
    * The next step towards `to` that does not walk into a creep camp.
    *
-   * `safeLeg` does the geometry; this is the half that has the host and can say where the camps
-   * are. Only camps with something ALIVE in them count — a cleared camp is ground — and the
-   * positions are the camp centres the clustering already computed, which is map data rather
-   * than anything this player has had to see (the AI is on the authority's side of the fog for
-   * creep camps exactly as the engine always was; `AiPlayer.creepCamp` reads the same table).
+   * `safeLeg` does the geometry; this is the half that has the host and can say where the creeps
+   * are. Only ones still ALIVE count — a cleared camp is ground — and their positions are map
+   * data rather than anything this player has had to see (the AI is on the authority's side of
+   * the fog for creep camps exactly as the engine always was; `AiPlayer.creepCamp` reads the
+   * same table).
+   *
+   * EVERY CREEP, not the camp's centre, and that one word is most of why the berth was not
+   * working. A camp is a CLUSTER — `CreepCamps` links guard posts up to `CAMP_LINK` (600) apart
+   * and hands back their centroid (src/game/minimapView.ts) — so a six-Gnoll camp spans a good
+   * 1200, and giving its CENTRE a 900 berth walks the scout 300 from the Gnoll on the near edge.
+   * That is well inside `MiscGame` AcquisitionRange, one of them shouts (`CreepCallForHelp`) and
+   * the whole camp comes. Asking the same 900 of each creep in turn is the berth the constant
+   * always claimed to be.
+   *
+   * Their CURRENT position rather than their guard post, because a creep chasing something else
+   * is a creep whose acquisition circle has moved with it.
    */
   private safeStep(from: { x: number; y: number }, to: { x: number; y: number }): { x: number; y: number } {
-    const camps: Array<{ x: number; y: number }> = [];
+    const creeps: Array<{ x: number; y: number }> = [];
     for (const camp of this.host.creepCamps()) {
-      if (!camp.members.some((id) => (this.host.world.units.get(id)?.hp ?? 0) > 0)) continue;
-      camps.push({ x: camp.x, y: camp.y });
+      for (const id of camp.members) {
+        const c = this.host.world.units.get(id);
+        if (c && c.hp > 0) creeps.push({ x: c.x, y: c.y });
+      }
     }
-    return safeLeg(from, to, camps);
+    return safeLeg(from, to, creeps);
   }
 
   /**

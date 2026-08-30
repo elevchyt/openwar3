@@ -78,7 +78,8 @@ bonus for a Computer+ seat. Every difference between its three rungs is a number
 
 That is also why Computer+ has a **scout** and the classic AI does not: with no fog cheat,
 walking a worker past the enemy's base is the only way it can ever learn about an expansion
-(`AiPlayer.enemyExpansion` is gated on `knows`). One worker, one tour, not replaced when it dies.
+(`AiPlayer.enemyExpansion` is gated on `knows`). One worker, one tour, never replaced when it
+dies.
 
 The tour goes **around** that base, never into it — `scoutRing`, three stops on a ring of
 `SCOUT_STANDOFF` about the enemy's town centre, starting on the side the scout is already coming
@@ -100,10 +101,48 @@ exactly the ground between two bases, so the straight line from home to the enem
 usually runs through one — the scout was acquired, killed, `scoutDone` latched, and that walk was
 again the whole of what the AI ever learnt. The route is re-asked at every step, so this does not
 have to be a path: it has to be a next *step* that is not into a camp, and the pathfinder does the
-rest. The first camp within `CREEP_BERTH` (900 — wider than the creeps' own `AcquisitionRange` of
-500, so passing outside it is passing outside their notice) is stepped around perpendicular to the
-line, on whichever side the camp is not; a camp behind the scout or beyond its goal is not on the
-way at all. Only camps with something **alive** in them count — a cleared camp is ground.
+rest. Only creeps still **alive** count — a cleared camp is ground.
+
+Three things it does, and the first two are what the berth was missing when scouts were still
+dying on the way out:
+
+- **A camp is a CLUSTER, so the berth is measured from every creep in it** and never from the
+  camp's centre. `CreepCamps` links guard posts up to `CAMP_LINK` (600) apart and hands back their
+  *centroid* ([`minimapView.ts`](../src/game/minimapView.ts)), so a six-creep camp is a good 1200
+  across: `CREEP_BERTH` (900) around the centre walked the scout **300** from the creep on the near
+  edge — inside `AcquisitionRange` (500), and one `CreepCallForHelp` shout from the whole camp.
+  Asked of each creep in turn, 900 is the berth the constant always claimed to be.
+- **A goal that is itself inside a camp is stood off**, not walked into (`standOff`). The old
+  routine only ever looked at camps the line ran *past* — a camp beyond the goal was "not on the
+  way" — and the tour's later legs are **gold mines**, every one of which a melee map guards. It
+  aimed the scout at the middle of the camp sitting on the expansion, every game. Standing off
+  costs the tour nothing (day sight is 1400+, a berth is 900) and `lookedAt` reads "the next safe
+  step is nowhere" as *arrival*, so the leg completes there rather than stalling until
+  `SCOUT_STUCK_AFTER` writes it off.
+- **Then it goes round.** The first creep within the berth is stepped around perpendicular to the
+  line, preferring the side it is not on; the throw is then **widened a step at a time and the
+  resulting leg re-measured against every creep**, both sides at each width, because one fixed
+  push only ever cleared the creep it was computed from and the arc that missed the centre walked
+  into a flank. A creep behind the scout or beyond its goal is not on the way at all — and one
+  already *within* the berth of where the scout stands is excluded from the detour, since no
+  waypoint avoids it and leaving it in scored every candidate equally badly and cancelled the
+  detour round the camp it could still go round.
+
+**One scout, and nobody follows it.** `scoutDone` latches the moment the scout dies. This briefly
+allowed a second (*"a worker is 75 gold and the map is worth more than that"*) and the second
+walked the same tour into whatever killed the first — so the AI paid twice and learnt once, and
+the bill fell on whoever could least afford it: a **Wisp** is a 120-hitpoint lumberjack whose
+lumber is credited in the tree it stands at ([night elf](night-elf.md)), so a night elf lost a
+third of its forest crew to a walk it had already learnt nothing from, and its lumber stopped.
+What the AI gives up by not looking again is countering, expanding and creeping running off an
+older read — which is what `EnemyMemory` is for, topped up by a teammate's sightings through
+[scouting intelligence](#scouting-intelligence-the-team-scouts-once).
+
+**And the tour has a deadline** (`SCOUT_TOUR`, 150 s). Every other way out of `scoutPass` is an
+*event* — it arrived, it got stuck, it died — so a tour whose events simply never came held a
+worker out of the economy for the rest of the match with nothing to show for it. The deadline is
+written as "the tour is over", so it walks home and goes back to work exactly as a finished one
+does.
 
 **And a scout that stops is noticed.** The tour only ever advanced on *arrival*, and `scoutPass`
 returned early while the order was still "move" — so a worker stopped by a cliff, wedged behind a

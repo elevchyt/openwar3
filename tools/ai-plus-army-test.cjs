@@ -15,7 +15,10 @@
 //   3. THE SCOUT GOES ROUND. A melee map's creep camps sit on the ground between two bases, so
 //      the straight line from home to the enemy's door runs through one — the scout walked in,
 //      died, and because a lost scout LATCHES that one walk was the whole of what the AI ever
-//      learnt about the map.
+//      learnt about the map. Two halves of that were still missing after the first fix and are
+//      pinned here too: a camp is a CLUSTER, so the berth has to clear its flanks and not merely
+//      its centroid; and the tour's later legs are GOLD MINES, which every melee map guards, so
+//      a goal sitting inside a camp has to be STOOD OFF rather than declared "not on the way".
 //
 // None of these numbers are Warcraft III's (nothing in the install describes an AI that creeps
 // or scouts) so this pins OUR tuning. What IS the game's is the scale it is stated against: the
@@ -195,6 +198,38 @@ check("the nearer camp is the one gone round", nearest(two, { x: -1500, y: 0 }) 
 // A camp BEHIND us, or past the destination, is not on the way at all.
 check("a camp behind is ignored", safeLeg(HOME, BASE, [{ x: -4000, y: 0 }]).x, BASE.x);
 check("…and one past the target too", safeLeg(HOME, BASE, [{ x: 5000, y: 0 }]).x, BASE.x);
+
+// A CAMP IS A CLUSTER, and this is the half that was missing. `safeLeg` is handed every live
+// creep rather than the camp's centroid (see ComputerPlusAi.safeStep), because linking guard
+// posts up to CAMP_LINK (600) apart makes a six-creep camp 1200 across: a 900 berth around the
+// CENTRE walks the scout 300 from the creep on the near edge, which is inside AcquisitionRange
+// and one CreepCallForHelp shout from the whole camp. The detour has to clear the FLANKS too.
+const SPREAD = [
+  { x: 0, y: -600 }, { x: 0, y: -200 }, { x: 0, y: 200 }, { x: 0, y: 600 },
+  { x: 400, y: 0 }, { x: -400, y: 0 },
+];
+const wide = safeLeg(HOME, BASE, SPREAD);
+let closest = Infinity;
+for (const c of SPREAD) closest = Math.min(closest, nearest(wide, c));
+check("a spread-out camp is cleared by the berth, flanks and all", closest >= 900, true);
+
+// THE DESTINATION ITSELF INSIDE A CAMP — every melee map's gold mines are guarded, and the
+// tour's later legs ARE gold mines. The old routine only looked at camps the line ran PAST, so
+// it walked the scout to the middle of the one sitting on the mine.
+const ON_TARGET = [{ x: 3000, y: 0 }];
+const off = safeLeg(HOME, BASE, ON_TARGET);
+check("a camp sitting ON the waypoint is stood off, not walked into",
+  Math.hypot(off.x - ON_TARGET[0].x, off.y - ON_TARGET[0].y) >= 900, true);
+check("…and the stand-off is on the way there, not off to one side", off.y, 0);
+check("…and it is as close as the berth allows", Math.round(off.x), 2100);
+
+// A creep already on top of us cannot be avoided by any waypoint, and must not cancel the
+// detour round the one ahead — every candidate would score equally badly and the scout would
+// walk straight on into the camp it CAN still go round.
+const ATFOOT = [{ x: -3000, y: 200 }, ON_THE_LINE];
+const away = safeLeg(HOME, BASE, ATFOOT);
+check("a creep at our feet does not cancel the detour round the next one",
+  nearest(away, ON_THE_LINE) >= 900, true);
 
 console.log(failed ? `\n${failed} FAILED\n` : "\nall ok\n");
 process.exit(failed ? 1 : 0);
