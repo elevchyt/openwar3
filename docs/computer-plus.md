@@ -570,6 +570,33 @@ because it walked out of it, and `REGROUP_PATIENCE` bounds even that. Its reason
 (`"stuck"`), because `ItemCtx.portalWorthIt` reads that field and a Scroll of Town Portal is for
 leaving a fight, not for leaving a walk that did not work out.
 
+### A wave is what SETS OFF, not what exists
+
+The other half of *"the undead leaves its army at home and the hero goes out to creep by
+himself"*, and it is not a race's bug at all — the undead simply hits it every game, because its
+soldiers are also its lumberjacks and are therefore the one army routinely *not* standing at the
+muster point.
+
+`gathered` has a **deadline** (`GATHER_PATIENCE`, 12 s) and it has to: without one, a single
+soldier that cannot reach the rally holds the whole army at home for ever, hero included. But the
+size gates behind it — `creepFood` in `creepNext`, `attackFood` in `waveReady`, and the party
+`creepTarget` prices a camp against — were still counting **everything in the squad, wherever it
+happened to be standing**. So when the deadline fired, a hero whose ghouls were in the forest read
+as *a hero and four ghouls*, cleared a `creepFood` of eight or ten on its own, and set off alone.
+
+`mustered` is the fix and it is one line: the captain's own feet once the party is out on the map,
+the home rally while it is at home — the same point `muster` sends everybody to. `squadFood` and
+`creepForce` both take it and count only what is within `GATHER_RADIUS` of it.
+
+This is **not** a second gate stacked on `gathered`. "Is enough of it here" and "is what is here
+big enough" are one decision, and the bug was that the two could disagree. Nothing deadlocks on
+it either, because `massing` re-orders everybody to that same point on every pass: the party
+arrives, the food is met, and the run starts a pass later with an army behind it.
+
+`creepForce` takes the muster point only where the question is *may this party set off*. `fightLost`
+asks it without one — a party already in a camp is all present by definition, and pricing that by a
+radius would write the stragglers off twice.
+
 ### …and it asks whether it can get there BEFORE it sets off
 
 The watchdog is the backstop, not the plan. `creepCamp` answers off the map's fixed camp table
@@ -729,6 +756,84 @@ Two rules, one at each end of the walk:
   the whole army at home, hero included ("the AI is moving the hero to its base and locking it
   there instead of going out to creep"). `GATHER_PATIENCE` is twelve seconds, after which it
   leaves with what came.
+
+### Engage, or go home — but never walk past an army
+
+Reported: *"when the AI sees their enemies' army they must either engage or fall back to their
+base instead of ignoring them and letting them pass"*. Ignoring is exactly what it did, and the
+reason is that **every rule the manager had about an enemy army was about a PLACE.** `defendPass`
+only ever looks inside our own towns (`isInvader`, `TOWN_RADIUS`); `fightLost` only ever asks
+whether a fight *already joined* is going badly. An army met in the middle of the map on the way
+to a creep camp was in neither, so the wave walked past it under its attack-move and the two
+groups slid by each other.
+
+`contactPass` ([`plus/index.ts`](../src/ai/plus/index.ts)) is the missing question, asked in four
+states:
+
+* **At home** — nothing. `defendPass` owns the base and has already run above it. That order
+  matters: a party that turns to fight in the field while its own hall is being killed has made
+  the wrong call.
+* **Nothing in front of us** — the clock is cleared, which is what makes the dwell below a
+  *reaction* rather than a cooldown.
+* **Already going for them** — the aim is kept fresh on their centre and `attacking` is left to
+  run. This branch is what stops the rule fighting itself: a decision re-taken every pass would
+  call `setMode` every pass, which zeroes the re-issue clock, which re-paths the whole army twice
+  a second (see `recommit`).
+* **A decision.** Both sides are priced by `armyPower` ([`power.ts`](../src/ai/plus/power.ts))
+  over the bodies each actually has in the field, and the party commits at `CONTACT_ENGAGE` (0.9)
+  — deliberately **below even**, because an even fight taken is a fight and a party that runs from
+  every even fight never has one. Outgunned, it retreats as `"player"`, which is the one retreat
+  the hero's Scroll of Town Portal is on the table for (`ItemCtx.portalWorthIt`).
+
+Two things it is careful about. The pricing is `powerOf`, not `creepForce`: that one holds the
+hero out of the fighters and multiplies the rest by its level, which is the right shape for *can
+this party clear a camp* and the wrong one for comparing two armies — the enemy's hero is a body
+on the field like ours, and `heroFactor(0)` would price an army with no hero at nothing at all.
+And the decision waits `PlusProfile.defendDelay`, so **a difficulty is exactly as slow to notice
+an army in front of it as it is to notice one in its base** — fifteen seconds on Easy, one on
+Insane.
+
+Creeps are deliberately not in it, and neither are illusions. A camp on the way is what the march
+walks round (below) and what `creepTarget` prices; this is about the other *player*, whose army
+chases, reinforces, and is the reason a wave is out at all.
+
+### A march goes ROUND the camps on the way
+
+The army's half of the arc the scout has always walked (`safeLeg`, and see [the scouting
+section](#the-tour-is-the-enemy-start-locations) for the geometry). A wave sent at a camp on the
+far side of the map takes the straight line, and on a melee map the straight line runs through two
+other camps — so the party arrives at the objective it was *priced* for having already fought the
+ones it was not.
+
+`marchAim` routes every attack-move destination in `commit`, and the walk home in `retreating`,
+through the same `safeLeg` the scout uses: a next **step** that clears every live creep's berth
+rather than a route, re-asked on each re-issue. The objective itself is untouched — `attacking`,
+`atGoal` and `stalled` all still read the real target — so a detour can delay an objective and can
+never lose one.
+
+**The developer's own condition was that it must never freeze**, and three things carry that:
+
+* **The creeps AT the destination are not obstacles.** `liveCreeps` takes an `except` point and
+  drops everything within `MARCH_GOAL_CAMP` of the goal — a berth plus a camp's own spread, since
+  `creepCamps` links guard posts up to 600 apart and hands back their *centroid*. Without it
+  `standOff` pulls the destination
+  back out of the very camp the wave was sent to clear — every pass, for ever — and an assault on
+  a base guarded by a camp never reaches it. (The scout passes nothing and is unaffected: nothing
+  sends a scout *at* a camp.)
+* **A detour that does not move the army is discarded.** `safeLeg` can hand back a point on top of
+  us — `standOff` clamps to zero when the party is already inside a berth — and an army ordered
+  onto its own feet is precisely the freeze this rule may not cause. Under `MARCH_STEP` (200) the
+  straight line stands.
+* **And there is a watchdog.** If the anchor fails to cover `MARCH_PROGRESS` for `MARCH_STUCK`
+  seconds while a detour is in force, detours are switched off for `MARCH_IGNORE` (30 s) and the
+  original logic runs — creep camps and all. `MARCH_STUCK` is **ten** seconds and has to be well
+  under the two watchdogs that would otherwise fire first (`PUSH_STUCK_AFTER` 20, `FREEZE_AFTER`
+  35), or lifting the net is a thing that only ever happens after the wave has already been
+  written off.
+
+Cohesion is measured against the **waypoint** rather than the objective, because "who is out in
+front" is a question about the direction the army is actually walking. Judged against the
+objective on a detour, the whole army reads as trailing and the leaders are never held at all.
 
 ### The captain is the FIRST hero, then the second, then the third
 
@@ -1034,6 +1139,17 @@ ghoul out at 49 % for one at 51 % and swap it back on the next pass.
 Relief happens at **home** only (`massing`, not `afield`). In the field it is two lone ghouls
 walking in opposite directions across a melee map, one of them wounded, and the camp between them
 eats both.
+
+**And the forest never takes a ghoul that is out with the wave.** `serving` — the choppers the
+crew may recall — is built only from squad members standing inside `TOWN_RADIUS` of home, and
+without that clause the forest bids for the wave *mid-run*: `lumberCrew` moves whenever the lumber
+bank does, and the bank moves every time the build order spends. The recall does two things at
+once, both bad. It drops the ghoul out of the squad, so `commit` stops moving it and the party it
+was in fights one body short; and the harvest plan then walks it home **alone** across a melee map
+— `serving` is sorted worst-health first, so it is always the ghoul in the thickest of it that
+gets picked. That is half of the reported *"the undead leaves its army at home"*. The forest simply
+waits: everything above the crew is handed to it the moment the party comes home, which is when a
+player does the same thing.
 
 That split decides how ghouls are *used*. Two more things follow from the same fact and both are
 in `plan.ts`:
@@ -1412,6 +1528,92 @@ or a custom map adds is not something to guess about. Magic immunity and `magicR
 netted off exactly as `SimWorld.spellDamage` nets them, so the rule cannot promise a kill the sim
 will not deliver.
 
+### A fight has to be worth the mana
+
+Reported: *"it feels like the AI is spending too much mana on small creep camps"* — a Death
+Knight that Coils two Gnolls, a Far Seer whose Chain Lightning goes into a three-body green camp,
+a Tauren Chieftain that War Stomps a pair of Murlocs. Every one of those casts is legal and none
+of them is wrong on its own; the sum of them is a hero that arrives at the fight that decides the
+game with an empty bar.
+
+`worthTheMana` ([`plus/casting.ts`](../src/ai/plus/casting.ts)) is the answer and it has exactly
+two moving parts:
+
+* **It is rolled ONCE PER ENGAGEMENT, not per pass.** That is the whole difference between a
+  chance and a delay. The caster walks its units two to three times a second; re-rolled there,
+  any chance short of zero fires within a second or two and nothing has been lowered at all. The
+  decision is taken when `fightSince` is first set and held for as long as that fight lasts
+  (`offense`, cleared with `fightSince`).
+* **It is priced by what the fight is AGAINST.** One hostile *player's* body in reach and the
+  answer is always yes — a spell held back in a real fight is wasted far more expensively than
+  one thrown at a Gnoll. Against creeps alone it is `CREEP_SPELL_SMALL` (0.25) for a small camp
+  and `CREEP_SPELL_BIG` (0.7) from `CREEP_SPELL_BODIES` (4) up, which is about where an orange
+  camp starts.
+
+It gates the `nuke` and `disable` roles — the developer's own list ("death coil, frost nova,
+impale, carrion swarm, war stomp, shockwave") is exactly those two — and nothing else. A heal, a
+panic button, a morph and a summon are answers to something that has already happened and are
+never held back.
+
+**Death Coil needs the rule stated twice**, and that is the trap in it. `AUdc` is graded `heal`
+on the ladder (see below), and a heal is never delayed — so the gate in `ready` cannot see it.
+The same test is therefore applied inside `pickTarget` to the target's *nuke half*, which is why
+the one nuke the developer named first would otherwise have been the one nuke the rule missed.
+
+### Holy Light and Death Coil are two spells on one button
+
+Both were half-broken, silently, for the same reason: `friendlySpell` reads the `targs1` flags,
+and **neither row carries an allegiance flag at all**. `AHhb`'s is
+`air,ground,organic,notself,invu,vuln,nonancient`. That is precisely why the engine hardcodes
+their rule and ships each one its own error string (`Holybolttarget` / `Deathcoiltarget`, see
+`POLARITY_SPELLS` in [`sim/spells.ts`](../src/sim/spells.ts)) — the data cannot say *"a friendly
+living unit or an enemy Undead one"*.
+
+So `friendlySpell` answered **false** for both, the target pool was the enemy list alone, and the
+result was a Paladin who could only ever smite enemy Undead and a Death Knight who could only
+ever burn enemy living. Neither ability had a healing half. That is most of a Paladin, and it is
+the *whole* of the undead's only heal.
+
+`pickTarget` now builds the pool from **both sides** for a polarity spell and decides which half
+each candidate is the same way the sim does — `hostile`, which is what `SimWorld.wouldHeal` asks
+once `polarityOk` has vouched for the race. Three things fall out of it:
+
+* **Each half is scored on its own ladder.** A friendly candidate is priced as a `heal` and a
+  hostile one as a `nuke`, and the healing half carries `POLARITY_HEAL_FIRST` (2×) so the two can
+  be compared at all — putting a body back on its feet is worth more than hurting one, and
+  without the thumb on the scale a Death Knight with a Ghoul at a fifth of its life still coils
+  whatever is standing in front of it.
+* **Death Coil's heal is held later than an ordinary one.** `COIL_HEAL_HP` is 0.3, the
+  developer's own number, against `HURT`'s 0.75 for everything else: the coil's other half is the
+  undead's opening nuke, so every one poured into a lightly scratched Ghoul is a burst that was
+  going to finish something. Holy Light competes with nothing (its other half only ever reaches
+  enemy Undead) and keeps the ordinary bar.
+* **An illusion is never healed.** It deals no damage, arrives at full health and is meant to die
+  ([`docs/illusions.md`](illusions.md)) — mana spent on one is mana spent on a picture.
+
+### A friendly spell reaches an ALLY's units
+
+`CasterView.allied` is the other half of the same fix. The caster's pools used to be *ours* and
+*hostile*, so every friendly spell in the game — Holy Light, Heal, Rejuvenation, Bloodlust,
+Healing Wave, Tranquility — was confined to this player's own units, and a Paladin stood beside a
+dying allied Footman doing nothing. `castError` never minded: the polarity rule and `targs1`
+alike ask about *allegiance*, not about ownership.
+
+It is `coAllied` and a real seat, never merely "not hostile" — a Goblin Merchant and a critter are
+neither ours nor an enemy's, and a Paladin has no business spending mana on either. The same
+question the chat router asks ([`src/game/chat.ts`](../src/game/chat.ts)), so "my ally" means one
+thing across the whole AI.
+
+**Heroes have priority**, and that is a deliberate inversion of the ladder rather than a
+by-product of it. `bodyValue` prices a *healthy enemy* hero at barely more than a soldier — the
+anti-chase rule — and read as-is that says heal the Footman at 40 % before your own Archmage at
+45 %, which is nobody's play at any level. `HEAL_HERO` (1.5×, in
+[`plus/targeting.ts`](../src/ai/plus/targeting.ts)) is the correction, and it is a *preference*
+rather than an override: the wound multiplier reaches 3× at a sliver of health, so a soldier
+under about a fifth of its life still outbids a hero that is merely scratched. At 2× it would be
+a rule, and no soldier could be healed while a hero anywhere in range was one point down. The
+`naive` read is exempt — it aims by bulk, so a hero's own hit points already put it in front.
+
 ### Items: buying them, and pressing them
 
 Computer+ shops and drinks. It lives in [`plus/items.ts`](../src/ai/plus/items.ts), separately
@@ -1449,11 +1651,62 @@ drinker — with `DataA`/`DataB` saying whether that drink is hit points or mana
 `tools/ai-plus-items-test.cjs` had encoded the same mistake (`code` set to the alias), which is
 why it passed the whole time; it now carries the real pairs.
 
-The two rungs aimed at somebody ELSE — `healArea` and `healOther` — are also the only two not
-gated on being in a fight, and that is deliberate. A Healing Salve and a Scroll of Regeneration
-pour over **forty-five seconds**; spending one while the blows are still landing is spending it
-into the damage. The moment they are worth is the moment the camp is dead and the party is about
-to walk to the next one, which is the job the shopping list says it bought them for.
+#### A regeneration item is never spent inside a fight
+
+The two rungs aimed at somebody ELSE — `healArea` and `healOther` — are the only two gated on
+there being **no** fight at all, and the reason is in the item rather than in the tactics.
+Reported from both races that open with one: *"the Orc AI must avoid using healing salve during
+fights and fighting with creeps … same thing for human's Scroll of Regeneration"*.
+
+`AIrg` hangs a HOT — 400 hit points over **forty-five seconds** — and **the sim cancels it the
+moment its bearer is hit** (`ITEM_REGEN_GROUP`, [`items.md`](items.md)), which is the real game's
+own rule. So a salve poured on a Grunt that is being swung at is not a heal racing the damage, it
+is a hundred gold and a charge thrown away on the next blow. The moment they are worth is the
+moment the camp is dead and the party is about to walk to the next one, which is the job the
+shopping list says it bought them for.
+
+This paragraph used to state that intention and no gate implemented it. It is now two tests, and
+it needs both:
+
+* **the PRESSER is not engaged** — nothing hostile within `LOOK` (900), creeps included, which is
+  the same reading everything else here calls "this fight";
+* **and neither is the BODY the charge is poured into** (`underFire`, asked inside `hurtest` and
+  `armyHeal`). The presser can be nine hundred units from the fight its own army is standing in,
+  and a Scroll of Regeneration is an AREA — the units it covers are not the unit pressing it.
+
+#### It sells the duplicate
+
+Reported: *"heroes that carry multiple Cloak of Shadows must try to sell them at shops (or goblin
+merchant/marketplace) and keep only 1"*. It is the natural consequence of a hero that picks up
+everything it walks over (`loot`) on a map whose creep camps drop from the same tables — two
+cloaks, two Rings of Protection +1, two Talismans — and a six-slot belt with two slots spent on
+nothing.
+
+**Which duplicates is not a list of items**, it is the question *does the game add the second one
+to the first*, and the game answers that in exactly one place: the `switch` in
+`SimWorld.itemBonuses`, plus the orb rule beside it (an orb's flat damage bonus is *"a carried
+stat, it stacks"* — [`orbs.md`](orbs.md)). `STACKS` in [`plus/items.ts`](../src/ai/plus/items.ts)
+mirrors those codes and says so; anything else an item grants is an **ability** or an **aura**, and
+a second copy of an ability the hero already has does nothing at all. A hero carrying two Cloaks
+of Shadows melds exactly as well as one carrying one. Note the two damage-reduction items are
+deliberately absent from `STACKS`: the sim takes `Math.max` of them, so a second Runed Bracers is
+worth nothing either.
+
+Being wrong the "it stacks" way costs a slot; being wrong the other way **throws an item away**.
+So `sparePermanent` refuses three whole classes before it even asks about duplication — anything
+`usable`, `charges > 0` or `perishable` (two Potions of Healing are two heals whatever their
+ability does), anything `powerup` (never in a belt at all), and anything the shops will not take
+back (`pawnable`). It sells the **later** slot, so the hero keeps the copy an aura or ability is
+already being granted from and nothing blinks off.
+
+The sale is the sim's own gesture end to end. `issueSellItem` walks the hero to the shop's near
+edge and pawns on arrival, and it sets the hero's order to `"getitem"` — which is precisely the
+order the army manager already leaves alone (`massing`, `commit`), so the trip needs no errand
+flag of its own. `canPawnAt` is what makes a **Marketplace** or a **Goblin Merchant** a valid
+destination and a Tavern not one: it asks for the `Apit` ability rather than for a ware list,
+which is the whole reason a Marketplace with empty shelves still buys. Gated on `mayShop` like the
+shopping trip and for the same reason — it is a walk, and a walk is not something to start while
+there is a wave in the field.
 
 #### The rest of it
 

@@ -195,5 +195,29 @@ check("a magic-immune worker is never nuked", nukeWorthIt("AUdc", DEATH_COIL_2, 
 check("…and reduction is netted off before the comparison",
   nukeWorthIt("AUdc", DEATH_COIL_1, worker(150, 220, { magicReduction: 0.5 })), false);
 
+// ==========================================================================================
+console.log("\n-- a heal goes on the HERO first ---------------------------------------------");
+// ==========================================================================================
+// The one place the anti-chase reading has to be inverted rather than reused. `bodyValue` prices
+// a healthy hero at barely more than a soldier, and read as-is that says heal the Footman at
+// 40% before your own Archmage at 45% — which is nobody's play at any level. `HEAL_HERO` is the
+// correction, and it is a PREFERENCE: the wound multiplier reaches 3x at a sliver of health, so
+// a soldier about to die still outbids a lightly scratched hero.
+const footman = (hp) => unit({ hp, maxHp: 1000 });
+const archmage = (hp) => unit({ hp, maxHp: 1000, isHero: true });
+for (const profile of [PLUS_EASY, PLUS_NORMAL, PLUS_INSANE]) {
+  const name = profile === PLUS_EASY ? "Easy" : profile === PLUS_NORMAL ? "Normal" : "Insane";
+  check(`${name}: the hero at 45% before the soldier at 40%`,
+    pick([["footman", footman(400)], ["hero", archmage(450)]], "heal", profile), "hero");
+}
+// …and it is a PREFERENCE, not a rule: a soldier on its last fifth still outbids a hero that is
+// merely scratched. `naive` is exempt and deliberately so — it aims by BULK, so a hero's own
+// hit points already put it in front, which is the same player who Storm Bolts your Tauren.
+for (const profile of [PLUS_NORMAL, PLUS_INSANE]) {
+  const name = profile === PLUS_NORMAL ? "Normal" : "Insane";
+  check(`${name}: …but a soldier about to die still comes first`,
+    pick([["footman", footman(60)], ["hero", archmage(700)]], "heal", profile), "footman");
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

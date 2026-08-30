@@ -372,6 +372,15 @@ export interface CasterView {
   def(abilityId: string): AbilityDef | undefined;
   /** `AiPlayer.hostileTo` — creeps and neutral-hostile included. */
   hostile(u: SimUnit): boolean;
+  /**
+   * Is this an ALLIED PLAYER's unit — somebody a friendly spell may legally land on?
+   *
+   * Not simply "not hostile": a Goblin Merchant and a critter are neither ours nor an enemy's,
+   * and a Paladin has no business spending mana on either. Optional because only the Computer+
+   * caster reads it (plus/casting.ts); the classic one plays the enemy's fight and its own and
+   * never looked past `hostile`.
+   */
+  allied?(u: SimUnit): boolean;
   /** `AiPlayer.order`. */
   order(cmd: Command): boolean;
 }

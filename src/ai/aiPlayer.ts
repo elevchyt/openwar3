@@ -7,6 +7,7 @@ import type { UpgradeRegistry } from "../data/upgrades";
 import { isOffField, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
 import { footprintBuildable, footprintCellsAt, type Footprint } from "../sim/destructibles";
 import { PATHING_CELL } from "../sim/pathing";
+import { heroReviveCost } from "../data/gameplayConstants";
 import {
   BUILD_EXPAND, BUILD_UNIT, BUILD_UPGRADE, ELF_MINE, MELEE_INSANE, MELEE_NEWBIE, TOWN_COUNT_EQUIVALENTS,
 } from "./ids";
@@ -665,6 +666,12 @@ export class AiPlayer {
     return false;
   }
 
+  /** The corpse this row would bring back, or null — the same one `reviveFallen` would pick.
+   *  A hero already on its way back (`revivingAt`) is not one this row still has to pay for. */
+  private fallenFor(typeId: string): { level: number } | null {
+    return this.host.world.fallenHeroesOf(this.player).find((f) => f.typeId === typeId && !f.revivingAt) ?? null;
+  }
+
   /** The tier route: a building of ours whose `Upgrade` list names `id`. */
   private upgradeExisting(id: string, town: number): boolean {
     for (const b of this.upgradeCandidates(id, town)) {
@@ -704,6 +711,27 @@ export class AiPlayer {
    * `id`, `setProduce` will FOUND the building and the full row is the right price.
    */
   private rowCost(def: UnitDef, id: string, town: number): { gold: number; lumber: number } {
+    // A HERO WE HAVE LYING DEAD IS NOT PRICED AT WHAT A HERO COSTS. `setProduce` turns this row
+    // into a REVIVAL (`reviveFallen`), and a revival is priced off the hero's LEVEL:
+    // `originalCost × (ReviveBaseFactor + ReviveLevelFactor × (level−1))`, which for a 425-gold
+    // hero is 170 at level 1, 255 at level 3, 425 at level 7 and 552 at level 10 (capped at
+    // `HeroMaxReviveCostGold`). So the base cost is wrong in BOTH directions and each way costs
+    // the same behaviour — "the AI doesn't seem to want to revive their heroes":
+    //
+    //  · BELOW level 7 it over-reserves. A row the loop cannot afford HALTS it, so the whole
+    //    build ladder waited for 425 gold to buy something that costs 170 — and everything
+    //    under the hero row starved for the whole of that wait.
+    //  · ABOVE it, it under-reserves. The row is declared affordable, the rows below spend the
+    //    difference, the `revive` command is then refused by the authority for want of the real
+    //    price (`stash.gold < cost.gold`), and `startUnit` reports success either way — so the
+    //    altar stands empty and the ladder never notices.
+    //
+    // Priced honestly, the loop saves for a revival exactly as it saves for anything else.
+    const fallen = def.isHero ? this.fallenFor(id) : null;
+    if (fallen) {
+      const c = heroReviveCost("altar", def.goldCost, def.lumberCost, def.buildTime || 1, fallen.level);
+      return { gold: c.gold, lumber: c.lumber };
+    }
     if (def.isBuilding) {
       for (const b of this.upgradeCandidates(id, town)) {
         const from = this.host.registry.get(b.typeId);
@@ -1292,7 +1320,15 @@ export class AiPlayer {
       // Jobs in this building's queue, and the structure this worker is on its way to raise:
       // both are already spoken for and must not be ordered a second time.
       for (const job of u.building?.queue ?? []) {
-        if (job.unitId === id && (job.kind === "unit" || job.kind === "upgrade")) {
+        // A REVIVAL counts too, and it has to: `job.unitId` on a revive job is the hero's own
+        // type id, so without this clause `GetUnitCount(hero)` reads 0 for the whole minute an
+        // altar is bringing one back — and the build ladder's hero row therefore asks for it
+        // again on every pass. `reviveFallen` then refuses (the corpse is already spoken for,
+        // and the altar's queue is full), `trainUnits` refuses as well, and the row spends the
+        // whole revival reserving gold for a hero that is already on its way. That is the
+        // classic "the AI never revives": it does, and then starves everything below the row
+        // while it happens.
+        if (job.unitId === id && (job.kind === "unit" || job.kind === "upgrade" || job.kind === "revive")) {
           c.all++;
           bump(c.allAt, town);
         }

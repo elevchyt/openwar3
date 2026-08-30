@@ -61,6 +61,42 @@ Three rules, all of them easy to get wrong:
    "upgrade the hall" and not "found a Keep": `setProduce` tries the tier route first, and an
    AI that skips it never leaves tier 1.
 
+## A dead hero is a build row, and it is priced as a REVIVAL
+
+Every race script's "always rebuild heroes for defense" branch asks for the hero by id, exactly
+as it would for a fresh one — `GetUnitCountDone(hero_id)` reads 0 for a corpse — and the engine
+turns that request into a revival. `setProduce` does the same (`reviveFallen`). Two things about
+that row are not obvious from the call site, and getting either wrong produces the same symptom:
+*the AI never revives its heroes.*
+
+1. **A revival in progress has to COUNT.** A revive job carries the hero's own type id in
+   `unitId`, but its `kind` is `"revive"` — so the census's queue walk skipped it, `count(hero)`
+   read 0 for the whole minute an altar was bringing one back, and the ladder asked for the hero
+   again on every pass. `reviveFallen` then refuses (the corpse is already spoken for, the altar's
+   queue is full), `trainUnits` refuses too (WC3 offers you the revive button, never a second copy
+   at full price), and the row spends the entire revival reserving gold for a hero already on its
+   way — starving everything below it.
+
+2. **It is not priced at what a hero costs.** A revival is priced off the hero's **level** —
+   `originalCost × (ReviveBaseFactor + ReviveLevelFactor × (level−1))`, capped at
+   `HeroMaxReviveCostGold` (`heroReviveCost`,
+   [`gameplayConstants.ts`](../src/data/gameplayConstants.ts)). For a 425-gold hero that is **170
+   at level 1**, 255 at level 3, 425 at level 7 and 552 at level 10. So `rowCost` reserving the
+   *base* cost was wrong in **both** directions, and each way produces the same symptom:
+
+   * *Below level 7 it over-reserves.* A unit row the loop cannot afford **halts** it, so the
+     whole ladder waited for 425 gold to buy something that costs 170 — and every row under the
+     hero starved for the length of that wait.
+   * *Above it, it under-reserves.* The row is declared affordable, the rows below spend the
+     difference, the `revive` command is refused by the authority for want of the real price, and
+     `startUnit` reports success either way — so the altar stands empty and the ladder never
+     notices.
+
+   Priced honestly, `OneBuildLoop` saves for a revival exactly as it saves for anything else.
+
+Both fixes are in the shared library ([`aiPlayer.ts`](../src/ai/aiPlayer.ts)), so the classic
+melee AI and Computer+ get them together.
+
 ## A town is a gold mine
 
 The scripts address towns by index — `HarvestGold(T+1, 5)`, `GuardSecondary(1, 2,

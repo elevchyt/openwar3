@@ -179,6 +179,11 @@ const ITEMS = {
   prep: { id: "prep", gold: 100, usable: true, abilities: ["AIp1"] }, // Replenishment Potion
   bspd: { id: "bspd", gold: 250, usable: false, abilities: ["AIms"] }, // Boots of Speed — passive
   will: { id: "will", gold: 150, usable: true, abilities: ["AIil"] }, // Wand of Illusion
+  // --- the permanent drops, for the PAWNING pass. What separates them is whether the game adds
+  // a second one to the first (`itemBonuses`' own switch, mirrored as `STACKS`).
+  clsd: { id: "clsd", gold: 150, usable: false, pawnable: true, charges: 0, abilities: ["Ashm"] }, // Cloak of Shadows
+  rat3: { id: "rat3", gold: 100, usable: false, pawnable: true, charges: 0, abilities: ["AIat"] }, // Claws of Attack +3
+  qbot: { id: "qbot", gold: 50, usable: false, pawnable: false, charges: 0, abilities: ["Ashm"] }, // a quest item: not pawnable
 };
 // The ability rows: the `target` that is the whole of how an item is AIMED (items.ts `aim`), the
 // base `code` that decides what pressing it is FOR (items.ts `USE_OF`), and — for the one code
@@ -208,6 +213,11 @@ const ABILS = {
   // Dealt (%)" is EMPTY — the 0 that makes the copy harmless (docs/illusions.md).
   AIil: { code: "AIil", target: "unit", levelData: [lvl({ castRange: 500, duration: 60, data: [0, 2] })] },
   AIms: { code: "AIms", target: "", levelData: [lvl()] },
+  // Shadow Meld — a granted ABILITY. A hero carrying two of them melds exactly as well as one
+  // carrying one, which is the whole of why the second is worth pawning.
+  Ashm: { code: "Ashm", target: "", levelData: [lvl()] },
+  // …and Claws of Attack, which IS in `itemBonuses`' switch: two of them are +6 damage.
+  AIat: { code: "AIat", target: "", levelData: [lvl({ data: [3, NaN] })] },
 };
 
 let nextId = 1;
@@ -238,6 +248,7 @@ function pressed(units, profile, ctx, opts = {}) {
     shopStock: () => -1,
     missingForShop: () => [],
     isShopUnit: () => false,
+    canPawnAt: () => false,
   };
   const items = new PlusItems({
     world, player: 0,
@@ -349,11 +360,22 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
 
 // --- healing the ARMY, not just the hero --------------------------------------------------------
 {
-  // Three hurt soldiers around a healthy hero: this is what the scroll is for.
+  // Three hurt soldiers around a healthy hero, and the camp already dead: this is what the
+  // scroll is for, and WHEN it is for it.
   const h = belt(hero(), "shea", "phea");
   const hurt = [1, 2, 3].map((i) => unit({ hp: 300, maxHp: 1000, x: 100 * i }));
-  check("three hurt soldiers: it reads the area heal", itemOf(pressed([h, ...hurt, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
+  check("three hurt soldiers: it reads the area heal", itemOf(pressed([h, ...hurt], PLUS_INSANE, AWAY)), 0);
 }
+{
+  // …AND NOT WHILE THE BLOWS ARE STILL LANDING. `AIrg` is a 45-second HOT and the sim cancels it
+  // the moment its bearer is hit (ITEM_REGEN_GROUP), so a scroll poured into a live fight — a
+  // creep camp included, which is the reported case — is 100 gold spent on the next blow.
+  const h = belt(hero(), "shea", "phea");
+  const hurt = [1, 2, 3].map((i) => unit({ hp: 300, maxHp: 1000, x: 100 * i }));
+  check("…and never with something still swinging at the party",
+    pressed([h, ...hurt, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+}
+
 {
   // One hurt soldier is a potion's job, not a scroll's — and the hero itself is fine.
   const h = belt(hero(), "shea");
@@ -429,9 +451,26 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
   // The Healing Salve is the one healing item you point at somebody.
   const h = belt(hero(), "hslv");
   const wounded = unit({ hp: 200, maxHp: 1000, x: 150 });
-  const cmd = pressed([h, wounded, enemy({ x: 200 })], PLUS_INSANE, AWAY);
+  const cmd = pressed([h, wounded], PLUS_INSANE, AWAY);
   check("the Healing Salve goes on the hurt soldier", itemOf(cmd), 0);
   check("…aimed at that unit", cmd && cmd.targetId, wounded.id);
+  // …and is held for as long as anything is swinging, for the same reason the scroll is: the
+  // orc's opening buy is the developer's own example ("avoid using healing salve during fights
+  // and fighting with creeps"), because a salve poured into damage is a salve cancelled.
+  check("…and never during the fight",
+    pressed([belt(hero(), "hslv"), wounded, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+}
+{
+  // THE BODY IS ASKED, NOT ONLY THE PRESSER. A hero can be a screen from the fight its own army
+  // is standing in. `near` is hull-to-hull (16 + 16 here), so an enemy 1600 out is 1568 from the
+  // hero — well outside its own `LOOK` of 900, so the hero is not "engaged" — and 768 from the
+  // soldier at 800, which is inside it.
+  const far = unit({ hp: 200, maxHp: 1000, x: 800 });
+  check("…nor onto a body that is itself under fire",
+    pressed([belt(hero(), "hslv"), far, enemy({ x: 1600 })], PLUS_INSANE, AWAY), null);
+  // …and the same soldier, with the fight over, gets it.
+  check("…and gets it once nothing is swinging",
+    itemOf(pressed([belt(hero(), "hslv"), unit({ hp: 200, maxHp: 1000, x: 800 })], PLUS_INSANE, AWAY)), 0);
 }
 
 // --- mana ------------------------------------------------------------------------------------
@@ -585,6 +624,7 @@ function wand(units, profile = PLUS_INSANE) {
     items: new Map(),
     itemReadyError: () => null, itemUseError: () => null,
     shopReaches: () => false, shopStock: () => -1, missingForShop: () => [], isShopUnit: () => false,
+    canPawnAt: () => false,
   };
   const items = new PlusItems({
     world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner !== 0,
@@ -639,6 +679,7 @@ function shopped(units, profile, opts = {}) {
     missingForShop: (_id, ware) => (opts.needsTech?.includes(ware) ? ["TWN2"] : []),
     // Every building in the fixture is a shop; which one gets the sale is the ordering rule.
     isShopUnit: () => true,
+    canPawnAt: () => false, // the pawning trip has its own fixture below
   };
   const items = new PlusItems({
     world, player: 0,
@@ -862,6 +903,7 @@ function shopped(units, profile, opts = {}) {
     itemReadyError: () => null, itemUseError: () => null,
     shopReaches: () => false, shopStock: () => -1, missingForShop: () => [],
     isShopUnit: (id) => id === MERCHANT.id,
+    canPawnAt: () => false,
   };
   const mk = () => new PlusItems({
     world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner !== 0 && u.owner !== 12,
@@ -899,6 +941,70 @@ const SHOPS = { human: "hvlt", orc: "ovln", undead: "utom", nightelf: "eden" };
 for (const [race, id] of Object.entries(SHOPS)) {
   const table = PLUS_RACES[race];
   check(`${race} names its shop (${id})`, table && table.shop, id);
+}
+
+// ==========================================================================================
+console.log("\n-- selling the duplicate -----------------------------------------------------");
+// ==========================================================================================
+
+// "Heroes that carry multiple Cloak of Shadows must try to sell them at shops … and keep only 1."
+// WHICH duplicates is not a list of items: it is the question *does the game add the second one
+// to the first*, which the sim answers in exactly one place (`SimWorld.itemBonuses`' switch,
+// mirrored as `STACKS` in plus/items.ts).
+const PAWNSHOP = unit({ owner: 12, typeId: "ngme", x: 500, building: { constructionLeft: 0, stock: null } });
+
+/** Drive one pass against a shop that DEALS IN ITEMS, and report the sale it asked for. */
+function pawned(units, opts = {}) {
+  const orders = [];
+  const world = {
+    units: new Map([...units, PAWNSHOP].map((u) => [u.id, u])),
+    items: new Map(),
+    itemReadyError: () => null, itemUseError: () => null,
+    shopReaches: () => true, shopStock: () => 0, missingForShop: () => [],
+    isShopUnit: (id) => id === PAWNSHOP.id,
+    // The `Apit` question, which is what makes a Marketplace or a Goblin Merchant a place you
+    // may sell to and a Tavern not one.
+    canPawnAt: () => opts.dealsInItems ?? true,
+  };
+  const items = new PlusItems({
+    world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner !== 0 && u.owner !== 12,
+    order: (cmd) => { orders.push(cmd); return true; }, item: (id) => ITEMS[id],
+    wares: () => [], gold: () => 0,
+  }, PLUS_INSANE, "human");
+  items.pass(500, { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, portalWorthIt: true });
+  return orders.find((c) => c.c === "sellitem") ?? null;
+}
+
+{
+  const h = belt(hero(), "clsd", "clsd", "phea");
+  const sale = pawned([h]);
+  check("a second Cloak of Shadows is sold", sale && sale.c, "sellitem");
+  check("…the LATER slot, so the granted ability never blinks off", sale && sale.slot, 1);
+  check("…at the shop that deals in items", sale && sale.shopId, PAWNSHOP.id);
+}
+{
+  check("one cloak is kept", pawned([belt(hero(), "clsd", "phea")]), null);
+}
+{
+  // Claws of Attack ARE in the switch: two of them are +6 damage, and the second is worth its
+  // slot. Being wrong the other way THROWS AN ITEM AWAY, so anything unlisted is never sold.
+  check("two Claws of Attack both stay", pawned([belt(hero(), "rat3", "rat3")]), null);
+}
+{
+  // Two Potions of Healing are two heals whatever their ability does — `usable`/`charges` is
+  // refused before the duplicate test is even asked.
+  check("two potions are two heals", pawned([belt(hero(), "phea", "phea")]), null);
+}
+{
+  check("…and nothing the shops will not take back", pawned([belt(hero(), "qbot", "qbot")]), null);
+}
+{
+  check("a Tavern is not somewhere to sell", pawned([belt(hero(), "clsd", "clsd")], { dealsInItems: false }), null);
+}
+{
+  // It is a WALK, so it waits like the shopping trip does: never while there is a wave out.
+  check("…and never while the army is in the field",
+    pawned([belt(hero(), "clsd", "clsd")], { mayShop: false }), null);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

@@ -103,6 +103,27 @@ const KILL_HP = 400;
  *  away on a summon when the hero is the only thing in range. */
 const HERO_DISABLE_FLOOR = 0.5;
 
+/**
+ * A HEAL GOES ON THE HERO FIRST — at every difficulty, including the novice one.
+ *
+ * The one place the anti-chase reading above has to be inverted rather than reused. `bodyValue`
+ * deliberately prices a healthy enemy hero at barely more than a soldier, and read as-is that
+ * says a Paladin should heal the Footman at 40 % before his own Archmage at 45 % — which is
+ * nobody's play at any level. Our own hero is the unit the whole army is arranged around, the
+ * one carrying the items, and the one whose death costs a minute and a half and a revival fee.
+ *
+ * Not so large that it overrides how hurt somebody is: the wound multiplier reaches 3 at a
+ * sliver of health, so a soldier under about a fifth of its life still outbids a hero that is
+ * merely scratched. It is a preference, which is what "heroes have priority" means — at 2 it
+ * would be a rule, and no soldier could ever be healed while a hero anywhere in range was one
+ * point down.
+ *
+ * The `naive` read is the exception and is left alone on purpose: it aims by BULK, so a hero's
+ * own hit points already put it in front and an easy computer heals the hero more or less
+ * regardless. That is the same player who Storm Bolts your Tauren.
+ */
+const HEAL_HERO = 1.5;
+
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 
 /** Average damage per second, off the weapon's own roll (`damage + dice×(sides+1)/2`, the
@@ -154,12 +175,15 @@ function naiveValue(t: SimUnit, ctx: AimCtx): number {
  */
 export function spellValue(t: SimUnit, role: AimRole, ctx: AimCtx, facts?: SpellFacts): number {
   const frac = t.hp / Math.max(1, t.maxHp);
-  if (ctx.skill === "naive") return naiveValue(t, ctx) * (role === "heal" ? 1 + (1 - frac) * 2 : 1);
+  if (ctx.skill === "naive") {
+    return naiveValue(t, ctx) * (role === "heal" ? (1 + (1 - frac) * 2) * (t.isHero ? HEAL_HERO : 1) : 1);
+  }
 
   let v = bodyValue(t, ctx);
   switch (role) {
     case "heal":
-      v *= 1 + (1 - frac) * 2; // the most wounded, and heroes first
+      v *= 1 + (1 - frac) * 2; // the most wounded…
+      v *= t.isHero ? HEAL_HERO : 1; // …and the HERO first, which `bodyValue` alone does not say
       break;
     case "nuke":
       // The wounded — but an expert prices "wounded" in hit points remaining rather than in

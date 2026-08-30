@@ -36,7 +36,48 @@ const DEFS = {
   // …and a tower and its upgraded form, to put a SECOND upgrade row under the tier-up with.
   hwtw: { goldCost: 70, lumberCost: 20, isBuilding: true, isHero: false, classification: [], foodUsed: 0 },
   hgtw: { goldCost: 100, lumberCost: 40, isBuilding: true, isHero: false, classification: [], foodUsed: 0 },
+  // …and an altar and a hero, for the REVIVAL half. A Blademaster is 425/100 (UnitBalance
+  // goldcost/lumbercost) and the altar it comes back at trains exactly its own race's four.
+  oalt: { goldCost: 180, lumberCost: 50, isBuilding: true, isHero: false, classification: [], foodUsed: 0 },
+  Obla: { goldCost: 425, lumberCost: 100, buildTime: 55, isBuilding: false, isHero: true, classification: [], foodUsed: 5 },
 };
+
+/**
+ * A world with a finished ALTAR of ours and one hero of ours lying dead in front of it.
+ *
+ * The revive ladder is what the row has to be priced against — see `AiPlayer.rowCost`. The
+ * factors are the game's (`MiscGame` ReviveBaseFactor 0.4, ReviveLevelFactor 0.1), so a
+ * 425-gold Blademaster costs 170 to bring back at level 1 and 425 at level 7: the base cost is
+ * wrong in both directions and the row has to save for the real one.
+ */
+function fallenSeat(gold, level, opts = {}) {
+  const altar = {
+    id: 1, owner: 0, typeId: "oalt", hp: 100, maxHp: 100, x: 0, y: 0,
+    building: { constructionLeft: 0, queue: [] },
+    orderQueue: [],
+  };
+  // A revival already under way is a job in the altar's queue whose `unitId` is the HERO's type
+  // — the census has to count it, or the row asks again for the whole minute it takes.
+  if (opts.reviving) altar.building.queue.push({ kind: "revive", unitId: "Obla", heroId: 9 });
+  const asked = [];
+  const host = {
+    world: {
+      units: new Map([[1, altar]]),
+      mines: new Map(),
+      nearestMine: () => null,
+      stashOf: () => ({ gold, lumber: 1000 }),
+      pendingTrained: () => [],
+      fallenHeroesOf: () => [{ id: 9, owner: 0, typeId: "Obla", level, revivingAt: opts.reviving ? 1 : 0 }],
+    },
+    registry: { get: (id) => DEFS[id] },
+    tech: { get: () => ({ upgrade: [], revive: true, trains: ["Obla"] }) },
+    execute: (_player, cmd) => {
+      asked.push(cmd);
+      return true;
+    },
+  };
+  return { ai: new AiPlayer(0, "orc", 1, host, 0, 0, 1), asked };
+}
 
 /** A world with one finished Town Hall of ours standing in it, and a stash we can set. */
 function seat(gold, lumber, opts = {}) {
@@ -139,6 +180,64 @@ console.log("\n-- a tier-up is priced as the UPGRADE it is ---------------------
   ai.setBuildUnit(1, "hkee");
   ai.runBuildLoop();
   check("a busy hall is not a cheap Keep", asked.length, 0);
+}
+
+// ==========================================================================================
+console.log("\n-- a dead hero's row is priced as the REVIVAL it becomes --------------------");
+// ==========================================================================================
+
+// LEVEL 1: 425 × 0.4 = 170. The old price made the ladder save 425 for it — and a unit row that
+// cannot afford itself HALTS the loop, so everything under the hero starved for the difference.
+{
+  const { ai, asked } = fallenSeat(170, 1);
+  ai.refresh();
+  ai.initBuildArray();
+  ai.setBuildUnit(1, "Obla");
+  ai.runBuildLoop();
+  check("a level-1 revival costs 170, not 425", asked.map((c) => c.c), ["revive"]);
+  check("…and it is the corpse that is raised", asked[0]?.heroId, 9);
+}
+{
+  const { ai, asked } = fallenSeat(169, 1);
+  ai.refresh();
+  ai.initBuildArray();
+  ai.setBuildUnit(1, "Obla");
+  ai.runBuildLoop();
+  check("a gold short and it waits", asked.length, 0);
+}
+// LEVEL 7: 425 × (0.4 + 0.6) = 425 — the one level at which the two prices agree. LEVEL 10 is
+// 425 × 1.3 = 552, which the base cost UNDER-reserves: the row used to be declared affordable at
+// 425, the rows below spent the difference, and the authority then refused the revival for want
+// of the real price while `startUnit` reported success either way.
+{
+  const { ai, asked } = fallenSeat(551, 10);
+  ai.refresh();
+  ai.initBuildArray();
+  ai.setBuildUnit(1, "Obla");
+  ai.runBuildLoop();
+  check("a level-10 revival is not affordable at the base price", asked.length, 0);
+}
+{
+  const { ai, asked } = fallenSeat(552, 10);
+  ai.refresh();
+  ai.initBuildArray();
+  ai.setBuildUnit(1, "Obla");
+  ai.runBuildLoop();
+  check("…and is at its own", asked.map((c) => c.c), ["revive"]);
+}
+// A REVIVAL ALREADY UNDER WAY satisfies the row. `job.unitId` on a revive job is the hero's own
+// type id but its `kind` is "revive", so the census used to skip it: `count(hero)` read 0 for the
+// whole minute the altar was working, the row asked again on every pass, and it reserved the
+// hero's gold the whole time — starving every row below it.
+{
+  const { ai, asked } = fallenSeat(2000, 3, { reviving: true });
+  ai.refresh();
+  ai.initBuildArray();
+  ai.setBuildUnit(1, "Obla");
+  ai.setBuildUnit(1, "oalt");
+  ai.runBuildLoop();
+  check("a hero already coming back is not asked for twice", asked.filter((c) => c.c === "revive").length, 0);
+  check("…and the rows below it are still reached", ai.count("Obla"), 1);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

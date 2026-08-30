@@ -1,6 +1,8 @@
 import { isRepairCode, NO_AOE_CURSOR, type AbilityDef, type AbilityLevel } from "../../data/abilities";
 import type { SimUnit } from "../../sim/world";
+import { POLARITY_SPELLS } from "../../sim/spells";
 import { friendlySpell, near, waveDistance, type CasterView } from "../casting";
+import { MELEE } from "../../data/gameplayConstants";
 import { MELEE_INSANE, MELEE_NEWBIE, WIND_WALK } from "../ids";
 import type { PlusProfile } from "./profile";
 import { aimCtx, HERO_KILL_HP, killValue, spellFacts, spellValue, type AimCtx } from "./targeting";
@@ -327,6 +329,54 @@ const MORPH_WHEN: Record<string, "engage" | "regen"> = {
 
 /** How hurt something has to be before a heal is spent on it. */
 const HURT = 0.75;
+/**
+ * …and how hurt a friendly UNDEAD unit has to be before Death Coil is spent healing it.
+ *
+ * The developer's own number, and much later than an ordinary heal for a reason the ability's
+ * own row states: `AUdc` is ONE button with two halves (POLARITY_SPELLS — "enemy living units
+ * or friendly Undead units"), so every coil poured into a lightly scratched Ghoul is the burst
+ * that was going to finish something. At a third of its life a body is about to be lost, which
+ * is the point at which a player spends it that way instead.
+ *
+ * Holy Light keeps the ordinary `HURT` bar: `AHhb` competes with nothing — its other half is
+ * only ever aimed at enemy Undead — so there is no reason to hold it.
+ */
+const COIL_HEAL_HP = 0.3;
+/** How much a POLARITY spell's healing half outbids its damaging half. Both halves are scored
+ *  by `spellValue`, but on different ladders — "who is worth healing" and "who is worth
+ *  hurting" are not the same number — so without a thumb on the scale a Death Knight with a
+ *  Ghoul at a fifth of its life still coils whatever is standing in front of it. */
+const POLARITY_HEAL_FIRST = 2;
+
+/**
+ * OFFENSIVE SPELLS ARE NOT SPENT ON EVERY SCUFFLE — how often one is pressed at all, by what
+ * the fight is against.
+ *
+ * The reported behaviour: *"it feels like the AI is spending too much mana on small creep
+ * camps"* — a Death Knight that Coils two Gnolls, a Far Seer whose Chain Lightning goes into a
+ * three-body green camp, a Tauren Chieftain that War Stomps a pair of Murlocs. All of it is
+ * legal, none of it is wrong on its own, and the sum of it is a hero that arrives at the fight
+ * that matters with an empty bar.
+ *
+ * So the roll is made ONCE PER ENGAGEMENT per unit rather than per pass (`offense`), which is
+ * the difference between a chance and a delay: re-rolled twice a second, any chance short of
+ * zero fires within a second or two and nothing has been lowered at all.
+ *
+ * Against a PLAYER the answer is always yes — a spell held back in the fight that decides the
+ * game is a spell wasted far more expensively than one thrown at a Gnoll. Against CREEPS it is
+ * priced by how big the camp actually is, on the same reading `plus/items.ts` uses for "is this
+ * a fight at all": bodies that can fight back. Ours, like every number in Computer+.
+ */
+const CREEP_SPELL_SMALL = 0.25;
+const CREEP_SPELL_BIG = 0.7;
+/** How many creep bodies in the fight make it worth the mana at `CREEP_SPELL_BIG` — about the
+ *  size of an orange camp, which is the first one the party is not going to walk through. */
+const CREEP_SPELL_BODIES = 4;
+/** The roles the roll above gates: the offensive half of the ladder. A heal, a panic button, a
+ *  morph and a summon are never held back — they are answers to something that has already
+ *  happened, and the developer's list is nukes and hard disables ("death coil, frost nova,
+ *  impale, carrion swarm, war stomp, shockwave"), which is exactly these two. */
+const OFFENSIVE: ReadonlySet<Role> = new Set<Role>(["nuke", "disable"]);
 /** …and how hurt the CASTER has to be for a panic button. */
 const NEAR_DEATH = 0.5;
 /** Dark Ritual is mana economy: it only makes sense when the caster is actually short. */
@@ -396,6 +446,10 @@ export class PlusCaster {
   /** When each burning unit last had something in reach — the dwell `douseImmolation` measures
    *  its "the fight is over" from. Swept with `fightSince` at the end of every pass. */
   private burningSince = new Map<number, number>();
+  /** Whether each unit is spending offensive mana on THIS engagement — rolled once when the
+   *  fight starts and kept for as long as it lasts. See `CREEP_SPELL_SMALL` for why it cannot
+   *  be a per-pass roll, and `trackFight`, which is what clears it. */
+  private offense = new Map<number, boolean>();
 
   /**
    * `roll` is the AI's OWN random stream (`AiPlayer.randomInt`), not `Math.random` — a
@@ -416,10 +470,19 @@ export class PlusCaster {
     this.ctx = ctx;
     const own: SimUnit[] = [];
     const foes: SimUnit[] = [];
+    // OURS, AND OUR ALLIES'. The two lists are different questions and were one: `own` is who
+    // this player gives ORDERS to, and `friends` is who its friendly spells may LAND on. A
+    // Paladin may Holy Light his ally's Footman and a Death Knight may Coil his ally's Ghoul —
+    // `castError` has always allowed it (the polarity rule asks `hostile`, not `owner`) — so
+    // the only thing that stopped it was this pool. See `CasterView.allied`.
+    const friends: SimUnit[] = [];
     for (const u of this.view.world.units.values()) {
       if (u.hp <= 0) continue;
-      if (u.owner === this.view.player) own.push(u);
-      else if (this.view.hostile(u)) foes.push(u);
+      if (u.owner === this.view.player) {
+        own.push(u);
+        friends.push(u);
+      } else if (this.view.hostile(u)) foes.push(u);
+      else if (this.view.allied?.(u)) friends.push(u);
     }
     this.townBell(own, foes);
     this.douseImmolation(own, foes);
@@ -432,7 +495,7 @@ export class PlusCaster {
       // on a unit and was already reached; the well was not.
       if (this.canArm(u)) this.armAutocasts(u);
       if (!this.canAct(u)) continue;
-      this.tryCast(u, own, foes);
+      this.tryCast(u, friends, foes);
     }
     this.lastHp.clear();
     const alive = new Set<number>();
@@ -444,6 +507,7 @@ export class PlusCaster {
     // a unit that died mid-engagement would otherwise sit in it for the rest of the match.
     for (const id of this.fightSince.keys()) if (!alive.has(id)) this.fightSince.delete(id);
     for (const id of this.burningSince.keys()) if (!alive.has(id)) this.burningSince.delete(id);
+    for (const id of this.offense.keys()) if (!alive.has(id)) this.offense.delete(id);
   }
 
   /** May this unit's autocasts be switched on? A much shorter list than `canAct`: arming is a
@@ -568,9 +632,9 @@ export class PlusCaster {
    * in range heals before he stuns, and a Mountain King with a fight starting stuns before he
    * throws his hammer at whatever is nearest.
    */
-  private tryCast(u: SimUnit, own: SimUnit[], foes: SimUnit[]): boolean {
+  private tryCast(u: SimUnit, friends: SimUnit[], foes: SimUnit[]): boolean {
     const engaged = this.engaged(u, foes);
-    this.trackFight(u, engaged);
+    this.trackFight(u, engaged, foes);
     const cards: Array<{ role: Role; ab: SimUnit["abilities"][number]; def: AbilityDef; lvl: AbilityLevel }> = [];
     for (const ab of u.abilities) {
       if (ab.level < 1 || ab.cooldownLeft > 0) continue;
@@ -594,7 +658,7 @@ export class PlusCaster {
       // the same door a player's click asks, so this can never be more permissive.
       if (this.view.world.castUseError(u.id, card.ab.code) !== null) continue;
       if (!this.wants(u, card.def, card.role, foes, engaged)) continue;
-      if (this.aim(u, card.ab.code, card.def, card.lvl, card.role, own, foes)) return true;
+      if (this.aim(u, card.ab.code, card.def, card.lvl, card.role, friends, foes)) return true;
     }
     return false;
   }
@@ -611,9 +675,37 @@ export class PlusCaster {
    */
   private ready(u: SimUnit, role: Role, engaged: boolean): boolean {
     if (role === "panic" || role === "heal") return true;
+    // …AND WHETHER IT IS SPENDING THE MANA ON THIS FIGHT AT ALL — see `CREEP_SPELL_SMALL`. The
+    // decision belongs to the engagement rather than to the pass, so it is asked of a roll made
+    // once when the fight started (`trackFight`) and it holds for the whole of it.
+    if (OFFENSIVE.has(role) && this.offense.get(u.id) === false) return false;
     if (!engaged) return true; // nothing to be late for
     const since = this.fightSince.get(u.id);
     return since === undefined || this.now - since >= this.profile.castDelay;
+  }
+
+  /**
+   * IS THIS FIGHT WORTH A SPELL? — rolled once, when the fight starts.
+   *
+   * A player's own mana discipline in one line: everything goes into the fight against another
+   * player, and a small camp on the way to it gets swung at rather than nuked. See
+   * `CREEP_SPELL_SMALL` for the numbers and for why this cannot be re-rolled every pass.
+   *
+   * "Creeps" is asked of the units in front of us rather than of the objective, because that is
+   * the thing that is actually true: a camp standing between the army and the enemy base is a
+   * creep fight whatever the wave was sent at. One hostile PLAYER body in reach is enough to
+   * make it a real fight — a scout's Peasant is not (`isPeon`), and neither is a building.
+   */
+  private worthTheMana(u: SimUnit, foes: SimUnit[]): boolean {
+    const look = Math.max(u.weapon?.acquire ?? 0, MIN_LOOK);
+    let bodies = 0;
+    for (const f of foes) {
+      if (f.building || f.isPeon || !near(u, f, look)) continue;
+      if (!f.isCreep && f.owner >= 0 && f.owner < MELEE.MAX_PLAYERS) return true; // a player: always
+      bodies++;
+    }
+    const chance = bodies >= CREEP_SPELL_BODIES ? CREEP_SPELL_BIG : CREEP_SPELL_SMALL;
+    return this.roll() < chance;
   }
 
   /** Does the caster want this ability at all, before anything is aimed? */
@@ -672,7 +764,7 @@ export class PlusCaster {
     def: AbilityDef,
     lvl: AbilityLevel,
     role: Role,
-    own: SimUnit[],
+    friends: SimUnit[],
     foes: SimUnit[],
   ): boolean {
     // Wind Walk is neither aimed nor merely pressed: the press is half the button and the ORDER
@@ -684,11 +776,11 @@ export class PlusCaster {
       return this.view.order({ c: "cast", unitId: u.id, code, targetId: 0, x: u.x, y: u.y, queued: false });
     }
     if (def.target === "unit") {
-      const t = this.pickTarget(u, code, def, lvl, role, own, foes);
+      const t = this.pickTarget(u, code, def, lvl, role, friends, foes);
       if (!t) return false;
       return this.view.order({ c: "cast", unitId: u.id, code, targetId: t.id, x: 0, y: 0, queued: false });
     }
-    const spot = this.pickSpot(u, code, def, lvl, role, own, foes);
+    const spot = this.pickSpot(u, code, def, lvl, role, friends, foes);
     if (!spot) return false;
     return this.view.order({ c: "cast", unitId: u.id, code, targetId: 0, x: spot.x, y: spot.y, queued: false });
   }
@@ -814,11 +906,26 @@ export class PlusCaster {
     def: AbilityDef,
     lvl: AbilityLevel,
     role: Role,
-    own: SimUnit[],
+    friends: SimUnit[],
     foes: SimUnit[],
   ): SimUnit | null {
     const friendly = friendlySpell(def);
-    const pool = friendly ? own : foes;
+    // A POLARITY SPELL IS TWO SPELLS ON ONE BUTTON, and the pool has to say so.
+    //
+    // Holy Light and Death Coil are mirror images — "friendly living units or enemy Undead" and
+    // "enemy living units or friendly Undead" (POLARITY_SPELLS, sim/spells.ts) — and neither
+    // row carries an allegiance FLAG, which is why the engine hardcodes the rule and gives each
+    // its own error string. `friendlySpell` reads those flags, so it answers FALSE for both,
+    // and the pool was therefore the enemy list alone: a Paladin could only ever smite enemy
+    // Undead and a Death Knight could only ever burn enemy living. Neither ability had a
+    // healing half at all, which is most of a Paladin and the whole of the undead's own heal.
+    const polarity = POLARITY_SPELLS[code] !== undefined;
+    // …and WHICH polarity spell, because only one of the two holds its heal back. The row itself
+    // says so: `healsUndead` is what makes this the Death Coil side of the mirror, whose other
+    // half is the undead's opening nuke (see `COIL_HEAL_HP`). Holy Light's other half only ever
+    // reaches enemy Undead, so it competes with nothing and keeps the ordinary `HURT` bar.
+    const healBar = POLARITY_SPELLS[code]?.healsUndead ? COIL_HEAL_HP : HURT;
+    const pool: SimUnit[] = friendly ? friends : polarity ? [...friends, ...foes] : foes;
     // Every LEGAL target is collected rather than only the best one, because the misclick
     // below has to draw from the same set: a "mistake" that could land on something the click
     // itself would refuse is not a mistake, it is a dropped cast.
@@ -826,19 +933,42 @@ export class PlusCaster {
     let best: SimUnit | null = null;
     let bestScore = -Infinity;
     for (const t of pool) {
-      if (t.building && !friendly) continue;
+      // WHICH HALF of the button this target is. `hostile` is the same question the sim's own
+      // `wouldHeal` asks (allegiance, once `polarityOk` has vouched for the race), so the two
+      // cannot disagree about whether this cast is a heal or a nuke.
+      const heals = friendly || (polarity && !this.view.hostile(t));
+      const half: Role = polarity ? (heals ? "heal" : "nuke") : role;
+      if (t.building && !heals) continue;
+      // A COPY IS NOT SOMEBODY TO HEAL. An illusion deals no damage, arrives at full health and
+      // is meant to die (docs/illusions.md), so mana spent putting hit points back into one is
+      // mana spent on a picture. Only the friendly half needs saying: hitting a copy is fine,
+      // and is often the whole point of the enemy having made it.
+      if (heals && t.isIllusion) continue;
       if (!near(u, t, lvl.castRange)) continue;
-      if (role === "heal" && t.hp / Math.max(1, t.maxHp) > HURT) continue;
+      // …and the healing half of a POLARITY spell is held later than an ordinary heal — see
+      // `COIL_HEAL_HP`. Death Coil's other half is the undead's opening nuke, so a coil spent
+      // on a scratch is a burst that was going to finish something.
+      if (half === "heal" && t.hp / Math.max(1, t.maxHp) > healBar) continue;
       // A NUKE IS NOT SPENT ON A WORKER IT CANNOT FINISH — see `nukeWorthIt`. Here rather than
       // in the score so the misclick below cannot land on one either.
-      if (role === "nuke" && !nukeWorthIt(code, lvl, t)) continue;
+      if (half === "nuke" && !nukeWorthIt(code, lvl, t)) continue;
+      // …and the mana gate the ladder applies to every other nuke (`ready`) has to be applied
+      // HERE for a polarity spell, because the card as a whole is graded `heal` and a heal is
+      // never held back. Death Coil is the developer's own first example of a nuke thrown at a
+      // small camp, and without this clause it is the one nuke in the game the rule missed.
+      if (polarity && half === "nuke" && this.offense.get(u.id) === false) continue;
       if (!buffFree(t, lvl)) continue;
       if (this.view.world.castError(u.id, code, t.id) !== null) continue;
       legal.push(t);
       // Worth first, distance only as the tie-break — and `bestScore` starts below every
       // possible score, because a cheap target at the edge of a long cast range scores
       // negative and would otherwise never be picked at all.
-      const s = this.value(t, role, lvl) * 1000 - Math.hypot(t.x - u.x, t.y - u.y);
+      // A HEAL OUTBIDS THE NUKE on a polarity button: the two halves are scored on different
+      // ladders and would otherwise be compared as if they were the same number, so a Death
+      // Knight with a Ghoul at a fifth of its life would still coil whatever was in front of
+      // it. Putting a body back on its feet is worth more than hurting one.
+      const s = this.value(t, half, lvl) * (half === "heal" && polarity ? POLARITY_HEAL_FIRST : 1) * 1000
+        - Math.hypot(t.x - u.x, t.y - u.y);
       if (s > bestScore) { bestScore = s; best = t; }
     }
     // …and then, sometimes, the wrong one. `castMistake` is ordinary sloppiness on top of a
@@ -846,7 +976,8 @@ export class PlusCaster {
     // aims at the biggest body most of the time and at whatever it happened to click on the
     // rest of it. A heal is exempt — a player who means to heal somebody heals somebody, and
     // the pool is already only the wounded.
-    if (best && role !== "heal" && legal.length > 1 && this.mistake()) {
+    const bestHeals = !!best && (friendly || (polarity && !this.view.hostile(best)));
+    if (best && role !== "heal" && !bestHeals && legal.length > 1 && this.mistake()) {
       return legal[Math.min(legal.length - 1, Math.floor(this.roll() * legal.length))] ?? best;
     }
     return best;
@@ -885,11 +1016,11 @@ export class PlusCaster {
     def: AbilityDef,
     lvl: AbilityLevel,
     role: Role,
-    own: SimUnit[],
+    friends: SimUnit[],
     foes: SimUnit[],
   ): { x: number; y: number } | null {
     const friendly = friendlySpell(def);
-    const pool = friendly ? own : foes;
+    const pool = friendly ? friends : foes;
     const area = lvl.area > 0;
     // A novice does not hold an area spell for a clump — they press it on whoever they are
     // looking at. So the quorum is the difficulty's too, and an easy computer's Blizzard lands
@@ -989,9 +1120,15 @@ export class PlusCaster {
   /** Remember when THIS fight started, and forget it when the fight ends — the delay is per
    *  engagement, not a cooldown, so a unit that has been fighting for a minute is not slow to
    *  react to the next spell it wants. */
-  private trackFight(u: SimUnit, engaged: boolean): void {
-    if (!engaged) this.fightSince.delete(u.id);
-    else if (!this.fightSince.has(u.id)) this.fightSince.set(u.id, this.now);
+  private trackFight(u: SimUnit, engaged: boolean, foes: SimUnit[]): void {
+    if (!engaged) {
+      this.fightSince.delete(u.id);
+      this.offense.delete(u.id); // …and so does the decision about spending mana on it
+      return;
+    }
+    if (this.fightSince.has(u.id)) return;
+    this.fightSince.set(u.id, this.now);
+    this.offense.set(u.id, this.worthTheMana(u, foes));
   }
 
   /** Has it lost hit points since the previous pass, or is something visibly swinging at it? */

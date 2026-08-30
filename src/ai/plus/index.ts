@@ -1041,6 +1041,78 @@ export function freezeStalled(
 const REGROUP_PATIENCE = 45;
 
 /**
+ * CONTACT: how near the army an enemy PLAYER's fighters have to be before the party has to make
+ * a decision about them, and how much stronger than them it has to be to take the fight.
+ *
+ * Reported: *"when the AI sees their enemies' army they must either engage or fall back to
+ * their base instead of ignoring them and letting them pass"* — and "ignoring" is exactly what
+ * the manager did, because every rule it had about an enemy army was about a PLACE. `defendPass`
+ * only ever looks inside our own towns (`isInvader`, `TOWN_RADIUS`), and `fightLost` only ever
+ * asks whether a fight already joined is going badly. An army met in the middle of the map on
+ * the way to a creep camp was in neither, so the wave walked past it under its attack-move and
+ * the two groups slid by each other.
+ *
+ * `CONTACT_LOOK` is wider than the cohesion radius (600) and a good deal narrower than the walk
+ * to the next camp: it is "we can see each other and one of us is about to be committed". The
+ * bar is deliberately BELOW even — an even fight taken is a fight, and a party that runs from
+ * every even fight never has one — and it is priced by the same `armyPower` metric everything
+ * else here uses (plus/power.ts), on both sides, with heroes counted as the bodies they are.
+ *
+ * Ours, like every number in Computer+.
+ */
+const CONTACT_LOOK = 1400;
+const CONTACT_ENGAGE = 0.9;
+
+/**
+ * THE SAFETY NET ON A MARCH — the army's own version of the arc the scout walks (`safeLeg`).
+ *
+ * A wave sent at a camp on the far side of the map takes the straight line, and on a melee map
+ * the straight line runs through two other camps. The party arrives at the objective it was
+ * priced for having already fought the ones it was not, which is the same mistake the scout
+ * used to make and is fixed the same way: the attack-move is aimed at a WAYPOINT that clears
+ * every creep's berth rather than at the objective itself, and re-asked every re-issue, so it
+ * is a next STEP rather than a route.
+ *
+ * Three things keep it from becoming a cage, and the third is the developer's own condition
+ * (*"we must make sure that they never freeze because of that safety leg"*):
+ *
+ *  · the creeps AT the objective are not in the haystack (`liveCreeps`' `except`) — otherwise
+ *    `standOff` pulls the destination back out of the very camp the wave was sent to clear, and
+ *    an assault on a base guarded by a camp never reaches it;
+ *  · a detour that does not actually move the army (`MARCH_STEP`) is discarded on the spot —
+ *    geometry that answers "stand still" is not a leg;
+ *  · and the WATCHDOG. If the anchor stops moving while a detour is in force, detours are
+ *    switched off for `MARCH_IGNORE` seconds and the straight line stands. That is the fallback
+ *    the brief asks for stated as a clock: the safety net may cost the party some walking, and
+ *    it may never cost it the objective. The other four watchdogs (`stalled`, `freezePass`) are
+ *    still behind it, so a party that is stuck for a reason detours cannot fix is still written
+ *    off — this only makes sure the net is never the reason.
+ */
+const MARCH_DIRECT = 900;
+const MARCH_STEP = 200;
+/**
+ * How long the army may fail to move while a detour is in force before the net is switched off,
+ * and for how long — and `MARCH_STUCK` has to be well UNDER the two watchdogs that would
+ * otherwise fire first, or lifting the net is a thing that only ever happens after the wave has
+ * already been written off. `PUSH_STUCK_AFTER` is 20 and `FREEZE_AFTER` is 35; ten seconds is
+ * two or three re-issues, which is enough to tell "walking round something" from "not walking".
+ */
+const MARCH_STUCK = 10;
+const MARCH_PROGRESS = 200;
+const MARCH_IGNORE = 30;
+/**
+ * How much ground around the OBJECTIVE counts as the objective's own camp, and is therefore not
+ * an obstacle (`liveCreeps`' `except`).
+ *
+ * A berth plus a camp's own spread. `creepCamps` links guard posts up to `CAMP_LINK` (600)
+ * apart and hands back their CENTROID (src/game/minimapView.ts), so a six-Gnoll camp reaches a
+ * good six hundred out from the point the wave is aimed at — and a member outside the plain
+ * `CREEP_BERTH` is a member the detour would try to walk the party round, which for the camp it
+ * was sent to kill means walking round the objective.
+ */
+const MARCH_GOAL_CAMP = CREEP_BERTH + 600;
+
+/**
  * THE WOUNDED WALK OUT OF THE FIGHT — how far back, how long for, and how long before the same
  * unit may do it again (`PlusProfile.pullOutHp` is the bar that starts it, and 0 on Easy).
  *
@@ -1364,6 +1436,14 @@ interface Brain {
    *  difficulty's `defendDelay` is measured off this: an easy computer lets you kill four
    *  workers before it looks up. */
   threatSince: number;
+  /** When an enemy PLAYER's army first came into contact with the wave in the FIELD (-1 = it
+   *  hasn't). The same `defendDelay` is measured off it, so a difficulty is as slow to notice an
+   *  army in front of it as it is to notice one in its base — see `contactPass`. */
+  contactSince: number;
+  /** The march's own freeze watchdog, and the clock that switches the safety net off when it
+   *  fires — see `MARCH_DIRECT`. */
+  leg: { was: { x: number; y: number } | null; since: number };
+  legOffUntil: number;
   greeted: boolean;
   /** WHEN this seat says its "glhf" — drawn once, off its own stream, inside the window
    *  `GREET_AT`…`GREET_AT + GREET_SPREAD` (plus/chatter.ts). A moment rather than a slot beat,
@@ -1467,6 +1547,12 @@ export class ComputerPlusAi {
         player,
         def: (id) => this.host.abilities.get(id),
         hostile: (u) => ai.hostileTo(u),
+        // An ALLIED PLAYER's unit — a seat, co-allied with ours, that is not us. `coAllied` is
+        // the same question the chat router asks (src/game/chat.ts), so "my ally" means one
+        // thing across the whole AI. Neutrals are excluded by the seat range: a Goblin Merchant
+        // is not somebody a Paladin heals.
+        allied: (u) =>
+          u.owner !== player && u.owner >= 0 && u.owner < MELEE.MAX_PLAYERS && this.host.coAllied(player, u.owner),
         order: (cmd) => ai.order(cmd),
         // The AI's OWN random stream, so a misclick (`PlusProfile.castMistake`) is as
         // deterministic as every other decision it takes.
@@ -1521,6 +1607,9 @@ export class ComputerPlusAi {
       reissueIn: 0,
       lastWaveEnd: 0,
       threatSince: -1,
+      contactSince: -1,
+      leg: { was: null, since: 0 },
+      legOffUntil: 0,
       greeted: false,
       // Tenths of a second off the seat's own stream, so it is as deterministic-per-seed as
       // every other Computer+ decision and as unpredictable between matches as the seed is.
@@ -1847,6 +1936,11 @@ export class ComputerPlusAi {
     // cannot execute is one more order stacked on a unit that is not moving.
     this.freezePass(b);
     if (this.defendPass(b)) return;
+    // …and the same decision taken OUT ON THE MAP: an enemy army in front of the wave is either
+    // fought or walked away from, never walked past. Below `defendPass` because the base always
+    // wins — a party that turns to fight in the field while its own hall is being killed has
+    // made the wrong call — and above the mode switch because it may change the mode.
+    if (this.contactPass(b)) return;
     switch (b.mode) {
       case "defending": return void this.setMode(b, "massing"); // the threat is gone
       case "massing": return this.massing(b);
@@ -1898,7 +1992,23 @@ export class ComputerPlusAi {
     // base is.
     const rested = spare.filter((u) => !!u.worker?.lumber).sort((x, y) => health(y) - health(x));
     const serving: SimUnit[] = [];
-    for (const u of this.squadUnits(b)) if (u.worker?.lumber) serving.push(u);
+    // …AND ONLY THE ONES STANDING AT HOME. A chopper in the squad that is out on the map is in
+    // a creep camp or on the walk to one, and handing it back to the forest does two things at
+    // once: it drops it out of the squad (so `commit` stops moving it and the wave it was in
+    // fights one body short) and the harvest plan then walks it home ALONE across a melee map,
+    // wounded — `serving` is sorted worst-health first, so it is always the ghoul in the
+    // thickest of it that gets recalled. That is the reported "the undead leaves its army
+    // behind", produced by the forest bidding for the wave mid-run: `lumberCrew` moves whenever
+    // the lumber bank does, and the bank moves every time the build order spends.
+    //
+    // The forest simply waits. Everything above the crew is still handed to it the moment the
+    // party comes home, which is when a player does the same thing.
+    const home = b.ai.home();
+    for (const u of this.squadUnits(b)) {
+      if (!u.worker?.lumber) continue;
+      if (Math.hypot(u.x - home.x, u.y - home.y) > TOWN_RADIUS) continue;
+      serving.push(u);
+    }
     serving.sort((x, y) => health(x) - health(y));
     // Choppers currently outside the wave. Both directions below are stated against this one
     // number, so "let one go back to the forest" and "take one into the wave" are one rule
@@ -2398,12 +2508,20 @@ export class ComputerPlusAi {
 
   /** Every creep still standing, as points — the haystack `safeStep` and `scoutPass` both
    *  measure a berth against. See `safeStep` for why it is every MEMBER and not the camp. */
-  private liveCreeps(): Array<{ x: number; y: number }> {
+  private liveCreeps(except?: { x: number; y: number } | null): Array<{ x: number; y: number }> {
     const creeps: Array<{ x: number; y: number }> = [];
     for (const camp of this.host.creepCamps()) {
       for (const id of camp.members) {
         const c = this.host.world.units.get(id);
-        if (c && c.hp > 0) creeps.push({ x: c.x, y: c.y });
+        if (!c || c.hp <= 0) continue;
+        // THE CREEPS AT THE DESTINATION ARE NOT AN OBSTACLE — see `MARCH_DIRECT`. `safeLeg`
+        // stands a leg OFF anything within a berth of where it ends (`standOff`), so leaving
+        // the objective's own camp in the haystack would stop the wave a berth short of the very
+        // thing it was sent to kill, every pass, for ever. `MARCH_GOAL_CAMP` is how far that
+        // camp reaches. The scout passes nothing here and is unaffected: nothing sends a scout
+        // AT a camp.
+        if (except && Math.hypot(c.x - except.x, c.y - except.y) <= MARCH_GOAL_CAMP) continue;
+        creeps.push({ x: c.x, y: c.y });
       }
     }
     return creeps;
@@ -2544,6 +2662,103 @@ export class ComputerPlusAi {
   }
 
   /**
+   * ENGAGE, OR GO HOME — but never walk past an army.
+   *
+   * See `CONTACT_LOOK` for the report and for why nothing already here covered it: every other
+   * rule about an enemy army is about a PLACE (our towns) or about a fight already joined.
+   *
+   * Four states, in the order they are asked:
+   *
+   *  · **At home** — `defendPass` owns the base and has already run. Nothing here.
+   *  · **Nothing in front of us** — the clock is cleared, and that is what makes the dwell below
+   *    a REACTION rather than a cooldown.
+   *  · **Already going for them** — the aim is kept fresh on their centre and `attacking` is
+   *    left to run. This is the branch that stops the rule fighting itself: a decision re-taken
+   *    every pass would call `setMode` every pass, which zeroes the re-issue clock, which
+   *    re-paths the whole army twice a second (see `recommit`).
+   *  · **A decision.** Priced by `armyPower` on both sides — the same metric plus/power.ts
+   *    prices a creep camp by, over the bodies each side actually has in the field — and it is
+   *    only ever taken once the difficulty has had time to NOTICE (`defendDelay`, the same dwell
+   *    an easy computer takes to look up when something walks into its base).
+   *
+   * Creeps are deliberately not in it. A camp on the way is what `marchAim` walks round and what
+   * `creepTarget` prices; this is about the other player, whose army chases, reinforces and is
+   * the reason a wave is out at all.
+   */
+  private contactPass(b: Brain): boolean {
+    if (b.mode === "retreating" || b.mode === "defending") return false;
+    const anchor = this.armyAnchor(b) ?? this.squadCentre(b);
+    if (!anchor) return false;
+    const home = b.ai.home();
+    if (Math.hypot(anchor.x - home.x, anchor.y - home.y) <= TOWN_RADIUS) {
+      b.contactSince = -1;
+      return false;
+    }
+    const foes: SimUnit[] = [];
+    let cx = 0;
+    let cy = 0;
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.building || u.isPeon || u.owner === b.ai.player) continue;
+      // A PLAYER's soldier, seen with our own eyes. Creeps and neutral hostiles are not an
+      // army — they stand where they stand — and `knows` is what keeps this on our side of the
+      // fog, exactly as `scoutEnemy` is.
+      if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
+      if (!b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
+      if (isCopy(u)) continue; // a picture of an army is not one (docs/illusions.md)
+      if (Math.hypot(u.x - anchor.x, u.y - anchor.y) > CONTACT_LOOK) continue;
+      foes.push(u);
+      cx += u.x;
+      cy += u.y;
+    }
+    if (!foes.length) {
+      b.contactSince = -1;
+      return false;
+    }
+    cx /= foes.length;
+    cy /= foes.length;
+    if (b.mode === "attacking" && !b.creeping && b.target
+        && Math.hypot(b.target.x - cx, b.target.y - cy) <= CONTACT_LOOK) {
+      b.target.x = cx;
+      b.target.y = cy;
+      return false; // already committed to them — `attacking` runs
+    }
+    if (b.contactSince < 0) b.contactSince = b.clock;
+    if (b.clock - b.contactSince < b.profile.defendDelay) return false;
+    b.contactSince = -1;
+    if (this.powerOf(foes) * CONTACT_ENGAGE <= this.powerOf(this.squadUnits(b))) {
+      b.creeping = false;
+      b.vanguardDone = false;
+      b.target = { id: 0, x: cx, y: cy };
+      this.setMode(b, "attacking");
+      this.commit(b, cx, cy);
+      return true;
+    }
+    // Outgunned: home, which is where the towers and the production are. `"player"` so the
+    // hero's Scroll of Town Portal is on the table — this is exactly the retreat it is for
+    // (`ItemCtx.portalWorthIt`), and the one thing a creep camp's is not.
+    this.retreat(b, "player");
+    return true;
+  }
+
+  /**
+   * A GROUP, PRICED — `armyPower` over the bodies that can actually fight (plus/power.ts).
+   *
+   * Symmetric, which is why it is not `creepForce`: that one holds the hero out of the fighters
+   * and multiplies the rest by its level (`heroFactor`), which is the right shape for "can this
+   * party clear a camp" and the wrong one for comparing two armies — the enemy's hero is a body
+   * on the field like ours, and `heroFactor(0)` would price an army with no hero at nothing at
+   * all.
+   */
+  private powerOf(units: Iterable<SimUnit>): number {
+    const fighters: Fighter[] = [];
+    for (const u of units) {
+      if (isCopy(u) || u.isPeon || u.building || u.hp <= 0) continue;
+      fighters.push({ dps: this.dpsOf(u), hp: Math.max(0, u.hp), maxHp: Math.max(1, u.maxHp) });
+    }
+    return armyPower(fighters);
+  }
+
+  /**
    * Waiting with the army, until there is enough of it and the clock allows.
    *
    * **Not always at home.** The muster point is the captain's own feet whenever the party is
@@ -2598,7 +2813,8 @@ export class ComputerPlusAi {
     const { profile } = b;
     if (b.clock < profile.firstAttack) return false;
     if (b.clock - b.lastWaveEnd < profile.waveGap) return false;
-    return this.squadFood(b) >= profile.attackFood;
+    // …measured at the MUSTER POINT — see `mustered`. A wave is what sets off, not what exists.
+    return this.squadFood(b, this.mustered(b)) >= profile.attackFood;
   }
 
   /**
@@ -2692,7 +2908,7 @@ export class ComputerPlusAi {
     // map and nothing whatever to do for two minutes.
     if (hero.level >= CREEP_UNTIL_LEVEL && this.waveReady(b)) return null;
     if (hero.hp / Math.max(1, hero.maxHp) < CREEP_HEALTH) return null;
-    if (this.squadFood(b) < profile.creepFood) return null;
+    if (this.squadFood(b, this.mustered(b)) < profile.creepFood) return null;
     return this.creepTarget(b);
   }
 
@@ -2719,7 +2935,9 @@ export class ComputerPlusAi {
    * party that `creepNext` had refused to send was sent anyway a moment later.
    */
   private creepTarget(b: Brain): { x: number; y: number; level: number } | null {
-    const ceiling = maxCampLevel(this.creepForce(b));
+    // Priced off the party that is actually STANDING at the muster point — see `mustered`. A
+    // camp chosen for an army that is still in the forest is a camp the hero walks into alone.
+    const ceiling = maxCampLevel(this.creepForce(b, this.mustered(b)));
     if (ceiling < 0) return null;
     const air = this.hasAir(b);
     // NEAREST TO THE PARTY, not to the base it left. A party that has just cleared a camp is
@@ -2782,13 +3000,18 @@ export class ComputerPlusAi {
    * that is half-hurt is exactly the squad that should not be walking into a camp — leaving them
    * out of both would let a party heal itself by ignoring its casualties.
    */
-  private creepForce(b: Brain): CreepForce {
+  private creepForce(b: Brain, at?: { x: number; y: number }): CreepForce {
     const fighters: Fighter[] = [];
     let hp = 0;
     let maxHp = 0;
     const captain = this.squadHero(b);
     for (const u of this.squadUnits(b)) {
       if (isCopy(u)) continue;
+      // `at` is the MUSTER POINT when the question is "may this party set off" (`creepTarget`)
+      // and absent when it is "is this fight going badly" (`fightLost`) — a party in a camp is
+      // all present by definition, and pricing THAT by a radius would write off the stragglers
+      // twice. See `mustered`.
+      if (at && Math.hypot(u.x - at.x, u.y - at.y) > GATHER_RADIUS) continue;
       hp += Math.max(0, u.hp);
       maxHp += Math.max(1, u.maxHp);
       if (u.isHero || this.recovering(u)) continue;
@@ -3144,12 +3367,16 @@ export class ComputerPlusAi {
   /** Broken, and going home to heal. */
   private retreating(b: Brain): void {
     const home = b.ai.home();
+    // …round the camps, like every other march (`marchAim`). A broken army walking home in a
+    // straight line through the camp it just failed to clear is the retreat killing what the
+    // fight did not. The real destination is still home, so the watchdogs below are unchanged.
+    const aim = this.marchAim(b, home.x, home.y, this.armyAnchor(b) ?? this.squadCentre(b));
     let allHome = true;
     for (const u of this.squadUnits(b)) {
       if (Math.hypot(u.x - home.x, u.y - home.y) <= TOWN_RADIUS / 2) continue;
       allHome = false;
       if (u.order !== "move") {
-        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: home.x, y: home.y }, queued: false });
+        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: aim.x, y: aim.y }, queued: false });
       }
     }
     if (!b.squad.size || (allHome && this.readiness(b) >= REGROUP_HP_FRACTION)) return void this.endWave(b);
@@ -3171,6 +3398,34 @@ export class ComputerPlusAi {
   private recommit(b: Brain, x: number, y: number): void {
     if ((b.reissueIn -= b.profile.armyPeriod) > 0) return;
     this.commit(b, x, y);
+  }
+
+  /**
+   * THE NEXT STEP OF A MARCH — the objective itself, or a waypoint round the camps in the way.
+   *
+   * The army's half of what the scout has always done (`safeLeg`, `safeStep`), and see
+   * `MARCH_DIRECT` for the whole of why it is a next STEP rather than a route and for the three
+   * things that stop it becoming a cage. Everything about the objective — when the wave is
+   * there, whether it is stuck, when to give up — is still asked of the REAL target
+   * (`attacking`, `stalled`), so a detour can delay an objective and can never lose one.
+   *
+   * Not applied while DEFENDING: something is standing in our base and the answer to that is
+   * always the shortest line to it. Nor while a vanguard is out, which `commit` settles by not
+   * calling this at all for the copies.
+   */
+  private marchAim(b: Brain, x: number, y: number, from: { x: number; y: number } | null): { x: number; y: number } {
+    const goal = { x, y };
+    if (b.mode === "defending" || !from) return goal;
+    if (b.clock < b.legOffUntil) return goal; // the watchdog has the net switched off
+    if (Math.hypot(x - from.x, y - from.y) <= MARCH_DIRECT) return goal; // practically there
+    const creeps = this.liveCreeps(goal);
+    if (!creeps.length) return goal;
+    const aim = safeLeg(from, goal, creeps, CREEP_BERTH, CREEP_DETOUR, this.standable);
+    // Geometry that answers "stand where you are" is not a leg. `safeLeg` can hand back a point
+    // on top of us — `standOff` clamps to zero when the party is already inside a berth — and an
+    // army ordered onto its own feet is the freeze this rule is required never to cause.
+    if (Math.hypot(aim.x - from.x, aim.y - from.y) < MARCH_STEP) return goal;
+    return aim;
   }
 
   /**
@@ -3207,6 +3462,25 @@ export class ComputerPlusAi {
     // the BODY — the rest of the squad, itself left out — so the same rule can be asked of it.
     const captain = centre ? this.squadHero(b) : null;
     const body = captain ? this.squadCentre(b, captain.id) : null;
+    // THE SAFETY NET. Everything below aims at `mx`/`my` — the objective, or the waypoint that
+    // keeps the walk out of the camps between here and it (`marchAim`) — while `x`/`y` stay the
+    // real objective for the focus-fire pick, which is about a BODY rather than about a walk.
+    const march = this.marchAim(b, x, y, centre ?? this.squadCentre(b));
+    const mx = march.x;
+    const my = march.y;
+    // …and the watchdog that guarantees the net can never be the reason the army stops. It runs
+    // only while a detour is actually in force: a party standing still on the straight line is
+    // `stalled`/`freezePass`'s business and switching detours off would not help it.
+    const anchor0 = centre ?? this.squadCentre(b);
+    if (!anchor0 || (mx === x && my === y) || this.fighting(b)) {
+      b.leg.was = null;
+    } else if (!b.leg.was || Math.hypot(anchor0.x - b.leg.was.x, anchor0.y - b.leg.was.y) > MARCH_PROGRESS) {
+      b.leg.was = { x: anchor0.x, y: anchor0.y };
+      b.leg.since = b.clock;
+    } else if (b.clock - b.leg.since >= MARCH_STUCK) {
+      b.leg.was = null;
+      b.legOffUntil = b.clock + MARCH_IGNORE;
+    }
     // THE ILLUSIONS ARE IN FRONT, ON PURPOSE — see `vanguardPass`. For the length of the lead
     // the only thing this commit moves is the copies; the body was stopped where it stands and
     // nothing here may start it walking again.
@@ -3244,7 +3518,11 @@ export class ComputerPlusAi {
       // a unit that is in a fight. The hero is not exempt: a hero out in front of its army is
       // the single most expensive thing on the map standing on its own.
       const anchor = captain && u.id === captain.id ? body : centre;
-      const apart = anchor ? this.strayed(b, u, anchor, x, y) : "none";
+      // Measured against the WAYPOINT, not the objective: "who is out in front" is a question
+      // about the direction the army is actually walking, and on a detour those are different
+      // directions — judged against the objective, the whole army reads as trailing and the
+      // leaders are never held at all.
+      const apart = anchor ? this.strayed(b, u, anchor, mx, my) : "none";
       if (apart === "wait") {
         // OUT IN FRONT: it stands where it is until the body is with it, and is NOT walked
         // back — see `strayed`. Stopped rather than merely skipped, because skipping leaves it
@@ -3309,8 +3587,8 @@ export class ComputerPlusAi {
       // re-issue is FOR is a target that has moved, and REISSUE_SLACK is how far it has to
       // have moved to be worth a new route. En-route acquisition is unaffected — that is
       // tickAttackMove's business and does not read the destination.
-      if (u.order === "attackmove" && Math.hypot(u.amDestX - x, u.amDestY - y) <= REISSUE_SLACK) continue;
-      b.ai.order({ c: "order", unitId: u.id, order: { kind: "attackmove", x, y }, queued: false });
+      if (u.order === "attackmove" && Math.hypot(u.amDestX - mx, u.amDestY - my) <= REISSUE_SLACK) continue;
+      b.ai.order({ c: "order", unitId: u.id, order: { kind: "attackmove", x: mx, y: my }, queued: false });
     }
     // A vanguard is re-considered EVERY army pass rather than every `REISSUE_PERIOD`. The copies
     // do not exist yet when the wand is pressed — spawning is asynchronous, the request is
@@ -3606,14 +3884,42 @@ export class ComputerPlusAi {
   }
 
   /** The food a wave would actually LEAVE with — the wounded are not in it. Counting a unit
-   *  that `commit` will not move is how a wave of four sets off believing it is a wave of ten. */
-  private squadFood(b: Brain): number {
+   *  that `commit` will not move is how a wave of four sets off believing it is a wave of ten.
+   *
+   *  `at` narrows it further to the food that is actually STANDING there, which is what every
+   *  "may this party set off" question wants — see `mustered`. Omitted, it is the whole squad. */
+  private squadFood(b: Brain, at?: { x: number; y: number }): number {
     let food = 0;
     for (const u of this.squadUnits(b)) {
       if (isCopy(u) || this.recovering(u) || pulledOut(b.pulls.get(u.id), b.clock)) continue;
+      if (at && Math.hypot(u.x - at.x, u.y - at.y) > GATHER_RADIUS) continue;
       food += this.host.registry.get(u.typeId)?.foodUsed ?? 0;
     }
     return food;
+  }
+
+  /**
+   * WHERE THE PARTY IS JUDGED FROM — the captain's own feet once it is out on the map, the home
+   * rally while it is at home. The same point `muster` sends everybody to.
+   *
+   * It exists because `gathered` has a DEADLINE and the size gates did not. `GATHER_PATIENCE`
+   * is there so that one soldier which cannot reach the muster point does not hold the whole
+   * army at home for ever — but when it fires, `creepNext` and `waveReady` were still pricing
+   * the party by everything in the SQUAD, wherever it happened to be standing. So a hero whose
+   * ghouls were in the forest read as "a hero and four ghouls", passed a `creepFood` of eight or
+   * ten on its own, and set off alone. That is the reported "the hero goes out to creep by
+   * himself", and it is not a race's bug — the undead simply hits it every game, because its
+   * soldiers are also its lumberjacks and are therefore the one army that is routinely NOT at
+   * the muster point.
+   *
+   * Asking these two questions at the muster point is not a second gate on top of `gathered`,
+   * it is the same gate: "is enough of it here" and "is what is here big enough" are one
+   * decision, and they must not be able to disagree. Nothing deadlocks on it, because `massing`
+   * re-orders everybody to this same point on every pass — the party arrives, the food is met,
+   * and the run starts a pass later with an army behind it.
+   */
+  private mustered(b: Brain): { x: number; y: number } {
+    return this.afieldAt(b) ?? this.rally(b);
   }
 
   /**

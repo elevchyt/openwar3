@@ -2,6 +2,7 @@ import type { AbilityDef } from "../../data/abilities";
 import type { ItemDef } from "../../data/items";
 import type { PlayableRace } from "../../data/races";
 import { ITEM_REGEN_GROUP, type SimUnit } from "../../sim/world";
+import { isOrbCode } from "../../sim/orbs";
 import { near, type CasterView } from "../casting";
 import type { PlusProfile } from "./profile";
 
@@ -415,6 +416,42 @@ const SHOP_REACH = 5000;
  */
 const SURPLUS = 500;
 
+/**
+ * THE CARRIED ABILITIES THAT ACTUALLY STACK — mirrors `SimWorld.itemBonuses`, and the mirror is
+ * the point.
+ *
+ * What decides whether a SECOND copy of an item is worth a slot is whether the game adds it to
+ * the first one, and the game answers that in exactly one place: the `switch` in `itemBonuses`
+ * (plus the orb rule beside it, whose flat damage bonus is *"a carried stat, it stacks"* —
+ * docs/orbs.md). Two Claws of Attack are +12 damage; two Rings of Protection are +6 armour.
+ *
+ * Everything else an item can grant is an ABILITY or an AURA, and a second copy of an ability
+ * the unit already has does nothing at all — a hero carrying two Cloaks of Shadows (`Ashm`,
+ * Shadow Meld) melds exactly as well as one carrying one, and the second cloak is a slot that
+ * could have held a potion. Note the two damage-reduction items are deliberately absent: the
+ * sim takes `Math.max` of them, so a second Runed Bracers is worth nothing either.
+ *
+ * Being wrong in the "it stacks" direction costs a slot; being wrong the other way THROWS AWAY
+ * an item, so anything unlisted counts as stacking would be the wrong default — which is why
+ * `sparePermanent` also refuses to pawn anything usable, charged or perishable, where a second
+ * copy is a second set of charges whatever its ability does.
+ */
+const STACKS = new Set<string>([
+  "AIat", // Claws of Attack — +damage
+  "AIde", // Ring of Protection — +armour
+  "AIab", // the stat items — +agi/+int/+str
+  "AIas", // Gloves of Haste — +attack speed
+  "Arel", // Ring of Regeneration / Health Stone — +hp per second
+  "AIrm", // Sobi Mask and the wands — +mana per second
+  "AIms", // Boots of Speed — +movement
+  "AIml", // Periapt of Vitality — +max hp
+  "AImm", // the Pendants — +max mana
+]);
+
+/** How often the belt is looked over for duplicates worth pawning — the shopping clock, since
+ *  it is the same errand and the same walk. */
+const PAWN_PERIOD = SHOP_PERIOD;
+
 /** What `PlusItems` needs beyond the caster's view: the item rows, a shop's catalogue, and the
  *  purse. Everything else — legality, stock, ranges — is asked of the sim through `world`. */
 export interface ItemView extends CasterView {
@@ -466,6 +503,8 @@ export class PlusItems {
   private onErrand = 0;
   /** When the ground was last looked at for drops — see `loot`. */
   private lastLoot = -Infinity;
+  /** …and when the belt was last looked over for duplicates worth pawning — see `pawn`. */
+  private lastPawn = -Infinity;
 
   constructor(
     private readonly view: ItemView,
@@ -487,7 +526,94 @@ export class PlusItems {
       this.press(u, own, foes, ctx);
     }
     this.loot(now, own, foes);
+    // BEFORE the shopping, and deliberately: a belt with a dead slot in it is a belt the
+    // shopper skips (`shopper` wants a free slot), so clearing the duplicate is what lets the
+    // next row of the list be bought at all — and the sale pays a third of it.
+    this.pawn(now, own, ctx);
     this.shop(now, own, ctx);
+  }
+
+  // ==========================================================================================
+  //  Selling what a second copy of is worth nothing
+  // ==========================================================================================
+
+  /**
+   * PAWN THE DUPLICATE.
+   *
+   * Reported: *"heroes that carry multiple Cloak of Shadows must try to sell them at shops (or
+   * goblin merchant/marketplace) and keep only 1"*. It is the natural consequence of a hero that
+   * picks up everything it walks over (`loot`) on a map whose creeps drop from the same tables:
+   * two cloaks, two Rings of Protection +1, two Talismans — and a six-slot belt with two slots
+   * spent on nothing.
+   *
+   * WHICH duplicates is not a list of items, it is `sparePermanent` — the question "does the
+   * game add the second one to the first", asked of the same codes `SimWorld.itemBonuses`
+   * switches on (`STACKS`). A second Claws of Attack is +6 more damage and is kept; a second
+   * Cloak of Shadows grants an ability the hero already has and is sold.
+   *
+   * The SALE is the sim's own gesture end to end: `issueSellItem` walks the hero to the shop's
+   * near edge and pawns on arrival, and it sets `order` to `"getitem"` — which is precisely the
+   * order the army manager already leaves alone (`massing`, `commit`), so the trip needs no
+   * errand flag of its own. `canPawnAt` is what makes a Marketplace or a Goblin Merchant a
+   * valid destination and a Tavern not one: it asks for the `Apit` ability rather than for a
+   * ware list, which is the whole reason a Marketplace with empty shelves still buys.
+   *
+   * Gated on `mayShop` like the shopping trip, and for the same reason: it is a walk, and a
+   * walk is not something to start while there is a wave in the field.
+   */
+  private pawn(now: number, own: SimUnit[], ctx: ItemCtx): void {
+    if (!ctx.mayShop || this.profile.shopping <= 0) return;
+    if (now - this.lastPawn < PAWN_PERIOD) return;
+    this.lastPawn = now;
+    const shops = this.shops(ctx).filter((sh) => this.view.world.canPawnAt(sh));
+    if (!shops.length) return;
+    for (const u of own) {
+      if (!u.isHero || u.isIllusion || !u.inventory.length || !this.canAct(u)) continue;
+      if (u.order === "getitem") continue; // already walking to a shop, or to a drop
+      const slot = this.sparePermanent(u);
+      if (slot < 0) continue;
+      // The nearest shop that deals in items — `shops` is already ordered ours-first then by
+      // distance from home, which is the same preference the buying trip uses.
+      this.view.order({ c: "sellitem", unitId: u.id, slot, shopId: shops[0].id });
+      return; // one errand at a time; the next pass takes the next duplicate
+    }
+  }
+
+  /**
+   * The slot holding a SECOND copy of something a second copy of is worth nothing, or -1.
+   *
+   * Three refusals before the duplicate test, and each is an item whose second copy IS worth
+   * carrying: anything with charges or a press (two Potions of Healing are two heals), anything
+   * `powerup` (which is never in a belt at all), and anything the shops will not take back
+   * (`pawnable` — a quest item, a campaign artifact).
+   *
+   * The LATER slot is the one sold, so the hero keeps what it picked up first — which is also
+   * the copy an aura or an ability is already being granted from, so nothing blinks off.
+   */
+  private sparePermanent(u: SimUnit): number {
+    for (let slot = 0; slot < u.inventory.length; slot++) {
+      const held = u.inventory[slot];
+      if (!held) continue;
+      const def = this.view.item(held.itemId);
+      if (!def || !def.pawnable || def.powerup) continue;
+      if (def.usable || def.charges > 0 || def.perishable) continue;
+      if (this.stacking(def)) continue;
+      // …and it is only spare if an EARLIER slot already holds the same item.
+      for (let first = 0; first < slot; first++) {
+        if (u.inventory[first]?.itemId === held.itemId) return slot;
+      }
+    }
+    return -1;
+  }
+
+  /** Does carrying two of this add up? See `STACKS`. */
+  private stacking(def: ItemDef): boolean {
+    for (const aid of def.abilities) {
+      const code = this.view.def(aid)?.code;
+      if (!code) continue;
+      if (STACKS.has(code) || isOrbCode(code)) return true;
+    }
+    return false;
   }
 
   // ==========================================================================================
@@ -607,7 +733,7 @@ export class PlusItems {
     const engaged = foes.some((f) => !f.building && near(u, f, LOOK));
     for (const card of cards) {
       if (!this.wants(u, card.use, card.def, own, foes, engaged, ctx)) continue;
-      if (this.aim(u, card.slot, card.def, card.use, own)) return true;
+      if (this.aim(u, card.slot, card.def, card.use, own, foes)) return true;
     }
     return false;
   }
@@ -652,19 +778,25 @@ export class PlusItems {
         return engaged && hp < PANIC_HP;
       case "healSelf":
         return engaged && hp < HURT_HP;
-      // An area heal is worth a charge when it is healing a GROUP — see `armyHeal`, which is
-      // where the three questions it actually asks live.
+      // The two REGENERATION rungs, and they are the only ones gated on there being NO fight.
       //
-      // These two are the ONLY rungs not gated on `engaged`, and it is deliberate: they are the
-      // ones aimed at somebody ELSE, and a Scroll of Regeneration or a Healing Salve pours over
-      // forty-five seconds. Spending one while the blows are still landing is spending it into
-      // the damage; the moment it is worth is the moment the camp is dead and the party is about
-      // to walk to the next one — which is the job the shopping list says it bought them for
-      // ("what puts an army back together between creep camps", see `LIST`).
+      // Reported from both races that open with one: *"the Orc AI must avoid using healing salve
+      // during fights and fighting with creeps … same thing for human's Scroll of Regeneration"*,
+      // and the reason is in the item rather than in the tactics. `AIrg` hangs a HOT — 400 hit
+      // points over forty-five seconds — and **the sim cancels it the moment its bearer is hit**
+      // (`ITEM_REGEN_GROUP`, docs/items.md), which is the real game's own rule. So a salve poured
+      // on a Grunt that is being swung at is not a heal that races the damage, it is a hundred
+      // gold and a charge thrown away on the next blow.
+      //
+      // The comment that used to be here had the right instinct — *"the moment it is worth is
+      // the moment the camp is dead and the party is about to walk to the next one"* — and no
+      // gate implementing it. This is that gate: nothing hostile within `LOOK` of the PRESSER,
+      // and (in `hurtest` / `armyHeal`) nothing hostile beside whoever the charge is being
+      // poured into, since the presser can be nine hundred units from the fight its army is in.
       case "healArea":
-        return this.armyHeal(u, own, this.areaOf(def));
+        return !engaged && this.armyHeal(u, own, this.areaOf(def), foes);
       case "healOther":
-        return !!this.hurtest(u, own);
+        return !engaged && !!this.hurtest(u, own, foes);
       // Mana is topped up for the fight, not during the panic — a hero with no mana is a hero
       // whose spells are the reason the army is winning, so this fires as the fight starts as
       // well as inside one.
@@ -705,7 +837,7 @@ export class PlusItems {
    * Legality is the sim's, at the same door: `itemUseError` is what the HUD asks before it
    * spends a click, so this can never be more permissive than a player.
    */
-  private aim(u: SimUnit, slot: number, def: ItemDef, use: Use, own: SimUnit[]): boolean {
+  private aim(u: SimUnit, slot: number, def: ItemDef, use: Use, own: SimUnit[], foes: SimUnit[]): boolean {
     // The aimed ability itself rather than only its `target`, because one rung needs the row's
     // own `Rng1` as well: the Wand of Illusion reaches 500 (`[AIil] Rng1`), and a copy chosen
     // out of that is a press `itemUseError` throws away.
@@ -713,7 +845,7 @@ export class PlusItems {
     let targetId = 0;
     if (aimed?.target === "unit") {
       const t =
-        use === "healOther" ? this.hurtest(u, own)
+        use === "healOther" ? this.hurtest(u, own, foes)
         : use === "illusion" ? this.toCopy(u, own, aimed.levelData[0]?.castRange ?? 0)
         : u;
       if (!t) return false;
@@ -767,7 +899,7 @@ export class PlusItems {
    * rule written against `LOOK` would have promised to cover units standing 300 units outside
    * the circle it was about to draw.
    */
-  private armyHeal(u: SimUnit, own: SimUnit[], radius: number): boolean {
+  private armyHeal(u: SimUnit, own: SimUnit[], radius: number, foes: SimUnit[]): boolean {
     let party = 0;
     let covered = 0;
     let hp = 0;
@@ -785,6 +917,11 @@ export class PlusItems {
       // in what the circle COVERS, so a second scroll cannot follow the first over the same
       // party a second later.
       if (this.regenerating(o)) continue;
+      // …and neither is somebody who is being HIT. The regeneration buff is cancelled by the
+      // next blow that lands, so a body in contact is a body this charge pours into the damage
+      // — see the `healArea` rung. It stays in the party for the same reason a regenerating one
+      // does: it is still a body the circle has to be drawn around.
+      if (this.underFire(o, foes)) continue;
       covered++;
       hp += o.hp;
       maxHp += o.maxHp;
@@ -831,12 +968,16 @@ export class PlusItems {
 
   /** The most hurt of ours in reach — who a Healing Salve goes on. Buildings and workers are
    *  left out for the same reason the army leaves them out: the salve is for the fight. */
-  private hurtest(u: SimUnit, own: SimUnit[]): SimUnit | null {
+  private hurtest(u: SimUnit, own: SimUnit[], foes: SimUnit[]): SimUnit | null {
     let best: SimUnit | null = null;
     let worst = ALLY_HP;
     for (const o of own) {
       if (o.building || o.isPeon || !near(u, o, LOOK)) continue;
       if (this.regenerating(o)) continue; // already pouring — see `regenerating`
+      // …and a body that is being swung at pours the salve straight into the damage: the buff
+      // is cancelled by the next blow (see the `healOther` rung). The presser's own fight is
+      // already gated there, but it can be a screen away from the one its army is in.
+      if (this.underFire(o, foes)) continue;
 
       const frac = o.hp / Math.max(1, o.maxHp);
       if (frac < worst) {
@@ -845,6 +986,15 @@ export class PlusItems {
       }
     }
     return best;
+  }
+
+  /** Is anything hostile close enough to this unit to break a regeneration buff on it? The
+   *  same `LOOK` everything else here calls "this fight", asked of the BODY being healed rather
+   *  than of the hero doing the pouring. Buildings do not count — a tower is a fight, so it is
+   *  left in deliberately: only a `building` with no weapon would be, and `near` already has to
+   *  reach it. */
+  private underFire(o: SimUnit, foes: SimUnit[]): boolean {
+    return foes.some((f) => !f.building && near(o, f, LOOK));
   }
 
   /**
@@ -917,7 +1067,9 @@ export class PlusItems {
       const slot = this.illusionSlot(u);
       if (slot < 0) break; // no wand, out of charges, or cooling down
       const def = this.view.item(u.inventory[slot]!.itemId);
-      if (!def || !this.aim(u, slot, def, "illusion", own)) break;
+      // No foes list: `illusion` aims at one of OURS (`toCopy`) and reads nothing about the
+      // fight, and this press is the army manager's own — made a few seconds BEFORE contact.
+      if (!def || !this.aim(u, slot, def, "illusion", own, [])) break;
       made++;
     }
     return made;
@@ -1066,6 +1218,10 @@ export class PlusItems {
     let best: SimUnit | null = null;
     for (const u of own) {
       if (!u.isHero || !u.inventory.length || u.isIllusion) continue;
+      // A hero already walking to a drop or to a shop with something to SELL is left alone: a
+      // move order issued over the top of `getitem` cancels the errand and the two passes then
+      // argue about the same hero for the rest of the match. Same rule `pawn` and `loot` follow.
+      if (u.order === "getitem") continue;
       if (u.inventory.indexOf(null) < 0) continue; // belt full
       const cap = rich ? u.inventory.length : this.profile.shopping;
       if (u.inventory.filter((h) => h !== null).length >= cap) continue;
