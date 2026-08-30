@@ -246,9 +246,20 @@ game's own numbers:
 | 4 Archers + a level-3 hero | ≈ 217 | green only |
 | 8 Grunts + a level-5 hero | ≈ 822 | red |
 
-The bars are **power 150 / hero level 1** (green), **300 / 3** (orange) and **620 / 5** (red),
-plus **75 % group health and 80 % hero health** for all three. Every one of them was *raised* off
+The bars are **power 120 / hero level 1** (green), **300 / 3** (orange) and **620 / 5** (red),
+plus **75 % group health and 80 % hero health** for all three. Orange and red were *raised* off
 the report "the AI is attacking orange creep camps with very weak armies".
+
+**Green then came back down, 150 → 120**, off the opposite report: *"it sits too long in its base
+while having a decent army instead of creeping."* 150 was not what a green camp costs, it was what
+the FIRST camp of the game costs to reach, and nobody's opening party could pay it — a hero and
+three Footmen price at ≈ 148, a hero and three Ghouls at ≈ 136, both refused — so every race stood
+at home waiting for a fourth soldier and the undead, whose soldier is the weakest body in the
+game, longest of all. It also disagreed with the profile asking the question: `creepFood` is 10 on
+Normal, which *is* a hero and three small soldiers, so one gate called that a party and the other
+did not. A green camp is levels 1–9 combined — two or three level-3 creeps — and a hero with a
+couple of soldiers behind it is what clears one in the real game. Orange and red did not move with
+it: the ladder out of green is the hero's own levels, and a green camp is most of one.
 
 ### Breaking off is a different question from starting
 
@@ -525,10 +536,10 @@ The block ORDER in `buildPlan` is the strategy, because `OneBuildLoop` reserves 
 list **and returns at the first unit row it cannot afford**:
 
 > hall → **gold crew** → food → **altar** → **first hero** → barracks → lumberjacks →
-> **core army** → tech buildings → **upgrades** → shop → always → **expansion** → extra heroes →
-> tier → towers → **the rest of the army**
+> **core army** → **tier 2, from 3:00** → tech buildings → **upgrades** → shop → always →
+> **expansion** → extra heroes → tier → towers → **the rest of the army**
 
-Four of those positions were moved after a live match said so, and each is worth stating:
+Five of those positions were moved after a live match said so, and each is worth stating:
 
 - **The gold crew is first and the lumberjacks are after the hero.** `workers` used to be one row
   asking for the profile's full number (14 on Insane), and because it is a `SetBuildNext` row it
@@ -548,6 +559,35 @@ Four of those positions were moved after a live match said so, and each is worth
   Forged Swords is a hundred gold and makes the army you already have better; a Castle is a
   thousand and makes nothing until it lands. (`startUpgrade` now also *reserves* what it spends,
   which every other row already did.)
+- **…but the tier-up has a CLOCK, and at three minutes it stops waiting its turn.** The rule
+  above is right and it is also how a computer stays at tier 1 for ever: there is always another
+  upgrade, and a `SetBuildNext` army row asks for one more soldier every pass, world without end.
+  So `tierUpDue` asks for the tier-2 hall a second time, high in the ladder, from `TIER2_CLOCK`
+  (180 s) — which is when a ladder player has their hall going up, and is the developer's own
+  "tier 2 transition starts at around 3-4 mins for all races". Asking twice in one pass is free:
+  the first ask starts the upgrade and `TownCount` counts a job in a queue, so the second is
+  already satisfied; and if the first could not afford it, the loop never reaches the second.
+  Tier 3 keeps its old place at the bottom — at ten minutes there is an army to spend on, and
+  what loses games there is teching past what you can defend.
+
+### A tier-up is priced as the UPGRADE it is
+
+The other half of "way too long at tier 1", and it was a plain bug in the library rather than a
+question of strategy — so it slowed the **classic** melee AI exactly as much, since both AIs
+spend down the same build array.
+
+A structure upgrade is charged the **difference** between the two buildings, in WC3 and in our own
+authority (`authority.ts` "upgradebuilding": a Stronghold at 700/375 over a Great Hall at 385/185
+is 315/190). `OneBuildLoop` priced it at the new building's whole row — **705 gold and 415 lumber
+for a Keep**, against the 320/210 the player is actually charged. So every computer of every race
+sat waiting to bank rather more than twice the money the tier-up costs; and because a unit row
+*halts* the loop while it cannot afford itself, everything below it in the ladder starved for the
+whole of that wait too.
+
+`AiPlayer.rowCost` now asks the same scan that will actually place the order
+(`upgradeCandidates`), so the price and the order can never disagree: with nothing of ours
+standing that upgrades into the row's id, `setProduce` will FOUND the building and the full row is
+the right price. Pinned in [`tools/ai-build-cost-test.cjs`](../tools/ai-build-cost-test.cjs).
 
 ### The undead's lumber comes out of its army
 
@@ -592,6 +632,27 @@ the trees, so the one race that pays for its army out of its forest was the one 
 not attack with what it had built, which is also the rule this file says Computer+ does not have
 (the ceiling is at production).
 
+### …and WHICH ghouls: the hurt ones go back to the trees
+
+How many the forest keeps is one question; which BODIES are on each side of that line is another.
+A hurt ghoul is worth more on the trees than in the line twice over: the party it leaves is priced
+off **current** hit points ([`power.ts`](../src/ai/plus/power.ts)), so the wave is stronger the
+moment the exchange is made rather than in the minute and a half a Ghoul takes to heal itself —
+and it heals while it chops, since a Ghoul regenerates **2 hp/s on blight and not one point off
+it** (UnitBalance `regenType`, [undead](undead.md)) and the blight is where its base is.
+
+So the two sides are sorted before anything moves: the choppers **outside** the wave freshest
+first, the ones **inside** it most hurt first. Every move is then between the two ends —
+returning a chopper to the crew takes the most hurt, filling the wave takes the freshest, and on
+top of both there is a one-for-one **relief** (`reliefCount`): a ghoul under 50 % is exchanged for
+one at 90 % or better, and the loop stops at the first pair not worth exchanging. The gap between
+those two numbers is the whole of "it must not go back and forth" — one threshold would swap a
+ghoul out at 49 % for one at 51 % and swap it back on the next pass.
+
+Relief happens at **home** only (`massing`, not `afield`). In the field it is two lone ghouls
+walking in opposite directions across a melee map, one of them wounded, and the camp between them
+eats both.
+
 That split decides how ghouls are *used*. Two more things follow from the same fact and both are
 in `plan.ts`:
 
@@ -600,11 +661,12 @@ in `plan.ts`:
   under those the race chopped nothing whatever — so `PlusRaceTable.lumberUnit` names the chopper
   and `workers` puts up `LUMBER_UNITS` of them beside the workers, as economy rather than as army.
   `LUMBER_UNITS` is **six**, and the sixth is the creeping party rather than the forest: with a
-  third of them chopping, six ghouls is two on the trees and four behind the hero, and four is
-  what a GREEN camp costs. A Ghoul is 340 hit points and 13 damage over a 1.3-second cooldown
-  (UnitBalance `realHP`, UnitWeapons `avgdmg1`/`cool1`), so behind a level-1 hero three price at
-  √(3 × 10 × 340) × 1.35 ≈ 136 and four at ≈ 157, against [`power.ts`](../src/ai/plus/power.ts)'s
-  green bar of 150. Five ghouls is a party that never leaves.
+  third of them chopping, six ghouls is two on the trees and four behind the hero. A Ghoul is 340
+  hit points and 13 damage over a 1.3-second cooldown (UnitBalance `realHP`, UnitWeapons
+  `avgdmg1`/`cool1`), so behind a level-1 hero three price at √(3 × 10 × 340) × 1.35 ≈ 136 and
+  four at ≈ 157 against [`power.ts`](../src/ai/plus/power.ts)'s green bar of 120 — and the margin
+  is the point, because the power is read off CURRENT hit points, so a three-ghoul party stops
+  being one the moment anything scratches it.
 - **An Acolyte is not a lumberjack, so five is the number.** Every worker past a mine's crew of
   five is 75 gold standing in a queue — for three races the sixth goes to the trees, for the
   undead it goes nowhere. `PlusProfile.workers` (11 on Normal, 14 on Insane) is an *economy's*

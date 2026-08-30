@@ -79,6 +79,25 @@ const TIER2_ARMY = 8;
 const TIER3_ARMY = 20;
 
 /**
+ * …and WHEN the tier-up stops waiting its turn in the ladder — the developer's own "tier 2
+ * transition starts at around 3-4 mins for all races".
+ *
+ * It is a POSITION rather than a permission: `tierUp` emits the same row wherever it is called
+ * from, and this clock is what moves it above the things that were quietly eating the gold it
+ * needed (`tierUpDue`, and the ladder in `buildPlan`). Below the tier-up sit the Forge, the
+ * upgrades, the shop and the expansion, and the reason they are above it is real — a 200-gold
+ * Forge makes the army you already have better, where a Keep is 320 and blocks everything under
+ * it while the AI saves. But "cheap things first" with no clock on it is a computer that never
+ * tiers at all: there is always another upgrade, and a `setBuildNext` army row asks for one more
+ * soldier every pass, for ever. Three minutes is when a ladder player has their hall going up.
+ *
+ * Only tier 2 has one. Tier 3 keeps its old place at the bottom, where the same argument runs
+ * the other way: at ten minutes there is an army on the field to spend on, and the thing that
+ * loses games there is teching past what you can defend.
+ */
+const TIER2_CLOCK = 180;
+
+/**
  * The army the plan keeps while it is teching — a hero and four or five soldiers.
  *
  * It is a FLOOR, not the army it intends to fight with: the rest of the mix is bought after the
@@ -107,8 +126,9 @@ const MINE_CREW = 5;
  * hero creeps with is, and the bar it has to clear is `plus/power.ts`'s green one: a Ghoul is
  * 340 hit points and 13 damage over a 1.3-second cooldown (UnitBalance `realHP`, UnitWeapons
  * `avgdmg1`/`cool1`), so behind a level-1 hero three of them price at √(3 × 10 × 340) × 1.35 ≈
- * 136 and four at ≈ 157, against a GREEN camp's 150. Five ghouls is two on the trees and three
- * in the party, which is a party that never leaves; six is two and four, which is the opening a
+ * 136 and four at ≈ 157, against a GREEN camp's 120. Five ghouls is two on the trees and three in
+ * the party, which clears that bar and stops clearing it the moment anything scratches one of
+ * them (the power is read off CURRENT hit points); six is two and four, which is the opening a
  * player actually has. Under the builds that DO name the Ghoul the army mix asks for more than
  * this anyway, and the row is then satisfied by them.
  */
@@ -173,12 +193,18 @@ const EXPAND_GOLD = 2000;
  *  · the support buildings AND THE EXPANSION come before the tier-up, because the tier-up is
  *    the one row the AI genuinely SAVES for and a saved-for row blocks everything under it. A
  *    Forge is two hundred gold and makes the army you already have better; a Stronghold is
- *    seven hundred. Put the Stronghold first and the Forge never gets built at all — measured,
- *    and it is also the order every real orc build writes down. The expansion is above it for
- *    the same reason and a second one: expanding INSTEAD of teching is what a fast-expand build
- *    order is, and a strategy that has decided to take a second mine at four minutes must not
- *    be held behind a Stronghold it is not saving for yet. It emits no row at all when its
- *    clock has not come due, so this costs a build that is not expanding nothing.
+ *    three hundred and fifteen over the Great Hall. Put the Stronghold first and the Forge never
+ *    gets built at all — measured, and it is also the order every real orc build writes down.
+ *    The expansion is above it for the same reason and a second one: expanding INSTEAD of
+ *    teching is what a fast-expand build order is, and a strategy that has decided to take a
+ *    second mine at four minutes must not be held behind a Stronghold it is not saving for yet.
+ *    It emits no row at all when its clock has not come due, so this costs a build that is not
+ *    expanding nothing.
+ *
+ *    …UNTIL THREE MINUTES, at which point the tier-up stops waiting its turn and is asked for
+ *    again from high in the ladder (`tierUpDue`, `TIER2_CLOCK`). "Cheap things first" with no
+ *    clock on it is a computer that never tiers at all — there is always another upgrade, and
+ *    an army row asks for one more soldier every pass, for ever.
  *
  * Read the list as a ladder player's priorities, top to bottom.
  */
@@ -216,6 +242,7 @@ export function buildPlan(c: PlusCtx): void {
   // puts up the altar, buys the hero, and grows the lumber crew around it.
   workers(c);
   army(c, CORE_ARMY_FOOD); // enough not to die to the first raid, cheap enough not to block tech
+  tierUpDue(c); // …and from three minutes, the Keep — see TIER2_CLOCK
   techBuildings(c);
   upgrades(c);
   shop(c);
@@ -451,11 +478,27 @@ function mixBuildings(c: PlusCtx): Array<{ build: string; tier: number }> {
 
 /** Tier up — but only with an army on the field, and never past what the difficulty allows.
  *  A tier is an UPGRADE of the hall you own, and `SetProduce` tries that route first, which is
- *  why this reads as "have a Keep" rather than "found one". */
+ *  why this reads as "have a Keep" rather than "found one" — and it is priced as one too, which
+ *  is a fix of its own: the build loop used to reserve a Keep's whole 705 gold rather than the
+ *  320 the upgrade is charged, and no computer of any race tiered up on time (`AiPlayer.rowCost`). */
 function tierUp(c: PlusCtx): void {
+  tier2(c);
+  const { ai, profile, table, armyFood, tier } = c;
+  if (profile.techTier >= 3 && tier >= 2 && armyFood >= TIER3_ARMY) ai.setBuildUnit(1, table.halls[2]);
+}
+
+/** …and the same tier-2 row HIGH in the ladder once its clock is up — see `TIER2_CLOCK`. Asking
+ *  twice in one pass is free: the first ask starts the upgrade and `townCount` counts a job in a
+ *  queue, so the second is already satisfied; and if the first could not afford it the loop never
+ *  reaches the second. */
+function tierUpDue(c: PlusCtx): void {
+  if (c.clock < TIER2_CLOCK) return;
+  tier2(c);
+}
+
+function tier2(c: PlusCtx): void {
   const { ai, profile, table, armyFood, tier } = c;
   if (profile.techTier >= 2 && tier >= 1 && armyFood >= TIER2_ARMY) ai.setBuildUnit(1, table.halls[1]);
-  if (profile.techTier >= 3 && tier >= 2 && armyFood >= TIER3_ARMY) ai.setBuildUnit(1, table.halls[2]);
 }
 
 /**

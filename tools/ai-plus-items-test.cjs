@@ -23,7 +23,7 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { PlusItems } = require(join(REPO, ".sim-build", "src", "ai", "plus", "items.js"));
-const { scoutRing, SCOUT_RING_LEGS, lumberCrew } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { scoutRing, SCOUT_RING_LEGS, lumberCrew, reliefCount } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -108,6 +108,29 @@ check("the bank still binds when it is the smaller", lumberCrew(600, 30), 5);
 // leaves the wave to everything else.
 check("it never asks for more choppers than exist", lumberCrew(0, 2), 2);
 check("…nor when the floor is above the whole crypt", lumberCrew(0, 1), 1);
+
+// ==========================================================================================
+console.log("\n-- …and swaps the hurt ones for the rested ones ------------------------------");
+// ==========================================================================================
+// The developer's own rule: "send hurt ghouls to mine lumber and get some healthy ghouls from
+// lumber". It is free healing rather than a rotation for its own sake — a Ghoul regenerates
+// 2 hp/s on BLIGHT and nowhere else (UnitBalance `regenType`), and the trees a base chops stand
+// on the blight its own Necropolis painted.
+//
+// Both sides arrive sorted: the ones SERVING worst-off first, the ones RESTING best-off first.
+check("a half-dead ghoul is exchanged for a whole one", reliefCount([0.3], [1]), 1);
+check("…and two of them for two", reliefCount([0.2, 0.4], [1, 0.95]), 2);
+// It stops at the first pair not worth exchanging, which is what keeps it one pass rather than
+// a churn: a scratched ghoul is not relieved, and a ghoul is not relieved by another hurt one.
+check("a scratched ghoul keeps its place", reliefCount([0.8], [1]), 0);
+check("…and nothing is relieved by a body just as hurt", reliefCount([0.2], [0.6]), 0);
+check("…the second pair being unworthy ends it, not the first", reliefCount([0.2, 0.8], [1, 1]), 1);
+check("nobody in the forest, nobody relieved", reliefCount([0.1, 0.1], []), 0);
+check("…and nobody in the wave, nothing to relieve", reliefCount([], [1, 1]), 0);
+// THE GAP between the two thresholds is the whole of "it must not go back and forth": the ghoul
+// that leaves is under half and the one that arrives is all but whole, so no exchange can be
+// undone by the same rule on the next pass.
+check("a ghoul is never swapped for one barely better", reliefCount([0.49], [0.51]), 0);
 
 // ==========================================================================================
 console.log("\n-- Normal and Insane farm creep camps --------------------------------------");

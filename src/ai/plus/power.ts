@@ -149,7 +149,22 @@ interface CampBar {
 //
 // The hero LEVELS are the developer's own words: orange wants a hero that has been somewhere,
 // red wants "a high level > 3-4 levels hero".
-const GREEN: CampBar = { power: 150, hero: 1 };
+//
+// **GREEN was then LOWERED, and the report was "it sits in its base instead of creeping".** 150
+// is not what a green camp costs, it is what the FIRST camp of the game costs to reach: nobody's
+// opening party clears it. A hero and three Footmen price at √(3 × 9.6 × 420) × 1.35 ≈ 148, a
+// hero and three Ghouls at ≈ 136 — both refused — so every race had to stand at home until it
+// could field a FOURTH soldier, and the undead, whose soldier is the weakest body in the game,
+// longest of all. It also disagreed with the profile that was asking the question: `creepFood`
+// is 10 on Normal, which IS a hero and three small soldiers, so one gate said "that is a party"
+// and the other said "that is not". A green camp is levels 1-9 combined — two or three level-3
+// creeps — and a hero with a couple of soldiers behind it is what clears one in the real game.
+//
+// ORANGE and RED are untouched, and deliberately: they are what "the AI attacks orange camps
+// with very weak armies" raised, and the ladder out of green is not blocked — a green camp is
+// most of a hero level, so a party that can take the first one is a party that is level 3 and
+// pricing orange camps a few minutes later. GREEN is the rung the AI could not get ON.
+const GREEN: CampBar = { power: 120, hero: 1 };
 const ORANGE: CampBar = { power: 300, hero: 3 };
 const RED: CampBar = { power: 620, hero: 5 };
 

@@ -531,8 +531,7 @@ export class AiPlayer {
 
     const def = this.host.registry.get(id);
     if (!def) return true; // an id this install doesn't have is not a reason to stall the list
-    const goldCost = def.goldCost;
-    const woodCost = def.lumberCost;
+    const { gold: goldCost, lumber: woodCost } = this.rowCost(def, id, town);
 
     let affordQty = goldCost === 0 ? need : Math.floor(this.totalGold / goldCost);
     if (affordQty > need) affordQty = need;
@@ -668,14 +667,54 @@ export class AiPlayer {
 
   /** The tier route: a building of ours whose `Upgrade` list names `id`. */
   private upgradeExisting(id: string, town: number): boolean {
+    for (const b of this.upgradeCandidates(id, town)) {
+      if (this.host.execute(this.player, { c: "upgradebuilding", buildingId: b.id, toTypeId: id })) return true;
+    }
+    return false;
+  }
+
+  /** Our own standing buildings that this row would UPGRADE rather than found — a Town Hall
+   *  under a `SetBuildUnit(1, KEEP)`, a Ziggurat under a Spirit Tower. Idle ones only, since a
+   *  building with anything in its queue refuses the order (authority.ts `queueFull`). */
+  private *upgradeCandidates(id: string, town: number): Generator<SimUnit> {
     for (const b of this.host.world.units.values()) {
       if (b.owner !== this.player || b.hp <= 0 || !b.building) continue;
       if (b.building.constructionLeft > 0 || b.building.queue.length > 0) continue;
       if (town >= 0 && this.townAt(b.x, b.y) !== town) continue;
       if (!this.host.tech.get(b.typeId).upgrade.includes(id)) continue;
-      if (this.host.execute(this.player, { c: "upgradebuilding", buildingId: b.id, toTypeId: id })) return true;
+      yield b;
     }
-    return false;
+  }
+
+  /**
+   * What a build row would actually COST — which for a TIER-UP is not what its own unit costs.
+   *
+   * **A structure upgrade is charged the DIFFERENCE**, in WC3 and in our authority
+   * (`authority.ts` "upgradebuilding": a Stronghold at 700/375 over a Great Hall at 385/185 is
+   * 315/190). The build loop priced it at the new building's whole row instead — 705 gold and
+   * 415 lumber for a Keep against the 320/210 the player is actually charged — so every
+   * computer in the game, classic and Computer+ alike, sat at tier 1 waiting to bank rather
+   * more than twice the money the tier-up costs. And because a unit row HALTS the loop while it
+   * cannot afford itself (`runBuildLoop`), it was not only late: everything below it in the
+   * ladder starved for the whole of that wait. This is the whole of the developer's "Computer+
+   * is staying at Tier 1 for way too long for all races".
+   *
+   * Asked of the same scan that will actually place the order (`upgradeCandidates`), so the
+   * price and the order can never disagree: with nothing of ours standing that upgrades into
+   * `id`, `setProduce` will FOUND the building and the full row is the right price.
+   */
+  private rowCost(def: UnitDef, id: string, town: number): { gold: number; lumber: number } {
+    if (def.isBuilding) {
+      for (const b of this.upgradeCandidates(id, town)) {
+        const from = this.host.registry.get(b.typeId);
+        if (!from) break;
+        return {
+          gold: Math.max(0, def.goldCost - from.goldCost),
+          lumber: Math.max(0, def.lumberCost - from.lumberCost),
+        };
+      }
+    }
+    return { gold: def.goldCost, lumber: def.lumberCost };
   }
 
   /** Place a structure: pick a worker, pick a site, order the build. */

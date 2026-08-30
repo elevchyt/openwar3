@@ -459,6 +459,49 @@ const LUMBER_SHARE = 1 / 3;
  * that none of them chop once the bank is full — is then pinned by a test rather than by
  * reading it. See `ComputerPlusAi.lumberCrew` for who is counted.
  */
+/**
+ * THE RELIEF, for the race whose soldiers are also its lumberjacks: a ghoul under this much
+ * life is exchanged for one at least this fresh, and the pair swap jobs.
+ *
+ * The developer's own rule — "send hurt ghouls to mine lumber and get some healthy ghouls from
+ * lumber" — and it is free healing rather than a rotation for its own sake: a Ghoul regenerates
+ * 2 hp/s on BLIGHT and not one point off it (UnitBalance `regenType` = blight, docs/undead.md),
+ * and the trees a base is chopping stand on the blight its own Necropolis painted. So the wave
+ * is topped up and the wounded are healed by the same one order.
+ *
+ * The GAP between the two numbers is what stops it thrashing. A single threshold would swap a
+ * ghoul out at 49 % for one at 51 % and swap it back the moment either ticked past the other;
+ * with a half-dead one leaving and a nearly-whole one arriving, every exchange is worth making
+ * and the loop runs out of pairs rather than out of patience. `RELIEVE_UNDER` is deliberately
+ * below `RECOVER_TO` (0.65, the bar a unit under treatment is held back to) — this is not a
+ * "hurt" ghoul, it is one about to die.
+ */
+const RELIEVE_UNDER = 0.5;
+const RELIEVE_WITH = 0.9;
+
+/** One unit's hit points over its own maximum. */
+function health(u: SimUnit): number {
+  return u.hp / Math.max(1, u.maxHp);
+}
+
+/**
+ * How many one-for-one RELIEFS to make, given the two sides already sorted: the crew serving in
+ * the wave worst-off first, the crew resting in the forest best-off first.
+ *
+ * Pure and exported for the same reason `lumberCrew` is — what matters about it is that it
+ * pairs the worst with the best, that it stops at the first pair not worth exchanging, and that
+ * the gap between the two thresholds is what stops the same ghoul walking in and out of the
+ * wave for the rest of the match. Pinned by a test rather than by reading it.
+ */
+export function reliefCount(serving: readonly number[], rested: readonly number[]): number {
+  let k = 0;
+  while (k < serving.length && k < rested.length) {
+    if (serving[k] >= RELIEVE_UNDER || rested[k] < RELIEVE_WITH) break;
+    k++;
+  }
+  return k;
+}
+
 export function lumberCrew(wood: number, choppers: number): number {
   if (choppers <= 0) return 0;
   const bank = LUMBER_CREW - Math.floor(wood / LUMBER_PER_CHOPPER);
@@ -1432,26 +1475,58 @@ export class ComputerPlusAi {
       if (u.worker) spare.push(u);
       else b.squad.add(u.id);
     }
-    const want = this.lumberCrew(b);
-    // Choppers currently OUTSIDE the wave. Both directions below are stated against this one
+    // A worker that cannot chop is not the forest's business at all: it is in the wave or it is
+    // nothing. (Nobody's ordinary worker reaches here — `isPeon` took them out above.)
+    for (const u of spare) if (!u.worker?.lumber) b.squad.add(u.id);
+    // THE TWO ENDS OF ONE EXCHANGE, and every move below is between them: the choppers OUTSIDE
+    // the wave with the freshest first, and the ones inside it with the most hurt first. Sorted
+    // by health rather than taken in whatever order the world happened to yield them, because
+    // WHICH ghoul walks each way is the developer's own rule — "send hurt ghouls to mine lumber
+    // and get some healthy ghouls from lumber". A hurt ghoul is worth more on the trees than in
+    // the line twice over: the party it leaves is priced off CURRENT hit points (plus/power.ts),
+    // so the wave is stronger the moment the exchange is made rather than in the minute and a
+    // half a Ghoul takes to heal itself — and it heals while it chops, since a Ghoul regenerates
+    // 2 hp/s on BLIGHT and nowhere else (UnitBalance `regenType`) and the blight is where its
+    // base is.
+    const rested = spare.filter((u) => !!u.worker?.lumber).sort((x, y) => health(y) - health(x));
+    const serving: SimUnit[] = [];
+    for (const u of this.squadUnits(b)) if (u.worker?.lumber) serving.push(u);
+    serving.sort((x, y) => health(x) - health(y));
+    // Choppers currently outside the wave. Both directions below are stated against this one
     // number, so "let one go back to the forest" and "take one into the wave" are one rule
     // rather than two that can disagree.
-    let free = 0;
-    for (const u of spare) if (u.worker?.lumber) free++;
-    // Short of the crew — take them back OUT of the wave. The squad is insertion-ordered, so
-    // the last one in is the one whose absence costs the least.
-    for (const id of [...b.squad].reverse()) {
-      if (free >= want) break;
-      const u = this.host.world.units.get(id);
-      if (!u?.worker?.lumber) continue;
-      b.squad.delete(id);
+    const want = this.lumberCrew(b);
+    let free = rested.length;
+    // Short of the crew — take them back OUT of the wave, the most hurt first.
+    let out = 0;
+    while (free < want && out < serving.length) {
+      b.squad.delete(serving[out++].id);
       free++;
     }
-    for (const u of spare) {
-      // The forest's crew is not in the wave, whatever the wave is short of.
-      if (u.worker?.lumber && free <= want) continue;
-      if (u.worker?.lumber) free--;
-      b.squad.add(u.id);
+    // …and everything above the crew joins it, the freshest first.
+    let inn = 0;
+    while (free > want && inn < rested.length) {
+      b.squad.add(rested[inn++].id);
+      free--;
+    }
+    // THE RELIEF: one for one, a hurt ghoul goes back to the trees and a rested one takes its
+    // place. The crew is the same size afterwards, so this is not the rule above in another
+    // guise — it is which BODIES are on which side of it, and it is the whole of what a player
+    // is doing when they pull a ghoul at half health out of the party and send a fresh one.
+    //
+    // Only at HOME, and that is not a detail: a relief in the field is two lone ghouls walking
+    // in opposite directions across a melee map, one of them wounded, and the creep camp between
+    // them eats both. `massing` at home is also exactly when a player does it.
+    //
+    // The lists are sorted, so the exchange is always the worst-off for the best-off and the
+    // loop stops of its own accord at the first pair not worth swapping. `out`/`inn` are where
+    // the two rules above left off, so nobody is moved twice in one pass.
+    if (b.mode === "massing" && !b.afield) {
+      const swaps = reliefCount(serving.slice(out).map(health), rested.slice(inn).map(health));
+      for (let k = 0; k < swaps; k++) {
+        b.squad.delete(serving[out + k].id);
+        b.squad.add(rested[inn + k].id);
+      }
     }
   }
 

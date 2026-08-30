@@ -47,6 +47,10 @@ function check(what, got, want) {
 const GRUNT = { dps: 16, hp: 700, maxHp: 700 };
 const FOOTMAN = { dps: 9.6, hp: 420, maxHp: 420 };
 const ARCHER = { dps: 11, hp: 245, maxHp: 245 };
+// …and the fourth, which is why the GREEN bar had to come down: the undead's soldier is also its
+// lumberjack and it is the weakest body of the four (UnitBalance `realHP` 340, UnitWeapons 13
+// damage over a 1.3-second cooldown).
+const GHOUL = { dps: 10, hp: 340, maxHp: 340 };
 const n = (unit, k) => Array.from({ length: k }, () => ({ ...unit }));
 
 /** A party, in the terms plus/power.ts reads. Healthy unless said otherwise. */
@@ -86,12 +90,24 @@ console.log("\n-- a party is priced against the camp's colour ------------------
 check("hero + two grunts takes a green camp", canClearCamp(force(n(GRUNT, 2), 1), GREEN), true);
 check("…the hero alone does not", canClearCamp(force([], 1), GREEN), false);
 check("…and neither do the grunts alone", canClearCamp(force(n(GRUNT, 4), 0), GREEN), false);
+// …and an OPENING PARTY of the smaller bodies takes one too, which is the whole of the reported
+// "it sits in its base instead of creeping": at the old bar of 150 neither of these cleared it,
+// so every race stood at home waiting for a fourth soldier and the undead — whose soldier is the
+// weakest body in the game — waited longest. `PlusProfile.creepFood` (10 on Normal) calls each
+// of these a party, and the two gates have to agree.
+check("hero + three footmen takes a green camp", canClearCamp(force(n(FOOTMAN, 3), 1), GREEN), true);
+check("…and hero + three ghouls, the undead's own opening", canClearCamp(force(n(GHOUL, 3), 1), GREEN), true);
+check("…but hero + two ghouls is still not a party", canClearCamp(force(n(GHOUL, 2), 1), GREEN), false);
 
 // ORANGE: "about four of those units with the hero" — and this is the bar that was RAISED,
 // because the AI was walking into orange camps with parties that had no chance.
 check("hero + two grunts does NOT take an orange camp", canClearCamp(force(n(GRUNT, 2), 1), ORANGE), false);
 check("four grunts and a level-3 hero does", canClearCamp(force(n(GRUNT, 4), 3), ORANGE), true);
 check("…but not on a level-1 hero", canClearCamp(force(n(GRUNT, 4), 1), ORANGE), false);
+// …and the ORANGE bar did NOT move when the green one did: it is what "the AI attacks orange
+// camps with very weak armies" raised, and lowering green does not touch the party an orange
+// camp asks for. The ladder out of green is the hero's own levels.
+check("…nor on a level-2 one, however the green bar moved", canClearCamp(force(n(GRUNT, 4), 2), ORANGE), false);
 check("…and four ARCHERS are not four grunts", canClearCamp(force(n(ARCHER, 4), 3), ORANGE), false);
 
 // RED: "a pretty big army with a level 3-4+ hero". This is the case the whole file exists for.
