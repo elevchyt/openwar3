@@ -269,6 +269,20 @@ dying on the way out:
   whose owner has walled a camp in, and a mine the *army* is sent to, are the same case.)
   `lookedAt` reads "the next safe step is nowhere" as *arrival*, so the leg completes there rather
   than stalling until `SCOUT_STUCK_AFTER` writes it off.
+- **A waypoint has to be somewhere the scout could stand** (`standable`, handed in by the caller
+  from the sim's own pathing grid — `walkable` for the terrain and everything stamped on it,
+  **and** `playable` for the map's boundary, which is a separate bit and set on nothing else; see
+  [unplayable area](unplayable-area.md)). Without it the geometry is happy to throw a detour clean
+  off the edge of the world: the perpendicular it prefers is chosen by which side the *creep* is
+  on, which says nothing about which side is *map*. Aimed at a point it cannot reach, the
+  pathfinder walks the unit at the nearest thing to it that it can — and beside a camp pinned
+  against a boundary, the nearest thing to "outside the map" is the strip of ground the camp is
+  standing on. That is the Wisp that walked **into** a boundary camp on its way home instead of at
+  its own Tree of Life. A rejected arc is simply not a candidate; with none left the straight line
+  stands, and the pathfinder is a great deal better at going round a cliff than a perpendicular is.
+  `backOffSpot` asks the same question and **sweeps** when the answer is no — the same distance,
+  turned twenty degrees at a time up to eighty either way, taking the first bearing that is both
+  standable and still an improvement, and giving up rather than ordering a walk into a wall.
 - **Then it goes round.** The first creep within the berth is stepped around perpendicular to the
   line, preferring the side it is not on; the throw is then **widened a step at a time and the
   resulting leg re-measured against every creep**, both sides at each width, because one fixed

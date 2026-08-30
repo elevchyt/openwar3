@@ -450,6 +450,17 @@ function thrown(
  *     centre walked into a flank. Both sides are tried at each width, so a camp against a cliff
  *     is passed on the open side rather than on the geometrically prettier one.
  *
+ *  4. **And a waypoint has to be somewhere the scout could stand.** `standable` — the map's own
+ *     answer, handed in by the caller — is asked of every arc before it is scored. Without it
+ *     this geometry is happy to throw a detour clean off the edge of the world: the perpendicular
+ *     it prefers is chosen by which side the creep is on, which says nothing about which side is
+ *     MAP. Aimed at a point it cannot reach, the pathfinder walks the unit at the nearest thing
+ *     to it that it can — and beside a boundary camp the nearest thing to "outside the map" is
+ *     the strip of ground the camp is standing on. That is the Wisp that walked INTO a camp
+ *     pinned against the map edge on its way home instead of walking at its own Tree of Life.
+ *     A rejected arc simply is not a candidate; with none left, the straight line stands, and
+ *     the pathfinder is a great deal better at going round a cliff than a perpendicular is.
+ *
  * Pure, and exported, for the same reason `scoutRing` is: what actually matters about it — that
  * the leg it hands back clears every creep it was given — is then pinned by a test rather than
  * by reading it (tools/ai-plus-army-test.cjs).
@@ -460,6 +471,7 @@ export function safeLeg(
   creeps: ReadonlyArray<{ x: number; y: number }>,
   berth = CREEP_BERTH,
   detour = CREEP_DETOUR,
+  standable?: (x: number, y: number) => boolean,
 ): { x: number; y: number } {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
@@ -478,6 +490,7 @@ export function safeLeg(
     const push = berth - worst.gap + detour * step;
     for (const away of sides) {
       const aim = thrown(from, goal, worst, away, push);
+      if (standable && !standable(aim.x, aim.y)) continue; // (4) — off the map is not a detour
       const gap = clearance(from, aim, ahead);
       if (gap >= berth) return aim; // clears everything: nothing wider to look for
       if (gap > bestGap) { bestGap = gap; best = aim; }
@@ -528,6 +541,12 @@ export function onGoldDuty(u: {
  * `CREEP_BERTH`, and there is no distance at which the scout wants to do both.
  */
 const CREEP_BACKOFF = 200;
+/** How far either way the back-off's bearing is swept, and in what steps, when the straight-out
+ *  one is off the map or into a cliff. Four steps of twenty degrees reaches eighty each way —
+ *  past that a "back-off" is walking along the camp's face rather than away from it, and every
+ *  bearing has to still increase the distance to everything that triggered it anyway. */
+const BACKOFF_TURN = Math.PI / 9;
+const BACKOFF_SWEEP = 4;
 
 /**
  * WHERE A SCOUT STANDING TOO CLOSE TO A CREEP WALKS TO — or null when nothing is too close.
@@ -549,6 +568,14 @@ const CREEP_BACKOFF = 200;
  * and a twitch: the berth is what an arc is drawn FOR, and treating every graze of it as an
  * emergency would have the scout stepping out of routes it had just been given.
  *
+ * AND IT HAS TO BE SOMEWHERE THE SCOUT COULD STAND. "Away from the camp" is a bearing, and a
+ * camp pinned against a cliff or the map's edge is a camp whose away-bearing points off the
+ * world; ordered there, the pathfinder walks the unit at the nearest reachable thing instead,
+ * which is the ground the camp is standing on. So when the pooled bearing is not standable the
+ * arc is SWEPT — the same distance, turned a step at a time either way — and the first bearing
+ * that is both standable and still an improvement is taken. With none at all it gives up rather
+ * than ordering a walk into a wall, and the ordinary routing runs instead.
+ *
  * Pure and exported for the same reason `scoutRing` is — what matters about it is that the
  * point it hands back is genuinely further from every creep than the point it was given.
  */
@@ -557,6 +584,7 @@ export function backOffSpot(
   creeps: ReadonlyArray<{ x: number; y: number }>,
   home: { x: number; y: number },
   bar = CREEP_PASS,
+  standable?: (x: number, y: number) => boolean,
 ): { x: number; y: number } | null {
   let ax = 0;
   let ay = 0;
@@ -579,7 +607,30 @@ export function backOffSpot(
     len = Math.hypot(ax, ay);
     if (len < 1) return null; // …and if home is here too, there is nothing to walk out of
   }
-  return { x: from.x + (ax / len) * need, y: from.y + (ay / len) * need };
+  const a0 = Math.atan2(ay, ax);
+  // The pooled bearing first, then the same distance swept either side of it. Ordered so the
+  // straight-out answer wins whenever it is available and a turned one is only ever a fallback.
+  for (let step = 0; step <= BACKOFF_SWEEP; step++) {
+    for (const side of step === 0 ? [0] : [1, -1]) {
+      const a = a0 + side * step * BACKOFF_TURN;
+      const spot = { x: from.x + Math.cos(a) * need, y: from.y + Math.sin(a) * need };
+      if (standable && !standable(spot.x, spot.y)) continue;
+      // A TURNED bearing still has to BE a back-off: it may not end up nearer to anything than
+      // where we already stand, or the sweep would walk the scout along the camp's face. Asked
+      // of the turns only — the straight-out one is an improvement by construction, and in the
+      // surrounded case (where it is the bearing of home instead) there is no improving answer
+      // to hold out for and standing still is the one thing that is certainly wrong.
+      if (step === 0) return spot;
+      let ok = true;
+      for (const c of creeps) {
+        const d = Math.hypot(from.x - c.x, from.y - c.y);
+        if (d >= bar) continue;
+        if (Math.hypot(spot.x - c.x, spot.y - c.y) <= d) { ok = false; break; }
+      }
+      if (ok) return spot;
+    }
+  }
+  return null;
 }
 
 /** How long the scout may make no PROGRESS before its waypoint is written off (seconds).
@@ -2050,7 +2101,7 @@ export class ComputerPlusAi {
     //
     // Only once it has left home (`away`), for the same reason the retreat rules are: a camp
     // near our own base must not stop the tour before it starts.
-    const out = away ? backOffSpot(scout, creeps, home) : null;
+    const out = away ? backOffSpot(scout, creeps, home, CREEP_PASS, this.standable) : null;
     if (out) {
       b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...out }, queued: false });
       return;
@@ -2068,8 +2119,10 @@ export class ComputerPlusAi {
     // does not come back clear, ask again for the clearance that actually matters
     // (`CREEP_PASS`), which is a much easier arc to draw and is still outside the notice of
     // every creep a melee camp is built from.
-    let step = safeLeg(scout, goal, creeps);
-    if (clearance(scout, step, creeps) < CREEP_PASS) step = safeLeg(scout, goal, creeps, CREEP_PASS);
+    let step = safeLeg(scout, goal, creeps, CREEP_BERTH, CREEP_DETOUR, this.standable);
+    if (clearance(scout, step, creeps) < CREEP_PASS) {
+      step = safeLeg(scout, goal, creeps, CREEP_PASS, CREEP_DETOUR, this.standable);
+    }
     // (3) …AND ONLY THEN, ON THE WAY OUT, DOES IT TAKE NO FOR AN ANSWER. A step that cannot even
     // keep `CREEP_PASS` is a step into a camp's notice, and the scout does not take it. (1) has
     // already put us clear of everything, so this is only ever about the ground ahead.
@@ -2216,8 +2269,27 @@ export class ComputerPlusAi {
    * is a creep whose acquisition circle has moved with it.
    */
   private safeStep(from: { x: number; y: number }, to: { x: number; y: number }): { x: number; y: number } {
-    return safeLeg(from, to, this.liveCreeps());
+    return safeLeg(from, to, this.liveCreeps(), CREEP_BERTH, CREEP_DETOUR, this.standable);
   }
+
+  /**
+   * COULD A GROUND UNIT STAND THERE — the map's own answer, for the waypoint geometry.
+   *
+   * Two questions and both are needed. `walkable` is the terrain and everything stamped on it
+   * (a cliff, water, a tree, a building); `playable` is the map's BOUNDARY, which is a separate
+   * bit (`Unflyable`, 0x04 — see docs/unplayable-area.md) and is set on nothing else. A point
+   * in the unplayable margin can be perfectly walkable ground, so asking only the first would
+   * still let an arc be thrown into the strip beyond the world's edge.
+   *
+   * Bound as a field rather than written as a method so it can be handed to `safeLeg` and
+   * `backOffSpot` — which are pure geometry and must stay that way — without a wrapper closure
+   * being allocated on every scout pass.
+   */
+  private readonly standable = (x: number, y: number): boolean => {
+    const grid = this.host.world.grid;
+    const [cx, cy] = grid.worldToCell(x, y);
+    return grid.walkable(cx, cy) && grid.playable(cx, cy);
+  };
 
   /** Every creep still standing, as points — the haystack `safeStep` and `scoutPass` both
    *  measure a berth against. See `safeStep` for why it is every MEMBER and not the camp. */

@@ -312,6 +312,35 @@ check("a creep stood exactly on us cannot produce a NaN",
   check("…and that leg really does keep 750", worst(pass) >= 750, true);
 }
 
+// AND A WAYPOINT HAS TO BE SOMEWHERE THE SCOUT COULD STAND. The perpendicular `safeLeg` prefers
+// is chosen by which side the CREEP is on, which says nothing about which side is MAP — so beside
+// a camp pinned against the world's edge it threw the arc clean off it, and the pathfinder, aimed
+// at a point it cannot reach, walked the unit at the nearest thing it can: the strip of ground
+// the camp is standing on. (The Wisp that walked into a boundary camp on its way home instead of
+// at its own Tree of Life.) The map's own answer is handed in, and a rejected arc is simply not a
+// candidate.
+{
+  const NORTH_IS_OFF_MAP = (x, y) => y <= 0;
+  const round2 = safeLeg(HOME, BASE, [ON_THE_LINE], undefined, undefined, NORTH_IS_OFF_MAP);
+  check("the arc is thrown to the side that is on the map", round2.y <= 0, true);
+  check("…and it still clears the camp", nearest(round2, ON_THE_LINE) > 800, true);
+  // With NO arc standable the straight line stands: the pathfinder is a great deal better at
+  // going round a cliff than a perpendicular is, and a reachable goal is what it needs.
+  const none = safeLeg(HOME, BASE, [ON_THE_LINE], undefined, undefined, () => false);
+  check("with nowhere to throw it, the straight line stands", none.x, BASE.x);
+}
+{
+  // The back-off sweeps for a bearing that is on the map, for the same reason.
+  const c = { x: 500, y: 0 };
+  const WALL_TO_THE_WEST = (x) => x > -100;
+  const out = backOffSpot({ x: 0, y: 0 }, [c], HOMEP, undefined, WALL_TO_THE_WEST);
+  check("backed into a wall, it turns rather than walking at it", out !== null, true);
+  check("…to a bearing that is on the map", out.x > -100, true);
+  check("…and the turned bearing is still a back-off", farther(out, c) > 500, true);
+  check("with no bearing at all it gives up rather than ordering a walk into a wall",
+    backOffSpot({ x: 0, y: 0 }, [c], HOMEP, undefined, () => false), null);
+}
+
 console.log("\n-- who is sent to go and look ------------------------------------------------");
 
 // WHO THE SCOUT IS (plus/index.ts `freeWorker`, via `onGoldDuty`). The spare worker first, then
