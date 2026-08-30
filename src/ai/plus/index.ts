@@ -255,19 +255,56 @@ const SCOUT_DANGER = 700;
  * scout LATCHES (`Brain.scoutDone` — nobody follows it), that one walk was the whole of what the
  * AI ever learnt about the map.
  *
- * Bigger than the creeps' own acquisition range (`MiscGame` AcquisitionRange is 500, and a guard
- * chases `GuardDistance` past it) so that passing outside this is passing outside their notice
- * rather than merely outside their reach. It also has to cover the ~1s between passes: this is
- * re-asked once per `armyPeriod` and a worker walks 190-350 of it in that time.
+ * Comfortably outside a creep's own acquisition range so that passing outside this is passing
+ * outside their notice rather than merely outside their reach. It also has to cover the gap
+ * between passes: a worker walks 95-175 of it in a `SCOUT_PERIOD`.
+ *
+ * This is the AMBITION, not the requirement — see `CREEP_PASS`, which is what a step is actually
+ * judged against. Every arc `safeLeg` draws is drawn for this number, and it settles for the
+ * other one only when this one is not available.
  *
  * Measured from EVERY LIVE CREEP, never from a camp's centre — see `ComputerPlusAi.safeStep`.
  */
 const CREEP_BERTH = 900;
+
+/**
+ * …AND HOW CLOSE IS ACTUALLY TOO CLOSE. The floor under `CREEP_BERTH`'s ambition, and the number
+ * the scout's decisions are really made on: it backs out of anything nearer than this, and it
+ * refuses a step that would bring it nearer than this.
+ *
+ * Separating the two is not a nicety — one number for both is what made the tour collapse.
+ * `safeLeg` hands back its BEST attempt rather than a guarantee, and "best" against a 900 berth
+ * is under 900 surprisingly often (a second camp beside the arc, a cliff on the roomy side).
+ * Treating every one of those as "do not move" meant the scout stood still, at which point the
+ * only thing that could happen to it was the stuck watchdog writing legs off eight seconds
+ * apart until the tour was gone — three legs, twenty-four seconds, and a computer that turned
+ * for home from the middle of the map having seen nothing. That is BOTH remaining reports at
+ * once: the Wisp that "stood still in the enemy base" was doing it beside the camp guarding
+ * their expansion, and the Acolyte that "came home half-way" was doing it beside the camp
+ * between the two bases. The Orc's route simply had no camp on it, which is why its scouting
+ * looked fine — none of this was ever a difference between the races.
+ *
+ * 750 is read off the game's own table. `SimWorld.acquireRange` gives a creep the map's placed
+ * `targetAcquisition` and otherwise its weapon's `acquire` (UnitWeapons.slk), and that column
+ * across the whole file is 500 on 510 rows, 600 on 142, 650 on 24 and 700 on 21 — everything
+ * above that is siege engines and towers rather than anything standing in a camp. So a step that
+ * keeps 750 is a step outside the notice of every creep a melee map's camps are built from,
+ * while still being a number an arc can usually achieve.
+ */
+const CREEP_PASS = 750;
+
 /** Extra margin thrown into a detour past what merely clearing the creep needs, so the arc is a
  *  walk round rather than a graze. Widened a step at a time — see `safeLeg`. */
 const CREEP_DETOUR = 450;
-/** How many widths of detour are tried, each side, before the best of them is taken. */
-const DETOUR_TRIES = 4;
+/** How many widths of detour are tried, each side, before the best of them is taken.
+ *
+ *  Six rather than four, so the widest arc considered is `berth - gap + 2700` instead of
+ *  `+ 1800`. It costs twelve clearance sums against a handful of points and it only changes
+ *  the answer in the cases that were failing: `safeLeg` returns at the FIRST width that clears,
+ *  so a camp it could already walk round is walked round exactly as narrowly as before. What it
+ *  buys is the camp that spans wide enough that a perpendicular throw at the blocker still
+ *  landed on a flank — which is the case that left the scout with no acceptable step at all. */
+const DETOUR_TRIES = 6;
 
 /** How near `p` comes to the SEGMENT `from`→`to` — the question "does this leg pass it". */
 function gapToLeg(
@@ -478,10 +515,18 @@ export function onGoldDuty(u: {
   return u.order === "harvest" && u.resKind === "gold";
 }
 
-/** How far PAST the berth a back-off aims, so the next pass is comfortably clear of the camp
- *  rather than balanced on its rim — where `safeLeg` would flip between seeing the creep and
- *  not seeing it (it drops creeps inside the berth from the detour) and the scout would jitter
- *  in and out instead of walking round. */
+/**
+ * How far a back-off aims PAST the bar it was triggered by.
+ *
+ * Enough to put the scout back outside `CREEP_BERTH` (750 + 200 = 950), which is the whole
+ * point of the manoeuvre: `safeLeg` drops creeps within the BERTH of where the scout stands
+ * from its detour, so a scout that stops balanced on that rim gets a route computed as though
+ * the camp beside it were not there. Walking out to where the arc can see it again is what
+ * turns the back-off into a step of a journey rather than a twitch.
+ *
+ * It is also the hysteresis between the two bars: back off under `CREEP_PASS`, return to beyond
+ * `CREEP_BERTH`, and there is no distance at which the scout wants to do both.
+ */
 const CREEP_BACKOFF = 200;
 
 /**
@@ -493,12 +538,16 @@ const CREEP_BACKOFF = 200;
  * notice is handed a step computed as though that camp were not there, and walks straight on
  * into it. This is the answer to that position, and it is the one a player gives: walk OUT.
  *
- * Away from the POOLED bearing of everything inside the berth rather than from the nearest one
- * — a scout standing between two creeps that alternated as "nearest" would alternate between
+ * Away from the POOLED bearing of everything inside the bar rather than from the nearest one —
+ * a scout standing between two creeps that alternated as "nearest" would alternate between
  * their two answers and go nowhere — and far enough out to clear the worst of them by
  * `CREEP_BACKOFF`. With creeps on every side the sum cancels and there is no "away" to name, so
  * it falls back to the bearing of `home`: not necessarily clear, but a direction, and standing
  * still is the one thing that is certainly wrong.
+ *
+ * The bar is `CREEP_PASS` and NOT `CREEP_BERTH`, which is the difference between a manoeuvre
+ * and a twitch: the berth is what an arc is drawn FOR, and treating every graze of it as an
+ * emergency would have the scout stepping out of routes it had just been given.
  *
  * Pure and exported for the same reason `scoutRing` is — what matters about it is that the
  * point it hands back is genuinely further from every creep than the point it was given.
@@ -507,7 +556,7 @@ export function backOffSpot(
   from: { x: number; y: number },
   creeps: ReadonlyArray<{ x: number; y: number }>,
   home: { x: number; y: number },
-  berth = CREEP_BERTH,
+  bar = CREEP_PASS,
 ): { x: number; y: number } | null {
   let ax = 0;
   let ay = 0;
@@ -516,8 +565,8 @@ export function backOffSpot(
     const dx = from.x - c.x;
     const dy = from.y - c.y;
     const d = Math.hypot(dx, dy);
-    if (d >= berth) continue;
-    need = Math.max(need, berth + CREEP_BACKOFF - d);
+    if (d >= bar) continue;
+    need = Math.max(need, bar + CREEP_BACKOFF - d);
     // A creep exactly underfoot has no bearing of its own to add; the pool carries the rest.
     if (d > 1) { ax += dx / d; ay += dy / d; }
   }
@@ -2010,21 +2059,29 @@ export class ComputerPlusAi {
     // tour still visits what it set out to visit); what is re-aimed is the step taken towards
     // it, which is re-asked every `SCOUT_PERIOD`, so the scout walks an arc round a camp rather
     // than a line into one.
-    const step = safeLeg(scout, goal, creeps);
-    // (3) …AND, ON THE WAY OUT, IT TAKES NO FOR AN ANSWER. `safeLeg` hands back the BEST leg it
-    // found, which is not always a SAFE one: a camp between us and the waypoint with no room to
-    // go round it still yields a step that walks inside its notice, and the scout took it —
-    // which is most of "it still aggroes creep camps sometimes". Being offered a step that is
-    // not clear is a reason not to take it. (1) has already guaranteed we are standing clear of
-    // everything, so this is only ever about the ground ahead.
+    //
+    // ASKED TWICE, and that is the fix for the two reports this routine was left with. `safeLeg`
+    // hands back its BEST attempt rather than a guarantee, and against a 900 berth "best" is
+    // under 900 surprisingly often — a second camp beside the arc, a cliff on the roomy side.
+    // Treating those as "no route" is what left the scout standing still, and standing still is
+    // the one position it cannot recover from (see (3)). So the wide arc is an AMBITION: when it
+    // does not come back clear, ask again for the clearance that actually matters
+    // (`CREEP_PASS`), which is a much easier arc to draw and is still outside the notice of
+    // every creep a melee camp is built from.
+    let step = safeLeg(scout, goal, creeps);
+    if (clearance(scout, step, creeps) < CREEP_PASS) step = safeLeg(scout, goal, creeps, CREEP_PASS);
+    // (3) …AND ONLY THEN, ON THE WAY OUT, DOES IT TAKE NO FOR AN ANSWER. A step that cannot even
+    // keep `CREEP_PASS` is a step into a camp's notice, and the scout does not take it. (1) has
+    // already put us clear of everything, so this is only ever about the ground ahead.
     //
     // IT WAITS; IT DOES NOT BURN THE LEG. Giving the leg up here is what made the tour
     // evaporate: nothing about the position changes when the scout stands still, so the very
     // next pass re-decided the same refusal for the NEXT leg, half a second later, and the
-    // whole itinerary was spent in about a second and a half — the scout turned for home
-    // before it had walked anywhere. ("The acolyte came home before reaching the enemy base",
-    // twice.) `SCOUT_STUCK_AFTER` is already the right answer to "this waypoint is not
-    // happening": eight seconds of no progress writes ONE leg off, at a rate a tour survives.
+    // whole itinerary was spent in about a second and a half. `SCOUT_STUCK_AFTER` is the right
+    // answer to "this waypoint is not happening": eight seconds of no progress writes ONE leg
+    // off, at a rate a tour survives. Even that is only tolerable because (2) makes reaching
+    // here rare — three legs written off eight seconds apart is still a scout that turned for
+    // home from the middle of the map having seen nothing, which is what was reported twice.
     //
     // THE WALK HOME IS EXEMPT, and it has to be. There is no next leg to fall through to and no
     // watchdog that can help — it writes off a waypoint, and the waypoint was never the problem
@@ -2032,7 +2089,7 @@ export class ComputerPlusAi {
     // froze in the middle of the map" report. Between walking past a camp and standing in the
     // open until the match ends, a player walks past the camp; (1) is what keeps that honest,
     // and the retreat rule above is already pointed at home if it costs a hit.
-    if (!b.scoutBack && clearance(scout, step, creeps) < CREEP_BERTH) return;
+    if (!b.scoutBack && clearance(scout, step, creeps) < CREEP_PASS) return;
     // (4) A STEP OF NOWHERE IS NOT AN ORDER. `standOff` clamps a goal that is itself inside a
     // creep's berth back to "do not move" (which is the honest answer for a leg whose whole
     // purpose was to approach that goal), and a camp parked near our own base makes it the

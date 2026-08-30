@@ -256,13 +256,19 @@ check("a creep at our feet does not cancel the detour round the next one",
 const HOMEP = { x: -3000, y: -3000 };
 function farther(spot, c) { return Math.hypot(spot.x - c.x, spot.y - c.y); }
 
-check("nothing inside the berth is nothing to walk out of",
+check("nothing inside the bar is nothing to walk out of",
   backOffSpot({ x: 0, y: 0 }, [{ x: 2000, y: 0 }], HOMEP), null);
+// The two bars are deliberately different numbers: it backs off under CREEP_PASS (750) and comes
+// out beyond CREEP_BERTH (900), which is the hysteresis that stops it stepping out of routes it
+// was just given — and is also what puts the camp back inside `safeLeg`'s own view, since that
+// drops creeps within the BERTH of where the scout stands from its detour.
+check("a graze of the berth is not an emergency",
+  backOffSpot({ x: 0, y: 0 }, [{ x: 800, y: 0 }], HOMEP), null);
 {
   const c = { x: 500, y: 0 };
   const out = backOffSpot({ x: 0, y: 0 }, [c], HOMEP);
   check("a creep 500 away is walked away from", out !== null, true);
-  check("…out past the berth, with room to spare", farther(out, c) >= 900 + 200 - 1, true);
+  check("…out past the BERTH, not merely past the bar it tripped", farther(out, c) >= 950 - 1, true);
   check("…and directly away from it, not round it", Math.round(out.y), 0);
 }
 {
@@ -288,6 +294,23 @@ check("nothing inside the berth is nothing to walk out of",
 }
 check("a creep stood exactly on us cannot produce a NaN",
   Number.isFinite(backOffSpot({ x: 0, y: 0 }, [{ x: 0, y: 0 }], HOMEP).x), true);
+
+// ASKED TWICE. `safeLeg` returns its BEST attempt rather than a guarantee, and against the wide
+// berth "best" is under the berth surprisingly often — so the scout asks again for the clearance
+// that actually matters (CREEP_PASS) rather than treating the wide arc's failure as "no route".
+// A corridor between two camps is the shape: too narrow to keep 900 from both, wide open at 750.
+{
+  // A picket rather than a lone camp, so that swinging wider is no answer either — 1600 apart,
+  // which leaves 800 of clearance at every gap in it and nowhere at all that keeps 900.
+  const PICKET = [-4000, -2400, -800, 800, 2400, 4000].map((y) => ({ x: 0, y }));
+  const worst = (leg) => Math.min(...PICKET.map((c) => nearest(leg, c)));
+  const wide = safeLeg(HOME, BASE, PICKET);        // 900: not available anywhere on the line
+  const pass = safeLeg(HOME, BASE, PICKET, 750);   // 750: straight through the middle gap
+  check("a picket 1600 apart cannot be crossed keeping 900", worst(wide) < 900, true);
+  check("…but asking for 750 crosses it", Math.round(pass.x), BASE.x);
+  check("…through the gap", Math.round(pass.y), 0);
+  check("…and that leg really does keep 750", worst(pass) >= 750, true);
+}
 
 console.log("\n-- who is sent to go and look ------------------------------------------------");
 

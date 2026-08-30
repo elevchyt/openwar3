@@ -249,8 +249,18 @@ dying on the way out:
   camp's centre. `CreepCamps` links guard posts up to `CAMP_LINK` (600) apart and hands back their
   *centroid* ([`minimapView.ts`](../src/game/minimapView.ts)), so a six-creep camp is a good 1200
   across: `CREEP_BERTH` (900) around the centre walked the scout **300** from the creep on the near
-  edge — inside `AcquisitionRange` (500), and one `CreepCallForHelp` shout from the whole camp.
-  Asked of each creep in turn, 900 is the berth the constant always claimed to be.
+  edge — inside acquisition range, and one `CreepCallForHelp` shout from the whole camp. Asked of
+  each creep in turn, 900 is the berth the constant always claimed to be.
+- **The berth is an AMBITION; `CREEP_PASS` (750) is the requirement.** This split is what the two
+  numbers are for, and collapsing them into one is what made the tour collapse with it. `safeLeg`
+  returns its *best attempt*, not a guarantee, and against 900 "best" comes back under 900
+  surprisingly often — a second camp beside the arc, a cliff on the roomy side. Every arc is still
+  drawn *for* 900; when that one is not available the route is asked for again at 750, which is a
+  far easier arc and is still outside the notice of every creep a melee camp is built from.
+  750 is read off the game's own table: `SimWorld.acquireRange` gives a creep the map's placed
+  `targetAcquisition` and otherwise its weapon's `acquire`, and that column across all of
+  `UnitWeapons.slk` is **500 on 510 rows, 600 on 142, 650 on 24 and 700 on 21** — everything above
+  is siege engines and towers, not camp creeps.
 - **A goal that is itself inside a camp is stood off**, not walked into (`standOff`). The old
   routine only ever looked at camps the line ran *past* — a camp beyond the goal was "not on the
   way" — and the tour's later legs are **gold mines**, every one of which a melee map guards. It
@@ -277,23 +287,31 @@ that camp were not there, and walks straight on into it. That is the Wisp that *
 camp and died while returning home"*, and it is not a walk-home bug — the same hole is on every
 leg. A player turns and walks **out**, and so does this: away from the **pooled** bearing of
 everything inside the berth (pooled rather than nearest, or a scout between two of them alternates
-between their two answers and goes nowhere), far enough to clear the worst by `CREEP_BACKOFF`, at
-which point `safeLeg` can see the camp again and arcs round it properly. Surrounded, the pool
+between their two answers and goes nowhere), far enough to clear the worst by `CREEP_BACKOFF` — out past
+`CREEP_BERTH`, at which point `safeLeg` can see the camp again and arcs round it properly. It
+triggers on `CREEP_PASS` and exits past `CREEP_BERTH`, and that gap is the hysteresis: a graze of
+the berth is not an emergency, or the scout would step out of routes it had just been given. Surrounded, the pool
 cancels and there is no *away* to name, so it takes the bearing of home: not necessarily clear,
 but a direction — standing still is the one thing that is certainly wrong.
 
-**And it takes no for an answer — by WAITING, not by burning the leg.** `safeLeg` hands back the
-*best* leg it found, which is not always a *safe* one: a camp between the scout and its waypoint
-with no room to go round still yields a step inside the camp's notice. Being offered a step that
-is not clear is a reason not to take it.
+**And only then does it take no for an answer — by WAITING, not by burning the leg.** A step that
+cannot keep even `CREEP_PASS` is a step into a camp's notice, and the scout does not take it.
 
 Giving the **leg** up there, which is what this did at first, made the whole tour evaporate.
 Nothing about the position changes when the scout stands still, so the very next pass re-decided
 the same refusal for the *next* leg half a second later, and the entire itinerary was spent in
-about a second and a half — the scout turned for home before it had walked anywhere. (Reported
-twice as *"the acolyte came home before reaching the enemy base"*.) `SCOUT_STUCK_AFTER` is
-already the right answer to *"this waypoint is not happening"*: eight seconds of no progress
-writes off **one** leg, at a rate a tour survives.
+about a second and a half. `SCOUT_STUCK_AFTER` is the right answer to *"this waypoint is not
+happening"*: eight seconds of no progress writes off **one** leg, at a rate a tour survives.
+
+Even eight seconds is only tolerable because the two-tier search above makes reaching here rare,
+and that is the lesson of the last round of reports. With one bar at 900, refusals were common,
+and a refused scout **stands still** — from which the only thing that can happen to it is the
+watchdog writing legs off eight seconds apart until the tour is gone. Three legs, twenty-four
+seconds, and a computer that turns for home from the middle of the map having seen nothing. That
+was *both* remaining reports at once: the Wisp *"standing still in the enemy base"* was doing it
+beside the camp guarding their expansion, and the Acolyte *"coming home half-way"* was doing it
+beside the camp between the two bases. The Orc's route simply had no camp on it, which is why its
+scouting looked fine — none of it was ever a difference between the races.
 
 **One scout, and nobody follows it.** `scoutDone` latches the moment the scout dies. This briefly
 allowed a second (*"a worker is 75 gold and the map is worth more than that"*) and the second
