@@ -201,7 +201,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   three Grunts are not three Archers. STARTING a fight and BREAKING OFF one are different bars,
   and the second is much lower (re-asking the first mid-fight aborts every run on the first
   scratch); the same rule serves creeps and players, and only "is the opposition still healthy"
-  is measured differently. The Scroll of Town Portal is spent leaving a PLAYER and never a creep
+  is measured differently. A THIRD bar is one SOLDIER's, not the army's: above Easy a unit under
+  `pullOutHp` (25 %) and standing in a fight is walked `PULL_BACK_DIST` behind the line and back
+  in later (`pullPass`), on a PER-UNIT cooldown — without that timer it see-saws in and out of
+  the battle instead of fighting in it — and a withdrawn CAPTAIN stops anchoring cohesion, or one
+  hurt hero drags the whole army home. The Scroll of Town Portal is spent leaving a PLAYER and never a creep
   camp. Its army also moves as ONE BODY anchored on the CAPTAIN — the first hero trained, then
   the second — and nothing leaves the muster point until four fifths of it is there, with a
   deadline, because a gate with no deadline locked the hero at home.
@@ -220,7 +224,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   two decisions that undo each other — and a difficulty grades the READ, not only the reaction:
   Easy aims by bulk (which is why its Storm Bolt lands on your Tauren), Insane prices what the
   spell is FOR. It also **does not chase heroes**: a healthy hero is worth barely more than a
-  soldier and the army will not walk after one it cannot finish. It DOES shop and drink
+  soldier and the army will not walk after one it cannot finish. And a single-target NUKE is
+  never spent on a WORKER it cannot finish (`nukeWorthIt`) — Frost Nova's share to the unit it
+  hits is 100 at every rank and no worker in the game has that little life — priced off the same
+  data columns the sim's own handlers read, and enforced at LEGALITY so the misclick cannot land
+  there either. It DOES shop and drink
   ([`plus/items.ts`](src/ai/plus/items.ts)), and the trap there is the one that broke almost the
   whole belt once: what a press is FOR is keyed on the ability's base **`code`**, never on
   `AbilityData.slk`'s `alias` — `AIh1` is `AIhe`, `AIm1` is `AIma`, and the Salve, both Clarity

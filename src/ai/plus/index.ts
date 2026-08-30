@@ -572,6 +572,109 @@ const PUSH_PROGRESS = 300;
 const REGROUP_PATIENCE = 45;
 
 /**
+ * THE WOUNDED WALK OUT OF THE FIGHT — how far back, how long for, and how long before the same
+ * unit may do it again (`PlusProfile.pullOutHp` is the bar that starts it, and 0 on Easy).
+ *
+ * This is micro at the level of ONE unit and it is a different decision from `retreatHp`, which
+ * is the whole army leaving: a wave that is winning still has a Grunt on its last quarter, and
+ * that Grunt is one blow from being 200 gold and 2 food spent on nothing. A player pulls it
+ * behind the line, lets the fight go on without it, and puts it back in.
+ *
+ * The distance is the developer's own ("around 800-1000 out of the fight"), measured from the
+ * ARMY's anchor rather than from the unit — see `pullBackSpot`, and note that "out of the
+ * fight" and "behind the owner's army" are the same point only when it is measured from there.
+ * A ranged soldier's acquisition is 500 and a caster's cast range 700-800, so 900 is out of
+ * everything that was about to land on it.
+ *
+ * `PULL_BACK_AGAIN` is the whole of "it must not go back and forth", and it is why this is a
+ * per-unit clock rather than a test on hit points: a unit released at 24 % health wants to be
+ * pulled again on the very next pass, and a rule with no memory is a unit that walks in and out
+ * of the line for the rest of the battle instead of fighting in it. Measured from when the pull
+ * STARTED, so the cooldown is the whole cycle rather than an extra wait bolted onto the hold.
+ */
+const PULL_BACK_DIST = 900;
+const PULL_BACK_HOLD = 10;
+const PULL_BACK_AGAIN = 45;
+/** …and how close to the spot counts as arrived, so a unit that has got there is not re-ordered
+ *  to it every pass. Wider than `RALLY_SLACK` for the same reason `GATHER_RADIUS` is: this is a
+ *  question about roughly where a unit ended up, not about a pixel. */
+const PULL_BACK_ARRIVE = 200;
+
+/**
+ * WHERE a unit pulled out of a fight goes: `PULL_BACK_DIST` behind the army, away from what is
+ * hitting it.
+ *
+ * Measured from the ARMY's own anchor (its captain, or its centre of mass) rather than from the
+ * unit's feet, which is what makes it "behind the owner's army" rather than merely "away from
+ * the enemy": a soldier that had run out in front walks all the way back past the line, and one
+ * that was already at the back does not walk twice as far as it needed to. It falls back to the
+ * unit's own position when there is no army left to stand behind, and to the anchor itself when
+ * the two points coincide and there is no direction to be had.
+ *
+ * Pure and exported for the same reason `safeLeg` and `pushStalled` are — the thing that
+ * actually matters about it (that the spot is on the FAR side of the army from the enemy, and
+ * that it is a screen away rather than a step) is then pinned by a test rather than by reading
+ * it (tools/ai-plus-army-test.cjs).
+ */
+export function pullBackSpot(
+  at: { x: number; y: number },
+  foe: { x: number; y: number },
+  anchor: { x: number; y: number } | null,
+): { x: number; y: number } {
+  const from = anchor ?? at;
+  let dx = from.x - foe.x;
+  let dy = from.y - foe.y;
+  let len = Math.hypot(dx, dy);
+  if (len < 1) {
+    // The anchor is standing on the enemy — back away along the unit's own line instead.
+    dx = at.x - foe.x;
+    dy = at.y - foe.y;
+    len = Math.hypot(dx, dy);
+  }
+  if (len < 1) return { x: from.x, y: from.y };
+  return { x: from.x + (dx / len) * PULL_BACK_DIST, y: from.y + (dy / len) * PULL_BACK_DIST };
+}
+
+/** One unit's pull-back clock: when it may come back, and when it may be pulled again. */
+export interface PullBack {
+  readonly x: number;
+  readonly y: number;
+  /** `clock` at which it rejoins the army. */
+  readonly until: number;
+  /** …and the earliest `clock` at which it may be pulled out a SECOND time. */
+  readonly next: number;
+}
+
+/** Is this unit currently OUT of the line? The one question `commit` and `squadFood` ask, so
+ *  that a withdrawn unit is neither ordered into the fight nor counted as part of the wave. */
+export const pulledOut = (entry: PullBack | undefined, clock: number): boolean =>
+  !!entry && clock < entry.until;
+
+/**
+ * Should this unit be walked out of the fight NOW?
+ *
+ * Four clauses and every one of them is load-bearing: the difficulty does this at all
+ * (`threshold` — 0 on Easy), the unit is actually hurt, it is not already out, and its own
+ * cooldown has expired. The last is the see-saw guard (`PULL_BACK_AGAIN`): without it a unit
+ * released at a hair under the bar is pulled again on the very next pass and spends the battle
+ * walking rather than fighting.
+ *
+ * Pure and exported so both directions are pinned by a test — and the FALSE one matters most,
+ * exactly as it does for `pushStalled`: an over-eager rule is an army that never fights.
+ */
+export function pullDue(
+  entry: PullBack | undefined,
+  hpFraction: number,
+  threshold: number,
+  clock: number,
+): boolean {
+  if (threshold <= 0) return false;
+  if (hpFraction >= threshold) return false;
+  if (!entry) return true;
+  return clock >= entry.until && clock >= entry.next;
+}
+
+/**
  * The stall watchdog itself, as arithmetic — see `PUSH_STUCK_AFTER` for what it is for.
  *
  * `w` is the wave's own memory of where it last made progress and when; it is written through,
@@ -708,6 +811,16 @@ interface Brain {
   push: { was: { x: number; y: number } | null; since: number };
   /** Camps this party gave up on, and when each may be offered again (`CAMP_SHUN`). */
   shunned: Array<{ x: number; y: number; until: number }>;
+  /**
+   * The wounded that have been walked OUT of the fight, by unit id — where each was sent, when
+   * it rejoins, and when it may be pulled again (`pullBack`, `PULL_BACK_AGAIN`).
+   *
+   * Empty at every rung that does not do this (`PlusProfile.pullOutHp` is 0 on Easy), and
+   * cleared outright whenever the whole army is going home or waiting at the rally point: a
+   * general retreat and a rally both supersede one soldier's errand, and a stale entry would
+   * hold that soldier out of the next wave.
+   */
+  readonly pulls: Map<number, PullBack>;
   /** Is the army mustering IN THE FIELD — on its captain, with another camp in front of it —
    *  rather than at home? Written by `muster` on every massing pass, and read by the errands
    *  that only make sense at home (the shop, `itemCtx.mayShop`). */
@@ -853,6 +966,7 @@ export class ComputerPlusAi {
       retreatSince: 0,
       push: { was: null, since: 0 },
       shunned: [],
+      pulls: new Map(),
       afield: false,
       target: null,
       reissueIn: 0,
@@ -1139,6 +1253,12 @@ export class ComputerPlusAi {
     // which is not healing, it is leaving. "When it returned to the base" is the whole
     // condition, and `massing` is what that is called here.
     if (b.mode === "massing" && !threatened) this.wellPass(b);
+    // THE WOUNDED WALK OUT OF THE FIGHT, one at a time — before anything is aimed, because who
+    // is in the line is what the aiming below is about. Above `defendPass` rather than inside a
+    // mode branch: a Grunt on its last quarter is worth pulling out of a fight in the enemy's
+    // base and out of one in its own, and `pullPass` reads the fight itself rather than the
+    // mode. Inert on Easy (`pullOutHp` 0).
+    this.pullPass(b);
     if (this.defendPass(b)) return;
     switch (b.mode) {
       case "defending": return void this.setMode(b, "massing"); // the threat is gone
@@ -2015,14 +2135,17 @@ export class ComputerPlusAi {
     // Cohesion holds a marching army together; it must NOT hold a defence back. Something is
     // standing in the base, everyone who can reach it should be swinging at it, and a Grunt
     // that is "ahead of the group" on the way home is a Grunt that got there first.
-    const centre = b.mode === "defending" ? null : (this.squadHero(b) ?? this.squadCentre(b));
+    const centre = b.mode === "defending" ? null : this.armyAnchor(b);
     for (const u of this.squadUnits(b)) {
       // A unit that is HEALING is not ordered anywhere. It is standing in the base with a Salve
       // on it or its head in a Moon Well, and marching it out is what makes the heal pointless.
       // Nor is one two steps from a drop it is walking to — the loot pass only ever sends a
       // hero somewhere nothing hostile is standing (plus/items.ts `loot`), so this cannot leave
       // one wandering into a fight.
-      if (this.recovering(u) || u.order === "getitem") continue;
+      // …and neither is one that has been WALKED OUT of the fight (`pullPass`). It is behind
+      // the line on its own clock, and an attack-move issued over the top of that is the whole
+      // army's order undoing one soldier's — which is how a pull-back becomes a see-saw.
+      if (this.recovering(u) || u.order === "getitem" || pulledOut(b.pulls.get(u.id), b.clock)) continue;
       // THE ARMY MOVES AS ONE BODY. A unit that has pulled AHEAD of the group waits for it
       // instead of walking on — see `COHESION_RADIUS`, and note the two conditions that make
       // this a regroup rather than a leash: it only ever holds back the units in FRONT (the
@@ -2187,7 +2310,13 @@ export class ComputerPlusAi {
    *  wave's objective, because "has it pulled away from us" is a question about the ARMY. */
   private squadCentre(b: Brain): { x: number; y: number } | null {
     let n = 0, sx = 0, sy = 0;
-    for (const u of this.squadUnits(b)) { if (u.isPeon) continue; sx += u.x; sy += u.y; n++; }
+    for (const u of this.squadUnits(b)) {
+      // The units still IN the line. One walked out of the fight (`pullPass`) is standing a
+      // screen behind it by design, and letting it drag the centre back is how one wounded
+      // Grunt re-aims the whole army at the ground behind itself.
+      if (u.isPeon || pulledOut(b.pulls.get(u.id), b.clock)) continue;
+      sx += u.x; sy += u.y; n++;
+    }
     return n ? { x: sx / n, y: sy / n } : null;
   }
 
@@ -2253,6 +2382,10 @@ export class ComputerPlusAi {
     b.push.was = null;
     b.push.since = b.clock;
     b.afield = false;
+    // A general retreat and a rally both SUPERSEDE one soldier's errand: both states issue a
+    // destination of their own for every unit in the squad, and a stale pull-back entry would
+    // either fight that order or hold the unit out of the wave that forms next.
+    if (mode === "massing" || mode === "retreating") b.pulls.clear();
   }
 
   /** Where the army waits: in front of the base, on the line to the enemy. */
@@ -2278,7 +2411,7 @@ export class ComputerPlusAi {
   private squadFood(b: Brain): number {
     let food = 0;
     for (const u of this.squadUnits(b)) {
-      if (this.recovering(u)) continue;
+      if (this.recovering(u) || pulledOut(b.pulls.get(u.id), b.clock)) continue;
       food += this.host.registry.get(u.typeId)?.foodUsed ?? 0;
     }
     return food;
@@ -2317,6 +2450,94 @@ export class ComputerPlusAi {
    * Any race may do this: `isReplenisher` is the sim's own question and an Obsidian Statue
    * answers to it as well as a Moon Well.
    */
+  /**
+   * MICRO: a unit on its last quarter is walked out of the fight, and put back in later.
+   *
+   * The single most visible thing a player does that a computer does not, and it is a decision
+   * about ONE unit rather than about the army — `retreatHp` is the wave giving up, this is a
+   * Grunt stepping back out of range while the wave goes on winning without it. A body kept is
+   * a body that fights in the NEXT engagement too, and the food it is standing in is food the
+   * production ceiling (`armyFood`) would otherwise not give back.
+   *
+   * Three gates, and each answers a different way of getting this wrong:
+   *
+   *  • **The difficulty does this at all.** `pullOutHp` is 0 on Easy — issue #124's easy
+   *    computer gives an order and watches it happen — so nothing here runs for it, and the map
+   *    is cleared so a rung that stops microing does not leave a soldier standing out of play.
+   *  • **It has to be IN a fight.** A hurt unit walking home across an empty map is not micro,
+   *    it is desertion: without this, every soldier that ever dropped below the bar would spend
+   *    the rest of the match at the back. `COHESION_COMBAT` is the same radius the cohesion rule
+   *    means "this unit is in the battle" by, and the two must agree — one says do not drag a
+   *    fighting unit back into formation, this one says drag exactly those out.
+   *  • **It must not see-saw.** `pullDue`'s cooldown is the developer's "some sort of internal
+   *    unit timer": a unit released at a hair under the bar wants pulling again immediately, and
+   *    a rule with no memory is a soldier that walks in and out of the line for the rest of the
+   *    battle instead of fighting in it.
+   *
+   * A general RETREAT supersedes all of it — `retreating` is already walking everybody home, and
+   * a second destination for the same unit is two orders undoing each other.
+   */
+  private pullPass(b: Brain): void {
+    if (b.profile.pullOutHp <= 0 || b.mode === "retreating") {
+      b.pulls.clear();
+      return;
+    }
+    // WHERE THE LINE IS. The same anchor `commit` holds the army together on — the captain when
+    // there is one — so "behind the army" means the same place to both rules. A captain that is
+    // itself out of the line does not count as one (see `armyAnchor`).
+    const anchor = this.armyAnchor(b);
+    for (const u of this.squadUnits(b)) {
+      const entry = b.pulls.get(u.id);
+      if (pulledOut(entry, b.clock)) {
+        // Already out: keep it walking there, and nothing else. A unit that arrived is left
+        // alone rather than re-ordered — a fresh move order restarts the path search, which is
+        // the same cost `commit` guards against.
+        if (entry && u.order !== "move" && Math.hypot(u.x - entry.x, u.y - entry.y) > PULL_BACK_ARRIVE) {
+          b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: entry.x, y: entry.y }, queued: false });
+        }
+        continue;
+      }
+      // A worker is not part of the line (the scout and the harvest crew are the economy's, and
+      // `recruit` keeps them out of the squad anyway), and a unit already being healed is
+      // standing still on purpose — walking it somewhere is what `recovering` exists to stop.
+      if (u.isPeon || this.recovering(u)) continue;
+      if (!pullDue(entry, u.hp / Math.max(1, u.maxHp), b.profile.pullOutHp, b.clock)) continue;
+      const foe = this.foeBeside(b, u, COHESION_COMBAT);
+      if (!foe) continue; // not in a fight — there is nothing to walk out of
+      const spot = pullBackSpot(u, foe, anchor);
+      b.pulls.set(u.id, { x: spot.x, y: spot.y, until: b.clock + PULL_BACK_HOLD, next: b.clock + PULL_BACK_AGAIN });
+      b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
+    }
+  }
+
+  /**
+   * WHERE THE ARMY IS — the captain, or the centre of mass of what is still in the line.
+   *
+   * "The army follows its hero" is the developer's own framing and a better anchor than a
+   * centroid for the reason a centroid always is (see `commit`), with one exception this pass
+   * created: a captain that has itself been pulled out of the fight is standing a screen behind
+   * the line, and anchoring on it there would walk the whole army back after it — turning one
+   * hurt hero into a general retreat nobody ordered. So a withdrawn captain is not one.
+   */
+  private armyAnchor(b: Brain): { x: number; y: number } | null {
+    const hero = this.squadHero(b);
+    if (hero && !pulledOut(b.pulls.get(hero.id), b.clock)) return hero;
+    return this.squadCentre(b);
+  }
+
+  /** The nearest hostile within `radius` of this unit — "what is it fighting", as a body rather
+   *  than as a yes/no. `enemyNear` is the same walk when only the answer is wanted. */
+  private foeBeside(b: Brain, u: SimUnit, radius: number): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestD = radius;
+    for (const t of this.host.world.units.values()) {
+      if (t.hp <= 0 || t.owner === b.ai.player || t.invulnerable || !b.ai.hostileTo(t)) continue;
+      const d = Math.hypot(t.x - u.x, t.y - u.y);
+      if (d < bestD) { bestD = d; best = t; }
+    }
+    return best;
+  }
+
   private wellPass(b: Brain): void {
     const wells: SimUnit[] = [];
     for (const u of this.host.world.units.values()) {
@@ -2577,6 +2798,7 @@ export class ComputerPlusAi {
       const u = this.host.world.units.get(id);
       if (u && u.hp > 0 && u.owner === b.ai.player) continue;
       b.squad.delete(id);
+      b.pulls.delete(id); // …and its pull-back clock dies with it
     }
   }
 

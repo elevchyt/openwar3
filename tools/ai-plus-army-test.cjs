@@ -31,7 +31,8 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const {
   canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
-const { safeLeg, pushStalled, isShunned } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { safeLeg, pushStalled, isShunned, pullBackSpot, pullDue, pulledOut } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -230,6 +231,51 @@ const ATFOOT = [{ x: -3000, y: 200 }, ON_THE_LINE];
 const away = safeLeg(HOME, BASE, ATFOOT);
 check("a creep at our feet does not cancel the detour round the next one",
   nearest(away, ON_THE_LINE) >= 900, true);
+
+console.log("\n-- the wounded walk out of the fight ------------------------------------------");
+
+// THE PULL-BACK (plus/index.ts `pullPass`). A unit on its last quarter steps out of the line,
+// stays out on a clock of its own, and goes back in — and the whole rule stands or falls on the
+// SECOND half of that: a soldier released at a hair under the bar wants pulling again on the
+// very next pass, and a rule with no memory is a unit that walks in and out of the battle
+// instead of fighting in it. None of these numbers are Warcraft III's (see the file header).
+
+// Easy does not do this at all — issue #124's easy computer gives an order and watches it happen.
+check("easy never pulls a unit out", pullDue(undefined, 0.05, PLUS_EASY.pullOutHp, 100), false);
+check("normal pulls one out at a quarter health", pullDue(undefined, 0.2, PLUS_NORMAL.pullOutHp, 100), true);
+check("insane too", pullDue(undefined, 0.2, PLUS_INSANE.pullOutHp, 100), true);
+check("…but not a unit that is merely scratched", pullDue(undefined, 0.5, PLUS_NORMAL.pullOutHp, 100), false);
+
+// The see-saw guard, end to end: pulled at t=100, out until 110, and not pullable again until
+// 145 however hurt it is when it rejoins.
+const entry = { x: 0, y: 0, until: 110, next: 145 };
+check("while it is out, it is OUT (commit and squadFood skip it)", pulledOut(entry, 105), true);
+check("…and it rejoins when the hold expires", pulledOut(entry, 111), false);
+check("it is not pulled again the instant it rejoins", pullDue(entry, 0.1, 0.25, 111), false);
+check("…nor while it is still out", pullDue(entry, 0.1, 0.25, 105), false);
+check("…and it may be, once its own cooldown is up", pullDue(entry, 0.1, 0.25, 146), true);
+
+// WHERE it goes: behind the army, away from what is hitting it — and a screen away rather than
+// a step ("around 800-1000", the developer's own distance).
+const ENEMY = { x: 1000, y: 0 };
+const LINE = { x: 0, y: 0 };      // the army's anchor, standing in the fight
+const AHEAD = { x: 300, y: 0 };   // …and the wounded soldier, out in front of it
+const back = pullBackSpot(AHEAD, ENEMY, LINE);
+check("the spot is on the far side of the army from the enemy", back.x < LINE.x, true);
+check("…a screen behind it", Math.round(Math.hypot(back.x - LINE.x, back.y - LINE.y)), 900);
+check("…which is further still from the enemy", Math.round(Math.hypot(back.x - ENEMY.x, back.y - ENEMY.y)), 1900);
+
+// Measured from the ARMY rather than from the unit's feet: a straggler already at the back does
+// not walk another nine hundred units, and one out in front walks all the way past the line.
+const BEHIND = { x: -800, y: 0 };
+check("a unit already behind the line is sent to the same spot as one in front of it",
+  Math.round(pullBackSpot(BEHIND, ENEMY, LINE).x), Math.round(back.x));
+
+// …and with no army left to stand behind, it backs off its own line instead.
+const alone = pullBackSpot(AHEAD, ENEMY, null);
+check("with no army, it backs away from the enemy on its own line", Math.round(alone.x), -600);
+check("a degenerate anchor cannot produce a NaN destination",
+  Number.isFinite(pullBackSpot(ENEMY, ENEMY, ENEMY).x), true);
 
 console.log(failed ? `\n${failed} FAILED\n` : "\nall ok\n");
 process.exit(failed ? 1 : 0);

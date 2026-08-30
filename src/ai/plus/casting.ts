@@ -165,6 +165,89 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
   ],
 };
 
+/**
+ * WHAT A NUKE TAKES OFF ONE BODY the instant it lands, by base ability code.
+ *
+ * Only the single-target ones are here, because this exists for exactly one question and that
+ * question is only ever asked of a unit-target cast (`pickTarget` → `nukeWorthIt`): *may this
+ * spell be spent on a WORKER?* A line or area nuke is aimed at a SPOT and priced by the sum of
+ * what its circle catches (`pickSpot`), where a peon is one more body in the pile and no waste
+ * at all — a Blizzard dropped on six Peasants is the play, not the mistake.
+ *
+ * The columns are the ones the sim's own handlers read (src/sim/spells.ts), and they have to be:
+ * what this asks is "will the blow that is about to land finish it", so the two must agree about
+ * the size of that blow or the promise is not the sim's. The defaults beside them are the same
+ * defaults, and the per-rank numbers quoted are 1.30.4's `Units\AbilityData.slk`. Two entries that look
+ * wrong and are not: Frost Nova's damage to the unit it is AIMED at is `DataB` (`DataA` is what
+ * everyone else in the ring takes), and Shadow Strike's `DataE` is the only part that lands at
+ * once — `DataA` is a dot spread over fifteen seconds and cannot finish anything now.
+ *
+ * A unit-target nuke that is NOT here scores 0 and is therefore never spent on a worker, which
+ * is the right way round for a rule phrased as "unless it can finish it": Soul Burn, Life Drain
+ * and Acid Bomb are all damage over time and none of them removes a body from the fight this
+ * second, and an ability a later patch or a custom map adds is not something to guess about.
+ */
+const NUKE_BURST: Record<string, (lvl: AbilityLevel) => number> = {
+  AUdc: (l) => dat(l, 0, 100), // Death Coil — DataA (200/400/600)
+  // Frost Nova — DataB, the share the unit the missile HITS takes, and it is 100 at all three
+  // ranks (the scaling DataA 50/100/150 is the ring around it). Which is why this spell is the
+  // developer's own example: it never grows into finishing a worker, at any rank.
+  AUfn: (l) => dat(l, 1, 100),
+  AOcl: (l) => dat(l, 0, 85),  // Chain Lightning — DataA, before the per-jump falloff (85/125/180)
+  ANfl: (l) => dat(l, 0, 85),  // Forked Lightning — DataA per unit the fan catches (85/160/250)
+  ANfd: (l) => dat(l, 2, 500), // Finger of Death — DataC (500, flat across its ranks)
+  AEsh: (l) => dat(l, 4, 75),  // Shadow Strike — DataE, the impact (75/150/225)
+  // Transmute takes the body outright, whatever is left of it: the handler's only conditions
+  // are that the victim is not a hero and not a building, and `castError` has already asked
+  // both. So it FINISHES a worker by definition — and turning a Peasant into gold is one of
+  // the few things a nuke aimed at a worker is unambiguously worth doing.
+  ANtm: () => Infinity,
+};
+
+/** One of `AbilityLevel.data`'s nine columns, or the sim's own default for it. The columns are
+ *  NaN when the row does not set them, exactly as `emptyAbilityLevel` leaves them. */
+function dat(lvl: AbilityLevel, i: number, fallback: number): number {
+  const v = lvl.data[i];
+  return Number.isFinite(v) ? v : fallback;
+}
+
+/** What this nuke takes off the unit it is aimed at, right now. 0 for anything unpriced — see
+ *  `NUKE_BURST` for why that is the safe direction. */
+export function nukeBurst(code: string, lvl: AbilityLevel): number {
+  return NUKE_BURST[code]?.(lvl) ?? 0;
+}
+
+/**
+ * MAY THIS NUKE BE SPENT ON THIS TARGET? The workers rule, and it is only ever about workers.
+ *
+ * *"The AI must not use nuke spells like Death Coil and Frost Nova on worker units if it cannot
+ * instakill them with that spell"* — the developer's own words, and the arithmetic behind them
+ * is the same one a player does without thinking. A worker is the cheapest body on the map
+ * (`WORKER` is 0.4 on the shared ladder, plus/targeting.ts) and a nuke is a hero's mana and a
+ * cooldown. The game's own numbers say the rest: a Peasant has 220 hit points, an Acolyte 230, a
+ * Peon 250, and even a Wisp 120 (`UnitBalance.slk`), while Frost Nova's share to the unit it hits
+ * is 100 at EVERY rank and Death Coil's is 200 at rank 1. So both of them buy a hurt worker that
+ * walks back to the mine — a cast, a cooldown and a minute of regeneration spent on nothing.
+ * Kill it and the trade is the other way round.
+ *
+ * Everything else is untouched: this says nothing about a soldier, a caster or a hero, and
+ * nothing about the area nukes (see `NUKE_BURST`). It is applied at LEGALITY rather than as a
+ * penalty on the score so that the misclick (`castMistake`) cannot land there either — a
+ * "mistake" that spends the same mana on the same peon is not sloppiness, it is the bug wearing
+ * a different hat.
+ *
+ * The damage is compared against the target's CURRENT hit points and not against a fraction of
+ * them: what a nuke buys is a body removed, and armour is not in the sum because untyped spell
+ * damage does not pay it (`SimWorld`'s `spellDamage` goes straight to `landDamage`). What it
+ * DOES pay is magic reduction, and a magic-immune target takes nothing at all — both are read
+ * off the unit here for the same reason, so this cannot promise a kill the sim will not deliver.
+ */
+export function nukeWorthIt(code: string, lvl: AbilityLevel, t: SimUnit): boolean {
+  if (!t.isPeon) return true;
+  if (t.magicImmune) return false;
+  return nukeBurst(code, lvl) * (1 - t.magicReduction) >= t.hp;
+}
+
 /** code → role, flattened once. */
 const ROLE_OF = new Map<string, Role>(
   (Object.entries(ROLES) as Array<[Role, readonly string[]]>).flatMap(([role, codes]) => codes.map((c) => [c, role] as const)),
@@ -545,6 +628,9 @@ export class PlusCaster {
       if (t.building && !friendly) continue;
       if (!near(u, t, lvl.castRange)) continue;
       if (role === "heal" && t.hp / Math.max(1, t.maxHp) > HURT) continue;
+      // A NUKE IS NOT SPENT ON A WORKER IT CANNOT FINISH — see `nukeWorthIt`. Here rather than
+      // in the score so the misclick below cannot land on one either.
+      if (role === "nuke" && !nukeWorthIt(code, lvl, t)) continue;
       if (!buffFree(t, lvl)) continue;
       if (this.view.world.castError(u.id, code, t.id) !== null) continue;
       legal.push(t);

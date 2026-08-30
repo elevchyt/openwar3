@@ -175,6 +175,7 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | **first creep camp** | **never** | 2½ min | 1½ min |
 | army food that makes a creeping party | — | 10 | 8 |
 | retreats a broken army | **no** | at 35 % | at 40 % |
+| **walks a wounded unit out of the fight** | **no** | at 25 % | at 25 % |
 | focus-fires / creeps / raids workers | no / no / no | no / yes / no | yes / yes / yes |
 | belt slots it shops for | **0** | 3 | 6 |
 | gold it keeps back from the shop | — | 300 | 200 |
@@ -795,6 +796,48 @@ This is a Computer+ rule only. `src/ai/casting.ts` and `src/ai/index.ts` are a t
 Blizzard's AI, warts included (`docs/melee-ai.md`), and this is one of the warts — fixing it
 there would be un-fixing the port.
 
+### A nuke is never spent on a worker it cannot finish
+
+Reported from a real game and stated in the developer's own words: *"the AI must not use nuke
+spells like Death Coil and Frost Nova on worker units if it cannot instakill them with that
+spell (as wasting two Frost Novas on a peon would be a huge waste of mana)."*
+
+The arithmetic is one a player does without thinking, and the game's own numbers make it stark.
+A Peasant has 220 hit points, an Acolyte 230, a Peon 250 and even a Wisp 120
+(`UnitBalance.slk`); Death Coil's `DataA` is 200 at rank 1 and **Frost Nova's `DataB` — the share
+the unit the missile hits takes — is 100 at every one of its three ranks** (the scaling 50/100/150
+in `DataA` is the ring around it). So neither spell finishes a healthy worker of any race, at any
+rank, and what a cast buys is a hurt peon that walks back to the mine while the caster stands
+there with no mana and a cooldown.
+
+`nukeWorthIt` ([`plus/casting.ts`](../src/ai/plus/casting.ts)) is the whole rule and it is
+deliberately narrow:
+
+* **Only workers.** It says nothing about a soldier, a caster or a hero — those are the ladder's
+  business (`plus/targeting.ts`), which already prefers what a nuke can finish at `expert`.
+* **Only single-target casts.** An area or line nuke is aimed at a *spot* and priced by the sum of
+  what its circle catches (`pickSpot`), where a peon is one more body in the pile and no waste at
+  all: a Blizzard dropped on six Peasants is the play, not the mistake.
+* **At LEGALITY, not in the score.** It drops the target out of `pickTarget`'s legal pool, so the
+  misclick (`castMistake`) cannot land there either — a "mistake" that spends the same mana on the
+  same peon is not sloppiness, it is the bug wearing a different hat.
+* **At every difficulty.** This is not a skill a player acquires; it is one nobody ever lacked.
+
+`NUKE_BURST` prices the burst off **the same columns the sim's own handlers read**
+(`src/sim/spells.ts`), and it has to: the question is *will the blow that is about to land finish
+it*, so the two must agree about the size of that blow. Two entries look wrong and are not —
+Frost Nova's is `DataB` (`DataA` is the ring), and Shadow Strike's is `DataE`, because its `DataA`
+is a dot spread over fifteen seconds and cannot finish anything *now*. **Transmute** is the one
+entry that is `Infinity`: it takes any non-hero body outright, so turning a Peasant into gold is
+one of the few things a nuke aimed at a worker is unambiguously worth doing.
+
+Anything not in that table scores 0 and is therefore never spent on a worker, which is the right
+way round for a rule phrased as *unless it can finish it* — Soul Burn, Life Drain and Acid Bomb
+are damage over time and remove nothing from the fight this second, and an ability a later patch
+or a custom map adds is not something to guess about. Magic immunity and `magicReduction` are
+netted off exactly as `SimWorld.spellDamage` nets them, so the rule cannot promise a kill the sim
+will not deliver.
+
 ### Items: buying them, and pressing them
 
 Computer+ shops and drinks. It lives in [`plus/items.ts`](../src/ai/plus/items.ts), separately
@@ -924,6 +967,57 @@ waits. And there is one button on a BUILDING which is very human: **Call to Arms
 Human town bell, and it is already rung by [`plus/casting.ts`](../src/ai/plus/casting.ts)
 `townBell` — the answer to "something is in my base and my army is somewhere else", and never on
 Easy.
+
+### The wounded walk out of the fight, and go back in
+
+The one piece of micro a player picks up long before they learn to focus a target, and the one
+this AI had no notion of at all: a Grunt on its last quarter is **one blow** from being 200 gold
+and 2 food spent on nothing, and it is standing in the line taking that blow. `pullPass`
+([`plus/index.ts`](../src/ai/plus/index.ts)) walks it out, holds it there, and lets it back in.
+
+It is **not** `retreatHp`, and the difference is the whole point. `retreatHp` is the *army* giving
+up on a fight; this is one soldier stepping back out of range while the fight goes on winning
+without it. The two are independent and both run.
+
+| | what it is | why that number |
+| --- | --- | --- |
+| `PlusProfile.pullOutHp` | 0.25, and **0 on Easy** | the developer's bar. Easy gives an order and watches it happen |
+| `PULL_BACK_DIST` | 900 | the developer's "around 800-1000". A ranged soldier acquires at 500 and a caster casts at 700–800, so it is out of everything that was about to land |
+| `PULL_BACK_HOLD` | 10 s | how long it stays out |
+| `PULL_BACK_AGAIN` | 45 s | **the see-saw guard** — from when the pull *started*, so the cooldown is the whole cycle |
+
+Three gates, and each one answers a different way of getting this wrong:
+
+* **The difficulty does this at all.** `pullOutHp` 0 on Easy, and the map is cleared as well as
+  read, so a rung that does not micro never leaves a soldier standing out of play.
+* **It has to be IN a fight.** A hurt unit walking home across an empty map is not micro, it is
+  desertion — without this every soldier that ever dropped below the bar would spend the rest of
+  the match at the back. The radius is `COHESION_COMBAT` (500), which is the same radius the
+  cohesion rule means "this unit is in the battle" by; the two say opposite things about the same
+  unit on purpose (*do not drag a fighting unit back into formation* / *drag exactly those out*)
+  and they must not disagree about which units they are talking about.
+* **It must not see-saw.** `PULL_BACK_AGAIN` is the developer's "some sort of internal unit
+  timer". A unit released at a hair under the bar wants pulling again on the very next pass, and a
+  rule with no memory is a soldier that walks in and out of the line for the rest of the battle
+  instead of fighting in it. `pullDue` is pure and both directions are pinned by
+  `tools/ai-plus-army-test.cjs` — the FALSE one matters most, as it always does here.
+
+**Where it goes is measured from the ARMY, not from the unit's feet** (`pullBackSpot`, also pure
+and pinned). That is what makes it *behind the owner's army* rather than merely *away from the
+enemy*: a soldier that had run out in front walks all the way back past the line, and one already
+at the back does not walk another nine hundred units for nothing.
+
+Two consequences that are not obvious from the rule and each of which is a bug if missed:
+
+* **A withdrawn captain is not an anchor.** `commit` holds the army together on its hero
+  (`armyAnchor`), so a hero pulled out of the fight would drag the whole army back after it —
+  turning one hurt hero into a general retreat nobody ordered. A withdrawn hero falls through to
+  the centre of mass, and the centre of mass itself only counts the units still in the line.
+* **A general retreat supersedes it.** `retreating` is already walking everybody home and
+  `massing` is already walking everybody to the rally, so both clear the map outright: a second
+  destination for the same unit is two orders undoing each other, and a stale entry would hold
+  that soldier out of the next wave (it does not count toward `squadFood` while it is out, for the
+  same reason a healing one does not).
 
 ### The wounded, and where they heal
 

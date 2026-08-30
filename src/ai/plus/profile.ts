@@ -162,6 +162,24 @@ export interface PlusProfile {
   readonly retreatHp: number;
   /** Does the whole group pick ONE target and kill it? The clearest "this AI micros" tell. */
   readonly focusFire: boolean;
+  /**
+   * Hit-point fraction at which a unit standing in a fight is WALKED OUT of it. 0 = it never
+   * is, which is Easy — and that is the whole of what the bottom rung gives up here.
+   *
+   * The other half of "this AI micros", and the half a player notices first: a Grunt on its
+   * last quarter is one blow from being 200 gold spent on nothing, and pulling it behind the
+   * line keeps the body — and the food it is standing in — in the game. It is a decision about
+   * ONE unit, unlike `retreatHp`, which is the whole army leaving; the two are independent and
+   * a wave that is winning still walks its wounded out one at a time.
+   *
+   * The threshold is the same at both rungs that have it, because "a quarter of my hit points"
+   * is not a thing a better player knows more precisely — what a better player does is NOTICE
+   * sooner, and that is `armyPeriod` (1.5 s against 0.5 s) rather than a second number here.
+   *
+   * See `PULL_BACK_DIST` / `PULL_BACK_HOLD` / `PULL_BACK_AGAIN` in plus/index.ts for how far
+   * out, how long for, and the cooldown that stops the unit see-sawing in and out of the line.
+   */
+  readonly pullOutHp: number;
   /** Does it go and level its hero on creep camps? */
   readonly creeps: boolean;
   /**
@@ -265,7 +283,9 @@ export const PLUS_EASY: PlusProfile = {
   // booleans are the switch. They are still stated rather than left to a default, because a
   // profile that only half-describes a difficulty is how one of them ends up playing another's
   // game by accident.
-  focusFire: false, creeps: false, creepAt: Infinity, creepFood: Infinity,
+  // …and it does NOT micro its wounded out of a fight — issue #124's Easy is a player who
+  // gives an order and then watches it happen. `pullOutHp` 0 is that in one number.
+  focusFire: false, pullOutHp: 0, creeps: false, creepAt: Infinity, creepFood: Infinity,
   harass: false, scout: false,
   shopping: 0, itemReserve: Infinity, keepPortal: false,
   concedeAfter: 35,
@@ -303,7 +323,9 @@ export const PLUS_NORMAL: PlusProfile = {
   firstAttack: 300, waveGap: 90, attackFood: 14, retreatHp: 0.35,
   // Creeps from two and a half minutes with the hero and ten food behind it — about a hero, a
   // couple of soldiers and whatever else is standing around, which is what clears a green camp.
-  focusFire: false, creeps: true, creepAt: 150, creepFood: 10,
+  // It does not focus-fire, but it DOES pull a soldier out of the line at a quarter health —
+  // the one piece of micro a player picks up long before they learn to focus a target.
+  focusFire: false, pullOutHp: 0.25, creeps: true, creepAt: 150, creepFood: 10,
   harass: false, scout: true,
   // Half a belt, and it keeps 300 gold back for the build order. It DOES keep a Town Portal and
   // replace it: a scroll is the difference between losing a fight and losing an army, and a
@@ -336,7 +358,7 @@ export const PLUS_INSANE: PlusProfile = {
   firstAttack: 150, waveGap: 30, attackFood: 16, retreatHp: 0.4,
   // Creeping starts at ninety seconds with the hero and eight food — the ladder's own answer,
   // which is "as soon as the hero walks out of the altar".
-  focusFire: true, creeps: true, creepAt: 90, creepFood: 8,
+  focusFire: true, pullOutHp: 0.25, creeps: true, creepAt: 90, creepFood: 8,
   harass: true, scout: true,
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been
   // here before from one who has not.
