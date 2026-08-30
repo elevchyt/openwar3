@@ -27,7 +27,7 @@ import {
   UPG_ORC_ARMOR, UPG_ORC_BERSERKER, UPG_ORC_ENSNARE, UPG_ORC_MELEE, UPG_ORC_PULVERIZE,
   UPG_ORC_RANGED, UPG_ORC_SHAMAN, UPG_ORC_SPIKES, UPG_ORC_WAR_DRUMS, UPG_PRAYING, UPG_RANGED,
   UPG_SORCERY, UPG_STR_MOON, UPG_STR_WILD, UPG_UNHOLY_ARMOR, UPG_UNHOLY_STR, UPG_WOOD,
-  UNDEAD_ALTAR, VAMP_AURA, VENGEANCE, VOODOO, WAR_STOMP, WARDEN, WATCH_TOWER, WATER_ELEMENTAL,
+  UNDEAD_ALTAR, UNDEAD_MINE, VAMP_AURA, VENGEANCE, VOODOO, WAR_STOMP, WARDEN, WATCH_TOWER, WATER_ELEMENTAL,
   WIND_WALK, WISP,
   WITCH_DOCTOR, WORKSHOP, WYVERN, ZIGGURAT_1, ZIGGURAT_2,
 } from "../ids";
@@ -168,6 +168,23 @@ export interface PlusRaceTable {
    *  Guard Tower and an undead Spirit Tower are both upgrades of something already standing). */
   readonly tower: string;
   readonly towerUpgrade?: string;
+  /**
+   * The building this race raises ON a gold mine to make it a mine at all — the undead's
+   * **Haunted Gold Mine** (`ugol`), and nobody else's anything.
+   *
+   * The one row without which an undead expansion is a Necropolis standing beside a rock.
+   * Three races walk into the shaft and need nothing but a depot in haul range; the undead's
+   * Acolytes kneel in a RING that does not exist until the mine is haunted — `issueGoldWork`
+   * refuses a gold order outright while `hauntedMine` is null ([Errors] `Blightminefirst` =
+   * "Must haunt gold mine first.", docs/undead.md). So a second town whose hall went up and
+   * whose mine was never haunted crews nobody, earns nothing, and reads to every gate above
+   * it (`townHasHall`, `minesOwned`) as a working expansion.
+   *
+   * The night elf's equivalent is NOT here and must not be: an Entangled Gold Mine is what
+   * the `Aent` CAST creates rather than something a worker builds, and it is issued from the
+   * library layer both AIs share (`AiPlayer.entangleMines`, docs/night-elf.md).
+   */
+  readonly mineBuilding?: string;
   /**
    * The unit that CHOPS, when this race's worker cannot — the undead's Ghoul, and nobody
    * else's anything.
@@ -392,6 +409,8 @@ const UNDEAD: PlusRaceTable = {
   race: "undead",
   worker: ACOLYTE,
   halls: [NECROPOLIS_1, NECROPOLIS_2, NECROPOLIS_3],
+  // …and the building that makes a mine a mine for this race alone — see `mineBuilding`.
+  mineBuilding: UNDEAD_MINE,
   farm: ZIGGURAT_1,
   // `uaod` Altar of Darkness — NOT `utod`, the Temple of the Damned, which is the CASTER
   // building (Necromancers and Banshees) and is what this row used to name. The two read alike

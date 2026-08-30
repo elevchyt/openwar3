@@ -1090,6 +1090,47 @@ const CONTACT_ENGAGE = 0.9;
  */
 const MARCH_DIRECT = 900;
 const MARCH_STEP = 200;
+
+/**
+ * IS THE PARTY MARCHING — walking to somewhere, rather than arriving at it?
+ *
+ * The question `commit` asks to decide between a plain MOVE and an attack-move, and it is the
+ * answer to "some army units are distracted by creep camps and they stop following their
+ * captain". A `move` order does not auto-acquire (the sim runs `tickAttackMove` for an
+ * attack-move and nothing of the sort for a move), so a column under one cannot be reached into
+ * by a camp beside the road — and a soldier a camp has ALREADY taken is put back on the march by
+ * the same order. It is also what a player does: you A-move when you arrive, not while you walk.
+ *
+ * Three clauses, each a way of saying "there is nothing here worth stopping for", and the third
+ * arrives as a parameter because it is the only one that has to look at the world:
+ *
+ *  · not while DEFENDING or RETREATING. A defence is a fight by definition, and a retreat walks
+ *    already (`retreating` issues its own moves); neither has a march to protect.
+ *  · not once the objective is CLOSE. `MARCH_DIRECT` is the same "practically there" bound
+ *    `marchAim` stops detouring at, so the two rules change over on the same line: outside it
+ *    the army is walking a leg, inside it the army has arrived and what is in front of it is
+ *    what it came for.
+ *  · not while a PLAYER's army is in reach (`ComputerPlusAi.armyInReach`, measured on
+ *    `CONTACT_LOOK` from the same anchor `contactPass` uses). This is the one thing a column
+ *    must not walk past — an opponent's soldiers chase, they reinforce, and they are the reason
+ *    the wave is out at all. Creeps are deliberately NOT in it: they stand where they stand,
+ *    they leash home, and they are the whole reason this rule exists.
+ *
+ * Pure and exported for the same reason `safeLeg` and `pullDue` are: an over-eager version of
+ * this is an army that walks through the fight it was sent to, so both directions are pinned by
+ * a test rather than by reading it (tools/ai-plus-army-test.cjs).
+ */
+export function marching(
+  mode: Mode,
+  anchor: { x: number; y: number } | null,
+  x: number,
+  y: number,
+  armyInReach = false,
+): boolean {
+  if (!anchor || mode === "defending" || mode === "retreating") return false;
+  if (Math.hypot(x - anchor.x, y - anchor.y) <= MARCH_DIRECT) return false;
+  return !armyInReach;
+}
 /**
  * How long the army may fail to move while a detour is in force before the net is switched off,
  * and for how long — and `MARCH_STUCK` has to be well UNDER the two watchdogs that would
@@ -1334,7 +1375,7 @@ const REPLENISH_CODE = "Ambt";
 const STATUE_LIFE = "Arpl";
 const STATUE_MANA = "Arpm";
 
-type Mode = "massing" | "attacking" | "retreating" | "defending";
+export type Mode = "massing" | "attacking" | "retreating" | "defending";
 
 interface Brain {
   readonly ai: AiPlayer;
@@ -2703,9 +2744,11 @@ export class ComputerPlusAi {
       // army — they stand where they stand — and `knows` is what keeps this on our side of the
       // fog, exactly as `scoutEnemy` is.
       if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
-      if (!b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
-      if (isCopy(u)) continue; // a picture of an army is not one (docs/illusions.md)
+      // How far off, before who — see `enemyNear`. `knows` is a fog-grid lookup and `hostileTo`
+      // an alliance one, and this walks every unit in the world on every army pass.
       if (Math.hypot(u.x - anchor.x, u.y - anchor.y) > CONTACT_LOOK) continue;
+      if (isCopy(u)) continue; // a picture of an army is not one (docs/illusions.md)
+      if (!b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
       foes.push(u);
       cx += u.x;
       cy += u.y;
@@ -3472,6 +3515,9 @@ export class ComputerPlusAi {
     // only while a detour is actually in force: a party standing still on the straight line is
     // `stalled`/`freezePass`'s business and switching detours off would not help it.
     const anchor0 = centre ?? this.squadCentre(b);
+    // IS THIS A MARCH OR A FIGHT? See `marching` — a march is walked, not fought. The world
+    // scan behind the third clause is only run when the first two have already passed.
+    const travelling = !!anchor0 && marching(b.mode, anchor0, x, y) && !this.armyInReach(b, anchor0);
     if (!anchor0 || (mx === x && my === y) || this.fighting(b)) {
       b.leg.was = null;
     } else if (!b.leg.was || Math.hypot(anchor0.x - b.leg.was.x, anchor0.y - b.leg.was.y) > MARCH_PROGRESS) {
@@ -3552,6 +3598,28 @@ export class ComputerPlusAi {
         b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: to.x, y: to.y }, queued: false });
         continue;
       }
+      // THE MARCH IS A WALK. While the party is travelling (`travelling`) every member gets a
+      // plain MOVE, and that single word is the whole of the fix: a `move` order does not
+      // auto-acquire (SimWorld's order switch runs `tickAttackMove` for an attack-move and
+      // nothing of the sort for a move), so a camp beside the road cannot reach into the
+      // column and take a soldier out of it — and one it has ALREADY taken is put back on the
+      // march, because the order replaces the `attack` it was holding. Reported: "some army
+      // units are distracted by creep camps and they stop following their captain."
+      //
+      // It is also what a player does. `marchAim` already walks the party AROUND the camps in
+      // the way; attack-moving along that detour asks the army to fight the very thing the
+      // detour was drawn to avoid, and the units at the outside of the column are the ones
+      // near enough to answer. What the AI loses by walking instead is the free hits on
+      // whatever it passes, which is exactly what it should be giving up to arrive as one body.
+      if (travelling) {
+        // Already walking to about there: leave it. A move order RESTARTS the path search,
+        // which is the cost `REISSUE_SLACK` exists for on the attack-move below, and the end of
+        // the current path IS a plain move's destination.
+        const end = u.order === "move" && u.path.length ? u.path[u.path.length - 1] : null;
+        if (end && Math.hypot(end[0] - mx, end[1] - my) <= REISSUE_SLACK) continue;
+        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: mx, y: my }, queued: false });
+        continue;
+      }
       if (focus && !u.isPeon) {
         if (u.order === "attack" && u.targetId === focus.id) continue;
         b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: focus.id }, queued: false });
@@ -3626,9 +3694,10 @@ export class ComputerPlusAi {
     let bestD = SWAP_LOOK;
     let fallback: SimUnit | null = null;
     for (const t of this.host.world.units.values()) {
-      if (t.hp <= 0 || t.isHero || t.invulnerable || !b.ai.hostileTo(t)) continue;
+      if (t.hp <= 0 || t.isHero || t.invulnerable) continue;
       const d = Math.hypot(t.x - u.x, t.y - u.y);
-      if (d > SWAP_LOOK) continue;
+      if (d > SWAP_LOOK) continue; // …before the alliance lookup — see `enemyNear`
+      if (!b.ai.hostileTo(t)) continue;
       if (t.building) {
         if (!fallback) fallback = t;
         continue;
@@ -3661,10 +3730,11 @@ export class ComputerPlusAi {
     // valuable AND close", which is not what the ladder says.
     let bestScore = -Infinity;
     for (const u of this.host.world.units.values()) {
-      if (u.hp <= 0 || u.owner === b.ai.player || !b.ai.hostileTo(u)) continue;
+      if (u.hp <= 0 || u.owner === b.ai.player) continue;
       if (u.building || u.invulnerable) continue;
       const d = Math.hypot(u.x - x, u.y - y);
-      if (d > CLEARED_RADIUS) continue;
+      if (d > CLEARED_RADIUS) continue; // …before the alliance lookup — see `enemyNear`
+      if (!b.ai.hostileTo(u)) continue;
       if (u.isHero && !heroKillable(u) && centre && Math.hypot(u.x - centre.x, u.y - centre.y) > HERO_CHASE) continue;
       const s = killValue(u, ctx) * 1000 - d;
       if (s > bestScore) { bestScore = s; best = u; }
@@ -3734,6 +3804,22 @@ export class ComputerPlusAi {
     if (Math.hypot(u.x - x, u.y - y) >= Math.hypot(centre.x - x, centre.y - y)) return release();
     b.waiting.add(u.id);
     return "wait";
+  }
+
+  /** `marching`'s third clause, asked of the world: is a PLAYER's soldier standing within
+   *  `CONTACT_LOOK` of the anchor? The same filter `contactPass` uses — a creep is not an army,
+   *  and neither is a picture of one (docs/illusions.md) — stopping at the first body found. */
+  private armyInReach(b: Brain, anchor: { x: number; y: number }): boolean {
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.building || u.isPeon || u.owner === b.ai.player) continue;
+      const dx = u.x - anchor.x;
+      const dy = u.y - anchor.y;
+      if (dx * dx + dy * dy > CONTACT_LOOK * CONTACT_LOOK) continue;
+      if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
+      if (isCopy(u) || !b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -4081,9 +4167,12 @@ export class ComputerPlusAi {
     let best: SimUnit | null = null;
     let bestD = radius;
     for (const t of this.host.world.units.values()) {
-      if (t.hp <= 0 || t.owner === b.ai.player || t.invulnerable || !b.ai.hostileTo(t)) continue;
+      if (t.hp <= 0 || t.owner === b.ai.player || t.invulnerable) continue;
       const d = Math.hypot(t.x - u.x, t.y - u.y);
-      if (d < bestD) { bestD = d; best = t; }
+      if (d >= bestD) continue; // …before the alliance lookup — see `enemyNear`
+      if (!b.ai.hostileTo(t)) continue;
+      bestD = d;
+      best = t;
     }
     return best;
   }
@@ -4277,9 +4366,17 @@ export class ComputerPlusAi {
   }
 
   private enemyNear(b: Brain, x: number, y: number, radius: number): boolean {
+    const r2 = radius * radius;
     for (const u of this.host.world.units.values()) {
-      if (u.hp <= 0 || u.owner === b.ai.player || !b.ai.hostileTo(u)) continue;
-      if (Math.hypot(u.x - x, u.y - y) <= radius) return true;
+      if (u.hp <= 0 || u.owner === b.ai.player) continue;
+      // WHERE IT IS STANDING BEFORE WHO IT IS. `hostileTo` is an alliance lookup and this walks
+      // every unit in the world; the clauses are ANDed, so testing the cheap one first cannot
+      // change the answer. Same rule the sim's own scans follow (`SimWorld.distSkip`).
+      const dx = u.x - x;
+      const dy = u.y - y;
+      if (dx * dx + dy * dy > r2) continue;
+      if (!b.ai.hostileTo(u)) continue;
+      return true;
     }
     return false;
   }
@@ -4326,8 +4423,10 @@ export class ComputerPlusAi {
    */
   private isInvader(b: Brain, u: SimUnit): boolean {
     if (u.hp <= 0 || u.owner === b.ai.player || u.building || u.isPeon) return false;
-    if (!b.ai.hostileTo(u)) return false;
+    // How far off it is, before who it is — see `enemyNear`. Both are pure and both must hold,
+    // so the order decides only how much of the world pays for an alliance lookup.
     if (this.townDistance(b, u) > TOWN_RADIUS) return false;
+    if (!b.ai.hostileTo(u)) return false;
     if (!u.isCreep && u.owner >= 0 && u.owner < MELEE.MAX_PLAYERS) return true;
     // A creep (or a neutral-hostile guard): only while it is fighting one of ours.
     const target = u.targetId ? this.host.world.units.get(u.targetId) : null;

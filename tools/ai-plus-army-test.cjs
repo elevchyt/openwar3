@@ -31,7 +31,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const {
   canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
-const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut, marching } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -460,6 +460,35 @@ const alone = pullBackSpot(AHEAD, ENEMY, null);
 check("with no army, it backs away from the enemy on its own line", Math.round(alone.x), -600);
 check("a degenerate anchor cannot produce a NaN destination",
   Number.isFinite(pullBackSpot(ENEMY, ENEMY, ENEMY).x), true);
+
+// ==========================================================================================
+// A MARCH IS WALKED, NOT FOUGHT — `marching`.
+//
+// Reported: "some army units are distracted by creep camps and they stop following their
+// captain." A column under an attack-move fights whatever its outside rank can reach, which on
+// a melee map is every camp the road runs past — so while the party is travelling it moves
+// instead, and only attack-moves once it is there. What has to be pinned is BOTH directions:
+// an over-eager version of this is an army that walks straight through the fight it was sent to.
+// ==========================================================================================
+{
+  const HERE = { x: 0, y: 0 };
+  const FAR = { x: 4000, y: 0 };
+  const NEAR = { x: 800, y: 0 }; // inside MARCH_DIRECT (900) — practically there
+
+  check("a long leg is a march", marching("attacking", HERE, FAR.x, FAR.y), true);
+  check("…and so is the walk to a creep camp", marching("massing", HERE, FAR.x, FAR.y), true);
+  // The changeover is `MARCH_DIRECT`, the same bound `marchAim` stops detouring at.
+  check("arriving is not", marching("attacking", HERE, NEAR.x, NEAR.y), false);
+  check("…and neither is standing on the objective", marching("attacking", HERE, 0, 0), false);
+  // A defence is a fight by definition, and a retreat already walks under its own orders.
+  check("a base under attack is never a march", marching("defending", HERE, FAR.x, FAR.y), false);
+  check("…nor is a retreat", marching("retreating", HERE, FAR.x, FAR.y), false);
+  // THE ONE THING A COLUMN MUST NOT WALK PAST. Creeps are not in this — they stand where they
+  // stand and they leash home — but a player's army chases, reinforces, and is why the wave is out.
+  check("an enemy ARMY in reach ends the march", marching("attacking", HERE, FAR.x, FAR.y, true), false);
+  // …and with no army at all there is nothing to anchor a march on.
+  check("no anchor, no march", marching("attacking", null, FAR.x, FAR.y), false);
+}
 
 console.log(failed ? `\n${failed} FAILED\n` : "\nall ok\n");
 process.exit(failed ? 1 : 0);

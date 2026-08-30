@@ -505,6 +505,9 @@ export class PlusItems {
   private lastLoot = -Infinity;
   /** …and when the belt was last looked over for duplicates worth pawning — see `pawn`. */
   private lastPawn = -Infinity;
+  /** Has a Scroll of Town Portal ever been in this player's belt? Latched true and never
+   *  cleared — spending one does not stop being a player who carries one. See `list`. */
+  private hadPortal = false;
 
   constructor(
     private readonly view: ItemView,
@@ -1115,13 +1118,29 @@ export class PlusItems {
     // Is the build order visibly failing to spend this? Then shop like it — deeper rows and a
     // fuller belt (see `RICH` and `SURPLUS`). Asked once, here, so the two halves cannot
     // disagree about which hero is doing the shopping and what it is allowed to buy.
+    // THE LATCH — see `list`. Asked here because the answer is a fact about the belt and this
+    // is where the belt is about to be shopped for; it can only ever go from false to true.
+    if (!this.hadPortal && this.carried(own, PORTAL.id) > 0) this.hadPortal = true;
     const rich = this.view.gold() - this.profile.itemReserve >= SURPLUS;
-    const hero = this.shopper(own, rich);
-    if (!hero) return void (this.onErrand = 0);
+    // WHAT to buy is decided before WHO fetches it, and that order is load-bearing rather than
+    // tidy: the answer decides which ceiling the shopper is held to (see below). `pick` reads
+    // nothing about the hero, so asking it first costs nothing.
+    //
     // The whole purse, not the surplus: `pick` applies `itemReserve` per ROW, because the
     // race's opening buys are not discretionary spending — see `Want.opening`.
     const buy = this.pick(own, this.view.gold(), ctx, rich);
     if (!buy) return void (this.onErrand = 0); // nothing left worth walking for
+    // A REPLACEMENT SCROLL IS NOT SHOPPING, and `PlusProfile.shopping` must not stop it.
+    //
+    // That number is a HABIT — how much of a belt this player bothers to fill — and it is
+    // counted against everything the hero is holding, drops included. Three slots on Normal is
+    // reached by two potions and one thing picked up off a creep, at which point the hero
+    // stopped shopping for the rest of the match while the one item that decides how a lost
+    // fight ends sat unbought at the shop it walked past. A player who keeps a Town Portal
+    // replaces it whatever else is in the belt; a free SLOT is the only thing that can stop
+    // them, and `shopper` still asks for one.
+    const hero = this.shopper(own, rich, buy.itemId === PORTAL.id);
+    if (!hero) return void (this.onErrand = 0);
     if (this.view.world.shopReaches(buy.shopId, hero.id)) {
       this.onErrand = 0; // arrived — the army may have it back
       this.view.order({ c: "buyitem", shopId: buy.shopId, itemId: buy.itemId });
@@ -1214,7 +1233,7 @@ export class PlusItems {
    *  Attack had "three items" and stopped shopping for the rest of the match, with the gold
    *  still in the bank. `rich` lifts it to the six slots the hero actually has: a player with
    *  money spare fills the belt, whatever is already in it. */
-  private shopper(own: SimUnit[], rich: boolean): SimUnit | null {
+  private shopper(own: SimUnit[], rich: boolean, essential = false): SimUnit | null {
     let best: SimUnit | null = null;
     for (const u of own) {
       if (!u.isHero || !u.inventory.length || u.isIllusion) continue;
@@ -1223,7 +1242,8 @@ export class PlusItems {
       // argue about the same hero for the rest of the match. Same rule `pawn` and `loot` follow.
       if (u.order === "getitem") continue;
       if (u.inventory.indexOf(null) < 0) continue; // belt full
-      const cap = rich ? u.inventory.length : this.profile.shopping;
+      // …and the habit ceiling, which an ESSENTIAL buy is exempt from — see `shop`.
+      const cap = rich || essential ? u.inventory.length : this.profile.shopping;
       if (u.inventory.filter((h) => h !== null).length >= cap) continue;
       if (!best || u.level > best.level) best = u;
     }
@@ -1278,7 +1298,27 @@ export class PlusItems {
     const first = (RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }));
     const seen = new Set(first.map((w) => w.id));
     const rest = LIST.filter((w) => !seen.has(w.id));
-    const core = this.profile.keepPortal ? [...first, PORTAL, ...rest] : [...first, ...rest, PORTAL];
+    // WHERE THE PORTAL SITS DEPENDS ON WHETHER THIS PLAYER HAS EVER HAD ONE.
+    //
+    // Two rules that both have a match behind them, and they are about different halves of it:
+    //
+    //  · the OPENING is the race's. `RACE_FIRST` leads, for the reason it gives — the orc's two
+    //    Healing Salves are what put the army back together between the first creep camps, and
+    //    a row the three-slot belt never reaches is a row that does not exist.
+    //  · a REPLACEMENT is not shopping, it is the first thing on the list. Reported: the hero
+    //    used its scroll and never bought another. `RACE_FIRST`'s rows re-satisfy themselves
+    //    every time they are drunk — a salve is 100 gold against the scroll's 350 — so behind
+    //    them the portal row was reached only in the gaps, and on Normal the belt filled up
+    //    before it ever was (see `shop` for the ceiling that closed the last of it).
+    //
+    // `hadPortal` is the latch between the two, and it says exactly what it means: this player
+    // is one that PLANS around carrying a scroll, which is `keepPortal`'s own words, and is
+    // only demonstrably true once one has been in the belt.
+    const core = this.profile.keepPortal && this.hadPortal
+      ? [PORTAL, ...first, ...rest]
+      : this.profile.keepPortal
+        ? [...first, PORTAL, ...rest]
+        : [...first, ...rest, PORTAL];
     if (!rich) return core;
     // The surplus rows go on the END, never in front: they are the same items wanted DEEPER
     // (`RICH`), so reaching them at all means every row above is already satisfied. The race's

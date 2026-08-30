@@ -279,6 +279,9 @@ export function buildPlan(c: PlusCtx): void {
   // as well, because an expansion whose hall died is a town with a mine and no hall.)
   ai.meleeTownHall(0, table.halls[0]);
   ai.meleeTownHall(1, table.halls[0]);
+  // …and, for the one race whose mine is a BUILDING, the mine itself. Beside the hall rows
+  // because it is the same row for the undead — see `mineBuildings`.
+  mineBuildings(c);
 
   // THE GOLD CREW before anything else — see `mineCrew`. Everything that pays for the rest of
   // this list comes out of a mine, so a dead miner is replaced ahead of a hero, a soldier and a
@@ -896,6 +899,44 @@ function expand(c: PlusCtx): void {
   const needed = ai.goldOwned() < EXPAND_GOLD;
   if (clock < planned && !needed) return;
   ai.basicExpansion(true, table.halls[0]);
+}
+
+/**
+ * HAUNT THE MINE — the undead's expansion, and the row without which it is not one.
+ *
+ * `PlusRaceTable.mineBuilding` is set for exactly one race and the rest of this function is
+ * inert for the other three. An undead expansion is not the Necropolis: it is the **Haunted
+ * Gold Mine** raised on the rock (`ugol`, docs/undead.md), and until it stands the town has no
+ * ring for an Acolyte to kneel in — `SimWorld.issueGoldWork` refuses the gold order outright
+ * ([Errors] `Blightminefirst` = "Must haunt gold mine first."). So a Computer+ undead that
+ * expanded put up a hall, sent five Acolytes, and earned nothing at that town for the rest of
+ * the match; and because `townHasHall` counts the Necropolis as a depot, `minesOwned` read the
+ * dead town as a working one and no later pass ever revisited it.
+ *
+ * The classic AI has always done this — `undead.ai`'s `undead_mine(townid)` is one line per
+ * town — and this is the same rule stated per town, without its `c_gold < 1000` clause: that
+ * clause is about not spending 240 gold you would rather put into an army, and a town with no
+ * income at all is not a saving.
+ *
+ * Where it sits in the ladder is the point. Beside `meleeTownHall` at the very top, because it
+ * is the same kind of row: the thing that makes a town a town. Whichever of the two finishes
+ * first satisfies `townHasHall` and retires the other — which is authentic either way, since
+ * an undead expansion in a real game is quite often the haunted mine and a Ziggurat with no
+ * Necropolis over it at all.
+ *
+ * Counted with `townCountTown` rather than `townCountDone`, so a mine already being haunted is
+ * not asked for a second time every pass; and placement is the library's, which knows a
+ * mine-standing building goes on the mine and nowhere else (`AiPlayer.siteFor`).
+ */
+function mineBuildings(c: PlusCtx): void {
+  const { ai, table } = c;
+  const id = table.mineBuilding;
+  if (!id) return;
+  for (let t = 0; t < ai.townCountTotal(); t++) {
+    if (!ai.townHasMine(t)) continue;
+    if (ai.townCountTown(id, t) >= 1) continue; // already haunted, or a haunting under way
+    ai.secondaryTown(t, 1, id);
+  }
 }
 
 /** Is everything this row needs actually STANDING? See rule 1 at the top of the file. */

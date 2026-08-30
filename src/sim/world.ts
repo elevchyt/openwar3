@@ -1938,6 +1938,7 @@ const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its lead
 const FOLLOW_LEASH = 48;
 const FOLLOW_SLOT_ARRIVE = 24; // how close a fanned follower parks to its formation slot
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
+
 // How far an idle unit will look to JOIN a fight a friend is already in (issue #24). It
 // wider than a unit's own acquisition range (~500) so a back-rank unit rallies to a
 // nearby melee instead of standing idle a few paces behind it, but bounded so an idle
@@ -2449,6 +2450,37 @@ export interface AttackReveal {
   team: number; // the side that gets to see it — the one that was hit
   flying: boolean;
   timeLeft: number;
+}
+
+/**
+ * "Is this pair too far apart to be the answer?" — the cheap first question every
+ * whole-world target scan asks (`nearestEnemy`, `acquireTarget`, `bestCreepTarget`).
+ *
+ * Those scans all measure a hull-to-hull `gap` (`distance − both radii`) and reject on it, and
+ * they all used to reach that test only after `hostile` — an alliance-matrix lookup — had
+ * already been paid for every unit in the world. Every unit runs one of these scans twice a
+ * second, so at a few hundred units it is six figures of matrix lookups a second to answer a
+ * question the coordinates settle for free.
+ *
+ * Stated as the EXACT form of the test it replaces rather than as an approximation, so nothing
+ * downstream changes: `gap ≥ bound ⟺ d ≥ bound + rA + rB`, squared on both sides so there is no
+ * square root — and a negative reach means no distance at all can satisfy it (`d` is never
+ * negative), which is the one case squaring would get backwards. `strict` picks between the
+ * two forms the callers use: `gap ≥ bound` (a narrowing best-so-far) and `gap > bound` (a
+ * fixed range).
+ */
+function distSkip(
+  a: { x: number; y: number; radius: number },
+  b: { x: number; y: number; radius: number },
+  bound: number,
+  strict = false,
+): boolean {
+  const reach = bound + a.radius + b.radius;
+  if (reach < 0) return true;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const d2 = dx * dx + dy * dy;
+  return strict ? d2 > reach * reach : d2 >= reach * reach;
 }
 
 export class SimWorld {
@@ -9460,18 +9492,28 @@ export class SimWorld {
         // aside. The friendly and sideless cases do not, because the extra gates targetError
         // adds are all about a CAST — a corpse, invulnerability, "already at full health" —
         // and none of them is a question a fountain asks of the ground it wets.
-        const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
-        const hostileAura = F.has("enemy") && !F.has("friend");
-        const alliedAura = F.has("friend") && !F.has("enemy");
+        // …asked ONCE per ability rather than once per source per step. It is a property of
+        // the ability's own `targs1` column and cannot change during a match, and this loop
+        // runs at the full sim rate over every unit in the world — a fresh Set and a
+        // lower-cased copy of the flag list per aura per step is pure garbage.
+        const { hostileAura, alliedAura } = this.auraSide(ab.id, def.targetFlags);
+        const r2 = radius * radius;
         for (const t of this.units.values()) {
           if (t.building || t.hp <= 0) continue;
+          // IN RANGE FIRST. `targetError`/`targetAllowed` walk a flag list and ask half a dozen
+          // questions about the unit; being inside the circle is two subtractions and a
+          // multiply, it is required for every one of these clauses to matter, and an aura's
+          // circle holds a handful of the world's units. Same rule as `distSkip`, and — as
+          // there — reordering pure predicates cannot change who gets the buff.
+          const dx = t.x - src.x;
+          const dy = t.y - src.y;
+          if (dx * dx + dy * dy > r2) continue;
           if (hostileAura) {
             if (!this.hostile(src, t) || this.targetError(src, t, def.targetFlags, ab.code) !== null) continue;
           } else {
             if (alliedAura && t.team !== src.team) continue;
             if (this.targetAllowed(src, t, def.targetFlags) !== null) continue;
           }
-          if (Math.hypot(t.x - src.x, t.y - src.y) > radius) continue;
           const ranged = !!t.weapon?.ranged;
           for (const e of effects) {
             if (e.rangedOnly && !ranged) continue; // Trueshot only helps ranged units
@@ -9487,6 +9529,21 @@ export class SimWorld {
         }
       }
     }
+  }
+
+  /** WHICH SIDE each aura ability lands on, memoised by ability id — see `applyAuras` for the
+   *  three answers and why "neither" is one of them. Keyed on the id because the answer is the
+   *  ability's `targs1` column, which is fixed for the whole match. */
+  private readonly auraSides = new Map<string, { hostileAura: boolean; alliedAura: boolean }>();
+
+  private auraSide(abilityId: string, targetFlags: readonly string[]): { hostileAura: boolean; alliedAura: boolean } {
+    let side = this.auraSides.get(abilityId);
+    if (!side) {
+      const F = new Set(targetFlags.map((f) => f.toLowerCase()));
+      side = { hostileAura: F.has("enemy") && !F.has("friend"), alliedAura: F.has("friend") && !F.has("enemy") };
+      this.auraSides.set(abilityId, side);
+    }
+    return side;
   }
 
   /** Everything on a unit that could be broadcasting an AURA: the abilities it has learned,
@@ -13201,12 +13258,27 @@ export class SimWorld {
     return true;
   }
 
-  /** Nearest hostile within `range` (gap measured hull-to-hull), or null. */
+  /**
+   * Nearest hostile within `range` (gap measured hull-to-hull), or null.
+   *
+   * **DISTANCE IS TESTED FIRST, and that is a performance rule rather than a semantic one.**
+   * Every clause in here is a pure predicate and they are ANDed, so their order cannot change
+   * which unit comes back — only how much work is done to find it. This scan (and the three
+   * beside it) walks EVERY unit in the world, and it is run by every unit in the world twice a
+   * second: at a few hundred units that is six figures of pair tests a second, and `hostile`
+   * is the dearest of them (two neutral-passive reads and an alliance-matrix lookup through
+   * `playerPassive`). The overwhelming majority of those pairs are simply far apart, and the
+   * cheapest thing that can be said about a pair is where they are standing.
+   *
+   * `distSkip` is the exact form of `gap >= bestGap`, without the square root — see there.
+   */
   private nearestEnemy(u: SimUnit, range: number, needSight = false): SimUnit | null {
     let best: SimUnit | null = null;
     let bestGap = range;
     for (const t of this.units.values()) {
-      if (t === u || !this.hostile(u, t)) continue;
+      if (t === u) continue;
+      if (distSkip(u, t, bestGap)) continue;
+      if (!this.hostile(u, t)) continue;
       // Untouchable is not a target — the same line `acquireTarget` keeps, and it has to be
       // kept HERE too or the attack-move that reads this loops: tickAttackMove drops an
       // invulnerable target, zeroes its scan timer because it just lost one, and is handed the
@@ -13215,11 +13287,9 @@ export class SimWorld {
       // creep uses (wake, go-home) want the same answer: a unit nothing in the camp can hurt
       // is not a reason to get up.
       if (t.invulnerable) continue;
-      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap >= bestGap) continue;
       if (!this.canAttack(u, t)) continue; // nothing in hand that can hit it (air/ground/structure)
       if (needSight && !this.canSee(u, t)) continue;
-      bestGap = gap;
+      bestGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       best = t;
     }
     return best;
@@ -13333,11 +13403,15 @@ export class SimWorld {
     let bestTier = -1;
     let bestGap = Infinity;
     for (const t of this.units.values()) {
-      if (t === u || !this.hostile(u, t)) continue;
-      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap > range) continue;
+      if (t === u) continue;
+      // `gap > range` skips, so the bound is `range` itself and it never shrinks — the tier
+      // ordering below means this scan cannot narrow as it goes. Same rule as `nearestEnemy`:
+      // the distance is what is cheap to know.
+      if (distSkip(u, t, range, true)) continue;
+      if (!this.hostile(u, t)) continue;
       if (!this.canAttack(u, t)) continue; // a ground-only creep ignores the flyer overhead
       if (!this.canSee(u, t)) continue; // a creep aggroes only what it can see (issue #45)
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       const tier = this.threatTier(t);
       if (tier > bestTier || (tier === bestTier && gap < bestGap)) {
         bestTier = tier;
@@ -17154,14 +17228,14 @@ export class SimWorld {
     let best: SimUnit | null = null;
     let bestGap = range;
     for (const t of this.units.values()) {
-      if (t === u || !this.hostile(u, t)) continue;
+      if (t === u) continue;
+      if (distSkip(u, t, bestGap)) continue; // the cheapest thing there is to know — see nearestEnemy
+      if (!this.hostile(u, t)) continue;
       if (t.invulnerable) continue; // invulnerable enemies (goblin merchant, gold mine, Divine Shield, …) aren't attackable (issue #26)
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't wake an idle creep camp
-      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap >= bestGap) continue;
       if (!this.canAttack(u, t)) continue; // a Footman never turns on the Gryphon overhead
       if (!this.canSee(u, t)) continue; // out of sight (fog, night, or a treeline) → don't aggro
-      bestGap = gap;
+      bestGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       best = t;
     }
     return best;

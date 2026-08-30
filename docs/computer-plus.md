@@ -756,6 +756,30 @@ Two rules, one at each end of the walk:
   the whole army at home, hero included ("the AI is moving the hero to its base and locking it
   there instead of going out to creep"). `GATHER_PATIENCE` is twelve seconds, after which it
   leaves with what came.
+- **A MARCH IS WALKED, NOT FOUGHT.** Reported: *"some army units are distracted by creep camps
+  and they stop following their captain."* Cohesion cannot answer that one, and deliberately
+  refuses to: a unit with an enemy inside `COHESION_COMBAT` is *in a fight*, and every rule above
+  leaves it there. The lure is the ORDER rather than the cohesion — a column under an attack-move
+  fights whatever its outside rank can reach, which on a melee map is every camp the road runs
+  past, and `marchAim` walking the party *around* a camp then asks the army to attack-move along
+  a detour drawn to avoid that very camp.
+
+  So while the party is **travelling** (`marching`) every member gets a plain `move`, and that
+  single word is the whole of it: a move order does not auto-acquire — the sim runs
+  `tickAttackMove` for an attack-move and nothing of the sort for a move — so a camp cannot reach
+  into the column, and a soldier one has already taken is put back on the march by the same
+  order. It is what a player does: you A-move when you arrive, not while you walk.
+
+  Three clauses say when a walk is a walk, and the third is the one that keeps this from being an
+  army that strolls through its own battles: not while **defending or retreating** (a defence is
+  a fight by definition, and a retreat already walks under its own orders); not once the
+  objective is inside **`MARCH_DIRECT`** (900 — the same "practically there" bound `marchAim`
+  stops detouring at, so the two rules change over on the same line); and not while a **player's
+  army** is within `CONTACT_LOOK` of the anchor, measured with `contactPass`'s own filter. Creeps
+  are pointedly not in that last one — they stand where they stand and they leash home — and that
+  is the entire point. What the AI gives up is the free hits on whatever it walks past, which is
+  exactly what it should be trading for arriving as one body. Both directions are pinned in
+  `tools/ai-plus-army-test.cjs`.
 
 ### Engage, or go home — but never walk past an army
 
@@ -1268,6 +1292,38 @@ about a Wisp inside an Entangled Gold Mine, since its whole crew is cargo and sh
 order at all). Lumberjacks and idle workers are still fair game — they are not income that is
 already flowing, and walking one over is exactly what a player does while the hall goes up. It
 holds for all four races.
+
+### …and an UNDEAD expansion is the MINE, not the Necropolis
+
+Reported: *"when undead is expanding, it doesn't use its acolyte to turn the gold mine into a
+haunted gold mine, rendering the expansion useless."* It did exactly that, and the town it
+founded earned nothing for the rest of the match.
+
+The undead is the one race whose expansion is not a hall beside a rock. Its Acolytes kneel in a
+**ring** that does not exist until the mine is haunted — `SimWorld.issueGoldWork` refuses a gold
+order outright while `hauntedMine` is null (`[Errors] Blightminefirst` = *"Must haunt gold mine
+first."*, [`undead.md`](undead.md)) — so a Necropolis on its own is a building, not an economy.
+Worse, it *looks* like one from above: `AiPlayer.townHasHall` counts any depot in range, so
+`minesOwned` read the dead town as a working mine and `expand`'s own cap then stopped the AI
+taking another.
+
+`PlusRaceTable.mineBuilding` names the building (`ugol`, and nobody else has one), and
+`plan.ts`'s **`mineBuildings`** asks for it at every town that holds a mine and has not got one.
+Three things about it are the decision rather than the plumbing:
+
+* it sits **beside `meleeTownHall` at the very top of the ladder**, because it is the same kind
+  of row — the thing that makes a town a town. Whichever of the two finishes first satisfies
+  `townHasHall` and retires the other, which is authentic either way: an undead expansion in a
+  real game is quite often the haunted mine and a Ziggurat with no Necropolis over it;
+* it is counted with `townCountTown`, so a haunting already under way is not asked for twice;
+* **the night elf is deliberately not in it.** An Entangled Gold Mine is what the `Aent` CAST
+  creates, not something a worker builds, and it is issued from the library layer both AIs share
+  (`AiPlayer.entangleMines`, [`night-elf.md`](night-elf.md)). A `mineBuilding` row for the elf
+  would be a build order asking for a unit id that no worker can found.
+
+The classic AI has always done this — `undead.ai`'s `undead_mine(townid)` is one line per town —
+so what was missing here was the row, not the idea. Placement is the library's and already knew:
+`AiPlayer.siteFor` puts a mine-standing building **on the mine and nowhere else**.
 
 ### It picks things up
 
@@ -1829,6 +1885,31 @@ Goblin Merchant only as a fallback: a race shop is in the base (so the errand is
 than a trek) and its shelf cannot be emptied by the other player. `keepPortal` is what makes the
 replacement prompt — it puts the scroll at the top of the shopping list, so the next trip after
 one is spent buys another before it buys anything else.
+
+#### The replacement outranks the OPENING buy, and the belt ceiling does not apply to it
+
+Reported: *"heroes don't seem to ever re-buy a scroll of town portal. this should be their number
+one priority after they use their scroll of town portal!"* Two separate rules were stopping it and
+neither was `keepPortal`:
+
+* **`RACE_FIRST` led the list, and its rows re-satisfy themselves.** A Healing Salve is 100 gold
+  against the scroll's 350 and it is drunk every fight, so the orc's two salve rows came back
+  round faster than the portal row was ever reached. `PlusItems.hadPortal` is the latch that
+  splits the two halves of the match: the **opening** is the race's (`RACE_FIRST` first, and the
+  section above is why), a **replacement** is the first thing on the list. It is set the first
+  time a pass sees a scroll in any of this player's belts and never cleared — spending one does
+  not stop being a player who carries one, which is `keepPortal`'s own wording.
+* **`PlusProfile.shopping` is a HABIT, and it counted the replacement.** It is how much of a belt
+  this player bothers to fill, and it is counted against *everything the hero is holding, drops
+  included* — three slots on Normal is two potions and one thing picked up off a creep, at which
+  point `shopper` returned nobody at all and the AI stopped shopping for the rest of the match
+  with the gold still in the bank. So `shop` now asks **what** to buy before **who** fetches it,
+  and a Town Portal is exempt from the ceiling: a free *slot* is the only thing that may stop it.
+  Nothing else is exempt — the control is pinned in `tools/ai-plus-items-test.cjs`.
+
+Neither of those changes the opening: `pick` does not *save*, it skips a row it cannot afford and
+buys the next one down, so at two minutes there is no 350 gold above the reserve and the salve is
+what gets bought — which is exactly what the tests for the orc's and the human's first buys pin.
 
 **The shopping list** is [`items.ts`](../src/ai/plus/items.ts)'s `LIST`, and it belongs beside the
 strategy rather than in the difficulty for the same reason the expansion clock does: *what* to buy

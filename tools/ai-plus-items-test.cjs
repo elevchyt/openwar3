@@ -692,12 +692,25 @@ function shopped(units, profile, opts = {}) {
     // WHOSE list this is: `RACE_FIRST` gives the orc two Healing Salves before anything else,
     // and every other race shops off `LIST` alone.
   }, profile, opts.race ?? "human");
-  items.pass(opts.now ?? 500, { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, portalWorthIt: true });
+  const ctx = { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, portalWorthIt: true };
+  items.pass(opts.now ?? 500, ctx);
+  // A SECOND pass on the SAME belt, for the rules that are about what this player has already
+  // had rather than about what it is holding — `PlusItems.hadPortal` is the only one today.
+  // `then` is handed the fixture's units between the two so a case can spend an item, and only
+  // the second pass's orders are reported.
+  if (opts.then) {
+    opts.then(units);
+    orders.length = 0;
+    items.pass((opts.now ?? 500) + 100, ctx);
+  }
   return {
     buy: orders.find((c) => c.c === "buyitem") ?? null,
     move: orders.find((c) => c.c === "order") ?? null,
   };
 }
+
+/** Take an item out of a belt — the fixture's "it was drunk / it was read". */
+const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === id); if (i >= 0) h.inventory[i] = null; };
 
 {
   const h = hero();
@@ -889,6 +902,44 @@ function shopped(units, profile, opts = {}) {
     check(`…${name} buys the replacement before anything else`,
       shopped([spent, MERCHANT], p).buy?.itemId, "stwp");
   }
+}
+
+// A SPENT SCROLL IS REPLACED BEFORE ANYTHING ELSE — including the race's own opening buys.
+//
+// Reported: "heroes don't seem to ever re-buy a scroll of town portal. this should be their
+// number one priority after they use their scroll of town portal!" Two separate things were
+// stopping it, and both are here:
+//
+//   · `RACE_FIRST` leads the list, and its rows RE-SATISFY THEMSELVES — a salve is 100 gold
+//     against the scroll's 350, and it is drunk every fight. So behind them the portal row was
+//     only ever reached in the gaps. The latch (`hadPortal`) splits the two halves of the
+//     match: the OPENING is the race's, a REPLACEMENT is the first thing on the list.
+//   · `PlusProfile.shopping` is a HABIT — how much of a belt this player bothers to fill — and
+//     it is counted against drops as well as buys. Three slots on Normal is two potions and one
+//     thing picked up off a creep, at which point `shopper` returned nobody at all.
+{
+  const LOUNGE = ["shas", "hslv", "plcl", "phea", "pman", "stwp", "tgrh", "oli2"]; // [ovln]
+  // An orc that has HAD a scroll and spent it. Its two salves are still the opening habit and
+  // are still wanted (`hslv` want 2, and it is carrying none) — and the scroll goes first.
+  const h = belt(hero(), "stwp");
+  check("a spent scroll is re-bought ahead of the orc's own opening buys",
+    shopped([h, MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE, then: (u) => spend(u[0], "stwp") }).buy?.itemId,
+    "stwp");
+}
+{
+  // …and the habit ceiling does not stop it. Normal fills three slots; this belt already has
+  // three things in it and no scroll, and the purse is deliberately under `SURPLUS` above the
+  // reserve so the `rich` exemption is NOT what is being measured (350 ≤ 700 − 300 < 800).
+  const h = belt(hero(), "stwp", "phea", "phea", "bspd");
+  check("…and a belt already at the habit's ceiling does not stop the replacement",
+    shopped([h, MERCHANT], PLUS_NORMAL, { gold: 700, then: (u) => spend(u[0], "stwp") }).buy?.itemId, "stwp");
+  // The control, and it is the same purse and the same three slots: a hero that is STILL
+  // carrying its scroll. The portal row is satisfied, so the next thing on the list is an
+  // ordinary potion — and the habit ceiling stands, which is what it is for. Only the scroll is
+  // exempt.
+  const kept = belt(hero(), "stwp", "phea", "bspd");
+  check("…while an ordinary row is still held to it",
+    shopped([kept, MERCHANT], PLUS_NORMAL, { gold: 700 }).buy, null);
 }
 
 // The errand latch — what stops the army manager dragging a shopping hero back to the muster

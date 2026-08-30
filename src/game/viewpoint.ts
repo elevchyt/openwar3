@@ -55,6 +55,15 @@ export interface VisionWorld {
  *  budget question rather than a design one, which is what item 7 measures. */
 const REBUILD_INTERVAL = 0.1;
 
+/**
+ * How many PHASES the rebuilds are spread across inside that interval — see `Viewpoint.tick`.
+ *
+ * Twelve, which is every melee slot, so in a full house no two seats ever rebuild on the same
+ * frame. It costs nothing when there are fewer: an unused phase is simply a phase nobody sits
+ * in.
+ */
+const REBUILD_STAGGER = 12;
+
 /** How the match starts every player's fog (the lobby's FogMode, minus the default). */
 export type StartFog = "explored" | "revealall" | null;
 
@@ -63,6 +72,9 @@ export class Viewpoint {
   /** Seconds since this viewpoint's last rebuild. Starts above the interval so the first
    *  tick rebuilds rather than showing a frame of blank fog. */
   private accum = 1;
+  /** Has this viewpoint taken its phase offset yet? See `tick` — it is applied once, at the
+   *  first rebuild, and every rebuild after that is a plain interval from the one before. */
+  private staggered = false;
   /** Players whose units are REVEALED to this viewpoint — blizzard.j `CripplePlayer`, what
    *  MeleeExposePlayer does to a player whose crippled timer ran out. Their units show
    *  through the fog wherever they stand, which is the punishment itself and the one thing
@@ -265,13 +277,40 @@ export class Viewpoint {
    *
    *  `modifiers` is every script-placed modifier the controller holds; the ones this
    *  viewpoint renders are picked out here. */
-  /** Advance this viewpoint's own rebuild clock; rebuild if it is due. Returns whether it
-   *  did. Per-viewpoint rather than one shared clock so N viewpoints stagger naturally
-   *  instead of all rebuilding on the same frame. */
+  /**
+   * Advance this viewpoint's own rebuild clock; rebuild if it is due. Returns whether it did.
+   *
+   * **The clocks are DELIBERATELY out of phase with each other**, and having one each is not
+   * by itself what does that. Every viewpoint is constructed with the same `accum`, every one
+   * of them rebuilds on the same first tick, and every one of them then reset to zero — so
+   * they stayed in lockstep for the whole match and all N rebuilds landed on ONE frame, ten
+   * times a second. Measured on an eight-player Feralas LV: `sim.fog` averaged 0.67 ms per
+   * frame but arrived as a ~6 ms spike every tenth of a second, which is most of a 120 fps
+   * frame budget spent in one go while the eleven frames either side of it did no fog work at
+   * all. The report's p95 is where that shows up, and p95 is what the player feels.
+   *
+   * So the offset is taken ONCE, at the first rebuild, out of the seat number: `accum` is left
+   * holding this viewpoint's share of the interval instead of zero, which brings its NEXT
+   * rebuild forward by that much and leaves it permanently that far out of step with its
+   * neighbours. Nothing about the rate changes — every viewpoint still rebuilds at 10 Hz, and
+   * the first round still happens on tick one so nobody spends a frame looking at blank fog.
+   *
+   * The phase is derived from the SLOT, so it is the same number on every machine and the
+   * sim's own vision-gated decisions (`visibleToTeam`, and every AI that reads `knows`) stay
+   * deterministic.
+   */
   tick(dt: number, modifiers: Iterable<FogModifier>): boolean {
     this.accum += dt;
     if (this.accum < REBUILD_INTERVAL) return false;
-    this.accum = 0;
+    if (this.staggered) {
+      this.accum = 0;
+    } else {
+      this.staggered = true;
+      // A team-only viewpoint carries `player: -1` by design, so its team is the seat number
+      // that identifies it. Either way this is a small non-negative integer.
+      const slot = this.player >= 0 ? this.player : Math.max(0, this.team);
+      this.accum = (REBUILD_INTERVAL * (slot % REBUILD_STAGGER)) / REBUILD_STAGGER;
+    }
     this.rebuild(modifiers);
     return true;
   }

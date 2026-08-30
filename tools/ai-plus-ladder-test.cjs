@@ -73,7 +73,10 @@ function recorder(table, strategy, profile, opts = {}) {
     meleeTownHall: () => {},
     guardSecondary: () => {},
     buildFactory: (item) => ai.setBuildUnit(1, item),
-    count, countDone: count, townCountDone: count, townCountTotal: () => 1,
+    count, countDone: count, townCountDone: count, townCountTotal: () => opts.towns ?? 1,
+    // Per TOWN, because that is the only shape in which "this mine is haunted and that one is
+    // not" can be said — see the undead's `mineBuildings` rows below.
+    townCountTown: (id, town) => opts.perTown?.[town]?.[id] ?? count(id),
     minesOwned: () => 1, goldOwned: () => 20000,
     foodUsed: () => opts.foodUsed ?? 0, foodCap: () => opts.foodCap ?? 100,
     gold: () => opts.gold ?? 500, wood: () => opts.wood ?? 500,
@@ -126,6 +129,42 @@ for (const [race, table] of Object.entries(PLUS_RACES)) {
   buildPlan(massed.ctx);
   const asked = Math.max(0, ...massed.build.filter((r) => r.item === orc.barracks).map((r) => r.qty));
   check("orc at its army ceiling stops adding production", asked <= 1, true);
+}
+
+// --- the undead's expansion is the MINE ---------------------------------------------------
+//
+// Reported: "when undead is expanding, it doesn't use its acolyte to turn the gold mine into a
+// haunted gold mine, rendering the expansion useless." The Necropolis is not the expansion —
+// the Haunted Gold Mine is (docs/undead.md). Until it stands there is no ring for an Acolyte to
+// kneel in and `SimWorld.issueGoldWork` refuses the order outright, while `townHasHall` counts
+// the Necropolis as a depot and every gate above reads the dead town as a working one.
+console.log("\n--- the undead's expansion is the MINE ---");
+{
+  const u = PLUS_RACES.undead;
+  const standing = { [u.halls[0]]: 1 };
+  // Two towns: the main, whose mine a melee game STARTS haunted (`MeleeStartingUnitsUndead`
+  // calls `BlightGoldMineForPlayerBJ`), and the expansion just founded beside a bare rock.
+  const r = recorder(u, u.strategies[0], PLUS_NORMAL, { standing, towns: 2, perTown: { 0: { [u.mineBuilding]: 1 } } });
+  buildPlan(r.ctx);
+  const rows = r.build.filter((x) => x.item === u.mineBuilding);
+  check("the undead haunts the expansion's mine", rows.length, 1);
+  check("…the town that needs it, not the one already haunted", rows[0]?.town, 1);
+  // `meleeTownHall` is a no-op in this fixture, so the first row recorded is the top of the
+  // ladder — which is where the thing that makes a town a town belongs.
+  check("…and it is the first row of the ladder", r.build[0]?.item, u.mineBuilding);
+
+  const done = recorder(u, u.strategies[0], PLUS_NORMAL, {
+    standing, towns: 2, perTown: { 0: { [u.mineBuilding]: 1 }, 1: { [u.mineBuilding]: 1 } },
+  });
+  buildPlan(done.ctx);
+  check("…and asks for nothing once both are haunted", done.build.some((x) => x.item === u.mineBuilding), false);
+}
+// Nobody else has one, and the night elf's absence is the load-bearing half: an Entangled Gold
+// Mine is what the `Aent` CAST creates, issued from the library layer both AIs share
+// (`AiPlayer.entangleMines`, docs/night-elf.md), never something a build order asks for.
+for (const [race, table] of Object.entries(PLUS_RACES)) {
+  if (race === "undead") continue;
+  check(`${race} builds nothing onto a mine`, table.mineBuilding, undefined);
 }
 
 // --- the forest floor -------------------------------------------------------------------
@@ -240,7 +279,13 @@ function runEconomy() {
     const S = {
       t: 0, gold: START_GOLD, lumber: START_LUMBER,
       units: { [table.worker]: 5 },
-      bldgs: [{ type: table.halls[0], ready: true, finishAt: 0, job: null }],
+      bldgs: [
+        { type: table.halls[0], ready: true, finishAt: 0, job: null },
+        // …and, for the undead, the Haunted Gold Mine a melee game STARTS with — Blizzard.j's
+        // `MeleeStartingUnitsUndead` calls `BlightGoldMineForPlayerBJ`, so the first mine is
+        // already haunted before anybody has built anything (docs/undead.md).
+        ...(table.mineBuilding ? [{ type: table.mineBuilding, ready: true, finishAt: 0, job: null }] : []),
+      ],
       mines: 1, freeMines: 1, research: {}, hold: new Set(),
       stallItem: "", stallBest: Infinity, stallPasses: 0, short: 0,
       halted: null, tierHaltsEarly: 0, passesEarly: 0,
@@ -274,6 +319,10 @@ function runEconomy() {
       guardSecondary: () => {},
       buildFactory: (item) => ai.setBuildUnit(1, item),
       count: countRaw, countDone: doneRaw, townCountDone, townCountTotal: () => S.mines,
+      // One town's worth is the whole model here — the run has one base — so a per-town count
+      // is the global one. What it is FOR is the undead's Haunted Gold Mine (plan.ts
+      // `mineBuildings`), which must not be asked for twice.
+      townCountTown: (id) => townCount(id),
       minesOwned: () => S.mines, goldOwned: () => 20000,
       foodUsed: () => Object.entries(S.units).reduce((n, [id, q]) => n + (def(id)?.foodUsed ?? 0) * q, 0)
         + jobs().filter((j) => j.kind === "unit").reduce((n, j) => n + (def(j.id)?.foodUsed ?? 0), 0),

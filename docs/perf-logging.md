@@ -109,6 +109,31 @@ The digest is laid out to separate the three shapes a dying framerate comes in:
 the steepest sustained fall and prints what changed on either side of it, including any note or
 first-time console error within 15 s.
 
+## Two shapes the report keeps finding, and what fixed each
+
+Both of these came out of one eight-player Feralas LV session and neither is visible in a mean.
+
+**A SYNCHRONISED periodic cost is a spike, not an average.** Fog of war rebuilds at 10 Hz, one
+grid per seat. Every `Viewpoint` was constructed with the same accumulator, so all of them
+rebuilt on the same first tick and all of them reset to zero — they stayed in lockstep for the
+whole match, and eight rebuilds landed on ONE frame ten times a second. `sim.fog` averaged
+0.67 ms/frame and arrived as a ~6 ms hitch, which is most of a 120 fps budget spent in one go
+while the eleven frames either side did no fog work at all. The fix is not less work: each
+viewpoint takes a **phase offset out of its seat number** at its first rebuild
+(`REBUILD_STAGGER`, [`src/game/viewpoint.ts`](../src/game/viewpoint.ts)), so the same total cost
+arrives as eight small ones. The rate is unchanged, and the phase is derived from the slot, so
+nothing about the sim's vision-gated decisions stops being deterministic. **Look for this
+wherever N things share one period**, and read `p95`/`worst` rather than the mean to see it.
+
+**In an O(n²) scan, the CHEAPEST predicate goes first.** Every whole-world target scan — the
+sim's `nearestEnemy`/`acquireTarget`/`bestCreepTarget`, `applyAuras`'s inner loop, and the AI's
+`enemyNear`/`foeBeside`/`focusTarget` — is a walk over every unit run by every unit, several
+times a second. All of them tested *who the unit is* (an alliance-matrix lookup, or a whole
+target-flag walk) before *where it is standing*. The clauses are pure and ANDed, so their order
+cannot change the answer — only how much of the world pays for the dear one, and the answer is
+"a handful of units are ever in range". `SimWorld.distSkip` is the exact squared-distance form
+of the hull-to-hull test those scans reject on, so nothing downstream shifts.
+
 ## Adding to it
 
 - **A new phase**: `perfLog.begin("name")` / `perfLog.end("name")` around a stretch of the
