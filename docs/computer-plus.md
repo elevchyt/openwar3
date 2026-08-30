@@ -156,11 +156,54 @@ twice a second at any difficulty, and the difficulty has no business in it anywa
 computer reacts to an *attack* slowly; it does not walk into trees more often.
 
 
-And it comes home **walked**, not merely released. Dropping the scout out of `held` is what lets
-the harvest plan have it again, but the plan assigns jobs, not journeys: a worker released
-standing in the enemy's base was left standing in the enemy's base, idle, for the rest of the
-match — one worker of an eleven-worker economy, thrown away every game. The move order is what
-brings it back; the harvest plan then picks it up as an idle worker at home.
+### The walk home is a LEG, not a parting order
+
+`headHome` / `release`. The tour used to end by firing one `safeStep` toward home and latching
+`scoutDone` on the same line, and both halves of that were wrong in the same way — the tour
+stopped being managed at the exact moment the scout still had the whole map to cross:
+
+- **`safeStep` hands back a *step*, not a destination.** When a camp is on the way, that step is a
+  detour waypoint thrown out *sideways* from the line home. So the order the scout was released
+  with was never "go home": it was "walk to a point in the middle of the map", and that is where
+  the worker stopped and where the harvest plan found it. That is *"they came back and started
+  chopping miles from the hall"* — the scout never came back at all.
+- **Nothing re-asked the route.** The way *out* was arc'd round camps twice a second and the way
+  *back* was a straight line through them. That is *"scouts don't avoid creeps on the way home"*,
+  and it is the more expensive direction: a scout that dies on the way out has at least looked.
+
+So the walk home is a leg like any other. The scout stays `held` (the economy may not re-task a
+worker halfway across the map), the step is re-aimed every `SCOUT_PERIOD` through the same
+`safeLeg` arcs, and `release` hands the worker back standing at its own hall — where the harvest
+plan is good at placing it. Two details the leg needs that the outward ones do not:
+
+- **Arrival is measured by distance alone**, not by `lookedAt`. Looking at a place and getting to
+  it are different questions: `lookedAt` counts *"the next safe step is nowhere"* as arrival,
+  which is right for a leg whose whole purpose is the look and catastrophic for this one, where it
+  would release the worker in the open the first time a camp stood between it and its base.
+- **The creep veto stands still instead of skipping.** There is no next leg to fall through to, and
+  waiting outside a camp is the right answer: the route is re-asked twice a second and a creep
+  chasing something else moves out of the way.
+
+Both retreat rules and the `SCOUT_TOUR` deadline all route through `headHome` (idempotent — they
+re-fire every pass while it walks), and `SCOUT_HOME_BY` (60 s, one map crossing) is the backstop
+that lets the worker go where it stands if the walk itself fails.
+
+### Who gets sent
+
+`freeWorker`: the **spare** worker first, then a lumberjack, and the **gold crew last** — a
+preference rather than a filter, because a player with nothing but miners still sends one.
+
+It used to be "the first worker this player owns that is not off the field", with a comment
+claiming a scout comes off the trees. On three races that comment is true by accident: a gold
+worker is inside the shaft or inside an Entangled Gold Mine, so `isOffField` had already skipped
+it. **The undead breaks it completely.** An Acolyte does not go anywhere — it kneels in a ring in
+the *open* around a Haunted Gold Mine (`Abgm`, [undead](undead.md)) — so it is on the field by
+every test that rule had, and the first Acolyte in iteration order is Acolyte number one, a
+member of the crew of five. The tour took a fifth of the undead's entire income, every game, and
+the **sixth** Acolyte — the spare the build ladder trains for exactly this (`SPARE_WORKERS`:
+*"the one a player keeps out of the mine to put up buildings with and to send to go and look"*) —
+stood in the base for the whole match. `onGoldDuty` is what closes it, and it asks the question
+the undead's way (`ringSlot`) as well as everybody else's.
 
 **It walks round the creep camps, not through them** (`safeLeg`). A melee map's camps sit on
 exactly the ground between two bases, so the straight line from home to the enemy's front door
@@ -217,8 +260,8 @@ older read — which is what `EnemyMemory` is for, topped up by a teammate's sig
 **And the tour has a deadline** (`SCOUT_TOUR`, 150 s). Every other way out of `scoutPass` is an
 *event* — it arrived, it got stuck, it died — so a tour whose events simply never came held a
 worker out of the economy for the rest of the match with nothing to show for it. The deadline is
-written as "the tour is over", so it walks home and goes back to work exactly as a finished one
-does.
+written as *"start walking home"* rather than as a special case, so it goes back to work exactly
+as a finished tour does — and `SCOUT_HOME_BY` is the backstop under that.
 
 **And a scout that stops is noticed.** The tour only ever advanced on *arrival*, and `scoutPass`
 returned early while the order was still "move" — so a worker stopped by a cliff, wedged behind a

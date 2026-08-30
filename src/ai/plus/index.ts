@@ -449,6 +449,35 @@ export function safeLeg(
   return best;
 }
 
+/**
+ * Is this worker on GOLD — asked the way each race actually answers it, and NOT the way three
+ * of the four happen to make easy.
+ *
+ * Three races put the worker inside something: a Peasant and a Peon go down the shaft
+ * (`inMine`) and a Wisp climbs inside an Entangled Gold Mine (a garrison). `isOffField` covers
+ * all of those, which is why "the first worker still standing on the field" used to be a
+ * perfectly good way to find a lumberjack.
+ *
+ * **The undead breaks it.** An Acolyte does not go anywhere — it kneels in a ring in the OPEN
+ * around a Haunted Gold Mine (`Abgm`, docs/undead.md), holding a mark in that mine's own ring
+ * (`SimWorld.tickRingHarvest`), and is therefore on the field by every test `isOffField` has.
+ * `ringSlot` is the fact that says so, and asking it is the whole difference between the scout
+ * being the spare Acolyte the build ladder trained for the job and the scout being a fifth of
+ * the undead's entire income.
+ *
+ * The harvest ORDER is the third clause and it catches everybody, in the moment between being
+ * sent to a mine and arriving at it.
+ *
+ * Pure and exported for the same reason `scoutRing` is: this is a trap that is invisible from
+ * the call site, so it is pinned by a test rather than by reading it.
+ */
+export function onGoldDuty(u: {
+  ringSlot?: number; inMineId?: number; order?: string | null; resKind?: string | null;
+}): boolean {
+  if ((u.ringSlot ?? 0) > 0 || (u.inMineId ?? 0) > 0) return true;
+  return u.order === "harvest" && u.resKind === "gold";
+}
+
 /** How long the scout may make no PROGRESS before its waypoint is written off (seconds).
  *
  *  The bug this exists for: `scoutPass` returns early while the scout's order is still "move",
@@ -476,6 +505,19 @@ const SCOUT_PROGRESS = 300;
  * a minute, and the tour is worth its while at twice that.
  */
 const SCOUT_TOUR = 150;
+/**
+ * …and how long the WALK HOME may take on top of it before the worker is simply let go where
+ * it stands.
+ *
+ * The walk home is a leg like any other (`headHome`), which means it can fail like any other —
+ * a route the pathfinder cannot find, a camp that has parked itself between the scout and its
+ * own base. A held worker that will never arrive is worth less than an idle one in the wrong
+ * place, because the harvest plan can at least give the second one a job.
+ *
+ * A worker crosses a 128x128 melee map in about a minute, so this is one crossing: generous for
+ * the walk it is actually making, and short next to the tour it is the tail of.
+ */
+const SCOUT_HOME_BY = 60;
 
 // ITEMS live in plus/items.ts, not here — an item ability is not in `SimUnit.abilities` (it
 // hangs off the inventory slot and dispatches through `useItem`), so neither this file's army
@@ -1034,6 +1076,10 @@ interface Brain {
   scoutHp: number;
   /** The scout's own clock, which is NOT the army's — see `SCOUT_PERIOD`. */
   scoutIn: number;
+  /** Is the tour over and the scout on its way HOME? The walk back is a leg like any other —
+   *  arc'd round the creeps, re-aimed every pass, and the worker is not handed back to the
+   *  economy until it arrives. See `headHome`. */
+  scoutBack: boolean;
   mode: Mode;
   /** When the wave first found itself short at the muster point (-1 = it is gathered). The
    *  deadline on `gathered`, without which one stuck soldier holds the army at home for ever. */
@@ -1209,6 +1255,7 @@ export class ComputerPlusAi {
       scoutWas: null,
       scoutHp: 0,
       scoutIn: 0,
+      scoutBack: false,
       scoutStill: 0,
       scoutSince: 0,
       mode: "massing",
@@ -1776,6 +1823,7 @@ export class ComputerPlusAi {
       b.scoutDone = true;
       b.scoutGoal = null;
       b.scoutWas = null;
+      b.scoutBack = false;
       return;
     }
     if (!scout) {
@@ -1798,23 +1846,27 @@ export class ComputerPlusAi {
     // rather than off a damage event, because "am I being shot at" is a question the order
     // system cannot answer and a comparison against last pass can.
     //
-    // ONLY ONCE IT HAS LEFT, and that clause is not a detail: `tourOver` LATCHES `scoutDone`,
-    // so a rush standing in our own base at the sixtieth second would end scouting for the
-    // whole match before the worker had taken a step. Being shot at at home is the defence
-    // pass's business (`defendPass`), not the tour's — the tour has not begun. It also means
-    // the scan below is only ever run by a scout that is actually out.
+    // ONLY ONCE IT HAS LEFT, and that clause is not a detail: a rush standing in our own base at
+    // the sixtieth second would otherwise end the tour before the worker had taken a step, and
+    // a tour ended at home is a tour that never happened. Being shot at at home is the defence
+    // pass's business (`defendPass`), not the tour's. It also means the scan below is only ever
+    // run by a scout that is actually out.
     const home = b.ai.home();
     if (Math.hypot(scout.x - home.x, scout.y - home.y) > TOWN_RADIUS) {
-      if (scout.hp < b.scoutHp) return this.tourOver(b, scout);
+      if (scout.hp < b.scoutHp) this.headHome(b);
       // …and it does not wait to be hit when it can see what is coming — see `SCOUT_DANGER`.
-      if (this.scoutInDanger(b, scout)) return this.tourOver(b, scout);
+      else if (this.scoutInDanger(b, scout)) this.headHome(b);
     }
     b.scoutHp = scout.hp;
     // THE TOUR HAS A DEADLINE — see `SCOUT_TOUR`. Every other way out of this routine is an
     // event, so a tour whose events never arrive holds a worker out of the economy for the
-    // rest of the match. Written as "the tour is over" rather than as a special case, so it
-    // walks home and goes back to work exactly as a finished tour does.
-    if (b.clock - b.scoutSince >= SCOUT_TOUR) return this.tourOver(b, scout);
+    // rest of the match. Written as "start walking home" rather than as a special case, so it
+    // goes back to work exactly as a finished tour does.
+    if (b.clock - b.scoutSince >= SCOUT_TOUR) this.headHome(b);
+    // …and the WALK HOME has one of its own, because it is a walk and walks can fail. Past this
+    // the worker is simply let go wherever it is standing: an idle worker in the wrong place is
+    // worth more than a held one, and the harvest plan will at least give it a job.
+    if (b.scoutBack && b.clock - b.scoutSince >= SCOUT_TOUR + SCOUT_HOME_BY) return this.release(b);
     // IS IT ACTUALLY MOVING? The tour only ever advanced on arrival, so a scout that stopped
     // short of a waypoint — wedged behind a building, turned round by a creep it survived, left
     // holding a stale order — stood there for the rest of the match. See `SCOUT_STUCK_AFTER`.
@@ -1836,10 +1888,20 @@ export class ComputerPlusAi {
       b.scoutWas = { x: scout.x, y: scout.y };
       b.scoutStill = 0;
     } else if (b.scoutGoal) {
-      if (this.lookedAt(scout, b.scoutGoal)) b.scoutLeg++;
-      else if (scout.order === "move") return; // still walking
+      // LOOKING AT a place and GETTING TO it are different questions, and the walk home is the
+      // second one. `lookedAt` counts "the next safe step is nowhere" as arrival, which is
+      // right for a leg whose whole purpose is the look — and catastrophic for the walk home,
+      // where it would release the worker in the middle of the map the first time a camp stood
+      // between it and its own base. Home is a place it has to actually reach.
+      const there = b.scoutBack
+        ? Math.hypot(scout.x - b.scoutGoal.x, scout.y - b.scoutGoal.y) <= SCOUT_ARRIVED
+        : this.lookedAt(scout, b.scoutGoal);
+      if (there) {
+        if (b.scoutBack) return this.release(b);
+        b.scoutLeg++;
+      } else if (scout.order === "move") return; // still walking
     }
-    const goal = this.scoutWaypoint(b);
+    let goal = b.scoutBack ? b.ai.home() : this.scoutWaypoint(b);
     // NO WAYPOINT is two different things and only one of them ends the tour. A tour that has
     // run off the end of its legs is finished; a tour that cannot name leg 0 because there is
     // nothing to look at yet (no start location, no enemy building this player can find) is
@@ -1847,7 +1909,8 @@ export class ComputerPlusAi {
     // scouting off for the whole match on the first pass it ran.
     if (!goal) {
       if (b.scoutLeg === 0) { b.scoutGoal = null; return; }
-      return this.tourOver(b, scout);
+      this.headHome(b);
+      goal = b.ai.home();
     }
     b.scoutGoal = goal;
     // ROUND the creep camps, not through them — see `safeLeg`. The GOAL is unchanged (the tour
@@ -1866,9 +1929,11 @@ export class ComputerPlusAi {
     // Asked as "am I clear NOW" rather than unconditionally, so a scout a camp has already
     // walked up to is not frozen by its own rule — there is no clear step from inside a berth,
     // and the answer to that position is the retreat above, not a refusal to move.
+    // …except on the way HOME, where there is no next leg to fall through to and standing still
+    // outside a camp is the whole of the right answer: the route is re-asked twice a second and
+    // a creep that is chasing something else moves out of the way.
     if (clearance(scout, scout, creeps) >= CREEP_BERTH && clearance(scout, step, creeps) < CREEP_BERTH) {
-      b.scoutLeg++;
-      b.scoutGoal = null;
+      if (!b.scoutBack) { b.scoutLeg++; b.scoutGoal = null; }
       return;
     }
     b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...step }, queued: false });
@@ -1897,22 +1962,45 @@ export class ComputerPlusAi {
   }
 
   /**
-   * Tour over: back to work — and WALKED home rather than merely released.
+   * Tour over: WALK HOME. Not "released", and not one move order either.
    *
-   * Dropping it out of `held` is what lets the harvest plan have it again, but the plan assigns
-   * jobs, not journeys: a worker released standing in the enemy's base was left standing in the
-   * enemy's base, idle, for the rest of the match. (Observed. It is also one worker of an
-   * eleven-worker economy, which is most of a Peon's worth of income thrown away every game.)
-   * The move order is what actually brings it back; the harvest plan then picks it up as an
-   * idle worker at home, which is what it is good at.
+   * This used to fire a single `safeStep` toward home and latch `scoutDone` on the same line,
+   * and both halves of that were wrong in the same way — the tour stopped being managed at the
+   * exact moment the scout still had the whole map to cross:
+   *
+   *  • `safeStep` hands back a STEP, and when a camp is on the way that step is a detour
+   *    waypoint thrown out SIDEWAYS from the line home. So the order the scout was released
+   *    with was not "go home" at all: it was "walk to a point in the middle of the map", and
+   *    that is where the worker stopped and where the harvest plan then found it. That is the
+   *    "they came back and started chopping miles from the hall" report — the scout never came
+   *    back at all.
+   *  • Nothing re-asked the route, so every creep camp the walk home passed was passed blind.
+   *    The way OUT was arc'd round camps twice a second and the way BACK was a straight line
+   *    through them, which is the "scouts don't avoid creeps on the way home" report, and it is
+   *    the more expensive direction: a scout that dies on the way out has at least looked.
+   *
+   * So the walk home is a LEG like any other. It keeps the scout `held` (the economy may not
+   * re-task a worker that is halfway across the map), it is re-aimed every `SCOUT_PERIOD`
+   * through the same `safeLeg` arcs, and the worker is handed back to the harvest plan only by
+   * `release`, standing at its own hall, where the plan is good at placing it.
+   *
+   * Idempotent: the deadline and both retreat rules re-fire every pass while the scout is on
+   * its way, and a second call must not restart the leg it is already walking.
    */
-  private tourOver(b: Brain, scout: SimUnit): void {
-    const home = b.ai.home();
-    b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...this.safeStep(scout, home) }, queued: false });
+  private headHome(b: Brain): void {
+    if (b.scoutBack) return;
+    b.scoutBack = true;
+    b.scoutGoal = null;
+    b.scoutStill = 0;
+  }
+
+  /** Home, or out of patience: hand the worker back to the economy. */
+  private release(b: Brain): void {
     b.scoutId = 0;
     b.scoutDone = true;
     b.scoutGoal = null;
     b.scoutWas = null;
+    b.scoutBack = false;
   }
 
   /**
@@ -2044,16 +2132,41 @@ export class ComputerPlusAi {
    * "Off the field" rather than `inMine` alone (`isOffField`, the sim's own answer): a Wisp
    * inside an Entangled Gold Mine and a Peon inside a Burrow are as busy as a Peasant down a
    * shaft, and pulling one of THEM out to walk across the map is the same mistake
-   * `AiPlayer.freeWorker` made with the builder. A scout comes off the trees.
+   * `AiPlayer.freeWorker` made with the builder.
+   *
+   * THE SPARE FIRST, THEN THE FOREST, AND THE GOLD CREW LAST — a preference and not a filter,
+   * because a player with nothing but miners still sends one. It used to be "the first worker
+   * this player owns", with a comment claiming a scout comes off the trees, and on three races
+   * that comment happened to be true: a gold worker is inside the shaft or inside the Entangled
+   * Gold Mine, so `isOffField` had already skipped it and the first body left standing was a
+   * lumberjack.
+   *
+   * THE UNDEAD IS THE RACE THAT BREAKS IT, and it breaks it completely. An Acolyte does not go
+   * anywhere — it kneels in a ring in the OPEN around a Haunted Gold Mine (`Abgm`,
+   * docs/undead.md), so it is on the field by every test this had, and the first Acolyte in the
+   * world's own iteration order is Acolyte number one, a member of the crew of five. The tour
+   * therefore took a fifth of the undead's entire income and left the SIXTH Acolyte — the spare
+   * the build ladder trains for exactly this (`SPARE_WORKERS`, plan.ts: *"the one a player keeps
+   * out of the mine to put up buildings with and to send to go and look"*) — standing in the
+   * base for the whole match. `onGold` is what closes that hole, and it asks the question the
+   * undead's way as well as everybody else's.
    */
   private freeWorker(b: Brain): SimUnit | null {
+    let spare: SimUnit | null = null;
+    let chopper: SimUnit | null = null;
+    let miner: SimUnit | null = null;
     for (const u of this.host.world.units.values()) {
       if (u.owner !== b.ai.player || u.hp <= 0 || !u.isPeon) continue;
       if (u.buildPending || u.constructing || isOffField(u)) continue;
-      return u;
+      if (b.held.has(u.id)) continue; // already the scout, or standing in the wave
+      if (onGoldDuty(u)) miner ??= u;
+      else if (u.order === "harvest") chopper ??= u;
+      else spare ??= u;
     }
-    return null;
+    return spare ?? chopper ?? miner;
   }
+
+
 
   /**
    * Something is in one of our towns.

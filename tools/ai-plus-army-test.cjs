@@ -31,7 +31,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const {
   canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
-const { safeLeg, pushStalled, isShunned, pullBackSpot, pullDue, pulledOut } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { safeLeg, onGoldDuty, pushStalled, isShunned, pullBackSpot, pullDue, pulledOut } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -247,6 +247,24 @@ const ATFOOT = [{ x: -3000, y: 200 }, ON_THE_LINE];
 const away = safeLeg(HOME, BASE, ATFOOT);
 check("a creep at our feet does not cancel the detour round the next one",
   nearest(away, ON_THE_LINE) >= 900, true);
+
+console.log("\n-- who is sent to go and look ------------------------------------------------");
+
+// WHO THE SCOUT IS (plus/index.ts `freeWorker`, via `onGoldDuty`). The spare worker first, then
+// a lumberjack, and the gold crew last — a preference, not a filter, since a player with nothing
+// but miners still sends one. `isOffField` used to be the whole of it, which works by accident on
+// three races (their gold workers are literally inside something) and fails completely on the
+// fourth: an Acolyte kneels in the OPEN around a Haunted Gold Mine, so the first Acolyte in
+// iteration order — a member of the crew of five — was the scout, every undead game, while the
+// SIXTH Acolyte the build ladder trains for exactly this job stood in the base all match.
+check("an Acolyte holding a mark in a Haunted mine's ring is on gold",
+  onGoldDuty({ ringSlot: 3 }), true);
+check("…and the spare Acolyte beside it is not", onGoldDuty({ ringSlot: 0 }), false);
+check("a worker walking to a mine is on gold before it arrives",
+  onGoldDuty({ order: "harvest", resKind: "gold" }), true);
+check("a worker down a shaft is on gold", onGoldDuty({ inMineId: 7 }), true);
+check("a lumberjack is not", onGoldDuty({ order: "harvest", resKind: "lumber" }), false);
+check("and neither is an idle worker", onGoldDuty({ order: "stop", resKind: null }), false);
 
 console.log("\n-- the wounded walk out of the fight ------------------------------------------");
 
