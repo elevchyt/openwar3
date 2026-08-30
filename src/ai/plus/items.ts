@@ -46,9 +46,9 @@ import type { PlusProfile } from "./profile";
  * highest first, one button per pass — and it reads the way a player's hands do: get out, don't
  * die, top up, then everything else.
  */
-export type Use = "escape" | "panic" | "healSelf" | "healArea" | "healOther" | "mana" | "buff";
+export type Use = "escape" | "panic" | "healSelf" | "healArea" | "healOther" | "mana" | "illusion" | "buff";
 
-const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "healArea", "healOther", "mana", "buff"];
+const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "healArea", "healOther", "mana", "illusion", "buff"];
 const useRank = (u: Use): number => LADDER.indexOf(u);
 
 /**
@@ -94,6 +94,15 @@ const USE_OF: Readonly<Record<string, Use>> = {
   AImr: "mana", // Scroll of Mana (and the two Runes of Mana)
 
   // `AIrg` is NOT here: one code, four different answers. See `regenUse`.
+
+  // --- more bodies --------------------------------------------------------------------------
+  // Wand of Illusion (`will`, three charges). It is on this ladder ABOVE the scrolls because
+  // what it buys is not a percentage: an illusion is another body in the line, it is what the
+  // camp swings at instead of the hero, and it hurts nothing — so the whole of its value is
+  // being in front of the party when the blows start landing. `targs1` is "ground,air,friend,
+  // self", so it is aimed at one of OURS (see `toCopy`), and the copy arrives at full hit
+  // points however hurt the original is (docs/illusions.md `initIllusion`).
+  AIil: "illusion",
 
   // --- make the fight better ----------------------------------------------------------------
   AIda: "buff", // Scroll of Protection
@@ -220,6 +229,10 @@ const PORTAL: Want = { id: "stwp", want: 1 };
  *  same reason `USE_OF` is: a custom map's re-skinned scroll is still a Town Portal. */
 const PORTAL_ABILITY = "AItp";
 
+/** …and the Wand of Illusion's, for the same reason. `makeIllusions` is the one press the army
+ *  manager reaches for by name (plus/index.ts), so it has to be able to find the wand. */
+const ILLUSION_ABILITY = "AIil";
+
 // --- when a button is pressed ---------------------------------------------------------------
 // All ours; see the file header. Stated as fractions of a unit's own maximum so they mean the
 // same thing on a Peasant and on a level-6 Tauren Chieftain.
@@ -256,6 +269,16 @@ const ALLY_HP = 0.5;
 /** How many of ours have to be hurt before an AREA heal is better than a potion. Below this the
  *  scroll is being spent to heal one unit, which is what the potion is for. */
 const CLUSTER = 3;
+/**
+ * How many doubles standing is enough — the whole of "do not empty the wand into one fight".
+ *
+ * A Wand of Illusion carries THREE charges (`[will] uses` = 3) and its ability's `Cool1` is 0,
+ * so nothing in the data stops a hero pressing all three in the same second. This is what does,
+ * and it is stated as *doubles alive* rather than as presses so it self-limits without a clock:
+ * two go in, and the third is only ever spent once one of them has popped — which is the fight
+ * that is still going, i.e. the one that needed it.
+ */
+const ILLUSION_CAP = 2;
 /** Mana fraction that sends a caster to the bottom of a Clarity Potion. */
 const MANA_LOW = 0.35;
 /** The radius everything here calls "this fight" — the same figure plus/casting.ts engages at. */
@@ -529,10 +552,27 @@ export class PlusItems {
       // well as inside one.
       case "mana":
         return u.maxMana > 0 && u.mana / u.maxMana < MANA_LOW && (engaged || foes.some((f) => near(u, f, LOOK * 2)));
+      // Another body, for a fight big enough that another body decides it. Gated exactly as the
+      // buff below is — one scout walking past is not a fight — plus the cap on how many doubles
+      // may be standing at once, which is what keeps the wand's three charges from going into
+      // the first skirmish of the match (`ILLUSION_CAP`).
+      //
+      // This is the IN-FIGHT press. The other one is the army manager's, made a few seconds
+      // BEFORE a creep camp so the doubles walk in ahead of the party — see `makeIllusions`.
+      case "illusion":
+        return engaged && this.realFight(u, foes) >= CLUSTER && this.doubles(own) < ILLUSION_CAP;
       // A buff is pre-fight, and only for a fight worth buffing: one scout walking past is not.
       case "buff":
-        return engaged && foes.filter((f) => !f.building && !f.isPeon && near(u, f, LOOK)).length >= CLUSTER;
+        return engaged && this.realFight(u, foes) >= CLUSTER;
     }
+  }
+
+  /** How much of what is standing around this unit is worth spending a charge on — bodies that
+   *  can fight back, so a worker or a building on the way past is not a fight. */
+  private realFight(u: SimUnit, foes: SimUnit[]): number {
+    let n = 0;
+    for (const f of foes) if (!f.building && !f.isPeon && near(u, f, LOOK)) n++;
+    return n;
   }
 
   /**
@@ -548,10 +588,16 @@ export class PlusItems {
    * spends a click, so this can never be more permissive than a player.
    */
   private aim(u: SimUnit, slot: number, def: ItemDef, use: Use, own: SimUnit[]): boolean {
-    const target = def.abilities.map((aid) => this.view.def(aid)?.target).find((t) => t === "point" || t === "unit");
+    // The aimed ability itself rather than only its `target`, because one rung needs the row's
+    // own `Rng1` as well: the Wand of Illusion reaches 500 (`[AIil] Rng1`), and a copy chosen
+    // out of that is a press `itemUseError` throws away.
+    const aimed = def.abilities.map((aid) => this.view.def(aid)).find((ad) => ad?.target === "point" || ad?.target === "unit");
     let targetId = 0;
-    if (target === "unit") {
-      const t = use === "healOther" ? this.hurtest(u, own) : u;
+    if (aimed?.target === "unit") {
+      const t =
+        use === "healOther" ? this.hurtest(u, own)
+        : use === "illusion" ? this.toCopy(u, own, aimed.levelData[0]?.castRange ?? 0)
+        : u;
       if (!t) return false;
       targetId = t.id;
     }
@@ -600,6 +646,98 @@ export class PlusItems {
       }
     }
     return best;
+  }
+
+  /**
+   * WHO THE WAND COPIES — the biggest body in reach, and the presser itself when there is none.
+   *
+   * `[AIil] targs1` is "ground,air,friend,self", so the double is made of one of OURS, and the
+   * copy arrives at FULL hit points however hurt the original is (`initIllusion`, docs/
+   * illusions.md). What the double is FOR is soaking blows that would otherwise land on the
+   * party — it deals no damage at all — so the only thing worth reading is how much punishment
+   * the copy can stand, which is `maxHp` and not the original's current health.
+   *
+   * It takes DOUBLE damage (`DataB` = 2), which does not change the ordering: twice the hit
+   * points is still twice the blows absorbed. A Tauren's copy outlasts a Tauren Chieftain's, so
+   * this is deliberately not "always the hero".
+   *
+   * Illusions are excluded, or the second press copies the first double — a copy of a copy is
+   * the same body at a further remove and it stops being the biggest thing in the party the
+   * moment anything hits it. Workers are excluded because a Peasant's double fools nobody and
+   * tanks nothing.
+   */
+  private toCopy(u: SimUnit, own: SimUnit[], range: number): SimUnit {
+    let best = u; // the presser is always in range of itself, so there is always an answer
+    for (const o of own) {
+      if (o.building || o.isPeon || o.isIllusion || o.hp <= 0) continue;
+      if (range > 0 && Math.hypot(o.x - u.x, o.y - u.y) > range) continue;
+      if (o.maxHp > best.maxHp) best = o;
+    }
+    return best;
+  }
+
+  /** How many doubles of ours are standing. Counted across the PLAYER rather than per hero: the
+   *  charges are the player's, and two heroes each pressing to their own cap is the wand emptied
+   *  twice as fast for no more bodies in the line. */
+  private doubles(own: readonly SimUnit[]): number {
+    let n = 0;
+    for (const o of own) if (o.isIllusion && o.hp > 0) n++;
+    return n;
+  }
+
+  /**
+   * THROW THE DOUBLES IN — the press the army manager makes for itself, before a creep camp.
+   *
+   * The ladder's own `illusion` rung is a reading of the fight this hero is ALREADY in, which is
+   * the wrong moment for a camp: by the time the party is engaged the creeps have picked their
+   * targets and the hero is one of them. This is the other press — made a few seconds out from
+   * an orange or red camp so the copies walk in ahead of the party and the camp spends its
+   * opening blows on them (plus/index.ts `vanguardPass`). Same doors as any other press, so it
+   * can never be more permissive than a player's click.
+   *
+   * It presses UP TO the cap in one go rather than one per pass. A vanguard has to set off
+   * together — doubles dribbled out a second apart arrive a second apart and are killed in
+   * ones — and the data allows it: `[AIil] Cool1` is 0, so a second charge is legal the instant
+   * the first is spent.
+   *
+   * The doubles already ordered do not exist yet when the next press is decided (spawning is
+   * asynchronous — the request is drained by the renderer, docs/illusions.md), which is why the
+   * loop counts its OWN presses against the cap rather than re-counting what is standing.
+   *
+   * Returns how many went through.
+   */
+  makeIllusions(u: SimUnit, cap: number = ILLUSION_CAP): number {
+    if (!u.inventory.length || !this.canAct(u)) return 0;
+    const own: SimUnit[] = [];
+    for (const o of this.view.world.units.values()) {
+      if (o.hp > 0 && o.owner === this.view.player) own.push(o);
+    }
+    const standing = this.doubles(own);
+    let made = 0;
+    while (standing + made < cap) {
+      const slot = this.illusionSlot(u);
+      if (slot < 0) break; // no wand, out of charges, or cooling down
+      const def = this.view.item(u.inventory[slot]!.itemId);
+      if (!def || !this.aim(u, slot, def, "illusion", own)) break;
+      made++;
+    }
+    return made;
+  }
+
+  /** The slot holding a Wand of Illusion this unit could press right now, or -1. Keyed on the
+   *  ABILITY code for the same reason `USE_OF` is, and `itemReadyError` is the sim's own door:
+   *  a wand out of charges is a wand the hero has not got. */
+  private illusionSlot(u: SimUnit): number {
+    for (let slot = 0; slot < u.inventory.length; slot++) {
+      const held = u.inventory[slot];
+      if (!held) continue;
+      const def = this.view.item(held.itemId);
+      if (!def?.usable) continue;
+      if (!def.abilities.some((aid) => this.view.def(aid)?.code === ILLUSION_ABILITY)) continue;
+      if (this.view.world.itemReadyError(u.id, slot) !== null) continue;
+      return slot;
+    }
+    return -1;
   }
 
   // ==========================================================================================

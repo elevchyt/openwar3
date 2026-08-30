@@ -983,7 +983,7 @@ human does not have:
 | may this hero take delivery | `SimWorld.shopReaches` — the same test `purchaseItem` applies, exposed so a caller can walk somebody into range first |
 
 **What it presses** is a `Use` ladder in the shape of the caster's `Role` one — *escape, panic,
-healSelf, healArea, healOther, mana, buff* — and it is keyed on the item's **ability code**, never
+healSelf, healArea, healOther, mana, illusion, buff* — and it is keyed on the item's **ability code**, never
 on the item id, because an item's behaviour is not in the item ([`items.md`](./items.md)). One
 entry therefore covers a Potion of Healing bought at a Vault and the same potion picked up off a
 dead ogre. Anything unlisted is carried and never pressed, which is the safe direction to be wrong
@@ -1066,6 +1066,77 @@ waits. And there is one button on a BUILDING which is very human: **Call to Arms
 Human town bell, and it is already rung by [`plus/casting.ts`](../src/ai/plus/casting.ts)
 `townBell` — the answer to "something is in my base and my army is somewhere else", and never on
 Easy.
+
+#### The Wand of Illusion: the doubles go in FIRST
+
+A **Wand of Illusion** (`will`, `[AIil]`, three charges) makes a body that walks, is swung at and
+**deals no damage at all** — `DataA "Damage Dealt (%)"` is empty, which is the 0 that makes it
+harmless, and `DataB` is the 2 that makes it take double ([`illusions.md`](./illusions.md)). So
+the whole of what a charge buys is *blows that land on a copy instead of on the party*, and that
+makes it two presses rather than one:
+
+- **In a fight** — the ladder's own `illusion` rung, gated exactly as `buff` is (a real fight,
+  `CLUSTER` bodies that can hit back; one scout walking past is not one).
+- **Before an ORANGE or RED creep camp** — `PlusItems.makeIllusions`, called by the army manager
+  ([`plus/index.ts`](../src/ai/plus/index.ts) `vanguardPass`) rather than reached from the ladder,
+  because by the time the belt can see a fight the creeps have already picked their targets and
+  the hero is one of them. A green camp gets none: it is priced at a hero and a soldier or two
+  ([`power.ts`](../src/ai/plus/power.ts)) and the wand has three charges for the whole match.
+
+**Who it copies** is the biggest body in reach (`toCopy`), not always the hero: the copy arrives at
+**full** hit points however hurt the original is (`initIllusion`), so the only thing worth reading
+is `maxHp`. A Tauren's double outlasts a Tauren Chieftain's. Its own copies are excluded — a copy
+of a copy is the same body at a further remove — and so is anything outside the wand's `Rng1` of
+500, which `itemUseError` would refuse anyway.
+
+**How many**: `ILLUSION_CAP` is 2, and it is stated in *doubles alive* rather than in presses, so
+it self-limits without a clock — the third charge is only ever spent once one of them has popped,
+which is the fight that is still going. Nothing in the data would stop a hero emptying the wand in
+one second: `[AIil] Cool1` is **0**.
+
+**The vanguard**, in order:
+
+1. The party is walking at an orange or red camp and the captain comes within `VANGUARD_RANGE`
+   (1200 — outside the camp's own `AcquisitionRange` of 500, with room to get in front). The wand
+   is pressed here rather than at the muster point because a double lasts **sixty seconds**
+   (`Dur1`) and one conjured at home spends most of that walking.
+2. The body is **stopped where it stands**. Merely leaving it out of the commit is not enough — it
+   would walk on under the attack-move it is already carrying, which is the party arriving *with*
+   the copies instead of behind them. Anything already swinging is left alone.
+3. `commit` walks only the copies, straight at the camp and **exempt from cohesion** (`strayed`
+   returns false for an illusion) — being out in front of the anchor is the entire job.
+4. `VANGUARD_LEAD` (3 s) later the body follows and the fight is joined normally.
+
+The lead is measured from the moment the copies **set off**, not from the press. They do not exist
+yet when the wand is pressed — spawning is asynchronous, the request is drained by the renderer —
+so the pass that throws them cannot also order them, and a lead counted from the press would be a
+different lead per difficulty (three seconds of `armyPeriod` on Easy, half of one on Insane) and on
+the slow one would be spent before the copies had taken a step. The hold is therefore armed for
+the lead **plus** `VANGUARD_SPAWN_GRACE`, and set-off brings the deadline **in** — `min`, never
+`max`, so a copy that reaches the camp, idles and is re-ordered cannot push the deadline out in
+front of itself and stand the whole army still for the rest of the match. One attempt per run, marked done
+whether or not anything was pressed, so a hero with no wand is not re-asked every pass and one with
+a wand does not dribble a fresh double into the walk every few seconds.
+
+#### An illusion is a PICTURE of the army, not part of it
+
+The copies join the squad — they have to, or nothing gives them orders — and belong in **none** of
+the arithmetic the squad is judged by (`isCopy`, [`plus/index.ts`](../src/ai/plus/index.ts)). Each
+of these was wrong in a way that matters, and all of them were already reachable through the
+Blademaster's Mirror Image:
+
+| reading | what counting a copy does |
+| --- | --- |
+| power (`creepForce`, `oppositionHealthy`) | prices `dps × hp` on a unit whose damage is zero — the party walks into a camp on strength it has not got, which is the exact failure [`power.ts`](../src/ai/plus/power.ts) exists to prevent |
+| health (`creepForce`, `readiness`) | copies arrive at full hit points and are **meant** to die, so the vanguard popping reads as the army breaking and `fightLost` marches it home from a camp it has not started fighting |
+| food (`squadFood`, `gathered`, `armyFood`) | a double occupies no food and lasts a minute — a wave believes it is big enough on bodies that are about to vanish, and the production ceiling stops training the real ones |
+| the line (`squadCentre`, `pullPass`) | the copies are deliberately in front, so they must not drag the anchor forward; and one on its last quarter is doing exactly what it is for and must not be walked out of the fight |
+
+One sim fix came with this. `[AIil]` filed its double under **the presser** rather than under what
+it copied (`SimUnit.illusionOf`, whose whole job is the link back to the original — the two
+coincide for Mirror Image and only for it). `levelUp` walks that link to level a hero's images with
+him, so a double of a Grunt made with the hero's wand would have dinged, flashed and stood there as
+a level-6 Grunt.
 
 ### The wounded walk out of the fight, and go back in
 

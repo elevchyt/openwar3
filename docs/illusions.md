@@ -171,6 +171,10 @@ back to the *attack* clip is not something the engine does.)
    shifted indices**), plus its name / level / mana / base attributes / inventory. Set
    `unsummonArt` = `def.buffSpecialArt` and `summonLeft` = `Dur1`, and let `initIllusion` apply
    it — do not poke the fields yourself, the ordering matters (see above).
+   **`illusionOf` is the TARGET, not the caster.** Mirror Image is the one ability where the two
+   are the same unit, and passing the presser here is the trap: `levelUp` walks that link to
+   level a hero's images with him, so a double of a Grunt made with a hero's wand would ding,
+   flash and stand there as a level-6 Grunt.
 4. Everything else — the blue wash, the timer, the no-damage rule, the pop and its sound —
    already follows from `isIllusion` + `isSummon` and needs no new code.
 
@@ -179,5 +183,9 @@ back to the *attack* clip is not something the engine does.)
 - `src/sim/world.ts` — `IllusionInit`, `initIllusion`, `startMirrorImage`, `tickMirrorImage`,
   `spawnIllusion`, `levelUpIllusion`, `unsummon`
 - `src/game/rts.ts` — `ILLUSION_TINT`, `applyFogTint`, `SelectionInfo`
+- [`computer-plus.md`](./computer-plus.md) § *The Wand of Illusion* — how the improved melee AI
+  spends one (the doubles walk into an orange or red creep camp ahead of the party), and why an
+  illusion has to be kept out of every reading the army is judged by: it deals no damage, it
+  arrives at full health, it costs no food, and it is meant to die
 - [`wc3-data-formats.md`](./wc3-data-formats.md) — where each table lives
 - [`REFERENCES.md`](./REFERENCES.md) — the reference index and its per-source gotchas

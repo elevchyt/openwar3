@@ -2801,7 +2801,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (!t) return;
     const lvl = lv(def, rank);
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
-    api.createIllusion(t, caster.owner, caster.team, caster.id, {
+    // The link is to WHAT WAS COPIED (`SimUnit.illusionOf`), which for this ability is the
+    // target and not the presser — the two coincide for Mirror Image and only for it. The hero
+    // holding the wand is the wrong answer: `levelUp` walks that link to level a hero's images
+    // with him, so a double of a Grunt filed under the hero would ding, flash and stand there
+    // as a level-6 Grunt the first time its owner levelled.
+    api.createIllusion(t, caster.owner, caster.team, t.id, {
       durationSec: lvl.heroDuration || lvl.duration || 60,
       dealt: d(lvl, 0, 0),
       taken: d(lvl, 1, 2),

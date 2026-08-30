@@ -228,7 +228,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   never spent on a WORKER it cannot finish (`nukeWorthIt`) — Frost Nova's share to the unit it
   hits is 100 at every rank and no worker in the game has that little life — priced off the same
   data columns the sim's own handlers read, and enforced at LEGALITY so the misclick cannot land
-  there either. It DOES shop and drink
+  there either. A WAND OF ILLUSION is spent as a VANGUARD: the doubles are thrown a few seconds
+  out from an ORANGE or RED creep camp, the body is STOPPED where it stands, and only the copies
+  walk in — exempt from cohesion, because being in front is the whole job. The trap beside it is
+  that an illusion is a PICTURE of the army and belongs in NONE of the readings the squad is
+  judged by (`isCopy`): it deals no damage, arrives at full health, costs no food and is MEANT to
+  die, so counting it prices the party for a camp it cannot take and makes the vanguard popping
+  read as the army breaking. It DOES shop and drink
   ([`plus/items.ts`](src/ai/plus/items.ts)), and the trap there is the one that broke almost the
   whole belt once: what a press is FOR is keyed on the ability's base **`code`**, never on
   `AbilityData.slk`'s `alias` — `AIh1` is `AIhe`, `AIm1` is `AIma`, and the Salve, both Clarity

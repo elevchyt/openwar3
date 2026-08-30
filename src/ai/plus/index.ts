@@ -22,7 +22,7 @@ import {
 import { plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, heroKillable, killValue } from "./targeting";
 import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from "./races";
-import { armyPower, maxCampLevel, type CreepForce, type Fighter } from "./power";
+import { CAMP_GREEN_MAX, armyPower, maxCampLevel, type CreepForce, type Fighter } from "./power";
 
 // Computer+ — the improved melee AI (issue #124). Start at docs/computer-plus.md.
 //
@@ -558,6 +558,55 @@ const CREEP_HEALTH = 0.65;
 const CREEP_UNTIL_LEVEL = 5;
 
 /**
+ * THE ILLUSIONS GO IN FIRST: how close to the camp the party is when the wand comes out.
+ *
+ * A Wand of Illusion makes a body that fights, is swung at, and hurts nothing (docs/
+ * illusions.md) — so what it is worth against a creep camp is the opening exchange, the one the
+ * camp's whole roster spends on whoever walked in first. That is a decision about a camp the
+ * party has not reached yet, which is why it is the army manager's and not the belt's: by the
+ * time the ladder's own `illusion` rung can see a fight, the creeps have already picked their
+ * targets and the hero is one of them.
+ *
+ * It is pressed HERE rather than at the muster point because a double lasts sixty seconds
+ * (`[AIil] Dur1`), and a vanguard conjured at home spends most of that walking. Wide enough to
+ * be outside the camp's own notice — `MiscGame` AcquisitionRange is 500 — with room for the
+ * copies to get in front, and narrow enough that they arrive with the clock barely started.
+ */
+const VANGUARD_RANGE = 1200;
+/**
+ * …and how long the body waits behind them, measured from the moment the copies SET OFF.
+ *
+ * From the press would be the wrong clock: the doubles do not exist yet when the wand is
+ * pressed (spawning is asynchronous — docs/illusions.md) and the pass that orders them is the
+ * next army pass, which is three seconds away on Easy and half of one on Insane. A lead counted
+ * from the press is therefore a different lead per difficulty, and on the slow one it is spent
+ * before the copies have taken a step.
+ *
+ * The head start is the only thing that puts them in front — a copy is exactly as fast as what
+ * it copies — and at a soldier's ~300 units a second three seconds is most of the walk in from
+ * `VANGUARD_RANGE`. Shorter and the party arrives with them and the camp spreads its blows over
+ * everybody; much longer and the copies are fighting the camp alone for a fight they cannot
+ * win — they deal no damage at all, and at DOUBLE damage taken a double is not a long wall.
+ *
+ * ONLY the orange and red camps get one. A green camp is a hero and a soldier or two against
+ * something that was never going to hurt them (plus/power.ts), and the wand has three charges
+ * for the whole match.
+ */
+const VANGUARD_LEAD = 3;
+/**
+ * …and how long the hold may stand before the copies have set off at all.
+ *
+ * The hold has to be up the moment the wand is pressed — the body must not walk on under the
+ * order it is already carrying — but the lead itself cannot start until the copies exist, which
+ * is the next army pass (`armyPeriod`, three seconds at its slowest). So the hold is armed for
+ * the lead PLUS this, and `commit` brings it back in to `VANGUARD_LEAD` from the moment they
+ * actually move. That direction matters: the clock only ever moves EARLIER once set off, so a
+ * copy that arrives, idles and is re-ordered cannot push the deadline out in front of itself and
+ * stand the whole army still for the rest of the match.
+ */
+const VANGUARD_SPAWN_GRACE = 4;
+
+/**
  * A camp the party could not get to — how long it is left alone before it is offered again.
  *
  * The other half of the stall watchdog (`stalled`/`abandon`). Without it the watchdog is a loop
@@ -746,6 +795,32 @@ export function pushStalled(
   return clock - w.since >= PUSH_STUCK_AFTER;
 }
 
+/**
+ * IS THIS UNIT A PICTURE OF THE ARMY RATHER THAN PART OF IT?
+ *
+ * An illusion — a Blademaster's Mirror Image, or a double off a Wand of Illusion — is a body
+ * that walks, is swung at and deals NO DAMAGE AT ALL (docs/illusions.md). It belongs in the
+ * squad, because it has to be given orders like anything else; it belongs in none of the
+ * arithmetic the squad is judged by, and every one of those readings is wrong in a way that
+ * matters:
+ *
+ *  · **power** (`creepForce`, `oppositionHealthy`) — priced off `dps × hp`, and a copy's damage
+ *    per second is zero however its weapon reads on the sheet. Counting it walks the party into
+ *    a camp on strength it has not got, which is the very thing plus/power.ts was written for.
+ *  · **health** (`creepForce`, `readiness`) — copies arrive at FULL hit points and are meant to
+ *    die. Left in, the vanguard popping IS the army "breaking", and `fightLost` marches the
+ *    party home from a camp it has not started fighting yet.
+ *  · **food** (`squadFood`, `gathered`, `armyFood`) — a double occupies no food and lasts sixty
+ *    seconds. Left in, a wave believes it is big enough to attack because of bodies that are
+ *    about to vanish, and the production ceiling stops training the real ones.
+ *  · **the line** (`squadCentre`, `pullPass`) — the copies are deliberately out in front, so
+ *    they must not drag the army's anchor forward, and one on its last quarter is doing exactly
+ *    what it is for and must not be walked out of the fight.
+ */
+function isCopy(u: SimUnit): boolean {
+  return u.isIllusion;
+}
+
 /** Is this camp one the party gave up on recently (`CAMP_SHUN`)? Pure and exported for the same
  *  reason `pushStalled` is — an over-eager shun list is an AI that stops creeping. */
 export function isShunned(
@@ -928,6 +1003,13 @@ interface Brain {
   /** …and the combined LEVEL of the camp it is on, which is what plus/power.ts prices the party
    *  against — both to set off and, every pass after that, to decide it is still winning. */
   creepLevel: number;
+  /** Until when the BODY holds while its illusions walk into the camp ahead of it — 0 when
+   *  there is no vanguard out. See `VANGUARD_LEAD` and `vanguardPass`. */
+  vanguardUntil: number;
+  /** …and whether this run has already had its one attempt at throwing one. Without it a hero
+   *  standing outside a camp with no wand asks the belt the same question every army pass, and
+   *  one WITH a wand pops a fresh double every few seconds instead of a vanguard. */
+  vanguardDone: boolean;
   concededAt: number;
   gone: boolean;
 }
@@ -1034,6 +1116,8 @@ export class ComputerPlusAi {
       helpResume: null,
       creeping: false,
       creepLevel: 0,
+      vanguardUntil: 0,
+      vanguardDone: false,
       concededAt: -1,
       gone: false,
     });
@@ -1256,7 +1340,7 @@ export class ComputerPlusAi {
       if (u.owner !== b.ai.player || u.hp <= 0) continue;
       const def = this.host.registry.get(u.typeId);
       if (!def) continue;
-      if (!u.building && !u.isPeon) food += def.foodUsed;
+      if (!u.building && !u.isPeon && !isCopy(u)) food += def.foodUsed;
       for (const job of u.building?.queue ?? []) {
         if (job.kind !== "unit") continue;
         const made = this.host.registry.get(job.unitId);
@@ -1811,7 +1895,7 @@ export class ComputerPlusAi {
     let total = 0;
     let here = 0;
     for (const u of this.squadUnits(b)) {
-      if (this.recovering(u)) continue;
+      if (isCopy(u) || this.recovering(u)) continue;
       const food = this.host.registry.get(u.typeId)?.foodUsed ?? 0;
       total += food;
       if (Math.hypot(u.x - rally.x, u.y - rally.y) <= GATHER_RADIUS) here += food;
@@ -1926,6 +2010,7 @@ export class ComputerPlusAi {
     let maxHp = 0;
     const captain = this.squadHero(b);
     for (const u of this.squadUnits(b)) {
+      if (isCopy(u)) continue;
       hp += Math.max(0, u.hp);
       maxHp += Math.max(1, u.maxHp);
       if (u.isHero || this.recovering(u)) continue;
@@ -2094,7 +2179,59 @@ export class ComputerPlusAi {
     // …AND NOTHING WAITS FOR EVER. Every end condition above is a statement about the objective,
     // and none of them can answer "we are never going to get there" — see `PUSH_STUCK_AFTER`.
     if (this.stalled(b)) return void this.abandon(b);
+    // Asked BEFORE the re-commit, because what it decides is what that commit does: while a
+    // vanguard is out, `commit` walks the copies in and leaves the body standing.
+    this.vanguardPass(b, target);
     this.recommit(b, target.x, target.y);
+  }
+
+  /**
+   * THE ILLUSIONS GO IN FIRST.
+   *
+   * A Wand of Illusion (`will`, `[AIil]`) makes a double that fights, is swung at, and hurts
+   * nothing whatever — `DataA "Damage Dealt (%)"` is 0 and `DataB "Damage Received"` is 2
+   * (docs/illusions.md). So the one thing it is worth is the OPENING of a fight: a camp's whole
+   * roster acquires whoever walked in first, and for `VANGUARD_LEAD` that is a copy rather than
+   * the hero the run is for. This throws them, and holds the party back long enough for it to mean
+   * something.
+   *
+   * Four conditions, and each is a different way of wasting a charge:
+   *
+   *  · **A creep run, and an ORANGE or RED one.** A green camp is priced at a hero and a soldier
+   *    or two (plus/power.ts) and takes no casualties worth a charge; the wand has three for the
+   *    whole match. `creepLevel` is the camp's own combined level, which is the number the game
+   *    itself paints the minimap dot with.
+   *  · **Once per run.** Marked done whether or not anything was pressed, so a hero with no wand
+   *    is not re-asked every army pass and a hero with one does not dribble a fresh double into
+   *    the walk every few seconds. What happens INSIDE the fight is the belt's own `illusion`
+   *    rung (plus/items.ts), which has its own bar and its own cap.
+   *  · **Near the camp.** A double lasts sixty seconds and conjuring one at the muster point
+   *    spends most of that walking — see `VANGUARD_RANGE`.
+   *  · **Something actually went in.** No press, no hold: standing the army still in front of a
+   *    camp buys nothing at all if there is no vanguard to buy it for.
+   *
+   * The body is STOPPED rather than merely left out of the commit. Skipping it would leave every
+   * soldier walking on under the attack-move it was already carrying, which is the party
+   * arriving with the copies instead of behind them — the same order the hold is there to undo.
+   * Anything already swinging is left alone: a unit in a fight is not walking into the camp, it
+   * is in one, and stopping it is how a Grunt turns its back on something.
+   */
+  private vanguardPass(b: Brain, target: { x: number; y: number }): void {
+    if (!b.creeping || b.vanguardDone || b.creepLevel <= CAMP_GREEN_MAX) return;
+    const hero = this.squadHero(b);
+    if (!hero || Math.hypot(hero.x - target.x, hero.y - target.y) > VANGUARD_RANGE) return;
+    b.vanguardDone = true;
+    if (b.items.makeIllusions(hero) <= 0) return;
+    // Armed, but the clock is not started here — `commit` restarts it when the copies actually
+    // set off, which is a pass later (see `VANGUARD_LEAD`). This value is only what keeps the
+    // hold up until then. The re-issue clock is zeroed so that pass is the very next army pass
+    // rather than up to `REISSUE_PERIOD` away.
+    b.vanguardUntil = b.clock + VANGUARD_LEAD + VANGUARD_SPAWN_GRACE;
+    b.reissueIn = 0;
+    for (const u of this.squadUnits(b)) {
+      if (isCopy(u) || u.inCombat) continue;
+      b.ai.order({ c: "order", unitId: u.id, order: { kind: "stop" }, queued: false });
+    }
   }
 
   /**
@@ -2209,7 +2346,27 @@ export class ComputerPlusAi {
     // the BODY — the rest of the squad, itself left out — so the same rule can be asked of it.
     const captain = centre ? this.squadHero(b) : null;
     const body = captain ? this.squadCentre(b, captain.id) : null;
+    // THE ILLUSIONS ARE IN FRONT, ON PURPOSE — see `vanguardPass`. For the length of the lead
+    // the only thing this commit moves is the copies; the body was stopped where it stands and
+    // nothing here may start it walking again.
+    const vanguard = b.vanguardUntil > b.clock;
     for (const u of this.squadUnits(b)) {
+      if (vanguard) {
+        if (!isCopy(u)) continue;
+        // Straight at the camp, and no cohesion: being out ahead of the anchor is the whole
+        // job, and `strayed` would walk every copy back to the hero it is supposed to be
+        // walking in front of. The re-issue guard is `commit`'s own, for the same reason — an
+        // attack-move restated every pass is a full path search per copy.
+        if (u.order === "attackmove" && Math.hypot(u.amDestX - x, u.amDestY - y) <= REISSUE_SLACK) continue;
+        b.ai.order({ c: "order", unitId: u.id, order: { kind: "attackmove", x, y }, queued: false });
+        // THE LEAD IS MEASURED FROM HERE — this copy has just been pointed at the camp, and the
+        // press is the wrong moment to count from (see `VANGUARD_LEAD`). `min`, never `max`:
+        // the deadline may only ever come in, so a copy that reaches the camp, idles and is
+        // re-ordered cannot keep pushing it out and hold the army still for the rest of the
+        // match. `VANGUARD_SPAWN_GRACE` is what it is coming in FROM.
+        b.vanguardUntil = Math.min(b.vanguardUntil, b.clock + VANGUARD_LEAD);
+        continue;
+      }
       // A unit that is HEALING is not ordered anywhere. It is standing in the base with a Salve
       // on it or its head in a Moon Well, and marching it out is what makes the heal pointless.
       // Nor is one two steps from a drop it is walking to — the loot pass only ever sends a
@@ -2276,7 +2433,13 @@ export class ComputerPlusAi {
       if (u.order === "attackmove" && Math.hypot(u.amDestX - x, u.amDestY - y) <= REISSUE_SLACK) continue;
       b.ai.order({ c: "order", unitId: u.id, order: { kind: "attackmove", x, y }, queued: false });
     }
-    b.reissueIn = REISSUE_PERIOD;
+    // A vanguard is re-considered EVERY army pass rather than every `REISSUE_PERIOD`. The copies
+    // do not exist yet when the wand is pressed — spawning is asynchronous, the request is
+    // drained by the renderer (docs/illusions.md) — so the pass that throws them cannot also
+    // order them, and waiting four seconds for the next one would spend most of the lead
+    // standing still. It costs nothing: inside the window this loop only ever looks at the
+    // copies, and their attack-move is not re-issued once it is pointed at the camp.
+    b.reissueIn = vanguard ? 0 : REISSUE_PERIOD;
   }
 
   /**
@@ -2366,6 +2529,12 @@ export class ComputerPlusAi {
    * middle instead of each unit chasing the one in front.
    */
   private strayed(b: Brain, u: SimUnit, centre: { x: number; y: number }, x: number, y: number): boolean {
+    // A COPY IS NEVER HELD BACK. Cohesion is about keeping the army's real bodies together so
+    // they arrive as one; an illusion's entire job is to be the thing in front (`vanguardPass`),
+    // and it costs nothing when it dies alone. Without this the doubles thrown ahead of a camp
+    // are walked back to the captain the moment the lead expires — a pass short of contact, and
+    // exactly the contact they were spent on.
+    if (isCopy(u)) return false;
     const off = Math.hypot(u.x - centre.x, u.y - centre.y);
     if (off <= COHESION_RADIUS) return false;
     // A unit that is IN a fight is left in it — pulling it out is not cohesion.
@@ -2388,7 +2557,7 @@ export class ComputerPlusAi {
       // The units still IN the line. One walked out of the fight (`pullPass`) is standing a
       // screen behind it by design, and letting it drag the centre back is how one wounded
       // Grunt re-aims the whole army at the ground behind itself.
-      if (u.isPeon || pulledOut(b.pulls.get(u.id), b.clock)) continue;
+      if (u.isPeon || isCopy(u) || pulledOut(b.pulls.get(u.id), b.clock)) continue;
       // …and one unit may be left out on purpose: `commit` asks where the BODY is in order to
       // hold the captain to it, and a captain measured against a centre it is itself half of is
       // a captain that can only ever be a fraction of its own lead out of position.
@@ -2460,6 +2629,11 @@ export class ComputerPlusAi {
     b.push.was = null;
     b.push.since = b.clock;
     b.afield = false;
+    // A new objective is also a fresh vanguard: the old one's hold must not survive into a
+    // retreat (it would stand the army still while it was supposed to be walking home), and the
+    // next creep run gets its own attempt at throwing one.
+    b.vanguardUntil = 0;
+    b.vanguardDone = false;
     // A general retreat and a rally both SUPERSEDE one soldier's errand: both states issue a
     // destination of their own for every unit in the squad, and a stale pull-back entry would
     // either fight that order or hold the unit out of the wave that forms next.
@@ -2489,7 +2663,7 @@ export class ComputerPlusAi {
   private squadFood(b: Brain): number {
     let food = 0;
     for (const u of this.squadUnits(b)) {
-      if (this.recovering(u) || pulledOut(b.pulls.get(u.id), b.clock)) continue;
+      if (isCopy(u) || this.recovering(u) || pulledOut(b.pulls.get(u.id), b.clock)) continue;
       food += this.host.registry.get(u.typeId)?.foodUsed ?? 0;
     }
     return food;
@@ -2578,7 +2752,7 @@ export class ComputerPlusAi {
       // A worker is not part of the line (the scout and the harvest crew are the economy's, and
       // `recruit` keeps them out of the squad anyway), and a unit already being healed is
       // standing still on purpose — walking it somewhere is what `recovering` exists to stop.
-      if (u.isPeon || this.recovering(u)) continue;
+      if (u.isPeon || isCopy(u) || this.recovering(u)) continue;
       if (!pullDue(entry, u.hp / Math.max(1, u.maxHp), b.profile.pullOutHp, b.clock)) continue;
       const foe = this.foeBeside(b, u, COHESION_COMBAT);
       if (!foe) continue; // not in a fight — there is nothing to walk out of
@@ -2833,6 +3007,7 @@ export class ComputerPlusAi {
     let hp = 0;
     let max = 0;
     for (const u of this.squadUnits(b)) {
+      if (isCopy(u)) continue;
       hp += u.hp;
       max += u.maxHp;
     }

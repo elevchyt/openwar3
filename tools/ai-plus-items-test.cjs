@@ -153,6 +153,7 @@ const ITEMS = {
   sreg: { id: "sreg", gold: 100, usable: true, abilities: ["AIsl"] }, // Scroll of Regeneration
   prep: { id: "prep", gold: 100, usable: true, abilities: ["AIp1"] }, // Replenishment Potion
   bspd: { id: "bspd", gold: 250, usable: false, abilities: ["AIms"] }, // Boots of Speed — passive
+  will: { id: "will", gold: 150, usable: true, abilities: ["AIil"] }, // Wand of Illusion
 };
 // The ability rows: the `target` that is the whole of how an item is AIMED (items.ts `aim`), the
 // base `code` that decides what pressing it is FOR (items.ts `USE_OF`), and — for the one code
@@ -178,6 +179,9 @@ const ABILS = {
   AIpr: { code: "AIrg", target: "", levelData: [lvl({ duration: 45, data: [0, 200] })] },
   AIp1: { code: "AIrg", target: "", levelData: [lvl({ duration: 30, data: [100, 25] })] },
   AIda: { code: "AIda", target: "", levelData: [lvl()] },
+  // `[AIil] targs1` = "ground,air,friend,self", `Rng1` = 500, `Dur1` = 60, and DataA "Damage
+  // Dealt (%)" is EMPTY — the 0 that makes the copy harmless (docs/illusions.md).
+  AIil: { code: "AIil", target: "unit", levelData: [lvl({ castRange: 500, duration: 60, data: [0, 2] })] },
   AIms: { code: "AIms", target: "", levelData: [lvl()] },
 };
 
@@ -413,6 +417,111 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
   // An illusion of a hero shows a copy of the belt; pressing from it would spend real charges.
   const h = belt(hero({ hp: 400, isIllusion: true }), "phea");
   check("an illusion presses nothing", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+}
+
+// ==========================================================================================
+console.log("\n-- the Wand of Illusion ------------------------------------------------------");
+// ==========================================================================================
+
+// What a double is FOR: it fights, it is swung at, and it deals no damage at all (`[AIil] DataA`
+// = 0). So the whole of its value is soaking blows that would otherwise land on the party — in a
+// fight, and, when the army manager asks for it, a few seconds BEFORE an orange or red creep
+// camp so the copies walk in first (plus/index.ts `vanguardPass`).
+const bigUn = (o = {}) => unit({ typeId: "otau", maxHp: 1300, hp: 1300, ...o });
+
+{
+  const h = belt(hero(), "will");
+  const cmd = pressed([h, enemy({ x: 200 }), enemy({ x: 250 }), enemy({ x: 300 })], PLUS_INSANE, AWAY);
+  check("a hero in a real fight waves its wand", itemOf(cmd), 0);
+}
+{
+  // ONE scout walking past is not a fight, and the wand has three charges for the whole match.
+  const h = belt(hero(), "will");
+  check("…but not at a single enemy", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+}
+{
+  // WHO IT COPIES: the biggest body in reach, because the copy arrives at FULL hit points and
+  // its only job is to stand there. A Tauren's double outlasts a hero's, so this is deliberately
+  // not "always the caster".
+  const h = belt(hero({ maxHp: 900, hp: 900 }), "will");
+  const tauren = bigUn({ x: 100 });
+  const cmd = pressed([h, tauren, enemy({ x: 200 }), enemy({ x: 250 }), enemy({ x: 300 })], PLUS_INSANE, AWAY);
+  check("…copying the biggest body in the party, not the hero", cmd && cmd.targetId, tauren.id);
+}
+{
+  // …and NOT one of its own copies. A copy of a copy is the same body at a further remove, and
+  // it stops being the biggest thing in the party the moment anything hits it.
+  const h = belt(hero({ maxHp: 900, hp: 900 }), "will");
+  const ghost = bigUn({ x: 100, maxHp: 5000, hp: 5000, isIllusion: true });
+  const cmd = pressed([h, ghost, enemy({ x: 200 }), enemy({ x: 250 }), enemy({ x: 300 })], PLUS_INSANE, AWAY);
+  check("…never a double of a double", cmd && cmd.targetId, h.id);
+}
+{
+  // The wand reaches 500 (`[AIil] Rng1`), so a body across the map is not a body it can copy.
+  const h = belt(hero({ maxHp: 900, hp: 900 }), "will");
+  const far = bigUn({ x: 4000 });
+  const cmd = pressed([h, far, enemy({ x: 200 }), enemy({ x: 250 }), enemy({ x: 300 })], PLUS_INSANE, AWAY);
+  check("…and only one inside the wand's own 500 range", cmd && cmd.targetId, h.id);
+}
+{
+  // THE CAP. Three charges, `Cool1` = 0: nothing in the data stops a hero emptying the wand into
+  // the first skirmish of the match. `ILLUSION_CAP` is what does, and it is stated in doubles
+  // ALIVE — so the third charge is only ever spent once one of them has popped.
+  const h = belt(hero(), "will");
+  const foes = [enemy({ x: 200 }), enemy({ x: 250 }), enemy({ x: 300 })];
+  const two = [unit({ x: 40, isIllusion: true }), unit({ x: 60, isIllusion: true })];
+  check("two doubles already standing is enough", pressed([h, ...two, ...foes], PLUS_INSANE, AWAY), null);
+  check("…one is not", itemOf(pressed([h, two[0], ...foes], PLUS_INSANE, AWAY)), 0);
+}
+{
+  // THE LADDER. A hero that is about to die leaves; it does not stop to conjure scenery.
+  const h = belt(hero({ hp: 200, x: 4000, y: 4000 }), "will", "stwp");
+  const foes = [enemy({ x: 4200, y: 4000 }), enemy({ x: 4250, y: 4000 }), enemy({ x: 4300, y: 4000 })];
+  check("the Town Portal still outranks the wand", itemOf(pressed([h, ...foes], PLUS_INSANE, AWAY)), 1);
+}
+
+// --- the vanguard: the press the ARMY MANAGER makes, before a camp --------------------------
+/** A `PlusItems` over these units, plus the orders it produced — `makeIllusions` is called by
+ *  plus/index.ts rather than by the belt's own pass, so it needs the object and not just a
+ *  press. */
+function wand(units, profile = PLUS_INSANE) {
+  const orders = [];
+  const world = {
+    units: new Map(units.map((u) => [u.id, u])),
+    items: new Map(),
+    itemReadyError: () => null, itemUseError: () => null,
+    shopReaches: () => false, shopStock: () => -1, missingForShop: () => [], isShopUnit: () => false,
+  };
+  const items = new PlusItems({
+    world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner !== 0,
+    order: (cmd) => { orders.push(cmd); return true; }, item: (id) => ITEMS[id],
+    wares: () => [], gold: () => 0,
+  }, profile, "human");
+  return { items, orders };
+}
+{
+  // A vanguard has to set off TOGETHER — doubles dribbled out a press per pass arrive a second
+  // apart and are killed in ones — and the data allows it: `Cool1` is 0, so the second charge is
+  // legal the instant the first is spent. The copies do not exist yet when the next press is
+  // decided (spawning is asynchronous), so the loop counts its own presses.
+  const h = belt(hero(), "will");
+  const { items, orders } = wand([h]);
+  check("the manager's press throws the whole vanguard at once", items.makeIllusions(h), 2);
+  check("…as two useitem commands", orders.filter((c) => c.c === "useitem").length, 2);
+}
+{
+  // …and it obeys the same cap the ladder does: one double already out, one more thrown.
+  const h = belt(hero(), "will");
+  const { items } = wand([h, unit({ x: 40, isIllusion: true })]);
+  check("…counting what is already standing", items.makeIllusions(h), 1);
+}
+{
+  const h = belt(hero(), "phea"); // no wand
+  check("a hero with no wand throws nothing", wand([h]).items.makeIllusions(h), 0);
+}
+{
+  const h = belt(hero({ stunned: true }), "will");
+  check("…and neither does a stunned one", wand([h]).items.makeIllusions(h), 0);
 }
 
 // ==========================================================================================
