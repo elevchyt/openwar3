@@ -154,6 +154,18 @@ const RETREAT_HP_FRACTION = 0.35;
 /** …and comes back out once it has healed to this. */
 const REGROUP_HP_FRACTION = 0.7;
 
+/**
+ * Build passes a halted row may spend WITHOUT once getting nearer to its price before the
+ * ladder is let past it for a single pass — see `AiPlayer.releaseStall`.
+ *
+ * Twenty, which is forty seconds for a Normal Computer+ and twenty for an Insane one
+ * (`PlusProfile.buildPeriod`) and about a minute for the classic AI. Long enough that a player
+ * genuinely saving up for a Keep is never interrupted — a saving row beats its own best on
+ * nearly every pass, which resets the count — and short enough that a computer which has
+ * walked into a corner is out of it before the corner decides the match.
+ */
+const STALL_PASSES = 20;
+
 export class AiPlayer {
   /** `hero_id`/`hero_id2`/`hero_id3` — PickMeleeHero's three picks, in order. */
   heroId = "";
@@ -201,6 +213,9 @@ export class AiPlayer {
   private totalWood = 0;
   /** The harvest plan `ClearHarvestAI`/`HarvestGold`/`HarvestWood` build up, in call order. */
   private harvestPlan: Array<{ res: "gold" | "lumber"; town: number; count: number }> = [];
+  /** Buildings this pass means to UPGRADE, and which `trainUnits` therefore leaves alone —
+   *  rebuilt at the top of every `runBuildLoop`. See `holdForUpgrades`. */
+  private upgradeHold: ReadonlySet<number> = new Set();
 
   constructor(
     readonly player: number,
@@ -513,15 +528,111 @@ export class AiPlayer {
   runBuildLoop(): void {
     this.totalGold = this.gold();
     this.totalWood = this.wood();
+    this.upgradeHold = this.holdForUpgrades();
+    let released = false;
     for (const row of this.buildList) {
-      if (row.type === BUILD_UNIT) {
-        if (!this.startUnit(row.qty, row.item, row.town)) return;
-      } else if (row.type === BUILD_UPGRADE) {
+      if (row.type === BUILD_UPGRADE) {
         this.startUpgrade(row.qty, row.item);
-      } else {
-        if (!this.startExpansion(row.qty, row.item)) return;
+        continue;
       }
+      const ok = row.type === BUILD_UNIT
+        ? this.startUnit(row.qty, row.item, row.town)
+        : this.startExpansion(row.qty, row.item);
+      if (ok) continue;
+      // …and the one exception to "the loop RETURNS": a row that has held the ladder for a
+      // long time and is getting no CLOSER to being paid for lets one pass through. See
+      // `releaseStall`. Only ever the first halt of a pass — once something has been let past,
+      // the next row that cannot pay stops the list as it always did.
+      if (released || !this.releaseStall(row.item)) return;
+      released = true;
     }
+    this.clearStall();
+  }
+
+  /** The row the loop last stopped on, the smallest shortfall seen while it has been stopped
+   *  there, and how many passes it has failed to beat that. See `releaseStall`. */
+  private stallItem = "";
+  private stallBest = Infinity;
+  private stallPasses = 0;
+  /** What the row that just refused was short by, gold and lumber summed — a progress signal
+   *  rather than a price, which is all `releaseStall` needs of it. */
+  private stallShort = 0;
+
+  /**
+   * THE RELEASE VALVE: is this halt a player saving up, or is it a dead end?
+   *
+   * `OneBuildLoop` returning at the first row it cannot afford is the file's own rule and it is
+   * what makes a build order an order — but it quietly assumes the shortfall SHRINKS. It does
+   * not always. A row short of LUMBER on a player with nobody in the trees is short of it for
+   * ever, and everything below that row never runs again — including the rows that would have
+   * hired a lumberjack, put up a farm or trained the soldier that pays for itself. The same
+   * shape closes over a computer that cannot reach the food to train what a row asks for: the
+   * ladder stops at the row, and the farm that would have lifted the cap is underneath it.
+   *
+   * So the halt is allowed to stand for as long as it is EARNING. `stallBest` ratchets down
+   * with every pass that gets nearer the price; only a row that has spent `STALL_PASSES`
+   * passes without once beating its own best is let past, and only for that single pass, and
+   * only for the first such row in the list. Nothing is abandoned — the row is asked for again
+   * on the very next pass, and the ordinary rule applies again from there.
+   *
+   * `harvestPlan`'s minimum forest crew (plus/plan.ts `LUMBER_MIN`) makes the commonest way
+   * into a dead end unreachable; this is the belt to that brace, and it is what keeps ANY such
+   * state from being permanent whatever produced it.
+   */
+  private releaseStall(item: string): boolean {
+    if (item !== this.stallItem) {
+      this.stallItem = item;
+      this.stallBest = this.stallShort;
+      this.stallPasses = 0;
+      return false;
+    }
+    if (this.stallShort < this.stallBest) {
+      this.stallBest = this.stallShort; // still earning: the rule holds
+      this.stallPasses = 0;
+      return false;
+    }
+    if (++this.stallPasses < STALL_PASSES) return false;
+    this.stallPasses = 0;
+    this.stallBest = Infinity;
+    return true;
+  }
+
+  private clearStall(): void {
+    this.stallItem = "";
+    this.stallBest = Infinity;
+    this.stallPasses = 0;
+  }
+
+  /**
+   * The buildings this pass intends to UPGRADE, held out of the training pool.
+   *
+   * A tier is an UPGRADE of the hall you already own (`setProduce`), and `upgradeExisting`
+   * needs that hall IDLE — but the worker rows sit above the tier row in every build order
+   * there is, and they re-fill the hall's queue on every pass. So the hall was never idle at
+   * the moment the tier row was read: `upgradeExisting` found no candidate, `placeStructure`
+   * was refused (no worker in the game builds a Stronghold), and the computer sat at tier 1
+   * for as long as it still wanted workers — which, with `PlusProfile.workers` counted per
+   * MINE, is most of a match that expands. Holding the candidate out of `trainUnits` for the
+   * pass costs one worker a few seconds and is the whole of the fix.
+   *
+   * Only for a row that can actually be PAID for, so no hall is ever held hostage to a tier-up
+   * the player is still saving for.
+   */
+  private holdForUpgrades(): Set<number> {
+    const held = new Set<number>();
+    for (const row of this.buildList) {
+      if (row.type !== BUILD_UNIT) continue;
+      const def = this.host.registry.get(row.item);
+      if (!def?.isBuilding) continue;
+      const have = row.town === -1 ? this.townCount(row.item) : this.townCountTown(row.item, row.town);
+      if (have >= row.qty) continue;
+      const sources = [...this.upgradeSources(row.item, row.town)];
+      if (sources.length === 0) continue;
+      const cost = this.rowCost(def, row.item, row.town);
+      if (this.gold() < cost.gold || this.wood() < cost.lumber) continue;
+      for (const b of sources) held.add(b.id);
+    }
+    return held;
   }
 
   /** `StartUnit(ask_qty, id, town)`. */
@@ -539,7 +650,13 @@ export class AiPlayer {
     const affordWood = woodCost === 0 ? need : Math.floor(this.totalWood / woodCost);
     if (affordWood < affordQty) affordQty = affordWood;
 
-    if (affordQty < 1) return false; // waiting on resources: hold everything below this row
+    if (affordQty < 1) {
+      // Waiting on resources: hold everything below this row — but record BY HOW MUCH, which is
+      // what tells a player saving up from a dead end. See `releaseStall`.
+      this.stallShort = Math.max(0, goldCost * need - this.totalGold)
+        + Math.max(0, woodCost * need - this.totalWood);
+      return false;
+    }
 
     this.totalGold = Math.max(0, this.totalGold - goldCost * need);
     this.totalWood = Math.max(0, this.totalWood - woodCost * need);
@@ -589,7 +706,10 @@ export class AiPlayer {
 
     const def = this.host.registry.get(hall);
     if (!def) return true;
-    if (def.goldCost > this.totalGold) return false;
+    if (def.goldCost > this.totalGold) {
+      this.stallShort = def.goldCost - this.totalGold;
+      return false;
+    }
     this.totalGold -= def.goldCost;
 
     // `GetExpansionFoe()` — creeps camped on the next expansion. The hall waits; the attack
@@ -644,6 +764,9 @@ export class AiPlayer {
       // One job at a time per building: WC3's AI does not stack five Grunts in one Barracks
       // while a second stands empty, and a deep queue is gold it cannot take back.
       if (b.building!.queue.length > 0) continue;
+      // …and a building this pass means to UPGRADE is not a building to put a worker in. See
+      // `holdForUpgrades` for the tier-up that could otherwise never start.
+      if (this.upgradeHold.has(b.id)) continue;
       if (this.host.execute(this.player, { c: "train", buildingId: b.id, unitId: id })) made++;
     }
     return made > 0;
@@ -681,15 +804,24 @@ export class AiPlayer {
   }
 
   /** Our own standing buildings that this row would UPGRADE rather than found — a Town Hall
-   *  under a `SetBuildUnit(1, KEEP)`, a Ziggurat under a Spirit Tower. Idle ones only, since a
-   *  building with anything in its queue refuses the order (authority.ts `queueFull`). */
-  private *upgradeCandidates(id: string, town: number): Generator<SimUnit> {
+   *  under a `SetBuildUnit(1, KEEP)`, a Ziggurat under a Spirit Tower. Whether they are BUSY or
+   *  not: this answers "is this row an upgrade at all", which is the question `rowCost` and
+   *  `holdForUpgrades` ask and which a job in a queue cannot change. */
+  private *upgradeSources(id: string, town: number): Generator<SimUnit> {
     for (const b of this.host.world.units.values()) {
       if (b.owner !== this.player || b.hp <= 0 || !b.building) continue;
-      if (b.building.constructionLeft > 0 || b.building.queue.length > 0) continue;
+      if (b.building.constructionLeft > 0) continue;
       if (town >= 0 && this.townAt(b.x, b.y) !== town) continue;
       if (!this.host.tech.get(b.typeId).upgrade.includes(id)) continue;
       yield b;
+    }
+  }
+
+  /** …and the ones that could take the order RIGHT NOW: idle only, since a building with
+   *  anything in its queue refuses it (authority.ts `queueFull`). */
+  private *upgradeCandidates(id: string, town: number): Generator<SimUnit> {
+    for (const b of this.upgradeSources(id, town)) {
+      if (b.building!.queue.length === 0) yield b;
     }
   }
 
@@ -733,7 +865,16 @@ export class AiPlayer {
       return { gold: c.gold, lumber: c.lumber };
     }
     if (def.isBuilding) {
-      for (const b of this.upgradeCandidates(id, town)) {
+      // `upgradeSources`, NOT `upgradeCandidates`: what this row COSTS cannot depend on whether
+      // the hall happens to be busy this second. Priced off the idle-only scan it was, and a
+      // hall training workers — which is a hall for most of the first three minutes, because the
+      // worker rows sit above the tier row in the ladder — priced a Stronghold at its whole
+      // 700/375 rather than the 315/190 the upgrade is charged. A row the loop cannot afford
+      // HALTS it, so the ladder spent most of the opening stopped at a price it would never
+      // actually have been asked for, with the Barracks, the upgrades and the army rows all
+      // underneath it. Measured headless (tools/ai-plus-ladder-test.cjs): a Normal computer of
+      // every race halted on the tier row for four passes in five over the first two minutes.
+      for (const b of this.upgradeSources(id, town)) {
         const from = this.host.registry.get(b.typeId);
         if (!from) break;
         return {

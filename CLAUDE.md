@@ -272,6 +272,21 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   called from the middle of chat delivery. Scouting intel is NOT chat — a sighting is written
   into every allied Computer+ player's `EnemyMemory` at the moment it is made — and it is not a
   fog bypass, because what travels is what somebody's own eyes saw.
+  **A ROW THAT HALTS THE LOOP STOPS EVERYTHING UNDER IT**, and almost every "the AI just stands
+  there" report is one row halting for a reason it should not. Four rules keep it moving and each
+  cost a subsystem: a tier-up is priced off a STANDING source (`upgradeSources`, busy or not) —
+  priced off the idle-only scan, a hall training a worker made a Stronghold read as 700/375
+  instead of 315/190 and the ladder stopped there for most of the opening; the hall that a row
+  means to upgrade takes NO WORKER that pass (`holdForUpgrades`), or the worker rows above the
+  tier row keep its queue full and the upgrade can never start; the FOREST is never left empty
+  (`LUMBER_DRY`), because a lumber shortfall with no lumber income never shrinks and the row that
+  would hire a lumberjack is underneath the row it stopped on; and a halt that has stopped getting
+  NEARER its price lets one pass through (`releaseStall`). The bulk of the army is the LAST row,
+  so anything that reserves gold above it — a second hero, an expansion, a tier — is production
+  stopped: the floor that keeps an army on the field while it saves is `CORE_ARMY_FOOD`, and it
+  grows with the tier for that reason. A second production building is bought with the BANK; the
+  old `armyFood >= 40` gate was above two of the three difficulties' own army ceilings and could
+  never fire. `tools/ai-plus-ladder-test.cjs` runs ten headless minutes of the ladder per build.
   **AMAI is GPL** — it was studied for the shape of the strategy table and nothing else; never
   lift its code or its numbers.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs

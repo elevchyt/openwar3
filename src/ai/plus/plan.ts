@@ -107,8 +107,25 @@ const TIER2_CLOCK = 180;
  * Note this number does not change how much gold a pass RESERVES — the rows use `SetBuildNext`,
  * which asks for one more than is finished whatever the target is. It only decides how big the
  * army gets before the plan starts banking for a Stronghold.
+ *
+ * It GROWS WITH THE TIER, and that is a fix rather than a flourish. A tier-up is a unit row and
+ * halts the ladder while the AI saves for it, so everything under it — the towers, and above
+ * all the `army(profile.armyFood)` row that is the bulk of the army — stops for the whole of
+ * that wait. Sixteen food is a reasonable floor to hold while saving 315 for a Stronghold; it
+ * is not a reasonable one to hold while saving a THOUSAND for a Fortress, and a computer that
+ * stood at sixteen food from the sixth minute to the ninth is the developer's "not building an
+ * army" seen at the other end of the game. A player keeps growing the army they already have
+ * while the hall goes up. Capped by the profile throughout, so an Easy computer's twelve-food
+ * ceiling is never quietly raised by it.
  */
 const CORE_ARMY_FOOD = 16;
+/** …and by how much per tier standing — 16 / 24 / 32, before the profile's own cap. */
+const CORE_ARMY_PER_TIER = 8;
+
+/** The floor as this pass sees it. */
+function coreArmy(c: PlusCtx): number {
+  return Math.min(c.profile.armyFood, CORE_ARMY_FOOD + CORE_ARMY_PER_TIER * Math.max(0, c.tier - 1));
+}
 
 /** Workers on a mine. WC3 mines take five at a time, so a sixth is a peasant standing in a
  *  queue: five per town, everybody else in the trees. */
@@ -191,9 +208,30 @@ const HERO3_ARMY = 30;
  *  actually in its base, which is what a player does. */
 const TOWER_CLOCK = 480;
 
-/** A second Barracks (etc.) is a rich player's answer to "my army arrives too slowly". */
+/**
+ * A second (and third) copy of the building that makes the bulk of the army — a rich player's
+ * answer to "my army arrives too slowly".
+ *
+ * **It is gated on the BANK, and it used to be gated on army food.** That number was 40, which
+ * is above two of the three difficulties' own army CEILINGS (`PlusProfile.armyFood` is 12 on
+ * Easy and 30 on Normal), so neither could ever reach it — and it was circular besides. One
+ * building trains one thing at a time (`AiPlayer.trainUnits`), so a single Barracks turns into
+ * at most a Grunt every thirty seconds however rich the player is; "get a big army, then buy a
+ * second Barracks" therefore says "buy a second Barracks once you no longer need one".
+ * Measured headless (tools/ai-plus-ladder-test.cjs): a Normal computer of every race reached
+ * ten minutes with FIVE TO SEVEN THOUSAND unspent gold and six food of soldiers, which is the
+ * developer's "stuck not building an initial army" exactly.
+ *
+ * Gold a player can SEE is not being spent is when they put up another Barracks, so that is
+ * the whole gate now — `FACTORY_GOLD` is the file's own 800, unchanged; what went is the army
+ * clause it was ANDed with. The other half is the army still being short of what the
+ * difficulty allows, so a computer that has already massed its ceiling does not carpet its
+ * base with production it has no food for.
+ */
 const FACTORY_GOLD = 800;
-const FACTORY_ARMY = 40;
+/** …and how many copies of it there may ever be. Three is what a player who is teching AND
+ *  fighting keeps; more than that is a base built out of Barracks. */
+const FACTORY_MAX = 3;
 
 /** Ore left in our own mines below which it is time to take another whatever the build order
  *  planned — the same question every race script asks as `c_gold_owned < 2000`, at the same
@@ -275,7 +313,7 @@ export function buildPlan(c: PlusCtx): void {
   // `shop` gives: it is 130 gold, the hero is what it is for, and a row below the army rows is
   // a row that is never reached at all.
   shop(c);
-  army(c, CORE_ARMY_FOOD); // enough not to die to the first raid, cheap enough not to block tech
+  army(c, coreArmy(c)); // enough not to die to the first raid, cheap enough not to block tech
   tierUpDue(c); // …and from three minutes, the Keep — see TIER2_CLOCK
   techBuildings(c);
   upgrades(c);
@@ -480,15 +518,27 @@ function army(c: PlusCtx, budget: number): void {
   const rows = buildableMix(c);
   const total = rows.reduce((n, r) => n + r.weight, 0);
   if (total <= 0) return;
+  let asked = 0;
+  let heaviest = rows[0];
   for (const r of rows) {
+    if (r.weight > heaviest.weight) heaviest = r;
     const food = Math.max(1, c.foodOf(r.unit));
     const want = Math.floor((spend * r.weight) / total / food);
     // `SetBuildNext` for the same reason the workers use it (above): a row that reserved its
     // whole shortfall would hold the entire ladder under it — the tier-up, the tech, the
     // upgrades — until the army was full. One more at a time per row keeps production
     // continuous and lets the rest of the plan breathe.
-    if (want > 0) ai.setBuildNext(want, r.unit);
+    if (want > 0) {
+      ai.setBuildNext(want, r.unit);
+      asked++;
+    }
   }
+  // A budget spread thinly enough rounds EVERY share to nothing — a wide mix of expensive
+  // units under an Easy computer's twelve food, say — and then a pass that can plainly build
+  // something asks for nothing at all. That is the same empty field `buildableMix`'s fallback
+  // exists to prevent, arrived at from the other side, and it feeds the same food gates. So
+  // the heaviest share of the build order gets one body whatever the arithmetic says.
+  if (asked === 0) ai.setBuildNext(1, heaviest.unit);
 }
 
 /**
@@ -681,11 +731,17 @@ function techBuildings(c: PlusCtx): void {
     if (row.tier > cap || (armyFood < TECH_AFTER[row.tier - 1] && !stuck)) continue;
     ai.setBuildUnit(1, row.build);
   }
-  // …and a second copy of the building that makes the bulk of the army, once the bank is
-  // deeper than the queue. The one thing that stops a rich computer sitting on 2000 gold.
-  if (armyFood >= FACTORY_ARMY && ai.gold() > FACTORY_GOLD) {
+  // …and more copies of the building that makes the bulk of the army, once the bank is deeper
+  // than the queue. The one thing that stops a rich computer sitting on 2000 gold — see
+  // `FACTORY_GOLD` for the gate this replaced and why it could never fire.
+  //
+  // `setBuildNext` rather than `setBuildUnit`, like every other growing row in this file: it
+  // asks for one more than is STANDING, so it reserves one Barracks' gold instead of the whole
+  // shortfall and the rows under it keep breathing while the second one goes up.
+  if (armyFood < profile.armyFood) {
     const main = mainProducer(c);
-    if (main) ai.buildFactory(main);
+    const want = Math.min(FACTORY_MAX, 1 + Math.floor(ai.gold() / FACTORY_GOLD));
+    if (main && want > 1) ai.setBuildNext(want, main);
   }
 }
 
@@ -866,8 +922,30 @@ function producerReady(c: PlusCtx, from: string, needs?: readonly string[]): boo
 export function harvestPlan(c: PlusCtx): void {
   const { ai } = c;
   ai.clearHarvestAI();
+  // THE AXE THAT IS NEVER PUT DOWN, and it goes FIRST because the slices are cumulative.
+  //
+  // Five per mine before anybody chops is the right opening and the wrong floor: a player
+  // reduced to five workers — a raid on the mine, an Ancient eating its wisps — put all five
+  // back on the gold and earned NO LUMBER AT ALL. Every row the ladder halts on early is
+  // priced in wood (a Burrow at 40, a Moon Well at 40, the hero at 100, a Hunter's Hall at
+  // 145), and a lumber shortfall with no lumber income never shrinks: `runBuildLoop` returns
+  // at the row and the rows below it — the farm that would lift the food cap, the worker that
+  // would go and chop — are never read again. That is a match-ending state a computer cannot
+  // walk out of, and one worker in the trees makes it unreachable.
+  //
+  // Only while the bank is DRY, so it costs the opening nothing: a melee start is 150 lumber
+  // (`MELEE_STARTING_LUMBER_V1`) and every race spends its way under `LUMBER_DRY` a minute in,
+  // by which time the forest crew is being hired anyway. And only for a race whose worker can
+  // chop — the undead's lumber is a Ghoul and comes out of `lumberUnits` instead.
+  if (c.workerChops && ai.wood() < LUMBER_DRY) ai.harvestWood(0, LUMBER_MIN);
   for (let t = 0; t < ai.townCountTotal(); t++) {
     if (ai.townHasMine(t) && ai.townHasHall(t)) ai.harvestGold(t, MINE_CREW);
   }
   ai.harvestWood(0, 40);
 }
+
+/** Lumber below which the forest is crewed BEFORE the mine — see `harvestPlan`. A little over
+ *  the cheapest lumber row in any race's opening (a farm, at 40). */
+const LUMBER_DRY = 100;
+/** …and by how many. One: it is a floor against a deadlock, not a lumber policy. */
+const LUMBER_MIN = 1;

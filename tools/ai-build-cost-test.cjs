@@ -30,16 +30,17 @@ function check(what, got, want) {
 // The two halls, on the game's own numbers (UnitBalance.slk goldcost/lumbercost). The upgrade
 // between them is 320/210.
 const DEFS = {
-  htow: { goldCost: 385, lumberCost: 205, isBuilding: true, isHero: false, classification: [], foodUsed: 0 },
-  hkee: { goldCost: 705, lumberCost: 415, isBuilding: true, isHero: false, classification: [], foodUsed: 0 },
-  hbar: { goldCost: 160, lumberCost: 50, isBuilding: true, isHero: false, classification: [], foodUsed: 0 },
+  htow: { goldCost: 385, lumberCost: 205, isBuilding: true, isHero: false, classification: [], foodUsed: 0, foodMade: 0, weapons: [] },
+  hkee: { goldCost: 705, lumberCost: 415, isBuilding: true, isHero: false, classification: [], foodUsed: 0, foodMade: 0, weapons: [] },
+  hbar: { goldCost: 160, lumberCost: 50, isBuilding: true, isHero: false, classification: [], foodUsed: 0, foodMade: 0, weapons: [] },
+  hpea: { goldCost: 75, lumberCost: 0, buildTime: 15, isBuilding: false, isHero: false, classification: ["peon"], foodUsed: 1, foodMade: 0, weapons: [] },
   // …and a tower and its upgraded form, to put a SECOND upgrade row under the tier-up with.
-  hwtw: { goldCost: 70, lumberCost: 20, isBuilding: true, isHero: false, classification: [], foodUsed: 0 },
-  hgtw: { goldCost: 100, lumberCost: 40, isBuilding: true, isHero: false, classification: [], foodUsed: 0 },
+  hwtw: { goldCost: 70, lumberCost: 20, isBuilding: true, isHero: false, classification: [], foodUsed: 0, foodMade: 0, weapons: [] },
+  hgtw: { goldCost: 100, lumberCost: 40, isBuilding: true, isHero: false, classification: [], foodUsed: 0, foodMade: 0, weapons: [] },
   // …and an altar and a hero, for the REVIVAL half. A Blademaster is 425/100 (UnitBalance
   // goldcost/lumbercost) and the altar it comes back at trains exactly its own race's four.
-  oalt: { goldCost: 180, lumberCost: 50, isBuilding: true, isHero: false, classification: [], foodUsed: 0 },
-  Obla: { goldCost: 425, lumberCost: 100, buildTime: 55, isBuilding: false, isHero: true, classification: [], foodUsed: 5 },
+  oalt: { goldCost: 180, lumberCost: 50, isBuilding: true, isHero: false, classification: [], foodUsed: 0, foodMade: 0, weapons: [] },
+  Obla: { goldCost: 425, lumberCost: 100, buildTime: 55, isBuilding: false, isHero: true, classification: [], foodUsed: 5, foodMade: 0, weapons: [] },
 };
 
 /**
@@ -92,22 +93,28 @@ function seat(gold, lumber, opts = {}) {
     orderQueue: [],
   };
   const asked = [];
+  // MUTABLE, so a test can let the income arrive between passes — see the stall valve below.
+  const stash = { gold, lumber };
   const host = {
     world: {
       units: new Map([[1, hall], [2, tower]]),
       mines: new Map(),
       nearestMine: () => null,
-      stashOf: () => ({ gold, lumber }),
+      hauntsMines: () => false,
+      stashOf: () => stash,
       pendingTrained: () => [],
     },
     registry: { get: (id) => DEFS[id] },
-    tech: { get: (id) => ({ upgrade: id === "htow" ? ["hkee"] : id === "hwtw" ? ["hgtw"] : [] }) },
+    tech: {
+      get: (id) => ({ upgrade: id === "htow" ? ["hkee"] : id === "hwtw" ? ["hgtw"] : [] }),
+      trains: (id) => (id === "htow" ? ["hpea"] : []),
+    },
     execute: (_player, cmd) => {
       asked.push(cmd);
       return true;
     },
   };
-  return { ai: new AiPlayer(0, "human", 1, host, 0, 0, 1), asked };
+  return { ai: new AiPlayer(0, "human", 1, host, 0, 0, 1), asked, stash };
 }
 
 // ==========================================================================================
@@ -170,16 +177,89 @@ console.log("\n-- a tier-up is priced as the UPGRADE it is ---------------------
   check("a building we FOUND is priced whole", asked.length, 0);
 }
 
-// The price is asked of the same scan that will place the order (`upgradeCandidates`), so the
-// two can never disagree: a hall with something in its queue refuses the upgrade, and is not
-// what the row is priced against either.
+// A BUSY HALL IS STILL A CHEAP KEEP. The price used to be asked of the idle-only
+// `upgradeCandidates` scan, so a hall with a worker in its queue — which is a hall for most of
+// the opening, since the worker rows sit above the tier row in every build order there is —
+// priced the Keep at its whole 705/415 again. That is the same halt the whole file is about,
+// wearing a different hat: what a row COSTS cannot depend on what the building happens to be
+// doing this second, and it is `upgradeSources` (standing, busy or not) that decides.
 {
   const { ai, asked } = seat(400, 300, { busy: true });
   ai.refresh();
   ai.initBuildArray();
   ai.setBuildUnit(1, "hkee");
+  ai.setBuildUnit(1, "hgtw");
   ai.runBuildLoop();
-  check("a busy hall is not a cheap Keep", asked.length, 0);
+  // The Keep itself cannot START — `upgradeExisting` needs the hall idle — but it no longer
+  // stops the ladder at a price nobody would have charged, so the tower under it is reached.
+  check("a busy hall does not halt the ladder at a phantom price", asked.map((c) => c.toTypeId), ["hgtw"]);
+}
+
+// …and the hall a row means to UPGRADE takes no worker while it can be paid for. Without this
+// the tier-up could be priced perfectly and still never happen: `upgradeExisting` needs an idle
+// hall, the worker rows above the tier row re-fill its queue on every pass, and the computer
+// therefore sits at tier 1 for as long as it still wants workers — which, with
+// `PlusProfile.workers` counted per MINE, is most of a match that expands.
+{
+  const { ai, asked } = seat(400, 300);
+  ai.refresh();
+  ai.initBuildArray();
+  ai.setBuildNext(5, "hpea"); // the worker row, where every build order puts it: above the tier
+  ai.setBuildUnit(1, "hkee");
+  ai.runBuildLoop();
+  check("the hall is held for the tier-up rather than filled with a worker",
+    asked.map((c) => c.c), ["upgradebuilding"]);
+}
+// The hold is only ever for a row that can be PAID for, so no hall is idled waiting on a
+// tier-up the player is nowhere near affording.
+{
+  const { ai, asked } = seat(100, 300);
+  ai.refresh();
+  ai.initBuildArray();
+  ai.setBuildNext(5, "hpea");
+  ai.setBuildUnit(1, "hkee");
+  ai.runBuildLoop();
+  check("…and an unaffordable one holds nothing", asked.map((c) => c.c), ["train"]);
+}
+
+// ==========================================================================================
+console.log("\n-- a halt that is going nowhere lets one pass through -----------------------");
+// ==========================================================================================
+
+// `OneBuildLoop` returning at the first row it cannot afford is the file's own rule, and it
+// assumes the shortfall SHRINKS. It does not always: a row short of LUMBER on a player with
+// nobody in the trees is short of it for ever, and everything below the row — including the rows
+// that would have put a worker back on the wood, lifted the food cap or trained the soldier that
+// pays for itself — is never read again. `AiPlayer.releaseStall` lets exactly one pass through
+// after `STALL_PASSES` passes that have not once got nearer the price.
+{
+  const { ai, asked } = seat(400, 0); // a Keep wants 210 lumber and nothing is chopping
+  let trains = 0;
+  for (let pass = 0; pass < 21; pass++) {
+    ai.refresh();
+    ai.initBuildArray();
+    ai.setBuildUnit(1, "hkee");
+    ai.setBuildNext(5, "hpea"); // …and underneath it, the row that would fix the lumber
+    ai.runBuildLoop();
+    trains = asked.filter((c) => c.c === "train").length;
+    if (trains > 0) { check(`the ladder is let past on pass ${pass + 1}`, pass >= 19 && pass <= 20, true); break }
+  }
+  check("a dead-end halt does not hold the ladder for ever", trains, 1);
+}
+// …and a halt that IS earning is never released. The row gets nearer the price on every pass,
+// which resets the count, so a player genuinely saving for a Keep is not interrupted and the
+// rows below it wait exactly as `OneBuildLoop` says they should.
+{
+  const { ai, asked, stash } = seat(0, 300);
+  for (let pass = 0; pass < 40; pass++) {
+    stash.gold += 5; // the mine paying in, a little at a time
+    ai.refresh();
+    ai.initBuildArray();
+    ai.setBuildUnit(1, "hkee");
+    ai.setBuildNext(5, "hpea");
+    ai.runBuildLoop();
+  }
+  check("a halt that is still earning is never released", asked.length, 0);
 }
 
 // ==========================================================================================

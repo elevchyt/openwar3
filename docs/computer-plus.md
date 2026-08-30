@@ -1071,10 +1071,76 @@ sat waiting to bank rather more than twice the money the tier-up costs; and beca
 *halts* the loop while it cannot afford itself, everything below it in the ladder starved for the
 whole of that wait too.
 
-`AiPlayer.rowCost` now asks the same scan that will actually place the order
-(`upgradeCandidates`), so the price and the order can never disagree: with nothing of ours
-standing that upgrades into the row's id, `setProduce` will FOUND the building and the full row is
-the right price. Pinned in [`tools/ai-build-cost-test.cjs`](../tools/ai-build-cost-test.cjs).
+`AiPlayer.rowCost` now prices the row off **`upgradeSources`** — our standing buildings that
+upgrade into its id, busy or not — so with nothing of ours that upgrades into it, `setProduce`
+will FOUND the building and the full row is the right price.
+
+**…and "busy or not" is the second half of the same bug.** The price used to be asked of the
+idle-only `upgradeCandidates` scan, and a hall with a worker in its queue is a hall for most of
+the opening: the worker rows sit above the tier row in every build order there is
+(`mineCrew`/`forestCrew`/`workers`, plus/plan.ts), and they re-fill the queue on every pass. So
+the Stronghold was priced at 700/375 again for four passes in five over the first two minutes,
+and the ladder stopped there — with the Barracks, the tech, the upgrades and the army rows all
+underneath it. That is the developer's report exactly: *"stuck not building an initial army of
+grunts and/or headhunters and is also not teching up"*, one halt producing both halves.
+
+**And priced right it still could not start**, because `upgradeExisting` needs that hall idle and
+the worker rows kept it busy. `runBuildLoop` now takes a `holdForUpgrades` pass first: a building
+some row in this list means to upgrade, and which we can afford to upgrade, is held out of
+`trainUnits` for that pass. It costs one worker a few seconds. Without it a computer sits at tier
+1 for as long as it still wants workers — which, with `PlusProfile.workers` counted per MINE, is
+most of a match that expands.
+
+Pinned in [`tools/ai-build-cost-test.cjs`](../tools/ai-build-cost-test.cjs).
+
+### …and nothing halts the ladder for ever
+
+`OneBuildLoop` returning at the first row it cannot afford is common.ai's own rule and it is what
+makes a build order an order. It quietly assumes the shortfall **shrinks**. It does not always: a
+row short of LUMBER on a player with nobody in the trees is short of it for ever, and everything
+below that row is never read again — including the rows that would have hired a lumberjack, put up
+the farm that lifts the food cap, or trained the soldier that pays for itself. A raid that kills a
+few workers is enough to walk into it: `harvestGold` is cumulative and comes first, so five
+workers left alive all go back on the mine and the forest is empty.
+
+Two things, a brace and a belt:
+
+* **`harvestPlan` never leaves the forest empty.** While the lumber bank is under `LUMBER_DRY`
+  (100) and the race's own worker can chop, one axe is asked for *before* the mine's crew, since
+  the slices are cumulative. Above that bank it costs the opening nothing — a melee start is 150
+  lumber — and it is the same interleaving Blizzard's own scripts use (`orc.ai`'s
+  `HarvestGold(T,4)` / `HarvestWood(0,1)` / `HarvestGold(T,1)`).
+* **`AiPlayer.releaseStall` lets one pass through.** The halt stands for as long as it is
+  *earning*: the smallest shortfall seen ratchets down, and any pass that beats it resets the
+  count. Only a row that has spent `STALL_PASSES` (20) passes without once getting nearer the
+  price is let past, for that single pass, and only the first such row in the list. Nothing is
+  abandoned — the row is asked for again on the very next pass.
+
+### A second Barracks is bought with the BANK, not with army food
+
+`techBuildings` gated another copy of the main producer on `armyFood >= 40 && gold > 800`, and the
+first half is **above the army ceiling of two of the three difficulties** (`PlusProfile.armyFood`
+is 12 on Easy and 30 on Normal) — so neither could ever build one. It was circular besides: one
+building trains one thing at a time (`AiPlayer.trainUnits`), so a single Barracks becomes at most
+a Grunt every thirty seconds however rich the player is, and "get a big army, then buy a second
+Barracks" says "buy one once you no longer need one". Measured headless
+([`tools/ai-plus-ladder-test.cjs`](../tools/ai-plus-ladder-test.cjs)): a Normal computer of every
+race at ten minutes with thousands of unspent gold and a handful of soldiers.
+
+The gold threshold is the file's own 800, unchanged; what went is the army clause it was ANDed
+with. Up to `FACTORY_MAX` (3) copies, one more per 800 banked, and only while the army is still
+short of what the difficulty allows.
+
+### The core army GROWS with the tier
+
+`CORE_ARMY_FOOD` is the only army row above the tier-up, and everything below a tier-up stops
+while the AI saves for it — the towers, the expansion and above all `army(profile.armyFood)`,
+which is the bulk of the army. Sixteen food is a reasonable floor to hold while saving 315 for a
+Stronghold. It is not a reasonable one to hold while saving a **thousand** for a Fortress, and a
+computer that stood at sixteen food from the sixth minute to the ninth is the same "not building
+an army" report seen at the other end of the game. So the floor is 16 / 24 / 32 by the tier
+standing (`CORE_ARMY_PER_TIER`), capped by the profile throughout — an Easy computer's twelve-food
+ceiling is never quietly raised by it.
 
 ### The undead's lumber comes out of its army
 
