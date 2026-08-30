@@ -350,7 +350,8 @@ const GATHER_PATIENCE = 12;
  */
 const CREEP_FLOOR = 0;
 /**
- * …and how far from home it will WALK to one, tried in order.
+ * …and how far it will WALK to one, tried in order — measured from wherever the party is
+ * standing (`creepTarget`), which is home while it is at home and the captain once it is out.
  *
  * Three rings rather than one sweep, so a camp beside the base is always taken before one
  * across the map — the developer's "target nearby creep camps first before expanding their
@@ -375,8 +376,94 @@ const WELL_WALK = 2000;
  *  that walks into a second camp on a third of its life is a hero the camp kills, and a dead
  *  hero is the most expensive thing on a melee map. It heals up at home first. */
 const CREEP_HEALTH = 0.65;
-/** …and the hero level past which creeping stops being worth the walk. */
+/** …and the hero level past which creeping stops being worth the walk. A PREFERENCE rather than
+ *  an ability — see `creepNext`, which only applies it when there is actually an attack to
+ *  prefer over the camp. */
 const CREEP_UNTIL_LEVEL = 5;
+
+/**
+ * A camp the party could not get to — how long it is left alone before it is offered again.
+ *
+ * The other half of the stall watchdog (`stalled`/`abandon`). Without it the watchdog is a loop
+ * rather than a decision: the wave gives up on an unreachable camp, `massing` asks for the
+ * nearest camp it can handle, gets the SAME one back, and walks at it again for ever. A camp is
+ * shunned rather than struck off because "unreachable" is usually a statement about right now —
+ * a building in the way, a camp on the far side of a fight — and the map's own geometry has not
+ * changed.
+ */
+const CAMP_SHUN = 120;
+/** How near a point has to be to a shunned camp to BE it. Both numbers are camp CENTROIDS off
+ *  the same fixed table, so this is slack for the arithmetic and nothing else — wide enough to
+ *  match and far narrower than the gap between two camps. */
+const SHUN_MATCH = 200;
+
+/**
+ * WHEN AN OBJECTIVE IS WRITTEN OFF: how long the group may make no progress towards it, and
+ * how far it has to move to count as progress.
+ *
+ * The wave had no deadline of any kind, and every state without one eventually deadlocks — this
+ * is `GATHER_PATIENCE` and `SCOUT_STUCK_AFTER` again, at the other end of the walk. A party
+ * standing on ground it cannot leave (a camp across a cliff, a target behind its own base's
+ * buildings, an objective the pathfinder will not route to) held the whole army — hero included
+ * — for the rest of the match. Measured against the group's own POSITION rather than against
+ * its orders, because "has this order gone stale" is a question no order can answer about
+ * itself, and never while there is something in front of it to fight.
+ */
+const PUSH_STUCK_AFTER = 20;
+const PUSH_PROGRESS = 300;
+
+/**
+ * How long a broken army waits at home before it is put back on the board.
+ *
+ * `retreating` ends when everybody is home AND the group has healed to `REGROUP_HP_FRACTION`,
+ * and there are two ways that never happens. One unit that cannot path home keeps `allHome`
+ * false for ever; and — the one that actually bites — most of the game's units do not
+ * REGENERATE at all (heroes do, the undead do on blight, the night elf does at night, a
+ * Footman does not), so a human or orc group that came home at half health can sit in its own
+ * base until fresh production alone lifts the average. Either way the party is out of the game.
+ * `massing` is where the decision to creep, to attack or to keep waiting belongs, and it is a
+ * much better place to wait than this one.
+ */
+const REGROUP_PATIENCE = 45;
+
+/**
+ * The stall watchdog itself, as arithmetic — see `PUSH_STUCK_AFTER` for what it is for.
+ *
+ * `w` is the wave's own memory of where it last made progress and when; it is written through,
+ * so one call per army pass IS the watchdog. Pure and exported for the reason `safeLeg` is: both
+ * directions have to be pinned by a test rather than by reading it, and the FALSE one matters
+ * most — a wave written off while it is merely walking is an army that never arrives anywhere
+ * (tools/ai-plus-army-test.cjs).
+ */
+export function pushStalled(
+  w: { was: { x: number; y: number } | null; since: number },
+  at: { x: number; y: number },
+  clock: number,
+  fighting: boolean,
+): boolean {
+  // A group in a fight is not stuck. Forgetting where it was is what makes the clock start
+  // again from where the fight ENDS rather than from where it began.
+  if (fighting) {
+    w.was = null;
+    return false;
+  }
+  if (!w.was || Math.hypot(at.x - w.was.x, at.y - w.was.y) > PUSH_PROGRESS) {
+    w.was = { x: at.x, y: at.y };
+    w.since = clock;
+    return false;
+  }
+  return clock - w.since >= PUSH_STUCK_AFTER;
+}
+
+/** Is this camp one the party gave up on recently (`CAMP_SHUN`)? Pure and exported for the same
+ *  reason `pushStalled` is — an over-eager shun list is an AI that stops creeping. */
+export function isShunned(
+  list: ReadonlyArray<{ x: number; y: number; until: number }>,
+  camp: { x: number; y: number },
+  clock: number,
+): boolean {
+  return list.some((s) => s.until > clock && Math.hypot(camp.x - s.x, camp.y - s.y) <= SHUN_MATCH);
+}
 
 /**
  * When a FIGHT is broken off — see `ComputerPlusAi.fightLost`, which explains why these are so
@@ -468,6 +555,17 @@ interface Brain {
   /** WHAT this retreat is running from, which is what decides whether the hero spends its
    *  Scroll of Town Portal on it. Null while nothing is retreating. */
   retreatFrom: "creeps" | "player" | null;
+  /** When this retreat began — the deadline on it (`REGROUP_PATIENCE`). */
+  retreatSince: number;
+  /** Where the group was when it was last seen to have MOVED towards its objective, and when.
+   *  The watchdog on a wave that is going nowhere — see `PUSH_STUCK_AFTER` and `pushStalled`. */
+  push: { was: { x: number; y: number } | null; since: number };
+  /** Camps this party gave up on, and when each may be offered again (`CAMP_SHUN`). */
+  shunned: Array<{ x: number; y: number; until: number }>;
+  /** Is the army mustering IN THE FIELD — on its captain, with another camp in front of it —
+   *  rather than at home? Written by `muster` on every massing pass, and read by the errands
+   *  that only make sense at home (the shop, `itemCtx.mayShop`). */
+  afield: boolean;
   target: { id: number; x: number; y: number } | null;
   reissueIn: number;
   /** When the last wave came home — `waveGap` is measured from it. */
@@ -606,6 +704,10 @@ export class ComputerPlusAi {
       mode: "massing",
       gatherSince: -1,
       retreatFrom: null,
+      retreatSince: 0,
+      push: { was: null, since: 0 },
+      shunned: [],
+      afield: false,
       target: null,
       reissueIn: 0,
       lastWaveEnd: 0,
@@ -783,9 +885,12 @@ export class ComputerPlusAi {
       // WHAT it is running from (see `ItemCtx.portalWorthIt` and `Brain.retreatFrom`). Creeps
       // do not chase; an army does.
       portalWorthIt: b.retreatFrom === "player",
-      // MASSING only. "Defending" is the base under attack, which is the one moment a hero
-      // walking off to buy a potion is worse than having no potion at all.
-      mayShop: b.mode === "massing",
+      // MASSING AT HOME only. "Defending" is the base under attack, which is the one moment a
+      // hero walking off to buy a potion is worse than having no potion at all — and a party
+      // mustering in the FIELD between two creep camps (`muster`) is not at home either: the
+      // shop is behind it, and sending the captain back to it walks the army's anchor off the
+      // map while the rest of the party stands on a cleared camp waiting for it.
+      mayShop: b.mode === "massing" && !b.afield,
     };
   }
 
@@ -1230,10 +1335,21 @@ export class ComputerPlusAi {
     return true;
   }
 
-  /** Waiting at home with the army, until there is enough of it and the clock allows. */
+  /**
+   * Waiting with the army, until there is enough of it and the clock allows.
+   *
+   * **Not always at home.** The muster point is the captain's own feet whenever the party is
+   * already out with another camp in front of it (`muster`), which is what turns creeping into
+   * a tour rather than a series of round trips: a party that has just cleared a camp used to be
+   * walked all the way back to the rally point, re-gathered there and sent out again, so most
+   * of a Computer+ army's match was spent walking past its own base. Home is what it falls back
+   * to — when the captain is hurt, when the party is not strong enough for anything left on the
+   * map, or when there is nothing left to take.
+   */
   private massing(b: Brain): void {
-    const { profile } = b;
-    const rally = this.rally(b);
+    // Asked BEFORE the rally orders, because what it answers is what those orders are for.
+    const camp = this.creepNext(b);
+    const rally = this.muster(b, camp);
     for (const u of this.squadUnits(b)) {
       // A hero walking to a shop is left alone. The errand is only re-issued every SHOP_PERIOD,
       // so a rally order in between would send it back and it would arrive at neither. Same for
@@ -1253,16 +1369,56 @@ export class ComputerPlusAi {
     if (!this.gathered(b, rally)) return;
     // Creeping is NOT an attack and does not wait behind the attack's clocks — see
     // `PlusProfile.creepAt` for what waiting behind them did to it.
-    if (this.creepRun(b)) return;
-    if (b.clock < profile.firstAttack) return;
-    if (b.clock - b.lastWaveEnd < profile.waveGap) return;
-    if (this.squadFood(b) < profile.attackFood) return;
+    if (camp) return void this.creepGo(b, camp);
+    if (!this.waveReady(b)) return;
+    // The reset goes BEFORE the ask rather than after it. `pickTarget`'s rung 1 answers with a
+    // CAMP and marks the wave a creeping party when it does, and clearing the flag on the line
+    // after the call quietly undid that: a wave sent to a camp was then priced, ended and
+    // retreated from as if it were an assault on a player — including spending the hero's
+    // Scroll of Town Portal to leave creeps, which `ItemCtx.portalWorthIt` exists to prevent.
+    b.creeping = false;
     const target = this.pickTarget(b);
     if (!target) return;
     b.target = target;
-    b.creeping = false;
     this.setMode(b, "attacking");
     this.commit(b, target.x, target.y);
+  }
+
+  /** Are the WAVE's own clocks open — is there an attack to be preferred over a camp? One
+   *  question in one place, because `creepNext` has to ask it too and the two must agree. */
+  private waveReady(b: Brain): boolean {
+    const { profile } = b;
+    if (b.clock < profile.firstAttack) return false;
+    if (b.clock - b.lastWaveEnd < profile.waveGap) return false;
+    return this.squadFood(b) >= profile.attackFood;
+  }
+
+  /**
+   * Where the army waits — its own captain while it is out creeping, the home rally otherwise.
+   *
+   * Also WRITES `Brain.afield`, because the same fact decides the errands that only make sense
+   * at home: a hero sent shopping from the middle of the map walks away from the party it is
+   * leading (`itemCtx.mayShop`).
+   */
+  private muster(b: Brain, camp: { x: number; y: number } | null): { x: number; y: number } {
+    const at = camp ? this.afieldAt(b) : null;
+    b.afield = !!at;
+    return at ?? this.rally(b);
+  }
+
+  /**
+   * Where the party IS, once it has left town — the captain's feet, or null while it is home.
+   *
+   * "Out" is measured against the town's own radius rather than against the rally point: a
+   * party standing among its own buildings is at home whatever it is doing, and one that is a
+   * screen past them is on the map.
+   */
+  private afieldAt(b: Brain): { x: number; y: number } | null {
+    const captain = this.squadHero(b);
+    if (!captain) return null;
+    const home = b.ai.home();
+    if (Math.hypot(captain.x - home.x, captain.y - home.y) <= TOWN_RADIUS) return null;
+    return { x: captain.x, y: captain.y };
   }
 
   /**
@@ -1298,7 +1454,11 @@ export class ComputerPlusAi {
   }
 
   /**
-   * Take the hero creeping.
+   * Take the hero creeping — the GATES and the camp in one question.
+   *
+   * Asked twice on a massing pass and deliberately so: once to decide where the army musters (a
+   * party with another camp in front of it does not walk home first — `muster`) and once to set
+   * off with it. It answers null the moment any gate closes, so the two askings cannot disagree.
    *
    * Everything here is a gate on the CAPTAIN, because that is what the run is for: a creep camp
    * is experience, and experience goes on the hero. A party without one is a party trading
@@ -1312,21 +1472,29 @@ export class ComputerPlusAi {
    * a party is compared against the camp COLOUR the game itself paints (plus/power.ts), so a
    * hero and two soldiers go to a green camp and nobody walks into a red one.
    */
-  private creepRun(b: Brain): boolean {
+  private creepNext(b: Brain): { x: number; y: number; level: number } | null {
     const { profile } = b;
-    if (!profile.creeps || b.clock < profile.creepAt) return false;
+    if (!profile.creeps || b.clock < profile.creepAt) return null;
     const hero = this.squadHero(b);
-    if (!hero || hero.level >= CREEP_UNTIL_LEVEL) return false;
-    if (hero.hp / Math.max(1, hero.maxHp) < CREEP_HEALTH) return false;
-    if (this.squadFood(b) < profile.creepFood) return false;
-    const camp = this.creepTarget(b);
-    if (!camp) return false;
+    if (!hero) return null;
+    // THE LEVEL CAP IS A PREFERENCE, not an ability. Past it a camp is worth less to the hero
+    // than the enemy's base is — so the party goes to the base, but only when it can actually
+    // go NOW. Applied unconditionally it produced the thing the developer asked us to stop: a
+    // level-six hero standing at the rally point behind `waveGap` with three camps still on the
+    // map and nothing whatever to do for two minutes.
+    if (hero.level >= CREEP_UNTIL_LEVEL && this.waveReady(b)) return null;
+    if (hero.hp / Math.max(1, hero.maxHp) < CREEP_HEALTH) return null;
+    if (this.squadFood(b) < profile.creepFood) return null;
+    return this.creepTarget(b);
+  }
+
+  /** Set off — the commit half of a creep run, once `creepNext` has said which camp. */
+  private creepGo(b: Brain, camp: { x: number; y: number; level: number }): void {
     b.target = { id: 0, x: camp.x, y: camp.y };
     b.creeping = true;
     b.creepLevel = camp.level;
     this.setMode(b, "attacking");
     this.commit(b, camp.x, camp.y);
-    return true;
   }
 
   /**
@@ -1338,14 +1506,21 @@ export class ComputerPlusAi {
    * ceiling then goes to `AiPlayer.creepCamp` exactly as the old food number did, so the AI
    * still takes the NEAREST camp it can handle rather than shopping around.
    *
-   * Asked from both places a camp is chosen (`creepRun` starts a run, `pickTarget` aims a wave
+   * Asked from both places a camp is chosen (`creepNext` starts a run, `pickTarget` aims a wave
    * that has no better idea) so the two cannot disagree — which they did, and which is how a
-   * party that `creepRun` had refused to send was sent anyway a moment later.
+   * party that `creepNext` had refused to send was sent anyway a moment later.
    */
   private creepTarget(b: Brain): { x: number; y: number; level: number } | null {
     const ceiling = maxCampLevel(this.creepForce(b));
     if (ceiling < 0) return null;
     const air = this.hasAir(b);
+    // NEAREST TO THE PARTY, not to the base it left. A party that has just cleared a camp is
+    // standing on the map, and "the camp nearest home" from out there is usually the one it
+    // has to walk past its own front door to reach — which is most of why a Computer+ army
+    // spent its match commuting. Home is still the answer while it is at home.
+    const from = this.afieldAt(b) ?? b.ai.home();
+    if (b.shunned.length) b.shunned = b.shunned.filter((s) => s.until > b.clock);
+    const skip = (camp: { x: number; y: number }): boolean => isShunned(b.shunned, camp, b.clock);
     // NEAREST FIRST, and the search widens rather than being one sweep of the whole map.
     // `creepCamp` already answers with the nearest camp inside the level window, but "nearest"
     // over the whole map still walks a party clean across it when the two camps beside home are
@@ -1353,7 +1528,7 @@ export class ComputerPlusAi {
     // defending. Stepping the radius out means a camp next door is always taken first, and the
     // long walk is only ever offered once nothing closer is left.
     for (const reach of CREEP_REACH) {
-      const camp = b.ai.creepCamp(CREEP_FLOOR, ceiling, air, reach);
+      const camp = b.ai.creepCamp(CREEP_FLOOR, ceiling, air, reach, from, skip);
       if (camp) return camp;
     }
     return null;
@@ -1476,6 +1651,7 @@ export class ComputerPlusAi {
    *  and a hero walking away from one usually does not get home. */
   private retreat(b: Brain, from: "creeps" | "player"): void {
     b.retreatFrom = from;
+    b.retreatSince = b.clock;
     this.setMode(b, "retreating");
   }
 
@@ -1508,7 +1684,28 @@ export class ComputerPlusAi {
     }
     const target = b.target;
     if (!target) return void this.endWave(b);
-    if (target.id) {
+    if (b.creeping) {
+      // A CREEP RUN IS OVER WHEN THE CAMP IS DEAD, and that is a question about the CAMP rather
+      // than about a radius drawn round where it stood. Asked the generic way — "is anybody
+      // standing at the goal, and is nothing hostile within `CLEARED_RADIUS` of it" — the run
+      // could not end at all in two ordinary cases, and the party then stood on the cleared
+      // camp for the rest of the match:
+      //
+      //  · the camps NEXT DOOR. Clustering links creeps whose guard posts are within 600
+      //    (`CAMP_LINK`), so two distinct camps only have to be a little further apart than
+      //    that — well inside the 900 this was asking about. The neighbours are outside their
+      //    own acquisition range (500) and nobody walks at anybody: the wave is neither
+      //    fighting nor finished, for ever. Orange camps are the ones this happens to because
+      //    they are the big sprawling ones, and on a melee map they are the ones with a second
+      //    camp beside them guarding a shop or an expansion.
+      //  · a party that STOPPED SHORT of the centroid — a camp in a nook, cohesion holding the
+      //    leaders behind a captain that is itself blocked — so no unit is ever within the 600
+      //    `atGoal` wants and the run never ends however dead the camp is.
+      //
+      // `campHealthAt` is the same measure `oppositionHealthy` already prices a run by, off the
+      // fixed camp table, so this cannot disagree with what the run was sent at.
+      if (b.ai.campHealthAt(target.x, target.y) <= 0) return void this.endWave(b);
+    } else if (target.id) {
       const u = this.host.world.units.get(target.id);
       if (!u || u.hp <= 0) return void this.endWave(b);
       target.x = u.x;
@@ -1516,7 +1713,56 @@ export class ComputerPlusAi {
     } else if (this.atGoal(b, target) && !this.enemyNear(b, target.x, target.y, CLEARED_RADIUS)) {
       return void this.endWave(b);
     }
+    // …AND NOTHING WAITS FOR EVER. Every end condition above is a statement about the objective,
+    // and none of them can answer "we are never going to get there" — see `PUSH_STUCK_AFTER`.
+    if (this.stalled(b)) return void this.abandon(b);
     this.recommit(b, target.x, target.y);
+  }
+
+  /**
+   * Is this wave going nowhere?
+   *
+   * The watchdog `gathered` has at the other end of the walk, and it is measured the same way:
+   * against the group's own POSITION over time rather than against its orders, because an order
+   * cannot tell you it has gone stale. The anchor is the captain for the same reason the
+   * cohesion rule uses it — the centroid of a hero at a camp and six soldiers at home is a point
+   * nobody is standing on.
+   *
+   * A group that is FIGHTING is not stuck, and the clock is reset for it — but that is asked of
+   * the group's own swings (`fighting`) rather than of what is standing within a radius, because
+   * the standoff is precisely the case where something IS nearby and nobody is walking at it.
+   */
+  private stalled(b: Brain): boolean {
+    const anchor = this.squadHero(b) ?? this.squadCentre(b);
+    if (!anchor) return false;
+    return pushStalled(b.push, anchor, b.clock, this.fighting(b, anchor));
+  }
+
+  /**
+   * Is any of this group actually in a fight?
+   *
+   * Asked of the units rather than of a radius, because an attack-move does NOT change a unit's
+   * order when it engages — `tickAttackMove` sets `targetId` and swings with `order` still
+   * "attackmove" — so "is it fighting" is `targetId` plus `inCombat`, exactly as the sim itself
+   * records it. The radius is only the fallback for the moment before contact: something inside
+   * a soldier's own acquisition is a fight about to start.
+   */
+  private fighting(b: Brain, anchor: { x: number; y: number }): boolean {
+    for (const u of this.squadUnits(b)) {
+      if (u.inCombat) return true;
+      if (!u.targetId) continue;
+      const t = this.host.world.units.get(u.targetId);
+      if (t && t.hp > 0 && b.ai.hostileTo(t)) return true;
+    }
+    return this.enemyNear(b, anchor.x, anchor.y, COHESION_COMBAT);
+  }
+
+  /** Write this objective off — and REMEMBER it, or the next massing pass hands the party the
+   *  same unreachable camp and the watchdog becomes a loop instead of a decision (`CAMP_SHUN`).
+   *  Only a camp is shunned: the enemy's base is not somewhere the AI may decide to stop going. */
+  private abandon(b: Brain): void {
+    if (b.creeping && b.target) b.shunned.push({ x: b.target.x, y: b.target.y, until: b.clock + CAMP_SHUN });
+    this.endWave(b);
   }
 
   /** Broken, and going home to heal. */
@@ -1530,7 +1776,12 @@ export class ComputerPlusAi {
         b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: home.x, y: home.y }, queued: false });
       }
     }
-    if (!b.squad.size || (allHome && this.readiness(b) >= REGROUP_HP_FRACTION)) this.endWave(b);
+    if (!b.squad.size || (allHome && this.readiness(b) >= REGROUP_HP_FRACTION)) return void this.endWave(b);
+    // …AND IT GIVES UP WAITING, for the same reason `gathered` does — see `REGROUP_PATIENCE`
+    // for the two ways this state never ends on its own. `massing` is not "go and attack": it
+    // is where the decision to creep, to attack or to keep waiting is taken, and every one of
+    // those gates is still in front of a party that got here broken.
+    if (b.clock - b.retreatSince >= REGROUP_PATIENCE) this.endWave(b);
   }
 
   /**
@@ -1773,9 +2024,9 @@ export class ComputerPlusAi {
         return { id: foe.id, x: foe.x, y: foe.y };
       }
     }
-    // The same rule `creepRun` states: no captain, no creeping. Reached when a wave is being
+    // The same rule `creepNext` states: no captain, no creeping. Reached when a wave is being
     // aimed rather than when a creep run is being started, and it must agree with it — an army
-    // sent to a camp from here without a hero is the very thing `creepRun` refuses to do.
+    // sent to a camp from here without a hero is the very thing `creepNext` refuses to do.
     const captain = this.squadHero(b);
     if (profile.creeps && captain && captain.level < CREEP_UNTIL_LEVEL) {
       const camp = this.creepTarget(b);
@@ -1802,6 +2053,11 @@ export class ComputerPlusAi {
   private setMode(b: Brain, mode: Mode): void {
     b.mode = mode;
     b.reissueIn = 0;
+    // A new objective is a fresh start for the stall watchdog, and nothing is mustering in the
+    // field until the next massing pass says so.
+    b.push.was = null;
+    b.push.since = b.clock;
+    b.afield = false;
   }
 
   /** Where the army waits: in front of the base, on the line to the enemy. */
@@ -2014,7 +2270,7 @@ export class ComputerPlusAi {
    * the one that is ahead and the one the camps are being farmed for. When it dies the second
    * takes over, and when that dies the third — which is what the developer asked for, and it
    * also stops the captaincy CHANGING HANDS mid-run every time a second hero happens to ding:
-   * `creepRun` gates on the captain's health and `attacking` ends the run when the captain is
+   * `creepNext` gates on the captain's health and `attacking` ends the run when the captain is
    * gone, and both of those become nonsense if "the captain" moves around.
    *
    * Falls back to any hero in the squad, so a hero this player was given rather than bought

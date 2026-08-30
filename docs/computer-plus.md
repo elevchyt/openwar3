@@ -234,16 +234,96 @@ decides the game. The hero's **own skin** is exempt — a hero about to die scro
 is fighting, and a camp is not a reason to lose one.
 
 **Nearest camps first.** `creepTarget` steps its search radius out (3000 → 6000 → the whole map)
-rather than sweeping once, so a camp beside the base is always taken before one across it: a
-party that is walking is neither creeping nor defending.
+rather than sweeping once, so a camp beside the party is always taken before one across the map:
+a party that is walking is neither creeping nor defending.
 
 `maxCampLevel` turns the party into a ceiling and hands it to `GetCreepCamp` exactly as the old
 food number did, so the AI still takes the **nearest** camp it can handle rather than shopping
-around. Both places a camp is chosen (`creepRun` starting a run, `pickTarget` aiming a wave that
+around. Both places a camp is chosen (`creepNext` starting a run, `pickTarget` aiming a wave that
 has no better idea) ask the same function, so they cannot disagree — which they did, and which is
-how a party `creepRun` had refused to send was sent anyway a moment later.
+how a party `creepNext` had refused to send was sent anyway a moment later.
 
 None of these numbers are Warcraft III's; the *scale* they are stated against is.
+
+### A run ends when the CAMP is dead — not when a radius is quiet
+
+The report was "**Computer+ stays on empty creep camps for ever, especially orange ones — they
+pretty much stay frozen there**", and the whole of it is that a creep run had no end condition of
+its own. It ended the way an assault on a spot ends: *somebody is standing within 600 of the goal
+(`atGoal`) and nothing hostile is within `CLEARED_RADIUS` (900) of it*. Two perfectly ordinary
+situations make that sentence unsatisfiable for the rest of the match:
+
+* **the camps next door.** Camps are clustered by linking creeps whose guard posts are within 600
+  of each other (`CAMP_LINK`, `MiscGame` CreepCallForHelp), so two *different* camps need only be
+  a little further apart than that — comfortably inside the 900 the wave was asking about. The
+  neighbours sit outside their own 500 acquisition range and nobody walks at anybody: the party
+  is neither fighting nor finished, for ever. That is why it is worst on **orange** camps — they
+  are the big sprawling ones, and the ones a melee map puts beside a shop or an expansion camp.
+* **a party that stopped short** of the centroid — a camp in a nook, a blocked captain with the
+  cohesion rule holding the leaders behind it — so nothing is ever inside the 600 `atGoal` wants,
+  however dead the camp is.
+
+A creep run now ends on the thing it is actually about: `campHealthAt(target) <= 0`, the same
+fixed-roster measure `oppositionHealthy` already prices the run by, so the two cannot disagree.
+
+### …and nothing waits for ever
+
+The deeper fault is that the wave had **no deadline of any kind**, which is the mistake
+`GATHER_PATIENCE` fixed at the other end of the same walk. Any objective the group cannot reach
+— a camp across a cliff, a target the pathfinder will not route to, a spot behind its own
+buildings — froze the whole army, hero included, permanently.
+
+`stalled` is that watchdog: less than `PUSH_PROGRESS` (300) of movement in `PUSH_STUCK_AFTER`
+(20 s), measured against the group's own **position** rather than against its orders, because
+"has this order gone stale" is a question no order can answer about itself. A group that is
+**fighting** is not stuck and resets the clock — asked of the units' own swings (`inCombat` /
+`targetId`, since an attack-move engages *without* changing a unit's order) rather than of what
+is standing within a radius, because a standoff is precisely the case where something is nearby
+and nobody is walking at it.
+
+`abandon` then writes the objective off, and **remembers it**: a camp it could not get to is
+shunned for `CAMP_SHUN` (120 s). Without the memory the watchdog is a loop rather than a decision
+— the wave gives up, `massing` asks for the nearest camp it can handle, gets the same one back,
+and walks at it again.
+
+`retreating` got the same treatment (`REGROUP_PATIENCE`, 45 s). It ends when everybody is home
+**and** the group has healed to `REGROUP_HP_FRACTION`, and there are two ways that never happens:
+one unit that cannot path home holds `allHome` false for ever, and — the one that actually bites
+— most of the game's units do not regenerate at all (heroes do, the undead do on blight, the
+night elf does at night, a Footman does not), so a human or orc group that came home at half
+health can sit in its own base until fresh production alone lifts the average.
+
+### Creeping is a TOUR, not a series of round trips
+
+The other half of "the army is constantly in the base": the muster point was always home. A party
+that had just cleared a camp was walked all the way back to the rally point, re-gathered there,
+and sent out again — so a Computer+ army spent most of its match commuting past its own front
+door, and `creepTarget`'s "nearest camp" was measured from a base it had left five minutes ago.
+
+Two changes, and they are the same idea:
+
+* **`muster` follows the captain.** While the party is out of town (`afieldAt`) and `creepNext`
+  has another camp for it, the army musters *where the captain is standing* and sets off from
+  there. The gathering rule is unchanged — it just gathers around the captain instead of around
+  the rally point, which is also how a straggler gets picked up on the way.
+* **`creepCamp` takes a `from`.** Distance is measured from the party rather than from town 0
+  (the classic scripts still pass nothing and still measure from home, because they only ever
+  creep out of a base and back).
+
+Home is the **fall-back**, which is what the developer asked for: the party goes back when the
+captain is hurt (`CREEP_HEALTH`), when it is not strong enough for anything left on the map
+(plus/power.ts), or when there is nothing left to take.
+
+**And the level cap is a preference, not an ability.** `CREEP_UNTIL_LEVEL` used to end creeping
+outright, so a level-6 hero stood at the rally point behind `waveGap` with three camps still on
+the map and nothing at all to do for two minutes. It now only applies when there is actually an
+attack to prefer over the camp — `waveReady`, the wave's own three clocks, asked in one place so
+that `creepNext` and `massing` cannot drift apart.
+
+One bug fell out of writing that down: `massing` cleared `Brain.creeping` on the line *after*
+`pickTarget`, and `pickTarget`'s rung 1 sets it — so a wave aimed at a camp was priced, ended and
+retreated from as though it were an assault on a player, Scroll of Town Portal included. The
+reset goes before the ask.
 
 ### The army moves as one body
 
@@ -284,7 +364,7 @@ Two rules, one at each end of the walk:
 hero order (`heroId`/`heroId2`/`heroId3`, rolled at seat time) is the order they were *trained*
 in and therefore the order they are levelled and equipped in, so the first one is the one that is
 ahead — and picking by level lets the captaincy **change hands mid-run** every time a second hero
-dings, which makes nonsense of `creepRun` (which gates on the captain's health) and of
+dings, which makes nonsense of `creepNext` (which gates on the captain's health) and of
 `attacking` (which ends the run when the captain is gone). When the first dies the second takes
 over, and when that dies the third.
 

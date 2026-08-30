@@ -9,7 +9,10 @@
 //      that happen to be numbers. At thirty food it read "camps between 14 and 24", which is
 //      orange and red, and it sent whatever was standing around into them. Both directions
 //      matter here and the false one matters more: a lone hero must not walk into a red camp.
-//   2. THE SCOUT GOES ROUND. A melee map's creep camps sit on the ground between two bases, so
+//   2. NOTHING WAITS FOR EVER. A wave had no deadline of any kind, so any objective the group
+//      could not reach froze the whole army — hero included — for the rest of the match, and a
+//      camp it gave up on was handed straight back to it on the next pass.
+//   3. THE SCOUT GOES ROUND. A melee map's creep camps sit on the ground between two bases, so
 //      the straight line from home to the enemy's door runs through one — the scout walked in,
 //      died, and because a lost scout LATCHES that one walk was the whole of what the AI ever
 //      learnt about the map.
@@ -25,7 +28,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const {
   canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
-const { safeLeg } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { safeLeg, pushStalled, isShunned } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -109,6 +112,49 @@ check("eight grunts + level 5: no ceiling", maxCampLevel(force(n(GRUNT, 8), 5)),
 check("…a hurt army has no ceiling because it is not going", maxCampLevel(force(n(GRUNT, 8), 5, 0.4)) < 0, true);
 // Footmen are between the two, which is the point of pricing rather than counting.
 check("six footmen and a level-3 hero reach orange", maxCampLevel(force(n(FOOTMAN, 6), 3)), CAMP_ORANGE_MAX);
+
+// ==========================================================================================
+console.log("\n-- a wave that is going nowhere is written off ---------------------------");
+// ==========================================================================================
+
+// `PUSH_STUCK_AFTER` / `PUSH_PROGRESS` — 20 s with less than 300 units of movement. The FALSE
+// direction matters most: a wave written off while it is merely walking never arrives anywhere.
+const walk = (steps, { fighting = false, step = 400, from = 0 } = {}) => {
+  const w = { was: null, since: 0 };
+  let stuck = false;
+  for (let i = 0; i < steps; i++) stuck = pushStalled(w, { x: from + i * step, y: 0 }, i * 2, fighting);
+  return stuck;
+};
+
+check("an army that is walking is never written off", walk(30), false);
+check("…even at a crawl, so long as it is covering ground", walk(30, { step: 200 }), false);
+check("an army standing still for twenty seconds is", walk(30, { step: 0 }), true);
+check("…but not before that", walk(6, { step: 0 }), false);
+// A fight is not a stall, however long the group stands in it — and the clock starts again
+// from where the fight ends rather than from where the group first stopped.
+check("a group in a fight is never written off", walk(60, { step: 0, fighting: true }), false);
+{
+  const w = { was: null, since: 0 };
+  for (let t = 0; t < 30; t += 2) pushStalled(w, { x: 0, y: 0 }, t, true); // thirty seconds of fighting
+  check("…and the clock restarts when it ends", pushStalled(w, { x: 0, y: 0 }, 30, false), false);
+  let stuck = false;
+  for (let t = 32; t <= 60; t += 2) stuck = pushStalled(w, { x: 0, y: 0 }, t, false);
+  check("…and then runs", stuck, true);
+}
+
+// ==========================================================================================
+console.log("\n-- a camp it could not get to is left alone for a while -------------------");
+// ==========================================================================================
+
+// `CAMP_SHUN` (120 s) and `SHUN_MATCH` (200). Without the memory the watchdog is a loop: the
+// wave gives up, `massing` asks for the nearest camp it can handle and gets the same one back.
+const SHUN = [{ x: 1000, y: 1000, until: 120 }];
+check("the camp it gave up on is not offered again", isShunned(SHUN, { x: 1000, y: 1000 }, 30), true);
+check("…nor is the same camp under a little arithmetic drift",
+  isShunned(SHUN, { x: 1050, y: 1050 }, 30), true);
+check("its NEIGHBOUR still is offered", isShunned(SHUN, { x: 1000, y: 1700 }, 30), false);
+check("and it comes back once the shun expires", isShunned(SHUN, { x: 1000, y: 1000 }, 121), false);
+check("nothing is shunned by an empty list", isShunned([], { x: 1000, y: 1000 }, 30), false);
 
 // ==========================================================================================
 console.log("\n-- the scout walks ROUND a creep camp, not through it ---------------------");

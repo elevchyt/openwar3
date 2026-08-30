@@ -1319,9 +1319,24 @@ export class AiPlayer {
     return false;
   }
 
-  /** `GetCreepCamp(min, max, flyers_ok)` — the nearest camp whose total level is in range. */
-  creepCamp(min: number, max: number, flyersOk: boolean, maxDist = Infinity): { x: number; y: number; level: number } | null {
-    const home = this.towns[0];
+  /**
+   * `GetCreepCamp(min, max, flyers_ok)` — the nearest camp whose total level is in range.
+   *
+   * `from` is where the walk STARTS, and it is home for everything the classic scripts do —
+   * they only ever creep out of a base and back. Computer+ chains camp to camp and asks from
+   * where the PARTY is standing (`ComputerPlusAi.creepTarget`), because "nearest" measured from
+   * a base the party left five minutes ago is what walked it home across the map between every
+   * camp. `skip` is that caller's shun list: a camp it could not get to is left alone for a
+   * while rather than picked again the moment the wave ends (`CAMP_SHUN`).
+   */
+  creepCamp(
+    min: number,
+    max: number,
+    flyersOk: boolean,
+    maxDist = Infinity,
+    from: { x: number; y: number } = this.towns[0],
+    skip?: (camp: { x: number; y: number }) => boolean,
+  ): { x: number; y: number; level: number } | null {
     let best: { x: number; y: number; level: number } | null = null;
     let bestD = maxDist;
     for (const camp of this.host.creepCamps()) {
@@ -1332,14 +1347,15 @@ export class AiPlayer {
       if (!alive.length) continue;
       if (camp.level < min || camp.level > max) continue;
       if (!flyersOk && alive.some((id) => this.host.world.units.get(id)!.flying)) continue;
-      const d = Math.hypot(camp.x - home.x, camp.y - home.y);
+      if (skip?.(camp)) continue;
+      const d = Math.hypot(camp.x - from.x, camp.y - from.y);
       // The camp's own combined LEVEL travels with it: it is the one number that says how hard
       // the camp is (green 1-9 / orange 10-19 / red 20+, the colours the minimap paints — see
       // game/minimapView.ts), and Computer+ prices its party against it both when it sets off
       // and while it is fighting (plus/power.ts). It is fixed map data and never re-derived.
       // Nearest first, and never further than `maxDist` — the classic scripts pass Infinity and
-      // get the behaviour they always had; Computer+ walks its search outwards from home so a
-      // camp beside the base is always taken before one across the map (`creepTarget`).
+      // get the behaviour they always had; Computer+ walks its search outwards from `from` so a
+      // camp beside the party is always taken before one across the map (`creepTarget`).
       if (d < bestD) { bestD = d; best = { x: camp.x, y: camp.y, level: camp.level }; }
     }
     return best;
