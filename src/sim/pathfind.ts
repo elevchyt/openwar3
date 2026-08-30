@@ -21,7 +21,27 @@ const NEIGHBOR_COST = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT
 // Search cap: keeps a fully-blocked goal from flooding the whole map. With
 // best-effort return semantics a capped search still yields a useful partial
 // path toward the goal.
+//
+// It is a FLOOR rather than the cap, because a flat cap is a cap on how far a unit may be
+// sent. On open ground A* with an octile heuristic and the h tie-break below walks almost
+// straight at the goal, so a route costs about as many expansions as it has cells; it is
+// only an obstacle that makes it flood, and the flood needed to get AROUND one grows with
+// how big the thing in the way is. A melee map is 384 cells a side (96 tiles of 128 world
+// units, four pathing cells to the tile), and 8192 expansions is a blob of roughly 50
+// cells' radius — about 1600 world units. So an order given across a forest wider than
+// that ran out of budget and came back best-effort, and best-effort means "the explored
+// cell closest to the goal", which against a treeline is the treeline. That is the bug
+// exactly as it was reported: an army sent at a creep camp it could plainly have walked to
+// stood in a line facing a wall of trees.
+//
+// `EXPANSIONS_PER_CELL` buys the detour in proportion to the distance actually asked for —
+// a search across the street is unchanged, one across the map gets what going round
+// something map-sized costs — and `MAX_EXPANSIONS_FAR` is the flood ceiling that still
+// protects the frame from a goal on an island. Nothing here loosens the guard that
+// mattered: an unreachable goal is still bounded, it is merely bounded further out.
 const MAX_EXPANSIONS = 8192;
+const EXPANSIONS_PER_CELL = 64;
+const MAX_EXPANSIONS_FAR = 32768;
 
 // Expansions an APPROACH search (one carrying a `ring` measure) is allowed once it has
 // first stood right against the target. A* pops in f order, so the first cell that reaches
@@ -127,13 +147,23 @@ export function findPath(
   start: Cell,
   goal: Cell,
   blocked?: (cx: number, cy: number) => boolean,
-  maxExpansions = MAX_EXPANSIONS,
+  maxExpansions?: number,
   domain: PathDomain = "ground",
   ring?: (cx: number, cy: number) => number,
 ): Cell[] | null {
   const from = grid.nearestWalkable(start[0], start[1], undefined, domain);
   const to = ring ? goal : grid.nearestWalkable(goal[0], goal[1], undefined, domain);
   if (!from || !to) return null;
+
+  // The budget the caller did not name grows with the length of the walk — see
+  // `EXPANSIONS_PER_CELL`. Measured on the octile distance, which is the same number the
+  // heuristic below works in, so "how far away is it" means one thing throughout.
+  const budget =
+    maxExpansions ??
+    Math.min(
+      MAX_EXPANSIONS_FAR,
+      Math.max(MAX_EXPANSIONS, Math.round(octile(from[0], from[1], to[0], to[1]) * EXPANSIONS_PER_CELL)),
+    );
 
   const width = grid.width;
   const height = grid.height;
@@ -232,7 +262,7 @@ export function findPath(
   let bestH = closeness(from[0], from[1]);
   let bestG = 0;
   let expansions = 0;
-  let limit = maxExpansions;
+  let limit = budget;
 
   while (heapF.length) {
     const currentKey = hpop();
@@ -253,8 +283,8 @@ export function findPath(
     }
     // First time we stand right against the target: give the search a short tail to settle
     // on the cheapest such spot, then stop. Set once — `limit` only ever shrinks.
-    if (ring && limit === maxExpansions && h <= 0) {
-      limit = Math.min(maxExpansions, expansions + ARRIVE_EXTRA);
+    if (ring && limit === budget && h <= 0) {
+      limit = Math.min(budget, expansions + ARRIVE_EXTRA);
     }
     if (++expansions > limit) break;
 

@@ -137,28 +137,44 @@ check("six footmen and a level-3 hero reach orange", maxCampLevel(force(n(FOOTMA
 console.log("\n-- a wave that is going nowhere is written off ---------------------------");
 // ==========================================================================================
 
-// `PUSH_STUCK_AFTER` / `PUSH_PROGRESS` — 20 s with less than 300 units of movement. The FALSE
-// direction matters most: a wave written off while it is merely walking never arrives anywhere.
+// `PUSH_STUCK_AFTER` / `PUSH_PROGRESS` — 20 s without closing 300 units on the objective. The
+// FALSE direction matters most: a wave written off while it is merely walking never arrives
+// anywhere. The objective is far out along +x, so a step in +x is a step towards it.
+const GOAL = { x: 20000, y: 0 };
 const walk = (steps, { fighting = false, step = 400, from = 0 } = {}) => {
-  const w = { was: null, since: 0 };
+  const w = { gap: -1, since: 0 };
   let stuck = false;
-  for (let i = 0; i < steps; i++) stuck = pushStalled(w, { x: from + i * step, y: 0 }, i * 2, fighting);
+  for (let i = 0; i < steps; i++) stuck = pushStalled(w, { x: from + i * step, y: 0 }, GOAL, i * 2, fighting);
   return stuck;
 };
 
 check("an army that is walking is never written off", walk(30), false);
-check("…even at a crawl, so long as it is covering ground", walk(30, { step: 200 }), false);
+check("…even at a crawl, so long as it is closing on the objective", walk(30, { step: 200 }), false);
 check("an army standing still for twenty seconds is", walk(30, { step: 0 }), true);
 check("…but not before that", walk(6, { step: 0 }), false);
+// GROUND COVERED IS NOT PROGRESS. The captain that shuttles between the objective and the body
+// it is held to walks half a screen every pass and arrives nowhere — the reading this watchdog
+// used to make said "moving", and the army followed it up and down the map for the rest of the
+// match. See `PUSH_PROGRESS`.
+{
+  const w = { gap: -1, since: 0 };
+  let stuck = false;
+  for (let i = 0; i <= 15; i++) {
+    stuck = pushStalled(w, { x: i % 2 ? 900 : 0, y: 0 }, GOAL, i * 2, false);
+  }
+  check("an army shuttling back and forth IS written off", stuck, true);
+}
+// …and walking AWAY from it is not progress either.
+check("nor does walking away from the objective count", walk(30, { step: -400 }), true);
 // A fight is not a stall, however long the group stands in it — and the clock starts again
 // from where the fight ends rather than from where the group first stopped.
 check("a group in a fight is never written off", walk(60, { step: 0, fighting: true }), false);
 {
-  const w = { was: null, since: 0 };
-  for (let t = 0; t < 30; t += 2) pushStalled(w, { x: 0, y: 0 }, t, true); // thirty seconds of fighting
-  check("…and the clock restarts when it ends", pushStalled(w, { x: 0, y: 0 }, 30, false), false);
+  const w = { gap: -1, since: 0 };
+  for (let t = 0; t < 30; t += 2) pushStalled(w, { x: 0, y: 0 }, GOAL, t, true); // thirty seconds of fighting
+  check("…and the clock restarts when it ends", pushStalled(w, { x: 0, y: 0 }, GOAL, 30, false), false);
   let stuck = false;
-  for (let t = 32; t <= 60; t += 2) stuck = pushStalled(w, { x: 0, y: 0 }, t, false);
+  for (let t = 32; t <= 60; t += 2) stuck = pushStalled(w, { x: 0, y: 0 }, GOAL, t, false);
   check("…and then runs", stuck, true);
 }
 

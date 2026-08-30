@@ -523,18 +523,57 @@ The deeper fault is that the wave had **no deadline of any kind**, which is the 
 — a camp across a cliff, a target the pathfinder will not route to, a spot behind its own
 buildings — froze the whole army, hero included, permanently.
 
-`stalled` is that watchdog: less than `PUSH_PROGRESS` (300) of movement in `PUSH_STUCK_AFTER`
-(20 s), measured against the group's own **position** rather than against its orders, because
-"has this order gone stale" is a question no order can answer about itself. A group that is
+`stalled` is that watchdog: the group fails to close `PUSH_PROGRESS` (300) on its objective for
+`PUSH_STUCK_AFTER` (20 s), measured against where the group **is** rather than against its orders,
+because "has this order gone stale" is a question no order can answer about itself. A group that is
 **fighting** is not stuck and resets the clock — asked of the units' own swings (`inCombat` /
 `targetId`, since an attack-move engages *without* changing a unit's order) rather than of what
 is standing within a radius, because a standoff is precisely the case where something is nearby
 and nobody is walking at it.
 
+**Progress is the GAP shrinking, not ground covered**, and that distinction is the whole of the
+watchdog. It was ground covered, and there is one case that walks a great deal of ground and
+arrives nowhere: a captain shuttling between the objective and the body it is held to (see *The
+army moves as one body* below). It moved half a screen every pass, so the clock restarted for
+ever, and the army followed it up and down the same stretch of map for the rest of the match —
+reported as *"their captain is moving towards a spot and then goes back and keeps being stuck on
+that loop while its army is trying to follow the captain"*. The sim's own `attackMoveStalled`
+had already learned this lesson in the same words: *"a unit shuffling between two spots it can
+reach covers plenty of ground and closes nothing"*.
+
 `abandon` then writes the objective off, and **remembers it**: a camp it could not get to is
 shunned for `CAMP_SHUN` (120 s). Without the memory the watchdog is a loop rather than a decision
 — the wave gives up, `massing` asks for the nearest camp it can handle, gets the same one back,
 and walks at it again.
+
+### …and it asks whether it can get there BEFORE it sets off
+
+The watchdog is the backstop, not the plan. `creepCamp` answers off the map's fixed camp table
+and a **straight-line** distance, and a straight line knows nothing about the river or the
+forest between here and there — so the nearest camp on the list is quite often one no route
+reaches, and twenty seconds of an army standing in a line facing a treeline is not something a
+person does. `creepTarget` now asks `SimWorld.canWalkTo` of the party (the captain, and one
+ordinary soldier behind it, since a flying hero would otherwise pass a camp the army has no road
+to) and shuns anything it cannot reach — which both ends the search loop and stops the next
+massing pass paying for the same A* again. Asked of the **terrain alone**, so a camp merely
+screened by bodies right now is not condemned.
+
+Two more things were walking at treelines, and both are ours rather than the pathfinder's. Every
+destination the army manager *computes* rather than reads off the map is arithmetic — the centre
+of mass a lost unit closes on, the spot `PULL_BACK_DIST` behind the line, the rally point
+projected `RALLY_OUT` in front of the hall — and arithmetic lands wherever it lands: inside a
+forest, on a cliff, in the water. A move order at such a point is not refused, it is answered
+best-effort, and best-effort against a forest is *the forest*. `standSpot` snaps each of them
+onto ground the unit could actually stand on first, in the unit's own domain and for its own
+footprint.
+
+The third was in the pathfinder itself and is the reason the symptom was so common: `findPath`'s
+expansion cap was flat at 8192, which on a 384-cell melee map is a blob about 1600 world units
+across — so an order given *around* anything bigger than that ran out of budget and came back
+best-effort. The cap is now a floor, with the budget growing in proportion to the distance
+actually asked for (`EXPANSIONS_PER_CELL`, ceilinged at `MAX_EXPANSIONS_FAR`): a search across
+the street is unchanged, one across the map gets what going round something map-sized costs, and
+a goal on an island is still bounded — merely bounded further out.
 
 `retreating` got the same treatment (`REGROUP_PATIENCE`, 45 s). It ends when everybody is home
 **and** the group has healed to `REGROUP_HP_FRACTION`, and there are two ways that never happens:
@@ -602,6 +641,18 @@ Two rules, one at each end of the walk:
   walks it into the camp the party is already fighting in, one at a time. Never a unit with an
   enemy within `COHESION_COMBAT` — pulling one out of a fight is not cohesion — and defence is
   exempt in full: something is in the base, and a soldier that got there first should be swinging.
+- **A unit out in FRONT stands still; it is never walked BACK.** The two strays want opposite
+  orders, and folding them into one was what made the army shuttle. The anchor is itself walking
+  forward under the same commit, so a leader ordered *onto* it turns round, meets it, is
+  re-pointed at the objective, out-walks the group again and turns round again — a loop that
+  covers ground in both directions and arrives nowhere. Standing still costs the group nothing,
+  because the body is closing anyway. Only the genuinely lost (past `FOLLOW_RADIUS`) has
+  somewhere to walk to.
+- **…with hysteresis, or the halt is a stutter.** `COHESION_RESUME` (350) is how close the body
+  has to get before a waiting unit walks on — not the same 600 that stopped it. Released on the
+  same radius, the hero (the fastest thing in the group) is outside it again before the next
+  pass, so it jogs forward and stops, forward and stops, and the army starts and stops with it.
+  It is the see-saw guard `PULL_BACK_AGAIN` is, stated in distance rather than in time.
 - **…and the CAPTAIN is not exempt from its own rule.** The anchor *is* the captain, so
   "how far is this unit from the anchor" is zero for the captain and cohesion held back every
   unit in the army except the one whose death loses the game. It is also the unit most likely to

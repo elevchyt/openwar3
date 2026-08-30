@@ -2,7 +2,7 @@ import { MELEE } from "../../data/gameplayConstants";
 import type { ChatLine, ChatScope } from "../../game/chat";
 import type { PlayableRace } from "../../data/races";
 import type { UnitDef } from "../../data/units";
-import { ITEM_REGEN_GROUP, isOffField, type SimUnit } from "../../sim/world";
+import { ITEM_REGEN_GROUP, isOffField, pathDomain, type SimUnit } from "../../sim/world";
 import { simProfile, perfNow } from "../../sim/profile";
 import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, TOWN_RADIUS } from "../aiPlayer";
 import { PlusCaster } from "./casting";
@@ -798,6 +798,22 @@ export function lumberCrew(wood: number, choppers: number): number {
  */
 const COHESION_RADIUS = 600;
 /**
+ * …and how close the body has to get before a unit that is WAITING for it walks on again.
+ *
+ * The hysteresis, and it is what turns the cohesion rule from a see-saw into a regroup. With
+ * one radius the leader is released the instant it is a hair inside it, is the fastest thing in
+ * the group, and is back outside it before the next pass — so the hero jogs forward and stops,
+ * forward and stops, and the army behind it starts and stops with it. (Reported as "their
+ * captain is moving towards a spot and then goes back and keeps being stuck on that loop while
+ * its army is trying to follow".) Made to wait until the body is properly with it, the same
+ * hero walks once. It is the see-saw guard `PULL_BACK_AGAIN` is, in distance rather than time.
+ */
+const COHESION_RESUME = 350;
+/** How far out `standable` looks for ground a body can stand on, in pathing CELLS. A centre of
+ *  mass lands inside a treeline or on a cliff by a body's width or two, never by a screen — and
+ *  a snap that hunted further than this would answer with somewhere the group is not. */
+const SNAP_SEARCH = 12;
+/**
  * …except when it is already fighting. A unit with an enemy this close is IN the battle, and
  * pulling it back to a centre of mass is retreating one soldier at a time. Half the acquisition
  * range of a ranged soldier: close enough that its own acquisition already has something.
@@ -938,16 +954,24 @@ const CAMP_SHUN = 120;
 const SHUN_MATCH = 200;
 
 /**
- * WHEN AN OBJECTIVE IS WRITTEN OFF: how long the group may make no progress towards it, and
- * how far it has to move to count as progress.
+ * WHEN AN OBJECTIVE IS WRITTEN OFF: how long the group may fail to CLOSE ON it, and how much
+ * closer it has to get to count as progress.
  *
  * The wave had no deadline of any kind, and every state without one eventually deadlocks — this
  * is `GATHER_PATIENCE` and `SCOUT_STUCK_AFTER` again, at the other end of the walk. A party
  * standing on ground it cannot leave (a camp across a cliff, a target behind its own base's
  * buildings, an objective the pathfinder will not route to) held the whole army — hero included
- * — for the rest of the match. Measured against the group's own POSITION rather than against
- * its orders, because "has this order gone stale" is a question no order can answer about
- * itself, and never while there is something in front of it to fight.
+ * — for the rest of the match. Measured against where the group IS rather than against its
+ * orders, because "has this order gone stale" is a question no order can answer about itself,
+ * and never while there is something in front of it to fight.
+ *
+ * PROGRESS IS THE GAP SHRINKING, not ground covered — and that distinction is the whole of the
+ * watchdog, exactly as it is for the sim's own `attackMoveStalled` ("a unit shuffling between
+ * two spots it can reach covers plenty of ground and closes nothing"). It was ground covered,
+ * and the case that got past it is the one that was reported: a captain shuttling back and
+ * forth between the objective and the body it is held to (`strayed`) walks hundreds of units
+ * every pass and never gets anywhere, so the clock restarted for ever and the army spent the
+ * match following it up and down the same stretch of map.
  */
 const PUSH_STUCK_AFTER = 20;
 const PUSH_PROGRESS = 300;
@@ -1091,19 +1115,23 @@ export function pullDue(
  * (tools/ai-plus-army-test.cjs).
  */
 export function pushStalled(
-  w: { was: { x: number; y: number } | null; since: number },
+  w: { gap: number; since: number },
   at: { x: number; y: number },
+  goal: { x: number; y: number },
   clock: number,
   fighting: boolean,
 ): boolean {
-  // A group in a fight is not stuck. Forgetting where it was is what makes the clock start
+  // A group in a fight is not stuck. Forgetting the reading is what makes the clock start
   // again from where the fight ENDS rather than from where it began.
   if (fighting) {
-    w.was = null;
+    w.gap = -1;
     return false;
   }
-  if (!w.was || Math.hypot(at.x - w.was.x, at.y - w.was.y) > PUSH_PROGRESS) {
-    w.was = { x: at.x, y: at.y };
+  const gap = Math.hypot(at.x - goal.x, at.y - goal.y);
+  // The BEST gap so far, so a party that is pushed back and comes on again is not credited
+  // with the same ground twice — and one that merely wanders is credited with none of it.
+  if (w.gap < 0 || gap <= w.gap - PUSH_PROGRESS) {
+    w.gap = gap;
     w.since = clock;
     return false;
   }
@@ -1251,9 +1279,9 @@ interface Brain {
   retreatFrom: "creeps" | "player" | null;
   /** When this retreat began — the deadline on it (`REGROUP_PATIENCE`). */
   retreatSince: number;
-  /** Where the group was when it was last seen to have MOVED towards its objective, and when.
-   *  The watchdog on a wave that is going nowhere — see `PUSH_STUCK_AFTER` and `pushStalled`. */
-  push: { was: { x: number; y: number } | null; since: number };
+  /** The CLOSEST the group has been to its objective (-1 = no reading yet), and when. The
+   *  watchdog on a wave that is going nowhere — see `PUSH_STUCK_AFTER` and `pushStalled`. */
+  push: { gap: number; since: number };
   /** Camps this party gave up on, and when each may be offered again (`CAMP_SHUN`). */
   shunned: Array<{ x: number; y: number; until: number }>;
   /**
@@ -1266,6 +1294,11 @@ interface Brain {
    * hold that soldier out of the next wave.
    */
   readonly pulls: Map<number, PullBack>;
+  /** Who is standing still WAITING for the rest of the army to catch up (`strayed` → "wait").
+   *  Held here rather than derived every pass because the rule has hysteresis: a unit is let go
+   *  only once the body is inside `COHESION_RESUME`, and "am I already waiting" is the question
+   *  that asks. Cleared with `pulls`, and for the same reason. */
+  readonly waiting: Set<number>;
   /** Is the army mustering IN THE FIELD — on its captain, with another camp in front of it —
    *  rather than at home? Written by `muster` on every massing pass, and read by the errands
    *  that only make sense at home (the shop, `itemCtx.mayShop`). */
@@ -1425,9 +1458,10 @@ export class ComputerPlusAi {
       gatherSince: -1,
       retreatFrom: null,
       retreatSince: 0,
-      push: { was: null, since: 0 },
+      push: { gap: -1, since: 0 },
       shunned: [],
       pulls: new Map(),
+      waiting: new Set(),
       afield: false,
       target: null,
       reissueIn: 0,
@@ -2631,10 +2665,42 @@ export class ComputerPlusAi {
     // defending. Stepping the radius out means a camp next door is always taken first, and the
     // long walk is only ever offered once nothing closer is left.
     for (const reach of CREEP_REACH) {
-      const camp = b.ai.creepCamp(CREEP_FLOOR, ceiling, air, reach, from, skip);
-      if (camp) return camp;
+      // …and it must be somewhere the party can actually WALK TO. `creepCamp` answers off the
+      // map's fixed camp table and a straight-line distance, neither of which knows about the
+      // river between here and there — so the nearest camp on the list is quite often one no
+      // route reaches, and the whole army would then walk at the treeline nearest it and stand
+      // there until the stall watchdog wrote the objective off twenty seconds later. Asked of
+      // the terrain alone (`canWalkTo`), so a camp merely screened by bodies right now is not
+      // condemned; and an unreachable one is SHUNNED rather than skipped in place, which both
+      // ends this loop and stops the next massing pass paying for the same search again.
+      for (;;) {
+        const camp = b.ai.creepCamp(CREEP_FLOOR, ceiling, air, reach, from, skip);
+        if (!camp) break;
+        if (this.reachable(b, camp)) return camp;
+        b.shunned.push({ x: camp.x, y: camp.y, until: b.clock + CAMP_SHUN });
+      }
     }
     return null;
+  }
+
+  /**
+   * Can the party's own bodies get there through the TERRAIN?
+   *
+   * Asked of the captain, and of one ordinary soldier behind it: the hero is what the run is
+   * for, and a hero that can fly (a Demon Hunter cannot, but a summoned mount or an air-borne
+   * hero could) would otherwise pass a camp the rest of the army has no road to. A full A* per
+   * call — see `SimWorld.canWalkTo` — so it belongs here, at the once-per-objective decision,
+   * and nowhere near the per-frame passes.
+   */
+  private reachable(b: Brain, to: { x: number; y: number }): boolean {
+    const world = this.host.world;
+    const hero = this.squadHero(b);
+    if (hero && !world.canWalkTo(hero.id, to.x, to.y)) return false;
+    for (const u of this.squadUnits(b)) {
+      if (u.isPeon || u.flying || isCopy(u) || u.id === hero?.id) continue;
+      return world.canWalkTo(u.id, to.x, to.y);
+    }
+    return true;
   }
 
   /**
@@ -2819,7 +2885,7 @@ export class ComputerPlusAi {
     }
     // …AND NOTHING WAITS FOR EVER. Every end condition above is a statement about the objective,
     // and none of them can answer "we are never going to get there" — see `PUSH_STUCK_AFTER`.
-    if (this.stalled(b)) return void this.abandon(b);
+    if (this.stalled(b, target)) return void this.abandon(b);
     // Asked BEFORE the re-commit, because what it decides is what that commit does: while a
     // vanguard is out, `commit` walks the copies in and leaves the body standing.
     this.vanguardPass(b, target);
@@ -2879,19 +2945,23 @@ export class ComputerPlusAi {
    * Is this wave going nowhere?
    *
    * The watchdog `gathered` has at the other end of the walk, and it is measured the same way:
-   * against the group's own POSITION over time rather than against its orders, because an order
-   * cannot tell you it has gone stale. The anchor is the captain for the same reason the
-   * cohesion rule uses it — the centroid of a hero at a camp and six soldiers at home is a point
-   * nobody is standing on.
+   * against where the group IS over time rather than against its orders, because an order cannot
+   * tell you it has gone stale. The anchor is the captain for the same reason the cohesion rule
+   * uses it — the centroid of a hero at a camp and six soldiers at home is a point nobody is
+   * standing on.
+   *
+   * What it watches is the GAP to the objective closing (`PUSH_PROGRESS`), which is not the same
+   * as the anchor moving: see that constant for the shuttling captain that walked half a screen
+   * every pass and defeated the old reading entirely.
    *
    * A group that is FIGHTING is not stuck, and the clock is reset for it — but that is asked of
    * the group's own swings (`fighting`) rather than of what is standing within a radius, because
    * the standoff is precisely the case where something IS nearby and nobody is walking at it.
    */
-  private stalled(b: Brain): boolean {
+  private stalled(b: Brain, goal: { x: number; y: number }): boolean {
     const anchor = this.squadHero(b) ?? this.squadCentre(b);
     if (!anchor) return false;
-    return pushStalled(b.push, anchor, b.clock, this.fighting(b, anchor));
+    return pushStalled(b.push, anchor, goal, b.clock, this.fighting(b, anchor));
   }
 
   /**
@@ -3024,7 +3094,25 @@ export class ComputerPlusAi {
       // a unit that is in a fight. The hero is not exempt: a hero out in front of its army is
       // the single most expensive thing on the map standing on its own.
       const anchor = captain && u.id === captain.id ? body : centre;
-      if (anchor && this.strayed(b, u, anchor, x, y)) {
+      const apart = anchor ? this.strayed(b, u, anchor, x, y) : "none";
+      if (apart === "wait") {
+        // OUT IN FRONT: it stands where it is until the body is with it, and is NOT walked
+        // back — see `strayed`. Stopped rather than merely skipped, because skipping leaves it
+        // walking on under the attack-move it is already carrying, which is the whole of being
+        // out in front. Once is enough: a unit that has stopped has nothing to re-state to.
+        if (u.moving || u.order === "move" || u.order === "attackmove") {
+          b.ai.order({ c: "order", unitId: u.id, order: { kind: "stop" }, queued: false });
+        }
+        continue;
+      }
+      if (apart === "follow" && anchor) {
+        // LOST BEHIND: walk to the army — and to ground it can actually STAND on. The anchor is
+        // a centre of mass whenever the captain is the one being held (`body`), and a centroid
+        // is a piece of arithmetic rather than a place: the middle of a group spread round a
+        // treeline is inside the trees, and a move order at a point no unit may occupy is a
+        // best-effort path that ends against the nearest blocked cell. That is the other half
+        // of "stuck looking at a wall of trees", and it is ours rather than the pathfinder's.
+        const to = this.standSpot(u, anchor);
         // Already walking back to about there: leave it alone. A move order RESTARTS the path
         // search (the same cost the attack-move guard below is about), and the centre of mass
         // drifts by a few units every pass — so without this the whole tail of the army would
@@ -3032,8 +3120,8 @@ export class ComputerPlusAi {
         // of its current path IS its destination, which is the only place a plain move records
         // one.
         const end = u.order === "move" && u.path.length ? u.path[u.path.length - 1] : null;
-        if (end && Math.hypot(end[0] - anchor.x, end[1] - anchor.y) <= REISSUE_SLACK) continue;
-        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: anchor.x, y: anchor.y }, queued: false });
+        if (end && Math.hypot(end[0] - to.x, end[1] - to.y) <= REISSUE_SLACK) continue;
+        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: to.x, y: to.y }, queued: false });
         continue;
       }
       if (focus && !u.isPeon) {
@@ -3157,37 +3245,92 @@ export class ComputerPlusAi {
   }
 
   /**
-   * Has this unit run out in front of the army?
+   * Has this unit come apart from the army — and if so, WHICH WAY?
    *
-   * Three conditions, and all three are needed. It is FAR from the group's centre of mass; it is
-   * NEARER the objective than that centre is (so it is a leader rather than a straggler — a
-   * straggler is already walking the right way); and there is nothing hostile beside it, because
-   * a unit with an enemy in reach is fighting and pulling it out is not cohesion, it is
-   * abandoning the fight one soldier at a time.
+   * Two different answers, because the two cases want opposite orders and folding them into one
+   * boolean is what made the army shuttle:
+   *
+   *  · **"wait"** — it has run out in FRONT. It stands where it is until the body reaches it.
+   *    It must not be walked BACKWARDS: the anchor is itself moving forward under the same
+   *    commit, so a unit ordered onto it turns round, meets it, is re-pointed at the objective,
+   *    out-walks the group again and turns round again — a loop that covers ground in both
+   *    directions and arrives nowhere (`COHESION_RESUME`, and `PUSH_PROGRESS` for the watchdog
+   *    it also blinded). Standing still costs the group nothing: the body is closing anyway.
+   *  · **"follow"** — it is genuinely LOST behind, further than `FOLLOW_RADIUS`, and its own
+   *    attack-move would walk it into a fight the party is already in, alone. That one really
+   *    does have somewhere to walk to.
+   *
+   * The conditions are the ones they always were. It is FAR from the group's centre of mass;
+   * there is nothing hostile beside it, because a unit with an enemy in reach is fighting and
+   * pulling it out is not cohesion, it is abandoning the fight one soldier at a time; and for a
+   * hold it is NEARER the objective than the centre is (so it is a leader rather than a
+   * straggler — a straggler is already walking the right way).
    *
    * The distance is measured from the CENTRE rather than between pairs, which is what makes it
    * a body rather than a chain: a group strung out along a road closes up towards its own
    * middle instead of each unit chasing the one in front.
    */
-  private strayed(b: Brain, u: SimUnit, centre: { x: number; y: number }, x: number, y: number): boolean {
+  private strayed(
+    b: Brain,
+    u: SimUnit,
+    centre: { x: number; y: number },
+    x: number,
+    y: number,
+  ): "none" | "wait" | "follow" {
     // A COPY IS NEVER HELD BACK. Cohesion is about keeping the army's real bodies together so
     // they arrive as one; an illusion's entire job is to be the thing in front (`vanguardPass`),
     // and it costs nothing when it dies alone. Without this the doubles thrown ahead of a camp
     // are walked back to the captain the moment the lead expires — a pass short of contact, and
     // exactly the contact they were spent on.
-    if (isCopy(u)) return false;
+    if (isCopy(u)) return "none";
+    const release = (): "none" => {
+      b.waiting.delete(u.id);
+      return "none";
+    };
     const off = Math.hypot(u.x - centre.x, u.y - centre.y);
-    if (off <= COHESION_RADIUS) return false;
+    // THE HYSTERESIS. A unit already waiting holds until the body is properly with it, not
+    // until it is a hair inside the same radius that stopped it — see `COHESION_RESUME`.
+    if (off <= (b.waiting.has(u.id) ? COHESION_RESUME : COHESION_RADIUS)) return release();
     // A unit that is IN a fight is left in it — pulling it out is not cohesion.
-    if (this.enemyNear(b, u.x, u.y, COHESION_COMBAT)) return false;
+    if (this.enemyNear(b, u.x, u.y, COHESION_COMBAT)) return release();
     // Far enough behind to be LOST rather than merely trailing: close on the captain instead of
     // attack-moving to an objective the group has already left it behind for. This is the half
     // that answers "army units stuck at base while the hero is out creeping alone" — a Grunt
     // trained after the party set off is a straggler by every measure, and the objective's own
     // attack-move walks it into the camp the party is already fighting in, one at a time.
-    if (off > FOLLOW_RADIUS) return true;
+    if (off > FOLLOW_RADIUS) {
+      b.waiting.delete(u.id);
+      return "follow";
+    }
     // …otherwise only the LEADERS wait: a unit nearer the objective than the anchor is.
-    return Math.hypot(u.x - x, u.y - y) < Math.hypot(centre.x - x, centre.y - y);
+    if (Math.hypot(u.x - x, u.y - y) >= Math.hypot(centre.x - x, centre.y - y)) return release();
+    b.waiting.add(u.id);
+    return "wait";
+  }
+
+  /**
+   * The nearest spot to (p) this unit could actually STAND on.
+   *
+   * Every destination the army manager computes rather than reads off the map is arithmetic —
+   * a centre of mass, a point offset from an anchor — and arithmetic lands wherever it lands:
+   * inside a treeline, on a cliff, in the water. A move order at such a point is not refused,
+   * it is answered best-effort: A* returns the explored cell nearest the goal, the unit walks
+   * to it and stops there, which against a forest is a unit standing with its nose in the
+   * trees. Snapping first is the difference between "walk to the army" and "walk at the army".
+   *
+   * The unit's own domain, so a ship is snapped onto water and a ground unit onto land — and
+   * its own footprint, since the free CELL a one-cell scan finds is no room at all for a body
+   * two cells across (the same trap `hostApproach` documents in the sim).
+   */
+  private standSpot(u: SimUnit, p: { x: number; y: number }): { x: number; y: number } {
+    const grid = this.host.world.grid;
+    const domain = pathDomain(u);
+    const [cx, cy] = grid.worldToCell(p.x, p.y);
+    if (grid.walkable(cx, cy, domain)) return p;
+    const free = grid.nearestWalkable(cx, cy, SNAP_SEARCH, domain);
+    if (!free) return p;
+    const [wx, wy] = grid.footprintCenter(free[0], free[1], u.footprint);
+    return { x: wx, y: wy };
   }
 
   /** Where the group actually is — the anti-chase rule measures from here rather than from the
@@ -3267,7 +3410,7 @@ export class ComputerPlusAi {
     b.reissueIn = 0;
     // A new objective is a fresh start for the stall watchdog, and nothing is mustering in the
     // field until the next massing pass says so.
-    b.push.was = null;
+    b.push.gap = -1;
     b.push.since = b.clock;
     b.afield = false;
     // A new objective is also a fresh vanguard: the old one's hold must not survive into a
@@ -3279,6 +3422,9 @@ export class ComputerPlusAi {
     // destination of their own for every unit in the squad, and a stale pull-back entry would
     // either fight that order or hold the unit out of the wave that forms next.
     if (mode === "massing" || mode === "retreating") b.pulls.clear();
+    // …and so does one soldier's WAIT for the rest of the army: both states hand every unit a
+    // destination of their own, and a stale hold would stand a soldier in a field.
+    b.waiting.clear();
   }
 
   /** Where the army waits: in front of the base, on the line to the enemy. */
@@ -3289,7 +3435,17 @@ export class ComputerPlusAi {
     const dx = foe.x - home.x;
     const dy = foe.y - home.y;
     const len = Math.hypot(dx, dy) || 1;
-    return { x: home.x + (dx / len) * RALLY_OUT, y: home.y + (dy / len) * RALLY_OUT };
+    const spot = { x: home.x + (dx / len) * RALLY_OUT, y: home.y + (dy / len) * RALLY_OUT };
+    // A projection off the hall, so it can land on the cliff or the treeline the base backs
+    // onto — and a whole army mustering at a point none of it may occupy is a whole army
+    // standing in a line against that treeline, which is `gathered` never becoming true.
+    const grid = this.host.world.grid;
+    const [cx, cy] = grid.worldToCell(spot.x, spot.y);
+    if (grid.walkable(cx, cy)) return spot;
+    const free = grid.nearestWalkable(cx, cy, SNAP_SEARCH);
+    if (!free) return home;
+    const [wx, wy] = grid.cellToWorld(free[0], free[1]);
+    return { x: wx, y: wy };
   }
 
   private *squadUnits(b: Brain): Generator<SimUnit> {
@@ -3397,7 +3553,11 @@ export class ComputerPlusAi {
       if (!pullDue(entry, u.hp / Math.max(1, u.maxHp), b.profile.pullOutHp, b.clock)) continue;
       const foe = this.foeBeside(b, u, COHESION_COMBAT);
       if (!foe) continue; // not in a fight — there is nothing to walk out of
-      const spot = pullBackSpot(u, foe, anchor);
+      // …onto ground it can stand on. The spot is a projection off the anchor and lands wherever
+      // the arithmetic puts it — a screen behind an army fighting with its back to a forest is
+      // inside the forest — and a move at a blocked point is a best-effort path that ends with
+      // the unit's nose against the treeline (`standSpot`).
+      const spot = this.standSpot(u, pullBackSpot(u, foe, anchor));
       b.pulls.set(u.id, { x: spot.x, y: spot.y, until: b.clock + PULL_BACK_HOLD, next: b.clock + PULL_BACK_AGAIN });
       b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
     }

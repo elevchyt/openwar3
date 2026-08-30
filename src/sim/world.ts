@@ -2011,7 +2011,7 @@ export function summonsBuildings(u: SimUnit): boolean {
   return u.race === "undead";
 }
 /** The grid domain a unit searches — see SimUnit.waterborne. */
-function pathDomain(u: SimUnit): PathDomain {
+export function pathDomain(u: SimUnit): PathDomain {
   return u.waterborne ? "water" : "ground";
 }
 // Proactive reroute poll (issue #6). A unit's path is computed once, but other
@@ -17849,6 +17849,25 @@ export class SimWorld {
     if (this.pathTo(u, u.chaseX, u.chaseY)) return true;
     this.holdOrGiveUp(u, u.chaseX, u.chaseY);
     return false;
+  }
+
+  /**
+   * Could this unit walk there AT ALL — terrain only, bodies ignored?
+   *
+   * The public face of `terrainReachable`, for a caller deciding whether a destination is
+   * worth ordering in the first place rather than whether to give one up. Computer+ asks it
+   * of a creep camp before it sends a wave (src/ai/plus/index.ts `creepTarget`): a camp
+   * across a river or behind a treeline is one the army walks at until the watchdog writes
+   * the whole objective off, and twenty seconds of an army standing in a line facing trees is
+   * exactly what a person does not do.
+   *
+   * A full A* per call, so it is for a decision taken once per objective and never per frame.
+   */
+  canWalkTo(id: number, x: number, y: number): boolean {
+    const u = this.units.get(id);
+    if (!u || u.hp <= 0) return false;
+    if (u.flying) return !this.grid || this.grid.playableAt(x, y);
+    return this.terrainReachable(u, x, y);
   }
 
   /** Could this unit get there if nobody else were in the way — is the destination reachable
