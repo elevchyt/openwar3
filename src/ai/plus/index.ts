@@ -506,18 +506,22 @@ const SCOUT_PROGRESS = 300;
  */
 const SCOUT_TOUR = 150;
 /**
- * …and how long the WALK HOME may take on top of it before the worker is simply let go where
- * it stands.
+ * …and how long the WALK HOME may take, measured from when it STARTED (`Brain.scoutBackAt`).
  *
  * The walk home is a leg like any other (`headHome`), which means it can fail like any other —
  * a route the pathfinder cannot find, a camp that has parked itself between the scout and its
  * own base. A held worker that will never arrive is worth less than an idle one in the wrong
  * place, because the harvest plan can at least give the second one a job.
  *
- * A worker crosses a 128x128 melee map in about a minute, so this is one crossing: generous for
- * the walk it is actually making, and short next to the tour it is the tail of.
+ * A worker crosses a 128x128 melee map in about a minute, so this is one crossing. Measured
+ * from the start of the WALK and not from the start of the tour, because the tour can end at
+ * any point in it: a scout that turns for home at ninety seconds must not be held to a deadline
+ * pinned to a `SCOUT_TOUR` it never reached.
  */
 const SCOUT_HOME_BY = 60;
+/** Below this, a "step" is not a step and ordering a walk to it is ordering nothing — see the
+ *  end of `scoutPass`. Half a pathing cell: shorter than any walk worth issuing an order for. */
+const SCOUT_STRIDE = 64;
 
 // ITEMS live in plus/items.ts, not here — an item ability is not in `SimUnit.abilities` (it
 // hangs off the inventory slot and dispatches through `useItem`), so neither this file's army
@@ -1080,6 +1084,9 @@ interface Brain {
    *  arc'd round the creeps, re-aimed every pass, and the worker is not handed back to the
    *  economy until it arrives. See `headHome`. */
   scoutBack: boolean;
+  /** `b.clock` when the walk home began — its own deadline (`SCOUT_HOME_BY`), measured from
+   *  there rather than from the tour's start, because the tour can end at any point in it. */
+  scoutBackAt: number;
   mode: Mode;
   /** When the wave first found itself short at the muster point (-1 = it is gathered). The
    *  deadline on `gathered`, without which one stuck soldier holds the army at home for ever. */
@@ -1256,6 +1263,7 @@ export class ComputerPlusAi {
       scoutHp: 0,
       scoutIn: 0,
       scoutBack: false,
+      scoutBackAt: 0,
       scoutStill: 0,
       scoutSince: 0,
       mode: "massing",
@@ -1863,10 +1871,13 @@ export class ComputerPlusAi {
     // rest of the match. Written as "start walking home" rather than as a special case, so it
     // goes back to work exactly as a finished tour does.
     if (b.clock - b.scoutSince >= SCOUT_TOUR) this.headHome(b);
-    // …and the WALK HOME has one of its own, because it is a walk and walks can fail. Past this
-    // the worker is simply let go wherever it is standing: an idle worker in the wrong place is
-    // worth more than a held one, and the harvest plan will at least give it a job.
-    if (b.scoutBack && b.clock - b.scoutSince >= SCOUT_TOUR + SCOUT_HOME_BY) return this.release(b);
+    // …and the WALK HOME has one of its own, because it is a walk and walks can fail. Measured
+    // from when the walk STARTED rather than from the tour's start, since the tour can end at
+    // any point in it — a scout that turns for home at ninety seconds must not be held to a
+    // deadline pinned to the two-and-a-half-minute one it never reached. Past this the worker is
+    // simply let go wherever it is standing: an idle worker in the wrong place is worth more
+    // than a held one, and the harvest plan will at least give it a job.
+    if (b.scoutBack && b.clock - b.scoutBackAt >= SCOUT_HOME_BY) return this.release(b);
     // IS IT ACTUALLY MOVING? The tour only ever advanced on arrival, so a scout that stopped
     // short of a waypoint — wedged behind a building, turned round by a creep it survived, left
     // holding a stale order — stood there for the rest of the match. See `SCOUT_STUCK_AFTER`.
@@ -1919,33 +1930,60 @@ export class ComputerPlusAi {
     // than a line into one.
     const creeps = this.liveCreeps();
     const step = safeLeg(scout, goal, creeps);
-    // …AND IT TAKES NO FOR AN ANSWER. `safeLeg` hands back the BEST leg it found, which is not
-    // always a SAFE one: a camp between us and the waypoint with no room to go round it still
-    // yields a step that walks inside its notice, and the scout took it — which is most of the
-    // remaining "it still aggroes creep camps sometimes". Standing clear of every creep and
-    // being offered a step that is not clear is the moment to give the leg up, because the
-    // tour's whole value is the legs after it and a dead scout has none.
+    // …AND, ON THE WAY OUT, IT TAKES NO FOR AN ANSWER. `safeLeg` hands back the BEST leg it
+    // found, which is not always a SAFE one: a camp between us and the waypoint with no room to
+    // go round it still yields a step that walks inside its notice, and the scout took it —
+    // which is most of the remaining "it still aggroes creep camps sometimes". Standing clear of
+    // every creep and being offered a step that is not clear is the moment to GIVE THE LEG UP,
+    // because the tour's whole value is the legs after it and a dead scout has none.
     //
     // Asked as "am I clear NOW" rather than unconditionally, so a scout a camp has already
     // walked up to is not frozen by its own rule — there is no clear step from inside a berth,
     // and the answer to that position is the retreat above, not a refusal to move.
-    // …except on the way HOME, where there is no next leg to fall through to and standing still
-    // outside a camp is the whole of the right answer: the route is re-asked twice a second and
-    // a creep that is chasing something else moves out of the way.
-    if (clearance(scout, scout, creeps) >= CREEP_BERTH && clearance(scout, step, creeps) < CREEP_BERTH) {
-      if (!b.scoutBack) { b.scoutLeg++; b.scoutGoal = null; }
+    //
+    // THE WALK HOME IS EXEMPT, and it has to be. "Give the leg up" only terminates because there
+    // is a next leg to fall through to; on the way home there is none, so refusing the step
+    // meant refusing to move at all — and nothing in the position changes, because the scout
+    // is standing still and a guard camp is standing still, so the same refusal is re-decided
+    // for ever. That is the "all the scouts froze in the middle of the map" report, and the
+    // stuck watchdog cannot rescue it: it writes off a waypoint, and the waypoint was never the
+    // problem. Between walking past a camp and standing in the open until the match ends, a
+    // player walks past the camp — and if it costs a hit, the retreat rule above is already
+    // pointed at home.
+    if (!b.scoutBack
+      && clearance(scout, scout, creeps) >= CREEP_BERTH && clearance(scout, step, creeps) < CREEP_BERTH) {
+      b.scoutLeg++;
+      b.scoutGoal = null;
       return;
     }
-    b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...step }, queued: false });
+    // A STEP OF NOWHERE IS NOT AN ORDER. `standOff` clamps a goal that is itself inside a
+    // creep's berth back to "do not move" (which is the honest answer for a leg whose whole
+    // purpose was to approach that goal), and a camp parked near our own base makes it the
+    // answer for HOME too — so the walk home was ordered to the spot it was already standing
+    // on, completed instantly, and re-decided identically next pass. Walking straight at the
+    // hall and letting the pathfinder deal with it is the right trade here for the same reason
+    // the exemption above is.
+    const stride = Math.hypot(step.x - scout.x, step.y - scout.y);
+    const aim = b.scoutBack && stride < SCOUT_STRIDE ? goal : step;
+    b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...aim }, queued: false });
   }
 
   /**
    * Is something that could kill the scout within `SCOUT_DANGER` of it?
    *
-   * Anything ARMED and hostile — the enemy army, a tower that has gone up while the scout was
-   * looking, a creep whose camp the route misjudged. A worker is not a threat (it is what the
-   * scout itself is) and neither is an unarmed building, or the tour would abandon itself on
-   * the first Farm it saw.
+   * A PLAYER's armed unit — the enemy army walking out to meet it, a tower that went up while
+   * it was looking. A worker is not a threat (it is what the scout itself is) and neither is an
+   * unarmed building, or the tour would abandon itself on the first Farm it saw.
+   *
+   * **CREEPS ARE NOT ASKED ABOUT HERE**, and leaving them in was what made the whole tour
+   * pointless: a melee map's camps sit on exactly the ground between two bases, `safeLeg` gives
+   * them a 900 berth but hands back its BEST attempt rather than a guarantee, and 700 of best
+   * effort is a very ordinary result — so the scout turned round and went home on the first
+   * camp it walked past, every game, usually before it had seen anything. Creeps already have
+   * two rules of their own and they are the right two: the berth arcs the route round them
+   * (`safeLeg`, re-asked twice a second), and if one does acquire the scout anyway its health
+   * goes down and `scoutPass`'s first rule sends it home. What this rule is FOR is the thing no
+   * berth can be computed against — a player's army, which chose to be there.
    *
    * Gated on `knows` like everything else this AI decides on: at 700 the scout's own eyes
    * (sight 800) already cover it, so this is honest by construction rather than by promise —
@@ -1955,6 +1993,7 @@ export class ComputerPlusAi {
   private scoutInDanger(b: Brain, scout: SimUnit): boolean {
     for (const u of this.host.world.units.values()) {
       if (u.hp <= 0 || u.owner === b.ai.player || u.weapons.length === 0) continue;
+      if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue; // see above
       if (u.isPeon || !b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
       if (Math.hypot(u.x - scout.x, u.y - scout.y) <= SCOUT_DANGER) return true;
     }
@@ -1990,6 +2029,7 @@ export class ComputerPlusAi {
   private headHome(b: Brain): void {
     if (b.scoutBack) return;
     b.scoutBack = true;
+    b.scoutBackAt = b.clock;
     b.scoutGoal = null;
     b.scoutStill = 0;
   }

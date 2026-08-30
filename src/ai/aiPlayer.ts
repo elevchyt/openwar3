@@ -897,22 +897,36 @@ export class AiPlayer {
    * They are still eligible, because a player with every worker down the mine must still be
    * able to build — but only once nothing on the surface can do it. Two passes rather than a
    * distance penalty, so "on the field" strictly beats "closer", which is the actual rule.
+   *
+   * A THIRD TIER under both of them: a worker `captainHeld` is SPOKEN FOR — it is the scout, or
+   * it is standing in the wave. `applyHarvest` has always honoured that set and this did not,
+   * which is a hole with a shape: the one race whose spare worker is BOTH the builder and the
+   * scout is the undead (`SPARE_WORKERS`, plus/plan.ts — an Acolyte cannot chop, so the sixth
+   * one is the only body not on a mine), so the moment Computer+ started scouting with the
+   * spare rather than with a miner, the build loop took the scout straight back off the map and
+   * walked it home to put up a Ziggurat. Observed as "the Acolyte came home before it had
+   * finished scouting". Still a preference and not a ban, for the same reason the sunk tier is
+   * one: a player whose every worker is spoken for must still be able to build.
    */
   private freeWorker(defId: string, x: number, y: number): SimUnit | null {
     let best: SimUnit | null = null;
     let bestD = Infinity;
     let sunk: SimUnit | null = null;
     let sunkD = Infinity;
+    let spoken: SimUnit | null = null;
+    let spokenD = Infinity;
     for (const u of this.host.world.units.values()) {
       if (u.owner !== this.player || u.hp <= 0 || !u.worker) continue;
       if (u.buildPending || u.insideBuild || u.constructing) continue;
       if (!this.host.tech.builds(u.typeId).includes(defId)) continue;
       const d = Math.hypot(u.x - x, u.y - y);
-      if (isOffField(u)) {
+      if (this.captainHeld.has(u.id)) {
+        if (d < spokenD) { spokenD = d; spoken = u; }
+      } else if (isOffField(u)) {
         if (d < sunkD) { sunkD = d; sunk = u; }
       } else if (d < bestD) { bestD = d; best = u; }
     }
-    return best ?? sunk;
+    return best ?? sunk ?? spoken;
   }
 
   // ======================================================================================

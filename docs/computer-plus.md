@@ -133,11 +133,20 @@ spot, both in `scoutPass`:
   — *"am I being shot at"* is a question the order system cannot answer and a comparison can. What
   is left to look at is worth less than the worker, and a scout that walks home hurt has already
   delivered everything it saw on the way in.
-- **Something armed and hostile is within `SCOUT_DANGER` (700).** The enemy army, a tower that went
-  up while it was looking, a creep the route misjudged. Workers and unarmed buildings are not
-  threats, or the tour would abandon itself on the first Farm it saw. 700 is just inside a worker's
-  own daylight sight, so the rule fires on what the scout can genuinely see; it is still gated on
-  `knows` so a later change to the radius cannot quietly turn it into a fog bypass.
+- **A PLAYER's armed unit is within `SCOUT_DANGER` (700).** The enemy army walking out to meet it,
+  a tower that went up while it was looking. Workers and unarmed buildings are not threats, or the
+  tour would abandon itself on the first Farm it saw. 700 is just inside a worker's own daylight
+  sight, so the rule fires on what the scout can genuinely see; it is still gated on `knows` so a
+  later change to the radius cannot quietly turn it into a fog bypass.
+
+  **Creeps are deliberately not asked about here**, and leaving them in made the whole tour
+  pointless. A melee map's camps sit on exactly the ground between two bases, `safeLeg` gives them
+  a 900 berth but hands back its *best attempt* rather than a guarantee, and 700 of best effort is
+  a very ordinary result — so the scout turned round on the first camp it walked past, every game,
+  usually before it had seen anything. Creeps already have the right two rules: the berth arcs the
+  route round them, re-asked twice a second, and if one acquires the scout anyway its health drops
+  and the first rule sends it home. What this rule is *for* is the thing no berth can be computed
+  against — an army, which chose to be there.
 
 Both are asked **only once the scout has left home** (`TOWN_RADIUS`), and that clause is not a
 detail: `tourOver` latches `scoutDone`, so a rush standing in our own base at the sixtieth second
@@ -180,13 +189,25 @@ plan is good at placing it. Two details the leg needs that the outward ones do n
   it are different questions: `lookedAt` counts *"the next safe step is nowhere"* as arrival,
   which is right for a leg whose whole purpose is the look and catastrophic for this one, where it
   would release the worker in the open the first time a camp stood between it and its base.
-- **The creep veto stands still instead of skipping.** There is no next leg to fall through to, and
-  waiting outside a camp is the right answer: the route is re-asked twice a second and a creep
-  chasing something else moves out of the way.
+- **The creep veto does not apply**, and it must not. *"Give the leg up"* only terminates because
+  there is a next leg to fall through to; on the way home there is none, so refusing the step meant
+  refusing to move at all — and nothing in the position changes, because the scout is standing
+  still and a guard camp is standing still, so the same refusal is re-decided for ever. That was
+  *"all the scouts froze in the middle of the map"*, and the stuck watchdog cannot rescue it: it
+  writes off a waypoint, and the waypoint was never the problem. Between walking past a camp and
+  standing in the open until the match ends, a player walks past the camp — and if it costs a hit,
+  the retreat rule is already pointed at home.
+- **A step of nowhere is not an order.** `standOff` clamps a goal that is itself inside a creep's
+  berth back to *"do not move"*, which is honest for a leg whose whole purpose was to approach that
+  goal — and is the answer for HOME too when a camp is parked near our own base. The walk was then
+  ordered to the spot it was already standing on, completed instantly, and re-decided identically
+  next pass. Under `SCOUT_STRIDE` (64) the order is aimed straight at the hall instead and the
+  pathfinder deals with it.
 
 Both retreat rules and the `SCOUT_TOUR` deadline all route through `headHome` (idempotent — they
-re-fire every pass while it walks), and `SCOUT_HOME_BY` (60 s, one map crossing) is the backstop
-that lets the worker go where it stands if the walk itself fails.
+re-fire every pass while it walks), and `SCOUT_HOME_BY` (60 s, one map crossing, measured from
+when the *walk* started rather than from the tour's) is the backstop that lets the worker go where
+it stands if the walk itself fails.
 
 ### Who gets sent
 
@@ -204,6 +225,15 @@ the **sixth** Acolyte — the spare the build ladder trains for exactly this (`S
 *"the one a player keeps out of the mine to put up buildings with and to send to go and look"*) —
 stood in the base for the whole match. `onGoldDuty` is what closes it, and it asks the question
 the undead's way (`ringSlot`) as well as everybody else's.
+
+**And the builder does not then take it back.** `AiPlayer.freeWorker` — the *other* one, which
+picks who puts a structure up — never honoured `captainHeld`, and `applyHarvest` always had. That
+hole has the same shape as the one above and shows up on the same race: the undead's spare Acolyte
+is *both* the builder and the scout, so the moment the tour started using the spare rather than a
+miner, the build loop pulled the scout off the map and walked it home to put up a Ziggurat —
+observed as *"the Acolyte came home before it had finished scouting"*. Held workers are now a third
+tier under "on the field" and "down a hole", still a preference rather than a ban: a player whose
+every worker is spoken for must still be able to build.
 
 **It walks round the creep camps, not through them** (`safeLeg`). A melee map's camps sit on
 exactly the ground between two bases, so the straight line from home to the enemy's front door
