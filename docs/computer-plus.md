@@ -547,17 +547,41 @@ every test in the sim, and the wave claimed every ghoul the moment it was traine
 then kept `applyHarvest` off it, and an undead Computer+ chopped **no lumber for the entire
 match**. It is the one race whose lumber comes out of its army, and it has to say so.
 
-The rule and both numbers are Blizzard's — undead.ai 205–219, ported at `UNDEAD_AI.waveGate` in
-[`src/ai/undead.ts`](../src/ai/undead.ts): *the forest keeps 10 lumberjacks minus one per 120
-lumber in the bank, and everything left over attacks.* It self-regulates, which is why it is worth
-taking whole rather than picking a constant: with nothing banked every ghoul chops, and by the
-time there is 1200 lumber standing every ghoul fights. `recruit` states both directions against
-one number, so a crew that has gone short takes ghouls back **out** of the wave (newest first)
-rather than only refusing to add more.
+The BANK's half of the rule and both its numbers are Blizzard's — undead.ai 205–219, ported at
+`UNDEAD_AI.waveGate` in [`src/ai/undead.ts`](../src/ai/undead.ts): *the forest keeps 10
+lumberjacks minus one per 120 lumber in the bank, and everything left over attacks.* It
+self-regulates, which is why it is worth taking whole rather than picking a constant: by the time
+there is 1200 lumber standing every ghoul fights. `recruit` states both directions against one
+number, so a crew that has gone short takes ghouls back **out** of the wave (newest first) rather
+than only refusing to add more.
 
 Which race this applies to is asked of the DATA, never of a race list: if this player's ordinary
 workers can chop (`WorkerState.lumber` — a Peasant, a Peon, a Wisp) nothing is held back at all.
 Only the Acolyte (`uaco`, `lumber: false`) reaches the formula.
+
+**But that decay is a LATE-game rule, and read onto an opening it means the opposite.** undead.ai
+has *two* branches and only the second one is the decay: in the OPENING the wave takes its six
+ghouls **first** and "the rest keep chopping" — the split is stated from the wave's side, and the
+forest gets the remainder. Computer+ has no opening branch, so it ran the decay on the opening: a
+melee undead's first ghouls arrive with 150 lumber banked, where the decay asks for **nine**
+choppers and there are five, so every ghoul chopped. The hero was then the only thing in the
+squad — five food against a `creepFood` of eight or ten — and the symptom was the reported one:
+*the undead hero stands in its own base for minutes while every other race is out creeping*, until
+the bank has grown to about 600 lumber and the decay finally releases a party.
+
+So there is a second ceiling and it is **ours**: the forest never takes more than a **third** of
+the ghouls, whatever the bank says (`LUMBER_SHARE`), and the lower of the two ceilings wins. Two
+thirds of them are the army — this is the one race whose soldiers and whose lumberjacks are the
+same body, and a rule that lets the forest bid for them by the bank alone is a rule that puts the
+army in the trees. It scales the way a player's hand does: two on the trees behind a four-ghoul
+opening, three behind seven, four behind ten, never the whole crypt.
+
+The same pass removed the *other* cap, which was the older shape of the same idea: a chopper used
+to be taken into the wave only while the squad was under `attackFood`. Left in beside `lumberCrew`
+it capped the undead's **army** at a wave — every ghoul past fourteen or sixteen food went back to
+the trees, so the one race that pays for its army out of its forest was the one race that could
+not attack with what it had built, which is also the rule this file says Computer+ does not have
+(the ceiling is at production).
 
 That split decides how ghouls are *used*. Two more things follow from the same fact and both are
 in `plan.ts`:
@@ -566,6 +590,12 @@ in `plan.ts`:
   any. Two of the five undead builds (`aboms`, `gargoyles`) name no Ghoul in their mix at all, and
   under those the race chopped nothing whatever — so `PlusRaceTable.lumberUnit` names the chopper
   and `workers` puts up `LUMBER_UNITS` of them beside the workers, as economy rather than as army.
+  `LUMBER_UNITS` is **six**, and the sixth is the creeping party rather than the forest: with a
+  third of them chopping, six ghouls is two on the trees and four behind the hero, and four is
+  what a GREEN camp costs. A Ghoul is 340 hit points and 13 damage over a 1.3-second cooldown
+  (UnitBalance `realHP`, UnitWeapons `avgdmg1`/`cool1`), so behind a level-1 hero three price at
+  √(3 × 10 × 340) × 1.35 ≈ 136 and four at ≈ 157, against [`power.ts`](../src/ai/plus/power.ts)'s
+  green bar of 150. Five ghouls is a party that never leaves.
 - **An Acolyte is not a lumberjack, so five is the number.** Every worker past a mine's crew of
   five is 75 gold standing in a queue — for three races the sixth goes to the trees, for the
   undead it goes nowhere. `PlusProfile.workers` (11 on Normal, 14 on Insane) is an *economy's*

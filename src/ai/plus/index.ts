@@ -421,18 +421,49 @@ const LUMBER_CREW = 10;
 const LUMBER_PER_CHOPPER = 120;
 
 /**
- * How many of `choppers` the forest keeps — `undead.ai`'s rule as arithmetic:
- * *"the forest keeps however many the LUMBER stock says (10 minus a ghoul per 120 wood) and
- * everything left over attacks."*
+ * …and the SHARE of the ghouls the forest may take, which is OURS and is the half undead.ai
+ * does not have (docs/computer-plus.md: a number here is ours unless a comment cites something).
+ *
+ * undead.ai's ten is not an opening. Its script has TWO branches and only the second one is the
+ * decay above: in the OPENING the wave takes its six ghouls FIRST and *"the rest keep chopping"*
+ * (undead.ai 205-219, `UNDEAD_AI.waveGate`) — the split is stated from the WAVE's side, and the
+ * forest gets the remainder. Computer+ has no opening branch, so it ran the late-game decay on
+ * the opening, where it means the opposite of what it means late: a melee undead's first ghouls
+ * arrive with 150 lumber in the bank, the decay asks for nine choppers, and there are five, so
+ * EVERY ghoul chopped. The hero was then the only thing in the squad — five food against a
+ * `creepFood` of eight or ten — and the reported symptom is exactly what falls out of that: the
+ * undead hero stood in its own base until the bank had grown to about 600 lumber and the decay
+ * released the fourth ghoul, minutes after every other race had left to creep.
+ *
+ * A THIRD, because two thirds of the ghouls are the army — this is the one race whose soldiers
+ * and whose lumberjacks are the same body, and a rule that lets the forest bid for them by the
+ * bank alone is a rule that puts the army in the trees. It is the developer's own reading of the
+ * opening ("2-3 ghouls stay at home gathering lumber", the rest creeping) and it scales the way
+ * a player's hand does: two on the trees behind a four-ghoul opening, three behind seven, four
+ * behind ten — never the whole crypt, at any bank.
+ */
+const LUMBER_SHARE = 1 / 3;
+
+/**
+ * How many of `choppers` the forest keeps.
+ *
+ * Two ceilings, and the LOWER one wins. `undead.ai`'s is the bank's — *"the forest keeps however
+ * many the LUMBER stock says (10 minus a ghoul per 120 wood) and everything left over attacks"*
+ * — which is what returns the crew to the wave as the wood piles up. Ours is the pool's
+ * (`LUMBER_SHARE`), which is what stops the forest claiming the whole army before the bank has
+ * had time to grow. Floored at `LUMBER_FLOOR` so a full bank still leaves somebody on the trees,
+ * and never more choppers than there are ghouls.
  *
  * Pure and exported for the same reason `scoutRing` is: the thing that actually matters about it
- * — that it self-regulates, all of them chopping at zero lumber and none of them once the bank
- * is full — is then pinned by a test rather than by reading it. See
- * `ComputerPlusAi.lumberCrew` for who is counted.
+ * — that it self-regulates, that a party is always left over for the hero to creep with, and
+ * that none of them chop once the bank is full — is then pinned by a test rather than by
+ * reading it. See `ComputerPlusAi.lumberCrew` for who is counted.
  */
 export function lumberCrew(wood: number, choppers: number): number {
   if (choppers <= 0) return 0;
-  const want = Math.max(LUMBER_FLOOR, LUMBER_CREW - Math.floor(wood / LUMBER_PER_CHOPPER));
+  const bank = LUMBER_CREW - Math.floor(wood / LUMBER_PER_CHOPPER);
+  const share = Math.ceil(choppers * LUMBER_SHARE);
+  const want = Math.max(LUMBER_FLOOR, Math.min(bank, share));
   return Math.max(0, Math.min(want, choppers));
 }
 
@@ -1276,9 +1307,18 @@ export class ComputerPlusAi {
    * list of how many of each type a wave wants.
    *
    * The one exception is the unit that is both a soldier and a lumberjack — the Ghoul, which
-   * is not `isPeon` and so is a fighter by every other test in the sim. It is only taken while
-   * the army is short of what makes a wave, so the rest go on chopping. That is undead.ai's own
-   * `AG`/`WG` split (attack ghouls / wood ghouls) arrived at from the other direction.
+   * is not `isPeon` and so is a fighter by every other test in the sim. The FOREST's crew is
+   * held back (`lumberCrew`) and everything above it joins, which is undead.ai's own `AG`/`WG`
+   * split (attack ghouls / wood ghouls) arrived at from the other direction.
+   *
+   * That crew is the ONLY thing held back, and it used to be two things. There was a second cap
+   * here — a chopper was taken only while the squad was under `attackFood` — from before
+   * `lumberCrew` existed, when it was the sole protection for the forest. Left in beside it, it
+   * capped the undead's ARMY at a wave: every ghoul past the fourteen or sixteen food was left
+   * standing in the trees, so the one race that pays for its army out of its forest was the one
+   * race that could not attack with what it had built. It is also the rule this file's first paragraph
+   * says it does not have. The forest's share is a share of the POOL now (`LUMBER_SHARE`), which
+   * is what that cap was reaching for and states properly.
    */
   private recruit(b: Brain): void {
     const spare: SimUnit[] = [];
@@ -1305,7 +1345,6 @@ export class ComputerPlusAi {
     for (const u of spare) {
       // The forest's crew is not in the wave, whatever the wave is short of.
       if (u.worker?.lumber && free <= want) continue;
-      if (this.squadFood(b) >= b.profile.attackFood) break;
       if (u.worker?.lumber) free--;
       b.squad.add(u.id);
     }
@@ -1315,12 +1354,15 @@ export class ComputerPlusAi {
    * How many LUMBERJACKS the forest keeps back from the wave — the undead's Ghoul, and nobody
    * else's anything.
    *
-   * This is `undead.ai`'s own rule and the number is the game's: *"the forest keeps however many
-   * the LUMBER stock says (10 minus a ghoul per 120 wood) and everything left over attacks"*
-   * (undead.ai 205-219, ported at `UNDEAD_AI.waveGate` in src/ai/undead.ts). It self-regulates,
-   * which is why it is worth taking whole rather than picking a constant: with nothing banked
-   * every ghoul chops, and by the time there is a thousand lumber in the bank every ghoul
-   * fights.
+   * The BANK's half of it is `undead.ai`'s own rule and its number is the game's: *"the forest
+   * keeps however many the LUMBER stock says (10 minus a ghoul per 120 wood) and everything left
+   * over attacks"* (undead.ai 205-219, ported at `UNDEAD_AI.waveGate` in src/ai/undead.ts). It
+   * self-regulates, which is why it is worth taking whole rather than picking a constant: by the
+   * time there is a thousand lumber in the bank every ghoul fights. The other half — never more
+   * than a THIRD of the ghouls, whatever the bank says — is ours, and is what undead.ai states
+   * from the wave's side in its opening branch instead. See `LUMBER_SHARE`, and note that
+   * without it this rule read "with nothing banked every ghoul chops", which in an OPENING is
+   * the whole army standing in the forest and a hero with nobody to creep with.
    *
    * Without it Computer+ had NO ghoul split at all. `recruit` takes anything that fights, a
    * Ghoul is not `isPeon` and so is a fighter by every test in the sim, and the undead opens

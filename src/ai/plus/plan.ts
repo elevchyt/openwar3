@@ -96,16 +96,23 @@ const CORE_ARMY_FOOD = 16;
 const MINE_CREW = 5;
 
 /**
- * The forest's crew for a race whose WORKER cannot chop — the undead, and only the undead.
+ * The forest's crew for a race whose WORKER cannot chop — the undead, and only the undead —
+ * AND the creeping party it has to leave over.
  *
- * Five Ghouls, which is `undead.ai`'s own opening rounded to what a Crypt can actually keep
- * coming (its `WG` ceiling is ten, and `ComputerPlusAi.lumberCrew` already lets the wave take
- * back however many the bank says it may — undead.ai 205-219). It is deliberately stated as a
- * PRODUCTION row rather than left to the army mix: two of the five undead builds
- * (`aboms`, `gargoyles`) name no Ghoul at all, and under those the race chopped nothing
- * whatever for the whole match.
+ * Six Ghouls. It is deliberately stated as a PRODUCTION row rather than left to the army mix:
+ * two of the five undead builds (`aboms`, `gargoyles`) name no Ghoul at all, and under those the
+ * race chopped nothing whatever for the whole match — but that is only half of what this row is
+ * for, and six rather than five is the other half. `ComputerPlusAi.lumberCrew` keeps a THIRD of
+ * the ghouls on the trees (`LUMBER_SHARE`), so this row is what decides how big the party the
+ * hero creeps with is, and the bar it has to clear is `plus/power.ts`'s green one: a Ghoul is
+ * 340 hit points and 13 damage over a 1.3-second cooldown (UnitBalance `realHP`, UnitWeapons
+ * `avgdmg1`/`cool1`), so behind a level-1 hero three of them price at √(3 × 10 × 340) × 1.35 ≈
+ * 136 and four at ≈ 157, against a GREEN camp's 150. Five ghouls is two on the trees and three
+ * in the party, which is a party that never leaves; six is two and four, which is the opening a
+ * player actually has. Under the builds that DO name the Ghoul the army mix asks for more than
+ * this anyway, and the row is then satisfied by them.
  */
-const LUMBER_UNITS = 5;
+const LUMBER_UNITS = 6;
 
 /**
  * …and how many of them the forest keeps NO MATTER WHAT the bank says.

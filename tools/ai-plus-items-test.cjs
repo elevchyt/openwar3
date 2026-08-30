@@ -74,12 +74,11 @@ console.log("\n-- the undead keeps ghouls in the forest ------------------------
 // an undead computer chopped nothing for the whole match. It is the one race whose lumber comes
 // out of its army, and undead.ai says so by name (`WG`, the wood ghouls).
 //
-// The rule and both numbers are BLIZZARD'S — undead.ai 205-219, ported at `UNDEAD_AI.waveGate`
-// — so what is pinned here is that we took it whole rather than picking a constant.
-check("with nothing banked, every ghoul chops", lumberCrew(0, 6), 6);
-check("…however many there are, up to the crew", lumberCrew(0, 20), 10);
-check("120 lumber banked releases one", lumberCrew(120, 20), 9);
-check("600 releases five", lumberCrew(600, 20), 5);
+// The BANK's rule and both its numbers are BLIZZARD'S — undead.ai 205-219, ported at
+// `UNDEAD_AI.waveGate` — so what is pinned here is that we took it whole rather than picking a
+// constant: the crew shrinks by one per 120 lumber standing in the bank.
+check("120 lumber banked releases one of the ten", lumberCrew(120, 30), 9);
+check("600 releases five", lumberCrew(600, 30), 5);
 // …down to a FLOOR of two, which is ours and not undead.ai's. Taken literally the formula
 // reaches zero at 1200 lumber, which is a bank an undead player passes through in the middle of
 // every game: every ghoul joined the wave, the wood stopped, the bank drained back down with
@@ -89,11 +88,26 @@ check("…a full bank leaves the FLOOR chopping", lumberCrew(1200, 20), 2);
 check("…and however full it gets, still two", lumberCrew(5000, 20), 2);
 check("…but never more ghouls than there are", lumberCrew(5000, 1), 1);
 check("…and none at all with no ghouls", lumberCrew(5000, 0), 0);
-// The self-regulating half, which is why the rule is worth taking whole: it can never ask for
-// more lumberjacks than there are ghouls, so a two-ghoul opening puts two in the forest and
+check("a race with no ghoul-shaped fighter reserves nobody", lumberCrew(0, 0), 0);
+
+// THE SECOND CEILING, and it is ours: never more than a THIRD of the ghouls, whatever the bank
+// says. The bank's rule alone is a LATE-game rule read onto an opening — a melee undead's first
+// ghouls arrive with 150 lumber banked, where it asks for nine choppers and there are five, so
+// every ghoul chopped, the hero was the only thing in the squad, and it stood in its own base
+// until the bank had grown enough to release a party. That is the reported bug: "its hero seems
+// to like to stay in their base for quite a while until going out to creep".
+check("an empty bank does NOT put the whole crypt in the forest", lumberCrew(0, 6), 2);
+check("…four ghouls: two chop, two fight", lumberCrew(0, 4), 2);
+check("…seven: three chop, four fight", lumberCrew(0, 7), 3);
+check("…and twelve: four chop, eight fight", lumberCrew(0, 12), 4);
+// The LOWER of the two ceilings wins, so the bank still returns the crew to the wave as the wood
+// piles up — a third of thirty is ten, and 600 lumber banked is five.
+check("the bank still binds when it is the smaller", lumberCrew(600, 30), 5);
+// The self-regulating half, which is why the bank's rule is worth taking whole: it can never ask
+// for more lumberjacks than there are ghouls, so a two-ghoul opening puts two in the forest and
 // leaves the wave to everything else.
 check("it never asks for more choppers than exist", lumberCrew(0, 2), 2);
-check("a race with no ghoul-shaped fighter reserves nobody", lumberCrew(0, 0), 0);
+check("…nor when the floor is above the whole crypt", lumberCrew(0, 1), 1);
 
 // ==========================================================================================
 console.log("\n-- Normal and Insane farm creep camps --------------------------------------");
