@@ -793,6 +793,52 @@ Seven of those positions were moved after a live match said so, and each is wort
   Tier 3 keeps its old place at the bottom — at ten minutes there is an army to spend on, and
   what loses games there is teching past what you can defend.
 
+### A build order names the army it INTENDS; the opening soldier is derived
+
+A strategy is a weighted unit mix, and a mix is a statement about the army this build wants to
+*end up with*. Five of the twenty builds in `races.ts` name nothing that exists at tier 1 — the
+night elf's `bears` (Druids of the Claw, Dryads, Mountain Giants) and `chimaeras`, the human's
+`gryphons`, the undead's `aboms` and `gargoyles`. `buildableMix` narrowed the mix to what could
+be produced *now*, that came back empty, and the army rows asked for nothing.
+
+**That is not a quiet opening, it is a deadlock**, and the reason is that every "don't tech with
+nothing on the field" gate in the plan is stated in ARMY FOOD: `TIER2_ARMY` wants 8 before the
+hall goes up, a `SupportRow` wants its own `after`, `TECH_AFTER` wants 12 before a tier-2
+producer. With nothing trainable the only food on the field is the hero's five, for ever — so the
+buildings waited on the army and the army waited on the buildings. Reported from a real match: a
+Normal **night elf training no Archers** and a Normal **orc training no Grunts**, while the
+undead — reported as fine, and it *was* fine — played normally for a reason that gives the game
+away: **its Ghouls come out of the economy, not out of the mix.** `lumberUnits` sits with the
+workers near the top of the ladder, so `aboms` and `gargoyles` had an army in spite of themselves.
+
+The fix is what a player does in that position, and what every real Bear or Gryphon build order
+writes down: **open with the race's basic soldier and tech behind it.** When the strategy's own
+mix can produce nothing, `buildableMix` falls back on the race's OPENING SOLDIER — and derives it
+rather than naming it on the table, like every other building and upgrade here (rule 2 in
+`plan.ts`): the lowest-tier thing `table.barracks` makes that **needs nothing else standing** and
+is neither siege nor air. That is the Footman, the Grunt, the Archer and the Ghoul.
+
+Two clauses in that carry weight:
+
+- **"needs nothing else standing"** is what keeps the fallback out of the same trap. The human's
+  Rifleman is a tier-1 unit too — and it waits on a Blacksmith, which is a support row gated on
+  six army food. Falling back onto it would be the identical circle one building further out.
+- **"when the mix can produce nothing"** is what keeps it a fallback. The moment one row of the
+  build order comes online the opening soldier stops being offered, and the ones already bought
+  simply stand in the army: an elf on `bears` opens on Archers and stops the instant its Ancient
+  of Lore can make a Dryad. Without that, every build would quietly become "the basic soldier,
+  and tech".
+
+Behind it sits one more brace, `starved()`: if there is genuinely nothing to train *even with the
+fallback* — a razed producer, a custom race table with no basic soldier — the army-food gates on
+the support buildings and on the tier-up are lifted, because in that state they are the thing
+keeping the field empty rather than a discipline about it. It is unreachable in a stock game, and
+that is the point of it.
+
+`tools/ai-plus-plan-test.cjs` pins all of it: every build of every race has something to train at
+tier 1 with only a hall and a barracks standing, the fallback is the right unit, it is offered
+only while the mix is empty, and nothing is ever asked for with no producer up.
+
 ### A tier-up is priced as the UPGRADE it is
 
 The other half of "way too long at tier 1", and it was a plain bug in the library rather than a

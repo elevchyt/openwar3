@@ -209,6 +209,15 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   camp. Its army also moves as ONE BODY anchored on the CAPTAIN — the first hero trained, then
   the second — and nothing leaves the muster point until four fifths of it is there, with a
   deadline, because a gate with no deadline locked the hero at home.
+  A STRATEGY names the army a build wants to END UP with, so five of the twenty name nothing
+  that exists at tier 1 — and `buildableMix` therefore falls back on the race's OPENING SOLDIER
+  (derived, not named: the lowest-tier thing the barracks makes that NEEDS NOTHING ELSE
+  STANDING, which is the Footman/Grunt/Archer/Ghoul). Without it the empty mix is a DEADLOCK
+  rather than a slow opening, because every "don't tech with nothing on the field" gate is
+  stated in ARMY FOOD: nothing trainable means no food means no buildings means nothing
+  trainable. The undead looks exempt only because its Ghouls come out of the ECONOMY
+  (`lumberUnits`) instead of the mix. The fallback yields the instant one row of the build
+  order comes online, or every build quietly becomes "basic soldier, and tech".
   The BUILD LADDER's order is the strategy and six positions in it were measured: the gold crew
   is first (it is also the dead-worker replacement, at the highest priority there is), the FOREST
   crew is right behind it, the hero outranks the Barracks, the rest of the workers wait behind

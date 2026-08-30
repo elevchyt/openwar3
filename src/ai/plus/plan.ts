@@ -492,6 +492,67 @@ function army(c: PlusCtx, budget: number): void {
 }
 
 /**
+ * What to train right now: the strategy's mix if it can make any of it, and the race's OPENING
+ * SOLDIER if it cannot.
+ *
+ * The fallback is the safeguard, and it is the whole of "Computer+ delays its first army units".
+ * A strategy names the army it INTENDS to field, and six of the twenty builds name nothing that
+ * can be made at tier 1 — the night elf's `bears` and `chimaeras` are Druids of the Claw and
+ * Dryads and Mountain Giants, the human's `gryphons` is air, the undead's `aboms` and
+ * `gargoyles` likewise. With no fallback `army` had nothing to ask for, and that is not merely
+ * a quiet opening: it is a DEADLOCK, because every gate that would open the tech is stated in
+ * army food. `TIER2_ARMY` wants 8, a support building wants its `after`, `TECH_AFTER` wants 12
+ * for a tier-2 producer — and with nothing trainable the only food on the field is the hero's
+ * five, for ever. So a `bears` night elf trained no Archers and no Huntresses, a `gryphons`
+ * human trained nothing at all (its one tier-1 unit, the Rifleman, waits on a Blacksmith that
+ * waits on six army food), and the race that was reported as FINE is the one that is immune:
+ * the undead's Ghouls come out of `lumberUnits`, which is the economy and sits above all of it.
+ *
+ * A player in that position does not stand still — they open with the race's basic soldier and
+ * tech behind it, which is what every real Bear or Gryphon build order actually writes down. So
+ * that is what this does, and only while the build order itself can make nothing: the moment one
+ * row of the mix comes online the fallback stops being offered, and the soldiers it already
+ * bought simply stand in the army.
+ */
+export function buildableMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
+  const rows = strategyMix(c);
+  if (rows.length > 0) return rows;
+  const opening = openingUnit(c);
+  if (!opening) return rows;
+  const row = c.table.units[opening];
+  if (!row || row.tier > Math.min(c.profile.techTier, c.tier)) return rows;
+  if (!producerReady(c, row.from, row.needs)) return rows;
+  return [{ unit: opening, weight: 1 }];
+}
+
+/**
+ * The race's OPENING SOLDIER — the Footman, the Grunt, the Archer, the Ghoul.
+ *
+ * DERIVED rather than named, like every other building and upgrade in this file (rule 2 at the
+ * top): the lowest-tier thing `table.barracks` makes that needs nothing else standing, and that
+ * is neither siege nor air. Naming it on the race table instead would let it disagree with the
+ * catalogue — and the whole reason a fallback is needed is a build order that disagreed with
+ * what its owner could actually make.
+ *
+ * "Needs nothing else standing" is the load-bearing clause. The human's Rifleman is a tier-1
+ * unit too, but it waits on a Blacksmith, and a Blacksmith waits on army food (`SupportRow.after`)
+ * — so choosing it would fall back onto the same deadlock this is here to break.
+ */
+function openingUnit(c: PlusCtx): string | null {
+  const { table } = c;
+  let best: string | null = null;
+  let bestTier = Infinity;
+  for (const [unit, row] of Object.entries(table.units)) {
+    if (row.from !== table.barracks || (row.needs?.length ?? 0) > 0) continue;
+    if (row.siege || row.air) continue;
+    if (row.tier >= bestTier) continue;
+    bestTier = row.tier;
+    best = unit;
+  }
+  return best;
+}
+
+/**
  * The strategy's mix, narrowed to what can be produced now and RE-WEIGHTED against what the
  * enemy has been seen to field.
  *
@@ -502,7 +563,7 @@ function army(c: PlusCtx, budget: number): void {
  * and its Footmen down without ever abandoning the build it is playing — which is what a
  * player does, and is why this is not a strategy SWITCH.
  */
-export function buildableMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
+function strategyMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
   const { profile, table, strategy, tier, enemy } = c;
   const cap = Math.min(profile.techTier, tier);
   const counter = profile.counterWeight > 0 && enemy.seen >= profile.counterSample;
@@ -572,7 +633,28 @@ function tierUpDue(c: PlusCtx): void {
 
 function tier2(c: PlusCtx): void {
   const { ai, profile, table, armyFood, tier } = c;
-  if (profile.techTier >= 2 && tier >= 1 && armyFood >= TIER2_ARMY) ai.setBuildUnit(1, table.halls[1]);
+  if (profile.techTier < 2 || tier < 1) return;
+  if (armyFood < TIER2_ARMY && !starved(c)) return;
+  ai.setBuildUnit(1, table.halls[1]);
+}
+
+/**
+ * The DEADLOCK BREAKER: is there nothing at all this player can currently train?
+ *
+ * Every "don't tech with nothing on the field" gate in this file is stated in army food —
+ * `TIER2_ARMY`, `SupportRow.after`, `TECH_AFTER` — and that is the right rule right up to the
+ * moment the AI has no way to put anything on the field. Then it is circular: the army waits on
+ * the buildings and the buildings wait on the army, and the pair sit there for the whole match.
+ * `buildableMix`'s opening-soldier fallback is what makes this unreachable in practice (there is
+ * always a Footman, a Grunt, an Archer or a Ghoul), so this is the belt to that pair of braces —
+ * a custom race table with no basic soldier, or a producer that has been razed, must still be
+ * able to spend its way back out.
+ *
+ * Deliberately asked of `buildableMix` and not of the strategy's own mix: while the fallback is
+ * feeding the queue there IS an army coming, and the food gates should hold exactly as written.
+ */
+function starved(c: PlusCtx): boolean {
+  return buildableMix(c).length === 0;
 }
 
 /**
@@ -588,12 +670,15 @@ function tier2(c: PlusCtx): void {
 function techBuildings(c: PlusCtx): void {
   const { ai, profile, table, tier, armyFood } = c;
   const cap = Math.min(profile.techTier, tier);
+  // …unless there is nothing it can train at all, in which case the food gate is the thing
+  // KEEPING the field empty and the building under it is the way out — see `starved`.
+  const stuck = starved(c);
   for (const row of table.support) {
-    if (row.tier > cap || armyFood < row.after) continue;
+    if (row.tier > cap || (armyFood < row.after && !stuck)) continue;
     ai.setBuildUnit(1, row.build);
   }
   for (const row of mixBuildings(c)) {
-    if (row.tier > cap || armyFood < TECH_AFTER[row.tier - 1]) continue;
+    if (row.tier > cap || (armyFood < TECH_AFTER[row.tier - 1] && !stuck)) continue;
     ai.setBuildUnit(1, row.build);
   }
   // …and a second copy of the building that makes the bulk of the army, once the bank is
