@@ -392,6 +392,15 @@ Two rules, one at each end of the walk:
   walks it into the camp the party is already fighting in, one at a time. Never a unit with an
   enemy within `COHESION_COMBAT` — pulling one out of a fight is not cohesion — and defence is
   exempt in full: something is in the base, and a soldier that got there first should be swinging.
+- **…and the CAPTAIN is not exempt from its own rule.** The anchor *is* the captain, so
+  "how far is this unit from the anchor" is zero for the captain and cohesion held back every
+  unit in the army except the one whose death loses the game. It is also the unit most likely to
+  be out in front, because it is usually the fastest thing in the group — and a Blademaster under
+  **Wind Walk** is 10-70 % faster again (`[AOwk]` DataB). Reported exactly that way: *"the
+  Blademaster seems to be using Windwalk to leave its army and go and fight another creep camp
+  while its army is currently fighting another one."* The captain is measured against the
+  **body** — the rest of the squad, with itself left out — so the same two radii can be asked of
+  it. With no body left to hold it to (a hero alone) it is held to nothing.
 - **…and the gate GIVES UP WAITING.** A gate with no deadline is a deadlock, and this one
   deadlocked in the way that costs most: a single soldier that cannot reach the muster point held
   the whole army at home, hero included ("the AI is moving the hero to its base and locking it
@@ -770,6 +779,55 @@ normal unit, `UnitID1` the alternate — so enabling them was two table rows and
 the `morphToggle` that already existed. See [`spell-fx.md`](spell-fx.md) for the presentation
 side and `SimWorld.morphToggle` for the mechanism.
 
+### Wind Walk is TWO buttons, and pressing it as one wastes it
+
+`[AOwk]` is the exception to "a role per ability", and it earned the exception by being visibly
+broken: *"the Blademaster hero is not using its Windwalk ability correctly — it seems to like to
+use it and just stay in the fight invisible."* Its own `Data` columns say why (AbilityMetaData
+names them Owk1/2/3, and [`spells.ts`](../src/sim/spells.ts) spends all three):
+
+| | | |
+| --- | --- | --- |
+| DataA | Transition Time | 0.6 s — the beat before he fades |
+| DataB | Movement Speed Increase (%) | 0.1 / 0.4 / 0.7 |
+| DataC | Backstab Damage | 40 / 70 / 100 |
+
+The backstab is **not a standing bonus**. It rides on the ONE blow that breaks the invisibility
+(`SimWorld.breakInvisibility`), so the ability is an **opener** at least as much as it is an
+escape — and grading it as nothing but a `panic` button is what produced the reported behaviour:
+a hero pressing the top of its ladder the instant anything scratched it, and getting a 40-damage
+swing out of a cooldown it should have opened a fight with. So `windWalkRole` decides which
+button this is, every pass:
+
+* an **EXIT** (`panic`, top of the ladder) when the hero is actually leaving — at `HERO_KILL_HP`
+  (40 %), the same share of its life at which this AI's own targeting starts treating a hero as
+  a kill, and **only with no Scroll of Town Portal to leave with**. The scroll is the better exit
+  by every measure (instant, invulnerable for the whole channel, and it ends in the base), and it
+  is the one the belt will press a beat later at that very threshold — so the spell is the escape
+  for a hero that has not got one. `PlusItems.holdsEscape` is the question, asked through
+  `CastCtx`, because an item ability is not in `SimUnit.abilities` at all.
+* an **OPENER** (`buff`) otherwise. `buff` puts it **below the ultimate** on the ladder, which is
+  where it belongs: a Blademaster with Bladestorm off cooldown presses Bladestorm.
+
+**And both halves need an order after the press**, which is the part that was missing entirely.
+`AOwk` is IMMEDIATE (`SimWorld.castImmediate`): it fires on the spot and *leaves the caster's
+current order completely alone*. That is exactly right for the real client — the Blademaster
+fades mid-stride, which is the escape micro the ability exists for — and it is precisely why a
+cast on its own changes nothing about what the hero does next. A hero that was swinging keeps
+swinging, and spends the invisibility breaking it on whatever was already in front of it.
+
+* The opener therefore **aims the blow**: the hero is put onto the body worth the backstab, by
+  `killValue` — the army's ladder rather than a spell's, because this is one swing and what it
+  buys is a body closer to dead. The 0.6 s fade costs nothing, since a swing landed before the
+  fade is simply not the one that breaks it. No target worth hitting, no cast.
+* The exit therefore **walks**. The move goes out at cast time (an army pass one to three seconds
+  later is far too late — the hero would have swung and revealed itself), and
+  `ComputerPlusAi.escapePass` then holds it there through the army's own withdrawal channel,
+  `pulls`: `commit` skips a withdrawn unit, `squadFood` does not count it, `pullPass` keeps it
+  walking, and `armyAnchor` refuses to anchor the army on a captain that has withdrawn — so the
+  army holds its ground instead of following its hero home. `WINDWALK_OUT` (18 s) sits inside the
+  ability's own shortest `Dur1`, so the hero is still invisible when it arrives.
+
 ### Aiming: one ladder for the casters and the army, three ways of reading a fight
 
 [`targeting.ts`](../src/ai/plus/targeting.ts) is the answer to "who do I hit", and **both**
@@ -974,6 +1032,17 @@ is what a melee player buys, not how good they are. Every id on it was read off 
 race shops sell `phea`/`pman`/`stwp`, which is why those anchor it. (Watch the near-homographs:
 `pinv` is Potion of *Invisibility*, `pnvu` Potion of Invulnerability, and `pnvl` the *Lesser* one
 that is what the Merchant actually stocks.)
+
+**A race opens with its own buy** (`RACE_FIRST`), in front of everything on that list — the Town
+Portal included. This is arithmetic before it is preference: `pick` walks the list in order and
+stops at the first row it can afford, and `shopping` is only **three slots** on Normal, so
+anything below the first two or three rows is decoration that is never reached. Today there is
+one entry and it is the **orc's two Healing Salves**. `[ovln]` (the Voodoo Lounge) is the one
+race shop that stocks `hslv`; it is 100 gold for three charges, the best hit points per gold in
+the game; and — the part that makes it a *first* buy rather than a cheap potion — its row is a
+`healOther` (`Rng1` 500, no `Area1`), so it is the item that puts the **army** back together
+between creep camps rather than the hero. Two of them, because the first camp spends one. The
+other three races open on the potions `LIST` already starts with, so they get no invented habit.
 
 A purchase needs the buyer **standing at the shop**, and the sim adopts whoever is in range as the
 patron by itself (`tickShopBuyers`) — so the whole of "select this hero as the buyer" is walking it

@@ -632,6 +632,18 @@ const PULL_BACK_AGAIN = 45;
 const PULL_BACK_ARRIVE = 200;
 
 /**
+ * How long a hero that WIND WALKED out of a fight stays out of it (`escapePass`).
+ *
+ * Much longer than `PULL_BACK_HOLD`, because the two are different withdrawals: a pull-back is a
+ * step behind the line taken while the fight goes on winning without that soldier, and this is
+ * the hero leaving the fight altogether — the whole walk home, which is what `[AOwk]`'s own
+ * `Dur1` is sized for and what its Movement Speed Increase (DataB) makes survivable. Set inside
+ * the shortest rank of that duration, so the hero is still invisible when it arrives rather than
+ * being dropped back into the army's orders halfway there.
+ */
+const WINDWALK_OUT = 18;
+
+/**
  * WHERE a unit pulled out of a fight goes: `PULL_BACK_DIST` behind the army, away from what is
  * hitting it.
  *
@@ -974,7 +986,8 @@ export class ComputerPlusAi {
           return [...t.makeitems, ...t.sellitems];
         },
         gold: () => ai.gold(),
-      }, profile),
+        // WHOSE SHELF this is — the race's own first buys (plus/items.ts `RACE_FIRST`).
+      }, profile, race),
       clock: 0,
       chops: null,
       // Staggered across the interval, so twelve computers never all think on one frame.
@@ -1111,7 +1124,10 @@ export class ComputerPlusAi {
         b.castIn = b.profile.castPeriod;
         simProfile.begin("sim.ai.cast");
         const t0 = perfNow();
-        b.caster.pass(b.clock);
+        // The belt's one answer the caster needs and cannot reach for itself: Wind Walk's exit
+        // is the escape a hero takes when it has no Scroll of Town Portal (plus/casting.ts
+        // `windWalkRole`), and an item ability is not in `SimUnit.abilities` at all.
+        b.caster.pass(b.clock, { holdsPortal: (u) => b.items.holdsEscape(u), home: b.ai.home() });
         simProfile.end("sim.ai.cast");
         simProfile.gauge("aiCastPass", perfNow() - t0);
         // The BELT, on the same clock as the buttons — it is the same kind of decision, and a
@@ -1290,6 +1306,11 @@ export class ComputerPlusAi {
     // base and out of one in its own, and `pullPass` reads the fight itself rather than the
     // mode. Inert on Easy (`pullOutHp` 0).
     this.pullPass(b);
+    // …and so does a hero that has just WIND WALKED out of one, which is the same withdrawal
+    // taken with a spell instead of with a pair of feet. After `pullPass`, so that the escape's
+    // own entry is the one that stands rather than being overwritten by a pull-back a pass
+    // later.
+    this.escapePass(b);
     if (this.defendPass(b)) return;
     switch (b.mode) {
       case "defending": return void this.setMode(b, "massing"); // the threat is gone
@@ -2178,6 +2199,16 @@ export class ComputerPlusAi {
     // standing in the base, everyone who can reach it should be swinging at it, and a Grunt
     // that is "ahead of the group" on the way home is a Grunt that got there first.
     const centre = b.mode === "defending" ? null : this.armyAnchor(b);
+    // …AND THE CAPTAIN IS NOT EXEMPT FROM ITS OWN RULE. `armyAnchor` IS the captain whenever
+    // there is one, so `strayed` measured against it is a distance of zero for the captain: the
+    // one unit cohesion never held back was the hero, which is the unit whose death loses the
+    // game and the unit most likely to be out in front, because it is usually the fastest thing
+    // in the group. A Blademaster under Wind Walk is 10-70 % faster again (`[AOwk]` DataB), and
+    // it showed: "the Blademaster seems to be using Windwalk to leave its army and go and fight
+    // another creep camp while its army is currently fighting another one." The hero is held to
+    // the BODY — the rest of the squad, itself left out — so the same rule can be asked of it.
+    const captain = centre ? this.squadHero(b) : null;
+    const body = captain ? this.squadCentre(b, captain.id) : null;
     for (const u of this.squadUnits(b)) {
       // A unit that is HEALING is not ordered anywhere. It is standing in the base with a Salve
       // on it or its head in a Moon Well, and marching it out is what makes the heal pointless.
@@ -2194,7 +2225,8 @@ export class ComputerPlusAi {
       // ones behind are already being carried forward by the same order), and it never touches
       // a unit that is in a fight. The hero is not exempt: a hero out in front of its army is
       // the single most expensive thing on the map standing on its own.
-      if (centre && this.strayed(b, u, centre, x, y)) {
+      const anchor = captain && u.id === captain.id ? body : centre;
+      if (anchor && this.strayed(b, u, anchor, x, y)) {
         // Already walking back to about there: leave it alone. A move order RESTARTS the path
         // search (the same cost the attack-move guard below is about), and the centre of mass
         // drifts by a few units every pass — so without this the whole tail of the army would
@@ -2202,8 +2234,8 @@ export class ComputerPlusAi {
         // of its current path IS its destination, which is the only place a plain move records
         // one.
         const end = u.order === "move" && u.path.length ? u.path[u.path.length - 1] : null;
-        if (end && Math.hypot(end[0] - centre.x, end[1] - centre.y) <= REISSUE_SLACK) continue;
-        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: centre.x, y: centre.y }, queued: false });
+        if (end && Math.hypot(end[0] - anchor.x, end[1] - anchor.y) <= REISSUE_SLACK) continue;
+        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: anchor.x, y: anchor.y }, queued: false });
         continue;
       }
       if (focus && !u.isPeon) {
@@ -2350,13 +2382,17 @@ export class ComputerPlusAi {
 
   /** Where the group actually is — the anti-chase rule measures from here rather than from the
    *  wave's objective, because "has it pulled away from us" is a question about the ARMY. */
-  private squadCentre(b: Brain): { x: number; y: number } | null {
+  private squadCentre(b: Brain, exceptId = 0): { x: number; y: number } | null {
     let n = 0, sx = 0, sy = 0;
     for (const u of this.squadUnits(b)) {
       // The units still IN the line. One walked out of the fight (`pullPass`) is standing a
       // screen behind it by design, and letting it drag the centre back is how one wounded
       // Grunt re-aims the whole army at the ground behind itself.
       if (u.isPeon || pulledOut(b.pulls.get(u.id), b.clock)) continue;
+      // …and one unit may be left out on purpose: `commit` asks where the BODY is in order to
+      // hold the captain to it, and a captain measured against a centre it is itself half of is
+      // a captain that can only ever be a fraction of its own lead out of position.
+      if (u.id === exceptId) continue;
       sx += u.x; sy += u.y; n++;
     }
     return n ? { x: sx / n, y: sy / n } : null;
@@ -2549,6 +2585,47 @@ export class ComputerPlusAi {
       const spot = pullBackSpot(u, foe, anchor);
       b.pulls.set(u.id, { x: spot.x, y: spot.y, until: b.clock + PULL_BACK_HOLD, next: b.clock + PULL_BACK_AGAIN });
       b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
+    }
+  }
+
+  /**
+   * A hero that has just WIND WALKED out of a fight is walked out of it.
+   *
+   * The press is the caster's (plus/casting.ts `windWalk`); this is the other half of the same
+   * decision, and without it the ability does nothing at all. `AOwk` is IMMEDIATE
+   * (`SimWorld.castImmediate`): it fires on the spot and leaves the caster's current order
+   * completely alone, so a hero that pressed it mid-fight fades and keeps swinging — the next
+   * blow breaks the invisibility, and the escape was spent standing in the fight it meant to
+   * leave. Reported in as many words: "it seems to like to use it and just stay in the fight
+   * invisible."
+   *
+   * It leaves through `pulls` rather than through an order of its own, because that map is
+   * already the one channel in this file that means *this unit is out of the fight and nothing
+   * may re-order it*: `commit` skips it, `squadFood` does not count it, `pullPass` keeps it
+   * walking, and — the clause that matters most here — `armyAnchor` refuses to anchor the army
+   * on a captain that has withdrawn, so the army holds its ground instead of following its hero
+   * home.
+   *
+   * HOME is the destination rather than `pullBackSpot`'s screen behind the line: a hero at
+   * `HERO_KILL_HP` is not stepping out of range for ten seconds, it is going to where it can be
+   * healed. It rejoins the way every other withdrawal does, when `WINDWALK_OUT` runs out.
+   */
+  private escapePass(b: Brain): void {
+    const ids = b.caster.drainEscapes();
+    if (!ids.length) return;
+    const home = b.ai.home();
+    for (const id of ids) {
+      const u = this.host.world.units.get(id);
+      if (!u || u.hp <= 0) continue;
+      b.pulls.set(u.id, {
+        x: home.x,
+        y: home.y,
+        until: b.clock + WINDWALK_OUT,
+        // The same see-saw guard an ordinary pull-back gets, measured from the same place —
+        // see `PULL_BACK_AGAIN`.
+        next: b.clock + PULL_BACK_AGAIN,
+      });
+      b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: home.x, y: home.y }, queued: false });
     }
   }
 

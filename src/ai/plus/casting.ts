@@ -1,9 +1,9 @@
 import { isRepairCode, NO_AOE_CURSOR, type AbilityDef, type AbilityLevel } from "../../data/abilities";
 import type { SimUnit } from "../../sim/world";
 import { friendlySpell, near, waveDistance, type CasterView } from "../casting";
-import { MELEE_INSANE, MELEE_NEWBIE } from "../ids";
+import { MELEE_INSANE, MELEE_NEWBIE, WIND_WALK } from "../ids";
 import type { PlusProfile } from "./profile";
-import { aimCtx, spellFacts, spellValue, type AimCtx } from "./targeting";
+import { aimCtx, HERO_KILL_HP, killValue, spellFacts, spellValue, type AimCtx } from "./targeting";
 
 // Computer+ — when its units press their buttons (issue #124).
 //
@@ -76,7 +76,9 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
     "AHds", // Divine Shield
     "AHav", // Avatar
     "ANms", // Mana Shield
-    "AOwk", // Wind Walk — the Blademaster's way out of a fight he is losing
+    "AOwk", // Wind Walk — but see `windWalkRole`: this is only HALF of that button, the exit,
+            // and the row is here so the exit sits at the top of the ladder where an exit
+            // belongs. Its other half is an opener and is graded `buff`.
     "Acan", // Cannibalize — a Ghoul eating a body IS its heal
     "AEbl", // Blink — an ESCAPE here and nothing else. The classic caster refuses it because
             // the thread records nothing about when the engine blinks; used only to leave a
@@ -349,6 +351,23 @@ function rolesFor(profile: PlusProfile): ReadonlySet<Role> {
   return new Set<Role>(["panic", "heal", "morph", "disable", "nuke", "summon", "buff"]);
 }
 
+/**
+ * What the BELT knows and the caster does not.
+ *
+ * One question today, and it exists because two different buttons answer "the hero is about to
+ * die": a Scroll of Town Portal and a Wind Walk. The scroll is the better of the two by every
+ * measure (docs/items.md — the press makes the hero invulnerable for the whole channel and ends
+ * in the base), so the spell is the exit for a hero that has not got one. An item ability is not
+ * in `SimUnit.abilities` at all, so this file cannot see a scroll by itself; plus/items.ts
+ * answers it (`PlusItems.holdsEscape`).
+ */
+export interface CastCtx {
+  holdsPortal(u: SimUnit): boolean;
+  /** Where a hero that has just Wind Walked out of a fight runs TO — the AI's own main base,
+   *  the same point `ComputerPlusAi.escapePass` then holds it at. */
+  home: { x: number; y: number };
+}
+
 /** One Computer+ player's casters. */
 export class PlusCaster {
   private readonly roles: ReadonlySet<Role>;
@@ -362,6 +381,11 @@ export class PlusCaster {
   private now = 0;
   /** How this player reads a fight (plus/targeting.ts), built once from the profile. */
   private readonly aim0: AimCtx;
+  /** What the belt knows — handed in each pass (see `CastCtx`). */
+  private ctx: CastCtx = { holdsPortal: () => false, home: { x: 0, y: 0 } };
+  /** Heroes that have just Wind Walked OUT of a fight this pass, and are waiting to be walked
+   *  home. Drained once by the army manager — see `drainEscapes` and `windWalk`. */
+  private escapes: number[] = [];
 
   /**
    * `roll` is the AI's OWN random stream (`AiPlayer.randomInt`), not `Math.random` — a
@@ -377,8 +401,9 @@ export class PlusCaster {
     this.aim0 = aimCtx(profile);
   }
 
-  pass(now: number): void {
+  pass(now: number, ctx: CastCtx): void {
     this.now = now;
+    this.ctx = ctx;
     const own: SimUnit[] = [];
     const foes: SimUnit[] = [];
     for (const u of this.view.world.units.values()) {
@@ -503,7 +528,7 @@ export class PlusCaster {
       if (def.autocast && !MORPH_WHEN[def.code]) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (!lvl) continue;
-      const role = roleOf(def, lvl);
+      const role = def.code === WIND_WALK ? this.windWalkRole(u) : roleOf(def, lvl);
       if (!role || !this.roles.has(role)) continue;
       cards.push({ role, ab, def, lvl });
     }
@@ -541,6 +566,11 @@ export class PlusCaster {
   private wants(u: SimUnit, def: AbilityDef, role: Role, foes: SimUnit[], engaged: boolean): boolean {
     switch (role) {
       case "panic":
+        // WIND WALK'S EXIT has already asked the two questions that decide it — the hit points
+        // and whether there is a scroll to leave with (`windWalkRole`) — so the only thing left
+        // is that there is a fight to leave at all. Without that clause a hero at a third life
+        // walking home across an empty map spends the cooldown on nothing.
+        if (def.code === WIND_WALK) return engaged;
         // "Casts when attacked … the health of the unit isn't a factor" is the real client's
         // Divine Shield; a Wind Walk or a Blink is the opposite, an exit taken when losing.
         // Both are here: hit right now, or hurt badly enough to leave.
@@ -591,6 +621,9 @@ export class PlusCaster {
     own: SimUnit[],
     foes: SimUnit[],
   ): boolean {
+    // Wind Walk is neither aimed nor merely pressed: the press is half the button and the ORDER
+    // that follows it is the other half. See `windWalk`.
+    if (def.code === WIND_WALK) return this.windWalk(u, code, lvl, role, foes);
     // A morph is aimed at nobody: its condition already ran in `morphWanted`, and the cast
     // point is ignored by the handler (`SPELL_HANDLERS`' morph entries take only the caster).
     if (role === "morph") {
@@ -604,6 +637,120 @@ export class PlusCaster {
     const spot = this.pickSpot(u, code, def, lvl, role, own, foes);
     if (!spot) return false;
     return this.view.order({ c: "cast", unitId: u.id, code, targetId: 0, x: spot.x, y: spot.y, queued: false });
+  }
+
+  // ====================================================================================
+  //  Wind Walk — the one button on the card that is two buttons
+  // ====================================================================================
+
+  /**
+   * WHICH of Wind Walk's two buttons this is, right now.
+   *
+   * `[AOwk]` is three things at once, and its `Data` columns say so (AbilityMetaData names them
+   * Owk1/2/3, and src/sim/spells.ts spends all three):
+   *
+   *   DataA "Transition Time"             0.6      — the beat before he actually fades
+   *   DataB "Movement Speed Increase (%)" 0.1/0.4/0.7
+   *   DataC "Backstab Damage"             40/70/100
+   *
+   * The backstab is not a standing bonus: it rides on the ONE blow that breaks the invisibility
+   * (`SimWorld.breakInvisibility`). So the ability is an OPENER as much as it is an escape, and
+   * grading it as nothing but a panic button is what produced the reported behaviour — "it seems
+   * to like to use it and just stay in the fight invisible", a hero pressing the top of its
+   * ladder the moment anything scratched it and getting one 40-damage swing out of a cooldown
+   * it should have opened a fight with.
+   *
+   *  · an EXIT (`panic`, top of the ladder) when the hero is actually leaving: at
+   *    `HERO_KILL_HP`, which is the share of its life at which this AI's own targeting starts
+   *    treating a hero as a kill (plus/targeting.ts) and therefore the last moment at which
+   *    walking away is still cheap — and only with no Scroll of Town Portal to leave with,
+   *    which is the better exit by every measure and is the one the belt will press
+   *    (plus/items.ts `holdsEscape`, and `ESCAPE_HP` there is the same 0.4 for the same reason).
+   *  · an OPENER (`buff`) otherwise. `buff` puts it BELOW the ultimate on the ladder, which is
+   *    where it belongs: a Blademaster with Bladestorm off cooldown presses Bladestorm.
+   */
+  private windWalkRole(u: SimUnit): Role {
+    const hurt = u.hp / Math.max(1, u.maxHp) <= HERO_KILL_HP;
+    return hurt && !this.ctx.holdsPortal(u) ? "panic" : "buff";
+  }
+
+  /**
+   * Press it, and then do the thing the press was FOR.
+   *
+   * Both halves need an order after the cast, and neither one used to get it, because `AOwk` is
+   * IMMEDIATE (`SimWorld.castImmediate`): it fires on the spot and *leaves the caster's current
+   * order completely alone*. That is exactly right for the real client — the Blademaster fades
+   * mid-stride — and it is why a cast on its own changes nothing about what the hero does next.
+   * A hero that was swinging keeps swinging, so the invisibility is spent breaking itself on
+   * whatever was already in front of it; a hero that was walking keeps walking.
+   *
+   *  · The EXIT is the walk, and it goes out here rather than on the next army pass: a hero
+   *    left swinging reveals itself within a second, which is well inside the one to three
+   *    seconds until the army thinks again. `ComputerPlusAi.escapePass` then takes the id off
+   *    `drainEscapes` and HOLDS it there through the army's own withdrawal channel, so that
+   *    `commit` cannot order it straight back into the fight and the army does not follow its
+   *    captain out (see that method).
+   *  · The OPENER is the blow. The hero is aimed at the body worth the backstab rather than at
+   *    whatever it happened to be hitting — `killValue` is the army's own ladder, because this
+   *    is a swing and not a spell — and the 0.6 s fade costs nothing, since the break is asked
+   *    of `cloaked` and a swing landed before the fade simply is not the one that breaks it.
+   */
+  private windWalk(u: SimUnit, code: string, lvl: AbilityLevel, role: Role, foes: SimUnit[]): boolean {
+    // Already walking: the buff is up, and pressing it again would only re-start a cooldown.
+    if (u.cloaked || !buffFree(u, lvl)) return false;
+    const press = (): boolean =>
+      this.view.order({ c: "cast", unitId: u.id, code, targetId: 0, x: u.x, y: u.y, queued: false });
+    if (role === "panic") {
+      if (!press()) return false;
+      // THE WALK IS ISSUED HERE, not on the next army pass. `AOwk` leaves the hero's current
+      // order alone, so a hero still swinging breaks its own invisibility within a second —
+      // long before an army pass one to three seconds away could have moved it. `escapePass`
+      // is what KEEPS it walking (and keeps `commit` off it); this is what starts it.
+      this.view.order({ c: "order", unitId: u.id, order: { kind: "move", x: this.ctx.home.x, y: this.ctx.home.y }, queued: false });
+      this.escapes.push(u.id);
+      return true;
+    }
+    // Nothing worth a backstab is nothing worth a Wind Walk: the opener is not pressed into an
+    // empty field, and returning false here leaves the rest of the card to be tried.
+    const t = this.backstab(u, foes);
+    if (!t) return false;
+    if (!press()) return false;
+    this.view.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: t.id }, queued: false });
+    return true;
+  }
+
+  /**
+   * What the backstab goes on: the most valuable body in this fight, by the ARMY's ladder
+   * (`killValue`) rather than by a spell's — this is one blow, and what it buys is a body closer
+   * to dead. Distance breaks ties, since the hero has to walk there before the fade runs out.
+   * Buildings are not backstabbed.
+   *
+   * And nor is a HEALTHY enemy hero, which is the same anti-chase rule the army follows
+   * (`ComputerPlusAi.focusTarget`, docs/computer-plus.md § it does not chase heroes): above
+   * `HERO_KILL_HP` a hero is a strong soldier with an escape and a healer, and a Wind Walk spent
+   * walking after one is the cooldown thrown away. Below it, it is the best thing on the field
+   * and `killValue` already says so.
+   */
+  private backstab(u: SimUnit, foes: SimUnit[]): SimUnit | null {
+    const look = Math.max(u.weapon?.acquire ?? 0, MIN_LOOK);
+    let best: SimUnit | null = null;
+    let bestScore = -Infinity;
+    for (const t of foes) {
+      if (t.building || t.invulnerable || t.hp <= 0) continue;
+      if (t.isHero && t.hp / Math.max(1, t.maxHp) > HERO_KILL_HP) continue;
+      if (!near(u, t, look)) continue;
+      const s = killValue(t, this.aim0) * 1000 - Math.hypot(t.x - u.x, t.y - u.y);
+      if (s > bestScore) { bestScore = s; best = t; }
+    }
+    return best;
+  }
+
+  /** The heroes that Wind Walked out of a fight since this was last asked — see `windWalk`.
+   *  Drained rather than read, so one escape produces exactly one walk home. */
+  drainEscapes(): number[] {
+    const out = this.escapes;
+    this.escapes = [];
+    return out;
   }
 
   /** The most VALUABLE legal target — see `value`. Legality is `castError`, the click's own. */

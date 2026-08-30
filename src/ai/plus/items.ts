@@ -1,5 +1,6 @@
 import type { AbilityDef } from "../../data/abilities";
 import type { ItemDef } from "../../data/items";
+import type { PlayableRace } from "../../data/races";
 import type { SimUnit } from "../../sim/world";
 import { near, type CasterView } from "../casting";
 import type { PlusProfile } from "./profile";
@@ -184,6 +185,32 @@ const LIST: readonly Want[] = [
   { id: "spro", want: 1 }, // Scroll of Protection (Merchant)
 ];
 
+/**
+ * What a RACE reaches for before anything else on that list.
+ *
+ * `LIST` is what a melee player buys; this is what a melee player buys *playing this race*, and
+ * it goes in front of everything — the Town Portal included — because a habit that only ever
+ * gets its turn once the general list is satisfied is a habit the belt never has room for.
+ * `PlusProfile.shopping` is only three slots on Normal, so a row three places down the ladder
+ * is a row that is never bought at all: an orc computer's belt was stwp + two Potions of
+ * Healing, every game, and the Healing Salve two lines further down was never once reached.
+ *
+ * ORC, and orc only. The Blademaster's own healing is a **Healing Salve**: `[ovln]` (the Voodoo
+ * Lounge) is the one race shop that stocks `hslv`, it is 100 gold for THREE charges — the best
+ * hit points per gold in the game — and it is aimed at somebody ELSE (`Rng1` 500, no `Area1`,
+ * so it is a `healOther`; docs/items.md). That last part is why it is the orc's first buy and
+ * not merely a cheap potion: it is the item that puts the ARMY back together between creep
+ * camps rather than the hero, which is exactly what an orc's early game is made of. Two of
+ * them, so there is one left after the first camp.
+ *
+ * The other three races have no equivalent first buy — the Vault, the Ancient of Wonders and
+ * the Tomb all open on the potions `LIST` already starts with — so they stay unlisted rather
+ * than being given an invented habit.
+ */
+const RACE_FIRST: Partial<Record<PlayableRace, readonly Want[]>> = {
+  orc: [{ id: "hslv", want: 2 }],
+};
+
 /** Where the Town Portal sits in that list. `keepPortal` puts it FIRST — a player who plans
  *  around having one buys it before the potions, because the potions are no use if the army
  *  it would have saved is dead. Without the habit it is merely the last thing it gets round to. */
@@ -312,6 +339,8 @@ export class PlusItems {
   constructor(
     private readonly view: ItemView,
     private readonly profile: PlusProfile,
+    /** Whose shelf this is shopping from — see `RACE_FIRST`. */
+    private readonly race: PlayableRace,
   ) {}
 
   pass(now: number, ctx: ItemCtx): void {
@@ -642,6 +671,31 @@ export class PlusItems {
     return false;
   }
 
+  /**
+   * Is this hero carrying a Scroll of Town Portal it could press RIGHT NOW?
+   *
+   * Read by the caster, and by exactly one rule there: Wind Walk's defensive half is the escape
+   * a hero takes when it has no scroll to leave with (plus/casting.ts `windWalk`). The scroll is
+   * the better exit — it is instant, it is invulnerable for the whole channel, and it ends in the
+   * base rather than somewhere on the way to it — so a hero holding one does not spend a Wind
+   * Walk cooldown a beat before pressing it.
+   *
+   * "Could press" is `itemReadyError`, the sim's own door: a scroll on cooldown or out of
+   * charges is a scroll the hero has not got.
+   */
+  holdsEscape(u: SimUnit): boolean {
+    for (let slot = 0; slot < u.inventory.length; slot++) {
+      const held = u.inventory[slot];
+      if (!held) continue;
+      const def = this.view.item(held.itemId);
+      if (!def?.usable) continue;
+      if (!def.abilities.some((aid) => this.view.def(aid)?.code === PORTAL_ABILITY)) continue;
+      if (this.view.world.itemReadyError(u.id, slot) !== null) continue;
+      return true;
+    }
+    return false;
+  }
+
   /** The unit on a shopping errand, or 0 — see `onErrand`. */
   get errand(): number {
     return this.onErrand;
@@ -687,9 +741,24 @@ export class PlusItems {
     return null;
   }
 
-  /** The shopping list this difficulty uses — see `PORTAL` for what `keepPortal` moves. */
+  /**
+   * The shopping list this player uses — the race's own first buys (`RACE_FIRST`), then the
+   * general one, with the Town Portal where `keepPortal` puts it.
+   *
+   * The race's rows go in FRONT of the portal rather than behind it. `pick` walks this in
+   * preference order and stops at the first row it can afford, and the belt is three slots
+   * deep on Normal — so anything below the first two or three rows is decoration. A row that
+   * describes what a race actually opens with has to be one of them.
+   *
+   * Duplicates are dropped rather than deduplicated by the `carried` gate, so a row that
+   * appears in both lists keeps the RACE's count rather than being asked for twice at two
+   * different quantities.
+   */
   private list(): readonly Want[] {
-    return this.profile.keepPortal ? [PORTAL, ...LIST] : [...LIST, PORTAL];
+    const first = RACE_FIRST[this.race] ?? [];
+    const seen = new Set(first.map((w) => w.id));
+    const rest = LIST.filter((w) => !seen.has(w.id));
+    return this.profile.keepPortal ? [...first, PORTAL, ...rest] : [...first, ...rest, PORTAL];
   }
 
   /** How many of an item our heroes are already carrying. Counted across ALL of them: two

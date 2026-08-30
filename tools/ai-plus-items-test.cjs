@@ -214,7 +214,7 @@ function pressed(units, profile, ctx, opts = {}) {
     item: (id) => ITEMS[id],
     wares: () => [],
     gold: () => opts.gold ?? 0,
-  }, profile);
+  }, profile, opts.race ?? "human");
   items.pass(opts.now ?? 100, ctx);
   return orders.find((c) => c.c === "useitem") ?? null;
 }
@@ -445,7 +445,9 @@ function shopped(units, profile, opts = {}) {
     item: (id) => ITEMS[id],
     wares: () => shelf,
     gold: () => opts.gold ?? 5000,
-  }, profile);
+    // WHOSE list this is: `RACE_FIRST` gives the orc two Healing Salves before anything else,
+    // and every other race shops off `LIST` alone.
+  }, profile, opts.race ?? "human");
   items.pass(opts.now ?? 500, { home: { x: 0, y: 0 }, losing: false, mayShop: opts.mayShop ?? true, portalWorthIt: true });
   return {
     buy: orders.find((c) => c.c === "buyitem") ?? null,
@@ -533,6 +535,35 @@ function shopped(units, profile, opts = {}) {
     shopped([h, MERCHANT], PLUS_INSANE, { shelf }).buy?.itemId, "hslv");
 }
 
+// THE ORC BUYS ITS SALVES FIRST (`RACE_FIRST`). Reported: an orc Computer+ "must buy two
+// healing salves on its hero from its shop as soon as possible". The Voodoo Lounge `[ovln]` is
+// the one race shop that stocks `hslv`, and the reason the AI never had one is arithmetic
+// rather than preference: the general list opens with a Town Portal and two Potions of Healing,
+// and Normal's belt is only three slots deep — so the Salve two rows further down was never
+// once reached. It is a `healOther` (Rng1 500, no Area1), which is why it is the ORC's first
+// buy and not merely a cheap potion: it is the item that heals the ARMY between creep camps.
+{
+  const LOUNGE = ["shas", "hslv", "plcl", "phea", "pman", "stwp", "tgrh", "oli2"]; // [ovln] Makeitems
+  const h = hero();
+  check("an orc's first buy is a Healing Salve, ahead of the Town Portal",
+    shopped([h, MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE }).buy?.itemId, "hslv");
+  // TWO of them — one is spent on the first camp.
+  const one = belt(hero(), "hslv");
+  check("…and a second one after that",
+    shopped([one, MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE }).buy?.itemId, "hslv");
+  // …and then the habit the general list describes resumes, scroll first.
+  const two = belt(hero(), "hslv", "hslv");
+  check("…and only then the Town Portal",
+    shopped([two, MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE }).buy?.itemId, "stwp");
+}
+{
+  // Nobody else gets the habit: a human off the same shelf still opens with the scroll.
+  const h = hero();
+  const shelf = ["stwp", "phea", "hslv", "sreg"];
+  check("a human's list is unchanged — the scroll still leads",
+    shopped([h, MERCHANT], PLUS_NORMAL, { shelf }).buy?.itemId, "stwp");
+}
+
 // OUR OWN SHOP FIRST, the Goblin Merchant as the last resort. A race shop is in the base (so
 // the errand is seconds, not a trek) and its shelf cannot be emptied by the other player.
 {
@@ -577,7 +608,7 @@ function shopped(units, profile, opts = {}) {
     world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner !== 0 && u.owner !== 12,
     order: (cmd) => { orders.push(cmd); return true; }, item: (id) => ITEMS[id],
     wares: () => ["stwp", "phea"], gold: () => 5000,
-  }, PLUS_INSANE);
+  }, PLUS_INSANE, "human");
 
   const walking = mk();
   walking.pass(500, { home: { x: 0, y: 0 }, losing: false, mayShop: true, portalWorthIt: true });
