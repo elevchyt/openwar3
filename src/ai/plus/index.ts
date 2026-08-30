@@ -977,6 +977,56 @@ const PUSH_STUCK_AFTER = 20;
 const PUSH_PROGRESS = 300;
 
 /**
+ * THE LAST RESORT: how long the CAPTAIN may stand on one spot, doing nothing, before the whole
+ * party is walked home — and how far it has to move for that not to be standing still.
+ *
+ * Every watchdog above this one is about an OBJECTIVE: `stalled` asks whether the wave is
+ * closing on what it was sent at, `gathered` whether the muster is filling, `REGROUP_PATIENCE`
+ * whether the retreat is ending. Each of them is the right question for its own state, and each
+ * of them is blind outside it — so the freezes that actually reach a match are the ones that
+ * happen in the gaps between them, on an ERRAND rather than on a wave. A hero walking to a drop
+ * carries the order `getitem`, which `commit` and `massing` both skip BY NAME so the errand is
+ * not fought over; a hero walking to a shop is skipped the same way (`PlusItems.errand`). Neither
+ * is a wave, so neither is watched, and one that cannot finish stands there for the rest of the
+ * match. And because the army musters on its captain (`afieldAt`), the party parks around it.
+ *
+ * This is the watchdog that does not care WHY. It reads the one thing every freeze has in
+ * common — the hero's feet have not moved and nothing is being swung at — and answers with the
+ * one destination the AI can always be sure of a route to, which is the town hall it walked out
+ * of. `abandon`'s own retreat, reached from outside a wave.
+ *
+ * Comfortably above `GATHER_PATIENCE` (12) and `PUSH_STUCK_AFTER` (20), because those two are
+ * the specific answers and this must never fire before the specific answer has had its turn: an
+ * army legitimately mustering afield on a stationary captain is standing still on purpose, and
+ * so is one that has just been told to wait for its body (`COHESION_RESUME`). The distance is
+ * `PUSH_PROGRESS`'s, since "did it get anywhere" means the same thing here as there.
+ */
+const FREEZE_AFTER = 35;
+const FREEZE_PROGRESS = 300;
+
+/**
+ * The freeze watchdog itself, as arithmetic — see `FREEZE_AFTER` for what it is for.
+ *
+ * `still` is the caller's answer to "is this unit standing about on purpose"; everything else is
+ * here. Pure and exported for the reason `pushStalled` is, and the FALSE direction matters most
+ * for the same reason: a captain written off while it is merely walking takes an army that was
+ * winning home with it (tools/ai-plus-army-test.cjs).
+ */
+export function freezeStalled(
+  w: { was: { x: number; y: number } | null; since: number },
+  at: { x: number; y: number },
+  still: boolean,
+  clock: number,
+): boolean {
+  if (!still || !w.was || Math.hypot(at.x - w.was.x, at.y - w.was.y) > FREEZE_PROGRESS) {
+    w.was = { x: at.x, y: at.y };
+    w.since = clock;
+    return false;
+  }
+  return clock - w.since >= FREEZE_AFTER;
+}
+
+/**
  * How long a broken army waits at home before it is put back on the board.
  *
  * `retreating` ends when everybody is home AND the group has healed to `REGROUP_HP_FRACTION`,
@@ -1276,7 +1326,7 @@ interface Brain {
   gatherSince: number;
   /** WHAT this retreat is running from, which is what decides whether the hero spends its
    *  Scroll of Town Portal on it. Null while nothing is retreating. */
-  retreatFrom: "creeps" | "player" | null;
+  retreatFrom: "creeps" | "player" | "stuck" | null;
   /** When this retreat began — the deadline on it (`REGROUP_PATIENCE`). */
   retreatSince: number;
   /** The CLOSEST the group has been to its objective (-1 = no reading yet), and when. The
@@ -1284,6 +1334,9 @@ interface Brain {
   push: { gap: number; since: number };
   /** Camps this party gave up on, and when each may be offered again (`CAMP_SHUN`). */
   shunned: Array<{ x: number; y: number; until: number }>;
+  /** Where the CAPTAIN was when it was last seen to have moved, and when — the last-resort
+   *  freeze watchdog (`FREEZE_AFTER`), which unlike `push` is asked in every mode. */
+  freeze: { was: { x: number; y: number } | null; since: number };
   /**
    * The wounded that have been walked OUT of the fight, by unit id — where each was sent, when
    * it rejoins, and when it may be pulled again (`pullBack`, `PULL_BACK_AGAIN`).
@@ -1460,6 +1513,7 @@ export class ComputerPlusAi {
       retreatSince: 0,
       push: { gap: -1, since: 0 },
       shunned: [],
+      freeze: { was: null, since: 0 },
       pulls: new Map(),
       waiting: new Set(),
       afield: false,
@@ -1787,6 +1841,11 @@ export class ComputerPlusAi {
     // own entry is the one that stands rather than being overwritten by a pull-back a pass
     // later.
     this.escapePass(b);
+    // THE LAST RESORT, above every mode because it is about none of them — see `FREEZE_AFTER`.
+    // It runs before `defendPass` for the same reason `pullPass` does: a hero frozen on an
+    // errand is frozen whether or not something has walked into the base, and a defend order it
+    // cannot execute is one more order stacked on a unit that is not moving.
+    this.freezePass(b);
     if (this.defendPass(b)) return;
     switch (b.mode) {
       case "defending": return void this.setMode(b, "massing"); // the threat is gone
@@ -2831,7 +2890,7 @@ export class ComputerPlusAi {
   /** Break off, and REMEMBER WHAT FROM — the one thing the hero's Scroll of Town Portal turns
    *  on (`itemCtx`). Creeps do not chase and will still be there in two minutes; an army does,
    *  and a hero walking away from one usually does not get home. */
-  private retreat(b: Brain, from: "creeps" | "player"): void {
+  private retreat(b: Brain, from: "creeps" | "player" | "stuck"): void {
     b.retreatFrom = from;
     b.retreatSince = b.clock;
     this.setMode(b, "retreating");
@@ -2973,34 +3032,113 @@ export class ComputerPlusAi {
   private stalled(b: Brain, goal: { x: number; y: number }): boolean {
     const anchor = this.squadHero(b) ?? this.squadCentre(b);
     if (!anchor) return false;
-    return pushStalled(b.push, anchor, goal, b.clock, this.fighting(b, anchor));
+    return pushStalled(b.push, anchor, goal, b.clock, this.fighting(b));
   }
 
   /**
    * Is any of this group actually in a fight?
    *
    * Asked of the units rather than of a radius, because an attack-move does NOT change a unit's
-   * order when it engages — `tickAttackMove` sets `targetId` and swings with `order` still
-   * "attackmove" — so "is it fighting" is `targetId` plus `inCombat`, exactly as the sim itself
-   * records it. The radius is only the fallback for the moment before contact: something inside
-   * a soldier's own acquisition is a fight about to start.
+   * order when it engages — `tickAttackMove` swings with `order` still "attackmove" — so "is it
+   * fighting" is what the sim itself records at the blow: `inCombat` (planted inside weapon
+   * range, which is the only state a WC3 unit swings from) or a swing already in flight.
+   *
+   * IT IS CONTACT, NOT PROXIMITY, and that is the whole of it. This used to answer true for a
+   * live `targetId` and, failing that, for anything hostile within `COHESION_COMBAT` of the
+   * anchor — and both are true of a STANDOFF, which is precisely the thing the watchdog above
+   * exists to catch. An army stopped at a treeline with the camp it was sent at eight hundred
+   * units away through the trees acquires those creeps (nothing blocks sight), fails to reach
+   * them, drops them, acquires them again half a second later — so `fighting` said yes on every
+   * pass, the stall clock restarted on every pass, and the wave was never written off at all.
+   * The hero stood there for the rest of the match and the army mustered around it.
+   *
+   * Nothing is lost by the narrower reading. A group walking IN to a fight is closing, so the
+   * gap watchdog is satisfied without this; a group being shot at by something it cannot reach
+   * is not in a fight in any sense that should buy it another twenty seconds of standing still.
    */
-  private fighting(b: Brain, anchor: { x: number; y: number }): boolean {
+  private fighting(b: Brain): boolean {
     for (const u of this.squadUnits(b)) {
-      if (u.inCombat) return true;
-      if (!u.targetId) continue;
-      const t = this.host.world.units.get(u.targetId);
-      if (t && t.hp > 0 && b.ai.hostileTo(t)) return true;
+      if (u.inCombat || u.swingLeft >= 0) return true;
     }
-    return this.enemyNear(b, anchor.x, anchor.y, COHESION_COMBAT);
+    return false;
   }
 
-  /** Write this objective off — and REMEMBER it, or the next massing pass hands the party the
-   *  same unreachable camp and the watchdog becomes a loop instead of a decision (`CAMP_SHUN`).
-   *  Only a camp is shunned: the enemy's base is not somewhere the AI may decide to stop going. */
+  /**
+   * Write this objective off — and WALK HOME.
+   *
+   * The objective is REMEMBERED first, or the next massing pass hands the party the same
+   * unreachable camp and the watchdog is a loop instead of a decision (`CAMP_SHUN`). Only a camp
+   * is shunned: the enemy's base is not somewhere the AI may decide to stop going.
+   *
+   * **Going home is the point, and `endWave` was not it.** `endWave` drops the party into
+   * `massing`, and `massing`'s muster point is the CAPTAIN'S OWN FEET whenever the party is out
+   * of town (`muster` → `afieldAt`) — which is the tour that makes creeping a tour. On a party
+   * that has just been written off for going nowhere it is a trap that closes on itself: the
+   * army gathers on the very spot it could not leave, `gathered` goes true because everybody is
+   * standing on it, another camp is chosen from there, the same ground is in the way, and the
+   * hero stands at the same treeline for the rest of the match with its army parked around it.
+   * That is the reported freeze, and no amount of writing the OBJECTIVE off fixes it while the
+   * MUSTER POINT is the stuck hero.
+   *
+   * So a stall retreats: `retreating` hands every unit a move order to the town hall — ground
+   * the party demonstrably has a route to, since it walked out of it — and `REGROUP_PATIENCE`
+   * bounds even that. Its reason is its own ("stuck") rather than "creeps" or "player", because
+   * `ItemCtx.portalWorthIt` reads that field and a Scroll of Town Portal is for leaving a fight,
+   * not for leaving a walk that did not work out.
+   */
   private abandon(b: Brain): void {
     if (b.creeping && b.target) b.shunned.push({ x: b.target.x, y: b.target.y, until: b.clock + CAMP_SHUN });
-    this.endWave(b);
+    this.retreat(b, "stuck");
+  }
+
+  /**
+   * THE LAST RESORT: a captain that has stopped moving takes the party home.
+   *
+   * See `FREEZE_AFTER` for why this exists beside four other watchdogs — in short, because all
+   * four of those are questions about a WAVE, and the freezes that survive them happen on
+   * errands, which the wave passes skip by name.
+   *
+   * The clock is reset by three things, and each of them is a different way of legitimately
+   * standing still:
+   *
+   *  · **it moved** — `FREEZE_PROGRESS`, the same distance `pushStalled` calls progress;
+   *  · **it is fighting** — the same `fighting` the stall watchdog reads, which after that fix
+   *    means contact rather than proximity and so cannot be satisfied by a standoff;
+   *  · **it is meant to be still** — healing (`recovering`, which is the whole point of a Moon
+   *    Well trip), walked out of the line on its own clock (`pullPass`), holding for the body to
+   *    catch up (`b.waiting`), mid-cast, or simply AT HOME, where standing about is what an army
+   *    between waves does.
+   *
+   * What it does is deliberately blunt. It does not diagnose the order — it cannot, since the
+   * whole point is that the cause is something nobody thought of — so it STOPS the hero, which
+   * ends whatever errand it was on, shuns the objective if there was one, and retreats. The
+   * town hall is the one destination the party is certain of a route to, because it walked out
+   * of it.
+   */
+  private freezePass(b: Brain): void {
+    const captain = this.squadHero(b);
+    if (!captain) {
+      b.freeze.was = null;
+      return;
+    }
+    const home = b.ai.home();
+    const still =
+      !this.recovering(captain) &&
+      !pulledOut(b.pulls.get(captain.id), b.clock) &&
+      !b.waiting.has(captain.id) &&
+      captain.order !== "cast" &&
+      !this.fighting(b) &&
+      Math.hypot(captain.x - home.x, captain.y - home.y) > TOWN_RADIUS;
+    if (!freezeStalled(b.freeze, captain, still, b.clock)) return;
+    b.freeze.was = null;
+    // STOP FIRST. The errand is whatever it is — a drop it cannot reach, a shop, an order this
+    // file has never heard of — and the one thing they have in common is that the retreat below
+    // must not be skipped by the pass that owns it. `PlusItems.forget` releases the shopping
+    // errand for the same reason.
+    b.items.forget(captain.id);
+    b.ai.order({ c: "order", unitId: captain.id, order: { kind: "stop" }, queued: false });
+    if (b.creeping && b.target) b.shunned.push({ x: b.target.x, y: b.target.y, until: b.clock + CAMP_SHUN });
+    this.retreat(b, "stuck");
   }
 
   /** Broken, and going home to heal. */

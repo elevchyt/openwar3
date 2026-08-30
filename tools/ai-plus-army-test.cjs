@@ -31,7 +31,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const {
   canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
-const { safeLeg, backOffSpot, onGoldDuty, pushStalled, isShunned, pullBackSpot, pullDue, pulledOut } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -176,6 +176,47 @@ check("a group in a fight is never written off", walk(60, { step: 0, fighting: t
   let stuck = false;
   for (let t = 32; t <= 60; t += 2) stuck = pushStalled(w, { x: 0, y: 0 }, GOAL, t, false);
   check("…and then runs", stuck, true);
+}
+
+// ==========================================================================================
+console.log("\n-- and a CAPTAIN that has stopped moving takes the party home -------------");
+// ==========================================================================================
+
+// `FREEZE_AFTER` (35 s) / `FREEZE_PROGRESS` (300). The last resort, and the only watchdog that
+// is asked in every mode — because the freezes that reach a match happen on ERRANDS, which the
+// wave passes skip by name. The FALSE direction matters most: a captain written off while it is
+// merely walking takes an army that was winning home with it.
+const stand = (steps, { still = true, step = 0 } = {}) => {
+  const w = { was: null, since: 0 };
+  let frozen = false;
+  for (let i = 0; i < steps; i++) frozen = freezeStalled(w, { x: i * step, y: 0 }, still, i * 2);
+  return frozen;
+};
+
+check("a captain that is walking is never written off", stand(40, { step: 400 }), false);
+check("…nor one that is standing still ON PURPOSE", stand(40, { still: false }), false);
+check("a captain rooted to one spot for thirty-five seconds is", stand(40), true);
+check("…but not before that", stand(10), false);
+check("…and a crawl is still walking, so long as it gets somewhere", stand(40, { step: 100 }), false);
+// A SHUFFLE is not walking, though. Rocking between two spots inside `FREEZE_PROGRESS` never
+// clears the last reading that stuck — the same thing `pushStalled` says about a whole wave.
+{
+  const w = { was: null, since: 0 };
+  let frozen = false;
+  for (let i = 0; i < 40; i++) frozen = freezeStalled(w, { x: i % 2 ? 200 : 0, y: 0 }, true, i * 2);
+  check("…and a shuffle between two spots is not moving at all", frozen, true);
+}
+{
+  // One step out of the freeze resets the clock in full — it is not a countdown to a decision
+  // already taken, it is a question re-asked from wherever the hero ended up.
+  const w = { was: null, since: 0 };
+  for (let t = 0; t < 34; t += 2) freezeStalled(w, { x: 0, y: 0 }, true, t);
+  check("…and one real step resets it", freezeStalled(w, { x: 900, y: 0 }, true, 34), false);
+  let frozen = false;
+  for (let t = 36; t <= 60; t += 2) frozen = freezeStalled(w, { x: 900, y: 0 }, true, t);
+  check("…after which it runs again from there", frozen, false);
+  for (let t = 62; t <= 110; t += 2) frozen = freezeStalled(w, { x: 900, y: 0 }, true, t);
+  check("…and fires when the new spot is held just as long", frozen, true);
 }
 
 // ==========================================================================================

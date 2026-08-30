@@ -531,6 +531,17 @@ because "has this order gone stale" is a question no order can answer about itse
 is standing within a radius, because a standoff is precisely the case where something is nearby
 and nobody is walking at it.
 
+A group that is fighting resets the clock, and **"fighting" is contact, not proximity**. It used
+to answer true for a live `targetId` and, failing that, for anything hostile within
+`COHESION_COMBAT` of the anchor — and both of those are true of a *standoff*, which is the exact
+thing this watchdog exists to catch. An army stopped at a treeline with the camp it was sent at
+eight hundred units away through the trees acquires those creeps (nothing blocks sight), fails to
+reach them, drops them, acquires them again half a second later: `fighting` said yes on every
+pass, the clock restarted on every pass, and the wave was never written off at all. It now reads
+`inCombat` (planted inside weapon range, the only state a WC3 unit swings from) or a swing in
+flight, which is what the sim itself records at the blow. Nothing is lost — a group walking *in*
+to a fight is closing, so the gap below already covers it.
+
 **Progress is the GAP shrinking, not ground covered**, and that distinction is the whole of the
 watchdog. It was ground covered, and there is one case that walks a great deal of ground and
 arrives nowhere: a captain shuttling between the objective and the body it is held to (see *The
@@ -541,10 +552,23 @@ that loop while its army is trying to follow the captain"*. The sim's own `attac
 had already learned this lesson in the same words: *"a unit shuffling between two spots it can
 reach covers plenty of ground and closes nothing"*.
 
-`abandon` then writes the objective off, and **remembers it**: a camp it could not get to is
-shunned for `CAMP_SHUN` (120 s). Without the memory the watchdog is a loop rather than a decision
-— the wave gives up, `massing` asks for the nearest camp it can handle, gets the same one back,
-and walks at it again.
+`abandon` then writes the objective off, **remembers it** — a camp it could not get to is shunned
+for `CAMP_SHUN` (120 s), or the watchdog is a loop rather than a decision: the wave gives up,
+`massing` asks for the nearest camp it can handle, gets the same one back, and walks at it again
+— and **walks the party home**.
+
+Going home is the part that took two attempts. `abandon` used to call `endWave`, which drops the
+party into `massing`, and `massing`'s muster point is **the captain's own feet** whenever the
+party is out of town (`muster` → `afieldAt`; that is what makes creeping a tour). On a party that
+has just been written off for going nowhere, it is a trap that closes on itself: the army gathers
+on the very spot it could not leave, `gathered` goes true because everybody is standing on it,
+another camp is chosen from there, the same ground is in the way, and the hero stands at the same
+treeline for the rest of the match with its army parked around it. Writing the *objective* off
+does nothing while the *muster point* is the stuck hero. So a stall retreats — `retreating` hands
+every unit a move order to the town hall, which is ground the party demonstrably has a route to
+because it walked out of it, and `REGROUP_PATIENCE` bounds even that. Its reason is its own
+(`"stuck"`), because `ItemCtx.portalWorthIt` reads that field and a Scroll of Town Portal is for
+leaving a fight, not for leaving a walk that did not work out.
 
 ### …and it asks whether it can get there BEFORE it sets off
 
@@ -581,6 +605,44 @@ one unit that cannot path home holds `allHome` false for ever, and — the one t
 — most of the game's units do not regenerate at all (heroes do, the undead do on blight, the
 night elf does at night, a Footman does not), so a human or orc group that came home at half
 health can sit in its own base until fresh production alone lifts the average.
+
+### The last resort: a captain that has stopped moving takes the party home
+
+Four watchdogs sit above this one — `stalled` asks whether the wave is closing on what it was
+sent at, `gathered` whether the muster is filling, `REGROUP_PATIENCE` whether the retreat is
+ending, `SCOUT_STUCK_AFTER` whether the tour is progressing. Each is the right question for its
+own state, and each is blind outside it. So the freezes that actually reach a match are the ones
+that happen **in the gaps between them, on an errand rather than on a wave**:
+
+- a hero walking to a **drop** carries the order `getitem`, which `commit` and `massing` both
+  skip *by name* so that the errand is not fought over;
+- a hero walking to a **shop** is skipped the same way (`PlusItems.errand`).
+
+Neither is a wave, so neither was watched. And because the army musters on its captain, one hero
+that could not finish its errand parked the entire party around it for the rest of the match.
+That is the freeze that was reported twice — *"the hero freezing in front of the treeline"* — and
+its immediate cause was in the sim rather than here: `tickGetItem` was the one walk in the game
+with **no give-up in it**, a bare `pathTo` whose failure it ignored, so a drop lying where no body
+can reach it (a treeline, which is exactly where creeps die) held the walker on the spot re-running
+A* every tick. It now follows issue #108's rule like every other walk — bodies move, so wait them
+out; terrain does not, so the order ends — and `loot` asks `SimWorld.canWalkTo` before it sends a
+hero at all, since being re-sent every `LOOT_PERIOD` is the same freeze at a slower rate.
+
+`freezePass` is the watchdog that **does not care why**. It reads the one thing every freeze has
+in common — the captain's feet have not moved `FREEZE_PROGRESS` (300) in `FREEZE_AFTER` (35 s)
+and nothing is being swung at — and answers with the one destination the AI can always be sure of
+a route to, which is the town hall it walked out of. The clock is reset by three different kinds
+of legitimate stillness: it moved; it is *fighting* (the same contact-not-proximity reading
+`stalled` uses); or it is **meant** to be still — healing (`recovering`, the whole point of a Moon
+Well trip), walked out of the line on its own clock (`pullPass`), holding for the body to catch up
+(`b.waiting`), mid-cast, or simply **at home**, where standing about is what an army between waves
+does. The threshold sits comfortably above `GATHER_PATIENCE` (12) and `PUSH_STUCK_AFTER` (20) so
+the specific answer always gets its turn first.
+
+What it does is deliberately blunt. It cannot diagnose the order — the whole point is that the
+cause is something nobody thought of — so it **stops** the hero (which ends whatever errand it was
+on, `PlusItems.forget` releasing the shopping claim so the belt does not hand it straight back),
+shuns the objective if there was one, and retreats.
 
 ### Creeping is a TOUR, not a series of round trips
 

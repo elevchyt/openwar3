@@ -15713,7 +15713,24 @@ export class SimWorld {
       this.pickUpItem(u, it);
       this.stop(u.id);
     } else if (!u.moving) {
-      this.pathTo(u, it.x, it.y); // arrived-but-not-close (blocked) or needs a repath
+      // Arrived-but-not-close (blocked) or needing a repath — and, when there is no route at
+      // all, THE ORDER ENDS. This was a bare `pathTo` whose failure it ignored, which made
+      // "getitem" the one walk in the game with no give-up in it: an item lying where no body
+      // can reach it — a drop that fell into a treeline, which is exactly where creeps die —
+      // held the walker on the spot re-running A* every tick for the rest of the match.
+      //
+      // It is the order an AI hero was found frozen on, and it froze the whole army with it:
+      // Computer+ musters on its captain and skips a unit whose order is `getitem` by name
+      // (src/ai/plus/index.ts `commit`, `massing`), so one hero standing at a treeline for a
+      // Tome of Strength it can never touch stood the entire wave there beside it.
+      //
+      // Shaped like the "move" case above, for the same three reasons: a walk paused by a stun
+      // is resumed rather than re-searched, a walk PARKED in a jam is left to its countdown
+      // (`parkAndWait` — re-pathing every tick is what the wait exists to stop), and only then
+      // is the route re-taken, with `holdOrGiveUp` drawing issue #108's line between bodies
+      // (which move, so wait them out) and terrain (which does not, so let the order go).
+      if (u.waypoint < u.path.length) u.moving = true;
+      else if (u.waitT <= 0 && !this.pathTo(u, it.x, it.y)) this.holdOrGiveUp(u, it.x, it.y);
     }
   }
 

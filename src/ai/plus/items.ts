@@ -548,7 +548,18 @@ export class PlusItems {
         if (d < bestD) { bestD = d; best = u; }
       }
       if (!best) continue;
+      // IS THERE A ROUTE TO IT? A drop lies where the creep died, and creeps die at the edges of
+      // things — so an item quite often ends up somewhere no body can stand: inside a treeline,
+      // over a cliff, in the water. The walk itself now gives up rather than re-pathing for ever
+      // (`SimWorld.tickGetItem`), but giving up and being re-sent every `LOOT_PERIOD` is the
+      // same freeze at a slower rate, and the hero is the unit the whole army musters on. Asked
+      // of the terrain alone, so a drop merely screened by bodies is still collected.
+      if (!this.view.world.canWalkTo(best.id, it.x, it.y)) continue;
       taken.add(best.id);
+      // Already on its way to this very item: leave it alone. A re-issued `getitem` restarts the
+      // path search, so re-stating it every pass is a full A* per hero for an order nothing has
+      // changed about — the same rule `commit` follows for an attack-move.
+      if (best.order === "getitem" && best.getItemId === it.id) continue;
       // `getitem` is the ordinary right-click on a ground item: the unit walks to it and picks
       // it up on arrival (`SimWorld.issueGetItem`), and a powerup is consumed there. One hero
       // per item per pass, so two heroes never race for the same drop.
@@ -1029,6 +1040,17 @@ export class PlusItems {
   /** The unit on a shopping errand, or 0 — see `onErrand`. */
   get errand(): number {
     return this.onErrand;
+  }
+
+  /** Let go of this unit's errand.
+   *
+   *  The belt marks a hero as SHOPPING so that the army manager leaves it alone on the way
+   *  (`commit`, `massing`), which is right up until the walk is the thing that has gone wrong:
+   *  the army's own last-resort freeze watchdog (src/ai/plus/index.ts `freezePass`) then hands
+   *  the hero a new order, and without this the very next shop pass would hand the errand
+   *  straight back and the two would argue for the rest of the match. */
+  forget(unitId: number): void {
+    if (this.onErrand === unitId) this.onErrand = 0;
   }
 
   /** Who does the shopping: our highest-level hero with a free slot. The best hero is the one
