@@ -10,7 +10,7 @@ import { collectMapDestructibles, findDestructibleAt, type MapDestructible } fro
 import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { AllianceType } from "../sim/alliances";
-import { summonsBuildings, type Alert, type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
+import { summonsBuildings, type Alert, type EffectAnim, type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -4132,8 +4132,13 @@ export class MapViewerScene {
   }
 
   /** Play a one-shot spawn-effect model (its "Birth" clip) at a point, then detach it
-   *  after `life` seconds. Model is loaded+cached on demand. */
-  private async spawnEffect(path: string, x: number, y: number, z: number, life = 2.5): Promise<void> {
+   *  after `life` seconds. Model is loaded+cached on demand.
+   *
+   *  `anim` overrides which clip it opens on, for the one-shots WC3 authors the other way
+   *  round: `MassTeleportCaster.mdx`, the smoke a Mass Teleport leaves where its caster was
+   *  standing, is a **Stand** — opened on Birth (the default) it shows nothing at all. Either
+   *  way it plays ONCE and never loops; see EffectAnim. */
+  private async spawnEffect(path: string, x: number, y: number, z: number, life = 2.5, anim?: EffectAnim): Promise<void> {
     const map = this.viewer.map;
     if (!map) return;
     let model = this.effectModels.get(path);
@@ -4148,7 +4153,8 @@ export class MapViewerScene {
     this.loc3[1] = y;
     this.loc3[2] = z;
     inst.setLocation(this.loc3);
-    inst.setSequence(this.effectSequence(inst));
+    const stand = anim === "stand" ? this.seqIndex(inst, /^stand/i) : -1;
+    inst.setSequence(stand >= 0 ? stand : this.effectSequence(inst));
     inst.setSequenceLoopMode(0); // play once
     inst.show();
     this.effects.push({ inst, t: life });
@@ -4434,6 +4440,7 @@ export class MapViewerScene {
       }
     }
     this.collectShopArrows(active);
+    this.collectTeleportFx(active);
     this.collectOrbAttachments(active);
     this.collectMoonWellWater(active);
     this.collectMineCircles(active);
@@ -4612,6 +4619,41 @@ export class MapViewerScene {
     for (const unitId of world.shopArrowUnits(this.localPlayer)) {
       const key = `shoparrow|${unitId}`;
       this.trackBuffFx(active, key, SHOP_ARROW_FX, unitId, this.rts?.playerColor(this.localPlayer) ?? this.localPlayer);
+    }
+  }
+
+  /**
+   * `MassTeleportTo.mdx` — the swirl that hangs at BOTH ends of a teleport while it is being
+   * cast: on the hero who pressed the Scroll of Town Portal (or the Archmage casting Mass
+   * Teleport) and on the town hall / unit it is travelling to.
+   *
+   * It is the abilities' own `Areaeffectart`, and both rows write a comment beside it saying
+   * what it is NOT — "Shouldn't show art at targeted coordinate, so don't use Effectart" —
+   * i.e. this is art on the two THINGS, never on the ground the click landed on.
+   *
+   * Rides the persistent-FX pool rather than the one-shot queue, because it is a three-act
+   * model whose middle act has to stretch to fit: Birth as the cast begins, Stand looping for
+   * however long the ability's wait is (five seconds for the scroll, three for Mass Teleport,
+   * whatever a map has re-authored), and Death the frame the sim stops listing the channel —
+   * which is the frame everybody leaves. That is the whole reason the sim publishes a live
+   * view (`activeTeleports`) instead of queueing an effect: a one-shot cannot hold.
+   *
+   * Both ends are unattached (`ground`), and the caster's end has to be: the hero is somewhere
+   * else entirely by the time this plays its Death, and the smoke belongs where he LEFT from —
+   * the same patch of ground `MassTeleportCaster.mdx` is dropped on. Unparented, the instance
+   * simply stays at the last position it was given, which was written on the final frame of
+   * the channel, before the jump. (It cannot have drifted: `recomputeStats` zeroes the
+   * caster's speed for the whole channel, so it has not moved a world unit.)
+   */
+  private collectTeleportFx(active: Set<string>): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    for (const ch of world.activeTeleports()) {
+      this.trackBuffFx(active, `tpto|c|${ch.casterId}`, { path: ch.art, attach: [] }, ch.casterId, undefined, true);
+      // …and the destination's. Keyed by the CASTER as well, because two heroes may be coming
+      // home to the same Town Hall at once and one key would leave the second with no swirl —
+      // and would take the first one's down the moment the second's channel ended.
+      if (ch.destId) this.trackBuffFx(active, `tpto|d|${ch.casterId}|${ch.destId}`, { path: ch.art, attach: [] }, ch.destId, undefined, true);
     }
   }
 
@@ -9937,7 +9979,7 @@ export class MapViewerScene {
           const x = t ? t.x : fx.x;
           const y = t ? t.y : fx.y;
           const z = this.rts!.groundHeightAt(x, y);
-          void this.spawnEffect(fx.art, x, y, z + (fx.z || 0), fx.life ?? 2);
+          void this.spawnEffect(fx.art, x, y, z + (fx.z || 0), fx.life ?? 2, fx.anim);
           // A wave field asked for its shard-fall sound (Blizzard): the WAV lives in
           // the effect model's own folder, so resolve it off the art like a cast sound.
           if (fx.sound) this.sounds?.playSpellSound([fx.art], undefined, { x, y, z });

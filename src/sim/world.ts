@@ -1622,6 +1622,12 @@ export interface SimUnit {
   /** The ability id behind the channel, so the party rules (`Area1`, `DataA`) are read off the
    *  row that started it rather than off a guess — a custom map may re-author them. */
   portalAbil: string;
+  /** WHAT the channel is travelling to, when the ability named a unit — the Archmage's Mass
+   *  Teleport, which is cast on "a friendly ground unit or structure" (`[AHmt]` Ubertip). 0
+   *  for the Scroll of Town Portal, which names a POINT and re-resolves it to the nearest
+   *  hall when the clock runs out: the scroll's destination may have been knocked down
+   *  inside the five seconds, and the two questions cannot share one answer. */
+  portalDestId: number;
   /** The facing a building was RAISED with, in radians — what an Ancient turns back to when it
    *  plants itself again.
    *
@@ -1829,6 +1835,11 @@ export function isOffField(u: {
 /** The [Errors] key for "refused, but the game has no line for this" — an empty key finds no
  *  string, so the UI beeps and stays silent. Named so the intent isn't mistaken for a bug. */
 const SILENT_REFUSAL = "";
+
+/** How far apart the rings a teleported party is set down on are (see `resolveTeleport`).
+ *  128 world units — one ring out is a body's width for most things, and it is the spacing
+ *  Mass Teleport's arrival has used here since it was written. */
+const TELEPORT_RING_GAP = 128;
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
 // Hero inventory reach, straight from the Gameplay Constants. Note that picking an
@@ -2418,6 +2429,18 @@ export interface ItemReveal {
   untilBuffGone: string;
 }
 
+/**
+ * Which clip a ONE-SHOT effect model opens on.
+ *
+ * Almost every effect in the game is its Birth — the flash, the burst, the ring going out —
+ * and that stays the default (`effectSequence`). The exception is the art WC3 leaves lying on
+ * the ground after something has left: `MassTeleportCaster.mdx`, the smoke a Mass Teleport
+ * drops where its caster was standing, is authored as a **Stand** and has to be played once
+ * and never looped (issue #138). Naming the clip here rather than guessing from the path keeps
+ * the decision with the code that knows which end of the spell it is emitting.
+ */
+export type EffectAnim = "birth" | "stand";
+
 /** A hidden attacker's position, given away to one team for a moment. */
 export interface AttackReveal {
   x: number;
@@ -2632,7 +2655,7 @@ export class SimWorld {
   // live beside its art (a shop paying you names `ReceiveGold`, which sits in
   // Abilities\Spells\Items\ResourceItems while the coins it plays with are a UI\Feedback
   // model; `sound` alone, which resolves off the art's own folder, would find nothing).
-  private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string }> = [];
+  private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string; anim?: EffectAnim }> = [];
   // Temporary ground decals a spell paints (Thunder Clap's scorch): an UberSplatData
   // row id + where. The row carries the texture, half-width and fade timings.
   private spellSplats: Array<{ splatId: string; x: number; y: number }> = [];
@@ -5710,6 +5733,7 @@ export class SimWorld {
     this.releaseClaim(u); // …and any tile it was walking onto
     this.releasePathStamp(u); // …and its footprint's collision
     this.units.delete(u.id);
+    this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
     this.removals.push(u.id);
     return true;
   }
@@ -5735,6 +5759,7 @@ export class SimWorld {
     }
     this.releaseEntangled(u); // an Entangled Gold Mine leaving hands the mine back
     this.units.delete(u.id);
+    this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
     this.removals.push(u.id);
     this.unitDrops.delete(u.id);
     this.dismissBoundSummons(u.id);
@@ -5942,6 +5967,7 @@ export class SimWorld {
       | "portalX"
       | "portalY"
       | "portalAbil"
+      | "portalDestId"
       | "builtFacing"
       | "rootPending"
       | "entanglePending"
@@ -6182,6 +6208,7 @@ export class SimWorld {
       portalX: 0,
       portalY: 0,
       portalAbil: "",
+      portalDestId: 0,
       builtFacing: unit.facing,
       rootPending: null,
       entanglePending: 0,
@@ -8693,7 +8720,11 @@ export class SimWorld {
     // own words, see SimUnit.portalLeft. It is still ON the field and still visible (unlike
     // `vanished`); it simply cannot be hurt, which is exactly why the units standing around it
     // CAN be, and why the scroll saves the hero more reliably than it saves the army.
-    if (u.portalLeft > 0) u.invulnerable = true;
+    // …but ONLY the scroll's. "When a Hero activates a Town Portal scroll they become
+    // invulnerable" is said of `AItp` and of nothing else; the Archmage's Mass Teleport
+    // shares the channel, the lock and the art but not the ward, so his three seconds are
+    // three seconds he can be killed in (see massTeleport).
+    if (u.portalLeft > 0 && this.abilities?.get(u.portalAbil)?.code === "AItp") u.invulnerable = true;
     // An Orc peon building from INSIDE the site is off the field entirely (isOffField): it has
     // no position anything can aim at, so it is invulnerable for as long as it is in there.
     // It comes back out — and the flag with it — through detachBuilder: on completion, on a
@@ -11816,6 +11847,7 @@ export class SimWorld {
       return burned;
     },
     teleport: (u, x, y) => this.teleportUnit(u, x, y),
+    massTeleport: (caster, def, dest) => this.massTeleport(caster, def, dest),
     mirrorImage: (caster, def, rank) => this.startMirrorImage(caster, def, rank),
     changeOwner: (u, owner, team) => this.changeUnitOwner(u, owner, team),
     possess: (casterId, targetId, seconds) => this.beginPossession(casterId, targetId, seconds),
@@ -12114,13 +12146,16 @@ export class SimWorld {
 
   /** Play a one-shot effect model at a point. For the spawn paths the renderer owns:
    *  a summon's burst belongs on the tile the renderer finally placed it on, which the
-   *  sim never sees (see drainSummonRequests). Spell handlers use SpellApi.emitEffect. */
-  emitEffectAt(art: string, x: number, y: number, sound = false): void {
-    if (art) this.spellEffects.push({ art, x, y, targetId: 0, z: 0, sound });
+   *  sim never sees (see drainSummonRequests). Spell handlers use SpellApi.emitEffect.
+   *
+   *  `anim` names the clip to open on when the model's own Birth is the wrong one — see
+   *  EffectAnim. Left off, the renderer opens on Birth as it always has. */
+  emitEffectAt(art: string, x: number, y: number, sound = false, anim?: EffectAnim): void {
+    if (art) this.spellEffects.push({ art, x, y, targetId: 0, z: 0, sound, ...(anim ? { anim } : {}) });
   }
 
   /** Spell/effect models to play this frame (targetId>0 = follow that unit). */
-  drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string }> {
+  drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string; anim?: EffectAnim }> {
     if (!this.spellEffects.length) return this.spellEffects;
     const out = this.spellEffects;
     this.spellEffects = [];
@@ -15384,6 +15419,7 @@ export class SimWorld {
     // stops existing (issue #126; see revealDyingUnit).
     this.revealDyingUnit(u);
     this.units.delete(u.id); // Map delete during values() iteration is safe
+    this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
     this.deaths.push(u.id);
     // …and anything BOUND to it goes with it — "Lasts 50 seconds or until the avatar dies".
     // Death does not run through removeUnit (a corpse stays behind, a hero goes to the
@@ -16354,59 +16390,174 @@ export class SimWorld {
    *  Aimed at a POINT (Rng1 99999 — anywhere on the map, minimap included) and resolved to
    *  the owner's nearest finished HALL, which is what its `targs1 = structure,vuln,invu`
    *  describes. `Area1` 1100 is the circle of troops that come along and `DataA "Maximum
-   *  Number of Units"` 90 the cap on them. Nothing to arrive at = no teleport and no charge. */
+   *  Number of Units"` 90 the cap on them. Nothing to arrive at = no teleport and no charge.
+   *
+   *  `Cast1` = 5. The scroll is the one item in the game that is not instant, and those five
+   *  seconds are the whole character of it — see SimUnit.portalLeft for Blizzard's own
+   *  description of what happens during them. The charge is spent HERE, on the press, because
+   *  "under no circumstances can the town portal be aborted once started": there is no state
+   *  in which the scroll is half-used and could be got back. */
   private itemTownPortal(u: SimUnit, ad: AbilityDef, x: number, y: number): boolean {
     if (!this.nearestHall(u.owner, x, y)) return false;
     const lvl = ad.levelData[0] ?? emptyAbilityLevel();
-    // `Cast1` = 5. The scroll is the one item in the game that is not instant, and those five
-    // seconds are the whole character of it — see SimUnit.portalLeft for Blizzard's own
-    // description of what happens during them. The charge is spent HERE, on the press, because
-    // "under no circumstances can the town portal be aborted once started": there is no state
-    // in which the scroll is half-used and could be got back.
-    if (lvl.castTime > 0) {
-      u.portalLeft = lvl.castTime;
-      u.portalX = x;
-      u.portalY = y;
-      u.portalAbil = ad.id;
-      this.stop(u.id); // it stands for the channel; castLocked keeps it standing
-      this.emitEffectAt(ad.casterArt, u.x, u.y);
-      this.recomputeStats(u); // invulnerable from this instant, not from the next tick
-      return true;
-    }
-    // No cast time (a map that has edited `Cast1` away): the old instant behaviour.
-    this.resolveTownPortal(u, ad, x, y);
+    this.beginTeleport(u, ad, lvl.castTime, 0, x, y);
     return true;
   }
 
+  /**
+   * MASS TELEPORT (`AHmt`) — the Archmage's ultimate, and the scroll's twin.
+   *
+   * One mechanism serves both, because the game gives them one set of art and one shape:
+   * `[AHmt]` and `[AItp]` name the same three models in the same three roles (see
+   * `resolveTeleport`), and both gather the caster's own nearby units and put them down
+   * somewhere else after a wait. What differs is only where the numbers come from and
+   * whether the caster is protected while it waits:
+   *
+   *   • the WAIT. The scroll's is `Cast1` = 5. Mass Teleport's `Cast1` is 0 and its delay is
+   *     its own column instead — `DataB` = **3**, which AbilityMetaData.slk keys as `Hmt2`
+   *     ("AHmt,AImt", an `unreal` bounded 0.001–300, i.e. seconds) and which the World
+   *     Editor exposes as Mass Teleport's Casting Delay real level field.
+   *   • the WARD. "When a Hero activates a Town Portal scroll they become invulnerable" is
+   *     said of the scroll and of nothing else; the Archmage is killable for all three of
+   *     his seconds, and that is the balance of an ultimate that saves an army (see
+   *     `recomputeStats`).
+   *
+   * The DESTINATION is a unit here rather than a point — "a friendly ground unit or
+   * structure" — so it is remembered by id and needs no re-resolution.
+   */
+  private massTeleport(u: SimUnit, ad: AbilityDef, dest: SimUnit): void {
+    const lvl = ad.levelData[0] ?? emptyAbilityLevel();
+    this.beginTeleport(u, ad, this.dataOf(lvl, 1, 3), dest.id, dest.x, dest.y);
+  }
+
+  /** Start the wait, or — for a row that has had its delay edited away — travel at once. */
+  private beginTeleport(u: SimUnit, ad: AbilityDef, wait: number, destId: number, x: number, y: number): void {
+    u.portalX = x;
+    u.portalY = y;
+    u.portalAbil = ad.id;
+    u.portalDestId = destId;
+    if (wait <= 0) {
+      // No delay (a map that has edited the column away): the instant behaviour.
+      this.resolveTeleport(u, ad);
+      u.portalAbil = "";
+      u.portalDestId = 0;
+      return;
+    }
+    u.portalLeft = wait;
+    this.teleportChannels.add(u.id); // …so the renderer can find it without walking the world
+    // It stands for the whole wait; castLocked keeps it standing. Skipped when a CAST is what
+    // started this — the Archmage is still inside his own `pendingCast`, and stopping him from
+    // in here would clear it and raise a second SPELL_ENDCAST when the pipeline ends the cast a
+    // moment later. He is stopped anyway, by `endCast`, and `recomputeStats` below has already
+    // taken his speed.
+    if (!u.pendingCast) this.stop(u.id);
+    this.recomputeStats(u); // invulnerable (the scroll) and rooted from this instant, not the next tick
+  }
+
   /** The channel, and what it ends in. Nothing here can cancel it: the only way out is the
-   *  hero dying, which cannot happen while it is invulnerable, or being removed from the
-   *  world — and `portalLeft` goes with the unit either way. */
+   *  caster dying — which cannot happen to a hero holding a scroll, but can to an Archmage —
+   *  or being removed from the world, and `portalLeft` goes with the unit either way. */
   private tickTownPortal(u: SimUnit, dt: number): void {
     u.portalLeft = Math.max(0, u.portalLeft - dt);
     if (u.portalLeft > 0) return;
     const ad = this.abilities?.get(u.portalAbil);
-    const x = u.portalX;
-    const y = u.portalY;
     u.portalAbil = "";
-    if (ad) this.resolveTownPortal(u, ad, x, y);
+    this.teleportChannels.delete(u.id);
+    if (ad) this.resolveTeleport(u, ad);
+    u.portalDestId = 0;
     this.recomputeStats(u); // …and it is mortal again
   }
 
   /** Gather the party and go. Called when the channel runs out — which is why it is a separate
    *  method: the units it takes are **"the surviving units"**, the ones still standing at the
-   *  END of the five seconds rather than the ones that were there at the start. An army wiped
-   *  out during the channel is an army the scroll does not save, and that is the point of it. */
-  private resolveTownPortal(u: SimUnit, ad: AbilityDef, x: number, y: number): void {
-    const dest = this.nearestHall(u.owner, x, y);
-    if (!dest) return; // the hall died during the channel — the hero simply stays put
+   *  END of the wait rather than the ones that were there at the start. An army wiped out
+   *  during the channel is an army the scroll does not save, and that is the point of it.
+   *
+   *  THE ART, and the data says which model belongs where. Both rows name the same three:
+   *
+   *      Areaeffectart = …\MassTeleport\MassTeleportTo.mdl     // both ends, for the wait
+   *      Casterart     = …\MassTeleport\MassTeleportCaster.mdl // left where the caster was
+   *      Specialart    = …\MassTeleport\MassTeleportTarget.mdl // left where each other was
+   *
+   *  `Areaeffectart` is the swirl that hangs on the caster and on the destination for as long
+   *  as the teleport is being cast; it is the renderer's, because it is a three-act model that
+   *  outlives a single tick (see `activeTeleports` and mapViewer's `collectTeleportFx`). The
+   *  other two are the marks LEFT BEHIND at the departure point, which is why each is emitted
+   *  from the position read before `teleportUnit` moves the unit — emitting after left every
+   *  one of them at the destination, stacked on the town hall.
+   *
+   *  Neither row names an `Effectart`, and both say why in a comment of their own: "Shouldn't
+   *  show art at targeted coordinate, so don't use Effectart." `[AHmt]` adds the other half —
+   *  "The targeted unit shouldn't show an effect, so there is no Targetart" — so nothing is
+   *  played on the unit the Archmage aimed at beyond the shared `To`. */
+  private resolveTeleport(u: SimUnit, ad: AbilityDef): void {
+    const dest = u.portalDestId ? this.units.get(u.portalDestId) : this.nearestHall(u.owner, u.portalX, u.portalY);
+    if (!dest || dest.hp <= 0) return; // the destination died during the channel — everyone stays put
     const lvl = ad.levelData[0] ?? emptyAbilityLevel();
-    const party = this.itemTeleportParty(u, ad, u.x, u.y, lvl.area || 1100, this.dataOf(lvl, 0, 90));
+    // `Area1` / `DataA "Maximum Number of Units"`: 1100 and 90 on the scroll, 800 and 24 on
+    // the Archmage's ultimate. The fallbacks are each row's own shipped value, for a map that
+    // has blanked the column rather than re-authored it.
+    const mass = ad.code === "AHmt";
+    const party = this.teleportParty(u, lvl.area || (mass ? 800 : 1100), this.dataOf(lvl, 0, mass ? 24 : 90));
+    // WHERE each one lands. `teleportUnit` snaps a walker to the nearest free fit and settles
+    // it, so ground units would shuffle apart around the destination on their own — but a
+    // FLYER skips that snap (it may stand anywhere), so an army handed one coordinate lands as
+    // a single stack of Gryphons. Each traveller is offered a spot on a widening ring instead,
+    // the caster in the middle, and `teleportUnit` refines it from there.
+    let ring = 0;
+    let slot = 0;
+    let slots = 1; // the middle holds one; ring n holds 6n, which is how a hex packs
     for (const t of party) {
-      this.emitEffectAt(ad.targetArt, t.x, t.y, true);
-      this.teleportUnit(t, dest.x, dest.y);
-      this.stop(t.id);
-      this.emitEffectAt(ad.specialArt, t.x, t.y, true);
+      const fromX = t.x;
+      const fromY = t.y;
+      const a = (slot / slots) * Math.PI * 2;
+      const r = ring * TELEPORT_RING_GAP;
+      if (++slot >= slots) {
+        slot = 0;
+        slots = 6 * ++ring;
+      }
+      this.teleportUnit(t, dest.x + Math.cos(a) * r, dest.y + Math.sin(a) * r);
+      this.stop(t.id); // it arrives idle, not still walking the errand it was pulled off
+      // The caster's own mark is `MassTeleportCaster.mdx`, which is authored as a STAND and
+      // has to be told so (EffectAnim) — opened on Birth, the default, it shows nothing.
+      // Everyone else leaves a `MassTeleportTarget.mdx`, whose Birth is the whole clip.
+      //
+      // ONE whoosh, on the caster's. The sound is resolved off the model like every other
+      // spell's (see playSpellSound) and a Town Portal may take ninety units — sounding each
+      // departure would fire ninety copies of MassTeleportTarget.wav in the same instant, at
+      // ninety points a few hundred units apart.
+      if (t === u) this.emitEffectAt(ad.casterArt, fromX, fromY, true, "stand");
+      else this.emitEffectAt(ad.specialArt, fromX, fromY, false, "birth");
     }
+  }
+
+  /** Ids with a teleport channel running (`portalLeft`), so `activeTeleports` costs nothing on
+   *  the overwhelming majority of frames where nobody is teleporting. Self-healing: an id whose
+   *  unit has left the world is dropped by the reader. */
+  private teleportChannels = new Set<number>();
+
+  /** Teleports being CAST right now — a Scroll of Town Portal's five seconds, a Mass
+   *  Teleport's three. A live view rather than a queue, like `activeSpellFields`: the renderer
+   *  holds `MassTeleportTo` on both ends of each for exactly as long as one appears here, and
+   *  lets it play its Death clip the frame it stops.
+   *
+   *  `destId` is 0 while there is nothing to arrive at — the scroll re-asks `nearestHall` every
+   *  frame, so a town hall knocked down mid-channel takes its half of the art down with it. */
+  activeTeleports(): Array<{ casterId: number; destId: number; art: string }> {
+    const out: Array<{ casterId: number; destId: number; art: string }> = [];
+    if (!this.teleportChannels.size) return out;
+    for (const id of this.teleportChannels) {
+      const u = this.units.get(id);
+      if (!u || u.portalLeft <= 0) {
+        this.teleportChannels.delete(id);
+        continue;
+      }
+      const art = this.abilities?.get(u.portalAbil)?.areaArt;
+      if (!art) continue;
+      const dest = u.portalDestId ? this.units.get(u.portalDestId) : this.nearestHall(u.owner, u.portalX, u.portalY);
+      out.push({ casterId: u.id, destId: dest && dest.hp > 0 ? dest.id : 0, art });
+    }
+    return out;
   }
 
   /** AMULET OF RECALL (`AIrt`) and DIAMOND OF SUMMONING (`AUds`) — the Town Portal run
@@ -16427,9 +16578,64 @@ export class SimWorld {
     return true;
   }
 
-  /** Who travels: the user's OWN units inside the circle that the ability's `targs1` admits,
-   *  nearest first, up to `max`. The user is always first in the list — a Town Portal that
-   *  left the hero behind because 90 Peasants stood closer would be a bad joke. */
+  /**
+   * Who travels with a Town Portal or a Mass Teleport: **the player's own** living units
+   * inside `radius` of the caster, nearest first, up to `max`, with the caster itself always
+   * first in the list — a Town Portal that left the hero behind because 90 Peasants stood
+   * closer would be a bad joke.
+   *
+   * Deliberately NOT filtered by the ability's `targs1`, and that is the whole of issue #138.
+   * On these two rows `targs1` describes the **destination**, not the party: `[AItp]
+   * structure,vuln,invu` is the town hall the scroll answers to, `[AHmt] ground,structure,
+   * vuln,invu,player,neutral,ally` the "friendly ground unit or structure" its Ubertip names.
+   * Run the party through it and `targsKindError` reads a structure-only row as "must target
+   * a building" (`Targetstructure`), so every Footman in the circle was refused and the hero
+   * always travelled alone — which is exactly what the scroll looked like: an escape that
+   * saved nobody. Mass Teleport had the mirror of the same bug, admitting `structure` and so
+   * offering to drag the barracks along.
+   *
+   * The party rule is the tooltips' own instead — "the Hero and any of its nearby troops"
+   * (`[stwp]` Ubertip) and "<AHmt,DataA1> of the player's nearby units, including the
+   * Archmage" (`[AHmt]` Ubertip). Buildings are not troops, and neither is a unit that is not
+   * on the map at all (`isOffField`): a Peasant down a gold mine, a Peon inside the wall it is
+   * building, a garrisoned Burrow crew. Those have a position, so a circle finds them — and
+   * teleporting one drags it out of the thing it is inside.
+   *
+   * A WORKER AT WORK is not a troop either, and this is the one departure here from "whatever
+   * stands in the circle". A base is very often inside 1100 units of the hero pressing the
+   * scroll, and a teleport that scoops up the mining crew answers the emergency by wrecking
+   * the economy that would pay for the next army — the peasants come back to a mine they are
+   * no longer at, the half-built Barracks loses its builder, and the player has to re-issue
+   * every one of them by hand. So a unit on a job is left on its job: mining or chopping
+   * (`harvest`, and the walk home with the load, `return` — a Ghoul on lumber is exactly this
+   * and needs no case of its own), building or repairing (`constructing` / `repair` /
+   * `buildPending`, the last of which is the walk out to a site that has not been staked yet),
+   * and an Acolyte knelt in a Haunted Gold Mine's ring (`ringSlot`, whose crew is paid where
+   * it kneels — docs/undead.md). A worker standing idle is a troop like any other and travels.
+   *
+   * The Amulet of Recall keeps the targs-filtered gatherer below: it is aimed at a bare point
+   * and has no destination unit, so its `targs1 = ground,air,player,vuln,invu,nonancient`
+   * genuinely does describe the units it picks up.
+   */
+  private teleportParty(u: SimUnit, radius: number, max: number): SimUnit[] {
+    const cap = Math.max(1, Math.round(max || 1));
+    const party = this.unitsInAreaInternal(u.x, u.y, radius)
+      .filter((t) => t !== u && t.owner === u.owner && !t.building && !isOffField(t) && !this.atWork(t))
+      .sort((a, b) => Math.hypot(a.x - u.x, a.y - u.y) - Math.hypot(b.x - u.x, b.y - u.y));
+    return [u, ...party].slice(0, cap);
+  }
+
+  /** Is this unit in the middle of a JOB — gathering, hauling, building or repairing? See
+   *  `teleportParty`, which is what it exists for. Deliberately about the ORDER rather than
+   *  about the unit type: "worker" is not a thing in the data (a Ghoul is a fighting unit that
+   *  also chops, a Wisp is a builder that is also consumed by one), and what matters is that
+   *  the unit is busy, not what it usually does. */
+  private atWork(u: SimUnit): boolean {
+    return u.order === "harvest" || u.order === "return" || u.order === "repair" || u.constructing > 0 || !!u.repair || !!u.buildPending || u.ringSlot > 0;
+  }
+
+  /** Who travels with an AMULET OF RECALL: the user's OWN units inside the circle that the
+   *  ability's `targs1` admits, nearest first, up to `max`. */
   private itemTeleportParty(u: SimUnit, ad: AbilityDef, x: number, y: number, radius: number, max: number): SimUnit[] {
     const cap = Math.max(1, Math.round(max || 1));
     const party = this.unitsInAreaInternal(x, y, radius)

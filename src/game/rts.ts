@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero } from "../sim/world";
+import { SimWorld, weaponsFromDef, isOffField, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type EffectAnim } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -5804,7 +5804,7 @@ export class RtsController {
    *  from the sim's drains where the sim steps, from the payload's `fx` on a frozen client.
    *  Capped so a hidden window (rAF stopped, pump stepping the sim) cannot grow them without
    *  bound — flushing stale bursts on refocus would be worse than dropping them. */
-  private fxEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string }> = [];
+  private fxEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string; anim?: EffectAnim }> = [];
   private fxSplats: Array<{ splatId: string; x: number; y: number }> = [];
   private fxLightnings: SimLightning[] = [];
   private fxLightningStops: string[] = [];

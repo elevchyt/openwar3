@@ -176,6 +176,73 @@ of date while the hero runs.
 `Cast1` is data like any other: a map that edits it to 0 gets the instant scroll back, and
 `itemTownPortal` still has that path.
 
+### Who comes along, and why `targs1` is the wrong question
+
+**`targs1` on this row describes the DESTINATION, not the party.** `[AItp] targs1 =
+structure,vuln,invu` is the *town hall the scroll answers to*; the Archmage's `[AHmt] targs1 =
+ground,structure,vuln,invu,player,neutral,ally` is the *"friendly ground unit or structure"* its
+Ubertip names — and Mass Teleport really can be aimed at any friendly or allied unit, not only a
+hall. Run the party through it (`targetAllowed`) and `targsKindError` reads a structure-only row
+as **"must target a building"**, so every Footman in the circle is refused and the hero travels
+alone. That was issue #138: an escape that saved nobody, and no way to see why from the call site.
+
+The party rule is the **tooltips'** instead — *"the Hero and any of its nearby troops"* (`[stwp]`
+Ubertip) and *"<AHmt,DataA1> of the player's nearby units, including the Archmage"* (`[AHmt]`
+Ubertip). So `teleportParty` takes the caster's **own** living units inside `Area1` (1100 on the
+scroll, 800 on Mass Teleport), nearest first, up to `DataA` (90 / 24), caster always first. Not
+troops, and so not taken: buildings, anything `isOffField` (a Peasant down a mine, a Peon inside
+the wall it is building, a Burrow's garrison) — and **a worker at work**. A base is very often
+inside 1100 units of the hero pressing the scroll, and scooping up the mining crew answers the
+emergency by wrecking the economy that pays for the next army, so `atWork` (harvesting, hauling
+home, building, repairing, or knelt in a Haunted Gold Mine's ring) stays put. It is keyed on the
+ORDER, never on the unit type: a Ghoul on lumber is a worker and needs no case of its own.
+
+The **Amulet of Recall** keeps the targs-filtered gatherer, and that is not an inconsistency: it
+is aimed at a bare point and has no destination unit, so its `targs1 = ground,air,player,vuln,
+invu,nonancient` genuinely does describe the units it picks up.
+
+### The art, at both ends
+
+Both rows name the same three models in the same three roles, and both write a comment beside
+them saying what is *not* wanted (*"Shouldn't show art at targeted coordinate, so don't use
+Effectart"*; `[AHmt]` adds *"The targeted unit shouldn't show an effect, so there is no
+Targetart"*):
+
+| field | model | where |
+| --- | --- | --- |
+| `Areaeffectart` | `MassTeleportTo.mdl` | on the **caster** and on the **destination**, for as long as the wait lasts |
+| `Casterart` | `MassTeleportCaster.mdl` | left where the **caster** was standing |
+| `Specialart` | `MassTeleportTarget.mdl` | left where each **other traveller** was standing |
+
+The `To` swirl is the renderer's, on the persistent-FX pool (`collectTeleportFx`) rather than the
+one-shot queue: it is a three-act model whose middle act has to stretch to fit the wait — Birth as
+the cast begins, Stand looping for five seconds (three for Mass Teleport, whatever a map has
+re-authored), Death the frame everybody leaves. A one-shot cannot hold, which is why the sim
+publishes a live view (`activeTeleports`) instead of queueing an effect.
+
+The other two are marks **left behind**, so each is emitted from the position read *before*
+`teleportUnit` moves the unit — emitting after put all of them at the destination, stacked on the
+town hall. And `MassTeleportCaster.mdx` is authored as a **Stand**, not a Birth: it has to be
+asked for by name (`EffectAnim`), because the renderer's default of "open on Birth" shows nothing
+at all for it.
+
+### Mass Teleport is the same mechanism
+
+`AHmt` hands straight over to `SimWorld.massTeleport` rather than keeping a second copy of any of
+this. Two things differ, and only two:
+
+* **The wait.** The scroll's is `Cast1` = 5. Mass Teleport's `Cast1` is 0 and its delay is its own
+  column — `DataB` = **3**, which AbilityMetaData.slk keys as `Hmt2` (`"AHmt,AImt"`, an `unreal`
+  bounded 0.001–300, i.e. seconds) and which the World Editor exposes as Mass Teleport's *Casting
+  Delay* real level field.
+* **The ward.** *"When a Hero activates a Town Portal scroll they become invulnerable"* is said of
+  the scroll and of nothing else. The Archmage shares the channel, the lock and the art but not
+  the protection — his three seconds are three seconds he can be killed in.
+
+The destination is a **unit** there rather than a point, so it is remembered by id
+(`portalDestId`) and needs no re-resolution; the scroll's is 0 and re-asks `nearestHall` every
+frame, because its hall may be knocked down inside the five seconds.
+
 ## Charges, cooldowns and refusals
 
 * A charge is spent **only** on `true`, and `USE_ITEM` is raised *after* it — so

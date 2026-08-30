@@ -158,8 +158,15 @@ export interface SpellApi {
   /** Drain up to `amount` mana from a unit; returns the mana actually removed
    *  (Mana Burn deals damage equal to what it burned). */
   burnMana(target: SimUnit, amount: number): number;
-  /** Move a unit instantly to a point (Blink, Mass Teleport) — re-settles pathing. */
+  /** Move a unit instantly to a point (Blink) — re-settles pathing. */
   teleport(unit: SimUnit, x: number, y: number): void;
+  /** Begin a MASS TELEPORT (`AHmt`) onto `dest`: the caster's own nearby units are gathered
+   *  and put down around it after the ability's own casting delay (`DataB` = 3 seconds). The
+   *  world owns it rather than this handler because it is a CHANNEL — the same one a Scroll
+   *  of Town Portal runs, minus the invulnerability — and everything that happens inside it
+   *  (the lock on the caster, the swirl at both ends, the party being gathered from whoever
+   *  is still alive when the clock runs out) outlives the tick that starts it. */
+  massTeleport(caster: SimUnit, def: AbilityDef, dest: SimUnit): void;
   /** Change a unit's controller (Charm): new owner + team. */
   changeOwner(unit: SimUnit, owner: number, team: number): void;
   /** Start a Possession (`Aps2`): after `seconds`, IF both bodies are still standing, the
@@ -2196,19 +2203,20 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (def.areaArt) api.emitEffect(def.areaArt, caster.x, caster.y, 0);
   },
 
-  // Mass Teleport (Archmage, ult) — warp the caster and nearby allies to a point.
-  AHmt: (api, caster, def, rank, ctx) => {
-    // Cast on a friendly UNIT or structure, and everyone lands around IT — `Area1` is the
-    // radius around the CASTER that comes along, not a destination circle (see
-    // KNOWN_ABILITIES for the tooltip that says so).
+  // Mass Teleport (Archmage, ult) — gather the player's nearby units and warp them to a
+  // friendly unit or structure, after the ability's own casting delay.
+  //
+  // Cast on a friendly UNIT or structure, and everyone lands around IT — `Area1` is the
+  // radius around the CASTER that comes along, not a destination circle (see KNOWN_ABILITIES
+  // for the tooltip that says so).
+  //
+  // Nothing else here: this is the Scroll of Town Portal's mechanism with different numbers,
+  // so it hands straight over to the world rather than keeping a second copy of the party
+  // rule and the art (SimWorld.massTeleport says how the two differ).
+  AHmt: (api, caster, def, _rank, ctx) => {
     const dest = api.getUnit(ctx.targetId);
     if (!dest) return;
-    const lvl = def.levelData[rank - 1];
-    const allies = alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 700, { self: true }).slice(0, d(lvl, 0, 24));
-    allies.forEach((t, i) => {
-      const a = (i / Math.max(1, allies.length)) * Math.PI * 2;
-      api.teleport(t, dest.x + Math.cos(a) * (i === 0 ? 0 : 128), dest.y + Math.sin(a) * (i === 0 ? 0 : 128));
-    });
+    api.massTeleport(caster, def, dest);
   },
 
   // Big Bad Voodoo (Shadow Hunter, ult) — a CHANNEL (`Animnames = stand,channel`), and that
