@@ -152,7 +152,10 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
     "Aspl", // Spirit Link
     "Auhf", // Unholy Frenzy
     "Aams", // Anti-magic Shell
-    "AEim", // Immolation — a toggle, so `alreadyOn` is what stops it being switched back off
+    // Immolation — a toggle, and the only ability with an OFF as well as an on: `buffFree`
+    // stops it being doused half a second after it is lit, and `douseImmolation` is what
+    // finally puts it out when the fighting stops.
+    "AEim",
     "Absk", // Berserk
     "AOmi", // Mirror Image — three more bodies is a buff on the hero carrying it
     "Alsh", // Lightning Shield: aimed at an enemy, but what it does is add damage to a fight
@@ -335,6 +338,10 @@ const CLUSTER = 2;
 const MIN_LOOK = 600;
 /** …and how far from the caster a fight has to be to count as "around us" for a morph. */
 const ENGAGE_LOOK = 900;
+/** Immolation (`AEim`), by base code — the one ability this file switches OFF as well as on. */
+const IMMOLATION = "AEim";
+/** How long nothing may be in reach before Immolation is put out — see `douseImmolation`. */
+const IMMOLATION_HOLD = 4;
 
 /**
  * Which roles a difficulty actually uses.
@@ -386,6 +393,9 @@ export class PlusCaster {
   /** Heroes that have just Wind Walked OUT of a fight this pass, and are waiting to be walked
    *  home. Drained once by the army manager — see `drainEscapes` and `windWalk`. */
   private escapes: number[] = [];
+  /** When each burning unit last had something in reach — the dwell `douseImmolation` measures
+   *  its "the fight is over" from. Swept with `fightSince` at the end of every pass. */
+  private burningSince = new Map<number, number>();
 
   /**
    * `roll` is the AI's OWN random stream (`AiPlayer.randomInt`), not `Math.random` — a
@@ -412,6 +422,7 @@ export class PlusCaster {
       else if (this.view.hostile(u)) foes.push(u);
     }
     this.townBell(own, foes);
+    this.douseImmolation(own, foes);
     for (const u of own) {
       // ARMING is asked of buildings as well, and `canAct` (which refuses one out of hand) is
       // deliberately not consulted for it. The Moon Well is why: Replenish Life and Mana
@@ -432,6 +443,7 @@ export class PlusCaster {
     // `fightSince` is the one map that outlives a pass, so it is the one that has to be swept:
     // a unit that died mid-engagement would otherwise sit in it for the rest of the match.
     for (const id of this.fightSince.keys()) if (!alive.has(id)) this.fightSince.delete(id);
+    for (const id of this.burningSince.keys()) if (!alive.has(id)) this.burningSince.delete(id);
   }
 
   /** May this unit's autocasts be switched on? A much shorter list than `canAct`: arming is a
@@ -499,6 +511,48 @@ export class PlusCaster {
       if (defenders >= raiders) continue;
       this.view.order({ c: "cast", unitId: hall.id, code: "Amic", targetId: 0, x: hall.x, y: hall.y, queued: false });
       return; // one bell is the whole town
+    }
+  }
+
+  /**
+   * PUT IMMOLATION OUT when the fighting stops.
+   *
+   * Every other button on a hero's card is spent once and then costs nothing. `AEim` is the
+   * exception and its own data says so: `Cost1` 25 to light it, then **DataB "Mana Drained per
+   * Second" = 7** for as long as it burns, until DataC's 10-mana buffer snuffs it out. So a
+   * Demon Hunter who lights it for a creep camp and never presses it again arrives at the next
+   * fight with an empty bar — no Mana Burn, no Metamorphosis, and a Fountain of Mana's worth of
+   * gold thrown into the grass on the way. The Ubertip is written for exactly this and from
+   * both sides: *"Drains mana until deactivated." / "Deactivate Immolation to stop draining
+   * mana."* Half of that instruction was implemented.
+   *
+   * It is a pass of its own rather than a rung on the ladder because `tryCast` only ever
+   * answers "what is the best thing to press *at* something", and this is the opposite: there
+   * is nothing to aim at, which is precisely the condition. `wants` already refuses to re-light
+   * it (a `buff` needs `engaged`, and `buffFree` sees `BEim` while it burns), so the two halves
+   * cannot fight: out when the fight ends, on again when the next one starts.
+   *
+   * `IMMOLATION_HOLD` is the whole of the judgement. Nothing here decides whether the fight is
+   * *won*, only whether anything is still within reach — so without a dwell a Demon Hunter
+   * chasing the last Ghoul out of a camp douses the moment it steps outside `MIN_LOOK` and
+   * pays the 25 again a second later. Ours, like every other number in Computer+.
+   */
+  private douseImmolation(own: SimUnit[], foes: SimUnit[]): void {
+    for (const u of own) {
+      if (!u.immolation || !this.canAct(u)) continue;
+      if (this.engaged(u, foes)) {
+        this.burningSince.set(u.id, this.now);
+        continue;
+      }
+      const quiet = this.burningSince.get(u.id);
+      if (quiet !== undefined && this.now - quiet < IMMOLATION_HOLD) continue;
+      // The same door a player's click goes through — and it is not a formality here: `Cost1`
+      // is charged to LIGHT it, so `castUseError` answers "Nomana" below 25, at which point the
+      // sim's own DataC buffer is about to put it out anyway.
+      if (this.view.world.castUseError(u.id, IMMOLATION) !== null) continue;
+      if (this.view.order({ c: "cast", unitId: u.id, code: IMMOLATION, targetId: 0, x: u.x, y: u.y, queued: false })) {
+        this.burningSince.delete(u.id);
+      }
     }
   }
 

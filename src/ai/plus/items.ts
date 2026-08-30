@@ -207,8 +207,62 @@ const LIST: readonly Want[] = [
   { id: "plcl", want: 1 }, // Lesser Clarity Potion — 70 gold, on three of the four race shops
   // The hero it expects to lose drinks this instead of dying.
   { id: "pnvl", want: 1 }, // Potion of Lesser Invulnerability (Merchant)
+  // BOOTS OF SPEED — the one PERMANENT item on this list, and the one thing a melee player
+  // walks to a Goblin Merchant for without thinking about it.
+  //
+  // It is not pressed and never will be: `[bspd]` is not `usable`, so `useOf` answers null and
+  // `press` skips the slot forever. Its whole value is being CARRIED — the movement its row
+  // grants, for the rest of the match — which is exactly why it suits this AI: a Computer+ hero
+  // creeps, walks between camps and runs home from lost fights, and all three are faster for
+  // 250 gold with no decision to make afterwards. It sits below the consumables because a potion
+  // wins the fight in front of you and boots win the next one, which is the order a player buys
+  // them in too.
+  { id: "bspd", want: 1 }, // Boots of Speed (Merchant)
   { id: "spro", want: 1 }, // Scroll of Protection (Merchant)
 ];
+
+/**
+ * …and what it buys once the gold is demonstrably NOT going into the build order.
+ *
+ * `itemReserve` is a floor, and a floor answers "may I spend at all"; it says nothing about a
+ * computer sitting on twelve hundred gold because its production is capped (`armyFood`) or its
+ * tech is finished. That is the state a player empties the shop in, and it is the state this AI
+ * was most obviously wrong in: banked gold, a Goblin Merchant across the clearing, and a hero
+ * carrying one Potion of Healing because `shopping` said three slots and the general list had
+ * already filled them.
+ *
+ * So being RICH does two things and only two (see `shop`): it opens these extra rows, and it
+ * lifts the belt ceiling to the six slots a hero actually has. Nothing here is a new KIND of
+ * item — the ids are the same shelves — it is the same shopping list, wanted deeper.
+ *
+ * The Town Portal is not repeated here. `keepPortal` already puts it at the head of the list on
+ * both difficulties that shop at all, and `carried` counts across every hero, so "buy one when
+ * we have not got one" is the row that is already there and is already first.
+ */
+const RICH: readonly Want[] = [
+  { id: "shea", want: 2 }, // a second Scroll of Healing — the Merchant's, 250
+  { id: "phea", want: 3 },
+  { id: "pnvl", want: 2 },
+  { id: "spro", want: 2 },
+];
+
+/**
+ * …and what a RACE buys with that surplus, on top of `RICH`.
+ *
+ * **UNDEAD — mana.** The one race whose army is mana, and the developer's own reading of it:
+ * *"undead is a very mana-hungry race"*. The data agrees from every direction — a Necromancer
+ * pays for each Raise Dead and each Cripple, a Banshee for every Curse and Anti-magic Shell, an
+ * Obsidian Statue's Spirit Touch is a mana bar being spent on other people's mana bars, and the
+ * Death Knight's Death Coil is the race's heal. `[utom] Makeitems` stocks `pman`, so a rich
+ * undead computer's answer to "what do I do with this gold" is a belt of Potions of Mana. Three
+ * of them: half a hero's inventory, and about what one long fight's worth of casting costs.
+ *
+ * The other three races have no equivalent — their surplus goes into the general `RICH` rows,
+ * which is what a human does with it — so they stay unlisted rather than being given a habit.
+ */
+const RACE_SURPLUS: Partial<Record<PlayableRace, readonly Want[]>> = {
+  undead: [{ id: "pman", want: 3 }],
+};
 
 /**
  * What a RACE reaches for before anything else on that list.
@@ -337,9 +391,29 @@ const LOOT_WALK = 2200;
 /** …and how close something hostile may be to the item before it is left where it lies. A hero
  *  that walks into a live camp for a Ring of Protection is a hero that dies for one. */
 const LOOT_DANGER = 700;
-/** How far from home a shop has to be before it is not worth the walk. A Goblin Merchant across
- *  the map is a hero out of the game for a minute, which is worse than having no potion. */
-const SHOP_REACH = 4000;
+/**
+ * How far from home a shop has to be before it is not worth the walk. A Goblin Merchant across
+ * the map is a hero out of the game for a minute, which is worse than having no potion.
+ *
+ * Ours, like everything else in this block, and it started at 4000 — which turned out to be
+ * shorter than the thing it is measuring. A melee map's neutral shop sits in the CONTESTED
+ * ground, not beside anybody's hall: the further a map spreads its start locations the further
+ * its Goblin Merchant is from all of them, so the maps with the most shops to visit were
+ * exactly the ones on which no shop was ever in range. 5000 is a walk a hero takes and comes
+ * back from, and it is still well short of "across the map" on anything four players fit on.
+ */
+const SHOP_REACH = 5000;
+
+/**
+ * Gold above `itemReserve` at which the shopping stops being careful — see `RICH`.
+ *
+ * The reserve answers "is there anything spare at all", and it has to be a low bar or a Normal
+ * computer never shops (see `Want.opening`). This is the other end of the same question: money
+ * the build order has visibly failed to spend. Set at rather more than the dearest thing on the
+ * list (the 350-gold Scroll of Town Portal) so that crossing it means the purse could absorb the
+ * whole ladder and not merely the next row of it.
+ */
+const SURPLUS = 500;
 
 /** What `PlusItems` needs beyond the caster's view: the item rows, a shop's catalogue, and the
  *  purse. Everything else — legality, stock, ranges — is asked of the sim through `world`. */
@@ -875,11 +949,15 @@ export class PlusItems {
     if (this.profile.shopping <= 0) return;
     if (now - this.lastShop < SHOP_PERIOD) return;
     this.lastShop = now;
-    const hero = this.shopper(own);
+    // Is the build order visibly failing to spend this? Then shop like it — deeper rows and a
+    // fuller belt (see `RICH` and `SURPLUS`). Asked once, here, so the two halves cannot
+    // disagree about which hero is doing the shopping and what it is allowed to buy.
+    const rich = this.view.gold() - this.profile.itemReserve >= SURPLUS;
+    const hero = this.shopper(own, rich);
     if (!hero) return void (this.onErrand = 0);
     // The whole purse, not the surplus: `pick` applies `itemReserve` per ROW, because the
     // race's opening buys are not discretionary spending — see `Want.opening`.
-    const buy = this.pick(own, this.view.gold(), ctx);
+    const buy = this.pick(own, this.view.gold(), ctx, rich);
     if (!buy) return void (this.onErrand = 0); // nothing left worth walking for
     if (this.view.world.shopReaches(buy.shopId, hero.id)) {
       this.onErrand = 0; // arrived — the army may have it back
@@ -954,13 +1032,21 @@ export class PlusItems {
   }
 
   /** Who does the shopping: our highest-level hero with a free slot. The best hero is the one
-   *  worth keeping alive, so it is the one that carries the potions. */
-  private shopper(own: SimUnit[]): SimUnit | null {
+   *  worth keeping alive, so it is the one that carries the potions.
+   *
+   *  `PlusProfile.shopping` is the ceiling on how much of a belt this player will FILL, and it
+   *  is a habit rather than a wallet — but a habit that is counted against everything the hero
+   *  is holding, drops included. So a Normal computer that walked over two tomes and a Claws of
+   *  Attack had "three items" and stopped shopping for the rest of the match, with the gold
+   *  still in the bank. `rich` lifts it to the six slots the hero actually has: a player with
+   *  money spare fills the belt, whatever is already in it. */
+  private shopper(own: SimUnit[], rich: boolean): SimUnit | null {
     let best: SimUnit | null = null;
     for (const u of own) {
       if (!u.isHero || !u.inventory.length || u.isIllusion) continue;
       if (u.inventory.indexOf(null) < 0) continue; // belt full
-      if (u.inventory.filter((h) => h !== null).length >= this.profile.shopping) continue;
+      const cap = rich ? u.inventory.length : this.profile.shopping;
+      if (u.inventory.filter((h) => h !== null).length >= cap) continue;
       if (!best || u.level > best.level) best = u;
     }
     return best;
@@ -974,10 +1060,11 @@ export class PlusItems {
     own: SimUnit[],
     gold: number,
     ctx: ItemCtx,
+    rich: boolean,
   ): { shopId: number; itemId: string; x: number; y: number } | null {
     const shops = this.shops(ctx);
     if (!shops.length) return null;
-    for (const want of this.list()) {
+    for (const want of this.list(rich)) {
       const purse = want.opening ? gold : gold - this.profile.itemReserve;
       const def = this.view.item(want.id);
       if (!def || def.gold > purse) continue;
@@ -1009,11 +1096,18 @@ export class PlusItems {
    * appears in both lists keeps the RACE's count rather than being asked for twice at two
    * different quantities.
    */
-  private list(): readonly Want[] {
+  private list(rich: boolean): readonly Want[] {
     const first = (RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }));
     const seen = new Set(first.map((w) => w.id));
     const rest = LIST.filter((w) => !seen.has(w.id));
-    return this.profile.keepPortal ? [...first, PORTAL, ...rest] : [...first, ...rest, PORTAL];
+    const core = this.profile.keepPortal ? [...first, PORTAL, ...rest] : [...first, ...rest, PORTAL];
+    if (!rich) return core;
+    // The surplus rows go on the END, never in front: they are the same items wanted DEEPER
+    // (`RICH`), so reaching them at all means every row above is already satisfied. The race's
+    // own surplus habit leads them, for the reason `RACE_FIRST` leads the core list — a row the
+    // ladder never reaches is a row that does not exist, and `pick` stops at the first one it
+    // can act on.
+    return [...core, ...(RACE_SURPLUS[this.race] ?? []), ...RICH];
   }
 
   /** How many of an item our heroes are already carrying. Counted across ALL of them: two

@@ -719,9 +719,38 @@ function shopped(units, profile, opts = {}) {
   check("a full belt stops shopping", shopped([h, MERCHANT], PLUS_INSANE).buy, null);
 }
 {
-  // …and so does the difficulty's own ceiling, well before the belt is full.
+  // …and so does the difficulty's own ceiling, well before the belt is full — while the gold
+  // is ordinary. `shopping` is a HABIT ("how much of a belt will this player bother to fill"),
+  // so it is measured against everything the hero is holding, drops included.
   const h = belt(hero(), "phea", "phea", "shea");
-  check("Normal stops at its own three slots", shopped([h, MERCHANT], PLUS_NORMAL).buy, null);
+  const purse = PLUS_NORMAL.itemReserve + 200; // spare, but not SURPLUS spare
+  check("Normal stops at its own three slots", shopped([h, MERCHANT], PLUS_NORMAL, { gold: purse }).buy, null);
+}
+{
+  // …but not when the build order has visibly failed to spend the gold. A player sitting on a
+  // banked purse fills the belt whatever is already in it — see items.ts `RICH` / `SURPLUS`.
+  const h = belt(hero(), "phea", "phea", "shea");
+  check("…but a rich Normal fills the belt anyway", !!shopped([h, MERCHANT], PLUS_NORMAL, { gold: 5000 }).buy, true);
+}
+{
+  // The Goblin Merchant's own shelf, and the one PERMANENT thing on the list. With the
+  // consumables above it satisfied, Boots of Speed is what the ladder reaches next.
+  const h = belt(hero(), "stwp", "phea", "phea", "shea", "pnvl");
+  check("boots of speed are bought off the Merchant", shopped([h, MERCHANT], PLUS_INSANE).buy?.itemId, "bspd");
+}
+{
+  // THE UNDEAD'S MANA. The Tomb of Relics' shelf, with the core list already satisfied off it —
+  // so what is left to buy is only what the SURPLUS rows want. `RACE_SURPLUS` leads them, so a
+  // banked undead computer keeps buying Potions of Mana. Reported: "undead is a very
+  // mana-hungry race".
+  const shelf = ["stwp", "phea", "pman"]; // [utom] Makeitems, less what this fixture has no row for
+  const h = belt(hero(), "stwp", "phea", "phea", "pman");
+  check("a rich undead keeps buying mana",
+    shopped([h, MERCHANT], PLUS_INSANE, { race: "undead", shelf, gold: 5000 }).buy?.itemId, "pman");
+  // …and only when it IS rich: an ordinary purse stops at the core list, which wanted one.
+  const lean = PLUS_INSANE.itemReserve + 300;
+  check("…and stops at one on an ordinary purse",
+    shopped([h, MERCHANT], PLUS_INSANE, { race: "undead", shelf, gold: lean }).buy, null);
 }
 {
   check("no hero, no shopping", shopped([unit(), MERCHANT], PLUS_INSANE).buy, null);

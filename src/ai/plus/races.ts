@@ -197,9 +197,26 @@ export interface PlusRaceTable {
   /** The builds it knows, and the default hero order for the ones that express no preference. */
   readonly strategies: readonly PlusStrategy[];
   readonly heroes: readonly string[];
-  /** Each hero's ten levels, in the shape `AiPlayer.setSkillArray` reads: index 0 is level 1,
-   *  index 5 is the ultimate (hero level 6). */
-  readonly skills: Readonly<Record<string, readonly string[]>>;
+  /**
+   * Each hero's SKILL BUILDS — a list of them, one rolled per match (`pickHeroes`).
+   *
+   * A build is the ten levels in the shape `AiPlayer.setSkillArray` reads: index 0 is hero
+   * level 1, index 5 is the ultimate (hero level 6). They all take the same shape, and it is
+   * the shape the hero-level rules force rather than a style: **A B A B A · ultimate · B ·
+   * C C C**, because a rank costs hero level 2n−1 (rank 2 at 3, rank 3 at 5) and the ultimate
+   * unlocks at 6. So the first two entries name the pair the hero actually plays with, and
+   * everything from index 7 is the skill it left behind.
+   *
+   * A LIST rather than one build because half of these heroes have more than one real answer
+   * and every Computer+ orc was giving the same one: a Blademaster is Wind Walk *or* Mirror
+   * Image beside Critical Strike, a Tauren Chieftain is Shock Wave *or* War Stomp beside
+   * Endurance Aura, a Demon Hunter is Mana Burn beside Immolation *or* Evasion, and a Mountain
+   * King picks two of Storm Bolt / Thunder Clap / Bash. The other heroes have one build each
+   * and say so by carrying a list of one, so there is a single shape to read and no second
+   * field to keep in step. Which one a seat gets is rolled off the AI's own random stream, like
+   * the build order and the hero order.
+   */
+  readonly skills: Readonly<Record<string, readonly (readonly string[])[]>>;
 }
 
 // --------------------------------------------------------------------------------------
@@ -265,14 +282,25 @@ const HUMAN: PlusRaceTable = {
   skills: {
     // Water Elemental first and maxed: a summoned unit every fight is what makes the Archmage
     // the standard opener, and it is the one hero skill an AI can spend well without micro.
-    [ARCHMAGE]: [WATER_ELEMENTAL, BRILLIANCE_AURA, WATER_ELEMENTAL, BRILLIANCE_AURA,
-      WATER_ELEMENTAL, MASS_TELEPORT, BRILLIANCE_AURA, BLIZZARD, BLIZZARD, BLIZZARD],
-    [PALADIN]: [HOLY_BOLT, DEVOTION_AURA, HOLY_BOLT, DEVOTION_AURA, HOLY_BOLT, RESURRECTION,
-      DEVOTION_AURA, DIVINE_SHIELD, DIVINE_SHIELD, DIVINE_SHIELD],
-    [MTN_KING]: [THUNDER_BOLT, THUNDER_CLAP, THUNDER_BOLT, THUNDER_CLAP, THUNDER_BOLT, AVATAR,
-      THUNDER_CLAP, BASH, BASH, BASH],
-    [BLOOD_MAGE]: [FLAME_STRIKE, SIPHON_MANA, FLAME_STRIKE, SIPHON_MANA, FLAME_STRIKE,
-      SUMMON_PHOENIX, SIPHON_MANA, BANISH, BANISH, BANISH],
+    [ARCHMAGE]: [[WATER_ELEMENTAL, BRILLIANCE_AURA, WATER_ELEMENTAL, BRILLIANCE_AURA,
+      WATER_ELEMENTAL, MASS_TELEPORT, BRILLIANCE_AURA, BLIZZARD, BLIZZARD, BLIZZARD]],
+    [PALADIN]: [[HOLY_BOLT, DEVOTION_AURA, HOLY_BOLT, DEVOTION_AURA, HOLY_BOLT, RESURRECTION,
+      DEVOTION_AURA, DIVINE_SHIELD, DIVINE_SHIELD, DIVINE_SHIELD]],
+    // THREE builds, because the Mountain King's card is three good skills and a player takes
+    // two of them. Storm Bolt + Thunder Clap is the caster's read (a stun and an area slow);
+    // Storm Bolt + Bash is the duellist's, spending the levels on the one target it wants
+    // dead; Thunder Clap + Bash is the front-line one, which is what a Mountain King leading
+    // Footmen actually looks like.
+    [MTN_KING]: [
+      [THUNDER_BOLT, THUNDER_CLAP, THUNDER_BOLT, THUNDER_CLAP, THUNDER_BOLT, AVATAR,
+        THUNDER_CLAP, BASH, BASH, BASH],
+      [THUNDER_BOLT, BASH, THUNDER_BOLT, BASH, THUNDER_BOLT, AVATAR,
+        BASH, THUNDER_CLAP, THUNDER_CLAP, THUNDER_CLAP],
+      [THUNDER_CLAP, BASH, THUNDER_CLAP, BASH, THUNDER_CLAP, AVATAR,
+        BASH, THUNDER_BOLT, THUNDER_BOLT, THUNDER_BOLT],
+    ],
+    [BLOOD_MAGE]: [[FLAME_STRIKE, SIPHON_MANA, FLAME_STRIKE, SIPHON_MANA, FLAME_STRIKE,
+      SUMMON_PHOENIX, SIPHON_MANA, BANISH, BANISH, BANISH]],
   },
 };
 
@@ -331,14 +359,28 @@ const ORC: PlusRaceTable = {
   ],
   heroes: [BLADE_MASTER, FAR_SEER, TAUREN_CHIEF, SHADOW_HUNTER],
   skills: {
-    [BLADE_MASTER]: [WIND_WALK, CRITICAL_STRIKE, WIND_WALK, CRITICAL_STRIKE, WIND_WALK,
-      BLADE_STORM, CRITICAL_STRIKE, MIRROR_IMAGE, MIRROR_IMAGE, MIRROR_IMAGE],
-    [FAR_SEER]: [CHAIN_LIGHTNING, SPIRIT_WOLF, CHAIN_LIGHTNING, SPIRIT_WOLF, CHAIN_LIGHTNING,
-      EARTHQUAKE, SPIRIT_WOLF, FAR_SIGHT, FAR_SIGHT, FAR_SIGHT],
-    [TAUREN_CHIEF]: [SHOCKWAVE, ENDURANE_AURA, SHOCKWAVE, ENDURANE_AURA, SHOCKWAVE,
-      REINCARNATION, ENDURANE_AURA, WAR_STOMP, WAR_STOMP, WAR_STOMP],
-    [SHADOW_HUNTER]: [HEALING_WAVE, SERPENT_WARD, HEALING_WAVE, SERPENT_WARD, HEALING_WAVE,
-      VOODOO, SERPENT_WARD, HEX, HEX, HEX],
+    // Both of the Blademaster's real openings, beside the Critical Strike that is never in
+    // question. Wind Walk is the harassing one — the backstab, and an exit (plus/casting.ts
+    // `windWalkRole` plays it as both); Mirror Image is the creeping one, three more bodies
+    // for the camp to swing at.
+    [BLADE_MASTER]: [
+      [WIND_WALK, CRITICAL_STRIKE, WIND_WALK, CRITICAL_STRIKE, WIND_WALK,
+        BLADE_STORM, CRITICAL_STRIKE, MIRROR_IMAGE, MIRROR_IMAGE, MIRROR_IMAGE],
+      [MIRROR_IMAGE, CRITICAL_STRIKE, MIRROR_IMAGE, CRITICAL_STRIKE, MIRROR_IMAGE,
+        BLADE_STORM, CRITICAL_STRIKE, WIND_WALK, WIND_WALK, WIND_WALK],
+    ],
+    [FAR_SEER]: [[CHAIN_LIGHTNING, SPIRIT_WOLF, CHAIN_LIGHTNING, SPIRIT_WOLF, CHAIN_LIGHTNING,
+      EARTHQUAKE, SPIRIT_WOLF, FAR_SIGHT, FAR_SIGHT, FAR_SIGHT]],
+    // Endurance Aura is the constant; the damage skill is the choice. Shock Wave is the wave
+    // through a creep camp, War Stomp the stun that holds a line together.
+    [TAUREN_CHIEF]: [
+      [SHOCKWAVE, ENDURANE_AURA, SHOCKWAVE, ENDURANE_AURA, SHOCKWAVE,
+        REINCARNATION, ENDURANE_AURA, WAR_STOMP, WAR_STOMP, WAR_STOMP],
+      [WAR_STOMP, ENDURANE_AURA, WAR_STOMP, ENDURANE_AURA, WAR_STOMP,
+        REINCARNATION, ENDURANE_AURA, SHOCKWAVE, SHOCKWAVE, SHOCKWAVE],
+    ],
+    [SHADOW_HUNTER]: [[HEALING_WAVE, SERPENT_WARD, HEALING_WAVE, SERPENT_WARD, HEALING_WAVE,
+      VOODOO, SERPENT_WARD, HEX, HEX, HEX]],
   },
 };
 
@@ -433,14 +475,14 @@ const UNDEAD: PlusRaceTable = {
   ],
   heroes: [DEATH_KNIGHT, LICH, DREAD_LORD, CRYPT_LORD],
   skills: {
-    [DEATH_KNIGHT]: [DEATH_COIL, UNHOLY_AURA, DEATH_COIL, UNHOLY_AURA, DEATH_COIL, ANIM_DEAD,
-      UNHOLY_AURA, DEATH_PACT, DEATH_PACT, DEATH_PACT],
-    [LICH]: [FROST_NOVA, DARK_RITUAL, FROST_NOVA, DARK_RITUAL, FROST_NOVA, DEATH_DECAY,
-      DARK_RITUAL, FROST_ARMOR, FROST_ARMOR, FROST_ARMOR],
-    [DREAD_LORD]: [CARRION_SWARM, VAMP_AURA, CARRION_SWARM, VAMP_AURA, CARRION_SWARM, INFERNO,
-      VAMP_AURA, SLEEP, SLEEP, SLEEP],
-    [CRYPT_LORD]: [IMPALE, CARRION_SCARAB, IMPALE, CARRION_SCARAB, IMPALE, LOCUST_SWARM,
-      CARRION_SCARAB, THORNY_SHIELD, THORNY_SHIELD, THORNY_SHIELD],
+    [DEATH_KNIGHT]: [[DEATH_COIL, UNHOLY_AURA, DEATH_COIL, UNHOLY_AURA, DEATH_COIL, ANIM_DEAD,
+      UNHOLY_AURA, DEATH_PACT, DEATH_PACT, DEATH_PACT]],
+    [LICH]: [[FROST_NOVA, DARK_RITUAL, FROST_NOVA, DARK_RITUAL, FROST_NOVA, DEATH_DECAY,
+      DARK_RITUAL, FROST_ARMOR, FROST_ARMOR, FROST_ARMOR]],
+    [DREAD_LORD]: [[CARRION_SWARM, VAMP_AURA, CARRION_SWARM, VAMP_AURA, CARRION_SWARM, INFERNO,
+      VAMP_AURA, SLEEP, SLEEP, SLEEP]],
+    [CRYPT_LORD]: [[IMPALE, CARRION_SCARAB, IMPALE, CARRION_SCARAB, IMPALE, LOCUST_SWARM,
+      CARRION_SCARAB, THORNY_SHIELD, THORNY_SHIELD, THORNY_SHIELD]],
   },
 };
 
@@ -502,14 +544,22 @@ const NIGHT_ELF: PlusRaceTable = {
   ],
   heroes: [DEMON_HUNTER, KEEPER, MOON_CHICK, WARDEN],
   skills: {
-    [DEMON_HUNTER]: [MANA_BURN, IMMOLATION, MANA_BURN, IMMOLATION, MANA_BURN, METAMORPHOSIS,
-      IMMOLATION, EVASION, EVASION, EVASION],
-    [KEEPER]: [ENT_ROOTS, FORCE_NATURE, ENT_ROOTS, FORCE_NATURE, ENT_ROOTS, TRANQUILITY,
-      FORCE_NATURE, THORNS_AURA, THORNS_AURA, THORNS_AURA],
-    [MOON_CHICK]: [SEARING_ARROWS, TRUESHOT, SEARING_ARROWS, TRUESHOT, SEARING_ARROWS,
-      STARFALL, TRUESHOT, SCOUT, SCOUT, SCOUT],
-    [WARDEN]: [SHADOW_TOUCH, FAN_KNIVES, SHADOW_TOUCH, FAN_KNIVES, SHADOW_TOUCH, VENGEANCE,
-      FAN_KNIVES, BLINK, BLINK, BLINK],
+    // Mana Burn is not the choice — the second skill is. Immolation is the creeping build (it
+    // clears a camp on its own, and plus/casting.ts now puts it out again afterwards rather
+    // than draining the bar); Evasion is the fighting one, which is what a Demon Hunter that
+    // means to stand in a line takes instead.
+    [DEMON_HUNTER]: [
+      [MANA_BURN, IMMOLATION, MANA_BURN, IMMOLATION, MANA_BURN, METAMORPHOSIS,
+        IMMOLATION, EVASION, EVASION, EVASION],
+      [MANA_BURN, EVASION, MANA_BURN, EVASION, MANA_BURN, METAMORPHOSIS,
+        EVASION, IMMOLATION, IMMOLATION, IMMOLATION],
+    ],
+    [KEEPER]: [[ENT_ROOTS, FORCE_NATURE, ENT_ROOTS, FORCE_NATURE, ENT_ROOTS, TRANQUILITY,
+      FORCE_NATURE, THORNS_AURA, THORNS_AURA, THORNS_AURA]],
+    [MOON_CHICK]: [[SEARING_ARROWS, TRUESHOT, SEARING_ARROWS, TRUESHOT, SEARING_ARROWS,
+      STARFALL, TRUESHOT, SCOUT, SCOUT, SCOUT]],
+    [WARDEN]: [[SHADOW_TOUCH, FAN_KNIVES, SHADOW_TOUCH, FAN_KNIVES, SHADOW_TOUCH, VENGEANCE,
+      FAN_KNIVES, BLINK, BLINK, BLINK]],
   },
 };
 

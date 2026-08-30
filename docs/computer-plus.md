@@ -376,7 +376,7 @@ Blizzard's unless a comment says otherwise) every value here is ours.
 | retreats a broken army | **no** | at 35 % | at 40 % |
 | **walks a wounded unit out of the fight** | **no** | at 25 % | at 25 % |
 | focus-fires / creeps / raids workers | no / no / no | no / yes / no | yes / yes / yes |
-| belt slots it shops for | **0** | 3 | 6 |
+| belt slots it shops for | **0** | 3 (6 when rich) | 6 |
 | gold it keeps back from the shop | — | 300 | 200 |
 | keeps and replaces a Town Portal | no | **yes** | **yes** |
 | builds its race's shop | no | **yes** | **yes** |
@@ -1161,6 +1161,48 @@ normal unit, `UnitID1` the alternate — so enabling them was two table rows and
 the `morphToggle` that already existed. See [`spell-fx.md`](spell-fx.md) for the presentation
 side and `SimWorld.morphToggle` for the mechanism.
 
+### Skill builds: a hero's ten levels are ROLLED, not fixed
+
+`PlusRaceTable.skills` carries a **list** of ten-level builds per hero and `pickHeroes` rolls one
+per seat, off the AI's own random stream like the build order and the hero order. Before that it
+was one build each, so every Computer+ Blademaster on every map spent its levels identically.
+
+Each build takes the same shape, and it is the shape the hero-level rules force rather than a
+style — **A B A B A · ultimate · B · C C C** — because a rank costs hero level 2n−1 (rank 2 at 3,
+rank 3 at 5) and the ultimate unlocks at 6. So the first two entries name the pair the hero
+actually plays with, and everything from index 7 is the skill it left behind.
+
+Half the melee heroes have more than one real answer on the card, and they are the four with
+alternatives:
+
+| hero | the builds |
+| --- | --- |
+| Blademaster | Wind Walk + Critical Strike · Mirror Image + Critical Strike |
+| Tauren Chieftain | Shock Wave + Endurance Aura · War Stomp + Endurance Aura |
+| Demon Hunter | Mana Burn + Immolation · Mana Burn + Evasion |
+| Mountain King | Storm Bolt + Thunder Clap · Storm Bolt + Bash · Thunder Clap + Bash |
+
+The other eight carry a list of ONE rather than a second field, so there is a single shape to read
+and nothing to keep in step. A Death Knight opening Death Coil and a Lich opening Frost Nova are
+not a lack of variety — they are the answer.
+
+### Immolation is the one button with an OFF
+
+Every other ability a hero presses is spent once and then costs nothing. `AEim` is the exception,
+and its own row says so: `Cost1` 25 to light it, then **`DataB` "Mana Drained per Second" = 7**
+for as long as it burns, until `DataC`'s 10-mana buffer snuffs it out. A Demon Hunter that lit it
+for a creep camp and never pressed it again reached the next fight with an empty bar — no Mana
+Burn, no Metamorphosis. The Ubertip is written for exactly this, from both sides: *"Drains mana
+until deactivated." / "Deactivate Immolation to stop draining mana."*
+
+`douseImmolation` is a pass of its own rather than a rung on the ladder, because `tryCast` only
+ever answers *what is the best thing to press at something* and this is the opposite: there is
+nothing to aim at, which is precisely the condition. It puts the flames out once nothing hostile
+has been in reach for `IMMOLATION_HOLD` (4 s, ours) — a dwell, or a hero chasing the last Ghoul
+out of a camp douses the moment it steps outside `MIN_LOOK` and pays the 25 again a second later.
+The two halves cannot fight: `wants` needs `engaged` to re-light a `buff`, and `buffFree` sees
+`BEim` while it burns.
+
 ### Wind Walk is TWO buttons, and pressing it as one wastes it
 
 `[AOwk]` is the exception to "a role per ability", and it earned the exception by being visibly
@@ -1460,6 +1502,37 @@ gold `OneBuildLoop` was going to spend. A floor is the only way a separate pass 
 the build ladder first call: the shop sees the surplus and nothing else. It is not a rung in the
 ladder and does not pretend to be one. The one exception is the race's opening buy, above, and it
 is an exception for a stated reason rather than a leak.
+
+#### …and when the gold is just SITTING there (`RICH`, `SURPLUS`)
+
+The reserve answers *may I spend at all*, which has to be a low bar or a Normal computer never
+shops. It says nothing about the other state a computer spends half a long game in: production
+capped at `armyFood`, tech finished, and a thousand gold in the bank. That was the state in which
+the Goblin Merchant went unvisited for a whole match — a hero carrying one Potion of Healing,
+because `shopping` said three belt slots and the general list had already used them on drops.
+
+So `SURPLUS` (500 above the reserve — more than the dearest row, the 350-gold scroll) turns on two
+things and nothing else:
+
+- the **`RICH` rows**, which are the same items wanted deeper (a second Scroll of Healing, a third
+  Potion of Healing) appended *after* the whole core list, so reaching them means everything above
+  is already satisfied;
+- **the belt ceiling comes off**. `shopping` is a habit — how much of a belt this player bothers
+  to fill — and it is counted against everything the hero holds, drops included, so a Normal
+  computer that walked over two tomes and a Claws of Attack stopped shopping for the rest of the
+  match with the gold still in the bank. Rich, it fills the six slots it has.
+
+**A race's surplus habit leads those rows** (`RACE_SURPLUS`), and there is one: the **undead's
+Potions of Mana**, three of them. It is the one race whose army *is* mana — a Necromancer pays per
+Raise Dead, a Banshee per Curse, an Obsidian Statue's Spirit Touch is a mana bar spent on other
+mana bars, and Death Coil is the race's heal — and `[utom] Makeitems` stocks `pman`, so that is
+what a banked undead computer's gold turns into.
+
+**Boots of Speed** (`bspd`, the Merchant's, 250) is on the core list rather than the rich one, and
+it is the only PERMANENT item either list carries. It is never pressed — `[bspd]` is not `usable`,
+so `useOf` answers null — and it does not need to be: a Computer+ hero creeps, walks between camps
+and runs home from lost fights, and all three are faster for the rest of the match. It sits below
+the consumables, because a potion wins the fight in front of you and boots win the next one.
 
 #### When an area heal is spent: is the army hurt, and is the army HERE?
 

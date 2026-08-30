@@ -1544,6 +1544,11 @@ export class ComputerPlusAi {
    * (a Tauren build opens Tauren Chieftain, a Bear build opens Keeper of the Grove) and the
    * race's otherwise — with the SECOND and THIRD swapped at random, because two computers
    * playing the same build should still not be identical.
+   *
+   * …and each hero's SKILL BUILD, which is the other half of "not identical" and used to be
+   * missing: every Computer+ Blademaster spent its ten levels the same way, every match. Half
+   * of the twelve melee heroes have more than one real answer on the card (see
+   * `PlusRaceTable.skills`), so the table carries a list and one is rolled here.
    */
   private pickHeroes(ai: AiPlayer, table: PlusRaceTable, strategy: PlusStrategy): void {
     const [first, ...rest] = strategy.heroes ?? table.heroes;
@@ -1551,8 +1556,15 @@ export class ComputerPlusAi {
     ai.heroId = first ?? "";
     ai.heroId2 = rest[0] ?? "";
     ai.heroId3 = rest[1] ?? "";
-    for (const slot of [1, 2, 3]) {
-      for (const [hero, skills] of Object.entries(table.skills)) ai.setSkillArray(slot, hero, skills);
+    // …and each hero's SKILL BUILD, rolled from the list its row carries (PlusRaceTable.skills).
+    // Rolled ONCE per seat rather than per slot: `setSkillArray` only writes under the hero this
+    // player actually drew, so the three calls are the same decision offered to three slots, and
+    // rolling inside the loop would let a Blademaster's build depend on which slot he came out
+    // of. Off the AI's own stream, so a replay of the same seed picks the same build.
+    for (const [hero, builds] of Object.entries(table.skills)) {
+      if (!builds.length) continue;
+      const build = builds[builds.length === 1 ? 0 : ai.randomInt(1, builds.length) - 1];
+      for (const slot of [1, 2, 3]) ai.setSkillArray(slot, hero, build);
     }
   }
 
