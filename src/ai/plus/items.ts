@@ -1,7 +1,7 @@
 import type { AbilityDef } from "../../data/abilities";
 import type { ItemDef } from "../../data/items";
 import type { PlayableRace } from "../../data/races";
-import type { SimUnit } from "../../sim/world";
+import { ITEM_REGEN_GROUP, type SimUnit } from "../../sim/world";
 import { near, type CasterView } from "../casting";
 import type { PlusProfile } from "./profile";
 
@@ -148,6 +148,22 @@ function regenUse(ad: AbilityDef): Use | null {
 interface Want {
   readonly id: string;
   readonly want: number;
+  /**
+   * Is this row part of the OPENING — one of the race's own first buys (`RACE_FIRST`)?
+   *
+   * It changes only one thing, and it is the money. Everything else on the list is bought out
+   * of the surplus above `PlusProfile.itemReserve`, which is the build order's gold; an opening
+   * row is bought out of the purse. That is not a loophole, it is what the reserve is for read
+   * honestly: a floor of 300 gold on a Normal computer means it never shops at all — measured
+   * on Echo Isles, a Normal orc's gold sat between 2 and 162 for the whole match while it paid
+   * for peons and Grunts, so `gold − 300` was never once positive at the moment the five-second
+   * shopping pass looked. The Healing Salve it is supposed to open with is ONE HUNDRED GOLD and
+   * the Voodoo Lounge that sells it cost 130: an AI that will build the shop but never has the
+   * hundred spare to buy from it has spent the 130 on nothing. A player buys the salves out of
+   * the same pocket the build order comes from, because at that price it is part of the build
+   * order.
+   */
+  readonly opening?: boolean;
 }
 
 /**
@@ -204,20 +220,28 @@ const LIST: readonly Want[] = [
  * is a row that is never bought at all: an orc computer's belt was stwp + two Potions of
  * Healing, every game, and the Healing Salve two lines further down was never once reached.
  *
- * ORC, and orc only. The Blademaster's own healing is a **Healing Salve**: `[ovln]` (the Voodoo
- * Lounge) is the one race shop that stocks `hslv`, it is 100 gold for THREE charges — the best
- * hit points per gold in the game — and it is aimed at somebody ELSE (`Rng1` 500, no `Area1`,
- * so it is a `healOther`; docs/items.md). That last part is why it is the orc's first buy and
- * not merely a cheap potion: it is the item that puts the ARMY back together between creep
- * camps rather than the hero, which is exactly what an orc's early game is made of. Two of
- * them, so there is one left after the first camp.
+ * **ORC — the Healing Salve.** `[ovln]` (the Voodoo Lounge) is the one race shop that stocks
+ * `hslv`, it is 100 gold for THREE charges — the best hit points per gold in the game — and it
+ * is aimed at somebody ELSE (`Rng1` 500, no `Area1`, so it is a `healOther`; docs/items.md).
+ * That last part is why it is the orc's first buy and not merely a cheap potion: it is the item
+ * that puts the ARMY back together between creep camps rather than the hero, which is exactly
+ * what an orc's early game is made of. Two of them, so there is one left after the first camp.
  *
- * The other three races have no equivalent first buy — the Vault, the Ancient of Wonders and
- * the Tomb all open on the potions `LIST` already starts with — so they stay unlisted rather
+ * **HUMAN — the Scroll of Regeneration.** The same job, done the human way: `[hvlt] Makeitems`
+ * opens with `sreg`, it is the first thing on the Arcane Vault's shelf, and it is the AREA
+ * version of the same 100 gold — `[AIsl] Area1` 600, 225 hit points poured over 45 seconds
+ * (`Dur1`) into everything standing in the circle. So where the orc's captain heals the ONE
+ * unit that came out worst, the human's heals the whole party at once, which is why `wants`
+ * asks a different question of it: not "is somebody hurt" but "is the ARMY hurt, and is the
+ * army actually STANDING here" (see the `healArea` rung).
+ *
+ * The undead and the night elf have no equivalent first buy — the Tomb and the Ancient of
+ * Wonders both open on the potions `LIST` already starts with — so they stay unlisted rather
  * than being given an invented habit.
  */
 const RACE_FIRST: Partial<Record<PlayableRace, readonly Want[]>> = {
   orc: [{ id: "hslv", want: 2 }],
+  human: [{ id: "sreg", want: 2 }],
 };
 
 /** Where the Town Portal sits in that list. `keepPortal` puts it FIRST — a player who plans
@@ -269,6 +293,16 @@ const ALLY_HP = 0.5;
 /** How many of ours have to be hurt before an AREA heal is better than a potion. Below this the
  *  scroll is being spent to heal one unit, which is what the potion is for. */
 const CLUSTER = 3;
+/**
+ * …and how hurt the PARTY has to be, pooled, before an area heal is worth its charge.
+ *
+ * Ours, like everything else in this block. Higher than `HURT_HP` (the line one unit drinks a
+ * potion at) and deliberately so: pooled health is a gentler number than any one soldier's —
+ * an army at two thirds usually has somebody in it at a third — and the thing being spent
+ * pours over forty-five seconds rather than saving anybody from the next blow. Two thirds is
+ * where a player reaches for the scroll: after the camp, before the walk to the next one.
+ */
+const ARMY_HURT = 0.65;
 /**
  * How many doubles standing is enough — the whole of "do not empty the wand into one fight".
  *
@@ -487,7 +521,7 @@ export class PlusItems {
 
     const engaged = foes.some((f) => !f.building && near(u, f, LOOK));
     for (const card of cards) {
-      if (!this.wants(u, card.use, own, foes, engaged, ctx)) continue;
+      if (!this.wants(u, card.use, card.def, own, foes, engaged, ctx)) continue;
       if (this.aim(u, card.slot, card.def, card.use, own)) return true;
     }
     return false;
@@ -513,7 +547,7 @@ export class PlusItems {
    * which is what makes it read as a player: a potion is drunk because you are being hit, not
    * because you have one.
    */
-  private wants(u: SimUnit, use: Use, own: SimUnit[], foes: SimUnit[], engaged: boolean, ctx: ItemCtx): boolean {
+  private wants(u: SimUnit, use: Use, def: ItemDef, own: SimUnit[], foes: SimUnit[], engaged: boolean, ctx: ItemCtx): boolean {
     const hp = u.hp / Math.max(1, u.maxHp);
     switch (use) {
       // The retreat, in one press. Either the ARMY has decided it is losing (`ctx.losing` is the
@@ -533,18 +567,17 @@ export class PlusItems {
         return engaged && hp < PANIC_HP;
       case "healSelf":
         return engaged && hp < HURT_HP;
-      // An area heal is worth a charge when it is healing a GROUP. Below `CLUSTER` it is being
-      // spent to do a potion's job, and the potion is one rung down.
+      // An area heal is worth a charge when it is healing a GROUP — see `armyHeal`, which is
+      // where the three questions it actually asks live.
       //
       // These two are the ONLY rungs not gated on `engaged`, and it is deliberate: they are the
       // ones aimed at somebody ELSE, and a Scroll of Regeneration or a Healing Salve pours over
       // forty-five seconds. Spending one while the blows are still landing is spending it into
       // the damage; the moment it is worth is the moment the camp is dead and the party is about
       // to walk to the next one — which is the job the shopping list says it bought them for
-      // ("what puts an army back together between creep camps", see `LIST`). The bar is still a
-      // real one: `CLUSTER` of them under `HURT_HP`, or somebody under `ALLY_HP`.
+      // ("what puts an army back together between creep camps", see `LIST`).
       case "healArea":
-        return this.hurtNear(u, own, HURT_HP) >= CLUSTER;
+        return this.armyHeal(u, own, this.areaOf(def));
       case "healOther":
         return !!this.hurtest(u, own);
       // Mana is topped up for the fight, not during the panic — a hero with no mana is a hero
@@ -622,14 +655,93 @@ export class PlusItems {
     return this.view.order({ c: "useitem", unitId: u.id, slot, targetId, x: u.x, y: u.y });
   }
 
-  /** How many of ours near this unit are below `frac` of their own maximum. */
-  private hurtNear(u: SimUnit, own: SimUnit[], frac: number): number {
-    let n = 0;
+  /**
+   * IS THE ARMY HURT, AND IS THE ARMY HERE? — the whole of when an area heal is spent.
+   *
+   * Three questions, and the developer's own statement of the feature names all three: *"it
+   * should base its usage around total army health and it must make sure that their hero uses
+   * it while close to its army so that more than half the army is in range of the Scroll of
+   * Regeneration's radius."*
+   *
+   *  1. **Is it reaching a GROUP?** `CLUSTER` bodies inside the circle, or the scroll is being
+   *     spent to do a potion's job and the potion is one rung down.
+   *  2. **Is more than HALF the army in the circle?** This is the one that makes it an army
+   *     item rather than a bigger potion, and it is measured against the whole army rather than
+   *     against what happens to be standing beside the hero — a Scroll of Regeneration poured
+   *     over the two units that arrived first is 100 gold spent on two units. It is also why
+   *     nothing here walks the hero anywhere: the Computer+ army moves as ONE BODY anchored on
+   *     its captain (docs/computer-plus.md), so "wait until the party is around you" is a
+   *     condition the army manager satisfies by itself a few seconds later.
+   *  3. **Is the army hurt?** POOLED — one fraction over the hit points and maxima of everybody
+   *     the circle covers, which is what "total army health" means and is a different question
+   *     from counting heads: five soldiers at 90 % are not an army that needs a scroll, and two
+   *     at 20 % beside three at full are.
+   *
+   * The radius is the item's OWN (`areaOf`), never a constant of ours — the Scroll of
+   * Regeneration reaches 600 (`[AIsl] Area1`) and the Scroll of Healing its own figure, and a
+   * rule written against `LOOK` would have promised to cover units standing 300 units outside
+   * the circle it was about to draw.
+   */
+  private armyHeal(u: SimUnit, own: SimUnit[], radius: number): boolean {
+    let party = 0;
+    let covered = 0;
+    let hp = 0;
+    let maxHp = 0;
     for (const o of own) {
-      if (o.building || o.isPeon || !near(u, o, LOOK)) continue;
-      if (o.hp / Math.max(1, o.maxHp) < frac) n++;
+      // The ARMY: what fights. Buildings, workers and the doubles are none of it — an illusion
+      // arrives at full health, takes double damage and is meant to die (docs/illusions.md), so
+      // counting it would price the party as healthier than it is and put it in the denominator
+      // of a question about where the real army is standing.
+      if (o.building || o.isPeon || o.isIllusion || o.hp <= 0) continue;
+      party++;
+      if (!near(u, o, radius)) continue;
+      // Somebody already pouring is not somebody this charge would help — see `regenerating`.
+      // It stays in the PARTY (it is still a body the circle has to be drawn around) but not
+      // in what the circle COVERS, so a second scroll cannot follow the first over the same
+      // party a second later.
+      if (this.regenerating(o)) continue;
+      covered++;
+      hp += o.hp;
+      maxHp += o.maxHp;
     }
-    return n;
+    if (covered < CLUSTER) return false;
+    if (covered * 2 <= party) return false;
+    return hp / Math.max(1, maxHp) < ARMY_HURT;
+  }
+
+  /**
+   * IS THIS UNIT ALREADY POURING? — the guard that stops a belt emptying itself in one breath.
+   *
+   * A regeneration item is a HOT: `applyItemAbility`'s `AIrg` branch hangs a buff in the
+   * `ITEM_REGEN_GROUP` for the row's own `Dur1` — 45 seconds for a Healing Salve, restoring
+   * 400 hit points over that time — and a second charge poured on the same unit does not
+   * stack, it REPLACES (one group, one instance). So a salve spent on somebody who is already
+   * regenerating is a salve thrown away, and without this the whole belt goes into the first
+   * camp: measured, a Blademaster carrying two Healing Salves (six charges) emptied both
+   * inside fifteen seconds because the unit it kept picking was still the most hurt one there
+   * — it was regenerating, but it had not finished yet.
+   *
+   * Asked of the sim's own buff list rather than remembered here, so a salve a PLAYER'S ally
+   * poured, or one from a rune off the ground, counts exactly the same.
+   */
+  private regenerating(u: SimUnit): boolean {
+    return u.buffs.some((b) => b.group.startsWith(ITEM_REGEN_GROUP) && b.timeLeft > 0);
+  }
+
+  /**
+   * The radius an area item's own row reaches — `Area1` off the ability that carries the
+   * effect, exactly as `SimWorld.applyItemAbility` reads it when the button is pressed.
+   *
+   * Falls back to `LOOK` for a row that names no area, which cannot happen for anything that
+   * reached this rung (`regenUse` and `USE_OF` only ever answer `healArea` for a row with an
+   * `Area1`) and is the harmless direction to be wrong in if a custom map manages it.
+   */
+  private areaOf(def: ItemDef): number {
+    for (const aid of def.abilities) {
+      const area = this.view.def(aid)?.levelData[0]?.area ?? 0;
+      if (area > 0) return area;
+    }
+    return LOOK;
   }
 
   /** The most hurt of ours in reach — who a Healing Salve goes on. Buildings and workers are
@@ -639,6 +751,8 @@ export class PlusItems {
     let worst = ALLY_HP;
     for (const o of own) {
       if (o.building || o.isPeon || !near(u, o, LOOK)) continue;
+      if (this.regenerating(o)) continue; // already pouring — see `regenerating`
+
       const frac = o.hp / Math.max(1, o.maxHp);
       if (frac < worst) {
         worst = frac;
@@ -761,11 +875,11 @@ export class PlusItems {
     if (this.profile.shopping <= 0) return;
     if (now - this.lastShop < SHOP_PERIOD) return;
     this.lastShop = now;
-    const purse = this.view.gold() - this.profile.itemReserve;
-    if (purse <= 0) return void (this.onErrand = 0);
     const hero = this.shopper(own);
     if (!hero) return void (this.onErrand = 0);
-    const buy = this.pick(own, purse, ctx);
+    // The whole purse, not the surplus: `pick` applies `itemReserve` per ROW, because the
+    // race's opening buys are not discretionary spending — see `Want.opening`.
+    const buy = this.pick(own, this.view.gold(), ctx);
     if (!buy) return void (this.onErrand = 0); // nothing left worth walking for
     if (this.view.world.shopReaches(buy.shopId, hero.id)) {
       this.onErrand = 0; // arrived — the army may have it back
@@ -853,15 +967,18 @@ export class PlusItems {
   }
 
   /** The next thing to buy, and where. Walks the list in preference order and stops at the
-   *  first row some reachable shop actually has on the shelf and this hero can afford. */
+   *  first row some reachable shop actually has on the shelf and this hero can afford — where
+   *  "afford" is the whole purse for one of the race's opening buys and the surplus above
+   *  `itemReserve` for everything else (`Want.opening`). */
   private pick(
     own: SimUnit[],
-    purse: number,
+    gold: number,
     ctx: ItemCtx,
   ): { shopId: number; itemId: string; x: number; y: number } | null {
     const shops = this.shops(ctx);
     if (!shops.length) return null;
     for (const want of this.list()) {
+      const purse = want.opening ? gold : gold - this.profile.itemReserve;
       const def = this.view.item(want.id);
       if (!def || def.gold > purse) continue;
       if (this.carried(own, want.id) >= want.want) continue;
@@ -893,7 +1010,7 @@ export class PlusItems {
    * different quantities.
    */
   private list(): readonly Want[] {
-    const first = RACE_FIRST[this.race] ?? [];
+    const first = (RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }));
     const seen = new Set(first.map((w) => w.id));
     const rest = LIST.filter((w) => !seen.has(w.id));
     return this.profile.keepPortal ? [...first, PORTAL, ...rest] : [...first, ...rest, PORTAL];

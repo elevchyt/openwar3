@@ -115,6 +115,31 @@ const CORE_ARMY_FOOD = 16;
 const MINE_CREW = 5;
 
 /**
+ * …and how many go to the TREES before anything else is bought — the opening forest crew.
+ *
+ * Reported: "Computer+ takes a lot of minutes to start training wisps for gathering lumber…
+ * lumber wisps should be trained as soon as possible independent of the build order." It is
+ * not a preference, it is a DEADLOCK, and a night elf match shows the whole of it: `mineCrew`
+ * asks for five wisps and a spare, `harvestPlan` puts five in the mine, and that leaves ONE
+ * wisp in the trees. The next row the ladder cannot pay for is the hero — 425 gold and **100
+ * lumber** — and `runBuildLoop` RETURNS at a row it cannot afford, so everything under it
+ * stops, `workers` (the row that would train more lumberjacks) included. One wisp chops at
+ * about ten lumber a quarter-minute, so the AI stood in its base for **four and a half
+ * minutes** with six wisps, no hero, no second building and two and a half THOUSAND gold
+ * banked, waiting for the one lumberjack it had to earn the hundred wood that would let the
+ * row it was stuck on move — the only row that could have hired a second lumberjack being
+ * underneath it.
+ *
+ * Four, so the forest has five with the spare in it and the mine keeps its own five: that is
+ * the opening every race actually plays, and it is what turns a hundred lumber from four
+ * minutes' work into one. It is a BOUNDED target, which is what makes it safe to put above the
+ * hero where the old `workers` row was not (see `workers`): it asks for ten workers and then
+ * stops asking, where a row for the profile's whole economy asks for one more every pass for
+ * ever and the altar underneath it is never reached.
+ */
+const LUMBER_OPENING = 4;
+
+/**
  * The forest's crew for a race whose WORKER cannot chop — the undead, and only the undead —
  * AND the creeping party it has to leave over.
  *
@@ -217,11 +242,15 @@ export function buildPlan(c: PlusCtx): void {
   ai.meleeTownHall(0, table.halls[0]);
   ai.meleeTownHall(1, table.halls[0]);
 
-  // THE GOLD CREW, and only the gold crew, before anything else — see `mineCrew`. Everything
-  // that pays for the rest of this list comes out of a mine, so a dead miner is replaced ahead
-  // of a hero, a soldier and a building alike; and a worker past the fifth on a mine pays for
-  // nothing at all, which is why the rest of them wait until after the hero.
+  // THE GOLD CREW before anything else — see `mineCrew`. Everything that pays for the rest of
+  // this list comes out of a mine, so a dead miner is replaced ahead of a hero, a soldier and a
+  // building alike; and a worker past the fifth on a mine pays for no GOLD at all, which is why
+  // the profile's whole economy still waits until after the hero (`workers`).
   mineCrew(c);
+  // …and the FOREST crew with it, because a build order that cannot pay its lumber stops dead
+  // and the row that would have hired a lumberjack is underneath the row it stopped on. See
+  // `LUMBER_OPENING` for the four and a half minutes that cost a night elf.
+  forestCrew(c);
   supply(c);
   // The ALTAR, then the HERO, then somewhere to make a soldier. The order of those three is the
   // opening, and the middle one moved: the Barracks used to sit above the hero, and a Barracks
@@ -233,19 +262,23 @@ export function buildPlan(c: PlusCtx): void {
   altar(c);
   firstHero(c);
   barracks(c);
-  // …and NOW the lumberjacks. This is the whole of the hero-delay fix: `workers` used to sit
-  // where `mineCrew` does and ask for the profile's full number (14 on Insane), and because it
-  // is a `SetBuildNext` row it asks for one more EVERY pass — so the ladder spent its gold a
-  // peon at a time, for ever, and the altar row underneath it was reached with nothing left.
-  // Measured before the fix: an INSANE orc at 2:30 with fourteen peons, no hero and no army,
-  // and its Blademaster finally out at nearly five minutes. A ladder player crews the mine,
-  // puts up the altar, buys the hero, and grows the lumber crew around it.
+  // …and NOW the REST of the economy — the profile's full worker count, whatever it is. This is
+  // the hero-delay fix and it is why only a BOUNDED opening crew sits above the hero: `workers`
+  // used to sit where `mineCrew` does and ask for the profile's whole number (14 on Insane), and
+  // because it is a `SetBuildNext` row it asks for one more EVERY pass — so the ladder spent its
+  // gold a peon at a time, for ever, and the altar row underneath it was reached with nothing
+  // left. Measured before the fix: an INSANE orc at 2:30 with fourteen peons, no hero and no
+  // army, and its Blademaster finally out at nearly five minutes. A ladder player crews the mine
+  // and the forest, puts up the altar, buys the hero, and grows the rest around it.
   workers(c);
+  // The SHOP, and it is up here with the opening rather than down with the tech for the reason
+  // `shop` gives: it is 130 gold, the hero is what it is for, and a row below the army rows is
+  // a row that is never reached at all.
+  shop(c);
   army(c, CORE_ARMY_FOOD); // enough not to die to the first raid, cheap enough not to block tech
   tierUpDue(c); // …and from three minutes, the Keep — see TIER2_CLOCK
   techBuildings(c);
   upgrades(c);
-  shop(c);
   always(c);
   expand(c);
   extraHeroes(c);
@@ -298,6 +331,47 @@ function mineCrew(c: PlusCtx): void {
   if (ai.townCountDone(table.halls[0]) < 1) return;
   const towns = Math.max(1, ai.minesOwned());
   ai.setBuildNext(MINE_CREW * towns + SPARE_WORKERS, table.worker);
+}
+
+/**
+ * THE FOREST CREW — the lumberjacks, bought with the miners and before everything else.
+ *
+ * `mineCrew` above is the gold; this is the wood, and the two are one decision taken twice
+ * because they are crewed from the same queue and neither may wait on the other. See
+ * `LUMBER_OPENING` for what waiting cost.
+ *
+ * Two shapes, because a race's lumberjack is either a worker or a soldier and the difference
+ * is not a tuning value (docs/undead.md):
+ *
+ *  · **A race whose worker can chop** simply wants more workers — the mine's crew, the spare,
+ *    and `LUMBER_OPENING` for the trees. `harvestPlan` does the rest: five per mine on gold,
+ *    everybody else in the forest.
+ *  · **The undead's lumber comes out of a BUILDING**, so its opening forest crew is that
+ *    building and the first two Ghouls out of it — and the building is the Crypt, which is
+ *    also `table.barracks`, so this asks for it a few rows earlier than the opening otherwise
+ *    would. That is what a real undead opening does and for exactly this reason: an Acolyte
+ *    cannot chop, so an undead player who buys the altar first has 150 starting lumber, spends
+ *    50 of it on the altar and 100 on the hero, and then owns nothing that can earn another
+ *    stick. Two Ghouls is `LUMBER_FLOOR`, the number `ComputerPlusAi.lumberCrew` keeps on the
+ *    trees whatever the bank says; the rest of the crew is still `lumberUnits`, below.
+ *
+ * `setBuildNext` throughout, like every other worker row here: it asks for one more than is
+ * finished, so it reserves ONE worker's gold rather than the whole shortfall and the ladder
+ * under it keeps breathing while the crew fills up.
+ */
+function forestCrew(c: PlusCtx): void {
+  const { ai, table } = c;
+  if (ai.townCountDone(table.halls[0]) < 1) return; // nothing to make them at
+  if (c.workerChops) {
+    const towns = Math.max(1, ai.minesOwned());
+    ai.setBuildNext(MINE_CREW * towns + SPARE_WORKERS + LUMBER_OPENING, table.worker);
+    return;
+  }
+  if (!table.lumberUnit) return;
+  const row = table.units[table.lumberUnit];
+  if (!row) return;
+  if (ai.countDone(row.from) < 1) return void ai.setBuildUnit(1, row.from);
+  ai.setBuildNext(LUMBER_FLOOR, table.lumberUnit);
 }
 
 /**
@@ -553,7 +627,7 @@ function always(c: PlusCtx): void {
 }
 
 /**
- * The race's own shop, once there is an army to spend on.
+ * The race's own shop, as soon as there is a hero to equip.
  *
  * A computer that shops needs somewhere to shop. Without this the AI's whole item side was
  * theoretical: the shopping pass would run every five seconds, find no shop of ours, and fall
@@ -561,10 +635,21 @@ function always(c: PlusCtx): void {
  * maps not there at all. Measured on Echo Isles: a Normal orc at ten minutes with a level-3
  * hero, no Town Portal and no Healing Salve, because nothing had put up a Voodoo Lounge.
  *
- * Placed AFTER `techBuildings` and before `expand`: it is a want, not an opening, and it must
- * not out-rank the tech that makes the army. `SHOP_AFTER` is the same kind of gate every
- * derived building here carries — army food already on the field, so a computer never buys a
- * shop instead of the soldiers that would have used it.
+ * It used to sit AFTER `techBuildings` and `upgrades`, on the argument that a shop is a want
+ * rather than an opening — and there it was never built either. A row is only "lower priority"
+ * if the ladder gets to it: `runBuildLoop` RETURNS at the first unit row it cannot afford, and
+ * the army rows above it ask for one more soldier every pass for ever. Measured, with the shop
+ * two rows further down: a Normal orc at eight and a half minutes with a Blademaster, three
+ * Grunts, no Stronghold, no upgrade and no Voodoo Lounge — the ladder had halted on a 200-gold
+ * Grunt every pass since the third minute and nothing below that row had run at all.
+ *
+ * So it goes with the opening, where its price says it belongs: a Voodoo Lounge is 130 gold and
+ * 30 lumber, less than one Grunt, and what it sells is what keeps the hero and the party alive
+ * through the creep camps the next ten minutes are made of.
+ *
+ * `SHOP_AFTER` is the hero's own food, which is to say: as soon as there is a hero. That is
+ * what the shop is FOR — the belt is a hero's — and a shop with nobody to carry what it sells
+ * is a hundred and thirty gold spent on nothing.
  *
  * Skipped entirely at a difficulty that does not shop, since nothing would ever buy from it.
  */
@@ -575,9 +660,10 @@ function shop(c: PlusCtx): void {
   ai.setBuildUnit(1, table.shop);
 }
 
-/** Army food on the field before the shop goes up. Roughly the first wave: past the point where
- *  a potion is worth more than another soldier, and well short of blocking the opening. */
-const SHOP_AFTER = 10;
+/** Army food on the field before the shop goes up — a HERO's worth, which is five in every
+ *  race (UnitBalance `fused`). Read it as "once the hero is out": nothing else on a melee map
+ *  has an inventory, so before that the shop has nobody to sell to. */
+const SHOP_AFTER = 5;
 
 /** Army food a derived building waits for, by the tier of the unit that wants it. A tier-1
  *  producer is the opening and comes almost at once; a tier-3 one is a commitment. */

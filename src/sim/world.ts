@@ -13859,7 +13859,24 @@ export class SimWorld {
       // is the stand-off a worker's own cell block needs beside the footprint (see
       // mineStandDist), plus a cell of slack for whoever had to shuffle a tile over.
       // (It re-emerges on the hall-facing side; see the emerge branch above.)
-      if (!this.arriveAtNode(u, mine.x, mine.y, this.mineStandDist(u, mine) + PATHING_CELL, () => this.pathToNode(u))) return;
+      //
+      // …times √2, and that factor is the whole of a bug that stopped a base's gold dead.
+      // The stand-off is a **square**: `mineStandDist` is a half-width, and `mineStandSpot`
+      // projects onto the footprint's rim by CHEBYSHEV for the reason stated there — the
+      // footprint is a square and a circle of that radius lands inside it on every diagonal.
+      // So a worker parked against the rim sits `mineStandDist` from the centre on an axis
+      // and up to `mineStandDist × √2` on a diagonal, and a EUCLIDEAN arrive test written
+      // against the axis figure can never be satisfied on a diagonal approach.
+      //
+      // Measured (Echo Isles, the hall diagonally up-left of its mine): peons parked 220
+      // units out against a reach of 208, so `arriveAtNode` answered "not there yet" for
+      // ever — and because they were still `moving`, its own re-path branch never ran
+      // either. The whole gold crew stood at the rim with the mine idle, one of them
+      // holding a load it never delivered, and the base's income was ZERO from the second
+      // minute. (The stuck watchdog cannot save this: it re-routes to the same cell, which
+      // the worker is already standing on.)
+      const reach = this.mineStandDist(u, mine) * Math.SQRT2 + PATHING_CELL;
+      if (!this.arriveAtNode(u, mine.x, mine.y, reach, () => this.pathToNode(u))) return;
       if (mine.busy) return; // parked at the entrance, waiting our turn (no re-path)
       mine.busy = true;
       u.inMine = true;

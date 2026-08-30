@@ -36,6 +36,7 @@ import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL } from "../ai/ids";
  *   ?dev&map=EchoIsles&race=nightelf        …with the local player seated as that race
  *   ?dev&map=EchoIsles&ai=insane            …with every OTHER seat a computer at that difficulty
  *   ?dev&map=EchoIsles&ai=plus-easy         …played by Computer+ instead (src/ai/plus/)
+ *   ?dev&map=EchoIsles&airace=orc           …with every OTHER seat seated as that race
  *   ?dev&chapter=NightElfX01                start a CAMPAIGN chapter (&difficulty=easy|normal|hard)
  *
  * `player` and `seed` are what make two-client testing possible: point two browser contexts at
@@ -137,6 +138,7 @@ function meleeConfigFor(
   seed: number,
   fog: FogMode,
   race: Race | null,
+  aiRace: Race | null,
   ai: number | null,
   aiPlus: boolean,
 ): MeleeConfig {
@@ -156,7 +158,13 @@ function meleeConfigFor(
     // `?race=` forces the PLAYABLE seats to one race. A melee map hands every slot
     // "random", so without this there is no way to boot straight into the race you are
     // working on — you reload until the dice agree. Neutral/rescuable seats keep theirs.
-    race: race && s.id === player ? race : s.defaultRace,
+    //
+    // `?airace=` is the same switch for the OTHER side, and it exists for the same reason
+    // one boot further on: `resolveRace` rolls a lobby "random" off `Math.random()`, so
+    // which race a computer plays is not even reproducible from `?seed=`. Testing one
+    // race's AI meant rebooting until the dice agreed — four boots on a two-slot map for
+    // every look at the orc.
+    race: race && s.id === player ? race : aiRace && s.controller === "user" && s.id !== player ? aiRace : s.defaultRace,
     team: s.team,
     startX: s.startX,
     startY: s.startY,
@@ -183,6 +191,9 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // `?race=nightelf` — seat the local player as that race instead of the map's default.
   const wantRace = params.get("race");
   const race: Race | null = wantRace && (RACES as string[]).includes(wantRace) ? (wantRace as Race) : null;
+  // `?airace=orc` — the same, for every seat we are NOT sitting in (see `meleeConfigFor`).
+  const wantAiRace = params.get("airace");
+  const aiRace: Race | null = wantAiRace && (RACES as string[]).includes(wantAiRace) ? (wantAiRace as Race) : null;
   // `?ai=easy|normal|insane` — seat every OTHER slot as a computer at that `MeleeDifficulty()`
   // (src/ai/ids.ts), which is the only way to reach the melee AI without the lobby screen.
   const AI_DIFFICULTIES: Record<string, number> = {
@@ -279,7 +290,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const mapFile = path ? load.maps.get(path) : undefined;
     if (!mapFile) throw new Error(`no mounted map matching "${name}" — mount it with ?maps=`);
     const info = parseMapInfo(new Uint8Array(await mapFile.arrayBuffer()), path!);
-    await hooks.startGame(mapFile, info, meleeConfigFor(info, player, seed, fog, race, ai, aiPlus));
+    await hooks.startGame(mapFile, info, meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus));
   };
 
   // A campaign chapter comes out of the archives we just mounted, so it needs no map file and
@@ -310,7 +321,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   }
 
   log(`starting ${info.name} as player ${player}, seed ${seed}`);
-  await hooks.startGame(file, info, meleeConfigFor(info, player, seed, fog, race, ai, aiPlus));
+  await hooks.startGame(file, info, meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus));
 }
 
 /** Resolve once the lobby's state satisfies `ready`, or reject after `timeoutMs`. */

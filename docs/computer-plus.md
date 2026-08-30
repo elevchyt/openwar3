@@ -535,20 +535,44 @@ one routine and [`races.ts`](../src/ai/plus/races.ts) is four tables of ids, wei
 The block ORDER in `buildPlan` is the strategy, because `OneBuildLoop` reserves gold down the
 list **and returns at the first unit row it cannot afford**:
 
-> hall → **gold crew** → food → **altar** → **first hero** → barracks → lumberjacks →
-> **core army** → **tier 2, from 3:00** → tech buildings → **upgrades** → shop → always →
-> **expansion** → extra heroes → tier → towers → **the rest of the army**
+> hall → **gold crew** → **forest crew** → food → **altar** → **first hero** → barracks →
+> the rest of the workers → **shop** → **core army** → **tier 2, from 3:00** → tech buildings →
+> **upgrades** → always → **expansion** → extra heroes → tier → towers → **the rest of the army**
 
-Five of those positions were moved after a live match said so, and each is worth stating:
+Seven of those positions were moved after a live match said so, and each is worth stating:
 
-- **The gold crew is first and the lumberjacks are after the hero.** `workers` used to be one row
+- **The gold crew is first and the lumberjacks are right behind it.** `workers` used to be one row
   asking for the profile's full number (14 on Insane), and because it is a `SetBuildNext` row it
   asks for one *more* every pass — so the ladder spent its gold a peon at a time, for ever, and
   the altar underneath was reached with nothing left. Measured: an **Insane orc at 2:30 with
-  fourteen peons, no hero and no army**, its Blademaster finally out at nearly five minutes. Now
-  `mineCrew` (five per mine, plus one for building and scouting) is at the very top — it is also
+  fourteen peons, no hero and no army**, its Blademaster finally out at nearly five minutes. So
+  `mineCrew` (five per mine, plus one for building and scouting) went to the very top — it is also
   the **dead-worker replacement, at the highest priority there is**, since a worker killed off a
-  mine is income that has stopped — and the rest of the workers wait behind the hero.
+  mine is income that has stopped — and everything else moved below the hero.
+- **…and then the forest crew had to come back up, because "after the hero" is a DEADLOCK.** With
+  the mine's five and one spare, `harvestPlan` leaves exactly **one** worker in the trees. The
+  next row the ladder cannot pay for is the hero — 425 gold and **100 lumber** — and
+  `OneBuildLoop` returns at a row it cannot afford, so everything under it stops, *including the
+  row that would have hired a second lumberjack*. Measured on Echo Isles: a Normal **night elf
+  stood in its base from 0:30 to 4:45** with six wisps, no hero, not one further building and
+  **two and a half thousand gold banked**, while one wisp chopped its way to a hundred wood.
+  `forestCrew` (`LUMBER_OPENING`, four more) now sits with `mineCrew` at the top. It is safe there
+  precisely where the old `workers` row was not: it is a **bounded** target — ten workers and then
+  it stops asking — rather than a row that asks for one more every pass for ever. Same match with
+  the row moved: **hero at 3:01 instead of 5:46, Ancient of War at 2:01 instead of 4:46, shop at
+  2:31, tier 2 reached at all.**
+  For the **undead** the same row means the Crypt and its first two Ghouls, because an Acolyte
+  cannot chop (docs/undead.md) — an undead opening that buys the altar first spends 50 of its 150
+  starting lumber on the altar and 100 on the hero and then owns nothing that can earn another
+  stick.
+- **The shop is with the opening, not with the tech.** It was below `techBuildings` and
+  `upgrades` on the argument that a shop is a want rather than an opening — and a row is only
+  "lower priority" if the ladder ever gets to it. Measured: a Normal orc at **8:30 with three
+  Grunts, no Stronghold, no upgrade and no Voodoo Lounge**, because a 200-gold Grunt row had
+  halted the loop every pass since the third minute. A Voodoo Lounge is 130 gold and 30 lumber,
+  less than one Grunt, and what it sells is what keeps the party alive through the creep camps the
+  next ten minutes are made of. `SHOP_AFTER` is now a hero's own food (5), which is to say: as
+  soon as there is somebody with a belt to fill.
 - **The hero outranks the Barracks.** A Barracks is 160 gold reserved out of the 425 the altar is
   saving for; measured, an Insane orc with its altar standing at 1:17 did not queue its
   Blademaster until past 3:30. A ladder player buys the hero the moment the altar finishes.
@@ -1098,13 +1122,31 @@ that is what the Merchant actually stocks.)
 **A race opens with its own buy** (`RACE_FIRST`), in front of everything on that list — the Town
 Portal included. This is arithmetic before it is preference: `pick` walks the list in order and
 stops at the first row it can afford, and `shopping` is only **three slots** on Normal, so
-anything below the first two or three rows is decoration that is never reached. Today there is
-one entry and it is the **orc's two Healing Salves**. `[ovln]` (the Voodoo Lounge) is the one
-race shop that stocks `hslv`; it is 100 gold for three charges, the best hit points per gold in
-the game; and — the part that makes it a *first* buy rather than a cheap potion — its row is a
-`healOther` (`Rng1` 500, no `Area1`), so it is the item that puts the **army** back together
-between creep camps rather than the hero. Two of them, because the first camp spends one. The
-other three races open on the potions `LIST` already starts with, so they get no invented habit.
+anything below the first two or three rows is decoration that is never reached. Two races have
+one, and they are the same idea in two vocabularies — *the item that puts the army back together
+between creep camps*:
+
+- the **orc's two Healing Salves**. `[ovln]` (the Voodoo Lounge) is the one race shop that stocks
+  `hslv`; it is 100 gold for three charges, the best hit points per gold in the game; and — the
+  part that makes it a *first* buy rather than a cheap potion — its row is a `healOther`
+  (`Rng1` 500, no `Area1`), so it goes on whichever soldier came out worst. Two, because the
+  first camp spends one.
+- the **human's two Scrolls of Regeneration**. `[hvlt] Makeitems` *opens* with `sreg`; it is the
+  same 100 gold; and `[AIsl]` is the AREA version of the same effect — `Area1` 600, 225 hit
+  points over 45 seconds into everything standing in the circle. So the human's captain heals the
+  whole party at once, which is why the `healArea` rung asks a different question of it (below).
+
+The undead and the night elf open on the potions `LIST` already starts with, so they get no
+invented habit.
+
+**An opening buy is not discretionary spending** (`Want.opening`). Everything else on the list is
+bought out of the surplus above `itemReserve`; these are bought out of the purse. That is what the
+reserve is for, read honestly: 300 gold of headroom on a Normal computer means it never shops at
+all — measured on Echo Isles, a Normal orc's gold sat between **2 and 162 for a whole match**
+while it paid for peons and Grunts, so `gold − 300` was never once positive at the moment the
+five-second shopping pass looked. A hundred-gold salve it can never reach is a 130-gold Voodoo
+Lounge built for nothing; a player buys the salves out of the same pocket the build order comes
+from, because at that price they are part of the build order.
 
 A purchase needs the buyer **standing at the shop**, and the sim adopts whoever is in range as the
 patron by itself (`tickShopBuyers`) — so the whole of "select this hero as the buyer" is walking it
@@ -1120,7 +1162,30 @@ bottom).
 `itemReserve` is also the answer to the second gate this section used to warn about — item gold is
 gold `OneBuildLoop` was going to spend. A floor is the only way a separate pass can honestly give
 the build ladder first call: the shop sees the surplus and nothing else. It is not a rung in the
-ladder and does not pretend to be one.
+ladder and does not pretend to be one. The one exception is the race's opening buy, above, and it
+is an exception for a stated reason rather than a leak.
+
+#### When an area heal is spent: is the army hurt, and is the army HERE?
+
+`armyHeal` is the `healArea` rung, and it asks three questions rather than counting hurt bodies
+the way it used to:
+
+1. **Is it reaching a group?** `CLUSTER` (3) inside the circle, or the scroll is doing a potion's
+   job and the potion is one rung down.
+2. **Is more than HALF the army in the circle?** This is what makes it an army item rather than a
+   bigger potion — a 100-gold scroll poured over the two units that arrived first is 100 gold
+   spent on two units. Measured against the whole army, not against whoever happens to be beside
+   the hero. Nothing here *walks* the hero anywhere: the Computer+ army moves as one body anchored
+   on its captain, so "wait until the party is around you" is a condition the army manager
+   satisfies by itself a few seconds later.
+3. **Is the army hurt?** **Pooled** — one fraction over the hit points and maxima of everybody the
+   circle covers, the hero's own included, which is a different question from counting heads.
+   Five soldiers at 90 % are not an army that needs a scroll; three at 15 % beside three whole
+   ones are. `ARMY_HURT` is two thirds, and it is ours.
+
+The circle is the **item's own** `Area1` (`areaOf`), never a constant of this file's: a rule
+written against `LOOK` (900, "this fight") would promise to heal units standing 300 units outside
+the 600 the Scroll of Regeneration actually draws.
 
 Still not touched: **Kelen's Dagger of Escape** (`AIbk`), a point-target blink that needs a
 decision about *where* the aiming above does not make — it is a drop, never shop stock, so it

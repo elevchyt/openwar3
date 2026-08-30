@@ -209,11 +209,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   camp. Its army also moves as ONE BODY anchored on the CAPTAIN — the first hero trained, then
   the second — and nothing leaves the muster point until four fifths of it is there, with a
   deadline, because a gate with no deadline locked the hero at home.
-  The BUILD LADDER's order is the strategy and four positions in it were measured: the gold crew
-  is first (it is also the dead-worker replacement, at the highest priority there is), the hero
-  outranks the Barracks, the rest of the workers wait behind the hero, and UPGRADES sit with the
-  tech buildings ABOVE the tier-up — below it they are simply never reached, which is the whole
-  of "the AI never upgrades anything". Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:
+  The BUILD LADDER's order is the strategy and six positions in it were measured: the gold crew
+  is first (it is also the dead-worker replacement, at the highest priority there is), the FOREST
+  crew is right behind it, the hero outranks the Barracks, the rest of the workers wait behind
+  the hero, the SHOP goes with the opening, and UPGRADES sit with the tech buildings ABOVE the
+  tier-up — below it they are simply never reached, which is the whole of "the AI never upgrades
+  anything". The forest crew and the shop are both the same lesson twice: a row is only "lower
+  priority" if the ladder ever REACHES it, and `OneBuildLoop` returns at the first row it cannot
+  afford. Lumberjacks below the hero DEADLOCK — five workers on the mine and one spare leaves ONE
+  in the trees, the hero row wants 100 lumber, and the row that would hire a second lumberjack is
+  underneath the row that is stuck (a night elf stood still from 0:30 to 4:45 with 2500 gold
+  banked); and a shop below the army rows is never built at all, so nothing is ever bought. Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:
   the undead altar is **`uaod`** (Altar of Darkness), NOT `utod` (Temple of the Damned, which is
   the CASTER building) — naming the wrong one left the undead with no hero and, because a hero row
   halts the build loop, no army either; and a BURROW is asked for by its hold's ability code
@@ -235,8 +241,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   judged by (`isCopy`): it deals no damage, arrives at full health, costs no food and is MEANT to
   die, so counting it prices the party for a camp it cannot take and makes the vanguard popping
   read as the army breaking. It DOES shop and drink
-  ([`plus/items.ts`](src/ai/plus/items.ts)), and the trap there is the one that broke almost the
-  whole belt once: what a press is FOR is keyed on the ability's base **`code`**, never on
+  ([`plus/items.ts`](src/ai/plus/items.ts)). A race's OPENING buy (`RACE_FIRST` — the orc's two
+  Healing Salves, the human's two Scrolls of Regeneration) is bought out of the purse rather than
+  out of the surplus above `itemReserve`, because a Normal computer's gold is almost never 300
+  above anything and a 100-gold salve it can never reach is a Voodoo Lounge built for nothing. An
+  AREA heal is spent on three questions and not on a head-count (`armyHeal`): `CLUSTER` bodies in
+  the circle, more than HALF the army inside it, and the party's POOLED health under `ARMY_HURT` —
+  and the circle is the item's own `Area1`, never `LOOK`. The trap beside all this is the one that
+  broke almost the whole belt once: what a press is FOR is keyed on the ability's base **`code`**, never on
   `AbilityData.slk`'s `alias` — `AIh1` is `AIhe`, `AIm1` is `AIma`, and the Salve, both Clarity
   Potions, the Scroll of Regeneration and the Replenishment family are all one code `AIrg`, told
   apart by their own `Area1`/`Rng1` exactly as the sim tells them apart (docs/items.md).

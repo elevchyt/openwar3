@@ -212,8 +212,12 @@ let nextId = 1;
 const unit = (o = {}) => ({
   id: nextId++, owner: 0, x: 0, y: 0, radius: 16, hp: 1000, maxHp: 1000, mana: 100, maxMana: 100,
   isHero: false, isPeon: false, building: null, paused: false, stunned: false, isIllusion: false,
-  morphT: 0, spawning: 0, level: 1, typeId: "hfoo", inventory: [], ...o,
+  morphT: 0, spawning: 0, level: 1, typeId: "hfoo", inventory: [], buffs: [], ...o,
 });
+/** A unit already pouring a regeneration item — `applyItemAbility`'s `AIrg` branch hangs this
+ *  buff (group `item:regen`) for the row's own `Dur1`. A second charge on it is thrown away,
+ *  which is what `PlusItems.regenerating` is for. */
+const regenBuff = () => ({ kind: "hot", group: "item:regen", timeLeft: 40, buffId: "BIrl" });
 const hero = (o = {}) => unit({ isHero: true, typeId: "Hamg", inventory: [null, null, null, null, null, null], ...o });
 const belt = (h, ...ids) => { ids.forEach((id, i) => { h.inventory[i] = { itemId: id, charges: 1 }; }); return h; };
 
@@ -353,6 +357,71 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
   const h = belt(hero(), "shea");
   check("…one hurt soldier is not worth a charge",
     pressed([h, unit({ hp: 300, maxHp: 1000, x: 100 }), enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+}
+{
+  // MORE THAN HALF THE ARMY HAS TO BE IN THE CIRCLE. The developer's own rule for the human's
+  // Scroll of Regeneration: "it must make sure that their hero uses it while close to its army
+  // so that more than half the army is in range". Three hurt soldiers beside the hero and five
+  // more of the army a screen away is a 100-gold scroll poured over three units.
+  const h = belt(hero(), "sreg");
+  const hurt = [1, 2, 3].map((i) => unit({ hp: 300, maxHp: 1000, x: 100 * i }));
+  const rest = [1, 2, 3, 4, 5].map((i) => unit({ hp: 300, maxHp: 1000, x: 3000 + 100 * i }));
+  check("half the army out of the circle: the scroll is held",
+    pressed([h, ...hurt, ...rest], PLUS_INSANE, AWAY), null);
+  // …and once the army is around the hero, the same party is worth it.
+  const near = [1, 2, 3, 4, 5].map((i) => unit({ hp: 300, maxHp: 1000, x: 100 * i }));
+  check("…and poured the moment they are all standing in it",
+    itemOf(pressed([belt(hero(), "sreg"), ...hurt, ...near], PLUS_INSANE, AWAY)), 0);
+}
+{
+  // THE CIRCLE IS THE ITEM'S OWN. `[AIsl] Area1` is 600; a rule written against the 900 the
+  // rest of this file calls "the fight" would promise to heal units it cannot reach.
+  const h = belt(hero(), "sreg");
+  const hurt = [1, 2, 3].map((i) => unit({ hp: 300, maxHp: 1000, x: 700 + i }));
+  check("soldiers outside Area1 but inside LOOK do not count",
+    pressed([h, ...hurt], PLUS_INSANE, AWAY), null);
+}
+{
+  // TOTAL ARMY HEALTH, pooled — "it should base its usage around total army health". Three
+  // soldiers with a scratch each is not an army that needs a scroll, however many of them there
+  // are, which is a different answer from the head-count this used to be.
+  const h = belt(hero(), "sreg");
+  const scratched = [1, 2, 3].map((i) => unit({ hp: 900, maxHp: 1000, x: 100 * i }));
+  check("a party at nine tenths keeps its scroll",
+    pressed([h, ...scratched], PLUS_INSANE, AWAY), null);
+  // …and three nearly dead among three whole ones is the case a head-count misses: only three
+  // of the six are under `HURT_HP`, but POOLED (the hero's own bar included, since the circle
+  // heals the hero too) the party is under two thirds and the scroll is worth its charge.
+  const mixed = [
+    unit({ hp: 150, maxHp: 1000, x: 100 }), unit({ hp: 150, maxHp: 1000, x: 200 }),
+    unit({ hp: 150, maxHp: 1000, x: 300 }),
+    unit({ hp: 1000, maxHp: 1000, x: 400 }), unit({ hp: 1000, maxHp: 1000, x: 500 }),
+    unit({ hp: 1000, maxHp: 1000, x: 100, y: 100 }),
+  ];
+  check("…three nearly dead among the whole ones is worth it",
+    itemOf(pressed([belt(hero(), "sreg"), ...mixed], PLUS_INSANE, AWAY)), 0);
+}
+{
+  // NOT ON SOMEBODY ALREADY POURING. A regeneration item is a 45-second HOT in one buff group,
+  // so a second charge REPLACES the first rather than stacking — and without this guard the
+  // whole belt goes into one camp: a Blademaster with two Healing Salves (six charges) emptied
+  // both in fifteen seconds, because the unit it kept picking was still the most hurt one there.
+  const h = belt(hero(), "hslv");
+  const pouring = unit({ hp: 200, maxHp: 1000, x: 150, buffs: [regenBuff()] });
+  check("the Salve is held back from a unit already regenerating",
+    pressed([h, pouring], PLUS_INSANE, AWAY), null);
+  // …and goes to the next worst one that is not.
+  const other = unit({ hp: 400, maxHp: 1000, x: 200 });
+  const cmd = pressed([belt(hero(), "hslv"), pouring, other], PLUS_INSANE, AWAY);
+  check("…and goes to the next one that is not", cmd && cmd.targetId, other.id);
+}
+{
+  // The same for the AREA heal: a party already pouring is not a party the circle still covers,
+  // so a second scroll cannot follow the first over the same units a second later.
+  const h = belt(hero(), "sreg");
+  const hurt = [1, 2, 3].map((i) => unit({ hp: 300, maxHp: 1000, x: 100 * i, buffs: [regenBuff()] }));
+  check("no second scroll over a party that is already regenerating",
+    pressed([h, ...hurt], PLUS_INSANE, AWAY), null);
 }
 {
   // The Healing Salve is the one healing item you point at somebody.
@@ -661,10 +730,12 @@ function shopped(units, profile, opts = {}) {
 // per gold in the game, and it is what puts a party back together between camps. Reported:
 // "it crept its hero nicely up to level 3 … however it didn't buy healing salves".
 {
+  // Asked of a race with no opening habit of its own (`RACE_FIRST`), so what is being pinned is
+  // the general `LIST`'s order rather than the orc's or the human's first buys.
   const h = belt(hero(), "stwp", "phea", "phea", "shea", "sreg");
   const shelf = ["stwp", "phea", "shea", "sreg", "hslv", "pman", "pclr"];
   check("with the portal and the potions bought, the Salve is next — before any mana",
-    shopped([h, MERCHANT], PLUS_INSANE, { shelf }).buy?.itemId, "hslv");
+    shopped([h, MERCHANT], PLUS_INSANE, { race: "undead", shelf }).buy?.itemId, "hslv");
 }
 
 // THE ORC BUYS ITS SALVES FIRST (`RACE_FIRST`). Reported: an orc Computer+ "must buy two
@@ -689,11 +760,36 @@ function shopped(units, profile, opts = {}) {
     shopped([two, MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE }).buy?.itemId, "stwp");
 }
 {
-  // Nobody else gets the habit: a human off the same shelf still opens with the scroll.
+  // THE HUMAN OPENS WITH ITS SCROLL OF REGENERATION, for the same reason and off the same kind
+  // of row: `[hvlt] Makeitems` opens with `sreg`, it is 100 gold, and `[AIsl] Area1` 600 makes
+  // it the ARMY's heal rather than the hero's.
+  const VAULT = ["sreg", "mcri", "plcl", "phea", "pman", "stwp", "tsct", "ofir", "ssan"]; // [hvlt]
+  const h = hero();
+  check("a human's first buy is a Scroll of Regeneration, ahead of the Town Portal",
+    shopped([h, MERCHANT], PLUS_NORMAL, { race: "human", shelf: VAULT }).buy?.itemId, "sreg");
+  const two = belt(hero(), "sreg", "sreg");
+  check("…and only then the Town Portal",
+    shopped([two, MERCHANT], PLUS_NORMAL, { race: "human", shelf: VAULT }).buy?.itemId, "stwp");
+}
+{
+  // THE OPENING BUY IS NOT DISCRETIONARY SPENDING. Everything on the general list waits for
+  // gold above `itemReserve`; the race's own first buys do not, because a Normal computer's
+  // gold is almost never 300 above anything (measured: an orc's purse sat between 2 and 162 for
+  // a whole match) and a 100-gold salve it can never reach is a Voodoo Lounge built for nothing.
+  const LOUNGE = ["shas", "hslv", "plcl", "phea", "pman", "stwp", "tgrh", "oli2"]; // [ovln]
+  check("120 gold buys the opening salve, reserve or no reserve",
+    shopped([hero(), MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE, gold: 120 }).buy?.itemId, "hslv");
+  // …and the rest of the list still waits for the surplus, which is what the reserve is for.
+  const stocked = belt(hero(), "hslv", "hslv");
+  check("…but the general list still waits above the reserve",
+    shopped([stocked, MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE, gold: PLUS_NORMAL.itemReserve + 10 }).buy, null);
+}
+{
+  // Nobody else gets the habit: an undead off the same shelf still opens with the scroll.
   const h = hero();
   const shelf = ["stwp", "phea", "hslv", "sreg"];
-  check("a human's list is unchanged — the scroll still leads",
-    shopped([h, MERCHANT], PLUS_NORMAL, { shelf }).buy?.itemId, "stwp");
+  check("an undead's list is unchanged — the Town Portal still leads",
+    shopped([h, MERCHANT], PLUS_NORMAL, { race: "undead", shelf }).buy?.itemId, "stwp");
 }
 
 // OUR OWN SHOP FIRST, the Goblin Merchant as the last resort. A race shop is in the base (so
