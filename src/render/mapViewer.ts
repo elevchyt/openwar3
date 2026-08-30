@@ -1991,6 +1991,12 @@ export class MapViewerScene {
           plus: s.aiPlus === true,
         })),
       config.seed ?? 1,
+      // …and where EVERYBODY starts, people included. A Computer+ scout tours the enemy start
+      // locations (src/ai/plus/, `PlusHost.startLocations`), which is what a melee map's start
+      // locations are for and what the minimap already prints for a person before the match.
+      config.slots
+        .filter((s) => s.controller === "user" || s.controller === "computer")
+        .map((s) => ({ player: s.id, x: s.startX, y: s.startY })),
     );
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     // …and the supply CEILING this map asks for, before a line of its script runs — a chapter

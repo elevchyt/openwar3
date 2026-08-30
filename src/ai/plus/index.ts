@@ -8,7 +8,8 @@ import { AiPlayer, type AiHost, REGROUP_HP_FRACTION, TOWN_RADIUS } from "../aiPl
 import { PlusCaster } from "./casting";
 import { EnemyMemory, counterScore, type EnemyRead } from "./counter";
 import {
-  CONCEDE_NOT_BEFORE, CONCESSIONS, GREETINGS, GREET_AT, GREET_STAGGER, LEAVE_AFTER, hopeless,
+  CONCEDE_NOT_BEFORE, CONCESSIONS, GREETINGS, GREET_AT, GREET_SPREAD, GREET_STAGGER, LEAVE_AFTER,
+  hopeless,
   type Standing,
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
@@ -86,6 +87,21 @@ export interface PlusHost extends AiHost {
    * remaining player is declared the winner by the map's own victory check rather than by us.
    */
   leave(player: number): void;
+  /**
+   * EVERY PLAYING SEAT'S START LOCATION — the lobby's, not the fog's.
+   *
+   * Map data, exactly as the creep camps are, and gated by nothing: "every melee player is
+   * handed the start locations — that is what a melee map's start locations ARE" is already
+   * the rule `AiPlayer.knows` states for the enemy's main base, and the classic AI's waves
+   * have always walked to them. So reading them here is not a fog bypass; it is the same fact
+   * the minimap prints for a person before the match starts.
+   *
+   * The SCOUT is what wants them (`scoutWaypoint`). A gold mine is a guarded expansion and a
+   * building is wherever that player happened to put it; a start location is the one point on
+   * the map that names an opponent's base before anybody has looked at it, and it is what a
+   * person sends their first worker at.
+   */
+  startLocations(): ReadonlyArray<{ player: number; x: number; y: number }>;
 }
 
 /** How often the manners pass runs — greeting, conceding, leaving. Cheap, and none of it is
@@ -135,23 +151,43 @@ const HERO_CHASE = 700;
 const SCOUT_AT = 60;
 const SCOUT_ARRIVED = 400;
 /**
- * How far off the enemy's town centre the scout STOPS.
+ * How far off the enemy's town CENTRE the scout stops.
  *
- * A scout looks at a base; it does not walk into one. Aiming leg 0 at the base's own centre
- * (which is what this used to do) marches a lone worker through the front door, past the
- * towers and into the army — it dies, and `scoutDone` latches, so that one walk is the whole
- * of what the AI ever learns. Standing off instead sees the same thing and comes back: a
- * worker's day sight is 1400+ and a melee start location's buildings sit well inside 900, so
- * from here the whole base is inside the scout's own vision (`AiPlayer.knows` is exactly
- * that — see the fog note on `scoutPass`).
+ * A scout looks at a base; it does not walk into one. Two things this has to be measured
+ * from, and getting either wrong is what put a worker in the middle of somebody's army:
+ *
+ *  • The CENTRE, which is the enemy's START LOCATION (`scoutWaypoint`) and not the enemy
+ *    building nearest to us. `enemyBase()` hands back whatever structure is closest to OUR
+ *    home — the near EDGE of the base, or a tower they put up facing us — so a ring drawn
+ *    round it is a ring drawn round the doorstep: the stop on our own bearing is genuinely
+ *    outside, and the two beside it are 900 from an edge building and therefore well INSIDE
+ *    the base. That is the reported "the scout walks too deep and dies", and it is geometry
+ *    rather than tuning. A start location does not move and does not depend on what the
+ *    enemy has built.
+ *  • Far enough out to be outside the base, near enough in to SEE it. A worker's sight is
+ *    800 by day and 600 by night (UnitBalance.slk `sight`/`nsight`; a Wisp's is 1000/750) —
+ *    NOT the 1400 an earlier comment here claimed — so a stop has to be about a base radius
+ *    out, not a screen. A melee main's buildings sprawl to roughly 600-1000 from the hall
+ *    (`AiPlayer`'s own placement rings), so from 1000 the scout stands at the edge of the
+ *    sprawl with its near half inside its own eyes, and the tech is read off the buildings
+ *    it can see rather than off the hall it cannot reach.
  *
  * It is also what a player does, and for the same reason.
  */
-const SCOUT_STANDOFF = 900;
-/** Radians between the stops it makes AROUND the base. Roughly 63 degrees, so three stops
- *  sweep an arc of about 126 and a base is looked at from three sides rather than one. */
-const SCOUT_ARC = 1.1;
-/** Stops on the standoff ring before the tour moves on to the gold mines. */
+const SCOUT_STANDOFF = 1000;
+/**
+ * Radians between the stops it makes AROUND the base. Roughly 40 degrees, so three stops
+ * sweep an arc of about 80 and the base is looked at from three angles on the side the scout
+ * arrived from.
+ *
+ * NARROW on purpose. At 1.1 (63 degrees each way) the three stops spanned 126 degrees, which
+ * is not a look from three sides — it is a lap, and a melee main sits on a plateau with one
+ * ramp, so the walk from one stop to the next is routed by the pathfinder straight back
+ * through the base it was standing off. Keeping the sweep on the approach side means every
+ * leg of the tour is a walk the scout can make without crossing the enemy's front door.
+ */
+const SCOUT_ARC = 0.7;
+/** Stops on the standoff ring before the tour moves on to the OTHER start locations. */
 export const SCOUT_RING_LEGS = 3;
 
 /**
@@ -161,7 +197,12 @@ export const SCOUT_RING_LEGS = 3;
  * The first stop is on the bearing the scout is already coming from (our home), because that is
  * the side it reaches first and walking round to a far side to begin is a walk past the whole
  * base. The next two step off it by `SCOUT_ARC` either way, so the base is looked at from three
- * sides without the scout ever being inside it.
+ * angles on that same side and the scout is never inside it — and never behind it either, which
+ * is a walk through it on every map whose main sits on a plateau with one ramp.
+ *
+ * `base` is the enemy's START LOCATION (`scoutWaypoint`), which is what makes the ring mean
+ * "outside the base": drawn round the enemy building nearest to US, which is what this used to
+ * be handed, the two side stops sit 900 from the near EDGE and therefore inside the base.
  *
  * Pure, and exported, so the one thing that actually matters about it — that every stop is
  * OUTSIDE the base — is pinned by a test rather than by reading it (tools/ai-plus-items-test).
@@ -175,9 +216,35 @@ export function scoutRing(
   const a = approach + (leg === 0 ? 0 : leg === 1 ? SCOUT_ARC : -SCOUT_ARC);
   return { x: base.x + Math.cos(a) * SCOUT_STANDOFF, y: base.y + Math.sin(a) * SCOUT_STANDOFF };
 }
-/** Total legs: the ring, then the gold mines nearest the enemy (where an expansion would be),
- *  then home. */
-const SCOUT_LEGS = SCOUT_RING_LEGS + 2;
+/**
+ * HOW OFTEN THE SCOUT IS THOUGHT ABOUT — its own clock, not the army's.
+ *
+ * This used to run inside `armyPass`, whose period is the difficulty's reaction time:
+ * three seconds on Easy, 1.5 on Normal. A worker walks 190-350 a second, so on Easy the
+ * route was re-asked once every 600-1000 units of walking — wider than `CREEP_BERTH`
+ * itself. Every arc round a camp was therefore decided once and then walked blind, which is
+ * exactly the "it still aggroes creep camps sometimes" report: the berth was never wrong,
+ * it was simply not being re-asked while the scout crossed it.
+ *
+ * One unit, one waypoint and one distance check, so it is cheap enough to ask twice a second
+ * whatever the difficulty — and the difficulty has no business in it anyway. An easy computer
+ * reacts to an ATTACK slowly; it does not walk into trees more often.
+ */
+const SCOUT_PERIOD = 0.5;
+
+/**
+ * HOW CLOSE SOMETHING THAT SHOOTS MAY COME BEFORE THE TOUR IS OVER.
+ *
+ * The other half of "it goes too deep and dies", and the half no amount of geometry fixes: a
+ * standoff ring says where the scout MEANT to stand, and an army that walks out to meet it or
+ * a tower that goes up while it is looking says where it actually is. A person pulls the
+ * worker out the moment either happens; nothing in the tour did.
+ *
+ * Just outside a worker's own daylight sight (800, UnitBalance.slk `sight`), so this fires on
+ * things the scout can genuinely see rather than on things the player happens to have eyes on
+ * elsewhere — and comfortably outside the reach of everything that could kill it in the open.
+ */
+const SCOUT_DANGER = 700;
 
 /**
  * HOW WIDE THE SCOUT GIVES A CREEP A BERTH.
@@ -233,13 +300,17 @@ function clearance(
  *
  * This is the half of the problem the old routine did not have at all, and it is where scouts
  * actually died. It only ever looked at camps the line ran PAST (`along >= len` was skipped), so
- * a waypoint that was ITSELF inside a camp was walked straight to. The tour's later legs are
- * GOLD MINES, and every melee map's gold mines are guarded: the scout was aimed at the middle of
- * the camp guarding the expansion, every game.
+ * a waypoint that was ITSELF inside a camp was walked straight to — and the tour's later legs
+ * used to be GOLD MINES, every one of which a melee map guards, so the scout was aimed at the
+ * middle of the camp guarding the expansion, every game. (Those legs are now the other START
+ * LOCATIONS, which nothing guards — see `scoutWaypoint` — but this still earns its place: a
+ * base whose owner has walled a camp in, and a mine the ARMY is sent to, are the same case.)
  *
- * Standing off instead is what a player does and it costs the tour nothing — a worker's day
- * sight is 1400+ (UnitBalance.slk `sight`), so a look from the edge of the berth has seen the
- * mine and whatever is sitting on it.
+ * Standing off instead is what a player does. It costs the tour some of the look rather than
+ * none of it — a worker sees 800 by day and 600 by night (UnitBalance.slk `sight`/`nsight`;
+ * a Wisp 1000/750), so from the edge of a 900 berth the camp itself is a step beyond its
+ * eyes — and that trade is the right way round: the whole point of the leg is the ground it
+ * is standing on being denied, which it has now learnt without dying to learn it.
  */
 function standOff(
   from: { x: number; y: number },
@@ -958,6 +1029,11 @@ interface Brain {
   scoutStill: number;
   /** `b.clock` when the scout set out — the tour's own deadline (`SCOUT_TOUR`). */
   scoutSince: number;
+  /** What the scout's health was last pass. A drop means somebody is shooting at it, which
+   *  ends the tour — see `scoutPass`. */
+  scoutHp: number;
+  /** The scout's own clock, which is NOT the army's — see `SCOUT_PERIOD`. */
+  scoutIn: number;
   mode: Mode;
   /** When the wave first found itself short at the muster point (-1 = it is gathered). The
    *  deadline on `gathered`, without which one stuck soldier holds the army at home for ever. */
@@ -995,6 +1071,10 @@ interface Brain {
    *  workers before it looks up. */
   threatSince: number;
   greeted: boolean;
+  /** WHEN this seat says its "glhf" — drawn once, off its own stream, inside the window
+   *  `GREET_AT`…`GREET_AT + GREET_SPREAD` (plus/chatter.ts). A moment rather than a slot beat,
+   *  so the lobby's greetings arrive in a different order and at different gaps each match. */
+  greetAt: number;
   /** When the position first looked unwinnable (-1 = it doesn't). */
   hopelessSince: number;
 
@@ -1127,6 +1207,8 @@ export class ComputerPlusAi {
       scoutGoal: null,
       scoutDone: false,
       scoutWas: null,
+      scoutHp: 0,
+      scoutIn: 0,
       scoutStill: 0,
       scoutSince: 0,
       mode: "massing",
@@ -1142,6 +1224,9 @@ export class ComputerPlusAi {
       lastWaveEnd: 0,
       threatSince: -1,
       greeted: false,
+      // Tenths of a second off the seat's own stream, so it is as deterministic-per-seed as
+      // every other Computer+ decision and as unpredictable between matches as the seed is.
+      greetAt: GREET_AT + ai.randomInt(0, GREET_SPREAD * 10) / 10,
       hopelessSince: -1,
       allies: [],
       alliesAt: -Infinity,
@@ -1268,6 +1353,15 @@ export class ComputerPlusAi {
         b.items.pass(b.clock, this.itemCtx(b));
         simProfile.end("sim.ai.items");
         simProfile.gauge("aiItemPass", perfNow() - t1);
+      }
+      // THE SCOUT, on its OWN clock rather than the army's — see `SCOUT_PERIOD`. `hold` after
+      // it, because the pass is what decides whether there IS a scout, and the economy may not
+      // re-task one; leaving that to the next army pass handed the worker back to the mine for
+      // up to three seconds on Easy.
+      if ((b.scoutIn -= dt) <= 0) {
+        b.scoutIn = SCOUT_PERIOD;
+        this.scoutPass(b);
+        this.hold(b);
       }
       if ((b.mannersIn -= dt) <= 0) {
         b.mannersIn = MANNERS_PERIOD;
@@ -1411,7 +1505,6 @@ export class ComputerPlusAi {
     this.prune(b);
     this.scoutEnemy(b);
     this.recruit(b);
-    this.scoutPass(b);
     this.hold(b);
     // The base's own defences, and the wounded, before anything is aimed anywhere: a peon in a
     // burrow and a Grunt at a well are both decisions about home, and both are wrong to take
@@ -1651,9 +1744,17 @@ export class ComputerPlusAi {
    *
    * Computer+ never bypasses the fog (see the file header), so this is the only way it can
    * find out about an enemy expansion — `AiPlayer.enemyExpansion` is gated on `knows`, and
-   * `knows` for this AI means "under my own eyes". One worker, one tour: the enemy's main base
-   * and then the nearest few gold mines, and then home. It is not replaced when it dies, which
-   * is both what a player does and what stops a computer feeding workers to a creep camp.
+   * `knows` for this AI means "under my own eyes". One worker, one tour: round the outside of
+   * the nearest enemy's main base, then the other enemy START LOCATIONS, then home
+   * (`scoutWaypoint`). It is not replaced when it dies, which is both what a player does and
+   * what stops a computer feeding workers to a creep camp.
+   *
+   * AND IT COMES HOME ALIVE. Three separate rules, because the scout was dying three separate
+   * ways: it stands off a base's CENTRE rather than its doorstep (`SCOUT_STANDOFF`), it gives
+   * the leg up rather than walking a step that is inside a creep's notice (`CREEP_BERTH`), and
+   * it abandons the tour the moment it is shot at or something that shoots comes near
+   * (`SCOUT_DANGER`). The third is the one no geometry could have covered: where the scout
+   * MEANT to stand says nothing about where the enemy army decided to walk.
    */
   private scoutPass(b: Brain): void {
     if (!b.profile.scout || b.scoutDone) return;
@@ -1687,8 +1788,28 @@ export class ComputerPlusAi {
       b.scoutWas = { x: worker.x, y: worker.y };
       b.scoutStill = 0;
       b.scoutSince = b.clock;
+      b.scoutHp = worker.hp;
       return;
     }
+    // IT RUNS AT THE FIRST SCRATCH. A worker has no answer to anything it can meet out there,
+    // so the only question a hit raises is whether the tour is worth dying for, and it never
+    // is: what is left to look at is worth less than the worker, and a scout that walks home
+    // hurt has already delivered everything it saw on the way in. Read off the HP falling
+    // rather than off a damage event, because "am I being shot at" is a question the order
+    // system cannot answer and a comparison against last pass can.
+    //
+    // ONLY ONCE IT HAS LEFT, and that clause is not a detail: `tourOver` LATCHES `scoutDone`,
+    // so a rush standing in our own base at the sixtieth second would end scouting for the
+    // whole match before the worker had taken a step. Being shot at at home is the defence
+    // pass's business (`defendPass`), not the tour's — the tour has not begun. It also means
+    // the scan below is only ever run by a scout that is actually out.
+    const home = b.ai.home();
+    if (Math.hypot(scout.x - home.x, scout.y - home.y) > TOWN_RADIUS) {
+      if (scout.hp < b.scoutHp) return this.tourOver(b, scout);
+      // …and it does not wait to be hit when it can see what is coming — see `SCOUT_DANGER`.
+      if (this.scoutInDanger(b, scout)) return this.tourOver(b, scout);
+    }
+    b.scoutHp = scout.hp;
     // THE TOUR HAS A DEADLINE — see `SCOUT_TOUR`. Every other way out of this routine is an
     // event, so a tour whose events never arrive holds a worker out of the economy for the
     // rest of the match. Written as "the tour is over" rather than as a special case, so it
@@ -1704,7 +1825,7 @@ export class ComputerPlusAi {
       b.scoutWas = { x: scout.x, y: scout.y };
       b.scoutStill = 0;
     } else {
-      b.scoutStill += b.profile.armyPeriod;
+      b.scoutStill += SCOUT_PERIOD;
     }
     const stuck = b.scoutStill >= SCOUT_STUCK_AFTER;
     if (stuck) {
@@ -1721,20 +1842,58 @@ export class ComputerPlusAi {
     const goal = this.scoutWaypoint(b);
     // NO WAYPOINT is two different things and only one of them ends the tour. A tour that has
     // run off the end of its legs is finished; a tour that cannot name leg 0 because there is
-    // nothing to look at yet (no enemy building this player can find, a map with one start
-    // location) is simply not ready — and latching on THAT, which is what this used to do,
-    // switched scouting off for the whole match on the first pass it ran.
-    if (!goal && b.scoutLeg <= SCOUT_LEGS) {
-      b.scoutGoal = null;
-      return;
+    // nothing to look at yet (no start location, no enemy building this player can find) is
+    // simply not ready — and latching on THAT, which is what this used to do, switched
+    // scouting off for the whole match on the first pass it ran.
+    if (!goal) {
+      if (b.scoutLeg === 0) { b.scoutGoal = null; return; }
+      return this.tourOver(b, scout);
     }
-    if (!goal) return this.tourOver(b, scout);
     b.scoutGoal = goal;
     // ROUND the creep camps, not through them — see `safeLeg`. The GOAL is unchanged (the tour
     // still visits what it set out to visit); what is re-aimed is the step taken towards it,
-    // which is re-asked every time this pass re-issues, so the scout walks an arc round a camp
-    // rather than a line into one.
-    b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...this.safeStep(scout, goal) }, queued: false });
+    // which is re-asked every `SCOUT_PERIOD`, so the scout walks an arc round a camp rather
+    // than a line into one.
+    const creeps = this.liveCreeps();
+    const step = safeLeg(scout, goal, creeps);
+    // …AND IT TAKES NO FOR AN ANSWER. `safeLeg` hands back the BEST leg it found, which is not
+    // always a SAFE one: a camp between us and the waypoint with no room to go round it still
+    // yields a step that walks inside its notice, and the scout took it — which is most of the
+    // remaining "it still aggroes creep camps sometimes". Standing clear of every creep and
+    // being offered a step that is not clear is the moment to give the leg up, because the
+    // tour's whole value is the legs after it and a dead scout has none.
+    //
+    // Asked as "am I clear NOW" rather than unconditionally, so a scout a camp has already
+    // walked up to is not frozen by its own rule — there is no clear step from inside a berth,
+    // and the answer to that position is the retreat above, not a refusal to move.
+    if (clearance(scout, scout, creeps) >= CREEP_BERTH && clearance(scout, step, creeps) < CREEP_BERTH) {
+      b.scoutLeg++;
+      b.scoutGoal = null;
+      return;
+    }
+    b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...step }, queued: false });
+  }
+
+  /**
+   * Is something that could kill the scout within `SCOUT_DANGER` of it?
+   *
+   * Anything ARMED and hostile — the enemy army, a tower that has gone up while the scout was
+   * looking, a creep whose camp the route misjudged. A worker is not a threat (it is what the
+   * scout itself is) and neither is an unarmed building, or the tour would abandon itself on
+   * the first Farm it saw.
+   *
+   * Gated on `knows` like everything else this AI decides on: at 700 the scout's own eyes
+   * (sight 800) already cover it, so this is honest by construction rather than by promise —
+   * but saying it in the code means a later change to the radius cannot quietly turn it into
+   * a fog bypass.
+   */
+  private scoutInDanger(b: Brain, scout: SimUnit): boolean {
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.owner === b.ai.player || u.weapons.length === 0) continue;
+      if (u.isPeon || !b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
+      if (Math.hypot(u.x - scout.x, u.y - scout.y) <= SCOUT_DANGER) return true;
+    }
+    return false;
   }
 
   /**
@@ -1762,14 +1921,11 @@ export class ComputerPlusAi {
    * Two ways to have looked, and the second is the one the tour needs. Standing within
    * `SCOUT_ARRIVED` of the waypoint is the obvious one. The other is standing as close to it as
    * the creeps guarding it allow: `safeStep` stands the walk OFF a camp sitting on the
-   * destination rather than walking into it (see `standOff`), so a leg aimed at a guarded gold
-   * mine — which on a melee map is all of them — hands back a step of nowhere once the scout has
-   * reached the edge of the berth. Reading that as arrival is what makes standing off a decision
-   * instead of a stall: without it the scout stood at the edge of the camp doing nothing until
-   * `SCOUT_STUCK_AFTER` wrote the leg off eight seconds later, every leg, every game.
-   *
-   * A worker's day sight is 1400+ (UnitBalance.slk `sight`) and a berth is 900, so the edge of
-   * the berth has already seen the mine and whatever is sitting on it.
+   * destination rather than walking into it (see `standOff`), so a leg something has camped on
+   * hands back a step of nowhere once the scout has reached the edge of the berth. Reading that
+   * as arrival is what makes standing off a decision instead of a stall: without it the scout
+   * stood at the edge of the camp doing nothing until `SCOUT_STUCK_AFTER` wrote the leg off
+   * eight seconds later, every leg, every game.
    */
   private lookedAt(scout: SimUnit, goal: { x: number; y: number }): boolean {
     if (Math.hypot(scout.x - goal.x, scout.y - goal.y) <= SCOUT_ARRIVED) return true;
@@ -1798,6 +1954,12 @@ export class ComputerPlusAi {
    * is a creep whose acquisition circle has moved with it.
    */
   private safeStep(from: { x: number; y: number }, to: { x: number; y: number }): { x: number; y: number } {
+    return safeLeg(from, to, this.liveCreeps());
+  }
+
+  /** Every creep still standing, as points — the haystack `safeStep` and `scoutPass` both
+   *  measure a berth against. See `safeStep` for why it is every MEMBER and not the camp. */
+  private liveCreeps(): Array<{ x: number; y: number }> {
     const creeps: Array<{ x: number; y: number }> = [];
     for (const camp of this.host.creepCamps()) {
       for (const id of camp.members) {
@@ -1805,30 +1967,75 @@ export class ComputerPlusAi {
         if (c && c.hp > 0) creeps.push({ x: c.x, y: c.y });
       }
     }
-    return safeLeg(from, to, creeps);
+    return creeps;
   }
 
   /**
-   * The tour: around the OUTSIDE of the enemy's main base, then the gold mines nearest to it.
+   * THE ITINERARY: every enemy START LOCATION, nearest to us first.
    *
-   * The first `SCOUT_RING_LEGS` legs are points on a ring of `SCOUT_STANDOFF` about the base's
+   * This is what a melee player's first worker walks, and it is the map's own list rather
+   * than anything this player has had to see — `PlusHost.startLocations` says at length why
+   * reading it is not a fog bypass (`AiPlayer.knows` already exempts the enemy main for
+   * exactly the same reason, and the classic AI's waves have always walked to them).
+   *
+   * Ordered by distance from HOME rather than from the scout, so the list a leg is indexed
+   * into does not reshuffle underneath the tour as the worker walks along it.
+   */
+  private scoutStops(b: Brain): Array<{ x: number; y: number }> {
+    const me = b.ai.player;
+    const home = b.ai.home();
+    return this.host.startLocations()
+      .filter((s) => s.player !== me && !this.host.coAllied(me, s.player))
+      .map((s) => ({ x: s.x, y: s.y, d: Math.hypot(s.x - home.x, s.y - home.y) }))
+      .sort((p, q) => p.d - q.d)
+      .map(({ x, y }) => ({ x, y }));
+  }
+
+  /**
+   * The tour: around the OUTSIDE of the nearest enemy's main base, then the OTHER enemy start
+   * locations.
+   *
+   * The first `SCOUT_RING_LEGS` legs are points on a ring of `SCOUT_STANDOFF` about that base's
    * centre — never the centre itself, which is the middle of somebody's army. The first is on
    * the bearing the scout is already coming from (our home), because that is the side it
    * reaches first and walking round to a far side to begin is a walk past the whole base; the
-   * next two step off it by `SCOUT_ARC` either way, so the base is looked at from three sides.
-   * Then the mines, which is where an expansion would be.
+   * next two step off it by `SCOUT_ARC` either way, so the base is looked at from three angles
+   * on the side it arrived from.
+   *
+   * THEN THE OTHER START LOCATIONS, and this replaces the GOLD MINES the tour used to finish
+   * on. Two things were wrong with the mines and only one of them was tuning:
+   *
+   *  • A melee map's gold mines are GUARDED, every one of them. The tour therefore ended by
+   *    aiming a lone worker at a creep camp — `standOff` was written to stop it walking all
+   *    the way in, but a leg whose whole purpose is to approach a camp is a leg spent standing
+   *    at the edge of one, and every pass that misjudged the berth was paid for with the scout.
+   *  • They are not what the scout is FOR. What a person wants out of the first worker is the
+   *    opponents' bases — who is where, what race, what they have built — and on a melee map
+   *    that is precisely the start locations. An expansion is read off the same walk anyway:
+   *    an enemy hall standing somewhere the map promised nobody is what `AiPlayer.knows` and
+   *    `enemyExpansion` are looking for, and the route between two start locations passes the
+   *    ground between them.
+   *
+   * Each of them is STOOD OFF exactly as the first base is (`scoutRing` leg 0), so the rule
+   * "a scout looks at a base, it does not walk into one" holds for the whole tour and not only
+   * for its opening.
    */
   private scoutWaypoint(b: Brain): { x: number; y: number } | null {
-    if (b.scoutLeg > SCOUT_LEGS) return null;
-    const base = b.ai.enemyBase();
-    if (!base) return null;
     const home = b.ai.home();
+    const stops = this.scoutStops(b);
+    // A custom map with no start locations to read, or a lobby that named none: fall back to
+    // whatever enemy building this player can name, and the ring is then the whole tour.
+    let base: { x: number; y: number } | null = stops[0] ?? null;
+    if (!base) {
+      const found = b.ai.enemyBase();
+      base = found ? { x: found.x, y: found.y } : null;
+    }
+    if (!base) return null;
     if (b.scoutLeg < SCOUT_RING_LEGS) return scoutRing(base, home, b.scoutLeg);
-    const mines = [...this.host.world.mines.values()]
-      .filter((m) => m.gold > 0 && Math.hypot(m.x - home.x, m.y - home.y) > TOWN_RADIUS)
-      .sort((p, q) => Math.hypot(p.x - base.x, p.y - base.y) - Math.hypot(q.x - base.x, q.y - base.y));
-    const mine = mines[b.scoutLeg - SCOUT_RING_LEGS];
-    return mine ? { x: mine.x, y: mine.y } : null;
+    // Leg SCOUT_RING_LEGS is the SECOND start location — the first one is what the ring was
+    // drawn round — and so on until the map runs out of enemies, which ends the tour.
+    const next = stops[b.scoutLeg - SCOUT_RING_LEGS + 1];
+    return next ? scoutRing(next, home, 0) : null;
   }
 
   /**
@@ -3177,7 +3384,7 @@ export class ComputerPlusAi {
 
   private mannersPass(b: Brain): void {
     const { ai, profile } = b;
-    if (!b.greeted && b.clock >= GREET_AT + GREET_STAGGER * ai.player) {
+    if (!b.greeted && b.clock >= b.greetAt) {
       b.greeted = true;
       this.host.say(ai.player, GREETINGS[ai.randomInt(0, GREETINGS.length - 1)]);
     }
@@ -3277,8 +3484,8 @@ export class ComputerPlusAi {
     if (b.opened) return;
     // AFTER THE GREETINGS — every seat's, not only this one's. `OPENER_AT` is the floor the
     // developer asked for (fourteen seconds, by which time the "glhf"s should be gone) and
-    // `greetingsDone` is the rest of it: the greetings are staggered per SLOT, so on a full map
-    // the last one lands later than any fixed floor can know, and the two sets of lines
+    // `greetingsDone` is the rest of it: each seat's greeting lands at a moment it drew for
+    // itself, so the last one is later than any fixed floor can know, and the two sets of lines
     // interleaved into one wall at the start of the match.
     if (b.clock < Math.max(OPENER_AT, this.greetingsDone()) + GREET_STAGGER * this.seatOrder(b)) return;
     b.opened = true;
@@ -3293,16 +3500,17 @@ export class ComputerPlusAi {
   }
 
   /**
-   * When the LAST seat's greeting goes out — `GREET_AT` plus the stagger of the highest slot
-   * that is actually seated (plus/chatter.ts `mannersPass` says it in the same terms).
+   * When the LAST seat's greeting goes out — the latest `Brain.greetAt` actually drawn.
    *
    * Off the seats that exist rather than off `MELEE.MAX_PLAYERS`, so a 1v1 does not hold its
-   * openers back for a lobby's worth of greetings that were never said.
+   * openers back for a lobby's worth of greetings that were never said. Read from the drawn
+   * moments rather than from the window's ceiling for the same reason: two computers that both
+   * rolled early should not hold the openers back to `GREET_AT + GREET_SPREAD` regardless.
    */
   private greetingsDone(): number {
-    let last = 0;
-    for (const other of this.brains) if (!other.gone) last = Math.max(last, other.ai.player);
-    return GREET_AT + GREET_STAGGER * last;
+    let last = GREET_AT;
+    for (const other of this.brains) if (!other.gone) last = Math.max(last, other.greetAt);
+    return last;
   }
 
   /** This computer's place among the Computer+ seats (0, 1, 2 …) rather than its LOBBY SLOT.

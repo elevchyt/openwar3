@@ -795,8 +795,14 @@ export class RtsController {
   prepareMeleeAI(
     slots: ReadonlyArray<{ player: number; race: PlayableRace; startX: number; startY: number; difficulty: number; plus?: boolean }>,
     seed: number,
+    starts: ReadonlyArray<{ player: number; x: number; y: number }> = slots.map((s) => ({ player: s.player, x: s.startX, y: s.startY })),
   ): void {
     this.meleeSeats = new Map(slots.map((s) => [s.player, s]));
+    // EVERY playing seat's start location, computers and people alike — what a Computer+ scout
+    // walks its tour round (src/ai/plus/, `PlusHost.startLocations`). `slots` is only the
+    // computers, so this is a second list rather than a projection of that one; it defaults to
+    // the computers' own so an older caller still names something real.
+    this.meleeStarts = starts;
     this.meleeSeed = seed;
     // Built here rather than as a field: `this.sim` is assigned in the constructor BODY, so a
     // field initializer that reached for it would capture `undefined`.
@@ -820,6 +826,7 @@ export class RtsController {
       // script is already listening for.
       say: (player, text, scope) => this.onChatSaid?.({ from: player, text, target: { scope: scope ?? "all" } }),
       leave: (player) => this.onPlayerLeft?.(player),
+      startLocations: () => this.meleeStarts,
     };
     this.meleeAi = new MeleeAi(host);
     this.computerPlus = new ComputerPlusAi(host);
@@ -828,6 +835,8 @@ export class RtsController {
   /** The lobby's answer for each computer seat — where it starts, how hard it plays, and which
    *  of the two AIs plays it — held until the map's script asks for it. Empty outside a match. */
   private meleeSeats = new Map<number, { player: number; race: PlayableRace; startX: number; startY: number; difficulty: number; plus?: boolean }>();
+  /** Where every PLAYING seat starts — the lobby's own list, held for the Computer+ scout. */
+  private meleeStarts: ReadonlyArray<{ player: number; x: number; y: number }> = [];
   private meleeSeed = 1;
 
   /**

@@ -81,14 +81,80 @@ walking a worker past the enemy's base is the only way it can ever learn about a
 (`AiPlayer.enemyExpansion` is gated on `knows`). One worker, one tour, never replaced when it
 dies.
 
-The tour goes **around** that base, never into it — `scoutRing`, three stops on a ring of
-`SCOUT_STANDOFF` about the enemy's town centre, starting on the side the scout is already coming
-from and stepping off it either way, then the gold mines nearest them. Aiming the first leg at
-the town centre (which is what it used to do) marches a lone worker through the front door, past
-the towers and into the army: it dies, `scoutDone` latches because nobody follows a scout that
-did not come back, and that one walk is the whole of what the AI ever learns about the map. A
-worker's day sight is 1400+ and a melee start's buildings sit well inside 900, so standing off
-sees the same thing and comes home. It is also what a player does, and for the same reason.
+### The tour is the enemy START LOCATIONS
+
+`scoutWaypoint`. Three stops on a ring of `SCOUT_STANDOFF` (1000) about the **nearest enemy's
+start location**, starting on the side the scout is already coming from and stepping off it by
+`SCOUT_ARC` either way — then the **other enemy start locations**, each stood off the same way,
+then home.
+
+Every noun in that sentence was something else once, and each of them was a way the scout died.
+
+- **The centre of the ring is a START LOCATION, not `enemyBase()`.** `enemyBase()` hands back the
+  enemy structure nearest to *our* home — the near **edge** of their base, or a tower they put up
+  facing us — so a ring drawn round it is a ring drawn round the doorstep: the stop on our own
+  bearing is genuinely outside, and the two beside it are 1000 from an edge building and therefore
+  well **inside** the base. That is "the scout walks too deep and dies", and it is geometry rather
+  than tuning. A start location does not move and does not depend on what the enemy has built.
+  Reading them is not a fog bypass — it is the same exemption `AiPlayer.knows` already states for
+  the enemy main (*"every melee player is handed the start locations — that is what a melee map's
+  start locations ARE"*), plumbed in as `PlusHost.startLocations`.
+- **The later legs are start locations and no longer GOLD MINES.** A melee map's mines are
+  *guarded*, every one of them, so the tour used to finish by aiming a lone worker at a creep camp
+  — `standOff` kept it from walking all the way in, but a leg whose whole purpose is to approach a
+  camp is a leg spent standing at the edge of one. They are also not what a scout is *for*: what a
+  person wants out of the first worker is the opponents' bases, and on a melee map that is exactly
+  the start locations. The expansion is read off the same walk anyway — an enemy hall standing
+  where the map promised nobody is what `enemyExpansion` looks for, and the route between two
+  start locations passes the ground between them.
+- **`SCOUT_ARC` is 0.7 rad (about 40°), not 1.1.** Three stops 63° apart span 126°, which is not
+  a look from three sides — it is a lap, and a melee main sits on a plateau with one ramp, so the
+  walk from one stop to the next is routed by the pathfinder straight back through the base it was
+  standing off.
+- **`SCOUT_STANDOFF` is measured against the real sight radius.** A worker sees **800** by day and
+  600 by night (`UnitBalance.slk` `sight`/`nsight`; a Wisp 1000/750) — *not* the 1400 an earlier
+  comment in this file claimed. A melee main's buildings sprawl to roughly 600-1000 from the hall,
+  so from 1000 the scout stands at the edge of the sprawl with its near half inside its own eyes,
+  and the tech is read off the buildings it can see rather than off the hall it cannot reach.
+
+Aiming the first leg at the town centre, which is what the very first version did, marches a lone
+worker through the front door, past the towers and into the army: it dies, `scoutDone` latches
+because nobody follows a scout that did not come back, and that one walk is the whole of what the
+AI ever learns about the map.
+
+### It runs at the first scratch
+
+No amount of geometry covers this one, and it is the other half of "it goes too deep and dies": a
+standoff ring says where the scout *meant* to stand, and an army that walks out to meet it or a
+tower that goes up while it is looking says where it actually is. So two rules end the tour on the
+spot, both in `scoutPass`:
+
+- **Its health went down.** Read off the HP falling since last pass rather than off a damage event
+  — *"am I being shot at"* is a question the order system cannot answer and a comparison can. What
+  is left to look at is worth less than the worker, and a scout that walks home hurt has already
+  delivered everything it saw on the way in.
+- **Something armed and hostile is within `SCOUT_DANGER` (700).** The enemy army, a tower that went
+  up while it was looking, a creep the route misjudged. Workers and unarmed buildings are not
+  threats, or the tour would abandon itself on the first Farm it saw. 700 is just inside a worker's
+  own daylight sight, so the rule fires on what the scout can genuinely see; it is still gated on
+  `knows` so a later change to the radius cannot quietly turn it into a fog bypass.
+
+Both are asked **only once the scout has left home** (`TOWN_RADIUS`), and that clause is not a
+detail: `tourOver` latches `scoutDone`, so a rush standing in our own base at the sixtieth second
+would otherwise end scouting for the whole match before the worker had taken a step. Being shot at
+at home is `defendPass`'s business, not the tour's — the tour has not begun.
+
+### …and it is thought about on its own clock
+
+`SCOUT_PERIOD` (0.5 s), not `armyPeriod`. The pass used to run inside `armyPass`, whose period is
+the difficulty's *reaction* time: three seconds on Easy, 1.5 on Normal. A worker walks 190-350 a
+second, so on Easy the route was re-asked once every 600-1000 units of walking — **wider than
+`CREEP_BERTH` itself**. Every arc round a camp was decided once and then walked blind, which is
+most of "it still aggroes creep camps sometimes": the berth was never wrong, it was simply not
+being re-asked while the scout crossed it. One unit and one distance check is cheap enough to ask
+twice a second at any difficulty, and the difficulty has no business in it anyway — an easy
+computer reacts to an *attack* slowly; it does not walk into trees more often.
+
 
 And it comes home **walked**, not merely released. Dropping the scout out of `held` is what lets
 the harvest plan have it again, but the plan assigns jobs, not journeys: a worker released
@@ -115,10 +181,11 @@ dying on the way out:
 - **A goal that is itself inside a camp is stood off**, not walked into (`standOff`). The old
   routine only ever looked at camps the line ran *past* — a camp beyond the goal was "not on the
   way" — and the tour's later legs are **gold mines**, every one of which a melee map guards. It
-  aimed the scout at the middle of the camp sitting on the expansion, every game. Standing off
-  costs the tour nothing (day sight is 1400+, a berth is 900) and `lookedAt` reads "the next safe
-  step is nowhere" as *arrival*, so the leg completes there rather than stalling until
-  `SCOUT_STUCK_AFTER` writes it off.
+  aimed the scout at the middle of the camp sitting on the expansion, every game. (Those legs are
+  now the other start locations, which nothing guards — but this still earns its place: a base
+  whose owner has walled a camp in, and a mine the *army* is sent to, are the same case.)
+  `lookedAt` reads "the next safe step is nowhere" as *arrival*, so the leg completes there rather
+  than stalling until `SCOUT_STUCK_AFTER` writes it off.
 - **Then it goes round.** The first creep within the berth is stepped around perpendicular to the
   line, preferring the side it is not on; the throw is then **widened a step at a time and the
   resulting leg re-measured against every creep**, both sides at each width, because one fixed
@@ -127,6 +194,15 @@ dying on the way out:
   already *within* the berth of where the scout stands is excluded from the detour, since no
   waypoint avoids it and leaving it in scored every candidate equally badly and cancelled the
   detour round the camp it could still go round.
+
+**And it takes no for an answer.** `safeLeg` hands back the *best* leg it found, which is not
+always a *safe* one: a camp between the scout and its waypoint with no room to go round still
+yields a step inside the camp's notice, and the scout took it — the rest of "it still aggroes
+creep camps sometimes". Standing clear of every creep and being offered a step that is not clear
+now gives the **leg** up instead, because the tour's whole value is the legs after it and a dead
+scout has none. Asked as *"am I clear now"* rather than unconditionally, so a scout a camp has
+already walked up to is not frozen by its own rule: there is no clear step from inside a berth,
+and the answer to that position is the retreat above, not a refusal to move.
 
 **One scout, and nobody follows it.** `scoutDone` latches the moment the scout dies. This briefly
 allowed a second (*"a worker is 75 gold and the map is worth more than that"*) and the second
@@ -1373,12 +1449,23 @@ and the hero it just walked away from is standing right there.
 
 Two things the classic AI never does, both asked for by the issue, and both deliberately plain —
 AMAI gives its bots invented names and a joke book, and issue #124 rules out both in as many
-words. Six lines of ladder shorthand, drawn off the AI's own RNG stream, spoken by whatever the
-lobby already calls that slot.
+words. Lines of anonymous ladder shorthand, drawn off the AI's own RNG stream, spoken by whatever
+the lobby already calls that slot.
 
 The lines go out through the **ordinary chat path** (`RtsController.onChatSaid` →
 `MapViewerScene.deliverChat`), so a computer's "glhf" is routed, tagged, coloured, logged and
 relayed to LAN clients exactly like a typed one, and a map with a chat trigger sees it.
+
+**Both the line and the moment are drawn.** `GREETINGS` is ten openers rather than three: three
+shared between a lobby's worth of computers is not a draw, it is a rotation, and on a four-player
+map two of them said the same word every game. And *when* each one speaks is drawn per seat into
+the window `GREET_AT`…`GREET_AT + GREET_SPREAD` (2-8 s, `Brain.greetAt`) instead of being
+`GREET_AT + GREET_STAGGER × slot` — which is a metronome: every seat spoke, in ascending slot
+order, exactly a second apart, every match. Two computers landing on the same beat and then a
+pause is what a lobby actually sounds like. It is still deterministic *per seed*, like every other
+Computer+ decision. `GREET_STAGGER` survives because the **ally openers** are still staggered by
+it (`openerTalk`), where a fixed beat is right: those are sentences rather than two-letter words,
+and reading them wants them apart.
 
 ### Conceding, without demolishing the base
 
@@ -1464,11 +1551,11 @@ length why that distinction is load-bearing.
 ### What it says
 
 **Nothing before the greetings are done.** `OPENER_AT` is a fourteen-second floor, and
-`greetingsDone` is the rest of it: the "glhf"s are staggered per *slot* (`GREET_AT` +
-`GREET_STAGGER` × player), so on a full map the last one lands later than any fixed floor can
-know, and the openers used to interleave with them into one wall at the start of the match. It is
-worked out from the seats that actually exist, so a 1v1 does not hold its openers back for a
-lobby's worth of greetings nobody said.
+`greetingsDone` is the rest of it: each seat's "glhf" lands at a moment it drew for itself
+(`Brain.greetAt`), so the last one is later than any fixed floor can know, and the openers used to
+interleave with them into one wall at the start of the match. It is read off the moments actually
+drawn rather than off the window's ceiling, so a 1v1 — and a lobby whose computers all rolled
+early — does not hold its openers back for greetings nobody is still going to say.
 
 * **Its build, once, near the top of the game** — *"i'm going footmen and riflemen"*. Off the
   `PlusStrategy` it rolled at seat time rather than off what it has produced, so at fourteen

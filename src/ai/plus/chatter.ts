@@ -17,15 +17,37 @@
 // and relayed to LAN clients exactly like a human player's, and a map with a chat trigger on
 // it sees the message the same way. There is no second channel.
 
-/** Openers. One is drawn per match off the AI's own RNG stream. */
-export const GREETINGS = ["glhf", "hf", "glgl"] as const;
+/**
+ * Openers. One is drawn per match off the AI's own RNG stream.
+ *
+ * WIDE ON PURPOSE. Three lines shared between a lobby's worth of computers is not a draw, it
+ * is a rotation: on a four-player map two of them said the same word every game, and with the
+ * greetings also going out in strict slot order (see `GREET_AT`) the whole opening read as one
+ * scripted line rather than as four players typing. Still anonymous ladder shorthand — issue
+ * #124 rules out personalities, and none of these say anything about who is speaking.
+ */
+export const GREETINGS = [
+  "glhf", "hf", "glgl", "gl hf", "hf gl", "gl", "gl all", "hf all", "glhf all", "gl & hf",
+] as const;
 
 /** …and what it says on the way out. */
 export const CONCESSIONS = ["gg", "gg wp", "gg, well played"] as const;
 
-/** Seconds into the match before anybody speaks, plus a stagger per slot — twelve computers
- *  all saying "glhf" on the same frame reads as a bug rather than as a lobby. */
+/**
+ * WHEN a computer says it: never before `GREET_AT`, and somewhere inside the `GREET_SPREAD`
+ * seconds after it — drawn per seat off that player's own stream (`Brain.greetAt`).
+ *
+ * It used to be `GREET_AT + GREET_STAGGER * slot`, which is a metronome: every seat spoke, in
+ * ascending slot order, exactly a second apart, every match. Drawing the moment instead makes
+ * the order and the gaps different each game — two computers landing on the same beat and then
+ * a pause is what a lobby actually sounds like, and it is the same window either way.
+ *
+ * `GREET_STAGGER` survives because the ALLY openers are still staggered by it (`openerTalk`),
+ * where a fixed beat is right: those are sentences rather than two-letter words, and reading
+ * them wants them apart.
+ */
 export const GREET_AT = 2;
+export const GREET_SPREAD = 6;
 export const GREET_STAGGER = 1;
 
 /** How long after conceding it actually leaves. Long enough to read the line. */

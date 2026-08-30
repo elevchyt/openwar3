@@ -49,13 +49,15 @@ for (let leg = 0; leg < SCOUT_RING_LEGS; leg++) {
   const d = Math.hypot(p.x - BASE.x, p.y - BASE.y);
   check(`leg ${leg} stops outside the base (${Math.round(d)} units out)`, d > BASE_RADIUS, true);
 }
-// Leg 0 is on OUR side of it — the side the scout reaches first. Anything else is a walk round
-// the whole base before it has looked at any of it.
-{
-  const p = scoutRing(BASE, HOME, 0);
+// EVERY leg is on OUR side of it — the side the scout reaches first. Anything else is a walk
+// round the whole base, which on a map whose main sits on a plateau with one ramp is the
+// pathfinder routing the scout straight back through the base it was standing off. (Leg 0 alone
+// used to be checked here, and the two beside it swept 63 degrees each way.)
+for (let leg = 0; leg < SCOUT_RING_LEGS; leg++) {
+  const p = scoutRing(BASE, HOME, leg);
   const toHome = Math.hypot(p.x - HOME.x, p.y - HOME.y);
   const baseToHome = Math.hypot(BASE.x - HOME.x, BASE.y - HOME.y);
-  check("leg 0 is on the approach side (nearer home than the base is)", toHome < baseToHome, true);
+  check(`leg ${leg} is on the approach side (nearer home than the base is)`, toHome < baseToHome, true);
 }
 // …and the other two are genuinely different vantage points, not the same spot again.
 {
