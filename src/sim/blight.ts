@@ -28,8 +28,12 @@ export class BlightGrid {
   /** Corner columns/rows — the w3e lattice, 128 units apart. */
   readonly columns: number;
   readonly rows: number;
-  private readonly originX: number;
-  private readonly originY: number;
+  /** The lattice's low corner in world space — the map's own `centerOffset`. Readable
+   *  because a corner's WORLD position is the only way to ask anything about it from outside:
+   *  the renderer has to know where corner (col, row) actually is to decide whether the local
+   *  player can see it (mapViewer.syncBlight fogs the blight). */
+  readonly originX: number;
+  readonly originY: number;
   private readonly on: Uint8Array;
   /** Corner indices whose state changed since `drainDirty` last ran. The renderer is the
    *  only consumer and it may not exist (headless), so this is capped: past the cap the

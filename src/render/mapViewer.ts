@@ -245,6 +245,18 @@ const SHOP_ARROW_FX: BuffFx = { path: "Abilities\\Spells\\Other\\Aneu\\AneuTarge
  *  hand rather than attached: they belong on the GROUND at the stations, not on the building's
  *  origin bone. */
 const MINE_CIRCLE_FX: BuffFx = { path: "Abilities\\Spells\\Undead\\UndeadMine\\UndeadMineCircle.mdx", attach: [] };
+/** The ability that IS "this creep is asleep" — `Units\NeutralAbilityFunc.txt`'s own
+ *  `[ACsp]`, commented "creeps sleeping":
+ *
+ *      Casterart    = Abilities\Spells\Other\CreepSleep\CreepSleepTarget.mdl
+ *      Casterattach = overhead
+ *      Order        = creepsleep
+ *
+ *  So the Zzz is not a piece of art we choose: it is that row's caster art worn on that
+ *  row's attachment point, looked up like any other ability (see collectSleepFx). The creep
+ *  never carries `ACsp` on its command card — the engine hangs the presentation off the
+ *  sleeping STATE — which is why this is a lookup by id rather than a walk of `u.abilities`. */
+const CREEP_SLEEP_ABILITY = "ACsp";
 // Cast sounds for spells whose effect model doesn't sit next to a folder WAV
 // (e.g. Divine Shield has no target/caster art), by base ability code.
 const SPELL_SOUND_FALLBACK: Record<string, string> = {
@@ -4450,6 +4462,7 @@ export class MapViewerScene {
     this.collectOrbAttachments(active);
     this.collectMoonWellWater(active);
     this.collectMineCircles(active);
+    this.collectSleepFx(active);
     for (const [key, inst] of this.buffFx) {
       if (!active.has(key)) this.dropBuffFx(key, inst);
     }
@@ -4543,6 +4556,37 @@ export class MapViewerScene {
   }
 
   /**
+   * The Zzz over a creep asleep at night.
+   *
+   * Whether a creep sleeps at all is a DATA field and nothing else: `Units\UnitData.slk`
+   * `canSleep` (a Gnoll 1, a Murloc 1, a Golem 0), carried onto the sim unit when a map-placed
+   * Neutral Hostile is seeded (RtsController) and spent by `SimWorld.tickCreep` — it dozes at
+   * its guard post after dusk, wakes at dawn, and wakes early for anything hostile that walks
+   * up to it. That half already worked; what a player could see of it was nothing at all, which
+   * is the same thing as it not happening.
+   *
+   * The art is the game's own and is not chosen here — see `CREEP_SLEEP_ABILITY`: `[ACsp]`'s
+   * `Casterart` on its `Casterattach`, which is why this rides the ordinary persistent-FX pool
+   * (Birth → looping Stand → Death when it wakes) and hangs off the `overhead` bone rather
+   * than being placed by hand.
+   *
+   * FOG-GATED on the creep's own model, not on the state: a sleeping camp in the dark is a
+   * camp you have not scouted, and a row of Zzz floating over black ground would be a map hack
+   * with a nice animation. `unitHidden` is the same answer the creep's body already gets.
+   */
+  private collectSleepFx(active: Set<string>): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    const def = this.abilities.get(CREEP_SLEEP_ABILITY);
+    if (!def?.casterArt) return;
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || !u.asleep) continue;
+      if (this.rts?.unitHidden(u.id)) continue; // fogged — the camp is not there to be seen
+      this.trackBuffFx(active, `sleep|${u.id}`, { path: def.casterArt, attach: def.casterAttach }, u.id);
+    }
+  }
+
+  /**
    * The WATER in a Moon Well, whose level is the well's mana.
    *
    * `[Ambt] Effectart` is a five-entry list and the data's own comment says what the five
@@ -4570,6 +4614,16 @@ export class MapViewerScene {
     for (const u of world.units.values()) {
       if (u.hp <= 0 || u.maxMana <= 0) continue;
       if (u.building && u.building.constructionLeft > 0) continue;
+      // THE WATER IS A GAUGE, AND A GAUGE MAY NOT BE READ THROUGH THE FOG.
+      //
+      // The well itself keeps its image once explored — WC3 leaves the last thing you saw
+      // standing on the ground — but this model's playhead is parked at the well's live mana
+      // (see below), so drawing it from that memory tells you, second by second and from
+      // across the map, how much healing an enemy night elf has banked and exactly when a
+      // unit has just drunk. Live sight, like every other thing that moves: no eyes on the
+      // well, no water. The pool tidies the instance away and the next look re-fills it at
+      // whatever level it has really reached.
+      if (!this.pointVisible(u.x, u.y)) continue;
       const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
       const art = ab && this.abilities.get(ab.id)?.effectArt;
       if (!art) continue;
@@ -5029,8 +5083,20 @@ export class MapViewerScene {
     const rts = this.rts;
     if (!rts) return true;
     if (fx.hostId >= 0) return !rts.unitHidden(fx.hostId);
-    const vision = rts.getVision();
-    return vision.revealed || vision.stateAt(fx.x, fx.y) === FogState.Visible;
+    return this.pointVisible(fx.x, fx.y);
+  }
+
+  /** LIVE sight of a world point — eyes on it right now, not a memory of having been there.
+   *
+   *  The distinction is the whole of what fog hides. A BUILDING you have explored keeps its
+   *  image once you walk away (WC3 leaves the last thing you saw standing on the ground), and
+   *  so does the terrain under it — but nothing that CHANGES may be drawn from that memory, or
+   *  the memory is a live feed: a Moon Well's water level, blight spreading out from a
+   *  Necropolis, a tree shuddering under somebody else's axe. Every one of those asks this. */
+  private pointVisible(x: number, y: number): boolean {
+    const vision = this.rts?.getVision();
+    if (!vision) return true;
+    return vision.revealed || vision.stateAt(x, y) === FogState.Visible;
   }
 
   /** DestroyEffect — the model dies where it stands (fadeOutFx plays its Death clip). */
@@ -5277,7 +5343,13 @@ export class MapViewerScene {
 
   private nearestDoodad(x: number, y: number, doodads: HideableWidget[]): { setVertexColor(c: ArrayLike<number>): unknown } | null {
     const w = this.nearestDoodadWidget(x, y, doodads);
-    return w ? (w.instance as unknown as { setVertexColor(c: ArrayLike<number>): unknown }) : null;
+    if (!w) return null;
+    // …and if that doodad has a STAND-IN, the stand-in is what is on screen: `doodadActor` hid
+    // the static instance the moment the tree took its first axe blow, so a colour written to
+    // it after that goes nowhere. Which matters here rather than in theory — the blink is the
+    // cue for "gather HERE", and the trees it is aimed at are the ones already being chopped.
+    const a = this.doodadActors.get(w);
+    return (a?.inst ?? w.instance) as unknown as { setVertexColor(c: ArrayLike<number>): unknown };
   }
 
   /** The doodad widget closest to (x,y) within a tile — used to map a sim tree back to
@@ -5349,6 +5421,16 @@ export class MapViewerScene {
     const world = this.rts?.simWorld;
     if (!map || !world) return;
     for (const h of world.drainTreeHits()) {
+      // NOBODY WATCHES A TREE THEY CANNOT SEE SHUDDER.
+      //
+      // A chop is an event in somebody's base, and this pass used to play it wherever it
+      // happened: an enemy's treeline wobbled under his Peons across the whole map, in grey
+      // explored fog, and you could count his lumber workers by watching it. Live sight is
+      // the gate, the same one the chop SFX now takes (RtsController.playImpacts) — and it is
+      // asked BEFORE `doodadActor`, because spawning the stand-in is itself a visible change:
+      // it retires the static doodad, which the fog pass tints, in favour of an instance that
+      // (until this) nothing dimmed.
+      if (!this.pointVisible(h.x, h.y)) continue;
       const w = this.nearestDoodadWidget(h.x, h.y, map.doodads);
       if (!w) continue;
       const a = this.doodadActor(w);
@@ -5406,15 +5488,46 @@ export class MapViewerScene {
     }
   }
 
-  /** Fell a tree's visual: free its pathing footprint, then play the model's "death" clip
-   *  once on its scene-animated stand-in and hold the final frame — the cut stump WC3 leaves
-   *  behind. A model with no death clip (or that can't be spawned) is just hidden. */
+  /**
+   * Fell a tree: free its pathing footprint, retire its destructible record, and take the
+   * tree down on screen — the model's "death" clip played once and its last frame held, which
+   * is the cut stump WC3 leaves behind. A model with no death clip (or that cannot be spawned)
+   * is just hidden.
+   *
+   * **The bookkeeping and the picture come apart on the FOG, and only one of them waits.**
+   * The collider and the record are facts about the world: the way is open now, and a building
+   * may be placed through the gap, whether or not anybody watched it happen. The fall is a
+   * thing to WATCH — and drawn unconditionally (which is what this did) it was a live feed out
+   * of every enemy base on the map: an opponent's treeline visibly toppling tree by tree, in
+   * grey explored fog, which is a running count of how many workers he has on lumber and how
+   * long he has had them there. So a tree felled out of sight keeps standing as the last thing
+   * the player saw of it, exactly as a remembered building does, and is simply GONE the next
+   * time they look — see `flushPendingFells`, which finishes the job without the fall, because
+   * a fall nobody watched is not a fall they get to watch late.
+   */
   private fellTreeVisual(nodeId: number, x: number, y: number, doodads: HideableWidget[]): void {
     const meta = this.nodeFootprints.get(nodeId);
     if (meta && this.grid) {
       unstampFootprint(this.grid, meta.fp, meta.x, meta.y);
       this.nodeFootprints.delete(nodeId);
     }
+    // A tree is a destructible too, and the SIM felled this one. Mark its record dead so a
+    // later script KillDestructable on the same tree can't unstamp a footprint that is
+    // already off the grid (the stamps are counted — a double release would punch a hole).
+    // Not deferred with the picture: it is the same fact the footprint above is.
+    const rec = this.destructibles.find((r) => r.isTree && r.life > 0 && r.x === x && r.y === y);
+    if (rec) rec.life = 0;
+    if (!this.pointVisible(x, y)) {
+      this.pendingFells.push({ x, y });
+      return;
+    }
+    this.dropTreeModel(x, y, doodads, false);
+  }
+
+  /** Take the tree at (x, y) down on screen. `instant` skips straight to the stump — the
+   *  final frame of the death clip, posed rather than played — which is what a tree felled in
+   *  the fog looks like when the player finally walks back to it. */
+  private dropTreeModel(x: number, y: number, doodads: HideableWidget[], instant: boolean): void {
     const w = this.nearestDoodadWidget(x, y, doodads);
     if (!w) return;
     const a = this.doodadActor(w);
@@ -5427,15 +5540,38 @@ export class MapViewerScene {
     if (death >= 0) {
       a.inst.setSequence(death);
       a.inst.setSequenceLoopMode(0); // play once; the last frame is the stump, held forever
-      a.clipT = 0; // and it falls on our clock, so it plays out off-camera too (issue #88)
+      const iv = a.inst.model.sequences[death]?.interval;
+      if (instant && iv) {
+        // Posed at the end rather than animated to it: `forced` is what makes the viewer
+        // re-sample the bones for a frame written from outside (see advanceDoodadClips).
+        a.inst.frame = iv[1];
+        a.inst.forced = true;
+        a.clipT = -1;
+      } else {
+        a.clipT = 0; // and it falls on our clock, so it plays out off-camera too (issue #88)
+      }
     }
     a.dead = true;
     a.revertEnd = 0;
-    // A tree is a destructible too, and the SIM felled this one. Mark its record dead so a
-    // later script KillDestructable on the same tree can't unstamp a footprint that is
-    // already off the grid (the stamps are counted — a double release would punch a hole).
-    const rec = this.destructibles.find((r) => r.isTree && r.life > 0 && r.x === x && r.y === y);
-    if (rec) rec.life = 0;
+  }
+
+  /** Trees that came down while the local player had no eyes on them, waiting to be taken off
+   *  the map the moment they do. Positions, because that is all `dropTreeModel` needs and the
+   *  sim record is already gone. */
+  private pendingFells: Array<{ x: number; y: number }> = [];
+
+  /** Vision moved (updateFog): take down any tree that was felled in the dark and is now
+   *  being looked at. Straight to the stump — see `dropTreeModel`. */
+  private flushPendingFells(): void {
+    if (!this.pendingFells.length) return;
+    const doodads = this.viewer.map?.doodads;
+    if (!doodads) return;
+    const held: Array<{ x: number; y: number }> = [];
+    for (const t of this.pendingFells) {
+      if (this.pointVisible(t.x, t.y)) this.dropTreeModel(t.x, t.y, doodads, true);
+      else held.push(t);
+    }
+    this.pendingFells = held;
   }
 
   // --- destructibles: a gate opens by dying (7.x; see src/world/mapDestructibles.ts) --------
@@ -5540,6 +5676,10 @@ export class MapViewerScene {
   private hitDestructibleVisual(d: MapDestructible): void {
     const map = this.viewer.map;
     if (!map) return;
+    // …and not through the fog, for the reason a chopped tree does not shudder through it
+    // either (updateTreeActors): a gate flinching on ground nobody can see is somebody else's
+    // fight, drawn for us.
+    if (!this.pointVisible(d.x, d.y)) return;
     const w = this.nearestDoodadWidget(d.x, d.y, map.doodads as unknown as HideableWidget[]);
     const existing = w ? this.doodadActors.get(w) : undefined;
     const sequences = existing?.inst.model.sequences ?? w?.instance?.model?.sequences;
@@ -6287,25 +6427,74 @@ export class MapViewerScene {
    * Driven off the sim's own lattice, which IS the terrain corner lattice (BlightGrid), so
    * there is no resampling step and nothing to drift. Cheap by construction: the sim hands
    * over only the corners that CHANGED, so a settled base costs one empty array a frame.
+   *
+   * **AND IT IS FOGGED**, which is the one thing that is not simply "push what the sim says".
+   * Blight is ground, so what a player knows about it is TERRAIN MEMORY — the state it was in
+   * the last time they had eyes on that corner — and never a live feed. Pushed unconditionally
+   * (which is what this did) an Undead opponent's whole expansion announced itself the moment
+   * the Necropolis finished: a spreading purple disc drawn on ground nobody had scouted, and a
+   * disc that shrank again the instant a Human razed the building. So a change to a corner the
+   * local player cannot currently SEE is parked in `blightPending` and applied on the pass
+   * after their vision comes back — at which point they see what is really there now, which is
+   * exactly what walking back into an area is supposed to tell you.
+   *
+   * `blightShown` is what the terrain is actually wearing, so the deferral survives the
+   * overflow path as well: a corner that changed twice in the fog is one push when it is next
+   * looked at, and a corner that changed and changed back is none at all.
    */
   private syncBlight(map: W3xMap): void {
     const world = this.rts?.simWorld;
+    const grid = world?.blight;
     if (!world) return;
     const { all, cells } = world.drainBlightUpdates();
+    if (!grid) return;
+    if (!this.blightShown || this.blightShown.length !== grid.columns * grid.rows) {
+      this.blightShown = new Uint8Array(grid.columns * grid.rows);
+    }
+    // The pending corners are re-examined on the FOG's own cadence rather than every frame:
+    // nothing in the list can change state until the fog does (`updateFog` sets the flag), and
+    // a base's worth of parked corners walked sixty times a second costs more than the feature.
+    const sweep = this.blightSweepDue && this.blightPending.size > 0;
+    this.blightSweepDue = false;
+    if (!all && !cells.length && !sweep) return;
+    const shown = this.blightShown;
+    let dirty = false;
+    const consider = (col: number, row: number): void => {
+      const i = row * grid.columns + col;
+      const want = grid.atCorner(col, row) ? 1 : 0;
+      if (want === shown[i]) {
+        this.blightPending.delete(i); // it changed back before anybody looked
+        return;
+      }
+      // The corner's own world point, on the lattice BlightGrid stamps (128 units, map
+      // centerOffset) — the same arithmetic `BlightGrid.at` inverts.
+      if (!this.pointVisible(grid.originX + col * 128, grid.originY + row * 128)) {
+        this.blightPending.add(i);
+        return;
+      }
+      this.blightPending.delete(i);
+      shown[i] = want;
+      if (map.setBlight(col, row, want === 1)) dirty = true;
+    };
     if (all) {
       // The change list overflowed (a map script blighting a whole region). Re-ask the grid
       // for everything rather than trying to reconstruct what was dropped.
-      const grid = world.blight;
-      if (!grid) return;
-      for (let row = 0; row < grid.rows; row++) {
-        for (let col = 0; col < grid.columns; col++) map.setBlight(col, row, grid.atCorner(col, row));
-      }
+      for (let row = 0; row < grid.rows; row++) for (let col = 0; col < grid.columns; col++) consider(col, row);
     } else {
-      if (!cells.length) return;
-      for (const [col, row, on] of cells) map.setBlight(col, row, on);
+      for (const [col, row] of cells) consider(col, row);
+      if (sweep) for (const i of [...this.blightPending]) consider(i % grid.columns, (i / grid.columns) | 0);
     }
-    map.flushBlight();
+    if (dirty) map.flushBlight();
   }
+
+  /** What the TERRAIN is wearing, corner by corner — see syncBlight. Not the sim's grid: the
+   *  two differ by exactly what has happened out of sight. */
+  private blightShown: Uint8Array | null = null;
+  /** Corners whose blight changed while the local player was not looking, waiting for the
+   *  vision that lets them be drawn. Lattice indices, the same `row * columns + col`. */
+  private readonly blightPending = new Set<number>();
+  /** Set by `updateFog` — the fog moved, so the parked corners are worth re-asking. */
+  private blightSweepDue = false;
 
   /** Rebuild the placement footprint grid batch centred on world (x, y): one terrain-
    *  hugging quad per BUILD cell (64u — WC3's placement square, 2×2 pathing cells) of
@@ -10511,6 +10700,10 @@ export class MapViewerScene {
     this.fog.update(vision);
     this.fogWidgets(vision);
     this.fogItems(vision);
+    // Sight moved, so anything held back for want of it is worth re-asking: blight painted
+    // out of view (syncBlight) and a tree felled out of view (flushPendingFells).
+    this.blightSweepDue = true;
+    this.flushPendingFells();
   }
 
   /** Conceal ground items outside current sight. Unlike buildings (which persist in
@@ -10611,11 +10804,11 @@ export class MapViewerScene {
     const pulsing = this.treePulses.length
       ? new Set(this.treePulses.map((p) => p.inst as unknown as HideableWidget["instance"]))
       : null;
-    const tint = (w: HideableWidget): void => {
-      const inst = w.instance;
+    const tintInstance = (inst: HideableWidget["instance"]): void => {
       if (pulsing && pulsing.has(inst)) return;
       if (this.aoeTreeInsts.has(inst)) return; // green AoE-target tree owns its colour this frame
       const loc = inst.localLocation;
+      if (!loc) return; // nothing placed yet — the same guard fogSpawnedInstances keeps
       // Light a prop from the BRIGHTEST cell of its footprint, not the one cell holding
       // its origin. A tree blocks sight on every cell it covers, so a 4×4 tree shadows
       // its own back half — and its origin sits exactly where its four cells meet, so
@@ -10650,6 +10843,7 @@ export class MapViewerScene {
       inst.setVertexColor?.(s);
       inst.show();
     };
+    const tint = (w: HideableWidget): void => tintInstance(w.instance);
     for (const w of map.doodads) {
       this.mapProps.add(w.instance); // …and claimed, so the sweep below leaves it to us
       // A doodad that has a STAND-IN is drawn by the stand-in, full stop.
@@ -10665,6 +10859,17 @@ export class MapViewerScene {
       // that map must never be shown again by this pass — whatever the Set thinks.
       if (this.removedWidgets.has(w) || this.doodadActors.has(w)) continue; // felled trees, open gates
       tint(w);
+    }
+    // …and the STAND-INS are props too. A chopped tree, a felled one and an opened gate are
+    // all drawn by an animated copy (doodadActor) that the loop above deliberately skips —
+    // and nothing else dimmed it, so the one tree in a treeline that somebody had once taken
+    // an axe to stood at full daylight colour in grey explored fog while its neighbours went
+    // dark around it. It is the same prop it was a moment ago and it takes the same tint;
+    // claiming the instance also keeps `fogSpawnedInstances` (which only ever hides) from
+    // handing it back at full brightness.
+    for (const a of this.doodadActors.values()) {
+      this.mapProps.add(a.inst);
+      tintInstance(a.inst as unknown as HideableWidget["instance"]);
     }
     const units = map.units as unknown as Array<HideableWidget & { row?: unknown }>;
     for (const w of units) {
@@ -11032,6 +11237,12 @@ export class MapViewerScene {
     this.removedWidgets.clear();
     this.baseColors = new WeakMap();
     this.fogAccum = 0;
+    // Everything the fog was holding back goes with it — both queues are answers about a map
+    // and a viewpoint that no longer exist (see syncBlight / flushPendingFells).
+    this.blightShown = null;
+    this.blightPending.clear();
+    this.blightSweepDue = false;
+    this.pendingFells = [];
   }
 
   private updateCamera(dtMs = 1000 / 60): void {

@@ -609,6 +609,14 @@ the interval — a full well brims, a drained one shows bare stone, and a well r
 the night visibly climbs. Read as a cast effect instead, the water flew to whoever drank and
 evaporated a few seconds later.
 
+**A gauge may not be read through the fog.** The well itself keeps its image once explored — WC3
+leaves the last thing you saw standing on the ground — but this model's playhead is parked at the
+well's LIVE mana, so drawing it from that memory told you, second by second and from across the
+map, how much healing an enemy night elf had banked and exactly when a unit had just drunk.
+`collectMoonWellWater` now takes live sight of the well (`pointVisible`), like everything else
+that moves; the pool tidies itself away and the next look re-fills it at whatever level it has
+really reached.
+
 Two placement traps, both of which look like "the water is missing":
 
 * It must be **centred on the well and lifted into the basin**, not hung from a bone. The model

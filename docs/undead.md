@@ -70,6 +70,16 @@ just those bytes) and `syncBlight` is the only caller. Because blight enters the
 texture stack it blends into the neighbouring grass the way any two tiles do, instead of ending
 at a hard circle.
 
+**And it is FOGGED.** Blight is ground, so what a player knows about it is TERRAIN MEMORY — the
+state it was in the last time they had eyes on that corner — never a live feed. `syncBlight`
+pushed the sim's grid unconditionally, and the result was that an undead opponent's expansion
+announced itself the moment the Necropolis finished: a purple disc spreading across ground nobody
+had scouted, and shrinking again the instant a Human razed the building. A change to a corner the
+local player cannot currently SEE is now parked (`blightPending`) and applied on the pass after
+their vision returns; `blightShown` is what the terrain is actually wearing, so a corner that
+changed twice out of sight is one push when it is next looked at and one that changed back is
+none. The parked list is re-examined on the fog's own 10 Hz cadence rather than per frame.
+
 > **Upstream bug fixed on the way:** `this.blightTextureIndex = this.tilesetTextures.length`
 > read the *previous* map's texture list (the current one is still being built in a local), so
 > the index pointed at ground tileset 0 and blight would have drawn as dirt.

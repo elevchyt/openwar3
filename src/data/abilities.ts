@@ -189,6 +189,11 @@ export interface AbilityDef {
    *  those models are loops rather than bursts (src/sim/orbs.ts, World.orbAttachments). */
   targetAttach: string[];
   casterArt: string; // effect attached to the caster (Thunder Clap ring)
+  /** `Casterattach` — where `casterArt` rides, in the same token form as `targetAttach`.
+   *  Most rows name nothing (a Thunder Clap ring erupts at the caster's feet), so this is
+   *  for the few whose caster art is WORN: `[ACsp] Casterattach = overhead` is the Zzz that
+   *  floats over a creep asleep at night (Units\NeutralAbilityFunc.txt, "creeps sleeping"). */
+  casterAttach: string[];
   specialArt: string; // extra one-shot effect (Flame Strike's erupting fire pillar)
   /** `Specialattach` — where `specialArt` rides, in the same token form as `targetAttach`.
    *  Eat Tree hangs its sprite on the Ancient's own `eattree` bone; most rows name nothing
@@ -922,6 +927,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
       targetAttach: (f ? str(f, "Targetattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       casterArt: mdlPath(f ? str(f, "Casterart") : ""),
+      casterAttach: (f ? str(f, "Casterattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       specialArt: mdlPath(f ? str(f, "SpecialArt") : ""),
       specialAttach: (f ? str(f, "Specialattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       effectArt: mdlPath(f ? str(f, "Effectart") : ""),
@@ -1039,6 +1045,7 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     targetArt: "",
     targetAttach: [],
     casterArt: "",
+    casterAttach: [],
     specialArt: "",
     specialAttach: [],
     effectArt: "",

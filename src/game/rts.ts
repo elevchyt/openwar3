@@ -1521,7 +1521,13 @@ export class RtsController {
     for (const workerId of this.sim.drainChops()) {
       const def = this.defOf(workerId);
       const w = this.sim.units.get(workerId);
-      const at = w ? { x: w.x, y: w.y, z: this.heightAt(w.x, w.y) } : undefined;
+      // YOU DO NOT HEAR AN AXE YOU CANNOT SEE. Live sight of the worker, not a memory of the
+      // ground it stands on: without this the whole map's lumber was audible from the first
+      // minute — an opponent's Peons hacking away in unscouted fog, one clang per chop, which
+      // is both a count of his lumber workers and a bearing on his base. The renderer's half
+      // of the same rule is the wobble the tree gives (mapViewer.updateTreeActors).
+      if (!w || this.local.fogBlocksAt(w)) continue;
+      const at = { x: w.x, y: w.y, z: this.heightAt(w.x, w.y) };
       if (def?.lumberSound) this.sounds.playImpact(def.lumberSound, "Wood", at); // trees are "Wood" armour
     }
   }
@@ -1647,8 +1653,14 @@ export class RtsController {
       // The same guard behaviour a map-placed creep gets: it holds the ground it was made on,
       // leashes back to it after a chase, and dozes at night if its type sleeps.
       su.isCreep = true;
-      su.guardX = x;
-      su.guardY = y;
+      // The post is where it ACTUALLY STANDS, not where it was asked to stand: `SimWorld.add`
+      // settles a new unit onto a clear spot, and every guard test measures from this point —
+      // `atHome` (which is what lets it doze at night, CREEP_HOME_EPS 64), the leash, and camp
+      // membership. Taking the requested position instead leaves a creep permanently "away
+      // from its post" by however far it was nudged, which reads as a camp that never sleeps
+      // and keeps trying to walk home.
+      su.guardX = su.x;
+      su.guardY = su.y;
       su.guardFacing = facing;
       su.aggroRange = su.weapon?.acquire ?? def.acquireRange ?? 0;
       su.canSleep = def.canSleep;
@@ -2375,8 +2387,10 @@ export class RtsController {
       // night-sleep flag from unit data. This is what makes them leash back home
       // after a chase and doze at night instead of chasing forever.
       su.isCreep = true;
-      su.guardX = loc[0];
-      su.guardY = loc[1];
+      // …where it ACTUALLY STANDS — see createScriptUnit for why the settled position and not
+      // the .doo's.
+      su.guardX = su.x;
+      su.guardY = su.y;
       su.guardFacing = su.facing;
       const aggro = this.placed.creepAggroAt(loc[0], loc[1]);
       su.aggroRange = aggro > 0 ? aggro : su.weapon?.acquire ?? def?.acquireRange ?? 0;
