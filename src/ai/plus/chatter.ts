@@ -18,15 +18,15 @@
 // it sees the message the same way. There is no second channel.
 
 /** Openers. One is drawn per match off the AI's own RNG stream. */
-export const GREETINGS = ["glhf", "gl hf", "good luck"] as const;
+export const GREETINGS = ["glhf", "hf", "glgl"] as const;
 
 /** …and what it says on the way out. */
 export const CONCESSIONS = ["gg", "gg wp", "gg, well played"] as const;
 
 /** Seconds into the match before anybody speaks, plus a stagger per slot — twelve computers
  *  all saying "glhf" on the same frame reads as a bug rather than as a lobby. */
-export const GREET_AT = 4;
-export const GREET_STAGGER = 1.5;
+export const GREET_AT = 2;
+export const GREET_STAGGER = 1;
 
 /** How long after conceding it actually leaves. Long enough to read the line. */
 export const LEAVE_AFTER = 5;

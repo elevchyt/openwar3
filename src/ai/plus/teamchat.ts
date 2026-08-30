@@ -89,19 +89,19 @@ const BUSY: readonly RegExp[] = [
  * positive marches an army across the map.
  */
 const HELP: readonly RegExp[] = [
-  /\b(help|halp|hlp|sos)\b/,
-  /\bneed\b[a-z ]{0,10}\b(backup|assist|army|units)\b/,
+  /\b(help|halp|hlp|sos|hlep)\b/,
+  /\bneed\b[a-z ]{0,10}\b(backup|assist|army|units|help)\b/,
   /\bcome\b[a-z ]{0,6}\b(here|to me|quick|now)\b/,
-  /\b(im|i m|i am)\b[a-z ]{0,12}\b(dying|dead|losing|overrun)\b/,
+  /\b(im|i m|i am|am)\b[a-z ]{0,12}\b(dying|dead|losing|overrun)\b/,
 ];
 
 // --- what it says ----------------------------------------------------------------------------
 
 /** Asking. Said on the allies channel when more than one opponent is standing in our towns. */
 export const HELP_CALLS = [
-  "help me, i'm getting attacked by two of them",
-  "need help at my base, they're both on me",
-  "i'm under attack from two sides, need help",
+  "help me, i'm getting attacked by a lot",
+  "need help at my base",
+  "i'm under attack from multiple sides, need help",
 ] as const;
 
 /** Answering, on foot. */
@@ -123,8 +123,8 @@ export const BUSY_LINES = {
     "can't come, i'm busy",
   ],
   creeping: [
-    "can't come right now, i'm creeping",
-    "i'm creeping, can't come there right now",
+    "can't, i'm creeping",
+    "i'm creeping, i can't come",
   ],
   broken: [
     "can't come, my army is dead",
