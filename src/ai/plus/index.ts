@@ -478,6 +478,61 @@ export function onGoldDuty(u: {
   return u.order === "harvest" && u.resKind === "gold";
 }
 
+/** How far PAST the berth a back-off aims, so the next pass is comfortably clear of the camp
+ *  rather than balanced on its rim — where `safeLeg` would flip between seeing the creep and
+ *  not seeing it (it drops creeps inside the berth from the detour) and the scout would jitter
+ *  in and out instead of walking round. */
+const CREEP_BACKOFF = 200;
+
+/**
+ * WHERE A SCOUT STANDING TOO CLOSE TO A CREEP WALKS TO — or null when nothing is too close.
+ *
+ * `safeLeg` cannot route round a creep that is already inside the berth of where the scout
+ * stands: it drops those from the detour on purpose, since no waypoint avoids them and leaving
+ * them in scores every candidate equally badly. So a scout that has blundered inside a camp's
+ * notice is handed a step computed as though that camp were not there, and walks straight on
+ * into it. This is the answer to that position, and it is the one a player gives: walk OUT.
+ *
+ * Away from the POOLED bearing of everything inside the berth rather than from the nearest one
+ * — a scout standing between two creeps that alternated as "nearest" would alternate between
+ * their two answers and go nowhere — and far enough out to clear the worst of them by
+ * `CREEP_BACKOFF`. With creeps on every side the sum cancels and there is no "away" to name, so
+ * it falls back to the bearing of `home`: not necessarily clear, but a direction, and standing
+ * still is the one thing that is certainly wrong.
+ *
+ * Pure and exported for the same reason `scoutRing` is — what matters about it is that the
+ * point it hands back is genuinely further from every creep than the point it was given.
+ */
+export function backOffSpot(
+  from: { x: number; y: number },
+  creeps: ReadonlyArray<{ x: number; y: number }>,
+  home: { x: number; y: number },
+  berth = CREEP_BERTH,
+): { x: number; y: number } | null {
+  let ax = 0;
+  let ay = 0;
+  let need = 0;
+  for (const c of creeps) {
+    const dx = from.x - c.x;
+    const dy = from.y - c.y;
+    const d = Math.hypot(dx, dy);
+    if (d >= berth) continue;
+    need = Math.max(need, berth + CREEP_BACKOFF - d);
+    // A creep exactly underfoot has no bearing of its own to add; the pool carries the rest.
+    if (d > 1) { ax += dx / d; ay += dy / d; }
+  }
+  if (need <= 0) return null;
+  let len = Math.hypot(ax, ay);
+  if (len < 0.001) {
+    // Surrounded (or stood on): no "away" exists, so take the way home as the direction.
+    ax = home.x - from.x;
+    ay = home.y - from.y;
+    len = Math.hypot(ax, ay);
+    if (len < 1) return null; // …and if home is here too, there is nothing to walk out of
+  }
+  return { x: from.x + (ax / len) * need, y: from.y + (ay / len) * need };
+}
+
 /** How long the scout may make no PROGRESS before its waypoint is written off (seconds).
  *
  *  The bug this exists for: `scoutPass` returns early while the scout's order is still "move",
@@ -1860,7 +1915,8 @@ export class ComputerPlusAi {
     // pass's business (`defendPass`), not the tour's. It also means the scan below is only ever
     // run by a scout that is actually out.
     const home = b.ai.home();
-    if (Math.hypot(scout.x - home.x, scout.y - home.y) > TOWN_RADIUS) {
+    const away = Math.hypot(scout.x - home.x, scout.y - home.y) > TOWN_RADIUS;
+    if (away) {
       if (scout.hp < b.scoutHp) this.headHome(b);
       // …and it does not wait to be hit when it can see what is coming — see `SCOUT_DANGER`.
       else if (this.scoutInDanger(b, scout)) this.headHome(b);
@@ -1924,45 +1980,66 @@ export class ComputerPlusAi {
       goal = b.ai.home();
     }
     b.scoutGoal = goal;
-    // ROUND the creep camps, not through them — see `safeLeg`. The GOAL is unchanged (the tour
-    // still visits what it set out to visit); what is re-aimed is the step taken towards it,
-    // which is re-asked every `SCOUT_PERIOD`, so the scout walks an arc round a camp rather
-    // than a line into one.
+    // THE STEP, in four parts — and the GOAL is unchanged by all of them: the tour still visits
+    // what it set out to visit, and what is re-decided every `SCOUT_PERIOD` is only the next
+    // stride towards it.
     const creeps = this.liveCreeps();
-    const step = safeLeg(scout, goal, creeps);
-    // …AND, ON THE WAY OUT, IT TAKES NO FOR AN ANSWER. `safeLeg` hands back the BEST leg it
-    // found, which is not always a SAFE one: a camp between us and the waypoint with no room to
-    // go round it still yields a step that walks inside its notice, and the scout took it —
-    // which is most of the remaining "it still aggroes creep camps sometimes". Standing clear of
-    // every creep and being offered a step that is not clear is the moment to GIVE THE LEG UP,
-    // because the tour's whole value is the legs after it and a dead scout has none.
+    // (1) BACK OUT OF WHAT IS ALREADY TOO CLOSE, before anything else is decided.
     //
-    // Asked as "am I clear NOW" rather than unconditionally, so a scout a camp has already
-    // walked up to is not frozen by its own rule — there is no clear step from inside a berth,
-    // and the answer to that position is the retreat above, not a refusal to move.
+    // `safeLeg` cannot route round a creep that is already inside the berth of where we stand —
+    // it deliberately drops those from the detour (no waypoint avoids them, and leaving them in
+    // scores every candidate equally badly), so a scout that has blundered inside a camp's
+    // notice is handed a step computed as though that camp were not there, and walks straight
+    // on into it. That is the Wisp that "hugged a creep camp and died on the way home", and it
+    // is not a walk-home bug: the same hole is on every leg.
     //
-    // THE WALK HOME IS EXEMPT, and it has to be. "Give the leg up" only terminates because there
-    // is a next leg to fall through to; on the way home there is none, so refusing the step
-    // meant refusing to move at all — and nothing in the position changes, because the scout
-    // is standing still and a guard camp is standing still, so the same refusal is re-decided
-    // for ever. That is the "all the scouts froze in the middle of the map" report, and the
-    // stuck watchdog cannot rescue it: it writes off a waypoint, and the waypoint was never the
-    // problem. Between walking past a camp and standing in the open until the match ends, a
-    // player walks past the camp — and if it costs a hit, the retreat rule above is already
-    // pointed at home.
-    if (!b.scoutBack
-      && clearance(scout, scout, creeps) >= CREEP_BERTH && clearance(scout, step, creeps) < CREEP_BERTH) {
-      b.scoutLeg++;
-      b.scoutGoal = null;
+    // A player turns and walks OUT. So does this: away from the pooled bearing of everything
+    // inside the berth — pooled rather than nearest, so a scout between two of them steps out
+    // on one consistent bearing instead of alternating between their two answers — and far
+    // enough that the next pass is comfortably clear, at which point `safeLeg` can see the
+    // camp again and will arc round it properly.
+    //
+    // Only once it has left home (`away`), for the same reason the retreat rules are: a camp
+    // near our own base must not stop the tour before it starts.
+    const out = away ? backOffSpot(scout, creeps, home) : null;
+    if (out) {
+      b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...out }, queued: false });
       return;
     }
-    // A STEP OF NOWHERE IS NOT AN ORDER. `standOff` clamps a goal that is itself inside a
+    // (2) ROUND the creep camps, not through them — see `safeLeg`. The GOAL is unchanged (the
+    // tour still visits what it set out to visit); what is re-aimed is the step taken towards
+    // it, which is re-asked every `SCOUT_PERIOD`, so the scout walks an arc round a camp rather
+    // than a line into one.
+    const step = safeLeg(scout, goal, creeps);
+    // (3) …AND, ON THE WAY OUT, IT TAKES NO FOR AN ANSWER. `safeLeg` hands back the BEST leg it
+    // found, which is not always a SAFE one: a camp between us and the waypoint with no room to
+    // go round it still yields a step that walks inside its notice, and the scout took it —
+    // which is most of "it still aggroes creep camps sometimes". Being offered a step that is
+    // not clear is a reason not to take it. (1) has already guaranteed we are standing clear of
+    // everything, so this is only ever about the ground ahead.
+    //
+    // IT WAITS; IT DOES NOT BURN THE LEG. Giving the leg up here is what made the tour
+    // evaporate: nothing about the position changes when the scout stands still, so the very
+    // next pass re-decided the same refusal for the NEXT leg, half a second later, and the
+    // whole itinerary was spent in about a second and a half — the scout turned for home
+    // before it had walked anywhere. ("The acolyte came home before reaching the enemy base",
+    // twice.) `SCOUT_STUCK_AFTER` is already the right answer to "this waypoint is not
+    // happening": eight seconds of no progress writes ONE leg off, at a rate a tour survives.
+    //
+    // THE WALK HOME IS EXEMPT, and it has to be. There is no next leg to fall through to and no
+    // watchdog that can help — it writes off a waypoint, and the waypoint was never the problem
+    // — so refusing here meant refusing to move at all, for ever, which is the "all the scouts
+    // froze in the middle of the map" report. Between walking past a camp and standing in the
+    // open until the match ends, a player walks past the camp; (1) is what keeps that honest,
+    // and the retreat rule above is already pointed at home if it costs a hit.
+    if (!b.scoutBack && clearance(scout, step, creeps) < CREEP_BERTH) return;
+    // (4) A STEP OF NOWHERE IS NOT AN ORDER. `standOff` clamps a goal that is itself inside a
     // creep's berth back to "do not move" (which is the honest answer for a leg whose whole
     // purpose was to approach that goal), and a camp parked near our own base makes it the
     // answer for HOME too — so the walk home was ordered to the spot it was already standing
     // on, completed instantly, and re-decided identically next pass. Walking straight at the
     // hall and letting the pathfinder deal with it is the right trade here for the same reason
-    // the exemption above is.
+    // (3)'s exemption is.
     const stride = Math.hypot(step.x - scout.x, step.y - scout.y);
     const aim = b.scoutBack && stride < SCOUT_STRIDE ? goal : step;
     b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...aim }, queued: false });

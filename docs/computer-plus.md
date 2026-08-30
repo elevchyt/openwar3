@@ -189,14 +189,14 @@ plan is good at placing it. Two details the leg needs that the outward ones do n
   it are different questions: `lookedAt` counts *"the next safe step is nowhere"* as arrival,
   which is right for a leg whose whole purpose is the look and catastrophic for this one, where it
   would release the worker in the open the first time a camp stood between it and its base.
-- **The creep veto does not apply**, and it must not. *"Give the leg up"* only terminates because
-  there is a next leg to fall through to; on the way home there is none, so refusing the step meant
+- **The creep veto does not apply**, and it must not. Refusing the step only terminates because
+  there is a next leg to fall through to; on the way home there is none, so refusing meant
   refusing to move at all — and nothing in the position changes, because the scout is standing
   still and a guard camp is standing still, so the same refusal is re-decided for ever. That was
   *"all the scouts froze in the middle of the map"*, and the stuck watchdog cannot rescue it: it
   writes off a waypoint, and the waypoint was never the problem. Between walking past a camp and
-  standing in the open until the match ends, a player walks past the camp — and if it costs a hit,
-  the retreat rule is already pointed at home.
+  standing in the open until the match ends, a player walks past the camp — the back-off below is
+  what keeps that honest, and if it costs a hit the retreat rule is already pointed at home.
 - **A step of nowhere is not an order.** `standOff` clamps a goal that is itself inside a creep's
   berth back to *"do not move"*, which is honest for a leg whose whole purpose was to approach that
   goal — and is the answer for HOME too when a camp is parked near our own base. The walk was then
@@ -268,14 +268,32 @@ dying on the way out:
   waypoint avoids it and leaving it in scored every candidate equally badly and cancelled the
   detour round the camp it could still go round.
 
-**And it takes no for an answer.** `safeLeg` hands back the *best* leg it found, which is not
-always a *safe* one: a camp between the scout and its waypoint with no room to go round still
-yields a step inside the camp's notice, and the scout took it — the rest of "it still aggroes
-creep camps sometimes". Standing clear of every creep and being offered a step that is not clear
-now gives the **leg** up instead, because the tour's whole value is the legs after it and a dead
-scout has none. Asked as *"am I clear now"* rather than unconditionally, so a scout a camp has
-already walked up to is not frozen by its own rule: there is no clear step from inside a berth,
-and the answer to that position is the retreat above, not a refusal to move.
+**And it backs out of what it is already inside** (`backOffSpot`). This is the hole the berth
+never covered and it is worth being precise about: `safeLeg` *deliberately* drops creeps that are
+within the berth of where the scout **stands** — no waypoint avoids them, and leaving them in
+scores every candidate equally badly and cancels the detour round the camp it could still go
+round. So a scout that has blundered inside a camp's notice is handed a step computed as though
+that camp were not there, and walks straight on into it. That is the Wisp that *"hugged a creep
+camp and died while returning home"*, and it is not a walk-home bug — the same hole is on every
+leg. A player turns and walks **out**, and so does this: away from the **pooled** bearing of
+everything inside the berth (pooled rather than nearest, or a scout between two of them alternates
+between their two answers and goes nowhere), far enough to clear the worst by `CREEP_BACKOFF`, at
+which point `safeLeg` can see the camp again and arcs round it properly. Surrounded, the pool
+cancels and there is no *away* to name, so it takes the bearing of home: not necessarily clear,
+but a direction — standing still is the one thing that is certainly wrong.
+
+**And it takes no for an answer — by WAITING, not by burning the leg.** `safeLeg` hands back the
+*best* leg it found, which is not always a *safe* one: a camp between the scout and its waypoint
+with no room to go round still yields a step inside the camp's notice. Being offered a step that
+is not clear is a reason not to take it.
+
+Giving the **leg** up there, which is what this did at first, made the whole tour evaporate.
+Nothing about the position changes when the scout stands still, so the very next pass re-decided
+the same refusal for the *next* leg half a second later, and the entire itinerary was spent in
+about a second and a half — the scout turned for home before it had walked anywhere. (Reported
+twice as *"the acolyte came home before reaching the enemy base"*.) `SCOUT_STUCK_AFTER` is
+already the right answer to *"this waypoint is not happening"*: eight seconds of no progress
+writes off **one** leg, at a rate a tour survives.
 
 **One scout, and nobody follows it.** `scoutDone` latches the moment the scout dies. This briefly
 allowed a second (*"a worker is 75 gold and the map is worth more than that"*) and the second

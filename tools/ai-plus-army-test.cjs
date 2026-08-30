@@ -31,7 +31,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const {
   canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
-const { safeLeg, onGoldDuty, pushStalled, isShunned, pullBackSpot, pullDue, pulledOut } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { safeLeg, backOffSpot, onGoldDuty, pushStalled, isShunned, pullBackSpot, pullDue, pulledOut } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -247,6 +247,47 @@ const ATFOOT = [{ x: -3000, y: 200 }, ON_THE_LINE];
 const away = safeLeg(HOME, BASE, ATFOOT);
 check("a creep at our feet does not cancel the detour round the next one",
   nearest(away, ON_THE_LINE) >= 900, true);
+
+// BACKING OUT OF A CAMP THE SCOUT IS ALREADY INSIDE (plus/index.ts `backOffSpot`). `safeLeg`
+// deliberately drops creeps that are within the berth of where the scout STANDS — no waypoint
+// avoids them, and leaving them in scores every candidate equally badly — so the step it hands
+// back is computed as though they were not there, and the scout walks straight on into them.
+// That is the Wisp that hugged a camp and died on the way home, and the hole is on every leg.
+const HOMEP = { x: -3000, y: -3000 };
+function farther(spot, c) { return Math.hypot(spot.x - c.x, spot.y - c.y); }
+
+check("nothing inside the berth is nothing to walk out of",
+  backOffSpot({ x: 0, y: 0 }, [{ x: 2000, y: 0 }], HOMEP), null);
+{
+  const c = { x: 500, y: 0 };
+  const out = backOffSpot({ x: 0, y: 0 }, [c], HOMEP);
+  check("a creep 500 away is walked away from", out !== null, true);
+  check("…out past the berth, with room to spare", farther(out, c) >= 900 + 200 - 1, true);
+  check("…and directly away from it, not round it", Math.round(out.y), 0);
+}
+{
+  // TWO MEMBERS OF ONE CAMP, which is the shape that actually occurs — `CreepCamps` links guard
+  // posts up to CAMP_LINK (600) apart, so a scout that has walked up to a camp is inside the
+  // berth of two or three of them at once. The POOLED bearing is one direction away from all of
+  // them; "the nearest one" would alternate between their answers every pass and go nowhere.
+  const a = { x: 500, y: 300 };
+  const b2 = { x: 500, y: -300 };
+  const out = backOffSpot({ x: 0, y: 0 }, [a, b2], HOMEP);
+  check("two creeps of one camp are stepped away from on one bearing", out !== null, true);
+  check("…further from the first than it was", farther(out, a) > Math.hypot(500, 300), true);
+  check("…and further from the second too", farther(out, b2) > Math.hypot(500, 300), true);
+  check("…straight back down the middle", Math.round(out.y), 0);
+}
+{
+  // Surrounded: the pool cancels, so there is no "away" to name and it takes the way home.
+  const ring = [{ x: 400, y: 0 }, { x: -400, y: 0 }, { x: 0, y: 400 }, { x: 0, y: -400 }];
+  const out = backOffSpot({ x: 0, y: 0 }, ring, HOMEP);
+  check("surrounded, it walks the way home rather than standing still", out !== null, true);
+  check("…on the bearing of home", out.x < 0 && out.y < 0, true);
+  check("…and it is a real point", Number.isFinite(out.x) && Number.isFinite(out.y), true);
+}
+check("a creep stood exactly on us cannot produce a NaN",
+  Number.isFinite(backOffSpot({ x: 0, y: 0 }, [{ x: 0, y: 0 }], HOMEP).x), true);
 
 console.log("\n-- who is sent to go and look ------------------------------------------------");
 
