@@ -134,6 +134,10 @@ export class MeleeAi {
   add(player: number, race: PlayableRace, difficulty: number, startX: number, startY: number, seed: number): void {
     const script = SCRIPTS[race];
     if (!script) return;
+    // One seat, one computer — `StartMeleeAI` is the map script's call to make and may be made
+    // twice (see `ComputerPlusAi.add`, which carries the story). Two players behind one slot
+    // issue every order twice and fight each other over the build array.
+    if (this.brains.some((b) => b.ai.player === player)) return;
     const ai = new AiPlayer(player, race, difficulty, this.host, startX, startY, seed);
     // `main()`: PickMeleeHero, then set_skills (which only writes the arrays of the three
     // heroes this player actually drew — see SetSkillArray).

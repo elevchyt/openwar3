@@ -25,9 +25,16 @@
  * greetings also going out in strict slot order (see `GREET_AT`) the whole opening read as one
  * scripted line rather than as four players typing. Still anonymous ladder shorthand — issue
  * #124 rules out personalities, and none of these say anything about who is speaking.
+ *
+ * **Nothing here addresses a ROOM.** "gl all", "hf all" and "glhf all" were in this list and
+ * came out again: a Computer+ seat draws the same line whatever the lobby is, and most lobbies
+ * are a 1v1, where a computer greeting "all" is greeting one person as if it were four. The
+ * alternative — a second list for games with three or more seats — buys a word nobody reads
+ * and a rule to keep right, and the eight remaining lines are already wider than the four
+ * openings a four-player map needs.
  */
 export const GREETINGS = [
-  "glhf", "hf", "glgl", "gl hf", "hf gl", "gl", "gl all", "hf all", "glhf all", "gl & hf",
+  "glhf", "hf", "glgl", "gl hf", "hf gl", "gl", "gl & hf", "hfgl",
 ] as const;
 
 /** …and what it says on the way out. */

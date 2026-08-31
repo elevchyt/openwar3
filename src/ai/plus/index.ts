@@ -1610,6 +1610,12 @@ export class ComputerPlusAi {
   add(player: number, race: PlayableRace, difficulty: number, startX: number, startY: number, seed: number): void {
     const table = PLUS_RACES[race];
     if (!table) return;
+    // ONE BRAIN PER SEAT. `StartMeleeAI` is the map script's to call and nothing here can stop
+    // it being called twice — a melee init that ran and a fallback that ran on top of it did
+    // exactly that (see `MapViewerScene.startMelee`), and two brains on one seat is not a
+    // slightly wrong AI: it is two of them fighting over the same units, the same build ladder
+    // and the same chat, which is how it was noticed ("the AIs sent the greeting twice").
+    if (this.brains.some((b) => b.ai.player === player)) return;
     const profile = plusProfile(difficulty);
     const ai = new AiPlayer(player, race, difficulty, this.host, startX, startY, seed);
     // No fog cheat at any difficulty — see the file header.

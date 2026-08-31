@@ -2346,9 +2346,12 @@ The lines go out through the **ordinary chat path** (`RtsController.onChatSaid` 
 `MapViewerScene.deliverChat`), so a computer's "glhf" is routed, tagged, coloured, logged and
 relayed to LAN clients exactly like a typed one, and a map with a chat trigger sees it.
 
-**Both the line and the moment are drawn.** `GREETINGS` is ten openers rather than three: three
+**Both the line and the moment are drawn.** `GREETINGS` is eight openers rather than three: three
 shared between a lobby's worth of computers is not a draw, it is a rotation, and on a four-player
-map two of them said the same word every game. And *when* each one speaks is drawn per seat into
+map two of them said the same word every game. **None of them address a ROOM** — "gl all", "hf
+all" and "glhf all" were in the list and came out again: a seat draws the same line whatever the
+lobby is, and most lobbies are a 1v1, where greeting "all" is greeting one person as if they were
+four. And *when* each one speaks is drawn per seat into
 the window `GREET_AT`…`GREET_AT + GREET_SPREAD` (2-8 s, `Brain.greetAt`) instead of being
 `GREET_AT + GREET_STAGGER × slot` — which is a metronome: every seat spoke, in ascending slot
 order, exactly a second apart, every match. Two computers landing on the same beat and then a

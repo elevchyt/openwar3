@@ -2143,7 +2143,18 @@ export class MapViewerScene {
     // No script (or it created nothing for the local player — a script that leans on
     // natives we haven't written yet): fall back to our own roster so the match still
     // starts, rather than dropping the player onto an empty map.
-    const spawned = [...this.rts.simView.units.values()].some((u) => u.owner === this.localPlayer);
+    //
+    // **Asked of the seats being WATCHED when this machine is only watching.** An observer owns
+    // nothing — that is what an observer is, and its seat is one past the last slot there is
+    // (ui/lobby.ts `OBSERVER_PLAYER`) — so "the script spawned nothing of mine" is true of every
+    // observed match, however well the script ran. Read as our own seat it fired the fallback on
+    // top of a script that had already done the job: a second roster, a second set of stashes,
+    // and — the half that showed — a second `StartMeleeAI` per computer slot, so every Computer+
+    // player was seated TWICE and greeted the lobby twice.
+    const seats = this.observer
+      ? config.slots.filter((s) => s.controller === "user" || s.controller === "computer").map((s) => s.id)
+      : [this.localPlayer];
+    const spawned = [...this.rts.simView.units.values()].some((u) => seats.includes(u.owner));
     if (!engine || !spawned) {
       console.warn(`[jass] melee init did not spawn a base (script: ${engine ? "ran" : "absent"}) — using the built-in roster.`);
       await this.startMeleeFallback(config, races);
