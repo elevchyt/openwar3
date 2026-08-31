@@ -2265,8 +2265,6 @@ const CREEP_LEVEL_CAP = new Set(["ANtm"]);
  *  Potion, Potion/Scroll of Rejuvenation). One prefix so a single filter drops both the
  *  life and the mana half together when the effect breaks. */
 export const ITEM_REGEN_GROUP = "item:regen";
-/** Damage that dispels a regeneration item's effect. Not in any data file — see landDamage. */
-const ITEM_REGEN_BREAK = 20;
 /** The four `pickFlags` values of UI\UnitEditorData.txt, **in bit order** — the domain a
  *  building's UnitData `buffType` draws from and a staff's "Building Types Allowed" masks
  *  (see UnitDef.buffType and SimWorld.staffDestination). WorldEditStrings names them Hall,
@@ -9031,6 +9029,7 @@ export class SimWorld {
   /** Advance timed buffs; apply DoT/HoT. Returns true if the unit died (DoT). */
   private tickBuffs(u: SimUnit, dt: number): boolean {
     if (!u.buffs.length) return false;
+    let burned = false; // a dot bit this tick — the regeneration items break on it
     for (const b of u.buffs) {
       // `delay` gates a heal-over-time the same way it gates Wind Walk's fade: the buff is
       // already on the unit and its clock is already running, the healing just hasn't
@@ -9039,7 +9038,14 @@ export class SimWorld {
       if (b.kind === "hot" && b.value && b.delay <= 0) u.hp = Math.min(u.maxHp, u.hp + b.value * dt);
       // A non-lethal dot (every poison) whittles and stops: it may take the last point off
       // a unit's health bar's worth of hp but never the last point itself.
-      else if (b.kind === "dot" && b.value) u.hp = b.nonLethal ? Math.max(1, u.hp - b.value * dt) : u.hp - b.value * dt;
+      else if (b.kind === "dot" && b.value) {
+        const before = u.hp;
+        u.hp = b.nonLethal ? Math.max(1, u.hp - b.value * dt) : u.hp - b.value * dt;
+        // A dot IS "a spell which does damage", so it cancels a salve on the tick it bites —
+        // burning under a Rain of Fire is exactly the fight you cannot regenerate through.
+        // Flagged rather than dispelled here: we are walking u.buffs, which the break edits.
+        burned ||= u.hp < before;
+      }
       if (b.delay > 0) b.delay -= dt; // Wind Walk's Transition Time, counting down to the vanish
       b.timeLeft -= dt;
       // Sanctuary ends on the health bar, not on a clock. Checked AFTER this tick's healing
@@ -9048,6 +9054,7 @@ export class SimWorld {
       if (b.untilHealed && u.hp >= u.maxHp) b.timeLeft = 0;
     }
     u.buffs = u.buffs.filter((b) => b.timeLeft > 0);
+    if (burned) this.breakItemRegen(u);
     if (u.hp <= 0) {
       this.kill(u);
       return true;
@@ -9071,6 +9078,7 @@ export class SimWorld {
       for (const t of this.unitsInAreaInternal(s.holder.x, s.holder.y, s.radius)) {
         if (t === s.holder || t.hp <= 0 || t.building || t.invulnerable) continue;
         t.hp -= s.dps * dt; // spell damage — no armor reduction
+        this.breakItemRegen(t); // "hit by a spell which does damage" — see breakItemRegen
         if (t.hp <= 0) this.kill(t, s.killerId);
       }
     }
@@ -9420,6 +9428,7 @@ export class SimWorld {
       if (!prey || prey.hp <= 0) { u.devouring = 0; continue; }
       const lvl = this.passiveLevelData(u, "Adev");
       prey.hp -= (lvl ? this.dataOf(lvl, 0, 5) : 5) * dt; // dataA — digest damage/sec
+      this.breakItemRegen(prey); // being digested is being damaged — see breakItemRegen
       if (prey.hp <= 0) { u.devouring = 0; this.kill(prey, u.id); }
     }
   }
@@ -14849,6 +14858,7 @@ export class SimWorld {
     for (const m of members) {
       if (m === target) continue;
       m.hp -= per; // already post-armor; spirit-shared damage isn't reduced again
+      this.breakItemRegen(m); // …and a share is damage: it takes the linked unit's salve with it
       if (m.hp <= 0) this.kill(m);
     }
     return dmg * (1 - share) + per; // target keeps the unshared part + its own slice
@@ -15071,6 +15081,34 @@ export class SimWorld {
     this.alerts.push({ kind: target.building ? "townattack" : "attack", player: target.owner, x: target.x, y: target.y });
   }
 
+  /**
+   * Cancel the NON-COMBAT consumables — the regeneration items (`AIrg`: Healing Salve,
+   * Clarity Potion, Scroll of Regeneration, and the Potions/Scrolls of Rejuvenation and
+   * Replenishment). Every one of their Ubertips opens with the game's own label for the
+   * family, `|cff87ceebNon-Combat Consumable|r`, and Blizzard's classic site states the rule
+   * outright on the Healing Salve: "This ability will be canceled if the units using the
+   * potion are attacked or are hit by a spell which does damage"
+   * (classic.battle.net/war3/basics/heroitemscharged.shtml).
+   *
+   * So it is ANY damage, not a threshold. This used to require a 20-damage hit — a number
+   * taken from Liquipedia and confirmable nowhere — which left a salve running through the
+   * whole early game, where a Footman's or a Ghoul's blow lands for less than that. The
+   * rows carry two unnamed booleans of their own (`DataD1`/`DataE1`, typed `bool` in
+   * AbilityMetaData's `irl4`/`irl5` with no WorldEditStrings shipped to name them, and the
+   * Hive thread on the Clarity Potion reports the editor mislabels them anyway), so the
+   * behaviour is not gated on either: all ten rows carry `DataE1 = 1`.
+   *
+   * Called from every path that removes hit points, not only from the attack path — the
+   * spirit-linked share is a reported-and-dismissed "bug" on Blizzard's own forums
+   * (us.forums.blizzard.com/en/warcraft3/t/critical-strike-cancels-non-combat-healing-via-
+   * spirit-link/36256: a crit on the linked hero dispelled the Spirit Walker's salve).
+   */
+  private breakItemRegen(target: SimUnit): void {
+    if (!target.buffs.some((b) => b.group?.startsWith(ITEM_REGEN_GROUP))) return;
+    target.buffs = target.buffs.filter((b) => !b.group?.startsWith(ITEM_REGEN_GROUP));
+    this.recomputeStats(target); // the mana half is a stat bonus — drop it now, not next tick
+  }
+
   /** Apply FINAL (post-reduction) damage: death, return fire, and (for physical
    *  hits) the impact SFX. Spell damage calls this directly with recordHit=false —
    *  WC3 ability damage ignores the armor value and plays its own effects. Returns
@@ -15085,15 +15123,10 @@ export class SimWorld {
     // Sleep (Dreadlord) breaks the instant the sleeper takes damage (WC3).
     if (target.buffs.some((b) => b.kind === "sleep")) target.buffs = target.buffs.filter((b) => b.kind !== "sleep");
     // …and so does a regeneration item. Drinking a Healing Salve and walking into a fight
-    // wastes it: the effect is dispelled by a hit worth at least ITEM_REGEN_BREAK damage.
-    // That threshold is an engine constant in no data file — it is documented on
-    // Liquipedia's Healing Salve page ("dispelled if the target is attacked or damaged by
-    // an ability that does at least 20 damage, before the damage is modified") and cannot
-    // be confirmed from the MPQ, unlike the amounts and durations above.
-    if (amount >= ITEM_REGEN_BREAK && target.buffs.some((b) => b.group?.startsWith(ITEM_REGEN_GROUP))) {
-      target.buffs = target.buffs.filter((b) => !b.group?.startsWith(ITEM_REGEN_GROUP));
-      this.recomputeStats(target); // the mana half is a stat bonus — drop it now, not next tick
-    }
+    // wastes it — see breakItemRegen for the rule, which is ANY damage and not a threshold.
+    // Placed with the sleep break, i.e. BEFORE the mana shield: being hit is being hit even
+    // when a shield eats the blow.
+    if (amount > 0) this.breakItemRegen(target);
     // Mana Shield (Naga): absorb incoming damage into mana at `value` mana per hp.
     amount = this.absorbWithManaShield(target, amount);
     if (amount <= 0) return 0;

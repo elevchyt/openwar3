@@ -81,6 +81,44 @@ says which. So every aim in `KNOWN_ABILITIES` was read out of the **item's Ubert
 keying the aim on the base code alone would make the Clarity Potion demand a target, or the
 Healing Salve fire on the drinker.
 
+## A non-combat consumable is cancelled by ANY damage
+
+The ten `AIrg` rows — Healing Salve, both Clarity Potions, the Scroll of Regeneration, and the
+six Potions/Scrolls of Rejuvenation and Replenishment — are one family, and the game names it
+itself: every one of their Ubertips opens `|cff87ceebNon-Combat Consumable|r`. That label is the
+behaviour. Blizzard's classic site states the rule on the Healing Salve:
+
+> "This ability will be canceled if the units using the potion are attacked or are hit by a
+> spell which does damage."
+> — [classic.battle.net/war3/basics/heroitemscharged.shtml](https://classic.battle.net/war3/basics/heroitemscharged.shtml)
+
+**There is no damage threshold.** This is the trap the implementation fell into once: a
+20-damage bar taken from Liquipedia and confirmable in no file left a salve running through the
+whole early game, where a Footman's or a Ghoul's blow lands for less than that — so the one
+period the salve exists for was the one period it could not be broken in. The rows do carry two
+booleans of their own (`DataD1`/`DataE1`, typed `bool` as `irl4`/`irl5` in `AbilityMetaData`),
+but no shipped WorldEditStrings names them and the Hive thread on the Clarity Potion reports the
+editor mislabels them anyway — so nothing is gated on either. All ten rows carry `DataE1 = 1`.
+
+The other half of the rule is **where** it is enforced. It is any path that removes hit points,
+not the attack path:
+
+| path | why it counts |
+|---|---|
+| `landDamage` | attacks and spell damage alike, before the mana shield — being hit is being hit even when a shield eats the blow |
+| `tickBuffs` (a `dot`) | "hit by a spell which does damage": you cannot regenerate through a Rain of Fire |
+| `spiritLinkSplit` | reported to Blizzard and [dismissed as not-a-bug](https://us.forums.blizzard.com/en/warcraft3/t/critical-strike-cancels-non-combat-healing-via-spirit-link/36256) — a crit on the linked hero dispels the linked Spirit Walker's salve |
+| `tickLightningShields` | the shield's aura damage is damage |
+| `tickDevour` | being digested is being damaged |
+
+`breakItemRegen` is the one implementation of it. Both halves of a Rejuvenation go together —
+that is what the single `ITEM_REGEN_GROUP` prefix is for — and the mana half is a stat bonus, so
+the break recomputes stats rather than waiting for the next tick to notice.
+
+This is also load-bearing for Computer+, whose two regeneration rungs are gated on there being
+no fight at all (`healArea` in [`plus/items.ts`](../src/ai/plus/items.ts)): a salve poured on a
+unit that is being swung at is a charge thrown away on the next blow.
+
 ## A carried ability is an ability
 
 `passiveLevelData(u, code)` used to look only at `u.abilities`. Every passive item in the game

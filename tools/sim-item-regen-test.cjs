@@ -67,12 +67,34 @@ function check(what, got, want, tol = 0.01) {
   check("…and nothing regenerates afterwards", u.hp - afterBreak, 0);
 }
 
-// A hit under the threshold leaves it running.
+// There is NO damage threshold: Blizzard's own classic site says the effect "will be canceled
+// if the units using the potion are attacked or are hit by a spell which does damage", so a
+// Footman's or a Ghoul's blow — well under the 20 this once demanded — takes it too.
 {
   const u = unit({ hp: 100 });
   applyRegen(u, 400, 0, 45);
   world.landDamage(u, 5, 0, false);
-  check("a 5-damage hit does NOT dispel it", u.buffs.filter((b) => b.group?.startsWith("item:regen")).length, 1);
+  check("a 5-damage hit dispels it too — no threshold", u.buffs.filter((b) => b.group?.startsWith("item:regen")).length, 0);
+}
+
+// …and every OTHER path that removes hit points is damage as well, not just the attack path.
+{
+  const u = unit({ hp: 100 });
+  applyRegen(u, 400, 0, 45);
+  // A dot ticking on the holder ("hit by a spell which does damage"): Rain of Fire's burn.
+  world.applyBuffInternal(u, { kind: "dot", group: "burn", timeLeft: 5, sourceId: 0, value: 4, value2: 0 });
+  world.tickBuffs(u, 1);
+  check("a dot tick dispels it", u.buffs.filter((b) => b.group?.startsWith("item:regen")).length, 0);
+}
+{
+  // Spirit Link's shared slice, which Blizzard's forums confirm is not a bug: a crit on the
+  // linked hero dispelled the linked Spirit Walker's salve.
+  const walker = unit({ hp: 100 });
+  const hero = unit({ hp: 500 });
+  applyRegen(walker, 400, 0, 45);
+  for (const u of [walker, hero]) { u.linkT = 10; u.linkShare = 0.5; u.linkGroup = [walker.id, hero.id]; }
+  world.spiritLinkSplit(hero, 40); // the split itself; applyDamage's armor pass is not the point here
+  check("a spirit-linked share dispels the OTHER unit's", walker.buffs.filter((b) => b.group?.startsWith("item:regen")).length, 0);
 }
 
 // Scroll of Rejuvenation I — DataA=250 hp AND DataB=100 mana over 45s: both halves break together.
