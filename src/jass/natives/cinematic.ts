@@ -32,12 +32,14 @@
 
 import type { CinematicScene, NativeCtx, Runtime } from "../runtime";
 import { intToRawcode } from "../lexer";
-import { asInt, asNum, asStr, jBool, JNULL, truthy, type JassValue } from "../values";
+import { asInt, asNum, asStr, jBool, jInt, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
 
 export function registerCinematicNatives(rt: Runtime): void {
+  // `SetCreepCampFilterState`'s state, per runtime — see the minimap-filter block below.
+  let creepFilter = true;
   // --- cinematic mode: what CinematicModeExBJ actually switches ----------------------
   // ShowInterface(false, fade) is the letterbox: the console fades out and the black bars
   // slide in over `fadeDuration` seconds (bj_CINEMODE_INTERFACEFADE = 0.5).
@@ -155,6 +157,21 @@ export function registerCinematicNatives(rt: Runtime): void {
     });
     return JNULL;
   });
+
+  // --- the minimap's own filter buttons ---------------------------------------------------
+  // Ally Color Mode: the button right of the minimap, Alt-A and these natives are three
+  // handles on ONE number — `SetAllyColorFilterStateHint` in UI\TriggerStrings.txt spells it
+  // out ("0 disables filtering, 1 … for the minimap, 2 … for the minimap and the game view"),
+  // and game/allyColor.ts carries the rest. Campaign chapters really do set it: OrcX02_03
+  // opens with `call SetAllyColorFilterState( 0 )`.
+  def(rt, "GetAllyColorFilterState", (c) => jInt(c.rt.hooks?.allyColorFilter?.() ?? 0));
+  def(rt, "SetAllyColorFilterState", (c, a) => (c.rt.hooks?.setAllyColorFilter?.(asInt(a[0])), JNULL));
+  def(rt, "EnableMinimapFilterButtons", (c, a) => (c.rt.hooks?.enableMinimapFilterButtons?.(truthy(a[0]), truthy(a[1])), JNULL));
+  // The creep-camp filter's own pair. We always draw the camp markers a viewpoint is entitled
+  // to (minimapView.CreepCamps), so the state is remembered honestly and nothing reads it yet
+  // — a lying getter is the one thing these must not be (see the header on the fog getters).
+  def(rt, "GetCreepCampFilterState", () => jBool(creepFilter));
+  def(rt, "SetCreepCampFilterState", (_c, a) => ((creepFilter = truthy(a[0])), JNULL));
 
   // PlayCinematic/PlayModelCinematic play a prerendered .avi / a full-screen model — the
   // campaign's between-mission movies. Nothing a melee or scenario map uses, and nothing we

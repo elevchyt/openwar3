@@ -1101,6 +1101,9 @@ export class MapViewerScene {
   /** The game's own string table (UI\FrameDef\GlobalStrings.fdf) behind GetLocalizedString:
    *  blizzard.j writes the whole victory/defeat screen in its keys. Loaded once, lazily. */
   private globalStrings: FdfLibrary | null = null;
+  /** `EnableMinimapFilterButtons(enableAlly, …)` — a map may take the Ally Color Mode button
+   *  away (the greyed `…Disabled` face, and Alt-A stops answering). On by default. */
+  private allyColorButtonOn = true;
   private screen3 = new Float32Array(3); // scratch for the world→screen projection
   private world3 = new Float32Array(3);
   private minimap: HTMLCanvasElement | null = null;
@@ -1523,6 +1526,10 @@ export class MapViewerScene {
         if (other !== this.localPlayer || type !== AllianceType.SharedControl) return;
         this.announce(fillSlots(this.strings.forRace(value ? "Controlgranted" : "Controlrevoked", this.localRace), [this.playerLabel(source)]));
       };
+      // Ally Color Mode changed (the button right of the minimap, Alt-A, or a script's
+      // SetAllyColorFilterState): the field has already been re-tinted by the controller —
+      // what is left is the button's own face, which IS the mode it is in.
+      this.rts.onAllyColorModeChange = () => this.hud?.refreshAllyColorButton();
       this.registerResourceNodes(nodes);
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
@@ -2558,6 +2565,16 @@ export class MapViewerScene {
       // melee victory/defeat dialog is written entirely in its keys, so without this the
       // player would be shown "GAMEOVER_VICTORY_MSG" instead of "Victory!".
       localizedString: (key) => this.globalStrings?.strings.get(key),
+      // --- Ally Color Mode (the button right of the minimap) ---
+      // The script's handle on the same number the button cycles (see game/allyColor.ts).
+      // Real maps do use it: OrcX02_03 (the expansion's orc chapter three) opens with
+      // `call SetAllyColorFilterState( 0 )` to put the player back in player colours.
+      allyColorFilter: () => this.rts?.allyColorMode() ?? 0,
+      setAllyColorFilter: (state) => this.rts?.setAllyColorMode(state),
+      enableMinimapFilterButtons: (ally) => {
+        this.allyColorButtonOn = ally;
+        this.hud?.refreshAllyColorButton();
+      },
       // The quit button of the victory/defeat dialog. `doScoreScreen` asks for WC3's
       // post-game score screen (Glue\ScoreScreen.fdf) — we don't build one yet, so both
       // paths simply leave the match.
@@ -3536,7 +3553,7 @@ export class MapViewerScene {
       if (!model) return;
       const instance = model.addInstance();
       instance.setScene(map.worldScene);
-      instance.setTeamColor(this.rts.playerColor(su.owner)); // the owner's COLOUR, not its slot
+      instance.setTeamColor(this.rts.unitColor(su.owner)); // the owner's COLOUR, not its slot (and the ally-colour filter over it)
       if (!this.rts.remodel(simId, instance, def)) {
         instance.hide(); // the unit went away while we were loading
         return;
@@ -3644,7 +3661,7 @@ export class MapViewerScene {
     if (!model) return null;
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
-    instance.setTeamColor(this.rts.playerColor(owner)); // a slot's colour is not its index
+    instance.setTeamColor(this.rts.unitColor(owner)); // a slot's colour is not its index (and Ally Color Mode paints over both)
     const simId = this.rts.addUnit(instance, def, x, y, facing, owner, team, constructionTime, reservedId); // default: face south
     // -1: the sim unit this model was loading for is already gone (a trigger created and
     // then removed it while the model streamed). Drop the model rather than leave a ghost.
@@ -5837,7 +5854,7 @@ export class MapViewerScene {
         this.loc3[1] = rally.y;
         this.loc3[2] = rally.z;
         this.rallyFlag.setLocation(this.loc3);
-        this.rallyFlag.setTeamColor(this.rts?.playerColor(rally.owner) ?? rally.owner); // team-coloured (issue #86)
+        this.rallyFlag.setTeamColor(this.rts?.unitColor(rally.owner) ?? rally.owner); // team-coloured (issue #86)
         this.rallyFlag.show();
       } else {
         this.rallyFlag.hide();
@@ -5852,7 +5869,7 @@ export class MapViewerScene {
       this.loc3[1] = markers[i].y;
       this.loc3[2] = markers[i].z;
       inst.setLocation(this.loc3);
-      inst.setTeamColor(this.rts?.playerColor(markers[i].owner) ?? markers[i].owner); // pooled across owners
+      inst.setTeamColor(this.rts?.unitColor(markers[i].owner) ?? markers[i].owner); // pooled across owners
       inst.show();
     }
     for (let i = markers.length; i < this.queueFlags.length; i++) this.queueFlags[i].hide();
@@ -6575,6 +6592,10 @@ export class MapViewerScene {
       minimapPing: (wx, wy) => this.signalPing(this.localPlayer, wx, wy),
       selection: () => this.rts?.selectedInfo() ?? null,
       dots: () => this.rts?.dots() ?? [],
+      allyColorMode: () => this.rts?.allyColorMode() ?? 0,
+      cycleAllyColorMode: () => this.rts?.cycleAllyColorMode() ?? 0,
+      allyColorButtonEnabled: () => this.allyColorButtonOn,
+      uiString: (key, fallback) => this.globalStrings?.strings.get(key) ?? fallback,
       creepCamps: () => this.rts?.creepCamps() ?? [],
       minimapIcons: () => this.rts?.minimapIcons() ?? [],
       mapBounds: () => {
@@ -7170,7 +7191,9 @@ export class MapViewerScene {
     // Team glow follows the owner's COLOUR, not their slot (see RtsController.playerColor) —
     // Rise of the Naga recolours Maiev's slot 0 to BLUE, and a bust keyed on the slot showed
     // her red in the console while the same model stood blue on the terrain. 12 is the
-    // classic neutral (black) slot, for a unit with no owner at all.
+    // classic neutral (black) slot, for a unit with no owner at all. Through `unitColor` for
+    // the same reason: the bust is the unit you have selected, so an ally-colour filter that
+    // painted it teal on the terrain has to paint it teal in the console too.
     // The `portrait` flag makes the viewer loop the model's "Portrait" idle clip
     // instead of walk/stand (portrait models have no walk — a stray one on some
     // heroes was being picked, so the bust just froze).
@@ -7178,7 +7201,7 @@ export class MapViewerScene {
     // the bust camera a bit left so the whole face shows.
     const panLeft = /paladin/i.test(sel.model) ? 0.14 : 0;
     this.portraitViewer
-      .load(path, sel.owner >= 0 ? this.rts.playerColor(sel.owner) : 12, true, panLeft)
+      .load(path, sel.owner >= 0 ? this.rts.unitColor(sel.owner) : 12, true, panLeft)
       .then(() => {
         this.portraitFor = id;
         this.portraitViewer!.start();
@@ -9133,9 +9156,12 @@ export class MapViewerScene {
       inst = model.addInstance();
       inst.setScene(map.worldScene);
       inst.setUniformScale(def.modelScale || 1);
-      inst.setTeamColor(this.rts?.playerColor(this.localPlayer) ?? this.localPlayer); // the team-coloured parts, in YOUR colour
       this.buildGhosts.set(def.id, inst);
     }
+    // The team-coloured parts, in YOUR colour — re-asked on every show rather than once at
+    // load, because this instance is cached per building TYPE and outlives an Ally Color Mode
+    // change (which repaints the field but knows nothing about a ghost nobody is placing).
+    inst.setTeamColor(this.rts?.unitColor(this.localPlayer) ?? this.localPlayer);
     // (Re)apply the finished-building pose every time it's shown.
     this.ghostBirthFrame = this.applyGhostPose(inst);
     if (this.placement?.def.id === def.id) {
@@ -9276,7 +9302,7 @@ export class MapViewerScene {
     const inst = model.addInstance();
     inst.setScene(this.viewer.map.worldScene);
     inst.setUniformScale(def.modelScale || 1);
-    inst.setTeamColor(this.rts?.playerColor(this.localPlayer) ?? this.localPlayer);
+    inst.setTeamColor(this.rts?.unitColor(this.localPlayer) ?? this.localPlayer);
     const g = { inst, defId: def.id, frame: this.applyGhostPose(inst) };
     this.pendingGhosts.set(key, g);
     this.placePendingGhost(g, x, y, blocked);

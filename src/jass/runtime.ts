@@ -769,6 +769,14 @@ export interface EngineHooks {
    *  (GetLocalizedString("GAMEOVER_VICTORY_MSG") → "Victory!"), so without this the
    *  dialog would render the key. Undefined → the caller keeps the key (identity). */
   localizedString?(key: string): string | undefined;
+  /** GetAllyColorFilterState / SetAllyColorFilterState — the local player's Ally Color Mode
+   *  (0 off, 1 minimap, 2 minimap + game world; see game/allyColor.ts). A display setting the
+   *  script may drive, which is why it is a hook and not sim state. */
+  allyColorFilter?(): number;
+  setAllyColorFilter?(state: number): void;
+  /** EnableMinimapFilterButtons(enableAlly, enableCreep) — take the two minimap filter
+   *  buttons away from the player. We draw only the ally one, so only that half lands. */
+  enableMinimapFilterButtons?(ally: boolean, creep: boolean): void;
   /**
    * RemovePlayer(player, PLAYER_GAME_RESULT_*) — THIS PLAYER'S GAME IS OVER.
    *

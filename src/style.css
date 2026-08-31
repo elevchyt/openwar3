@@ -740,6 +740,22 @@ body.hud-tooltip-skinned .hud-chatbar::after {
 .hud-iconbtn:hover { filter: brightness(1.12); }
 .hud-iconbtn.pressed { transform: scale(0.98); }
 
+/* Ally Color Mode button — the third socket of the column the console art punches to the
+   RIGHT of the minimap (ui/hud.ts CONSOLE_ZONES.allyColor places it there). The art is the
+   game's own `MiniMapAllyButton*` texture and carries its own gold rim, so there is nothing
+   to draw around it; `.hud-iconbtn` already stretches it edge to edge and sinks it on a
+   press. A button the map has taken away (EnableMinimapFilterButtons) wears the game's own
+   greyed face — no filter of ours over a live one (CLAUDE.md: never fake a DIS* twin). */
+.hud-minimap-ally {
+  z-index: 4;
+}
+.hud-minimap-ally.disabled {
+  cursor: default;
+}
+.hud-minimap-ally.disabled:hover {
+  filter: none;
+}
+
 /* Idle-worker button — the race's own worker button ABOVE the minimap's top-left corner, with
    an idle-count in its bottom-right. Sized and offset off the STAGE like the hero bar (same
    68 px at 1080p as a hero's button — these are the same kind of button), so it scales with

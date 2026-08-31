@@ -11,6 +11,7 @@ import { escapeHtml, wc3StripMarkup, wc3ToHtml } from "./wc3Text";
 
 import { CHAT_MAX_LENGTH, sanitizeChat, type ChatTarget } from "../game/chat";
 import type { HeroBarEntry } from "../game/rts";
+import { allyButtonSkin, type AllyColorMode } from "../game/allyColor";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
@@ -182,6 +183,17 @@ export interface HudDriver {
   selection(): HudSelection | null;
   /** Minimap dots: world positions + owning player (for color). */
   dots(): Array<{ x: number; y: number; owner: number }>;
+  /** Ally Color Mode — which of the three the local player is in (game/allyColor.ts). The
+   *  button right of the minimap wears its face; Alt-A and a click cycle it. */
+  allyColorMode(): AllyColorMode;
+  /** Cycle it, and report where it landed (so the button can redress itself at once). */
+  cycleAllyColorMode(): AllyColorMode;
+  /** …unless the map has taken the button away (`EnableMinimapFilterButtons`), in which
+   *  case it wears the greyed face and neither the click nor Alt-A answers. */
+  allyColorButtonEnabled(): boolean;
+  /** A `UI\FrameDef\GlobalStrings.fdf` string by key, with a literal to fall back on when
+   *  no install is mounted. (The game writes the minimap buttons' tooltips in it.) */
+  uiString(key: string, fallback: string): string;
   /** Creep-camp difficulty markers: camp centre + combined creep level (the HUD
    *  colours and sizes it per `UI\MiscData.txt` [Minimap]). Fixed map data. */
   creepCamps(): Array<{ x: number; y: number; level: number }>;
@@ -326,6 +338,25 @@ export interface HudDriver {
 }
 
 /**
+ * One socket of the minimap's BUTTON COLUMN — the small squares the console art punches to
+ * the right of the minimap, counted from the top (0-based).
+ *
+ * Measured off `<Race>UITile01` with the same "transparent OR near-black" scan CONSOLE_ZONES
+ * below was: four holes 42 texels wide (x 311…352) and 37 tall, on a 44-texel pitch (rows
+ * 226, 270, 314, 358), with a ROUND socket under them at row 411 — five buttons in all, and
+ * `UI\war3skins.txt` names exactly five: the signal (ping), terrain, ally-colour, creep-camp
+ * and formation buttons. The circle is the ping's: its art is the only one of the five drawn
+ * as a disc with a gold ring of its own.
+ *
+ * Times the tile's own 1 texel = 0.0005 world, y counted UP from row 512 — the same reading
+ * every rect in CONSOLE_ZONES is (see its block comment for why the scan is not alpha alone).
+ */
+function minimapButtonSocket(index: number): { x: number; y: number; w: number; h: number } {
+  const top = 226 + 44 * index; // first socket's top row, then the column's pitch
+  return { x: 311 * 0.0005, y: (512 - (top + 37)) * 0.0005, w: 42 * 0.0005, h: 37 * 0.0005 };
+}
+
+/**
  * Where each widget goes in the console — the sockets the art leaves for it.
  *
  * These are the FDF's own coordinates, in the 0.8 × 0.6 space `ConsoleUI.fdf` is written in:
@@ -373,6 +404,10 @@ export interface HudDriver {
  */
 const CONSOLE_ZONES = {
   minimap: { x: 0.0095, y: 0.0070, w: 0.1390, h: 0.1390 },
+  /** The Ally Color Mode button, in the THIRD socket of the minimap's button column
+   *  (`UI\TipStrings.txt` Tip12: "…the Toggle Minimap Ally Colors button to the right of
+   *  the minimap"). See `minimapButtonSocket`. */
+  allyColor: minimapButtonSocket(2),
   portrait: { x: 0.2157, y: 0.0320, w: 0.0747, h: 0.0795 },
   /** The first strip under the arch — the unit's hit points. */
   portraitHp: { x: 0.2157, y: 0.0165, w: 0.0747, h: 0.0115 },
@@ -982,6 +1017,9 @@ export class GameHud {
   private mmH = MINIMAP_SIZE;
   private camRect?: HTMLDivElement; // the white camera box over the map picture (#112)
   private minimapDrag: number | null = null; // pointerId of a held left-press dragging the camera
+  /** The Ally Color Mode button in the socket right of the minimap (buildAllyColorButton).
+   *  Absent with no install mounted: the socket is part of the console ART. */
+  private allyColorBtn?: HTMLButtonElement;
   private idleWorkerBadge!: HTMLButtonElement;
   private idleWorkerCount!: HTMLSpanElement;
   /** The hero bar's seven slots (issue #95), built once and shown per living hero. */
@@ -1425,6 +1463,18 @@ export class GameHud {
       this.driver.useInventory(slot);
       return;
     }
+    // Alt-A cycles the Ally Color Mode — the game's own binding, printed in the button's
+    // tooltip ("Set Ally Color Mode (|Cfffed312Alt-A|R)", GlobalStrings.fdf). Read before the
+    // command card's letters so a unit whose card has an "A" on it cannot eat it, and
+    // `preventDefault` because Alt+letter is a menu accelerator in the browser.
+    if (e.altKey && e.code === "KeyA") {
+      e.preventDefault();
+      if (this.driver.allyColorButtonEnabled()) {
+        this.driver.cycleAllyColorMode();
+        this.refreshAllyColorButton();
+      }
+      return;
+    }
     // Trigger the command whose hotkey matches the pressed key. A passive isn't a
     // command, so its letter isn't taken — it can't shadow a real order sharing it.
     // Neither is an unavailable one (a greyed DISBTN button has no hotkey in WC3
@@ -1467,6 +1517,9 @@ export class GameHud {
     const inventory = this.buildInventory(skinned);
     const command = this.buildCommandCard();
     console_.append(minimap, portraitWrap, infoText, inventory, command);
+    // The minimap's button column is punched through the console ART, so the button only
+    // exists when that art is on screen; the placeholder strip has nowhere to put it.
+    if (skinned) console_.append(this.buildAllyColorButton());
     if (skinned) console_.append(this.selHpText, this.selMpText);
     // The crest that replaces the six slots when the selection carries nothing. LAST, so it
     // paints over them; only the console art's own version of this corner is under it.
@@ -1489,6 +1542,7 @@ export class GameHud {
       this.root.classList.add("hud-skinned-console");
 
       place(minimap, CONSOLE_ZONES.minimap);
+      if (this.allyColorBtn) place(this.allyColorBtn, CONSOLE_ZONES.allyColor);
       place(portraitWrap, CONSOLE_ZONES.portrait);
       place(this.selHpText, CONSOLE_ZONES.portraitHp);
       place(this.selMpText, CONSOLE_ZONES.portraitMana);
@@ -1995,6 +2049,74 @@ export class GameHud {
     onPress(this.idleWorkerBadge, () => this.driver.cycleIdleWorker());
     box.appendChild(this.idleWorkerBadge);
     return box;
+  }
+
+  /**
+   * The Ally Color Mode button — the third socket in the column right of the minimap.
+   *
+   * One button, three faces: it shows the mode it is IN (the art ships a triple per mode —
+   * `MiniMapAllyButton{Off,Inactive,Active}{Enabled,Pushed,Disabled}` in `UI\war3skins.txt`),
+   * and a click steps to the next one, exactly as Alt-A does. See game/allyColor.ts for what
+   * the three modes are and which face belongs to which.
+   *
+   * The art is the game's own and carries its whole look — the gold rim included — so there
+   * is no border of ours around it, the same rule every command button follows. It is named
+   * by war3skins KEY rather than by path so the orc console gets the orc button.
+   */
+  private buildAllyColorButton(): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.className = "hud-minimap-ally hud-iconbtn";
+    this.allyColorBtn = btn;
+    // The press: `onPress` gives it the same sink-and-release every other console button has.
+    // A button the map has taken away (EnableMinimapFilterButtons) is bound all the same and
+    // simply does nothing — the same discipline the upper button bar follows, so a button that
+    // comes back does not need re-binding.
+    onPress(btn, () => {
+      if (!this.driver.allyColorButtonEnabled()) return;
+      this.driver.cycleAllyColorMode();
+      this.refreshAllyColorButton(); // the face IS the mode, so it changes under the cursor
+    });
+    btn.oncontextmenu = (e) => e.preventDefault();
+    // The game's own pushed face while it is held, over the top of the pressed transform.
+    btn.addEventListener("pointerdown", (e) => {
+      if (e.button === 0 && this.driver.allyColorButtonEnabled()) this.paintAllyColorButton("Pushed");
+    });
+    btn.addEventListener("pointerup", () => this.refreshAllyColorButton());
+    btn.onpointerenter = () => this.showAllyColorTooltip();
+    btn.onpointerleave = () => {
+      this.cmdTooltip.hidden = true;
+      this.refreshAllyColorButton(); // a press dragged off the button never got its pointerup
+    };
+    this.refreshAllyColorButton();
+    return btn;
+  }
+
+  /** Redress the button for the mode it is now in — after a click, Alt-A, or a script's
+   *  `SetAllyColorFilterState` / `EnableMinimapFilterButtons`. Public because the mode can
+   *  change from outside the HUD entirely (mapViewer wires both). */
+  refreshAllyColorButton(): void {
+    this.paintAllyColorButton(this.driver.allyColorButtonEnabled() ? "Enabled" : "Disabled");
+  }
+
+  private paintAllyColorButton(press: "Enabled" | "Pushed" | "Disabled"): void {
+    if (!this.allyColorBtn) return;
+    const url = this.driver.blpUrl(this.driver.skinPath(allyButtonSkin(this.driver.allyColorMode(), press)));
+    this.allyColorBtn.style.backgroundImage = url ? `url(${url})` : "";
+    this.allyColorBtn.classList.toggle("disabled", press === "Disabled");
+  }
+
+  /** The button's tooltip, in the same slab above the command card every other HUD tooltip
+   *  uses — and in the game's own words: `MINIMAPALLYCOLORTOOLTIP` over its `_UBER` body,
+   *  whose `|Cff…` runs are what paints "Allies" teal and "Enemies" red in the text. */
+  private showAllyColorTooltip(): void {
+    const title = this.driver.uiString("MINIMAPALLYCOLORTOOLTIP", "Set Ally Color Mode (|Cfffed312Alt-A|R)");
+    const body = this.driver.uiString(
+      "MINIMAPALLYCOLORTOOLTIP_UBER",
+      "This option cycles through three different unit color modes.",
+    );
+    this.cmdTooltip.innerHTML =
+      `<div class="hud-tooltip-title">${wc3ToHtml(title)}</div><div class="hud-tooltip-desc">${wc3ToHtml(body)}</div>`;
+    this.cmdTooltip.hidden = false;
   }
 
   /**

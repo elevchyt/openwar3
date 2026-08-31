@@ -32,6 +32,7 @@ import { perfLog } from "../dev/perfLog";
 import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot, FxSnapshot } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
+import { allyFilterColor, nextAllyColorMode, toAllyColorMode, type AllyColorMode, type ColorSide } from "./allyColor";
 import type { RenderBuildJob, RenderUnit } from "./renderUnit";
 import { SnapshotIndex } from "./renderView";
 import type { FogArea, FogModifier } from "./fog";
@@ -246,6 +247,9 @@ interface Entry {
    * door, drawn over the rubble the stand-in was correctly holding.
    */
   borrowedBody?: true;
+  /** A `SetUnitColor` the script put on THIS unit — the colour it wears in place of its
+   *  owner's. Kept so the Ally Color Mode filter can be lifted back off it (unitColor). */
+  colorOverride?: number;
   curSeq: number; // sequence index currently playing (avoid redundant sets)
   // Art - Animation - Walk/Run Speed (unitUI): the movement speeds the model's "Walk"/"Walk
   // Fast" clips were authored for. The walk cycle is re-rated by speed/gait — see walkAnim().
@@ -934,6 +938,85 @@ export class RtsController {
     this.playerColors.set(owner, color);
   }
 
+  // --- Ally Color Mode (the button right of the minimap, and Alt-A) ------------------------
+  //
+  // See game/allyColor.ts for what the three modes are and where the game states them. The
+  // state lives here for the same reason `playerColors` does: this object owns both halves of
+  // the question — who is allied with whom, and what colour a slot wears — and it is the one
+  // place the minimap and the world can be answered from consistently.
+  //
+  // It is a LOCAL display setting, never a fact about the world: nothing here reaches the sim,
+  // the wire or another seat, and a client that turns it on sees a recoloured picture of the
+  // same match everybody else is playing.
+
+  /** `SetAllyColorFilterState`'s state — 0 off, 1 minimap, 2 minimap + game world. The
+   *  game boots at 0 (TriggerData's own `_SetAllyColorFilterState_Defaults=0`). */
+  private allyColorFilter: AllyColorMode = 0;
+
+  /** Called when the mode changes, so the console's button can wear the face of the mode it
+   *  is now in. The bodies on the field are re-tinted here (`retintUnits`) — they are ours. */
+  onAllyColorModeChange: (() => void) | null = null;
+
+  /** `GetAllyColorFilterState`, and what the button paints its face from. */
+  allyColorMode(): AllyColorMode {
+    return this.allyColorFilter;
+  }
+
+  /** `SetAllyColorFilterState` — from the script, or from the button/Alt-A through
+   *  `cycleAllyColorMode`. Out-of-range states clamp (TriggerData: `_Limits=0,2`). */
+  setAllyColorMode(state: number): void {
+    const next = toAllyColorMode(state);
+    if (next === this.allyColorFilter) return;
+    this.allyColorFilter = next;
+    this.retintUnits();
+    this.onAllyColorModeChange?.();
+  }
+
+  /** Alt-A / the button: step to the next of the three modes and report where we landed. */
+  cycleAllyColorMode(): AllyColorMode {
+    this.setAllyColorMode(nextAllyColorMode(this.allyColorFilter));
+    return this.allyColorFilter;
+  }
+
+  /** What `owner` is to the LOCAL player. Both neutrals arrive as owner -1 (see
+   *  NEUTRAL_HOSTILE_OWNER / NEUTRAL_PASSIVE_OWNER), which is why a creep is left alone
+   *  rather than reddened — allyColor.ts's `allyFilterColor` says why that is the safer half. */
+  private colorSide(owner: number): ColorSide {
+    if (owner < 0) return "neutral";
+    if (owner === this.localPlayer) return "self";
+    return this.alliances.coAllied(this.localPlayer, owner) ? "ally" : "enemy";
+  }
+
+  /** The colour a minimap dot for `owner` should be painted in — the filter's answer, or
+   *  the player's own colour. */
+  private minimapColor(owner: number): number {
+    return allyFilterColor(this.allyColorFilter, "minimap", this.colorSide(owner)) ?? this.playerColor(owner);
+  }
+
+  /**
+   * The colour a unit's team-coloured parts should wear in the WORLD — what every
+   * `setTeamColor` on a body goes through (mapViewer).
+   *
+   * `override` is a `SetUnitColor` the script put on this one unit; it stands in for the
+   * player's colour, and the FILTER stands over both. A filter is a display mode over the
+   * whole picture, so while one is on it has the last word — exactly as it does over
+   * `SetPlayerColor`.
+   */
+  unitColor(owner: number, override?: number): number {
+    return allyFilterColor(this.allyColorFilter, "world", this.colorSide(owner)) ?? override ?? this.playerColor(owner);
+  }
+
+  /** Re-tint every body on the field to `unitColor` — for the frame the mode changes on.
+   *  Destructibles are skipped: their instance is BORROWED from the viewer (see Entry). */
+  retintUnits(): void {
+    for (const e of this.byId.values()) {
+      if (e.borrowedBody) continue;
+      const u = this.sim.units.get(e.simId);
+      if (!u) continue;
+      e.unit.instance.setTeamColor?.(this.unitColor(u.owner, e.colorOverride));
+    }
+  }
+
   /** Is the player's interface on screen — `ShowInterface` AND `EnableUserUI` (see
    *  MapViewerScene.syncHudVisible, which owns the pair and pushes their AND here). Read by
    *  the world-layer overlays, which belong to the interface even though they are drawn over
@@ -985,6 +1068,9 @@ export class RtsController {
   /** JASS SetPlayerAlliance / GetPlayerAlliance. */
   setPlayerAlliance(source: number, other: number, type: number, value: boolean): void {
     this.alliances.set(source, other, type, value);
+    // Who is teal and who is red is an ALLIANCE, so a side changing hands repaints the field
+    // while an ally-colour filter is on. (Cheap: the matrix only moves on a script's say-so.)
+    if (this.allyColorFilter > 0 && type === AllianceType.Passive) this.retintUnits();
   }
   getPlayerAlliance(source: number, other: number, type: number): boolean {
     return this.alliances.get(source, other, type);
@@ -3007,9 +3093,17 @@ export class RtsController {
     e.curRate = NaN; // force setAnimRate to re-apply against the new override next tick
   }
   /** JASS SetUnitColor / SetUnitOwner's changeColor — re-tint the team-coloured
-   *  model parts to a player-colour index (our slot doubles as the colour). */
+   *  model parts to a player-colour index (our slot doubles as the colour).
+   *
+   *  Remembered on the entry, not just applied: the Ally Color Mode filter paints over every
+   *  body while it is on, and the colour this unit goes back to when it comes off is this one
+   *  rather than its owner's (see `unitColor`). */
   setUnitTeamColor(simId: number, colorIndex: number): void {
-    this.byId.get(simId)?.unit.instance.setTeamColor?.(colorIndex);
+    const e = this.byId.get(simId);
+    if (!e) return;
+    e.colorOverride = colorIndex;
+    const u = this.sim.units.get(simId);
+    e.unit.instance.setTeamColor?.(u ? this.unitColor(u.owner, colorIndex) : colorIndex);
   }
   /** JASS SetUnitAnimation / ResetUnitAnimation (7.17) — play the clip whose sequence
    *  name matches `animation` ("attack", "stand victory", "birth"; "" resets to the
@@ -6206,7 +6300,12 @@ export class RtsController {
     // `owner` on a dot is read for one thing only — what COLOUR to paint it — so it carries
     // the player's colour rather than its slot (see playerColor).
     const dots = this.snapshot.active ? dotsFromSnapshot(this.snapshot.units) : minimapDots(this.sim, vp);
-    if (this.playerColors.size) for (const d of dots) d.owner = this.playerColor(d.owner);
+    // Ally Color Mode paints that colour instead, from mode 2 up (allyColor.ts). Only for the
+    // LOCAL viewpoint: the filter is this seat's display setting, and asking for somebody
+    // else's dots (a test, an observer) must not come back wearing our teal.
+    const mine = vp === this.local;
+    if (mine && this.allyColorFilter > 0) for (const d of dots) d.owner = this.minimapColor(d.owner);
+    else if (this.playerColors.size) for (const d of dots) d.owner = this.playerColor(d.owner);
     return dots;
   }
 
