@@ -295,6 +295,10 @@ interface Entry {
   aoeHi?: boolean; // last AoE-target green-tint state applied (avoids redundant setVertexColor)
   illus?: boolean; // last Mirror-Image blue-wash state applied (owner/allies only)
   fade?: number; // last ghost fade applied (invisible/ethereal) — see INVIS_ALPHA
+  /** How long the invisibility now coming on takes in total, captured the first frame this
+   *  entry saw it — a buff carries what is LEFT of its transition, never what it started
+   *  with, so the blend has no other way to know how far along it is. 0 = nothing fading. */
+  fadeSpan?: number;
   /** Last alternate-model state this entry's animation set was built for (see animPropsFor).
    *  Undefined until a unit first shows it can be in two forms, which is what keeps the sync
    *  off the overwhelming majority of units that only ever have one. */
@@ -307,18 +311,18 @@ interface Entry {
 // declare no art whatsoever, so there is nothing in the MPQs to read this from.
 const INVIS_ALPHA = 0.5;
 
-// …and it is reached by BLENDING, over the tail of the invisibility's own Transition Time.
-// That period is a visual one as much as a mechanical one — the unit is "blending out" while
-// it is still perfectly targetable, which is what makes an opponent's window to punish a Wind
-// Walk something they can SEE (hiveworkshop 370226; see spells.ts invisTransition for the
+// …and it is reached by BLENDING, over the invisibility's OWN Transition Time. That period is
+// a visual one as much as a mechanical one — the unit is "blending out" while it is still
+// perfectly targetable, which is what makes an opponent's window to punish a Wind Walk
+// something they can SEE (hiveworkshop 370226; see spells.ts invisTransition for the
 // mechanical half). The blend is timed to END exactly as the fade engages, so the frame the
 // model reaches INVIS_ALPHA is the frame the sim stops letting anything target it.
 //
-// A fixed window rather than the whole transition, because a buff carries what is LEFT of its
-// delay and not what it started with. 0.6 is `[AOwk]` DataA — the Blademaster's whole
-// transition, and the longest blend anything needs; a Shadow Meld's 1.5s simply stands there
-// for its first 0.9. OURS, like INVIS_ALPHA: nothing in the MPQs describes the ramp.
-const INVIS_BLEND = 0.6;
+// Each ability therefore blends over its own number and none is a snap: Wind Walk's 0.6s
+// (`[AOwk]` DataA), Shadow Meld's 1.5 ("Fade Duration"), and the quarter second the
+// Sorceress's Invisibility and the Potions come on over. The ramp itself is OURS, like
+// INVIS_ALPHA — nothing in the MPQs describes it — but every duration it runs over is the
+// game's.
 
 // The blue wash an illusion wears for its owner and their allies — the same "not the real
 // thing" read a building has while it is being placed. Multiplies the mesh, so the unit's
@@ -1607,7 +1611,7 @@ export class RtsController {
     // rather than be written straight to the instance: baseColor caches the model's own
     // colour and this method re-emits from it every time the fog brightness changes, so
     // an alpha written anywhere else would be clobbered on the next re-emit.
-    const fade = this.ghostAlpha(u);
+    const fade = this.ghostAlpha(e, u);
     if (e.fogTintB === b && e.aoeHi === hi && e.fade === fade && e.illus === illus) return; // unchanged since last tick
     e.fogTintB = b;
     e.aoeHi = hi;
@@ -1628,17 +1632,32 @@ export class RtsController {
    *
    * Ethereal is a state and snaps. An invisibility is a FADE and does not: while its
    * Transition Time is still running the unit is not invisible at all — it can be seen, shot
-   * at, and hit by anything already in the air — so it is drawn solid, and only blends out
-   * over the last `INVIS_BLEND` of the wait. The buff's own `delay` is what is left of that
-   * wait, and it crosses the wire, so a client draws the same blend from the same number
-   * rather than re-deriving one of its own.
+   * at, and hit by anything already in the air — so it blends out across that whole window and
+   * arrives at `INVIS_ALPHA` on the frame the sim stops letting anything target it. Even the
+   * abilities that state no transition get one (spells.ts `invisTransition`), so no
+   * invisibility in the game snaps to its target opacity.
+   *
+   * The buff's own `delay` is what is left of the wait, and it crosses the wire, so a client
+   * draws the same blend off the same number rather than re-deriving one of its own. What it
+   * does NOT carry is the wait's LENGTH — hence `Entry.fadeSpan`.
    */
-  private ghostAlpha(u: RenderUnit): number {
-    if (u.ethereal || u.invisible) return INVIS_ALPHA;
+  private ghostAlpha(e: Entry, u: RenderUnit): number {
+    if (u.ethereal || u.invisible) {
+      e.fadeSpan = 0;
+      return INVIS_ALPHA;
+    }
     let left = Infinity;
     for (const b of u.buffs) if (b.kind === "invisible" && b.delay > 0) left = Math.min(left, b.delay);
-    if (!Number.isFinite(left)) return 1; // no invisibility coming on — solid
-    const t = Math.max(0, Math.min(1, 1 - left / INVIS_BLEND));
+    if (!Number.isFinite(left)) {
+      e.fadeSpan = 0;
+      return 1; // no invisibility coming on — solid
+    }
+    // The longest `delay` this entry has seen on this transition IS its length: the first
+    // frame of a Wind Walk reports ~0.6 and a Shadow Meld ~1.5, and it only counts down from
+    // there. Re-seeded rather than assumed, so a unit that walks into view halfway through
+    // somebody's fade still blends the rest of the way instead of jumping.
+    if (!e.fadeSpan || left > e.fadeSpan) e.fadeSpan = left;
+    const t = Math.max(0, Math.min(1, 1 - left / e.fadeSpan));
     return 1 - (1 - INVIS_ALPHA) * t;
   }
 

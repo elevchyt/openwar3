@@ -820,8 +820,11 @@ export class SoundBoard {
    *  distances. Positional — a rune popped across the map should sound like it. Routed to
    *  the uncapped "spell" channel for the same reason cast sounds are (issue #23): the
    *  shared impact pool sits at its cap through a fight and would silently drop it. */
-  playAbilitySound(label: string, at?: SoundPos): void {
-    if (label) this.playPool(this.resolve("ability", label), "spell", at);
+  playAbilitySound(label: string, at?: SoundPos): boolean {
+    const clip = label ? this.resolve("ability", label) : null;
+    if (!clip) return false; // no such label in AbilitySounds.slk — the caller may try elsewhere
+    this.playPool(clip, "spell", at);
+    return true;
   }
 
   /** The WAV behind an AbilitySounds label, for a caller that wants to LOOP it rather than

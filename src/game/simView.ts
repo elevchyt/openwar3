@@ -51,6 +51,11 @@ export interface SimView {
    *  the same question before it acts, so the button and the rule can never disagree. */
   rootRefusal(u: SimUnit): string | null;
 
+  /** Is this unit already hidden by the ability `code` — the Blademaster asked to Wind Walk
+   *  while he is wind walking? A READ, and the same one the sim refuses the order on, so the
+   *  greyed button and the rule cannot disagree. */
+  alreadyHidden(u: SimUnit, code: string): boolean;
+
   waygateIsActive(id: number): boolean;
   waygateDestination(id: number): { x: number; y: number } | null;
 }

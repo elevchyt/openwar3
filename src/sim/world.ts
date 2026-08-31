@@ -40,7 +40,7 @@ import {
   type ReviveMode,
 } from "../data/gameplayConstants";
 import { simProfile } from "./profile";
-import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -10054,6 +10054,26 @@ export class SimWorld {
    *  gold line appears. Not every "no" in WC3 comes with a sentence. */
   static readonly SILENT_REFUSAL = SILENT_REFUSAL;
 
+  /**
+   * Is this unit ALREADY hidden by the very ability it is being asked to press?
+   *
+   * Wind Walk is the one that matters: `[AOwk] Cool1` is 5 seconds against a `Dur1` of 20-50,
+   * so the button comes back up long before the walk ends, and a second press would restart a
+   * fade that is already in force and charge 75 mana for it. The answer is the same one twice
+   * over — the command card greys the button (and draws its `DISBTNWindWalkOn` twin), and
+   * every door into the sim refuses the order — because a gate only the UI keeps is not a gate.
+   * The COOLDOWN is untouched: it runs, and its radial draws, exactly as it does in the game.
+   *
+   * Asked of the BUFF rather than of `cloaked`, and for a reason that is not cosmetic: buffs
+   * cross the wire and `cloaked` does not, so a client's card reads the same answer its host
+   * does. The group is the ability's own (`SELF_INVIS_GROUP`), so being hidden by something
+   * ELSE — a Potion, a Sorceress — is not what this asks.
+   */
+  alreadyHidden(u: SimUnit, code: string): boolean {
+    const group = SELF_INVIS_GROUP[code];
+    return !!group && u.buffs.some((b) => b.kind === "invisible" && b.group === group);
+  }
+
   /** WHY this unit can't cast this ability AT ALL right now, target or no target — the
    *  caster-side half of `castError`, in the engine's own order: does it have the spell,
    *  is it able to cast, is the spell ready, can it pay. A commandstrings.txt [Errors]
@@ -10085,6 +10105,11 @@ export class SimWorld {
     // …nor a hero channelling a Town Portal, which is the same kind of lock and is spelt out in
     // the same breath as the item one: "cannot do any action … nor his spell".
     if (u.portalLeft > 0) return SILENT_REFUSAL;
+    // …nor a unit already hidden by this very button (see alreadyHidden). Silent for the same
+    // reason the three above are: WC3 greys the button, so the click cannot happen and there
+    // is nothing to say. Above the cooldown and mana lines deliberately — a wind walking hero
+    // is off cooldown for most of its walk, and "not ready yet" would be a lie.
+    if (this.alreadyHidden(u, code)) return SILENT_REFUSAL;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     if (ab.cooldownLeft > 0) return "Cooldown"; // "Spell is not ready yet."
     if (u.mana < lvl.cost) return "Nomana"; // "Not enough mana."
@@ -10190,6 +10215,10 @@ export class SimWorld {
     if (!this.techMeets(u.owner, ab.id)) return false;
     const def = this.abilities.get(ab.id);
     if (!def || def.target === "passive") return false;
+    // Already hidden by this ability: the press restarts nothing and pays for it (see
+    // alreadyHidden). Refused at this door as well as at the button, so a trigger, a hotkey
+    // and a command off the wire all mean the same thing the card shows.
+    if (this.alreadyHidden(u, code)) return false;
     // Entangle pressed on a WALKING tree, which is the only card it is on (UPROOTED_ONLY).
     // Roots in the air hold nothing, so the press is not a cast: it is the errand
     // (`entangleat`), and the tree plants itself within reach of the mine first.

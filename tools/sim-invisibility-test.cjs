@@ -170,5 +170,28 @@ function walking(delay) {
   check("once the transition elapses it is invisible", u.invisible, true);
 }
 
+// --- and the button that must not be pressed twice ---------------------------------------
+//
+// `[AOwk] Cool1` is 5 seconds against a `Dur1` of 20-50, so the cooldown is long gone while
+// the Blademaster is still walking. `alreadyHidden` is what both the greyed card button and
+// every door into the sim ask so the press cannot happen in between.
+
+{
+  const u = walking(0.35);
+  check("a hero mid-fade is already wind walking", world.alreadyHidden(u, "AOwk"), true);
+  check("…and so is one whose fade has landed", world.alreadyHidden(walking(0), "AOwk"), true);
+  // Asked of the BUFF's group, so being hidden by something else is a different fact: a
+  // Blademaster who drank a Potion of Invisibility has not spent his own cooldown.
+  const drunk = walking(0);
+  drunk.buffs = drunk.buffs.filter((b) => b.kind === "invisible");
+  drunk.buffs[0].group = "item:invis";
+  check("a Potion's invisibility is not a Wind Walk", world.alreadyHidden(drunk, "AOwk"), false);
+  // …and an ability with no self-invisibility at all is never refused by this rule.
+  check("Bladestorm is not an invisibility", world.alreadyHidden(walking(0), "AOww"), false);
+  const clear = walking(0);
+  clear.buffs = [];
+  check("a hero standing in the open may press it", world.alreadyHidden(clear, "AOwk"), false);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

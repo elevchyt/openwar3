@@ -8739,6 +8739,12 @@ export class MapViewerScene {
       // half that lets the card say so, which is what stops Unburrow reading as available
       // the instant Burrow was pressed.
       const morphing = su.morphT > 0;
+      // …and a unit ALREADY under this button's own invisibility presses nothing either: a
+      // Blademaster who is wind walking may not wind walk (SimWorld.alreadyHidden). The button
+      // wears its `DISBTNWindWalkOn` twin for the whole walk, which is a good deal longer than
+      // the 5-second cooldown it also carries — and the cooldown keeps running and drawing
+      // underneath, because the two are different facts about the same button.
+      const hidden = this.rts.simView.alreadyHidden(su, ab.code);
       const col = reversed ? def.unButtonX : def.buttonX; // the ability's real WC3 card slot
       const row = reversed ? def.unButtonY : def.buttonY;
       const passive = def.target === "passive";
@@ -8796,10 +8802,10 @@ export class MapViewerScene {
         // it just isn't a button you press (see `passive` below).
         noMana,
         // Unavailable: the button goes inert and wears the DIS* art with no frame, so it reads
-        // as unpressable at a glance. Four things say so — a silenced or stunned caster, a
-        // planted Ancient with a queue that cannot pull itself up, a unit mid-morph, and an
-        // ability whose research is not in.
-        disabled: muted || rootBlocked || morphing || !techMet,
+        // as unpressable at a glance. Five things say so — a silenced or stunned caster, a
+        // planted Ancient with a queue that cannot pull itself up, a unit mid-morph, an
+        // ability whose research is not in, and one whose effect is already on the presser.
+        disabled: muted || rootBlocked || morphing || !techMet || hidden,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and
@@ -10422,6 +10428,14 @@ export class MapViewerScene {
           // spell's art (see playModelAbilityEvent). Asking her model by code is exact; the
           // art chain below is the guess we fall back to.
           if (this.sounds?.playModelAbilityEvent(this.rts!.renderedModelPath(c.casterId), c.code, at)) continue;
+          // …THEN the sound the row NAMES. `Effectsound` is a label into
+          // UI\SoundInfo\AbilitySounds.slk (`[AOwk] Effectsound=WindWalk` → that table's
+          // `WindWalk` row → Abilities\Spells\Orc\WindWalk\WindWalk.wav), and it is the
+          // ability saying outright which WAV is its own. Ahead of the art chain because that
+          // chain is a GUESS — and for the spells that declare no art whatsoever it is not
+          // even that: Wind Walk, Shadow Meld, Banish and the town bell hang their whole
+          // sound on this field, and without it they cast in silence.
+          if (def.effectSound && this.sounds?.playAbilitySound(def.effectSound, at)) continue;
           const arts = SPELL_SOUND_ART[c.code]?.(def) ?? [def.targetArt, def.casterArt, def.specialArt, def.effectArt, def.areaArt, def.fxArt, def.fxSpecialArt, def.buffArt];
           this.sounds?.playSpellSound(arts, SPELL_SOUND_FALLBACK[c.code], at);
         }

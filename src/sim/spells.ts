@@ -524,6 +524,25 @@ export function invisTransition(seconds: number): number {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : INVIS_REACTION;
 }
 
+/**
+ * The `invisible` buff GROUP each self-cast invisibility lays on its caster, by ability code.
+ *
+ * One table rather than a string typed twice, because two places have to agree about it: the
+ * handler that applies the buff, and the rule that refuses the button while it is in force
+ * (`SimWorld.alreadyHidden`). A Blademaster who is already wind walking may not wind walk —
+ * the press would restart a fade that is already running and pay 75 mana for it — so the card
+ * greys the button and every other door in refuses the order, while the COOLDOWN goes on
+ * running underneath exactly as it does in the game (`[AOwk] Cool1` = 5s against a `Dur1` of
+ * 20-50s, which is why the button comes back up long before the walk ends).
+ *
+ * Only the SELF casts are here. The Sorceress's `[Aivs]` and the Potions hide somebody the
+ * caster chose, so "you are already hidden" is not a fact about the presser at all.
+ */
+export const SELF_INVIS_GROUP: Record<string, string> = {
+  AOwk: "windwalk", // Wind Walk
+  Ashm: "shadowmeld", // Shadow Meld — a stance, and re-taking one you are already in is a no-op
+};
+
 /** Blizzard and Rain of Fire are the SAME engine ability with different numbers:
  *  MPQ Units\AbilityMetaData.slk gives their Data columns one shared row
  *  (`useSpecific=ahbz,acbz,anrf,acrf`), so both read
@@ -2001,8 +2020,8 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     const d0 = lvl.duration || 20;
     const transition = invisTransition(d(lvl, 0, 0.6));
-    api.applyBuff(caster, { kind: "haste", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, ...fx(def) });
-    api.applyBuff(caster, { kind: "invisible", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40), delay: transition });
+    api.applyBuff(caster, { kind: "haste", group: SELF_INVIS_GROUP.AOwk, timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, ...fx(def) });
+    api.applyBuff(caster, { kind: "invisible", group: SELF_INVIS_GROUP.AOwk, timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40), delay: transition });
   },
 
   // Call to Arms, the Peasant's own half (`Amil`, order `militia` / `militiaoff`) — the same
@@ -2199,7 +2218,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.holdPosition(caster);
     api.applyBuff(caster, {
       kind: "invisible",
-      group: "shadowmeld",
+      group: SELF_INVIS_GROUP.Ashm,
       timeLeft: Infinity, // no duration column — the conditions are the duration
       sourceId: caster.id,
       value: 0, // no Backstab Damage: that is Wind Walk's DataC, and Ashm has no equivalent
