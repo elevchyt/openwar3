@@ -343,8 +343,18 @@ const ESCAPE_HP = 0.4;
 /** …and at which it drinks. Higher, because a potion heals over time and a hero that waits for
  *  `PANIC_HP` to drink one has usually waited too long. */
 const HURT_HP = 0.55;
-/** How hurt somebody else has to be to be worth a Healing Salve. */
-const ALLY_HP = 0.5;
+/**
+ * How hurt somebody else has to be to be worth a Healing Salve.
+ *
+ * Ours, like the rest of this block. Read one bar above `HURT_HP` (the line a hero drinks its
+ * own potion at) rather than below it, and for the same reason `ARMY_HURT` sits there: a salve
+ * pours over forty-five seconds and is cancelled by the next blow (`ITEM_REGEN_GROUP`,
+ * docs/items.md), so it is spent BETWEEN fights on a body that is going into the next one — not
+ * as an emergency top-up on somebody about to die, which is what the potion is for. Waiting for
+ * half health on a three-charge, hundred-gold item that regenerates rather than heals leaves
+ * most of an army walking to the next camp hurt with the charges still in the belt.
+ */
+const ALLY_HP = 0.65;
 /** How many of ours have to be hurt before an AREA heal is better than a potion. Below this the
  *  scroll is being spent to heal one unit, which is what the potion is for. */
 const CLUSTER = 3;
