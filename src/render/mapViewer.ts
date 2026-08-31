@@ -8654,6 +8654,15 @@ export class MapViewerScene {
       // of a unit that can actually root, so a creep that happens to carry one of those rows
       // is not quietly stripped of it.
       if (rootable && !su.uprooted && UPROOTED_ONLY.has(ab.code)) continue;
+      // GATHER and REPAIR are a WORKER'S buttons, and `worker` is the one thing that says a
+      // unit still has that job (see SimWorld.morphUnit). The MILITIA is why this is asked:
+      // `hmil`'s abilList is `Ahar,Amil,Ahrp` and its `Builds` is the Peasant's whole list, so
+      // an armed Peasant kept both buttons on a card where neither of them can do anything —
+      // the sim already refuses the press (issueHarvest/issueRepair want a `worker`), which
+      // makes them exactly the "button whose only possible press is a refusal" the block above
+      // deleted the generic Repair for. Build Structure is withheld the same way, one level up
+      // (`sel.isWorker`).
+      if (!su.worker && (isHarvestCode(ab.code) || isRepairCode(ab.code))) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];

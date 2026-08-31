@@ -97,6 +97,7 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   u.swingBroken = s.swingBroken;
   u.swingSlam = s.swingSlam;
   u.altModel = s.altModel;
+  u.altFormLeft = s.altFormLeft;
   u.spawning = s.spawning;
   u.constructing = s.constructing;
   // Only `.active` crosses the wire and only `.active` is read on a client (2a) — the rest

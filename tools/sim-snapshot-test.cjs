@@ -42,7 +42,7 @@ const unit = (o) => ({
   x: 10, y: 20, facing: 0, flyHeight: 0, speed: 270, radius: 16, flying: false,
   order: "idle", moving: false, inCombat: false, working: false,
   swingSeq: 0, chopSeq: 0, swingBroken: false, swingSlam: false,
-  altModel: false, spawning: 0, constructing: 0, repair: null,
+  altModel: false, altFormLeft: 0, spawning: 0, constructing: 0, repair: null,
   inMine: false, insideBuild: false, inBurrow: false, devouredBy: 0, vanished: false,
   invisible: false, ethereal: false,
   hp: 420, maxHp: 420, mana: 0, maxMana: 0, armor: 2, bonusArmor: 0, bonusDamage: 0,

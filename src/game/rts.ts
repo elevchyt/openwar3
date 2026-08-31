@@ -167,6 +167,10 @@ export interface SelectionInfo {
   isIllusion: boolean;
   summonSecondsLeft: number; // seconds until the summon expires
   summonFrac: number; // remaining fraction of its lifetime (bar fill)
+  /** A TIMED ALTERNATE FORM wears the same expiry bar — see the HudSelection twin. "" = none. */
+  timedFormLabel: string;
+  timedFormSecondsLeft: number;
+  timedFormFrac: number;
   /** Active auras/buffs/debuffs, as the info panel's Status row shows them: the BUFF's
    *  own icon, name and tooltip body (`Buffart`/`Bufftip`/`Buffubertip`). */
   buffs: Array<{ icon: string; name: string; tip: string }>;
@@ -5014,7 +5018,7 @@ export class RtsController {
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: false, goldRemaining: 0,
       isItem: true, description: def ? this.tipText(def.description) : "",
-      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, buffs: [],
+      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, buffs: [],
     };
   }
 
@@ -5041,7 +5045,7 @@ export class RtsController {
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: true, goldRemaining: m.gold,
       isItem: false, description: "",
-      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, buffs: [],
+      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, buffs: [],
     };
   }
 
@@ -5110,6 +5114,40 @@ export class RtsController {
     return boxes;
   }
 
+  /**
+   * The TIMED ALTERNATE FORM a unit is standing in — what it currently is, and how long the
+   * form lasts — or null.
+   *
+   * DERIVED rather than carried: the unit's own ability list crosses the wire whole and both
+   * sides hold the ability registry, so the form is simply whichever of this unit's abilities
+   * names its CURRENT type as its alternate form. That is the same pair of columns
+   * `SimWorld.morphToggle` reads (UnitID1 first, DataB second — see `altFormOf`), asked from
+   * the other end, and it is per-RANK for the one ability that needs it: Chemical Rage names a
+   * different ogre per level (`Nalm`/`Nal2`/`Nal3`), so matching on the type finds the rank the
+   * hero actually raged at and therefore the right duration.
+   *
+   * The NAME is the unit's own — `hmil` is "Militia", which is what the clock is counting down
+   * — not the ability's ("Call to Arms" is the press, not the state). The same choice
+   * `[Bmil] Bufftip = Militia` makes.
+   */
+  private timedFormOf(id: number): { name: string; total: number } | null {
+    // The ability LIST is not on `RenderUnit` (the panel's own read), but it is on the sim
+    // record — and on a client the applier fills those records straight from the payload, so
+    // this is the same question with the same answer on both sides.
+    const u = this.sim.units.get(id);
+    if (!u) return null;
+    for (const ab of u.abilities) {
+      if (ab.level < 1) continue;
+      const def = this.abilities.get(ab.id);
+      const lvl = def?.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      if (!lvl || (lvl.summon || lvl.dataStr[1] || "") !== u.typeId) continue;
+      const total = lvl.heroDuration;
+      if (total <= 0) continue; // an untimed form (Burrow, a rooted Ancient) has no bar
+      return { name: this.registry.get(u.typeId)?.name || u.typeId, total };
+    }
+    return null;
+  }
+
   private infoFor(id: number): SelectionInfo | null {
     // The authority's numbers, not our own prediction of them (item 10c-2c-3). A panel is
     // drawn at a fixed place in the HUD rather than over the terrain, so this could wait for
@@ -5125,6 +5163,7 @@ export class RtsController {
     const def = this.registry.get(e.typeId);
     const upgradeBoxes = this.upgradeBoxes(e.typeId);
     const builderId = b && b.constructionLeft > 0 ? this.builderInside(e.simId) : 0;
+    const form = u.altFormLeft > 0 ? this.timedFormOf(id) : null;
     /**
      * May this viewer read the building's STATUS — what it is making, and how many seconds
      * are left on it?
@@ -5228,6 +5267,11 @@ export class RtsController {
 
       summonSecondsLeft: Math.max(0, Math.ceil(u.summonLeft)),
       summonFrac: u.summonMax > 0 ? Math.max(0, Math.min(1, u.summonLeft / u.summonMax)) : 0,
+      // …and the same bar for a TIMED ALTERNATE FORM, which is the same fact about the unit:
+      // a clock is running and it will be something else when it stops. See timedFormOf.
+      timedFormLabel: form?.name ?? "",
+      timedFormSecondsLeft: Math.max(0, Math.ceil(u.altFormLeft)),
+      timedFormFrac: form && form.total > 0 ? Math.max(0, Math.min(1, u.altFormLeft / form.total)) : 0,
       buffs: this.statusBuffsFor(u),
     };
   }

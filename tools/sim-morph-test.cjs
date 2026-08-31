@@ -184,6 +184,11 @@ function peasant(id, typeId = "hpea") {
     baseSightDay: 1800, baseSightNight: 800, armorType: d.armorType,
     radius: 16, isPeon: typeId === "hpea", ward: false, mechanical: false, ancient: false,
     militiaCall: 0, nodeRetries: 0, waitT: 0,
+    // The Peasant's own harvest profile (data/races WORKERS.hpea), carrying a load — `worker`
+    // is the one switch the Build, Gather and Repair buttons all hang off.
+    worker: typeId === "hpea"
+      ? { gold: true, lumber: true, harvestAbility: "Ahar", lumberCapacity: 10, baseLumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1.1, goldPerTrip: 10, damagesTree: true, deliversInPlace: false, minesInRing: false, carryGold: 0, carryLumber: 6 }
+      : null,
   };
   u.weapon = u.weapons.find((w) => w.enabled) ?? null;
   world.units.set(u.id, u);
@@ -270,6 +275,22 @@ function hall(id, x, bell = true) {
   check("…and a Militia is not (hmil type = \"_\")", u.isPeon, false);
   world.morphToggle(u, ABILS.Amil);
   check("…and is a worker again on the way back", u.isPeon, true);
+}
+
+// …and the JOB goes with the classification. `hmil` carries `Ahar,Amil,Ahrp` and the Peasant's
+// whole `Builds` list all the same, so this cannot be keyed off the ability list — it is the
+// `Peon` type, which is also what `sort2` (peo → me1) and `upgrades` (Improved Lumber
+// Harvesting → melee attack + armour) say twice more.
+{
+  const u = peasant(14);
+  check("a Peasant has a harvest profile", !!u.worker, true);
+  world.morphToggle(u, ABILS.Amil);
+  check("an armed Militia has none — no Build, Gather or Repair", u.worker, null);
+  world.morphToggle(u, ABILS.Amil);
+  check("…and gets it back when it goes back to work", !!u.worker, true);
+  check("…which is the Peasant's own row (Ahar)", u.worker.harvestAbility, "Ahar");
+  // A worker has one pair of hands (dropOtherLoad); taking up a sword drops what was in them.
+  check("…and the load it was carrying did not come back", [u.worker.carryGold, u.worker.carryLumber], [0, 0]);
 }
 
 // --- Bear Form: the whole sheet follows the type, mana pool and cast clock included -------

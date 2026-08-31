@@ -164,6 +164,8 @@ export interface RenderUnit {
   readonly constructing: number;
   /** Which HALF of a two-form model is showing (a rooted Ancient, a burrowed Crypt Fiend). */
   readonly altModel: boolean;
+  /** Seconds left on a TIMED alternate form (a Militia's 40), or 0. Drives the expiry bar. */
+  readonly altFormLeft: number;
   readonly repair: { readonly active: boolean } | null;
   readonly worker: { readonly carryGold: number; readonly carryLumber: number } | null;
   /** Present iff this is a structure — which the renderer keys the health-bar suppression, the

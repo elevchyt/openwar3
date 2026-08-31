@@ -170,6 +170,14 @@ export interface HudSelection {
   isSummon: boolean; // temporary summon — show the "Summoned Unit" timer bar
   summonSecondsLeft: number; // seconds until it expires
   summonFrac: number; // remaining fraction of its lifetime (bar fill)
+  /** A unit standing in a TIMED ALTERNATE FORM wears the same expiry bar, because it is the
+   *  same fact about it: a clock is running and it will not be this when the clock stops. Call
+   *  to Arms is the melee case — `[Amil]` HeroDur1 = 40 seconds of Militia — and Chemical Rage
+   *  and Metamorphosis are the two hero ones. Empty label = no bar; it names what the unit
+   *  currently IS ("Militia"), which is what the clock is counting down. */
+  timedFormLabel: string;
+  timedFormSecondsLeft: number;
+  timedFormFrac: number;
   /** Active auras/buffs/debuffs, as the info panel's Status row shows them: the BUFF's
    *  own icon, name and tooltip body (`Buffart`/`Bufftip`/`Buffubertip`). */
   buffs: Array<{ icon: string; name: string; tip: string }>;
@@ -2957,6 +2965,17 @@ export class GameHud {
           this.xpBar.title = "";
           this.xpText.textContent = `Summoned Unit (${sel.summonSecondsLeft}s)`;
           this.xpFill.style.width = `${sel.summonFrac * 100}%`;
+        } else if (sel.timedFormLabel) {
+          // A TIMED FORM is the same bar for the same reason — a Militia has 40 seconds
+          // (`[Amil]` HeroDur1) and then it is a Peasant again, wherever it is standing, and
+          // that is the one number a player needs off the panel. Below the hero branch on
+          // purpose: a metamorphosed Demon Hunter keeps his XP bar, as in the game.
+          this.selSub.textContent = "";
+          this.xpBar.hidden = false;
+          this.xpBar.classList.add("summon");
+          this.xpBar.title = "";
+          this.xpText.textContent = `${sel.timedFormLabel} (${sel.timedFormSecondsLeft}s)`;
+          this.xpFill.style.width = `${sel.timedFormFrac * 100}%`;
         } else {
           this.selSub.textContent = "";
           this.xpBar.hidden = true;

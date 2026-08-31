@@ -275,6 +275,12 @@ export interface UnitSnapshot {
   swingBroken: boolean;
   swingSlam: boolean;
   altModel: boolean;
+  /** Seconds left on a TIMED alternate form — a Militia's 40 (`[Amil]` HeroDur1), a raging
+   *  Alchemist's 15. Rides with `altModel` (which is already "am I wearing the other half of
+   *  my model"), because the two are the same fact and only a unit in an alternate form can
+   *  have a clock on one. 0 for a toggle you switch off yourself — Burrow, a rooted Ancient.
+   *  The selection panel's expiry bar is the only reader; see RtsController.timedFormOf. */
+  altFormLeft: number;
   spawning: number;
   constructing: number;
   /** Whether this worker is hammering. Kept as an OBJECT rather than the flat `repairing`
@@ -617,6 +623,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     swingBroken: false,
     swingSlam: false,
     altModel: u.altModel,
+    altFormLeft: 0, // a memory has no live clock on it — the same rule the rest of this stub keeps
     spawning: 0,
     constructing: 0,
     repair: null,
@@ -748,6 +755,7 @@ export function snapshotFor(
       swingBroken: u.swingBroken,
       swingSlam: u.swingSlam,
       altModel: u.altModel,
+      altFormLeft: u.altFormLeft,
       spawning: u.spawning,
       constructing: u.constructing,
       repair: u.repair ? { active: u.repair.active } : null,

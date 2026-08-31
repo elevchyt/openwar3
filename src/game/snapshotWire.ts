@@ -348,6 +348,14 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
     w.f32(s.summonLeft);
     w.f32(s.summonMax);
   }
+  // The TIMED-FORM clock rides the flag that already says "this unit is wearing the other half
+  // of its model", because only a unit in an alternate form can have one — `altFormLeft` is set
+  // in the same line of morphToggle that sets `altModel`. All 32 flag bits are spoken for, so
+  // there is no room for a bit of its own, and this needs none: an untimed form (Burrow, a
+  // rooted Ancient) simply writes 0. DECISECONDS in a u16 rather than an f32 — the longest form
+  // in the game is Metamorphosis' 45 seconds and the only reader is a bar with a one-second
+  // label, so a tenth is already finer than anything drawn from it.
+  if (flags & F_ALT_MODEL) w.u16(Math.min(65535, Math.max(0, Math.round(s.altFormLeft * 10))));
   if (flags & F_IS_ILLUSION) w.u32(s.illusionOf);
   if (flags & F_HAS_GUARD) {
     w.i16(quantPos(s.guardX));
@@ -465,6 +473,7 @@ function readUnit(r: Reader): UnitSnapshot {
     swingBroken: (flags & F_SWING_BROKEN) !== 0,
     swingSlam: (flags & F_SWING_SLAM) !== 0,
     altModel: (flags & F_ALT_MODEL) !== 0,
+    altFormLeft: 0,
     spawning: 0,
     constructing: 0,
     repair: flags & F_HAS_REPAIR ? { active: (flags & F_REPAIR_ACTIVE) !== 0 } : null,
@@ -554,6 +563,7 @@ function readUnit(r: Reader): UnitSnapshot {
     s.summonLeft = r.f32();
     s.summonMax = r.f32();
   }
+  if (flags & F_ALT_MODEL) s.altFormLeft = r.u16() / 10;
   if (flags & F_IS_ILLUSION) s.illusionOf = r.u32();
   if (flags & F_HAS_GUARD) {
     s.guardX = r.i16();

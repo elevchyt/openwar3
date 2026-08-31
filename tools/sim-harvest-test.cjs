@@ -261,5 +261,35 @@ console.log("\nStand Down returns the crew to the job it was pulled off");
   check("a plain unload leaves them standing", worker.order === "idle", `order ${worker.order}`);
 }
 
+// A worker whose way home closes behind it must RE-DECIDE, not grind.
+//
+// The bug: `pathTo` reports failure by returning false — it does not stand the unit down,
+// because most callers want to decide that themselves. checkStuck's gatherer branch asked for
+// a reroute and then ignored the answer, so a worker whose reroute came back empty was left
+// with `moving` still true and last tick's dead path still on it. It walked into the
+// obstruction for ever: `arriveAtNode` will not let a MOVING unit short of its goal deposit,
+// and checkStuck ran the same failing search twice a second from then on. Nothing in the loop
+// could end it — which is why it reads as a freeze rather than a stumble, and why it was
+// reported on the RETURN leg, which ends in the tightest crowd on the map.
+console.log("\na worker whose way home is shut re-decides instead of grinding");
+{
+  const { world, worker } = loadWorld();
+  worker.worker.carryLumber = 10;
+  worker.order = "return";
+  worker.atNode = false;
+  // Let it get right up to where the way is about to close. The wall has to go up while the
+  // worker is mid-STEP toward it: further back and the route it is already on simply runs out
+  // against the obstruction, which the movement tail already handles (`settle`). It is the
+  // step that is REFUSED — the one the reroute is asked to replace and cannot — that had
+  // nothing behind it.
+  check("it sets off for the hall", runUntil(world, () => worker.y > 3160, 5), `order ${worker.order}, y ${worker.y.toFixed(0)}`);
+  // Now shut the way: a wall across the whole map between the worker and the depot, which is
+  // the extreme of the crowd that shuts it in a real game — every reroute from here fails.
+  for (let cx = 0; cx < 160; cx++) { world.grid.block(cx, 100); world.grid.block(cx, 101); }
+  const freed = runUntil(world, () => !worker.moving, 6);
+  check("…and stops walking a path that goes nowhere", freed, `still moving after 6s, order ${worker.order}`);
+  check("…without being sacked mid-job", worker.order === "return" || world.stashOf(0).lumber === 10, `order ${worker.order}, banked ${world.stashOf(0).lumber}`);
+}
+
 console.log(failed ? `\nharvest: ${failed} check(s) FAILED` : "\nharvest: all checks passed");
 process.exit(failed ? 1 : 0);

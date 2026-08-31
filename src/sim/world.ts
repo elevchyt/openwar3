@@ -8,7 +8,7 @@ import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, 
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { slotMissileArt, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
-import { RACE_INDEX, type PlayableRace } from "../data/races";
+import { RACE_INDEX, workerProfileFor, type PlayableRace } from "../data/races";
 import { type UpgradeRegistry } from "../data/upgrades";
 import { TechState } from "./tech";
 import {
@@ -2081,6 +2081,13 @@ const MINE_TIME = 1.0; // seconds a worker spends inside the mine (Agld DataB)
  *  before parking where it stands (arriveAtNode). Small: two honest A* attempts per leg
  *  of the round trip beat both a fake arrival and a per-tick re-flood. */
 const NODE_REPATH_TRIES = 2;
+/** How many failed walk-ups a Call to Arms muster is worth before the Peasant gives up on it
+ *  (tickMilitiaCall). Deliberately more patient than a garrison walk-up's NODE_REPATH_TRIES:
+ *  the crowd at a hall that has just rung its bell is the densest on the map, and it is
+ *  CHURNING — every Peasant that does get armed walks off and frees the ground behind it — so
+ *  waiting it out is exactly the right move, where a burrow that is FULL will still be full in
+ *  four seconds. Each try costs a `parkAndWait` countdown, so this is seconds, not ticks. */
+const MUSTER_TRIES = 8;
 const TREE_LUMBER = 50; // lumber a standard tree yields before falling
 // Tree hit points, separate from lumber: harvesting drains `lumber`, but area
 // spells that list `tree` in Targets Allowed (Flame Strike) burn a tree down by
@@ -2234,8 +2241,8 @@ const CAST_TIME_IS_NOT_A_WINDUP = new Set(["AEsh"]);
 export const ANIM_FOR_DURATION = new Set(["AOww"]);
 // Immediate abilities (base code): pressing the button IS the cast. No wind-up, no
 // cast animation, and no re-tasking — the caster keeps attacking/walking straight
-// through it. Two cases, both with `Cast1=0` in AbilityData.slk and no `Animnames`
-// in their AbilityFunc:
+// through it. Every member has `Cast1=0` in AbilityData.slk and no `Animnames`
+// in its AbilityFunc:
 //   - Divine Shield (and Cenarius's ACds, the same spell) — no Animnames in
 //     HumanAbilityFunc.txt, and a toggle rather than an order (`Order=divineshield`
 //     / `Unorder=undivineshield`): in WC3 the Paladin bubbles mid-swing without
@@ -2245,6 +2252,14 @@ export const ANIM_FOR_DURATION = new Set(["AOww"]);
 //     Attack Slam/Walk/Death/Dissipate/Attack Walk Stand Spin), so the engine has
 //     literally nothing to show for the cast — it fades him where he stands and he
 //     keeps walking. That is the escape micro the ability exists for.
+//   - CALL TO ARMS, both halves. `[Amil]` and `[Amic]` carry `Cast1` = 0 and no `Animnames`
+//     at all in HumanAbilityFunc.txt — an order pair each (`militia`/`militiaoff`,
+//     `townbellon`/`townbelloff`) and nothing else — which is the same argument `Aroo` is
+//     given a line of its own for below. Through the generic pipeline the press was charged
+//     the CASTER's `castpt` and then his `castbsw`, so a Peasant told to arm himself stood
+//     still for about a second before he so much as turned toward the hall, and the bell
+//     answered a whole second late. Neither number belongs to this ability: a Peasant's cast
+//     point is `Ahrp` Repair's wind-up.
 // Do NOT widen this to every no-Animnames spell: Holy Light and Water Elemental have
 // none either, yet the engine falls back to the caster's "Spell" clip for them (see
 // RtsController.playCastAnim).
@@ -2262,7 +2277,7 @@ function altFormOf(lvl: AbilityLevel | undefined): string {
   return lvl?.summon || lvl?.dataStr[1] || "";
 }
 
-const IMMEDIATE = new Set(["AHds", "ACds", "AOwk"]);
+const IMMEDIATE = new Set(["AHds", "ACds", "AOwk", "Amil", "Amic"]);
 /** Abilities that refuse a target for being TOO BIG, with the cap in their own `DataC`.
  *  Transmute is the only one in 1.30 and its Ubertip names both the rule and the column:
  *  "Transmute cannot be used on Heroes, or creeps above level <ANtm,DataC1>" (= 5). The
@@ -5312,6 +5327,28 @@ export class SimWorld {
     u.ward = cls.includes("ward");
     u.mechanical = cls.includes("mechanical");
     u.ancient = cls.includes("ancient");
+    // …and so does the JOB. A Militia is not a Peasant holding a sword: while it is armed it
+    // gathers nothing, builds nothing and mends nothing, and `worker` is the one switch all
+    // three hang off (`SelectionInfo.isWorker` is `!!u.worker`, and so are issueHarvest and
+    // canRepair), so re-deriving it from the type takes the whole job away in one place — and
+    // gives it back on the way home, because `hpea` is a worker profile again.
+    //
+    // The GATE is the Peon classification rather than "does its abilList carry a harvest row",
+    // and that distinction is the whole of this line: `hmil`'s list is `Ahar,Amil,Ahrp` and its
+    // `Builds` in HumanUnitFunc.txt is the Peasant's entire list, so keyed off the abilities a
+    // Militia would come out able to do every one of them. Three columns say it is a soldier
+    // instead, and they are the three the Peasant and the Militia differ in besides their
+    // combat numbers (UnitBalance.slk): `type` Peon → `_`, `sort2` peo → me1, and `upgrades`
+    // Rhlh,Rguv → Rhar,Rhme,Rguv — it trades Improved Lumber Harvesting, which is a bigger
+    // load for a unit that carries one, for the melee attack and armour upgrades.
+    //
+    // A LOAD does not survive the change either, by the rule dropOtherLoad already states: a
+    // worker has one pair of hands, and taking up a sword drops whatever was in them.
+    const profile = u.isPeon ? workerProfileFor(toTypeId, u.abilities.map((a) => a.code)) : null;
+    u.worker = profile
+      ? { ...profile, baseLumberCapacity: profile.lumberCapacity, carryGold: 0, carryLumber: 0 }
+      : null;
+    if (u.worker) this.applyHarvestData(u.worker); // rates off the harvest ability's own row
     // maxHp/maxMana now reflect the new type (+ any research already in). Both POOLS moving is
     // an ordinary ceiling move, so the current values ride it by RATIO — the one rule stated in
     // recomputeStats and cited there to Liquipedia (Hit_Points): a bear at half life comes back
@@ -5607,17 +5644,30 @@ export class SimWorld {
     return best;
   }
 
+  /** Close enough to the hall to be armed at it.
+   *
+   *  Deliberately LOOSER than the cargo hold's `inHostReach`, which is the same measurement
+   *  plus a cell: a muster is not a DOOR. Nothing has to fit through anything — the Peasant
+   *  walks up to the building and is handed a sword — so the last body-width of shoving buys
+   *  nothing, and insisting on it is what would leave the back of a five-Peasant queue
+   *  standing outside the hall for ever while the front of it armed and walked away. Four
+   *  cells of standing room beyond the building's own extent — about two ranks of Peasants,
+   *  which is the depth the queue at a hall actually reaches. */
+  private atMusterHall(u: SimUnit, hall: SimUnit): boolean {
+    const reach = this.hostExtent(hall) + u.radius + PATHING_CELL * 4;
+    return Math.max(Math.abs(u.x - hall.x), Math.abs(u.y - hall.y)) <= reach;
+  }
+
   /**
    * Drive a Peasant (or a Militia) walking to its muster hall, and change its shape when it
    * gets there. The walk is an ordinary move order, so the unit is selectable, interruptible
    * and pushable the whole way — the errand lives in `militiaCall` beside it, exactly as an
    * Ancient's does in `rootPending`, and any other order drops it (`dispatch`).
    *
-   * The door and the arrival test are the cargo hold's (`hostApproach` / `inHostReach`): a
-   * hall's centre is inside its own blocked footprint, so pathing at it fails, and the two
-   * have to be measured the same way or the unit parks where it was sent and is told it has
-   * not arrived. Bounded by the same `NODE_REPATH_TRIES` a garrison walk-up is, so a Peasant
-   * that can never reach the door gives up rather than re-pathing at it forever.
+   * The DOOR it is sent to is the cargo hold's (`hostApproach`), because a hall's centre is
+   * inside its own blocked footprint and pathing straight at it fails; arriving is measured by
+   * `atMusterHall`, which is looser. Bounded by `MUSTER_TRIES`, so a Peasant that cannot get
+   * there at all gives up rather than re-pathing at the hall forever.
    */
   private tickMilitiaCall(u: SimUnit): void {
     const hall = this.units.get(u.militiaCall);
@@ -5627,7 +5677,7 @@ export class SimWorld {
       u.militiaCall = 0;
       return;
     }
-    if (this.inHostReach(u, hall)) {
+    if (this.atMusterHall(u, hall)) {
       u.militiaCall = 0;
       u.nodeRetries = 0;
       if (u.order === "move") this.stop(u.id); // the errand's own walk is over
@@ -5636,21 +5686,29 @@ export class SimWorld {
       if (def) this.morphToggle(u, def); // …and THIS is where the Peasant becomes a Militia
       return;
     }
-    // Still finishing the press that booked the errand. `[Amil]` has no gesture of its own
-    // (`Cast1` = 0 and no `Animnames`), but the CASTER's backswing still runs on the far side
-    // of the effect, and `issueMove` refuses a unit that is still casting — counted as failed
-    // attempts, the half-second of recovery alone spent every try the errand had.
+    // Mid-cast of something ELSE (a trigger's spell, an item): `issueMove` refuses a unit that
+    // is still casting, and counting those refusals as failed attempts would spend the
+    // errand's tries on a wind-up rather than on the walk. Call to Arms itself never lands
+    // here — it is IMMEDIATE and touches no order at all.
     if (u.order === "cast") return;
     // Already walking it. Tested against the errand's OWN order rather than `moving` alone: a
     // Militia chasing something when the bell rings is moving too, and a bell that could not
     // interrupt a fight is a bell nobody can answer.
     if (u.order === "move" && (u.moving || u.waitT > 0)) return;
-    // Standing still and not there yet: (re)start the walk. `issueMove` parks by itself when
-    // the way is merely crowded (holdOrGiveUp), so a false here is a door that A* could not
-    // reach at all — a couple of honest tries, then the errand is off.
+    // Standing still and not there yet: (re)start the walk.
     const [ax, ay] = this.hostApproach(u, hall);
-    if (this.issueMove(u.id, ax, ay)) return;
-    if (u.nodeRetries++ >= NODE_REPATH_TRIES) {
+    this.issueMove(u.id, ax, ay);
+    if (u.moving) {
+      u.nodeRetries = 0;
+      return;
+    }
+    // It did not set off. `issueMove` parks when the way is merely crowded (holdOrGiveUp) and
+    // stops when the ground is walled off, and BOTH have to be counted here or the errand can
+    // loop for ever: a parked unit keeps its move order, so the branch above would send it
+    // straight back to waiting, and there would be nothing anywhere in the loop that ever
+    // said "this Peasant is not going to make it". Bounded by MUSTER_TRIES, and each try costs
+    // a park's countdown rather than a tick, so it is seconds of honest trying.
+    if (u.nodeRetries++ >= MUSTER_TRIES) {
       u.militiaCall = 0;
       u.nodeRetries = 0;
     }
@@ -12723,12 +12781,35 @@ export class SimWorld {
     // otherwise flag). Re-route around the crowd; a boxed-in lumberjack parks in
     // place so tickHarvest chops the nearest reachable tree instead of standing idle.
     if (u.worker && (u.order === "harvest" || u.order === "return")) {
-      const routed = this.pathTo(u, u.chaseX, u.chaseY);
-      if (!routed && u.order === "harvest" && u.resKind === "lumber") {
+      if (this.pathTo(u, u.chaseX, u.chaseY)) {
+        u.stuckRetries = 0;
+        return;
+      }
+      // NO WAY THROUGH — and this is the branch that used to do NOTHING, which is the whole
+      // of "the workers just freeze instead of going round each other".
+      //
+      // `pathTo` reports a failure by returning false; it does not stand the unit down (it
+      // cannot — most callers want to decide that for themselves). So a worker whose reroute
+      // came back empty was left with `moving` still true and last tick's dead path still on
+      // it: it walked into the queue at the hall for ever, `arriveAtNode` refused to let it
+      // deposit because a MOVING unit short of its goal has not arrived, and checkStuck ran
+      // the same failing search twice a second from then on. Nothing in the loop could end
+      // it, which is why it looked like a freeze rather than a stumble — and why the report
+      // is "returning lumber", the leg that ends in the tightest crowd on the map.
+      //
+      // A lumberjack takes the tree in front of it instead (the pre-existing branch). Anyone
+      // else PARKS, exactly as every other order does when bodies rather than terrain are in
+      // the way (holdOrGiveUp): the job is not dropped — dropping it is the "idle mid-job"
+      // this block exists to prevent — the unit simply stops shoving, and the order's own
+      // arrival test picks it up again when the wait lapses. parkAndWait owns `stuckRetries`
+      // from here (it is the backoff), so it is deliberately not reset on this path.
+      if (u.order === "harvest" && u.resKind === "lumber") {
         this.settle(u);
         u.atNode = false;
+        u.stuckRetries = 0;
+        return;
       }
-      u.stuckRetries = 0;
+      this.parkAndWait(u);
       return;
     }
     const [tx, ty] = [u.chaseX, u.chaseY];
@@ -14376,6 +14457,12 @@ export class SimWorld {
     if (u.atNode) return true;
     const short = Math.hypot(x - u.x, y - u.y) > reach;
     if (u.moving && short) return false;
+    // PARKED in a jam is not "as close as we can get" — it is a countdown that is itself the
+    // retry (parkAndWait, and the same rule tickGarrison's walk-up keeps). Without this the
+    // park spends both of the tries below on the very tick it starts, so a worker that stopped
+    // to let a crowd clear banked its load from wherever it happened to be standing instead of
+    // waiting the two seconds out and walking the last few feet.
+    if (short && u.waitT > 0) return false;
     if (short && repath && u.nodeRetries < NODE_REPATH_TRIES) {
       u.nodeRetries++;
       repath();
