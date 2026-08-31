@@ -4173,25 +4173,33 @@ export class RtsController {
    *  has no click-to-deselect — you keep your selection until you pick another).
    *  Modifiers (WC3): `additive` (Shift) adds the unit to the current selection
    *  (toggling it back out if it's already in); `sameType` (Ctrl / double-click)
-   *  grabs every on-screen own unit of that type. */
+   *  grabs every on-screen own unit of that type — BUILDINGS included, which is how
+   *  a player grabs every Moon Well to replenish or every Burrow to man (the group
+   *  is still units XOR buildings; see `ownSelectionByKind`). */
   selectAt(cssX: number, cssY: number, mods: { additive?: boolean; sameType?: boolean } = {}): void {
     const id = this.pickAt(cssX, cssY);
     if (id !== null) {
       const u = this.sim.units.get(id);
       const e = this.byId.get(id);
-      const ownMobile = !!u && !!e && u.owner === this.localPlayer && !u.building;
+      const own = !!u && !!e && u.owner === this.localPlayer;
+      // A selection is units XOR buildings (the exclusion rule the drag box and the
+      // control groups already keep), so an ADDITIVE click may only join a selection
+      // of its own kind — a shift-click on a barracks with footmen held is ignored
+      // rather than mixing the two.
+      const selKind = this.ownSelectionByKind().kind;
+      const joins = own && (selKind === null || selKind === (u!.building ? "building" : "unit"));
       // Shift + same-type (shift+ctrl-click or shift+double-click) ADDS the whole
       // on-screen type group to the current selection, mirroring WC3.
-      if (mods.additive && mods.sameType && ownMobile) {
+      if (mods.additive && mods.sameType && joins) {
         this.selectByType(e!.typeId, true);
         return;
       }
       if (mods.additive) {
-        // Already in the group → toggle it out. Otherwise add own mobile units.
-        // A shift-click on anything else (enemy/neutral/building) is ignored so a
-        // stray click never wipes the current selection.
+        // Already in the group → toggle it out. Otherwise add own entities of the
+        // selection's own kind. A shift-click on anything else (enemy, neutral, or
+        // the other kind) is ignored so a stray click never wipes the current selection.
         if (this.selected.has(id)) this.deselect(id);
-        else if (ownMobile) {
+        else if (joins) {
           this.selected.add(id);
           this.selectedMine = null;
           this.selectedItem = null;
@@ -4200,7 +4208,7 @@ export class RtsController {
         }
         return;
       }
-      if (mods.sameType && ownMobile) {
+      if (mods.sameType && own) {
         this.selectByType(e!.typeId);
         return;
       }
@@ -4251,8 +4259,10 @@ export class RtsController {
     // Empty ground: keep the current selection (no manual deselect).
   }
 
-  /** Select every on-screen own mobile unit of a given type (Ctrl-click / double-
-   *  click). WC3 limits this to what's visible, so off-screen kin are left out.
+  /** Select every on-screen own entity of a given type (Ctrl-click / double-click).
+   *  WC3 limits this to what's visible, so off-screen kin are left out. BUILDINGS
+   *  answer to it exactly as units do — the type is what's matched, and one typeId is
+   *  all units or all buildings, so the units-XOR-buildings rule holds by itself.
    *  `additive` (shift held) unions them into the current selection instead of
    *  replacing it. */
   private selectByType(typeId: string, additive = false): void {
@@ -4260,7 +4270,7 @@ export class RtsController {
     for (const e of this.entries) {
       if (e.typeId !== typeId || e.hidden) continue;
       const u = this.frameUnit(e.simId); // "on screen" is a question about the DRAWN position
-      if (!u || u.owner !== this.localPlayer || u.building) continue;
+      if (!u || u.owner !== this.localPlayer) continue;
       if (this.onScreen(u, e)) picked.push(e.simId);
     }
     if (!picked.length) return;
