@@ -1751,41 +1751,80 @@ or a custom map adds is not something to guess about. Magic immunity and `magicR
 netted off exactly as `SimWorld.spellDamage` nets them, so the rule cannot promise a kill the sim
 will not deliver.
 
-### A Purge is spent on what a Purge does
+### A dispel is spent on what a dispel does
 
 Reported: *"make Computer+ only use Purge against enemy Summoned units and enemy units that have
-positive buffs/effects like Bloodlust, Inner Fire and Unholy Frenzy"*, and it is the right rule
-for the ability. Purge is graded `disable` — its slow is real — and a disable's only gate is the
-target search, so it went out at whatever stood nearest: 75 mana to slow one Grunt for three
-seconds, when what the button is for is deleting a Water Elemental or stripping Bloodlust off the
-pack.
+positive buffs/effects like Bloodlust, Inner Fire and Unholy Frenzy"*, then *"apply the same
+dispel rules to Dispel Magic and Abolish Magic (dryads etc.)"*, *"…and to the Disenchant ability
+(spirit walkers)"*, and *"mark friendly units under the effect of Entangling Roots as valid
+dispel targets, so that they can save friendly units that are entangled"*. That is one rule, and
+it now lives in one function.
 
-`worthDispelling` ([`plus/casting.ts`](../src/ai/plus/casting.ts)) is the gate, and both halves of
-it are read off the **sim's own handler** (`Aprg` in [`sim/spells.ts`](../src/sim/spells.ts)) so
-the AI cannot promise something the cast will not do:
+A dispel is the only kind of spell in the game that does *nothing whatsoever* to a target with
+nothing on it, which is why "is it legal" was never enough of a gate for one. Purge is graded
+`disable` — its slow is real — and a disable's only gate is the target search, so it went out at
+whatever stood nearest: 75 mana for a three-second slow. Dispel Magic's quorum was "three enemy
+bodies", i.e. every fight. And a Dryad's Abolish Magic hunted the nearest enemy and fired at it
+whether or not it carried anything.
 
-* **A summon is destroyed outright.** The handler's test is `summonLeft > 0`, so that is this
-  one's test too. A permanent body is not a summon to Purge however it was made, and any other
-  question here would promise a kill the handler will not deliver.
-* **A positive effect is stripped.** Nothing in `AbilityBuffData.slk` says which buffs are the
-  good ones — its only flag is `isEffect`, and it is `0` for Bloodlust, Inner Fire, Unholy
-  Frenzy, Slow and Cripple alike — so polarity is **not in the data to be read**. What is
-  knowable is *who put it there*: a buff hung by the target's own side is one they wanted, and
-  one hung by ours is a debuff we would be undoing for them. `team` is the same comparison the
-  sim's own area effects make (`areaEffectAffects`).
+`worthDispelling` lives in [`sim/spells.ts`](../src/sim/spells.ts) — the **sim** owns it, because
+it is a fact about what these handlers do rather than an opinion of the AI's, and because the
+Dryad's autocast is the sim's own decision (below). `DISPEL_CODES` is the family, and it is three
+codes because the aliases collapse: `Aprg` (Purge — the Shaman's `AOpg`, the Spirit Walker's
+`ACpu`, the purge orbs), `Adis` (Dispel Magic **and Disenchant**, whose `Adcn` row's *code* is
+`Adis`, so it dispatches to the same handler and is covered by anything keyed on the code), and
+`Aadm` (Abolish Magic).
+
+Both halves are read off the handlers themselves, so the AI cannot promise something the cast
+will not do:
+
+* **A summon is destroyed or damaged.** The handlers' test is `summonLeft > 0`, so that is this
+  one's test too — a permanent body is not a summon to a dispel however it was made.
+* **An effect is stripped — and *whose* effect decides.** Nothing in `AbilityBuffData.slk` says
+  which buffs are the good ones (its only flag is `isEffect`, and it is `0` for Bloodlust, Inner
+  Fire, Unholy Frenzy, Slow and Cripple alike), so polarity is **not in the data to be read**.
+  What *is* knowable is who put it there: a buff hung by the bearer's own side is one they
+  wanted, one hung by the other side is one they did not. `team` is the same comparison the sim's
+  own area effects make (`areaEffectAffects`).
+
+**`ours` is what makes it one function rather than two.** A dispel cuts both ways and the
+handlers say so — `Adis` clears every unit in its circle without asking allegiance — so the same
+line that reads Bloodlust as a *buff* on their Grunt reads **Entangling Roots as a debuff on our
+Huntress**: `AEer` hangs a `root` and a `dot` carrying the enemy Keeper's own `sourceId`. No
+table of "bad buffs" is needed, and none exists. The one asymmetry: a summon is only ever a
+reason to cast on *their* side. Ours is something a dispel would **kill**.
 
 Two exclusions, both because the cast would achieve nothing: an `undispellable` buff (Doom —
 `dispelUnit` keeps exactly those), and an **aura**, which is a buff with `timeLeft` Infinity and
-is therefore back the tick after the purge lands. A buff whose source is *gone* — a Bloodlust
+is therefore back the tick after the dispel lands. A buff whose source is *gone* — a Bloodlust
 from a dead Shaman — cannot be placed and does not count, which is the safe direction: the cost
-of missing one is a purge not cast.
+of missing one is a dispel not cast.
 
-The gate sits at LEGALITY rather than in the score, like `nukeWorthIt` and for the same reason: a
-"mistake" (`castMistake`) that lands on a unit with nothing to strip is not a mistake, it is a
-dropped cast.
+Three places ask it:
 
-It is written as a free function over the world rather than as a method because it is the reading
-the whole dispel family wants — Dispel Magic's own quorum is the obvious next caller.
+1. **The single-target cast** (`pickTarget`, Purge). At LEGALITY rather than in the score, like
+   `nukeWorthIt` and for the same reason: a `castMistake` that lands on a unit with nothing to
+   strip is not a mistake, it is a dropped cast.
+2. **The area cast** (`pickSpot`/`counts`, Dispel Magic and Disenchant). The pool is **both
+   sides** — the circle is worth drawing over their Bloodlusted pack *and* over our own rooted
+   Huntress — and the quorum drops to **one** body, which is the classic caster's own argument
+   for its `count: 1` ([`src/ai/casting.ts`](../src/ai/casting.ts)): one summoned unit is already
+   worth a Dispel. The quorum was standing in for "is anything here worth it"; the predicate
+   answers that directly. A spot that would also catch one of **our** summons is vetoed outright
+   — a dispel is blind, and the Water Elemental we paid for is worth more than a buff coming off
+   a Grunt.
+3. **The Dryad's autocast**, which is the sim's (`dispelAutocastTarget` in
+   [`sim/world.ts`](../src/sim/world.ts)). `tickAutocast` decides friendly-versus-hostile off the
+   ability's allegiance flags — right for every other autocast in the game, and unable to
+   describe this one: `[Aadm] targs1` is `air,ground,ward,invu,vuln,tree`, no allegiance flag at
+   all, because the ability genuinely goes both ways. Read as "not friendly" it made the Dryad a
+   hunter: mana spent on nothing, and an entangled ally left standing in the roots beside her.
+   The caster is deliberately *not* excluded — a Dryad rooted by an enemy Keeper freeing herself
+   is the cast working as intended, and the flags permit it. This half is a **sim** change, so it
+   is the player's Dryads too, which is the point: it is how the ability behaves.
+
+The classic Blizzard-transcription caster keeps its own coarser reading (`dispellable`: a summon
+or any timed buff, quoted from the observation thread) — it reproduces that AI, warts included.
 
 ### A fight has to be worth the mana
 

@@ -760,6 +760,65 @@ export const POLARITY_SPELLS: Record<string, { healsUndead: boolean; error: stri
   AUdc: { healsUndead: true, error: "Deathcoiltarget" }, // "Must target enemy living units or friendly Undead units."
 };
 
+/**
+ * THE DISPEL FAMILY, by base code — every button whose job is taking effects OFF a unit.
+ *
+ * Three codes cover all of it, because the aliases collapse the way the potions' do:
+ *
+ *     Aprg   Purge            — Shaman `AOpg`, Spirit Walker `ACpu`, the two purge orbs
+ *     Adis   Dispel Magic     — Priest `Adis`, **Spirit Walker Disenchant `Adcn`**, `Adsm`
+ *     Aadm   Abolish Magic    — Dryad `Aadm`, and `Andm` / `ACdm` / `ACd2`
+ *
+ * Disenchant is the one worth naming out loud: it is a different ability with a different
+ * icon, radius and range, and its `code` IS `Adis` — so it dispatches to Dispel Magic's own
+ * handler and is covered by anything keyed on the code, here included.
+ */
+export const DISPEL_CODES = new Set(["Aprg", "Adis", "Aadm"]);
+
+/**
+ * IS THERE ANYTHING ON THIS UNIT WORTH DISPELLING? — the one reading the whole family shares.
+ *
+ * A dispel is the only spell in the game that does nothing at all to a target with nothing on
+ * it, which is why "is it legal" is not enough of a gate for one: a Purge at whatever stands
+ * nearest is 75 mana for a three-second slow, and a Dryad's Abolish Magic autocast firing at
+ * every passing Footman empties her bar for nothing.
+ *
+ * `ours` says which side of the target we are on, and it is what makes this ONE function
+ * instead of two. A dispel cuts both ways and the handlers say so — `Adis` clears every unit
+ * in its circle without asking allegiance — so:
+ *
+ *  · **theirs** (`ours` false): a SUMMON, which the handlers destroy or damage outright
+ *    (`summonLeft > 0` is the sim's own test — see `Aprg`, `Adis` and `Aadm` above, so this
+ *    cannot promise a kill the cast will not deliver), or a POSITIVE effect;
+ *  · **ours** (`ours` true): a NEGATIVE effect — Entangling Roots on a Huntress, a Slow, a
+ *    Cripple. Never a summon: our own Water Elemental is something a dispel would KILL, so it
+ *    is a reason not to cast rather than a reason to.
+ *
+ * And polarity is not in the data to be read. `AbilityBuffData.slk`'s only flag is `isEffect`,
+ * and it is 0 for Bloodlust, Inner Fire, Unholy Frenzy, Slow and Cripple alike. What IS
+ * knowable is WHO PUT IT THERE: a buff hung by the bearer's own side is one they wanted, and
+ * one hung by the other side is one they did not. That is the whole rule, and it needs no table
+ * — Entangling Roots (`AEer`, a `root` plus a `dot`, both carrying their caster's `sourceId`)
+ * is read as a debuff on our Huntress by exactly the same line that reads Bloodlust as a buff
+ * on their Grunt.
+ *
+ * Two exclusions, both because the cast would achieve nothing: an `undispellable` buff (Doom —
+ * `dispelUnit` keeps exactly those), and an AURA, which is a buff with `timeLeft` Infinity and
+ * is therefore back the tick after the dispel lands. A buff whose source is GONE — a Bloodlust
+ * from a dead Shaman — cannot be placed and does not count; that is the safe direction, since
+ * the cost of missing one is a dispel not cast.
+ */
+export function worthDispelling(t: SimUnit, units: ReadonlyMap<number, SimUnit>, ours = false): boolean {
+  if (!ours && t.summonLeft > 0) return true;
+  return t.buffs.some((b) => {
+    if (b.undispellable || !Number.isFinite(b.timeLeft)) return false;
+    const src = units.get(b.sourceId);
+    if (!src) return false;
+    const theirs = src.team === t.team; // hung by the bearer's OWN side
+    return ours ? !theirs : theirs;
+  });
+}
+
 /** Single-target heals that ALWAYS heal whatever they may legally touch. The polarity
  *  spells above heal too, but only their friendly half, so they're judged separately.
  *  A heal that would restore nothing is refused by WC3 rather than wasted (HPmaxed /

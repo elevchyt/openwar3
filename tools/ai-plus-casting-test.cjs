@@ -47,6 +47,10 @@ const ABILS = {
   // Purge — `[Aprg] targs1` names no allegiance either, and it is a `disable` (its slow is
   // real), so its only gate was the target search: 75 mana at whatever stood nearest.
   Aprg: { code: "Aprg", target: "unit", autocast: false, targetFlags: ["air", "ground", "ward", "vuln", "invu", "tree"], levelData: [lvl({ castRange: 700, duration: 15 })] },
+  // Dispel Magic — the AREA one, and the code Disenchant (`Adcn`) shares. Its handler clears
+  // every unit inside the circle without asking allegiance, which is why the AI aims it at both
+  // sides. `[Adis] Area1` 200, `Rng1` 600.
+  Adis: { code: "Adis", target: "point", autocast: false, targetFlags: ["air", "ground", "ward", "invu", "vuln", "tree"], levelData: [lvl({ area: 200, castRange: 600 })] },
 };
 
 let nextId = 1;
@@ -80,6 +84,9 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
     castUseError: () => null,
     targsAdmit: () => true,
     castError: (casterId, code, targetId) => {
+      // A POINT cast carries no target id — `pickSpot` passes 0 and an (x, y). Nothing in the
+      // stub's rules is about where the ground is, so the only answer it can give is yes.
+      if (!targetId) return null;
       const t = units.find((u) => u.id === targetId);
       if (!t) return "notarget";
       const healsUndead = POLARITY[code];
@@ -311,6 +318,48 @@ const theirBuff = (src) => ({ kind: "haste", group: "bloodlust", timeLeft: 45, s
   const src = shaman();
   const doomed = unit({ owner: 1, x: 200, buffs: [{ kind: "dot", group: "doom", timeLeft: Infinity, sourceId: src.id, undispellable: true }] });
   check("…nor a Doom, which no dispel may touch", cast([s, doomed, src]), null);
+}
+
+// ==========================================================================================
+console.log("\n-- …and the AREA dispels ask the same question, of both sides -----------------");
+// ==========================================================================================
+// Dispel Magic (`Adis`, which is also Disenchant `Adcn`'s code) clears every unit in its circle
+// whichever side they are on, so the AI aims it at both — and one body worth dispelling is
+// enough, which is the classic caster's own `count: 1`.
+const spotOf = (cmd) => (cmd ? { x: cmd.x, y: cmd.y } : null);
+{
+  const p = caster({ abilId: "Adis" });
+  const plain = [1, 2, 3].map((i) => unit({ owner: 1, x: 200 + 20 * i }));
+  check("a pack with nothing on it is not worth a Dispel", cast([p, ...plain]), null);
+}
+{
+  const p = caster({ abilId: "Adis" });
+  const src = shaman();
+  const lusted = unit({ owner: 1, x: 300, buffs: [theirBuff(src)] });
+  check("…one Bloodlusted body in it is", spotOf(cast([p, lusted, src])), { x: 300, y: 0 });
+}
+{
+  // OUR OWN SIDE, which is the half a "debuff" role could never reach: Entangling Roots hangs
+  // its `root` and `dot` with the enemy Keeper's own `sourceId`, so the same line that reads
+  // Bloodlust as a buff on their Grunt reads the roots as a debuff on our Huntress.
+  const p = caster({ abilId: "Adis" });
+  const keeper = unit({ owner: 1, x: -600 });
+  const roots = (src) => ({ kind: "root", group: "roots", timeLeft: 9, sourceId: src.id, buffId: "BEer" });
+  const rooted = unit({ x: 300, buffs: [roots(keeper)] });
+  check("an ENTANGLED friendly unit is dispelled free", spotOf(cast([p, rooted, keeper])), { x: 300, y: 0 });
+  // …and an ALLY's, for the same reason.
+  const p2 = caster({ abilId: "Adis" });
+  const allyRooted = unit({ owner: 2, x: 250, buffs: [roots(keeper)] });
+  check("…and an ALLY's too", spotOf(cast([p2, allyRooted, keeper])), { x: 250, y: 0 });
+}
+{
+  // …but never a circle that would take our OWN summon with it — a dispel damages summons, and
+  // the Water Elemental we paid for is worth more than the buff coming off their Grunt.
+  const p = caster({ abilId: "Adis" });
+  const src = shaman();
+  const lusted = unit({ owner: 1, x: 300, buffs: [theirBuff(src)] });
+  const ours = unit({ x: 340, summonLeft: 45 });
+  check("a spot that would delete our own summon is not a spot", cast([p, lusted, ours, src]), null);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

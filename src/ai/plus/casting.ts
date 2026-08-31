@@ -1,6 +1,6 @@
 import { isRepairCode, NO_AOE_CURSOR, type AbilityDef, type AbilityLevel } from "../../data/abilities";
 import type { SimUnit } from "../../sim/world";
-import { POLARITY_SPELLS } from "../../sim/spells";
+import { DISPEL_CODES, POLARITY_SPELLS, worthDispelling } from "../../sim/spells";
 import { friendlySpell, near, waveDistance, type CasterView } from "../casting";
 import { MELEE } from "../../data/gameplayConstants";
 import { MELEE_INSANE, MELEE_NEWBIE, WIND_WALK } from "../ids";
@@ -1032,10 +1032,11 @@ export class PlusCaster {
       // A NUKE IS NOT SPENT ON A WORKER IT CANNOT FINISH — see `nukeWorthIt`. Here rather than
       // in the score so the misclick below cannot land on one either.
       if (half === "nuke" && !nukeWorthIt(code, lvl, t)) continue;
-      // …AND A PURGE IS SPENT ON WHAT A PURGE DOES — see `worthDispelling`, and here for the
-      // same reason: a "mistake" that lands on a unit with nothing to strip is not a mistake,
-      // it is a wasted cast.
-      if (code === PURGE && !worthDispelling(t, this.view.world)) continue;
+      // …AND A DISPEL IS SPENT ON WHAT A DISPEL DOES — `worthDispelling` (sim/spells.ts), asked
+      // of the side this body is on, and here rather than in the score for the same reason the
+      // clause above is: a "mistake" that lands on a unit with nothing to strip is not a
+      // mistake, it is a wasted cast. Purge is the single-target one that reaches this line.
+      if (DISPEL_CODES.has(code) && !worthDispelling(t, this.view.world.units, !this.view.hostile(t))) continue;
       // …and the mana gate the ladder applies to every other nuke (`ready`) has to be applied
       // HERE for a polarity spell, because the card as a whole is graded `heal` and a heal is
       // never held back. Death Coil is the developer's own first example of a nuke thrown at a
@@ -1104,13 +1105,22 @@ export class PlusCaster {
     foes: SimUnit[],
   ): { x: number; y: number } | null {
     const friendly = friendlyAim(code, def, role);
-    const pool = friendly ? friends : foes;
+    // A DISPEL IS AIMED AT BOTH SIDES, because its handler is: `Adis` clears every unit inside
+    // its circle without asking allegiance (sim/spells.ts), so the circle is worth drawing over
+    // an enemy's Bloodlusted pack AND over our own Huntress standing in Entangling Roots.
+    // `counts` asks `worthDispelling` of each body from the side it is on.
+    const dispel = DISPEL_CODES.has(def.code);
+    const pool = dispel ? [...friends, ...foes] : friendly ? friends : foes;
     const area = lvl.area > 0;
     // A novice does not hold an area spell for a clump — they press it on whoever they are
     // looking at. So the quorum is the difficulty's too, and an easy computer's Blizzard lands
     // on one Footman.
     const quorum = this.profile.castTargeting === "naive" ? 1 : CLUSTER;
-    const need = area && !friendly ? quorum : 1;
+    // …and ONE body is enough for a dispel, which is the classic caster's own argument for its
+    // `count: 1` (src/ai/casting.ts): a single summoned unit is already worth a Dispel, because
+    // damaging it is what the ability is FOR. The quorum was standing in for "is anything here
+    // worth it"; `worthDispelling` answers that directly and much better.
+    const need = dispel ? 1 : area && !friendly ? quorum : 1;
 
     if (def.target === "none") {
       if (!buffFree(u, lvl)) return null; // a self-buff already up is not re-pressed
@@ -1148,10 +1158,16 @@ export class PlusCaster {
     pool: SimUnit[], friendly: boolean,
   ): { count: number; value: number } {
     const area = lvl.area || MIN_LOOK;
+    const dispel = DISPEL_CODES.has(def.code);
     let count = 0;
     let value = 0;
     for (const t of pool) {
       if (Math.hypot(t.x - x, t.y - y) > area) continue;
+      // A DISPEL IS BLIND — `Adis` clears (and DAMAGES the summons of) every unit in its circle,
+      // ours included. So a spot that would take out one of our own summons is not a spot: the
+      // Water Elemental we paid for is worth more than a buff taken off a Grunt. Vetoed here
+      // rather than in `counts`, which can only leave a body out of the tally.
+      if (dispel && t.summonLeft > 0 && !this.view.hostile(t)) return { count: 0, value: 0 };
       if (!this.counts(u, t, def, role, friendly)) continue;
       count++;
       value += this.value(t, role, lvl);
@@ -1186,9 +1202,13 @@ export class PlusCaster {
 
   /** Does this unit count toward an area spell's quorum? */
   private counts(u: SimUnit, t: SimUnit, def: AbilityDef, role: Role, friendly: boolean): boolean {
-    if (t === u && !friendly) return false;
     if (t.invulnerable) return false;
     if (!this.view.world.targsAdmit(t, def.targetFlags)) return false;
+    // A DISPEL asks its own question of every body in the circle — see `worthDispelling`, and
+    // `pickSpot` for why the pool is both sides. Before the `t === u` line deliberately: a
+    // Dryad rooted by an enemy Keeper freeing HERSELF is the cast working exactly as intended.
+    if (DISPEL_CODES.has(def.code)) return worthDispelling(t, this.view.world.units, !this.view.hostile(t));
+    if (t === u && !friendly) return false;
     if (friendly) return role !== "heal" || t.hp / Math.max(1, t.maxHp) <= HURT;
     return !t.building;
   }
@@ -1295,58 +1315,6 @@ function buffFree(t: SimUnit, lvl: AbilityLevel): boolean {
   if (!lvl.buffs.length) return true;
   const want = lvl.buffs.map((b) => b.toLowerCase());
   return !t.buffs.some((b) => b.buffId && want.includes(b.buffId.toLowerCase()));
-}
-
-/**
- * Purge — the Shaman's `AOpg`, the Spirit Walker's `ACpu` and the two purge orbs, all one CODE.
- * Keyed on the code for the reason every other table here is: the aliases differ per unit and
- * the dispatch does not (`SimWorld.applyItemAbility` and plus/items.ts's header make the same
- * point about the potions).
- */
-const PURGE = "Aprg";
-
-/**
- * IS THERE ANYTHING ON THIS UNIT WORTH STRIPPING? — the whole of when a Purge is spent.
- *
- * Reported: *"make Computer+ only use Purge against enemy Summoned units and enemy units that
- * have positive buffs/effects like Bloodlust, Inner Fire and Unholy Frenzy"*, and it is the
- * right rule for the ability. Purge is graded `disable` (its slow is real) and a disable's only
- * gate is the target search, so it went out at whatever was nearest — 75 mana to slow one Grunt
- * for three seconds, when what the button is for is deleting a Water Elemental or taking
- * Bloodlust off the pack.
- *
- * Two things make a target worth it, and both are read off the SIM's own handler (`Aprg` in
- * src/sim/spells.ts) so the AI cannot promise something the cast will not do:
- *
- *  1. **A SUMMON — it is destroyed outright.** The handler's test is `summonLeft > 0`, so that
- *     is this one's test too: a Water Elemental, a Feral Spirit, an Infernal. A permanent body
- *     is not a summon to Purge however it was made, and asking any other question here would
- *     promise a kill the handler will not deliver.
- *  2. **A POSITIVE EFFECT — it is stripped.** Nothing in `AbilityBuffData.slk` says which buffs
- *     are the good ones (its only flag is `isEffect`, and it is 0 for Bloodlust, Inner Fire,
- *     Unholy Frenzy, Slow and Cripple alike), so polarity is not in the data to be read. What
- *     IS knowable is WHO PUT IT THERE: a buff hung by the target's own side is one they wanted
- *     (Bloodlust, Inner Fire, Unholy Frenzy, a Healing Salve's regeneration), and one hung by
- *     ours is a debuff we would be undoing for them. `team` is the same comparison the sim's own
- *     area effects make (`areaEffectAffects`).
- *
- * Two exclusions, both because the cast would achieve nothing: an `undispellable` buff (Doom —
- * `dispelUnit` keeps exactly those), and an AURA. An aura is a buff with `timeLeft` Infinity,
- * refreshed while its source is in range, so it is back the tick after the purge lands.
- *
- * A buff whose source is GONE (a Bloodlust from a dead Shaman) cannot be placed and does not
- * count. That is the safe direction: the cost of missing one is a purge not cast.
- *
- * Written as a free function on the WORLD rather than as a method because it is the reading the
- * whole dispel family wants — Dispel Magic's own quorum is the obvious next caller.
- */
-export function worthDispelling(t: SimUnit, world: CasterView["world"]): boolean {
-  if (t.summonLeft > 0) return true;
-  return t.buffs.some((b) => {
-    if (b.undispellable || !Number.isFinite(b.timeLeft)) return false;
-    const src = world.units.get(b.sourceId);
-    return !!src && src.team === t.team;
-  });
 }
 
 /**

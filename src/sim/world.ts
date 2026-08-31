@@ -40,7 +40,7 @@ import {
   type ReviveMode,
 } from "../data/gameplayConstants";
 import { simProfile } from "./profile";
-import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, DISPEL_CODES, worthDispelling, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -10729,6 +10729,14 @@ export class SimWorld {
       const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
       const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
       const range = inPlace ? lvl.castRange : this.autocastSearchRange(u, lvl.castRange);
+      // A DISPEL IS NEITHER a friendly autocast nor a hostile one — it is BOTH, and it wants a
+      // target with something on it. See `dispelAutocastTarget`; Abolish Magic (`Aadm`, the
+      // Dryad's) is the one that reaches this, and it is the whole of what that unit does.
+      if (DISPEL_CODES.has(def.code)) {
+        const t = this.dispelAutocastTarget(u, range, def);
+        if (t) return this.issueCast(u.id, def.code, t.id, 0, 0, true);
+        continue;
+      }
       const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags);
       if (target) return this.issueCast(u.id, def.code, target.id, 0, 0, true);
     }
@@ -10807,6 +10815,41 @@ export class SimWorld {
     return best;
   }
 
+  /**
+   * WHO A DISPEL AUTOCAST GOES ON — both sides of the fight, and only a body with something on
+   * it.
+   *
+   * `tickAutocast` decides friendly-versus-hostile off the ability's allegiance flags, which is
+   * the right reading for every other autocast in the game and cannot describe this one. Abolish
+   * Magic's `targs1` is "air,ground,ward,invu,vuln,tree" — no allegiance flag at all, which by
+   * `targetAllowed`'s own rule means ANY allegiance — because the ability genuinely goes both
+   * ways: it strips a Bloodlust off their Grunt and it frees our Huntress from Entangling Roots.
+   * Read as "not friendly", a Dryad hunted the nearest enemy and fired at it whether or not it
+   * carried anything, which is both halves wrong: mana spent on nothing, and an entangled ally
+   * left standing in the roots beside her.
+   *
+   * `worthDispelling` is the gate and it is asked from the side each body is on. The caster is
+   * deliberately NOT excluded — a Dryad rooted by an enemy Keeper freeing herself is the cast
+   * working exactly as intended, and the flags permit it.
+   *
+   * A SUMMON first, because that is a kill rather than a strip, then whatever is nearest.
+   */
+  private dispelAutocastTarget(u: SimUnit, range: number, def: AbilityDef): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestScore = -Infinity;
+    for (const t of this.units.values()) {
+      if (t.hp <= 0 || t.building) continue;
+      if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
+      if (this.targetError(u, t, def.targetFlags, def.code) !== null) continue;
+      const ours = !this.hostile(u, t);
+      if (!worthDispelling(t, this.units, ours)) continue;
+      const kill = !ours && t.summonLeft > 0 ? 1e6 : 0;
+      const score = kill - Math.hypot(t.x - u.x, t.y - u.y);
+      if (score > bestScore) { bestScore = score; best = t; }
+    }
+    return best;
+  }
+
   /** Everything except the distance that makes `t` a target this autocast wants. Split out of
    *  the search so the APPROACH can re-ask it (see PendingCast.auto): a Priest halfway to a
    *  wounded ally that someone else just healed turns around instead of arriving to spend
@@ -10834,6 +10877,9 @@ export class SimWorld {
   /** Re-ask autocastWants for a cast the unit is still walking to. Rebuilds the same
    *  friendly/self flags tickAutocast derived from the ability's Targets Allowed. */
   private autocastStillWanted(u: SimUnit, t: SimUnit, def: AbilityDef): boolean {
+    // …and the dispel family re-asks its own question: somebody else's Dryad may have taken the
+    // buff off while this one was walking, and then there is nothing here to spend mana on.
+    if (DISPEL_CODES.has(def.code)) return worthDispelling(t, this.units, !this.hostile(u, t));
     const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
     const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
     return this.autocastWants(u, t, friendly, def.code, F.has("self"), def.targetFlags);

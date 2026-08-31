@@ -31,6 +31,18 @@ const HEAL = {
   levelData: [{ cost: 5, cooldown: 1, castRange: 250, area: 0, duration: 0, heroDuration: 0, castTime: 0, data: [25], buffs: [], summon: "" }],
 };
 
+/**
+ * Abolish Magic (`Aadm`) as the 1.30.4 row has it — `targs1` with NO allegiance flag, `Rng1`
+ * 500, `Cost1` 50. The missing flag is the whole of the last section of this file: read as "not
+ * friendly" it made the Dryad a hunter, firing at the nearest enemy whether or not it carried
+ * anything, and never freeing an ally from anything.
+ */
+const ABOLISH = {
+  id: "Aadm", code: "Aadm", target: "unit", autocast: true,
+  targetFlags: ["air", "ground", "ward", "invu", "vuln", "tree"],
+  levelData: [{ cost: 50, cooldown: 0, castRange: 500, area: 0, duration: 0, heroDuration: 0, castTime: 0, data: [0, 250], buffs: [], summon: "" }],
+};
+
 /** The Priest's ranged slot — `acquire` 600 is the number this whole issue turns on. */
 // Every `base*` twin is spelled out because recomputeStats REBUILDS the live fields off them
 // each tick (`w.range = w.baseRange + upg.range`) — leave one out and the weapon's range comes
@@ -59,7 +71,8 @@ function world() {
   const W = 64, H = 64;
   const g = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [-(W * 32) / 2, -(H * 32) / 2]);
   const w = new SimWorld(g, 1);
-  w.abilities = { get: (id) => (id === "Ahea" ? HEAL : undefined), all: () => [HEAL] };
+  const rows = { Ahea: HEAL, Aadm: ABOLISH };
+  w.abilities = { get: (id) => rows[id], all: () => Object.values(rows) };
   return w;
 }
 
@@ -237,6 +250,72 @@ function priest(w, over = {}) {
   hurt.hp = hurt.maxHp; // somebody else got there first
   w.tickCast(p, 0.1);
   check("…and turns back once it is topped up", p.order, "idle");
+}
+
+// ==========================================================================================
+// A DISPEL AUTOCAST GOES BOTH WAYS, and only at a body with something on it.
+// ==========================================================================================
+// `tickAutocast` reads friendly-versus-hostile off the ability's allegiance flags, which is
+// right for every other autocast in the game and cannot describe this one: Abolish Magic has no
+// allegiance flag at all, because it strips a buff off their Grunt AND frees our Huntress from
+// Entangling Roots. See `dispelAutocastTarget` and `worthDispelling` (sim/spells.ts).
+function dryad(w, over = {}) {
+  const u = add(w, { typeId: "edry", hp: 380, maxHp: 380, mana: 200, maxMana: 200, name: "Dryad", ...over });
+  u.abilities = [{ id: "Aadm", code: "Aadm", level: 1, cooldownLeft: 0, autocastOn: true }];
+  u.mana = 200;
+  return u;
+}
+/** A buff hung by `src` — the source's TEAM is what says whether it is a buff or a debuff. */
+const from = (src, over = {}) => ({
+  kind: "haste", group: "bloodlust", timeLeft: 45, sourceId: src.id, value: 0, value2: 0,
+  art: "", fx: [], buffId: "Bblo", delay: 0, ...over,
+});
+{
+  const w = world();
+  const d = dryad(w, { x: 0, y: 0 });
+  add(w, { owner: 1, team: 1, x: 300, y: 0 });
+  check("a plain enemy with nothing on it is not dispelled", w.tickAutocast(d), false);
+  check("…and the Dryad keeps its mana", d.mana, 200);
+}
+{
+  const w = world();
+  const d = dryad(w, { x: 0, y: 0 });
+  const shaman = add(w, { owner: 1, team: 1, x: 400, y: 0 });
+  const lusted = add(w, { owner: 1, team: 1, x: 300, y: 0 });
+  lusted.buffs = [from(shaman)];
+  check("…one their own side has Bloodlusted is", w.tickAutocast(d), true);
+  check("…aimed at it", d.pendingCast && d.pendingCast.targetId, lusted.id);
+}
+{
+  // THE HALF THAT DID NOT EXIST. Entangling Roots hangs its `root` with the enemy Keeper's own
+  // `sourceId`, so the same comparison that reads Bloodlust as a buff on their Grunt reads the
+  // roots as a debuff on our Huntress.
+  const w = world();
+  const d = dryad(w, { x: 0, y: 0 });
+  const keeper = add(w, { owner: 1, team: 1, x: -400, y: 0 });
+  const rooted = add(w, { x: 300, y: 0 });
+  rooted.buffs = [from(keeper, { kind: "root", group: "roots", timeLeft: 9, buffId: "BEer" })];
+  check("an ENTANGLED friendly unit is freed", w.tickAutocast(d), true);
+  check("…aimed at it", d.pendingCast && d.pendingCast.targetId, rooted.id);
+}
+{
+  // …and OUR summon is never a target: a dispel damages summons, so that is a reason not to
+  // cast rather than a reason to.
+  const w = world();
+  const d = dryad(w, { x: 0, y: 0 });
+  // `summonLeft` is set by the SUMMON path, never by `add`'s init — so it is stamped on here.
+  const elemental = add(w, { x: 300, y: 0 });
+  elemental.summonLeft = 45;
+  check("our own summon is not dispelled", w.tickAutocast(d), false);
+}
+{
+  // …and theirs is, because that is a kill rather than a strip.
+  const w = world();
+  const d = dryad(w, { x: 0, y: 0 });
+  const wolf = add(w, { owner: 1, team: 1, x: 300, y: 0 });
+  wolf.summonLeft = 45;
+  check("an enemy summon is", w.tickAutocast(d), true);
+  check("…aimed at it", d.pendingCast && d.pendingCast.targetId, wolf.id);
 }
 
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
