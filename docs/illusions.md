@@ -77,10 +77,8 @@ enemy must not. **Both tells key off the LOCAL viewpoint (`seesFor`), never off 
   `applyFogTint`, which is the *single owner* of a unit's `vertexColor` and composes
   base × fog × AoE-highlight × ghost-fade. Writing the tint anywhere else gets silently
   clobbered the next time fog brightness changes.
-- **"Summoned Unit (Ns)" timer** — `SelectionInfo.isSummon` is gated the same way, and
-  `src/ui/hud.ts` lets the summon branch win over the hero branch. **A copy of a HERO is the
-  exception**: it keeps the hero XP bar, because both sides must see the same panel and the
-  enemy's already shows one (below). The owner's tell there is the wash, not the bar.
+- **"Summoned Unit (Ns)" timer** instead of the hero XP bar — `SelectionInfo.isSummon` is
+  gated the same way, and `src/ui/hud.ts` lets the summon branch win over the hero branch.
 - **The 3D portrait bust** wears the same wash (`ModelViewerScene.setTint`, driven by
   `SelectionInfo.isIllusion`). Set it on **every selection**, not once at load: one viewer is
   reused for every unit and an illusion shares the original's model, so selecting the real
@@ -89,12 +87,14 @@ enemy must not. **Both tells key off the LOCAL viewpoint (`seesFor`), never off 
 To an enemy, `isSummon`/`isIllusion` both report `false`, so the image keeps a hero's XP bar,
 no tint and no timer — an ordinary Blademaster.
 
-**The XP bar is the original's**, not an empty one under a copied level: `IllusionInit.xp`
-carries it in, and `mirrorXpToIllusions` (called from `gainXp`, `setHeroXp`, `setHeroLevel` and
-`levelUpIllusion`) keeps it there for the copy's whole 60 seconds. An image earns nothing of its
-own — it is shown its hero's bar. Leave it at the spawn default and every panel in the pack
-reads "Level 5 … 0 / 2300" while the real Blademaster's reads three quarters full, which is the
-answer the ability exists to hide, printed.
+**The bar they see is the ORIGINAL's**, not an empty one under a copied level: `IllusionInit.xp`
+carries the hero's experience in, and `mirrorXpToIllusions` (called from `gainXp`, `setHeroXp`,
+`setHeroLevel` and `levelUpIllusion`) keeps it there for the copy's whole 60 seconds. An image
+earns nothing of its own — it is *shown* its hero's. Leave it at the spawn default and the
+enemy's panel reads "Level 5 … 0 / 2300" on the copies while the real Blademaster's reads three
+quarters full: the answer the ability exists to hide, printed on their own screen. (The owner
+never sees this bar at all — they get the timer — which is exactly why it is easy to leave
+wrong.)
 
 Nothing in the MPQs carries the tint (`AOmi` declares no colour field); like the ghosting on
 invisible/ethereal units it is a hardcoded engine look.

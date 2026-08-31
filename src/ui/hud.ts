@@ -168,10 +168,6 @@ export interface HudSelection {
   isItem: boolean; // selected ground item (show name + description instead of stats)
   description: string; // item description (shown when isItem)
   isSummon: boolean; // temporary summon — show the "Summoned Unit" timer bar
-  /** A copy of another unit (Mirror Image, Wand of Illusion). Viewpoint-gated exactly like
-   *  `isSummon`, so an enemy's illusion reports false. A copy of a HERO keeps the hero's XP
-   *  bar rather than the summon timer — it shares its original's bar (docs/illusions.md). */
-  isIllusion: boolean;
   summonSecondsLeft: number; // seconds until it expires
   summonFrac: number; // remaining fraction of its lifetime (bar fill)
   /** A unit standing in a TIMED ALTERNATE FORM wears the same expiry bar, because it is the
@@ -2959,15 +2955,16 @@ export class GameHud {
         // Hero: level + experience shown INSIDE the purple XP bar; a summon shows
         // a green "Summoned Unit (Ns)" timer bar. The sub-line carries a skill-
         // point nudge for heroes.
-        // A summon wins over the hero bar — EXCEPT for an illusion of a hero, which shows the
-        // hero bar its original does, filled to the same place (the sim mirrors the hero's XP
-        // onto his copies, `mirrorXpToIllusions`). An illusion is technically a summon on a
-        // 60s clock, but it IS a hero (it copies the Blademaster exactly) and the whole point
-        // of it is that it reads as one: an ENEMY already sees the XP bar (isSummon is masked
-        // to false for them — rts.selectedInfo), and swapping in a "Summoned Unit (Ns)" timer
-        // for the owner would make the two panels disagree about the same unit. The owner's
-        // tell is the blue wash, not the bar.
-        if (sel.isHero && sel.level > 0 && (!sel.isSummon || sel.isIllusion)) {
+        // A summon wins over the hero bar: a Mirror Image illusion IS a hero (it copies the
+        // Blademaster exactly), but to its owner it must read as what it is — a temporary
+        // copy on a 60s clock — not carry a hero's XP bar. To an ENEMY the same illusion
+        // reports isSummon=false (rts.selectedInfo), so it keeps the XP bar and stays
+        // indistinguishable from the real thing — and the bar it shows them is the ORIGINAL's,
+        // filled to the same place, because the sim mirrors his experience onto his copies
+        // (`mirrorXpToIllusions`). Left at the spawn default it would read 0 into the level
+        // while the real hero's read three quarters, which is the answer the ability exists to
+        // hide, printed on the enemy's own panel.
+        if (sel.isHero && sel.level > 0 && !sel.isSummon) {
           const span = sel.xpNext - sel.xpThis;
           const into = Math.max(0, Math.round(sel.xp - sel.xpThis));
           this.selSub.textContent = ""; // level + XP live inside the bar; no extra label

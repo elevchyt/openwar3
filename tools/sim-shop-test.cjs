@@ -9,9 +9,10 @@
 // and pops sixty seconds later. All five doors are checked here, because a shop that offers a
 // buyer it will then refuse is the same bug twice.
 //
-// The second half is the copy's EXPERIENCE BAR, which is the original's: it is shown his bar
-// (the panel's hero branch, not the summon timer), so a kill that moved the hero's bar and
-// not his copies' would let an enemy read the real one off the four panels.
+// The second half is the copy's EXPERIENCE BAR, which is the original's. The OWNER sees the
+// summon timer in its place; it is the ENEMY who gets the hero bar (the summon triple is
+// masked on the wire), so a copy left at the spawn default reads 0 into its level on their
+// panel while the real Blademaster reads three quarters full — the real one, named.
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
@@ -129,7 +130,7 @@ console.log("\n…and the adoption pass never hands a shop one either");
   check("the hero who walks up behind it is", world.shopBuyer(s.id, 0)?.id, real.id);
 }
 
-console.log("\nA hero's image shares HIS experience bar (docs/illusions.md)");
+console.log("\nA hero's image shares HIS experience bar — the one the ENEMY sees (docs/illusions.md)");
 {
   world = newWorld();
   const h = hero({ level: 4, xp: 1000 });
