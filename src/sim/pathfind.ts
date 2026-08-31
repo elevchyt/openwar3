@@ -54,9 +54,11 @@ const NEIGHBOR_COST = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT
 //     gets the FLOOR and nothing more: the result can only ever be best-effort, so all the
 //     old distance-scaled budget bought was a longer wait for the same answer. This is where
 //     the frame time saved below comes from.
-//   • Same region — a way round EXISTS through the terrain, for a body this size. Fund the
-//     search to find it, bounded by the region's own cell count (the exact worst case, since
-//     A* closes each cell at most once) and by the ceiling.
+//   • Same region — a way round EXISTS through the terrain, for a body this size, so a
+//     search worth funding is fundable: up to `MAX_EXPANSIONS_FAR`, bounded by the region's
+//     own cell count (the exact worst case, since A* closes each cell at most once). Note
+//     this is what a caller gets when it asks for no budget AT ALL, which after the second
+//     rule below is the escalation and not the first look.
 //   • Unknown (an air search, or an approach whose target has no walkable ground near it) —
 //     the old distance-scaled rule, unchanged.
 //
@@ -73,6 +75,7 @@ const NEIGHBOR_COST = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT
 // the trees, which bought almost nothing, which is why a unit would walk into a treeline to
 // reach something a moment's detour away. An open-ground walk across the map is 0.16 ms
 // either way, and an unreachable goal went from 7.3 ms to 3.1 ms.
+//
 // Two things the labels are NOT, each of which cost a measured regression before it was
 // understood:
 //
