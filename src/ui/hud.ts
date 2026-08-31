@@ -2054,14 +2054,18 @@ export class GameHud {
   /**
    * The Ally Color Mode button — the third socket in the column right of the minimap.
    *
-   * One button, three faces: it shows the mode it is IN (the art ships a triple per mode —
-   * `MiniMapAllyButton{Off,Inactive,Active}{Enabled,Pushed,Disabled}` in `UI\war3skins.txt`),
-   * and a click steps to the next one, exactly as Alt-A does. See game/allyColor.ts for what
-   * the three modes are and which face belongs to which.
+   * One button, three faces: it shows the mode it is IN — the crossed axes for player colours
+   * (mode 1), the pauldron for the filtered minimap (mode 2), the pauldron and its lens for
+   * the filtered world too (mode 3) — and a click steps to the next one, exactly as Alt-A
+   * does. Held down it wears that same face's `-down` twin, which is what the art ships a
+   * TRIPLE per mode for (`MiniMapAllyButton{Off,Inactive,Active}{Enabled,Pushed,Disabled}` in
+   * `UI\war3skins.txt`). See game/allyColor.ts for the whole table.
    *
    * The art is the game's own and carries its whole look — the gold rim included — so there
-   * is no border of ours around it, the same rule every command button follows. It is named
-   * by war3skins KEY rather than by path so the orc console gets the orc button.
+   * is no border of ours around it, the same rule every command button follows. Named by
+   * war3skins KEY rather than by path, which is also what lets the four races share one
+   * button honestly: the keys sit in the file's [Default] section because Blizzard only ever
+   * drew the Human one.
    */
   private buildAllyColorButton(): HTMLButtonElement {
     const btn = document.createElement("button");

@@ -65,10 +65,21 @@ check("SetAllyColorFilterState(-3)", toAllyColorMode(-3), 0);
 check("SetAllyColorFilterState(7)", toAllyColorMode(7), 2);
 check("SetAllyColorFilterState(2)", toAllyColorMode(2), 2);
 
+// The face is the mode it is IN, and a press wears that face's own `-down` twin. The whole
+// 3 x 3 is pinned because the mapping is the one thing here the install does NOT state (it
+// was confirmed against the real client), and because a button that shows the wrong mode is
+// a bug nothing else in this file could catch. The `//` lines are what war3skins.txt resolves
+// each key to, so the pin reads against the art the developer named.
 console.log("The face is the mode it is IN (war3skins MiniMapAllyButton* keys)");
-check("mode 1 = filtering off", allyButtonSkin(0, "Enabled"), "MiniMapAllyButtonOffEnabled");
-check("mode 2", allyButtonSkin(1, "Pushed"), "MiniMapAllyButtonInactivePushed");
-check("mode 3 = fully on", allyButtonSkin(2, "Disabled"), "MiniMapAllyButtonActiveDisabled");
+check("mode 1 up", allyButtonSkin(0, "Enabled"), "MiniMapAllyButtonOffEnabled"); //      human-minimap-ally-off.blp
+check("mode 1 held", allyButtonSkin(0, "Pushed"), "MiniMapAllyButtonOffPushed"); //      human-minimap-ally-off-down.blp
+check("mode 1 taken away", allyButtonSkin(0, "Disabled"), "MiniMapAllyButtonOffDisabled");
+check("mode 2 up", allyButtonSkin(1, "Enabled"), "MiniMapAllyButtonInactiveEnabled"); // human-minimap-ally-inactive.blp
+check("mode 2 held", allyButtonSkin(1, "Pushed"), "MiniMapAllyButtonInactivePushed"); // human-minimap-ally-inactive-down.blp
+check("mode 2 taken away", allyButtonSkin(1, "Disabled"), "MiniMapAllyButtonInactiveDisabled");
+check("mode 3 up", allyButtonSkin(2, "Enabled"), "MiniMapAllyButtonActiveEnabled"); //   human-minimap-ally-active.blp
+check("mode 3 held", allyButtonSkin(2, "Pushed"), "MiniMapAllyButtonActivePushed"); //   human-minimap-ally-active-down.blp
+check("mode 3 taken away", allyButtonSkin(2, "Disabled"), "MiniMapAllyButtonActiveDisabled");
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

@@ -92,15 +92,23 @@ export function allyFilterColor(mode: AllyColorMode, surface: ColorSurface, side
  *
  * The table ships nine of them — `MiniMapAllyButton{Active,Inactive,Off}{Enabled,Pushed,
  * Disabled}` — one triple per mode, which is what says the button shows the mode it is IN
- * rather than the one it would switch to. The three faces are, in the human art: crossed
- * battle axes (Off), a shoulder pauldron (Inactive) and that pauldron with a lens (Active).
+ * rather than the one it would switch to. Nothing in the install states which face belongs to
+ * which mode; this is the mapping **confirmed against the real client** (developer, issue
+ * thread), and it is the one the state names already read as:
  *
- * **Which face belongs to which mode is not written down anywhere in the install**, so it is
- * read off the state names in the only order they can mean: Off is filtering off (state 0,
- * the `_Defaults=0` the game boots in), and of the two remaining, Active is the one that is
- * fully on (state 2). The keys are per-race — `skinPath` resolves them against the local
- * player's race the way the FDF's `DecorateFileNames` does — so the orc console gets the orc
- * button without a second table here.
+ *     mode 1 (state 0)  every player their own colour, map and world   `…Off`       crossed axes
+ *     mode 2 (state 1)  the MINIMAP shows allies teal, enemies red     `…Inactive`  a pauldron
+ *     mode 3 (state 2)  …and the world shows you blue with them        `…Active`    + its lens
+ *
+ * `Pushed` is the `-down` twin of whichever of the three is up — the art the button wears
+ * while it is held — and `Disabled` the greyed one for a button the map has taken away.
+ *
+ * The nine keys live in war3skins' **[Default]** section rather than in a race's: Blizzard
+ * only ever drew the Human widget (there is no `orc-minimap-ally-*.blp` in the archives), so
+ * every race's console shows this same button — the same way the tooltip slab and the
+ * command-button glow are Human-only art that all four races draw. Asking by KEY is still
+ * what makes that true rather than assumed: `skinPath` resolves the race's own section first
+ * and falls through to [Default], so a mod that DOES draw one gets it for nothing.
  */
 export function allyButtonSkin(mode: AllyColorMode, press: "Enabled" | "Pushed" | "Disabled"): string {
   const state = mode === 0 ? "Off" : mode === 1 ? "Inactive" : "Active";
