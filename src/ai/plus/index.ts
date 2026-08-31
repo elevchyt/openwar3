@@ -13,12 +13,15 @@ import {
   type Standing,
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
-import { LUMBER_FLOOR, buildPlan, buildableMix, harvestPlan, type PlusCtx } from "./plan";
+import {
+  LUMBER_FLOOR, buildPlan, buildableMix, harvestPlan, openingUnit, type PlusCtx,
+} from "./plan";
 import {
   ATTACK_TELL_GAP, BUSY_LINES, COLOUR_NAMES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP,
   HELP_ANSWER_STAGGER, HELP_CALLS, HELP_CALL_FOES, HELP_CALL_GAP, HELP_CLEAR, HELP_GRACE,
   HELP_TIMEOUT, JOIN_LINES, JOIN_STAGGER, JOIN_TIMEOUT, OPENER_AT, OPENER_UNITS, OVERRUN_BODIES,
-  OVERRUN_EDGE, PORTAL_LINES, PORTAL_WALK, SWITCH_MARGIN, TALK_GAP, attackLine, namedColour,
+  OVERRUN_EDGE, PORTAL_LINES, PORTAL_WALK, STRATEGY_TIER, SWITCH_MARGIN, TALK_GAP, attackLine,
+  namedColour,
   openerLine, readAllyCall, switchLine,
   type SwitchReason,
 } from "./teamchat";
@@ -4976,17 +4979,17 @@ export class ComputerPlusAi {
   // --- what it is building --------------------------------------------------------------
 
   /**
-   * "i'm going footmen and riflemen" — the build, stated once, near the top of the game.
+   * "i'm going footmen" — the OPENING, stated once, near the top of the game.
    *
-   * Off the STRATEGY rather than off the production mix, which is the whole difference between
-   * this and `mixTalk`: at twelve seconds there is no production to report and no producer to
-   * report it from, but the build has already been decided — it was rolled at seat time and is
-   * held for the match (plus/races.ts). So this is the plan, and `mixTalk` is the running
-   * commentary on carrying it out.
+   * What it is about to train, which at fourteen seconds is tier 1 and nothing else. NOT the
+   * strategy: that is what the build means to end up with, it is two buildings and a hall
+   * upgrade away from existing, and it is announced by `mixTalk` at `STRATEGY_TIER` when the
+   * computer can actually act on it. Announcing it here instead is the developer's own report —
+   * an ally told "i'm going tauren" on minute one watched four minutes of Grunts, and the next
+   * line out of the same computer was "switching to grunts", every match.
    *
-   * It SEEDS `said` with the top of that mix. Without it the first thing `mixTalk` says is
-   * "going footmen" to an ally who was told "i'm going footmen and riflemen" a minute earlier,
-   * which reads as a computer with nothing to say rather than as a teammate.
+   * It SEEDS `said` with the heaviest of what it named, so the first thing `mixTalk` reports is
+   * a change from the opening rather than the opening said twice.
    */
   private openerTalk(b: Brain): void {
     if (b.opened) return;
@@ -4997,14 +5000,33 @@ export class ComputerPlusAi {
     // interleaved into one wall at the start of the match.
     if (b.clock < Math.max(OPENER_AT, this.greetingsDone()) + GREET_STAGGER * this.seatOrder(b)) return;
     b.opened = true;
-    const ranked = Object.entries(b.strategy.mix).sort((a, c) => c[1] - a[1]);
-    if (!ranked.length) return;
-    b.said = ranked[0][0];
-    const named = ranked.slice(0, OPENER_UNITS)
-      .map(([unit]) => this.host.registry.get(unit)?.name ?? "")
+    const opening = this.openingUnits(b);
+    if (!opening.length) return;
+    b.said = opening[0];
+    const named = opening
+      .map((unit) => this.host.registry.get(unit)?.name ?? "")
       .filter(Boolean);
     const line = openerLine(named);
     if (line) this.tell(b, [line]);
+  }
+
+  /**
+   * What the opener names: the strategy's own TIER-1 rows, heaviest first — and the race's
+   * OPENING SOLDIER when the build has none, which is fourteen of the twenty builds.
+   *
+   * The same two answers `buildableMix` gives, asked before there is a producer standing to give
+   * them: a `bears` night elf or a `gryphons` human opens on Archers and Footmen exactly as its
+   * fallback will have it do (plus/plan.ts `openingUnit`), so saying so is a statement of what
+   * the ally is about to see rather than a guess.
+   */
+  private openingUnits(b: Brain): string[] {
+    const tier1 = Object.entries(b.strategy.mix)
+      .filter(([unit]) => (b.table.units[unit]?.tier ?? Infinity) <= 1)
+      .sort((a, c) => c[1] - a[1])
+      .map(([unit]) => unit);
+    if (tier1.length) return tier1.slice(0, OPENER_UNITS);
+    const opening = openingUnit(this.ctx(b));
+    return opening ? [opening] : [];
   }
 
   /**
@@ -5039,12 +5061,19 @@ export class ComputerPlusAi {
    * becomes a Knight build the moment the Castle lands) and the counter re-weighting
    * (plus/counter.ts). `switchReason` tells the ally which.
    *
+   * It is also the line that states the STRATEGY, once, because tier 2 is the first moment the
+   * strategy has anything on the field: `STRATEGY_TIER` is the floor, and below it every line
+   * this could produce is "switching to grunts" — a switch to the opening `openerTalk` has
+   * already named.
+   *
    * `SWITCH_MARGIN` is what keeps this from being noise, and `said` is deliberately NOT updated
    * when the line is held back by `TALK_GAP` — the change is still un-announced, so the next
-   * pass says it.
+   * pass says it. The tier floor is held the same way, for the same reason: what the opening
+   * became while it was closed is news the moment it opens.
    */
   private mixTalk(b: Brain, ctx: PlusCtx): void {
     if (!b.allies.length || b.concededAt >= 0) return;
+    if (ctx.tier < STRATEGY_TIER) return;
     const rows = buildableMix(ctx);
     if (!rows.length) return;
     let top = rows[0];

@@ -2600,19 +2600,33 @@ interleave with them into one wall at the start of the match. It is read off the
 drawn rather than off the window's ceiling, so a 1v1 — and a lobby whose computers all rolled
 early — does not hold its openers back for greetings nobody is still going to say.
 
-* **Its build, once, near the top of the game** — *"i'm going footmen and riflemen"*. Off the
-  `PlusStrategy` it rolled at seat time rather than off what it has produced, so at fourteen
-  seconds it is a plan rather than a report. The two heaviest units in the mix, named by the
-  **game's** own `UnitDef.name` so a localized install says what it says; only the pluralisation
-  is ours.
-* **When the top of that mix moves** — *"switching to knights"*, *"going hippogryphs to counter
-  their air units"*. Be precise about what this is: not a strategy switch (Computer+ holds its
-  build for the whole match) but the two things that genuinely move production — the tech tree
-  opening up, and the counter re-weighting. `switchReason` only blames the enemy when this
-  difficulty is actually countering and off a sample it believes, because a computer that blamed
-  the enemy for a switch caused by its own Castle finishing is a computer talking nonsense.
-  `SWITCH_MARGIN` is real hysteresis and is not optional: `buildableMix` is a continuous
-  re-weighting, so two near-equal rows trade places constantly and every trade would be a line.
+* **Its OPENING, once, near the top of the game** — *"i'm going footmen"*. What it is about to
+  train, which at fourteen seconds is tier 1 and nothing else: `openingUnits` takes the
+  strategy's own tier-1 rows, heaviest first, and falls back on the race's **opening soldier**
+  (`openingUnit`, plus/plan.ts) for the fourteen builds of twenty that name nothing buildable at
+  tier 1 — the same two answers `buildableMix` will give once a Barracks is standing. Named by
+  the **game's** own `UnitDef.name` so a localized install says what it says; only the
+  pluralisation is ours (`plural`, teamchat.ts — "-man" → "-men" for the compounds the roster
+  really ships, Rifleman and Footman, with `ROOT_MAN` holding back the word that merely *ends*
+  that way: the Shaman is a shaman, and Orc08's own `war3map.j` writes "shamans").
+
+  It used to announce the **strategy** here instead, and that was the developer's own bug report:
+  an ally was told *"i'm going tauren"* on minute one, watched four minutes of Grunts, and the
+  next line out of that computer was *"switching to grunts"* — a switch to the opening, in every
+  single match. The opening is what it is opening with; the build is stated when it is real.
+* **The build it is switching to, from tier 2 on** — *"switching to knights"*, *"going
+  hippogryphs to counter their air units"*. Be precise about what this is: not a strategy switch
+  (Computer+ holds the build it rolled for the whole match) but the two things that genuinely
+  move production — the tech tree opening up, and the counter re-weighting. `STRATEGY_TIER` is
+  the floor and is where the strategy gets stated at all: below a Keep the top of the mix *is*
+  the opening that was already announced, so the only line this could produce down there is the
+  one above. It is a floor rather than a moment — the line lands with the first row of the
+  strategy `buildableMix` can actually produce, so what goes out is what is being trained rather
+  than what is intended. `switchReason` only blames the enemy when this difficulty is actually
+  countering and off a sample it believes, because a computer that blamed the enemy for a switch
+  caused by its own Castle finishing is a computer talking nonsense. `SWITCH_MARGIN` is real
+  hysteresis and is not optional: `buildableMix` is a continuous re-weighting, so two near-equal
+  rows trade places constantly and every trade would be a line.
 * **"help me"**, on either of two conditions. **More than one opponent** has units in its towns
   at once (`isInvader`, so a creep camp next door is not an invasion) — two at once is an
   emergency by arithmetic. Or **one of them is overrunning it** (`overrun`): the number of

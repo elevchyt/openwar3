@@ -618,7 +618,7 @@ export function buildableMix(c: PlusCtx): Array<{ unit: string; weight: number }
  * unit too, but it waits on a Blacksmith, and a Blacksmith waits on army food (`SupportRow.after`)
  * — so choosing it would fall back onto the same deadlock this is here to break.
  */
-function openingUnit(c: PlusCtx): string | null {
+export function openingUnit(c: PlusCtx): string | null {
   const { table } = c;
   let best: string | null = null;
   let bestTier = Infinity;

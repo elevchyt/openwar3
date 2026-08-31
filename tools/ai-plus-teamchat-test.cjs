@@ -106,6 +106,8 @@ check("the names are the install's, in the install's order", COLOUR_NAMES.join("
 check("plural: regular", plural("Knight"), "knights");
 check("plural: -man", plural("Rifleman"), "riflemen");
 check("plural: -man again", plural("Footman"), "footmen");
+// …and the word that merely ENDS in "man" — Orc08's own war3map.j writes "priests and shamans".
+check("plural: -man that is not one", plural("Shaman"), "shamans");
 check("plural: sibilant", plural("Huntress"), "huntresses");
 check("plural: -ch", plural("Batrider"), "batriders");
 check("plural: consonant + y", plural("Harpy"), "harpies");

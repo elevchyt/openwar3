@@ -13,13 +13,21 @@
 // no back door: what a computer hears is what `chatRecipients` decided it hears, so it cannot
 // read a message that was not addressed to it any more than it can see through the fog.
 //
-//  1. **It states its build**, once, near the top of the game — "i'm going footmen and
-//     riflemen". Off the STRATEGY it rolled at seat time (plus/races.ts), so it is a plan rather
-//     than a report of what it has already made.
-//  2. **It says when that changes.** Not a strategy SWITCH — Computer+ plays the one build for
-//     the whole match — but the thing a player actually announces: what the top of its
-//     production mix has just become, and whether the enemy's composition is why
-//     (plus/counter.ts). "switching to knights", "going hippogryphs to counter their air units".
+//  1. **It states its OPENING**, once, near the top of the game — "i'm going footmen". What it
+//     is about to TRAIN, which at fourteen seconds is tier 1 and nothing else whatever the
+//     strategy it rolled at seat time (plus/races.ts) means to end up with.
+//  2. **It states the build it is switching to**, from tier 2 on (`STRATEGY_TIER`). Not a
+//     strategy SWITCH — Computer+ plays the one build it rolled for the whole match — but the
+//     thing a player actually announces: what the top of its production mix has just become,
+//     and whether the enemy's composition is why (plus/counter.ts). "switching to knights",
+//     "going hippogryphs to counter their air units".
+//
+//     Those two together are ONE statement made twice, and the split is the whole of the
+//     developer's report. Announcing the strategy's END STATE in (1) told an ally "i'm going
+//     tauren" from a computer that then spent four minutes making Grunts, and the next thing it
+//     ever said was "switching to grunts" — a switch to the opening, in every single match. The
+//     opening is what it is opening with, and a build is committed to when the hall finishes
+//     upgrading, which is where a player commits to one too.
 //  3. **It asks for help** when more than one opponent is in its towns at once, or when ONE of
 //     them is overrunning it — see `OVERRUN_EDGE`.
 //  4. **It answers a call for help** — its ally's or another computer's, since both arrive by
@@ -181,17 +189,17 @@ export const BUSY_LINES = {
 // --- what it is building ---------------------------------------------------------------------
 
 /**
- * "i'm going footmen and riflemen" — the BUILD, announced once, near the top of the game.
+ * "i'm going footmen and riflemen" — the OPENING, announced once, near the top of the game.
  *
  * The one line a team game actually opens with, and it is a different statement from
- * `switchLine`: that one reports what production has BECOME, this one states the plan before
- * there is any production to report. Both are worth having — an ally who knows on minute one
- * that you are going air plays the next ten minutes differently.
+ * `switchLine`: that one reports what production has BECOME, this one states what it is about
+ * to be before there is any production to report.
  *
- * Built from the strategy's own mix rather than from its `name`: a strategy's name is English
- * typed into plus/races.ts, where a unit's name is the GAME's (UnitStrings' `Name`), so this
- * says what the install says. Two units, because a mix with five entries in it announced in full
- * is a list rather than a plan — the two the build is actually about are the two heaviest.
+ * What it names is the TIER-1 army — `ComputerPlusAi.openerTalk` picks it — and not the
+ * strategy's end state, which is not a decision this computer has made yet and is announced at
+ * `STRATEGY_TIER` when it has. Every unit name is the GAME's (UnitStrings' `Name`), never typed
+ * here, so a localized install says what it says. Two units at most, because a mix announced in
+ * full is a list rather than a plan.
  */
 export function openerLine(unitNames: readonly string[]): string {
   const said = unitNames.filter(Boolean).map(plural);
@@ -199,7 +207,7 @@ export function openerLine(unitNames: readonly string[]): string {
   return `i'm going ${said.length > 1 ? `${said.slice(0, -1).join(", ")} and ${said[said.length - 1]}` : said[0]}`;
 }
 
-/** How many of the strategy's units the opener names — see `openerLine`. */
+/** How many units the opener names — see `openerLine`. */
 export const OPENER_UNITS = 2;
 
 /**
@@ -213,7 +221,8 @@ export const OPENER_UNITS = 2;
  * actually exist rather than from a guess at how many there are.
  *
  * Still early enough that it is a plan rather than a report — nothing is producing at fourteen
- * seconds either.
+ * seconds either, which is also why what it names is the opening: at fourteen seconds the
+ * strategy's own units are two buildings and a hall upgrade away from existing.
  */
 export const OPENER_AT = 14;
 
@@ -240,17 +249,29 @@ export function switchLine(unitName: string, reason: SwitchReason, first: boolea
  * a localized install and a custom map both say what they say. Only the shape is ours:
  *
  *  · "-man" → "-men", which is the only irregular the melee roster actually contains (Rifleman,
- *    Footman is "footmen", Swordsman in a custom map);
+ *    Footman is "footmen", Swordsman in a custom map) — except where the "man" is the whole root
+ *    rather than the English suffix (`ROOT_MAN`);
  *  · a sibilant ending takes "-es" (Huntress → huntresses);
  *  · consonant + "-y" takes "-ies" (Harpy → harpies);
  *  · and a name with "of" in it pluralizes its HEAD rather than its tail — "druids of the claw",
  *    not "druid of the claws", which is the one that reads as a machine wrote it.
  */
+/**
+ * Names that merely END in "man" without being one, so the -men rule above them is wrong.
+ *
+ * The orc Shaman is the whole list the melee roster produces: it is a loan word whose plural is
+ * "shamans", and Blizzard's own script says so — Orc08's `war3map.j` writes "priests and
+ * shamans" in its comments. Kept as an exception rather than by dropping the rule, because the
+ * rule is right for every compound the game actually ships (Rifleman, Footman) and those are the
+ * names a teammate reads most.
+ */
+const ROOT_MAN: ReadonlySet<string> = new Set(["shaman"]);
+
 export function plural(name: string): string {
   const said = name.toLowerCase().trim();
   const of = said.indexOf(" of ");
   if (of > 0) return `${plural(said.slice(0, of))}${said.slice(of)}`;
-  if (said.endsWith("man")) return `${said.slice(0, -3)}men`;
+  if (said.endsWith("man") && !ROOT_MAN.has(said)) return `${said.slice(0, -3)}men`;
   if (/(s|x|z|ch|sh)$/.test(said)) return `${said}es`;
   if (/[^aeiou]y$/.test(said)) return `${said.slice(0, -1)}ies`;
   return `${said}s`;
@@ -337,6 +358,24 @@ export const HELP_CALL_FOES = 2;
  * change of plan; anything under it is the same plan breathing.
  */
 export const SWITCH_MARGIN = 1.25;
+
+/**
+ * The hall tier at which a build is worth announcing at all — 2, the Keep/Stronghold/Halls of
+ * the Dead/Tree of Ages.
+ *
+ * A floor rather than a moment: everything from tier 2 on is announced as it happens, and
+ * nothing below it is announced ever. Below tier 2 the top of the mix is the OPENING — the same
+ * Grunt the opener already named, since a strategy's own units are tier 2 and up in fourteen of
+ * the twenty builds — so the only line this could produce down there is the one the developer
+ * reported: "switching to grunts", said once a match, always, by every computer on the team.
+ *
+ * Tier 2 rather than a clock because that is when the decision is real. A player opens with what
+ * their race opens with and commits to a build when the hall finishes upgrading and the tech
+ * building behind it goes down; the announcement lands with the first row of the strategy that
+ * `buildableMix` can actually produce, so what goes out is what is being trained rather than
+ * what is intended.
+ */
+export const STRATEGY_TIER = 2;
 
 /** …and how well the new unit has to answer what has been SEEN before the announcement says the
  *  enemy is the reason. `counterScore` is normalised so 1.0 is a plain trade (plus/counter.ts),
