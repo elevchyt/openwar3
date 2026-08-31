@@ -19,6 +19,7 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { PathingGrid, PathingFlag } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
 const { findPath } = require(join(REPO, ".sim-build", "src", "sim", "pathfind.js"));
+const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 
 let failures = 0;
 const check = (label, cond) => {
@@ -50,19 +51,19 @@ const OLD_BUDGET = (from, to) => {
 
 console.log("a goal behind a long treeline is walked round, not walked into");
 {
-  const g = grid(treeline(190, 6, 300)); // open only along the top 84 rows
+  const g = grid(treeline(190, 6, 120)); // 3840 world units of unbroken trunks
   const from = [20, 20], to = [360, 20];
 
   const old = findPath(g, from, to, undefined, OLD_BUDGET(from, to));
   const oldEnd = old[old.length - 1];
-  check(`the old distance-scaled budget stopped at the trees (x ${oldEnd[0]}, y ${oldEnd[1]})`,
-    oldEnd[0] < 190);
+  check(`the old distance-scaled budget never got there (stopped ${oldEnd[0]},${oldEnd[1]})`,
+    oldEnd[0] !== to[0] || oldEnd[1] !== to[1]);
 
   const path = findPath(g, from, to);
   const end = path[path.length - 1];
   check(`now it arrives (end ${end[0]},${end[1]})`, end[0] === to[0] && end[1] === to[1]);
   const highest = path.reduce((m, [, y]) => Math.max(m, y), 0);
-  check(`by going round the top of it (highest row ${highest})`, highest >= 300);
+  check(`by going round the top of it (highest row ${highest})`, highest >= 120);
 }
 
 console.log("the way round is taken however near the thing behind the trees is");
@@ -71,7 +72,7 @@ console.log("the way round is taken however near the thing behind the trees is")
   // very long walk. This is the case the distance-scaled budget was worst at: a near goal
   // bought almost nothing, so the shorter the hop the more certain the unit was to stand in
   // the trees.
-  const g = grid(treeline(190, 6, 300));
+  const g = grid(treeline(190, 6, 120));
   const from = [180, 20], to = [210, 20];
   const old = findPath(g, from, to, undefined, OLD_BUDGET(from, to));
   const oldEnd = old[old.length - 1];
@@ -80,6 +81,46 @@ console.log("the way round is taken however near the thing behind the trees is")
   const path = findPath(g, from, to);
   const end = path[path.length - 1];
   check(`now it arrives (end ${end[0]},${end[1]})`, end[0] === to[0] && end[1] === to[1]);
+}
+
+console.log("the question is asked with the MOVER'S OWN FOOTPRINT");
+{
+  // A one-cell corridor through the wall: a point can thread it and a 2×2 body cannot. Told
+  // one cell wide, the labels call the far side reachable for everybody — and the 2×2's
+  // search then spends its ENTIRE budget discovering otherwise, every time it is asked. That
+  // is what a flat ~40 ms stall several times a second looked like on a real map.
+  const flags = blank();
+  for (let y = 0; y < H; y++) for (let x = 190; x < 196; x++) flags[y * W + x] = PathingFlag.Unwalkable;
+  for (let x = 190; x < 196; x++) flags[100 * W + x] = 0;
+  const g = grid(flags);
+  check("one region for a 1×1", g.sameRegion(20, 20, 360, 20, "ground", 1));
+  check("two regions for a 2×2", !g.sameRegion(20, 20, 360, 20, "ground", 2));
+  check("…and for a 3×3", !g.sameRegion(20, 20, 360, 20, "ground", 3));
+  const blocked = (cx, cy) => !g.footprintClear(cx, cy, 2);
+  const path = findPath(g, [20, 20], [360, 20], blocked, undefined, "ground", undefined, 2);
+  check(`the 2×2 walks up to the wall (x ${path[path.length - 1][0]})`, path[path.length - 1][0] < 190);
+  // The point is the COST, not the answer: both budgets end at the wall, and only one of them
+  // pays the ceiling to get there.
+  const spend = (b) => { const t = process.hrtime.bigint(); findPath(g, [20, 20], [360, 20], blocked, b, "ground", undefined, 2); return Number(process.hrtime.bigint() - t) / 1e6; };
+  const floor = spend(8192), ceil = spend(32768);
+  const auto = (() => { const t = process.hrtime.bigint(); findPath(g, [20, 20], [360, 20], blocked, undefined, "ground", undefined, 2); return Number(process.hrtime.bigint() - t) / 1e6; })();
+  check(`and it is priced as unreachable, not as a detour (${auto.toFixed(1)} ms vs floor ${floor.toFixed(1)} / ceiling ${ceil.toFixed(1)})`,
+    auto < (floor + ceil) / 2);
+}
+
+console.log("the ceiling is a real bound, and a wall past it does not hang the search");
+{
+  // Far longer than any real map's treeline — 9600 world units of unbroken trunks with the
+  // only way round at the very end. This one needs about 77k expansions and the ceiling is
+  // 32768, so it comes back best-effort at the trees, exactly as everything used to. That is
+  // the documented limit of the fix and it is deliberate: the alternative is a budget every
+  // failing search in a crush spends, which measured four times worse than the bug.
+  const g = grid(treeline(190, 6, 300));
+  const t0 = process.hrtime.bigint();
+  const path = findPath(g, [20, 20], [360, 20]);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  check(`it returns, bounded (${ms.toFixed(1)} ms)`, path !== null && ms < 40);
+  check("…best-effort, as the floor always did", path[path.length - 1][0] < 190);
 }
 
 console.log("a goal with no way to it at all is still refused, and cheaply");
@@ -138,6 +179,49 @@ console.log("a 4-connected label never promises a diagonal pinch");
   check("a one-cell corridor does join them", g.sameRegion(20, 20, 360, 20));
   const path = findPath(g, [20, 20], [360, 20]);
   check("and the search threads it", path[path.length - 1][0] === 360);
+}
+
+console.log("and a UNIT sent past a treeline walks round it");
+{
+  // The whole point, end to end, and the shape of the report: findPath above is one search,
+  // while a move order re-runs it every time the walk stalls — so a unit does claw its way
+  // round a SHORT wall on best-effort paths alone, a bit at a time. Past a certain length it
+  // stops being able to: the search from the treeline is no better than the one that put it
+  // there, the walk makes no headway, and the order is given up. Measured on this grid, a
+  // wall of 150 cells (4800 world units of unbroken trunks) is past that line — before this
+  // it parked at x≈3808, one cell from the trees, and went idle.
+  const SIM_DT = 1 / 60;
+  const WALL = 120; // column, ×32 = world x 3840
+  const flags = blank();
+  for (let y = 0; y < 150; y++) for (let k = 0; k < 4; k++) flags[y * W + WALL + k] = PathingFlag.Unwalkable;
+  const world = new SimWorld(grid(flags), 1);
+  world.add({
+    id: 1, owner: 0, team: 0, typeId: "hfoo", x: 1000, y: 500, facing: 0,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 3000, sightNight: 3000,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [], oldWeapons: [],
+  });
+  const goalX = (WALL + 60) * 32;
+  world.issueMove(1, goalX, 500); // straight through the wall, as the crow flies
+  let highest = 0;
+  let t = 0;
+  for (let i = 0; i < Math.round(90 / SIM_DT); i++) {
+    world.tick(SIM_DT);
+    t += SIM_DT;
+    const u = world.units.get(1);
+    highest = Math.max(highest, u.y);
+    if (u.x > goalX - 64) break;
+  }
+  const u = world.units.get(1);
+  check(`it got to the far side (x ${u.x.toFixed(0)} of ${goalX}, in ${t.toFixed(1)}s)`, u.x > goalX - 200);
+  check(`by walking round the north end of the trees (reached y ${highest.toFixed(0)})`, highest > 150 * 32);
+  check(`and never gave the order up (order ${u.order})`, u.order !== "idle" || u.x > goalX - 200);
 }
 
 console.log(failures ? `\ndetour: ${failures} check(s) FAILED` : "\ndetour: all checks passed");

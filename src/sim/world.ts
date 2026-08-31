@@ -1,5 +1,5 @@
 import { BUILD_CELL, BUILD_CELL_CELLS, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
-import { findPath, smoothPath } from "./pathfind";
+import { findPath, smoothPath, PATH_FLOOR_EXPANSIONS } from "./pathfind";
 import { targsKindError } from "./targeting";
 import { corpseAdmits, corpseMissingError, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
@@ -1903,6 +1903,11 @@ const ATTACK_LEASH = 48;
 // where we want to bail to a best-effort short path fast rather than flood the whole map
 // (the full 8192 cap × 100 units all probing one crowded target was the ~20fps stall).
 const COMBAT_EXPANSIONS = 700;
+// Sim steps between two escalated (ceiling-budget) path searches — see SimWorld.escalate.
+// Eight steps is ~7.5 a second, which is plenty for an army finding its way round a forest
+// one unit at a time, and few enough that a crush at a choke cannot turn the ceiling into
+// the frame's biggest cost the way a pre-paid budget did.
+const LONG_SEARCH_EVERY = 8;
 const ATTACK_STALL_TIME = 0.6;
 const ATTACK_PROGRESS = PATHING_CELL * 1.5; // 48 world units per window
 // After a unit gives up on an unreachable target with nothing else reachable, it
@@ -12316,6 +12321,7 @@ export class SimWorld {
     this.tech?.invalidate();
     // Sub-phases of `sim.world`, for the log (src/sim/profile.ts). Six spans a step, on a
     // profiler that is a no-op unless a match plugged one in.
+    this.longSearchIn--; // the escalation allowance ages one step — see pathTo
     simProfile.begin("sim.world.pre");
     this.tickAttackReveals(dt);
     this.tickDeathReveals(dt); // …and the eyes a body keeps while it falls (issue #126)
@@ -13007,7 +13013,7 @@ export class SimWorld {
     const start = this.grid.footprintAnchor(u.x, u.y, u.footprint);
     const blocked = this.clearanceBlocker(u, start);
     const goal = this.grid.footprintAnchor(t.x, t.y, u.footprint);
-    const cells = findPath(this.grid, start, goal, blocked, COMBAT_EXPANSIONS, pathDomain(u));
+    const cells = findPath(this.grid, start, goal, blocked, COMBAT_EXPANSIONS, pathDomain(u), undefined, u.footprint);
     if (wasReserved) this.settle(u);
     if (!cells || cells.length <= 1) return false;
     const [ecx, ecy] = cells[cells.length - 1];
@@ -17827,13 +17833,19 @@ export class SimWorld {
           return Math.max(0, Math.round((Math.hypot(dx, dy) - half) / PATHING_CELL));
         }
       : undefined;
-    let cells = findPath(this.grid, start, goal, blocked, maxExpansions, domain, ring);
+    // Search CHEAP first. A caller that named its own budget keeps it; everyone else gets the
+    // floor, and pays for more only if the floor fell short — see `escalate`.
+    const first = maxExpansions ?? PATH_FLOOR_EXPANSIONS;
+    let cells = findPath(this.grid, start, goal, blocked, first, domain, ring, u.footprint);
     // Routing around the live crowd can leave nowhere to go at all (hemmed in on every
     // side). Fall back to the ordinary route — walk up to the obstruction and wait it out —
     // rather than reporting "no path" and standing down.
     if (avoidMovers && (!cells || cells.length <= 1)) {
       blocked = this.clearanceBlocker(u, start);
-      cells = findPath(this.grid, start, goal, blocked, maxExpansions, domain, ring);
+      cells = findPath(this.grid, start, goal, blocked, first, domain, ring, u.footprint);
+    }
+    if (maxExpansions === undefined && this.escalate(u, cells, start, goal, domain, ring)) {
+      cells = findPath(this.grid, start, goal, blocked, undefined, domain, ring, u.footprint) ?? cells;
     }
     // A single-cell (or empty) result means the unit can't get any closer.
     if (!cells || cells.length <= 1) {
@@ -17866,6 +17878,62 @@ export class SimWorld {
     u.path = pts;
     u.waypoint = 0;
     u.moving = true;
+    return true;
+  }
+
+  /** Sim steps to wait between one escalated search and the next — see `escalate`. */
+  private longSearchIn = 0;
+
+  /**
+   * Did the cheap search fall short of somewhere we can prove is reachable, and may we pay
+   * for a proper look at it right now?
+   *
+   * A* is best-effort: out of budget it returns the explored cell nearest the goal, and
+   * against a wall of trees that cell IS the wall of trees. The budget that finds the way
+   * round a forest is set by the size of the forest, so a unit sent past a big one needs
+   * several times the floor — which is why the floor alone put units' noses in treelines.
+   *
+   * But handing that budget out up front prices every search as though it were that one, and
+   * a search that is never going to arrive spends all of it. In a crush at a choke, most
+   * searches are exactly that: 58 % of them ran out of budget in a 240-unit test and spent
+   * 77 % of every expansion the sim made, for answers a floor-budget search had already
+   * reached. So the ceiling is bought AFTER the cheap look, and only on the two conditions
+   * that make it worth anything:
+   *
+   *   • the cheap search did not get there — an arrival needs nothing more, and that is
+   *     almost every search;
+   *   • the LABELS say the ground connects for a body this size (PathingGrid.sameRegion), so
+   *     what stopped us was distance round something rather than a wall or a crowd. Bodies
+   *     move: flooding the map to discover that somebody is standing in the doorway buys
+   *     nothing the parked-and-waiting behaviour does not already handle.
+   *
+   * …and then only `LONG_SEARCH_EVERY` steps apart, globally. A jammed army asks this
+   * hundreds of times a second and it is the same wasted flood every time; one unit an
+   * eighth of a second finds its way round, and the rest re-path a moment later and take
+   * their turn. Counted in sim STEPS rather than seconds so it cannot drift with the frame
+   * rate, and spent in the sim's own deterministic iteration order.
+   */
+  private escalate(
+    u: SimUnit,
+    cells: Array<[number, number]> | null,
+    start: [number, number],
+    goal: [number, number],
+    domain: PathDomain,
+    ring?: (cx: number, cy: number) => number,
+  ): boolean {
+    if (this.longSearchIn > 0) return false;
+    if (!cells || !cells.length) return false;
+    const [ecx, ecy] = cells[cells.length - 1];
+    // Arrived? An approach arrives when it is up against the thing (ring 0); a plain move
+    // when it is standing on the goal cell.
+    if (ring ? ring(ecx, ecy) <= 0 : ecx === goal[0] && ecy === goal[1]) return false;
+    const startRegion = this.grid.regionAt(start[0], start[1], domain, u.footprint);
+    if (startRegion < 0) return false;
+    const goalRegion = ring
+      ? this.grid.regionNear(goal[0], goal[1], domain, u.footprint)
+      : this.grid.regionNear(goal[0], goal[1], domain, u.footprint, 2);
+    if (goalRegion !== startRegion) return false; // a wall, not a detour
+    this.longSearchIn = LONG_SEARCH_EVERY;
     return true;
   }
 
@@ -18020,28 +18088,17 @@ export class SimWorld {
     const domain = pathDomain(u);
     const start = this.grid.footprintAnchor(u.x, u.y, n);
     const goal = this.grid.footprintAnchor(tx, ty, n);
-    // The grid already knows, and knows in O(1): a goal in another connected piece of the
-    // map is unreachable however hard we look, and it is the one case the search below is
-    // worst at — it floods to its ceiling and then reports "as close as I got", which is the
-    // near side of whatever is in the way. Ask the labels first (PathingGrid.regionAt); they
-    // ignore bodies, which is exactly what this method means by reachable.
-    const startRegion = this.grid.regionAt(start[0], start[1], domain);
-    const goalRegion = this.grid.regionNear(goal[0], goal[1], domain);
-    if (startRegion >= 0 && goalRegion >= 0 && startRegion !== goalRegion) return false;
-    const half = n >> 1;
-    const blocked =
-      n <= 0
-        ? undefined
-        : (cx: number, cy: number) => {
-            for (let y = cy - half; y < cy - half + n; y++)
-              for (let x = cx - half; x < cx - half + n; x++) if (!this.grid.walkable(x, y, domain)) return true;
-            return false;
-          };
-    const cells = findPath(this.grid, start, goal, blocked, undefined, domain);
-    if (!cells || cells.length <= 1) return false;
-    const [ecx, ecy] = cells[cells.length - 1];
-    const [ex, ey] = this.grid.footprintCenter(ecx, ecy, n);
-    return Math.hypot(tx - ex, ty - ey) <= PATHING_CELL * 2;
+    // The grid already knows, and knows in O(1). This used to run an A* whose blocked
+    // predicate was "does my footprint fit on walkable ground" and whose budget was the
+    // whole region — which is precisely PathingGrid's connectivity labels, keyed on the
+    // footprint, computed once and reused. Asking A* instead meant that every time the
+    // answer was NO the search flooded the region to prove it, and no is the answer on
+    // exactly the path this sits on (a mover about to give up). Two cells of slack around
+    // the goal, as before: the ordered point is very often the middle of something, or
+    // ground pressed against a wall, and standing a body away from it is arriving.
+    const startRegion = this.grid.regionAt(start[0], start[1], domain, n);
+    if (startRegion < 0) return false;
+    return startRegion === this.grid.regionNear(goal[0], goal[1], domain, n, 2);
   }
 
   /** After finishing a path that stopped short of the ordered point, try again
@@ -18089,11 +18146,17 @@ export class SimWorld {
       ? (x: number, y: number) => this.grid.isOccupied(x, y)
       : (x: number, y: number) => this.grid.isReserved(x, y);
     return (cx, cy) => {
+      // TERRAIN first, and in one read. `walkable` is the dearer of the two tests (bounds,
+      // the wpm flag, then both stamp layers) and it is the one that rejects — so asking it
+      // n² times per cell, for a cell A* revisits from up to eight neighbours, was the bulk
+      // of the search. `footprintClear` is the same answer off the clearance map the region
+      // labels are already built on (PathingGrid.footprintClear), and it is exact: the map
+      // is rebuilt with them whenever a stamp changes, and bodies were never in it.
+      if (!this.grid.footprintClear(cx, cy, n, domain)) return true;
       const cx0 = cx - half;
       const cy0 = cy - half;
       for (let y = cy0; y < cy0 + n; y++) {
         for (let x = cx0; x < cx0 + n; x++) {
-          if (!this.grid.walkable(x, y, domain)) return true;
           if (held(x, y)) {
             const own = x >= ownX0 && x < ownX0 + n && y >= ownY0 && y < ownY0 + n;
             if (!own) return true;
