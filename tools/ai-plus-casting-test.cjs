@@ -40,6 +40,13 @@ const ABILS = {
   AUdc: { code: "AUdc", target: "unit", autocast: false, targetFlags: ["air", "ground", "organic", "notself", "vuln", "invu", "nonancient"], levelData: [lvl()] },
   // A plain single-target nuke, for the mana gate: Storm Bolt is a `disable`, Frost Nova a `nuke`.
   AHtb: { code: "AHtb", target: "unit", autocast: false, targetFlags: ["air", "ground", "enemy", "organic", "vuln", "invu"], levelData: [lvl({ duration: 5, heroDuration: 1.5 })] },
+  // Unholy Frenzy — a BUFF whose row names no allegiance at all (`[Auhf] targs1` =
+  // "air,ground,organic"), which is the whole of the reported bug: with the flags silent the
+  // pool fell through to the enemy list and a Necromancer hasted the other player's army.
+  Auhf: { code: "Auhf", target: "unit", autocast: false, targetFlags: ["air", "ground", "organic"], levelData: [lvl({ castRange: 500, duration: 45 })] },
+  // Purge — `[Aprg] targs1` names no allegiance either, and it is a `disable` (its slow is
+  // real), so its only gate was the target search: 75 mana at whatever stood nearest.
+  Aprg: { code: "Aprg", target: "unit", autocast: false, targetFlags: ["air", "ground", "ward", "vuln", "invu", "tree"], levelData: [lvl({ castRange: 700, duration: 15 })] },
 };
 
 let nextId = 1;
@@ -49,6 +56,10 @@ const unit = (o = {}) => ({
   paused: false, stunned: false, silenced: false, morphT: 0, order: "", constructing: false,
   repair: false, immolation: false, altModel: false, altFormLeft: 0, cloaked: false, level: 1,
   race: "human", weapon: null, weapons: [], abilities: [], buffs: [], inventory: [], speed: 270,
+  // `team` is how the sim's own area effects tell the sides apart, and what `worthDispelling`
+  // asks of a buff's SOURCE; seat 2 is our ally, so it shares ours. `summonLeft` > 0 is the
+  // sim's own test for "a Purge would destroy this" (`Aprg` in sim/spells.ts).
+  team: o.owner === 1 ? 1 : 0, summonLeft: 0,
   targetId: 0, ...o,
 });
 const caster = (o = {}) => unit({ isHero: true, abilities: [{ id: o.abilId ?? "AHhb", code: o.abilId ?? "AHhb", level: 1, cooldownLeft: 0, autocastOn: false }], ...o });
@@ -72,7 +83,13 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
       const t = units.find((u) => u.id === targetId);
       if (!t) return "notarget";
       const healsUndead = POLARITY[code];
-      if (healsUndead === undefined) return t.owner === 0 ? "mustargetenemy" : null;
+      if (healsUndead === undefined) {
+        // The sim's own rule (`targetAllowed`): a row that names no allegiance flag allows ANY
+        // allegiance — which is exactly why a flagless buff could be cast at the enemy at all.
+        const F = new Set((ABILS[code]?.targetFlags ?? []).map((f) => f.toLowerCase()));
+        if (!F.has("enemy") && !F.has("friend")) return null;
+        return t.owner === 0 ? "mustargetenemy" : null;
+      }
       const undead = t.race === "undead";
       const friendly = t.owner === 0 || t.owner === 2; // 2 is our ally — see `allied` below
       if (friendly ? undead !== healsUndead : undead === healsUndead) return "polarity";
@@ -220,6 +237,80 @@ console.log("\n-- a fight has to be worth the mana -----------------------------
   const hurt = unit({ hp: 400, x: 200 });
   const cmd = cast([p, hurt, unit({ owner: 1, isCreep: true, x: 250 })], PLUS_NORMAL, { roll: 0.99 });
   check("Holy Light is not held back by the mana gate", cmd && cmd.targetId, hurt.id);
+}
+
+// ==========================================================================================
+console.log("\n-- a beneficial spell with no allegiance flag still goes on OUR side ----------");
+// ==========================================================================================
+// Reported: *"the Computer+ AI seems to like to cast Unholy Frenzy on enemy units"*. `[Auhf]
+// targs1` is "air,ground,organic" — no allegiance flag — so `friendlySpell` answered false and
+// the pool was the enemy list. What settles it when the data does not is the ROLE (`friendlyAim`).
+{
+  const n = caster({ abilId: "Auhf", race: "undead" });
+  const ghoul = unit({ x: 200 });
+  const foe = unit({ owner: 1, x: -200 }); // …and a fight, since a buff is pre-fight, not idle
+  const cmd = cast([n, ghoul, foe]);
+  check("Unholy Frenzy goes on our own Ghoul", cmd && cmd.code, "Auhf");
+  check("…aimed at it, and never at the enemy", cmd && cmd.targetId, ghoul.id);
+}
+{
+  const n = caster({ abilId: "Auhf", race: "undead" });
+  const ally = unit({ owner: 2, x: 200 });
+  const cmd = cast([n, ally, unit({ owner: 1, x: -200 })]);
+  check("…an ALLY's unit counts as ours", cmd && cmd.targetId, ally.id);
+}
+{
+  // …and with nobody of ours to buff, nothing is cast at all — which is the bug, stated the
+  // other way round: the enemy in front of it is not a target for this button.
+  const n = caster({ abilId: "Auhf", race: "undead" });
+  check("…and with only enemies in reach it is not pressed", cast([n, unit({ owner: 1, x: 200 })]), null);
+}
+
+// ==========================================================================================
+console.log("\n-- a Purge is spent on what a Purge does -------------------------------------");
+// ==========================================================================================
+// Reported: *"only use Purge against enemy Summoned units and enemy units that have positive
+// buffs/effects"*. Both halves are read off the sim's own handler — `summonLeft > 0` is what it
+// destroys, and a buff hung by the target's OWN side is what it strips (`worthDispelling`).
+const shaman = () => unit({ owner: 1, x: -400 }); // whoever hung the buff, still standing
+const theirBuff = (src) => ({ kind: "haste", group: "bloodlust", timeLeft: 45, sourceId: src.id, buffId: "Bblo" });
+{
+  const s = caster({ abilId: "Aprg" });
+  check("a plain enemy soldier with nothing on it is not purged",
+    cast([s, unit({ owner: 1, x: 200 })]), null);
+}
+{
+  const s = caster({ abilId: "Aprg" });
+  const wolf = unit({ owner: 1, x: 200, summonLeft: 30 });
+  const cmd = cast([s, wolf, unit({ owner: 1, x: 250 })]);
+  check("…a SUMMON is, because the purge deletes it", cmd && cmd.targetId, wolf.id);
+}
+{
+  const s = caster({ abilId: "Aprg" });
+  const src = shaman();
+  const lusted = unit({ owner: 1, x: 200, buffs: [theirBuff(src)] });
+  const cmd = cast([s, lusted, src, unit({ owner: 1, x: 250 })]);
+  check("…and so is one their own side has Bloodlusted", cmd && cmd.targetId, lusted.id);
+}
+{
+  // A buff WE hung is not a reason to purge: stripping it is doing their dispelling for them.
+  const s = caster({ abilId: "Aprg" });
+  const slowed = unit({ owner: 1, x: 200, buffs: [{ kind: "slow", group: "slow", timeLeft: 15, sourceId: 1, buffId: "Bslo" }] });
+  check("…but our own slow on it is not", cast([s, slowed]), null);
+}
+{
+  // An AURA is back the tick after the purge lands — `timeLeft` Infinity is what says so.
+  const s = caster({ abilId: "Aprg" });
+  const src = shaman();
+  const aura = unit({ owner: 1, x: 200, buffs: [{ kind: "armor", group: "devotion", timeLeft: Infinity, sourceId: src.id, buffId: "Bdev" }] });
+  check("…nor is an aura it is standing in", cast([s, aura, src]), null);
+}
+{
+  // Doom cannot be dispelled by anything — `dispelUnit` keeps exactly the undispellable ones.
+  const s = caster({ abilId: "Aprg" });
+  const src = shaman();
+  const doomed = unit({ owner: 1, x: 200, buffs: [{ kind: "dot", group: "doom", timeLeft: Infinity, sourceId: src.id, undispellable: true }] });
+  check("…nor a Doom, which no dispel may touch", cast([s, doomed, src]), null);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

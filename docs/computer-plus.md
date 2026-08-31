@@ -1751,6 +1751,42 @@ or a custom map adds is not something to guess about. Magic immunity and `magicR
 netted off exactly as `SimWorld.spellDamage` nets them, so the rule cannot promise a kill the sim
 will not deliver.
 
+### A Purge is spent on what a Purge does
+
+Reported: *"make Computer+ only use Purge against enemy Summoned units and enemy units that have
+positive buffs/effects like Bloodlust, Inner Fire and Unholy Frenzy"*, and it is the right rule
+for the ability. Purge is graded `disable` — its slow is real — and a disable's only gate is the
+target search, so it went out at whatever stood nearest: 75 mana to slow one Grunt for three
+seconds, when what the button is for is deleting a Water Elemental or stripping Bloodlust off the
+pack.
+
+`worthDispelling` ([`plus/casting.ts`](../src/ai/plus/casting.ts)) is the gate, and both halves of
+it are read off the **sim's own handler** (`Aprg` in [`sim/spells.ts`](../src/sim/spells.ts)) so
+the AI cannot promise something the cast will not do:
+
+* **A summon is destroyed outright.** The handler's test is `summonLeft > 0`, so that is this
+  one's test too. A permanent body is not a summon to Purge however it was made, and any other
+  question here would promise a kill the handler will not deliver.
+* **A positive effect is stripped.** Nothing in `AbilityBuffData.slk` says which buffs are the
+  good ones — its only flag is `isEffect`, and it is `0` for Bloodlust, Inner Fire, Unholy
+  Frenzy, Slow and Cripple alike — so polarity is **not in the data to be read**. What is
+  knowable is *who put it there*: a buff hung by the target's own side is one they wanted, and
+  one hung by ours is a debuff we would be undoing for them. `team` is the same comparison the
+  sim's own area effects make (`areaEffectAffects`).
+
+Two exclusions, both because the cast would achieve nothing: an `undispellable` buff (Doom —
+`dispelUnit` keeps exactly those), and an **aura**, which is a buff with `timeLeft` Infinity and
+is therefore back the tick after the purge lands. A buff whose source is *gone* — a Bloodlust
+from a dead Shaman — cannot be placed and does not count, which is the safe direction: the cost
+of missing one is a purge not cast.
+
+The gate sits at LEGALITY rather than in the score, like `nukeWorthIt` and for the same reason: a
+"mistake" (`castMistake`) that lands on a unit with nothing to strip is not a mistake, it is a
+dropped cast.
+
+It is written as a free function over the world rather than as a method because it is the reading
+the whole dispel family wants — Dispel Magic's own quorum is the obvious next caller.
+
 ### A fight has to be worth the mana
 
 Reported: *"it feels like the AI is spending too much mana on small creep camps"* — a Death
@@ -1837,6 +1873,60 @@ under about a fifth of its life still outbids a hero that is merely scratched. A
 a rule, and no soldier could be healed while a hero anywhere in range was one point down. The
 `naive` read is exempt — it aims by bulk, so a hero's own hit points already put it in front.
 
+**The BELT is the same rule**, and it was missing the same half. `[AIrl] targs1` (the Healing
+Salve) is `air,ground,friend,self,organic,vuln,invu`, the Scroll of Regeneration, the Scroll of
+Healing, the Scroll of Protection and the Scroll of the Beast all say `friend` too, and the sim
+answers `friend` with `hostile` rather than with `owner` — `targetAllowed` and `itemAreaTargets`
+between them mean an **ally's units have always been inside the circle a scroll draws** and have
+always been a legal press for the salve. `itemUseError` would have allowed it all along; the only
+thing that left them out was [`plus/items.ts`](../src/ai/plus/items.ts)'s own candidate list. It
+now keeps the two pools the caster keeps, for the same reason: `own` is who this player gives
+*orders* to (whose belt may be pressed, who may walk to a shop), `friends` is who a press may
+*land* on. The Wand of Illusion's `ground,air,friend,self` is read the same way — an ally's
+Tauren is as good a thing to copy as our own, and the copy is ours however it was made.
+
+### A row that names no side is not a row aimed at the ENEMY
+
+Reported: *"the Computer+ AI seems to like to cast Unholy Frenzy on enemy units."* It did, and
+the pool is why. `friendlySpell` reads `targs1`'s **allegiance flags**, which is the right
+reading and the same one `SimWorld.tickAutocast` makes — but a beneficial row is not obliged to
+carry one, and three in the melee game carry none at all:
+
+| row | `targs1` | what it is |
+|---|---|---|
+| `Auhf` | `air,ground,organic` | Unholy Frenzy |
+| `Aams` | `air,ground,vuln,invu` | Anti-magic Shell |
+| `Ahwd` | `_` | Healing Ward |
+
+The sim reads them exactly as the engine does — `targetAllowed` allows **any** allegiance for a
+row that names none — so the click is legal on either side and nothing downstream objected. With
+the flags silent, `pickTarget` fell through to the enemy pool and a Necromancer spent its mana
+giving the other player's Grunts a 75 % attack-speed buff.
+
+What settles it when the data does not is what the button is FOR — its `Role`. `friendlyAim` is
+that rule, and it is deliberately narrow, because a wrong answer here aims a spell at the wrong
+army: a **polarity** spell keeps its own two-halves branch; an `enemy` flag is the last word
+(Lightning Shield says `friend,enemy` and is played at the enemy); a `dead` row is aimed at
+corpses, which neither pool describes; and only a `unit` or `point` cast is aimed at anybody at
+all — a bare self-cast (Berserk, Mirror Image) lands on the caster whatever is standing around,
+and for those the pool is a reading of the FIGHT. Everything else keeps the flags' own answer, so
+a custom map's flagless spell is still derived (`roleOf` reaches `nuke`/`disable` for one, never
+`heal`/`buff`) and still aimed at the enemy exactly as before.
+
+One thing is **not** inferred along with the polarity: whether the CASTER is a candidate. Every
+row that is meant for the presser says `self` in its flags (Divine Shield, Berserk, Mana Shield)
+and `friendlySpell` is true the moment it does — so a row that says neither `friend` nor `self`
+has not said it is for the caster, and inferring that as well would have a Necromancer put Unholy
+Frenzy's three-hit-points-a-second on its own 220-hp body.
+
+The **Healing Ward** is the third row in that table and needed one thing more: `roleOf` would
+grade it `summon` off its `UnitID1`, and a summon is aimed at the enemy — which is where the ward
+was being planted. It is named `heal` in `ROLES` instead, because what it summons *is* a heal
+(`[ohwd]` carries `Aoar`, the same regeneration aura the Fountain of Health has). And because
+`[Ahwd] Cool1` is **zero**, the heal role also asks `summonStanding` first: nothing in the data
+stops a Witch Doctor planting a second 200-mana ward inside the first one's reach every pass for
+as long as somebody nearby is hurt.
+
 ### Items: buying them, and pressing them
 
 Computer+ shops and drinks. It lives in [`plus/items.ts`](../src/ai/plus/items.ts), separately
@@ -1896,6 +1986,12 @@ it needs both:
 * **and neither is the BODY the charge is poured into** (`underFire`, asked inside `hurtest` and
   `armyHeal`). The presser can be nine hundred units from the fight its own army is standing in,
   and a Scroll of Regeneration is an AREA — the units it covers are not the unit pressing it.
+
+The same reasoning sets **how hurt is hurt enough**: `ALLY_HP`, the bar a Healing Salve is poured
+at, is **65 %** — one bar *above* `HURT_HP` (55 %, where a hero drinks its own potion) rather than
+below it, and level with `ARMY_HURT`. A potion is an emergency and heals at once; a salve pours
+over forty-five seconds between fights, so waiting for half health on a three-charge, hundred-gold
+item leaves most of an army walking to the next camp hurt with the charges still in the belt.
 
 #### It sells the duplicate
 
@@ -2137,6 +2233,12 @@ the way it used to:
 The circle is the **item's own** `Area1` (`areaOf`), never a constant of this file's: a rule
 written against `LOOK` (900, "this fight") would promise to heal units standing 300 units outside
 the 600 the Scroll of Regeneration actually draws.
+
+**The two pools in question 2 and 3 are not the same pool**, and the asymmetry is the point. What
+the circle *covers* is every friendly body inside it, an **ally's included** (see below); the
+*party* it is measured against is ours alone, because that is the body the hero travels with, and
+an ally's army standing across the map is not a reason this hero's scroll is being wasted. Put
+them in the denominator and a computer with a busy ally could never reach the half.
 
 Still not touched: **Kelen's Dagger of Escape** (`AIbk`), a point-target blink that needs a
 decision about *where* the aiming above does not make — it is a drop, never shop stock, so it

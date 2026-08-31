@@ -13,7 +13,7 @@ import type { PlusProfile } from "./profile";
 // carried it to the grave. This is the AI's half, and it is deliberately built on exactly the
 // doors a player's click goes through — there is no item path here that a human does not have.
 //
-// Three facts about items shape the whole file, and all three are docs/items.md's:
+// Four facts about items shape the whole file, and the first three are docs/items.md's:
 //
 //   1. **An item's behaviour is not in the item.** It is an ability id in the item's `abilList`,
 //      and that row has the same fields a hero spell's does. So `USE_OF` below is keyed on the
@@ -28,6 +28,16 @@ import type { PlusProfile } from "./profile";
 //      all three healing and all three aimed differently. So aiming here is not a table at all:
 //      it is the ability's own `target`, read exactly as `RtsController.useInventorySlot` reads
 //      it to decide whether your click needs a second one.
+//   4. **"Friendly" means OUR SIDE, not our units.** Every beneficial row in the game says
+//      `friend` in its `targs1` — the Healing Salve, the Scroll of Regeneration, the Scroll of
+//      Healing, the Scroll of Protection, the Scroll of the Beast — and the sim answers that
+//      flag with `hostile`, not with `owner` (`targetAllowed`, `itemAreaTargets`), so an
+//      ALLY'S units have always been inside the circle a scroll draws and have always been a
+//      legal target for the salve. The only thing that ever excluded them was this file's own
+//      candidate list. So there are two pools here and they are different questions: `own` is
+//      who this player gives ORDERS to (whose belt may be pressed, who may walk to a shop),
+//      and `friends` is who a press may LAND on. plus/casting.ts draws exactly the same line
+//      for the same reason — see `CasterView.allied`.
 //
 // The other gate the doc named is the money, and `PlusProfile.itemReserve` is the answer: item
 // gold is gold `OneBuildLoop` was going to spend, so the shop only ever sees the surplus above
@@ -554,14 +564,21 @@ export class PlusItems {
   pass(now: number, ctx: ItemCtx): void {
     const own: SimUnit[] = [];
     const foes: SimUnit[] = [];
+    // OURS, AND OUR ALLIES' — see fact 4 in the file header. `own` is who this player gives
+    // orders to; `friends` is who a charge may be poured into. Everything below that asks "who
+    // would this help" takes `friends`, and everything that asks "who can I order" takes `own`.
+    const friends: SimUnit[] = [];
     for (const u of this.view.world.units.values()) {
       if (u.hp <= 0) continue;
-      if (u.owner === this.view.player) own.push(u);
-      else if (this.view.hostile(u)) foes.push(u);
+      if (u.owner === this.view.player) {
+        own.push(u);
+        friends.push(u);
+      } else if (this.view.hostile(u)) foes.push(u);
+      else if (this.view.allied?.(u)) friends.push(u);
     }
     for (const u of own) {
       if (!u.inventory.length || !this.canAct(u)) continue;
-      this.press(u, own, foes, ctx);
+      this.press(u, own, friends, foes, ctx);
     }
     this.loot(now, own, foes);
     // BEFORE the shopping, and deliberately: a belt with a dead slot in it is a belt the
@@ -787,7 +804,7 @@ export class PlusItems {
    * the sim allow. A hero whose command card and whose belt disagreed about which came first
    * would be two decisions undoing each other, which is the whole argument in plus/targeting.ts.
    */
-  private press(u: SimUnit, own: SimUnit[], foes: SimUnit[], ctx: ItemCtx): boolean {
+  private press(u: SimUnit, own: SimUnit[], friends: SimUnit[], foes: SimUnit[], ctx: ItemCtx): boolean {
     const cards: Array<{ slot: number; use: Use; def: ItemDef }> = [];
     for (let slot = 0; slot < u.inventory.length; slot++) {
       const held = u.inventory[slot];
@@ -806,8 +823,8 @@ export class PlusItems {
 
     const engaged = foes.some((f) => !f.building && near(u, f, LOOK));
     for (const card of cards) {
-      if (!this.wants(u, card.use, card.def, own, foes, engaged, ctx)) continue;
-      if (this.aim(u, card.slot, card.def, card.use, own, foes)) return true;
+      if (!this.wants(u, card.use, card.def, own, friends, foes, engaged, ctx)) continue;
+      if (this.aim(u, card.slot, card.def, card.use, friends, foes)) return true;
     }
     return false;
   }
@@ -832,7 +849,7 @@ export class PlusItems {
    * which is what makes it read as a player: a potion is drunk because you are being hit, not
    * because you have one.
    */
-  private wants(u: SimUnit, use: Use, def: ItemDef, own: SimUnit[], foes: SimUnit[], engaged: boolean, ctx: ItemCtx): boolean {
+  private wants(u: SimUnit, use: Use, def: ItemDef, own: SimUnit[], friends: SimUnit[], foes: SimUnit[], engaged: boolean, ctx: ItemCtx): boolean {
     const hp = u.hp / Math.max(1, u.maxHp);
     switch (use) {
       // The retreat, in one press. Either the ARMY has decided it is losing (`ctx.losing` is the
@@ -868,9 +885,9 @@ export class PlusItems {
       // and (in `hurtest` / `armyHeal`) nothing hostile beside whoever the charge is being
       // poured into, since the presser can be nine hundred units from the fight its army is in.
       case "healArea":
-        return !engaged && this.armyHeal(u, own, this.areaOf(def), foes);
+        return !engaged && this.armyHeal(u, own, friends, this.areaOf(def), foes);
       case "healOther":
-        return !engaged && !!this.hurtest(u, own, foes);
+        return !engaged && !!this.hurtest(u, friends, foes);
       // Mana is topped up for the fight, not during the panic — a hero with no mana is a hero
       // whose spells are the reason the army is winning, so this fires as the fight starts as
       // well as inside one.
@@ -911,7 +928,7 @@ export class PlusItems {
    * Legality is the sim's, at the same door: `itemUseError` is what the HUD asks before it
    * spends a click, so this can never be more permissive than a player.
    */
-  private aim(u: SimUnit, slot: number, def: ItemDef, use: Use, own: SimUnit[], foes: SimUnit[]): boolean {
+  private aim(u: SimUnit, slot: number, def: ItemDef, use: Use, friends: SimUnit[], foes: SimUnit[]): boolean {
     // The aimed ability itself rather than only its `target`, because one rung needs the row's
     // own `Rng1` as well: the Wand of Illusion reaches 500 (`[AIil] Rng1`), and a copy chosen
     // out of that is a press `itemUseError` throws away.
@@ -919,8 +936,8 @@ export class PlusItems {
     let targetId = 0;
     if (aimed?.target === "unit") {
       const t =
-        use === "healOther" ? this.hurtest(u, own, foes)
-        : use === "illusion" ? this.toCopy(u, own, aimed.levelData[0]?.castRange ?? 0)
+        use === "healOther" ? this.hurtest(u, friends, foes)
+        : use === "illusion" ? this.toCopy(u, friends, aimed.levelData[0]?.castRange ?? 0)
         : u;
       if (!t) return false;
       targetId = t.id;
@@ -972,19 +989,32 @@ export class PlusItems {
    * Regeneration reaches 600 (`[AIsl] Area1`) and the Scroll of Healing its own figure, and a
    * rule written against `LOOK` would have promised to cover units standing 300 units outside
    * the circle it was about to draw.
+   *
+   * THE TWO POOLS ARE NOT THE SAME POOL, and the asymmetry is the point (file header, fact 4).
+   * What the circle COVERS is every friendly body inside it, an ally's included — the sim pours
+   * over exactly that set (`itemAreaTargets` admits anything the row's `friend` flag admits, and
+   * `friend` is answered with `hostile`), so counting only ours would price the charge at less
+   * than it is worth and hold a scroll that would put four armies' worth of hit points back.
+   * The PARTY it is measured against is ours alone: that is the body the hero moves with
+   * (docs/computer-plus.md — the army travels anchored on its captain), and an ally's army
+   * standing across the map is not a reason this hero's scroll is being wasted. Putting them in
+   * the denominator would mean a computer with a busy ally could never reach the half.
    */
-  private armyHeal(u: SimUnit, own: SimUnit[], radius: number, foes: SimUnit[]): boolean {
+  private armyHeal(u: SimUnit, own: SimUnit[], friends: SimUnit[], radius: number, foes: SimUnit[]): boolean {
     let party = 0;
+    for (const o of own) {
+      if (o.building || o.isPeon || o.isIllusion || o.hp <= 0) continue;
+      party++;
+    }
     let covered = 0;
     let hp = 0;
     let maxHp = 0;
-    for (const o of own) {
+    for (const o of friends) {
       // The ARMY: what fights. Buildings, workers and the doubles are none of it — an illusion
       // arrives at full health, takes double damage and is meant to die (docs/illusions.md), so
       // counting it would price the party as healthier than it is and put it in the denominator
       // of a question about where the real army is standing.
       if (o.building || o.isPeon || o.isIllusion || o.hp <= 0) continue;
-      party++;
       if (!near(u, o, radius)) continue;
       // Somebody already pouring is not somebody this charge would help — see `regenerating`.
       // It stays in the PARTY (it is still a body the circle has to be drawn around) but not
@@ -1040,12 +1070,17 @@ export class PlusItems {
     return LOOK;
   }
 
-  /** The most hurt of ours in reach — who a Healing Salve goes on. Buildings and workers are
-   *  left out for the same reason the army leaves them out: the salve is for the fight. */
-  private hurtest(u: SimUnit, own: SimUnit[], foes: SimUnit[]): SimUnit | null {
+  /** The most hurt of OUR SIDE in reach — who a Healing Salve goes on. Buildings and workers
+   *  are left out for the same reason the army leaves them out: the salve is for the fight.
+   *
+   *  The pool is `friends` and not `own` (file header, fact 4): `[AIrl] targs1` is
+   *  "air,ground,friend,self,organic,vuln,invu" and the sim answers `friend` with `hostile`,
+   *  so an ally's Grunt has always been a legal target for this charge — `itemUseError` would
+   *  have allowed the press all along. Nothing else needed changing for it. */
+  private hurtest(u: SimUnit, friends: SimUnit[], foes: SimUnit[]): SimUnit | null {
     let best: SimUnit | null = null;
     let worst = ALLY_HP;
-    for (const o of own) {
+    for (const o of friends) {
       if (o.building || o.isPeon || !near(u, o, LOOK)) continue;
       if (this.regenerating(o)) continue; // already pouring — see `regenerating`
       // …and a body that is being swung at pours the salve straight into the damage: the buff
@@ -1074,9 +1109,10 @@ export class PlusItems {
   /**
    * WHO THE WAND COPIES — the biggest body in reach, and the presser itself when there is none.
    *
-   * `[AIil] targs1` is "ground,air,friend,self", so the double is made of one of OURS, and the
-   * copy arrives at FULL hit points however hurt the original is (`initIllusion`, docs/
-   * illusions.md). What the double is FOR is soaking blows that would otherwise land on the
+   * `[AIil] targs1` is "ground,air,friend,self", so the double is made of one of OUR SIDE's —
+   * an ally's Tauren as readily as our own, since the sim answers `friend` with `hostile` (file
+   * header, fact 4) and the copy is OURS however it was made. It arrives at FULL hit points
+   * however hurt the original is (`initIllusion`, docs/illusions.md). What the double is FOR is soaking blows that would otherwise land on the
    * party — it deals no damage at all — so the only thing worth reading is how much punishment
    * the copy can stand, which is `maxHp` and not the original's current health.
    *
@@ -1089,9 +1125,9 @@ export class PlusItems {
    * moment anything hits it. Workers are excluded because a Peasant's double fools nobody and
    * tanks nothing.
    */
-  private toCopy(u: SimUnit, own: SimUnit[], range: number): SimUnit {
+  private toCopy(u: SimUnit, friends: SimUnit[], range: number): SimUnit {
     let best = u; // the presser is always in range of itself, so there is always an answer
-    for (const o of own) {
+    for (const o of friends) {
       if (o.building || o.isPeon || o.isIllusion || o.hp <= 0) continue;
       if (range > 0 && Math.hypot(o.x - u.x, o.y - u.y) > range) continue;
       if (o.maxHp > best.maxHp) best = o;
@@ -1132,8 +1168,15 @@ export class PlusItems {
   makeIllusions(u: SimUnit, cap: number = ILLUSION_CAP): number {
     if (!u.inventory.length || !this.canAct(u)) return 0;
     const own: SimUnit[] = [];
+    // The same two pools `pass` keeps, for the same reason: the CAP is counted over our own
+    // doubles (they are our units and our charges), and what may be COPIED is our whole side.
+    const friends: SimUnit[] = [];
     for (const o of this.view.world.units.values()) {
-      if (o.hp > 0 && o.owner === this.view.player) own.push(o);
+      if (o.hp <= 0) continue;
+      if (o.owner === this.view.player) {
+        own.push(o);
+        friends.push(o);
+      } else if (!this.view.hostile(o) && this.view.allied?.(o)) friends.push(o);
     }
     const standing = this.doubles(own);
     let made = 0;
@@ -1143,7 +1186,7 @@ export class PlusItems {
       const def = this.view.item(u.inventory[slot]!.itemId);
       // No foes list: `illusion` aims at one of OURS (`toCopy`) and reads nothing about the
       // fight, and this press is the army manager's own — made a few seconds BEFORE contact.
-      if (!def || !this.aim(u, slot, def, "illusion", own, [])) break;
+      if (!def || !this.aim(u, slot, def, "illusion", friends, [])) break;
       made++;
     }
     return made;

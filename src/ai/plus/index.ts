@@ -1718,6 +1718,14 @@ export class ComputerPlusAi {
     // be sent back to the mine before it reached the first waypoint.
     const held = new Set<number>();
     ai.captainHeld = held;
+    // An ALLIED PLAYER's unit — a seat, co-allied with ours, that is not us. `coAllied` is the
+    // same question the chat router asks (src/game/chat.ts), so "my ally" means one thing across
+    // the whole AI. Neutrals are excluded by the seat range: a Goblin Merchant is not somebody a
+    // Paladin heals. Declared once because BOTH the caster and the belt ask it — a Paladin who
+    // heals an ally's Footman and a hero who will not pour a salve on it are one AI disagreeing
+    // with itself.
+    const allied = (u: SimUnit): boolean =>
+      u.owner !== player && u.owner >= 0 && u.owner < MELEE.MAX_PLAYERS && this.host.coAllied(player, u.owner);
     this.brains.push({
       ai, profile, table, strategy,
       memory: new EnemyMemory(),
@@ -1727,12 +1735,7 @@ export class ComputerPlusAi {
         player,
         def: (id) => this.host.abilities.get(id),
         hostile: (u) => ai.hostileTo(u),
-        // An ALLIED PLAYER's unit — a seat, co-allied with ours, that is not us. `coAllied` is
-        // the same question the chat router asks (src/game/chat.ts), so "my ally" means one
-        // thing across the whole AI. Neutrals are excluded by the seat range: a Goblin Merchant
-        // is not somebody a Paladin heals.
-        allied: (u) =>
-          u.owner !== player && u.owner >= 0 && u.owner < MELEE.MAX_PLAYERS && this.host.coAllied(player, u.owner),
+        allied,
         order: (cmd) => ai.order(cmd),
         // The AI's OWN random stream, so a misclick (`PlusProfile.castMistake`) is as
         // deterministic as every other decision it takes.
@@ -1742,6 +1745,9 @@ export class ComputerPlusAi {
         player,
         def: (id) => this.host.abilities.get(id),
         hostile: (u) => ai.hostileTo(u),
+        // The BELT asks it too, and for the same reason the caster does: every beneficial item
+        // row in the game says `friend`, and `friend` means our SIDE (plus/items.ts, fact 4).
+        allied,
         order: (cmd) => ai.order(cmd),
         item: (id) => this.host.items.get(id),
         // A shop's shelf from the buyer's side: `Makeitems` is a race shop's and `Sellitems` a

@@ -95,6 +95,12 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
     "AEtq", // Tranquility
     "AHre", // Resurrection — a heal that works on the dead
     "AUan", // Animate Dead
+    // Healing Ward (Witch Doctor). Named here rather than left to `roleOf`, which would grade
+    // it `summon` off its `UnitID1` — and a summon is aimed at the ENEMY, which is where the
+    // ward was being planted. What it summons is a HEAL: `[ohwd]` carries `Aoar`, the same
+    // regeneration aura the Fountain of Health has. Its polarity cannot be read off its row
+    // either (`[Ahwd] targs1` is "_", no allegiance flag at all) — see `friendlyAim`.
+    "Ahwd",
   ],
   morph: [
     "Abrf", // Bear Form — issue #124's named example, and the fighting form of the Druid
@@ -143,7 +149,9 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
     "AOsf", // Feral Spirit
     "AUcb", // Carrion Beetles
     "AEfn", // Force of Nature
-    "AOsw", // Serpent Ward
+    "AOwd", // Serpent Ward — the row's alias is `AOsw`, its CODE (what this map is keyed on)
+            // is `AOwd`. Named as the alias it matched nothing; the derivation caught it anyway
+            // because the row summons, so this is the same role by a shorter road.
     "AHpx", // Summon Phoenix
     "AUin", // Inferno
     "AEsv", // Vengeance
@@ -746,6 +754,10 @@ export class PlusCaster {
       case "morph":
         return this.morphWanted(u, def, foes, engaged);
       case "heal":
+        // A WARD ALREADY STANDING IS THE HEAL — see `summonStanding`. `[Ahwd] Cool1` is ZERO,
+        // so nothing in the data stops a Witch Doctor planting a second 200-mana ward on top
+        // of the first one every pass for as long as somebody nearby is hurt.
+        return !this.summonStanding(u, def);
       case "nuke":
       case "disable":
         return true; // the target search is the gate — see aim()
@@ -968,7 +980,7 @@ export class PlusCaster {
     friends: SimUnit[],
     foes: SimUnit[],
   ): SimUnit | null {
-    const friendly = friendlySpell(def);
+    const friendly = friendlyAim(code, def, role);
     // A POLARITY SPELL IS TWO SPELLS ON ONE BUTTON, and the pool has to say so.
     //
     // Holy Light and Death Coil are mirror images — "friendly living units or enemy Undead" and
@@ -985,6 +997,13 @@ export class PlusCaster {
     // reaches enemy Undead, so it competes with nothing and keeps the ordinary `HURT` bar.
     const healBar = POLARITY_SPELLS[code]?.healsUndead ? COIL_HEAL_HP : HURT;
     const pool: SimUnit[] = friendly ? friends : polarity ? [...friends, ...foes] : foes;
+    // WAS THE POLARITY INFERRED? — true when the row named no side and its ROLE settled it
+    // (`friendlyAim`). It matters for one thing only: whether the CASTER is a candidate. Every
+    // row that is meant for the presser says `self` in its flags (Divine Shield, Berserk, Mana
+    // Shield), and `friendlySpell` is true the moment it does — so a row that says neither
+    // `friend` nor `self` has not said it is for the caster, and inferring that as well would
+    // have a Necromancer put Unholy Frenzy's 3-hit-points-a-second on its own 220-hp body.
+    const inferred = friendly && !friendlySpell(def);
     // Every LEGAL target is collected rather than only the best one, because the misclick
     // below has to draw from the same set: a "mistake" that could land on something the click
     // itself would refuse is not a mistake, it is a dropped cast.
@@ -1003,6 +1022,8 @@ export class PlusCaster {
       // mana spent on a picture. Only the friendly half needs saying: hitting a copy is fine,
       // and is often the whole point of the enemy having made it.
       if (heals && t.isIllusion) continue;
+      if (inferred && t === u) continue; // see `inferred`
+
       if (!near(u, t, lvl.castRange)) continue;
       // …and the healing half of a POLARITY spell is held later than an ordinary heal — see
       // `COIL_HEAL_HP`. Death Coil's other half is the undead's opening nuke, so a coil spent
@@ -1011,6 +1032,10 @@ export class PlusCaster {
       // A NUKE IS NOT SPENT ON A WORKER IT CANNOT FINISH — see `nukeWorthIt`. Here rather than
       // in the score so the misclick below cannot land on one either.
       if (half === "nuke" && !nukeWorthIt(code, lvl, t)) continue;
+      // …AND A PURGE IS SPENT ON WHAT A PURGE DOES — see `worthDispelling`, and here for the
+      // same reason: a "mistake" that lands on a unit with nothing to strip is not a mistake,
+      // it is a wasted cast.
+      if (code === PURGE && !worthDispelling(t, this.view.world)) continue;
       // …and the mana gate the ladder applies to every other nuke (`ready`) has to be applied
       // HERE for a polarity spell, because the card as a whole is graded `heal` and a heal is
       // never held back. Death Coil is the developer's own first example of a nuke thrown at a
@@ -1078,7 +1103,7 @@ export class PlusCaster {
     friends: SimUnit[],
     foes: SimUnit[],
   ): { x: number; y: number } | null {
-    const friendly = friendlySpell(def);
+    const friendly = friendlyAim(code, def, role);
     const pool = friendly ? friends : foes;
     const area = lvl.area > 0;
     // A novice does not hold an area spell for a clump — they press it on whoever they are
@@ -1168,6 +1193,29 @@ export class PlusCaster {
     return !t.building;
   }
 
+  /**
+   * Is one of OUR summons from this very ability already standing here?
+   *
+   * Asked of a `heal` that summons, which today is the Healing Ward alone: the heal is not the
+   * cast, it is the thing the cast leaves on the ground, so a second one inside the first one's
+   * reach heals nobody who is not already being healed. The type is the row's own `UnitID1`
+   * (`[Ahwd]` → `ohwd`) and the reach its own `Rng1`, so nothing here is a constant of ours.
+   *
+   * `levelData[0]` rather than the learned rank because what a row summons does not change with
+   * rank — only how long it lives does.
+   */
+  private summonStanding(u: SimUnit, def: AbilityDef): boolean {
+    const lvl = def.levelData[0];
+    const type = lvl?.summon;
+    if (!type) return false;
+    const reach = lvl.castRange || MIN_LOOK;
+    for (const o of this.view.world.units.values()) {
+      if (o.hp <= 0 || o.owner !== this.view.player || o.typeId !== type) continue;
+      if (near(u, o, reach)) return true;
+    }
+    return false;
+  }
+
   // --- the fight, as the AI reads it --------------------------------------------------
 
   /** Is there a fight around this unit at all? */
@@ -1198,12 +1246,107 @@ export class PlusCaster {
   }
 }
 
+/**
+ * IS THIS BUTTON AIMED AT OUR OWN SIDE? — and the target flags alone cannot answer it.
+ *
+ * `friendlySpell` reads `targs1`'s ALLEGIANCE flags, which is the right reading and the same
+ * one `SimWorld.tickAutocast` makes. The trouble is that a beneficial row is not obliged to
+ * carry one. Three of them in the melee game carry none at all:
+ *
+ *     Auhf  Unholy Frenzy   targs1 "air,ground,organic"      → no allegiance flag
+ *     Aams  Anti-magic Shell targs1 "air,ground,vuln,invu"   → no allegiance flag
+ *     Ahwd  Healing Ward    targs1 "_"                       → no flags whatsoever
+ *
+ * and the sim reads them exactly as the engine does: `targetAllowed` allows ANY allegiance for a
+ * row that names none, so the click is legal on either side. With the flags silent, `pickTarget`
+ * fell through to the enemy pool and a Necromancer spent its mana giving the other player's
+ * Grunts a 75 % attack-speed buff. (Reported: *"the Computer+ AI seems to like to cast Unholy
+ * Frenzy on enemy units"*.)
+ *
+ * What settles it when the data does not is what the button is FOR — its `Role`. A heal or a
+ * buff goes on our own side; a nuke, a disable or a debuff goes on theirs. The fallback is
+ * deliberately narrow, because a wrong answer here aims a spell at the wrong army:
+ *
+ *  · a POLARITY spell (Holy Light / Death Coil) is two spells on one button and has its own
+ *    branch in `pickTarget` — this must not collapse it to one half;
+ *  · an `enemy` flag is the last word: Lightning Shield says "friend,enemy" and is played at
+ *    the enemy, Immolation says "enemy" and burns them;
+ *  · a `dead` row (Animate Dead) is aimed at CORPSES, which neither pool describes;
+ *  · and only a `unit` or `point` cast is aimed at anybody at all. A bare self-cast (Berserk,
+ *    Mirror Image) lands on the caster whatever is standing around, and for those the pool is
+ *    a reading of the FIGHT — flipping it would fire Mirror Image at the first ally in sight.
+ *
+ * Everything else keeps the flags' own answer, so a custom map's flagless spell is still
+ * derived (`roleOf` reaches "nuke"/"disable" for one, never "heal"/"buff") and still aimed at
+ * the enemy exactly as before.
+ */
+function friendlyAim(code: string, def: AbilityDef, role: Role): boolean {
+  if (POLARITY_SPELLS[code] !== undefined) return false; // two spells on one button
+  if (friendlySpell(def)) return true;
+  const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+  if (F.has("enemy") || F.has("dead")) return false;
+  if (def.target !== "unit" && def.target !== "point") return false;
+  return role === "heal" || role === "buff";
+}
+
 /** Already carrying a buff this rank applies — the sim's own no-restack doctrine, narrowed to
  *  THIS ability's buff ids so two spells never block each other. */
 function buffFree(t: SimUnit, lvl: AbilityLevel): boolean {
   if (!lvl.buffs.length) return true;
   const want = lvl.buffs.map((b) => b.toLowerCase());
   return !t.buffs.some((b) => b.buffId && want.includes(b.buffId.toLowerCase()));
+}
+
+/**
+ * Purge — the Shaman's `AOpg`, the Spirit Walker's `ACpu` and the two purge orbs, all one CODE.
+ * Keyed on the code for the reason every other table here is: the aliases differ per unit and
+ * the dispatch does not (`SimWorld.applyItemAbility` and plus/items.ts's header make the same
+ * point about the potions).
+ */
+const PURGE = "Aprg";
+
+/**
+ * IS THERE ANYTHING ON THIS UNIT WORTH STRIPPING? — the whole of when a Purge is spent.
+ *
+ * Reported: *"make Computer+ only use Purge against enemy Summoned units and enemy units that
+ * have positive buffs/effects like Bloodlust, Inner Fire and Unholy Frenzy"*, and it is the
+ * right rule for the ability. Purge is graded `disable` (its slow is real) and a disable's only
+ * gate is the target search, so it went out at whatever was nearest — 75 mana to slow one Grunt
+ * for three seconds, when what the button is for is deleting a Water Elemental or taking
+ * Bloodlust off the pack.
+ *
+ * Two things make a target worth it, and both are read off the SIM's own handler (`Aprg` in
+ * src/sim/spells.ts) so the AI cannot promise something the cast will not do:
+ *
+ *  1. **A SUMMON — it is destroyed outright.** The handler's test is `summonLeft > 0`, so that
+ *     is this one's test too: a Water Elemental, a Feral Spirit, an Infernal. A permanent body
+ *     is not a summon to Purge however it was made, and asking any other question here would
+ *     promise a kill the handler will not deliver.
+ *  2. **A POSITIVE EFFECT — it is stripped.** Nothing in `AbilityBuffData.slk` says which buffs
+ *     are the good ones (its only flag is `isEffect`, and it is 0 for Bloodlust, Inner Fire,
+ *     Unholy Frenzy, Slow and Cripple alike), so polarity is not in the data to be read. What
+ *     IS knowable is WHO PUT IT THERE: a buff hung by the target's own side is one they wanted
+ *     (Bloodlust, Inner Fire, Unholy Frenzy, a Healing Salve's regeneration), and one hung by
+ *     ours is a debuff we would be undoing for them. `team` is the same comparison the sim's own
+ *     area effects make (`areaEffectAffects`).
+ *
+ * Two exclusions, both because the cast would achieve nothing: an `undispellable` buff (Doom —
+ * `dispelUnit` keeps exactly those), and an AURA. An aura is a buff with `timeLeft` Infinity,
+ * refreshed while its source is in range, so it is back the tick after the purge lands.
+ *
+ * A buff whose source is GONE (a Bloodlust from a dead Shaman) cannot be placed and does not
+ * count. That is the safe direction: the cost of missing one is a purge not cast.
+ *
+ * Written as a free function on the WORLD rather than as a method because it is the reading the
+ * whole dispel family wants — Dispel Magic's own quorum is the obvious next caller.
+ */
+export function worthDispelling(t: SimUnit, world: CasterView["world"]): boolean {
+  if (t.summonLeft > 0) return true;
+  return t.buffs.some((b) => {
+    if (b.undispellable || !Number.isFinite(b.timeLeft)) return false;
+    const src = world.units.get(b.sourceId);
+    return !!src && src.team === t.team;
+  });
 }
 
 /**

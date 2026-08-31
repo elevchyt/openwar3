@@ -253,7 +253,10 @@ function pressed(units, profile, ctx, opts = {}) {
   const items = new PlusItems({
     world, player: 0,
     def: (id) => ABILS[id],
-    hostile: (u) => u.owner !== 0,
+    // Three sides, not two: seat 1 is the enemy, seat 2 an ALLY and seat 12 the neutral shops.
+    // A neutral is in neither pool — a Goblin Merchant is not a fight and not somebody to heal.
+    hostile: (u) => u.owner === 1,
+    allied: (u) => u.owner === 2,
     order: (cmd) => { orders.push(cmd); return true; },
     item: (id) => ITEMS[id],
     wares: () => [],
@@ -471,6 +474,34 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
   // …and the same soldier, with the fight over, gets it.
   check("…and gets it once nothing is swinging",
     itemOf(pressed([belt(hero(), "hslv"), unit({ hp: 200, maxHp: 1000, x: 800 })], PLUS_INSANE, AWAY)), 0);
+}
+
+// --- "friendly" means our SIDE ---------------------------------------------------------------
+// Every beneficial row in the game says `friend` in its `targs1`, and the sim answers `friend`
+// with `hostile` rather than with `owner` (`targetAllowed`, `itemAreaTargets`) — so an ally's
+// units have always been inside the circle a scroll draws and have always been a legal press for
+// the salve. The only thing that ever left them out was the AI's own candidate list.
+{
+  const h = belt(hero(), "hslv");
+  const ally = unit({ owner: 2, hp: 200, maxHp: 1000, x: 150 });
+  const cmd = pressed([h, ally], PLUS_INSANE, AWAY);
+  check("the Healing Salve goes on an ALLY's hurt soldier", itemOf(cmd), 0);
+  check("…aimed at that unit", cmd && cmd.targetId, ally.id);
+}
+{
+  // …and the AREA heal counts them too, or a scroll is held over a party it would have healed.
+  const h = belt(hero(), "sreg");
+  const allies = [1, 2, 3].map((i) => unit({ owner: 2, hp: 300, maxHp: 1000, x: 100 * i }));
+  check("the Scroll of Regeneration is worth spending over an ALLY's hurt party",
+    itemOf(pressed([h, ...allies], PLUS_INSANE, AWAY)), 0);
+}
+{
+  // …and neither reaches the other side, however hurt it is. (The enemy is far enough out that
+  // the hero is not "engaged" — the regeneration rungs are gated on there being no fight — so
+  // what this pins is the POOL and not the fight gate.)
+  const h = belt(hero(), "hslv");
+  check("…and never onto an enemy's",
+    pressed([h, enemy({ hp: 200, maxHp: 1000, x: 1500 })], PLUS_INSANE, AWAY), null);
 }
 
 // --- mana ------------------------------------------------------------------------------------
