@@ -31,7 +31,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const {
   canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
-const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut, marching } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut, marching, cohesionCall } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -488,6 +488,60 @@ check("a degenerate anchor cannot produce a NaN destination",
   check("an enemy ARMY in reach ends the march", marching("attacking", HERE, FAR.x, FAR.y, true), false);
   // …and with no army at all there is nothing to anchor a march on.
   check("no anchor, no march", marching("attacking", null, FAR.x, FAR.y), false);
+}
+
+// ==========================================================================================
+// THE ARMY MOVES AS ONE BODY — `cohesionCall`.
+//
+// Reported: "there are a lot of stranded units during the mid to late game which are not
+// sticking to their captain". Two of them were this function's own test ORDER:
+//
+//   1. LOST WAS ASKED AFTER FIGHTING. A unit that is in a fight is left in it, because pulling
+//      one soldier out of a battle is not cohesion — but that rule was reached before the one
+//      that says a unit a screen and a half from the army is not in a battle at all, it is on
+//      its own. So one Grunt that picked something up on the walk was pinned out there for as
+//      long as anything hostile stayed within 500 of it, which on a melee map is until it dies.
+//   2. A HOLD HAD NO DEADLINE. "Wait for the body" only ever regroups an army while the body is
+//      actually closing; when it is not — a straggler behind a treeline, half the group waiting
+//      on the other half — the unit stood in a field for the rest of the match, and
+//      `freezePass` deliberately does not watch a unit that was TOLD to stand still.
+//
+// Both directions matter here, and the false ones matter more: an over-eager version of this
+// walks the whole army backwards every pass and arrives nowhere (see `COHESION_RESUME`).
+// None of these numbers are Warcraft III's — nothing in the install describes an AI at all.
+// ==========================================================================================
+{
+  // (off, waiting, heldFor, fighting, leading)
+  const call = (off, waiting, heldFor, fighting, leading) =>
+    cohesionCall(off, waiting, heldFor, fighting, leading);
+
+  // WITH THE GROUP: nothing to do, whichever way it is facing.
+  check("a unit with the army marches on", call(300, false, 0, false, true), "none");
+  check("…and one exactly on the radius still is", call(600, false, 0, false, true), "none");
+  // THE HYSTERESIS: a unit already holding waits until the body is properly with it (350),
+  // not until it is a hair inside the 600 that stopped it — or the leader see-saws.
+  check("a held unit is not released at the radius that stopped it", call(500, true, 1, false, true), "wait");
+  check("…and is released once the body is properly with it", call(300, true, 1, false, true), "none");
+
+  // OUT IN FRONT: it stands, and it is never walked backwards.
+  check("a leader out in front waits for the body", call(900, false, 0, false, true), "wait");
+  check("a straggler behind is carried forward by the wave's own order", call(900, false, 0, false, false), "none");
+
+  // IN A FIGHT: left in it. Pulling one soldier out of a battle is not cohesion.
+  check("a leader in a fight is left in it", call(900, false, 0, true, true), "none");
+
+  // LOST — beyond FOLLOW_RADIUS (1400) there is no fight to be pulled out of, only itself and
+  // whatever found it. This is the test order that stranded people.
+  check("a lost unit goes and finds the army", call(1500, false, 0, false, false), "follow");
+  check("…even while something is swinging at it", call(1500, false, 0, true, false), "follow");
+  check("…and even if it was the one holding", call(1500, true, 1, true, true), "follow");
+  check("…but 1400 is still merely trailing", call(1400, false, 0, false, false), "none");
+
+  // THE DEADLINE. A hold that is not working ends in a REGROUP, never in "carry on": walking
+  // on is what put the unit out here.
+  check("a hold that is not working ends", call(900, true, 15, false, true), "follow");
+  check("…but not before it has had its time", call(900, true, 14, false, true), "wait");
+  check("…and a hold that is fighting is not on the clock at all", call(900, true, 60, true, true), "none");
 }
 
 console.log(failed ? `\n${failed} FAILED\n` : "\nall ok\n");

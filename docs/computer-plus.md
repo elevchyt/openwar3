@@ -688,6 +688,27 @@ Two changes, and they are the same idea:
   (the classic scripts still pass nothing and still measure from home, because they only ever
   creep out of a base and back).
 
+**The muster pass has to be able to REACH a straggler, and for a long time it could not.** Its
+skip list read *"leave anything already carrying a move or an attack order alone"*, flat,
+wherever that unit happened to be standing — and that is a stranded soldier by definition: the
+muster is the one pass that gathers the army back up, and it was the one pass blind to exactly
+the units that had come apart from it. A Grunt that picked something up on the walk home, a
+straggler that walked into the camp beside the road, anything left standing in a base the wave
+has finished with: each fights on alone and is never asked to come back, because a fight in the
+sim *ends with the unit still carrying its attack order*. Two lines instead:
+
+* an **attack** is left alone only within `GATHER_RADIUS` of the muster point — fighting where
+  the army is, is fighting *with* it; fighting anywhere else is a body to be recalled;
+* a **move** is left alone only when it is aimed at about the muster point (`moveGoal`). That
+  point *moves* whenever the party musters on its own captain, so a unit still walking to where
+  the captain stood a minute ago is walking at nothing.
+
+`moveGoal` is worth its own line: it reads `chaseX`/`chaseY` — the goal the sim re-paths towards
+— and **not** the end of the current `path`, which is only as far as the search got. They differ
+exactly where it matters, because a route round a crowd stops short and the unit *parks* on the
+order it is still carrying. Read off the path end, every such guard in the file decides the order
+is stale and re-issues it every pass, which is a straggler re-pathing instead of walking.
+
 Home is the **fall-back**, which is what the developer asked for: the party goes back when the
 captain is hurt (`CREEP_HEALTH`), when it is not strong enough for anything left on the map
 (plus/power.ts), or when there is nothing left to take.
@@ -730,6 +751,15 @@ Two rules, one at each end of the walk:
   walks it into the camp the party is already fighting in, one at a time. Never a unit with an
   enemy within `COHESION_COMBAT` — pulling one out of a fight is not cohesion — and defence is
   exempt in full: something is in the base, and a soldier that got there first should be swinging.
+- **LOST is asked BEFORE fighting, and that ORDER is the rule.** The two tests above are stated
+  as one function (`cohesionCall`, pinned in `tools/ai-plus-army-test.cjs`) precisely because
+  which of them runs first is the whole answer: a unit past `FOLLOW_RADIUS` is **not in a fight**
+  — there is no fight where it is standing, only itself and whatever found it — so the rule that
+  leaves a soldier in a battle must not be allowed to reach it. Asked the other way round, which
+  is how it was asked, one Grunt that aggroed a creep on the walk was pinned out there for as
+  long as anything hostile stayed within 500 of it, which on a melee map is *until it dies*.
+  Reported as *"there are a lot of stranded units during the mid to late game which are not
+  sticking to their captain"*, and it is most of that report.
 - **A unit out in FRONT stands still; it is never walked BACK.** The two strays want opposite
   orders, and folding them into one was what made the army shuttle. The anchor is itself walking
   forward under the same commit, so a leader ordered *onto* it turns round, meets it, is
@@ -751,6 +781,24 @@ Two rules, one at each end of the walk:
   while its army is currently fighting another one."* The captain is measured against the
   **body** — the rest of the squad, with itself left out — so the same two radii can be asked of
   it. With no body left to hold it to (a hero alone) it is held to nothing.
+- **…and the BODY is what is WITH it, not the mean of the squad.** `bodyCentre`, and the
+  difference is a deadlock. The hold ends when the body is inside `COHESION_RESUME` of the
+  captain; measured over the whole squad, a single soldier left across the map — one trained
+  after the party set off, one that stopped to fight, one behind a treeline — drags the
+  arithmetic mean hundreds of units from where every other soldier is actually standing, so the
+  mean never arrives, so the captain never walks again. The army then parks around a frozen hero
+  while its stragglers are walked in one at a time. So the body is the squad members inside
+  `FOLLOW_RADIUS` — the same line that separates *trailing* from *lost* — and the lost are not
+  ignored by it, they are the ones already being ordered onto the captain, and they join the
+  body by arriving. Only when nothing at all is with it does the captain fall back to the whole
+  squad's centre, which holds it for an army that is coming rather than marching it further away.
+- **…and a HOLD HAS A DEADLINE** (`HOLD_PATIENCE`, fifteen seconds), for the reason `gathered`
+  and `REGROUP_PATIENCE` do: every state in this file without one eventually deadlocks. Standing
+  still regroups an army only while the body is actually closing, and when it is not the unit
+  stood in a field for the rest of the match — invisible to every watchdog, because `freezePass`
+  deliberately does not count a waiting unit as *still* (standing about is what it was told to
+  do). When it expires the answer is **follow**, never *carry on*: ending up beside the army is
+  the whole point, and walking on is what put the unit out here.
 - **…and the gate GIVES UP WAITING.** A gate with no deadline is a deadlock, and this one
   deadlocked in the way that costs most: a single soldier that cannot reach the muster point held
   the whole army at home, hero included ("the AI is moving the hero to its base and locking it

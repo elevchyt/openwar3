@@ -788,6 +788,23 @@ function health(u: SimUnit): number {
 }
 
 /**
+ * WHERE A PLAIN MOVE IS ACTUALLY GOING — which every "is it already walking to about there?"
+ * guard in this file has to ask before it re-states an order, since a fresh move RESTARTS the
+ * path search (see `REISSUE_SLACK`).
+ *
+ * `chaseX`/`chaseY` and not the end of `path`: the sim writes the GOAL there on every route it
+ * lays (`pathTo`) and re-aims at it whenever the way clears (`resumeRoute`), whereas a path is
+ * only as far as the search got. Those differ exactly when it matters — a route round a crowd
+ * stops short and the unit PARKS on the order it is still carrying ("fell short — hold it") —
+ * so a guard reading the path end sees a destination hundreds of units from the one it asked
+ * for, decides the order is stale and re-issues it, every pass, for as long as the way is
+ * blocked. That is a straggler re-pathing instead of walking.
+ */
+function moveGoal(u: SimUnit): { x: number; y: number } | null {
+  return u.order === "move" ? { x: u.chaseX, y: u.chaseY } : null;
+}
+
+/**
  * How many one-for-one RELIEFS to make, given the two sides already sorted: the crew serving in
  * the wave worst-off first, the crew resting in the forest best-off first.
  *
@@ -862,6 +879,72 @@ const COHESION_COMBAT = 500;
  * left, or that fell behind killing something.
  */
 const FOLLOW_RADIUS = 1400;
+/**
+ * …and how long a unit that has been told to WAIT for the body may stand there before it goes
+ * and finds it instead.
+ *
+ * The deadline every other state in this file has (`GATHER_PATIENCE`, `REGROUP_PATIENCE`,
+ * `PUSH_STUCK_AFTER`) and the hold did not, which is why the hold was the one that stranded
+ * people. Standing still only regroups an army when the body is actually closing: a body that
+ * is itself held up — a straggler behind a treeline, a soldier fighting somewhere else, half
+ * the group waiting on the other half — never arrives, and the unit stands in a field for the
+ * rest of the match. Worse, `freezePass` deliberately does not count a waiting unit as still
+ * (standing about is what it was TOLD to do), so nothing else was watching it either.
+ *
+ * When it expires the answer is "follow", never "carry on": the whole point is to end up
+ * beside the army, and walking on is what put the unit out here. Long enough that an ordinary
+ * column really does close up first — at a soldier's ~300 units a second this is four times
+ * the `COHESION_RADIUS` it is waiting out — and short enough to be over well inside one wave.
+ */
+const HOLD_PATIENCE = 15;
+
+/**
+ * HAS THIS UNIT COME APART FROM THE ARMY — and if so, WHICH WAY? The cohesion rule as
+ * arithmetic; `PlusArmy.strayed` is the world lookups it needs and the bookkeeping it does.
+ *
+ * Three answers, because the cases want opposite orders and folding them into one boolean is
+ * what made the army shuttle:
+ *
+ *  · **"none"** — it is with the group, or it is in the fight, or it is a straggler already
+ *    walking the right way. It gets the wave's own order.
+ *  · **"wait"** — it has run out in FRONT. It stands where it is until the body reaches it,
+ *    and it is NOT walked backwards: the anchor is itself moving forward under the same
+ *    commit, so a unit ordered onto it turns round, meets it, is re-pointed at the objective,
+ *    out-walks the group again and turns round again — a loop that covers ground in both
+ *    directions and arrives nowhere (`COHESION_RESUME`, and `PUSH_PROGRESS` for the watchdog
+ *    it also blinded).
+ *  · **"follow"** — it is not with the army at all and has to go and find it.
+ *
+ * THE ORDER OF THE TESTS IS THE RULE, and two of them are the reported stranding:
+ *
+ *  1. the hysteresis, so a hold ends when the body is properly here rather than a hair inside
+ *     the radius that stopped it;
+ *  2. **LOST comes before FIGHTING.** A unit further than `FOLLOW_RADIUS` from the army is not
+ *     "in the fight" — there is no fight where it is standing, only itself and whatever found
+ *     it — so the rule that leaves a soldier in a battle must not reach it. Asked the other
+ *     way round (which is how it was asked), one Grunt that aggroed a creep on the walk home
+ *     was pinned out there for as long as anything hostile stayed within 500 of it, which on a
+ *     melee map is "until it dies". That is most of "there are a lot of stranded units";
+ *  3. a unit that is genuinely IN the fight is left in it — pulling it out is not cohesion, it
+ *     is abandoning the fight one soldier at a time;
+ *  4. **a hold has a deadline** (`HOLD_PATIENCE`). Standing still regroups an army only while
+ *     the body is closing; when it is not, the unit goes and finds it instead;
+ *  5. …and otherwise only the LEADERS wait.
+ */
+export function cohesionCall(
+  off: number,
+  waiting: boolean,
+  heldFor: number,
+  fighting: boolean,
+  leading: boolean,
+): "none" | "wait" | "follow" {
+  if (off <= (waiting ? COHESION_RESUME : COHESION_RADIUS)) return "none";
+  if (off > FOLLOW_RADIUS) return "follow";
+  if (fighting) return "none";
+  if (waiting && heldFor >= HOLD_PATIENCE) return "follow";
+  return leading ? "wait" : "none";
+}
+
 /**
  * How much of the wave has to be AT the muster point before it may leave.
  *
@@ -1491,11 +1574,15 @@ interface Brain {
    * hold that soldier out of the next wave.
    */
   readonly pulls: Map<number, PullBack>;
-  /** Who is standing still WAITING for the rest of the army to catch up (`strayed` → "wait").
+  /** Who is standing still WAITING for the rest of the army to catch up (`strayed` → "wait"),
+   *  and WHEN each of them was stopped.
+   *
    *  Held here rather than derived every pass because the rule has hysteresis: a unit is let go
    *  only once the body is inside `COHESION_RESUME`, and "am I already waiting" is the question
-   *  that asks. Cleared with `pulls`, and for the same reason. */
-  readonly waiting: Set<number>;
+   *  that asks. The clock is the second half of the same answer — a hold that is not working
+   *  has to end (`HOLD_PATIENCE`), and "how long has this one been standing here" is the only
+   *  way to know. Cleared with `pulls`, and for the same reason. */
+  readonly waiting: Map<number, number>;
   /** Is the army mustering IN THE FIELD — on its captain, with another camp in front of it —
    *  rather than at home? Written by `muster` on every massing pass, and read by the errands
    *  that only make sense at home (the shop, `itemCtx.mayShop`). */
@@ -1694,7 +1781,7 @@ export class ComputerPlusAi {
       shunned: [],
       freeze: { was: null, since: 0 },
       pulls: new Map(),
-      waiting: new Set(),
+      waiting: new Map(),
       afield: false,
       target: null,
       reissueIn: 0,
@@ -2903,8 +2990,32 @@ export class ComputerPlusAi {
       // one walking to a DROP (`getitem`): the loot pass re-issues on its own clock, and a
       // rally order in between is what left the tomes on the grass.
       if (u.id === b.items.errand || u.order === "getitem") continue;
-      if (Math.hypot(u.x - rally.x, u.y - rally.y) <= RALLY_SLACK) continue;
-      if (u.order === "move" || u.order === "attack") continue;
+      // …and neither is one with its head in a MOON WELL or a Salve on it, nor one walked out
+      // of a fight on `pullPass`'s own clock. Both are `commit`'s skips, and both used to be
+      // covered here by accident: the blanket "it has a move order" below caught the walk to
+      // the well along with everything else. Recalling a unit mid-heal is what makes the heal
+      // pointless, and re-stating the muster over a pull-back is how a withdrawal see-saws.
+      if (this.recovering(u) || pulledOut(b.pulls.get(u.id), b.clock)) continue;
+      const off = Math.hypot(u.x - rally.x, u.y - rally.y);
+      if (off <= RALLY_SLACK) continue;
+      // FIGHTING WHERE THE ARMY IS is left alone; fighting anywhere ELSE is recalled.
+      //
+      // The skip used to be `u.order === "attack"` flat, wherever the unit happened to be, and
+      // that is a soldier stranded by definition: the muster is the one pass that gathers the
+      // army back up, and it was the one pass that could not reach the units that had most come
+      // apart from it. A Grunt that picked something up on the walk home, a straggler that
+      // walked into the camp beside the road, anything left standing in a cleared base — each
+      // of them fights on alone, wins or dies, and is never asked to come back either way,
+      // because a fight in the sim ends with the unit still carrying its attack order. It is
+      // the same mistake `strayed` made at the other end of the walk, and the same answer: at
+      // the muster point there is a body to be part of, and beyond it there is not.
+      if (u.order === "attack" && off <= GATHER_RADIUS) continue;
+      // …and one already walking to about the muster point is left to walk. Only "about": the
+      // point MOVES whenever the party is mustering on its own captain (`muster` → `afieldAt`),
+      // so a unit still walking to where the captain stood a minute ago is walking at nothing,
+      // and the blanket "it has a move order" this replaces is what let it keep doing so.
+      const end = moveGoal(u);
+      if (end && Math.hypot(end.x - rally.x, end.y - rally.y) <= RALLY_SLACK) continue;
       b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: rally.x, y: rally.y }, queued: false });
     }
     // NOTHING LEAVES UNTIL THE ARMY IS TOGETHER. This gate is above both the creep run and the
@@ -3454,7 +3565,10 @@ export class ComputerPlusAi {
    *  · **it is meant to be still** — healing (`recovering`, which is the whole point of a Moon
    *    Well trip), walked out of the line on its own clock (`pullPass`), holding for the body to
    *    catch up (`b.waiting`), mid-cast, or simply AT HOME, where standing about is what an army
-   *    between waves does.
+   *    between waves does. Each of those four has a clock of its own, which is what keeps this
+   *    watchdog from being blinded by them — the hold's is `HOLD_PATIENCE`, and before it had
+   *    one a captain waiting for a body that could never arrive was invisible to every watchdog
+   *    in the file, this one included.
    *
    * What it does is deliberately blunt. It does not diagnose the order — it cannot, since the
    * whole point is that the cause is something nobody thought of — so it STOPS the hero, which
@@ -3499,7 +3613,23 @@ export class ComputerPlusAi {
     for (const u of this.squadUnits(b)) {
       if (Math.hypot(u.x - home.x, u.y - home.y) <= TOWN_RADIUS / 2) continue;
       allHome = false;
-      if (u.order !== "move") {
+      // …and "it already has a move order" is not the same question as "it is already walking
+      // home". The aim MOVES — `marchAim` re-draws the leg round the camps as the party comes
+      // apart from them — and a retreat is entered from a fight, where a unit may be carrying a
+      // move of its own (a pull-back, an errand it was called off). Read flat, the order it
+      // happens to hold makes it exempt from the retreat for as long as it holds it, which is
+      // one more body left standing where the fight was. See `moveGoal`.
+      //
+      // The slack is `MARCH_DIRECT` and not `REISSUE_SLACK` on purpose: this asks "is it
+      // pointed the same way", not "is it pointed at the same pixel". The aim is a WAYPOINT
+      // re-drawn from a walking anchor, so it slides by a soldier's stride every pass, and a
+      // guard tight enough to notice that would re-path the whole retreating army every pass
+      // — the cost `REISSUE_SLACK` itself exists to avoid. Home counts too, since a leg that
+      // has run out is answered by the straight line the aim falls back to.
+      const end = moveGoal(u);
+      const walking = !!end && (Math.hypot(end.x - aim.x, end.y - aim.y) <= MARCH_DIRECT
+        || Math.hypot(end.x - home.x, end.y - home.y) <= MARCH_DIRECT);
+      if (!walking) {
         b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: aim.x, y: aim.y }, queued: false });
       }
     }
@@ -3598,7 +3728,7 @@ export class ComputerPlusAi {
     // another creep camp while its army is currently fighting another one." The hero is held to
     // the BODY — the rest of the squad, itself left out — so the same rule can be asked of it.
     const captain = centre ? this.squadHero(b) : null;
-    const body = captain ? this.squadCentre(b, captain.id) : null;
+    const body = captain ? this.bodyCentre(b, captain) : null;
     // THE SAFETY NET. Everything below aims at `mx`/`my` — the objective, or the waypoint that
     // keeps the walk out of the camps between here and it (`marchAim`) — while `x`/`y` stay the
     // real objective for the focus-fire pick, which is about a BODY rather than about a walk.
@@ -3684,11 +3814,12 @@ export class ComputerPlusAi {
         // Already walking back to about there: leave it alone. A move order RESTARTS the path
         // search (the same cost the attack-move guard below is about), and the centre of mass
         // drifts by a few units every pass — so without this the whole tail of the army would
-        // re-path every `REISSUE_PERIOD` for a destination that had not really moved. The end
-        // of its current path IS its destination, which is the only place a plain move records
-        // one.
-        const end = u.order === "move" && u.path.length ? u.path[u.path.length - 1] : null;
-        if (end && Math.hypot(end[0] - to.x, end[1] - to.y) <= REISSUE_SLACK) continue;
+        // re-path every `REISSUE_PERIOD` for a destination that had not really moved. See
+        // `moveGoal` for where a plain move records its destination, and for why the end of its
+        // path is not it — a straggler walking back through a crowd is precisely the unit that
+        // parks short of its goal, which is the case that read as stale every pass.
+        const end = moveGoal(u);
+        if (end && Math.hypot(end.x - to.x, end.y - to.y) <= REISSUE_SLACK) continue;
         b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: to.x, y: to.y }, queued: false });
         continue;
       }
@@ -3707,10 +3838,10 @@ export class ComputerPlusAi {
       // whatever it passes, which is exactly what it should be giving up to arrive as one body.
       if (travelling) {
         // Already walking to about there: leave it. A move order RESTARTS the path search,
-        // which is the cost `REISSUE_SLACK` exists for on the attack-move below, and the end of
-        // the current path IS a plain move's destination.
-        const end = u.order === "move" && u.path.length ? u.path[u.path.length - 1] : null;
-        if (end && Math.hypot(end[0] - mx, end[1] - my) <= REISSUE_SLACK) continue;
+        // which is the cost `REISSUE_SLACK` exists for on the attack-move below — and where a
+        // plain move keeps its destination is `moveGoal`.
+        const end = moveGoal(u);
+        if (end && Math.hypot(end.x - mx, end.y - my) <= REISSUE_SLACK) continue;
         b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: mx, y: my }, queued: false });
         continue;
       }
@@ -4026,29 +4157,30 @@ export class ComputerPlusAi {
     // are walked back to the captain the moment the lead expires — a pass short of contact, and
     // exactly the contact they were spent on.
     if (isCopy(u)) return "none";
-    const release = (): "none" => {
-      b.waiting.delete(u.id);
-      return "none";
-    };
+    const held = b.waiting.get(u.id);
     const off = Math.hypot(u.x - centre.x, u.y - centre.y);
-    // THE HYSTERESIS. A unit already waiting holds until the body is properly with it, not
-    // until it is a hair inside the same radius that stopped it — see `COHESION_RESUME`.
-    if (off <= (b.waiting.has(u.id) ? COHESION_RESUME : COHESION_RADIUS)) return release();
-    // A unit that is IN a fight is left in it — pulling it out is not cohesion.
-    if (this.enemyNear(b, u.x, u.y, COHESION_COMBAT)) return release();
-    // Far enough behind to be LOST rather than merely trailing: close on the captain instead of
-    // attack-moving to an objective the group has already left it behind for. This is the half
-    // that answers "army units stuck at base while the hero is out creeping alone" — a Grunt
-    // trained after the party set off is a straggler by every measure, and the objective's own
-    // attack-move walks it into the camp the party is already fighting in, one at a time.
-    if (off > FOLLOW_RADIUS) {
-      b.waiting.delete(u.id);
-      return "follow";
-    }
-    // …otherwise only the LEADERS wait: a unit nearer the objective than the anchor is.
-    if (Math.hypot(u.x - x, u.y - y) >= Math.hypot(centre.x - x, centre.y - y)) return release();
-    b.waiting.add(u.id);
-    return "wait";
+    // The world scan is the expensive half of this question and `cohesionCall` wants it as a
+    // plain boolean, so it is asked HERE, under the two tests that make it matter at all: a
+    // unit still with the group is not going anywhere, and one that is LOST is coming back
+    // whatever it happens to be swinging at.
+    const fighting =
+      off > (held === undefined ? COHESION_RADIUS : COHESION_RESUME) &&
+      off <= FOLLOW_RADIUS &&
+      this.enemyNear(b, u.x, u.y, COHESION_COMBAT);
+    const call = cohesionCall(
+      off,
+      held !== undefined,
+      held === undefined ? 0 : b.clock - held,
+      fighting,
+      // Is it a LEADER — nearer the objective than the anchor is? A straggler is already
+      // walking the right way and only the ones in front are ever held.
+      Math.hypot(u.x - x, u.y - y) < Math.hypot(centre.x - x, centre.y - y),
+    );
+    // The hold's clock starts when the hold does and is not restated while it runs, or the
+    // deadline below could never be reached.
+    if (call !== "wait") b.waiting.delete(u.id);
+    else if (held === undefined) b.waiting.set(u.id, b.clock);
+    return call;
   }
 
   /** `marching`'s third clause, asked of the world: is a PLAYER's soldier standing within
@@ -4090,6 +4222,38 @@ export class ComputerPlusAi {
     if (!free) return p;
     const [wx, wy] = grid.footprintCenter(free[0], free[1], u.footprint);
     return { x: wx, y: wy };
+  }
+
+  /**
+   * WHERE THE BODY THE CAPTAIN IS LEADING IS — which is not the same point as the centre of the
+   * squad, and the difference is a deadlock.
+   *
+   * `commit` holds the captain to its body (`strayed`), and the hold only ends when that body
+   * is inside `COHESION_RESUME` of it. Measured over the WHOLE squad, a single soldier left
+   * across the map — one trained after the party set off, one that stopped to fight, one on the
+   * far side of a treeline — drags the arithmetic mean hundreds of units away from where every
+   * other soldier is actually standing, so the mean can never arrive, so the captain never
+   * walks again. And because `freezePass` does not count a waiting unit as still (standing
+   * about is what it was told to do), nothing else was watching it either: the army parked
+   * around a frozen hero while its stragglers were being walked in one at a time.
+   *
+   * So the body is the units that are WITH it — inside `FOLLOW_RADIUS`, which is the same line
+   * that decides who is merely trailing and who is lost. The lost ones are not ignored: they
+   * are the ones already being ordered onto the captain, and they join the body by arriving.
+   *
+   * Null when NOTHING is with it, and the caller falls back to the whole squad's centre for
+   * that — a captain out on its own should be holding for its army, not marching further away
+   * from it, and `HOLD_PATIENCE` is what stops that hold becoming the freeze this method exists
+   * to prevent.
+   */
+  private bodyCentre(b: Brain, captain: SimUnit): { x: number; y: number } | null {
+    let n = 0, sx = 0, sy = 0;
+    for (const u of this.squadUnits(b)) {
+      if (u.id === captain.id || u.isPeon || isCopy(u) || pulledOut(b.pulls.get(u.id), b.clock)) continue;
+      if (Math.hypot(u.x - captain.x, u.y - captain.y) > FOLLOW_RADIUS) continue;
+      sx += u.x; sy += u.y; n++;
+    }
+    return n ? { x: sx / n, y: sy / n } : this.squadCentre(b, captain.id);
   }
 
   /** Where the group actually is — the anti-chase rule measures from here rather than from the
@@ -4699,6 +4863,7 @@ export class ComputerPlusAi {
       if (u && u.hp > 0 && u.owner === b.ai.player) continue;
       b.squad.delete(id);
       b.pulls.delete(id); // …and its pull-back clock dies with it
+      b.waiting.delete(id); // …as does the hold it was standing under (`HOLD_PATIENCE`)
     }
   }
 

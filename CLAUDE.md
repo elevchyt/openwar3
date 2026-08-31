@@ -208,7 +208,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   hurt hero drags the whole army home. The Scroll of Town Portal is spent leaving a PLAYER and never a creep
   camp. Its army also moves as ONE BODY anchored on the CAPTAIN — the first hero trained, then
   the second — and nothing leaves the muster point until four fifths of it is there, with a
-  deadline, because a gate with no deadline locked the hero at home.
+  deadline, because a gate with no deadline locked the hero at home. A STRANDED unit is that
+  same lesson three more times, and each is an ORDER of tests rather than a number: "it is LOST"
+  is asked before "it is in a fight" (`cohesionCall`), because past `FOLLOW_RADIUS` there is no
+  fight to be pulled out of — only the unit and whatever found it; the captain's BODY is what is
+  WITH it and not the mean of the whole squad, or one soldier across the map freezes the hero
+  every other soldier is mustering on; and a HOLD has a deadline that ends in a REGROUP, since
+  standing still only gathers an army while the body is closing. The muster pass must be able to
+  REACH a straggler too: it skipped anything carrying a move or an attack order WHEREVER it
+  stood, which is precisely the units that had come apart from it, and a fight in the sim ends
+  with the unit still holding its attack order.
   A STRATEGY names the army a build wants to END UP with, so five of the twenty name nothing
   that exists at tier 1 — and `buildableMix` therefore falls back on the race's OPENING SOLDIER
   (derived, not named: the lowest-tier thing the barracks makes that NEEDS NOTHING ELSE
