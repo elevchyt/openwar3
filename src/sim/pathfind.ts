@@ -36,12 +36,57 @@ const NEIGHBOR_COST = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT
 //
 // `EXPANSIONS_PER_CELL` buys the detour in proportion to the distance actually asked for —
 // a search across the street is unchanged, one across the map gets what going round
-// something map-sized costs — and `MAX_EXPANSIONS_FAR` is the flood ceiling that still
-// protects the frame from a goal on an island. Nothing here loosens the guard that
-// mattered: an unreachable goal is still bounded, it is merely bounded further out.
+// something map-sized costs — and `MAX_EXPANSIONS_FAR` is the flood ceiling that protects
+// the frame from a goal on an island.
+//
+// That was not enough, because a detour's cost has nothing to do with how far away the goal
+// is: the flood needed to round a forest is set by the SIZE OF THE FOREST, and a treeline
+// wider than the budget is wider than the budget however near or far the thing behind it
+// happens to be. Scaling with distance only moved the line at which a unit walks into the
+// trees. Two goals that look identical to A* until it has already spent the budget —
+// "unreachable" and "reachable the long way round" — need opposite answers, and asking the
+// question the expensive way means the wrong one is only ever discovered by paying for it.
+//
+// So the budget is now chosen from the grid's STATIC CONNECTIVITY (PathingGrid.regionAt),
+// which answers exactly that in O(1):
+//
+//   • Different regions — genuinely unreachable, and no amount of searching changes it. It
+//     gets the FLOOR and nothing more: the result can only ever be best-effort, so all the
+//     old distance-scaled budget bought was a longer wait for the same answer. This is where
+//     the frame time saved below comes from.
+//   • Same region — a way round EXISTS. Fund the search to find it: A* closes each cell at
+//     most once, so the region's own cell count is the exact worst case and a budget that
+//     size cannot fail on a route that is there.
+//   • Unknown (an air search, or an approach whose target has no walkable ground near it) —
+//     the old distance-scaled rule, unchanged.
+//
+// Measured on a 384×384 grid (a melee map's own size) against a solid wall with the only way
+// round at the far end of it, one path at a time:
+//
+//     wall length      old            new
+//        20 cells    1.7 ms  ok     1.5 ms  ok
+//        60 cells    5.3 ms  ok     4.8 ms  ok
+//       100 cells    6.9 ms  FAIL   7.3 ms  ok
+//       300 cells    7.0 ms  FAIL  21.8 ms  ok
+//
+// — i.e. every search the old budget could finish is unchanged or cheaper (an open-ground
+// walk right across the map is 0.16 ms either way, and an unreachable goal went from 7.3 ms
+// to 3.1 ms), and the extra time is spent only where the answer used to be wrong. The
+// The ceiling is what stops that trade running away, and it is set to bound the search by
+// the REGION rather than to make it cheap: nothing short of that keeps the guarantee the fix
+// exists for, which is that a route that exists is found rather than approximated. On a
+// melee map a wide-open region is around 140k cells, so `MAX_EXPANSIONS_REACHABLE` is what
+// actually binds, and the worst single search it permits is about 30 ms. That is a cost no
+// real map pays — the 300-cell row above is a wall across three quarters of the map with one
+// way round at the very end of it, and a real treeline is tens of cells with gaps in it.
+//
+// The labels are terrain-only, so "same region" is necessary rather than sufficient: a 4×4
+// footprint may still not fit through a one-cell gap. That is the other thing the ceiling is
+// for — it is the one case that can still spend the whole budget and come back best-effort.
 const MAX_EXPANSIONS = 8192;
 const EXPANSIONS_PER_CELL = 64;
 const MAX_EXPANSIONS_FAR = 32768;
+const MAX_EXPANSIONS_REACHABLE = 1 << 17;
 
 // Expansions an APPROACH search (one carrying a `ring` measure) is allowed once it has
 // first stood right against the target. A* pops in f order, so the first cell that reaches
@@ -152,18 +197,50 @@ export function findPath(
   ring?: (cx: number, cy: number) => number,
 ): Cell[] | null {
   const from = grid.nearestWalkable(start[0], start[1], undefined, domain);
-  const to = ring ? goal : grid.nearestWalkable(goal[0], goal[1], undefined, domain);
-  if (!from || !to) return null;
+  if (!from) return null;
+  const startRegion = grid.regionAt(from[0], from[1], domain);
+  // Snap the goal to walkable ground WE CAN ACTUALLY GET TO, when there is any nearby. A
+  // point dropped on something unwalkable snaps to whichever cell the ring scan finds
+  // closest, and "closest" pays no attention to which side of the obstacle it is on: an
+  // order given at an island snapped onto the island, and the whole walk to the shore was
+  // then a capped best-effort search for a goal on the far side of the water. Asking for a
+  // cell in the mover's own region instead makes it an ordinary walk to an ordinary place.
+  // Note this only ever moves the snap where the two sides are genuinely separate ground —
+  // clicking into a treeline you can walk round still snaps to the nearest trunk-free cell,
+  // near side or far, exactly as WC3 does. Falls back to the plain snap so a goal with
+  // nothing reachable near it keeps the best-effort walk toward it that it always had.
+  const to = ring
+    ? goal
+    : (startRegion >= 0
+        ? grid.nearestWalkable(goal[0], goal[1], undefined, domain, (x, y) => grid.regionAt(x, y, domain) === startRegion)
+        : null) ?? grid.nearestWalkable(goal[0], goal[1], undefined, domain);
+  if (!to) return null;
 
-  // The budget the caller did not name grows with the length of the walk — see
-  // `EXPANSIONS_PER_CELL`. Measured on the octile distance, which is the same number the
-  // heuristic below works in, so "how far away is it" means one thing throughout.
-  const budget =
-    maxExpansions ??
-    Math.min(
+  // The budget the caller did not name is chosen from static connectivity — see the note on
+  // `MAX_EXPANSIONS`. An approach's goal cell is the target itself (never walkable), so it
+  // is asked about the ground AROUND it, which is where the walk actually ends.
+  const goalRegion = ring
+    ? grid.regionNear(to[0], to[1], domain)
+    : grid.regionAt(to[0], to[1], domain);
+  let budget: number;
+  if (maxExpansions !== undefined) {
+    budget = maxExpansions;
+  } else if (startRegion >= 0 && goalRegion >= 0 && startRegion !== goalRegion) {
+    // Proven unreachable: the search can only ever come back best-effort, so buy the
+    // best-effort probe and not a flood that ends the same way.
+    budget = MAX_EXPANSIONS;
+  } else if (startRegion >= 0 && startRegion === goalRegion) {
+    // Proven reachable: pay for the detour. Bounded by the region, which is the most the
+    // search could possibly close, so this is "search until you find it" with a ceiling
+    // rather than an open-ended flood.
+    budget = Math.min(MAX_EXPANSIONS_REACHABLE, Math.max(MAX_EXPANSIONS, grid.regionSize(from[0], from[1], domain)));
+  } else {
+    // Nothing to go on (air, or a target with no ground near it): the distance-scaled rule.
+    budget = Math.min(
       MAX_EXPANSIONS_FAR,
       Math.max(MAX_EXPANSIONS, Math.round(octile(from[0], from[1], to[0], to[1]) * EXPANSIONS_PER_CELL)),
     );
+  }
 
   const width = grid.width;
   const height = grid.height;

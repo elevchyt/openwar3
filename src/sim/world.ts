@@ -18020,6 +18020,14 @@ export class SimWorld {
     const domain = pathDomain(u);
     const start = this.grid.footprintAnchor(u.x, u.y, n);
     const goal = this.grid.footprintAnchor(tx, ty, n);
+    // The grid already knows, and knows in O(1): a goal in another connected piece of the
+    // map is unreachable however hard we look, and it is the one case the search below is
+    // worst at — it floods to its ceiling and then reports "as close as I got", which is the
+    // near side of whatever is in the way. Ask the labels first (PathingGrid.regionAt); they
+    // ignore bodies, which is exactly what this method means by reachable.
+    const startRegion = this.grid.regionAt(start[0], start[1], domain);
+    const goalRegion = this.grid.regionNear(goal[0], goal[1], domain);
+    if (startRegion >= 0 && goalRegion >= 0 && startRegion !== goalRegion) return false;
     const half = n >> 1;
     const blocked =
       n <= 0

@@ -104,6 +104,16 @@ export class PathingGrid {
   // footprint releases exactly the cells it took, and only once nothing else claims them.
   private blockStamps: Uint16Array | null = null; // red channel → unwalkable
   private buildStamps: Uint16Array | null = null; // blue channel → unbuildable
+  // Static connectivity labels, one Int32Array per domain, built lazily — see `regionAt`.
+  // The arrays are kept and refilled rather than reallocated: a rebuild is triggered by a
+  // felled tree or a building going up, and a fresh Int32Array per domain per event is over
+  // a megabyte of garbage for something that happens all match (see PathScratch in
+  // pathfind.ts for the same reasoning about the search's own working set).
+  private regions = new Map<PathDomain, Int32Array>();
+  private regionCounts = new Map<PathDomain, Int32Array>();
+  private regionsBuilt = new Set<PathDomain>();
+  private regionStack: Int32Array | null = null;
+  private regionsDirty = true;
 
   constructor(data: PathingData, centerOffset: readonly [number, number]) {
     this.width = data.width;
@@ -278,7 +288,11 @@ export class PathingGrid {
   block(cx: number, cy: number): void {
     if (!this.inBounds(cx, cy)) return;
     this.blockStamps ??= new Uint16Array(this.width * this.height);
-    this.blockStamps[cy * this.width + cx]++;
+    // Walkability only actually CHANGES on the 0→1 transition (the stamps are counted, so
+    // the second tree on a cell shuts nothing that was open) — and it is only a change that
+    // invalidates the region labels. A treeline being stamped at map load is thousands of
+    // calls; this makes all but the first of them free.
+    if (this.blockStamps[cy * this.width + cx]++ === 0) this.regionsDirty = true;
   }
 
   /** Release one stamp of a cell (felled tree / collapsed building footprint). The cell
@@ -287,7 +301,7 @@ export class PathingGrid {
   unblock(cx: number, cy: number): void {
     if (!this.inBounds(cx, cy) || !this.blockStamps) return;
     const i = cy * this.width + cx;
-    if (this.blockStamps[i] > 0) this.blockStamps[i]--;
+    if (this.blockStamps[i] > 0 && --this.blockStamps[i] === 0) this.regionsDirty = true;
   }
 
   /** Mark/clear a cell unbuildable — building footprints' full (blue) extent, so
@@ -384,16 +398,38 @@ export class PathingGrid {
     return null;
   }
 
-  /** Nearest cell this domain can stand on, searched in growing rings. Null if none near. */
-  nearestWalkable(cx: number, cy: number, maxRadius = 32, domain: PathDomain = "ground"): [number, number] | null {
-    if (this.walkable(cx, cy, domain)) return [cx, cy];
+  /** Nearest cell this domain can stand on, searched in growing rings. Null if none near.
+   *
+   *  `accept` narrows what counts — findPath uses it to keep a goal dropped inside a
+   *  treeline on the CALLER'S side of it (see `regionAt`), because snapping it through to
+   *  the far side is an order to walk round the whole forest that the player never gave.
+   *
+   *  Takes the CLOSEST cell on the first ring that has one, not the first it walks into: a
+   *  ring is a square, so its corner is half again as far as its middle, and scanning
+   *  row-major biases every snap toward the bottom-left. (Same reasoning, and same fix, as
+   *  `nearestPlayable` above.) */
+  nearestWalkable(
+    cx: number,
+    cy: number,
+    maxRadius = 32,
+    domain: PathDomain = "ground",
+    accept?: (x: number, y: number) => boolean,
+  ): [number, number] | null {
+    const ok = (x: number, y: number) => this.walkable(x, y, domain) && (!accept || accept(x, y));
+    if (ok(cx, cy)) return [cx, cy];
     for (let r = 1; r <= maxRadius; r++) {
+      let best: [number, number] | null = null;
+      let bestD = Infinity;
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
-          if (this.walkable(cx + dx, cy + dy, domain)) return [cx + dx, cy + dy];
+          const d = dx * dx + dy * dy;
+          if (d >= bestD || !ok(cx + dx, cy + dy)) continue;
+          best = [cx + dx, cy + dy];
+          bestD = d;
         }
       }
+      if (best) return best;
     }
     return null;
   }
@@ -411,6 +447,114 @@ export class PathingGrid {
       }
     }
     return true;
+  }
+
+  /**
+   * Which connected piece of the STATIC map this cell belongs to, or -1 for a cell this
+   * domain cannot stand on at all. Flood-filled once per domain and reused until a tree is
+   * felled or a building goes up (see `block`/`unblock`).
+   *
+   * This exists because "can I get there at all" is the question A* answers most expensively
+   * and least well. A* is a best-effort search on a budget: when it runs out it hands back
+   * the explored cell CLOSEST TO THE GOAL, and against a wall of trees that cell is the wall
+   * of trees. So the two failures the budget produced were the same failure — a goal on an
+   * island burned the whole budget proving nothing, and a goal that merely needed a long walk
+   * round a forest ran out of budget mid-detour and the unit marched into the treeline and
+   * stood there. A label lookup separates them before the search starts: an unreachable goal
+   * gets a small probe (it can never do better), and a reachable one gets funded to actually
+   * go round.
+   *
+   * FOUR-connected on purpose. A* is 8-directional but forbids corner-cutting — a diagonal
+   * step is legal only when both of its orthogonal neighbours are open, which is exactly when
+   * the two cells are already 4-connected. Labelling 8-connected would join two regions that
+   * touch at a single corner and declare a route nothing can walk.
+   *
+   * The labels are terrain-only: units are not in them, deliberately. This answers the same
+   * question `terrainReachable` asks — "could it get there if nobody were in the way" — and a
+   * crowd is a wait, not a wall. It is therefore a NECESSARY condition and not a sufficient
+   * one: a 4×4 footprint may still not fit through a one-cell gap that is 4-connected, so the
+   * search keeps its ceiling.
+   */
+  regionAt(cx: number, cy: number, domain: PathDomain = "ground"): number {
+    if (!this.inBounds(cx, cy)) return -1;
+    return this.regionLabels(domain)[cy * this.width + cx];
+  }
+
+  /** How many cells the region containing (cx,cy) holds — 0 for an unwalkable cell. This is
+   *  the exact worst case for a search inside it: A* expands each cell at most once, so a
+   *  budget of this size cannot fail to find a route that exists. */
+  regionSize(cx: number, cy: number, domain: PathDomain = "ground"): number {
+    const id = this.regionAt(cx, cy, domain);
+    if (id < 0) return 0;
+    const counts = this.regionCounts.get(domain)!;
+    return id < counts.length ? counts[id] : 0;
+  }
+
+  /** Can a mover of this domain walk from one cell to the other at all, ignoring bodies?
+   *  Unknown (either end unwalkable) answers false — callers treat that as "cannot prove it"
+   *  rather than as a verdict. */
+  sameRegion(ax: number, ay: number, bx: number, by: number, domain: PathDomain = "ground"): boolean {
+    const a = this.regionAt(ax, ay, domain);
+    return a >= 0 && a === this.regionAt(bx, by, domain);
+  }
+
+  /** The region a TARGET sits in when the target itself stands on cells nobody may occupy —
+   *  a building, a tree, a unit's own footprint. Falls back to the nearest walkable cell
+   *  around it, which is the ground an approach actually ends on. */
+  regionNear(cx: number, cy: number, domain: PathDomain = "ground", radius = 6): number {
+    const here = this.regionAt(cx, cy, domain);
+    if (here >= 0) return here;
+    const spot = this.nearestWalkable(cx, cy, radius, domain);
+    return spot ? this.regionAt(spot[0], spot[1], domain) : -1;
+  }
+
+  /** Labels for one domain, flood-filled on demand. A stamp change dirties every domain at
+   *  once (a building is in a boat's way as much as a Footman's), and the rebuild is deferred
+   *  to the next question — so stamping a whole treeline at map load costs one fill, not one
+   *  per tree. */
+  private regionLabels(domain: PathDomain): Int32Array {
+    if (this.regionsDirty) {
+      this.regionsBuilt.clear(); // the arrays stay; only their contents are stale
+      this.regionsDirty = false;
+    }
+    if (this.regionsBuilt.has(domain)) return this.regions.get(domain)!;
+
+    const w = this.width;
+    const h = this.height;
+    const n = w * h;
+    let label = this.regions.get(domain);
+    if (!label) {
+      label = new Int32Array(n);
+      this.regions.set(domain, label);
+    }
+    label.fill(-1);
+    // Every cell is labelled BEFORE it is pushed, so it is pushed at most once and the
+    // stack can never need more than one slot per cell.
+    const stack = (this.regionStack ??= new Int32Array(n));
+    const counts: number[] = [];
+    for (let seed = 0; seed < n; seed++) {
+      if (label[seed] !== -1) continue;
+      if (!this.walkable(seed % w, (seed / w) | 0, domain)) continue;
+      const id = counts.length;
+      let sp = 0;
+      let count = 0;
+      label[seed] = id;
+      stack[sp++] = seed;
+      while (sp > 0) {
+        const k = stack[--sp];
+        count++;
+        const x = k % w;
+        const y = (k / w) | 0;
+        if (x > 0 && label[k - 1] === -1 && this.walkable(x - 1, y, domain)) { label[k - 1] = id; stack[sp++] = k - 1; }
+        if (x + 1 < w && label[k + 1] === -1 && this.walkable(x + 1, y, domain)) { label[k + 1] = id; stack[sp++] = k + 1; }
+        if (y > 0 && label[k - w] === -1 && this.walkable(x, y - 1, domain)) { label[k - w] = id; stack[sp++] = k - w; }
+        if (y + 1 < h && label[k + w] === -1 && this.walkable(x, y + 1, domain)) { label[k + w] = id; stack[sp++] = k + w; }
+      }
+      counts.push(count);
+    }
+    this.regionCounts.set(domain, Int32Array.from(counts));
+    this.regionsBuilt.add(domain);
+    return label;
   }
 
   /** Nearest cell (spiralling out from cx,cy) where an n×n footprint fits — for
