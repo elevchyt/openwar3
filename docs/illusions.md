@@ -60,7 +60,7 @@ gives it the timer, the no-corpse death and its vulnerability to Dispel Magic fo
 
 | rule | where | why there |
 |---|---|---|
-| deals no damage | `applyDamage` | the ATTACK path. The blow must still **land** — it records the hit so the weapon-on-armour clang fires, then returns 0. Bailing out early leaves the copies swinging in silence, which identifies them instantly. |
+| deals no damage | `applyDamage` | the ATTACK path. The blow must still **land** — it records the hit so the weapon-on-armour clang fires, **and it is answered** (`noteAttacked` / `revealFoggedAttacker` / `provoke`, the same three `landDamage` runs) before it returns 0. Bailing out early leaves the copies swinging in silence at a camp that never wakes, which identifies them instantly — and lets images scout a camp for free. `landDamage` cannot do it for us: it returns on `amount <= 0` long before `provoke`. |
 | takes 200% | `landDamage` | the true chokepoint. `spellDamage` skips `applyDamage` entirely, and Dispel Magic hitting a summon is exactly the case that must double. |
 | cannot cast | `issueCast` | backstop for triggers/hotkeys/autocast. The command card also emits no ability buttons (`pushAbilityButtons`) — a card full of spells that silently refuse reads as a bug. |
 | cannot pick up items | `pickUpItem` | every route in (walk-over, right-click, a trigger's `UnitAddItem`) funnels through that one door. |

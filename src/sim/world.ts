@@ -14800,7 +14800,22 @@ export class SimWorld {
     // bailing early is exactly what left the images swinging in silence.
     const attacker = attackerId ? this.units.get(attackerId) : undefined;
     if (attacker?.isIllusion && attacker.illusionDamageDealt <= 0) {
-      if (!target.invulnerable) this.hits.push({ attackerId, targetId: target.id, weaponSound });
+      if (!target.invulnerable) {
+        this.hits.push({ attackerId, targetId: target.id, weaponSound });
+        // …and the blow must be ANSWERED as well, which is the other half of "the hit still
+        // lands". Dealing no damage is not the same as not attacking: the victim cannot tell
+        // the copy from the original (docs/illusions.md), so it turns on it, and a creep camp
+        // the images walk into wakes and comes for them. A camp that stood there ignoring an
+        // attacking illusion would be the loudest tell in the game — and worse, images could
+        // then be walked through a camp to scout it for free.
+        //
+        // Spelled out here because the path that normally does this is UNREACHABLE for us:
+        // landDamage bails on `amount <= 0` long before it reaches provoke, so zero damage
+        // has always meant zero reaction. Same three steps it would have run, in its order.
+        this.noteAttacked(target, attackerId);
+        this.revealFoggedAttacker(attackerId, target);
+        this.provoke(target, attackerId);
+      }
       return 0;
     }
     if (attacker?.isIllusion) rawDamage *= attacker.illusionDamageDealt;
