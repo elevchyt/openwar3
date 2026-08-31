@@ -4653,6 +4653,15 @@ export class MapViewerScene {
       const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
       const art = ab && this.abilities.get(ab.id)?.effectArt;
       if (!art) continue;
+      // AN EMPTY WELL HAS NO WATER IN IT. The model's "empty" pose is still a sheet of water
+      // — the clip animates a LEVEL between two surfaces, so its first frame is a low pool
+      // rather than nothing at all — and parking the playhead there left a drained well
+      // shimmering exactly like one that still had a heal in it. Which is the one thing the
+      // gauge exists to tell apart: a Moon Well emptied by day stays empty until dusk
+      // (`manaRegenSuspended`), and that dry basin is the whole cost of drinking from it.
+      // So zero mana is not a level to draw — it is no model, and the pool tidies the
+      // instance away (the key is simply left out of `active`) until the well has water again.
+      if (u.mana <= 0) continue;
       const key = `well|${u.id}`;
       // Unattached, and placed by hand below. The model is a flat hexagon of rippling water
       // that carries its own height above wherever it is put, so it wants the well's CENTRE
