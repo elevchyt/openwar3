@@ -1830,6 +1830,25 @@ which is the whole reason a Marketplace with empty shelves still buys. Gated on 
 shopping trip and for the same reason — it is a walk, and a walk is not something to start while
 there is a wave in the field.
 
+#### …and the junk
+
+`STACKS` answers *is a **second** one worth a slot*. `JUNK` beside it answers the blunter question
+*is the **first** one*, and it is a short argued list rather than a rule, checked before the
+duplicate test because a junk item is a dead slot at any count.
+
+One item is on it. The **Wand of Lightning Shield** (`wlsd`) is not stocked anywhere — no
+`Makeitems` or `Sellitems` row in the install names it — so it reaches a Computer+ hero exactly
+one way, as a level-2 creep drop that `loot` walked over. Its ability `AIls` is Lightning Shield
+(`Alsh`) with the item's numbers on it: an offensive buff cast on an **enemy**, worth what the
+body it lands on is packed around, which is a targeting question the item ladder does not ask.
+There is no `AIls` card in `USE_OF`, so `press` never reaches for the wand and it rides the belt
+for the rest of the match holding a slot a Potion of Healing wants. Pawned it is 75 gold
+(`PawnItemRate` 0.5 of 150) towards the next row of `LIST`.
+
+The general rule — *pawn anything whose ability is not on the ladder* — is deliberately NOT what
+is implemented: it would pawn the next item somebody writes a handler for, in the window before
+they add its card.
+
 #### The rest of it
 
 Everything goes through the doors a player's click goes through, and there is no item path here a

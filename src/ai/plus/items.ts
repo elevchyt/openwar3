@@ -448,6 +448,31 @@ const STACKS = new Set<string>([
   "AImm", // the Pendants — +max mana
 ]);
 
+/**
+ * THE ITEMS A COMPUTER+ HERO ALWAYS PAWNS — junk, even when it is the only copy.
+ *
+ * `STACKS` above answers "is a SECOND one worth a slot"; this answers the blunter question "is
+ * the FIRST one". The two live side by side because a belt slot is the scarce thing, and an item
+ * this AI will never press is a slot spent on nothing however it got there.
+ *
+ * Membership is deliberately a short, argued list rather than a rule — the general rule would
+ * have to be "an item whose ability is not on the `USE_OF` ladder", and that would pawn the next
+ * item somebody adds a handler for before they get round to adding its card.
+ *
+ *   • **Wand of Lightning Shield (`wlsd`)** — reported. Nothing in the install stocks it (no
+ *     `Makeitems`/`Sellitems` row names it, only `ItemData.slk`'s own row), so it reaches a
+ *     Computer+ hero exactly one way: a level-2 creep drop that `loot` walked over. Its ability
+ *     is `AIls`, which is Lightning Shield (`Alsh`) with the item's numbers on it — an offensive
+ *     buff cast on an ENEMY, whose whole value is picking the body in the enemy line that the
+ *     most of its own army is packed around. That is a targeting question the item ladder does
+ *     not ask (`USE_OF` has no `AIls` card, so `press` never reaches for it), so the wand rides
+ *     the belt for the rest of the match holding a slot that a Potion of Healing wants. Pawned,
+ *     it is 75 gold — `PawnItemRate` 0.5 of its 150 — towards the next row of `LIST`.
+ */
+const JUNK = new Set<string>([
+  "wlsd", // Wand of Lightning Shield — see above
+]);
+
 /** How often the belt is looked over for duplicates worth pawning — the shopping clock, since
  *  it is the same errand and the same walk. */
 const PAWN_PERIOD = SHOP_PERIOD;
@@ -541,13 +566,17 @@ export class PlusItems {
   // ==========================================================================================
 
   /**
-   * PAWN THE DUPLICATE.
+   * PAWN THE DUPLICATE — and the junk.
    *
    * Reported: *"heroes that carry multiple Cloak of Shadows must try to sell them at shops (or
    * goblin merchant/marketplace) and keep only 1"*. It is the natural consequence of a hero that
    * picks up everything it walks over (`loot`) on a map whose creeps drop from the same tables:
    * two cloaks, two Rings of Protection +1, two Talismans — and a six-slot belt with two slots
    * spent on nothing.
+   *
+   * The other half is `JUNK`, which IS a list of items and is checked first: an item this AI
+   * has no button for is a dead slot at any count, so it does not wait for a second copy to
+   * become worth selling. See that list for why membership is argued one item at a time.
    *
    * WHICH duplicates is not a list of items, it is `sparePermanent` — the question "does the
    * game add the second one to the first", asked of the same codes `SimWorld.itemBonuses`
@@ -573,13 +602,45 @@ export class PlusItems {
     for (const u of own) {
       if (!u.isHero || u.isIllusion || !u.inventory.length || !this.canAct(u)) continue;
       if (u.order === "getitem") continue; // already walking to a shop, or to a drop
-      const slot = this.sparePermanent(u);
+      const slot = this.pawnSlot(u);
       if (slot < 0) continue;
       // The nearest shop that deals in items — `shops` is already ordered ours-first then by
       // distance from home, which is the same preference the buying trip uses.
       this.view.order({ c: "sellitem", unitId: u.id, slot, shopId: shops[0].id });
       return; // one errand at a time; the next pass takes the next duplicate
     }
+  }
+
+  /**
+   * The slot this hero should pawn, or -1 — junk first, then the spare duplicate.
+   *
+   * Junk goes first because it is the unconditional answer: a `JUNK` item is worth nothing to
+   * this AI at any count, while a duplicate is only worth pawning relative to the copy already
+   * in the belt. One errand carries one item either way (`pawn` returns after issuing), so the
+   * order here is the order the belt is cleared in.
+   */
+  private pawnSlot(u: SimUnit): number {
+    const junk = this.junkSlot(u);
+    return junk >= 0 ? junk : this.sparePermanent(u);
+  }
+
+  /**
+   * The slot holding something on the `JUNK` list, or -1.
+   *
+   * The two refusals are `issueSellItem`'s own — it drops the order outright for anything not
+   * `pawnable`, and a `powerup` is never in a belt to begin with — so asking here means the pass
+   * moves on to the duplicate rather than spending its one errand a pass on an order the sim
+   * will refuse.
+   */
+  private junkSlot(u: SimUnit): number {
+    for (let slot = 0; slot < u.inventory.length; slot++) {
+      const held = u.inventory[slot];
+      if (!held || !JUNK.has(held.itemId)) continue;
+      const def = this.view.item(held.itemId);
+      if (!def || !def.pawnable || def.powerup) continue;
+      return slot;
+    }
+    return -1;
   }
 
   /**
