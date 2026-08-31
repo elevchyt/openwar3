@@ -224,13 +224,24 @@ exactly at the middle of them.)
 Tapping `F1`/`F2`/`F3` or a group digit twice inside the double-tap window centres the camera on
 that selection. **Keep the second press down** and the camera rides it until the key comes back
 up (issue #114) — the same gesture as holding the portrait, which locks onto the primary unit
-(`focusSelected`). What a held hotkey follows is the selection's **centroid**, the same point the
-double-tap jumped to, so a spread-out control group stays framed instead of the view clinging to
-whichever member happens to be primary.
+(`focusSelected`).
+
+Both halves aim at the same point, and that point is a **body**: the group's leading unit — its
+"captain" — which is `orderedSelection`'s first (highest UnitData `prio`, so a hero leads; oldest
+first on a tie) and therefore the very unit the console's portrait is showing. `selectionAnchor`
+is the one answer both the jump and the held follow ask for.
+
+It is deliberately **not the centroid** of the members. A centroid is a point in the middle of the
+group rather than a point on any of it, so the moment a group is not standing in one clump — a
+straggler left behind, the hero out front, one worker still walking home — it lands on empty
+ground between them, and the double-tap reads as putting the camera somewhere wrong. Anchoring on
+the leader is also what makes the hotkey follow agree with the portrait follow, which has ridden
+the primary all along; anchoring the jump and the follow differently would slide the view off the
+unit the jump had just put under it as soon as the key was held.
 
 ### Follow the sim's clock, not the frame's
 
-The focus is **eased** toward that centroid rather than written from it, but the easing is not
+The focus is **eased** toward that leader rather than written from it, but the easing is not
 what keeps it from juddering — the CLOCK is.
 
 Units are drawn straight from sim positions; there is no interpolation between steps (see

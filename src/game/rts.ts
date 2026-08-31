@@ -2334,20 +2334,32 @@ export class RtsController {
     return true;
   }
 
-  /** Centre of the current selection (for the control-group double-tap camera jump). */
-  selectionCentroid(): [number, number] | null {
-    let sx = 0;
-    let sy = 0;
-    let n = 0;
-    for (const id of this.selected) {
+  /**
+   * Where the camera goes when a control-group digit or a hero key is double-tapped — and
+   * what a held one then rides: the selection's LEADING unit, the group's "captain".
+   *
+   * That is the same unit the console's portrait shows — `orderedSelection`'s first, i.e.
+   * highest UnitData `prio` (a hero leads), oldest first on a tie — which is `primary` once
+   * `refocus` has run. It is deliberately NOT the centroid of the members: a centroid is a
+   * point in the middle of the group rather than a point ON any of it, so the instant a group
+   * is not standing in one clump — a straggler left behind, a hero out front, one worker
+   * still walking home — it lands on empty ground between them and the jump reads as putting
+   * the camera in the wrong place. Anchoring on the leader also makes the two follows agree:
+   * holding the portrait (`focusSelected` → `selectedPosition`) already rides the primary.
+   *
+   * Falls down the rest of the group rather than answering null the moment the leader itself
+   * cannot be read, which happens two ways: `primary` is read off the RENDER entries
+   * (`byId`), so it is null for the frame or two before a freshly trained unit's model has
+   * landed, and a leader that dies mid-hold is out of the sim before the selection is pruned.
+   * Either way the group is still there and a held key must go on riding it.
+   */
+  selectionAnchor(): [number, number] | null {
+    const order = this.primary !== null ? [this.primary, ...this.orderedSelection()] : this.orderedSelection();
+    for (const id of order) {
       const u = this.sim.units.get(id);
-      if (u) {
-        sx += u.x;
-        sy += u.y;
-        n++;
-      }
+      if (u) return [u.x, u.y];
     }
-    return n ? [sx / n, sy / n] : this.selectedPosition();
+    return this.selectedPosition(); // nothing selected, or what is selected is a gold mine
   }
 
   /** Drop dead units from the selection and repoint the primary if it died. */

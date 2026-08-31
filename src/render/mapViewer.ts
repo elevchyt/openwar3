@@ -6264,9 +6264,11 @@ export class MapViewerScene {
     sync();
   }
 
-  /** Centre the camera on the current selection (control-group / hero jump). */
+  /** Centre the camera on the current selection (control-group / hero jump) — on the
+   *  group's LEADING unit, the one the portrait shows. See RtsController.selectionAnchor
+   *  for why the point has to be on a body rather than in the middle of the group. */
   private jumpToSelection(): void {
-    const c = this.rts?.selectionCentroid();
+    const c = this.rts?.selectionAnchor();
     if (c) {
       this.target[0] = c[0];
       this.target[1] = c[1];
@@ -6275,9 +6277,9 @@ export class MapViewerScene {
 
   /**
    * A hero key (F1/F2/F3) or a control-group digit HELD after its double-tap: the camera rides
-   * that selection until the key comes back up (issue #114). It follows the group's CENTROID —
-   * the same point the double-tap jumped to — so a group stays framed as it spreads out, rather
-   * than the camera clinging to whichever member is primary.
+   * that selection until the key comes back up (issue #114). It follows the group's LEADING
+   * unit — the same point the double-tap jumped to (`selectionAnchor`), so the view stays on
+   * the body the jump put under it instead of sliding off it the moment the key is held.
    *
    * Two things keep it from juddering, and both are about the follow agreeing with the world
    * it is following rather than about filtering harder:
@@ -6305,7 +6307,7 @@ export class MapViewerScene {
    */
   private followHeld(): void {
     if (!this.groupFollow) return;
-    const c = this.rts?.selectionCentroid();
+    const c = this.rts?.selectionAnchor();
     if (!c) {
       this.groupFollow = false; // everyone it was following is gone
       return;
