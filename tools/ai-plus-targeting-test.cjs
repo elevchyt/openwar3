@@ -34,7 +34,7 @@ function check(what, got, want) {
 function unit(over = {}) {
   return {
     hp: 100, maxHp: 100, maxMana: 0, isHero: false, isSummon: false, isPeon: false,
-    weapon: null, ...over,
+    building: null, weapon: null, weapons: [], ...over,
   };
 }
 
@@ -218,6 +218,92 @@ for (const profile of [PLUS_NORMAL, PLUS_INSANE]) {
   check(`${name}: …but a soldier about to die still comes first`,
     pick([["footman", footman(60)], ["hero", archmage(700)]], "heal", profile), "footman");
 }
+
+// ==========================================================================================
+console.log("\n-- a building is not a target while anything is defending it ------------------");
+// ==========================================================================================
+// The report: "the Computer+ AI attacks buildings first when sieging an enemy's town". A Farm
+// does not shoot back and will still be standing when the fight is over, so it loses to
+// everything with a pulse — INCLUDING a worker, which is the comparison that matters, and at
+// every difficulty. `naive` is NOT exempt this time (it is elsewhere): it reads bulk, and a
+// Town Hall is three Tauren of bulk, so left alone the easy computer would be the worst
+// offender of the three.
+const farm = () => unit({ hp: 500, maxHp: 500, building: {} });
+const hall = () => unit({ hp: 1500, maxHp: 1500, building: {} });
+for (const profile of [PLUS_EASY, PLUS_NORMAL, PLUS_INSANE]) {
+  const name = profile === PLUS_EASY ? "Easy" : profile === PLUS_NORMAL ? "Normal" : "Insane";
+  check(`${name}: the Footman before the Farm`,
+    pickKill([["farm", farm()], ["footman", unit({ hp: 420, maxHp: 420 })]], profile), "footman");
+  check(`${name}: even the PEASANT before the Town Hall`,
+    pickKill([["hall", hall()], ["peasant", peasant()]], profile), "peasant");
+}
+
+// …with the one exception every player makes: the building that is IN the fight. A tower cannot
+// be walked away from — it goes on shooting the army's back for as long as the army is in the
+// base — so it is priced as a soldier that cannot retreat, above a soldier and below a caster.
+const tower = () => unit({
+  hp: 500, maxHp: 500, building: {},
+  weapon: { enabled: true, damage: 26, dice: 1, sides: 1, cooldown: 1, targets: ["ground", "structure"], weaponType: "missile" },
+});
+check("isTower: an armed building", T.isTower(tower()), true);
+check("isTower: a Farm is not", T.isTower(farm()), false);
+check("isTower: nor is a Footman", T.isTower(unit({})), false);
+for (const profile of [PLUS_EASY, PLUS_NORMAL, PLUS_INSANE]) {
+  const name = profile === PLUS_EASY ? "Easy" : profile === PLUS_NORMAL ? "Normal" : "Insane";
+  check(`${name}: the Guard Tower before a Footman`,
+    pickKill([["tower", tower()], ["footman", unit({ hp: 420, maxHp: 420 })]], profile), "tower");
+}
+check("normal: …but the Shaman before the tower", pickKill([["tower", tower()], ["shaman", shaman()]], PLUS_NORMAL), "shaman");
+
+// The raze ladder is the other way up: for the siege, a tower first and then whatever is
+// nearest falling over. A Farm at a sliver outbids one at full health.
+check("razeValue: the tower first", T.razeValue(tower()) > T.razeValue(farm()), true);
+check("razeValue: …then whatever is nearly down",
+  T.razeValue(unit({ hp: 50, maxHp: 500, building: {} })) > T.razeValue(farm()), true);
+
+// ==========================================================================================
+console.log("\n-- …unless you are siege -----------------------------------------------------");
+// ==========================================================================================
+// `isSiege` is read off UnitWeapons.slk rather than off a list of ids, but the list it has to
+// produce is the game's own — `AddSiege` in Scripts\common.ai names the Meat Wagon, the Mortar
+// Team, the Siege Engine, the Glaive Thrower and the Demolisher. The rows below are those units'
+// real columns.
+const weap = (over) => ({ enabled: true, damage: 10, dice: 1, sides: 1, cooldown: 1, targets: [], weaponType: "normal", ...over });
+const siegeUnit = (weapons) => unit({ weapons, weapon: weapons.find((w) => w.enabled) ?? null });
+
+// Mortar Team (hmtm): an artillery ground shot that lists no `structure` at all, plus the
+// structure-only second slot that is what actually knocks the wall down.
+const mortar = () => siegeUnit([
+  weap({ weaponType: "artillery", targets: ["ground", "debris", "tree", "wall", "item", "ward"] }),
+  weap({ targets: ["structure"] }),
+]);
+// Glaive Thrower (ebal): one `aline` slot, and it does list `structure`.
+const glaive = () => siegeUnit([weap({ weaponType: "aline", targets: ["ground", "structure", "debris", "wall", "item", "ward"] })]);
+// Siege Engine (hrtt): not artillery at all — an `instant` cannon that can hit NOTHING but
+// buildings, which is the second half of the rule.
+const tank = () => siegeUnit([weap({ weaponType: "instant", targets: ["structure", "debris"] }), weap({ targets: ["air"] })]);
+// Chimaera (echm): the structure-only slot is switched OFF until Corrosive Breath is bought.
+const chimaera = (breath) => siegeUnit([
+  weap({ enabled: breath, weaponType: "missile", targets: ["structure", "debris"] }),
+  weap({ weaponType: "missile", targets: ["ground", "item", "ward", "structure", "debris"] }),
+]);
+
+check("isSiege: Mortar Team", T.isSiege(mortar()), true);
+check("isSiege: Glaive Thrower", T.isSiege(glaive()), true);
+check("isSiege: Siege Engine", T.isSiege(tank()), true);
+check("isSiege: Chimaera with Corrosive Breath", T.isSiege(chimaera(true)), true);
+check("isSiege: …and without it, not yet", T.isSiege(chimaera(false)), false);
+
+// A Raider does SIEGE damage and is not a siege unit — which is the whole reason this is read
+// off `weapTp` and the targets list rather than off `atkType1`.
+const raider = () => siegeUnit([weap({ targets: ["ground", "structure", "debris", "item", "ward"] })]);
+check("isSiege: a Raider is NOT siege (siege damage is not a siege unit)", T.isSiege(raider()), false);
+check("isSiege: nor is a Footman", T.isSiege(siegeUnit([weap({ targets: ["ground", "structure"] })])), false);
+// A Cannon Tower is artillery, and a tower is not a unit that walks to a base.
+check("isSiege: nor is a Cannon Tower", T.isSiege(unit({
+  building: {}, weapons: [weap({ weaponType: "artillery", targets: ["ground"] })],
+})), false);
+check("isSiege: nor is a worker", T.isSiege(unit({ isPeon: true, weapons: [weap({ weaponType: "artillery" })] })), false);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

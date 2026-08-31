@@ -2272,6 +2272,69 @@ did the killing. `commit` now breaks a unit off a healthy enemy hero — `heroKi
 an attack-move would be answered by the sim's own acquisition, which takes the *nearest* enemy,
 and the hero it just walked away from is standing right there.
 
+### A building is not a target while anything is defending it
+
+Reported: *"the Computer+ AI has a tendency to attack buildings first when sieging/attacking/
+raiding an enemy's town."* Two separate causes, and both had to be fixed.
+
+**The ladder had no price for a building at all.** `focusTarget` simply skipped them, so the only
+thing that had ever *decided* between a Farm and a Footman was the sim's own auto-acquisition,
+which takes the nearest. `plus/targeting.ts` now prices one: `BUILDING` = 0.15, below a WORKER
+(0.4), which is the comparison that matters — a Peasant runs away and repairs, a Farm does
+neither, so of the two things standing in front of an army only one of them gets more expensive
+to kill. The `naive` read is **not** exempt this time (it is for the heal and the hero premium):
+it aims by bulk, a Town Hall is three Tauren of bulk, and an easy computer left alone would be
+the worst offender of the three.
+
+The one exception every player makes is the building that *is* the fight: `isTower` — an armed
+building, the same reading `AiPlayer.isTowered` already used — is priced at `TOWER` = 1.5, above
+a soldier and below a caster. That is the developer's own *"army units and towers first"*.
+
+**The correction had to be asked of the ORDER-LESS units.** An attack-move does not change a
+unit's order when it engages — `tickAttackMove` swings with `order` still `"attackmove"` — so
+nearly every soldier in a base is a unit whose order says "attackmove" and whose `targetId` is
+the building it is hitting. The existing anti-hero rule was written as `u.order === "attack" &&
+u.targetId`, and read that way it never saw the army it was written for; both rules now key on
+`u.targetId` alone. (That is most of why *"the AI units still focused the hero quite a lot"*
+survived the first fix.)
+
+**…until the defence is broken.** `RAZE_EDGE` (2.5) is the developer's *"until their army is
+noticeably larger"*, stated as a ratio: below it `holdTheLine` keeps the discipline on and
+anything that has wandered onto a Farm is re-aimed at something with a pulse; above it the fight
+is over in all but name and the wave gets on with the razing. Priced with `armyPower` on both
+sides — the same √Σ(dps × current hp) as every other comparison here, so 2.5 in those units is
+about six times the raw fighting weight. It is a ratio and not a count for the same reason
+everything else here is: one Tauren left standing is not one Peasant left standing.
+
+### …and the siege units do the opposite
+
+*"Things like siege units (mortar teams, demolishers, glaive throwers, meat wagons etc.) should
+focus buildings whenever possible."* `isSiege` answers it, and it is read off **UnitWeapons.slk**
+rather than off a list of ids — but the list it has to produce is the game's own and is written
+down: `AddSiege` in `Scripts\common.ai` names MEAT_WAGON, MORTAR, TANK (the Siege Engine),
+BALLISTA (the Glaive Thrower) and CATAPULT (the Demolisher). Two columns name exactly those:
+
+* **`weapTp` = `artillery` / `aline`** — a shot that flies at the GROUND and splashes. That is
+  the whole artillery roster: Mortar Team, Demolisher, Meat Wagon, Glaive Thrower and the creep
+  Catapult, and nothing else. Their `targs1` does not even list `structure`; a building is caught
+  by the burst's `splashTargs`, which does.
+* **a STRUCTURE-ONLY slot** — `targs` admitting `structure` and neither `ground` nor `air`. A
+  weapon that can hit nothing but buildings is a weapon the unit was given *for* buildings: the
+  Siege Engine's cannon, the Chimaera's Corrosive Breath (which is why that slot is switched off
+  until the upgrade is bought), and the second slot the Mortar Team, Demolisher and Meat Wagon
+  each carry precisely because their ground shot cannot reach a wall.
+
+**The trap this avoids is `atkType1`.** A Raider does *siege damage* and is not a siege unit; so
+does a Troll Batrider. Keyed on the attack type, half the orc army would have walked past your
+Grunts to punch a Farm.
+
+`siegeTarget` picks **one** building for the whole wave off `razeValue` (a tower first — it is
+shooting at the army while the army works — then whatever is nearest the objective and closest to
+falling), because siege is slow and splashes: four Demolishers on one Barracks bring it down in
+the time one of them spends walking between four different ones. `commit` checks the sim's own
+`weaponVs` before ordering, so a gun with no slot that admits a structure falls through to the
+ordinary rules rather than being ordered at something it can only stand next to.
+
 ## Manners: glhf, gg, and leaving
 
 Two things the classic AI never does, both asked for by the issue, and both deliberately plain —

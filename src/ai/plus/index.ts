@@ -23,7 +23,7 @@ import {
   type SwitchReason,
 } from "./teamchat";
 import { plusProfile, type PlusProfile } from "./profile";
-import { aimCtx, heroKillable, killValue } from "./targeting";
+import { aimCtx, heroKillable, isSiege, isTower, killValue, razeValue } from "./targeting";
 import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from "./races";
 import { CAMP_GREEN_MAX, armyPower, maxCampLevel, type CreepForce, type Fighter } from "./power";
 
@@ -147,6 +147,25 @@ const CLEARED_RADIUS = 900;
  *  short: the point is to swing at what is standing in this fight, not to go and find a better
  *  one somewhere else. */
 const SWAP_LOOK = 700;
+
+/**
+ * HOW BROKEN THE DEFENCE HAS TO BE before the buildings become the point.
+ *
+ * The developer's *"prioritize killing army units and towers first until their army is
+ * noticeably larger"*, stated as a ratio rather than as a head-count. Below this the army holds
+ * its discipline and every unit that has wandered onto a Farm is re-aimed at something with a
+ * pulse (`stuckOnBuilding`); above it the fight is over in all but name and the wave gets on
+ * with the razing, which is what it walked here for.
+ *
+ * Priced with `armyPower` on both sides — the same √Σ(dps × current hp) every other comparison
+ * in this file uses, so it is quadratic underneath: an edge of 2.5 in these units is about six
+ * times the raw fighting weight, which is what "noticeably larger" has to mean before an army
+ * turns its back on what is left of a defence. It is also why the gate is not a count — one
+ * Tauren left standing is not one Peasant left standing.
+ *
+ * OURS, like everything else in this directory (docs/computer-plus.md).
+ */
+const RAZE_EDGE = 2.5;
 
 /**
  * How far from the group a HEALTHY enemy hero may be and still be worth focusing.
@@ -3535,9 +3554,22 @@ export class ComputerPlusAi {
    * worth killing first (`worth`), which is a hero, then a spellcaster, then — when raiding —
    * a worker. An attack-move is still what everyone else gets, because a group that is ordered
    * onto one unit and nothing else walks past the thing killing it.
+   *
+   * **And it is where the army's TARGET DISCIPLINE lives**, which is a different rule and runs
+   * at every difficulty: `hold` says whether there is still a defence worth killing before the
+   * buildings (`RAZE_EDGE`), `siegeAim` says which building the artillery is knocking down
+   * meanwhile, and the per-unit pass below re-aims anything that has wandered onto a Farm.
    */
   private commit(b: Brain, x: number, y: number): void {
-    const focus = b.profile.focusFire ? this.focusTarget(b, x, y) : null;
+    // WHAT IS STANDING AT THE OBJECTIVE, scanned once — the focus-fire pick, the discipline
+    // gate and the siege aim all read the same list rather than walking the world three times.
+    const near = this.enemiesNear(b, x, y);
+    // Is the defence still worth killing before the buildings are? See `RAZE_EDGE`.
+    const hold = this.holdTheLine(b, near.bodies);
+    const focus = b.profile.focusFire ? this.focusTarget(b, near.bodies, x, y) : null;
+    // …and what the SIEGE is knocking down while everybody else fights. Null when there is
+    // nothing of the enemy's standing here, which is every fight that is not in a base.
+    const siegeAim = this.siegeTarget(near.buildings, x, y);
     // WHERE THE ARMY IS, for the cohesion rule below — and it is the CAPTAIN when there is one.
     //
     // "The army follows its hero" is the developer's own framing and it is a better anchor than
@@ -3676,7 +3708,19 @@ export class ComputerPlusAi {
         b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: mx, y: my }, queued: false });
         continue;
       }
-      if (focus && !u.isPeon) {
+      // SIEGE IS FOR THE BUILDINGS — and it is asked BEFORE the focus-fire pick, because a
+      // Demolisher swinging at a Grunt beside the Barracks is a Demolisher doing a quarter of
+      // its job. `weaponVs` is the sim's own answer to "may this unit hit that at all": a
+      // Mortar Team's ground shot lists no `structure` and it is the SECOND slot that knocks
+      // walls down, so a unit that has no such slot falls through to the ordinary rules rather
+      // than being ordered at something it can only stand next to.
+      if (siegeAim && !u.isPeon && isSiege(u) && this.host.world.weaponVs(u, siegeAim)
+          && Math.hypot(u.x - siegeAim.x, u.y - siegeAim.y) <= CLEARED_RADIUS) {
+        if (u.order === "attack" && u.targetId === siegeAim.id) continue;
+        b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: siegeAim.id }, queued: false });
+        continue;
+      }
+      if (focus && !u.isPeon && this.host.world.weaponVs(u, focus)) {
         if (u.order === "attack" && u.targetId === focus.id) continue;
         b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: focus.id }, queued: false });
         continue;
@@ -3692,15 +3736,37 @@ export class ComputerPlusAi {
       // them. (Observed, and reported: "the AI units still focused the hero quite a lot".) The
       // hero premium in plus/targeting.ts is deliberately conditional on `heroKillable` for
       // exactly this reason; without this the ARMY had no such condition at all.
-      if (u.order === "attack" && u.targetId) {
-        const swap = this.stuckOnHero(b, u) ? this.besideHero(b, u) : null;
-        if (!swap) continue;
-        // Re-aimed at a BODY rather than merely released. An attack-move here would be
-        // answered by the sim's own acquisition, which takes the NEAREST enemy — and the hero
-        // it just walked away from is standing right there, so the group would pick it up
-        // again on the next tick and this would be a four-second loop instead of a decision.
-        b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: swap.id }, queued: false });
-        continue;
+      //
+      // …and the SECOND thing it must not stay parked on is a BUILDING while there is still a
+      // defence standing (`stuckOnBuilding`). Reported: the army walks into a base and punches
+      // the Farm on the edge of it while the defenders kill it from behind. A Farm does not
+      // shoot back and will still be standing when the fight is over; the ladder prices one at
+      // a seventh of a soldier for exactly that reason (plus/targeting.ts `BUILDING`), and this
+      // is where a unit that has already picked one up is taken off it.
+      //
+      // BOTH are asked of any unit carrying a live TARGET rather than only of one whose ORDER
+      // is "attack", and that is most of the rule: an attack-move does NOT change a unit's
+      // order when it engages — `tickAttackMove` swings with `order` still "attackmove" (see
+      // `fighting`) — so nearly every soldier in a base is a unit whose order says "attackmove"
+      // and whose `targetId` is the building it is hitting. Read off the order alone, neither
+      // rule saw the army it was written for.
+      if (u.targetId) {
+        const swap = this.stuckOnHero(b, u) ? this.besideHero(b, u)
+          : hold && this.stuckOnBuilding(b, u) ? this.besideBuilding(b, u, near.bodies)
+          : null;
+        if (swap) {
+          // Re-aimed at a BODY rather than merely released. An attack-move here would be
+          // answered by the sim's own acquisition, which takes the NEAREST enemy — and the hero
+          // (or the Farm) it just walked away from is standing right there, so the group would
+          // pick it up again on the next tick and this would be a four-second loop instead of a
+          // decision.
+          b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: swap.id }, queued: false });
+          continue;
+        }
+        // Nothing better to hit: a unit that was explicitly ORDERED onto something is left
+        // swinging at it, exactly as before. One merely auto-acquiring under an attack-move
+        // falls through to the re-issue guard below, which is where it always went.
+        if (u.order === "attack") continue;
       }
       // …and so is a unit already walking to this same spot. A re-issued attack-move
       // RESTARTS the search (SimWorld.issueAttackMove calls pathTo), so re-stating an order
@@ -3764,6 +3830,123 @@ export class ComputerPlusAi {
   }
 
   /**
+   * WHAT IS STANDING AT THE OBJECTIVE — one world walk, three questions.
+   *
+   * `bodies` is everything the army should be KILLING: the enemy's units, and the buildings
+   * that are part of the fight because they shoot back (`isTower`). `buildings` is everything
+   * it is here to KNOCK DOWN, which is a player's structures and nothing else — a tree, a gate
+   * and a neutral shop are not a town.
+   *
+   * A tower is deliberately in BOTH: it is a soldier that cannot retreat as far as the army is
+   * concerned, and it is also the first thing the siege should be pointed at.
+   *
+   * Not gated on `knows`, the same as `focusTarget` has always been: this is a list of what is
+   * within `CLEARED_RADIUS` of the spot the wave is standing on and fighting over, which its
+   * own eyes cover several times over. (`scoutInDanger` and `contactPass` do ask, because those
+   * two read ground the AI is not standing on.)
+   */
+  private enemiesNear(b: Brain, x: number, y: number): { bodies: SimUnit[]; buildings: SimUnit[] } {
+    const bodies: SimUnit[] = [];
+    const buildings: SimUnit[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.owner === b.ai.player || u.invulnerable) continue;
+      if (Math.hypot(u.x - x, u.y - y) > CLEARED_RADIUS) continue; // …before the alliance lookup — see `enemyNear`
+      if (!b.ai.hostileTo(u)) continue;
+      if (!u.building) {
+        bodies.push(u);
+        continue;
+      }
+      if (isTower(u)) bodies.push(u);
+      // A PLAYER's structure. `owner` outside the melee slots is the neutral players — the
+      // shops, the gold mines and the creeps' own buildings — and a destructible carries its
+      // own target class (`targetKey`, "debris"/"wall"), so neither is ever a razing target.
+      if (!u.targetKey && u.owner >= 0 && u.owner < MELEE.MAX_PLAYERS) buildings.push(u);
+    }
+    return { bodies, buildings };
+  }
+
+  /**
+   * IS THERE STILL A DEFENCE WORTH KILLING FIRST? — the gate on the whole target discipline.
+   *
+   * See `RAZE_EDGE`. Priced with `armyPower` over what is left standing at the objective, our
+   * squad on the other side of it, so the answer moves as the fight does: a wave that walks in
+   * against six defenders holds its discipline, and the same wave four kills later is let off
+   * it and gets on with the buildings.
+   *
+   * Workers are not a defence — a Peasant with a hammer is not what stops an army razing a base
+   * — but a TOWER is, and it is already in the list `enemiesNear` builds.
+   */
+  private holdTheLine(b: Brain, defence: readonly SimUnit[]): boolean {
+    const fighters: Fighter[] = [];
+    for (const u of defence) {
+      if (u.isPeon || isCopy(u)) continue; // a picture of an army is not one (docs/illusions.md)
+      fighters.push({ dps: this.dpsOf(u), hp: Math.max(0, u.hp), maxHp: Math.max(1, u.maxHp) });
+    }
+    const power = armyPower(fighters);
+    if (power <= 0) return false; // nothing armed left here — the buildings ARE the fight now
+    return power * RAZE_EDGE > this.powerOf(this.squadUnits(b));
+  }
+
+  /**
+   * WHICH BUILDING THE SIEGE IS KNOCKING DOWN — one for the whole wave, by `razeValue`.
+   *
+   * One rather than each unit's own nearest, because siege is slow and splashes: four
+   * Demolishers on one Barracks bring it down in the time one of them spends walking between
+   * four different ones. A tower first (it is shooting at the army while the army works), then
+   * whatever is nearest the objective and closest to falling.
+   *
+   * Distance is measured from the OBJECTIVE and not from each gun, for the same reason
+   * `focusTarget`'s is: this is the wave's target, and a per-unit tiebreak would scatter them.
+   * Whether a given gun can reach it, and whether it can hit it at all, is `commit`'s business.
+   */
+  private siegeTarget(buildings: readonly SimUnit[], x: number, y: number): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestScore = -Infinity;
+    for (const u of buildings) {
+      if (u.hp <= 0) continue;
+      const s = razeValue(u) * 1000 - Math.hypot(u.x - x, u.y - y);
+      if (s > bestScore) { bestScore = s; best = u; }
+    }
+    return best;
+  }
+
+  /**
+   * Is this unit swinging at a BUILDING that is not part of the fight?
+   *
+   * The building half of `stuckOnHero`, and the same shape. A TOWER is exempt — it is shooting
+   * back, and "army units and towers first" is the rule this serves rather than an exception to
+   * it — and so is anything SIEGE, whose entire job is the building it is standing in front of.
+   */
+  private stuckOnBuilding(b: Brain, u: SimUnit): boolean {
+    if (isSiege(u)) return false;
+    const t = u.targetId ? this.host.world.units.get(u.targetId) : null;
+    if (!t || !t.building || t.hp <= 0) return false;
+    if (isTower(t)) return false;
+    return b.ai.hostileTo(t);
+  }
+
+  /** Something with a pulse to hit instead: the best target near this unit off the same ladder
+   *  the rest of the AI aims by (`killValue`), out of the list `enemiesNear` already built.
+   *  Null — leave it punching the wall — when nothing it can actually reach and actually hit is
+   *  within `SWAP_LOOK`, because the alternative to a bad target is not "no target". */
+  private besideBuilding(b: Brain, u: SimUnit, bodies: readonly SimUnit[]): SimUnit | null {
+    const ctx = aimCtx(b.profile);
+    let best: SimUnit | null = null;
+    let bestScore = -Infinity;
+    for (const t of bodies) {
+      if (t.hp <= 0 || t.id === u.targetId) continue;
+      const d = Math.hypot(t.x - u.x, t.y - u.y);
+      if (d > SWAP_LOOK) continue;
+      // The anti-chase rule again: a healthy hero is not what a unit is taken off a Farm for.
+      if (t.isHero && !heroKillable(t)) continue;
+      if (!this.host.world.weaponVs(u, t)) continue;
+      const s = killValue(t, ctx) * 1000 - d;
+      if (s > bestScore) { bestScore = s; best = t; }
+    }
+    return best;
+  }
+
+  /**
    * The enemy the group should kill first, from around where it is fighting.
    *
    * The ladder is `killValue` (plus/targeting.ts) — the same one its casters aim by, which is
@@ -3776,8 +3959,12 @@ export class ComputerPlusAi {
    * (`heroKillable`) and that has already pulled away from where the group is standing is not a
    * target at all — the ladder's hero premium only applies to one that is standing IN the
    * fight, or one that is nearly dead and worth the walk.
+   *
+   * `bodies` is `enemiesNear`'s list, so a TOWER is in it and a Farm is not: the whole wave
+   * being aimed at the Guard Tower that is shooting it is a decision a player takes, and the
+   * whole wave being aimed at a Farm is the bug the discipline exists to stop.
    */
-  private focusTarget(b: Brain, x: number, y: number): SimUnit | null {
+  private focusTarget(b: Brain, bodies: readonly SimUnit[], x: number, y: number): SimUnit | null {
     const ctx = aimCtx(b.profile);
     const centre = this.squadCentre(b);
     let best: SimUnit | null = null;
@@ -3785,14 +3972,10 @@ export class ComputerPlusAi {
     // units away scores below zero. Starting at zero silently means "only pick something
     // valuable AND close", which is not what the ladder says.
     let bestScore = -Infinity;
-    for (const u of this.host.world.units.values()) {
-      if (u.hp <= 0 || u.owner === b.ai.player) continue;
-      if (u.building || u.invulnerable) continue;
-      const d = Math.hypot(u.x - x, u.y - y);
-      if (d > CLEARED_RADIUS) continue; // …before the alliance lookup — see `enemyNear`
-      if (!b.ai.hostileTo(u)) continue;
+    for (const u of bodies) {
+      if (u.hp <= 0) continue;
       if (u.isHero && !heroKillable(u) && centre && Math.hypot(u.x - centre.x, u.y - centre.y) > HERO_CHASE) continue;
-      const s = killValue(u, ctx) * 1000 - d;
+      const s = killValue(u, ctx) * 1000 - Math.hypot(u.x - x, u.y - y);
       if (s > bestScore) { bestScore = s; best = u; }
     }
     return best;
