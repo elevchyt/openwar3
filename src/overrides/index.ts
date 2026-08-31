@@ -31,6 +31,20 @@ export interface FdfOverride {
   /** New frames to hang inside an existing container, IN ORDER — a row's label anchors to its
    *  checkbox, so the checkbox has to be adopted first. */
   readonly add?: ReadonlyArray<{ frame: string; into: string }>;
+  /**
+   * SetPoint targets to REDIRECT, before anything is removed.
+   *
+   * A retired row is rarely the last one on a panel, and an FDF panel is a CHAIN: every row
+   * anchors to the row above it by name. Drop the Observers row and `MapVisibilityLabel` is
+   * left anchored to a frame that no longer exists — which the layout solver reads as
+   * "anchored to my parent" and lands at the top of the pane, taking every row below it along.
+   *
+   * So a replacement row hands its anchors on: each entry rewrites every `SetPoint …, "from",
+   * …` in the tree to name `to` instead, and `dx`/`dy` are ADDED to that point's own offsets
+   * for what the swap changed about the anchor's box (a dropdown's right edge does not sit
+   * where a checkbox's does).
+   */
+  readonly repoint?: ReadonlyArray<{ from: string; to: string; dx?: number; dy?: number }>;
 }
 
 /** Strings the game has no key for. Layered by both screens below — a screen's own override
@@ -55,12 +69,31 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
   ],
 };
 
-/** Custom Game → Advanced Options: the "Computer+ (Improved AI)" switch, at the bottom of the
- *  pane where issue #124 asks for it. */
+/**
+ * Custom Game → Advanced Options: two rows of ours.
+ *
+ * "Computer+ (Improved AI)" is added at the bottom of the pane, where issue #124 asks for it.
+ * "Observer Mode" REPLACES the game's "Observers:" dropdown in place — that row picks how
+ * other PEOPLE may watch a hosted game and has nothing to say on a single-player screen, where
+ * it stood greyed at "No Observers"; ours is the one form of watching this screen can offer.
+ * See `ui/AdvancedOptionsPane.fdf` for the reasons and src/ui/fdfSkirmish.ts for the switch.
+ *
+ * The dropdown was the anchor of the visibility row under it, so its anchors are handed to the
+ * checkbox that takes its place — with the 0.005 the FDF insets a POPUPMENU's right edge by
+ * and a checkbox's not, or the visibility menu (and the Computer+ box hanging off it) would
+ * step 0.005 out of the column.
+ */
 export const ADVANCED_OPTIONS_OVERRIDE: FdfOverride = {
   id: "ow3-advanced-options",
   source: advancedOptionsFdf,
+  repoint: [
+    { from: "ObserversLabel", to: "ObserverModeLabel" },
+    { from: "ObserversMenu", to: "ObserverModeCheckBox", dx: 0.005 },
+  ],
+  remove: ["ObserversLabel", "ObserversMenu"],
   add: [
+    { frame: "ObserverModeLabel", into: "AdvancedOptionsPane" },
+    { frame: "ObserverModeCheckBox", into: "AdvancedOptionsPane" },
     { frame: "ComputerPlusLabel", into: "AdvancedOptionsPane" },
     { frame: "ComputerPlusCheckBox", into: "AdvancedOptionsPane" },
   ],
@@ -84,6 +117,8 @@ export function layer(lib: FdfLibrary, override: FdfOverride): void {
  * the column is up, and a screen may be mounted against an install whose FDF differs.
  */
 export function applyOverride(lib: FdfLibrary, root: FdfFrame, override: FdfOverride): void {
+  // Before the removals, or the anchors we are redirecting would already be dangling.
+  for (const r of override.repoint ?? []) repoint(root, r);
   for (const name of override.remove ?? []) dropFrame(root, name);
   for (const { frame, into } of override.add ?? []) {
     const target = findFrame(root, into);
@@ -92,6 +127,40 @@ export function applyOverride(lib: FdfLibrary, root: FdfFrame, override: FdfOver
     const built = lib.resolveRoot(frame);
     if (built) target.children.push(built);
   }
+}
+
+/**
+ * Point every `SetPoint` that names `from` at `to` instead, shifting its offsets by dx/dy.
+ *
+ * The statement is `SetPoint <myPoint>, "<relFrame>", <relPoint>, <dx>, <dy>` with the last
+ * three parts optional, so the offsets are found the way ui/fdf/layout.ts's `readPoints` finds
+ * them: step past the relative frame's name and its point, and what is left is the pair. A
+ * point that stated no offsets grows them, since it is being moved off a different box.
+ */
+function repoint(root: FdfFrame, r: { from: string; to: string; dx?: number; dy?: number }): void {
+  const dx = r.dx ?? 0;
+  const dy = r.dy ?? 0;
+  (function walk(f: FdfFrame): void {
+    for (const p of f.props) {
+      if (p.key !== "SetPoint") continue;
+      const at = p.args.findIndex((a) => a.str && a.s === r.from);
+      if (at < 0) continue;
+      p.args[at] = { s: r.to, n: null, str: true };
+      if (!dx && !dy) continue;
+      // The relative POINT is optional (it defaults to my own), so the offsets start at
+      // whichever of the next two slots is not one.
+      let i = at + 1;
+      if (p.args[i] && p.args[i].n === null && !p.args[i].str) i++;
+      p.args[i] = numArg((p.args[i]?.n ?? 0) + dx);
+      p.args[i + 1] = numArg((p.args[i + 1]?.n ?? 0) + dy);
+    }
+    f.children.forEach(walk);
+  })(root);
+}
+
+/** A numeric FDF argument, as the parser would have produced it. */
+function numArg(v: number): { s: string; n: number; str: boolean } {
+  return { s: String(v), n: v, str: false };
 }
 
 /** Remove a named frame from wherever it sits in the tree, subtree and all. */

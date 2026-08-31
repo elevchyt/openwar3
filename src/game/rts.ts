@@ -32,7 +32,7 @@ import { perfLog } from "../dev/perfLog";
 import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot, FxSnapshot } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot, type MinimapDot } from "./minimapView";
-import { minimapDotTone, nextAllyColorMode, toAllyColorMode, worldFilterColor, type AllyColorMode, type ColorSide } from "./allyColor";
+import { minimapDotTone, nextAllyColorMode, observerTeamColors, toAllyColorMode, worldFilterColor, type AllyColorMode, type ColorSide } from "./allyColor";
 import type { RenderBuildJob, RenderUnit } from "./renderUnit";
 import { SnapshotIndex } from "./renderView";
 import type { FogArea, FogModifier } from "./fog";
@@ -986,6 +986,22 @@ export class RtsController {
     return this.allyColorFilter;
   }
 
+  /**
+   * Player -> the colour slot the ally-colour filter paints them in while this machine holds
+   * NO SEAT and is only watching (MeleeConfig.observer). Empty in every ordinary match, and
+   * that emptiness is what every "are we observing" test below reads.
+   *
+   * A watcher has no side for the filter to answer from, so it colours the TEAMS instead —
+   * team 1 blue, team 2 red, the rest of the palette after them. The ladder itself is
+   * `observerTeamColors` (game/allyColor.ts); the caller says who is on which team.
+   */
+  private observedColors = new Map<number, number>();
+
+  setObservedTeams(seats: ReadonlyArray<{ player: number; team: number }>): void {
+    this.observedColors = observerTeamColors(seats);
+    this.retintUnits();
+  }
+
   /** What `owner` is to the LOCAL player. Both neutrals arrive as owner -1 (see
    *  NEUTRAL_HOSTILE_OWNER / NEUTRAL_PASSIVE_OWNER), which is why a creep is left alone
    *  rather than reddened — allyColor.ts's `allyFilterColor` says why that is the safer half. */
@@ -996,9 +1012,22 @@ export class RtsController {
   }
 
   /** Which of the minimap's own friend-or-foe tones this dot takes — `self` (white) in every
-   *  mode, ally/enemy once one is on, null to keep the player's colour. */
+   *  mode, ally/enemy once one is on, null to keep the player's colour.
+   *
+   *  A WATCHER takes none of the three: there is no friend and no foe to paint, and what the
+   *  filter does for it instead is a per-team COLOUR, which is a player-colour slot rather
+   *  than a tone (see `dotColor`). */
   private minimapTone(owner: number): MinimapDot["tone"] {
+    if (this.observedColors.size) return null;
     return minimapDotTone(this.allyColorFilter, this.colorSide(owner));
+  }
+
+  /** The colour slot a minimap DOT is painted in: the watched game's per-team colour while
+   *  the filter is on and nobody is playing here, else the player's own (`SetPlayerColor`
+   *  moves that, which is why it is asked rather than assumed). */
+  private dotColor(owner: number): number {
+    const observed = this.allyColorFilter > 0 ? this.observedColors.get(owner) : undefined;
+    return observed ?? this.playerColor(owner);
   }
 
   /**
@@ -1011,6 +1040,13 @@ export class RtsController {
    * `SetPlayerColor`.
    */
   unitColor(owner: number, override?: number): number {
+    // A WATCHER's filter paints one colour per TEAM rather than mode 3's blue/teal/red, for
+    // want of a side of its own — and only in mode 3, exactly as the ordinary filter only
+    // reaches the world there (`worldFilterColor`).
+    if (this.observedColors.size) {
+      const observed = this.allyColorFilter >= 2 ? this.observedColors.get(owner) : undefined;
+      return observed ?? override ?? this.playerColor(owner);
+    }
     return worldFilterColor(this.allyColorFilter, this.colorSide(owner)) ?? override ?? this.playerColor(owner);
   }
 
@@ -1204,8 +1240,16 @@ export class RtsController {
   }
   toggleRevealAll(): boolean {
     const on = !this.local.revealed;
-    this.local.setRevealAll(on);
+    this.setLocalRevealAll(on);
     return on;
+  }
+
+  /** Reveal the whole map to THIS MACHINE and to nobody else — an observer's eyes, and
+   *  `iseedeadpeople`'s. Deliberately not `setRevealAll`, which is the LOBBY's fog mode and
+   *  therefore the whole match's: handing that to a watcher would hand it to every computer
+   *  in the game as well (see VisionSet.setStartFog). */
+  setLocalRevealAll(on: boolean): void {
+    this.local.setRevealAll(on);
   }
 
   /** Install the fog's line-of-sight height field + tree blockers, so vision is
@@ -6515,7 +6559,10 @@ export class RtsController {
     // this seat's display setting, and asking for somebody else's dots (a test, an observer)
     // must not come back wearing our white.
     if (vp === this.local) for (const d of dots) d.tone = this.minimapTone(d.owner);
-    if (this.playerColors.size) for (const d of dots) d.owner = this.playerColor(d.owner);
+    // `owner` leaves here as a COLOUR SLOT, which is what the HUD paints the dot with: a
+    // player's own (SetPlayerColor can move it), or — for a watcher, whose dots carry no tone
+    // — the team colour its filter gives them.
+    if (this.playerColors.size || this.observedColors.size) for (const d of dots) d.owner = this.dotColor(d.owner);
     return dots;
   }
 

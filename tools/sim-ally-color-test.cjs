@@ -22,6 +22,7 @@ const {
   allyButtonSkin,
   nextAllyColorMode,
   toAllyColorMode,
+  observerTeamColors,
   ALLY_FILTER_COLOR,
 } = require(join(REPO, ".sim-build", "src", "game", "allyColor.js"));
 
@@ -66,6 +67,31 @@ check("world: a creep/shop is left alone", worldFilterColor(2, "neutral"), null)
 check("minimap: you are STILL white, not the world's blue", minimapDotTone(2, "self"), "self");
 check("minimap: an ally is teal", minimapDotTone(2, "ally"), "ally");
 check("minimap: an enemy is red", minimapDotTone(2, "enemy"), "enemy");
+
+// An OBSERVER is on no side, so the three-tone vocabulary above has nothing to say about the
+// game it is watching — asked of a watcher's own (empty) alliances every player is an enemy
+// and the field goes red. The filter colours the TEAMS instead, and what is pinned is the
+// order: blue then red — the two slots the filter already means by "you" and "the enemy", so a
+// watched game reads like a played one — then the palette's own order for any team after them.
+console.log("Watching: the filter gives each TEAM its own colour, blue and red first");
+{
+  const twoTeams = [
+    { player: 0, team: 0 }, { player: 3, team: 0 },
+    { player: 1, team: 1 }, { player: 5, team: 1 },
+  ];
+  check("team 1 is blue, both of them", [observerTeamColors(twoTeams).get(0), observerTeamColors(twoTeams).get(3)], [BLUE, BLUE]);
+  check("team 2 is red, both of them", [observerTeamColors(twoTeams).get(1), observerTeamColors(twoTeams).get(5)], [RED, RED]);
+  // A free-for-all is four teams, and the two after the first pair take the palette in ITS
+  // order with blue and red skipped — teal (2) is next, then purple (3).
+  const ffa = [{ player: 0, team: 0 }, { player: 1, team: 1 }, { player: 2, team: 2 }, { player: 3, team: 3 }];
+  check("then the palette, blue and red skipped", [...observerTeamColors(ffa).values()], [BLUE, RED, TEAL, 3]);
+  // Teams are ranked by their own index, not by who happens to be listed first: the two
+  // surfaces (a minimap dot and the unit in the world) have to agree, and a rebuild must not
+  // renumber anybody.
+  const reversed = [{ player: 9, team: 3 }, { player: 2, team: 1 }];
+  check("ranked by team index, not by seat order", [...observerTeamColors(reversed).values()], [RED, BLUE]);
+  check("nobody playing, nobody coloured", [...observerTeamColors([]).values()], []);
+}
 
 console.log("The button cycles three modes, and a script's state clamps to them");
 check("0 → 1 → 2 → 0", [nextAllyColorMode(0), nextAllyColorMode(1), nextAllyColorMode(2)], [1, 2, 0]);

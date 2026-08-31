@@ -9,7 +9,7 @@ import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { savedPlayerName } from "./fdfLan";
-import type { Controller, FogMode, MeleeConfig, SlotConfig } from "./lobby";
+import { OBSERVER_PLAYER, type Controller, type FogMode, type MeleeConfig, type SlotConfig } from "./lobby";
 import {
   BLURB_SCROLLBAR_FDF, MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, nudgeY, num,
   setProp, size, str,
@@ -134,7 +134,9 @@ export async function mountSkirmish(
    *  · Random Races / Random Hero — both are `IsMapFlagSet` flags that Blizzard.j's melee
    *    initialisation reads (`MAP_RANDOM_HERO` swaps the free-hero token for a rolled hero),
    *    and that native answers false to everything today (jass/natives/melee.ts).
-   *  · Observers — there is no observer seat in the lobby at all.
+   *
+   * The Observers dropdown is not among them: it is GONE, and `observerMode` stands in its
+   * place (see below, and src/overrides/).
    */
   const advanced = {
     lockTeams: false,
@@ -159,6 +161,19 @@ export async function mountSkirmish(
      * Opens on whatever Options → Gameplay → "Use Computer+ as default AI" was left at.
      */
     computerPlus: computerPlusDefault(),
+    /**
+     * **Observer Mode** — get up from your own slot and just watch.
+     *
+     * The pane's replacement for the game's "Observers:" dropdown, which chooses how other
+     * PEOPLE may watch a game you are HOSTING and so had nothing to offer on a single-player
+     * screen (it sat greyed at "No Observers"). This one is about the person at this machine:
+     * switched on, your row becomes an ordinary OPEN slot — re-seatable as a computer like any
+     * other, since the point is to watch a game of computers play out — and the match starts
+     * with no seat of ours in it at all (`MeleeConfig.observer`).
+     *
+     * Off by default: the Custom Game screen is for playing a custom game.
+     */
+    observerMode: false,
   };
 
   /** A map was picked (or its folder finished reading): reseat the player rows on it. */
@@ -176,7 +191,11 @@ export async function mountSkirmish(
       const spare: Controller = info.isMelee ? "computer" : "open";
       slots = info.slots.map((s, i) => ({
         id: s.id,
-        controller: s.controller === "computer" ? "computer" : i === localIndex ? "user" : spare,
+        // …and OUR row is only ours while we are playing: an observer's seat opens like any
+        // other spare one, on this map and on every map picked after it.
+        controller: s.controller === "computer" ? "computer"
+          : i === localIndex ? (advanced.observerMode ? "open" : "user")
+          : spare,
         // A spare seat opens on the difficulty the reference opens on — the menu's own
         // middle entry, which is also what a slot the MAP owns is greyed at.
         ai: MELEE_NORMAL,
@@ -236,10 +255,29 @@ export async function mountSkirmish(
     screen.relayout();
   }
 
+  /**
+   * Observer Mode was flipped: leave our row, or take it back.
+   *
+   * Leaving hands it over as OPEN rather than as a computer, because the row is now a choice
+   * to be made and not a decision taken for us — and coming back takes it whatever it was
+   * turned into meanwhile, since it is our seat again. A row the MAP owns was never ours to
+   * get up from (see Slot.locked).
+   */
+  function seatLocalRow(): void {
+    const seat = slots[localIndex];
+    if (!seat || seat.locked) return;
+    seat.controller = advanced.observerMode ? "open" : "user";
+    seat.ai = MELEE_NORMAL;
+  }
+
   function start(): void {
     const picked = browser.selected;
     if (!picked) return;
-    h.onStart(picked.file, picked.info, toConfig(slots, picked.info, visibilityFog(advanced.visibility), advanced.computerPlus));
+    h.onStart(picked.file, picked.info, toConfig(slots, picked.info, {
+      fog: visibilityFog(advanced.visibility),
+      computerPlus: advanced.computerPlus,
+      observer: advanced.observerMode,
+    }));
   }
 
   // Leaving the screen must stop the browser's background read — it walks the whole install.
@@ -254,8 +292,9 @@ export async function mountSkirmish(
   function fill(s: FdfScreen): void {
     browser.fill(s); // the map list and the map-info pane
     const picked = browser.selected;
-    // Nothing picked yet: no map to start.
-    s.setEnabled("PlayGameButton", !!picked);
+    // Nothing picked yet: no map to start — nor is there anything to WATCH if the observer
+    // emptied the last seat, which is a match of nobody rather than a game of computers.
+    s.setEnabled("PlayGameButton", !!picked && (!advanced.observerMode || slots.some(isSeated)));
     // …and nothing to configure either: the options are the MATCH's, so the button that
     // opens them is dead until there is a map to play.
     s.setEnabled("MapInfoButton", !!picked);
@@ -269,7 +308,9 @@ export async function mountSkirmish(
     const teams = teamOptions(maxSlots);
     const fixed = picked.info.fixedPlayerSettings;
     slots.forEach((slot, i) => {
-      const mine = i === localIndex;
+      // Our own row — unless we have got up from it: an OBSERVER's old seat is nobody's, so it
+      // wears the full slot menu and can be handed to a computer like any other open one.
+      const mine = i === localIndex && !advanced.observerMode;
       const name = s.popup(`NameMenu${i}`);
       if (name) {
         // Your own slot is you — WC3 shows your profile name there, not a menu of others. A
@@ -297,7 +338,7 @@ export async function mountSkirmish(
       }
       // An EMPTY slot has nothing to configure: on an Open/Closed row the real client greys
       // the race, team, colour and handicap and leaves only the slot menu live.
-      const seated = slot.controller === "user" || slot.controller === "computer";
+      const seated = isSeated(slot);
       const race = s.popup(`RaceMenu${i}`);
       if (race) {
         race.setOptions(RACES.map((r) => ({ value: r, label: RACE_LABEL[r] })));
@@ -362,13 +403,6 @@ export async function mountSkirmish(
       box.checked = value;
       box.setEnabled(false);
     }
-    const observers = s.popup("ObserversMenu");
-    if (observers) {
-      observers.setOptions([{ value: "NO_OBSERVERS", label: text("NO_OBSERVERS") }]);
-      observers.value = "NO_OBSERVERS";
-      observers.setEnabled(false);
-    }
-
     // …and the one that does. Its four items are the FDF's own MenuItem list, under the
     // GlobalStrings names the game prints them by.
     const visibility = s.popup("MapVisibilityMenu");
@@ -378,12 +412,18 @@ export async function mountSkirmish(
       visibility.onChange = (v) => { advanced.visibility = v as Visibility; };
     }
 
-    // …and OURS. Flipping it re-fills the whole screen, because the switch is not only about
-    // the match: every computer row's name menu changes with it.
+    // …and the two that are OURS. Flipping either re-fills the whole screen, because neither
+    // is only about the match: Computer+ changes what every computer row's name menu offers,
+    // and Observer Mode empties (or takes back) our own row.
     const plus = s.checkBox("ComputerPlusCheckBox");
     if (plus) {
       plus.checked = advanced.computerPlus;
       plus.onChange = (on) => { advanced.computerPlus = on; fill(s); };
+    }
+    const observer = s.checkBox("ObserverModeCheckBox");
+    if (observer) {
+      observer.checked = advanced.observerMode;
+      observer.onChange = (on) => { advanced.observerMode = on; seatLocalRow(); fill(s); };
     }
   }
 }
@@ -484,11 +524,21 @@ function renameFrame(root: FdfFrame, from: string, to: string): void {
   })(root);
 }
 
+/** Is somebody actually IN this row? The two empty states are lobby states, not occupants —
+ *  the same question the config's filter, the roster and the row's own greying all ask. */
+function isSeated(slot: Slot): boolean {
+  return slot.controller === "user" || slot.controller === "computer";
+}
+
 /** The lobby config the melee initializer consumes (ui/lobby.ts). Start locations come
  *  from the MAP — the lobby only seats players, it doesn't place them. */
-function toConfig(slots: Slot[], info: MapInfo, fog: FogMode, computerPlus: boolean): MeleeConfig {
+function toConfig(
+  slots: Slot[],
+  info: MapInfo,
+  opts: { fog: FogMode; computerPlus: boolean; observer: boolean },
+): MeleeConfig {
   const playing: SlotConfig[] = slots
-    .filter((s) => s.controller === "user" || s.controller === "computer")
+    .filter(isSeated)
     .map((s) => {
       const mapSlot = info.slots.find((m) => m.id === s.id);
       return {
@@ -501,7 +551,7 @@ function toConfig(slots: Slot[], info: MapInfo, fog: FogMode, computerPlus: bool
         name: mapSlot?.name,
         // Which computer the row picked, and which AI plays it. Only a computer has either
         // — see SlotConfig.
-        ...(s.controller === "computer" ? { aiDifficulty: s.ai, aiPlus: computerPlus } : {}),
+        ...(s.controller === "computer" ? { aiDifficulty: s.ai, aiPlus: opts.computerPlus } : {}),
         // The one seat a human is in on this screen is theirs, under the name the profile
         // saved — the loading screen's roster is the only thing that reads it.
         ...(s.controller === "user" ? { playerName: savedPlayerName() } : {}),
@@ -522,8 +572,11 @@ function toConfig(slots: Slot[], info: MapInfo, fog: FogMode, computerPlus: bool
     // Advanced Options → Visibility. Was hardcoded to "explored" while there was no screen
     // to say otherwise; the pane's own default still opens on Map Explored, so a match
     // started without touching it plays exactly as it did before.
-    fog,
+    fog: opts.fog,
     forces: info.forces.map((f) => ({ allied: f.allied, sharedVision: f.sharedVision })),
     seed: 1 + Math.floor(Math.random() * 2147483645),
+    // Advanced Options → Observer Mode: nobody in `playing` is us, so the match is told which
+    // seat this machine watches from — one that is nobody's (ui/lobby.ts OBSERVER_PLAYER).
+    ...(opts.observer ? { observer: true, localPlayer: OBSERVER_PLAYER } : {}),
   };
 }

@@ -58,7 +58,7 @@ import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { AI_SCRIPT_FOR } from "../ai";
 import { labelOf, slotOptionValue } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
-import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
+import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { perfLog } from "../dev/perfLog";
 import { setSimProfiler } from "../sim/profile";
@@ -1114,6 +1114,17 @@ export class MapViewerScene {
    *  finds it again without threading a second path through every push site. */
   private iconSource = new Map<string, string>();
   private localPlayer = 0;
+  /**
+   * This machine holds NO seat: it is watching (Custom Game → Advanced Options → Observer
+   * Mode; `MeleeConfig.observer`).
+   *
+   * `localPlayer` is `OBSERVER_PLAYER` then — a number outside every slot the match has — so
+   * almost nothing here needs to know: an observer owns no unit, so every "is this mine" test
+   * already answers no, the authority refuses every order in its name (Authority.ownedBy), and
+   * no victory or defeat is ever declared for it. What DOES need saying is the two things a
+   * watcher gets that an empty seat would not: the whole map, and a camera pointed at it.
+   */
+  private observer = false;
   private localRace: PlayableRace = "human";
   // Footprints of registered resource nodes, for unstamping on removal.
   private nodeFootprints = new Map<number, { fp: Footprint; x: number; y: number }>();
@@ -1923,7 +1934,9 @@ export class MapViewerScene {
     // instead, because its w3i name is the file's ("NightElfX01") and nothing a player has
     // ever seen. See MeleeConfig.mapName.
     if (config.mapName) this.mapDisplayName = config.mapName;
-    // Who WE are. A LAN client is told (every human slot in a shared config says "user", so
+    // Who WE are — or that we are nobody, and only watching (see `observer`).
+    this.observer = config.observer === true;
+    // A LAN client is told (every human slot in a shared config says "user", so
     // the fallback would seat every machine on the same player — see MeleeConfig.localPlayer).
     this.localPlayer = config.localPlayer
       ?? config.slots.find((s) => s.controller === "user")?.id
@@ -1953,16 +1966,24 @@ export class MapViewerScene {
             : `Player ${s.id + 1}`),
       ]),
     );
+    // …and the watcher's own seat is in nobody's slot list, so it names itself. The one place
+    // it is ever read is a line the observer types: their own chat comes back to them labelled.
+    if (this.observer) this.playerNames.set(this.localPlayer, OBSERVER_NAME);
     this.humanPlayers = config.slots.filter((s) => s.controller === "user").length;
     this.rts!.setPlayerNames(this.playerNames);
     // Whose placed units hold their ground (see SimUnit.guarding). Set before seeding, since
     // that is when a unit is told whether it has a post.
     this.rts!.setAiPlayers(config.slots.filter((s) => s.controller === "computer").map((s) => s.id));
-    // Open on the local player's base, at the wheel's far end (see MELEE_START).
+    // Open on the local player's base, at the wheel's far end (see MELEE_START). A WATCHER has
+    // no base to open on and keeps the middle of the map the camera was pointed at while the
+    // terrain loaded — but it still takes the GAME's camera rather than the map viewer's: the
+    // same height, pitch and zoom every match starts at.
     const home = config.slots.find((s) => s.id === this.localPlayer);
     if (home) {
       this.target[0] = home.startX;
       this.target[1] = home.startY;
+    }
+    if (home || this.observer) {
       this.distance = this.playerDistance = MapViewerScene.MELEE_START;
       this.pitch = this.playerPitch = MapViewerScene.GAME_PITCH;
       this.zoomT = 1;
@@ -1986,6 +2007,22 @@ export class MapViewerScene {
     // fog entirely; "unexplored" leaves the default pitch-black unseen ground.
     if (config.fog === "explored") this.rts!.exploreAll();
     else if (config.fog === "revealall") this.rts!.setRevealAll(true);
+    // …and a WATCHER sees the whole map whatever the lobby chose for the players, because
+    // there is nothing for a match to hide from somebody who is not in it. On this machine's
+    // own viewpoint alone — the lobby's fog mode is a MATCH setting and would hand the same
+    // reveal to every computer in the game, which is the one thing an observer must not do.
+    if (this.observer) {
+      this.rts!.setLocalRevealAll(true);
+      // …and the Ally Color Mode button (Alt-A) has no "us" to draw from a watcher's own
+      // alliances — asked of them every player comes back an enemy and the whole field goes
+      // red. What it paints instead is one colour per TEAM, blue and red first
+      // (game/allyColor.ts observerTeamColors); the seats are what says who is on which.
+      this.rts!.setObservedTeams(
+        config.slots
+          .filter((s) => s.controller === "user" || s.controller === "computer")
+          .map((s) => ({ player: s.id, team: s.team })),
+      );
+    }
     this.applyRaceCursor();
     // ARM Blizzard's own melee AI with this lobby's computer seats (issue #119; src/ai/).
     //
@@ -6855,7 +6892,9 @@ export class MapViewerScene {
         .map((id) => ({ id, name: this.playerLabel(id) })),
       target: () => this.hud?.chatTargetNow() ?? { scope: "all" },
       setTarget: (target) => this.hud?.setChatTarget(target),
-      hasObservers: () => false, // the lobby seats players only
+      // …and whether there is anybody watching: in a single-player match that is this machine
+      // itself, when it got up from its seat to watch (see `observer`).
+      hasObservers: () => this.observer,
     });
   }
 
@@ -6905,10 +6944,13 @@ export class MapViewerScene {
   /** The world the chat model routes against (src/game/chat.ts). */
   private chatWorld(): ChatWorld {
     return {
-      players: () => [...this.meleeTeams.keys()],
+      // Every seat, plus our own if we are watching from outside them — an observer is in no
+      // team list, and a line addressed to "Everyone" that did not reach the person who typed
+      // it would look like it had gone nowhere.
+      players: () => (this.observer ? [...this.meleeTeams.keys(), this.localPlayer] : [...this.meleeTeams.keys()]),
       coAllied: (a, b) => this.rts?.playersAreCoAllied(a, b) ?? a === b,
-      // No observer slots yet — the lobby seats players only, so nobody is watching.
-      isObserver: () => false,
+      // The one observer a single-player match can have is this machine (see `observer`).
+      isObserver: (p) => this.observer && p === this.localPlayer,
     };
   }
 

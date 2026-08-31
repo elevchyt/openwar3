@@ -67,6 +67,24 @@ export interface SlotConfig {
  *   • revealall  — no fog of war at all; the entire map + every unit stays visible */
 export type FogMode = "explored" | "unexplored" | "revealall";
 
+/**
+ * The seat an OBSERVER sits in — one past the last slot there is.
+ *
+ * common.j's `bj_MAX_PLAYER_SLOTS` is 16: slots 0-11 are the players and 12-15 the four fixed
+ * neutrals (data/enums.ts). Every one of those owns something a match can hand it, so an
+ * observer is given a number OUTSIDE them, and that is the point rather than a spare index —
+ * it makes the answer to every "is this player mine / my ally / my enemy" fall out of the
+ * checks already written: the alliance matrix is 16 x 16 and grants a number off its edge
+ * nothing, and the sim's own `owner >= 0 && owner < MAX_PLAYERS` tests already exclude it.
+ * Nobody's unit, nobody's ally, nobody's enemy — which is what a watcher is.
+ */
+export const OBSERVER_PLAYER = 16;
+
+/** What the match calls a watcher — `UI\FrameDef\GlobalStrings.fdf`'s own `OBSERVER`
+ *  ("Observer"). Here rather than in the FDF overrides layer for the reason the Computer+
+ *  labels are in ui/playerSlots.ts: it is asked for mid-match, with no FDF library in scope. */
+export const OBSERVER_NAME = "Observer";
+
 export interface MeleeConfig {
   slots: SlotConfig[];
   fog: FogMode; // fog-of-war start mode; default "explored"
@@ -103,6 +121,19 @@ export interface MeleeConfig {
    * from the slot holding its own peer id instead. See docs/multiplayer.md.
    */
   localPlayer?: number;
+  /**
+   * THIS MACHINE is only WATCHING: it holds no seat in the match at all.
+   *
+   * The Custom Game screen's "Observer Mode" switch (ui/fdfSkirmish.ts) sets it — the local
+   * player gets up from their slot, which becomes an ordinary Open one anybody may re-seat as
+   * a computer, and the match plays itself out while you watch. So there is no `user` slot in
+   * `slots` and `localPlayer` is `OBSERVER_PLAYER`, a seat nothing in the match is played from.
+   *
+   * What the match does with it is in render/mapViewer.ts: the whole map is revealed to this
+   * machine and to nobody else, and every rule that reads "is this mine" answers no, because
+   * an observer owns nothing.
+   */
+  observer?: boolean;
   /**
    * The CAMPAIGN difficulty the player chose on the campaign screen, as the common.j
    * `gamedifficulty` index (MAP_DIFFICULTY_EASY 0 / NORMAL 1 / HARD 2 / INSANE 3). Omitted

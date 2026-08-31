@@ -65,6 +65,41 @@ export type MinimapTone = "self" | "ally" | "enemy" | null;
  *  own order, `PLAYER_COLORS` in ui/hud.ts and `TeamColor00/01/02.blp` in the archives). */
 export const ALLY_FILTER_COLOR = { self: 1, ally: 2, enemy: 0 } as const;
 
+/** How many player colours the palette holds — `TeamColor00`-`TeamColor11.blp` in the
+ *  archives, which is `PLAYER_COLORS` in ui/hud.ts and one per playable slot
+ *  (`bj_MAX_PLAYERS` = 12). Stated here rather than imported: this module knows the FILTER,
+ *  and a filter that paints in slots has to know how many there are. */
+export const PLAYER_COLOR_SLOTS = 12;
+
+/**
+ * The colour slot each PLAYER takes while the person at this machine is only WATCHING
+ * (`MeleeConfig.observer`), keyed by player.
+ *
+ * A watcher is on nobody's side, so the filter's own vocabulary — you, your allies, your
+ * enemies — has nothing to answer with: asked of an observer's (empty) alliances every player
+ * comes back an enemy, and the whole field goes red, which is the one thing the mode exists to
+ * prevent. What is left to tell apart is the TEAMS, so each one takes a colour of its own:
+ * team 1 BLUE and team 2 RED — the very two slots `ALLY_FILTER_COLOR` already means by "you"
+ * and "the enemy", so a watched game reads exactly like a played one — and every team after
+ * them the next slot in the palette's own order.
+ *
+ * Teams are ranked by their lobby index, so the ladder is stable across a rebuild and across
+ * the two surfaces (the minimap dot and the unit in the world must agree).
+ */
+export function observerTeamColors(
+  seats: ReadonlyArray<{ player: number; team: number }>,
+): Map<number, number> {
+  const teams = [...new Set(seats.map((s) => s.team))].sort((a, b) => a - b);
+  const first: number[] = [ALLY_FILTER_COLOR.self, ALLY_FILTER_COLOR.enemy];
+  const ladder = [
+    ...first,
+    ...Array.from({ length: PLAYER_COLOR_SLOTS }, (_, i) => i).filter((i) => !first.includes(i)),
+  ];
+  const out = new Map<number, number>();
+  for (const s of seats) out.set(s.player, ladder[teams.indexOf(s.team) % ladder.length]);
+  return out;
+}
+
 /** Alt-A / a click: the next mode round the ring of three. */
 export function nextAllyColorMode(mode: AllyColorMode): AllyColorMode {
   return (((mode + 1) % ALLY_COLOR_MODES) as AllyColorMode);

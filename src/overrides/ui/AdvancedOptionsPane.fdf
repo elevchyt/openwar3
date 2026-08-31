@@ -1,14 +1,38 @@
 // OpenWar3 override — `UI\FrameDef\Glue\AdvancedOptionsPane.fdf`.
 //
-// Adds the "Computer+ (Improved AI)" switch of issue #124 to the bottom of the Advanced
-// Options pane. It goes at the bottom because that is where the issue asks for it, and because
-// the pane's own layout chains every row off the one above it: the label follows
-// MapVisibilityLabel and the checkbox follows MapVisibilityMenu, so the new row inherits the
-// column positions of the eight rows already there without restating a single coordinate.
+// Two rows of this pane are OpenWar3's own:
 //
-// The two frames are declared at top level (rather than inside an `AdvancedOptionsPane` block)
+//  · "Observer Mode" REPLACES the game's "Observers:" dropdown, in the same place on the pane.
+//    That dropdown offers four ways for OTHER PEOPLE to watch a hosted game (Full Observers,
+//    Observers on Defeat, Referees, No Observers), and a single-player Custom Game has nobody
+//    to invite — so the row stood permanently greyed at "No Observers". What it becomes is the
+//    one form of observing this screen CAN offer: you leave your own seat, and watch the
+//    computers play it out. See src/ui/fdfSkirmish.ts for what the switch does to the lobby.
+//  · "Computer+ (Improved AI)" (issue #124) goes at the BOTTOM, because that is where the
+//    issue asks for it.
+//
+// Both anchor to the row ABOVE them in the game's own file, so they inherit the column
+// positions of the eight rows already there without restating a single coordinate: the
+// Observer Mode row takes the Observers row's own anchors (RandomHero*), and Computer+ takes
+// the last row's (MapVisibility*). The frames the Observers row leaves behind were the anchor
+// of the row UNDER it, which is what the manifest's `repoint` is for — see src/overrides/index.ts.
+//
+// The frames are declared at top level (rather than inside an `AdvancedOptionsPane` block)
 // because that is what the layering mechanism wants: they are registered as templates and then
-// adopted into the pane by name — see src/overrides/index.ts.
+// adopted into the pane by name — again, src/overrides/index.ts.
+
+Frame "TEXT" "ObserverModeLabel" INHERITS "StandardLabelTextTemplate" {
+    Height 0.024,
+    SetPoint TOPLEFT, "RandomHeroLabel", BOTTOMLEFT, 0.0, -0.008,
+    Text "COLON_OBSERVER_MODE",
+}
+
+// A CHECKBOX row, not the dropdown's own 0.032-tall popup — so it takes the plain checkbox
+// anchors of the five rows above it (0.0, not the popup's 0.005 inset), and the pane ends up
+// one popup-vs-checkbox shorter. The visibility row below re-anchors onto this one.
+Frame "GLUECHECKBOX" "ObserverModeCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
+    SetPoint TOPRIGHT, "RandomHeroCheckBox", BOTTOMRIGHT, 0.0, -0.008,
+}
 
 Frame "TEXT" "ComputerPlusLabel" INHERITS "StandardLabelTextTemplate" {
     Height 0.024,

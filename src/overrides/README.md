@@ -5,14 +5,15 @@ never write it, and nothing in this repository is a copy of it (see the legal bo
 [`CLAUDE.md`](../../CLAUDE.md) — OpenWar3 ships zero Blizzard assets).
 
 So when OpenWar3 needs a control the 2003 UI has no frame for — the Computer+ checkbox of
-issue #124 — the change is expressed **here**, as a small file in the game's own FrameDef
+issue #124, the Observer Mode switch that replaces a dropdown a single-player screen can do
+nothing with — the change is expressed **here**, as a small file in the game's own FrameDef
 language that is layered onto the screen at mount time:
 
 | file | what it does |
 | --- | --- |
 | [`ui/GlobalStrings.fdf`](ui/GlobalStrings.fdf) | strings the game has no key for |
 | [`ui/OptionsMenu.fdf`](ui/OptionsMenu.fdf) | Options → Gameplay: drops two rows, adds one |
-| [`ui/AdvancedOptionsPane.fdf`](ui/AdvancedOptionsPane.fdf) | Custom Game → Advanced Options: adds one row |
+| [`ui/AdvancedOptionsPane.fdf`](ui/AdvancedOptionsPane.fdf) | Custom Game → Advanced Options: adds a row, and replaces the Observers one |
 
 ## How a layer is applied
 
@@ -20,9 +21,17 @@ language that is layered onto the screen at mount time:
 
 * **`layer`** parses the override's FDF and registers its frames and strings in the screen's
   `FdfLibrary`, *winning* over the install's where a name collides. It runs once, at mount.
-* **`applyOverride`** edits the resolved frame tree of one build: it DROPS the frames the
-  override retires and ADOPTS the ones it adds into a named container. It runs on every build,
-  because an FDF screen rebuilds its whole tree on resize.
+* **`applyOverride`** edits the resolved frame tree of one build: it REPOINTS the anchors of
+  a row that is being replaced, DROPS the frames the override retires and ADOPTS the ones it
+  adds into a named container. It runs on every build, because an FDF screen rebuilds its
+  whole tree on resize.
+
+`repoint` is the one of the three that is not obvious, and it is what replacing a row in the
+MIDDLE of a panel needs: an FDF panel is a chain, each row anchored by name to the row above
+it, so a retired row takes the rest of the panel with it (an anchor to a frame that is not
+there reads as "anchored to my parent"). An entry hands the retired frame's anchors to its
+replacement, with a `dx`/`dy` for what the swap changes about the anchor's box — a POPUPMENU's
+right edge does not sit where a checkbox's does.
 
 Both are wired into `mountFdfScreen` through its `overrides` option, so a screen opts in with
 one line and everything else about it is unchanged.

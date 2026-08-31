@@ -1,9 +1,10 @@
 // OpenWar3 override — strings the game has no key for.
 //
 // Layered onto `UI\FrameDef\GlobalStrings.fdf` (src/overrides/index.ts), which is where every
-// other label on these two screens comes from. Blizzard never shipped a second melee AI, so
-// there is no COMPUTERPLUS_* to reuse and no localisation to inherit: these keys are ours, and
-// they follow the file's own naming so they read as part of the same table.
+// other label on these two screens comes from. Blizzard never shipped a second melee AI, and
+// its own observing is something other PEOPLE do to a hosted game, so there is no COMPUTERPLUS_*
+// to reuse and nothing that says "sit this one out and watch": these keys are ours, and they
+// follow the file's own naming so they read as part of the same table.
 //
 // The three "Computer+ (…)" labels a SLOT MENU shows are deliberately NOT here — they are in
 // src/ui/playerSlots.ts beside the classic ones they mirror, because the owner line of a hover
@@ -14,6 +15,12 @@ StringList {
     // ("Lock Teams:") and COLON_ADV_SHARED_CONTROL ("Full Shared Unit Control:"), and is no
     // longer than the latter.
     COLON_COMPUTER_PLUS         "Computer+ (Improved AI):",
+
+    // ...and the row the game's own COLON_OBSERVERS ("Observers:") had. That one offered four
+    // ways for other people to watch a HOSTED game and could never be anything but "No
+    // Observers" on this screen; this one is about the person sitting at this machine, so it
+    // is a mode rather than a guest list.
+    COLON_OBSERVER_MODE         "Observer Mode:",
 
     // Options → Gameplay, directly under AUTOSAVE_REPLAY ("Automatically Save Replays").
     COMPUTER_PLUS_DEFAULT       "Use Computer+ as default AI",
