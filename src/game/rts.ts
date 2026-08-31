@@ -6954,8 +6954,13 @@ export class RtsController {
   }
 
   /** Feedback for a rally point: a tree/mine rally flashes the same yellow ring
-   *  (and, for a tree, the yellow colorize pulse) as sending a worker to gather
-   *  it; a plain point/unit rally shows the green move arrow. */
+   *  (and, for a tree, the yellow colorize pulse) as sending a worker to gather it.
+   *
+   *  A plain point/unit rally shows NOTHING here — no green confirmation arrow. Setting a
+   *  rally point is not a move order: nobody walks anywhere when you place it, and what
+   *  marks the spot is the race's own rally FLAG (`RallyIndicatorDst`, mapViewer) planted
+   *  there for as long as the building is selected, plus the `RallyPointPlace` UI sound.
+   *  Confirmation.mdx is the feedback for an order a unit is obeying right now. */
   private rallyFeedback(r: { x: number; y: number; kind: RallyKind; targetId: number }): void {
     if (r.kind === "tree") {
       this.flashTarget(r.x, r.y, 76);
@@ -6963,8 +6968,6 @@ export class RtsController {
     } else if (r.kind === "mine") {
       const mine = this.sim.mines.get(r.targetId);
       this.flashTarget(r.x, r.y, mine ? mine.radius * MINE_RING_SCALE : 76);
-    } else {
-      this.queueArrow(r.x, r.y, MOVE_ARROW);
     }
   }
 
