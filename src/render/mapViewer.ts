@@ -1259,6 +1259,8 @@ export class MapViewerScene {
   private projectileModels = new Map<string, SpawnModel | null>();
   private projectileInsts = new Map<number, SpawnInstance>();
   private projectileLoading = new Set<number>();
+  // Missiles currently hidden because their point is fogged (see setProjectileShown).
+  private projectileHidden = new Set<number>();
   // Blood Mage orbiting spheres (issue #37): one rig per live Blood Mage, keyed by
   // sim id. Spawned on demand; balls ride the hero model's sprite attachment nodes.
   private bloodMageSpheres = new Map<number, SphereRig>();
@@ -4150,6 +4152,13 @@ export class MapViewerScene {
       this.scriptCam.setNoise(false, quake ? EQ_MAGNITUDE : 0, quake ? EQ_VELOCITY : 0, true);
     }
     for (const f of fields) {
+      // …and a field you cannot see does not howl. A Blizzard or a Death and Decay running on
+      // unscouted ground is a running report of where the enemy's caster is standing, held for
+      // the whole channel — the loudest of the fog leaks, because unlike a one-shot it does not
+      // stop. The bed drops the moment the field leaves sight and is picked back up if it
+      // returns, which the reconcile below already does for free (a fogged field simply stops
+      // being `live`).
+      if (!this.pointVisible(f.x, f.y)) continue;
       const wav = this.sounds?.abilityLoopPath(f.loopSound) ?? "";
       if (!wav) continue;
       const key = `${f.code}|${Math.round(f.x)}|${Math.round(f.y)}`;
@@ -5724,6 +5733,9 @@ export class MapViewerScene {
    */
   private playDestructibleDeathSound(d: MapDestructible): void {
     if (!this.sounds) return;
+    // …and not through the fog, for the reason the flinch above is not drawn through it: a
+    // gate crashing open on ground nobody is watching is a report that somebody is through it.
+    if (!this.pointVisible(d.x, d.y)) return;
     const at = { x: d.x, y: d.y, z: d.z };
     if (d.deathSound) this.sounds.playAnimSound(d.deathSound, at);
     else this.sounds.playModelDeath(d.model, at);
@@ -6112,7 +6124,12 @@ export class MapViewerScene {
     if (!world || !map) return;
     for (const p of world.drainSpawnedProjectiles()) {
       if (!p.art) continue; // no missile model (still deals delayed damage)
-      this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z }); // fire/whoosh/gunshot as it launches
+      // The launch NOISE is the shot being fired, and it happens where the shooter stands:
+      // an arrow loosed out of unscouted fog must be as silent as the bow that loosed it
+      // (rts.playImpacts gates the shooter's own gunshot by the same test). The MODEL is
+      // still created — a missile is the one effect that travels, so it is hidden and shown
+      // per frame as it crosses the fog line rather than being dropped at birth.
+      if (this.pointVisible(p.x, p.y)) this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z }); // fire/whoosh/gunshot as it launches
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
@@ -6139,6 +6156,12 @@ export class MapViewerScene {
         continue;
       }
       const t = world.units.get(p.targetId);
+      // A missile in flight is judged where it IS this frame, not where it was fired: it
+      // vanishes as it crosses into the fog and appears as it comes out, which is what makes
+      // an arrow arriving from unscouted ground read as arriving rather than as having been
+      // watched the whole way. (Same show/hide rule as a script's special effects —
+      // specialFxVisible — applied to the one effect that moves under its own power.)
+      this.setProjectileShown(id, inst, this.pointVisible(p.x, p.y));
       this.loc3[0] = p.x;
       this.loc3[1] = p.y;
       this.loc3[2] = this.rts!.groundHeightAt(p.x, p.y) + p.z; // per-projectile launch→impact height
@@ -6154,8 +6177,22 @@ export class MapViewerScene {
     }
   }
 
+  /** Hide/show a missile as it crosses the fog line, tracking which ones are currently
+   *  hidden so `hide()`/`show()` are called on the edge rather than every frame. */
+  private setProjectileShown(id: number, inst: SpawnInstance, shown: boolean): void {
+    if (shown === !this.projectileHidden.has(id)) return;
+    if (shown) {
+      this.projectileHidden.delete(id);
+      inst.show();
+    } else {
+      this.projectileHidden.add(id);
+      inst.hide();
+    }
+  }
+
   private detachProjectile(id: number): void {
     this.projectileLoading.delete(id);
+    this.projectileHidden.delete(id);
     const inst = this.projectileInsts.get(id);
     if (inst) {
       inst.detach();
@@ -6168,14 +6205,19 @@ export class MapViewerScene {
    *  one-shot effect list). Missiles without a Death clip just detach. */
   private impactProjectile(id: number, x: number, y: number, z: number): void {
     this.projectileLoading.delete(id);
+    const wasHidden = this.projectileHidden.delete(id);
     const inst = this.projectileInsts.get(id);
     if (!inst) return;
     this.projectileInsts.delete(id);
-    const death = inst.model.sequences.findIndex((s) => /death/i.test(s.name));
+    // A burst on ground nobody can see is somebody else's fight — drawn, and heard, for us.
+    // The impact's own noise rings out through rts.playImpacts, which asks the same question
+    // of the blow that landed; this is its visual half.
+    const death = this.pointVisible(x, y) ? inst.model.sequences.findIndex((s) => /death/i.test(s.name)) : -1;
     if (death < 0) {
       inst.detach();
       return;
     }
+    if (wasHidden) inst.show(); // it crossed into sight on the last step of its flight
     this.loc3[0] = x;
     this.loc3[1] = y;
     this.loc3[2] = this.rts!.groundHeightAt(x, y) + z; // impact at the weapon's impactz height
@@ -6201,6 +6243,10 @@ export class MapViewerScene {
     inst.setSequence(this.missileSequence(inst)); // the flight loop, NOT index 0 (see missileSequence)
     inst.setSequenceLoopMode(2);
     this.projectileInsts.set(id, inst);
+    // Seat its fog state on arrival rather than waiting for the next frame's sweep: a missile
+    // that streamed in while flying through the fog would otherwise flash once before it hides.
+    const p = this.rts?.simWorld.projectiles.get(id);
+    if (p) this.setProjectileShown(id, inst, this.pointVisible(p.x, p.y));
   }
 
   /** Capture browser/OS shortcuts (Ctrl+number tab-switch, etc.) so game hotkeys
@@ -9635,7 +9681,11 @@ export class MapViewerScene {
     // every real hit.
     for (const p of this.rts?.drainSnapshotProjSpawns() ?? []) {
       if (!p.art) continue;
-      this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z });
+      // …and the same eyes-on-the-spot gate the sim path puts on the launch noise. The host's
+      // AoI filter has already dropped the missiles this client has no business hearing, so
+      // this is belt and braces — but a client's own grid is the one that must answer here,
+      // exactly as it does for the flight itself (updateProjectiles).
+      if (this.pointVisible(p.x, p.y)) this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z });
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
@@ -9725,7 +9775,10 @@ export class MapViewerScene {
       // Ward, `[Aeye]` Sentry Ward, `[Ahwd]` Healing Ward, `[Asta]` Stasis Trap) carries no
       // art field at all, and the SND event sits on the arriving unit's Birth clip. Without
       // this a Shadow Hunter planted his ward in total silence.
-      else this.sounds?.playModelSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
+      // …but not through the fog: a ward planted on ground nobody is watching announces
+      // itself to nobody. (The `summonArt` branch above goes out through the sim's effect
+      // queue, which RtsController.drainFxEffects already gates by the same test.)
+      else if (this.pointVisible(sx, sy)) this.sounds?.playModelSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
       void this.spawnUnit(d, sx, sy, s.owner, s.team).then((simId) => {
         if (simId === null) return;
         const su = world.units.get(simId);
@@ -10224,15 +10277,18 @@ export class MapViewerScene {
         this.updateFieldLoops(world.activeSpellFields());
         // Cast animations (throw/slam/spell) begin at the wind-up.
         for (const c of this.rts!.drainFxCastStarts()) {
-          this.rts!.playCastAnim(c.casterId, c.code, c.hold, c.loop);
+          // The two ends of a cast are tested separately (see drainFxCastStarts): the gesture
+          // and the sphere belong to the caster, the warn art to the ground it is aimed at.
+          const caster = world.units.get(c.casterId);
+          const casterSeen = !caster || this.pointVisible(caster.x, caster.y);
+          if (casterSeen) this.rts!.playCastAnim(c.casterId, c.code, c.hold, c.loop);
           // A delayed-strike spell drops its "beware" art as the wind-up STARTS, and the
           // sound rides that model: FlameStrikeTarget.mdx fires its SND…AHFT event at frame
           // 0 of its birth clip, so Flame Strike's rising howl begins with the cast point's
           // timer — not 1.33s later at ignition (which sounds the pillar's own AHFS event).
-          if (c.warnArt) this.sounds?.playModelSound(c.warnArt, { x: c.tx, y: c.ty, z: this.rts!.groundHeightAt(c.tx, c.ty) });
-          const caster = world.units.get(c.casterId);
+          if (c.warnArt && this.pointVisible(c.tx, c.ty)) this.sounds?.playModelSound(c.warnArt, { x: c.tx, y: c.ty, z: this.rts!.groundHeightAt(c.tx, c.ty) });
           // Blood Mage: hurl one orbiting sphere at Flame Strike / Banish targets (issue #37).
-          if (MapViewerScene.SPHERE_THROW_CODES.has(c.code) && caster && this.hasSpheres(caster.typeId))
+          if (casterSeen && MapViewerScene.SPHERE_THROW_CODES.has(c.code) && caster && this.hasSpheres(caster.typeId))
             this.throwSphere(c.casterId, c.tx, c.ty, c.targetId);
         }
         // ...but the cast/effect SOUND fires with the effect at the cast point (issue #23):
@@ -10317,6 +10373,9 @@ export class MapViewerScene {
         for (const p of world.drainPowerupPickups()) {
           const u = world.units.get(p.unitId);
           if (!u) continue;
+          // An enemy hero drinking a tome in the fog neither glows nor chimes: the pickup is
+          // an event at a place, and the place is one we have no eyes on.
+          if (!this.pointVisible(u.x, u.y)) continue;
           const at = { x: u.x, y: u.y, z: this.rts!.groundHeightAt(u.x, u.y) };
           // The tome effects are a single 900ms Birth clip with no Death, so they are
           // reaped on a timer rather than by a clip ending.
@@ -10674,6 +10733,7 @@ export class MapViewerScene {
     for (const inst of this.projectileInsts.values()) inst.detach();
     this.projectileInsts.clear();
     this.projectileLoading.clear();
+    this.projectileHidden.clear();
     this.projectileModels.clear();
     for (const rig of this.bloodMageSpheres.values()) this.destroySphereRig(rig);
     this.bloodMageSpheres.clear();

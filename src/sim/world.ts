@@ -2581,8 +2581,14 @@ export class SimWorld {
    *  THAT LANDED IT, not just the attacker's id: the clang belongs to the blow rather than to
    *  the unit. A hero whose air slot an orb woke, a Flying Machine that has researched Bombs
    *  and a map's `ucs2` all swing something the def's primary-slot summary does not describe,
-   *  and a shot still in flight when its shooter dies has no def left to ask at all. */
-  private hits: Array<{ attackerId: number; targetId: number; weaponSound: string }> = [];
+   *  and a shot still in flight when its shooter dies has no def left to ask at all.
+   *
+   *  It also carries WHERE it landed, stamped at the blow. The renderer needs that twice
+   *  over — to place the clang in 3D, and to ask the fog whether the player is entitled to
+   *  hear it at all — and neither question can be answered from the target's id once the
+   *  blow was the killing one: by the time the drain runs, a reaped unit has no position
+   *  left. That is the case the fog test must get right, so the point travels with the hit. */
+  private hits: Array<{ attackerId: number; targetId: number; weaponSound: string; x: number; y: number }> = [];
   // Worker ids whose axe just landed a chop this tick — the renderer plays the
   // chop SFX (worker's lumber-weapon material vs Wood).
   private chops: number[] = [];
@@ -3599,7 +3605,7 @@ export class SimWorld {
   /** Weapon hits (melee + projectile) landed since the last drain. Each names the weapon
    *  that landed it, which the renderer pairs with the struck unit's material to get the
    *  combat-impact sound — see `hits`. */
-  drainHits(): Array<{ attackerId: number; targetId: number; weaponSound: string }> {
+  drainHits(): Array<{ attackerId: number; targetId: number; weaponSound: string; x: number; y: number }> {
     if (!this.hits.length) return this.hits;
     const out = this.hits;
     this.hits = [];
@@ -14807,7 +14813,7 @@ export class SimWorld {
     const attacker = attackerId ? this.units.get(attackerId) : undefined;
     if (attacker?.isIllusion && attacker.illusionDamageDealt <= 0) {
       if (!target.invulnerable) {
-        this.hits.push({ attackerId, targetId: target.id, weaponSound });
+        this.hits.push({ attackerId, targetId: target.id, weaponSound, x: target.x, y: target.y });
         // …and the blow must be ANSWERED as well, which is the other half of "the hit still
         // lands". Dealing no damage is not the same as not attacking: the victim cannot tell
         // the copy from the original (docs/illusions.md), so it turns on it, and a creep camp
@@ -15151,7 +15157,7 @@ export class SimWorld {
     // Mana Shield (Naga): absorb incoming damage into mana at `value` mana per hp.
     amount = this.absorbWithManaShield(target, amount);
     if (amount <= 0) return 0;
-    if (recordHit) this.hits.push({ attackerId, targetId: target.id, weaponSound });
+    if (recordHit) this.hits.push({ attackerId, targetId: target.id, weaponSound, x: target.x, y: target.y });
     this.noteAttacked(target, attackerId); // "The battle has been joined." / "Our town is under siege!"
     this.revealFoggedAttacker(attackerId, target);
     // EVENT_UNIT_DAMAGED: the amount that actually landed (after mana shield), with

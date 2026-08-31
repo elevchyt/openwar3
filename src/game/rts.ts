@@ -1583,12 +1583,20 @@ export class RtsController {
     for (const attackerId of this.sim.drainAttackSwings()) {
       const def = this.defOf(attackerId);
       const au = this.sim.units.get(attackerId);
-      if (def?.model && au) this.sounds.playModelAttack(def.model, { x: au.x, y: au.y, z: this.heightAt(au.x, au.y) });
+      // YOU DO NOT HEAR A RIFLE YOU CANNOT SEE — the same rule as the axe below, applied to
+      // the shooter rather than to the worker. A gunshot, a mortar's boom or a dragon's
+      // breath fired from unscouted fog is a bearing on the enemy's army for anyone wearing
+      // headphones, which is precisely what the fog exists to withhold.
+      if (!au || this.local.fogBlocksAt(au)) continue;
+      if (def?.model) this.sounds.playModelAttack(def.model, { x: au.x, y: au.y, z: this.heightAt(au.x, au.y) });
     }
     for (const h of this.sim.drainHits()) {
+      // …and the clang is placed and gated by WHERE THE BLOW LANDED, which the hit carries
+      // itself (SimWorld.hits): the struck unit may already have been reaped by the time this
+      // drain runs, and a killing blow struck in the fog is the one that must not be heard.
+      if (this.local.fogBlocksAt(h)) continue;
       const tgt = this.defOf(h.targetId);
-      const tu = this.sim.units.get(h.targetId); // impact rings out at the struck unit
-      const at = tu ? { x: tu.x, y: tu.y, z: this.heightAt(tu.x, tu.y) } : undefined;
+      const at = { x: h.x, y: h.y, z: this.heightAt(h.x, h.y) }; // impact rings out at the struck unit
       // The clang is the WEAPON THAT LANDED THE BLOW against the target's MATERIAL — taken
       // from the hit, not from the attacker's def, so nothing here has to know which of a
       // unit's two slots was swinging (an orb-woken air attack, a Flying Machine's bombs).
@@ -3657,12 +3665,16 @@ export class RtsController {
       e.ghosted = true; // stands frozen, dimmed by `drawnFromMemory`, until the ghost is forgotten
       return;
     }
-    // Death cry (all units, friend or foe — you hear the battlefield). Buildings
-    // have no Death sound-set → resolves to nothing.
+    // Death cry (friend or foe — you hear the battlefield, as long as you can SEE it).
+    // Buildings have no Death sound-set → resolves to nothing.
     const def = this.registry.get(e.typeId);
-    // Death cry rings out from where the unit fell (its model's last location).
+    // Death cry rings out from where the unit fell (its model's last location)…
     const loc = e.unit.instance.localLocation;
-    if (def?.soundSet) this.sounds?.play(def.soundSet, "Death", { x: loc[0], y: loc[1], z: loc[2] });
+    // …and only if the player has eyes on that spot. A scream out of unscouted fog is a
+    // report that a fight is happening and roughly where — the same intelligence the axe
+    // and the gunshot are withheld for (playImpacts). Your OWN dying units are never
+    // silenced by this: a viewpoint always has live sight of what it owns.
+    if (def?.soundSet && !this.local.fogBlocksAt({ x: loc[0], y: loc[1] })) this.sounds?.play(def.soundSet, "Death", { x: loc[0], y: loc[1], z: loc[2] });
     this.byId.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
     this.deselect(simId);
@@ -5929,48 +5941,92 @@ export class RtsController {
   private fxCastFires: Array<{ casterId: number; code: string; abilityId: string }> = [];
   private fxCombatTexts: CombatText[] = [];
   private wireFx: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };
+  /**
+   * **Nothing that HAPPENS in the fog may be shown or heard.** The eyes-on-the-spot test every
+   * presentation drain below runs before it hands the renderer an event.
+   *
+   * This is the LOCAL half of a rule the wire has enforced since it existed: `MatchLink.tickHost`
+   * filters these queues per recipient (`viewer.fogBlocksAt`), so a remote client has never been
+   * sent an opponent's spell burst out of unscouted ground. The machine holding the authority —
+   * a single-player match, or the host's own seat — read the same queues straight out of the sim
+   * and was shown everything: every Storm Bolt, every Blizzard, every crit number in the whole
+   * match, wherever it happened. The two now ask the same question, so the host and its clients
+   * see one match.
+   *
+   * Two of the queues are deliberately NOT filtered here and say why at their own drain: a
+   * lightning bolt is judged per frame at both of its ends, and a lightning STOP is a tag
+   * rather than a place.
+   *
+   * An event with NO position to test (a cast whose caster died in the same tick) is let
+   * through: absence of a point is not evidence the point was hidden, and the renderer already
+   * plays such a cast non-positionally.
+   */
+  private fxShown(p: { x: number; y: number } | undefined): boolean {
+    return !p || !this.local.fogBlocksAt(p);
+  }
+  /** Where a spell effect actually IS: riding its target unit if it was given one (the effect
+   *  follows the unit, and so must the fog test), else the point the sim stamped. */
+  private fxEffectAt(e: { x: number; y: number; targetId: number }): { x: number; y: number } {
+    return (e.targetId ? this.sim.units.get(e.targetId) : undefined) ?? e;
+  }
   drainFxEffects(): typeof this.fxEffects {
     if (this.fxEffects.length > 400) this.fxEffects.splice(0, this.fxEffects.length - 400);
     if (!this.fxEffects.length) return this.fxEffects;
-    const out = this.fxEffects;
+    const out = this.fxEffects.filter((e) => this.fxShown(this.fxEffectAt(e)));
     this.fxEffects = [];
     return out;
   }
   drainFxSplats(): typeof this.fxSplats {
     if (!this.fxSplats.length) return this.fxSplats;
-    const out = this.fxSplats;
+    const out = this.fxSplats.filter((s) => this.fxShown(s));
     this.fxSplats = [];
     return out;
   }
   drainFxLightnings(): SimLightning[] {
     if (this.fxLightnings.length > 400) this.fxLightnings.splice(0, this.fxLightnings.length - 400);
     if (!this.fxLightnings.length) return this.fxLightnings;
+    // NOT fogged HERE — a bolt is the one presentation event that lives for seconds and moves
+    // with both of its ends, so it is judged every frame instead of once at birth, and the
+    // renderer already does it (mapViewer.renderLightning: seen if EITHER end is, because a
+    // bolt reaching out of the fog into your army is a bolt you watch land). Dropping it at
+    // this door would silently overrule that rule with a worse one.
     const out = this.fxLightnings;
     this.fxLightnings = [];
     return out;
   }
   drainFxLightningStops(): string[] {
     if (!this.fxLightningStops.length) return this.fxLightningStops;
+    // NOT fogged — a stop is a tag, not a place, and one that never arrives leaves a bolt
+    // strung across the world for the rest of the match. (The wire passes them whole too.)
     const out = this.fxLightningStops;
     this.fxLightningStops = [];
     return out;
   }
+  /**
+   * A cast start is the one event here with TWO places in it, and they are not the same place:
+   * the wind-up gesture happens at the CASTER, while a delayed-strike spell's "beware" art is
+   * dropped on the GROUND IT IS AIMED AT, which may be your own army. So the event survives if
+   * either end is visible, and the renderer then tests each half against its own end — the
+   * gesture and the thrown sphere against the caster, the warn art against the strike point.
+   * A hero shelling your line from unscouted ground is exactly the case: you never see him
+   * wind up, and the circle still lands under your feet where you can read it.
+   */
   drainFxCastStarts(): typeof this.fxCastStarts {
     if (!this.fxCastStarts.length) return this.fxCastStarts;
-    const out = this.fxCastStarts;
+    const out = this.fxCastStarts.filter((c) => this.fxShown(this.sim.units.get(c.casterId)) || (!!c.warnArt && this.fxShown({ x: c.tx, y: c.ty })));
     this.fxCastStarts = [];
     return out;
   }
   drainFxCastFires(): typeof this.fxCastFires {
     if (!this.fxCastFires.length) return this.fxCastFires;
-    const out = this.fxCastFires;
+    const out = this.fxCastFires.filter((c) => this.fxShown(this.sim.units.get(c.casterId)));
     this.fxCastFires = [];
     return out;
   }
   drainFxCombatTexts(): CombatText[] {
     if (this.fxCombatTexts.length > 200) this.fxCombatTexts.splice(0, this.fxCombatTexts.length - 200);
     if (!this.fxCombatTexts.length) return this.fxCombatTexts;
-    const out = this.fxCombatTexts;
+    const out = this.fxCombatTexts.filter((t) => this.fxShown(t));
     this.fxCombatTexts = [];
     return out;
   }
