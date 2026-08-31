@@ -9,9 +9,13 @@
 // nothing asked. So this file asks.
 //
 // The rule (SimWorld.tickCreep): a creep with `canSleep` dozes off at night while it is IDLE at
-// its guard post with nothing hostile on top of it; dawn wakes it, and so does anything hostile
-// coming within SLEEP_WAKE_RANGE. Asleep it acquires nobody — which is what lets an army walk
-// past a camp in the dark.
+// its guard post and its camp is quiet. Asleep it acquires nobody — which is what lets an army
+// walk past a camp in the dark. What ends the nap is DAWN or COMBAT, and combat only:
+// proximity does not wake a creep (reported as "sleeping creeps wake up when a unit simply
+// walks near them" — we used to rouse one to any hostile within 200, which is well inside its
+// aggro range, so "woken" meant "charging"). Being struck wakes it (`provoke`), and so does a
+// camp-mate's fight — which is how the members of a camp that do NOT sleep (`cansleep=0`, the
+// Mud Golem) act as the eyes of the ones that do.
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
@@ -41,13 +45,11 @@ const WEAPON = () => ({
   launchX: 0, launchY: 0, launchZ: 0, impactZ: 0,
 });
 
-/** A world with one Neutral Hostile creep guarding where it stands. `canSleep` is the field. */
-function camp(canSleep) {
-  const grid = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [0, 0]);
-  const world = new SimWorld(grid, 1);
+/** One Neutral Hostile creep guarding where it stands. `canSleep` is the field. */
+function addCreep(world, id, x, y, canSleep) {
   const c = world.add(
     {
-      id: 1, owner: -1, team: -1, race: "", typeId: "ngno", x: 1500, y: 1500, facing: 0,
+      id, owner: -1, team: -1, race: "", typeId: "ngno", x, y, facing: 0,
       speed: 270, turnRate: 0.5, radius: 16, flying: false, flyHeight: 0,
       sightDay: 1400, sightNight: 800, hp: 500, maxHp: 500, mana: 0, maxMana: 0,
       armor: 0, armorType: "medium", weapons: [WEAPON()], oldWeapons: [WEAPON()],
@@ -64,7 +66,15 @@ function camp(canSleep) {
   c.guardY = c.y;
   c.guardFacing = c.facing;
   c.canSleep = canSleep;
-  return { world, creep: c };
+  c.aggroRange = c.weapon.acquire; // no per-placed targetAcquisition here, so the weapon's
+  return c;
+}
+
+/** A world with one such creep in it. */
+function camp(canSleep) {
+  const grid = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [0, 0]);
+  const world = new SimWorld(grid, 1);
+  return { world, creep: addCreep(world, 1, 1500, 1500, canSleep) };
 }
 
 /** A player unit `gap` units from the camp — the thing a sleeping creep may or may not notice. */
@@ -113,12 +123,11 @@ console.log("\ndawn wakes it");
   check("daylight ends the nap", creep.asleep, false);
 }
 
-console.log("\n…and so does somebody standing on it");
+console.log("\nwalking past does NOT");
 {
   const { world, creep } = camp(true);
   world.timeOfDay = NIGHT;
   run(world, 1);
-  // Far enough away to walk past in the dark: outside SLEEP_WAKE_RANGE (200).
   intruder(world, creep, 600);
   run(world, 1);
   check("an army can slip past the camp at a distance", creep.asleep, true);
@@ -128,9 +137,40 @@ console.log("\n…and so does somebody standing on it");
   const { world, creep } = camp(true);
   world.timeOfDay = NIGHT;
   run(world, 1);
-  intruder(world, creep, 120); // inside the wake range — right on top of it
+  intruder(world, creep, 120); // right on top of it — well inside its 500 aggro range
+  run(world, 2);
+  check("…and can walk right through it, so long as nobody swings", creep.asleep, true);
+  check("…still having acquired nobody", creep.targetId, null);
+}
+
+console.log("\na blow does");
+{
+  const { world, creep } = camp(true);
+  world.timeOfDay = NIGHT;
   run(world, 1);
-  check("walking into it wakes it", creep.asleep, false);
+  const foot = intruder(world, creep, 120);
+  world.issueAttack(foot.id, creep.id, false, true); // the player clicked Attack on the sleeper
+  run(world, 3);
+  check("being struck ends the nap", creep.asleep, false);
+  check("…and the woken creep fights back", creep.targetId, foot.id);
+}
+
+console.log("\n…and so does a camp-mate that never sleeps");
+{
+  // A mixed camp: a Golem (`cansleep=0`) beside a sleeper, guard posts inside
+  // CreepCallForHelp (600) of each other so they are camp-mates.
+  const { world, creep } = camp(true);
+  const golem = addCreep(world, 3, creep.x + 200, creep.y, false);
+  world.timeOfDay = NIGHT;
+  run(world, 1);
+  check("the sleeper naps beside the wakeful Golem", creep.asleep, true);
+  check("…and the Golem does not", golem.asleep, false);
+  // Inside the Golem's own 500 aggro range, and it is awake to use it.
+  intruder(world, golem, 300);
+  run(world, 2);
+  check("the Golem engages", golem.order, "attack");
+  check("…and its fight wakes the whole camp", creep.asleep, false);
+  check("…which joins it", creep.order, "attack");
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

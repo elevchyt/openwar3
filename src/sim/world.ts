@@ -2412,9 +2412,6 @@ const CREEP_HOME_EPS = 64; // within this of the guard point counts as "home" (r
 // finish→snap→return→finish, flickering the walk↔stand clip (the return "jiggle"). So a
 // guarding creep only heads home again once displaced comfortably past the snap noise.
 const CREEP_RETURN_TRIGGER = 128; // 4 cells — safely beyond CREEP_HOME_EPS + the settle snap
-// Not in any data file (engine-internal): a sleeping creep only wakes to a hostile
-// that strays very close — far enough that you can still scout past camps at night.
-const SLEEP_WAKE_RANGE = 200; // a sleeping creep wakes if a hostile comes within this
 // Shooting from the dark gives you away (issue #45). MiscData names no duration for
 // FoggedAttackRevealRadius, so the blow buys the attacker's position one second,
 // re-stamped by every following blow.
@@ -17800,17 +17797,35 @@ export class SimWorld {
    *  home) so the caller skips the normal order logic. */
   private tickCreep(u: SimUnit, dt: number): boolean {
     const atHome = Math.hypot(u.x - u.guardX, u.y - u.guardY) <= CREEP_HOME_EPS;
-    // --- sleep (night): doze off while guarding at the post, with no hostile
-    // right on top of us; dawn (or the checks below) wakes it. ---
+    // --- sleep (night): doze off while guarding at the post with the camp quiet;
+    // dawn (or a fight — see below) wakes it. ---
+    //
+    // Sleep is broken by COMBAT and by nothing else. PROXIMITY does not wake a creep:
+    // at night you can walk a whole army through a sleeping camp so long as nobody
+    // swings, which is the point of creeps sleeping at all (maintainer's observation
+    // against the real client — we used to wake a creep to any hostile within 200,
+    // and since that is well inside every creep's aggro range, "woken" meant "charging",
+    // so a camp aggroed on a unit merely walking past). What DOES wake one:
+    //   • dawn (here);
+    //   • being struck, or hit by any harmful spell (`provoke`);
+    //   • a camp-mate's call for help (`alertCamp`) — which is how a creep that does NOT
+    //     sleep (`cansleep=0`, the Mud Golem and friends) drags its sleeping camp into the
+    //     fight the moment it engages or is engaged;
+    //   • a foundation laid nearby (`notifyCreepsOfPlacement`) or a neutral shop used
+    //     under its nose (`notifyCreepsOfShopUse`).
     if (u.canSleep && !u.returning) {
       if (this.isDay) u.asleep = false;
-      else if (!u.asleep && u.order === "idle" && atHome && !this.nearestEnemy(u, SLEEP_WAKE_RANGE)) u.asleep = true;
+      else if (!u.asleep && u.order === "idle" && atHome && !this.campFightTarget(u)) u.asleep = true;
     } else if (!u.canSleep) {
       u.asleep = false;
     }
     if (u.asleep) {
-      // A hostile straying very close wakes it (else you can scout past at night).
-      if (this.nearestEnemy(u, SLEEP_WAKE_RANGE)) {
+      // A camp-mate in a fight wakes it. `alertCamp` already shouts at the moment a
+      // camp-mate engages, so this is the standing form of the same rule: it covers a
+      // sleeper that dozed off after the fight started (it had come home and gone idle),
+      // and it keeps the non-sleeping members of a mixed camp — who never stop scanning —
+      // acting as the camp's eyes all night.
+      if (this.campFightTarget(u)) {
         u.asleep = false;
         return false; // awake now — let it acquire this tick
       }
@@ -18045,6 +18060,11 @@ export class SimWorld {
    *  wakes every sleeping camp-mate and pulls idle ones onto the same target —
    *  "a creep camp acts as one unit; attack one and they all attack" (Battle.net
    *  creep basics). Leashing camp-mates are left alone.
+   *
+   *  This is the ONLY thing that rouses a camp at night besides a blow to one of its own
+   *  (tickCreep: proximity does not wake a creep), so it is what makes a camp-mate that
+   *  never sleeps — `cansleep=0`, the Mud Golem sitting among Gnolls — the camp's eyes:
+   *  it goes on scanning all night, and the instant it engages, the sleepers get up.
    *
    *  The call travels exactly ONE hop: everyone it rouses is flagged `campHelper`,
    *  and a helper never calls for help itself. Without that flag the shout relays —
