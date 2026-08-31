@@ -51,8 +51,16 @@ function grid() {
  *  up the way a real spawn would be. Big HP by default: these tests run for seconds and a
  *  corpse re-targets, which would mask the behaviour under test. */
 function addUnit(w, id, owner, x, y, over = {}) {
+  return w.add(addSpec(id, owner, x, y, over));
+}
+
+/** The spec addUnit hands to `add()`. Split out because a BUILDING and a WORKER are made
+ *  through add()'s OTHER two arguments (a BuildingState, and `opts.isPeon` — which `add`
+ *  reads only from there: passed in the spec it is overwritten with false), and the ladder
+ *  cases below need both. */
+function addSpec(id, owner, x, y, over = {}) {
   const weapons = over.weapons ?? [WEAPON()];
-  return w.add({
+  return {
     id, owner, team: owner, typeId: "hfoo", x, y, facing: 0,
     hp: 100000, maxHp: 100000, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
     speed: 270, turnRate: 6, radius: 16, scale: 1,
@@ -67,7 +75,7 @@ function addUnit(w, id, owner, x, y, over = {}) {
     worker: null, depotGold: false, depotLumber: false,
     castPoint: 0, castBackswing: 0,
     ...over, weapons, oldWeapons: weapons,
-  });
+  };
 }
 
 const run = (w, seconds) => { for (let i = 0; i < Math.round(seconds / SIM_DT); i++) w.tick(SIM_DT); };
@@ -391,6 +399,98 @@ console.log("a swing already begun is not interrupted by the target running away
   check(`the blow landed anyway (hp ${runner.hp}, was ${hp})`, runner.hp < hp);
   check(`…on the unit it was aimed at (swingTargetId ${swingTarget})`, swingTarget === runner.id);
   check(`…and it is still on the order (order ${u.order}, target ${u.targetId})`, u.order === "attack" && u.targetId === runner.id);
+}
+
+// ── An ATTACK-MOVE works down a ladder: the army, then the workers, then the buildings ──
+// An A-move is the player pointing rather than picking, so WHICH of the enemies in range it
+// picks is the sim's decision — and "the nearest" is the wrong one on the way into a base,
+// where the outer Farm and the Peasant beside it are always met before the soldiers that
+// defend them. The army first (it is the only thing that shoots back), the workers next
+// (they rebuild what you kill), the buildings last.
+console.log("attack-move picks the army over the workers over the buildings");
+{
+  // A Farm's building state — nothing is under construction and nothing is queued; what
+  // matters to the ladder is only that the unit HAS one (SimUnit.building is what
+  // attackMoveTier reads).
+  const FARM = (x, y) => [
+    { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0,
+      queue: [], rallyX: x, rallyY: y, rallyKind: "point", rallyTargetId: 0, producesUnits: false },
+  ];
+  // All three stand inside the attacker's 500 acquisition, and DELIBERATELY in the reverse
+  // order: the building is nearest, the worker next, the soldier farthest. Nearest-wins
+  // would take them in exactly that order.
+  const field = () => {
+    const w = new SimWorld(grid(), 1);
+    const u = addUnit(w, 1, 0, 300, 500);
+    const farm = w.add({ ...addSpec(2, 1, 560, 500), speed: 0, isBuilding: true, radius: 48,
+      targetedAs: "structure", weapons: [], oldWeapons: [], name: "Farm" }, ...FARM(560, 500));
+    const peasant = w.add({ ...addSpec(3, 1, 640, 500), weapons: [], oldWeapons: [], name: "Peasant" },
+      null, { isPeon: true });
+    const grunt = addUnit(w, 4, 1, 720, 500, { weapons: [], name: "Grunt" }); // weaponless: it never pulls us itself
+    w.issueOrder(1, { kind: "attackmove", x: 2400, y: 500 });
+    return { w, u, farm, peasant, grunt };
+  };
+  {
+    const f = field();
+    run(f.w, 2);
+    check(`took the soldier over the worker and the building (targetId ${f.u.targetId}, soldier ${f.grunt.id})`,
+      f.u.targetId === f.grunt.id);
+    check(`…and neither of the others was touched (farm ${f.farm.hp}, peasant ${f.peasant.hp})`,
+      f.farm.hp === f.farm.maxHp && f.peasant.hp === f.peasant.maxHp);
+  }
+  {
+    // Same field with the army gone: the worker outranks the building.
+    const f = field();
+    f.w.removeUnit(f.grunt.id);
+    run(f.w, 2);
+    check(`with no army left, took the worker over the building (targetId ${f.u.targetId}, worker ${f.peasant.id})`,
+      f.u.targetId === f.peasant.id);
+    check(`…and the building was not touched (hp ${f.farm.hp})`, f.farm.hp === f.farm.maxHp);
+  }
+  {
+    // …and with nothing else standing, the building IS the fight — an A-move into an empty
+    // base still razes it. Last is last, not never.
+    const f = field();
+    f.w.removeUnit(f.grunt.id);
+    f.w.removeUnit(f.peasant.id);
+    run(f.w, 3);
+    check(`with nothing else, engaged the building (targetId ${f.u.targetId}, hp ${f.farm.hp})`,
+      f.u.targetId === f.farm.id && f.farm.hp < f.farm.maxHp);
+  }
+  {
+    // The UPGRADE: the ladder is re-asked while the unit is holding something below the
+    // army, because on the way into a base the outbuildings are in range first and the
+    // defenders arrive after. Without it, one decision at second zero has the whole squad
+    // chewing a Farm for the rest of the battle.
+    const w = new SimWorld(grid(), 1);
+    const u = addUnit(w, 1, 0, 300, 500);
+    const farm = w.add({ ...addSpec(2, 1, 560, 500), speed: 0, isBuilding: true, radius: 48,
+      targetedAs: "structure", weapons: [], oldWeapons: [], name: "Farm", hp: 100000, maxHp: 100000 }, ...FARM(560, 500));
+    w.issueOrder(1, { kind: "attackmove", x: 2400, y: 500 });
+    run(w, 2);
+    check(`started on the only thing there was (targetId ${u.targetId}, farm ${farm.id})`, u.targetId === farm.id);
+    const defender = addUnit(w, 3, 1, 700, 500, { weapons: [] }); // the defence turns up
+    run(w, 2);
+    check(`switched onto the defender that arrived (targetId ${u.targetId}, defender ${defender.id})`,
+      u.targetId === defender.id);
+    check(`…and is hitting it (hp ${defender.hp})`, defender.hp < defender.maxHp);
+  }
+  {
+    // …and never the other way round. A fight already joined is not abandoned because a
+    // Peasant wandered past: the switch is an UPGRADE only.
+    const w = new SimWorld(grid(), 1);
+    const u = addUnit(w, 1, 0, 300, 500);
+    const soldier = addUnit(w, 2, 1, 560, 500, { weapons: [] });
+    w.issueOrder(1, { kind: "attackmove", x: 2400, y: 500 });
+    run(w, 2);
+    check(`engaged the soldier (targetId ${u.targetId})`, u.targetId === soldier.id);
+    const peasant = w.add({ ...addSpec(3, 1, 400, 500), weapons: [], oldWeapons: [], name: "Peasant" },
+      null, { isPeon: true });
+    run(w, 2);
+    check(`stayed on it when a worker walked nearer (targetId ${u.targetId}, worker ${peasant.id})`,
+      u.targetId === soldier.id);
+    check(`…and never swung at the worker (hp ${peasant.hp})`, peasant.hp === peasant.maxHp);
+  }
 }
 
 console.log(failures === 0 ? "\nattack-order: all checks passed" : `\nattack-order: ${failures} FAILED`);

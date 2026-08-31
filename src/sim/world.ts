@@ -1969,6 +1969,10 @@ const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its lead
 const FOLLOW_LEASH = 48;
 const FOLLOW_SLOT_ARRIVE = 24; // how close a fanned follower parks to its formation slot
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
+/** Top rung of an attack-move's target ladder (`attackMoveTier`): the enemy ARMY — anything
+ *  that is neither a structure nor one of `lowPriorityTarget`'s workers and wards. Named
+ *  because two places ask "is what we are holding already the best kind of target?". */
+const ARMY_TIER = 2;
 
 // How far an idle unit will look to JOIN a fight a friend is already in (issue #24). It
 // wider than a unit's own acquisition range (~500) so a back-rank unit rallies to a
@@ -13501,14 +13505,35 @@ export class SimWorld {
       let t = hadTarget ? this.units.get(u.targetId!) : undefined;
       // Drop the target if it died, turned friendly, went invulnerable (Divine Shield resets aggro), or fled past the leash.
       if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > acq)) t = undefined;
+      // Holding something the ladder ranks BELOW the army — the Farm that was in range
+      // before its defenders were, the Peasant standing in front of the Grunt. Ranking the
+      // pick is worth nothing unless it is re-asked, because on the way into a base the
+      // outbuildings are what an A-move meets FIRST and the army it is for arrives after:
+      // decided once, the whole squad spends the battle chewing a Farm. Only ever an
+      // UPGRADE (strictly higher tier), so nothing switches away from a fight, and it runs
+      // on the same throttle as the scan below — no extra pass over the world.
+      if (t && this.attackMoveTier(t) < ARMY_TIER) {
+        u.acquireT -= dt;
+        if (u.acquireT <= 0) {
+          u.acquireT = ACQUIRE_PERIOD;
+          const better = this.attackMoveTarget(u, acq);
+          if (better && this.attackMoveTier(better) > this.attackMoveTier(t)) {
+            t = better;
+            u.stallT = 0; // new enemy, new approach window (see attackMoveStalled)
+            u.attackStalls = 0;
+          }
+        }
+      }
       if (!t) {
         if (hadTarget) u.acquireT = 0; // just lost one — re-scan now, don't creep forward
         u.acquireT -= dt;
         if (u.acquireT <= 0) {
           u.acquireT = ACQUIRE_PERIOD;
           // Sight-gated: an attack-moving army engages what it can SEE, not whatever
-          // the sim knows is out there in the fog ahead of it (issue #45).
-          t = this.nearestEnemy(u, acq, true) ?? undefined;
+          // the sim knows is out there in the fog ahead of it (issue #45). And RANKED,
+          // not merely nearest: the army first, then the workers, then the buildings
+          // (attackMoveTier) — an A-move into a base must not stall on the outer Farm.
+          t = this.attackMoveTarget(u, acq) ?? undefined;
         }
       }
       if (t) {
@@ -13597,6 +13622,28 @@ export class SimWorld {
   }
 
   /**
+   * The predicate half of a hostile scan — everything `nearestEnemy` asks about a candidate
+   * EXCEPT the distance, which each caller bounds differently (a narrowing best-so-far for
+   * the nearest-wins scan, a fixed range for the tiered one). Shared so the two cannot drift:
+   * `attackMoveTarget` changes the ORDER the answers come back in and nothing about which
+   * units are answers at all.
+   */
+  private engageable(u: SimUnit, t: SimUnit, needSight: boolean): boolean {
+    if (!this.hostile(u, t)) return false;
+    // Untouchable is not a target — the same line `acquireTarget` keeps, and it has to be
+    // kept HERE too or the attack-move that reads this loops: tickAttackMove drops an
+    // invulnerable target, zeroes its scan timer because it just lost one, and is handed the
+    // same unit straight back, every tick, for as long as it stands there. An A-move walked
+    // into a Divine Shield stopped dead beside it and never reached its destination. The
+    // creep uses (wake, go-home) want the same answer: a unit nothing in the camp can hurt
+    // is not a reason to get up.
+    if (t.invulnerable) return false;
+    if (!this.canAttack(u, t)) return false; // nothing in hand that can hit it (air/ground/structure)
+    if (needSight && !this.canSee(u, t)) return false;
+    return true;
+  }
+
+  /**
    * Nearest hostile within `range` (gap measured hull-to-hull), or null.
    *
    * **DISTANCE IS TESTED FIRST, and that is a performance rule rather than a semantic one.**
@@ -13616,18 +13663,54 @@ export class SimWorld {
     for (const t of this.units.values()) {
       if (t === u) continue;
       if (distSkip(u, t, bestGap)) continue;
-      if (!this.hostile(u, t)) continue;
-      // Untouchable is not a target — the same line `acquireTarget` keeps, and it has to be
-      // kept HERE too or the attack-move that reads this loops: tickAttackMove drops an
-      // invulnerable target, zeroes its scan timer because it just lost one, and is handed the
-      // same unit straight back, every tick, for as long as it stands there. An A-move walked
-      // into a Divine Shield stopped dead beside it and never reached its destination. The
-      // creep uses (wake, go-home) want the same answer: a unit nothing in the camp can hurt
-      // is not a reason to get up.
-      if (t.invulnerable) continue;
-      if (!this.canAttack(u, t)) continue; // nothing in hand that can hit it (air/ground/structure)
-      if (needSight && !this.canSee(u, t)) continue;
+      if (!this.engageable(u, t, needSight)) continue;
       bestGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      best = t;
+    }
+    return best;
+  }
+
+  /** What an ATTACK-MOVED army turns on first. The pointed army fights its way to a place,
+   *  so what is worth its swings is what can fight back or can rebuild what it kills:
+   *  soldiers and heroes, then the workers, and a building dead last.
+   *
+   *  Three tiers rather than the creep camp's four (`threatTier`), and the two ladders
+   *  DISAGREE on purpose — a creep is defending its post against whatever is standing on it
+   *  and ranks a building above the Peasant repairing it, while an A-moved army is walking
+   *  INTO a base and must not stop to chew a Farm while the Footmen defending it swing back.
+   *  The bottom of both is the same helper, so an armed Serpent Ward planted in front of the
+   *  real army still does not pull the army onto it (`lowPriorityTarget`).
+   *
+   *  Same tier → distance breaks the tie, so within the army the nearest enemy is still the
+   *  one that gets hit; the tier only decides which KIND of thing is worth walking to. */
+  private attackMoveTier(t: SimUnit): number {
+    if (t.building) return 0; // structures last — kill what defends the base, not the base
+    if (this.lowPriorityTarget(t)) return 1; // workers and wards
+    return ARMY_TIER; // the army: soldiers, casters, heroes
+  }
+
+  /** The enemy an attack-move engages: the highest `attackMoveTier` within acquisition range,
+   *  nearest within that tier. The candidate set is exactly `nearestEnemy`'s (sight-gated —
+   *  an A-moving army engages what it can SEE, and it may still pull a creep camp, which is
+   *  what makes an A-move across a map fight the creeps on the way).
+   *
+   *  Unlike `nearestEnemy` the distance bound cannot NARROW as the scan runs: a soldier
+   *  farther off still outranks a nearer Farm, so the skip is against the fixed `range` (the
+   *  same shape, and for the same reason, as `bestCreepTarget`). */
+  private attackMoveTarget(u: SimUnit, range: number): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestTier = -1;
+    let bestGap = Infinity;
+    for (const t of this.units.values()) {
+      if (t === u) continue;
+      if (distSkip(u, t, range, true)) continue; // still the cheapest question — see nearestEnemy
+      const tier = this.attackMoveTier(t);
+      if (tier < bestTier) continue; // outranked already; don't pay for the predicates
+      if (!this.engageable(u, t, true)) continue;
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (tier === bestTier && gap >= bestGap) continue;
+      bestTier = tier;
+      bestGap = gap;
       best = t;
     }
     return best;
