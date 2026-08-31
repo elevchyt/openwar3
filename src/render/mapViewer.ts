@@ -1121,8 +1121,10 @@ export class MapViewerScene {
    * `localPlayer` is `OBSERVER_PLAYER` then — a number outside every slot the match has — so
    * almost nothing here needs to know: an observer owns no unit, so every "is this mine" test
    * already answers no, the authority refuses every order in its name (Authority.ownedBy), and
-   * no victory or defeat is ever declared for it. What DOES need saying is the two things a
-   * watcher gets that an empty seat would not: the whole map, and a camera pointed at it.
+   * no victory or defeat is ever declared for it. What DOES need saying is the three things a
+   * watcher gets that an empty seat would not: the whole map, a camera pointed at it, and
+   * EVERY player for an ally (`RtsController.observeMatch`) — a seat outside the alliance
+   * matrix is nobody's ally, and read that way the whole field comes back hostile.
    */
   private observer = false;
   private localRace: PlayableRace = "human";
@@ -2013,11 +2015,12 @@ export class MapViewerScene {
     // reveal to every computer in the game, which is the one thing an observer must not do.
     if (this.observer) {
       this.rts!.setLocalRevealAll(true);
-      // …and the Ally Color Mode button (Alt-A) has no "us" to draw from a watcher's own
-      // alliances — asked of them every player comes back an enemy and the whole field goes
-      // red. What it paints instead is one colour per TEAM, blue and red first
-      // (game/allyColor.ts observerTeamColors); the seats are what says who is on which.
-      this.rts!.setObservedTeams(
+      // …and it watches the match rather than plays it, which decides the two questions its
+      // own seat cannot answer: WHO IS AN ALLY (everybody — nobody is playing against a
+      // watcher, and a seat outside the alliance matrix would otherwise read the whole field
+      // as hostile) and what the Ally Color Mode button paints (one colour per TEAM, blue and
+      // red first). Both want the same thing from here: who is playing, and on whose team.
+      this.rts!.observeMatch(
         config.slots
           .filter((s) => s.controller === "user" || s.controller === "computer")
           .map((s) => ({ player: s.id, team: s.team })),

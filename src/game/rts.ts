@@ -986,10 +986,12 @@ export class RtsController {
     return this.allyColorFilter;
   }
 
+  /** This machine holds NO SEAT and is only WATCHING the match (MeleeConfig.observer). Two
+   *  readings turn on it and no others: who is an ALLY (`playersAreCoAllied` — everybody is),
+   *  and what the ally-colour filter paints (`observedColors`). */
+  private observing = false;
   /**
-   * Player -> the colour slot the ally-colour filter paints them in while this machine holds
-   * NO SEAT and is only watching (MeleeConfig.observer). Empty in every ordinary match, and
-   * that emptiness is what every "are we observing" test below reads.
+   * Player -> the colour slot the ally-colour filter paints them in while watching.
    *
    * A watcher has no side for the filter to answer from, so it colours the TEAMS instead —
    * team 1 blue, team 2 red, the rest of the palette after them. The ladder itself is
@@ -997,7 +999,10 @@ export class RtsController {
    */
   private observedColors = new Map<number, number>();
 
-  setObservedTeams(seats: ReadonlyArray<{ player: number; team: number }>): void {
+  /** Watch this match rather than play it: nobody on the field is ours, and everybody on it
+   *  is an ally (see `observing`). `seats` is who is playing and on whose team. */
+  observeMatch(seats: ReadonlyArray<{ player: number; team: number }>): void {
+    this.observing = true;
     this.observedColors = observerTeamColors(seats);
     this.retintUnits();
   }
@@ -1011,6 +1016,19 @@ export class RtsController {
     return this.alliances.coAllied(this.localPlayer, owner) ? "ally" : "enemy";
   }
 
+  /**
+   * Is `owner` an ally of the person AT THIS MACHINE — the question every friend-or-foe
+   * reading on this screen asks (a selection ring, a hover's owner line, the cursor).
+   *
+   * A creep is nobody's ally (it arrives as owner -1 and would otherwise fall through the
+   * watcher's rule), which is what keeps a creep camp red on an observer's screen. Everything
+   * else while watching is a player, and a watcher is allied with all of them.
+   */
+  private localAlly(owner: number): boolean {
+    if (this.observing) return owner >= 0;
+    return this.alliances.coAllied(owner, this.localPlayer);
+  }
+
   /** Which of the minimap's own friend-or-foe tones this dot takes — `self` (white) in every
    *  mode, ally/enemy once one is on, null to keep the player's colour.
    *
@@ -1018,7 +1036,7 @@ export class RtsController {
    *  filter does for it instead is a per-team COLOUR, which is a player-colour slot rather
    *  than a tone (see `dotColor`). */
   private minimapTone(owner: number): MinimapDot["tone"] {
-    if (this.observedColors.size) return null;
+    if (this.observing) return null;
     return minimapDotTone(this.allyColorFilter, this.colorSide(owner));
   }
 
@@ -1043,7 +1061,7 @@ export class RtsController {
     // A WATCHER's filter paints one colour per TEAM rather than mode 3's blue/teal/red, for
     // want of a side of its own — and only in mode 3, exactly as the ordinary filter only
     // reaches the world there (`worldFilterColor`).
-    if (this.observedColors.size) {
+    if (this.observing) {
       const observed = this.allyColorFilter >= 2 ? this.observedColors.get(owner) : undefined;
       return observed ?? override ?? this.playerColor(owner);
     }
@@ -1121,6 +1139,13 @@ export class RtsController {
   }
   /** blizzard.j's PlayersAreCoAllied — what IsPlayerAlly and every ally count read. */
   playersAreCoAllied(a: number, b: number): boolean {
+    // The one rule the matrix cannot hold: EVERYBODY is an ally to a WATCHER. Its seat is
+    // outside the table on purpose (ui/lobby.ts OBSERVER_PLAYER is one past the last slot
+    // there is), so the table answers "not allied" for it — and read that way every player on
+    // the screen comes back an ENEMY: red rings, red owner names, a red cursor, and not one
+    // ping or warning heard. A watcher is in the match against nobody, so it is on everybody's
+    // side. (Both directions, because a caller may ask either way round.)
+    if (this.observing && (a === this.localPlayer || b === this.localPlayer)) return true;
     return this.alliances.coAllied(a, b);
   }
 
@@ -4469,7 +4494,10 @@ export class RtsController {
     if (u.neutralPassive) return { has: true, category: "neutral" }; // shops, critters
     if (u.owner === this.localPlayer) return { has: true, category: "friendly" };
     const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
-    const hostile = prim ? this.sim.hostile(prim, u) : u.owner !== this.localPlayer;
+    // A WATCHER's cursor reads its OWN diplomacy and never the selection's: it is allied with
+    // every player (`localAlly`), and a unit it has clicked is somebody else's — no click of
+    // its own could do anything to either of them.
+    const hostile = prim && !this.observing ? this.sim.hostile(prim, u) : !this.localAlly(u.owner);
     return { has: true, category: hostile ? "enemy" : "friendly" };
   }
 
@@ -5530,7 +5558,7 @@ export class RtsController {
   private ringAllegiance(u: { owner: number; neutralPassive: boolean }): RingInfo["allegiance"] {
     if (u.owner === this.localPlayer) return "own";
     if (u.neutralPassive || this.sim.neutralPlayers.has(u.owner)) return "neutral";
-    if (u.owner >= 0 && this.alliances.coAllied(u.owner, this.localPlayer)) return "neutral";
+    if (u.owner >= 0 && this.localAlly(u.owner)) return "neutral";
     return "enemy";
   }
 
@@ -6562,7 +6590,7 @@ export class RtsController {
     // `owner` leaves here as a COLOUR SLOT, which is what the HUD paints the dot with: a
     // player's own (SetPlayerColor can move it), or — for a watcher, whose dots carry no tone
     // — the team colour its filter gives them.
-    if (this.playerColors.size || this.observedColors.size) for (const d of dots) d.owner = this.dotColor(d.owner);
+    if (this.playerColors.size || this.observing) for (const d of dots) d.owner = this.dotColor(d.owner);
     return dots;
   }
 
@@ -7406,7 +7434,7 @@ export class RtsController {
         lines.push({ text: `Level ${u.level}`, color: HOVER_TEXT });
       } else {
         // Another player's unit: the owner's name, coloured by diplomacy to us.
-        const ally = this.alliances.coAllied(u.owner, this.localPlayer);
+        const ally = this.localAlly(u.owner);
         lines.push({ text: this.playerLabel(u.owner), color: ally ? HOVER_OWNER_ALLY : HOVER_OWNER_ENEMY });
         if (u.isHero) {
           lines.push({ text: u.properName || e.name, color: HOVER_TEXT });
