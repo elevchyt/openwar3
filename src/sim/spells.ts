@@ -483,6 +483,47 @@ function d(lvl: AbilityLevel, i: number, def = 0): number {
   return v === undefined || Number.isNaN(v) ? def : v;
 }
 
+/**
+ * What a 0.00 Transition Time actually costs — the engine's own reaction delay, and the
+ * shortest window in which a unit that has pressed an invisibility is still standing there to
+ * be hit.
+ *
+ * NOT a value the game states. Nothing in the install carries a reaction-delay field, so per
+ * CLAUDE.md this has to be said out loud: 0.25 is OURS, taken from the behaviour the sources
+ * in `invisTransition` describe rather than from a column.
+ */
+const INVIS_REACTION = 0.25;
+
+/**
+ * How long an invisibility takes to COME ON: the ability's own transition column, or — for a
+ * row that states none — `INVIS_REACTION`.
+ *
+ * Two of the four invisibilities state the fade themselves and keep it, whatever its size:
+ * Wind Walk `[AOwk]` DataA "Transition Time" 0.6, Shadow Meld `[Ashm]` DataA "Fade Duration"
+ * 1.5 (and its instant variant `Sshm`'s 0.1). The other two state nothing — the Sorceress's
+ * `[Aivs]` reads DataA1 = 0, and the Potions' `[AIvi]` row has no Data column at all — and
+ * those are what this is for. A 0.00 transition does NOT mean "gone on the frame the button
+ * was pressed": the field is the World Editor's `Data - Transition Time (sec)`, and the engine
+ * finalises a true 0.00 on its own ~0.25 s reaction-delay loop, leaving a window in which the
+ * unit already has the movement speed and the collision subversion but is still perfectly
+ * targetable — a shot already in the air lands, and an attack ordered inside the window
+ * connects.
+ *   hiveworkshop 370226 "Wind Walk without invisibility"
+ *   hiveworkshop 332725 "Windwalk with 1 transition time…"
+ *   us.forums.blizzard.com/en/warcraft3/t/patch-300-suggestions/37928
+ *
+ * A STATED fade is the game's and is never overridden, which is why this is not a `max`: the
+ * data wins wherever the data speaks (CLAUDE.md), and it only stays silent for a zero.
+ *
+ * The window is not cosmetic: it is what makes an invisibility a decision rather than a dodge,
+ * and — for Wind Walk — it is what the Backstab Damage is paid for. The bonus rides on the
+ * fade having LANDED (world.ts breakInvisibility asks the buff's own `delay`), so a blow
+ * struck inside the transition still gives the unit away and carries nothing.
+ */
+export function invisTransition(seconds: number): number {
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : INVIS_REACTION;
+}
+
 /** Blizzard and Rain of Fire are the SAME engine ability with different numbers:
  *  MPQ Units\AbilityMetaData.slk gives their Data columns one shared row
  *  (`useSpecific=ahbz,acbz,anrf,acrf`), so both read
@@ -869,6 +910,30 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     api.applyBuff(t, { kind: "armor", group: "innerfire", timeLeft: dur(lvl, t) || 30, sourceId: caster.id, value: d(lvl, 1, 5), ...fx(def) });
     api.applyBuff(t, { kind: "damage", group: "innerfire", timeLeft: dur(lvl, t) || 30, sourceId: caster.id, value: Math.max(1, Math.round((t.baseDamage || 10) * (d(lvl, 0, 0.1) || 0.1))) });
+  },
+
+  // Invisibility (`Aivs`, the Sorceress's third spell) — the plainest member of the family,
+  // and the one that shows what an invisibility IS once Wind Walk's extras are taken away.
+  // Its whole row is a duration and a buff: `targs1` = "air,ground,organic,friend,nonsapper,
+  // neutral" (a friendly ORGANIC unit — never a building, never a machine), Rng1 = 300,
+  // Cost1 = 50, Dur1/HeroDur1 = 120, BuffID1 = `Binv` — the same `Binv` the Potion wears,
+  // which is the data saying outright that the two are one effect bought two ways.
+  //
+  // Every Data column it has reads 0, so it carries no Backstab Damage (`[AOwk]` DataC is
+  // Wind Walk's alone) and states no transition — DataA1 = 0, which is the case
+  // `invisTransition` exists for: the fade still comes on over the engine's reaction delay, so the
+  // Sorceress cannot make a unit untargetable on the frame she is told to. Everything after
+  // that is the shared `invisible` buff: undetected units cannot be seen or aggroed, and the
+  // fade breaks the moment its holder attacks, uses an ability or casts (breakInvisibility).
+  Aivs: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.ally(caster, t) || !api.admits(def, t)) return;
+    const lvl = def.levelData[rank - 1];
+    // `[Binv]` carries a Buffart (the status icon) and nothing else, so the buff wears no
+    // model; the ability's own `Targetart` — InvisibilityTarget.mdl on the `chest` — is the
+    // one-shot flash of the cast, and belongs in emitEffect like every other Targetart.
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+    api.applyBuff(t, { kind: "invisible", group: "invis", timeLeft: dur(lvl, t) || 120, sourceId: caster.id, delay: invisTransition(d(lvl, 0, 0)), ...fx(def) });
   },
 
   // Slow — cripple an enemy: slow its movement (dataA) and attack (dataB).
@@ -1926,10 +1991,16 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // unit to break invisibility, he will deal bonus damage" — it is one blow's worth, so it
   // rides on the invisible buff and world.ts breakInvisibility() hands it to that swing.
   // Both buffs share the "windwalk" group, which is what makes the break end the speed too.
+  //
+  // THE TWO HALVES ARRIVE AT DIFFERENT TIMES, and that is the whole shape of the ability. The
+  // speed goes on at the press (no `delay`) — the transition is a fade, not a cast point, and
+  // the hero is already moving through it — while the fade itself, and with it the backstab
+  // the fade pays for, land only when DataA has run out (`invisTransition`). Strike inside the
+  // window and the blow is an ordinary blow that has given the hero away for nothing.
   AOwk: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     const d0 = lvl.duration || 20;
-    const transition = d(lvl, 0, 0.6);
+    const transition = invisTransition(d(lvl, 0, 0.6));
     api.applyBuff(caster, { kind: "haste", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, ...fx(def) });
     api.applyBuff(caster, { kind: "invisible", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40), delay: transition });
   },
@@ -2132,7 +2203,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       timeLeft: Infinity, // no duration column — the conditions are the duration
       sourceId: caster.id,
       value: 0, // no Backstab Damage: that is Wind Walk's DataC, and Ashm has no equivalent
-      delay: d(lvl, 0, 1.5), // "Fade Duration"
+      delay: invisTransition(d(lvl, 0, 1.5)), // "Fade Duration" — through the one fade rule, like every invisibility
       meld: true,
       ...fx(def),
     });
@@ -2662,10 +2733,15 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // carries nothing but a duration and `Binv`: everything the tooltip describes —
   // untargetable unless detected, and the fade breaking the moment the hero "attacks, uses
   // an ability, or casts a spell" — is what the `invisible` buff already means (world.ts
-  // breakInvisibility). No transition delay: unlike Wind Walk this row has no DataA.
+  // breakInvisibility).
+  //
+  // Unlike Wind Walk this row has no DataA at all, which does NOT make the drink instant:
+  // a stated 0.00 transition and no column are the same thing to the engine, and both come on
+  // over its own reaction delay (`invisTransition` — see there for why, and for the sources).
+  // It carries no Backstab Damage: that is `[AOwk]` DataC and nothing else in the game has one.
   AIvi: (api, caster, def, rank) => {
     const lvl = lv(def, rank);
-    api.applyBuff(caster, { kind: "invisible", group: "item:invis", timeLeft: dur(lvl, caster) || 120, sourceId: caster.id, ...fx(def) });
+    api.applyBuff(caster, { kind: "invisible", group: "item:invis", timeLeft: dur(lvl, caster) || 120, sourceId: caster.id, delay: invisTransition(0), ...fx(def) });
   },
 
   // Potion of Restoration (`AIre`) — DataA "Hit Points Restored" 500, DataB "Mana Points

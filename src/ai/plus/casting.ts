@@ -386,6 +386,18 @@ const DARK_RITUAL_MANA = 0.5;
 const CLUSTER = 2;
 /** How far a caster looks to decide there is a fight around it (the Priest's own `acquire`). */
 const MIN_LOOK = 600;
+/**
+ * How long a Wind Walked hero will hold its blow while it walks at the body it pressed the
+ * button for (`backstabPass`).
+ *
+ * A ceiling and not a wait: the blow goes out on the FIRST pass after the fade has landed, and
+ * `[AOwk]` DataA is 0.6 s against a `castPeriod` of 0.35-2 s, so this is only ever reached by a
+ * hero that is still walking. Five seconds is what the walk gets before the intent is dropped
+ * and the hero is handed back to the army's own orders — well inside the 20 s that is the
+ * shortest rank of the invisibility itself, so nothing is held past the ability that bought it.
+ * OURS, like every other number in this file that no install file states.
+ */
+const BACKSTAB_HOLD = 5;
 /** …and how far from the caster a fight has to be to count as "around us" for a morph. */
 const ENGAGE_LOOK = 900;
 /** Immolation (`AEim`), by base code — the one ability this file switches OFF as well as on. */
@@ -443,6 +455,9 @@ export class PlusCaster {
   /** Heroes that have just Wind Walked OUT of a fight this pass, and are waiting to be walked
    *  home. Drained once by the army manager — see `drainEscapes` and `windWalk`. */
   private escapes: number[] = [];
+  /** Heroes that have Wind Walked INTO a fight and are still fading, with the body the blow is
+   *  meant for. The attack is held here until the fade lands — see `backstabPass`. */
+  private backstabs = new Map<number, { targetId: number; until: number }>();
   /** When each burning unit last had something in reach — the dwell `douseImmolation` measures
    *  its "the fight is over" from. Swept with `fightSince` at the end of every pass. */
   private burningSince = new Map<number, number>();
@@ -484,6 +499,7 @@ export class PlusCaster {
       } else if (this.view.hostile(u)) foes.push(u);
       else if (this.view.allied?.(u)) friends.push(u);
     }
+    this.backstabPass(own);
     this.townBell(own, foes);
     this.douseImmolation(own, foes);
     for (const u of own) {
@@ -842,10 +858,15 @@ export class PlusCaster {
    *    `drainEscapes` and HOLDS it there through the army's own withdrawal channel, so that
    *    `commit` cannot order it straight back into the fight and the army does not follow its
    *    captain out (see that method).
-   *  · The OPENER is the blow. The hero is aimed at the body worth the backstab rather than at
-   *    whatever it happened to be hitting — `killValue` is the army's own ladder, because this
-   *    is a swing and not a spell — and the 0.6 s fade costs nothing, since the break is asked
-   *    of `cloaked` and a swing landed before the fade simply is not the one that breaks it.
+   *  · The OPENER is the blow, but NOT on the same tick. The hero is aimed at the body worth
+   *    the backstab rather than at whatever it happened to be hitting — `killValue` is the
+   *    army's own ladder, because this is a swing and not a spell — and it WALKS there while
+   *    it fades. The Backstab Damage is bought by full invisibility rather than by the press
+   *    (`[AOwk]` DataA "Transition Time" 0.6, and world.ts `breakInvisibility` asks the buff's
+   *    own `delay`), so a hero sent in on the tick it pressed swings inside the window, gives
+   *    itself away and collects nothing — a whole cooldown spent on an ordinary blow. The walk
+   *    is also what takes the hero off the swing it was already making, since `AOwk` leaves the
+   *    current order alone. `backstabPass` orders the blow once the fade has landed.
    */
   private windWalk(u: SimUnit, code: string, lvl: AbilityLevel, role: Role, foes: SimUnit[]): boolean {
     // Already walking: the buff is up, and pressing it again would only re-start a cooldown.
@@ -867,8 +888,40 @@ export class PlusCaster {
     const t = this.backstab(u, foes);
     if (!t) return false;
     if (!press()) return false;
-    this.view.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: t.id }, queued: false });
+    this.view.order({ c: "order", unitId: u.id, order: { kind: "move", x: t.x, y: t.y }, queued: false });
+    this.backstabs.set(u.id, { targetId: t.id, until: this.now + BACKSTAB_HOLD });
     return true;
+  }
+
+  /**
+   * The held blow: order it the moment the fade has actually landed.
+   *
+   * A move rather than an attack goes out at the press (see `windWalk`), so this is the other
+   * half of that decision and without it the opener never strikes at all — a Wind Walked hero
+   * auto-acquires nothing (`SimWorld.acquireRange` answers 0 for anything cloaked, which is
+   * what stops an invisibility walking out of itself), so the blow has to be ordered.
+   *
+   * `invisible` is the gate and `cloaked` is the abort: the first is the fade in force, the
+   * second is the effect being there at all, so a walk that has been dispelled — or broken by
+   * something else the hero did in the meantime — drops the intent instead of firing a stale
+   * attack order into it. The deadline is the third way out, for a target that has been walked
+   * to and never reached.
+   */
+  private backstabPass(own: SimUnit[]): void {
+    if (!this.backstabs.size) return;
+    const mine = new Map(own.map((u) => [u.id, u]));
+    for (const [id, held] of this.backstabs) {
+      const u = mine.get(id);
+      if (!u || !u.cloaked || this.now > held.until) {
+        this.backstabs.delete(id);
+        continue;
+      }
+      if (!u.invisible) continue; // still fading — waiting it out is the whole point
+      this.backstabs.delete(id);
+      const t = this.view.world.units.get(held.targetId);
+      if (!t || t.hp <= 0 || t.invulnerable) continue; // it died while the hero walked
+      this.view.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: t.id }, queued: false });
+    }
   }
 
   /**

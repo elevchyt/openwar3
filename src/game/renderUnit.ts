@@ -63,6 +63,10 @@ export interface RenderBuff {
   /** The `B….` buff row this IS — where the Status line reads its icon, name and tooltip
    *  (see BuffDef). "" when nothing named one, which falls back to the group. */
   readonly buffId: string;
+  /** Seconds until the effect actually engages — an invisibility's Transition Time, counting
+   *  down (see SimBuff.delay). The renderer reads it to draw the vanish as the BLEND it is
+   *  rather than as a snap; it crosses the wire with the rest of the buff. */
+  readonly delay: number;
 }
 
 /** The unit, as the render path reads it. */

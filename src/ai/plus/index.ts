@@ -3781,6 +3781,15 @@ export class ComputerPlusAi {
       // the line on its own clock, and an attack-move issued over the top of that is the whole
       // army's order undoing one soldier's — which is how a pull-back becomes a see-saw.
       if (this.recovering(u) || u.order === "getitem" || pulledOut(b.pulls.get(u.id), b.clock)) continue;
+      // …nor is one that is still FADING. `cloaked && !invisible` is the Transition Time of an
+      // invisibility that has been pressed and has not landed yet (`[AOwk]` DataA = 0.6 s), and
+      // an attack ordered inside that window is the one thing that throws the press away: the
+      // swing breaks the walk, and the Backstab Damage the fade was going to pay is not owed
+      // yet (world.ts `breakInvisibility`). The caster is already holding the right blow for
+      // this hero (plus/casting.ts `backstabPass`); the army's job is to not undo it. It skips
+      // a unit for the length of one transition and only after that unit has just spent a
+      // cooldown on being unseen, so nothing can be held here that is not about to vanish.
+      if (u.cloaked && !u.invisible) continue;
       // THE ARMY MOVES AS ONE BODY. A unit that has pulled AHEAD of the group waits for it
       // instead of walking on — see `COHESION_RADIUS`, and note the two conditions that make
       // this a regroup rather than a leash: it only ever holds back the units in FRONT (the

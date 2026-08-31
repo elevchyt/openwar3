@@ -307,6 +307,19 @@ interface Entry {
 // declare no art whatsoever, so there is nothing in the MPQs to read this from.
 const INVIS_ALPHA = 0.5;
 
+// …and it is reached by BLENDING, over the tail of the invisibility's own Transition Time.
+// That period is a visual one as much as a mechanical one — the unit is "blending out" while
+// it is still perfectly targetable, which is what makes an opponent's window to punish a Wind
+// Walk something they can SEE (hiveworkshop 370226; see spells.ts invisTransition for the
+// mechanical half). The blend is timed to END exactly as the fade engages, so the frame the
+// model reaches INVIS_ALPHA is the frame the sim stops letting anything target it.
+//
+// A fixed window rather than the whole transition, because a buff carries what is LEFT of its
+// delay and not what it started with. 0.6 is `[AOwk]` DataA — the Blademaster's whole
+// transition, and the longest blend anything needs; a Shadow Meld's 1.5s simply stands there
+// for its first 0.9. OURS, like INVIS_ALPHA: nothing in the MPQs describes the ramp.
+const INVIS_BLEND = 0.6;
+
 // The blue wash an illusion wears for its owner and their allies — the same "not the real
 // thing" read a building has while it is being placed. Multiplies the mesh, so the unit's
 // own colours still show through underneath. Nothing in the MPQs carries this (AOmi
@@ -1594,7 +1607,7 @@ export class RtsController {
     // rather than be written straight to the instance: baseColor caches the model's own
     // colour and this method re-emits from it every time the fog brightness changes, so
     // an alpha written anywhere else would be clobbered on the next re-emit.
-    const fade = u.ethereal || u.invisible ? INVIS_ALPHA : 1;
+    const fade = this.ghostAlpha(u);
     if (e.fogTintB === b && e.aoeHi === hi && e.fade === fade && e.illus === illus) return; // unchanged since last tick
     e.fogTintB = b;
     e.aoeHi = hi;
@@ -1608,6 +1621,25 @@ export class RtsController {
     const g = hi ? AOE_TARGET_TINT : ([1, 1, 1] as const);
     const m = illus ? ILLUSION_TINT : ([1, 1, 1] as const);
     inst.setVertexColor([base[0] * b * g[0] * m[0], base[1] * b * g[1] * m[1], base[2] * b * g[2] * m[2], base[3] * fade]);
+  }
+
+  /**
+   * How faded this unit's model is drawn: 1 solid, `INVIS_ALPHA` ghosted.
+   *
+   * Ethereal is a state and snaps. An invisibility is a FADE and does not: while its
+   * Transition Time is still running the unit is not invisible at all — it can be seen, shot
+   * at, and hit by anything already in the air — so it is drawn solid, and only blends out
+   * over the last `INVIS_BLEND` of the wait. The buff's own `delay` is what is left of that
+   * wait, and it crosses the wire, so a client draws the same blend from the same number
+   * rather than re-deriving one of its own.
+   */
+  private ghostAlpha(u: RenderUnit): number {
+    if (u.ethereal || u.invisible) return INVIS_ALPHA;
+    let left = Infinity;
+    for (const b of u.buffs) if (b.kind === "invisible" && b.delay > 0) left = Math.min(left, b.delay);
+    if (!Number.isFinite(left)) return 1; // no invisibility coming on — solid
+    const t = Math.max(0, Math.min(1, 1 - left / INVIS_BLEND));
+    return 1 - (1 - INVIS_ALPHA) * t;
   }
 
   /** Wire the voice/sound board (owned by the host, which has the VFS). */

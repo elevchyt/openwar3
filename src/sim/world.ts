@@ -374,7 +374,13 @@ export interface SimBuff {
   /** Seconds until the buff's effect actually engages — Wind Walk's "Transition Time"
    *  (AbilityData.slk AOwk DataA = 0.6), the beat between the cast and the vanish. The
    *  buff exists and its duration is already running; it just isn't in force yet. 0 for
-   *  everything else, which engages the instant it lands. */
+   *  everything else, which engages the instant it lands.
+   *
+   *  EVERY invisibility carries one, the rows that state no transition included — a 0.00
+   *  Transition Time is not an instant vanish, it is one the engine finalises on its own
+   *  reaction delay. spells.ts `invisTransition` is where that is decided and argued; this
+   *  field is what the rest of the sim then asks (recomputeStats for `invisible`,
+   *  breakInvisibility for the backstab, and the renderer for the blend). */
   delay: number;
   /** Shadow Meld (`Ashm`), the one invisibility that is a STANCE rather than a spell. It
    *  never expires on a clock — it holds for as long as its conditions do — so it breaks on
@@ -1522,8 +1528,10 @@ export interface SimUnit {
    *  any other unit — because a 4×4 stamped block is a thing the pathfinder routes around,
    *  and an Ancient carrying one cannot leave the hole it is standing in. See toggleRoot. */
   rootedFootprint: number;
-  /** The fade is IN FORCE: renders half-faded, and draws no aggro (see canSee). False during
-   *  the Transition Time, when the unit is under the effect but hasn't vanished yet. */
+  /** The fade is IN FORCE: renders half-faded, draws no aggro (see canSee), and — for Wind
+   *  Walk — is owed the Backstab Damage. False during the Transition Time, when the unit is
+   *  under the effect but hasn't vanished yet: it has the movement speed already and is still
+   *  perfectly targetable, which is the vulnerability window every invisibility has. */
   invisible: boolean;
   /** Under an invisibility effect AT ALL, transition included — a superset of `invisible`.
    *  This, not `invisible`, is what stops the unit picking its own fights and what a strike
@@ -13469,10 +13477,11 @@ export class SimWorld {
     u.swingBash = this.hostile(u, t) && !t.invulnerable && this.rollBash(u);
 
     // A blow out of Wind Walk shows the same strike: the fade breaks at the damage point
-    // (tickSwing) and that blow carries the Backstab Damage, so a swing begun while cloaked
-    // is the backstab swing. `cloaked`, not `invisible` — the bonus is owed from the moment
-    // the buff lands, transition included, which is the same test breakInvisibility makes.
-    u.swingSlam = u.swingCrit || (u.swingBash && !w.ranged) || u.cloaked;
+    // (tickSwing) and that blow carries the Backstab Damage, so a swing begun while the unit
+    // is FADED is the backstab swing. `invisible`, not `cloaked` — a swing begun inside the
+    // Transition Time earns nothing (breakInvisibility asks the buff's own `delay`), and a
+    // strike that pays no bonus must not be dressed up as the one that does.
+    u.swingSlam = u.swingCrit || (u.swingBash && !w.ranged) || u.invisible;
     u.swingSeq++; // renderer restarts the attack animation so the strike lines up
     // EVENT_(PLAYER_)UNIT_ATTACKED fires as the attacker commits a swing at the target.
     if (this.captureAttacks) this.attackEvents.push({ attacked: eventInfo(t), attacker: eventInfo(u) });
@@ -13939,7 +13948,12 @@ export class SimWorld {
     const groups = new Set<string>();
     for (const b of u.buffs) {
       if (b.kind !== "invisible") continue;
-      bonus = Math.max(bonus, b.value); // Backstab Damage (AOwk DataC: 40/70/100)
+      // THE BREAK IS OWED FROM THE PRESS; THE BONUS ONLY FROM THE FADE. Attacking during the
+      // Transition Time still gives the unit away — it is an attack, and the ability ends —
+      // but the Backstab Damage is what full invisibility BUYS, so a blow struck inside the
+      // window carries nothing. `delay` is what is left of that window (see SimBuff.delay and
+      // spells.ts invisTransition); the same test recomputeStats makes for `invisible`.
+      if (b.delay <= 0) bonus = Math.max(bonus, b.value); // Backstab Damage (AOwk DataC: 40/70/100)
       if (b.group) groups.add(b.group);
     }
     u.buffs = u.buffs.filter((b) => b.kind !== "invisible" && !(b.group && groups.has(b.group)));

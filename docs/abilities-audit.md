@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 367, **done** 246, **partial** 4, **passive** 13, **todo** 169.
+Totals: 799 rows — **alias** 367, **done** 249, **partial** 4, **passive** 13, **todo** 166.
 
 ## Art paths this install does not ship
 
@@ -83,7 +83,7 @@ Known gaps that are NOT ability rows, found while auditing:
 
 ## Unimplemented base codes, by alias fanout
 
-131 distinct base `code`s cover the 169 todo rows. Implementing one
+128 distinct base `code`s cover the 166 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -136,7 +136,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Adec` | Dismount | 1 |  | decouple | `Adec` |
 | `Atdp` | Drop Pilot | 1 |  |  | `Atdp` |
 | `Aegm` | Entangled Gold Mine Ability | 1 |  |  | `Aegm` |
-| `Arpl` | Essence of Blight | 1 | ground,air,friend,self,organic,vuln,invu | replenishlife | `Arpl` |
 | `Aetl` | Ethereal | 1 |  |  | `Aetl` |
 | `Aetf` | Ethereal Form | 1 |  | etherealform | `Aetf` |
 | `ANfy` | Factory | 1 |  |  | `ANfy` |
@@ -151,7 +150,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `AHer` | Hero | 1 |  |  | `AHer` |
 | `ACtb` | Hurl Boulder | 1 | air,ground,organic,enemy,neutral | creepthunderbolt | `ACtb` |
 | `ANin` | Inferno | 1 | ground,structure,debris,enemy,neutral | inferno | `ANin` |
-| `Aivs` | Invisibility | 1 | air,ground,organic,friend,nonsapper,neutral | invisibility | `Aivs` |
 | `Avul` | Invulnerable | 1 |  |  | `Avul` |
 | `AIdm` | Item Area tree/wall damage | 1 |  |  | `AIdm` |
 | `AIlb` | Item Attack Lightning Bonus | 1 | ground,air,ward |  | `AIlb` |
@@ -207,7 +205,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Asps` | Spell Steal | 1 | air,ground,friend,enemy,neutral,self,vuln,invu | spellsteal | `Asps` |
 | `Aspa` | Spider Attack | 1 | ground,ward,item,structure,debris,enemy |  | `Aspa` |
 | `Aspi` | Spiked Barricades | 1 | enemy |  | `Aspi` |
-| `Arpm` | Spirit Touch | 1 | ground,air,friend,self,organic,vuln,invu | replenishmana | `Arpm` |
 | `Astd` | Stand Down | 1 |  | standdown | `Astd` |
 | `Astn` | Stone Form | 1 |  | stoneform | `Astn` |
 | `Atsp` | Tornado Spin | 1 | ground,enemy |  | `Atsp` |
@@ -444,7 +441,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `Aenw` | `AEer` | Entangling Roots | creeps |  |  | ground,enemy,neutral,nonhero,organic |  | entanglingroots | Entangling Seaweed |
 | x | `Aven` | `Aven` | Envenomed Spears | orc |  |  | air,ground,organic |  |  | Venom Spears |
 | ~ | `ACvs` | `Aven` | Envenomed Weapons | creeps |  |  | air,ground,organic |  |  | Venom Spears (Creep) |
-|   | `Arpl` | `Arpl` | Essence of Blight | undead |  |  | ground,air,friend,self,organic,vuln,invu | 3 | replenishlife | Replenish (Life) |
+| x | `Arpl` | `Arpl` | Essence of Blight | undead |  |  | ground,air,friend,self,organic,vuln,invu | 3 | replenishlife | Replenish (Life) |
 |   | `Aetl` | `Aetl` | Ethereal | nightelf |  |  |  |  |  | Ethereal |
 |   | `Aetf` | `Aetf` | Ethereal Form | orc |  |  |  | 1 | etherealform | Ethereal Form |
 | ~ | `ACes` | `AEev` | Evasion | creeps |  |  |  |  |  | Evasion (creep 100%) |
@@ -556,7 +553,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACif` | `Ainf` | Inner Fire | creeps |  |  | air,ground,friend,neutral,self |  | innerfire | Inner Fire (Creep) |
 | x | `Ainf` | `Ainf` | Inner Fire | human |  |  | air,ground,friend,neutral,self |  | innerfire | Inner Fire |
 | x | `AInv` | `AInv` | Inventory | other |  |  |  |  |  | Inventory |
-|   | `Aivs` | `Aivs` | Invisibility | human |  |  | air,ground,organic,friend,nonsapper,neutral | 1 | invisibility | Invisibility |
+| x | `Aivs` | `Aivs` | Invisibility | human |  |  | air,ground,organic,friend,nonsapper,neutral | 1 | invisibility | Invisibility |
 |   | `Avul` | `Avul` | Invulnerable | other |  |  |  |  |  | Invulnerable |
 | x | `AIam` | `AIam` | Item Agility Gain | other |  | I |  | 1 |  | AgilityMod           |
 | ~ | `AIgm` | `AIam` | Item Agility Gain | other |  | I |  | 1 |  | AgilityMod +2 |
@@ -932,7 +929,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `Aspl` | `Aspl` | Spirit Link | orc |  |  | air,ground,friend,self,organic | 2 | spiritlink | Spirit Link |
 | ~ | `Aspp` | `Aspl` | Spirit Link | other |  | I | air,ground,friend,self,organic |  | spiritlinkaoe | Rune of Spirit Link |
 | x | `Avng` | `Avng` | Spirit of Vengeance | nightelf |  |  | air,ground,dead | 1 | Vengeance | Vengeance |
-|   | `Arpm` | `Arpm` | Spirit Touch | undead |  |  | ground,air,friend,self,organic,vuln,invu | 3 | replenishmana | Replenish (Mana) |
+| x | `Arpm` | `Arpm` | Spirit Touch | undead |  |  | ground,air,friend,self,organic,vuln,invu | 3 | replenishmana | Replenish (Mana) |
 |   | `Srtt` | `Acha` |  | human |  |  |  |  |  | Tank Upgrade |
 | x | `ANpr` | `ANpr` | Staff of Preservation | other |  | I | ground,air,vuln,invu,player,neutral | 3 |  | Preservation |
 | x | `ANsa` | `ANsa` | Staff of Sanctuary | other |  | I | ground,air,vuln,invu,player,neutral | 3 |  | Sanctuary |

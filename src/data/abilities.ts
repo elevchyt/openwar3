@@ -483,6 +483,11 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Adis: { target: "point" }, // Dispel Magic — clear buffs, damage summons
   Ainf: { target: "unit", autocast: true }, // Inner Fire — +armour +damage
   Aslo: { target: "unit", autocast: true }, // Slow (Sorceress)
+  // Invisibility (Sorceress) — a friendly ORGANIC unit, 300 range. NOT an autocast, and the
+  // Func file settles it: `[Aivs]` carries `Order=invisibility` and no `Orderon`/`Orderoff`
+  // pair at all, where `[Aslo]` right above it carries `slowon`/`slowoff`. Slow is the one
+  // button on her card that arms itself.
+  Aivs: { target: "unit" },
   Ablo: { target: "unit", autocast: true }, // Bloodlust (Shaman) — +attack & move speed
   Aprg: { target: "unit" }, // Purge (Shaman) — strip buffs, slow enemy, destroy summons
   Aens: { target: "unit", autocast: true }, // Ensnare (Raider) — root a target (air pulled down)
