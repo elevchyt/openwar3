@@ -311,18 +311,24 @@ interface Entry {
 // declare no art whatsoever, so there is nothing in the MPQs to read this from.
 const INVIS_ALPHA = 0.5;
 
-// …and it is reached by BLENDING, over the invisibility's OWN Transition Time. That period is
-// a visual one as much as a mechanical one — the unit is "blending out" while it is still
-// perfectly targetable, which is what makes an opponent's window to punish a Wind Walk
-// something they can SEE (hiveworkshop 370226; see spells.ts invisTransition for the
-// mechanical half). The blend is timed to END exactly as the fade engages, so the frame the
-// model reaches INVIS_ALPHA is the frame the sim stops letting anything target it.
+// …and it is reached by BLENDING. The transition is a visual period as much as a mechanical
+// one — the unit is "blending out" while it is still perfectly targetable, which is what makes
+// an opponent's window to punish a Wind Walk something they can SEE (hiveworkshop 370226; see
+// spells.ts invisTransition for the mechanical half).
 //
-// Each ability therefore blends over its own number and none is a snap: Wind Walk's 0.6s
-// (`[AOwk]` DataA), Shadow Meld's 1.5 ("Fade Duration"), and the quarter second the
-// Sorceress's Invisibility and the Potions come on over. The ramp itself is OURS, like
-// INVIS_ALPHA — nothing in the MPQs describes it — but every duration it runs over is the
-// game's.
+// The blend STARTS at the press, follows the ability's own transition down (Wind Walk's 0.6s
+// `[AOwk]` DataA, Shadow Meld's 1.5 "Fade Duration", the quarter second the Sorceress's
+// Invisibility and the Potions come on over) — and is RATE-LIMITED, so however short that
+// number is, the picture still takes GHOST_FADE_TIME to travel the whole way. Without the
+// limit a quarter-second transition is not a fade at all: it reads as the model snapping to
+// half opacity, which is the complaint this exists to answer.
+//
+// The consequence is deliberate and worth naming: a unit can be untargetable while its model
+// is still finishing its dissolve. Only FRIENDLY eyes ever see that — an enemy without
+// detection is not shown an invisible unit at all — so nothing is drawn to a player who could
+// act on it. The ramp and its duration are OURS, like INVIS_ALPHA; nothing in the MPQs
+// describes either.
+const GHOST_FADE_TIME = 0.9;
 
 // The blue wash an illusion wears for its owner and their allies — the same "not the real
 // thing" read a building has while it is being placed. Multiplies the mesh, so the unit's
@@ -1478,7 +1484,7 @@ export class RtsController {
    *
    *  `hide` is decided by the caller (`modelHidden`) rather than here: on a client it is the
    *  payload's answer, and this method has no business knowing which of the two it got. */
-  private applyVisibility(e: Entry, u: RenderUnit, hide: boolean): void {
+  private applyVisibility(e: Entry, u: RenderUnit, hide: boolean, dt: number): void {
     if (u.inMine !== e.inMine) {
       e.inMine = u.inMine;
       if (u.inMine) {
@@ -1523,7 +1529,7 @@ export class RtsController {
         e.unit.instance.show();
       }
     }
-    if (!hide && !e.borrowedBody) this.applyFogTint(e, u); // borrowed: mapViewer's doodad pass tints it
+    if (!hide && !e.borrowedBody) this.applyFogTint(e, u, dt); // borrowed: mapViewer's doodad pass tints it
   }
 
   /** Re-skin a unit that has changed FORM: rebuild its animation set for the new state and
@@ -1587,7 +1593,7 @@ export class RtsController {
    *  structures. Own units and anything currently in sight stay full colour; mobile
    *  enemy units never reach here (fogHides already hides them out of sight). Tint
    *  multiplies the model's own base colour so a unit's team/UnitData tint survives. */
-  private applyFogTint(e: Entry, u: RenderUnit): void {
+  private applyFogTint(e: Entry, u: RenderUnit, dt: number): void {
     const inst = e.unit.instance;
     if (!inst.setVertexColor) return;
     let b = 1;
@@ -1611,7 +1617,7 @@ export class RtsController {
     // rather than be written straight to the instance: baseColor caches the model's own
     // colour and this method re-emits from it every time the fog brightness changes, so
     // an alpha written anywhere else would be clobbered on the next re-emit.
-    const fade = this.ghostAlpha(e, u);
+    const fade = this.ghostAlpha(e, u, dt);
     if (e.fogTintB === b && e.aoeHi === hi && e.fade === fade && e.illus === illus) return; // unchanged since last tick
     e.fogTintB = b;
     e.aoeHi = hi;
@@ -1628,20 +1634,40 @@ export class RtsController {
   }
 
   /**
-   * How faded this unit's model is drawn: 1 solid, `INVIS_ALPHA` ghosted.
+   * How faded this unit's model is drawn THIS step: 1 solid, `INVIS_ALPHA` ghosted.
    *
-   * Ethereal is a state and snaps. An invisibility is a FADE and does not: while its
-   * Transition Time is still running the unit is not invisible at all — it can be seen, shot
-   * at, and hit by anything already in the air — so it blends out across that whole window and
-   * arrives at `INVIS_ALPHA` on the frame the sim stops letting anything target it. Even the
-   * abilities that state no transition get one (spells.ts `invisTransition`), so no
-   * invisibility in the game snaps to its target opacity.
+   * Two things decide it. `ghostTarget` says where the fade is up to according to the sim,
+   * and this walks the drawn value toward that at no more than the whole swing per
+   * `GHOST_FADE_TIME` — in BOTH directions, so a unit that is revealed swims back into
+   * solidity instead of popping. The limit is what makes a quarter-second transition look
+   * like a dissolve rather than a switch; everything longer than it (a Shadow Meld's 1.5s
+   * "Fade Duration") is already slower and is simply followed.
+   *
+   * Seeded AT the target the first time an entry is drawn, not at 1: a unit that walks into
+   * view already invisible is already invisible, and easing it in from solid would announce
+   * to its owner's allies a hero that has been hidden for half a minute.
+   */
+  private ghostAlpha(e: Entry, u: RenderUnit, dt: number): number {
+    const target = this.ghostTarget(e, u);
+    const prev = e.fade ?? target;
+    const step = ((1 - INVIS_ALPHA) / GHOST_FADE_TIME) * Math.max(0, dt);
+    return target > prev ? Math.min(target, prev + step) : Math.max(target, prev - step);
+  }
+
+  /**
+   * Where the fade is up to according to the SIM: 1 before it starts, `INVIS_ALPHA` once it is
+   * in force, and a straight ramp between the two across the transition.
+   *
+   * While its Transition Time runs a unit is not invisible at all — it can be seen, shot at,
+   * and hit by anything already in the air — so the picture leaves solid the moment the button
+   * is pressed and is on its way down for the whole window. Even the abilities that state no
+   * transition have one (spells.ts `invisTransition`), so nothing here starts at the target.
    *
    * The buff's own `delay` is what is left of the wait, and it crosses the wire, so a client
    * draws the same blend off the same number rather than re-deriving one of its own. What it
    * does NOT carry is the wait's LENGTH — hence `Entry.fadeSpan`.
    */
-  private ghostAlpha(e: Entry, u: RenderUnit): number {
+  private ghostTarget(e: Entry, u: RenderUnit): number {
     if (u.ethereal || u.invisible) {
       e.fadeSpan = 0;
       return INVIS_ALPHA;
@@ -3607,7 +3633,7 @@ export class RtsController {
       // floats. A mobile neutral is neither: a critter, or a cinematic extra a trigger orders
       // across the graveyard, is drawn from the sim like any other unit (see seedNeutral).
       if (u.neutralPassive && (u.building || e.borrowedBody)) {
-        this.applyVisibility(e, u, this.modelHidden(e.simId)); // static & viewer-rendered, but fog still hides/reveals it
+        this.applyVisibility(e, u, this.modelHidden(e.simId), dt); // static & viewer-rendered, but fog still hides/reveals it
         continue;
       }
       this.loc[0] = u.x;
@@ -3620,7 +3646,7 @@ export class RtsController {
       setZQuat(this.quat, u.facing);
       e.unit.instance.setRotation(this.quat);
       // Workers inside a gold mine vanish; enemy units vanish in the fog of war.
-      this.applyVisibility(e, u, this.modelHidden(e.simId));
+      this.applyVisibility(e, u, this.modelHidden(e.simId), dt);
       // A unit that has changed FORM wears the other half of its model — a rooted Ancient, a
       // burrowed Crypt Fiend. Skipped entirely for the vast majority, which have only one.
       if (u.altModel || e.altModel !== undefined) this.applyFormAnims(e, u, this.registry.get(e.typeId));

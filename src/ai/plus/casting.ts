@@ -875,10 +875,13 @@ export class PlusCaster {
    *    army's own ladder, because this is a swing and not a spell — and it WALKS there while
    *    it fades. The Backstab Damage is bought by full invisibility rather than by the press
    *    (`[AOwk]` DataA "Transition Time" 0.6, and world.ts `breakInvisibility` asks the buff's
-   *    own `delay`), so a hero sent in on the tick it pressed swings inside the window, gives
-   *    itself away and collects nothing — a whole cooldown spent on an ordinary blow. The walk
-   *    is also what takes the hero off the swing it was already making, since `AOwk` leaves the
-   *    current order alone. `backstabPass` orders the blow once the fade has landed.
+   *    own `delay`), so a hero sent in on the tick it pressed would arrive swinging inside the
+   *    window and collect nothing — a whole cooldown spent on an ordinary blow. The sim will
+   *    not let that swing start at all now (`SimWorld.engage` refuses one from a unit still
+   *    fading, and the press itself drops the fight — `dropAggression`), so what this order
+   *    buys is the WALK: the hero closes the ground while it disappears. `backstabPass` orders
+   *    the blow once the fade has landed, and it has to, because nothing under an invisibility
+   *    ever picks its own fight (`acquireRange` is 0 for anything cloaked).
    */
   private windWalk(u: SimUnit, code: string, lvl: AbilityLevel, role: Role, foes: SimUnit[]): boolean {
     // Already walking: the buff is up, and pressing it again would only re-start a cooldown.

@@ -10649,6 +10649,13 @@ export class SimWorld {
       return;
     }
     this.applySpellEffect(pc.code, pc.rank, u, { targetId: pc.targetId, x: pc.x, y: pc.y }, def);
+    // A self-invisibility ends the caster's fight as it lands — see dropAggression. Here
+    // rather than in the handler because it is an ORDER change and not an effect, and here
+    // rather than at each caller because every route into a cast (a click, an autocast, a
+    // trigger, a command off the wire) arrives through this one method.
+    // …and only if the fade actually went on: `[Ashm]` refuses to meld by day and the press
+    // is then nothing at all, which is not a reason to end a fight.
+    if (SELF_INVIS_GROUP[pc.code] && this.alreadyHidden(u, pc.code)) this.dropAggression(u);
   }
 
   /** Idle autocast: a unit with a toggled-on autocast ability picks a valid
@@ -13526,7 +13533,14 @@ export class SimWorld {
     u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
     // Don't start a new swing while facing the wrong way, cooling down, or with a
     // swing already mid-flight toward its damage point.
-    if (!this.facesTarget(u, FACING_EPS) || u.cooldownLeft > 0 || u.swingLeft >= 0) return;
+    //
+    // …or while an invisibility is still COMING ON. A blow struck inside the Transition Time
+    // gives the unit away for nothing (breakInvisibility pays the Backstab Damage only once
+    // the fade has landed), so the window is not a window in which anything swings: not an
+    // ordered attack, not a Hold, not an attack-move, and not an auto-acquire. The unit stands
+    // where it is, faces its target and swings the instant it is actually hidden — this gate
+    // is the one door every one of those routes comes through.
+    if (!this.facesTarget(u, FACING_EPS) || u.cooldownLeft > 0 || u.swingLeft >= 0 || this.fading(u)) return;
     // Begin the attack: the cooldown starts now, but the strike/projectile only
     // lands at the weapon's damage point (a fraction into the swing animation) —
     // matching WC3 so e.g. the Archmage's fireball leaves at the right moment.
@@ -14012,6 +14026,48 @@ export class SimWorld {
     if (!u.buffs.some((b) => b.kind === "invisible" && b.meld)) return;
     const moved = u.x !== u.prevX || u.y !== u.prevY;
     if (moved || this.isDay) this.breakInvisibility(u);
+  }
+
+  /** Is an invisibility on this unit still COMING ON — pressed, and not yet in force? The
+   *  Transition Time, in one test: `cloaked` is the effect being there at all and `invisible`
+   *  is the fade actually landed, so the gap between them is the window (see SimUnit). */
+  private fading(u: SimUnit): boolean {
+    return u.cloaked && !u.invisible;
+  }
+
+  /**
+   * THE FIGHT IS OVER THE MOMENT YOU PRESS IT: a unit that vanishes drops whatever it was
+   * fighting or chasing.
+   *
+   * Wind Walk is IMMEDIATE — it leaves the caster's order alone, which is what lets the
+   * Blademaster fade mid-stride — and that is exactly how a fade got spent on the thing
+   * already in front of him: the swing already wound up landed a beat later, broke the
+   * invisibility before it had finished arriving and paid no Backstab Damage for it (the
+   * bonus is the FADE's, see breakInvisibility). So the aggression goes here, at the press.
+   *
+   * A WALK is not aggression and is left alone — the escape is the whole other half of this
+   * ability, and a hero told to stop dead the moment it pressed its way out of a fight would
+   * be standing in the fight. Only the target, the swing and a chase after that target go.
+   * Nothing re-acquires by itself afterwards either (`acquireRange` answers 0 for anything
+   * cloaked), so the next blow is one somebody ORDERS — a player's click, or the AI's own
+   * held backstab (plus/casting.ts `backstabPass`).
+   */
+  private dropAggression(u: SimUnit): void {
+    // The buff is on but nothing has derived `cloaked` from it yet (applyBuff does not
+    // recompute), and the swing gate in `engage` reads exactly that. Recomputing here — cheap
+    // and idempotent — closes the tick between the press and the next stat pass, in which the
+    // unit would still have read as fair game to swing.
+    this.recomputeStats(u);
+    this.cancelSwing(u); // a committed strike must not land out of a fade that has not finished
+    u.targetId = null; // …and the body it was fighting or chasing is not its business any more
+    u.arrowShot = null; // an aimed arrow is called off with the attack that carried it
+    u.inCombat = false;
+    if (u.order === "attack") {
+      // The order WAS that body. Attack-move and patrol are walks and keep their destination;
+      // this one has nothing left to mean, so it ends where the unit stands.
+      u.order = "idle";
+      this.settle(u);
+    }
   }
 
   private breakInvisibility(u: SimUnit): number {

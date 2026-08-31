@@ -193,5 +193,63 @@ function walking(delay) {
   check("a hero standing in the open may press it", world.alreadyHidden(clear, "AOwk"), false);
 }
 
+// --- the fight is over at the press ------------------------------------------------------
+//
+// `[AOwk]` is IMMEDIATE and leaves the caster's order alone, which is what lets the
+// Blademaster fade mid-stride — and is also how a fade got spent on whatever was already in
+// front of him. Two rules now stop that: the press DROPS the fight, and no swing may begin
+// while the fade is still coming on.
+
+function fighter(over = {}) {
+  const u = {
+    id: 7, owner: 0, team: 0, hp: 500, maxHp: 500, x: 0, y: 0, prevX: 0, prevY: 0, radius: 16,
+    facing: 0, desiredFacing: 0, turnRate: 0, detectRadius: 0, invisible: false, cloaked: false,
+    // A collision RADIUS and no grid footprint: `settle` reserves blocks for the footprinted
+    // (buildings, and the walkers this bare 8x8 world has no block index for) and returns at
+    // once for everything else, which is what these checks want — the ORDERS, not the snap.
+    footprint: 0, path: [], hasReservation: false,
+    inventory: [], abilities: [], buffs: [], baseArmor: 0, baseMaxHp: 500, baseMaxMana: 0,
+    baseMoveSpeed: 270, baseSight: 1800, baseSpeed: 270,
+    order: "attack", targetId: 99, arrowShot: { code: "AHfa" }, inCombat: true, moving: true,
+    swingLeft: 0.2, swingTargetId: 99, cooldownLeft: 0, swingSeq: 0,
+    weapons: [{ enabled: true, targets: [], range: 90, rangeBuffer: 250, cooldown: 1.5, damagePoint: 0.3, damage: 30, dice: 1, sides: 1, ranged: false, weaponType: "normal" }],
+    ...over,
+  };
+  world.units.set(u.id, u);
+  return u;
+}
+
+// The press: the swing is cancelled, the body is let go, and the ATTACK order ends.
+{
+  const u = fighter();
+  world.dropAggression(u);
+  check("the press cancels the swing", u.swingLeft, -1);
+  check("…lets the body go", u.targetId, null);
+  check("…calls off an aimed arrow", u.arrowShot, null);
+  check("…and ends the attack order", u.order, "idle");
+}
+
+// A WALK is not aggression: the escape is half of what the ability is for, so a hero that
+// pressed it on the run keeps running.
+{
+  const u = fighter({ order: "move" });
+  world.dropAggression(u);
+  check("a walk survives the press", u.order, "move");
+  check("…but the body it was fighting does not", u.targetId, null);
+}
+
+// And no swing may BEGIN inside the transition — the one gate every route into a strike
+// (an ordered attack, a Hold, an attack-move, an auto-acquire) comes through.
+{
+  const t = fighter({ id: 99, team: 1, x: 60, y: 0, order: "idle", targetId: null, swingLeft: -1, arrowShot: null });
+  const u = fighter({ id: 7, order: "attack", swingLeft: -1, cooldownLeft: 0, cloaked: true, invisible: false });
+  world.engage(u, t);
+  check("a fading unit starts no swing", u.swingLeft, -1);
+  // …and swings the instant it is actually hidden.
+  u.invisible = true;
+  world.engage(u, t);
+  check("a hidden one does", u.swingLeft > 0, true);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);
