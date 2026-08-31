@@ -1,13 +1,14 @@
-// Headless check of ALLY COLOR MODE's one rule table (src/game/allyColor.ts).
+// Headless check of ALLY COLOR MODE's rule table (src/game/allyColor.ts).
 //
-// The feature is three modes over two surfaces, and the whole of it is a reading of two
-// strings the game ships (GlobalStrings' MINIMAPALLYCOLORTOOLTIP_UBER and TriggerStrings'
-// SetAllyColorFilterStateHint). What is worth pinning is exactly the part that reading
-// decides and a running client would never make obvious:
+// Three modes over two surfaces that answer in different currencies, and almost all of it is
+// a reading of files the game ships (GlobalStrings' MINIMAPALLYCOLORTOOLTIP_UBER, TriggerStrings'
+// SetAllyColorFilterStateHint, and `UI\MiscData.txt` [FogOfWar]'s own FogColorPlayer/Ally/Enemy).
+// What is worth pinning is what that reading decides and a running client would never make
+// obvious:
 //
+//   · YOUR OWN units are white on YOUR minimap in EVERY mode, filter or no filter — the
+//     `self` tone comes back even at state 0, which is the whole of "for themselves only";
 //   · mode 2 (state 1) is the MINIMAP ONLY — the world keeps player colours;
-//   · the minimap is "As Mode 2" in BOTH filtered modes, so YOU are teal on it with your
-//     allies, and only the game world in mode 3 separates you out in blue;
 //   · the neutrals are never filtered (a creep and a shop share owner -1, so reddening one
 //     reddens the other).
 //
@@ -16,7 +17,8 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const {
-  allyFilterColor,
+  minimapDotTone,
+  worldFilterColor,
   allyButtonSkin,
   nextAllyColorMode,
   toAllyColorMode,
@@ -31,33 +33,39 @@ function check(what, got, want) {
   if (!ok) console.log(`        want ${JSON.stringify(want)}\n        got  ${JSON.stringify(got)}`);
 }
 
-const RED = ALLY_FILTER_COLOR.enemy; // 0
-const BLUE = ALLY_FILTER_COLOR.self; // 1
-const TEAL = ALLY_FILTER_COLOR.ally; // 2
+const RED = ALLY_FILTER_COLOR.enemy; // player-colour slot 0
+const BLUE = ALLY_FILTER_COLOR.self; // slot 1
+const TEAL = ALLY_FILTER_COLOR.ally; // slot 2
 
-console.log("Mode 1 (state 0) — all units use Player Colors");
-for (const surface of ["minimap", "world"]) {
-  for (const side of ["self", "ally", "enemy", "neutral"]) {
-    check(`${surface}/${side} unfiltered`, allyFilterColor(0, surface, side), null);
-  }
+console.log("You are FogColorPlayer white on your own minimap in every mode");
+check("mode 1 (state 0)", minimapDotTone(0, "self"), "self");
+check("mode 2 (state 1)", minimapDotTone(1, "self"), "self");
+check("mode 3 (state 2)", minimapDotTone(2, "self"), "self");
+
+console.log("Mode 1 (state 0) — everyone else uses Player Colors, map and world");
+for (const side of ["ally", "enemy", "neutral"]) {
+  check(`minimap/${side} unfiltered`, minimapDotTone(0, side), null);
+}
+for (const side of ["self", "ally", "enemy", "neutral"]) {
+  check(`world/${side} unfiltered`, worldFilterColor(0, side), null);
 }
 
 console.log("Mode 2 (state 1) — the minimap only");
-check("minimap: you go teal with your allies", allyFilterColor(1, "minimap", "self"), TEAL);
-check("minimap: an ally is teal", allyFilterColor(1, "minimap", "ally"), TEAL);
-check("minimap: an enemy is red", allyFilterColor(1, "minimap", "enemy"), RED);
-check("minimap: a creep/shop is left alone", allyFilterColor(1, "minimap", "neutral"), null);
+check("minimap: an ally is teal", minimapDotTone(1, "ally"), "ally");
+check("minimap: an enemy is red", minimapDotTone(1, "enemy"), "enemy");
+check("minimap: a creep/shop is left alone", minimapDotTone(1, "neutral"), null);
 for (const side of ["self", "ally", "enemy", "neutral"]) {
-  check(`world/${side} still player colours`, allyFilterColor(1, "world", side), null);
+  check(`world/${side} still player colours`, worldFilterColor(1, side), null);
 }
 
 console.log("Mode 3 (state 2) — and the game world");
-check("world: YOU are blue", allyFilterColor(2, "world", "self"), BLUE);
-check("world: an ally is teal", allyFilterColor(2, "world", "ally"), TEAL);
-check("world: an enemy is red", allyFilterColor(2, "world", "enemy"), RED);
-check("world: a creep/shop is left alone", allyFilterColor(2, "world", "neutral"), null);
-check("minimap is still 'As Mode 2': you are teal", allyFilterColor(2, "minimap", "self"), TEAL);
-check("minimap: an enemy is red", allyFilterColor(2, "minimap", "enemy"), RED);
+check("world: YOU are blue", worldFilterColor(2, "self"), BLUE);
+check("world: an ally is teal", worldFilterColor(2, "ally"), TEAL);
+check("world: an enemy is red", worldFilterColor(2, "enemy"), RED);
+check("world: a creep/shop is left alone", worldFilterColor(2, "neutral"), null);
+check("minimap: you are STILL white, not the world's blue", minimapDotTone(2, "self"), "self");
+check("minimap: an ally is teal", minimapDotTone(2, "ally"), "ally");
+check("minimap: an enemy is red", minimapDotTone(2, "enemy"), "enemy");
 
 console.log("The button cycles three modes, and a script's state clamps to them");
 check("0 → 1 → 2 → 0", [nextAllyColorMode(0), nextAllyColorMode(1), nextAllyColorMode(2)], [1, 2, 0]);

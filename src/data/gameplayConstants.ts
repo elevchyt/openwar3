@@ -345,6 +345,23 @@ export const MINIMAP = {
   /** Minimap dot colour for Neutral Hostile creeps — and, in the client, for every
    *  other unowned unit (gold mines, shops, critters) too. */
   FogColorCreepNormal: [255, 0, 0, 50],
+  /**
+   * The minimap's FRIEND-OR-FOE palette, and the reason the ally-colour tooltip can leave
+   * "You" out of its Mode 2 line: **your own units are white on your own minimap in every
+   * mode** — the row is right here, beside the creep colour the dots already come from, and
+   * it is not part of the filter at all. (Confirmed in the real client by the developer.)
+   *
+   * `FogColorAlly` / `FogColorEnemy` ARE the filter: they are what modes 2 and 3 paint
+   * everyone else in, which is why the minimap's teal (0,255,210) is its own colour rather
+   * than the player-colour teal a unit wears in the world. See game/allyColor.ts.
+   *
+   * The rest of the family is the same palette for things that are not players
+   * (`FogColorResource`, `-Item`, `-Hero`, `-Destructable`) — we draw glyphs for those
+   * instead (minimapView.minimapIcons), so they are not transcribed here.
+   */
+  FogColorPlayer: [255, 255, 255, 255],
+  FogColorAlly: [255, 0, 255, 210],
+  FogColorEnemy: [255, 255, 0, 0],
 } as const;
 
 /**
@@ -767,6 +784,12 @@ const cssColor = ([, r, g, b]: readonly number[]): string => `rgb(${r},${g},${b}
 
 /** Minimap dot colour for creeps and every other unowned unit. */
 export const NEUTRAL_DOT_COLOR = cssColor(MINIMAP.FogColorCreepNormal);
+
+/** Minimap dot colour for YOUR OWN units — white, in every Ally Color Mode (see MINIMAP). */
+export const SELF_DOT_COLOR = cssColor(MINIMAP.FogColorPlayer);
+/** …and for an ally's / an enemy's, once an ally-colour mode is on. */
+export const ALLY_DOT_COLOR = cssColor(MINIMAP.FogColorAlly);
+export const ENEMY_DOT_COLOR = cssColor(MINIMAP.FogColorEnemy);
 
 /** A creep camp's minimap marker, from its combined creep level. */
 export function campMarker(level: number): { color: string; scale: number } {

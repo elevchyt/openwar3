@@ -31,8 +31,8 @@ import { applyWorldSnapshot } from "./snapshotApply";
 import { perfLog } from "../dev/perfLog";
 import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot, FxSnapshot } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
-import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
-import { allyFilterColor, nextAllyColorMode, toAllyColorMode, type AllyColorMode, type ColorSide } from "./allyColor";
+import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot, type MinimapDot } from "./minimapView";
+import { minimapDotTone, nextAllyColorMode, toAllyColorMode, worldFilterColor, type AllyColorMode, type ColorSide } from "./allyColor";
 import type { RenderBuildJob, RenderUnit } from "./renderUnit";
 import { SnapshotIndex } from "./renderView";
 import type { FogArea, FogModifier } from "./fog";
@@ -987,10 +987,10 @@ export class RtsController {
     return this.alliances.coAllied(this.localPlayer, owner) ? "ally" : "enemy";
   }
 
-  /** The colour a minimap dot for `owner` should be painted in — the filter's answer, or
-   *  the player's own colour. */
-  private minimapColor(owner: number): number {
-    return allyFilterColor(this.allyColorFilter, "minimap", this.colorSide(owner)) ?? this.playerColor(owner);
+  /** Which of the minimap's own friend-or-foe tones this dot takes — `self` (white) in every
+   *  mode, ally/enemy once one is on, null to keep the player's colour. */
+  private minimapTone(owner: number): MinimapDot["tone"] {
+    return minimapDotTone(this.allyColorFilter, this.colorSide(owner));
   }
 
   /**
@@ -1003,7 +1003,7 @@ export class RtsController {
    * `SetPlayerColor`.
    */
   unitColor(owner: number, override?: number): number {
-    return allyFilterColor(this.allyColorFilter, "world", this.colorSide(owner)) ?? override ?? this.playerColor(owner);
+    return worldFilterColor(this.allyColorFilter, this.colorSide(owner)) ?? override ?? this.playerColor(owner);
   }
 
   /** Re-tint every body on the field to `unitColor` — for the frame the mode changes on.
@@ -6291,7 +6291,7 @@ export class RtsController {
    *  shops alike are furniture: the ones worth finding already carry a glyph of
    *  their own (minimapIcons), and the rest would only speckle the map. Creeps do
    *  get a dot once visible — and their camp marker steps aside for it. */
-  dots(vp: Viewpoint = this.local): Array<{ x: number; y: number; owner: number }> {
+  dots(vp: Viewpoint = this.local): MinimapDot[] {
     // On a CLIENT, draw the authority's answer, not our own prediction (item 10c). A received
     // snapshot is already AoI-filtered for this seat, so `dotsFromSnapshot` re-applies no fog —
     // it draws what it was sent. Through the SAME `SnapshotIndex` the frame reads (item
@@ -6300,12 +6300,13 @@ export class RtsController {
     // `owner` on a dot is read for one thing only — what COLOUR to paint it — so it carries
     // the player's colour rather than its slot (see playerColor).
     const dots = this.snapshot.active ? dotsFromSnapshot(this.snapshot.units) : minimapDots(this.sim, vp);
-    // Ally Color Mode paints that colour instead, from mode 2 up (allyColor.ts). Only for the
-    // LOCAL viewpoint: the filter is this seat's display setting, and asking for somebody
-    // else's dots (a test, an observer) must not come back wearing our teal.
-    const mine = vp === this.local;
-    if (mine && this.allyColorFilter > 0) for (const d of dots) d.owner = this.minimapColor(d.owner);
-    else if (this.playerColors.size) for (const d of dots) d.owner = this.playerColor(d.owner);
+    // …and the friend-or-foe TONE on top of it, which is not a player colour at all: your own
+    // units are white on your own minimap in every mode, and from mode 2 up everyone else is
+    // the `[FogOfWar]` teal or red (allyColor.ts). Only for the LOCAL viewpoint — the mode is
+    // this seat's display setting, and asking for somebody else's dots (a test, an observer)
+    // must not come back wearing our white.
+    if (vp === this.local) for (const d of dots) d.tone = this.minimapTone(d.owner);
+    if (this.playerColors.size) for (const d of dots) d.owner = this.playerColor(d.owner);
     return dots;
   }
 

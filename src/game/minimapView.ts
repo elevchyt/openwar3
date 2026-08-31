@@ -1,5 +1,6 @@
 import { isOffField, type SimUnit } from "../sim/world";
 import type { Viewpoint } from "./viewpoint";
+import type { MinimapTone } from "./allyColor";
 
 // What the minimap shows, asked for ONE viewpoint (docs/multiplayer.md Phase E item 3b).
 //
@@ -12,6 +13,22 @@ import type { Viewpoint } from "./viewpoint";
 // The point of the move is therefore testability rather than tidiness: the property that matters —
 // these answer for a viewpoint whose client rendered nothing — is exactly the one a single
 // running client cannot demonstrate.
+
+/**
+ * One coloured dot: a world position, the owner it takes its colour from, and — for the
+ * viewpoint's OWN screen — the friend-or-foe `tone` that colour is overridden by.
+ *
+ * `tone` is filled in by `RtsController.dots`, not here: it is a property of who is LOOKING
+ * (game/allyColor.ts), where everything in this file is a property of the world. It is on the
+ * record rather than resolved to a colour so that the colours themselves stay in one place,
+ * the game's own `[FogOfWar]` palette (data/gameplayConstants.ts).
+ */
+export interface MinimapDot {
+  x: number;
+  y: number;
+  owner: number;
+  tone?: MinimapTone;
+}
 
 /** The slice of the world the minimap reads. Narrow on purpose, the same discipline as
  *  `VisionWorld`: this must never become a second handle on the whole `SimWorld`. */
@@ -54,8 +71,8 @@ export function hiddenFor(vp: Viewpoint, u: SimUnit): boolean {
  * Neutral-passive units — critters, shops, the neutral buildings — never get a dot. They are
  * furniture, and `minimapIcons` paints the ones that get an icon instead.
  */
-export function minimapDots(world: MinimapWorld, vp: Viewpoint): Array<{ x: number; y: number; owner: number }> {
-  const out: Array<{ x: number; y: number; owner: number }> = [];
+export function minimapDots(world: MinimapWorld, vp: Viewpoint): MinimapDot[] {
+  const out: MinimapDot[] = [];
   for (const u of world.units.values()) {
     if (u.neutralPassive) continue;
     if (isOffField(u)) continue;
@@ -91,8 +108,8 @@ export interface SnapshotDotUnit {
  * unit rather than about who may see it: neutral-passive furniture and off-the-field units get
  * no dot, exactly as on the host, through the SAME `isOffField`.
  */
-export function dotsFromSnapshot(units: readonly SnapshotDotUnit[]): Array<{ x: number; y: number; owner: number }> {
-  const out: Array<{ x: number; y: number; owner: number }> = [];
+export function dotsFromSnapshot(units: readonly SnapshotDotUnit[]): MinimapDot[] {
+  const out: MinimapDot[] = [];
   for (const u of units) {
     if (u.neutralPassive) continue;
     if (isOffField(u)) continue;

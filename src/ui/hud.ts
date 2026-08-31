@@ -5,13 +5,14 @@
 // used when available (asset-resolver philosophy: authentic when present).
 
 import { ArmorType, AttackType, PrimaryAttribute } from "../data/enums";
-import { campMarker, NEUTRAL_DOT_COLOR } from "../data/gameplayConstants";
+import { ALLY_DOT_COLOR, campMarker, ENEMY_DOT_COLOR, NEUTRAL_DOT_COLOR, SELF_DOT_COLOR } from "../data/gameplayConstants";
 import type { MinimapPing } from "../jass/runtime";
 import { escapeHtml, wc3StripMarkup, wc3ToHtml } from "./wc3Text";
 
 import { CHAT_MAX_LENGTH, sanitizeChat, type ChatTarget } from "../game/chat";
 import type { HeroBarEntry } from "../game/rts";
 import { allyButtonSkin, type AllyColorMode } from "../game/allyColor";
+import type { MinimapDot } from "../game/minimapView";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
@@ -181,8 +182,11 @@ export interface HudDriver {
   controlEnabled(): boolean;
   resources(): { gold: number; lumber: number; foodUsed: number; foodMax: number };
   selection(): HudSelection | null;
-  /** Minimap dots: world positions + owning player (for color). */
-  dots(): Array<{ x: number; y: number; owner: number }>;
+  /** Minimap dots: world positions + owning player (for colour), and the friend-or-foe
+   *  `tone` that overrides that colour on the local player's own minimap — white for their
+   *  own units in every mode, teal/red for allies and enemies once an Ally Color Mode is on
+   *  (game/allyColor.ts). */
+  dots(): MinimapDot[];
   /** Ally Color Mode — which of the three the local player is in (game/allyColor.ts). The
    *  button right of the minimap wears its face; Alt-A and a click cycle it. */
   allyColorMode(): AllyColorMode;
@@ -3166,7 +3170,20 @@ export class GameHud {
     for (const dot of this.driver.dots()) {
       const p = this.toMini(dot.x, dot.y, ox, oy, w, h);
       if (!p) continue;
-      ctx.fillStyle = dot.owner >= 0 ? PLAYER_COLORS[dot.owner % PLAYER_COLORS.length] : NEUTRAL_DOT_COLOR;
+      // The friend-or-foe tone wins over the player colour when there is one: your own units
+      // are `FogColorPlayer` white on your own minimap in EVERY mode, and an ally/enemy takes
+      // the minimap's own teal/red from mode 2 up. All three are the game's own [FogOfWar]
+      // palette, the same section the neutral dot below already comes from.
+      ctx.fillStyle =
+        dot.tone === "self"
+          ? SELF_DOT_COLOR
+          : dot.tone === "ally"
+            ? ALLY_DOT_COLOR
+            : dot.tone === "enemy"
+              ? ENEMY_DOT_COLOR
+              : dot.owner >= 0
+                ? PLAYER_COLORS[dot.owner % PLAYER_COLORS.length]
+                : NEUTRAL_DOT_COLOR;
       ctx.fillRect(p[0] - d, p[1] - d, UNIT_DOT, UNIT_DOT);
     }
     this.drawPings(ctx, ox, oy, w, h); // over everything: a ping is meant to be seen
