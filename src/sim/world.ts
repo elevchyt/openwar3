@@ -61,6 +61,12 @@ export interface SimWeapon {
    *  is the rate the renderer plays the swing clip at (see rts.ts attackAnimRate). */
   backswing: number;
   range: number; // measured between collision hulls, WC3-style
+  /** `RngBuff` — "Range Motion Buffer": how far the target may drift beyond `range` AFTER the
+   *  swing has begun and still be struck by it (see WeaponSlotDef.rangeBuffer). 250 on almost
+   *  every armed row in the game, which is a LOT of ground — a Footman's own reach is 90 — and
+   *  deliberately so: it is what makes a committed WC3 blow land on a target already walking
+   *  away. Only the strike consults it; the chase band is ATTACK_LEASH's business. */
+  rangeBuffer: number;
   // Pre-upgrade baselines, straight off this slot's UnitWeapons columns.
   baseDamage: number;
   baseDice: number;
@@ -299,6 +305,7 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
       damagePoint: s.damagePoint,
       backswing: s.backswing,
       range: s.range,
+      rangeBuffer: s.rangeBuffer,
       baseDamage: s.damage,
       baseDice: s.dice,
       baseRange: s.range,
@@ -6704,8 +6711,10 @@ export class SimWorld {
     let [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
     if (!this.blockFree(cx0, cy0, n)) {
       // Our tile is taken — relocate to the nearest free tile still comfortably inside
-      // the strike band (hits connect out to range + ATTACK_LEASH; cap a margin below so
-      // we stay inCombat and don't re-chase). This branch DOES move us (onto that tile).
+      // the strike band (range + ATTACK_LEASH, the band engage() plants and swings from;
+      // cap a margin below so we stay inCombat and don't re-chase). This branch DOES move
+      // us (onto that tile). Not the weapon's Range Motion Buffer: that one is how far a
+      // target may drift once a blow is already committed, never where to stand.
       const maxGap = (this.weaponVs(u, t) ?? u.weapon).range + ATTACK_LEASH * 0.6;
       let free = this.nearestFreeBlockInRange(u, t, n, maxGap);
       if (!free) {
@@ -7292,7 +7301,12 @@ export class SimWorld {
     u.repathT = 0; // clear any lingering hold/repath cooldown so we chase the new target
     // NOW — otherwise a freshly re-acquired enemy (e.g. after the first kill) inherited
     // the previous target's multi-second hold cooldown and the unit just stood there.
-    this.cancelSwing(u); // a fresh target starts a fresh swing
+    // A PLAYER's order cancels a swing already in flight — that is WC3's "attack cancel", and
+    // it is the one thing that may take a committed blow away. An INTERNAL re-target is not an
+    // order (a kill rolled us onto the next enemy, a nearer one turned up): it must not throw
+    // away a strike that is already on its way, so the pending swing rides on and lands on
+    // whom it was aimed at — tickSwing works off `swingTargetId`, not `targetId`.
+    if (ordered) this.cancelSwing(u);
     this.detachBuilder(id);
     // Claim a distinct standing slot around the target so a group swarming one
     // enemy fans out around it instead of lining up (generic: every attack order,
@@ -12885,6 +12899,22 @@ export class SimWorld {
       this.stop(u.id);
       return;
     }
+    // A COMMITTED SWING IS NEVER RE-DECIDED. Everything below this line may re-target the
+    // unit, stand it down or hand it to another enemy, and every one of those routes ends in
+    // issueAttack/stop — which throws the pending strike away. WC3 commits at the swing's
+    // START: the unit plants for the wind-up and the blow lands (or misses on the weapon's own
+    // Range Motion Buffer, in tickSwing) whatever the target does in the meantime — a target
+    // that turns and runs does not make the attacker cancel. Only the PLAYER interrupts a
+    // swing, and that arrives as a fresh order through issueAttack rather than through here.
+    // engage() holds position and keeps facing the blow's target; if that target is gone the
+    // ordinary re-acquire below runs and the swing whiffs, which is the same thing WC3 does.
+    if (u.swingLeft >= 0) {
+      const st = this.units.get(u.swingTargetId);
+      if (st) {
+        this.engage(u, st);
+        return;
+      }
+    }
     // An attack the unit picked up ITSELF never outranks an autocast (issue #94). This is
     // where a Priest's Heal was being lost: idle auto-acquisition and attack-move both hand
     // the fight over as a plain "attack" order, and from then on nothing looked at the
@@ -13714,12 +13744,15 @@ export class SimWorld {
       if (w.missileArt) this.spellEffects.push({ art: w.missileArt, x: t.x, y: t.y, targetId: t.id, z: w.impactZ });
       this.dealDamage(u, t, w, backstab);
     } else {
-      // Melee connects if the target is still within the same reach the unit is
-      // allowed to swing from (range + the combat-hold leash) — NOT the tighter
-      // ARRIVE_EPS, which left a dead band where the attack animation played but
-      // the strike whiffed and no damage landed against a target drifting away.
+      // Melee connects out to the weapon's own RANGE MOTION BUFFER — `RngBuff1/2`, which
+      // every armed row in the game states and which is 250 on all but a handful (a Footman's
+      // reach is 90). That number is the game's answer to this exact question: a swing that
+      // has begun is committed, and the blow lands on a target that has since walked away.
+      // Measuring the strike by the chase leash (48) instead made a unit whiff the moment its
+      // target turned and ran — the animation played, the cooldown was spent, and nothing
+      // happened — which is a fraction of the ground WC3 actually allows.
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap <= w.range + ATTACK_LEASH) this.dealDamage(u, t, w, backstab);
+      if (gap <= w.range + w.rangeBuffer) this.dealDamage(u, t, w, backstab);
     }
   }
 

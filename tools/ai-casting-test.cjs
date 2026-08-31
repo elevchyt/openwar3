@@ -63,7 +63,7 @@ for (const d of [
 ]) DEFS[d.id] = d;
 
 const WEAPON = {
-  enabled: true, targets: ["ground", "air", "structure"], acquire: 600, range: 90, baseRange: 90,
+  enabled: true, targets: ["ground", "air", "structure"], acquire: 600, range: 90, baseRange: 90, rangeBuffer: 250,
   dice: 1, baseDice: 1, sides: 2, damage: 12, baseDamage: 12, cooldown: 1.5, baseCooldown: 1.5,
   damagePoint: 0.3, baseDamagePoint: 0.3, backswing: 0.3, baseBackswing: 0.3,
   baseSpillDist: 0, baseSpillRadius: 0, spillDist: 0, spillRadius: 0, damageLoss: 0,

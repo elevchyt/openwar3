@@ -53,7 +53,7 @@ function splitCsv(line) {
 
 const slot = (over = {}) => ({
   enabled: true, targets: ["ground"], weaponType: "normal", attackType: "hero",
-  damage: 20, dice: 1, sides: 1, cooldown: 2.05, range: 100, damagePoint: 0.1, backswing: 0.1,
+  damage: 20, dice: 1, sides: 1, cooldown: 2.05, range: 100, rangeBuffer: 250, damagePoint: 0.1, backswing: 0.1,
   weaponSound: "", missileArt: "", missileSpeed: 900,
   spillDist: 0, spillRadius: 0, damageLoss: 0, areaFull: 0, areaHalf: 0, areaQuarter: 0,
   splashTargets: [], showUI: true, ...over,

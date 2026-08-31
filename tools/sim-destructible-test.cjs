@@ -38,7 +38,7 @@ const MELEE_TARGETS = ["ground", "structure", "debris", "item", "ward"];
 const WEAPON = (targets = MELEE_TARGETS) => ({
   enabled: true, targets, ranged: false,
   damage: 20, baseDamage: 20, dice: 1, baseDice: 1, sides: 1,
-  cooldown: 1.0, baseCooldown: 1.0, range: 90, baseRange: 90,
+  cooldown: 1.0, baseCooldown: 1.0, range: 90, baseRange: 90, rangeBuffer: 250,
   damagePoint: 0.1, baseDamagePoint: 0.1, backswing: 0.1, baseBackswing: 0.1,
   spillDist: 0, spillRadius: 0, baseSpillDist: 0, baseSpillRadius: 0, damageLoss: 0,
   acquire: 800, attackType: "normal", missileArt: "", missileSpeed: 0,

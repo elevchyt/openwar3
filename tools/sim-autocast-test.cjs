@@ -36,7 +36,7 @@ const HEAL = {
 // each tick (`w.range = w.baseRange + upg.range`) — leave one out and the weapon's range comes
 // back NaN, which reads as "never in range of anything" everywhere a band is measured.
 const PRIEST_WEAPON = {
-  enabled: true, targets: ["ground", "air", "structure"], acquire: 600, range: 600, baseRange: 600,
+  enabled: true, targets: ["ground", "air", "structure"], acquire: 600, range: 600, baseRange: 600, rangeBuffer: 250,
   dice: 1, baseDice: 1, sides: 2, base: 9, damage: 9, baseDamage: 9, cooldown: 1.9, baseCooldown: 1.9, rangeMotionBuffer: 250,
   damagePoint: 0.3, baseDamagePoint: 0.3, backswing: 0.3, baseBackswing: 0.3, baseSpillDist: 0, baseSpillRadius: 0,
   attackType: "magic", ranged: true,

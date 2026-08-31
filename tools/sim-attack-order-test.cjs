@@ -35,7 +35,7 @@ const SIM_DT = 1 / 60; // must match render/mapViewer.ts SIM_DT
 const WEAPON = () => ({
   enabled: true, targets: ["ground", "air", "structure"], ranged: false,
   damage: 12, baseDamage: 12, dice: 1, baseDice: 1, sides: 6,
-  cooldown: 1.2, baseCooldown: 1.2, range: 90, baseRange: 90,
+  cooldown: 1.2, baseCooldown: 1.2, range: 90, baseRange: 90, rangeBuffer: 250,
   damagePoint: 0.4, baseDamagePoint: 0.4, backswing: 0.3, baseBackswing: 0.3,
   spillDist: 0, spillRadius: 0, baseSpillDist: 0, baseSpillRadius: 0, damageLoss: 0,
   acquire: 500, attackType: "normal", missileArt: "", missileSpeed: 0,
@@ -365,6 +365,32 @@ console.log("an attack order whose target goes invulnerable");
   run(w, 12);
   check(`advanced past it (x ${u.x.toFixed(0)}, it stands at 900, destination 2400)`, u.x > 2000);
   check(`never engaged it (targetId ${u.targetId}, hp ${shielded.hp})`, shielded.hp === shielded.maxHp);
+}
+
+// ── A COMMITTED SWING LANDS ─────────────────────────────────────────────────────────────
+// The wind-up is a commitment. Once the attack animation has started, a target that turns and
+// runs does NOT make the attacker cancel it: the unit stands its ground through the wind-up
+// and the blow goes through. WC3 even says how far the target may get and still be struck —
+// the weapon's own Range Motion Buffer (`RngBuff1`, 250 on all but a handful of the game's
+// armed rows), which is the one thing the strike consults. Measuring it by the chase leash
+// (48) instead made a melee unit whiff the moment its target ran: animation played, cooldown
+// spent, nothing happened.
+console.log("a swing already begun is not interrupted by the target running away");
+{
+  const w = new SimWorld(grid(), 1);
+  const u = addUnit(w, 1, 0, 500, 500);
+  const runner = addUnit(w, 2, 1, 600, 500, { weapons: [], hp: 500, maxHp: 500 });
+  w.issueOrder(1, { kind: "attack", targetId: runner.id, force: false });
+  let ticks = 0;
+  while (u.swingLeft < 0 && ticks++ < Math.round(5 / SIM_DT)) w.tick(SIM_DT); // wait for the swing to start
+  check("the swing started", u.swingLeft >= 0);
+  const hp = runner.hp;
+  const swingTarget = u.swingTargetId;
+  w.issueOrder(2, { kind: "move", x: 2400, y: 500 }); // …and off it goes, mid-swing
+  run(w, 0.5); // the damage point is 0.4s in
+  check(`the blow landed anyway (hp ${runner.hp}, was ${hp})`, runner.hp < hp);
+  check(`…on the unit it was aimed at (swingTargetId ${swingTarget})`, swingTarget === runner.id);
+  check(`…and it is still on the order (order ${u.order}, target ${u.targetId})`, u.order === "attack" && u.targetId === runner.id);
 }
 
 console.log(failures === 0 ? "\nattack-order: all checks passed" : `\nattack-order: ${failures} FAILED`);

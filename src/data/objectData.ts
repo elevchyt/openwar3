@@ -204,6 +204,11 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // with. A unit that declares no second slot simply ignores every `*2` code.
   ua1r: w1(n, (w, v) => { w.range = v; }),
   ua2r: w2(n, (w, v) => { w.range = v; }),
+  // `RngBuff` — how far the target may drift out of range after the swing has started and
+  // still be hit (see WeaponSlotDef.rangeBuffer). A map that retunes a unit's reach usually
+  // retunes this beside it, and the pair is what decides whether a committed blow connects.
+  urb1: w1(n, (w, v) => { w.rangeBuffer = v; }),
+  urb2: w2(n, (w, v) => { w.rangeBuffer = v; }),
   ua1t: w1((v) => toAttackType(s(v)), (w, v) => { w.attackType = v; }),
   ua2t: w2((v) => toAttackType(s(v)), (w, v) => { w.attackType = v; }),
   ua1c: w1(n, (w, v) => { w.cooldown = v; }),
@@ -452,7 +457,6 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   uamn: "minRange — no minimum attack range; 6 stock rows carry one (the mortar/siege pair)",
   uma1: "no missile arc (Missilearc)", uma2: "no missile arc (Missilearc)",
   umh1: "missiles always home (MissileHoming)", umh2: "missiles always home (MissileHoming)",
-  urb1: "no ranged range buffer (RngBuff1)", urb2: "no ranged range buffer (RngBuff2)",
   utc1: "no multi-target attacks (targCount1)", utc2: "no multi-target attacks (targCount2)",
 
   // Movement / pathing we do not model yet.

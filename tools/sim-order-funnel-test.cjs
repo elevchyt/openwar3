@@ -42,7 +42,7 @@ function unit(over = {}) {
     inCombat: false, noCollision: false, stuckT: 0, stuckRetries: 0, acquireT: 0,
     pendingCast: null,
     weapons: [{
-      enabled: true, baseDamage: 12, damage: 12, baseDice: 1, dice: 1, baseRange: 90, range: 90,
+      enabled: true, baseDamage: 12, damage: 12, baseDice: 1, dice: 1, baseRange: 90, rangeBuffer: 250, range: 90,
       baseDamagePoint: 0.3, damagePoint: 0.3, baseBackswing: 0.3, backswing: 0.3,
       baseCooldown: 1.35, cooldown: 1.35, baseSpillDist: 0, spillDist: 0,
       baseSpillRadius: 0, spillRadius: 0,

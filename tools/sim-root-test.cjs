@@ -55,8 +55,8 @@ function ancient(abilId, over = {}) {
     abilities: [{ id: abilId, code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }],
     // Slot 0 = a 128-range melee; slot 1 = the Protector's 700-range attack that also hits air.
     weapons: [
-      { enabled: false, baseDamage: 25, damage: 0, baseDice: 1, dice: 0, baseRange: 128, range: 0, baseDamagePoint: 0.3, damagePoint: 0, baseBackswing: 0.3, backswing: 0, baseCooldown: 2, cooldown: 0, baseSpillDist: 0, spillDist: 0, baseSpillRadius: 0, spillRadius: 0 },
-      { enabled: false, baseDamage: 44, damage: 0, baseDice: 1, dice: 0, baseRange: 700, range: 0, baseDamagePoint: 0.3, damagePoint: 0, baseBackswing: 0.3, backswing: 0, baseCooldown: 2, cooldown: 0, baseSpillDist: 0, spillDist: 0, baseSpillRadius: 0, spillRadius: 0 },
+      { enabled: false, baseDamage: 25, damage: 0, baseDice: 1, dice: 0, baseRange: 128, rangeBuffer: 250, range: 0, baseDamagePoint: 0.3, damagePoint: 0, baseBackswing: 0.3, backswing: 0, baseCooldown: 2, cooldown: 0, baseSpillDist: 0, spillDist: 0, baseSpillRadius: 0, spillRadius: 0 },
+      { enabled: false, baseDamage: 44, damage: 0, baseDice: 1, dice: 0, baseRange: 700, rangeBuffer: 250, range: 0, baseDamagePoint: 0.3, damagePoint: 0, baseBackswing: 0.3, backswing: 0, baseCooldown: 2, cooldown: 0, baseSpillDist: 0, spillDist: 0, baseSpillRadius: 0, spillRadius: 0 },
     ],
     baseArmor: 2, baseMaxHp: 900, baseMaxMana: 0, baseSpeed: 40, baseSight: 1800,
     ...over,

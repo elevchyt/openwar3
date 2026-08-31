@@ -52,6 +52,13 @@ export interface WeaponSlotDef {
    *  plays at (see rts.ts attackAnimRate — the pair is NOT the clip's length). */
   backswing: number;
   range: number;
+  /** `RngBuff1/2` — "Range Motion Buffer": how far the target may drift OUTSIDE this weapon's
+   *  range AFTER the swing has begun and still be struck by it. Every armed row in the game
+   *  states one — 250 on all but a handful (the Knight, the Hippogryph and the Pit Lord swing
+   *  300; a worker's second slot, and the Flying Machine's bombs, 120/125) — and it is what
+   *  makes a WC3 unit that has committed to a blow land it on someone already walking away
+   *  instead of whiffing at the last moment. See SimWorld.tickSwing. */
+  rangeBuffer: number;
   weaponType: WeaponType; // weapTp1/2 — normal = melee, instant = hitscan, the rest fly
   attackType: AttackType; // atkType1/2 → the damage table's row
   /** This slot's weapon-impact base — the clang half of `<weapon><armour>`, paired with the
@@ -811,6 +818,9 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
       damagePoint: num(w, `dmgpt${n}`, 0),
       backswing: num(w, `backSw${n}`, 0),
       range: num(w, `rangeN${n}`, 0),
+      // Every armed stock row states its buffer, so the fallback is only ever reached by a
+      // custom row that dropped the column — and 584 of the 587 that state one say 250.
+      rangeBuffer: num(w, `RngBuff${n}`, 250),
       weaponType,
       attackType: toAttackType(str(w, `atkType${n}`)),
       weaponSound: soundBase(str(w, `weapType${n}`)) || soundBase(ui ? str(ui, `weap${n}`) : ""),

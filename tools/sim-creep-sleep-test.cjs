@@ -34,7 +34,7 @@ const W = 160, H = 160;
 const WEAPON = () => ({
   enabled: true, targets: ["ground", "air", "structure"], ranged: false,
   damage: 12, baseDamage: 12, dice: 1, baseDice: 1, sides: 6,
-  cooldown: 1.2, baseCooldown: 1.2, range: 90, baseRange: 90,
+  cooldown: 1.2, baseCooldown: 1.2, range: 90, baseRange: 90, rangeBuffer: 250,
   damagePoint: 0.4, baseDamagePoint: 0.4, backswing: 0.3, baseBackswing: 0.3,
   spillDist: 0, spillRadius: 0, baseSpillDist: 0, baseSpillRadius: 0, damageLoss: 0,
   acquire: 500, attackType: "normal", missileArt: "", missileSpeed: 0,
