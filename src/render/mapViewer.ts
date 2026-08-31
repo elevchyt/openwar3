@@ -8997,6 +8997,17 @@ export class MapViewerScene {
     this.sounds?.playUi(voice ? `${voice}${UI_SOUND_RACE[this.localRace]}` : "InterfaceError");
   }
 
+  /** Per ALLIED player, the world clock when something of theirs was last hit — whether or
+   *  not we said anything about it. The ally warning is one per LULL, not one per blow (see
+   *  showAlert): it speaks once and then holds its tongue for as long as the raid keeps
+   *  going, so this is a timer that every further blow RESTARTS. */
+  private allyAttackAt = new Map<number, number>();
+  /** Seconds of quiet an ally must have before their next raid is news again. Ours, not the
+   *  game's: MiscData's `AttackNotifyDelay` (30s) is the rule for YOUR OWN property and the
+   *  data says nothing about the ally lines, which in the real client are far rarer than one
+   *  every half-minute. A minute of silence is what that reads as. */
+  private static readonly ALLY_ATTACK_QUIET = 60;
+
   /**
    * Say the game's own news out loud: the [Errors] rows nobody asked for (see SimWorld.Alert).
    *
@@ -9008,7 +9019,9 @@ export class MapViewerScene {
    *
    * The ALLY variants are why the sim doesn't do this itself: one blow, two audiences, and
    * a different row and a different WAV for each. An ally's gold mine is the exception with
-   * no second row at all — the data offers nothing to say about it, so nothing is said.
+   * no second row at all — the data offers nothing to say about it, so nothing is said. The
+   * ally side is also the QUIET one: only their buildings are news, and only once per raid
+   * (see the attack case, and `allyAttackAt`).
    */
   private showAlert(a: Alert): void {
     const own = a.player === this.localPlayer;
@@ -9023,8 +9036,27 @@ export class MapViewerScene {
       case "attack":
       case "townattack": {
         const town = a.kind === "townattack";
-        key = own ? (town ? "Townattack" : "Unitattack") : (town ? "Allytownattack" : "Allyunderattack");
-        sound = own ? (town ? "TownAttack" : "UnderAttack") : (town ? "AllyTownUnderAttack" : "AllyUnderAttack");
+        // An ally's fights are not a running commentary. Two rules the real client applies to
+        // the ally lines and we did not, which together are why "our ally is under attack"
+        // was heard every few seconds:
+        //   1. Only their BUILDINGS are news. Their army trading blows in the field is their
+        //      own business, so `Allyunderattack`/`AllyUnderAttack` is a pair the game ships
+        //      and never speaks — the town line is the only one an ally ever raises.
+        //   2. It is said ONCE per raid: the warning starts a minute of silence about that
+        //      player, and every further blow on their property RESTARTS that minute rather
+        //      than repeating the line. A raid is announced again only once it has actually
+        //      been over for ALLY_ATTACK_QUIET seconds.
+        // Deliberately not the sim's own `attackNotify` throttle: that one is per VICTIM and
+        // half this long, and the ally line has a different audience with a different clock.
+        if (!own) {
+          if (!town) return;
+          const t = this.rts?.simWorld.elapsed ?? 0;
+          const last = this.allyAttackAt.get(a.player);
+          this.allyAttackAt.set(a.player, t); // the timer restarts whether or not we speak
+          if (last !== undefined && t - last < MapViewerScene.ALLY_ATTACK_QUIET) return;
+        }
+        key = own ? (town ? "Townattack" : "Unitattack") : "Allytownattack";
+        sound = own ? (town ? "TownAttack" : "UnderAttack") : "AllyTownUnderAttack";
         if (!own) args.push(this.playerLabel(a.player)); // "%s's city is under siege!" — the possessive names a PLAYER
         // …and the minimap flashes where the blow landed, which is how you find a raid you
         // cannot see. Observed behaviour rather than a data field: no table carries a colour
