@@ -541,6 +541,7 @@ export interface IllusionInit {
   properName: string; // the original's given name
   mana: number; // the original's pool after the cast was paid
   level: number; // the original's hero level
+  xp: number; // the original's experience — a copy shares its hero's bar, it earns none of its own
   baseStr: number; // base attributes INCLUDING permanent tome gains
   baseAgi: number;
   baseInt: number;
@@ -3090,6 +3091,24 @@ export class SimWorld {
     return !!shop && this.shopInteract(shop.typeId).showArrow;
   }
 
+  /** Could this unit ever be a "valid patron" — the thing standing at the counter that takes
+   *  delivery of a purchase? It must be alive and have an inventory (in melee that means a
+   *  hero), and it must not be an ILLUSION.
+   *
+   *  The illusion clause is the same rule `pickUpItem` enforces (docs/illusions.md): a copy's
+   *  six slots are a PICTURE — inert items with `id: 0` — and it can neither use, drop, give
+   *  nor pick up one. `purchaseItem` writes into `buyer.inventory` directly rather than going
+   *  through `pickUpItem`, so without this an image was a perfectly good shopper: the gold
+   *  left the stash, the Potion of Healing went into a body that cannot drink it, and 60
+   *  seconds later it popped and took the purchase with it.
+   *
+   *  Stated once because five callers ask it (the patron list, the Select User nomination and
+   *  its re-validation, the adoption pass, and the purchase itself) and a shop that offers a
+   *  buyer it will then refuse is the same bug twice. */
+  private isPatron(u: SimUnit): boolean {
+    return u.hp > 0 && u.inventory.length > 0 && !u.isIllusion;
+  }
+
   /** The units of `player` that could take delivery of an item bought from this shop — WC3's
    *  "valid patron". A patron needs an inventory (in melee that means a hero) and must be
    *  standing inside the shop's activation radius; otherwise the purchase is refused with
@@ -3101,7 +3120,7 @@ export class SimWorld {
     if (!shop) return [];
     const out: SimUnit[] = [];
     for (const u of this.units.values()) {
-      if (u.owner !== player || u.hp <= 0 || !u.inventory.length) continue;
+      if (u.owner !== player || !this.isPatron(u)) continue;
       if (this.inShopRange(shop, u)) out.push(u);
     }
     return out;
@@ -3130,7 +3149,7 @@ export class SimWorld {
       return true;
     }
     const u = this.units.get(unitId);
-    if (!u || u.owner !== player || u.hp <= 0 || !u.inventory.length) return false;
+    if (!u || u.owner !== player || !this.isPatron(u)) return false;
     if (!this.inShopRange(shop, u)) return false;
     let per = this.shopBuyers.get(shopId);
     if (!per) this.shopBuyers.set(shopId, (per = new Map()));
@@ -3156,7 +3175,7 @@ export class SimWorld {
     const nominated = this.shopBuyers.get(shopId)?.get(player);
     if (nominated === undefined) return null;
     const u = this.units.get(nominated);
-    if (u && u.owner === player && u.hp > 0 && u.inventory.length && this.inShopRange(shop, u)) return u;
+    if (u && u.owner === player && this.isPatron(u) && this.inShopRange(shop, u)) return u;
     this.shopBuyers.get(shopId)?.delete(player); // stale — dead, gone, or walked away
     return null;
   }
@@ -3184,7 +3203,7 @@ export class SimWorld {
       // Which players have a unit here at all — no patrons, nothing to adopt.
       const seen = new Set<number>();
       for (const u of this.units.values()) {
-        if (u.hp <= 0 || !u.inventory.length || seen.has(u.owner)) continue;
+        if (seen.has(u.owner) || !this.isPatron(u)) continue;
         if (!this.inShopRange(shop, u)) continue;
         seen.add(u.owner);
         if (this.shopBuyer(shop.id, u.owner)) continue; // already has a valid one — leave it
@@ -3448,7 +3467,7 @@ export class SimWorld {
     // A RACE shop's tech gates the shelf: an Arcane Vault's Scroll of Town Portal needs a Keep.
     // A NEUTRAL shop's does not — see missingForShop.
     if (this.missingForShop(shopId, itemId, player).length) return "req";
-    if (!buyer || buyer.owner !== player || buyer.hp <= 0 || !buyer.inventory.length) return "nopatron";
+    if (!buyer || buyer.owner !== player || !this.isPatron(buyer)) return "nopatron";
     if (!this.inShopRange(shop, buyer)) return "nopatron";
     if (buyer.inventory.indexOf(null) < 0) return "full";
     const stash = this.stashOf(player);
@@ -11226,6 +11245,18 @@ export class SimWorld {
         break;
       }
     }
+    this.mirrorXpToIllusions(hero);
+  }
+
+  /** Keep a hero's images on his experience bar. An illusion earns nothing of its own, but it
+   *  SHOWS his bar (docs/illusions.md — the panel's hero branch, not the summon timer), so a
+   *  kill that moves the hero's bar and not his copies' would let an enemy read the real one
+   *  off the four panels. Same walk `levelUp` makes, and for the same reason. */
+  private mirrorXpToIllusions(hero: SimUnit): void {
+    if (!hero.isHero) return;
+    for (const im of this.units.values()) {
+      if (im.isIllusion && im.illusionOf === hero.id && im.hp > 0) im.xp = hero.xp;
+    }
   }
 
   private levelUp(hero: SimUnit): void {
@@ -11262,6 +11293,11 @@ export class SimWorld {
     u.illusionDamageTaken = init.taken; // AOmi DataC "Damage Taken (%)" — 200%
     u.properName = init.properName; // the original's name, not the fresh roll spawning gave it
     u.level = Math.max(1, init.level);
+    // …and the ORIGINAL's experience with the level, because the panel shows a hero's copy the
+    // hero's own XP bar (see the HUD's selection branch): a level-5 Blademaster three quarters
+    // of the way to 6 must conjure three copies whose bars read three quarters, not empty. The
+    // image earns none of its own — `gainXp` mirrors the hero's total onto it instead.
+    u.xp = init.xp;
     // Tomes are PERMANENT and live in the original's base attributes (applyPowerup bumps
     // baseStr/baseAgi/baseInt/baseMaxHp), so a copy spawned off the unit type alone would be
     // missing every tome he ever drank — visibly weaker on the sheet than the hero beside it.
@@ -11285,6 +11321,7 @@ export class SimWorld {
    *  the player's hero levelling and must fire once, not once per copy. */
   private levelUpIllusion(im: SimUnit, hero: SimUnit): void {
     im.level = hero.level;
+    im.xp = hero.xp; // the shared bar, carried over the threshold with him
     // The hero's pool rides his new ceiling in proportion, so the images' must too — matching
     // pools is the whole point. recomputeStats does exactly that for both.
     this.recomputeStats(im); // new maxHp/maxMana/attributes off the level
@@ -11371,6 +11408,7 @@ export class SimWorld {
     const target = Math.min(MAX_HERO_LEVEL, Math.trunc(level));
     while (h.level < target) this.levelUp(h);
     h.xp = Math.max(h.xp, xpToReachLevel(h.level));
+    this.mirrorXpToIllusions(h); // the bar his images show is his (see gainXp)
   }
 
   /** AddHeroXP — grant experience (levels follow through gainXp). Not a creep kill,
@@ -11386,6 +11424,7 @@ export class SimWorld {
     if (!h?.isHero) return;
     h.xp = Math.max(0, Math.trunc(xp));
     while (h.level < MAX_HERO_LEVEL && h.xp >= xpToReachLevel(h.level + 1)) this.levelUp(h);
+    this.mirrorXpToIllusions(h); // the bar his images show is his (see gainXp)
   }
 
   /** UnitModifySkillPoints — add/remove unspent skill points (never below zero). */
@@ -11620,6 +11659,7 @@ export class SimWorld {
         properName: of.properName,
         mana: m.mana,
         level: of.level,
+        xp: of.xp,
         baseStr: of.baseStr,
         baseAgi: of.baseAgi,
         baseInt: of.baseInt,

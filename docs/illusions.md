@@ -64,6 +64,7 @@ gives it the timer, the no-corpse death and its vulnerability to Dispel Magic fo
 | takes 200% | `landDamage` | the true chokepoint. `spellDamage` skips `applyDamage` entirely, and Dispel Magic hitting a summon is exactly the case that must double. |
 | cannot cast | `issueCast` | backstop for triggers/hotkeys/autocast. The command card also emits no ability buttons (`pushAbilityButtons`) — a card full of spells that silently refuse reads as a bug. |
 | cannot pick up items | `pickUpItem` | every route in (walk-over, right-click, a trigger's `UnitAddItem`) funnels through that one door. |
+| is no shop patron | `isPatron` | a purchase does NOT go through `pickUpItem` — `purchaseItem` writes straight into the buyer's inventory — so the copy was a perfectly good shopper: the gold left the stash and the potion went into a body that cannot drink it and pops 60 seconds later. One predicate, because five callers ask it (the patron list, Select User and its re-validation, the adoption pass, the purchase) and a shop that offers a buyer it will then refuse is the same bug twice. |
 | dies by popping | `kill` → `unsummon` | an illusion never plays a death clip: it is replaced by `unsummonArt` (the buff's `Specialart`). No corpse, no XP — it was only ever a picture. |
 | expires at 60s | `summonLeft` → `unsummon` | same path as the pop. |
 
@@ -76,8 +77,10 @@ enemy must not. **Both tells key off the LOCAL viewpoint (`seesFor`), never off 
   `applyFogTint`, which is the *single owner* of a unit's `vertexColor` and composes
   base × fog × AoE-highlight × ghost-fade. Writing the tint anywhere else gets silently
   clobbered the next time fog brightness changes.
-- **"Summoned Unit (Ns)" timer** instead of the hero XP bar — `SelectionInfo.isSummon` is
-  gated the same way, and `src/ui/hud.ts` lets the summon branch win over the hero branch.
+- **"Summoned Unit (Ns)" timer** — `SelectionInfo.isSummon` is gated the same way, and
+  `src/ui/hud.ts` lets the summon branch win over the hero branch. **A copy of a HERO is the
+  exception**: it keeps the hero XP bar, because both sides must see the same panel and the
+  enemy's already shows one (below). The owner's tell there is the wash, not the bar.
 - **The 3D portrait bust** wears the same wash (`ModelViewerScene.setTint`, driven by
   `SelectionInfo.isIllusion`). Set it on **every selection**, not once at load: one viewer is
   reused for every unit and an illusion shares the original's model, so selecting the real
@@ -85,6 +88,13 @@ enemy must not. **Both tells key off the LOCAL viewpoint (`seesFor`), never off 
 
 To an enemy, `isSummon`/`isIllusion` both report `false`, so the image keeps a hero's XP bar,
 no tint and no timer — an ordinary Blademaster.
+
+**The XP bar is the original's**, not an empty one under a copied level: `IllusionInit.xp`
+carries it in, and `mirrorXpToIllusions` (called from `gainXp`, `setHeroXp`, `setHeroLevel` and
+`levelUpIllusion`) keeps it there for the copy's whole 60 seconds. An image earns nothing of its
+own — it is shown its hero's bar. Leave it at the spawn default and every panel in the pack
+reads "Level 5 … 0 / 2300" while the real Blademaster's reads three quarters full, which is the
+answer the ability exists to hide, printed.
 
 Nothing in the MPQs carries the tint (`AOmi` declares no colour field); like the ghosting on
 invisible/ethereal units it is a hardcoded engine look.
@@ -99,6 +109,8 @@ gives you the type's defaults, and every one of these would otherwise be a tell.
   Blademasters with four different names.
 - **level** — spawning starts every hero at the unit TYPE's level 1, so a level-5 Blademaster
   would conjure three level-1 copies.
+- **experience** — the bar under that level, and it stays the hero's for the copy's whole life
+  (see *The asymmetry*).
 - **mana** — the original's pool *after* the cast is paid. (`AOmi`'s cost is spent up front at
   cast commit, so the value read when the sequence starts is already post-cast. Capture it
   **once** rather than at landing, or the images drift apart from each other via regen.)
@@ -168,7 +180,7 @@ back to the *attack* clip is not something the engine does.)
    illusion of **the target's** type beside it — `AOmi` copies the *caster*, `AIil` copies the
    *target*.
 3. Build an `IllusionInit` off **the target**: `dealt` = `DataA`, `taken` = `DataB` (**note the
-   shifted indices**), plus its name / level / mana / base attributes / inventory. Set
+   shifted indices**), plus its name / level / experience / mana / base attributes / inventory. Set
    `unsummonArt` = `def.buffSpecialArt` and `summonLeft` = `Dur1`, and let `initIllusion` apply
    it — do not poke the fields yourself, the ordering matters (see above).
    **`illusionOf` is the TARGET, not the caster.** Mirror Image is the one ability where the two

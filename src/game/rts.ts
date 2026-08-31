@@ -4493,8 +4493,11 @@ export class RtsController {
       // refused cast does — you aimed at the wrong thing, you did not cancel the command.
       // The two refusals are the game's own, and it has a string for precisely this
       // ability: "Select a unit with an inventory." (commandstrings.txt Inventoryinteract).
+      // An ILLUSION is refused with that same string rather than "no patron nearby": its six
+      // slots are a picture (docs/illusions.md — inert copies it cannot use, drop or fill), so
+      // as far as a shop is concerned it is a unit without an inventory, standing right there.
       const target = picked === null ? undefined : this.sim.units.get(picked);
-      if (!target || !this.controls(picked!) || !target.inventory.length) return this.refuseOrder("Inventoryinteract");
+      if (!target || !this.controls(picked!) || !target.inventory.length || target.isIllusion) return this.refuseOrder("Inventoryinteract");
       if (!this.execute(this.localPlayer, { c: "shopbuyer", shopId, unitId: picked! })) return this.refuseOrder("Neednearbypatron");
       this.orderMode = null;
       this.armedShopUser = null;
