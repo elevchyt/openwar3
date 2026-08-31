@@ -45,7 +45,7 @@ import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
 import { disabledIconPath } from "../data/commandStrings";
 import { type ItemRegistry } from "../data/items";
-import { workerProfileFor, depotRoleFor, type PlayableRace } from "../data/races";
+import { workerProfileFor, depotRoleFor, isHarvestCode, type PlayableRace } from "../data/races";
 import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
 import { ComputerPlusAi, type PlusHost } from "../ai/plus";
 import { type TechRegistry } from "../data/techtree";
@@ -2107,6 +2107,72 @@ export class RtsController {
     this.lastIdleWorker = id;
     this.selected.clear();
     this.selected.add(id);
+    this.selectedMine = null;
+    this.selectedItem = null;
+    this.refocus();
+    this.announceSelection();
+    return true;
+  }
+
+  // --- select all army ("-") -------------------------------------------------
+
+  /**
+   * Is this unit ARMY — the thing the "-" key gathers (issue #131)?
+   *
+   * No file in the install answers this: WC3 has no "select all army" key and so no table
+   * saying what an army is. What the game DOES carry is every piece the question is made of,
+   * so the rule below is stated in the data's own terms rather than in a list of unit ids:
+   *
+   *  - **Not a building.** A group is units XOR buildings here as everywhere else.
+   *  - **Not off the field** (`isOffField`) — a Peon in a Burrow, a Wisp in an Entangled Gold
+   *    Mine, an Acolyte's crew, a passenger in a hold. They have a position, so a naive sweep
+   *    finds them, and selecting one selects a unit that is not on the map.
+   *  - **Not a worker.** `UnitBalance.slk`'s `type` column reads `Peon` on the Peasant, the
+   *    Peon, the Wisp and the Acolyte (`Peon,undead`) — that is `SimUnit.isPeon`, and it is
+   *    the same flag the idle-worker badge keys off (see `isIdleWorker`).
+   *  - **Not a HARVESTING one.** The Ghoul is `undead`, not `Peon`, so it is a soldier by the
+   *    line above — and the issue's own rule is that a Ghoul *on the lumber line* is not army.
+   *    `SimWorld.atWork` is already that exact predicate (it is what keeps a working gatherer
+   *    out of a Town Portal's party), and it covers the whole round trip — walking out,
+   *    chopping, and hauling the load home — plus building and repairing.
+   *  - **Not a harvesting MACHINE.** The Goblin Shredder is the one unit in the game whose
+   *    entire `abilList` is a harvest row (`ngir` = `Ahr3`, base code `Ahrl`) — verified by
+   *    sweeping UnitAbilities.slk against AbilityData.slk's `code` column: nothing else in the
+   *    install lists a harvest ability and nothing besides. A unit that can do nothing but
+   *    gather is economy whether or not it happens to be gathering this second, and unlike the
+   *    Ghoul it never stops being one.
+   *  - **Not a TRANSPORT.** A cargo hold whose ability `code` is `Acar` — AbilityData's own
+   *    "Cargo Hold (Ship)" `Sch5` (every transport ship: hbot/obot/nbot/etrs/ubot) and "Cargo
+   *    Hold (Transport)" `Sch3` (the Goblin Zeppelin). `Abun` (Burrow) and `Aenc` (Gold Mine)
+   *    are the same family but sit on BUILDINGS, which the first rule already dropped.
+   */
+  private isArmyUnit(u: SimUnit | undefined): u is SimUnit {
+    if (!u || u.owner !== this.localPlayer || u.building || isOffField(u)) return false;
+    if (u.isPeon) return false;
+    if (this.sim.atWork(u)) return false; // a Ghoul chopping lumber is economy for as long as it chops
+    if (this.harvestOnly(u.typeId)) return false; // the Goblin Shredder
+    if (this.sim.cargoHoldCode(u.typeId) === "Acar") return false; // zeppelin / transport ship
+    return true;
+  }
+
+  /** A unit type whose whole ability list is harvest rows — it can do nothing but gather.
+   *  Read off the type's `abilList` resolved to BASE codes (a custom map's `A000` based on
+   *  `Ahar` is still `Ahar`), the same resolution `workerProfileFor` is asked with. */
+  private harvestOnly(typeId: string): boolean {
+    const abils = this.registry.get(typeId)?.abilities;
+    if (!abils?.length) return false;
+    return abils.every((id) => isHarvestCode(this.abilities.get(id)?.code ?? id));
+  }
+
+  /** "-": select the player's whole ARMY — every unit `isArmyUnit` admits — replacing the
+   *  current selection. False when there is none, so nothing is cleared and no selection
+   *  voice line plays for an empty grab. */
+  selectAllArmy(): boolean {
+    const army: number[] = [];
+    for (const e of this.entries) if (this.isArmyUnit(this.sim.units.get(e.simId))) army.push(e.simId);
+    if (!army.length) return false;
+    this.selected.clear();
+    for (const id of army) this.selected.add(id);
     this.selectedMine = null;
     this.selectedItem = null;
     this.refocus();

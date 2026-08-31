@@ -17058,11 +17058,12 @@ export class SimWorld {
   }
 
   /** Is this unit in the middle of a JOB — gathering, hauling, building or repairing? See
-   *  `teleportParty`, which is what it exists for. Deliberately about the ORDER rather than
+   *  `teleportParty` and the "-" select-all-army key (issue #131), which is what it exists
+   *  for. Deliberately about the ORDER rather than
    *  about the unit type: "worker" is not a thing in the data (a Ghoul is a fighting unit that
    *  also chops, a Wisp is a builder that is also consumed by one), and what matters is that
    *  the unit is busy, not what it usually does. */
-  private atWork(u: SimUnit): boolean {
+  atWork(u: SimUnit): boolean {
     return u.order === "harvest" || u.order === "return" || u.order === "repair" || u.constructing > 0 || !!u.repair || !!u.buildPending || u.ringSlot > 0;
   }
 

@@ -252,6 +252,10 @@ export interface HudDriver {
   idleWorkerCount(): number;
   /** Icon (BLP path) of the local player's worker, for the idle-worker button. */
   workerIcon(): string | null;
+  /** "-" — select the player's whole ARMY: every own unit that is not a worker, not a
+   *  harvesting Ghoul or Shredder and not a transport (issue #131). False when there is
+   *  none, so an empty grab leaves the current selection alone. */
+  selectAllArmy(): boolean;
   /** Ctrl+N — bind the current selection to control group N ("0".."9"). */
   assignControlGroup(key: string): void;
   /** Shift+N — append the current selection to control group N. */
@@ -1428,6 +1432,15 @@ export class GameHud {
     if (e.key === "F8" || e.key === "`" || e.key === "~") {
       e.preventDefault();
       this.driver.cycleIdleWorker();
+      this.refreshSelectionNow();
+      return;
+    }
+    // "-" selects the whole army (issue #131). Read off `e.key` rather than `e.code`, so the
+    // numpad's minus is the same key and no keyboard layout can move it. Placed above the
+    // command card below because a card hotkey is a LETTER — nothing can shadow this.
+    if (e.key === "-") {
+      e.preventDefault();
+      this.driver.selectAllArmy();
       this.refreshSelectionNow();
       return;
     }

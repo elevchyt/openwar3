@@ -6723,6 +6723,7 @@ export class MapViewerScene {
       },
       idleWorkerCount: () => this.rts?.idleWorkerCount() ?? 0,
       workerIcon: () => this.workerIcon(),
+      selectAllArmy: () => this.rts?.selectAllArmy() ?? false,
       assignControlGroup: (key) => this.rts?.assignGroup(key),
       appendControlGroup: (key) => this.rts?.appendGroup(key),
       recallControlGroup: (key, jump) => {
