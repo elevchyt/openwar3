@@ -2697,12 +2697,17 @@ export class SimWorld {
   private buildCompletions: Array<{ buildingId: number; owner: number }> = [];
   // News the engine announces by itself — see Alert.
   private alerts: Alert[] = [];
-  /** Per player, WHEN and WHERE they were last told they are under attack. Both halves are
-   *  needed: MiscData carries `AttackNotifyDelay=30.0` ("seconds between attack
-   *  notifications") beside `AttackNotifyRange=1250`, and a delay alone would have no use
-   *  for a range. Read as one rule — a fresh blow is news if the last warning has gone
-   *  stale OR it lands somewhere else entirely — which is what stops a raid on the far
-   *  side of the map from being silenced by a creep nibbling at home. */
+  /** WHEN and WHERE somebody was last told they are under attack. Both halves are needed:
+   *  MiscData carries `AttackNotifyDelay=30.0` ("seconds between attack notifications")
+   *  beside `AttackNotifyRange=1250`, and a delay alone would have no use for a range. Read
+   *  as one rule — a fresh blow is news if the last warning has gone stale OR it lands
+   *  somewhere else entirely — which is what stops a raid on the far side of the map from
+   *  being silenced by a creep nibbling at home.
+   *
+   *  Keyed per player AND per KIND of property (see `noteAttacked`), because the two are
+   *  separate warnings with separate lines and separate WAVs — `Unitattack`/`UnderAttackSound` against
+   *  `Townattack`/`TownAttackSound` — and one clock for both let a creep chewing on a Peasant
+   *  swallow the news that a Keep was being stormed. */
   private attackNotify = new Map<number, { t: number; x: number; y: number }>();
   /** Mines already announced as running low, so the warning is given once per mine rather
    *  than on every trip below the line. */
@@ -15422,10 +15427,13 @@ export class SimWorld {
   private noteAttacked(target: SimUnit, attackerId: number): void {
     const src = attackerId ? this.units.get(attackerId) : undefined;
     if (!src || !this.hostile(src, target)) return; // friendly fire is not an invasion
-    const last = this.attackNotify.get(target.owner);
+    // One clock per player per kind — computed rather than a string, since this runs on
+    // every hostile blow that lands anywhere on the map.
+    const key = target.owner * 2 + (target.building ? 1 : 0);
+    const last = this.attackNotify.get(key);
     if (last && this.elapsed - last.t < MISC_DATA.AttackNotifyDelay &&
         Math.hypot(target.x - last.x, target.y - last.y) <= MISC_DATA.AttackNotifyRange) return;
-    this.attackNotify.set(target.owner, { t: this.elapsed, x: target.x, y: target.y });
+    this.attackNotify.set(key, { t: this.elapsed, x: target.x, y: target.y });
     this.alerts.push({ kind: target.building ? "townattack" : "attack", player: target.owner, x: target.x, y: target.y });
   }
 

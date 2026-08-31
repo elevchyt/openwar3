@@ -8997,16 +8997,16 @@ export class MapViewerScene {
     this.sounds?.playUi(voice ? `${voice}${UI_SOUND_RACE[this.localRace]}` : "InterfaceError");
   }
 
-  /** Per ALLIED player, the world clock when something of theirs was last hit — whether or
-   *  not we said anything about it. The ally warning is one per LULL, not one per blow (see
-   *  showAlert): it speaks once and then holds its tongue for as long as the raid keeps
-   *  going, so this is a timer that every further blow RESTARTS. */
-  private allyAttackAt = new Map<number, number>();
-  /** Seconds of quiet an ally must have before their next raid is news again. Ours, not the
-   *  game's: MiscData's `AttackNotifyDelay` (30s) is the rule for YOUR OWN property and the
-   *  data says nothing about the ally lines, which in the real client are far rarer than one
-   *  every half-minute. A minute of silence is what that reads as. */
-  private static readonly ALLY_ATTACK_QUIET = 60;
+  /** Is this world point on the ground the camera is looking at? The rect is the very one
+   *  the minimap draws its white camera box from (`viewRect`), so "off screen" here means
+   *  exactly "outside that box" — the frame the player themselves is reading. It is the
+   *  BOUNDING BOX of a trapezoid, so a blow just outside the near corners still counts as
+   *  seen; erring that way keeps the under-attack warning for the fights that are genuinely
+   *  out of sight rather than firing it for one at the edge of the screen. */
+  private onScreen(x: number, y: number): boolean {
+    const r = this.viewRect();
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
 
   /**
    * Say the game's own news out loud: the [Errors] rows nobody asked for (see SimWorld.Alert).
@@ -9020,8 +9020,7 @@ export class MapViewerScene {
    * The ALLY variants are why the sim doesn't do this itself: one blow, two audiences, and
    * a different row and a different WAV for each. An ally's gold mine is the exception with
    * no second row at all — the data offers nothing to say about it, so nothing is said. The
-   * ally side is also the QUIET one: only their buildings are news, and only once per raid
-   * (see the attack case, and `allyAttackAt`).
+   * ally side is also the QUIET one: only their BUILDINGS are news (see the attack case).
    */
   private showAlert(a: Alert): void {
     const own = a.player === this.localPlayer;
@@ -9036,25 +9035,27 @@ export class MapViewerScene {
       case "attack":
       case "townattack": {
         const town = a.kind === "townattack";
-        // An ally's fights are not a running commentary. Two rules the real client applies to
-        // the ally lines and we did not, which together are why "our ally is under attack"
-        // was heard every few seconds:
-        //   1. Only their BUILDINGS are news. Their army trading blows in the field is their
-        //      own business, so `Allyunderattack`/`AllyUnderAttack` is a pair the game ships
-        //      and never speaks — the town line is the only one an ally ever raises.
-        //   2. It is said ONCE per raid: the warning starts a minute of silence about that
-        //      player, and every further blow on their property RESTARTS that minute rather
-        //      than repeating the line. A raid is announced again only once it has actually
-        //      been over for ALLY_ATTACK_QUIET seconds.
-        // Deliberately not the sim's own `attackNotify` throttle: that one is per VICTIM and
-        // half this long, and the ally line has a different audience with a different clock.
-        if (!own) {
-          if (!town) return;
-          const t = this.rts?.simWorld.elapsed ?? 0;
-          const last = this.allyAttackAt.get(a.player);
-          this.allyAttackAt.set(a.player, t); // the timer restarts whether or not we speak
-          if (last !== undefined && t - last < MapViewerScene.ALLY_ATTACK_QUIET) return;
-        }
+        // THREE warnings share this one case, and each has a different audience and a
+        // different WAV — all three of them the local player's own race speaking, resolved
+        // through UISounds.slk by the label + race suffix `playUi` is handed below:
+        //   • YOUR BUILDINGS: always news. TownAttack<race> → KnightTownAttack1.wav,
+        //     GruntTownAttack1.wav, SentinelTownAttack1.wav, NecromancerTownAttack1.wav
+        //     (and NagaTownAttack1.wav, which no melee race reaches).
+        //   • YOUR UNITS: news only when you cannot SEE the fight. A skirmish in the middle
+        //     of the screen announces itself; one off the edge of the view is the whole
+        //     reason the line exists. UnderAttack<race> → KnightUnitAttack1.wav, …
+        //   • An ALLY's BUILDINGS: news. AllyTownUnderAttack<race> → KnightAllyTownAttack1.wav,
+        //     GruntAllyTownAttack1.wav, … Their UNITS are not: `Allyunderattack` and its
+        //     `AllyUnderAttack<race>` WAVs are a pair the game ships and never speaks here,
+        //     because an ally's army trading blows in the field is their own business.
+        // The RATE is the data's, once, in the sim: `attackNotify` holds each of these to one
+        // per MiscData `AttackNotifyDelay` (30s) inside `AttackNotifyRange`, per player and
+        // per KIND of property — so a creep nibbling a Peasant can no longer silence a Keep
+        // being stormed, and no second timer is kept here. The one thing that rule cannot see
+        // is the camera, so a blow you are watching still spends the unit window: a fight in
+        // view can hold the warning for a second skirmish within 1250 units of it.
+        if (!own && !town) return; // an ally's field battles are their own business
+        if (own && !town && this.onScreen(a.x, a.y)) return; // you are already looking at it
         key = own ? (town ? "Townattack" : "Unitattack") : "Allytownattack";
         sound = own ? (town ? "TownAttack" : "UnderAttack") : "AllyTownUnderAttack";
         if (!own) args.push(this.playerLabel(a.player)); // "%s's city is under siege!" — the possessive names a PLAYER
