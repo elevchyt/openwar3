@@ -120,6 +120,10 @@ export interface SpellApi {
   /** Look up another ability's own row. The town bell reaches for `Amil` this way so the
    *  militia's stats and timer stay stated once, on the ability that owns them. */
   abilityOf(id: string): AbilityDef | undefined;
+  /** Call to Arms (`Amil`/`Amic`): send this unit to a hall to have its shape changed THERE.
+   *  `hallId` 0 = the nearest hall of its own that carries the bell. False when there is
+   *  none — a human with no Keep, Castle or starting Town Hall left cannot muster. */
+  callToArms(unit: SimUnit, hallId?: number): boolean;
   /** Put a unit into the hold-position stance (order "hold"), clearing whatever it was
    *  doing. Shadow Meld melds a unit INTO this stance: WC3 has a melded unit "hold position
    *  and hold their fire", which is what stops it walking out of its own invisibility. */
@@ -1941,7 +1945,14 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // is hmil's own row. What makes it a decision rather than a free upgrade is Dur1 = 45: the
   // form is TIMED, and a militia that survives its 45 seconds turns back into a Peasant
   // wherever it happens to be standing — see tickAltForm.
-  Amil: (api, caster, def) => { api.morphToggle(caster, def); },
+  //
+  // …but the press does NOT morph him. The ability's own Ubertip is an instruction rather than
+  // a description — "Run to the nearest Keep, Castle or starting Town Hall to arm the Peasant,
+  // converting him into Militia", and the Unubertip says the same of the way back — so both
+  // directions are an ERRAND, and the shape changes at the hall's door. See
+  // SimWorld.callToArms / tickMilitiaCall; `def` is not needed here because the walk ends in
+  // the same `morphToggle` this used to call, run from there.
+  Amil: (api, caster) => { api.callToArms(caster); },
 
   // Call to Arms, the town bell (`Amic`, order `townbellon` / `townbelloff`) — the half a
   // player actually clicks. It converts no one itself: it rings, and every Peasant the hall
@@ -1953,6 +1964,11 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // That matches the button ("Call to Arms" / "Back to Work") without the hall having to
   // remember a state that the militia themselves already carry — and it stays correct when a
   // militia's own timer runs out from under the hall.
+  //
+  // What the bell hands each of them is the WALK, not the new shape: "Call all nearby Peasants
+  // **to the Town Hall** to be converted to Militia" (and the Unubertip the same of the way
+  // back). They are called to the hall that rang — `caster.id`, rather than "the nearest",
+  // which is what the Peasant's own button means.
   Amic: (api, caster, def) => {
     const lvl = def.levelData[0];
     const militia = api.abilityOf("Amil");
@@ -1962,7 +1978,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       .filter((u) => u.owner === caster.owner && u.hp > 0 && u.abilities.some((a) => a.code === "Amil"));
     const anyUp = near.some((u) => u.typeId === alt);
     for (const u of near) {
-      if ((u.typeId === alt) === anyUp) api.morphToggle(u, militia); // only those on the wrong side
+      if ((u.typeId === alt) === anyUp) api.callToArms(u, caster.id); // only those on the wrong side
     }
   },
 

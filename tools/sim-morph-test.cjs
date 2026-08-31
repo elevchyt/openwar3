@@ -43,8 +43,8 @@ function check(what, got, want) {
  *  dmgplus 18→26, castpt 0.5→0.3, castbsw 1.17→0.51, and a mana pool of 200 on BOTH sides
  *  (Units\UnitBalance.slk + UnitWeapons.slk, 1.27a). */
 const UNITS = {
-  hpea: { id: "hpea", acquireRange: 500, hitPoints: 220, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 190, abilities: ["Ahar", "Amil"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 4, dice: 1, sides: 2, cooldown: 2.0, damagePoint: 0.3, backswing: 0.51, range: 90, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
-  hmil: { id: "hmil", acquireRange: 500, hitPoints: 220, armor: 4, armorType: "large", sightDay: 1800, sightNight: 800, speed: 270, abilities: ["Ahar", "Amil"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 11, dice: 1, sides: 2, cooldown: 2.0, damagePoint: 0.3, backswing: 0.51, range: 90, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
+  hpea: { id: "hpea", classification: ["peon"], acquireRange: 500, hitPoints: 220, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 190, abilities: ["Ahar", "Amil"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 4, dice: 1, sides: 2, cooldown: 2.0, damagePoint: 0.3, backswing: 0.51, range: 90, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
+  hmil: { id: "hmil", classification: [], acquireRange: 500, hitPoints: 220, armor: 4, armorType: "large", sightDay: 1800, sightNight: 800, speed: 270, abilities: ["Ahar", "Amil"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 11, dice: 1, sides: 2, cooldown: 2.0, damagePoint: 0.3, backswing: 0.51, range: 90, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
   ucry: { id: "ucry", acquireRange: 500, hitPoints: 550, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 270, abilities: ["Aweb", "Aspa", "Abur"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 26, dice: 1, sides: 4, cooldown: 1.9, damagePoint: 0.3, backswing: 0.51, range: 550, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
   ucrm: { id: "ucrm", acquireRange: 500, hitPoints: 550, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 0, abilities: ["Aspa", "Abur"], heroAbilities: [], autoAbility: "", weapons: [] },
   edoc: { id: "edoc", acquireRange: 500, hitPoints: 430, mana: 200, armor: 1, armorType: "large", sightDay: 1400, sightNight: 800, speed: 270, castPoint: 0.5, castBackswing: 1.17, abilities: ["Abrf", "Arej"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 18, dice: 1, sides: 4, cooldown: 1.5, damagePoint: 0.33, backswing: 0.53, range: 100, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
@@ -182,8 +182,25 @@ function peasant(id, typeId = "hpea") {
     weapon: null, order: "idle", targetId: null, path: [], moving: false,
     baseArmor: d.armor, baseMaxHp: 220, baseMaxMana: 0, baseSpeed: d.speed, baseSight: 1800,
     baseSightDay: 1800, baseSightNight: 800, armorType: d.armorType,
+    radius: 16, isPeon: typeId === "hpea", ward: false, mechanical: false, ancient: false,
+    militiaCall: 0, nodeRetries: 0, waitT: 0,
   };
   u.weapon = u.weapons.find((w) => w.enabled) ?? null;
+  world.units.set(u.id, u);
+  return u;
+}
+
+/** A hall to be armed at. What makes one is the BELL — `Amic`, which only `hkee` and `hcas`
+ *  carry in Units\UnitAbilities.slk, plus whatever Blizzard.j hands it to at a melee start
+ *  (MeleeStartingUnitsHuman: `UnitAddAbilityBJ('Amic', townHall)`). `bell: false` is the
+ *  expansion Town Hall that has none. */
+function hall(id, x, bell = true) {
+  const u = {
+    id, owner: 0, team: 0, hp: 1200, maxHp: 1200, mana: 0, maxMana: 0, x, y: 0, prevX: x, prevY: 0,
+    typeId: "hkee", radius: 100, building: { constructionLeft: 0 },
+    abilities: bell ? [{ id: "Amic", code: "Amic", level: 1, cooldownLeft: 0, autocastOn: false }] : [],
+    buffs: [], inventory: [], weapons: [], weapon: null, order: "idle", targetId: null, path: [], moving: false,
+  };
   world.units.set(u.id, u);
   return u;
 }
@@ -213,6 +230,46 @@ function peasant(id, typeId = "hpea") {
   check("past 40s he reverts himself", u.typeId, "hpea");
   check("…and the clock is cleared", u.altFormLeft, 0);
   check("…back to Peasant speed", (world.recomputeStats(u), u.speed), 190);
+}
+
+// --- Call to Arms is an ERRAND: the shape changes AT THE HALL, not where the button is ----
+//
+// The ability says so itself. `[Amil]` Ubertip: "Run to the nearest Keep, Castle or starting
+// Town Hall to arm the Peasant, converting him into Militia", and the Unubertip repeats it for
+// the way back; `[Amic]`, the town bell, "Call all nearby Peasants to the Town Hall to be
+// converted to Militia". Morphing on the spot made the bell a free instant army anywhere on
+// the map, including inside the enemy's base.
+{
+  const u = peasant(12);
+  check("with no hall standing, nobody can be armed", world.callToArms(u), false);
+  check("…and he is still a Peasant", u.typeId, "hpea");
+
+  hall(90, 3000, false); // an expansion Town Hall: no bell, so no muster
+  check("a hall with no `Amic` is not a muster point", world.callToArms(u), false);
+
+  const keep = hall(91, 100); // …and one with the bell, a body's width away
+  check("the bell books the errand", world.callToArms(u), true);
+  check("…naming the hall he is to run to", u.militiaCall, keep.id);
+  check("…and the PRESS does not arm him", u.typeId, "hpea");
+
+  world.tickMilitiaCall(u); // he is already at the door
+  check("arriving is what arms him", u.typeId, "hmil");
+  check("…and the errand is spent", u.militiaCall, 0);
+  check("…on the ability's own clock", u.altFormLeft, 40);
+}
+
+// The half that made the Militia a bystander in its own defence: the four UnitBalance `type`
+// flags belong to the TYPE, so they have to follow the morph. `hpea` is `Peon` and `hmil` is
+// `_`, and `isPeon` is what says a unit never auto-acquires (acquireRange returns 0) and is the
+// last thing a creep camp turns on (lowPriorityTarget) — carried across, the Militia stood in
+// the middle of a fight swinging at nothing.
+{
+  const u = peasant(13);
+  check("a Peasant is a worker", u.isPeon, true);
+  world.morphToggle(u, ABILS.Amil);
+  check("…and a Militia is not (hmil type = \"_\")", u.isPeon, false);
+  world.morphToggle(u, ABILS.Amil);
+  check("…and is a worker again on the way back", u.isPeon, true);
 }
 
 // --- Bear Form: the whole sheet follows the type, mana pool and cast clock included -------

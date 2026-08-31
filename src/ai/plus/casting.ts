@@ -563,7 +563,13 @@ export class PlusCaster {
     // out sends them straight back to work — and this pass runs twice a second. Call to Arms is
     // a TIMED form (`[Amil]` Dur 40 = HeroDur 40), so `altFormLeft` on something that carries
     // the ability is exactly "the militia are already up".
-    if (own.some((o) => o.altFormLeft > 0 && o.abilities.some((a) => a.code === "Amil"))) return;
+    //
+    // …and `militiaCall` is "they are on their way", which has to count for the same thing.
+    // The bell calls Peasants TO the hall and arms them at the door (docs: `[Amic]` Ubertip),
+    // so for the length of that run nobody is a Militia yet — a pass that only looked at
+    // `altFormLeft` rang the bell again twice a second all the way there, and each ring
+    // re-issued the walk from wherever they had got to.
+    if (own.some((o) => (o.altFormLeft > 0 || o.militiaCall > 0) && o.abilities.some((a) => a.code === "Amil"))) return;
     for (const hall of own) {
       if (!hall.building || hall.hp <= 0) continue;
       const bell = hall.abilities.find((a) => a.code === "Amic" && a.level >= 1);

@@ -1650,6 +1650,24 @@ export interface SimUnit {
    *  moment the tree settles) and is what makes the cast happen on the far side of the root
    *  transition. See issueEntangleAt / tickEntangleAt. */
   entanglePending: number;
+  /** The hall a Peasant (or a Militia) is running to in order to answer Call to Arms, or 0.
+   *
+   *  Call to Arms is not a morph in place, and the ability says so in its own Ubertip:
+   *  `[Amil]` — "**Run to the nearest Keep, Castle or starting Town Hall** to arm the
+   *  Peasant, converting him into Militia" — with the Unubertip saying the same of the way
+   *  back, and `[Amic]`'s pair saying it of the bell ("Call all nearby Peasants **to the
+   *  Town Hall** to be converted"). So the press is an ERRAND: walk there, change shape on
+   *  arrival. Modelled the way the other two walk-there-then-do-it intents are (`rootPending`,
+   *  `entanglePending`): a field the unit carries under an ordinary move order, spent by
+   *  tickMilitiaCall and dropped by any other order (`dispatch`).
+   *
+   *  Which halls count is not a list of ids either — it is `Amic`, the town bell itself.
+   *  Only `hkee` and `hcas` carry it in Units\UnitAbilities.slk, and Blizzard.j's
+   *  MeleeStartingUnitsHuman hands it to the melee START's Town Hall and nothing else
+   *  (`UnitAddAbilityBJ('Amic', townHall)` + `UnitMakeAbilityPermanentBJ`), which is exactly
+   *  the tooltip's "Keep, Castle or **starting** Town Hall". An expansion hall has no bell
+   *  and so is no muster point. */
+  militiaCall: number;
   /** The settling GESTURE of an Ancient that is planting itself, or null.
    *
    *  Planting is never a jump. The Ancient walks to the site under an ordinary move, which
@@ -5278,6 +5296,22 @@ export class SimWorld {
     // What it produces is a property of the TYPE, so re-derive it: a structure that only gains
     // a training list on upgrade would otherwise never get a rally point.
     if (u.building && this.techReg) u.building.producesUnits = this.techReg.producesUnits(toTypeId);
+    // …and so is WHAT IT IS. UnitBalance.slk's `type` column is the whole of these four (the
+    // same read RtsController.spawn does at birth), and leaving them behind is what kept a
+    // Militia a WORKER: `hpea` is `Peon` and `hmil` is `_`, so a Peasant that answered Call to
+    // Arms carried `isPeon` into its new body — and `isPeon` is the flag that says a unit never
+    // auto-acquires (acquireRange returns 0 for one) and is the LAST thing a creep camp turns
+    // on (lowPriorityTarget). The militia stood in the middle of a fight, took an attack-move
+    // like a worker walking a route, and was ignored by everything it walked past. Which is the
+    // opposite of the ability: `hmil` is its own unit type with its own 11 damage, 4 armour and
+    // 270 speed, and the classification is what makes those belong to a soldier.
+    // `?? []` for the same reason `altFormOf` guards `dataStr`: a hand-built def (a test, a
+    // custom row) need not carry every column, and a morph must not throw over one.
+    const cls = def.classification ?? [];
+    u.isPeon = cls.includes("peon");
+    u.ward = cls.includes("ward");
+    u.mechanical = cls.includes("mechanical");
+    u.ancient = cls.includes("ancient");
     // maxHp/maxMana now reflect the new type (+ any research already in). Both POOLS moving is
     // an ordinary ceiling move, so the current values ride it by RATIO — the one rule stated in
     // recomputeStats and cited there to Liquipedia (Hit_Points): a bear at half life comes back
@@ -5498,6 +5532,128 @@ export class SimWorld {
     const def = this.abilities?.get(u.altFormAbil);
     if (def) this.morphToggle(u, def, 1, true); // byTimer: the clock always goes back
     else u.altFormLeft = 0; // ability gone (custom data reload) — just stop counting
+  }
+
+  /**
+   * CALL TO ARMS (`Amil` on the Peasant, `Amic` on the hall) — the ERRAND, which is the whole
+   * of what the two abilities actually do.
+   *
+   * Neither one arms anybody where it is pressed, and both say so in their own Ubertips:
+   *
+   *   [Amil]  "Run to the nearest Keep, Castle or starting Town Hall to arm the Peasant,
+   *            converting him into Militia."
+   *   [Amil]  Unubertip: the same sentence for the way back ("…to disarm the Militia").
+   *   [Amic]  "Call all nearby Peasants to the Town Hall to be converted to Militia."
+   *   [Amic]  Unubertip: "Call all nearby Militia to the Town Hall to be converted to Peasants."
+   *
+   * So the press books a walk and the SHAPE CHANGE happens at the door (tickMilitiaCall) —
+   * in both directions, which is the half that is easy to miss. Morphing on the spot made the
+   * bell a free instant army wherever the Peasants happened to be standing, including in the
+   * middle of the enemy's base, and it is the walk that makes it a defensive ability.
+   *
+   * `hallId` 0 = "the nearest", which is what the Peasant's own button means; the bell passes
+   * its own id, because the hall that rang is the hall they are called to.
+   */
+  callToArms(u: SimUnit, hallId = 0): boolean {
+    const hall = hallId ? this.units.get(hallId) : this.nearestMusterHall(u);
+    if (!hall || !this.isMusterHall(hall) || hall.owner !== u.owner) return false;
+    // A Peasant down the shaft is called up with the rest of them — the bell reaches every
+    // Peasant the hall owns inside `Area1`, and being at work is the whole situation the
+    // ability answers. Put back on the field first, exactly as issueGarrison does, or the
+    // walk below is ordered on a unit the mine still holds and its one-worker latch wedges.
+    this.popFromMine(u);
+    this.popFromCanopy(u);
+    u.militiaCall = hall.id;
+    u.nodeRetries = 0;
+    return true;
+  }
+
+  /**
+   * Is this building one a Peasant may be armed at?
+   *
+   * The answer is not a list of hall ids — it is `Amic`, the town bell itself. Only `hkee` and
+   * `hcas` carry it in Units\UnitAbilities.slk, and Blizzard.j's MeleeStartingUnitsHuman hands
+   * it to the melee start's Town Hall alone:
+   *
+   *     call UnitAddAbilityBJ('Amic', townHall)
+   *     call UnitMakeAbilityPermanentBJ(true, 'Amic', townHall)
+   *
+   * which is exactly the tooltip's "Keep, Castle or **starting** Town Hall". An expansion Town
+   * Hall has no bell and is no muster point, and asking the ability rather than the id is what
+   * gets that right for free — including in a custom map that hands the bell to something else.
+   */
+  private isMusterHall(b: SimUnit): boolean {
+    return (
+      b.hp > 0 &&
+      !!b.building &&
+      b.building.constructionLeft <= 0 && // a foundation has no bell to ring yet
+      b.abilities.some((a) => a.code === "Amic" && a.level >= 1)
+    );
+  }
+
+  /** The nearest hall of the unit's OWN that can arm it, or null when there is none left —
+   *  a human whose Keep has just been razed cannot call to arms, and neither half of the
+   *  ability has an error line in Units\CommandStrings.txt to say so. */
+  private nearestMusterHall(u: SimUnit): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const b of this.units.values()) {
+      if (b.owner !== u.owner || !this.isMusterHall(b)) continue;
+      const d = Math.hypot(b.x - u.x, b.y - u.y);
+      if (d >= bestD) continue;
+      bestD = d;
+      best = b;
+    }
+    return best;
+  }
+
+  /**
+   * Drive a Peasant (or a Militia) walking to its muster hall, and change its shape when it
+   * gets there. The walk is an ordinary move order, so the unit is selectable, interruptible
+   * and pushable the whole way — the errand lives in `militiaCall` beside it, exactly as an
+   * Ancient's does in `rootPending`, and any other order drops it (`dispatch`).
+   *
+   * The door and the arrival test are the cargo hold's (`hostApproach` / `inHostReach`): a
+   * hall's centre is inside its own blocked footprint, so pathing at it fails, and the two
+   * have to be measured the same way or the unit parks where it was sent and is told it has
+   * not arrived. Bounded by the same `NODE_REPATH_TRIES` a garrison walk-up is, so a Peasant
+   * that can never reach the door gives up rather than re-pathing at it forever.
+   */
+  private tickMilitiaCall(u: SimUnit): void {
+    const hall = this.units.get(u.militiaCall);
+    // Razed, sold, captured or still going up while we walked: there is nothing to be armed
+    // at any more, and the errand simply ends where the unit is standing.
+    if (!hall || hall.owner !== u.owner || !this.isMusterHall(hall)) {
+      u.militiaCall = 0;
+      return;
+    }
+    if (this.inHostReach(u, hall)) {
+      u.militiaCall = 0;
+      u.nodeRetries = 0;
+      if (u.order === "move") this.stop(u.id); // the errand's own walk is over
+      const ab = u.abilities.find((a) => a.code === "Amil" && a.level >= 1);
+      const def = ab && this.abilities?.get(ab.id);
+      if (def) this.morphToggle(u, def); // …and THIS is where the Peasant becomes a Militia
+      return;
+    }
+    // Still finishing the press that booked the errand. `[Amil]` has no gesture of its own
+    // (`Cast1` = 0 and no `Animnames`), but the CASTER's backswing still runs on the far side
+    // of the effect, and `issueMove` refuses a unit that is still casting — counted as failed
+    // attempts, the half-second of recovery alone spent every try the errand had.
+    if (u.order === "cast") return;
+    // Already walking it. Tested against the errand's OWN order rather than `moving` alone: a
+    // Militia chasing something when the bell rings is moving too, and a bell that could not
+    // interrupt a fight is a bell nobody can answer.
+    if (u.order === "move" && (u.moving || u.waitT > 0)) return;
+    // Standing still and not there yet: (re)start the walk. `issueMove` parks by itself when
+    // the way is merely crowded (holdOrGiveUp), so a false here is a door that A* could not
+    // reach at all — a couple of honest tries, then the errand is off.
+    const [ax, ay] = this.hostApproach(u, hall);
+    if (this.issueMove(u.id, ax, ay)) return;
+    if (u.nodeRetries++ >= NODE_REPATH_TRIES) {
+      u.militiaCall = 0;
+      u.nodeRetries = 0;
+    }
   }
 
   /**
@@ -6012,6 +6168,7 @@ export class SimWorld {
       | "builtFacing"
       | "rootPending"
       | "entanglePending"
+      | "militiaCall"
       | "rootSettle"
       | "garrisonJob"
       | "drinkWellId"
@@ -6253,6 +6410,7 @@ export class SimWorld {
       builtFacing: unit.facing,
       rootPending: null,
       entanglePending: 0,
+      militiaCall: 0, // nobody has rung a bell at it
       rootSettle: null,
       garrisonJob: null,
       drinkWellId: 0,
@@ -7597,6 +7755,7 @@ export class SimWorld {
       u0.drinkWellId = 0;
       u0.rootPending = null;
       u0.entanglePending = 0;
+      u0.militiaCall = 0; // …and a Peasant told to do anything else is no longer answering the bell
     }
     switch (o.kind) {
       case "move": return this.issueMove(id, o.x, o.y, o.targetId);
@@ -11883,6 +12042,7 @@ export class SimWorld {
     },
     setReplenishTarget: (well, targetId) => { well.replenishTargetId = targetId; },
     morphToggle: (unit, def, rank) => this.morphToggle(unit, def, rank),
+    callToArms: (unit, hallId) => this.callToArms(unit, hallId),
     abilityOf: (id) => this.abilities?.get(id),
     dismissSummons: (owner, typeIds) => {
       const set = new Set(typeIds);
@@ -12358,6 +12518,7 @@ export class SimWorld {
       if (u.rootSettle) this.tickRootSettle(u); // …and one mid-ROOT is still lowering itself onto its site
       if (u.rootPending) this.tickRootAt(u); // an Ancient that walked to the spot it was told to plant on
       if (u.entanglePending) this.tickEntangleAt(u); // …and a Tree of Life that planted there to take a mine
+      if (u.militiaCall) this.tickMilitiaCall(u); // …and a Peasant running to the hall to be armed
       this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired
