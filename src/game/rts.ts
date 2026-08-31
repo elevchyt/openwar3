@@ -4350,8 +4350,20 @@ export class RtsController {
     return units.length ? units : buildings;
   }
 
-  selectBox(x0: number, y0: number, x1: number, y1: number, additive = false): void {
+  /** What an ADDITIVE (Shift) box may actually take. A selection is units XOR
+   *  buildings, so a shift-drag over the army while three Moon Wells are held joins
+   *  nothing rather than mixing the two — the same rule the shift-click keeps
+   *  (`selectAt`) and the control groups enforce (`ownSelectionByKind`). A plain
+   *  (replacing) box has no selection to agree with, so it takes what it caught. */
+  private boxPicks(x0: number, y0: number, x1: number, y1: number, additive: boolean): number[] {
     const picked = this.unitsInBox(x0, y0, x1, y1);
+    const kind = additive ? this.ownSelectionByKind().kind : null;
+    if (!kind) return picked;
+    return picked.filter((id) => (this.sim.units.get(id)?.building ? "building" : "unit") === kind);
+  }
+
+  selectBox(x0: number, y0: number, x1: number, y1: number, additive = false): void {
+    const picked = this.boxPicks(x0, y0, x1, y1, additive);
     if (picked.length === 0) return; // empty box: keep the current selection
     if (!additive) this.selected.clear();
     for (const id of picked) this.selected.add(id); // no cap (issue #109)
@@ -4364,9 +4376,11 @@ export class RtsController {
   /** Update the live marquee preview: the units the drag-box currently covers get
    *  a green ring (via previewRings) so the player sees exactly who will be picked
    *  before releasing. Already-selected units are skipped — they keep their own
-   *  selection ring, so an additive (Shift) drag shows the union without stacking. */
-  setPreviewBox(x0: number, y0: number, x1: number, y1: number): void {
-    this.previewIds = this.unitsInBox(x0, y0, x1, y1).filter((id) => !this.selected.has(id));
+   *  selection ring, so an additive (Shift) drag shows the union without stacking.
+   *  `additive` is passed through so the preview promises exactly what the release
+   *  will take: with buildings held, a shift-drag over units rings nobody. */
+  setPreviewBox(x0: number, y0: number, x1: number, y1: number, additive = false): void {
+    this.previewIds = this.boxPicks(x0, y0, x1, y1, additive).filter((id) => !this.selected.has(id));
   }
 
   clearPreviewBox(): void {

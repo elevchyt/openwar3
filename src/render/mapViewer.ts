@@ -11793,7 +11793,7 @@ export class MapViewerScene {
   /** Draw the drag-selection rectangle. `x`/`y` are CANVAS coords (offsetX/offsetY), so the
    *  box lives in the world layer, whose box is the canvas's — not on the body, which is the
    *  window's and would offset it by the letterbox. */
-  private updateSelectBox(x: number, y: number): void {
+  private updateSelectBox(x: number, y: number, additive = false): void {
     if (!this.selectBoxEl) {
       this.selectBoxEl = document.createElement("div");
       this.selectBoxEl.className = "select-box";
@@ -11806,7 +11806,7 @@ export class MapViewerScene {
     el.style.width = `${Math.abs(x - this.downX)}px`;
     el.style.height = `${Math.abs(y - this.downY)}px`;
     // Ring the units the box currently covers (green preview) as it's dragged.
-    this.rts?.setPreviewBox(this.downX, this.downY, x, y);
+    this.rts?.setPreviewBox(this.downX, this.downY, x, y, additive);
   }
 
   private hideSelectBox(): void {
@@ -12185,7 +12185,7 @@ export class MapViewerScene {
           // `moved` only decides whether to *draw* the marquee; pointerup re-measures
           // the real distance to decide whether it selects a box or a point.
           if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > DRAG_SLOP) this.moved = true;
-          if (this.moved) this.updateSelectBox(e.offsetX, e.offsetY);
+          if (this.moved) this.updateSelectBox(e.offsetX, e.offsetY, e.shiftKey);
         }
       }
       // EnableUserControl(false) — a cinematic owns the mouse (7.24). It already owned the
