@@ -69,10 +69,6 @@ export interface PlusCtx {
   defOf(id: string): UnitDef | undefined;
 }
 
-/** How much food headroom to keep. Six is one Farm's worth of slack, which is about how far
- *  ahead a player who is paying attention stays. */
-const FOOD_HEADROOM = 6;
-
 /** Army food that has to be on the field before the AI spends on teching up a tier. Teching
  *  with nothing out is how a computer dies to the first six Footmen it meets. */
 const TIER2_ARMY = 8;
@@ -275,13 +271,19 @@ export function buildPlan(c: PlusCtx): void {
   const { ai, table } = c;
   ai.initBuildArray();
 
+  // THE MINE ITSELF, for the one race whose mine is a BUILDING — ABOVE the hall rows, which is
+  // undead.ai's own order (`undeadMine(ai, 1)`, then `basicExpansion(…, UNDEAD_MINE)`, and only
+  // then `meleeTownHall(1, NECROPOLIS_1)`, undead.ai 299–302). It sat below them and that is the
+  // whole of the developer's "it only builds a necropolis": a Necropolis is 225 gold and NO
+  // lumber, a Haunted Gold Mine is 225 and **210** — the most lumber any undead building costs
+  // (UnitBalance.slk) — so the cheap half of an undead expansion was bought first every pass and
+  // the half that actually earns anything was left underneath it competing for wood that the
+  // rows below kept spending. See `mineBuildings`.
+  mineBuildings(c);
   // A hall, first and always: with no hall there is no economy, no worker and no game. (Town 1
   // as well, because an expansion whose hall died is a town with a mine and no hall.)
   ai.meleeTownHall(0, table.halls[0]);
   ai.meleeTownHall(1, table.halls[0]);
-  // …and, for the one race whose mine is a BUILDING, the mine itself. Beside the hall rows
-  // because it is the same row for the undead — see `mineBuildings`.
-  mineBuildings(c);
 
   // THE GOLD CREW before anything else — see `mineCrew`. Everything that pays for the rest of
   // this list comes out of a mine, so a dead miner is replaced ahead of a hero, a soldier and a
@@ -432,13 +434,38 @@ function lumberUnits(c: PlusCtx): void {
   ai.setBuildNext(LUMBER_UNITS, table.lumberUnit);
 }
 
-/** Stay ahead of the food. One building at a time — `countDone + 1` is already satisfied by a
- *  farm in progress (`setBuildUnit` counts what is under construction), so this cannot carpet
- *  the base the way a `count + 1` would. */
+/**
+ * Stay ahead of the food.
+ *
+ * Two numbers, and BOTH of them used to be the Human's. The headroom was a flat six and exactly
+ * one supply building was ever allowed in flight (`countDone + 1` is already satisfied by one
+ * under construction, since `setBuildUnit` counts what is going up), which is a fair description
+ * of a player putting up Farms — 80 gold, 20 lumber, **35 seconds**, six food — and is not a
+ * description of any other race. A **Moon Well is 180 gold, 40 lumber, 50 seconds and ten
+ * food** (UnitBalance.slk): the most expensive supply building in the game, half again as slow
+ * as a Farm, and the night elf is also paying one food per Wisp out of the same cap. Six food of
+ * warning is most of a Farm's build time and about a third of a Moon Well's, so the elf reached
+ * the cap while its one well was still going up and stopped producing — the developer's "not
+ * building enough moon wells, rendering it unable to produce more army units".
+ *
+ * So both numbers are asked of the building itself:
+ *
+ *  · **The headroom is one of these buildings' worth of food** (`GetFoodMade`) rather than six.
+ *    Ten for a Moon Well, a Burrow and a Ziggurat, six for a Farm — which leaves the Human
+ *    exactly where it was.
+ *  · **Two may be in flight once the cap has actually been REACHED**, and only then. Blocked is
+ *    a different position from nearly-blocked: nothing below this row can be trained at all
+ *    until the cap moves, so the gold a second building reserves is gold that had nothing else
+ *    to buy. Below the cap it is still one at a time, which is what keeps this from carpeting
+ *    the base.
+ */
 function supply(c: PlusCtx): void {
   const { ai, table } = c;
-  if (ai.foodUsed() + FOOD_HEADROOM < ai.foodCap()) return;
-  ai.setBuildUnit(ai.countDone(table.farm) + 1, table.farm);
+  const used = ai.foodUsed();
+  const cap = ai.foodCap();
+  const headroom = Math.max(1, ai.foodMade(table.farm));
+  if (used + headroom < cap) return;
+  ai.setBuildUnit(ai.countDone(table.farm) + (used >= cap ? 2 : 1), table.farm);
 }
 
 /**
@@ -898,7 +925,15 @@ function expand(c: PlusCtx): void {
   const planned = (owned === 1 ? strategy.expandAt : strategy.expandAgainAt) + profile.expandDelay;
   const needed = ai.goldOwned() < EXPAND_GOLD;
   if (clock < planned && !needed) return;
-  ai.basicExpansion(true, table.halls[0]);
+  // WHAT AN EXPANSION *IS* is not the same building for all four races, and `undead.ai` says so
+  // in as many words: every one of its four expansion sites reads
+  // `ai.basicExpansion(mines < N, UNDEAD_MINE)` — the Haunted Gold Mine, never the Necropolis
+  // (undead.ai 179/215/302/322, ported in src/ai/undead.ts). It is the right reading of the
+  // race too: an Acolyte kneels in a ring that only the haunt creates, so a Necropolis founded
+  // beside a bare rock is a second base with no income at all (docs/undead.md). Founding the
+  // town with the mine also settles the ORDER for free — `nextExpansion` registers the town at
+  // the moment the haunt is ordered, so nothing can put the hall up first.
+  ai.basicExpansion(true, table.mineBuilding ?? table.halls[0]);
 }
 
 /**
@@ -918,11 +953,21 @@ function expand(c: PlusCtx): void {
  * clause is about not spending 240 gold you would rather put into an army, and a town with no
  * income at all is not a saving.
  *
- * Where it sits in the ladder is the point. Beside `meleeTownHall` at the very top, because it
- * is the same kind of row: the thing that makes a town a town. Whichever of the two finishes
- * first satisfies `townHasHall` and retires the other — which is authentic either way, since
- * an undead expansion in a real game is quite often the haunted mine and a Ziggurat with no
- * Necropolis over it at all.
+ * Where it sits in the ladder is the point, and it moved: **above** `meleeTownHall` rather than
+ * beside it, which is undead.ai's own order (undead.ai 299–302). A Necropolis is 225 gold and no
+ * lumber; a Haunted Gold Mine is 225 and **210**, the most lumber of any undead building
+ * (UnitBalance.slk). Under the hall rows the cheap half of an expansion was therefore bought
+ * first and the half that earns anything was left to compete for wood that every row below kept
+ * spending — "it only builds a necropolis". Above them, `OneBuildLoop`'s own halt does the
+ * saving: nothing under this row spends a stick until the 210 is banked. Whichever of the two
+ * finishes first satisfies `townHasHall` and retires the other, which is authentic either way,
+ * since an undead expansion in a real game is quite often the haunted mine and a Ziggurat with
+ * no Necropolis over it at all.
+ *
+ * It is also the row that catches the town `expand` has only just claimed. `startExpansion`
+ * calls `nextExpansion()` — which REGISTERS the town — before it asks whether the row can be
+ * paid for, so a Computer+ undead that cannot yet afford the 225/210 still owns the town from
+ * that pass on, and this row picks it up at the top of the ladder where the saving is protected.
  *
  * Counted with `townCountTown` rather than `townCountDone`, so a mine already being haunted is
  * not asked for a second time every pass; and placement is the library's, which knows a
@@ -980,9 +1025,28 @@ export function harvestPlan(c: PlusCtx): void {
   // chop — the undead's lumber is a Ghoul and comes out of `lumberUnits` instead.
   if (c.workerChops && ai.wood() < LUMBER_DRY) ai.harvestWood(0, LUMBER_MIN);
   for (let t = 0; t < ai.townCountTotal(); t++) {
-    if (ai.townHasMine(t) && ai.townHasHall(t)) ai.harvestGold(t, MINE_CREW);
+    if (ai.townHasMine(t) && ai.townHasHall(t) && mineWorkable(c, t)) ai.harvestGold(t, MINE_CREW);
   }
   ai.harvestWood(0, 40);
+}
+
+/**
+ * Can this race actually WORK the mine at this town yet?
+ *
+ * True for three races and for the undead's own main, and it exists for the fourth's
+ * expansions: `SimWorld.issueGoldWork` refuses a gold order outright while the mine is not
+ * haunted ([Errors] `Blightminefirst` = "Must haunt gold mine first.", docs/undead.md), and
+ * `townHasHall` says yes to a Necropolis standing beside a bare rock because a Necropolis is a
+ * gold DEPOT by its own row. So the plan sent five Acolytes to kneel at nothing, every pass,
+ * for as long as the haunt took — and the slices are cumulative, so those five were counted
+ * before anybody was sent anywhere else.
+ *
+ * `countAt(…, done)` and not `townCountTown`: a haunt still going up is a mine that still
+ * cannot be worked, whatever the build array thinks of it.
+ */
+function mineWorkable(c: PlusCtx, town: number): boolean {
+  const id = c.table.mineBuilding;
+  return !id || c.ai.countAt(id, town, true) >= 1;
 }
 
 /** Lumber below which the forest is crewed BEFORE the mine — see `harvestPlan`. A little over

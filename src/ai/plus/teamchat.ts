@@ -20,10 +20,16 @@
 //     the whole match — but the thing a player actually announces: what the top of its
 //     production mix has just become, and whether the enemy's composition is why
 //     (plus/counter.ts). "switching to knights", "going hippogryphs to counter their air units".
-//  3. **It asks for help** when more than one opponent is in its towns at once.
+//  3. **It asks for help** when more than one opponent is in its towns at once, or when ONE of
+//     them is overrunning it — see `OVERRUN_EDGE`.
 //  4. **It answers a call for help** — its ally's or another computer's, since both arrive by
 //     the same route. It comes on foot, or by Scroll of Town Portal when the walk is too long to
 //     matter, and it says so if it cannot come at all.
+//  5. **It says who it is about to hit** — "im going to hit blue" — when the wave sets off at a
+//     PLAYER, naming them by the colour both players can see on the minimap (`COLOUR_NAMES`).
+//  6. **It answers that** with "im coming with you", and then actually comes: the promise is
+//     kept by committing its own wave to the same player. An ally that is not interested says
+//     NOTHING, which is the ordinary answer to an attack call and keeps the channel readable.
 //
 // What is NOT here: SCOUTING INTELLIGENCE, which is the other half of playing as a team and is
 // not chat at all — a sighting one Computer+ player makes is written into every allied Computer+
@@ -34,9 +40,15 @@
 // for chatter.ts restated: no personalities, no names, no jokes. Every line is lowercase for the
 // same reason the greetings are — that is how this is typed in a real game.
 
-/** What a heard line is asking for. Only `help` moves an army; the other two are recognised so
- *  a computer does not read another computer's ANSWER as a fresh request and answer the answer. */
-export type AllyCall = "help" | "coming" | "busy";
+/**
+ * What a heard line is asking for.
+ *
+ * Two of them move an army — `help` (come to my base) and `attack` (I am hitting that player,
+ * come with me if you like). The other three are recognised so a computer does not read another
+ * computer's ANSWER as a fresh request and answer the answer: `coming` and `joining` are the two
+ * answers, `busy` is the decline.
+ */
+export type AllyCall = "help" | "coming" | "busy" | "attack" | "joining";
 
 /**
  * What an ally just said, or null for anything this AI has no reading of.
@@ -46,19 +58,49 @@ export type AllyCall = "help" | "coming" | "busy";
  * "help   me" and "help-me" are one message. Matching is on WORDS (`\b`), which is what keeps
  * "helped", "helping" and "helpful" out of it without a list of exceptions.
  *
- * Ordering matters: the DECLINES are tested first, because every one of them contains the word
- * the request is recognised by ("i can't help right now" is not a request for help), and so does
- * every line this file itself says. A computer that read its own vocabulary as a call would
- * answer itself for the rest of the match.
+ * Ordering matters, and every step of it is a line this file itself says being kept out of the
+ * reading below it. The ANSWERS come first — `joining` before `coming`, because "im coming with
+ * you" contains "coming"; then the DECLINES, because every one of them contains the word a
+ * request is recognised by ("i can't help right now" is not a request for help); then the attack
+ * announcement, which is additionally gated on a colour; and only then `help`. A computer that
+ * read its own vocabulary as a call would answer itself for the rest of the match.
  */
 export function readAllyCall(text: string): AllyCall | null {
   const said = ` ${text.toLowerCase().replace(/[^a-z]+/g, " ").trim()} `;
   if (!said.trim()) return null;
+  if (JOINING.some((re) => re.test(said))) return "joining";
   if (COMING.some((re) => re.test(said))) return "coming";
   if (BUSY.some((re) => re.test(said))) return "busy";
+  // …and the ATTACK announcement, which is the one reading that also needs a COLOUR (see
+  // `ATTACK` for why that is a condition rather than a detail).
+  if (namedColour(said) >= 0 && ATTACK.some((re) => re.test(said))) return "attack";
   if (HELP.some((re) => re.test(said))) return "help";
   return null;
 }
+
+/**
+ * "I am coming WITH you" — the answer to an attack announcement rather than to a call for help,
+ * and tested before `COMING` for exactly that reason: every line in `JOIN_LINES` contains the
+ * word "coming", so without this a computer that said "im coming with you" would be heard by the
+ * third teammate as somebody answering a call for help that nobody made.
+ */
+const JOINING: readonly RegExp[] = [
+  /\b(coming|come|going|go|rolling|roll) with (you|u|ya)\b/,
+  /\b(ill|i ll|i will|im|i m) (join|joining|coming|going) (you|with you|in with you)\b/,
+  /\bcount me in\b/,
+];
+
+/**
+ * "I am hitting that player."
+ *
+ * Gated on a COLOUR being named as well, in `readAllyCall`, and that gate is what keeps this
+ * clause from eating the file's own calls for help: "i'm under attack from multiple sides, need
+ * help" is one of `HELP_CALLS` and contains the word this is recognised by. A request for help
+ * names no colour; an announcement always does, because naming who is the whole point of it.
+ */
+const ATTACK: readonly RegExp[] = [
+  /\b(attack|attacking|hit|hitting|kill|killing|push|pushing|going in|rush|rushing)\b/,
+];
 
 /**
  * "I am on my way" in the forms a player types it. Tested BEFORE the request patterns — see
@@ -301,3 +343,107 @@ export const SWITCH_MARGIN = 1.25;
  *  so this is "noticeably better than an even fight" — below it the switch is the tech tree
  *  opening up, which needs no explaining to a teammate. */
 export const COUNTER_TELL = 1.15;
+
+// --- who it is hitting, and who is coming with it ---------------------------------------------
+
+/**
+ * The twelve melee player colours, by the game's OWN names for them.
+ *
+ * `UI\TriggerData.txt`'s `playercolor` enum — `Color00=…,PLAYER_COLOR_RED,…` through
+ * `Color11=…,PLAYER_COLOR_BROWN,…` — lowercased and with the underscores opened out, which is
+ * how a player types them. Nothing here is invented: red/blue/cyan/purple/yellow/orange/green/
+ * pink/light gray/light blue/aqua/brown is the install's own list in the install's own order.
+ *
+ * A COLOUR is not a slot. `SetPlayerColor` can move one (`RtsController.playerColor`), which is
+ * why the index into this list is asked of the host rather than assumed to be the seat number —
+ * and it is also why the enemy is named by colour at all: a colour is what both players can see
+ * on the minimap, and "hit player 4" is not something anybody says.
+ */
+export const COLOUR_NAMES = [
+  "red", "blue", "cyan", "purple", "yellow", "orange",
+  "green", "pink", "light gray", "light blue", "aqua", "brown",
+] as const;
+
+/**
+ * The colour named in a line, as an index into `COLOUR_NAMES`, or -1.
+ *
+ * Longest match first, and that is not a tidiness rule: "light blue" contains "blue" and "light
+ * gray" contains "gray", so a shortest-first scan reads every ally's call to hit light blue as a
+ * call to hit blue — which is a different player, usually on a different side of the map.
+ *
+ * The spellings a player actually types are accepted alongside the install's ("grey" for gray,
+ * "teal" for the two colours everybody calls teal), but nothing SAYS them: what goes out is
+ * always `COLOUR_NAMES`, so the vocabulary this file reads and the vocabulary it writes stay one
+ * list.
+ */
+export function namedColour(text: string): number {
+  const said = ` ${text.toLowerCase().replace(/[^a-z]+/g, " ").trim()} `;
+  const aliases: ReadonlyArray<readonly [string, number]> = [
+    ...COLOUR_NAMES.map((c, i) => [c, i] as const),
+    ["grey", 8], ["light grey", 8], ["gray", 8], ["teal", 2], ["dark green", 10],
+  ];
+  let best = -1;
+  let bestLen = 0;
+  for (const [word, index] of aliases) {
+    if (word.length <= bestLen) continue;
+    if (!said.includes(` ${word} `)) continue;
+    best = index;
+    bestLen = word.length;
+  }
+  return best;
+}
+
+/** "im going to hit blue." Said on the allies channel when the wave sets off at a PLAYER. */
+export function attackLine(colour: string): readonly string[] {
+  return [
+    `im going to hit ${colour}`,
+    `attacking ${colour}'s base`,
+    `going in on ${colour}`,
+    `im hitting ${colour} now`,
+  ];
+}
+
+/**
+ * "im coming with you."
+ *
+ * The only answer there is. An ally that is NOT interested says nothing at all — which is the
+ * developer's own rule and is also how a team game reads: silence is the ordinary answer to
+ * "im hitting blue", and a computer that typed "no" every time somebody attacked would be the
+ * loudest thing on the channel.
+ */
+export const JOIN_LINES = ["im coming with you", "coming with you", "ill join you"] as const;
+
+/** Seconds before the same wave announces a target again, so a wave that re-aims at the same
+ *  player mid-push does not re-announce it. Longer than `TALK_GAP`: an attack is one event. */
+export const ATTACK_TELL_GAP = 45;
+
+/** …and between two of these computers ANSWERING one announcement, for the same reason
+ *  `HELP_ANSWER_STAGGER` exists: every allied computer hears it on the same frame. */
+export const JOIN_STAGGER = 2.5;
+
+/** How long a computer that said "im coming with you" holds that objective before its own army
+ *  manager is allowed to re-decide. A push across a melee map is about this long, and the point
+ *  of the promise is that it is kept for the length of the trip rather than abandoned at the
+ *  first thing the wave sees on the way. */
+export const JOIN_TIMEOUT = 75;
+
+/**
+ * How much stronger than everything we have at home the enemy standing IN it has to be before
+ * one opponent counts as OVERRUN.
+ *
+ * The second reason to call for help, beside `HELP_CALL_FOES`. Two opponents in your base is an
+ * emergency by arithmetic; ONE opponent in your base is an ordinary melee game right up until
+ * it is not, and the difference is not how many players there are — it is whether what is
+ * standing in the base can answer what walked into it. Priced with plus/power.ts, the same
+ * √Σ(dps × hp) the AI already uses to decide whether it can take a fight, so "overrun" means
+ * the same thing here as "we would lose this" does everywhere else.
+ *
+ * A HALF again, rather than merely "more": a raid the defence is losing narrowly is a fight, and
+ * a teammate walking across the map arrives after it. This is the bar at which the base goes.
+ */
+export const OVERRUN_EDGE = 1.5;
+
+/** …and how many enemy BODIES have to be standing in the towns before the ratio is asked at all.
+ *  Two, because a player with nothing at home is outweighed by any single unit that wanders in,
+ *  and one Ghoul at a Ziggurat is a harasser rather than an overrun. */
+export const OVERRUN_BODIES = 2;

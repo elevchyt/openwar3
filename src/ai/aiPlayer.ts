@@ -706,11 +706,20 @@ export class AiPlayer {
 
     const def = this.host.registry.get(hall);
     if (!def) return true;
-    if (def.goldCost > this.totalGold) {
-      this.stallShort = def.goldCost - this.totalGold;
+    // Priced in BOTH resources, like every other row (`startUnit`). It used to ask about gold
+    // alone, which is harmless while an expansion is always a Town Hall — a Necropolis, a Great
+    // Hall and a Tree of Life are all bought with gold and lumber the player has long since
+    // banked — and wrong for the one race whose expansion is a HAUNTED GOLD MINE: 225 gold and
+    // **210 lumber** (UnitBalance.slk), so the row declared itself affordable on gold, the
+    // authority then refused the build for want of the wood, and `setProduce` reported the
+    // failure as a halt with a stale shortfall behind it. See `expand` in plus/plan.ts.
+    if (def.goldCost > this.totalGold || def.lumberCost > this.totalWood) {
+      this.stallShort = Math.max(0, def.goldCost - this.totalGold)
+        + Math.max(0, def.lumberCost - this.totalWood);
       return false;
     }
     this.totalGold -= def.goldCost;
+    this.totalWood -= def.lumberCost;
 
     // `GetExpansionFoe()` — creeps camped on the next expansion. The hall waits; the attack
     // sequence is what clears them (SingleMeleeAttack's `needs_exp` branch).

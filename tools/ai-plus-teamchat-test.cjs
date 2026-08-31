@@ -20,8 +20,8 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const {
-  readAllyCall, plural, switchLine, openerLine,
-  HELP_CALLS, COMING_LINES, PORTAL_LINES, BUSY_LINES,
+  readAllyCall, namedColour, plural, switchLine, openerLine, attackLine,
+  HELP_CALLS, COMING_LINES, PORTAL_LINES, BUSY_LINES, JOIN_LINES, COLOUR_NAMES,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "teamchat.js"));
 
 let failed = 0;
@@ -53,12 +53,53 @@ for (const said of ["no help needed", "i cant help right now", "i can't help rig
 
 // --- it does not eat its own vocabulary --------------------------------------------------------
 // The loop guard. Everything the file ANSWERS with must read as anything except a request.
-for (const said of [...COMING_LINES, ...PORTAL_LINES, ...Object.values(BUSY_LINES).flat()]) {
+for (const said of [
+  ...COMING_LINES, ...PORTAL_LINES, ...Object.values(BUSY_LINES).flat(), ...JOIN_LINES,
+  ...COLOUR_NAMES.flatMap((c) => attackLine(c)),
+]) {
   const got = readAllyCall(said);
   check(`its own answer is not a call: ${JSON.stringify(said)}`, got === "help", false);
 }
 // …and everything it ASKS with must read as one, or a computer could never call another computer.
 for (const said of HELP_CALLS) check(`its own call is a call: ${JSON.stringify(said)}`, readAllyCall(said), "help");
+
+// --- who it is hitting, and who is coming with it ----------------------------------------------
+//
+// The same loop guard, one step further out. An ATTACK announcement and the answer to it travel
+// on the channel the calls for help do, so each has to read as itself and as nothing else — and
+// the two ways this breaks are both here: "im coming with you" contains the word every "on my
+// way" is recognised by, and "i'm under attack from multiple sides, need help" contains the word
+// every attack announcement is recognised by. The colour is what tells the second pair apart.
+for (const colour of COLOUR_NAMES) {
+  for (const said of attackLine(colour)) {
+    check(`an attack call is an attack call: ${JSON.stringify(said)}`, readAllyCall(said), "attack");
+    check(`…and it names ${colour}`, namedColour(said), COLOUR_NAMES.indexOf(colour));
+  }
+}
+for (const said of JOIN_LINES) {
+  check(`joining is joining, not coming: ${JSON.stringify(said)}`, readAllyCall(said), "joining");
+}
+for (const said of [
+  "im going to hit blue", "attacking yellow's base", "hitting RED now", "lets push green",
+  "going in on light blue", "im rushing brown",
+]) check(`hears an attack call: ${JSON.stringify(said)}`, readAllyCall(said), "attack");
+
+// An attack call with no colour in it is not one — which is what keeps the file's OWN request
+// for help ("i'm under attack from multiple sides") out of this reading.
+for (const said of ["attack now", "im attacking", "lets push"]) {
+  check(`no colour, no attack call: ${JSON.stringify(said)}`, readAllyCall(said) === "attack", false);
+}
+
+// Longest match first, or every call to hit light blue is heard as a call to hit blue — a
+// different player, usually on the other side of the map.
+check("light blue is not blue", namedColour("im going to hit light blue"), 9);
+check("blue is blue", namedColour("im going to hit blue"), 1);
+check("light gray is gray", namedColour("hitting light gray"), 8);
+check("grey is the install's gray", namedColour("hitting grey"), 8);
+check("teal is what everybody calls cyan", namedColour("attacking teal"), 2);
+check("no colour named", namedColour("attacking now"), -1);
+check("the names are the install's, in the install's order", COLOUR_NAMES.join(","),
+  "red,blue,cyan,purple,yellow,orange,green,pink,light gray,light blue,aqua,brown");
 
 // --- saying what it is building ----------------------------------------------------------------
 // The name is always the game's (`UnitDef.name`); only the shape is ours.

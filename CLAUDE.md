@@ -267,9 +267,19 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   on the recipient list `deliverChat` already computed and on the alliance matrix, so it can no
   more read chat it was not addressed than see through the fog. Two traps: the file's own
   vocabulary is read by its own parser, so a decline that parses as a request makes two computers
-  answer each other for the rest of the match (`readAllyCall` tests the declines FIRST, and
-  `tools/ai-plus-teamchat-test.cjs` pins it); and nothing is acted on inside `heard`, which is
-  called from the middle of chat delivery. Scouting intel is NOT chat — a sighting is written
+  answer each other for the rest of the match (`readAllyCall` tests the ANSWERS and then the
+  declines FIRST, and `tools/ai-plus-teamchat-test.cjs` pins it); and nothing is acted on inside
+  `heard`, which is called from the middle of chat delivery. It asks for HELP on two conditions —
+  two opponents in its towns, or ONE that is overrunning it, which is a `powerOf` comparison
+  rather than a count — and it announces WHO IT IS HITTING ("im going to hit blue") whenever the
+  wave sets off at a player, naming them by the COLOUR both players read off the minimap
+  (`COLOUR_NAMES` is `UI\TriggerData.txt`'s own `playercolor` enum, asked of
+  `PlusHost.playerColor` because `SetPlayerColor` can move one). An ally answers that with "im
+  coming with you" and then actually comes; one that is not interested says NOTHING, because
+  nobody types "no" every time a teammate attacks. The colour is also what keeps the announcement
+  out of the help reading — a request for help names no colour — and `namedColour` matches
+  LONGEST FIRST, or every call to hit light blue is heard as a call to hit blue. Scouting intel
+  is NOT chat — a sighting is written
   into every allied Computer+ player's `EnemyMemory` at the moment it is made — and it is not a
   fog bypass, because what travels is what somebody's own eyes saw.
   **A ROW THAT HALTS THE LOOP STOPS EVERYTHING UNDER IT**, and almost every "the AI just stands
@@ -281,7 +291,15 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   tier row keep its queue full and the upgrade can never start; the FOREST is never left empty
   (`LUMBER_DRY`), because a lumber shortfall with no lumber income never shrinks and the row that
   would hire a lumberjack is underneath the row it stopped on; and a halt that has stopped getting
-  NEARER its price lets one pass through (`releaseStall`). The bulk of the army is the LAST row,
+  NEARER its price lets one pass through (`releaseStall`). Two rows whose price is a RACE's rather
+  than the Human's: the SUPPLY row keeps one supply BUILDING's worth of food in hand and not a
+  flat six (a Moon Well is 180/40, fifty seconds and ten food against a Farm's 80/20, thirty-five
+  and six — six food of warning is a third of a well's build time, which is the night elf food
+  block), and the UNDEAD's expansion is the HAUNTED GOLD MINE (`expand` founds it with
+  `table.mineBuilding`, undead.ai's own `basicExpansion(…, UNDEAD_MINE)`), whose 210 lumber is the
+  most of any undead building — so `mineBuildings` sits ABOVE the hall rows, where the loop's own
+  halt protects the saving, or the 225-gold no-lumber Necropolis is bought first every pass and
+  the mine never is. The bulk of the army is the LAST row,
   so anything that reserves gold above it — a second hero, an expansion, a tier — is production
   stopped: the floor that keeps an army on the field while it saves is `CORE_ARMY_FOOD`, and it
   grows with the tier for that reason. A second production building is bought with the BANK; the

@@ -77,8 +77,12 @@ function recorder(table, strategy, profile, opts = {}) {
     // Per TOWN, because that is the only shape in which "this mine is haunted and that one is
     // not" can be said — see the undead's `mineBuildings` rows below.
     townCountTown: (id, town) => opts.perTown?.[town]?.[id] ?? count(id),
+    // …and the same question asked of what is FINISHED, which is what `harvestPlan` puts a
+    // crew on: a haunt still going up is a mine nobody can kneel at (plan.ts `mineWorkable`).
+    countAt: (id, town) => opts.perTown?.[town]?.[id] ?? count(id),
     minesOwned: () => 1, goldOwned: () => 20000,
     foodUsed: () => opts.foodUsed ?? 0, foodCap: () => opts.foodCap ?? 100,
+    foodMade: (id) => opts.foodMade?.[id] ?? 6,
     gold: () => opts.gold ?? 500, wood: () => opts.wood ?? 500,
     clearHarvestAI: () => { harvest.length = 0 },
     harvestGold: (town, n) => harvest.push({ res: "gold", town, n }),
@@ -175,11 +179,15 @@ for (const [race, table] of Object.entries(PLUS_RACES)) {
 console.log("\n--- the forest is never left empty ---");
 for (const [race, table] of Object.entries(PLUS_RACES)) {
   const chops = race !== "undead";
-  const dry = recorder(table, table.strategies[0], PLUS_NORMAL, { wood: 20, workerChops: chops });
+  // The undead's own main mine is HAUNTED from the first frame (`MeleeStartingUnitsUndead`
+  // calls `BlightGoldMineForPlayerBJ`), and without it standing there is nothing for a crew to
+  // kneel at — see plan.ts `mineWorkable`.
+  const standing = table.mineBuilding ? { [table.mineBuilding]: 1 } : {};
+  const dry = recorder(table, table.strategies[0], PLUS_NORMAL, { wood: 20, workerChops: chops, standing });
   harvestPlan(dry.ctx);
   check(`${race} crews the trees first when the bank is dry`, dry.harvest[0]?.res, chops ? "lumber" : "gold");
 
-  const flush = recorder(table, table.strategies[0], PLUS_NORMAL, { wood: 800, workerChops: chops });
+  const flush = recorder(table, table.strategies[0], PLUS_NORMAL, { wood: 800, workerChops: chops, standing });
   harvestPlan(flush.ctx);
   check(`${race} opens on the mine when it is not`, flush.harvest[0]?.res, "gold");
 }
@@ -323,10 +331,12 @@ function runEconomy() {
       // is the global one. What it is FOR is the undead's Haunted Gold Mine (plan.ts
       // `mineBuildings`), which must not be asked for twice.
       townCountTown: (id) => townCount(id),
+      countAt: (id) => doneRaw(id),
       minesOwned: () => S.mines, goldOwned: () => 20000,
       foodUsed: () => Object.entries(S.units).reduce((n, [id, q]) => n + (def(id)?.foodUsed ?? 0) * q, 0)
         + jobs().filter((j) => j.kind === "unit").reduce((n, j) => n + (def(j.id)?.foodUsed ?? 0), 0),
       foodCap: () => S.bldgs.filter((b) => b.ready).reduce((n, b) => n + (def(b.type)?.foodMade ?? 0), 0),
+      foodMade: (id) => def(id)?.foodMade ?? 0,
       gold: () => S.gold, wood: () => S.lumber,
       clearHarvestAI: () => {}, harvestGold: () => {}, harvestWood: () => {},
       townHasMine: () => true, townHasHall: () => true, townThreatened: () => false,

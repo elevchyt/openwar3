@@ -831,6 +831,10 @@ export class RtsController {
       say: (player, text, scope) => this.onChatSaid?.({ from: player, text, target: { scope: scope ?? "all" } }),
       leave: (player) => this.onPlayerLeft?.(player),
       startLocations: () => this.meleeStarts,
+      // What COLOUR a seat wears, which is how one computer names another player to its
+      // teammates ("im going to hit blue"). Not the seat number: `SetPlayerColor` can move it,
+      // and what a person reads off the minimap is the colour (see `playerColor`).
+      playerColor: (player) => this.playerColor(player),
     };
     this.meleeAi = new MeleeAi(host);
     this.computerPlus = new ComputerPlusAi(host);

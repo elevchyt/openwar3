@@ -1035,6 +1035,30 @@ Seven of those positions were moved after a live match said so, and each is wort
   Tier 3 keeps its old place at the bottom — at ten minutes there is an army to spend on, and
   what loses games there is teching past what you can defend.
 
+### The food headroom is the SUPPLY BUILDING's, not a Farm's
+
+Reported: *"the Computer+ AI for Night Elf sometimes does not build enough moon wells, rendering
+it unable to produce more army units."*
+
+`supply` had two numbers in it and **both of them were the Human's**. It kept a flat six food of
+headroom and allowed exactly one supply building in flight (`countDone + 1` is already satisfied
+by one under construction, since `SetBuildUnit` counts what is going up). That is a fair
+description of a player putting up **Farms** — 80 gold, 20 lumber, **35 seconds**, six food — and
+it describes no other race in the game. A **Moon Well is 180 gold, 40 lumber, 50 seconds and ten
+food** (`UnitBalance.slk`): the most expensive supply building there is, half again as slow as a
+Farm, and the night elf is paying one food per Wisp out of the same cap. Six food of warning is
+most of a Farm's build time and about a third of a Moon Well's — so the elf hit the cap while its
+one well was still going up, and stopped producing.
+
+Both numbers are now asked of the building itself:
+
+* **the headroom is one of these buildings' worth of food** (`GetFoodMade`) — ten for a Moon
+  Well, a Burrow and a Ziggurat, six for a Farm, which leaves the Human exactly where it was;
+* **two may be in flight once the cap has actually been REACHED**, and only then. Blocked is a
+  different position from nearly-blocked: nothing below this row can be trained at all until the
+  cap moves, so the gold a second building reserves is gold that had nothing else to buy. Below
+  the cap it is still one at a time, which is what keeps the row from carpeting the base.
+
 ### A build order names the army it INTENDS; the opening soldier is derived
 
 A strategy is a weighted unit mix, and a mix is a statement about the army this build wants to
@@ -1309,12 +1333,26 @@ taking another.
 
 `PlusRaceTable.mineBuilding` names the building (`ugol`, and nobody else has one), and
 `plan.ts`'s **`mineBuildings`** asks for it at every town that holds a mine and has not got one.
-Three things about it are the decision rather than the plumbing:
+Four things about it are the decision rather than the plumbing:
 
-* it sits **beside `meleeTownHall` at the very top of the ladder**, because it is the same kind
-  of row — the thing that makes a town a town. Whichever of the two finishes first satisfies
-  `townHasHall` and retires the other, which is authentic either way: an undead expansion in a
-  real game is quite often the haunted mine and a Ziggurat with no Necropolis over it;
+* **the expansion is FOUNDED with it.** `expand` passes `table.mineBuilding ?? table.halls[0]` to
+  `basicExpansion`, which is `undead.ai`'s own rule stated four times over — every one of its
+  expansion sites reads `ai.basicExpansion(mines < N, UNDEAD_MINE)`, never the Necropolis
+  (undead.ai 179/215/302/322, ported in [`src/ai/undead.ts`](../src/ai/undead.ts)). That also
+  settles the order for free: `startExpansion` calls `nextExpansion()` — which *registers* the
+  town — before it asks whether the row can be paid for, so the town exists from that pass on and
+  `mineBuildings` picks it up at the top of the ladder whether or not the 225/210 was affordable
+  that second;
+* it sits **above `meleeTownHall` at the very top of the ladder**, which is undead.ai's own order
+  (undead.ai 299–302) and was the bug: a Necropolis is 225 gold and **no lumber**, a Haunted Gold
+  Mine is 225 and **210** — the most lumber of any undead building (`UnitBalance.slk`). Under the
+  hall rows the cheap half of an expansion was bought first every pass and the half that earns
+  anything was left underneath competing for wood the rows below kept spending, which is exactly
+  the developer's *"it only builds a necropolis"*. Above them, `OneBuildLoop`'s own halt does the
+  saving: nothing under this row spends a stick until the 210 is banked. Whichever of the two
+  finishes first still satisfies `townHasHall` and retires the other, which is authentic either
+  way: an undead expansion in a real game is quite often the haunted mine and a Ziggurat with no
+  Necropolis over it;
 * it is counted with `townCountTown`, so a haunting already under way is not asked for twice;
 * **the night elf is deliberately not in it.** An Entangled Gold Mine is what the `Aent` CAST
   creates, not something a worker builds, and it is issued from the library layer both AIs share
@@ -1324,6 +1362,21 @@ Three things about it are the decision rather than the plumbing:
 The classic AI has always done this — `undead.ai`'s `undead_mine(townid)` is one line per town —
 so what was missing here was the row, not the idea. Placement is the library's and already knew:
 `AiPlayer.siteFor` puts a mine-standing building **on the mine and nowhere else**.
+
+Two things in the library had to change with it, and both are the same fact arriving from
+different directions — that for one race an expansion is a **lumber** purchase:
+
+* **`AiPlayer.startExpansion` prices lumber**, like every other row (`startUnit`) always did. It
+  asked about gold alone, which is harmless while an expansion is always a Town Hall and wrong
+  for a 225/**210** Haunted Gold Mine: the row declared itself affordable, the authority then
+  refused the build for want of the wood, and the failure came back as a halt with a stale
+  shortfall behind it.
+* **`harvestPlan` does not crew a mine nobody can work** (`mineWorkable`). `townHasHall` says yes
+  to a Necropolis standing beside a bare rock, because a Necropolis is a gold depot by its own
+  row — so the plan sent five Acolytes to kneel at nothing for as long as the haunt took, and the
+  slices are cumulative, so those five were counted before anybody was sent anywhere else. It is
+  asked of `countAt(…, done)` rather than `townCountTown`: a haunt still going up is a mine that
+  still cannot be worked, whatever the build array thinks of it.
 
 ### It picks things up
 
@@ -2344,8 +2397,37 @@ early — does not hold its openers back for greetings nobody is still going to 
   the enemy for a switch caused by its own Castle finishing is a computer talking nonsense.
   `SWITCH_MARGIN` is real hysteresis and is not optional: `buildableMix` is a continuous
   re-weighting, so two near-equal rows trade places constantly and every trade would be a line.
-* **"help me"**, when **more than one opponent** has units in its towns at once (`isInvader`, so
-  a creep camp next door is not an invasion). One opponent in your base is a melee game.
+* **"help me"**, on either of two conditions. **More than one opponent** has units in its towns
+  at once (`isInvader`, so a creep camp next door is not an invasion) — two at once is an
+  emergency by arithmetic. Or **one of them is overrunning it** (`overrun`): the number of
+  attackers is not what makes a raid an emergency, and one opponent in your base is an ordinary
+  melee game right up until what is standing there cannot answer what walked in. That is a
+  comparison rather than a count, so it is priced with `powerOf` — the same √Σ(dps × current hp)
+  both sides of every other fight this AI decides are weighed with — against everything of ours
+  standing in a town, with `OVERRUN_EDGE` (a half again) as the bar. `OVERRUN_BODIES` is the
+  floor under the ratio and does real work: a player whose army is out creeping has *no* home
+  defence at all, so without it one Ghoul strolling past a Ziggurat outweighs the base by any
+  margin you like.
+* **Who it is about to hit** — *"im going to hit blue"* — when the wave sets off at a **player**.
+  Not a creep run, and not a field battle the wave was dragged into (`contactPass`'s target
+  carries `id` 0): a teammate cannot join something that is already happening somewhere the
+  announcer did not choose, so the objective has to name a unit whose owner is a seat we are at
+  war with. The opponent is named by **colour**, which is the only name an opponent has — it is
+  what both players read off the minimap, and "player 4" is not something anybody types.
+  `COLOUR_NAMES` is the install's own list in the install's own order (`UI\TriggerData.txt`'s
+  `playercolor` enum, `Color00=…PLAYER_COLOR_RED…` through `Color11=…PLAYER_COLOR_BROWN`), and
+  the colour is asked of `PlusHost.playerColor` rather than taken as the seat number, because
+  `SetPlayerColor` can move one. `attackSaid` holds the *player* rather than a flag, so re-aiming
+  at a different enemy is a fresh announcement while the same one inside `ATTACK_TELL_GAP` is
+  not — `attacking` re-picks its objective as buildings die under it.
+* **"im coming with you"**, and then it comes: the promise is kept by pointing its own wave at
+  that player, because anything less would make the line a lie. **Silence is the other answer.**
+  An ally that is not interested says nothing at all — nobody types "no" every time a teammate
+  announces an attack, and one announcement is heard by every allied computer at once, so a
+  spoken decline here would be the loudest thing on the channel. Not interested means exactly the
+  states `busyLines` already names, plus the wave's own clocks (`waveReady`): a computer that
+  walked out with three soldiers because a teammate asked would be attacking with less than it
+  has itself decided an attack takes.
 * **An answer to somebody else's call** — *"omw"*, *"coming, tping to you"*, or a decline that
   says **why**: *"i can't come there right now, i'm under attack too"*. The decline is as much of
   the feature as the relief wave: an ally told that nobody is coming can play the fight
@@ -2355,11 +2437,27 @@ early — does not hold its openers back for greetings nobody is still going to 
 
 `readAllyCall` folds the text to lowercase and turns every non-letter into a space, then matches
 on **words**, so "HELP!!", "Help me.", "help-me" and "i'm dying" are one message and "helped",
-"helping" and "helpful" are not messages at all. The **declines are tested first**, because every
-one of them contains the word a request is recognised by — and so does every line this file
-itself says. Without that ordering two computers answer each other's answers for the rest of the
-match, which is why `tools/ai-plus-teamchat-test.cjs` runs the file's own vocabulary through its
-own parser and requires none of the answers to read as a call.
+"helping" and "helpful" are not messages at all.
+
+**The order of the readings is the whole parser**, and every step of it is a line this file itself
+says being kept out of the reading below it:
+
+1. `joining` before `coming`, because every one of `JOIN_LINES` contains the word "coming" — so
+   without it "im coming with you" is heard by the third teammate as somebody answering a call for
+   help that nobody made;
+2. the **declines**, because every one of them contains the word a request is recognised by ("i
+   can't help right now" is not a request for help);
+3. the **attack announcement**, which is additionally gated on a **colour** being named — that
+   gate is what keeps it from eating the file's own `HELP_CALLS`, one of which reads *"i'm under
+   attack from multiple sides, need help"*. A request for help names no colour; an announcement
+   always does, because naming who is the point of it. `namedColour` matches **longest first**,
+   or every call to hit light blue is heard as a call to hit blue — a different player, usually
+   on the other side of the map;
+4. and only then `help`.
+
+Without that ordering two computers answer each other's answers for the rest of the match, which
+is why `tools/ai-plus-teamchat-test.cjs` runs the file's own vocabulary through its own parser and
+requires none of the answers to read as a call.
 
 A call is acted on only if it was **addressed to this computer** (the recipient list `deliverChat`
 already computed — it cannot read chat it was not a recipient of any more than it can see through
@@ -2450,7 +2548,12 @@ None of them are Warcraft III's — nothing in the install describes a computer 
 every one is ours, which is this whole directory's standing rule. `TALK_GAP` 25 s between any two
 lines (a team game with three computers is three of these at once and the message area is small),
 `HELP_CALL_GAP` 60 s, `HELP_ANSWER_GAP` 30 s (a second "help" inside it is the same emergency and
-the army is already walking), `HELP_TIMEOUT` 90 s, `SWITCH_MARGIN` 1.25, `HELP_CALL_FOES` 2.
+the army is already walking), `HELP_TIMEOUT` 90 s, `SWITCH_MARGIN` 1.25, `HELP_CALL_FOES` 2,
+`OVERRUN_EDGE` 1.5 and `OVERRUN_BODIES` 2, `ATTACK_TELL_GAP` 45 s, `JOIN_STAGGER` 2.5 s,
+`JOIN_TIMEOUT` 75 s.
+
+The one thing here that *is* the install's is `COLOUR_NAMES` — twelve words, in twelve places,
+straight off `UI\TriggerData.txt`'s `playercolor` enum.
 
 ## The UI, and the overrides layer
 

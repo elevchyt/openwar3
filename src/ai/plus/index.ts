@@ -15,9 +15,11 @@ import {
 import { PlusItems, type ItemCtx } from "./items";
 import { LUMBER_FLOOR, buildPlan, buildableMix, harvestPlan, type PlusCtx } from "./plan";
 import {
-  BUSY_LINES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP, HELP_ANSWER_STAGGER, HELP_CALLS,
-  HELP_CALL_FOES, HELP_CALL_GAP, HELP_CLEAR, HELP_GRACE, HELP_TIMEOUT, OPENER_AT, OPENER_UNITS,
-  PORTAL_LINES, PORTAL_WALK, SWITCH_MARGIN, TALK_GAP, openerLine, readAllyCall, switchLine,
+  ATTACK_TELL_GAP, BUSY_LINES, COLOUR_NAMES, COMING_LINES, COUNTER_TELL, HELP_ANSWER_GAP,
+  HELP_ANSWER_STAGGER, HELP_CALLS, HELP_CALL_FOES, HELP_CALL_GAP, HELP_CLEAR, HELP_GRACE,
+  HELP_TIMEOUT, JOIN_LINES, JOIN_STAGGER, JOIN_TIMEOUT, OPENER_AT, OPENER_UNITS, OVERRUN_BODIES,
+  OVERRUN_EDGE, PORTAL_LINES, PORTAL_WALK, SWITCH_MARGIN, TALK_GAP, attackLine, namedColour,
+  openerLine, readAllyCall, switchLine,
   type SwitchReason,
 } from "./teamchat";
 import { plusProfile, type PlusProfile } from "./profile";
@@ -102,6 +104,16 @@ export interface PlusHost extends AiHost {
    * person sends their first worker at.
    */
   startLocations(): ReadonlyArray<{ player: number; x: number; y: number }>;
+  /**
+   * What COLOUR a seat wears, as an index into `COLOUR_NAMES` (plus/teamchat.ts).
+   *
+   * How one player names another to a teammate — "im going to hit blue" — and it has to be
+   * asked rather than assumed, because `SetPlayerColor` can move a slot's colour off its seat
+   * number (`RtsController.playerColor`, and Rise of the Naga does exactly that). A colour is
+   * also the only name an opponent HAS: it is what both players read off the minimap, and
+   * "player 4" is not something anybody types.
+   */
+  playerColor(player: number): number;
 }
 
 /** How often the manners pass runs — greeting, conceding, leaving. Cheap, and none of it is
@@ -1523,6 +1535,21 @@ interface Brain {
   /** When that call may be ANSWERED. One "help" reaches every allied computer on the same
    *  frame; `HELP_ANSWER_STAGGER` gives each of them its own turn to speak and to decide. */
   answerAt: number;
+  /** The PLAYER this wave's attack was announced for (-1 = nothing announced yet), and when it
+   *  was said. Both so a wave that re-aims at the same base mid-push does not say it twice —
+   *  see `attackTalk` and `ATTACK_TELL_GAP`. */
+  attackSaid: number;
+  attackSaidAt: number;
+  /** An ally's ATTACK announcement that has not been acted on yet (null = none): who said it,
+   *  and which player they named. Parked by `heard` and answered by the manners pass, for the
+   *  same reason `called` is — see `Brain.called`. */
+  joinCall: { from: number; foe: number } | null;
+  /** …and when this computer's turn to answer it comes (`JOIN_STAGGER`). */
+  joinAt: number;
+  /** The player this computer said it was coming with (-1 = none), and the clock that promise
+   *  runs out on. */
+  joining: number;
+  joinUntil: number;
   /** The ally this relief wave is for (-1 = none), and the clock it gives up on. */
   helping: number;
   helpUntil: number;
@@ -1665,6 +1692,12 @@ export class ComputerPlusAi {
       answeredAt: -Infinity,
       called: -1,
       answerAt: 0,
+      attackSaid: -1,
+      attackSaidAt: -Infinity,
+      joinCall: null,
+      joinAt: 0,
+      joining: -1,
+      joinUntil: 0,
       helping: -1,
       helpUntil: 0,
       helpSince: 0,
@@ -1698,6 +1731,12 @@ export class ComputerPlusAi {
    * `Brain.called` for why that separation is not optional.
    */
   heard(line: ChatLine, recipients: readonly number[]): void {
+    const call = readAllyCall(line.text);
+    if (call !== "help" && call !== "attack") return;
+    // WHO an attack announcement named, resolved once for every listener: the colour is what
+    // was said (`COLOUR_NAMES`), and the seat wearing it is what an army can be pointed at.
+    const foe = call === "attack" ? this.playerWearing(namedColour(line.text)) : -1;
+    if (call === "attack" && foe < 0) return;
     // How many computers have already taken a turn at this ONE line. Every allied Computer+
     // player hears it on the same frame, so without a turn each they all typed "omw" onto the
     // same frame as well — see `HELP_ANSWER_STAGGER`. Counted here rather than derived from the
@@ -1709,10 +1748,27 @@ export class ComputerPlusAi {
       const me = b.ai.player;
       if (line.from === me || !recipients.includes(me)) continue;
       if (!this.host.coAllied(me, line.from)) continue;
-      if (readAllyCall(line.text) !== "help") continue;
-      b.called = line.from;
-      b.answerAt = b.clock + HELP_ANSWER_STAGGER * turn++;
+      if (call === "help") {
+        b.called = line.from;
+        b.answerAt = b.clock + HELP_ANSWER_STAGGER * turn++;
+        continue;
+      }
+      // …and an ATTACK call is only worth answering if the player named is somebody THIS
+      // computer is also at war with. An ally announcing a target we are allied to is not an
+      // invitation to break an alliance.
+      if (foe === me || this.host.coAllied(me, foe)) continue;
+      b.joinCall = { from: line.from, foe };
+      b.joinAt = b.clock + JOIN_STAGGER * turn++;
     }
+  }
+
+  /** The seat wearing this colour, or -1 — the inverse of `PlusHost.playerColor`, which is the
+   *  only direction the host offers. Walked over the seats rather than cached because a colour
+   *  can move mid-match (`SetPlayerColor`) and the answer is wanted about twice a minute. */
+  private playerWearing(colour: number): number {
+    if (colour < 0) return -1;
+    for (let p = 0; p < MELEE.MAX_PLAYERS; p++) if (this.host.playerColor(p) === colour) return p;
+    return -1;
   }
 
   reset(): void {
@@ -3916,6 +3972,11 @@ export class ComputerPlusAi {
     b.creeping = false;
     b.retreatFrom = null;
     b.lastWaveEnd = b.clock;
+    // The wave is over, so both halves of what it was TOLD ABOUT are too: the next one announces
+    // itself even if it happens to pick the same opponent, and nothing is still promised to a
+    // teammate. See `attackTalk` / `joinWave`.
+    b.attackSaid = -1;
+    b.joining = -1;
     this.setMode(b, "massing");
   }
 
@@ -4502,12 +4563,16 @@ export class ComputerPlusAi {
     }
     if (!b.allies.length) {
       b.called = -1; // nobody to have called; a stale one must not fire if a team forms later
+      b.joinCall = null;
       return;
     }
     this.openerTalk(b);
     this.helpWave(b);
     this.answerCall(b);
     this.callForHelp(b);
+    this.joinWave(b);
+    this.answerAttack(b);
+    this.attackTalk(b);
   }
 
   /**
@@ -4662,9 +4727,162 @@ export class ComputerPlusAi {
     if (b.helping >= 0) return;
     if (b.clock - b.askedAt < HELP_CALL_GAP) return;
     if (b.clock - b.spokeAt < TALK_GAP) return;
-    if (this.attackers(b) < HELP_CALL_FOES) return;
+    if (this.attackers(b) < HELP_CALL_FOES && !this.overrun(b)) return;
     b.askedAt = b.clock;
     this.tell(b, HELP_CALLS);
+  }
+
+  /**
+   * …and the OTHER reason to ask: one opponent, and it is winning.
+   *
+   * The developer's own addition — "it should ask for help when it is being overrun" — and the
+   * reason it is a second condition rather than a lower `HELP_CALL_FOES` is that the number of
+   * attackers is not what makes a raid an emergency. One opponent in your base is an ordinary
+   * melee game right up until the moment what is standing there cannot answer what walked in,
+   * and that moment is a comparison rather than a count.
+   *
+   * Priced with `powerOf` — the same √Σ(dps × current hp) both sides of every other fight this
+   * AI decides are weighed with (plus/power.ts) — so "overrun" means here what "we would lose
+   * this" means everywhere else in the file. The defence is everything of ours standing in a
+   * town, which is what a raid is actually met by: the wave if it is home, whatever was being
+   * trained if it is not. Buildings and workers are in neither side's count, exactly as
+   * `isInvader` leaves them out of the attackers'.
+   *
+   * `OVERRUN_BODIES` is the floor under the ratio, and it is doing real work: a player whose
+   * army is out creeping has NO defence at all, so without it a single Ghoul walking past a
+   * Ziggurat outweighs the base by any margin you like and the channel fills with calls for
+   * help about one unit.
+   */
+  private overrun(b: Brain): boolean {
+    const invaders: SimUnit[] = [];
+    const defence: SimUnit[] = [];
+    for (const u of this.host.world.units.values()) {
+      if (this.isInvader(b, u)) { invaders.push(u); continue; }
+      if (u.owner !== b.ai.player || u.hp <= 0 || u.building || u.isPeon) continue;
+      if (this.townDistance(b, u) <= TOWN_RADIUS) defence.push(u);
+    }
+    if (invaders.length < OVERRUN_BODIES) return false;
+    return this.powerOf(invaders) > this.powerOf(defence) * OVERRUN_EDGE;
+  }
+
+  // --- who it is hitting, and who is coming with it ---------------------------------------
+
+  /**
+   * "im going to hit blue."
+   *
+   * Said when the wave sets off at a PLAYER and not otherwise, which is the whole distinction:
+   * a creep run is not an attack on anybody, and a field battle that the wave was dragged into
+   * (`contactPass`, whose target carries `id` 0) is not a plan worth announcing — a teammate
+   * cannot join something that is already happening somewhere the announcer did not choose.
+   * So the target has to name a UNIT, and that unit's owner has to be a seat we are at war
+   * with; an enemy expansion and an enemy main both answer to that, and both are exactly what
+   * a person says out loud before walking over.
+   *
+   * The player is named by COLOUR (`COLOUR_NAMES`, off `PlusHost.playerColor`) because that is
+   * the only name an opponent has — it is what both players read off the minimap.
+   *
+   * `attackSaid` holds the player rather than a boolean, so re-aiming at a DIFFERENT enemy is a
+   * fresh announcement while the same one inside `ATTACK_TELL_GAP` is not: `attacking` re-picks
+   * its objective as buildings die under it, and a wave working through one base would
+   * otherwise announce it every time the nearest structure changed.
+   */
+  private attackTalk(b: Brain): void {
+    if (b.mode !== "attacking" || b.creeping || b.helping >= 0 || !b.target) return;
+    const foe = this.targetOwner(b);
+    if (foe < 0) return;
+    if (foe === b.attackSaid && b.clock - b.attackSaidAt < ATTACK_TELL_GAP) return;
+    if (b.clock - b.spokeAt < TALK_GAP) return;
+    const colour = COLOUR_NAMES[this.host.playerColor(foe)];
+    if (!colour) return; // a map with more colours than names: say nothing rather than guess
+    b.attackSaid = foe;
+    b.attackSaidAt = b.clock;
+    this.tell(b, attackLine(colour));
+  }
+
+  /** The SEAT this wave's objective belongs to, or -1 for a camp, a spot on the ground, a
+   *  neutral building, or anything we are not at war with. */
+  private targetOwner(b: Brain): number {
+    const id = b.target?.id ?? 0;
+    if (!id) return -1;
+    const u = this.host.world.units.get(id);
+    if (!u || u.hp <= 0 || u.isCreep) return -1;
+    if (u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) return -1;
+    return b.ai.hostileTo(u) ? u.owner : -1;
+  }
+
+  /**
+   * "im coming with you" — and then it comes.
+   *
+   * The promise is kept by the same machinery a rescue is: the wave is pointed at that player
+   * and set walking. Anything less would make the line a lie, which is worse than silence.
+   *
+   * SILENCE IS THE OTHER ANSWER, and it is the developer's own rule: an ally that is not
+   * interested says nothing at all. That is how a team game reads — nobody types "no" every
+   * time somebody announces an attack — and it is also what keeps the channel legible, since
+   * one announcement is heard by every allied computer at once.
+   *
+   * Not interested means exactly the states `busyLines` already names (its own base under
+   * attack, a broken army, no army yet, already in a fight of its own) plus the wave's own
+   * clocks (`waveReady`): a computer that walked out with three soldiers because a teammate
+   * asked would be attacking with less than it has decided an attack takes.
+   */
+  private answerAttack(b: Brain): void {
+    if (!b.joinCall) return;
+    if (b.clock < b.joinAt) return; // its turn — see JOIN_STAGGER
+    const { from, foe } = b.joinCall;
+    b.joinCall = null;
+    if (!b.allies.includes(from)) return;
+    if (b.helping >= 0) return; // already promised to be somewhere else
+    if (b.joining === foe && b.clock < b.joinUntil) return; // already coming, and said so
+    if (this.busyLines(b)) return; // not interested — and says nothing
+    if (!this.waveReady(b)) return;
+    const spot = this.foeBase(b, foe);
+    if (!spot) return;
+    b.joining = foe;
+    b.joinUntil = b.clock + JOIN_TIMEOUT;
+    b.creeping = false;
+    b.target = { id: 0, x: spot.x, y: spot.y };
+    // Announced as OUR attack as well, so the third teammate hears one plan rather than two:
+    // `attackSaid` is set here, which is also what stops `attackTalk` re-announcing the same
+    // base a beat later in this player's own words.
+    b.attackSaid = foe;
+    b.attackSaidAt = b.clock;
+    this.setMode(b, "attacking");
+    this.tell(b, JOIN_LINES);
+    this.commit(b, spot.x, spot.y);
+  }
+
+  /** How long the promise binds. After that the army manager owns the wave again — it is a
+   *  push across a map, not a treaty. Also released the moment the wave stops attacking at
+   *  all, since a retreat or a recall home has already overridden it. */
+  private joinWave(b: Brain): void {
+    if (b.joining < 0) return;
+    if (b.mode !== "attacking" || b.clock > b.joinUntil) b.joining = -1;
+  }
+
+  /**
+   * Where a named enemy player IS: their nearest building we can actually see, and their START
+   * LOCATION when we cannot see any.
+   *
+   * The fallback is not a fog bypass and is the same exemption the rest of this AI already
+   * states — a melee map hands every player the start locations, which is what start locations
+   * ARE (`AiPlayer.knows`, `PlusHost.startLocations`). It is also the honest answer to being
+   * told "im hitting blue" by somebody who can see blue and we cannot: a person walks to where
+   * the map says blue lives.
+   */
+  private foeBase(b: Brain, foe: number): { x: number; y: number } | null {
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    const home = b.ai.home();
+    for (const u of this.host.world.units.values()) {
+      if (u.owner !== foe || u.hp <= 0 || !u.building) continue;
+      if (!b.ai.knows(u)) continue;
+      const d = Math.hypot(u.x - home.x, u.y - home.y);
+      if (d < bestD) { bestD = d; best = u; }
+    }
+    if (best) return { x: best.x, y: best.y };
+    const start = this.host.startLocations().find((s) => s.player === foe);
+    return start ? { x: start.x, y: start.y } : null;
   }
 
   /** How many distinct enemy PLAYERS have units in one of our towns right now. */
