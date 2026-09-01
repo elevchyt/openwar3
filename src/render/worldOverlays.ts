@@ -118,9 +118,11 @@ interface HpBar {
   /** The occupancy bar's row: one child track per cargo slot, rebuilt only when the number
    *  of slots changes (a pool slot may be handed to a burrow one frame and a mine the next). */
   garrisonRow: HTMLDivElement;
-  /** The ally-hero spell row, floated over the bar. Absolutely positioned above the bars so
-   *  growing one never moves the health bar it belongs to — a bar that jumped up and down as
-   *  its hero learned a skill would be the one thing on screen you cannot read at a glance. */
+  /** The ally-hero spell row, floated over the bar. Absolutely positioned against the ROOT —
+   *  which begins at the hero's level badge — so the row reads left to right from the same
+   *  edge the bar itself starts at, and so growing one never moves the health bar it belongs
+   *  to (a bar that jumped as its hero learned a skill would be the one thing on screen you
+   *  cannot read at a glance). */
   abilRow: HTMLDivElement;
   /** What this SLOT's DOM was last given, so syncBars can skip writes that change nothing.
    *  It describes the elements, not a unit — a pool slot is handed to whichever unit lands
@@ -166,13 +168,14 @@ function makeHpBar(layer: HTMLElement): HpBar {
   const garrisonRow = document.createElement("div");
   garrisonRow.className = "unit-hpbar-garrison";
   garrisonRow.hidden = true;
-  // The ally-hero spell row rides in the same column as the bars — it is centred on them —
-  // but OUT of the flow (see HpBar.abilRow), so it hangs above without displacing anything.
   const abilRow = document.createElement("div");
   abilRow.className = "unit-hpbar-abils";
   abilRow.hidden = true;
-  bars.append(hpTrack, manaTrack, garrisonRow, abilRow);
-  root.append(level, bars);
+  bars.append(hpTrack, manaTrack, garrisonRow);
+  // The spell row hangs off the ROOT's left edge — the hero's level badge — rather than off
+  // the bars, so the first spell sits over the level and the row runs right from there. Out of
+  // the flow (see HpBar.abilRow), so it displaces nothing.
+  root.append(level, bars, abilRow);
   // Into the world layer, whose box IS the canvas's — the bar's position is computed in
   // canvas CSS pixels, so parenting it to the window instead offsets every bar by the
   // letterbox (see ui/stage.ts).
@@ -364,17 +367,23 @@ export class WorldOverlays {
             for (let i = 0; i < list.length; i++) {
               const cell = document.createElement("div");
               cell.className = "unit-hpbar-abil";
+              const art = document.createElement("div");
+              art.className = "unit-hpbar-abil-icon";
+              // The rank is its own row BENEATH the art rather than a badge on top of it: a
+              // dot drawn over the icon reads as part of the icon, and at this size the icon
+              // has no spare corner to give it.
               const rank = document.createElement("div");
               rank.className = "unit-hpbar-abil-rank";
-              cell.appendChild(rank);
+              cell.append(art, rank);
               bar.abilRow.appendChild(cell);
             }
           }
           for (let i = 0; i < list.length; i++) {
             const cell = bar.abilRow.children[i] as HTMLDivElement;
             const a = list[i];
-            cell.style.backgroundImage = a.icon ? `url(${a.icon})` : "none";
-            const rank = cell.firstElementChild as HTMLDivElement;
+            const art = cell.firstElementChild as HTMLDivElement;
+            art.style.backgroundImage = a.icon ? `url(${a.icon})` : "none";
+            const rank = cell.lastElementChild as HTMLDivElement;
             // Rank: dots up to three, the number itself past that. The dots are elements
             // rather than text because they have to stay legible over any icon, which is a
             // white disc with a dark halo — not a glyph.
@@ -428,7 +437,8 @@ export class WorldOverlays {
         // shading stays put as the bar drains instead of squashing along with it.
         bar.bars.style.setProperty("--statbar-w", `${barW}px`);
         bar.bars.style.setProperty("--statbar-h", `${barH}px`);
-        bar.bars.style.setProperty("--abil-size", `${abilPx}px`);
+        // On the ROOT, not on the bars: that is where the spell row hangs now.
+        bar.root.style.setProperty("--abil-size", `${abilPx}px`);
       }
       // gl y-up → css y-down (floats above the unit). Rounded to whole CSS pixels: the bar
       // cannot be drawn at a finer grain than that, and rounding is what lets a unit standing

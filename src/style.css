@@ -206,9 +206,7 @@ html body.loading-screen * { cursor: none !important; }
   min-width: 17px;
   text-align: center;
 }
-/* `relative` so the ally-hero spell row (.unit-hpbar-abils) can hang above the bars without
-   being in their flow — see that rule. */
-.unit-hpbar-bars { position: relative; display: flex; flex-direction: column; gap: 1px; }
+.unit-hpbar-bars { display: flex; flex-direction: column; gap: 1px; }
 /* The frame. WC3 draws it solid black, 1px above and below the fill and 2px at each end
    (measured off the real client) — the empty stretch of a bar IS this frame showing. */
 .unit-hpbar-track {
@@ -276,33 +274,43 @@ body.hud-statbar-skinned .unit-hpbar-slot .unit-hpbar-fill {
    itself swaps in (see BarAbility). The twin is desaturated and drawn without the gold frame,
    and no filter of ours reproduces the second half of that. */
 .unit-hpbar-abils {
+  /* Against the ROOT, whose left edge is the hero's LEVEL badge: the first spell sits over the
+     level and the row runs right from there, rather than being centred on the bar. Absolute,
+     so a hero learning a skill never shifts the bar underneath it. */
   position: absolute;
-  left: 50%;
+  left: 0;
   bottom: calc(100% + 3px);
-  transform: translateX(-50%);
   display: flex;
+  align-items: flex-end;
   gap: 2px;
   opacity: 0.9; /* discreet: an ally's spells are context, not your own command card */
 }
 .unit-hpbar-abils[hidden] { display: none; }
+/* One spell: its art, with the rank in its own row UNDERNEATH — never over the art, which at
+   this size has no corner to spare and would read as part of the icon. */
 .unit-hpbar-abil {
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.unit-hpbar-abil-icon {
   width: var(--abil-size, 14px);
   height: var(--abil-size, 14px);
   background: no-repeat center / 100% 100%;
   border-radius: 1px;
   box-shadow: 0 0 2px rgba(0, 0, 0, 0.85); /* seats the icon against bright terrain */
 }
-/* The rank, drawn ON the icon along its bottom edge: white dots up to three, and the number
-   itself past that (a custom map may raise an ability past the three ranks the melee game
-   stops at, and four dots at this size are a smear). */
+/* White dots up to three, and the number itself past that (a custom map may raise an ability
+   past the three ranks the melee game stops at, and four dots at this size are a smear). */
 .unit-hpbar-abil-rank {
-  position: absolute;
-  left: 0; right: 0; bottom: 1px;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
   gap: 1px;
+  /* One dot tall at the least, so the icons in a row all sit at the same height whatever
+     their rank draws (dots, or the number). */
+  min-height: max(2px, calc(var(--abil-size, 14px) * 0.14));
   font: 700 max(7px, calc(var(--abil-size, 14px) * 0.5)) / 1 var(--game-font);
   color: #fff;
   text-shadow: 0 0 2px #000, 0 1px 1px #000;
