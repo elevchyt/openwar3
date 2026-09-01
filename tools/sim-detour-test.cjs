@@ -108,19 +108,60 @@ console.log("the question is asked with the MOVER'S OWN FOOTPRINT");
     auto < (floor + ceil) / 2);
 }
 
-console.log("the ceiling is a real bound, and a wall past it does not hang the search");
+console.log("a treeline longer than any real map's is walked round too");
 {
-  // Far longer than any real map's treeline — 9600 world units of unbroken trunks with the
-  // only way round at the very end. This one needs about 77k expansions and the ceiling is
-  // 32768, so it comes back best-effort at the trees, exactly as everything used to. That is
-  // the documented limit of the fix and it is deliberate: the alternative is a budget every
-  // failing search in a crush spends, which measured four times worse than the bug.
+  // 9600 world units of unbroken trunks with the only way round at the very end — far longer
+  // than a 96x96 map can hold. This needs ~77k expansions, which the old 32768 ceiling could
+  // not buy, so it used to come back best-effort with its nose in the trees. That was the
+  // documented limit of the first fix; it is now inside the budget.
   const g = grid(treeline(190, 6, 300));
-  const t0 = process.hrtime.bigint();
   const path = findPath(g, [20, 20], [360, 20]);
+  check("it arrives", path[path.length - 1][0] === 360);
+}
+
+console.log("and the same holds on the BIG grids, which is where 32768 never reached at all");
+{
+  // The report the ceiling was raised for: a destination past a big obstacle on a big map.
+  // The cost of rounding an obstacle is set by the obstacle, and an obstacle grows with the
+  // map, so a ceiling measured on a 96x96 melee map did not buy the way round even a SHORT
+  // wall on a 192x192 or 256x256 one — on a big map essentially every obstacle worth the
+  // name was "too big" and the unit walked into it.
+  for (const [side, wall, oldNeed] of [[768, 200, 99426], [1024, 200, 143219]]) {
+    const flags = new Uint8Array(side * side);
+    const cx = (side >> 1) - 3;
+    for (let y = 0; y < wall; y++)
+      for (let x = cx; x < cx + 6; x++) flags[y * side + x] = PathingFlag.Unwalkable;
+    const g = new PathingGrid({ width: side, height: side, flags }, [0, 0]);
+    const from = [20, 20], to = [side - 24, 20];
+    const old = findPath(g, from, to, undefined, 32768);
+    check(`${side}: the old ceiling stopped at the trees (x ${old[old.length - 1][0]}, needs ~${oldNeed})`,
+      old[old.length - 1][0] < cx);
+    const t0 = process.hrtime.bigint();
+    const path = findPath(g, from, to);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    const end = path[path.length - 1];
+    check(`${side}: now it arrives (${ms.toFixed(1)} ms)`, end[0] === to[0] && end[1] === to[1]);
+  }
+}
+
+console.log("the ceiling is still a real bound, and nothing past it hangs the search");
+{
+  // A wall down four fifths of a 256x256 map's grid, gap at the far end: ~560k expansions,
+  // past the 262144 ceiling. It still comes back best-effort rather than flooding on, and
+  // the escalation that funded it then waits in proportion to what it spent (see
+  // SimWorld.escalate) — which is what lets the ceiling be this size at all.
+  const side = 1024;
+  const flags = new Uint8Array(side * side);
+  const cx = (side >> 1) - 3;
+  for (let y = 0; y < 819; y++)
+    for (let x = cx; x < cx + 6; x++) flags[y * side + x] = PathingFlag.Unwalkable;
+  const g = new PathingGrid({ width: side, height: side, flags }, [0, 0]);
+  findPath(g, [20, 20], [side - 24, 20]); // warm the scratch, which is allocated per map size
+  const t0 = process.hrtime.bigint();
+  const path = findPath(g, [20, 20], [side - 24, 20]);
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-  check(`it returns, bounded (${ms.toFixed(1)} ms)`, path !== null && ms < 40);
-  check("…best-effort, as the floor always did", path[path.length - 1][0] < 190);
+  check(`it returns, bounded (${ms.toFixed(1)} ms)`, path !== null && ms < 200);
+  check("…best-effort, as the floor always did", path[path.length - 1][0] < cx);
 }
 
 console.log("a goal with no way to it at all is still refused, and cheaply");
@@ -222,6 +263,44 @@ console.log("and a UNIT sent past a treeline walks round it");
   check(`it got to the far side (x ${u.x.toFixed(0)} of ${goalX}, in ${t.toFixed(1)}s)`, u.x > goalX - 200);
   check(`by walking round the north end of the trees (reached y ${highest.toFixed(0)})`, highest > 150 * 32);
   check(`and never gave the order up (order ${u.order})`, u.order !== "idle" || u.x > goalX - 200);
+}
+
+console.log("…and a GROUP does, on a big map, past an obstacle sized for one");
+{
+  // The report, end to end and at the size it was reported at. A 192x192 map's grid with a
+  // 300-cell treeline: with the 32768 ceiling this needed ~117k expansions, so every search
+  // — the first one and every re-path from the trees after it — came back best-effort at the
+  // trunks, and the group stood there. Measured on this grid before the ceiling was raised,
+  // 0 of 4 arrived in 400 simulated seconds; they now round it in about 66.
+  //
+  // FOUR of them, because the long search is funded out of a global allowance: one unit gets
+  // it, the rest re-path a moment later and take their turn. That the last one still gets
+  // round is what says the allowance — now priced in expansions, so a big search buys a
+  // proportionally longer wait — is still handing the slot out often enough to be useful.
+  const SIM_DT = 1 / 60;
+  const SIDE = 768, WALL = SIDE >> 1, WALL_TOP = 300, N = 4;
+  const flags = new Uint8Array(SIDE * SIDE);
+  for (let y = 0; y < WALL_TOP; y++)
+    for (let k = 0; k < 6; k++) flags[y * SIDE + WALL + k] = PathingFlag.Unwalkable;
+  const world = new SimWorld(new PathingGrid({ width: SIDE, height: SIDE, flags }, [0, 0]), 1);
+  for (let i = 0; i < N; i++) world.add({
+    id: i + 1, owner: 0, team: 0, typeId: "hfoo", x: (WALL - 40) * 32 + i * 40, y: 20 * 32, facing: 0,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 3000, sightNight: 3000,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [], oldWeapons: [],
+  });
+  const goalX = (WALL + 40) * 32;
+  for (let i = 0; i < N; i++) world.issueMove(i + 1, goalX, 20 * 32);
+  const there = () => { let n = 0; for (let k = 1; k <= N; k++) if (world.units.get(k).x > goalX - 200) n++; return n; };
+  let t = 0;
+  for (let i = 0; i < Math.round(150 / SIM_DT) && there() < N; i++) { world.tick(SIM_DT); t += SIM_DT; }
+  check(`all ${N} got to the far side (${there()}/${N}, in ${t.toFixed(0)}s)`, there() === N);
 }
 
 console.log(failures ? `\ndetour: ${failures} check(s) FAILED` : "\ndetour: all checks passed");

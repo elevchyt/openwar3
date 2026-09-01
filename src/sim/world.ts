@@ -1,5 +1,5 @@
 import { BUILD_CELL, BUILD_CELL_CELLS, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
-import { findPath, smoothPath, PATH_FLOOR_EXPANSIONS } from "./pathfind";
+import { findPath, smoothPath, pathExpansionsSpent, PATH_FLOOR_EXPANSIONS } from "./pathfind";
 import { targsKindError } from "./targeting";
 import { corpseAdmits, corpseMissingError, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
@@ -1937,11 +1937,24 @@ const ATTACK_LEASH = 48;
 // where we want to bail to a best-effort short path fast rather than flood the whole map
 // (the full 8192 cap × 100 units all probing one crowded target was the ~20fps stall).
 const COMBAT_EXPANSIONS = 700;
-// Sim steps between two escalated (ceiling-budget) path searches — see SimWorld.escalate.
+// The SHORTEST wait between two escalated (long-budget) path searches — see SimWorld.escalate.
 // Eight steps is ~7.5 a second, which is plenty for an army finding its way round a forest
 // one unit at a time, and few enough that a crush at a choke cannot turn the ceiling into
 // the frame's biggest cost the way a pre-paid budget did.
 const LONG_SEARCH_EVERY = 8;
+// …and the rate the wait is actually computed from, because "one search per eight steps" is
+// only a cost when every search costs the same. It never did: an escalated search that finds
+// its way round a treeline in 20k expansions and one that floods a whole region for nothing
+// are two very different purchases, and pricing them alike is what pinned the ceiling to
+// whatever a single frame could stand (32768 — far too small for a big map's obstacles, see
+// the table on MAX_EXPANSIONS_FAR).
+//
+// So the allowance is spent in EXPANSIONS. This rate is the old rule's own: a 32768-expansion
+// search every 8 steps. A search now waits in proportion to what it really spent, so the
+// expansions per second escalation can cost the sim are exactly what they were — the 240-unit
+// crush that note measured is unchanged — while one hard detour may spend eight times as much
+// in one go and simply waits eight times as long for the next.
+const LONG_SEARCH_EXPANSIONS_PER_STEP = 32768 / LONG_SEARCH_EVERY;
 const ATTACK_STALL_TIME = 0.6;
 const ATTACK_PROGRESS = PATHING_CELL * 1.5; // 48 world units per window
 // After a unit gives up on an unreachable target with nothing else reachable, it
@@ -18482,6 +18495,14 @@ export class SimWorld {
     }
     if (maxExpansions === undefined && this.escalate(u, cells, start, goal, domain, ring)) {
       cells = findPath(this.grid, start, goal, blocked, undefined, domain, ring, u.footprint) ?? cells;
+      // Bill the allowance for what the search ACTUALLY cost, not for the ceiling it was
+      // allowed to reach. Nearly every escalation arrives long before the ceiling — the way
+      // round a forest is a fifth of it — and charging those the full wait is what made the
+      // ceiling a frame-time decision instead of a "how big can an obstacle be" one.
+      this.longSearchIn = Math.max(
+        LONG_SEARCH_EVERY,
+        Math.ceil(pathExpansionsSpent() / LONG_SEARCH_EXPANSIONS_PER_STEP),
+      );
     }
     // A single-cell (or empty) result means the unit can't get any closer.
     if (!cells || cells.length <= 1) {
@@ -18543,11 +18564,16 @@ export class SimWorld {
    *     move: flooding the map to discover that somebody is standing in the doorway buys
    *     nothing the parked-and-waiting behaviour does not already handle.
    *
-   * …and then only `LONG_SEARCH_EVERY` steps apart, globally. A jammed army asks this
-   * hundreds of times a second and it is the same wasted flood every time; one unit an
-   * eighth of a second finds its way round, and the rest re-path a moment later and take
-   * their turn. Counted in sim STEPS rather than seconds so it cannot drift with the frame
-   * rate, and spent in the sim's own deterministic iteration order.
+   * …and then only so often, globally. A jammed army asks this hundreds of times a second and
+   * it is the same wasted flood every time; one unit an eighth of a second finds its way
+   * round, and the rest re-path a moment later and take their turn. Counted in sim STEPS
+   * rather than seconds so it cannot drift with the frame rate, and spent in the sim's own
+   * deterministic iteration order.
+   *
+   * How long "so often" is is decided by the CALLER, once the search has run, out of what it
+   * spent (`LONG_SEARCH_EXPANSIONS_PER_STEP`) — a cheap detour is back in a few steps, a
+   * region-wide flood waits the best part of a second. That is what lets the ceiling be sized
+   * by the biggest obstacle a map can hold rather than by a single frame.
    */
   private escalate(
     u: SimUnit,
@@ -18569,6 +18595,8 @@ export class SimWorld {
       ? this.grid.regionNear(goal[0], goal[1], domain, u.footprint)
       : this.grid.regionNear(goal[0], goal[1], domain, u.footprint, 2);
     if (goalRegion !== startRegion) return false; // a wall, not a detour
+    // Reserve the slot up front so nothing re-enters before the caller has billed it; the
+    // minimum wait stands in until the caller replaces it with what the search really spent.
     this.longSearchIn = LONG_SEARCH_EVERY;
     return true;
   }

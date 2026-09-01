@@ -98,9 +98,34 @@ const NEIGHBOR_COST = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT
 // under a global per-step allowance, because in a crush it is asked for hundreds of times a
 // second and it is the same wasted flood each time. A search that arrives never pays for the
 // ceiling at all, which is nearly all of them.
+//
+// The ceiling was 32768, and that was too small — a unit sent somewhere far still stopped
+// with its nose against the first big thing in the way. Every measurement above was taken on
+// a 384-cell grid (a 96x96 melee map), and the cost of rounding an obstacle is set by the
+// OBSTACLE, which grows with the map. Re-measured across the three grid sizes the game
+// actually ships, same wall, same only-way-round-at-the-far-end, one search at a time
+// (~3000 expansions per ms throughout, so ms is expansions/3000):
+//
+//     wall length      100     200     300  cells
+//     384 grid        23.6k   34.2k   74.5k     (96x96 tiles)
+//     768 grid        56.8k   99.4k  117.3k     (192x192)
+//    1024 grid        78.4k  143.2k  189.3k     (256x256)
+//
+// So 32768 bought the way round a ~180-cell wall on the SMALLEST map and did not reach even
+// the first column on any larger one: on a big map essentially every obstacle worth the name
+// was "too big", which is the shape of the report exactly — a destination past one, and the
+// unit walks into it. 262144 covers every row above with room to spare, and on all three it
+// stays under the region bound below, which is the exact worst case a search can cost.
+//
+// What makes a ceiling this size affordable is that the throttle guarding it is priced in
+// EXPANSIONS rather than in searches (SimWorld.escalate): a flood that spends eight times the
+// old ceiling now waits eight times as long before the next one is funded, so the expansions
+// per second the sim can lose to escalation are exactly what they were when the ceiling was
+// 32768 — the crush measured in note 2 above is unchanged — while a single hard detour is
+// allowed to finish instead of being cut off at a number that was never about it.
 const MAX_EXPANSIONS = 8192;
 const EXPANSIONS_PER_CELL = 64;
-const MAX_EXPANSIONS_FAR = 32768;
+const MAX_EXPANSIONS_FAR = 1 << 18; // 262144 — see the table above
 
 /** The floor, for callers that want the cheap first look before deciding to pay for more.
  *  See `SimWorld.pathTo`'s escalation. */
@@ -112,6 +137,17 @@ export const PATH_FLOOR_EXPANSIONS = MAX_EXPANSIONS;
 // one may be a few expansions behind it. This buys that little bit of extra looking, and
 // nothing like the map flood a goal it can never occupy would otherwise provoke.
 const ARRIVE_EXTRA = 192;
+
+// Expansions the most recent `findPath` actually spent. The escalation in `SimWorld.pathTo`
+// pays for a long search out of a per-step allowance, and an allowance has to be spent in the
+// currency the frame is billed in — a search that arrives in 20k expansions and one that
+// floods a whole region for nothing are not the same purchase, and counting them both as
+// "one search" is what pinned the ceiling to whatever a single frame could stand. See
+// `SimWorld.escalate`.
+let lastExpansions = 0;
+export function pathExpansionsSpent(): number {
+  return lastExpansions;
+}
 
 /**
  * The search's working set, allocated ONCE for the map and reused by every call.
@@ -215,6 +251,7 @@ export function findPath(
   ring?: (cx: number, cy: number) => number,
   footprint = 1,
 ): Cell[] | null {
+  lastExpansions = 0;
   const from = grid.nearestWalkable(start[0], start[1], undefined, domain);
   if (!from) return null;
   const startRegion = grid.regionAt(from[0], from[1], domain, footprint);
@@ -368,7 +405,10 @@ export function findPath(
     if (closed[currentKey] === gen) continue; // stale duplicate from a decrease-key
     // An approach never "reaches" its goal — the goal is the thing itself, standing on
     // cells nobody may occupy — so it is `ring` + the closeness rule that end it.
-    if (!ring && currentKey === goalKey) return reconstruct(cameFrom, seen, gen, currentKey, width);
+    if (!ring && currentKey === goalKey) {
+      lastExpansions = expansions;
+      return reconstruct(cameFrom, seen, gen, currentKey, width);
+    }
     closed[currentKey] = gen;
     const cx = currentKey % width;
     const cy = (currentKey / width) | 0;
@@ -408,6 +448,7 @@ export function findPath(
     }
   }
   // Goal unreachable (or search capped): walk as close as we got, WC3-style.
+  lastExpansions = expansions;
   return reconstruct(cameFrom, seen, gen, bestKey, width);
 }
 
