@@ -1048,9 +1048,10 @@ one routine and [`races.ts`](../src/ai/plus/races.ts) is four tables of ids, wei
 The block ORDER in `buildPlan` is the strategy, because `OneBuildLoop` reserves gold down the
 list **and returns at the first unit row it cannot afford**:
 
-> hall → **gold crew** → **forest crew** → food → **altar** → **first hero** → barracks →
-> the rest of the workers → **shop** → **core army** → **tier 2, from 3:00** → tech buildings →
-> **upgrades** → always → **expansion** → extra heroes → tier → towers → **the rest of the army**
+> **gold crew** → **forest crew** → *(undead: haunt the mine)* → hall → food → **altar** →
+> **first hero** → barracks → the rest of the workers → **shop** → **core army** →
+> **tier 2, from 3:00** → tech buildings → **upgrades** → always → **expansion** → extra heroes →
+> tier → towers → **the rest of the army**
 
 Seven of those positions were moved after a live match said so, and each is worth stating:
 
@@ -1062,6 +1063,29 @@ Seven of those positions were moved after a live match said so, and each is wort
   `mineCrew` (five per mine, plus one for building and scouting) went to the very top — it is also
   the **dead-worker replacement, at the highest priority there is**, since a worker killed off a
   mine is income that has stopped — and everything else moved below the hero.
+
+  **…and "the very top" has to mean it literally.** Reported later: *"when its town gets
+  raided/attacked and workers die, it doesn't replace them by producing new ones"*. The row was
+  always ASKING — the crew target is absolute, so a dead miner makes it short on the very next
+  pass — but two rows still sat above it, and both are priced at a **building**:
+  `meleeTownHall`, which asks for a hall on any town of ours that has a mine and no hall (a razed
+  expansion — 385 gold and up), and `mineBuildings`, which asks for a Haunted Gold Mine (225 gold
+  and **210 lumber**) the moment an undead player holds an unhaunted rock. A raid is precisely
+  when the bank is smallest, so those rows are certain to halt the loop then — and with the crews
+  underneath them **the halt is permanent by construction**, because the shortfall would be
+  cleared with gold out of a mine nobody is standing in. A ladder player replaces the worker
+  first and rebuilds the hall out of what it earns. Nothing is written above the two crew rows
+  now, at any difficulty: an Easy computer economises on how big its army and its economy *grow*,
+  not on whether its mine is crewed.
+
+  **The rate matters too, and that is `crewRow`.** `SetBuildNext` reserves one worker's gold —
+  which is what keeps a crew row from starving the ladder — but it also means exactly **one**
+  worker in flight in the whole base, however many are missing and however many halls are idle,
+  since `trainUnits` puts one job in a building and moves on. A raid that kills five workers was
+  then repaired one at a time through a single hall while the expansion's hall did nothing. The
+  crew rows now ask for the absolute target **capped at one in flight per hall**: identical to
+  `SetBuildNext` on one base, both queues filled on two, and never the whole shortfall — which is
+  the `SetBuildUnit(12, PEON)` trap the row was moved out of in the first place.
 - **…and then the forest crew had to come back up, because "after the hero" is a DEADLOCK.** With
   the mine's five and one spare, `harvestPlan` leaves exactly **one** worker in the trees. The
   next row the ladder cannot pay for is the hero — 425 gold and **100 lumber** — and

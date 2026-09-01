@@ -70,7 +70,12 @@ function recorder(table, strategy, profile, opts = {}) {
     setBuildExpa: (qty, item) => build.push({ kind: "expand", qty, item }),
     secondaryTown: (town, qty, item) => { if (qty > 0) build.push({ kind: "unit", qty, item, town }) },
     basicExpansion: (go, hall) => { if (go) ai.setBuildExpa(count(hall) + 1, hall) },
-    meleeTownHall: () => {},
+    // Faithful to `AiPlayer.meleeTownHall`, because WHERE this row lands is now under test: a
+    // hall on a town of ours that has a mine and no hall is the razed expansion of the raid
+    // fixture below, and it is a row that halts the ladder at a hall's price.
+    meleeTownHall: (town, hall) => {
+      if (ai.townHasMine(town) && !ai.townHasHall(town)) ai.secondaryTown(town, 1, hall);
+    },
     guardSecondary: () => {},
     buildFactory: (item) => ai.setBuildUnit(1, item),
     count, countDone: count, townCountDone: count, townCountTotal: () => opts.towns ?? 1,
@@ -87,7 +92,9 @@ function recorder(table, strategy, profile, opts = {}) {
     clearHarvestAI: () => { harvest.length = 0 },
     harvestGold: (town, n) => harvest.push({ res: "gold", town, n }),
     harvestWood: (town, n) => harvest.push({ res: "lumber", town, n }),
-    townHasMine: () => true, townHasHall: () => true, townThreatened: () => false,
+    townHasMine: () => true,
+    townHasHall: (t) => !(opts.hallless ?? []).includes(t),
+    townThreatened: () => false,
   };
   const ctx = {
     ai, profile, table, strategy,
@@ -147,15 +154,22 @@ console.log("\n--- the undead's expansion is the MINE ---");
   const u = PLUS_RACES.undead;
   const standing = { [u.halls[0]]: 1 };
   // Two towns: the main, whose mine a melee game STARTS haunted (`MeleeStartingUnitsUndead`
-  // calls `BlightGoldMineForPlayerBJ`), and the expansion just founded beside a bare rock.
-  const r = recorder(u, u.strategies[0], PLUS_NORMAL, { standing, towns: 2, perTown: { 0: { [u.mineBuilding]: 1 } } });
+  // calls `BlightGoldMineForPlayerBJ`), and the expansion just founded beside a bare rock — no
+  // haunt on it and no Necropolis over it yet, so both halves of an undead expansion are asked
+  // for in the same pass and their ORDER is the thing under test.
+  const r = recorder(u, u.strategies[0], PLUS_NORMAL, {
+    standing, towns: 2, hallless: [1], perTown: { 0: { [u.mineBuilding]: 1 } },
+  });
   buildPlan(r.ctx);
   const rows = r.build.filter((x) => x.item === u.mineBuilding);
   check("the undead haunts the expansion's mine", rows.length, 1);
   check("…the town that needs it, not the one already haunted", rows[0]?.town, 1);
-  // `meleeTownHall` is a no-op in this fixture, so the first row recorded is the top of the
-  // ladder — which is where the thing that makes a town a town belongs.
-  check("…and it is the first row of the ladder", r.build[0]?.item, u.mineBuilding);
+  // …ABOVE THE HALL ROWS, which is the whole point of where it sits (undead.ai 299–302). The
+  // only rows allowed over it are the two CREWS, which are the cheapest in the ladder and the
+  // ones everything else is bought with — see the raid fixture below and plan.ts `buildPlan`.
+  const mineAt = r.build.findIndex((x) => x.item === u.mineBuilding);
+  check("…above everything but the crews", r.build.slice(0, mineAt).every((x) => x.item === u.worker), true);
+  check("…and above the hall rows", mineAt < r.build.findIndex((x) => x.item === u.halls[0]), true);
 
   const done = recorder(u, u.strategies[0], PLUS_NORMAL, {
     standing, towns: 2, perTown: { 0: { [u.mineBuilding]: 1 }, 1: { [u.mineBuilding]: 1 } },
@@ -169,6 +183,48 @@ console.log("\n--- the undead's expansion is the MINE ---");
 for (const [race, table] of Object.entries(PLUS_RACES)) {
   if (race === "undead") continue;
   check(`${race} builds nothing onto a mine`, table.mineBuilding, undefined);
+}
+
+// --- the crews are the top of the ladder ------------------------------------------------
+//
+// Reported: "when its town gets raided/attacked and workers die, it doesn't replace them by
+// producing new ones". The rows always ASKED — the crew target is absolute, so a dead miner
+// makes it short on the very next pass — but they sat under two rows priced at a BUILDING, and
+// `OneBuildLoop` returns at the first row it cannot afford. Both of those rows come due in
+// exactly the situation this is about: a raid that razed the expansion's hall leaves a town of
+// ours with a mine and no hall (`meleeTownHall`, 385 gold and up), and an undead one leaves an
+// unhaunted rock (`mineBuildings`, 225 gold and 210 lumber). With the crews underneath them the
+// halt is permanent by construction: the shortfall would be cleared with gold out of a mine
+// that nobody is standing in.
+//
+// So: nothing whatever above the gold crew, and nothing but the gold crew above the forest — at
+// EVERY difficulty, because a computer that plays with an empty mine is not an easier opponent,
+// it is a broken one.
+console.log("\n--- a raid is repaired from the mine up ---");
+for (const [race, table] of Object.entries(PLUS_RACES)) {
+  const chops = race !== "undead";
+  for (const [name, profile] of [["easy", PLUS_EASY], ["normal", PLUS_NORMAL], ["insane", PLUS_INSANE]]) {
+    const r = recorder(table, table.strategies[0], profile, {
+      // A raided two-base player: the main standing, the expansion's hall razed, two workers
+      // left of a crew of six, and the bank a raid leaves behind.
+      standing: {
+        [table.halls[0]]: 1, [table.barracks]: 1, [table.altar]: 1, [table.worker]: 2,
+        ...(table.mineBuilding ? { [table.mineBuilding]: 1 } : {}),
+      },
+      towns: 2, hallless: [1], workerChops: chops, gold: 200, wood: 120, armyFood: 6, clock: 300,
+    });
+    buildPlan(r.ctx);
+    check(`${race}/${name} asks for a worker before anything else`, r.build[0]?.item, table.worker);
+    const worker = r.build.findIndex((x) => x.item === table.worker);
+    const hall = r.build.findIndex((x) => x.item === table.halls[0]);
+    check(`${race}/${name} replaces the miner before it rebuilds the razed hall`, hall > worker, true);
+    // …and the forest is under nothing but the gold. For three races that is the same worker
+    // row asked for again; for the undead it is the Ghoul, out of the Crypt (`table.barracks`).
+    const lumber = chops
+      ? worker
+      : r.build.findIndex((x) => x.item === table.lumberUnit || x.item === table.barracks);
+    check(`${race}/${name} crews the forest before the hall too`, lumber >= 0 && lumber < hall, true);
+  }
 }
 
 // --- the forest floor -------------------------------------------------------------------

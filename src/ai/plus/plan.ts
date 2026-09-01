@@ -265,11 +265,44 @@ const EXPAND_GOLD = 2000;
  *    clock on it is a computer that never tiers at all — there is always another upgrade, and
  *    an army row asks for one more soldier every pass, for ever.
  *
+ *  · …and ABOVE ALL OF IT, THE CREWS. Nothing whatever may precede the gold crew and the forest
+ *    crew — see `mineCrew`. Every other row in this list is bought with what those two earn, so
+ *    a row that halts the ladder above them is a computer that has stopped paying for itself,
+ *    and it cannot get out of it: the halted row's shortfall never shrinks, because the income
+ *    that would shrink it is what the halt is holding up.
+ *
  * Read the list as a ladder player's priorities, top to bottom.
  */
 export function buildPlan(c: PlusCtx): void {
   const { ai, table } = c;
   ai.initBuildArray();
+
+  // THE GOLD CREW, AND THEN THE FOREST CREW. FIRST, ALWAYS, AT EVERY DIFFICULTY.
+  //
+  // Reported: "when its town gets raided/attacked and workers die, it doesn't replace them by
+  // producing new ones". The rows themselves always ASKED — a crew target is an absolute one
+  // ("have at least five per mine"), so a dead miner makes it short on the very next pass — but
+  // they were the THIRD and FOURTH rows of the ladder, and `OneBuildLoop` RETURNS at the first
+  // row it cannot afford. Both rows above them are priced at a BUILDING, and both come due in
+  // exactly the situation this is about:
+  //
+  //  · `meleeTownHall` asks for a hall on any town of ours that has a mine and no hall — which
+  //    is what a razed expansion is. That is 385/500/600 gold saved for above the 75-gold peasant
+  //    that would have replaced the miner the same raid killed, so the ladder stopped there and
+  //    the mine crew was never refilled at all.
+  //  · `mineBuildings` asks for a Haunted Gold Mine (225 gold and **210 lumber**) the moment an
+  //    undead player holds an unhaunted rock, with the same effect on its Acolytes.
+  //
+  // A raid is precisely when a computer's income is worst and its bank is smallest, so this is
+  // the one moment those rows are certain to halt — and with the crew rows underneath them the
+  // halt is permanent by construction, because the gold that would clear it comes out of a mine
+  // nobody is standing in. A ladder player replaces the dead worker FIRST and rebuilds the hall
+  // out of what it earns. So do these two rows, and nothing is ever written above them.
+  mineCrew(c);
+  // …and the FOREST crew with it, because a build order that cannot pay its lumber stops dead
+  // and the row that would have hired a lumberjack is underneath the row it stopped on. See
+  // `LUMBER_OPENING` for the four and a half minutes that cost a night elf.
+  forestCrew(c);
 
   // THE MINE ITSELF, for the one race whose mine is a BUILDING — ABOVE the hall rows, which is
   // undead.ai's own order (`undeadMine(ai, 1)`, then `basicExpansion(…, UNDEAD_MINE)`, and only
@@ -280,20 +313,12 @@ export function buildPlan(c: PlusCtx): void {
   // the half that actually earns anything was left underneath it competing for wood that the
   // rows below kept spending. See `mineBuildings`.
   mineBuildings(c);
-  // A hall, first and always: with no hall there is no economy, no worker and no game. (Town 1
-  // as well, because an expansion whose hall died is a town with a mine and no hall.)
+  // A hall — under the crews and over everything else, because with no hall there is no economy,
+  // no worker and no game. (Town 1 as well, because an expansion whose hall died is a town with
+  // a mine and no hall. That is the row the crews used to sit underneath.)
   ai.meleeTownHall(0, table.halls[0]);
   ai.meleeTownHall(1, table.halls[0]);
 
-  // THE GOLD CREW before anything else — see `mineCrew`. Everything that pays for the rest of
-  // this list comes out of a mine, so a dead miner is replaced ahead of a hero, a soldier and a
-  // building alike; and a worker past the fifth on a mine pays for no GOLD at all, which is why
-  // the profile's whole economy still waits until after the hero (`workers`).
-  mineCrew(c);
-  // …and the FOREST crew with it, because a build order that cannot pay its lumber stops dead
-  // and the row that would have hired a lumberjack is underneath the row it stopped on. See
-  // `LUMBER_OPENING` for the four and a half minutes that cost a night elf.
-  forestCrew(c);
   supply(c);
   // The ALTAR, then the HERO, then somewhere to make a soldier. The order of those three is the
   // opening, and the middle one moved: the Barracks used to sit above the hero, and a Barracks
@@ -352,7 +377,7 @@ function workers(c: PlusCtx): void {
 }
 
 /**
- * The GOLD CREW: five workers per mine we own, at the very top of the ladder.
+ * The GOLD CREW: five workers per mine we own, and NOTHING in the ladder above it.
  *
  * Two jobs in one row, and both of them are "the mine must never be short".
  *
@@ -360,28 +385,65 @@ function workers(c: PlusCtx): void {
  *    pays for the altar and the hero underneath it.
  *  · **It is the dead-worker replacement, at the highest priority there is.** A worker killed
  *    off a mine is income that has stopped, so it outranks a hero, a soldier and a building —
- *    which is exactly where this row sits. Nothing special is needed to notice the death:
- *    `SetBuildNext` is an absolute target ("have at least five per mine"), so the moment one
- *    dies the row is short again and the next pass asks for one. The lumberjacks are replaced
- *    the same way by `workers`, lower down, which is also the right order — a lost lumberjack
- *    costs wood, a lost miner costs the game.
+ *    which is exactly where this row sits. Nothing special is needed to notice the death: the
+ *    target is an absolute one ("have at least five per mine"), so the moment one dies the row
+ *    is short again and the next pass asks for a replacement.
+ *
+ * **It is the FIRST row of the whole ladder**, above the hall rows and above the undead's mine,
+ * and that is a fix rather than a tidy-up — see `buildPlan` for the raid that a hall row above
+ * it made unrecoverable. The rule to keep is simply stated: this row is what every other row is
+ * bought with, so a row that can halt the loop must never sit over it.
+ *
+ * The FOREST crew is the row immediately under it (`forestCrew`), which is the same priority
+ * one step down: a lost miner costs the game, a lost lumberjack costs the rest of the list.
  *
  * `MINE_CREW` is five because that is what a WC3 gold mine takes at once; a sixth worker on a
  * mine is a worker standing in a queue.
+ *
+ * None of this is graded by difficulty. An Easy computer economises on how big its army and its
+ * economy GROW (`PlusProfile.workers`, `armyFood`, and `workers` far below); it does not play
+ * with a mine standing empty, because that is not an easier opponent, it is a broken one.
  */
 function mineCrew(c: PlusCtx): void {
   const { ai, table } = c;
   if (ai.townCountDone(table.halls[0]) < 1) return;
   const towns = Math.max(1, ai.minesOwned());
-  ai.setBuildNext(MINE_CREW * towns + SPARE_WORKERS, table.worker);
+  crewRow(c, MINE_CREW * towns + SPARE_WORKERS);
 }
 
 /**
- * THE FOREST CREW — the lumberjacks, bought with the miners and before everything else.
+ * A crew row: short of `want` workers, ask for one more per HALL that could take the order.
+ *
+ * `setBuildNext` — the relative form, one more than is finished — is what every worker row here
+ * used, and it is the right shape for the reason `workers` gives: it reserves ONE worker's gold
+ * rather than the whole shortfall, so the ladder under it keeps breathing while the crew fills
+ * up. What it is not is a shape that can REFILL a crew: `AiPlayer.trainUnits` puts one job in a
+ * building and moves on, and `startUnit` counts what is already in a queue, so "one more than is
+ * finished" means exactly one worker in flight in the whole base however many are missing and
+ * however many halls are standing idle. A raid that kills five workers is then repaired one at a
+ * time through a single hall while the second hall does nothing — which is what "it doesn't
+ * really like to replenish its dead workers" looks like from the outside even once the row is
+ * reached every pass.
+ *
+ * So the target is the absolute one, capped at one in flight PER HALL. With one hall that is
+ * `setBuildNext` exactly; with two it refills both queues at once, and the most it can ever
+ * reserve out of the rows below is one worker per hall — never the whole shortfall, which is the
+ * `SetBuildUnit(12, PEON)` trap that cost the opening (see `workers`).
+ */
+function crewRow(c: PlusCtx, want: number): void {
+  const { ai, table } = c;
+  if (ai.count(table.worker) >= want) return; // counting what is already in a queue
+  const halls = Math.max(1, ai.townCountDone(table.halls[0]));
+  ai.setBuildUnit(Math.min(want, ai.countDone(table.worker) + halls), table.worker);
+}
+
+/**
+ * THE FOREST CREW — the lumberjacks, the SECOND row of the ladder and under nothing but the gold.
  *
  * `mineCrew` above is the gold; this is the wood, and the two are one decision taken twice
  * because they are crewed from the same queue and neither may wait on the other. See
- * `LUMBER_OPENING` for what waiting cost.
+ * `LUMBER_OPENING` for what waiting cost — and `buildPlan` for why nothing that costs a
+ * BUILDING's price is allowed above either of them.
  *
  * Two shapes, because a race's lumberjack is either a worker or a soldier and the difference
  * is not a tuning value (docs/undead.md):
@@ -398,16 +460,16 @@ function mineCrew(c: PlusCtx): void {
  *    stick. Two Ghouls is `LUMBER_FLOOR`, the number `ComputerPlusAi.lumberCrew` keeps on the
  *    trees whatever the bank says; the rest of the crew is still `lumberUnits`, below.
  *
- * `setBuildNext` throughout, like every other worker row here: it asks for one more than is
- * finished, so it reserves ONE worker's gold rather than the whole shortfall and the ladder
- * under it keeps breathing while the crew fills up.
+ * `crewRow` for the workers and `setBuildNext` for the Ghouls: both are relative forms, so the
+ * row reserves a worker or two rather than the whole shortfall and the ladder under it keeps
+ * breathing while the crew fills up.
  */
 function forestCrew(c: PlusCtx): void {
   const { ai, table } = c;
   if (ai.townCountDone(table.halls[0]) < 1) return; // nothing to make them at
   if (c.workerChops) {
     const towns = Math.max(1, ai.minesOwned());
-    ai.setBuildNext(MINE_CREW * towns + SPARE_WORKERS + LUMBER_OPENING, table.worker);
+    crewRow(c, MINE_CREW * towns + SPARE_WORKERS + LUMBER_OPENING);
     return;
   }
   if (!table.lumberUnit) return;

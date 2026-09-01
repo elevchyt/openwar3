@@ -237,7 +237,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   (`lumberUnits`) instead of the mix. The fallback yields the instant one row of the build
   order comes online, or every build quietly becomes "basic soldier, and tech".
   The BUILD LADDER's order is the strategy and six positions in it were measured: the gold crew
-  is first (it is also the dead-worker replacement, at the highest priority there is), the FOREST
+  is first — LITERALLY first, with the hall rows and the undead's mine BELOW it, because it is
+  also the dead-worker replacement and a raid is exactly when a building row above it halts the
+  loop for ever (the shortfall would be cleared out of a mine nobody is standing in) — the FOREST
   crew is right behind it, the hero outranks the Barracks, the rest of the workers wait behind
   the hero, the SHOP goes with the opening, and UPGRADES sit with the tech buildings ABOVE the
   tier-up — below it they are simply never reached, which is the whole of "the AI never upgrades
