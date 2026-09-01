@@ -168,6 +168,21 @@ console.log("\nINVISIBLE: the Wind Walk case");
   check("an ally's own fade does not disjoint the shot", r.landed && !r.fizzled, `hp ${r.hp}`);
 }
 
+console.log("\nINVULNERABLE: the Divine Shield case");
+{
+  // Liquipedia files this one line ABOVE the miss list — the missile "will deal no damage, if
+  // the target is invulnerable, when the missile reaches the target", i.e. it arrives wasted.
+  // We disjoint it instead (see missileDisjointed): for a plain arrow the difference is
+  // cosmetic, but an arrival carries orbs, Liquid Fire, Pillage, the line spill and a spell
+  // missile's whole effect, none of which may reach a unit nothing is supposed to touch.
+  const r = shot((w, a, t) => {
+    t.buffs.push({ kind: "invuln", group: "divineshield", timeLeft: 15, sourceId: t.id,
+      value: 0, value2: 0, art: "", fx: [], buffId: "", delay: 0 });
+  });
+  check("a shield raised mid-flight disjoints the arrow", r.fizzled, `hp ${r.hp}`);
+  check("and nothing lands on it", r.hp === 100000);
+}
+
 console.log("\nLOADED INTO ANOTHER UNIT: the Burrow / Zeppelin / Devour case");
 {
   const r = shot((w, a, t) => { t.inBurrow = true; });

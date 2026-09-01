@@ -69,8 +69,12 @@ returns melee damage % to the attacker (0.1/0.2/0.3). Implemented via the generi
 if one of the following conditions is met during any time of the missile's traveling" — the target
 goes **invisible**, is **loaded into another unit** (Orc Burrow, Goblin Zeppelin, Devour), is
 **teleported**, or **dies** — and "abilities with missiles follow the same behaviour as the Missile
-weapon type", which is why Blink disjoints a Storm Bolt as readily as an arrow. An invulnerable target
-takes no damage but the missile still arrives. **Distance is not on that list.** The *Range Motion
+weapon type", which is why Blink disjoints a Storm Bolt as readily as an arrow. The page files
+invulnerability separately — the missile "will deal no damage… when the missile reaches the target",
+i.e. it arrives wasted; **we deliberately diverge and disjoint it instead** (developer's call,
+2026-09-01), because an arrival also carries orbs, Liquid Fire, Pillage, the line spill and a spell
+missile's whole effect, and none of those may reach an untouchable unit. **Distance is not on that
+list.** The *Range Motion
 Buffer* (`RngBuff1/2`) is stated only under **Normal** and **Instant** — the two weapon types that put
 nothing in the air — and decides whether the attack instance is created at all; hive
 [thread 53615](https://www.hiveworkshop.com/threads/range-motion-buffer.53615/) says the same in one
@@ -78,6 +82,21 @@ line: *"Missile and Artillery-type attacks are unaffected by RMB."* So the widel
 dies at base range + RMB" is folklore — there is no flight-distance cap in the data, and none is
 invented here. Implemented as `missileDisjointed` in `src/sim/world.ts`
 (`tools/sim-missile-disjoint-test.cjs`).
+
+**Invulnerability wipes status effects, and Mirror Image wipes even that.** Three rules that look
+alike and are not — `dispelUnit` keeps `undispellable`, `clearStatusForInvulnerable` keeps that plus
+the shield that raised it, `wipeAllStatus` keeps nothing. Liquipedia's
+[Invulnerability](https://liquipedia.net/warcraft/Invulnerability) page states only that "most spells
+cannot target invulnerable units", so the first wipe comes from map authors working against the stock
+ability — hive [thread 307917](https://www.hiveworkshop.com/threads/prevent-buff-removal-from-divine-shield-and-anti-magic-shell.307917/):
+*"using of divine shield … unfortunately it also removes the positive buff they may have. Is there a
+way to prevent [it]?"* (answer: no, rebuild the ability on Berserk). It takes positive buffs too — a
+wipe, not a friendly cleanse. Mirror Image's total wipe **is** on Liquipedia, on the
+[Dispel](https://liquipedia.net/warcraft/Dispel) page, named as the exception to the roll-call of
+undispellable debuffs (Thunder Clap, Doom, Acid Bomb, Shadow Strike, the breaths' DoT halves): *"The
+exception to the above is Blademaster Mirror Image which dispels even such effects."* That page is
+also where **Wisp Detonate** is recorded as the one dispel that reaches an invulnerable unit at all.
+Implemented in `src/sim/world.ts` (`tools/sim-invulnerability-test.cjs`).
 
 **[warcraft3.info](https://warcraft3.info/) articles** are another solid engine-behavior source. Its
 [Hero Experience](https://warcraft3.info/articles/232/hero-experience-in-warcraft-3-how-it-works)

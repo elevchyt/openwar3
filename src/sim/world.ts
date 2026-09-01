@@ -8847,6 +8847,7 @@ export class SimWorld {
    *  growth, active buffs, items and the owner's researched upgrades. Called every
    *  tick (cheap, idempotent). */
   private recomputeStats(u: SimUnit): void {
+    const wasInvulnerable = u.invulnerable; // for the rising edge — see clearStatusForInvulnerable
     const item = this.itemBonuses(u);
     const upg = this.upgradeBonuses(u);
     // Buffed attributes (Robo-Goblin's Strength) count exactly as an item's do — same pool,
@@ -9187,6 +9188,45 @@ export class SimWorld {
     u.bonusStr = item.str;
     u.bonusAgi = item.agi;
     u.bonusInt = item.int;
+    // BECOMING invulnerable wipes the unit's status effects — the rising edge only, and after
+    // everything above has been derived, since the wipe changes the very list that was read.
+    if (!wasInvulnerable && u.invulnerable) this.clearStatusForInvulnerable(u);
+  }
+
+  /**
+   * Becoming INVULNERABLE strips the unit's status effects.
+   *
+   * Not stated on Liquipedia's Invulnerability page, which says only that "most spells cannot
+   * target invulnerable units" — but reported first-hand by map authors working against the
+   * stock ability, e.g. hiveworkshop 307917: *"I am working on a map which includes using of
+   * divine shield and anti magic shell to protect the hero, but unfortunately it also removes
+   * the positive buff they may have. Is there a way to prevent positive buff from being
+   * removed…"* The answer there is to rebuild the ability on Berserk instead, i.e. the stock
+   * one cannot be talked out of it. Note that it takes the POSITIVE buffs too: this is a wipe,
+   * not a friendly cleanse.
+   *
+   * Applied on the RISING EDGE, at whatever raises it — Divine Shield, a Potion of
+   * Invulnerability, the Town Portal channel, Animate Dead, Big Bad Voodoo, a peon building
+   * from inside the site, the Blademaster whisked off the field by Mirror Image (Liquipedia's
+   * Dispel page singles that last one out as dispelling "even such effects"). A unit whose
+   * type is simply `Avul` — a shop, a tavern, a gold mine — crosses the edge once at birth
+   * with nothing to lose, and never again.
+   *
+   * Two survivors, both for the same reason `dispelUnit` keeps the second: taking them would
+   * unmake an ability the game states outright.
+   *   - the `invuln` buff ITSELF, or the shield would end the instant it began;
+   *   - an `undispellable` one — Doom, whose Ubertip is "This spell cannot be dispelled". A
+   *     Doomed unit is going to die, and a Divine Shield does not buy its way out of that.
+   * Auras are taken like everything else and are back on the next `applyAuras` pass, exactly
+   * as they are after a Dispel Magic.
+   */
+  private clearStatusForInvulnerable(u: SimUnit): void {
+    const before = u.buffs.length;
+    u.buffs = u.buffs.filter((b) => b.kind === "invuln" || b.undispellable);
+    // Re-derive off what is LEFT — the pass that called this read the old list, so every
+    // number it just wrote (armour, move speed, the stun) still carries the stripped buffs.
+    // Safe from recursion: `u.invulnerable` is already true, so the edge cannot fire twice.
+    if (u.buffs.length !== before) this.recomputeStats(u);
   }
 
   /** This unit's Root ability (`Aroo`), or undefined for everything that is not an Ancient.
@@ -11752,12 +11792,31 @@ export class SimWorld {
     spots: Array<{ x: number; y: number; hero: boolean; t: number; flight: number; sx: number; sy: number; landed: boolean }>;
   }> = [];
 
-  /** Strip every timed buff (Dispel Magic; Mirror Image dispels its own caster). Auras
-   *  re-apply on the next tick, so only the timed ones actually go. */
+  /** Strip every timed buff (Dispel Magic). Auras re-apply on the next tick, so only the
+   *  timed ones actually go. Mirror Image is NOT this — it is a total wipe; see
+   *  `wipeAllStatus`. */
   private dispelUnit(u: SimUnit): void {
     // …except the ones no dispel may touch. Doom is the only one in 1.30 and it is the whole
     // ability: "This spell cannot be dispelled" — a Doomed unit is going to die.
     u.buffs = u.buffs.filter((b) => b.undispellable);
+  }
+
+  /**
+   * MIRROR IMAGE's own dispel, which is not a dispel at all but a total wipe: every status
+   * effect on the Blademaster goes, with no survivor list whatever — the healing over time,
+   * the invulnerability he is standing in, and the undispellable debuffs `dispelUnit` is
+   * careful to keep. Liquipedia's Dispel page names it as exactly that exception, immediately
+   * after the roll-call of what nothing else can remove (Thunder Clap, Doom, Acid Bomb, Shadow
+   * Strike, the DoT halves of the breaths…): "The exception to the above is Blademaster Mirror
+   * Image which dispels even such effects."
+   *
+   * So this is deliberately a different rule from both of its neighbours, and the difference
+   * is the whole point: `dispelUnit` keeps `undispellable`, `clearStatusForInvulnerable` keeps
+   * that plus the shield that raised it, and this keeps nothing.
+   */
+  private wipeAllStatus(u: SimUnit): void {
+    u.buffs = [];
+    this.recomputeStats(u); // the stats were derived off buffs that no longer exist
   }
 
   /** Begin Mirror Image: hide the caster, and work out where everyone lands. */
@@ -11799,10 +11858,17 @@ export class SimWorld {
         landed: false,
       })),
     });
-    // "Dispels all magic from the Blademaster" — straight off the Ubertip.
-    this.dispelUnit(caster);
+    // "Dispels all magic from the Blademaster" — straight off the Ubertip — and it means ALL
+    // of it, which is why this is `wipeAllStatus` and not the `dispelUnit` every other dispel
+    // in the game runs. Nothing on him survives: a Rejuvenation still ticking, a Divine Shield
+    // he is standing in, a Doom that no dispel may touch.
+    this.wipeAllStatus(caster);
     caster.vanished = true; // off the field: hidden, untargetable, and it keeps him from
     // being attacked while the illusions are still in the air.
+    // …which is itself a source of invulnerability, so the derived state has to be re-taken
+    // AFTER the flag rather than before it (wipeAllStatus recomputed against a caster who was
+    // still on the field). The rising edge finds an empty buff list and takes nothing.
+    this.recomputeStats(caster);
     this.stop(caster.id);
     if (def.specialArt) this.spellEffects.push({ art: def.specialArt, x: caster.x, y: caster.y, targetId: 0, z: 0 });
   }
@@ -14365,7 +14431,8 @@ export class SimWorld {
    * Orc Burrow, Goblin Zeppelin and Devour) / the target is teleported / the target dies" —
    * and adds that "abilities with missiles follow the same behaviour as the Missile weapon
    * type", which is why a Storm Bolt disjoints on a Blink exactly as an arrow does. Death is
-   * handled by the caller (the unit is simply gone from `units`); the other three are here.
+   * handled by the caller (the unit is simply gone from `units`); the other three are here,
+   * plus a fourth the page does not put on that list — invulnerability — argued below.
    *
    * What is NOT in that list is DISTANCE. The community lore that a missile dies at "base
    * range + Range Motion Buffer" reads the buffer's job backwards: `RngBuff1/2` decides
@@ -14399,6 +14466,17 @@ export class SimWorld {
     // lands), and a unit is never hidden from its own team, so an allied missile — a Death
     // Coil sent to heal a Wind Walking Ghoul — is not thrown away by its target fading.
     if (p.sourceTeam !== undefined && t.team !== p.sourceTeam && t.invisible && !this.teamDetects(p.sourceTeam, t.x, t.y)) return true;
+    // INVULNERABLE — a Divine Shield, a potion, the Town Portal ward — and here we part with
+    // the letter of the page. Liquipedia files invulnerability one line above the miss list,
+    // as "the missile will deal no damage, if the target is invulnerable, when the missile
+    // reaches the target": it ARRIVES and is wasted. We disjoint it instead, on the developer's
+    // call, and the difference is only cosmetic for a plain arrow (0 damage either way) — but
+    // it is NOT cosmetic for everything an arrival carries with it. Landing a missile on an
+    // invulnerable unit would run the orb effect, the Liquid Fire, the Pillage, the line
+    // spill, and — for a spell missile — `applySpellEffect`, so a Storm Bolt would stun a unit
+    // nothing is supposed to be able to touch. `landDamage`'s invulnerable check guards the
+    // DAMAGE and nothing else; this guards the whole delivery.
+    if (t.invulnerable) return true;
     return false;
   }
 
@@ -14419,8 +14497,8 @@ export class SimWorld {
         continue;
       }
       const t = this.units.get(p.targetId);
-      // The target DIED (killUnit deletes it) — the first of the four ways a missile misses.
-      // The other three are the disjoint (Blink, a Wind Walk, a step into a Burrow).
+      // The target DIED (killUnit deletes it) — the first of the ways a missile misses. The
+      // rest are the disjoint (Blink, a Wind Walk, a step into a Burrow, a Divine Shield).
       if (!t || this.missileDisjointed(p, t)) {
         this.removeProjectile(p.id); // a fizzle: the renderer detaches it without an impact
         continue;
