@@ -8365,7 +8365,22 @@ export class MapViewerScene {
   /** The command card for the current selection, with every button's grid slot resolved
    *  (see `layoutCard` — two buttons may WANT the same cell). */
   private commandCard(): CommandButton[] {
-    return this.layoutCard(this.buildCommandCard());
+    const card = this.layoutCard(this.buildCommandCard());
+    // A unit channelling a Town Portal / Mass Teleport can press NOTHING: "the Hero cannot do
+    // any action (such as move, attack, use any other item nor his spell)", and "under no
+    // circumstances can the town portal be aborted once started" (SimUnit.portalLeft). The sim
+    // has refused every one of these orders since the channel began (`castLocked`); this is the
+    // half that SHOWS it, so the whole card goes inert wearing each icon's `DIS*` twin — the
+    // same texture swap every other unavailable button makes, and never a tint (disabledArt).
+    // A greyed button answers neither the click nor its hotkey (see hud.ts), so this is also
+    // what stops the presses arriving at all rather than arriving to be refused in silence.
+    //
+    // Applied HERE rather than inside each `push*` because it is the CARD that is dead, not one
+    // button on it: the four order commands, Build Structure and Cancel are pushed by
+    // buildCommandCard itself and would each need the same test.
+    const su = this.rts?.selectedSimUnit();
+    if (!su || su.owner !== this.localPlayer || su.portalLeft <= 0) return card;
+    return card.map((b) => (b.disabled ? b : this.cmd({ ...b, disabled: true, active: false, modal: false })));
   }
 
   /**

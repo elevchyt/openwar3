@@ -12981,6 +12981,26 @@ export class SimWorld {
         this.interruptForStun(u); // stunned units can't act this tick
         continue;
       }
+      // …and a unit mid-Town-Portal / Mass Teleport acts even less than a stunned one:
+      // "the Hero cannot do any action (such as move, attack, use any other item nor his
+      // spell)" (SimUnit.portalLeft). `castLocked` already refuses every ORDER for the
+      // duration and `recomputeStats` has taken the speed — but neither of those is what
+      // makes a unit swing. Auto-acquire is, and it lives in the order switch below: the
+      // caster is left `idle` by the stop that starts the channel, so `tickAcquire` picked
+      // a target on the very next tick and `tickAutocast` was free to fire as well. Zero
+      // speed hid it for a melee hero (it could never close), which is exactly why this
+      // read as "ranged units keep attacking through a teleport" — a Sorceress or a
+      // Sylvanas with something already inside her range never had to walk anywhere.
+      // Skipping the switch is the whole fix: no acquire, no autocast, no order resumed.
+      // Movement still runs in tickMovement, and finds a speed of 0 there.
+      //
+      // `cast` is the one order let through, and it is not an action: a Mass Teleport starts
+      // its own channel from inside its cast's effect phase, so the Archmage is still holding
+      // the pendingCast that fired it. That cast has to be allowed to run out its recovery and
+      // raise SPELL_FINISH / SPELL_ENDCAST like every other one — tickCast past `fired` only
+      // stands the caster still and then stops him, and every order `endCast` might resume is
+      // refused by `castLocked` anyway.
+      if (u.portalLeft > 0 && u.order !== "cast") continue;
       // Neutral Hostile creeps run a guard/leash/sleep controller on top of the
       // normal order handling. It returns true when it has taken the unit over for
       // this tick (asleep at its post, or leashing home) — skip the order switch;
@@ -13096,6 +13116,11 @@ export class SimWorld {
     // walking to a build site) starts its next queued order. Runs after all
     // order/movement processing so "arrived → idle" is visible this tick.
     for (const u of this.units.values()) {
+      // …but not while a teleport channel is running. The caster is left `idle` by the stop
+      // that starts it, which is exactly the state this pass takes as "ready for the next
+      // shift-queued order" — and `dispatch` would pop that order off the queue only for the
+      // leaf `issue*` to refuse it (castLocked), losing it. It waits out the three seconds.
+      if (u.portalLeft > 0) continue;
       if (u.orderQueue.length && u.order === "idle" && u.constructing === 0 && !u.buildPending) {
         this.startNextQueued(u);
       }
@@ -17452,6 +17477,11 @@ export class SimWorld {
     }
     u.portalLeft = wait;
     this.teleportChannels.add(u.id); // …so the renderer can find it without walking the world
+    // A blow already in the air is called off with everything else: "the Hero cannot do any
+    // action". `stop` below cancels it on the item path, but the CAST path deliberately does
+    // not stop (see the comment under it), so a swing committed on the tick the Archmage cast
+    // would otherwise still land its damage point somewhere inside the three seconds.
+    this.cancelSwing(u);
     // It stands for the whole wait; castLocked keeps it standing. Skipped when a CAST is what
     // started this — the Archmage is still inside his own `pendingCast`, and stopping him from
     // in here would clear it and raise a second SPELL_ENDCAST when the pipeline ends the cast a
@@ -17535,6 +17565,13 @@ export class SimWorld {
       // ninety points a few hundred units apart.
       if (t === u) this.emitEffectAt(ad.casterArt, fromX, fromY, true, "stand");
       else this.emitEffectAt(ad.specialArt, fromX, fromY, false, "birth");
+      // …and the ARRIVAL is marked too, on every traveller including the caster: the party
+      // materializes out of a `MassTeleportTarget.mdx` at the spot each one lands on, which
+      // is what makes an army appear rather than simply be there. Emitted at the settled
+      // position, AFTER `teleportUnit` has snapped the unit to a free fit — read before it,
+      // the burst would sit on the ring slot the unit was offered instead of on the unit.
+      // Silent, like every other arrival: the one whoosh is the caster's departure, above.
+      this.emitEffectAt(ad.specialArt, t.x, t.y, false, "birth");
     }
   }
 
