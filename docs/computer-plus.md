@@ -1562,6 +1562,35 @@ normal unit, `UnitID1` the alternate — so enabling them was two table rows and
 the `morphToggle` that already existed. See [`spell-fx.md`](spell-fx.md) for the presentation
 side and `SimWorld.morphToggle` for the mechanism.
 
+### A wave is aimed off its OWN columns — Impale is not Shock Wave's row shape
+
+Reported: *"the Computer+ AI usage of Cryptlord doesn't really like to use the Impale ability"*.
+It was arithmetic, not policy, and it lived in the one helper both casters share
+(`waveDistance` / `waveHalfWidth`, [`src/ai/casting.ts`](../src/ai/casting.ts)).
+
+`Units\AbilityMetaData.slk` declares **three** wave groups, and they do not number their `Data`
+columns alike (see `NO_AOE_CURSOR` in [`data/abilities.ts`](../src/data/abilities.ts)):
+
+| group | members | distance | width | damage |
+| --- | --- | --- | --- | --- |
+| `Osh1..4` | `AOsh`, `ACsh`, `ACst` | `DataC` 800 | `Area1` 125 = **half**-width | `DataA` |
+| `Ucs1..4` | `AUcs`, `ANbf`, `ACbc`, `ACbf`, `ACca`, `ACcv` | `DataC` 800 | `Area1` 100 = half-width | `DataA` |
+| `Uim1..4` | `AUim`, `ACmp` | **`DataA`** 600 | `Area1` 250 = the **whole** width | **`DataC`** |
+
+Read down the Shock Wave column, Impale's reach comes back as **75** — which is its *damage* —
+so no enemy was ever inside it, no direction was ever a candidate, and the Crypt Lord never
+pressed the button at all. In *both* casters, because both take the reach from the same helper.
+`sim/spells.ts`' own `AUim` handler reads `d(lvl, 0, 600)` and `(lvl.area || 250) / 2`, and these
+two now mirror it exactly: the corridor a caster scores is the corridor the wave sweeps.
+
+The other half of the developer's fix — *treat Impale like Shock Wave* — is its **role**. It was
+graded `disable` beside War Stomp and Thunder Clap; it is now a `nuke` beside Shock Wave and
+Carrion Swarm, which is what its own tooltip leads with (*"dealing `<AUim,DataC1>` damage and
+hurling enemy ground units into the air in their wake"* — the air time is one second and rides
+the damage). That also puts it back on the novice's card: `rolesFor` gives Easy `heal`, `nuke`,
+`summon` and `morph` only, so an easy Crypt Lord had no offensive button at all while an easy
+Tauren Chieftain Shock Waved.
+
 ### Skill builds: a hero's ten levels are ROLLED, not fixed
 
 `PlusRaceTable.skills` carries a **list** of ten-level builds per hero and `pickHeroes` rolls one
@@ -2190,9 +2219,13 @@ between creep camps*:
   same 100 gold; and `[AIsl]` is the AREA version of the same effect — `Area1` 600, 225 hit
   points over 45 seconds into everything standing in the circle. So the human's captain heals the
   whole party at once, which is why the `healArea` rung asks a different question of it (below).
+- the **undead's Rod of Necromancy**. `[utom] Makeitems` *opens* with `rnec` exactly as the
+  Vault's opens with `sreg`; it is 150 gold for **four** charges; and what each charge buys is not
+  hit points at all but two more bodies — see *The Rod of Necromancy* below. Its shelf starts
+  **empty** (`stockStart` 0 against a `stockRegen` of 60), so the AI waits for the first one the
+  way a player does: `pick` asks `shopStock` and moves on down the list until it is there.
 
-The undead and the night elf open on the potions `LIST` already starts with, so they get no
-invented habit.
+The night elf opens on the potions `LIST` already starts with, so it gets no invented habit.
 
 **An opening buy is not discretionary spending** (`Want.opening`). Everything else on the list is
 bought out of the surplus above `itemReserve`; these are bought out of the purse. That is what the
@@ -2285,6 +2318,38 @@ waits. And there is one button on a BUILDING which is very human: **Call to Arms
 Human town bell, and it is already rung by [`plus/casting.ts`](../src/ai/plus/casting.ts)
 `townBell` — the answer to "something is in my base and my army is somewhere else", and never on
 Easy.
+
+#### The Rod of Necromancy: two more bodies out of something already dead
+
+Reported: the Computer+ undead should *"buy and also use Rod of Necromancy on corpses to get
+skeletons that can help it creep and fight better, especially at the start of the game"*.
+
+**It is not item behaviour at all — it is Raise Dead.** `[AIrd]` keeps its own `code` (the trap
+[`sim/corpses.ts`](../src/sim/corpses.ts) warns about: `ACrd` collapses onto `Arai` and `AIrd`
+does *not*) but it carries the whole `Rai1..Rai4` field group, so `SimWorld.useItem` runs the
+spell's own handler with the item's numbers: **two Skeleton Warriors** (`DataA` 2, `DataC` `uske`)
+out of **one** body within `Rng1` = 600, for `Dur1` = **65 seconds** rather than the Necromancer's
+45. Four charges (`[rnec] uses`), a 22-second `Cool1`, 150 gold.
+
+**The corpse question is the sim's, at both doors.** `itemUseError` asks `corpseRefusal` — the
+same query at the same radius the handler will take its body from — so a rod waved over bare
+ground is refused before the press and keeps its charge. Nothing in [`plus/items.ts`](../src/ai/plus/items.ts)
+restates it; the `raise` rung only answers *when a hero reaches for it*:
+
+- **While the camp is still standing.** The corpses a rod spends are made by the fight it is spent
+  in — a camp with two of its five down is two skeletons' worth of bodies on the floor and three
+  creeps left to swing at. Waiting for the fight to end would be waiting until the thing the
+  skeletons were for has finished.
+- **On the walk between camps**, with the last camp's dead underfoot and the next one already in
+  sight (`LOOK * 2`, the same "a fight is about to start" reading the `mana` rung uses).
+
+One real fighting body is enough, where the wand asks for `CLUSTER`: a charge costs no food, no
+mana and nothing the next fight wants back, so there is no trade to weigh — only the four charges,
+which the row's own cooldown already rations. A lone worker scouting past is still not a fight.
+
+On the ladder it sits **above the Wand of Illusion** — these bodies actually swing, where an
+illusion deals no damage — and **below `mana`**: a hero with an empty bar has lost the spells the
+fight is being won with, which is worth more than two skeletons.
 
 #### The Wand of Illusion: the doubles go in FIRST
 

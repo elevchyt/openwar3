@@ -179,6 +179,7 @@ const ITEMS = {
   prep: { id: "prep", gold: 100, usable: true, abilities: ["AIp1"] }, // Replenishment Potion
   bspd: { id: "bspd", gold: 250, usable: false, abilities: ["AIms"] }, // Boots of Speed — passive
   will: { id: "will", gold: 150, usable: true, abilities: ["AIil"] }, // Wand of Illusion
+  rnec: { id: "rnec", gold: 150, usable: true, charges: 4, perishable: true, abilities: ["AIrd"] }, // Rod of Necromancy
   // --- the permanent drops, for the PAWNING pass. What separates them is whether the game adds
   // a second one to the first (`itemBonuses`' own switch, mirrored as `STACKS`).
   clsd: { id: "clsd", gold: 150, usable: false, pawnable: true, charges: 0, abilities: ["Ashm"] }, // Cloak of Shadows
@@ -213,6 +214,11 @@ const ABILS = {
   // Dealt (%)" is EMPTY — the 0 that makes the copy harmless (docs/illusions.md).
   AIil: { code: "AIil", target: "unit", levelData: [lvl({ castRange: 500, duration: 60, data: [0, 2] })] },
   AIms: { code: "AIms", target: "", levelData: [lvl()] },
+  // ROD OF NECROMANCY. `[AIrd]` keeps its OWN code — it is Raise Dead in every other respect,
+  // which is precisely the trap sim/corpses.ts warns about — and carries the `Rai1..Rai4` group:
+  // `Rng1` 600 (the bodies it can reach), `Area1` 900, `Dur1` 65, DataA 2 (skeletons per body),
+  // DataC `uske`. No `target`, exactly as Raise Dead has none: the press finds its own corpse.
+  AIrd: { code: "AIrd", target: "", levelData: [lvl({ castRange: 600, area: 900, duration: 65, data: [2, 0] })] },
   // Shadow Meld — a granted ABILITY. A hero carrying two of them melds exactly as well as one
   // carrying one, which is the whole of why the second is worth pawning.
   Ashm: { code: "Ashm", target: "", levelData: [lvl()] },
@@ -513,6 +519,56 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
 {
   const h = belt(hero({ mana: 90, maxMana: 100 }), "pclr");
   check("…and a full one does not", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+}
+
+// --- the Rod of Necromancy: two more bodies out of something already dead --------------------
+// Reported: the Computer+ undead should "use Rod of Necromancy on corpses to get skeletons that
+// can help it creep and fight better, especially at the start of the game."
+//
+// The corpse half is the SIM's — `itemUseError` asks `corpseRefusal`, the same query at the same
+// radius the handler will take its body from, so a rod waved over bare ground is refused at the
+// door and keeps its charge. What is pinned here is the other half: WHEN a hero reaches for it.
+{
+  const h = belt(hero(), "rnec");
+  const cmd = pressed([h, enemy({ x: 300 })], PLUS_INSANE, AWAY);
+  check("a hero in a fight raises the dead of it", itemOf(cmd), 0);
+  check("…pressed on itself, like Raise Dead — it finds its own corpse", cmd && cmd.targetId, 0);
+}
+{
+  // The walk BETWEEN camps, which is the press a player makes: the last camp's dead underfoot
+  // and the next one already in sight. `LOOK * 2` is the same reading the mana rung uses.
+  const h = belt(hero(), "rnec");
+  check("…and one with the next camp in sight raises before it arrives",
+    itemOf(pressed([h, enemy({ x: 1500 })], PLUS_INSANE, AWAY)), 0);
+}
+{
+  const h = belt(hero(), "rnec");
+  check("a hero standing alone raises nothing", pressed([h], PLUS_INSANE, AWAY), null);
+}
+{
+  // A scout walking past is not a fight, at any distance — the same `realFight` reading the
+  // wand and the scrolls use.
+  const h = belt(hero(), "rnec");
+  check("…and neither does an enemy WORKER wandering past",
+    pressed([h, enemy({ x: 300, isPeon: true })], PLUS_INSANE, AWAY), null);
+}
+{
+  // THE LADDER. A hero that is about to die drinks first: `healSelf` is four rungs above
+  // `raise`, because two skeletons are no use to a dead Crypt Lord.
+  const h = belt(hero({ hp: 300 }), "rnec", "phea");
+  check("a dying hero drinks before it raises", itemOf(pressed([h, enemy({ x: 300 })], PLUS_INSANE, AWAY)), 1);
+}
+{
+  // …and above the Wand of Illusion, because these bodies actually swing.
+  const h = belt(hero(), "will", "rnec");
+  const pack = [200, 260, 320].map((x) => enemy({ x }));
+  check("…and it raises before it makes pictures", itemOf(pressed([h, ...pack], PLUS_INSANE, AWAY)), 1);
+}
+{
+  // The sim's own door is the last word: no corpse, no press, and the charge stays in the rod.
+  const h = belt(hero(), "rnec");
+  check("…and the sim's corpse refusal is the last word",
+    pressed([h, enemy({ x: 300 })], PLUS_INSANE, AWAY, { badTarget: "Cantfindcorpse" }), null);
 }
 
 // --- the alias/code trap: everything it BUYS, it can press ---------------------------------------
@@ -905,11 +961,34 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
     shopped([stocked, MERCHANT], PLUS_NORMAL, { race: "orc", shelf: LOUNGE, gold: PLUS_NORMAL.itemReserve + 10 }).buy, null);
 }
 {
-  // Nobody else gets the habit: an undead off the same shelf still opens with the scroll.
+  // Nobody else gets the habit: a night elf off the same shelf still opens with the scroll.
   const h = hero();
   const shelf = ["stwp", "phea", "hslv", "sreg"];
-  check("an undead's list is unchanged — the Town Portal still leads",
-    shopped([h, MERCHANT], PLUS_NORMAL, { race: "undead", shelf }).buy?.itemId, "stwp");
+  check("a night elf's list is unchanged — the Town Portal still leads",
+    shopped([h, MERCHANT], PLUS_NORMAL, { race: "nightelf", shelf }).buy?.itemId, "stwp");
+}
+{
+  // THE UNDEAD OPENS WITH A ROD OF NECROMANCY, the third race with a first buy off its own
+  // shop's first shelf row (`[utom] Makeitems` = rnec,dust,skul,phea,pman,stwp,ocor,shea).
+  // Reported: the Computer+ undead should "buy and also use Rod of Necromancy on corpses to get
+  // skeletons that can help it creep and fight better, especially at the start of the game" —
+  // and at 150 gold for four charges of two Skeleton Warriors each, it is the same shape of buy
+  // the orc's salves and the human's scroll are: cheap, early, and spent on the creeping.
+  const TOMB = ["rnec", "dust", "skul", "phea", "pman", "stwp", "ocor", "shea"]; // [utom] Makeitems
+  check("an undead's first buy is a Rod of Necromancy, ahead of the Town Portal",
+    shopped([hero(), MERCHANT], PLUS_NORMAL, { race: "undead", shelf: TOMB }).buy?.itemId, "rnec");
+  // ONE — `[rnec] stockMax` is 1, and four charges is two camps' worth.
+  const one = belt(hero(), "rnec");
+  check("…one of them, and then the general list resumes",
+    shopped([one, MERCHANT], PLUS_NORMAL, { race: "undead", shelf: TOMB }).buy?.itemId, "stwp");
+  // …and it is an OPENING row, so it is bought out of the purse rather than out of the surplus
+  // above `itemReserve` — the same rule the orc's salve is bought under, for the same reason.
+  check("160 gold buys it, reserve or no reserve",
+    shopped([hero(), MERCHANT], PLUS_NORMAL, { race: "undead", shelf: TOMB, gold: 160 }).buy?.itemId, "rnec");
+  // The Tomb's shelf starts EMPTY (`stockStart` 0 against a `stockRegen` of 60), and the AI
+  // simply waits for it exactly as a player does rather than trying and being refused.
+  check("…and a sold-out shelf is waited on, not walked to",
+    shopped([hero(), MERCHANT], PLUS_NORMAL, { race: "undead", shelf: TOMB, soldOut: ["rnec"] }).buy?.itemId, "stwp");
 }
 
 // OUR OWN SHOP FIRST, the Goblin Merchant as the last resort. A race shop is in the base (so

@@ -1,7 +1,7 @@
 import { isRepairCode, NO_AOE_CURSOR, type AbilityDef, type AbilityLevel } from "../../data/abilities";
 import type { SimUnit } from "../../sim/world";
 import { DISPEL_CODES, POLARITY_SPELLS, worthDispelling } from "../../sim/spells";
-import { friendlySpell, near, waveDistance, type CasterView } from "../casting";
+import { friendlySpell, near, waveDistance, waveHalfWidth, type CasterView } from "../casting";
 import { MELEE } from "../../data/gameplayConstants";
 import { MELEE_INSANE, MELEE_NEWBIE, WIND_WALK } from "../ids";
 import type { PlusProfile } from "./profile";
@@ -120,7 +120,6 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
     "ANsi", // Silence
     "AHtc", "AOws", // Thunder Clap / War Stomp — damage as well, but a stun that lands on the
                     // whole enemy line is worth more than the damage and is what opens a fight
-    "AUim", // Impale
     "Asta", // Stasis Trap
     "ANch", // Charm
     "Adev", // Devour
@@ -132,6 +131,20 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
     "AHbz", "ANrf", // Blizzard / Rain of Fire
     "AHfs", // Flame Strike
     "AUcs", "AOsh", "ANbf", // Carrion Swarm / Shock Wave / Breath of Fire
+    // IMPALE, with its cousins rather than with the stuns, and it belongs here for the same
+    // reason they do: it is the Crypt Lord's LINE NUKE. `Uim1..4` is a wave group in
+    // AbilityMetaData exactly as `Osh1..4` and `Ucs1..4` are (data/abilities.ts
+    // `NO_AOE_CURSOR`), it is aimed the same way — a direction, scored by what the corridor
+    // catches — and `UndeadAbilityStrings [AUim]` leads with the damage: "shooting spiked
+    // tendrils out in a straight line, dealing <AUim,DataC1> damage and hurling enemy ground
+    // units into the air in their wake". The air time is one second (`Uim4`) and rides the
+    // damage; it is not what the button is spent for, the way a Storm Bolt's five seconds are.
+    //
+    // Graded `disable` it also fell out of the novice vocabulary entirely (`rolesFor`), so an
+    // easy computer's Crypt Lord had no offensive button at all while an easy Tauren Chieftain
+    // Shock Waved — which is the reported behaviour, and the developer's own reading of it:
+    // treat Impale as Shock Wave.
+    "AUim",
     "AEsf", // Starfall
     "AEfk", // Fan of Knives
     "AOww", // Bladestorm
@@ -1133,7 +1146,7 @@ export class PlusCaster {
     }
 
     const wave = NO_AOE_CURSOR.has(def.code);
-    const reach = wave ? waveDistance(lvl) : lvl.castRange;
+    const reach = wave ? waveDistance(def, lvl) : lvl.castRange;
     const legal: Array<{ x: number; y: number }> = [];
     let best: { x: number; y: number } | null = null;
     let bestValue = 0;
@@ -1178,13 +1191,15 @@ export class PlusCaster {
     return { count, value };
   }
 
-  /** …and who a wave aimed through `at` would sweep (mirrors `lineTargets` in sim/spells.ts). */
+  /** …and who a wave aimed through `at` would sweep — the corridor as long and as wide as the
+   *  wave itself, which is not the same pair of columns for every family (`waveDistance` /
+   *  `waveHalfWidth`; mirrors `lineTargets` in sim/spells.ts). */
   private corridor(
     u: SimUnit, at: SimUnit, def: AbilityDef, lvl: AbilityLevel, role: Role,
     pool: SimUnit[], friendly: boolean,
   ): { count: number; value: number } {
-    const dist = waveDistance(lvl);
-    const half = lvl.area || 125;
+    const dist = waveDistance(def, lvl);
+    const half = waveHalfWidth(def, lvl);
     const len = Math.hypot(at.x - u.x, at.y - u.y) || 1;
     const ux = (at.x - u.x) / len;
     const uy = (at.y - u.y) / len;

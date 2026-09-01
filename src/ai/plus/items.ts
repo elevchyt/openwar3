@@ -57,9 +57,9 @@ import type { PlusProfile } from "./profile";
  * highest first, one button per pass — and it reads the way a player's hands do: get out, don't
  * die, top up, then everything else.
  */
-export type Use = "escape" | "panic" | "healSelf" | "healArea" | "healOther" | "mana" | "illusion" | "buff";
+export type Use = "escape" | "panic" | "healSelf" | "healArea" | "healOther" | "mana" | "raise" | "illusion" | "buff";
 
-const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "healArea", "healOther", "mana", "illusion", "buff"];
+const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "healArea", "healOther", "mana", "raise", "illusion", "buff"];
 const useRank = (u: Use): number => LADDER.indexOf(u);
 
 /**
@@ -107,6 +107,23 @@ const USE_OF: Readonly<Record<string, Use>> = {
   // `AIrg` is NOT here: one code, four different answers. See `regenUse`.
 
   // --- more bodies --------------------------------------------------------------------------
+  // ROD OF NECROMANCY (`rnec`, four charges, 150 gold, the Tomb of Relics' first shelf). It is
+  // not item behaviour at all: `[AIrd] code = AIrd` but the whole `Rai1..Rai4` group with it, so
+  // `SimWorld.useItem` runs RAISE DEAD's own handler with the item's numbers — two Skeleton
+  // Warriors (`uske`) out of ONE body within `Rng1` = 600, for `Dur1` = 65 seconds instead of
+  // the Necromancer's 45 (docs/items.md; sim/corpses.ts `CORPSE_SPAWNERS`).
+  //
+  // It sits on the ladder beside the Wand of Illusion because what it buys is the same thing —
+  // bodies in the line that nobody paid food for — and ABOVE it because these ones actually
+  // swing: an illusion deals no damage (docs/illusions.md) and a Skeleton Warrior is a real
+  // 180-hit-point unit. Below `mana`, though: a hero with an empty bar has lost the spells the
+  // fight is being won with, and that is worth more than two skeletons.
+  //
+  // No "is there a corpse" test is needed here or in `wants`: `itemUseError` asks
+  // `corpseRefusal` — the same query the handler will take its body from, at the same radius —
+  // so a rod waved over bare ground is refused at the door and keeps its charge.
+  AIrd: "raise",
+
   // Wand of Illusion (`will`, three charges). It is on this ladder ABOVE the scrolls because
   // what it buys is not a percentage: an illusion is another body in the line, it is what the
   // camp swings at instead of the hero, and it hurts nothing — so the whole of its value is
@@ -300,13 +317,27 @@ const RACE_SURPLUS: Partial<Record<PlayableRace, readonly Want[]>> = {
  * asks a different question of it: not "is somebody hurt" but "is the ARMY hurt, and is the
  * army actually STANDING here" (see the `healArea` rung).
  *
- * The undead and the night elf have no equivalent first buy — the Tomb and the Ancient of
- * Wonders both open on the potions `LIST` already starts with — so they stay unlisted rather
- * than being given an invented habit.
+ * **UNDEAD — the Rod of Necromancy.** `[utom] Makeitems` opens with `rnec` exactly as the
+ * Vault's opens with `sreg`, and it is the same kind of row for the same reason: the one item on
+ * that shelf that changes how the early game goes. 150 gold buys FOUR charges of Raise Dead
+ * (`[rnec] uses` = 4), and each one is two Skeleton Warriors out of a body the fight has already
+ * made — so a creeping Crypt Lord or Death Knight walks out of every camp with an escort it paid
+ * no food for, which is the whole of "help it creep". It is bought out of the purse rather than
+ * out of the surplus (`Want.opening`) for the reason the orc's salves are: at 150 gold it is
+ * part of the build order, not spare change, and a Tomb of Relics that is built and never bought
+ * from is 215 gold spent on nothing.
+ *
+ * Its `[rnec] stockStart` is 0 against a `stockRegen` of 60, so the shelf is empty for the first
+ * minute of the match whatever the AI wants — `pick` asks `shopStock` and simply waits, which is
+ * the same wait a player has.
+ *
+ * The night elf has no equivalent first buy — the Ancient of Wonders opens on the potions `LIST`
+ * already starts with — so it stays unlisted rather than being given an invented habit.
  */
 const RACE_FIRST: Partial<Record<PlayableRace, readonly Want[]>> = {
   orc: [{ id: "hslv", want: 2 }],
   human: [{ id: "sreg", want: 2 }],
+  undead: [{ id: "rnec", want: 1 }],
 };
 
 /** Where the Town Portal sits in that list. `keepPortal` puts it FIRST — a player who plans
@@ -902,6 +933,26 @@ export class PlusItems {
       // BEFORE a creep camp so the doubles walk in ahead of the party — see `makeIllusions`.
       case "illusion":
         return engaged && this.realFight(u, foes) >= CLUSTER && this.doubles(own) < ILLUSION_CAP;
+      // TWO MORE BODIES OUT OF SOMETHING THAT IS ALREADY DEAD — see the `AIrd` card.
+      //
+      // The developer's own framing is that this is a CREEPING item, and the timing falls out of
+      // that: the corpses a rod spends are made by the fight it is spent in, so the moment worth
+      // pressing is *while the camp is still standing* — a camp with two of its five down is a
+      // camp with two skeletons' worth of bodies on the floor and three creeps left to swing at.
+      // Waiting until the fight is over would be waiting until the thing the skeletons were for
+      // has finished (they last 65 seconds, `[AIrd] Dur1`).
+      //
+      // The second half is the walk BETWEEN camps: a hero standing over the last camp's dead
+      // with the next one already in sight takes its skeletons along, which is the press a
+      // player makes and the reason the early game is what this item is bought for. `LOOK * 2`
+      // is the same "a fight is about to start" reading the `mana` rung above uses.
+      //
+      // One real fighting body is enough, unlike the wand's `CLUSTER`: a rod charge costs no
+      // food, no mana and nothing that the next fight wants back, so there is no trade to weigh
+      // — only the four charges, which `itemReadyError` and the row's 22-second `Cool1` already
+      // ration. A lone scout is still not a fight (`realFight` leaves workers out).
+      case "raise":
+        return this.realFight(u, foes) >= 1 || foes.some((f) => !f.building && !f.isPeon && near(u, f, LOOK * 2));
       // A buff is pre-fight, and only for a fight worth buffing: one scout walking past is not.
       case "buff":
         return engaged && this.realFight(u, foes) >= CLUSTER;

@@ -179,7 +179,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   mission's. **SPELLS are the exception to "a number here is the game's"**: the race scripts say
   what a hero LEARNS and nothing about using it, so [`casting.ts`](src/ai/casting.ts) is built on
   Boris_Spider's observation thread (hiveworkshop 193280) instead — every rule quotes its line,
-  and it is keyed on the BASE ability code, which is the thread's own point.
+  and it is keyed on the BASE ability code, which is the thread's own point. A WAVE's reach and
+  width come out of `waveDistance`/`waveHalfWidth` there, shared with Computer+ — and the three
+  wave meta groups do NOT number their columns alike: `Osh1..4`/`Ucs1..4` put the distance in
+  `DataC` and a HALF-width in `Area1`, while `Uim1..4` (Impale) puts the distance in `DataA`,
+  its DAMAGE in `DataC` and its WHOLE width in `Area1`. Read down the wrong column and Impale's
+  reach is **75** — its damage — so nothing is ever inside it and the Crypt Lord never presses
+  the button at all, in both casters at once.
 - **Computer+:** read [`docs/computer-plus.md`](docs/computer-plus.md) before touching
   [`src/ai/plus/`](src/ai/plus/), the Advanced Options pane's Computer+ switch, or
   [`src/overrides/`](src/overrides/). It is a SECOND melee AI beside Blizzard's ported one, not a
@@ -260,8 +266,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   die, so counting it prices the party for a camp it cannot take and makes the vanguard popping
   read as the army breaking. It DOES shop and drink
   ([`plus/items.ts`](src/ai/plus/items.ts)). A race's OPENING buy (`RACE_FIRST` — the orc's two
-  Healing Salves, the human's two Scrolls of Regeneration) is bought out of the purse rather than
-  out of the surplus above `itemReserve`, because a Normal computer's gold is almost never 300
+  Healing Salves, the human's two Scrolls of Regeneration, the undead's Rod of Necromancy, whose
+  `AIrd` keeps its OWN code while carrying Raise Dead's whole `Rai1..Rai4` group) is bought out
+  of the purse rather than out of the surplus above `itemReserve`, because a Normal computer's gold is almost never 300
   above anything and a 100-gold salve it can never reach is a Voodoo Lounge built for nothing. An
   AREA heal is spent on three questions and not on a head-count (`armyHeal`): `CLUSTER` bodies in
   the circle, more than HALF the army inside it, and the party's POOLED health under `ARMY_HURT` —

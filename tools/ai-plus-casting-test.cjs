@@ -21,7 +21,7 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { PlusCaster } = require(join(REPO, ".sim-build", "src", "ai", "plus", "casting.js"));
-const { PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
+const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -51,6 +51,13 @@ const ABILS = {
   // every unit inside the circle without asking allegiance, which is why the AI aims it at both
   // sides. `[Adis] Area1` 200, `Rng1` 600.
   Adis: { code: "Adis", target: "point", autocast: false, targetFlags: ["air", "ground", "ward", "invu", "vuln", "tree"], levelData: [lvl({ area: 200, castRange: 600 })] },
+  // THE TWO WAVES, with their real rows — because the whole point of the section below is that
+  // their Data columns are numbered DIFFERENTLY and reading one family's order off the other is
+  // what silenced Impale. `Units\AbilityData.slk`, rank 1:
+  //   [AOsh] Area1 125  Rng1 700  DataA 75 (damage)  DataB 900 (max damage)  DataC 800 (distance)
+  //   [AUim] Area1 250  Rng1 700  DataA 600 (distance)  DataB 0.3 (wave time)  DataC 75 (damage)
+  AOsh: { code: "AOsh", target: "point", autocast: false, targetFlags: ["ground", "structure"], levelData: [lvl({ area: 125, castRange: 700, data: [75, 900, 800] })] },
+  AUim: { code: "AUim", target: "point", autocast: false, targetFlags: ["ground", "enemy", "neutral", "organic"], levelData: [lvl({ area: 250, castRange: 700, duration: 2, heroDuration: 2, data: [600, 0.3, 75] })] },
 };
 
 let nextId = 1;
@@ -113,7 +120,15 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
     allied: (u) => u.owner === 2,
     order: (cmd) => { orders.push(cmd); return true; },
   }, profile, () => (rolls && rolls.length ? rolls.shift() : (opts.roll ?? 0)));
-  c.pass(opts.now ?? 100, { holdsPortal: () => false, home: { x: 0, y: 0 } });
+  // `opts.passes` is for the REACTION DELAY alone (`PlusProfile.castDelay`): the fight is first
+  // seen on the pass that starts it, so a difficulty that waits two and a half seconds cannot
+  // cast on the pass that noticed. Ten seconds apart, and only the LAST pass's decision is
+  // reported — one caster presses at most one button a pass.
+  const t0 = opts.now ?? 100;
+  for (let i = 0; i < (opts.passes ?? 1); i++) {
+    if (i > 0) orders.length = 0;
+    c.pass(t0 + i * 10, { holdsPortal: () => false, home: { x: 0, y: 0 } });
+  }
   return orders.find((o) => o.c === "cast") ?? null;
 }
 
@@ -360,6 +375,60 @@ const spotOf = (cmd) => (cmd ? { x: cmd.x, y: cmd.y } : null);
   const lusted = unit({ owner: 1, x: 300, buffs: [theirBuff(src)] });
   const ours = unit({ x: 340, summonLeft: 45 });
   check("a spot that would delete our own summon is not a spot", cast([p, lusted, ours, src]), null);
+}
+
+// ==========================================================================================
+console.log("\n-- Impale is aimed like Shock Wave, off its OWN wave columns -------------------");
+// ==========================================================================================
+// Reported: *"the Computer+ AI usage of Cryptlord doesn't really like to use the Impale
+// ability"*, with the developer's own fix — treat it like Shock Wave.
+//
+// The cause was arithmetic, not policy, and it lived in the ONE helper both casters share
+// (`waveDistance`, src/ai/casting.ts). Read as the Shock Wave family is — distance in `DataC` —
+// Impale's reach came back as **75**, which is its DAMAGE column: no enemy was ever inside it,
+// so no candidate direction was ever considered and the button was never pressed. Its distance
+// is `DataA` = 600, because `Uim1..4` is its own meta group.
+{
+  const cl = caster({ abilId: "AUim", race: "undead" });
+  // Two Gnolls down the same line, four and five hundred out — well inside Impale's 600 reach
+  // and far outside the 75 the old reading gave it.
+  const a = unit({ owner: 1, x: 400 });
+  const b = unit({ owner: 1, x: 500 });
+  const cmd = cast([cl, a, b]);
+  check("a Crypt Lord Impales a line of two", cmd && cmd.code, "AUim");
+  check("…aimed down the corridor that catches them", spotOf(cmd), { x: 400, y: 0 });
+}
+{
+  // …and the reach is the wave's own, not the cast range: `Rng1` is 700, `DataA` 600, and a
+  // body at 650 is one the tendrils stop short of.
+  const cl = caster({ abilId: "AUim", race: "undead" });
+  const far = [650, 660].map((x) => unit({ owner: 1, x }));
+  check("…and nothing past 600 is worth aiming at", cast([cl, ...far]), null);
+}
+{
+  // THE WIDTH IS THE WHOLE WIDTH for this family (`(Area1) / 2` in the sim's own handler),
+  // where the Shock Wave family's `Area1` is the half. Read as a half-width, Impale's 250 makes
+  // a 500-wide lane and counts bodies the tendrils miss — here, two Gnolls 200 either side of
+  // the line, which no single Impale can catch together.
+  const cl = caster({ abilId: "AUim", race: "undead" });
+  const spread = [200, -200].map((y) => unit({ owner: 1, x: 400, y }));
+  check("…and the corridor is 125 to either side, not 250", cast([cl, ...spread]), null);
+}
+{
+  // Shock Wave, unchanged, off ITS columns: 800 out and 125 either side.
+  const tc = caster({ abilId: "AOsh", race: "orc" });
+  const line = [700, 780].map((x) => unit({ owner: 1, x }));
+  const cmd = cast([tc, ...line]);
+  check("Shock Wave still reaches its own 800", cmd && spotOf(cmd), { x: 700, y: 0 });
+}
+{
+  // The other half of "treat it like Shock Wave": it is a NUKE, so it is on the novice's card.
+  // Graded `disable` it fell out of `rolesFor` entirely — an easy computer plays heal, nuke,
+  // summon and morph and nothing else — so an easy Crypt Lord had no offensive button at all
+  // while an easy Tauren Chieftain Shock Waved.
+  const cl = caster({ abilId: "AUim", race: "undead" });
+  const pack = [400, 460].map((x) => unit({ owner: 1, x }));
+  check("an EASY computer's Crypt Lord Impales too", !!cast([cl, ...pack], PLUS_EASY, { passes: 2 }), true);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

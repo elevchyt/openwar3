@@ -645,7 +645,7 @@ export class AiCaster {
     }
 
     const wave = NO_AOE_CURSOR.has(def.code);
-    const reach = wave ? waveDistance(lvl) : lvl.castRange;
+    const reach = wave ? waveDistance(def, lvl) : lvl.castRange;
     let best: { x: number; y: number } | null = null;
     let bestCount = need - 1;
     for (const t of pool) {
@@ -684,11 +684,12 @@ export class AiCaster {
     return out;
   }
 
-  /** …and who a wave aimed through `at` would sweep: the corridor from the caster, `DataC`
-   *  long and `Area1` to either side (mirrors `lineTargets` in sim/spells.ts). */
+  /** …and who a wave aimed through `at` would sweep: the corridor from the caster, as long and
+   *  as wide as the wave itself (`waveDistance` / `waveHalfWidth` — which column each of those
+   *  is depends on the family; mirrors `lineTargets` in sim/spells.ts). */
   private corridor(u: SimUnit, at: SimUnit, def: AbilityDef, lvl: AbilityLevel, pool: SimUnit[], friendly: boolean): SimUnit[] {
-    const dist = waveDistance(lvl);
-    const half = lvl.area || 125;
+    const dist = waveDistance(def, lvl);
+    const half = waveHalfWidth(def, lvl);
     const dx = at.x - u.x;
     const dy = at.y - u.y;
     const len = Math.hypot(dx, dy) || 1;
@@ -783,15 +784,41 @@ export function friendlySpell(def: AbilityDef): boolean {
   return !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
 }
 
+/**
+ * IMPALE'S OWN META GROUP — the one wave family whose Data columns are numbered differently.
+ *
+ * `Units\\AbilityMetaData.slk` declares three wave groups (see NO_AOE_CURSOR in
+ * data/abilities.ts): `Osh1..4` (AOsh,ACsh,ACst), `Ucs1..4` (AUcs,ANbf,ACbc,ACbf,ACca,ACcv) and
+ * `Uim1..4` (AUim,ACmp). The first two put the DISTANCE in `DataC`; Impale puts it in `DataA`
+ * and its `DataC` is the DAMAGE — `UI\\WorldEditStrings.txt` names them `Uim1` **Wave Distance**
+ * (600), `Uim2` Wave Time, `Uim3` **Damage Dealt** (75/120/165), `Uim4` Air Time.
+ *
+ * Which is why the family has to be a list and could not be a column-order guess. Read `DataC`
+ * first and Impale's reach comes back as **75** — its damage — so no enemy is ever inside it,
+ * the corridor sweeps nothing, and the Crypt Lord never presses the button at all. That was the
+ * bug, in both casters at once, and it is exactly the kind of disagreement with the sim these
+ * shared helpers exist to prevent: sim/spells.ts' own `AUim` handler reads `d(lvl, 0, 600)`.
+ */
+const IMPALE_WAVE = new Set<string>(["AUim", "ACmp"]);
+
 /** A wave's reach — `DataC` "Distance" for the Shock Wave / Carrion Swarm family, `DataA` for
- *  Impale, whose meta group numbers its columns differently (see the handlers in
- *  sim/spells.ts). Falls back to the cast range, then to the family's 700. */
-export function waveDistance(lvl: AbilityLevel): number {
-  const c = lvl.data[2];
-  if (Number.isFinite(c) && c > 0) return c;
-  const a = lvl.data[0];
-  if (Number.isFinite(a) && a > 0) return a;
+ *  the Impale group, whose meta group numbers its columns differently (see `IMPALE_WAVE` and
+ *  the handlers in sim/spells.ts). Falls back to the cast range, then to the family's 700, for
+ *  a custom row that fills neither. */
+export function waveDistance(def: AbilityDef, lvl: AbilityLevel): number {
+  const col = IMPALE_WAVE.has(def.code) ? lvl.data[0] : lvl.data[2];
+  if (Number.isFinite(col) && col > 0) return col;
   return lvl.castRange || 700;
+}
+
+/** …and HALF its width, which the same split governs: `Area1` is the whole width for Impale
+ *  (`(lvl.area || 250) / 2` in its handler) and the half-width for the Shock Wave / Carrion
+ *  Swarm family (`lvl.area || 125` in theirs). Mirrors sim/spells.ts either way, so the
+ *  corridor a caster scores is the corridor the wave actually sweeps — read as a half-width
+ *  for both, Impale's 250 became a 500-wide lane and counted bodies the tendrils miss. */
+export function waveHalfWidth(def: AbilityDef, lvl: AbilityLevel): number {
+  if (IMPALE_WAVE.has(def.code)) return (lvl.area || 250) / 2;
+  return lvl.area || 125;
 }
 
 /** Hull-to-hull, the way every range in the sim is measured. */
