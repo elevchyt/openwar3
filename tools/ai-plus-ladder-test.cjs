@@ -657,6 +657,11 @@ function runEconomy() {
       tier: ctx.tier, armyFood: ctx.armyFood, gold: Math.round(S.gold),
       lumber: Math.round(S.lumber), workers: alive(table.worker),
       producers: of(table.barracks).length,
+      // THE SECOND HERO, which at tier 2 is a row of its own above the expansion
+      // (plus/plan.ts `tierTwoHero`). Counted as "asked for" rather than "standing" for the
+      // same reason the raze half counts an ordered building: the DECISION is what is under
+      // test, and an altar's queue is 55 seconds long.
+      heroes: [ctx.ai.heroId, ctx.ai.heroId2].filter((id) => id && ai.count(id) > 0).length,
       tierHaltShare: S.tierHaltsEarly / Math.max(1, S.passesEarly),
       back,
       foodCap: ai.foodCap(), foodUsed: ai.foodUsed(),
@@ -709,6 +714,11 @@ function runEconomy() {
         // — the ladder saving 700/375 for something it would have been charged 315/190 for,
         // with the Barracks, the tech and the army rows all underneath it.
         check(`${race}/${s.id} does not spend its opening stuck on the tier row`, r.tierHaltShare < 0.3, true);
+        // …AND IT BUYS ITS SECOND HERO ONCE THE KEEP IS UP. `PLUS_NORMAL.heroes` is 2 and every
+        // one of these runs reaches tier 2, so by ten minutes both should have been asked for —
+        // see `tierTwoHero`, which is the row that made this true: below the expansion, the
+        // second hero was reached only in the moments the AI happened to be rich.
+        check(`${race}/${s.id} has both its heroes by ten minutes`, r.heroes, 2);
       }
     }
   }

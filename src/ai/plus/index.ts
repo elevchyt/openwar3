@@ -1006,6 +1006,64 @@ const CREEP_HEALTH = 0.65;
 const CREEP_UNTIL_LEVEL = 5;
 
 /**
+ * THE FIRST TEN MINUTES BELONG TO THE CAMPS — how long, and the hero level that buys the party
+ * out of it early.
+ *
+ * The developer's report is one sentence and it names both races it happens to: "Computer+ seems
+ * to like to hit the enemy base very early with a really weak hero (especially Orc and Human
+ * like to do that with a level 1 blademaster or level 1 archmage)". The mechanism is not that
+ * the AI prefers the base — `massing` asks `creepNext` first and `pickTarget`'s rung 1 is a camp
+ * — it is that BOTH of those answer null the moment `maxCampLevel` prices the party under even a
+ * green camp (plus/power.ts), and the rung underneath them is the enemy's base. So the one state
+ * in which the AI has no business attacking anybody, a level-1 hero with two soldiers, is
+ * precisely the state in which nothing was left but the attack.
+ *
+ * This is the gate that says so, and it is a gate on the WAVE rather than a preference between
+ * two targets: for the opening ten minutes a party whose captain has not been anywhere does not
+ * leave for a player's base at all. What it does instead is what a ladder player does — it
+ * creeps, because `waveReady` is also the clock `creepNext` asks before it gives the level cap
+ * any weight, so a closed wave window is an OPEN creep window at any hero level.
+ *
+ * Level 3 is the same number `plus/power.ts` sets as the ORANGE bar, and deliberately: a hero
+ * that has cleared its green camps is a hero at 3, so "has it been creeping" and "may it go and
+ * fight a player" are the same question asked once. Ten minutes is the window the developer
+ * named; after it the ordinary clocks (`firstAttack`, `waveGap`, `attackFood`) decide alone,
+ * because a hero that is still level 1 at ten minutes is not going to get there by waiting.
+ *
+ * Easy is exempt by its own profile rather than by a test here: it does not creep at all
+ * (`PlusProfile.creeps`), so there is nothing to prefer over the attack and its `firstAttack` of
+ * seven minutes is already the whole of its opening.
+ */
+const EARLY_GAME = 600;
+const EARLY_HERO_LEVEL = 3;
+
+/**
+ * …AND AN UNDEAD OPPONENT'S BASE NEEDS A REAL ARMY — the multiplier on `attackFood`, and the
+ * ceiling that keeps it reachable.
+ *
+ * The developer's own ask ("Computer+ AI should always require a very strong army to attack an
+ * UNDEAD opponent's base"), and it is the one race-specific bar in the file. What is behind it
+ * is that an undead base defends itself better than any other for the same gold: a Ziggurat is
+ * supply that upgrades into a TOWER on the spot (docs/undead.md), the whole base sits on blight
+ * that heals everything standing on it, and the Acolytes that would be a raid's easy kills are
+ * standing in a ring in the open rather than down a shaft — which is to say the food that walks
+ * in has to beat the food that is already there plus everything the ground gives it.
+ *
+ * A FOOD multiplier rather than a power comparison, because what the wave is short of is bodies
+ * and because the AI must not be asked to price a base it has only half seen (Computer+ never
+ * bypasses the fog). It applies to the enemy's BASE and expansions — a fight in the field is
+ * `contactPass`'s, and it is symmetric there because both armies are in the open.
+ *
+ * `UNDEAD_CEILING` is what stops the bar being a bar nobody can clear: every difficulty caps its
+ * own production (`PlusProfile.armyFood` is 12 on Easy), so 1.75 × `attackFood` is above what an
+ * easy computer may ever own and would read as "never attack the undead at all". Four fifths of
+ * the ceiling is the most that can be asked of a difficulty without asking for the impossible —
+ * a wave is measured in the food that would actually LEAVE, and the wounded are not in it.
+ */
+const UNDEAD_ARMY = 1.75;
+const UNDEAD_CEILING = 0.8;
+
+/**
  * THE ILLUSIONS GO IN FIRST: how close to the camp the party is when the wand comes out.
  *
  * A Wand of Illusion makes a body that fights, is swung at, and hurts nothing (docs/
@@ -1069,6 +1127,27 @@ const CAMP_SHUN = 120;
  *  the same fixed table, so this is slack for the arithmetic and nothing else — wide enough to
  *  match and far narrower than the gap between two camps. */
 const SHUN_MATCH = 200;
+
+/**
+ * …AND THE SAME THING FOR AN ASSAULT THE PARTY COULD NOT GET TO (`Brain.avoid`).
+ *
+ * A camp is written off because a camp is a place. A base is written off because the whole BASE
+ * turned out to be somewhere the army has no road to — an island, the far side of a river the
+ * pathfinder will not cross, ground walled off by the enemy's own buildings — and the objective
+ * inside it is whatever structure happened to be nearest us when the wave was aimed
+ * (`AiPlayer.enemyBase`). That building can die, or another can become the nearest one, and a
+ * 200-unit match would then hand the party the same unreachable base under a different name on
+ * the very next pass. So the match is a base's own width.
+ *
+ * The DURATION is shorter than a camp's for the opposite reason to what it looks like: "I cannot
+ * reach that" is almost always a statement about right now (a building in the way, a fight in
+ * the corridor, a burrow across the ramp), and an enemy's main base is not somewhere an AI may
+ * decide to stop going. It is long enough to send the wave somewhere else — which is the whole
+ * point, see `pickTarget`'s last rung — and short enough that a map whose geometry has changed
+ * is re-tried within a wave or two.
+ */
+const GOAL_MATCH = 1200;
+const GOAL_SHUN = 90;
 
 /**
  * WHEN AN OBJECTIVE IS WRITTEN OFF: how long the group may fail to CLOSE ON it, and how much
@@ -1463,14 +1542,43 @@ function isCopy(u: SimUnit): boolean {
   return u.isIllusion;
 }
 
+/** The army as a shape rather than as a point — see `ComputerPlusAi.armyFrame`. */
+export interface ArmyFrame {
+  readonly spots: ReadonlyArray<{ x: number; y: number }>;
+  readonly minX: number;
+  readonly minY: number;
+  readonly maxX: number;
+  readonly maxY: number;
+}
+
+/** Is that point within `CONTACT_LOOK` of ANY body in the wave? The box first, because this is
+ *  asked of every unit in the world on every army pass and nearly all of them fail it. Pure and
+ *  exported for the same reason `marching` is: the two rules it serves — the march stops, and
+ *  the wave re-aims — have to agree, and a test is what says they do. */
+export function inContact(frame: ArmyFrame, x: number, y: number): boolean {
+  if (x < frame.minX || x > frame.maxX || y < frame.minY || y > frame.maxY) return false;
+  for (const p of frame.spots) {
+    const dx = x - p.x;
+    const dy = y - p.y;
+    if (dx * dx + dy * dy <= CONTACT_LOOK * CONTACT_LOOK) return true;
+  }
+  return false;
+}
+
 /** Is this camp one the party gave up on recently (`CAMP_SHUN`)? Pure and exported for the same
- *  reason `pushStalled` is — an over-eager shun list is an AI that stops creeping. */
+ *  reason `pushStalled` is — an over-eager shun list is an AI that stops creeping.
+ *
+ *  `match` is how near a point has to be to BE the thing that was written off, and it is the
+ *  caller's because the two lists it serves are drawn at two different scales: a camp is a
+ *  centroid off a fixed table and `SHUN_MATCH` is arithmetic slack, while a written-off
+ *  ASSAULT (`Brain.avoid`) is a whole base — see `GOAL_MATCH`. */
 export function isShunned(
   list: ReadonlyArray<{ x: number; y: number; until: number }>,
   camp: { x: number; y: number },
   clock: number,
+  match = SHUN_MATCH,
 ): boolean {
-  return list.some((s) => s.until > clock && Math.hypot(camp.x - s.x, camp.y - s.y) <= SHUN_MATCH);
+  return list.some((s) => s.until > clock && Math.hypot(camp.x - s.x, camp.y - s.y) <= match);
 }
 
 /**
@@ -1583,6 +1691,12 @@ interface Brain {
   push: { gap: number; since: number };
   /** Camps this party gave up on, and when each may be offered again (`CAMP_SHUN`). */
   shunned: Array<{ x: number; y: number; until: number }>;
+  /** …and the ASSAULTS it gave up on: a player's base or expansion the wave could not get to
+   *  (`GOAL_SHUN`/`GOAL_MATCH`). Kept apart from `shunned` because the two are matched at
+   *  different scales and offered again on different clocks, and because a camp is written off
+   *  by the party that was standing in front of it while this is written off by a march that
+   *  never arrived. `pickTarget` reads it, and its last rung is what the party does instead. */
+  avoid: Array<{ x: number; y: number; until: number }>;
   /** Where the CAPTAIN was when it was last seen to have moved, and when — the last-resort
    *  freeze watchdog (`FREEZE_AFTER`), which unlike `push` is asked in every mode. */
   freeze: { was: { x: number; y: number } | null; since: number };
@@ -1812,6 +1926,7 @@ export class ComputerPlusAi {
       retreatSince: 0,
       push: { gap: -1, since: 0 },
       shunned: [],
+      avoid: [],
       freeze: { was: null, since: 0 },
       pulls: new Map(),
       waiting: new Map(),
@@ -2027,6 +2142,13 @@ export class ComputerPlusAi {
     // runs its two halves in (`peon_assignment` fills the harvest plan, `OneBuildLoop` spends).
     harvestPlan(ctx);
     ai.applyHarvest();
+    // …AND NOBODY IS LEFT STANDING ABOUT. The plan is a list of slices and a worker no slice
+    // reached has no job at all — the commonest of them being an Acolyte past its mine's fifth
+    // mark, since the plan's catch-all last slice is the FOREST and the undead's worker cannot
+    // chop. The fallback is the developer's own: fill a mine that is short of its five,
+    // otherwise go to the trees. Computer+ only — see `AiPlayer.workIdleWorkers`, which is
+    // written to be unable to touch a worker that already has something to do.
+    ai.workIdleWorkers();
     buildPlan(ctx);
     // What it is building is worth telling a TEAMMATE, and this is where the answer is already
     // in hand. Said after the plan rather than before it, so the line and the build array are
@@ -2948,6 +3070,8 @@ export class ComputerPlusAi {
     const foes: SimUnit[] = [];
     let cx = 0;
     let cy = 0;
+    // MEASURED AGAINST THE WHOLE COLUMN, not only against the captain — see `armyFrame`.
+    const frame = this.armyFrame(b, anchor);
     for (const u of this.host.world.units.values()) {
       if (u.hp <= 0 || u.building || u.isPeon || u.owner === b.ai.player) continue;
       // A PLAYER's soldier, seen with our own eyes. Creeps and neutral hostiles are not an
@@ -2956,7 +3080,7 @@ export class ComputerPlusAi {
       if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
       // How far off, before who — see `enemyNear`. `knows` is a fog-grid lookup and `hostileTo`
       // an alliance one, and this walks every unit in the world on every army pass.
-      if (Math.hypot(u.x - anchor.x, u.y - anchor.y) > CONTACT_LOOK) continue;
+      if (!inContact(frame, u.x, u.y)) continue;
       if (isCopy(u)) continue; // a picture of an army is not one (docs/illusions.md)
       if (!b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
       foes.push(u);
@@ -3079,6 +3203,11 @@ export class ComputerPlusAi {
     b.creeping = false;
     const target = this.pickTarget(b);
     if (!target) return;
+    // …and one last question, about the OPPONENT rather than about us: an undead base needs a
+    // real army (`mayAssault`). Refusing here leaves the party massing at the rally point, which
+    // is what "wait until you have one" looks like — and the creep rungs above have already had
+    // their say, so nothing that could have been doing something else is held back by it.
+    if (!this.mayAssault(b, target)) return;
     b.target = target;
     this.setMode(b, "attacking");
     this.commit(b, target.x, target.y);
@@ -3090,8 +3219,42 @@ export class ComputerPlusAi {
     const { profile } = b;
     if (b.clock < profile.firstAttack) return false;
     if (b.clock - b.lastWaveEnd < profile.waveGap) return false;
+    // THE OPENING BELONGS TO THE CAMPS — see `EARLY_GAME`. A closed wave window is an OPEN creep
+    // window, because this is the same question `creepNext` asks before it lets the hero's level
+    // cap refuse a camp: for the first ten minutes a party led by a hero that has been nowhere
+    // goes creeping instead of walking at a player's base with a level-1 Blademaster.
+    if (profile.creeps && b.clock < EARLY_GAME) {
+      const captain = this.squadHero(b);
+      if (!captain || captain.level < EARLY_HERO_LEVEL) return false;
+    }
     // …measured at the MUSTER POINT — see `mustered`. A wave is what sets off, not what exists.
     return this.squadFood(b, this.mustered(b)) >= profile.attackFood;
+  }
+
+  /**
+   * MAY THIS WAVE SET OFF AT *THAT*? The one bar that is about WHO is being attacked.
+   *
+   * Everything else in the wave's clocks is about us — how long since the last one, how much
+   * food is standing at the muster point. This is the developer's undead rule (`UNDEAD_ARMY`):
+   * an undead base is towers that were supply a moment ago, on ground that heals what stands on
+   * it, so the wave that walks into one has to be a real army rather than the wave that would
+   * have done against anybody else.
+   *
+   * The race is read off the BUILDING the wave is aimed at (`UnitDef.race`) rather than off the
+   * lobby, which keeps it honest in the one way that matters here: what the AI is answering is
+   * "the thing I am about to attack is an undead structure", which is a fact about something it
+   * has seen. A creep camp has no owner and no race and is never gated — `b.creeping` and the
+   * missing `id` both say so — and neither is a fight in the field, which is `contactPass`'s and
+   * is symmetric because both armies are in the open.
+   */
+  private mayAssault(b: Brain, target: { id: number; x: number; y: number }): boolean {
+    if (b.creeping || !target.id) return true;
+    const u = this.host.world.units.get(target.id);
+    if (!u || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) return true;
+    if (this.host.registry.get(u.typeId)?.race !== "undead") return true;
+    const { profile } = b;
+    const bar = Math.min(profile.attackFood * UNDEAD_ARMY, profile.armyFood * UNDEAD_CEILING);
+    return this.squadFood(b, this.mustered(b)) >= bar;
   }
 
   /**
@@ -3587,8 +3750,31 @@ export class ComputerPlusAi {
    * not for leaving a walk that did not work out.
    */
   private abandon(b: Brain): void {
-    if (b.creeping && b.target) b.shunned.push({ x: b.target.x, y: b.target.y, until: b.clock + CAMP_SHUN });
+    this.writeOff(b);
     this.retreat(b, "stuck");
+  }
+
+  /**
+   * REMEMBER WHAT COULD NOT BE REACHED, whichever kind of objective it was.
+   *
+   * A camp goes on `shunned` and everything else on `avoid`, and the second half of that used to
+   * be nothing at all — the comment here said the enemy's base is not somewhere the AI may decide
+   * to stop going, which is true of the DECISION and says nothing about the WALK. What actually
+   * happened was the loop that rule was written to prevent, one rung further down: the wave was
+   * written off for going nowhere, `massing` re-aimed at the same base on the next pass because
+   * nothing had changed, and the party spent the match walking at the same cliff. The developer's
+   * report is that behaviour from the outside — "give up on trying to reach unreachable areas via
+   * pathfinding if not possible and move to another task (e.g. pick another creep camp)".
+   *
+   * So both are written off, on their own clocks, and `pickTarget` is where "another task" is
+   * actually chosen: past the base rung it falls through to a CAMP at any hero level, which is
+   * the one objective a party with nothing to attack can always be doing something about.
+   */
+  private writeOff(b: Brain): void {
+    if (!b.target) return;
+    const seen = { x: b.target.x, y: b.target.y };
+    if (b.creeping) b.shunned.push({ ...seen, until: b.clock + CAMP_SHUN });
+    else b.avoid.push({ ...seen, until: b.clock + GOAL_SHUN });
   }
 
   /**
@@ -3640,7 +3826,7 @@ export class ComputerPlusAi {
     // errand for the same reason.
     b.items.forget(captain.id);
     b.ai.order({ c: "order", unitId: captain.id, order: { kind: "stop" }, queued: false });
-    if (b.creeping && b.target) b.shunned.push({ x: b.target.x, y: b.target.y, until: b.clock + CAMP_SHUN });
+    this.writeOff(b);
     this.retreat(b, "stuck");
   }
 
@@ -4235,19 +4421,65 @@ export class ComputerPlusAi {
   }
 
   /** `marching`'s third clause, asked of the world: is a PLAYER's soldier standing within
-   *  `CONTACT_LOOK` of the anchor? The same filter `contactPass` uses — a creep is not an army,
-   *  and neither is a picture of one (docs/illusions.md) — stopping at the first body found. */
+   *  `CONTACT_LOOK` of the army? The same filter and the same FRAME `contactPass` uses — a creep
+   *  is not an army, and neither is a picture of one (docs/illusions.md) — stopping at the first
+   *  body found. The two must agree: this is what turns the march off, and that is what turns
+   *  the march into a fight, so a body one of them can see and the other cannot is a column that
+   *  stops walking without ever deciding anything. */
   private armyInReach(b: Brain, anchor: { x: number; y: number }): boolean {
+    const frame = this.armyFrame(b, anchor);
     for (const u of this.host.world.units.values()) {
       if (u.hp <= 0 || u.building || u.isPeon || u.owner === b.ai.player) continue;
-      const dx = u.x - anchor.x;
-      const dy = u.y - anchor.y;
-      if (dx * dx + dy * dy > CONTACT_LOOK * CONTACT_LOOK) continue;
+      if (!inContact(frame, u.x, u.y)) continue;
       if (u.isCreep || u.owner < 0 || u.owner >= MELEE.MAX_PLAYERS) continue;
       if (isCopy(u) || !b.ai.hostileTo(u) || !b.ai.knows(u)) continue;
       return true;
     }
     return false;
+  }
+
+  /**
+   * WHERE THE ARMY IS, as something an enemy can be near — every body in the wave, plus the
+   * anchor, plus a bounding box for the walk of the world that follows.
+   *
+   * Contact used to be measured from the anchor alone, and the anchor is the CAPTAIN: one point,
+   * at the head of a column that on a long march is strung out behind it for most of a screen.
+   * So an enemy army standing beside the road met the TAIL of the wave while the hero was
+   * already `CONTACT_LOOK` past it — nothing registered as contact, `marching` stayed true, and
+   * a plain move order does not auto-acquire (see `commit`), so the rear of the column walked
+   * through them under orders not to fight back. That is the developer's report exactly: "they
+   * must change their mind and commit to fighting the opponent that they just met instead of
+   * trying to pass through the opponent's army".
+   *
+   * The box is what keeps it cheap. Contact is asked of every unit in the world on every army
+   * pass, so the per-unit cost has to stay O(1) in the ordinary case: almost everything fails the
+   * box, and only what is genuinely near the column is measured against the bodies in it.
+   */
+  private armyFrame(b: Brain, anchor: { x: number; y: number }): ArmyFrame {
+    const spots: Array<{ x: number; y: number }> = [{ x: anchor.x, y: anchor.y }];
+    for (const u of this.squadUnits(b)) {
+      // The bodies that are actually IN the column: a worker in the wave is not one, and neither
+      // is an illusion — the same two exclusions every other reading of the squad makes.
+      if (u.isPeon || isCopy(u)) continue;
+      spots.push({ x: u.x, y: u.y });
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of spots) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return {
+      spots,
+      minX: minX - CONTACT_LOOK,
+      minY: minY - CONTACT_LOOK,
+      maxX: maxX + CONTACT_LOOK,
+      maxY: maxY + CONTACT_LOOK,
+    };
   }
 
   /**
@@ -4328,7 +4560,9 @@ export class ComputerPlusAi {
   /**
    * What the wave is FOR.
    *
-   * Four rungs, in the order a player thinks about them:
+   * Five rungs, in the order a player thinks about them — and every one of them may be REFUSED
+   * for being somewhere the army has already proved it cannot walk to (`Brain.avoid`), which is
+   * what makes the last one the answer to "give up and move to another task":
    *  0. whatever is SITTING ON the mine the build order has decided to take. `AiPlayer.takeExp`
    *     is set by `startExpansion` when it wants a town it cannot found yet and `expansionFoe`
    *     is what is in the way — which on a melee map is almost always a creep camp, since that
@@ -4342,13 +4576,25 @@ export class ComputerPlusAi {
    *  2. an enemy EXPANSION, if we have actually seen one (`AiPlayer.knows`, and Computer+ never
    *     bypasses the fog — so this rung only exists once it has scouted or been attacked from
    *     there);
-   *  3. the enemy's main base, which every melee player is handed and always knows.
+   *  3. the enemy's main base, which every melee player is handed and always knows;
+   *  4. and failing all of those, a CREEP CAMP at any hero level — see the rung itself.
    */
   private pickTarget(b: Brain): { id: number; x: number; y: number } | null {
     const { ai, profile } = b;
+    // WHAT THE PARTY ALREADY FAILED TO REACH is not offered again for a while — see `writeOff`
+    // and `GOAL_SHUN`. Filtered in place first, exactly as `creepTarget` does with the camps, so
+    // the list cannot grow for the length of a match.
+    if (b.avoid.length) b.avoid = b.avoid.filter((a) => a.until > b.clock);
+    const avoided = (p: { x: number; y: number }): boolean => isShunned(b.avoid, p, b.clock, GOAL_MATCH);
     if (ai.takeExp) {
       const foe = ai.expansionFoe();
-      if (foe) {
+      // …and it must be somewhere the party can WALK TO. The same test `creepTarget` applies to
+      // every camp it offers (`reachable`), and this rung bypassed it: what is sitting on a mine
+      // is almost always a creep camp, and a mine across a river is a mine whose guards no route
+      // reaches. `takeExp` is deliberately left standing when this refuses — the expansion is
+      // still wanted, and the question is asked again for the price of a region lookup — so what
+      // the refusal buys is the wave going and doing something it CAN do in the meantime.
+      if (foe && !avoided(foe) && this.reachable(b, foe)) {
         ai.takeExp = false; // asked and answered; `startExpansion` sets it again if still wanted
         return { id: foe.id, x: foe.x, y: foe.y };
       }
@@ -4366,9 +4612,35 @@ export class ComputerPlusAi {
       }
     }
     const expansion = ai.enemyExpansion();
-    if (expansion && !ai.isTowered(expansion)) return { id: expansion.id, x: expansion.x, y: expansion.y };
+    if (expansion && !ai.isTowered(expansion) && !avoided(expansion)) {
+      return { id: expansion.id, x: expansion.x, y: expansion.y };
+    }
     const base = ai.enemyBase();
-    return base ? { id: base.id, x: base.x, y: base.y } : null;
+    if (base && !avoided(base)) return { id: base.id, x: base.x, y: base.y };
+    // 4. …AND WHEN THERE IS NOTHING IT CAN GET TO, IT GOES CREEPING ANYWAY.
+    //
+    // The rung under "the enemy's base", which for most of this file's life was `null` — the
+    // wave simply had no objective and the army stood at the rally point. That is the wrong
+    // answer to every way of arriving here: an enemy base the march could not reach (the rung
+    // above just refused it), an island opponent, a base already razed but for a building the
+    // pathfinder will not route to. There is always a camp, a camp is always experience, and
+    // "move to another task (e.g. pick another creep camp)" is the developer's own instruction.
+    //
+    // The LEVEL CAP is deliberately not applied here. Rung 1 above is the preference — creep
+    // while the hero still gains from it — and this is what is left when the alternative is
+    // nothing at all, so a level-6 hero with nowhere to attack goes and clears a camp rather
+    // than standing in its base. `creepTarget` still prices the party against the camp
+    // (plus/power.ts) and still refuses one it cannot walk to, so this cannot send anybody
+    // anywhere the rest of the file would not.
+    if (profile.creeps && captain) {
+      const camp = this.creepTarget(b);
+      if (camp) {
+        b.creeping = true;
+        b.creepLevel = camp.level;
+        return { id: 0, x: camp.x, y: camp.y };
+      }
+    }
+    return null;
   }
 
   private endWave(b: Brain): void {

@@ -227,6 +227,21 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   REACH a straggler too: it skipped anything carrying a move or an attack order WHEREVER it
   stood, which is precisely the units that had come apart from it, and a fight in the sim ends
   with the unit still holding its attack order.
+  CONTACT with an enemy army is measured against the whole COLUMN and never against the captain
+  (`armyFrame`/`inContact`, shared by `contactPass` and `armyInReach` — a body one of them sees
+  and the other does not is a column that stops walking without deciding anything): a march is
+  walked under plain MOVE orders, which do not auto-acquire, so an enemy that met the tail while
+  the hero was already past it was walked through under orders not to fight back. An objective it
+  could not REACH is written off like a camp (`writeOff` → `Brain.avoid`, matched at a base's own
+  width because the aim is whichever building was nearest us), and `pickTarget`'s LAST rung is a
+  creep camp at ANY hero level — the level cap is a preference between a camp and an attack, and
+  down there the alternative is an army standing in its base for the rest of the game. The first
+  TEN MINUTES belong to the camps: below hero level 3 `waveReady` refuses, and because `creepNext`
+  asks the same clock, a closed wave window is an OPEN creep window. An UNDEAD base is the one
+  race-specific bar (`mayAssault`, 1.75 × `attackFood` ceilinged at the difficulty's own army cap,
+  read off the target BUILDING's `race` rather than off the lobby). No worker is ever left idle
+  (`AiPlayer.workIdleWorkers`, below `applyHarvest`: fill a mine short of its five, else the
+  trees — the plan's catch-all last slice is the FOREST, which for the undead is nobody).
   A STRATEGY names the army a build wants to END UP with, so five of the twenty name nothing
   that exists at tier 1 — and `buildableMix` therefore falls back on the race's OPENING SOLDIER
   (derived, not named: the lowest-tier thing the barracks makes that NEEDS NOTHING ELSE
@@ -236,14 +251,19 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   trainable. The undead looks exempt only because its Ghouls come out of the ECONOMY
   (`lumberUnits`) instead of the mix. The fallback yields the instant one row of the build
   order comes online, or every build quietly becomes "basic soldier, and tech".
-  The BUILD LADDER's order is the strategy and six positions in it were measured: the gold crew
+  The BUILD LADDER's order is the strategy and seven positions in it were measured: the gold crew
   is first — LITERALLY first, with the hall rows and the undead's mine BELOW it, because it is
   also the dead-worker replacement and a raid is exactly when a building row above it halts the
   loop for ever (the shortfall would be cleared out of a mine nobody is standing in) — the FOREST
   crew is right behind it, the hero outranks the Barracks, the rest of the workers wait behind
   the hero, the SHOP goes with the opening, and UPGRADES sit with the tech buildings ABOVE the
   tier-up — below it they are simply never reached, which is the whole of "the AI never upgrades
-  anything". The forest crew and the shop are both the same lesson twice: a row is only "lower
+  anything" — and at TIER 2 the SECOND HERO goes above all three of the Castle, the tech buildings
+  and the upgrades (`tierTwoHero`), because a row does not have to be UNREACHED to be unaffordable:
+  the loop spends a RUNNING budget, so with the hero merely above the expansion the rows over it
+  took the gold before it was read, every pass, and ten of the twenty builds reached ten minutes
+  at tier 2 with one hero. The forest crew and the shop are both the same lesson twice: a row is
+  only "lower
   priority" if the ladder ever REACHES it, and `OneBuildLoop` returns at the first row it cannot
   afford. Lumberjacks below the hero DEADLOCK — five workers on the mine and one spare leaves ONE
   in the trees, the hero row wants 100 lumber, and the row that would hire a second lumberjack is

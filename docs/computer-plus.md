@@ -621,6 +621,54 @@ arrives, the food is met, and the run starts a pass later with an army behind it
 asks it without one — a party already in a camp is all present by definition, and pricing that by a
 radius would write the stragglers off twice.
 
+### The first ten minutes belong to the CAMPS
+
+Reported: *"Computer+ seems to like to hit the enemy base very early with a really weak hero
+(especially Orc and Human like to do that with a level 1 blademaster or level 1 archmage)"*.
+
+The mechanism is not a preference for the base — `massing` asks `creepNext` **first**, and
+`pickTarget`'s rung 1 is a camp. It is that both of those answer `null` the moment `maxCampLevel`
+prices the party under even a green camp, and the rung underneath them is the enemy's base. So the
+one state in which an AI has no business attacking anybody — a level-1 hero with two soldiers —
+was precisely the state in which nothing was left *but* the attack.
+
+`waveReady` says so directly: for `EARLY_GAME` (600 s) a party whose captain has not reached
+`EARLY_HERO_LEVEL` (3) does not leave for a player's base at all. What it does instead is what a
+ladder player does, and it falls out for free — `waveReady` is also the clock `creepNext` asks
+before it lets the hero's level cap refuse a camp, so **a closed wave window is an open creep
+window at any hero level**.
+
+Level 3 is [`power.ts`](../src/ai/plus/power.ts)'s own ORANGE bar, and deliberately the same
+number: a hero that has cleared its green camps is a hero at 3, so *"has it been creeping"* and
+*"may it go and fight a player"* are one question asked once. After ten minutes the ordinary clocks
+decide alone, because a hero still at level 1 then is not going to get there by waiting. Easy is
+exempt through its own profile rather than through a test — it does not creep at all, so there is
+nothing to prefer over the attack.
+
+### An UNDEAD base needs a real army
+
+The one race-specific bar in the file, and the developer's own ask: *"Computer+ AI should always
+require a very strong army to attack an UNDEAD opponent's base"*. What is behind it is that an
+undead base defends itself better than any other for the same gold — a Ziggurat is supply that
+upgrades into a **tower** on the spot, the whole base stands on blight that heals what is on it,
+and the Acolytes that would be a raid's easy kills are out in a ring rather than down a shaft
+(docs/undead.md). The food that walks in has to beat the food already there *plus* what the ground
+gives it.
+
+`mayAssault` is asked once, in `massing`, after the target is chosen and before the wave commits:
+`UNDEAD_ARMY` (1.75) × `attackFood`, ceilinged at `UNDEAD_CEILING` (0.8) × the difficulty's own
+`armyFood`. The ceiling is not decoration — every difficulty caps its production, and 1.75 ×
+`attackFood` is above what an Easy computer may ever own, so without it the rule would read *never
+attack the undead at all*.
+
+Two things it deliberately is not. It is a **food** bar rather than a power comparison, because
+what the wave is short of is bodies and because the AI must not be asked to price a base it has
+only half seen — Computer+ never bypasses the fog. And the race is read off the **building the
+wave is aimed at** (`UnitDef.race`) rather than off the lobby, so what is being answered is *the
+thing I am about to attack is an undead structure*, which is a fact about something it has seen. A
+creep camp has no race and is never gated, and neither is a fight in the field — that is
+`contactPass`'s, and it is symmetric, because both armies are in the open.
+
 ### …and it asks whether it can get there BEFORE it sets off
 
 The watchdog is the backstop, not the plan. `creepCamp` answers off the map's fixed camp table
@@ -656,6 +704,45 @@ one unit that cannot path home holds `allHome` false for ever, and — the one t
 — most of the game's units do not regenerate at all (heroes do, the undead do on blight, the
 night elf does at night, a Footman does not), so a human or orc group that came home at half
 health can sit in its own base until fresh production alone lifts the average.
+
+### …and an ASSAULT it could not reach is written off too
+
+The same rule, at the other end of the target list, and for most of this file's life the second
+half of it was missing. `abandon` shunned a **camp** and nothing else, on the grounds that the
+enemy's base is not somewhere an AI may decide to stop going — which is true of the *decision* and
+says nothing about the *walk*. What happened instead was the loop the shun list exists to prevent,
+one rung further down: the wave was written off for going nowhere, `massing` re-aimed at the same
+base on the next pass because nothing had changed, and the party spent the match walking at the
+same cliff. Reported as *"give up on trying to reach unreachable areas via pathfinding if not
+possible and move to another task (e.g. pick another creep camp)"*.
+
+So `writeOff` remembers **whichever kind** of objective it was: a camp on `Brain.shunned`
+(`CAMP_SHUN`, 120 s, matched at `SHUN_MATCH` 200), an assault on `Brain.avoid` (`GOAL_SHUN`, 90 s,
+matched at `GOAL_MATCH` 1200). The two numbers differ because the two objectives are different
+shapes:
+
+* an assault is aimed at whatever structure happened to be **nearest us** (`AiPlayer.enemyBase`),
+  and that building can die or be overtaken by another — so a camp-sized match would hand the
+  party the same unreachable base back under a different name on the very next pass. The match is
+  a base's own width;
+* and it is offered again **sooner**, because "I cannot reach that" is nearly always a statement
+  about right now — a building in the way, a fight in the corridor — and an enemy main is not
+  somewhere the AI may write off for good.
+
+`pickTarget` reads the list at every rung, which is where *"move to another task"* actually
+happens, and it grew a fifth rung underneath the enemy's base for it: **a creep camp at any hero
+level**. The level cap (`CREEP_UNTIL_LEVEL`) is a *preference* between a camp and an attack, and
+down here there is no attack to prefer — an island opponent, a base the march cannot reach, a base
+already razed but for one building the pathfinder will not route to. The old answer was `null`,
+which is an army standing at the rally point for the rest of the game. `creepTarget` still prices
+the party against the camp and still refuses one it cannot walk to, so the new rung cannot send
+anybody anywhere the rest of the file would not.
+
+The rung at the **top** of the list got the reachability test it never had, too: `expansionFoe`
+— what is sitting on the mine the build order wants, which on a melee map is a creep camp — is now
+asked of `canWalkTo` like every other camp. `AiPlayer.takeExp` is deliberately left standing when
+it refuses, since the expansion is still wanted and the question costs a region lookup; what the
+refusal buys is the wave going and doing something it *can* do meanwhile.
 
 ### The last resort: a captain that has stopped moving takes the party home
 
@@ -893,6 +980,24 @@ Creeps are deliberately not in it, and neither are illusions. A camp on the way 
 walks round (below) and what `creepTarget` prices; this is about the other *player*, whose army
 chases, reinforces, and is the reason a wave is out at all.
 
+**Contact is measured against the whole COLUMN, not against the captain.** The rule above was
+right and still let an army walk through one, because *near* was a distance from the anchor — and
+the anchor is the captain, one point at the head of a column that on a long march is strung out
+`FOLLOW_RADIUS` and more behind it. An enemy standing beside the road met the **tail** of the wave
+while the hero was already `CONTACT_LOOK` past it: nothing registered as contact, `marching` stayed
+true, and a march is walked under plain `move` orders, which do not auto-acquire (see below) — so
+the rear of the column walked through them under orders not to fight back. Reported as *"they must
+change their mind and commit to fighting the opponent that they just met instead of trying to pass
+through the opponent's army"*.
+
+`armyFrame` is the answer and it is deliberately shared: `contactPass` (which turns the march into
+a fight) and `armyInReach` (which turns the march off) read the same frame, because a body one of
+them can see and the other cannot is a column that stops walking without ever deciding anything.
+The frame is every body in the wave plus the anchor, with a bounding box round the lot — the box
+is what keeps it cheap, since contact is asked of every unit in the world on every army pass and
+almost everything fails it in O(1). `inContact` is pure and exported, and pinned by
+[`tools/ai-plus-army-test.cjs`](../tools/ai-plus-army-test.cjs) for the same reason `marching` is.
+
 ### A march goes ROUND the camps on the way
 
 The army's half of the arc the scout has always walked (`safeLeg`, and see [the scouting
@@ -951,6 +1056,33 @@ tier-1 soldiers, never expands, never towers, never leaves its Town Hall, comes 
 after seven minutes, feeds its army in one piece, and takes fifteen seconds to notice you are in
 its base. That is issue #124's brief — "must essentially be able to be beaten by players who have
 played MOBAs" — written as numbers.
+
+### …and the SECOND one comes with the Keep
+
+`extraHeroes` sits **below the expansion** on purpose: a hero row halts the build loop while the
+AI saves four hundred gold for it, and above the expansion that halt is what stopped an insane orc
+ever founding a second town. That reasoning is about the first five minutes, when a second hero is
+a luxury and a second mine is the game. At **tier 2** it is the other way round — the army is out,
+the income is running, and the second hero is the next thing a ladder player buys. Reported as
+*"make the Computer+ AI (Normal and Insane only) be more keen towards training a second hero when
+it reaches tier 2"*; Easy is excluded by its own `heroes: 1` rather than by a difficulty test.
+
+So the row is asked **twice, at two different heights**, and the tier decides which of the two ever
+fires (`tierTwoHero`). Where the tier-2 copy sits is the whole of whether it happens: the first
+attempt put it just above the expansion, and that measured as no change at all —
+[`tools/ai-plus-ladder-test.cjs`](../tools/ai-plus-ladder-test.cjs) had ten of the twenty builds
+reaching ten minutes at tier 2 with **one** hero, halted on the second hero's own row for a third
+of their passes. **A row does not have to be unreached to be unaffordable**: `OneBuildLoop` spends
+a running budget, so the tech buildings, the upgrades and the Castle above it took the gold before
+the hero row was read, every pass, for ever. It goes above all three, and below `army(coreArmy)` —
+the one thing that must never be saved through, because a base with no army does not need a second
+hero, it needs an army. With it there, all twenty builds field both heroes inside ten minutes and
+every other ladder check is unchanged.
+
+The halt is bounded in both directions besides: it is **one** purchase (nothing re-asks once the
+hero is queued — `ai.count` counts a job in a queue), and `releaseStall` lets the ladder past a row
+that has stopped getting nearer its price. Only the second hero moves; the third is a luxury at any
+tier and stays where it was.
 
 ### The army ceiling is enforced at PRODUCTION
 
@@ -1322,6 +1454,36 @@ is Ghouls out of the Crypt, so the two are not bidding for the same bodies at al
 wood slice picks up whatever ghouls the wave did not take. Asked as `PlusCtx.workerChops` — a
 question about this player's WORKER — rather than as a race, so a custom map that hands its
 Acolytes an axe gets the interleave with no list of races anywhere.
+
+### …and nobody stands about: the fallback under the plan
+
+The harvest plan is a **list of slices** — five on the main mine, an axe, the fifth miner, another
+axe, five on every other mine, and forty in the trees — and a worker no slice reached is a worker
+with no job at all. There are four ordinary ways to be one, and the first is the one that shows:
+
+* **it cannot chop.** The catch-all last slice is the *forest*, which for the undead is nobody: an
+  Acolyte past its mine's fifth mark is a worker the plan has no row for, and it stands where it
+  was trained for the rest of the match;
+* **there is no tree** within `sendToWood`'s reach of the town it was assigned to (a base backing
+  onto water, a forest already chopped out), so no order was ever issued;
+* **it just finished something** on a pass where every slice was full;
+* **the plan itself was short**, because the mine it would have crewed is dead, unhaunted or held
+  by somebody else (`mineWorkable`).
+
+`AiPlayer.workIdleWorkers` is the floor under all four, and it is the developer's own rule: *"the
+Computer+ AI should never leave workers idle, its fallback must be to send them to gather lumber
+or fill their gold mine if it doesn't have 5 workers inside it already"*. Gold first, because gold
+is what every row on the build ladder is bought with and because "is that mine at its five" is the
+one question a mine answers by itself (`MINE_SEATS`; a mine's crew is counted four different ways,
+since it is a different shape in three of the four races — down the shaft, inside an Entangled
+Gold Mine, kneeling in a Haunted one's ring, or simply walking there); otherwise the trees, trying
+every town rather than only town 0.
+
+It runs **below** `applyHarvest` rather than instead of it, so it can only ever hand work to
+somebody the plan left with none: the only unit it can see is one whose order is literally
+`"idle"`, and anything harvesting, hauling, building, repairing, walking or held by the army
+(`captainHeld` — the scout and the wave) is passed over untouched. Computer+ calls it; the classic
+AI is unchanged.
 
 ### It repairs, and the hall outranks everything
 

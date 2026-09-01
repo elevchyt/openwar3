@@ -144,6 +144,14 @@ const EXPANSION_HALL_RANGE_WIDE = 700;
 const SITE_RING_STEP = 96;
 const SITE_MAX_RADIUS = 1800;
 
+/**
+ * How many workers a gold mine takes at once — the number every "is that mine crewed" question
+ * in the game is asked against, and the one the idle-worker fallback fills up to
+ * (`workIdleWorkers`). Five is the mine's own capacity in WC3, which is why every race's
+ * harvest plan is written in fives (plus/plan.ts `MINE_CREW`, and human.ai's own 4+1).
+ */
+const MINE_SEATS = 5;
+
 /** A guard tower goes at the FRONT of a town — between its hall and the enemy — rather than
  *  wherever the spiral first fits. This is how far from the hall it aims. */
 const TOWER_RADIUS = 640;
@@ -1296,6 +1304,102 @@ export class AiPlayer {
         }
       }
     }
+  }
+
+  /**
+   * NOBODY STANDS ABOUT — the fallback UNDER the harvest plan.
+   *
+   * `applyHarvest` is a plan and a plan is a list of slices: five on the main mine, an axe, the
+   * fifth miner, another axe, five on every other mine, and forty in the trees. A worker that no
+   * slice reached is a worker with no job at all, and there are four ordinary ways to be one:
+   *
+   *  · **it CANNOT CHOP.** The last slice is `HarvestWood(0, 40)` and it catches everybody who
+   *    can hold an axe — which for the undead is nobody. An Acolyte past the mine's fifth mark
+   *    is a worker the plan has no row for at all, and it stands where it was trained for the
+   *    rest of the match.
+   *  · **there is no tree** within `sendToWood`'s reach of the town it was assigned to, so the
+   *    order was never issued (a base backing onto water, a forest already chopped out).
+   *  · **it just finished something** — a building, a repair, a walk — on a pass where every
+   *    slice was already full, and nothing asks again until a slice empties.
+   *  · **the plan itself was short**, because the mine it was going to crew is dead, blighted,
+   *    or held by somebody else (`mineWorkable`).
+   *
+   * The fallback is the developer's own and it is the order a player uses: **fill a mine that
+   * is not yet at its five, otherwise go and chop.** Gold first because gold is what every row
+   * on the build ladder is bought with, and because "it doesn't have 5 workers inside it
+   * already" is the one question a mine answers by itself.
+   *
+   * It runs BELOW the plan rather than instead of it, so it can only ever hand work to somebody
+   * the plan left with none: anything harvesting, hauling, building, repairing, walking or held
+   * by the army (`captainHeld` — the scout and the wave) is passed over untouched, and the only
+   * unit it can see is one whose order is literally `"idle"`.
+   */
+  workIdleWorkers(): void {
+    const world = this.host.world;
+    const idle: SimUnit[] = [];
+    // Who is already paying into which mine — the crew count the fill below is measured against,
+    // taken over the same walk so the two readings cannot disagree.
+    const crew = new Map<number, number>();
+    for (const u of world.units.values()) {
+      if (u.owner !== this.player || u.hp <= 0 || !u.worker) continue;
+      const mine = this.mineWorkedBy(u);
+      if (mine) {
+        crew.set(mine, (crew.get(mine) ?? 0) + 1);
+        continue;
+      }
+      if (isOffField(u) || u.buildPending || u.insideBuild || u.constructing) continue;
+      if (this.captainHeld.has(u.id)) continue; // the scout, or standing in the wave
+      // ONE order means idle and it is the sim's own word for it. Everything else — a walk, a
+      // haul home, a repair, a chop, a garrison — is a worker with something to do, and a plan
+      // that re-tasked those would be `applyHarvest` written twice.
+      if (u.order !== "idle") continue;
+      idle.push(u);
+    }
+    if (!idle.length) return;
+    idle.sort((a, b) => a.id - b.id); // stable, so a pass cannot shuffle what the last one placed
+
+    for (const u of idle) {
+      // A MINE THAT IS SHORT OF ITS FIVE, nearest first. Whether this race may work THAT mine
+      // yet is not asked here and does not need to be: `sendToGold` goes through the command
+      // funnel, and the sim refuses a gold order at a mine that is not haunted yet ([Errors]
+      // `Blightminefirst`, docs/undead.md). A refusal simply falls through to the trees below,
+      // which is the right answer for an Acolyte that would otherwise kneel at nothing.
+      let best: Town | null = null;
+      let bestGap = Infinity;
+      for (const town of this.towns) {
+        if (!town.mineId || !world.mines.get(town.mineId)) continue;
+        if ((crew.get(town.mineId) ?? 0) >= MINE_SEATS) continue;
+        const gap = Math.hypot(u.x - town.x, u.y - town.y);
+        if (gap < bestGap) { best = town; bestGap = gap; }
+      }
+      if (best && u.worker!.gold && this.sendToGold(u, best.mineId)) {
+        crew.set(best.mineId, (crew.get(best.mineId) ?? 0) + 1);
+        continue;
+      }
+      // …OTHERWISE THE TREES, and every town is tried rather than only town 0: "there is no
+      // wood near the hall it happens to be standing at" is one of the four ways it got here.
+      if (!u.worker!.lumber) continue;
+      for (const town of [...this.towns].sort(
+        (a, b) => Math.hypot(u.x - a.x, u.y - a.y) - Math.hypot(u.x - b.x, u.y - b.y),
+      )) {
+        if (this.sendToWood(u, town)) break;
+      }
+    }
+  }
+
+  /** Which mine is this worker paying into, or 0 — asked four ways, because a mine's crew is a
+   *  different shape in three of the four races: down the shaft (`inMineId`), inside an
+   *  Entangled Gold Mine (a garrison — docs/night-elf.md), kneeling in a Haunted one's ring
+   *  (`ringSlot`, docs/undead.md), or simply on its way there under a harvest order. */
+  private mineWorkedBy(u: SimUnit): number {
+    if (u.inMineId) return u.inMineId;
+    if (u.garrisonHost) {
+      const host = this.host.world.units.get(u.garrisonHost);
+      if (host && host.mineId > 0) return host.mineId;
+    }
+    if (u.ringSlot > 0 && u.resId) return u.resId;
+    if ((u.order === "harvest" || u.order === "return") && u.resKind === "gold" && u.resId) return u.resId;
+    return 0;
   }
 
   /** Is this worker currently paying into a DIFFERENT mine from the one being crewed? See the

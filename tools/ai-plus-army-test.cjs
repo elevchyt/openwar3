@@ -31,7 +31,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const {
   canClearCamp, maxCampLevel, armyPower, forcePower, CAMP_GREEN_MAX, CAMP_ORANGE_MAX, CAMP_HEALTH,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "power.js"));
-const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut, marching, cohesionCall } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
+const { safeLeg, backOffSpot, onGoldDuty, pushStalled, freezeStalled, isShunned, pullBackSpot, pullDue, pulledOut, marching, inContact, cohesionCall } = require(join(REPO, ".sim-build", "src", "ai", "plus", "index.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -232,6 +232,14 @@ check("…nor is the same camp under a little arithmetic drift",
 check("its NEIGHBOUR still is offered", isShunned(SHUN, { x: 1000, y: 1700 }, 30), false);
 check("and it comes back once the shun expires", isShunned(SHUN, { x: 1000, y: 1000 }, 121), false);
 check("nothing is shunned by an empty list", isShunned([], { x: 1000, y: 1000 }, 30), false);
+// …and the SAME list serves the assaults that were written off (`Brain.avoid`), matched at a
+// base's own width rather than at a camp centroid's slack — see `GOAL_MATCH`. An enemy base is
+// aimed at through whichever of its buildings happens to be nearest us, and that building can
+// die or be overtaken by another, so a 200-unit match would hand the party the same unreachable
+// base back under a different name on the very next pass.
+check("an assault written off is not re-aimed at the building next door",
+  isShunned(SHUN, { x: 1900, y: 1000 }, 30, 1200), true);
+check("…but a base across the map still is", isShunned(SHUN, { x: 4000, y: 1000 }, 30, 1200), false);
 
 // ==========================================================================================
 console.log("\n-- the scout walks ROUND a creep camp, not through it ---------------------");
@@ -488,6 +496,31 @@ check("a degenerate anchor cannot produce a NaN destination",
   check("an enemy ARMY in reach ends the march", marching("attacking", HERE, FAR.x, FAR.y, true), false);
   // …and with no army at all there is nothing to anchor a march on.
   check("no anchor, no march", marching("attacking", null, FAR.x, FAR.y), false);
+}
+
+// ==========================================================================================
+// CONTACT IS MEASURED AGAINST THE WHOLE COLUMN — `inContact`.
+//
+// Reported: "if the Computer+ AI is moving towards a different goal and they meet an opponent on
+// the way, they must change their mind and commit to fighting the opponent that they just met
+// instead of trying to pass through the opponent's army." Contact used to be measured from the
+// anchor alone, and the anchor is the CAPTAIN — one point at the head of a column that on a long
+// march is strung out behind it. An enemy beside the road met the TAIL while the hero was already
+// past it: nothing registered, `marching` stayed true, and a plain move does not fight back.
+// ==========================================================================================
+{
+  // A hero at the front and the army trailing two thousand units behind it — an ordinary march.
+  const FRAME = {
+    spots: [{ x: 4000, y: 0 }, { x: 3400, y: 0 }, { x: 2600, y: 0 }, { x: 2000, y: 0 }],
+    minX: 2000 - 1400, maxX: 4000 + 1400, minY: -1400, maxY: 1400,
+  };
+  check("an enemy in front of the captain is contact", inContact(FRAME, 4600, 0), true);
+  // The one this exists for: 2600 from the hero is nothing to the hero and 600 to the rear rank.
+  check("…and so is one that has met the TAIL of the column", inContact(FRAME, 1400, 0), true);
+  check("…which the captain alone could not see", Math.hypot(1400 - 4000, 0) > 1400, true);
+  // Both bounds still mean something: the box rejects in O(1) and the bodies decide the rest.
+  check("something a screen off the column's flank is not", inContact(FRAME, 3000, 1500), false);
+  check("nor is one behind the whole column", inContact(FRAME, 500, 0), false);
 }
 
 // ==========================================================================================

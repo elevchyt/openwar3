@@ -344,6 +344,11 @@ export function buildPlan(c: PlusCtx): void {
   // a row that is never reached at all.
   shop(c);
   army(c, coreArmy(c)); // enough not to die to the first raid, cheap enough not to block tech
+  // THE SECOND HERO COMES WITH THE KEEP — see `tierTwoHero`, and note WHERE it is: above the
+  // Castle, above the tech buildings and above the upgrades, because at tier 2 that is the order
+  // a ladder player spends in. Below the core army, so it can never be the reason there is
+  // nothing on the field.
+  tierTwoHero(c);
   tierUpDue(c); // …and from three minutes, the Keep — see TIER2_CLOCK
   techBuildings(c);
   upgrades(c);
@@ -591,12 +596,52 @@ function extraHeroes(c: PlusCtx): void {
   const { ai, profile, armyFood, table } = c;
   if (ai.countDone(table.altar) < 1 || ai.count(ai.heroId) < 1) return;
   if (ai.count(ai.heroId2) < 1) {
-    if (profile.heroes >= 2 && armyFood >= HERO2_ARMY) ai.setBuildUnit(1, ai.heroId2);
+    // TIER 1 ONLY. From tier 2 the second hero is `tierTwoHero`'s row, much higher up the
+    // ladder, and asking for it again down here would put the SAME row in the build array twice
+    // — `OneBuildLoop` reserves a row's gold whether or not it started it, so a duplicate unit
+    // row is four hundred gold withheld from everything below it for nothing.
+    if (c.tier < 2 && profile.heroes >= 2 && armyFood >= HERO2_ARMY) ai.setBuildUnit(1, ai.heroId2);
     return;
   }
   if (profile.heroes >= 3 && ai.count(ai.heroId3) < 1 && armyFood >= HERO3_ARMY) {
     ai.setBuildUnit(1, ai.heroId3);
   }
+}
+
+/**
+ * …and the SECOND hero once the Keep is standing, which is a different row in a different place.
+ *
+ * `extraHeroes` sits below the expansion on purpose — a hero row HALTS the build loop while the
+ * AI saves four hundred gold for it, and above the expansion that halt is what stopped an insane
+ * orc ever founding a second town. That reasoning is about the first five minutes, when a second
+ * hero is a luxury and a second mine is the game. At TIER 2 it is the other way round: the army
+ * is out, the income is running, and the second hero is the next thing a ladder player buys —
+ * "more keen towards training a second hero when it reaches tier 2" (the developer's own words).
+ *
+ * So the row is asked TWICE, at two different heights, and the tier decides which of the two
+ * ever fires — exclusively, since a unit row that appeared twice would reserve its gold twice
+ * (see `extraHeroes`). The halt is bounded in both directions: it is ONE purchase (nothing re-asks once
+ * the hero is queued — `ai.count` counts a job in a queue), and `AiPlayer.releaseStall` lets the
+ * ladder past a row that has stopped getting nearer its price, so a base too poor to buy it
+ * cannot be locked out of everything underneath it.
+ *
+ * WHERE it sits is the whole of whether it happens, and the first attempt at this put it just
+ * above the expansion — which measured as no change at all (tools/ai-plus-ladder-test.cjs: ten
+ * of twenty builds reached ten minutes at tier 2 with one hero, halted on the second hero's own
+ * row for a third of their passes). A row does not have to be UNREACHED to be unaffordable: the
+ * loop spends a RUNNING budget, so the tech buildings, the upgrades and the Castle above it took
+ * the gold before the hero row was read, every pass, for ever. It goes above all three. Below
+ * `army(coreArmy)`, which is the one thing that must never be saved through — a base with no
+ * army does not need a second hero, it needs an army.
+ *
+ * Only the SECOND. The third is a luxury at any tier and stays where it is.
+ */
+function tierTwoHero(c: PlusCtx): void {
+  const { ai, profile, table, tier } = c;
+  if (tier < 2 || profile.heroes < 2) return;
+  if (ai.countDone(table.altar) < 1 || ai.count(ai.heroId) < 1) return;
+  if (ai.count(ai.heroId2) >= 1) return;
+  ai.setBuildUnit(1, ai.heroId2);
 }
 
 /**
