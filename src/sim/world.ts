@@ -6763,7 +6763,16 @@ export class SimWorld {
     // Hand the walker's claim back BEFORE the free-block tests below, or the unit would
     // find its own claim sitting on the tile it is trying to settle onto and shuffle off it.
     this.releaseClaim(u);
-    if (u.footprint <= 0 || u.hasReservation) return;
+    // A unit that holds no ground reserves none either. `claimsCells` is the one answer to
+    // "is this body in the way" and a reservation is the STOPPED half of it, so asking it
+    // here is what makes a ghosting worker (`noCollision`) transparent in BOTH halves. It
+    // used to be gated on the footprint alone, and that is the whole of "a gold worker
+    // ignores collision only with the other gold workers": the crew ghosts past one another
+    // because neither of them is in resolveCollisions or claims a cell — but the moment one
+    // parked at the rim or at the hall it reserved its block, which every OTHER unit's
+    // routing and movement reads as a wall. (The wisp-in-a-tree case unsettles by hand for
+    // exactly this reason; it no longer has to.)
+    if (!this.claimsCells(u) || u.hasReservation) return;
     const n = u.footprint;
     let sx = u.x;
     let sy = u.y;
@@ -19028,7 +19037,10 @@ export class SimWorld {
     // The block we just failed to take: one cell further along the way we were heading.
     const [bx0, by0] = this.grid.footprintOrigin(u.x + ((wx - u.x) / d) * PATHING_CELL, u.y + ((wy - u.y) / d) * PATHING_CELL, n);
     for (const o of this.units.values()) {
-      if (o === u || o.moving || o.building || o.speed <= 0 || o.footprint <= 0) continue;
+      // …and a ghosting worker is never what corked us, so it is never asked to move: it
+      // holds no cell, and shuffling a mining Peon out of a doorway it is not standing in
+      // would only take it off its round trip.
+      if (o === u || o.moving || o.building || o.speed <= 0 || o.footprint <= 0 || o.noCollision) continue;
       if (o.team !== u.team || o.hp <= 0 || isOffField(o)) continue;
       if (!(o.waitT > 0 || o.order === "idle")) continue; // busy with something of its own
       const m = o.footprint;
@@ -19185,6 +19197,12 @@ export class SimWorld {
   ): ((cx: number, cy: number) => boolean) | undefined {
     const n = self.footprint;
     if (n <= 0) return undefined;
+    // A ghosting worker walks THROUGH the crowd (noCollision), so nobody's body is in its
+    // way and routing it around one is the same collision it is exempt from — only taken by
+    // the pathfinder instead of by the separation pass. Terrain and building stamps still
+    // stop it, exactly as they stop a WC3 miner. (repathPoll already declines to reroute it
+    // for the same reason; without this the FIRST route was drawn around the queue anyway.)
+    if (self.noCollision) return (cx, cy) => !this.grid.footprintClear(cx, cy, n, pathDomain(self));
     const [sx, sy] = start;
     const half = n >> 1;
     const ownX0 = sx - half; // the unit's own footprint (reservation-exempt) origin
