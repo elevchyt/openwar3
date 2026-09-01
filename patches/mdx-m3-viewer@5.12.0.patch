@@ -992,10 +992,52 @@ index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d669aef649 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c6971c0f070 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
-@@ -44,6 +44,13 @@ class War3MapViewerMap {
+@@ -16,6 +16,41 @@ const file_3 = require("../../../parsers/w3x/doo/file");
+ const file_4 = require("../../../parsers/w3x/unitsdoo/file");
+ const normalHeap1 = gl_matrix_1.vec3.create();
+ const normalHeap2 = gl_matrix_1.vec3.create();
++/**
++ * OpenWar3: look a MappedData row up ignoring case, the way the engine's own string-hashed
++ * tables do. The index is built once per table and cached on it, so a map whose palette is
++ * spelled correctly never pays for it.
++ */
++function rowIgnoringCase(data, key) {
++    if (typeof key !== 'string') {
++        return undefined;
++    }
++    let index = data.__openwar3LowerIndex;
++    if (!index) {
++        index = new Map();
++        for (const name of Object.keys(data.map)) {
++            const lower = name.toLowerCase();
++            if (!index.has(lower)) {
++                index.set(lower, data.map[name]);
++            }
++        }
++        data.__openwar3LowerIndex = index;
++    }
++    return index.get(key.toLowerCase());
++}
++/**
++ * OpenWar3: resolve one entry of a map's ground-tile palette to its Terrain.slk row.
++ * Never returns undefined for a map whose tileset letter is real -- see the call site.
++ */
++function terrainRow(viewer, tileID, tileset) {
++    const data = viewer.terrainData;
++    const row = data.getRow(tileID) || rowIgnoringCase(data, tileID);
++    if (row) {
++        return row;
++    }
++    console.warn(`Unknown ground tile "${tileID}" -- falling back to the tileset's dirt.`);
++    return data.getRow(`${tileset}drt`) || data.getRow('Ldrt');
++}
+ class War3MapViewerMap {
+     constructor(viewer, buffer) {
+         this.buildVersion = 0;
+@@ -44,6 +79,13 @@ class War3MapViewerMap {
          this.mapSize = new Int32Array(2);
          this.tilesets = [];
          this.blightTextureIndex = -1;
@@ -1009,7 +1051,42 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
          this.cliffTilesets = [];
          this.columns = 0;
          this.rows = 0;
-@@ -165,10 +172,17 @@ class War3MapViewerMap {
+@@ -136,12 +178,32 @@ class War3MapViewerMap {
+         // Override the grid based on the map.
+         this.worldScene.grid = new grid_1.default(centerOffset[0], centerOffset[1], mapSize[0] * 128 - 128, mapSize[1] * 128 - 128, 16 * 128, 16 * 128);
+         const texturesExt = this.solverParams.reforged ? '.dds' : '.blp';
+-        const tileset = parser.tileset;
++        // OpenWar3 fix: the rest of this function is keyed on the tileset LETTER -- the
++        // blight texture's name and the `<letter>Sha` row that carries every water colour.
++        // A map naming a letter the game has no tileset for would take `.number()` on an
++        // undefined row and abort the whole (unawaited) terrain load, leaving the map
++        // black. Fall back to 'A', the same default the viewer already uses for a map with
++        // no war3map.w3i at all. Water.slk has a row for each of the eighteen real ones.
++        let tileset = parser.tileset;
++        if (!viewer.waterData.getRow(`${tileset}Sha`)) {
++            console.warn(`Unknown tileset "${tileset}" -- falling back to tileset A.`);
++            tileset = 'A';
++        }
+         const tilesetTextures = [];
+         const cliffTextures = [];
+         const waterTextures = [];
+         for (const groundTileset of parser.groundTilesets) {
+-            const row = viewer.terrainData.getRow(groundTileset);
++            // OpenWar3 fix: a map's tile palette can spell a Terrain.slk row in a
++            // different CASE. The cliff tiles are the one family in that table with a
++            // lowercase leading letter ("cAc2", "cCc1", ...), and the RoC editor wrote
++            // them capitalized -- three of Blizzard's own maps ((6)SwampOfSorrows,
++            // (8)Plaguelands, (3)Nighthaven, all Felwood) carry "CAc2". The unguarded
++            // row.string() below then threw on undefined, and because loadTerrainCliffs-
++            // AndWater() is never awaited that rejection just left terrainReady false:
++            // the whole map rendered BLACK. WC3's own table lookups are case-insensitive,
++            // so resolve it the same way, and fall back to the map tileset's dirt if the
++            // id is unknown even then -- one wrong tile must not cost the map.
++            const row = terrainRow(viewer, groundTileset, tileset);
+             this.tilesets.push(row);
+             tilesetTextures.push(this.load(`${row.string('dir')}\\${row.string('file')}${texturesExt}`));
+         }
+@@ -165,10 +227,19 @@ class War3MapViewerMap {
              Y: 'Village',
              Z: 'Ruins',
          };
@@ -1025,11 +1102,13 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
 +            // (e.g. "CLno" on HillsOfGlory). The unguarded row.string() below then
 +            // threw and the whole terrain failed to load. Fall back to CLdi so
 +            // terrain still renders.
-+            const row = viewer.cliffTypesData.getRow(cliffTileset) || viewer.cliffTypesData.getRow('CLdi');
++            const row = viewer.cliffTypesData.getRow(cliffTileset)
++                || rowIgnoringCase(viewer.cliffTypesData, cliffTileset)
++                || viewer.cliffTypesData.getRow('CLdi');
              this.cliffTilesets.push(row);
              cliffTextures.push(this.load(`${row.string('texDir')}\\${row.string('texFile')}${texturesExt}`));
          }
-@@ -199,6 +213,99 @@ class War3MapViewerMap {
+@@ -199,6 +270,99 @@ class War3MapViewerMap {
          const cliffs = {};
          this.columns = columns - 1;
          this.rows = rows - 1;
@@ -1129,7 +1208,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
          for (let y = 0; y < rows; y++) {
              for (let x = 0; x < columns; x++) {
                  const bottomLeft = corners[y][x];
-@@ -209,8 +316,12 @@ class War3MapViewerMap {
+@@ -209,8 +373,12 @@ class War3MapViewerMap {
                  if (y < rows - 1 && x < columns - 1) {
                      // Water can be used with cliffs and normal corners, so store water state regardless.
                      waterFlags[instance] = this.isWater(x, y);
@@ -1144,7 +1223,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
                          const bottomLeftLayer = bottomLeft.layerHeight;
                          const bottomRightLayer = corners[y][x + 1].layerHeight;
                          const topLeftLayer = corners[y + 1][x].layerHeight;
-@@ -234,38 +345,30 @@ class War3MapViewerMap {
+@@ -234,38 +402,30 @@ class War3MapViewerMap {
                          }
                      }
                      else {
@@ -1202,7 +1281,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
          const gl = this.viewer.gl;
          const webgl = this.viewer.webgl;
          this.vertexBuffer = gl.createBuffer();
-@@ -291,10 +394,17 @@ class War3MapViewerMap {
+@@ -291,10 +451,17 @@ class War3MapViewerMap {
          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(instanceCount).map((currentValue, index) => index), gl.STATIC_DRAW);
          this.textureBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
@@ -1222,7 +1301,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
          this.waterBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
          gl.bufferData(gl.ARRAY_BUFFER, waterFlags, gl.STATIC_DRAW);
-@@ -358,7 +468,25 @@ class War3MapViewerMap {
+@@ -358,7 +525,25 @@ class War3MapViewerMap {
                          }
                          promise.then((model) => {
                              if (model) {
@@ -1249,7 +1328,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
                              }
                          });
                      }
-@@ -503,6 +631,8 @@ class War3MapViewerMap {
+@@ -503,6 +688,8 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1258,7 +1337,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 15);
-@@ -558,11 +688,17 @@ class War3MapViewerMap {
+@@ -558,11 +745,17 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1276,7 +1355,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
              gl.uniform1f(uniforms['u_offsetHeight'], this.waterHeightOffset);
              gl.uniform4fv(uniforms['u_maxDeepColor'], this.maxDeepColor);
              gl.uniform4fv(uniforms['u_minDeepColor'], this.minDeepColor);
-@@ -599,6 +735,8 @@ class War3MapViewerMap {
+@@ -599,6 +792,8 @@ class War3MapViewerMap {
              gl.disable(gl.BLEND);
              shader.use();
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1285,7 +1364,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
              gl.uniform1i(uniforms['u_heightMap'], 0);
              gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
              gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
-@@ -612,6 +750,9 @@ class War3MapViewerMap {
+@@ -612,6 +807,9 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
@@ -1295,7 +1374,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +812,86 @@ class War3MapViewerMap {
+@@ -671,6 +869,86 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -1382,7 +1461,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
      /**
       * Is the tile at the given column and row water?
       */
-@@ -692,6 +913,108 @@ class War3MapViewerMap {
+@@ -692,6 +970,108 @@ class War3MapViewerMap {
          }
          return 0;
      }
@@ -1491,7 +1570,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..a2dd3f67b87c8cc5bf12bc2bb3c208d6
      /**
       * Get the ground texture of a corner, whether it's normal ground, a cliff, or a blighted corner.
       */
-@@ -730,17 +1053,37 @@ class War3MapViewerMap {
+@@ -730,17 +1110,37 @@ class War3MapViewerMap {
      applyModificationTable(dataMap, metadataMap, modificationTable) {
          for (const modificationObject of modificationTable.objects) {
              let row;

@@ -262,6 +262,26 @@ names the parser where we read it (all under `src/world/`, wired through `src/vf
 | `war3map.mmp` | **Menu minimap**: start-location & icon positions drawn on the lobby preview | — |
 | `war3mapPreview.tga` / `war3mapMap.tga` | Loading-screen / terrain preview images | — |
 
+**A map's tile palette names `TerrainArt\Terrain.slk` rows, and the case is not to be trusted.**
+`war3map.w3e` carries up to 16 ground-tile ids and 16 cliff-type ids; each is looked up by id in
+`Terrain.slk` / `CliffTypes.slk` to get the `dir`+`file` of its texture. Two traps live there, and
+both are stock Blizzard maps rather than broken custom ones:
+
+* The **cliff tiles** — the rows a tileset gets for the ground on top of and beneath a cliff — are
+  the one family in `Terrain.slk` spelled with a **lowercase leading letter** (`cAc1`, `cAc2`,
+  `cCc1`, … one pair per tileset). The RoC editor wrote them capitalized, so `(6)SwampOfSorrows`,
+  `(8)Plaguelands` and `(3)Nighthaven` (all Felwood) list **`CAc2`** where the table says `cAc2`.
+  WC3's own table lookups are case-insensitive, so ours must be too.
+* An id can be **absent outright**: `CLno` on `(2)HillsOfGlory`, `(4)Legends`, `(4)Deadwaterdrop`
+  and `(4)TurtleRock`, and four NUL bytes on `(10)DustwallowKeys`.
+
+Neither may be fatal. The terrain load is not awaited, so a `getRow(...)` that returns `undefined`
+throws into a dropped promise and simply leaves the map **entirely black** — which is exactly what
+`CAc2` did before it was fixed (`patches/mdx-m3-viewer@5.12.0.patch`, `map.js`). Resolve
+case-insensitively first, then fall back (the tileset's own dirt for a ground tile, `CLdi` for a
+cliff type) rather than losing the map. A palette slot can also be listed and never used — nothing
+on those three Felwood maps actually paints with `CAc2`.
+
 ### Placed objects
 
 | File | Content | OpenWar3 |
