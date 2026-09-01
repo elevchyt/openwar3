@@ -314,6 +314,15 @@ says so at each site, so a later correction knows what it is correcting.
   outright). This is the sim's own autocast doctrine (`autocastWants` → `findBuffFrom`), matched
   on the ability's own `buffid` list. **Immolation is why it matters on the caster**: `AEim` is
   a TOGGLE, so re-pressing it puts it out.
+- **Force of Nature is aimed at the TREES.** `[AEfn] targs1` is **"tree"** and nothing else —
+  the one point spell in the game whose target is not a body. Scored like an area nuke it went
+  down on whichever ENEMY caught the most bodies, which is a spot with trees in it only by luck:
+  `SimWorld.fellTrees` raises one Treant per felled trunk, so a point with no tree inside `Area1`
+  (150) summons nothing at all and still spends `Cost1` 100 and `Cool1` 20. `treeAim`/`treeSpots`
+  are the answer, and they are shared with Computer+ (`src/ai/plus/casting.ts`) because the
+  ability's shape is the same for both: a treeline within `Rng1` 800, and of those the one
+  nearest the FIGHT — Treants last `Dur1` 60 seconds and spend it walking if they are raised in
+  the forest behind the hero.
 - **Workers are the economy's.** `isPeon` and anyone mid-harvest/build/repair is left alone.
 - **Legality is asked of the sim.** `castUseError`/`castError` — the click-time gate — decide
   mana, cooldown, the upgrade requirement, Targets Allowed, spell polarity and "is there even a

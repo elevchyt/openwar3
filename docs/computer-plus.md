@@ -2163,6 +2163,21 @@ engaging enemies"* — so with a fight in reach it is a **bare press**. (`src/ai
 had the bug: its `need` is 0 for anything that is not a `cluster` rule, so only this file's
 `quorum` ever reached the row.)
 
+### …and Force of Nature is aimed at the trees
+
+The same lesson one row along, and the same cause: `[AEfn] targs1` is **"tree"** alone, so the
+spot a Keeper of the Grove wants is a treeline within `Rng1` 800 — `SimWorld.fellTrees` turns up
+to `DataA` (2/3/4) trunks inside `Area1` into Treants, one each, and a point with no trunk in it
+summons nothing while charging the full 100 mana and 20-second cooldown. Scored as an area spell
+it was pointed at whichever clump of ENEMIES caught the most bodies.
+
+The search is [`treeSpots`](../src/ai/casting.ts) and it is **shared with the classic caster**,
+because the ability's shape is not a difficulty: trees or no cast, and of the treelines the one
+nearest the fight (Treants last 60 seconds and spend them walking if they are raised in the
+forest behind the hero). What Computer+ puts on top is its own two dials — the `quorum` (Easy
+presses it on a single trunk, the others want a clump, but never more than the rank can fell) and
+the misclick.
+
 On top of the read sits `castMistake`, plain sloppiness: a chance the cast lands on a random
 *legal* target (or a random legal spot) instead of the best one. Drawn off the AI's own RNG
 stream, so a match replays identically. Heals are exempt — a player who means to heal somebody

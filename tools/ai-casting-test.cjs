@@ -60,6 +60,10 @@ for (const d of [
   ability({ code: "Ahea", target: "unit", autocast: true, targetFlags: ["air", "ground", "friend", "self", "organic"], levelData: [lvl({ castRange: 250, cost: 5 })] }),
   // Defend — the autocast with a condition (piercing attackers only).
   ability({ code: "Adef", target: "none", autocast: true, targetFlags: [], levelData: [lvl()] }),
+  // Force of Nature — `targs1 = tree` ALONE, `Rng1` 800 to a spot, `Area1` 150 around it,
+  // `DataA` 2 trees felled with a Treant in each hole, `Cost1` 100. The one point spell in the
+  // game whose target is not a body.
+  ability({ code: "AEfn", target: "point", targetFlags: ["tree"], levelData: [lvl({ area: 150, castRange: 800, cost: 100, duration: 60, summon: "efon", data: [2, ...new Array(8).fill(NaN)] })] }),
 ]) DEFS[d.id] = d;
 
 const WEAPON = {
@@ -320,6 +324,44 @@ const casts = (log) => log.filter((c) => c.c === "cast").map((c) => [c.code, c.t
   const { c, log } = ai(w);
   c.pass();
   check("a worker is never pulled off its job to cast", log, []);
+}
+
+// --- Force of Nature is aimed at the TREES --------------------------------------------
+// The derived rule for anything that summons is `{ when: "engaged" }` (`ruleFor`), so the Keeper
+// pressed the button in every fight — and `pickSpot` scored the spot like an area nuke, on the
+// bodies caught, which put 100 mana on a point that fells nothing at all. `[AEfn] targs1` is
+// "tree": what has to be inside `Area1` is TRUNKS, and `SimWorld.fellTrees` raises one Treant
+// for each of them.
+{
+  const w = world();
+  const keeper = caster(w, ["AEfn"], { x: 0, y: 0, isHero: true });
+  foe(w, { x: 600, y: 0 });
+  // A stand off to one side of the enemy — deliberately further from it than `Area1` (150), so
+  // that "aimed at the trees" and "aimed at the body" are different answers and the old aim
+  // cannot pass by luck — and one lone trunk behind the hero.
+  let tid = 1;
+  for (const t of [{ x: 700, y: 300 }, { x: 760, y: 340 }, { x: -200, y: 0 }]) {
+    w.trees.set(tid, { id: tid, x: t.x, y: t.y, lumber: 200, hp: 50, blockRadius: 64 });
+    tid++;
+  }
+  const { c, log } = ai(w);
+  c.pass();
+  const cmd = log.find((o) => o.c === "cast" && o.code === "AEfn");
+  check("a Keeper casts Force of Nature in a fight", !!cmd, true);
+  check("…on a TRUNK rather than on the enemy", cmd && [cmd.x, cmd.y], [700, 300]);
+  check("…and on the stand by the fight, not the one behind him", cmd && cmd.x > 0, true);
+}
+{
+  // NO TREES IN REACH, NO CAST. `nearestTrees` pads its answer past the radius, so a forest on
+  // the far side of the map comes back looking like a candidate; 100 mana on a spot that fells
+  // nothing is exactly what this is here to stop.
+  const w = world();
+  caster(w, ["AEfn"], { x: 0, y: 0, isHero: true });
+  foe(w, { x: 600, y: 0 });
+  w.trees.set(1, { id: 1, x: 4000, y: 4000, lumber: 200, hp: 50, blockRadius: 64 });
+  const { c, log } = ai(w);
+  c.pass();
+  check("a forest out of `Rng1` is not a spot", log.filter((o) => o.c === "cast"), []);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

@@ -66,6 +66,10 @@ const ABILS = {
   // `Dur1` 60, `UnitID1` hwat … and **`Area1` 200**, which is NOT an area of effect. It is the
   // radius the elemental is placed in around its caster. Reading it as one made the summon ask
   // for a QUORUM of two enemy bodies within 200 units of the Archmage — see `pickSpot`.
+  // FORCE OF NATURE, with its real row. `Units\AbilityData.slk [AEfn]`: `targs1` **"tree"** and
+  // nothing else, `Rng1` 800 to a spot, `Area1` 150/225/300 around it, `DataA` 2/3/4 trees
+  // felled there with a Treant (`UnitID1` efon) standing in each hole, `Cost1` 100, `Dur1` 60.
+  AEfn: { code: "AEfn", target: "point", autocast: false, targetFlags: ["tree"], levelData: [lvl({ area: 150, castRange: 800, cost: 100, duration: 60, heroDuration: 60, buffs: ["BEfn"], summon: "efon", data: [2, NaN] })] },
   AHwe: { code: "AHwe", target: "none", autocast: false, targetFlags: [], levelData: [lvl({ area: 200, castRange: 0, cost: 125, duration: 60, heroDuration: 60, buffs: ["BHwe"], summon: "hwat" })] },
 };
 
@@ -96,6 +100,13 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
   const POLARITY = { AHhb: false, AUdc: true }; // healsUndead
   const world = {
     units: new Map(units.map((u) => [u.id, u])),
+    // The sim's own signature, PADDING included: `nearestTrees` hands back the nearest `limit`
+    // trees whether or not they are inside `maxDist`, which is why every caller re-filters by
+    // distance (`SimWorld.fellTrees` does, and so must `treeSpot`).
+    nearestTrees: (x, y, maxDist, limit) => (opts.trees ?? [])
+      .map((t, i) => ({ id: i + 1, x: t.x, y: t.y, lumber: 100, hp: 50, blockRadius: 64 }))
+      .sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y))
+      .slice(0, Math.max(1, limit)),
     techMeets: () => true,
     castUseError: () => null,
     targsAdmit: () => true,
@@ -528,6 +539,45 @@ console.log("\n-- a summon's `Area1` is where the body goes, not who is caught -
   const at = (p) => !!cast([caster({ abilId: "AHwe", isHero: true }), unit({ owner: 1, x: 500 })], p, { passes: 2 });
   check("an EASY computer's Archmage summons too", at(PLUS_EASY), true);
   check("…and a NORMAL one", at(PLUS_NORMAL), true);
+}
+
+// ==========================================================================================
+console.log("\n-- Force of Nature is aimed at the TREES, and at the ones by the fight --------");
+// ==========================================================================================
+// `[AEfn] targs1` is "tree" alone — the one point spell in the game whose target is not a body.
+// Aimed like an area nuke it went down on a clump of ENEMIES, which is a spot with trees in it
+// only by luck: `fellTrees` raises one Treant per felled tree, so a point with no tree inside
+// `Area1` summons nothing at all and still charges the 100 mana and the 20-second cooldown.
+const keeper = () => caster({ abilId: "AEfn", isHero: true, x: 0, y: 0 });
+{
+  // A fight to the east, a lone trunk beside the hero, and a stand of trees out by the enemy.
+  const foe = unit({ owner: 1, x: 600, y: 0 });
+  const trees = [{ x: -100, y: 0 }, { x: 560, y: 40 }, { x: 620, y: 90 }];
+  const cmd = cast([keeper(), foe], PLUS_NORMAL, { trees, passes: 2 });
+  check("a Keeper casts Force of Nature at all", cmd && cmd.code, "AEfn");
+  check("…on the trees and not on the enemy", cmd && Math.round(Math.hypot(cmd.x - 600, cmd.y)) < 120, true);
+  check("…and not on the lone trunk behind him", cmd && cmd.x > 0, true);
+}
+{
+  // NO TREES IN REACH, NO CAST — `Rng1` is 800, and `nearestTrees` pads its answer past the
+  // radius, so a forest on the other side of the map comes back from the sim looking like a
+  // candidate. 100 mana on a spot that fells nothing is the whole bug this file is pinning.
+  const foe = unit({ owner: 1, x: 600, y: 0 });
+  check("a forest out of range is not a spot", cast([keeper(), foe], PLUS_NORMAL, { trees: [{ x: 5000, y: 5000 }], passes: 2 }), null);
+  check("…and neither is no forest at all", cast([keeper(), foe], PLUS_NORMAL, { trees: [], passes: 2 }), null);
+}
+{
+  // THE QUORUM IS THE DIFFICULTY'S, as everywhere else here — but never more than the rank can
+  // fell (`DataA` 2 at level 1), or the ability would be held to a bar it cannot reach.
+  const foe = () => unit({ owner: 1, x: 600, y: 0 });
+  // Well off the enemy, so that "it landed on the tree" and "it landed on the body" are
+  // different answers — under the old aim this spot is the FOE's and the trunk is never read.
+  const lone = [{ x: 400, y: -300 }];
+  check("a NORMAL Keeper wants a clump, not one trunk", cast([keeper(), foe()], PLUS_NORMAL, { trees: lone, passes: 2 }), null);
+  const easy = cast([keeper(), foe()], PLUS_EASY, { trees: lone, passes: 2 });
+  check("…an EASY one presses it on the single tree", easy && [easy.x, easy.y], [400, -300]);
+  check("…and two trunks together are a clump for anybody",
+    !!cast([keeper(), foe()], PLUS_NORMAL, { trees: [{ x: 560, y: 0 }, { x: 620, y: 60 }], passes: 2 }), true);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

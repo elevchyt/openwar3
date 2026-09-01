@@ -644,6 +644,14 @@ export class AiCaster {
       return { x: u.x, y: u.y };
     }
 
+    // FORCE OF NATURE IS AIMED AT THE TREES, not at anybody — `[AEfn] targs1` is "tree" alone,
+    // and it is the one point spell in the game whose target is not a body. Scored like an area
+    // spell it went down on whichever ENEMY caught the most bodies, which is a spot with trees
+    // in it only by luck: `fellTrees` raises one Treant per felled tree, so a point with no
+    // trunk inside `Area1` summons nothing and still spends `Cost1` 100 and `Cool1` 20. One
+    // trunk is the whole requirement here — this caster keeps no quorum of its own.
+    if (treeAim(def)) return treeSpots(this.view, u, code, lvl, foes, 1)[0] ?? null;
+
     const wave = NO_AOE_CURSOR.has(def.code);
     const reach = wave ? waveDistance(def, lvl) : lvl.castRange;
     let best: { x: number; y: number } | null = null;
@@ -819,6 +827,65 @@ export function waveDistance(def: AbilityDef, lvl: AbilityLevel): number {
 export function waveHalfWidth(def: AbilityDef, lvl: AbilityLevel): number {
   if (IMPALE_WAVE.has(def.code)) return (lvl.area || 250) / 2;
   return lvl.area || 125;
+}
+
+/**
+ * Is this row aimed at TREES rather than at anybody — Force of Nature's shape?
+ *
+ * `Units\AbilityData.slk [AEfn] targs1` is **"tree"** and nothing else, and that is the whole
+ * test: the flag also turns up on rows that merely ALLOW a tree among their targets (Purge
+ * names "air,ground,ward,vuln,invu,tree"), and those are aimed at bodies like anything else. A
+ * row that names no body at all has named the forest.
+ */
+export function treeAim(def: AbilityDef): boolean {
+  const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+  return F.has("tree") && !F.has("ground") && !F.has("air") && !F.has("structure");
+}
+
+/** How many trees a tree-aimed spell will consider. A cap on the SEARCH rather than on the
+ *  ability: `[AEfn] Rng1` is 800 and a forest inside 800 units of a hero is a lot of trunks,
+ *  while the nearest few dozen already hold every clump worth felling. OURS. */
+const TREE_CANDIDATES = 48;
+
+/**
+ * WHERE THE TREES ARE — Force of Nature's aim, and the only spot search either caster runs
+ * that does not look at a body. Nearest the FIGHT first; empty when there is no cast to make.
+ *
+ * Two questions, in the order a player asks them:
+ *
+ *  1. **Is there a cast at all?** `SimWorld.fellTrees` turns up to `DataA` trees inside `Area1`
+ *     of the point into Treants, one each, so a point with no tree inside it summons NOTHING
+ *     and still charges the full `Cost1` 100 and `Cool1` 20. Every candidate here IS a tree —
+ *     a circle drawn on a trunk always catches at least that trunk, which a circle drawn on a
+ *     Grunt does not.
+ *  2. **Which treeline?** The one the Treants can reach somebody from. They are summoned to
+ *     fight (`Dur1` 60 — a minute of two to four bodies), so the clump nearest the enemy wins
+ *     and the stand behind the hero is the wrong one however many trees are in it.
+ *
+ * `need` is the caller's: the classic caster asks for one trunk (it keeps no quorum of its
+ * own), Computer+ for its difficulty's clump — never more than the rank can actually fell.
+ */
+export function treeSpots(
+  view: CasterView, u: SimUnit, code: string, lvl: AbilityLevel, foes: SimUnit[], need: number,
+): Array<{ x: number; y: number }> {
+  const reach = lvl.castRange || 800;
+  const area = lvl.area || 150;
+  // `nearestTrees` PADS to its limit — it answers with the nearest trees whether or not they
+  // are inside the radius, which is why every caller re-filters (`SimWorld.fellTrees` does).
+  const inReach = view.world.nearestTrees(u.x, u.y, reach, TREE_CANDIDATES)
+    .filter((t) => Math.hypot(t.x - u.x, t.y - u.y) <= reach);
+  const out: Array<{ x: number; y: number; d: number }> = [];
+  for (const t of inReach) {
+    let clump = 0;
+    for (const o of inReach) if (Math.hypot(o.x - t.x, o.y - t.y) <= area) clump++;
+    if (clump < Math.max(1, need)) continue;
+    if (view.world.castError(u.id, code, 0, t.x, t.y) !== null) continue;
+    let d = Infinity;
+    for (const f of foes) if (!f.building) d = Math.min(d, Math.hypot(f.x - t.x, f.y - t.y));
+    out.push({ x: t.x, y: t.y, d });
+  }
+  out.sort((a, b) => a.d - b.d);
+  return out.map(({ x, y }) => ({ x, y }));
 }
 
 /** Hull-to-hull, the way every range in the sim is measured. */

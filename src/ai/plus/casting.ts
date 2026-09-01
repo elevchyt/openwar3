@@ -1,7 +1,7 @@
 import { isRepairCode, NO_AOE_CURSOR, type AbilityDef, type AbilityLevel } from "../../data/abilities";
 import type { SimUnit } from "../../sim/world";
 import { DISPEL_CODES, POLARITY_SPELLS, worthDispelling } from "../../sim/spells";
-import { friendlySpell, near, waveDistance, waveHalfWidth, type CasterView } from "../casting";
+import { friendlySpell, near, treeAim, treeSpots, waveDistance, waveHalfWidth, type CasterView } from "../casting";
 import { MELEE } from "../../data/gameplayConstants";
 import { MELEE_INSANE, MELEE_NEWBIE, WIND_WALK } from "../ids";
 import type { PlusProfile } from "./profile";
@@ -1280,6 +1280,19 @@ export class PlusCaster {
       return hits.count >= need ? { x: u.x, y: u.y } : null;
     }
 
+    // FORCE OF NATURE IS AIMED AT TREES — the one point spell whose target is not a body.
+    //
+    // `[AEfn] targs1` is **"tree"** and nothing else: `Rng1` 800 to a spot, `Area1` 150/225/300
+    // around it, `DataA` 2/3/4 trees FELLED there and one Treant standing in each hole (the
+    // sim's own shape — `SimWorld.fellTrees`, called by the `AEfn` handler in sim/spells.ts).
+    // Aimed like an area nuke it was pointed at a clump of ENEMIES, which is a spot with trees
+    // in it only by luck: 100 mana and a 20-second cooldown spent felling nothing at all.
+    //
+    // So the aim is the treeline, and "which treeline" is the fight — a Keeper of the Grove
+    // pulls his Treants up where they can reach somebody, not out of the forest behind him.
+    // Trees first (there is no cast without them), the nearest one to the enemy second.
+    if (role === "summon" && treeAim(def)) return this.treeSpot(u, code, lvl, foes, quorum);
+
     const wave = NO_AOE_CURSOR.has(def.code);
     const reach = wave ? waveDistance(def, lvl) : lvl.castRange;
     const legal: Array<{ x: number; y: number }> = [];
@@ -1301,6 +1314,29 @@ export class PlusCaster {
       return legal[Math.min(legal.length - 1, Math.floor(this.roll() * legal.length))] ?? best;
     }
     return best;
+  }
+
+  /**
+   * Force of Nature's aim, at this difficulty.
+   *
+   * The search itself is shared with the classic caster (`treeSpots` in ../casting.ts) because
+   * the ability's shape is the same for both — it is a treeline or it is nothing. What belongs
+   * to Computer+ is the two dials it puts on top: the QUORUM (an easy computer presses it on a
+   * single trunk, a better one wants a clump — but never more than the rank can actually fell,
+   * `DataA` 2/3/4, or a level-1 Keeper would be held to a bar its own ability cannot reach),
+   * and the misclick every other spot in this file can make.
+   */
+  private treeSpot(
+    u: SimUnit, code: string, lvl: AbilityLevel, foes: SimUnit[], quorum: number,
+  ): { x: number; y: number } | null {
+    // `DataA` "Trees Consumed" — how many Treants this rank raises.
+    const fells = Math.max(1, Math.round(lvl.data[0] || 2));
+    const legal = treeSpots(this.view, u, code, lvl, foes, Math.min(fells, quorum));
+    if (!legal.length) return null;
+    if (legal.length > 1 && this.mistake()) {
+      return legal[Math.min(legal.length - 1, Math.floor(this.roll() * legal.length))] ?? legal[0];
+    }
+    return legal[0];
   }
 
   /** Who a circle centred on (x, y) would catch, and what they are worth. */
