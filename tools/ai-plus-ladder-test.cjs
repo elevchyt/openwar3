@@ -37,6 +37,7 @@ writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { buildPlan, harvestPlan } = require(join(REPO, ".sim-build", "src", "ai", "plus", "plan.js"));
 const { PLUS_RACES } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
+const { TOWN_COUNT_EQUIVALENTS } = require(join(REPO, ".sim-build", "src", "ai", "ids.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -59,6 +60,7 @@ function recorder(table, strategy, profile, opts = {}) {
   const build = [];
   const harvest = [];
   const count = (id) => have.get(id) ?? 0;
+  const folded = (id, self) => self + (TOWN_COUNT_EQUIVALENTS[id] ?? []).reduce((n, o) => n + count(o), 0);
   const ai = {
     heroId: (strategy.heroes ?? table.heroes)[0],
     heroId2: (strategy.heroes ?? table.heroes)[1],
@@ -69,7 +71,7 @@ function recorder(table, strategy, profile, opts = {}) {
     setBuildUpgr: (level, item) => build.push({ kind: "upgrade", qty: level, item }),
     setBuildExpa: (qty, item) => build.push({ kind: "expand", qty, item }),
     secondaryTown: (town, qty, item) => { if (qty > 0) build.push({ kind: "unit", qty, item, town }) },
-    basicExpansion: (go, hall) => { if (go) ai.setBuildExpa(count(hall) + 1, hall) },
+    basicExpansion: (go, hall) => { if (go) ai.setBuildExpa(ai.townCount(hall) + 1, hall) },
     // Faithful to `AiPlayer.meleeTownHall`, because WHERE this row lands is now under test: a
     // hall on a town of ours that has a mine and no hall is the razed expansion of the raid
     // fixture below, and it is a row that halts the ladder at a hall's price.
@@ -78,10 +80,17 @@ function recorder(table, strategy, profile, opts = {}) {
     },
     guardSecondary: () => {},
     buildFactory: (item) => ai.setBuildUnit(1, item),
-    count, countDone: count, townCountDone: count, townCountTotal: () => opts.towns ?? 1,
+    count, countDone: count, townCountTotal: () => opts.towns ?? 1,
+    // `TownCount` FOLDS a type's upgraded forms into it and the raw counts do not — a Keep is a
+    // Town Hall, a Spirit Tower is a Ziggurat (`TOWN_COUNT_EQUIVALENTS`, `AiPlayer.townCountEx`).
+    // The distinction is not decoration: `startUnit` compares a row's quantity against the
+    // FOLDED count, so a relative row that counted the raw one asks for less than the loop
+    // thinks it already has and is satisfied for ever. See the supply fixture below.
+    townCount: (id) => folded(id, count(id)),
+    townCountDone: (id) => folded(id, count(id)),
     // Per TOWN, because that is the only shape in which "this mine is haunted and that one is
     // not" can be said — see the undead's `mineBuildings` rows below.
-    townCountTown: (id, town) => opts.perTown?.[town]?.[id] ?? count(id),
+    townCountTown: (id, town) => folded(id, opts.perTown?.[town]?.[id] ?? count(id)),
     // …and the same question asked of what is FINISHED, which is what `harvestPlan` puts a
     // crew on: a haunt still going up is a mine nobody can kneel at (plan.ts `mineWorkable`).
     countAt: (id, town) => opts.perTown?.[town]?.[id] ?? count(id),
@@ -183,6 +192,33 @@ console.log("\n--- the undead's expansion is the MINE ---");
 for (const [race, table] of Object.entries(PLUS_RACES)) {
   if (race === "undead") continue;
   check(`${race} builds nothing onto a mine`, table.mineBuilding, undefined);
+}
+
+// --- the supply row counts what the LOOP counts -------------------------------------------
+//
+// A relative row ("one more than I have") is only relative to the same number `startUnit` will
+// compare it against, and `startUnit` compares against `TownCount` — the id with its UPGRADED
+// forms folded in. One race's supply building upgrades, and it is the one whose supply building
+// is also its TOWER: a Ziggurat becomes a **Spirit Tower** (`PlusRaceTable.tower` = `uzg1`) and
+// goes on making its ten food. Asked of the plain Ziggurat alone, the row said "I have none,
+// give me one"; `startUnit` folded the Spirit Towers back in, answered "you have three", and the
+// undead never built another supply building for the rest of the match. A RAID is what brings it
+// on, because `towers` fires the moment a town is threatened.
+console.log("\n--- the supply row counts what the loop counts ---");
+for (const [race, table] of Object.entries(PLUS_RACES)) {
+  // Every supply building this race owns has been upgraded into its tower form (which is a
+  // no-op for the three races whose tower is a separate building — they still hold at three).
+  const upgraded = TOWN_COUNT_EQUIVALENTS[table.farm]?.[0] ?? table.farm;
+  const r = recorder(table, table.strategies[0], PLUS_NORMAL, {
+    standing: { [table.halls[0]]: 1, [upgraded]: 3 },
+    foodUsed: 40, foodCap: 40, foodMade: { [table.farm]: 10 },
+  });
+  buildPlan(r.ctx);
+  const row = r.build.find((x) => x.item === table.farm);
+  check(`${race} asks for supply when it is food-blocked`, !!row, true);
+  // The row has to out-ask what the loop already sees, or `startUnit` answers it for free.
+  check(`${race} asks for MORE than TownCount already sees`,
+    (row?.qty ?? 0) > r.ai.townCount(table.farm), true);
 }
 
 // --- the crews are the top of the ladder ------------------------------------------------
@@ -333,11 +369,14 @@ function runEconomy() {
   /** `MELEE_STARTING_GOLD_V1` / `MELEE_STARTING_LUMBER_V1`. */
   const START_GOLD = 500;
   const START_LUMBER = 150;
+  /** Seconds a razed building has to be back under way in. Not a tuning number — the fixture's
+   *  own worst case is about half of it — but a bound that fails if a row stops being read. */
+  const REBUILD_BY = 300;
   /** The computer creeps and skirmishes, so the army is not a monotonic thing. */
   const ATTRITION_EVERY = 90;
   const ATTRITION_SHARE = 0.25;
 
-  function run(race, strategyId, profile, seconds) {
+  function run(race, strategyId, profile, seconds, opts = {}) {
     const table = PLUS_RACES[race];
     const strategy = table.strategies.find((s) => s.id === strategyId);
     const S = {
@@ -527,6 +566,12 @@ function runEconomy() {
     const DT = 0.25;
     let nextPass = 0;
     let nextKill = ATTRITION_EVERY;
+    // THE RAID: at `raze.at`, every building of these types is gone. `back` then records how
+    // long each took to be ORDERED again (a building under construction counts — the decision
+    // is what is under test, not the build time).
+    let razeDue = opts.raze ? opts.raze.at : Infinity;
+    let razedAt = 0;
+    const back = {};
     while (S.t < seconds) {
       const workers = alive(table.worker);
       const miners = Math.min(MINE_CREW * S.mines, workers);
@@ -543,6 +588,17 @@ function runEconomy() {
           else b.type = b.job.id;
           b.job = null;
         }
+      }
+      if (S.t >= razeDue) {
+        razeDue = Infinity;
+        razedAt = S.t;
+        for (const type of opts.raze.types) {
+          S.bldgs = S.bldgs.filter((b) => b.type !== type);
+          back[type] = Infinity;
+        }
+      }
+      for (const type of Object.keys(back)) {
+        if (back[type] === Infinity && countRaw(type) > 0) back[type] = Math.round(S.t - razedAt);
       }
       if (S.t >= nextKill) {
         nextKill = S.t + ATTRITION_EVERY;
@@ -569,7 +625,33 @@ function runEconomy() {
       lumber: Math.round(S.lumber), workers: alive(table.worker),
       producers: of(table.barracks).length,
       tierHaltShare: S.tierHaltsEarly / Math.max(1, S.passesEarly),
+      back,
+      foodCap: ai.foodCap(), foodUsed: ai.foodUsed(),
     };
+  }
+
+  // --- and the same run with the base RAZED halfway through -----------------------------
+  //
+  // "Check that the AI actually rebuilds its farms/supply, army buildings and shop when they
+  // get destroyed." Every one of those rows is an ABSOLUTE ask — `setBuildUnit(1, barracks)`,
+  // `setBuildUnit(1, shop)`, one support building of each kind — so a razed building makes its
+  // row short again on the next pass and nothing else is needed to notice. What this pins is
+  // that the rows are still READ once the base is a ruin: they sit at different depths in the
+  // ladder, and a rebuild is exactly when several expensive rows come due at once.
+  //
+  // The supply row is the one that is not absolute (it is "one more than I have", because how
+  // much supply a player wants depends on the army), and it is therefore the one that can go
+  // wrong quietly — see the Spirit Tower fixture in part one.
+  console.log("\n--- a razed base is rebuilt ---");
+  for (const [race, table] of Object.entries(PLUS_RACES)) {
+    const types = [table.farm, table.barracks, table.shop, table.altar, table.support[0].build];
+    const r = run(race, table.strategies[0].id, PLUS_NORMAL, 900, { raze: { at: 300, types } });
+    const worst = Math.max(...types.map((t) => r.back[t]));
+    check(`${race} rebuilds every razed building`, types.every((t) => r.back[t] < REBUILD_BY), true);
+    // …and is not left food-blocked by the farms it lost.
+    check(`${race} is not left food-blocked`, r.foodUsed < r.foodCap, true);
+    console.log(`      ${race.padEnd(9)} slowest ${String(worst).padStart(3)}s `
+      + types.map((t) => `${t}=${r.back[t]}s`).join(" "));
   }
 
   console.log("\n--- ten minutes of build ladder ---");

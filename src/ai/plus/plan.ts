@@ -520,6 +520,16 @@ function lumberUnits(c: PlusCtx): void {
  *    until the cap moves, so the gold a second building reserves is gold that had nothing else
  *    to buy. Below the cap it is still one at a time, which is what keeps this from carpeting
  *    the base.
+ *
+ * **`townCountDone`, never `countDone`** — the row is RELATIVE ("one more than I have"), so it
+ * has to count what `startUnit` will count, and what `startUnit` counts is `TownCount`: the id
+ * WITH its upgraded forms folded in (`TOWN_COUNT_EQUIVALENTS`). One race's supply building
+ * upgrades, and it is the one whose supply building is also its TOWER — a Ziggurat becomes a
+ * Spirit Tower (`towers`, `PlusRaceTable.tower` = `uzg1`) and goes on making its ten food. Asked
+ * of the plain Ziggurat alone the row said "I have none, give me one", `startUnit` folded the
+ * three Spirit Towers back in and answered "you have three", and the undead never built another
+ * supply building for the rest of the match — a food block that a RAID brings on, since `towers`
+ * fires the moment a town is threatened.
  */
 function supply(c: PlusCtx): void {
   const { ai, table } = c;
@@ -527,7 +537,7 @@ function supply(c: PlusCtx): void {
   const cap = ai.foodCap();
   const headroom = Math.max(1, ai.foodMade(table.farm));
   if (used + headroom < cap) return;
-  ai.setBuildUnit(ai.countDone(table.farm) + (used >= cap ? 2 : 1), table.farm);
+  ai.setBuildUnit(ai.townCountDone(table.farm) + (used >= cap ? 2 : 1), table.farm);
 }
 
 /**

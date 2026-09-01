@@ -1155,6 +1155,31 @@ Both numbers are now asked of the building itself:
   cap moves, so the gold a second building reserves is gold that had nothing else to buy. Below
   the cap it is still one at a time, which is what keeps the row from carpeting the base.
 
+…and a **third** number was wrong in a way only one race could see. The row is *relative* ("one
+more than I have"), so it has to count what `startUnit` will count — and what `startUnit` counts
+is **`TownCount`**, the id with its **upgraded forms folded in** (`TOWN_COUNT_EQUIVALENTS`). One
+race's supply building upgrades, and it is the one whose supply building is also its **tower**: a
+Ziggurat becomes a **Spirit Tower** (`PlusRaceTable.tower` = `uzg1`) and goes on making its ten
+food. Asked of the plain Ziggurat alone, the row said *"I have none, give me one"*; `startUnit`
+folded the Spirit Towers back in, answered *"you have three"*, and **the undead never built
+another supply building for the rest of the match**. A raid is what brings it on, because
+`towers` fires the moment a town is threatened — a Normal computer turns two Ziggurats per town
+into Spirit Towers, an Insane one four, and each of those was a supply building the AI would
+never replace. `supply` now asks `townCountDone`, so both sides of the comparison speak the same
+language.
+
+### Razed buildings: what makes them come back
+
+Nothing, and that is the design. The farm/supply row is the only one of them that is relative;
+the **altar, the barracks, the shop, the support buildings and the towers are all absolute asks**
+(`setBuildUnit(1, …)`, `guardSecondary(t, n, …)`), re-emitted from scratch on every pass by a
+plan that is rebuilt from the world each time. A razed building simply makes its row short again
+on the very next pass, and the ladder buys it back in ladder order as the gold arrives — which is
+also why nothing here needs to notice a *death*. `ai-plus-ladder-test.cjs` razes each of those
+five types at the five-minute mark of the headless economy run, for every race, and pins that all
+of them are back under way (worst case ≈ 150 s, a Blacksmith behind a rebuilt Barracks) and that
+the player is not left food-blocked.
+
 ### A build order names the army it INTENDS; the opening soldier is derived
 
 A strategy is a weighted unit mix, and a mix is a statement about the army this build wants to

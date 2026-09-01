@@ -316,7 +316,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   than the Human's: the SUPPLY row keeps one supply BUILDING's worth of food in hand and not a
   flat six (a Moon Well is 180/40, fifty seconds and ten food against a Farm's 80/20, thirty-five
   and six — six food of warning is a third of a well's build time, which is the night elf food
-  block), and the UNDEAD's expansion is the HAUNTED GOLD MINE (`expand` founds it with
+  block), and it counts that supply with **`townCountDone`, never `countDone`**: `startUnit`
+  compares a row against the FOLDED count, and the undead's Ziggurat upgrades into its own TOWER
+  (a Spirit Tower still makes ten food), so the plain-Ziggurat reading left a raided undead unable
+  to build supply ever again. The UNDEAD's expansion is the HAUNTED GOLD MINE (`expand` founds it with
   `table.mineBuilding`, undead.ai's own `basicExpansion(…, UNDEAD_MINE)`), whose 210 lumber is the
   most of any undead building — so `mineBuildings` sits ABOVE the hall rows, where the loop's own
   halt protects the saving, or the 225-gold no-lumber Necropolis is bought first every pass and
