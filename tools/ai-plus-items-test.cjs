@@ -273,7 +273,7 @@ function pressed(units, profile, ctx, opts = {}) {
   return orders.find((c) => c.c === "useitem") ?? null;
 }
 
-const CTX = { home: { x: 0, y: 0 }, losing: false, mayShop: false, portalWorthIt: true };
+const CTX = { home: { x: 0, y: 0 }, losing: false, mayShop: false, portalWorthIt: true, creeping: false };
 const AWAY = { ...CTX, home: { x: 9000, y: 9000 } }; // the fight is far from home
 const enemy = (o = {}) => unit({ owner: 1, ...o });
 const itemOf = (cmd) => (cmd ? cmd.slot : null);
@@ -325,14 +325,30 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
   // a few seconds of walking and is then not in the belt for the fight that decides the game.
   // A HEALTHY hero on a lost creep run walks.
   const h = belt(hero({ hp: 900, x: 4000, y: 4000 }), "phea", "pnvl", "stwp");
-  const vsCreeps = { ...AWAY, losing: true, portalWorthIt: false };
+  const vsCreeps = { ...AWAY, losing: true, portalWorthIt: false, creeping: true };
   check("a lost CREEP fight: the healthy hero walks home rather than scrolling",
     pressed([h, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, vsCreeps), null);
-  // …and the hero's OWN skin is still unconditional: a hero about to die is a hero about to
-  // die, and a creep camp is not a reason to lose one.
-  const dying = belt(hero({ hp: 200, x: 4000, y: 4000 }), "phea", "pnvl", "stwp");
-  check("…but a DYING hero scrolls out of a creep camp all the same",
+  // …AND NEITHER DOES A HURT ONE. The hero's own bar against creeps is `LAST_RESORT_HP` and
+  // nothing above it: at 20 % it steps out of the camp instead (`pullBar`, plus/index.ts, which
+  // walks a hero out of a creep fight at the bar the scroll used to fire at), and a camp that
+  // is actually winning is walked away from.
+  const hurt = belt(hero({ hp: 200, x: 4000, y: 4000 }), "phea", "pnvl", "stwp");
+  check("…nor does a hurt one — it walks out of the camp rather than spending the scroll",
+    itemOf(pressed([hurt, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, vsCreeps)), 1); // the potion
+  // …and the LAST RESORT, which is the one thing that still spends it there: below 8 % the walk
+  // out is not going to finish, and 320 gold is cheaper than a level-6 hero.
+  const dying = belt(hero({ hp: 70, x: 4000, y: 4000 }), "phea", "pnvl", "stwp");
+  check("…but at 7 % it scrolls out of the camp all the same",
     itemOf(pressed([dying, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, vsCreeps)), 2);
+}
+{
+  // The same two bars with NO retreat ordered: `creeping` is a question about the fight the
+  // hero is standing in, not about a walk home somebody has already decided on.
+  const inCamp = { ...AWAY, creeping: true, portalWorthIt: false };
+  const h = belt(hero({ hp: 390, x: 4000, y: 4000 }), "stwp");
+  check("mid-camp at 39 %, the scroll stays in the belt", pressed([h, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, inCamp), null);
+  const dying = belt(hero({ hp: 70, x: 4000, y: 4000 }), "stwp");
+  check("…and comes out at 7 %", itemOf(pressed([dying, enemy({ x: 4200, y: 4000 })], PLUS_INSANE, inCamp)), 0);
 }
 {
   // THE HERO'S OWN SKIN, not just the army's. A hero about to die in a fight the army has not

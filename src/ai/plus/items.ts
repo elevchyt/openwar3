@@ -381,6 +381,25 @@ const PANIC_HP = 0.3;
  * leaving is still cheap.
  */
 const ESCAPE_HP = 0.4;
+/**
+ * …and the bar the scroll comes out at when what the hero is fighting is a CREEP CAMP: the
+ * hero's LAST RESORT, and nothing above it.
+ *
+ * Reported: the AI "should never use its Scroll of Town Portal while fighting a creep camp".
+ * The reason is the one `ItemCtx.portalWorthIt` already states for the army's half of this rung
+ * — creeps do not chase, do not follow you home and will still be standing there in two minutes
+ * — and a hero being worn down in one has two cheaper answers before the scroll: it is walked
+ * out of the camp the way any other hurt unit is (`pullPass` in plus/index.ts, which gives a
+ * hero in a creep fight the higher bar this used to be), and if the fight itself has gone the
+ * party breaks off and walks home (`fightLost` → `retreat(b, "creeps")`). A scroll spent on a
+ * camp is a scroll not in the belt for the fight that decides the game.
+ *
+ * What survives is the case neither of those answers reaches: a hero already so low that the
+ * walk out is not going to finish. 8 % is the developer's own number, and it is a floor rather
+ * than a tactic — at that share of its life a hero is one blow from dead whatever it is
+ * fighting, and 320 gold is cheaper than a level-6 Blademaster.
+ */
+const LAST_RESORT_HP = 0.08;
 /** …and at which it drinks. Higher, because a potion heals over time and a hero that waits for
  *  `PANIC_HP` to drink one has usually waited too long. */
 const HURT_HP = 0.55;
@@ -558,11 +577,20 @@ export interface ItemCtx {
    * walks away from one usually does not get home; that is exactly the trip the item is for
    * (docs/items.md).
    *
-   * It gates only the `escape` rung's ARMY half. A hero that is personally about to die still
-   * scrolls out whatever it is fighting — a dead hero is a dead hero, and the camp is not a
-   * reason to lose one.
+   * It gates the `escape` rung's ARMY half. The hero's OWN half is gated by `creeping`, which
+   * is the same judgement asked of the fight the hero is standing in rather than of the retreat
+   * the army has already decided on.
    */
   portalWorthIt: boolean;
+  /**
+   * Is the fight this party is in a CREEP CAMP's?
+   *
+   * Distinct from `portalWorthIt`, which is a question about a retreat that has already been
+   * ordered and is therefore false in every fight nobody has given up on yet. This one is true
+   * from the moment the party sets off at a camp, and it is what holds the hero's own Scroll of
+   * Town Portal back to `LAST_RESORT_HP` — see there for why a camp is not worth one.
+   */
+  creeping: boolean;
   /** May a hero walk off to a shop right now? False while there is a wave in the field, so the
    *  trip never pulls the captain out of a fight. */
   mayShop: boolean;
@@ -890,9 +918,13 @@ export class PlusItems {
       case "escape": {
         if (!engaged && !ctx.losing) return false;
         if (Math.hypot(u.x - ctx.home.x, u.y - ctx.home.y) <= HOME) return false;
-        // The hero's OWN skin is unconditional — see `portalWorthIt`. The ARMY's retreat only
-        // spends the scroll on a retreat worth spending it on, which is a player's army and
-        // never a creep camp.
+        // AGAINST CREEPS the scroll is the LAST RESORT and nothing else — `LAST_RESORT_HP`, and
+        // neither half of the rung below it. The hero steps back out of the camp instead
+        // (`pullPass`), and a camp that is actually winning is walked away from.
+        if (ctx.creeping) return hp < LAST_RESORT_HP;
+        // The hero's OWN skin is otherwise unconditional — see `portalWorthIt`. The ARMY's
+        // retreat only spends the scroll on a retreat worth spending it on, which is a player's
+        // army and never a creep camp.
         if (hp < ESCAPE_HP) return true;
         return ctx.losing && ctx.portalWorthIt;
       }

@@ -211,8 +211,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `pullOutHp` (25 %) and standing in a fight is walked `PULL_BACK_DIST` behind the line and back
   in later (`pullPass`), on a PER-UNIT cooldown — without that timer it see-saws in and out of
   the battle instead of fighting in it — and a withdrawn CAPTAIN stops anchoring cohesion, or one
-  hurt hero drags the whole army home. The Scroll of Town Portal is spent leaving a PLAYER and never a creep
-  camp. Its army also moves as ONE BODY anchored on the CAPTAIN — the first hero trained, then
+  hurt hero drags the whole army home. The Scroll of Town Portal is spent leaving a PLAYER; against
+  a CREEP CAMP it is a LAST RESORT at 8 % (`LAST_RESORT_HP`) and nothing above it, because the
+  hero has two cheaper answers there — the same walk out of the fight every other unit gets, at
+  the higher bar the scroll used to fire at (`pullBar`), and `fightLost` taking the party home.
+  Its army also moves as ONE BODY anchored on the CAPTAIN — the first hero trained, then
   the second — and nothing leaves the muster point until four fifths of it is there, with a
   deadline, because a gate with no deadline locked the hero at home. A STRANDED unit is that
   same lesson three more times, and each is an ORDER of tests rather than a number: "it is LOST"

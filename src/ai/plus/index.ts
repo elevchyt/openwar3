@@ -26,7 +26,7 @@ import {
   type SwitchReason,
 } from "./teamchat";
 import { plusProfile, type PlusProfile } from "./profile";
-import { aimCtx, heroKillable, isSiege, isTower, killValue, razeValue } from "./targeting";
+import { aimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeValue } from "./targeting";
 import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from "./races";
 import { CAMP_GREEN_MAX, armyPower, maxCampLevel, type CreepForce, type Fighter } from "./power";
 
@@ -1300,6 +1300,25 @@ const PULL_BACK_AGAIN = 45;
 const PULL_BACK_ARRIVE = 200;
 
 /**
+ * …and the same two clocks for a HERO walked out of a CREEP CAMP, which is a different
+ * withdrawal (`pullBar`).
+ *
+ * Ours, like the rest of this block. A soldier's ten seconds is a step out of range while the
+ * fight goes on winning without it; the hero is the unit the creep run EXISTS for, and the
+ * whole reason it is standing behind the line is that the alternative used to be spending a
+ * Scroll of Town Portal on a camp. Twice as long out, so the walk back is not into the same
+ * blows it left.
+ *
+ * The see-saw guard is deliberately the SAME number rather than `PULL_BACK_AGAIN`'s
+ * three-quarters of a minute: a hero that rejoins a camp still under `HERO_KILL_HP` has to be
+ * able to step straight back out, and a forty-five-second lockout is the hero dying in the
+ * camp holding an unusable scroll — the exact failure this pass replaced. It is not a see-saw,
+ * because coming back at all is what the hold is measuring: the fight it walks into is either
+ * over by then or one `fightLost` pass away from a walk home.
+ */
+const HERO_PULL_HOLD = 20;
+
+/**
  * How long a hero that WIND WALKED out of a fight stays out of it (`escapePass`).
  *
  * Much longer than `PULL_BACK_HOLD`, because the two are different withdrawals: a pull-back is a
@@ -2030,6 +2049,11 @@ export class ComputerPlusAi {
       // WHAT it is running from (see `ItemCtx.portalWorthIt` and `Brain.retreatFrom`). Creeps
       // do not chase; an army does.
       portalWorthIt: b.retreatFrom === "player",
+      // The same judgement asked of the fight the hero is STANDING in rather than of a retreat
+      // already ordered, which is what holds the hero's own scroll back in a creep camp
+      // (`ItemCtx.creeping`). Both flags are read, because `creeping` is cleared by `endWave`
+      // while a party walking home from a camp is still running from creeps.
+      creeping: b.creeping || b.retreatFrom === "creeps",
       // MASSING AT HOME only. "Defending" is the base under attack, which is the one moment a
       // hero walking off to buy a potion is worse than having no potion at all — and a party
       // mustering in the FIELD between two creep camps (`muster`) is not at home either: the
@@ -4524,7 +4548,10 @@ export class ComputerPlusAi {
       // `recruit` keeps them out of the squad anyway), and a unit already being healed is
       // standing still on purpose — walking it somewhere is what `recovering` exists to stop.
       if (u.isPeon || isCopy(u) || this.recovering(u)) continue;
-      if (!pullDue(entry, u.hp / Math.max(1, u.maxHp), b.profile.pullOutHp, b.clock)) continue;
+      // THE HERO IN A CAMP is the one unit with a bar and a pair of clocks of its own — see
+      // `pullBar` for both, and `LAST_RESORT_HP` (plus/items.ts) for what they replace.
+      const heroOut = u.isHero && b.creeping;
+      if (!pullDue(entry, u.hp / Math.max(1, u.maxHp), this.pullBar(b, u), b.clock)) continue;
       const foe = this.foeBeside(b, u, COHESION_COMBAT);
       if (!foe) continue; // not in a fight — there is nothing to walk out of
       // …onto ground it can stand on. The spot is a projection off the anchor and lands wherever
@@ -4532,9 +4559,40 @@ export class ComputerPlusAi {
       // inside the forest — and a move at a blocked point is a best-effort path that ends with
       // the unit's nose against the treeline (`standSpot`).
       const spot = this.standSpot(u, pullBackSpot(u, foe, anchor));
-      b.pulls.set(u.id, { x: spot.x, y: spot.y, until: b.clock + PULL_BACK_HOLD, next: b.clock + PULL_BACK_AGAIN });
+      const hold = heroOut ? HERO_PULL_HOLD : PULL_BACK_HOLD;
+      b.pulls.set(u.id, {
+        x: spot.x,
+        y: spot.y,
+        until: b.clock + hold,
+        next: b.clock + (heroOut ? HERO_PULL_HOLD : PULL_BACK_AGAIN),
+      });
       b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
     }
+  }
+
+  /**
+   * The share of its life at which THIS unit comes out of the line.
+   *
+   * A soldier's is the difficulty's (`PlusProfile.pullOutHp`, 0 on Easy — which is why nothing
+   * here runs for it at all). A HERO in a creep camp comes out earlier, at `HERO_KILL_HP`: that
+   * is the line at which this AI's own targeting starts treating a hero as a kill, and it is
+   * exactly the line its Scroll of Town Portal used to come out at before the scroll was held
+   * back to a last resort against creeps (`LAST_RESORT_HP`, plus/items.ts). The withdrawal is
+   * what REPLACES the scroll there, so it has to happen where the scroll happened — at a
+   * soldier's quarter the hero would be walking out of the camp with nothing left to walk with.
+   *
+   * It also carries its own hold and see-saw clock (`HERO_PULL_HOLD`), for the same reason: a
+   * hero walked out of a camp and marched back into it ten seconds later at the same share of
+   * its life has not been saved from anything.
+   *
+   * Only against creeps. Against a PLAYER the scroll is still the right answer at that bar and
+   * fires on the same pass, and pulling the hero back a screen first would walk it out of
+   * `LOOK` of anything — which is the one way to make the belt's `engaged` test miss the
+   * retreat it exists for.
+   */
+  private pullBar(b: Brain, u: SimUnit): number {
+    if (!u.isHero || !b.creeping) return b.profile.pullOutHp;
+    return Math.max(b.profile.pullOutHp, HERO_KILL_HP);
   }
 
   /**

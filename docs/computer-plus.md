@@ -480,8 +480,32 @@ about an opponent. The same rule serves both, which is why `fightLost` is not `c
 false when what the army is running from is a creep camp and true when it is a player: creeps do
 not chase, do not follow you home, and will still be standing there in two minutes, so a scroll
 spent to leave one buys a few seconds of walking and is then not in the belt for the fight that
-decides the game. The hero's **own skin** is exempt — a hero about to die scrolls out whatever it
-is fighting, and a camp is not a reason to lose one.
+decides the game.
+
+**The hero's own skin is not an exception to that — it has its own, much lower bar.** Reported:
+the AI *"should never use its Scroll of Town Portal while fighting a creep camp"*, and it used
+to, because the hero's half of the `escape` rung fired at `ESCAPE_HP` (40 %) whatever it was
+fighting. A hero being worn down in a camp has two cheaper answers before the scroll, and both
+already existed:
+
+* it is **walked out of the camp** the way any other hurt unit is (`pullPass`) — and in a camp
+  the hero gets the bar the scroll used to fire at (`pullBar` → `HERO_KILL_HP`) rather than a
+  soldier's quarter, because the withdrawal is what *replaces* the scroll there;
+* and if the fight itself has gone, `fightLost` breaks the party off and it **walks home**.
+
+What is left is the case neither reaches: a hero already so low that the walk out is not going to
+finish. That is `LAST_RESORT_HP` — **8 %**, a floor rather than a tactic — and it is the only
+thing that still spends a scroll on creeps. The flag that says so is `ItemCtx.creeping`, and it
+is deliberately *not* `portalWorthIt`: that one is a question about a retreat somebody has already
+ordered, and so is false in every fight nobody has given up on yet, while the hero is standing in
+the camp from the moment the party sets off at it.
+
+A hero pulled out of a camp also carries its own pair of clocks (`HERO_PULL_HOLD`, 20 s for both
+the hold and the see-saw guard). Twice a soldier's ten seconds out, so the walk back is not into
+the same blows it left; and the guard is the same number rather than `PULL_BACK_AGAIN`'s
+three-quarters of a minute, because a hero that rejoins still under the bar has to be able to step
+straight back out — a forty-five-second lockout is the hero dying in the camp holding an unusable
+scroll, which is the failure this replaced.
 
 **Nearest camps first.** `creepTarget` steps its search radius out (3000 → 6000 → the whole map)
 rather than sweeping once, so a camp beside the party is always taken before one across the map:
@@ -2148,8 +2172,9 @@ reached about a smaller group, and it is why a Computer+ hero does not die to a 
 have walked out of. Never from the doorstep of its own base, where it would be spent to travel no
 distance.
 
-It leaves at `ESCAPE_HP` (40 %) rather than at the panic line, and the reason is easy to get
-backwards: once the scroll is *pressed* the hero is invulnerable for the whole five seconds and
+It leaves at `ESCAPE_HP` (40 %) **against a player** — against creeps it leaves at
+`LAST_RESORT_HP` (8 %) and not a point above it, for which see *the fight that is lost* above —
+and 40 % rather than the panic line, for a reason that is easy to get backwards: once the scroll is *pressed* the hero is invulnerable for the whole five seconds and
 **cannot die mid-channel**. The only window in which a hero holding one can be killed is the
 window *before* it presses, and the width of that window is the AI's own reaction — the belt is
 walked once per `castPeriod`, a whole second on Normal. A hero at 30 % with an army on it does not
