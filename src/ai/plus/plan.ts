@@ -1,6 +1,6 @@
 import type { UnitDef } from "../../data/units";
 import type { AiPlayer } from "../aiPlayer";
-import { counterScore, type EnemyRead } from "./counter";
+import { AIR_HEAVY, counterScore, type EnemyRead } from "./counter";
 import type { PlusProfile } from "./profile";
 import type { PlusRaceTable, PlusStrategy } from "./races";
 
@@ -344,6 +344,17 @@ export function buildPlan(c: PlusCtx): void {
   // a row that is never reached at all.
   shop(c);
   army(c, coreArmy(c)); // enough not to die to the first raid, cheap enough not to block tech
+  // THE RACE'S OWN SMITH — the Blacksmith, the Forge, the Graveyard, the Hunter's Hall — ABOVE
+  // the tier-up, which is where this file's own header always said it belonged ("a Forge is two
+  // hundred gold and makes the army you already have better; a Stronghold is three hundred and
+  // fifteen and blocks everything under it while the AI saves"). It was stated there and
+  // implemented one screen lower, inside `techBuildings`, which sits below `tierUpDue` — so from
+  // `TIER2_CLOCK` onward the smith was in fact bought AFTER the hall. Measured on the razed-base
+  // fixture (tools/ai-plus-ladder-test.cjs), where the two orders are told apart: a razed
+  // Graveyard — the building the undead's fiends, its Gargoyles and every one of its armour and
+  // attack upgrades come out of — was queued behind a Tomb of Relics and a Halls of the Dead and
+  // took over five minutes to come back.
+  supportBuildings(c);
   // THE SECOND HERO COMES WITH THE KEEP — see `tierTwoHero`, and note WHERE it is: above the
   // Castle, above the tech buildings and above the upgrades, because at tier 2 that is the order
   // a ladder player spends in. Below the core army, so it can never be the reason there is
@@ -353,6 +364,11 @@ export function buildPlan(c: PlusCtx): void {
   techBuildings(c);
   upgrades(c);
   always(c);
+  // …and the ANSWER TO AIR, which is the only row here the build order did not ask for — see
+  // `antiAir`. Beside `always` because it is the same kind of row: support the plan assumed
+  // (or, here, did not know it would need), above the expansion and below the buildings that
+  // make the army.
+  antiAir(c);
   expand(c);
   extraHeroes(c);
   tierUp(c);
@@ -712,15 +728,73 @@ function army(c: PlusCtx, budget: number): void {
  * bought simply stand in the army.
  */
 export function buildableMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
-  const rows = strategyMix(c);
+  const rows = capCasters(c, strategyMix(c));
   if (rows.length > 0) return rows;
-  const opening = openingUnit(c);
-  if (!opening) return rows;
-  const row = c.table.units[opening];
-  if (!row || row.tier > Math.min(c.profile.techTier, c.tier)) return rows;
-  if (!producerReady(c, row.from, row.needs)) return rows;
-  return [{ unit: opening, weight: 1 }];
+  return fallbackMix(c);
 }
+
+/**
+ * The LAST RESORT: whatever the race's own opening building can still make.
+ *
+ * "If it loses its production buildings for its designated build, it should fall back to tier 1
+ * (barracks / crypt / ancient of war) units as a last resort" — which is the same row that gets
+ * a tier-3 build order out of its opening (see `buildableMix`), asked from the other end. It is
+ * every tier-appropriate unit `table.barracks` can produce RIGHT NOW, so a human whose Arcane
+ * Sanctums have been razed goes back to Footmen and Riflemen rather than to Footmen alone, and
+ * an orc that has lost its Beastiary keeps making Grunts and Head Hunters.
+ *
+ * Derived off the catalogue rather than named, like every other building and upgrade in this
+ * file (rule 2 at the top). `producerReady` is what makes it a last resort and not a second
+ * build order: a razed Barracks leaves this empty too, which is correct — a row for something we
+ * cannot make starves every row below it.
+ */
+function fallbackMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
+  const cap = Math.min(c.profile.techTier, c.tier);
+  const out: Array<{ unit: string; weight: number }> = [];
+  for (const [unit, row] of Object.entries(c.table.units)) {
+    if (row.from !== c.table.barracks || row.tier > cap) continue;
+    if (row.siege || row.air) continue; // an army, not a siege line — see `openingUnit`
+    if (!producerReady(c, row.from, row.needs)) continue;
+    out.push({ unit, weight: 1 });
+  }
+  return out;
+}
+
+/**
+ * …and the SPELLCASTERS held to a share of it.
+ *
+ * The developer's report is the whole of this: "it seems to tunnel-vision a build like Orc going
+ * Shamans, which is ok, but there is no true strategy that has ONLY shamans — usually shamans
+ * are mixed with actual army units". No build order in plus/races.ts asks for that, and it is
+ * still reachable, because the two things that move a weight after the table has spoken can only
+ * push one way: `counterScore` leaves a weaponless caster at a flat 1.0 (the damage table says
+ * nothing about a spell) while it pushes everything with a weapon up or down around it, so a bad
+ * matchup PROMOTES the casters it could not judge — and `MIN_COUNTER_WEIGHT` floors the soldiers
+ * at a fifth while the casters keep their whole share.
+ *
+ * So the cap is a backstop rather than a rebalancing, and `CASTER_SHARE` is set where it does
+ * not argue with a build that MEANS to be caster-heavy: half the army. A double-Arcane-Sanctum
+ * build is genuinely half Priests and Sorceresses and is left exactly where its weights put it;
+ * an army that has become nothing but Shamans is not.
+ *
+ * Applied inside `buildableMix` rather than in `army`, so everything downstream sees the capped
+ * weights — `mainProducer` (which building is worth a second copy) and the ally chat's "switching
+ * to…" line included. And never when the casters are all there IS: with no body in the mix the
+ * cap would ask for nothing at all, which is the empty field the fallback exists to prevent.
+ */
+function capCasters(c: PlusCtx, rows: Array<{ unit: string; weight: number }>): Array<{ unit: string; weight: number }> {
+  let casters = 0;
+  let body = 0;
+  for (const r of rows) (c.table.units[r.unit]?.caster ? (casters += r.weight) : (body += r.weight));
+  if (casters <= 0 || body <= 0) return rows;
+  const allowed = (body * CASTER_SHARE) / (1 - CASTER_SHARE);
+  if (casters <= allowed) return rows;
+  const scale = allowed / casters;
+  return rows.map((r) => (c.table.units[r.unit]?.caster ? { ...r, weight: r.weight * scale } : r));
+}
+
+/** The most of the army that may be spellcasters — see `capCasters`. Ours, not the game's. */
+const CASTER_SHARE = 0.5;
 
 /**
  * The race's OPENING SOLDIER — the Footman, the Grunt, the Archer, the Ghoul.
@@ -761,7 +835,8 @@ export function openingUnit(c: PlusCtx): string | null {
  * player does, and is why this is not a strategy SWITCH.
  */
 function strategyMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
-  const { profile, table, strategy, tier, enemy } = c;
+  const { profile, table, tier, enemy } = c;
+  const strategy = activeStrategy(c);
   const cap = Math.min(profile.techTier, tier);
   const counter = profile.counterWeight > 0 && enemy.seen >= profile.counterSample;
   const out: Array<{ unit: string; weight: number }> = [];
@@ -782,11 +857,36 @@ function strategyMix(c: PlusCtx): Array<{ unit: string; weight: number }> {
  *  collapsed to one type would be countered in turn, and the build order still has a shape. */
 const MIN_COUNTER_WEIGHT = 0.2;
 
+/**
+ * The build this pass actually produces from — the one the seat rolled, or the build that one
+ * GROWS INTO at tier 3 (`PlusStrategy.thenAt3`).
+ *
+ * "Tier 3 Knights, Priests, Mortars, Flying Machines… can be transitioned into from other builds
+ * when tier 3 is reached." A tier-2 rifle build that reaches a Castle is a Knight build, and a
+ * mass-Grunt build that reaches a Fortress is a Tauren one; naming the successor on the build
+ * itself is what keeps that a clause of the BUILD ORDER rather than the mid-game strategy switch
+ * plus/races.ts rejects — nothing here reacts to anything, and a build with no `thenAt3` never
+ * moves at all.
+ *
+ * It is a build order and not a purge: the successor's mix decides what is TRAINED from now on,
+ * and everything the earlier build put on the field goes on standing in the army.
+ *
+ * Read on every pass rather than latched, because the tier itself is: a razed Castle takes the
+ * build back to what its owner can actually produce, which is the same rule every other row here
+ * obeys (rule 1 at the top of the file).
+ */
+function activeStrategy(c: PlusCtx): PlusStrategy {
+  const { strategy } = c;
+  if (!strategy.thenAt3 || c.tier < 3 || c.profile.techTier < 3) return strategy;
+  return c.table.strategies.find((s) => s.id === strategy.thenAt3) ?? strategy;
+}
+
 /** The buildings the strategy's mix implies — every producer it names, and everything those
  *  units need. Derived rather than listed, so a build cannot ask for a unit whose building it
  *  forgot to put up (plus/races.ts explains why that mattered). */
 function mixBuildings(c: PlusCtx): Array<{ build: string; tier: number }> {
-  const { table, strategy } = c;
+  const { table } = c;
+  const strategy = activeStrategy(c);
   const seen = new Map<string, number>();
   // The `always` units drag their own producers up with them, which is how "the undead ALWAYS
   // builds a Slaughterhouse at tier 2" is stated: nowhere. It falls out of wanting the statue,
@@ -855,41 +955,157 @@ function starved(c: PlusCtx): boolean {
 }
 
 /**
- * The buildings: the race's own support first, then whatever the strategy's mix implies.
+ * THE RACE'S OWN SMITH — the Blacksmith, the Forge, the Graveyard, the Hunter's Hall.
  *
- * The support row is the smith every build wants whatever it is making (the Blacksmith, the
- * Forge, the Graveyard, the Hunter's Hall) — without it a Gryphon build would take no armour
- * upgrades at all, since `upgrades` gates on the researching building standing.
+ * The building every build wants whatever it is making: without it a Gryphon build would take no
+ * armour upgrades at all, since `upgrades` gates on the researching building standing, and for
+ * the undead it is also what its Crypt Fiends and its Gargoyles are made of.
+ *
+ * It is its OWN block, above the tier-up, rather than the first half of `techBuildings` — see
+ * `buildPlan` for the five minutes that cost a razed undead base. What is left in
+ * `techBuildings` is the derived half: a building the MIX implies, which waits on army food
+ * scaled by its tier.
+ */
+function supportBuildings(c: PlusCtx): void {
+  for (const build of supportDue(c)) c.ai.setBuildUnit(1, build);
+}
+
+/** Which of the race's support buildings this pass is asking for — the same answer given to
+ *  `supportBuildings`, which emits them, and to `techBuildings`, which must not emit them a
+ *  SECOND time (see the Set there). A row held back by its own food gate is not in it, so the
+ *  mix is still free to ask for the same building on its own terms. */
+function supportDue(c: PlusCtx): string[] {
+  const { profile, table, tier, armyFood } = c;
+  const cap = Math.min(profile.techTier, tier);
+  const stuck = starved(c);
+  return table.support.filter((r) => r.tier <= cap && (armyFood >= r.after || stuck)).map((r) => r.build);
+}
+
+/**
+ * …and the buildings the strategy's MIX implies, plus the copies of them a rich player or the
+ * build order itself asks for.
  *
  * A derived building waits on army food scaled by its TIER, which is the same "don't tech with
  * nothing on the field" rule the support rows state by hand.
  */
 function techBuildings(c: PlusCtx): void {
-  const { ai, profile, table, tier, armyFood } = c;
+  const { ai, profile, tier, armyFood } = c;
   const cap = Math.min(profile.techTier, tier);
   // …unless there is nothing it can train at all, in which case the food gate is the thing
   // KEEPING the field empty and the building under it is the way out — see `starved`.
   const stuck = starved(c);
-  for (const row of table.support) {
-    if (row.tier > cap || (armyFood < row.after && !stuck)) continue;
-    ai.setBuildUnit(1, row.build);
-  }
+  // ONE ROW PER BUILDING, and the race's own smith is already SPOKEN FOR — `supportBuildings`
+  // asked for it higher up the ladder. The two lists overlap constantly, because a support
+  // building is quite often also a `needs` of something in the mix (the undead's Graveyard is
+  // the Crypt Fiend's and the Gargoyle's, the orc's War Mill is the Head Hunter's and the
+  // Kodo's), and a building asked for twice in one pass is not merely untidy: `startUnit`
+  // prices each row separately off the same running budget, so an unsatisfied duplicate
+  // reserves the building's cost twice over and everything below it starves for a payment that
+  // is only ever made once — and `setProduce` can be called twice for it besides.
+  const asked = new Set<string>(supportDue(c));
+  const want = (build: string): void => {
+    if (asked.has(build)) return;
+    asked.add(build);
+    ai.setBuildUnit(1, build);
+  };
   for (const row of mixBuildings(c)) {
     if (row.tier > cap || (armyFood < TECH_AFTER[row.tier - 1] && !stuck)) continue;
-    ai.setBuildUnit(1, row.build);
+    want(row.build);
   }
-  // …and more copies of the building that makes the bulk of the army, once the bank is deeper
-  // than the queue. The one thing that stops a rich computer sitting on 2000 gold — see
-  // `FACTORY_GOLD` for the gate this replaced and why it could never fire.
-  //
-  // `setBuildNext` rather than `setBuildUnit`, like every other growing row in this file: it
-  // asks for one more than is STANDING, so it reserves one Barracks' gold instead of the whole
-  // shortfall and the rows under it keep breathing while the second one goes up.
+  // …and more copies of the buildings that make the army — ONE row per building, however many
+  // reasons there are to want another of it (see `extraCopies`).
+  for (const [build, qty] of extraCopies(c, stuck)) ai.setBuildNext(qty, build);
+}
+
+/**
+ * How many copies of a producer to ask for, and why there are two answers to fold together.
+ *
+ *  · **The BANK.** More copies of the building that makes the bulk of the army, once the bank is
+ *    deeper than the queue — the one thing that stops a rich computer sitting on 2000 gold. The
+ *    gate used to be `armyFood >= 40 && gold > 800`, and the first half is above the army CEILING
+ *    of two of the three difficulties, so it could never fire; see `FACTORY_GOLD`.
+ *  · **The BUILD ORDER.** "Two Arcane Sanctums", "two Ancient of Lores", "two Crypts"
+ *    (`PlusStrategy.factories`) — three of the builds in plus/races.ts are named after their
+ *    second building, because one Sanctum makes one caster at a time and a build whose army IS
+ *    casters arrives at half speed with one of them. Two gates keep that honest: the building
+ *    must be one the MIX ALREADY IMPLIES (rule 2 at the top of the file — a strategy may say
+ *    *how many*, never *which*), and the first copy must be STANDING, so the second is bought
+ *    once the build has come online rather than beside it.
+ *
+ * FOLDED, because the two can name the same building and a building asked for twice in one pass
+ * reserves its price twice over out of the same running budget (see `techBuildings`). The bigger
+ * of the two wins, which is the only reading that can satisfy both.
+ *
+ * `setBuildNext` rather than `setBuildUnit`, like every other growing row in this file: one more
+ * than is STANDING, so it reserves one building's gold instead of the whole shortfall and the
+ * rows under it keep breathing while the next one goes up.
+ */
+function extraCopies(c: PlusCtx, stuck: boolean): Array<[string, number]> {
+  const { ai, profile, tier, armyFood } = c;
+  const want = new Map<string, number>();
+  const ask = (build: string, qty: number): void => {
+    if (qty > 1) want.set(build, Math.max(want.get(build) ?? 0, qty));
+  };
   if (armyFood < profile.armyFood) {
     const main = mainProducer(c);
-    const want = Math.min(FACTORY_MAX, 1 + Math.floor(ai.gold() / FACTORY_GOLD));
-    if (main && want > 1) ai.setBuildNext(want, main);
+    if (main) ask(main, Math.min(FACTORY_MAX, 1 + Math.floor(ai.gold() / FACTORY_GOLD)));
   }
+  const cap = Math.min(profile.techTier, tier);
+  const implied = new Map(mixBuildings(c).map((r) => [r.build, r.tier]));
+  for (const [build, count] of Object.entries(activeStrategy(c).factories ?? {})) {
+    const at = implied.get(build);
+    if (at === undefined || at > cap) continue;
+    if (armyFood < TECH_AFTER[at - 1] && !stuck) continue;
+    if (ai.countDone(build) < 1) continue; // the first one is `techBuildings`'s row, above
+    ask(build, count);
+  }
+  return [...want];
+}
+
+/**
+ * THE ANSWER TO AIR — one producer and a handful of the race's own anti-air unit, bolted onto
+ * whatever build is being played.
+ *
+ * "If they see the enemy getting a lot of air units, the Computer+ AI must transition into 1
+ * workshop and train Flying Machines to counter enemy air — this can be done on top of whatever
+ * is the current strategy (no full commitment to anti-air), and this should be true for other
+ * races' anti-air units."
+ *
+ * It is the counter system's missing half. `strategyMix` re-weights the units a build ALREADY
+ * NAMES against what has been scouted (plus/counter.ts), which is the right answer to "they have
+ * a lot of Footmen" and no answer at all to "they have Gryphons": a Grunt build re-weighted for
+ * air is still a Grunt build, and `AIR_PENALTY` merely tells it that everything it owns is
+ * worthless. So this row adds the one unit the build could not — `PlusRaceTable.antiAir`, the
+ * race's dedicated answer rather than its best flyer — and adds it BOUNDED, four bodies and one
+ * building, because the brief is explicit that this is not a change of army.
+ *
+ * The same three gates the rest of the countering obeys, so it can never be a fog bypass or a
+ * difficulty-free upgrade: only what has been SEEN (`EnemyMemory`), only off a sample this
+ * difficulty believes (`counterSample`), and never at a difficulty that does not counter at all
+ * (`counterWeight` is 0 on Easy). `AIR_HEAVY` is counter.ts's own bar for "the enemy went air",
+ * shared rather than re-stated so the row and the re-weighting can never disagree about it.
+ *
+ * Nothing is asked for that cannot be built (rule 1): the producer goes up first and only then
+ * the unit, and a missing REQUIREMENT is left to the row that already owns it — the human's
+ * Blacksmith is `support`, the orc's Voodoo Lounge is `shop` — rather than asked for twice, since
+ * a duplicated row reserves its gold twice over (`OneBuildLoop`).
+ */
+function antiAir(c: PlusCtx): void {
+  const { ai, profile, table, tier, enemy } = c;
+  const answer = table.antiAir;
+  if (!answer || profile.counterWeight <= 0) return;
+  if (enemy.seen < profile.counterSample || enemy.air < AIR_HEAVY) return;
+  const row = table.units[answer.unit];
+  if (!row || row.tier > Math.min(profile.techTier, tier)) return;
+  for (const need of row.needs ?? []) if (ai.countDone(need) < 1) return;
+  if (ai.countDone(row.from) < 1) {
+    // The one building in the ladder that no build order asked for — unless the mix already
+    // wants it, in which case `techBuildings` has the row and a second one would only reserve
+    // the same gold twice.
+    if (!mixBuildings(c).some((b) => b.build === row.from)) ai.setBuildUnit(1, row.from);
+    return;
+  }
+  ai.setBuildNext(answer.count, answer.unit);
 }
 
 /**

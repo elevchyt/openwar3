@@ -199,7 +199,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   leaves through `EVENT_PLAYER_LEAVE` so Blizzard's own `MeleeTriggerActionPlayerLeft` hands the
   units over instead of the AI demolishing its own base. A race is a TABLE of named builds, one
   rolled per match, and **expanding belongs to the build order** (`PlusStrategy.expandAt`) rather
-  than to the difficulty — a fast expand is a build, not a setting. Countering reads the game's
+  than to the difficulty — a fast expand is a build, not a setting. A build names UNITS and its
+  buildings are derived, with two clauses that go further and no third: `factories` (the second
+  Arcane Sanctum / Ancient of Lore / Crypt a build is NAMED after — how many of a building the
+  mix already implies, never which) and `thenAt3` (the build it GROWS INTO at tier 3, a clause of
+  the rolled build rather than the mid-game switch we reject). SPELLCASTERS are a share and not
+  an army (`UnitRow.caster`, `CASTER_SHARE` = half): the counter re-weighting cannot score a
+  spell, so it only ever pushes the units AROUND the casters and a bad matchup quietly promotes
+  them. The one row that buys a producer the build never asked for is `antiAir` — one building
+  and four of the race's DEDICATED anti-air unit, on top of the mix, gated on the same
+  seen/sample/difficulty switches as the rest of the countering and on counter.ts's own
+  `AIR_HEAVY`. Countering reads the game's
   own `DAMAGE_TABLE` against what the AI has SCOUTED, so never add a hand-written counter chart.
   CREEPING is PRICED, never measured in food ([`plus/power.ts`](src/ai/plus/power.ts)): a camp's
   combined level already says how hard it is on the game's own green/orange/red scale, and a

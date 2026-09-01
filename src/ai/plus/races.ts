@@ -22,7 +22,8 @@ import {
   TAUREN_CHIEF, THORNS_AURA, THORNY_SHIELD, THUNDER_BOLT, THUNDER_CLAP, TOTEM, TOWN_HALL,
   TRANQUILITY, TREE_AGES, TREE_ETERNITY, TREE_LIFE, TRUESHOT, UNHOLY_AURA, UPG_ABOLISH,
   UPG_ARMOR, UPG_BANSHEE, UPG_BOWS, UPG_BREEDING, UPG_CHIM_ACID, UPG_CLOUD, UPG_CR_ARMOR,
-  UPG_CR_ATTACK, UPG_DEFEND, UPG_DRUID_CLAW, UPG_DRUID_TALON, UPG_GHOUL_FRENZY, UPG_GUN_RANGE,
+  UPG_CR_ATTACK, UPG_DEFEND, UPG_DRUID_CLAW, UPG_DRUID_TALON, UPG_FIEND_WEB, UPG_GHOUL_FRENZY,
+  UPG_GUN_RANGE,
   UPG_HAMMERS, UPG_HIDES, UPG_LEATHER, UPG_MASONRY, UPG_MELEE, UPG_MOON_ARMOR, UPG_NECROS,
   UPG_ORC_ARMOR, UPG_ORC_BERSERKER, UPG_ORC_ENSNARE, UPG_ORC_MELEE, UPG_ORC_PULVERIZE,
   UPG_ORC_RANGED, UPG_ORC_SHAMAN, UPG_ORC_SPIKES, UPG_ORC_WAR_DRUMS, UPG_PRAYING, UPG_RANGED,
@@ -56,7 +57,10 @@ import {
 // words, so a Computer+ player is anonymous: the strategy decides the build and nothing decides
 // a personality. AMAI also SWITCHES strategy mid-game once `strat_minimum_time` has passed; we
 // roll once, at seat time, and hold it — a mid-game switch abandons half-built production, and
-// nothing here yet measures whether the switch was worth it.
+// nothing here yet measures whether the switch was worth it. What a build MAY carry is a
+// `thenAt3`: the build it grows into when a tier-3 hall lands, named by the rolled build itself
+// and fired by the one event a real player transitions on too. That is a clause of the build
+// order, not a change of mind about it.
 //
 // **The one structural improvement over the reference.** AMAI names each strategy's key
 // buildings by hand (`key_building1`, `key_building2`), which can disagree with the units it
@@ -80,6 +84,20 @@ export interface UnitRow {
   siege?: boolean;
   /** Counts as AIR: it crosses cliffs, and it makes air creep camps fair game. */
   air?: boolean;
+  /**
+   * Counts as a SPELLCASTER — a Shaman, a Priest, a Necromancer, a Druid of the Talon.
+   *
+   * It is a SHARE of the army rather than a member of it, and `plan.ts` (`CASTER_SHARE`) caps it
+   * as one. The developer's report is the whole reason the flag exists: "there is no true
+   * strategy that has ONLY shamans — usually shamans are mixed with actual army units". No build
+   * below asks for that, and it is still reachable, because the counter re-weighting can only
+   * push one way — plus/counter.ts leaves a weaponless caster at a flat 1.0 (the damage table
+   * says nothing about a spell) while it pushes everything with a weapon around it, so a bad
+   * matchup quietly PROMOTES the casters it could not judge. The cap is the backstop under that
+   * rather than a rebalancing: a double-Arcane-Sanctum build is genuinely half casters and is
+   * left exactly where its own weights put it.
+   */
+  caster?: boolean;
 }
 
 /** An upgrade, and how far up it is worth going. */
@@ -137,6 +155,33 @@ export interface PlusStrategy {
   readonly expandAgainAt: number;
   /** The hero order this build wants, when it wants a particular one. Falls back to the race's. */
   readonly heroes?: readonly string[];
+  /**
+   * Producers this build wants MORE THAN ONE of — "two Arcane Sanctums", "two Ancient of
+   * Lores", "two Crypts".
+   *
+   * The only thing in this file that names a building at all, and rule 2 still holds: `plan.ts`
+   * honours a row here only for a building the mix ALREADY implies, so this can say *how many*
+   * and never *which*. What it adds is the half a unit list cannot express — how fast the army
+   * arrives — and for three of the builds here that is the build's identity rather than a
+   * luxury: one Sanctum makes one caster at a time, so a build whose army IS casters arrives at
+   * half speed with one of them.
+   *
+   * `techBuildings`'s own `FACTORY_GOLD` rule is a different question with a similar answer: that
+   * one is a RICH player buying another Barracks with gold it cannot otherwise spend.
+   */
+  readonly factories?: Readonly<Record<string, number>>;
+  /**
+   * The build this one GROWS INTO once a tier-3 hall is standing — the id of another strategy in
+   * the same race's table.
+   *
+   * "Tier 3 Knights, Priests, Mortars, Flying Machines… can be transitioned into from other
+   * builds when tier 3 is reached" (the developer's own words). It is deliberately NOT the
+   * mid-game strategy switch this file rejects above: AMAI re-rolls a different plan on a timer,
+   * having measured nothing; this is one clause of the build order the seat rolled at the start,
+   * fired by the one event a real player also transitions on. The rolled build keeps its clocks
+   * and its heroes — what changes is what comes out of the buildings.
+   */
+  readonly thenAt3?: string;
 }
 
 export interface PlusRaceTable {
@@ -168,6 +213,26 @@ export interface PlusRaceTable {
    *  Guard Tower and an undead Spirit Tower are both upgrades of something already standing). */
   readonly tower: string;
   readonly towerUpgrade?: string;
+  /**
+   * The unit this race answers AIR with, and how many of it — the Flying Machine, the Troll
+   * Batrider, the Gargoyle, the Hippogryph.
+   *
+   * "If they see the enemy getting a lot of air units, the Computer+ AI must transition into 1
+   * workshop and train Flying Machines to counter enemy air — this can be done on top of
+   * whatever is the current strategy (no full commitment to anti-air), and this should be true
+   * for other races' anti-air units."
+   *
+   * A RACE row and not a strategy one, because the answer to air does not depend on which build
+   * was rolled and has to be reachable from a build that names no flyer at all. `plan.ts`
+   * (`antiAir`) is the only row in the whole ladder that puts up a producer the build order
+   * never asked for, and it is bounded on purpose — a handful of one unit on top of the mix,
+   * rather than a switch to an anti-air army.
+   *
+   * All four name the race's DEDICATED answer rather than its best flyer: a Flying Machine and a
+   * Hippogryph shoot air and nothing else, which is exactly what makes them safe to bolt onto
+   * any build. The counts are OURS — nothing in the install describes an improved AI.
+   */
+  readonly antiAir?: { readonly unit: string; readonly count: number };
   /**
    * The building this race raises ON a gold mine to make it a mine at all — the undead's
    * **Haunted Gold Mine** (`ugol`), and nobody else's anything.
@@ -249,19 +314,33 @@ const HUMAN: PlusRaceTable = {
   barracks: BARRACKS,
   support: [{ build: BLACKSMITH, tier: 1, after: 6 }, { build: LUMBER_MILL, tier: 1, after: 12 }],
   shop: ARCANE_VAULT,
+  // THE FLYING MACHINE, off one Workshop — the developer's own example of the rule
+  // (`PlusRaceTable.antiAir`). It is the human's dedicated answer: `hgyr` shoots air and nothing
+  // else, so four of them are worth bolting onto a Knight build and cost it no plan.
+  antiAir: { unit: COPTER, count: 4 },
   tower: WATCH_TOWER,
   towerUpgrade: GUARD_TOWER,
   units: {
     [FOOTMAN]: { from: BARRACKS, tier: 1 },
+    // `[hrif] Requires=hbla` — the Rifleman is a TIER-1 unit that waits on a Blacksmith, which
+    // is what makes "riflemen instead of footmen" a build ORDER rather than a tier-2 plan.
     [RIFLEMAN]: { from: BARRACKS, needs: [BLACKSMITH], tier: 1 },
-    [KNIGHT]: { from: BARRACKS, needs: [LUMBER_MILL, BLACKSMITH], tier: 3 },
-    [PRIEST]: { from: SANCTUM, tier: 2 },
-    [SORCERESS]: { from: SANCTUM, tier: 2 },
-    [SPELL_BREAKER]: { from: SANCTUM, tier: 3 },
-    [MORTAR]: { from: WORKSHOP, tier: 2, siege: true },
-    [COPTER]: { from: WORKSHOP, tier: 2, air: true },
-    [GRYPHON]: { from: AVIARY, tier: 3, air: true },
-    [HUMAN_DRAGON_HAWK]: { from: AVIARY, tier: 3, air: true },
+    [KNIGHT]: { from: BARRACKS, needs: [LUMBER_MILL, BLACKSMITH], tier: 3 }, // `[hkni] Requires=hlum,hcas,hbla`
+    [PRIEST]: { from: SANCTUM, tier: 2, caster: true },
+    [SORCERESS]: { from: SANCTUM, tier: 2, caster: true },
+    // TIER TWO, and its other requirement is the ARCANE VAULT — `[hspt] Requires=hvlt,hkee`
+    // (HumanUnitFunc). The row said tier 3, and the Spell Breaker is the double-Sanctum build's
+    // MAIN combat unit, so that put a Castle in front of a build that is played at the Keep.
+    // Not a `caster` for the same reason: a Spell Breaker fights in the line.
+    [SPELL_BREAKER]: { from: SANCTUM, needs: [ARCANE_VAULT], tier: 2 },
+    // The Workshop is `[harm] Requires=hkee,hbla`, so both of its units carry the Blacksmith.
+    [MORTAR]: { from: WORKSHOP, needs: [BLACKSMITH], tier: 2, siege: true },
+    [COPTER]: { from: WORKSHOP, needs: [BLACKSMITH], tier: 2, air: true },
+    // The Aviary is `[hgra] Requires=hkee,hlum`; the Gryphon then waits for the Castle
+    // (`[hgry] Requires=hcas`) and the Dragonhawk for the Arcane Vault (`[hdhw] Requires=hvlt`)
+    // — which makes the Dragonhawk a TIER-2 flyer, the human's other answer to air.
+    [GRYPHON]: { from: AVIARY, needs: [LUMBER_MILL], tier: 3, air: true },
+    [HUMAN_DRAGON_HAWK]: { from: AVIARY, needs: [LUMBER_MILL, ARCANE_VAULT], tier: 2, air: true },
   },
   upgrades: [
     { id: UPG_DEFEND, from: BARRACKS, ranks: 1, after: 6 },
@@ -279,20 +358,34 @@ const HUMAN: PlusRaceTable = {
     { id: UPG_CLOUD, from: AVIARY, ranks: 1, after: 30 },
   ],
   strategies: [
-    { id: "footmen", name: "Footmen and Riflemen", tier: 2, weight: 30, expandAt: 300, expandAgainAt: 720,
-      mix: { [FOOTMAN]: 3, [RIFLEMAN]: 2, [PRIEST]: 1.5, [SORCERESS]: 1 } },
-    // A ranged line holds ground, so it takes its second mine early — AMAI's own reading of
-    // the same build (its Rifle/BarrackMix rows carry the earliest expansion times it has).
-    { id: "rifles", name: "Riflemen and Mortars", tier: 2, weight: 24, expandAt: 240, expandAgainAt: 660,
-      mix: { [RIFLEMAN]: 3, [FOOTMAN]: 1.5, [MORTAR]: 1.5, [PRIEST]: 1 } },
-    { id: "knights", name: "Knights", tier: 3, weight: 22, expandAt: 420, expandAgainAt: 840,
+    // THE RIFLE BUILD, and it is a tier-1 build order as much as a tier-2 one: `[hrif]
+    // Requires=hbla`, so it opens on a Blacksmith and Riflemen where every other human build
+    // opens on Footmen. Paladin first, then the Blood Mage or the Mountain King — which is what
+    // `pickHeroes` does with the rest of this list anyway (it swaps the second and third).
+    // A ranged line holds ground, so it takes its second mine early.
+    { id: "rifles", name: "Riflemen, Priests and Mortars", tier: 2, weight: 26, expandAt: 240, expandAgainAt: 660,
+      heroes: [PALADIN, BLOOD_MAGE, MTN_KING, ARCHMAGE], thenAt3: "knights",
+      mix: { [RIFLEMAN]: 3, [PRIEST]: 1.2, [MORTAR]: 0.8 } },
+    // THE DOUBLE ARCANE SANCTUM. Footmen at tier 1, and at tier 2 a SECOND Sanctum pouring out
+    // the three units that come out of it — the Spell Breaker being the army and the other two
+    // the support. The second building IS the build: one Sanctum makes one caster at a time.
+    { id: "sanctums", name: "Double Arcane Sanctum", tier: 2, weight: 24, expandAt: 330, expandAgainAt: 750,
+      heroes: [ARCHMAGE, MTN_KING, PALADIN, BLOOD_MAGE],
+      factories: { [SANCTUM]: 2 },
+      mix: { [FOOTMAN]: 2, [SPELL_BREAKER]: 2, [SORCERESS]: 1.5, [PRIEST]: 1.5 } },
+    // RIFLES AND PRIESTS — the same opening as `rifles`, with the Sanctum rather than the
+    // Workshop behind it and the Riflemen never stopping.
+    { id: "riflecaster", name: "Riflemen and Priests", tier: 2, weight: 22, expandAt: 270, expandAgainAt: 690,
+      heroes: [ARCHMAGE, MTN_KING, PALADIN, BLOOD_MAGE], thenAt3: "knights",
+      mix: { [RIFLEMAN]: 3, [PRIEST]: 1.5, [SORCERESS]: 0.5 } },
+    // THE CLASSIC TIER-3 ARMY, and the build both rifle openings GROW INTO (`thenAt3`): Knights,
+    // Priests, Mortar Teams and a few Flying Machines. Rollable on its own too, in which case
+    // the Footman row is what it plays until the Castle lands.
+    { id: "knights", name: "Knights, Priests and Mortars", tier: 3, weight: 20, expandAt: 420, expandAgainAt: 840,
       heroes: [PALADIN, ARCHMAGE, MTN_KING, BLOOD_MAGE],
-      mix: { [KNIGHT]: 3, [FOOTMAN]: 2, [PRIEST]: 1.5, [SORCERESS]: 1, [SPELL_BREAKER]: 1 } },
-    { id: "casters", name: "Sorceresses and Spell Breakers", tier: 3, weight: 18, expandAt: 360, expandAgainAt: 780,
-      heroes: [ARCHMAGE, BLOOD_MAGE, PALADIN, MTN_KING],
-      mix: { [SORCERESS]: 2.5, [PRIEST]: 2, [SPELL_BREAKER]: 1.5, [FOOTMAN]: 2 } },
+      mix: { [KNIGHT]: 3, [FOOTMAN]: 1, [PRIEST]: 1.5, [MORTAR]: 0.8, [COPTER]: 0.5 } },
     // Air is the slowest build to come online, so it is the last to look up from its own base.
-    { id: "gryphons", name: "Gryphon Riders", tier: 3, weight: 16, expandAt: 480, expandAgainAt: 900,
+    { id: "gryphons", name: "Gryphon Riders", tier: 3, weight: 12, expandAt: 480, expandAgainAt: 900,
       mix: { [GRYPHON]: 3, [HUMAN_DRAGON_HAWK]: 1, [RIFLEMAN]: 1.5, [PRIEST]: 1 } },
   ],
   heroes: [ARCHMAGE, PALADIN, MTN_KING, BLOOD_MAGE],
@@ -334,18 +427,30 @@ const ORC: PlusRaceTable = {
   barracks: ORC_BARRACKS,
   support: [{ build: FORGE, tier: 1, after: 6 }],
   shop: VOODOO_LOUNGE,
+  // THE BATS. `[otbr] Requires=ovln` — the Voodoo Lounge, which is also `shop` and is going up
+  // for the hero's belt anyway, so the orc's anti-air costs it a Beastiary it may not have had.
+  antiAir: { unit: BATRIDER, count: 4 },
   tower: ORC_WATCH_TOWER,
   units: {
     [GRUNT]: { from: ORC_BARRACKS, tier: 1 },
-    [HEAD_HUNTER]: { from: ORC_BARRACKS, tier: 1 },
-    [CATAPULT]: { from: ORC_BARRACKS, needs: [BESTIARY], tier: 2, siege: true },
-    [SHAMAN]: { from: LODGE, tier: 2 },
-    [WITCH_DOCTOR]: { from: LODGE, tier: 2 },
+    // `[ohun] Requires=ofor` — the Head Hunter waits on the WAR MILL, which is why "Far Seer and
+    // head hunters" is a build order (the mill first) and not just a barracks full of them.
+    [HEAD_HUNTER]: { from: ORC_BARRACKS, needs: [FORGE], tier: 1 },
+    // The Demolisher is trained at the BARRACKS (`[obar] Trains=ogru,ohun,otbk,ocat`) and needs
+    // the War Mill and the Stronghold (`[ocat] Requires=ofor,ostr`). The row named the Beastiary,
+    // which is neither its producer nor its requirement — so a build that asked for one put up a
+    // building it did not need and waited on a requirement nothing had asked for.
+    [CATAPULT]: { from: ORC_BARRACKS, needs: [FORGE], tier: 2, siege: true },
+    [SHAMAN]: { from: LODGE, tier: 2, caster: true },
+    [WITCH_DOCTOR]: { from: LODGE, tier: 2, caster: true },
     [RAIDER]: { from: BESTIARY, tier: 2 },
-    [KODO_BEAST]: { from: BESTIARY, tier: 2 },
-    [BATRIDER]: { from: BESTIARY, tier: 2, air: true },
-    [WYVERN]: { from: BESTIARY, tier: 3, air: true },
-    [TAUREN]: { from: TOTEM, tier: 3 },
+    [KODO_BEAST]: { from: BESTIARY, needs: [FORGE], tier: 2 }, // `[okod] Requires=ofor`
+    [BATRIDER]: { from: BESTIARY, needs: [VOODOO_LOUNGE], tier: 2, air: true }, // `[otbr] Requires=ovln`
+    // TIER TWO. The Beastiary is `[obea] Requires=ostr` and the Wind Rider states no requirement
+    // of its own, so it lands with the Stronghold exactly like the Raider beside it. At tier 3
+    // the orc's whole tier-2 transition had no air unit in it at all.
+    [WYVERN]: { from: BESTIARY, tier: 2, air: true },
+    [TAUREN]: { from: TOTEM, needs: [FORGE], tier: 3 }, // `[otau] Requires=ofor,ofrt`
   },
   upgrades: [
     { id: UPG_ORC_MELEE, from: FORGE, ranks: 3, after: 8 },
@@ -359,20 +464,30 @@ const ORC: PlusRaceTable = {
     { id: UPG_ORC_PULVERIZE, from: TOTEM, ranks: 1, after: 30 },
   ],
   strategies: [
-    { id: "grunts", name: "Grunts and Shamans", tier: 2, weight: 30, expandAt: 330, expandAgainAt: 750,
-      mix: { [GRUNT]: 3, [HEAD_HUNTER]: 1.5, [SHAMAN]: 1.5, [WITCH_DOCTOR]: 1 } },
-    { id: "headhunters", name: "Head Hunters", tier: 1, weight: 26, expandAt: 240, expandAgainAt: 660,
-      mix: { [HEAD_HUNTER]: 3, [GRUNT]: 1.5, [WITCH_DOCTOR]: 1 } },
-    // Raiders are for being somewhere the enemy is not, so the second mine comes late — the
-    // same reading AMAI's own Raider row takes.
-    { id: "raiders", name: "Raiders and Kodos", tier: 2, weight: 22, expandAt: 480, expandAgainAt: 900,
-      heroes: [BLADE_MASTER, FAR_SEER, SHADOW_HUNTER, TAUREN_CHIEF],
-      mix: { [RAIDER]: 3, [GRUNT]: 1.5, [KODO_BEAST]: 0.7, [SHAMAN]: 1 } },
-    { id: "taurens", name: "Taurens and Shamans", tier: 3, weight: 20, expandAt: 420, expandAgainAt: 840,
+    // FAR SEER AND HEAD HUNTERS — a tier-1 build (the War Mill, then the hunters) that is KEPT
+    // and enriched at tier 2 rather than replaced: the Spirit Lodge and the Beastiary go up
+    // behind the same hunters. Feral Spirit is what makes it the creeping opening, and the
+    // second hero is the Shadow Hunter or the Tauren Chieftain.
+    { id: "headhunters", name: "Head Hunters, Shamans and Kodos", tier: 2, weight: 28, expandAt: 270, expandAgainAt: 690,
+      heroes: [FAR_SEER, SHADOW_HUNTER, TAUREN_CHIEF, BLADE_MASTER],
+      mix: { [HEAD_HUNTER]: 3, [SHAMAN]: 1.2, [KODO_BEAST]: 0.8, [WITCH_DOCTOR]: 0.6 } },
+    // BLADEMASTER, GRUNTS AND HEAD HUNTERS, enriched at tier 2 with the whole Beastiary —
+    // Raiders, a Kodo, Wind Riders — and the Shamans behind them. Always the Shadow Hunter
+    // second. Raiders want to be somewhere the enemy is not, so the second mine comes later.
+    { id: "grunts", name: "Grunts, Head Hunters and Raiders", tier: 2, weight: 26, expandAt: 330, expandAgainAt: 750,
+      heroes: [BLADE_MASTER, SHADOW_HUNTER, FAR_SEER, TAUREN_CHIEF],
+      mix: { [GRUNT]: 3, [HEAD_HUNTER]: 1.5, [RAIDER]: 1.5, [SHAMAN]: 1, [KODO_BEAST]: 0.6, [WYVERN]: 0.8 } },
+    // TAUREN CHIEFTAIN AND MASS GRUNTS — the simple one, and the one that grows into the Tauren
+    // build proper when the Fortress lands (`thenAt3`). At tier 2 the Beastiary adds the Kodo,
+    // the Wind Riders and the bats.
+    { id: "massgrunts", name: "Grunts, Kodos and Wind Riders", tier: 2, weight: 22, expandAt: 300, expandAgainAt: 720,
+      heroes: [TAUREN_CHIEF, SHADOW_HUNTER, FAR_SEER, BLADE_MASTER], thenAt3: "taurens",
+      mix: { [GRUNT]: 3.5, [KODO_BEAST]: 0.8, [WYVERN]: 1, [BATRIDER]: 0.5, [SHAMAN]: 0.8 } },
+    { id: "taurens", name: "Taurens, Shamans and Wind Riders", tier: 3, weight: 18, expandAt: 420, expandAgainAt: 840,
       heroes: [TAUREN_CHIEF, FAR_SEER, BLADE_MASTER, SHADOW_HUNTER],
-      mix: { [TAUREN]: 3, [GRUNT]: 1.5, [SHAMAN]: 2, [WITCH_DOCTOR]: 1 } },
-    { id: "wyverns", name: "Wyverns and Batriders", tier: 3, weight: 18, expandAt: 450, expandAgainAt: 870,
-      mix: { [WYVERN]: 3, [BATRIDER]: 1, [HEAD_HUNTER]: 1.5, [SHAMAN]: 1 } },
+      mix: { [TAUREN]: 3, [GRUNT]: 1.5, [SHAMAN]: 1.2, [WYVERN]: 1, [WITCH_DOCTOR]: 0.6 } },
+    { id: "wyverns", name: "Wind Riders and Batriders", tier: 3, weight: 12, expandAt: 450, expandAgainAt: 870,
+      mix: { [WYVERN]: 3, [BATRIDER]: 0.8, [HEAD_HUNTER]: 1.5, [SHAMAN]: 1 } },
   ],
   heroes: [BLADE_MASTER, FAR_SEER, TAUREN_CHIEF, SHADOW_HUNTER],
   skills: {
@@ -427,6 +542,9 @@ const UNDEAD: PlusRaceTable = {
   // undead's towers are paid for out of supply it was going to build anyway. There is no
   // separate base to raise, which is why `tower` names the upgraded form directly.
   shop: TOMB_OF_RELICS,
+  // THE GARGOYLE — out of the CRYPT, which every undead build already owns, so this is the one
+  // race whose answer to air is a unit row and no building at all (`[ugar] Requires=ugrv,unp1`).
+  antiAir: { unit: GARGOYLE, count: 4 },
   tower: ZIGGURAT_2,
   // THE GHOUL IS THE UNDEAD'S LUMBERJACK, and it is the only such row in the file. An Acolyte
   // cannot chop (`uaco` `lumber: false` — docs/undead.md), so an undead player who builds only
@@ -453,12 +571,18 @@ const UNDEAD: PlusRaceTable = {
   always: [{ unit: OBSIDIAN_STATUE, count: 2 }],
   units: {
     [GHOUL]: { from: CRYPT, tier: 1 },
-    [CRYPT_FIEND]: { from: CRYPT, tier: 2 },
-    [GARGOYLE]: { from: CRYPT, tier: 3, air: true },
-    [NECRO]: { from: DAMNED_TEMPLE, tier: 2 },
-    [BANSHEE]: { from: DAMNED_TEMPLE, tier: 2 },
+    // TIER ONE, with a GRAVEYARD standing: `[ucry] Requires=ugrv` and nothing else
+    // (UndeadUnitFunc) — the Crypt already makes it under a plain Necropolis. The row said tier
+    // 2, so the ghouls-and-fiends opening every undead player writes down could not be played
+    // until the Halls of the Dead landed, and the race opened on Ghouls alone.
+    [CRYPT_FIEND]: { from: CRYPT, needs: [GRAVEYARD], tier: 1 },
+    // …and the Gargoyle is TIER TWO — `[ugar] Requires=ugrv,unp1`, the Graveyard and the Halls
+    // of the Dead. At tier 3 the race's own answer to air arrived after the game was decided.
+    [GARGOYLE]: { from: CRYPT, needs: [GRAVEYARD], tier: 2, air: true },
+    [NECRO]: { from: DAMNED_TEMPLE, tier: 2, caster: true },
+    [BANSHEE]: { from: DAMNED_TEMPLE, tier: 2, caster: true },
     [MEAT_WAGON]: { from: SLAUGHTERHOUSE, tier: 2, siege: true },
-    [ABOMINATION]: { from: SLAUGHTERHOUSE, tier: 3 },
+    [ABOMINATION]: { from: SLAUGHTERHOUSE, tier: 3 }, // `[uabo] Requires=unp2`
     // TIER TWO, and its own requirement is the TOMB OF RELICS. Both are straight off
     // UndeadUnitFunc: `[uslh] Requires=unp1,ugrv` — a Slaughterhouse needs a Halls of the Dead
     // (tier 2) and a Graveyard, which this race's `support` row already puts up — and
@@ -467,7 +591,7 @@ const UNDEAD: PlusRaceTable = {
     // the undead's own tier-3 clock is past ten minutes, so the race's only healer arrived
     // after the game had been decided.
     [OBSIDIAN_STATUE]: { from: SLAUGHTERHOUSE, needs: [TOMB_OF_RELICS], tier: 2 },
-    [FROST_WYRM]: { from: BONEYARD, tier: 3, air: true },
+    [FROST_WYRM]: { from: BONEYARD, tier: 3, air: true }, // `[ubon] Requires=unp2,usap`
   },
   upgrades: [
     { id: UPG_UNHOLY_STR, from: GRAVEYARD, ranks: 3, after: 8 },
@@ -475,22 +599,40 @@ const UNDEAD: PlusRaceTable = {
     { id: UPG_CR_ATTACK, from: GRAVEYARD, ranks: 3, after: 12 },
     { id: UPG_CR_ARMOR, from: GRAVEYARD, ranks: 3, after: 16 },
     { id: UPG_GHOUL_FRENZY, from: CRYPT, ranks: 1, after: 12 },
+    // WEB, and every fiend build wants it the moment tier 2 lands — it is what lets a GROUND
+    // army answer air at all, which for the undead is most of what a Crypt Fiend is for.
+    // `[usep] Researches=Ruac,Ruwb,Rugf,Rusf,Rubu` and `[Ruwb] Requires=ugrv,unp1`.
+    { id: UPG_FIEND_WEB, from: CRYPT, ranks: 1, after: 10 },
     { id: UPG_NECROS, from: DAMNED_TEMPLE, ranks: 2, after: 20 },
     { id: UPG_BANSHEE, from: DAMNED_TEMPLE, ranks: 2, after: 24 },
   ],
   strategies: [
-    { id: "ghouls", name: "Ghouls and Crypt Fiends", tier: 2, weight: 30, expandAt: 270, expandAgainAt: 690,
-      mix: { [GHOUL]: 3, [CRYPT_FIEND]: 2, [NECRO]: 1 } },
-    { id: "fiends", name: "Crypt Fiends and Statues", tier: 2, weight: 26, expandAt: 300, expandAgainAt: 720,
-      mix: { [CRYPT_FIEND]: 3, [GHOUL]: 1.5, [MEAT_WAGON]: 1, [OBSIDIAN_STATUE]: 1 } },
-    { id: "necros", name: "Necromancers and Banshees", tier: 2, weight: 20, expandAt: 330, expandAgainAt: 750,
-      heroes: [LICH, DEATH_KNIGHT, DREAD_LORD, CRYPT_LORD],
-      mix: { [NECRO]: 2.5, [BANSHEE]: 1.5, [GHOUL]: 2, [CRYPT_FIEND]: 1 } },
-    { id: "aboms", name: "Abominations and Meat Wagons", tier: 3, weight: 20, expandAt: 420, expandAgainAt: 840,
+    // DEATH KNIGHT, GHOULS AND FIENDS — the standard one. The Lich comes with tier 2, WEB comes
+    // off the Crypt the moment the Halls of the Dead land (`Ruwb`, in `upgrades` above), and the
+    // Banshees are what it adds once there are fiends to stand in front of them. Both Obsidian
+    // Statues are the race's rather than the build's — see `always`.
+    { id: "fiends", name: "Ghouls and Crypt Fiends", tier: 2, weight: 30, expandAt: 300, expandAgainAt: 720,
+      heroes: [DEATH_KNIGHT, LICH, CRYPT_LORD, DREAD_LORD],
+      mix: { [CRYPT_FIEND]: 3, [GHOUL]: 2.5, [BANSHEE]: 1 } },
+    // CRYPT LORD, and the widest mix the race has: ghouls and fiends from the opening, then Meat
+    // Wagons and Necromancers at tier 2. The Death Knight is the SECOND hero here rather than the
+    // first — he heals the Crypt Lord, who is already the one that can be stood in front.
+    { id: "meatwagons", name: "Fiends, Meat Wagons and Necromancers", tier: 2, weight: 24, expandAt: 330, expandAgainAt: 750,
       heroes: [CRYPT_LORD, DEATH_KNIGHT, LICH, DREAD_LORD],
-      mix: { [ABOMINATION]: 3, [MEAT_WAGON]: 1.5, [NECRO]: 1, [OBSIDIAN_STATUE]: 1 } },
-    { id: "gargoyles", name: "Gargoyles and Frost Wyrms", tier: 3, weight: 18, expandAt: 450, expandAgainAt: 870,
-      mix: { [GARGOYLE]: 3, [FROST_WYRM]: 1, [CRYPT_FIEND]: 1.5, [OBSIDIAN_STATUE]: 1 } },
+      mix: { [CRYPT_FIEND]: 2.5, [GHOUL]: 2, [MEAT_WAGON]: 1, [NECRO]: 1.2 } },
+    // DREAD LORD MASS GHOULS — the fast one. Vampiric Aura is what makes those ghouls farm, so it
+    // expands early, and it is the one undead build that names its SECOND CRYPT: a ghoul army is
+    // only as fast as the buildings making it. Gargoyles come with tier 2, and the Death Knight
+    // is the second hero (a Death Coil on a ghoul is the same aura read from the other end).
+    { id: "ghouls", name: "Mass Ghouls and Gargoyles", tier: 2, weight: 22, expandAt: 240, expandAgainAt: 640,
+      heroes: [DREAD_LORD, DEATH_KNIGHT, LICH, CRYPT_LORD],
+      factories: { [CRYPT]: 2 },
+      mix: { [GHOUL]: 4, [GARGOYLE]: 1.5, [CRYPT_FIEND]: 1 } },
+    { id: "aboms", name: "Abominations and Meat Wagons", tier: 3, weight: 16, expandAt: 420, expandAgainAt: 840,
+      heroes: [CRYPT_LORD, DEATH_KNIGHT, LICH, DREAD_LORD],
+      mix: { [ABOMINATION]: 3, [CRYPT_FIEND]: 1.5, [MEAT_WAGON]: 1.2, [NECRO]: 1 } },
+    { id: "frostwyrms", name: "Gargoyles and Frost Wyrms", tier: 3, weight: 12, expandAt: 450, expandAgainAt: 870,
+      mix: { [GARGOYLE]: 2.5, [FROST_WYRM]: 1, [CRYPT_FIEND]: 1.5, [NECRO]: 0.8 } },
   ],
   heroes: [DEATH_KNIGHT, LICH, DREAD_LORD, CRYPT_LORD],
   skills: {
@@ -498,8 +640,15 @@ const UNDEAD: PlusRaceTable = {
       UNHOLY_AURA, DEATH_PACT, DEATH_PACT, DEATH_PACT]],
     [LICH]: [[FROST_NOVA, DARK_RITUAL, FROST_NOVA, DARK_RITUAL, FROST_NOVA, DEATH_DECAY,
       DARK_RITUAL, FROST_ARMOR, FROST_ARMOR, FROST_ARMOR]],
-    [DREAD_LORD]: [[CARRION_SWARM, VAMP_AURA, CARRION_SWARM, VAMP_AURA, CARRION_SWARM, INFERNO,
-      VAMP_AURA, SLEEP, SLEEP, SLEEP]],
+    // TWO builds. Carrion Swarm first is the damage one; VAMPIRIC AURA first is what the mass
+    // ghoul build is played for — the aura is why those ghouls can creep and farm without going
+    // home, so it is maxed rather than merely taken (`ghouls`, above).
+    [DREAD_LORD]: [
+      [CARRION_SWARM, VAMP_AURA, CARRION_SWARM, VAMP_AURA, CARRION_SWARM, INFERNO,
+        VAMP_AURA, SLEEP, SLEEP, SLEEP],
+      [VAMP_AURA, CARRION_SWARM, VAMP_AURA, CARRION_SWARM, VAMP_AURA, INFERNO,
+        CARRION_SWARM, SLEEP, SLEEP, SLEEP],
+    ],
     [CRYPT_LORD]: [[IMPALE, CARRION_SCARAB, IMPALE, CARRION_SCARAB, IMPALE, LOCUST_SWARM,
       CARRION_SCARAB, THORNY_SHIELD, THORNY_SHIELD, THORNY_SHIELD]],
   },
@@ -518,18 +667,28 @@ const NIGHT_ELF: PlusRaceTable = {
   barracks: ANCIENT_WAR,
   support: [{ build: HUNTERS_HALL, tier: 1, after: 4 }],
   shop: DEN_OF_WONDERS,
+  // THE HIPPOGRYPH, off an Ancient of Wind. Like the Flying Machine it is a dedicated anti-air
+  // unit, which is what makes it safe to bolt onto a Dryad or a Huntress build.
+  antiAir: { unit: HIPPO, count: 4 },
   tower: ANCIENT_PROTECT,
   units: {
     [ARCHER]: { from: ANCIENT_WAR, tier: 1 },
-    [HUNTRESS]: { from: ANCIENT_WAR, needs: [HUNTERS_HALL], tier: 1 },
-    [BALLISTA]: { from: ANCIENT_WAR, tier: 2, siege: true },
+    [HUNTRESS]: { from: ANCIENT_WAR, needs: [HUNTERS_HALL], tier: 1 }, // `[esen] Requires=edob`
+    // TIER ONE with a Hunter's Hall, like the Huntress beside it — `[ebal] Requires=edob` and
+    // nothing more (NightElfUnitFunc).
+    [BALLISTA]: { from: ANCIENT_WAR, needs: [HUNTERS_HALL], tier: 1, siege: true },
     [DRYAD]: { from: ANCIENT_LORE, tier: 2 },
-    [DRUID_CLAW]: { from: ANCIENT_LORE, tier: 3 },
-    [MOUNTAIN_GIANT]: { from: ANCIENT_LORE, tier: 3 },
-    [DRUID_TALON]: { from: ANCIENT_WIND, tier: 2 },
-    [HIPPO]: { from: ANCIENT_WIND, tier: 3, air: true },
-    [FAERIE_DRAGON]: { from: ANCIENT_WIND, tier: 3, air: true },
-    [CHIMAERA]: { from: CHIMAERA_ROOST, tier: 3, air: true },
+    // TIER TWO — `[edoc] Requires=etoa`, the Tree of Ages. What waits for tier 3 is BEAR FORM,
+    // which is `Redc` rank 2 (`[Redc] Requirescount=2 Requires1=etoe`): the build's power spike
+    // is an UPGRADE, not the unit, and at tier 3 the unit could not be fielded before it.
+    [DRUID_CLAW]: { from: ANCIENT_LORE, tier: 2 },
+    [MOUNTAIN_GIANT]: { from: ANCIENT_LORE, needs: [DEN_OF_WONDERS], tier: 2 }, // `[emtg] Requires=etoa,eden`
+    [DRUID_TALON]: { from: ANCIENT_WIND, tier: 2, caster: true },
+    // The Ancient of Wind is `[eaow] Requires=etoa`, so the Hippogryph is a tier-2 flyer; the
+    // Faerie Dragon adds the Den of Wonders (`[efdr] Requires=eden`).
+    [HIPPO]: { from: ANCIENT_WIND, tier: 2, air: true },
+    [FAERIE_DRAGON]: { from: ANCIENT_WIND, needs: [DEN_OF_WONDERS], tier: 2, air: true },
+    [CHIMAERA]: { from: CHIMAERA_ROOST, tier: 3, air: true }, // `[edos] Requires=etoe`
   },
   upgrades: [
     { id: UPG_STR_MOON, from: HUNTERS_HALL, ranks: 3, after: 8 },
@@ -546,19 +705,31 @@ const NIGHT_ELF: PlusRaceTable = {
     { id: UPG_CHIM_ACID, from: CHIMAERA_ROOST, ranks: 1, after: 30 },
   ],
   strategies: [
-    { id: "archers", name: "Archers and Huntresses", tier: 1, weight: 28, expandAt: 240, expandAgainAt: 660,
-      heroes: [MOON_CHICK, DEMON_HUNTER, KEEPER, WARDEN],
-      mix: { [ARCHER]: 3, [HUNTRESS]: 2, [DRYAD]: 1 } },
-    { id: "huntresses", name: "Huntresses and Dryads", tier: 2, weight: 26, expandAt: 300, expandAgainAt: 720,
-      mix: { [HUNTRESS]: 3, [DRYAD]: 2, [ARCHER]: 1, [BALLISTA]: 1 } },
-    // The Bear Form build. `Redc` rank 2 is what grants `[Abrf]` at all, so this is the one
-    // strategy that makes issue #124's named ability reachable in a normal game.
-    { id: "bears", name: "Dryads and Druids of the Claw", tier: 3, weight: 24, expandAt: 420, expandAgainAt: 840,
-      heroes: [KEEPER, DEMON_HUNTER, MOON_CHICK, WARDEN],
-      mix: { [DRUID_CLAW]: 3, [DRYAD]: 2, [HUNTRESS]: 1.5, [MOUNTAIN_GIANT]: 1 } },
-    { id: "talons", name: "Druids of the Talon and Hippogryphs", tier: 3, weight: 18, expandAt: 450, expandAgainAt: 870,
-      mix: { [DRUID_TALON]: 2.5, [HIPPO]: 2, [ARCHER]: 1.5, [DRYAD]: 1 } },
-    { id: "chimaeras", name: "Chimaeras and Dryads", tier: 3, weight: 16, expandAt: 480, expandAgainAt: 900,
+    // DEMON HUNTER AND FOUR ARCHERS into the creep camps, then TWO Ancient of Lores at tier 2
+    // pouring out Dryads and Druids of the Claw — with `Resi` (Abolish Magic) and `Redc` off the
+    // same buildings, and `Redc` rank 2 is what puts Bear Form on the Druid at tier 3. That is
+    // the build's power spike, and it is why this one build is worth two Lores.
+    { id: "bears", name: "Dryads and Druids of the Claw", tier: 2, weight: 26, expandAt: 330, expandAgainAt: 750,
+      heroes: [DEMON_HUNTER, KEEPER, MOON_CHICK, WARDEN],
+      factories: { [ANCIENT_LORE]: 2 },
+      mix: { [DRUID_CLAW]: 2.5, [DRYAD]: 2, [ARCHER]: 1.5 } },
+    // KEEPER OF THE GROVE, ARCHERS AND HUNTRESSES — committed to from tier 1 (the Hunter's Hall
+    // is what decides it), with the Priestess of the Moon as the second hero.
+    { id: "huntresses", name: "Archers and Huntresses", tier: 1, weight: 26, expandAt: 240, expandAgainAt: 660,
+      heroes: [KEEPER, MOON_CHICK, DEMON_HUNTER, WARDEN],
+      mix: { [ARCHER]: 2.5, [HUNTRESS]: 2.5, [DRYAD]: 1 } },
+    // …the same opening, massing DRYADS out of both Lores instead. Abolish Magic is the upgrade
+    // that makes it, and the second hero is the ranged damage the Dryads do not have.
+    { id: "dryads", name: "Mass Dryads", tier: 2, weight: 22, expandAt: 300, expandAgainAt: 720,
+      heroes: [DEMON_HUNTER, MOON_CHICK, KEEPER, WARDEN],
+      factories: { [ANCIENT_LORE]: 2 },
+      mix: { [DRYAD]: 3.5, [ARCHER]: 1.5 } },
+    // …and the same opening again, teching to the WIND instead: Druids of the Talon behind
+    // Archers that never stop, with `Reib` (Improved Bows) off the Ancient of War.
+    { id: "talons", name: "Archers and Druids of the Talon", tier: 2, weight: 20, expandAt: 270, expandAgainAt: 690,
+      heroes: [DEMON_HUNTER, MOON_CHICK, KEEPER, WARDEN],
+      mix: { [ARCHER]: 3, [DRUID_TALON]: 1.2, [DRYAD]: 1 } },
+    { id: "chimaeras", name: "Chimaeras and Dryads", tier: 3, weight: 12, expandAt: 480, expandAgainAt: 900,
       mix: { [CHIMAERA]: 3, [DRYAD]: 2, [HUNTRESS]: 1.5, [FAERIE_DRAGON]: 0.5 } },
   ],
   heroes: [DEMON_HUNTER, KEEPER, MOON_CHICK, WARDEN],
@@ -597,12 +768,16 @@ export const PLUS_RACES: Record<PlayableRace, PlusRaceTable> = {
  * easy computer can play, so it never rolls one. That filter is the whole interaction between
  * difficulty and strategy — everything else about a strategy is the same at every rung.
  *
- * Falls back to the lowest-tier build if a ceiling somehow excludes everything, so this can
- * never answer "no strategy".
+ * Falls back to the LOWEST-TIER builds if a ceiling excludes everything, so this can never
+ * answer "no strategy" — and to all of them that share that tier rather than to one, or an easy
+ * computer of a race whose builds all aim at tier 2 would open identically in every match it
+ * ever played. Its `techTier` still caps the MIX at tier 1, so what it actually fields is the
+ * tier-1 half of whichever of them it drew.
  */
 export function rollStrategy(table: PlusRaceTable, techTier: number, roll: (lo: number, hi: number) => number): PlusStrategy {
   const eligible = table.strategies.filter((s) => s.tier <= techTier);
-  const pool = eligible.length ? eligible : [[...table.strategies].sort((a, b) => a.tier - b.tier)[0]];
+  const lowest = Math.min(...table.strategies.map((s) => s.tier));
+  const pool = eligible.length ? eligible : table.strategies.filter((s) => s.tier === lowest);
   const total = pool.reduce((n, s) => n + s.weight, 0);
   let pick = roll(1, Math.max(1, total));
   for (const s of pool) {

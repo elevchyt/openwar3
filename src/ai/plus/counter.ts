@@ -140,8 +140,12 @@ export function counterScore(def: UnitDef, read: EnemyRead): number {
 const NEUTRAL = 1;
 
 /** The share of an enemy army that has to fly before being unable to shoot up is disqualifying
- *  rather than merely awkward. A third: below that a ground army still decides the fight. */
-const AIR_HEAVY = 1 / 3;
+ *  rather than merely awkward. A third: below that a ground army still decides the fight.
+ *
+ *  Exported because it is also the bar the PLAN reads — `plan.ts`'s `antiAir`, the row that puts
+ *  up a Workshop for a build that never asked for one. The re-weighting and the transition are
+ *  answers to the same observation and must not be able to disagree about when it has been made. */
+export const AIR_HEAVY = 1 / 3;
 /** …and what it is worth to be able to, or not. The penalty is deliberately harsher than the
  *  bonus: a unit that cannot fight back at all is not a bad trade, it is no trade. */
 const AIR_BONUS = 1.6;

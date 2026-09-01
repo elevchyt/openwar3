@@ -3,10 +3,11 @@
 //
 // What this is here to pin, and it is one thing said two ways:
 //
-//   1. EVERY BUILD CAN OPEN. A strategy names the army it INTENDS to field, and six of the
-//      twenty in plus/races.ts name nothing that exists at tier 1 — the night elf's `bears` and
-//      `chimaeras`, the human's `gryphons`, the undead's `aboms` and `gargoyles`, and the
-//      Rifleman half of `gryphons` waits on a Blacksmith besides. With nothing to ask for, the
+//   1. EVERY BUILD CAN OPEN. A strategy names the army it INTENDS to field, and several builds
+//      in plus/races.ts can field none of it in the first two minutes — the night elf's
+//      `chimaeras` (its Huntress waits on a Hunter's Hall), the undead's `aboms` and
+//      `frostwyrms` (their Crypt Fiend waits on a Graveyard) and all three rifle builds, whose
+//      tier-1 Rifleman waits on a Blacksmith. With nothing to ask for, the
 //      army rows emitted nothing; and because every "don't tech with nothing on the field" gate
 //      in the plan is stated in ARMY FOOD (`TIER2_ARMY`, `SupportRow.after`, `TECH_AFTER`), the
 //      field stayed empty and the gates stayed shut. Reported from a real match: a Normal orc
@@ -100,13 +101,64 @@ for (const [race, table] of Object.entries(PLUS_RACES)) {
 console.log("\n--- the fallback is only a fallback ---");
 {
   const elf = PLUS_RACES.nightelf;
-  const bears = elf.strategies.find((s) => s.id === "bears");
-  // Tier 1, only the War: nothing `bears` names can be made, so the Archer stands in.
-  const early = buildableMix(ctx(elf, bears, PLUS_NORMAL, [elf.halls[0], elf.barracks], 1));
-  check("elf/bears opens on Archers", early.map((r) => r.unit).join(","), "earc");
-  // Tier 2 with an Ancient of Lore up: the Dryad is in the mix, so the Archer is not.
-  const later = buildableMix(ctx(elf, bears, PLUS_NORMAL, [elf.halls[1], elf.barracks, "eaoe"], 2));
-  check("elf/bears drops the Archer once the Dryad is up", later.map((r) => r.unit).join(","), "edry");
+  // A build that names nothing below tier 2 — the shape the undead's `aboms` and the human's
+  // `gryphons` still have. (`bears` itself now opens on Archers of its own, which is the point
+  // of the rewritten tables: a build order that can be played from the first minute.)
+  const late = { ...elf.strategies.find((s) => s.id === "bears"), id: "late", mix: { edry: 2, edoc: 1 } };
+  // Tier 1, only the War: nothing it names can be made, so the Archer stands in.
+  const early = buildableMix(ctx(elf, late, PLUS_NORMAL, [elf.halls[0], elf.barracks], 1));
+  check("a tier-2 elf build opens on Archers", early.map((r) => r.unit).join(","), "earc");
+  // Tier 2 with an Ancient of Lore up: the mix can be produced, so the Archer is not offered.
+  const later = buildableMix(ctx(elf, late, PLUS_NORMAL, [elf.halls[1], elf.barracks, "eaoe"], 2));
+  check("…and drops it once the Dryad is up", later.map((r) => r.unit).join(","), "edry,edoc");
+}
+
+// THE LAST RESORT is everything the opening building can still make, not one named unit: a
+// build whose tier-2 producers have been razed goes back to the whole tier-1 line.
+console.log("\n--- the last resort is the whole tier-1 line ---");
+{
+  const human = PLUS_RACES.human;
+  const sanctums = human.strategies.find((s) => s.id === "sanctums");
+  const razed = { ...sanctums, id: "razed", mix: { hspt: 2, hsor: 1 } };
+  // A Keep and a Blacksmith standing and no Arcane Sanctum — the shape a raid leaves behind.
+  const rows = buildableMix(ctx(human, razed, PLUS_NORMAL, [human.halls[1], human.barracks, "hbla"], 2));
+  check("human falls back on Footmen AND Riflemen", rows.map((r) => r.unit).sort().join(","), "hfoo,hrif");
+}
+
+// THE CASTER SHARE. No build order asks for an army of nothing but Shamans, and the counter
+// re-weighting can still get there (it cannot score a spell, so it only ever pushes the units
+// around them). `CASTER_SHARE` is the backstop: half the army, never more.
+console.log("\n--- spellcasters are a share of the army, not the army ---");
+{
+  const orc = PLUS_RACES.orc;
+  const casters = { ...orc.strategies[0], id: "casters", mix: { ogru: 1, oshm: 4, odoc: 4 } };
+  const rows = buildableMix(ctx(orc, casters, PLUS_NORMAL, [orc.halls[1], orc.barracks, "osld", "ofor"], 2));
+  const total = rows.reduce((n, r) => n + r.weight, 0);
+  const share = rows.filter((r) => orc.units[r.unit].caster).reduce((n, r) => n + r.weight, 0) / total;
+  check("a caster-only mix is capped at half the army", Math.round(share * 100) / 100, 0.5);
+  check("…and the soldier keeps its own weight", rows.find((r) => r.unit === "ogru").weight, 1);
+}
+{
+  // …and a build that MEANS to be half casters is left exactly where its weights put it.
+  const human = PLUS_RACES.human;
+  const sanctums = human.strategies.find((s) => s.id === "sanctums");
+  const standing = [human.halls[1], human.barracks, "hars", "hvlt"];
+  const rows = buildableMix(ctx(human, sanctums, PLUS_NORMAL, standing, 2));
+  const of = (id) => rows.find((r) => r.unit === id).weight;
+  check("the double Sanctum keeps its Priests and Sorceresses", `${of("hmpr")},${of("hsor")}`, "1.5,1.5");
+}
+
+// A BUILD THAT NAMES A SUCCESSOR grows into it when the tier-3 hall lands, and not before.
+console.log("\n--- thenAt3: the tier-3 transition ---");
+{
+  const human = PLUS_RACES.human;
+  const rifles = human.strategies.find((s) => s.id === "rifles");
+  const standing = [human.barracks, "hbla", "hlum", "hars", "harm"];
+  const two = buildableMix(ctx(human, rifles, PLUS_NORMAL, [human.halls[1], ...standing], 2));
+  check("the rifle build is Riflemen at tier 2", two.some((r) => r.unit === "hrif"), true);
+  check("…and no Knights yet", two.some((r) => r.unit === "hkni"), false);
+  const three = buildableMix(ctx(human, rifles, PLUS_NORMAL, [human.halls[2], ...standing], 3));
+  check("…and Knights once the Castle is standing", three.some((r) => r.unit === "hkni"), true);
 }
 
 // The cap is the difficulty's, not the fallback's: an Easy computer never reaches past tier 1

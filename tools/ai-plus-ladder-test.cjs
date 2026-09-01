@@ -107,7 +107,8 @@ function recorder(table, strategy, profile, opts = {}) {
   };
   const ctx = {
     ai, profile, table, strategy,
-    enemy: { seen: 0, share: () => 0 },
+    // Nothing scouted unless the fixture says so — see the anti-air section.
+    enemy: opts.enemy ?? { seen: 0, air: 0, armor: {} },
     clock: opts.clock ?? 0,
     armyFood: opts.armyFood ?? 0,
     tier: opts.tier ?? 1,
@@ -149,6 +150,81 @@ for (const [race, table] of Object.entries(PLUS_RACES)) {
   buildPlan(massed.ctx);
   const asked = Math.max(0, ...massed.build.filter((r) => r.item === orc.barracks).map((r) => r.qty));
   check("orc at its army ceiling stops adding production", asked <= 1, true);
+}
+
+// --- the answer to AIR ---------------------------------------------------------------------
+//
+// "If they see the enemy getting a lot of air units, the Computer+ AI must transition into 1
+// workshop and train Flying Machines to counter enemy air — this can be done on top of whatever
+// is the current strategy (no full commitment to anti-air)."
+//
+// Three things are pinned, and the third is the one that keeps it honest: it happens only off
+// what has been SEEN. `plan.ts` `antiAir` shares counter.ts's own `AIR_HEAVY` bar and the
+// difficulty's own sample size, so an unscouted opponent is never answered — Computer+ does not
+// bypass the fog and this row must not become the exception.
+console.log("\n--- an air enemy is answered on top of the build ---");
+{
+  const AIR = { seen: 12, air: 0.5, armor: {} };
+  for (const [race, table] of Object.entries(PLUS_RACES)) {
+    const s = table.strategies[0];
+    const aa = table.antiAir;
+    const unit = table.units[aa.unit];
+    const base = {
+      [table.halls[0]]: 1, [table.halls[1]]: 1, [table.barracks]: 1, [table.altar]: 1,
+      ...Object.fromEntries((unit.needs ?? []).map((n) => [n, 1])),
+    };
+    const opts = { standing: base, tier: 2, armyFood: 20, enemy: AIR };
+    // With the producer missing, the row that goes up is the PRODUCER — a Workshop for a build
+    // that never asked for one.
+    if (unit.from !== table.barracks) {
+      const r = recorder(table, s, PLUS_NORMAL, opts);
+      buildPlan(r.ctx);
+      check(`${race} puts up a ${unit.from} against air`, r.build.some((x) => x.item === unit.from), true);
+      check(`${race} does not ask for ${aa.unit} before it stands`, r.build.some((x) => x.item === aa.unit), false);
+    }
+    // …and with it standing, the unit itself.
+    const up = recorder(table, s, PLUS_NORMAL, { ...opts, standing: { ...base, [unit.from]: 1 } });
+    buildPlan(up.ctx);
+    check(`${race} trains ${aa.unit} against air`, up.build.some((x) => x.item === aa.unit), true);
+    // …and NOTHING of either while nothing has been scouted.
+    const blind = recorder(table, s, PLUS_NORMAL, { ...opts, standing: { ...base, [unit.from]: 1 }, enemy: undefined });
+    buildPlan(blind.ctx);
+    const named = Object.keys(s.mix).includes(aa.unit);
+    check(`${race} does not answer an enemy it has not seen`, blind.build.some((x) => x.item === aa.unit), named);
+  }
+  // …and an EASY computer, which does not counter at all (`PlusProfile.counterWeight` is 0),
+  // never transitions either: the whole row is gated on the same switch the re-weighting is.
+  const human = PLUS_RACES.human;
+  const easy = recorder(human, human.strategies[0], PLUS_EASY, {
+    standing: { [human.halls[0]]: 1, [human.barracks]: 1, "hbla": 1, "harm": 1 },
+    tier: 1, armyFood: 20, enemy: { seen: 12, air: 0.5, armor: {} },
+  });
+  buildPlan(easy.ctx);
+  check("an easy computer does not transition to anti-air", easy.build.some((x) => x.item === "hgyr"), false);
+}
+
+// --- a build that names its SECOND producer ------------------------------------------------
+//
+// "On tier 2 get two Ancient of Lores", "it must build TWO Arcane Sanctums", "usually requires
+// two Crypts" — `PlusStrategy.factories`, which is the one thing in plus/races.ts that names a
+// building. It may only say HOW MANY of something the mix already implies (rule 2), and the
+// second copy is bought once the first is STANDING.
+console.log("\n--- a build order's second producer ---");
+{
+  const elf = PLUS_RACES.nightelf;
+  const bears = elf.strategies.find((x) => x.id === "bears");
+  const standing = { [elf.halls[0]]: 1, [elf.halls[1]]: 1, [elf.barracks]: 1, [elf.altar]: 1, [elf.support[0].build]: 1 };
+  const one = recorder(elf, bears, PLUS_NORMAL, { standing, tier: 2, armyFood: 20 });
+  buildPlan(one.ctx);
+  check("the first Ancient of Lore is asked for", one.build.some((x) => x.item === "eaoe"), true);
+  const two = recorder(elf, bears, PLUS_NORMAL, { standing: { ...standing, eaoe: 1 }, tier: 2, armyFood: 20 });
+  buildPlan(two.ctx);
+  check("…and a second once it stands", Math.max(0, ...two.build.filter((x) => x.item === "eaoe").map((x) => x.qty)), 2);
+  // A build that names no second producer never gets one from this row.
+  const talons = elf.strategies.find((x) => x.id === "talons");
+  const plain = recorder(elf, talons, PLUS_NORMAL, { standing: { ...standing, eaow: 1 }, tier: 2, armyFood: 20 });
+  buildPlan(plain.ctx);
+  check("a build with no `factories` asks for one Ancient of Wind", Math.max(0, ...plain.build.filter((x) => x.item === "eaow").map((x) => x.qty)), 1);
 }
 
 // --- the undead's expansion is the MINE ---------------------------------------------------

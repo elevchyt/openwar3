@@ -1096,11 +1096,16 @@ out.
 ## Strategies: a race is a table of builds, not one build
 
 Each race owns several named builds ([`races.ts`](../src/ai/plus/races.ts)) — Human plays
-Footmen-and-Riflemen, Riflemen-and-Mortars, Knights, Sorceresses-and-Spell-Breakers or Gryphons;
-Night Elf plays Archers, Huntresses-and-Dryads, Dryads-and-Druids-of-the-Claw, Talons-and-Hippos
-or Chimaeras — and one is **rolled at seat time**, weighted, off the AI's own RNG stream. Two
-Computer+ players on one map open differently; the same seat on the same seed opens the same way
-twice.
+Riflemen-Priests-and-Mortars, the double Arcane Sanctum, Riflemen-and-Priests, the tier-3
+Knight build or Gryphons; Night Elf plays Archers-and-Huntresses, Dryads-and-Druids-of-the-Claw
+out of two Ancient of Lores, mass Dryads, Archers-and-Talons or Chimaeras — and one is **rolled
+at seat time**, weighted, off the AI's own RNG stream. Two Computer+ players on one map open
+differently; the same seat on the same seed opens the same way twice.
+
+The builds are the ones a person would name, which is the point of them: an orc that reaches
+tier 2 is not "going Shamans", it is Head Hunters with Shamans and a Kodo behind them, or Grunts
+and Head Hunters enriched with Raiders and Wind Riders. A build that is worth rolling names an
+ARMY and the support that goes with it.
 
 A strategy is a **weighted unit mix** and two clocks, and nothing else is written down:
 
@@ -1110,14 +1115,56 @@ A strategy is a **weighted unit mix** and two clocks, and nothing else is writte
 * the **hero** it opens with is the build's own where it states one (a Tauren build opens Tauren
   Chieftain, a Bear build opens Keeper of the Grove), the race's otherwise.
 
+Two optional clauses go beyond a unit list, because a real build order says things a list of
+units cannot:
+
+* **`factories`** — the copies of a producer the build is *named after*: two Arcane Sanctums, two
+  Ancient of Lores, two Crypts. It is the only place a strategy names a building, and it may only
+  say *how many* of something the mix already implies (rule 2 survives). One Sanctum makes one
+  caster at a time, so a build whose army IS casters arrives at half speed with one of them.
+  `plan.ts` buys the second once the first is STANDING.
+* **`thenAt3`** — the build this one GROWS INTO when a tier-3 hall lands. A rifle opening that
+  reaches a Castle is the classic Knights-Priests-Mortars-Flying-Machines army; a mass-Grunt
+  build that reaches a Fortress is the Tauren one. It is not the mid-game strategy switch below:
+  nothing reacts to anything, the clause is part of the build the seat rolled at the start, and a
+  build with no `thenAt3` never moves. What the earlier build already put on the field goes on
+  standing in the army — the successor only decides what is TRAINED from now on.
+
+**Spellcasters are a share of the army, never the army** (`UnitRow.caster`, `plan.ts`'s
+`CASTER_SHARE`). No build asks for an army of nothing but Shamans and it was still reachable,
+because the counter re-weighting can only push one way: `counterScore` leaves a weaponless caster
+at a flat 1.0 — the damage table says nothing about a spell — while it moves everything with a
+weapon around it, so a bad matchup quietly promotes the casters it could not judge. Half the army
+is the cap, set where it does not argue with a build that MEANS to be caster-heavy: the double
+Sanctum keeps its Priests and Sorceresses exactly where its own weights put them.
+
+**The tavern is not a hero shop yet.** Several of these builds are played in real games with a
+Naga Sea Witch or a Dark Ranger as the second or third hero; `AiPlayer` only ever produces heroes
+at an ALTAR, so the tables name altar heroes throughout and a tavern hero is a thing no Computer+
+player can buy. Worth knowing before reading a build's `heroes` list as the whole of the build.
+
 **Difficulty picks which builds are on the menu.** A strategy declares the hall tier it aims at,
 and one above the difficulty's `techTier` is never offered — so an easy computer only ever rolls
-its race's simplest openings. Normal and Insane can both roll anything, which is what raising
+its race's simplest openings, and where a race's builds ALL aim higher than its ceiling it rolls
+among the lowest-tier ones rather than being handed a single build for every match it plays (its
+`techTier` caps the mix at tier 1 either way, so what it fields is that build's tier-1 half). Normal and Insane can both roll anything, which is what raising
 Normal to tier 3 was mostly *for*: at tier 2 it was shut out of most of every race's table.
 
 We roll ONCE and hold it. AMAI switches strategy mid-game once its `strat_minimum_time` has
 passed; we do not, because a switch abandons half-built production and nothing here yet measures
-whether it was worth it. Countering (below) is the adaptive part instead.
+whether it was worth it. Countering (below) and the build's own `thenAt3` are the two things that
+move, and neither is a change of plan: one re-weights the mix the build already named, the other
+is a clause the build wrote down before the match started.
+
+### Losing the buildings a build is made of
+
+A build order is only a plan while its producers are standing. When they are not — a raid, a
+razed expansion — `buildableMix` falls back on **everything the race's opening building can still
+make**: Footmen *and* Riflemen for a human whose Sanctums are gone, Grunts and Head Hunters for an
+orc that has lost its Beastiary. It is the same row that gets a tier-3 build order out of its
+opening (below), asked from the other end, and it yields the moment one row of the build itself
+comes back online. With no barracks standing it asks for nothing at all, which is correct: a row
+for something we cannot make starves every row under it.
 
 ### Expanding is part of the BUILD ORDER
 
@@ -1136,6 +1183,25 @@ mines it already owns running out — a build order is a plan, not a promise), a
 The expansion row sits above the tier-up **and above the second hero** in the ladder, because
 both are things the AI SAVES for and a saved-for row halts everything under it. With the second
 hero above it, an insane orc past its own expansion time never founded a second town at all.
+
+### The answer to AIR is a transition, not a re-weighting
+
+`PlusRaceTable.antiAir` and `plan.ts`'s `antiAir` — the Flying Machine off one Workshop, the
+Troll Batrider, the Gargoyle, the Hippogryph.
+
+Re-weighting the mix is the right answer to "they have a lot of Footmen" and **no answer at all**
+to "they have Gryphons": a Grunt build re-weighted for air is still a Grunt build, and the air
+penalty merely tells it that everything it owns is worthless. So this is the one row in the whole
+ladder that puts up a producer the build order never asked for — and it is deliberately BOUNDED:
+one building and four bodies, on top of whatever is being played, never a switch to an anti-air
+army. Each race's row names its DEDICATED answer rather than its best flyer (a Flying Machine and
+a Hippogryph shoot air and nothing else), which is what makes it safe to bolt onto any build.
+
+It obeys the same three gates as the rest of the countering, so it can never become a fog bypass
+or a free upgrade: only what has been SEEN, only off a sample this difficulty believes, and never
+at a difficulty that does not counter at all — an Easy computer builds what it opened with,
+whatever is flying over its base. The "the enemy went air" bar is `counter.ts`'s own `AIR_HEAVY`,
+shared rather than re-stated so the row and the re-weighting cannot disagree about it.
 
 ## Countering: the damage table, read off what it has scouted
 
@@ -1309,8 +1375,24 @@ plan that is rebuilt from the world each time. A razed building simply makes its
 on the very next pass, and the ladder buys it back in ladder order as the gold arrives — which is
 also why nothing here needs to notice a *death*. `ai-plus-ladder-test.cjs` razes each of those
 five types at the five-minute mark of the headless economy run, for every race, and pins that all
-of them are back under way (worst case ≈ 150 s, a Blacksmith behind a rebuilt Barracks) and that
-the player is not left food-blocked.
+of them are back under way (worst case ≈ 180 s, the smith behind a rebuilt Barracks) and that the
+player is not left food-blocked.
+
+The fixture is also what caught the one thing that was *stated* here and implemented one screen
+lower: the race's own smith belongs **above the tier-up** ("a Forge is two hundred gold and makes
+the army you already have better; a Stronghold is three hundred and fifteen and blocks everything
+under it while the AI saves"), and it was emitted inside `techBuildings`, which sits below the
+three-minute tier row. So from `TIER2_CLOCK` onward the smith was in fact bought after the hall —
+and a razed Graveyard, which is where the undead's Crypt Fiends, its Gargoyles and every one of
+its armour and attack upgrades come from, was queued behind a Tomb of Relics and a Halls of the
+Dead and took over five minutes to come back. `supportBuildings` is that row in the place the
+paragraph always claimed for it; every race's worst rebuild dropped by a third to a half.
+
+One building, **one row**. A support building is quite often also a `needs` of something in the
+mix (the undead's Graveyard is the Crypt Fiend's and the Gargoyle's; the orc's War Mill is the
+Head Hunter's and the Kodo's), and a building asked for twice in one pass is not merely untidy:
+`startUnit` prices each row separately off the same running budget, so an unsatisfied duplicate
+reserves the price twice over for a payment that is only ever made once.
 
 ### A build order names the army it INTENDS; the opening soldier is derived
 
