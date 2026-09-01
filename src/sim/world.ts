@@ -3029,10 +3029,16 @@ export class SimWorld {
   }
 
   /** Whether this particular building can be bought from — by data OR by script-placed stock.
-   *  A Marketplace passes only on the strength of the latter. */
+   *  A Marketplace passes only on the strength of the latter.
+   *
+   *  A shop still being RAISED is not open: nothing is sold over a half-built counter, and —
+   *  the visible half of the same rule — it nominates no patron, so the four race shops stopped
+   *  planting the team-coloured arrow over a hero the moment their foundation went down. This
+   *  is the one question every shop path asks (the arrow, the adoption pass, Select User, the
+   *  card, the purchase), so stating it here answers all of them at once. */
   isShopUnit(shopId: number): boolean {
     const u = this.units.get(shopId);
-    if (!u) return false;
+    if (!u || this.raising(u)) return false;
     return this.isShop(u.typeId) || (u.building?.stock?.size ?? 0) > 0;
   }
 
@@ -3474,6 +3480,7 @@ export class SimWorld {
     const buyer = this.units.get(buyerId);
     const def = this.itemReg?.get(itemId);
     if (!shop || !def || shop.hp <= 0) return "no";
+    if (this.raising(shop)) return "no"; // the counter isn't built yet (isShopUnit)
     // `=== 0` and not `<= 0`: shopStock answers -1 for a ware with no shelf at all, which is
     // "not stock-limited", not "sold out". The command card has always read it that way
     // (`inStock = stock !== 0`) and the purchase refusing it was the two disagreeing.
@@ -3509,6 +3516,7 @@ export class SimWorld {
   purchaseUnit(shopId: number, unitId: string, player: number): ShopResult {
     const shop = this.units.get(shopId);
     if (!shop || shop.hp <= 0) return "no";
+    if (this.raising(shop)) return "no"; // a Tavern hires nobody until it is finished
     if (this.shopStock(shopId, unitId) === 0) return "nostock"; // -1 = not stock-limited
     // Only a sold HERO is requirement-gated — see soldUnitNeedsTech.
     if (this.tech && this.soldUnitNeedsTech(unitId) && !this.tech.meets(player, unitId)) return "req";
@@ -6096,10 +6104,22 @@ export class SimWorld {
     return true;
   }
 
+  /** A building still being RAISED — a construction site, not a building yet. The one
+   *  predicate behind every "…but it isn't finished" rule: it has no armour class and no
+   *  armour value (recomputeStats/dealDamage), no mana pool, no weapon (weaponVs) and no
+   *  shop counter (isShopUnit).
+   *
+   *  A structure UPGRADING in place is NOT raising: an upgrade is a queue job (enqueueUpgrade)
+   *  and carries no `constructionLeft`, so a Town Hall becoming a Keep keeps its armour, its
+   *  mana and its guns throughout. */
+  private raising(u: SimUnit): boolean {
+    return !!u.building && u.building.constructionLeft > 0;
+  }
+
   /** Whether a building is still under construction (renderer/HUD cue). */
   isUnderConstruction(id: number): boolean {
-    const b = this.units.get(id)?.building;
-    return !!b && b.constructionLeft > 0;
+    const u = this.units.get(id);
+    return !!u && this.raising(u);
   }
 
   add(
@@ -8701,6 +8721,14 @@ export class SimWorld {
    *  `structure,debris` alone and hits nothing but buildings, and the Mortar Team keeps a
    *  separate structure-only slot precisely because its ground shot lists no `structure`. */
   weaponVs(u: SimUnit, t: SimUnit): SimWeapon | null {
+    // A construction site has no guns. A tower shoots from the moment it FINISHES, never
+    // while the scaffold is up (a half-grown Ancient Protector was picking fights, and a
+    // Guard Tower would have defended its own building site) — the same rule that zeroes its
+    // armour and its mana pool while it is being raised. Stated here rather than in the
+    // acquisition scan because it is the single question every attacking path asks: the idle
+    // scan and hold-position go through canAttack, an ordered attack through issueAttack, and
+    // the cursor turns red off the same answer. See raising().
+    if (this.raising(u)) return null;
     for (const w of u.weapons) {
       if (!w.enabled) continue;
       // No Targets Allowed data at all (a summon or custom unit with no weapons row) → treat
