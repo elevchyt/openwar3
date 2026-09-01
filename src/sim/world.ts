@@ -3055,6 +3055,47 @@ export class SimWorld {
     return this.isShop(u.typeId) || (u.building?.stock?.size ?? 0) > 0;
   }
 
+  /** May `player` trade at this shop at all — the OTHER half of "is this a shop", and the
+   *  one every shop path has to ask before it shows or sells anything.
+   *
+   *  A shop serves its owner, its owner's ALLIES, and — when nobody owns it — the whole map.
+   *  It never serves an enemy. The data says which is which, in the interact ability the
+   *  building carries (`Units\UnitAbilities.slk`; see shopInteract for the three rows):
+   *
+   *    · `Aneu`/`Ane2` "Neutral Building" — the Goblin Merchant, the Marketplace, the Tavern,
+   *      the Mercenary Camps, the Dragon Roosts. All Neutral Passive, so everybody shops there.
+   *    · `Aall` "Allied Building" — carried by exactly the four RACE shops (Arcane Vault
+   *      `hvlt`, Voodoo Lounge `ovln`, Ancient of Wonders `eden`, Tomb of Relics `utom`).
+   *      That is WC3's shop sharing: your ally's Vault is your Vault.
+   *
+   *  An ENEMY's is neither, and this is what says so: without it a player could stand a hero
+   *  by the other side's Arcane Vault and buy off their shelf, wearing their team-coloured
+   *  patron arrow while doing it — and merely SELECTING it laid their stock, their restock
+   *  clocks and their tech gates out on the command card, which is reconnaissance nobody
+   *  should get for a click.
+   *
+   *  Allegiance comes from the alliance matrix (`alliedPlayers`, the same lookup `allied`
+   *  goes through), so a script's `SetPlayerAlliance` opens and closes the shelf exactly as
+   *  it opens and closes a fight. `null` — no matrix installed, i.e. a headless sim — is
+   *  read as "no alliances", leaving the owner and the neutral shops, which is the safe half. */
+  canUseShop(shopId: number, player: number): boolean {
+    return this.isShopUnit(shopId) && this.shopServes(shopId, player);
+  }
+
+  /** The ALLEGIANCE half of that question on its own, asked of a building that has already
+   *  been established to trade — which is not always established by its ware list. Pawning
+   *  is the case: `canPawnAt` asks for the `Apit` ability precisely so that a Marketplace
+   *  whose shelves are still empty will still buy your Claws of Attack (see canPawnAt), and
+   *  routing that through `isShopUnit` would refuse it. */
+  shopServes(shopId: number, player: number): boolean {
+    const shop = this.units.get(shopId);
+    if (!shop || shop.hp <= 0 || this.raising(shop)) return false;
+    if (shop.neutralPassive) return true; // nobody's building; everybody's shop
+    if (shop.owner === player) return true;
+    if (shop.owner < 0 || player < 0) return false; // Neutral Hostile's own sells to nobody
+    return this.alliedPlayers(shop.owner, player) === true;
+  }
+
   /** What a shop's "interact" ability says about using it. WC3 puts all of this on the
    *  ability, not the building, and there are three of them (AbilityData.slk, all with
    *  base code `Aneu`; column names from AbilityMetaData `Neu1..Neu4`):
@@ -3150,7 +3191,7 @@ export class SimWorld {
    *  make its own doorstep out of range. */
   shopPatrons(shopId: number, player: number): SimUnit[] {
     const shop = this.units.get(shopId);
-    if (!shop) return [];
+    if (!shop || !this.canUseShop(shopId, player)) return []; // an enemy's shop has no patrons of yours
     const out: SimUnit[] = [];
     for (const u of this.units.values()) {
       if (u.owner !== player || !this.isPatron(u)) continue;
@@ -3176,7 +3217,7 @@ export class SimWorld {
    *  Passing 0 clears the nomination and hands the shop back to the default rule. */
   setShopBuyer(shopId: number, player: number, unitId: number): boolean {
     const shop = this.units.get(shopId);
-    if (!shop || !this.isShopUnit(shopId) || !this.shopSelectsUser(shopId)) return false;
+    if (!shop || !this.canUseShop(shopId, player) || !this.shopSelectsUser(shopId)) return false; // …and not an enemy's
     if (unitId === 0) {
       this.shopBuyers.get(shopId)?.delete(player);
       return true;
@@ -3204,7 +3245,10 @@ export class SimWorld {
    *  tie the sim's choice to how often something happened to ask. tickShopBuyers owns it. */
   shopBuyer(shopId: number, player: number): SimUnit | null {
     const shop = this.units.get(shopId);
-    if (!shop) return null;
+    // Re-asked here rather than only at the nomination because an alliance can be REVOKED
+    // mid-match (SetPlayerAlliance): the buyer the shop held for a former ally stops being
+    // one on the same tick the alliance does, arrow and all.
+    if (!shop || !this.canUseShop(shopId, player)) return null;
     const nominated = this.shopBuyers.get(shopId)?.get(player);
     if (nominated === undefined) return null;
     const u = this.units.get(nominated);
@@ -3239,6 +3283,10 @@ export class SimWorld {
         if (seen.has(u.owner) || !this.isPatron(u)) continue;
         if (!this.inShopRange(shop, u)) continue;
         seen.add(u.owner);
+        // …but only for a player this shop actually serves. An enemy hero walking past your
+        // Arcane Vault is not its customer, and adopting one is what put their team's arrow
+        // over their own head at your counter.
+        if (!this.canUseShop(shop.id, u.owner)) continue;
         if (this.shopBuyer(shop.id, u.owner)) continue; // already has a valid one — leave it
         let per = this.shopBuyers.get(shop.id);
         if (!per) this.shopBuyers.set(shop.id, (per = new Map()));
@@ -3494,6 +3542,7 @@ export class SimWorld {
     const def = this.itemReg?.get(itemId);
     if (!shop || !def || shop.hp <= 0) return "no";
     if (this.raising(shop)) return "no"; // the counter isn't built yet (isShopUnit)
+    if (!this.canUseShop(shopId, player)) return "no"; // not yours, not an ally's, not neutral
     // `=== 0` and not `<= 0`: shopStock answers -1 for a ware with no shelf at all, which is
     // "not stock-limited", not "sold out". The command card has always read it that way
     // (`inStock = stock !== 0`) and the purchase refusing it was the two disagreeing.
@@ -3530,6 +3579,7 @@ export class SimWorld {
     const shop = this.units.get(shopId);
     if (!shop || shop.hp <= 0) return "no";
     if (this.raising(shop)) return "no"; // a Tavern hires nobody until it is finished
+    if (!this.canUseShop(shopId, player)) return "no"; // nobody hires out of an enemy's shipyard
     if (this.shopStock(shopId, unitId) === 0) return "nostock"; // -1 = not stock-limited
     // Only a sold HERO is requirement-gated — see soldUnitNeedsTech.
     if (this.tech && this.soldUnitNeedsTech(unitId) && !this.tech.meets(player, unitId)) return "req";
@@ -3570,6 +3620,9 @@ export class SimWorld {
     // The shop must actually DEAL IN ITEMS — the `Apit` ability, see canPawnAt. (Asking its
     // ware LIST instead, as this did, silently refused a Marketplace: it lists nothing.)
     if (!this.canPawnAt(shop)) return false;
+    // …and it must be a counter that will DEAL with this hero: you no more sell into an
+    // enemy's Arcane Vault than you buy out of it (canUseShop).
+    if (!this.shopServes(shop.id, u.owner)) return false;
     // Stated as "within", not "not beyond" — see inShopRange. Note pawning uses its own,
     // shorter reach (PawnItemRange 300) than buying does, so a hero can buy from further
     // away than he can sell.
@@ -16349,6 +16402,7 @@ export class SimWorld {
     const u = this.units.get(unitId);
     const shop = this.units.get(shopId);
     if (!u || !shop || !u.inventory[slot] || !this.canPawnAt(shop) || this.castLocked(u)) return false;
+    if (!this.shopServes(shopId, u.owner)) return false; // an enemy's shop takes nothing of yours either
     const def = this.itemReg?.get(u.inventory[slot]!.itemId);
     if (!def?.pawnable) return false;
     u.pendingSell = { shopId, slot };

@@ -310,6 +310,31 @@ frame, because its hall may be knocked down inside the five seconds.
   own `[Errors]` key — `Notownportalhalls` = *"There are no friendly Town Halls to Town Portal
   to."* was written for the Scroll of Town Portal, and `Needsummoned` for Control Magic.
 
+## Whose shop it is
+
+A shop serves **its owner, its owner's allies, and — when nobody owns it — everybody**. It never
+serves an enemy. The building itself says which case it is, in the interact ability it carries
+(`Units\UnitAbilities.slk`; the three rows are in `SimWorld.shopInteract`):
+
+| ability | comment in the SLK | who carries it | who may trade |
+| --- | --- | --- | --- |
+| `Aneu` / `Ane2` | "Neutral Building" / "…(any unit)" | Goblin Merchant, Marketplace, Tavern, Mercenary Camps, Dragon Roosts | anybody — they are Neutral Passive |
+| `Aall` | "Allied Building" | the four race shops: Arcane Vault `hvlt`, Voodoo Lounge `ovln`, Ancient of Wonders `eden`, Tomb of Relics `utom` | the owner and their allies — this is WC3's shop sharing |
+
+`SimWorld.canUseShop(shopId, player)` is that rule, and every shop path goes through it: the
+command card, the patron list, Select User, the adoption pass that plants the overhead arrow,
+the purchase, hiring a unit, and pawning (which asks `shopServes` — the allegiance half alone —
+because `canPawnAt` deliberately reads the `Apit` ability rather than the ware list, so a
+Marketplace with empty shelves still buys). Allegiance comes from the alliance matrix, so a
+script's `SetPlayerAlliance` opens and closes the shelf on the same tick it opens and closes a
+fight, and a revoked alliance takes the patron arrow with it.
+
+**Refusing the click is only half of it.** The command card is built *only* for a shop you may
+trade at, because selecting an enemy's Arcane Vault otherwise laid their stock counts, their
+restock clocks and their tech gates out in front of you — reconnaissance for one click. A
+foreign shop's card and a foreign shop's purchase are the same question asked twice, which is
+why they ask it of the same function.
+
 ## Two things still open
 
 **`AIrb` Rune of Rebirth.** Its row carries nothing at all — no duration, no data, one buff

@@ -9,6 +9,12 @@
 // and pops sixty seconds later. All five doors are checked here, because a shop that offers a
 // buyer it will then refuse is the same bug twice.
 //
+// The third part is WHOSE shop it is: a shop serves its owner, its owner's allies and — when
+// nobody owns it — the whole map, and never an enemy (`canUseShop`). Every door is checked,
+// because "you may not buy here" and "you may not be SHOWN what is here" are the same rule:
+// the command card is built only for a shop you may trade at, so an enemy's shelf, its stock
+// counts and its restock clocks stay off your screen.
+//
 // The second half is the copy's EXPERIENCE BAR, which is the original's. The OWNER sees the
 // summon timer in its place; it is the ENEMY who gets the hero bar (the summon triple is
 // masked on the wire), so a copy left at the spawn default reads 0 into its level on their
@@ -39,6 +45,29 @@ const ABILITIES = new Map([
     buffSpecialArt: "", lightning: [], animNames: [], order: "", orderOn: "", orderOff: "",
     levelData: [lvl({ data: D(450, 1, 1, 1) })],
   }],
+  // `[Aall]` "Shop Sharing, Allied Bldg." — DataA 600 radius, and the same three flags. This
+  // is the ability the four RACE shops carry, and the reason an ally may use one.
+  ["Aall", {
+    id: "Aall", code: "Aall", isHero: false, isItem: false, levels: 1, reqLevel: 0, levelSkip: 0,
+    target: "unit", targetFlags: [], autocast: false, name: "Shop Sharing", icon: "", hotkey: "",
+    researchHotkey: "", buttonX: 0, buttonY: 0, learnX: 0, learnY: 0, research: false,
+    tips: [], uberTips: [], researchTip: "", researchUberTip: "",
+    missileArt: "", targetArt: "", targetAttach: [], casterArt: "", specialArt: "", effectArt: "",
+    areaArt: "", fxArt: "", effectSound: "", buffFx: [], buffArt: "", buffEffectArt: "",
+    buffSpecialArt: "", lightning: [], animNames: [], order: "", orderOn: "", orderOff: "",
+    levelData: [lvl({ data: D(600, 1, 1, 1) })],
+  }],
+  // "Purchase Item" — what makes a building one you can PAWN to (canPawnAt).
+  ["Apit", {
+    id: "Apit", code: "Apit", isHero: false, isItem: false, levels: 0, reqLevel: 0, levelSkip: 0,
+    target: "none", targetFlags: [], autocast: false, name: "Purchase Item", icon: "", hotkey: "",
+    researchHotkey: "", buttonX: 0, buttonY: 0, learnX: 0, learnY: 0, research: false,
+    tips: [], uberTips: [], researchTip: "", researchUberTip: "",
+    missileArt: "", targetArt: "", targetAttach: [], casterArt: "", specialArt: "", effectArt: "",
+    areaArt: "", fxArt: "", effectSound: "", buffFx: [], buffArt: "", buffEffectArt: "",
+    buffSpecialArt: "", lightning: [], animNames: [], order: "", orderOn: "", orderOff: "",
+    levelData: [],
+  }],
 ]);
 
 // A Potion of Healing on a Goblin Merchant's shelf: 150 gold, one charge.
@@ -52,7 +81,8 @@ const ITEMS = new Map([
   }],
 ]);
 
-const SHOP = "ngme"; // Goblin Merchant
+const SHOP = "ngme"; // Goblin Merchant — Neutral Passive, serves everybody
+const VAULT = "hvlt"; // Arcane Vault — a PLAYER's shop, and it carries Aall (shop sharing)
 const UNIT_DEF = { priority: 0, buffType: "", abilities: [], upgradesUsed: [], moveHeight: 0, defUp: 2 };
 const N = 256;
 // No upgradeReg on purpose: `this.tech` stays null, so `missingForShop` answers "nothing
@@ -61,8 +91,10 @@ const newWorld = () =>
   new SimWorld(new PathingGrid({ width: N, height: N, flags: new Uint8Array(N * N).fill(0x40) }, [0, 0]), 1,
     { get: (id) => ABILITIES.get(id), has: (id) => ABILITIES.has(id), buffFx: () => [] },
     { get: (id) => ITEMS.get(id), has: (id) => ITEMS.has(id) },
-    { get: (id) => (id === SHOP ? { ...UNIT_DEF, abilities: ["Aneu"] } : UNIT_DEF), has: () => false },
-    { get: (id) => (id === SHOP ? { makeitems: [], sellitems: ["phea"], sellunits: [] } : undefined), has: (id) => id === SHOP });
+    { get: (id) => (id === SHOP ? { ...UNIT_DEF, abilities: ["Aneu", "Apit"] }
+      : id === VAULT ? { ...UNIT_DEF, abilities: ["Aall", "Apit"] } : UNIT_DEF), has: () => false },
+    { get: (id) => (id === SHOP || id === VAULT ? { makeitems: [], sellitems: ["phea"], sellunits: [] } : undefined),
+      has: (id) => id === SHOP || id === VAULT });
 
 let world = newWorld();
 let nextId = 1;
@@ -88,6 +120,11 @@ function unit(over = {}) {
 }
 const hero = (over = {}) => unit({ isHero: true, inventory: [null, null, null, null, null, null], ...over });
 const shop = () => unit({ typeId: SHOP, owner: -1, team: -1, neutralPassive: true, x: 2000, y: 2000, prevX: 2000, prevY: 2000, radius: 72 });
+// An Arcane Vault belonging to player 1 — finished, so it is open for business.
+const vault = (owner = 1) => unit({
+  typeId: VAULT, owner, team: owner, x: 2000, y: 2000, prevX: 2000, prevY: 2000, radius: 72,
+  building: { constructionLeft: 0, queue: [] },
+});
 
 let failed = 0;
 function check(what, got, want) {
@@ -152,6 +189,63 @@ console.log("\nA hero's image shares HIS experience bar — the one the ENEMY se
   im.hp = 0;
   world.gainXp(h, 100);
   check("a popped image is left alone", im.xp, 2600);
+}
+
+
+console.log("\nWHOSE shop it is: the owner's, an ally's, and nobody's — never an enemy's");
+{
+  world = newWorld();
+  // Player 1's Arcane Vault. 0 and 1 are enemies until the matrix says otherwise; 2 is 1's ally.
+  world.alliedPlayers = (a, b) => a === b || (a === 1 && b === 2) || (a === 2 && b === 1);
+  const v = vault(1);
+  world.stashOf(0).gold = 500;
+  world.stashOf(2).gold = 500;
+  // One hero of each player standing at the same counter, 200 units out (inside Aall's 600).
+  const enemy = hero({ owner: 0, team: 0, x: 2200, y: 2000, prevX: 2200, prevY: 2000 });
+  const ally = hero({ owner: 2, team: 2, x: 2150, y: 2000, prevX: 2150, prevY: 2000 });
+  const mine = hero({ owner: 1, team: 1, x: 2100, y: 2000, prevX: 2100, prevY: 2000 });
+
+  check("its owner may trade there", world.canUseShop(v.id, 1), true);
+  check("…and so may their ally (Aall, shop sharing)", world.canUseShop(v.id, 2), true);
+  check("…but the enemy may not", world.canUseShop(v.id, 0), false);
+  // The command card is built ONLY for a shop you may use, so this is also the answer to
+  // "does clicking it show me their shelf": it does not.
+  check("the enemy is offered no patron for it", world.shopPatrons(v.id, 0).length, 0);
+  check("…while the ally is", world.shopPatrons(v.id, 2).some((u) => u.id === ally.id), true);
+  check("Select User refuses the enemy's hero", world.setShopBuyer(v.id, 0, enemy.id), false);
+  check("…and takes the ally's", world.setShopBuyer(v.id, 2, ally.id), true);
+
+  // The adoption pass is what plants the team-coloured arrow, and it was planting one over
+  // the enemy hero standing at a counter that would never serve him.
+  world.adoptShopBuyers();
+  check("the enemy hero is adopted by nobody", world.shopBuyer(v.id, 0), null);
+  check("…so wears no patron arrow", world.shopArrowUnits(0).has(enemy.id), false);
+  check("the owner's hero is", world.shopBuyer(v.id, 1)?.id, mine.id);
+  check("…and wears one", world.shopArrowUnits(1).has(mine.id), true);
+
+  check("the purchase itself refuses the enemy", world.purchaseItem(v.id, enemy.id, "phea", 0), "no");
+  check("…with nothing taken out of his stash", world.stashOf(0).gold, 500);
+  check("…and the ally buys the potion", world.purchaseItem(v.id, ally.id, "phea", 2), "ok");
+  check("…paying its 150 gold", world.stashOf(2).gold, 350);
+  // Hiring and pawning go through the same rule.
+  check("nobody hires out of an enemy's shop", world.purchaseUnit(v.id, "Hamg", 0), "no");
+  enemy.inventory[0] = { id: 99, itemId: "phea", charges: 1, cooldownLeft: 0 };
+  check("…nor sells into one", world.pawnItem(enemy.id, 0, v.id), false);
+  check("…keeping the item he tried to sell", enemy.inventory[0]?.itemId, "phea");
+}
+
+console.log("\n…and an alliance REVOKED closes the shelf again on the same tick");
+{
+  world = newWorld();
+  let allied = true;
+  world.alliedPlayers = (a, b) => a === b || allied;
+  const v = vault(1);
+  const h = hero({ owner: 2, team: 2, x: 2200, y: 2000, prevX: 2200, prevY: 2000 });
+  world.adoptShopBuyers();
+  check("an ally's hero is the vault's buyer", world.shopBuyer(v.id, 2)?.id, h.id);
+  allied = false; // SetPlayerAlliance(…, false)
+  check("…and stops being one when the alliance ends", world.shopBuyer(v.id, 2), null);
+  check("…arrow and all", world.shopArrowUnits(2).has(h.id), false);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

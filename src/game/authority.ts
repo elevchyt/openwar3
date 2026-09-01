@@ -583,6 +583,8 @@ export class Authority {
         // The SHOP is deliberately not ownership-checked — a neutral Goblin Merchant belongs
         // to nobody, which is the entire point. What must be the issuer's is the unit it
         // nominates, and the buyer is recorded against the ISSUER, never against this machine.
+        // Not ownership, but not nothing either: `setShopBuyer` refuses a shop that does not
+        // serve the issuer at all (SimWorld.canUseShop), so no arrow is planted at an enemy's.
         return (cmd.unitId === 0 || this.ownedBy(player, cmd.unitId))
           && this.sim.setShopBuyer(cmd.shopId, player, cmd.unitId);
       case "autocast":
@@ -678,8 +680,10 @@ export class Authority {
         if (!b?.building || b.hp <= 0) return false;
         // A SHOP is deliberately exempt from ownership — a Tavern is Neutral Passive, so
         // nobody owns the building you hire your first hero from. Anything else must be
-        // yours. (Same carve-out the command card makes for a foreign shop.)
-        if (b.owner !== player && !this.sim.isShopUnit(cmd.buildingId)) return false;
+        // yours. (Same carve-out the command card makes for a foreign shop.) The exemption
+        // is "a shop that serves YOU", never "a shop": an enemy's counter hires nobody, and
+        // this is the door a forged command would come through (SimWorld.canUseShop).
+        if (b.owner !== player && !this.sim.canUseShop(cmd.buildingId, player)) return false;
         const def = this.registry.get(cmd.unitId);
         if (!def) return false;
         // "Does this building even train that?" — never checked before, because the card
@@ -741,7 +745,9 @@ export class Authority {
         const b = this.sim.units.get(cmd.buildingId);
         if (!b?.building || b.hp <= 0) return false;
         const tavern = this.sim.isShopUnit(cmd.buildingId);
-        if (b.owner !== player && !tavern) return false;
+        // …and a shop you may TRADE at, never merely a shop: no hero of yours wakes up in
+        // the enemy's Tavern (see `train`, same carve-out).
+        if (b.owner !== player && !this.sim.canUseShop(cmd.buildingId, player)) return false;
         if (b.building.constructionLeft > 0) return false; // a half-built altar revives nothing
         const t = this.tech.get(b.typeId);
         const f = this.sim.fallen.get(cmd.heroId);
@@ -913,9 +919,10 @@ export class Authority {
       case "buyitem": {
         // No ownership gate ON PURPOSE — a Goblin Merchant is Neutral Passive and an ally's
         // Vault is shoppable (Aall). Who may buy is `purchaseItem`'s own judgement: it checks
-        // the shop's tech gate, the shelf, the patron's range and that the patron is the
-        // BUYER's unit — and the patron is nominated here, by the same `shopBuyer` rule the
-        // card's overhead arrow uses, never named by the wire.
+        // that the shop serves this player at all (canUseShop — an ENEMY's does not), its
+        // tech gate, the shelf, the patron's range and that the patron is the BUYER's unit —
+        // and the patron is nominated here, by the same `shopBuyer` rule the card's overhead
+        // arrow uses, never named by the wire.
         const buyer = this.sim.shopBuyer(cmd.shopId, player);
         if (!buyer) return false;
         return this.sim.purchaseItem(cmd.shopId, buyer.id, cmd.itemId, player) === "ok";

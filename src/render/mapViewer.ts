@@ -8400,8 +8400,11 @@ export class MapViewerScene {
     if (!sel) return [];
     const world = this.rts!.simWorld;
     // A shop the local player may buy from shows its purchase card even though they don't own
-    // it (a Tavern, a Goblin Merchant — all Neutral Passive). Anything else must be theirs.
-    const foreignShop = sel.isBuilding && sel.owner !== this.localPlayer && world.isShopUnit(sel.id);
+    // it (a Tavern, a Goblin Merchant — all Neutral Passive; an ALLY's Arcane Vault, which is
+    // shop sharing). Anything else must be theirs — and "may buy from" is the whole test, not
+    // "is a shop": an ENEMY's shop shows no card at all, so selecting it never lays out their
+    // shelf, their stock counts and their restock clocks for you (SimWorld.canUseShop).
+    const foreignShop = sel.isBuilding && sel.owner !== this.localPlayer && world.canUseShop(sel.id, this.localPlayer);
     if (sel.owner !== this.localPlayer && !foreignShop) return [];
     const btnIcon = (n: string) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
     const out: CommandButton[] = [];

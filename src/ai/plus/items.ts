@@ -1458,7 +1458,10 @@ export class PlusItems {
     for (const u of this.view.world.units.values()) {
       if (u.hp <= 0 || !u.building || this.view.hostile(u)) continue;
       if (u.building.constructionLeft > 0) continue;
-      if (!this.view.world.isShopUnit(u.id)) continue;
+      // "May we trade here at all" is the sim's own question, and asking it rather than
+      // merely "is it hostile" is what keeps a hero from walking across the map to a counter
+      // that will refuse him — a non-hostile NEUTRAL player's shop is nobody's ally.
+      if (!this.view.world.canUseShop(u.id, this.view.player)) continue;
       if (Math.hypot(u.x - ctx.home.x, u.y - ctx.home.y) > SHOP_REACH) continue;
       out.push(u);
     }

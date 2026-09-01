@@ -248,6 +248,7 @@ function pressed(units, profile, ctx, opts = {}) {
     shopStock: () => -1,
     missingForShop: () => [],
     isShopUnit: () => false,
+    canUseShop: () => false,
     canPawnAt: () => false,
   };
   const items = new PlusItems({
@@ -655,6 +656,7 @@ function wand(units, profile = PLUS_INSANE) {
     items: new Map(),
     itemReadyError: () => null, itemUseError: () => null,
     shopReaches: () => false, shopStock: () => -1, missingForShop: () => [], isShopUnit: () => false,
+    canUseShop: () => false,
     canPawnAt: () => false,
   };
   const items = new PlusItems({
@@ -710,6 +712,8 @@ function shopped(units, profile, opts = {}) {
     missingForShop: (_id, ware) => (opts.needsTech?.includes(ware) ? ["TWN2"] : []),
     // Every building in the fixture is a shop; which one gets the sale is the ordering rule.
     isShopUnit: () => true,
+    // …and every one of them serves us: whose shop it is has its own fixture (sim-shop-test).
+    canUseShop: () => true,
     canPawnAt: () => false, // the pawning trip has its own fixture below
   };
   const items = new PlusItems({
@@ -985,6 +989,7 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
     itemReadyError: () => null, itemUseError: () => null,
     shopReaches: () => false, shopStock: () => -1, missingForShop: () => [],
     isShopUnit: (id) => id === MERCHANT.id,
+    canUseShop: (id) => id === MERCHANT.id,
     canPawnAt: () => false,
   };
   const mk = () => new PlusItems({
@@ -1044,6 +1049,7 @@ function pawned(units, opts = {}) {
     itemReadyError: () => null, itemUseError: () => null,
     shopReaches: () => true, shopStock: () => 0, missingForShop: () => [],
     isShopUnit: (id) => id === PAWNSHOP.id,
+    canUseShop: (id) => id === PAWNSHOP.id,
     // The `Apit` question, which is what makes a Marketplace or a Goblin Merchant a place you
     // may sell to and a Tavern not one.
     canPawnAt: () => opts.dealsInItems ?? true,

@@ -4856,7 +4856,10 @@ export class RtsController {
       // Vault / Marketplace), an allied hero is handed it, and bare ground gets it dropped.
       const picked = this.pickAt(cssX, cssY);
       const to = picked !== null ? this.sim.units.get(picked) : undefined;
-      if (to && picked !== null && picked !== id && this.sim.canPawnAt(to)) {
+      // …and a shop that will not TRADE with you is not a shop for this gesture: an enemy's
+      // Vault deals in items but takes none of yours (SimWorld.canUseShop), so the click
+      // falls through to the ordinary drop rather than sending a sale that must be refused.
+      if (to && picked !== null && picked !== id && this.sim.canPawnAt(to) && this.sim.shopServes(picked, this.localPlayer)) {
         this.execute(this.localPlayer, { c: "sellitem", unitId: id, slot: armed.slot, shopId: picked });
       } else if (to && picked !== null && picked !== id && this.controls(picked) && to.inventory.length) {
         this.execute(this.localPlayer, { c: "giveitem", unitId: id, slot: armed.slot, targetId: picked });
