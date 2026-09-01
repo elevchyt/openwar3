@@ -69,6 +69,21 @@ export interface RenderBuff {
   readonly delay: number;
 }
 
+/**
+ * One ability on a unit, as the WORLD layer reads it — the row of spell icons floated over an
+ * allied hero's health bar (rts.ts allyAbilityRow).
+ *
+ * Three fields, and they are the three questions that row asks: WHICH row it is (the alias, to
+ * find the icon and whether it is a hero spell at all), what RANK it stands at (the pips), and
+ * whether it is ready. `code`/`autocastOn` are the command card's business — the card reads a
+ * `SimAbility` directly, because a card is only ever drawn for a unit this machine owns.
+ */
+export interface RenderAbility {
+  readonly id: string;
+  readonly level: number;
+  readonly cooldownLeft: number;
+}
+
 /** The unit, as the render path reads it. */
 export interface RenderUnit {
   // --- where it is, and what floats over it (item 10c-2c-2) -------------------
@@ -146,6 +161,10 @@ export interface RenderUnit {
   readonly summonMax: number;
   /** The status row's icons. `SimBuff` is a plain data record and crosses whole. */
   readonly buffs: readonly RenderBuff[];
+  /** What it can cast, and at what rank. Read by the world layer for an ALLY's hero only —
+   *  your own hero's spells are on your command card, and an enemy's are not yours to read
+   *  (see rts.ts allyAbilityRow). Already on the wire for the selection panel. */
+  readonly abilities: readonly RenderAbility[];
 
   // --- animation -------------------------------------------------------------
   readonly spawning: number;

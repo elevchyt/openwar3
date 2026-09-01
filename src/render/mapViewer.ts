@@ -1542,6 +1542,7 @@ export class MapViewerScene {
       this.footMaxHeight = makeFootprintMaxSampler(terrain);
       this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.items, this.tech, this.upgrades, this.footMaxHeight);
       this.rts.setFootprintReader((tex) => this.footprintFor(tex)); // pathTex decode is a VFS read
+      this.rts.setIconResolver((path) => this.blpIcon(path)); // BLP decode is a VFS read, too — for the ally spell row
       this.rts.setSoundBoard(this.sounds);
       this.rts.onRefuse = (key) => this.refuse(key); // refused orders → the gold line + error sound
       // Somebody handed us the keys to their army (or took them back). SHARED CONTROL only:

@@ -206,7 +206,9 @@ html body.loading-screen * { cursor: none !important; }
   min-width: 17px;
   text-align: center;
 }
-.unit-hpbar-bars { display: flex; flex-direction: column; gap: 1px; }
+/* `relative` so the ally-hero spell row (.unit-hpbar-abils) can hang above the bars without
+   being in their flow — see that rule. */
+.unit-hpbar-bars { position: relative; display: flex; flex-direction: column; gap: 1px; }
 /* The frame. WC3 draws it solid black, 1px above and below the fill and 2px at each end
    (measured off the real client) — the empty stretch of a bar IS this frame showing. */
 .unit-hpbar-track {
@@ -261,6 +263,56 @@ html body.loading-screen * { cursor: none !important; }
    every division). */
 body.hud-statbar-skinned .unit-hpbar-slot .unit-hpbar-fill {
   background-size: 100% 100%;
+}
+
+/* The learned spells of an ALLIED hero, floated over its health bar (rts.ts allyAbilityRow).
+   Not a WC3 frame — the original shows an ally's spellbook nowhere — so this is ours, and it is
+   built to be read out of the corner of the eye: small icons, no chrome, no button frame, and
+   nothing that competes with the bar underneath it. Out of the flow (absolute, anchored to the
+   bars' top edge) so a hero learning a skill never shifts the bar itself.
+
+   An unavailable spell — on cooldown, or its caster short of mana — is NOT darkened here: it
+   arrives already carrying its own `CommandButtonsDisabled\DIS*` art, which is what the game
+   itself swaps in (see BarAbility). The twin is desaturated and drawn without the gold frame,
+   and no filter of ours reproduces the second half of that. */
+.unit-hpbar-abils {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 3px);
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  opacity: 0.9; /* discreet: an ally's spells are context, not your own command card */
+}
+.unit-hpbar-abils[hidden] { display: none; }
+.unit-hpbar-abil {
+  position: relative;
+  width: var(--abil-size, 14px);
+  height: var(--abil-size, 14px);
+  background: no-repeat center / 100% 100%;
+  border-radius: 1px;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.85); /* seats the icon against bright terrain */
+}
+/* The rank, drawn ON the icon along its bottom edge: white dots up to three, and the number
+   itself past that (a custom map may raise an ability past the three ranks the melee game
+   stops at, and four dots at this size are a smear). */
+.unit-hpbar-abil-rank {
+  position: absolute;
+  left: 0; right: 0; bottom: 1px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  font: 700 max(7px, calc(var(--abil-size, 14px) * 0.5)) / 1 var(--game-font);
+  color: #fff;
+  text-shadow: 0 0 2px #000, 0 1px 1px #000;
+}
+.unit-hpbar-abil-pip {
+  width: max(2px, calc(var(--abil-size, 14px) * 0.14));
+  height: max(2px, calc(var(--abil-size, 14px) * 0.14));
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 2px #000, 0 0 1px #000; /* the halo is what keeps a white dot on white art */
 }
 
 /* The real thing (issue #79): the game's own bar slab, tinted per state by ui/hud.ts

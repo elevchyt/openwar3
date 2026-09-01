@@ -51,7 +51,7 @@ import { ComputerPlusAi, type PlusHost } from "../ai/plus";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
-import { WorldOverlays, type HoverLine, type BarSpec } from "../render/worldOverlays";
+import { WorldOverlays, type HoverLine, type BarAbility, type BarSpec } from "../render/worldOverlays";
 import { INSANE_HARVEST_FACTOR, MELEE_INSANE } from "../ai/ids";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
@@ -648,6 +648,7 @@ export class RtsController {
    *  See game/authority.ts; it imports no renderer, no DOM and no transport. */
   private authority: Authority;
   private overlays: WorldOverlays; // floating HP bars + the hover slab (DOM, client-only)
+  private iconUrl: ((path: string) => string | null) | null = null; // BLP path → drawable URL (setIconResolver)
   // The single floating name/owner slab shown above the unit (or gold mine / ground
   // item) under the cursor. Built lazily into the world layer so it tracks its target
   // Display names for the owner line ("Computer (Normal)", a human's account name).
@@ -1828,6 +1829,20 @@ export class RtsController {
    * one is a VFS read and this half must not import an archive — the renderer already caches
    * them, a headless host would read its own install.
    */
+  /**
+   * How to turn a BLP path into something an `<img>`/`background-image` can draw. Injected for
+   * the same reason the footprint reader is: decoding one is a VFS read, and this half must not
+   * import an archive. The renderer already caches every decode (and pre-warms every ability
+   * icon AND its DIS* twin), so this is a map lookup by the time the world layer asks.
+   *
+   * Only the world layer asks. Everywhere else this object hands out icon PATHS and lets the
+   * HUD resolve them through its own `blpUrl` — but a floating bar has no HUD behind it, so
+   * the row over an ally's head is the one place that needs the URL itself.
+   */
+  setIconResolver(resolve: (path: string) => string | null): void {
+    this.iconUrl = resolve;
+  }
+
   setFootprintReader(read: (texPath: string) => Footprint | null): void {
     this.footprintOf = read;
     // …and the same reader, in the shape the SIM asks its one question in: how far from a
@@ -7518,6 +7533,7 @@ export class RtsController {
       // payload already said so — `remembered` — and its hp is redacted to 0 anyway, so drawing
       // one would show a full-empty bar over every scouted building.
       if (this.drawnFromMemory(e.simId)) continue;
+      const row = this.allyAbilityRow(u);
       specs.push({
         x: u.x,
         y: u.y,
@@ -7538,9 +7554,60 @@ export class RtsController {
         garrison: u.garrisonCap > 0 && u.garrison.length > 0
           ? { filled: u.garrison.length, slots: u.garrisonCap }
           : null,
+        // …and what an ALLY's hero has to hand. Nothing for anything else, which is almost
+        // every bar on the field.
+        abilities: row?.list ?? null,
+        abilitySig: row?.sig ?? "",
       });
     }
     this.overlays.syncBars(specs);
+  }
+
+  /**
+   * The discreet row of spell icons floated over an ALLIED hero's health bar, or null.
+   *
+   * WC3 itself draws no such row — the original tells you nothing about an ally's spellbook —
+   * so this is OpenWar3's, and the three rules it follows are chosen to keep it from becoming
+   * a second command card:
+   *
+   *  • **Only an ally's, and only a hero's.** Your own hero's spells are already on your
+   *    command card the moment you click it, and an enemy's are not yours to read: a row over
+   *    a hostile Blademaster would hand you his cooldowns, which no amount of scouting does in
+   *    the original. Everything already visible-gated by the caller (a bar is a LIVE reading —
+   *    a hero the fog has swallowed has neither bar nor row).
+   *  • **Learned spells only.** A hero carries every one of its four rows from birth at rank 0
+   *    (`buildAbilitiesFor` — `heroAbilities` come in unlearned), and rank 0 is "not picked".
+   *    Its INNATE abilities are not spells at all — a hero's `abilList` is Inventory and kin —
+   *    so the row is `AbilityDef.isHero`, which is the same `hero=1` column the learn page is.
+   *  • **Unavailable is a TEXTURE, not a tint.** An ability on cooldown, or whose caster is
+   *    short of the rank's mana, wears its own `CommandButtonsDisabled\DIS*` twin, exactly as
+   *    the command card's greyed buttons do (see `disabledArt` in mapViewer, and `cmd`). A CSS
+   *    filter is not the same thing: the twin is desaturated AND drawn without the gold button
+   *    frame, and losing the frame is most of what reads as "you can't press this". Falls back
+   *    to the live art for the handful of icons that ship no twin.
+   */
+  private allyAbilityRow(u: RenderUnit): { list: BarAbility[]; sig: string } | null {
+    const icon = this.iconUrl;
+    if (!icon || !u.isHero) return null;
+    // Neutral heroes (a Tavern's, a creep camp's) are nobody's ally; your own is on your card.
+    if (u.owner < 0 || u.owner === this.localPlayer || !this.localAlly(u.owner)) return null;
+    let list: BarAbility[] | null = null;
+    let sig = "";
+    for (const ab of u.abilities) {
+      if (ab.level < 1) continue; // never picked — the row shows nothing at all for it
+      const def = this.abilities.get(ab.id);
+      if (!def || !def.isHero || !def.icon) continue;
+      const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      // The two things that stop a press, and the only two the row draws: the clock, and the
+      // mana this RANK costs (a rank 3 Blizzard is not a rank 1 one).
+      const unavailable = ab.cooldownLeft > 0 || (lvl !== undefined && u.mana < lvl.cost);
+      const live = icon(def.icon);
+      const dis = unavailable ? disabledIconPath(def.icon) : null;
+      (list ??= []).push({ icon: (dis && icon(dis)) || live, level: ab.level });
+      // Short, and built from the ID rather than from the icon: see BarSpec.abilitySig.
+      sig += `${ab.id}${ab.level}${unavailable ? "-" : "+"},`;
+    }
+    return list ? { list, sig } : null;
   }
 
   /** What the hover slab should say for whatever the cursor is over — the ordered,
