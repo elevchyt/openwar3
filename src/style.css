@@ -206,7 +206,9 @@ html body.loading-screen * { cursor: none !important; }
   min-width: 17px;
   text-align: center;
 }
-.unit-hpbar-bars { display: flex; flex-direction: column; gap: 1px; }
+/* `relative` so the ally-hero spell row (.unit-hpbar-abils) can hang above the bars from
+   their own left edge without being in their flow — see that rule. */
+.unit-hpbar-bars { position: relative; display: flex; flex-direction: column; gap: 1px; }
 /* The frame. WC3 draws it solid black, 1px above and below the fill and 2px at each end
    (measured off the real client) — the empty stretch of a bar IS this frame showing. */
 .unit-hpbar-track {
@@ -274,8 +276,8 @@ body.hud-statbar-skinned .unit-hpbar-slot .unit-hpbar-fill {
    itself swaps in (see BarAbility). The twin is desaturated and drawn without the gold frame,
    and no filter of ours reproduces the second half of that. */
 .unit-hpbar-abils {
-  /* Against the ROOT, whose left edge is the hero's LEVEL badge: the first spell sits over the
-     level and the row runs right from there, rather than being centred on the bar. Absolute,
+  /* Against the BARS, so the row begins where the health bar does — clear of the level badge
+     to its left — and runs right from there, rather than being centred on the bar. Absolute,
      so a hero learning a skill never shifts the bar underneath it. */
   position: absolute;
   left: 0;

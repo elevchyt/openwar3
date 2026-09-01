@@ -118,11 +118,11 @@ interface HpBar {
   /** The occupancy bar's row: one child track per cargo slot, rebuilt only when the number
    *  of slots changes (a pool slot may be handed to a burrow one frame and a mine the next). */
   garrisonRow: HTMLDivElement;
-  /** The ally-hero spell row, floated over the bar. Absolutely positioned against the ROOT —
-   *  which begins at the hero's level badge — so the row reads left to right from the same
-   *  edge the bar itself starts at, and so growing one never moves the health bar it belongs
-   *  to (a bar that jumped as its hero learned a skill would be the one thing on screen you
-   *  cannot read at a glance). */
+  /** The ally-hero spell row, floated over the bar. Absolutely positioned against the BARS —
+   *  so it starts at the health bar's own left edge, clear of the level badge to its left —
+   *  and out of their flow, so growing the row never moves the bar it belongs to (a bar that
+   *  jumped as its hero learned a skill would be the one thing on screen you cannot read at
+   *  a glance). */
   abilRow: HTMLDivElement;
   /** What this SLOT's DOM was last given, so syncBars can skip writes that change nothing.
    *  It describes the elements, not a unit — a pool slot is handed to whichever unit lands
@@ -171,11 +171,11 @@ function makeHpBar(layer: HTMLElement): HpBar {
   const abilRow = document.createElement("div");
   abilRow.className = "unit-hpbar-abils";
   abilRow.hidden = true;
-  bars.append(hpTrack, manaTrack, garrisonRow);
-  // The spell row hangs off the ROOT's left edge — the hero's level badge — rather than off
-  // the bars, so the first spell sits over the level and the row runs right from there. Out of
-  // the flow (see HpBar.abilRow), so it displaces nothing.
-  root.append(level, bars, abilRow);
+  // The spell row hangs off the BARS' left edge, so the first spell sits over the start of the
+  // health bar rather than over the level badge beside it. Out of the flow (see HpBar.abilRow),
+  // so it displaces nothing.
+  bars.append(hpTrack, manaTrack, garrisonRow, abilRow);
+  root.append(level, bars);
   // Into the world layer, whose box IS the canvas's — the bar's position is computed in
   // canvas CSS pixels, so parenting it to the window instead offsets every bar by the
   // letterbox (see ui/stage.ts).
@@ -437,7 +437,8 @@ export class WorldOverlays {
         // shading stays put as the bar drains instead of squashing along with it.
         bar.bars.style.setProperty("--statbar-w", `${barW}px`);
         bar.bars.style.setProperty("--statbar-h", `${barH}px`);
-        // On the ROOT, not on the bars: that is where the spell row hangs now.
+        // On the root: the spell row hangs inside the bars, and inherits it from here along
+        // with everything else the bar is sized by.
         bar.root.style.setProperty("--abil-size", `${abilPx}px`);
       }
       // gl y-up → css y-down (floats above the unit). Rounded to whole CSS pixels: the bar
