@@ -911,7 +911,15 @@ const POOL_PAIR_MAX = 9999;
  */
 function poolReadout(cur: number, max: number): string {
   if (max <= 0) return "";
-  return max > POOL_PAIR_MAX ? String(cur) : `${cur} / ${max}`;
+  // The CEILING is a derived float and the client never prints a fraction of one: Masonry's
+  // `rhpo` is +10% of the base pool, so the Arcane Vault's 485 becomes a real 533.5. So it is
+  // rounded for the readout — and `cur` is clamped to what that rounding shows, because it
+  // arrives CEILED and would otherwise print a point OVER a maximum the unit is sitting
+  // exactly on. (The float noise the same step used to leave behind — 1500 x 1.1 =
+  // 1650.0000000000002, printed in full — is gone at the source; see SimWorld.snapPool.)
+  const cap = Math.round(max);
+  const shown = Math.min(cur, cap);
+  return cap > POOL_PAIR_MAX ? String(shown) : `${shown} / ${cap}`;
 }
 
 /** How many rows of fill the client shows inside the frame, and so how many the slab is

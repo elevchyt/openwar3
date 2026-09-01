@@ -2146,6 +2146,13 @@ const MAX_HERO_LEVEL = MISC_GAME.MaxHeroLevel;
 const XP_SHARE_RANGE = MISC_GAME.HeroExpRange;
 const SUMMON_XP_FACTOR = MISC_GAME.SummonedKillFactor;
 
+/** Clear the float noise off a derived life/mana ceiling — see `refreshDerived`, where it is
+ *  applied. Six decimals is far below anything the data can mean and far above the 1e-13 a
+ *  percentage upgrade leaves behind. */
+function snapPool(v: number): number {
+  return Math.round(v * 1e6) / 1e6;
+}
+
 // Attribute → stat conversions (MiscGame Str/Int/Agi bonuses; Liquipedia: Hero).
 const HP_PER_STR = MISC_GAME.StrHitPointBonus;
 const MANA_PER_INT = MISC_GAME.IntManaBonus;
@@ -8885,8 +8892,14 @@ export class SimWorld {
     }
     // Masonry-style `rhpo` is a PERCENTAGE of the base pool, applied before the flat `rhpx`
     // adds (Animal War Training's +150).
-    const newMaxHp = (u.baseMaxHp + HP_PER_STR * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp + maxHpBonus;
-    const newMaxMana = u.baseMaxMana + MANA_PER_INT * dInt + upg.mana + item.maxMana;
+    // Snapped, because the percentage step is the only place a pool picks up a fraction and
+    // IEEE noise is not one of them: the Barracks' 1500 x 1.1 is 1650.0000000000002. That speck
+    // is not merely cosmetic — the readout under the portrait CEILS the current value, so a
+    // Masonry'd building stood a whole point above its own maximum at EVERY health it had
+    // ("1651 / 1650"). Six decimals clears the noise and leaves a real fraction (the Arcane
+    // Vault's 485 x 1.1 = 533.5) exactly where the data puts it.
+    const newMaxHp = snapPool((u.baseMaxHp + HP_PER_STR * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp + maxHpBonus);
+    const newMaxMana = snapPool(u.baseMaxMana + MANA_PER_INT * dInt + upg.mana + item.maxMana);
     // Moving the ceiling keeps the unit's RELATIVE pool, in both directions: "Increasing the
     // maximum amount of Hit Points of a unit does not change its relative Hit Points"
     // (Liquipedia, Hit_Points). The page's own item-drop trick proves the ratio (not a flat
