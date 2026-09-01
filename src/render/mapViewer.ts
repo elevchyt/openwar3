@@ -1153,6 +1153,11 @@ export class MapViewerScene {
   private lastVoice: { label: string; until: number } | null = null; // most recent voice line (label + when it ends), so a bust that finishes loading mid-line still mouths it
   private cameraLock = false; // portrait held → camera follows the selected unit
   private groupFollow = false; // hero key / control-group digit held after its double-tap → camera rides the group
+  /** Ctrl+C's camera lock: the sim id of the unit the camera is riding, or null. Unlike the
+   *  two follows above this one is a TOGGLE and rides a UNIT rather than the selection — see
+   *  `rideLocked` for what ends it. */
+  private cameraRide: number | null = null;
+  private edgePanHeldMs = 0; // how long the cursor has been holding a screen edge, unbroken
   private followVel: [number, number] = [0, 0]; // that follow's spring velocity, world units/s
   /** GAME milliseconds the PREVIOUS frame's `advanceSim` actually retired (0, one or two
    *  SIM_DT steps, and 0 while paused). The follow moves on this clock rather than the render
@@ -1435,6 +1440,11 @@ export class MapViewerScene {
     this.mapBounds = { minX: ox, maxX: ox + (cols - 1) * CELL, minY: oy, maxY: oy + (rows - 1) * CELL };
     this.target = new Float32Array([ox + (cols - 1) * 64, oy + (rows - 1) * 64, 0]);
     // A new map is a teleport: no previous ground to ease away from, and no script offset yet.
+    // Every follow goes with the world it was riding — a sim id from the last match names a
+    // different unit in this one.
+    this.releaseCameraRide();
+    this.cameraLock = false;
+    this.groupFollow = false;
     this.zOffset = 0;
     this.lastFocus = null;
     this.groundSnap = true;
@@ -2514,6 +2524,7 @@ export class MapViewerScene {
       setCameraTargetUnit: (id, xOff, yOff) => {
         this.cameraLock = false; // the script's controller replaces the portrait's follow-lock
         this.groupFollow = false; // …and the held hotkey's, which follows the same way
+        this.releaseCameraRide(); // …and Ctrl+C's, for the same reason
         this.scriptCam.setTargetUnit(id, xOff, yOff);
       },
       resetToGameCamera: (duration) => this.scriptCam.resetToGameCamera(duration, this.readCamera()),
@@ -6376,6 +6387,14 @@ export class MapViewerScene {
       this.groupFollow = false; // everyone it was following is gone
       return;
     }
+    this.easeFocusTo(c);
+  }
+
+  /** The spring itself, shared by the held follow above and Ctrl+C's lock (`rideLocked`) —
+   *  both ride a moving body and both want the same two properties (the sim's clock, and a
+   *  spring rather than an ease); see followHeld's comment for why. They are mutually
+   *  exclusive, so the one velocity between them is one follow's. */
+  private easeFocusTo(c: readonly [number, number]): void {
     const dt = this.lastSimStep / 1000; // seconds of GAME time, 0 while the sim is stopped
     if (dt <= 0) return; // a paused/held world doesn't move, so neither does the camera
     const w = 1000 / FOLLOW_TAU_MS;
@@ -6386,6 +6405,36 @@ export class MapViewerScene {
       this.target[i] = c[i] + (d + step) * decay;
       this.followVel[i] = (this.followVel[i] - w * step) * decay;
     }
+  }
+
+  /**
+   * Ctrl+C's camera lock, once a frame: keep the camera on the unit it was pressed over.
+   *
+   * It differs from the two follows beside it in both directions. It is a TOGGLE — nothing is
+   * being held down, so it survives the keystroke — and it rides a UNIT rather than the
+   * SELECTION, so the player goes on selecting, ordering and building while the camera stays
+   * with the locked hero. That is the whole point of a lock, and it is why the id is stored
+   * here rather than re-read from the selection each frame.
+   *
+   * Four things end it, and three of them are the same rule: the camera is the player's the
+   * moment they take it by hand (the arrow keys, a middle-mouse drag, the minimap, and a
+   * second of unbroken edge-panning). The fourth is the unit leaving the world.
+   */
+  private rideLocked(): void {
+    if (this.cameraRide === null) return;
+    const u = this.rts?.simWorld.units.get(this.cameraRide);
+    if (!u) {
+      this.cameraRide = null; // it died, or was consumed/loaded away — there is nothing to ride
+      return;
+    }
+    this.easeFocusTo([u.x, u.y]);
+  }
+
+  /** Let go of a Ctrl+C lock (the player moved the camera themselves, or a script took it).
+   *  Silent when there is no lock on, so every hand-on-the-camera path can just call it. */
+  private releaseCameraRide(): void {
+    this.cameraRide = null;
+    this.edgePanHeldMs = 0;
   }
 
   /** Command-card icon (BLP path) of the local race's worker, for the idle button. */
@@ -6720,6 +6769,7 @@ export class MapViewerScene {
       fogAt: (wx, wy) => this.rts?.getVision().stateAt(wx, wy) ?? 2, // 2 = visible (no fog before a match)
       cameraRect: () => this.viewRect(),
       panTo: (wx, wy) => {
+        this.releaseCameraRide(); // a minimap click/drag is the player taking the camera back
         this.target[0] = wx;
         this.target[1] = wy;
       },
@@ -6736,6 +6786,7 @@ export class MapViewerScene {
       },
       focusSelected: (lock) => {
         this.cameraLock = lock;
+        this.releaseCameraRide(); // one follow at a time — the portrait's replaces Ctrl+C's
         const pos = this.rts?.selectedPosition();
         if (pos) {
           this.target[0] = pos[0];
@@ -6795,8 +6846,26 @@ export class MapViewerScene {
         this.groupFollow = on;
         if (on) {
           this.cameraLock = false; // one follow at a time — this replaces the portrait's
+          this.releaseCameraRide(); // …and Ctrl+C's, which rides the same way
           this.followVel[0] = this.followVel[1] = 0; // the double-tap already put us there, at rest
         }
+      },
+      // Ctrl+C: lock the camera onto the leading FRIENDLY unit of the selection and ride it.
+      // A press with a lock already on is the release — the binding is one key, so the state
+      // it toggles is read here rather than mirrored in the HUD.
+      toggleCameraLock: () => {
+        if (this.cameraRide !== null) {
+          this.releaseCameraRide();
+          return false;
+        }
+        const id = this.rts?.cameraLockTarget() ?? null;
+        if (id === null) return false; // nothing selected, or what is selected is an enemy's
+        this.cameraRide = id;
+        this.cameraLock = false; // one follow at a time — this replaces the portrait's…
+        this.groupFollow = false; // …and the held hotkey's
+        this.followVel[0] = this.followVel[1] = 0; // start at rest, wherever the camera is now
+        this.edgePanHeldMs = 0; // an edge the cursor was already on doesn't count against it
+        return true;
       },
       heroBar: () => this.rts?.heroBar() ?? [],
       rallyToHero: (index) => this.rts?.rallyToHero(index) ?? false,
@@ -11476,6 +11545,7 @@ export class MapViewerScene {
     }
 
     this.followHeld(); // a held hero key / group digit: ride the selection (issue #114)
+    this.rideLocked(); // …and Ctrl+C's lock, which rides one unit until it is let go
 
     // Pan the ground target relative to view yaw. WASD only outside a match —
     // in-game the letters belong to command hotkeys (M/A/S), WC3 pans with
@@ -11489,13 +11559,22 @@ export class MapViewerScene {
     // player moving through a world, and there is no moving through one that is not running.
     // (`updateEdgeScroll` tests the pause a second time for its own arrow cursor.)
     if (this.userControl && !this.hardPaused) {
-      if ((letters && this.keys.has("w")) || this.keys.has("arrowup")) this.pan(fwd, speed);
-      if ((letters && this.keys.has("s")) || this.keys.has("arrowdown")) this.pan(fwd, -speed);
-      if ((letters && this.keys.has("d")) || this.keys.has("arrowright")) this.pan(right, speed);
-      if ((letters && this.keys.has("a")) || this.keys.has("arrowleft")) this.pan(right, -speed);
-      this.updateEdgeScroll(fwd, right, speed); // pan when the cursor rests at a screen edge
+      const panUp = (letters && this.keys.has("w")) || this.keys.has("arrowup");
+      const panDown = (letters && this.keys.has("s")) || this.keys.has("arrowdown");
+      const panRight = (letters && this.keys.has("d")) || this.keys.has("arrowright");
+      const panLeft = (letters && this.keys.has("a")) || this.keys.has("arrowleft");
+      if (panUp) this.pan(fwd, speed);
+      if (panDown) this.pan(fwd, -speed);
+      if (panRight) this.pan(right, speed);
+      if (panLeft) this.pan(right, -speed);
+      // Driving the camera with the keys ends a Ctrl+C lock at once — unlike the screen edge
+      // below, which is timed: an arrow key can only be pressed on purpose, while the cursor
+      // brushes an edge on its way to the console every time you click a command button.
+      if (panUp || panDown || panRight || panLeft) this.releaseCameraRide();
+      this.updateEdgeScroll(fwd, right, speed, dtMs); // pan when the cursor rests at a screen edge
     } else {
       this.showScrollArrow(0, 0);
+      this.edgePanHeldMs = 0;
     }
 
     // The wheel's ease and Insert/Delete's rotation — the two things the PLAYER can do to the
@@ -11639,7 +11718,8 @@ export class MapViewerScene {
   // Edge-of-screen scrolling (WC3): pan when the cursor rests within EDGE_MARGIN of
   // a screen edge, and show a directional arrow cursor pointing the scroll way.
   private scrollArrow: HTMLDivElement | null = null;
-  private updateEdgeScroll(fwd: [number, number], right: [number, number], speed: number): void {
+  private static readonly EDGE_UNLOCK_MS = 1000; // edge-panning this long lets go of a Ctrl+C lock
+  private updateEdgeScroll(fwd: [number, number], right: [number, number], speed: number, dtMs: number): void {
     // Only in a live match, cursor on the page, nothing modal.
     const active =
       !!this.hud &&
@@ -11671,6 +11751,17 @@ export class MapViewerScene {
     if (dx || dy) {
       if (dx) this.pan(right, dx * speed);
       if (dy) this.pan(fwd, -dy * speed); // top of screen (dy<0) pans the view forward
+      // A held edge is the player looking somewhere else, and after a second of it a Ctrl+C
+      // lock lets go. Timed rather than answered on the first frame because the cursor
+      // crosses an edge constantly without meaning to move the camera — reaching the console,
+      // clicking near the border, sweeping to the minimap — and a lock that dropped on the
+      // first touch would never survive an ordinary minute of play. While the second runs the
+      // pan and the lock's spring fight, so the view leans toward the edge and springs back:
+      // the lock reads as resisting, which is the feedback that it is still on.
+      this.edgePanHeldMs += dtMs;
+      if (this.edgePanHeldMs >= MapViewerScene.EDGE_UNLOCK_MS) this.releaseCameraRide();
+    } else {
+      this.edgePanHeldMs = 0; // the run has to be UNBROKEN — leaving the edge starts the second over
     }
     this.showScrollArrow(dx, dy);
   }
@@ -11791,6 +11882,7 @@ export class MapViewerScene {
    *  forward axis is divided by sin(pitch) because the tilted ground plane covers
    *  more world per vertical screen pixel. */
   private midPan(mx: number, my: number): void {
+    this.releaseCameraRide(); // dragging the map by hand is taking the camera back (Ctrl+C)
     const h = this.canvas.clientHeight || 720;
     // Off the LIVE lens, not a hard-coded one: the drag has to track the ground under the
     // cursor, and the world a screen pixel covers is set by the lens (and by a script's, if

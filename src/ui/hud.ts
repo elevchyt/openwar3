@@ -269,6 +269,12 @@ export interface HudDriver {
   /** Hold the key down on that double-tap (a hero key or a control-group digit) and the
    *  camera RIDES the recalled selection until the key comes back up — WC3's hold-to-follow. */
   followSelection(on: boolean): void;
+  /** Ctrl+C — toggle a camera LOCK onto the selected friendly unit: unlike the hold-to-follow
+   *  above it stays on after the key comes up, and rides that one unit (not the selection, so
+   *  you may go on clicking elsewhere) until it is pressed again, the unit dies, or the player
+   *  takes the camera by hand. False when nothing lockable is selected — an enemy's unit is
+   *  not lockable (see RtsController.cameraLockTarget) — and when the press turned a lock OFF. */
+  toggleCameraLock(): boolean;
   /** The hero bar's buttons: the local player's living heroes in hire order, the order
    *  F1/F2/F3 also count in. */
   heroBar(): HeroBarEntry[];
@@ -1486,6 +1492,16 @@ export class GameHud {
     if (slot >= 0) {
       e.preventDefault();
       this.driver.useInventory(slot);
+      return;
+    }
+    // Ctrl+C locks the camera onto the selected friendly unit and keeps it there — a toggle,
+    // not a hold (the driver says what releases it). Keyed off `e.code` so no keyboard layout
+    // can move the key, and `preventDefault` because Ctrl+C is the browser's own copy. Read
+    // here, above the command card's letters, so a card with a "C" on it (Cripple, Coil,
+    // Cyclone) cannot eat it — the same precedence Alt-A takes below.
+    if ((e.ctrlKey || e.metaKey) && e.code === "KeyC") {
+      e.preventDefault();
+      this.driver.toggleCameraLock();
       return;
     }
     // Alt-A cycles the Ally Color Mode — the game's own binding, printed in the button's

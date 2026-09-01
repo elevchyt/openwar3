@@ -2582,6 +2582,32 @@ export class RtsController {
     return this.selectedPosition(); // nothing selected, or what is selected is a gold mine
   }
 
+  /**
+   * The unit a Ctrl+C camera lock rides: the selection's LEADING unit — the same one the
+   * portrait shows and `selectionAnchor` centres on — and only while it is the local
+   * player's own or an ALLY's.
+   *
+   * An enemy's unit is not lockable. A lock is a way of watching something you command or
+   * fight beside; riding a hostile unit would be a camera parked in his base for as long as
+   * he lives, which is a fog bypass by another name. "Friendly" is the same question every
+   * other friend-or-foe reading on this screen asks (`localAlly`, and see the
+   * friendly-means-allied rule), so a creep or a neutral-passive shop is not one either.
+   *
+   * Falls down the rest of the group like `selectionAnchor` does, for the same two reasons
+   * (the leader may be a frame from having a render entry, or may have just died) — and here
+   * it also skips PAST an enemy leader, so an own unit box-selected alongside somebody else's
+   * is still what the lock lands on.
+   */
+  cameraLockTarget(): number | null {
+    const order = this.primary !== null ? [this.primary, ...this.orderedSelection()] : this.orderedSelection();
+    for (const id of order) {
+      const u = this.sim.units.get(id);
+      if (!u || u.neutralPassive) continue;
+      if (u.owner === this.localPlayer || this.localAlly(u.owner)) return id;
+    }
+    return null;
+  }
+
   /** Drop dead units from the selection and repoint the primary if it died. */
   private pruneSelection(): void {
     let changed = false;
