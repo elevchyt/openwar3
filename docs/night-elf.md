@@ -598,20 +598,26 @@ an effect's art.
 `Effectart` is a five-entry list and the row's own comment says what the five are: "One for each
 normal race, and a special one for demons and their corrupted moon well." That is a list of
 WELLS, not of drinkers. `MoonWellTarget.mdl` is a flat hexagon of rippling blue water — the pool
-standing in the basin — and its **level is the well's mana**, by the same trick the loading bar
-uses (`docs/loading-screens.md`): the clip animates the surface from empty to brimming and the
-engine simply parks the playhead. Its `Stand` runs 8 seconds, which is a very long idle and a
-very ordinary gauge.
+standing in the basin — and its **level is the well's mana**.
+
+The level is a HEIGHT, and it is the engine's to set: there is no clip to park a playhead in.
+The model is one bone ("PoolSurface") with **no animation tracks at all** over six vertices
+lying flat at z = 7.28; the only things its two sequences move are a texture rotation on a
+global sequence and the `ElderPond01` emitter's drift. Reading it as a loading bar
+(`docs/loading-screens.md`) — mana fraction along `Stand`, `timeScale` 0, `forced` — therefore
+moved nothing: the well brimmed at every mana. It was worse than a no-op, because the frozen
+clock stopped the ripple and the particles too; both ride `dt * timeScale`.
 
 So it is not played at a cast at all. It is a persistent model on the building, riding the same
-pool as buff art (`collectMoonWellWater`), with `timeScale` 0 and `frame` = mana fraction along
-the interval — a full well brims, a drained one shows bare stone, and a well refilling through
-the night visibly climbs. Read as a cast effect instead, the water flew to whoever drank and
-evaporated a few seconds later.
+pool as buff art (`collectMoonWellWater`), and what varies is where the plane is PUT: linear in
+the mana fraction between `MOON_WELL_WATER_LIFT_DRY` and `MOON_WELL_WATER_LIFT`, so a full well
+brims, a drained one shows bare stone, and a well refilling through the night visibly climbs.
+Read as a cast effect instead, the water flew to whoever drank and evaporated a few seconds
+later.
 
 **A gauge may not be read through the fog.** The well itself keeps its image once explored — WC3
-leaves the last thing you saw standing on the ground — but this model's playhead is parked at the
-well's LIVE mana, so drawing it from that memory told you, second by second and from across the
+leaves the last thing you saw standing on the ground — but this model's height is the well's
+LIVE mana, so drawing it from that memory told you, second by second and from across the
 map, how much healing an enemy night elf had banked and exactly when a unit had just drunk.
 `collectMoonWellWater` now takes live sight of the well (`pointVisible`), like everything else
 that moves; the pool tidies itself away and the next look re-fills it at whatever level it has
@@ -624,7 +630,12 @@ Two placement traps, both of which look like "the water is missing":
   stone — drawn, and invisible. The artist's own answer is the well's `Sprite First Ref`, which
   is at the right height and on the RIM, so riding it puts the pool half off the rock;
   `MOON_WELL_WATER_LIFT` is that height without the offset, and it is measured rather than
-  read, because no column states it.
+  read, because no column states it. `MOON_WELL_WATER_LIFT_DRY` — the bottom of the ramp — is
+  measured off the geometry instead of by eye: raycast `MoonWell.mdx`'s body straight down over
+  the pool's own footprint and the basin is a DISH, stone at z = 11.2 dead centre and z ≈ 17.5
+  out at the hexagon's rim, and a flat plane can only rest on the shallowest part of a dish.
+  Minus the pool's own 7.28 that is 10 — the last puddle before zero mana takes the model away
+  entirely.
 * The reference height is the BUILDING's, not the terrain's. A structure is seated above the
   ground it stands on, so its water has to rise with it.
 

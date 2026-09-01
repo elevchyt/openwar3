@@ -443,7 +443,9 @@ const AOE_SPLAT_TEXTURE: Record<PlayableRace, string> = {
 const UPROOTED_ONLY = new Set(["Aeat", "Aent"]);
 
 /**
- * How far above a Moon Well's own origin its water model is placed, in world units.
+ * How far above a Moon Well's own origin its water model is placed at FULL mana, in world
+ * units. `MOON_WELL_WATER_LIFT_DRY` is the same height for an all-but-empty one; a well in
+ * between floats its pool between the two (collectMoonWellWater).
  *
  * MEASURED, because nothing in the data states it: `[Ambt] Effectart` names the model and
  * nothing names where to put it, and the model is authored to be dropped INTO the basin rather
@@ -454,6 +456,18 @@ const UPROOTED_ONLY = new Set(["Aeat", "Aent"]);
  * RIM, so riding it puts the pool half off the well; this is its height without its offset.
  */
 const MOON_WELL_WATER_LIFT = 32;
+
+/**
+ * Where the same pool sits when the well is down to its last drop — the floor of the basin.
+ *
+ * Read off the geometry rather than by eye, because the basin is a dish and its floor is not
+ * one number: raycasting `MoonWell.mdx`'s body straight down over the pool's own footprint
+ * puts the stone at z = 11.2 dead centre and z ≈ 17.5 out at the hexagon's rim (r = 55), and
+ * a flat plane can only rest on the shallowest part of a dish. The pool's own surface lies
+ * 7.28 above its origin, so 17.5 − 7.3 ≈ 10 is the height at which the water is just touching
+ * the stone all round: the last puddle before `mana <= 0` takes the model away entirely.
+ */
+const MOON_WELL_WATER_LIFT_DRY = 10;
 
 /**
  * The half-extents a building's SEAT HEIGHT is sampled over — its BODY, not its whole
@@ -4681,12 +4695,15 @@ export class MapViewerScene {
    * as an effect to throw at whoever drinks is the bug this replaces: the water model flew to
    * the drinking unit and evaporated a few seconds later.
    *
-   * The LEVEL is the same trick the loading bar uses (docs/loading-screens.md): the clip
-   * animates the surface from empty to full and the engine simply parks the playhead — mana
-   * fraction along the interval, `timeScale` 0 so it holds there. `forced` makes the pose
-   * follow a frame written from outside (the viewer only re-samples bones for animations it
-   * advanced itself). So a full well brims, a drained one shows bare stone, and a well
-   * refilling through the night visibly climbs.
+   * The LEVEL is the plane's HEIGHT, and it is the engine's to set — there is no clip to park
+   * a playhead in. `MoonWellTarget.mdx` is one bone ("PoolSurface") with NO animation tracks
+   * at all, over a six-vertex hexagon lying flat at z = 7.28; its only motion is a texture
+   * rotation on a global sequence and the `ElderPond01` emitter's drift. So the old reading —
+   * mana fraction along the Stand interval, `timeScale` 0, `forced` — moved nothing (the well
+   * brimmed at every mana), and the frozen clock stopped the ripple and the particles besides:
+   * both ride `dt * timeScale`. What moves is the model, lowered into the basin as the well is
+   * drunk from, so a full well brims, a drained one shows bare stone, and a well refilling
+   * through the night visibly climbs.
    *
    * Rides the persistent-FX pool like buff art, so it gets the Birth → Stand lifecycle, the
    * `origin` attachment and the tidy-up when the well dies for free. A well still under
@@ -4702,24 +4719,24 @@ export class MapViewerScene {
       // THE WATER IS A GAUGE, AND A GAUGE MAY NOT BE READ THROUGH THE FOG.
       //
       // The well itself keeps its image once explored — WC3 leaves the last thing you saw
-      // standing on the ground — but this model's playhead is parked at the well's live mana
-      // (see below), so drawing it from that memory tells you, second by second and from
-      // across the map, how much healing an enemy night elf has banked and exactly when a
-      // unit has just drunk. Live sight, like every other thing that moves: no eyes on the
-      // well, no water. The pool tidies the instance away and the next look re-fills it at
-      // whatever level it has really reached.
+      // standing on the ground — but this model's HEIGHT is the well's live mana (see below),
+      // so drawing it from that memory tells you, second by second and from across the map,
+      // how much healing an enemy night elf has banked and exactly when a unit has just
+      // drunk. Live sight, like every other thing that moves: no eyes on the well, no water.
+      // The pool tidies the instance away and the next look re-fills it at whatever level it
+      // has really reached.
       if (!this.pointVisible(u.x, u.y)) continue;
       const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
       const art = ab && this.abilities.get(ab.id)?.effectArt;
       if (!art) continue;
-      // AN EMPTY WELL HAS NO WATER IN IT. The model's "empty" pose is still a sheet of water
-      // — the clip animates a LEVEL between two surfaces, so its first frame is a low pool
-      // rather than nothing at all — and parking the playhead there left a drained well
-      // shimmering exactly like one that still had a heal in it. Which is the one thing the
-      // gauge exists to tell apart: a Moon Well emptied by day stays empty until dusk
-      // (`manaRegenSuspended`), and that dry basin is the whole cost of drinking from it.
-      // So zero mana is not a level to draw — it is no model, and the pool tidies the
-      // instance away (the key is simply left out of `active`) until the well has water again.
+      // AN EMPTY WELL HAS NO WATER IN IT. The model is a solid sheet of water at any height
+      // you put it, so the bottom of the ramp is still a puddle lying on the stone — and a
+      // drained well left shimmering down there reads exactly like one that still has a heal
+      // in it. Which is the one thing the gauge exists to tell apart: a Moon Well emptied by
+      // day stays empty until dusk (`manaRegenSuspended`), and that dry basin is the whole
+      // cost of drinking from it. So zero mana is not a level to draw — it is no model, and
+      // the pool tidies the instance away (the key is simply left out of `active`) until the
+      // well has water again.
       if (u.mana <= 0) continue;
       const key = `well|${u.id}`;
       // Unattached, and placed by hand below. The model is a flat hexagon of rippling water
@@ -4730,24 +4747,17 @@ export class MapViewerScene {
       this.trackBuffFx(active, key, { path: art, attach: [] }, u.id, undefined, true);
       const inst = this.buffFx.get(key);
       if (!inst) continue;
-      const stand = this.seqIndex(inst, /^stand/i);
-      const iv = stand >= 0 ? inst.model.sequences[stand]?.interval : undefined;
-      if (stand < 0 || !iv || iv.length < 2) continue;
-      if (inst.sequence !== stand) {
-        inst.setSequence(stand);
-        inst.setSequenceLoopMode(2);
-        this.buffFxBirthing.delete(key); // it is a gauge, not a three-act effect
-      }
-      inst.timeScale = 0; // parked: the clip is a dial, not a loop
-      inst.frame = iv[0] + Math.max(0, Math.min(1, u.mana / u.maxMana)) * (iv[1] - iv[0]);
-      inst.forced = true;
-      // Centred on the well and lifted into the basin. The building's OWN drawn height is the
-      // reference rather than the terrain: a structure is seated above the ground it stands on
-      // (seatHalfExtents), and its water has to rise with it.
+      // Centred on the well and lifted into the basin, AS FAR AS ITS MANA HAS FILLED IT. The
+      // building's OWN drawn height is the reference rather than the terrain: a structure is
+      // seated above the ground it stands on (seatHalfExtents), and its water has to rise with
+      // it. Linear in the mana fraction, which is also how the well reads as a gauge: half a
+      // heal left is half a basin.
+      const full = Math.max(0, Math.min(1, u.mana / u.maxMana));
+      const lift = MOON_WELL_WATER_LIFT_DRY + full * (MOON_WELL_WATER_LIFT - MOON_WELL_WATER_LIFT_DRY);
       const host = this.rts?.unitInstance(u.id) as unknown as SpawnInstance | undefined;
       this.loc3[0] = u.x;
       this.loc3[1] = u.y;
-      this.loc3[2] = (host?.localLocation[2] ?? this.rts!.groundHeightAt(u.x, u.y)) + MOON_WELL_WATER_LIFT;
+      this.loc3[2] = (host?.localLocation[2] ?? this.rts!.groundHeightAt(u.x, u.y)) + lift;
       inst.setLocation(this.loc3);
     }
   }
