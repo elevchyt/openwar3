@@ -284,6 +284,39 @@ for (const [race, table] of Object.entries(PLUS_RACES)) {
   check(`${race} opens on the mine when it is not`, flush.harvest[0]?.res, "gold");
 }
 
+// --- …and an EXPANDED base does not swallow it -------------------------------------------
+//
+// The dry-bank floor above is a plaster; the interleave is the fix, and it is the game's own.
+// All three chopping races write the same four lines (human.ai 623-626, orc.ai 628-631,
+// elf.ai 688-691): `HarvestGold(T,4)`, `HarvestWood(0,1)`, `HarvestGold(T,1)`, `HarvestWood(0,1)`
+// — the slices are cumulative, so that says *the fifth miner is worth less than the first
+// lumberjack, and the second town's whole crew is worth less than the second lumberjack*.
+//
+// Written the other way round — five per mine, then everybody else in the trees, which is what
+// this was — an expanded Computer+ chopped NOTHING: three towns is fifteen gold seats against an
+// Insane profile's fourteen workers, so the trailing lumber slice swept up nobody at all.
+//
+// The UNDEAD is the exception and undead.ai says so too (647-652: every mine, and only then
+// `HarvestWood(0,WG)`). There is nothing to interleave, because an Acolyte cannot chop — its
+// gold is Acolytes at the Haunted Gold Mine and its lumber is Ghouls, so the two are not
+// competing for the same bodies at all.
+console.log("\n--- three towns still leave somebody in the forest ---");
+for (const [race, table] of Object.entries(PLUS_RACES)) {
+  const chops = race !== "undead";
+  const standing = table.mineBuilding ? { [table.mineBuilding]: 1 } : {};
+  const r = recorder(table, table.strategies[0], PLUS_NORMAL, { wood: 800, workerChops: chops, standing, towns: 3 });
+  harvestPlan(r.ctx);
+  const firstWood = r.harvest.findIndex((s) => s.res === "lumber");
+  const secondTown = r.harvest.findIndex((s) => s.res === "gold" && s.town > 0);
+  check(`${race} ${chops ? "chops before it crews the second mine" : "crews every mine before it chops"}`,
+    chops ? firstWood >= 0 && firstWood < secondTown : firstWood > secondTown, true);
+  // …and the main mine's crew is still five, split 4 + 1 the way the scripts split it.
+  const main = r.harvest.filter((s) => s.res === "gold" && s.town === 0).reduce((n, s) => n + s.n, 0);
+  check(`${race} still crews its main mine with five`, main, 5);
+  // The trailing sweep is the LAST word either way: whatever is left over chops.
+  check(`${race} sweeps the rest into the trees`, r.harvest[r.harvest.length - 1]?.res, "lumber");
+}
+
 // --- the army always asks for something --------------------------------------------------
 //
 // A budget spread thinly enough rounds every share to nothing, and a pass that can plainly build

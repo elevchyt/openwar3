@@ -1064,13 +1064,42 @@ function producerReady(c: PlusCtx, from: string, needs?: readonly string[]): boo
 }
 
 /**
- * The harvest split: five per mine, everybody else in the trees.
+ * The harvest split — the MAIN mine's crew INTERLEAVED with the first lumberjacks, then every
+ * other mine, then the forest.
  *
- * Five because that is what a WC3 gold mine takes at once — a sixth worker on a mine is a
- * worker standing in a queue. The slices are ORDERED and cumulative (see docs/melee-ai.md):
- * every mine is crewed before anybody is sent to chop, which is the priority a melee opening
- * actually has, and the trailing lumber slice is deliberately larger than any roster so it
- * sweeps up whatever is left.
+ * This is `peon_assignment`'s own shape, and it is worth taking whole because the interleave is
+ * the point rather than a detail. All three chopping races write the same four lines
+ * (human.ai 623-626, orc.ai 628-631, elf.ai 688-691):
+ *
+ *     call HarvestGold(T,4)
+ *     call HarvestWood(0,1)
+ *     call HarvestGold(T,1)
+ *     call HarvestWood(0,1)          // elf.ai asks 2 here
+ *     if <a second mine> then call HarvestGold(T+1,5) endif
+ *     call HarvestWood(0,15)
+ *
+ * The slices are ORDERED and cumulative, so what those lines say is *the fifth miner is worth
+ * less than the first lumberjack, and the second town's whole crew is worth less than the
+ * second lumberjack*. Written as "five per mine, then everybody else in the trees" — which is
+ * what this was — it says the opposite, and the difference is not cosmetic:
+ *
+ *  · **an expanded Computer+ chopped NOTHING.** Three towns is fifteen gold seats against an
+ *    Insane profile's fourteen workers (`PlusProfile.workers`), so the trailing lumber slice
+ *    swept up nobody at all — and every row the ladder halts on is priced in wood.
+ *  · **a raided one chopped nothing either**, for as long as it was short of five workers per
+ *    mine, which is exactly when it is rebuilding and needs lumber most.
+ *
+ * `LUMBER_DRY` below was the plaster over the second of those (one worker, and only while the
+ * bank was empty); the interleave is the fix, and it is the game's own.
+ *
+ * **The undead is the exception and the game says so too** (undead.ai 647-652): every town's
+ * mine crewed, and only then `HarvestWood(0, WG)`. There is nothing to interleave, because an
+ * Acolyte cannot chop — `uaco` `lumber: false`, docs/undead.md — so the undead's gold seats and
+ * its forest are not competing for the same bodies at all. Its gold is Acolytes at the Haunted
+ * Gold Mine and its lumber is Ghouls, and the trailing wood slice picks up the Ghouls the wave
+ * did not take (`ComputerPlusAi.lumberCrew`). Asked as `c.workerChops` — a question about this
+ * player's WORKER — rather than as a race, so a custom map that hands its Acolytes an axe gets
+ * the interleave with no list of races anywhere.
  *
  * "Go and work that mine" is a different order for each race and none of it is here: the AI
  * hands the job to `SimWorld.issueGoldWork` through `AiPlayer.applyHarvest`, which knows that
@@ -1082,23 +1111,42 @@ export function harvestPlan(c: PlusCtx): void {
   ai.clearHarvestAI();
   // THE AXE THAT IS NEVER PUT DOWN, and it goes FIRST because the slices are cumulative.
   //
-  // Five per mine before anybody chops is the right opening and the wrong floor: a player
-  // reduced to five workers — a raid on the mine, an Ancient eating its wisps — put all five
-  // back on the gold and earned NO LUMBER AT ALL. Every row the ladder halts on early is
-  // priced in wood (a Burrow at 40, a Moon Well at 40, the hero at 100, a Hunter's Hall at
-  // 145), and a lumber shortfall with no lumber income never shrinks: `runBuildLoop` returns
-  // at the row and the rows below it — the farm that would lift the food cap, the worker that
-  // would go and chop — are never read again. That is a match-ending state a computer cannot
-  // walk out of, and one worker in the trees makes it unreachable.
+  // The interleave below already guarantees a forest crew wherever there are five workers to
+  // split. This is the floor UNDER that, for the base that has just lost most of them: with
+  // four workers left, four gold seats take all four and the wood slices find nobody. Every row
+  // the ladder halts on early is priced in wood (a Burrow at 40, a Moon Well at 40, the hero at
+  // 100, a Hunter's Hall at 145), and a lumber shortfall with no lumber income never shrinks —
+  // `runBuildLoop` returns at the row, and the rows below it (the farm that would lift the food
+  // cap, the worker that would go and chop) are never read again. That is a match-ending state
+  // a computer cannot walk out of, and one worker in the trees makes it unreachable.
   //
   // Only while the bank is DRY, so it costs the opening nothing: a melee start is 150 lumber
   // (`MELEE_STARTING_LUMBER_V1`) and every race spends its way under `LUMBER_DRY` a minute in,
   // by which time the forest crew is being hired anyway. And only for a race whose worker can
   // chop — the undead's lumber is a Ghoul and comes out of `lumberUnits` instead.
   if (c.workerChops && ai.wood() < LUMBER_DRY) ai.harvestWood(0, LUMBER_MIN);
+  const mines: number[] = [];
   for (let t = 0; t < ai.townCountTotal(); t++) {
-    if (ai.townHasMine(t) && ai.townHasHall(t) && mineWorkable(c, t)) ai.harvestGold(t, MINE_CREW);
+    if (ai.townHasMine(t) && ai.townHasHall(t) && mineWorkable(c, t)) mines.push(t);
   }
+  // The MAIN mine — `T` in the scripts, which is `TownWithMine()`: the first town that has one.
+  const [main, ...rest] = mines;
+  if (main !== undefined) {
+    // Four, an axe, the fifth miner, another axe — human.ai 623-626 to the line, and the whole
+    // of "the fifth miner is worth less than the first lumberjack".
+    if (c.workerChops) {
+      ai.harvestGold(main, MINE_CREW - 1);
+      ai.harvestWood(0, LUMBER_MIN);
+      ai.harvestGold(main, 1);
+      ai.harvestWood(0, LUMBER_MIN);
+    } else {
+      // …and nothing to interleave for the race whose worker cannot chop: undead.ai crews every
+      // mine outright (647-652) and leaves the forest to the Ghouls in the sweep below.
+      ai.harvestGold(main, MINE_CREW);
+    }
+  }
+  // Every other town's crew, which even for a chopping race sits UNDER the first two axes.
+  for (const t of rest) ai.harvestGold(t, MINE_CREW);
   ai.harvestWood(0, 40);
 }
 
@@ -1124,5 +1172,10 @@ function mineWorkable(c: PlusCtx, town: number): boolean {
 /** Lumber below which the forest is crewed BEFORE the mine — see `harvestPlan`. A little over
  *  the cheapest lumber row in any race's opening (a farm, at 40). */
 const LUMBER_DRY = 100;
-/** …and by how many. One: it is a floor against a deadlock, not a lumber policy. */
+/** …and by how many. One: it is a floor against a deadlock, not a lumber policy.
+ *
+ *  It is also the size of each of the two slices the main mine's crew is interleaved with, and
+ *  that one IS the game's — human.ai and orc.ai both write `HarvestWood(0,1)` twice, for two
+ *  lumberjacks before the second town is crewed at all. (elf.ai asks 2 on its second slice; the
+ *  extra wisp is inside `LUMBER_OPENING`'s four either way.) */
 const LUMBER_MIN = 1;

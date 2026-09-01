@@ -139,6 +139,10 @@ export class MeleeAi {
     // issue every order twice and fight each other over the build array.
     if (this.brains.some((b) => b.ai.player === player)) return;
     const ai = new AiPlayer(player, race, difficulty, this.host, startX, startY, seed);
+    // `StandardAI`'s own flag block, and the one line of it that was missing: every melee
+    // computer repairs, at every difficulty (`call SetPeonsRepair(true)`, common.ai 792, beside
+    // SetGroupsFlee/SetHeroesFlee/SetIgnoreInjured). See `AiPlayer.applyRepairs`.
+    ai.peonsRepair = true;
     // `main()`: PickMeleeHero, then set_skills (which only writes the arrays of the three
     // heroes this player actually drew — see SetSkillArray).
     ai.pickMeleeHero(script.heroes);
@@ -234,6 +238,9 @@ export class MeleeAi {
     // …and `init_vars`' last act: the opening latch, which never goes back once it has dropped.
     if (ai.basicOpening && script.openingDone(ai)) ai.basicOpening = false;
 
+    // `SetPeonsRepair` — before the harvest split, so a worker sent to mend something is
+    // already spoken for when the slices are filled rather than being walked back to the mine.
+    ai.applyRepairs();
     script.peonAssignment(ai); // ClearHarvestAI + the Harvest* split
     ai.applyHarvest();
     script.buildSequence(ai); // fills the build array

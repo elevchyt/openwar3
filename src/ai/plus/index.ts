@@ -1729,6 +1729,11 @@ export class ComputerPlusAi {
     const ai = new AiPlayer(player, race, difficulty, this.host, startX, startY, seed);
     // No fog cheat at any difficulty — see the file header.
     ai.bypassFog = false;
+    // …and it mends what it owns, at every difficulty. `SetPeonsRepair(true)` is unconditional
+    // in `StandardAI` (common.ai 792), so this is one of the few places Computer+ has nothing to
+    // improve on: a ladder player repairs, and a hall being chewed on is the whole reason.
+    // Two workers is the ceiling, and the hall outranks everything — `AiPlayer.applyRepairs`.
+    ai.peonsRepair = true;
     // WHICH BUILD this computer is playing, rolled once off its own stream and held for the
     // match. Two Computer+ players on one map open differently; the same seat on the same seed
     // opens the same way twice.
@@ -2014,6 +2019,10 @@ export class ComputerPlusAi {
     const { ai } = b;
     ai.refresh();
     const ctx = this.ctx(b);
+    // `SetPeonsRepair` — ahead of the harvest split, so the two workers it may hire are already
+    // spoken for when the slices are filled and the rest of the crew is redistributed around
+    // them (`applyHarvest` passes over a worker on a repair job).
+    ai.applyRepairs();
     // Workers first, then the list they will be spending on — the same order the classic AI
     // runs its two halves in (`peon_assignment` fills the harvest plan, `OneBuildLoop` spends).
     harvestPlan(ctx);

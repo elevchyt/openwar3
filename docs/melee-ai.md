@@ -125,6 +125,55 @@ trip resets once a second.
 kneels in a Haunted one's ring (a `harvest`, but only once the mine is haunted). The AI mirrors
 `SimWorld.issueGoldWork` rather than guessing.
 
+## `SetPeonsRepair` — every melee computer repairs, at every difficulty
+
+```jass
+call SetPeonsRepair(true)          // common.ai 792, inside StandardAI
+```
+
+It sits in `StandardAI`'s flag block beside `SetGroupsFlee` / `SetHeroesFlee` /
+`SetIgnoreInjured`, with **no difficulty test on it**, and `StandardAI` is what all four race
+scripts call. So a melee computer mending its buildings is not a Hard-and-above behaviour: both
+AIs set `AiPlayer.peonsRepair` at seat time. The flag is GRADED in *campaigns* instead, which is
+the only reason it is a flag at all — `CampaignAI` asks for it only at `MAP_DIFFICULTY_HARD`
+(common.ai 2414), and individual chapters turn it on for themselves (`u08x05.ai`, `n07_red.ai`,
+`h05x07.ai`, …).
+
+**What the flag switches on is Blizzard's C++ and is in no file in the install**, so
+`AiPlayer.applyRepairs` is ours and so is every number in it. Three decisions:
+
+- **What.** Anything of ours that is FINISHED and under `REPAIR_AT` (90 %) of its life. A
+  building still going up is *built*, not repaired — it already has a worker on it, and a
+  structure hurt on the way up finishes hurt and is mended afterwards like any other.
+- **In what order. The hall first, always** — sorted on *is it the hall* BEFORE *how hurt is
+  it*, so a Farm at a tenth of its life never outranks a Town Hall at four fifths. No race list
+  says which building that is: `UnitBalance`'s own `type` column carries **`TownHall`** on all
+  twelve of them (`htow`/`hkee`/`hcas`, `ogre`/`ostr`/`ofrt`, `etol`/`etoa`/`etoe`,
+  `unpl`/`unp1`/`unp2`) and on nothing else. It is the same column `siteFor` already picks a
+  hall's building site by.
+- **With whom. Two workers, ever** (`REPAIR_MAX`), the hall being the only thing allowed both.
+  A raided base is damaged *everywhere*, so a per-building crew with no ceiling over it walks
+  the whole economy into the rubble — and a computer that has stopped earning cannot pay for the
+  repairs it has ordered, since `tickRepair` charges gold and lumber per hit point restored and
+  abandons the job when the bank empties. Within that two, an IDLE worker is taken before a
+  lumberjack before a **miner**: gold is what every other row on the build ladder is bought with.
+
+Two things it deliberately does not decide for itself:
+
+- **Whether this worker may mend that building.** Every repair row lists `nonancient` except the
+  Wisp's Renew, so only a Wisp mends a Tree of Life; a Ghoul carries no repair row at all
+  (`ugho` `abilList` = `Acan,Ahrl,Aiun`), so the undead mends with Acolytes or not at all. Both
+  fall out of `SimWorld.repairRefusal`, which the pass asks per (worker, building) and does not
+  second-guess.
+- **When to stop.** The sim ends the job itself at full health or an empty bank, and the worker
+  falls back to idle — where the next harvest pass picks it up. A worker already on a repair job
+  is never re-tasked here, or the walk would restart every pass.
+
+It runs BEFORE the harvest split in both AIs' build passes, so a worker sent to mend something is
+already spoken for when the slices are filled (`applyHarvest` skips a worker on a repair job) and
+the rest of the crew is redistributed around it. Pinned by
+[`tools/ai-repair-test.cjs`](../tools/ai-repair-test.cjs).
+
 ## Night elf gold is a CAST, not a build order
 
 `egol` (Entangled Gold Mine) is what `Aent` *creates*. It appears in no build array anywhere
@@ -161,8 +210,8 @@ Each of these is engine machinery rather than a line of script, and each is mark
   a channel we have no equivalent of.
 - **Zeppelins** (`PurchaseZeppelin`, `LoadZepWave`) — buying a Goblin Zeppelin and airlifting a
   wave into a base.
-- **`SetPeonsRepair`, `SetHeroesBuyItems`, `SetHeroesTakeItems`, `SetSmartArtillery`** — the
-  `StandardAI` behaviour switches.
+- **`SetHeroesBuyItems`, `SetHeroesTakeItems`, `SetSmartArtillery`** — the rest of the
+  `StandardAI` behaviour switches. (`SetPeonsRepair` is no longer among them — see below.)
 - **`MergeUnits` / `ConvertUnits`** — Hippogryph Riders and Obsidian Statues → Destroyers.
 
 ## The difficulty spread

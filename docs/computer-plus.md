@@ -1274,16 +1274,65 @@ workers left alive all go back on the mine and the forest is empty.
 
 Two things, a brace and a belt:
 
-* **`harvestPlan` never leaves the forest empty.** While the lumber bank is under `LUMBER_DRY`
-  (100) and the race's own worker can chop, one axe is asked for *before* the mine's crew, since
-  the slices are cumulative. Above that bank it costs the opening nothing — a melee start is 150
-  lumber — and it is the same interleaving Blizzard's own scripts use (`orc.ai`'s
-  `HarvestGold(T,4)` / `HarvestWood(0,1)` / `HarvestGold(T,1)`).
+* **`harvestPlan` never leaves the forest empty**, and the way it does that is the race scripts'
+  own — see [*The harvest split is INTERLEAVED*](#the-harvest-split-is-interleaved-not-gold-then-wood)
+  below. The `LUMBER_DRY` floor (one axe before the mine's crew while the bank is under 100)
+  survives underneath it, for the base reduced to fewer workers than the main mine alone would
+  take.
 * **`AiPlayer.releaseStall` lets one pass through.** The halt stands for as long as it is
   *earning*: the smallest shortfall seen ratchets down, and any pass that beats it resets the
   count. Only a row that has spent `STALL_PASSES` (20) passes without once getting nearer the
   price is let past, for that single pass, and only the first such row in the list. Nothing is
   abandoned — the row is asked for again on the very next pass.
+
+### The harvest split is INTERLEAVED, not gold-then-wood
+
+Computer+ read *five per mine, and then everybody left over goes to the trees*. That is a
+plausible sentence and it is not what any race script says. All three whose worker can chop write
+the same four lines — human.ai 623-626, orc.ai 628-631, elf.ai 688-691:
+
+```jass
+call HarvestGold(T,4)
+call HarvestWood(0,1)
+call HarvestGold(T,1)
+call HarvestWood(0,1)              // elf.ai asks 2 here
+if <a second mine> then call HarvestGold(T+1,5) endif
+call HarvestWood(0,15)
+```
+
+The slices are cumulative and ORDERED, so what those lines actually say is: **the fifth miner is
+worth less than the first lumberjack, and the second town's entire crew is worth less than the
+second lumberjack.** Collapsed into gold-then-wood, the priority is inverted, and it costs exactly
+the two players who can least afford it:
+
+- **An EXPANDED computer chopped nothing at all.** Three towns is fifteen gold seats against an
+  Insane profile's fourteen workers (`PlusProfile.workers`), so the trailing lumber slice swept up
+  *nobody*. Every row the ladder halts on early is priced in wood, and a lumber shortfall with no
+  lumber income never shrinks.
+- **A RAIDED one chopped nothing either**, for as long as it was short of five workers per mine —
+  which is precisely while it is rebuilding and needs lumber most.
+
+So `harvestPlan` now opens the main mine's crew up and puts the two lumberjacks through the gap,
+then crews every other town, then sweeps the rest into the forest.
+
+**The undead is the exception, and undead.ai says so too** (647-652): `harvest_gold(0..3)`, and
+only then `HarvestWood(0, WG)`. There is nothing to interleave, because an Acolyte cannot chop
+(`uaco` `lumber: false`) — its gold is Acolytes kneeling at the Haunted Gold Mine and its lumber
+is Ghouls out of the Crypt, so the two are not bidding for the same bodies at all and the trailing
+wood slice picks up whatever ghouls the wave did not take. Asked as `PlusCtx.workerChops` — a
+question about this player's WORKER — rather than as a race, so a custom map that hands its
+Acolytes an axe gets the interleave with no list of races anywhere.
+
+### It repairs, and the hall outranks everything
+
+`SetPeonsRepair(true)` is unconditional in `StandardAI` (common.ai 792), so this is one of the few
+places Computer+ has nothing to improve on Blizzard's computer: it sets the same flag at seat
+time, at every difficulty. The pass behind it lives on the shared library layer where the native
+belongs (`AiPlayer.applyRepairs`) and is described in
+[`melee-ai.md`](melee-ai.md#setpeonsrepair--every-melee-computer-repairs-at-every-difficulty) —
+hall first (off `UnitBalance`'s own `TownHall` class, not a race list), **two workers ever**, and
+an idle worker before a lumberjack before a miner, because gold is what every other row on the
+ladder above is bought with.
 
 ### A second Barracks is bought with the BANK, not with army food
 

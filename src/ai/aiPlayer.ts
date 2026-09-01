@@ -166,6 +166,35 @@ const REGROUP_HP_FRACTION = 0.7;
  */
 const STALL_PASSES = 20;
 
+// SetPeonsRepair — how far both AIs go about it (`AiPlayer.applyRepairs`). Every number below
+// is OURS: the FLAG is Blizzard's (common.ai 792, `SetPeonsRepair(true)` inside `StandardAI`),
+// and what the engine's C++ does once it is set is described in no file in the install. They are
+// one rule seen from three sides — the hall must not fall, mending is worth a worker's walk only
+// once something is actually hurt, and the economy is never dismantled to do it.
+
+/** A finished building under this share of its life is worth a worker's walk. Not "any damage
+ *  at all": a stray arrow at 99 % would pull a miner off the gold for two seconds of mending. */
+const REPAIR_AT = 0.9;
+/**
+ * THE MOST WORKERS THAT MAY EVER BE MENDING AT ONCE — two, whatever is damaged and however
+ * badly. The developer's own ceiling, and the reason for it is what a raid looks like from the
+ * inside: a base that has just been hit is damaged EVERYWHERE, so a per-building crew with no
+ * cap over it walks the whole economy off the mine and into the rubble, and a computer that has
+ * stopped earning cannot pay for the repairs it has ordered (`tickRepair` charges gold and
+ * lumber per hit point restored and abandons the job when the bank empties).
+ */
+const REPAIR_MAX = 2;
+/** Workers put on one damaged building… */
+const REPAIR_CREW = 1;
+/** …and on the HALL, which is the one building whose loss ends the game: it may have BOTH of
+ *  them, which is why `applyRepairs` sorts by "is it the hall" before it sorts by how hurt
+ *  anything is. Nothing else in the base is worth the whole allowance. */
+const REPAIR_HALL_CREW = REPAIR_MAX;
+/** Gold under which only the HALL is worth mending. Repair is not free — it is charged per hit
+ *  point restored, off the target's own `goldRep`/`lumberRep` (`SimWorld.repairRates`) — and a
+ *  computer down to its last hundred gold needs it for a worker, not for a Farm's paintwork. */
+const REPAIR_GOLD = 100;
+
 export class AiPlayer {
   /** `hero_id`/`hero_id2`/`hero_id3` — PickMeleeHero's three picks, in order. */
   heroId = "";
@@ -285,6 +314,21 @@ export class AiPlayer {
    * `difficulty` is a parameter property and is not written until the constructor runs.)
    */
   bypassFog = false;
+
+  /**
+   * `SetPeonsRepair(state)` — a common.ai native, and the switch under `applyRepairs`.
+   *
+   * **On for every melee computer, at every difficulty.** `StandardAI` sets it unconditionally
+   * (common.ai 792) in the same block as `SetGroupsFlee`/`SetHeroesFlee`/`SetIgnoreInjured`, so
+   * a melee computer mending its buildings is not a Hard-and-above behaviour — both AIs turn it
+   * on at seat time. The flag is GRADED in campaigns instead, which is why it exists at all:
+   * `CampaignAI` asks for it only at `MAP_DIFFICULTY_HARD` (common.ai 2414), and a chapter's own
+   * `.ai` script turns it on for itself where the mission wants it (`u08x05.ai`, `n07_red.ai`…).
+   *
+   * A FIELD rather than a hard-coded `true` for exactly that reason: a campaign AI is entitled
+   * to leave it off.
+   */
+  peonsRepair = false;
 
   /** `GetRandomInt(low, high)`, off the AI's own stream. */
   randomInt(low: number, high: number): number {
@@ -1305,6 +1349,117 @@ export class AiPlayer {
     return this.host.execute(this.player, {
       c: "order", unitId: u.id, order: { kind: "harvest", res: "lumber", nodeId: tree.id }, queued: false,
     });
+  }
+
+  // ======================================================================================
+  //  Repair — SetPeonsRepair (a common.ai native)
+  // ======================================================================================
+
+  /**
+   * Send workers at damaged buildings. The pass `peonsRepair` switches on.
+   *
+   * The FLAG is Blizzard's and is set for every melee computer (see `peonsRepair`); what the
+   * engine does behind it is C++ and in no file, so the policy below is ours. It is three
+   * decisions and nothing else:
+   *
+   *  · **WHAT.** Anything of ours that is FINISHED and under `REPAIR_AT` of its life. A
+   *    building still going up is BUILT rather than repaired — the site already has a worker on
+   *    it, and a structure hurt on the way up finishes hurt and is mended afterwards like any
+   *    other (`SimWorld.addConstructionHp`).
+   *  · **IN WHAT ORDER. The hall first, always** — sorted on "is it the hall" BEFORE "how hurt
+   *    is it", so a Farm at a tenth of its life never outranks a Town Hall at four fifths. No
+   *    race list says which building that is: `UnitBalance` `type` carries **`TownHall`** on all
+   *    twelve of them (`htow`/`hkee`/`hcas`, `ogre`/`ostr`/`ofrt`, `etol`/`etoa`/`etoe`,
+   *    `unpl`/`unp1`/`unp2`), which is the same column `siteFor` already picks a hall's spot by.
+   *  · **WITH WHOM. Two workers, ever** (`REPAIR_MAX`) — and an IDLE one before a lumberjack
+   *    before a miner, because gold is what every other row on the ladder is bought with. A
+   *    worker already on a repair job is never re-tasked here: the sim ends the job itself when
+   *    the building is whole or the bank runs dry, and re-issuing it every pass would restart
+   *    the walk.
+   *
+   * Whether this worker may mend that building at all is the SIM's question, not a race rule
+   * here: every repair row lists `nonancient` except the Wisp's Renew, so only a Wisp mends a
+   * Tree of Life (`SimWorld.repairRefusal`, docs/night-elf.md), and a Ghoul — which is a worker
+   * and a lumberjack — carries no repair row at all, so the undead mends with Acolytes or not
+   * at all. Both fall out of `repairRefusal` refusing the order.
+   *
+   * Runs BEFORE `applyHarvest` in both AIs' build passes, so the crew it hires is already
+   * spoken for when the harvest slices are filled (`applyHarvest` skips a worker on a repair
+   * job) and the rest of the workers are redistributed around them.
+   */
+  applyRepairs(): void {
+    if (!this.peonsRepair) return;
+    const world = this.host.world;
+
+    // Who is mending what already, and how much of the allowance that has spent.
+    const crew = new Map<number, number>();
+    let working = 0;
+    for (const u of world.units.values()) {
+      if (u.owner !== this.player || u.hp <= 0 || !u.repair) continue;
+      crew.set(u.repair.targetId, (crew.get(u.repair.targetId) ?? 0) + 1);
+      working++;
+    }
+    if (working >= REPAIR_MAX) return;
+
+    const poor = this.gold() < REPAIR_GOLD;
+    const hurt: Array<{ b: SimUnit; hall: boolean; share: number }> = [];
+    for (const b of world.units.values()) {
+      if (b.owner !== this.player || b.hp <= 0 || !b.building) continue;
+      if (b.building.constructionLeft > 0) continue; // a site is built, not repaired
+      if (b.hp >= b.maxHp * REPAIR_AT) continue;
+      const hall = !!this.host.registry.get(b.typeId)?.classification.includes("townhall");
+      if (poor && !hall) continue;
+      hurt.push({ b, hall, share: b.hp / Math.max(1, b.maxHp) });
+    }
+    if (!hurt.length) return;
+    // The hall, and then whatever is nearest to falling.
+    hurt.sort((x, y) => (x.hall === y.hall ? x.share - y.share : x.hall ? -1 : 1));
+
+    // The bodies this may spend, WORST-PAID FIRST: an idle worker costs nothing, a lumberjack
+    // costs wood, a miner costs the gold everything else is bought with. Off-field workers are
+    // not addressable at all (a peon down the shaft, a wisp inside an Entangled Gold Mine — the
+    // authority refuses an order naming one), and a builder, a scout or a worker already in the
+    // wave is spoken for.
+    const free: SimUnit[] = [];
+    for (const u of world.units.values()) {
+      if (u.owner !== this.player || u.hp <= 0 || !u.worker || u.repair) continue;
+      if (isOffField(u) || u.buildPending || u.insideBuild || u.constructing) continue;
+      if (this.captainHeld.has(u.id)) continue;
+      free.push(u);
+    }
+    if (!free.length) return;
+    const cost = (u: SimUnit): number => (this.onGold(u) ? 2 : u.resKind === "lumber" ? 1 : 0);
+
+    const taken = new Set<number>();
+    for (const h of hurt) {
+      if (working >= REPAIR_MAX) return;
+      const want = Math.min(h.hall ? REPAIR_HALL_CREW : REPAIR_CREW, REPAIR_MAX - working + (crew.get(h.b.id) ?? 0));
+      let on = crew.get(h.b.id) ?? 0;
+      if (on >= want) continue;
+      const pool = free
+        .filter((u) => !taken.has(u.id))
+        .sort((a, b) => cost(a) - cost(b)
+          || Math.hypot(a.x - h.b.x, a.y - h.b.y) - Math.hypot(b.x - h.b.x, b.y - h.b.y));
+      for (const u of pool) {
+        if (on >= want || working >= REPAIR_MAX) break;
+        if (world.repairRefusal(u.id, h.b.id) !== null) continue; // wrong worker for this building
+        if (!this.host.execute(this.player, { c: "repair", unitId: u.id, buildingId: h.b.id, queued: false })) continue;
+        taken.add(u.id);
+        on++;
+        working++;
+      }
+    }
+  }
+
+  /** Is this worker's trip a GOLD trip — kneeling in a haunted mine's ring, or walking a load of
+   *  it home? The one thing `applyRepairs` will not spend cheaply.
+   *
+   *  The two workers that are INSIDE their gold (a peon down the shaft, a wisp in an Entangled
+   *  Gold Mine — which garrisons, so `inBurrow`) never reach this: `isOffField` has already taken
+   *  them out of the pool, because nothing can be ordered while it is off the field at all. */
+  private onGold(u: SimUnit): boolean {
+    if (u.inMineId) return true;
+    return u.resKind === "gold" && (u.order === "harvest" || u.order === "return");
   }
 
   // ======================================================================================
