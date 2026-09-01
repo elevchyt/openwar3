@@ -65,7 +65,14 @@ export interface SimWeapon {
    *  swing has begun and still be struck by it (see WeaponSlotDef.rangeBuffer). 250 on almost
    *  every armed row in the game, which is a LOT of ground — a Footman's own reach is 90 — and
    *  deliberately so: it is what makes a committed WC3 blow land on a target already walking
-   *  away. Only the strike consults it; the chase band is ATTACK_LEASH's business. */
+   *  away. Only the strike consults it; the chase band is ATTACK_LEASH's business.
+   *
+   *  And only the strike of a weapon type that has NO MISSILE: Liquipedia states the buffer
+   *  under Normal and under Instant and nowhere else, and hive's own answer thread on the
+   *  field says the same in one line — "Range Motion Buffer is how far away a unit have to
+   *  run to make a Normal or Instant-type attack against it miss. Missile and Artillery-type
+   *  attacks are unaffected by RMB" (hiveworkshop 53615). A loosed missile is past the
+   *  question; what ends one is a disjoint, not a distance (see missileDisjointed). */
   rangeBuffer: number;
   // Pre-upgrade baselines, straight off this slot's UnitWeapons columns.
   baseDamage: number;
@@ -142,6 +149,14 @@ export interface SimProjectile {
   startZ: number;
   impactZ: number;
   startDist: number;
+  /** The shooter's TEAM at the loosing, carried for the same reason `attackType` is — the
+   *  shooter may be dead by the time the arrow has to ask whether its target has gone
+   *  invisible, and "invisible" is a question with a side (see missileDisjointed). */
+  sourceTeam?: number;
+  /** `SimUnit.teleports` read at the loosing. If the target's count has moved on when the
+   *  missile next looks, the target was teleported out from under it and the shot MISSES
+   *  (see missileDisjointed). Undefined on the artillery/wave shots, which have no target. */
+  targetTeleports?: number;
   attackType?: AttackType; // attacker's weapon attack type, carried so the damage-table
   // multiplier is correct even if the attacker dies before the arrow lands
   /** The firing weapon's impact base, carried for the same reason `attackType` is: the shot
@@ -1404,6 +1419,14 @@ export interface SimUnit {
    *  Blademaster is whisked away while MirrorImageCaster plays and the missiles fly out, then
    *  set down on one of the destination tiles as if he had been a copy all along. */
   vanished: boolean;
+  /** How many times this unit has been TELEPORTED (`teleportUnit` — Blink, Mass Teleport, a
+   *  Way Gate, the staves, a script's `SetUnitPosition`). A counter and not a flag because
+   *  the only thing that ever asks is an in-flight missile comparing the count it recorded at
+   *  the loosing against the count now: Liquipedia's Weapon Types page lists "the target is
+   *  teleported" among the four things that make a missile MISS, and that is the whole of why
+   *  a Blink disjoints an arrow. Walking, however fast and however far, is not a teleport —
+   *  see missileDisjointed. */
+  teleports: number;
   etherealForm: boolean; // Spirit Walker in ethereal form: persistently ethereal (immune physical, no attack)
   working: boolean; // chopping (renderer plays the attack animation)
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
@@ -6372,6 +6395,7 @@ export class SimWorld {
       | "exhumeLeft"
       | "unsummonArt"
       | "vanished"
+      | "teleports"
       | "isIllusion"
       | "illusionOf"
       | "illusionDamageDealt"
@@ -6614,6 +6638,7 @@ export class SimWorld {
       exhumeLeft: 0,
       unsummonArt: "",
       vanished: false,
+      teleports: 0,
       isIllusion: false,
       illusionOf: 0,
       illusionDamageDealt: 1,
@@ -11050,6 +11075,11 @@ export class SimWorld {
       startZ: lz,
       impactZ: impactBase + (t?.flyHeight ?? 0),
       startDist: t ? Math.hypot(t.x - lx, t.y - ly) : 0,
+      // "Abilities with missiles follow the same behaviour as the Missile weapon type"
+      // (Liquipedia, Weapon Types) — a Storm Bolt is disjointed by a Blink exactly as an
+      // arrow is, so a spell missile carries the same two stamps an attack's does.
+      sourceTeam: u.team,
+      targetTeleports: t?.teleports ?? 0,
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
@@ -12486,6 +12516,11 @@ export class SimWorld {
   /** Relocate a unit instantly and re-settle it onto the pathing grid (Blink,
    *  Mass Teleport). Clears its current path so it doesn't walk back. */
   private teleportUnit(u: SimUnit, x: number, y: number): void {
+    // Everything that MOVES a unit without walking it comes through here, so this is the one
+    // place a "the target was teleported" stamp can be raised for the missiles already in the
+    // air (missileDisjointed). Bumped before the snap below, since even a teleport the
+    // pathing grid then nudges a few units is still a teleport.
+    u.teleports++;
     this.unsettle(u);
     this.releaseClaim(u); // the tile it was walking onto is behind it now
     if (this.grid && !u.flying) {
@@ -14085,8 +14120,14 @@ export class SimWorld {
       // flight, and the slot's `Missileart` is a one-shot burst played on the unit struck:
       // all six stock instant slots name a `*Impact.mdx` that holds a lone "Birth" sequence
       // (RifleImpact = a Dust3 puff + a Yellow_Star_Dim spark — the bullet hit), with no
-      // "Stand" to loop while travelling. No reach re-test: like a homing missile, a loosed
-      // instant shot connects — only MELEE can whiff on a target that drifted out of reach.
+      // "Stand" to loop while travelling.
+      //
+      // No reach re-test HERE because there is nothing to re-test against: an instant shot
+      // arrives in the same instant it is fired. Liquipedia gives Instant word for word the
+      // rule it gives Normal — "if the target is out of the range plus the Range Motion
+      // Buffer of the attacker when the Attack Instance is created, the attack will miss" —
+      // and that instance was created back when the swing began. What a MISSILE weapon can
+      // still lose to, a hitscan cannot: see missileDisjointed.
       if (w.missileArt) this.spellEffects.push({ art: w.missileArt, x: t.x, y: t.y, targetId: t.id, z: w.impactZ });
       this.dealDamage(u, t, w, backstab);
     } else {
@@ -14246,6 +14287,8 @@ export class SimWorld {
       startZ: lz,
       impactZ: impactBase + t.flyHeight,
       startDist: Math.hypot(t.x - lx, t.y - ly),
+      sourceTeam: u.team,
+      targetTeleports: t.teleports,
       spill: w.spillDist > 0 && w.spillRadius > 0
         ? { dist: w.spillDist, radius: w.spillRadius, loss: w.damageLoss, ox: lx, oy: ly }
         : undefined,
@@ -14313,8 +14356,55 @@ export class SimWorld {
     }
   }
 
+  /**
+   * DISJOINTING: has this homing missile lost the target it was loosed at?
+   *
+   * Liquipedia's **Weapon Types** page states the Missile rule outright — "the missile will
+   * also miss, if one of the following conditions is met during any time of the missile's
+   * traveling: the target is invisible / the target is loaded into another unit (for example
+   * Orc Burrow, Goblin Zeppelin and Devour) / the target is teleported / the target dies" —
+   * and adds that "abilities with missiles follow the same behaviour as the Missile weapon
+   * type", which is why a Storm Bolt disjoints on a Blink exactly as an arrow does. Death is
+   * handled by the caller (the unit is simply gone from `units`); the other three are here.
+   *
+   * What is NOT in that list is DISTANCE. The community lore that a missile dies at "base
+   * range + Range Motion Buffer" reads the buffer's job backwards: `RngBuff1/2` decides
+   * whether an attack instance is CREATED at all, and it does so only for the two weapon
+   * types that have no missile — Normal (melee) and Instant (hitscan), which is exactly where
+   * the sim already spends it (tickSwing). Once a Missile weapon type has actually loosed,
+   * running is not an answer: the arrow homes for as long as its target stays on the field,
+   * visible and un-teleported. So nothing here measures how far the target has got, and no
+   * flight-distance cap is invented — the install states no such number.
+   *
+   * Blink, then, does not disjoint because the Warden covered 600 units in an instant; it
+   * disjoints because she covered them WITHOUT WALKING. Every teleport in the game goes
+   * through `teleportUnit`, which is what `teleports` counts.
+   */
+  private missileDisjointed(p: SimProjectile, t: SimUnit): boolean {
+    // "The target is teleported." A Blink, a Mass Teleport, a Way Gate, a Staff of
+    // Sanctuary, the Blademaster stepping out of a Mirror Image — one counter covers them
+    // all, and covers a unit teleported twice mid-flight too.
+    if (p.targetTeleports !== undefined && t.teleports !== p.targetTeleports) return true;
+    // "The target is loaded into another unit… Orc Burrow, Goblin Zeppelin and Devour."
+    // `isOffField` is that list plus the two other ways a unit leaves the map entirely (into
+    // a gold mine, into the structure an orc peon is raising) — in every case there is no
+    // longer anything standing there for the missile to reach.
+    if (isOffField(t)) return true;
+    // "The target is invisible." `invisible` is the fade IN FORCE, not the Transition Time —
+    // which is precisely why a Wind Walk cut short to a fraction of a second disjoints while
+    // the unit is still perfectly targetable during its wind-up.
+    //
+    // Gated on the shooter's SIDE twice over, because being unseen is not an absolute: True
+    // Sight cancels the disjoint (a Sentry Ward over the vanishing point and the arrow still
+    // lands), and a unit is never hidden from its own team, so an allied missile — a Death
+    // Coil sent to heal a Wind Walking Ghoul — is not thrown away by its target fading.
+    if (p.sourceTeam !== undefined && t.team !== p.sourceTeam && t.invisible && !this.teamDetects(p.sourceTeam, t.x, t.y)) return true;
+    return false;
+  }
+
   /** Advance in-flight projectiles toward their (moving) targets; deal damage on
-   *  arrival, and fizzle harmlessly if the target died before impact. */
+   *  arrival, and fizzle harmlessly if the target died, or disjointed the shot before
+   *  it landed (missileDisjointed). */
   private tickProjectiles(dt: number): void {
     for (const p of this.projectiles.values()) {
       // An artillery shell is aimed at GROUND: it keeps flying (and still lands) whether or
@@ -14329,8 +14419,10 @@ export class SimWorld {
         continue;
       }
       const t = this.units.get(p.targetId);
-      if (!t) {
-        this.removeProjectile(p.id);
+      // The target DIED (killUnit deletes it) — the first of the four ways a missile misses.
+      // The other three are the disjoint (Blink, a Wind Walk, a step into a Burrow).
+      if (!t || this.missileDisjointed(p, t)) {
+        this.removeProjectile(p.id); // a fizzle: the renderer detaches it without an impact
         continue;
       }
       const dx = t.x - p.x;

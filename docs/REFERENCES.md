@@ -64,6 +64,21 @@ ranged units only); **Unholy `AUau`** +move speed % (dataA) & +hp-regen/sec (dat
 returns melee damage % to the attacker (0.1/0.2/0.3). Implemented via the generic `AURA_BUFFS` table
 (`src/sim/spells.ts`) + `applyAuras`/`recomputeStats` (`src/sim/world.ts`).
 
+**Weapon types and missile DISJOINTING** (verified 2026-09-01 from
+[Liquipedia Weapon Types](https://liquipedia.net/warcraft/Weapon_Types)): a *Missile* shot "will miss
+if one of the following conditions is met during any time of the missile's traveling" — the target
+goes **invisible**, is **loaded into another unit** (Orc Burrow, Goblin Zeppelin, Devour), is
+**teleported**, or **dies** — and "abilities with missiles follow the same behaviour as the Missile
+weapon type", which is why Blink disjoints a Storm Bolt as readily as an arrow. An invulnerable target
+takes no damage but the missile still arrives. **Distance is not on that list.** The *Range Motion
+Buffer* (`RngBuff1/2`) is stated only under **Normal** and **Instant** — the two weapon types that put
+nothing in the air — and decides whether the attack instance is created at all; hive
+[thread 53615](https://www.hiveworkshop.com/threads/range-motion-buffer.53615/) says the same in one
+line: *"Missile and Artillery-type attacks are unaffected by RMB."* So the widely repeated "a missile
+dies at base range + RMB" is folklore — there is no flight-distance cap in the data, and none is
+invented here. Implemented as `missileDisjointed` in `src/sim/world.ts`
+(`tools/sim-missile-disjoint-test.cjs`).
+
 **[warcraft3.info](https://warcraft3.info/) articles** are another solid engine-behavior source. Its
 [Hero Experience](https://warcraft3.info/articles/232/hero-experience-in-warcraft-3-how-it-works)
 article pins the XP-award side (verified 2026-07-03): a slain **level-1 unit grants 25 XP**, and a
@@ -76,6 +91,11 @@ Practical notes:
   summaries, or search for the thread title. Liquipedia pages are reachable via WebSearch too.
   **Workaround that works:** `curl` (or any fetch) with a real browser `User-Agent` header returns the
   full page — that's how the Game.dll thread below was archived.
+- **Liquipedia now 403s that trick too** (Cloudflare Turnstile, as of 2026-09). Its MediaWiki API
+  still answers, but only to a request that asks for gzip and names itself — the page's wikitext,
+  which is what you want anyway:
+  `curl -s --compressed -A "OpenWar3-research/1.0 (contact: …)" "https://liquipedia.net/warcraft/api.php?action=parse&page=Weapon_Types&format=json&prop=wikitext"`
+  (without `--compressed` it returns *406 Gzip encoding is required for API requests*).
 - Warsmash's source is the next stop: it encodes many of these findings as code.
 - When a mechanic matters for gameplay feel, write the source (thread/repo) next to the constant in
   the code.
