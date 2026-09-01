@@ -7594,12 +7594,12 @@ export class RtsController {
    *    (`buildAbilitiesFor` — `heroAbilities` come in unlearned), and rank 0 is "not picked".
    *    Its INNATE abilities are not spells at all — a hero's `abilList` is Inventory and kin —
    *    so the row is `AbilityDef.isHero`, which is the same `hero=1` column the learn page is.
-   *  • **Unavailable is a TEXTURE, not a tint.** An ability on cooldown, or whose caster is
-   *    short of the rank's mana, wears its own `CommandButtonsDisabled\DIS*` twin, exactly as
-   *    the command card's greyed buttons do (see `disabledArt` in mapViewer, and `cmd`). A CSS
-   *    filter is not the same thing: the twin is desaturated AND drawn without the gold button
-   *    frame, and losing the frame is most of what reads as "you can't press this". Falls back
-   *    to the live art for the handful of icons that ship no twin.
+   *  • **Why it can't be cast is drawn as the CARD draws it.** The two facts are the two the
+   *    command card already shows, so the row shows them the same way and the player learns
+   *    one language: a cooldown is the clockwise wedge with its seconds printed in it, and
+   *    "short of mana" is the deep blue wash (`CommandCardIcon.setColor`). Neither is a greyed
+   *    DIS* twin — that art means "unavailable", which is a different word, and it can say
+   *    neither how long is left nor which of the two is the matter.
    */
   private allyAbilityRow(u: RenderUnit): { list: BarAbility[]; sig: string } | null {
     const icon = this.iconUrl;
@@ -7614,13 +7614,23 @@ export class RtsController {
       if (!def || !def.isHero || !def.icon) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       // The two things that stop a press, and the only two the row draws: the clock, and the
-      // mana this RANK costs (a rank 3 Blizzard is not a rank 1 one).
-      const unavailable = ab.cooldownLeft > 0 || (lvl !== undefined && u.mana < lvl.cost);
-      const live = icon(def.icon);
-      const dis = unavailable ? disabledIconPath(def.icon) : null;
-      (list ??= []).push({ icon: (dis && icon(dis)) || live, level: ab.level });
-      // Short, and built from the ID rather than from the icon: see BarSpec.abilitySig.
-      sig += `${ab.id}${ab.level}${unavailable ? "-" : "+"},`;
+      // mana this RANK costs (a rank 3 Blizzard is not a rank 1 one). Read exactly as the
+      // command card reads them (mapViewer pushAbilityButtons), the FRACTION included — a
+      // sweep needs the rank's own `cooldown` to know how much of itself is still to run.
+      const onCd = ab.cooldownLeft > 0;
+      const noMana = lvl !== undefined && u.mana < lvl.cost;
+      (list ??= []).push({
+        icon: icon(def.icon),
+        level: ab.level,
+        cooldownLeft: onCd ? ab.cooldownLeft : 0,
+        cooldownFrac: onCd && lvl !== undefined && lvl.cooldown > 0
+          ? Math.max(0, Math.min(1, ab.cooldownLeft / lvl.cooldown))
+          : 0,
+        noMana,
+      });
+      // Short, and built from the ID rather than from the icon: see BarSpec.abilitySig. The
+      // cooldown is NOT in it — it has its own per-frame pass in the overlay.
+      sig += `${ab.id}${ab.level}${noMana ? "-" : "+"},`;
     }
     return list ? { list, sig } : null;
   }

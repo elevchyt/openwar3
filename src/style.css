@@ -271,10 +271,11 @@ body.hud-statbar-skinned .unit-hpbar-slot .unit-hpbar-fill {
    nothing that competes with the bar underneath it. Out of the flow (absolute, anchored to the
    bars' top edge) so a hero learning a skill never shifts the bar itself.
 
-   An unavailable spell — on cooldown, or its caster short of mana — is NOT darkened here: it
-   arrives already carrying its own `CommandButtonsDisabled\DIS*` art, which is what the game
-   itself swaps in (see BarAbility). The twin is desaturated and drawn without the gold frame,
-   and no filter of ours reproduces the second half of that. */
+   Why a spell can't be cast is drawn exactly as the command card draws it, because it is the
+   same pair of facts and the player already reads them there: the clockwise cooldown wedge
+   with its seconds printed in it (.hud-cmd-cd), and the deep blue no-mana wash (.hud-cmd
+   .no-mana). Both rules are restated at this size rather than shared, because a 14px icon
+   wants its own type size and its own sweep opacity, not the console's. */
 .unit-hpbar-abils {
   /* Against the BARS, so the row begins where the health bar does — clear of the level badge
      to its left — and runs right from there, rather than being centred on the bar. Absolute,
@@ -297,11 +298,39 @@ body.hud-statbar-skinned .unit-hpbar-slot .unit-hpbar-fill {
   gap: 1px;
 }
 .unit-hpbar-abil-icon {
+  position: relative; /* the cooldown sweep sits inside it */
   width: var(--abil-size, 14px);
   height: var(--abil-size, 14px);
   background: no-repeat center / 100% 100%;
   border-radius: 1px;
   box-shadow: 0 0 2px rgba(0, 0, 0, 0.85); /* seats the icon against bright terrain */
+}
+/* Short of mana: the art multiplied by (0.3, 0.5, 1.0) — the tint the engine itself uses when
+   `unit.getMana() < manaCost`, and the same one the command card wears (.hud-slot.hud-cmd
+   .no-mana). `background-blend-mode` multiplies the icon against the colour beneath it in this
+   same element, so the wash lands on the ART and leaves the sweep drawn over it alone. */
+.unit-hpbar-abil-icon.no-mana {
+  background-color: rgb(77, 128, 255);
+  background-blend-mode: multiply;
+}
+/* Cooldown: the clockwise dark wedge, with the seconds left printed in it. The REVEALED part
+   grows from the top as the cooldown runs down (render/worldOverlays.ts writes the gradient),
+   so what is dark is what is still to wait. */
+.unit-hpbar-abil-cd {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.unit-hpbar-abil-cd[hidden] { display: none; }
+.unit-hpbar-abil-cd-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 max(7px, calc(var(--abil-size, 14px) * 0.55)) / 1 var(--game-font);
+  color: #fff;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
 }
 /* White dots up to three, and the number itself past that (a custom map may raise an ability
    past the three ranks the melee game stops at, and four dots at this size are a smear). */

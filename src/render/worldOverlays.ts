@@ -19,15 +19,22 @@ export interface HoverLine {
 /**
  * One learned spell in the row floated over an ALLIED hero's health bar.
  *
- * The icon arrives DECIDED: an ability that cannot be cast right now — on cooldown, or with
- * its caster short of mana — carries its own `CommandButtonsDisabled\\DIS*` twin instead of
- * its live art, which is how the original says "you can't press this" (the twin is desaturated
- * AND drawn without the gold button frame, and the missing frame is most of what reads as
- * unavailable). Nothing here tints or darkens: the art IS the state.
+ * Why it can't be cast right now is drawn exactly as the command card draws it, because they
+ * are the same two facts and the player already reads them there (ui/hud.ts):
+ *
+ *  • **On cooldown** → the clockwise dark wedge over the art, with the seconds left printed
+ *    in it. Not a greyed twin: the sweep is the one that says *how long*.
+ *  • **Short of mana** → the deep blue wash, the art multiplied by (0.3, 0.5, 1.0) — the tint
+ *    the engine itself uses (`CommandCardIcon.setColor` when `unit.getMana() < manaCost`).
+ *
+ * The icon is always the LIVE art, then, and the two states are drawn OVER it.
  */
 export interface BarAbility {
-  icon: string | null; // decoded icon URL, already the DIS* twin when it is unavailable
+  icon: string | null; // decoded icon URL (the live art — never the greyed twin)
   level: number; // current rank — the pips (or, past three, the printed number)
+  cooldownLeft: number; // seconds remaining (0 = ready) — the number printed in the sweep
+  cooldownFrac: number; // remaining fraction 0..1 — how much of the wedge is still dark
+  noMana: boolean; // its caster cannot pay this rank's cost — the blue wash
 }
 
 /** One unit's status bar, as the controller sees it: where it floats in the world
@@ -52,10 +59,14 @@ export interface BarSpec {
    *  null for everything else: your own hero's spells are already on your command card, and
    *  an enemy's are not yours to read (rts.ts allyAbilityRow). */
   abilities: readonly BarAbility[] | null;
-  /** One short string that changes exactly when that row's DOM must — the ability, its rank
-   *  and whether it is available, per entry. Built where the row is, out of ability IDS: the
-   *  icons themselves are multi-kilobyte data URLs, and joining those every frame to notice
-   *  that nothing had changed would cost more than the row does. */
+  /** One short string that changes exactly when that row's STRUCTURE must — the ability, its
+   *  rank and whether its caster can pay for it, per entry. Built where the row is, out of
+   *  ability IDS: the icons themselves are multi-kilobyte data URLs, and joining those every
+   *  frame to notice that nothing had changed would cost more than the row does.
+   *
+   *  The COOLDOWN is deliberately not in it. A sweep moves every frame by definition, so it is
+   *  drawn by its own per-frame pass (as the command card's is — `updateCooldownOverlays`),
+   *  and folding it in here would rebuild the row's icons sixty times a second. */
   abilitySig: string;
 }
 
@@ -369,6 +380,15 @@ export class WorldOverlays {
               cell.className = "unit-hpbar-abil";
               const art = document.createElement("div");
               art.className = "unit-hpbar-abil-icon";
+              // The cooldown sweep lives INSIDE the art, so the blue no-mana wash (which is a
+              // blend against the art's own background) never tints the wedge or its number.
+              const cd = document.createElement("div");
+              cd.className = "unit-hpbar-abil-cd";
+              cd.hidden = true;
+              const cdText = document.createElement("span");
+              cdText.className = "unit-hpbar-abil-cd-text";
+              cd.appendChild(cdText);
+              art.appendChild(cd);
               // The rank is its own row BENEATH the art rather than a badge on top of it: a
               // dot drawn over the icon reads as part of the icon, and at this size the icon
               // has no spare corner to give it.
@@ -383,6 +403,10 @@ export class WorldOverlays {
             const a = list[i];
             const art = cell.firstElementChild as HTMLDivElement;
             art.style.backgroundImage = a.icon ? `url(${a.icon})` : "none";
+            // The wash is a multiply against the ART, so it needs one: a cell whose icon
+            // failed to decode would otherwise just be a blue tile (the card guards the same
+            // way — `!!c.icon` in refreshCommandCard).
+            art.classList.toggle("no-mana", a.noMana && !!a.icon);
             const rank = cell.lastElementChild as HTMLDivElement;
             // Rank: dots up to three, the number itself past that. The dots are elements
             // rather than text because they have to stay legible over any icon, which is a
@@ -407,6 +431,37 @@ export class WorldOverlays {
             }
           }
           bar.abilRow.hidden = false;
+        }
+      }
+      // …and the cooldowns, every frame, outside the signature above: a sweep that only moved
+      // when something else about the row changed would be a stopped clock. Same shape as the
+      // command card's own pass (ui/hud.ts updateCooldownOverlays), including the wedge: the
+      // REVEALED part grows clockwise from the top and the dark part is what is still to run.
+      if (s.abilities) {
+        for (let i = 0; i < s.abilities.length; i++) {
+          const art = bar.abilRow.children[i]?.firstElementChild;
+          const cd = art?.firstElementChild as HTMLDivElement | undefined;
+          if (!cd) continue;
+          const a = s.abilities[i];
+          if (a.cooldownLeft <= 0) {
+            if (!cd.hidden) {
+              cd.hidden = true;
+              cd.dataset.deg = "";
+            }
+            continue;
+          }
+          // Whole degrees and whole seconds: neither can be drawn finer than that, and the
+          // comparison is what keeps a running cooldown from re-parsing a conic-gradient and
+          // a text node on every frame of its own duration.
+          const deg = Math.round((1 - a.cooldownFrac) * 360);
+          if (cd.dataset.deg !== String(deg)) {
+            cd.dataset.deg = String(deg);
+            cd.style.background = `conic-gradient(transparent 0deg ${deg}deg, rgba(0,0,0,0.62) ${deg}deg 360deg)`;
+          }
+          const secs = String(Math.ceil(a.cooldownLeft));
+          const text = cd.firstElementChild as HTMLSpanElement;
+          if (text.textContent !== secs) text.textContent = secs;
+          cd.hidden = false;
         }
       }
       // Hero level badge to the left of the bars.
