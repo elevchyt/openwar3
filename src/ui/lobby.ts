@@ -22,8 +22,10 @@ export interface SlotConfig {
   startY: number;
   /** The MAP's own name for this slot (w3i player record), when it has one. A campaign map
    *  names every side it fields — "Illidan's Naga", "Wild Mur'guls", "Night Elf Villagers" —
-   *  and that name is what the owner line of a hover tooltip reads, exactly as in WC3. Absent
-   *  on a melee map, where a slot is named after whoever sits in it. */
+   *  and that name is what the owner line of a hover tooltip reads, exactly as in WC3.
+   *  A MELEE map fills the same record and says nothing with it (Echo Isles: "Player 1",
+   *  "Player 2" — the World Editor's placeholders), so there the SEATING names the slot
+   *  instead; `slotLabel` in ui/playerSlots.ts is that rule. */
   name?: string;
   /**
    * WHO is in the seat — the human's own name, as they typed it on the LAN screen or as the

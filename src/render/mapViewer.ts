@@ -56,7 +56,7 @@ interface CreepSeed {
 import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, isHarvestCode, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
 import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { AI_SCRIPT_FOR } from "../ai";
-import { labelOf, slotOptionValue } from "../ui/playerSlots";
+import { slotLabel } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
 import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
@@ -1933,8 +1933,10 @@ export class MapViewerScene {
   /** Shared match bring-up for both melee and custom starts: pick the local
    *  player, aim the camera at their base, resolve each slot's race (so roster +
    *  console skin agree), seed teams/stashes, and mount the HUD. Returns the
-   *  resolved race per slot (melee needs it for the starting roster). */
-  private beginMatch(config: MeleeConfig, startGold: number, startLumber: number): Map<number, PlayableRace> {
+   *  resolved race per slot (melee needs it for the starting roster).
+   *
+   *  `melee` says which of the two this is — the one thing `slotLabel` turns on. */
+  private beginMatch(config: MeleeConfig, startGold: number, startLumber: number, melee = false): Map<number, PlayableRace> {
     // Seed the match's RNG before anything can roll. The world is built at map load, when
     // the lobby's choices aren't known yet, so the seed arrives here — still ahead of unit
     // seeding, the map script and the first tick, which is the last moment it is safe.
@@ -1961,28 +1963,12 @@ export class MapViewerScene {
       ?? config.slots[0]?.id
       ?? 0;
     this.rts!.setLocalPlayer(this.localPlayer); // drag-box selects this player's units
-    // Owner-line names for the hover tooltip.
-    //
-    // **The MAP's name for the slot wins.** A campaign map names every side it fields in its
-    // w3i player records — "Illidan's Naga", "Wild Mur'guls", "Ferocious Beasts", "Night Elf
-    // Villagers" — and that is what WC3 prints under a hovered enemy. Reading "Computer
-    // (Normal)" over every one of them is a melee lobby's answer given to a mission, and it
-    // erases the one thing the line is there to tell you: WHOSE that unit is.
-    //
-    // Only a slot the map left unnamed falls back — an AI slot to the label its own difficulty
-    // wears on the lobby's slot menu ("Computer (Easy)" / "(Normal)" / "(Insane)", which are
-    // GlobalStrings.fdf's own COMPUTER_NEWBIE/NORMAL/INSANE), a human slot to a generic
-    // "Player N". The local player never shows an owner line, so its own label is never seen.
-    // Neutral and rescuable players are in this map too and only ever take the map's name:
-    // nobody is playing them, so "Computer (Normal)" would be a lie about them.
+    // Owner-line names for the hover tooltip, the Allies rows and every chat line — and, from
+    // here, `GetPlayerName` too (see `runMapScript`). Who names a slot is `slotLabel`'s rule and
+    // turns on one thing: a MELEE map's slots are the lobby's (a computer plays under the exact
+    // entry its row wore, "Computer+ (Insane)" included), a mission's are the map's.
     this.playerNames = new Map(
-      config.slots.map((s) => [
-        s.id,
-        s.name?.trim()
-          || (s.controller === "computer"
-            ? labelOf(slotOptionValue("computer", s.aiDifficulty, s.aiPlus === true))
-            : `Player ${s.id + 1}`),
-      ]),
+      config.slots.map((s) => [s.id, slotLabel(s, melee)]),
     );
     // …and the watcher's own seat is in nobody's slot list, so it names itself. The one place
     // it is ever read is a line the observer types: their own chat comes back to them labelled.
@@ -2147,7 +2133,7 @@ export class MapViewerScene {
   async startMelee(config: MeleeConfig, onProgress?: (p: number) => void): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
     // Resources come from the script (MeleeStartingResources), so open empty.
-    const races = this.beginMatch(config, 0, 0);
+    const races = this.beginMatch(config, 0, 0, true);
     this.rts.enableSeeding(); // owners/teams configured → trySeed may adopt the map's units
     // …and the creeps/mines must all be in the sim before the script runs. This is the LONG
     // wait of the whole load — the map's art streaming in — and the only one of them the
@@ -2955,6 +2941,11 @@ export class MapViewerScene {
           controller: MAP_CONTROL_FOR[s.controller],
           team: s.team,
           startLocation: -1, // config()'s SetPlayerStartLocation already placed each slot
+          // …and what the seat is CALLED, which only the lobby knows. `GetPlayerName` answered
+          // a bare "Player N" for every slot, so blizzard.j's own victory broadcast — the
+          // melee dialog's "%s was victorious." — never named the computer that had just won
+          // by the name it played the whole match under. Same string the owner line reads.
+          ...(this.playerNames.get(s.id) ? { name: this.playerNames.get(s.id) } : {}),
         })),
         localPlayer: this.localPlayer,
       };

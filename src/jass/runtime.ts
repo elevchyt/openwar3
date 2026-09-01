@@ -418,6 +418,14 @@ export interface LobbySlot {
   controller: number; // a MAP_CONTROL index (USER / COMPUTER)
   team: number;
   startLocation: number;
+  /**
+   * What the slot is CALLED — `GetPlayerName`, and so the "%s was victorious." the melee
+   * victory dialog broadcasts. The lobby is the only thing that knows it: a human's is the
+   * name they typed, an AI's is the entry its row wore on the slot menu ("Computer (Insane)",
+   * "Computer+ (Normal)"), and a mission's side is whatever the MAP called it. Absent leaves
+   * the engine's own "Player N" default (see `playerName`).
+   */
+  name?: string;
 }
 
 /** A unit created by the script (CreateUnit). Kept so main()/CreateAllUnits can be
@@ -1438,6 +1446,9 @@ export class Runtime {
       p.controller = s.controller;
       p.team = s.team;
       if (s.startLocation >= 0) p.startLocation = s.startLocation;
+      // The lobby's name for the seat — but never over a name the SCRIPT chose: config() runs
+      // before this, and a map that called SetPlayerName meant it.
+      if (s.name && p.name === undefined) p.name = s.name;
     }
   }
 

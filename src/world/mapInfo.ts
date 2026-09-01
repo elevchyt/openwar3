@@ -26,7 +26,9 @@ export interface PlayerSlot {
    * tooltip, and on a campaign map it is the whole point of the field: Rise of the Naga's
    * nine slots are "Watchers", "Illidan's Naga", "Illidan's Servitors", "Ferocious Beasts",
    * "Wild Mur'guls", "Night Elf Villagers", "Prisoners" and "Illidan" — the sides the
-   * mission is about. Empty on a melee map, whose slots are named by whoever sits in them.
+   * mission is about. A MELEE map fills it too and says nothing with it — Echo Isles' two
+   * records resolve to "Player 1" and "Player 2", the World Editor's placeholders — so there
+   * the lobby's seating names the slot instead (`slotLabel`, ui/playerSlots.ts).
    */
   name: string;
   /** The slot's TEAM, and on a custom map it is the map's to decide, not the lobby's.

@@ -101,6 +101,52 @@ export function labelOf(value: string): string {
   return slotOption(value)?.label ?? value;
 }
 
+/**
+ * What a player slot is CALLED once the match is running — the owner line of a hover tooltip,
+ * the Allies rows, the name a chat line arrives under, and `GetPlayerName` (so the melee
+ * dialog's "%s was victorious." too).
+ *
+ * **`melee` is the whole rule.** On a melee map every slot is the LOBBY's: it seated whoever is
+ * in it, and the w3i player record the map fills is boilerplate — Echo Isles' two slots are
+ * TRIGSTR_001/TRIGSTR_003, which its own war3map.wts resolves to "Player 1" and "Player 2", the
+ * World Editor's placeholders. Letting those win put a bare "Player 2" over a computer's units
+ * for a whole match when the lobby had seated a "Computer+ (Insane)" there.
+ *
+ * On a scenario or a campaign chapter the reverse holds, and it is why the field is read at all:
+ * a mission NAMES the sides it fields — "Illidan's Naga", "Wild Mur'guls", "Night Elf Villagers"
+ * — and that is what WC3 prints under a hovered enemy. Reading "Computer (Normal)" over one of
+ * those is a melee lobby's answer given to a mission.
+ *
+ * A player the lobby never seated (neutral, rescuable) only ever takes the map's name at all:
+ * nobody is playing them, so a computer's label would be a lie about them.
+ */
+export function slotLabel(slot: NamedSlot, melee: boolean): string {
+  const seated = slot.controller === "user" || slot.controller === "computer";
+  // The lobby's own answer: WHO is in the seat. An AI slot reads back the exact entry its name
+  // menu showed, Computer+ included — one table answers both — so the in-game name is the lobby
+  // label letter for letter, which is what issue #124 asks for.
+  const lobby = slot.controller === "computer"
+    ? labelOf(slotOptionValue("computer", slot.aiDifficulty, slot.aiPlus === true))
+    : slot.playerName?.trim() || `Player ${slot.id + 1}`;
+  if (melee && seated) return lobby;
+  return slot.name?.trim() || (seated ? lobby : `Player ${slot.id + 1}`);
+}
+
+/** What `slotLabel` needs of a seat — the naming fields of `MeleeConfig`'s `SlotConfig`
+ *  (ui/lobby.ts), spelled out here so this file stays a table and imports no match config. */
+export interface NamedSlot {
+  id: number;
+  controller: Controller;
+  /** The MAP's own name for the side (w3i player record). */
+  name?: string;
+  /** The person in the seat, by the name they play under. */
+  playerName?: string;
+  /** `MeleeDifficulty()`, on a computer the lobby seated. */
+  aiDifficulty?: number;
+  /** …and whether that computer is a Computer+ (src/ai/plus/). */
+  aiPlus?: boolean;
+}
+
 /** A run of player rows under one heading. A melee map has a single, unnamed group (its rows
  *  just stack from the top of the panel); a custom map has one per FORCE it declares, and the
  *  lobby prints the map's own name for it over that force's rows. */
