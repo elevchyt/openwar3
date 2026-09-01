@@ -1196,10 +1196,12 @@ export class MapViewerScene {
   private meleeTeams = new Map<number, number>(); // owner slot → team
   /** Lobby labels by slot — the owner line, and the Allies dialog's player rows. */
   private playerNames = new Map<number, string>();
-  /** Every chat line this player has heard, rendered — the F12 dialog's Chat History and the
+  /** Every chat line this player has heard, AS SAID — the F12 dialog's Chat History and the
    *  Message Log both read it. Kept here rather than in the HUD because it must outlive the
-   *  on-screen lines, which expire. */
-  private chatHistory: string[] = [];
+   *  on-screen lines, which expire; and kept raw rather than rendered because the colour a
+   *  speaker's name wears is the colour their units wear NOW, which the ally-colour filter
+   *  can move at any time (see `renderChat`). */
+  private chatHistory: ChatLine[] = [];
   /** How many seats a person is sitting in — what makes a match "multiplayer" for chat. */
   private humanPlayers = 1;
   // Custom maps only: the map's pre-placed player units (from war3mapUnits.doo) and
@@ -1555,6 +1557,10 @@ export class MapViewerScene {
       // SetAllyColorFilterState): the field has already been re-tinted by the controller —
       // what is left is the button's own face, which IS the mode it is in.
       this.rts.onAllyColorModeChange = () => this.hud?.refreshAllyColorButton();
+      // …and everything OFF the field that wears a player's colour repaints with the bodies:
+      // a chat name is read as "that player" only while it matches the units on screen. Raised
+      // by the re-tint itself, so an alliance changing hands under a filter reaches it too.
+      this.rts.onWorldColorsChange = () => this.hud?.refreshChatColors();
       this.registerResourceNodes(nodes);
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
@@ -6970,7 +6976,8 @@ export class MapViewerScene {
     });
     this.chatDialog?.dispose();
     this.chatDialog = new ChatDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
-      history: () => this.chatHistory,
+      // Rendered on the way out, never on the way in: the colours are today's (see renderChat).
+      history: () => this.chatHistory.map((line) => this.renderChat(line)),
       peers: () => [...this.meleeTeams.keys()]
         .filter((id) => id !== this.localPlayer)
         .sort((a, b) => a - b)
@@ -7094,18 +7101,35 @@ export class MapViewerScene {
   /** Put a line on screen and in the history. No routing, no triggers — either this machine
    *  is the authority and has already done both, or the authority has done them for us. */
   private showChat(line: ChatLine): void {
-    const rendered = formatChatLine(
-      line,
-      (p) => this.playerLabel(p),
-      (p) => teamColorHex(this.vfs, this.rts?.playerColor(p) ?? p),
-      (k) => this.globalStrings?.strings.get(k),
-    );
-    this.chatHistory.push(rendered);
+    this.chatHistory.push(line);
     if (this.chatHistory.length > MapViewerScene.CHAT_HISTORY_MAX) this.chatHistory.shift();
     // Chat has a display of ITS OWN (the engine's CChatDisplay / ORIGIN_FRAME_CHAT_MSG), not
     // the message area the trigger text uses — a line of chat must never shove the map's own
     // messages up the screen. It expires the same way: WC3 holds it a while, then lets it go.
-    this.hud?.showChatMessage(rendered, MapViewerScene.CHAT_MESSAGE_SECS);
+    this.hud?.showChatMessage(() => this.renderChat(line), MapViewerScene.CHAT_MESSAGE_SECS);
+  }
+
+  /**
+   * One chat line as it reads right NOW — the audience tag, then the speaker's name in the
+   * speaker's colour.
+   *
+   * The colour is `unitColor`, the very call every body on the field is tinted through, and
+   * NOT `playerColor`: a name is only readable as "that player" while it matches what they
+   * look like in the world, and the Ally Color Mode filter (Alt-A / the button right of the
+   * minimap, `SetAllyColorFilterState`) repaints the world's blue-you / teal-ally / red-enemy
+   * over the player colours in mode 3. Asked per draw rather than baked into the stored line
+   * for the same reason: the mode can change after a line has been said, and both surfaces
+   * that show chat — the display over the console and the F12 dialog's Chat History — must
+   * follow it. (Mode 2 is the minimap alone and leaves the world, and so this, untouched;
+   * `SetUnitColor` is not asked, because it colours one unit and not its owner.)
+   */
+  private renderChat(line: ChatLine): string {
+    return formatChatLine(
+      line,
+      (p) => this.playerLabel(p),
+      (p) => teamColorHex(this.vfs, this.rts?.unitColor(p) ?? p),
+      (k) => this.globalStrings?.strings.get(k),
+    );
   }
 
   /**

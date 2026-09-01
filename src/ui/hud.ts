@@ -1110,6 +1110,9 @@ export class GameHud {
   private chatDefault: ChatTarget | null = null;
   private msgTimers = new Set<number>(); // pending auto-remove timeouts, cleared on dispose
   private chatTimers = new Set<number>(); // the same, for the chat display's own lines
+  /** How to re-draw each chat line still on screen — see `refreshChatColors`. Weak, so a
+   *  line that has expired or scrolled off takes its entry with it. */
+  private chatRenders = new WeakMap<HTMLDivElement, () => string>();
   // The gold error line just above the console (WC3's SimpleMessage frame).
   private errLine!: HTMLDivElement;
   private errTimer = 0;
@@ -1924,12 +1927,29 @@ export class GameHud {
    *  ORIGIN_FRAME_UNIT_MSG), so what a player says cannot shove the map's own text around.
    *  MiscUI sizes them apart too: WorldFrameChatMessage (0.013) against the message area's
    *  WorldFrameUnitMessage (0.015). */
-  showChatMessage(text: string, duration: number): void {
-    this.pushLine(this.chatLog, this.chatTimers, "hud-chatline", CHAT_MAX, text, duration);
+  showChatMessage(render: () => string, duration: number): void {
+    const line = this.pushLine(this.chatLog, this.chatTimers, "hud-chatline", CHAT_MAX, render(), duration);
+    if (line) this.chatRenders.set(line, render);
+  }
+
+  /**
+   * Re-draw the chat lines still on screen.
+   *
+   * A speaker's name wears the colour their units wear in the world (mapViewer.renderChat),
+   * and the ally-colour filter can move that colour — Alt-A while somebody's line is still
+   * up must not leave the name in the colour it was said in. The line is re-rendered rather
+   * than patched: what it reads as is the caller's to say, not ours.
+   */
+  refreshChatColors(): void {
+    for (const el of [...this.chatLog.children]) {
+      const render = this.chatRenders.get(el as HTMLDivElement);
+      if (render) (el as HTMLDivElement).innerHTML = formatColorCodes(render());
+    }
   }
 
   /** One line into one of the two stacks: newest at the bottom, oldest scrolled off past
-   *  `max`, and removed again on its own timer. WC3 colour codes are honoured. */
+   *  `max`, and removed again on its own timer. WC3 colour codes are honoured. Returns the
+   *  element, so a caller that can re-render it later (see `showChatMessage`) can hold it. */
   private pushLine(
     log: HTMLDivElement,
     timers: Set<number>,
@@ -1937,8 +1957,8 @@ export class GameHud {
     max: number,
     text: string,
     duration: number,
-  ): void {
-    if (!text) return;
+  ): HTMLDivElement | null {
+    if (!text) return null;
     const line = document.createElement("div");
     line.className = cls;
     line.innerHTML = formatColorCodes(text);
@@ -1950,6 +1970,7 @@ export class GameHud {
       timers.delete(id);
     }, Math.max(0.5, secs) * 1000);
     timers.add(id);
+    return line;
   }
 
   /** The single gold line the engine flashes above the console when a command is

@@ -1092,6 +1092,17 @@ export class RtsController {
     return worldFilterColor(this.allyColorFilter, this.colorSide(owner)) ?? override ?? this.playerColor(owner);
   }
 
+  /**
+   * Called whenever the colours the WORLD is painted in have moved — the filter changing
+   * mode, an alliance changing hands under one, a watched match being seated.
+   *
+   * Everything OUTSIDE the field that wears a player's colour repaints from here, because a
+   * name is only readable as "that player" while it matches the units on screen: chat is the
+   * one that reads them (mapViewer.renderChat). The bodies themselves are done by
+   * `retintUnits`, which raises this.
+   */
+  onWorldColorsChange: (() => void) | null = null;
+
   /** Re-tint every body on the field to `unitColor` — for the frame the mode changes on.
    *  Destructibles are skipped: their instance is BORROWED from the viewer (see Entry). */
   retintUnits(): void {
@@ -1101,6 +1112,7 @@ export class RtsController {
       if (!u) continue;
       e.unit.instance.setTeamColor?.(this.unitColor(u.owner, e.colorOverride));
     }
+    this.onWorldColorsChange?.();
   }
 
   /** Is the player's interface on screen — `ShowInterface` AND `EnableUserUI` (see
