@@ -34,7 +34,7 @@ function check(what, got, want) {
 // The two mirror rows. `castRange` and the ranks are the game's; what matters here is that both
 // are `target: "unit"` with no allegiance flag in `targetFlags`, which is the fact that broke
 // them (`friendlySpell` answers false for both).
-const lvl = (o = {}) => ({ area: 0, castRange: 800, duration: 0, heroDuration: 0, data: [200, NaN], buffs: [], summon: "", ...o });
+const lvl = (o = {}) => ({ area: 0, castRange: 800, cost: 0, duration: 0, heroDuration: 0, data: [200, NaN], buffs: [], summon: "", ...o });
 const ABILS = {
   AHhb: { code: "AHhb", target: "unit", autocast: false, targetFlags: ["air", "ground", "organic", "notself", "vuln", "invu", "nonancient"], levelData: [lvl()] },
   AUdc: { code: "AUdc", target: "unit", autocast: false, targetFlags: ["air", "ground", "organic", "notself", "vuln", "invu", "nonancient"], levelData: [lvl()] },
@@ -58,6 +58,9 @@ const ABILS = {
   //   [AUim] Area1 250  Rng1 700  DataA 600 (distance)  DataB 0.3 (wave time)  DataC 75 (damage)
   AOsh: { code: "AOsh", target: "point", autocast: false, targetFlags: ["ground", "structure"], levelData: [lvl({ area: 125, castRange: 700, data: [75, 900, 800] })] },
   AUim: { code: "AUim", target: "point", autocast: false, targetFlags: ["ground", "enemy", "neutral", "organic"], levelData: [lvl({ area: 250, castRange: 700, duration: 2, heroDuration: 2, data: [600, 0.3, 75] })] },
+  // MANA BURN, with its real row: `[AEmb] targs1` "air,ground,enemy,neutral", `Rng1` 300,
+  // `Cost1` 60, `Cool1` 7 and `DataA1` 50 — the rank a Demon Hunter has from hero level 1.
+  AEmb: { code: "AEmb", target: "unit", autocast: false, targetFlags: ["air", "ground", "enemy", "neutral"], levelData: [lvl({ castRange: 300, cost: 60, data: [50, 0.25, 1] })] },
 };
 
 let nextId = 1;
@@ -96,6 +99,9 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
       if (!targetId) return null;
       const t = units.find((u) => u.id === targetId);
       if (!t) return "notarget";
+      // The sim's own `MANA_TARGET_SPELLS` gate (sim/spells.ts): "Unable to cast Mana Burn on
+      // this target." is what a Footman gets — a pool of zero is the test, not an empty one.
+      if (code === "AEmb" && t.maxMana <= 0) return "Cantmanaburn";
       const healsUndead = POLARITY[code];
       if (healsUndead === undefined) {
         // The sim's own rule (`targetAllowed`): a row that names no allegiance flag allows ANY
@@ -429,6 +435,64 @@ console.log("\n-- Impale is aimed like Shock Wave, off its OWN wave columns ----
   const cl = caster({ abilId: "AUim", race: "undead" });
   const pack = [400, 460].map((x) => unit({ owner: 1, x }));
   check("an EASY computer's Crypt Lord Impales too", !!cast([cl, ...pack], PLUS_EASY, { passes: 2 }), true);
+}
+
+// ==========================================================================================
+console.log("\n-- Mana Burn is aimed at the biggest BAR, and heroes hold the biggest ---------");
+// ==========================================================================================
+// Reported: *"the Computer+ AI is not utilizing the Demon Hunter's Mana Burn at all"*, with the
+// developer's own rule for it — heroes first, then casters. Two things were wrong and the first
+// is Impale's bug exactly: graded `debuff`, `AEmb` sat in a vocabulary only INSANE has
+// (`rolesFor`), so the one skill every Computer+ Demon Hunter learns at level 1 could not be
+// pressed at all below it. The second is the aim: `debuff` scores off `bodyValue` alone, which
+// prices a healthy hero (1.15, and less once `heroFocus` scales it) UNDER any caster (2.5).
+const dh = (o = {}) => caster({ abilId: "AEmb", race: "nightelf", ...o });
+const sorceress = (o = {}) => unit({ owner: 1, mana: 300, maxMana: 300, ...o });
+{
+  const hero = unit({ owner: 1, isHero: true, mana: 300, maxMana: 300, x: 250 });
+  const cmd = cast([dh(), sorceress({ x: 200 }), hero]);
+  check("a Demon Hunter burns the enemy HERO", cmd && cmd.code, "AEmb");
+  check("…and not the Sorceress standing closer", cmd && cmd.targetId, hero.id);
+}
+{
+  // …and with no hero in reach, the caster is the target. A Footman never is: he has no pool at
+  // all, and the sim will not let the button be aimed at him (`Cantmanaburn`).
+  const witch = sorceress({ x: 200 });
+  const cmd = cast([dh(), witch, unit({ owner: 1, mana: 0, maxMana: 0, x: 100 })]);
+  check("…with no hero about, the caster", cmd && cmd.targetId, witch.id);
+}
+{
+  // A HERO ALREADY BURNED DRY stops outbidding a full bar — there is nothing left on it to take.
+  const dry = unit({ owner: 1, isHero: true, mana: 5, maxMana: 300, x: 150 });
+  const witch = sorceress({ x: 250 });
+  const cmd = cast([dh(), dry, witch]);
+  check("…and a hero with an empty bar is not the target any more", cmd && cmd.targetId, witch.id);
+}
+{
+  // …and a field of empty bars is not a cast: 60 mana to take four is what makes an AI look
+  // like it is pressing buttons for the sake of it (`manaBurnWorthIt`).
+  const drained = [1, 2].map((i) => unit({ owner: 1, mana: 4, maxMana: 300, x: 150 + 50 * i }));
+  check("nobody worth burning, nothing pressed", cast([dh(), ...drained]), null);
+}
+{
+  // THE FLOOR IS THE TARGET'S OWN CHEAPEST BUTTON, not a constant: keep burning while it can
+  // still afford something. This Sorceress holds 40 — under a 50-mana Invisibility, over a
+  // 35-mana Slow — so which of the two she has learned decides whether she is worth the press.
+  const slow = { code: "Aslo", target: "unit", autocast: true, targetFlags: ["air", "ground", "enemy"], levelData: [lvl({ castRange: 600, cost: 35 })] };
+  const invis = { code: "Aivs", target: "unit", autocast: false, targetFlags: ["air", "ground"], levelData: [lvl({ castRange: 600, cost: 50 })] };
+  ABILS.Aslo = slow;
+  ABILS.Aivs = invis;
+  const bar = (code) => sorceress({ x: 200, mana: 40, abilities: [{ id: code, code, level: 1, cooldownLeft: 0, autocastOn: false }] });
+  check("40 mana and a 35-mana Slow to spend it on: burned", !!cast([dh(), bar("Aslo")]), true);
+  check("…40 mana and nothing under 50 to cast: left alone", cast([dh(), bar("Aivs")]), null);
+}
+{
+  // THE VOCABULARY, which is the whole of "not utilizing it at all": `debuff` is Insane's and
+  // nobody else's, so an easy or normal Demon Hunter never pressed the button in its life.
+  const foe = () => unit({ owner: 1, isHero: true, mana: 300, maxMana: 300, x: 200 });
+  check("an EASY computer's Demon Hunter burns mana too",
+    !!cast([dh(), foe()], PLUS_EASY, { passes: 2 }), true);
+  check("…and a NORMAL one", !!cast([dh(), foe()], PLUS_NORMAL, { passes: 2 }), true);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

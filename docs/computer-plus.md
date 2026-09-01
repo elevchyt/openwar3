@@ -1875,6 +1875,53 @@ the damage). That also puts it back on the novice's card: `rolesFor` gives Easy 
 `summon` and `morph` only, so an easy Crypt Lord had no offensive button at all while an easy
 Tauren Chieftain Shock Waved.
 
+### Mana Burn is aimed at a BAR, not at a body
+
+Reported: *"the Computer+ AI is not utilizing the Demon Hunter's Mana Burn at all"*. Two causes,
+and the first is Impale's exactly.
+
+**It was in a vocabulary almost nobody has.** `AEmb` was graded `debuff`, and `rolesFor` gives
+`debuff` to **Insane alone** — an easy or a normal Demon Hunter could not press it in its life.
+That is not a marginal button either: `AEmb` is the *fixed* half of both night elf skill builds
+(the table above), so every Demon Hunter this AI fields learns it at hero level 1 and has rank 3
+by level 5. It is now a `nuke`, which is what its handler and its tooltip both say it is —
+`sim/spells.ts` burns up to `DataA` and then deals `spellDamage` for exactly what it took, and
+`NightElfAbilityStrings [AEmb]` leads with *"Burns mana … Deals damage equal to the amount of mana
+burned"*. `Units\AbilityData.slk`: `Rng1` 300, `Cost1` 60, `Cool1` 7/6/5, `DataA1` 50/100/150.
+
+**And a nuke's aim is the wrong aim for it.** A nuke goes on the body it can finish; a Mana Burn
+is worth exactly what it TAKES — `min(DataA, mana)` — so the target is whoever has been *saving*
+their bar, whatever their hit points say. `manaBurnValue` is therefore its own ladder, two terms
+wide:
+
+| | |
+| --- | --- |
+| **who holds the mana** | a hero `MANA_BURN_HERO` = 4× anybody else; a summon 0.5× (it is leaving on its own clock) |
+| **how much of the press lands** | the share of this rank's own burn the pool can actually pay |
+
+which is the developer's own rule — *primarily enemy heroes, enemy casters when there is no
+hero* — falling out of one number rather than out of a list. A hero's bar is the Storm Bolt, the
+Frost Nova and the ultimate the fight turns on, and it is the only bar on the field that does not
+walk away and come back full: a hero keeps what it is left with. At 4× a hero stops outbidding a
+full Sorceress only once it is under a quarter of what the rank can take — which is the button
+working rather than an exception to it, because there is nothing left on it to burn.
+
+The hero premium is deliberately **not** scaled by `heroFocus`, which every other hero preference
+in this AI is (`bodyValue`). That dial is the ANTI-CHASE rule — how far the army may be pulled
+onto a hero it cannot finish — and this is not a chase: Mana Burn is a 300-range press at whoever
+is *already* in front of the Demon Hunter. What a difficulty still changes here is how late the
+press comes (`castDelay`) and how often it lands on the wrong body (`castMistake`).
+
+**The floor under it is the target's own cheapest button.** The sim already refuses any target
+with no mana POOL (`MANA_TARGET_SPELLS`, the game's own `Cantmanaburn` — a Demon Hunter may not
+pick a Footman at all), but a pool with nothing *in* it is legal and useless, and 60 mana spent
+taking 4 off a drained Sorceress is what makes an AI look like it is pressing buttons for the sake
+of it. `manaBurnWorthIt` keeps burning while the target can still afford one of its OWN abilities
+and stops when it cannot — read off `Cost1` on whatever the target is carrying, so it needs no
+constant of ours, and it is exactly what the spell is *for*: a hero below its cheapest spell is
+already out of the fight's magic. It is applied at legality rather than as a penalty on the score,
+so the misclick cannot land there either.
+
 ### Skill builds: a hero's ten levels are ROLLED, not fixed
 
 `PlusRaceTable.skills` carries a **list** of ten-level builds per hero and `pickHeroes` rolls one

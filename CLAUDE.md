@@ -283,7 +283,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   never spent on a WORKER it cannot finish (`nukeWorthIt`) — Frost Nova's share to the unit it
   hits is 100 at every rank and no worker in the game has that little life — priced off the same
   data columns the sim's own handlers read, and enforced at LEGALITY so the misclick cannot land
-  there either. A WAND OF ILLUSION is spent as a VANGUARD: the doubles are thrown a few seconds
+  there either. MANA BURN is the one press aimed at a BAR rather than at a body (`manaBurnValue`):
+  it is worth what it TAKES, `min(DataA, mana)`, so it goes on whoever has been SAVING their bar
+  and never on the wounded — a HERO at 4× anybody else, its premium deliberately NOT scaled by
+  `heroFocus` (that dial is the anti-chase rule, and a 300-range press at whoever is already in
+  front of the Demon Hunter is not a chase), with the floor under it read off the TARGET's own
+  cheapest `Cost1`: burn while it can still afford one of its own buttons. Its old `debuff`
+  grading is why it never fired at all — `rolesFor` gives `debuff` to Insane alone, exactly as it
+  once silenced Impale. A WAND OF ILLUSION is spent as a VANGUARD: the doubles are thrown a few seconds
   out from an ORANGE or RED creep camp, the body is STOPPED where it stands, and only the copies
   walk in — exempt from cohesion, because being in front is the whole job. The trap beside it is
   that an illusion is a PICTURE of the army and belongs in NONE of the readings the squad is

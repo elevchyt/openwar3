@@ -145,6 +145,25 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
     // Shock Waved — which is the reported behaviour, and the developer's own reading of it:
     // treat Impale as Shock Wave.
     "AUim",
+    // MANA BURN, and it is here for the same two reasons Impale is: the damage is what the
+    // ability DOES, and `debuff` is a vocabulary almost nobody has.
+    //
+    // Reported: *"the Computer+ AI is not utilizing the Demon Hunter's Mana Burn at all"* —
+    // and it could not, at two of the three difficulties, because `rolesFor` gives `debuff`
+    // to Insane alone. Every Demon Hunter this AI fields learns `AEmb` at hero level 1 and
+    // takes rank 3 by level 5 (plus/races.ts: it is the fixed half of both night elf skill
+    // builds), so the one button the hero is guaranteed to own was the one button an easy or
+    // normal computer could never press.
+    //
+    // It belongs with the nukes rather than beside Cripple in any case. The handler is a nuke
+    // (sim/spells.ts `AEmb`: `burnMana` up to `DataA`, then `spellDamage` for exactly what it
+    // took), and `NightElfAbilityStrings [AEmb]` leads with both halves — "Burns mana … Deals
+    // damage equal to the amount of mana burned". 50/100/150 at 60 mana and a 7/6/5 s
+    // cooldown (`Units\AbilityData.slk`), which is a Demon Hunter's whole opening.
+    //
+    // What it does NOT get from this row is its aim: a nuke goes on the wounded, and Mana Burn
+    // goes on the full pool that is about to be spent on us. See `manaBurnValue`.
+    "AEmb",
     "AEsf", // Starfall
     "AEfk", // Fan of Knives
     "AOww", // Bladestorm
@@ -184,7 +203,6 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
     "Alsh", // Lightning Shield: aimed at an enemy, but what it does is add damage to a fight
   ],
   debuff: [
-    "AEmb", // Mana Burn
     "ANht", // Howl of Terror
     "Acri", // Cripple
     "ANdh", // Drunken Haze
@@ -274,6 +292,66 @@ export function nukeWorthIt(code: string, lvl: AbilityLevel, t: SimUnit): boolea
   if (!t.isPeon) return true;
   if (t.magicImmune) return false;
   return nukeBurst(code, lvl) * (1 - t.magicReduction) >= t.hp;
+}
+
+// ==========================================================================================
+//  MANA BURN — the one nuke that is aimed at a bar rather than at a body
+// ==========================================================================================
+
+/** Mana Burn (Demon Hunter), by base code. `Rng1` 300, `Cost1` 60, `Cool1` 7/6/5, `DataA1`
+ *  50/100/150 (`Units\AbilityData.slk`). */
+const MANA_BURN = "AEmb";
+
+/**
+ * HOW MUCH MORE A HERO'S POOL IS WORTH THAN ANYBODY ELSE'S.
+ *
+ * The developer's own instruction — *"it must primarily target enemy heroes when possible and
+ * enemy casters if there are no heroes"* — and it is what the button is for. A Sorceress spends
+ * her bar on one Slow at a time; a hero's bar is the Storm Bolt, the Frost Nova and the ultimate
+ * the whole fight turns on, and it is the only bar on the field that does not walk away and come
+ * back full a minute later, because a hero keeps what it is left with.
+ *
+ * NOT scaled by `heroFocus`, which every other hero preference in this AI is (plus/targeting.ts
+ * `bodyValue`). That dial is the ANTI-CHASE rule — how far the army is allowed to be pulled onto
+ * a hero it cannot finish — and this is not a chase: Mana Burn is a 300-range press at whoever
+ * is already standing in front of the Demon Hunter, and stripping a hero's mana is the right
+ * click at every skill level. What a difficulty still changes here is how LATE the press comes
+ * (`castDelay`) and how often it goes on the wrong body (`castMistake`).
+ *
+ * Four rather than a rule, so a hero already burned dry stops outbidding a Sorceress with a full
+ * bar (below a quarter of what the rank can take) — which is the button working, not an
+ * exception to it: there is nothing left on that hero to burn.
+ */
+const MANA_BURN_HERO = 4;
+/** …and a summon's pool, which is leaving on its own clock — the same reading `SUMMON` gets on
+ *  the shared ladder, for the same reason. */
+const MANA_BURN_SUMMON = 0.5;
+/**
+ * The floor when the target owns no button with a price on it — a creep with a bar and nothing
+ * to spend it on, or a hero whose one learned skill is a passive. Half of what this rank can
+ * take: a press that cannot fill half its own burn is not what 60 mana is for. Ours, like every
+ * number in Computer+ that no install file states.
+ */
+const MANA_BURN_SLIVER = 0.5;
+
+/**
+ * WHAT THIS TARGET IS WORTH BURNING.
+ *
+ * Deliberately NOT `spellValue(t, "nuke")`, though the role is `nuke` and the damage is real. A
+ * nuke is worth most on the body it can finish; a Mana Burn is worth exactly what it TAKES, and
+ * what it takes is `min(DataA, mana)` — so the target that has been saving its bar is the target,
+ * whatever its hit points say. An empty pool is a 60-mana cast that does nothing at all, which is
+ * how the same button reads as spam or as play.
+ *
+ * The two terms are therefore: WHO is holding the mana (a hero above everybody, `MANA_BURN_HERO`)
+ * and HOW MUCH of the press actually lands (the share of the rank's own burn the pool can pay).
+ * `pickTarget` breaks ties with distance as it does for every other single-target cast.
+ */
+export function manaBurnValue(t: SimUnit, lvl: AbilityLevel): number {
+  const cap = dat(lvl, 0, 50);
+  const lands = cap > 0 ? Math.min(cap, t.mana) / cap : 0;
+  const who = t.isHero ? MANA_BURN_HERO : t.isSummon ? MANA_BURN_SUMMON : 1;
+  return who * lands;
 }
 
 /** code → role, flattened once. */
@@ -1007,6 +1085,9 @@ export class PlusCaster {
     // Undead and a Death Knight could only ever burn enemy living. Neither ability had a
     // healing half at all, which is most of a Paladin and the whole of the undead's own heal.
     const polarity = POLARITY_SPELLS[code] !== undefined;
+    // MANA BURN is aimed at a BAR and not at a body — see `manaBurnValue` for the ladder and
+    // `manaBurnWorthIt` for the floor under it.
+    const manaBurn = code === MANA_BURN;
     // …and WHICH polarity spell, because only one of the two holds its heal back. The row itself
     // says so: `healsUndead` is what makes this the Death Coil side of the mirror, whose other
     // half is the undead's opening nuke (see `COIL_HEAL_HP`). Holy Light's other half only ever
@@ -1048,6 +1129,9 @@ export class PlusCaster {
       // A NUKE IS NOT SPENT ON A WORKER IT CANNOT FINISH — see `nukeWorthIt`. Here rather than
       // in the score so the misclick below cannot land on one either.
       if (half === "nuke" && !nukeWorthIt(code, lvl, t)) continue;
+      // …AND A MANA BURN IS NOT SPENT ON AN EMPTY BAR. Here rather than in the score for the
+      // same reason: a "mistake" that burns 4 mana off a drained Sorceress is not sloppiness.
+      if (manaBurn && !this.manaBurnWorthIt(t, lvl)) continue;
       // …AND A DISPEL IS SPENT ON WHAT A DISPEL DOES — `worthDispelling` (sim/spells.ts), asked
       // of the side this body is on, and here rather than in the score for the same reason the
       // clause above is: a "mistake" that lands on a unit with nothing to strip is not a
@@ -1068,8 +1152,10 @@ export class PlusCaster {
       // ladders and would otherwise be compared as if they were the same number, so a Death
       // Knight with a Ghoul at a fifth of its life would still coil whatever was in front of
       // it. Putting a body back on its feet is worth more than hurting one.
-      const s = this.value(t, half, lvl) * (half === "heal" && polarity ? POLARITY_HEAL_FIRST : 1) * 1000
-        - Math.hypot(t.x - u.x, t.y - u.y);
+      const worth = manaBurn
+        ? manaBurnValue(t, lvl)
+        : this.value(t, half, lvl) * (half === "heal" && polarity ? POLARITY_HEAL_FIRST : 1);
+      const s = worth * 1000 - Math.hypot(t.x - u.x, t.y - u.y);
       if (s > bestScore) { bestScore = s; best = t; }
     }
     // …and then, sometimes, the wrong one. `castMistake` is ordinary sloppiness on top of a
@@ -1087,6 +1173,40 @@ export class PlusCaster {
   /** Did this click go astray? Drawn off the AI's own stream, so a match replays identically. */
   private mistake(): boolean {
     return this.profile.castMistake > 0 && this.roll() < this.profile.castMistake;
+  }
+
+  /**
+   * IS THERE ENOUGH LEFT IN THIS BAR TO BE WORTH BURNING?
+   *
+   * Mana Burn's own legality is the sim's and it is already narrow — `MANA_TARGET_SPELLS`
+   * (sim/spells.ts) refuses any target with no mana POOL, which is the game's own
+   * `Cantmanaburn` and the reason a Demon Hunter may not pick a Footman at all. What the data
+   * cannot say is that a pool with nothing in it is legal and useless: a drained Sorceress is
+   * still a caster, and 60 mana spent taking 4 off her is the cast that makes an AI look like
+   * it is pressing buttons for the sake of it.
+   *
+   * The bar is READ OFF THE TARGET rather than picked: keep burning while it can still afford
+   * one of its OWN buttons, and stop when it cannot. That is what the spell is for — a hero
+   * below its cheapest spell is out of the fight's magic already — and it needs no constant of
+   * ours, since the price is `Cost1` on the row of whatever the target is carrying. Items are
+   * not in it: an item ability is paid for in CHARGES and out of the item's own row, so a
+   * Scroll of Healing is not something a burn can take away (docs/items.md).
+   *
+   * Worth noting for anyone reading this beside `nukeWorthIt`, which sits one gate away: the
+   * WORKER rule can never fire here. No worker in the melee game has a mana bar at all —
+   * `UnitBalance.slk` gives `hpea`, `opeo`, `uaco` and `ewsp` no `mana0` — so the Demon Hunter
+   * could not pick one if it wanted to.
+   */
+  private manaBurnWorthIt(t: SimUnit, lvl: AbilityLevel): boolean {
+    let cheapest = Infinity;
+    for (const ab of t.abilities) {
+      if (ab.level < 1) continue;
+      const def = this.view.def(ab.id);
+      if (!def || def.target === "passive") continue;
+      const l = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      if (l && l.cost > 0) cheapest = Math.min(cheapest, l.cost);
+    }
+    return t.mana >= (Number.isFinite(cheapest) ? cheapest : dat(lvl, 0, 50) * MANA_BURN_SLIVER);
   }
 
   /**
