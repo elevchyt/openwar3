@@ -164,8 +164,37 @@ interface CampBar {
 // with very weak armies" raised, and the ladder out of green is not blocked — a green camp is
 // most of a hero level, so a party that can take the first one is a party that is level 3 and
 // pricing orange camps a few minutes later. GREEN is the rung the AI could not get ON.
+//
+// **ORANGE's HERO LEVEL then had to go, and the report was "big armies are staying in the base
+// instead of creeping orange camps — the hero is level 1".** A hero and eight Grunts prices at
+// √(8 × 16 × 700) × 1.35 ≈ 404, well over the 300 this bar asks for, and it was refused anyway
+// by the `hero: 3` beside it. That clause is a CHICKEN AND EGG, because the only thing on a
+// melee map that levels a hero is the camps: green is the rung out of it, and a map whose near
+// camps are all orange — which is most of them, since expansion mines are orange-guarded — has
+// no such rung at all. So the hero stayed at 1 for ever, `maxCampLevel` never handed back
+// anything above `CAMP_GREEN_MAX`, and there was nothing left for the army to do. The other
+// half of the same lock is in plus/index.ts: `waveReady` refuses a wave for the first ten
+// minutes under `EARLY_HERO_LEVEL`, so the party could not attack a player either, and a
+// Computer+ match's first ten minutes were an army standing at its own rally point.
+//
+// It is also a DOUBLE COUNT. A hero's level is already priced, by `heroFactor` — the same party
+// is worth 1.35 × its soldiers at level 1 and 2.05 × at level 3 — so a level-1 hero already has
+// to bring about half an army again to clear the same bar. Requiring the level as well asked
+// for the one thing that cannot be earned. The POWER is the real reading, and it is the one
+// that stops the thing the bar was raised for: what refuses a weak party is that it is weak.
+//
+// So orange is stated in the developer's own unit — **about four Grunts** — with the hero clause
+// down to 1, and it comes to nearly the same power as before for a levelled hero:
+//
+//   4 Grunts + a level-1 hero  →  √(4 × 16 × 700) × 1.35  ≈ 286   — clears ORANGE, the bar
+//   3 Grunts + a level-1 hero  →  √(3 × 16 × 700) × 1.35  ≈ 247   — does NOT
+//   4 Grunts + a level-3 hero  →  √(4 × 16 × 700) × 2.05  ≈ 434   — clears it comfortably
+//   4 Archers + a level-3 hero →  √(4 × 11 × 245) × 2.05  ≈ 217   — still does NOT
+//
+// RED keeps its `hero: 5`, and is not the same trap: orange IS the rung to level 5 on, and it
+// is now reachable at any level.
 const GREEN: CampBar = { power: 120, hero: 1 };
-const ORANGE: CampBar = { power: 300, hero: 3 };
+const ORANGE: CampBar = { power: 280, hero: 1 };
 const RED: CampBar = { power: 620, hero: 5 };
 
 /**

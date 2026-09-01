@@ -1260,7 +1260,22 @@ export class PlusCaster {
 
     if (def.target === "none") {
       if (!buffFree(u, lvl)) return null; // a self-buff already up is not re-pressed
-      if (!area) return { x: u.x, y: u.y }; // a bare self-cast — nothing to aim
+      // A SUMMON'S `Area1` IS NOT AN AREA OF EFFECT — it is where the summoned body is PUT.
+      //
+      // This is the whole of the reported "the Computer+ Archmage never casts Water Elemental,
+      // in fights or while creeping". `[AHwe] Area1` is 200 (and `[AOsf]` Feral Spirit, `[AHpx]`
+      // Phoenix and `[AEsv]` Vengeance all carry the same 200; `[AUcb]` Carrion Beetles 900),
+      // which is the radius the summon appears in around its caster — nothing is caught by it
+      // and nobody has to be standing in it. Read as a catchment it became a QUORUM: two enemy
+      // bodies within 200 units of the hero, which for a 600-range caster standing behind its
+      // own army is a thing that essentially never happens, so the button was never pressed.
+      //
+      // The condition a summon actually has is the one `wants` already asks, and it is the
+      // classic caster's rule from the same observation thread — *"~Water Elemental - Casts when
+      // caster or nearby allies are engaging enemies"* (src/ai/casting.ts, `AHwe: engaged`).
+      // There is a fight; press it. Note src/ai/casting.ts does not have this bug: its `need`
+      // is 0 for anything that is not a `cluster` rule, so only this file's `quorum` reached it.
+      if (!area || role === "summon") return { x: u.x, y: u.y }; // a bare press — nothing to aim
       const hits = this.catchment(u, u.x, u.y, def, lvl, role, pool, friendly);
       return hits.count >= need ? { x: u.x, y: u.y } : null;
     }

@@ -61,6 +61,12 @@ const ABILS = {
   // MANA BURN, with its real row: `[AEmb] targs1` "air,ground,enemy,neutral", `Rng1` 300,
   // `Cost1` 60, `Cool1` 7 and `DataA1` 50 — the rank a Demon Hunter has from hero level 1.
   AEmb: { code: "AEmb", target: "unit", autocast: false, targetFlags: ["air", "ground", "enemy", "neutral"], levelData: [lvl({ castRange: 300, cost: 60, data: [50, 0.25, 1] })] },
+  // SUMMON WATER ELEMENTAL, with its real row — and every field of it matters here.
+  // `Units\AbilityData.slk [AHwe]`: `targs1` "_" (no target at all), `Cost1` 125, `Cool1` 20,
+  // `Dur1` 60, `UnitID1` hwat … and **`Area1` 200**, which is NOT an area of effect. It is the
+  // radius the elemental is placed in around its caster. Reading it as one made the summon ask
+  // for a QUORUM of two enemy bodies within 200 units of the Archmage — see `pickSpot`.
+  AHwe: { code: "AHwe", target: "none", autocast: false, targetFlags: [], levelData: [lvl({ area: 200, castRange: 0, cost: 125, duration: 60, heroDuration: 60, buffs: ["BHwe"], summon: "hwat" })] },
 };
 
 let nextId = 1;
@@ -493,6 +499,35 @@ const sorceress = (o = {}) => unit({ owner: 1, mana: 300, maxMana: 300, ...o });
   check("an EASY computer's Demon Hunter burns mana too",
     !!cast([dh(), foe()], PLUS_EASY, { passes: 2 }), true);
   check("…and a NORMAL one", !!cast([dh(), foe()], PLUS_NORMAL, { passes: 2 }), true);
+}
+
+// ==========================================================================================
+console.log("\n-- a summon's `Area1` is where the body goes, not who is caught ---------------");
+// ==========================================================================================
+// Reported: *"the Computer+ Archmage does not cast Water Elemental during fights or during
+// creeping"*. Nothing about the summon was gated — it is `summon` in every difficulty's
+// vocabulary and it costs 125 of a 300-mana bar — but the aim read `[AHwe] Area1` 200 as a
+// catchment and refused to press the button until TWO enemies were standing inside 200 units of
+// a hero whose own attack reaches 600. The same row shape is Feral Spirit's, the Phoenix's and
+// Vengeance's, so this was every no-target summon in the game.
+{
+  const mage = caster({ abilId: "AHwe", isHero: true });
+  const cmd = cast([mage, unit({ owner: 1, x: 500 })]);
+  check("an Archmage with ONE enemy in front of him summons", cmd && cmd.code, "AHwe");
+  check("…aimed at nothing — it is a bare press", cmd && cmd.targetId, 0);
+}
+{
+  // …and the condition it DOES have is the thread's own — "casts when caster or nearby allies
+  // are engaging enemies" — so an Archmage standing in an empty field keeps his mana.
+  const mage = caster({ abilId: "AHwe", isHero: true });
+  check("…and nothing to fight is no summon", cast([mage, unit({ owner: 1, x: 4000 })]), null);
+}
+{
+  // Every difficulty, because `summon` is in all three vocabularies (`rolesFor`) and the
+  // reported behaviour was not difficulty-specific.
+  const at = (p) => !!cast([caster({ abilId: "AHwe", isHero: true }), unit({ owner: 1, x: 500 })], p, { passes: 2 });
+  check("an EASY computer's Archmage summons too", at(PLUS_EASY), true);
+  check("…and a NORMAL one", at(PLUS_NORMAL), true);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

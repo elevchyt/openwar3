@@ -445,7 +445,7 @@ game's own numbers:
 | 4 Archers + a level-3 hero | ≈ 217 | green only |
 | 8 Grunts + a level-5 hero | ≈ 822 | red |
 
-The bars are **power 120 / hero level 1** (green), **300 / 3** (orange) and **620 / 5** (red),
+The bars are **power 120 / hero level 1** (green), **280 / 1** (orange) and **620 / 5** (red),
 plus **75 % group health and 80 % hero health** for all three. Orange and red were *raised* off
 the report "the AI is attacking orange creep camps with very weak armies".
 
@@ -459,6 +459,23 @@ Normal, which *is* a hero and three small soldiers, so one gate called that a pa
 did not. A green camp is levels 1–9 combined — two or three level-3 creeps — and a hero with a
 couple of soldiers behind it is what clears one in the real game. Orange and red did not move with
 it: the ladder out of green is the hero's own levels, and a green camp is most of one.
+
+**Orange's HERO LEVEL then went too, 3 → 1**, off the report *"big armies are staying in the base
+instead of creeping orange camps — e.g. 1 hero + 8 grunts, and the hero is level 1"*. That party
+prices at ≈ 404, well over orange's power bar, and the level clause refused it anyway. The clause
+is a **chicken and egg**: the only thing on a melee map that levels a hero is the camps, green is
+the rung out of it, and a map whose near camps are all orange — most of them, since expansion
+mines are orange-guarded — has no such rung. So the hero stayed at 1 for ever, `maxCampLevel`
+never handed back more than `CAMP_GREEN_MAX`, and `waveReady` (below) refused the attack as well
+for the first ten minutes on the same level — a whole opening spent standing at the rally point.
+
+It was also a **double count**. `heroFactor` already prices the level: the same party is worth
+1.35 × its soldiers at level 1 and 2.05 × at level 3, so a level-1 hero has to bring about half an
+army again to clear the same bar. What refuses a weak party is that it is weak. The bar is now
+stated in the developer's own unit — **about four Grunts** — and comes out at nearly the old
+number for a levelled hero: 4 Grunts + a level-1 hero ≈ 286 clears it, 3 Grunts + a level-1 hero
+≈ 247 does not, and 4 Archers + a level-3 hero ≈ 217 still does not. Red keeps its `hero: 5` and is
+not the same trap, because orange *is* the rung to level 5 on and is now reachable at any level.
 
 ### Breaking off is a different question from starting
 
@@ -638,9 +655,12 @@ ladder player does, and it falls out for free — `waveReady` is also the clock 
 before it lets the hero's level cap refuse a camp, so **a closed wave window is an open creep
 window at any hero level**.
 
-Level 3 is [`power.ts`](../src/ai/plus/power.ts)'s own ORANGE bar, and deliberately the same
-number: a hero that has cleared its green camps is a hero at 3, so *"has it been creeping"* and
-*"may it go and fight a player"* are one question asked once. After ten minutes the ordinary clocks
+Level 3 was [`power.ts`](../src/ai/plus/power.ts)'s ORANGE bar too, and the two were deliberately
+the same number: a hero that has cleared its green camps is a hero at 3, so *"has it been
+creeping"* and *"may it go and fight a player"* were one question asked once. **They are two
+questions now** — orange no longer asks for a level at all (above), because that clause could not
+be earned on a map with no green camps, while this one still may: it is a preference between a
+camp and a player's base, and a party refused here is a party sent creeping. After ten minutes the ordinary clocks
 decide alone, because a hero still at level 1 then is not going to get there by waiting. Easy is
 exempt through its own profile rather than through a test — it does not creep at all, so there is
 nothing to prefer over the attack.
@@ -2123,6 +2143,25 @@ than either decision taken alone.
   and 1.5 s on a hero, Hex 15 s / 5 s, Sleep 20 s / 10 s — which is why a good player saves the
   Hex for the Shaman. (Those two are the only numbers in the file that come off the install;
   everything else is ours, like the rest of `PlusProfile`.)
+
+### A summon's `Area1` is where the body goes, not who is caught
+
+Reported: *"the Computer+ Archmage does not cast Water Elemental during fights or during
+creeping."* Nothing about the summon was gated — `summon` is in every difficulty's vocabulary
+(`rolesFor`) and 125 mana is affordable on a level-1 Archmage's bar — but `pickSpot` read
+`Units\AbilityData.slk [AHwe] Area1` **200** as an area of effect and applied the ordinary area
+quorum to it: *two enemy bodies inside 200 units of the caster*. A 600-range hero standing behind
+its own army is never in that state, so the button was never pressed at all.
+
+`Area1` on a summon row is the radius the summoned body is **placed** in around its caster.
+Nothing is caught by it and nobody has to be standing in it — and the same 200 is on `[AOsf]`
+Feral Spirit, `[AHpx]` Phoenix and `[AEsv]` Vengeance, with `[AUcb]` Carrion Beetles at 900, so
+this silenced every no-target summon in the game rather than one hero's button. The condition a
+summon actually has is the one `wants` already asks and the same one the classic caster uses,
+straight off the observation thread — *"~Water Elemental - Casts when caster or nearby allies are
+engaging enemies"* — so with a fight in reach it is a **bare press**. (`src/ai/casting.ts` never
+had the bug: its `need` is 0 for anything that is not a `cluster` rule, so only this file's
+`quorum` ever reached the row.)
 
 On top of the read sits `castMistake`, plain sloppiness: a chance the cast lands on a random
 *legal* target (or a random legal spot) instead of the best one. Drawn off the AI's own RNG

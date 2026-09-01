@@ -103,11 +103,14 @@ check("…but hero + two ghouls is still not a party", canClearCamp(force(n(GHOU
 // because the AI was walking into orange camps with parties that had no chance.
 check("hero + two grunts does NOT take an orange camp", canClearCamp(force(n(GRUNT, 2), 1), ORANGE), false);
 check("four grunts and a level-3 hero does", canClearCamp(force(n(GRUNT, 4), 3), ORANGE), true);
-check("…but not on a level-1 hero", canClearCamp(force(n(GRUNT, 4), 1), ORANGE), false);
-// …and the ORANGE bar did NOT move when the green one did: it is what "the AI attacks orange
-// camps with very weak armies" raised, and lowering green does not touch the party an orange
-// camp asks for. The ladder out of green is the hero's own levels.
-check("…nor on a level-2 one, however the green bar moved", canClearCamp(force(n(GRUNT, 4), 2), ORANGE), false);
+// THE BAR IS THE PARTY, NOT THE HERO'S BADGE. Orange used to require level 3 as well, and that
+// clause is a chicken and egg: the only thing that levels a hero is the camps, green is the rung
+// out of it, and a map whose near camps are all orange has no such rung — so "big armies staying
+// in the base with a level-1 hero" was the reported behaviour and the AI could never leave it.
+// The level is already priced (`heroFactor`: 1.35 at level 1 against 2.05 at level 3), so a
+// level-1 hero still has to bring about half an army again to clear the same power.
+check("…and on a LEVEL-1 hero too, given four grunts", canClearCamp(force(n(GRUNT, 4), 1), ORANGE), true);
+check("…but three grunts behind a level-1 hero is not four", canClearCamp(force(n(GRUNT, 3), 1), ORANGE), false);
 check("…and four ARCHERS are not four grunts", canClearCamp(force(n(ARCHER, 4), 3), ORANGE), false);
 
 // RED: "a pretty big army with a level 3-4+ hero". This is the case the whole file exists for.
@@ -129,6 +132,8 @@ check("nothing at all: not creeping", maxCampLevel(force([], 0)) < 0, true);
 check("hero + two grunts: green only", maxCampLevel(force(n(GRUNT, 2), 1)), CAMP_GREEN_MAX);
 check("four grunts + level 3: up to orange", maxCampLevel(force(n(GRUNT, 4), 3)), CAMP_ORANGE_MAX);
 check("eight grunts + level 5: no ceiling", maxCampLevel(force(n(GRUNT, 8), 5)), Infinity);
+// The reported lock, from the other end: an army with a level-1 hero is not held to green.
+check("eight grunts + level 1: up to orange", maxCampLevel(force(n(GRUNT, 8), 1)), CAMP_ORANGE_MAX);
 check("…a hurt army has no ceiling because it is not going", maxCampLevel(force(n(GRUNT, 8), 5, 0.4)) < 0, true);
 // Footmen are between the two, which is the point of pricing rather than counting.
 check("six footmen and a level-3 hero reach orange", maxCampLevel(force(n(FOOTMAN, 6), 3)), CAMP_ORANGE_MAX);
