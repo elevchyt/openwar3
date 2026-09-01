@@ -107,6 +107,57 @@ console.log("\nA site has no armour CLASS: every attack type lands undivided");
   check("PIERCE on the finished building: ×0.35, then armour", round(w.applyDamage(done, 100, 0, "pierce")), 26.923);
 }
 
+console.log("\nDamage taken while a site goes up is KEPT — construction ADDS hp, it never SETS it");
+{
+  // A site is stamped at 10 % of the finished building's life and earns the other 90 % across
+  // its build time. That ramp is what the construction CONTRIBUTES; it is not where the hp is
+  // supposed to be. Writing the ramp straight into `hp` healed away every blow landed since the
+  // last tick, so a foundation under attack snapped back onto the curve and could not be killed.
+  //
+  // `selfBuilds` is used to drive the clock with no worker standing there (an Undead structure
+  // was summoned and rises on its own) — the hp rule is the same on all three construction paths.
+  const w = world();
+  const b = raising(w, { hp: 150 }); // 10 % of 1500
+  b.building.constructionLeft = 60;
+  b.building.buildTimeTotal = 60;
+  b.building.selfBuilds = true;
+  w.recomputeStats(b);
+
+  w.tickBuildings(30); // halfway: 10 % + 90 %·½ = 55 % of 1500
+  check("half-built, untouched: on the ramp", round(b.hp), 825);
+
+  b.hp -= 500; // a Grunt gets at it
+  check("it took the blow", round(b.hp), 325);
+
+  w.tickBuildings(30); // …and finishes. The other half of the ramp is ADDED to 325.
+  check("the second half of the ramp is added, not assigned", round(b.hp), 1000);
+  check("…and it is finished", w.isUnderConstruction(b.id), false);
+  check("…still short of full, because it was hurt on the way up", b.hp < b.maxHp, true);
+}
+{
+  // The ramp never overshoots: a site damaged only lightly still tops out at maxHp.
+  const w = world();
+  const b = raising(w, { hp: 150 });
+  b.building.constructionLeft = 60;
+  b.building.buildTimeTotal = 60;
+  b.building.selfBuilds = true;
+  w.recomputeStats(b);
+  w.tickBuildings(120); // twice the build time in one go
+  check("an undamaged building finishes at exactly full", round(b.hp), 1500);
+}
+{
+  // And the point of the whole fix: a foundation CAN be killed.
+  const w = world();
+  const b = raising(w, { hp: 150 });
+  b.building.constructionLeft = 60;
+  b.building.buildTimeTotal = 60;
+  b.building.selfBuilds = true;
+  w.recomputeStats(b);
+  w.tickBuildings(1);      // 10 % + 90 %/60 = 172.5
+  w.applyDamage(b, 500, 0, "siege");
+  check("500 siege into a 172-hp site kills it", b.hp <= 0, true);
+}
+
 console.log("\nA building UPGRADING in place keeps the armour it already has");
 {
   // Town Hall → Keep: `enqueueUpgrade` puts a job in the queue and leaves constructionLeft at

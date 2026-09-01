@@ -2054,6 +2054,10 @@ const AIR_FANOUT_SPEED = 0.6;
 // Town Hall reference: 5 peasants take ~53s (from 90s) and cost ~615g (from 385g).
 const SPEED_BUILD_BONUS = 0.17;
 const SPEED_BUILD_SURCHARGE = 0.15;
+// A structure is STAMPED at a tenth of its finished hit points and earns the other nine
+// tenths across its build time, so it reaches full life exactly as it finishes.
+export const BUILD_START_HP_FRAC = 0.1;
+const BUILD_RAMP_HP_FRAC = 1 - BUILD_START_HP_FRAC;
 // Per-race construction style (engine behaviour, not a data field — observed in-game +
 // Warsmash). ORC/NIGHT ELF workers build from INSIDE the structure (hidden, one worker,
 // no assist); HUMAN peasants build from outside and can "speed build" — extra peasants
@@ -5266,6 +5270,25 @@ export class SimWorld {
     if (b.hp >= b.maxHp) this.stop(u.id);
   }
 
+  /** Credit one tick of construction to a rising structure's hit points.
+   *
+   *  Construction ADDS life, it never SETS it. The 10 %→100 % ramp is what the hammering
+   *  CONTRIBUTES, not where the building's hp is supposed to be: writing the ramp straight
+   *  into `hp` (which is what this did) healed away every blow landed since the last tick,
+   *  so a site under attack snapped back onto the curve every frame and was effectively
+   *  unkillable. WC3 lets you kill a building while it goes up — damage taken is kept, and a
+   *  structure hurt on the way up FINISHES hurt (and is then repaired like any other).
+   *
+   *  So take the ramp's DELTA across the tick and add that, clamped at maxHp. */
+  private addConstructionHp(u: SimUnit, b: BuildingState, prevLeft: number): void {
+    if (b.buildTimeTotal <= 0) {
+      u.hp = u.maxHp;
+      return;
+    }
+    const gain = u.maxHp * BUILD_RAMP_HP_FRAC * (Math.max(0, prevLeft - b.constructionLeft) / b.buildTimeTotal);
+    u.hp = Math.min(u.maxHp, u.hp + gain);
+  }
+
   /** Advance construction and training queues for all buildings. */
   private tickBuildings(dt: number): void {
     for (const u of this.units.values()) {
@@ -5278,8 +5301,9 @@ export class SimWorld {
       if (b.constructionLeft > 0) {
         // Debug cheat: finish in ~1s no matter what (no builder required).
         if (this.fastBuild) {
+          const prevLeft = b.constructionLeft;
           b.constructionLeft = Math.max(0, b.constructionLeft - Math.max(dt, b.buildTimeTotal * dt));
-          u.hp = u.maxHp * (0.1 + 0.9 * (1 - b.constructionLeft / b.buildTimeTotal));
+          this.addConstructionHp(u, b, prevLeft);
           if (b.constructionLeft === 0) this.finishConstruction(u, b);
           continue;
         }
@@ -5287,8 +5311,9 @@ export class SimWorld {
         // Mine is held up by the Tree's roots, and every Undead structure was SUMMONED and
         // then left to rise on its own. Either way the clock runs unattended.
         if (b.selfBuilds) {
+          const prevLeft = b.constructionLeft;
           b.constructionLeft = Math.max(0, b.constructionLeft - dt);
-          u.hp = u.maxHp * (0.1 + 0.9 * (1 - b.constructionLeft / b.buildTimeTotal));
+          this.addConstructionHp(u, b, prevLeft);
           if (b.constructionLeft === 0) this.finishConstruction(u, b);
           continue;
         }
@@ -5333,9 +5358,9 @@ export class SimWorld {
             }
           }
           const rate = 1 + extra * SPEED_BUILD_BONUS;
+          const prevLeft = b.constructionLeft;
           b.constructionLeft = Math.max(0, b.constructionLeft - rate * dt);
-          const done = 1 - b.constructionLeft / b.buildTimeTotal;
-          u.hp = u.maxHp * (0.1 + 0.9 * done);
+          this.addConstructionHp(u, b, prevLeft);
           if (b.constructionLeft === 0) this.finishConstruction(u, b);
         }
         continue; // can't train while still being built

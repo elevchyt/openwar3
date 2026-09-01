@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type EffectAnim } from "../sim/world";
+import { SimWorld, weaponsFromDef, isOffField, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type EffectAnim } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -3110,7 +3110,7 @@ export class RtsController {
         flyHeight: lift(def.moveHeight), // same lift as the Entry, so missiles match the model's altitude
         sightDay: def.sightDay || 1400,
         sightNight: def.sightNight || def.sightDay || 800,
-        hp: constructionTime > 0 ? (def.hitPoints || 100) * 0.1 : def.hitPoints || 100,
+        hp: constructionTime > 0 ? (def.hitPoints || 100) * BUILD_START_HP_FRAC : def.hitPoints || 100,
         maxHp: def.hitPoints || 100,
         // Mana it is BORN with, not its pool: UnitBalance's `mana0`, which is short of `manaN`
         // for every caster you have to wait on (a Priest at 75/200, a Moon Well at 100/300).
