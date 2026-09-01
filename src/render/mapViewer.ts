@@ -37,7 +37,7 @@ import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
-import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
+import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, requiredHeroLevel, aoeCursorRadius } from "../data/abilities";
 import { loadCommandStrings, disabledIconPath, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
@@ -5895,16 +5895,18 @@ export class MapViewerScene {
   /** Position/scale/colour the flat selection + hover rings each frame, plus
    *  the transient yellow harvest-order flashes. */
   private updateSelectionCircles(dt: number): void {
-    // "Aiming mode": a spell is armed for targeting (orderMode === "cast"). While
+    // "Aiming mode": a spell or an aimed ITEM is armed for targeting. While
     // aiming, the persistent selection/preview rings under the army are suppressed so
     // the ground isn't cluttered (issue #20). What replaces them depends on the aim:
     //   • point-AoE (ubersplat): the splat + green rings on the units it would hit;
     //     the hover ring is hidden (the green target rings are the indicator).
     //   • single-target: the normal hover ring stays on whatever unit the cursor is
     //     over — allegiance-coloured, NOT green — so the player still sees their target.
-    const cast = this.rts?.armedCast ?? null;
-    const aiming = !!cast;
-    const aoeAiming = !!(cast && cast.target === "point" && cast.area);
+    // Both readings cover an armed ITEM as well as an armed spell: pointing a Staff of
+    // Negation at the ground is the same gesture as pointing Dispel Magic at it, and the
+    // circle it arms with comes off the same `Area1` column (rts.armedAoe).
+    const aiming = this.rts?.aimingTarget() ?? false;
+    const aoeAiming = !!this.rts?.armedAoe();
     // The ring keys painted this frame; anything in ringKeys that isn't refreshed here
     // is a stale ring (deselected unit / expired flash) and gets removed at the end.
     const live = new Set<string>();
@@ -5993,15 +5995,15 @@ export class MapViewerScene {
   }
 
   /** AoE cast indicator at the cursor while a point-target area spell (Blizzard,
-   *  Flame Strike, …) is armed — WC3's real per-race SpellAreaOfEffect ground splat,
+   *  Flame Strike, …) or an area-aimed ITEM (the Staff of Negation, the Staff of Silence,
+   *  the Wand of Negation) is armed — WC3's real per-race SpellAreaOfEffect ground splat,
    *  sized to the ability's area of effect (issue #20). Painted through the ubersplat
    *  overlay so it's genuinely coplanar with the terrain (flats, slopes, ramps). The
    *  units the spell would hit are green-tinted (rts.setAoeHighlight) so the player
    *  sees its valid targets — friendly fire included — before clicking. */
   private aoeSplatShown = false;
   private updateAoeCircle(): void {
-    const cast = this.rts?.armedCast;
-    const area = cast && cast.target === "point" ? cast.area : undefined;
+    const area = this.rts?.armedAoe()?.area;
     const hit = this.rts && area ? this.rts.groundPoint(this.lastMouse.x, this.lastMouse.y) : null;
     if (!this.splats || !hit || !area) {
       if (this.aoeSplatShown) {
@@ -6045,7 +6047,9 @@ export class MapViewerScene {
     const su = this.rts?.selectedSimUnit();
     const ab = su?.abilities.find((a) => a.code === code && a.level >= 1);
     const def = ab ? this.abilities.get(ab.id) : undefined;
-    return def ? def.levelData[Math.min(ab!.level, def.levelData.length) - 1].area || 0 : 0;
+    // Through `aoeCursorRadius` rather than off `levelData[…].area` directly, so a spell and
+    // an aimed ITEM answer "how big is the circle" the same way (see rts.useInventorySlot).
+    return def ? aoeCursorRadius(def, def.levelData[Math.min(ab!.level, def.levelData.length) - 1]) : 0;
   }
 
   /** Time the harvest-/attack-order flashes (terrain-conforming ground rings, blinking

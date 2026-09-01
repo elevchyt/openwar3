@@ -1,6 +1,6 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
 import { SimWorld, weaponsFromDef, isOffField, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type EffectAnim } from "../sim/world";
-import { KNOWN_ABILITIES, NO_AOE_CURSOR } from "../data/abilities";
+import { KNOWN_ABILITIES, NO_AOE_CURSOR, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint, Footprint } from "../sim/destructibles";
@@ -4603,8 +4603,42 @@ export class RtsController {
   armedCast: { code: string; target: "unit" | "point"; area?: number } | null = null;
   /** The inventory item armed for targeting when orderMode === "item": a point-use
    *  item (blink) awaiting a ground click, a unit-use item (the staves) awaiting a unit,
-   *  or a passive item awaiting a drop/give target (ground → drop, allied hero → give). */
-  armedItem: { slot: number; mode: "usepoint" | "useunit" | "move" } | null = null;
+   *  or a passive item awaiting a drop/give target (ground → drop, allied hero → give).
+   *
+   *  `abilityId`/`area` are the AIMED modes' half of what `armedCast` carries for a spell:
+   *  an item that is pointed at an AREA (the Staff of Negation, the Staff of Silence, the
+   *  Wand of Negation, the Amulet of Recall) is aimed exactly as Dispel Magic is, so it gets
+   *  the same cursor circle and the same green preview of who it would catch. `area` is 0
+   *  for everything else, which is what leaves a Kelen's Dagger a bare cursor. */
+  armedItem: { slot: number; mode: "usepoint" | "useunit" | "move"; abilityId?: string; area?: number } | null = null;
+
+  /** The AoE aim currently armed — the circle's radius and the `targs1` that says who it
+   *  would catch — for a SPELL or an ITEM alike, or null when nothing area-shaped is armed.
+   *
+   *  One accessor because it answers one question, and every piece of AoE aiming feedback
+   *  asks it: the `SpellAreaOfEffect` ground splat, the green tint on the units the cast
+   *  would hit, and the green tree highlight. It used to read `armedCast` directly, which
+   *  is why an item aimed at an area — a Staff of Negation is "Dispels all magical effects
+   *  in a target area" (`ItemStrings [sneg]`) — armed with none of it. */
+  armedAoe(): { area: number; flags: string[] } | null {
+    const cast = this.armedCast;
+    if (cast?.target === "point" && cast.area) {
+      return { area: cast.area, flags: this.abilityDefByCode(cast.code)?.targetFlags ?? [] };
+    }
+    const item = this.orderMode === "item" ? this.armedItem : null;
+    if (item?.mode === "usepoint" && item.area) {
+      return { area: item.area, flags: (item.abilityId ? this.abilities.get(item.abilityId) : undefined)?.targetFlags ?? [] };
+    }
+    return null;
+  }
+
+  /** Is a target-taking order armed — a spell reticle, or an item pointed out of the
+   *  inventory? Both put the same reticle up and both suppress the ground rings under the
+   *  army while they do (issue #20). An armed "move" is a DROP gesture, not an aim. */
+  aimingTarget(): boolean {
+    if (this.armedCast) return true;
+    return this.orderMode === "item" && !!this.armedItem && this.armedItem.mode !== "move";
+  }
 
   /** Called when an order is refused, with a commandstrings.txt [Errors] key — the host
    *  (render/mapViewer.ts) turns it into the gold line above the console and the error
@@ -5001,12 +5035,13 @@ export class RtsController {
       this.refuseOrder(err);
       return false;
     }
-    // Some point spells arm with NO aiming area at all: a directional wave's `Area` is its
-    // width at the caster rather than a circle at the cursor, and Far Sight's is a radius of
-    // REVEALED MAP that catches no units (NO_AOE_CURSOR says which, and why). Zeroing it
-    // here is the single gate for every piece of AoE aiming feedback — the SpellAreaOfEffect
-    // splat, the green target tint and the tree highlight all key off `armedCast.area` — and
-    // matches the real client, which shows a bare cursor for these.
+    // `area` arrives already zeroed for the point spells that arm with NO circle — a
+    // directional wave's `Area` is its width at the caster rather than a radius at the
+    // cursor, Far Sight's is a radius of REVEALED MAP that catches no units (see
+    // `aoeCursorRadius`/`NO_AOE_CURSOR` for which, and why). The guard is repeated here
+    // because `armedCast.area` is what every piece of AoE aiming feedback keys off, and a
+    // caller that hands over a raw `Area1` must not be able to conjure a circle the real
+    // client does not draw.
     this.armedCast = { code, target, area: NO_AOE_CURSOR.has(code) ? 0 : area };
     this.orderMode = "cast";
     return true;
@@ -5123,7 +5158,12 @@ export class RtsController {
     // How the item is AIMED is its ability's own `target` (KNOWN_ABILITIES): a point for
     // Kelen's Dagger, a unit for the staves, nothing at all for a potion — which is the
     // overwhelming majority and fires on this very click.
-    const aim = def.abilities.map((aid) => this.abilities.get(aid)?.target).find((t) => t === "point" || t === "unit");
+    //
+    // The whole DEF is kept, not just its `target`, because a point aim has a second half:
+    // the ability's own `Area1` says whether the click picks a SPOT or an AREA, and an item
+    // that names an area is aimed like the spell it is (see aoeCursorRadius).
+    const aimed = def.abilities.map((aid) => this.abilities.get(aid)).find((a) => a?.target === "point" || a?.target === "unit");
+    const aim = aimed?.target;
     // DOUBLE-CLICK — a second press of an item that is already armed fires it on the user
     // rather than waiting for a target. Reached from the button and from the numpad hotkey
     // alike, because both funnel through here, which is what makes it "double click OR press
@@ -5152,8 +5192,8 @@ export class RtsController {
       this.execute(this.localPlayer, { c: "useitem", unitId: id, slot, targetId: selfTarget, x: u.x, y: u.y });
       return;
     }
-    if (aim) {
-      this.armedItem = { slot, mode: aim === "point" ? "usepoint" : "useunit" };
+    if (aim && aimed) {
+      this.armedItem = { slot, mode: aim === "point" ? "usepoint" : "useunit", abilityId: aimed.id, area: aoeCursorRadius(aimed) };
       this.orderMode = "item";
       return;
     }
@@ -5708,12 +5748,11 @@ export class RtsController {
    *  highlight matches who the cast actually hits, friendly fire included. Empty
    *  unless a point-target spell with an area is armed. */
   aoeTargetIds(wx: number, wy: number): number[] {
-    const cast = this.armedCast;
-    if (!cast || cast.target !== "point" || !cast.area) return [];
+    const aoe = this.armedAoe();
+    if (!aoe) return [];
     const caster = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
     if (!caster) return [];
-    const flags = this.abilityDefByCode(cast.code)?.targetFlags ?? [];
-    return this.sim.areaEffectTargets(caster.id, caster.team, flags, wx, wy, cast.area);
+    return this.sim.areaEffectTargets(caster.id, caster.team, aoe.flags, wx, wy, aoe.area);
   }
 
   /** Positions of the trees an armed AoE would destroy at (wx,wy) — drives the green
@@ -5721,11 +5760,9 @@ export class RtsController {
    *  whose targs1 lists `tree` (Flame Strike), so trees light up green exactly when the
    *  cast would fell them. */
   aoeTreePoints(wx: number, wy: number): Array<{ x: number; y: number }> {
-    const cast = this.armedCast;
-    if (!cast || cast.target !== "point" || !cast.area) return [];
-    const flags = this.abilityDefByCode(cast.code)?.targetFlags ?? [];
-    if (!flags.includes("tree")) return [];
-    return this.sim.treesInArea(wx, wy, cast.area).map((t) => ({ x: t.x, y: t.y }));
+    const aoe = this.armedAoe();
+    if (!aoe || !aoe.flags.includes("tree")) return [];
+    return this.sim.treesInArea(wx, wy, aoe.area).map((t) => ({ x: t.x, y: t.y }));
   }
 
   /** Set which units are highlighted as valid AoE-spell targets (green mesh tint,

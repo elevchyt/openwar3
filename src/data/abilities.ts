@@ -288,6 +288,16 @@ export interface AbilityDef {
  *     radius — "Reveals the area of the map that it is cast upon for <Dur1> seconds"
  *     (`OrcAbilityStrings [AOfs]`), and its `targs1` is `_` because there is nothing to
  *     target. Nothing gets caught, so there is nothing to preview.
+ *  3. **An area measured around the CASTER.** The Scroll of Town Portal's `Area1`=1100 is
+ *     the radius of the troops that come ALONG — "Teleports the Hero and any of its nearby
+ *     troops to a target friendly town hall" (`ItemStrings [stwp]`) — while the click picks
+ *     a destination on the far side of the map (`Rng1`=99999). Drawing an 1100 circle where
+ *     the player is pointing would name units the scroll never looks at. Mass Teleport is
+ *     the same shape and escapes only because it is aimed at a UNIT (see `AHmt`).
+ *
+ * `targs1` cannot stand in for any of this, and Blizzard (`AHbz`) is the proof: the spell the
+ * circle exists for carries `targs1` = `_` exactly as Far Sight does, because its victims come
+ * out of the hardcoded implementation rather than out of the flags. So the family is a LIST.
  *
  * Not in here, and worth saying why: Forked Lightning shares Carrion Swarm's `Ucs3`/`Ucs4`
  * cone fields but is cast on a UNIT, so it never arms a point in the first place.
@@ -300,7 +310,26 @@ export const NO_AOE_CURSOR = new Set<string>([
   "AUim", "ACmp", // Impale (+ creep)
   // 2 — an Area that is not an effect on units
   "AOfs", // Far Sight — `Area1` is the radius of map it reveals
+  // 3 — an Area measured around the caster, not at the click
+  "AItp", // Scroll of Town Portal — `Area1` is the escort that travels with the Hero
 ]);
+
+/**
+ * The radius of the `SpellAreaOfEffect` circle an ability arms with — 0 for "a bare cursor".
+ *
+ * ONE answer for a spell and for an ITEM alike, because the question is the same one and so is
+ * the data behind it: an item ability's row carries `Area1` in the same column a unit's does,
+ * which is what makes the Staff of Negation (`AIds`, `Area1` 200) the Dispel Magic its Ubertip
+ * says it is — "Dispels all magical effects IN A TARGET AREA" — and the Staff of Silence
+ * (`AIse`, 225) the Dark Ranger's Silence. Read off the ability row rather than off a list of
+ * item ids, so the Wand of Negation, the Rune of Dispel Magic (`APdi`, 800), the Amulet of
+ * Recall, the Diamond of Summoning and the Horn of the Clouds all get their own circle for
+ * free — and a custom map's staff gets one too.
+ */
+export function aoeCursorRadius(def: AbilityDef, level: AbilityLevel | undefined = def.levelData[0]): number {
+  if (def.target !== "point" || NO_AOE_CURSOR.has(def.code)) return 0;
+  return level?.area || 0;
+}
 
 /** Ability behaviours we implement, keyed by base `code`. `target` tells the UI/
  *  sim how to aim it; `autocast` marks abilities that can toggle autocasting.

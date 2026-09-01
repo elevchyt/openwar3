@@ -81,6 +81,24 @@ says which. So every aim in `KNOWN_ABILITIES` was read out of the **item's Ubert
 keying the aim on the base code alone would make the Clarity Potion demand a target, or the
 Healing Salve fire on the drinker.
 
+**But once the aim is known, `Area1` is what makes it an AREA aim.** An item aimed at a point is
+aimed like the spell it is, and its row says how big the circle is in the same column a unit's
+does — so the Staff of Negation (`AIds`, `Area1` 200), the Staff of Silence (`AIse`, 225), the
+Wand of Negation (`AIdi`, 200), the Rune of Dispel Magic (`APdi`, 800), the Amulet of Recall and
+the Diamond of Summoning (`AIrt`/`AUds`, 700) all arm with WC3's `SpellAreaOfEffect` circle under
+the cursor and green-tint the units they would catch, exactly as Dispel Magic does. One function
+answers it for a spell and an item alike — `aoeCursorRadius` in
+[`src/data/abilities.ts`](../src/data/abilities.ts) — and `RtsController.armedAoe` is the one
+place the splat, the tint and the tree highlight ask. Before that they read `armedCast` directly
+and every one of those items aimed with a **bare cursor**.
+
+The exclusions are a LIST, not a rule, and `NO_AOE_CURSOR` holds them: a directional wave's
+`Area` is its width at the caster, Far Sight's is a radius of revealed map, and the Scroll of
+Town Portal's `Area1` = 1100 is *"the Hero and any of its **nearby** troops"* — an escort
+measured around the caster while the click lands anywhere on the map (`Rng1` = 99999). `targs1`
+cannot stand in for the list: Blizzard (`AHbz`), the spell the circle exists for, carries
+`targs1` = `_` exactly as Far Sight does.
+
 ## A non-combat consumable is cancelled by ANY damage
 
 The ten `AIrg` rows — Healing Salve, both Clarity Potions, the Scroll of Regeneration, and the
