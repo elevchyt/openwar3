@@ -1249,6 +1249,26 @@ export class RtsController {
     return this.local.seesFor(player);
   }
 
+  /**
+   * Does the person at THIS MACHINE read `player`'s own side of the game — the things a
+   * team-mate is shown and an opponent is not (what a building is making, and how long is
+   * left on it)?
+   *
+   * `seesFor` alone is TEAM membership, and a WATCHER is on nobody's team: its seat sits
+   * outside the lobby's slots on purpose (ui/lobby.ts `OBSERVER_PLAYER`), so asked about
+   * every player on the field it answers no, and an observer would read the match with an
+   * OPPONENT's eyes — the one thing a watcher is not. It is on everybody's side instead,
+   * which is exactly the rule `playersAreCoAllied` already states for it.
+   *
+   * A creep is still nobody's team-mate (owner < 0), for `localAlly`'s reason: it falls
+   * through the watcher's rule rather than belonging to it, so a watcher reads a neutral
+   * building precisely as a player does.
+   */
+  private readsSideOf(player: number): boolean {
+    if (this.observing) return player >= 0;
+    return this.seesFor(player);
+  }
+
   /** The fog-of-war grid — read by the minimap (HUD) and the 3D fog overlay. */
   getVision(): VisionMap {
     return this.local.vision;
@@ -5517,13 +5537,16 @@ export class RtsController {
      * `constructionLeft`), while the NUMBER under it is the owner's. Redacting the field would
      * take the visual with it. This is the one place either becomes a readout.
      *
-     * `seesFor` is the ally gate rather than plain ownership: a team-mate's Barracks shows you
-     * what it is training, which is what shared vision is for.
+     * `readsSideOf` is the ally gate rather than plain ownership: a team-mate's Barracks shows
+     * you what it is training, which is what shared vision is for — and an OBSERVER is an ally
+     * of everybody (see the method), so a watcher reads every player's queue rather than none
+     * of them. Watching a match and being told nothing of what either side is building is the
+     * one reading that makes observer mode pointless.
      */
     // (Widened: the constant is `as const` 0, so TypeScript would call the comparison dead.
     //  It is read rather than folded away because it is the game's switch, not our policy —
     //  a mod that turns it on turns this on.)
-    const status = (MISC_GAME.DisplayBuildingStatus as number) !== 0 || this.seesFor(u.owner);
+    const status = (MISC_GAME.DisplayBuildingStatus as number) !== 0 || this.readsSideOf(u.owner);
     return {
       id: e.simId,
       typeId: e.typeId,
