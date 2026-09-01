@@ -71,7 +71,8 @@ gives it the timer, the no-corpse death and its vulnerability to Dispel Magic fo
 ## The asymmetry (the important part)
 
 The owner and their allies must be able to pick their images apart from the real unit. The
-enemy must not. **Both tells key off the LOCAL viewpoint (`seesFor`), never off the unit:**
+enemy must not. **Both tells key off the LOCAL viewpoint (`RtsController.readsSideOf`), never
+off the unit:**
 
 - **Blue wash** — `ILLUSION_TINT`, exported from `src/game/rts.ts`. It is folded into
   `applyFogTint`, which is the *single owner* of a unit's `vertexColor` and composes
@@ -86,6 +87,14 @@ enemy must not. **Both tells key off the LOCAL viewpoint (`seesFor`), never off 
 
 To an enemy, `isSummon`/`isIllusion` both report `false`, so the image keeps a hero's XP bar,
 no tint and no timer — an ordinary Blademaster.
+
+An **observer** is told, and is told about BOTH sides. `readsSideOf` is `seesFor` plus the
+watcher's own rule — its seat is outside the alliance matrix (`ui/lobby.ts OBSERVER_PLAYER`),
+so team membership answers "no" for every player on the field and a watcher would read the
+match with an opponent's eyes. There is no guess of theirs to spoil: a watcher plays against
+nobody, which is the same reason `playersAreCoAllied` already makes it everyone's ally. The
+tell is a viewpoint rule, so this is one predicate rather than three — the wash, the timer and
+the portrait bust all follow it.
 
 **The bar they see is the ORIGINAL's**, not an empty one under a copied level: `IllusionInit.xp`
 carries the hero's experience in, and `mirrorXpToIllusions` (called from `gainXp`, `setHeroXp`,

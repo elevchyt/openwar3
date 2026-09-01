@@ -1251,8 +1251,9 @@ export class RtsController {
 
   /**
    * Does the person at THIS MACHINE read `player`'s own side of the game — the things a
-   * team-mate is shown and an opponent is not (what a building is making, and how long is
-   * left on it)?
+   * team-mate is shown and an opponent is not: what a building is making and how long is left
+   * on it, which of four identical Blademasters are copies, and the summon clock running over
+   * one of them?
    *
    * `seesFor` alone is TEAM membership, and a WATCHER is on nobody's team: its seat sits
    * outside the lobby's slots on purpose (ui/lobby.ts `OBSERVER_PLAYER`), so asked about
@@ -1637,15 +1638,19 @@ export class RtsController {
     }
     // Green whole-mesh tint while this unit is a valid target of an armed AoE spell.
     const hi = this.aoeHighlight.has(e.simId);
-    // A Mirror Image illusion wears a blue wash — and ONLY its owner and their allies see
-    // it. That asymmetry is the ability: you must be able to pick your images apart from
-    // your hero, while the enemy sees N identical Blademasters and has to guess. So it
-    // keys off the LOCAL viewpoint (seesFor), not off the unit itself.
+    // A Mirror Image illusion wears a blue wash — and ONLY its owner, their allies and a
+    // WATCHER see it. That asymmetry is the ability: you must be able to pick your images
+    // apart from your hero, while the enemy sees N identical Blademasters and has to guess.
+    // So it keys off the LOCAL viewpoint (readsSideOf), not off the unit itself — and an
+    // observer is an ally of everybody, which is why it reads BOTH sides' copies. There is
+    // no guess for it to be spoiled: it is playing against nobody.
     // On the wire the bit is ALREADY viewpoint-resolved: item 5 masks it at the source, so an
-    // enemy's snapshot simply says `false` and no `seesFor` is needed (nor available — a client
-    // rendering someone else's answer has no business re-deciding it). On the sim path the
-    // local viewpoint is still what knows.
-    const illus = u.isIllusion && (this.snapshot.active || this.seesFor(u.owner));
+    // enemy's snapshot simply says `false` and no viewpoint test is needed (nor available — a
+    // client rendering someone else's answer has no business re-deciding it). On the sim path
+    // the local viewpoint is still what knows, and a watcher's seat is a LOCAL one (observer
+    // mode is skirmish-only: `snapshotFor` is built per seated recipient, and a watcher holds
+    // no seat), so the rule below is the whole of it.
+    const illus = u.isIllusion && (this.snapshot.active || this.readsSideOf(u.owner));
     // Half-fade the ghosted states (issue #66). This has to compose with the tint here
     // rather than be written straight to the instance: baseColor caches the model's own
     // colour and this method re-emits from it every time the fog brightness changes, so
@@ -5616,15 +5621,16 @@ export class RtsController {
       isItem: false,
       description: "",
       // The "Summoned Unit" timer bar. A Mirror Image illusion is a summon and shows one —
-      // but only to the side that owns it and their allies. Click an enemy's image and it
-      // must look like an ordinary Blademaster: a timer bar over one of four identical
-      // heroes would hand the opponent the answer the ability exists to hide.
+      // but only to the side that owns it, their allies and a WATCHER. Click an ENEMY's image
+      // and it must look like an ordinary Blademaster: a timer bar over one of four identical
+      // heroes would hand the opponent the answer the ability exists to hide. An observer is
+      // nobody's opponent, so it is told (`readsSideOf`), exactly as a team-mate is.
       // Already viewpoint-resolved on the wire — item 5 masks the illusion bit AND the whole
       // summon triple with it, so an enemy's payload reports an ordinary hero with no expiry.
-      // A client re-applying `seesFor` here would be a client deciding for itself which units
-      // are illusions; on the sim path the local viewpoint is still what knows.
-      isSummon: u.isSummon && u.summonLeft > 0 && (!u.isIllusion || this.snapshot.active || this.seesFor(u.owner)),
-      isIllusion: u.isIllusion && (this.snapshot.active || this.seesFor(u.owner)), // same viewpoint rule as the tint
+      // A client re-applying the viewpoint here would be a client deciding for itself which
+      // units are illusions; on the sim path the local viewpoint is still what knows.
+      isSummon: u.isSummon && u.summonLeft > 0 && (!u.isIllusion || this.snapshot.active || this.readsSideOf(u.owner)),
+      isIllusion: u.isIllusion && (this.snapshot.active || this.readsSideOf(u.owner)), // same viewpoint rule as the tint
 
       summonSecondsLeft: Math.max(0, Math.ceil(u.summonLeft)),
       summonFrac: u.summonMax > 0 ? Math.max(0, Math.min(1, u.summonLeft / u.summonMax)) : 0,
