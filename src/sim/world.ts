@@ -1756,6 +1756,9 @@ export interface SimUnit {
    *  instant: the well spends its mana into ONE unit at a rate, so the pour has to be state
    *  rather than a one-shot effect. See tickReplenish. */
   replenishTargetId: number;
+  /** Seconds left before this well may play its pour ART again (see REPLENISH_ART_COOLDOWN).
+   *  A throttle on the models only — the pour itself is never gated by it. */
+  replenishArtT: number;
   /** Seconds until this unit's Exhume Corpses passive grows its next body (`Aexh`, the Meat
    *  Wagon's upgrade). 0 on everything else, and reset to `Dur1` each time it fires. */
   exhumeLeft: number;
@@ -6430,6 +6433,7 @@ export class SimWorld {
       | "garrisonJob"
       | "drinkWellId"
       | "replenishTargetId"
+      | "replenishArtT"
       | "isSummon"
       | "spawning"
       | "summonLeft"
@@ -6674,6 +6678,7 @@ export class SimWorld {
       garrisonJob: null,
       drinkWellId: 0,
       replenishTargetId: 0,
+      replenishArtT: 0,
       isSummon: false,
       spawning: 0,
       summonLeft: 0,
@@ -9690,15 +9695,32 @@ export class SimWorld {
     return ab && this.abilities ? this.abilities.get(ab.id) : undefined;
   }
 
+  /** How often ONE well may play its pour art, in seconds. OURS, not the game's: nothing in
+   *  the install meters the effect, and the pour itself is still unthrottled — a drinker gets
+   *  exactly the hit points and mana it always did, on the tick it always did.
+   *
+   *  What it answers is a night elf habit. After dark a well refills, so a player parks the
+   *  army on the wells and spam-right-clicks them: every click that finds a unit a few hit
+   *  points short is a whole pour, and each pour spawns two mdx models (the well's
+   *  `Casterart` and the drinker's `Heal\HealTarget.mdl`). Twenty wells under a fast hand is
+   *  hundreds of live particle emitters a second and the frame rate goes with them. Two
+   *  seconds is a little longer than HealTarget itself lasts, so at the throttle the art
+   *  still reads as one flash per drink rather than a stutter.
+   */
+  private static readonly REPLENISH_ART_COOLDOWN = 2;
+
   /** One well's worth of pouring: find whoever is drinking and empty into them.
    *
    *  Three ways a drinker is chosen, in the order the player's intent runs: the unit the well
    *  was aimed at by hand (`Ambt` cast from its own card, or by a trigger), then anyone who was
    *  RIGHT-CLICKED onto this well and has since arrived, then — only with autocast on — the
    *  neediest friendly standing nearby. */
-  private tickReplenish(u: SimUnit): void {
+  private tickReplenish(u: SimUnit, dt: number): void {
     const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
     if (!ab) return;
+    // Ages before any of the pour's own early-outs, so the art cooldown runs on the clock
+    // rather than on how often this well happened to find a drinker.
+    if (u.replenishArtT > 0) u.replenishArtT = Math.max(0, u.replenishArtT - dt);
     const def = this.abilities?.get(ab.id);
     const lvl = def?.levelData[0];
     if (!def || !lvl) return;
@@ -9752,6 +9774,12 @@ export class SimWorld {
     // is the well's mana, and it belongs to the building for as long as the building lives
     // (renderer, collectMoonWellWater). Playing it here threw the water at the drinker and let
     // it evaporate a few seconds later.
+    //
+    // Both models are one presentation of one drink, so they share one throttle
+    // (REPLENISH_ART_COOLDOWN) — a pour inside the window is silent and invisible, and heals
+    // exactly as much as it otherwise would.
+    if (u.replenishArtT > 0) return;
+    u.replenishArtT = SimWorld.REPLENISH_ART_COOLDOWN;
     if (def.casterArt) this.spellEffects.push({ art: def.casterArt, x: u.x, y: u.y, targetId: u.id, z: 0 });
     if (def.specialArt) this.spellEffects.push({ art: def.specialArt, x: t.x, y: t.y, targetId: t.id, z: 0, sound: true });
   }
@@ -13025,7 +13053,7 @@ export class SimWorld {
       this.tickCarriedItems(u, dt); // …and an Amulet of Spell Shield regrowing its shield
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
-      this.tickReplenish(u); // a Moon Well pouring itself into whoever is drinking
+      this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking
       if (u.morphT > 0) u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
       if (u.portalLeft > 0) this.tickTownPortal(u, dt); // …and a hero mid-Town-Portal
       if (u.rootSettle) this.tickRootSettle(u); // …and one mid-ROOT is still lowering itself onto its site
