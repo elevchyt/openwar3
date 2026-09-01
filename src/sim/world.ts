@@ -1016,6 +1016,19 @@ const MAX_MORPH_TRANSITION = 3;
  *  with the base by the halfway mark and the rest of the morph plays out facing home. */
 const ROOT_TURN_SPEEDUP = 2;
 
+/** How long a ROOTED Ancient stands with nothing to shoot at before it turns back to the facing
+ *  it was raised at (`builtFacing`), seconds — developer request: "rotate back after not
+ *  attacking for 2s while rooted".
+ *
+ *  An Ancient is the ONLY structure the sim turns at all — every other building row carries
+ *  turnRate "-" and shoots from the angle it was placed at (see facesTarget) — so it is the
+ *  only one that can be left pointing the wrong way: it swings round to face whatever walked
+ *  past, the fight ends with `engage`'s `stop()` (a tower cannot follow) leaving `desiredFacing`
+ *  on that last heading, and the tree stands sideways to the base for the rest of the match.
+ *  A planted building has ONE facing in WC3 (`bj_UNIT_FACING`), which is exactly the rest pose
+ *  a re-rooted Ancient settles into — see toggleRoot. */
+const ANCIENT_REST_DELAY = 2;
+
 /** How close an Ancient must stop to the spot it was told to plant on before it settles there
  *  (`{kind:"rootat"}`), on top of its own collision radius.
  *
@@ -1676,6 +1689,10 @@ export interface SimUnit {
    *  because a map may place a building at any angle, and THAT is the angle it should return
    *  to. */
   builtFacing: number;
+  /** Seconds a ROOTED Ancient has stood out of a fight — the clock behind ANCIENT_REST_DELAY,
+   *  reset by anything the tree is pointed AT. No other unit uses it: a walking Ancient keeps
+   *  whatever heading its last order left it with, and nothing else that turns is a building. */
+  restFaceT: number;
   /** Where an uprooted Ancient has been told to plant itself (`{kind:"rootat"}`), or null.
    *
    *  Root is a PLACEMENT, so the order names a spot the player picked off the build grid
@@ -6405,6 +6422,7 @@ export class SimWorld {
       | "portalAbil"
       | "portalDestId"
       | "builtFacing"
+      | "restFaceT"
       | "rootPending"
       | "entanglePending"
       | "militiaCall"
@@ -6648,6 +6666,7 @@ export class SimWorld {
       portalAbil: "",
       portalDestId: 0,
       builtFacing: unit.facing,
+      restFaceT: 0,
       rootPending: null,
       entanglePending: 0,
       militiaCall: 0, // nobody has rung a bell at it
@@ -9422,6 +9441,38 @@ export class SimWorld {
     // base well before the clip ends instead of rotating all the way into the ground.
     u.facing = s.f0 + angleDiff(s.f0, u.builtFacing) * Math.min(1, k * ROOT_TURN_SPEEDUP);
     u.desiredFacing = u.facing; // …so the shared turning pass has nothing to add on top
+  }
+
+  /**
+   * A rooted Ancient's REST facing. An Ancient is the one building the sim turns (facesTarget),
+   * so it is the one building that can be left pointing at where a fight used to be — and
+   * nothing puts it back: `engage` ends an out-of-reach fight with `stop()` (a tower cannot
+   * follow), which drops the target but leaves `desiredFacing` on the last heading it took.
+   *
+   * So the tree counts ANCIENT_REST_DELAY seconds of standing still with nothing to shoot at
+   * and then takes `builtFacing` up again; the shared turning pass rotates it home at its own
+   * turn rate, the same gesture a re-rooted one plays.
+   *
+   * UPROOTED is not its business. A walking Ancient is a unit — it keeps whatever heading its
+   * last order left it with — and a PLANTING one is owned by tickRootSettle, which is already
+   * interpolating both ends of the same turn.
+   */
+  private tickAncientRest(u: SimUnit, dt: number): void {
+    if (u.turnRate <= 0 || u.uprooted || !u.building || u.paused) return;
+    if (!this.rootAbility(u)) return; // a turn rate on a structure is what an Ancient has
+    // Anything the tree is POINTED AT holds the clock at zero: a live target (ordered or
+    // auto-acquired), a swing already committed to its damage point, a cast being aimed or
+    // wound up (a Tree of Life must not turn away in the middle of eating a tree), and the
+    // root transition itself.
+    if (u.targetId !== null || u.swingLeft >= 0 || u.pendingCast !== null || u.morphT > 0 || u.order === "attack" || u.order === "cast") {
+      u.restFaceT = 0;
+      return;
+    }
+    if (u.restFaceT < ANCIENT_REST_DELAY) {
+      u.restFaceT += dt;
+      return;
+    }
+    u.desiredFacing = u.builtFacing;
   }
 
   /**
@@ -12759,6 +12810,11 @@ export class SimWorld {
     const u = this.units.get(id);
     if (!u) return;
     u.desiredFacing = rad;
+    // A ROOTED Ancient turns back to the facing it was raised at when it stops fighting
+    // (tickAncientRest), so a trigger that turns a planted building is naming where it RESTS —
+    // without this the facing the script asked for would be undone two seconds later. Inert for
+    // every other structure, which has no turn rate and no rest pose to keep.
+    if (u.building && !u.uprooted) u.builtFacing = rad;
     // A unit that cannot turn (turnRate 0 — every structure) would otherwise sit on an
     // unreachable target forever, so the timed form lands instantly too. The trigger still
     // gets what it asked for; only the rotating-there part has no meaning here.
@@ -13126,6 +13182,9 @@ export class SimWorld {
       // (or stands attacking) still finishes rotating to its desired heading —
       // unless it has no turn rate at all (a structure; see facesTarget), in which
       // case the heading combat asked for is simply never taken up.
+      // …and a rooted Ancient that has stopped fighting asks for its rest heading back first,
+      // so the same pass carries it home (ANCIENT_REST_DELAY).
+      this.tickAncientRest(u, dt);
       if (u.turnRate > 0 && u.facing !== u.desiredFacing && !u.paused) {
         u.facing = turnToward(u.facing, u.desiredFacing, turnSpeed(u.turnRate) * dt);
       }
