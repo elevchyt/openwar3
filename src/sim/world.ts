@@ -8822,8 +8822,24 @@ export class SimWorld {
     // Spiked Carapace (Crypt Lord passive AUts): a flat bonus armour (dataB) while learned.
     const carapace = this.passiveLevelData(u, "AUts");
     const carapaceArmor = carapace ? this.dataOf(carapace, 1) : 0;
-    u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
-    u.bonusArmor = armorBonus + carapaceArmor + item.armor + upg.armor; // the buff/aura/item/upgrade portion (shown green in the HUD)
+    // A structure still going up is UNARMOURED — a scaffold, not a building yet. The armour
+    // VALUE is 0 while it is raised (nothing carries over: not the type's own `def1`, not
+    // Masonry, not a Devotion Aura standing over the site), which is half of why a foundation
+    // dies so much faster than the finished building. The other half is that it also loses its
+    // armour TYPE, so a blow lands undivided — enforced at the blow, in applyDamage, since the
+    // type is a property of the unit's TYPE rather than a recomputed stat.
+    //
+    // Zeroed here rather than at the blow (exactly as the mana pool is above) so that
+    // everything reading the number agrees with what the hit does — the info panel prints a
+    // plain 0 for a site under construction, as the game's does.
+    //
+    // A structure UPGRADING in place keeps the finished building's armour until the morph
+    // lands (a Town Hall becoming a Keep defends as a Town Hall): an upgrade is a QUEUE JOB,
+    // not construction (see enqueueUpgrade), so it carries no `constructionLeft` and never
+    // reaches this branch.
+    const raising = !!u.building && u.building.constructionLeft > 0;
+    u.armor = raising ? 0 : u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
+    u.bonusArmor = raising ? 0 : armorBonus + carapaceArmor + item.armor + upg.armor; // the buff/aura/item/upgrade portion (shown green in the HUD)
     // The corner numbers on the info panel's two icons: the LEVEL researched, not the bonus.
     u.attackUpgrade = upg.attackLevel;
     u.armorUpgrade = upg.armorLevel;
@@ -15410,7 +15426,15 @@ export class SimWorld {
     // the hit (Normal +50% vs Medium, Pierce ×2 vs Light/Unarmored, Siege ×1.5 vs
     // Fortified, Magic ×2 vs Heavy, …). Applied before the armor-value reduction;
     // both are multiplicative so order is immaterial.
-    let typeMult = damageMultiplier(attackType, target.armorType);
+    //
+    // …unless the target is a structure still being RAISED, which has no armour class at all:
+    // a construction site is neither Fortified nor Unarmored, so nothing in the table applies
+    // to it and every attack type lands at a flat 100% (no Siege ×1.5, and no Pierce ×0.35
+    // either — this cuts BOTH ways). `ArmorType.Unknown` is the game's own "row with no
+    // defType" column, which damageMultiplier already resolves to 1.0. Its armour VALUE is
+    // zeroed alongside this, in recomputeStats; the pair is the whole rule.
+    const raising = !!target.building && target.building.constructionLeft > 0;
+    let typeMult = damageMultiplier(attackType, raising ? ArmorType.Unknown : target.armorType);
     // Banished (ethereal) targets take a SECOND multiplier by the attacker's type:
     // 0 for every physical type (immune to melee/pierce/siege) and ×1.66 from
     // Magic/Spells (issue #49, EtherealDamageBonus). A physical auto-attack thus
