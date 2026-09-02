@@ -764,6 +764,36 @@ asked of `canWalkTo` like every other camp. `AiPlayer.takeExp` is deliberately l
 it refuses, since the expansion is still wanted and the question costs a region lookup; what the
 refusal buys is the wave going and doing something it *can* do meanwhile.
 
+#### A guarded mine is guarded by a CAMP, not by a radius
+
+Reported: the AI *"seems to be sending a worker to their nearest expansion gold mine constantly in
+order to expand, but the camp guarding it has not been cleared!"* — for every race. `expansionFoe`
+is what holds the hall back (`startExpansion` returns before `setProduce` while it is non-null),
+and it was asking the wrong question: it measured from the mine to each **individual body** at 900
+units. A melee map's expansion guards do not stand on the rock. They are a cluster spread over
+their camp and they wander to the ends of their leash, so one ogre a thousand units off read as an
+unguarded mine and the peon was sent into the camp.
+
+`AiPlayer.townGuarded` asks it twice now, and the second question is the camp's:
+
+1. **Anything hostile standing on the site**, at `EXPANSION_FOE_RANGE` (900, unchanged) — an enemy
+   army camped on the rock, a tower, a stray creep.
+2. **The camp that owns the mine**, matched on the clustered camp table's own **centre**
+   (`CreepCamps`, linked at `CAMP_LINK` = 600 — `MiscGame` CreepCallForHelp) within
+   `EXPANSION_CAMP_RANGE` = `CAMP_MATCH` + 600. The centre is fixed map data, so it does not move
+   as the guards are pulled about, and **any live member** of that camp is the answer: clearing a
+   camp means clearing the camp.
+
+Town 0 is never asked — our own start location is ours by definition, and on a map whose near camp
+sits inside that range the test would refuse the main base its own mine.
+
+**`expansionFoe` is not the only door.** The undead's expansion is the **Haunted Gold Mine**, and
+that goes up through `secondaryTown` from plus/plan.ts's `mineBuildings` rather than through
+`startExpansion` — a row that exists precisely to catch a town `expand` has only *claimed*, since
+`nextExpansion` registers the town before the foe is asked about. It asked nobody, so an Acolyte
+walked into the camp the Necropolis was being held back from, every build pass. Both doors now ask
+`townGuarded`, which is why it is public. Pinned in `tools/ai-plus-ladder-test.cjs`.
+
 ### The last resort: a captain that has stopped moving takes the party home
 
 Four watchdogs sit above this one — `stalled` asks whether the wave is closing on what it was
@@ -2528,6 +2558,40 @@ below it, and level with `ARMY_HURT`. A potion is an emergency and heals at once
 over forty-five seconds between fights, so waiting for half health on a three-charge, hundred-gold
 item leaves most of an army walking to the next camp hurt with the charges still in the belt.
 
+#### …and a CLARITY POTION is a regeneration item, which is why it was never drunk
+
+Reported: the computers must be *"more eager/keen towards using Clarity Potions to constantly
+restore their heroes mana (all races) … note that they should use them only when not fighting as
+their effect gets interrupted by damage"*. Both halves of that are the data's:
+`applyItemAbility`'s `AIrg` branch hangs the Clarity Potion's mana as a `manaRegen` **buff** in
+`ITEM_REGEN_GROUP:mana` over the row's `Dur1`, and `breakItemRegen` strips that group on **any**
+damage the drinker takes — the same rule that already holds the salve and the scroll out of
+fights. A **Potion of Mana** (`AIma`) is `itemRestore`: the bar moves at the press and nothing can
+take it back.
+
+Two items, two very different moments, and `regenUse` used to answer `mana` for both. One rung for
+them made the eager one unreachable, because the rung was written for the instant potion — *drink
+when the fight starts* — which is precisely the state in which the pouring one is thrown away. The
+ladder now carries **two** rungs and they are near mirror images:
+
+| | `mana` — Potion / Scroll of Mana | `manaRegen` — Clarity, Lesser Clarity |
+| --- | --- | --- |
+| fight | doesn't care | **only with nothing hostile in sight** |
+| bar | under `MANA_LOW` (35 %) | under `MANA_TOPUP` (**75 %**) |
+| waste | not asked | `manaRoom` — the bar must have room for the whole pour |
+| already pouring | n/a | refused (one buff group, one instance) |
+
+`MANA_TOPUP` is what "eager" means: a Clarity Potion is what a hero takes on the walk *between*
+camps, not an emergency. `manaRoom` is what keeps eager from meaning wasteful — a pour is worth
+only what lands, and it is read off the item's own row in the column the sim's handler reads
+(`DataB` for the `AIrg` family, `DataA` for `AIma`/`AImr`). The instant potion deliberately does
+**not** ask it: at a third of its bar the question is not "will all 150 of it fit" but "can this
+hero cast anything at all", and a player swallows it.
+
+Dropping the fight gate from `mana` is also the undead's half of the report. Its shop stocks no
+Clarity Potion at all, so its only mana item is the instant one — see `RACE_MANA` below for why it
+now buys one.
+
 #### It sells the duplicate
 
 Reported: *"heroes that carry multiple Cloak of Shadows must try to sell them at shops (or goblin
@@ -2595,7 +2659,7 @@ human does not have:
 | may this hero take delivery | `SimWorld.shopReaches` — the same test `purchaseItem` applies, exposed so a caller can walk somebody into range first |
 
 **What it presses** is a `Use` ladder in the shape of the caster's `Role` one — *escape, panic,
-healSelf, healArea, healOther, mana, illusion, buff* — and it is keyed on the item's **ability code**, never
+healSelf, healArea, healOther, mana, manaRegen, raise, illusion, buff* — and it is keyed on the item's **ability code**, never
 on the item id, because an item's behaviour is not in the item ([`items.md`](./items.md)). One
 entry therefore covers a Potion of Healing bought at a Vault and the same potion picked up off a
 dead ogre. Anything unlisted is carried and never pressed, which is the safe direction to be wrong
@@ -2653,11 +2717,27 @@ neither was `keepPortal`:
   not stop being a player who carries one, which is `keepPortal`'s own wording.
 * **`PlusProfile.shopping` is a HABIT, and it counted the replacement.** It is how much of a belt
   this player bothers to fill, and it is counted against *everything the hero is holding, drops
-  included* — three slots on Normal is two potions and one thing picked up off a creep, at which
+  included* — four slots on Normal is two potions and two things picked up off a creep, at which
   point `shopper` returned nobody at all and the AI stopped shopping for the rest of the match
   with the gold still in the bank. So `shop` now asks **what** to buy before **who** fetches it,
   and a Town Portal is exempt from the ceiling: a free *slot* is the only thing that may stop it.
   Nothing else is exempt — the control is pinned in `tools/ai-plus-items-test.cjs`.
+* **…and it was still being bought out of the SURPLUS.** Reported again after both of the above
+  landed: it *"is still not re-buying Scroll of Town Portal when able to / is available. it does
+  sometimes but not very often."* Being first on a list is no use while the row cannot be paid
+  for, and the arithmetic is stark — the scroll is **350 gold** (`[stwp] goldcost`) and an
+  ordinary row is bought out of `gold − itemReserve`, so a Normal computer needed **650 gold in
+  hand at the instant the five-second shopping pass looked**, and an Insane one 550. That is a
+  purse a melee computer holds for a few seconds at a time, which is precisely "sometimes but not
+  very often". Under `keepPortal` the scroll is now a `Want.opening` row — bought out of the
+  **purse**, exactly like the race's first buys and for the file's own stated reason: *a
+  replacement is not shopping*. The gold floor exists so the shop cannot eat the build order's
+  money, and a player who plans around carrying a Town Portal buys the next one out of the same
+  pocket the build order comes from.
+
+  What is left is the game's own: `[stwp] stockMax` is 2 against a `stockStart` of **440**, so no
+  shelf in the game carries one before 7:20 whatever the AI wants, and it restocks one per 120
+  seconds. `pick` asks `shopStock` and waits, which is the same wait a player has.
 
 Neither of those changes the opening: `pick` does not *save*, it skips a row it cannot afford and
 buys the next one down, so at two minutes there is no 350 gold above the reserve and the salve is
@@ -2673,8 +2753,8 @@ that is what the Merchant actually stocks.)
 
 **A race opens with its own buy** (`RACE_FIRST`), in front of everything on that list — the Town
 Portal included. This is arithmetic before it is preference: `pick` walks the list in order and
-stops at the first row it can afford, and `shopping` is only **three slots** on Normal, so
-anything below the first two or three rows is decoration that is never reached. Two races have
+stops at the first row it can afford, and `shopping` is only **four slots** on Normal, so
+anything below the first three or four rows is decoration that is never reached. Two races have
 one, and they are the same idea in two vocabularies — *the item that puts the army back together
 between creep camps*:
 
@@ -2694,6 +2774,32 @@ between creep camps*:
   way a player does: `pick` asks `shopStock` and moves on down the list until it is there.
 
 The night elf opens on the potions `LIST` already starts with, so it gets no invented habit.
+
+#### …and then the race's MANA (`RACE_MANA`)
+
+Reported: the computers must *"be more eager/keen towards using Clarity Potions to constantly
+restore their heroes mana (all races)"*, and *"Undead should also buy and use mana potions
+(unlocked at tier 2) and use them if their heroes mana is low (since they don't have clarity
+potions in their shops)."* The second half is exactly right, and the data says so from three
+directions:
+
+- `[pclr] Requires = etoe` — the **full** Clarity Potion is gated on a Tree of Eternity, so for
+  three races it is a late-game item on somebody else's shelf.
+- `[plcl]`, the **Lesser** Clarity Potion, carries no requirement at all, costs 70, and is on
+  three of the four race shelves (`[hvlt]`, `[ovln]`, `[eden]`).
+- `[utom] Makeitems = rnec,dust,skul,phea,pman,stwp,ocor,shea` lists **neither**. The undead's
+  mana comes in a Potion of Mana, and `[pman] Requires = TWN2` *is* the tier-2 unlock the report
+  names — enforced by the shop (`missingForShop`), so nothing here needs a clock.
+
+So it is a row of its own, for `RACE_FIRST`'s own reason — a row the belt never reaches is a row
+that does not exist — and bought out of the **purse** for the same one. It sits **behind the Town
+Portal and in front of the general list**: an empty bar loses a fight, no scroll loses the army.
+One of each, because this is the *habit* rather than a stockpile; a rich undead already answers a
+banked purse with three more (`RACE_SURPLUS`).
+
+`PlusProfile.shopping` went from three to four on Normal to make room for it. Three slots was the
+race's opening (two Healing Salves, or two Scrolls of Regeneration) plus the scroll, and the mana
+row directly behind them was never once reached on that rung.
 
 **An opening buy is not discretionary spending** (`Want.opening`). Everything else on the list is
 bought out of the surplus above `itemReserve`; these are bought out of the purse. That is what the
@@ -2727,7 +2833,8 @@ The reserve answers *may I spend at all*, which has to be a low bar or a Normal 
 shops. It says nothing about the other state a computer spends half a long game in: production
 capped at `armyFood`, tech finished, and a thousand gold in the bank. That was the state in which
 the Goblin Merchant went unvisited for a whole match — a hero carrying one Potion of Healing,
-because `shopping` said three belt slots and the general list had already used them on drops.
+because `shopping` capped the belt at a handful of slots and the general list had already used
+them on drops.
 
 So `SURPLUS` (500 above the reserve — more than the dearest row, the 350-gold scroll) turns on two
 things and nothing else:
@@ -2780,6 +2887,23 @@ the circle *covers* is every friendly body inside it, an **ally's included** (se
 an ally's army standing across the map is not a reason this hero's scroll is being wasted. Put
 them in the denominator and a computer with a busy ally could never reach the half.
 
+**And there is a second reason to pour it, which the army reading cannot see.** Reported:
+*"Computer+ AI for human must use scroll of regeneration if their hero has low health, even if the
+overall army is healthy."* Every one of the three questions above is about the **party**, and a
+hero that came out of a camp at a third of its life beside five untouched Footmen fails all three
+while being exactly the unit the next fight turns on. `selfRegenWorthIt` is the other half: the
+hero itself under `HURT_HP` (55 %, the line it drinks its own potion at) and not already pouring.
+The circle is drawn on the presser either way — `aim` leaves an area item at its own feet — so the
+two are the same press asked for two different reasons: *is the army worth 100 gold, or is the
+hero*.
+
+It is deliberately limited to the **pouring** kind. Two quite different items answer `healArea`:
+the Scroll of Regeneration and its Replenishment cousins pour `AIrg` over forty-five seconds for
+100 gold, while the Scroll of Healing (`AIha`, `AIra`) restores at the press for 250. Only the
+cheap trickle is worth spending on one body — emptying the army's emergency heal into a single
+hero at 54 % out of combat is the press a player would kick themselves for. The army reading above
+still spends either.
+
 Still not touched: **Kelen's Dagger of Escape** (`AIbk`), a point-target blink that needs a
 decision about *where* the aiming above does not make — it is a drop, never shop stock, so it
 waits. And there is one button on a BUILDING which is very human: **Call to Arms**. `Amic` is the
@@ -2809,7 +2933,7 @@ restates it; the `raise` rung only answers *when a hero reaches for it*:
   creeps left to swing at. Waiting for the fight to end would be waiting until the thing the
   skeletons were for has finished.
 - **On the walk between camps**, with the last camp's dead underfoot and the next one already in
-  sight (`LOOK * 2`, the same "a fight is about to start" reading the `mana` rung uses).
+  sight (`LOOK * 2` — "a fight is about to start").
 
 One real fighting body is enough, where the wand asks for `CLUSTER`: a charge costs no food, no
 mana and nothing the next fight wants back, so there is no trade to weigh — only the four charges,
@@ -2983,6 +3107,26 @@ and it outlives the trip home, so a peon walking a load of lumber back still cou
 lumberjack. They come back out through `standdown`, which is the door that *remembers* the job
 (`unloadBurrow(id, true)` → `resumeGarrisonJob`), so a peon that went in chopping comes out
 chopping at the same tree.
+
+**…and the AI puts back the ones the sim could not.** Reported: the orc *"seems to not return some
+workers back to lumber gathering after they un-garrison from a burrow after a defense"*. Note
+*some*. What Stand Down remembers is one specific **tree** (`SimUnit.garrisonJob` is
+`{kind:"harvest", res, nodeId}`), and `resumeGarrisonJob` states its own limit — *"a mine that ran
+dry or a tree that fell while it was inside simply refuses, and the worker stands where it came
+out, which is the honest answer."* A raid is exactly when a tree falls: the peon is inside for
+half a minute while the rest of the crew finishes the one it was on. Two more ways out with
+nothing to go back to: a peon caught between deliveries has no `resId` for `jobOf` to write down,
+and a burrow that **dies** with its crew inside empties through the door that drops the memory.
+
+So `burrowPass` keeps its own note of who it rang the bell on (`Brain.burrowCrew`) and
+`backToTrees` walks anybody the sim left standing back to the **forest**. It runs in the same pass
+as the Stand Down, because `standdown` goes through the authority synchronously — by the next line
+the peons are out and their orders already say what happened to them — and it touches only a
+worker whose order is literally `"idle"`, so a resume that *did* land is never re-ordered.
+
+Why the forest specifically, rather than leaving it to `AiPlayer.workIdleWorkers`: that fallback
+would reach them eventually, but its first preference is **a mine short of its five**. Left to it,
+every defence quietly converted a little more of the lumber crew into miners.
 
 ### It does not park on a hero it cannot finish
 

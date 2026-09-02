@@ -103,6 +103,10 @@ function recorder(table, strategy, profile, opts = {}) {
     harvestWood: (town, n) => harvest.push({ res: "lumber", town, n }),
     townHasMine: () => true,
     townHasHall: (t) => !(opts.hallless ?? []).includes(t),
+    // Is the site still held by the camp that guards it? `mineBuildings` asks it before it
+    // sends an Acolyte to haunt an expansion — see `AiPlayer.townGuarded`. Nothing is guarded
+    // here unless a fixture says so.
+    townGuarded: (t) => ((opts.guarded ?? []).includes(t) ? { id: 9001 } : null),
     townThreatened: () => false,
   };
   const ctx = {
@@ -261,6 +265,20 @@ console.log("\n--- the undead's expansion is the MINE ---");
   });
   buildPlan(done.ctx);
   check("…and asks for nothing once both are haunted", done.build.some((x) => x.item === u.mineBuilding), false);
+
+  // …AND NOT WHILE THE CAMP THAT GUARDS IT IS STILL STANDING. Reported: the AI *"seems to be
+  // sending a worker to their nearest expansion gold mine constantly in order to expand, but
+  // the camp guarding it has not been cleared"*. `startExpansion` holds the HALL back through
+  // `expansionFoe`, but it claims the town on the same pass (`nextExpansion` registers it before
+  // the foe is asked about) — so this row, which exists precisely to catch a town that has only
+  // been claimed, walked an Acolyte into the camp every build pass. `townGuarded` is the same
+  // question, asked here too. The main's own mine is never guarded (town 0 is excepted).
+  const guarded = recorder(u, u.strategies[0], PLUS_NORMAL, {
+    standing, towns: 2, hallless: [1], perTown: { 0: { [u.mineBuilding]: 1 } }, guarded: [1],
+  });
+  buildPlan(guarded.ctx);
+  check("…and never onto a mine the creeps are still standing on",
+    guarded.build.some((x) => x.item === u.mineBuilding), false);
 }
 // Nobody else has one, and the night elf's absence is the load-bearing half: an Entangled Gold
 // Mine is what the `Aent` CAST creates, issued from the library layer both AIs share
@@ -544,6 +562,7 @@ function runEconomy() {
       gold: () => S.gold, wood: () => S.lumber,
       clearHarvestAI: () => {}, harvestGold: () => {}, harvestWood: () => {},
       townHasMine: () => true, townHasHall: () => true, townThreatened: () => false,
+      townGuarded: () => null,
     };
     const ctx = {
       ai, profile, table, strategy,

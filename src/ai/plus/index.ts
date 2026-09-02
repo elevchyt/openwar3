@@ -1651,6 +1651,10 @@ interface Brain {
   /** Everyone the ECONOMY may not re-task: the army, plus the scout. Handed to
    *  `AiPlayer.captainHeld` once and mutated in place, so `applyHarvest` sees a live view. */
   readonly held: Set<number>;
+  /** The LUMBERJACKS this player rang the town bell on — the peons `burrowPass` put into an Orc
+   *  Burrow, remembered so that the stand down can check they actually went back to the trees.
+   *  See `burrowPass` for why the sim's own memory is not always enough. */
+  readonly burrowCrew: Set<number>;
   /** The worker sent to go and look, and how far round its tour it is. ONE of them, ever:
    *  `scoutDone` latches when the tour ends, when it runs out of time, and — this is the whole
    *  rule — the moment the scout dies, because a player who loses a scout sends their workers
@@ -1909,6 +1913,7 @@ export class ComputerPlusAi {
       mannersIn: MANNERS_PERIOD,
       squad,
       held,
+      burrowCrew: new Set<number>(),
       scoutId: 0,
       scoutLeg: 0,
       scoutGoal: null,
@@ -5046,6 +5051,25 @@ export class ComputerPlusAi {
    * They come back out through `standdown`, which is the door that REMEMBERS the job
    * (`unloadBurrow(id, true)` → `resumeGarrisonJob`) — so a peon that went in chopping comes
    * out chopping, at the same tree, with no re-planning at all.
+   *
+   * …EXCEPT WHEN THERE IS NOTHING LEFT TO REMEMBER, which is the reported bug: the orc *"seems
+   * to not return some workers back to lumber gathering after they un-garrison from a burrow
+   * after a defense."* Note "some". The memory is one specific TREE (`SimUnit.garrisonJob` is
+   * `{kind:"harvest", res, nodeId}`), and `resumeGarrisonJob` says so in as many words — *"a
+   * mine that ran dry or a tree that fell while it was inside simply refuses, and the worker
+   * stands where it came out, which is the honest answer."* A raid is exactly when that
+   * happens: the peon is in the burrow for half a minute while the rest of the crew finishes
+   * the tree it was on, and there are two more ways to come out with nothing to go back to —
+   * a peon caught between deliveries has no `resId` for `jobOf` to write down, and a burrow
+   * that DIES with its crew inside empties through the door that drops the memory.
+   *
+   * So the AI keeps its own note of who it rang the bell on (`Brain.burrowCrew`) and puts
+   * anybody the sim left standing back in the FOREST — which is where they came from, and the
+   * distinction that matters: `AiPlayer.workIdleWorkers` would eventually reach them too, but
+   * its first preference is a mine short of its five, so a raid quietly converted the lumber
+   * crew into miners one defence at a time. The order is issued in the same pass because
+   * `standdown` runs through the authority synchronously, so by the line below the peons are
+   * already out and their orders already say what happened to them.
    */
   private burrowPass(b: Brain, threatened: boolean): void {
     const burrows: SimUnit[] = [];
@@ -5069,6 +5093,7 @@ export class ComputerPlusAi {
       for (const bur of burrows) {
         if (bur.garrison.length) b.ai.order({ c: "standdown", buildingId: bur.id });
       }
+      this.backToTrees(b);
       return;
     }
     for (const bur of burrows) {
@@ -5080,10 +5105,38 @@ export class ComputerPlusAi {
         if (p.resKind !== "lumber") continue; // the gold crew keeps paying for the war
         if (p.insideBuild || p.constructing || p.inMine) continue;
         if (Math.hypot(p.x - bur.x, p.y - bur.y) > TOWN_RADIUS) continue;
-        b.ai.order({ c: "garrison", unitId: p.id, buildingId: bur.id });
+        if (!b.ai.order({ c: "garrison", unitId: p.id, buildingId: bur.id })) continue;
+        // Whose axe this was, so the stand down can check it picked it up again — see the
+        // header. Remembered even though the SIM remembers too, because what the sim wrote down
+        // is a tree and the tree is the part that goes missing.
+        b.burrowCrew.add(p.id);
         room--;
       }
     }
+  }
+
+  /**
+   * PUT THE BELL-RINGERS BACK IN THE FOREST — the half of Stand Down the sim cannot promise.
+   *
+   * Only ever reaches a worker of ours that this AI itself put in a burrow (`Brain.burrowCrew`)
+   * and that came out of it with NO order at all, which is the sim's own word for "the job I
+   * wrote down no longer exists" (`resumeGarrisonJob` refused, or there was nothing to refuse).
+   * Anything the resume did place is chopping again and is passed over untouched, exactly as
+   * `workIdleWorkers` passes over a worker with something to do.
+   *
+   * The note is spent whatever the answer: a peon is in the crew for one siege, and one that
+   * cannot be given a tree this pass is an ordinary idle worker for `workIdleWorkers` to find
+   * on the next build pass.
+   */
+  private backToTrees(b: Brain): void {
+    if (!b.burrowCrew.size) return;
+    for (const id of b.burrowCrew) {
+      const p = this.host.world.units.get(id);
+      if (!p || p.hp <= 0 || p.owner !== b.ai.player || !p.worker?.lumber) continue;
+      if (p.inBurrow || p.order !== "idle") continue;
+      b.ai.sendToTrees(p);
+    }
+    b.burrowCrew.clear();
   }
 
   /**

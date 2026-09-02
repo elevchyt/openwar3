@@ -311,10 +311,20 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   Healing Salves, the human's two Scrolls of Regeneration, the undead's Rod of Necromancy, whose
   `AIrd` keeps its OWN code while carrying Raise Dead's whole `Rai1..Rai4` group) is bought out
   of the purse rather than out of the surplus above `itemReserve`, because a Normal computer's gold is almost never 300
-  above anything and a 100-gold salve it can never reach is a Voodoo Lounge built for nothing. An
+  above anything and a 100-gold salve it can never reach is a Voodoo Lounge built for nothing. The
+  same is true of the REPLACEMENT Town Portal (a replacement is not shopping) and of the race's
+  MANA row (`RACE_MANA`) — which is not the same item for all four, because `[pclr]` needs a Tree
+  of Eternity, only `[plcl]` is ungated, and the Tomb of Relics stocks NEITHER: the undead's mana
+  is `pman`, whose `Requires = TWN2` is the tier-2 unlock the shop enforces by itself. An
   AREA heal is spent on three questions and not on a head-count (`armyHeal`): `CLUSTER` bodies in
   the circle, more than HALF the army inside it, and the party's POOLED health under `ARMY_HURT` —
-  and the circle is the item's own `Area1`, never `LOOK`. The trap beside all this is the one that
+  and the circle is the item's own `Area1`, never `LOOK`; with one clause beside it for the
+  HERO alone (`selfRegenWorthIt`, the pouring kind only), since a hurt hero beside a whole army
+  fails all three. A CLARITY POTION IS NOT A POTION OF MANA and they are two rungs: `AIrg` pours,
+  so it is drunk only with nothing hostile in sight (any damage strips `ITEM_REGEN_GROUP`) and
+  EAGERLY — `MANA_TOPUP` 75 %, with `manaRoom` so the pour is not wasted — while `AIma` restores
+  at the press and asks nothing about the fight at all. One rung for both meant the eager one was
+  gated on the exact state that throws it away. The trap beside all this is the one that
   broke almost the whole belt once: what a press is FOR is keyed on the ability's base **`code`**, never on
   `AbilityData.slk`'s `alias` — `AIh1` is `AIhe`, `AIm1` is `AIma`, and the Salve, both Clarity
   Potions, the Scroll of Regeneration and the Replenishment family are all one code `AIrg`, told

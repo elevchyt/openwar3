@@ -529,12 +529,36 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
 
 // --- mana ------------------------------------------------------------------------------------
 {
-  const h = belt(hero({ mana: 10, maxMana: 100 }), "pclr");
-  check("an empty caster drinks its Clarity Potion", itemOf(pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
+  // A CLARITY POTION POURS, so it is drunk BETWEEN fights and never in one: `applyItemAbility`
+  // hangs its mana as a `manaRegen` buff in `ITEM_REGEN_GROUP:mana` and `breakItemRegen` strips
+  // that group on ANY damage. Reported: the computers must be keener on them, and *"they should
+  // use them only when not fighting as their effect gets interrupted by damage"*. Nothing
+  // hostile in sight here (the far enemy is outside `LOOK`).
+  const h = belt(hero({ mana: 10, maxMana: 1000 }), "pclr");
+  check("an empty caster drinks its Clarity Potion", itemOf(pressed([h, enemy({ x: 4000 })], PLUS_INSANE, AWAY)), 0);
+}
+{
+  // …and it is EAGER: `MANA_TOPUP` is three quarters, not `MANA_LOW`'s third, because the pour
+  // is what a hero takes on the walk to the next camp rather than an emergency top-up.
+  const h = belt(hero({ mana: 600, maxMana: 1000 }), "pclr");
+  check("…and tops up well short of empty", itemOf(pressed([h, enemy({ x: 4000 })], PLUS_INSANE, AWAY)), 0);
+}
+{
+  // THE FIGHT GATE. The same empty caster, with something swinging at it: the whole charge
+  // would be cancelled by the next blow.
+  const h = belt(hero({ mana: 10, maxMana: 1000 }), "pclr");
+  check("…but never while there is a fight on", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
 }
 {
   const h = belt(hero({ mana: 90, maxMana: 100 }), "pclr");
-  check("…and a full one does not", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+  check("…and a full one does not", pressed([h, enemy({ x: 4000 })], PLUS_INSANE, AWAY), null);
+}
+{
+  // NO ROOM FOR THE POUR, which is the other half of "eager but not wasteful" (`manaRoom`): a
+  // small bar missing less than the potion is worth throws most of the charge away, so it waits.
+  const h = belt(hero({ mana: 60, maxMana: 100 }), "pclr");
+  check("…nor one with less room in the bar than the potion is worth",
+    pressed([h, enemy({ x: 4000 })], PLUS_INSANE, AWAY), null);
 }
 
 // --- the Rod of Necromancy: two more bodies out of something already dead --------------------
@@ -883,9 +907,11 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   // …and so does the difficulty's own ceiling, well before the belt is full — while the gold
   // is ordinary. `shopping` is a HABIT ("how much of a belt will this player bother to fill"),
   // so it is measured against everything the hero is holding, drops included.
-  const h = belt(hero(), "phea", "phea", "shea");
+  // …and the belt holds a scroll already, so what is being measured is the ceiling rather than
+  // the Town Portal's exemption from it (see `shopper`'s `essential`, pinned further down).
+  const h = belt(hero(), "stwp", "phea", "phea", "shea");
   const purse = PLUS_NORMAL.itemReserve + 200; // spare, but not SURPLUS spare
-  check("Normal stops at its own three slots", shopped([h, MERCHANT], PLUS_NORMAL, { gold: purse }).buy, null);
+  check("Normal stops at its own four slots", shopped([h, MERCHANT], PLUS_NORMAL, { gold: purse }).buy, null);
 }
 {
   // …but not when the build order has visibly failed to spend the gold. A player sitting on a
@@ -922,12 +948,17 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
 // per gold in the game, and it is what puts a party back together between camps. Reported:
 // "it crept its hero nicely up to level 3 … however it didn't buy healing salves".
 {
-  // Asked of a race with no opening habit of its own (`RACE_FIRST`), so what is being pinned is
-  // the general `LIST`'s order rather than the orc's or the human's first buys.
+  // Asked of the undead, whose `RACE_FIRST` row (a Rod of Necromancy) is not on this shelf — so
+  // what leads is its `RACE_MANA` row, and behind that the general `LIST`.
   const h = belt(hero(), "stwp", "phea", "phea", "shea", "sreg");
   const shelf = ["stwp", "phea", "shea", "sreg", "hslv", "pman", "pclr"];
-  check("with the portal and the potions bought, the Salve is next — before any mana",
-    shopped([h, MERCHANT], PLUS_INSANE, { race: "undead", shelf }).buy?.itemId, "hslv");
+  check("the undead's own mana row leads the general list",
+    shopped([h, MERCHANT], PLUS_INSANE, { race: "undead", shelf }).buy?.itemId, "pman");
+  // …and once it is carried, the general list resumes with the cheap AREA heal above the rest
+  // of the mana: 100 gold for three Salve charges is the best hit points per gold in the game.
+  const withMana = belt(hero(), "stwp", "phea", "phea", "shea", "pman");
+  check("with the portal, the potions and the mana bought, the Salve is next",
+    shopped([withMana, MERCHANT], PLUS_INSANE, { race: "undead", shelf }).buy?.itemId, "hslv");
 }
 
 // THE ORC BUYS ITS SALVES FIRST (`RACE_FIRST`). Reported: an orc Computer+ "must buy two
@@ -1067,7 +1098,7 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
   // carrying its scroll. The portal row is satisfied, so the next thing on the list is an
   // ordinary potion — and the habit ceiling stands, which is what it is for. Only the scroll is
   // exempt.
-  const kept = belt(hero(), "stwp", "phea", "bspd");
+  const kept = belt(hero(), "stwp", "phea", "bspd", "spro");
   check("…while an ordinary row is still held to it",
     shopped([kept, MERCHANT], PLUS_NORMAL, { gold: 700 }).buy, null);
 }

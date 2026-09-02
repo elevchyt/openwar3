@@ -57,9 +57,9 @@ import type { PlusProfile } from "./profile";
  * highest first, one button per pass — and it reads the way a player's hands do: get out, don't
  * die, top up, then everything else.
  */
-export type Use = "escape" | "panic" | "healSelf" | "healArea" | "healOther" | "mana" | "raise" | "illusion" | "buff";
+export type Use = "escape" | "panic" | "healSelf" | "healArea" | "healOther" | "mana" | "manaRegen" | "raise" | "illusion" | "buff";
 
-const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "healArea", "healOther", "mana", "raise", "illusion", "buff"];
+const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "healArea", "healOther", "mana", "manaRegen", "raise", "illusion", "buff"];
 const useRank = (u: Use): number => LADDER.indexOf(u);
 
 /**
@@ -142,6 +142,12 @@ const USE_OF: Readonly<Record<string, Use>> = {
 /** The one code that is four different items — see `regenUse`. */
 const REGEN = "AIrg";
 
+/** The mana items whose bar moves AT THE PRESS — `SimWorld.useItem` sends both of them to
+ *  `itemRestore(u, ad, -1, 0)`, so what they are worth is their `DataA`. The pouring kind is
+ *  `REGEN` and its mana is `DataB`. Only `manaRoom` reads either column, and the two are listed
+ *  apart because they live in different ones. */
+const MANA_INSTANT = new Set<string>(["AIma", "AImr"]);
+
 /**
  * `AIrg` — one code, four different items, and the row itself is what says which.
  *
@@ -153,12 +159,22 @@ const REGEN = "AIrg";
  *     AIsl    Scroll of Regeneration      Area1 600                  the AREA      -> healArea
  *     AIp5/6  Scroll of Replenishment     Area1 600                  the AREA      -> healArea
  *     AIrl    Healing Salve               Rng1 500, no Area1         a UNIT        -> healOther
- *     AIpr    Clarity Potion              neither, DataB mana only   the drinker   -> mana
+ *     AIpr    Clarity Potion              neither, DataB mana only   the drinker   -> manaRegen
  *     AIp1-4  Replenishment Potion        neither, DataA hp          the drinker   -> healSelf
  *
  * The last two are told apart by which column the row FILLS — a Clarity Potion is 200 mana and
  * no hit points, a Replenishment Potion is both — because "what is it for" is the question the
  * ladder sorts on, and a mana item pressed as a heal is pressed at the wrong moment.
+ *
+ * **A CLARITY POTION IS NOT A POTION OF MANA**, and it answers `manaRegen` rather than `mana`
+ * for the one reason that decides when it may be drunk at all: it pours. `applyItemAbility`'s
+ * `AIrg` branch hangs its mana as a `manaRegen` BUFF in `ITEM_REGEN_GROUP:mana` over the row's
+ * own `Dur1`, and `breakItemRegen` strips that group on **any** damage the drinker takes — the
+ * real game's own rule, and the same one that already holds the Healing Salve and the Scroll of
+ * Regeneration out of fights. A Potion of Mana (`AIma`) is `itemRestore`: the bar moves at the
+ * press and nothing can take it back. Two items, two very different moments, and one `Use` for
+ * them made the eager one unreachable — the fight gate written for the instant potion is
+ * precisely the state in which the pouring one is thrown away.
  *
  * A blank SLK column parses to NaN, which fails `> 0` — so a row that fills neither says nothing
  * and is left alone rather than guessed at.
@@ -169,7 +185,7 @@ function regenUse(ad: AbilityDef): Use | null {
   if (lvl.area > 0) return "healArea";
   if (lvl.castRange > 0) return "healOther";
   const hp = lvl.data[0];
-  return hp > 0 ? "healSelf" : lvl.data[1] > 0 ? "mana" : null;
+  return hp > 0 ? "healSelf" : lvl.data[1] > 0 ? "manaRegen" : null;
 }
 
 /** One row of the shopping list: what to buy, and how many of it to carry. */
@@ -340,6 +356,46 @@ const RACE_FIRST: Partial<Record<PlayableRace, readonly Want[]>> = {
   undead: [{ id: "rnec", want: 1 }],
 };
 
+/**
+ * …and the MANA the race can actually get, which is not the same item for all four.
+ *
+ * Reported: the computers must *"be more eager/keen towards using Clarity Potions to constantly
+ * restore their heroes mana (all races)"*, and *"Undead should also buy and use mana potions
+ * (unlocked at tier 2) and use them if their heroes mana is low (since they don't have clarity
+ * potions in their shops)."* Both halves of that are in the data rather than in a preference,
+ * and the second is exactly right:
+ *
+ *   • `[pclr] Requires = etoe` — the full Clarity Potion is gated on a **Tree of Eternity**, so
+ *     for three of the four races it is a late-game item on somebody else's shelf.
+ *   • `[plcl]` — the **Lesser** Clarity Potion — carries no requirement at all, is 70 gold, and
+ *     is on three of the four race shelves: `[hvlt]`, `[ovln]` and `[eden]` all list it.
+ *   • `[utom] Makeitems = rnec,dust,skul,phea,pman,stwp,ocor,shea` lists NEITHER. The undead's
+ *     mana comes in a Potion of Mana, and `[pman] Requires = TWN2` is the tier-2 unlock the
+ *     report names — enforced by the shop itself (`missingForShop`), so there is no clock here.
+ *
+ * Why it is a row of its own rather than a line in `LIST`: the general list is walked in order
+ * and stops at the first row it can act on, and the belt is a habit that is only a few slots
+ * deep (`PlusProfile.shopping`), so a mana potion five rows down is a mana potion no computer
+ * ever buys. That is the same argument `RACE_FIRST` makes, and this sits just behind it for the
+ * same reason — a hero whose bar is empty has lost the spells the fight is being won with, which
+ * is worth more than the second Potion of Healing it was buying instead. Behind the SCROLL too
+ * (see `list`): an empty bar loses a fight, no Town Portal loses the army.
+ *
+ * Bought out of the PURSE (`Want.opening`) rather than out of the surplus above `itemReserve`,
+ * again for `RACE_FIRST`'s own reason: at 70 and 200 gold these are part of the build order, not
+ * spare change, and a Normal computer's gold is almost never 300 above anything.
+ *
+ * ONE of each, deliberately. This is the habit — a hero that tops up between fights — and not a
+ * stockpile; a rich undead's answer to a banked purse is already three more of them
+ * (`RACE_SURPLUS`), which is where a belt full of mana belongs.
+ */
+const RACE_MANA: Partial<Record<PlayableRace, readonly Want[]>> = {
+  human: [{ id: "plcl", want: 1 }],
+  orc: [{ id: "plcl", want: 1 }],
+  nightelf: [{ id: "plcl", want: 1 }],
+  undead: [{ id: "pman", want: 1 }],
+};
+
 /** Where the Town Portal sits in that list. `keepPortal` puts it FIRST — a player who plans
  *  around having one buys it before the potions, because the potions are no use if the army
  *  it would have saved is dead. Without the habit it is merely the last thing it gets round to. */
@@ -438,8 +494,31 @@ const ARMY_HURT = 0.65;
  * that is still going, i.e. the one that needed it.
  */
 const ILLUSION_CAP = 2;
-/** Mana fraction that sends a caster to the bottom of a Clarity Potion. */
+/**
+ * Mana fraction at which a hero swallows an INSTANT top-up — a Potion of Mana, a Scroll of Mana.
+ *
+ * Ours. Low, because the bar moves the moment it is pressed and nothing can interrupt it: the
+ * only thing a charge held back buys is the option of pressing it later, so the honest line is
+ * "the spells the fight is being won with have gone" rather than "the bar is not full".
+ */
 const MANA_LOW = 0.35;
+/**
+ * …and the bar a POURING one is drunk at, which is a much higher one — see `regenUse`.
+ *
+ * Reported: the computers *"must be more eager/keen towards using Clarity Potions to constantly
+ * restore their heroes mana … note that they should use them only when not fighting as their
+ * effect gets interrupted by damage"*, which is both halves of this rung in one sentence, and
+ * the data agrees with the second half exactly (`breakItemRegen`).
+ *
+ * A Clarity Potion pours 200 mana over its `Dur1` and a Lesser one 100 (`[AIpr]`/`[AIpl]`), so
+ * what it is for is the walk BETWEEN fights: the whole charge lands only if nothing touches the
+ * drinker while it runs, and every second of the pour spent with a full bar is thrown away. So
+ * the rung is stated twice over — a bar this far down, AND enough room in it for the whole pour
+ * (`manaRoom`) — and the second clause is what makes "eager" mean eager rather than wasteful: a
+ * hero with a small pool drinks the moment it is meaningfully down, one with a deep late-game
+ * pool waits until there is a potion's worth of room in it.
+ */
+const MANA_TOPUP = 0.75;
 /** The radius everything here calls "this fight" — the same figure plus/casting.ts engages at. */
 const LOOK = 900;
 /** How close to home is close enough that a Town Portal would be spent on nothing. */
@@ -932,7 +1011,7 @@ export class PlusItems {
         return engaged && hp < PANIC_HP;
       case "healSelf":
         return engaged && hp < HURT_HP;
-      // The two REGENERATION rungs, and they are the only ones gated on there being NO fight.
+      // The REGENERATION rungs, and they are the only ones gated on there being NO fight.
       //
       // Reported from both races that open with one: *"the Orc AI must avoid using healing salve
       // during fights and fighting with creeps … same thing for human's Scroll of Regeneration"*,
@@ -947,15 +1026,54 @@ export class PlusItems {
       // gate implementing it. This is that gate: nothing hostile within `LOOK` of the PRESSER,
       // and (in `hurtest` / `armyHeal`) nothing hostile beside whoever the charge is being
       // poured into, since the presser can be nine hundred units from the fight its army is in.
+      //
+      // An AREA scroll has a SECOND reason to be poured, and it is the one the army reading
+      // cannot see. Reported: *"Computer+ AI for human must use scroll of regeneration if their
+      // hero has low health, even if the overall army is healthy."* `armyHeal` is deliberately
+      // a question about the PARTY — three bodies in the circle, more than half the army in it,
+      // pooled health under `ARMY_HURT` — and a hero that came out of a camp at a third of its
+      // life beside five untouched Footmen fails every one of those clauses while being exactly
+      // the unit the next fight turns on. The circle is drawn on the hero either way (`aim`
+      // leaves an area item at the presser's own feet), so the two readings are the same press
+      // asked for two different reasons: is the ARMY worth 100 gold, or is the HERO.
       case "healArea":
-        return !engaged && this.armyHeal(u, own, friends, this.areaOf(def), foes);
+        return (
+          !engaged
+          && (this.armyHeal(u, own, friends, this.areaOf(def), foes) || this.selfRegenWorthIt(u, hp, def))
+        );
       case "healOther":
         return !engaged && !!this.hurtest(u, friends, foes);
       // Mana is topped up for the fight, not during the panic — a hero with no mana is a hero
-      // whose spells are the reason the army is winning, so this fires as the fight starts as
-      // well as inside one.
+      // whose spells are the reason the army is winning.
+      //
+      // Nothing here asks whether there IS a fight, and that is the undead's rung. Its shop has
+      // no Clarity Potion to pour — `[utom] Makeitems` is `rnec,dust,skul,phea,pman,stwp,ocor,
+      // shea`, and `pclr` is gated on `etoe` (a Tree of Eternity) while `plcl` is simply not on
+      // that shelf — so the one mana item a Death Knight can carry is the instant Potion of
+      // Mana, which the race that pays for every Raise Dead, every Cripple and every Death Coil
+      // needs more than any other (see `RACE_MANA`).
+      //
+      // No `manaRoom` here, and that asymmetry with the rung below is the whole difference
+      // between the two items. A pour is worth what LANDS, so a Clarity Potion emptied into a
+      // nearly-full bar is a charge thrown away; an instant restore is spent at the moment the
+      // bar is already down to a third of itself, where the question is not "will all 150 of it
+      // fit" but "can this hero cast anything at all". A player swallows it.
       case "mana":
-        return u.maxMana > 0 && u.mana / u.maxMana < MANA_LOW && (engaged || foes.some((f) => near(u, f, LOOK * 2)));
+        return u.maxMana > 0 && u.mana / u.maxMana < MANA_LOW;
+      // …and the POURING one, which is the same top-up read the other way round: it may only be
+      // drunk with nothing hostile in sight, and it is drunk far more readily. See `MANA_TOPUP`,
+      // and `regenUse` for why a Clarity Potion is not a Potion of Mana.
+      case "manaRegen":
+        return (
+          !engaged
+          && u.maxMana > 0
+          && u.mana / u.maxMana < MANA_TOPUP
+          && this.manaRoom(u, def)
+          // Already pouring: a second charge REPLACES the first (one buff group, one instance),
+          // so it would be a charge spent to restart a clock. The same guard `hurtest` and
+          // `armyHeal` apply to the hit-point half of `AIrg`.
+          && !this.regenerating(u)
+        );
       // Another body, for a fight big enough that another body decides it. Gated exactly as the
       // buff below is — one scout walking past is not a fight — plus the cap on how many doubles
       // may be standing at once, which is what keeps the wand's three charges from going into
@@ -1151,6 +1269,63 @@ export class PlusItems {
       if (area > 0) return area;
     }
     return LOOK;
+  }
+
+  /**
+   * IS THE HERO ITSELF WORTH THE SCROLL? — the second half of the `healArea` rung.
+   *
+   * A Scroll of Regeneration draws its circle on the presser, so this asks nothing about who
+   * else is standing in it: the question is only whether the body at the centre wants what is
+   * about to be poured. `HURT_HP` is the line the hero drinks its own potion at, which is the
+   * right bar for a hundred-gold area charge spent on one unit — above it the scroll is being
+   * spent on a scratch, and `armyHeal` is the reading that decides whether the party makes it
+   * worth pouring anyway.
+   *
+   * `regenerating` for the reason it guards every other `AIrg` press: one buff group, one
+   * instance, so a second charge would only restart a clock that is already running.
+   *
+   * THE POURING KIND ONLY, and that clause is doing real work. Two quite different items answer
+   * `healArea`: the Scroll of Regeneration and its Replenishment cousins pour `AIrg` over
+   * forty-five seconds for 100 gold, and the Scroll of Healing (`AIha`, `AIra`) restores at the
+   * press for 250. The report is about the first — *"must use scroll of regeneration if their
+   * hero has low health"* — and only the first is worth spending on one body: the cheap trickle
+   * is what a hero drinks walking between camps, while the Scroll of Healing is the charge that
+   * puts a whole army back on its feet in the middle of a fight, and emptying it into one hero
+   * at 54 % out of combat is exactly the press a player would kick themselves for. The army
+   * reading above still spends either.
+   */
+  private selfRegenWorthIt(u: SimUnit, hp: number, def: ItemDef): boolean {
+    if (hp >= HURT_HP || this.regenerating(u)) return false;
+    return def.abilities.some((aid) => this.view.def(aid)?.code === REGEN);
+  }
+
+  /**
+   * IS THERE ROOM IN THE BAR FOR THE WHOLE THING? — the guard on both mana rungs.
+   *
+   * A mana item's worth is a flat number of points off its own row, not a fraction, so "the bar
+   * is low" says nothing about whether a charge would be wasted: a hero with 900 mana at a
+   * third of it is missing six hundred and a Lesser Clarity Potion's hundred all lands, while a
+   * level-1 hero at the same fraction is missing 200 and a 200-mana Potion of Mana overflows the
+   * moment it regenerates a point on its own. The sim will not refuse the press for that — its
+   * only refusal is a bar that is completely FULL (`itemRestore`'s `t.mana < t.maxMana`, and
+   * `applyItemAbility`'s `mana > 0 && hp <= 0` clause for the pouring kind) — so the judgement
+   * has to be here, and it is what lets `MANA_TOPUP` sit as high as it does.
+   *
+   * Read off the item's OWN row, in the column the sim's handler reads: `AIma`/`AImr` restore
+   * `DataA` at once (`itemRestore(u, ad, -1, 0)`), and the `AIrg` family pours `DataB` over
+   * `Dur1`. A row that names no mana at all answers true — it is not a mana item, and nothing
+   * that reached this rung is one.
+   */
+  private manaRoom(u: SimUnit, def: ItemDef): boolean {
+    let worth = 0;
+    for (const aid of def.abilities) {
+      const ad = this.view.def(aid);
+      const lvl = ad?.levelData[0];
+      if (!ad || !lvl) continue;
+      const mana = ad.code === REGEN ? lvl.data[1] : MANA_INSTANT.has(ad.code) ? lvl.data[0] : 0;
+      if (mana > 0) worth = Math.max(worth, mana);
+    }
+    return worth <= 0 || u.maxMana - u.mana >= worth;
   }
 
   /** The most hurt of OUR SIDE in reach — who a Healing Salve goes on. Buildings and workers
@@ -1493,7 +1668,11 @@ export class PlusItems {
    */
   private list(rich: boolean): readonly Want[] {
     const first = (RACE_FIRST[this.race] ?? []).map((w) => ({ ...w, opening: true }));
-    const seen = new Set(first.map((w) => w.id));
+    // …and the race's MANA, which is bought out of the purse for the same reason but sits one
+    // place further down: BEHIND the scroll. A hero with an empty bar has lost its spells; a
+    // hero with no Town Portal loses the army, and that is the bigger loss (`PORTAL`).
+    const mana = (RACE_MANA[this.race] ?? []).map((w) => ({ ...w, opening: true }));
+    const seen = new Set([...first, ...mana].map((w) => w.id));
     const rest = LIST.filter((w) => !seen.has(w.id));
     // WHERE THE PORTAL SITS DEPENDS ON WHETHER THIS PLAYER HAS EVER HAD ONE.
     //
@@ -1511,11 +1690,30 @@ export class PlusItems {
     // `hadPortal` is the latch between the two, and it says exactly what it means: this player
     // is one that PLANS around carrying a scroll, which is `keepPortal`'s own words, and is
     // only demonstrably true once one has been in the belt.
+    // …AND A REPLACEMENT SCROLL IS BOUGHT OUT OF THE PURSE, not out of the surplus.
+    //
+    // Reported again, after the ordering above had already been fixed: the AI *"is still not
+    // re-buying Scroll of Town Portal when able to / is available. it does sometimes but not
+    // very often."* Being FIRST on the list is no use while the row cannot be paid for, and the
+    // arithmetic is stark — the scroll is 350 gold (`[stwp] goldcost`) and an ordinary row is
+    // bought out of `gold − itemReserve`, so a Normal computer needed **650 gold in hand at the
+    // instant the five-second shopping pass looked**, and an Insane one 550. That is a purse a
+    // melee computer sees for a few seconds at a time, which is exactly "sometimes but not very
+    // often".
+    //
+    // `Want.opening` is the answer already written for the race's first buys and its argument is
+    // the same one this file makes two paragraphs up: *a replacement is not shopping*. The gold
+    // floor exists so that the shop cannot eat the build order's money — and a player who plans
+    // around carrying a Town Portal (`keepPortal`) buys the next one out of the same pocket the
+    // build order comes from, because at that price and that value it IS part of the build
+    // order. Only under `keepPortal`, so a difficulty that does not plan around one still picks
+    // it up merely with what is spare.
+    const portal = this.profile.keepPortal ? { ...PORTAL, opening: true } : PORTAL;
     const core = this.profile.keepPortal && this.hadPortal
-      ? [PORTAL, ...first, ...rest]
+      ? [portal, ...first, ...mana, ...rest]
       : this.profile.keepPortal
-        ? [...first, PORTAL, ...rest]
-        : [...first, ...rest, PORTAL];
+        ? [...first, portal, ...mana, ...rest]
+        : [...first, ...mana, ...rest, portal];
     if (!rich) return core;
     // The surplus rows go on the END, never in front: they are the same items wanted DEEPER
     // (`RICH`), so reaching them at all means every row above is already satisfied. The race's

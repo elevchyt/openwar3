@@ -1188,20 +1188,79 @@ export class AiPlayer {
     return this.towns.length - 1;
   }
 
-  /** `GetExpansionFoe()` — whoever is sitting on the expansion we want. */
+  /**
+   * `GetExpansionFoe()` — whoever is sitting on the expansion we want.
+   *
+   * The whole point of the answer is that it holds the hall back: `startExpansion` returns
+   * before `setProduce` while this is non-null, so nothing is placed and no worker walks. It
+   * is also what the classic attack ladder aims at (`SingleMeleeAttack`'s `needs_exp` branch),
+   * so the same reading both stops the expansion and starts the clearing.
+   *
+   * TWO QUESTIONS, because a guarded mine is guarded by a CAMP and not by a radius. Reported:
+   * the AI *"seems to be sending a worker to their nearest expansion gold mine constantly in
+   * order to expand, but the camp guarding it has not been cleared!"* — and the reason the
+   * original single test missed it is that it measured from the MINE to each individual body.
+   * A melee map's expansion guards do not stand on the rock: they are a cluster spread over
+   * their camp, they wander to the ends of their leash, and only the nearest of them was ever
+   * inside the 900 this used to ask for. One ogre a thousand units off its rock read as an
+   * unguarded mine, and the peon was sent into the camp.
+   *
+   *  1. **Anything hostile standing on the site**, at `EXPANSION_FOE_RANGE` — an enemy army
+   *     camped on the rock, a tower, a creep that happens to be near. Unchanged.
+   *  2. **The CAMP that owns the mine**, whatever its members have wandered to. Asked of the
+   *     clustered camp table (`CreepCamps`, linked at `CAMP_LINK` = 600 — MiscGame
+   *     CreepCallForHelp) rather than of loose bodies, so the answer is "is this mine still
+   *     somebody's camp" and not "is a creep standing here this second". Any live member of it
+   *     is the foe, because clearing a camp means clearing the camp.
+   *
+   * Both bounds are ours: `GetExpansionFoe` is a C++ native and appears in none of the scripts.
+   */
   expansionFoe(): SimUnit | null {
     for (let t = 1; t < this.towns.length; t++) {
       if (this.townHasHall(t)) continue;
-      const town = this.towns[t];
-      let best: SimUnit | null = null;
-      let bestD = 900;
-      for (const u of this.host.world.units.values()) {
-        if (u.hp <= 0 || u.owner === this.player) continue;
-        if (!u.isCreep && !this.hostileTo(u)) continue;
-        const d = Math.hypot(u.x - town.x, u.y - town.y);
-        if (d < bestD) { bestD = d; best = u; }
+      const foe = this.townGuarded(t);
+      if (foe) return foe;
+    }
+    return null;
+  }
+
+  /**
+   * Is the site of town `t` still HELD, and by whom — the one question `expansionFoe` and
+   * plus/plan.ts's `mineBuildings` both ask.
+   *
+   * It is public because the two of them are the two ways a worker is sent to an expansion and
+   * they have to agree: `startExpansion` puts the HALL up and asks this through `expansionFoe`,
+   * while the undead's expansion is the HAUNTED GOLD MINE and goes up through `secondaryTown`
+   * on a town `expand` has merely CLAIMED (see `mineBuildings`) — which asked nobody at all, so
+   * an Acolyte walked into the camp the Necropolis was being held back from.
+   *
+   * Never asked of town 0. Our own start location is ours by definition, and on a map whose
+   * near camp happens to sit inside `EXPANSION_CAMP_RANGE` of it this would refuse the main
+   * base its own mine.
+   */
+  townGuarded(t: number): SimUnit | null {
+    const town = this.towns[t];
+    if (!town || t < 1) return null;
+    // 1. Anything hostile standing ON the site.
+    let best: SimUnit | null = null;
+    let bestD = EXPANSION_FOE_RANGE;
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.owner === this.player) continue;
+      if (!u.isCreep && !this.hostileTo(u)) continue;
+      const d = Math.hypot(u.x - town.x, u.y - town.y);
+      if (d < bestD) { bestD = d; best = u; }
+    }
+    if (best) return best;
+    // 2. …and the CAMP that owns the mine, matched on its CENTRE — fixed map data, so it does
+    //    not move as its guards are pulled about — with any member of it that is still standing
+    //    as the answer, since a camp with one ogre left in it is a camp that has not been
+    //    cleared.
+    for (const camp of this.host.creepCamps()) {
+      if (Math.hypot(camp.x - town.x, camp.y - town.y) > EXPANSION_CAMP_RANGE) continue;
+      for (const id of camp.members) {
+        const u = this.host.world.units.get(id);
+        if (u && u.hp > 0) return u;
       }
-      if (best) return best;
     }
     return null;
   }
@@ -1453,6 +1512,20 @@ export class AiPlayer {
     return this.host.execute(this.player, {
       c: "order", unitId: u.id, order: { kind: "harvest", res: "lumber", nodeId: tree.id }, queued: false,
     });
+  }
+
+  /** "Go back to the trees" — a single worker, at whichever of our towns has one within reach,
+   *  nearest first. The same walk `workIdleWorkers` ends on, offered on its own so a caller that
+   *  already knows this worker is a LUMBERJACK does not have to go through the fallback's
+   *  gold-first preference (`ComputerPlusAi.backToTrees`, the Orc Burrow's stand down). */
+  sendToTrees(u: SimUnit): boolean {
+    if (!u.worker?.lumber) return false;
+    for (const town of [...this.towns].sort(
+      (a, b) => Math.hypot(u.x - a.x, u.y - a.y) - Math.hypot(u.x - b.x, u.y - b.y),
+    )) {
+      if (this.sendToWood(u, town)) return true;
+    }
+    return false;
   }
 
   // ======================================================================================
@@ -1961,6 +2034,15 @@ export class AiPlayer {
  *  clustering's own `CAMP_LINK` is 600 (MiscGame CreepCallForHelp), so this is one camp's
  *  radius plus the slack a party's objective is allowed to have drifted by. */
 const CAMP_MATCH = 900;
+
+/** How close a loose hostile body has to be to an expansion site to be sitting ON it —
+ *  `expansionFoe`'s first question. Ours. */
+const EXPANSION_FOE_RANGE = 900;
+/** …and how near a CREEP CAMP's centre has to be to that site to be the camp GUARDING it —
+ *  `expansionFoe`'s second. `CAMP_MATCH` (one camp's own radius plus slack) plus one more
+ *  `CAMP_LINK`, because a camp's members stand up to a link out from its centre and the mine is
+ *  guarded by whichever of them the worker would walk into. Ours, like the bound above. */
+const EXPANSION_CAMP_RANGE = CAMP_MATCH + 600;
 
 /** `Aent` Entangle Gold Mine's own `Rng1`. The bound `EXPANSION_HALL_RANGE` is chosen under. */
 const ENTANGLE_RANGE = 500;

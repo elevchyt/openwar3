@@ -1313,6 +1313,14 @@ function mineBuildings(c: PlusCtx): void {
   for (let t = 0; t < ai.townCountTotal(); t++) {
     if (!ai.townHasMine(t)) continue;
     if (ai.townCountTown(id, t) >= 1) continue; // already haunted, or a haunting under way
+    // NOT WHILE THE CAMP IS STILL STANDING ON IT. This is the row that catches a town `expand`
+    // has only just CLAIMED (see above), and claiming is exactly what happens on the pass where
+    // `startExpansion` finds the site guarded and holds the hall back — `nextExpansion` registers
+    // the town before the foe is asked about. So without this the one race whose expansion is
+    // the mine itself walked an Acolyte into the very camp the Necropolis was being held back
+    // from, every build pass, for as long as the camp lived. `townGuarded` is the same question
+    // `expansionFoe` asks and answers it the same way, town 0 excepted (our own mine is ours).
+    if (ai.townGuarded(t)) continue;
     ai.secondaryTown(t, 1, id);
   }
 }

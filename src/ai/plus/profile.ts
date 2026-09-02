@@ -327,10 +327,18 @@ export const PLUS_NORMAL: PlusProfile = {
   // the one piece of micro a player picks up long before they learn to focus a target.
   focusFire: false, pullOutHp: 0.25, creeps: true, creepAt: 150, creepFood: 10,
   harass: false, scout: true,
-  // Half a belt, and it keeps 300 gold back for the build order. It DOES keep a Town Portal and
-  // replace it: a scroll is the difference between losing a fight and losing an army, and a
-  // player at this level has learnt that much.
-  shopping: 3, itemReserve: 300, keepPortal: true,
+  // Two thirds of a belt, and it keeps 300 gold back for the build order. It DOES keep a Town
+  // Portal and replace it: a scroll is the difference between losing a fight and losing an army,
+  // and a player at this level has learnt that much.
+  //
+  // Four rather than three, and the fourth slot is the MANA potion. This number is a ceiling on
+  // the habit and it is counted against everything the hero is holding, so three slots was the
+  // whole of the race's opening (`RACE_FIRST` — two Healing Salves, or two Scrolls of
+  // Regeneration) plus the scroll, and the mana row directly behind them was never once reached
+  // on this rung. A player who has learnt to carry a Town Portal has also learnt to carry
+  // something to cast with; making room for it is what turns `RACE_MANA` from a list into a
+  // habit. Insane keeps the full six.
+  shopping: 4, itemReserve: 300, keepPortal: true,
   concedeAfter: 20,
 };
 
