@@ -399,6 +399,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   never fire. `tools/ai-plus-ladder-test.cjs` runs ten headless minutes of the ladder per build.
   **AMAI is GPL** — it was studied for the shape of the strategy table and nothing else; never
   lift its code or its numbers.
+- **Transports:** read [`docs/transports.md`](docs/transports.md) before touching the Goblin
+  Zeppelin, a transport ship, a cargo hold, or the cargo panel. A transport is the BURROW's
+  hold on a body that moves (`Acar` beside `Abun`/`Aenc`, one `garrison` roster), and three
+  things are its own: boarding is a MEETING (the transport goes to the passenger while the
+  passenger walks to it — `issueLoad`/`tickLoad`, and a right-click fetches an idle one), a hold
+  is measured in SEATS (`UnitData.cargoSize` — a Mortar Team is two, a Siege Engine four), and
+  unloading ASKS THE GROUND (`dropSpot`: a cell the passenger can stand on within the hold's
+  `Area1` of 250, in the passenger's domain, so a Zeppelin over the lake keeps its cargo and a
+  ship lands on the beach). Unload All (`Adro`/`Sdro`) is a POINT order, "at a target location",
+  one body per `Dur1` = 0.5 s; a refused unload says `Cantland` "Unable to land there." — at the
+  click for a slot, and through `drainRefusals` when the transport only finds out on arrival.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
   that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
   files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its

@@ -166,6 +166,17 @@ export type Command =
    * `battlestations`: an ungated version emptied an enemy's burrow of its defenders.
    */
   | { c: "standdown"; buildingId: number }
+  /** A TRANSPORT told to load a unit — its `Aloa`/`Slo3` button, or a right-click on a
+   *  friendly ground unit with the Zeppelin selected. The opposite way round from `garrison`
+   *  (which the passenger gives) and the two meet in the middle: the transport sets off for
+   *  the passenger and the passenger for the transport (SimWorld.issueLoad). */
+  | { c: "load"; transportId: number; unitId: number }
+  /** Put ONE passenger off where the hold stands — the click on its slot in the cargo panel.
+   *  Refused, and nothing happens, when there is nowhere to stand (a Zeppelin over water). */
+  | { c: "unloadone"; buildingId: number; unitId: number }
+  /** Unload All AT A POINT — the transport's `Adro`/`Sdro` button, which is a point order:
+   *  it goes there and puts its cargo off one body at a time (SimWorld.issueUnloadAt). */
+  | { c: "unloadat"; unitId: number; x: number; y: number }
   /**
    * Buy an ITEM from a shop. Intent only: which shop, which ware.
    *

@@ -336,6 +336,16 @@ export function aoeCursorRadius(def: AbilityDef, level: AbilityLevel | undefined
  *  Anything not listed here loads as data but is treated as passive/uncastable
  *  (so unknown custom abilities degrade gracefully rather than crash). */
 export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: boolean }> = {
+  // === Cargo holds (docs/transports.md) ===
+  // The transport's own two buttons. Neither is a CAST — the card routes them to the hold's
+  // orders (SimWorld.issueLoad / issueUnloadAt) rather than through issueCast — but their
+  // target kinds are what draw the cursor: Load is aimed at a UNIT (`Aloa` targs
+  // "ground,friend"), Unload All at a POINT ("Unloads all carried units at a target
+  // location"), and the Entangled Gold Mine's Unload Instant at nothing. Listed here so a
+  // Zeppelin's card wears them as live buttons instead of the passive art an unknown code gets.
+  Aloa: { target: "unit" }, // Load (Zeppelin, ships — Slo3; the burrow's Sloa; the mine's Slo2)
+  Adro: { target: "point" }, // Unload All at a point (Zeppelin; ships — Sdro)
+  Adri: { target: "none" }, // Unload Instant (Entangled Gold Mine)
   // === Human heroes ===
   // -- Paladin --
   AHhb: { target: "unit" }, // Holy Light — heal ally / smite undead

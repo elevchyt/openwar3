@@ -358,7 +358,7 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
   return out;
 }
 
-export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem" | "garrison";
+export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem" | "garrison" | "load" | "unload";
 
 /** A learned/innate ability on a unit. `code` is the base ability code (dispatch
  *  key — see data/abilities). `level` 0 = a hero ability not yet learned. */
@@ -1422,6 +1422,12 @@ export interface SimUnit {
   garrisonHost: number; // Orc Burrow id this peon is garrisoned in (0 = none)
   garrison: number[]; // for an Orc Burrow: the peon ids loaded inside (fires arrows; DPS scales)
   garrisonCap: number; // max passengers this unit can hold (0 = can't garrison; Abun Dataa1)
+  /** A transport told to Unload All AT A POINT (`Adro`/`Sdro` — "Unloads all carried units at
+   *  a target location", order "unload"): where it was sent, and the clock between one
+   *  passenger stepping off and the next (`Sch3`/`Sch5` Dur1 = 0.5 s). See issueUnloadAt. */
+  unloadX: number;
+  unloadY: number;
+  unloadT: number;
   linkGroup: number[]; // Spirit Link: the co-linked unit ids sharing this unit's damage (empty = unlinked)
   linkT: number; // Spirit Link time remaining (0 = not linked)
   linkShare: number; // Spirit Link: fraction of a hit distributed across the group (dataA)
@@ -2846,6 +2852,11 @@ export class SimWorld {
   // deny's "!" (see CombatText). Not a script's CreateTextTag: no trigger is involved, and it
   // must appear in a melee match where nothing is listening.
   private combatTexts: CombatText[] = [];
+  /** Orders the sim had to give up on AFTER accepting them, for the HUD's gold error line
+   *  and the error sound — a Zeppelin that reached the point its Unload All was aimed at and
+   *  found only water under it ("Unable to land there."). Keyed by the owner, since only that
+   *  player hears it; `key` is a commandstrings.txt [Errors] key (drainRefusals). */
+  private refusals: Array<{ owner: number; key: string }> = [];
   // Heroes that just gained a level: renderer plays the level-up nova + sound.
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
@@ -4328,6 +4339,40 @@ export class SimWorld {
     return code === "Abun" || code === "Aenc";
   }
 
+  /** A MOBILE cargo hold — the Goblin Zeppelin, the air barge and the five transport ships,
+   *  the `Acar` family. The one kind of hold that goes to its passengers rather than waiting
+   *  for them (issueLoad / tickLoad), and the one that has to ask where it is before it can
+   *  put anybody down (dropSpot): a burrow stands on the ground its crew steps out onto, a
+   *  Zeppelin is over whatever it is over. */
+  isTransport(u: SimUnit): boolean {
+    return u.garrisonCap > 0 && !u.building && this.cargoHold(u.typeId)?.code === "Acar";
+  }
+
+  /** The seats a hold has left — its capacity less what its passengers TAKE (garrisonLoad,
+   *  which counts a Demolisher as two). What the card's Load button and the right-click both
+   *  ask before naming a passenger. */
+  holdRoom(host: SimUnit): number {
+    return host.garrisonCap > 0 ? host.garrisonCap - this.garrisonLoad(host) : 0;
+  }
+
+  /** How far from a hold's centre a passenger may be set down: the hold row's own `Area1`,
+   *  which is 250 on every hold in the game (`Sch3` and `Sch5` for the transports, `Abun`,
+   *  `Aenc`). The default is that same 250, for a row that went missing. */
+  private holdArea(host: SimUnit): number {
+    const hold = this.cargoHold(host.typeId);
+    const area = hold ? this.abilities?.get(hold.alias)?.levelData[0]?.area : 0;
+    return area && area > 0 ? area : 250;
+  }
+
+  /** The beat between two passengers stepping off an Unload All: the hold row's `Dur1`
+   *  (`Sch3` Cargo Hold (Transport) and `Sch5` (Ship) both 0.5 s) — the cargo comes out one
+   *  body at a time rather than as a heap. Default the same half-second. */
+  private holdDropInterval(host: SimUnit): number {
+    const hold = this.cargoHold(host.typeId);
+    const dur = hold ? this.abilities?.get(hold.alias)?.levelData[0]?.duration : 0;
+    return dur && dur > 0 ? dur : 0.5;
+  }
+
   /** Passenger capacity of a unit type: its cargo hold's Dataa1 (4 for the Orc Burrow, 10 for
    *  a transport ship), 0 if it has no hold. Cached per unit in `garrisonCap`. */
   private computeGarrisonCap(typeId: string): number {
@@ -4367,14 +4412,35 @@ export class SimWorld {
 
   /** Order a unit into a cargo hold: walk there, then climb inside (tickGarrison). A BURROW
    *  takes workers only (WC3 lets nothing else man one); a transport takes any ground unit
-   *  that isn't itself a building or a flier — Acar's targs are "ground,friend,vuln,invu". */
-  issueGarrison(passengerId: number, hostId: number): boolean {
+   *  that isn't itself a building or a flier — Acar's targs are "ground,friend,vuln,invu".
+   *
+   *  A TRANSPORT with nothing else to do comes to meet the passenger (`meet`): the two walk
+   *  towards each other and whichever arrives first closes the gap, which is what a
+   *  right-click on a Zeppelin does in the game and what makes boarding from across a
+   *  clearing take half the time. One that is busy — sailing somewhere, unloading — keeps
+   *  its order, and the passenger walks the whole way (tickGarrison re-aims as it moves).
+   *  `issueLoad` is the same meeting seen from the transport's end. */
+  issueGarrison(passengerId: number, hostId: number, meet = true): boolean {
     const p = this.units.get(passengerId);
     const b = this.units.get(hostId);
     if (!p || this.castLocked(p) || !b || b.garrisonCap === 0) return false;
     const workersOnly = this.holdTakesWorkersOnly(b.typeId);
     if (workersOnly ? !p.worker : p.building || p.flying) return false;
+    if (p.id === b.id || p.garrisonCap > 0) return false; // a hold does not board a hold
     if (this.hostile(p, b)) return false; // only your own / allied holds
+    // FULL is a refusal ("Cargo capacity unavailable."); a hold that is merely not open yet —
+    // an Entangled Gold Mine still closing its roots — is not, and the walk-up waits at the
+    // door for it (tickGarrison).
+    if (this.garrisonLoad(b) + p.cargoSize > b.garrisonCap) return false;
+    const ok = this.boardHost(p, b);
+    if (ok && meet && !p.inBurrow && this.isTransport(b) && b.order === "idle" && !this.castLocked(b)) this.approachPassenger(b, p);
+    return ok;
+  }
+
+  /** The passenger's half of issueGarrison — the order itself, once every refusal is past. */
+  private boardHost(p: SimUnit, b: SimUnit): boolean {
+    const hostId = b.id;
+    const passengerId = p.id;
     // What it was doing, written down BEFORE anything below cancels it — `detachBuilder` and
     // the order change three lines on are exactly what leaves a peon with nothing to go back
     // to. Stand Down spends it (resumeGarrisonJob).
@@ -4479,7 +4545,25 @@ export class SimWorld {
       this.stop(u.id);
       return;
     }
-    if (u.moving) return; // still walking up
+    // Within reach of an OPEN hold, climb in — mid-stride included. A transport coming to
+    // meet its passenger (issueLoad) closes the gap from its own side, and the passenger
+    // must not walk on to the spot it aimed at a moment ago beside where the Zeppelin used to
+    // be, and only then look round.
+    if (this.inHostReach(u, b) && this.hostHasRoom(b, u)) {
+      this.enterHost(u, b);
+      u.nodeRetries = 0;
+      return;
+    }
+    if (u.moving) {
+      // A MOVING host walks out from under the door we aimed at. Re-aim as it strays, on
+      // the same leash chasePoint keeps for a leader — a building never moves and this
+      // costs it nothing.
+      if (!b.building && u.repathT <= 0) {
+        const [ax, ay] = this.hostApproach(u, b);
+        if (Math.hypot(ax - u.chaseX, ay - u.chaseY) >= CHASE_REPATH) this.pathTo(u, ax, ay);
+      }
+      return; // still walking up
+    }
     if (this.inHostReach(u, b)) {
       if (this.hostHasRoom(b, u)) this.enterHost(u, b);
       // A hold that is still going UP is not a refusal — it is not open yet. Patch 1.10:
@@ -4510,6 +4594,7 @@ export class SimWorld {
    *  riding along, since a transport takes its cargo with it (`carryPassengers`). */
   private enterHost(passenger: SimUnit, host: SimUnit): void {
     this.unsettle(passenger); // no cell block while inside
+    this.releaseClaim(passenger); // …and no walker's claim either: one met mid-stride boards mid-stride
     passenger.inBurrow = true;
     passenger.garrisonHost = host.id;
     passenger.order = "idle";
@@ -4524,14 +4609,43 @@ export class SimWorld {
     this.noteLoad(passenger, host);
   }
 
-  /** Eject one passenger to a free tile beside its host. */
-  private ejectPassenger(passenger: SimUnit, host: SimUnit): void {
-    passenger.inBurrow = false;
-    passenger.garrisonHost = 0;
+  /**
+   * Where a passenger would stand if it stepped off its host now — or null when there is
+   * nowhere: a Zeppelin over deep water or a forest, a ship out at sea.
+   *
+   * A TRANSPORT's answer is bounded by its hold's own `Area1` (250 — holdArea) and read in
+   * the PASSENGER's domain, so a Footman is put on land and a ship at the shore sets him on
+   * the beach rather than in the surf. A unit over nothing it can stand on is simply not
+   * unloaded ("if the image/button is clicked, the unit is dropped but only if possible" —
+   * issue #128). A BURROW or an Entangled Gold Mine keeps the old unbounded search: it stands
+   * on the ground its crew came in from, and a crew that could not get out of a building
+   * that is dying or running dry would be a crew buried alive. `anywhere` is that reading,
+   * asked for by every path that is not a player's Unload.
+   */
+  private dropSpot(passenger: SimUnit, host: SimUnit, anywhere = false): [number, number] | null {
     const n = passenger.footprint || footprintCells(passenger.radius);
     const [bcx, bcy] = this.grid.footprintAnchor(host.x, host.y, n);
-    const fit = this.grid.nearestFit(bcx, bcy, n) ?? this.grid.nearestWalkable(bcx, bcy);
-    if (fit) [passenger.x, passenger.y] = this.grid.footprintCenter(fit[0], fit[1], n);
+    if (anywhere || !this.isTransport(host)) {
+      const fit = this.grid.nearestFit(bcx, bcy, n) ?? this.grid.nearestWalkable(bcx, bcy);
+      return fit ? this.grid.footprintCenter(fit[0], fit[1], n) : [host.x, host.y];
+    }
+    const area = this.holdArea(host);
+    const fit = this.grid.nearestFit(
+      bcx, bcy, n, Math.ceil(area / PATHING_CELL) + 1,
+      (cx, cy) => {
+        const [wx, wy] = this.grid.footprintCenter(cx, cy, n);
+        return Math.hypot(wx - host.x, wy - host.y) <= area && this.grid.playable(cx, cy);
+      },
+      pathDomain(passenger),
+    );
+    return fit ? this.grid.footprintCenter(fit[0], fit[1], n) : null;
+  }
+
+  /** Eject one passenger onto `spot` beside its host (see dropSpot). */
+  private ejectPassenger(passenger: SimUnit, host: SimUnit, spot: [number, number]): void {
+    passenger.inBurrow = false;
+    passenger.garrisonHost = 0;
+    [passenger.x, passenger.y] = spot;
     passenger.order = "idle";
     passenger.moving = false;
     passenger.path = [];
@@ -4588,13 +4702,160 @@ export class SimWorld {
     for (const pid of [...b.garrison]) {
       const p = this.units.get(pid);
       if (!p) continue;
-      this.ejectPassenger(p, b);
+      // `anywhere`: this is the door a dying host and a JASS RemoveUnit put a crew out of,
+      // and nobody is left aboard for want of a beach. A player's own Unload goes through
+      // unloadOne / tickUnload instead, and those DO refuse.
+      this.ejectPassenger(p, b, this.dropSpot(p, b, true) ?? [b.x, b.y]);
       if (resume) this.resumeGarrisonJob(p);
       else p.garrisonJob = null; // out by any other door: the memory goes with it
     }
     b.garrison = [];
     this.recomputeStats(b); // empty → arrow attack off
     return true;
+  }
+
+  /**
+   * Unload ONE passenger — the click on its slot in the cargo panel — where its host stands
+   * now. False when it is not aboard or there is nowhere to put it down (dropSpot): a
+   * Zeppelin over the lake keeps its cargo, and the button simply does nothing, which is
+   * what the game's does.
+   *
+   * A peon let out of a burrow this way goes back to what it was doing, exactly as Stand
+   * Down sends it (resumeGarrisonJob): one door or all of them, it is the same interruption
+   * ending. Every other hold's passenger is left standing where it landed.
+   */
+  unloadOne(hostId: number, passengerId: number): boolean {
+    const b = this.units.get(hostId);
+    const p = this.units.get(passengerId);
+    if (!b || !p || !b.garrison.includes(passengerId)) return false;
+    const spot = this.dropSpot(p, b);
+    if (!spot) return false;
+    this.ejectPassenger(p, b, spot);
+    b.garrison = b.garrison.filter((id) => id !== passengerId);
+    if (this.cargoHoldCode(b.typeId) === "Abun") this.resumeGarrisonJob(p);
+    else p.garrisonJob = null;
+    this.recomputeStats(b); // a burrow's arrows scale with the crew left in it
+    return true;
+  }
+
+  /**
+   * Unload All — the transport's `Adro`/`Sdro` button, which is a POINT order ("Unloads all
+   * carried units at a target location"): the transport goes THERE and then puts its cargo
+   * off one body per `Dur1` (tickUnload). A ship sent at a beach sails to the nearest water
+   * (findPath snaps an unreachable goal) and lands the party from there — the hold's 250-unit
+   * `Area1` is what reaches the sand. The Entangled Gold Mine's `Adri` "Unload Instant" is
+   * not this: it is unloadBurrow, here and now.
+   */
+  issueUnloadAt(hostId: number, x: number, y: number): boolean {
+    const b = this.units.get(hostId);
+    if (!b || !this.isTransport(b) || this.castLocked(b) || b.garrison.length === 0 || b.hp <= 0) return false;
+    if (!this.inPlayableArea(x, y)) return false; // the black is not a spot (issue #117)
+    this.clearGuardPost(b);
+    b.order = "unload";
+    b.targetId = null;
+    b.unloadX = x;
+    b.unloadY = y;
+    b.unloadT = 0; // the first one steps off the moment it arrives
+    b.inCombat = false;
+    this.cancelSwing(b);
+    b.stuckT = 0;
+    b.stuckRetries = 0;
+    b.waitT = 0;
+    // Not yet there: go. A route that cannot be had (a ship told to unload inland with no
+    // water anywhere near it) is not a refusal of the ORDER — it unloads where it stands,
+    // if it can, and hovers if it cannot.
+    if (Math.hypot(x - b.x, y - b.y) > MOVE_MIN_DIST) this.pathTo(b, x, y);
+    return true;
+  }
+
+  /** Drive an Unload All: sail/fly to the point, then put the passengers off one at a time. */
+  private tickUnload(u: SimUnit, dt: number): void {
+    if (u.garrison.length === 0) {
+      this.stop(u.id); // done
+      return;
+    }
+    if (u.moving || u.waitT > 0) return; // still on the way (or parked in a jam on it)
+    u.unloadT -= dt;
+    if (u.unloadT > 0) return;
+    for (const pid of u.garrison) {
+      if (this.unloadOne(u.id, pid)) {
+        u.unloadT = this.holdDropInterval(u);
+        return;
+      }
+    }
+    // Nobody aboard can be put down here — over water, over the wood. The order ends and
+    // the transport waits where it is for a better one, cargo kept — and its owner is told
+    // why, with the line the game keeps for it: [Errors] `Cantland` "Unable to land there."
+    this.refusals.push({ owner: u.owner, key: "Cantland" });
+    this.stop(u.id);
+  }
+
+  /**
+   * Load — the transport's own `Aloa`/`Slo3` button aimed at a unit, and a right-click on
+   * one with the transport selected: the passenger is sent to board (issueGarrison) and the
+   * transport sets off to meet it (approachPassenger). Refused for exactly what the
+   * passenger's order refuses: a building, a flier, a foe, no seat.
+   */
+  issueLoad(hostId: number, passengerId: number): boolean {
+    const b = this.units.get(hostId);
+    if (!b || !this.isTransport(b) || this.castLocked(b)) return false;
+    if (!this.issueGarrison(passengerId, hostId, false)) return false;
+    const p = this.units.get(passengerId);
+    if (p && !p.inBurrow) this.approachPassenger(b, p);
+    return true;
+  }
+
+  /** The transport's half of a boarding: head for the passenger (order "load", tickLoad). */
+  private approachPassenger(b: SimUnit, p: SimUnit): void {
+    this.clearGuardPost(b);
+    b.order = "load";
+    b.targetId = p.id;
+    b.inCombat = false;
+    this.cancelSwing(b);
+    b.stuckT = 0;
+    b.stuckRetries = 0;
+    b.waitT = 0;
+    b.repathT = 0;
+    this.chase(b, p);
+  }
+
+  /**
+   * Drive a transport going to meet its passengers. The one it was aimed at boards when the
+   * two are within reach of each other (or gives up); then any OTHER unit still walking to
+   * this hold is met in turn, nearest first, so a group sent to board is collected rather
+   * than made to walk the rest of the way after the first one climbed in. With nobody left
+   * on the way, the transport stops where it is.
+   */
+  private tickLoad(u: SimUnit): void {
+    const coming = (p: SimUnit | undefined): p is SimUnit =>
+      !!p && p.hp > 0 && !p.inBurrow && p.order === "garrison" && p.targetId === u.id;
+    let p = u.targetId !== null ? this.units.get(u.targetId) : undefined;
+    if (!coming(p)) {
+      p = undefined;
+      let best = Infinity;
+      for (const o of this.units.values()) {
+        if (!coming(o)) continue;
+        const d = (o.x - u.x) ** 2 + (o.y - u.y) ** 2;
+        if (d < best) {
+          best = d;
+          p = o;
+        }
+      }
+      if (!p) {
+        this.stop(u.id);
+        return;
+      }
+      u.targetId = p.id;
+    }
+    if (this.inHostReach(p, u)) {
+      // Met. The passenger's own tick would board it too; doing it here means it happens
+      // on the tick the gap closed rather than the one after.
+      if (this.hostHasRoom(u, p)) this.enterHost(p, u);
+      else this.stop(p.id);
+      if (u.moving) this.settle(u);
+      return;
+    }
+    this.chase(u, p); // a ship's goal snaps to the nearest water; it waits there for the walk-up
   }
 
   /** Cargo rides with its carrier. A burrow never moves and this costs it nothing; a ship
@@ -6342,6 +6603,9 @@ export class SimWorld {
       | "garrisonHost"
       | "garrison"
       | "garrisonCap"
+      | "unloadX"
+      | "unloadY"
+      | "unloadT"
       | "linkGroup"
       | "linkT"
       | "linkShare"
@@ -6587,6 +6851,9 @@ export class SimWorld {
       garrisonHost: 0,
       garrison: [],
       garrisonCap: this.computeGarrisonCap(unit.typeId),
+      unloadX: 0,
+      unloadY: 0,
+      unloadT: 0,
       linkGroup: [],
       linkT: 0,
       linkShare: 0,
@@ -12990,6 +13257,13 @@ export class SimWorld {
     this.combatTexts = [];
     return out;
   }
+  /** Orders given up on this frame, for the owner's error line (see `refusals`). */
+  drainRefusals(): Array<{ owner: number; key: string }> {
+    if (!this.refusals.length) return this.refusals;
+    const out = this.refusals;
+    this.refusals = [];
+    return out;
+  }
   /** Heroes that leveled up this frame (renderer plays the level-up nova). */
   drainLevelUps(): Array<{ unitId: number; level: number }> {
     if (!this.levelUps.length) return this.levelUps;
@@ -13147,6 +13421,12 @@ export class SimWorld {
           break;
         case "garrison":
           this.tickGarrison(u); // walk to the Orc Burrow, then climb inside
+          break;
+        case "load":
+          this.tickLoad(u); // a transport going to meet the unit it was told to load
+          break;
+        case "unload":
+          this.tickUnload(u, dt); // …or to the point it was told to put its cargo off at
           break;
         case "follow":
           this.tickFollow(u, dt); // trail the leader; guard it against nearby enemies once caught up

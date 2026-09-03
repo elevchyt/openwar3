@@ -1764,6 +1764,57 @@ body.hud-statbar-skinned .hud-sel-icon-fill.mana { background-image: var(--statb
   pointer-events: none;
 }
 
+/* The cargo panel (docs/transports.md): one gold pocket per seat of a cargo hold — a
+   Zeppelin's eight as 2×4, a ship's ten as 2×5 — each the game's own `human-transport-slot.blp`
+   (war3skins `CargoBackdrop`, one 64×64 framed square), with the passenger's icon inset and
+   its health bar along the pocket's foot. A unit that takes two seats spans two pockets, the
+   second wearing the same icon dimmed and no bar. Clicking a filled pocket puts that unit off. */
+.hud-cargo {
+  display: grid;
+  grid-template-columns: repeat(var(--cargo-cols, 4), 1fr);
+  gap: 3px;
+  padding: 2px 8%;
+  align-content: start;
+}
+.hud-cargo-slot {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid rgba(216, 180, 90, 0.55);
+  border-radius: 3px;
+  background: #07080b;
+  cursor: default;
+}
+body.hud-widget-skinned .hud-cargo-slot {
+  border: none;
+  border-radius: 0;
+  background: var(--hud-cargo-slot) 0 0 / 100% 100% no-repeat;
+}
+.hud-cargo-slot.filled { cursor: pointer; }
+.hud-cargo-slot.filled:hover .hud-cargo-art { filter: brightness(1.15); }
+/* The icon sits inside the frame's own gold rim (the art's border is ~4 of 64 texels) and
+   leaves the pocket's bottom fifth to the bar. */
+.hud-cargo-art {
+  position: absolute;
+  left: 9%;
+  right: 9%;
+  top: 9%;
+  bottom: 24%;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+/* The second (third, fourth) seat of a wide unit: the same picture, dimmed, and no bar —
+   "it is taking this seat too", not "here is another one". */
+.hud-cargo-slot.extra .hud-cargo-art { filter: brightness(0.45); top: 9%; bottom: 9%; }
+.hud-cargo-slot.extra.filled:hover .hud-cargo-art { filter: brightness(0.6); }
+.hud-cargo-track {
+  position: absolute;
+  left: 9%;
+  right: 9%;
+  bottom: 10%;
+  height: 7px;
+}
+
 /* Construction / training progress (WC3 info panel): status icon + gold label,
    a gold progress bar, and the queue slots. */
 .hud-progress-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 4px; }

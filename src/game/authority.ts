@@ -168,7 +168,7 @@ export class Authority {
     // A cargo order first, BEFORE castOrder: the carrier's own Load/Unload are abilities with
     // exactly these order strings (Slo3/Sdro), so a ship told to "load" would otherwise be
     // asked to cast a spell it has no handler for and the order would die there.
-    const cargo = this.cargoOrder(unitId, s, targetId);
+    const cargo = this.cargoOrder(unitId, s, targetId, kind, x, y);
     if (cargo !== null) {
       if (cargo) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
       return cargo;
@@ -443,8 +443,15 @@ export class Authority {
    * on the SHIP, aimed at a passenger — while a script that spells the same thing the other
    * way round (order the passenger to "load" the ship) still gets what it asked for.
    */
-  private cargoOrder(unitId: number, order: string, targetId: number): boolean | null {
-    if (order === "unload" || order === "unloadall") return this.sim.unloadBurrow(unitId);
+  private cargoOrder(unitId: number, order: string, targetId: number, kind: "immediate" | "point" | "target", x: number, y: number): boolean | null {
+    if (order === "unload" || order === "unloadall") {
+      // A TRANSPORT's "unload" is a point order (`Adro`/`Sdro`: "Unloads all carried units at
+      // a target location") and a script that gives it one gets the sail-there-then-unload
+      // the button does. An immediate one — and every burrow's — empties the hold here.
+      const u = this.sim.units.get(unitId);
+      if (u && kind === "point" && this.sim.isTransport(u)) return this.sim.issueUnloadAt(unitId, x, y);
+      return this.sim.unloadBurrow(unitId);
+    }
     if (order !== "board" && order !== "load") return null;
     const u = this.sim.units.get(unitId);
     const t = this.sim.units.get(targetId);
@@ -916,6 +923,15 @@ export class Authority {
         // …and this is the one caller that means "back to work": the button says so
         // (see SimWorld.unloadBurrow). Every internal unload leaves its passengers standing.
         return this.ownedBy(player, cmd.buildingId) && this.sim.unloadBurrow(cmd.buildingId, true);
+      case "load":
+        // Both ends gated: the transport is the one being ordered, and the passenger is
+        // ordered too (it walks to meet it) — an ally's Footman is not yours to send anywhere,
+        // however friendly the hold's `targs` call it.
+        return this.ownedBy(player, cmd.transportId) && this.ownedBy(player, cmd.unitId) && this.sim.issueLoad(cmd.transportId, cmd.unitId);
+      case "unloadone":
+        return this.ownedBy(player, cmd.buildingId) && this.sim.unloadOne(cmd.buildingId, cmd.unitId);
+      case "unloadat":
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueUnloadAt(cmd.unitId, cmd.x, cmd.y);
       case "buyitem": {
         // No ownership gate ON PURPOSE — a Goblin Merchant is Neutral Passive and an ally's
         // Vault is shoppable (Aall). Who may buy is `purchaseItem`'s own judgement: it checks

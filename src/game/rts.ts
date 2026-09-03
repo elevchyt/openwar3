@@ -174,6 +174,12 @@ export interface SelectionInfo {
   /** Active auras/buffs/debuffs, as the info panel's Status row shows them: the BUFF's
    *  own icon, name and tooltip body (`Buffart`/`Bufftip`/`Buffubertip`). */
   buffs: Array<{ icon: string; name: string; tip: string }>;
+  /** Who is ABOARD — the cargo panel's slots (docs/transports.md): each passenger's id, icon,
+   *  health, and the SEATS it takes (UnitDef.cargoSize — a Demolisher spans two). Empty for
+   *  anything with nobody inside, which is almost everything. */
+  cargo: Array<{ simId: number; icon: string; hpFrac: number; size: number }>;
+  /** The hold's capacity in seats (SimUnit.garrisonCap) — how many slots the panel draws. */
+  cargoSlots: number;
 }
 
 // A ground selection/hover ring the renderer draws as a flat model.
@@ -3640,6 +3646,10 @@ export class RtsController {
     }
     perfLog.begin("sim.deaths");
     this.playImpacts(); // BEFORE deaths — a killed target's entry is still around to read its armour
+    // An order the sim accepted and then had to give up on — a transport's Unload All that
+    // found only water at the point — is refused LATE, and to its owner alone: the same gold
+    // line and error sound an order refused at the click gets (docs/transports.md).
+    for (const r of this.sim.drainRefusals()) if (r.owner === this.localPlayer) this.onRefuse?.(r.key);
     for (const id of this.sim.drainDeaths()) {
       // Hosting a wire: the recipients must be TOLD a unit died — its absence from the next
       // payload alone reads exactly like fog, and fog plays no collapse. Position from the
@@ -4683,7 +4693,10 @@ export class RtsController {
   /** Armed command-card order; the next left-click executes it instead of
    *  selecting. "rally" sets a building's rally point; "repair" targets a
    *  damaged friendly building; "cast" targets a spell (see armedCast). */
-  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "harvest" | "cast" | "item" | "selectuser" | "load" | null = null;
+  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "harvest" | "cast" | "item" | "selectuser" | "load" | "unload" | null = null;
+  /** The transport awaiting the POINT its Unload All was aimed at when orderMode === "unload"
+   *  (`Adro`/`Sdro`: "Unloads all carried units at a target location"). */
+  armedUnload: { hostId: number } | null = null;
   /** The shop awaiting a purchaser pick when orderMode === "selectuser" (WC3's "Select
    *  Hero"/"Select Unit"). Unlike every other armed order this one belongs to a building
    *  the player may not even own — a neutral Goblin Merchant — so it carries the shop's id
@@ -4748,11 +4761,84 @@ export class RtsController {
    *  which is the button's own greying-out asked again at the press. */
   armLoad(hostId: number): boolean {
     const b = this.sim.units.get(hostId);
-    if (!b || b.garrisonCap === 0 || b.garrison.length >= b.garrisonCap) return false;
+    if (!b || this.sim.holdRoom(b) <= 0) return false;
     if (!this.controls(hostId)) return false;
     this.orderMode = "load";
     this.armedLoad = { hostId };
     return true;
+  }
+
+  /** Arm a transport's Unload All: the next ground click is where it sails/flies to put its
+   *  cargo off (`Adro`/`Sdro` are point orders). False with nothing aboard — the button is
+   *  greyed for the same reason. */
+  armUnload(hostId: number): boolean {
+    const b = this.sim.units.get(hostId);
+    if (!b || !this.sim.isTransport(b) || b.garrison.length === 0) return false;
+    if (!this.controls(hostId)) return false;
+    this.orderMode = "unload";
+    this.armedUnload = { hostId };
+    return true;
+  }
+
+  /** Click on a passenger's slot in the cargo panel: put that one off where the hold stands.
+   *  False when it cannot be — a Zeppelin over the lake — and nothing happens, as in the game. */
+  unloadCargo(hostId: number, passengerId: number): boolean {
+    if (!this.controls(hostId)) return false;
+    if (this.execute(this.localPlayer, { c: "unloadone", buildingId: hostId, unitId: passengerId })) return true;
+    // "Unable to land there." — commandstrings.txt [Errors] Cantland: the gold line and the
+    // error sound, exactly as "Not enough gold." arrives. Only a hold the player controls with
+    // that passenger still aboard gets this far, so the one thing left to refuse is the ground.
+    return this.refuseOrder("Cantland");
+  }
+
+  /**
+   * Board a transport with the selection: every selected unit that can ride — ground, not a
+   * building, not the transport itself — is sent to it, no more of them than it has SEATS
+   * for (SimWorld.holdRoom, which counts a Demolisher as two). The rest keep their orders,
+   * exactly as manHold leaves the wisps a full mine cannot take. Returns whether anybody
+   * took the order, so a full hold falls through to the ordinary follow.
+   */
+  private boardTransport(host: SimUnit, hostId: number): boolean {
+    let room = this.sim.holdRoom(host);
+    let any = false;
+    for (const id of this.selected) {
+      if (id === hostId || room <= 0) continue;
+      const u = this.sim.units.get(id);
+      if (!u || u.building || u.flying || u.garrisonCap > 0 || u.cargoSize > room) continue;
+      if (this.execute(this.localPlayer, { c: "garrison", unitId: id, buildingId: hostId })) {
+        any = true;
+        room -= u.cargoSize;
+      }
+    }
+    return any;
+  }
+
+  /**
+   * The other way round: a TRANSPORT (or several) is selected and the click names the unit
+   * to pick up — the transport's own Load, given by right-click. Each selected transport with
+   * room is sent for it; the first that gets there takes it (issueLoad refuses the rest once
+   * it is aboard). Returns whether any transport took the order.
+   */
+  private loadInto(picked: number): boolean {
+    const p = this.sim.units.get(picked);
+    if (!p || p.building || p.flying || p.garrisonCap > 0 || !this.controls(picked)) return false;
+    let any = false;
+    for (const id of this.selected) {
+      const t = this.sim.units.get(id);
+      if (!t || !this.sim.isTransport(t) || this.sim.holdRoom(t) < p.cargoSize) continue;
+      if (this.execute(this.localPlayer, { c: "load", transportId: id, unitId: picked })) any = true;
+    }
+    return any;
+  }
+
+  /** Is a transport among the selected units? Decides what a right-click on a friendly
+   *  ground unit means — pick it up, rather than follow it. */
+  private selectionHasTransport(): boolean {
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (u && this.sim.isTransport(u)) return true;
+    }
+    return false;
   }
 
   orderClickAt(cssX: number, cssY: number, queued = false): boolean {
@@ -4792,6 +4878,16 @@ export class RtsController {
       }
       const picked = this.pickAt(cssX, cssY);
       const p = picked === null ? undefined : this.sim.units.get(picked);
+      const host = this.sim.units.get(hostId);
+      if (host && this.sim.isTransport(host)) {
+        // A TRANSPORT's Load: the Zeppelin sets off for the unit and the unit for the
+        // Zeppelin (SimWorld.issueLoad). "Unable to load target." — [Errors] Canttransport —
+        // for a building, a flier, a foe, or nobody at all.
+        if (!p || picked === null || !this.controls(picked) || !this.execute(this.localPlayer, { c: "load", transportId: hostId, unitId: picked })) return this.refuseOrder("Canttransport");
+        this.orderMode = null;
+        this.armedLoad = null;
+        return true;
+      }
       // "Must target a Peon." — commandstrings.txt [Errors] Targetbunkerunit, which is the
       // line the Orc Burrow's own Load already refuses with. Same hold, same answer.
       if (!p || picked === null || !this.controls(picked) || !p.worker) return this.refuseOrder("Targetbunkerunit");
@@ -4938,6 +5034,18 @@ export class RtsController {
       }
       return true;
     }
+    if (mode === "unload") {
+      // Unload All is a POINT order: the transport goes there and puts its cargo off one
+      // body at a time (SimWorld.issueUnloadAt). Green move feedback, because that is what
+      // the transport does first; a spot it cannot reach or cannot unload at is not a
+      // refusal of the order — it goes as near as it can and hovers.
+      const armed = this.armedUnload;
+      this.armedUnload = null;
+      const hit = this.groundHitAt(cssX, cssY);
+      if (!armed || !hit) return true;
+      if (this.execute(this.localPlayer, { c: "unloadat", unitId: armed.hostId, x: hit[0], y: hit[1] })) this.queueArrow(hit[0], hit[1], MOVE_ARROW);
+      return true;
+    }
     if (mode === "repair") {
       this.repairAt(this.pickAt(cssX, cssY), queued);
       return true;
@@ -5023,6 +5131,7 @@ export class RtsController {
       this.armedCast = null;
       this.armedItem = null;
       this.armedLoad = null;
+      this.armedUnload = null;
       return "ordered";
     }
     if (!this.selected.size || !this.hasControllable()) {
@@ -5031,6 +5140,7 @@ export class RtsController {
         this.armedCast = null;
         this.armedItem = null;
         this.armedLoad = null;
+        this.armedUnload = null;
         return "ordered";
       }
       return "none";
@@ -5040,6 +5150,15 @@ export class RtsController {
     // above, is how you back out of one). A tree or a mine on the minimap is a pixel, not a
     // node, and there is no picking either of them out of it.
     if (mode === "cast" || mode === "item" || mode === "repair" || mode === "harvest" || mode === "selectuser" || mode === "load") return "ignored";
+    if (mode === "unload") {
+      // Unload All is a point order and the minimap names a point as well as the ground does:
+      // the transport sets off for it and unloads on arrival (SimWorld.issueUnloadAt).
+      const armed = this.armedUnload;
+      this.orderMode = null;
+      this.armedUnload = null;
+      if (armed && this.execute(this.localPlayer, { c: "unloadat", unitId: armed.hostId, x: wx, y: wy })) this.ack(false);
+      return "ordered";
+    }
     if (mode === "rally") {
       this.orderMode = null;
       for (const id of this.selected) {
@@ -5398,7 +5517,7 @@ export class RtsController {
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: false, goldRemaining: 0,
       isItem: true, description: def ? this.tipText(def.description) : "",
-      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, buffs: [],
+      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
     };
   }
 
@@ -5425,7 +5544,7 @@ export class RtsController {
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: true, goldRemaining: m.gold,
       isItem: false, description: "",
-      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, buffs: [],
+      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
     };
   }
 
@@ -5657,6 +5776,18 @@ export class RtsController {
       timedFormSecondsLeft: Math.max(0, Math.ceil(u.altFormLeft)),
       timedFormFrac: form && form.total > 0 ? Math.max(0, Math.min(1, u.altFormLeft / form.total)) : 0,
       buffs: this.statusBuffsFor(u),
+      // The cargo panel: whoever is inside, in boarding order, with the seats each takes.
+      // Read by the OWNER'S side only — `garrison` is on the wire for allies as well (a
+      // Burrow lists its crew to a team-mate), and an enemy's hold shows nothing of what it
+      // carries, exactly as the game's does.
+      cargo: this.readsSideOf(u.owner)
+        ? u.garrison.flatMap((pid) => {
+            const p = this.sim.units.get(pid);
+            if (!p) return [];
+            return [{ simId: pid, icon: this.registry.get(p.typeId)?.icon ?? "", hpFrac: p.maxHp > 0 ? Math.max(0, Math.min(1, p.hp / p.maxHp)) : 1, size: Math.max(1, p.cargoSize) }];
+          })
+        : [],
+      cargoSlots: u.garrisonCap,
     };
   }
 
@@ -6954,6 +7085,22 @@ export class RtsController {
           this.orderOnBuilding(target, picked, enemy, selR, queued);
           return;
         } else {
+          // A TRANSPORT under the cursor — a Zeppelin, a ship — takes the selection ABOARD:
+          // the units walk to it and, if it has nothing better to do, it comes to them
+          // (SimWorld.issueGarrison). Own or an ally's: the hold's `targs` say "friend". A
+          // full one falls through to the follow below, which is what the click otherwise
+          // means.
+          if (!enemy && this.sim.isTransport(target) && this.boardTransport(target, picked)) {
+            this.flashRing(target.x, target.y, selR, FLASH_GREEN, false, lift);
+            return;
+          }
+          // …and the other way round: a transport SELECTED and a friendly ground unit
+          // clicked is the transport's own Load — it goes to pick the unit up while the unit
+          // walks to meet it. Only for units the player controls (it is an order to both).
+          if (!enemy && this.selectionHasTransport() && this.loadInto(picked)) {
+            this.flashRing(target.x, target.y, selR, FLASH_GREEN, false, lift);
+            return;
+          }
           // Friendly / neutral UNIT: FOLLOW it (move-follow, no auto-acquire) — for
           // marshalling large forces or scouting a unit you can't attack (WC3). Fan
           // the group into distinct slots around the leader (formation offsets) so

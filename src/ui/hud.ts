@@ -181,6 +181,13 @@ export interface HudSelection {
   /** Active auras/buffs/debuffs, as the info panel's Status row shows them: the BUFF's
    *  own icon, name and tooltip body (`Buffart`/`Bufftip`/`Buffubertip`). */
   buffs: Array<{ icon: string; name: string; tip: string }>;
+  /** Who is ABOARD a cargo hold — a Zeppelin's passengers, a Burrow's peons — for the cargo
+   *  panel that replaces the stat lines while anybody is in there (docs/transports.md). Each
+   *  entry is one passenger; `size` is the SEATS it takes (a Demolisher spans two slots, the
+   *  second drawn dimmed). Empty for everything with nobody inside. */
+  cargo: Array<{ simId: number; icon: string; hpFrac: number; size: number }>;
+  /** The hold's capacity — how many slots the panel draws (8 for a Zeppelin, 10 for a ship). */
+  cargoSlots: number;
 }
 
 export interface HudDriver {
@@ -295,6 +302,9 @@ export interface HudDriver {
   useInventory(slot: number): void;
   /** Right-click an inventory slot: arm its drop/give targeting. */
   moveInventory(slot: number): void;
+  /** Click a passenger's slot in the cargo panel: put that one off where the hold stands.
+   *  False when it cannot be put down there (a Zeppelin over water) — nothing happens. */
+  unloadCargo(hostId: number, passengerId: number): boolean;
   /** Data URL for a resource icon, or null to use the text fallback. */
   icon(kind: "gold" | "lumber" | "supply"): string | null;
   /** Data URL for a command button icon (e.g. "BTNMove"), or null. */
@@ -616,6 +626,10 @@ const CONSOLE_ART = {
   buildBarFill: "SimpleBuildTimeIndicator",
   inventoryCover: "ConsoleInventoryCoverTexture",
   numberOverlay: "CommandButtonNumberOverlay",
+  /** `CargoBackdrop` — `human-transport-slot.blp`, ONE gold-framed 64×64 pocket, drawn once
+   *  per seat of a cargo hold (the panel's slots are the engine's own layout, not the FDF's:
+   *  `SimpleInfoPanelCargoDetail` carries only the name and description strings). */
+  cargoSlot: "CargoBackdrop",
 } as const;
 
 /** What the engine tints `human-bigbar-fill.blp` with, read off the models that draw the
@@ -1035,6 +1049,11 @@ export class GameHud {
   private queueRow!: HTMLDivElement;
   private queueSlots: HTMLDivElement[] = [];
   private queueTrainable = false; // status icon shows a cancellable training job (not construction)
+  // The cargo panel: one pocket per seat of the selected hold, rebuilt when the seat count
+  // changes and refreshed in place every frame (docs/transports.md).
+  private cargoGrid!: HTMLDivElement;
+  private cargoPockets: Array<{ slot: HTMLButtonElement; art: HTMLDivElement; track: HTMLDivElement; fill: HTMLDivElement }> = [];
+  private cargoHostId = 0; // the hold the pockets were last built for
   private portrait!: HTMLDivElement;
   private portraitCanvasEl!: HTMLCanvasElement;
   private dotsCanvas!: HTMLCanvasElement;
@@ -1216,6 +1235,8 @@ export class GameHud {
     }
     const cover = url(CONSOLE_ART.inventoryCover);
     if (cover) root.setProperty("--hud-inventory-cover", `url(${cover})`);
+    const cargo = url(CONSOLE_ART.cargoSlot);
+    if (cargo) root.setProperty("--hud-cargo-slot", `url(${cargo})`);
     // The boxed number an icon wears in its corner (see countBadge). On :root and gated by a
     // class of its own rather than by `hud-widget-skinned`, because the badge is worn by the
     // HERO BAR too — which is not in the console, and is on screen with no console at all
@@ -2573,7 +2594,13 @@ export class GameHud {
       this.selGridBars.push({ art, hp, manaTrack, mana, more });
       this.selGrid.appendChild(slot);
     }
-    infoText.append(this.selName, this.selSub, this.xpBar, this.progressWrap, this.selStats, this.selDesc, this.selCarry, this.selGrid);
+    // The cargo panel — a Zeppelin's eight pockets, a ship's ten, a Burrow's four — in place
+    // of the stat lines while anybody is aboard. Its pockets are built per hold (renderCargo),
+    // since the count is the hold's own capacity.
+    this.cargoGrid = document.createElement("div");
+    this.cargoGrid.className = "hud-cargo";
+    this.cargoGrid.hidden = true;
+    infoText.append(this.selName, this.selSub, this.xpBar, this.progressWrap, this.selStats, this.selDesc, this.selCarry, this.selGrid, this.cargoGrid);
     return { portraitWrap, infoText };
   }
 
@@ -2922,6 +2949,7 @@ export class GameHud {
       }
       this.selGrid.hidden = true;
       this.selDesc.hidden = true; // only the item branch shows it
+      this.cargoGrid.hidden = true; // only the cargo branch shows it
       this.xpBar.hidden = true; // only the hero-stats branch below re-shows it
       const constructing = sel.underConstruction;
       const training = sel.isBuilding && !constructing && sel.queueLength > 0;
@@ -2943,6 +2971,18 @@ export class GameHud {
         this.selSub.textContent = "";
         this.selCarry.hidden = false;
         this.selCarry.textContent = `Gold: ${sel.goldRemaining}`;
+      } else if (sel.cargo.length > 0) {
+        // A hold with somebody INSIDE: the cargo panel takes the place of the stat lines —
+        // the name, then one gold pocket per seat with the passengers' icons and health in
+        // them (docs/transports.md; the reference shot on issue #128). The stats come back
+        // the moment the last passenger steps off.
+        this.progressWrap.hidden = true;
+        this.selStats.hidden = true;
+        this.selSub.textContent = "";
+        this.selCarry.hidden = true;
+        this.attrIconEl.hidden = true;
+        this.attrLines.hidden = true;
+        this.renderCargo(sel);
       } else if (constructing || training) {
         // Progress display replaces the stat lines.
         this.progressWrap.hidden = false;
@@ -3099,6 +3139,7 @@ export class GameHud {
       this.progressWrap.hidden = true;
       this.selGrid.hidden = true;
       this.selDesc.hidden = true; // clearing the selection also clears a shown item description
+      this.cargoGrid.hidden = true;
     }
   }
 
@@ -3110,6 +3151,7 @@ export class GameHud {
     this.progressWrap.hidden = true;
     this.selCarry.hidden = true;
     this.selDesc.hidden = true; // a multi-unit recall (e.g. a control group) replaces a selected item
+    this.cargoGrid.hidden = true; // …and a group is not one hold
     // Pick the tier the selection's size falls in and hand the CSS its two numbers; a
     // selection past the last tier stays on it and spends its final slot on the "+N".
     const tier = SEL_GRID_TIERS.find((t) => icons.length <= t.max) ?? SEL_GRID_TIERS[SEL_GRID_TIERS.length - 1];
@@ -3165,6 +3207,72 @@ export class GameHud {
       });
       slot.ondblclick = null;
     });
+  }
+
+  /**
+   * The cargo panel: one pocket per seat of the selected hold, the passengers laid into them
+   * in boarding order.
+   *
+   * A passenger that takes MORE THAN ONE seat (UnitDef.cargoSize — a Demolisher is 2, a Siege
+   * Engine 4) spans that many pockets: its icon and health bar in the first, and the same
+   * icon DIMMED with no bar in each one after, so the panel reads "this one is taking two
+   * seats" rather than "there are two of these" (issue #128). Clicking any pocket of it puts
+   * the whole unit off.
+   *
+   * The pockets are rebuilt only when the HOLD changes (a Zeppelin's 8 against a ship's 10);
+   * every frame otherwise just repaints them, the way the inventory and the group grid are.
+   */
+  private renderCargo(sel: HudSelection): void {
+    this.cargoGrid.hidden = false;
+    const seats = Math.max(sel.cargoSlots, sel.cargo.reduce((n, c) => n + c.size, 0));
+    if (this.cargoHostId !== sel.id || this.cargoPockets.length !== seats) {
+      this.cargoHostId = sel.id;
+      this.cargoGrid.replaceChildren();
+      this.cargoPockets = [];
+      // Four to a row is the game's own arrangement (the eight of a Zeppelin as 2×4); a
+      // ship's ten goes 5 wide so its two rows stay two rows.
+      this.cargoGrid.style.setProperty("--cargo-cols", String(seats > 8 ? 5 : 4));
+      for (let i = 0; i < seats; i++) {
+        const slot = document.createElement("button");
+        slot.className = "hud-cargo-slot";
+        const art = document.createElement("div");
+        art.className = "hud-cargo-art";
+        const track = document.createElement("div");
+        track.className = "hud-sel-icon-track hud-cargo-track";
+        const fill = document.createElement("div");
+        fill.className = "hud-sel-icon-fill";
+        track.appendChild(fill);
+        slot.append(art, track);
+        this.cargoGrid.appendChild(slot);
+        this.cargoPockets.push({ slot, art, track, fill });
+      }
+    }
+    let i = 0;
+    for (const c of sel.cargo) {
+      const url = c.icon ? this.driver.blpUrl(c.icon) : null;
+      for (let k = 0; k < c.size && i < this.cargoPockets.length; k++, i++) {
+        const p = this.cargoPockets[i];
+        p.slot.classList.add("filled");
+        p.slot.classList.toggle("extra", k > 0); // the dimmed continuation of a wide unit
+        p.art.style.backgroundImage = url ? `url(${url})` : "";
+        p.track.hidden = k > 0;
+        const frac = Math.max(0, Math.min(1, c.hpFrac));
+        // Same bar the group grid draws: the slab clipped to the fraction, tinted by state.
+        p.fill.style.clipPath = `inset(0 ${(1 - frac) * 100}% 0 0)`;
+        p.fill.dataset.state = frac > 0.6 ? "green" : frac > 0.3 ? "yellow" : "red";
+        onPress(p.slot, () => {
+          this.driver.unloadCargo(sel.id, c.simId);
+          this.refreshSelectionNow();
+        });
+      }
+    }
+    for (; i < this.cargoPockets.length; i++) {
+      const p = this.cargoPockets[i];
+      p.slot.classList.remove("filled", "extra");
+      p.art.style.backgroundImage = "";
+      p.track.hidden = true;
+      onPress(p.slot, null);
+    }
   }
 
   private setIcon(el: HTMLDivElement, path: string): void {

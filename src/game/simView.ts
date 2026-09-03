@@ -56,6 +56,13 @@ export interface SimView {
    *  greyed button and the rule cannot disagree. */
   alreadyHidden(u: SimUnit, code: string): boolean;
 
+  /** The seats a cargo hold has left (its capacity less what its passengers TAKE — a
+   *  Demolisher counts two). A READ the command card greys the Load button on, and the same
+   *  one the sim refuses a boarding on (docs/transports.md). */
+  holdRoom(host: SimUnit): number;
+  /** A MOBILE cargo hold — the Zeppelin, the transport ships (`Acar`). */
+  isTransport(u: SimUnit): boolean;
+
   waygateIsActive(id: number): boolean;
   waygateDestination(id: number): { x: number; y: number } | null;
 }

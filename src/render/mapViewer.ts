@@ -6885,6 +6885,7 @@ export class MapViewerScene {
       },
       commandCard: () => this.commandCard(),
       runCommand: (id) => this.runCommand(id),
+      unloadCargo: (hostId, passengerId) => !!this.rts?.unloadCargo(hostId, passengerId),
       inventory: () =>
         (this.rts?.inventorySlots() ?? []).map((s) =>
           s ? { icon: s.icon ? this.blpIcon(s.icon) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable } : null,
@@ -8863,6 +8864,10 @@ export class MapViewerScene {
       // the 5-second cooldown it also carries — and the cooldown keeps running and drawing
       // underneath, because the two are different facts about the same button.
       const hidden = this.rts.simView.alreadyHidden(su, ab.code);
+      // …and a cargo hold's two buttons answer to the hold: Load with no seat left, Unload
+      // All with nobody aboard, are each a press that could only be refused (holdRoom /
+      // garrison — docs/transports.md).
+      const holdGate = ab.code === "Aloa" ? this.rts.simView.holdRoom(su) <= 0 : ab.code === "Adro" ? su.garrison.length === 0 : false;
       const col = reversed ? def.unButtonX : def.buttonX; // the ability's real WC3 card slot
       const row = reversed ? def.unButtonY : def.buttonY;
       const passive = def.target === "passive";
@@ -8923,7 +8928,7 @@ export class MapViewerScene {
         // as unpressable at a glance. Five things say so — a silenced or stunned caster, a
         // planted Ancient with a queue that cannot pull itself up, a unit mid-morph, an
         // ability whose research is not in, and one whose effect is already on the presser.
-        disabled: muted || rootBlocked || morphing || !techMet || hidden,
+        disabled: muted || rootBlocked || morphing || !techMet || hidden || holdGate,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and
@@ -9018,6 +9023,19 @@ export class MapViewerScene {
         this.rts.castNoTarget(code); // planted → pull up, here and now
         return;
       }
+      // A CARGO HOLD's buttons are orders to the hold, not casts (docs/transports.md). Load
+      // arms the same passenger pick the Entangled Gold Mine's does — the SELECTION is the
+      // hold and the click names who boards — and a transport's goes to meet the unit it was
+      // given. Unload All is a POINT: the transport flies/sails there and puts its cargo off.
+      // The mine's Unload Instant (`Adri`) empties the hold here and now.
+      if (code === "Aloa" || code === "Adro" || code === "Adri") {
+        const sel = this.rts.selectedInfo();
+        if (!sel) return;
+        if (code === "Aloa" && this.rts.armLoad(sel.id)) this.hud?.setArmed(true);
+        else if (code === "Adro" && this.rts.armUnload(sel.id)) this.hud?.setArmed(true);
+        else if (code === "Adri") this.rts.execute(this.localPlayer, { c: "standdown", buildingId: sel.id });
+        return;
+      }
       const target = KNOWN_ABILITIES[code]?.target;
       if (target === "none") {
         this.rts.castNoTarget(code); // Thunder Clap / Divine Shield / Avatar — fire now
@@ -9068,6 +9086,7 @@ export class MapViewerScene {
         this.rts.orderMode = null;
         this.rts.armedCast = null; // disarm a pending spell target
         this.rts.armedLoad = null; // …and a pending Load pick
+        this.rts.armedUnload = null; // …or Unload All point
         this.hud?.clearOrderMode();
         return;
       }
