@@ -3418,18 +3418,33 @@ early — does not hold its openers back for greetings nobody is still going to 
   floor under the ratio and does real work: a player whose army is out creeping has *no* home
   defence at all, so without it one Ghoul strolling past a Ziggurat outweighs the base by any
   margin you like.
-* **Who it is about to hit** — *"im going to hit blue"* — when the wave sets off at a **player**.
-  Not a creep run, and not a field battle the wave was dragged into (`contactPass`'s target
-  carries `id` 0): a teammate cannot join something that is already happening somewhere the
+* **Who it is about to hit** — *"im going to hit the undead"* — when the wave sets off at a
+  **player**. Not a creep run, and not a field battle the wave was dragged into (`contactPass`'s
+  target carries `id` 0): a teammate cannot join something that is already happening somewhere the
   announcer did not choose, so the objective has to name a unit whose owner is a seat we are at
-  war with. The opponent is named by **colour**, which is the only name an opponent has — it is
-  what both players read off the minimap, and "player 4" is not something anybody types.
-  `COLOUR_NAMES` is the install's own list in the install's own order (`UI\TriggerData.txt`'s
-  `playercolor` enum, `Color00=…PLAYER_COLOR_RED…` through `Color11=…PLAYER_COLOR_BROWN`), and
-  the colour is asked of `PlusHost.playerColor` rather than taken as the seat number, because
-  `SetPlayerColor` can move one. `attackSaid` holds the *player* rather than a flag, so re-aiming
-  at a different enemy is a fresh announcement while the same one inside `ATTACK_TELL_GAP` is
-  not — `attacking` re-picks its objective as buildings die under it.
+  war with. The opponent is named by **race** (`playerNames`), because that is what a person says
+  and what a teammate can act on without looking anything up — "the undead" already says Ghouls
+  are coming, where "purple" is a swatch that has to be found on the minimap first. A race is not
+  unique, so it is qualified **only when it has to be**: two opponents playing the same race are
+  told apart by where they sit — *"the undead at the top"*, *"the human in the middle"* — and one
+  of a kind is simply "the orc", because a position nobody needs is noise. The positions are
+  **relative to the players sharing that race**, not to the map's own halves, which is what makes
+  the words mean the same thing to the speaker and the listener; the axis is whichever the group
+  is more spread along, three take a middle, and four take both axes at once (`spotsFor`, +y is
+  north). Both ends run `playerNames` over the same seats with the **speaker left out**
+  (`line.from` is known to every listener), so an undead computer saying "the undead" means the
+  other one and every phrase written resolves back to the seat it was written about
+  (`namedPlayer`). The race is the lobby's (`PlusHost.playerRace`) and has exactly the standing
+  the start locations do — a melee lobby prints both beside a player's name before a unit has
+  moved. **The colour is the fallback**, for a seat with no known race and for one of four the
+  map's geometry cannot separate (two starts in the same quarter name *neither*, because a name
+  that fits two players is worse than a swatch). `COLOUR_NAMES` is the install's own list in the
+  install's own order (`UI\TriggerData.txt`'s `playercolor` enum, `Color00=…PLAYER_COLOR_RED…`
+  through `Color11=…PLAYER_COLOR_BROWN`), asked of `PlusHost.playerColor` rather than taken as
+  the seat number, because `SetPlayerColor` can move one. Reading a heard line tries both
+  vocabularies, since a *person* still types a colour. `attackSaid` holds the *player* rather
+  than a flag, so re-aiming at a different enemy is a fresh announcement while the same one
+  inside `ATTACK_TELL_GAP` is not — `attacking` re-picks its objective as buildings die under it.
 * **"im coming with you"**, and then it comes: the promise is kept by pointing its own wave at
   that player, because anything less would make the line a lie. **Silence is the other answer.**
   An ally that is not interested says nothing at all — nobody types "no" every time a teammate
@@ -3563,7 +3578,8 @@ the army is already walking), `HELP_TIMEOUT` 90 s, `SWITCH_MARGIN` 1.25, `HELP_C
 `JOIN_TIMEOUT` 75 s.
 
 The one thing here that *is* the install's is `COLOUR_NAMES` — twelve words, in twelve places,
-straight off `UI\TriggerData.txt`'s `playercolor` enum.
+straight off `UI\TriggerData.txt`'s `playercolor` enum. `RACE_WORDS` beside it is only the four
+races written the way a player types them.
 
 ## The UI, and the overrides layer
 

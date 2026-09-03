@@ -828,6 +828,7 @@ export class RtsController {
     slots: ReadonlyArray<{ player: number; race: PlayableRace; startX: number; startY: number; difficulty: number; plus?: boolean }>,
     seed: number,
     starts: ReadonlyArray<{ player: number; x: number; y: number }> = slots.map((s) => ({ player: s.player, x: s.startX, y: s.startY })),
+    races: ReadonlyMap<number, PlayableRace> = new Map(slots.map((s) => [s.player, s.race])),
   ): void {
     this.meleeSeats = new Map(slots.map((s) => [s.player, s]));
     // EVERY playing seat's start location, computers and people alike — what a Computer+ scout
@@ -835,6 +836,12 @@ export class RtsController {
     // computers, so this is a second list rather than a projection of that one; it defaults to
     // the computers' own so an older caller still names something real.
     this.meleeStarts = starts;
+    // …and what EVERY playing seat is playing, people included — lobby data of exactly the same
+    // standing as the start locations above it (a melee lobby prints both beside a player's name
+    // before the match starts). What reads it is Computer+ naming an opponent to its teammates:
+    // "im going to hit the undead" (src/ai/plus/teamchat.ts). `slots` is the computers alone,
+    // so this is a second list rather than a projection of it.
+    this.meleeRaces = races;
     this.meleeSeed = seed;
     // Built here rather than as a field: `this.sim` is assigned in the constructor BODY, so a
     // field initializer that reached for it would capture `undefined`.
@@ -863,6 +870,8 @@ export class RtsController {
       // teammates ("im going to hit blue"). Not the seat number: `SetPlayerColor` can move it,
       // and what a person reads off the minimap is the colour (see `playerColor`).
       playerColor: (player) => this.playerColor(player),
+      // …and what they are PLAYING, which is the better name and the one it reaches for first.
+      playerRace: (player) => this.meleeRaces.get(player) ?? null,
     };
     this.meleeAi = new MeleeAi(host);
     this.computerPlus = new ComputerPlusAi(host);
@@ -873,6 +882,8 @@ export class RtsController {
   private meleeSeats = new Map<number, { player: number; race: PlayableRace; startX: number; startY: number; difficulty: number; plus?: boolean }>();
   /** Where every PLAYING seat starts — the lobby's own list, held for the Computer+ scout. */
   private meleeStarts: ReadonlyArray<{ player: number; x: number; y: number }> = [];
+  /** …and what each of them is playing, held for the same reason (`PlusHost.playerRace`). */
+  private meleeRaces: ReadonlyMap<number, PlayableRace> = new Map();
   private meleeSeed = 1;
 
   /**
@@ -981,9 +992,15 @@ export class RtsController {
   // the wire or another seat, and a client that turns it on sees a recoloured picture of the
   // same match everybody else is playing.
 
-  /** `SetAllyColorFilterState`'s state — 0 off, 1 minimap, 2 minimap + game world. The
-   *  game boots at 0 (TriggerData's own `_SetAllyColorFilterState_Defaults=0`). */
-  private allyColorFilter: AllyColorMode = 0;
+  /** `SetAllyColorFilterState`'s state — 0 off, 1 minimap, 2 minimap + game world.
+   *
+   *  OpenWar3 boots in MODE 3 (state 2 — minimap AND game world), which is a deliberate
+   *  departure from the original's own default: TriggerData's `_SetAllyColorFilterState_Defaults=0`
+   *  is what the 2003 client starts in, and Alt-A / the button still cycles away from it. The
+   *  mode is a purely LOCAL display setting (nothing here reaches the sim, the wire or another
+   *  seat), so choosing a different starting one changes what this machine sees and nothing
+   *  about the match. A script that sets the state still overrules it. */
+  private allyColorFilter: AllyColorMode = 2;
 
   /** Called when the mode changes, so the console's button can wear the face of the mode it
    *  is now in. The bodies on the field are re-tinted here (`retintUnits`) — they are ours. */

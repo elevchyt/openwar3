@@ -2074,6 +2074,10 @@ export class MapViewerScene {
       config.slots
         .filter((s) => s.controller === "user" || s.controller === "computer")
         .map((s) => ({ player: s.id, x: s.startX, y: s.startY })),
+      // …and what each of them is PLAYING, resolved (a lobby "random" is a race by now). What
+      // wants it is Computer+ naming an opponent to its allies by race rather than by colour —
+      // "im going to hit the undead at the top" (src/ai/plus/teamchat.ts).
+      races,
     );
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     // …and the supply CEILING this map asks for, before a line of its script runs — a chapter

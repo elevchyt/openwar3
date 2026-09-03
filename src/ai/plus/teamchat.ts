@@ -1,3 +1,5 @@
+import type { PlayableRace } from "../../data/races";
+
 // Computer+ — talking to its ALLIES, and hearing them (team games: 2v2, 3v3, 4v4, FFA teams).
 //
 // plus/chatter.ts is the manners file: glhf at the start, gg at the end, both said to everyone
@@ -33,8 +35,13 @@
 //  4. **It answers a call for help** — its ally's or another computer's, since both arrive by
 //     the same route. It comes on foot, or by Scroll of Town Portal when the walk is too long to
 //     matter, and it says so if it cannot come at all.
-//  5. **It says who it is about to hit** — "im going to hit blue" — when the wave sets off at a
-//     PLAYER, naming them by the colour both players can see on the minimap (`COLOUR_NAMES`).
+//  5. **It says who it is about to hit** — "im going to hit the undead" — when the wave sets off
+//     at a PLAYER, naming them by their RACE (`playerNames`), which is how a person says it: a
+//     teammate reads "the undead" without looking anything up, while "purple" is a swatch they
+//     have to find on the minimap first. Two opponents of the SAME race are told apart by where
+//     they sit — "the undead at the top" — and only then, because a position nobody needs is
+//     noise. A seat whose race is not known, or one of four the map cannot separate, falls back
+//     to the colour (`COLOUR_NAMES`), which is the name every player has.
 //  6. **It answers that** with "im coming with you", and then actually comes: the promise is
 //     kept by committing its own wave to the same player. An ally that is not interested says
 //     NOTHING, which is the ordinary answer to an attack call and keeps the channel readable.
@@ -47,6 +54,19 @@
 // The vocabulary is ladder shorthand and the speaker is anonymous, which is issue #124's rule
 // for chatter.ts restated: no personalities, no names, no jokes. Every line is lowercase for the
 // same reason the greetings are — that is how this is typed in a real game.
+
+/**
+ * A line of chat as this file reads it: lowercased, every non-letter turned into a space, and
+ * a space on each end.
+ *
+ * One function rather than three copies of the expression, because every reader here depends on
+ * it meaning exactly the same thing: matching is on WORDS (` word `), which is what lets "HELP!!"
+ * and "help-me" be one message and what keeps "helpful" out of the reading. The pad is why the
+ * first and last word of a line match like any other.
+ */
+function fold(text: string): string {
+  return ` ${text.toLowerCase().replace(/[^a-z]+/g, " ").trim()} `;
+}
 
 /**
  * What a heard line is asking for.
@@ -74,14 +94,16 @@ export type AllyCall = "help" | "coming" | "busy" | "attack" | "joining";
  * read its own vocabulary as a call would answer itself for the rest of the match.
  */
 export function readAllyCall(text: string): AllyCall | null {
-  const said = ` ${text.toLowerCase().replace(/[^a-z]+/g, " ").trim()} `;
+  const said = fold(text);
   if (!said.trim()) return null;
   if (JOINING.some((re) => re.test(said))) return "joining";
   if (COMING.some((re) => re.test(said))) return "coming";
   if (BUSY.some((re) => re.test(said))) return "busy";
-  // …and the ATTACK announcement, which is the one reading that also needs a COLOUR (see
-  // `ATTACK` for why that is a condition rather than a detail).
-  if (namedColour(said) >= 0 && ATTACK.some((re) => re.test(said))) return "attack";
+  // …and the ATTACK announcement, which is the one reading that also has to NAME SOMEBODY (see
+  // `ATTACK` for why that is a condition rather than a detail). Either name will do: a race
+  // ("the undead") is what these computers say now, a colour ("blue") is what a person still
+  // types and what a seat of unknown race is called.
+  if ((namedRace(said) !== null || namedColour(said) >= 0) && ATTACK.some((re) => re.test(said))) return "attack";
   if (HELP.some((re) => re.test(said))) return "help";
   return null;
 }
@@ -101,10 +123,10 @@ const JOINING: readonly RegExp[] = [
 /**
  * "I am hitting that player."
  *
- * Gated on a COLOUR being named as well, in `readAllyCall`, and that gate is what keeps this
+ * Gated on a PLAYER being named as well, in `readAllyCall`, and that gate is what keeps this
  * clause from eating the file's own calls for help: "i'm under attack from multiple sides, need
  * help" is one of `HELP_CALLS` and contains the word this is recognised by. A request for help
- * names no colour; an announcement always does, because naming who is the whole point of it.
+ * names nobody; an announcement always does, because naming who is the whole point of it.
  */
 const ATTACK: readonly RegExp[] = [
   /\b(attack|attacking|hit|hitting|kill|killing|push|pushing|going in|rush|rushing)\b/,
@@ -416,7 +438,7 @@ export const COLOUR_NAMES = [
  * list.
  */
 export function namedColour(text: string): number {
-  const said = ` ${text.toLowerCase().replace(/[^a-z]+/g, " ").trim()} `;
+  const said = fold(text);
   const aliases: ReadonlyArray<readonly [string, number]> = [
     ...COLOUR_NAMES.map((c, i) => [c, i] as const),
     ["grey", 8], ["light grey", 8], ["gray", 8], ["teal", 2], ["dark green", 10],
@@ -432,13 +454,240 @@ export function namedColour(text: string): number {
   return best;
 }
 
-/** "im going to hit blue." Said on the allies channel when the wave sets off at a PLAYER. */
-export function attackLine(colour: string): readonly string[] {
+/**
+ * WHAT A PLAYER IS CALLED — the race they are playing, and where they sit when that is not
+ * enough.
+ *
+ * "im going to hit the undead" is what a person says, and it is a better name than the colour
+ * for the reason the colour was chosen in the first place: it is what the teammate already
+ * knows. A race says what is coming — a teammate told "the undead" knows to expect Ghouls, and
+ * knows which of their own units answer them — while "purple" is a swatch that has to be found
+ * on the minimap before it means anything at all.
+ *
+ * A race is not unique, so it is qualified only when it has to be: TWO opponents playing the
+ * same race are told apart by WHERE THEY SIT ("the undead at the top", "the human in the
+ * middle"), and one of a kind is simply "the orc". That order is the whole rule — a position
+ * nobody needs is noise, and this is chat.
+ *
+ * Both ends run this same function over the same seats, which is what makes the line readable
+ * back: the speaker composes a phrase from it and every listener resolves one with it
+ * (`namedPlayer`), so the vocabulary written and the vocabulary read stay one list exactly as
+ * `COLOUR_NAMES` does. The seat list itself is the LOBBY's — `PlusHost.startLocations` plus
+ * `PlusHost.playerRace`, both of them things a person reads off the lobby and the minimap
+ * before a unit has moved, which is the same standing as the start locations the scout already
+ * tours (docs/computer-plus.md).
+ */
+export const RACE_WORDS: Record<PlayableRace, string> = {
+  human: "human",
+  orc: "orc",
+  undead: "undead",
+  nightelf: "night elf",
+};
+
+/**
+ * …and the spellings a player actually types for them.
+ *
+ * Read-only, like the colour aliases: what a computer SAYS is always `RACE_WORDS`, so there is
+ * one vocabulary going out and a forgiving one coming in. Longest match first for the same
+ * reason "light blue" needs it — "night elf" contains "elf", and both happen to mean the same
+ * race here, but the scan is shared and the rule has to hold for it.
+ */
+const RACE_ALIASES: ReadonlyArray<readonly [string, PlayableRace]> = [
+  ["human", "human"], ["humans", "human"],
+  ["orc", "orc"], ["orcs", "orc"],
+  ["undead", "undead"], ["ud", "undead"],
+  ["night elf", "nightelf"], ["night elves", "nightelf"], ["nightelf", "nightelf"],
+  ["elf", "nightelf"], ["elves", "nightelf"], ["ne", "nightelf"],
+];
+
+/** The race named in a line, or null. Longest match first (see `RACE_ALIASES`). */
+export function namedRace(text: string): PlayableRace | null {
+  const said = fold(text);
+  let best: PlayableRace | null = null;
+  let bestLen = 0;
+  for (const [word, race] of RACE_ALIASES) {
+    if (word.length <= bestLen) continue;
+    if (!said.includes(` ${word} `)) continue;
+    best = race;
+    bestLen = word.length;
+  }
+  return best;
+}
+
+/**
+ * WHERE ON THE MAP a player sits, in the words a person uses for it.
+ *
+ * Said of a player only when their race alone does not name them, so this list is short on
+ * purpose: two of a race is a line, three is a line with a middle to it, and four is the only
+ * case that needs both axes at once.
+ */
+export type MapSpot =
+  | "top" | "bottom" | "left" | "right" | "middle"
+  | "top left" | "top right" | "bottom left" | "bottom right";
+
+/** …and how it is said. The preposition is not decoration — "the human in the middle" and "the
+ *  undead at the top" are what a person types, and "at the middle" is not. */
+const SPOT_PHRASE: Record<MapSpot, string> = {
+  top: "at the top",
+  bottom: "at the bottom",
+  left: "on the left",
+  right: "on the right",
+  middle: "in the middle",
+  "top left": "in the top left",
+  "top right": "in the top right",
+  "bottom left": "in the bottom left",
+  "bottom right": "in the bottom right",
+};
+
+/** One playing seat, as the naming reads it: where it starts and what it is playing. `race` is
+ *  null for a seat whose race this computer has no business knowing (an empty slot, a map that
+ *  never said) — such a seat is named by colour instead. */
+export interface PlayerSeat {
+  player: number;
+  race: PlayableRace | null;
+  x: number;
+  y: number;
+}
+
+/** What one player is called: the race, the position that tells them from the others playing it
+ *  (null when nothing does), and the phrase both halves compose to. */
+export interface PlayerName {
+  player: number;
+  race: PlayableRace;
+  spot: MapSpot | null;
+  phrase: string;
+}
+
+/**
+ * Name every seat that can be named, keyed by player.
+ *
+ * A seat missing from the result has no race name — either its race is unknown, or it is one of
+ * four the map's own geometry cannot separate (two starts in the same quarter). The caller falls
+ * back to the colour there, which is why nothing here ever returns an AMBIGUOUS name: a name
+ * that fits two players is worse than a swatch, because an ally acts on it.
+ *
+ * The SPEAKER is expected to be left out by the caller. That keeps the two ends symmetric —
+ * `line.from` is known to every listener — and it is also how a person talks: an undead player
+ * saying "the undead" means the other one.
+ */
+export function playerNames(seats: readonly PlayerSeat[]): Map<number, PlayerName> {
+  const out = new Map<number, PlayerName>();
+  const byRace = new Map<PlayableRace, PlayerSeat[]>();
+  for (const s of seats) {
+    if (!s.race) continue;
+    const group = byRace.get(s.race);
+    if (group) group.push(s);
+    else byRace.set(s.race, [s]);
+  }
+  for (const [race, group] of byRace) {
+    const spots = spotsFor(group);
+    for (const s of group) {
+      const spot = spots.get(s.player) ?? null;
+      if (group.length > 1 && !spot) continue; // unnameable — the colour will have to do
+      out.set(s.player, {
+        player: s.player,
+        race,
+        spot,
+        phrase: spot ? `the ${RACE_WORDS[race]} ${SPOT_PHRASE[spot]}` : `the ${RACE_WORDS[race]}`,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Which of these players is which, told apart by their start locations alone.
+ *
+ * Relative rather than absolute, and that is the point: the words have to mean the same thing to
+ * the speaker and to the listener, and "the undead at the top" is a comparison between the two
+ * undead players rather than a claim about the map's own halves. Two starts a hundred units
+ * apart on a big map still have a top one, and that is exactly how a person would point at them.
+ *
+ * The AXIS is whichever the group is more spread along — four starts down one side of a map are
+ * top-to-bottom, not left-to-right — and `+y is north` is the world's own convention (the same
+ * one the minimap prints), so the largest y is the top.
+ *
+ * FOUR or more takes both axes at once, off the group's own centre, and any quarter holding two
+ * of them names NEITHER: an ambiguous name is worse than no name (see `playerNames`).
+ */
+function spotsFor(group: readonly PlayerSeat[]): Map<number, MapSpot | null> {
+  const out = new Map<number, MapSpot | null>();
+  if (group.length < 2) {
+    for (const s of group) out.set(s.player, null);
+    return out;
+  }
+  const xs = group.map((s) => s.x);
+  const ys = group.map((s) => s.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  if (group.length <= 3) {
+    const vertical = maxY - minY >= maxX - minX;
+    const order = [...group].sort((a, b) => (vertical ? b.y - a.y : a.x - b.x));
+    const words: MapSpot[] = vertical
+      ? (order.length === 2 ? ["top", "bottom"] : ["top", "middle", "bottom"])
+      : (order.length === 2 ? ["left", "right"] : ["left", "middle", "right"]);
+    order.forEach((s, i) => out.set(s.player, words[i]));
+    return out;
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const taken = new Map<MapSpot, number>();
+  for (const s of group) {
+    const spot = `${s.y >= cy ? "top" : "bottom"} ${s.x < cx ? "left" : "right"}` as MapSpot;
+    out.set(s.player, spot);
+    taken.set(spot, (taken.get(spot) ?? 0) + 1);
+  }
+  for (const s of group) {
+    const spot = out.get(s.player);
+    if (spot && (taken.get(spot) ?? 0) > 1) out.set(s.player, null);
+  }
+  return out;
+}
+
+/**
+ * The player a heard line names, or -1 — the reading half of `playerNames`.
+ *
+ * The race comes first and the position only decides between players already sharing one, which
+ * is the same order the phrase is built in. Longest spot first, for the reason `namedColour`
+ * needs it: "in the top left" contains "top", so a shortest-first scan reads a call on the
+ * top-left undead as a call on the undead at the top — a different player.
+ *
+ * A line naming a race that TWO of these players are playing with no position in it names
+ * nobody, deliberately: the army would otherwise walk at whichever seat happened to be scanned
+ * first.
+ */
+export function namedPlayer(text: string, names: ReadonlyMap<number, PlayerName>): number {
+  const race = namedRace(text);
+  if (!race) return -1;
+  const group = [...names.values()].filter((n) => n.race === race);
+  if (!group.length) return -1;
+  if (group.length === 1) return group[0].player;
+  const said = fold(text);
+  let best = -1;
+  let bestLen = 0;
+  for (const n of group) {
+    if (!n.spot || n.spot.length <= bestLen) continue;
+    if (!said.includes(` ${n.spot} `)) continue;
+    best = n.player;
+    bestLen = n.spot.length;
+  }
+  return best;
+}
+
+/**
+ * "im going to hit the undead." Said on the allies channel when the wave sets off at a PLAYER.
+ *
+ * `name` is a whole NAME rather than a colour word — "the undead", "the human in the middle", or
+ * a bare colour when neither is available — so nothing here may glue anything onto the end of
+ * it. That is why the possessive form this used to have ("attacking blue's base") is gone: "the
+ * undead at the top's base" is not a sentence, and the base is what a wave is walking at anyway.
+ */
+export function attackLine(name: string): readonly string[] {
   return [
-    `im going to hit ${colour}`,
-    `attacking ${colour}'s base`,
-    `going in on ${colour}`,
-    `im hitting ${colour} now`,
+    `im going to hit ${name}`,
+    `attacking ${name}`,
+    `going in on ${name}`,
+    `im hitting ${name} now`,
   ];
 }
 

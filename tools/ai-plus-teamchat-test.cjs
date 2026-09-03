@@ -20,8 +20,9 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const {
-  readAllyCall, namedColour, plural, switchLine, openerLine, attackLine,
-  HELP_CALLS, COMING_LINES, PORTAL_LINES, BUSY_LINES, JOIN_LINES, COLOUR_NAMES,
+  readAllyCall, namedColour, namedRace, namedPlayer, playerNames, plural, switchLine, openerLine,
+  attackLine,
+  HELP_CALLS, COMING_LINES, PORTAL_LINES, BUSY_LINES, JOIN_LINES, COLOUR_NAMES, RACE_WORDS,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "teamchat.js"));
 
 let failed = 0;
@@ -100,6 +101,95 @@ check("teal is what everybody calls cyan", namedColour("attacking teal"), 2);
 check("no colour named", namedColour("attacking now"), -1);
 check("the names are the install's, in the install's order", COLOUR_NAMES.join(","),
   "red,blue,cyan,purple,yellow,orange,green,pink,light gray,light blue,aqua,brown");
+
+// --- naming a player by RACE, and by where they sit --------------------------------------------
+//
+// The name a computer points its teammates at an opponent with. Three things are pinned, and the
+// first two are the ones that would ruin a match rather than a line of chat: a phrase this file
+// WRITES must resolve back to the seat it was written about (the army walks at whatever comes
+// out), and a race TWO players are playing must never resolve to one of them by accident. The
+// third is the readable half — a position nobody needs is not said at all.
+//
+// Both ends run `playerNames` over the same seats with the speaker left out, so these tests build
+// the seat list the way `ComputerPlusAi.namesFor` does. `+y is north`, as everywhere else.
+const seat = (player, race, x, y) => ({ player, race, x, y });
+
+// One of each race: nobody needs a position.
+{
+  const names = playerNames([
+    seat(1, "human", 0, 0), seat(2, "undead", 0, 5000), seat(3, "orc", 5000, 0),
+  ]);
+  check("one of a race is just the race", names.get(2).phrase, "the undead");
+  check("…and no position is said", names.get(2).spot, null);
+  check("the night elf is two words", RACE_WORDS.nightelf, "night elf");
+  for (const said of attackLine(names.get(2).phrase)) {
+    check(`a race attack call is an attack call: ${JSON.stringify(said)}`, readAllyCall(said), "attack");
+    check("…and it names the undead seat", namedPlayer(said, names), 2);
+  }
+  check("a race nobody is playing names nobody", namedPlayer("im going to hit the orc", playerNames([seat(1, "human", 0, 0)])), -1);
+}
+
+// Two of a race: the axis they are spread along names them.
+{
+  const names = playerNames([seat(2, "undead", 0, 5000), seat(3, "undead", 0, -5000)]);
+  check("two of a race: the top one", names.get(2).phrase, "the undead at the top");
+  check("two of a race: the bottom one", names.get(3).phrase, "the undead at the bottom");
+  check("…and the top phrase names the top seat", namedPlayer(attackLine(names.get(2).phrase)[0], names), 2);
+  check("…and the bottom phrase names the bottom seat", namedPlayer(attackLine(names.get(3).phrase)[0], names), 3);
+  // The whole reason a position is said at all: without one the line names nobody rather than
+  // marching an army at whichever seat was scanned first.
+  check("no position, no seat", namedPlayer("im going to hit the undead", names), -1);
+}
+{
+  const names = playerNames([seat(2, "orc", -5000, 0), seat(3, "orc", 5000, 0)]);
+  check("spread left-to-right is left and right", names.get(2).phrase, "the orc on the left");
+  check("…and the other one", names.get(3).phrase, "the orc on the right");
+}
+
+// Three: the one in between is the middle, which is the developer's own example.
+{
+  const names = playerNames([
+    seat(1, "human", -5000, 0), seat(2, "human", 0, 0), seat(3, "human", 5000, 0),
+  ]);
+  check("three across: left", names.get(1).phrase, "the human on the left");
+  check("three across: middle", names.get(2).phrase, "the human in the middle");
+  check("three across: right", names.get(3).phrase, "the human on the right");
+  check("…and the middle resolves", namedPlayer("im going to hit the human in the middle", names), 2);
+}
+
+// Four: both axes at once — and "in the top left" contains "top", which is why the scan is
+// longest-first (`namedColour` needs the same rule for light blue).
+{
+  const names = playerNames([
+    seat(1, "undead", -5000, 5000), seat(2, "undead", 5000, 5000),
+    seat(3, "undead", -5000, -5000), seat(4, "undead", 5000, -5000),
+  ]);
+  check("four: top left", names.get(1).phrase, "the undead in the top left");
+  check("four: bottom right", names.get(4).phrase, "the undead in the bottom right");
+  check("…and top left is not the top", namedPlayer("im going to hit the undead in the top left", names), 1);
+  check("…and a bare 'top' with four of them names nobody", namedPlayer("im hitting the undead at the top now", names), -1);
+}
+
+// Two starts the map cannot separate name NEITHER of them — the caller falls back to the colour,
+// because a name that fits two players is worse than a swatch.
+{
+  const names = playerNames([
+    seat(1, "orc", -5000, 5000), seat(2, "orc", -4900, 4900),
+    seat(3, "orc", -5000, -5000), seat(4, "orc", 5000, -5000),
+  ]);
+  check("a crowded quarter names neither", names.has(1) || names.has(2), false);
+  check("…and the seats it can name are still named", names.get(4).phrase, "the orc in the bottom right");
+}
+
+// Reading the race out of a line, in the spellings people type.
+check("race: undead", namedRace("im going to hit the undead"), "undead");
+check("race: ud", namedRace("hitting ud now"), "undead");
+check("race: night elf", namedRace("going in on the night elf"), "nightelf");
+check("race: elves", namedRace("attacking the elves"), "nightelf");
+check("race: orcs", namedRace("lets push the orcs"), "orc");
+check("no race named", namedRace("attacking now"), null);
+// …and the file's own calls for help name nobody, which is what keeps them out of this reading.
+for (const said of HELP_CALLS) check(`a call for help names no race: ${JSON.stringify(said)}`, namedRace(said), null);
 
 // --- saying what it is building ----------------------------------------------------------------
 // The name is always the game's (`UnitDef.name`); only the shape is ours.

@@ -351,14 +351,22 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   declines FIRST, and `tools/ai-plus-teamchat-test.cjs` pins it); and nothing is acted on inside
   `heard`, which is called from the middle of chat delivery. It asks for HELP on two conditions —
   two opponents in its towns, or ONE that is overrunning it, which is a `powerOf` comparison
-  rather than a count — and it announces WHO IT IS HITTING ("im going to hit blue") whenever the
-  wave sets off at a player, naming them by the COLOUR both players read off the minimap
-  (`COLOUR_NAMES` is `UI\TriggerData.txt`'s own `playercolor` enum, asked of
+  rather than a count — and it announces WHO IT IS HITTING ("im going to hit the undead")
+  whenever the wave sets off at a player, naming them by their RACE (`playerNames`, off
+  `PlusHost.playerRace`), which is what a person says and what a teammate can act on without
+  looking anything up. A POSITION is added only when another player shares that race ("the undead
+  at the top", "the human in the middle") and is measured against THOSE PLAYERS rather than
+  against the map's halves, so the words mean the same thing to speaker and listener; both ends
+  run `playerNames` over the same seats with the SPEAKER LEFT OUT, which is what makes an undead
+  computer's "the undead" the other one. The COLOUR is the fallback for a seat with no known race
+  and for two starts in one quarter, which name NEITHER — an ambiguous name is worse than a
+  swatch (`COLOUR_NAMES` is `UI\TriggerData.txt`'s own `playercolor` enum, asked of
   `PlusHost.playerColor` because `SetPlayerColor` can move one). An ally answers that with "im
   coming with you" and then actually comes; one that is not interested says NOTHING, because
-  nobody types "no" every time a teammate attacks. The colour is also what keeps the announcement
-  out of the help reading — a request for help names no colour — and `namedColour` matches
-  LONGEST FIRST, or every call to hit light blue is heard as a call to hit blue. Scouting intel
+  nobody types "no" every time a teammate attacks. NAMING SOMEBODY is also what keeps the
+  announcement out of the help reading — a request for help names nobody — and both `namedRace`
+  and `namedColour` match LONGEST FIRST, or a call to hit the undead in the top left is heard as
+  a call on the undead at the top, exactly as light blue is heard as blue. Scouting intel
   is NOT chat — a sighting is written
   into every allied Computer+ player's `EnemyMemory` at the moment it is made — and it is not a
   fog bypass, because what travels is what somebody's own eyes saw.

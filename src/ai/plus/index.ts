@@ -21,9 +21,9 @@ import {
   HELP_ANSWER_STAGGER, HELP_CALLS, HELP_CALL_FOES, HELP_CALL_GAP, HELP_CLEAR, HELP_GRACE,
   HELP_TIMEOUT, JOIN_LINES, JOIN_STAGGER, JOIN_TIMEOUT, OPENER_AT, OPENER_UNITS, OVERRUN_BODIES,
   OVERRUN_EDGE, PORTAL_LINES, PORTAL_WALK, STRATEGY_TIER, SWITCH_MARGIN, TALK_GAP, attackLine,
-  namedColour,
+  namedColour, namedPlayer, playerNames,
   openerLine, readAllyCall, switchLine,
-  type SwitchReason,
+  type PlayerName, type SwitchReason,
 } from "./teamchat";
 import { plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeValue } from "./targeting";
@@ -117,6 +117,17 @@ export interface PlusHost extends AiHost {
    * "player 4" is not something anybody types.
    */
   playerColor(player: number): number;
+  /**
+   * What RACE a seat is playing, or null for a slot that is not playing one.
+   *
+   * The LOBBY's, exactly as `startLocations` is, and gated by nothing for the same reason: a
+   * melee lobby prints every player's race beside their name before a unit has moved, so this
+   * is not a fog bypass any more than knowing where the start locations are is. What wants it
+   * is the NAMING (plus/teamchat.ts `playerNames`) — "im going to hit the undead" is how a
+   * person points a teammate at an opponent, and a colour is what is left when this cannot
+   * answer.
+   */
+  playerRace(player: number): PlayableRace | null;
 }
 
 /** How often the manners pass runs — greeting, conceding, leaving. Cheap, and none of it is
@@ -1998,9 +2009,16 @@ export class ComputerPlusAi {
   heard(line: ChatLine, recipients: readonly number[]): void {
     const call = readAllyCall(line.text);
     if (call !== "help" && call !== "attack") return;
-    // WHO an attack announcement named, resolved once for every listener: the colour is what
-    // was said (`COLOUR_NAMES`), and the seat wearing it is what an army can be pointed at.
-    const foe = call === "attack" ? this.playerWearing(namedColour(line.text)) : -1;
+    // WHO an attack announcement named, resolved once for every listener. The RACE is what these
+    // computers say ("the undead at the top", `playerNames`) and a COLOUR is what a person still
+    // types, so both readings are tried — either way what comes out is a seat, which is the only
+    // thing an army can be pointed at.
+    const foe = call === "attack"
+      ? (() => {
+        const named = namedPlayer(line.text, this.namesFor(line.from));
+        return named >= 0 ? named : this.playerWearing(namedColour(line.text));
+      })()
+      : -1;
     if (call === "attack" && foe < 0) return;
     // How many computers have already taken a turn at this ONE line. Every allied Computer+
     // player hears it on the same frame, so without a turn each they all typed "omw" onto the
@@ -5568,8 +5586,10 @@ export class ComputerPlusAi {
    * with; an enemy expansion and an enemy main both answer to that, and both are exactly what
    * a person says out loud before walking over.
    *
-   * The player is named by COLOUR (`COLOUR_NAMES`, off `PlusHost.playerColor`) because that is
-   * the only name an opponent has — it is what both players read off the minimap.
+   * The player is named by their RACE (`playerNames`, off `PlusHost.playerRace`) — "im going to
+   * hit the undead" — which is what a person says and what a teammate can act on without
+   * looking anything up, with the position added only when two opponents share a race ("the
+   * undead at the top"). The COLOUR is the fallback for a seat neither can name.
    *
    * `attackSaid` holds the player rather than a boolean, so re-aiming at a DIFFERENT enemy is a
    * fresh announcement while the same one inside `ATTACK_TELL_GAP` is not: `attacking` re-picks
@@ -5582,11 +5602,31 @@ export class ComputerPlusAi {
     if (foe < 0) return;
     if (foe === b.attackSaid && b.clock - b.attackSaidAt < ATTACK_TELL_GAP) return;
     if (b.clock - b.spokeAt < TALK_GAP) return;
-    const colour = COLOUR_NAMES[this.host.playerColor(foe)];
-    if (!colour) return; // a map with more colours than names: say nothing rather than guess
+    // The race first, and its position only if another player is playing it too; the colour when
+    // the seat has no race name at all. Built fresh — a colour can move mid-match
+    // (`SetPlayerColor`) and a seat can leave, and the answer is wanted about twice a minute.
+    const name = this.namesFor(b.ai.player).get(foe)?.phrase
+      ?? COLOUR_NAMES[this.host.playerColor(foe)];
+    if (!name) return; // a map with more colours than names: say nothing rather than guess
     b.attackSaid = foe;
     b.attackSaidAt = b.clock;
-    this.tell(b, attackLine(colour));
+    this.tell(b, attackLine(name));
+  }
+
+  /**
+   * What every player is CALLED, from the speaker's side of the conversation.
+   *
+   * The speaker is left out of the seat list, which is what makes an undead computer's "the
+   * undead" mean the other one — and both ends of a line run this over the same seats with the
+   * same exclusion (`line.from` is known to every listener), so a phrase written here resolves
+   * back to the same seat everywhere (`namedPlayer`).
+   */
+  private namesFor(speaker: number): Map<number, PlayerName> {
+    return playerNames(
+      this.host.startLocations()
+        .filter((s) => s.player !== speaker)
+        .map((s) => ({ player: s.player, race: this.host.playerRace(s.player), x: s.x, y: s.y })),
+    );
   }
 
   /** The SEAT this wave's objective belongs to, or -1 for a camp, a spot on the ground, a
