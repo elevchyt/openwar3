@@ -216,6 +216,9 @@ export async function mountSkirmish(
     container,
     vfs,
     fdfPath: "UI\\FrameDef\\Glue\\Skirmish.fdf",
+    // Every letter belongs to the map list's type-ahead search here (issue #137) — a map's
+    // name is spelled with the same letters this screen's buttons answer to.
+    noShortcutKeys: true,
     rootFrame: "Skirmish",
     includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, ADVANCED_OPTIONS_FDF, PLAYER_SLOT_FDF, BLURB_SCROLLBAR_FDF],
     // …and our own layer on the Advanced Options pane: the Computer+ switch, which the 2003 UI

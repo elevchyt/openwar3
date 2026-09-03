@@ -9,6 +9,7 @@ import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { uiFont, type FdfScreen } from "./fdf/render";
+import { bestMatch, norm } from "./mapSearch";
 import { gameFontsReady, onGameFontsReady } from "./gameFont";
 import type { ListItem } from "./fdf/widgets";
 
@@ -40,6 +41,13 @@ const ICON_FOLDER = "UI\\Widgets\\Glues\\icon-folder.blp";
 const ICON_FOLDER_UP = "UI\\Widgets\\Glues\\icon-folder-up.blp";
 const ICON_MELEE = "UI\\Widgets\\Glues\\icon-file-melee.blp";
 const ICON_UMS = "UI\\Widgets\\Glues\\icon-file-ums.blp";
+
+/**
+ * How long a type-ahead search stands before the next keystroke starts a fresh one (issue
+ * #137). The list has no search box — you type a map's name at it, as you do at any list of
+ * files — so the only thing that says "this is a new search" is a pause.
+ */
+const TYPEAHEAD_RESET_MS = 1200;
 
 /** Every map we have read, path → info. Module-level, so coming back to a map-picking
  *  screen doesn't re-read and re-parse the whole install's Maps folder a second time. */
@@ -120,6 +128,16 @@ export class MapBrowser {
   private preview: MapPreview | null = null; // the selected map's minimap markers
   private listScroll = 0; // where the list stands, kept across the screen's rebuilds
   private alive = true; // cleared on dispose, so background reads stop
+  /** The type-ahead search (issue #137): what has been typed at the list so far, and when
+   *  the last key of it landed — a pause longer than TYPEAHEAD_RESET_MS starts a new one. */
+  private query = "";
+  private queryAt = 0;
+  /** A row the next fill must SCROLL to. A searched-for map is nowhere near the player's
+   *  cursor, which is exactly the case `select` deliberately does not scroll for. */
+  private revealPath: string | null = null;
+  /** The screen this browser last filled — the type-ahead only takes keys while it is up. */
+  private screen: FdfScreen | null = null;
+  private indexing = false; // the background read of every folder is running
   private strings: FdfLibrary | null = null; // for "(up one level)" — GlobalStrings
   private offFontReady: () => void = () => {}; // unsubscribe from the font-ready relayout (issue #82)
 
@@ -151,6 +169,11 @@ export class MapBrowser {
         this.onChange();
       });
     }
+    // On the WINDOW, because a map list is not a focusable control and the player has not
+    // clicked into anything: the keystrokes have no other route here. In the CAPTURE phase so
+    // the search is ahead of anything else listening on the window (ui/fdf/render.ts does, in
+    // the bubble phase) rather than racing it.
+    window.addEventListener("keydown", this.onKey, true);
   }
 
   /** Hand over the screen's FDF library, for the strings the list shows. */
@@ -188,6 +211,7 @@ export class MapBrowser {
 
   /** Fill the map list and the summary pane on `s`. Call from the screen's `onBuild`. */
   fill(s: FdfScreen): void {
+    this.screen = s;
     this.fillList(s);
     if (this.selected) this.fillInfo(s);
     else clearMapInfo(s);
@@ -204,6 +228,13 @@ export class MapBrowser {
     list.setEnabled(ready);
     if (this.selected) list.select(this.selected.path);
     list.scrollTop = this.listScroll;
+    // A row the search landed on is brought into view — and then it IS where the list
+    // stands, or the next rebuild would scroll back to where the player last clicked.
+    if (ready && this.revealPath) {
+      list.reveal(this.revealPath);
+      this.listScroll = list.scrollTop;
+      this.revealPath = null;
+    }
     // A single click only ever SELECTS a row. Opening one takes a second click: a folder
     // is walked into on a double-click, a map is played on one.
     list.onChange = (value) => {
@@ -267,9 +298,114 @@ export class MapBrowser {
     if (this.alive) readFolders.add(folder);
   }
 
+  // --- type-ahead search (issue #137) ------------------------------------------------
+  //
+  // Typing a map's name at the list goes to it, with no search box to click into first. What
+  // is typed is ranked against every folder's maps in ui/mapSearch.ts; what lives here is when
+  // a keystroke counts as typing at all, and what "go to it" means for a map the open folder
+  // does not contain.
+
+  /**
+   * A key pressed while the list is up.
+   *
+   * Every printable key is the search's on these two screens. They carry one-letter button
+   * accelerators in the FDF (Skirmish.fdf's `KEY_START_GAME_SHORTCUT` "S",
+   * `KEY_CANCEL_SHORTCUT` "a", `KEY_MAP_INFO_SHORTCUT` "M") and a map's name is spelled with
+   * those same letters, so the two cannot share the keyboard — the screens mount with
+   * `noShortcutKeys` and the buttons keep their click (ui/fdf/render.ts). Nothing here has to
+   * decide whose a key is; it only has to leave the keys that are NOBODY's alone.
+   */
+  private readonly onKey = (e: KeyboardEvent): void => {
+    if (!this.alive || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (!this.listening(e.target)) return;
+    // Escape abandons a half-typed search and is passed on — it is nobody else's key on
+    // these screens today, and dropping the buffer is what it means to a list either way.
+    if (e.key === "Escape") { this.query = ""; return; }
+    if (e.key === "Backspace") {
+      if (!this.query) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.query = this.query.slice(0, -1);
+      this.queryAt = performance.now();
+      if (this.query) this.runSearch();
+      return;
+    }
+    if (e.key.length !== 1) return;
+    const fresh = performance.now() - this.queryAt > TYPEAHEAD_RESET_MS;
+    const query = (fresh ? "" : this.query) + e.key;
+    if (!norm(query)) return; // a bare space is not a search
+    e.preventDefault();
+    e.stopPropagation();
+    this.query = query;
+    this.queryAt = performance.now();
+    // A search that matches nothing KEEPS what was typed and leaves the selection alone, so
+    // that one mistyped letter is a backspace rather than a search to start over.
+    const hit = this.search(query);
+    if (hit) this.jumpTo(hit);
+    void this.indexAll(); // the first search warms the folders nobody has opened
+  };
+
+  /** Whether a keystroke is the list's to read: its screen is up, live and not typed into. */
+  private listening(target: EventTarget | null): boolean {
+    const el = this.screen?.element;
+    if (!el?.isConnected) return false;
+    if (getComputedStyle(el).display === "none") return false; // mounted but hidden
+    if (el.classList.contains("fdf-screen-disabled")) return false; // leaving
+    if (el.classList.contains("fdf-screen-inert")) return false; // not landed yet
+    const to = target as HTMLElement | null;
+    if (to && (to.tagName === "INPUT" || to.tagName === "TEXTAREA" || to.isContentEditable)) return false;
+    return !!this.screen?.list("MapListBox");
+  }
+
+  /** Re-run the standing search — a keystroke, or a folder whose real map names just landed. */
+  private runSearch(): void {
+    const hit = this.search(this.query);
+    if (hit) this.jumpTo(hit);
+  }
+
+  /** The best fit for `q` across every folder — the ranking is ui/mapSearch.ts's. */
+  private search(q: string): MapEntry | null {
+    return bestMatch(this.entries, q, this.cwd);
+  }
+
+  /** Go to a map the search found — walking into its folder first when it is in another. */
+  private jumpTo(e: MapEntry): void {
+    this.revealPath = e.path;
+    if (e.folder === this.cwd) {
+      if (this.selected?.path === e.path) this.onChange(); // already picked: just show it
+      else void this.choose(e.path);
+      return;
+    }
+    void this.openFolder(e.folder).then(() => {
+      if (this.alive && this.cwd === e.folder) void this.choose(e.path);
+    });
+  }
+
+  /**
+   * Read every folder's maps in the background, once the player has started searching.
+   *
+   * A map's OWN name ("Turtle Rock") lives inside the file; until its folder has been read all
+   * a search has to go on is the file name ("(4)TurtleRock"), which is close enough to find it
+   * and not close enough for every map. So the first keystroke starts the read, and each
+   * folder that lands re-runs the search — but only while the player is still typing, or a
+   * selection would move under a player who has stopped and is reading the pane.
+   */
+  private async indexAll(): Promise<void> {
+    if (this.indexing) return;
+    this.indexing = true;
+    const folders = [...new Set(this.entries.map((e) => e.folder))];
+    for (const folder of folders) {
+      if (readFolders.has(folder)) continue;
+      await this.readFolder(folder);
+      if (!this.alive) return;
+      if (this.query && performance.now() - this.queryAt <= TYPEAHEAD_RESET_MS) this.runSearch();
+    }
+  }
+
   dispose(): void {
     this.alive = false;
     this.offFontReady();
+    window.removeEventListener("keydown", this.onKey, true);
   }
 }
 

@@ -57,6 +57,9 @@ export async function mountLanCreateScreen(
     container,
     vfs,
     fdfPath: "UI\\FrameDef\\Glue\\LocalMultiplayerCreate.fdf",
+    // Every letter belongs to the map list's type-ahead search here (issue #137) — a map's
+    // name is spelled with the same letters this screen's buttons answer to.
+    noShortcutKeys: true,
     rootFrame: "LocalMultiplayerCreate",
     includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, BLURB_SCROLLBAR_FDF],
     buildRoot: (lib) => {

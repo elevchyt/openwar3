@@ -120,6 +120,16 @@ export interface FdfScreenOptions {
    *  screen that renames a button with `textOverrides` has to re-point its shortcut too —
    *  "Battle.net" answers B, and "Online" has no B in it to gild. */
   shortcutOverrides?: Record<string, string>;
+  /**
+   * Turn this screen's one-letter button accelerators OFF (issue #137).
+   *
+   * For the two screens whose main widget is the MAP LIST: typing a map's name at the list is
+   * how you find one there, and a name is made of the same letters `KEY_START_GAME_SHORTCUT`
+   * ("S") and `KEY_CANCEL_SHORTCUT` ("a") are. The two cannot both have the keys, and a
+   * keystroke that starts the match while the player is spelling "Secret Valley" is the worse
+   * of the two ways to be wrong. The buttons keep their gilded letter and their click.
+   */
+  noShortcutKeys?: boolean;
   /** Optional SPRITE frameName → BLP path, to draw a static stand-in for a 3D sprite. */
   sprites?: Record<string, string>;
   /** Frame names to skip (WC3's glue scripts hide these sub-panels initially). */
@@ -378,6 +388,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     if (overlay.classList.contains("fdf-screen-inert")) return;
     const target = e.target as HTMLElement | null;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+    if (opts.noShortcutKeys) return; // the map-list screens: every letter is the search's
     const h = shortcuts.get(e.key.toLowerCase());
     if (h) { e.preventDefault(); h(); }
   };

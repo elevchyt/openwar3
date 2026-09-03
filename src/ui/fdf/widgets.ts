@@ -51,6 +51,10 @@ export interface ListControl extends Control {
   setItems(items: ListItem[]): void;
   get value(): string | null;
   select(value: string): void;
+  /** Scroll a row into view — what SELECTING without clicking needs (the map list's
+   *  type-ahead search lands on a row nobody's cursor is anywhere near). `select` deliberately
+   *  does not scroll; this is the other half of it. */
+  reveal(value: string): void;
   /** How far the list is scrolled. A screen that rebuilds itself (the Custom Game screen
    *  does, on every map picked) reads this before and writes it after, so the list stays
    *  exactly where the player left it. */
@@ -557,6 +561,18 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
       const at = rows.scrollTop;
       paint(); // rebuilds the rows, which resets scrollTop — put it back
       rows.scrollTop = at;
+      scrollbar?.sync();
+    },
+    reveal(v: string): void {
+      const at = items.findIndex((i) => i.value === v);
+      const row = rows.children[at] as HTMLElement | undefined;
+      if (!row) return;
+      // Only when it is actually out of the box — a row already on screen must not be
+      // yanked to an edge, which is what scrollIntoView does to one that is merely close.
+      const top = row.offsetTop;
+      const bottom = top + row.offsetHeight;
+      if (top < rows.scrollTop) rows.scrollTop = top;
+      else if (bottom > rows.scrollTop + rows.clientHeight) rows.scrollTop = bottom - rows.clientHeight;
       scrollbar?.sync();
     },
     get scrollTop(): number { return rows.scrollTop; },
