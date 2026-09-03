@@ -506,6 +506,18 @@ function runEconomy() {
   function run(race, strategyId, profile, seconds, opts = {}) {
     const table = PLUS_RACES[race];
     const strategy = table.strategies.find((s) => s.id === strategyId);
+    // The build's own POWER SPIKE building: the producer of the heaviest tier-2 unit in its mix
+    // — the human's Arcane Sanctum, the orc's Spirit Lodge, the undead's Temple of the Damned.
+    // Derived from the mix like everything else here; a build with no tier-2 unit has none.
+    const spike = (() => {
+      let best = null, w = 0;
+      for (const [unit, weight] of Object.entries(strategy.mix)) {
+        const row = table.units[unit];
+        if (!row || row.tier !== 2 || weight <= w) continue;
+        w = weight; best = row.from;
+      }
+      return best;
+    })();
     const S = {
       t: 0, gold: START_GOLD, lumber: START_LUMBER,
       units: { [table.worker]: 5 },
@@ -519,6 +531,11 @@ function runEconomy() {
       mines: 1, freeMines: 1, research: {}, hold: new Set(),
       stallItem: "", stallBest: Infinity, stallPasses: 0, short: 0,
       halted: null, tierHaltsEarly: 0, passesEarly: 0,
+      // WHEN the second hall finished, and when the build's own tier-2 producer did. "Reaches
+      // tier 2 in ten minutes" is a deadlock test; these two are the TIMING one — the developer's
+      // report is not that the human never tiers but that it tiers late, and late is only
+      // visible on a clock.
+      tier2At: Infinity, spikeAt: Infinity,
     };
     const alive = (id) => S.units[id] ?? 0;
     const of = (id) => S.bldgs.filter((b) => b.type === id);
@@ -746,6 +763,8 @@ function runEconomy() {
         // a hall it had to found from nothing.
         if (S.t < 150) { S.passesEarly++; if (S.halted === table.halls[1]) S.tierHaltsEarly++ }
       }
+      if (S.tier2At === Infinity && doneRaw(table.halls[1]) > 0) S.tier2At = S.t;
+      if (S.spikeAt === Infinity && spike && doneRaw(spike) > 0) S.spikeAt = S.t;
       S.t += DT;
     }
     return {
@@ -758,6 +777,7 @@ function runEconomy() {
       // test, and an altar's queue is 55 seconds long.
       heroes: [ctx.ai.heroId, ctx.ai.heroId2].filter((id) => id && ai.count(id) > 0).length,
       tierHaltShare: S.tierHaltsEarly / Math.max(1, S.passesEarly),
+      tier2At: Math.round(S.tier2At), spike, spikeAt: Math.round(S.spikeAt),
       back,
       foodCap: ai.foodCap(), foodUsed: ai.foodUsed(),
     };
@@ -796,12 +816,20 @@ function runEconomy() {
         console.log(`      ${name} ${(race + "/" + s.id).padEnd(22)} tier=${r.tier} army=${String(r.armyFood).padStart(3)}`
           + ` ${table.barracks}x${r.producers} workers=${String(r.workers).padStart(2)}`
           + ` gold=${String(r.gold).padStart(4)} lumber=${String(r.lumber).padStart(4)}`
+          + ` tier2@${String(r.tier2At).padStart(3)}s`
+          + (r.spike ? ` ${r.spike}@${String(r.spikeAt).padStart(3)}s` : "")
           + ` openingStuckOnTier=${Math.round(r.tierHaltShare * 100)}%`);
         if (name !== "NORM") continue;
         // A NORMAL computer that is not stuck reaches its second tier and fields a real army.
         // The bar is deliberately well under what the fixed plan actually manages (24–37 food):
         // what is pinned is "the ladder kept being read", not a tuning number.
         check(`${race}/${s.id} reaches tier 2 in ten minutes`, r.tier >= 2, true);
+        // …and reaches it on a CLOCK, which is the other half of the report and the half a
+        // deadlock test cannot see: "the Computer+ Human seems to be delaying its tier 2 quite a
+        // lot". The bar is deliberately loose against what the fixed plan manages (336-430s
+        // across the four races) — what is pinned is that the tier row is being SAVED for rather
+        // than out-bid every pass by the core-army row above it (plan.ts `coreArmy`).
+        check(`${race}/${s.id} reaches tier 2 inside eight minutes`, r.tier2At <= 480, true);
         check(`${race}/${s.id} fields an army`, r.armyFood >= 20, true);
         // …and is not sitting on money it never found anything to do with.
         check(`${race}/${s.id} spends what it earns`, r.gold < 2000, true);
@@ -814,6 +842,18 @@ function runEconomy() {
         // see `tierTwoHero`, which is the row that made this true: below the expansion, the
         // second hero was reached only in the moments the AI happened to be rich.
         check(`${race}/${s.id} has both its heroes by ten minutes`, r.heroes, 2);
+        // …AND, FOR THE HUMAN, THE BUILD'S OWN TIER-2 PRODUCER IS STANDING. A Keep with no
+        // Arcane Sanctum behind it has bought the human nothing: the Priests and Sorceresses are
+        // the whole reason the race tiers at all (races.ts `tier2Clock`), and reaching the hall
+        // sooner is only worth measuring if the spike follows it.
+        //
+        // Asked of the human alone because it is the human this pins. The column is PRINTED for
+        // all four, and it shows a separate fault that is not this one's to fix: three undead
+        // builds never stand up their Temple of the Damned or Slaughterhouse at all, on 830 gold
+        // and 73 lumber — an undead LUMBER problem (six Acolytes, and Ghouls that are the army
+        // as well as the axes), not a tier-2 one.
+        if (race === "human") check(`${race}/${s.id} has its Arcane Sanctum by ten minutes`,
+          r.spikeAt <= 600, true);
       }
     }
   }

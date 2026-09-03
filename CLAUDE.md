@@ -278,7 +278,19 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   afford. Lumberjacks below the hero DEADLOCK — five workers on the mine and one spare leaves ONE
   in the trees, the hero row wants 100 lumber, and the row that would hire a second lumberjack is
   underneath the row that is stuck (a night elf stood still from 0:30 to 4:45 with 2500 gold
-  banked); and a shop below the army rows is never built at all, so nothing is ever bought. Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:
+  banked); and a shop below the army rows is never built at all, so nothing is ever bought.
+  The CORE ARMY is the row directly above the tier-up and it therefore STOPS GROWING once that
+  row is past its clock (`coreArmy`/`tierUpOverdue`, held at `TIER2_ARMY`) — an `army` row asks
+  for one more soldier every pass for ever, so between the clock and the hall it is the same
+  "there is always another soldier" leak seen from inside one row, and every race reached tier 2
+  sooner for the hold with no smaller army at ten minutes. `TIER2_CLOCK` (180 s) is a DEFAULT and
+  a race may want its second tier sooner: `PlusRaceTable.tier2Clock` is the HUMAN's 120, because
+  the human's first power spike is entirely BEHIND the Keep (an Arcane Sanctum is `[hars]
+  Requires=hkee`, so there is no cheap half to buy while it waits) and its opening is the
+  dearest in the game. The Sanctum is a human SUPPORT row for the same reason — all five human
+  builds name a Priest, a Sorceress or a Spell Breaker — while the Lumber Mill is a TIER-2
+  support row, not the tier-1 one it was: nothing a human builds before a Castle needs it, and it
+  was the only second tier-1 support row any race had, sitting above the tier-up. Two ID TRAPS that each cost a whole subsystem and are invisible from the call site:
   the undead altar is **`uaod`** (Altar of Darkness), NOT `utod` (Temple of the Damned, which is
   the CASTER building) — naming the wrong one left the undead with no hero and, because a hero row
   halts the build loop, no army either; and a BURROW is asked for by its hold's ability code

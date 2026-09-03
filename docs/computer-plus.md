@@ -1373,7 +1373,10 @@ Seven of those positions were moved after a live match said so, and each is wort
   upgrade, and a `SetBuildNext` army row asks for one more soldier every pass, world without end.
   So `tierUpDue` asks for the tier-2 hall a second time, high in the ladder, from `TIER2_CLOCK`
   (180 s) — which is when a ladder player has their hall going up, and is the developer's own
-  "tier 2 transition starts at around 3-4 mins for all races". Asking twice in one pass is free:
+  "tier 2 transition starts at around 3-4 mins for all races". That 180 is a **default**: a race
+  may want its second tier sooner and say so with `PlusRaceTable.tier2Clock`, as the human does
+  (120 s — see *The human tiers a minute earlier than the other three* below).
+  Asking twice in one pass is free:
   the first ask starts the upgrade and `TownCount` counts a job in a queue, so the second is
   already satisfied; and if the first could not afford it, the loop never reaches the second.
   Tier 3 keeps its old place at the bottom — at ten minutes there is an army to spend on, and
@@ -1653,6 +1656,67 @@ computer that stood at sixteen food from the sixth minute to the ninth is the sa
 an army" report seen at the other end of the game. So the floor is 16 / 24 / 32 by the tier
 standing (`CORE_ARMY_PER_TIER`), capped by the profile throughout — an Easy computer's twelve-food
 ceiling is never quietly raised by it.
+
+### …and it STOPS growing while an overdue tier-up is being saved for
+
+The same argument runs the other way once the tier row is *past its clock*. The core army is the
+row directly above the tier row, and it is an `army` row — `SetBuildNext` asks for one more
+soldier every pass, for ever, up to whatever budget it is handed. So every point of core army
+between the clock and the hall is gold the hall is not getting, which is exactly the "there is
+always another soldier" leak the ladder's whole ordering exists to stop, arrived at from inside a
+single row.
+
+`coreArmy` therefore holds at **`TIER2_ARMY`** while `tierUpOverdue` — past the race's clock,
+tier 2 not yet standing, the difficulty allowed to tech at all. Those two numbers are one number
+said twice: the army the plan insists on *having* before it techs is the army it is content to
+hold *while* it techs. The hold ends the moment the hall lands, where `CORE_ARMY_PER_TIER` takes
+over.
+
+Measured over ten headless minutes (`tools/ai-plus-ladder-test.cjs`, which now prints when the
+second hall and the build's own tier-2 producer went up), with the human's race clock below:
+
+| race | tier-2 hall standing, before | after |
+|---|---|---|
+| human | 442–487 s | **336–379 s** |
+| orc | 402–490 s | 362–405 s |
+| undead | 398–589 s | 381–456 s |
+| night elf | 466–510 s | 384–401 s |
+
+No race fielded a smaller army at ten minutes for it — the hall landing earlier pays the soldiers
+back with interest.
+
+### The HUMAN tiers a minute earlier than the other three
+
+Reported: *"the Computer+ AI for Human seems to be delaying its tier 2 quite a lot… its first
+power spike is related to Arcane Sanctums building casters like priests and sorceresses, so tier
+2 is very important and must be sought after."*
+
+That is a statement about the RACE and not about the difficulty, so it is answered in
+[`plus/races.ts`](../src/ai/plus/races.ts) rather than in `PlusProfile`. Three things were wrong,
+and each of them is human-specific:
+
+* **`TIER2_CLOCK` is now a default, and the human overrides it** (`PlusRaceTable.tier2Clock`,
+  **120 s**). The human's spike is entirely *behind* the Keep — an Arcane Sanctum is `[hars]
+  Requires=hkee` — so unlike the other three there is no cheap half of the plan to buy while it
+  waits. It is also the race with the dearest opening: two of its five builds open on Riflemen,
+  which are `[hrif] Requires=hbla`, so a human pays for a Blacksmith *and* the game's most
+  expensive tier-1 soldier before it starts saving at all.
+* **The Lumber Mill was a tier-1 support row**, and the human was the only race with two of
+  those. 120 gold sat above the tier-up from twelve army food onward for a building **no human
+  tier-2 build needs**: the Knight and the Gryphon are `Requires=hlum` and both are tier 3, and
+  the Masonry and Lumber Harvesting upgrades it researches are wanted later still. No human
+  ladder build puts a Lumber Mill in front of its Keep. It is a **tier-2** support row now.
+* **The Arcane Sanctum IS a human support row.** A support row is "the building every build of
+  this race wants whatever its mix", and all five human strategies name a Priest, a Sorceress or
+  a Spell Breaker — so all five want a Sanctum. Left to `techBuildings` it was derived *below*
+  the second hero and the rest of the tech; stated as support at tier 2 it sits directly behind
+  the tier row. Its `after` is 0 because the gate is the **Keep**: a tier-2 support row is
+  unreachable until `supportDue`'s own `r.tier <= min(techTier, tier)` lets it through, and by
+  then the `TIER2_ARMY` the tier row demanded is already on the field.
+
+Together: the Keep lands at **336–379 s** instead of 442–487, the first Arcane Sanctum at
+**426–468 s** instead of 552–581, and the human is now the **first** of the four races to its
+second tier rather than the last. `tools/ai-plus-ladder-test.cjs` pins both.
 
 ### The undead's lumber comes out of its army
 

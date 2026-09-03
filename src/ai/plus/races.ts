@@ -197,6 +197,26 @@ export interface PlusRaceTable {
   /** Put up whatever the mix is: every race has a smith its whole army wants. */
   readonly support: readonly SupportRow[];
   /**
+   * When this race's TIER-UP stops waiting its turn in the ladder, in seconds — `plan.ts`
+   * `TIER2_CLOCK`, which is the default (180) and stays the default for three of the four.
+   *
+   * The human overrides it, and the reason is the race's own shape rather than a difficulty
+   * setting: the human's first power spike is the **Arcane Sanctum** — the Priests and
+   * Sorceresses that make a Footman or Rifleman line into an army — and there is no cheap half
+   * of it to buy early, because a Sanctum is `[hars] Requires=hkee` (HumanUnitFunc) and the
+   * whole spike therefore sits BEHIND the Keep. It is also the race whose opening costs the
+   * most: two of its five builds open on Riflemen, which are `[hrif] Requires=hbla`, so a human
+   * pays for a Blacksmith AND the game's dearest tier-1 soldier before it starts saving at all.
+   * Reported from real matches: the Computer+ human tiers far too late for a race whose plan
+   * does not begin until it has.
+   *
+   * Measured over ten headless minutes (tools/ai-plus-ladder-test.cjs), with the core-army hold
+   * in `plan.ts` beside it: the Keep landed at 442-487s and the first Arcane Sanctum at
+   * 552-581s; they now land at 336-358s and 426-438s, which puts the human FIRST of the four
+   * races to its second tier rather than last.
+   */
+  readonly tier2Clock?: number;
+  /**
    * The race's own SHOP — Arcane Vault, Voodoo Lounge, Ancient of Wonders, Tomb of Relics.
    *
    * Without one the AI has nowhere to buy anything, and for most of a match that means nothing
@@ -312,7 +332,32 @@ const HUMAN: PlusRaceTable = {
   farm: HOUSE,
   altar: HUMAN_ALTAR,
   barracks: BARRACKS,
-  support: [{ build: BLACKSMITH, tier: 1, after: 6 }, { build: LUMBER_MILL, tier: 1, after: 12 }],
+  // THE BLACKSMITH, THEN — THE MOMENT THE KEEP IS UP — THE ARCANE SANCTUM.
+  //
+  // A support row is "the building every build of this race wants whatever its mix", and for the
+  // human that is genuinely two buildings: all five strategies below name a Priest, a Sorceress
+  // or a Spell Breaker, so all five want a Sanctum, and it is the race's power spike besides
+  // (`tier2Clock`). Stating it here rather than leaving it to `techBuildings` puts it directly
+  // behind the tier row instead of below the second hero and the tech, which is where the human
+  // spent an extra hundred seconds getting to the thing its whole plan is waiting on.
+  //
+  // `after: 0` because the gate is the KEEP, not an army: a tier-2 support row is unreachable
+  // until `supportDue`'s own `r.tier <= min(techTier, tier)` lets it through, and by then the
+  // `TIER2_ARMY` the tier row demanded is already on the field.
+  //
+  // THE LUMBER MILL IS TIER 2, and that is a correction rather than a preference. It was a
+  // tier-1 support row — the only race with two of those — so 120 gold sat above the tier-up
+  // from twelve army food onward for a building NO human tier-2 build needs: the Knight and the
+  // Gryphon are `Requires=hlum` and both are tier 3, and the Masonry and Lumber Harvesting
+  // upgrades it researches are wanted later still. No human ladder build puts a Lumber Mill in
+  // front of its Keep.
+  support: [
+    { build: BLACKSMITH, tier: 1, after: 6 },
+    { build: SANCTUM, tier: 2, after: 0 },
+    { build: LUMBER_MILL, tier: 2, after: 12 },
+  ],
+  // A MINUTE EARLIER THAN THE OTHER THREE — see `PlusRaceTable.tier2Clock`.
+  tier2Clock: 120,
   shop: ARCANE_VAULT,
   // THE FLYING MACHINE, off one Workshop — the developer's own example of the rule
   // (`PlusRaceTable.antiAir`). It is the human's dedicated answer: `hgyr` shoots air and nothing

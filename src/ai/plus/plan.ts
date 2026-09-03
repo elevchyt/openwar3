@@ -90,6 +90,9 @@ const TIER3_ARMY = 20;
  * Only tier 2 has one. Tier 3 keeps its old place at the bottom, where the same argument runs
  * the other way: at ten minutes there is an army on the field to spend on, and the thing that
  * loses games there is teching past what you can defend.
+ *
+ * A DEFAULT rather than the number: a race that wants its second tier sooner overrides it with
+ * `PlusRaceTable.tier2Clock`, and the human does — see the comment there.
  */
 const TIER2_CLOCK = 180;
 
@@ -118,9 +121,42 @@ const CORE_ARMY_FOOD = 16;
 /** …and by how much per tier standing — 16 / 24 / 32, before the profile's own cap. */
 const CORE_ARMY_PER_TIER = 8;
 
-/** The floor as this pass sees it. */
+/**
+ * Is the tier-2 row PAST ITS CLOCK and still unpaid — is the plan now saving for a Keep?
+ *
+ * The same question `tierUpDue` asks, asked one row earlier, and it reads the race's own clock
+ * for the same reason that row does.
+ */
+function tierUpOverdue(c: PlusCtx): boolean {
+  return c.tier < 2 && c.profile.techTier >= 2 && c.clock >= tier2Clock(c);
+}
+
+/**
+ * The floor as this pass sees it — and it STOPS GROWING while an overdue tier-up is being saved
+ * for.
+ *
+ * The core army is the row DIRECTLY ABOVE the tier row (see `buildPlan`), so every point of it
+ * is gold the hall is not getting, and it is an `army` row: `setBuildNext` asks for one more
+ * soldier every pass, for ever, up to whatever budget it is handed. Past the clock the plan has
+ * already decided the hall is what it wants most, and then sixteen food of core army is simply
+ * the same "there is always another soldier" leak the ladder's own ordering exists to stop,
+ * arrived at from inside a single row.
+ *
+ * It holds at `TIER2_ARMY` and not at nothing, because those two numbers are one number said
+ * twice: the army the plan insists on HAVING before it techs is exactly the army it is content
+ * to hold WHILE it techs. Measured over ten headless minutes (tools/ai-plus-ladder-test.cjs),
+ * every race reached its second tier sooner and none of them fielded a smaller army at ten
+ * minutes for it — the Keep landing earlier pays the soldiers back with interest:
+ *
+ *     human   442-487s -> 336-358s      orc       402-490s -> 362-384s
+ *     undead  398-589s -> 382-430s      nightelf  466-510s -> 384s
+ *
+ * The hold ends the moment the hall is standing, where `CORE_ARMY_PER_TIER` takes over and the
+ * floor grows with the tier for the reason stated above.
+ */
 function coreArmy(c: PlusCtx): number {
-  return Math.min(c.profile.armyFood, CORE_ARMY_FOOD + CORE_ARMY_PER_TIER * Math.max(0, c.tier - 1));
+  const full = CORE_ARMY_FOOD + CORE_ARMY_PER_TIER * Math.max(0, c.tier - 1);
+  return Math.min(c.profile.armyFood, tierUpOverdue(c) ? Math.min(full, TIER2_ARMY) : full);
 }
 
 /** Workers on a mine. WC3 mines take five at a time, so a sixth is a peasant standing in a
@@ -924,8 +960,13 @@ function tierUp(c: PlusCtx): void {
  *  queue, so the second is already satisfied; and if the first could not afford it the loop never
  *  reaches the second. */
 function tierUpDue(c: PlusCtx): void {
-  if (c.clock < TIER2_CLOCK) return;
+  if (c.clock < tier2Clock(c)) return;
   tier2(c);
+}
+
+/** …and the clock is the RACE'S — see `PlusRaceTable.tier2Clock`. */
+function tier2Clock(c: PlusCtx): number {
+  return c.table.tier2Clock ?? TIER2_CLOCK;
 }
 
 function tier2(c: PlusCtx): void {
