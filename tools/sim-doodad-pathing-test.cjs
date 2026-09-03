@@ -1,6 +1,6 @@
 // Headless check of doodad/destructible pathing footprints (issue #85).
 //
-// Two rules are under test, both taken from the real 1.27a data (see src/sim/destructibles.ts):
+// Two rules are under test, both taken from the real data (see src/sim/destructibles.ts):
 //   1. A pathing texture is authored in the World Editor's DEFAULT doodad facing, 270°, and
 //      TURNS with the doodad — `Gate1Path.tga` (20×4) is the footprint of BOTH the horizontal
 //      gate (facing 270 → no turn) and the vertical one (facing 0 → one CCW turn → 4×20).

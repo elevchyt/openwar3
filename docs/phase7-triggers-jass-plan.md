@@ -27,7 +27,7 @@ Two north stars, in order:
 
 ---
 
-## How WC3 actually runs a map (verified against the 1.27a MPQs)
+## How WC3 actually runs a map (verified against the real game data)
 
 A map's triggers — GUI or hand-written — are compiled by the World Editor into **one script the engine runs**:
 `war3map.j` (JASS; `war3map.lua` on Reforged). The GUI files `war3map.wtg`/`.wct` are editor-only and never run.

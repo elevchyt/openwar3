@@ -23,8 +23,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
      file, and six `common.j`/`Blizzard.j` constants became natives the engine has to answer.
    - **Archive split** (`ARCHIVE_ORDER` in `src/vfs/casc.ts`, later wins): `Deprecated.mpq` = art old custom maps
      still reference; `War3.mpq` = everything shared; `<locale>-War3Local.mpq` = localized text, unit voices and the
-     campaign maps. 1.30 kept the MPQ *names* after dropping the format. A 1.27a install is still mountable and
-     layers `war3 < war3x < war3xlocal < war3patch` (`src/vfs/profiles.ts`).
+     campaign maps. 1.30 kept the MPQ *names* after dropping the format. A legacy MPQ-era install is still
+     mountable and layers `war3 < war3x < war3xlocal < war3patch` (`src/vfs/profiles.ts`), but 1.30.4 is what we
+     target and what the developer runs.
    - **TFT audio (Huffman+ADPCM):** WC3 stores every WAV as **Huffman(+ADPCM)**. Stock `mdx-m3-viewer` threw
      `compression type 'huffman' not supported`, muting every expansion sound. Fixed in
      `patches/mdx-m3-viewer@5.12.0.patch` (Storm-Huffman port in `huffman.js` + `file.js` wiring + an `adpcm.js`

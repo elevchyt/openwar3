@@ -118,7 +118,7 @@ check('Scourge finale is a MODEL, not a map',
   finale.playable === false && /\.mdl$/i.test(finale.file)
   && read(finale.file.replace(/\.mdl$/i, '.mdx')) !== null, finale.file);
 
-// A chapter map is a `.w3x` blob on a 1.27a install and a set of exploded entries on a 1.30
+// A chapter map is a `.w3x` blob on an MPQ-era install and a set of exploded entries on a 1.30
 // one, so it is asked for the way the campaign screen asks for it (src/vfs/mapArchive.ts).
 const chapterBytes = new Map();
 for (const c of campaigns) {

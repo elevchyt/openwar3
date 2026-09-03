@@ -19,7 +19,7 @@ export interface DoodadInstance {
    *  the editor's placeholder, which is why the byte reads as the "invisible & non-solid"
    *  state the format docs describe.
    *
-   *  Measured against the real 1.27a maps: on WarChasers all 31 records without the bit
+   *  Measured against the real maps: on WarChasers all 31 records without the bit
    *  are created by its script, position for position, and all 800 with it are not — and
    *  those 31 are the ONLY records missing the bit in the whole stock map set. So a clear
    *  bit never means "the mapmaker wanted units to walk through here": the doodad is still

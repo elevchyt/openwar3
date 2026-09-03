@@ -4,7 +4,7 @@ import type { MpqDataSource } from "../vfs/mpq";
 //
 // Warcraft III compiles every map's triggers — whether authored in the World
 // Editor's GUI or hand-written JASS — into ONE script the engine actually runs:
-//   • war3map.j    — JASS (our target, 1.27a)
+//   • war3map.j    — JASS (our target)
 //   • war3map.lua  — Lua  (Reforged 1.31+)
 // The GUI trigger tree also persists as war3map.wtg (structure/variables) +
 // war3map.wct (custom text), but those exist only to re-open the map in the
@@ -28,7 +28,7 @@ export type ScriptLanguage = "jass" | "lua" | "none";
 /** The standard "Melee Initialization" library functions the editor emits into
  *  war3map.j for a melee map (from Blizzard's blizzard.j melee library; called
  *  out of the map's init trigger via RunInitializationTriggers). Verified
- *  present in all 148 bundled 1.27a stock melee maps and absent from Scenario
+ *  present in all 148 bundled stock melee maps and absent from Scenario
  *  maps — see the classifyMap verification note. */
 export const MELEE_INIT_FUNCS = [
   "MeleeStartingVisibility",
@@ -53,7 +53,7 @@ export interface MapScript {
 }
 
 /** Read a map's compiled trigger script and scan it for the standard melee-init
- *  calls. Handles both the 1.27a layout (war3map.j at the archive root) and the
+ *  calls. Handles both the MPQ-era layout (war3map.j at the archive root) and the
  *  Reforged layout (scripts\war3map.lua / scripts\war3map.j). */
 export function readMapScript(mpq: MpqDataSource): MapScript {
   const jass = mpq.rawBytes("war3map.j") ?? mpq.rawBytes("scripts\\war3map.j");

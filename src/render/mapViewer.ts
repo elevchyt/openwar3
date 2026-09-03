@@ -762,7 +762,7 @@ export class MapViewerScene {
   // (7.24).
   //
   // The FOV *field* (Blizzard.j bj_CAMERA_DEFAULT_FOV = 70) is NOT the angle the client renders
-  // with. The rendered lens is **32° vertical**, measured off the real 1.27a client (issue #73):
+  // with. The rendered lens is **32° vertical**, measured off the real client (issue #73):
   //
   //   Blizzard.j's MeleeStartingUnits places the five starting workers at EXACT offsets around
   //   the point it then centres the camera on (`unitSpacing = 64`, so the two side workers sit
@@ -4336,7 +4336,7 @@ export class MapViewerScene {
    *  glyph and runes an `SPN…TOBO` → Objects\Spawnmodels\Other\ToonBoom\ToonBoom.mdl, the
    *  Chest of Gold an `SPN…GDCR` → UI\Feedback\GoldCredit\GoldCredit.mdl), which the mdx
    *  handler spawns for us off Splats\SpawnData.slk. Death lengths run 233ms (runes, pot
-   *  of gold) to 3633ms (tomes) — verified against the 1.27a models. */
+   *  of gold) to 3633ms (tomes) — verified against the models. */
   private removeItemModel(itemId: number, died = false): void {
     const inst = this.itemInstances.get(itemId);
     if (inst) {
@@ -4972,7 +4972,7 @@ export class MapViewerScene {
   }
 
   /** The attachment node on `host` for a buff's `Targetattach` tokens. WC3 names these
-   *  nodes "<Tokens…> Ref" — verified against the real 1.27 MDXs (Paladin/Grunt/Footman/
+   *  nodes "<Tokens…> Ref" — verified against the real MDXs (Paladin/Grunt/Footman/
    *  Headhunter/Crypt Fiend): "Origin Ref", "OverHead Ref", "Hand Left Ref", "Head - Ref".
    *
    *  Matching is a BEST match, not an exact one, because the data routinely asks for a
@@ -8398,7 +8398,7 @@ export class MapViewerScene {
    * asks for `0,2` twice, for Devour Magic and Absorb Mana). The HUD writes buttons into
    * `row * 4 + col`, so the loser used to be silently overwritten — the reported bug.
    *
-   * MEASURED off the real 1.27a client (WarChasers, Skeletorus' learn page): the engine shows
+   * MEASURED off the real client (WarChasers, Skeletorus' learn page): the engine shows
    * FOUR buttons — Chain Lightning keeps slot 0, Brilliance Aura and Death And Decay keep the
    * 2 and 3 their data asks for, and Mana Burn is pushed to the free slot 1. So a collision
    * falls FORWARD into the next free cell; nothing is ever dropped.
@@ -10610,7 +10610,7 @@ export class MapViewerScene {
         // playSpellSound reaches for. The runes and glyphs instead name an Effectsound
         // LABEL (`PowerupSound`, the same Tomes.wav; `ReceiveGold`/`ReceiveLumber` for the
         // resource items), so that is the fallback — and the only source for the runes that
-        // carry no art of their own. Verified 1.27a Units\ItemAbilityFunc.txt +
+        // carry no art of their own. Verified Units\ItemAbilityFunc.txt +
         // UI\SoundInfo\AbilitySounds.slk (row Y49) — see docs/wc3-data-formats.md.
         for (const p of world.drainPowerupPickups()) {
           const u = world.units.get(p.unitId);

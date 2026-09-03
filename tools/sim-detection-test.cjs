@@ -7,7 +7,7 @@
 // This file used to hand-set `detectRadius` for every case and assert the derivation only in
 // a comment ("Atru, dataA = 900"). The comment was wrong and the tests passed anyway: dataA
 // reads 3 for all three detect abilities, so every detector really had a 3-unit reach and
-// revealed nothing. Radii below are Rng1 of the real 1.27a AbilityData.slk rows:
+// revealed nothing. Radii below are Rng1 of the real AbilityData.slk rows:
 //
 //   Atru  "Detect (Shade)"           Rng1  900
 //   Adet  "Detect (Sentry Ward)"     Rng1 1100

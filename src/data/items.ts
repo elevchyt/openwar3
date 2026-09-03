@@ -10,7 +10,7 @@ import type { DataSource } from "../vfs/types";
 // off the base ability `code` in the sim (world.ts `itemBonuses`/`useItem`/
 // `applyPowerup`), exactly like unit spells dispatch off `code`. So this module
 // stays pure data; the item ability rows are already loaded by the AbilityRegistry
-// (flagged `isItem`). Verified 2026-07 against the real 1.27a MPQ (ItemData.slk).
+// (flagged `isItem`). Verified 2026-07 against the real game data (ItemData.slk).
 
 export interface ItemDef {
   id: string; // item rawcode

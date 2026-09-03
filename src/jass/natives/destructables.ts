@@ -1,7 +1,7 @@
 // Destructable natives (Phase 7 — issue #85; see docs/triggers.md).
 //
 // The trigger surface for the map's destructibles: gates, doors, cage bars, the walls a
-// lever drops. Signatures are taken from the real `Scripts\common.j` (1.27a).
+// lever drops. Signatures are taken from the real `Scripts\common.j`.
 //
 // **The whole point is that a gate OPENS by DYING.** `blizzard.j`'s `ModifyGateBJ` — which
 // is what the GUI's "Destructible - Open/Close gate" action compiles to, and what every one

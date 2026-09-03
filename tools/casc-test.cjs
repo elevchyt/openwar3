@@ -8,7 +8,7 @@
 // everything, and a wrong BLTE offset yields garbage that only announces itself several
 // subsystems later. This is where that gets caught, against the actual archives, headlessly.
 //
-// Skips (exit 0) when the local install is 1.27a — the MPQ path is checked by the tools that
+// Skips (exit 0) when the local install is an MPQ one — the MPQ path is checked by the tools that
 // were already checking it.
 
 const { existsSync } = require('node:fs');

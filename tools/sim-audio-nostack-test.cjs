@@ -10,7 +10,7 @@
 // moved. That last one is the whole point of the issue: an inaudible copy must not
 // silence the same sound landing next to the listener.
 //
-// Distances come from the real 1.27a UnitCombatSounds.slk row shape (MinDistance 600,
+// Distances come from the real UnitCombatSounds.slk row shape (MinDistance 600,
 // MaxDistance 10000, DistanceCutoff 2100, WANT3D — verified against the extracted MPQ).
 //
 // Run: pnpm sim:test

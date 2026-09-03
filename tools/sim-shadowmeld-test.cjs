@@ -5,7 +5,7 @@
 //   1. the handler (spells.ts)  — which Data column it spends, and the buff it builds
 //   2. tickMeld (world.ts)      — the two break conditions no other invisibility has
 //
-// Numbers are the real 1.27a ones from Units\AbilityData.slk, with the column meanings from
+// Numbers are the real ones from Units\AbilityData.slk, with the column meanings from
 // AbilityMetaData.slk Shm1/2/3 → UI\WorldEditStrings.txt:
 //   DataA "Fade Duration"      1.5   (Sshm, the instant variant, 0.1)
 //   DataB "Day/Night Duration" 2.5   — unspent: named but no source says what it measures

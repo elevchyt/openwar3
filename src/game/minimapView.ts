@@ -65,7 +65,7 @@ export function hiddenFor(vp: Viewpoint, u: SimUnit): boolean {
  * team before it consults the grid, so fog was never what it overrode. The only thing it could
  * override was the viewpoint-independent half of `hiddenFor`, which meant a peasant inside a
  * gold mine and a peon inside a burrow each painted a dot at the spot they walked in from.
- * **Measured in the real 1.27a client: they get no dot.** So the off-field test is applied
+ * **Measured in the real client: they get no dot.** So the off-field test is applied
  * first, on its own, and the own-team clause is left doing only the fog job it reads like.
  *
  * Neutral-passive units — critters, shops, the neutral buildings — never get a dot. They are
@@ -126,7 +126,7 @@ export const ICON_NEUTRAL_BUILDING = "UI\\MiniMap\\MiniMap-NeutralBuilding.blp";
  *
  * **A glyph is EXPLORED-gated: it appears the moment the black mask lifts off its tile, and stays
  * for good after** (issue #71). Phase D left "should these be fog-gated?" open, Phase E item 4
- * closed it as "no gate, measured against the real 1.27a client", and that close was wrong — the
+ * closed it as "no gate, measured against the real client", and that close was wrong — the
  * session it was measured in ran the dev default `?dev&fog=explored`, where the whole map is
  * explored from tick 0 and every gate is invisible. The developer re-checked under normal fog:
  * a gold mine, a tavern, a fountain is NOT on the minimap until something of yours has been

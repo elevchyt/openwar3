@@ -406,7 +406,7 @@ function leaveCampaignScreen(): void {
 }
 
 /** Play a chapter. Campaign maps live INSIDE the mounted install (Maps\FrozenThrone\Campaign\*.w3x
- *  in War3x/War3xLocal on 1.27a, exploded into the content store on 1.30 — see vfs/mapArchive.ts),
+ *  in War3x/War3xLocal on an MPQ install, exploded into the content store on 1.30 — see vfs/mapArchive.ts),
  *  not in the install's `Maps\` folder the Custom Game screen browses, so the bytes come from the
  *  VFS. Everything after that is the ordinary custom-map path: the map is not melee-flagged, so
  *  its own triggers set the mission up — which is the point of the campaign as a test bed, since

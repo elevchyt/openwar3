@@ -2,7 +2,7 @@
 // later). Profiles, not forks: RoC and TFT are the same engine over different
 // data. `archives` is listed LOWEST priority first (later entries override earlier).
 //
-// This describes the MPQ era (1.27a and older). A 1.30+ install is a CASC content store whose
+// This describes the MPQ era (the MPQ era). A 1.30+ install is a CASC content store whose
 // layering is written into the paths inside its own root listing, so there is nothing for a
 // profile to declare there — see ARCHIVE_ORDER in vfs/casc.ts.
 

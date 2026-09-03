@@ -902,7 +902,7 @@ body.hud-tooltip-skinned .hud-chatbar::after {
    inset rings, with `background-clip: content-box` holding the icon off them).
 
    `war3skins.txt` does name a frame — HeroBarBorder = human-hero-border.blp — and it is worth
-   knowing that the file is not in the archives, in 1.27a or in the 1.30.4 store: the engine
+   knowing that the file is in neither storage — not in the MPQs, not in the 1.30.4 store: the engine
    has nothing to draw there either. The icon is the frame.
 
    Death is likewise a TEXTURE SWAP and not a tint: `refreshHeroBar` puts up the icon's

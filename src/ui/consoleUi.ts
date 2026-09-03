@@ -26,7 +26,7 @@
 //
 // **The whole console is held at the 4:3 box it was authored for, centred**, rather than
 // stretched to the viewport the way the rest of the FDF layer spreads a menu (fdf/layout.ts
-// fitBox). 1.27a itself did stretch — measured off the real client at 1424×720, its command
+// fitBox). The older MPQ-era client did stretch — measured off the real client at 1424×720, its command
 // cells come out 78 × 52.5 px, a 1.49× horizontal smear — and the game stopped doing it: at
 // 1.30.4 the console is exactly `height × 4/3` centred (cells 78 × 78, square) with filler
 // panels either side. That is the version we follow, and it is also what the art wants, since
@@ -58,7 +58,7 @@ const CONSOLE_OVERRIDES = {
    * viewport, and fill the leftover width either side.
    *
    * The FDF has no opinion here — it is written in a 0.8 × 0.6 space and something else
-   * decides what that maps to. 1.27a maps 0.8 to the whole screen, which on 16:9 smears every
+   * decides what that maps to. maps 0.8 to the whole screen, which on 16:9 smears every
    * command icon 1.49× wide (measured: 78 × 52.5 px cells). 1.30.4 stopped, and draws filler
    * panels in the gap instead. We follow 1.30.4.
    */
@@ -428,7 +428,7 @@ export class ConsoleUi {
    * of the stone as transparency.
    *
    * It stops at the console's own edges. Both bands used to run the full width of the game
-   * frame, standing in for the filler panels 1.30.4 draws in the widescreen gap (1.27a has no
+   * frame, standing in for the filler panels 1.30.4 draws in the widescreen gap (the older client has no
    * texture for them, so they were left blank) — but a blank black slab either side of the
    * console is not a filler panel, it is a black slab, and it read as one (issue #96). With
    * nothing to put there, the battlefield is the better answer; the console keeps its backing

@@ -1135,7 +1135,7 @@ export class Interpreter {
   }
 
   /** Pump damage events (7.4c) — EVENT_UNIT_DAMAGED on the struck unit, with
-   *  GetEventDamage / GetEventDamageSource. (1.27 has no per-player damage event.) */
+   *  GetEventDamage / GetEventDamageSource. (WC3 has no per-player damage event.) */
   pumpDamageEvents(events: ReadonlyArray<DamageEvent>): void {
     for (const e of events) {
       const target = this.rt.unitForSim(e.target);

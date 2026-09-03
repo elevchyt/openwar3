@@ -3,9 +3,9 @@
 OpenWar3 targets **Warcraft III: The Frozen Throne 1.30.4**. That version's UI is the one built
 for widescreen (the console side-panels and the top bar stretch properly), which is why it is
 the target — but it also dropped MPQ for **CASC**, Blizzard's NGDP content store, so the whole
-asset layer had to learn a second storage. The MPQ path is kept and still mounts a 1.27a folder
-unchanged; which one a picked folder is, is decided by `.build.info` beside the exe, never asked
-of the player.
+asset layer had to learn a second storage. The MPQ path is kept and still mounts a legacy
+MPQ-era folder unchanged; which one a picked folder is, is decided by `.build.info` beside the
+exe, never asked of the player.
 
 Read this before touching `src/vfs/casc.ts`, `src/vfs/blte.ts`, `src/vfs/mapArchive.ts`, the
 install picker, or `tools/extract-data.mjs`.
@@ -72,13 +72,13 @@ enUS-War3Local.mpq:UI/CampaignStrings_exp.txt|ebbf1847b41e65a03f38b06422eefbe5|e
 ```
 
 1.30 kept the MPQ **layering** in name after dropping the format. Three archives are mounted,
-lowest priority first — the same shape `src/vfs/profiles.ts` describes for 1.27a:
+lowest priority first — the same shape `src/vfs/profiles.ts` describes for the MPQ era:
 
-| CASC archive             | 1.27a equivalent | holds |
-|--------------------------|------------------|-------|
-| `Deprecated.mpq`         | —                | art old custom maps still reference |
-| `War3.mpq`               | War3 + War3x     | everything shared |
-| `<locale>-War3Local.mpq` | War3xLocal       | localized text, voices, campaign maps |
+| CASC archive             | MPQ-era equivalent | holds |
+|--------------------------|--------------------|-------|
+| `Deprecated.mpq`         | —                  | art old custom maps still reference |
+| `War3.mpq`               | War3 + War3x       | everything shared |
+| `<locale>-War3Local.mpq` | War3xLocal         | localized text, voices, campaign maps |
 
 Verified on the retail build: the three sets are **disjoint but for two files**, so the order
 barely bites — but it is the order the paths imply, so it is the order we mount.
@@ -137,7 +137,7 @@ chapter has no terrain" rather than as an error. The table is sized up front.
 
 | command | what it does |
 |---|---|
-| `pnpm casc:test` | mounts the local store and checks it end to end; skips on a 1.27a install |
+| `pnpm casc:test` | mounts the local store and checks it end to end; skips on an MPQ install |
 | `pnpm data:extract` | rebuilds `ExtractedData/` from **either** storage |
 | `pnpm data:verify` | re-checks `src/data/gameplayConstants.ts` against the extracted data |
 
@@ -161,4 +161,4 @@ view *is* the per-archive view.
 - **The gameplay constants did not move.** All 148 in `gameplayConstants.ts` still match.
 - **Some models were re-exported.** `Footman.mdx` lost its `Attack Slam` and gained `Stand
   Defend` / `Walk Defend` / `Attack Defend`. Anything asserting on a specific clip needs
-  checking against the 1.30.4 art, not remembered from 1.27a.
+  checking against the 1.30.4 art, not remembered from an earlier patch.

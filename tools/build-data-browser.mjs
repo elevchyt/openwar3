@@ -461,7 +461,7 @@ pre.src mark{background:var(--gold-dim);color:var(--stone-900);border-radius:2px
 <nav id="rail">
   <div class="brand">
     <h1>Data Codex</h1>
-    <div class="sub">WARCRAFT III · TFT 1.27a</div>
+    <div class="sub">WARCRAFT III · TFT</div>
   </div>
   <div class="search"><input id="q" type="search" placeholder="filter files…" autocomplete="off" spellcheck="false"></div>
   <div id="tree"></div>
@@ -681,7 +681,7 @@ function home() {
   pad.innerHTML =
     '<div class="hero">'
     + '<h2>The <em>data</em> behind<br>Warcraft III.</h2>'
-    + '<p>Every text table unpacked from the four MPQ archives of a real TFT 1.27a install, merged in mount order so what you read is what the engine runs. <strong>The patch always wins.</strong></p>'
+    + '<p>Every text table unpacked from the four MPQ archives of a real MPQ-era TFT install, merged in mount order so what you read is what the engine runs. <strong>The patch always wins.</strong></p>'
     + '<p>These files hand you the <em>numbers and the naming</em>. They hand you almost no behaviour — pathing, combat resolution, the damage table, ability effects and the order system are all yours to build. See <code>README.md</code> for that split.</p>'
     + '<div class="stats">'
     + '<div class="stat"><div class="v">' + DATA.stats.files.toLocaleString() + '</div><div class="k">Data files</div></div>'

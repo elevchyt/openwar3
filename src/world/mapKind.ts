@@ -10,7 +10,7 @@ import { readMapScript, type MapScript } from "./triggers";
 // melee AI, defeat-on-no-buildings) while leaving a custom map's setup to its
 // own triggers.
 //
-// Verified against ALL 161 bundled 1.27a maps (RoC + TFT): every one of the 148
+// Verified against ALL 161 bundled maps (RoC + TFT): every one of the 148
 // stock melee maps has the MELEE flag set AND every standard Melee* init call in
 // war3map.j; every Scenario map has the flag clear. The single edge case —
 // TFT Scenario (4)Monolith — calls 5/8 Melee* functions yet has the flag OFF,

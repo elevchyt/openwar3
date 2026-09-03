@@ -33,7 +33,7 @@ const playerIndex = (ctx: NativeCtx, v: JassValue): number => ctx.rt.data<{ inde
 /** common.j: `constant fgamestate GAME_STATE_TIME_OF_DAY = ConvertFGameState(2)`. */
 const GAME_STATE_TIME_OF_DAY = 2;
 /** common.j: `constant version VERSION_FROZEN_THRONE = ConvertVersion(1)`. We are TFT
- *  1.27a — which is what picks the V1 melee constants (500 gold / 150 lumber, a 4-hero
+ *  — which is what picks the V1 melee constants (500 gold / 150 lumber, a 4-hero
  *  random-hero roll, 1 twinked hero) over the Reign-of-Chaos V0 ones. */
 const VERSION_FROZEN_THRONE = 1;
 /** common.j: `PLAYER_NEUTRAL_PASSIVE = 15` — a gold mine's owner. */
@@ -125,7 +125,7 @@ export function registerMeleeNatives(rt: Runtime): void {
   def(rt, "GetPlayerUnitCount", (c, a) => jInt(c.rt.hooks?.playerUnitCount?.(playerIndex(c, a[0]), truthy(a[1])) ?? 0));
   // GetPlayerTypedUnitCount(p, "townhall", …): `unitName` is the unit's internal TYPE name
   // — UnitUI.slk's `name` column ("townhall", "greathall", "treeoflife", "necropolis") —
-  // not its display name or rawcode. Verified in the 1.27 MPQ (Units\UnitUI.slk).
+  // not its display name or rawcode. Verified in the real game data (Units\UnitUI.slk).
   def(rt, "GetPlayerTypedUnitCount", (c, a) =>
     jInt(c.rt.hooks?.playerTypedUnitCount?.(playerIndex(c, a[0]), asStr(a[1]), truthy(a[2]), truthy(a[3])) ?? 0),
   );

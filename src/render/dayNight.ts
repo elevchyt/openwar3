@@ -11,7 +11,7 @@ import { MISC_DATA } from "../data/gameplayConstants";
 // noon/dusk/midnight tints the issue asks for aren't constants to be typed out: they
 // are sampled out of the model at `frame = hour / DayHours * seqDuration`.
 //
-// Verified against the real 1.27a MPQs: every outdoor DNC model keys its transitions
+// Verified against the real game data: every outdoor DNC model keys its transitions
 // at exactly 15 000 ms and 45 000 ms — i.e. game hours 6 and 18, MiscData's Dawn and
 // Dusk. The light's rotation track (KGRT) has a single frame, so the sun never moves;
 // only its colour does — and that colour is stored BGR (see sample()).
@@ -217,7 +217,7 @@ class LightSampler {
     // every tileset a mirror-image night: Lordaeron's moonlight comes out sepia
     // (0.80, 0.53, 0.31) instead of blue (0.31, 0.53, 0.80).
     //
-    // Verified against the real 1.27a game: `daylightsavings 12` vs `daylightsavings 1`
+    // Verified against the real game: `daylightsavings 12` vs `daylightsavings 1`
     // on Lordaeron Summer darkens flat ground by (0.385, 0.595, 0.840) per channel.
     // Swapped, this code predicts (0.380, 0.586, 0.841); unswapped it predicts the
     // reverse. It also makes Ashenvale's night blue moonlight and Felwood's a sickly

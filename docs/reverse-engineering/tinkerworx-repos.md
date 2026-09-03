@@ -1,7 +1,7 @@
 # Reverse-engineering sources: TinkerWorX Warcraft III repos
 
 Two reference repos the user added as sources. Both document how the **real** engine is structured. As with every
-reference in [`../REFERENCES.md`](../REFERENCES.md): **treat as hypotheses, verify against the 1.27a MPQs / observed
+reference in [`../REFERENCES.md`](../REFERENCES.md): **treat as hypotheses, verify against the real game data / observed
 behaviour before building on them.** OpenWar3 contains zero Blizzard code — we use these to name and shape our own
 clean implementations, never to copy binaries or lifted code.
 

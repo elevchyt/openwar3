@@ -7,7 +7,7 @@ import { rememberedUnit, visibilityFor, type SnapshotViewer, type UnitSnapshot }
  * Item 6 gave a structure three states — watched, remembered, absent — and left one hole: a
  * remembered building that has since been DESTROYED simply stops appearing, because
  * `visibilityFor` classifies what is in `world.units` and a dead building is not. **Measured
- * against the real 1.27a client: it keeps the ghost image until you re-scout the spot.** So the
+ * against the real client: it keeps the ghost image until you re-scout the spot.** So the
  * memory outlives the thing it is a memory of, which is the entire point of a memory and the
  * one case the live world cannot answer.
  *

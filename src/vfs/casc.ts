@@ -4,7 +4,7 @@ import { type DataSource, normalizeMpqPath } from "./types";
 /**
  * CASC — the storage a Warcraft III 1.30+ install uses in place of MPQ archives (issue #102).
  *
- * The 1.27a install we started on is four MoPaQ files; 1.30.4's `Data/` folder is Blizzard's
+ * The MPQ-era install we started on is four MoPaQ files; 1.30.4's `Data/` folder is Blizzard's
  * NGDP content store, and NOTHING in it is addressed by name. Four indirections stand between
  * a path and its bytes, and all four have to be walked before the first file can be read:
  *
@@ -65,7 +65,7 @@ export interface CascFiles {
   data: Map<number, ByteReader>;
 }
 
-/** True when a picked folder is a 1.30+ CASC install rather than a 1.27a MPQ one. */
+/** True when a picked folder is a 1.30+ CASC install rather than an MPQ-era one. */
 export function isCascInstall(files: CascFiles | null): files is CascFiles {
   return !!files && files.buildInfo.length > 0 && files.data.size > 0 && files.idx.size > 0;
 }

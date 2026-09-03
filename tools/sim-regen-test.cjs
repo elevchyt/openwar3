@@ -1,7 +1,7 @@
 // Headless check of PASSIVE hit-point regeneration (issue #93).
 //
 // The whole rule lives in two Units\UnitBalance.slk columns — `regenHP` (hp/sec) and
-// `regenType` (when it may run) — and the numbers below are the real 1.27a ones read
+// `regenType` (when it may run) — and the numbers below are the real ones read
 // straight out of the MPQ:
 //
 //   hfoo Footman      always 0.25      hbar Barracks    none   -

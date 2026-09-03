@@ -1882,7 +1882,7 @@ export interface SimUnit {
  * Burrow, digesting inside a Kodo, or `vanished` for the beat of Mirror Image's shuffle. The
  * common fact is that the unit has no position anybody can see: it is not merely fogged, it is
  * not on the map. Nothing draws it, nothing can target it, and — measured against the real
- * 1.27a client — **it gets no minimap dot, not even its owner's**.
+ * client — **it gets no minimap dot, not even its owner's**.
  *
  * It lives here, next to `SimUnit`, because four separate places have to agree on it and the
  * expression had already been written out twice: `hiddenFor` (the render/fog question),
@@ -1932,7 +1932,7 @@ const ITEM_DROP_RANGE = MISC_GAME.DropItemRange;
 // gold" and names both halves in its own data:
 //
 //  • the SOUND is what makes a building a shop in the first place. `[Apit] Effectsound =
-//    ReceiveGold` (1.27a Units\CommonAbilityFunc.txt) — "Shop Purchase Item", the very
+//    ReceiveGold` (Units\CommonAbilityFunc.txt) — "Shop Purchase Item", the very
 //    ability canPawnAt() looks for — and it is the same coin "cha-ching" a Chest of Gold
 //    pays out with (`[AIgo] Effectsound = ReceiveGold`, Units\ItemAbilityFunc.txt). It is
 //    a LABEL, not a path: AbilitySounds.slk row Y38 carries the wav and its 3D metadata.
@@ -3661,7 +3661,7 @@ export class SimWorld {
   }
 
   /** Sell an item back to a shop. WC3 pays `PawnItemRate` of its gold value (0.50 in the
-   *  1.27a MiscGame.txt — NOT the 60% often quoted), and the hero must be within
+   *  MiscGame.txt — NOT the 60% often quoted), and the hero must be within
    *  `PawnItemRange` (300) of the shop. The item is destroyed, not restocked. */
   pawnItem(unitId: number, slot: number, shopId: number): boolean {
     const u = this.units.get(unitId);
@@ -5748,7 +5748,7 @@ export class SimWorld {
   }
 
   /** Run a timed alternate form down, and revert it when the clock does. Call to Arms is the
-   *  only user in 1.27a: a militia gets 45 seconds and then goes back to being a Peasant
+   *  only user in the game: a militia gets 45 seconds and then goes back to being a Peasant
    *  wherever it stands, which is what makes calling the bell a decision rather than a free
    *  upgrade. Reverting goes through morphToggle so the return trip is the same code as the
    *  outbound one — nothing here knows a Peasant from a militia. */
@@ -9201,7 +9201,7 @@ export class SimWorld {
     // reach, i.e. True Sight silently never fired: nothing was ever revealed.
     //
     // `Adet` is the odd one out in the table: its row carries no `code` cell, so it reaches
-    // the registry under the id fallback (abilities.ts `str(r, "code") || id`). No 1.27a unit
+    // the registry under the id fallback (abilities.ts `str(r, "code") || id`). No stock unit
     // lists it — it is kept here for custom maps that hand it out.
     //
     // The tech gate is the standing "abilList membership is not availability" rule, and this
@@ -9218,7 +9218,7 @@ export class SimWorld {
     }
     // …and the CARRIED detector: the Gem of True Seeing's `Adt1` is `code = Adet`, the row
     // whose comment is literally "Detect (Sentry Ward)" and whose Rng1 = 1100. No unit in
-    // 1.27a lists `Adet` — the gem is the only thing in the game that hands it out, which is
+    // the game data lists `Adet` — the gem is the only thing in the game that hands it out, which is
     // why the note above says the code is kept "for custom maps". It was the item's all along.
     for (const code of ["Atru", "Adet", "Adts"] as const) {
       const r = this.itemAbilityLevel(u, code)?.castRange;
@@ -10325,7 +10325,7 @@ export class SimWorld {
 
   /** Enforce the ability's "Targets Allowed" (AbilityData `targs1`) allegiance +
    *  hero/non-hero flags, so a spell only hits what its data says it may. Verified
-   *  against the 1.27 MPQ: Storm Bolt/Chain Lightning/Slow are `enemy` (never a
+   *  against the real game data: Storm Bolt/Chain Lightning/Slow are `enemy` (never a
    *  friendly), Heal/Inner Fire/Frost Armor are `friend,self` (never an enemy),
    *  Holy Light/Death Coil/Life Drain are `notself` (anything but the caster).
    *  Codes with no allegiance flag (Banish) stay unrestricted.
@@ -11033,7 +11033,7 @@ export class SimWorld {
       // Allowed flags (targs1), not a hard-coded code list: a spell allowing
       // `friend`/`self`/`player` (and not `enemy`) buffs/heals allies; `enemy`
       // targets foes. `self` in the flags lets the caster be its own target
-      // (Heal/Inner Fire/Frost Armor all carry it — verified in the 1.27 MPQ).
+      // (Heal/Inner Fire/Frost Armor all carry it — verified in the real game data).
       const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
       const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
       const range = inPlace ? lvl.castRange : this.autocastSearchRange(u, lvl.castRange);
@@ -16680,7 +16680,7 @@ export class SimWorld {
   /** Take a ground item off the world. `died` = it was CONSUMED where it lay, so the
    *  renderer plays the model's Death clip (which is also what spawns the little puff:
    *  every powerup model carries an `SPN…TOBO` → ToonBoom event on its Death track, and
-   *  the Chest of Gold an `SPN…GDCR` → GoldCredit one — verified 1.27a). It is NOT set
+   *  the Chest of Gold an `SPN…GDCR` → GoldCredit one — verified in the data). It is NOT set
    *  for the plumbing removals: an item that merely MOVES is removed and re-modelled at
    *  the new spot (see moveItem), and dying there would puff on every reposition. */
   private removeGroundItem(id: number, died = false): void {
@@ -17080,7 +17080,7 @@ export class SimWorld {
         // TIME, not at once. DataA is the total hit points and DataB the total mana the
         // effect is worth across `Dur1`, so the per-second rate is the total over the
         // duration: the Healing Salve's 400 HP / 45s, the greater Clarity Potion's 200 mana
-        // / 45s, a Scroll of Rejuvenation's 250 + 100 (1.27a Units\AbilityData.slk).
+        // / 45s, a Scroll of Rejuvenation's 250 + 100 (Units\AbilityData.slk).
         //
         // Which buff the unit visibly wears is the ability's own choice among the three it
         // lists (`BuffID1 = BIrg,BIrl,BIrm`): life-and-mana, life alone, mana alone. So the
@@ -18007,7 +18007,7 @@ export class SimWorld {
       // own data — the tomes use `Targetart` (AIsm/AIam/AIim → …\AIsmTarget.mdl et al) but
       // the Tome of Experience, Manual of Health and Chest of Gold use `Casterart` for the
       // very same job — so take whichever is set. Every powerup attaches at `origin`, which
-      // is where a unit-targeted effect already plays. (1.27a Units\ItemAbilityFunc.txt.)
+      // is where a unit-targeted effect already plays. (Units\ItemAbilityFunc.txt.)
       //
       // An AoE rune plays it on EVERY unit it restored, not just the one that stepped on it:
       // the flash over each of them is how the player can see who was in range.

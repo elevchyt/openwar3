@@ -133,7 +133,7 @@ export interface QuestObj {
 }
 
 /** A JASS `defeatcondition` (CreateDefeatCondition) — held so the handles behave and a
- *  script can round-trip its description, but not rendered: 1.27's own F9 dialog has no
+ *  script can round-trip its description, but not rendered: the game's own F9 dialog has no
  *  visible slot for them (the FDF's QuestConditionListScrollBar anchors to a container no
  *  file declares), and inventing one would be guessing. */
 export interface DefeatConditionObj {

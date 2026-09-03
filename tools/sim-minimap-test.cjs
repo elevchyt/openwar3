@@ -84,7 +84,7 @@ console.log("\nyour own team survives the fog; the enemy does not");
 // override was the VIEWPOINT-INDEPENDENT half of hiddenFor, which meant a friendly unit inside a
 // gold mine or a burrow painted a dot at the spot it walked in from.
 //
-// The developer drove the real 1.27a client and reported: no dot. So `isOffField` is now tested
+// The developer drove the real client and reported: no dot. So `isOffField` is now tested
 // first and on its own, and the own-team clause does only the fog job it reads like.
 console.log("\na unit that is off the field gets no dot, not even its owner's (item 3c)");
 {
@@ -203,7 +203,7 @@ console.log("\nunder normal fog a creep camp never rates a marker, discovered or
 // Minimap GLYPHS. Phase D asked "should these be fog-gated?", Phase E item 4 closed it as "no
 // gate, measured against the real client", and ISSUE #71 reopened and settled it the other way:
 // that measurement was taken under the dev default `?dev&fog=explored`, where the whole map is
-// explored from tick 0 and any gate is invisible. Under normal fog the real 1.27a client shows
+// explored from tick 0 and any gate is invisible. Under normal fog the real client shows
 // no mine, no tavern and no fountain until you have been there — and once you have, the glyph
 // stays put, because `explored` is sticky. So the gate is EXPLORED, not VISIBLE.
 console.log("\nminimap glyphs appear on discovery and stay (#71)");

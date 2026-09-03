@@ -3,7 +3,7 @@
 // C-ish frame language. `Game.dll` calls this the `frame`/`framedef`/`fdfile` system
 // (see docs/reverse-engineering/game-dll-thread.md), so we mirror the names.
 //
-// Grammar (verified by sweeping all 86 shipped .fdf files in the 1.27a MPQs):
+// Grammar (verified by sweeping all 86 shipped .fdf files in the real game data):
 //   IncludeFile "path",
 //   StringList { KEY "value", ... }
 //   Frame "TYPE" "Name" [INHERITS [WITHCHILDREN] "Template"] { ...body... }

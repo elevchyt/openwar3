@@ -5,7 +5,7 @@ import { PATHING_CELL, type PathingGrid } from "./pathing";
 // their own pathing textures (`pathTex`), applied here so units path around them.
 //
 // WC3 pathing textures carry TWO independent channels (verified against the real
-// 1.27a MPQs — e.g. `PathTextures\12x12Simple.tga` for the Barracks):
+// game data — e.g. `PathTextures\12x12Simple.tga` for the Barracks):
 //   R channel > 0 → UNWALKABLE  (blocks unit movement / collision)
 //   B channel > 0 → UNBUILDABLE (blocks *building placement* only — still walkable)
 //   G stays 0 → still flyable.
@@ -91,7 +91,7 @@ export function stampFootprints(
  * same 270 (`StoneWall3Path.tga`, 2×10) or the SAME texture at `fixedRot` 0 — both gates read
  * `Gate1Path.tga` (20×4), and only the facing tells them apart.
  *
- * Verified against the real 1.27a `Units\DestructableData.slk`: applied to every destructible
+ * Verified against the real `Units\DestructableData.slk`: applied to every destructible
  * whose name declares HORIZONTAL or VERTICAL it yields the matching shape in **all 76 cases,
  * 0 mismatches** — gates, doors, stone walls, and all four bridge/cliff sizes. It also lands
  * WarChasers' gates across the corridors `war3map.wpm` actually leaves open (a vertical gate

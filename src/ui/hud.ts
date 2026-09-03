@@ -458,7 +458,7 @@ const INVENTORY_GAP = { col: 12.5 / 167.5, row: 9.5 / 251.5 } as const;
  * Not a socket, so it is not one of the zones above: the cover is a whole texture, most of it
  * transparent, laid over that corner of the console. Its rect was solved by matching the blue
  * emblem inside the texture (u 0.3633…0.8438, v 0.5723…0.9160 of `<Race>UITile-InventoryCover`)
- * against the same emblem in a real 1.27a frame (x 0.5191…0.5798, y 0.0217…0.1092). The solve
+ * against the same emblem in a real client frame (x 0.5191…0.5798, y 0.0217…0.1092). The solve
  * lands on 0.1263 × 0.2545 — a ratio of 0.496 against the texture's own 256 × 512 — so the
  * game draws it UNSTRETCHED, which is the check that the fit is a real one and not two
  * measurements that happened to meet. It stands taller than the band; the overhang is the
@@ -495,7 +495,7 @@ export const PLAYER_COLORS = [
 ];
 
 // Marker sizes, as a fraction of the minimap widget's side. Measured off the real
-// 1.27a client (its minimap is ~249px wide): a weak camp's dot spans ~3.2% of that,
+// client (its minimap is ~249px wide): a weak camp's dot spans ~3.2% of that,
 // a gold-mine or house glyph ~4.5%. Ours draw ~1.4× those fractions — the client
 // paints at native resolution, while this canvas is only MINIMAP_SIZE across and is
 // then scaled up into the console frame, so the client's fractions come out mushy.
@@ -533,7 +533,7 @@ const TOOLTIP_COST_ICON = {
 // That texture is a 128×16 grey slab — a bright top row over a flat body over a darker
 // bottom, with a faint barrel shade across its width. The engine multiplies it by the bar's
 // colour and drops it inside a plain black frame; everything else is that frame showing
-// through. Measured off the real 1.27a client (Warcraft III/Screenshots, 1424×720): a
+// through. Measured off the real client (Warcraft III/Screenshots, 1424×720): a
 // peasant's bar is 5 rows of fill inside a 1px top/bottom, 2px left/right black border, and
 // its pixels come back 0,255,0 / 0,151,0 / … — the texture's own 255 / 151 / … rows times a
 // PURE green. Hence the tints below.
@@ -628,7 +628,7 @@ const BIGBAR_TINT = {
 } as const;
 
 /** The colour each bar multiplies the fill texture by. Green is measured (see above), so
- *  yellow and red are the engine's matching primaries. 1.27a floats no mana bar at all, so
+ *  yellow and red are the engine's matching primaries. WC3 floats no mana bar at all, so
  *  its blue has no measurement to match — this is the value the game's own mana art carries,
  *  ManaBarConsoleSmall.mdx's geoset colour (0.0627, 0, 0.9020). */
 const STATBAR_TINT = {
@@ -954,7 +954,7 @@ function bakeStatBarFill(fill: HTMLCanvasElement, tint: readonly number[], rows 
 }
 
 /** The tooltip fill is a flat colour stored as a 64×64 texture — read its one pixel
- *  rather than hardcoding it. (1.27a: rgba(24, 34, 49, 195).) */
+ *  rather than hardcoding it. (Measured: rgba(24, 34, 49, 195).) */
 function tooltipFill(bg: HTMLCanvasElement): string | null {
   const p = bg.getContext("2d")!.getImageData(0, 0, 1, 1).data;
   return `rgba(${p[0]}, ${p[1]}, ${p[2]}, ${(p[3] / 255).toFixed(3)})`;
@@ -962,7 +962,7 @@ function tooltipFill(bg: HTMLCanvasElement): string | null {
 
 /** Crop war3mapMap.blp down to the map itself.
  *
- *  The World Editor always writes a SQUARE minimap image (256×256 in every 1.27a
+ *  The World Editor always writes a SQUARE minimap image (256×256 in every stock
  *  melee map) with the map contain-fitted into it and the leftover margins left
  *  fully transparent. Verified against the real maps: (2)BootyBay is 193×97 tiles
  *  (2:1), and its alpha goes solid at y=64 = (256 − 256/2) / 2; (2)PlunderIsle is

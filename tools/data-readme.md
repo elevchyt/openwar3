@@ -3,8 +3,8 @@
 <!-- Source of truth: tools/data-readme.md. `node tools/build-data-browser.mjs` copies it here.
      Edit it there, not in ExtractedData/ — this folder gets wiped and rebuilt. -->
 
-Generated from the install in this folder's parent — a 1.30.4 **CASC content store** or the four
-**MPQ** archives of 1.27a and older, whichever is there:
+Generated from the install in this folder's parent — the targeted 1.30.4 **CASC content store**, or the
+four **MPQ** archives of a legacy install, whichever is there:
 
 ```bash
 pnpm data:extract    # unpack the install  (tools/extract-data.mjs)
@@ -79,7 +79,7 @@ Deprecated.mpq  <  War3.mpq  <  <locale>-War3Local.mpq
 | `War3.mpq` | Everything shared — RoC **and** TFT data, models, textures, effect sounds |
 | `<locale>-War3Local.mpq` | **Localized** content: unit voice lines, UI strings, cinematics, and the campaign maps |
 
-**1.27a and older** — four MoPaQ archives, mirrored in `src/vfs/profiles.ts`:
+**Legacy MPQ era** — four MoPaQ archives, mirrored in `src/vfs/profiles.ts`:
 
 ```
 War3.mpq  <  War3x.mpq  <  War3xLocal.mpq  <  War3Patch.mpq
@@ -90,15 +90,15 @@ War3.mpq  <  War3x.mpq  <  War3xLocal.mpq  <  War3Patch.mpq
 | `War3.mpq` | 10,600 | All **Reign of Chaos** content: data tables, models, textures, and the base (PCM) sounds |
 | `War3x.mpq` | 6,127 | **Frozen Throne** models, data tables, textures, effect sounds |
 | `War3xLocal.mpq` | 1,136 | TFT **localized** content — unit **voice** lines (`enUS`), cinematics |
-| `War3Patch.mpq` | 578 | The 1.27a patch. **Highest priority — always authoritative.** |
+| `War3Patch.mpq` | 578 | The patch archive. **Highest priority — always authoritative.** |
 
-So on 1.27a a TFT unit like the Blood Mage draws its *model* from `War3x` but its *voice lines* from
+So on an MPQ install a TFT unit like the Blood Mage draws its *model* from `War3x` but its *voice lines* from
 `War3xLocal`, and if the patch touched its stats, `War3Patch` has the real numbers. On 1.30.4 the first two
 of those are one archive.
 
 **When a reference and the game data disagree, the game data wins.** That's the prime directive in `CLAUDE.md`.
 
-### Two facts about `War3Patch.mpq` worth knowing (1.27a installs)
+### Two facts about `War3Patch.mpq` worth knowing (MPQ installs)
 
 1. **It ships no `(listfile)`.** All 576 of its blocks are anonymous; a generic MPQ tool shows you
    `file00000000`, `file00000001`, … and nothing else. The hash table still resolves a *name* to a block,
@@ -385,7 +385,7 @@ hiveworkshop 403s plain fetchers, send a browser `User-Agent`).
   and `Units\CommandStrings.txt` are the same block, and collapse to a single file when extracted onto a
   case-insensitive filesystem. That is why 629 data-path spellings yield 627 files on disk (one, `war3x.txt`,
   fails to decode; two collapse into one).
-- **`War3x.mpq\war3x.txt` cannot be decoded** (1.27a) — a root-level stub with a malformed sector table
+- **`War3x.mpq\war3x.txt` cannot be decoded** (MPQ installs) — a root-level stub with a malformed sector table
   (its declared sector count doesn't fit the block). Not gameplay data; the extractor logs it and moves on.
   It is the only decode failure in the whole archive set, and it is absent from `merged/`.
 - **All TFT audio is Huffman(+ADPCM) compressed.** `War3.mpq` WAVs are plain PCM, but *every* `War3x` /

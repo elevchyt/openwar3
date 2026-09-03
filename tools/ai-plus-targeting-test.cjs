@@ -39,7 +39,7 @@ function unit(over = {}) {
 }
 
 // The two units the whole "who does an easy computer hit" question is about. Numbers are the
-// 1.27a ones: a Tauren is 1300 hit points of meat, a Shaman 400 with a mana bar.
+// real ones: a Tauren is 1300 hit points of meat, a Shaman 400 with a mana bar.
 const tauren = () => unit({ hp: 1300, maxHp: 1300 });
 const shaman = () => unit({ hp: 400, maxHp: 400, maxMana: 300 });
 

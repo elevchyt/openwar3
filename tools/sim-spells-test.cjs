@@ -2,7 +2,7 @@
 //
 // Each handler is called directly with a stub SpellApi, so what is being verified is the
 // thing that actually matters: which Data column each spell reads, and what buff it turns
-// it into. The numbers are the real 1.27a ones from Units\AbilityData.slk, and the column
+// it into. The numbers are the real ones from Units\AbilityData.slk, and the column
 // MEANINGS are the game's own (AbilityMetaData.slk `useSpecific` → WorldEditStrings.txt).
 //
 // Run: pnpm sim:test

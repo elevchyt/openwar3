@@ -8,7 +8,7 @@
 // The chooser is driven over a REAL SimWorld, not a stub of one: its legality gate is
 // `SimWorld.castError` / `castUseError` — the same door a player's click goes through — so a
 // test that faked those would be testing nothing. Only the ability ROWS are stubs, and their
-// numbers are the 1.27a ones from Units\AbilityData.slk.
+// numbers are the real ones from Units\AbilityData.slk.
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");

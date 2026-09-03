@@ -7,7 +7,7 @@ import { ArmorType, AttackType } from "./enums";
 //   MISC_DATA  ← Units\MiscData.txt [Misc]   (timing, ranges, day/night, decay)
 //   MELEE      ← Scripts\Blizzard.j bj_*     (melee-game setup: gold, lumber, radii)
 //
-// All three are read straight from the real 1.27a MPQs (War3.mpq / War3x.mpq /
+// All three are read straight from the real game data (War3.mpq / War3x.mpq /
 // War3Patch.mpq — the patch layer wins). The World Editor exposes MiscGame/MiscData
 // under Advanced → Gameplay Constants; each key below keeps its **exact file name**
 // so a value can be checked against the game in one grep, and `pnpm data:verify`
@@ -145,7 +145,7 @@ export const MISC_GAME = {
   /** WE: "Inventory - Sell Item Range" — reach to pawn an item at a shop. */
   PawnItemRange: 300,
   /** What a shop pays for an item you sell back: HALF its gold value. Note this is 0.50 in
-   *  the real 1.27a data, not the 60% widely quoted online (that figure is from a later
+   *  the real data, not the 60% widely quoted online (that figure is from a later
    *  patch / Reforged). The MPQ wins. */
   PawnItemRate: 0.5,
 
@@ -329,7 +329,7 @@ export const MISC_ENGINE = {
  *  camp's marker is coloured and sized by the camp's combined level, and the colour
  *  every non-player unit's dot is drawn in. Colours are the file's own **ARGB**.
  *
- *  Confirmed against the real 1.27a client (a fresh melee game on Booty Bay): the
+ *  Confirmed against the real client (a fresh melee game on Booty Bay): the
  *  creep marker is a flat ellipse in `MinimapWeakCampColor` and the creep / neutral
  *  dots sample as exactly `#000032` — `FogColorCreepNormal` with its alpha dropped.
  *  `MinimapCampPulseScale` (the marker's idle pulse) is not modelled. */

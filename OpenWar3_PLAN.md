@@ -1,7 +1,7 @@
 # OpenWar3 — Build Plan
 
 A browser-first, asset-compatible re-creation of the Warcraft III engine, in **TypeScript**.
-**Base version: 1.27a**, **The Frozen Throne first** (Reign of Chaos supported later as a content
+**Base version: 1.30.4**, **The Frozen Throne first** (Reign of Chaos supported later as a content
 profile, not a fork). Players supply their own legally-owned game files; **OpenWar3 ships and hosts no
 Blizzard assets** — and is **playable with zero assets** via placeholders (see §2). The UI is a
 **faithful, asset-driven recreation** of the original menus and HUD (see §10).
@@ -20,7 +20,7 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
 - **Melee vs. custom map classification (2026-07-04, latest+29)** — the engine now tells a **standard melee**
   map from a **custom / scenario / game-mode** map instead of force-running melee init on everything. Ground truth is
   the **`war3map.w3i` melee flag (0x0004)**, which the World Editor sets iff the map is melee — verified against **all
-  161 bundled 1.27a maps** (every stock melee map has the flag + all 8 `Melee*` init funcs in `war3map.j`; every
+  161 bundled maps** (every stock melee map has the flag + all 8 `Melee*` init funcs in `war3map.j`; every
   Scenario map has it clear; the altered-melee `(4)Monolith` calls 5/8 `Melee*` funcs but has the flag OFF → correctly
   classified custom, proving the flag — not a script scan — is authoritative). New **`src/world/mapKind.ts`**
   (`classifyMap` + the full w3i flag table) and **`src/world/triggers.ts`** (`readMapScript`: reads the compiled
@@ -619,7 +619,7 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   portrait (own mini-viewer rendering `<model>_Portrait.mdx`, fallback to the unit model) with
   HP/mana bars + numeric values beneath; real race console skin (stitched `UI\Console\<Race>\
   <Race>UITile01–04.blp`, cropped to opaque chrome); main-menu panel hidden in-game
-  (body.in-game). Collision now also read from UnitData.slk (1.27 keeps it there in the RoC base
+  (body.in-game). Collision now also read from UnitData.slk (it lives there in the RoC base
   layer) so unit cell footprints are real. Known gaps: portrait uses bounds-framing (not the model's
   own Portrait camera); console zone alignment approximate (FDF later); NE/UD mining is classic-
   style (entangle/haunt later); no carry-visual on worker models.
@@ -673,7 +673,7 @@ Adding vitest for `src/sim/` is worthwhile once gameplay logic grows.
 | Build / dev server | **Vite** |
 | Rendering | **mdx-m3-viewer's WebGL renderer** (behind a thin interface) |
 | Asset parsing (MPQ/MDX/BLP/W3X/SLK/INI) | **mdx-m3-viewer** parsers |
-| Base game version | **1.27a** (format-identical to 1.27b) |
+| Base game version | **1.30.4** (The Frozen Throne) |
 | Game scope | **Frozen Throne first**; RoC later as a **content profile** |
 | Client hosting | **Vercel** — static build, **engine code only, no assets** |
 | Server hosting | **Render** — paid persistent web service (not free tier) |
@@ -695,17 +695,20 @@ the first milestone. The plan is organized as **thin vertical slices**: each pha
 runnable.
 
 **First real milestone (the "vertical slice"):**
-> Import a legally-owned **1.27a Frozen Throne** install → load one real melee `.w3x` map → render its
+> Import a legally-owned **Frozen Throne 1.30.4** install → load one real melee `.w3x` map → render its
 > terrain, tiles, cliffs, and doodads with real models → place one unit that can be selected and given
 > a move order that respects pathing. **(And: the same map is playable with placeholder primitives
 > before any assets are imported.)**
 
-### Why 1.27a / Frozen Throne
-- **MPQ only** — no CASC (`war3.mpq` = RoC base, `war3x.mpq` = TFT expansion, `war3xlocal.mpq`,
-  `war3patch.mpq`).
+### Why 1.30.4 / Frozen Throne
+- **Its UI is built for widescreen** — the console side-panels and the top bar stretch properly, which
+  earlier patches' UI does not. That is the reason it is the target.
+- **CASC, not MPQ** — three archives (`Deprecated.mpq`, `War3.mpq`, `<locale>-War3Local.mpq`) in Blizzard's
+  NGDP content store; see [`docs/casc.md`](docs/casc.md). Older MPQ-era installs still mount
+  (`src/vfs/profiles.ts`), on a best-effort basis.
 - **TFT is a superset of RoC**, layered: a Frozen Throne install already contains RoC's data under the
   expansion data. Mounting the full stack gives you TFT; that's the default.
-- **Pre-Reforged / pre-FLAC**, best-documented era. 1.27a ≡ 1.27b in file formats.
+- **Pre-Reforged** — the last classic build, and the best-documented one.
 
 ### Content profiles (how RoC and TFT coexist — one engine, not two)
 A **content profile** declares: which MPQ layers to mount + which ruleset/roster/balance is active +
@@ -724,7 +727,7 @@ assets.**
   *you* a distribution license; hosting the files is redistribution and gets projects taken down.
 - **Assets come only from the user's own local install**, read client-side and cached in OPFS.
   Copyrighted bytes never touch your servers.
-- Legitimacy check is **local** (hash `war3.mpq` etc. against known-good 1.27a checksums), not a server
+- Legitimacy check is **local** (hash the install's own files against known-good checksums), not a server
   unlock. Largely self-enforcing: no assets, nothing renders.
 - The engine itself is your code and can be fully public. *(Not legal advice — but this is the
   well-trodden safe path.)*
@@ -819,11 +822,11 @@ the resolver, which decides install vs CC0 vs primitive.
 
 ---
 
-## 4. File-format map (1.27a)
+## 4. File-format map (1.30.4)
 
-| Concern | **1.27a (base)** | Changes in 1.30+ / Reforged (later, §9) |
+| Concern | **1.30.4 (base)** | Other eras (legacy MPQ / Reforged — §9) |
 |---|---|---|
-| Base data container | **MPQ** (`war3.mpq` RoC, `war3x.mpq` TFT, `war3xlocal.mpq`, `war3patch.mpq`) | → **CASC** |
+| Base data container | **CASC** (`Deprecated.mpq`, `War3.mpq`, `<locale>-War3Local.mpq`) | legacy: **MPQ** (`war3.mpq`, `war3x.mpq`, `war3xlocal.mpq`, `war3patch.mpq`) |
 | Map / campaign | `.w3m`/`.w3x` / `.w3n` = **MPQ** | unchanged |
 | Models | **MDX v800** (+ MDL) | +v1000/1100, HD |
 | Textures | **BLP1** (+TGA) | +BLP2 / DDS |

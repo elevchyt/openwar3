@@ -90,7 +90,7 @@ export interface OverlayHost {
 
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 
-// The bar's shape, measured off the real 1.27a client (Warcraft III/Screenshots, 1424×720).
+// The bar's shape, measured off the real client (Warcraft III/Screenshots, 1424×720).
 //
 // Its HEIGHT is fixed: a peasant's bar and a Town Hall's are both ~7px of frame there, only
 // four times apart in width. Its WIDTH grows with how big the thing is on screen — 64px of
@@ -314,7 +314,7 @@ export class WorldOverlays {
           bar.hp.dataset.state = state;
         }
       }
-      // Mana bar (units/heroes with a mana pool). 1.27a floats no mana bar of its own,
+      // Mana bar (units/heroes with a mana pool). WC3 floats no mana bar of its own,
       // so it has no mana art either — the game builds one out of the SAME textures under
       // a blue geoset colour (war3skins.txt points SimpleManaBarConsole at the health
       // fill, and ManaBarConsoleSmall.mdx is HPBarConsoleSmall.mdx in blue), and so do we.
@@ -480,7 +480,7 @@ export class WorldOverlays {
       }
       // Bar width tracks the unit/building on-screen size (≈ its footprint), floored at the
       // width the game gives its smallest units. Heroes get a wider one so their HP + mana
-      // stand out (1.27a floats neither, so there is nothing to match here).
+      // stand out (WC3 floats neither, so there is nothing to match here).
       const barW = s.isHero
         ? Math.max(minW * 1.25, Math.min(maxW, p.ry * 3))
         : Math.max(minW, Math.min(maxW, p.ry * 2.4));

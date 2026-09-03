@@ -61,7 +61,7 @@ const isMpq = (name: string): boolean => name.toLowerCase().endsWith(".mpq");
 /**
  * A picked install, whichever storage it uses (issue #102).
  *
- * `files` is the same as it always was — the MPQ archives of a 1.27a install, plus the maps
+ * `files` is the same as it always was — the MPQ archives of an MPQ-era install, plus the maps
  * on disk, which BOTH eras keep in a plain `Maps\` folder. `casc` is filled in instead of the
  * archives when the folder is 1.30+: `.build.info` beside the exe and the `Data\` content
  * store. The two never coexist, and the loader mounts whichever it was handed.
@@ -71,7 +71,7 @@ export interface PickedInstall {
   casc: CascFiles | null;
 }
 
-/** `.build.info` is the marker of a CASC install; a 1.27a folder has no such file. */
+/** `.build.info` is the marker of a CASC install; an MPQ-era folder has no such file. */
 const BUILD_INFO = ".build.info";
 const isIdx = (name: string): boolean => /^[0-9a-f]{10}\.idx$/i.test(name);
 const dataFileNumber = (name: string): number | null => {

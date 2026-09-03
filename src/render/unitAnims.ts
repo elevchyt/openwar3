@@ -97,7 +97,7 @@ export interface AnimSet {
 // model carrying every tier as sequences — TownHall.mdx holds "Stand" (Town Hall), "Stand
 // Upgrade First" (Keep) and "Stand Upgrade Second" (Castle); HumanTower.mdx holds the Scout,
 // Guard, Cannon and Arcane towers the same way — and the unit's Animprops name its own set.
-// This is the whole closed vocabulary used for tiers across the 1.27a data.
+// This is the whole closed vocabulary used for tiers across the real game data.
 //
 // `swim` is also an Animprops but is STATE, not identity (a unit plays it only in water — never
 // here, water is unwalkable), so it's not handled — the pickers exclude swim clips outright
@@ -279,7 +279,7 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
   // that ourselves — our units are raw MdxComplexInstances, NOT mdx-m3-viewer Widgets, so its
   // Widget.update → randomStandSequence never runs). `stand` is the FIRST plain stand, the
   // canonical idle (never a swim/carry clip). Attack swings ARE randomized here (swing-driven,
-  // below). Verified against real 1.27a models — Footman "Stand - 1/2/4", Peasant
+  // below). Verified against real models — Footman "Stand - 1/2/4", Peasant
   // "Stand/-2/-3/-4", Naga "Stand"+"Stand - 2" alongside its Swim/Ready variants (issue #38).
   const PLAIN_STAND = /^stand(\s*-?\s*\d+)?\s*$/i;
   const PLAIN_ATTACK = /^attack(\s*-?\s*\d+)?\s*$/i;
@@ -311,7 +311,7 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
   /**
    * The SWING clips, for a model that authors no plain "Attack" at all.
    *
-   * 102 of the 835 unit models in 1.27a are in that position, and picking "the first sequence
+   * 102 of the 835 unit models are in that position, and picking "the first sequence
    * whose name contains attack" is wrong for the biggest group of them: the Owlbear
    * (nowb/nowe/nowk — the Wildkin, the Enraged and the Berserk), the sasquatches and the
    * furbolgs all author
@@ -484,7 +484,7 @@ export function setAnimRate(e: AnimEntry, rate: number): void {
  *
  *  It is NOT `clip length / (damagePoint + backswing)`. That pair looks like the clip's
  *  authored length on the units one checks first (Footman 0.5+0.5 = his 1000ms
- *  "Attack - 1"; Archmage 0.55+0.85 = 1400ms), but across every 1.27a model only 377 of
+ *  "Attack - 1"; Archmage 0.55+0.85 = 1400ms), but across every model only 377 of
  *  706 plain-attack clips land within 10% of it — 265 are LONGER, so fitting them to the
  *  pair played them up to 2.5x too fast while their cooldown stayed right (Frost/Fire
  *  Treant 1.5s clips against a 0.6 pair). The giveaway is a unit whose own variants

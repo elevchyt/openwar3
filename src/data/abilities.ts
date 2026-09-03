@@ -206,7 +206,7 @@ export interface AbilityDef {
    *  none and sound themselves off their effect model's embedded SND event instead, which
    *  is why this is a fallback rather than the primary source: of the powerups, the runes
    *  and glyphs name `Effectsound=PowerupSound` while every TOME names nothing at all and
-   *  relies on the SND…AITM event inside its Target model (verified 1.27a
+   *  relies on the SND…AITM event inside its Target model (verified in
    *  Units\ItemAbilityFunc.txt + AbilitySounds.slk row Y49). */
   effectSound: string;
   /** AbilityFunc `Effectsoundlooped` — the LABEL of the bed that plays for as long as the
@@ -219,7 +219,7 @@ export interface AbilityDef {
    *  buffFx (worn while it lasts) and the ability's `Effectart` (a pre-cast warning).
    *  This is where an unsummon lives: `[BOsf] Effectart = …\feralspiritdone.mdl` is what
    *  replaces a Feral Spirit wolf when its timer runs out. Verified 2026-07 against the
-   *  1.27 MPQ (BOsf/BNsg/BNsq/BNsw all carry it). */
+   *  real game data (BOsf/BNsg/BNsq/BNsw all carry it). */
   buffEffectArt: string;
   /** The buff's own `Specialart` — a PROC, and what it means is per-ability, so read it
    *  only where you know the ability: Frost Armor's is the chill on an attacker, Mirror
@@ -778,7 +778,7 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // a Ghoul before 1.30.0 changed it; 1.30.4 data says Crypt Fiend.)
   Aexh: { target: "passive" },
   // `Adet` "Detect (Sentry Ward)" (Rng1 1100) is in AbilityData.slk but NO unit lists it in
-  // 1.27a's UnitAbilities.slk — it is a dead row. It stays out of this table (nothing would
+  // the game's UnitAbilities.slk — it is a dead row. It stays out of this table (nothing would
   // ever carry it) while the sim's detect derivation still honours the code, so a custom map
   // that hands it out gets the radius the data promises. The Gem of True Seeing (`Adt1`) is
   // what actually hands it out — an ITEM, which is why no unit does (see itemAbilityLevel).
@@ -971,7 +971,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       // The persistent buff model lives on the BUFF, not the ability: resolve
       // buffid1's own [B….] func section TargetArt (Banish → BanishTarget, an aura →
       // GeneralAuraTarget, Flame Strike → FlameStrikeDamageTarget). Verified 2026-07
-      // against the 1.27 MPQ (docs/wc3-data-formats.md).
+      // against the real game data (docs/wc3-data-formats.md).
       buffFx: buffFx,
       buffArt: buffFx[0]?.path ?? "",
       buffEffectArt: mdlPath(buffField(func, str(r, "buffid1"), "Effectart")),
@@ -1221,7 +1221,7 @@ function buffField(func: MappedData, buffId: string, key: string): string {
  *            Targetattach1 = hand,right     ← model 1
  *  So `Targetattach` is model 0's spec and `Targetattach<i>` is model i's — and each
  *  spec is ITSELF a comma-list of tokens ("hand" + "left"), not two attach points.
- *  Verified 2026-07 against the 1.27 MPQ (Bblo/BUts/Bbsk/BHds; docs/wc3-data-formats.md).
+ *  Verified 2026-07 against the real game data (Bblo/BUts/Bbsk/BHds; docs/wc3-data-formats.md).
  */
 function buffFxOf(func: MappedData, buffId: string): BuffFx[] {
   const row = buffRow(func, buffId);

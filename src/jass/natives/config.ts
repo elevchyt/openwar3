@@ -100,7 +100,7 @@ export function registerConfigNatives(rt: Runtime): void {
 
   // --- the player-table shape itself (issue #102) ---
   //
-  // All six of these were LITERALS in 1.27a's common.j/Blizzard.j:
+  // All six of these were LITERALS in the game's common.j/Blizzard.j:
   //
   //     constant integer bj_MAX_PLAYERS            = 12
   //     constant integer bj_MAX_PLAYER_SLOTS       = 16

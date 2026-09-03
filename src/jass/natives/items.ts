@@ -2,7 +2,7 @@
 //
 // The trigger surface for items: create one, give it to a hero, drop it, use it,
 // destroy it, and ask what/where it is. Signatures are taken from the real
-// `Scripts\common.j` (1.27a), and everything the GUI actually emits — the whole
+// `Scripts\common.j`, and everything the GUI actually emits — the whole
 // `…BJ` family (UnitAddItemByIdSwapped, UnitDropItemPointLoc, GetItemLoc,
 // GetInventoryIndexOfItemTypeBJ, ChooseRandomItemExBJ, CheckItemStatus, the
 // RandomDist* distribution) — is blizzard.j code we already interpret, riding on
@@ -38,7 +38,7 @@ const info = (c: NativeCtx, it: JassItem | undefined): ItemSnapshot | null =>
   it && it.simId >= 0 ? c.rt.hooks?.itemInfo?.(it.simId) ?? null : null;
 
 /** common.j's `itemtype` (ConvertItemType) ↔ ItemData.slk's `class` column. The enum's
- *  order IS the SLK's vocabulary (verified against the 1.27a ItemData.slk, whose only
+ *  order IS the SLK's vocabulary (verified against the real ItemData.slk, whose only
  *  class values are exactly these seven). ITEM_TYPE_UNKNOWN (7) and _ANY (8) match no
  *  single class — _ANY means "don't filter", which is how ChooseRandomItemEx reads it. */
 const ITEM_CLASSES = ["Permanent", "Charged", "PowerUp", "Artifact", "Purchasable", "Campaign", "Miscellaneous"];

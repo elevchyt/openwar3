@@ -4,7 +4,7 @@
 // cells, and a slow angry tree that walks and swings. What is verified here is that both
 // states fall out of the DATA rather than out of hardcoded special cases.
 //
-// Numbers are the real 1.27a ones from Units\AbilityData.slk, with the column meanings from
+// Numbers are the real ones from Units\AbilityData.slk, with the column meanings from
 // AbilityMetaData.slk Roo1..Roo4 → UI\WorldEditStrings.txt:
 //   DataA "Rooted Weapons"        Aroo/Aro1 = 1, Aro2 = 2   (same bitmask as weapsOn)
 //   DataB "Uprooted Weapons"      Aroo/Aro1 = 2, Aro2 = 1

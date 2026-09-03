@@ -8,7 +8,7 @@
 //                         written; CreateUnit('hfoo', …) is an integer arg.
 //   • hex       0xFF  or  $FF   (both integer)
 //   • reals     3.14, .5, 3.    — a dot with digits on at least one side
-// Verified against the real 1.27a Scripts\common.j / a map's war3map.j.
+// Verified against the real Scripts\common.j / a map's war3map.j.
 
 export type TokenKind =
   | "id" // identifier or keyword (see KEYWORDS)

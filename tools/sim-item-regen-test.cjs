@@ -1,7 +1,7 @@
 // Headless check of the regeneration items' effect (`AIrg` — Healing Salve, Clarity Potion,
 // Potion & Scroll of Rejuvenation): restore over time, and break when the holder is hit.
 //
-// The numbers are the real 1.27a ones from Units\AbilityData.slk (DataA = total hit points,
+// The numbers are the real ones from Units\AbilityData.slk (DataA = total hit points,
 // DataB = total mana, Dur1 = seconds). Driving useItem() itself would need the item and
 // ability registries — i.e. the MPQs — so this exercises the buff mechanics the case builds,
 // which is where the behaviour actually lives.

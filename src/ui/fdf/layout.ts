@@ -4,7 +4,7 @@ import { allProps, firstProp, hasFlag, numProp } from "./library";
 // FDF layout solver — turns SetPoint/SetAllPoints/Anchor + Width/Height into world
 // rectangles. WC3 glue screens are authored in a fixed coordinate space: the screen
 // is 0.8 wide × 0.6 tall (4:3), origin BOTTOM-LEFT, +y UP (verified against the
-// 1.27a MPQs — every offset in MainMenu.fdf reads that way, e.g. the top button is
+// real game data — every offset in MainMenu.fdf reads that way, e.g. the top button is
 // -0.110625 *below* the frame's top-right). SetPoint offsets are +x right / +y up.
 
 export const UI_WIDTH = 0.8;

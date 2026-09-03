@@ -4,7 +4,7 @@ import type { DataSource } from "../vfs/types";
 // UberSplat registry — the "ground texture" decals WC3 paints on the terrain under
 // buildings (and gold mines). A unit's `uberSplat` code (UnitUI.slk, see units.ts)
 // keys a row in `Splats\UberSplatData.slk` that gives the texture + how big to draw
-// it. Verified against the real 1.27a MPQs (War3x.mpq holds UberSplatData.slk):
+// it. Verified against the real game data (War3x.mpq holds UberSplatData.slk):
 //
 //   HTOW → dir=ReplaceableTextures\Splats file=HumanTownHallUberSplat scale=230 blend=0
 //   HMED → …\HumanUberSplat scale=190 …   OLAR → …\OrcUberSplat scale=240 …

@@ -2,7 +2,7 @@
 
 ![OpenWar3 screenshot](screenshot.png)
 
-A recreation of the **Warcraft III** engine in TypeScript. Ships **zero Blizzard assets** — uses your own install at runtime (1.30's CASC content store is recommended, but works semi-well with the MPQs of 1.27a and older).
+A recreation of the **Warcraft III** engine in TypeScript. Ships **zero Blizzard assets** — uses your own install at runtime. **The Frozen Throne 1.30.4** is the recommended version — it is what OpenWar3 targets, and its CASC content store is the storage the engine is built around. Older MPQ-era installs still mount, but are supported only on a best-effort basis.
 
 Goal: liberate WC3 from legacy constraints and bring the engine up to modern standards. Features planned:
 

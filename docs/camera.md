@@ -1,7 +1,7 @@
 # The camera — lens, zoom, ground-follow, and a map's own camera
 
 What Warcraft III's camera actually does, and the trap that cost this project several wrong
-commits in a row. The numbers here are **measured against the real 1.27a client**, with a ruler
+commits in a row. The numbers here are **measured against the real client**, with a ruler
 that no asset can corrupt (see below) — the previous two attempts both measured a *model*, and
 both were wrong.
 

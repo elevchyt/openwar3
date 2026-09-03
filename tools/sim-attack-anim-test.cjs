@@ -1,4 +1,4 @@
-// Which clip a unit SWINGS — checked against the sequence lists real 1.27a models ship.
+// Which clip a unit SWINGS — checked against the sequence lists real models ship.
 //
 // A model that authors a plain "Attack" (or "Attack - 2", …) is the easy majority. 102 of the
 // 835 unit models author none, and for them the picker used to take "the first sequence whose

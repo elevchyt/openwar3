@@ -126,7 +126,7 @@ export interface UnitDef {
   /** Art - Animation - Walk Speed / Run Speed (unitUI "walk"/"run"). NOT how fast the unit
    *  moves — the movement speed at which the model's "Walk" / "Walk Fast" clips were AUTHORED
    *  to look natural at 1.0x playback. They are literal copies of the MDX sequence's own
-   *  MoveSpeed field (verified against the real 1.27a models: Kodo Beast's Walk=100 /
+   *  MoveSpeed field (verified against the real models: Kodo Beast's Walk=100 /
    *  Walk Fast=240 match its SLK 100/240 exactly). The renderer re-rates the walk cycle by
    *  `current speed / gait` so a slowed or hasted unit's feet stay planted — nearly every
    *  stock unit has spd > walk (Footman 270 vs 210), so they habitually walk slightly fast.
@@ -393,7 +393,7 @@ export interface UnitDef {
   // spell takes effect (added to the ability's own Casting Time); 0 = instant.
   // Cast backswing = the recovery animation AFTER the effect — pure follow-through
   // that a new order cancels for free (the "animation canceling" micro). Verified
-  // against the real 1.27 MPQ (Archmage 0.3/2.4, Paladin 0.5/1.67, MK 0.4/0.5).
+  // against the real game data (Archmage 0.3/2.4, Paladin 0.5/1.67, MK 0.4/0.5).
   castPoint: number;
   castBackswing: number;
   attackRange: number;
@@ -619,11 +619,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // the 0.5 default the way `num` would. See UnitDef.turnRate: 0 = this thing never rotates.
       turnRate: d && d.string("turnrate") === "-" ? 0 : d ? num(d, "turnrate", 0.5) : 0.5,
       moveHeight: d ? num(d, "moveheight", 0) : 0,
-      // 1.27 layering quirk: collision lives in UnitBalance.slk in the
+      // Layering quirk: collision lives in UnitBalance.slk in the
       // expansion/patch MPQs but in UnitData.slk in the RoC base.
       collision: (b && num(b, "collision", 0)) || (d ? num(d, "collision", 0) : 0),
       // Sight radii live in UnitBalance.slk (`sight` day / `nsight` night). Verified
-      // against the real 1.27 MPQ; buildings use the same fields (Town Hall 900/600).
+      // against the real game data; buildings use the same fields (Town Hall 900/600).
       sightDay: b ? num(b, "sight", 0) : 0,
       sightNight: b ? num(b, "nsight", 0) : 0,
       // UnitData.slk `death` — how long this type takes to die. See UnitDef.deathTime.
@@ -682,7 +682,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       missileArt: "",
       missileSpeed: 900,
       // Launch/impact offsets live in UnitWeapons.slk (launchx/y/z, impactz). Verified
-      // against the real 1.27 MPQ: Archmage launchx=15/launchz=66, Archer launchy=62.
+      // against the real game data: Archmage launchx=15/launchz=66, Archer launchy=62.
       launchX: w ? num(w, "launchx", 0) : 0,
       launchY: w ? num(w, "launchy", 0) : 0,
       launchZ: w ? num(w, "launchz", 0) : 0,

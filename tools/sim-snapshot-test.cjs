@@ -444,7 +444,7 @@ console.log("a ground item in the dark is absent, because nothing remembers an i
 
 // ---------------------------------------------------------------------------------------
 // Item 6b: a building destroyed while you were not looking keeps its image until you go back
-// and see the empty ground. MEASURED in the real 1.27a client: no timeout, no decay, cleared
+// and see the empty ground. MEASURED in the real client: no timeout, no decay, cleared
 // by sight of the cell.
 // ---------------------------------------------------------------------------------------
 

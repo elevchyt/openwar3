@@ -14,7 +14,7 @@
 //  * The search reaches the caster's ACQUISITION range, not the spell's cast range —
 //    "Any friendly unit within acquisition range of the Priest will be automatically healed"
 //    (Warcraft Wiki, Priest), and autocast "can cause it to move in order to cast their
-//    spell" (Liquipedia). Real 1.27a numbers: Priest `acquire` 600 (Units\UnitWeapons.slk)
+//    spell" (Liquipedia). Real real numbers: Priest `acquire` 600 (Units\UnitWeapons.slk)
 //    against Heal `Rng1` 250 / `Cost1` 5 (Units\AbilityData.slk).
 //
 // Run: pnpm sim:test
@@ -24,7 +24,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 const { PathingGrid } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
 
-// Heal (`Ahea`) as the 1.27a row has it.
+// Heal (`Ahea`) as the real row has it.
 const HEAL = {
   id: "Ahea", code: "Ahea", target: "unit",
   targetFlags: ["air", "ground", "friend", "vuln", "invu", "self", "organic", "nonancient", "neutral"],

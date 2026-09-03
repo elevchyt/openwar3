@@ -3,7 +3,7 @@
 An **illusion** is a copy of a unit that fights but cannot hurt anything. It is the shared
 mechanic behind the Blademaster's **Mirror Image** (`AOmi`) and the **Wand of Illusion**
 (`AIil`), and a custom map can hang it off either. Everything below is verified against the
-real 1.27a MPQs — see [`REFERENCES.md`](./REFERENCES.md) for the archive layout.
+real game data — see [`REFERENCES.md`](./REFERENCES.md) for the archive layout.
 
 The point of an illusion is that **the enemy cannot tell it from the original**. Every rule
 here follows from that: it is an exact copy of the unit (same type, same stats on the sheet,

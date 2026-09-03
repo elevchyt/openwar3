@@ -5,7 +5,7 @@
 // (`ground,enemy,organic,neutral`) rather than decided in code. The rest of those flags
 // have to hold too: no flyer and no mechanical unit catches the plague.
 //
-// Numbers are the real 1.27a row: Area 176, dataA "Aura Duration" 120, dataB "Damage per
+// Numbers are the real row: Area 176, dataA "Aura Duration" 120, dataB "Damage per
 // Second" 1.
 //
 // Run: pnpm sim:test

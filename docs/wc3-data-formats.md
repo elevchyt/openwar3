@@ -20,7 +20,7 @@ live is not: 1.30.4 keeps them in a CASC content store rather than in MoPaQ arch
 | `War3.mpq` | Everything shared — RoC **and** TFT data, models, textures, effect sounds | 1.30 merged the old War3 + War3x split |
 | `<locale>-War3Local.mpq` | **Localized** content — unit voice lines, UI strings, cinematics, and the campaign maps | One locale per install (`enUS`) |
 
-**1.27a and older (still mounted).** Four MoPaQ archives, same lowest-first rule, in
+**Legacy MPQ-era installs (still mounted).** Four MoPaQ archives, same lowest-first rule, in
 `src/vfs/profiles.ts`:
 
 | Archive | Holds | Notes |
@@ -28,7 +28,7 @@ live is not: 1.30.4 keeps them in a CASC content store rather than in MoPaQ arch
 | `War3.mpq` | All **Reign of Chaos** data, models, textures, and base sounds | RoC unit/ability tables + PCM voice WAVs |
 | `War3x.mpq` | **Frozen Throne** models, data tables, textures, effect sounds | TFT-added units/abilities/heroes live here |
 | `War3xLocal.mpq` | TFT **localized** content — unit **voice** lines, cinematics | Locale-specific (`enUS`) |
-| `War3Patch.mpq` | The 1.27a patch — **overrides** rows/files in all of the above | Highest priority; always check here first |
+| `War3Patch.mpq` | The patch archive — **overrides** rows/files in all of the above | Highest priority; always check here first |
 
 A given table (e.g. `AbilityData.slk`) may exist in several archives; the last one wins. On an MPQ install,
 probe every archive when a row/file seems missing — the internal `(listfile)` is incomplete, but
@@ -102,7 +102,7 @@ A comma-separated flag list saying **what a targeted ability may be cast on**. O
 - **Unit-type:** `air`, `ground`, `organic`, `structure`, `hero`, `nonhero`, `ancient`/`nonancient`,
   `sapper`/`nonsapper`, `vuln`/`invu`, `debris`, `item`, `tree`, `ward`, …
 
-Examples (verified in the 1.27 MPQ): Storm Bolt `AHtb` = `…,enemy,neutral,…` (enemies only, never friendly);
+Examples (verified in the real game data): Storm Bolt `AHtb` = `…,enemy,neutral,…` (enemies only, never friendly);
 Heal `Ahea` = `…,friend,self,neutral,…` (allies/self, never enemy); Holy Light `AHhb` = `…,notself,…`
 (any unit but the caster); Doom `ANdo` = `…,nonhero,…` (cannot target heroes).
 
@@ -151,7 +151,7 @@ i.e. exactly `Dawn` and `Dusk`. So:
   as `u_geosetColor.bgra`), but neither it nor Warsmash swizzles the *light* colours — so both render every
   tileset's night as its own mirror image. Read straight, Lordaeron's midnight sun is a sepia `(0.80, 0.53, 0.31)`;
   swapped, it is the blue moonlight `(0.31, 0.53, 0.80)` the game actually draws. Ashenvale likewise becomes blue
-  and Felwood a sickly green. Confirmed in the real 1.27a client: `daylightsavings 12` vs `daylightsavings 1` on
+  and Felwood a sickly green. Confirmed in the real client: `daylightsavings 12` vs `daylightsavings 1` on
   Lordaeron Summer darkens flat ground by exactly `(0.385, 0.595, 0.840)` per channel.
 - Shading is WC3's fixed function: `clamp(ambColor·ambIntensity + color·intensity·max(N·L, 0), 0, 1)`, modulating
   the texel — but **only where the layer is not `Unshaded`** (flag `0x1`). Blizzard marks the team-colour layer
@@ -246,7 +246,7 @@ files rather than the game's. Open one with the same reader (`src/vfs/`). The on
 extensions is the game version they target: **`.w3m` = Reign of Chaos** maps (also playable in TFT);
 **`.w3x` = Frozen Throne** maps (TFT-only, may use expansion content). Both have the identical internal
 layout. This manifest is the full set of chunk files a map can contain, per thehelper.net's *"Explanation of
-w3m and w3x files"* thread (#35292), cross-checked against the bundled 1.27a maps; the **OpenWar3** column
+w3m and w3x files"* thread (#35292), cross-checked against the bundled maps; the **OpenWar3** column
 names the parser where we read it (all under `src/world/`, wired through `src/vfs/`).
 
 ### Terrain, pathing & minimap
@@ -351,7 +351,7 @@ Player **15** is Neutral Passive (shops, taverns, fountains, critters); neutral-
 The w3i **flags** bitfield (Map Properties) tells melee from custom. Bit **0x0004 = "melee map"** is the ground
 truth: the World Editor sets it iff the map is a standard melee map. `src/world/mapKind.ts` reads it to decide whether
 to run our standard melee setup (`startMelee`: town hall + workers + melee rules) or leave setup to the map's own
-triggers (`startCustom`). Verified against **all 161 bundled 1.27a maps**: every stock melee map has the flag set *and*
+triggers (`startCustom`). Verified against **all 161 bundled maps**: every stock melee map has the flag set *and*
 all 8 `Melee*` init functions (`MeleeStartingUnits`, `MeleeStartingResources`, …) in its `war3map.j`; every Scenario
 map has it clear. The lone TFT altered-melee map `(4)Monolith` calls 5/8 `Melee*` funcs yet has the flag **off** — so
 the **flag**, not a script scan, is authoritative (Monolith runs as custom). `src/world/triggers.ts` still scans the

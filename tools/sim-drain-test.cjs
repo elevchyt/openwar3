@@ -16,7 +16,7 @@
 //   • …and cuts the beam by tag, so the ribbon does not hang in the air for the rest of the
 //     duration (`drainLightningStops`).
 //
-// Real 1.27a rows (Units\AbilityData.slk; column names via AbilityMetaData → WorldEditStrings):
+// Real real rows (Units\AbilityData.slk; column names via AbilityMetaData → WorldEditStrings):
 //   AHdr Blood Mage - Siphon Mana   Dur1 6   DataA "Life Transferred Per Second" 0, DataB 15
 //   ANdr Dark Ranger - Drain        Dur1 8   DataA 25, DataB 0
 //

@@ -462,7 +462,7 @@ const IMPALE_HIT_ART = "Abilities\\Spells\\Undead\\Impale\\ImpaleHitTarget.mdx";
  *  you can walk out from under a Blizzard you see coming. */
 const SHARD_FALL = 0.8;
 
-// Flame Strike models, straight from the 1.27 MPQ (War3x, Abilities\Spells\Human\
+// Flame Strike models, straight from the real game data (War3x, Abilities\Spells\Human\
 // FlameStrike\). The ability's Specialart lists FlameStrike1,FlameStrike2,FlameStrike
 // but our data keeps only the first (FlameStrike1); WC3 erupts the PLAIN FlameStrike
 // pillar, whose "birth" clip burns for ~7.2s — the lingering fire. FlameStrikeEmbers
@@ -672,7 +672,7 @@ function bolts(def: AbilityDef): [string, string] {
 }
 
 /** The Drain's buff rows, by ROLE then by flavour (both, life, mana) — the order its
- *  `BuffID1` list is written in (`Bdcb,Bdcl,Bdcm,Bdtb,Bdtl,Bdtm,Bdbb,Bdbl,Bdbm`, 1.27a
+ *  `BuffID1` list is written in (`Bdcb,Bdcl,Bdcm,Bdtb,Bdtl,Bdtm,Bdbb,Bdbl,Bdbm`,
  *  Units\AbilityData.slk). The `icon` trio carries no model at all: those rows exist only to
  *  put BTNLifeDrain / BTNManaDrain on the info card, which is why they are named apart from
  *  the two that do have art. See src/sim/spells.ts AHdr and docs/spell-fx.md. */
@@ -752,7 +752,7 @@ const SUMMON_FALLBACK: Record<string, string> = {
  *  error string in commandstrings.txt (Holybolttarget/Deathcoiltarget), which is how we
  *  know the rule is the ability's and not the data's. `healsUndead` says which side the
  *  Undead are on; the handlers below apply the same split to decide heal vs. damage.
- *  Verified in the 1.27 MPQ: AHhb targs1 = "air,ground,organic,notself,invu,vuln,
+ *  Verified in the real game data: AHhb targs1 = "air,ground,organic,notself,invu,vuln,
  *  nonancient" — no allegiance flag at all, so the flags alone would let a Paladin
  *  Holy Light an enemy Footman, which the real game refuses. */
 export const POLARITY_SPELLS: Record<string, { healsUndead: boolean; error: string }> = {
@@ -1844,7 +1844,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // paint the burning circle: 9 in a ring around the area + 1 at the centre.
   //
   // Damage is TWO phases, straight from the MPQ AHfs fields (verified 2026-07 against the
-  // 1.27 SLK + ubertip): the ubertip reads "burns ground units for N damage a second for
+  // SLK + ubertip): the ubertip reads "burns ground units for N damage a second for
   // 3 seconds. As the pillar of flame subsides, units within the fire continue to take
   // minor damage." So the pillar deals "Full Damage Dealt" (dataA) every "Full Damage
   // Interval" (dataB, 0.33s) — L1 15/0.33s ≈ 45 dps, matching the tooltip's 45/80/110 —

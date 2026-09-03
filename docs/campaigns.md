@@ -226,7 +226,7 @@ ordinary custom-map path: the map is not melee-flagged, so its own triggers set 
 
 `.w3n` campaign archives (a custom campaign packaged as one file) are a separate thing and are
 **not** implemented — the stock campaigns ship as loose maps inside the MPQs, and the only
-`.w3n` in a 1.27a install is War3x's `DemoCampaign.w3n`.
+`.w3n` in an MPQ-era install is War3x's `DemoCampaign.w3n`.
 
 For DRIVING one — a chapter cannot be reached through the dev boot's `?map=`, whose manifest
 lists the install's `Maps\` folder and not the archives — there is `?dev&chapter=NightElfX01`
@@ -490,7 +490,7 @@ There is no plain `"Attack"`, and the picker's last-resort rule was "the first s
 name CONTAINS attack" — the War Stomp. So the Berserk Wildkin played a two-armed ground pound
 at every blow and never once used either of its two real slams.
 
-102 of the 835 unit models in 1.27a author no plain attack clip, and the fix is scoped by what
+102 of the 835 unit models author no plain attack clip, and the fix is scoped by what
 the tokens MEAN: a `spell` clip is a cast, and casts are picked by the cast-tag matcher off
 `seqNames`, not by the swing picker — the same reason `defend` (a stance), `swim` (a state we
 never enter) and `gold`/`lumber` (carry poses) are already excluded from the carry-attack list.

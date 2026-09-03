@@ -4,7 +4,7 @@
 //   pnpm data:extract        (or: node tools/extract-data.mjs --wc3-dir "<path>")
 //
 // Reads EITHER storage (issue #102): a 1.30+ install's CASC content store, or the four MPQs of
-// 1.27a and older. Which one a folder is, is decided by `.build.info` beside the exe, exactly
+// the MPQ era. Which one a folder is, is decided by `.build.info` beside the exe, exactly
 // as the engine decides it (src/vfs/loader.ts) — and the CASC side runs the ENGINE's own
 // reader, compiled headlessly by tools/tsconfig.casc.json, so what comes out here is what the
 // game sees rather than what a second parser thinks it should.
@@ -172,7 +172,7 @@ if (!existsSync(WC3_DIR)) {
   process.exit(1);
 }
 const casc = isCascInstallDir(WC3_DIR);
-log(casc ? 'storage: CASC (1.30+)' : 'storage: MPQ (1.27a and older)');
+log(casc ? 'storage: CASC (1.30+)' : 'storage: MPQ (the MPQ era)');
 const install = casc ? await openCasc() : openMpqInstall();
 log(`total distinct files: ${install.owners.size}`);
 

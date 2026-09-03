@@ -5,7 +5,7 @@
 // so the toggle is a morph and the target unit's own row supplies the behaviour. If that holds,
 // nobody ever has to write "a burrowed Crypt Fiend cannot move" in code.
 //
-// Real 1.27a rows (Units\AbilityData.slk; column meanings from AbilityMetaData.slk through
+// Real real rows (Units\AbilityData.slk; column meanings from AbilityMetaData.slk through
 // UI\WorldEditStrings.txt):
 //   DataA   "Normal Form Unit"     Abur = ucry, Abu2 = ucs2, Aetf = ospw
 //   UnitID1 "Alternate Form Unit"  Abur = ucrm, Abu2 = ucsB, Aetf = ospm
@@ -41,7 +41,7 @@ function check(what, got, want) {
  *  edoc/edcm are the Druid of the Claw and his bear — the pair that proves the type's WHOLE
  *  sheet has to follow the morph, not just the visible stats: hp 430→810, def 1→3,
  *  dmgplus 18→26, castpt 0.5→0.3, castbsw 1.17→0.51, and a mana pool of 200 on BOTH sides
- *  (Units\UnitBalance.slk + UnitWeapons.slk, 1.27a). */
+ *  (Units\UnitBalance.slk + UnitWeapons.slk). */
 const UNITS = {
   hpea: { id: "hpea", classification: ["peon"], acquireRange: 500, hitPoints: 220, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 190, abilities: ["Ahar", "Amil"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 4, dice: 1, sides: 2, cooldown: 2.0, damagePoint: 0.3, backswing: 0.51, range: 90, rangeBuffer: 250, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
   hmil: { id: "hmil", classification: [], acquireRange: 500, hitPoints: 220, armor: 4, armorType: "large", sightDay: 1800, sightNight: 800, speed: 270, abilities: ["Ahar", "Amil"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 11, dice: 1, sides: 2, cooldown: 2.0, damagePoint: 0.3, backswing: 0.51, range: 90, rangeBuffer: 250, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },

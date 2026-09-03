@@ -5,7 +5,7 @@ its own data, its own lifetime and its own renderer path, and the commonest bug 
 is reaching for the wrong one — looking for a model where there is only a ribbon, or hanging
 the caster's art on the target. This page says which is which and where each one's data lives.
 
-Everything here is verified against the real 1.27a MPQs; see [`REFERENCES.md`](./REFERENCES.md)
+Everything here is verified against the real game data; see [`REFERENCES.md`](./REFERENCES.md)
 for the archive layout and [`wc3-data-formats.md`](./wc3-data-formats.md) for the tables.
 
 | | what it is | data | code |

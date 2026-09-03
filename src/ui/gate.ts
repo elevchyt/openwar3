@@ -36,7 +36,7 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
   const sub = document.createElement("p");
   sub.className = "load-gate-sub";
   sub.textContent =
-    "Select your Warcraft III (TFT 1.30.4) folder to begin — a 1.27a install works too. The menu is built from the game's own files, so they're loaded first. Nothing is uploaded — your install is read locally in the browser.";
+    "Select your Warcraft III (TFT 1.30.4) folder to begin — that is the recommended version. The menu is built from the game's own files, so they're loaded first. Nothing is uploaded — your install is read locally in the browser.";
 
   const btn = document.createElement("button");
   btn.className = "load-gate-btn";

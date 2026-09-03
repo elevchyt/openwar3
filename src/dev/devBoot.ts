@@ -73,7 +73,7 @@ interface CascManifest {
 interface Manifest {
   archives: string[];
   maps: string[];
-  /** Present when the served install is 1.30+ (issue #102); null for a 1.27a one. */
+  /** Present when the served install is 1.30+ (issue #102); null for an MPQ-era one. */
   casc: CascManifest | null;
 }
 

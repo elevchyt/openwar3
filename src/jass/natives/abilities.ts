@@ -67,7 +67,7 @@ export function registerAbilityNatives(rt: Runtime): void {
   });
 
   // --- heroes: level, XP, skill points ---
-  // GetHeroLevel and GetUnitLevel are the same read in 1.27 (a non-hero is level 0/1
+  // GetHeroLevel and GetUnitLevel are the same read in WC3 (a non-hero is level 0/1
   // from its data; the sim keeps `level` for both).
   const level = (c: NativeCtx, v: JassValue): JassValue => {
     const id = simOf(c, v);

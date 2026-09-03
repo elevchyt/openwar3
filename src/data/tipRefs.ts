@@ -21,7 +21,7 @@ import type { UpgradeDef, UpgradeRegistry } from "./upgrades";
 // Improved Lumber Harvesting's two Ubertips BOTH say <Rhlh,mod1> because +10 is what each rank adds.
 //
 // Format flags (the optional third field), verified by resolving all 2017 references in the real
-// 1.27a MPQs against the tables:
+// game data against the tables:
 //   (none)  round to a whole number — which is why Shadow Meld's Dur1 of 15.1 reads "15 seconds"
 //           and a 1.01s stun reads "1". 23 of the game's references rely on this.
 //   ,%      multiply by 100 (Boots of Speed's DataA1 is 0.6 → "60"; the % sign is in the sentence).

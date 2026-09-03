@@ -1204,7 +1204,7 @@ enumerated by body rather than by name.
    construction — under the old `this.entries` walk every one of those lists would have been.
 
 3c. ~~**A garrisoned friendly still gets a minimap dot.**~~ **Fixed, and the fix waited on a
-   measurement rather than on an argument.** The developer drove the real 1.27a client — a
+   measurement rather than on an argument.** The developer drove the real client — a
    peasant sent to a remote gold mine, with no other unit or building of theirs nearby so the
    dot could not be confused with anything else — and reported: **no dot while it is inside.**
    That is the whole of what was missing; the reasoning below had been right since 3b and was
@@ -1239,13 +1239,13 @@ enumerated by body rather than by name.
    clause cannot be about fog. The only thing it overrides is the viewpoint-INDEPENDENT half of
    `hiddenFor`: `inMine`, `insideBuild`, `inBurrow`, `devouredBy`, `vanished`. So a peasant inside
    a gold mine and a worker in a burrow each draw a dot at the spot they entered from. The real
-   1.27a client gives garrisoned and mining units no dot of their own. Pre-existing — the clause
+   client gives garrisoned and mining units no dot of their own. Pre-existing — the clause
    was carried across byte-for-byte by items 3 and 3b — so it is asserted as current behaviour in
    the test, flagged there in capitals, and left for a deliberate fix. **Check the running client
    before fixing**, per CLAUDE.md; the suspicion above is from memory of WC3, not from measurement.
 
    **Still open, and deliberately skipped once (item 5's iteration) rather than fixed on a
-   hunch.** The measurement needs the real 1.27a client driven with global mouse/keyboard —
+   hunch.** The measurement needs the real client driven with global mouse/keyboard —
    launch, melee game, send a peasant into a mine, read the minimap — and the developer's
    desktop was in active use at the time, which makes input injection somebody else's problem
    rather than a test. The fix itself is one line (`hiddenFor`'s viewpoint-INDEPENDENT half must
@@ -1255,7 +1255,7 @@ enumerated by body rather than by name.
 4. ~~**Decide whether `minimapIcons()` should have a fog gate.**~~ ~~**Closed: no gate.**~~
    **Reopened and settled the other way by [issue #71](https://github.com/elevchyt/openwar3/issues/71):
    the gate is EXPLORED.** The close above recorded a measurement — both glyph types "were
-   plainly visible over unexplored ground in a fresh 1.27a melee game" — and the measurement was
+   plainly visible over unexplored ground in a fresh melee game" — and the measurement was
    taken in a session booted with the dev default `?dev&fog=explored`, where the whole map is
    explored from tick 0 and every fog gate is invisible by construction. Under normal fog the
    real client shows no gold mine, tavern or fountain until you have been there; once you have,
@@ -1491,7 +1491,7 @@ enumerated by body rather than by name.
    last-seen set of destroyed structures and emit them as `remembered` until the cell is seen
    again. That IS the per-viewpoint history item 6 got to avoid, so it is its own item.
 
-   **MEASURED — the developer drove the real 1.27a client: it keeps the ghost image until you
+   **MEASURED — the developer drove the real client: it keeps the ghost image until you
    re-scout the spot.** So there is no timeout to model and no decay: the memory persists
    indefinitely and is cleared by SIGHT of the cell, which is the same trigger that would
    refresh it. That is the cheapest possible rule and it settles the design — the authority
@@ -1877,7 +1877,7 @@ enumerated by body rather than by name.
 10c-1. ~~**The minimap dots.**~~ **Done — and the decomposition split on FOG-OWNERSHIP, not on
     size.** The minimap has three outputs and only ONE is a fit for the snapshot. Dots are
     per-recipient (fog-gated), so they are exactly what the AoI snapshot already answers.
-    Icons and camps are the opposite — the real 1.27a client paints every gold-mine glyph and
+    Icons and camps are the opposite — the real client paints every gold-mine glyph and
     every creep-camp marker over unexplored black from tick 0, so they are map-GLOBAL scouting
     aids, and the AoI snapshot deliberately withholds the units they need. A client cannot draw
     them from its snapshot because it was never sent the unseen mines and creeps; they stay on
@@ -2120,7 +2120,7 @@ enumerated by body rather than by name.
     red across two files, because the Birth-clip scrub reads the same pair).
 
     **Verified with two clients: the panel on the CLIENT is drawn from the payload** — Peon,
-    250/250, Damage 7-8, Armor 0, command card populated — which are the real 1.27a numbers, off
+    250/250, Damage 7-8, Armor 0, command card populated — which are the real game numbers, off
     the wire. Single-player minimap byte-identical to the parent (0 of 18 088).
 
 10c-2c-4. ~~**Classify the rest.**~~ **Done, and the classification came out on a different axis
@@ -2159,7 +2159,7 @@ enumerated by body rather than by name.
     four are questions about a camera projection. Verified in the browser instead, with two
     clients: on the CLIENT, clicking a unit and then a building both resolved through the
     payload-sourced picker — Peon 250/250, then Great Hall 1500/1500 Armor 5 with its own
-    command card. Those are the real 1.27a numbers, picked and printed off the wire.
+    command card. Those are the real game numbers, picked and printed off the wire.
     Single-player minimap byte-identical to the parent (0 of 18 088). **The construction-stutter
     fix was NOT captured** — staging a build on a client through the harness was more than the
     fix was worth; it is a code-reading fix and is stated as one.

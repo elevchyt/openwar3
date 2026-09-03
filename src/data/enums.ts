@@ -70,7 +70,7 @@ export enum MoveType {
 
 /** UnitBalance.slk `regenType` — WHEN the unit's own `regenHP` applies. This one
  *  column is the whole of WC3's racial hit-point-regeneration rule, and every stock
- *  row uses exactly one of these four tokens (verified against the 1.27a
+ *  row uses exactly one of these four tokens (verified against the real
  *  Units\UnitBalance.slk: 502 `always`, 242 `none`, 51 `night`, 41 `blight`):
  *
  *    always  Human and Orc units, all creeps, and the heroes of those races.

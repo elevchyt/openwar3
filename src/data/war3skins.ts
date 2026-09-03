@@ -17,7 +17,7 @@ export const WAR3SKINS = "UI\\war3skins.txt";
 
 /** The `_V<n>` suffix the engine appends to a versioned key. Warcraft III keys its music
  *  lists by game version — `Music_V0` is Reign of Chaos, `Music_V1` is The Frozen Throne.
- *  We target TFT 1.27a, so V1. (A `_V1Beta` set also ships; the engine ignores it.) */
+ *  We target TFT, so V1. (A `_V1Beta` set also ships; the engine ignores it.) */
 export const SKIN_VERSION_SUFFIX = "_V1";
 
 /** Parse war3skins.txt into `section → key → value`. */

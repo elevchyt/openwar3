@@ -5,7 +5,7 @@ import { LayeredDataSource } from "../vfs/layered";
 import type { DataSource } from "../vfs/types";
 
 // Unit voice lines & sound effects, sourced entirely from the real WC3 sound data
-// (the safest source of truth). Mappings, verified against the 1.27 MPQs:
+// (the safest source of truth). Mappings, verified against the real game data:
 //
 //   Units\UnitUI.slk  `unitSound`  → sound-set LABEL (hfoo → "Footman")
 //                     `weap1`      → weapon-impact base ("MetalMediumSlice")
@@ -156,7 +156,7 @@ const VOICE_CATEGORIES: ReadonlySet<SoundCategory> = new Set<SoundCategory>(["Wh
 const MAX_VOICES = 8; // concurrent voice lines across all sources (safety cap on overlap)
 
 /** Concurrent voices allowed per SOUND CHANNEL — the grouping the game's own SoundInfo
- *  SLKs carry in their `Channel` column, read straight off the 1.27a archives:
+ *  SLKs carry in their `Channel` column, read straight off the real archives:
  *    UnitCombatSounds → 5      every weapon-impact clang (all 60 rows)
  *    AnimSounds       → 11     a model's SND attack/fire/death events (591 of 592 rows)
  *    UnitAckSounds    → 1–4    voice lines        AbilitySounds → 13/14    UISounds → 8/12

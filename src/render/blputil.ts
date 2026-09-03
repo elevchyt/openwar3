@@ -29,7 +29,7 @@ export function blpToCanvas(bytes: Uint8Array, opts: BlpOptions = {}): HTMLCanva
  * A PAINTED image whose alpha channel is entirely zero, made opaque — **before it ever
  * touches a canvas**, which is the whole point of doing it here.
  *
- * Six BLPs in the 1.27a install decode to nothing but transparent pixels, and four of them
+ * Six BLPs in the MPQ-era install decode to nothing but transparent pixels, and four of them
  * are the button faces the night elf and undead menus are made of
  * (`nightelf-options-button-background.blp` + its `-down` twin, and the undead pair). They
  * are fully painted 256×256 images — the night elf one is a green marble in 200+ distinct

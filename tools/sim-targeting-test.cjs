@@ -35,7 +35,7 @@ const allyGround = unit({ owner: 0, team: 0 });
 const allyAir = unit({ owner: 0, team: 0, flying: true });
 const allyBuilding = unit({ owner: 0, team: 0, building: { constructionLeft: 0 } });
 
-// Each case is a real ability's targs1, straight out of Units\AbilityData.slk (1.27a).
+// Each case is a real ability's targs1, straight out of Units\AbilityData.slk.
 const CASES = [
   // Keeper of the Grove — Entangling Roots. Ground only: roots come out of the earth.
   ["AEer", "ground,enemy,neutral,organic", enemyGround, null, "roots an enemy footman"],

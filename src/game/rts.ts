@@ -511,7 +511,7 @@ export interface HeroBarEntry {
 }
 
 // The floating name slab WC3 draws above the unit under the cursor. Colours
-// measured off the real 1.27a client's mouseover shots: the owner (player) line
+// measured off the real client's mouseover shots: the owner (player) line
 // is red for an enemy, gold for an ally; the unit's own name and its level are
 // white. Everything below the owner line is white regardless of allegiance.
 const HOVER_OWNER_ENEMY = "#ff0303"; // WC3 red — a hostile player's name
@@ -3676,7 +3676,7 @@ export class RtsController {
     // selection, because the selection is this machine's, not the match's.
     perfLog.begin("sim.fog");
     const rebuilt = this.viewpoints.tick(dt);
-    // A ghost is forgotten by SIGHT, not by a clock (measured against the real 1.27a client),
+    // A ghost is forgotten by SIGHT, not by a clock (measured against the real client),
     // and the moment a viewpoint's sight changes is exactly when it rebuilt.
     for (const vp of rebuilt) this.ghosts.forgetSeen(vp.player, vp);
     if (rebuilt.includes(this.local)) {
@@ -7751,7 +7751,7 @@ export class RtsController {
 }
 
 // Flight altitude = the unit's real UnitData `moveheight` (Movement - Height),
-// verified against the 1.27 MPQ: 240 for most fliers, 280 (Gryphon/Chimaera),
+// verified against the real game data: 240 for most fliers, 280 (Gryphon/Chimaera),
 // 325 (Dragons), 150 (Gargoyle); hover units (Abomination/Lich/Ghost) sit at
 // 30–50. No fudge — this is the authentic Z the game floats each unit at.
 function lift(moveHeight: number): number {

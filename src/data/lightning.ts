@@ -18,7 +18,7 @@ import type { DataSource } from "../vfs/types";
 //
 // Field meanings, from the Hive Workshop tutorials "How to Customise Lightning Effects"
 // (thread 203171) and "Beginner's Guide to Lightning Effects" (thread 220370), checked
-// against the real 1.27a table and the textures themselves:
+// against the real table and the textures themselves:
 //   • `Dir`\`file`   the texture — a 256×64 horizontal STRIP with the bolt drawn into it
 //                    on black, i.e. authored for additive blending and tiling along U.
 //   • `AvgSegLen`    "the portion of the texture file visible at any instant (50 is half,

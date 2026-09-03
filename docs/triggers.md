@@ -88,7 +88,7 @@ the map's own tech tree**), and
 A `.w3x`/`.w3m` map file is a renamed **MPQ archive**. The World Editor compiles every trigger — whether authored
 in the GUI or hand-written JASS — into **one script the engine actually runs**:
 
-- **`war3map.j`** — JASS (our target, 1.27a). *(`war3map.lua` on Reforged — deferred.)*
+- **`war3map.j`** — JASS (our target, 1.30.4). *(`war3map.lua` on Reforged — deferred.)*
 - The GUI files `war3map.wtg` (trigger tree) and `war3map.wct` (custom text) are **editor-only** — the game never
   reads them. So "run a map's triggers" = run the compiled `war3map.j`.
 
@@ -687,7 +687,7 @@ spell → order it cast → react when it goes off*. Built:
   `SquareRoot(dx*dx + dy*dy)`, so until now **every distance in the BJ layer measured 0**.
 - **Ability orders** — the GUI's *"Unit - Order \<unit\> to \<ability\>"* compiles to
   `IssueTargetOrder(u, "holybolt", target)`. The order string lives in the ability data
-  (`<Race>AbilityFunc.txt` `Order=` / `Orderon` / `Orderoff` — verified in the 1.27 MPQ; it is
+  (`<Race>AbilityFunc.txt` `Order=` / `Orderon` / `Orderoff` — verified in the real game data; it is
   **not** in AbilityData.slk), so `AbilityDef` now carries it and the bridge passes the order
   **string** alongside the id: `RtsController.castOrder` matches it against the unit's own
   abilities and calls `SimWorld.issueCast` (an autocast toggle flips autocast instead). The engine's
@@ -1139,7 +1139,7 @@ one place (`src/data/war3skins.ts`, shared by `FdfLibrary` and `SoundBoard`):
 [Orc]   Music_V1=Sound\Music\mp3Music\OrcX1.mp3;…\Orc3.mp3;…\Orc2.mp3;…\Orc1.mp3
 ```
 
-Keyed by the **local player's race** and the game version (`_V0` = RoC, `_V1` = TFT — we're 1.27a, so V1). That is
+Keyed by the **local player's race** and the game version (`_V0` = RoC, `_V1` = TFT — we're TFT, so V1). That is
 exactly how WC3 gives an Orc player orc music and a Human player human music, and it falls out of a table we already
 parse.
 
@@ -2154,5 +2154,5 @@ Echo Isles: town hall + 5 workers, 500/150, teams unchanged.
 - **The 7.23 weather ambient sound bed** (`AmbientSound` — "AmbientSoundRain") is parsed off `Weather.slk` onto the def
   and carried there, but nothing plays it. It is a label the 7.20 `SoundBoard` already knows how to resolve.
 - **The 7.21 countdown format is still not ground-truthed** — M:SS under an hour / HH:MM:SS over is *inferred* from the
-  `Game.dll` string dump, not measured. To settle it, read the clock off a real 1.27a client.
+  `Game.dll` string dump, not measured. To settle it, read the clock off a real client.
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.
