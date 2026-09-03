@@ -528,9 +528,41 @@ const ORC: PlusRaceTable = {
     { id: "massgrunts", name: "Grunts, Kodos and Wind Riders", tier: 2, weight: 22, expandAt: 300, expandAgainAt: 720,
       heroes: [TAUREN_CHIEF, SHADOW_HUNTER, FAR_SEER, BLADE_MASTER], thenAt3: "taurens",
       mix: { [GRUNT]: 3.5, [KODO_BEAST]: 0.8, [WYVERN]: 1, [BATRIDER]: 0.5, [SHAMAN]: 0.8 } },
+    // …AND THE SAME CHIEFTAIN OVER TROLLS INSTEAD OF GRUNTS. The Tauren Chieftain's two skills
+    // are an AURA and a STUN, and neither of them cares what is standing under it: Endurance
+    // Aura is movement and attack speed, which a Head Hunter turns into damage at range rather
+    // than into a faster walk to the front, and War Stomp is what a ranged line needs most —
+    // the two seconds where nothing is hitting the trolls back. So "Chieftain and mass Grunts"
+    // and "Chieftain and mass Head Hunters" are two real builds off one hero rather than one
+    // build with a substitution, and this is the second of them.
+    //
+    // `[ohun] Requires=ofor`, and the War Mill is already the orc's tier-1 support row, so the
+    // hunters are an OPENING here exactly as they are in `headhunters` above. What separates
+    // the two builds is the plan around the same unit: this one leads with the Chieftain, buys
+    // Kodo Beasts for the War Drums the aura stacks with, and grows into the Tauren army at
+    // tier 3 — where the Head Hunters become the line the Taurens walk in front of, which is
+    // what `taurens` already names its Grunt row for.
+    //
+    // Expands between the two: a ranged line holds ground the way `headhunters` does (270 s),
+    // but this one is saving for the Fortress that `thenAt3` is pointed at, the way `massgrunts`
+    // does (300 s).
+    //
+    // No flyer in the mix, unlike its Grunt twin, and that is the unit rather than an omission:
+    // `ohun` is `targs1 = ground,structure,debris,AIR,item,ward` (UnitWeapons.slk), so the mass
+    // IS the answer to air. `antiAir` is still there for a build that meets nothing but Gargoyles.
+    { id: "masshunters", name: "Head Hunters, Kodos and Witch Doctors", tier: 2, weight: 20, expandAt: 285, expandAgainAt: 705,
+      heroes: [TAUREN_CHIEF, SHADOW_HUNTER, FAR_SEER, BLADE_MASTER], thenAt3: "taurens",
+      mix: { [HEAD_HUNTER]: 3.5, [KODO_BEAST]: 1, [WITCH_DOCTOR]: 0.8, [SHAMAN]: 0.8 } },
+    // THE TAUREN ARMY, and the build BOTH Chieftain openings grow into (`thenAt3`). Its line is
+    // half Grunts and half Head Hunters — one 1.5 share split rather than a second one added, so
+    // the Taurens keep the share of the army their name promises. That split is what makes it a
+    // legal destination for both parents: whichever of the two the seat spent its tier-2 game
+    // massing keeps being produced under the Taurens instead of being abandoned for the other,
+    // and a directly-rolled `taurens` gets the mixed melee-and-ranged line an orc tier-3 army
+    // actually has.
     { id: "taurens", name: "Taurens, Shamans and Wind Riders", tier: 3, weight: 18, expandAt: 420, expandAgainAt: 840,
       heroes: [TAUREN_CHIEF, FAR_SEER, BLADE_MASTER, SHADOW_HUNTER],
-      mix: { [TAUREN]: 3, [GRUNT]: 1.5, [SHAMAN]: 1.2, [WYVERN]: 1, [WITCH_DOCTOR]: 0.6 } },
+      mix: { [TAUREN]: 3, [GRUNT]: 0.8, [HEAD_HUNTER]: 0.8, [SHAMAN]: 1.2, [WYVERN]: 1, [WITCH_DOCTOR]: 0.6 } },
     { id: "wyverns", name: "Wind Riders and Batriders", tier: 3, weight: 12, expandAt: 450, expandAgainAt: 870,
       mix: { [WYVERN]: 3, [BATRIDER]: 0.8, [HEAD_HUNTER]: 1.5, [SHAMAN]: 1 } },
   ],

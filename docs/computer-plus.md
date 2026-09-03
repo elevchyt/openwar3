@@ -1126,7 +1126,7 @@ of their passes. **A row does not have to be unreached to be unaffordable**: `On
 a running budget, so the tech buildings, the upgrades and the Castle above it took the gold before
 the hero row was read, every pass, for ever. It goes above all three, and below `army(coreArmy)` —
 the one thing that must never be saved through, because a base with no army does not need a second
-hero, it needs an army. With it there, all twenty builds field both heroes inside ten minutes and
+hero, it needs an army. With it there, every build fields both heroes inside ten minutes and
 every other ladder check is unchanged.
 
 The halt is bounded in both directions besides: it is **one** purchase (nothing re-asks once the
@@ -1156,6 +1156,20 @@ The builds are the ones a person would name, which is the point of them: an orc 
 tier 2 is not "going Shamans", it is Head Hunters with Shamans and a Kodo behind them, or Grunts
 and Head Hunters enriched with Raiders and Wind Riders. A build that is worth rolling names an
 ARMY and the support that goes with it.
+
+Which is also why the same unit can appear at the top of two builds. The Tauren Chieftain has
+**two** of them — `massgrunts` and `masshunters` — and they are two plans rather than one plan
+with a substitution: the Chieftain's card is an AURA and a STUN, and neither cares what is
+standing under it. Endurance Aura is attack speed, which a Head Hunter turns into damage at range
+where a Grunt turns it into a faster walk to the front; War Stomp is what a ranged line needs
+most. The troll build takes no flyer of its own, because `ohun` is `targs1 =
+ground,structure,debris,**air**,item,ward` (`UnitWeapons.slk`) and the mass IS the answer to air,
+where the Grunt build has to buy Wind Riders and bats for it. Both grow into `taurens` at the
+Fortress, whose line is a split 0.8/0.8 of Grunts and Head Hunters for exactly that reason —
+whichever unit the seat spent its tier-2 game massing keeps being produced under the Taurens
+instead of being abandoned for the other one. Head Hunters are the orc's other tier-1 opening
+besides (`[ohun] Requires=ofor`, and the War Mill is already the race's tier-1 support row), so
+the troll build opens on trolls rather than waiting for anything.
 
 A strategy is a **weighted unit mix** and two clocks, and nothing else is written down:
 
@@ -1450,7 +1464,7 @@ reserves the price twice over for a payment that is only ever made once.
 ### A build order names the army it INTENDS; the opening soldier is derived
 
 A strategy is a weighted unit mix, and a mix is a statement about the army this build wants to
-*end up with*. Five of the twenty builds in `races.ts` name nothing that exists at tier 1 — the
+*end up with*. Five of the twenty-one builds in `races.ts` name nothing that exists at tier 1 — the
 night elf's `bears` (Druids of the Claw, Dryads, Mountain Giants) and `chimaeras`, the human's
 `gryphons`, the undead's `aboms` and `gargoyles`. `buildableMix` narrowed the mix to what could
 be produced *now*, that came back empty, and the army rows asked for nothing.

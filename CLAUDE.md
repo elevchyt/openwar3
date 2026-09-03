@@ -252,7 +252,7 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   read off the target BUILDING's `race` rather than off the lobby). No worker is ever left idle
   (`AiPlayer.workIdleWorkers`, below `applyHarvest`: fill a mine short of its five, else the
   trees — the plan's catch-all last slice is the FOREST, which for the undead is nobody).
-  A STRATEGY names the army a build wants to END UP with, so five of the twenty name nothing
+  A STRATEGY names the army a build wants to END UP with, so five of the twenty-one name nothing
   that exists at tier 1 — and `buildableMix` therefore falls back on the race's OPENING SOLDIER
   (derived, not named: the lowest-tier thing the barracks makes that NEEDS NOTHING ELSE
   STANDING, which is the Footman/Grunt/Archer/Ghoul). Without it the empty mix is a DEADLOCK
