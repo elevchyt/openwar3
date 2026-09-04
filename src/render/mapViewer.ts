@@ -8666,7 +8666,12 @@ export class MapViewerScene {
     out.push(this.cmd({ id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", desc: "Moves the unit to a target point.", col: 0, row: 0, active: active === "move" }));
     out.push(this.cmd({ id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", desc: "Halts the unit's current order.", col: 1, row: 0, active: active === "stop" }));
     out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 2, row: 0, active: active === "hold" }));
-    out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 3, row: 0, active: active === "attack" }));
+    // Attack is a WEAPON's button. A Goblin Zeppelin, a Wisp, a transport ship carry none
+    // (UnitWeapons gives them no attack at all) and the game's card has no Attack on them —
+    // a press that can only be refused is not a button. Asked of the whole selection rather
+    // than of the primary alone, as the game does: a Zeppelin grabbed together with the
+    // Footmen it is about to carry still lets the group attack-move.
+    if (this.rts?.selectionCanAttack()) out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 3, row: 0, active: active === "attack" }));
     out.push(this.cmd({ id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", desc: "Patrols between here and a target point.", col: 0, row: 1, active: active === "patrol" }));
     // Build sits at the bottom-left of a worker's card (developer spec) — but only on a worker
     // that HAS something to build. `Builds` is a per-unit column (`[hpea] Builds=htow,hhou,

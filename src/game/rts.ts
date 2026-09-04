@@ -4831,6 +4831,15 @@ export class RtsController {
     return any;
   }
 
+  /** Can anything in the selection ATTACK — does any selected unit carry a weapon? The card's
+   *  Attack button hangs on it: a Goblin Zeppelin, a Wisp or a transport ship has none and the
+   *  game's card has no Attack for them, while a Zeppelin grabbed with the Footmen it is about
+   *  to carry still lets the group attack-move. */
+  selectionCanAttack(): boolean {
+    for (const id of this.selected) if ((this.sim.units.get(id)?.weapons.length ?? 0) > 0) return true;
+    return false;
+  }
+
   /** Is a transport among the selected units? Decides what a right-click on a friendly
    *  ground unit means — pick it up, rather than follow it. */
   private selectionHasTransport(): boolean {
