@@ -75,7 +75,7 @@ import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
 import { ConsoleUi, type ConsolePanel } from "../ui/consoleUi";
 import { parseMapInfo } from "../world/mapInfo";
 import {
-  chatPrompt, chatRecipients, formatChatLine, hasChatAllies, observerLine,
+  chatPrompt, chatRecipients, chatShowsPlayerDot, formatChatLine, hasChatAllies, observerLine,
   type ChatLine, type ChatTarget, type ChatWorld,
 } from "../game/chat";
 import { teamColorHex, teamColorRgb } from "./teamColor";
@@ -7200,13 +7200,21 @@ export class MapViewerScene {
    * that show chat — the display over the console and the F12 dialog's Chat History — must
    * follow it. (Mode 2 is the minimap alone and leaves the world, and so this, untouched;
    * `SetUnitColor` is not asked, because it colours one unit and not its owner.)
+   *
+   * The DOT in front of the name is the counterweight to all of that: it is `playerColor`,
+   * the colour the player picked in the lobby, and it stays that in every mode — so a game
+   * played in mode 3 (where every ally reads teal and every enemy red) can still be read for
+   * WHO said a line without cycling the filter back. It is drawn only with more than two
+   * players on the field, the bench excluded (`chatShowsPlayerDot`).
    */
   private renderChat(line: ChatLine): string {
+    const dotted = chatShowsPlayerDot(this.chatWorld());
     return formatChatLine(
       line,
       (p) => this.playerLabel(p),
       (p) => teamColorHex(this.vfs, this.rts?.unitColor(p) ?? p),
       (k) => this.globalStrings?.strings.get(k),
+      dotted ? (p) => teamColorHex(this.vfs, this.rts?.playerColor(p) ?? p) : null,
     );
   }
 

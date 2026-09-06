@@ -145,10 +145,35 @@ export function chatRecipientTag(target: ChatTarget, strings: ChatStrings): stri
 }
 
 /**
- * One line as WC3 markup, ready for the message area and the log: the audience tag, then the
- * speaker's name in the speaker's own colour, then the text.
+ * The dot drawn between the audience tag and the speaker's name — U+25CF BLACK CIRCLE.
  *
- *     [All] Player 2: gl hf
+ * A DELIBERATE DEVIATION, asked for by the developer: the real client has nothing like it.
+ * It exists because the name beside it follows the Ally Color Mode filter (see `formatChatLine`),
+ * so in mode 3 every ally reads teal and every enemy red and no line says WHO spoke. The dot
+ * keeps the speaker's own player colour in every mode, so the two readings sit side by side.
+ *
+ * Friz Quadrata TT is Latin-only and has no glyph for it, so it falls through the font stack
+ * per glyph like any other non-Latin character (ui/gameFont.ts) — which is why it is a plain
+ * round dot and not something the game's own face would have to draw.
+ */
+export const CHAT_PLAYER_DOT = "●";
+
+/**
+ * Is the speaker's colour dot worth drawing at all?
+ *
+ * Only with more than two people PLAYING — the bench is excluded, because a watcher is not
+ * somebody the dot has to tell apart. With one opponent there is nothing to disambiguate:
+ * a line is yours or it is theirs, and the tag and the name already say which.
+ */
+export function chatShowsPlayerDot(world: ChatWorld): boolean {
+  return world.players().filter((p) => !world.isObserver(p)).length > 2;
+}
+
+/**
+ * One line as WC3 markup, ready for the message area and the log: the audience tag, the
+ * speaker's colour dot, then the speaker's name in the speaker's own colour, then the text.
+ *
+ *     [All] ● Player 2: gl hf
  *
  * The TAG LEADS — that is the order the real client draws (a multiplayer shot the developer
  * measured this against: `[All]` in plain white at the head of every line, the name after it
@@ -158,6 +183,11 @@ export function chatRecipientTag(target: ChatTarget, strings: ChatStrings): stri
  *
  * The tag is the one piece that never takes a colour — it is the channel, not a speaker, and
  * it stays the message area's own white while the name beside it wears the player's.
+ *
+ * The DOT is the one piece that never follows the Ally Color Mode filter: `colorOf` is the
+ * world's answer (blue-you / teal-ally / red-enemy in mode 3) while `dotColorOf` is always the
+ * player's own colour, which is the whole point of it — see `CHAT_PLAYER_DOT`. Passing no
+ * `dotColorOf` draws no dot, which is what a game of two answers (`chatShowsPlayerDot`).
  *
  * The name carries the colour and the message does NOT — a player cannot colour their own
  * chat by typing `|cff...` into it, because the text is escaped by the renderer's markup pass
@@ -170,12 +200,18 @@ export function formatChatLine(
   nameOf: (player: number) => string,
   colorOf: (player: number) => string | null,
   strings: ChatStrings,
+  /** The speaker's OWN colour, for the leading dot — or null/omitted for no dot. */
+  dotColorOf?: ((player: number) => string | null) | null,
 ): string {
   const tag = chatRecipientTag(line.target, strings);
-  const color = colorOf(line.from);
-  const name = nameOf(line.from);
-  const said = color ? `|c${color}${name}|r` : name;
-  return `${tag ? `${tag} ` : ""}${said}: ${stripMarkup(line.text)}`;
+  const said = paint(nameOf(line.from), colorOf(line.from));
+  const dot = dotColorOf ? `${paint(CHAT_PLAYER_DOT, dotColorOf(line.from))} ` : "";
+  return `${tag ? `${tag} ` : ""}${dot}${said}: ${stripMarkup(line.text)}`;
+}
+
+/** A piece of a chat line in a colour, or bare when there is none to give it. */
+function paint(text: string, color: string | null): string {
+  return color ? `|c${color}${text}|r` : text;
 }
 
 /** The line as the room should SEE it: a watcher's line wears the `[Observers]` tag whatever
