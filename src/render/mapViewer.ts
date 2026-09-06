@@ -10895,7 +10895,9 @@ export class MapViewerScene {
         if (this.ringSplats && fogScene) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
         if (fogScene) this.renderLightning(fogScene.camera);
       }
-      if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
+      // …and the veil takes the terrain's own runs: it is one quad per cell over the same
+      // grid, so what the ground skipped this frame the fog skips too (render/terrainCull.ts).
+      if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix, this.terrainCull?.runs());
       // Weather LAST of the world passes — after the fog-of-war veil, because rain and snow
       // fall between the eye and the world rather than being part of it: WC3 shows you the
       // storm over ground you have never explored. It advances on the RENDER clock rather

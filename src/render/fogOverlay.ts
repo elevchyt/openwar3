@@ -305,7 +305,7 @@ export class FogOverlay {
    *  (bypassing that cache), so we must save EVERYTHING we touch and restore it, or
    *  the viewer's cache goes stale and it draws the next frame's whole world with our
    *  fog shader (→ black screen). Every state set below has a matching restore. */
-  render(viewProj: Float32Array | Iterable<number>): void {
+  render(viewProj: Float32Array | Iterable<number>, runs?: Int32Array | null): void {
     if (this.indexCount === 0) return; // map too big for Uint16 and no uint-index ext
     const gl = this.gl;
     const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
@@ -354,7 +354,22 @@ export class FogOverlay {
     gl.enableVertexAttribArray(this.aDark);
     gl.vertexAttribPointer(this.aDark, 1, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.idxBuf);
-    gl.drawElements(gl.TRIANGLES, this.indexCount, this.indexType, 0);
+    // Camera culling (docs/terrain-culling.md). The veil is a second mesh the size of the
+    // terrain — one quad per cell over the WHOLE map — so it was the biggest full-map sweep
+    // left after the ground itself, and it is the same mesh in the same order: the index
+    // buffer is built cell row by cell row, six indices apiece, over the same
+    // (width-1) × (height-1) grid the cull counts in. So a run of cells IS a run of indices,
+    // and the whole of it is a first/count on the draw. No runs (or a caller that does not
+    // pass any) draws the lot, exactly as before.
+    if (runs && runs.length) {
+      const stride = this.indexType === this.gl.UNSIGNED_INT ? 4 : 2;
+      for (let i = 0; i < runs.length; i += 2) {
+        const cells = runs[i + 1];
+        if (cells > 0) gl.drawElements(gl.TRIANGLES, cells * 6, this.indexType, runs[i] * 6 * stride);
+      }
+    } else {
+      gl.drawElements(gl.TRIANGLES, this.indexCount, this.indexType, 0);
+    }
 
     // Restore every touched state so the viewer's cached GL state stays valid.
     gl.useProgram(prevProgram);
