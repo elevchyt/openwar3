@@ -13,9 +13,27 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
 import WebSocket from "ws";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** The number the BROWSER will send, read straight out of src/net/protocol.ts.
+ *
+ *  The relay keeps its own copy of this constant (server/rooms.mjs) because it is plain .mjs
+ *  and deploys with no build step, so it cannot import a .ts one. That duplication is fine; the
+ *  duplication going UNCHECKED is not. A handshake whose two numbers differ is REFUSED, so a
+ *  bump landing on one side alone does not degrade the lobby — it deletes it, and every LAN
+ *  game ends at the client's close message with nothing on screen about a version. This test
+ *  used to pin the relay's number against a LITERAL here, which drifts in exactly the same way
+ *  (it still said 10 against a relay on 11 and had been failing unnoticed). So read the client's
+ *  and compare the two — the only assertion that cannot itself go stale. */
+const clientProtocol = (() => {
+  const src = readFileSync(join(REPO, "src", "net", "protocol.ts"), "utf8");
+  const m = /export const PROTOCOL_VERSION\s*=\s*(\d+)/.exec(src);
+  if (!m) throw new Error("could not find PROTOCOL_VERSION in src/net/protocol.ts");
+  return Number(m[1]);
+})();
 const PORT = 8799; // not the default, so a relay you already have running is left alone
 const URL = `ws://localhost:${PORT}`;
 /** The relay's ping interval, wound right down so a reaping is watchable inside a test run.
@@ -96,7 +114,10 @@ try {
   const host = client("host");
   await host.open();
   const hello = await host.next("hello");
-  check("sends hello with a protocol version", hello.protocol === 10);
+  check(
+    `relay speaks the same protocol as the client (${clientProtocol})`,
+    hello.protocol === clientProtocol,
+  );
   const empty = await host.next("rooms");
   check("game list starts empty", Array.isArray(empty.rooms) && empty.rooms.length === 0);
 

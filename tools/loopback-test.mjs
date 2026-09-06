@@ -13,7 +13,19 @@
 //
 // Run: pnpm loopback:test
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { LoopbackRelay, tick } from "./loopback.mjs";
+import { PROTOCOL_VERSION as RELAY_PROTOCOL } from "../server/rooms.mjs";
+
+/** What the browser will send. Read out of the .ts rather than re-typed, so this check tests
+ *  the two constants AGREE rather than pinning a literal that drifts alongside them — see the
+ *  same note in tools/relay-test.mjs. */
+const CLIENT_PROTOCOL = (() => {
+  const src = readFileSync(join(process.cwd(), "src", "net", "protocol.ts"), "utf8");
+  const m = /export const PROTOCOL_VERSION\s*=\s*(\d+)/.exec(src);
+  if (!m) throw new Error("could not find PROTOCOL_VERSION in src/net/protocol.ts");
+  return Number(m[1]);
+})();
 
 // The command router is TypeScript, compiled by `tsc -p tools/tsconfig.sim.json` into
 // .sim-build alongside the sim. `pnpm sim:test` runs that build; run it before this file.
@@ -21,6 +33,11 @@ const { CommandRouter, commandMessage, accepted } = await import(
   "file://" + join(process.cwd(), ".sim-build", "src", "net", "commandLink.js")
 );
 const { MatchLink } = await import("file://" + join(process.cwd(), ".sim-build", "src", "game", "matchLink.js"));
+// The empty fx payload comes from the SNAPSHOT itself rather than being spelled out here. Every
+// hand-written copy of it went stale the day a field was added — `lightnings` landed, the copies
+// below kept their four keys, and `tickHost` threw "fx.lightnings is not iterable" halfway
+// through this file, taking every check after it with it.
+const { EMPTY_FX } = await import("file://" + join(process.cwd(), ".sim-build", "src", "game", "snapshot.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -54,7 +71,8 @@ console.log("a client connects and is handshaked before anything else");
   check("nothing has arrived yet", c.inbox.length, 0);
   await tick();
   check("hello first, then the game list", c.seen().map((m) => m.t), ["hello", "rooms"]);
-  check("and it speaks our protocol", c.last("hello").protocol, 11);
+  check("and it speaks our protocol", c.last("hello").protocol, CLIENT_PROTOCOL);
+  check("the relay's own constant is the client's", RELAY_PROTOCOL, CLIENT_PROTOCOL);
 }
 
 console.log("the room forms exactly as it does over a socket");
@@ -362,6 +380,13 @@ function worldAt(hp) {
     worker: null, building: null, abilities: [], buffs: [], inventory: [], garrison: [],
     garrisonCap: 0, isSummon: false, summonLeft: 0, summonMax: 0, isIllusion: false,
     illusionOf: 0, guardX: 0, guardY: 0, buildPending: null, orderQueue: [], pendingCast: null,
+    // Every field UnitSnapshot declares has to be here, or the desync check below reports the
+    // OMISSION rather than the difference it is testing: the wire reads these back as 0 while
+    // the fixture has undefined, so `compare` correctly calls that a disagreement and the one
+    // planted difference (hp) arrives fifth in a list of five. A field added to the snapshot
+    // and not to this unit fails these checks with the new field's name in them — which is the
+    // signal to add it here, not to loosen the check.
+    ringSlot: 0, altFormLeft: 0, attackUpgrade: 0, armorUpgrade: 0,
   };
   return { units: new Map([[1, u]]), mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true, stashOf: () => ({ gold: 500, lumber: 150 }) };
 }
@@ -773,12 +798,12 @@ console.log("\nspell fx ride due broadcasts, filtered per recipient, and never r
     viewers: () => [{ player: 0, viewer: seer }, { player: 1, viewer: halfBlind }, { player: 2, viewer: seer }],
     ghostsFor: () => [],
     commandsApplied: () => 0,
-    drainFx: () => fxThisTick.shift() ?? { effects: [], splats: [], castStarts: [], castFires: [] },
+    drainFx: () => fxThisTick.shift() ?? { ...EMPTY_FX },
   };
   // Two ticks of events land BETWEEN sends: both must arrive in the one due broadcast.
   const fxThisTick = [
-    { effects: [{ art: "HolyBolt.mdx", x: 100, y: 100, targetId: 7, z: 0 }], splats: [], castStarts: [], castFires: [] },
-    { effects: [{ art: "FarBurst.mdx", x: 900, y: 900, targetId: 0, z: 0 }], splats: [{ splatId: "THND", x: 50, y: 60 }], castStarts: [], castFires: [] },
+    { ...EMPTY_FX, effects: [{ art: "HolyBolt.mdx", x: 100, y: 100, targetId: 7, z: 0 }] },
+    { ...EMPTY_FX, effects: [{ art: "FarBurst.mdx", x: 900, y: 900, targetId: 0, z: 0 }], splats: [{ splatId: "THND", x: 50, y: 60 }] },
   ];
   hostLink.tickHost(0.005, worldAt(420), fxSources, 1); // buffers, not due (interval 1/60)
   hostLink.tickHost(0.005, worldAt(420), fxSources, 2); // buffers the second tick's too
@@ -833,13 +858,13 @@ console.log("a client slower than the wire still gets every burst and every coll
   const hostLink = new MatchLink(channelFor(host), 0, SEATS);
   const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
   const fxQ = [
-    { effects: [{ art: "A.mdx", x: 1, y: 2, targetId: 0, z: 0 }], splats: [], castStarts: [], castFires: [] },
-    { effects: [{ art: "B.mdx", x: 3, y: 4, targetId: 0, z: 0 }], splats: [], castStarts: [], castFires: [] },
+    { ...EMPTY_FX, effects: [{ art: "A.mdx", x: 1, y: 2, targetId: 0, z: 0 }] },
+    { ...EMPTY_FX, effects: [{ art: "B.mdx", x: 3, y: 4, targetId: 0, z: 0 }] },
   ];
   const dQ = [[{ id: 7, x: 0, y: 0 }], [{ id: 8, x: 1, y: 1 }]];
   const src = {
     ...sources,
-    drainFx: () => fxQ.shift() ?? { effects: [], splats: [], castStarts: [], castFires: [] },
+    drainFx: () => fxQ.shift() ?? { ...EMPTY_FX },
     drainDeaths: () => dQ.shift() ?? [],
   };
   // Two due broadcasts back to back, BEFORE the client consumes anything — the second

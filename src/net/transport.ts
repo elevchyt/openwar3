@@ -42,6 +42,14 @@ export class WebSocketTransport implements Transport {
   connect(url = defaultRelayUrl()): Promise<void> {
     return new Promise((resolve, reject) => {
       let settled = false;
+      // Set when the handshake itself REFUSED the relay (a protocol mismatch). We close the
+      // socket to say so, and that close fires `onclose` like any other — but this one is not a
+      // connection that was lost, it is one we never accepted, and its real reason is already on
+      // its way to the caller in the rejection. Without this flag the generic close text
+      // OVERWRITES that rejection in the lobby's state (`onLost` runs after the `catch`), so a
+      // relay one version behind reported "Connection to the game host was lost." and the actual
+      // fault — two numbers that differ, and which file to change — was never shown to anybody.
+      let refused = false;
       let ws: WebSocket;
       try {
         ws = new WebSocket(url);
@@ -62,6 +70,7 @@ export class WebSocketTransport implements Transport {
           if (msg.t !== "hello") return;
           settled = true;
           if (msg.protocol !== PROTOCOL_VERSION) {
+            refused = true;
             ws.close();
             return reject(
               new Error(
@@ -89,6 +98,7 @@ export class WebSocketTransport implements Transport {
         const wasSettled = settled;
         settled = true;
         this.ws = null;
+        if (refused) return; // we closed it, and the caller already has the reason why
         if (wasSettled) this.onClose("Connection to the game host was lost.");
         else reject(new Error(`No relay at ${url}. Start one with:  node server/relay.mjs`));
       };

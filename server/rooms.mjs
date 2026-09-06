@@ -19,7 +19,13 @@
 // data, no match state beyond this table. Keep it that way — it is what makes a free tier
 // viable and what keeps us clear of hosting Blizzard content.
 
-export const PROTOCOL_VERSION = 11; // 11: the pause (`pausereq`/`pause`) — src/net/protocol.ts
+// MUST equal `PROTOCOL_VERSION` in src/net/protocol.ts. The two are hand-kept in sync because
+// this file is plain .mjs on purpose — the relay deploys with no build step and so cannot import
+// a .ts constant — and a client whose number differs is REFUSED at the handshake. Drift is
+// therefore not a degraded lobby, it is no lobby at all: 12 landed on the client alone once and
+// every LAN game died at "Connection to the game host was lost." `pnpm relay:test` now reads
+// protocol.ts and compares, so the next bump that forgets this line fails a test instead.
+export const PROTOCOL_VERSION = 12; // 12: per-slot AI difficulty — 11: the pause (`pausereq`/`pause`)
 
 /** The game list entry, as LocalMultiplayerJoin.fdf wants it. */
 const roomInfo = (r) => ({
