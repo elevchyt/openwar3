@@ -698,8 +698,11 @@ const SEL_GRID_MAX = SEL_GRID_TIERS[SEL_GRID_TIERS.length - 1].max;
  * fixed spot in the real game no matter how much has been said, which it plainly does.
  */
 const MSG_AREA = {
-  left: 0.05, // from the 0.8 box's left edge
-  bottom: 0.255, // above the bottom of the frame
+  // Both offsets carry a small deliberate nudge on top of the measurement — the developer
+  // asked for the block a little higher and a little further right than the shot puts it.
+  // The measured values are 0.05 / 0.255; keep them here so the nudge stays legible as one.
+  left: 0.07, // from the 0.8 box's left edge (measured 0.05, +0.02 right)
+  bottom: 0.285, // above the bottom of the frame (measured 0.255, +0.03 up)
   width: 0.5, // where a long line wraps (the shot wraps between 0.491 and 0.517)
 } as const;
 
