@@ -62,6 +62,7 @@ import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } fro
 import { MetricsOverlay } from "../ui/metrics";
 import { perfLog } from "../dev/perfLog";
 import { animStride, videoSettings } from "./videoQuality";
+import { TerrainCull } from "./terrainCull";
 import { setSimProfiler } from "../sim/profile";
 import { wc3ToPlain } from "../ui/wc3Text";
 import { GameHud, isTyping, upkeepBand, PLAYER_COLORS, type HudDriver, type CommandButton } from "../ui/hud";
@@ -528,6 +529,10 @@ interface Camera {
   location: Float32Array;
   directionX: Float32Array;
   directionY: Float32Array;
+  /** The six frustum planes the camera unpacks from its view-projection each update — what
+   *  the viewer's own instance culling tests against, and what the terrain cull does too
+   *  (render/terrainCull.ts). */
+  planes: Float32Array[];
 }
 interface Scene {
   camera: Camera;
@@ -579,6 +584,10 @@ interface W3xMap {
   // ground → cliffs → opaque instances → water → translucent instances; we replay that
   // sequence ourselves to insert the ubersplat pass before the translucent one (issue #16).
   anyReady: boolean;
+  /** OpenWar3 patch hook: the terrain cells to draw, as (first instance, count) pairs — one
+   *  run per visible cell row, refilled each frame by render/terrainCull.ts. Null draws the
+   *  whole map, which is what the stock viewer does on every frame of every match. */
+  ow3Runs: Int32Array | null;
   /** OpenWar3 patch hook: mark one terrain CORNER blighted / clean, and push every tile
    *  changed since the last push. See src/sim/blight.ts for what drives it. */
   setBlight(column: number, row: number, on: boolean): boolean;
@@ -1267,6 +1276,9 @@ export class MapViewerScene {
   private buildingShadows: ShadowOverlay | null = null;
   /** The map's own baked shadow layer (war3map.shd) — cliffs, doodads and scenery. */
   private terrainShadows: TerrainShadowOverlay | null = null;
+  /** Which terrain cells this frame's ground and water passes draw (render/terrainCull.ts).
+   *  Public so the dev console can reach `holdRuns` and watch the cull stand still. */
+  terrainCull: TerrainCull | null = null;
   // Lightning ribbons (issue #97) — Chain Lightning, Healing Wave, the Drains and kin.
   // Its own GL pass, drawn after the world's translucent instances and before the fog; the
   // bolts are strung by the sim's `drainFxLightnings` events and follow their units.
@@ -1437,6 +1449,7 @@ export class MapViewerScene {
     this.buildingShadows = null;
     this.terrainShadows?.dispose();
     this.terrainShadows = null;
+    this.terrainCull = null; // plain arrays; none of the GL context is in it
     this.simBuildingSplats.clear();
     this.liftedSplats.clear();
     this.mapBuildingSplats.clear();
@@ -1534,6 +1547,9 @@ export class MapViewerScene {
         const b = this.vfs.rawBytes(p);
         return b ? blpToCanvas(b) : null;
       };
+      // Terrain camera culling (render/terrainCull.ts) — built off the same terrain the
+      // overlays are, and consulted once a frame just before the ground and water passes.
+      this.terrainCull = new TerrainCull(terrain);
       this.splats = new UberSplatOverlay(this.viewer.gl, terrain, splatLoader);
       // Separate overlay for selection/hover rings: same terrain-tessellation, but drawn
       // as its OWN pass AFTER the building splats so a ring paints on top of a foundation
@@ -10315,6 +10331,9 @@ export class MapViewerScene {
       itemModels: this.itemInstances.size,
       projModels: this.projectileInsts.size,
       doodadActors: this.doodadActors.size,
+      // Terrain cells this frame's ground/water passes actually drew, out of the whole map —
+      // the one number that says whether the cull is doing anything (render/terrainCull.ts).
+      groundCells: this.terrainCull?.visibleCells ?? 0,
       combatText: this.combatText.count,
       lightning: this.lightning?.count ?? 0,
       // --- the renderer underneath us ---
@@ -10832,6 +10851,13 @@ export class MapViewerScene {
       // casts (docs/lighting.md, render/videoQuality.ts).
       const unitShadows = videoSettings().unitShadows;
       if (this.shadows && unitShadows) this.updateShadowBatch();
+      // Which terrain cells this camera can see (render/terrainCull.ts). Computed once and
+      // handed to the map, because the ground and the water are two passes over ONE cell grid
+      // and a frame in which they disagreed would draw a sea with no floor under it.
+      if (map && fogScene && this.terrainCull) {
+        this.terrainCull.update(fogScene.camera);
+        map.ow3Runs = this.terrainCull.runs();
+      }
       if (map && fogScene && map.anyReady) {
         fogScene.startFrame();
         this.syncBlight(map); // the Undead's rot, painted onto the ground before it is drawn
@@ -10964,6 +10990,7 @@ export class MapViewerScene {
     this.buildingShadows = null;
     this.terrainShadows?.dispose();
     this.terrainShadows = null;
+    this.terrainCull = null; // plain arrays; none of the GL context is in it
     this.simBuildingSplats.clear();
     this.liftedSplats.clear();
     this.mapBuildingSplats.clear();

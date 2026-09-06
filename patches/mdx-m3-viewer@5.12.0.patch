@@ -1979,3 +1979,96 @@ index 34686902ea449513570fad17cecbb6938ad9547a..2d355bcd094726e48a364a491faa5fb6
              }
          }
      }
+diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
+index 95bb7a5be241f134d8486d67e9b496be7a9c1925..517d487f05cfb948e778090634a344f0098fc3eb 100644
+--- a/dist/cjs/viewer/handlers/w3x/map.js
++++ b/dist/cjs/viewer/handlers/w3x/map.js
+@@ -95,6 +95,10 @@ class War3MapViewerMap {
+         this.textureBuffer = null;
+         this.variationBuffer = null;
+         this.waterBuffer = null;
++        // OpenWar3 (terrain camera culling): (first instance, count) pairs naming the cell rows
++        // the camera can see, refilled every frame by src/render/terrainCull.ts. Null means
++        // "nobody is culling" and every pass below draws the whole map, exactly as it always did.
++        this.ow3Runs = null;
+         this.heightMap = null;
+         this.waterHeightMap = null;
+         this.cliffHeightMap = null;
+@@ -670,6 +674,31 @@ class War3MapViewerMap {
+             worldScene.renderTranslucent();
+         }
+     }
++    /**
++     * OpenWar3: issue one instanced terrain pass over the cells `ow3Runs` names.
++     *
++     * The per-cell attribute buffers are ROW-MAJOR, so a row of cells is a contiguous slice of
++     * every one of them and the whole of the culling is an OFFSET into the attribute pointers --
++     * which is what `rebind(first)` re-points, per run, for whichever attributes this pass uses.
++     * With no runs set, this is the original single call over `rows * columns`.
++     */
++    ow3DrawCells(rebind) {
++        const gl = this.viewer.gl;
++        const instancedArrays = this.viewer.webgl.extensions['ANGLE_instanced_arrays'];
++        const runs = this.ow3Runs;
++        if (!runs || !runs.length) {
++            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
++            return;
++        }
++        for (let i = 0; i < runs.length; i += 2) {
++            const count = runs[i + 1];
++            if (count <= 0) {
++                continue;
++            }
++            rebind(runs[i]);
++            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, count);
++        }
++    }
+     renderGround() {
+         if (this.terrainReady) {
+             const gl = this.viewer.gl;
+@@ -714,7 +743,19 @@ class War3MapViewerMap {
+                 gl.uniform1i(uniforms[`u_tilesets[${i}]`], i);
+                 webgl.bindTexture(tilesetTextures[i], i);
+             }
+-            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
++            // OpenWar3: the three per-instance attributes are all 4 bytes per cell -- one float
++            // of instance id, four texture bytes, four variation bytes -- so one offset serves
++            // all three (see ow3DrawCells).
++            const rebindGround = (first) => {
++                const at = first * 4;
++                gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
++                gl.vertexAttribPointer(instanceAttrib, 1, gl.FLOAT, false, 0, at);
++                gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
++                gl.vertexAttribPointer(texturesAttrib, 4, gl.UNSIGNED_BYTE, false, 0, at);
++                gl.bindBuffer(gl.ARRAY_BUFFER, this.variationBuffer);
++                gl.vertexAttribPointer(variationsAttrib, 4, gl.UNSIGNED_BYTE, false, 0, at);
++            };
++            this.ow3DrawCells(rebindGround);
+             if (tilesetCount > 15) {
+                 gl.uniform1f(uniforms['u_baseTileset'], 15);
+                 for (let i = 0, l = tilesetCount - 15; i < l; i++) {
+@@ -722,7 +763,7 @@ class War3MapViewerMap {
+                     gl.uniform1f(uniforms[`u_extended[${i}]`], isExtended);
+                     webgl.bindTexture(tilesetTextures[i + 15], i);
+                 }
+-                instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
++                this.ow3DrawCells(rebindGround);
+             }
+             instancedArrays.vertexAttribDivisorANGLE(texturesAttrib, 0);
+             instancedArrays.vertexAttribDivisorANGLE(variationsAttrib, 0);
+@@ -775,7 +816,14 @@ class War3MapViewerMap {
+             gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, 0);
+             instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 1);
+             gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.faceBuffer);
+-            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
++            // OpenWar3: same cell grid, same runs -- but water's two per-instance attributes are
++            // a 4-byte instance id and a SINGLE water flag byte, so the two offsets differ.
++            this.ow3DrawCells((first) => {
++                gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
++                gl.vertexAttribPointer(instanceAttrib, 1, gl.FLOAT, false, 4, first * 4);
++                gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
++                gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, first);
++            });
+             instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 0);
+             instancedArrays.vertexAttribDivisorANGLE(instanceAttrib, 0);
+         }

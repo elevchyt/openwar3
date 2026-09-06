@@ -83,6 +83,19 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   outside our loop*. The recorder is dev-server-only in both halves (`apply: "serve"` +
   `import.meta.env.DEV`), and phases must PARTITION the frame — nesting two `perfLog.begin`
   spans makes the report's `(unaccounted)` row meaningless.
+- **Terrain culling:** read [`docs/terrain-culling.md`](docs/terrain-culling.md) before touching
+  [`src/render/terrainCull.ts`](src/render/terrainCull.ts) or the `ow3Runs`/`ow3DrawCells` hunks in
+  the viewer patch. mdx-m3-viewer drew EVERY terrain cell every frame whatever the camera was
+  looking at (12 288 instances on Echo Isles, of which **704 are visible**); the per-cell buffers
+  are row-major, so the whole cull is an OFFSET into the attribute pointers and a list of
+  `(first, count)` runs, one per visible cell row. It is deliberately CONSERVATIVE and tested in
+  PIXELS against a control — two culled frames already differ (rain, idle clips, the fps readout),
+  so the bar is "culled vs unculled differs no more than culled vs culled", and `TerrainCull.enabled`
+  exists to take that measurement. On a modern GPU it is worth ~1 %: the frame is CPU-bound
+  elsewhere, and this is a change for the machine with no headroom — do not quote a number off the
+  dev box as though it were the point. `holdRuns` freezes the runs so you can fly out and SEE the
+  cull. The fog overlay and the baked shadow layer still sweep the whole map and can take the same
+  runs; the cliffs need per-instance bounds instead.
 - **Video options:** read [`docs/video-options.md`](docs/video-options.md) before touching the Video
   panel, [`src/render/videoQuality.ts`](src/render/videoQuality.ts) or anything that wants to be
   cheaper on a weak machine. The panel is the game's own, so its shape is not ours: the labels are
