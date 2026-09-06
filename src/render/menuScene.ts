@@ -1,4 +1,5 @@
 import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
+import { maxOmniLights } from "./videoQuality";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
 import type { DataSource } from "../vfs/types";
@@ -990,7 +991,12 @@ export class MenuScene {
     const v = this.lightVec;
     const s = this.lightScalar;
     let n = 0; // slots FILLED — not the light's index, since a non-omni is skipped
-    for (let i = 0; i < lights.length && n < MAX_OMNI; i++) {
+    // Options → Video → Lights caps how many of the model's points are uploaded
+    // (render/videoQuality.ts). At its lowest rung that is none, and the loop below never
+    // runs — the ambient term is still uploaded past it, so the screen keeps its own base
+    // wash rather than falling back to the shader's stock one.
+    const cap = Math.min(MAX_OMNI, maxOmniLights());
+    for (let i = 0; i < lights.length && n < cap; i++) {
       const light = lights[i];
       // Only `Type 0` is a point light, and everything below it — a world position, a distance
       // and a linear attenuation window — is a point light's arithmetic. Alliance_Exp carries

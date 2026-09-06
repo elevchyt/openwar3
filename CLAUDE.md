@@ -83,6 +83,18 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   outside our loop*. The recorder is dev-server-only in both halves (`apply: "serve"` +
   `import.meta.env.DEV`), and phases must PARTITION the frame — nesting two `perfLog.begin`
   spans makes the report's `(unaccounted)` row meaningless.
+- **Video options:** read [`docs/video-options.md`](docs/video-options.md) before touching the Video
+  panel, [`src/render/videoQuality.ts`](src/render/videoQuality.ts) or anything that wants to be
+  cheaper on a weak machine. The panel is the game's own, so its shape is not ours: the labels are
+  named PER ROW (there is no generic `LOW`/`HIGH` in GlobalStrings), `COLON_SHADOWS` is **"Unit
+  Shadows"** and so leaves the baked `war3map.shd` layer alone, and the shipped FDF has the Spell
+  Detail row commented out. Exactly ONE number in the file is the game's — the viewer's own
+  `SETTING_PARTICLES_HIGH = 2` makes the rate an MDX author wrote the game's *Medium* — and every
+  other rung is OURS and says so. Two rows have no backend on purpose (Model Detail: an MDX has no
+  LOD twin; Occlusion: we draw no x-ray silhouettes). Two traps: a terrain tileset is an ATLAS, so
+  dropping its mips bleeds across the cells and draws a seam around every tile; and Animation
+  Quality must not stride the SKELETONS, because the sim moves a unit by writing onto its instance
+  and a skipped instance stops moving.
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
   in `src/render/mapViewer.ts`, HUD DOM in `src/ui/hud.ts`, data tables in `src/data/` (units, techtree, `abilities.ts`),
   audio in `src/audio/`, styles in `src/style.css`.

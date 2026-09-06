@@ -21,6 +21,7 @@ import type { AdvancedOptions } from "./net/advancedOptions";
 import { WebSocketTransport } from "./net/transport";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
+import { applyVideoOptions } from "./render/videoQuality";
 import { GlueManager, type GlueScreenDef } from "./ui/glue";
 import { mountLoadingScreen, type LoadingScreen } from "./ui/loadingScreen";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
@@ -65,6 +66,12 @@ let mapCanvas = document.getElementById("map") as HTMLCanvasElement;
 const loadingCanvas = document.getElementById("loading") as HTMLCanvasElement;
 const loadingLayer = document.getElementById("loading-layer") as HTMLElement;
 const ui = document.getElementById("ui") as HTMLElement;
+
+// The Video panel, before anything can be drawn or loaded (render/videoQuality.ts). It goes
+// HERE, at module scope, rather than beside the audio applier down in the gate: texture quality
+// is read as a texture is uploaded, so a setting applied after the first viewer exists would
+// miss everything that viewer had already loaded.
+applyVideoOptions(loadOptions());
 
 const resolver = new AssetResolver(null);
 

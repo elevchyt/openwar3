@@ -100,6 +100,11 @@ html, body {
    box scales: pixel-for-pixel at 1080p fullscreen, never a stretched aspect anywhere else. */
 #map {
   background: #000;
+  /* Options -> Video -> Gamma (render/videoQuality.ts). The property is set on :root and only
+     while the slider is off its middle, so at the default this is `none` and the compositor has
+     no extra pass to make. It lives here rather than on the element because a match REPLACES
+     this canvas when it ends (main.ts freshMapCanvas) — an inline style would go with it. */
+  filter: var(--ow3-gamma, none);
 }
 
 /* World-anchored overlays (health bars, the drag box, floating combat text). Above the map,

@@ -32,6 +32,9 @@ global.window = global.window || {};
 const {
   OPTION_DEFS, defaultOptions, loadOptions, saveOptions, applyAudioOptions,
 } = require(join(REPO, ".sim-build", "src", "data", "options.js"));
+const {
+  applyVideoOptions, videoSettings, animStride, maxOmniLights,
+} = require(join(REPO, ".sim-build", "src", "render", "videoQuality.js"));
 const { SOUND_GROUP } = require(join(REPO, ".sim-build", "src", "audio", "sounds.js"));
 
 console.log("defaults cover every option in the table");
@@ -103,6 +106,42 @@ console.log("\nthe audio applier maps the sound options onto the SoundBoard");
   check("…but music still plays", calls.music, Math.round(0.7 * 127));
   applyAudioOptions(fake, { ...o, musicEnabled: false });
   check("music off zeroes the track", calls.music, 0);
+}
+
+console.log("\nthe video applier turns the panel's words into the renderer's numbers");
+{
+  // The bridge the vendored viewer reads (patches/mdx-m3-viewer@5.12.0.patch). It is a global
+  // precisely because those two call sites cannot import us, so the test asserts on the global.
+  const bridge = () => globalThis.__OW3_VIDEO__;
+
+  applyVideoOptions(defaultOptions());
+  check("defaults are the top rung", [videoSettings().particles, videoSettings().textureQuality], ["high", "high"]);
+  // High is what OpenWar3 has always drawn: the emitter object's own SETTING_PARTICLES_HIGH = 2,
+  // unscaled. Medium is therefore the rate the MDX author actually wrote.
+  check("high leaves the viewer's rate alone", bridge().particleScale, 1);
+  check("high uploads the full mip chain", bridge().textureMipDrop, 0);
+
+  applyVideoOptions({ ...defaultOptions(), particles: "medium", textureQuality: "medium" });
+  check("medium halves emission", bridge().particleScale, 0.5);
+  check("medium drops one mip", bridge().textureMipDrop, 1);
+
+  applyVideoOptions({ ...defaultOptions(), particles: "low", textureQuality: "low" });
+  check("low quarters emission", bridge().particleScale, 0.25);
+  check("low drops two mips", bridge().textureMipDrop, 2);
+
+  // "Unit Shadows" is a switch, and the ONLY value that turns it off is the FDF's own "off".
+  check("shadows default on", videoSettings().unitShadows, true);
+  applyVideoOptions({ ...defaultOptions(), shadows: "off" });
+  check("shadows off", videoSettings().unitShadows, false);
+
+  applyVideoOptions({ ...defaultOptions(), animQuality: "low", lights: "low" });
+  check("low anim scans a quarter as often", animStride(), 4);
+  check("low lights uploads no points", maxOmniLights(), 0);
+
+  // A store written by an older build, or edited by hand, must not put a junk string into a
+  // renderer ladder — every rung is looked up by key and an unknown one is not a rung.
+  applyVideoOptions({ ...defaultOptions(), particles: "ultra", animQuality: 7 });
+  check("an unknown rung falls back to the default", [bridge().particleScale, animStride()], [1, 1]);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");

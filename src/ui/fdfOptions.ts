@@ -12,6 +12,7 @@ import {
   type Options,
   type OptionDef,
 } from "../data/options";
+import { applyVideoOptions } from "../render/videoQuality";
 
 // The Options screen (issue #81), built from the game's own UI\FrameDef\Glue\OptionsMenu.fdf:
 // the three category buttons (Gameplay / Video / Sound) down the right, the settings for the
@@ -30,9 +31,10 @@ import {
 //     ones live so a volume drag is heard immediately; OK commits the copy to localStorage,
 //     Cancel throws it away and restores the committed values (re-applying the audio it touched).
 //
-// The three video-quality dropdowns and the gameplay sliders are remembered but don't yet drive
-// anything (a WebGL client sizes to its canvas; see OPTION_DEFS `applied:false`) — the Sound
-// panel is the one with a live backend, wired through applyAudioOptions.
+// The Sound and Video panels both have live backends — applyAudioOptions and applyVideoOptions,
+// each called from `commit` as its own panel is touched, so a volume drag is heard and a gamma
+// drag is seen. The gameplay sliders, and the two video rows this engine has no feature behind,
+// are remembered only (see OPTION_DEFS `applied:false`, which says why for each).
 //
 // WHERE THE BIG PANEL BEHIND THESE CONTROLS COMES FROM. Nothing in this file draws it: the
 // settings frame is 3D chrome in the LEFT sprite layer, and it is the one screen in the game
@@ -82,6 +84,10 @@ export async function mountOptions(
   const applyAudio = (opts: Options): void => {
     if (h.sounds) applyAudioOptions(h.sounds, opts);
   };
+  // The video half applies live for the same reason the audio half does: a gamma slider you
+  // cannot see move is not a gamma slider. Both are applied off the WORKING copy, so Cancel
+  // putting the committed values back through the same two calls is a complete undo.
+  const applyVideo = (opts: Options): void => applyVideoOptions(opts);
 
   const num = (v: unknown, fallback: number): number => (typeof v === "number" ? v : fallback);
   const str = (v: unknown, fallback: string): string => (typeof v === "string" ? v : fallback);
@@ -111,7 +117,7 @@ export async function mountOptions(
       SoundButton: () => void showPanel("sound"),
       OKButton: () => { saveOptions(working); h.onClose(); },
       // Undo everything this visit changed — including the audio applied live along the way.
-      CancelButton: () => { Object.assign(working, committed); applyAudio(committed); h.onClose(); },
+      CancelButton: () => { Object.assign(working, committed); applyAudio(committed); applyVideo(committed); h.onClose(); },
     },
     onBuild: (s) => bind(s),
   });
@@ -163,6 +169,7 @@ export async function mountOptions(
     const commit = (v: Options[string]): void => {
       working[d.key] = v;
       if (d.panel === "sound") applyAudio(working); // heard the instant it changes
+      if (d.panel === "video") applyVideo(working); // …and seen the instant it changes
     };
     if (d.kind === "bool") {
       const c = s.checkBox(d.frame);

@@ -9,10 +9,13 @@ import { SOUND_GROUP, type SoundBoard } from "../audio/sounds";
 // with the FDF FRAME that drives it and the kind of control it is, so the screen can bind
 // every widget generically instead of naming each one twice. Defaults match Warcraft III's.
 //
-// Not every option the FDF carries maps to something this engine does yet — the video panel's
-// resolution/model-detail/etc. are meaningless to a WebGL client, and are kept as remembered
-// UI state rather than faked behaviour. The ones with a real backend (the whole Sound panel)
-// are applied live through `applyAudioOptions`. Persist-only options are marked `applied:false`.
+// Not every option the FDF carries maps to something this engine does — the resolution list is
+// meaningless to a client that renders into a fixed 16:9 buffer (ui/stage.ts), and two of the
+// video rows describe features we do not have. Those are kept as remembered UI state rather than
+// faked behaviour, and are marked `applied:false` with the reason next to them. The rest have a
+// live backend: the Sound panel through `applyAudioOptions` here, the Video panel through
+// `applyVideoOptions` in render/videoQuality.ts, which is also where each video setting's
+// meaning (and which of its numbers are the game's) is written down.
 
 /** The kind of control an option is bound to, which decides how its value is read/written. */
 export type OptionKind = "bool" | "range" | "choice" | "text";
@@ -27,18 +30,23 @@ export interface OptionDef {
   /** Default value: boolean for bool, 0–100 for range, a choice value for choice, string for text. */
   def: boolean | number | string;
   /** `choice` options: the value/label pairs. Labels are GlobalStrings keys resolved by the
-   *  screen (LOW/MEDIUM/HIGH/OFF/ON). Empty for the dropdowns WC3 fills at runtime (resolution,
-   *  sound provider) — those stay empty and disabled, as they have nothing to offer us. */
+   *  screen (`LOW_MODELS`, `HIGH_PARTICLES`, `OFF`/`ON`, …). Empty for the dropdowns WC3 fills at
+   *  runtime (resolution, sound provider) — those stay empty and disabled, having nothing to
+   *  offer us. */
   choices?: Array<{ value: string; label: string }>;
   /** False when the option is remembered but nothing in the engine reads it yet. Documented so
    *  a future feature knows the value is already there, and so the screen can dim it if wanted. */
   applied?: boolean;
 }
 
-const QUALITY = [
-  { value: "low", label: "LOW" },
-  { value: "medium", label: "MEDIUM" },
-  { value: "high", label: "HIGH" },
+// The three-rung dropdowns each have their OWN label keys — the FDF spells the MenuItems out
+// per row (`LOW_MODELS`/`MEDIUM_MODELS`/`HIGH_MODELS`, `LOW_ANIM`…, and so on) and GlobalStrings
+// gives every one of them the same three words. There is no generic `LOW`/`MEDIUM`/`HIGH` in
+// GlobalStrings at all, so a shared table left every video dropdown showing its raw key.
+const quality = (suffix: string) => [
+  { value: "low", label: `LOW_${suffix}` },
+  { value: "medium", label: `MEDIUM_${suffix}` },
+  { value: "high", label: `HIGH_${suffix}` },
 ];
 const ON_OFF = [
   { value: "off", label: "OFF" },
@@ -64,16 +72,24 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // is also where the Game Port and Chat Support rows that used to sit under this one go.
   { key: "computerPlusDefault", frame: "ComputerPlusDefaultCheckBox", kind: "bool", panel: "gameplay", def: false },
 
-  // --- Video (remembered, not yet acted on — a WebGL client sizes to its canvas) ---
-  { key: "gamma", frame: "GammaSlider", kind: "range", panel: "video", def: 50, applied: false },
-  { key: "modelDetail", frame: "ModelDetailMenu", kind: "choice", panel: "video", def: "high", choices: QUALITY, applied: false },
-  { key: "animQuality", frame: "AnimQualityMenu", kind: "choice", panel: "video", def: "high", choices: QUALITY, applied: false },
-  { key: "textureQuality", frame: "TextureQualityMenu", kind: "choice", panel: "video", def: "high", choices: QUALITY, applied: false },
-  { key: "particles", frame: "ParticlesMenu", kind: "choice", panel: "video", def: "high", choices: QUALITY, applied: false },
-  { key: "lights", frame: "LightsMenu", kind: "choice", panel: "video", def: "high", choices: QUALITY, applied: false },
-  { key: "shadows", frame: "ShadowsMenu", kind: "choice", panel: "video", def: "on", choices: ON_OFF, applied: false },
+  // --- Video (applied through render/videoQuality.ts, which documents what each rung does) ---
+  { key: "gamma", frame: "GammaSlider", kind: "range", panel: "video", def: 50 },
+  // No LOD models to swap to: an MDX carries one mesh, and WC3's lower rungs picked a simpler
+  // one. Faking it by thinning the map's doodads would change what the map LOOKS like rather
+  // than how much it costs to draw, which is not what the row says.
+  { key: "modelDetail", frame: "ModelDetailMenu", kind: "choice", panel: "video", def: "high", choices: quality("MODELS"), applied: false },
+  { key: "animQuality", frame: "AnimQualityMenu", kind: "choice", panel: "video", def: "high", choices: quality("ANIM") },
+  { key: "textureQuality", frame: "TextureQualityMenu", kind: "choice", panel: "video", def: "high", choices: quality("TEXTURES") },
+  { key: "particles", frame: "ParticlesMenu", kind: "choice", panel: "video", def: "high", choices: quality("PARTICLES") },
+  { key: "lights", frame: "LightsMenu", kind: "choice", panel: "video", def: "high", choices: quality("LIGHTS") },
+  // "Unit Shadows:" (COLON_SHADOWS) — the model shadow decals, not the baked terrain layer.
+  { key: "shadows", frame: "ShadowsMenu", kind: "choice", panel: "video", def: "on", choices: ON_OFF },
+  // Occlusion is the x-ray silhouette a unit shows through a cliff or a tree — the thing
+  // `EnableOcclusion` turns off for a cinematic (jass/natives/cinematic.ts). We don't draw it,
+  // so there is nothing here to switch.
   { key: "occlusion", frame: "OcclusionMenu", kind: "choice", panel: "video", def: "on", choices: ON_OFF, applied: false },
-  { key: "spellFilter", frame: "SpellFilterMenu", kind: "choice", panel: "video", def: "high", choices: QUALITY, applied: false },
+  // …and no Spell Detail row: the shipped 1.30.4 OptionsMenu.fdf has the whole `SpellFilterMenu`
+  // block commented out, so the panel it is bound to has never had one.
 
   // --- Sound (all live-applied through applyAudioOptions) ---
   { key: "soundEnabled", frame: "SoundCheckBox", kind: "bool", panel: "sound", def: true },

@@ -1870,3 +1870,112 @@ index afd956b8a078be77190d840a7fe5cb4d2c76797a..66de9bb3445643603adc39e0cbec367e
          this.viewer = viewer;
          const canvas = viewer.canvas;
          const width = canvas.width;
+diff --git a/dist/cjs/viewer/handlers/blp/texture.js b/dist/cjs/viewer/handlers/blp/texture.js
+index 26347d6d988194c95415c2a40597123e80bd61a2..3d28cc4165be8474ed4005abfe3ce7265f762b9c 100644
+--- a/dist/cjs/viewer/handlers/blp/texture.js
++++ b/dist/cjs/viewer/handlers/blp/texture.js
+@@ -29,28 +29,58 @@ class BlpTexture extends texture_1.default {
+             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+         }
+         const mipmaps = image.mipmaps();
++        // OpenWar3: Options -> Video -> Texture Quality (src/render/videoQuality.ts, VideoBridge).
++        // `textureMipDrop` levels are taken off the TOP of the chain, so Medium uploads the
++        // half-size mip as level 0 and Low the quarter-size one. This is the one downscale a
++        // mipmapped BLP gives away free: the levels below are already in the file, so the large
++        // one is never decoded and never uploaded -- load time and CPU as well as texture memory
++        // (a quarter-width texture is a sixteenth of the bytes). Read through a global because
++        // this is vendored code our own modules cannot be imported into.
++        //
++        // …with one exemption, and it is visible the moment it is missing. A terrain TILESET is
++        // an ATLAS -- an "extended" tileset is four variations side by side in one image, which
++        // is exactly what the ground shader's `u_extended` test (width > height) is asking. An
++        // atlas has no padding between its cells, so each mip level down blends further across
++        // their borders, and the coarse levels a drop promotes to level 0 paint a dark seam
++        // around every terrain tile on the map. Wide images keep their full chain for that
++        // reason; the bulk of the memory is in the hundreds of unit and doodad skins anyway,
++        // and those are square.
++        const ow3 = globalThis.__OW3_VIDEO__;
++        const atlas = image.width > image.height;
++        const drop = atlas ? 0 : Math.max(0, Math.min(ow3 ? ow3.textureMipDrop | 0 : 0, mipmaps - 1));
+         // If there is one mipmap, or fake mipmaps, or it's an NPOT image, use just the first mipmap. Otherwise load all of them.
+         if (mipmaps === 1 || image.fakeMipmaps() || !isPOT) {
++            // Nothing to drop here: there is no chain to climb down, and re-sampling the single
++            // level on the CPU would cost more than the upload it saves.
+             const imageData = image.getMipmap(0);
+             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, imageData);
++            this.width = image.width;
++            this.height = image.height;
+         }
+         else {
+             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+             let width = image.width;
+             let height = image.height;
+-            for (let i = 0; i < mipmaps; i++) {
++            for (let i = 0; i < drop; i++) {
++                width = Math.ceil(width / 2);
++                height = Math.ceil(height / 2);
++            }
++            // The dropped level becomes level 0, so these are the size of the texture that now
++            // EXISTS. Everything reading them wants that: the ground shader's "is this tileset
++            // extended" test is a width-vs-height ratio, which whole halvings preserve.
++            this.width = width;
++            this.height = height;
++            for (let i = drop; i < mipmaps; i++) {
+                 const imageData = image.getMipmap(i);
+                 // Don't use the image data dimensions directly.
+                 // Some JPG mipmaps out there have wrong sizes.
+                 // For example the last two mipmaps being 2x1, which messes with GL.
+-                gl.texImage2D(gl.TEXTURE_2D, i, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, imageData.data);
++                gl.texImage2D(gl.TEXTURE_2D, i - drop, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, imageData.data);
+                 width = Math.ceil(width / 2);
+                 height = Math.ceil(height / 2);
+             }
+         }
+-        this.width = image.width;
+-        this.height = image.height;
+         this.webglResource = id;
+     }
+ }
+diff --git a/dist/cjs/viewer/handlers/mdx/particleemitter2.js b/dist/cjs/viewer/handlers/mdx/particleemitter2.js
+index 34686902ea449513570fad17cecbb6938ad9547a..2d355bcd094726e48a364a491faa5fb6d7d0af39 100644
+--- a/dist/cjs/viewer/handlers/mdx/particleemitter2.js
++++ b/dist/cjs/viewer/handlers/mdx/particleemitter2.js
+@@ -3,6 +3,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
+ const emitter_1 = require("./emitter");
+ const particle2_1 = require("./particle2");
+ const emissionRateHeap = new Float32Array(1);
++// OpenWar3: Options -> Video -> Particles (src/render/videoQuality.ts, VideoBridge).
++//
++// The emitter OBJECT has already multiplied the author's rate by SETTING_PARTICLES_HIGH = 2 --
++// geometryemitterfuncs.js records why: the game doubles emission at High, so the rate written
++// into the MDX is the game's Medium. That stays where it is and this scales it, making High the
++// doubled rate, Medium the authored one, and Low a quarter of it. Applied HERE, at the moment of
++// emission, rather than to the object's stored rate, so a change on the Options screen shows in
++// the scene behind it instead of waiting for the next model to load. Read through a global
++// because this is vendored code our own modules cannot be imported into.
++function ow3ParticleScale() {
++    const ow3 = globalThis.__OW3_VIDEO__;
++    return ow3 && typeof ow3.particleScale === 'number' ? ow3.particleScale : 1;
++}
+ /**
+  * An MDX particle emitter type 2.
+  */
+@@ -17,14 +30,15 @@ class ParticleEmitter2 extends emitter_1.default {
+         if (instance.allowParticleSpawn) {
+             const emitterObject = this.emitterObject;
+             const keyframe = emitterObject.getEmissionRate(emissionRateHeap, instance.sequence, instance.frame, instance.counter);
++            const scale = ow3ParticleScale();
+             if (emitterObject.squirt) {
+                 if (keyframe !== this.lastEmissionKey) {
+-                    this.currentEmission += emissionRateHeap[0];
++                    this.currentEmission += emissionRateHeap[0] * scale;
+                 }
+                 this.lastEmissionKey = keyframe;
+             }
+             else {
+-                this.currentEmission += emissionRateHeap[0] * dt;
++                this.currentEmission += emissionRateHeap[0] * dt * scale;
+             }
+         }
+     }

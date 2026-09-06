@@ -61,6 +61,7 @@ import { ModelViewerScene } from "./modelViewer";
 import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { perfLog } from "../dev/perfLog";
+import { animStride, videoSettings } from "./videoQuality";
 import { setSimProfiler } from "../sim/profile";
 import { wc3ToPlain } from "../ui/wc3Text";
 import { GameHud, isTyping, upkeepBand, PLAYER_COLORS, type HudDriver, type CommandButton } from "../ui/hud";
@@ -585,6 +586,12 @@ interface W3xMap {
   renderGround(): void;
   renderCliffs(): void;
   renderWater(): void;
+  /** The scrolling water animation: `update()` steps `waterIndex` on by
+   *  `waterIncreasePerFrame` and wraps it at the end of `waterTextures`. Ours to step on the
+   *  frames Animation Quality skips that call — see `updateMapWidgets`. */
+  waterIndex: number;
+  waterIncreasePerFrame: number;
+  waterTextures: ArrayLike<unknown>;
   units: unknown[];
   doodads: HideableWidget[];
   doodadsReady: boolean;
@@ -10725,7 +10732,7 @@ export class MapViewerScene {
       // moving.
       perfLog.begin("anim");
       baseUpdate.call(this.viewer, wdt);
-      if (!this.paused) this.viewer.map?.update();
+      if (!this.paused) this.updateMapWidgets();
       // Re-pin under-construction buildings AFTER the animation advance so a
       // halted build's Birth animation truly freezes (and resumes with progress).
       this.rts?.repinConstructionFrames();
@@ -10817,7 +10824,14 @@ export class MapViewerScene {
       // ubersplats instead of under them (issue #16), while the splats still sit on the
       // terrain. Splats draw before the fog so the veil dims them like the ground.
       // Rebuild the unit shadow batch from the visible units (cheap — see updateShadowBatch).
-      if (this.shadows) this.updateShadowBatch();
+      //
+      // Options → Video → "Unit Shadows" (COLON_SHADOWS) switches the MODEL shadows off: the
+      // blob under a unit and the decal under a building, which are the two passes below and
+      // the batch this line rebuilds for them. The map's baked `war3map.shd` layer is NOT one
+      // of them and stays on — it is part of how the ground looks, not a shadow the engine
+      // casts (docs/lighting.md, render/videoQuality.ts).
+      const unitShadows = videoSettings().unitShadows;
+      if (this.shadows && unitShadows) this.updateShadowBatch();
       if (map && fogScene && map.anyReady) {
         fogScene.startFrame();
         this.syncBlight(map); // the Undead's rot, painted onto the ground before it is drawn
@@ -10828,14 +10842,14 @@ export class MapViewerScene {
         // The map's baked shadow layer goes down FIRST, under everything: it is part of how
         // the ground looks, so a unit blob and a foundation decal both belong on top of it.
         if (this.terrainShadows) this.terrainShadows.render(fogScene.camera.viewProjectionMatrix);
-        if (this.shadows) this.shadows.render(fogScene.camera.viewProjectionMatrix);
+        if (this.shadows && unitShadows) this.shadows.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderOpaque();
         map.renderWater();
         if (this.splats) this.splats.render(fogScene.camera.viewProjectionMatrix);
         // Building shadows draw AFTER the foundation decals so a building's shadow darkens
         // its own ubersplat, not just the grass around it (issue #58 f/u). The building
         // body (opaque, already drawn) still occludes it at the base via depth.
-        if (this.buildingShadows) this.buildingShadows.render(fogScene.camera.viewProjectionMatrix);
+        if (this.buildingShadows && unitShadows) this.buildingShadows.render(fogScene.camera.viewProjectionMatrix);
         // Selection rings draw right after the shadows/splats (so a ring paints ON TOP of a
         // foundation decal — issue #16) and BEFORE the translucent units (so a unit body
         // draws over its own ring, which reads as sitting under it).
@@ -10849,9 +10863,9 @@ export class MapViewerScene {
         // Map not fully ready — fall back to the stock all-in-one path. Depth-test (depthMask
         // off) keeps units in front of both shadow passes even when drawn late.
         this.viewer.render();
-        if (this.shadows && fogScene) this.shadows.render(fogScene.camera.viewProjectionMatrix);
+        if (this.shadows && fogScene && unitShadows) this.shadows.render(fogScene.camera.viewProjectionMatrix);
         if (this.splats && fogScene) this.splats.render(fogScene.camera.viewProjectionMatrix);
-        if (this.buildingShadows && fogScene) this.buildingShadows.render(fogScene.camera.viewProjectionMatrix);
+        if (this.buildingShadows && fogScene && unitShadows) this.buildingShadows.render(fogScene.camera.viewProjectionMatrix);
         if (this.ringSplats && fogScene) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
         if (fogScene) this.renderLightning(fogScene.camera);
       }
@@ -11146,6 +11160,36 @@ export class MapViewerScene {
    *  Corpses and fogged/mined units are skipped — a fogged enemy's shadow must not reveal
    *  it. Cheap: a beginFrame + one small tessellation per unit, all drawn later in ~one
    *  call per shadow texture. */
+  /** Frames retired since the map's widgets were last scanned — the phase of `animStride`. */
+  private widgetScanPhase = 0;
+
+  /**
+   * `War3MapViewer`'s `map.update()`, at the rate Options → Video → Animation Quality asks for.
+   *
+   * That call does two unrelated things. It rolls the water texture on one step, which is the
+   * sea moving and belongs to every frame; and it walks EVERY doodad and EVERY map-placed unit
+   * asking whether their stand animation has run out and a new one should be picked
+   * (`Widget.update`). The second is thousands of iterations on a big map — 3 300 trees on
+   * Twisted Meadows — to answer "no" almost every time, and it is the honest reach of an
+   * animation-quality setting in this engine: the expensive half of animating a model cannot be
+   * strided, because the sim moves a unit by writing onto its instance and the skeleton is what
+   * carries that to the screen (render/videoQuality.ts, ANIM_STRIDE).
+   *
+   * So the scan is strided and the water is not: on a frame the scan skips, the roll is stepped
+   * here exactly as `update()` would have, or the sea would run at a quarter speed on Low.
+   */
+  private updateMapWidgets(): void {
+    const map = this.viewer.map;
+    if (!map) return;
+    const stride = animStride();
+    if (stride <= 1 || this.widgetScanPhase++ % stride === 0) {
+      map.update();
+      return;
+    }
+    map.waterIndex += map.waterIncreasePerFrame;
+    if (map.waterIndex >= map.waterTextures.length) map.waterIndex = 0;
+  }
+
   private updateShadowBatch(): void {
     const world = this.rts?.simWorld;
     if (!this.shadows || !this.buildingShadows || !world) return;
