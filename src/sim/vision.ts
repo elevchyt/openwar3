@@ -68,6 +68,122 @@ export function fogStateOf(jassState: number): FogState {
   return FogState.Visible;
 }
 
+/**
+ * One unit's sight footprint, cast ONCE and replayed.
+ *
+ * THE COST THIS EXISTS FOR. `revealLineOfSight` casts a ray to every cell on the sight ring and
+ * walks it — O(R²) per unit, and R is ~22 cells for a footman and ~28 for a town hall, so one
+ * unit is a few thousand ray steps. That was being paid again for every unit, in every
+ * VIEWPOINT, ten times a second. In an eight-player match with 366 units on the field it came to
+ * roughly sixteen million ray steps a second and 2.5 ms of every frame — the largest single
+ * sub-phase of the sim after the world step itself (docs/perf-logging.md, and the Feralas LV
+ * session that prompted this).
+ *
+ * WHY ONE CACHE SERVES EVERY VIEWPOINT. The footprint of a sight is a fact about the TERRAIN, not
+ * about who is looking: `VisionSet` installs the same height field on every viewpoint and
+ * broadcasts every felled tree to all of them, so a unit standing on a spot lights the same cells
+ * for its owner, for each ally sharing vision, and for an observer. What differs between
+ * viewpoints is only WHICH units they stamp and which of their own three layers they write —
+ * both of which stay where they are. So the ray cast is shared and the writing is not.
+ *
+ * WHY IT IS KEYED ON THE UNIT AND NOT ON THE POSITION. A position key would be a cache with no
+ * bound: a unit walking across the map mints a new entry every 64 world units and never returns
+ * to one. Keyed on the unit there is exactly one entry per unit, replaced when it moves to
+ * another vision cell — which still hits, because viewpoints rebuild 8 ms apart while a running
+ * unit takes ~240 ms to cross a cell.
+ *
+ * DETERMINISM. A replay writes exactly the cell list the cast produced, so a cached rebuild and
+ * an uncast one are the same grid to the byte. `tools/sim-vision-cache-test.cjs` asserts that
+ * against the real map rather than trusting it.
+ */
+export class SightStamps {
+  private readonly byUnit = new Map<number, { cx: number; cy: number; r: number; cells: Uint32Array; used: number }>();
+  private clock = 0;
+  /** Cast/replay counts, for the test and for anyone wondering whether it is working. */
+  hits = 0;
+  misses = 0;
+  /**
+   * Turn the sharing off — every sight is cast from scratch, which is what this replaced.
+   *
+   * It exists for the same reason `TerrainCull.enabled` does: a claim about how much something
+   * costs has to be measurable in the running game, on the same match state, at the same moment,
+   * rather than inferred from a benchmark's model of one. `tools/sim-vision-cache-test.cjs`
+   * takes the synthetic measurement; this takes the real one.
+   */
+  enabled = true;
+
+  /** The remembered footprint for this unit at this exact cell and sight, or null. */
+  get(unit: number, cx: number, cy: number, r: number): Uint32Array | null {
+    const e = this.byUnit.get(unit);
+    if (!e || e.cx !== cx || e.cy !== cy || e.r !== r) {
+      this.misses++;
+      return null;
+    }
+    // The clock has to advance on a HIT as well as on a put, or a settled match — which is
+    // mostly hits — never moves it, and the sweep below has no idea what is stale.
+    e.used = ++this.clock;
+    this.hits++;
+    return e.cells;
+  }
+
+  put(unit: number, cx: number, cy: number, r: number, cells: Uint32Array): void {
+    this.byUnit.set(unit, { cx, cy, r, cells, used: ++this.clock });
+    // A dead unit's entry is never asked for again, and nothing tells us it died. Sweep the
+    // ones nothing has touched in a long while, but only once the map is big enough to be
+    // worth walking — the live set is one entry per unit on the field.
+    if (this.byUnit.size > 4096) this.sweep();
+  }
+
+  /**
+   * A tree came down (or grew) at this cell: every footprint whose ray ring could have crossed
+   * it is now wrong. The rays reach `r` cells in Chebyshev distance, so anything further than
+   * `r + radius` away cannot have been shadowed by it and keeps its entry.
+   */
+  invalidateAround(cx: number, cy: number, radius: number): void {
+    for (const [unit, e] of this.byUnit) {
+      const reach = e.r + radius;
+      if (Math.abs(e.cx - cx) <= reach && Math.abs(e.cy - cy) <= reach) this.byUnit.delete(unit);
+    }
+  }
+
+  /** The ground itself moved under everything — forget the lot. */
+  clear(): void {
+    this.byUnit.clear();
+  }
+
+  // ---- the recorder's scratch ----------------------------------------------------------
+  //
+  // A cast's rays cross the cells near the eye many times over, so the footprint has to be
+  // deduped as it is collected or the replay costs several times what it should. That needs a
+  // mark per cell — half a megabyte on a big map — and it lives HERE, on the one shared cache,
+  // rather than on each of nine viewpoints: a cast is never nested, so one is all there is use
+  // for.
+  private mark: Int32Array | null = null;
+  private gen = 0;
+
+  beginCast(cells: number): void {
+    if (!this.mark || this.mark.length < cells) this.mark = new Int32Array(cells);
+    this.gen++;
+  }
+
+  /** True the first time this cell is offered during the current cast. */
+  markOnce(i: number): boolean {
+    const m = this.mark!;
+    if (m[i] === this.gen) return false;
+    m[i] = this.gen;
+    return true;
+  }
+
+  get size(): number {
+    return this.byUnit.size;
+  }
+
+  private sweep(): void {
+    const stale = this.clock - 2048;
+    for (const [unit, e] of this.byUnit) if (e.used < stale) this.byUnit.delete(unit);
+  }
+}
+
 export class VisionMap {
   readonly width: number; // cells
   readonly height: number;
@@ -108,6 +224,12 @@ export class VisionMap {
   private ground: Float32Array | null = null;
   private block: Float32Array | null = null;
   private treeCount: Uint16Array | null = null;
+  // The shared sight-footprint cache (see SightStamps), and the scratch a cache MISS records
+  // into: `rec` collects the cells this cast lit, and `recMark`/`recGen` dedupe them, because
+  // the rays overlap heavily near the eye and a footprint replayed with its duplicates would
+  // cost several times what it should.
+  private stamps: SightStamps | null = null;
+  private rec: number[] | null = null;
 
   constructor(originX: number, originY: number, worldWidth: number, worldHeight: number) {
     this.originX = originX;
@@ -119,9 +241,17 @@ export class VisionMap {
     this.seen = new Uint8Array(this.width * this.height);
   }
 
+  /** Share one sight-footprint cache with every other viewpoint on this map (SightStamps).
+   *  Without one, every reveal is cast from scratch, which is exactly what the uncached arm of
+   *  `tools/sim-vision-cache-test.cjs` measures against. */
+  setSightStamps(stamps: SightStamps | null): void {
+    this.stamps = stamps;
+  }
+
   /** Install the terrain height field so reveal() does line-of-sight. `heightAt` is
    *  the same world-height sampler units stand on. Sampled once per cell centre. */
   setHeightField(heightAt: (wx: number, wy: number) => number): void {
+    this.stamps?.clear(); // the ground every footprint was cast over is being replaced
     const n = this.width * this.height;
     this.ground = new Float32Array(n);
     this.block = new Float32Array(n);
@@ -150,6 +280,7 @@ export class VisionMap {
       this.treeCount![i]++;
       this.block![i] = this.ground![i] + TREE_BLOCK;
     });
+    this.forgetStampsAround(wx, wy, radius);
   }
 
   /** A felled tree stops blocking sight once a cell holds no more trees. Pass the
@@ -158,6 +289,17 @@ export class VisionMap {
     this.forEachBlockerCell(wx, wy, radius, (i) => {
       if (this.treeCount![i] > 0 && --this.treeCount![i] === 0) this.block![i] = this.ground![i];
     });
+    this.forgetStampsAround(wx, wy, radius);
+  }
+
+  /** What casts a shadow here has changed, so every remembered footprint that could have been
+   *  shadowed by it has to be cast again. The cache is SHARED, so this is stated once here
+   *  rather than by each viewpoint — every one of them is handed the same tree events, and the
+   *  ones after the first find nothing left to forget. */
+  private forgetStampsAround(wx: number, wy: number, radius: number): void {
+    if (!this.stamps) return;
+    const [cx, cy] = this.worldToCell(wx, wy);
+    this.stamps.invalidateAround(cx, cy, Math.ceil(radius / VISION_CELL) + 1);
   }
 
   /** Cells covered by a footprint square: every cell whose CENTRE falls in the
@@ -235,9 +377,12 @@ export class VisionMap {
   /** Reveal a unit's sight of world radius `radius` centred at (wx, wy). With a
    *  height field installed and a ground unit, this is line-of-sight (higher ground
    *  and trees cast shadows); flyers and the no-field fallback reveal a full circle. */
-  reveal(wx: number, wy: number, radius: number, flying = false): void {
+  reveal(wx: number, wy: number, radius: number, flying = false, unit?: number): void {
     if (radius <= 0) return;
-    if (this.ground && this.block && !flying) this.revealLineOfSight(wx, wy, radius);
+    // `unit` opts this sight into the footprint cache. Only the line-of-sight path takes it:
+    // the radial one casts no rays at all, so there is nothing there worth remembering, and its
+    // radius is a float rather than the integer ring the cache is keyed on.
+    if (this.ground && this.block && !flying) this.revealLineOfSight(wx, wy, radius, unit);
     else this.revealRadial(wx, wy, radius);
   }
 
@@ -271,17 +416,31 @@ export class VisionMap {
    *  is visible only if it rises to (or above) that running horizon. Higher ground /
    *  trees raise the horizon and so shadow the lower ground behind them — while a unit
    *  standing ON high ground looks down over everything. O(radius²) per unit. */
-  private revealLineOfSight(wx: number, wy: number, radius: number): void {
+  private revealLineOfSight(wx: number, wy: number, radius: number, unit?: number): void {
     const ground = this.ground!;
     const ucx = Math.floor((wx - this.originX) / VISION_CELL);
     const ucy = Math.floor((wy - this.originY) / VISION_CELL);
     if (!this.inBounds(ucx, ucy)) return;
     const R = Math.round(radius / VISION_CELL);
+    // Has this unit already lit this exact cell with this exact sight — for ANY viewpoint on this
+    // map? Then the answer is a list of cells rather than a few thousand ray steps. (Switched
+    // off, this bypasses the cache COMPLETELY rather than always missing: a miss still records
+    // the footprint on the way past, and an off-arm that pays for recording would not be a
+    // measurement of what this replaced.)
+    const stamps = unit === undefined || !this.stamps?.enabled ? null : this.stamps;
+    if (stamps) {
+      const cached = stamps.get(unit as number, ucx, ucy, R);
+      if (cached) {
+        this.applyCells(cached);
+        return;
+      }
+      // A miss: cast it, and record what it lit on the way.
+      this.rec = [];
+      stamps.beginCast(this.width * this.height);
+    }
     const eyeH = ground[ucy * this.width + ucx] + EYE_BONUS;
     // The unit always sees its own cell.
-    this.visible[ucy * this.width + ucx] = 1;
-    this.explored[ucy * this.width + ucx] = 1;
-    this.seen[ucy * this.width + ucx] = 1;
+    this.lit(ucy * this.width + ucx);
     // Cast to every cell on the square ring at Chebyshev distance R; the ray walk
     // clips to the circular radius. Adjacent rays overlap enough to cover the disk.
     for (let t = -R; t <= R; t++) {
@@ -289,6 +448,35 @@ export class VisionMap {
       this.castRay(ucx, ucy, ucx + t, ucy + R, R, eyeH);
       this.castRay(ucx, ucy, ucx - R, ucy + t, R, eyeH);
       this.castRay(ucx, ucy, ucx + R, ucy + t, R, eyeH);
+    }
+    if (stamps) {
+      stamps.put(unit as number, ucx, ucy, R, Uint32Array.from(this.rec!));
+      this.rec = null;
+    }
+  }
+
+  /** This cell is lit: the three layers, and the recorder if a cast is being remembered — deduped
+   *  through the cache's own mark (`markOnce`), since the ray fan crosses the cells near the eye
+   *  many times over and a footprint replayed with its duplicates costs several times what it
+   *  should. */
+  private lit(i: number): void {
+    this.visible[i] = 1;
+    this.explored[i] = 1;
+    this.seen[i] = 1;
+    const rec = this.rec;
+    if (rec && this.stamps!.markOnce(i)) rec.push(i);
+  }
+
+  /** Replay a remembered footprint into THIS viewpoint's layers. */
+  private applyCells(cells: Uint32Array): void {
+    const visible = this.visible;
+    const explored = this.explored;
+    const seen = this.seen;
+    for (let k = 0; k < cells.length; k++) {
+      const i = cells[k];
+      visible[i] = 1;
+      explored[i] = 1;
+      seen[i] = 1;
     }
   }
 
@@ -318,9 +506,7 @@ export class VisionMap {
       const dWorld = dCells * VISION_CELL;
       // Visible if this cell's terrain rises to at least the running horizon angle.
       if ((ground[i] - eyeH) / dWorld >= maxAngle - ANGLE_EPS) {
-        this.visible[i] = 1;
-        this.explored[i] = 1;
-        this.seen[i] = 1;
+        this.lit(i);
       }
       // Then this cell's BLOCK height (terrain + any tree) raises the horizon for
       // everything beyond it along this ray.

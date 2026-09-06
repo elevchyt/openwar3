@@ -1,4 +1,4 @@
-import { VisionMap, FogState, fogStateOf } from "../sim/vision";
+import { VisionMap, FogState, fogStateOf, SightStamps} from "../sim/vision";
 import type { AllianceTable } from "../sim/alliances";
 import type { SimUnit } from "../sim/world";
 import type { HeightSampler } from "./heightmap";
@@ -100,6 +100,13 @@ export class Viewpoint {
     private readonly seatedTeam: (player: number) => number | undefined = () => undefined,
   ) {
     this.vision = new VisionMap(originX, originY, worldWidth, worldHeight);
+  }
+
+  /** Share the map's one sight-footprint cache (sim/vision.ts SightStamps). Every viewpoint on
+   *  a map gets the SAME object: the footprint of a sight is a fact about the terrain, and every
+   *  viewpoint is handed the same height field and the same felled trees. */
+  setSightStamps(stamps: SightStamps): void {
+    this.vision.setSightStamps(stamps);
   }
 
   setPlayer(player: number): void {
@@ -322,7 +329,10 @@ export class Viewpoint {
       if (u.neutralPassive) continue; // shops/critters don't scout for you
       if (!this.revealsFor(u)) continue;
       const r = (day ? u.sightDay : u.sightNight) || u.sightDay || 800;
-      this.vision.reveal(u.x, u.y, r, u.flying); // flyers see over terrain/trees
+      // The unit id opts this sight into the shared footprint cache: a unit that has not
+      // changed vision cell since it was last cast — for THIS viewpoint or any other — replays
+      // its cells instead of re-casting a few thousand ray steps (sim/vision.ts SightStamps).
+      this.vision.reveal(u.x, u.y, r, u.flying, u.id); // flyers see over terrain/trees
     }
     // An enemy that shot at us out of the fog gives its position away for a second
     // (MiscData FoggedAttackRevealRadius) — so you see what is hitting you, and it fades
@@ -452,6 +462,10 @@ export class VisionSet {
    *  registry block at the bottom of this class. */
   private readonly modifiers = new Map<number, FogModifier>();
   private nextModifier = 1;
+  /** ONE footprint cache for the whole match, shared by every viewpoint — which is where most
+   *  of its value is: a 4v4 stamps each unit into its owner's eyes, each vision-sharing ally's,
+   *  and any observer's, and all of them want the same cells. See sim/vision.ts SightStamps. */
+  private readonly stamps = new SightStamps();
 
   constructor(
     private readonly world: VisionWorld,
@@ -482,7 +496,11 @@ export class VisionSet {
       (p) => this.seats.get(p),
     );
     vp.setTeam(vp.teamOfPlayer(player));
+    // AFTER initBlockers, deliberately: that call installs a height field and stamps every tree
+    // on the map, and each of those would otherwise sweep the shared cache — for a field
+    // identical to the one every other viewpoint already has.
     if (this.cliffHeight) vp.initBlockers(this.cliffHeight, this.trees());
+    vp.setSightStamps(this.stamps);
     if (this.startFog === "explored") vp.exploreAll();
     else if (this.startFog === "revealall") vp.setRevealAll(true);
     for (const exposed of this.exposures.get(player) ?? []) vp.setExposed(exposed, true);
@@ -549,6 +567,7 @@ export class VisionSet {
     if (existing) return existing;
     const vp = new Viewpoint(-1, team, this.world, this.alliances, this.originX, this.originY, this.worldWidth, this.worldHeight);
     if (this.cliffHeight) vp.initBlockers(this.cliffHeight, this.trees());
+    vp.setSightStamps(this.stamps);
     if (this.startFog === "revealall") vp.setRevealAll(true);
     // NOT exploreAll: the lobby's start-explored is a courtesy to HUMANS looking at a minimap.
     // Handing it to the creep team would explore ground no creep has walked, and `explored` is

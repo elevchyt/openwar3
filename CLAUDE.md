@@ -83,6 +83,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   outside our loop*. The recorder is dev-server-only in both halves (`apply: "serve"` +
   `import.meta.env.DEV`), and phases must PARTITION the frame — nesting two `perfLog.begin`
   spans makes the report's `(unaccounted)` row meaningless.
+- **Fog rebuild:** the per-seat vision rebuild (`sim.fog`) is the largest sub-phase of the sim
+  after the world step in a team game, and `SightStamps` in [`src/sim/vision.ts`](src/sim/vision.ts)
+  is why it is no longer. A sight's footprint is a fact about the TERRAIN, not about who is
+  looking — every viewpoint gets the same height field and every felled tree — so the ray cast is
+  cast ONCE and replayed into each viewpoint's own three layers, keyed on the UNIT (one entry per
+  unit; a position key would mint a new one every 64 world units a unit walks). Invalidated by the
+  tree that comes down and by the sight radius changing (day/night is a different `R`, so it
+  re-keys itself). It must stay EXACT — fog gates what an AI knows and what a client may see, so a
+  footprint that is even slightly wrong is a desync and a cheat at once; `tools/sim-vision-cache-test.cjs`
+  compares cached and uncast grids cell for cell, including across a felling, and `SightStamps.enabled`
+  turns it off so the claim can be measured in a real match rather than only in a benchmark.
 - **Terrain culling:** read [`docs/terrain-culling.md`](docs/terrain-culling.md) before touching
   [`src/render/terrainCull.ts`](src/render/terrainCull.ts) or the `ow3Runs`/`ow3DrawCells` hunks in
   the viewer patch. mdx-m3-viewer drew EVERY terrain cell every frame whatever the camera was

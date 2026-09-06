@@ -134,6 +134,23 @@ cannot change the answer — only how much of the world pays for the dear one, a
 "a handful of units are ever in range". `SimWorld.distSkip` is the exact squared-distance form
 of the hull-to-hull test those scans reject on, so nothing downstream shifts.
 
+**THE SAME EXPENSIVE ANSWER, COMPUTED OVER AND OVER.** `sim.fog` — the per-seat vision rebuild —
+was 2.49 ms of a 14 ms frame in an eight-player Feralas LV match, the largest sub-phase of the sim
+after the world step itself. Nothing about it was wrong: `revealLineOfSight` casts a ray to every
+cell on a unit's sight ring and walks it, which is O(R²), and R is ~22 cells for a footman and ~28
+for a town hall. The cost was that the SAME cast was being paid again for every viewpoint, ten
+times a second, for units that had not moved — around sixteen million ray steps a second with 366
+units on the field. The fix is not a cheaper cast: it is **noticing that the answer is a fact
+about the TERRAIN, not about who is looking**. Every viewpoint is installed with the same height
+field and handed every felled tree, so a unit standing on a spot lights the same cells for its
+owner, for each ally sharing vision, and for an observer — and it lights them again next round if
+it has not moved a vision cell. `SightStamps`
+([`src/sim/vision.ts`](../src/sim/vision.ts)) casts once and replays a cell list, keyed on the
+UNIT so the cache has one entry per unit rather than a new one every 64 world units a unit walks.
+**Look for this wherever a per-frame cost is multiplied by a number of OBSERVERS** — and note
+what made it findable: `sim.fog` was already a phase of its own, so the report named it without
+anybody profiling anything.
+
 ## Adding to it
 
 - **A new phase**: `perfLog.begin("name")` / `perfLog.end("name")` around a stretch of the
