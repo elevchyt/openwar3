@@ -2459,6 +2459,10 @@ export function heroBodyTime(deathTime: number): number {
 // stock repair row in 1.30.4 carries exactly these: Ahrp/Arep/Aren DataA1 0.35, DataB1 1.5.
 const REPAIR_COST_RATIO = 0.35;
 const REPAIR_TIME_RATIO = 1.5;
+// …and its REACH, for the same bare world. Repair is an ability like any other and states its
+// own cast range: `Ahrp`/`Arep`/`Arst`/`Aren` all carry Rng1 = 50, i.e. a worker standing
+// against the wall. Read per worker in SimWorld.repairReach.
+const REPAIR_REACH = 50;
 
 // WC3 day/night (Units\MiscData.txt): a full cycle is DayLength=480 real seconds =
 // DayHours=24 game hours (so one game hour = 20 real seconds); daytime runs from
@@ -5515,7 +5519,10 @@ export class SimWorld {
     u.stuckRetries = 0;
     u.waitT = 0; // a fresh order is never still parked on the old one
     u.repair = { targetId: buildingId, hpPerSec, goldPerHp, lumberPerHp, active: false };
-    this.pathTo(u, b.x, b.y);
+    // Walk up to the building's BOX and stop against it (approachExtent), rather than at the
+    // nearest cell to its unreachable centre — the same approach a right-click move on a
+    // building takes, and what puts the worker inside Repair's own 50 when it arrives.
+    this.pathTo(u, b.x, b.y, undefined, false, this.approachExtent(b));
     return true;
   }
 
@@ -5532,8 +5539,23 @@ export class SimWorld {
       this.stop(u.id); // repaired to full, or the building is gone
       return;
     }
-    if (u.moving && this.siteGap(u, b) > 96) {
-      r.active = false; // still walking to the site
+    // IN RANGE, and nothing else. Repair states its own reach — `Ahrp`/`Arep`/`Arst`/`Aren`
+    // all carry Rng1 = 50 — and this used to ask whether the worker was still MOVING instead,
+    // which is not the same question and answers it wrongly every time the walk pauses: a
+    // worker waiting out a jam, a repath cooldown or a shove is not moving for that tick, and
+    // it would start hammering a building it was still half a screen away from. Measured
+    // hull-to-STAMP like every other approach to a building (siteGap), so "in range" means
+    // standing against the wall rather than within 50 of the site's centre.
+    if (this.siteGap(u, b) > this.repairReach(u)) {
+      r.active = false; // still on the way
+      // …and if the walk has ENDED short — shoved off, path given up, the building itself
+      // moved (an uprooted Ancient re-rooting) — take it up again. Without this the worker
+      // stands there holding a job it will never do. On the same repath cooldown a blocked
+      // chaser keeps, so a site nothing can reach costs one A* every ATTACK_GIVEUP_COOLDOWN
+      // rather than one a frame.
+      if (!u.moving && u.repathT <= 0 && !this.pathTo(u, b.x, b.y, undefined, false, this.approachExtent(b))) {
+        u.repathT = ATTACK_GIVEUP_COOLDOWN;
+      }
       return;
     }
     this.settle(u);
@@ -10127,9 +10149,20 @@ export class SimWorld {
   // that runs for as long as the building is hurt. Hence a tick of its own.
 
   /** The repair ability a worker carries (`Arep` code — Repair / Restoration / Renew), or
-   *  undefined for a worker that cannot mend anything (the Acolyte, the Ghoul). */
+   *  undefined for a worker that cannot mend anything (the Ghoul, whose `abilList` is
+   *  `Acan,Ahrl,Aiun` — no repair row in it. The Acolyte's `Aaha,Arst,Alam,Auns` has one). */
   private repairAbility(u: SimUnit): SimAbility | undefined {
     return u.abilities.find((a) => isRepairCode(a.code) && a.level >= 1);
+  }
+
+  /** How close a worker has to be to mend — its repair ability's own `Rng1`, which every
+   *  stock row states as **50**: `[Ahrp]`, `[Arep]`, `[Arst]` and `[Aren]` alike, i.e. a
+   *  body standing against the wall. It is the ability's number and not a constant of the
+   *  game, which is why it is read off the worker's own row exactly as the cost and time
+   *  ratios are (repairRates). REPAIR_REACH covers a bare world with no ability registry. */
+  private repairReach(u: SimUnit): number {
+    const lvl = this.abilities?.get(this.repairAbility(u)?.id ?? "")?.levelData[0];
+    return lvl?.castRange || REPAIR_REACH;
   }
 
   /** Why `worker` may not repair `target`, in the game's own [Errors] key, or null if it may.
@@ -10912,6 +10945,34 @@ export class SimWorld {
   }
 
   /**
+   * How far a caster still has to close before it may cast — the distance tickCast's approach
+   * walks off. Hull to hull, as every range in the sim is measured, with one correction and
+   * one allowance:
+   *
+   *   • A BUILDING is the ground it STAMPS, not its collision hull. `collision` is a shove
+   *     radius and is routinely SMALLER than the square the building actually blocks (a
+   *     Barracks: 144 against its 12×12 stamp's 192), so measured against the hull a caster
+   *     pressed flat against the wall still reads as 48 units short of it. `approachExtent`
+   *     is the same box the pathfinder stops a move outside of, which is what makes the walk
+   *     and the range test agree about where "there" is.
+   *   • The grid has a QUANTUM. A body stops on a pathing CELL beside that box rather than
+   *     flush against it, so "touching" is a cell wide — the same PATHING_CELL of slack
+   *     buildApproach hands a worker walking up to a site. Without it a reach the data states
+   *     as 0 could never be met at all and the caster would grind into the wall for ever.
+   */
+  private castGap(u: SimUnit, tx: number, ty: number, t: SimUnit | null | undefined): number {
+    // A POINT is a point: there is no box to stand against and no stamp to be short of, and
+    // it is walked onto rather than up to. Neither the correction nor the allowance applies,
+    // and adding either would stop a caster short of a reach its own EFFECT then re-checks
+    // (Eat Tree measures the trunk from the Ancient's hull all over again).
+    if (!t) return Math.hypot(tx - u.x, ty - u.y) - u.radius;
+    const { hx, hy } = this.approachExtent(t);
+    const dx = Math.max(0, Math.abs(t.x - u.x) - hx);
+    const dy = Math.max(0, Math.abs(t.y - u.y) - hy);
+    return Math.hypot(dx, dy) - u.radius - PATHING_CELL;
+  }
+
+  /**
    * Aim an attack modifier by hand (isArrowOrb): shoot THAT unit, and let the blow that
    * lands carry the ability.
    *
@@ -11025,10 +11086,20 @@ export class SimWorld {
 
     // --- phase 1: approach + face (before the wind-up begins) ---
     if (!pc.started) {
-      // Approach: close to cast range (hull-to-hull for unit targets), then face.
-      if (pc.range > 0) {
-        const t = pc.targetId ? this.units.get(pc.targetId) : null;
-        const gap = Math.hypot(tx - u.x, ty - u.y) - u.radius - (t?.radius ?? 0);
+      // Approach: close to cast range (see castGap), then face.
+      //
+      // A UNIT target is always walked to, however short the reach: `Rng1` = 0 is a real cast
+      // range and what it says is "you have to be TOUCHING it". Kaboom (`[Asds] Rng1` = 0) is
+      // the Goblin Sapper walking in and detonating himself, and Unsummon's blank column says
+      // the same about an Acolyte. Reading a zero as "no approach needed" skipped the walk
+      // altogether, so a sapper levelled a Town Hall from wherever it happened to be standing.
+      //
+      // A POINT keeps the old "only if the ability states a reach" test, because a blank
+      // column there is genuinely ambiguous — `[ANlm]` Summon Lava Spawn states none — and a
+      // point spell whose target cell is unwalkable is a walk that can never arrive.
+      const t = pc.targetId ? this.units.get(pc.targetId) : null;
+      if (t || pc.range > 0) {
+        const gap = this.castGap(u, tx, ty, t);
         if (gap > pc.range) {
           // An autocast walking to a target it would no longer choose gives up here rather
           // than at the end of the walk (see PendingCast.auto). The next idle/attack-move
