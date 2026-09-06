@@ -2072,3 +2072,95 @@ index 95bb7a5be241f134d8486d67e9b496be7a9c1925..517d487f05cfb948e778090634a344f0
              instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 0);
              instancedArrays.vertexAttribDivisorANGLE(instanceAttrib, 0);
          }
+diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
+index ccaf93519a59b78b909a15a36d6bad88b8db986f..8d0fb463d4154e99aca52bba51f3353e56c84ff4 100644
+--- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
++++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
+@@ -31,19 +31,19 @@ class BatchGroup {
+         const shader = handler_1.default.getBatchShader(viewer, skinningType, isHd);
+         shader.use();
+         const uniforms = shader.uniforms;
++        // OpenWar3: everything from here to the end of this block belongs to the SCENE and not
++        // to the instance -- the camera, the scene's lights, its fog, its boundary mask. It was
++        // being re-uploaded for every instance of every batch group, which in a match is ~20
++        // redundant GL calls a time and several thousand a frame; a uniform lives on the PROGRAM,
++        // so writing it once per (shader, scene, frame) leaves exactly the same values in place.
++        // The stamp carries the SCENE as well as the frame because one viewer draws several
++        // (the glue screens have four), and `viewer.frame` advances in `update()`, which every
++        // render path calls first. `ow3HoistUniforms = false` turns it off so the saving can be
++        // measured in a real match, the way TerrainCull.enabled and SightStamps.enabled are.
++        if (shader.ow3Scene !== scene || shader.ow3Frame !== viewer.frame || viewer.ow3HoistUniforms === false) {
++        shader.ow3Scene = scene;
++        shader.ow3Frame = viewer.frame;
+         gl.uniformMatrix4fv(uniforms['u_VP'], false, camera.viewProjectionMatrix);
+-        const boneTexture = instance.boneTexture;
+-        // Instances of models with no bones don't have a bone texture.
+-        if (boneTexture) {
+-            boneTexture.bind(15);
+-            gl.uniform1f(uniforms['u_hasBones'], 1);
+-            gl.uniform1i(uniforms['u_boneMap'], 15);
+-            gl.uniform1f(uniforms['u_vectorSize'], 1 / boneTexture.width);
+-            gl.uniform1f(uniforms['u_rowSize'], 1);
+-        }
+-        else {
+-            gl.uniform1f(uniforms['u_hasBones'], 0);
+-        }
+         gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
+         // OpenWar3: the scene's day/night light for models (Environment\DNC\*Unit.mdx).
+         // Only the SD shader declares these; on HD/other shaders the lookup misses and
+@@ -109,23 +109,48 @@ class BatchGroup {
+         else {
+             gl.uniform1f(uniforms['u_boundaryEnabled'], 0);
+         }
+-        gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
+-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
+         if (isHd) {
++            // The sampler slots never change, and the view matrix and eye are the camera's --
++            // all of them scene-wide, so they ride in here rather than being re-stated per
++            // instance below. The BLEND/DEPTH state does not: the SD path changes it per batch,
++            // so an HD group has to restate it every time it draws.
+             gl.uniform1i(uniforms['u_diffuseMap'], 0);
+             gl.uniform1i(uniforms['u_normalsMap'], 1);
+             gl.uniform1i(uniforms['u_ormMap'], 2);
+             gl.uniform1i(uniforms['u_emissiveMap'], 3);
+             gl.uniform1i(uniforms['u_teamColorMap'], 4);
+             gl.uniform1i(uniforms['u_environmentMap'], 5);
+-            // gl.uniform1i(uniforms['u_lutMap'], 6);
+-            // gl.uniform1i(uniforms['u_envDiffuseMap'], 7);
+-            // gl.uniform1i(uniforms['u_envSpecularMap'], 8);
++            gl.uniformMatrix4fv(uniforms['u_MV'], false, camera.viewMatrix);
++            gl.uniform3fv(uniforms['u_eyePos'], camera.location);
++        }
++        } // ---- end of the once-per-(shader, scene, frame) block -------------------------
++        // ---- and from here it is the INSTANCE's ------------------------------------------
++        const boneTexture = instance.boneTexture;
++        // Instances of models with no bones don't have a bone texture.
++        if (boneTexture) {
++            boneTexture.bind(15);
++            // …and put the ACTIVE unit back to 0. `bind` leaves it at 15, and the boundary
++            // block above used to be what restored it -- it no longer runs every instance, and
++            // the SD path can leave here without binding anything (a fully faded instance
++            // returns early). What comes after the world are our own overlay passes, which bind
++            // their textures without naming a unit and would land on 15.
++            gl.activeTexture(gl.TEXTURE0);
++            gl.uniform1f(uniforms['u_hasBones'], 1);
++            gl.uniform1i(uniforms['u_boneMap'], 15);
++            gl.uniform1f(uniforms['u_vectorSize'], 1 / boneTexture.width);
++            gl.uniform1f(uniforms['u_rowSize'], 1);
++        }
++        else {
++            gl.uniform1f(uniforms['u_hasBones'], 0);
++        }
++        gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
++        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
++        if (isHd) {
++            // The samplers, u_MV and u_eyePos are hoisted above; this is the state the SD path
++            // takes back from us between draws.
+             gl.disable(gl.BLEND);
+             gl.enable(gl.DEPTH_TEST);
+             gl.depthMask(true);
+-            gl.uniformMatrix4fv(uniforms['u_MV'], false, camera.viewMatrix);
+-            gl.uniform3fv(uniforms['u_eyePos'], camera.location);
+             for (const index of this.objects) {
+                 const batch = batches[index];
+                 const geoset = batch.geoset;
