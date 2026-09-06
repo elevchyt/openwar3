@@ -98,9 +98,15 @@ CPU-bound in the sim and the animation update, and a current GPU eats 12 288 ins
 without noticing.
 
 That is not an argument against it, but it *is* the honest framing: this is a change for the
-machine that has no headroom — where vertex throughput, fill rate and the driver cost of a big
-draw are the budget rather than a rounding error. Do not quote a percentage from this machine as
-though it were the point.
+machine that has no headroom — where vertex throughput and the driver cost of a big draw are the
+budget rather than a rounding error. Do not quote a percentage from this machine as though it
+were the point.
+
+**And be clear about what is saved, because it is not fill.** A cell outside the view was already
+contributing no pixels: the GPU clipped it away. What it was costing is everything BEFORE that —
+the vertex transform, the clip itself, and the driver's share of one enormous draw. So this buys
+nothing on a machine that is fragment-bound and a great deal on one whose vertex path is weak or
+partly in software, which is exactly the 2008 integrated part this is aimed at.
 
 **And do not reach for SwiftShader to prove otherwise.** Running the same interleaved benchmark
 under `--use-angle=swiftshader` as a stand-in for a weak GPU produced 202 and 261 ms/frame *for
@@ -117,8 +123,12 @@ Three passes still sweep the whole map every frame, and the runs are already com
   the entire map, and it is BLENDED, so it costs fill as well as vertices. Its index buffer is
   row-major over the same cell grid, so a run maps to an index range directly
   (`first * 6` indices, `count * 6` of them).
-- **`src/render/terrainShadowOverlay.ts`** — the baked `war3map.shd` layer, one `drawArrays` over
-  the whole map's vertex soup.
+- **`src/render/terrainShadowOverlay.ts`** — the baked `war3map.shd` layer. This one already
+  prunes by CONTENT: it builds triangles only for cells the mask actually shadows, plus a
+  one-cell dilation. But that is still every shadowed cell on the map, drawn whatever the camera
+  is doing, and on a forested map that is a large fraction of it. Its vertex soup is compacted to
+  the kept cells, so a cell row is still a contiguous vertex range — just not one a multiply can
+  find. It needs a per-row (start, count) table built alongside the mesh.
 - **The cliffs.** `renderCliffs` draws each cliff model's instances, which is real geometry rather
   than a full-map sweep, but nothing tests them against the camera either. They would need
   per-instance bounds, not the cell runs.
