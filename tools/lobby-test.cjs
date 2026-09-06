@@ -13,8 +13,10 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const { LanLobby } = require(join(REPO, ".sim-build", "src", "net", "lobby.js"));
 const { reconnectPlan, memoryStore } = require(join(REPO, ".sim-build", "src", "net", "reconnect.js"));
 const {
-  allSeated, applyRequest, buildStart, newSetup, seatPeers,
+  allSeated, applyRequest, buildStart, canStart, colorsFreeFor, editSlot, newSetup, observerSlots,
+  seatPeers, setSlotColor,
 } = require(join(REPO, ".sim-build", "src", "net", "lobbySetup.js"));
+const { DEFAULT_ADVANCED, isDefaultAdvanced } = require(join(REPO, ".sim-build", "src", "net", "advancedOptions.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -338,6 +340,100 @@ const ME = { id: 2, name: "Joiner", host: false };
     setup = { ...setup, slots: setup.slots.map((s, i) => (i === 2 ? { ...s, ai: 3 } : s)) };
     check("…and Computer (Insane) crosses as MELEE_INSANE", buildStart(setup, 7).slots[2].aiDifficulty, 3);
     check("a human's row carries no difficulty at all", buildStart(setup, 7).slots[0].aiDifficulty, undefined);
+  }
+
+  // -------------------------------------------------------------------------------------
+  // The OBSERVERS bench, colours, and the Advanced Options — the LAN lobby's second round.
+  //
+  // Full Observers grows an "Observers:" force under the players: the twelve seats the game
+  // has, less the map's. A joiner who finds no open player slot lands on it; a player may get
+  // up onto it from the team menu and come back by picking a team. Colours are one player's
+  // each, kept unique across the whole lobby. Races are rolled on the HOST at Start.
+  // -------------------------------------------------------------------------------------
+
+  console.log("\ngame lobby: the Observers bench (Full Observers)");
+  {
+    const melee = { slots: [0, 1].map((id) => ({ id, defaultRace: "human", startX: id, startY: 0, controller: "user", team: id })) };
+    const HOST = { id: 1, name: "Alice", host: true };
+    const BOB = { id: 2, name: "Bob", host: false };
+    const CARA = { id: 3, name: "Cara", host: false };
+    const full = { ...DEFAULT_ADVANCED, observers: "FULL_OBSERVERS" };
+
+    check("no bench without Full Observers", newSetup("m", "M", "G", melee).observers.length, 0);
+    check("the bench is the game's twelve seats less the map's", observerSlots(2, full), 10);
+    const fresh = newSetup("m", "M", "G", melee, full);
+    check("…and opens every one of them", fresh.observers.map((o) => o.kind).slice(0, 3), ["open", "open", "open"]);
+
+    // Two player slots, three people: the third lands on the bench, not on a closed chair.
+    const seated = seatPeers(fresh, [HOST, BOB, CARA]).setup;
+    check("player slots fill first", seated.slots.map((s) => s.name), ["Alice", "Bob"]);
+    check("…and the overflow watches", seated.observers[0], { kind: "player", peer: 3, name: "Cara" });
+    check("everybody has a seat", allSeated(seated, [HOST, BOB, CARA]), true);
+    check("…and the room can start", canStart(seated, [HOST, BOB, CARA]), true);
+
+    // Bob gets up to watch: his slot opens, he keeps his name on the bench.
+    const bobWatches = applyRequest(seated, 2, { k: "lobbyreq", observe: true });
+    check("a player may get up onto the bench", bobWatches.slots[1].kind, "open");
+    check("…keeping his name there", bobWatches.observers[1], { kind: "player", peer: 2, name: "Bob" });
+    check("one player and a bench cannot start", canStart(bobWatches, [HOST, BOB, CARA]), false);
+    // …and comes back on team 1, into the slot he left (the first open one).
+    const bobBack = applyRequest(bobWatches, 2, { k: "lobbyreq", team: 1 });
+    check("a watcher comes back by picking a team", [bobBack.slots[1].kind, bobBack.slots[1].peer, bobBack.slots[1].team], ["player", 2, 1]);
+    check("…and the bench seat opens again", bobBack.observers[1].kind, "open");
+    // A watcher has nothing else to change.
+    check("a watcher's race request changes nothing", applyRequest(bobWatches, 2, { k: "lobbyreq", race: "orc" }), null);
+    // Without a bench the request means nothing at all.
+    const noBench = seatPeers(newSetup("m", "M", "G", melee), [HOST, BOB]).setup;
+    check("no bench, no getting up", applyRequest(noBench, 2, { k: "lobbyreq", observe: true }), null);
+
+    // A watcher leaving frees the seat, and is named as having left.
+    const caraGone = seatPeers(seated, [HOST, BOB]);
+    check("a departing watcher frees the seat", caraGone.setup.observers[0].kind, "open");
+    check("…and is named", caraGone.left, ["Cara"]);
+
+    // The bench crosses at Start by peer, outside the slots.
+    const start = buildStart(seated, 7);
+    check("Start carries the bench by peer", start.observers, [{ peer: 3, name: "Cara" }]);
+    check("…and no watcher is among the slots", start.slots.map((s) => s.peer), [1, 2]);
+    check("…and the host's options ride with it", start.advanced.observers, "FULL_OBSERVERS");
+  }
+
+  console.log("\ngame lobby: colours are one player's each");
+  {
+    const melee = { slots: [0, 1, 2].map((id) => ({ id, defaultRace: "human", startX: id, startY: 0, controller: "user", team: id })) };
+    const HOST = { id: 1, name: "Alice", host: true };
+    const BOB = { id: 2, name: "Bob", host: false };
+    const setup = seatPeers(newSetup("m", "M", "G", melee), [HOST, BOB]).setup;
+    check("a seat opens on its own index", setup.slots.map((s) => s.color), [0, 1, 2]);
+    check("the palette less what other SEATED rows wear is on offer", colorsFreeFor(setup, 1), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+
+    // Bob takes the empty third seat's teal: the seat gets his blue — a swap, so nothing
+    // is ever worn twice.
+    const swapped = applyRequest(setup, 2, { k: "lobbyreq", color: 2 });
+    check("a colour off an EMPTY seat is taken by swapping", swapped.slots.map((s) => s.color), [0, 2, 1]);
+    // Alice's red is Alice's.
+    check("a colour a SEATED row wears is refused", applyRequest(swapped, 2, { k: "lobbyreq", color: 0 }), null);
+    check("…and a colour off the palette is refused", setSlotColor(swapped, 1, 12), null);
+    check("the host edits its computers' colours by the same rule", editSlot(swapped, 2, { color: 0 }), null);
+    check("…and swaps by the same rule", editSlot(swapped, 2, { color: 5 }).slots.map((s) => s.color), [0, 2, 5]);
+    check("the colour crosses at Start", buildStart(swapped, 7).slots.map((s) => s.color), [0, 2]);
+  }
+
+  console.log("\ngame lobby: races are rolled on the host, and Computer+ rides per seat");
+  {
+    const melee = { slots: [0, 1].map((id) => ({ id, defaultRace: "human", startX: id, startY: 0, controller: "user", team: id })) };
+    const HOST = { id: 1, name: "Alice", host: true };
+    let setup = seatPeers(newSetup("m", "M", "G", melee), [HOST]).setup;
+    setup = { ...setup, slots: setup.slots.map((s, i) => (i === 1 ? { ...s, kind: "computer", race: "random" } : s)) };
+    const roll = (r) => (r === "random" ? "undead" : r);
+    check("a seat left on Random crosses RESOLVED, by the host's roll", buildStart(setup, 7, roll).slots.map((s) => s.race), ["human", "undead"]);
+    const everyone = { ...setup, advanced: { ...DEFAULT_ADVANCED, randomRaces: true } };
+    check("Random Races rolls every seat, whatever the row said", buildStart(everyone, 7, roll).slots.map((s) => s.race), ["undead", "undead"]);
+    const plus = { ...setup, advanced: { ...DEFAULT_ADVANCED, computerPlus: true } };
+    check("Computer+ is stamped on each computer seat", buildStart(plus, 7).slots.map((s) => s.aiPlus), [undefined, true]);
+    check("…and the classic AI is the absence of it", buildStart(setup, 7).slots.map((s) => s.aiPlus), [undefined, false]);
+    check("the defaults are the defaults", isDefaultAdvanced(DEFAULT_ADVANCED), true);
+    check("…and a Computer+ game is not", isDefaultAdvanced({ ...DEFAULT_ADVANCED, computerPlus: true }), false);
   }
 
   console.log(failed === 0 ? "\nlobby: all checks passed" : `\nlobby: ${failed} FAILED`);

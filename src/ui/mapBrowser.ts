@@ -441,7 +441,15 @@ export function clearMapInfo(s: FdfScreen): void {
 }
 
 /** Fill the map-info pane: the badge, minimap, the three stat rows and the blurb. */
-export function fillMapInfo(s: FdfScreen, info: MapInfo, preview: MapPreview | null, icons: MinimapIcons): void {
+export function fillMapInfo(
+  s: FdfScreen,
+  info: MapInfo,
+  preview: MapPreview | null,
+  icons: MinimapIcons,
+  /** The colour a slot's start location is painted — the LAN lobby's picks; absent, the
+   *  slot's own default. */
+  colorOf?: (slotId: number) => string,
+): void {
   for (const name of NAME_ROW) {
     const el = s.frame(name);
     if (el) el.style.display = ""; // back from the empty state — and before centreNameRow measures them
@@ -461,7 +469,7 @@ export function fillMapInfo(s: FdfScreen, info: MapInfo, preview: MapPreview | n
   const el = s.frame("MinimapImage");
   if (!el) return;
   const canvas = info.minimap ? blpToCanvas(info.minimap) : null;
-  if (canvas && preview) drawPreviewMarkers(canvas, info, preview, icons);
+  if (canvas && preview) drawPreviewMarkers(canvas, info, preview, icons, colorOf);
   el.style.background = canvas ? `url(${canvas.toDataURL()}) center/contain no-repeat` : "#000";
 }
 
@@ -512,7 +520,13 @@ function centreNameRow(s: FdfScreen): void {
 }
 
 /** Stamp the lobby's markers onto a copy of the map's own minimap picture. */
-export function drawPreviewMarkers(canvas: HTMLCanvasElement, info: MapInfo, preview: MapPreview, icons: MinimapIcons): void {
+export function drawPreviewMarkers(
+  canvas: HTMLCanvasElement,
+  info: MapInfo,
+  preview: MapPreview,
+  icons: MinimapIcons,
+  colorOf: (slotId: number) => string = (id) => PLAYER_COLORS[id % PLAYER_COLORS.length],
+): void {
   const g = canvas.getContext("2d");
   if (!g) return;
   // The picture covers the whole terrain rect, so world → picture is a straight remap
@@ -530,7 +544,7 @@ export function drawPreviewMarkers(canvas: HTMLCanvasElement, info: MapInfo, pre
   }
   // Start locations last and larger — the one thing on this map you are looking for.
   for (const slot of info.slots) {
-    stamp(icons.start, slot.startX, slot.startY, s * 1.2, PLAYER_COLORS[slot.id % PLAYER_COLORS.length]);
+    stamp(icons.start, slot.startX, slot.startY, s * 1.2, colorOf(slot.id));
   }
 }
 

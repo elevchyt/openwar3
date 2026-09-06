@@ -42,7 +42,8 @@ export interface ChatWorld {
   players(): readonly number[];
   /** blizzard.j's PlayersAreCoAllied — BOTH directions of ALLIANCE_PASSIVE. */
   coAllied(a: number, b: number): boolean;
-  /** Is this player watching rather than playing? (No observer slots yet — always false.) */
+  /** Is this player watching rather than playing? A single-player watcher (Observer Mode) or
+   *  a seat on a LAN game's Observers bench (MeleeConfig.observers). */
   isObserver(player: number): boolean;
 }
 
@@ -56,6 +57,11 @@ export interface ChatWorld {
 export function chatRecipients(line: ChatLine, world: ChatWorld): number[] {
   const { from, target } = line;
   const all = world.players();
+  // A WATCHER's line reaches the other watchers and nobody else, whatever it was addressed to.
+  // The bench is outside the game: an observer sees the whole map, so anything it says to a
+  // player is a scouting report. The authority applies it (`observerLine` re-tags the line
+  // before it is relayed), so a client's own choice of audience cannot widen it.
+  if (world.isObserver(from)) return all.filter((p) => p === from || world.isObserver(p));
   switch (target.scope) {
     case "all":
       return all.slice();
@@ -170,6 +176,15 @@ export function formatChatLine(
   const name = nameOf(line.from);
   const said = color ? `|c${color}${name}|r` : name;
   return `${tag ? `${tag} ` : ""}${said}: ${stripMarkup(line.text)}`;
+}
+
+/** The line as the room should SEE it: a watcher's line wears the `[Observers]` tag whatever
+ *  audience the watcher's own entry line named, because that is the audience it reached
+ *  (`chatRecipients`). Anybody else's line is left as it was addressed. */
+export function observerLine(line: ChatLine, world: ChatWorld): ChatLine {
+  return world.isObserver(line.from) && line.target.scope !== "observers"
+    ? { ...line, target: { scope: "observers" } }
+    : line;
 }
 
 /** Strip WC3 markup codes from player-typed text — see formatChatLine. */

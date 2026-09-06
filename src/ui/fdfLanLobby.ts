@@ -6,24 +6,27 @@ import { sanitizeChat } from "../game/chat";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 import type { LanLobby } from "../net/lobby";
 import type { PeerInfo, StartMatch } from "../net/protocol";
+import { isDefaultAdvanced, type AdvancedOptions } from "../net/advancedOptions";
 import {
-  allSeated, applyRequest, buildStart, newSetup, rosterDiff, seatPeers,
-  type LobbyChat, type LobbyRequest, type LobbySetup, type LobbySlot, type SlotKind,
+  applyRequest, buildStart, canStart, colorsFreeFor, editSlot, isSeated, newSetup, rosterDiff,
+  seatPeers, type LobbyChat, type LobbyRequest, type LobbySetup, type SlotKind,
 } from "../net/lobbySetup";
+import { ADVANCED_OPTIONS_DISPLAY_OVERRIDE, OW3_STRINGS } from "../overrides";
 import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import type { Option } from "./fdf/widgets";
 import type { MeleeConfig } from "./lobby";
 import {
-  INFO_ROWS, adopt, fillMapInfo, findFrame, layoutInfoPane, loadMinimapIcons, nudgeX, num,
+  INFO_ROWS, adopt, fillMapInfo, findFrame, layoutInfoPane, loadMinimapIcons, nudgeX, nudgeY, num,
   paneRowsToHide, readMapPreviewFor, setProp, size, type MinimapIcons,
 } from "./mapBrowser";
 import {
-  HANDICAPS, PLAYER_SLOT_FDF, buildSlotRows, dropdownButtonNames, fillForceLabels,
+  HANDICAPS, PLAYER_SLOT_FDF, SLOT_OPTIONS, buildSlotRows, dropdownButtonNames, fillForceLabels,
   forceGroups, labelOf, slotOption, slotOptionValue, slotOptionsFor, teamOptions, type Group,
 } from "./playerSlots";
-import { toConfig } from "./fdfLan";
+import { LABEL_GOLD, observerSeats, toConfig } from "./fdfLan";
 
 // The LAN GAME LOBBY (issue #77), built from the game's own UI\FrameDef\Glue\GameChatroom.fdf.
 //
@@ -38,21 +41,24 @@ import { toConfig } from "./fdfLan";
 //     Frame "TEXTAREA"     "ChatTextArea"          ← the lobby's chat log (TextAreaMaxLines 128)
 //     Frame "SLASHCHATBOX" "ChatEditBox"           ← …and the line you type into
 //     Frame "FRAME"        "MapInfoPaneContainer"  ← MapInfoPane.fdf, the map you are about to play
+//     Frame "FRAME"        "AdvancedOptionsContainer" ← AdvancedOptionsDisplay.fdf, the host's options
 //     Frame "TEXT"         "GameNameLabel"/"Value" ← COLON_GAME_NAME + the room's own name
 //     Frame "GLUETEXTBUTTON" "StartGameButton"     ← KEY_START_GAME, shortcut "S"
 //
 // The player rows are ui/playerSlots.ts — the SAME composition the Custom Game screen uses,
-// because it is the same template dropped into the same container by the same engine.
+// because it is the same template dropped into the same container by the same engine. Under
+// Full Observers the rows continue below the players' as an "Observers:" force — one row per
+// seat on the bench, name only, because a watcher has no race, team, colour or handicap.
 //
 // THE HOST OWNS THE SEATING (src/net/lobbySetup.ts). This screen renders whatever the host
 // last broadcast and, on the host, is where those decisions are made. A client changing its
 // race sends a request and waits for the broadcast to come back; it never edits its own copy,
 // or two players changing rows in the same beat would be looking at two different lobbies.
 //
-// Not modelled: AdvancedOptionsContainer (a panel of its own we don't have, as on the Custom
-// Game screen), and kicking a player out of a slot.
+// Not modelled: kicking a player out of a slot.
 
 const MAP_INFO_FDF = "UI\\FrameDef\\Glue\\MapInfoPane.fdf";
+const ADVANCED_DISPLAY_FDF = "UI\\FrameDef\\Glue\\AdvancedOptionsDisplay.fdf";
 /** The game's own network copy — "|CFFAAAAAA%s has joined the game." and its twin. Not
  *  included by GameChatroom.fdf, so it is loaded alongside it for the strings alone. */
 const NETWORK_STRINGS_FDF = "UI\\FrameDef\\NetworkStrings.fdf";
@@ -61,6 +67,12 @@ const NETWORK_STRINGS_FDF = "UI\\FrameDef\\NetworkStrings.fdf";
  *  0.234375 × 0.225, which has no room for a map's description — so it shows the three stat
  *  rows and stops, as the LAN game list's summary panel does. */
 const SUMMARY_ROWS = INFO_ROWS.slice(0, 3);
+
+/** The team menu's value for "move onto the Observers bench" / "this row is on it". */
+const OBSERVERS_TEAM = "observers";
+
+/** The rows of a bench seat that PlayerSlot.fdf declares and a watcher has no use for. */
+const BENCH_HIDDEN = ["RaceMenu", "ColorButton", "HandicapMenu"] as const;
 
 export interface LanLobbyHandlers {
   /** Cancel: leave the room and go back to the game list. Also fired when the room dies
@@ -77,7 +89,9 @@ export interface LanLobbyHandlers {
  *
  * `lobby` is the live relay connection, owned by main.ts across the whole LAN screen stack:
  * the host announced its room from the create screen and a client joined from the game list,
- * so by the time this screen exists we are in a room either way.
+ * so by the time this screen exists we are in a room either way. `hostAdvanced` is what the
+ * host set on the create screen — the host's own lobby is born with it; a client passes none
+ * and renders the host's broadcast.
  */
 export async function mountLanLobbyScreen(
   container: HTMLElement,
@@ -86,6 +100,7 @@ export async function mountLanLobbyScreen(
   lobby: LanLobby,
   map: { path: string; info: MapInfo },
   h: LanLobbyHandlers,
+  hostAdvanced?: AdvancedOptions,
 ): Promise<FdfScreen> {
   const minimapIcons: MinimapIcons = loadMinimapIcons(vfs);
   let preview: MapPreview | null = null;
@@ -110,12 +125,57 @@ export async function mountLanLobbyScreen(
    *  simply the answer not having arrived; AFTER it, the same state means the room died. */
   let wasInRoom = false;
 
+  /**
+   * Frames the build leaves out — the array `mountFdfScreen` reads its `hidden` set from on
+   * every build, so it is edited in place (same object) and a change is a relayout. Besides
+   * the pane rows this short screen has no room for, it names the widgets a BENCH row does not
+   * carry, and the Advanced Options summary while there is nothing in it to tell a joiner.
+   */
+  const hiddenFrames: string[] = [...paneRowsToHide(SUMMARY_ROWS)];
+
+  /** The lobby's rows: the map's player slots first, then the bench — one index space, which
+   *  is also each row's widget suffix. */
+  const playerRows = (): number => setup?.slots.length ?? map.info.slots.length;
+  const benchRows = (): number => setup?.observers.length ?? 0;
+
   /** The row groups the screen is built for. The FDF screen rebuilds its DOM on every resize
    *  and the row COUNT is part of the frame tree, so a change in it is a relayout. */
   const regroup = (): void => {
+    const t = (key: string, fallback: string): string => strings?.string(key) ?? fallback;
     groups = forceGroups(map.info, (setup?.slots ?? map.info.slots).map((s) => s.id));
+    const bench = benchRows();
+    if (!bench) return;
+    // With a bench the players get a heading too — "Players:" over a melee map's one
+    // nameless force (a custom map's own force names stay), then "Observers:" over the bench.
+    if (groups.length === 1 && !groups[0].name) groups[0].name = `${t("PLAYERS", "Players")}:`;
+    const first = playerRows();
+    groups.push({ name: t("COLON_OBSERVERS", "Observers:"), rows: Array.from({ length: bench }, (_, j) => first + j) });
   };
   regroup();
+
+  /** Recompute the hidden set from the seating; true when it changed (a relayout is owed). */
+  const syncHidden = (): boolean => {
+    const next = [...paneRowsToHide(SUMMARY_ROWS)];
+    const first = playerRows();
+    (setup?.observers ?? []).forEach((seat, j) => {
+      const i = first + j;
+      for (const w of BENCH_HIDDEN) next.push(`${w}${i}`);
+      if (seat.kind !== "player") next.push(`TeamButton${i}`); // an empty bench seat is its name box alone
+    });
+    if (!setup || isDefaultAdvanced(setup.advanced)) next.push("AdvancedOptionsContainer");
+    if (next.length === hiddenFrames.length && next.every((n, i) => n === hiddenFrames[i])) return false;
+    hiddenFrames.length = 0;
+    hiddenFrames.push(...next);
+    return true;
+  };
+  syncHidden();
+
+  /** The seating changed: rebuild the screen if its frame tree did, else repaint it. */
+  const refresh = (): void => {
+    if (!screen) return;
+    if (syncHidden()) screen.relayout();
+    else render(screen);
+  };
 
   // --- the chat area ------------------------------------------------------------------
 
@@ -131,16 +191,22 @@ export async function mountLanLobbyScreen(
     append((strings?.string(key) ?? "%s").replace("%s", who));
   };
 
-  /** Someone said something. `from` is the relay peer; the name and the colour are its ROW's,
-   *  so a line reads in that player's own colour exactly as in-game chat does (game/chat.ts) —
-   *  and the body is stripped of markup there too, so nobody can paint the log from the box. */
+  /** Everyone in the room by peer, wherever they sit — a name for a chat line. */
+  const nameOf = (peer: number): string =>
+    setup?.slots.find((s) => s.peer === peer)?.name
+    ?? setup?.observers.find((o) => o.peer === peer)?.name
+    ?? lobby.snapshot.peers.find((p) => p.id === peer)?.name
+    ?? "Player";
+
+  /** Someone said something. `from` is the relay peer; the name is its ROW's. The name is set
+   *  in the screen's own label gold rather than the player's colour: in the lobby a colour is
+   *  still being CHOSEN (the menu on the row), and a line painted in a colour that may change
+   *  under it — or, for a watcher, in no colour at all — reads worse than one voice for all.
+   *  The body is stripped of markup (game/chat.ts), so nobody can paint the log from the box. */
   const say = (from: number, text: string): void => {
     const clean = sanitizeChat(text);
     if (!clean) return;
-    const slot = setup?.slots.find((s) => s.peer === from);
-    const name = slot?.name ?? lobby.snapshot.peers.find((p) => p.id === from)?.name ?? "Player";
-    const colour = slot ? PLAYER_COLORS[slot.id % PLAYER_COLORS.length].replace("#", "") : null;
-    append(`${colour ? `|cff${colour}${name}|r` : name}: ${clean}`);
+    append(`|cff${LABEL_GOLD}${nameOf(from)}|r: ${clean}`);
   };
 
   /** Send what is in the entry line, and echo it: the relay never echoes a sender its own
@@ -167,15 +233,16 @@ export async function mountLanLobbyScreen(
   /** Re-seat against the room's roster and say who came and went. */
   const reseat = (peers: readonly PeerInfo[]): void => {
     if (!isHost()) return;
-    // The host's lobby is born the moment the relay confirms the room — see `isHost`.
-    setup ??= newSetup(map.path, map.info.name, lobby.snapshot.room?.name ?? map.info.name, map.info);
-    const before = setup.slots.length;
+    // The host's lobby is born the moment the relay confirms the room — see `isHost` — and
+    // born with the options the host set on the create screen.
+    setup ??= newSetup(map.path, map.info.name, lobby.snapshot.room?.name ?? map.info.name, map.info, hostAdvanced);
+    const before = setup.slots.length + setup.observers.length;
     const { setup: next, joined, left } = seatPeers(setup, peers);
     setup = next;
     // The host seats itself on the way in; that is not news worth printing.
     for (const p of joined) if (!p.host) system("NETMESSAGE_PLAYERJOINED", p.name);
     for (const name of left) system("NETMESSAGE_PLAYERLEFT", name);
-    if (setup.slots.length !== before) regroup();
+    if (setup.slots.length + setup.observers.length !== before) regroup();
     broadcast();
   };
 
@@ -187,7 +254,7 @@ export async function mountLanLobbyScreen(
     if (!next) return;
     setup = next;
     broadcast();
-    if (screen) render(screen);
+    refresh();
   };
 
   // --- starting the match ----------------------------------------------------------------
@@ -202,7 +269,8 @@ export async function mountLanLobbyScreen(
   const enter = (msg: StartMatch): void => {
     const me = lobby.snapshot.you?.id;
     const hostPeer = lobby.snapshot.peers.find((p) => p.host)?.id ?? 1;
-    const link = matchLinkFrom(lobby, isHost(), msg.slots, me, hostPeer);
+    // The bench is seated on the link too — a watcher is addressed snapshots like anybody.
+    const link = matchLinkFrom(lobby, isHost(), msg.slots, me, hostPeer, observerSeats(msg));
     alive = false;
     lobby.handOff();
     lobby.onChange = () => {};
@@ -233,8 +301,9 @@ export async function mountLanLobbyScreen(
       const { joined, left } = rosterDiff(prev, setup);
       for (const name of joined) system("NETMESSAGE_PLAYERJOINED", name);
       for (const name of left) system("NETMESSAGE_PLAYERLEFT", name);
-      if (setup.slots.length !== (prev?.slots.length ?? -1)) { regroup(); screen?.relayout(); }
-      else if (screen) render(screen);
+      const rows = setup.slots.length + setup.observers.length;
+      if (rows !== (prev ? prev.slots.length + prev.observers.length : -1)) { regroup(); syncHidden(); screen?.relayout(); }
+      else refresh();
       return;
     }
     if (msg.k === "lobbyreq") return onRequest(from, msg as LobbyRequest);
@@ -254,7 +323,7 @@ export async function mountLanLobbyScreen(
     }
     wasInRoom = true;
     reseat(st.peers);
-    if (screen) render(screen);
+    refresh();
   };
 
   lobby.onStart = (msg) => { if (alive) enter(msg); };
@@ -266,13 +335,13 @@ export async function mountLanLobbyScreen(
     vfs,
     fdfPath: "UI\\FrameDef\\Glue\\GameChatroom.fdf",
     rootFrame: "GameChatroom",
-    includeFdf: [MAP_INFO_FDF, PLAYER_SLOT_FDF, NETWORK_STRINGS_FDF],
-    buildRoot: (lib) => { strings = lib; return buildLobbyRoot(lib, groups); },
+    includeFdf: [MAP_INFO_FDF, PLAYER_SLOT_FDF, NETWORK_STRINGS_FDF, ADVANCED_DISPLAY_FDF],
+    // …and our one row on the options summary (Computer+), and the strings our menus need.
+    overrides: [OW3_STRINGS, ADVANCED_OPTIONS_DISPLAY_OVERRIDE],
+    buildRoot: (lib) => { strings = lib; regroup(); return buildLobbyRoot(lib, groups); },
     // The dropdowns PlayerSlot declares as plain BUTTONs (TeamButton / ColorButton).
     dropdownButtons: dropdownButtonNames(),
-    // Advanced Options is a screen of its own that we don't have (as on Skirmish), and the
-    // pane's description row has no room on this screen (see SUMMARY_ROWS).
-    hidden: ["AdvancedOptionsContainer", ...paneRowsToHide(SUMMARY_ROWS)],
+    hidden: hiddenFrames,
     panels: [
       "TeamSetupContainer", "ChatTextArea", "ChatEditBox", "MapDisplayPanel",
       "StartGameBackdrop", "CancelBackdrop",
@@ -292,7 +361,7 @@ export async function mountLanLobbyScreen(
   // client (which got here BECAUSE it joined) that change has already happened.
   wasInRoom = lobby.snapshot.phase === "hosting" || lobby.snapshot.phase === "joined";
   reseat(lobby.snapshot.peers);
-  render(screen);
+  refresh();
 
   // The minimap's markers (gold mines, shops, start locations) are read out of the map file;
   // it lands a beat later and repaints the pane.
@@ -310,8 +379,11 @@ export async function mountLanLobbyScreen(
   function render(s: FdfScreen): void {
     screen = s;
     s.setText("GameNameValue", setup?.gameName ?? lobby.snapshot.room?.name ?? "");
-    fillMapInfo(s, map.info, preview, minimapIcons);
+    // The start locations on the minimap wear the colours the rows have picked.
+    const colorOf = (id: number): string => PLAYER_COLORS[(setup?.slots.find((x) => x.id === id)?.color ?? id) % PLAYER_COLORS.length];
+    fillMapInfo(s, map.info, preview, minimapIcons, colorOf);
     fillForceLabels(s, groups);
+    if (setup) fillAdvanced(s, setup.advanced);
 
     const area = s.textArea("ChatTextArea");
     area?.setLines(chat);
@@ -319,35 +391,39 @@ export async function mountLanLobbyScreen(
     const box = s.editBox("ChatEditBox");
     if (box) box.onSubmit = () => submit();
 
+    const t = (key: string, fallback: string): string => strings?.string(key) ?? fallback;
     const slots = setup?.slots ?? [];
-    const teams = teamOptions(slots.length);
+    const bench = setup?.observers ?? [];
     const me = lobby.snapshot.you?.id;
     const fixed = map.info.fixedPlayerSettings;
+    const computerPlus = setup?.advanced.computerPlus ?? false;
+    /** The team menu: the map's teams and, with a bench, the way onto it. */
+    const teams: Option[] = [
+      ...teamOptions(slots.length),
+      ...(bench.length ? [{ value: OBSERVERS_TEAM, label: t("OBSERVERS_TEAM", "Observers") }] : []),
+    ];
 
     slots.forEach((slot, i) => {
       const mine = slot.kind === "player" && slot.peer === me;
       // Your own row is yours; on the host, so is every row that is not another PERSON's.
-      // That is the reference's division: each player picks their own race, team and handicap,
-      // and the host gets the empty seats and whatever AI it put in them.
+      // That is the reference's division: each player picks their own race, team, colour and
+      // handicap, and the host gets the empty seats and whatever AI it put in them.
       const ours = mine || (isHost() && slot.kind !== "player");
-      const seated = slot.kind === "player" || slot.kind === "computer";
+      const seated = isSeated(slot);
 
       const name = s.popup(`NameMenu${i}`);
       if (name) {
         // A seated player's row is their NAME, not a menu. An empty row is the host's choice
         // of Open / Closed / Computer. A slot the MAP owns is greyed at Computer, exactly as
-        // the real client greys WarChasers' "Dungeon Denizens".
+        // the real client greys WarChasers' "Dungeon Denizens". Which AI's three difficulties
+        // an empty row offers is the host's Computer+ switch (issue #124), as on the Custom
+        // Game screen — the switch was set on the create screen and rides in `advanced`.
         name.setOptions(
           slot.kind === "player" ? [{ value: "player", label: slot.name ?? "Player" }]
           : slot.locked ? [{ value: "computer", label: labelOf("computer") }]
-          // The CLASSIC three. Computer+ (issue #124) is chosen on the Custom Game screen's
-          // Advanced Options pane, and this screen — the game lobby, `GameChatroom.fdf` — has
-          // no such pane: there is nowhere on it to say which AI the match uses, and the
-          // choice is the MATCH's rather than the row's. A LAN game therefore plays the
-          // ported Blizzard scripts, as it always has.
-          : slotOptionsFor(false).map((o) => ({ value: o.value, label: o.label })),
+          : slotOptionsFor(computerPlus).map((o) => ({ value: o.value, label: o.label })),
         );
-        name.value = slot.kind === "computer" ? slotOptionValue("computer", slot.ai) : slot.kind;
+        name.value = slot.kind === "computer" ? slotOptionValue("computer", slot.ai, computerPlus) : slot.kind;
         name.onChange = (v) => hostSetKind(i, v);
         name.setEnabled(isHost() && slot.kind !== "player" && !slot.locked);
       }
@@ -356,7 +432,7 @@ export async function mountLanLobbyScreen(
       if (race) {
         race.setOptions(RACES.map((r) => ({ value: r, label: RACE_LABEL[r] })));
         race.value = slot.race;
-        race.onChange = (v) => change(i, { k: "lobbyreq", race: v });
+        race.onChange = (v) => change(i, { race: v });
         race.setEnabled(seated && ours);
       }
 
@@ -364,50 +440,114 @@ export async function mountLanLobbyScreen(
       if (team) {
         team.setOptions(teams);
         team.value = String(slot.team);
-        team.onChange = (v) => change(i, { k: "lobbyreq", team: parseInt(v, 10) });
+        // "Observers" on a player's row is not a team but a move: off the slot, onto the bench.
+        team.onChange = (v) => change(i, v === OBSERVERS_TEAM ? { observe: true } : { team: parseInt(v, 10) });
         // A fixed-settings map hands out everyone's team but your own (see MapInfo).
         team.setEnabled(seated && ours && (!fixed || mine));
       }
 
       const colour = s.popup(`ColorButton${i}`);
       if (colour) {
-        // The colour IS the player slot in WC3 — player 6 is green because it is player 6 —
-        // so the swatch is the slot's own and the menu is read-only.
-        colour.setOptions(PLAYER_COLORS.map((c, ci) => ({ value: c, label: `Player ${ci + 1}` })));
-        colour.value = PLAYER_COLORS[slot.id % PLAYER_COLORS.length];
-        colour.setEnabled(false);
+        // The colours on offer are the palette less what every other seated row wears — a
+        // colour is one player's, and the lobby keeps them unique (lobbySetup.ts). The value
+        // is the row's own; a menu whose current value is not among its options would drop it,
+        // which is why the row's own colour is always in the list.
+        const free = setup ? colorsFreeFor(setup, i) : [slot.color];
+        colour.setOptions(free.map((c) => ({ value: PLAYER_COLORS[c], label: `Player ${c + 1}` })));
+        colour.value = PLAYER_COLORS[slot.color % PLAYER_COLORS.length];
+        colour.onChange = (v) => change(i, { color: PLAYER_COLORS.indexOf(v) });
+        colour.setEnabled(seated && ours);
       }
 
       const handicap = s.popup(`HandicapMenu${i}`);
       if (handicap) {
         handicap.setOptions(HANDICAPS.map((p) => ({ value: String(p), label: `${p}%` })));
         handicap.value = String(slot.handicap);
-        handicap.onChange = (v) => change(i, { k: "lobbyreq", handicap: parseInt(v, 10) });
+        handicap.onChange = (v) => change(i, { handicap: parseInt(v, 10) });
         handicap.setEnabled(seated && ours && (!fixed || mine));
       }
     });
 
+    // The bench: a name box, and — for somebody sitting on it — the team menu that is the way
+    // back to a player slot. The other widgets are not built for these rows (`syncHidden`).
+    bench.forEach((seat, j) => {
+      const i = slots.length + j;
+      const mine = seat.kind === "player" && seat.peer === me;
+      const name = s.popup(`NameMenu${i}`);
+      if (name) {
+        name.setOptions(
+          seat.kind === "player"
+            ? [{ value: "player", label: seat.name ?? "Player" }]
+            : SLOT_OPTIONS.filter((o) => o.controller === "open" || o.controller === "closed").map((o) => ({ value: o.value, label: o.label })),
+        );
+        name.value = seat.kind;
+        name.onChange = (v) => hostSetBenchKind(j, v);
+        name.setEnabled(isHost() && seat.kind !== "player");
+      }
+      const team = s.popup(`TeamButton${i}`);
+      if (team) {
+        team.setOptions(teams);
+        team.value = OBSERVERS_TEAM;
+        team.onChange = (v) => { if (v !== OBSERVERS_TEAM) benchChange(j, parseInt(v, 10)); };
+        team.setEnabled(mine);
+      }
+    });
+
     // Start Game is the host's, and only once everybody in the room has a seat and there are
-    // two players to play: a lobby of one is not a match.
-    const playing = slots.filter((x) => x.kind === "player" || x.kind === "computer").length;
-    s.setEnabled(
-      "StartGameButton",
-      isHost() && !!setup && playing >= 2 && allSeated(setup, lobby.snapshot.peers),
-    );
+    // two PLAYERS to play (NEED_AT_LEAST_TWO): a lobby of one, or of one and a bench, is not a
+    // match.
+    s.setEnabled("StartGameButton", isHost() && !!setup && canStart(setup, lobby.snapshot.peers));
   }
 
-  /** A change to a row. On the host it applies straight away (its own row, and the AI rows it
-   *  owns); on a client it is a REQUEST, and the row moves when the broadcast comes back. */
-  function change(index: number, patch: LobbyRequest): void {
+  /**
+   * The Advanced Options summary under the map — `AdvancedOptionsDisplay.fdf`'s seven rows
+   * plus ours, each a Yes/No or the menu item's own label. Only built while the options differ
+   * from the defaults (`syncHidden`), which is when there is something to tell a joiner.
+   */
+  function fillAdvanced(s: FdfScreen, a: AdvancedOptions): void {
+    const t = (key: string): string => strings?.string(key) ?? key;
+    const yesNo = (on: boolean): string => t(on ? "YES" : "NO");
+    s.setText("AdvancedOptionsTitleValue", "");
+    s.setText("LockTeamsValue", yesNo(a.lockTeams));
+    s.setText("TeamsTogetherValue", yesNo(a.teamsTogether));
+    s.setText("AdvSharedControlValue", yesNo(a.sharedControl));
+    s.setText("RandomRacesValue", yesNo(a.randomRaces));
+    s.setText("RandomHeroValue", yesNo(a.randomHero));
+    s.setText("ObserversValue", t(a.observers));
+    s.setText("MapVisibilityValue", t(a.visibility));
+    s.setText("ComputerPlusDisplayValue", yesNo(a.computerPlus));
+  }
+
+  /** A change to a player row. On the host it applies straight away (its own row, and the AI
+   *  rows it owns); on a client it is a REQUEST, and the row moves when the broadcast comes
+   *  back. Both go through lobbySetup's rules, so a colour is unique on every machine. */
+  function change(index: number, patch: Omit<LobbyRequest, "k">): void {
     const slot = setup?.slots[index];
     if (!setup || !slot) return;
     const me = lobby.snapshot.you?.id;
-    const ours = slot.peer === me || (isHost() && slot.kind !== "player");
-    if (!ours) return;
-    if (!isHost()) { lobby.send(patch); return; }
-    setup = { ...setup, slots: setup.slots.map((s, i) => (i === index ? { ...s, ...slotPatch(patch) } : s)) };
+    const mine = slot.kind === "player" && slot.peer === me;
+    if (!mine && !(isHost() && slot.kind !== "player")) return;
+    if (!isHost()) { lobby.send({ k: "lobbyreq", ...patch } satisfies LobbyRequest); return; }
+    const next = mine && me !== undefined
+      ? applyRequest(setup, me, { k: "lobbyreq", ...patch })
+      : editSlot(setup, index, patch);
+    if (!next) return;
+    setup = next;
     broadcast();
-    if (screen) render(screen);
+    refresh();
+  }
+
+  /** A watcher picked a team: the way back off the bench into an open player slot. */
+  function benchChange(j: number, team: number): void {
+    const seat = setup?.observers[j];
+    const me = lobby.snapshot.you?.id;
+    if (!setup || !seat || seat.kind !== "player" || seat.peer !== me || me === undefined) return;
+    if (!isHost()) { lobby.send({ k: "lobbyreq", team } satisfies LobbyRequest); return; }
+    const next = applyRequest(setup, me, { k: "lobbyreq", team });
+    if (!next) return;
+    setup = next;
+    broadcast();
+    refresh();
   }
 
   /** Host only: what an empty row's slot menu does — Open / Closed / one of the three
@@ -419,22 +559,24 @@ export async function mountLanLobbyScreen(
     const kind = (opt?.controller ?? value) as Exclude<SlotKind, "player">;
     setup = { ...setup, slots: setup.slots.map((s, i) => (i === index ? { ...s, kind, ai: opt?.ai } : s)) };
     broadcast();
-    if (screen) render(screen);
+    refresh();
   }
-}
 
-/** A request's payload as a slot's fields (its message tag dropped). */
-function slotPatch(patch: LobbyRequest): Partial<LobbySlot> {
-  const out: Partial<LobbySlot> = {};
-  if (patch.race !== undefined) out.race = patch.race;
-  if (patch.team !== undefined) out.team = patch.team;
-  if (patch.handicap !== undefined) out.handicap = patch.handicap;
-  return out;
+  /** Host only: open or close a seat on the bench. */
+  function hostSetBenchKind(j: number, value: string): void {
+    const seat = setup?.observers[j];
+    if (!isHost() || !setup || !seat || seat.kind === "player") return;
+    if (value !== "open" && value !== "closed") return;
+    setup = { ...setup, observers: setup.observers.map((o, k) => (k === j ? { kind: value } : o)) };
+    broadcast();
+    refresh();
+  }
 }
 
 // --- composing the screen out of the game's templates --------------------------------------
 
-/** GameChatroom + the player rows and the map-info pane dropped into its containers. */
+/** GameChatroom + the player rows, the map-info pane and the options summary dropped into
+ *  its containers. */
 function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   const root = lib.resolveRoot("GameChatroom");
   if (!root) throw new Error("GameChatroom.fdf: no GameChatroom frame");
@@ -444,6 +586,23 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
 
   const pane = lib.resolveRoot("MapInfoPane");
   if (pane) adopt(root, "MapInfoPaneContainer", [layoutInfoPane(pane, { w: PANE_W, h: PANE_H, rows: SUMMARY_ROWS })]);
+
+  // The host's options, under the map: AdvancedOptionsDisplay.fdf is a bare FRAME whose rows
+  // chain down from its top, so it takes the container's own box.
+  const display = lib.resolveRoot("AdvancedOptionsDisplay");
+  if (display) {
+    setProp(display, "SetAllPoints", []);
+    // Every row of the display is a TEXT anchored TOPLEFT and TOPRIGHT to the row above and
+    // given no Height — the engine sizes it to its string, and two anchors on one edge tell
+    // our solver the box is zero tall, so nothing drew. Each gets its line here: the title at
+    // its 0.015 face, the rows a little under their 0.013 one, tight enough that eight rows
+    // and the title fit the 0.125 the container has (the reference packs them just so).
+    size(findFrame(display, "AdvancedOptionsTitleLabel"), PANE_W, DISPLAY_TITLE_H);
+    for (const row of DISPLAY_ROWS) size(findFrame(display, row), PANE_W, DISPLAY_ROW_H);
+    // …and the container grows for the eighth row: the file sized it for its own seven.
+    setProp(findFrame(root, "AdvancedOptionsContainer"), "Height", [num(DISPLAY_H)]);
+    adopt(root, "AdvancedOptionsContainer", [display]);
+  }
 
   // …and the map panel moves left to sit inside the 3D chrome that frames it, exactly as the
   // Custom Game and LAN screens do (see nudgeX). GameNameLabel/Value and the Advanced Options
@@ -455,6 +614,17 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   // height, so they would inherit the screen's; give them the line they share.
   size(findFrame(root, "GameNameLabel"), PANE_W, 0.019);
   size(findFrame(root, "GameNameValue"), PANE_W, 0.019);
+
+  // The chat log sits INSIDE the lower-left panel of the 16:9 chrome, whose top rail runs
+  // lower than the 4:3 file's anchor (0.453125 down) expects: as authored, the first line of
+  // chat was drawn across the rail. The area drops by the rail's height and gives that much
+  // back off its bottom, so the entry line (anchored to its BOTTOMLEFT) stays on the panel's
+  // floor where the file put it.
+  nudgeY(findFrame(root, "ChatTextArea"), -CHAT_RAIL);
+  setProp(findFrame(root, "ChatTextArea"), "Height", [num(CHAT_H - CHAT_RAIL)]);
+  // …and in from the panel's left rail by the same margin, narrowing to keep its right edge.
+  nudgeX(findFrame(root, "ChatTextArea"), CHAT_INSET);
+  setProp(findFrame(root, "ChatTextArea"), "Width", [num(CHAT_W - CHAT_INSET)]);
 
   // Start Game / Cancel grow to fill the slot the 3D chrome leaves them, keeping the file's
   // own base:button ratio — the same correction, and the same numbers, as Skirmish.
@@ -468,6 +638,25 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
 /** GameChatroom.fdf's own MapInfoPaneContainer box. */
 const PANE_W = 0.234375;
 const PANE_H = 0.225;
+
+/** AdvancedOptionsDisplay.fdf's own label rows, and the line they are given. Our eighth
+ *  (ComputerPlusDisplayLabel) is not here: it is laid over the tree AFTER `buildRoot` and
+ *  states its own Height in its file (src/overrides/ui/AdvancedOptionsDisplay.fdf). */
+const DISPLAY_ROWS = [
+  "LockTeamsLabel", "TeamsTogetherLabel", "AdvSharedControlLabel", "RandomRacesLabel",
+  "RandomHeroLabel", "ObserversLabel", "MapVisibilityLabel",
+];
+const DISPLAY_TITLE_H = 0.016;
+const DISPLAY_ROW_H = 0.012;
+/** GameChatroom.fdf gives AdvancedOptionsContainer 0.125 for seven rows; ours has eight. */
+const DISPLAY_H = 0.138;
+
+/** GameChatroom.fdf's own ChatTextArea box, how far the chrome's top rail runs into it, and
+ *  the margin it keeps off the left one. */
+const CHAT_W = 0.461875;
+const CHAT_H = 0.094375;
+const CHAT_RAIL = 0.016;
+const CHAT_INSET = 0.006;
 
 /** How far left the map panel's contents move to sit inside the 3D chrome. */
 const MAP_INFO_NUDGE = 0.052;

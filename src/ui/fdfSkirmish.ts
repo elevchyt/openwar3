@@ -9,6 +9,7 @@ import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { savedPlayerName } from "./fdfLan";
+import { VISIBILITY_ITEMS, visibilityFog, type Visibility } from "../net/advancedOptions";
 import { OBSERVER_PLAYER, type Controller, type FogMode, type MeleeConfig, type SlotConfig } from "./lobby";
 import {
   BLURB_SCROLLBAR_FDF, MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, nudgeY, num,
@@ -49,27 +50,9 @@ const ADVANCED_OPTIONS_FDF = "UI\\FrameDef\\Glue\\AdvancedOptionsPane.fdf";
  */
 const PANEL_FACES = { info: "MapInfoPanel", advanced: "AdvancedOptionsPanel" } as const;
 
-/** Map Visibility, as `AdvancedOptionsPane.fdf`'s own `MapVisibilityPopupMenuMenu` lists it —
- *  four `MenuItem`s whose labels are GlobalStrings keys. The value each one carries into the
- *  match is a `FogMode`; see `visibilityFog`. */
-const VISIBILITY_ITEMS = ["DEFAULT", "HIDE_TERRAIN", "MAP_EXPLORED", "ALWAYS_VISIBLE"] as const;
-type Visibility = (typeof VISIBILITY_ITEMS)[number];
-
-/**
- * What each visibility choice means to the match.
- *
- * `HIDE_TERRAIN` and `DEFAULT` land on the same `FogMode` because we model one unexplored
- * state, not two: WC3's Hide Terrain additionally blanks the terrain in the minimap preview
- * and the loading screen, which is a presentation difference on ground that is black either
- * way while you play.
- */
-function visibilityFog(v: Visibility): FogMode {
-  switch (v) {
-    case "MAP_EXPLORED": return "explored";
-    case "ALWAYS_VISIBLE": return "revealall";
-    default: return "unexplored";
-  }
-}
+// Map Visibility's four items and what each means to the match live in
+// src/net/advancedOptions.ts, beside the rest of the pane's options — the LAN create screen
+// carries the same pane, and the two must read the FDF's `MenuItem`s the same way.
 
 export interface SkirmishHandlers {
   onStart: (map: File, info: MapInfo, config: MeleeConfig) => void;

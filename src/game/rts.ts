@@ -1172,6 +1172,21 @@ export class RtsController {
     this.viewpoints.seat(seats);
   }
 
+  /**
+   * HOST: give the Observers bench its eyes (MeleeConfig.observers).
+   *
+   * A watcher is a snapshot RECIPIENT like any seat — the host builds one per viewpoint and
+   * addresses it by player number (`HostSources.viewers`) — so it needs a viewpoint of its
+   * own, and that viewpoint sees EVERYTHING: the whole map is what an observer is for. Seated
+   * on a team of its own (its own number), so it shares nobody's sight and nobody shares its.
+   * Reveal-all on THIS viewpoint only, never the match's fog mode — the single-player watcher's
+   * rule (`setLocalRevealAll`), applied per bench seat.
+   */
+  seatObservers(players: readonly number[]): void {
+    this.viewpoints.seat(players.map((player) => ({ player, team: player })));
+    for (const player of players) this.viewpoints.viewpointFor(player).setRevealAll(true);
+  }
+
   /** Seed the alliance matrix from the lobby's teams (7.22). Called once start setup
    *  knows who is on which team, BEFORE the map script runs — so the script's own
    *  `SetPlayerAlliance` calls land on top of it rather than under it. `grantsOf` carries a

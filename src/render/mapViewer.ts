@@ -73,7 +73,7 @@ import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
 import { ConsoleUi, type ConsolePanel } from "../ui/consoleUi";
 import { parseMapInfo } from "../world/mapInfo";
 import {
-  chatPrompt, chatRecipients, formatChatLine, hasChatAllies,
+  chatPrompt, chatRecipients, formatChatLine, hasChatAllies, observerLine,
   type ChatLine, type ChatTarget, type ChatWorld,
 } from "../game/chat";
 import { teamColorHex, teamColorRgb } from "./teamColor";
@@ -1141,6 +1141,15 @@ export class MapViewerScene {
    * matrix is nobody's ally, and read that way the whole field comes back hostile.
    */
   private observer = false;
+  /**
+   * A LAN game's OBSERVERS BENCH (`MeleeConfig.observers`): every watcher's player number, this
+   * machine's included if it is one. The host seats each with reveal-all eyes and addresses it
+   * snapshots by this number; every machine names them and routes their chat by it. Empty in a
+   * match with no bench — which leaves `observer` alone to say whether THIS machine watches.
+   */
+  private observers: ReadonlyArray<{ id: number; peer: number; name: string }> = [];
+  /** Advanced Options → Lock Teams (`MeleeConfig.lockTeams`): the Allies dialog's boxes are dead. */
+  private lockTeams = false;
   private localRace: PlayableRace = "human";
   // Footprints of registered resource nodes, for unstamping on removal.
   private nodeFootprints = new Map<number, { fp: Footprint; x: number; y: number }>();
@@ -1970,6 +1979,8 @@ export class MapViewerScene {
     if (config.mapName) this.mapDisplayName = config.mapName;
     // Who WE are — or that we are nobody, and only watching (see `observer`).
     this.observer = config.observer === true;
+    this.observers = config.observers ?? [];
+    this.lockTeams = config.lockTeams === true;
     // A LAN client is told (every human slot in a shared config says "user", so
     // the fallback would seat every machine on the same player — see MeleeConfig.localPlayer).
     this.localPlayer = config.localPlayer
@@ -1987,6 +1998,9 @@ export class MapViewerScene {
     // …and the watcher's own seat is in nobody's slot list, so it names itself. The one place
     // it is ever read is a line the observer types: their own chat comes back to them labelled.
     if (this.observer) this.playerNames.set(this.localPlayer, OBSERVER_NAME);
+    // A LAN bench is named by the people on it — their lines arrive under their own names, on
+    // every machine, exactly as a seated player's do.
+    for (const o of this.observers) this.playerNames.set(o.id, o.name || OBSERVER_NAME);
     this.humanPlayers = config.slots.filter((s) => s.controller === "user").length;
     this.rts!.setPlayerNames(this.playerNames);
     // Whose placed units hold their ground (see SimUnit.guarding). Set before seeding, since
@@ -2015,11 +2029,24 @@ export class MapViewerScene {
     // mid-match the first time something asks whether that side can see. Ordered before the
     // fog-mode calls below so the match setting reaches all of them by both routes.
     this.rts!.seatPlayers(config.slots.map((s) => ({ player: s.id, team: s.team })));
+    // …and the Observers bench, on the HOST alone: only the authority builds snapshots, and a
+    // watcher's is built from a viewpoint that sees the whole map (RtsController.seatObservers).
+    // A client seating them would only be paying for fog grids nobody reads.
+    if (this.observers.length && !this.rts!.frozenClient) this.rts!.seatObservers(this.observers.map((o) => o.id));
+    // The lobby's colours (`SlotConfig.color`, a LAN player's pick off their row) go through
+    // the same door a map's `SetPlayerColor` does, before a unit exists to wear the old one.
+    // Only a seat whose colour is not its own index says anything — that index is the default.
+    for (const s of config.slots) if (s.color !== undefined && s.color !== s.id) this.rts!.setPlayerColor(s.id, s.color);
     // Seed the alliance matrix from those teams (7.22) BEFORE the map script runs, so the
     // script's own SetPlayerAlliance calls land on top of it rather than under it — and seed
     // it with what the map says a force GRANTS, which on a custom map is not "everything"
-    // (see MapInfo.ForceGrants). A team index IS the force index there.
-    this.rts!.seedAlliances((p) => this.teamOf(p), (team) => config.forces?.[team]);
+    // (see MapInfo.ForceGrants). A team index IS the force index there. Full Shared Unit
+    // Control (Advanced Options) rides on top of whichever the force grants.
+    this.rts!.seedAlliances((p) => this.teamOf(p), (team) => {
+      const grants = config.forces?.[team];
+      if (!config.sharedControl) return grants;
+      return { ...(grants ?? { allied: true, sharedVision: true }), sharedControl: true };
+    });
     // Fog-of-war start mode from the lobby: "explored" reveals the whole map as grey
     // terrain memory (live fog still hides current enemy movement); "revealall" drops
     // fog entirely; "unexplored" leaves the default pitch-black unseen ground.
@@ -6815,7 +6842,7 @@ export class MapViewerScene {
         return bytes ? blpToCanvas(bytes) : null;
       },
       chatPrompt: (target) =>
-        chatPrompt(target, this.multiplayerMatch, (p) => this.playerLabel(p), (k) => this.globalStrings?.strings.get(k)),
+        chatPrompt(this.chatTargetFor(target), this.multiplayerMatch, (p) => this.playerLabel(p), (k) => this.globalStrings?.strings.get(k)),
       sendChat: (text, target) => this.sendChat(text, target),
       chatHasAllies: () => hasChatAllies(this.localPlayer, this.chatWorld()),
       setResources: (next) => this.consoleUi?.update(next),
@@ -6968,6 +6995,8 @@ export class MapViewerScene {
       trade: (other, gold, lumber) => this.giveResources(other, gold, lumber),
       // A LAN client cannot write: see AllianceModel.writable.
       writable: !(this.rts?.frozenClient ?? false),
+      // …and under Lock Teams nobody can, host included: see AllianceModel.lockedTeams.
+      lockedTeams: this.lockTeams,
     });
     this.questLog?.dispose();
     this.questLog = new QuestDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
@@ -6990,9 +7019,9 @@ export class MapViewerScene {
         .map((id) => ({ id, name: this.playerLabel(id) })),
       target: () => this.hud?.chatTargetNow() ?? { scope: "all" },
       setTarget: (target) => this.hud?.setChatTarget(target),
-      // …and whether there is anybody watching: in a single-player match that is this machine
-      // itself, when it got up from its seat to watch (see `observer`).
-      hasObservers: () => this.observer,
+      // …and whether there is anybody watching: a LAN game's bench, or — in a single-player
+      // match — this machine itself, when it got up from its seat to watch (see `observer`).
+      hasObservers: () => this.observer || this.observers.length > 0,
     });
   }
 
@@ -7041,15 +7070,30 @@ export class MapViewerScene {
 
   /** The world the chat model routes against (src/game/chat.ts). */
   private chatWorld(): ChatWorld {
+    const bench = this.observers.map((o) => o.id);
     return {
-      // Every seat, plus our own if we are watching from outside them — an observer is in no
-      // team list, and a line addressed to "Everyone" that did not reach the person who typed
-      // it would look like it had gone nowhere.
-      players: () => (this.observer ? [...this.meleeTeams.keys(), this.localPlayer] : [...this.meleeTeams.keys()]),
+      // Every seat, plus the bench, plus our own number if we are watching from outside both
+      // (the single-player watcher) — an observer is in no team list, and a line addressed to
+      // "Everyone" that did not reach the person who typed it would look like it had gone
+      // nowhere. A LAN watcher is already on the bench and is not counted twice.
+      players: () => {
+        const all = [...this.meleeTeams.keys(), ...bench];
+        return this.observer && !bench.includes(this.localPlayer) ? [...all, this.localPlayer] : all;
+      },
       coAllied: (a, b) => this.rts?.playersAreCoAllied(a, b) ?? a === b,
-      // The one observer a single-player match can have is this machine (see `observer`).
-      isObserver: (p) => this.observer && p === this.localPlayer,
+      // The bench, or — in a single-player match — this machine (see `observer`).
+      isObserver: (p) => bench.includes(p) || (this.observer && p === this.localPlayer),
     };
+  }
+
+  /**
+   * Where a line typed at THIS machine goes: a watcher talks to the other watchers and to
+   * nobody else, whatever the entry line was left on (game/chat.ts `chatRecipients` enforces
+   * it on the authority; this is the prompt saying so up front, so the player is not typing
+   * "To All:" into a channel that reaches no player).
+   */
+  private chatTargetFor(target: ChatTarget): ChatTarget {
+    return this.observer ? { scope: "observers" } : target;
   }
 
   /**
@@ -7058,6 +7102,7 @@ export class MapViewerScene {
    * chat: it is the only confirmation the message went anywhere).
    */
   private sendChat(text: string, target: ChatTarget): void {
+    target = this.chatTargetFor(target);
     const link = this.rts?.matchLinkHandle ?? null;
     // On a CLIENT nothing is shown yet: the host decides who hears this, ourselves included,
     // and its ruling comes straight back. Showing it optimistically would mean a message that
@@ -7093,6 +7138,10 @@ export class MapViewerScene {
    * per machine. A client takes `showChat` instead and decides nothing.
    */
   private deliverChat(line: ChatLine): void {
+    // A watcher's line is an observers' line whatever it was addressed to (game/chat.ts) —
+    // re-tagged HERE, on the authority, so every copy that leaves carries the audience it
+    // actually reached.
+    line = observerLine(line, this.chatWorld());
     this.fireChatTriggers(line);
     const heard = chatRecipients(line, this.chatWorld());
     const link = this.rts?.matchLinkHandle ?? null;

@@ -11,6 +11,11 @@
 //  · "Computer+ (Improved AI)" (issue #124) goes at the BOTTOM, because that is where the
 //    issue asks for it.
 //
+// The LAN create screen (src/ui/fdfLanCreate.ts) layers this SAME file through a second
+// manifest (`LAN_ADVANCED_OPTIONS_OVERRIDE`) that adopts only the Computer+ row: a hosted game
+// has people to invite, so there the game's own "Observers:" dropdown stays and means what it
+// says. The Observer Mode frames below are simply never adopted on that screen.
+//
 // Both anchor to the row ABOVE them in the game's own file, so they inherit the column
 // positions of the eight rows already there without restating a single coordinate: the
 // Observer Mode row takes the Observers row's own anchors (RandomHero*), and Computer+ takes

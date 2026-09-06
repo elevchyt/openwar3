@@ -317,11 +317,16 @@ export function matchLinkFrom(
   slots: ReadonlyArray<{ id: number; peer?: number }>,
   myPeer: number | undefined,
   hostPeer: number,
+  /** The Observers bench, already given its player numbers (fdfLan `toConfig`). A watcher is
+   *  a recipient like any other — snapshots and chat are ADDRESSED, by peer, so it has to be
+   *  in the seating or the host could never find it. */
+  observers: ReadonlyArray<{ id: number; peer: number }> = [],
 ): MatchLinkSetup {
+  const seats = [...slots.map((s) => ({ id: s.id, peer: s.peer })), ...observers.map((o) => ({ id: o.id, peer: o.peer }))];
   return {
     channel,
-    localPlayer: slots.find((s) => s.peer === myPeer)?.id ?? myPeer ?? 0,
-    seats: slots.map((s) => ({ id: s.id, peer: s.peer })),
+    localPlayer: seats.find((s) => s.peer === myPeer)?.id ?? myPeer ?? 0,
+    seats,
     isHost,
     hostPeer,
   };

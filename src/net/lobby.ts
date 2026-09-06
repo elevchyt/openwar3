@@ -149,8 +149,10 @@ export class LanLobby {
     });
   }
 
-  host(name: string, playerName: string, mapName: string, mapPath: string, maxPlayers = 12): void {
-    this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers });
+  /** Announce a game. `maxPlayers` is every seat the lobby has — the map's slots plus the
+   *  Observers bench under Full Observers — and `observers` is what the game list prints. */
+  host(name: string, playerName: string, mapName: string, mapPath: string, maxPlayers = 12, observers = false): void {
+    this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers, observers });
   }
 
   join(roomId: string, playerName: string): void {

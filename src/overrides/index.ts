@@ -1,6 +1,7 @@
 import type { FdfFrame } from "../ui/fdf/parser";
 import type { FdfLibrary } from "../ui/fdf/library";
 import advancedOptionsFdf from "./ui/AdvancedOptionsPane.fdf?raw";
+import advancedOptionsDisplayFdf from "./ui/AdvancedOptionsDisplay.fdf?raw";
 import globalStringsFdf from "./ui/GlobalStrings.fdf?raw";
 import optionsMenuFdf from "./ui/OptionsMenu.fdf?raw";
 
@@ -97,6 +98,35 @@ export const ADVANCED_OPTIONS_OVERRIDE: FdfOverride = {
     { frame: "ComputerPlusLabel", into: "AdvancedOptionsPane" },
     { frame: "ComputerPlusCheckBox", into: "AdvancedOptionsPane" },
   ],
+};
+
+/**
+ * LAN → Create Game → Advanced Options: ONE row of ours, and the game's "Observers:" row kept.
+ *
+ * The same pane as the Custom Game screen's, out of the same override file, with the one
+ * difference that decides which of the two manifests a screen layers: on a HOSTED game the
+ * Observers dropdown is exactly what it says — how other people may watch — so it stays, and
+ * only "Computer+ (Improved AI)" is added under the visibility row (issue #124). Nothing is
+ * retired, so nothing has to be re-anchored.
+ */
+export const LAN_ADVANCED_OPTIONS_OVERRIDE: FdfOverride = {
+  id: "ow3-lan-advanced-options",
+  source: advancedOptionsFdf,
+  add: [
+    { frame: "ComputerPlusLabel", into: "AdvancedOptionsPane" },
+    { frame: "ComputerPlusCheckBox", into: "AdvancedOptionsPane" },
+  ],
+};
+
+/**
+ * The game lobby's Advanced Options SUMMARY (`AdvancedOptionsDisplay.fdf`, under the map on
+ * GameChatroom): the Computer+ row, so a joiner reads which AI the match uses alongside the
+ * seven rows the game prints. See `ui/AdvancedOptionsDisplay.fdf`.
+ */
+export const ADVANCED_OPTIONS_DISPLAY_OVERRIDE: FdfOverride = {
+  id: "ow3-advanced-options-display",
+  source: advancedOptionsDisplayFdf,
+  add: [{ frame: "ComputerPlusDisplayLabel", into: "AdvancedOptionsDisplay" }],
 };
 
 /**

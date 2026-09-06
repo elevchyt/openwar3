@@ -16,6 +16,8 @@ import { mountLanScreen, savedPlayerName } from "./ui/fdfLan";
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
 import { mountLanLobbyScreen } from "./ui/fdfLanLobby";
 import { LanLobby } from "./net/lobby";
+import { observerSlots } from "./net/lobbySetup";
+import type { AdvancedOptions } from "./net/advancedOptions";
 import { WebSocketTransport } from "./net/transport";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
@@ -246,14 +248,17 @@ function lanCreateScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: (
   return {
     chrome: "BattlenetCustom",
     mount: () => mountLanCreateScreen(ui, vfs, installMaps, {
-      onCreate: (path, info, gameName) => {
+      onCreate: (path, info, gameName, advanced) => {
         const { lobby, connected } = lanSession();
+        // The room is as big as the lobby: the map's slots, plus the Observers bench when the
+        // host opened one — the relay caps joins at this, so it has to count the bench.
+        const seats = info.slots.length + observerSlots(info.slots.length, advanced);
         // WAIT for the socket: a `LanLobby` with no transport yet drops a send on the floor
         // without a word, and this runs well before `connect()` has resolved.
         void connected.then(() => {
-          lobby.host(gameName, savedPlayerName(), info.name, path, info.slots.length);
+          lobby.host(gameName, savedPlayerName(), info.name, path, seats, advanced.observers === "FULL_OBSERVERS");
         }).catch(() => {}); // the failure is already on screen, on the list we came from
-        void glue.goTo(lanLobbyScreen(vfs, { path, info }));
+        void glue.goTo(lanLobbyScreen(vfs, { path, info }, advanced));
       },
       onCancel: () => void glue.goTo(lanScreen(vfs)),
     }),
@@ -265,13 +270,16 @@ function lanCreateScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: (
 function lanLobbyScreen(
   vfs: DataSource,
   map: { path: string; info: MapInfo },
+  /** The HOST's Advanced Options, straight off the create screen. A joiner passes none — it
+   *  renders whatever the host broadcasts. */
+  advanced?: AdvancedOptions,
 ): { chrome: "MultiplayerPreGameChat"; mount: () => Promise<FdfScreen> } {
   return {
     chrome: "MultiplayerPreGameChat",
     mount: () => mountLanLobbyScreen(ui, vfs, installMaps, lanSession().lobby, map, {
       onCancel: () => void glue.goTo(lanScreen(vfs)),
       onStart: (path, info, config, link) => void startGame(mapFileFor(path), info, config, link),
-    }),
+    }, advanced),
   };
 }
 

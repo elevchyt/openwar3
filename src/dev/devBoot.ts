@@ -9,7 +9,7 @@ import { RACES, type Race } from "../data/races";
 import { LanLobby, type LobbyState } from "../net/lobby";
 import { WebSocketTransport } from "../net/transport";
 import type { StartMatch as StartMatchMsg } from "../net/protocol";
-import { toConfig } from "../ui/fdfLan";
+import { observerSeats, toConfig } from "../ui/fdfLan";
 import { buildStart, newSetup, seatPeers } from "../net/lobbySetup";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL } from "../ai/ids";
@@ -397,7 +397,7 @@ async function devLanBoot(
 
   const me = lobby.snapshot.you?.id;
   const hostPeer = lobby.snapshot.peers.find((p) => p.host)?.id ?? 1;
-  const link = matchLinkFrom(lobby, lobby.isHost, start.slots, me, hostPeer);
+  const link = matchLinkFrom(lobby, lobby.isHost, start.slots, me, hostPeer, observerSeats(start));
   const config = { ...toConfig(start, me), fog };
   await hooks.startGame(file, info, config, link);
 }

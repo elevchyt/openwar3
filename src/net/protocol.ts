@@ -38,13 +38,16 @@ export interface RoomInfo {
   mapPath: string;
   players: number;
   maxPlayers: number;
+  /** The host chose Full Observers: the game list prints the game's own `GAMELIST_OBSERVERS`
+   *  " (observers)" after it, and `maxPlayers` counts the bench. */
+  observers: boolean;
 }
 
 // --- client → relay ---------------------------------------------------------------
 
 export type ClientMessage =
   /** Announce a game. The sender becomes the room's host, hence its authority. */
-  | { t: "create"; name: string; playerName: string; mapName: string; mapPath: string; maxPlayers: number }
+  | { t: "create"; name: string; playerName: string; mapName: string; mapPath: string; maxPlayers: number; observers?: boolean }
   /** Ask for the game list. The relay also pushes `rooms` unprompted when it changes. */
   | { t: "list" }
   /** Join a room. `token` is a REJOIN token from an earlier `created`/`joined` in this room —
@@ -107,16 +110,27 @@ export interface StartMatch {
     controller: "user" | "computer";
     race: string;
     team: number;
+    /** The colour the lobby gave the seat (a PLAYER_COLORS index — `SetPlayerColor`). Absent
+     *  reads as the slot's own index, WC3's default. */
+    color?: number;
     startX: number;
     startY: number;
     peer?: number;
     /** WHICH computer, on a computer slot — `MeleeDifficulty()` (src/ai/ids.ts). Absent on a
      *  human's slot; absent on a computer's reads as MELEE_NORMAL. */
     aiDifficulty?: number;
+    /** …and whether it is a Computer+ (src/ai/plus/) — the host's Advanced Options switch. */
+    aiPlus?: boolean;
     /** The person in the seat, by name — what the LOADING SCREEN's roster prints (issue #78).
      *  Absent on a computer slot, which is named by what it is. */
     name?: string;
   }>;
+  /** Who is WATCHING: the Observers bench, by relay peer. They hold no slot above — each
+   *  machine seats them one past the last player there is (ui/lobby.ts OBSERVER_PLAYER). */
+  observers?: Array<{ peer: number; name: string }>;
+  /** The host's Advanced Options, so every machine builds the same match from them
+   *  (src/net/advancedOptions.ts). Absent reads as the defaults. */
+  advanced?: import("./advancedOptions").AdvancedOptions;
 }
 
 /**
@@ -142,7 +156,7 @@ export type GameMessage =
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */
-export const PROTOCOL_VERSION = 12; // 12: per-slot AI difficulty — 11: the pause (`pausereq`/`pause`)
+export const PROTOCOL_VERSION = 13; // 13: observers, colours, advanced options — 12: per-slot AI difficulty
 
 /** Default relay port. Overridable via PORT (the env var Railway/Render both inject). */
 export const DEFAULT_RELAY_PORT = 8787;

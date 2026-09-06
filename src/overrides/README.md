@@ -13,7 +13,8 @@ language that is layered onto the screen at mount time:
 | --- | --- |
 | [`ui/GlobalStrings.fdf`](ui/GlobalStrings.fdf) | strings the game has no key for |
 | [`ui/OptionsMenu.fdf`](ui/OptionsMenu.fdf) | Options → Gameplay: drops two rows, adds one |
-| [`ui/AdvancedOptionsPane.fdf`](ui/AdvancedOptionsPane.fdf) | Custom Game → Advanced Options: adds a row, and replaces the Observers one |
+| [`ui/AdvancedOptionsPane.fdf`](ui/AdvancedOptionsPane.fdf) | Custom Game → Advanced Options: adds a row, and replaces the Observers one. The LAN create screen layers the same file through a second manifest that adds the row and KEEPS the Observers one — on a hosted game that dropdown means what it says |
+| [`ui/AdvancedOptionsDisplay.fdf`](ui/AdvancedOptionsDisplay.fdf) | the LAN game lobby's Advanced Options summary: adds the Computer+ row to the seven the game prints |
 
 ## How a layer is applied
 

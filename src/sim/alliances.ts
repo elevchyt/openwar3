@@ -123,7 +123,10 @@ export class AllianceTable {
    * their whole half of the map from the first frame. Omitted (every melee game) means the
    * melee default: allies share everything, as the lobby's own Team column promises.
    */
-  seedFromTeams(teamOf: (player: number) => number, grantsOf?: (team: number) => { allied: boolean; sharedVision: boolean } | undefined): void {
+  seedFromTeams(
+    teamOf: (player: number) => number,
+    grantsOf?: (team: number) => { allied: boolean; sharedVision: boolean; sharedControl?: boolean } | undefined,
+  ): void {
     this.grants.fill(0);
     for (let a = 0; a < SLOTS; a++) {
       for (let b = 0; b < SLOTS; b++) {
@@ -151,6 +154,9 @@ export class AllianceTable {
           }
         }
         if (grants.sharedVision) this.set(a, b, AllianceType.SharedVision, true);
+        // Advanced Options → Full Shared Unit Control: the lobby's promise plus control, which
+        // is the one grant the five ally sets leave out (it is its own box in the dialog).
+        if (grants.sharedControl) this.set(a, b, AllianceType.SharedControl, true);
       }
     }
   }

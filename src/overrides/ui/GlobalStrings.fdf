@@ -24,4 +24,10 @@ StringList {
 
     // Options → Gameplay, directly under AUTOSAVE_REPLAY ("Automatically Save Replays").
     COMPUTER_PLUS_DEFAULT       "Use Computer+ as default AI",
+
+    // The LAN game lobby's TEAM menu, under Full Observers: the entry that moves a player onto
+    // the Observers bench, and what a watcher's row reads in that column. The game names the
+    // force with a colon (COLON_OBSERVERS "Observers:") and the mode by its full phrase
+    // (FULL_OBSERVERS); the bare word a menu entry wants is nowhere in its table.
+    OBSERVERS_TEAM              "Observers",
 }

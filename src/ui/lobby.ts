@@ -18,6 +18,13 @@ export interface SlotConfig {
   controller: Controller;
   race: Race;
   team: number;
+  /**
+   * The colour the seat plays in — a PLAYER_COLORS index (ui/hud.ts), applied through the
+   * sim's own `SetPlayerColor` at match start. Only the LAN lobby sets it (a player picks one
+   * off their row, unique across the lobby — src/net/lobbySetup.ts); absent reads as the
+   * slot's own index, which is WC3's default and what every other lobby keeps.
+   */
+  color?: number;
   startX: number;
   startY: number;
   /** The MAP's own name for this slot (w3i player record), when it has one. A campaign map
@@ -136,6 +143,23 @@ export interface MeleeConfig {
    * an observer owns nothing.
    */
   observer?: boolean;
+  /**
+   * The OBSERVERS BENCH of a LAN game — everyone watching, seated one past the last player
+   * slot there is (`OBSERVER_PLAYER`, `OBSERVER_PLAYER + 1`, …) so that every rule already
+   * written for the single-player watcher covers them too. Each carries the relay peer the
+   * host addresses its snapshots to, and the name its chat lines arrive under.
+   *
+   * The machine that IS one of them sets `observer` and points `localPlayer` at its own entry;
+   * the host seats them all with reveal-all eyes (they see the whole map) and routes their chat
+   * to each other only (game/chat.ts). Absent in every match that has no bench.
+   */
+  observers?: ReadonlyArray<{ id: number; peer: number; name: string }>;
+  /** Advanced Options → Lock Teams: alliances are fixed for the match, so the Allies dialog's
+   *  boxes are dead. The real client's default, which is why the LAN lobby sends it. */
+  lockTeams?: boolean;
+  /** Advanced Options → Full Shared Unit Control: team-mates are seeded with
+   *  `AllianceType.SharedControl` as well as the five ally grants. */
+  sharedControl?: boolean;
   /**
    * The CAMPAIGN difficulty the player chose on the campaign screen, as the common.j
    * `gamedifficulty` index (MAP_DIFFICULTY_EASY 0 / NORMAL 1 / HARD 2 / INSANE 3). Omitted

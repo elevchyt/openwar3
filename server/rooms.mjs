@@ -25,7 +25,7 @@
 // therefore not a degraded lobby, it is no lobby at all: 12 landed on the client alone once and
 // every LAN game died at "Connection to the game host was lost." `pnpm relay:test` now reads
 // protocol.ts and compares, so the next bump that forgets this line fails a test instead.
-export const PROTOCOL_VERSION = 12; // 12: per-slot AI difficulty — 11: the pause (`pausereq`/`pause`)
+export const PROTOCOL_VERSION = 13; // 13: observers, colours, advanced options — 12: per-slot AI difficulty
 
 /** The game list entry, as LocalMultiplayerJoin.fdf wants it. */
 const roomInfo = (r) => ({
@@ -38,6 +38,8 @@ const roomInfo = (r) => ({
   mapPath: r.mapPath,
   players: r.peers.size,
   maxPlayers: r.maxPlayers,
+  // Full Observers: the list prints " (observers)" after the game, as the real client does.
+  observers: r.observers,
 });
 
 const peerInfo = (p) => ({ id: p.id, name: p.name, host: p.host });
@@ -159,6 +161,7 @@ export class RelayCore {
           mapName: msg.mapName || "",
           mapPath: msg.mapPath || "",
           maxPlayers: Math.max(2, Math.min(12, msg.maxPlayers || 12)),
+          observers: msg.observers === true,
           peers: new Map([[peer.id, peer]]),
           nextPeerId: 2,
         };

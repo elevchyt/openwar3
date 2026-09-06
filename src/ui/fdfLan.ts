@@ -1,16 +1,18 @@
 import type { DataSource } from "../vfs/types";
 import type { MapInfo } from "../world/mapInfo";
+import type { MapPreview } from "../world/mapPreview";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { ListItem } from "./fdf/widgets";
 import type { LanLobby, LobbyState } from "../net/lobby";
 import type { StartMatch } from "../net/protocol";
-import type { MeleeConfig, SlotConfig } from "./lobby";
+import { advancedOf, visibilityFog } from "../net/advancedOptions";
+import { OBSERVER_PLAYER, type MeleeConfig, type SlotConfig } from "./lobby";
 import type { Race } from "../data/races";
 import {
   INFO_ROWS, adopt, baseName, clearMapInfo, fillMapInfo, findFrame, layoutInfoPane,
-  loadMinimapIcons, nudgeX, paneRowsToHide, readMapInfo, setProp,
+  loadMinimapIcons, nudgeX, paneRowsToHide, readMapInfo, readMapPreviewFor, setProp,
 } from "./mapBrowser";
 
 // The Local Area Network screen, built from the game's own
@@ -64,6 +66,8 @@ export async function mountLanScreen(
 ): Promise<FdfScreen> {
   const minimapIcons = loadMinimapIcons(vfs);
   let screen: FdfScreen;
+  /** The screen's own strings — GAMELIST_OBSERVERS, FAST — captured on build. */
+  let strings: FdfLibrary | null = null;
   /** The lobby OUTLIVES this screen (main.ts owns it), and the screen it hands over to
    *  installs its own `onChange` while this one is still mounted — GlueManager builds the
    *  next screen before tearing down the last. So the handler below stays installed and goes
@@ -72,6 +76,9 @@ export async function mountLanScreen(
 
   // The map of the game highlighted in the list. Null while we have no map for it (`missing`).
   let shown: MapInfo | null = null;
+  /** …and its markers — start locations, gold mines, the neutral buildings — read out of the
+   *  map file a beat after the summary, exactly as the host's own map picker shows them. */
+  let preview: MapPreview | null = null;
   /** The highlighted game's map is not in THIS install: its name, for the message. */
   let missing: string | null = null;
   /** Which game in the list is highlighted. */
@@ -84,11 +91,19 @@ export async function mountLanScreen(
   /** Read the map a room is advertising, out of OUR install. */
   const showMapOf = async (room: { mapPath: string; mapName: string } | null): Promise<void> => {
     shown = null;
+    preview = null;
     missing = null;
     if (!room?.mapPath) { render(screen, lobby.snapshot); return; }
     const info = await readMapInfo(maps, room.mapPath);
     if (info) shown = info;
     else missing = room.mapName || baseName(room.mapPath);
+    render(screen, lobby.snapshot);
+    if (!info) return;
+    // The markers need the map's terrain header and unit list unpacked — a second read, and
+    // only for the one game highlighted. Ignored if the highlight has moved on meanwhile.
+    const markers = await readMapPreviewFor(vfs, maps, room.mapPath);
+    if (!alive || shown !== info) return;
+    preview = markers;
     render(screen, lobby.snapshot);
   };
 
@@ -98,7 +113,7 @@ export async function mountLanScreen(
     fdfPath: "UI\\FrameDef\\Glue\\LocalMultiplayerJoin.fdf",
     includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF],
     rootFrame: "LocalMultiplayerJoin",
-    buildRoot: (lib) => buildLanRoot(lib),
+    buildRoot: (lib) => { strings = lib; return buildLanRoot(lib); },
     buttonWidthScale: 1.35,
     // The engine's own strings assume Blizzard's LAN browser; ours says what it does.
     textOverrides: {
@@ -160,10 +175,14 @@ export async function mountLanScreen(
   /** Paint the current lobby state onto the screen. */
   function render(s: FdfScreen, st: LobbyState): void {
     const list = s.list("MapListBox");
+    // A row is the game's name and its seats, "(1/2)", in the same face as the name and in the
+    // LABEL gold the screen's own captions wear (StandardLabelTextTemplate's 0.99 0.827 0.0705)
+    // — and, for a game that takes observers, the game's own GAMELIST_OBSERVERS " (observers)".
+    const observersTag = strings?.string("GAMELIST_OBSERVERS") ?? " (observers)";
     list?.setItems(
       st.rooms.map((r): ListItem => ({
         value: r.id,
-        label: `${r.name}   |cff909090${r.players}/${r.maxPlayers}|r`,
+        label: `${r.name}${r.observers ? observersTag : ""} |cff${LABEL_GOLD}(${r.players}/${r.maxPlayers})|r`,
       })),
     );
     list?.setEnabled(true);
@@ -181,8 +200,11 @@ export async function mountLanScreen(
       if (picked) list.select(picked);
     }
     s.setText("GameListTitle", "Network Games");
-    s.setText("GameCreatorValue", "");
-    s.setText("GameSpeedValue", "");
+    // The two rows under the summary: who made the game, and the one speed we run at — WC3's
+    // "Fast" (GlobalStrings FAST), the setting the create screen's slider is parked on.
+    const room = picked ? st.rooms.find((r) => r.id === picked) : null;
+    s.setText("GameCreatorValue", room?.hostName ?? "");
+    s.setText("GameSpeedValue", room ? (strings?.string("FAST") ?? "Fast") : "");
     if (!st.error) {
       s.setText(
         "CustomCreateInfo",
@@ -194,8 +216,8 @@ export async function mountLanScreen(
       );
     }
 
-    // The map summary: the highlighted game's map.
-    if (shown) fillMapInfo(s, shown, null, minimapIcons);
+    // The map summary: the highlighted game's map, with its markers once they have been read.
+    if (shown) fillMapInfo(s, shown, preview, minimapIcons);
     else clearMapInfo(s);
 
     if (st.error) s.setText("CustomCreateInfo", `|cffff8080${st.error}|r`);
@@ -212,6 +234,21 @@ export function savedPlayerName(): string {
   return localStorage.getItem("openwar3.playerName") || "Player";
 }
 
+/** The gold every label on these screens is set in — `StandardLabelTextTemplate`'s FontColor
+ *  0.99 0.827 0.0705, as a WC3 colour code. The list's own rows are white by default, so a
+ *  row that wants to match its captions has to say so. */
+export const LABEL_GOLD = "fcd312";
+
+/**
+ * The Observers bench as the match numbers it: the first watcher is `OBSERVER_PLAYER`, the
+ * next one past it, and so on — outside the alliance matrix and the sim's player range, for
+ * the reasons OBSERVER_PLAYER gives. Every machine numbers them the same way off the same
+ * `start`, which is what lets the host address one by number and the watcher answer to it.
+ */
+export function observerSeats(msg: StartMatch): Array<{ id: number; peer: number; name: string }> {
+  return (msg.observers ?? []).map((o, i) => ({ id: OBSERVER_PLAYER + i, peer: o.peer, name: o.name }));
+}
+
 /** A start message as THIS machine's `MeleeConfig` — the same match, seen from our seat.
  *  Exported for the game lobby (which sends it) and for the dev-LAN boot, which overrides
  *  only `fog`. */
@@ -223,17 +260,30 @@ export function toConfig(msg: StartMatch, me: number | undefined): MeleeConfig {
     team: s.team,
     startX: s.startX,
     startY: s.startY,
+    ...(s.color === undefined ? {} : { color: s.color }),
     ...(s.peer === undefined ? {} : { peer: s.peer }),
     ...(s.aiDifficulty === undefined ? {} : { aiDifficulty: s.aiDifficulty }),
+    ...(s.aiPlus === undefined ? {} : { aiPlus: s.aiPlus }),
     ...(s.name === undefined ? {} : { playerName: s.name }),
   }));
+  const advanced = advancedOf(msg.advanced);
+  const observers = observerSeats(msg);
+  // Our seat — or our place on the bench. Every human slot says "user", so the peer is the
+  // only thing that tells two clients apart (see MeleeConfig.localPlayer); a watcher's peer
+  // is on the bench instead, and that machine plays nobody (MeleeConfig.observer).
+  const seat = slots.find((s) => s.peer === me)?.id;
+  const watching = seat === undefined ? observers.find((o) => o.peer === me) : undefined;
   return {
     slots,
-    fog: "explored",
+    // Advanced Options → Visibility. An older host's `start` carries none and reads as the
+    // pane's own default, the game's ordinary fog.
+    fog: visibilityFog(advanced.visibility),
     seed: msg.seed,
-    // Our seat. Every human slot says "user", so this is the only thing that tells two
-    // clients apart — see MeleeConfig.localPlayer.
-    localPlayer: slots.find((s) => s.peer === me)?.id,
+    localPlayer: watching ? watching.id : seat,
+    ...(watching ? { observer: true } : {}),
+    ...(observers.length ? { observers } : {}),
+    lockTeams: advanced.lockTeams,
+    sharedControl: advanced.sharedControl,
   };
 }
 

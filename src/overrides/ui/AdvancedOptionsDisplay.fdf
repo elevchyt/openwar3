@@ -1,0 +1,28 @@
+// OpenWar3 override — `UI\FrameDef\Glue\AdvancedOptionsDisplay.fdf`.
+//
+// The game LOBBY's summary of a hosted game's Advanced Options (the "Advanced Options" block
+// under the map on GameChatroom.fdf), which the game's file lays out as seven label/value rows.
+// Our pane has an eighth row, "Computer+ (Improved AI)" (src/overrides/ui/AdvancedOptionsPane.fdf,
+// issue #124), and a joiner deserves to read it here as they read the other seven — which AI
+// they will be playing against is not a smaller fact than whether the teams are locked.
+//
+// One row, in the file's own idiom: a label anchored under the last one (MapVisibilityLabel),
+// with its value as a right-justified child filling the same line. Adopted into the display by
+// name — src/overrides/index.ts.
+//
+// It states its Height where the game's rows do not: the engine sizes a TEXT to its string,
+// our solver does not, and the screen gives the game's rows their line in code BEFORE this
+// override is laid over it (src/ui/fdfLanLobby.ts) — so a row added afterwards has to bring
+// its own. The same 0.012 the screen gives the other seven.
+
+Frame "TEXT" "ComputerPlusDisplayLabel" INHERITS "StandardLabelTextTemplate" {
+    Height 0.012,
+    SetPoint TOPLEFT, "MapVisibilityLabel", BOTTOMLEFT, 0.0, -0.002,
+    SetPoint TOPRIGHT, "MapVisibilityLabel", BOTTOMRIGHT, 0.0, -0.002,
+    Text "COLON_COMPUTER_PLUS",
+
+    Frame "TEXT" "ComputerPlusDisplayValue" INHERITS "StandardValueTextTemplate" {
+        SetAllPoints,
+        FontJustificationH JUSTIFYRIGHT,
+    }
+}

@@ -129,6 +129,7 @@ try {
   const created = await host.next("created");
   check("host is peer 1 and flagged host", created.you.id === 1 && created.you.host === true);
   check("room carries the map name", created.room.mapName === "Echo Isles");
+  check("a room without observers says so", created.room.observers === false);
   // The PATH is what a joiner resolves in its own install; the map file never crosses the
   // wire (src/net/protocol.ts RoomInfo.mapPath). A room without it is unjoinable.
   check("room carries the map path", created.room.mapPath === MAP_PATH);

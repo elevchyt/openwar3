@@ -85,6 +85,12 @@ export interface AllianceModel {
    * change it. (Single player is the authority, so it writes normally.)
    */
   writable: boolean;
+  /**
+   * Advanced Options → Lock Teams (`MeleeConfig.lockTeams`): the alliances are the match's and
+   * stay as the lobby set them, so the boxes are dead for everybody, host included. The GIFT
+   * fields are not — locking teams stops you changing sides, not helping yours.
+   */
+  lockedTeams?: boolean;
 }
 
 export class AllianceDialogOverlay {
@@ -237,7 +243,7 @@ export class AllianceDialogOverlay {
         const box = screen.checkBox(`${col.frame}${peer.id}`);
         if (!box) continue;
         box.checked = this.pending.get(key(peer.id, col.type)) ?? this.model.get(peer.id, col.type);
-        box.setEnabled(this.model.writable);
+        box.setEnabled(this.model.writable && !this.model.lockedTeams);
         box.onChange = (on) => this.pending.set(key(peer.id, col.type), on);
       }
       this.wireGift(screen, peer.id, "Gold");
