@@ -145,7 +145,7 @@ export function chatRecipientTag(target: ChatTarget, strings: ChatStrings): stri
 }
 
 /**
- * The dot drawn between the audience tag and the speaker's name — U+25CF BLACK CIRCLE.
+ * The dot drawn between the audience tag and the speaker's name — U+2022 BULLET.
  *
  * A DELIBERATE DEVIATION, asked for by the developer: the real client has nothing like it.
  * It exists because the name beside it follows the Ally Color Mode filter (see `formatChatLine`),
@@ -156,16 +156,22 @@ export function chatRecipientTag(target: ChatTarget, strings: ChatStrings): stri
  * per glyph like any other non-Latin character (ui/gameFont.ts) — which is why it is a plain
  * round dot and not something the game's own face would have to draw.
  */
-export const CHAT_PLAYER_DOT = "●";
+export const CHAT_PLAYER_DOT = "\u2022";
 
 /**
- * Is the speaker's colour dot worth drawing at all?
+ * Is this line's speaker worth a colour dot?
  *
- * Only with more than two people PLAYING — the bench is excluded, because a watcher is not
- * somebody the dot has to tell apart. With one opponent there is nothing to disambiguate:
- * a line is yours or it is theirs, and the tag and the name already say which.
+ * Two conditions, and both are about whether there is anybody to be told apart:
+ *
+ *  • More than two people PLAYING, the bench excluded. With one opponent a line is yours or
+ *    it is theirs, and the tag and the name already say which.
+ *  • The speaker is not a WATCHER. An observer is on nobody's side, wears no player colour
+ *    the filter could ever have moved, and already carries a tag of its own (`observerLine`
+ *    re-tags every line it says `[Observers]`) — so a dot in front of it would be answering
+ *    a question nothing asked, in whatever colour the seat number happened to land on.
  */
-export function chatShowsPlayerDot(world: ChatWorld): boolean {
+export function chatShowsPlayerDot(line: ChatLine, world: ChatWorld): boolean {
+  if (world.isObserver(line.from)) return false;
   return world.players().filter((p) => !world.isObserver(p)).length > 2;
 }
 
@@ -173,7 +179,7 @@ export function chatShowsPlayerDot(world: ChatWorld): boolean {
  * One line as WC3 markup, ready for the message area and the log: the audience tag, the
  * speaker's colour dot, then the speaker's name in the speaker's own colour, then the text.
  *
- *     [All] ● Player 2: gl hf
+ *     [All] • Player 2: gl hf
  *
  * The TAG LEADS — that is the order the real client draws (a multiplayer shot the developer
  * measured this against: `[All]` in plain white at the head of every line, the name after it

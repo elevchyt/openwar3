@@ -7205,10 +7205,10 @@ export class MapViewerScene {
    * the colour the player picked in the lobby, and it stays that in every mode — so a game
    * played in mode 3 (where every ally reads teal and every enemy red) can still be read for
    * WHO said a line without cycling the filter back. It is drawn only with more than two
-   * players on the field, the bench excluded (`chatShowsPlayerDot`).
+   * players on the field and never in front of a WATCHER's name (`chatShowsPlayerDot`).
    */
   private renderChat(line: ChatLine): string {
-    const dotted = chatShowsPlayerDot(this.chatWorld());
+    const dotted = chatShowsPlayerDot(line, this.chatWorld());
     return formatChatLine(
       line,
       (p) => this.playerLabel(p),
