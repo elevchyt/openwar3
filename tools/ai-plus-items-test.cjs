@@ -256,6 +256,9 @@ function pressed(units, profile, ctx, opts = {}) {
     isShopUnit: () => false,
     canUseShop: () => false,
     canPawnAt: () => false,
+    // The `loot` pass asks the terrain before it sends anybody — a drop can land where no body
+    // can stand (`SimWorld.canWalkTo`).
+    canWalkTo: () => !opts.noPath,
   };
   const items = new PlusItems({
     world, player: 0,
@@ -270,8 +273,21 @@ function pressed(units, profile, ctx, opts = {}) {
     gold: () => opts.gold ?? 0,
   }, profile, opts.race ?? "human");
   items.pass(opts.now ?? 100, ctx);
+  lastOrders = orders;
   return orders.find((c) => c.c === "useitem") ?? null;
 }
+
+/** Everything the pass ordered, for the halves of it that are not a press — see `looted`. */
+let lastOrders = [];
+
+/** Drive one pass with drops on the grass and report the `getitem` errand it produced, if any. */
+function looted(units, opts = {}) {
+  pressed(units, opts.profile ?? PLUS_INSANE, AWAY, opts);
+  return lastOrders.find((c) => c.c === "getitem") ?? null;
+}
+
+/** One drop lying on the ground. `phea` is an ordinary item: it needs a free slot. */
+const drop = (o = {}) => ({ id: nextId++, itemId: "phea", x: 0, y: 0, ...o });
 
 const CTX = { home: { x: 0, y: 0 }, losing: false, mayShop: false, portalWorthIt: true, creeping: false };
 const AWAY = { ...CTX, home: { x: 9000, y: 9000 } }; // the fight is far from home
@@ -643,9 +659,35 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
   check("the Potion of Mana (AIm1 → AIma) is drunk", itemOf(pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
 }
 {
+  // THE NON-COMBAT CONSUMABLE, and the one row of `regenUse` that fills BOTH columns: hit
+  // points AND mana over `Dur1`. It used to fall out of that split as `healSelf` — the INSTANT
+  // potion's rung, gated on being in a fight — so a POUR was drunk at exactly the moment the
+  // next blow cancels it, and at no other moment. It is its own rung now (`replenish`).
   const h = belt(hero({ hp: 400 }), "prep");
-  check("a Replenishment Potion (AIp1 → AIrg, no area, no range) is a heal on the drinker",
-    itemOf(pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY)), 0);
+  check("a Replenishment Potion (AIp1 → AIrg, both columns) is drunk by a hurt hero out of a fight",
+    itemOf(pressed([h], PLUS_INSANE, AWAY)), 0);
+}
+{
+  const h = belt(hero({ hp: 400 }), "prep");
+  check("…and never with a fight on, because it pours",
+    pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY), null);
+}
+{
+  // The reported case: "willing to use it even if they have a lot of health … if they have
+  // less than 70% mana" (`REPLENISH_MANA`). Either bar on its own is enough.
+  const h = belt(hero({ mana: 60, maxMana: 100 }), "prep");
+  check("…a hero at FULL health with its bar under 70% drinks it anyway",
+    itemOf(pressed([h], PLUS_INSANE, AWAY)), 0);
+}
+{
+  const h = belt(hero({ mana: 90, maxMana: 100 }), "prep");
+  check("…and one that is full on both leaves it in the belt",
+    pressed([h], PLUS_INSANE, AWAY), null);
+}
+{
+  const h = belt(hero({ hp: 400, buffs: [regenBuff()] }), "prep");
+  check("…nor is a second charge poured on top of one already running",
+    pressed([h], PLUS_INSANE, AWAY), null);
 }
 {
   // The other half of `regenUse`: the same code, mana only, must NOT read as a heal — a mana
@@ -785,6 +827,43 @@ function wand(units, profile = PLUS_INSANE) {
 {
   const h = belt(hero({ stunned: true }), "will");
   check("…and neither does a stunned one", wand([h]).items.makeIllusions(h), 0);
+}
+
+// ==========================================================================================
+console.log("\n-- what is on the ground ----------------------------------------------------");
+// ==========================================================================================
+// `loot` sends the nearest hero with room at a drop. The rules are all about WHEN it is worth
+// leaving whatever the hero was doing, because `getitem` replaces that order outright.
+{
+  const h = hero();
+  check("a quiet drop is collected", looted([h], { ground: [drop({ x: 600 })] })?.itemId != null, true);
+}
+{
+  // Never into a live camp for a Ring of Protection — `LOOT_DANGER`, measured around the ITEM.
+  const h = hero();
+  check("…but not one with something hostile standing over it",
+    looted([h, enemy({ x: 900 })], { ground: [drop({ x: 900 })] }), null);
+}
+{
+  // THE REPORTED CASE: "heroes should prioritize fighting instead of picking up orphaned items
+  // from the ground". The drop is quiet and two screens away; the HERO is in the fight that
+  // decides the match, and it is the unit the whole squad musters on.
+  const h = hero();
+  check("…and a hero that is FIGHTING is not sent shopping on the floor",
+    looted([h, enemy({ x: 300 })], { ground: [drop({ x: 2000 })] }), null);
+}
+{
+  // …which is a reading of the HERO, not of the map: the same drop, the same fight, one hero
+  // standing out of it.
+  const a = hero({ x: 2100 });
+  const b = hero();
+  check("…while a hero out of it still goes",
+    looted([a, b, enemy({ x: 300 })], { ground: [drop({ x: 2000 })] })?.unitId, a.id);
+}
+{
+  const h = hero();
+  check("…and nothing is walked to that cannot be reached",
+    looted([h], { ground: [drop({ x: 600 })], noPath: true }), null);
 }
 
 // ==========================================================================================

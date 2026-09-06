@@ -19,7 +19,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { hopeless, CONCEDE_NOT_BEFORE, LEAVE_AFTER } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
+const { hopeless, teamLost, CONCEDE_NOT_BEFORE, LEAVE_AFTER } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -114,6 +114,25 @@ check("…nor while a hero of ours is up (or on the altar's clock)",
 // The same opening guard clause 4 carries: never having built a hero is not having lost one.
 check("…and a hero rush against a player who has no hero YET is not a lost game",
   hopeless(at({ halls: 2, structures: 8, workers: 4, gold: 700, heroesLost: 0, invaders: 7 }), HALL), false);
+
+console.log("\n-- half the team has gone ---------------------------------------------------");
+
+// The other concession, and the one that is not a reading of this player's own board at all:
+// `teamLost` (plus/chatter.ts). `team` is the roster as it started — every seat that has ever
+// been an ally — and `allies` is who still has anything on the map, so a player who quit and
+// one who was wiped out are the same thing here. See docs/computer-plus.md.
+check("a 1v1 can never concede for this reason", teamLost([], []), false);
+check("a 2v2 with the partner still playing plays on", teamLost([1], [1]), false);
+check("…and concedes when the partner goes", teamLost([1], []), true);
+// Half or MORE, so one of two is already it — a 3v3 that is now a 2v3 has lost half its team.
+check("a 3v3 concedes when one of its two teammates goes", teamLost([1, 2], [2]), true);
+check("…and of course when both do", teamLost([1, 2], []), true);
+// …while one of THREE is under half, which is the case the "or more" does not reach.
+check("a 4v4 with one of its three gone plays on", teamLost([1, 2, 3], [2, 3]), false);
+check("…and concedes at two of three", teamLost([1, 2, 3], [3]), true);
+// The roster is latched precisely so this stays true: re-deriving it would drop the departed
+// from both sides of the ratio at once and the rule would never fire.
+check("a shrinking roster would never fire — the latched one does", teamLost([1, 2, 3], [1]), true);
 
 console.log("\n-- the rails ---------------------------------------------------------------");
 

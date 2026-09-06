@@ -170,6 +170,34 @@ export interface Standing {
  * are cheap. `hallCost` is the race's own tier-1 hall price, read from the registry rather than
  * typed here, so clause 1 asks the real question on every race.
  */
+/**
+ * HALF THE TEAM HAS GONE — the concession that is NOT a reading of the board.
+ *
+ * Asked for in as many words: *"if half or more of the allies have left the game, then the rest
+ * of the Computer+ AI teammates must concede"*. It sits beside `hopeless` rather than inside it
+ * because it is a different question entirely: `hopeless` reads this player's own base, army and
+ * heroes, and a computer whose two teammates walked out can be sitting on a perfectly healthy
+ * economy while the match is over. A 3v3 that is now a 1v3 is not a game anybody plays out. For
+ * the same reason `mannersPass` does not put it behind `CONCEDE_NOT_BEFORE`: a teammate leaving
+ * at ninety seconds has decided the game as thoroughly as one leaving at ten minutes.
+ *
+ * `team` is the roster as it STARTED and `allies` who is still playing, and the caller's job is
+ * that the first only ever grows (`Brain.team`): "left" is seen as *nothing on the map*, because
+ * leaving runs `MeleeTriggerActionPlayerLeft` and the leaver's units go to Neutral Passive — so
+ * a re-derived roster would lose the departed from both sides of the ratio at once and it would
+ * never move. It also means a teammate who was WIPED OUT counts, which is right: either way
+ * there is nobody there to fight beside.
+ *
+ * Half or MORE, against the team as it started: two of four concedes, one of three does not.
+ * An empty team is a 1v1 or a free-for-all and can never concede for this reason.
+ */
+export function teamLost(team: readonly number[], allies: readonly number[]): boolean {
+  if (!team.length) return false;
+  let gone = 0;
+  for (const p of team) if (!allies.includes(p)) gone++;
+  return gone * 2 >= team.length;
+}
+
 export function hopeless(s: Standing, hallCost: number): boolean {
   if (s.halls === 0 && (s.workers === 0 || s.gold < hallCost)) return true;
   if (s.invaders > 0 && s.armyFood === 0 && s.workers === 0) return true;

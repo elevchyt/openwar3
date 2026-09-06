@@ -501,6 +501,24 @@ const BACKSTAB_HOLD = 5;
 const ENGAGE_LOOK = 900;
 /** Immolation (`AEim`), by base code — the one ability this file switches OFF as well as on. */
 const IMMOLATION = "AEim";
+/**
+ * Mirror Image (`AOmi`), by base code — the one `buff` whose effect is not a buff at all.
+ *
+ * Everything else on that rung leaves something on the caster that `buffFree` can see, so a
+ * spell already up is never re-pressed. Mirror Image leaves BODIES: `[AOmi] BuffID1` is `BOmi`,
+ * and `BOmi` is not a state the Blademaster carries — it is the popping effect an image dies
+ * with (`MirrorImageDeathCaster`, src/sim/world.ts). So nothing in the data or in `buffFree`
+ * says "you have already done this", and with `Cool1` = **3** against a `Dur1` of **60** the
+ * rung fired every three seconds for as long as the fight lasted.
+ *
+ * Which is worse than merely wasteful, because of what the sim does on a re-cast: the previous
+ * pack POPS (`startMirrorImage` unsummons every image of the caster before it places the new
+ * ones), so a Blademaster pressing it on cooldown spends 100 mana to throw away the three
+ * bodies the last 100 bought, over and over, and is never actually screened by anything.
+ *
+ * See `imagesStanding` for the gate.
+ */
+const MIRROR_IMAGE = "AOmi";
 /** How long nothing may be in reach before Immolation is put out — see `douseImmolation`. */
 const IMMOLATION_HOLD = 4;
 
@@ -858,8 +876,31 @@ export class PlusCaster {
       case "summon":
       case "buff":
       case "utility":
+        // MIRROR IMAGE IS NOT RE-PRESSED WHILE ITS OWN IMAGES ARE STILL WALKING — see
+        // `MIRROR_IMAGE`. Reported: the Computer+ orc "seems to be spamming the Mirror Image
+        // ability instead of waiting for the mirror images to die first".
+        if (def.code === MIRROR_IMAGE) return engaged && !this.imagesStanding(u);
         return engaged;
     }
+  }
+
+  /**
+   * ARE THIS HERO'S OWN COPIES STILL STANDING? — the gate on Mirror Image.
+   *
+   * Asked of the sim's own link rather than remembered here: `SimUnit.illusionOf` is the id of
+   * the body a copy was made FROM (`initIllusion`, docs/illusions.md), so this is exactly the
+   * set `startMirrorImage` would pop if the button were pressed again. Which also means a
+   * double made by a Wand of Illusion off this hero counts — and it should: what the rung is
+   * for is bodies in the line that the enemy cannot tell from the hero, and those already are
+   * some. The pack lives `Dur1` = 60 seconds, so the button comes back when it is empty, when
+   * the images have been killed, or when the hero is somewhere new — which is what a player
+   * presses it for.
+   */
+  private imagesStanding(u: SimUnit): boolean {
+    for (const o of this.view.world.units.values()) {
+      if (o.hp > 0 && o.isIllusion && o.illusionOf === u.id) return true;
+    }
+    return false;
   }
 
   /**

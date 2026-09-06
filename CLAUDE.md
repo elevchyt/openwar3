@@ -391,7 +391,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `table.mineBuilding`, undead.ai's own `basicExpansion(…, UNDEAD_MINE)`), whose 210 lumber is the
   most of any undead building — so `mineBuildings` sits ABOVE the hall rows, where the loop's own
   halt protects the saving, or the 225-gold no-lumber Necropolis is bought first every pass and
-  the mine never is. The bulk of the army is the LAST row,
+  the mine never is — and a mine ANYBODY ELSE is on is not an expansion (`AiPlayer.mineTaken`:
+  wrapped, a depot on it, or somebody else's workers in it, asked of every other seat and not
+  only of an enemy, because the row that saves for a rock a TEAMMATE took halts everything under
+  it for ever). The bulk of the army is the LAST row,
   so anything that reserves gold above it — a second hero, an expansion, a tier — is production
   stopped: the floor that keeps an army on the field while it saves is `CORE_ARMY_FOOD`, and it
   grows with the tier for that reason. A second production building is bought with the BANK; the

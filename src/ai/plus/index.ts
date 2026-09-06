@@ -9,7 +9,7 @@ import { PlusCaster } from "./casting";
 import { EnemyMemory, counterScore, type EnemyRead } from "./counter";
 import {
   CONCEDE_NOT_BEFORE, CONCESSIONS, GREETINGS, GREET_AT, GREET_SPREAD, GREET_STAGGER, LEAVE_AFTER,
-  hopeless,
+  hopeless, teamLost,
   type Standing,
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
@@ -1769,6 +1769,11 @@ interface Brain {
    *  walk of the whole unit table. */
   allies: number[];
   alliesAt: number;
+  /** …and every seat that has EVER been in `allies` — the team as it started, which is what
+   *  `teamCollapsed` counts the departed against. It only ever grows: an ally who leaves stops
+   *  being in `allies` (that is how leaving is seen at all — their units go to Neutral Passive)
+   *  and must not quietly leave the denominator with them. */
+  team: number[];
   /** Has it told its allies what it is building yet (`openerLine`)? Once a match, near the top
    *  of it — and only ever reached with an audience, since `teamPass` returns on an empty
    *  `allies` before anything here runs. */
@@ -1961,6 +1966,7 @@ export class ComputerPlusAi {
       hopelessSince: -1,
       allies: [],
       alliesAt: -Infinity,
+      team: [],
       opened: false,
       said: "",
       spokeAt: -Infinity,
@@ -5317,6 +5323,8 @@ export class ComputerPlusAi {
     // The TEAM game — after the concession check, so a computer that has already said gg does not
     // then announce a build or promise to come and help (plus/teamchat.ts).
     this.teamPass(b);
+    // …and the one concession that is not a reading of the position at all — see `teamCollapsed`.
+    if (this.teamCollapsed(b)) return void this.concede(b);
     if (b.clock < CONCEDE_NOT_BEFORE) return; // nothing is decided this early — see the constant
     if (!hopeless(this.standing(b), this.host.registry.get(b.table.halls[0])?.goldCost ?? 0)) {
       b.hopelessSince = -1;
@@ -5326,8 +5334,34 @@ export class ComputerPlusAi {
     // It has to STAY hopeless: a base that looks lost for five seconds while the army walks
     // home is not a lost game, and `concedeAfter` is longer the weaker the player is.
     if (b.clock - b.hopelessSince < profile.concedeAfter) return;
+    this.concede(b);
+  }
+
+  /** Say gg. `mannersPass` walks it out `LEAVE_AFTER` later, through the ordinary
+   *  `EVENT_PLAYER_LEAVE` door — see `PlusHost.leave`. */
+  private concede(b: Brain): void {
     b.concededAt = b.clock;
-    this.host.say(ai.player, CONCESSIONS[ai.randomInt(0, CONCESSIONS.length - 1)]);
+    this.host.say(b.ai.player, CONCESSIONS[b.ai.randomInt(0, CONCESSIONS.length - 1)]);
+  }
+
+  /**
+   * HAS HALF THE TEAM GONE? — the one concession that is not a reading of the board.
+   *
+   * Asked for in as many words: *"if half or more of the allies have left the game, then the
+   * rest of the Computer+ AI teammates must concede"*. Which is what people do — a 3v3 that is
+   * now a 1v3 is not a game anybody plays out — and it is deliberately NOT run through
+   * `hopeless`: that reading is about this player's own base and army, and a computer whose two
+   * teammates walked out can be sitting on a perfectly healthy economy while the match is over.
+   * For the same reason it is exempt from `CONCEDE_NOT_BEFORE`: a teammate leaving at ninety
+   * seconds has decided the game every bit as thoroughly as one leaving at ten minutes.
+   *
+   * The rule itself is `teamLost` in plus/chatter.ts, beside `hopeless`, and it is pinned by
+   * `tools/ai-plus-concede-test.cjs`. This half is the two lists it reads: the ROSTER is
+   * `b.team` — every seat that has ever been an ally of ours, which only ever grows — and who
+   * is still IN it is `b.allies`, derived from what is standing on the field.
+   */
+  private teamCollapsed(b: Brain): boolean {
+    return teamLost(b.team, b.allies);
   }
 
   // ======================================================================================
@@ -5342,6 +5376,8 @@ export class ComputerPlusAi {
     if (b.clock - b.alliesAt >= ALLY_REFRESH) {
       b.allies = this.alliesOf(b);
       b.alliesAt = b.clock;
+      // The roster only ever grows — see `Brain.team` and `teamCollapsed`.
+      for (const p of b.allies) if (!b.team.includes(p)) b.team.push(p);
     }
     if (!b.allies.length) {
       b.called = -1; // nobody to have called; a stale one must not fire if a team forms later
@@ -5765,7 +5801,6 @@ export class ComputerPlusAi {
     b.helpUntil = b.clock + HELP_TIMEOUT;
     b.helpSince = b.clock;
     b.helpDangerAt = b.clock;
-    b.target = { id: 0, x: spot.x, y: spot.y };
     b.creeping = false;
     this.setMode(b, "attacking");
     // ON FOOT, or by scroll — and the scroll is spent on ONE thing: an ally whose BASE is being
@@ -5774,14 +5809,29 @@ export class ComputerPlusAi {
     // scroll goes to a town hall (`SimWorld.nearestHall`, docs/items.md), the fight is not at
     // one, and a scroll spent on a field battle is a scroll that is not there for the base.
     // `PORTAL_WALK` still applies on top — a base three seconds' walk away is a walk.
+    //
+    // WHICH OF THEIR HALLS is the second half of that decision, and it was not being made.
+    // Reported: *"when a Computer+ AI decides to teleport to a teammate to help them, they
+    // should decide at which main hall building to teleport to of that player's, because the
+    // player asking for help might require help at their expansion instead of their main
+    // town"*. The scroll resolves to `nearestHall` **from the point it is aimed at**, and the
+    // point it was aimed at was `helpSpot` — which is their ARMY, or a fight in the field, and
+    // quite often nowhere near the hall that is being knocked down. So the rescue arrived at
+    // whichever hall happened to be closest to that, and an ally whose expansion was under
+    // siege got an army in their main. `hallUnderAttack` names the hall the fight is actually
+    // at, and that hall is both the aim of the scroll and where the wave is sent.
     const centre = this.squadCentre(b) ?? b.ai.home();
-    const far = Math.hypot(centre.x - spot.x, centre.y - spot.y) > PORTAL_WALK;
     const hero = this.squadHero(b);
-    const tp = far && hero && this.baseUnderAttack(b, from)
-      ? b.items.portalTo(hero, spot.x, spot.y)
-      : false;
+    const hall = hero ? this.hallUnderAttack(b, from) : null;
+    const far = !!hall && Math.hypot(centre.x - hall.x, centre.y - hall.y) > PORTAL_WALK;
+    const tp = far && hero && hall ? b.items.portalTo(hero, hall.x, hall.y) : false;
+    // Only a scroll that was actually spent moves the objective: a wave that is walking still
+    // goes where the help is (`helpSpot`), while one that has just come out of a portal is
+    // standing at that hall and has no business walking off to where the ally's army was.
+    const dest = tp && hall ? { x: hall.x, y: hall.y } : spot;
+    b.target = { id: 0, x: dest.x, y: dest.y };
     this.tell(b, tp ? PORTAL_LINES : COMING_LINES);
-    this.commit(b, spot.x, spot.y);
+    this.commit(b, dest.x, dest.y);
   }
 
   /** Why it cannot come, or null if it can. In the order a player would give them: my own base
@@ -5841,21 +5891,36 @@ export class ComputerPlusAi {
   }
 
   /**
-   * Is one of the ally's TOWN HALLS actually being attacked?
+   * WHICH of the ally's TOWN HALLS is actually being attacked — or null if none is.
    *
    * The one question the Scroll of Town Portal is asked (`answerCall`), and the reason it is
    * asked separately from `helpSpot`: the scroll's destination is a town hall, so it can only
    * ever answer "their base is under attack" — spending it on a field battle drops the army
    * somewhere near the fight at best and wastes the item at worst. Gated on our own eyes like
    * everything else here.
+   *
+   * It answers the HALL rather than a boolean because that is the thing the scroll needs: a
+   * Town Portal lands at `nearestHall` **to the point it is aimed at**, so aiming it anywhere
+   * but at the hall in trouble is choosing a hall by accident. A player with three bases has
+   * three of these, and the one their teammate is asking about is the one with an army in it.
+   *
+   * The MOST beset one when several are, counted in bodies rather than picked by distance: a
+   * raid that has reached two towns is one the ally is losing at the busier of them, and the
+   * nearest-to-us reading would send the relief to whichever happened to be on our side of the
+   * map. (`allyBase`, which is where the army WALKS when no scroll is spent, still prefers the
+   * near one — a walk that arrives in two minutes is a different question from a portal that
+   * arrives now.)
    */
-  private baseUnderAttack(b: Brain, ally: number): boolean {
+  private hallUnderAttack(b: Brain, ally: number): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestN = 0;
     for (const u of this.host.world.units.values()) {
       if (u.owner !== ally || u.hp <= 0 || !u.building || u.building.constructionLeft > 0) continue;
       if (this.host.registry.get(u.typeId)?.buffType !== HALL_CATEGORY) continue;
-      if (this.fightAt(b, u)) return true;
+      const n = this.fightSize(b, u);
+      if (n > bestN) { bestN = n; best = u; }
     }
-    return false;
+    return best;
   }
 
   /**
@@ -5941,12 +6006,19 @@ export class ComputerPlusAi {
   /** Is there a fight at this building that we can SEE? Same test `isInvader` makes about our
    *  own towns, asked about somebody else's and gated on our own eyes. */
   private fightAt(b: Brain, hall: SimUnit): boolean {
+    return this.fightSize(b, hall) > 0;
+  }
+
+  /** …and HOW BIG it is — the same test counted rather than answered yes/no, which is what
+   *  `hallUnderAttack` picks between two besieged towns with. */
+  private fightSize(b: Brain, hall: SimUnit): number {
+    let n = 0;
     for (const u of this.host.world.units.values()) {
       if (u.hp <= 0 || u.building || u.isPeon || !b.ai.hostileTo(u)) continue;
       if (Math.hypot(u.x - hall.x, u.y - hall.y) > TOWN_RADIUS) continue;
-      if (b.ai.knows(u)) return true;
+      if (b.ai.knows(u)) n++;
     }
-    return false;
+    return n;
   }
 
   /**

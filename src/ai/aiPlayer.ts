@@ -449,7 +449,7 @@ export class AiPlayer {
     const t = this.towns[town];
     if (!t) return false;
     const mine = this.host.world.mines.get(t.mineId);
-    return !!mine && mine.gold > 0 && !this.mineHeldByEnemy(mine);
+    return !!mine && mine.gold > 0 && !this.mineTaken(mine);
   }
 
   /**
@@ -1179,7 +1179,7 @@ export class AiPlayer {
     for (const m of this.host.world.mines.values()) {
       if (m.gold <= 0) continue;
       if (this.towns.some((t) => t.mineId === m.id)) continue;
-      if (this.mineHeldByEnemy(m)) continue;
+      if (this.mineTaken(m)) continue;
       const d = Math.hypot(m.x - home.x, m.y - home.y);
       if (d < bestD) { bestD = d; best = m; }
     }
@@ -1265,14 +1265,60 @@ export class AiPlayer {
     return null;
   }
 
-  private mineHeldByEnemy(mine: SimMine): boolean {
-    for (const u of this.host.world.units.values()) {
-      if (u.hp <= 0 || !u.building || u.owner === this.player || u.owner < 0) continue;
-      if (!u.depotGold && !this.host.world.hauntsMines(u.typeId)) continue;
-      if (!this.hostileTo(u)) continue;
-      if (Math.hypot(u.x - mine.x, u.y - mine.y) <= EXPANSION_HALL_RANGE) return true;
+  /**
+   * IS SOMEBODY ELSE ALREADY ON THIS MINE? — the one question that turns a rock into an
+   * expansion or not, asked by `nextExpansion` (do not pick it) and by `townHasMine` (a town
+   * whose mine somebody else took is not a town any more).
+   *
+   * **Somebody else, not an enemy.** It used to ask `hostileTo`, and the seat that reading let
+   * through is the one that hurts most: an ALLY. Reported, of the undead — *"sometimes it
+   * haunts a gold mine where an ally is expanding on, which is very bad"* — and it is very bad
+   * twice over. A Haunted Gold Mine is 225 gold and 210 lumber, the most lumber of any undead
+   * building (docs/undead.md), spent on a rock a teammate's Peasants are already standing in;
+   * and because the row that pays for it sits high on the ladder (`mineBuildings` in
+   * plus/plan.ts), an undead stuck on a mine it can never take is an undead that builds nothing
+   * underneath it either — which is the other half of the same report, *"sometimes the Undead
+   * AI is NOT haunting the gold mine to expand to"*. Both halves are this one word.
+   *
+   * Three ways a mine is somebody's, and the last is the developer's own phrasing — *"allow the
+   * haunted gold mine to be built only on gold mines that are not occupied by workers"*:
+   *
+   *  · it is WRAPPED. `SimMine.entangledBy` carries the building standing on the rock for both
+   *    races that raise one — an Entangled Gold Mine and a Haunted Gold Mine alike
+   *    (`SimWorld.hauntedMine` reads the same field) — so this is the whole answer for a mine
+   *    that is already an expansion, whoever owns it.
+   *  · there is a DEPOT on it: anybody else's hall inside `EXPANSION_HALL_RANGE`.
+   *  · somebody else's WORKERS are digging in it — in the shaft (`inMine`) or walking their
+   *    gold out of it (`resKind`/`resId`), which is the same pair `SimWorld.mineClaimable`
+   *    reads for the night elf's own right-click.
+   *
+   * OURS WINS OUTRIGHT, and that clause is not decoration: an enemy worker sneaking into the
+   * mine our own hall is standing on must not make our own town read as somebody else's.
+   */
+  private mineTaken(mine: SimMine): boolean {
+    let taken = false;
+    if (mine.entangledBy > 0) {
+      const wrap = this.host.world.units.get(mine.entangledBy);
+      if (wrap && wrap.hp > 0) {
+        if (wrap.owner === this.player) return false;
+        taken = true;
+      }
     }
-    return false;
+    for (const u of this.host.world.units.values()) {
+      if (u.hp <= 0 || u.owner < 0) continue;
+      if (u.building) {
+        // Under construction counts, on both sides of the question: a hall going up on the rock
+        // is somebody taking that rock, and one of OURS going up is us taking it.
+        if (!u.depotGold && !this.host.world.hauntsMines(u.typeId)) continue;
+        if (Math.hypot(u.x - mine.x, u.y - mine.y) > EXPANSION_HALL_RANGE) continue;
+        if (u.owner === this.player) return false; // ours: the mine is settled, and it is ours
+        taken = true;
+        continue;
+      }
+      if (!u.worker || u.owner === this.player) continue;
+      if ((u.inMine && u.inMineId === mine.id) || (u.resKind === "gold" && u.resId === mine.id)) taken = true;
+    }
+    return taken;
   }
 
   hostileTo(u: SimUnit): boolean {

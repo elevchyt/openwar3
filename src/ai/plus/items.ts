@@ -57,9 +57,9 @@ import type { PlusProfile } from "./profile";
  * highest first, one button per pass — and it reads the way a player's hands do: get out, don't
  * die, top up, then everything else.
  */
-export type Use = "escape" | "panic" | "healSelf" | "healArea" | "healOther" | "mana" | "manaRegen" | "raise" | "illusion" | "buff";
+export type Use = "escape" | "panic" | "healSelf" | "healArea" | "healOther" | "mana" | "replenish" | "manaRegen" | "raise" | "illusion" | "buff";
 
-const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "healArea", "healOther", "mana", "manaRegen", "raise", "illusion", "buff"];
+const LADDER: readonly Use[] = ["escape", "panic", "healSelf", "healArea", "healOther", "mana", "replenish", "manaRegen", "raise", "illusion", "buff"];
 const useRank = (u: Use): number => LADDER.indexOf(u);
 
 /**
@@ -160,11 +160,20 @@ const MANA_INSTANT = new Set<string>(["AIma", "AImr"]);
  *     AIp5/6  Scroll of Replenishment     Area1 600                  the AREA      -> healArea
  *     AIrl    Healing Salve               Rng1 500, no Area1         a UNIT        -> healOther
  *     AIpr    Clarity Potion              neither, DataB mana only   the drinker   -> manaRegen
- *     AIp1-4  Replenishment Potion        neither, DataA hp          the drinker   -> healSelf
+ *     AIp1-4  Replenishment Potion        neither, DataA hp AND DataB mana         -> replenish
  *
  * The last two are told apart by which column the row FILLS — a Clarity Potion is 200 mana and
  * no hit points, a Replenishment Potion is both — because "what is it for" is the question the
  * ladder sorts on, and a mana item pressed as a heal is pressed at the wrong moment.
+ *
+ * **A REPLENISHMENT POTION IS BOTH, AND THAT IS ITS OWN RUNG.** It used to answer `healSelf`,
+ * on the strength of its hit-point column alone, and that is the one answer that can never be
+ * right for it: `healSelf` is the INSTANT potion's rung and is therefore gated on `engaged` —
+ * so the AI drank a POUR (`AIrg`, cancelled by the next blow) at precisely the moment the next
+ * blow was coming, and never drank it at any other. Its own Ubertip is the whole argument:
+ * *"|cff87ceebNon-Combat Consumable|r … Regenerates <AIp1,DataA1> hit points and
+ * <AIp1,DataB1> mana of the Hero over <AIp1,Dur1> seconds"* — the game itself calls it
+ * non-combat, and it names the two bars in one sentence. See the `replenish` rung in `wants`.
  *
  * **A CLARITY POTION IS NOT A POTION OF MANA**, and it answers `manaRegen` rather than `mana`
  * for the one reason that decides when it may be drunk at all: it pours. `applyItemAbility`'s
@@ -185,7 +194,9 @@ function regenUse(ad: AbilityDef): Use | null {
   if (lvl.area > 0) return "healArea";
   if (lvl.castRange > 0) return "healOther";
   const hp = lvl.data[0];
-  return hp > 0 ? "healSelf" : lvl.data[1] > 0 ? "manaRegen" : null;
+  const mana = lvl.data[1];
+  if (hp > 0 && mana > 0) return "replenish"; // both bars: the Replenishment Potion
+  return hp > 0 ? "healSelf" : mana > 0 ? "manaRegen" : null;
 }
 
 /** One row of the shopping list: what to buy, and how many of it to carry. */
@@ -519,6 +530,23 @@ const MANA_LOW = 0.35;
  * pool waits until there is a potion's worth of room in it.
  */
 const MANA_TOPUP = 0.75;
+/**
+ * The two bars a REPLENISHMENT POTION is drunk at — and EITHER of them on its own is enough.
+ *
+ * Reported: *"all Computer+ AI should be willing to use Replenishment potion even if they have
+ * a lot of health. they should also be willing to use it if they have less than 70% mana."*
+ * The 70 % is the developer's own number; the hit-point bar beside it is `MANA_TOPUP`'s, and it
+ * is deliberately the eager one rather than `HURT_HP`, because this potion is not an emergency
+ * item at all. It restores BOTH bars at once for one charge, it is bought by the pair, and its
+ * own row calls it a Non-Combat Consumable — so what it is for is the walk between fights, and
+ * a charge still in the belt when the next fight starts has done nothing for anybody.
+ *
+ * OR, and not AND, is the whole of the report: a hero at full health with a spent bar wants
+ * this exactly as much as a hurt one with a full bar does, and asking for both left the pair
+ * bought at the shop undrunk for the rest of the match.
+ */
+const REPLENISH_HP = 0.75;
+const REPLENISH_MANA = 0.7;
 /** The radius everything here calls "this fight" — the same figure plus/casting.ts engages at. */
 const LOOK = 900;
 /** How close to home is close enough that a Town Portal would be spent on nothing. */
@@ -883,7 +911,17 @@ export class PlusItems {
     const ground = [...this.view.world.items.values()];
     if (!ground.length) return;
     // Heroes only, and the errand runner is left alone — it is walking to a shop.
-    const heroes = own.filter((u) => u.isHero && u.inventory.length && !u.isIllusion && this.canAct(u));
+    //
+    // A HERO THAT IS FIGHTING DOES NOT GO SHOPPING ON THE FLOOR. Reported: *"Computer+ AI
+    // heroes should prioritize fighting instead of picking up orphaned items from the ground"*
+    // — and the gate this file already had is the wrong end of that sentence. `LOOT_DANGER` is
+    // measured around the ITEM ("do not walk into a live camp for a Ring of Protection"), which
+    // says nothing at all about a drop lying quietly two screens away while the army is in the
+    // fight that decides the match: `getitem` replaces whatever the hero was doing, so the one
+    // unit the whole squad musters on walked out of the battle for a tome. `underFire` is the
+    // same reading every press on this file's ladder calls "this fight", asked of the hero.
+    const heroes = own.filter((u) =>
+      u.isHero && u.inventory.length && !u.isIllusion && this.canAct(u) && !this.underFire(u, foes));
     if (!heroes.length) return;
     const taken = new Set<number>();
     for (const it of ground) {
@@ -1060,6 +1098,22 @@ export class PlusItems {
       // fit" but "can this hero cast anything at all". A player swallows it.
       case "mana":
         return u.maxMana > 0 && u.mana / u.maxMana < MANA_LOW;
+      // THE POTION THAT FILLS BOTH BARS, and the rung that is not an emergency — see
+      // `REPLENISH_HP` / `REPLENISH_MANA` for the two lines and `regenUse` for why it is its
+      // own rung rather than a heal. A pour, so it is drunk with nothing hostile in sight and
+      // never on top of one that is already running; and either bar being down is reason
+      // enough, since one charge fills both whichever of them asked for it.
+      //
+      // No `manaRoom` clause, unlike the pure mana pour below it. That guard exists to stop a
+      // Clarity Potion being emptied into a bar with no room for it — the only thing it does —
+      // and here the charge is buying hit points as well, so a full bar wastes half a potion at
+      // worst while the missing 25 % of a hero's life goes on being missing.
+      case "replenish":
+        return (
+          !engaged
+          && !this.regenerating(u)
+          && (hp < REPLENISH_HP || (u.maxMana > 0 && u.mana / u.maxMana < REPLENISH_MANA))
+        );
       // …and the POURING one, which is the same top-up read the other way round: it may only be
       // drunk with nothing hostile in sight, and it is drunk far more readily. See `MANA_TOPUP`,
       // and `regenUse` for why a Clarity Potion is not a Potion of Mana.

@@ -71,6 +71,11 @@ const ABILS = {
   // felled there with a Treant (`UnitID1` efon) standing in each hole, `Cost1` 100, `Dur1` 60.
   AEfn: { code: "AEfn", target: "point", autocast: false, targetFlags: ["tree"], levelData: [lvl({ area: 150, castRange: 800, cost: 100, duration: 60, heroDuration: 60, buffs: ["BEfn"], summon: "efon", data: [2, NaN] })] },
   AHwe: { code: "AHwe", target: "none", autocast: false, targetFlags: [], levelData: [lvl({ area: 200, castRange: 0, cost: 125, duration: 60, heroDuration: 60, buffs: ["BHwe"], summon: "hwat" })] },
+  // MIRROR IMAGE, with its real row. `Units\AbilityData.slk [AOmi]`: `targs1` "_", `Cost1` 100,
+  // **`Cool1` 3** against a **`Dur1` 60**, `Area1` 1000, `Rng1` 128, `DataA` 1/2/3 images —
+  // and `BuffID1` `BOmi`, which is NOT a state the caster carries: it is the effect an image
+  // POPS with. So `buffFree` sees nothing here, which is why the rung needed its own gate.
+  AOmi: { code: "AOmi", target: "none", autocast: false, targetFlags: [], levelData: [lvl({ area: 1000, castRange: 128, cost: 100, duration: 60, heroDuration: 60, buffs: ["BOmi"], data: [1, 0, 2, 0.5] })] },
 };
 
 let nextId = 1;
@@ -84,7 +89,7 @@ const unit = (o = {}) => ({
   // asks of a buff's SOURCE; seat 2 is our ally, so it shares ours. `summonLeft` > 0 is the
   // sim's own test for "a Purge would destroy this" (`Aprg` in sim/spells.ts).
   team: o.owner === 1 ? 1 : 0, summonLeft: 0,
-  targetId: 0, ...o,
+  targetId: 0, illusionOf: 0, ...o,
 });
 const caster = (o = {}) => unit({ isHero: true, abilities: [{ id: o.abilId ?? "AHhb", code: o.abilId ?? "AHhb", level: 1, cooldownLeft: 0, autocastOn: false }], ...o });
 
@@ -578,6 +583,41 @@ const keeper = () => caster({ abilId: "AEfn", isHero: true, x: 0, y: 0 });
   check("…an EASY one presses it on the single tree", easy && [easy.x, easy.y], [400, -300]);
   check("…and two trunks together are a clump for anybody",
     !!cast([keeper(), foe()], PLUS_NORMAL, { trees: [{ x: 560, y: 0 }, { x: 620, y: 60 }], passes: 2 }), true);
+}
+
+// ==========================================================================================
+console.log("\n-- Mirror Image is not re-pressed while its own images stand ------------------");
+// ==========================================================================================
+// Reported: the Computer+ orc "seems to be spamming the Mirror Image ability instead of waiting
+// for the mirror images (illusions) to die first". `AOmi` is the one `buff` whose effect is not
+// a buff — it leaves BODIES — so `buffFree` sees nothing and a `Cool1` of 3 against a `Dur1` of
+// 60 pressed it twenty times a pack. And a re-cast POPS the previous images
+// (`SimWorld.startMirrorImage`), so the spam was 100 mana to throw away the last 100's bodies.
+const pack = () => [unit({ owner: 1, x: 200 }), unit({ owner: 1, x: 260 })];
+{
+  const bm = caster({ abilId: "AOmi" });
+  check("a Blademaster in a fight presses Mirror Image", cast([bm, ...pack()])?.code, "AOmi");
+}
+{
+  const bm = caster({ abilId: "AOmi" });
+  const image = unit({ isIllusion: true, illusionOf: bm.id, x: 40 });
+  check("…and not again while its own images are still standing", cast([bm, image, ...pack()]), null);
+}
+{
+  // Somebody ELSE's copies are not this hero's pack — a re-cast would not pop them, and they
+  // are not screening this hero either. `illusionOf` is the link, not "an illusion exists".
+  const bm = caster({ abilId: "AOmi" });
+  const other = unit({ isIllusion: true, illusionOf: 999, x: 40 });
+  check("…while another hero's copies are nothing to do with it", cast([bm, other, ...pack()])?.code, "AOmi");
+}
+{
+  // A dead image is not standing.
+  const bm = caster({ abilId: "AOmi" });
+  const popped = unit({ isIllusion: true, illusionOf: bm.id, hp: 0, x: 40 });
+  check("…and the pack being dead brings the button back", cast([bm, popped, ...pack()])?.code, "AOmi");
+}
+{
+  check("…and nothing is pressed with no fight at all", cast([caster({ abilId: "AOmi" })]), null);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

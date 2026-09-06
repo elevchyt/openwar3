@@ -1920,6 +1920,34 @@ different directions — that for one race an expansion is a **lumber** purchase
   asked of `countAt(…, done)` rather than `townCountTown`: a haunt still going up is a mine that
   still cannot be worked, whatever the build array thinks of it.
 
+#### …and it only haunts a mine NOBODY ELSE IS ON
+
+Reported, of the same race: *"sometimes the Undead AI is NOT haunting the gold mine to expand to,
+but sometimes it haunts a gold mine where an ally is expanding on, which is very bad"* — and the
+two halves are one word. `AiPlayer` asked `hostileTo` about whoever was sitting on a mine, so the
+one seat that reading let through was an **ally**. The 225 gold and 210 lumber went onto a rock a
+teammate's workers were already standing in; and because that row sits at the very top of the
+ladder, an undead saving for a mine it can never take is an undead that **builds nothing
+underneath it either**, which is the "it is not haunting anything" half.
+
+`mineTaken` (was `mineHeldByEnemy`) is therefore about *anybody else*, not about an enemy, and it
+answers the two questions both `nextExpansion` (do not pick that rock) and `townHasMine` (a town
+whose mine somebody else took is not a town any more) need:
+
+* the mine is **wrapped** — `SimMine.entangledBy` carries the building standing on it for both
+  races that raise one, an Entangled Gold Mine and a Haunted Gold Mine alike;
+* somebody else's **depot** is on it, inside `EXPANSION_HALL_RANGE`;
+* somebody else's **workers** are in it — down the shaft (`inMine`) or carrying its gold out
+  (`resKind`/`resId`), which is the developer's own phrasing: *"allow the haunted gold mine to be
+  built only on gold mines that are not occupied by workers"*, and the same pair
+  `SimWorld.mineClaimable` reads for the night elf's own right-click.
+
+**Ours wins outright**, and that clause is not decoration: an enemy worker sneaking into the mine
+our own hall stands on must not make our own town read as somebody else's. And because a claimed
+town whose mine has since been taken now fails `townHasMine`, `nextExpansion`'s first loop walks
+past it and picks another rock instead of handing back the same doomed one for the rest of the
+match.
+
 ### It picks things up
 
 The whole point of creeping, and the AI did not do it at all: it cleared a camp, walked away, and
@@ -1938,6 +1966,14 @@ Ring of Protection is a hero that dies for one. That last test also means a camp
 simply collected once the camp is dead, with no special case. The order is `getitem`, the ordinary
 right-click, and a unit walking to a drop is left alone by the rally and by `commit` exactly as a
 shopping hero is.
+
+**And a hero that is FIGHTING does not go shopping on the floor.** `LOOT_DANGER` is measured
+around the *item*, which says nothing at all about a drop lying quietly two screens away while
+the army is in the fight that decides the match — and `getitem` replaces whatever the hero was
+doing, so the one unit the whole squad musters on walked out of the battle for a tome. The hero
+is therefore skipped outright while anything that can fight back is within `LOOK` of *it*
+(`underFire`, the same reading every press on the belt's ladder calls "this fight"). The drop is
+still there in twenty seconds; the fight is not.
 
 ### Obsidian Statues: one on life, one on mana
 
@@ -2173,6 +2209,27 @@ has been in reach for `IMMOLATION_HOLD` (4 s, ours) — a dwell, or a hero chasi
 out of a camp douses the moment it steps outside `MIN_LOOK` and pays the 25 again a second later.
 The two halves cannot fight: `wants` needs `engaged` to re-light a `buff`, and `buffFree` sees
 `BEim` while it burns.
+
+### Mirror Image is the one buff whose effect is BODIES, not a buff
+
+Reported: the Computer+ orc *"seems to be spamming the Mirror Image ability instead of waiting for
+the mirror images (illusions) to die first"*. Everything else on the `buff` rung leaves something
+on the caster that `buffFree` can see, so a spell already up is never re-pressed — and `AOmi`
+leaves *bodies*. Its `BuffID1` is `BOmi`, and `BOmi` is not a state the Blademaster carries at
+all: it is the effect an image **pops** with (`MirrorImageDeathCaster`). So nothing in the data
+said "you have already done this", and with `Cool1` = **3** against a `Dur1` of **60** the rung
+fired every three seconds for as long as the fight lasted.
+
+Which is worse than merely wasteful, because of what a re-cast does: `SimWorld.startMirrorImage`
+**unsummons every image of the caster** before it places the new ones ("a re-cast replaces the
+pack"). So a Blademaster pressing it on cooldown spent 100 mana to throw away the three bodies the
+last 100 bought, over and over, and was never actually screened by anything.
+
+`imagesStanding` is the gate, and it is asked of the sim's own link rather than remembered:
+`SimUnit.illusionOf` is the id of the body a copy was made *from* ([`illusions.md`](illusions.md)),
+so it is exactly the set a re-press would pop. A double made by a **Wand of Illusion** off the same
+hero counts too, and it should — what the rung is for is bodies in the line the enemy cannot tell
+from the hero, and those already are some.
 
 ### Wind Walk is TWO buttons, and pressing it as one wastes it
 
@@ -2670,6 +2727,33 @@ Dropping the fight gate from `mana` is also the undead's half of the report. Its
 Clarity Potion at all, so its only mana item is the instant one — see `RACE_MANA` below for why it
 now buys one.
 
+#### …and a REPLENISHMENT POTION fills both bars, so either bar may call for it
+
+Reported: *"all Computer+ AI should be willing to use Replenishment potion even if they have a lot
+of health. they should also be willing to use it if they have less than 70% mana."* It is the same
+family again (`AIp1`–`AIp4`, code `AIrg`) and the same shape of mistake: `regenUse` split the code
+on which column the row fills, and a Replenishment Potion fills **both** — so it fell out of that
+split as `healSelf`, the *instant* potion's rung, which is gated on `engaged`. The AI therefore
+drank a **pour** at exactly the moment the next blow was about to cancel it, and at no other
+moment. The item's own tooltip is the whole argument: *"|cff87ceebNon-Combat Consumable|r …
+Regenerates <AIp1,DataA1> hit points **and** <AIp1,DataB1> mana of the Hero over <AIp1,Dur1>
+seconds"* — the game calls it non-combat, and it names the two bars in one sentence.
+
+So it is its own rung, `replenish`, sitting between `mana` and `manaRegen`:
+
+| | `replenish` — the Replenishment Potions |
+| --- | --- |
+| fight | only with nothing hostile in sight (it pours) |
+| bars | hit points under `REPLENISH_HP` (75 %) **OR** mana under `REPLENISH_MANA` (**70 %**) |
+| waste | not asked — the charge is buying both bars, so a full one wastes half a potion at worst |
+| already pouring | refused (one buff group, one instance) |
+
+**OR, not AND**, is the whole of the report: a hero at full health with a spent bar wants this
+exactly as much as a hurt one with a full bar does, and asking for both left the pair bought at
+the shop undrunk for the rest of the match. The 70 % is the developer's own number; the hit-point
+bar beside it is `MANA_TOPUP`'s rather than `HURT_HP`'s, deliberately — this potion is not an
+emergency item, it is what a hero drinks on the walk to the next fight.
+
 #### It sells the duplicate
 
 Reported: *"heroes that carry multiple Cloak of Shadows must try to sell them at shops (or goblin
@@ -2737,7 +2821,7 @@ human does not have:
 | may this hero take delivery | `SimWorld.shopReaches` — the same test `purchaseItem` applies, exposed so a caller can walk somebody into range first |
 
 **What it presses** is a `Use` ladder in the shape of the caster's `Role` one — *escape, panic,
-healSelf, healArea, healOther, mana, manaRegen, raise, illusion, buff* — and it is keyed on the item's **ability code**, never
+healSelf, healArea, healOther, mana, replenish, manaRegen, raise, illusion, buff* — and it is keyed on the item's **ability code**, never
 on the item id, because an item's behaviour is not in the item ([`items.md`](./items.md)). One
 entry therefore covers a Potion of Healing bought at a Vault and the same potion picked up off a
 dead ogre. Anything unlisted is carried and never pressed, which is the safe direction to be wrong
@@ -3372,6 +3456,27 @@ Note what this depends on: `MeleeInitVictoryDefeat` must have run, i.e. it is a 
 melee init trigger. On a map that never registered the event the concession is still said and the
 AI still stops playing — it simply stands there, like a player who alt-tabbed.
 
+### …and the concession that is not a reading of the board at all
+
+**If half or more of the team has gone, the rest concede.** `teamCollapsed`, and it is
+deliberately not run through `hopeless()`: that reading is about *this* player's base, army and
+heroes, and a computer whose two teammates walked out can be sitting on a perfectly healthy
+economy while the match is over. A 3v3 that is now a 1v3 is not a game anybody plays out. For the
+same reason it is exempt from `CONCEDE_NOT_BEFORE` — a teammate leaving at ninety seconds has
+decided the game every bit as thoroughly as one leaving at ten minutes.
+
+"Left" is *no longer playing*, and there is no separate signal for it: leaving runs
+`MeleeTriggerActionPlayerLeft`, which hands the leaver's units to Neutral Passive, so a player
+who quit and a player who was wiped out are the same thing seen from the field — and both are
+equally not somebody to fight beside. So it is asked of `Brain.allies`, which is derived from
+what is standing.
+
+The denominator has to be **latched**. `Brain.team` is every seat that has ever been in `allies`
+and it only grows, because the seat that leaves drops out of `allies` — if the roster were
+re-derived each pass (from the alliance matrix, or from who is on the field) the departing player
+would leave the denominator along with the numerator and the ratio would never move. Half or
+more, counted against the team as it started: two of four concedes, one of three does not.
+
 ## Team games: talking to your allies, and scouting once
 
 [`src/ai/plus/teamchat.ts`](../src/ai/plus/teamchat.ts). All of it is **inert in a 1v1** — every
@@ -3529,10 +3634,23 @@ teammates' start locations from the first frame.
 **The scroll is for one thing: the ally's BASE being attacked.** It walks unless two things are
 both true — the walk is longer than `PORTAL_WALK` (5400; a Footman's `spd` is 270, so about twenty
 seconds of open ground, and a fight that has been going twenty seconds has been decided) *and*
-`baseUnderAttack` can see a fight at one of that ally's town halls. That second gate is not a
+`hallUnderAttack` can see a fight at one of that ally's town halls. That second gate is not a
 policy, it is what the item is: a Town Portal's destination is a **town hall**
 ([`items.md`](./items.md)), so a scroll spent on a field battle drops the army somewhere near the
 fight at best and is simply gone at worst — and gone is exactly when the base call comes.
+
+**WHICH of their halls is a second decision, and it is the scroll's aim.** A Town Portal lands at
+`nearestHall` **to the point it is aimed at**, and the point it used to be aimed at was
+`helpSpot` — their army, or a fight in the field — which is quite often nowhere near the building
+that is being knocked down. So an ally under siege at their *expansion* got a relief army in
+their *main*, one whole base away from the fight they asked about. `hallUnderAttack` therefore
+answers the hall rather than a yes/no, and that hall is both what the scroll is aimed at and
+where the wave is sent. When several are beset it takes the **busiest** one, counted in bodies
+(`fightSize`) rather than picked by distance: a raid that has reached two towns is being lost at
+the busier of them, while the nearest-to-us reading would send the relief to whichever happened
+to be on our side of the map. `allyBase` — where the army *walks* when no scroll is spent — still
+prefers the near one, because a walk that arrives in two minutes is a different question from a
+portal that arrives now.
 
 The press itself needed one fix in the sim: `SimWorld.nearestHall` accepts an **allied** hall,
 which is the item's stated behaviour rather than a convenience — Blizzard's own page says the
