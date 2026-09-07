@@ -19249,14 +19249,34 @@ export class SimWorld {
     const searchAt = perfNow();
     let cells = findPath(this.grid, start, goal, blocked, first, domain, ring, u.footprint);
     simProfile.tally("pathExpansions", pathExpansionsSpent());
+    // Are the CROWD's bodies still among this search's walls? See the escalation guard below.
+    let crowdWalls = avoidMovers;
     // Routing around the live crowd can leave nowhere to go at all (hemmed in on every
     // side). Fall back to the ordinary route — walk up to the obstruction and wait it out —
     // rather than reporting "no path" and standing down.
     if (avoidMovers && (!cells || cells.length <= 1)) {
       blocked = this.clearanceBlocker(u, start);
+      crowdWalls = false; // …and this is an ordinary search again, so it may escalate
       cells = findPath(this.grid, start, goal, blocked, first, domain, ring, u.footprint);
     }
-    if (maxExpansions === undefined && this.escalate(u, cells, start, goal, domain, ring)) {
+    // A CROWD-AVOIDING search never escalates, because the licence to flood is a proof about
+    // the wrong graph. `escalate` reads the static region labels, and those are built on
+    // `footprintClear` — terrain and building stamps, with bodies deliberately not in them.
+    // That is a fair proof for the ordinary predicate, whose only bodies are units standing
+    // STILL. It is not one here: `avoidMovers` widens the walls to everyone holding ground,
+    // walkers included, so "the ground connects" says nothing at all about whether this
+    // search can arrive — and it is asked exactly when a unit is in the middle of a jam.
+    //
+    // The flood buys nothing, measured rather than assumed. On a 1024-cell map (Feralas LV's
+    // size) with the goal shut in by bodies — which is what the AI's own column looks like
+    // from inside it — the floor spends 8,193 expansions in 5.0 ms and the escalated ceiling
+    // spends 262,145 in 87.5 ms, and both hand back the SAME best-effort cell. That is the
+    // 69 ms single search and the 133 ms sim step in the 2026-09-07 Feralas log.
+    //
+    // Nothing is lost by refusing: this reroute is a local manoeuvre on a 0.3 s clock
+    // (BLOCKED_REPATH_TIME), and when it finds nothing the fallback above has already turned
+    // it into an ordinary search, which may escalate like any other.
+    if (maxExpansions === undefined && !crowdWalls && this.escalate(u, cells, start, goal, domain, ring)) {
       cells = findPath(this.grid, start, goal, blocked, undefined, domain, ring, u.footprint) ?? cells;
       // Bill the allowance for what the search ACTUALLY cost, not for the ceiling it was
       // allowed to reach. Nearly every escalation arrives long before the ceiling — the way

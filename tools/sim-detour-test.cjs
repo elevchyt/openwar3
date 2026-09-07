@@ -18,7 +18,7 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { PathingGrid, PathingFlag } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
-const { findPath } = require(join(REPO, ".sim-build", "src", "sim", "pathfind.js"));
+const { findPath, pathExpansionsSpent, PATH_FLOOR_EXPANSIONS } = require(join(REPO, ".sim-build", "src", "sim", "pathfind.js"));
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 
 let failures = 0;
@@ -301,6 +301,37 @@ console.log("…and a GROUP does, on a big map, past an obstacle sized for one")
   let t = 0;
   for (let i = 0; i < Math.round(150 / SIM_DT) && there() < N; i++) { world.tick(SIM_DT); t += SIM_DT; }
   check(`all ${N} got to the far side (${there()}/${N}, in ${t.toFixed(0)}s)`, there() === N);
+}
+
+// A CROWD-AVOIDING reroute must not buy the escalated flood.
+//
+// `escalate` licenses the big search off the static region labels, which are built on terrain
+// and building stamps with bodies deliberately left out. That is a fair proof for the ordinary
+// predicate (whose only bodies are units standing still) and no proof at all for `avoidMovers`,
+// which makes a wall of everyone holding ground. The shape below is what the AI's own column
+// looks like from inside it: open ground everywhere, so the labels say one region and "fund
+// it", and the goal shut in by bodies, so nothing can arrive however long it looks.
+console.log("a flood licensed by the terrain cannot pay off against BODIES");
+{
+  const BIG = 1024; // Feralas LV's own size, where a region is most of the map
+  const g = new PathingGrid({ width: BIG, height: BIG, flags: new Uint8Array(BIG * BIG) }, [0, 0]);
+  const sx = 100, sy = 500, gx = 400, gy = 500;
+  const ringOfBodies = (cx, cy) => {
+    const dx = cx - gx, dy = cy - gy, d2 = dx * dx + dy * dy;
+    return d2 <= 30 * 30 && d2 >= 26 * 26;
+  };
+  const at = (budget) => {
+    const p = findPath(g, [sx, sy], [gx, gy], ringOfBodies, budget);
+    return { end: p && p.length ? p[p.length - 1] : null, spent: pathExpansionsSpent() };
+  };
+  const floor = at(PATH_FLOOR_EXPANSIONS);
+  const flood = at(262144);
+  check(`the floor cannot arrive either (spends ${floor.spent})`,
+    !!floor.end && !(floor.end[0] === gx && floor.end[1] === gy));
+  check(`the flood spends far more looking (${floor.spent} -> ${flood.spent})`,
+    flood.spent > floor.spent * 20);
+  check("…and hands back the very same cell for it",
+    !!floor.end && !!flood.end && floor.end[0] === flood.end[0] && floor.end[1] === flood.end[1]);
 }
 
 console.log(failures ? `\ndetour: ${failures} check(s) FAILED` : "\ndetour: all checks passed");
