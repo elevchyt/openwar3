@@ -50,6 +50,17 @@ const FALLBACK = {
     "Stand", "Attack 2", "Stand Ready", "Stand Victory", "Dissipate", "Portrait 1",
     "Attack Walk Stand Spin",
   ],
+  // The ready stance between swings, and its absence: the Grunt authors one, the Wind Rider
+  // (and every other flyer) does not and stands in its plain Stand instead — never on the
+  // held last frame of its 1.33 s "attack" while its 2.0 s cooldown runs out.
+  "units\\orc\\Grunt\\Grunt.mdx": [
+    "walk", "Stand - 1", "Attack - 1", "Death", "Decay Flesh", "Attack - 2", "Stand - 2",
+    "Stand Victory", "Stand - 3", "Spell", "Stand Ready", "Decay Bone",
+  ],
+  "units\\orc\\WyvernRider\\WyvernRider.mdx": [
+    "Stand", "Stand - 2", "Stand Victory", "Stand - 4", "Walk", "Walk - 2", "attack", "Spell",
+    "Death", "Stand Hit",
+  ],
   "units\\human\\Priest\\Priest.mdx": [
     "Stand", "Stand - 2", "Spell Attack", "Spell", "Death", "Walk", "Decay Flesh", "Decay Bone",
   ],
@@ -107,6 +118,21 @@ console.log("a model with a plain Attack is untouched");
   const name = named(a, seqs);
   check("the Footman swings his first plain attack", name(a.attack), "Attack - 1");
   check("…with every plain variant in the rotation", a.attackVariants.map(name), ["Attack - 1", "Attack - 2"]);
+}
+
+console.log("between swings a unit stands READY, or in its plain Stand when it has no ready clip");
+{
+  const { buildAnimSet: build, isSwingClip } = require(join(REPO, ".sim-build", "src", "render", "unitAnims.js"));
+  const gruntNames = sequences("units\\orc\\Grunt\\Grunt.mdx");
+  const grunt = build(gruntNames.map((name) => ({ name })));
+  check("the Grunt's ready stance is his Stand Ready", named(grunt, gruntNames.map((name) => ({ name })))(grunt.standReady), "Stand Ready");
+  check("…and it is not a swing clip", isSwingClip(grunt, grunt.standReady), false);
+  check("…while both of his attacks are", grunt.attackVariants.every((i) => isSwingClip(grunt, i)), true);
+  const wyvNames = sequences("units\\orc\\WyvernRider\\WyvernRider.mdx");
+  const wyv = build(wyvNames.map((name) => ({ name })));
+  check("the Wind Rider authors no ready clip", wyv.standReady, -1);
+  check("…so its swing is its lower-case \"attack\"", named(wyv, wyvNames.map((name) => ({ name })))(wyv.attack), "attack");
+  check("…and its stand is the fallback stance", named(wyv, wyvNames.map((name) => ({ name })))(wyv.stand), "Stand");
 }
 
 console.log("a proc slam is kept out of the ordinary rotation");

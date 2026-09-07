@@ -49,6 +49,13 @@ export interface AnimSet {
    *  Strike, or the blow that breaks Wind Walk). -1 when the model authors none, which is
    *  most of them — only units with a proc-on-attack passive carry one. */
   attackSlam: number;
+  /** "Stand Ready" — the ALERT stance a unit holds BETWEEN swings: the Grunt's raised axe,
+   *  the Dreadlord's crouch. -1 when the model authors none, which most of the flyers do not
+   *  (WyvernRider, Gargoyle, GryphonRider, Hippogryph, Chimaera, BatTroll all go Stand ·
+   *  Walk · Attack · Death with no ready pose), and then the plain `stand` is the stance.
+   *  Never left to hold the attack clip's last frame — see the attacking branch of
+   *  RtsController's tick, where a swing clip that has ENDED hands over to this. */
+  standReady: number;
   death: number;
   standGold: number;
   walkGold: number;
@@ -416,6 +423,15 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     // King authors "Attack Slam" and "Attack Slam Alternate" (Avatar), and applyAnimProps
     // has already renamed the alternate to a bare "Attack Slam" — or blanked it — by here.
     attackSlam: find(/^attack slam\s*$/i),
+    // Anchored for the same reason as the slam: "Stand Ready Alternate" is the OTHER form's
+    // stance and has already been renamed to a bare "Stand Ready" by applyAnimProps when
+    // the alternate props are on. And in the alternate form only a clip of MINE counts — a
+    // state half is a complete set of poses (see ownStands), so a bear form with no ready
+    // clip has none, rather than borrowing the night elf's.
+    standReady: (() => {
+      const i = find(/^stand ready\s*$/i);
+      return i >= 0 && alternateForm && !seqs[i].mine ? -1 : i;
+    })(),
     death: find(/^death/i),
     standGold: or(find(/stand gold/i), stand),
     walkGold: or(find(/walk gold/i), walk),
@@ -441,6 +457,19 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     morph: find(/^morph(\s*-?\s*\d+)?\s*$/i),
     seqNames: seqs.map((s) => s.name),
   };
+}
+
+/** Is `seq` one of the model's SWING clips — any pool the attacking branch may have picked
+ *  from, not just the pool it would pick from NOW. The pool is re-derived every tick from the
+ *  carry state and `swingSlam`, so asking "is the current clip in the current pool" judged a
+ *  slam as "not a swing" the tick after the proc cleared, and dropped it for the ready stance
+ *  mid-blow. A tower's stand-attack clip is excluded on purpose: that one loops as its stand. */
+export function isSwingClip(a: AnimSet, seq: number): boolean {
+  if (seq < 0) return false;
+  return (
+    (seq === a.attackSlam || a.attackVariants.includes(seq) || a.attackGold.includes(seq) || a.attackLumber.includes(seq)) &&
+    !a.standVariants.includes(seq)
+  );
 }
 
 /** The "Birth" construction sequence + its frame interval, if the model has one. */

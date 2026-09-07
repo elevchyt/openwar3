@@ -17,6 +17,7 @@ import {
   findBirthFields,
   setAnimRate,
   attackAnimRate,
+  isSwingClip,
   walkAnim,
   pickSequence,
   seqDuration,
@@ -3854,7 +3855,7 @@ export class RtsController {
       // Attacking is swing-driven: play a (random) attack clip ONCE per swing so
       // the strike gesture matches the damage-point-timed hit/projectile, and
       // units with several attack animations vary them shot to shot. Between swings
-      // the non-looping attack clip holds its last frame; everything else loops. A unit that walked
+      // the unit stands in its READY stance (below); everything else loops. A unit that walked
       // after firing (`swingBroken` — its backswing was move-canceled) does NOT show
       // the attack clip: it stands out the recovery until its next real swing.
       const attacking = u.inCombat && !u.moving && !u.swingBroken && e.anims.attack >= 0;
@@ -3909,17 +3910,43 @@ export class RtsController {
             e.unit.instance.setSequence(vs[0]);
             e.unit.instance.setSequenceLoopMode(SequenceLoopMode.Loop);
           }
-        } else if (u.swingSeq !== e.lastSwingSeq || !vs.includes(e.curSeq)) {
-          e.lastSwingSeq = u.swingSeq;
-          const pick = vs.length > 1 ? vs[(Math.random() * vs.length) | 0] : (vs[0] ?? e.anims.attack);
-          e.curSeq = pick;
-          e.unit.state = WidgetState.WALK; // non-stand state prevents mdx-m3-viewer's auto-stand
-          e.unit.instance.setSequence(pick);
-          e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
+        } else {
+          // The first sight of this unit in a fight is the BASELINE, not a swing: nothing
+          // has been swung yet (or it was swung before we were looking), and playing the
+          // attack clip for it had every unit throw a phantom blow while it was still
+          // turning to face its target.
+          if (e.lastSwingSeq < 0) e.lastSwingSeq = u.swingSeq;
+          // Between swings a WC3 unit is never a still picture. The attack clip plays ONCE
+          // and the unit then stands in its "Stand Ready" alert stance until the next swing
+          // — or in its plain Stand when the model authors no ready clip, which is what
+          // every flyer does. A cooldown is routinely longer than the swing clip (the Wind
+          // Rider's 2.0 s against a 1.33 s "attack", the Gryphon Rider's 2.2 s against
+          // 1.67 s, the Gargoyle's ground bite 2.2 s against 1.33 s), and holding the
+          // clip's last frame across that gap froze the whole body — on a flyer the wings
+          // stop beating mid-air, which is what reads as "the animation is stuck after an
+          // attack". The swing-clip hold was also what a unit that had merely ARRIVED in
+          // range showed, before its first blow; that is the ready stance too.
+          const ready = e.anims.standReady >= 0 ? e.anims.standReady : e.anims.stand;
+          if (u.swingSeq !== e.lastSwingSeq) {
+            e.lastSwingSeq = u.swingSeq;
+            const pick = vs.length > 1 ? vs[(Math.random() * vs.length) | 0] : (vs[0] ?? e.anims.attack);
+            e.curSeq = pick;
+            e.unit.state = WidgetState.WALK; // non-stand state prevents mdx-m3-viewer's auto-stand
+            e.unit.instance.setSequence(pick); // a same-clip restart hard-cuts (no blend) to stay in phase
+            e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
+          } else if (isSwingClip(e.anims, e.curSeq) ? e.unit.instance.sequenceEnded : e.curSeq !== ready) {
+            // The swing clip has finished (or nothing has been swung yet): the ready stance,
+            // looped, until the next swing re-triggers the attack clip above.
+            e.curSeq = ready;
+            e.unit.state = WidgetState.WALK; // held against the idle fidget, as a cast clip is
+            e.unit.instance.setSequence(ready);
+            e.unit.instance.setSequenceLoopMode(SequenceLoopMode.Loop);
+          }
         }
         // Re-rate every tick, not just on the swing: attack speed can change mid-swing
-        // (a Bloodlust lands, a Slow wears off) and the clip must follow it at once.
-        setAnimRate(e, attackAnimRate(u));
+        // (a Bloodlust lands, a Slow wears off) and the clip must follow it at once. The
+        // ready stance between swings is a stand and plays at its authored rate.
+        setAnimRate(e, isSwingClip(e.anims, e.curSeq) ? attackAnimRate(u) : 1);
       } else {
         // Smooth the actual/expected displacement so the walk clip only plays
         // when the unit is really making progress — a unit wedged in a crowd
