@@ -455,7 +455,15 @@ export async function mountLanLobbyScreen(
         const free = setup ? colorsFreeFor(setup, i) : [slot.color];
         colour.setOptions(free.map((c) => ({ value: PLAYER_COLORS[c], label: `Player ${c + 1}` })));
         colour.value = PLAYER_COLORS[slot.color % PLAYER_COLORS.length];
-        colour.onChange = (v) => change(i, { color: PLAYER_COLORS.indexOf(v) });
+        colour.onChange = (v) => {
+          // Validated at the pick against the NEWEST setup, not only when the menu was built:
+          // a colour another seated row wears by now is refused here — on a client too, which
+          // otherwise sends a request the host refuses and is never told — and the button keeps
+          // the colour it had. The host's `change` refuses the same way through setSlotColor.
+          const color = PLAYER_COLORS.indexOf(v);
+          if (setup && !colorsFreeFor(setup, i).includes(color)) return false;
+          return change(i, { color });
+        };
         colour.setEnabled(seated && ours);
       }
 
@@ -521,20 +529,23 @@ export async function mountLanLobbyScreen(
   /** A change to a player row. On the host it applies straight away (its own row, and the AI
    *  rows it owns); on a client it is a REQUEST, and the row moves when the broadcast comes
    *  back. Both go through lobbySetup's rules, so a colour is unique on every machine. */
-  function change(index: number, patch: Omit<LobbyRequest, "k">): void {
+  function change(index: number, patch: Omit<LobbyRequest, "k">): boolean {
     const slot = setup?.slots[index];
-    if (!setup || !slot) return;
+    if (!setup || !slot) return false;
     const me = lobby.snapshot.you?.id;
     const mine = slot.kind === "player" && slot.peer === me;
-    if (!mine && !(isHost() && slot.kind !== "player")) return;
-    if (!isHost()) { lobby.send({ k: "lobbyreq", ...patch } satisfies LobbyRequest); return; }
+    if (!mine && !(isHost() && slot.kind !== "player")) return false;
+    if (!isHost()) { lobby.send({ k: "lobbyreq", ...patch } satisfies LobbyRequest); return true; }
     const next = mine && me !== undefined
       ? applyRequest(setup, me, { k: "lobbyreq", ...patch })
       : editSlot(setup, index, patch);
-    if (!next) return;
+    // Nothing changed — a colour refused by the seating rule, say — and the menu that asked is
+    // told so, so it falls back to what it showed (PopupControl.onChange).
+    if (!next) return false;
     setup = next;
     broadcast();
     refresh();
+    return true;
   }
 
   /** A watcher picked a team: the way back off the bench into an open player slot. */

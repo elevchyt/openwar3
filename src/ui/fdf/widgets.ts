@@ -44,7 +44,10 @@ export interface PopupControl extends Control {
   setOptions(options: Option[]): void;
   get value(): string;
   set value(v: string);
-  onChange?: (value: string) => void;
+  /** A pick was made. Answer `false` to REFUSE it — the menu goes back to the value it showed
+   *  before, as if nothing had been clicked (the colour menu: a colour another seated row
+   *  wears is not taken, and the button keeps the colour it had). */
+  onChange?: (value: string) => void | boolean;
 }
 
 export interface ListControl extends Control {
@@ -418,9 +421,15 @@ export function buildPopup(
         e.stopPropagation();
         close();
         if (o.value === value) return;
+        const prev = value;
         value = o.value;
         paint();
-        control.onChange?.(value);
+        // The owner may refuse the pick (see PopupControl.onChange): then the face goes back
+        // to what it showed, rather than wearing a value the model never took.
+        if (control.onChange?.(value) === false) {
+          value = prev;
+          paint();
+        }
       });
       menu.appendChild(item);
     }

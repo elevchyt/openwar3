@@ -368,9 +368,13 @@ export async function mountSkirmish(
         colour.setOptions(free.map((c) => ({ value: PLAYER_COLORS[c], label: `Player ${c + 1}` })));
         colour.value = PLAYER_COLORS[slot.color % PLAYER_COLORS.length];
         colour.onChange = (v) => {
+          // Validated at the pick, not only in the menu: a colour another SEATED row wears
+          // by now is refused (swapColors answers null) and the row keeps the colour it had.
           const next = swapColors(slots, i, PLAYER_COLORS.indexOf(v), isSeated);
-          if (next) slots = next;
+          if (!next) return false;
+          slots = next;
           fill(s);
+          return true;
         };
         colour.setEnabled(seated);
       }
