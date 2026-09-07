@@ -130,6 +130,40 @@ console.log("\na missile slot still flies");
   check("and nothing landed yet — it is in flight", r.hits.length === 0);
 }
 
+console.log("\na missile leaves from the row's launch point: launchY is FORWARD, launchX right, launchZ as stated");
+{
+  // The Frost Wyrm's own row (UnitWeapons.slk ufro: launchX 0 / launchY 115 / launchZ -60 /
+  // impactZ 0, every cell stated), with a 35 to the left added so the sideways sign is pinned
+  // too — the Wind Rider's -35 is its spear on the LEFT of the model. The attacker stands at
+  // (500, 500) facing +X at a target 60 away, so forward is +X and left is +Y.
+  const wyrm = weaponsFromDef({
+    ...def([slot({ weaponType: "missile", range: 600, targets: AIR_TARGETS, attackType: "magic", missileArt: "FrostWyrmMissile.mdx" })]),
+    launchX: -35, launchY: 115, launchZ: -60, impactZ: 0,
+  });
+  const w = new SimWorld(grid(), 2);
+  const a = addUnit(w, 1, 0, 500, 500, wyrm, { flyHeight: 0 });
+  const t = addUnit(w, 2, 1, 560, 500, [], { flyHeight: 0 });
+  w.issueOrder(a.id, { kind: "attack", targetId: t.id, force: true });
+  let spawned = [];
+  for (let i = 0; i < 240 && !spawned.length; i++) {
+    w.tick(SIM_DT);
+    spawned = w.drainSpawnedProjectiles();
+  }
+  const p = spawned[0];
+  // Measured from where the wyrm actually STANDS and FACES once settled (add() snaps it onto
+  // the grid), so the check is about the offset's axes and not about the harness's grid.
+  const fwd = [Math.cos(a.facing), Math.sin(a.facing)];
+  const left = [-fwd[1], fwd[0]];
+  const ex = a.x + 115 * fwd[0] + 35 * left[0];
+  const ey = a.y + 115 * fwd[1] + 35 * left[1];
+  check("the breath is loosed", !!p);
+  check("115 AHEAD of the wyrm (launchY along the facing), not off its flank", p && Math.abs(p.x - ex) < 0.5, p && `x ${p.x.toFixed(1)} vs ${ex.toFixed(1)}`);
+  check("35 to its LEFT (a negative launchX)", p && Math.abs(p.y - ey) < 0.5, p && `y ${p.y.toFixed(1)} vs ${ey.toFixed(1)}`);
+  check("60 BELOW the pivot (a negative launchZ is a real height)", p && p.z === -60, p && `z ${p.z}`);
+  const live = p && w.projectiles.get(p.id);
+  check("and it lands at the target's feet — a stated impactZ of 0 is 0, not the launch height", live && live.impactZ === 0, live && `impactZ ${live.impactZ}`);
+}
+
 // ---------------------------------------------------------------------------------------
 // A CUSTOM unit goes through the same rule — driven through a real war3map.w3u, because the
 // point is that there is no second code path for a map to slip past. `ua1w` (weapTp) and

@@ -404,11 +404,14 @@ export interface UnitDef {
   armorType: ArmorType; // defType → the damage table's column
   missileArt: string; // weapon-1 projectile model (MDX path, backslashes) — "" if melee
   missileSpeed: number; // projectile travel speed (world units/sec)
-  // Projectile launch offset from the unit's origin, in its LOCAL frame (x forward,
-  // y left, z up), rotated by facing — UnitWeapons.slk launchx/y/z. e.g. the Archmage
-  // fires his fireball from launchz=66 (rod height), the Archer from launchy=62 (bow
-  // offset to the side), not from the unit's feet. impactZ is the height the missile
-  // aims for on the target (impactz, ~60 for everything).
+  // Projectile launch offset from the unit's origin, in its LOCAL frame — and the frame is
+  // launchY FORWARD, launchX to the RIGHT, launchZ up (see the sim's launchPoint for the
+  // rows and models that settle it), rotated by facing — UnitWeapons.slk launchx/y/z. e.g.
+  // the Archmage fires his fireball from launchz=66 (rod height), the Archer from
+  // launchy=62 (her bow, held out in front), the Frost Wyrm from launchy=115, launchz=-60
+  // (its jaw, far forward and below the pivot), not from the unit's feet. impactZ is the
+  // height the missile aims for on the target (impactz, 60 for most; a stated 0 on the
+  // dragons — their breath lands at the feet).
   launchX: number;
   launchY: number;
   launchZ: number;

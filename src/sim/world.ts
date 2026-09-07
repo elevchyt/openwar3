@@ -123,9 +123,11 @@ export interface SimWeapon {
    *  bombs on, and neither touches the def the summary was derived from. */
   weaponSound: string;
   attackType: AttackType; // UnitWeapons atkType1 → picks the damage-table row
-  // Projectile launch offset (LOCAL frame: x forward, y left, z up; rotated by facing)
-  // and impact height — UnitWeapons.slk launchx/y/z, impactz. The missile leaves from
-  // launchZ (e.g. the Archmage's rod at 66) rather than the unit's feet.
+  // Projectile launch offset (LOCAL frame: launchY FORWARD, launchX right, launchZ up;
+  // rotated by facing — see launchPoint for why the axes are that way round) and impact
+  // height — UnitWeapons.slk launchx/y/z, impactz. The missile leaves from launchZ (the
+  // Archmage's rod at 66, the Frost Wyrm's jaw at -60 below its altitude) rather than
+  // the unit's feet.
   launchX: number;
   launchY: number;
   launchZ: number;
@@ -11730,7 +11732,9 @@ export class SimWorld {
     // Knight's Death Coil from his hand); otherwise from a default missile height so
     // it never leaves from the feet.
     const w = u.weapon;
-    const lzLocal = w && w.launchZ > 0 ? w.launchZ : DEFAULT_MISSILE_HEIGHT;
+    // A NEGATIVE launch height is one the row states (a dragon's jaw below its pivot); only
+    // a row that says nothing at all falls back to the default.
+    const lzLocal = w && w.launchZ !== 0 ? w.launchZ : DEFAULT_MISSILE_HEIGHT;
     const [lx, ly, lz0] = launchPoint(u, w?.launchX ?? 0, w?.launchY ?? 0, lzLocal);
     const t = this.units.get(targetId);
     // Same height handling as attacks: launch from the caster's altitude, land at
@@ -11778,7 +11782,7 @@ export class SimWorld {
     // A wave hugs the ground it sweeps rather than arcing: launch height stays put, so
     // startZ and impactZ are the same and the renderer's height lerp is a no-op.
     const w = u.weapon;
-    const lzLocal = w && w.launchZ > 0 ? w.launchZ : DEFAULT_MISSILE_HEIGHT;
+    const lzLocal = w && w.launchZ !== 0 ? w.launchZ : DEFAULT_MISSILE_HEIGHT;
     // A wave that SHOWS a missile leaves the front of the caster, not his middle. The
     // melee casters that throw one name no launch offset at all — UnitWeapons has LaunchX,
     // LaunchY and LaunchZ blank for the Brewmaster, the Warden and the Tauren Chieftain —
@@ -11786,9 +11790,9 @@ export class SimWorld {
     // first frames of Breath of Fire were drawn coming out of the panda's back. One hull
     // radius forward is the front of the model, which is where his mouth is. Only for a
     // wave with a missile: a TRAIL wave (Impale) is the ground bursting open and its first
-    // tendril belongs at the caster's feet.
+    // tendril belongs at the caster's feet. Forward is launchY (see launchPoint).
     const nose = def.missileArt && !(w && (w.launchX || w.launchY)) ? u.radius : 0;
-    const [lx, ly, lz0] = launchPoint(u, (w?.launchX ?? 0) + nose, w?.launchY ?? 0, lzLocal);
+    const [lx, ly, lz0] = launchPoint(u, w?.launchX ?? 0, (w?.launchY ?? 0) + nose, lzLocal);
     const lz = lz0 + u.flyHeight;
     const proj: SimProjectile = {
       id,
@@ -15022,7 +15026,12 @@ export class SimWorld {
     // beneath it). Likewise the missile aims at the target's altitude on impact —
     // a shot at an air unit lands at its height, not on the ground below it.
     const lz = lz0 + u.flyHeight;
-    const impactBase = w.impactZ > 0 ? w.impactZ : lz0;
+    // `impactZ` is STATED on every one of the game's own rows, and 0 is a value: the Frost
+    // Wyrm and thirteen other dragons write impactZ = 0 (raw SLK cell `K0`, not a blank)
+    // beside a launch height of -60/-30, and their breath lands at the target's feet.
+    // Treating the 0 as "unstated" and falling back to the launch height ended the wyrm's
+    // breath 60 units UNDER the ground its target stood on.
+    const impactBase = w.impactZ;
     const proj: SimProjectile = {
       id,
       x: lx,
@@ -20508,13 +20517,28 @@ function boltZ(u: SimUnit, end: "launch" | "impact"): number {
 }
 
 // World-space launch point for a missile: the unit origin plus the weapon's LOCAL
-// (launchX forward, launchY left, launchZ up) offset, rotated by facing. WC3
-// UnitWeapons.slk launchx/y/z — e.g. the Archmage's fireball leaves from his rod.
-// Returns [worldX, worldY, heightAboveGround].
+// offset, rotated by facing — UnitWeapons.slk launchX/launchY/launchZ.
+//
+// The axes are NOT "x forward". **launchY is FORWARD** (along the facing), **launchX is
+// to the RIGHT**, launchZ is up — and the game's own rows say so, read against the
+// models. A model faces +X in its own space (FrostWyrm.mdx's "Head" bone sits at
+// x = 92, the Meat Wagon's basket "Weapon Ref" at x = -112, behind), and every
+// head-forward creature puts its big number in launchY: the Frost Wyrm 0/115/-60,
+// every dragon 0/120/-30, the Hydra 50/100/100, the Skeletal Marksman's bow -11/74/60 —
+// while the Meat Wagon's -30 is its basket at the BACK. The sign of X comes off the Wind
+// Rider: -35/30/51 against a "Weapon Ref" at model (35, +37, 38), and +Y in model space is
+// the unit's LEFT (X forward, Z up, right-handed), so a negative launchX is left and a
+// positive one right. Read as "x forward, y left", the Frost Wyrm breathed from a point
+// 115 units off its left flank.
+//
+// Returns [worldX, worldY, heightAboveGround]. `lz` is handed back as given: a NEGATIVE
+// launch height is a real one — the wyrm's jaw hangs 60 below the pivot its altitude is
+// measured at.
 function launchPoint(u: SimUnit, lx: number, ly: number, lz: number): [number, number, number] {
   const c = Math.cos(u.facing);
   const s = Math.sin(u.facing);
-  return [u.x + lx * c - ly * s, u.y + lx * s + ly * c, lz];
+  // forward = (c, s); right = (s, -c).
+  return [u.x + ly * c + lx * s, u.y + ly * s - lx * c, lz];
 }
 
 // Angular speed in rad/sec from a unit's UnitData turnrate (WC3 semantics).
