@@ -1,7 +1,7 @@
 import type { PlayableRace } from "../../data/races";
 import {
   ARCANE_VAULT, VOODOO_LOUNGE, TOMB_OF_RELICS, DEN_OF_WONDERS,
-  ABOMINATION, ACOLYTE, ANCIENT_LORE, ANCIENT_PROTECT, ANCIENT_WAR, ANCIENT_WIND, ANIM_DEAD,
+  ABOMINATION, ACOLYTE, ANCIENT_LORE, ARCANE_TOWER, ANCIENT_PROTECT, ANCIENT_WAR, ANCIENT_WIND, ANIM_DEAD,
   ARCHER, ARCHMAGE, AVATAR, AVIARY, BALLISTA, BANISH, BANSHEE, BARRACKS, BASH, BATRIDER,
   BESTIARY, BLACKSMITH, BLADE_MASTER, BLADE_STORM, BLINK, BLIZZARD, BLOOD_MAGE, BONEYARD,
   BRILLIANCE_AURA, BURROW, CARRION_SCARAB, CARRION_SWARM, CASTLE, CATAPULT, CHAIN_LIGHTNING,
@@ -229,10 +229,20 @@ export interface PlusRaceTable {
    * this is a shop in the sense the AI cares about whatever the race.
    */
   readonly shop: string;
-  /** The defensive structure, and the upgrade of it worth taking when there is one (a Human
-   *  Guard Tower and an undead Spirit Tower are both upgrades of something already standing). */
+  /** The defensive structure — and, for the one race whose tower is a BASE for something, what
+   *  it is upgraded into. (An undead Spirit Tower is also an upgrade of something standing, but
+   *  of the supply building, so `tower` names the upgraded form directly there.) */
   readonly tower: string;
-  readonly towerUpgrade?: string;
+  /**
+   * What a standing `tower` becomes, in the order the rows are emitted: `perTown` of each id at
+   * every town, and an entry with no `perTown` takes whatever towers the town has left. Each id
+   * is gated on its OWN `Requires` at emit time (`AiPlayer.techMeets`), because an upgrade row
+   * that cannot be legal is not merely ignored — `startUnit` reserves its price off the running
+   * budget before `setProduce` is refused, so it taxes every row under it and buys nothing.
+   * That, with the Guard Tower's `Requires=hlum` and a Lumber Mill the human build order only
+   * puts up at tier 2, is why a human computer stood behind plain Scout Towers all match.
+   */
+  readonly towerUpgrades?: ReadonlyArray<{ id: string; perTown?: number }>;
   /**
    * The unit this race answers AIR with, and how many of it — the Flying Machine, the Troll
    * Batrider, the Gargoyle, the Hippogryph.
@@ -364,7 +374,15 @@ const HUMAN: PlusRaceTable = {
   // else, so four of them are worth bolting onto a Knight build and cost it no plan.
   antiAir: { unit: COPTER, count: 4 },
   tower: WATCH_TOWER,
-  towerUpgrade: GUARD_TOWER,
+  // As human.ai takes them: ONE Arcane Tower per town (178–180, 195–198, 240–243) and every
+  // other Scout Tower a Guard Tower (284: `countDone(WATCH_TOWER) − count(ARCANE_TOWER)`). The
+  // Arcane Tower goes first because it is the one with no requirement (`[hatw] Requires=` is
+  // empty; `[hgtw] Requires=hlum`), so it is the upgrade a tier-1 base can actually buy. No
+  // Cannon Tower: human.ai never asks for one either, and its `Requires=harm` is a Workshop.
+  towerUpgrades: [
+    { id: ARCANE_TOWER, perTown: 1 },
+    { id: GUARD_TOWER },
+  ],
   units: {
     [FOOTMAN]: { from: BARRACKS, tier: 1 },
     // `[hrif] Requires=hbla` — the Rifleman is a TIER-1 unit that waits on a Blacksmith, which

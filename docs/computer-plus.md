@@ -1396,6 +1396,26 @@ Seven of those positions were moved after a live match said so, and each is wort
   Tier 3 keeps its old place at the bottom — at ten minutes there is an army to spend on, and
   what loses games there is teching past what you can defend.
 
+### The human's Scout Towers become something
+
+Reported: *"Computer+ AI for Human is not upgrading their scout towers to Arcane Towers and Guard
+Towers"*. The tower row asked for a Guard Tower and nothing else, and a Guard Tower is `[hgtw]
+Requires=hlum` — a Lumber Mill the human build order only puts up at tier 2. So the row was refused
+every pass at a tier-1 base, and worse than refused: `startUnit` prices a row and reserves its gold
+off the running budget *before* `setProduce` is turned away, so an upgrade that could never be
+legal taxed every row under it and bought nothing. The Arcane Tower, whose `Requires=` is empty,
+was never asked for at all.
+
+`PlusRaceTable.towerUpgrades` says what a standing `tower` becomes, in human.ai's own shape (178–
+180, 195–198, 240–243, 284): **one Arcane Tower per town, and every other Scout Tower a Guard
+Tower** (`countDone(WATCH_TOWER) − count(ARCANE_TOWER)`). No Cannon Tower — human.ai never asks
+for one either, and its `Requires=harm` is a Workshop. `towers` emits the rows per town off the
+town's own finished Scout Towers, and each id only when `AiPlayer.techMeets` says its `Requires`
+is met — so a tier-1 base buys the Arcane Tower now and the Guard Towers when the Lumber Mill
+lands. The base row is unchanged and asks in the folded count (a Guard Tower *is* a Scout Tower
+to `TownCount`), so an upgrade never makes it ask for another Scout Tower. Pinned in
+[`tools/ai-plus-ladder-test.cjs`](../tools/ai-plus-ladder-test.cjs).
+
 ### The food headroom is the SUPPLY BUILDING's, not a Farm's
 
 Reported: *"the Computer+ AI for Night Elf sometimes does not build enough moon wells, rendering
@@ -1633,6 +1653,35 @@ somebody the plan left with none: the only unit it can see is one whose order is
 `"idle"`, and anything harvesting, hauling, building, repairing, walking or held by the army
 (`captainHeld` — the scout and the wave) is passed over untouched. Computer+ calls it; the classic
 AI is unchanged.
+
+### …and nobody stands about WITH an order, either: the mine watchdog
+
+The two passes above share a blind spot, and it was seen in a real match: a Computer+ human's
+gold crew *"had stopped gathering gold altogether and were chillin in the worker line"* — five
+peasants standing in the mine→hall line, every one of them holding a harvest order, banking
+nothing for the rest of the game. A worker **with** an order is invisible to both passes, and
+rightly so: `applyHarvest` counts it as already on the job (re-issuing a live crew every pass is
+the collision bug documented at `alreadyHarvesting`), and `workIdleWorkers` can only see an order
+that is literally `"idle"`. Whatever wedged them, nothing above would ever have asked again.
+
+`AiPlayer.kickStalledMines` is the watchdog under both. Its reading is the **mine's own gold**,
+not the bank: `SimMine.gold` goes down by exactly one load every time a worker of anybody's comes
+out of the shaft, while a bank goes up and down with every purchase. A mine of ours that has held
+the same gold for `MINE_STALL` (40 s) while we have a crew assigned to it is a crew that is not
+mining, whatever its orders say, and that crew is re-issued through the funnel — `sendToGold` →
+`issueOrder`, the reset a player's click is: it pops a worker out of the shaft, clears a parked
+wait and the arrival latch, and paths it afresh. Only the workers on the field can be told
+anything (the authority refuses an order naming one down the shaft), and the clock restarts on the
+kick, so a crew that genuinely cannot reach its mine is nudged once a period rather than every
+pass. The period is ours; it only has to be longer than the longest honest gap between two loads,
+and one worker on a melee map's farthest expansion, on foot, is well under half of it.
+
+The sim's side of the same report is the mine's one-worker latch, which now names its holder
+(`SimMine.busyBy`) and is verified by every miner that would wait on it (`mineLatchStale`), and a
+worker taken off its harvest by a Stop or a teleport is popped out of the shaft first — a latch
+held by nobody used to park the whole crew at the entrance for good. Pinned headless in
+[`tools/ai-mine-watchdog-test.cjs`](../tools/ai-mine-watchdog-test.cjs) and the latch checks in
+[`tools/sim-harvest-test.cjs`](../tools/sim-harvest-test.cjs).
 
 ### It repairs, and the hall outranks everything
 

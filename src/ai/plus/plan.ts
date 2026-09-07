@@ -1229,8 +1229,19 @@ function mainProducer(c: PlusCtx): string | null {
   return best;
 }
 
-/** Towers: none at all on Easy, and never before something has actually gone wrong or the
- *  game has gone long. Placement puts them at the town's FRONT (see AiPlayer.siteFor). */
+/**
+ * Towers: none at all on Easy, and never before something has actually gone wrong or the
+ * game has gone long. Placement puts them at the town's FRONT (see AiPlayer.siteFor).
+ *
+ * …and, for the human, what the Scout Towers BECOME (`PlusRaceTable.towerUpgrades`). The base
+ * row is asked in the FOLDED count (`TownCount`: a Guard Tower is a Scout Tower, ids.ts
+ * `TOWN_COUNT_EQUIVALENTS`), so a town's `each` is its towers of any kind and an upgrade never
+ * makes it ask for another Scout Tower. The upgrade rows are asked per TOWN, off the town's own
+ * standing Scout Towers, and each id only when its `Requires` is met — the human computer was
+ * seen standing behind plain Scout Towers all match, and that was this row asking for a Guard
+ * Tower (`Requires=hlum`) at a base with no Lumber Mill: refused every pass, and never the Arcane
+ * Tower that needs nothing. A row it cannot buy still costs it — see `towerUpgrades`.
+ */
 function towers(c: PlusCtx): void {
   const { ai, profile, table, clock, threatened } = c;
   if (profile.towers < 1) return;
@@ -1240,8 +1251,19 @@ function towers(c: PlusCtx): void {
   const towns = Math.max(1, ai.minesOwned());
   const each = Math.max(1, Math.floor(profile.towers / towns));
   for (let t = 0; t < ai.townCountTotal(); t++) ai.guardSecondary(t, each, table.tower);
-  if (table.towerUpgrade && ai.countDone(table.tower) >= 1) {
-    ai.guardSecondary(0, Math.max(1, each - 1), table.towerUpgrade);
+  if (!table.towerUpgrades) return;
+  for (let t = 0; t < ai.townCountTotal(); t++) {
+    // Something to upgrade: a FINISHED plain tower here. (One whose upgrade is already in its
+    // queue is still its base type, and the row below counts that queued job as done.)
+    if (ai.countAt(table.tower, t, true) < 1) continue;
+    let left = each;
+    for (const up of table.towerUpgrades) {
+      if (left < 1) break;
+      const qty = up.perTown === undefined ? left : Math.min(up.perTown, left);
+      left -= qty;
+      if (!ai.techMeets(up.id)) continue; // not legal yet — a Lumber Mill for the Guard Tower
+      ai.guardSecondary(t, qty, up.id);
+    }
   }
 }
 

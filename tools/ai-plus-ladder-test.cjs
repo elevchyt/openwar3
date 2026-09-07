@@ -78,7 +78,14 @@ function recorder(table, strategy, profile, opts = {}) {
     meleeTownHall: (town, hall) => {
       if (ai.townHasMine(town) && !ai.townHasHall(town)) ai.secondaryTown(town, 1, hall);
     },
-    guardSecondary: () => {},
+    // Faithful to `AiPlayer.guardSecondary` — a tower row lands only on a town that is a base —
+    // because the human's tower UPGRADES are under test below.
+    guardSecondary: (town, qty, item) => {
+      if (ai.townHasMine(town) && ai.townHasHall(town)) ai.secondaryTown(town, qty, item);
+    },
+    // Whether a tech id's own `Requires` is met — the sim's question, stubbed as "yes" unless a
+    // fixture withholds something (a Lumber Mill, for the Guard Tower).
+    techMeets: (id) => (opts.meets ? opts.meets(id) : true),
     buildFactory: (item) => ai.setBuildUnit(1, item),
     count, countDone: count, townCountTotal: () => opts.towns ?? 1,
     // `TownCount` FOLDS a type's upgraded forms into it and the raw counts do not — a Keep is a
@@ -416,6 +423,40 @@ for (const [race, table] of Object.entries(PLUS_RACES)) {
 // A budget spread thinly enough rounds every share to nothing, and a pass that can plainly build
 // something then asks for nothing at all — the same empty field `buildableMix`'s own fallback
 // exists to prevent, arrived at from the other side, and it starves the same food gates.
+console.log("\n--- the human's Scout Towers become something ---");
+{
+  // Reported: "Computer+ AI for Human is not upgrading their scout towers to Arcane Towers and
+  // Guard Towers". It asked for a Guard Tower alone, whose `Requires=hlum` a tier-1 base does
+  // not meet, and never for the Arcane Tower that needs nothing (`PlusRaceTable.towerUpgrades`).
+  const human = PLUS_RACES.human;
+  const strategy = human.strategies[0];
+  const rows = (r, id) => r.build.filter((x) => x.item === id);
+  const towered = (profile, opts = {}) => {
+    const r = recorder(human, strategy, profile, { standing: { htow: 1, hwtw: 2, hlum: 1, ...(opts.standing ?? {}) }, clock: 600, ...opts });
+    buildPlan(r.ctx);
+    return r;
+  };
+  const both = towered(PLUS_NORMAL);
+  // `check` compares by identity, so the rows are read as `qty@town` strings.
+  const at = (r, id) => rows(r, id).map((x) => `${x.qty}@${x.town}`).join(",");
+  check("a Normal human with a Lumber Mill asks for an Arcane Tower at its base", at(both, "hatw"), "1@0");
+  check("…and a Guard Tower", at(both, "hgtw"), "1@0");
+  check("…after the Scout Towers themselves", both.build.findIndex((x) => x.item === "hwtw") < both.build.findIndex((x) => x.item === "hatw"), true);
+  const noMill = towered(PLUS_NORMAL, { meets: (id) => id !== "hgtw" });
+  check("without a Lumber Mill it still asks for the Arcane Tower", rows(noMill, "hatw").length, 1);
+  check("…and not for the Guard Tower it cannot buy", rows(noMill, "hgtw").length, 0);
+  const bare = towered(PLUS_NORMAL, { standing: { hwtw: 0 } });
+  check("with no Scout Tower standing there is nothing to upgrade", rows(bare, "hatw").length + rows(bare, "hgtw").length, 0);
+  const insane = towered(PLUS_INSANE);
+  check("an Insane human makes the rest of its towers Guard Towers", at(insane, "hgtw"), "3@0");
+  check("…and still one Arcane Tower", at(insane, "hatw"), "1@0");
+  const easy = towered(PLUS_EASY);
+  check("an easy human builds no towers at all", easy.build.some((x) => ["hwtw", "hatw", "hgtw"].includes(x.item)), false);
+  const orc = recorder(PLUS_RACES.orc, PLUS_RACES.orc.strategies[0], PLUS_NORMAL, { standing: { ogre: 1, owtw: 2 }, clock: 600 });
+  buildPlan(orc.ctx);
+  check("an orc's Watch Tower is nothing's base", orc.build.filter((x) => x.item !== "owtw" && /tw$/.test(x.item)).length, 0);
+}
+
 console.log("\n--- a thin budget still asks for a body ---");
 {
   const elf = PLUS_RACES.nightelf;

@@ -294,7 +294,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   race-specific bar (`mayAssault`, 1.75 × `attackFood` ceilinged at the difficulty's own army cap,
   read off the target BUILDING's `race` rather than off the lobby). No worker is ever left idle
   (`AiPlayer.workIdleWorkers`, below `applyHarvest`: fill a mine short of its five, else the
-  trees — the plan's catch-all last slice is the FOREST, which for the undead is nobody).
+  trees — the plan's catch-all last slice is the FOREST, which for the undead is nobody), and no
+  crew stands about WITH an order either: a mine of ours that has held the same gold for
+  `MINE_STALL` while we crew it has its crew re-issued (`kickStalledMines`, read off the MINE's
+  own gold and never the bank), because a worker holding a harvest order is invisible to both
+  passes above it. The human's Scout Towers BECOME something (`PlusRaceTable.towerUpgrades`: one
+  Arcane Tower per town, Guard Towers for the rest, human.ai's own split), each row gated on its
+  own `Requires` through `techMeets` — a row that cannot be legal still reserves its price off
+  the running budget, so the Guard Tower's `Requires=hlum` taxed the ladder for nothing.
   A STRATEGY names the army a build wants to END UP with, so five of the twenty-one name nothing
   that exists at tier 1 — and `buildableMix` therefore falls back on the race's OPENING SOLDIER
   (derived, not named: the lowest-tier thing the barracks makes that NEEDS NOTHING ELSE

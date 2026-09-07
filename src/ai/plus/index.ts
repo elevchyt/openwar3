@@ -2253,6 +2253,10 @@ export class ComputerPlusAi {
     // otherwise go to the trees. Computer+ only — see `AiPlayer.workIdleWorkers`, which is
     // written to be unable to touch a worker that already has something to do.
     ai.workIdleWorkers();
+    // …AND NOBODY STANDS ABOUT WITH AN ORDER, EITHER. A crew whose mine has stopped paying is
+    // sent back in — the one case neither pass above can see, because every worker in it holds
+    // a harvest order. See `AiPlayer.kickStalledMines` for the match it was seen in.
+    ai.kickStalledMines(b.clock);
     buildPlan(ctx);
     // What it is building is worth telling a TEAMMATE, and this is where the answer is already
     // in hand. Said after the plan rather than before it, so the line and the build array are

@@ -1052,6 +1052,13 @@ export interface SimMine {
   radius: number;
   gold: number;
   busy: boolean; // WC3 classic mines hold one worker at a time
+  /** WHO is holding the latch — the id of the worker down the shaft, 0 when it is free. The
+   *  latch is a boolean the emerge branch clears, so anything that takes that worker off its
+   *  harvest WITHOUT the emerge (a Stop, a teleport, a path that forgot popFromMine) left it
+   *  set for ever, and every other miner then parked at the entrance "waiting its turn" for
+   *  the rest of the match — the crew standing in the mine→hall line, mining nothing. With
+   *  the holder named, the wait can ask whether it is still inside (tickHarvest). */
+  busyBy: number;
   /** The Entangled Gold Mine standing on this mine (`egol`), or 0. Entangle (`Aent`) does not
    *  convert the mine: it CREATES a unit over it (the ability's own `UnitID1` = egol) and the
    *  mine keeps being the gold. So the two stay separate here as well — the building is the
@@ -2159,6 +2166,12 @@ const PATH_REPAIR_EXPANSIONS = 2048;
  * machine slices at the same cell and a replay stays a replay.
  */
 const PATH_SLICE_EXPANSIONS = PATH_FLOOR_EXPANSIONS;
+/** How near (Chebyshev, cells) a goal has to be to the shared route's for it to be "the same
+ *  place", and how near a unit has to be to some cell of that route to be "coming the same
+ *  way" — see SimWorld.sharedRoute. Ours: a wave's objective is one point and its soldiers
+ *  arrive from one side, so a few cells and a screen's width respectively. */
+const SHARED_ROUTE_GOAL_SLACK = 4;
+const SHARED_ROUTE_JOIN_REACH = 48;
 /** Turns the slicing off (the escalated search runs in one go, as before) so its worth can be
  *  measured in a real match, the way TerrainCull.enabled and SightStamps.enabled are. */
 export const PathSlicing = { enabled: true };
@@ -2166,12 +2179,6 @@ export const PathSlicing = { enabled: true };
  *  keeps this slack; this is the backstop for the case it cannot help — a hundred units
  *  shoved into the same corridor by the same event, all blocked on the same step. A skipped
  *  reroute is not a lost one: the poll comes round again in REPATH_POLL, and checkStuck() is
-/** How near (Chebyshev, cells) a goal has to be to the shared route's for it to be "the same
- *  place", and how near a unit has to be to some cell of that route to be "coming the same
- *  way" — see SimWorld.sharedRoute. Ours: a wave's objective is one point and its soldiers
- *  arrive from one side, so a few cells and a screen's width respectively. */
-const SHARED_ROUTE_GOAL_SLACK = 4;
-const SHARED_ROUTE_JOIN_REACH = 48;
  *  the backstop it always was. Deliberately generous — this must bite only pathologically. */
 const REPATH_BUDGET_PER_STEP = 4;
 /** What a trip is worth when the worker's own harvest row does not say (`Aaha`, the Acolyte's,
@@ -2972,7 +2979,7 @@ export class SimWorld {
   }
 
   addMine(x: number, y: number, gold: number, radius = 96): SimMine {
-    const mine: SimMine = { id: this.nextNodeId++, x, y, radius, gold, busy: false, entangledBy: 0 };
+    const mine: SimMine = { id: this.nextNodeId++, x, y, radius, gold, busy: false, busyBy: 0, entangledBy: 0 };
     this.mines.set(mine.id, mine);
     return mine;
   }
@@ -7748,6 +7755,7 @@ export class SimWorld {
       if (Math.hypot(tx - u.x, ty - u.y) > 1) u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
       return false;
     }
+    if (!approach && this.routeStillServes(u, tx, ty)) return true; // see routeStillServes
     if (!this.pathTo(u, tx, ty, undefined, false, approach)) {
       // Boxed in by bodies at this instant — a crowded rally, a group all told to go at
       // once. The order is still good; park and take it up when the way opens (issue #108).
@@ -7755,7 +7763,6 @@ export class SimWorld {
       this.holdOrGiveUp(u, tx, ty);
       return u.order === "move"; // parked keeps the order (accepted); stopped does not
     }
-    if (!approach && this.routeStillServes(u, tx, ty)) return true; // see routeStillServes
     return true;
   }
 
@@ -7810,18 +7817,11 @@ export class SimWorld {
     u.amDestX = tx; // final destination; tickAttackMove engages enemies en route
     u.amDestY = ty;
     u.acquireT = 0; // scan on the very first tick so it fights before advancing
+    if (this.routeStillServes(u, tx, ty)) return true; // a re-issue keeps a route worth keeping
     this.pathTo(u, tx, ty); // best-effort initial move (re-decided each tick)
     return true;
   }
 
-  /** Order a unit to patrol between its current position and a point (bounces
-   *  back and forth; combat units acquire enemies along the way). */
-  issuePatrol(id: number, tx: number, ty: number): boolean {
-    if (this.routeStillServes(u, tx, ty)) return true; // a re-issue keeps a route worth keeping
-    const u = this.units.get(id);
-    if (!u || this.castLocked(u)) return false;
-    if (!this.canPursue(u)) return false; // nothing to patrol between when you cannot walk
-    this.clearGuardPost(u);
   /**
    * Is the route this unit is walking still the route to (tx, ty)? Asked by a re-issued
    * order before it re-plans. A route that REACHES the point, or one whose detour is still
@@ -7844,6 +7844,13 @@ export class SimWorld {
     return Math.hypot(lx - tx, ly - ty) <= PATHING_CELL * 2; // it gets there
   }
 
+  /** Order a unit to patrol between its current position and a point (bounces
+   *  back and forth; combat units acquire enemies along the way). */
+  issuePatrol(id: number, tx: number, ty: number): boolean {
+    const u = this.units.get(id);
+    if (!u || this.castLocked(u)) return false;
+    if (!this.canPursue(u)) return false; // nothing to patrol between when you cannot walk
+    this.clearGuardPost(u);
     u.order = "patrol";
     u.targetId = null;
     u.inCombat = false;
@@ -8128,6 +8135,10 @@ export class SimWorld {
   stop(id: number): void {
     const u = this.units.get(id);
     if (u) {
+      // A stopped miner stands on the FIELD. Stop does not come through issueOrder, so a worker
+      // stopped mid-shaft (an Amulet of Recall's pull, a script) kept `inMine` with nothing left
+      // to clear it and held the mine's `busy` latch shut against its whole crew.
+      this.popFromMine(u);
       u.order = "idle";
       this.clearCast(u); // the one command that aborts a locked-in wind-up (raises SPELL_ENDCAST)
       u.arrowShot = null; // …and an aimed arrow is called off with the attack that carried it
@@ -8444,8 +8455,32 @@ export class SimWorld {
     u.inMineId = undefined;
     if (mine) {
       mine.busy = false;
+      mine.busyBy = 0;
       [u.x, u.y] = this.mineApproach(u, mine);
     }
+  }
+
+  /**
+   * Is the mine's `busy` latch held by nobody who is actually mining? A parked miner asks this
+   * before it waits, and the answer is the difference between a queue and a crew stuck for good.
+   *
+   * The latch is honest only while the worker holding it is INSIDE (`inMine`, at this mine)
+   * and still on its harvest order — that is the one state whose own tick (tickHarvest's emerge
+   * branch) will ever clear it. Every other way a miner has ever come off its order mid-shaft
+   * clears it too (issueOrder, stop, teleportUnit, death, removeUnit all pop the worker first)
+   * — but one that was missed is a base's whole income gone, and it was: a Computer+ crew was
+   * seen standing in the mine→hall line for the rest of a match, mining nothing. So the wait
+   * verifies the holder rather than trusting the flag, and frees a stale one. The holder, if
+   * it is somehow still flagged as inside, is put back on the field the way popFromMine does,
+   * so it is a worker again rather than a ghost in the shaft.
+   */
+  private mineLatchStale(mine: SimMine): boolean {
+    const holder = mine.busyBy ? this.units.get(mine.busyBy) : undefined;
+    if (holder && holder.hp > 0 && holder.inMine && holder.inMineId === mine.id && holder.order === "harvest") return false;
+    if (holder && holder.inMine && holder.inMineId === mine.id) this.popFromMine(holder);
+    mine.busy = false;
+    mine.busyBy = 0;
+    return true;
   }
 
   /** The forest's twin of popFromMine: put a Wisp that was working a tree back on ground it
@@ -13190,6 +13225,7 @@ export class SimWorld {
     // air (missileDisjointed). Bumped before the snap below, since even a teleport the
     // pathing grid then nudges a few units is still a teleport.
     u.teleports++;
+    this.popFromMine(u); // a body moved out of the shaft is out of the shaft — and off the mine's latch
     this.unsettle(u);
     this.releaseClaim(u); // the tile it was walking onto is behind it now
     if (this.grid && !u.flying) {
@@ -15425,6 +15461,7 @@ export class SimWorld {
         u.inMineId = undefined;
         if (mine) {
           mine.busy = false;
+          mine.busyBy = 0;
           this.dropOtherLoad(w, "gold"); // it walked in with lumber; it walks out with gold
           w.carryGold = Math.min(w.goldPerTrip || GOLD_PER_TRIP, mine.gold);
           mine.gold -= w.carryGold;
@@ -15495,8 +15532,9 @@ export class SimWorld {
       // the worker is already standing on.)
       const reach = this.mineStandDist(u, mine) * Math.SQRT2 + PATHING_CELL;
       if (!this.arriveAtNode(u, mine.x, mine.y, reach, () => this.pathToNode(u))) return;
-      if (mine.busy) return; // parked at the entrance, waiting our turn (no re-path)
+      if (mine.busy && !this.mineLatchStale(mine)) return; // parked at the entrance, waiting our turn (no re-path)
       mine.busy = true;
+      mine.busyBy = u.id;
       u.inMine = true;
       u.inMineId = mine.id;
       u.workT = MINE_TIME;
@@ -16974,8 +17012,8 @@ export class SimWorld {
     this.releaseClaim(u); // …nor does a tile the dead unit was walking onto
     this.releasePathStamp(u); // …and neither does a collapsed building's footprint
     if (u.inMine) {
-      const mine = this.mines.get(u.resId);
-      if (mine) mine.busy = false; // don't wedge the mine shut forever
+      const mine = this.mines.get(u.inMineId ?? u.resId);
+      if (mine) { mine.busy = false; mine.busyBy = 0; } // don't wedge the mine shut forever
     }
     if (u.constructing) this.detachBuilder(u.id); // free the halted construction
     // …and the same in the other direction: a half-built STRUCTURE dying takes its builders off
@@ -19443,6 +19481,14 @@ export class SimWorld {
     // it into an ordinary search, which may escalate like any other.
     // A new plan for this unit supersedes any escalated search still running for it.
     if (this.pathJob && this.pathJob.unitId === u.id) this.pathJob = null;
+    // Came back short of a place somebody else has already found the way to? Take their way.
+    if (!ring && !crowdWalls && cells && cells.length > 1) {
+      const end = cells[cells.length - 1];
+      if (end[0] !== goal[0] || end[1] !== goal[1]) {
+        const shared = this.adoptSharedRoute(u, start, goal, blocked, domain);
+        if (shared) cells = shared;
+      }
+    }
     if (maxExpansions === undefined && !crowdWalls && this.escalate(u, cells, start, goal, domain, ring)) {
       if (PathSlicing.enabled) {
         // The detour is paid for across sim steps (pumpPathJob), not here. The unit keeps the
@@ -19481,14 +19527,6 @@ export class SimWorld {
   /** Turn a cell path into the unit's route: string-pull it, put each waypoint where the
    *  footprint STANDS on its cell, and end on the settling nudge — pathTo's own tail, shared
    *  with the sliced search's landing (pumpPathJob). */
-    // Came back short of a place somebody else has already found the way to? Take their way.
-    if (!ring && !crowdWalls && cells && cells.length > 1) {
-      const end = cells[cells.length - 1];
-      if (end[0] !== goal[0] || end[1] !== goal[1]) {
-        const shared = this.adoptSharedRoute(u, start, goal, blocked, domain);
-        if (shared) cells = shared;
-      }
-    }
   private installRoute(
     u: SimUnit,
     cells: Array<[number, number]>,
@@ -19521,44 +19559,6 @@ export class SimWorld {
     u.moving = true;
   }
 
-  /**
-   * Advance the escalated search in flight by one slice, and land it when it is done.
-   *
-   * Landing is conditional on the unit still wanting it: alive, still under an order, and
-   * still aimed at the same point. A unit re-ordered meanwhile already dropped the job in
-   * pathTo; one that died or arrived simply lets it go. A search that lands is billed to the
-   * allowance exactly as the one-frame search was, for what it actually spent.
-   */
-  private pumpPathJob(): void {
-    const job = this.pathJob;
-    if (!job) return;
-    simProfile.begin("sim.world.move.job");
-    const before = job.search.expansions;
-    const done = job.search.run(PATH_SLICE_EXPANSIONS);
-    simProfile.tally("pathExpansions", job.search.expansions - before);
-    simProfile.end("sim.world.move.job");
-    if (!done) return;
-    this.pathJob = null;
-    this.longSearchIn = Math.max(
-      LONG_SEARCH_EVERY,
-      Math.ceil(job.search.expansions / LONG_SEARCH_EXPANSIONS_PER_STEP),
-    );
-    simProfile.tally("pathJobsLanded");
-    const u = this.units.get(job.unitId);
-    if (!u || u.hp <= 0 || u.order === "idle" || u.chaseX !== job.tx || u.chaseY !== job.ty) return;
-    const cells = job.search.result();
-    if (cells.length <= 1) return; // no better than what it is already walking
-    // The unit has walked on since the search began; the route starts where the search did,
-    // so mend the first stretch onto where it stands now rather than teleport it back.
-    this.installRoute(u, cells, job.tx, job.ty, job.approach, job.blocked, job.domain);
-    if (u.path.length && Math.hypot(u.path[0][0] - u.x, u.path[0][1] - u.y) > PATHING_CELL * 2) {
-      const [sx, sy] = this.grid.footprintAnchor(u.x, u.y, u.footprint);
-      const [gx, gy] = this.grid.footprintAnchor(u.path[0][0], u.path[0][1], u.footprint);
-      simProfile.tally("pathSearches");
-      const join = findPath(this.grid, [sx, sy], [gx, gy], job.blocked, PATH_REPAIR_EXPANSIONS, job.domain, undefined, u.footprint);
-      simProfile.tally("pathExpansions", pathExpansionsSpent());
-      const end = join && join.length > 1 ? join[join.length - 1] : null;
-      if (join && end && end[0] === gx && end[1] === gy) {
   /**
    * Join the wave's shared route, if there is one to this goal and this unit can reach it.
    * The join is a short search (PATH_REPAIR_EXPANSIONS) to the route's cell nearest the
@@ -19596,6 +19596,49 @@ export class SimWorld {
     return [...join, ...sr.cells.slice(bestI + 1)];
   }
 
+  /**
+   * Advance the escalated search in flight by one slice, and land it when it is done.
+   *
+   * Landing is conditional on the unit still wanting it: alive, still under an order, and
+   * still aimed at the same point. A unit re-ordered meanwhile already dropped the job in
+   * pathTo; one that died or arrived simply lets it go. A search that lands is billed to the
+   * allowance exactly as the one-frame search was, for what it actually spent.
+   */
+  private pumpPathJob(): void {
+    const job = this.pathJob;
+    if (!job) return;
+    simProfile.begin("sim.world.move.job");
+    const before = job.search.expansions;
+    const done = job.search.run(PATH_SLICE_EXPANSIONS);
+    simProfile.tally("pathExpansions", job.search.expansions - before);
+    simProfile.end("sim.world.move.job");
+    if (!done) return;
+    this.pathJob = null;
+    this.longSearchIn = Math.max(
+      LONG_SEARCH_EVERY,
+      Math.ceil(job.search.expansions / LONG_SEARCH_EXPANSIONS_PER_STEP),
+    );
+    simProfile.tally("pathJobsLanded");
+    const u = this.units.get(job.unitId);
+    if (!u || u.hp <= 0 || u.order === "idle" || u.chaseX !== job.tx || u.chaseY !== job.ty) return;
+    const cells = job.search.result();
+    if (cells.length <= 1) return; // no better than what it is already walking
+    // …and it is the WAVE's route now, not only this unit's — see sharedRoute. A plain move
+    // only: an approach's route ends against a thing, which is nowhere for anyone else.
+    if (!job.approach && u.footprint > 0) {
+      this.sharedRoute = { cells, goal: cells[cells.length - 1], domain: job.domain, footprint: u.footprint, version: this.grid.stampVersion };
+    }
+    // The unit has walked on since the search began; the route starts where the search did,
+    // so mend the first stretch onto where it stands now rather than teleport it back.
+    this.installRoute(u, cells, job.tx, job.ty, job.approach, job.blocked, job.domain);
+    if (u.path.length && Math.hypot(u.path[0][0] - u.x, u.path[0][1] - u.y) > PATHING_CELL * 2) {
+      const [sx, sy] = this.grid.footprintAnchor(u.x, u.y, u.footprint);
+      const [gx, gy] = this.grid.footprintAnchor(u.path[0][0], u.path[0][1], u.footprint);
+      simProfile.tally("pathSearches");
+      const join = findPath(this.grid, [sx, sy], [gx, gy], job.blocked, PATH_REPAIR_EXPANSIONS, job.domain, undefined, u.footprint);
+      simProfile.tally("pathExpansions", pathExpansionsSpent());
+      const end = join && join.length > 1 ? join[join.length - 1] : null;
+      if (join && end && end[0] === gx && end[1] === gy) {
         const smoothed = smoothPath(this.grid, join, job.blocked, job.domain);
         const pts = smoothed.slice(1).map(([cx, cy]) => this.grid.footprintCenter(cx, cy, u.footprint)) as Array<[number, number]>;
         u.path = [...pts, ...u.path.slice(1)];
@@ -19619,15 +19662,22 @@ export class SimWorld {
   } | null = null;
   /** The job's own working set — allocated on the first escalation, kept for the match. */
   private jobScratch: PathScratch | null = null;
+  /**
+   * The last detour the sliced search landed, kept for the wave that is coming the same way.
+   * The escalated search serves one unit at a time, so a wave of fifty past a treeline was
+   * fifty detours found one after another, a second apart, with the other forty-nine walking
+   * into the trees meanwhile. A route found through the TERRAIN is good for anyone going to
+   * the same place from the same side, so a later plan that comes back short toward the same
+   * goal joins it instead (`adoptSharedRoute`): a short search to its nearest cell, then the
+   * rest of it. Dated by the grid's stamp version, because a tree coming down is the one
+   * thing that changes what the route is a route through. Bodies are not its problem —
+   * repairs mend a route around those as it is walked.
+   */
+  private sharedRoute: { cells: Array<[number, number]>; goal: [number, number]; domain: PathDomain; footprint: number; version: number } | null = null;
 
   /**
    * Did the cheap search fall short of somewhere we can prove is reachable, and may we pay
    * for a proper look at it right now?
-    // …and it is the WAVE's route now, not only this unit's — see sharedRoute. A plain move
-    // only: an approach's route ends against a thing, which is nowhere for anyone else.
-    if (!job.approach && u.footprint > 0) {
-      this.sharedRoute = { cells, goal: cells[cells.length - 1], domain: job.domain, footprint: u.footprint, version: this.grid.stampVersion };
-    }
    *
    * A* is best-effort: out of budget it returns the explored cell nearest the goal, and
    * against a wall of trees that cell IS the wall of trees. The budget that finds the way
@@ -19662,18 +19712,6 @@ export class SimWorld {
   private escalate(
     u: SimUnit,
     cells: Array<[number, number]> | null,
-  /**
-   * The last detour the sliced search landed, kept for the wave that is coming the same way.
-   * The escalated search serves one unit at a time, so a wave of fifty past a treeline was
-   * fifty detours found one after another, a second apart, with the other forty-nine walking
-   * into the trees meanwhile. A route found through the TERRAIN is good for anyone going to
-   * the same place from the same side, so a later plan that comes back short toward the same
-   * goal joins it instead (`adoptSharedRoute`): a short search to its nearest cell, then the
-   * rest of it. Dated by the grid's stamp version, because a tree coming down is the one
-   * thing that changes what the route is a route through. Bodies are not its problem —
-   * repairs mend a route around those as it is walked.
-   */
-  private sharedRoute: { cells: Array<[number, number]>; goal: [number, number]; domain: PathDomain; footprint: number; version: number } | null = null;
     start: [number, number],
     goal: [number, number],
     domain: PathDomain,

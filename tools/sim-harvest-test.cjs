@@ -35,7 +35,7 @@ const MINE_TIME = 1.0; // Agld "Mining Duration" — the mine issues at most one
 
 /** A mine + town hall `angle` degrees apart, `n` peasants ordered onto the mine.
  *  `bonus` is `setHarvestBonus`'s factor — 2 is an insane computer (src/ai/ids.ts). */
-function harvestRun(angleDeg, n, seconds, bonus = 1) {
+function harvestRun(angleDeg, n, seconds, bonus = 1, hook = null) {
   const W = 160, H = 160;
   const grid = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [0, 0]);
   const a = (angleDeg * Math.PI) / 180;
@@ -90,6 +90,7 @@ function harvestRun(angleDeg, n, seconds, bonus = 1) {
   const walked = new Map(ids.map((id) => [id, 0]));
   for (let t = 0; t < seconds / DT; t++) {
     const was = ids.map((id) => [world.units.get(id).x, world.units.get(id).y]);
+    if (hook) hook(world, mine, t * DT);
     world.tick(DT);
     ids.forEach((id, i) => {
       const u = world.units.get(id);
@@ -289,6 +290,49 @@ console.log("\na worker whose way home is shut re-decides instead of grinding");
   const freed = runUntil(world, () => !worker.moving, 6);
   check("…and stops walking a path that goes nowhere", freed, `still moving after 6s, order ${worker.order}`);
   check("…without being sacked mid-job", worker.order === "return" || world.stashOf(0).lumber === 10, `order ${worker.order}, banked ${world.stashOf(0).lumber}`);
+}
+
+// --- the mine's latch cannot be wedged shut -------------------------------------------
+//
+// `SimMine.busy` is the one-worker-at-a-time latch (Agld Mining Capacity 1), and it is cleared
+// by the emerge branch of the worker holding it. Anything that took that worker off its harvest
+// WITHOUT the emerge — a Stop that did not come through issueOrder, a teleport, a path that
+// forgot popFromMine — left it set for ever, and the rest of the crew then parked at the
+// entrance "waiting its turn" for the rest of the match: standing in the mine→hall line, mining
+// nothing. Reported from a Computer+ human's base. Now the latch names its holder (`busyBy`), a
+// parked miner verifies the holder is still inside before it waits (mineLatchStale), and both
+// Stop and teleportUnit pop a worker out of the shaft first.
+console.log("\nthe mine's latch cannot be wedged shut");
+{
+  // A latch held by NOBODY — the state every forgotten pop left behind.
+  let before = 0;
+  const { gold } = harvestRun(45, 5, 70, 1, (world, mine, t) => {
+    if (Math.abs(t - 10) < 1e-6) {
+      before = world.stashOf(0).gold;
+      mine.busy = true;
+      mine.busyBy = 9999; // no such unit
+    }
+  });
+  check("a latch held by nobody is freed and the crew keeps mining", gold - before > 30 * GOLD_PER_TRIP, `${(gold - before) / GOLD_PER_TRIP} loads in the 60 s after the wedge`);
+}
+{
+  // A worker STOPPED mid-shaft (an Amulet of Recall's pull is the stock way): it comes out onto
+  // the field, the latch is released with it, and the crew goes on.
+  let stopped = null;
+  let atStop = null;
+  let before = 0;
+  const { gold } = harvestRun(45, 5, 70, 1, (world, mine, t) => {
+    if (t >= 10 && stopped === null) {
+      for (const u of world.units.values()) if (u.inMine) { stopped = u; break; }
+      if (!stopped) return;
+      before = world.stashOf(0).gold;
+      world.stop(stopped.id);
+      atStop = { inMine: stopped.inMine, order: stopped.order, busy: mine.busy, busyBy: mine.busyBy };
+    }
+  });
+  check("a worker stopped mid-shaft is on the field, idle", atStop && !atStop.inMine && atStop.order === "idle", JSON.stringify(atStop));
+  check("…and the latch went with it", atStop && !atStop.busy && atStop.busyBy === 0, JSON.stringify(atStop));
+  check("…so the other four keep mining", gold - before > 25 * GOLD_PER_TRIP, `${(gold - before) / GOLD_PER_TRIP} loads in the 60 s after the stop`);
 }
 
 console.log(failed ? `\nharvest: ${failed} check(s) FAILED` : "\nharvest: all checks passed");

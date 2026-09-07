@@ -156,6 +156,9 @@ const SITE_MAX_RADIUS = 1800;
  * harvest plan is written in fives (plus/plan.ts `MINE_CREW`, and human.ai's own 4+1).
  */
 const MINE_SEATS = 5;
+/** Seconds a crewed mine may hold the same gold before its crew is sent back in — see
+ *  `AiPlayer.kickStalledMines`. Ours: longer than any honest gap between two loads. */
+const MINE_STALL = 40;
 
 /** A guard tower goes at the FRONT of a town — between its hall and the enemy — rather than
  *  wherever the spiral first fits. This is how far from the hall it aims. */
@@ -255,6 +258,10 @@ export class AiPlayer {
   private totalWood = 0;
   /** The harvest plan `ClearHarvestAI`/`HarvestGold`/`HarvestWood` build up, in call order. */
   private harvestPlan: Array<{ res: "gold" | "lumber"; town: number; count: number }> = [];
+  /** Per mine we crew: the gold it held when it was last seen PAYING, and when that was. What
+   *  `kickStalledMines` measures a crew against — see it for why the mine's own gold is the
+   *  reading and not our bank. */
+  private mineWatch = new Map<number, { gold: number; since: number }>();
   /** Buildings this pass means to UPGRADE, and which `trainUnits` therefore leaves alone —
    *  rebuilt at the top of every `runBuildLoop`. See `holdForUpgrades`. */
   private upgradeHold: ReadonlySet<number> = new Set();
@@ -407,6 +414,15 @@ export class AiPlayer {
   /** `HallsCompleted(id)` — nothing of this type is still going up. */
   hallsCompleted(id: string): boolean {
     return this.townCount(id) === this.townCountDone(id);
+  }
+
+  /** Does this player meet a tech id's own `Requires` — the sim's answer (`SimWorld.techMeets`),
+   *  read off the same data the authority refuses an order against. A build row that cannot be
+   *  LEGAL is worse than useless: `startUnit` prices it and reserves its gold off the running
+   *  budget before `setProduce` is refused, so an unmet row taxes every row under it, every
+   *  pass, and buys nothing. Ask this before emitting one that has a requirement. */
+  techMeets(id: string): boolean {
+    return this.host.world.techMeets(this.player, id);
   }
 
   /** `GetUpgradeLevel(id)`. */
@@ -1509,6 +1525,64 @@ export class AiPlayer {
         (a, b) => Math.hypot(u.x - a.x, u.y - a.y) - Math.hypot(u.x - b.x, u.y - b.y),
       )) {
         if (this.sendToWood(u, town)) break;
+      }
+    }
+  }
+
+  /**
+   * A CREW THAT HAS STOPPED PAYING IS SENT BACK IN — the watchdog under the harvest plan.
+   *
+   * Reported from a real match: a Computer+ human's gold crew *"had stopped gathering gold
+   * altogether and were chillin in the worker line"* — five peasants standing in the mine→hall
+   * line, each holding a harvest order, banking nothing, for the rest of the game. A worker
+   * with an order is invisible to everything above this: `applyHarvest` counts it as already on
+   * the job (rightly — re-issuing a live crew every pass is the collision bug in
+   * `alreadyHarvesting`), and `workIdleWorkers` can only see a worker whose order is literally
+   * `"idle"`. So whatever wedged them — a mine latch held by nobody (SimWorld.mineLatchStale),
+   * a parked walk that never resumed — nothing in the AI would ever have re-asked.
+   *
+   * The reading is the MINE's own gold, not our bank: `SimMine.gold` goes down by exactly one
+   * load every time a worker of anybody's comes out of the shaft, and a bank goes up and down
+   * with every purchase. A mine of ours that has held the same gold for `MINE_STALL` seconds
+   * while we have a crew assigned to it is a crew that is not mining, whatever its orders say.
+   * The response is the plan's own order re-issued through the funnel (`sendToGold` →
+   * `issueOrder`), which is the reset a player's click is: it pops a worker out of the shaft,
+   * clears its parked wait and its arrival latch, and paths it afresh. Only the workers ON THE
+   * FIELD can be told anything (the authority refuses an order naming one down the shaft, and
+   * the sim frees a stale latch by itself). Then the clock restarts, so a crew that genuinely
+   * cannot mine — the way to the mine cut by a wall of buildings — is nudged once a period
+   * rather than every pass.
+   *
+   * `MINE_STALL` is ours. It only has to be longer than the longest honest gap between two
+   * loads: one worker on the farthest expansion a melee map has, a round trip on foot, is well
+   * under half of it.
+   */
+  kickStalledMines(now: number): void {
+    const world = this.host.world;
+    const crews = new Map<number, SimUnit[]>();
+    for (const u of world.units.values()) {
+      if (u.owner !== this.player || u.hp <= 0 || !u.worker) continue;
+      const mine = this.mineWorkedBy(u);
+      if (!mine) continue;
+      const crew = crews.get(mine);
+      if (crew) crew.push(u);
+      else crews.set(mine, [u]);
+    }
+    for (const id of this.mineWatch.keys()) if (!crews.has(id)) this.mineWatch.delete(id);
+    for (const [mineId, crew] of crews) {
+      const mine = world.mines.get(mineId);
+      if (!mine) continue;
+      const seen = this.mineWatch.get(mineId);
+      if (!seen || seen.gold !== mine.gold) {
+        this.mineWatch.set(mineId, { gold: mine.gold, since: now });
+        continue;
+      }
+      if (now - seen.since < MINE_STALL) continue;
+      seen.since = now;
+      for (const u of crew) {
+        if (isOffField(u) || u.buildPending || u.insideBuild || u.constructing || u.repair) continue;
+        if (this.captainHeld.has(u.id)) continue;
+        this.sendToGold(u, mineId);
       }
     }
   }
