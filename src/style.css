@@ -192,9 +192,16 @@ html body.loading-screen * { cursor: none !important; }
    Width is set inline, relative to the unit's on-screen size. The selection/
    hover RING is a separate flat 3D model on the terrain. */
 .unit-hpbar {
-  /* Absolute inside #world-layer: the bar's left/top are canvas CSS pixels (ui/stage.ts). */
+  /* Absolute inside #world-layer, anchored at its origin and moved by TRANSFORM — the whole
+     position, centring included, is written by render/worldOverlays.ts as one `transform`.
+     Where a bar sits is the only thing about it that changes every frame, and `left`/`top` are
+     LAYOUT properties: writing them makes the browser lay the page out again, once per bar per
+     frame, for every unit on screen. A transform is not, so the same move is a compositor job.
+     (A single `transform` cannot be written from both ends, which is why the centring moved
+     into that string rather than staying here. `textTags` has always done it this way.) */
   position: absolute;
-  transform: translate(-50%, -50%);
+  left: 0;
+  top: 0;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -377,8 +384,10 @@ body.hud-statbar-skinned .unit-hpbar-mana { background-image: var(--statbar-mana
    Placeholder chrome here; the real human-tooltip nine-patch frames it once an install
    is mounted (body.hud-tooltip-skinned, with the vars lifted to :root by ui/hud.ts). */
 .unit-hover-tooltip {
+  /* Positioned by transform, centring included — see .unit-hpbar. */
   position: absolute;
-  transform: translate(-50%, -100%);
+  left: 0;
+  top: 0;
   padding: 5px 12px 6px;
   text-align: left;
   font: 400 15px/1.3 var(--game-font);

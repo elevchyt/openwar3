@@ -499,15 +499,19 @@ export class WorldOverlays {
       // gl y-up → css y-down (floats above the unit). Rounded to whole CSS pixels: the bar
       // cannot be drawn at a finer grain than that, and rounding is what lets a unit standing
       // still write nothing at all rather than jitter in the sub-pixel.
+      //
+      // Written as ONE `transform` rather than as `left`/`top`. Those are layout properties, so
+      // moving a bar with them makes the browser lay the page out again — once per bar per
+      // frame, for every unit on screen, any time the camera pans. A transform is handled by the
+      // compositor instead and lays out nothing. The `translate(-50%, -50%)` is the centring
+      // that used to live in the stylesheet: a single transform cannot be written from both
+      // ends, so it comes along here (see .unit-hpbar in style.css).
       const left = Math.round(p.sx / g.dpr);
       const top = Math.round((g.h - p.sy) / g.dpr - (p.ry + 24));
-      if (last.left !== left) {
+      if (last.left !== left || last.top !== top) {
         last.left = left;
-        bar.root.style.left = `${left}px`;
-      }
-      if (last.top !== top) {
         last.top = top;
-        bar.root.style.top = `${top}px`;
+        bar.root.style.transform = `translate(${left}px, ${top}px) translate(-50%, -50%)`;
       }
     }
     for (let k = n; k < this.hpBars.length; k++) {
@@ -555,8 +559,11 @@ export class WorldOverlays {
     }
     const p = this.proj;
     const g = this.frameGeom;
-    root.style.left = `${p.sx / g.dpr}px`;
-    root.style.top = `${(g.h - p.sy) / g.dpr - (p.ry + 34)}px`; // just above the HP bar (ry + 24), which sits above the unit
+    // Same as the bars: positioned by transform, carrying the centring the stylesheet used to
+    // hold. One element rather than two hundred, so this is for consistency rather than cost.
+    const x = p.sx / g.dpr;
+    const y = (g.h - p.sy) / g.dpr - (p.ry + 34); // just above the HP bar (ry + 24), which sits above the unit
+    root.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
     root.hidden = false;
   }
 
