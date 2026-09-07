@@ -2137,6 +2137,17 @@ const REPATH_POLL = 0.25;
  *  step and no unit ever waits longer for its first poll than it would have anyway. */
 const REPATH_POLL_PHASES = 15;
 const REPATH_LOOKAHEAD = PATHING_CELL * 5; // ~5 cells (160 world units) ahead
+/**
+ * What a REPAIR may spend — a mend to a nearby node of a route that was good a moment ago,
+ * as against a plan. The floor (8,192) is sized for a first plan; handed to a repair it was
+ * the whole cost of the blocked branch: a crowd search that cannot reach its node spends all
+ * of it, the plain fallback then spends it again, and "wait" cost 16k expansions. In the
+ * traces every repair that arrived cost 300–3,000. A mend that needs more than this is a
+ * plan wearing the wrong hat, and the poll's re-plan is where it belongs (WC3 mends the
+ * queued nodes; it does not search the map from inside a jam). Measured: see the 2026-09-07
+ * Feralas runs in the commit log.
+ */
+const PATH_REPAIR_EXPANSIONS = 2048;
 /** Reroutes (a full A* each) any ONE sim step may run. The stagger above is what normally
  *  keeps this slack; this is the backstop for the case it cannot help — a hundred units
  *  shoved into the same corridor by the same event, all blocked on the same step. A skipped
@@ -19463,9 +19474,9 @@ export class SimWorld {
     if (k >= u.path.length) return false;
     // 2. A short search to the first that still is — round the crowd first, and if the crowd
     //    leaves no way round (hemmed in), the plain route, which walks up to the blocker and
-    //    waits. Both at the floor: `maxExpansions` named means pathTo's escalation never
-    //    enters, so neither can cost more than one floor search. Counted with the rest so the
-    //    report can tell a repair from a plan (`pathRepairs`).
+    //    waits. Both under PATH_REPAIR_EXPANSIONS: `maxExpansions` named means pathTo's
+    //    escalation never enters, and the cap is a repair's, not a plan's. Counted with the
+    //    rest so the report can tell a repair from a plan (`pathRepairs`).
     const goal = this.grid.footprintAnchor(u.path[k][0], u.path[k][1], n);
     simProfile.tally("pathRepairs");
     let cells: Array<[number, number]> | null = null;
@@ -19474,7 +19485,7 @@ export class SimWorld {
       blocked = pred;
       simProfile.tally("pathSearches");
       const searchAt = perfNow();
-      cells = findPath(this.grid, start, goal, pred, PATH_FLOOR_EXPANSIONS, domain, undefined, n);
+      cells = findPath(this.grid, start, goal, pred, PATH_REPAIR_EXPANSIONS, domain, undefined, n);
       simProfile.tally("pathExpansions", pathExpansionsSpent());
       simProfile.gauge("pathSearch", perfNow() - searchAt);
       const end = cells && cells.length > 1 ? cells[cells.length - 1] : null;
