@@ -26,6 +26,10 @@ export interface HeadlessOptions {
   seed?: number;
   /** Raw war3map.wts text — the map's trigger-string table (resolves TRIGSTR_nnn). */
   wts?: string;
+  /** The playercolor index of the four neutral players (see `Runtime.neutralPlayerColor`).
+   *  Defaults to the 2003 table's slot 12, which is what a headless run has no art to
+   *  disagree with. */
+  neutralColor?: number;
 }
 
 /** Parse + load the given sources (in order), register natives, and initialise
@@ -34,6 +38,7 @@ export function buildInterpreter(sources: string[], opts: HeadlessOptions = {}):
   const rt = new Runtime(opts.seed);
   rt.gameType = opts.gameType ?? 4;
   rt.hooks = opts.hooks ?? null;
+  if (opts.neutralColor !== undefined) rt.neutralPlayerColor = opts.neutralColor;
   if (opts.worldWritingHooks) rt.worldWritingHooks = new Set(opts.worldWritingHooks);
   if (opts.localViewHooks) rt.localViewHooks = new Set(opts.localViewHooks);
   if (opts.wts) for (const [id, text] of parseWts(opts.wts)) rt.trigStrings.set(id, text);

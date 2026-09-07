@@ -78,7 +78,7 @@ import {
   chatPrompt, chatRecipients, chatShowsPlayerDot, formatChatLine, hasChatAllies, observerLine,
   type ChatLine, type ChatTarget, type ChatWorld,
 } from "../game/chat";
-import { teamColorHex, teamColorRgb } from "./teamColor";
+import { neutralTeamColor, teamColorHex, teamColorRgb } from "./teamColor";
 import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
 import { MultiboardOverlay } from "../ui/multiboard";
@@ -1590,7 +1590,7 @@ export class MapViewerScene {
       };
       this.heightSampler = makeHeightSampler(terrain);
       this.footMaxHeight = makeFootprintMaxSampler(terrain);
-      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.items, this.tech, this.upgrades, this.footMaxHeight);
+      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.items, this.tech, this.upgrades, this.footMaxHeight, neutralTeamColor(this.vfs));
       this.rts.setFootprintReader((tex) => this.footprintFor(tex)); // pathTex decode is a VFS read
       this.rts.setIconResolver((path) => this.blpIcon(path)); // BLP decode is a VFS read, too — for the ally spell row
       this.rts.setSoundBoard(this.sounds);
@@ -3027,6 +3027,9 @@ export class MapViewerScene {
         worldWritingHooks: this.worldWritingHookNames(),
         localViewHooks: this.localViewHookNames(),
         lobby,
+        // What `GetPlayerColor(Player(PLAYER_NEUTRAL_AGGRESSIVE))` answers — a campaign map
+        // (UndeadX05) colours its sleeping guards off it so they read as creeps.
+        neutralColor: neutralTeamColor(this.vfs),
         // Publish the engine BEFORE config()/main() run: a hook fired during init may need
         // the interpreter itself (ChooseRandomItem draws from its seeded RNG — 7.18).
         onBoot: (e) => { this.mapScript = e; },
@@ -7508,10 +7511,12 @@ export class MapViewerScene {
     const id = sel.id;
     // Team glow follows the owner's COLOUR, not their slot (see RtsController.playerColor) —
     // Rise of the Naga recolours Maiev's slot 0 to BLUE, and a bust keyed on the slot showed
-    // her red in the console while the same model stood blue on the terrain. 12 is the
-    // classic neutral (black) slot, for a unit with no owner at all. Through `unitColor` for
-    // the same reason: the bust is the unit you have selected, so an ally-colour filter that
-    // painted it teal on the terrain has to paint it teal in the console too.
+    // her red in the console while the same model stood blue on the terrain. A unit with no
+    // owner at all (a creep, a shop) wears the black neutral swatch, which `unitColor` answers
+    // too — it is NOT the 2003 table's slot 12, which on a 1.30.4 install is player 13's
+    // maroon (see render/teamColor.ts `neutralTeamColor`). Through `unitColor` for the same
+    // reason: the bust is the unit you have selected, so an ally-colour filter that painted
+    // it teal on the terrain has to paint it teal in the console too.
     // The `portrait` flag makes the viewer loop the model's "Portrait" idle clip
     // instead of walk/stand (portrait models have no walk — a stray one on some
     // heroes was being picked, so the bust just froze).
@@ -7519,7 +7524,7 @@ export class MapViewerScene {
     // the bust camera a bit left so the whole face shows.
     const panLeft = /paladin/i.test(sel.model) ? 0.14 : 0;
     this.portraitViewer
-      .load(path, sel.owner >= 0 ? this.rts.unitColor(sel.owner) : 12, true, panLeft)
+      .load(path, this.rts.unitColor(sel.owner), true, panLeft)
       .then(() => {
         this.portraitFor = id;
         this.portraitViewer!.start();

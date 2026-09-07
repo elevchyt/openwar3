@@ -694,6 +694,11 @@ export class RtsController {
     // Highest terrain height across a building's footprint — used to seat structures
     // on the tallest level they touch instead of the (often lower) centre (issue #15).
     private footMaxHeight: FootprintMaxSampler,
+    // The swatch every unit with NO owner wears (a creep, a shop, a critter): black, at an
+    // index that depends on which table the install ships (render/teamColor.ts
+    // `neutralTeamColor`). Passed in because the answer is in the ART and this object never
+    // opens the archives.
+    private neutralColor: number,
   ) {
     // Registries power casting/learning/auras + items, and (issue #57) the tech tree:
     // requirements, research effects and shop stock.
@@ -976,8 +981,13 @@ export class RtsController {
    * so Maiev's slot 0 is BLUE, not red. `changeExisting` recoloured the units standing there
    * at the time (that is a `ForGroup` of `SetUnitColor`, which we did honour), and everything
    * spawned afterwards came out red — half the player's army one colour, half the other.
+   *
+   * A NEUTRAL owner (-1, both the creeps and the shops) is not a slot at all and wears the
+   * black neutral swatch (`neutralColor`). Handing the viewer -1 bound no swatch and drew the
+   * creeps' team-coloured parts in the viewer's opaque-white fallback texture.
    */
   playerColor(owner: number): number {
+    if (owner < 0) return this.neutralColor;
     return this.playerColors.get(owner) ?? owner;
   }
 

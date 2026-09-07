@@ -10,6 +10,7 @@
 
 import type { FunctionDecl } from "./ast";
 import { type JassValue, JNULL, jHandle } from "./values";
+import { FIRST_NEUTRAL_SLOT, PlayerSlot } from "../data/enums";
 
 /** A trigger object (CreateTrigger) — its conditions + actions (function names)
  *  and enabled flag. The engine fires it when a registered event occurs (7.4). */
@@ -388,7 +389,7 @@ export const MAP_CONTROL = {
 export interface JassPlayer {
   index: number; // 0–15
   handleId: number; // its entry in the handle table
-  color: number; // ConvertPlayerColor index (0–11)
+  color: number; // ConvertPlayerColor index (0–11; a neutral slot wears `Runtime.neutralPlayerColor`)
   controller: number; // a MAP_CONTROL index (0 user, 1 computer, 3 neutral, …)
   race: number; // RACE_PREF_* index
   raceSelectable: boolean;
@@ -1199,6 +1200,15 @@ export class Runtime {
    *  GetGameTypeSelected — the host sets it from the map's melee flag. */
   gameType = 4;
 
+  /** The playercolor index a NEUTRAL slot (12–15) is born with — what
+   *  `GetPlayerColor(Player(PLAYER_NEUTRAL_AGGRESSIVE))` answers, which UndeadX05 hands to
+   *  `SetPlayerColorBJ` so Garithos' sleeping guards wear the creeps' colour. In the game
+   *  that colour is the BLACK swatch after the player palette, and its index is the
+   *  install's: 12 on the 2003 table, 24 on 1.30.4's (render/teamColor.ts
+   *  `neutralTeamColor`; the host sets this through `HeadlessOptions.neutralColor`). A
+   *  neutral slot's own index is not a colour at all on the wide table — 12 there is maroon. */
+  neutralPlayerColor: number = PlayerSlot.NeutralHostile;
+
   /** Which slot the human at THIS MACHINE is playing. The lobby's user slot isn't always 0,
    *  so the host sets this with applyLobby. */
   localPlayer = 0;
@@ -1464,7 +1474,7 @@ export class Runtime {
       p = {
         index,
         handleId: 0,
-        color: index,
+        color: index >= FIRST_NEUTRAL_SLOT ? this.neutralPlayerColor : index,
         controller: MAP_CONTROL.NEUTRAL, // until config() says otherwise
         race: 0,
         raceSelectable: false,

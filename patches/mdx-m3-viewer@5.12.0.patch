@@ -2234,3 +2234,21 @@ index b80da6448a597b662087852d83a1f499c2ed0173..d5d8afa8b489dd57f20a698e22812aff
          }
      }
      // OpenWar3 (issue #66): a faded instance (vertex-colour alpha < 1 — Wind Walk,
+diff --git a/dist/cjs/viewer/handlers/mdx/handler.js b/dist/cjs/viewer/handlers/mdx/handler.js
+index 87e3bbdbf1377c888ac650cf23029492fc1a05f7..b92458b2d3645c0bcec2169797706a84d66ac9f1 100644
+--- a/dist/cjs/viewer/handlers/mdx/handler.js
++++ b/dist/cjs/viewer/handlers/mdx/handler.js
+@@ -153,7 +153,12 @@ exports.default = {
+     loadTeamTextures(viewer) {
+         const { pathSolver, reforged, teamColors, teamGlows } = viewer.sharedCache.get('mdx');
+         if (teamColors.length === 0) {
+-            const teams = reforged ? 28 : 16;
++            // OpenWar3: the classic table is 28 too since patch 1.29 - TeamColor00..23 are the
++            // 24 player colours and TeamColor24..27 the four black NEUTRAL swatches the creeps
++            // and shops wear (src/render/teamColor.ts `neutralTeamColor`). Loading 16 left a
++            // 1.30.4 install's neutral slot with no swatch at all. A 2003 install simply has
++            // no TeamColor16..27 to load, which was already the case for 13..15.
++            const teams = 28;
+             const ext = reforged ? 'dds' : 'blp';
+             const params = reforged ? { reforged: true } : undefined;
+             for (let i = 0; i < teams; i++) {

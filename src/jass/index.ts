@@ -79,6 +79,10 @@ export function loadMapScript(
     localViewHooks?: Iterable<string>;
     runMain?: boolean;
     lobby?: { slots: ReadonlyArray<LobbySlot>; localPlayer: number };
+    /** The playercolor index the four NEUTRAL players answer `GetPlayerColor` with — the
+     *  black swatch, whose index is the install's (render/teamColor.ts `neutralTeamColor`).
+     *  Passed in rather than read here: the interpreter never opens the art. */
+    neutralColor?: number;
     /** Called with the booted engine BEFORE config()/main() run, so the host can publish
      *  it (e.g. a hook that needs the interpreter's seeded RNG — ChooseRandomItem, 7.18)
      *  while the script is still initialising. Waiting for the return value is too late:
@@ -98,6 +102,7 @@ export function loadMapScript(
   const interp = buildInterpreter(sources, {
     gameType: opts.melee ? 1 : 4, hooks: opts.hooks,
     worldWritingHooks: opts.worldWritingHooks, localViewHooks: opts.localViewHooks, wts,
+    neutralColor: opts.neutralColor,
   });
   const engine: MapScriptEngine = { interp, setup: interp.rt.setup };
   opts.onBoot?.(engine);
