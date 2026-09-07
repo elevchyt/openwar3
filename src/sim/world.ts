@@ -2166,6 +2166,12 @@ export const PathSlicing = { enabled: true };
  *  keeps this slack; this is the backstop for the case it cannot help — a hundred units
  *  shoved into the same corridor by the same event, all blocked on the same step. A skipped
  *  reroute is not a lost one: the poll comes round again in REPATH_POLL, and checkStuck() is
+/** How near (Chebyshev, cells) a goal has to be to the shared route's for it to be "the same
+ *  place", and how near a unit has to be to some cell of that route to be "coming the same
+ *  way" — see SimWorld.sharedRoute. Ours: a wave's objective is one point and its soldiers
+ *  arrive from one side, so a few cells and a screen's width respectively. */
+const SHARED_ROUTE_GOAL_SLACK = 4;
+const SHARED_ROUTE_JOIN_REACH = 48;
  *  the backstop it always was. Deliberately generous — this must bite only pathologically. */
 const REPATH_BUDGET_PER_STEP = 4;
 /** What a trip is worth when the worker's own harvest row does not say (`Aaha`, the Acolyte's,
@@ -7749,6 +7755,7 @@ export class SimWorld {
       this.holdOrGiveUp(u, tx, ty);
       return u.order === "move"; // parked keeps the order (accepted); stopped does not
     }
+    if (!approach && this.routeStillServes(u, tx, ty)) return true; // see routeStillServes
     return true;
   }
 
@@ -7810,10 +7817,33 @@ export class SimWorld {
   /** Order a unit to patrol between its current position and a point (bounces
    *  back and forth; combat units acquire enemies along the way). */
   issuePatrol(id: number, tx: number, ty: number): boolean {
+    if (this.routeStillServes(u, tx, ty)) return true; // a re-issue keeps a route worth keeping
     const u = this.units.get(id);
     if (!u || this.castLocked(u)) return false;
     if (!this.canPursue(u)) return false; // nothing to patrol between when you cannot walk
     this.clearGuardPost(u);
+  /**
+   * Is the route this unit is walking still the route to (tx, ty)? Asked by a re-issued
+   * order before it re-plans. A route that REACHES the point, or one whose detour is still
+   * being paid for (a job pending for this unit), is kept; a best-effort one that stops short
+   * with nothing pending is re-planned, exactly as before.
+   *
+   * This is the treeline bug's actual mechanism. Computer+ re-states a wave's attack-move
+   * every pass in which its march waypoint has drifted, and a re-plan from scratch past a big
+   * obstacle is a floor search — best-effort INTO the trees — unless the throttle happens to
+   * allow the detour that moment. So every detour the sliced search landed was thrown away
+   * within a second and a half: twelve units re-issued every 1.5 s past a 300-cell treeline
+   * arrived 1 of 12 in 300 s, eleven standing at the trees, after 150 landed detours
+   * (tools/sim-detour-test.cjs). Ordered ONCE, all twelve arrived.
+   */
+  private routeStillServes(u: SimUnit, tx: number, ty: number): boolean {
+    if (Math.hypot(u.chaseX - tx, u.chaseY - ty) > PATHING_CELL * 2) return false; // a different place
+    if (!u.moving || u.waypoint >= u.path.length) return false; // nothing being walked
+    if (this.pathJob && this.pathJob.unitId === u.id) return true; // its detour is on the way
+    const [lx, ly] = u.path[u.path.length - 1];
+    return Math.hypot(lx - tx, ly - ty) <= PATHING_CELL * 2; // it gets there
+  }
+
     u.order = "patrol";
     u.targetId = null;
     u.inCombat = false;
@@ -19451,6 +19481,14 @@ export class SimWorld {
   /** Turn a cell path into the unit's route: string-pull it, put each waypoint where the
    *  footprint STANDS on its cell, and end on the settling nudge — pathTo's own tail, shared
    *  with the sliced search's landing (pumpPathJob). */
+    // Came back short of a place somebody else has already found the way to? Take their way.
+    if (!ring && !crowdWalls && cells && cells.length > 1) {
+      const end = cells[cells.length - 1];
+      if (end[0] !== goal[0] || end[1] !== goal[1]) {
+        const shared = this.adoptSharedRoute(u, start, goal, blocked, domain);
+        if (shared) cells = shared;
+      }
+    }
   private installRoute(
     u: SimUnit,
     cells: Array<[number, number]>,
@@ -19521,6 +19559,43 @@ export class SimWorld {
       simProfile.tally("pathExpansions", pathExpansionsSpent());
       const end = join && join.length > 1 ? join[join.length - 1] : null;
       if (join && end && end[0] === gx && end[1] === gy) {
+  /**
+   * Join the wave's shared route, if there is one to this goal and this unit can reach it.
+   * The join is a short search (PATH_REPAIR_EXPANSIONS) to the route's cell nearest the
+   * unit; the rest of the route follows. Null when there is nothing to share, it is out of
+   * date, it was found for a bigger footprint than this unit's is small enough to use, it
+   * goes somewhere else, or the join cannot be made cheaply.
+   */
+  private adoptSharedRoute(
+    u: SimUnit,
+    start: [number, number],
+    goal: [number, number],
+    blocked: ((cx: number, cy: number) => boolean) | undefined,
+    domain: PathDomain,
+  ): Array<[number, number]> | null {
+    const sr = this.sharedRoute;
+    if (!sr || sr.version !== this.grid.stampVersion || sr.domain !== domain) return null;
+    if (u.footprint > sr.footprint) return null; // a bigger body than it was cleared for
+    if (Math.max(Math.abs(sr.goal[0] - goal[0]), Math.abs(sr.goal[1] - goal[1])) > SHARED_ROUTE_GOAL_SLACK) return null;
+    // The cell of the route nearest to where this unit stands.
+    let bestI = -1;
+    let bestD = SHARED_ROUTE_JOIN_REACH + 1;
+    for (let i = 0; i < sr.cells.length; i++) {
+      const [cx, cy] = sr.cells[i];
+      const d = Math.max(Math.abs(cx - start[0]), Math.abs(cy - start[1]));
+      if (d < bestD) { bestD = d; bestI = i; }
+    }
+    if (bestI < 0) return null; // too far from any of it to be "coming the same way"
+    if (bestI === sr.cells.length - 1) return null; // nearest to its end: nothing to gain
+    simProfile.tally("pathSearches");
+    const join = findPath(this.grid, start, sr.cells[bestI], blocked, PATH_REPAIR_EXPANSIONS, domain, undefined, u.footprint);
+    simProfile.tally("pathExpansions", pathExpansionsSpent());
+    const end = join && join.length ? join[join.length - 1] : null;
+    if (!join || !end || end[0] !== sr.cells[bestI][0] || end[1] !== sr.cells[bestI][1]) return null;
+    simProfile.tally("pathShared");
+    return [...join, ...sr.cells.slice(bestI + 1)];
+  }
+
         const smoothed = smoothPath(this.grid, join, job.blocked, job.domain);
         const pts = smoothed.slice(1).map(([cx, cy]) => this.grid.footprintCenter(cx, cy, u.footprint)) as Array<[number, number]>;
         u.path = [...pts, ...u.path.slice(1)];
@@ -19548,6 +19623,11 @@ export class SimWorld {
   /**
    * Did the cheap search fall short of somewhere we can prove is reachable, and may we pay
    * for a proper look at it right now?
+    // …and it is the WAVE's route now, not only this unit's — see sharedRoute. A plain move
+    // only: an approach's route ends against a thing, which is nowhere for anyone else.
+    if (!job.approach && u.footprint > 0) {
+      this.sharedRoute = { cells, goal: cells[cells.length - 1], domain: job.domain, footprint: u.footprint, version: this.grid.stampVersion };
+    }
    *
    * A* is best-effort: out of budget it returns the explored cell nearest the goal, and
    * against a wall of trees that cell IS the wall of trees. The budget that finds the way
@@ -19582,6 +19662,18 @@ export class SimWorld {
   private escalate(
     u: SimUnit,
     cells: Array<[number, number]> | null,
+  /**
+   * The last detour the sliced search landed, kept for the wave that is coming the same way.
+   * The escalated search serves one unit at a time, so a wave of fifty past a treeline was
+   * fifty detours found one after another, a second apart, with the other forty-nine walking
+   * into the trees meanwhile. A route found through the TERRAIN is good for anyone going to
+   * the same place from the same side, so a later plan that comes back short toward the same
+   * goal joins it instead (`adoptSharedRoute`): a short search to its nearest cell, then the
+   * rest of it. Dated by the grid's stamp version, because a tree coming down is the one
+   * thing that changes what the route is a route through. Bodies are not its problem —
+   * repairs mend a route around those as it is walked.
+   */
+  private sharedRoute: { cells: Array<[number, number]>; goal: [number, number]; domain: PathDomain; footprint: number; version: number } | null = null;
     start: [number, number],
     goal: [number, number],
     domain: PathDomain,

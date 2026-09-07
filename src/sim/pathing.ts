@@ -125,6 +125,9 @@ export class PathingGrid {
   private regionStack: Int32Array | null = null;
   private clearances = new Map<PathDomain, Uint8Array>();
   private regionsDirty = true;
+  /** Bumped whenever a stamp goes down or comes up — the moment a route found through the
+   *  terrain may stop being one. What `SimWorld.sharedRoute` is dated by. */
+  stampVersion = 0;
 
   constructor(data: PathingData, centerOffset: readonly [number, number]) {
     this.width = data.width;
@@ -303,7 +306,7 @@ export class PathingGrid {
     // the second tree on a cell shuts nothing that was open) — and it is only a change that
     // invalidates the region labels. A treeline being stamped at map load is thousands of
     // calls; this makes all but the first of them free.
-    if (this.blockStamps[cy * this.width + cx]++ === 0) this.regionsDirty = true;
+    if (this.blockStamps[cy * this.width + cx]++ === 0) { this.regionsDirty = true; this.stampVersion++; }
   }
 
   /** Release one stamp of a cell (felled tree / collapsed building footprint). The cell
@@ -312,7 +315,7 @@ export class PathingGrid {
   unblock(cx: number, cy: number): void {
     if (!this.inBounds(cx, cy) || !this.blockStamps) return;
     const i = cy * this.width + cx;
-    if (this.blockStamps[i] > 0 && --this.blockStamps[i] === 0) this.regionsDirty = true;
+    if (this.blockStamps[i] > 0 && --this.blockStamps[i] === 0) { this.regionsDirty = true; this.stampVersion++; }
   }
 
   /** Mark/clear a cell unbuildable — building footprints' full (blue) extent, so

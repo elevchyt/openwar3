@@ -184,6 +184,16 @@ peak 201 → **78 ms**, worst sim step peak 208 → **103**, for 0.06 ms/frame. 
 the fog and the sliced-search lessons above: separate what a pass DECIDES from what it DOES,
 and let the doing take as many steps as its natural unit needs.
 
+**A WAVE FINDS ITS DETOUR ONCE.** The escalated search serves one unit at a time, so fifty
+soldiers past a treeline were fifty detours found a second apart while the other forty-nine
+walked into the trees — and Computer+ re-states a wave's order every pass its march waypoint
+drifts, so each landed detour was thrown away within 1.5 s by a from-scratch floor plan
+(`routeStillServes` is the fix for that: a re-issue to the same place keeps a route that reaches
+it or has its detour pending). A landed detour is now the wave's (`SimWorld.sharedRoute`,
+`pathShared` rate): a later plan toward the same goal that comes back short joins it with a
+short search. Twelve units re-issued every 1.5 s past a 300-cell treeline: 1 of 12 in 300 s
+before, 12 of 12 in 68 s after, on one landed detour shared fourteen times.
+
 ## A counter that is not a cost
 
 `pathNodes` is the sum of every unit's remaining WAYPOINTS. It is a census of what the units are

@@ -561,5 +561,54 @@ console.log("no single step pays for the detour");
     worstStep <= 3 * PATH_FLOOR_EXPANSIONS);
 }
 
+// A WAVE gets past the treeline — re-issued every pass, as a computer's is.
+//
+// The treeline bug's real mechanism (SimWorld.routeStillServes): Computer+ re-states a wave's
+// attack-move every pass in which its march waypoint has drifted, a re-plan from scratch past
+// a big obstacle is a floor search best-effort INTO the trees, and the one detour a second the
+// sliced search lands was thrown away within 1.5 s. Twelve units re-issued every 1.5 s past
+// the group test's 300-cell treeline arrived 1 of 12 in 300 s, eleven standing at the trees,
+// after 150 landed detours and 27,538 searches. A re-issue to the same place now keeps a route
+// that reaches it or has its detour pending, and a landed detour is shared with the wave
+// (SimWorld.sharedRoute), so the second unit does not wait a second for its own.
+console.log("a wave re-issued every pass still gets past the treeline");
+{
+  const { setSimProfiler } = require(join(REPO, ".sim-build", "src", "sim", "profile.js"));
+  const SIM_DT = 1 / 60;
+  const SIDE = 768, WALL = SIDE >> 1, WALL_TOP = 300, N = 12;
+  const flags = new Uint8Array(SIDE * SIDE);
+  for (let y = 0; y < WALL_TOP; y++)
+    for (let k = 0; k < 6; k++) flags[y * SIDE + WALL + k] = PathingFlag.Unwalkable;
+  const world = new SimWorld(new PathingGrid({ width: SIDE, height: SIDE, flags }, [0, 0]), 1);
+  for (let i = 0; i < N; i++) world.add({
+    id: i + 1, owner: 0, team: 0, typeId: "hfoo", x: (WALL - 40) * 32 + (i % 4) * 40, y: 20 * 32 + Math.floor(i / 4) * 40, facing: 0,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 3000, sightNight: 3000,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [], oldWeapons: [],
+  });
+  let landed = 0, shared = 0, searches = 0;
+  setSimProfiler({ begin() {}, end() {}, gauge() {},
+    tally(name, n = 1) { if (name === "pathJobsLanded") landed += n; if (name === "pathShared") shared += n; if (name === "pathSearches") searches += n; } });
+  const goalX = (WALL + 40) * 32, goalY = 20 * 32;
+  const order = () => { for (let i = 0; i < N; i++) world.issueAttackMove(i + 1, goalX, goalY); };
+  order();
+  const there = () => { let n = 0; for (let k = 1; k <= N; k++) if (world.units.get(k).x > goalX - 200) n++; return n; };
+  let t = 0, since = 0;
+  for (let i = 0; i < Math.round(150 / SIM_DT) && there() < N; i++) {
+    world.tick(SIM_DT); t += SIM_DT; since += SIM_DT;
+    if (since >= 1.5) { since = 0; order(); } // the pass, re-stating the wave's order
+  }
+  setSimProfiler(null);
+  check(`all ${N} got past the trees (${there()}/${N}, in ${t.toFixed(0)}s)`, there() === N);
+  check(`on ${landed} landed detour${landed === 1 ? "" : "s"}, shared ${shared} time${shared === 1 ? "" : "s"}`, landed >= 1 && shared >= 1);
+  check(`and ${searches} searches in all, not tens of thousands`, searches < 1000);
+}
+
 console.log(failures ? `\ndetour: ${failures} check(s) FAILED` : "\ndetour: all checks passed");
 process.exit(failures ? 1 : 0);
