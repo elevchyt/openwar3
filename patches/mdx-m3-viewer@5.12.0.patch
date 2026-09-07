@@ -2164,3 +2164,73 @@ index ccaf93519a59b78b909a15a36d6bad88b8db986f..8d0fb463d4154e99aca52bba51f3353e
              for (const index of this.objects) {
                  const batch = batches[index];
                  const geoset = batch.geoset;
+diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
+index b80da6448a597b662087852d83a1f499c2ed0173..d5d8afa8b489dd57f20a698e22812aff0ca7b9a5 100644
+--- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
++++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
+@@ -68,6 +68,13 @@ class MdxModelInstance extends modelinstance_1.default {
+         this.uvAnims = [];
+         this.worldMatrices = null;
+         this.boneTexture = null;
++        // OpenWar3: has anything moved since the bone texture was last uploaded? `updateNodes`
++        // already decides this per node -- `wasDirty` is what tells it whether to recompute a
++        // node's world matrix at all -- so the answer costs nothing to collect, and the world
++        // matrices CANNOT have changed unless at least one node was dirty, because
++        // `recalculateTransformation` is the only thing that writes them. See updateBoneTexture.
++        this.ow3BonesDirty = true;
++        this.ow3BonesUploaded = false;
+         for (let i = 0, l = model.geosets.length; i < l; i++) {
+             this.geosetColors[i] = new Float32Array(4);
+         }
+@@ -257,6 +264,7 @@ class MdxModelInstance extends modelinstance_1.default {
+             }
+         }
+         // Update the nodes
++        let anyDirty = forced; // OpenWar3: see updateBoneTexture
+         for (let i = 0, l = sortedNodes.length; i < l; i++) {
+             const genericObject = sortedGenericObjects[i];
+             const node = sortedNodes[i];
+@@ -306,6 +314,7 @@ class MdxModelInstance extends modelinstance_1.default {
+             node.wasDirty = wasDirty;
+             // If this is a forced update, or this node's local data was updated, or the parent node was updated, do a full world update.
+             if (wasDirty) {
++                anyDirty = true; // OpenWar3
+                 node.recalculateTransformation(this);
+             }
+             // If there is an instance object associated with this node (emitter/attachment), and it is visible, update it.
+@@ -325,6 +334,7 @@ class MdxModelInstance extends modelinstance_1.default {
+                 child.update(dt);
+             }
+         }
++        this.ow3BonesDirty = anyDirty; // OpenWar3
+     }
+     /**
+      * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
+@@ -418,9 +428,26 @@ class MdxModelInstance extends modelinstance_1.default {
+             }
+         }
+     }
++    /**
++     * Hand this instance's bone matrices to the GPU -- but only when they have actually changed.
++     *
++     * This is one `bindTexture` plus one `texSubImage2D` per instance per frame, and the cost is
++     * almost entirely the CALL rather than the bytes: measured at ~2 microseconds an instance
++     * whether it carries three bones or two hundred. Half of them were paying it to upload a pose
++     * identical to last frame's. Probed in a real match with 249 visible instances: 127 unchanged
++     * against 122 changed, and the split was exactly by model -- every unit animating, every tree
++     * standing still. A doodad's Stand sequence has no tracks, so `updateNodes` marks not one of
++     * its nodes dirty and `recalculateTransformation`, the only thing that writes `worldMatrices`,
++     * never runs. Uploading it again cannot say anything new.
++     *
++     * `ow3BonesUploaded` is separate from the dirty flag so the FIRST upload always happens, even
++     * for an instance whose very first update somehow finds nothing dirty.
++     */
+     updateBoneTexture() {
+-        if (this.boneTexture) {
++        if (this.boneTexture && (this.ow3BonesDirty || !this.ow3BonesUploaded)) {
+             this.boneTexture.bindAndUpdate(this.worldMatrices);
++            this.ow3BonesUploaded = true;
++            this.ow3BonesDirty = false;
+         }
+     }
+     // OpenWar3 (issue #66): a faded instance (vertex-colour alpha < 1 — Wind Walk,

@@ -151,6 +151,19 @@ UNIT so the cache has one entry per unit rather than a new one every 64 world un
 what made it findable: `sim.fog` was already a phase of its own, so the report named it without
 anybody profiling anything.
 
+**THE SAME ANSWER, UPLOADED AGAIN.** Every MDX instance owns a bone-matrix texture and re-sent it
+to the GPU every frame — one `bindTexture` plus one `texSubImage2D` apiece, and the cost is almost
+entirely the CALL rather than the bytes: ~2 µs an instance whether it carries three bones or two
+hundred. Probed in a real match with 249 visible instances, **127 of those uploads were identical
+to the previous frame's**, and the split was exactly by model: every unit animating, every tree
+standing still. A doodad's Stand sequence has no tracks, so `updateNodes` marks not one of its
+nodes dirty and `recalculateTransformation` — the only thing that writes `worldMatrices` — never
+runs. The fix is to notice, and `updateNodes` already knew: `wasDirty` per node is what tells it
+whether to recompute that node at all, so collecting it costs nothing. **Look for this wherever
+something is PUSHED on a clock rather than on a change** — and note the shape it shares with the
+fog rebuild above: neither was doing anything wrong, both were answering a question nobody had
+asked again.
+
 ## Adding to it
 
 - **A new phase**: `perfLog.begin("name")` / `perfLog.end("name")` around a stretch of the
