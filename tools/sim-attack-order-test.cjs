@@ -493,5 +493,63 @@ console.log("attack-move picks the army over the workers over the buildings");
   }
 }
 
+// ── A surround slot is a place the unit can STRIKE from ────────────────────────────────
+// assignAttackSlot laid its rings out `spacing` apart (56 for a Footman) while the strike
+// band engage() plants in is only range + ATTACK_LEASH — so every ring past the first was
+// ground a melee unit could stand on and never swing from. A unit handed such a slot walked
+// to it, found itself out of range, chased the enemy's centre on a detour round the ring,
+// and then walked straight back when the cell it had just left read as a reachable slot
+// again: a unit "wiggling between two tiles for a second or two" until the stall watchdog
+// held it. Twelve Footmen on one enemy is the crowd that hands out outer-ring slots; before
+// the fix seven of them logged 4+ direction reversals inside one second (94 in all), after
+// it none do and more of them are in the fight.
+console.log("a crowd on one enemy closes without wiggling");
+{
+  const w = new SimWorld(grid(), 1);
+  let id = 1;
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) addUnit(w, id++, 0, 400 + c * 64, 400 + r * 64);
+  const enemy = addUnit(w, 99, 1, 1200, 500);
+  for (let i = 1; i < id; i++) w.issueAttack(i, enemy.id, false, true);
+  const prev = new Map(); // id -> last displacement
+  const reversals = new Map(); // id -> times a unit turned straight back on itself
+  let worstWindow = 0;
+  const times = new Map();
+  for (let i = 0; i < Math.round(8 / SIM_DT); i++) {
+    w.tick(SIM_DT);
+    for (const u of w.units.values()) {
+      if (u.owner !== 0) continue;
+      const p = prev.get(u.id);
+      const cur = { x: u.x, y: u.y, dx: p ? u.x - p.x : 0, dy: p ? u.y - p.y : 0 };
+      prev.set(u.id, cur);
+      if (!p) continue;
+      const len = Math.hypot(cur.dx, cur.dy), plen = Math.hypot(p.dx, p.dy);
+      if (len > 0.5 && plen > 0.5 && (cur.dx * p.dx + cur.dy * p.dy) / (len * plen) < -0.3) {
+        reversals.set(u.id, (reversals.get(u.id) ?? 0) + 1);
+        const ts = times.get(u.id) ?? [];
+        ts.push(i * SIM_DT);
+        times.set(u.id, ts);
+        // reversals inside the last second
+        let k = 0;
+        while (ts[k] < i * SIM_DT - 1) k++;
+        worstWindow = Math.max(worstWindow, ts.length - k);
+      }
+    }
+  }
+  const total = [...reversals.values()].reduce((a, b) => a + b, 0);
+  check(`no unit turned back on itself more than twice in any second (worst ${worstWindow})`, worstWindow <= 2);
+  check(`few reversals in all (${total}; 94 before the fix)`, total <= 12);
+  const attackers = [...w.units.values()].filter((u) => u.owner === 0);
+  const fighting = attackers.filter((u) => u.inCombat).length;
+  check(`most of the crowd is in the fight (${fighting}/${attackers.length})`, fighting >= 9);
+  // …and every slot handed out is inside the strike band: hull gap ≤ range + ATTACK_LEASH.
+  let outOfBand = 0;
+  for (const u of attackers) {
+    if (u.atkOffTarget !== enemy.id || (u.atkOffX === 0 && u.atkOffY === 0)) continue;
+    const gap = Math.hypot(u.atkOffX, u.atkOffY) - u.radius - enemy.radius;
+    if (gap > 90 + 48) outOfBand++;
+  }
+  check(`no slot lies outside the strike band (${outOfBand} did)`, outOfBand === 0);
+}
+
 console.log(failures === 0 ? "\nattack-order: all checks passed" : `\nattack-order: ${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

@@ -8075,7 +8075,20 @@ export class SimWorld {
     // range), so a melee unit that reaches its slot is exactly in range — the slots
     // ARE the surround positions, giving a full ring of them rather than a tight
     // clump the units overshoot.
-    const stand = tr + wr + Math.min(this.weaponVs(u, t)?.range ?? 0, 160);
+    const range = this.weaponVs(u, t)?.range ?? 0;
+    const stand = tr + wr + Math.min(range, 160);
+    // …and EVERY ring has to be a place the unit can strike from, or it is not a surround
+    // position at all. The rings step out by `spacing` (56 for a Footman) while the strike
+    // band engage() plants in is only range + ATTACK_LEASH (48 past the inner ring), so for
+    // a melee unit the second ring is already ground it can stand on and never swing from.
+    // A unit handed such a slot walked to it, found itself out of range, and chased the
+    // enemy's centre instead — on a detour round the ring, since the direct line is the
+    // ring — whereupon the cell it had just vacated read as a reachable slot again and it
+    // walked straight back: the "wiggles between two tiles for a second or two" that ends
+    // only when the stall watchdog holds it. So the outer rings are simply not offered. A
+    // unit that finds no in-band slot free chases the enemy itself, walks up to the ring
+    // and waits there for a gap, as WC3's extras do around a surrounded target.
+    const band = range + ATTACK_LEASH;
     // Own footprint origin — exempt from the reachability line check so the unit can
     // step off the tile it's standing on.
     const [oX0, oY0] = this.grid.footprintOrigin(u.x, u.y, u.footprint);
@@ -8085,6 +8098,7 @@ export class SimWorld {
     let fallbackD = Infinity;
     for (let ring = 0; ring < 8; ring++) {
       const rr = stand + ring * spacing;
+      if (ring > 0 && rr - tr - wr > band) break; // out of reach — not a surround position
       const n = Math.max(1, Math.floor((2 * Math.PI * rr) / spacing));
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2 + ring * 0.618; // golden-ish stagger between rings
@@ -15372,12 +15386,34 @@ export class SimWorld {
     // that eventually rescues this; attack-move calls engage() directly and has none, which
     // is how an attack-moved squad ended up with members frozen mid-field, in range of
     // nothing, staring at a grunt 250 units away (issue #108).
-    if (u.atkOffTarget === t.id && (u.atkOffX !== 0 || u.atkOffY !== 0)) {
-      if (this.chasePoint(u, t.x + u.atkOffX, t.y + u.atkOffY)) return;
-    } else {
+    if (u.repathT > 0) return; // committed to a hold / cooling down after a block
+    const slotted = u.atkOffTarget === t.id && (u.atkOffX !== 0 || u.atkOffY !== 0);
+    if (!slotted) {
       this.chasePoint(u, t.x, t.y);
       return;
     }
+    const sx = t.x + u.atkOffX;
+    const sy = t.y + u.atkOffY;
+    // Already on the way — to the slot, or to the enemy itself after the slot fell through
+    // below — keep walking; re-plan only when the target has dragged the aim away
+    // (chasePoint's own CHASE_REPATH rule). This used to be asked of the SLOT alone, so once
+    // the fallback had aimed the route at the enemy's centre every following tick found the
+    // slot more than CHASE_REPATH from where the route was aimed, planned to the slot again,
+    // failed again and planned to the centre again: two A* searches per unit per tick for
+    // the whole approach, and a route that could change under the unit's feet each time.
+    if (u.moving && (Math.hypot(sx - u.chaseX, sy - u.chaseY) < CHASE_REPATH || Math.hypot(t.x - u.chaseX, t.y - u.chaseY) < CHASE_REPATH)) return;
+    // Standing on the slot already. pathTo answers "no route" to a point inside the cell
+    // the unit occupies, which is not the same thing as the slot being walled off — and
+    // reading it as that is what sent the unit off round the ring to the enemy's centre
+    // from a spot it had every right to be standing on. engage() has already decided the
+    // slot is out of the strike band (that is why we are here), so the slot is no use:
+    // let it go, and take a fresh one on the next stall or hand the chase to the enemy itself.
+    if (Math.hypot(sx - u.x, sy - u.y) <= PATHING_CELL) {
+      u.atkOffTarget = -1;
+      if (this.canReachToAttack(u, t)) this.chasePoint(u, t.x, t.y);
+      return;
+    }
+    if (this.pathTo(u, sx, sy, COMBAT_EXPANSIONS)) return;
     // The slot was unreachable. Only walk at the enemy itself if we can genuinely GET to
     // it — a best-effort path exists toward anything, so an unconditional fallback would
     // march a unit ordered at a walled-off enemy into the wall and then shuffle it along
