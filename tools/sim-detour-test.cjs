@@ -18,7 +18,7 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { PathingGrid, PathingFlag } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
-const { findPath, pathExpansionsSpent, PATH_FLOOR_EXPANSIONS } = require(join(REPO, ".sim-build", "src", "sim", "pathfind.js"));
+const { findPath, beginPath, PathScratch, pathExpansionsSpent, PATH_FLOOR_EXPANSIONS } = require(join(REPO, ".sim-build", "src", "sim", "pathfind.js"));
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 
 let failures = 0;
@@ -485,6 +485,80 @@ console.log("the poll mends the route it has rather than planning a new one");
   check(`it got there (in ${t.toFixed(0)}s)`, arrived());
   check(`the poll mended the route (${repairs} repair${repairs === 1 ? "" : "s"})`, repairs >= 1);
   check(`and nothing was escalated (dearest ${dearest})`, dearest <= PATH_FLOOR_EXPANSIONS);
+}
+
+// A search cut into slices answers exactly what the same search answers in one go.
+//
+// The escalated search now runs across sim steps (SimWorld.pumpPathJob). It is the same
+// loop on a working set of its own, and the slice boundary is counted in expansions, so a
+// replay and a LAN client — which never see the wall clock — get the same route cell for
+// cell. Checked on the treeline the group test uses, which is a real ~100k-expansion detour.
+console.log("a sliced search is the same search");
+{
+  const SIDE = 768, WALL = SIDE >> 1, WALL_TOP = 300;
+  const flags = new Uint8Array(SIDE * SIDE);
+  for (let y = 0; y < WALL_TOP; y++)
+    for (let k = 0; k < 6; k++) flags[y * SIDE + WALL + k] = PathingFlag.Unwalkable;
+  const g = new PathingGrid({ width: SIDE, height: SIDE, flags }, [0, 0]);
+  const from = [WALL - 40, 20], to = [WALL + 40, 20];
+  const whole = findPath(g, from, to, undefined, undefined, "ground", undefined, 2);
+  const spentWhole = pathExpansionsSpent();
+  const own = new PathScratch();
+  const job = beginPath(own, g, from, to, undefined, undefined, "ground", undefined, 2);
+  let slices = 0;
+  while (!job.run(8192)) slices++;
+  const sliced = job.result();
+  const same = whole.length === sliced.length && whole.every((c, i) => c[0] === sliced[i][0] && c[1] === sliced[i][1]);
+  check(`it took ${slices + 1} slices of 8192 for ${job.expansions} expansions (one-go: ${spentWhole})`, job.expansions === spentWhole);
+  check(`and produced the identical ${sliced.length}-cell path`, same);
+  check(`which reaches the goal`, sliced.length > 1 && sliced[sliced.length - 1][0] === to[0] && sliced[sliced.length - 1][1] === to[1]);
+}
+
+// …and no sim step ever pays for the whole of it. The group test above is the escalation
+// in anger — four units, a 300-cell treeline, a detour the floor cannot find — so it is run
+// again here with the profiler counting what each STEP spends. Before slicing, one step
+// carried the entire detour (~100k expansions); now no step carries more than a plan, a
+// slice and a handful of repairs.
+console.log("no single step pays for the detour");
+{
+  const { setSimProfiler } = require(join(REPO, ".sim-build", "src", "sim", "profile.js"));
+  const SIM_DT = 1 / 60;
+  const SIDE = 768, WALL = SIDE >> 1, WALL_TOP = 300, N = 4;
+  const flags = new Uint8Array(SIDE * SIDE);
+  for (let y = 0; y < WALL_TOP; y++)
+    for (let k = 0; k < 6; k++) flags[y * SIDE + WALL + k] = PathingFlag.Unwalkable;
+  const world = new SimWorld(new PathingGrid({ width: SIDE, height: SIDE, flags }, [0, 0]), 1);
+  for (let i = 0; i < N; i++) world.add({
+    id: i + 1, owner: 0, team: 0, typeId: "hfoo", x: (WALL - 40) * 32 + i * 40, y: 20 * 32, facing: 0,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 3000, sightNight: 3000,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [], oldWeapons: [],
+  });
+  let thisStep = 0, worstStep = 0, landed = 0, total = 0;
+  setSimProfiler({ begin() {}, end() {}, gauge() {},
+    tally(name, n = 1) {
+      if (name === "pathExpansions") { thisStep += n; total += n; }
+      if (name === "pathJobsLanded") landed += n;
+    } });
+  const goalX = (WALL + 40) * 32;
+  for (let i = 0; i < N; i++) world.issueMove(i + 1, goalX, 20 * 32);
+  const there = () => { let n = 0; for (let k = 1; k <= N; k++) if (world.units.get(k).x > goalX - 200) n++; return n; };
+  let t = 0;
+  for (let i = 0; i < Math.round(150 / SIM_DT) && there() < N; i++) {
+    thisStep = 0; world.tick(SIM_DT); t += SIM_DT;
+    if (thisStep > worstStep) worstStep = thisStep;
+  }
+  setSimProfiler(null);
+  check(`all ${N} still get to the far side (${there()}/${N}, in ${t.toFixed(0)}s)`, there() === N);
+  check(`the detours landed as jobs (${landed})`, landed >= 1);
+  check(`and the dearest step spent ${worstStep} expansions of ${total} — never the whole detour`,
+    worstStep <= 3 * PATH_FLOOR_EXPANSIONS);
 }
 
 console.log(failures ? `\ndetour: ${failures} check(s) FAILED` : "\ndetour: all checks passed");

@@ -164,6 +164,16 @@ something is PUSHED on a clock rather than on a change** — and note the shape 
 fog rebuild above: neither was doing anything wrong, both were answering a question nobody had
 asked again.
 
+**A SEARCH THAT NO LONGER FITS IN A FRAME IS SLICED, NOT SHRUNK.** The escalated path search
+— the one that pays for a real detour, up to 262,144 cells — used to run whole in one sim step:
+a 90–190 ms stall wherever it landed, and the whole of the pathfinding tail. It is now a JOB
+(`SimWorld.pumpPathJob`, its own `sim.world.move.job` span): the same loop on a working set of
+its own, `PATH_SLICE_EXPANSIONS` cells a step, counted in expansions so every machine slices at
+the same cell and a replay stays a replay. `pathJobsLanded` is how many finished per second.
+Measured on the same 4v4, worst single search 166 → **27.5 ms** and frames over 100 ms
+365 → **26**, for 0.39 ms/frame of job work. The pattern generalises: when one step's worst
+case is the problem, ask what the work's natural unit is and pay one unit per step.
+
 ## A counter that is not a cost
 
 `pathNodes` is the sum of every unit's remaining WAYPOINTS. It is a census of what the units are

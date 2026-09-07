@@ -1,5 +1,5 @@
 import { BUILD_CELL, BUILD_CELL_CELLS, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
-import { findPath, smoothPath, pathExpansionsSpent, PATH_FLOOR_EXPANSIONS } from "./pathfind";
+import { findPath, smoothPath, pathExpansionsSpent, PATH_FLOOR_EXPANSIONS, beginPath, PathScratch, type PathSearch } from "./pathfind";
 import { targsKindError } from "./targeting";
 import { corpseAdmits, corpseMissingError, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
@@ -2148,6 +2148,20 @@ const REPATH_LOOKAHEAD = PATHING_CELL * 5; // ~5 cells (160 world units) ahead
  * Feralas runs in the commit log.
  */
 const PATH_REPAIR_EXPANSIONS = 2048;
+/**
+ * What an ESCALATED search may spend per sim step. The escalated search is the one that pays
+ * for a real detour (up to MAX_EXPANSIONS_FAR = 262,144 cells, a 90–190 ms stall in one
+ * frame) and it is the only search that ever did; it now runs as a JOB, this many
+ * expansions a step, so no step pays more for it than a first plan costs today. The unit
+ * walks its floor best-effort route meanwhile and takes the full one when it lands — which
+ * is the trade Warcraft III makes (it throttles rather than drops frames; Warsmash does the
+ * same at 7,500 iterations a tick — docs/REFERENCES.md). Counted in EXPANSIONS so every
+ * machine slices at the same cell and a replay stays a replay.
+ */
+const PATH_SLICE_EXPANSIONS = PATH_FLOOR_EXPANSIONS;
+/** Turns the slicing off (the escalated search runs in one go, as before) so its worth can be
+ *  measured in a real match, the way TerrainCull.enabled and SightStamps.enabled are. */
+export const PathSlicing = { enabled: true };
 /** Reroutes (a full A* each) any ONE sim step may run. The stagger above is what normally
  *  keeps this slack; this is the backstop for the case it cannot help — a hundred units
  *  shoved into the same corridor by the same event, all blocked on the same step. A skipped
@@ -13549,6 +13563,7 @@ export class SimWorld {
     }
     simProfile.end("sim.world.units");
     simProfile.begin("sim.world.move");
+    this.pumpPathJob(); // the escalated search in flight gets its slice first (its own span)
     simProfile.begin("sim.world.move.walk");
     this.tickMovement(dt);
     this.carryPassengers(); // a transport's cargo moves with it
@@ -19299,16 +19314,27 @@ export class SimWorld {
     // Nothing is lost by refusing: this reroute is a local manoeuvre on a 0.3 s clock
     // (BLOCKED_REPATH_TIME), and when it finds nothing the fallback above has already turned
     // it into an ordinary search, which may escalate like any other.
+    // A new plan for this unit supersedes any escalated search still running for it.
+    if (this.pathJob && this.pathJob.unitId === u.id) this.pathJob = null;
     if (maxExpansions === undefined && !crowdWalls && this.escalate(u, cells, start, goal, domain, ring)) {
-      cells = findPath(this.grid, start, goal, blocked, undefined, domain, ring, u.footprint) ?? cells;
-      // Bill the allowance for what the search ACTUALLY cost, not for the ceiling it was
-      // allowed to reach. Nearly every escalation arrives long before the ceiling — the way
-      // round a forest is a fifth of it — and charging those the full wait is what made the
-      // ceiling a frame-time decision instead of a "how big can an obstacle be" one.
-      this.longSearchIn = Math.max(
-        LONG_SEARCH_EVERY,
-        Math.ceil(pathExpansionsSpent() / LONG_SEARCH_EXPANSIONS_PER_STEP),
-      );
+      if (PathSlicing.enabled) {
+        // The detour is paid for across sim steps (pumpPathJob), not here. The unit keeps the
+        // floor's best-effort route for now — it walks toward the obstacle exactly as it did
+        // while the whole search ran in one frame — and takes the full route when it lands.
+        this.jobScratch ??= new PathScratch();
+        const search = beginPath(this.jobScratch, this.grid, start, goal, blocked, undefined, domain, ring, u.footprint);
+        if (search) this.pathJob = { search, unitId: u.id, tx, ty, approach, blocked, domain };
+      } else {
+        cells = findPath(this.grid, start, goal, blocked, undefined, domain, ring, u.footprint) ?? cells;
+        // Bill the allowance for what the search ACTUALLY cost, not for the ceiling it was
+        // allowed to reach. Nearly every escalation arrives long before the ceiling — the way
+        // round a forest is a fifth of it — and charging those the full wait is what made the
+        // ceiling a frame-time decision instead of a "how big can an obstacle be" one.
+        this.longSearchIn = Math.max(
+          LONG_SEARCH_EVERY,
+          Math.ceil(pathExpansionsSpent() / LONG_SEARCH_EXPANSIONS_PER_STEP),
+        );
+      }
     }
     simProfile.gauge("pathSearch", perfNow() - searchAt);
     // A single-cell (or empty) result means the unit can't get any closer.
@@ -19321,6 +19347,22 @@ export class SimWorld {
     // glide straight toward each turn-point instead of stepping cell-to-cell in
     // 45° increments — the per-segment heading (and thus facing) then tracks the
     // real travel direction rather than zig-zagging and snapping on arrival.
+    this.installRoute(u, cells, tx, ty, approach, blocked, domain);
+    return true;
+  }
+
+  /** Turn a cell path into the unit's route: string-pull it, put each waypoint where the
+   *  footprint STANDS on its cell, and end on the settling nudge — pathTo's own tail, shared
+   *  with the sliced search's landing (pumpPathJob). */
+  private installRoute(
+    u: SimUnit,
+    cells: Array<[number, number]>,
+    tx: number,
+    ty: number,
+    approach: { hx: number; hy: number } | undefined,
+    blocked: ((cx: number, cy: number) => boolean) | undefined,
+    domain: PathDomain,
+  ): void {
     const smoothed = smoothPath(this.grid, cells, blocked, domain);
     // Waypoints are where the unit STANDS when its footprint is anchored on that cell —
     // footprintCenter, not cellToWorld. For an EVEN footprint (every unit whose collision
@@ -19342,11 +19384,69 @@ export class SimWorld {
     u.path = pts;
     u.waypoint = 0;
     u.moving = true;
-    return true;
+  }
+
+  /**
+   * Advance the escalated search in flight by one slice, and land it when it is done.
+   *
+   * Landing is conditional on the unit still wanting it: alive, still under an order, and
+   * still aimed at the same point. A unit re-ordered meanwhile already dropped the job in
+   * pathTo; one that died or arrived simply lets it go. A search that lands is billed to the
+   * allowance exactly as the one-frame search was, for what it actually spent.
+   */
+  private pumpPathJob(): void {
+    const job = this.pathJob;
+    if (!job) return;
+    simProfile.begin("sim.world.move.job");
+    const before = job.search.expansions;
+    const done = job.search.run(PATH_SLICE_EXPANSIONS);
+    simProfile.tally("pathExpansions", job.search.expansions - before);
+    simProfile.end("sim.world.move.job");
+    if (!done) return;
+    this.pathJob = null;
+    this.longSearchIn = Math.max(
+      LONG_SEARCH_EVERY,
+      Math.ceil(job.search.expansions / LONG_SEARCH_EXPANSIONS_PER_STEP),
+    );
+    simProfile.tally("pathJobsLanded");
+    const u = this.units.get(job.unitId);
+    if (!u || u.hp <= 0 || u.order === "idle" || u.chaseX !== job.tx || u.chaseY !== job.ty) return;
+    const cells = job.search.result();
+    if (cells.length <= 1) return; // no better than what it is already walking
+    // The unit has walked on since the search began; the route starts where the search did,
+    // so mend the first stretch onto where it stands now rather than teleport it back.
+    this.installRoute(u, cells, job.tx, job.ty, job.approach, job.blocked, job.domain);
+    if (u.path.length && Math.hypot(u.path[0][0] - u.x, u.path[0][1] - u.y) > PATHING_CELL * 2) {
+      const [sx, sy] = this.grid.footprintAnchor(u.x, u.y, u.footprint);
+      const [gx, gy] = this.grid.footprintAnchor(u.path[0][0], u.path[0][1], u.footprint);
+      simProfile.tally("pathSearches");
+      const join = findPath(this.grid, [sx, sy], [gx, gy], job.blocked, PATH_REPAIR_EXPANSIONS, job.domain, undefined, u.footprint);
+      simProfile.tally("pathExpansions", pathExpansionsSpent());
+      const end = join && join.length > 1 ? join[join.length - 1] : null;
+      if (join && end && end[0] === gx && end[1] === gy) {
+        const smoothed = smoothPath(this.grid, join, job.blocked, job.domain);
+        const pts = smoothed.slice(1).map(([cx, cy]) => this.grid.footprintCenter(cx, cy, u.footprint)) as Array<[number, number]>;
+        u.path = [...pts, ...u.path.slice(1)];
+      }
+      u.waypoint = 0;
+    }
   }
 
   /** Sim steps to wait between one escalated search and the next — see `escalate`. */
   private longSearchIn = 0;
+  /** The one escalated search in flight, if any — see `pumpPathJob`. One at a time: the
+   *  throttle above already spaces them, and one private working set is 25 bytes a cell. */
+  private pathJob: {
+    search: PathSearch;
+    unitId: number;
+    tx: number;
+    ty: number;
+    approach: { hx: number; hy: number } | undefined;
+    blocked: ((cx: number, cy: number) => boolean) | undefined;
+    domain: PathDomain;
+  } | null = null;
+  /** The job's own working set — allocated on the first escalation, kept for the match. */
+  private jobScratch: PathScratch | null = null;
 
   /**
    * Did the cheap search fall short of somewhere we can prove is reachable, and may we pay
@@ -19391,6 +19491,7 @@ export class SimWorld {
     ring?: (cx: number, cy: number) => number,
   ): boolean {
     if (this.longSearchIn > 0) return false;
+    if (this.pathJob) return false; // one in flight is enough — see pumpPathJob
     if (!cells || !cells.length) return false;
     const [ecx, ecy] = cells[cells.length - 1];
     // Arrived? An approach arrives when it is up against the thing (ring 0); a plain move

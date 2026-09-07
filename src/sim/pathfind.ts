@@ -164,7 +164,7 @@ export function pathExpansionsSpent(): number {
  * place of an O(width×height) wipe, which on a 256×256 grid is 65k writes per path and
  * would cost more than the search for a short one.
  */
-class PathScratch {
+export class PathScratch {
   size = 0;
   gen = 0;
   /** Generation that last wrote gScore/cameFrom for the cell. */
@@ -241,17 +241,17 @@ function octile(ax: number, ay: number, bx: number, by: number): number {
  *   • It stops early (ARRIVE_EXTRA) once ring 0 is touched, instead of flooding the
  *     reachable map looking for a goal cell it can never occupy.
  */
-export function findPath(
+/** What every search decides before it expands a cell: where it really starts and ends
+ *  (snapped to ground the mover can stand on), and what it may spend. */
+function prepare(
   grid: PathingGrid,
   start: Cell,
   goal: Cell,
-  blocked?: (cx: number, cy: number) => boolean,
-  maxExpansions?: number,
-  domain: PathDomain = "ground",
-  ring?: (cx: number, cy: number) => number,
-  footprint = 1,
-): Cell[] | null {
-  lastExpansions = 0;
+  maxExpansions: number | undefined,
+  domain: PathDomain,
+  ring: ((cx: number, cy: number) => number) | undefined,
+  footprint: number,
+): { from: Cell; to: Cell; budget: number } | null {
   const from = grid.nearestWalkable(start[0], start[1], undefined, domain);
   if (!from) return null;
   const startRegion = grid.regionAt(from[0], from[1], domain, footprint);
@@ -301,48 +301,115 @@ export function findPath(
     );
   }
 
-  const width = grid.width;
-  const height = grid.height;
-  const gen = scratch.begin(width * height);
-  const { seen, gScore, cameFrom, closed, openGen, openVal, heapF, heapH, heapK } = scratch;
-  const goalKey = to[1] * width + to[0];
+  return { from, to, budget };
+}
 
-  /**
-   * May the mover stand here — asked at most ONCE per cell per search.
-   *
-   * `blocked` is the clearance predicate (SimWorld.clearanceBlocker): for an n×n footprint
-   * it walks the whole block, so one call is up to 2n² grid reads. A* asks about the same
-   * cell over and over — every cell is a neighbour of up to eight expanded nodes, and the
-   * no-corner-cutting test asks about two more each time — so an unmemoized search paid that
-   * price ten to twenty-five times over for every cell it touched. This is the single
-   * biggest cost in the pass, and it is pure for the duration of a search: nothing reserves
-   * a cell or fells a tree while A* is running.
-   */
-  const open = (x: number, y: number): boolean => {
-    // Bounds first: the memo is indexed by y*width+x, which for a cell off the left edge
-    // would alias onto the row above. `grid.walkable` answers false out of bounds, and
-    // `blocked` is never consulted for one, so returning here is the same answer.
-    if (x < 0 || y < 0 || x >= width || y >= height) return false;
+export function findPath(
+  grid: PathingGrid,
+  start: Cell,
+  goal: Cell,
+  blocked?: (cx: number, cy: number) => boolean,
+  maxExpansions?: number,
+  domain: PathDomain = "ground",
+  ring?: (cx: number, cy: number) => number,
+  footprint = 1,
+): Cell[] | null {
+  lastExpansions = 0;
+  const prep = prepare(grid, start, goal, maxExpansions, domain, ring, footprint);
+  if (!prep) return null;
+  const { from, to, budget } = prep;
+  const search = new PathSearch(scratch, grid, from, to, blocked, domain, ring, budget);
+  search.run(Infinity);
+  lastExpansions = search.expansions;
+  return search.result();
+}
+
+/** The search's own working set is `findPath`'s; a JOB brings one of its own (`beginPath`).
+ *  Everything `findPath` decides before the loop — snapping, the labels, the budget — is
+ *  decided here once, so a sliced search asks the same questions and gets the same answers. */
+export function beginPath(
+  scratch: PathScratch,
+  grid: PathingGrid,
+  start: Cell,
+  goal: Cell,
+  blocked?: (cx: number, cy: number) => boolean,
+  maxExpansions?: number,
+  domain: PathDomain = "ground",
+  ring?: (cx: number, cy: number) => number,
+  footprint = 1,
+): PathSearch | null {
+  const prep = prepare(grid, start, goal, maxExpansions, domain, ring, footprint);
+  if (!prep) return null;
+  return new PathSearch(scratch, grid, prep.from, prep.to, blocked, domain, ring, prep.budget);
+}
+
+/**
+ * One A* search, resumable. `run(sliceMax)` expands at most `sliceMax` more cells and says
+ * whether the search is finished; `result()` is the path to the goal, or best-effort toward
+ * it, exactly as `findPath` would have returned it. The slice boundary is counted in
+ * EXPANSIONS and nothing else, so a search cut into pieces answers exactly what the same
+ * search run in one go answers, on every machine — which is what a replay and a LAN host
+ * need of it (tools/sim-detour-test.cjs pins it cell for cell).
+ *
+ * The state is the working set (`PathScratch`) plus a handful of numbers. A search that
+ * runs across sim steps therefore needs a scratch of its OWN: every synchronous search
+ * bumps the shared one's generation, which would wipe a paused search's marks under it.
+ */
+export class PathSearch {
+  readonly width: number;
+  readonly height: number;
+  readonly gen: number;
+  expansions = 0;
+  private limit: number;
+  private bestKey: number;
+  private bestH: number;
+  private bestG = 0;
+  private readonly goalKey: number;
+  private readonly startKey: number;
+  private readonly closeness: (cx: number, cy: number) => number;
+  private finished = false;
+
+  constructor(
+    private readonly scratch: PathScratch,
+    private readonly grid: PathingGrid,
+    from: Cell,
+    private readonly to: Cell,
+    private readonly blocked: ((cx: number, cy: number) => boolean) | undefined,
+    private readonly domain: PathDomain,
+    private readonly ring: ((cx: number, cy: number) => number) | undefined,
+    private readonly budget: number,
+  ) {
+    this.width = grid.width;
+    this.height = grid.height;
+    this.gen = scratch.begin(this.width * this.height);
+    this.goalKey = to[1] * this.width + to[0];
+    this.startKey = from[1] * this.width + from[0];
+    const { seen, gScore, cameFrom } = scratch;
+    seen[this.startKey] = this.gen;
+    gScore[this.startKey] = 0;
+    cameFrom[this.startKey] = -1;
+    this.hpush(this.startKey, 0, octile(from[0], from[1], to[0], to[1]));
+    this.closeness = ring ?? ((cx: number, cy: number) => octile(cx, cy, to[0], to[1]));
+    this.bestKey = this.startKey;
+    this.bestH = this.closeness(from[0], from[1]);
+    this.limit = budget;
+  }
+
+  /** May the mover stand here — asked at most ONCE per cell per search (see findPath). */
+  private open(x: number, y: number): boolean {
+    const width = this.width;
+    if (x < 0 || y < 0 || x >= width || y >= this.height) return false;
     const i = y * width + x;
-    if (openGen[i] === gen) return openVal[i] === 1;
-    const ok = grid.walkable(x, y, domain) && !(blocked && blocked(x, y));
-    openGen[i] = gen;
+    const { openGen, openVal } = this.scratch;
+    if (openGen[i] === this.gen) return openVal[i] === 1;
+    const ok = this.grid.walkable(x, y, this.domain) && !(this.blocked && this.blocked(x, y));
+    openGen[i] = this.gen;
     openVal[i] = ok ? 1 : 0;
     return ok;
-  };
+  }
 
-  // Binary min-heap of open nodes keyed on f (parallel arrays: f-value + cell key).
-  // Popping the lowest f was an O(open) linear scan, making a whole search O(n²) — a
-  // failing search floods MAX_EXPANSIONS cells, so with many units probing paths toward
-  // (often unreachable) attack targets it tanked the frame rate. The heap makes each
-  // pop/push O(log n). Decrease-key is handled lazily: a relaxed node is pushed again and
-  // any now-stale duplicate is skipped on pop via the closed set.
-  //
-  // Ordered by f, then by h (lower h — nearer the goal — wins ties). The h tie-break is
-  // the standard A* refinement: it drives the frontier straight at the goal, so a capped
-  // or unreachable search's best-effort endpoint lands as close to the goal as possible
-  // (and deterministically), rather than fanning out sideways.
-  const hpush = (k: number, g: number, h: number): void => {
+  private hpush(k: number, g: number, h: number): void {
+    const { heapF, heapH, heapK } = this.scratch;
     let i = heapF.length;
     heapF.push(g + h);
     heapH.push(h);
@@ -356,8 +423,10 @@ export function findPath(
         i = p;
       } else break;
     }
-  };
-  const hpop = (): number => {
+  }
+
+  private hpop(): number {
+    const { heapF, heapH, heapK } = this.scratch;
     const topK = heapK[0];
     const lastF = heapF.pop()!;
     const lastH = heapH.pop()!;
@@ -382,75 +451,69 @@ export function findPath(
       }
     }
     return topK;
-  };
+  }
 
-  const startKey = from[1] * width + from[0];
-  seen[startKey] = gen;
-  gScore[startKey] = 0;
-  cameFrom[startKey] = -1;
-  hpush(startKey, 0, octile(from[0], from[1], to[0], to[1]));
-
-  // Closeness measure for the best-effort endpoint: distance to the goal CELL normally,
-  // clearance from the target's own box in approach mode (see the `ring` note above).
-  const closeness = ring ?? ((cx: number, cy: number) => octile(cx, cy, to[0], to[1]));
-
-  let bestKey = startKey;
-  let bestH = closeness(from[0], from[1]);
-  let bestG = 0;
-  let expansions = 0;
-  let limit = budget;
-
-  while (heapF.length) {
-    const currentKey = hpop();
-    if (closed[currentKey] === gen) continue; // stale duplicate from a decrease-key
-    // An approach never "reaches" its goal — the goal is the thing itself, standing on
-    // cells nobody may occupy — so it is `ring` + the closeness rule that end it.
-    if (!ring && currentKey === goalKey) {
-      lastExpansions = expansions;
-      return reconstruct(cameFrom, seen, gen, currentKey, width);
-    }
-    closed[currentKey] = gen;
-    const cx = currentKey % width;
-    const cy = (currentKey / width) | 0;
-    const cg = gScore[currentKey];
-
-    const h = closeness(cx, cy);
-    if (h < bestH || (h === bestH && cg < bestG)) {
-      bestH = h;
-      bestG = cg;
-      bestKey = currentKey;
-    }
-    // First time we stand right against the target: give the search a short tail to settle
-    // on the cheapest such spot, then stop. Set once — `limit` only ever shrinks.
-    if (ring && limit === budget && h <= 0) {
-      limit = Math.min(budget, expansions + ARRIVE_EXTRA);
-    }
-    if (++expansions > limit) break;
-
-    // Flat, indexed neighbour walk. `for (const [dx, dy, cost] of NEIGHBORS)` allocated an
-    // iterator result and destructured a tuple on EVERY expansion — thousands per search,
-    // hundreds of thousands per wave, and all of it garbage.
-    for (let ni = 0; ni < 8; ni++) {
-      const nx = cx + NEIGHBOR_DX[ni];
-      const ny = cy + NEIGHBOR_DY[ni];
-      if (!open(nx, ny)) continue;
-      // No corner-cutting through a blocked orthogonal neighbour.
-      if (ni >= 4 && (!open(nx, cy) || !open(cx, ny))) continue;
-      const nKey = ny * width + nx;
-      if (closed[nKey] === gen) continue;
-      const tentative = cg + NEIGHBOR_COST[ni];
-      if (seen[nKey] !== gen || tentative < gScore[nKey]) {
-        seen[nKey] = gen;
-        cameFrom[nKey] = currentKey;
-        gScore[nKey] = tentative;
-        hpush(nKey, tentative, octile(nx, ny, to[0], to[1]));
+  /** Expand up to `sliceMax` more cells. True when the search is over — goal reached, frontier
+   *  exhausted, or budget spent — and `result()` may be read. */
+  run(sliceMax: number): boolean {
+    if (this.finished) return true;
+    const { seen, gScore, cameFrom, closed, heapF } = this.scratch;
+    const width = this.width;
+    const gen = this.gen;
+    const to = this.to;
+    const ring = this.ring;
+    const goalKey = this.goalKey;
+    let sliced = 0;
+    while (heapF.length) {
+      if (sliced >= sliceMax) return false; // …next step
+      const currentKey = this.hpop();
+      if (closed[currentKey] === gen) continue; // stale duplicate from a decrease-key
+      if (!ring && currentKey === goalKey) {
+        this.bestKey = currentKey;
+        this.finished = true;
+        return true;
+      }
+      closed[currentKey] = gen;
+      const cx = currentKey % width;
+      const cy = (currentKey / width) | 0;
+      const cg = gScore[currentKey];
+      const h = this.closeness(cx, cy);
+      if (h < this.bestH || (h === this.bestH && cg < this.bestG)) {
+        this.bestH = h;
+        this.bestG = cg;
+        this.bestKey = currentKey;
+      }
+      if (ring && this.limit === this.budget && h <= 0) {
+        this.limit = Math.min(this.budget, this.expansions + ARRIVE_EXTRA);
+      }
+      if (++this.expansions > this.limit) break;
+      sliced++;
+      for (let ni = 0; ni < 8; ni++) {
+        const nx = cx + NEIGHBOR_DX[ni];
+        const ny = cy + NEIGHBOR_DY[ni];
+        if (!this.open(nx, ny)) continue;
+        if (ni >= 4 && (!this.open(nx, cy) || !this.open(cx, ny))) continue;
+        const nKey = ny * width + nx;
+        if (closed[nKey] === gen) continue;
+        const tentative = cg + NEIGHBOR_COST[ni];
+        if (seen[nKey] !== gen || tentative < gScore[nKey]) {
+          seen[nKey] = gen;
+          cameFrom[nKey] = currentKey;
+          gScore[nKey] = tentative;
+          this.hpush(nKey, tentative, octile(nx, ny, to[0], to[1]));
+        }
       }
     }
+    this.finished = true;
+    return true;
   }
-  // Goal unreachable (or search capped): walk as close as we got, WC3-style.
-  lastExpansions = expansions;
-  return reconstruct(cameFrom, seen, gen, bestKey, width);
+
+  /** The path — to the goal, or as close as the search got. */
+  result(): Cell[] {
+    return reconstruct(this.scratch.cameFrom, this.scratch.seen, this.gen, this.bestKey, this.width);
+  }
 }
+
 
 /** Walk the parent chain back to the start. `seen`/`gen` stand in for the old Map's "has":
  *  a cell this search never wrote carries a stale generation, and the start cell — the one
