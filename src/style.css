@@ -2735,6 +2735,20 @@ body.in-game .fdf-screen.fdf-ingame {
    background. */
 .fdf-popup-item:hover,
 .fdf-popup-item.selected { color: var(--fdf-menu-highlight, #fcd312); }
+/* The colour menu's rows: one chip each, centred in a column as wide as the button that
+   dropped it (ui/fdf/widgets.ts — the game's TeamColorMenu prints nothing). The chip under
+   the mouse takes the same gold the text menus tint their row with, as a rim. */
+.fdf-popup-item-swatch {
+  justify-content: center;
+  padding: 1px 0;
+}
+.fdf-popup-swatch {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.85);
+}
+.fdf-popup-item-swatch:hover .fdf-popup-swatch,
+.fdf-popup-item-swatch.selected .fdf-popup-swatch {
+  outline: 1px solid var(--fdf-menu-highlight, #fcd312);
+}
 
 /* The dropdown's own label: one line, clipped where the pulldown arrow begins (the frame
    itself is a flex box laid out by the renderer, so the clipping belongs on the span). */

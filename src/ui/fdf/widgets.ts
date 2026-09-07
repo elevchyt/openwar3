@@ -400,7 +400,21 @@ export function buildPopup(
       item.className = "fdf-popup-item";
       if (o.value === value) item.classList.add("selected");
       if (style) item.style.height = `${style.itemHeight}px`;
-      item.textContent = o.label;
+      if (opts.swatchEl && opts.paintSwatch) {
+        // A menu whose closed face is a swatch drops a column of swatches: the game's own
+        // colour list (PlayerSlot.fdf's TeamColorMenu) is a bordered box of colour chips and
+        // prints no text at all. Each chip is the closed face's own size, painted the same way.
+        item.classList.add("fdf-popup-item-swatch");
+        const chip = document.createElement("div");
+        chip.className = "fdf-popup-swatch";
+        const side = opts.swatchEl.offsetWidth || (style ? style.itemHeight * 0.85 : 12);
+        chip.style.width = `${side}px`;
+        chip.style.height = `${opts.swatchEl.offsetHeight || side}px`;
+        opts.paintSwatch(chip, o.value);
+        item.appendChild(chip);
+      } else {
+        item.textContent = o.label;
+      }
       item.addEventListener("click", (e) => {
         e.stopPropagation();
         close();
