@@ -19512,9 +19512,15 @@ export class SimWorld {
       const m = o.footprint;
       const [ox0, oy0] = this.grid.footprintOrigin(o.x, o.y, m);
       if (!(ox0 < bx0 + n && bx0 < ox0 + m && oy0 < by0 + n && by0 < oy0 + m)) continue; // not in our way
-      // A tile of its own to step onto: any neighbouring block it fits in that is clear of
-      // the one we want. Nearest ring first, so the shuffle is as small as it can be.
-      for (let r = 1; r <= 2 && !o.moving; r++) {
+      // A tile of its own to step onto: a neighbouring block it fits in that is clear of the
+      // one we want — and, of those, the one FARTHEST FROM US. Taking the first clear block
+      // in ring order could pick the block on our own side, so the ally stepped INTO the
+      // unit it was making way for: the two met head-on in the gap, the errand parked, and
+      // the ally settled back inside the gap it had been asked to leave. Stepping aside means
+      // away from what is coming. Nearest ring still wins a tie, so the shuffle stays small.
+      let best: [number, number] | null = null;
+      let bestD = -1;
+      for (let r = 1; r <= 2 && !best; r++) {
         for (let dy = -r; dy <= r; dy++) {
           for (let dx = -r; dx <= r; dx++) {
             if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
@@ -19523,21 +19529,40 @@ export class SimWorld {
             if (cx0 < bx0 + n && bx0 < cx0 + m && cy0 < by0 + n && by0 < cy0 + m) continue; // still in the way
             if (!this.blockClaimable(o, cx0, cy0)) continue;
             const [sx, sy] = this.grid.footprintCenter(cx0 + (m >> 1), cy0 + (m >> 1), m);
-            // Written onto the path directly rather than through pathTo(), so the ally's
-            // OWN destination (chaseX/chaseY) survives the errand: it steps out of the way
-            // and then carries straight on with the order it was already under.
-            o.path = [[sx, sy]];
-            o.waypoint = 0;
-            o.moving = true;
-            o.waitT = 0;
-            o.stuckT = 0;
-            o.desiredFacing = Math.atan2(sy - o.y, sx - o.x);
-            break;
+            const dist = Math.hypot(sx - u.x, sy - u.y);
+            if (dist > bestD) { bestD = dist; best = [sx, sy]; }
           }
-          if (o.moving) break;
         }
       }
-      if (o.moving) return; // one is enough — the corridor only needs one row back
+      if (!best) continue; // boxed in — somebody else may still have room
+      const [sx, sy] = best;
+      // Written onto the path directly rather than through pathTo(), so the ally's
+      // OWN destination (chaseX/chaseY) survives the errand: it steps out of the way
+      // and then carries straight on with the order it was already under.
+      //
+      // …but its RESERVATION must not survive it. pathTo would have released it; this
+      // did not, and `settle` returns early for a unit that still holds one — so the
+      // ally arrived, never reserved the block it now stood on, and never gave up the
+      // one it had left: a phantom 2×2 wall where it used to be, and a body nothing
+      // could path around where it was. Seen in a trace as a unit at one place with
+      // its reservation at another. The walk claims its cells the ordinary way.
+      this.unsettle(o);
+      // An IDLE ally's chase point is stale — the birth default (0,0) for a unit that
+      // was trained and never ordered, which is most of what stands about a base — and
+      // every reroute re-aims at the chase point: a poll or a repair that hits the
+      // errand mid-way sent the ally walking to the map corner. The errand IS its
+      // destination, so say so. A WAITING ally (parked mid-order) keeps its own.
+      if (o.order === "idle") {
+        o.chaseX = sx;
+        o.chaseY = sy;
+      }
+      o.path = [[sx, sy]];
+      o.waypoint = 0;
+      o.moving = true;
+      o.waitT = 0;
+      o.stuckT = 0;
+      o.desiredFacing = Math.atan2(sy - o.y, sx - o.x);
+      return; // one is enough — the corridor only needs one row back
     }
   }
 
@@ -19721,7 +19746,16 @@ export class SimWorld {
       // Stopped, dead, boarded or ghosting: a claim it may still hold is stale. (settle()
       // normally hands it back; this catches every other way movement can end.)
       if ((u.moving || u.waitT > 0) && this.claimsCells(u)) this.ensureClaim(u);
-      else if (u.hasClaim) this.releaseClaim(u);
+      else if (u.hasClaim) {
+        // A body that has STOPPED holds ground as a reservation — that is the invariant the
+        // two layers are built on, and it had a hole: an IDLE unit whose wait ran out. A unit
+        // under an order is picked back up by resumeRoute, which settles or re-plans it; an
+        // idle one (an ally makeWay shuffled and checkStuck then parked) had nobody to do
+        // either, so its claim was dropped here and it stood on nothing — walked through by
+        // the next unit along, as a trace showed at (948,671). Settle it instead.
+        if (u.order === "idle" && !u.hasReservation && this.claimsCells(u)) this.settle(u);
+        else this.releaseClaim(u);
+      }
     }
     simProfile.end("sim.world.move.walk.claims");
     for (const u of this.units.values()) {
@@ -19755,7 +19789,20 @@ export class SimWorld {
         const dx = wx - u.x;
         const dy = wy - u.y;
         const dist = Math.hypot(dx, dy);
+        // A waypoint is passed by standing ON it, not near it. The route was validated leg
+        // by leg from waypoint to waypoint (smoothPath's lineClear, cell centre to cell
+        // centre), and the walk must execute those legs, not legs that start wherever the
+        // unit happened to be inside ARRIVE_EPS of the last one. The difference is up to
+        // eight units, and at a leg that grazes a reserved corner it is the whole bug: the
+        // offset crossed the even-footprint rounding onto the reserved row, every re-plan
+        // from there said "straight is clear" and every step said "reserved", and the unit
+        // parked there for good. The snap goes through claimStep like any other move — a
+        // body that has since taken the cell blocks it, exactly as it would the step.
         if (dist <= ARRIVE_EPS) {
+          if (dist > 0 && !this.claimStep(u, wx, wy)) {
+            blocked = true;
+            break;
+          }
           u.waypoint++;
           continue;
         }
@@ -19780,7 +19827,14 @@ export class SimWorld {
           dirX = ux;
           dirY = uy;
         }
-        if (dist - step <= ARRIVE_EPS) u.waypoint++;
+        if (dist - step <= ARRIVE_EPS) {
+          // Arrived within the slack: finish the leg exactly on the waypoint (see above).
+          if (dist - step > 0 && !this.claimStep(u, wx, wy)) {
+            blocked = true;
+            break;
+          }
+          u.waypoint++;
+        }
       }
       simProfile.end("sim.world.move.walk.step");
       // Face the movement direction; the shared turning pass rotates at the

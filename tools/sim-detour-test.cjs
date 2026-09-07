@@ -408,5 +408,44 @@ console.log("a unit walled off mid-walk mends its path and keeps its order");
   check(`and the walk was ${searches - plansBefore} search(es) after the wall, not a flood`, searches - plansBefore <= 12);
 }
 
+// A route whose leg grazes a reserved corner is walked as it was validated.
+//
+// The geometry that wedged: the goal far past the wall, so the leg from the wall's end back
+// into the lane is shallow and passes within a hair of the corner. lineClear validated it
+// from cell centre to cell centre; the unit then walked it from wherever it stood inside
+// ARRIVE_EPS of the previous waypoint, and at the corner that offset crossed the
+// even-footprint rounding onto the wall's reserved row — every plan said "clear", every
+// step said "reserved", and it parked there for the rest of the run. Waypoints are now
+// passed by standing ON them.
+console.log("a leg that grazes a reserved corner is walked as it was validated");
+{
+  const SIM_DT = 1 / 60;
+  const SIDE = 384;
+  const world = new SimWorld(new PathingGrid({ width: SIDE, height: SIDE, flags: new Uint8Array(SIDE * SIDE) }, [0, 0]), 1);
+  const footman = (id, x, y) => ({
+    id, owner: 0, team: 0, typeId: "hfoo", x, y, facing: 0,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 3000, sightNight: 3000,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [], oldWeapons: [],
+  });
+  world.add(footman(1, 40 * 32, 200 * 32));
+  const goalX = 340 * 32, goalY = 200 * 32; // far past the wall: the shallow return leg
+  world.issueMove(1, goalX, goalY);
+  const u = world.units.get(1);
+  while (u.x < (120 - 6) * 32) world.tick(SIM_DT);
+  let id = 2;
+  for (let y = 180; y <= 220; y += 2) { world.add(footman(id, 120 * 32, y * 32)); world.issueHold(id); id++; }
+  let t = 0;
+  const arrived = () => Math.hypot(u.x - goalX, u.y - goalY) < 200;
+  for (let i = 0; i < Math.round(60 / SIM_DT) && !arrived(); i++) { world.tick(SIM_DT); t += SIM_DT; }
+  check(`it rounded the corner and got there (in ${t.toFixed(0)}s)`, arrived());
+}
+
 console.log(failures ? `\ndetour: ${failures} check(s) FAILED` : "\ndetour: all checks passed");
 process.exit(failures ? 1 : 0);

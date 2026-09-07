@@ -487,5 +487,55 @@ console.log("an unreachable destination still ends the order");
   check(`having walked up to the wall (x ${u.x.toFixed(0)})`, u.x > 800 && u.x < 960);
 }
 
+// An ally makeWay shuffles aside takes its reservation with it.
+//
+// makeWay writes the errand straight onto the ally's path so its own destination survives —
+// and used to leave its reservation where it had been standing. settle() returns early for
+// a unit that still holds one, so the ally arrived and reserved nothing: a phantom wall on
+// the old cells, an intangible body on the new ones, for as long as it stood there.
+console.log("an ally shuffled aside by makeWay is reserved where it stands, not where it was");
+{
+  const grid = gridOf(wallWithGaps(30, [20]));
+  const w = new SimWorld(grid, 1);
+  // The mover plans through the OPEN gap first; the plug lands in it afterwards. A plug
+  // standing there beforehand is a reservation the planner routes up to and stops at (as
+  // the corked-gap test above shows), so nothing is ever bumped and makeWay never runs.
+  // Bumping a body that arrived after the plan is what makeWay is for.
+  const mover = addUnit(w, 10, 0, 500, 672);
+  w.issueMove(10, 1600, 672);
+  while (mover.x < (30 - 5) * 32) w.tick(SIM_DT);
+  const plug = addUnit(w, 2, 0, 992, 672); // IDLE in the gap: exactly what makeWay may move
+  w.tick(SIM_DT);
+  // …and the proactive poll is held off: it would see the plug inside its five-cell lookahead,
+  // re-plan to a best-effort route that ENDS at the wall face, and the mover would walk there
+  // and stop with nothing ever bumped. This test is the blocked branch's — makeWay runs from
+  // there — as the mid-walk-wall test in sim-detour-test.cjs is; the corked-gap test above is
+  // where the poll and the branch run together.
+  mover.repollT = 1e9;
+  const [ox, oy] = grid.footprintOrigin(plug.x, plug.y, plug.footprint);
+  check("the plug starts settled on its cells", plug.hasReservation && grid.isReserved(ox, oy));
+  const overlap = runWatched(w, grid, 20);
+  const moved = Math.hypot(plug.x - 992, plug.y - 672) > PATHING_CELL / 2;
+  check(`the plug was shuffled aside (${Math.round(plug.x)},${Math.round(plug.y)})`, moved);
+  // …and only ASIDE. An idle ally's chase point is the birth default (0,0); with its cells
+  // released it could move again, and the first reroute that hit the errand mid-way aimed it
+  // there — it walked from the gap to the map's top edge (1056,32) before the errand became
+  // its destination.
+  check(`…and only a step or two (${Math.round(Math.hypot(plug.x - 992, plug.y - 672))} units from the gap)`,
+    Math.hypot(plug.x - 992, plug.y - 672) < 4 * PATHING_CELL);
+  check(`…and is at rest again (order ${plug.order}, ${plug.moving ? "moving" : "still"})`, plug.order === "idle" && !plug.moving);
+  const [nx, ny] = grid.footprintOrigin(plug.x, plug.y, plug.footprint);
+  check("…and is reserved where it now stands", plug.hasReservation && grid.isReserved(nx, ny));
+  // The old block's cells that the NEW block does not cover must be free — the two 2×2
+  // blocks may share a column or a row after a one-cell step.
+  let phantom = false;
+  for (let y = oy; y < oy + plug.footprint; y++)
+    for (let x = ox; x < ox + plug.footprint; x++)
+      if (!(x >= nx && x < nx + plug.footprint && y >= ny && y < ny + plug.footprint) && grid.isReserved(x, y)) phantom = true;
+  check("…and left no phantom on the cells it came from", !phantom);
+  check(`the mover got through (x ${Math.round(w.units.get(10).x)})`, w.units.get(10).x > 1100);
+  check(`without ever standing inside anybody (${overlap ?? "clean"})`, overlap === null);
+}
+
 console.log(failures ? `\npathing: ${failures} check(s) FAILED` : "\npathing: all checks passed");
 process.exit(failures ? 1 : 0);
