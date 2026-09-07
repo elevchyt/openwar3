@@ -20,9 +20,10 @@ export interface SlotConfig {
   team: number;
   /**
    * The colour the seat plays in — a PLAYER_COLORS index (ui/hud.ts), applied through the
-   * sim's own `SetPlayerColor` at match start. Only the LAN lobby sets it (a player picks one
-   * off their row, unique across the lobby — src/net/lobbySetup.ts); absent reads as the
-   * slot's own index, which is WC3's default and what every other lobby keeps.
+   * sim's own `SetPlayerColor` at match start. The LAN lobby and the Custom Game screen both
+   * set it (a colour picked off the row's menu, unique across the rows — src/net/lobbySetup.ts
+   * `swapColors`); absent reads as the slot's own index, which is WC3's default and what a
+   * campaign chapter and the map's own neutral players keep.
    */
   color?: number;
   startX: number;

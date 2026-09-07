@@ -293,21 +293,51 @@ export function canStart(setup: LobbySetup, peers: ReadonlyArray<PeerInfo>): boo
  * one anyway (a stale menu, a forged payload) changes nothing.
  */
 export function setSlotColor(setup: LobbySetup, index: number, color: number): LobbySetup | null {
-  const slot = setup.slots[index];
-  if (!slot || !Number.isInteger(color) || color < 0 || color >= MELEE.MAX_PLAYERS) return null;
-  if (slot.color === color) return null;
-  const holder = setup.slots.findIndex((s) => s.color === color);
-  if (holder >= 0 && isSeated(setup.slots[holder])) return null;
-  const slots = setup.slots.map((s) => ({ ...s }));
-  if (holder >= 0) slots[holder].color = slot.color;
-  slots[index].color = color;
-  return { ...setup, slots };
+  const slots = swapColors(setup.slots, index, color, isSeated);
+  return slots ? { ...setup, slots } : null;
 }
 
 /** The colours row `index` may pick: the whole palette less what every OTHER seated row wears.
  *  (An empty row's colour is on offer — taking it swaps, see `setSlotColor`.) */
 export function colorsFreeFor(setup: LobbySetup, index: number): number[] {
-  const taken = new Set(setup.slots.filter((s, i) => i !== index && isSeated(s)).map((s) => s.color));
+  return freeColorsFor(setup.slots, index, isSeated);
+}
+
+/**
+ * The colour rule itself, over ANY rows that wear one — the two above are it on a `LobbySetup`,
+ * and the Custom Game screen (ui/fdfSkirmish.ts) runs it over its own rows, which are not
+ * `LobbySlot`s (nobody joins them) but pick a colour under exactly the same rule: unique across
+ * the rows, an empty row's colour taken by swapping, a seated row's refused. `seated` is the
+ * caller's own "is somebody in this row", since each screen spells that differently.
+ *
+ * Returns the rows with the change made (a fresh array, the touched rows copied), or null when
+ * nothing changes — the same colour, one off the palette, or one a seated row already wears.
+ */
+export function swapColors<T extends { color: number }>(
+  rows: ReadonlyArray<T>,
+  index: number,
+  color: number,
+  seated: (row: T) => boolean,
+): T[] | null {
+  const slot = rows[index];
+  if (!slot || !Number.isInteger(color) || color < 0 || color >= MELEE.MAX_PLAYERS) return null;
+  if (slot.color === color) return null;
+  const holder = rows.findIndex((s) => s.color === color);
+  if (holder >= 0 && seated(rows[holder])) return null;
+  const next = rows.map((s) => ({ ...s }));
+  if (holder >= 0) next[holder].color = slot.color;
+  next[index].color = color;
+  return next;
+}
+
+/** `colorsFreeFor` over any rows: the palette less what every OTHER row `seated` says is
+ *  occupied wears. The row's own colour is always in the list. */
+export function freeColorsFor<T extends { color: number }>(
+  rows: ReadonlyArray<T>,
+  index: number,
+  seated: (row: T) => boolean,
+): number[] {
+  const taken = new Set(rows.filter((s, i) => i !== index && seated(s)).map((s) => s.color));
   return Array.from({ length: MELEE.MAX_PLAYERS }, (_, i) => i).filter((c) => !taken.has(c));
 }
 

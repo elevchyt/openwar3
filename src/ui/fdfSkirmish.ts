@@ -10,6 +10,7 @@ import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { savedPlayerName } from "./fdfLan";
 import { VISIBILITY_ITEMS, visibilityFog, type Visibility } from "../net/advancedOptions";
+import { freeColorsFor, swapColors } from "../net/lobbySetup";
 import { OBSERVER_PLAYER, type Controller, type FogMode, type MeleeConfig, type SlotConfig } from "./lobby";
 import {
   BLURB_SCROLLBAR_FDF, MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, nudgeY, num,
@@ -68,6 +69,16 @@ interface Slot {
   race: Race;
   team: number;
   handicap: number;
+  /**
+   * The colour the seat plays in — a PLAYER_COLORS index (ui/hud.ts), and the match's
+   * `SetPlayerColor` for this slot through `SlotConfig.color`.
+   *
+   * Opens on the slot's own index, which is WC3's default (player 6 is green because it is
+   * player 6), and is picked off the row's colour menu under the LAN lobby's own rule
+   * (net/lobbySetup.ts `swapColors`): unique across every row, empty rows included — a colour
+   * an empty row holds is taken by SWAPPING, one a seated row holds is not on offer.
+   */
+  color: number;
   /** The MAP declared this slot a computer (w3i player type 2), so it is not the lobby's to
    *  re-seat: the slot menu is greyed at "Computer (Normal)". See MapInfo's PlayerSlot. */
   locked: boolean;
@@ -185,6 +196,7 @@ export async function mountSkirmish(
         race: s.defaultRace,
         team: s.team,
         handicap: 100,
+        color: s.id,
         locked: s.controller === "computer",
       }));
       groups = forceGroups(info, slots.map((s) => s.id));
@@ -345,14 +357,22 @@ export async function mountSkirmish(
       }
       const colour = s.popup(`ColorButton${i}`);
       if (colour) {
-        // The colour IS the player slot in WC3 — player 6 is green because it is player 6 —
-        // so the swatch is the slot's own colour and the menu is read-only. The options are
-        // the WHOLE palette, not the first `maxSlots` of it: a popup drops a value it has no
-        // option for, and a map that seats players 0/1/5/6/11 (WarChasers) would then paint
-        // three of its five rows with option 0's red.
-        colour.setOptions(PLAYER_COLORS.map((c, ci) => ({ value: c, label: `Player ${ci + 1}` })));
-        colour.value = PLAYER_COLORS[slot.id % PLAYER_COLORS.length];
-        colour.setEnabled(false);
+        // The same menu the LAN lobby's rows carry (ui/fdfLanLobby.ts), under the same rule:
+        // on offer is the palette less what every OTHER seated row wears, and the row's own
+        // colour is always in the list — a popup drops a value it has no option for, and a
+        // map that seats players 0/1/5/6/11 (WarChasers) would otherwise paint three of its
+        // five rows with option 0's red. Every row here is ours to set (there is nobody else
+        // on this screen), so it is live on any seated row; picking a colour an empty row
+        // holds swaps the two, which re-fills every row's menu and swatch.
+        const free = freeColorsFor(slots, i, isSeated);
+        colour.setOptions(free.map((c) => ({ value: PLAYER_COLORS[c], label: `Player ${c + 1}` })));
+        colour.value = PLAYER_COLORS[slot.color % PLAYER_COLORS.length];
+        colour.onChange = (v) => {
+          const next = swapColors(slots, i, PLAYER_COLORS.indexOf(v), isSeated);
+          if (next) slots = next;
+          fill(s);
+        };
+        colour.setEnabled(seated);
       }
       const handicap = s.popup(`HandicapMenu${i}`);
       if (handicap) {
@@ -532,6 +552,7 @@ function toConfig(
         controller: s.controller,
         race: s.race,
         team: s.team,
+        color: s.color,
         startX: mapSlot?.startX ?? 0,
         startY: mapSlot?.startY ?? 0,
         name: mapSlot?.name,
