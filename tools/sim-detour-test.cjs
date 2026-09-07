@@ -447,5 +447,45 @@ console.log("a leg that grazes a reserved corner is walked as it was validated")
   check(`it rounded the corner and got there (in ${t.toFixed(0)}s)`, arrived());
 }
 
+// The proactive poll mends too. Same wall, dropped eighty cells ahead with the poll RUNNING:
+// it used to see the wall inside its lookahead and re-plan to the far goal at once (one
+// 579-expansion search, no repair). Now it mends the route it has, like the blocked branch.
+console.log("the poll mends the route it has rather than planning a new one");
+{
+  const { setSimProfiler } = require(join(REPO, ".sim-build", "src", "sim", "profile.js"));
+  const SIM_DT = 1 / 60;
+  const SIDE = 384;
+  const world = new SimWorld(new PathingGrid({ width: SIDE, height: SIDE, flags: new Uint8Array(SIDE * SIDE) }, [0, 0]), 1);
+  const footman = (id, x, y) => ({
+    id, owner: 0, team: 0, typeId: "hfoo", x, y, facing: 0,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 3000, sightNight: 3000,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [], oldWeapons: [],
+  });
+  let repairs = 0, dearest = 0;
+  setSimProfiler({ begin() {}, end() {}, gauge() {},
+    tally(name, n = 1) { if (name === "pathRepairs") repairs += n; if (name === "pathExpansions") dearest = Math.max(dearest, n); } });
+  world.add(footman(1, 40 * 32, 200 * 32));
+  const goalX = 150 * 32, goalY = 200 * 32;
+  world.issueMove(1, goalX, goalY);
+  const u = world.units.get(1);
+  for (let i = 0; i < Math.round(2 / SIM_DT); i++) world.tick(SIM_DT); // under way, wall 80 cells ahead
+  let id = 2;
+  for (let y = 180; y <= 220; y += 2) { world.add(footman(id, 120 * 32, y * 32)); world.issueHold(id); id++; }
+  let t = 0;
+  const arrived = () => Math.hypot(u.x - goalX, u.y - goalY) < 200;
+  for (let i = 0; i < Math.round(60 / SIM_DT) && !arrived(); i++) { world.tick(SIM_DT); t += SIM_DT; }
+  setSimProfiler(null);
+  check(`it got there (in ${t.toFixed(0)}s)`, arrived());
+  check(`the poll mended the route (${repairs} repair${repairs === 1 ? "" : "s"})`, repairs >= 1);
+  check(`and nothing was escalated (dearest ${dearest})`, dearest <= PATH_FLOOR_EXPANSIONS);
+}
+
 console.log(failures ? `\ndetour: ${failures} check(s) FAILED` : "\ndetour: all checks passed");
 process.exit(failures ? 1 : 0);

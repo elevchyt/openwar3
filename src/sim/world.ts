@@ -19090,7 +19090,19 @@ export class SimWorld {
       if (!this.pathAheadBlocked(u)) return;
       if (this.repathsThisStep >= REPATH_BUDGET_PER_STEP) return; // …next poll, then
       this.repathsThisStep++;
-      this.pathTo(u, u.chaseX, u.chaseY); // reroute toward the same goal
+      // `pathAheadBlocked` is "bodies have stopped across my route", which is the same event
+      // the blocked branch answers a moment later — so it gets the same answer first: MEND
+      // the route, bounded, to the first queued node still open (repairPath; WC3 mends its
+      // queued nodes, docs/REFERENCES.md). This used to re-plan to the far goal at once, and
+      // that plan could ESCALATE: the labels that license the flood are terrain-only, and
+      // the thing in the way here is by definition bodies. Every 150–240 ms search left in
+      // the Feralas logs after the blocked branch was fixed came through this door.
+      if (this.repairPath(u)) return;
+      // Nothing to mend to. Re-plan — but from INSIDE a jam, at the floor and never
+      // escalated, for the reason above. A plan that comes back short walks the unit up to
+      // the crowd, where the blocked branch waits it out and, failing that, checkStuck parks
+      // it; resumeRoute's re-plan after the wait is the one that may still pay for a detour.
+      this.pathTo(u, u.chaseX, u.chaseY, PATH_FLOOR_EXPANSIONS);
     } finally {
       simProfile.end("sim.world.move.walk.reroute");
     }
