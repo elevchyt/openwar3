@@ -174,6 +174,16 @@ Measured on the same 4v4, worst single search 166 → **27.5 ms** and frames ove
 365 → **26**, for 0.39 ms/frame of job work. The pattern generalises: when one step's worst
 case is the problem, ask what the work's natural unit is and pay one unit per step.
 
+**A PASS THAT DECIDES FIFTY THINGS SHOULD NOT DO FIFTY THINGS.** Computer+'s army pass was
+the last 200 ms step in the logs, and it was not the deciding: it was the fifty movement orders
+a wave commit sends, each of which is a floor path search (`issueAttackMove` calls `pathTo`).
+The pass still decides in one step; the orders go out `ORDERS_PER_STEP` a step through a
+per-brain queue (`PlusPlayers.issue`/`drainOrders`, span `sim.ai.orders`, gauge `aiOrderDrain`,
+rates `aiOrdersQueued`/`aiOrdersIssued`), newest order per unit winning. Same 4v4: `aiAttackPass`
+peak 201 → **78 ms**, worst sim step peak 208 → **103**, for 0.06 ms/frame. The general form of
+the fog and the sliced-search lessons above: separate what a pass DECIDES from what it DOES,
+and let the doing take as many steps as its natural unit needs.
+
 ## A counter that is not a cost
 
 `pathNodes` is the sum of every unit's remaining WAYPOINTS. It is a census of what the units are

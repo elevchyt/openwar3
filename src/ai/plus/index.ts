@@ -1,3 +1,4 @@
+import type { Command } from "../../game/commands";
 import { MELEE } from "../../data/gameplayConstants";
 import type { ChatLine, ChatScope } from "../../game/chat";
 import type { PlayableRace } from "../../data/races";
@@ -1656,6 +1657,10 @@ interface Brain {
   armyIn: number;
   castIn: number;
   mannersIn: number;
+  /** Movement orders a pass decided but this step could not afford — see `issue`. */
+  orderQueue: Command[];
+  /** Movement orders already sent this step, against ORDERS_PER_STEP. */
+  ordersThisStep: number;
   /** The whole army. Computer+ fields ONE group and fights with all of it, which is what a
    *  player does — there is no muster list to satisfy, unlike the classic captain. */
   readonly squad: Set<number>;
@@ -1841,6 +1846,21 @@ interface Brain {
   gone: boolean;
 }
 
+/**
+ * Movement orders one computer may SEND in one sim step. Everything else about a pass is
+ * arithmetic; a movement order is a path search — `issueAttackMove`/`issueMove` call `pathTo`,
+ * a floor search of up to 8,192 expansions — and a wave commit sends one per soldier. Fifty
+ * soldiers re-aimed at a new objective was fifty searches in one step, which is the 200 ms
+ * `aiAttackPass` in the 2026-09-07 Feralas logs, and the last thing left in their tail after
+ * the pathfinder's own floods were gone. So the pass DECIDES in one step and the orders go out
+ * this many a step (`issue`, drained in `tick`): a wave sets off as a ripple over a few steps
+ * — a tenth of a second for fifty — which is Warcraft III's own "stand and stare" under load
+ * in miniature (docs/REFERENCES.md), and no step pays more for a computer's orders than it
+ * pays for one plan and one slice of a detour. Ours; six is REPATH_BUDGET_PER_STEP's four
+ * with a little room, and the recorder's `aiOrderDrain` gauge is what it is judged by.
+ */
+const ORDERS_PER_STEP = 6;
+
 /** Every Computer+ player in the match. */
 export class ComputerPlusAi {
   private readonly brains: Brain[] = [];
@@ -1927,6 +1947,8 @@ export class ComputerPlusAi {
       armyIn: profile.armyPeriod * (1 + player / 12),
       castIn: profile.castPeriod * (1 + player / 12),
       mannersIn: MANNERS_PERIOD,
+      orderQueue: [],
+      ordersThisStep: 0,
       squad,
       held,
       burrowCrew: new Set<number>(),
@@ -2097,10 +2119,59 @@ export class ComputerPlusAi {
     }
   }
 
+  /**
+   * Send an order — now, if it is not a walk or this step still has room for one; else it
+   * joins the brain's queue and goes out on a later step (`drainOrders`). See ORDERS_PER_STEP.
+   * Queued means accepted, which is what every caller here treats the answer as.
+   */
+  private issue(b: Brain, cmd: Command): boolean {
+    if (cmd.c === "order") {
+      const kind = cmd.order.kind;
+      if (kind === "move" || kind === "attackmove" || kind === "attack" || kind === "patrol") {
+        if (b.ordersThisStep >= ORDERS_PER_STEP) {
+          b.orderQueue.push(cmd);
+          simProfile.tally("aiOrdersQueued");
+          return true;
+        }
+        b.ordersThisStep++;
+      }
+    }
+    return b.ai.order(cmd);
+  }
+
+  /**
+   * The step's share of what earlier steps decided. Newest wins per unit — a soldier the last
+   * pass re-aimed does not first walk off toward where the pass before sent it — and an order
+   * for a unit that is gone is dropped. FIFO otherwise, so it is the same ripple on every
+   * machine.
+   */
+  private drainOrders(b: Brain): void {
+    b.ordersThisStep = 0;
+    if (!b.orderQueue.length) return;
+    simProfile.begin("sim.ai.orders");
+    const t0 = perfNow();
+    const latest = new Map<number, Command>();
+    for (const cmd of b.orderQueue) if (cmd.c === "order") latest.set(cmd.unitId, cmd);
+    const rest: Command[] = [];
+    for (const cmd of b.orderQueue) {
+      if (cmd.c !== "order" || latest.get(cmd.unitId) !== cmd) continue; // superseded
+      if (b.ordersThisStep >= ORDERS_PER_STEP) { rest.push(cmd); continue; }
+      const u = this.host.world.units.get(cmd.unitId);
+      if (!u || u.hp <= 0) continue; // gone
+      b.ordersThisStep++;
+      b.ai.order(cmd);
+      simProfile.tally("aiOrdersIssued");
+    }
+    b.orderQueue = rest;
+    simProfile.end("sim.ai.orders");
+    simProfile.gauge("aiOrderDrain", perfNow() - t0);
+  }
+
   tick(dt: number): void {
     for (const b of this.brains) {
       if (b.gone) continue;
       b.clock += dt;
+      this.drainOrders(b); // last step's leftovers go first, then this step's passes
       if ((b.buildIn -= dt) <= 0) {
         b.buildIn = b.profile.buildPeriod;
         simProfile.begin("sim.ai.build");
@@ -2720,7 +2791,7 @@ export class ComputerPlusAi {
     // near our own base must not stop the tour before it starts.
     const out = away ? backOffSpot(scout, creeps, home, CREEP_PASS, this.standable) : null;
     if (out) {
-      b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...out }, queued: false });
+      this.issue(b, { c: "order", unitId: scout.id, order: { kind: "move", ...out }, queued: false });
       return;
     }
     // (2) ROUND the creep camps, not through them — see `safeLeg`. The GOAL is unchanged (the
@@ -2769,7 +2840,7 @@ export class ComputerPlusAi {
     // (3)'s exemption is.
     const stride = Math.hypot(step.x - scout.x, step.y - scout.y);
     const aim = b.scoutBack && stride < SCOUT_STRIDE ? goal : step;
-    b.ai.order({ c: "order", unitId: scout.id, order: { kind: "move", ...aim }, queued: false });
+    this.issue(b, { c: "order", unitId: scout.id, order: { kind: "move", ...aim }, queued: false });
   }
 
   /**
@@ -3211,7 +3282,7 @@ export class ComputerPlusAi {
       // and the blanket "it has a move order" this replaces is what let it keep doing so.
       const end = moveGoal(u);
       if (end && Math.hypot(end.x - rally.x, end.y - rally.y) <= RALLY_SLACK) continue;
-      b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: rally.x, y: rally.y }, queued: false });
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: rally.x, y: rally.y }, queued: false });
     }
     // NOTHING LEAVES UNTIL THE ARMY IS TOGETHER. This gate is above both the creep run and the
     // wave because it is the same rule for both, and because the creep run is where its absence
@@ -3700,7 +3771,7 @@ export class ComputerPlusAi {
     b.reissueIn = 0;
     for (const u of this.squadUnits(b)) {
       if (isCopy(u) || u.inCombat) continue;
-      b.ai.order({ c: "order", unitId: u.id, order: { kind: "stop" }, queued: false });
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "stop" }, queued: false });
     }
   }
 
@@ -3854,7 +3925,7 @@ export class ComputerPlusAi {
     // must not be skipped by the pass that owns it. `PlusItems.forget` releases the shopping
     // errand for the same reason.
     b.items.forget(captain.id);
-    b.ai.order({ c: "order", unitId: captain.id, order: { kind: "stop" }, queued: false });
+    this.issue(b, { c: "order", unitId: captain.id, order: { kind: "stop" }, queued: false });
     this.writeOff(b);
     this.retreat(b, "stuck");
   }
@@ -3887,7 +3958,7 @@ export class ComputerPlusAi {
       const walking = !!end && (Math.hypot(end.x - aim.x, end.y - aim.y) <= MARCH_DIRECT
         || Math.hypot(end.x - home.x, end.y - home.y) <= MARCH_DIRECT);
       if (!walking) {
-        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: aim.x, y: aim.y }, queued: false });
+        this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: aim.x, y: aim.y }, queued: false });
       }
     }
     if (!b.squad.size || (allHome && this.readiness(b) >= REGROUP_HP_FRACTION)) return void this.endWave(b);
@@ -4020,7 +4091,7 @@ export class ComputerPlusAi {
         // walking in front of. The re-issue guard is `commit`'s own, for the same reason — an
         // attack-move restated every pass is a full path search per copy.
         if (u.order === "attackmove" && Math.hypot(u.amDestX - x, u.amDestY - y) <= REISSUE_SLACK) continue;
-        b.ai.order({ c: "order", unitId: u.id, order: { kind: "attackmove", x, y }, queued: false });
+        this.issue(b, { c: "order", unitId: u.id, order: { kind: "attackmove", x, y }, queued: false });
         // THE LEAD IS MEASURED FROM HERE — this copy has just been pointed at the camp, and the
         // press is the wrong moment to count from (see `VANGUARD_LEAD`). `min`, never `max`:
         // the deadline may only ever come in, so a copy that reaches the camp, idles and is
@@ -4065,7 +4136,7 @@ export class ComputerPlusAi {
         // walking on under the attack-move it is already carrying, which is the whole of being
         // out in front. Once is enough: a unit that has stopped has nothing to re-state to.
         if (u.moving || u.order === "move" || u.order === "attackmove") {
-          b.ai.order({ c: "order", unitId: u.id, order: { kind: "stop" }, queued: false });
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "stop" }, queued: false });
         }
         continue;
       }
@@ -4086,7 +4157,7 @@ export class ComputerPlusAi {
         // parks short of its goal, which is the case that read as stale every pass.
         const end = moveGoal(u);
         if (end && Math.hypot(end.x - to.x, end.y - to.y) <= REISSUE_SLACK) continue;
-        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: to.x, y: to.y }, queued: false });
+        this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: to.x, y: to.y }, queued: false });
         continue;
       }
       // THE MARCH IS A WALK. While the party is travelling (`travelling`) every member gets a
@@ -4108,7 +4179,7 @@ export class ComputerPlusAi {
         // plain move keeps its destination is `moveGoal`.
         const end = moveGoal(u);
         if (end && Math.hypot(end.x - mx, end.y - my) <= REISSUE_SLACK) continue;
-        b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: mx, y: my }, queued: false });
+        this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: mx, y: my }, queued: false });
         continue;
       }
       // SIEGE IS FOR THE BUILDINGS — and it is asked BEFORE the focus-fire pick, because a
@@ -4120,12 +4191,12 @@ export class ComputerPlusAi {
       if (siegeAim && !u.isPeon && isSiege(u) && this.host.world.weaponVs(u, siegeAim)
           && Math.hypot(u.x - siegeAim.x, u.y - siegeAim.y) <= CLEARED_RADIUS) {
         if (u.order === "attack" && u.targetId === siegeAim.id) continue;
-        b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: siegeAim.id }, queued: false });
+        this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: siegeAim.id }, queued: false });
         continue;
       }
       if (focus && !u.isPeon && this.host.world.weaponVs(u, focus)) {
         if (u.order === "attack" && u.targetId === focus.id) continue;
-        b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: focus.id }, queued: false });
+        this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: focus.id }, queued: false });
         continue;
       }
       // A unit already swinging at something is left alone: re-aiming a melee fighter at the
@@ -4163,7 +4234,7 @@ export class ComputerPlusAi {
           // (or the Farm) it just walked away from is standing right there, so the group would
           // pick it up again on the next tick and this would be a four-second loop instead of a
           // decision.
-          b.ai.order({ c: "order", unitId: u.id, order: { kind: "attack", targetId: swap.id }, queued: false });
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "attack", targetId: swap.id }, queued: false });
           continue;
         }
         // Nothing better to hit: a unit that was explicitly ORDERED onto something is left
@@ -4181,7 +4252,7 @@ export class ComputerPlusAi {
       // have moved to be worth a new route. En-route acquisition is unaffected — that is
       // tickAttackMove's business and does not read the destination.
       if (u.order === "attackmove" && Math.hypot(u.amDestX - mx, u.amDestY - my) <= REISSUE_SLACK) continue;
-      b.ai.order({ c: "order", unitId: u.id, order: { kind: "attackmove", x: mx, y: my }, queued: false });
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "attackmove", x: mx, y: my }, queued: false });
     }
     // A vanguard is re-considered EVERY army pass rather than every `REISSUE_PERIOD`. The copies
     // do not exist yet when the wand is pressed — spawning is asynchronous, the request is
@@ -4850,7 +4921,7 @@ export class ComputerPlusAi {
         // alone rather than re-ordered — a fresh move order restarts the path search, which is
         // the same cost `commit` guards against.
         if (entry && u.order !== "move" && Math.hypot(u.x - entry.x, u.y - entry.y) > PULL_BACK_ARRIVE) {
-          b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: entry.x, y: entry.y }, queued: false });
+          this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: entry.x, y: entry.y }, queued: false });
         }
         continue;
       }
@@ -4876,7 +4947,7 @@ export class ComputerPlusAi {
         until: b.clock + hold,
         next: b.clock + (heroOut ? HERO_PULL_HOLD : PULL_BACK_AGAIN),
       });
-      b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: spot.x, y: spot.y }, queued: false });
     }
   }
 
@@ -4942,7 +5013,7 @@ export class ComputerPlusAi {
         // see `PULL_BACK_AGAIN`.
         next: b.clock + PULL_BACK_AGAIN,
       });
-      b.ai.order({ c: "order", unitId: u.id, order: { kind: "move", x: home.x, y: home.y }, queued: false });
+      this.issue(b, { c: "order", unitId: u.id, order: { kind: "move", x: home.x, y: home.y }, queued: false });
     }
   }
 
@@ -5008,7 +5079,7 @@ export class ComputerPlusAi {
       if (!best) continue;
       // The ORDINARY right-click on a friendly well: it walks there and the well pours when it
       // arrives (SimWorld.issueDrink). Not a second channel — the same order a player gives.
-      b.ai.order({ c: "drink", unitId: u.id, wellId: best.id });
+      this.issue(b, { c: "drink", unitId: u.id, wellId: best.id });
     }
   }
 
@@ -5050,13 +5121,13 @@ export class ComputerPlusAi {
   private arm(b: Brain, u: SimUnit, code: string): void {
     const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
     if (!ab || ab.autocastOn) return;
-    b.ai.order({ c: "autocast", unitId: u.id, code });
+    this.issue(b, { c: "autocast", unitId: u.id, code });
   }
 
   private disarm(b: Brain, u: SimUnit, code: string): void {
     const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
     if (!ab || !ab.autocastOn) return;
-    b.ai.order({ c: "autocast", unitId: u.id, code });
+    this.issue(b, { c: "autocast", unitId: u.id, code });
   }
 
   /**
@@ -5115,7 +5186,7 @@ export class ComputerPlusAi {
     if (!threatened) {
       // The siege is over: everyone back to work, through the door that remembers the job.
       for (const bur of burrows) {
-        if (bur.garrison.length) b.ai.order({ c: "standdown", buildingId: bur.id });
+        if (bur.garrison.length) this.issue(b, { c: "standdown", buildingId: bur.id });
       }
       this.backToTrees(b);
       return;
@@ -5129,7 +5200,7 @@ export class ComputerPlusAi {
         if (p.resKind !== "lumber") continue; // the gold crew keeps paying for the war
         if (p.insideBuild || p.constructing || p.inMine) continue;
         if (Math.hypot(p.x - bur.x, p.y - bur.y) > TOWN_RADIUS) continue;
-        if (!b.ai.order({ c: "garrison", unitId: p.id, buildingId: bur.id })) continue;
+        if (!this.issue(b, { c: "garrison", unitId: p.id, buildingId: bur.id })) continue;
         // Whose axe this was, so the stand down can check it picked it up again — see the
         // header. Remembered even though the SIM remembers too, because what the sim wrote down
         // is a tree and the tree is the part that goes missing.
