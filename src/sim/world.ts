@@ -19417,6 +19417,83 @@ export class SimWorld {
    *
    *  Only an ally that is standing about — parked on its own blocked order, or plain idle —
    *  is ever asked. Nobody is shoved off a job, off a Hold, or out of a fight. */
+  /**
+   * Repair a blocked route the way Warcraft III does: keep the plan, re-search only the
+   * broken stretch. Walk the queued waypoints forward from where the unit is, drop the ones
+   * its footprint can no longer stand on, and search — at the FLOOR budget, never escalated —
+   * to the first that is still open; splice that in front of what remains. True when the
+   * path was repaired; false when there was nothing to repair to, or the short search could
+   * not reach it — in which case the unit simply keeps waiting where it stands and asks
+   * again on the blocked branch's own clock (WC3: stop and wait for a pathing update).
+   *
+   * Why this cannot flood, where the old re-plan could: the goal is a waypoint of a route
+   * that was good a moment ago, so it is near and it is reachable on TERRAIN — the only
+   * question is bodies — and a search that cannot reach a nearby cell inside 8,192
+   * expansions has answered "wait", which is the answer WC3 gives. The walls are the
+   * ordinary ones (terrain, stamps, units standing still): a body that is MOVING is not
+   * routed around, it is waited for, exactly as in the original.
+   *
+   * The long-range plan is untouched — chaseX/chaseY, and every waypoint past the repair,
+   * survive — so a cross-map order is planned ONCE and mended as it goes.
+   */
+  private repairPath(u: SimUnit): boolean {
+    const n = u.footprint;
+    if (n <= 0 || u.waypoint >= u.path.length) return false;
+    const domain = pathDomain(u);
+    const start = this.grid.footprintAnchor(u.x, u.y, n);
+    // Two readings of "in the way". The CROWD one — everyone holding ground, walkers and
+    // parked units included — is the one WC3 makes at this level ("the actual check for
+    // units happens in the pathfinding search at the pathing node level", bear_369), and it
+    // is what makes a queue at a gap FAN: each route goes round its neighbours to the mouth,
+    // so the squad lines up and drains. The ordinary reading (terrain, stamps, units standing
+    // still) drew straight lines through the neighbours' claims instead, and a squad corked
+    // at a one-body gap then drained 1 of 6 in 30 s, every unit parked by checkStuck in turn.
+    // The crowd reading was never what made the old reroute flood — the far goal and the
+    // escalation were — so it is safe here, at the floor and to a near node.
+    const crowd = this.clearanceBlocker(u, start, true);
+    const plain = this.clearanceBlocker(u, start);
+    const open = (wx: number, wy: number, blocked: typeof plain): boolean => {
+      const [cx, cy] = this.grid.footprintAnchor(wx, wy, n);
+      return this.grid.footprintClear(cx, cy, n, domain) && !(blocked && blocked(cx, cy));
+    };
+    // 1. Drop the queued nodes that are no longer traversable (by the plain reading: a node
+    //    a walker is crossing is still ours to aim at — the crowd reading is for the ROUTE).
+    let k = u.waypoint;
+    while (k < u.path.length && !open(u.path[k][0], u.path[k][1], plain)) k++;
+    if (k >= u.path.length) return false;
+    // 2. A short search to the first that still is — round the crowd first, and if the crowd
+    //    leaves no way round (hemmed in), the plain route, which walks up to the blocker and
+    //    waits. Both at the floor: `maxExpansions` named means pathTo's escalation never
+    //    enters, so neither can cost more than one floor search. Counted with the rest so the
+    //    report can tell a repair from a plan (`pathRepairs`).
+    const goal = this.grid.footprintAnchor(u.path[k][0], u.path[k][1], n);
+    simProfile.tally("pathRepairs");
+    let cells: Array<[number, number]> | null = null;
+    let blocked = crowd;
+    for (const pred of [crowd, plain]) {
+      blocked = pred;
+      simProfile.tally("pathSearches");
+      const searchAt = perfNow();
+      cells = findPath(this.grid, start, goal, pred, PATH_FLOOR_EXPANSIONS, domain, undefined, n);
+      simProfile.tally("pathExpansions", pathExpansionsSpent());
+      simProfile.gauge("pathSearch", perfNow() - searchAt);
+      const end = cells && cells.length > 1 ? cells[cells.length - 1] : null;
+      if (end && end[0] === goal[0] && end[1] === goal[1]) break; // reached it
+      cells = null; // best-effort fell short: not a repair by this reading
+    }
+    if (!cells) return false;
+    // 3. Splice it in front of the rest of the route. The repaired-to waypoint is the last
+    //    cell of the search, so the remainder starts after it — except that the final point
+    //    of a route may be pathTo's sub-cell settling nudge rather than a cell centre, and
+    //    that one is kept.
+    const smoothed = smoothPath(this.grid, cells, blocked, domain);
+    const pts = smoothed.slice(1).map(([cx, cy]) => this.grid.footprintCenter(cx, cy, n)) as Array<[number, number]>;
+    const keepFrom = k === u.path.length - 1 ? k : k + 1;
+    u.path = [...pts, ...u.path.slice(keepFrom)];
+    u.waypoint = 0;
+    return true;
+  }
+
   private makeWay(u: SimUnit): void {
     const n = u.footprint;
     if (n <= 0 || u.waypoint >= u.path.length) return;
@@ -19712,22 +19789,44 @@ export class SimWorld {
         u.desiredFacing = Math.atan2(dirY, dirX);
       }
       if (blocked) {
-        // Held up by a body in the way. This is the case the issue describes as
-        // path-finding disruption: the way is shut, so recalculate and route AROUND rather
-        // than grind into it. The reroute treats the crowd's current cells as walls too
-        // (avoidMovers) so it genuinely goes round; if that leaves nowhere to go it falls
-        // back to the ordinary route and waits the blocker out. checkStuck is still the
-        // longer backstop for a unit that is simply boxed in.
+        // Held up by a body in the way. What Warcraft III does here is REPAIR THE PATH IT
+        // HAS, not plan a new one: bear_369 tested it by dropping walls in front of a walking
+        // unit — "the engine will iterate through unit's queued pathing nodes, removing those
+        // that are no longer traversible for them until it'll find the one that is still
+        // traversible which will perform another pathfinding to that node, appending the
+        // pathfinding's new nodes to the unit's queued pathing nodes" (hiveworkshop 352974,
+        // post 3614130). That search is bounded by construction: its goal is a few cells away
+        // on a route already known to be good. And when there is nothing to repair to, the
+        // unit STOPS AND WAITS — "if one occurs the engine simply makes both units stop and
+        // wait for a pathing update" (Dr Super Good, same thread). WC3 never routes AROUND a
+        // crowd at all: units "rather attempt to move through a shortest path blocked by
+        // bunch of units rather than through a long path with open space" (bear_369).
+        //
+        // This used to re-plan to the FINAL goal from inside the jam, with every body as a
+        // wall (`avoidMovers`) — the largest possible search under the worst possible
+        // conditions, and the 87 ms flood the 2026-09-07 Feralas logs are full of. See
+        // repairPath. checkStuck is still the longer backstop for a unit simply boxed in.
         u.blockedT += dt;
         if (u.blockedT >= BLOCKED_REPATH_TIME) {
           u.blockedT = 0;
           if (u.waypoint < u.path.length && !u.flying) {
-            // The OTHER repath in this loop, and the dear one: `avoidMovers` treats the crowd
-            // as walls, so it is the search most likely to run out of budget and spend all of
-            // it. Timed apart from the poll above, which is the one on a cooldown.
             simProfile.begin("sim.world.move.walk.blocked");
             this.makeWay(u); // ask an idle/parked ally standing in the gap to shuffle over
-            this.pathTo(u, u.chaseX, u.chaseY, undefined, true);
+            // A repair that finds nothing is "wait" — and the unit is already waiting: it is
+            // standing at the block it could not take, and it asks again in
+            // BLOCKED_REPATH_TIME. It is NOT parked here. parkAndWait carries the escalating
+            // stuck penalty (BLOCKED_WAIT × retries, up to 3 s), and handing that out on
+            // every failed repair made a squad corked at a one-body gap drain through it one
+            // three-second nap at a time once uncorked (1 of 6 in 30 s). checkStuck stays
+            // the one owner of that penalty, as it was.
+            //
+            // Under the per-step reroute budget too: its own note says it exists for "a
+            // hundred units shoved into the same corridor by the same event, all blocked
+            // on the same step", and this is that step. A skipped repair is not a lost one.
+            if (this.repathsThisStep < REPATH_BUDGET_PER_STEP) {
+              this.repathsThisStep++;
+              this.repairPath(u);
+            }
             simProfile.end("sim.world.move.walk.blocked");
           }
         }

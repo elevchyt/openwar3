@@ -334,5 +334,79 @@ console.log("a flood licensed by the terrain cannot pay off against BODIES");
     !!floor.end && !!flood.end && floor.end[0] === flood.end[0] && floor.end[1] === flood.end[1]);
 }
 
+// A blocked unit REPAIRS its route; it does not plan a new one.
+//
+// What Warcraft III does when the next node is shut (bear_369, hiveworkshop 352974 post
+// 3614130, tested by dropping walls in front of a walking unit): drop the queued nodes that
+// are no longer traversable, search to the first that still is, splice. The search is bounded
+// by construction — the goal is on a route that was good a moment ago — and it is never the
+// escalated flood, because that is licensed by terrain and the thing in the way is BODIES.
+console.log("a unit walled off mid-walk mends its path and keeps its order");
+{
+  const { setSimProfiler } = require(join(REPO, ".sim-build", "src", "sim", "profile.js"));
+  const SIM_DT = 1 / 60;
+  const SIDE = 384;
+  const world = new SimWorld(new PathingGrid({ width: SIDE, height: SIDE, flags: new Uint8Array(SIDE * SIDE) }, [0, 0]), 1);
+  const footman = (id, x, y) => ({
+    id, owner: 0, team: 0, typeId: "hfoo", x, y, facing: 0,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 3000, sightNight: 3000,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [], oldWeapons: [],
+  });
+  // Every search the world makes, counted: how many were repairs, and the dearest of them.
+  let repairs = 0, searches = 0, dearest = 0;
+  setSimProfiler({
+    begin() {}, end() {}, gauge() {},
+    tally(name, n = 1) {
+      if (name === "pathRepairs") repairs += n;
+      if (name === "pathSearches") searches += n;
+      if (name === "pathExpansions") dearest = Math.max(dearest, n);
+    },
+  });
+  world.add(footman(1, 40 * 32, 200 * 32));
+  // The goal is 30 cells past the wall, not 220: the leg from the wall's end back into the
+  // lane is then STEEP rather than grazing. A shallow return leg trips a planner-vs-movement
+  // mismatch that predates this test and is not what it measures — `smoothPath` validates a
+  // leg from cell centre to cell centre, but the unit walks it from wherever it stood when it
+  // passed the previous waypoint (inside ARRIVE_EPS), and at a corner that offset crosses the
+  // even-footprint rounding boundary onto the wall's reserved row: every re-plan then says
+  // "straight is clear" and every step says "reserved", and the unit parks there for good.
+  const goalX = 150 * 32, goalY = 200 * 32;
+  world.issueMove(1, goalX, goalY); // a walk across open ground: ONE plan
+  const u = world.units.get(1);
+  // …under way, and up to six cells short of where the wall will stand. The proactive poll
+  // (repathPoll: five cells of lookahead every quarter second) would otherwise see the wall
+  // land eighty cells ahead and re-plan before the unit ever bumped it — a fine thing, and a
+  // different mechanism. This test is the BLOCKED branch's, so the poll is held off for it;
+  // the one-body-gap test in sim-pathing-test.cjs is where the two run together.
+  while (u.x < (120 - 6) * 32) world.tick(SIM_DT);
+  u.repollT = 1e9;
+  const plansBefore = searches;
+  // Now a wall of STOPPED friendlies drops across the way ahead — a column 40 cells tall,
+  // open ground above and below it. Standing still, they reserve their cells, which is
+  // exactly what the pathfinder treats as a wall. They are put on HOLD, as the gap test's
+  // plug is: an IDLE ally standing in a blocked unit's way is fair game for `makeWay`, which
+  // shuffles it aside — and a wall that shuffles is not a wall, it is a different test
+  // (and one that trips over makeWay leaving the shuffled unit's reservation behind).
+  let id = 2;
+  for (let y = 180; y <= 220; y += 2) { world.add(footman(id, 120 * 32, y * 32)); world.issueHold(id); id++; }
+  let t = 0;
+  const arrived = () => Math.hypot(u.x - goalX, u.y - goalY) < 200;
+  for (let i = 0; i < Math.round(60 / SIM_DT) && !arrived(); i++) { world.tick(SIM_DT); t += SIM_DT; }
+  setSimProfiler(null);
+  check(`it got there anyway (in ${t.toFixed(0)}s)`, arrived());
+  check(`by mending the route (${repairs} repair${repairs === 1 ? "" : "s"})`, repairs >= 1);
+  check(`and its order survived the mending (still aimed at ${goalX},${goalY})`, u.chaseX === goalX && u.chaseY === goalY);
+  check(`no search along the way was escalated (dearest ${dearest} of a ${PATH_FLOOR_EXPANSIONS} floor)`,
+    dearest <= PATH_FLOOR_EXPANSIONS);
+  check(`and the walk was ${searches - plansBefore} search(es) after the wall, not a flood`, searches - plansBefore <= 12);
+}
+
 console.log(failures ? `\ndetour: ${failures} check(s) FAILED` : "\ndetour: all checks passed");
 process.exit(failures ? 1 : 0);
