@@ -27,6 +27,9 @@ export type Quality = "low" | "medium" | "high";
 
 /** Everything the Video panel decides, parsed out of the stored option values. */
 export interface VideoSettings {
+  /** The buffer the world is drawn into, in device pixels. Always exactly 16:9. */
+  renderWidth: number;
+  renderHeight: number;
   modelDetail: Quality;
   animQuality: Quality;
   textureQuality: Quality;
@@ -60,7 +63,13 @@ const bridge = (): VideoBridge => {
   return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0 });
 };
 
+/** What OpenWar3 has always rendered at, and what `ui/stage.ts` calls the game frame. */
+const DEFAULT_WIDTH = 1920;
+const DEFAULT_HEIGHT = 1080;
+
 const DEFAULTS: VideoSettings = {
+  renderWidth: DEFAULT_WIDTH,
+  renderHeight: DEFAULT_HEIGHT,
   modelDetail: "high",
   animQuality: "high",
   textureQuality: "high",
@@ -138,6 +147,40 @@ const MAX_LIGHTS: Record<Quality, number> = { high: 8, medium: 4, low: 0 };
 const quality = (v: unknown, fallback: Quality): Quality =>
   v === "low" || v === "medium" || v === "high" ? v : fallback;
 
+/** "1280x720" → [1280, 720]. Anything else — an older store, a hand-edited one — is the
+ *  default, which is the size the game rendered at before this option existed. */
+function resolution(v: unknown): [number, number] {
+  const m = typeof v === "string" ? /^(\d{3,5})x(\d{3,5})$/.exec(v) : null;
+  return m ? [Number(m[1]), Number(m[2])] : [DEFAULT_WIDTH, DEFAULT_HEIGHT];
+}
+
+/**
+ * The size the world's canvas should be, in device pixels — Options → Video → Resolution.
+ *
+ * THIS IS THE ONE VIDEO SETTING A WEAK GPU CARES MOST ABOUT, and the reason is that it is the
+ * only one that changes how many PIXELS are drawn. Every other rung on the panel takes work off
+ * the CPU or off the vertex path; this one divides the fill rate, the overdraw of every
+ * translucent pass over the world, and the fog veil and weather that cover the screen. 1280×720
+ * is 2.25× fewer pixels than 1080p and 800×450 is 5.8× fewer.
+ *
+ * It costs no framing at all, which is why it can be a plain number rather than a compromise:
+ * the buffer is scaled into the stage by CSS and the stage is a fixed 16:9 box, so the camera
+ * sees exactly the same world however small this is (ui/stage.ts). The HUD is DOM and is not in
+ * this buffer, so it stays sharp at every rung.
+ */
+export function renderSize(): { width: number; height: number } {
+  return { width: current.renderWidth, height: current.renderHeight };
+}
+
+/**
+ * The same setting as a FACTOR, for the canvases that are sized by their own CSS box rather
+ * than to the game frame — the glue screens' 3D scene, which fills the window at whatever shape
+ * the window is. 1080p is 1, so the default changes nothing there either.
+ */
+export function renderScale(): number {
+  return current.renderHeight / DEFAULT_HEIGHT;
+}
+
 /** Frames between stand-sequence scans of the map's widgets — see ANIM_STRIDE. */
 export function animStride(): number {
   return ANIM_STRIDE[current.animQuality];
@@ -156,7 +199,10 @@ export function maxOmniLights(): number {
  * loader as textures arrive, and `particles` by the emitters as they emit.
  */
 export function applyVideoOptions(opts: Options): void {
+  const [renderWidth, renderHeight] = resolution(opts.resolution);
   current = {
+    renderWidth,
+    renderHeight,
     modelDetail: quality(opts.modelDetail, DEFAULTS.modelDetail),
     animQuality: quality(opts.animQuality, DEFAULTS.animQuality),
     textureQuality: quality(opts.textureQuality, DEFAULTS.textureQuality),

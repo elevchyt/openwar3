@@ -1,5 +1,5 @@
 import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
-import { maxOmniLights } from "./videoQuality";
+import { maxOmniLights, renderScale } from "./videoQuality";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
 import type { DataSource } from "../vfs/types";
@@ -1222,8 +1222,14 @@ export class MenuScene {
   }
 
   private syncCanvasSize(): void {
-    const w = this.canvas.clientWidth || window.innerWidth;
-    const h = this.canvas.clientHeight || window.innerHeight;
+    // Options → Video → Resolution applies here too, as a FACTOR: unlike the match's canvas this
+    // one is not a 16:9 game frame but the whole window, whatever shape that is, so what carries
+    // over is the ratio to 1080p rather than the pair of numbers (render/videoQuality.ts). The
+    // default rung is 1 and changes nothing. The glue is a 3D scene that animates continuously,
+    // so a machine that needs the setting needs it here as well.
+    const scale = renderScale();
+    const w = Math.max(1, Math.round((this.canvas.clientWidth || window.innerWidth) * scale));
+    const h = Math.max(1, Math.round((this.canvas.clientHeight || window.innerHeight) * scale));
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;

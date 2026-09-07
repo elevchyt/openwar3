@@ -53,6 +53,30 @@ const ON_OFF = [
   { value: "on", label: "ON" },
 ];
 
+/**
+ * What the Resolution dropdown offers — the size of the buffer the game is DRAWN into.
+ *
+ * This is the one list WC3 built at runtime rather than writing into the FDF (the `MENU` frame
+ * under `ResolutionMenu` is empty in the file), because it enumerated the display modes the
+ * hardware would give it. A browser has no display modes: the page renders into a canvas and CSS
+ * scales it into the window. So the analogue is the ladder of buffer sizes, and the frame it is
+ * scaled into is unchanged — which is why every rung here is EXACTLY 16:9. The stage is a fixed
+ * 16:9 box by construction (ui/stage.ts: a wider one quietly hands the player more map than the
+ * real game gives), so a 4:3 rung off the 2003 list would have to distort or letterback, and
+ * either way it would not mean what it says.
+ *
+ * Ascending, as the game's own list was. Labels are plain text rather than GlobalStrings keys —
+ * there are none for these, for the same reason the list was built at runtime.
+ */
+const RESOLUTIONS = [
+  { value: "800x450", label: "800 x 450" },
+  { value: "1024x576", label: "1024 x 576" },
+  { value: "1280x720", label: "1280 x 720" },
+  { value: "1600x900", label: "1600 x 900" },
+  { value: "1920x1080", label: "1920 x 1080" },
+  { value: "2560x1440", label: "2560 x 1440" },
+];
+
 // Ordered by panel, then by the FDF's own top-to-bottom order.
 export const OPTION_DEFS: readonly OptionDef[] = [
   // --- Gameplay ---
@@ -74,6 +98,9 @@ export const OPTION_DEFS: readonly OptionDef[] = [
 
   // --- Video (applied through render/videoQuality.ts, which documents what each rung does) ---
   { key: "gamma", frame: "GammaSlider", kind: "range", panel: "video", def: 50 },
+  // The buffer the world is drawn into (see RESOLUTIONS). 1920x1080 is the default and is what
+  // OpenWar3 has always rendered at, so a player who never opens this screen sees no change.
+  { key: "resolution", frame: "ResolutionMenu", kind: "choice", panel: "video", def: "1920x1080", choices: RESOLUTIONS },
   // No LOD models to swap to: an MDX carries one mesh, and WC3's lower rungs picked a simpler
   // one. Faking it by thinning the map's doodads would change what the map LOOKS like rather
   // than how much it costs to draw, which is not what the row says.

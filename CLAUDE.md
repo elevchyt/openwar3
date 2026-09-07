@@ -118,7 +118,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   LOD twin; Occlusion: we draw no x-ray silhouettes). Two traps: a terrain tileset is an ATLAS, so
   dropping its mips bleeds across the cells and draws a seam around every tile; and Animation
   Quality must not stride the SKELETONS, because the sim moves a unit by writing onto its instance
-  and a skipped instance stops moving.
+  and a skipped instance stops moving. **RESOLUTION is the one rung that changes how many PIXELS
+  are drawn**, and so the one a weak GPU cares most about: it sizes the world's drawing buffer,
+  which CSS then scales into the same fixed 16:9 stage, so the camera sees the same world at every
+  rung and the DOM HUD stays sharp (`GAME_WIDTH`/`GAME_HEIGHT` remain the LOGICAL frame). Every
+  rung is EXACTLY 16:9 because the stage is — a 4:3 rung off the 2003 list would distort or hand
+  the player more map. Measured on a fill-bound frame it halves it (6.8 → 3.1 ms at 800×450); on a
+  CPU-bound one it does almost nothing, which is the whole point of who it is for.
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
   in `src/render/mapViewer.ts`, HUD DOM in `src/ui/hud.ts`, data tables in `src/data/` (units, techtree, `abilities.ts`),
   audio in `src/audio/`, styles in `src/style.css`.

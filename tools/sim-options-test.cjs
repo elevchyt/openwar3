@@ -33,7 +33,7 @@ const {
   OPTION_DEFS, defaultOptions, loadOptions, saveOptions, applyAudioOptions,
 } = require(join(REPO, ".sim-build", "src", "data", "options.js"));
 const {
-  applyVideoOptions, videoSettings, animStride, maxOmniLights,
+  applyVideoOptions, videoSettings, animStride, maxOmniLights, renderSize, renderScale,
 } = require(join(REPO, ".sim-build", "src", "render", "videoQuality.js"));
 const { SOUND_GROUP } = require(join(REPO, ".sim-build", "src", "audio", "sounds.js"));
 
@@ -142,6 +142,36 @@ console.log("\nthe video applier turns the panel's words into the renderer's num
   // renderer ladder — every rung is looked up by key and an unknown one is not a rung.
   applyVideoOptions({ ...defaultOptions(), particles: "ultra", animQuality: 7 });
   check("an unknown rung falls back to the default", [bridge().particleScale, animStride()], [1, 1]);
+}
+
+console.log("\nResolution picks the size of the buffer the world is drawn into");
+{
+  // The default has to be what the game rendered at before the option existed, or a player who
+  // never opens this screen would have their picture change under them.
+  applyVideoOptions(defaultOptions());
+  check("the default is the game frame", renderSize(), { width: 1920, height: 1080 });
+  check("…and its factor is 1 for the canvases sized by their own box", renderScale(), 1);
+
+  applyVideoOptions({ ...defaultOptions(), resolution: "1280x720" });
+  check("a chosen rung is the buffer size", renderSize(), { width: 1280, height: 720 });
+  check("…and the same rung as a factor", +renderScale().toFixed(4), +(720 / 1080).toFixed(4));
+
+  // EVERY rung must be exactly 16:9. The stage scales this buffer into a fixed 16:9 box, so a
+  // rung that is not would either distort the world or show more of it than the game gives.
+  const res = OPTION_DEFS.find((d) => d.key === "resolution");
+  const offRatio = (res.choices ?? []).filter((c) => {
+    const [w, h] = c.value.split("x").map(Number);
+    return w * 9 !== h * 16;
+  });
+  check("every rung offered is exactly 16:9", offRatio.map((c) => c.value), []);
+
+  // A store from before this option, or one somebody edited, must not size a canvas to NaN.
+  applyVideoOptions({ ...defaultOptions(), resolution: "native" });
+  check("a junk resolution falls back to the game frame", renderSize(), { width: 1920, height: 1080 });
+  const stale = { ...defaultOptions() };
+  delete stale.resolution;
+  applyVideoOptions(stale);
+  check("…and so does a store that predates it", renderSize(), { width: 1920, height: 1080 });
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");

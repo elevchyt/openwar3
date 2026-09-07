@@ -33,6 +33,7 @@ in `OPTION_DEFS` for it was bound to a frame that has never existed.
 | Row | Backend |
 |---|---|
 | **Gamma** | An SVG `feComponentTransfer type="gamma"` over `#map`. Installed only off the middle. |
+| **Resolution** | The size of the buffer the world is drawn into. |
 | **Model Detail** | *Nothing* — see below. |
 | **Animation Quality** | Strides the map's widget stand-scan (1 / 2 / 4 frames). |
 | **Texture Quality** | Drops 0 / 1 / 2 mip levels off the top of every BLP as it uploads. |
@@ -40,6 +41,46 @@ in `OPTION_DEFS` for it was bound to a frame that has never existed.
 | **Lights** | Caps the glue scene's uploaded omni lights at 8 / 4 / 0. |
 | **Unit Shadows** | Skips the unit and building shadow passes (and the batch rebuild that feeds them). |
 | **Occlusion** | *Nothing* — see below. |
+
+## Resolution is the one that changes how many pixels are drawn
+
+Every other rung on the panel takes work off the CPU or off the vertex path. This one divides
+the **fill**: the ground, the water, the fog veil, the weather, and every translucent pass over
+the world. 1280×720 is 2.25× fewer pixels than 1080p and 800×450 is 5.8× fewer. On a machine
+whose GPU is the bottleneck it is the largest single thing on this screen.
+
+It costs no framing at all, which is why it can be a plain number rather than a compromise. The
+buffer is scaled into the stage by CSS and the stage is a fixed 16:9 box, so the camera sees
+exactly the same world at 800×450 as at 1440p — and the HUD is DOM, so it is not in this buffer
+and stays sharp at every rung. `GAME_WIDTH`/`GAME_HEIGHT` in `ui/stage.ts` remain the LOGICAL
+frame; this is only how many pixels are drawn into it.
+
+**Every rung is exactly 16:9, and that is not a style choice.** This is the one list WC3 built at
+runtime rather than writing into the FDF — the `MENU` frame under `ResolutionMenu` is empty in
+the file, because the game enumerated the display modes the hardware offered. A browser has no
+display modes, so the analogue is the ladder of buffer sizes; and since the stage is 16:9 by
+construction (a wider box quietly hands the player more map than the real game gives), a 4:3 rung
+off the 2003 list would have to distort or letterbox and would not mean what it says. The test
+asserts the ratio of every rung rather than trusting the table.
+
+The glue screens take the same setting as a FACTOR rather than a pair of numbers: that canvas is
+the whole window at whatever shape the window is, not a game frame, so what carries over is the
+ratio to 1080p. The default rung is 1 and changes nothing anywhere.
+
+**What it is worth, measured both ways, because the answer is entirely about what the frame is
+short of.** On a frame that is FILL-bound — the camera on empty ground, the match paused, 13
+instances on screen, so what is left is the terrain, the water, the veil and the weather:
+
+| | ms/frame | |
+|---|---|---|
+| 1920×1080 | 6.79 | |
+| 1280×720 | 4.57 | −33 % |
+| 800×450 | 3.14 | −54 % |
+
+On a frame that is CPU-bound — the same map with an army of 180 standing on it, 263 instances —
+the same three rungs give 21.5, 19.9 and 19.0 ms. Barely anything. Both numbers are true and the
+pair of them is the point: this setting divides the pixels and nothing else, so it is worth half
+the frame to a machine whose GPU is the bottleneck and nearly nothing to one whose CPU is.
 
 **Only ONE of these numbers is the game's**, and it is worth knowing which. mdx-m3-viewer's
 `geometryemitterfuncs.js` records the observation in its own source — *"The game scales the

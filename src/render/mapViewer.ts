@@ -61,12 +61,12 @@ import { ModelViewerScene } from "./modelViewer";
 import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { perfLog } from "../dev/perfLog";
-import { animStride, videoSettings } from "./videoQuality";
+import { animStride, renderSize, videoSettings } from "./videoQuality";
 import { TerrainCull } from "./terrainCull";
 import { setSimProfiler } from "../sim/profile";
 import { wc3ToPlain } from "../ui/wc3Text";
 import { GameHud, isTyping, upkeepBand, PLAYER_COLORS, type HudDriver, type CommandButton } from "../ui/hud";
-import { GAME_WIDTH, GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
+import { GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
 import { MatchOverDialog } from "../ui/gameMenu";
 import { EscMenu } from "../ui/escMenu";
 import { AllianceDialogOverlay } from "../ui/allianceDialog";
@@ -12635,18 +12635,28 @@ export class MapViewerScene {
   }
 }
 
-// The game renders at a fixed 1080p, 16:9 (ui/stage.ts) — the frame Warcraft III itself
-// draws, and the frame the lens is framed for. The CSS stage scales this buffer into the
-// largest 16:9 box the window allows and letterboxes the rest, so the aspect can never drift
-// with the window: 1:1 fullscreen on a 1080p display, cleanly scaled everywhere else. Sizing
-// the buffer off the window instead is what let a tall window widen the view — the lens is
-// vertical, so a wider box quietly hands the player more map than the real game gives.
+// The game renders at a fixed 16:9 (ui/stage.ts) — the frame Warcraft III itself draws, and the
+// frame the lens is framed for. The CSS stage scales this buffer into the largest 16:9 box the
+// window allows and letterboxes the rest, so the aspect can never drift with the window: 1:1
+// fullscreen on a 1080p display, cleanly scaled everywhere else. Sizing the buffer off the
+// window instead is what let a tall window widen the view — the lens is vertical, so a wider box
+// quietly hands the player more map than the real game gives.
+//
+// HOW BIG that 16:9 buffer is, though, is the player's (Options → Video → Resolution;
+// render/videoQuality.ts). Nothing about the framing moves with it — the stage scales whatever
+// size this is into the same box, so the camera sees the same world at 800×450 as at 1440p, and
+// the HUD is DOM and is not in this buffer at all. `GAME_WIDTH`/`GAME_HEIGHT` remain the LOGICAL
+// frame; this is only the number of pixels drawn into it.
+//
+// Called every frame (see the render loop), so a change on the Options screen lands on the next
+// one rather than the next match.
 function syncCanvasSize(canvas: HTMLCanvasElement): void {
+  const { width, height } = renderSize();
   // Only assign when it changed: reassigning canvas.width/height even to the same value
   // reallocates and clears the GL drawing buffer.
-  if (canvas.width !== GAME_WIDTH || canvas.height !== GAME_HEIGHT) {
-    canvas.width = GAME_WIDTH;
-    canvas.height = GAME_HEIGHT;
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
   }
 }
 
