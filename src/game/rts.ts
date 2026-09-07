@@ -3745,6 +3745,15 @@ export class RtsController {
       // delta is zero and a freshly spawned unit stands rather than false-triggering a walk.
       const prevX = Number.isNaN(e.prevDrawnX) ? u.x : e.prevDrawnX;
       const prevY = Number.isNaN(e.prevDrawnY) ? u.y : e.prevDrawnY;
+      // The swing counter's baseline is the same fact for the attack picker, and it is taken
+      // HERE — the first frame this entry sees the unit at all — and never inside the
+      // attacking branch. The sim raises `inCombat` and starts the first swing in ONE tick,
+      // so "the first frame in combat" already carries that swing's increment: adopting the
+      // counter there swallowed the first blow of every freshly trained unit, which stood in
+      // its ready stance while the hit landed. Adopted at first sight instead, a unit that
+      // was already mid-fight when we began drawing it (a client joining, a remodel) still
+      // throws no phantom swing, and a fresh unit's first swing is the first increment we see.
+      if (e.lastSwingSeq < 0) e.lastSwingSeq = u.swingSeq;
       e.prevDrawnX = u.x;
       e.prevDrawnY = u.y;
       // A neutral-passive STRUCTURE (shop, tavern, fountain) is drawn where the map put it —
@@ -3911,11 +3920,6 @@ export class RtsController {
             e.unit.instance.setSequenceLoopMode(SequenceLoopMode.Loop);
           }
         } else {
-          // The first sight of this unit in a fight is the BASELINE, not a swing: nothing
-          // has been swung yet (or it was swung before we were looking), and playing the
-          // attack clip for it had every unit throw a phantom blow while it was still
-          // turning to face its target.
-          if (e.lastSwingSeq < 0) e.lastSwingSeq = u.swingSeq;
           // Between swings a WC3 unit is never a still picture. The attack clip plays ONCE
           // and the unit then stands in its "Stand Ready" alert stance until the next swing
           // — or in its plain Stand when the model authors no ready clip, which is what
