@@ -39,7 +39,7 @@ import {
   xpToReachLevel,
   type ReviveMode,
 } from "../data/gameplayConstants";
-import { simProfile } from "./profile";
+import { perfNow, simProfile } from "./profile";
 import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, DISPEL_CODES, worthDispelling, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
@@ -19071,10 +19071,18 @@ export class SimWorld {
     if (u.repollT > 0) return;
     u.repollT = REPATH_POLL;
     if (u.waypoint >= u.path.length) return; // nothing left to walk
-    if (!this.pathAheadBlocked(u)) return;
-    if (this.repathsThisStep >= REPATH_BUDGET_PER_STEP) return; // …next poll, then
-    this.repathsThisStep++;
-    this.pathTo(u, u.chaseX, u.chaseY); // reroute toward the same goal
+    // Past both cooldowns, so this is the poll actually doing something. Timed from here
+    // rather than from the top of the call: a span around the early returns would measure the
+    // profiler more than the work.
+    simProfile.begin("sim.world.move.walk.reroute");
+    try {
+      if (!this.pathAheadBlocked(u)) return;
+      if (this.repathsThisStep >= REPATH_BUDGET_PER_STEP) return; // …next poll, then
+      this.repathsThisStep++;
+      this.pathTo(u, u.chaseX, u.chaseY); // reroute toward the same goal
+    } finally {
+      simProfile.end("sim.world.move.walk.reroute");
+    }
   }
 
   /** True when the remaining path — out to REPATH_LOOKAHEAD ahead — now runs
@@ -19231,7 +19239,16 @@ export class SimWorld {
     // Search CHEAP first. A caller that named its own budget keeps it; everyone else gets the
     // floor, and pays for more only if the floor fell short — see `escalate`.
     const first = maxExpansions ?? PATH_FLOOR_EXPANSIONS;
+    // Every ground search in the game comes through here, so this is where the two numbers
+    // that tell "the pathing is expensive" apart from "the pathing is being ASKED far too
+    // often" are counted. The report reads a tally as a per-second rate: `pathSearches` is how
+    // many times somebody wanted a route, `pathExpansions` is what those routes actually cost
+    // in A* cells, and the gauge is the single worst search in the window — which a mean over
+    // hundreds of floor-budget searches is guaranteed to hide (docs/perf-logging.md).
+    simProfile.tally("pathSearches");
+    const searchAt = perfNow();
     let cells = findPath(this.grid, start, goal, blocked, first, domain, ring, u.footprint);
+    simProfile.tally("pathExpansions", pathExpansionsSpent());
     // Routing around the live crowd can leave nowhere to go at all (hemmed in on every
     // side). Fall back to the ordinary route — walk up to the obstruction and wait it out —
     // rather than reporting "no path" and standing down.
@@ -19250,6 +19267,7 @@ export class SimWorld {
         Math.ceil(pathExpansionsSpent() / LONG_SEARCH_EXPANSIONS_PER_STEP),
       );
     }
+    simProfile.gauge("pathSearch", perfNow() - searchAt);
     // A single-cell (or empty) result means the unit can't get any closer.
     if (!cells || cells.length <= 1) {
       if (wasReserved) this.settle(u);
@@ -19597,12 +19615,18 @@ export class SimWorld {
     // its own pass because the claims have to be complete for the stepping pass to mean
     // anything: whoever ran first would otherwise walk straight over a unit that had not
     // got round to claiming its own ground yet, and iteration order would decide who wins.
+    //
+    // Timed apart from the stepping because it is the one pass here that walks EVERY unit
+    // rather than every MOVER, so it grows with the army standing still as well as the army
+    // walking — which is a different shape of cost and worth being able to see (docs/perf-logging.md).
+    simProfile.begin("sim.world.move.walk.claims");
     for (const u of this.units.values()) {
       // Stopped, dead, boarded or ghosting: a claim it may still hold is stale. (settle()
       // normally hands it back; this catches every other way movement can end.)
       if ((u.moving || u.waitT > 0) && this.claimsCells(u)) this.ensureClaim(u);
       else if (u.hasClaim) this.releaseClaim(u);
     }
+    simProfile.end("sim.world.move.walk.claims");
     for (const u of this.units.values()) {
       if (!u.moving || !u.path.length) continue; // parked units hold a claim but walk nowhere
       // Still materializing: a raised Skeleton is climbing out of the ground and has no feet
@@ -19624,6 +19648,10 @@ export class SimWorld {
       let dirX = 0;
       let dirY = 0;
       let blocked = false;
+      // The stepping itself: gliding along the polyline, taking the ground cell by cell. No
+      // early exit leaves the loop, so the span needs no `finally` — `break` ends the while,
+      // not the method.
+      simProfile.begin("sim.world.move.walk.step");
       while (budget > 0 && u.waypoint < u.path.length) {
         const isLast = u.waypoint === u.path.length - 1;
         const [wx, wy] = u.path[u.waypoint];
@@ -19657,6 +19685,7 @@ export class SimWorld {
         }
         if (dist - step <= ARRIVE_EPS) u.waypoint++;
       }
+      simProfile.end("sim.world.move.walk.step");
       // Face the movement direction; the shared turning pass rotates at the
       // unit's turn rate (and keeps rotating after arrival if needed).
       if (dirX || dirY) {
@@ -19673,8 +19702,13 @@ export class SimWorld {
         if (u.blockedT >= BLOCKED_REPATH_TIME) {
           u.blockedT = 0;
           if (u.waypoint < u.path.length && !u.flying) {
+            // The OTHER repath in this loop, and the dear one: `avoidMovers` treats the crowd
+            // as walls, so it is the search most likely to run out of budget and spend all of
+            // it. Timed apart from the poll above, which is the one on a cooldown.
+            simProfile.begin("sim.world.move.walk.blocked");
             this.makeWay(u); // ask an idle/parked ally standing in the gap to shuffle over
             this.pathTo(u, u.chaseX, u.chaseY, undefined, true);
+            simProfile.end("sim.world.move.walk.blocked");
           }
         }
         continue;

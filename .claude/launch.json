@@ -4,7 +4,17 @@
     {
       "name": "openwar3-dev",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["node_modules/vite/bin/vite.js"],
+      "runtimeArgs": [
+        "node_modules/vite/bin/vite.js"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "openwar3-dev-log",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/dev-log.mjs"
+      ],
       "port": 5173
     }
   ]

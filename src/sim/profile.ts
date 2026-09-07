@@ -21,9 +21,13 @@ export interface SimProfiler {
   end(phase: string): void;
   /** The worst single occurrence of something this window — see `perfLog.gauge`. */
   gauge(name: string, v: number): void;
+  /** How many times something happened this window; the report reads it as a per-second rate
+   *  (see `perfLog.tally`). A COUNT is what separates "this pass is expensive" from "this pass
+   *  is being run far more often than it should be", and only the second is a bug. */
+  tally(name: string, n?: number): void;
 }
 
-const OFF: SimProfiler = { begin: () => {}, end: () => {}, gauge: () => {} };
+const OFF: SimProfiler = { begin: () => {}, end: () => {}, gauge: () => {}, tally: () => {} };
 
 /** The live profiler. Read through the object (never destructured) so `setSimProfiler` is
  *  seen by call sites that were compiled before it was ever called. */
@@ -34,6 +38,7 @@ export function setSimProfiler(p: SimProfiler | null): void {
   simProfile.begin = p ? p.begin.bind(p) : OFF.begin;
   simProfile.end = p ? p.end.bind(p) : OFF.end;
   simProfile.gauge = p ? p.gauge.bind(p) : OFF.gauge;
+  simProfile.tally = p ? p.tally.bind(p) : OFF.tally;
 }
 
 /** `performance.now()`, reachable from the sim — it is a global in Node as well as in the

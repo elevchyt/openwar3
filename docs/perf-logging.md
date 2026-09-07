@@ -164,6 +164,16 @@ something is PUSHED on a clock rather than on a change** — and note the shape 
 fog rebuild above: neither was doing anything wrong, both were answering a question nobody had
 asked again.
 
+## A counter that is not a cost
+
+`pathNodes` is the sum of every unit's remaining WAYPOINTS. It is a census of what the units are
+holding, not of what the pathfinder did — a unit walking a long way holds a dozen of them and a
+unit that has just been given a short order holds two, and neither says anything about how much
+searching happened. Read as though it were work, it says "8× the pathing for 1.3× the units" in a
+session where nothing of the sort was going on; the actual rate, once counted, was **29 searches a
+second across eight players**. Every census counter here has this shape, so before drawing a
+conclusion from one, check whether it counts a THING or an EVENT.
+
 ## Adding to it
 
 - **A new phase**: `perfLog.begin("name")` / `perfLog.end("name")` around a stretch of the
@@ -181,6 +191,12 @@ asked again.
   there. So the sim calls `simProfile.begin/end/gauge` from `src/sim/profile.ts` — a no-op the
   renderer plugs the real recorder into when a match starts. Never import the recorder into
   `src/sim/`.
+- **A COUNT, from inside the sim**: `simProfile.tally("name")` (or `tally(name, n)`), which the
+  report reads as a per-second rate. Reach for this whenever the question is *how often* rather
+  than *how long* — the two are different bugs and a phase time cannot tell them apart. `walk`
+  growing could be the stepping loop doing its job for more units, or it could be the pathfinder
+  being asked over and over; `pathSearches` and `pathExpansions` answer that in one line of the
+  report and cost nothing when the recorder is unplugged.
 - **A new counter**: one line in `MapViewerScene.perfCounts()`. The bar is "can this grow?" —
   a collection that only ever holds one thing tells you nothing, and a counter that costs more
   than a `.size` read does not belong in something sampled every second.

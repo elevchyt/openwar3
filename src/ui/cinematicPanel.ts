@@ -177,7 +177,7 @@ export class CinematicPanelOverlay {
   /** What the panel should be showing right now — the bars plus this line of subtitle. */
   private sceneKey(): string {
     const s = this.scene;
-    return `${this.letterbox}|${s ? `${s.speaker} ${s.text}` : ""}`;
+    return `${this.letterbox}|${s ? `${s.speaker}\0${s.text}` : ""}`;
   }
 
   /** Note that what's on screen is out of date, and get the pump going.

@@ -195,7 +195,7 @@ function makeHpBar(layer: HTMLElement): HpBar {
     root, bars, level, hp, manaTrack, mana, garrisonRow, abilRow,
     // NaN/undefined-ish seeds so the first sync writes everything; `hidden` matches the
     // element's actual initial state.
-    last: { hpFrac: NaN, state: "", manaFrac: NaN, level: NaN, garrison: " ", abilities: " ", barW: NaN, barH: NaN, left: NaN, top: NaN, hidden: true },
+    last: { hpFrac: NaN, state: "", manaFrac: NaN, level: NaN, garrison: "\0", abilities: "\0", barW: NaN, barH: NaN, left: NaN, top: NaN, hidden: true },
   };
 }
 
