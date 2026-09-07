@@ -4841,7 +4841,10 @@ export class MapViewerScene {
     if (!world) return;
     for (const unitId of world.shopArrowUnits(this.localPlayer)) {
       const key = `shoparrow|${unitId}`;
-      this.trackBuffFx(active, key, SHOP_ARROW_FX, unitId, this.rts?.playerColor(this.localPlayer) ?? this.localPlayer);
+      // The patron's OWN colour as it stands on the field — under Ally Color Mode that is the
+      // filter's blue, not the player's slot, and `trackBuffFx` re-applies it every frame so
+      // toggling the mode while the arrow is up repaints it with the unit beneath it.
+      this.trackBuffFx(active, key, SHOP_ARROW_FX, unitId, this.rts?.bodyColor(unitId) ?? this.localPlayer);
     }
   }
 
@@ -4944,6 +4947,10 @@ export class MapViewerScene {
     const inst = this.buffFx.get(key);
     if (inst) {
       this.settleBuffFx(key, inst);
+      // Team-coloured art follows the colour its unit wears NOW (an int write per frame):
+      // the ally-colour filter repaints every body when it toggles, and art spawned under
+      // the old mode would otherwise keep the old colour until it died.
+      if (teamColor !== undefined) inst.setTeamColor?.(teamColor);
       if (this.buffFxParented.has(key)) return; // rides its attachment node
       const u = this.rts?.simView.units.get(simId);
       if (u) {

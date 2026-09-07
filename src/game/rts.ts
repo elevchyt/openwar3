@@ -1126,6 +1126,16 @@ export class RtsController {
     return worldFilterColor(this.allyColorFilter, this.colorSide(owner)) ?? override ?? this.playerColor(owner);
   }
 
+  /** The colour THIS BODY wears right now — `unitColor` with the unit's own `SetUnitColor`
+   *  folded in — for art that hangs on a unit and must match it (the shop arrow over the
+   *  patron). Asked every frame rather than once at spawn, because the ally-colour filter can
+   *  change while the art is up and a stale arrow reads as somebody else's unit. */
+  bodyColor(simId: number): number | undefined {
+    const u = this.sim.units.get(simId);
+    if (!u) return undefined;
+    return this.unitColor(u.owner, this.byId.get(simId)?.colorOverride);
+  }
+
   /**
    * Called whenever the colours the WORLD is painted in have moved — the filter changing
    * mode, an alliance changing hands under one, a watched match being seated.
