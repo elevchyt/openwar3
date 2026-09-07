@@ -4248,8 +4248,24 @@ export class SimWorld {
       // stays paused until the worker arrives (tickBuildings' nearby check). A
       // grouped order passes ax/ay — a distinct spot around the footprint — so
       // builders fan around the structure rather than all making for its centre.
+      //
+      // A LONE builder is sent at the building itself, and that means its BOX
+      // (approachExtent): walk up to the stamp and stop against it, exactly as a repair
+      // order walks (issueRepair). It used to be sent at the CENTRE, which is ground
+      // inside the foundation that nothing can stand on, and a plain move there can never
+      // ARRIVE — atMoveGoal wants the point itself — nor be waited out, since
+      // terrainReachable read a centre six cells inside the stamp as "walled off". So the
+      // walk ended in stop(), and stop() threw the construction job away with it: a
+      // Peasant right-clicked onto a halted Barracks walked over and stood there idle.
+      // Because it fell short (holdOrGiveUp) rather than arriving, a group's spread points
+      // — real cells beside the building — were the one case that worked, which is why
+      // the report was "sometimes".
+      // (A spread point ON the centre is the building too: ringTargets hands a lone worker
+      // the plain centre rather than a ring slot, and the order passes that through as ax/ay.)
       w.order = "move";
-      if (!this.pathTo(w, ax ?? b.x, ay ?? b.y)) {
+      const atBuilding = ax === undefined || ay === undefined || (ax === b.x && ay === b.y);
+      const approach = atBuilding ? this.approachExtent(b) : undefined;
+      if (!this.pathTo(w, ax ?? b.x, ay ?? b.y, undefined, false, approach)) {
         w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x);
       }
       return;
@@ -5747,6 +5763,18 @@ export class SimWorld {
           if (nearby) {
             if (!builder.insideBuild) builder.desiredFacing = Math.atan2(u.y - builder.y, u.x - builder.x); // face the site while hammering
             present++;
+          } else if (!builder.moving && builder.order === "idle" && builder.waitT <= 0 && builder.repathT <= 0) {
+            // Holding the job, standing still, and NOT at the site: the walk ended short —
+            // shoved off, a spread point that was a ring too far out, a route given up on —
+            // and nothing else will ever take it up again, because a builder is skipped by
+            // every idle-worker pass (it has a job) and its shift-queue waits on the job too.
+            // Walk it up to the building's box, as tickRepair walks a repairer whose walk
+            // ended short. On the same cooldown, so a site nothing can reach costs one A*
+            // every ATTACK_GIVEUP_COOLDOWN rather than one a tick. (A builder still PARKED
+            // on its move order — waitT running — is resumeRoute's, not ours.)
+            builder.order = "move";
+            if (!this.pathTo(builder, u.x, u.y, undefined, false, this.approachExtent(u))) builder.order = "idle";
+            builder.repathT = ATTACK_GIVEUP_COOLDOWN;
           }
         }
         if (present > 0) {
@@ -8136,32 +8164,57 @@ export class SimWorld {
 
   stop(id: number): void {
     const u = this.units.get(id);
-    if (u) {
-      // A stopped miner stands on the FIELD. Stop does not come through issueOrder, so a worker
-      // stopped mid-shaft (an Amulet of Recall's pull, a script) kept `inMine` with nothing left
-      // to clear it and held the mine's `busy` latch shut against its whole crew.
-      this.popFromMine(u);
-      u.order = "idle";
-      this.clearCast(u); // the one command that aborts a locked-in wind-up (raises SPELL_ENDCAST)
-      u.arrowShot = null; // …and an aimed arrow is called off with the attack that carried it
-      u.targetId = null;
-      u.followLeaderId = null; // an explicit stop ends any follow-and-guard episode
-      u.inCombat = false;
-      u.working = false;
-      u.atNode = false;
-      u.noCollision = false; // manual stop restores collision
-      u.stallT = 0;
-      u.waitT = 0; // nothing left to resume
-      u.gaveUp = false;
-      u.acquireT = 0; // scan for a new target on the very next idle tick (no ½s lag)
-      this.cancelSwing(u);
-      this.detachBuilder(id);
-      u.ringSlot = 0; // an Acolyte told to stop gives up its station in the mining ring
-      this.settle(u);
-      // Any errand the unit was walking to finish is off: a Stop cancels a pending drop, hand-
-      // over or sale as it cancels everything else.
-      u.pendingSell = null;
-    }
+    if (u) this.standDown(u, false);
+  }
+
+  /**
+   * A walk that has ENDED where the unit stands, as the movement code ends one: arrived as
+   * near as the crowd allows (checkStuck, resumeRoute), or given up because the terrain puts
+   * the point out of reach (holdOrGiveUp). Everything a Stop does — with ONE difference: a
+   * builder walking to its site keeps the site.
+   *
+   * Those sites all called `stop`, and `stop` detaches a builder, because a Stop from the
+   * player must. But a worker resuming a halted construction walks there under a plain
+   * "move" order with the job hanging off `constructing` (assignBuilder), so every way its
+   * walk could end early — stopped a body short of a crowded site, parked and then found
+   * "close enough", walled off — threw the job away at the very moment the worker got there.
+   * It then stood beside the building idle, holding nothing, and tickBuildings had nobody to
+   * count. The job is the worker's until the PLAYER re-tasks it: tickBuildings walks a
+   * builder that ended short back up to the box, and counts one that ended against it.
+   */
+  private endWalk(u: SimUnit): void {
+    this.standDown(u, true);
+  }
+
+  /** The body of `stop` / `endWalk`: stand the unit down where it is. `keepSite` is the
+   *  one thing that tells the two apart — a Stop drops a construction job, a walk that has
+   *  merely ended does not. (Everything else a builder holds is order state, and a builder
+   *  on its way to the site holds no other.) */
+  private standDown(u: SimUnit, keepSite: boolean): void {
+    // A stopped miner stands on the FIELD. Stop does not come through issueOrder, so a worker
+    // stopped mid-shaft (an Amulet of Recall's pull, a script) kept `inMine` with nothing left
+    // to clear it and held the mine's `busy` latch shut against its whole crew.
+    this.popFromMine(u);
+    u.order = "idle";
+    this.clearCast(u); // the one command that aborts a locked-in wind-up (raises SPELL_ENDCAST)
+    u.arrowShot = null; // …and an aimed arrow is called off with the attack that carried it
+    u.targetId = null;
+    u.followLeaderId = null; // an explicit stop ends any follow-and-guard episode
+    u.inCombat = false;
+    u.working = false;
+    u.atNode = false;
+    u.noCollision = false; // manual stop restores collision
+    u.stallT = 0;
+    u.waitT = 0; // nothing left to resume
+    u.gaveUp = false;
+    u.acquireT = 0; // scan for a new target on the very next idle tick (no ½s lag)
+    this.cancelSwing(u);
+    if (!keepSite) this.detachBuilder(u.id);
+    u.ringSlot = 0; // an Acolyte told to stop gives up its station in the mining ring
+    this.settle(u);
+    // Any errand the unit was walking to finish is off: a Stop cancels a pending drop, hand-
+    // over or sale as it cancels everything else.
+    u.pendingSell = null;
   }
 
   // --- shift-queued orders --------------------------------------------------
@@ -13883,7 +13936,7 @@ export class SimWorld {
     // other units occupy and the mover vibrates against them (issue #24). Only for
     // plain move/patrol — attack/attackmove/harvest handle their own arrival above.
     if ((u.order === "move" || u.order === "patrol") && Math.hypot(tx - u.x, ty - u.y) <= PATHING_CELL * 2) {
-      this.stop(u.id);
+      this.endWalk(u); // …and a builder walking to its site keeps the site
       u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
       return;
     }
@@ -19935,7 +19988,7 @@ export class SimWorld {
       this.parkAndWait(u);
       return;
     }
-    this.stop(u.id);
+    this.endWalk(u); // the walk is over; a builder's site is still its site (see endWalk)
     u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
   }
 
@@ -19962,7 +20015,7 @@ export class SimWorld {
   private resumeRoute(u: SimUnit): boolean {
     if (u.waitT > 0) return false; // still counting down
     if (this.atMoveGoal(u)) {
-      this.stop(u.id); // as close as the crowd allows — that IS arriving
+      this.endWalk(u); // as close as the crowd allows — that IS arriving (a builder keeps its site)
       u.desiredFacing = Math.atan2(u.chaseY - u.y, u.chaseX - u.x);
       return false;
     }
@@ -20011,7 +20064,18 @@ export class SimWorld {
     // ground pressed against a wall, and standing a body away from it is arriving.
     const startRegion = this.grid.regionAt(start[0], start[1], domain, n);
     if (startRegion < 0) return false;
-    return startRegion === this.grid.regionNear(goal[0], goal[1], domain, n, 2);
+    // An APPROACH names a thing standing on the point, not the point (pathTo's `approach`,
+    // remembered on the unit as chaseHX/chaseHY exactly as pathTo itself re-reads it). Its
+    // centre is inside the thing's own stamp, and two cells of slack reach the edge of a
+    // Farm and nowhere near the edge of a Barracks — so a builder or a repairer sent at a
+    // big building read as "walled off" the moment its route ended short, and was stood
+    // down. Reaching THE BOX is what such a walk asks, so the slack is the box's own
+    // half-extent on top of the two cells.
+    let slack = 2;
+    if (u.chaseHX > 0 && tx === u.chaseX && ty === u.chaseY) {
+      slack += Math.ceil(Math.max(u.chaseHX, u.chaseHY) / PATHING_CELL);
+    }
+    return startRegion === this.grid.regionNear(goal[0], goal[1], domain, n, slack);
   }
 
   /** After finishing a path that stopped short of the ordered point, try again
