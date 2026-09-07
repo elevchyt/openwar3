@@ -694,6 +694,35 @@ export function buildTextArea(el: HTMLElement, f: FdfFrame, scale: number, bar?:
   return control;
 }
 
+// --- a scrolling FRAME -------------------------------------------------------------
+
+/**
+ * A plain FRAME that SCROLLS: its children ride in a viewport clipped to the frame's own box,
+ * with the FDF's scrollbar down its right — the game lobby's TeamSetupContainer, whose rows
+ * (one PlayerSlot per seat, a heading per force, an Observers bench under its own) can run
+ * past the 0.39 GameChatroom.fdf gives it.
+ *
+ * The engine has no such thing — a FRAME is a bare container, and only a TEXTAREA or a list
+ * drives a bar — so this is OURS: the renderer treats a FRAME that carries a SCROLLBAR child
+ * as one of these (ui/fdf/render.ts `renderScrollFrame`). The bar is whatever SCROLLBAR the
+ * frame was handed, drawn from its own art exactly as a list's is; and as everywhere else it
+ * goes away when there is nothing to scroll (`buildScrollBar.sync`), so a lobby that fits is
+ * laid out exactly as it was before there was a bar at all.
+ *
+ * `view` is where the frame's children go. Every one of them is `position:absolute` inside
+ * it, so the viewport's scroll height is the bottom of the lowest row and nothing more.
+ */
+export function buildScrollFrame(el: HTMLElement, bar: ScrollBarStyle | null): { view: HTMLElement; sync(): void } {
+  const view = document.createElement("div");
+  view.className = "fdf-scroll-view";
+  // The children stop where the bar starts — it sits beside them, as a list's does. `sync`
+  // gives the strip back while the bar is hidden.
+  if (bar) view.style.right = `${bar.width}px`;
+  el.appendChild(view);
+  const scrollbar = bar ? buildScrollBar(el, view, bar, 0) : null;
+  return { view, sync: () => scrollbar?.sync() };
+}
+
 /** Draw the FDF's scrollbar down the right of `rows` and drive it: the arrows step, the
  *  knob drags, and scrolling the rows any other way (wheel, keyboard) moves the knob back. */
 function buildScrollBar(

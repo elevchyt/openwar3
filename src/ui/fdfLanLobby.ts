@@ -14,17 +14,19 @@ import {
 import { ADVANCED_OPTIONS_DISPLAY_OVERRIDE, OW3_STRINGS } from "../overrides";
 import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
-import type { FdfLibrary } from "./fdf/library";
+import { numProp, type FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { Option } from "./fdf/widgets";
 import type { MeleeConfig } from "./lobby";
 import {
-  INFO_ROWS, adopt, fillMapInfo, findFrame, layoutInfoPane, loadMinimapIcons, nudgeX, nudgeY, num,
-  paneRowsToHide, readMapPreviewFor, setProp, size, type MinimapIcons,
+  BLURB_SCROLLBAR, BLURB_SCROLLBAR_FDF, INFO_ROWS, adopt, fillMapInfo, findFrame, layoutInfoPane,
+  loadMinimapIcons, nudgeX, nudgeY, num, paneRowsToHide, readMapPreviewFor, setProp, size,
+  type MinimapIcons,
 } from "./mapBrowser";
 import {
-  HANDICAPS, PLAYER_SLOT_FDF, SLOT_OPTIONS, buildSlotRows, dropdownButtonNames, fillForceLabels,
-  forceGroups, labelOf, slotOption, slotOptionValue, slotOptionsFor, teamOptions, type Group,
+  HANDICAPS, PLAYER_SLOT_FDF, ROW_INDENT, SLOT_OPTIONS, buildSlotRows, dropdownButtonNames,
+  fillForceLabels, forceGroups, labelOf, slotOption, slotOptionValue, slotOptionsFor, teamOptions,
+  type Group,
 } from "./playerSlots";
 import { LABEL_GOLD, observerSeats, toConfig } from "./fdfLan";
 
@@ -335,7 +337,9 @@ export async function mountLanLobbyScreen(
     vfs,
     fdfPath: "UI\\FrameDef\\Glue\\GameChatroom.fdf",
     rootFrame: "GameChatroom",
-    includeFdf: [MAP_INFO_FDF, PLAYER_SLOT_FDF, NETWORK_STRINGS_FDF, ADVANCED_DISPLAY_FDF],
+    // …and EscMenuTemplates.fdf for the player rows' scrollbar (BLURB_SCROLLBAR), which the
+    // glue's own StandardTemplates.fdf does not carry.
+    includeFdf: [MAP_INFO_FDF, PLAYER_SLOT_FDF, NETWORK_STRINGS_FDF, ADVANCED_DISPLAY_FDF, BLURB_SCROLLBAR_FDF],
     // …and our one row on the options summary (Computer+), and the strings our menus need.
     overrides: [OW3_STRINGS, ADVANCED_OPTIONS_DISPLAY_OVERRIDE],
     buildRoot: (lib) => { strings = lib; regroup(); return buildLobbyRoot(lib, groups); },
@@ -592,8 +596,29 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   const root = lib.resolveRoot("GameChatroom");
   if (!root) throw new Error("GameChatroom.fdf: no GameChatroom frame");
 
-  // The player rows — the same composition the Custom Game screen uses (ui/playerSlots.ts).
-  adopt(root, "TeamSetupContainer", buildSlotRows(lib, groups, "TeamSetupContainer"));
+  // The player rows — the same composition the Custom Game screen uses (ui/playerSlots.ts) —
+  // and, down the container's right, the bar that scrolls them. GameChatroom.fdf gives the
+  // container 0.39, fifteen rows at the row pitch, and a map can ask for more: twelve seats
+  // under a heading per force, plus an Observers bench under a heading of its own. Handing the
+  // container a SCROLLBAR is what makes it a viewport (ui/fdf/widgets.ts buildScrollFrame),
+  // and the bar is the Map Description's — EscMenuScrollBarTemplate, the in-game bare track
+  // and round knob (see mapBrowser.ts makeBlurbScrollable for why that one and not the glue's
+  // stepped bar). It is drawn only while the rows overrun the box; a lobby that fits looks
+  // exactly as it did.
+  const rows = buildSlotRows(lib, groups, "TeamSetupContainer");
+  const bar = lib.resolveRoot(BLURB_SCROLLBAR);
+  if (bar) {
+    bar.name = "TeamSetupScrollBar";
+    rows.push(bar);
+    // The bar stands down the container's RIGHT edge, and the file's 0.46375 is the rows'
+    // own width — a PlayerSlot's Handicap box ends a hair inside it, and a row under a force
+    // heading is indented ROW_INDENT further. So the box grows by the bar and that indent,
+    // or the widest row's Handicap runs under the bar's strip and the viewport clips it.
+    // The rows anchor TOPLEFT and do not move; the chrome's panel has the room.
+    const barW = numProp(bar, "Width") ?? 0.012;
+    setProp(findFrame(root, "TeamSetupContainer"), "Width", [num(TEAM_SETUP_W + barW + ROW_INDENT)]);
+  }
+  adopt(root, "TeamSetupContainer", rows);
 
   const pane = lib.resolveRoot("MapInfoPane");
   if (pane) adopt(root, "MapInfoPaneContainer", [layoutInfoPane(pane, { w: PANE_W, h: PANE_H, rows: SUMMARY_ROWS })]);
@@ -645,6 +670,9 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   }
   return root;
 }
+
+/** GameChatroom.fdf's own TeamSetupContainer width — the rows' own; see `buildLobbyRoot`. */
+const TEAM_SETUP_W = 0.46375;
 
 /** GameChatroom.fdf's own MapInfoPaneContainer box. */
 const PANE_W = 0.234375;

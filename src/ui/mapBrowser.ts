@@ -888,7 +888,7 @@ function makeBlurbScrollable(desc: FdfFrame | undefined, lib: FdfLibrary): void 
 /** The blurb's scrollbar: the in-game bar (bare track, round knob). Its template lives in
  *  EscMenuTemplates.fdf, so a screen that shows a description must name that file in its
  *  `includeFdf` — the glue's own StandardTemplates.fdf does not carry this one. */
-const BLURB_SCROLLBAR = "EscMenuScrollBarTemplate";
+export const BLURB_SCROLLBAR = "EscMenuScrollBarTemplate";
 export const BLURB_SCROLLBAR_FDF = "UI\\FrameDef\\UI\\EscMenuTemplates.fdf";
 
 /** The minimap, and the stat rows under it — both a little higher than the FDF's own

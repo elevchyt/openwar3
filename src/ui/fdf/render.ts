@@ -11,7 +11,8 @@ import {
 import { fadePanels, FADE_MS, LATE_PANEL_DELAY_MS, type PanelDirection } from "./anim";
 import { applyOverride, layer, type FdfOverride } from "../../overrides";
 import {
-  buildCheckBox, buildEditBox, buildList, buildPopup, buildSlider, buildTextArea, widgetKind,
+  buildCheckBox, buildEditBox, buildList, buildPopup, buildScrollFrame, buildSlider, buildTextArea,
+  widgetKind,
   type CheckBoxControl, type EditBoxControl, type ListControl, type PopupControl,
   type PopupMenuStyle, type ScrollBarStyle, type SliderControl, type TextAreaControl, type WidgetKind,
 } from "./widgets";
@@ -248,6 +249,15 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     for (const off of disposers) off();
     disposers = [];
     root = makeRoot();
+    // A scrolling FRAME keeps its place across the rebuild. The lobby relayouts whenever the
+    // seating changes shape (a joiner takes a bench seat, a row's widgets come and go), and
+    // a host that had scrolled down to the bench would otherwise be thrown back to the top
+    // every time somebody arrived.
+    const scrollAt = new Map<string, number>();
+    for (const [name, el] of elements) {
+      const view = el.querySelector<HTMLElement>(":scope > .fdf-scroll-view");
+      if (view) scrollAt.set(name, view.scrollTop);
+    }
     overlay.textContent = "";
     shortcuts.clear();
     elements.clear();
@@ -285,7 +295,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
       sprites: opts.sprites ?? {},
       hidden: new Set(opts.hidden ?? []),
       dropdownButtons: new Set(opts.dropdownButtons ?? []),
-      shortcuts, elements, controls, disposers,
+      scrollAt, shortcuts, elements, controls, disposers,
     });
     opts.onBuild?.(screen);
   };
@@ -408,6 +418,9 @@ interface RenderCtx {
   hidden: Set<string>;
   /** BUTTON frames the screen wants treated as dropdowns (PlayerSlot's Team/Colour). */
   dropdownButtons: Set<string>;
+  /** Where each scrolling FRAME (`renderScrollFrame`) stood before this rebuild, by frame
+   *  name — a relayout must not throw the player back to the top of a list they had scrolled. */
+  scrollAt: Map<string, number>;
   overlay: HTMLElement;
   shortcuts: Map<string, () => void>;
   elements: Map<string, HTMLElement>;
@@ -472,10 +485,35 @@ function renderFrame(
     renderSimpleButtonLayers(el, f, ctx);
   } else if (isButton) {
     renderButtonLayers(el, node, f, px, ctx, abs);
+  } else if (f.type === "FRAME" && node.children.some((c) => c.frame.type === "SCROLLBAR")) {
+    renderScrollFrame(el, node, f, ctx, abs);
   } else {
     for (const child of node.children) renderFrame(child, el, ctx, abs);
   }
   return el;
+}
+
+/**
+ * A FRAME handed a SCROLLBAR scrolls its children — ui/fdf/widgets.ts `buildScrollFrame`, and
+ * our own idea rather than the engine's (a FRAME in the game is a bare container). The bar
+ * is not rendered as a child: the builder draws it from its art, as a list's is. The rest
+ * render into the viewport at the frame's own origin, since the viewport fills the frame's
+ * box and the layout already solved them against it.
+ */
+function renderScrollFrame(
+  el: HTMLElement,
+  node: LaidOutFrame,
+  f: FdfFrame,
+  ctx: RenderCtx,
+  abs: { left: number; top: number },
+): void {
+  const { view, sync } = buildScrollFrame(el, scrollBarStyle(node, ctx));
+  for (const child of node.children) {
+    if (child.frame.type === "SCROLLBAR") continue;
+    renderFrame(child, view, ctx, abs);
+  }
+  view.scrollTop = ctx.scrollAt.get(f.name) ?? 0;
+  sync(); // now that there are rows to measure: the bar shows only if they overrun the box
 }
 
 /**

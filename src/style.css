@@ -2794,6 +2794,20 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-scrollbar-knob { cursor: inherit; }
 .fdf-scrollbar-arrow:active { filter: brightness(0.8); }
 
+/* A FRAME that scrolls (ui/fdf/widgets.ts buildScrollFrame — the game lobby's player rows):
+   the viewport the frame's children ride in, clipped to the frame's box. It takes the pointer
+   so the wheel scrolls it; the bar beside it is the FDF's own, so the browser's is hidden as
+   everywhere else. */
+.fdf-scroll-view {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  pointer-events: auto;
+  scrollbar-width: none;
+}
+.fdf-scroll-view::-webkit-scrollbar { display: none; }
+
 /* A thin, dark scrollbar so the popup's own chrome (the FDF border) stays the loud part. */
 .fdf-popup-menu::-webkit-scrollbar { width: 10px; }
 .fdf-popup-menu::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.4); }

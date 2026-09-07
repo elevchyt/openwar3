@@ -257,7 +257,7 @@ const HANDICAP_WIDTH = 0.06;
 const ROW_PITCH = 0.026;
 /** The rows are indented under their heading, and the heading itself sits in a little from
  *  the panel's left edge. */
-const ROW_INDENT = 0.012;
+export const ROW_INDENT = 0.012;
 const FORCE_INDENT = 0.006;
 
 /** The force heading's type size (StandardLabelTextTemplate's own 0.013 sets too loud here). */
