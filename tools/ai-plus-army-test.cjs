@@ -426,7 +426,12 @@ check("…and the spare Acolyte beside it is not", onGoldDuty({ ringSlot: 0 }), 
 check("a worker walking to a mine is on gold before it arrives",
   onGoldDuty({ order: "harvest", resKind: "gold" }), true);
 check("a worker down a shaft is on gold", onGoldDuty({ inMineId: 7 }), true);
+// The haul home is the same job walked the other way — and re-sending it to the mine is a
+// MANUAL order that restores the collision the auto round trip drops, which is how a crew of
+// ghosts got one solid body walking against it every pass (AiPlayer.alreadyHarvesting).
+check("a worker carrying its gold home is on gold", onGoldDuty({ order: "return", resKind: "gold" }), true);
 check("a lumberjack is not", onGoldDuty({ order: "harvest", resKind: "lumber" }), false);
+check("…nor one hauling lumber home", onGoldDuty({ order: "return", resKind: "lumber" }), false);
 check("and neither is an idle worker", onGoldDuty({ order: "stop", resKind: null }), false);
 
 console.log("\n-- the wounded walk out of the fight ------------------------------------------");

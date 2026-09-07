@@ -571,7 +571,11 @@ export function onGoldDuty(u: {
   ringSlot?: number; inMineId?: number; order?: string | null; resKind?: string | null;
 }): boolean {
   if ((u.ringSlot ?? 0) > 0 || (u.inMineId ?? 0) > 0) return true;
-  return u.order === "harvest" && u.resKind === "gold";
+  // …and the RETURN order is the same job walked the other way: a worker carrying its gold
+  // home is a miner, and reading it as spare made the scout a fifth of the income again —
+  // and, because `issueHarvest` restores the collision the auto round trip drops, put a solid
+  // body back into a crew of ghosts (see AiPlayer.alreadyHarvesting).
+  return (u.order === "harvest" || u.order === "return") && u.resKind === "gold";
 }
 
 /**
@@ -3102,7 +3106,7 @@ export class ComputerPlusAi {
       if (u.buildPending || u.constructing || isOffField(u)) continue;
       if (b.held.has(u.id)) continue; // already the scout, or standing in the wave
       if (onGoldDuty(u)) miner ??= u;
-      else if (u.order === "harvest") chopper ??= u;
+      else if (u.order === "harvest" || u.order === "return") chopper ??= u; // a haul home is still the axe
       else spare ??= u;
     }
     return spare ?? chopper ?? miner;

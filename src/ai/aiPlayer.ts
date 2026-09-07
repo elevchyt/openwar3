@@ -4,8 +4,8 @@ import type { ItemRegistry } from "../data/items";
 import type { UnitDef, UnitRegistry } from "../data/units";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
-import { isOffField, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
-import { footprintBuildable, footprintCellsAt, type Footprint } from "../sim/destructibles";
+import { HALL_MINE_DISTANCE, isOffField, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
+import { footprintBuildable, footprintCellsAt, footprintRadius, type Footprint } from "../sim/destructibles";
 import { PATHING_CELL } from "../sim/pathing";
 import { heroReviveCost } from "../data/gameplayConstants";
 import {
@@ -124,21 +124,26 @@ const MINE_CLEAR = 320;
 /**
  * How far out an expansion hall may stand from its mine.
  *
- * Bounded from ABOVE by the NIGHT ELF and by nothing else: `Aent` Entangle has `Rng1` = 500, so
- * a Tree of Life planted further than that from the mine it came to take can never wrap it
- * (docs/night-elf.md). 460 leaves room for the snap without ever crossing that line.
+ * Bounded from BELOW by the game: a hall inside `HALL_MINE_DISTANCE` (768, centre to centre)
+ * of a mine is refused at placement — for a computer by the authority, exactly as for a
+ * player's click — so the search starts ON that ring and never spends a pass on a nearer spot.
  *
- * The other three races have no such rule — their hall only needs its miners' walk to be short
- * — and holding them to the elf's number is a real cost, because the search is RINGS: at
- * `SITE_RING_STEP` = 96 a ceiling of 460 offers exactly two of them, 320 and 416, in a
- * 140-unit band around a mine that on most maps is hemmed in by trees. Two rings is easily
- * blocked outright, and a blocked expansion hall is silent — `startUnit` has already reserved
- * its gold by the time placement fails, so the AI pays for a hall it never founds, every pass,
- * and starves everything below it in the build order. Give the races that can afford it a
- * wider search; 700 is still a shorter haul than the width of a base.
+ * Bounded from ABOVE by the NIGHT ELF and by nothing else: `Aent` Entangle has `Rng1` = 500
+ * (`ENTANGLE_RANGE`), measured hull to hull (SimWorld.entangleBody) — the mine's 128 and the
+ * tree's own blocked radius come off the centre distance first — so a Tree of Life can reach
+ * the rock from about 820 out and no further (docs/night-elf.md). That ceiling is computed in
+ * `siteFor` off the tree's real footprint rather than typed here, and it leaves the elf a band
+ * of some fifty units, which is why a hall's rings are walked a PATHING CELL apart rather than
+ * the base's `SITE_RING_STEP` (768, 800, …): one ring is easily blocked outright, and a blocked
+ * expansion hall is silent — `startUnit` has already reserved its gold by the time placement
+ * fails, so the AI pays for a hall it never founds, every pass, and starves everything below
+ * it in the build order.
+ *
+ * The other three races have no such ceiling — their hall only needs its miners' walk to be
+ * short — and holding them to the elf's band is that same cost for nothing. Give them a wider
+ * search; 300 past the floor is still a shorter haul than the width of a base.
  */
-const EXPANSION_HALL_RANGE = 460;
-const EXPANSION_HALL_RANGE_WIDE = 700;
+const EXPANSION_HALL_RANGE_WIDE = HALL_MINE_DISTANCE + 300;
 
 /** Placement search: rings this far apart, out to this far from the town centre. */
 const SITE_RING_STEP = 96;
@@ -1014,10 +1019,18 @@ export class AiPlayer {
     // back to for the campaign halls whose `Artn` row says nothing.
     if (def.classification.includes("townhall") && town >= 0 && !this.townHasHall(town)) {
       // The night elf's hall has to end up inside Entangle's reach; everyone else's only has to
-      // be near. See EXPANSION_HALL_RANGE.
-      const reach = this.race === "nightelf" ? EXPANSION_HALL_RANGE : EXPANSION_HALL_RANGE_WIDE;
+      // be near. See EXPANSION_HALL_RANGE_WIDE.
       const mine = world.mines.get(t.mineId);
-      if (mine) return this.spiral(def, mine.x, mine.y, MINE_CLEAR, reach, t);
+      if (mine) {
+        // The elf's ceiling is Entangle's reach from the planted tree, hull to hull: the
+        // mine's radius and the tree's own blocked radius on top of `Rng1`. See
+        // EXPANSION_HALL_RANGE_WIDE for the band and why a hall walks its rings a cell apart.
+        const fp = def.pathTex ? this.host.footprintOf(def.pathTex) : null;
+        const reach = this.race === "nightelf"
+          ? ENTANGLE_RANGE + mine.radius + (fp ? footprintRadius(fp) : 0)
+          : EXPANSION_HALL_RANGE_WIDE;
+        return this.spiral(def, mine.x, mine.y, HALL_MINE_DISTANCE, reach, t, PATHING_CELL);
+      }
     }
 
     // A tower belongs at the town's threat-facing edge.
@@ -1063,22 +1076,29 @@ export class AiPlayer {
    * pathing textures already carry a walkable blue border for the same reason; this widens it
    * by one more cell so two neighbours are always two cells apart rather than zero.
    */
-  private spiral(def: UnitDef, cx: number, cy: number, minR: number, maxR: number, t: Town): [number, number] | null {
-    const grid = this.host.world.grid;
+  private spiral(def: UnitDef, cx: number, cy: number, minR: number, maxR: number, t: Town, step = SITE_RING_STEP): [number, number] | null {
+    const world = this.host.world;
+    const grid = world.grid;
     const fp = def.pathTex ? this.host.footprintOf(def.pathTex) : null;
     if (!fp) return [cx, cy]; // no footprint: it reserves nothing and can go anywhere
     const padded = inflate(fp);
     const reserved = this.pendingBuildCells();
-    const mine = this.host.world.mines.get(t.mineId);
+    const mine = world.mines.get(t.mineId);
     // A per-player phase so two computers on one map don't build identical-looking bases, and
     // a per-ring one so successive rings don't line every building up on the same spokes.
     const phase = this.rng() * Math.PI * 2;
-    for (let r = Math.max(minR, SITE_RING_STEP); r <= maxR; r += SITE_RING_STEP) {
+    for (let r = Math.max(minR, step); r <= maxR; r += step) {
       const steps = Math.max(8, Math.round((2 * Math.PI * r) / 160));
       for (let i = 0; i < steps; i++) {
         const a = phase + (i / steps) * Math.PI * 2 + r * 0.01;
         const [sx, sy] = grid.snapForBuildingRect(cx + Math.cos(a) * r, cy + Math.sin(a) * r, fp.w, fp.h);
         if (mine && Math.hypot(sx - mine.x, sy - mine.y) < MINE_CLEAR) continue;
+        // The snap moves a candidate by up to half a build cell, and a ceiling is a ceiling
+        // AFTER it: a Tree of Life snapped a hair past Entangle's reach never wraps its mine.
+        if (Math.hypot(sx - cx, sy - cy) > maxR) continue;
+        // The authority's own refusal, asked of ANY mine and not only this town's, so a hall
+        // is never ordered onto a spot the click would have been refused (HALL_MINE_DISTANCE).
+        if (world.tooCloseToMine(def.id, sx, sy)) continue;
         if (!footprintBuildable(grid, padded, sx, sy, reserved)) continue;
         if (!this.groundSuits(def, sx, sy, fp)) continue;
         return [sx, sy];
@@ -1287,7 +1307,7 @@ export class AiPlayer {
    *    races that raise one — an Entangled Gold Mine and a Haunted Gold Mine alike
    *    (`SimWorld.hauntedMine` reads the same field) — so this is the whole answer for a mine
    *    that is already an expansion, whoever owns it.
-   *  · there is a DEPOT on it: anybody else's hall inside `EXPANSION_HALL_RANGE`.
+   *  · there is a DEPOT on it: anybody else's hall inside `EXPANSION_HALL_RANGE_WIDE`.
    *  · somebody else's WORKERS are digging in it — in the shaft (`inMine`) or walking their
    *    gold out of it (`resKind`/`resId`), which is the same pair `SimWorld.mineClaimable`
    *    reads for the night elf's own right-click.
@@ -1310,7 +1330,8 @@ export class AiPlayer {
         // Under construction counts, on both sides of the question: a hall going up on the rock
         // is somebody taking that rock, and one of OURS going up is us taking it.
         if (!u.depotGold && !this.host.world.hauntsMines(u.typeId)) continue;
-        if (Math.hypot(u.x - mine.x, u.y - mine.y) > EXPANSION_HALL_RANGE) continue;
+        // …as far out as any race founds one (the wide band, since a hall cannot be nearer).
+        if (Math.hypot(u.x - mine.x, u.y - mine.y) > EXPANSION_HALL_RANGE_WIDE) continue;
         if (u.owner === this.player) return false; // ours: the mine is settled, and it is ours
         taken = true;
         continue;
@@ -1511,7 +1532,8 @@ export class AiPlayer {
    *  filter in `applyHarvest` for why that makes it untouchable. */
   private onAnotherMine(u: SimUnit, mineId: number): boolean {
     if (u.inMineId && u.inMineId !== mineId) return true;
-    if (u.order === "harvest" && u.resKind === "gold" && u.resId && u.resId !== mineId) return true;
+    // Hauling its gold home from the other mine is still working the other mine.
+    if ((u.order === "harvest" || u.order === "return") && u.resKind === "gold" && u.resId && u.resId !== mineId) return true;
     // A wisp inside an Entangled Gold Mine shows no harvest order at all — its whole crew is
     // cargo (`Aegm` Car1 = 5, docs/night-elf.md) — so its host is the only thing that says so.
     if (u.garrisonHost) {
@@ -1522,7 +1544,14 @@ export class AiPlayer {
   }
 
   private alreadyHarvesting(u: SimUnit, res: "gold" | "lumber", mineId: number): boolean {
-    if (u.order === "harvest" && u.resKind === res) return res === "lumber" || u.resId === mineId;
+    // A haul HOME is the same job walked the other way: a worker carrying its gold to the hall
+    // is on that mine. Read as free, it was re-sent to the mine on every pass of the plan —
+    // and `issueHarvest` is a MANUAL order, which restores the collision the automatic round
+    // trip drops (SimWorld.tickHarvest: a miner ghosts through the crowd from the moment it
+    // emerges until somebody takes control). So every pass put one SOLID body back into a
+    // crew of ghosts, walking to the hall and then back to the mine against the others — the
+    // whole of "workers returning to the mine collide with the ones carrying gold".
+    if ((u.order === "harvest" || u.order === "return") && u.resKind === res) return res === "lumber" || u.resId === mineId;
     if (u.inMine || u.inMineId) return res === "gold";
     // A wisp inside an Entangled Gold Mine is "on gold" while showing no harvest order at all
     // — its whole crew is cargo (`Aegm` Car1 = 5). See docs/night-elf.md.
@@ -2064,9 +2093,11 @@ export class AiPlayer {
       if (!u.abilities.some((a) => a.code === "Aent")) continue;
       if (u.order === "cast") continue; // already throwing its roots — a re-issue restarts it
       // `Aent` is a no-target cast that takes the nearest un-entangled mine inside its own
-      // Rng1 — so the only question here is whether there is one.
-      const mine = world.nearestMine(u.x, u.y, ENTANGLE_RANGE);
-      if (!mine || mine.entangledBy > 0 || mine.gold <= 0) continue;
+      // Rng1 — so the only question here is whether there is one, and it is the SIM's question
+      // (hull to hull, SimWorld.entangleTarget): asked of the centre distance against a bare
+      // 500, a tree standing where the hall rule first allows it was never near its own mine.
+      const mine = world.entangleTarget(u);
+      if (!mine || mine.gold <= 0) continue;
       this.order({ c: "cast", unitId: u.id, code: "Aent", targetId: 0, x: 0, y: 0, queued: false });
     }
   }
@@ -2090,7 +2121,9 @@ const EXPANSION_FOE_RANGE = 900;
  *  guarded by whichever of them the worker would walk into. Ours, like the bound above. */
 const EXPANSION_CAMP_RANGE = CAMP_MATCH + 600;
 
-/** `Aent` Entangle Gold Mine's own `Rng1`. The bound `EXPANSION_HALL_RANGE` is chosen under. */
+/** `Aent` Entangle Gold Mine's own `Rng1` — the night elf expansion hall's ceiling is built on
+ *  it in `siteFor`, hull to hull (see EXPANSION_HALL_RANGE_WIDE). Whether a planted tree can
+ *  actually reach its mine is the sim's question, not this number's (SimWorld.entangleTarget). */
 const ENTANGLE_RANGE = 500;
 
 /** A footprint one cell bigger on every side, with the whole border unbuildable. See

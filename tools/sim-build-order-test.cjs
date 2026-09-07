@@ -227,6 +227,51 @@ console.log("\nthe AUTHORITY asks the price of an outright build and not of a qu
     [auth.execute(6, at(56 * CELL, 8 * CELL, false)), world.stashOf(6).gold, w.buildPending.paid], [true, 70, true]);
 }
 
+console.log("\na hall is held off the gold mine's mouth — HALL_MINE_DISTANCE, and who it binds");
+{
+  // The rule is read off `UnitBalance.type`: TownHall, less undead. See the constant in
+  // src/sim/world.ts for where 768 comes from (Blizzard's own start locations) and why the
+  // Necropolis is out (hiveworkshop 255597 — its gold never travels).
+  const { Authority } = require(join(REPO, ".sim-build", "src", "game", "authority.js"));
+  const { HALL_MINE_DISTANCE } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
+  const DEFS = {
+    htow: { id: "htow", goldCost: 385, lumberCost: 205, classification: ["townhall", "mechanical"] },
+    etol: { id: "etol", goldCost: 340, lumberCost: 185, classification: ["townhall", "ancient"] },
+    unpl: { id: "unpl", goldCost: 225, lumberCost: 0, classification: ["townhall", "undead", "mechanical"] },
+    hhou: { id: "hhou", goldCost: 80, lumberCost: 20, classification: ["mechanical"] },
+  };
+  const registry = { get: (id) => DEFS[id] };
+  const w2 = new SimWorld(grid, 1, { get: () => undefined }, undefined, registry);
+  const mine = w2.addMine(1024, 1024, 12500, 128);
+  check("the floor is the stock maps' own 768", HALL_MINE_DISTANCE, 768);
+  check("a Town Hall a unit inside it is too close", w2.tooCloseToMine("htow", 1024 + 767, 1024), true);
+  check("…and ON it is allowed — Terenas Stand's start is exactly 768 on the axis", w2.tooCloseToMine("htow", 1024 + 768, 1024), false);
+  check("…measured centre to centre, so a diagonal at Echo Isles' (448,640) is fine", w2.tooCloseToMine("htow", 1024 + 448, 1024 + 640), false);
+  check("a Tree of Life obeys it too", w2.tooCloseToMine("etol", 1024 + 700, 1024), true);
+  check("a Necropolis does not", w2.tooCloseToMine("unpl", 1024 + 300, 1024), false);
+  check("nor does a Farm", w2.tooCloseToMine("hhou", 1024 + 300, 1024), false);
+  // A collapsed mine keeps nothing away.
+  w2.mines.delete(mine.id);
+  check("a mine that has collapsed no longer binds", w2.tooCloseToMine("htow", 1024 + 300, 1024), false);
+  w2.mines.set(mine.id, mine);
+  // …and the AUTHORITY refuses it, which is what makes a computer's hall obey the same rule as
+  // a player's click: every build order comes through this gate.
+  const tech = { builds: () => ["htow", "unpl"] };
+  const auth = new Authority(w2, registry, {}, tech, {});
+  w2.initStash(3, 5000, 5000);
+  const u = worker({ owner: 3, typeId: "hpea" });
+  world.units.delete(u.id);
+  w2.units.set(u.id, u);
+  const build = (defId, x, y) => auth.execute(3, { c: "build", unitId: u.id, defId, x, y, queued: false });
+  check("the authority refuses a hall 600 from the rock", build("htow", 1024 + 600, 1024), false);
+  check("…and nothing was charged for it", w2.stashOf(3).gold, 5000);
+  check("…a Necropolis at 300 goes through", build("unpl", 1024 + 300, 1024), true);
+  const a = worker({ owner: 3, typeId: "hpea" });
+  world.units.delete(a.id);
+  w2.units.set(a.id, a);
+  check("…and a hall at 800 goes through", auth.execute(3, { c: "build", unitId: a.id, defId: "htow", x: 1024 + 800, y: 1024, queued: false }), true);
+}
+
 console.log("\nan unpaid build refunds nothing, having never been charged");
 {
   world.initStash(4, 0, 0);

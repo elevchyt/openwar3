@@ -2188,6 +2188,32 @@ const RING_PUSH = 256;
 // Duration" 1, DataC "Mining Capacity" 1. Capacity 1 is the `SimMine.busy` latch: a classic
 // gold mine holds exactly ONE worker at a time and the rest queue at the rim.
 const MINE_TIME = 1.0; // seconds a worker spends inside the mine (Agld DataB)
+/**
+ * How near a gold mine a TOWN HALL may be founded — centre to centre, Euclidean — and the one
+ * placement rule in the game that is about DISTANCE rather than about the ground. A hall
+ * nearer than this is refused with [Errors] `Tooclosetomine` = "Unable to build so close to
+ * the gold mine." and the placement ghost's WHOLE grid goes red for it, not a square here and
+ * there. The rule exists so a hall cannot be dropped against the mine's mouth and the gold
+ * trip shortened to nothing.
+ *
+ * The game states the number nowhere in its files (MiscGame/MiscData carry nothing of the
+ * kind), so this one is MEASURED off Blizzard's own melee maps, whose start locations sit
+ * exactly where a hall is first allowed: over 700 start-location→nearest-mine pairs across
+ * the shipped Frozen Throne maps, 71 sit at exactly 768.0 (an axis offset of 768 — Terenas
+ * Stand), the rest at the next lattice-reachable distances above it — 770.7 (512,576: Lost
+ * Temple, Twisted Meadows), 773.3 (320,704), 781.2 (448,640: Echo Isles, Turtle Rock) — and
+ * NOTHING between 751 and 768. The one below is Jungle Fever's hand-placed, off-lattice start
+ * (751.2), which a script creates the hall on and no placement test ever sees. Centre to
+ * centre because the same start location seats a 16×16 Town Hall and a 12×12 Tree of Life
+ * alike, and both are the same 768 from the rock.
+ *
+ * WHO it binds is read off `UnitBalance.type` (`UnitDef.classification`): the `TownHall`
+ * classification, less the `undead` one. The Necropolis stands where it likes — hiveworkshop
+ * 255597 is a mapper failing to give it the restriction at all — and the reason is the race:
+ * an Acolyte never carries gold and the Haunted Gold Mine is dug where the gold is
+ * (docs/undead.md), so there is no trip to shorten. See `tooCloseToMine`.
+ */
+export const HALL_MINE_DISTANCE = 768;
 /** How many times a gatherer that came to rest SHORT of its node re-issues the approach
  *  before parking where it stands (arriveAtNode). Small: two honest A* attempts per leg
  *  of the round trip beat both a fake arrival and a per-tick re-flood. */
@@ -4989,6 +5015,36 @@ export class SimWorld {
    *
    *  `instant` skips the 60-second build (`egol` bldtm) as well as the cast — the melee
    *  opening's `entangleinstant`, and nothing else. */
+  /**
+   * The mine a no-target Entangle takes from where this tree stands: the nearest un-wrapped
+   * one inside `Rng1`, measured hull to hull (`entangleBody`). Null with none in reach — or
+   * with no Entangle on the unit, when `def` is left for this to find.
+   *
+   * Public because the AI's own pass over its halls (`AiPlayer.entangleMines`) has to ask the
+   * SAME question before pressing the button: asked of the centre distance against a bare
+   * 500, a Tree of Life planted where the hall rule first allows it (`HALL_MINE_DISTANCE`) was
+   * never "near" its own mine, and the night elf computer's expansion never entangled.
+   */
+  entangleTarget(caster: SimUnit, def?: AbilityDef): SimMine | null {
+    if (!def) {
+      const ab = caster.abilities.find((a) => a.code === "Aent" && a.level >= 1);
+      def = ab ? this.abilities?.get(ab.id) : undefined;
+      if (!def) return null;
+    }
+    const range = def.levelData[0]?.castRange || 500;
+    const body = this.entangleBody(caster);
+    let best: SimMine | null = null;
+    let bestD = Infinity;
+    for (const m of this.mines.values()) {
+      if (m.entangledBy) continue;
+      const d = Math.hypot(m.x - caster.x, m.y - caster.y);
+      if (d > range + m.radius + body || d >= bestD) continue;
+      bestD = d;
+      best = m;
+    }
+    return best;
+  }
+
   entangleMine(caster: SimUnit, def: AbilityDef, mine?: SimMine, instant = false): boolean {
     // Roots in the air hold nothing, and the game has a line for it: [Errors]
     // `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it." A press on
@@ -4996,20 +5052,12 @@ export class SimWorld {
     // the tree first (issueEntangleAt) — so this is the backstop for a trigger or an order
     // that aims the raw cast at a walking Ancient.
     if (caster.uprooted) return false;
-    const range = def.levelData[0]?.castRange || 500;
     let best: SimMine | null = null;
     if (mine) {
       if (mine.entangledBy || !this.mines.has(mine.id)) return false;
       best = mine;
     } else {
-      let bestD = Infinity;
-      for (const m of this.mines.values()) {
-        if (m.entangledBy) continue;
-        const d = Math.hypot(m.x - caster.x, m.y - caster.y);
-        if (d > range + m.radius || d >= bestD) continue;
-        bestD = d;
-        best = m;
-      }
+      best = this.entangleTarget(caster, def);
     }
     if (!best) return false;
     const unitId = def.levelData[0]?.summon || "egol"; // `Aent` UnitID1 — the unit it raises
@@ -5074,6 +5122,7 @@ export class SimWorld {
     const def = ab && this.abilities.get(ab.id);
     if (!def) return false;
     const range = def.levelData[0]?.castRange || 500;
+    const body = this.entangleBody(u);
     let mine = mineId ? this.mines.get(mineId) : undefined;
     if (mineId && !mine) return false;
     if (!mine) {
@@ -5081,7 +5130,7 @@ export class SimWorld {
       let bestD = Infinity;
       for (const m of this.mines.values()) {
         const d = Math.hypot(m.x - u.x, m.y - u.y);
-        if (d > range + m.radius || d >= bestD || !this.mineClaimable(m, u)) continue;
+        if (d > range + m.radius + body || d >= bestD || !this.mineClaimable(m, u)) continue;
         bestD = d;
         mine = m;
       }
@@ -5131,14 +5180,34 @@ export class SimWorld {
    * the ability's reach is swept and the closest survivor to the tree wins, so it also lands
    * on the side it approached from.
    */
+  /**
+   * The half of Entangle's reach that is the TREE's own body.
+   *
+   * WC3 measures a range between the two HULLS (`SimWeapon.range` says so of a weapon's), and
+   * a rooted Ancient's hull is its footprint: a 12×12 Tree of Life reaches 192 further than
+   * its centre does. Measured from the centre against the mine's 128 alone, the tree the hall
+   * rule lets stand nearest a mine — `HALL_MINE_DISTANCE` from its centre — read as out of
+   * `Aent`'s 500 (768 − 128 = 640), and a night elf could not take an expansion at all, nor
+   * entangle from the hall every melee map starts it on. The uprooted tree carries its
+   * footprint (`rootedStamp`); the planted one has it stamped (`pathStamp`).
+   */
+  private entangleBody(u: SimUnit): number {
+    const fp = u.rootedStamp ?? u.pathStamp?.fp ?? null;
+    return Math.max(u.radius, fp ? footprintRadius(fp) : 0);
+  }
+
   private entangleSite(u: SimUnit, mine: SimMine, range: number): [number, number] | null {
     const fp = u.rootedStamp;
     if (!this.grid || !fp) return null;
     const grid = this.grid;
     const half = (Math.max(fp.w, fp.h) * PATHING_CELL) / 2;
+    const body = this.entangleBody(u);
     const fits = (wx: number, wy: number): [number, number] | null => {
       const [sx, sy] = grid.snapForBuildingRect(wx, wy, fp.w, fp.h);
-      if (Math.hypot(sx - mine.x, sy - mine.y) - mine.radius > range) return null;
+      if (Math.hypot(sx - mine.x, sy - mine.y) - mine.radius - body > range) return null;
+      // Rooting a hall IS placing one: the spot the roots go down on obeys the hall's own
+      // distance from the rock (`HALL_MINE_DISTANCE`), exactly as the placement ghost does.
+      if (this.tooCloseToMine(u.typeId, sx, sy)) return null;
       return footprintBuildable(grid, fp, sx, sy) ? [sx, sy] : null;
     };
     // Where it already stands, first and without a search: in range and on ground it fits on
@@ -5149,10 +5218,11 @@ export class SimWorld {
     let best: [number, number] | null = null;
     let bestD = Infinity;
     const seen = new Set<string>();
-    // Rings from "as close as the footprint can physically sit" out to the ability's reach,
-    // one build cell at a time, with enough samples per ring that a 12×12 candidate cannot
-    // slip between spokes.
-    for (let r = mine.radius + half; r <= range + mine.radius; r += BUILD_CELL) {
+    // Rings from "as close as the footprint can physically sit" — or as close as a hall is
+    // ALLOWED to sit, whichever is further — out to the ability's reach, one build cell at a
+    // time, with enough samples per ring that a 12×12 candidate cannot slip between spokes.
+    const nearest = Math.max(mine.radius + half, this.mineDistanceBinds(u.typeId) ? HALL_MINE_DISTANCE : 0);
+    for (let r = nearest; r <= range + mine.radius + body; r += BUILD_CELL) {
       const steps = Math.max(8, Math.round((2 * Math.PI * r) / BUILD_CELL));
       for (let i = 0; i < steps; i++) {
         const a = (i / steps) * Math.PI * 2;
@@ -8283,6 +8353,33 @@ export class SimWorld {
    *  which are asked of the same rows at the same moments. */
   hauntsMines(defId: string): boolean {
     return (this.unitReg?.get(defId)?.abilities ?? []).includes("Abgm");
+  }
+
+  /** Does `HALL_MINE_DISTANCE` bind this type at all — a `TownHall` that is not `undead`?
+   *  Read off the classification list and never off an id, so a custom map's own hall
+   *  inherits the rule with the checkbox. See the constant for why the undead are out. */
+  private mineDistanceBinds(defId: string): boolean {
+    const cls = this.unitReg?.get(defId)?.classification;
+    return !!cls && cls.includes("townhall") && !cls.includes("undead");
+  }
+
+  /**
+   * Is this site inside `HALL_MINE_DISTANCE` of a gold mine, for a building the rule binds?
+   *
+   * Asked by the placement ghost (every square red), by the click (`Tooclosetomine`), by the
+   * authority for EVERY build order — a computer's included, so it can found a hall no nearer
+   * than a player can — by an expansion's site search before it spends a pass on a spot the
+   * authority would refuse, and by a Tree of Life picking where to root for Entangle. Any
+   * mine, not only the one being expanded to: the rule is about the rock. A DEPLETED mine has
+   * collapsed and left the map (`tickHarvest` drops it from `mines`), so it keeps nothing
+   * away; a wrapped one is still a mine.
+   */
+  tooCloseToMine(defId: string, x: number, y: number): boolean {
+    if (!this.mineDistanceBinds(defId)) return false;
+    for (const m of this.mines.values()) {
+      if (Math.hypot(m.x - x, m.y - y) < HALL_MINE_DISTANCE) return true;
+    }
+    return false;
   }
 
   /** Execute an order right now, replacing whatever the unit is doing and its

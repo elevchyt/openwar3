@@ -388,6 +388,9 @@ const ERROR_VOICE: Record<string, string> = {
   Nolumber: "NoLumber",
   Nofood: "NoFood",
   Cantplace: "CantPlace",
+  // "Unable to build so close to the gold mine." has no row of its own in UISounds.slk: the
+  // game says it over the same worker's "can't build there" line as any other refused site.
+  Tooclosetomine: "CantPlace",
   // The Undead's own refusal, and the one race that has a SECOND one: UISounds.slk gives
   // "Must summon structures upon Blight." its own row, `OffBlightUndead` →
   // AcolytePlacedOffBlight1.wav, distinct from the CantPlace* the four races share. No
@@ -3888,9 +3891,8 @@ export class MapViewerScene {
       return;
     }
     if (!this.placementValid(x, y, this.pendingBuildCells(queued ? 0 : p.workerId))) {
-      // Which refusal depends on WHY: clear ground that simply is not rotted gets the
-      // Undead's own line, everything else the shared one.
-      this.refuse(this.groundSuitsBuilding(p.def, x, y) ? "Cantplace" : "Offblight");
+      // Which refusal depends on WHY — see placementRefusal.
+      this.refuse(this.placementRefusal(p.def, x, y));
       return;
     }
     // Feedback only, and deliberately duplicated (same contract as trainUnit): `execute`
@@ -6515,7 +6517,20 @@ export class MapViewerScene {
     // nowhere else — the mine's own cells are stamped unbuildable, so the ordinary footprint
     // test would refuse the one site it belongs on. See SimWorld.hauntTarget.
     if (this.rts?.simWorld.hauntsMines(p.def.id)) return !!this.rts.simWorld.hauntTarget(p.def.id, x, y);
+    // A hall is also held off the mine's mouth — a rule about the SITE, not about any square
+    // of it (SimWorld.tooCloseToMine, [Errors] `Tooclosetomine`).
+    if (this.rts?.simWorld.tooCloseToMine(p.def.id, x, y)) return false;
     return footprintBuildable(this.grid, p.fp, x, y, reserved) && this.groundSuitsBuilding(p.def, x, y);
+  }
+
+  /** WHY a site is refused, in the game's own words — the three sentences `placementValid`
+   *  can say no with, asked in the order the game asks them: the distance rule ("Unable to
+   *  build so close to the gold mine."), then clear ground that is not rotted for a building
+   *  that needs it ("Must summon structures upon Blight."), then the shared "Unable to build
+   *  there." — the last two in the local race's worker's voice (see ERROR_VOICE). */
+  private placementRefusal(def: UnitDef, x: number, y: number): "Tooclosetomine" | "Offblight" | "Cantplace" {
+    if (this.rts?.simWorld.tooCloseToMine(def.id, x, y)) return "Tooclosetomine";
+    return this.groundSuitsBuilding(def, x, y) ? "Cantplace" : "Offblight";
   }
 
   /** Where a placement ghost actually sits: on the build grid, except for a building that
@@ -6588,6 +6603,9 @@ export class MapViewerScene {
     // on rot that a Human expansion scrubs away before the Acolyte walks over, so the
     // requirement is re-asked here with everything else rather than only at the click.
     if (!this.groundSuitsBuilding(def, x, y)) return true;
+    // The distance rule is re-asked with it — a mine is fixed ground, but a queued site is
+    // judged by the same three questions the click was, or the two would disagree.
+    if (this.rts?.simWorld.tooCloseToMine(defId, x, y)) return true;
     // A mine-standing building's site is the mine, whose own cells are unbuildable; it is
     // blocked only if the mine has gone or somebody else got there first.
     if (this.rts?.simWorld.hauntsMines(defId)) return !this.rts.simWorld.hauntTarget(defId, x, y);
@@ -6755,6 +6773,10 @@ export class MapViewerScene {
     // the Undead's blight. Read per build square below, on the same 64-unit lattice
     // SimWorld.footprintBlighted decides on, so the red squares are exactly the refusal.
     const needsBlight = p.def.requirePlace === "blighted" ? this.rts?.simWorld ?? null : null;
+    // …and the DISTANCE rule, which is about the site and not about any one square of it: a
+    // hall inside `HALL_MINE_DISTANCE` of a mine turns the WHOLE grid red, as the game's does
+    // — there is no square the player could move to fix it short of moving all of them.
+    const tooClose = !!this.rts?.simWorld.tooCloseToMine(p.def.id, x, y);
     // Low-corner cell of the footprint — same centring as placementValid / stampFootprint.
     // snapForBuildingRect keeps it even, so build squares tile the footprint exactly.
     const [bx, by] = this.grid.worldToCell(x - (fp.w * PATHING_CELL) / 2, y - (fp.h * PATHING_CELL) / 2);
@@ -6777,6 +6799,7 @@ export class MapViewerScene {
         if (!reserved) continue;
         const x0 = ox + (bx + sx) * PATHING_CELL, y0 = oy + (by + sy) * PATHING_CELL;
         if (needsBlight && !needsBlight.isBlighted(x0 + BUILD_CELL / 2, y0 + BUILD_CELL / 2)) blocked = true;
+        if (tooClose) blocked = true;
         const color = blocked ? COLLIDER_COLORS.unbuildable : COLLIDER_COLORS.buildable;
         pushColliderQuad(cells, x0, y0, x0 + BUILD_CELL, y0 + BUILD_CELL, h, color);
       }

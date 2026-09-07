@@ -355,8 +355,10 @@ console.log("`entangleat` — the expansion in one right-click: walk, and root O
   for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05); // the 2.5s uproot transition
   check("uprooted, the order takes", world.issueEntangleAt(40, mine.id) === true);
   check("…as a WALK to a site the mine can be reached from", u.uprooted === true && !!u.rootPending, JSON.stringify(u.rootPending));
-  check("…which is all the site has to be — `Rng1` = 500, the ability's own",
-    Math.hypot(u.rootPending.x - mine.x, u.rootPending.y - mine.y) - mine.radius <= 500);
+  // Hull to hull, as WC3 measures a range: the mine's 128 and the tree's own 192 (the 12×12
+  // stamp's blocked radius) come off the centre distance first — see SimWorld.entangleBody.
+  check("…which is all the site has to be — `Rng1` = 500, the ability's own, hull to hull",
+    Math.hypot(u.rootPending.x - mine.x, u.rootPending.y - mine.y) - mine.radius - 192 <= 500);
   check("…with the mine remembered for the far side of the walk", u.entanglePending === mine.id);
   let plantedAt = -1;
   for (let t = 0; t < 60 / 0.05 && plantedAt < 0; t++) {

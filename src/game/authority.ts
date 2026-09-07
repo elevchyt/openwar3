@@ -629,6 +629,11 @@ export class Authority {
         // wire, and until now nothing downstream asked.
         if (!this.tech.builds(worker.typeId).includes(cmd.defId)) return false;
         if (!this.sim.canMake(player, cmd.defId, 0)) return false;
+        // …and not against a gold mine's mouth: a hall inside `HALL_MINE_DISTANCE` is refused
+        // HERE, so a computer founds one no nearer than a player's click can (the ghost's red
+        // grid and [Errors] `Tooclosetomine` are the same test, asked of the cursor). The
+        // ground itself is not re-asked on this side — the footprint lives with the renderer.
+        if (this.sim.tooCloseToMine(cmd.defId, cmd.x, cmd.y)) return false;
         // A build placed OUTRIGHT must be paid for now — WC3 never lets you put a structure
         // down you cannot afford, and the gold leaves the stash at the click.
         //
