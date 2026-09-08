@@ -11387,6 +11387,12 @@ export class SimWorld {
         return;
       }
       pc.started = true;
+      // The heading is LOCKED for the cast point, exactly as a swing locks it for the attack
+      // point (see engage): the caster is within FACING_CAST_EPS of its target, that is the
+      // angle the spell goes out at, and the shared turning pass must not finish the last
+      // few degrees underneath the cast animation. Nothing re-aims it until the effect has
+      // fired — a channel then tracks its point again (below), which is where the game turns.
+      u.desiredFacing = u.facing;
       // Wind-up before the effect = the unit's Cast Point PLUS the ability's own
       // Casting Time (they add — hiveworkshop "Cast Point and Backswing" 265781;
       // castPoint 0 → an instant cast). Storm Bolt = MK's 0.4; Blizzard = Archmage's
