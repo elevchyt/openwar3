@@ -1893,6 +1893,25 @@ export interface SimUnit {
    *  in its own columns, the ability restores the lot. */
   reviveHp: number;
   reviveMana: number;
+  /**
+   * THIS UNIT WAS TURNED ON ITS OWN SIDE, and a creep camp does not count it a threat.
+   *
+   * The aggro-drop trick, which every creeping guide teaches: "You do this by issuing an
+   * attack with the attacked unit onto one of your other units. Your initial unit will no
+   * longer be viewed as a threat and the creeps will therefore change their target"
+   * (warcraft3.info 176; warcraft-gym, and Grubby's own video). The order is CANCELLED a
+   * fraction of a second later — a Stop, a Hold, a step — so the blow never lands on your own
+   * Peasant, and that cancel is exactly why the state has to be REMEMBERED: read off the
+   * live order (`attackingCreeps`), the drop lasted only as long as the player held the
+   * order, and the camp walked straight back onto the unit the moment it was called off.
+   *
+   * It lapses when the unit acts like a threat again — the next attack it takes on anything
+   * HOSTILE, ordered or auto-acquired, clears it in `issueAttack`. So a unit told to Stop
+   * stays dropped for as long as it stands there, and one that resumes swinging is a threat
+   * from that swing on. What the drop does is put it on the BOTTOM rung (`threatTier`), a
+   * worker's rung, not out of the world: a camp with nothing else in reach still eats it.
+   */
+  aggroDropped: boolean;
   /** Was this creep's camp in a fight on the previous tick? The edge `ensnareSeen` is taken on. */
   creepFighting: boolean;
   /** For a creep carrying Ensnare: the enemies already inside its cast range the moment its
@@ -6974,6 +6993,7 @@ export class SimWorld {
       | "returning"
       | "campHelper"
       | "campGuard"
+      | "aggroDropped"
       | "creepFighting"
       | "ensnareSeen"
       | "reviveT"
@@ -7229,6 +7249,7 @@ export class SimWorld {
       asleep: false,
       returning: false,
       campHelper: false,
+      aggroDropped: false,
       campGuard: false,
       creepFighting: false,
       ensnareSeen: null,
@@ -8041,6 +8062,21 @@ export class SimWorld {
     // WITHIN an ongoing fight (reacquire after a kill, switching to a reachable enemy)
     // leaves it intact — the whole combat episode still belongs to that follow (#32).
     if (u.order !== "attack") u.followLeaderId = null;
+    // THE AGGRO-DROP TRICK, recorded here because here is where it happens: a unit pointed at
+    // something that is NOT an enemy (the forced attack a player makes with A + a click on
+    // their own Footman) stops being a threat to a creep camp. See SimUnit.aggroDropped — the
+    // whole point of remembering it is that the player CANCELS the order a moment later, and
+    // the drop has to outlive the cancel.
+    //
+    // Only a DELIBERATE attack on an enemy takes it back (`ordered`), never an auto-acquired
+    // one, and that asymmetry is the trick as it is actually played: the cancel the guides
+    // give is a Stop, a step, or a HOLD — and a holding unit goes on striking whatever comes
+    // into its range. If its own swings put it back on the top rung, the H in the trick would
+    // undo the trick. The engine's own reading says the same thing from the other side: what
+    // puts a unit on that rung is having an ATTACK ORDER on a creep (`attackingCreeps`), and
+    // a holding unit has no attack order at all.
+    if (!this.hostile(u, t)) u.aggroDropped = true;
+    else if (ordered) u.aggroDropped = false;
     u.order = "attack";
     u.targetId = targetId;
     u.noCollision = false; // manual control restores collision
@@ -15286,6 +15322,7 @@ export class SimWorld {
    * Same tier → distance breaks the tie (see bestCreepTarget).
    */
   private threatTier(t: SimUnit): number {
+    if (t.aggroDropped) return 0; // turned on its own side: not a threat (SimUnit.aggroDropped)
     if (this.lowPriorityTarget(t)) return 0; // workers and wards dead last
     if (t.weapon && !t.weapon.ranged && t.buffs.some((b) => b.kind === "root")) return 0; // a snared swordsman is nobody's threat
     if (t.isSummon && t.weapon) return 5; // a summon, fighting or not
@@ -19798,18 +19835,39 @@ export class SimWorld {
         // bait — standing there trading with it while the Riflemen shoot is precisely the
         // thing the ward was planted to buy.
         //
-        // The comparison is `creepScore`, the same number the pick maximises — for a creep
-        // under level 7 that is the threat ladder (a unit that stops attacking drops a rung and
-        // the camp walks off it, which is the retargeting trick every creeping guide teaches),
-        // and for a level 7+ creep it is the most wounded thing in reach, which is why the
-        // trick does not work on those. Looked for over the FIGHT range, not the 200 the camp
-        // was pulled at.
+        // **A RE-PICK IS AN UPGRADE, NOT A RE-DECISION**, and for a creep under level 7 the
+        // upgrade is a strictly HIGHER RUNG of the threat ladder — never merely a better
+        // score. The score carries the within-tier tie-break (`- gap`, the nearest of a rung),
+        // which is the right reading for CHOOSING a target out of a crowd and the wrong one
+        // for re-opening a fight already joined: the unit a camp is chewing on is usually the
+        // closest thing to it, so any equal-rung neighbour that drifted a few units nearer
+        // took the camp off it, every half second. That churn is what put the aggro back on
+        // the unit the player had just dropped it from (SimUnit.aggroDropped) — the drop moves
+        // a unit DOWN the ladder, the camp leaves, and a moment later the same unit was the
+        // nearest thing on its new rung and the camp came back. The trick's whole promise is
+        // that it sticks: "the creeps will therefore change their target" (warcraft3.info
+        // 176), and a target changed for one tick is not changed.
+        //
+        // So what moves a camp off a live fight is somebody more threatening turning up — an
+        // ally that starts hitting it (rung 4), a summon walked in front of it (rung 5) — or
+        // the current target dropping a rung under it. That is the ladder doing exactly what
+        // the guides describe, and nothing else moves the camp.
+        //
+        // A level 7+ creep keeps the full `creepScore` comparison: it "behaves like the melee
+        // AI" and takes the most wounded thing in reach whatever it is fighting, which is why
+        // the trick "does not always work as level 7+ creeps are a bit different" (176).
+        //
+        // Looked for over the FIGHT range, not the 200 the camp was pulled at.
         if (!(u.inCombat && cur.isPeon)) {
           const best = this.bestCreepTarget(u, this.creepFightRange(u));
           if (best && best.id !== cur.id) {
             const gapCur = Math.hypot(cur.x - u.x, cur.y - u.y) - u.radius - cur.radius;
             const gapBest = Math.hypot(best.x - u.x, best.y - u.y) - u.radius - best.radius;
-            if (this.creepScore(u, best, gapBest) > this.creepScore(u, cur, gapCur)) {
+            const upgrade =
+              u.level >= CREEP_SMART_LEVEL
+                ? this.creepScore(u, best, gapBest) > this.creepScore(u, cur, gapCur)
+                : this.threatTier(best) > this.threatTier(cur);
+            if (upgrade) {
               this.issueAttack(u.id, best.id);
               u.campHelper = false; // picked this one out of its own aggro range
             }

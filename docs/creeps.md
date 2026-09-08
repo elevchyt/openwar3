@@ -32,7 +32,8 @@ For what no file states:
 |---|---|---|
 | A **Camp** creep stirs at **200**, a Normal one at its weapon's `acquire` (500 on nearly all). The .doo stores -1/-2/N; the 200 is the editor's label, never in the map. Camp creeps are also deaf to construction. | Wowpedia "500 or 200"; Hive 15660 | `CREEP_CAMP_ACQUIRE_RANGE`, `trySeed` |
 | Once FIGHTING, a creep looks as far as its own weapon's acquisition, not the 200 it was pulled at. | (inference: the Riflemen at 500 are fought like anybody) | `creepFightRange` |
-| **Threat ladder** (below level 7): a **summon** first, then whatever is **attacking the camp** (an Ancient of War included), then armed units, unarmed, buildings, and last workers/wards and **ensnared melee** units. Nearest within a tier. A unit told to attack its own side drops a rung and the camp walks off it. | 176; warcraft-gym; Grubby | `threatTier`, `attackingCreeps`, `creepScore` |
+| **Threat ladder** (below level 7): a **summon** first, then whatever is **attacking the camp** (an Ancient of War included), then armed units, unarmed, buildings, and last workers/wards, **ensnared melee** units and anything whose **aggro has been dropped**. Nearest within a tier. | 176; warcraft-gym; Grubby | `threatTier`, `attackingCreeps`, `creepScore` |
+| **The aggro-drop trick**: a unit ordered to attack ITS OWN SIDE is no threat, and it STAYS no threat after the order is cancelled — only a deliberate attack order back onto an enemy ends it. And a camp in a fight only ever moves UP a rung: it does not re-decide, so the dropped unit is not picked back up. | 176; warcraft-gym; Grubby's video | `SimUnit.aggroDropped`, `issueAttack`, `threatTier`, the re-pick in `tickCreep` |
 | **Level 7+**: summon > hero > **lowest hit points**, among what is in weapon reach; the ladder for the rest. The retarget trick does not work on them. | warcraft-gym; Wowpedia; 176 | `creepScore`, `CREEP_SMART_LEVEL` |
 | **Level 6+** take a spell's HERO duration ("Hero magic resistance"). | patch 1.03 | `dur()` in spells.ts |
 | A resting camp **ignores a flyer under a plain move**; one that stops overhead, or attack-moves, is fair game. | patch 1.10; Wowpedia | `bestCreepTarget(idle)` |
@@ -163,6 +164,35 @@ the behaviour:
   `tickAutoMeld` refuses to re-meld a creep whose camp is fighting, or it would vanish again
   on the next tick it stood still. Creeps only: a night elf player's melded Archer is not
   roused by her neighbours being shot at.
+
+## The aggro-drop trick, and why it kept wearing off
+
+"You do this by issuing an attack with the attacked unit onto one of your other units. Your
+initial unit will no longer be viewed as a threat and the creeps will therefore change their
+target" (warcraft3.info 176; warcraft-gym and Grubby's video say the same). The order is then
+CANCELLED a fraction of a second later — a Stop, a step, or a Hold — so the blow never lands
+on your own Peasant.
+
+Two things were wrong, and each on its own put the camp straight back on the unit the player
+had just saved:
+
+- **The drop was read off the LIVE order** (`attackingCreeps`), so it lasted exactly as long
+  as the player held the order down. The cancel is not an afterthought in this trick, it is
+  step two of it. `SimUnit.aggroDropped` remembers it instead, and only a DELIBERATE attack
+  order back onto an enemy clears it — never a swing the unit takes by itself, because the
+  cancel the guides recommend is often a HOLD, and a holding unit goes on striking whatever
+  walks into its range. (The engine's own reading agrees from the other side: what puts a unit
+  on the "attacking us" rung is having an attack ORDER on a creep, and a holding unit has no
+  attack order at all.)
+- **The half-second re-pick was a re-decision rather than an upgrade.** It compared the full
+  `creepScore`, which carries the within-tier tie-break `- gap` — right for choosing a target
+  out of a crowd, wrong for re-opening a fight already joined, because the unit a camp is
+  chewing on is nearly always the closest thing to it. So any equal-rung neighbour that
+  drifted a few units nearer took the camp off its target, twice a second, and the tricked
+  unit — back on the ordinary armed rung the moment the drop lapsed — was the nearest of them.
+  Below level 7 the re-pick now needs a strictly HIGHER rung: an ally that starts hitting the
+  camp, a summon walked in front of it, or the current target dropping a rung. A level 7+
+  creep keeps the full comparison, which is why the trick "does not always work" on those.
 
 ## The net: one spell, four models, three sizes
 

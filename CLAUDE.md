@@ -467,7 +467,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `trySeed`. A camp is a handful of measured RULES rather than numbers: **Camp (200)** is the
   editor's acquisition setting and why most camps are "passive"; the threat ladder puts a SUMMON
   first and then whatever is ATTACKING the camp (which is the retargeting trick every guide
-  teaches), and a level-7+ creep ignores it for the lowest hit points in reach; a poisoner
+  teaches), and a level-7+ creep ignores it for the lowest hit points in reach; the AGGRO-DROP trick is
+  REMEMBERED (`SimUnit.aggroDropped`) because its second step is CANCELLING the order, and a
+  camp in a fight only ever moves UP a rung — a re-pick that re-decided on the full score put
+  the camp back on the unit it had just been pulled off, since that unit is the nearest thing
+  to it; a poisoner
   spreads itself around before fighting; a resting camp ignores a flyer under a plain move;
   Ensnare goes on what ENTERS its reach after the fight starts. A creep casts only while its
   camp is fighting — Heal excepted. Three wiring traps cost every creep ability at once:

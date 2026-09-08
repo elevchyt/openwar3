@@ -145,6 +145,47 @@ console.log("\nthe threat ladder: the camp goes for what is ATTACKING it");
   check("…and switches to the other when the roles swap", gnoll.targetId, b.id);
 }
 
+console.log("\n…and the drop STICKS past the cancel, which is the whole of how it is played");
+{
+  // The guide's own sequence: "issue an attack… onto one of your other units", then "let the
+  // animation start for just a fraction of a second, then immediately move, issue a stop
+  // command (S), or hold position (H) before your unit actually strikes your own target".
+  // Read off the LIVE order, the drop lasted exactly as long as the player held the order and
+  // the camp walked straight back the moment it was called off — and back it went to the same
+  // weak unit, because the unit a camp is chewing on is the closest thing to it and the
+  // half-second re-pick took the nearest of a rung. Both halves are fixed: the drop is
+  // REMEMBERED (SimUnit.aggroDropped) and a re-pick is an UPGRADE, a strictly higher rung.
+  const w = world();
+  const gnoll = creep(w, "ngno", 1000, 1000);
+  const a = footman(w, 1100, 1000); // the one being hit — and the NEAREST thing to the camp
+  const b = footman(w, 1340, 1000); // further off, and never attacks: an ordinary armed unit
+  const decoy = footman(w, 2600, 2600); // …and one right out of it, to point the trick at
+  const keep = immortal(gnoll, a, b, decoy);
+  w.issueHold(b.id);
+  w.issueHold(decoy.id); // an idle Footman within reach would rally to the fight by itself
+  w.issueAttack(a.id, gnoll.id, false, true);
+  runKeeping(w, null, 3, keep);
+  check("the Gnoll is on the Footman hitting it", gnoll.targetId, a.id);
+
+  w.issueAttack(a.id, decoy.id, true, true); // A + click on one of our own
+  runKeeping(w, null, 0.2, keep); // "let the animation start for a fraction of a second…"
+  w.stop(a.id); // "…then immediately move, issue a stop command (S), or hold position (H)"
+  runKeeping(w, null, 4, keep);
+  check("the camp has changed target", gnoll.targetId, b.id);
+  check("…to the one that never touched it", gnoll.targetId !== a.id, true);
+  runKeeping(w, null, 6, keep);
+  check("…and it does NOT come back, though the tricked unit is nearer", gnoll.targetId, b.id);
+  check("…which is what the drop being remembered means", a.aggroDropped, true);
+
+  // Sending it back in by hand is what ends the drop — a deliberate attack order, never a
+  // swing the unit took by itself (see issueAttack): now it is the top rung again and the
+  // camp, which only ever moves UP a rung, comes for it.
+  w.issueAttack(a.id, gnoll.id, false, true);
+  runKeeping(w, null, 4, keep);
+  check("ordered back onto the camp, it is a threat again", a.aggroDropped, false);
+  check("…and the camp comes for it", gnoll.targetId, a.id);
+}
+
 console.log("\na summon is worth hitting even when it is not fighting");
 {
   // 176: "Creeps tend to prioritize summoned units with attacks (not spells like Purge) even
