@@ -690,6 +690,11 @@ export class Authority {
       case "train": {
         const b = this.sim.units.get(cmd.buildingId);
         if (!b?.building || b.hp <= 0) return false;
+        // A building still going up produces nothing — the same guard `revive` makes, and for
+        // the same reason. It has always been reachable over the wire, and it became reachable
+        // from the card the moment a train click started going to the WHOLE selected sub-group
+        // (MapViewerScene.trainUnit): a finished Barracks and a half-built one group together.
+        if (b.building.constructionLeft > 0) return false;
         // A SHOP is deliberately exempt from ownership — a Tavern is Neutral Passive, so
         // nobody owns the building you hire your first hero from. Anything else must be
         // yours. (Same carve-out the command card makes for a foreign shop.) The exemption
@@ -804,11 +809,19 @@ export class Authority {
         if (!this.ownedBy(player, cmd.buildingId)) return false;
         const b = this.sim.units.get(cmd.buildingId);
         if (!b?.building || b.hp <= 0) return false;
+        if (b.building.constructionLeft > 0) return false; // a half-built Blacksmith researches nothing
         const state = this.sim.tech;
         const d = this.upgrades.get(cmd.upgradeId);
         if (!d || !state) return false;
         // Does this building even research that? Same gap as `train` had.
         if (!this.tech.researches(b.typeId).includes(cmd.upgradeId)) return false;
+        // An upgrade is the PLAYER's, not the building's, so only one of your buildings may be
+        // researching a given one at a time — a second Barracks does not get its own Defend.
+        // The card greys the button out on the others (pushResearchButtons); this is the gate
+        // behind it, and it is the one that matters: without it the second purchase is money
+        // burnt for a level the player already owns by the time it lands.
+        const busy = this.sim.playerResearching(player).get(cmd.upgradeId);
+        if (busy && busy.buildingId !== cmd.buildingId) return false;
         if (this.sim.queueFull(cmd.buildingId)) return false; // before charging
         // The LEVEL is derived, not sent: an upgrade's price climbs with its level, so a
         // client naming its own level would buy level 3 at level 1's price. It is one past

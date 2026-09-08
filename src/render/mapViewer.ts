@@ -8338,13 +8338,22 @@ export class MapViewerScene {
     const world = this.rts!.simWorld;
     const state = world.tech;
     const stash = this.rts!.stashFor(this.localPlayer);
-    for (const upId of this.tech.researches(sel.typeId)) {
+    const researches = this.tech.researches(sel.typeId);
+    if (!researches.length) return; // nothing this building can research — don't sweep the units
+    // An upgrade belongs to the PLAYER, not to the building paying for it, so a Blacksmith
+    // already on Iron Forged Swords takes the button off every OTHER Blacksmith's card until
+    // it lands (WC3 greys it out there). Read once for the whole card — it is one pass over
+    // the units, and the loop below asks it per button.
+    const busy = world.playerResearching(this.localPlayer);
+    for (const upId of researches) {
       const d = this.upgrades.get(upId);
       if (!d) continue;
       const have = state?.researchLevel(this.localPlayer, upId) ?? 0;
       // Something already in this building's queue counts as done for the card's purposes,
       // so you can't queue Steel Forged Swords twice.
       const queued = world.researchingLevel(sel.id, upId);
+      const elsewhere = busy.get(upId);
+      const heldElsewhere = !!elsewhere && elsewhere.buildingId !== sel.id;
       const next = Math.max(have, queued) + 1;
       if (next > d.maxLevel) continue; // fully researched — the button is gone, as in WC3
       const cost = this.upgrades.cost(upId, next);
@@ -8360,7 +8369,9 @@ export class MapViewerScene {
         desc: this.tipText(this.upgrades.uberTip(upId, next)) + this.requirementLine(upId, tier),
         gold: cost.gold, lumber: cost.lumber, food: 0,
         ...this.researchSlot(upId, d),
-        disabled: !metTech, // no Keep yet → inert, the way WC3 greys it out
+        // Inert for a missing requirement, and inert for the same upgrade already running at
+        // another of the player's buildings — a hard NO with no line to say it either way.
+        disabled: !metTech || heldElsewhere,
         cantAfford: !afford, // affordable-later → still clickable, still answered
       }));
     }
@@ -9368,7 +9379,12 @@ export class MapViewerScene {
     }
     if (id.startsWith("train:")) {
       const sel = this.rts.selectedInfo();
-      if (sel) this.trainUnit(sel.id, id.slice(6));
+      // The whole focused sub-group, not just the leader — see trainUnit. A mine or a ground
+      // item has no group behind it (its id is synthetic), so it falls back to itself.
+      if (sel) {
+        const group = this.rts.focusedGroupIds();
+        this.trainUnit(group.includes(sel.id) ? group : [sel.id], id.slice(6));
+      }
       return;
     }
     if (id.startsWith("revive:")) {
@@ -9531,29 +9547,53 @@ export class MapViewerScene {
     return true;
   }
 
-  /** Ask to train (or hire) a unit. Every gate that decides whether this HAPPENS now lives in
-   *  `execute` — cost, food, tech, hero cap, queue depth, shop stock. What stays here is the
-   *  part `execute` cannot do: telling the player WHY it was refused, in the game's own voice.
-   *  These are feedback pre-checks, deliberately duplicated, and nothing depends on them. */
-  private trainUnit(buildingId: number, unitId: string): void {
-    if (!this.rts) return;
+  /** The line WC3 would answer this train click with, or "" when nothing objects. Every gate
+   *  that decides whether training HAPPENS lives in `execute` — cost, food, tech, hero cap,
+   *  queue depth, shop stock. What is here is the part `execute` cannot do: telling the player
+   *  WHY it was refused, in the game's own voice. Feedback only, deliberately duplicated, and
+   *  nothing depends on it.
+   *
+   *  Split out of `trainUnit` so an order sent to a WHOLE selection of barracks can stay quiet
+   *  about the ones that had no room and speak only when nothing at all took it. */
+  private trainRefusal(buildingId: number, unitId: string): string {
+    if (!this.rts) return "";
     const d = this.registry.get(unitId);
-    if (d) {
-      const freeHero = d.isHero && this.rts.hasFreeHero(this.localPlayer);
-      if (!this.canAfford(freeHero ? 0 : d.goldCost, freeHero ? 0 : d.lumberCost)) return;
-      const food = this.rts.foodFor(this.localPlayer);
-      if (food.used + d.foodUsed > food.made) {
-        this.refuse(ERR_NOFOOD);
-        return;
+    if (!d) return "";
+    const freeHero = d.isHero && this.rts.hasFreeHero(this.localPlayer);
+    // Gold before lumber, the order WC3 reports them in (see canAfford).
+    const stash = this.rts.stashFor(this.localPlayer);
+    if (stash.gold < (freeHero ? 0 : d.goldCost)) return ERR_NOGOLD;
+    if (stash.lumber < (freeHero ? 0 : d.lumberCost)) return ERR_NOLUMBER;
+    const food = this.rts.foodFor(this.localPlayer);
+    if (food.used + d.foodUsed > food.made) return ERR_NOFOOD;
+    // A sold-out shelf has its own line ("That unit is not available") — worth keeping,
+    // since a Tavern with no stock looks identical to one that just refused silently.
+    if (this.rts.simView.shopStock(buildingId, unitId) === 0) return SHOP_ERROR.nostock;
+    return "";
+  }
+
+  /** Ask to train (or hire) a unit — at EVERY building of the selected sub-group, which is
+   *  where a command-card order goes in WC3 (RtsController.focusedGroupIds): two Barracks
+   *  selected and Footman clicked once starts one Footman in each, so they walk out together.
+   *
+   *  Fairness needs no bookkeeping because each click adds exactly one job per building, and
+   *  the affordability question answers itself: `execute` charges as it goes, so with 200 gold
+   *  in hand the first Barracks takes the Footman and the second one's check already sees the
+   *  emptied stash. The refusal is spoken only when NOTHING took the order — a full queue on
+   *  the leader is not worth a "Not enough gold." when the barracks beside it started the unit. */
+  private trainUnit(buildings: number[], unitId: string): void {
+    if (!this.rts) return;
+    let started = 0;
+    let refusal = "";
+    for (const buildingId of buildings) {
+      const err = this.trainRefusal(buildingId, unitId);
+      if (err) {
+        refusal ||= err;
+        continue;
       }
-      // A sold-out shelf has its own line ("That unit is not available") — worth keeping,
-      // since a Tavern with no stock looks identical to one that just refused silently.
-      if (this.rts.simView.shopStock(buildingId, unitId) === 0) {
-        this.refuse(SHOP_ERROR.nostock);
-        return;
-      }
+      if (this.rts.execute(this.localPlayer, { c: "train", buildingId, unitId })) started++;
     }
-    this.rts.execute(this.localPlayer, { c: "train", buildingId, unitId });
+    if (!started && refusal) this.refuse(refusal);
   }
 
   /** Bring a fallen hero back. Feedback only — the price and the wait are the LEVEL's and

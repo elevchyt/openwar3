@@ -4252,6 +4252,31 @@ export class SimWorld {
     return 0;
   }
 
+  /** Every upgrade any of `player`'s buildings has in a queue right now, keyed by upgrade id,
+   *  carrying the highest level queued and the building holding it.
+   *
+   *  An upgrade belongs to the PLAYER and not to the building that pays for it, so WC3 lets
+   *  only ONE of your buildings research a given one at a time: start Defend at one Barracks
+   *  and the button goes inert on every other Barracks until it lands. Without that rule two
+   *  Barracks both buy level 1 and the second one's gold is simply burnt — the research
+   *  completes, `researchLevel` is already 1, and nothing on the card ever says so.
+   *
+   *  ONE pass over the units answers the whole command card, which asks once per upgrade
+   *  button; `buildingId` is exact rather than a pick because the authority enforces the
+   *  invariant that there is at most one holder per player per upgrade. */
+  playerResearching(player: number): Map<string, { level: number; buildingId: number }> {
+    const out = new Map<string, { level: number; buildingId: number }>();
+    for (const [id, u] of this.units) {
+      if (u.owner !== player || !u.building) continue;
+      for (const j of u.building.queue) {
+        if (j.kind !== "research") continue;
+        const seen = out.get(j.unitId);
+        if (!seen || j.level > seen.level) out.set(j.unitId, { level: j.level, buildingId: id });
+      }
+    }
+    return out;
+  }
+
   /** Whether this building is already turning into something. A structure can only become one
    *  thing, so the upgrade buttons come off its card the moment one is queued — otherwise
    *  clicking "Upgrade to Keep" twice charges 705 gold twice and morphs a Keep into a Keep. */

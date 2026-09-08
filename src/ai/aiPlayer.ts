@@ -739,9 +739,10 @@ export class AiPlayer {
   }
 
   /** `StartUpgrade(level, id)`. The level compared against counts what is already IN a
-   *  building's queue as well as what is researched: two of our buildings can research the
-   *  same upgrade, each is priced from its own `researchingLevel`, and an AI that asked twice
-   *  would buy level 1 twice. */
+   *  building's queue as well as what is researched, across ALL of our buildings: an upgrade
+   *  is the player's, so a second Barracks is refused Defend while the first is on it
+   *  (Authority `research`), and a row that asked again every pass would stall the ladder
+   *  behind a purchase that can never happen. */
   private startUpgrade(level: number, id: string): boolean {
     const have = this.upgradeLevelOrQueued(id);
     if (have >= level) return true;

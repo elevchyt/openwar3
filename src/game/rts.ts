@@ -2207,6 +2207,24 @@ export class RtsController {
     return null;
   }
 
+  /** The whole sub-group the command card is showing — every selected unit of the FOCUSED
+   *  group, in the card's own order, so the primary (the one `selectedInfo` describes) leads.
+   *
+   *  A command-card order in WC3 goes to the SELECTION rather than to its leader: select two
+   *  Barracks, click Footman once, and each Barracks starts a Footman, so both walk out
+   *  together. The spread is what makes the work fair — the queues stay level because every
+   *  click adds one job to each — and it is the caller's job to stop when the player runs out
+   *  (each order is charged as it is issued, so a stash that covers one Footman buys exactly
+   *  one). Empty when nothing (or a mine / a ground item) is selected. */
+  focusedGroupIds(): number[] {
+    if (this.primary === null) return [];
+    const key = this.groupKeyOf(this.primary);
+    if (!key) return [this.primary];
+    const out: number[] = [];
+    for (const id of this.orderedSelection()) if (this.groupKeyOf(id) === key) out.push(id);
+    return out;
+  }
+
   /** Recompute the focused group + primary from the current selection, keeping
    *  `preferKey` focused if it still exists. */
   private refocus(preferKey = ""): void {
