@@ -403,9 +403,12 @@ body.hud-statbar-skinned .unit-hpbar-fill[data-state="team"] {
   position: absolute;
   left: 0;
   top: 0;
-  padding: 5px 12px 6px;
+  padding: var(--tt-pad, 5px) calc(var(--tt-pad, 5px) * 2);
   text-align: left;
-  font: 400 15px/1.3 var(--game-font);
+  /* MiscUI [FontHeights]: UnitTipPlayerName / UnitTipUnitName / UnitTipDesc are all 0.011, so
+     one length serves every line the slab stacks (they are listed apart in FONT_HEIGHTS because
+     the game lists them apart). This was a flat 15px. */
+  font: 400 var(--font-UnitTipDesc, 15px) / 1.3 var(--game-font);
   pointer-events: none;
   z-index: 3;
   background: rgba(30, 40, 55, 0.9);
@@ -413,20 +416,13 @@ body.hud-statbar-skinned .unit-hpbar-fill[data-state="team"] {
   border-radius: 2px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
 }
+/* The frame is the command tooltip's, band for band — see the `::after` it shares up at
+   .hud-tooltip.skinned, and TOOLTIP_BOX in ui/hud.ts for why the band is a tile wide. */
 body.hud-tooltip-skinned .unit-hover-tooltip {
   background: var(--hud-tooltip-fill);
   border: none;
-  border-radius: 5px;
+  border-radius: calc(var(--tt-band, 10px) * 0.4);
   box-shadow: none;
-  padding: 6px 13px 7px;
-}
-body.hud-tooltip-skinned .unit-hover-tooltip::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border: 10px solid transparent;
-  border-image: var(--hud-tooltip-border) 16 / 10px stretch;
-  pointer-events: none;
 }
 .uht-line { white-space: nowrap; }
 
@@ -1178,18 +1174,35 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
    Tip string's own |cffffcc00 markup, ToolTip*Icon glyphs on the cost line, and
    the Ubertip body with its colour runs and |n breaks intact (issue #50).
    The pre-skin values below are the placeholder used when no install is mounted. */
+/* The command tooltip. NOTHING about this frame comes out of a .fdf — the engine builds it in
+   code, and `UI\MiscUI.txt` says so in as many words — so read docs/tooltips.md before touching
+   it: the sizes are MiscUI's [FontHeights], the words are GlobalStrings/CommandStrings, and the
+   box is TOOLTIP_BOX in ui/hud.ts. Everything here is a length off --stage-h for the usual
+   reason; the px constants this replaced were only right on one monitor.
+
+   RIGHT-aligned to the command card, not left: in the reference shot the slab is far wider than
+   the card and hangs off its LEFT edge, with the right edges flush. */
 .hud-tooltip {
   position: absolute;
-  left: -4px;
+  right: 0;
   /* Anchor the BOTTOM edge a fixed gap above the command card so the tooltip
      only ever grows UPWARD as its text gets taller (a percentage transform
      scaled with height, which made it expand in both directions). The gap has to
      clear the console art's own top edge, which rises well above the card's box —
      at 14px the slab sat right on the stonework. */
-  bottom: calc(100% + 48px);
-  min-width: 210px;
-  max-width: 300px;
-  padding: 8px 11px;
+  bottom: calc(100% + var(--stage-h) * 48 / 1080);
+  /* Where a line wraps — in ems of the body text, so the box tracks the type it holds
+     (TOOLTIP_BOX.wrapEm, measured off the real client's own line breaks).
+
+     `max-content` is load-bearing next to `right: 0`. An absolutely-positioned box with only
+     ONE edge pinned shrink-to-fits against the space from its containing block to that edge —
+     and the containing block here is the command CARD, which is narrower than the tooltip. So
+     pinning the right edge silently capped the width at the card's and wrapped the body two
+     lines early; `max-content` sizes it to the text and lets `max-width` do the wrapping. */
+  width: max-content;
+  min-width: var(--tt-min, 210px);
+  max-width: var(--tt-wrap, 300px);
+  padding: var(--tt-pad, 8px);
   background: rgba(30, 40, 55, 0.9);
   border: 1px solid rgba(126, 146, 176, 0.55);
   border-radius: 2px;
@@ -1198,34 +1211,44 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
   pointer-events: none;
   z-index: 6;
 }
-/* With the real art: drop the placeholder outline and frame the slab with the
-   gold nine-patch. It rides on a pseudo-element pulled 3px OUTSIDE the fill,
-   because the engine insets the backdrop background from its border the same way
-   (BackdropBackgroundInsets 0.005 against BackdropCornerSize 0.016). The fill's
-   rounded corners then tuck behind the border art's arcs. */
+/* With the real art: drop the placeholder outline and frame the slab with the gold nine-patch.
+   It rides on a pseudo-element pulled `--tt-bg-inset` OUTSIDE the fill, because that is what
+   BackdropBackgroundInsets means — the fill starts 0.005 inside the frame's outer edge and
+   underlaps the rest of the 0.016 band, so the slate sits behind the gold stroke rather than
+   leaving a hairline of map showing through it.
+
+   `round`, not `stretch`: a BackdropEdgeFile is TILED along the edge. The four edge tiles are
+   a uniform 4-texel stroke, so for this art the two render identically — but the band is one
+   tile at 1:1 either way, which is the thing that was wrong when this was a flat 10px. */
 .hud-tooltip.skinned {
   background: var(--hud-tooltip-fill);
   border: none;
-  border-radius: 5px;
+  /* Enough to tuck the fill's corners behind the border art's arcs, no more. */
+  border-radius: calc(var(--tt-band, 10px) * 0.4);
   box-shadow: none;
-  padding: 9px 12px;
 }
-.hud-tooltip.skinned::after {
+.hud-tooltip.skinned::after,
+body.hud-tooltip-skinned .unit-hover-tooltip::after {
   content: "";
   position: absolute;
-  inset: -3px;
-  border: 10px solid transparent;
-  border-image: var(--hud-tooltip-border) 16 / 10px stretch;
+  inset: calc(var(--tt-bg-inset, 3px) * -1);
+  border: var(--tt-band, 10px) solid transparent;
+  border-image: var(--hud-tooltip-border) 16 / var(--tt-band, 10px) round;
   pointer-events: none;
 }
-.hud-tooltip-title { font-size: 14px; color: #fff; margin-bottom: 4px; }
+/* MiscUI [FontHeights]: ToolTipName / ToolTipDesc / ToolTipCost are all 0.011 — the name line
+   is NOT drawn larger than the body, which is most of what made ours read wrong. */
+.hud-tooltip-title { font-size: var(--font-ToolTipName, 14px); color: #fff; }
 .hud-tooltip-title b { color: #ffcc00; font-weight: 400; } /* the |cffffcc00 hotkey gold */
-.hud-tooltip-desc { font-size: 12.5px; color: #fff; line-height: 1.4; }
-.hud-tooltip-desc + .hud-tooltip-desc { margin-top: 6px; }
-.hud-tooltip-cost { font-size: 13px; margin-bottom: 4px; display: flex; gap: 16px; }
-.tt-cost-item { display: inline-flex; align-items: center; gap: 4px; color: #fed312; } /* WC3 tooltip gold */
+/* Tight leading, as the reference shot has it — 1.4 opened the body into a paragraph. */
+.hud-tooltip-desc { font-size: var(--font-ToolTipDesc, 14px); color: #fff; line-height: 1.2; }
+.hud-tooltip-desc + .hud-tooltip-desc { margin-top: 0.5em; }
+.hud-tooltip-cost { font-size: var(--font-ToolTipCost, 14px); display: flex; gap: 1.2em; }
+.tt-cost-item { display: inline-flex; align-items: center; gap: 0.3em; color: #fed312; } /* WC3 tooltip gold */
 .tt-cost-item.short { color: #ff2020; } /* can't pay it right now — WC3 reddens the number */
-.tt-cost-icon { width: 16px; height: 16px; display: block; }
+/* The icon is the height of the digit beside it. The art is 32 texels square; drawn at its own
+   resolution it towers over 0.011 type, which is not what the real client shows. */
+.tt-cost-icon { width: 1em; height: 1em; display: block; }
 
 /* UNAVAILABLE (a prerequisite is missing) is drawn with the engine's OWN art — the icon's
    ReplaceableTextures\CommandButtonsDisabled\DIS* twin (`.dis-art`, see
@@ -2049,7 +2072,8 @@ body.hud-widget-skinned .hud-queue-slot { color: transparent; }
   border-radius: 4px;
   background: rgba(8, 7, 4, 0.6);
 }
-.hud-inv-title { font-size: 12px; color: var(--gold); margin-bottom: 6px; text-align: center; }
+/* MiscUI [FontHeights] Inventory=0.011 — "'Inventory' text above your inventory". */
+.hud-inv-title { font-size: var(--font-Inventory, 12px); color: var(--gold); margin-bottom: 6px; text-align: center; }
 .hud-inv-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

@@ -10,7 +10,7 @@ import { collectMapDestructibles, findDestructibleAt, type MapDestructible } fro
 import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { AllianceType } from "../sim/alliances";
-import { summonsBuildings, type Alert, type EffectAnim, type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
+import { summonsBuildings, type Alert, type EffectAnim, type RallyKind, type ShopResult, type ShopStock, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -371,7 +371,7 @@ const SHOP_ERROR: Record<ShopResult, string> = {
   nopatron: "Neednearbypatron",
   full: "Inventoryfull",
   cost: "Nogold",
-  req: "", // the red "Requires:" line on the button already says which building is missing
+  req: "", // the yellow "Requires:" line on the button already says which building is missing
 };
 
 // The [Errors] keys that aren't spoken by any one subsystem — the resource refusals the
@@ -7081,7 +7081,7 @@ export class MapViewerScene {
       unloadCargo: (hostId, passengerId) => !!this.rts?.unloadCargo(hostId, passengerId),
       inventory: () =>
         (this.rts?.inventorySlots() ?? []).map((s) =>
-          s ? { icon: s.icon ? this.blpIcon(s.icon) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable } : null,
+          s ? { icon: s.icon ? this.blpIcon(s.icon) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable, pawnable: s.pawnable } : null,
         ),
       useInventory: (slot) => {
         this.rts?.useInventorySlot(slot);
@@ -8301,7 +8301,7 @@ export class MapViewerScene {
       // it is taken, so a permanent "1" in the corner would be stating the opposite of the truth.
       const badge = stock > 0 && !st?.unlimited ? stock : undefined;
       // A unit the shop SELLS asks nothing of you unless it is a hero — being in stock is the
-      // gate (SimWorld.soldUnitNeedsTech). The greying and the red "Requires:" line have to say
+      // gate (SimWorld.soldUnitNeedsTech). The greying and the yellow "Requires:" line have to say
       // the same thing, so both come off the one answer, exactly as the item wares do.
       const gated = !sold.has(uid) || world.soldUnitNeedsTech(uid);
       const metTech = gated
@@ -8314,7 +8314,8 @@ export class MapViewerScene {
       out.push(this.cmd({
         id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
         tip: d.tip, // "Train |cffffcc00P|reasant" — the game's own tooltip title
-        desc: this.tipText(d.description || `Trains a ${d.name}.`) + this.requirementLine(uid, owned, gated ? undefined : []),
+        desc: this.tipText(d.description || `Trains a ${d.name}.`) + this.stockLine(st)
+          + this.requirementLine(uid, owned, gated ? undefined : []),
         gold, lumber, food: d.foodUsed,
         count: badge, // the shop's stock badge
         cooldownLeft: restocking ? st.timer : 0,
@@ -8521,7 +8522,8 @@ export class MapViewerScene {
       out.push(this.cmd({
         id: `buy:${itemId}`, icon: this.blpIcon(d.icon), name: d.name,
         hotkey: d.hotkey, tip: d.tip,
-        desc: this.tipText(d.description) + (hasPatron ? "" : "|n|cffff0000A valid patron must be nearby.|r") + this.requirementLine(itemId, 0, missing),
+        desc: this.tipText(d.description) + this.patronLine(hasPatron) + this.stockLine(st)
+          + this.requirementLine(itemId, 0, missing),
         gold: d.gold, lumber: d.lumber, food: 0,
         count: stock > 0 ? stock : undefined,
         cooldownLeft: restocking ? st.timer : 0,
@@ -8539,20 +8541,100 @@ export class MapViewerScene {
     }
   }
 
-  /** The tech ids the local player is missing for `id`, rendered as the game's own red
-   *  "Requires:" tooltip line. WC3 names the requirement by its display name — and the
-   *  pseudo-techs have names of their own ("Keep or Stronghold or Tree of Ages or Halls of
-   *  the Dead" for TWN2), which is why they live in the data rather than being spelled out. */
+  /**
+   * The tech ids the local player is missing for `id`, rendered as the game's own "Requires:"
+   * tooltip line. WC3 names the requirement by its display name — and the pseudo-techs have
+   * names of their own ("Keep or Stronghold or Tree of Ages or Halls of the Dead" for TWN2),
+   * which is why they live in the data rather than being spelled out.
+   *
+   * The label is `GlobalStrings.fdf`'s **REQUIRESTOOLTIP**, and it is worth reading as it is
+   * written: `"|Cffffff00Requires:"` — the colour is baked into the STRING, it is pure YELLOW
+   * (not the red this used to draw), and there is no `|r` to close it, so the names that follow
+   * stay yellow to the end of the line. Taking it from the table is also what lets a localized
+   * install say "Benötigt:" without us knowing the word.
+   */
   private requirementLine(id: string, tier = 0, override?: string[]): string {
     const state = this.rts?.simView.tech;
     if (!state) return "";
     // `override` lets a caller narrow the list — a neutral shop asks less of a buyer than the
-    // item's raw data does (SimWorld.missingForShop), and the red line must say the same thing
+    // item's raw data does (SimWorld.missingForShop), and the line must say the same thing
     // the greying does.
     const missing = override ?? state.missing(this.localPlayer, id, tier);
     if (!missing.length) return "";
     const names = missing.map((t) => this.techName(t));
-    return `|n|cffff0000Requires: ${names.join(", ")}|r`;
+    return `|n${this.uiText("REQUIRESTOOLTIP", "|Cffffff00Requires:")} ${names.join(", ")}`;
+  }
+
+  /**
+   * An empty shelf, in the game's own words — and there are TWO of them, which is the point.
+   *
+   * `GlobalStrings.fdf` keeps a key for each: **OUTOFSTOCKTOOLTIP** "Out of stock" for a ware
+   * that has been bought and is restocking, and **COOLDOWNSTOCKTOOLTIP** "Coming soon" for one
+   * whose `stockStart` has not come round yet — a Tavern hero before 2:15 has never been on the
+   * shelf, so "out of stock" would be the wrong sentence. `ShopStock.pending` is the bit that
+   * tells them apart (neither the count nor the clock can).
+   *
+   * These are the TOOLTIP keys, distinct from commandstrings' `[Errors] Outofstock`, which is
+   * what `buyItem` speaks aloud when the click actually arrives. The shelf says it quietly and
+   * the click says it out loud; both exist in the real game.
+   */
+  private stockLine(st: ShopStock | null): string {
+    if (!st || st.count > 0) return "";
+    return st.pending
+      ? `|n${this.uiText("COOLDOWNSTOCKTOOLTIP", "Coming soon")}`
+      : `|n${this.uiText("OUTOFSTOCKTOOLTIP", "Out of stock")}`;
+  }
+
+  /** "A valid patron must be nearby." — the one refusal a shop's card states in ADVANCE rather
+   *  than at the click, because it is the one you cannot fix by waiting. Its words are
+   *  commandstrings' `[Errors] Neednearbypatron`, the same string `buyItem` speaks, rather than
+   *  the English literal this used to carry. */
+  private patronLine(hasPatron: boolean): string {
+    if (hasPatron) return "";
+    return `|n|cffff0000${this.strings.get("Neednearbypatron") || "A valid patron must be nearby."}|r`;
+  }
+
+  /** One `GlobalStrings.fdf` string, or the shipped English if no install is mounted. The
+   *  fallbacks here are the file's own text verbatim, markup included — never a paraphrase,
+   *  so the unmounted look is the mounted one. */
+  private uiText(key: string, fallback: string): string {
+    return this.globalStrings?.strings.get(key) ?? fallback;
+  }
+
+  /**
+   * The card text for one of the ENGINE's own command buttons — Move, Stop, Hold Position,
+   * Attack, Patrol, Build, Set Rally Point, Hero Abilities, Cancel.
+   *
+   * These are not abilities, so they have no `AbilityStrings` row; the game keeps them in
+   * `Units\CommandStrings.txt` instead, one `[Cmd*]` section each carrying the `Tip` (with the
+   * hotkey already gilded — `|cffffcc00M|rove`) and the `Ubertip`. Those Ubertips are much
+   * fuller than a one-line paraphrase, and they say things a player actually needs: that a Move
+   * onto a UNIT follows it, that Hold Position will not chase, that a rally point can be set on
+   * a mine or on trees to auto-harvest.
+   *
+   * The fallbacks are the file's own English, so an unmounted install reads the same.
+   */
+  private cmdText(key: string, tip: string, ubertip: string): { tip: string; desc: string } {
+    const text = this.strings.command(key);
+    return { tip: text.tip || tip, desc: text.ubertip || ubertip };
+  }
+
+  /**
+   * Which `[CmdBuild*]` section this unit's Build button speaks from.
+   *
+   * The verb is the RACE's, and it is not decoration: `[CmdBuildNightElf]` is "Create
+   * |cffffcc00B|ruilding" and `[CmdBuildUndead]` is "Summon |cffffcc00B|ruilding" — a Wisp does
+   * not build and an Acolyte does not either, and the Ubertips say "create" and "summon" to
+   * match. Asked of the WORKER rather than of the lobby seat, since a captured or transferred
+   * worker keeps its own race's card.
+   */
+  private buildCmdKey(typeId: string): string {
+    const race = this.registry.get(typeId)?.race || this.localRace;
+    const byRace: Record<string, string> = {
+      human: "CmdBuildHuman", orc: "CmdBuildOrc", nightelf: "CmdBuildNightElf", undead: "CmdBuildUndead",
+    };
+    // A modded/neutral race falls through to the generic section, which the file also ships.
+    return byRace[race] ?? "CmdBuild";
   }
 
   /** A requirement's display name for the LOCAL player. Most ids just carry their own name,
@@ -8695,18 +8777,21 @@ export class MapViewerScene {
     // Units\commandstrings.txt [CmdCancel] "Drops the current un-issued order and allows
     // you to select a different order." Escape runs it, as does a right-click on the map.
     if (this.isTargeting()) {
-      const text = this.strings.command("CmdCancel");
       out.push(this.cmd({
-        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape",
-        tip: text.tip || "Cancel (|cffffcc00ESC|r)",
-        desc: text.ubertip || "Drops the current un-issued order and allows you to select a different order.",
-        col: 3, row: 2,
+        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+        ...this.cmdText("CmdCancel", "Cancel (|cffffcc00ESC|r)",
+          "Drops the current un-issued order and allows you to select a different order."),
       }));
       return out;
     }
 
     if (sel.underConstruction) {
-      out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel construction.", col: 3, row: 2 }));
+      // [CmdCancelBuild] — the file gives the half-built structure's Cancel its own section.
+      out.push(this.cmd({
+        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+        ...this.cmdText("CmdCancelBuild", "Cancel (|cffffcc00ESC|r)",
+          "Drops the current un-issued order and allows you to select a different order."),
+      }));
       return out;
     }
     // …and for the 2.5 seconds of `Aroo`'s own transition (`Dur1`), an Ancient is NEITHER
@@ -8769,11 +8854,15 @@ export class MapViewerScene {
         const active = this.activeCommandId();
         out.push(this.cmd({
           id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A",
-          desc: "Attacks a target unit.", col: 3, row: 0, active: active === "attack",
+          col: 3, row: 0, active: active === "attack",
+          ...this.cmdText("CmdAttack", "|cffffcc00A|rttack",
+            "Orders your units to move to the target area and attack any enemy units they see on the way. If you order them to attack a specific unit, your units will ignore other enemy units and will attack the targeted unit until it is destroyed."),
         }));
         out.push(this.cmd({
           id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S",
-          desc: "Halts the unit's current order.", col: 1, row: 0, active: active === "stop",
+          col: 1, row: 0, active: active === "stop",
+          ...this.cmdText("CmdStop", "|cffffcc00S|rtop",
+            "Orders your units to stop whatever order they were previously given. Units that have been told to stop will attack enemy units and move to engage nearby enemies."),
         }));
       }
       // Orc Burrow garrison (UnitAbilities.slk otrb: Abtl Battle Stations + Astd Stand Down).
@@ -8811,9 +8900,21 @@ export class MapViewerScene {
         const rallyIcon = { human: "BTNRallyPoint", orc: "BTNOrcRallyPoint", undead: "BTNRallyPointUndead", nightelf: "BTNRallyPointNightElf" }[this.localRace];
         // No active state: placing a rally point is an aim, not an order in flight,
         // and a building has no "current command" to keep it lit afterwards.
-        out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 1 }));
+        out.push(this.cmd({
+          id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", col: 3, row: 1,
+          ...this.cmdText("CmdRally", "Set Rall|cffffcc00y|r Point",
+            "Orders units that pop out of the building to immediately attack move to the targeted area. You can rally point gold mines or trees to auto-harvest. You can rally point a unit to have new units follow it when they finish building."),
+        }));
       }
-      if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last item in the queue.", col: 3, row: 2 }));
+      // [CmdCancelTrain] — its own section, and its own words: "Stops training the current
+      // unit." (the generic [CmdCancel] talks about dropping an un-issued ORDER, which is a
+      // different button in the same slot).
+      if (sel.queueLength) {
+        out.push(this.cmd({
+          id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+          ...this.cmdText("CmdCancelTrain", "Cancel (|cffffcc00ESC|r)", "Stops training the current unit."),
+        }));
+      }
       // …and the abilities the building's own UnitAbilities row gives it, at the slots their
       // `Buttonpos` asks for — which is where the Arcane Tower's Feedback (`Afbt`, 3,2) and
       // Magic Sentry (`Adts`, 2,1) live, and the Nerubian Tower's Frost Attack (`Afra`, 0,2).
@@ -8827,7 +8928,7 @@ export class MapViewerScene {
     if (this.cardPage === "build" && sel.isWorker) {
       const stash = this.rts!.stashFor(this.localPlayer);
       // The worker's OWN `Builds` list from its profile — `[hpea] Builds=htow,hhou,hbar,…`.
-      // Structures whose prerequisites aren't met are greyed with a red "Requires:" line
+      // Structures whose prerequisites aren't met are greyed with a yellow "Requires:" line
       // rather than hidden, which is what WC3 does (you can see the Guard Tower is there and
       // that it wants a Lumber Mill).
       for (const bid of this.tech.builds(sel.typeId)) {
@@ -8848,7 +8949,11 @@ export class MapViewerScene {
           cantAfford: !afford,
         }));
       }
-      out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Return to orders.", col: 3, row: 2 }));
+      out.push(this.cmd({
+        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+        ...this.cmdText("CmdCancel", "Cancel (|cffffcc00ESC|r)",
+          "Drops the current un-issued order and allows you to select a different order."),
+      }));
       return out;
     }
 
@@ -8870,8 +8975,10 @@ export class MapViewerScene {
           // The learn page has its own pair of strings in AbilityStrings: Researchtip
           // ("Learn Holy Ligh|cffffcc00t|r - [|cffffcc00Level %d|r]") and Researchubertip,
           // which spells out what every rank does. Use them, and add the game's own
-          // "Hero level:" requirement line (GlobalStrings REQUIREDLEVELTOOLTIP) while
-          // the hero is too low to take the next rank.
+          // requirement line while the hero is too low to take the next rank: GlobalStrings
+          // REQUIREDLEVELTOOLTIP, which is the bare words "Hero level:" with NO colour of its
+          // own — unlike REQUIRESTOOLTIP, which carries `|Cffffff00`. It is the same KIND of
+          // line, so it is dressed in the same yellow here rather than in a gold of our own.
           const shown = Math.min(nextRank, def.levels);
           const tip = def.researchTip
             ? def.researchTip.replace(/%d/g, String(shown))
@@ -8879,7 +8986,8 @@ export class MapViewerScene {
           const body = def.researchUberTip
             ? this.tipText(def.researchUberTip, def, shown)
             : this.abilityDesc(def, shown);
-          const desc = maxed || su.level >= need ? body : `${body}|n|n|cffffcc00Hero level: ${need}|r`;
+          const levelLine = `|n|n|Cffffff00${this.uiText("REQUIREDLEVELTOOLTIP", "Hero level:")} ${need}`;
+          const desc = maxed || su.level >= need ? body : `${body}${levelLine}`;
           out.push(this.cmd({
             id: canLearn ? `learn:${ab.id}` : "noop",
             icon: this.blpIcon(def.icon),
@@ -8890,7 +8998,11 @@ export class MapViewerScene {
             col, row, disabled: !canLearn,
           }));
         }
-        out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Return to orders.", col: 3, row: 2 }));
+        out.push(this.cmd({
+        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+        ...this.cmdText("CmdCancel", "Cancel (|cffffcc00ESC|r)",
+          "Drops the current un-issued order and allows you to select a different order."),
+      }));
       }
       return out;
     }
@@ -8899,16 +9011,39 @@ export class MapViewerScene {
     // (0,1); a worker's Build (or a hero's learn-skill) at (3,1); the bottom row
     // is reserved for learned skills/abilities.
     const active = this.activeCommandId();
-    out.push(this.cmd({ id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", desc: "Moves the unit to a target point.", col: 0, row: 0, active: active === "move" }));
-    out.push(this.cmd({ id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", desc: "Halts the unit's current order.", col: 1, row: 0, active: active === "stop" }));
-    out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 2, row: 0, active: active === "hold" }));
+    // Every one of these speaks from its own `Units\CommandStrings.txt` section — see cmdText.
+    out.push(this.cmd({
+      id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", col: 0, row: 0, active: active === "move",
+      ...this.cmdText("CmdMove", "|cffffcc00M|rove",
+        "Orders your units to move to the target area while ignoring enemy units and attacks. Issuing a move order onto a target unit will cause your unit to follow the target using move orders."),
+    }));
+    out.push(this.cmd({
+      id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", col: 1, row: 0, active: active === "stop",
+      ...this.cmdText("CmdStop", "|cffffcc00S|rtop",
+        "Orders your units to stop whatever order they were previously given. Units that have been told to stop will attack enemy units and move to engage nearby enemies."),
+    }));
+    out.push(this.cmd({
+      id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", col: 2, row: 0, active: active === "hold",
+      ...this.cmdText("CmdHoldPos", "|cffffcc00H|rold Position",
+        "Orders your units to stand where they are and attack units that are within range. When on Hold Position your units will not chase down enemy units that run away, nor move to engage ranged attackers."),
+    }));
     // Attack is a WEAPON's button. A Goblin Zeppelin, a Wisp, a transport ship carry none
     // (UnitWeapons gives them no attack at all) and the game's card has no Attack on them —
     // a press that can only be refused is not a button. Asked of the whole selection rather
     // than of the primary alone, as the game does: a Zeppelin grabbed together with the
     // Footmen it is about to carry still lets the group attack-move.
-    if (this.rts?.selectionCanAttack()) out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 3, row: 0, active: active === "attack" }));
-    out.push(this.cmd({ id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", desc: "Patrols between here and a target point.", col: 0, row: 1, active: active === "patrol" }));
+    if (this.rts?.selectionCanAttack()) {
+      out.push(this.cmd({
+        id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", col: 3, row: 0, active: active === "attack",
+        ...this.cmdText("CmdAttack", "|cffffcc00A|rttack",
+          "Orders your units to move to the target area and attack any enemy units they see on the way. If you order them to attack a specific unit, your units will ignore other enemy units and will attack the targeted unit until it is destroyed."),
+      }));
+    }
+    out.push(this.cmd({
+      id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", col: 0, row: 1, active: active === "patrol",
+      ...this.cmdText("CmdPatrol", "|cffffcc00P|ratrol",
+        "Orders your units to continually move from their current position to the targeted area until given another command. Units on patrol will move to engage enemy units that come within range. Issuing a patrol order onto a target unit will cause your unit to imitate the targeted unit's behavior."),
+    }));
     // Build sits at the bottom-left of a worker's card (developer spec) — but only on a worker
     // that HAS something to build. `Builds` is a per-unit column (`[hpea] Builds=htow,hhou,
     // hbar,…`) and the GHOUL's is empty: it gathers lumber and does nothing else, so WC3 gives
@@ -8926,7 +9061,12 @@ export class MapViewerScene {
     // path too now (isHarvestCode) — one row, `Buttonpos=3,1`, showing Return Goods while
     // there is a load to carry home.
     if (sel.isWorker && this.tech.builds(sel.typeId).length) {
-      out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2, active: active === "build" }));
+      // …and the VERB is the worker's race's: build / create / summon (see buildCmdKey).
+      out.push(this.cmd({
+        id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", col: 0, row: 2, active: active === "build",
+        ...this.cmdText(this.buildCmdKey(sel.typeId), "|cffffcc00B|ruild Structure",
+          "Brings up a list of the available buildings that you may choose to construct."),
+      }));
     }
     this.pushAbilityButtons(sel, out); // learned spells + a hero's Learn Skill button
     return out;
@@ -9057,7 +9197,7 @@ export class MapViewerScene {
       // are always met and this costs them nothing.
       //
       // UNAVAILABLE, NOT ABSENT (developer spec). A gated ability keeps its slot and goes
-      // inert wearing the DIS* art, with the game's own red "Requires:" line under its
+      // inert wearing the DIS* art, with the game's own yellow "Requires:" line under its
       // tooltip — the same three things a Guard Tower with no Lumber Mill already does on a
       // worker's build page, a Knight with no Keep on an Altar's card and a Potion of
       // Greater Healing with no tier-2 hall in a shop. So the player can see that Web exists,
@@ -9196,7 +9336,10 @@ export class MapViewerScene {
         icon: this.blpIcon("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp"),
         name: "Hero Abilities",
         hotkey: "O",
-        desc: "Opens the abilities menu and allows you to assign unused points to the Heroes' abilities.",
+        // …and its words are [CmdSelectSkill]'s, "Her|cffffcc00o|r Abilities" — the gilded
+        // letter in the Tip is what pairs the title with the O on the button's corner.
+        ...this.cmdText("CmdSelectSkill", "Her|cffffcc00o|r Abilities",
+          "Opens the abilities menu and allows you to assign unused points to the Heroes' abilities."),
         // No `modal` sparkle here, deliberately: the button already says there are points to
         // spend — it only exists while there are, and it wears the count. The hero's PORTRAIT
         // up in the corner is where the model goes, because that is the one that has to catch

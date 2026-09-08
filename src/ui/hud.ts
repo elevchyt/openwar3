@@ -62,7 +62,7 @@ export interface CommandButton {
    *  in the icon's desaturated `DISBTN*` art and the button stops being a button —
    *  no click, no hotkey, no click sound. Nothing is said out loud either, because
    *  Units\commandstrings.txt [Errors] has no line for "requirements not met": the
-   *  red "Requires: …" in the tooltip is the whole explanation.
+   *  yellow "Requires: …" in the tooltip is the whole explanation.
    *
    *  A PRICE is deliberately NOT this — see `cantAfford`. */
   disabled: boolean;
@@ -118,6 +118,9 @@ export interface HudInvSlot {
   cooldownLeft: number; // seconds remaining (0 = ready)
   cooldownFrac: number; // remaining fraction 0..1 (radial sweep)
   usable: boolean; // has an active effect (potion/scroll) vs a passive stat item
+  /** `ItemData` **ipaw** — a shop will buy it back, so the tooltip carries the game's grey
+   *  "Drop item on shop to sell" line. A quest item or a campaign artifact does not. */
+  pawnable: boolean;
 }
 
 export interface HudSelection {
@@ -755,8 +758,13 @@ const CHAT_AREA = {
  * `UI\MiscUI.txt` **[FontHeights]**, by its own keys — the sizes for the frames the engine
  * builds in code rather than out of a .fdf, which is why they are in a text file at all
  * ("To change the font height of a frame created in the FrameDef files, you will need to
- * look in the appropriate .fdf file"). All four are fractions of the 0.6-tall UI space, so
+ * look in the appropriate .fdf file"). Every one is a fraction of the 0.6-tall UI space, so
  * each becomes a length off --stage-h and none of them is a pixel count.
+ *
+ * The TOOLTIP block is why that sentence in the file matters: **no .fdf declares the command
+ * tooltip at all** (docs/tooltips.md). It is one of `CGameUI`'s programmatic frames, so these
+ * three keys are the only place the game states its type sizes — and it states all three the
+ * SAME, which is the shape of the real slab: the name line is not drawn larger than the body.
  */
 const FONT_HEIGHTS = {
   /** "single line of error text that appears above the console" — the gold refusal line. */
@@ -767,6 +775,76 @@ const FONT_HEIGHTS = {
   WorldFrameChatMessage: 0.013,
   /** "chat edit bar text" — the line being typed. */
   ChatEditBar: 0.013,
+  /** "tooltip name (first line)" — a command button's `Tip`. */
+  ToolTipName: 0.011,
+  /** "tooltip description and ubertip" — the body. Same size as the name. */
+  ToolTipDesc: 0.011,
+  /** "tooltip cost value" — the gold/lumber/food/mana numbers. Same size again, which is
+   *  what sizes the cost ICONS too: in the real client a `ToolTip*Icon` is the height of the
+   *  digit beside it, not the 32-texel art at its own resolution. */
+  ToolTipCost: 0.011,
+  /** The WORLD hover slab's three pieces — "player name on unit tooltip", "unit name on unit
+   *  tooltip", "description text on unit tooltip". All 0.011 as well, so one length serves
+   *  every line of it (`.uht-line`); they are listed apart here because the game lists them
+   *  apart, and a localized or modded install may pull them apart again. */
+  UnitTipPlayerName: 0.011,
+  UnitTipUnitName: 0.011,
+  UnitTipDesc: 0.011,
+  /** "'Inventory' text above your inventory". */
+  Inventory: 0.011,
+} as const;
+
+/**
+ * The tooltip SLAB's geometry — in the same 0.6-tall UI space as its type, because a pixel
+ * count here is only right on one monitor. The frame is programmatic, so no file states these
+ * for the tooltip itself; what settles them is the ART plus the one FDF that dresses the
+ * IDENTICAL strip, `Glue/BattleNetChatActionMenu.fdf`'s ActionMenuBackdrop.
+ *
+ * `human-tooltip-border.blp` is a **128×16 strip of eight 16×16 tiles**, and reading its alpha
+ * is what makes the numbers below make sense:
+ *
+ *   • tiles 0/2 are a plain vertical stroke at texels 1–4 (`.+##+.`), 1/3 the same at 9–12 —
+ *     UNIFORM along the run, so the edges are TILED rather than stretched (the two are
+ *     pixel-identical for this art, but tiling is what the engine does with a BackdropEdgeFile
+ *     and what the rest of our nine-patches do);
+ *   • tiles 4–7 are the corners, each a rounded arc drawn inside the same 16 texels.
+ *
+ * So only 4 of the band's 16 texels carry ink and only 2 of those are opaque — which is why
+ * the real client's frame reads as a THIN gold rule even though the nine-patch is wide.
+ *
+ * `band` is **measured off the reference shot**, against the type rather than in pixels (the
+ * only scale-invariant thing in a screenshot): there, the corner arc's radius is a little over
+ * half the cap height of the title beside it, i.e. ~0.55 em, and the band IS the arc. The bnet
+ * twin's `BackdropCornerSize 0.016` is 2.4× that and was tried — it draws a fat rounded frame
+ * nothing like the reference. Which figures: that frame dresses a 0.18 × 0.2 CONTEXT MENU, and
+ * 0.016 is exactly the tile at 1:1 on a 600-tall screen, so it is the art's own resolution
+ * rather than a statement about the tooltip. The tooltip draws the same tile smaller.
+ */
+const TOOLTIP_BOX = {
+  /** The band — the tile's 16 texels drawn at this height, so the visible stroke is a quarter
+   *  of it. ~0.55 em against ToolTipDesc, which is where the reference shot puts the arc. */
+  band: 0.0067,
+  /** `BackdropBackgroundInsets` in spirit — how far inside the frame's OUTER edge the fill
+   *  starts, so the fill underlaps the band and the flat slate sits BEHIND the gold stroke
+   *  instead of leaving a hairline of map showing through it. Scaled to our band from the bnet
+   *  twin's 0.005-against-0.016, i.e. a bit under a third of it. */
+  bgInset: 0.002,
+  /** Text inset from the FILL's edge. The bnet twin anchors its first label 0.0095 in from the
+   *  frame corner; the reference shot's text clears the stroke by about the stroke's own width
+   *  again, which is what this is. */
+  pad: 0.005,
+  /**
+   * Where a line WRAPS, in ems of the tooltip's own type.
+   *
+   * Read off the reference shot of the real client rather than guessed: an Ancient of War's
+   * Ubertip breaks after "Keeper of primary assault troops. Trains Archers," — 48 characters —
+   * where ours broke at 35. Stated in ems (not in UI units) because that IS the relationship
+   * the shot shows: the box is as wide as the text it has to fit, so it tracks ToolTipDesc and
+   * cannot drift out of step with it. The number itself is OURS; the shot is what it matches.
+   */
+  wrapEm: 24,
+  /** …and a floor, so a one-word tip ("Cancel") isn't a tall sliver. Ours. */
+  minEm: 13,
 } as const;
 
 /** A length stated in the game's 0.6-tall UI space, as CSS that scales with the game frame
@@ -1164,12 +1242,21 @@ export class GameHud {
     // of it (it draws behind), so it has no percentage box of its own to be inset from and the
     // stylesheet multiplies this by `--hero-btn` instead.
     this.root.style.setProperty("--herolevel-fx-overhang", HERO_LEVEL_FX_OVERHANG.toFixed(5));
-    // The four font heights `UI\MiscUI.txt` states for the frames the engine builds in code,
-    // handed to the stylesheet as lengths (FONT_HEIGHTS). On the ROOT because the frames that
-    // read them are siblings, not one widget.
+    // The font heights `UI\MiscUI.txt` states for the frames the engine builds in code, handed
+    // to the stylesheet as lengths (FONT_HEIGHTS). On `:root` rather than on the HUD root for
+    // the same reason the tooltip's ART is (applyWidgetSkin): the world-space hover slab lives
+    // in ui/stage.ts's world layer, a separate DOM subtree, and reads UnitTip* from here.
     for (const [key, height] of Object.entries(FONT_HEIGHTS)) {
-      this.root.style.setProperty(`--font-${key}`, uiPx(height));
+      document.documentElement.style.setProperty(`--font-${key}`, uiPx(height));
     }
+    // The tooltip slab's own geometry, in that same UI space (TOOLTIP_BOX) — and on `:root`
+    // for the same reason, since the hover slab wears the same frame and the same inset.
+    const rootStyle = document.documentElement.style;
+    rootStyle.setProperty("--tt-band", uiPx(TOOLTIP_BOX.band));
+    rootStyle.setProperty("--tt-bg-inset", uiPx(TOOLTIP_BOX.bgInset));
+    rootStyle.setProperty("--tt-pad", uiPx(TOOLTIP_BOX.pad));
+    rootStyle.setProperty("--tt-wrap", `calc(var(--font-ToolTipDesc) * ${TOOLTIP_BOX.wrapEm})`);
+    rootStyle.setProperty("--tt-min", `calc(var(--font-ToolTipDesc) * ${TOOLTIP_BOX.minEm})`);
     const skin = driver.consoleSkinned();
     this.root.append(
       this.buildConsole(skin),
@@ -1303,8 +1390,11 @@ export class GameHud {
     document.body.classList.remove(
       "hud-tooltip-skinned", "hud-widget-skinned", "hud-statbar-skinned", "order-armed",
     );
+    // …and so are the MiscUI font heights and the slab geometry, for the same reason: the
+    // hover slab's type is sized from `:root`, so those live there too (`--font-` / `--tt-`).
     const root = document.documentElement.style;
-    for (const prop of [...root].filter((p) => p.startsWith("--hud-") || p.startsWith("--statbar-"))) {
+    const OURS = ["--hud-", "--statbar-", "--font-", "--tt-"];
+    for (const prop of [...root].filter((p) => OURS.some((prefix) => p.startsWith(prefix)))) {
       root.removeProperty(prop);
     }
   }
@@ -2688,10 +2778,20 @@ export class GameHud {
    *  build, item — is the SAME slab in the SAME place, above the command card, so
    *  the eye never has to hunt for it. An empty slot shows nothing.
    *
-   *  Title and footer follow the game's own format strings (UI\FrameDef\GlobalStrings.fdf):
-   *  ITEM_NAME_HOTKEY "%s (|cfffed312NumPad %u|r)" and, for anything with an active
-   *  effect, ITEM_USE_TOOLTIP "|CFFFED312Left-Click to Use|R". The remaining charges
-   *  live on the slot's corner badge, as in WC3 — not in the name. */
+   *  Title and footer are the game's own FORMAT STRINGS, taken from the table rather than
+   *  transcribed — `GlobalStrings.fdf` ITEM_NAME_HOTKEY "%s (|cfffed312NumPad %u|r)" and, for
+   *  anything with an active effect, ITEM_USE_TOOLTIP "|CFFFED312Left-Click to Use|R". They
+   *  were typed out here as literals, which is the same bug twice: a localized install said
+   *  "Left-Click to Use" in English, and our copy of the markup was free to drift from the
+   *  file's (it had, in the case). The remaining charges live on the slot's corner badge, as
+   *  in WC3 — not in the name.
+   *
+   *  The third of the file's item lines, ITEM_PAWN_TOOLTIP "|cff808080Drop item on shop to
+   *  sell|R", was missing altogether — and it is the ONLY place the game ever tells you that
+   *  dropping an item onto a shop sells it, which is a thing our sim has done all along
+   *  (SimWorld.pawnItem). It is grey rather than gold because it is an affordance and not an
+   *  instruction, and it is gated on the item's own `ipaw`: a quest item cannot be pawned, so
+   *  offering does not apply to it. */
   private showItemTooltip(i: number): void {
     this.invHover = i;
     const s = this.driver.inventory()[i] ?? null;
@@ -2699,10 +2799,15 @@ export class GameHud {
       this.cmdTooltip.hidden = true;
       return;
     }
-    const title = wc3ToHtml(`${s.name} (|cfffed312NumPad ${INVENTORY_NUMPAD[i]}|r)`);
+    // "%s (…NumPad %u…)" — fill the file's own two slots, in its own order.
+    const nameFmt = this.driver.uiString("ITEM_NAME_HOTKEY", "%s (|cfffed312NumPad %u|r)");
+    const title = wc3ToHtml(nameFmt.replace("%s", s.name).replace("%u", String(INVENTORY_NUMPAD[i])));
     const desc = s.desc ? `<div class="hud-tooltip-desc">${wc3ToHtml(s.desc)}</div>` : "";
-    const use = s.usable ? `<div class="hud-tooltip-desc">${wc3ToHtml("|cfffed312Left-Click to Use|r")}</div>` : "";
-    this.cmdTooltip.innerHTML = `<div class="hud-tooltip-title">${title}</div>${desc}${use}`;
+    const useText = this.driver.uiString("ITEM_USE_TOOLTIP", "|CFFFED312Left-Click to Use|R");
+    const use = s.usable ? `<div class="hud-tooltip-desc">${wc3ToHtml(useText)}</div>` : "";
+    const pawnText = this.driver.uiString("ITEM_PAWN_TOOLTIP", "|cff808080Drop item on shop to sell|R");
+    const pawn = s.pawnable ? `<div class="hud-tooltip-desc">${wc3ToHtml(pawnText)}</div>` : "";
+    this.cmdTooltip.innerHTML = `<div class="hud-tooltip-title">${title}</div>${desc}${use}${pawn}`;
     this.cmdTooltip.hidden = false;
   }
 
@@ -2804,7 +2909,7 @@ export class GameHud {
     const cmds = this.driver.commandCard();
     this.updateCooldownOverlays(cmds); // every frame (cheap) — cmdKey ignores cooldown
     // `desc` is part of the key: a button can keep every other property and still have new
-    // TEXT — a tavern hero stays greyed while its red "Requires:" line goes from "Altar of
+    // TEXT — a tavern hero stays greyed while its yellow "Requires:" line goes from "Altar of
     // Storms, Stronghold" to "Stronghold" the moment the altar goes up. Leave it out and the
     // tooltip keeps showing the requirement the player has just met.
     const key = cmds.map((c) => `${c.id}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${c.desc}`).join("|");

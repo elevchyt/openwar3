@@ -5503,7 +5503,7 @@ export class RtsController {
 
   /** The primary selected hero's 6 inventory slots for the HUD (null = empty). An
    *  empty array means the selection has no inventory (not a hero). */
-  inventorySlots(): Array<{ itemId: string; icon: string; name: string; desc: string; charges: number; cooldownLeft: number; cooldownFrac: number; usable: boolean } | null> {
+  inventorySlots(): Array<{ itemId: string; icon: string; name: string; desc: string; charges: number; cooldownLeft: number; cooldownFrac: number; usable: boolean; pawnable: boolean } | null> {
     const id = this.primary;
     const u = id !== null ? this.sim.units.get(id) : undefined;
     if (!u || !u.inventory.length) return [];
@@ -5522,6 +5522,10 @@ export class RtsController {
         cooldownLeft: held.cooldownLeft,
         cooldownFrac: total > 0 ? Math.max(0, Math.min(1, held.cooldownLeft / total)) : 0,
         usable: def?.usable ?? false,
+        // `ipaw` — whether a shop will buy it back. Drives the tooltip's grey ITEM_PAWN_TOOLTIP
+        // hint, which is the only place the game ever tells you that dropping an item onto a
+        // shop sells it (SimWorld.pawnItem is the thing it is talking about).
+        pawnable: def?.pawnable ?? false,
       };
     });
   }

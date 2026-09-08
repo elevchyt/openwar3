@@ -1013,7 +1013,7 @@ function cloneTech(base: TechDef, id: string): TechDef {
 function applyTechMods(def: TechDef, mods: AbilMod[], trigStr: (v: string) => string): boolean {
   let touched = false;
   for (const m of mods) {
-    // The display name, for the red "Requires: …" line a gated button prints. Carried here as
+    // The display name, for the yellow "Requires: …" line a gated button prints. Carried here as
     // well as on the UnitDef because a pseudo-tech (TWN2, HERO) has no unit row to read it off.
     if (m.id === "unam" || m.id === "gnam" || m.id === "anam") {
       def.name = trigStr(s(m.value)).split(",")[0]?.replace(/^"|"$/g, "").trim() || def.name;

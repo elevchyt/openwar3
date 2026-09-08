@@ -187,6 +187,18 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   and progress is just where you park the playhead. It is also the one screen laid out **stretched** rather than
   height-scaled (it is a picture with things printed on it) and the one that must live OUTSIDE `#ui`, which a match
   re-boxes to the 16:9 game frame while the bar is still moving.
+- **Tooltips:** read [`docs/tooltips.md`](docs/tooltips.md) before touching the slab a command button raises, the
+  world hover slab, or anything that composes a line into either. Do **not** go looking for its FrameDef — there
+  isn't one, and `UI\MiscUI.txt` says why in as many words ("not created through the use of FrameDef files"). Its
+  four authorities are that file's **[FontHeights]** (`ToolTipName`/`Desc`/`Cost`, all **0.011** — the name line is
+  NOT drawn larger than the body), `war3skins.txt` **[Default]** (which is why every race hovers the *human* frame,
+  and one of whose keys names a file 1.30.4 never shipped), `GlobalStrings.fdf` for the lines the engine composes,
+  and `Units\CommandStrings.txt` for the engine's OWN buttons — whose Ubertips are much fuller than a paraphrase and
+  whose Build verb is the RACE's ("Create Building", "Summon Building"). Read a string, never retype it:
+  `REQUIRESTOOLTIP` bakes its colour into the string and it is **yellow**, and the two empty-shelf strings are two
+  strings on purpose ("Out of stock" against a `stockStart` that has not come round yet, "Coming soon"). The border
+  is a 128×16 strip whose tile is a 4-texel stroke in 16 transparent ones, so the visible rule is a QUARTER of the
+  band — size the band off the type, not off the ink.
 - **Unplayable area:** read [`docs/unplayable-area.md`](docs/unplayable-area.md) before touching the map border, the
   camera clamp, `GetCameraMargin`/`GetPlayableMapRect`, or anything that asks "is this point on the map". A map
   states its boundary FOUR times over (two w3e flags that mean the same thing, one wpm bit, `SetCameraBounds` in its

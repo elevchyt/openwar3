@@ -20,7 +20,7 @@ import type { DataSource } from "../vfs/types";
 /** One node of the tech graph: what an id needs, and what it unlocks. */
 export interface TechDef {
   id: string;
-  /** Display name, for the red "Requires: …" tooltip line. Usually redundant with the unit /
+  /** Display name, for the yellow "Requires: …" tooltip line. Usually redundant with the unit /
    *  upgrade registry — but NOT for the pseudo-techs, which exist in neither: TWN2's name is
    *  "Keep or Stronghold or Tree of Ages or Halls of the Dead", and it is spelled out in
    *  ItemStrings.txt precisely so the tooltip can say that instead of "TWN2". */

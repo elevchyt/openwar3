@@ -928,6 +928,14 @@ export interface ShopStock {
   /** Which id space the key belongs to — one flat map holds both, and the slot caps are
    *  counted per kind (11 item types AND 11 unit types). */
   kind: "item" | "unit";
+  /** The ware has NEVER been on the shelf: its `stockStart` has not come round yet. An empty
+   *  shelf and a shelf that has not opened are the same `count` of 0 and a different SENTENCE
+   *  in the game — `GlobalStrings.fdf` gives them one key each, OUTOFSTOCKTOOLTIP "Out of
+   *  stock" against COOLDOWNSTOCKTOOLTIP "Coming soon" — so the tooltip needs the bit that
+   *  tells them apart, and neither the count nor the timer carries it (`period` is the
+   *  `stockStart` wait in one case and the `stockRegen` one in the other, but a map is free to
+   *  make them equal). Cleared by the first arrival and never set again. */
+  pending?: boolean;
 }
 
 /** Why a shop purchase was refused. The HUD maps these onto the game's own messages in
@@ -3559,7 +3567,7 @@ export class SimWorld {
     return !!shop && !!u && this.inShopRange(shop, u);
   }
 
-  /** The requirements `player` has NOT met for `itemId` AT THIS SHOP — the red "Requires:" line,
+  /** The requirements `player` has NOT met for `itemId` AT THIS SHOP — the yellow "Requires:" line,
    *  and the gate on the purchase itself.
    *
    *  A tech requirement belongs to the RACE shop, and to it alone. An item carries ONE
@@ -3651,8 +3659,9 @@ export class SimWorld {
         period = Infinity;
       }
       // A pre-`stockStart` ware is still unlimited-to-be: the flag describes the WARE, and the
-      // `count = 0` above is what holds it back until its first arrival.
-      stock.set(id, { count, max, regen, timer, period, kind, unlimited: regen <= 0 });
+      // `count = 0` above is what holds it back until its first arrival — which is also the one
+      // state that reads "Coming soon" rather than "Out of stock" (see ShopStock.pending).
+      stock.set(id, { count, max, regen, timer, period, kind, unlimited: regen <= 0, pending: t < start });
     };
     for (const id of wares.items) {
       const d = this.itemReg?.get(id);
@@ -3738,6 +3747,7 @@ export class SimWorld {
           // The only clock an unlimited ware ever runs is its `stockStart` wait, and when that
           // expires the shelf fills right up rather than gaining one (regen 0 = no wait).
           s.count = s.unlimited ? s.max : s.count + 1;
+          s.pending = false; // it has been on the shelf now, so an empty one is "Out of stock"
           s.timer = s.regen > 0 ? s.regen : Infinity;
           s.period = s.timer;
         }
