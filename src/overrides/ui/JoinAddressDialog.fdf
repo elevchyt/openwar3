@@ -20,10 +20,13 @@
 // the same composition the Single Player screen's Profile List is made by.
 //
 // It is a DIALOG frame with its own size and no anchors, which is what `centerRoot` wants: the
-// box states how big it is and the mount puts it in the middle of the screen.
+// box states how big it is and the mount puts it in the middle of the screen. Its height is set
+// against the LIST rather than the text: everything above the list hangs off the box's top and
+// Done hangs off its bottom, so the height IS the gap between them — 0.34 leaves the button
+// clear of the list's own frame, which at 0.30 it sat on.
 
 Frame "DIALOG" "JoinAddressDialog" {
-    Height 0.30,
+    Height 0.34,
     Width 0.36,
 
     DialogBackdrop "JoinAddressDialogBackdrop",
@@ -107,7 +110,7 @@ Frame "DIALOG" "JoinAddressDialog" {
     // to its right edge, and those two numbers together are what makes the real dialog's OK look
     // centred. Copied rather than re-derived.
     Frame "BACKDROP" "JoinAddressDoneBackdrop" INHERITS "StandardMenuSingleButtonBaseBackdrop" {
-        SetPoint BOTTOM, "JoinAddressDialog", BOTTOM, -0.015, 0.012,
+        SetPoint BOTTOM, "JoinAddressDialog", BOTTOM, -0.015, 0.008,
 
         Frame "GLUETEXTBUTTON" "JoinAddressDoneButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
             Width 0.159,

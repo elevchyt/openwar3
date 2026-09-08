@@ -9,7 +9,7 @@ import { reachabilityLine, type LanLobby, type LobbyState } from "../net/lobby";
 import type { StartMatch } from "../net/protocol";
 import { advancedOf, visibilityFog } from "../net/advancedOptions";
 import { LAN_JOIN_OVERRIDE, OW3_STRINGS } from "../overrides";
-import { showJoinAddressDialog } from "./joinAddressDialog";
+import { showJoinAddressDialog, type JoinAddressDialog } from "./joinAddressDialog";
 import { OBSERVER_PLAYER, type MeleeConfig, type SlotConfig } from "./lobby";
 import type { Race } from "../data/races";
 import {
@@ -85,6 +85,9 @@ export async function mountLanScreen(
   let missing: string | null = null;
   /** Which game in the list is highlighted. */
   let picked: string | null = null;
+  /** The Servers List box while it is up. Held so the lobby's own changes reach it: a relay
+   *  that starts answering does so on a timer, with nobody having clicked anything. */
+  let serversDialog: JoinAddressDialog | null = null;
 
   // The name you appear as. WC3 remembers this between sessions; so do we.
   const savedName = localStorage.getItem("openwar3.playerName") || "Player";
@@ -149,7 +152,8 @@ export async function mountLanScreen(
           vfs,
           lobby,
           onChange: () => { if (alive) render(screen, lobby.snapshot); },
-        });
+          onClosed: () => { serversDialog = null; },
+        }).then((d) => { serversDialog = d; });
       },
       CancelButton: () => h.onCancel(),
     },
@@ -162,6 +166,7 @@ export async function mountLanScreen(
 
   lobby.onChange = (s) => {
     if (!alive) return;
+    serversDialog?.refresh();
     // The relay confirmed a join: the room has a screen of its own now (issue #77).
     if (s.phase === "joined" && s.room) {
       const room = s.room;

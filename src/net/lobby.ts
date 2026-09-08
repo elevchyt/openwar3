@@ -32,6 +32,27 @@ export type LobbyPhase = "offline" | "browsing" | "hosting" | "joined";
  * `key` is what the screen selects by; `source` is which relay to talk to in order to join it,
  * empty for our own.
  */
+/** A machine we are watching, as a screen sees it. */
+export interface RelayInfo {
+  url: string;
+  /** Answering right now. False for one that has not been started yet, or has gone away — both
+   *  of which are waited out rather than reported as failures. */
+  connected: boolean;
+}
+
+/** How long between knocks at an address that is not answering. A failed connect on a LAN is
+ *  immediate and costs nothing; this is really about how long a player will sit looking at a
+ *  list that has not noticed the other machine yet. */
+const RETRY_MS = 4000;
+
+interface RemoteRelay {
+  /** Null between attempts. */
+  transport: LobbyTransport | null;
+  rooms: RoomInfo[];
+  connected: boolean;
+  retry: ReturnType<typeof setTimeout> | null;
+}
+
 export interface ListedRoom extends RoomInfo {
   source: string;
   key: string;
@@ -133,7 +154,7 @@ export class LanLobby {
    * into the one list, and joining one of them PROMOTES that connection to primary — because
    * the match wire has to be with the host's relay, and nothing else about a match changes.
    */
-  private remotes = new Map<string, { transport: LobbyTransport; rooms: RoomInfo[] }>();
+  private remotes = new Map<string, RemoteRelay>();
   /** Our own relay's game list, kept apart from the merged one so a remote's update cannot be
    *  mistaken for ours (the reconnect consults OURS, and only ours). */
   private ownRooms: RoomInfo[] = [];
@@ -279,37 +300,70 @@ export class LanLobby {
    * Rejects with a readable reason: the screen shows it, and "nothing happened" is the one
    * answer a typed-in address must never give.
    */
-  async addRelay(input: string): Promise<void> {
+  addRelay(input: string): void {
     const url = normalizeRelayUrl(input);
     if (!url) throw new Error(`"${input}" is not an address. Try 192.168.1.42 or 192.168.1.42:${DEFAULT_RELAY_PORT}.`);
     if (this.isOurOwn(url)) throw new Error("That address is this computer — your own games are already listed.");
     if (this.remotes.has(url)) { this.refresh(); return; }
+    const entry: RemoteRelay = { transport: null, rooms: [], connected: false, retry: null };
+    this.remotes.set(url, entry);
+    this.mergeRooms();
+    this.dial(url, entry);
+  }
+
+  /**
+   * Open (or re-open) a browse connection, and keep trying.
+   *
+   * A machine that does not answer is not a mistake — the game there has not been started yet,
+   * which is the ordinary case when two people are sitting down to play. So the address stays on
+   * the list and this keeps knocking, and the moment somebody hosts on it their game appears
+   * with no second act from the player. The same loop covers a host who quits and comes back.
+   *
+   * `RETRY_MS` is a whole failed TCP connect on a LAN, which costs nothing, against how long a
+   * player is willing to sit looking at a list that has not noticed yet.
+   */
+  private dial(url: string, entry: RemoteRelay): void {
+    const again = (): void => {
+      entry.transport = null;
+      if (entry.connected) { entry.connected = false; entry.rooms = []; this.mergeRooms(); }
+      // Removed while we were away: stop, and leave no timer behind.
+      if (this.remotes.get(url) !== entry) return;
+      entry.retry = setTimeout(() => { entry.retry = null; this.dial(url, entry); }, RETRY_MS);
+    };
     const t = this.newTransport();
-    const entry = { transport: t, rooms: [] as RoomInfo[] };
+    entry.transport = t;
     t.onMessage = (m) => {
       // A browse connection understands exactly one message. Everything else a relay can say is
       // about a room we are in, and we are not in one — until we join, at which point this
       // connection has been promoted and `handle` is the listener.
-      if (m.t === "rooms") { entry.rooms = m.rooms; this.mergeRooms(); }
+      if (m.t === "rooms" && this.remotes.get(url) === entry) { entry.rooms = m.rooms; this.mergeRooms(); }
     };
-    t.onClose = () => { if (this.remotes.get(url) === entry) { this.remotes.delete(url); this.mergeRooms(); } };
-    await t.connect(url);
-    this.remotes.set(url, entry);
-    this.mergeRooms();
+    t.onClose = again;
+    void t.connect(url).then(
+      () => {
+        if (this.remotes.get(url) !== entry) return t.close(); // removed mid-dial
+        entry.connected = true;
+        this.mergeRooms();
+      },
+      again,
+    );
   }
 
-  /** The addresses being watched besides our own, for a screen that wants to show them. */
-  get relays(): string[] {
-    return [...this.remotes.keys()];
+  /** The addresses being watched besides our own, and whether each is answering — a screen
+   *  shows both, because an address that nothing is hosting on yet is a normal thing to be
+   *  looking at and should not read as an error. */
+  get relays(): RelayInfo[] {
+    return [...this.remotes].map(([url, entry]) => ({ url, connected: entry.connected }));
   }
 
   /** Stop watching one. Its games leave the list with it — they were never ours to show once
-   *  nobody is listening to the machine hosting them. */
+   *  nobody is listening to the machine hosting them — and its retry stops with it. */
   removeRelay(url: string): void {
     const entry = this.remotes.get(url);
     if (!entry) return;
     this.remotes.delete(url);
-    entry.transport.close();
+    if (entry.retry !== null) clearTimeout(entry.retry);
+    entry.transport?.close();
     this.mergeRooms();
   }
 
@@ -328,15 +382,20 @@ export class LanLobby {
     const entry = this.remotes.get(url);
     if (!entry) return;
     this.remotes.delete(url);
+    if (entry.retry !== null) clearTimeout(entry.retry);
     this.transport?.close();
     const t = entry.transport;
+    if (!t) return; // still knocking: there is nothing yet to promote
     t.onMessage = (m) => this.handle(m);
     t.onClose = (reason) => this.onLost(reason);
     this.transport = t;
     this.primaryUrl = url;
     // Their list is now ours, and every OTHER machine's is no longer any of our business.
     this.ownRooms = entry.rooms;
-    for (const other of this.remotes.values()) other.transport.close();
+    for (const other of this.remotes.values()) {
+      if (other.retry !== null) clearTimeout(other.retry);
+      other.transport?.close();
+    }
     this.remotes.clear();
     this.mergeRooms();
   }
@@ -393,7 +452,10 @@ export class LanLobby {
     this.store.save(null); // the match is over on our end; a fresh game starts a fresh session
     this.transport?.close();
     this.transport = null;
-    for (const entry of this.remotes.values()) entry.transport.close();
+    for (const entry of this.remotes.values()) {
+      if (entry.retry !== null) clearTimeout(entry.retry);
+      entry.transport?.close();
+    }
     this.remotes.clear();
     this.ownRooms = [];
     this.primaryUrl = undefined;

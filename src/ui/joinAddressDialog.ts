@@ -1,6 +1,5 @@
 import type { DataSource } from "../vfs/types";
 import type { LanLobby } from "../net/lobby";
-import { normalizeRelayUrl } from "../net/lobby";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
@@ -23,15 +22,22 @@ import { LABEL_GOLD } from "./fdfLan";
 // and a way to remove a row. The chrome is the glue's own (see the FDF), it is centred, and the
 // scrim behind it is darkened, because a panel that is a place of its own should say so.
 //
-// Everything it changes lives on the `LanLobby`: `addRelay` opens a browse connection, whose
-// games merge into the screen's list under the room `key` that tells two relays' rooms apart,
-// and `removeRelay` closes one again.
+// Everything it changes lives on the `LanLobby`: `addRelay` takes an address and keeps knocking
+// at it, and the games of whichever ones are answering merge into the screen's list under the
+// room `key` that tells two relays' rooms apart; `removeRelay` drops one again. An address that
+// nothing is hosting on is not a failure and is never reported as one — the other player has
+// simply not started their game yet, and the row waits for them.
 
 const DIALOG_FDF = "UI\\FrameDef\\Glue\\DialogWar3.fdf";
 const LIST_FDF = "UI\\FrameDef\\Glue\\ListBoxWar3.fdf";
 
 export interface JoinAddressDialog {
   close(): void;
+  /** Re-read the lobby and repaint. The dialog EDITS the lobby but does not own it: a knock
+   *  that lands while the box is open (`LanLobby.dial`) changes a row from waiting to answering
+   *  with nobody having touched anything, and a dialog that only painted on its own events sat
+   *  there saying "waiting" at a machine whose games were already in the list behind it. */
+  refresh(): void;
 }
 
 /** Strip the wire's own dressing back to what the player typed: `ws://1.2.3.4:8787/relay` is
@@ -68,6 +74,9 @@ export async function showJoinAddressDialog(opts: {
   vfs: DataSource;
   lobby: LanLobby;
   onChange?: () => void;
+  /** Fired when the dialog takes itself away (Done, Escape, a click on the scrim), so the
+   *  screen underneath can stop holding on to it. */
+  onClosed?: () => void;
 }): Promise<JoinAddressDialog> {
   const scrim = document.createElement("div");
   scrim.className = "glue-dialog-scrim dimmed";
@@ -81,6 +90,7 @@ export async function showJoinAddressDialog(opts: {
     window.removeEventListener("keydown", onKey, true);
     screen?.dispose();
     scrim.remove();
+    opts.onClosed?.();
   };
   const onKey = (e: KeyboardEvent): void => {
     if (e.key !== "Escape") return;
@@ -97,9 +107,14 @@ export async function showJoinAddressDialog(opts: {
     if (!s) return;
     const relays = opts.lobby.relays;
     s.list("JoinAddressList")?.setItems(
-      relays.map((url): ListItem => ({
+      relays.map(({ url, connected }): ListItem => ({
         value: url,
-        label: authorityOf(url),
+        // An address nobody is hosting on YET is the ordinary case — two people sitting down to
+        // play, one of them not there yet — so it is a state on the row and never an error. The
+        // lobby keeps knocking; the row says so quietly until somebody answers.
+        label: connected
+          ? authorityOf(url)
+          : `${authorityOf(url)}  |cff808080(waiting)|r`,
         // The row IS the address, so its control removes it — no "select the row, then press
         // the button under the list", which is a step a three-row list does not need.
         action: {
@@ -127,32 +142,21 @@ export async function showJoinAddressDialog(opts: {
     const box = s?.editBox("JoinAddressDialogEditBox");
     const typed = box?.value.trim() ?? "";
     if (!typed) return;
-    // Checked here as well as in `addRelay` so a typo is answered instantly rather than after a
-    // socket has been opened at a hostname that cannot exist.
-    if (!normalizeRelayUrl(typed)) {
-      message = `"${typed}" is not an address.`;
+    try {
+      // Only the two answers that are the PLAYER's mistake throw — a typo, and their own
+      // address. Whether anything is listening is not one of them: `addRelay` takes the address
+      // on the spot and keeps knocking, so the row appears either way and nothing here waits.
+      opts.lobby.addRelay(typed);
+    } catch (err) {
+      message = (err as Error).message;
       warn = true;
       return paint();
     }
-    message = `Looking for a game at ${typed}…`;
+    if (box) box.value = "";
+    message = null;
     warn = false;
     paint();
-    void opts.lobby.addRelay(typed).then(
-      () => {
-        if (box) box.value = "";
-        message = null;
-        warn = false;
-        paint();
-        opts.onChange?.();
-      },
-      (err: Error) => {
-        // A relay that is not there rejects with the transport's own sentence, which names a
-        // dev command; in this box the fault is almost always the address, so say that instead.
-        message = /no relay at/i.test(err.message) ? `No game answered at ${typed}.` : err.message;
-        warn = true;
-        paint();
-      },
-    );
+    opts.onChange?.();
   };
 
   try {
@@ -189,5 +193,5 @@ export async function showJoinAddressDialog(opts: {
     close();
     throw err;
   }
-  return { close };
+  return { close, refresh: paint };
 }

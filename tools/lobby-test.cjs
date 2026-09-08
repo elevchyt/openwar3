@@ -28,13 +28,16 @@ function check(what, got, want) {
 
 /** A fake `LobbyTransport`: records what the lobby sends, lets the test play the relay by
  *  driving `onMessage`, and can be `drop()`ped to fire `onClose` exactly as a lost socket does. */
-function fakeTransport() {
+/** Let the microtask queue drain — `addRelay` returns before its connect has settled. */
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+function fakeTransport(refuse) {
   const t = {
     sent: [],
     onMessage: () => {},
     onClose: () => {},
     connected: true,
-    connect: (url) => { t.url = url; return Promise.resolve(); },
+    connect: (url) => { t.url = url; return refuse ? Promise.reject(new Error("No relay at " + url)) : Promise.resolve(); },
     send: (m) => t.sent.push(m),
     close: () => {
       t.connected = false;
@@ -487,7 +490,8 @@ const ME = { id: 2, name: "Joiner", host: false };
     own.onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Mine" }] });
     check("our own games carry no source", lobby.snapshot.rooms.map((r) => [r.key, r.source]), [["#1", ""]]);
 
-    await lobby.addRelay("192.168.1.42");
+    lobby.addRelay("192.168.1.42");
+    await tick();
     const remote = made[1];
     check("a bare address takes the desktop game's port", remote.url, "ws://192.168.1.42:8787/relay");
     remote.onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Theirs" }] });
@@ -509,12 +513,40 @@ const ME = { id: 2, name: "Joiner", host: false };
     const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
     await lobby.connect();
     made[0].onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Mine" }] });
-    await lobby.addRelay("192.168.1.42");
+    lobby.addRelay("192.168.1.42");
+    await tick();
     made[1].onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Theirs" }] });
     check("two machines", lobby.snapshot.rooms.length, 2);
     made[1].drop("gone");
     check("one machine, and it is ours", lobby.snapshot.rooms.map((r) => r.name), ["Mine"]);
-    check("…and it is no longer watched", lobby.relays, []);
+    // Still WATCHED, though — a host who quits may come back, and the row waits for them.
+    check("…but the address is still on the list, waiting", lobby.relays, [{ url: "ws://192.168.1.42:8787/relay", connected: false }]);
+    lobby.removeRelay("ws://192.168.1.42:8787/relay");
+    check("removing it is what takes it off", lobby.relays, []);
+  }
+
+  console.log("\nan address nobody is hosting on yet is KEPT, and knocked at again");
+  {
+    const made = [];
+    let refuse = true;
+    const lobby = new LanLobby(() => { const t = fakeTransport(made.length > 0 && refuse); made.push(t); return t; }, memoryStore());
+    await lobby.connect();
+    lobby.addRelay("192.168.1.42");
+    await tick();
+    // Nothing answered. That is the ORDINARY case — the other player has not started their game
+    // yet — so it is a state on the row, not a refusal that throws the address away.
+    check("the address is on the list", lobby.relays.map((r) => r.url), ["ws://192.168.1.42:8787/relay"]);
+    check("…marked as not answering", lobby.relays[0].connected, false);
+    check("…and no games came with it", lobby.snapshot.rooms, []);
+
+    // The other player starts their game: the next knock lands.
+    refuse = false;
+    await new Promise((r) => setTimeout(r, 4200));
+    check("a later knock connects", lobby.relays[0].connected, true);
+    made[made.length - 1].onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Late" }] });
+    check("…and their game appears with no second act from the player",
+      lobby.snapshot.rooms.map((r) => r.name), ["Late"]);
+    lobby.close();
   }
 
   console.log("\npasting your own address is answered rather than listing everything twice");
@@ -526,13 +558,13 @@ const ME = { id: 2, name: "Joiner", host: false };
     // `192.168.1.34:8787` and the loopback connection we already hold are one machine.
     made[0].onMessage({ t: "hello", protocol: 99, host: { kind: "app", lan: true, addresses: ["192.168.1.34:8787"] } });
     let said = null;
-    await lobby.addRelay("http://192.168.1.34:8787").catch((e) => { said = e.message; });
+    try { lobby.addRelay("http://192.168.1.34:8787"); } catch (e) { said = e.message; }
     check("it says so", said, "That address is this computer — your own games are already listed.");
     check("…and opened nothing", made.length, 1);
     check("…and watches nothing", lobby.relays, []);
 
     let refused = null;
-    await lobby.addRelay("hello there").catch((e) => { refused = e.message; });
+    try { lobby.addRelay("hello there"); } catch (e) { refused = e.message; }
     check("a typo is refused with the shape of an address",
       refused, `"hello there" is not an address. Try 192.168.1.42 or 192.168.1.42:8787.`);
   }
