@@ -130,6 +130,21 @@ export interface LobbyChat {
 }
 
 /**
+ * One second of the host's start countdown, to be printed by everybody in the room.
+ *
+ * The clock is the HOST's alone: it sends one of these per line and a client prints what it is
+ * told rather than running a countdown of its own, so nobody's numbers can drift out of step
+ * with the `start` that follows the last one. An ABORTED countdown sends nothing at all — the
+ * lines simply stop, which is all the real client shows (NetworkStrings.fdf carries no line for
+ * a cancelled start, the way it does for a player joining or leaving).
+ */
+export interface LobbyCount {
+  k: "lobbycount";
+  /** Seconds left — GlobalStrings' TIMER_COUNTDOWN `%d`, counting 5 … 1. */
+  n: number;
+}
+
+/**
  * How many seats the Observers bench has: the twelve player slots the game has, less the
  * ones the map takes — a two-player map seats ten observers, which is the count the real
  * client's lobby shows. Zero unless the host chose Full Observers (see AdvancedOptions).

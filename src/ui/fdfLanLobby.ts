@@ -9,7 +9,7 @@ import type { PeerInfo, StartMatch } from "../net/protocol";
 import { isDefaultAdvanced, type AdvancedOptions } from "../net/advancedOptions";
 import {
   applyRequest, buildStart, canStart, colorsFreeFor, editSlot, isSeated, newSetup, rosterDiff,
-  seatPeers, type LobbyChat, type LobbyRequest, type LobbySetup, type SlotKind,
+  seatPeers, type LobbyChat, type LobbyCount, type LobbyRequest, type LobbySetup, type SlotKind,
 } from "../net/lobbySetup";
 import { ADVANCED_OPTIONS_DISPLAY_OVERRIDE, OW3_STRINGS } from "../overrides";
 import { PLAYER_COLORS } from "./hud";
@@ -69,6 +69,14 @@ const NETWORK_STRINGS_FDF = "UI\\FrameDef\\NetworkStrings.fdf";
  *  0.234375 × 0.225, which has no room for a map's description — so it shows the three stat
  *  rows and stops, as the LAN game list's summary panel does. */
 const SUMMARY_ROWS = INFO_ROWS.slice(0, 3);
+
+/**
+ * How long Start Game counts down for, in seconds.
+ *
+ * Not a value any file in the install carries — it is what the real client counts, "Game
+ * starting in 5 ..." down to 1, with the match beginning a second after the last line.
+ */
+const COUNTDOWN_SECONDS = 5;
 
 /** The team menu's value for "move onto the Observers bench" / "this row is on it". */
 const OBSERVERS_TEAM = "observers";
@@ -193,6 +201,9 @@ export async function mountLanLobbyScreen(
     append((strings?.string(key) ?? "%s").replace("%s", who));
   };
 
+  /** The room's host, as the relay stamps it — who a countdown line has to have come from. */
+  const hostPeer = (): number | undefined => lobby.snapshot.peers.find((p) => p.host)?.id;
+
   /** Everyone in the room by peer, wherever they sit — a name for a chat line. */
   const nameOf = (peer: number): string =>
     setup?.slots.find((s) => s.peer === peer)?.name
@@ -270,10 +281,10 @@ export async function mountLanLobbyScreen(
    */
   const enter = (msg: StartMatch): void => {
     const me = lobby.snapshot.you?.id;
-    const hostPeer = lobby.snapshot.peers.find((p) => p.host)?.id ?? 1;
     // The bench is seated on the link too — a watcher is addressed snapshots like anybody.
-    const link = matchLinkFrom(lobby, isHost(), msg.slots, me, hostPeer, observerSeats(msg));
+    const link = matchLinkFrom(lobby, isHost(), msg.slots, me, hostPeer() ?? 1, observerSeats(msg));
     alive = false;
+    stopCountdown();
     lobby.handOff();
     lobby.onChange = () => {};
     lobby.onStart = () => {};
@@ -281,11 +292,67 @@ export async function mountLanLobbyScreen(
     h.onStart(msg.mapPath, map.info, toConfig(msg, me), link);
   };
 
-  const startMatch = (): void => {
+  /** Actually begin the match: the host's own countdown has run out. */
+  const launch = (): void => {
     if (!isHost() || !setup) return;
     const msg = buildStart(setup);
     lobby.startMatch(msg);
     enter(msg);
+  };
+
+  // --- the countdown ------------------------------------------------------------------------
+  //
+  // Start Game does not start the game: it starts a FIVE-SECOND COUNTDOWN, printed into the
+  // chat log a line at a time — GlobalStrings' own
+  //
+  //     TIMER_COUNTDOWN  "|Cffff0000Game starting in |R%d|Cffff0000 ..."
+  //
+  // from 5 down to 1, one a second, with the match beginning a second after the last one. The
+  // clock is the HOST's alone (LobbyCount): every line goes out as its own message and a client
+  // prints what it is told, so no client can count out of step with the `start` that ends it.
+  // Nothing is sent for an abort — the lines just stop, which is all the real client shows.
+
+  /** The host's countdown handle, or null while there is none. A client never runs one. */
+  let countdown: number | null = null;
+  /** The number the NEXT tick announces; the match begins on the tick that finds it at zero. */
+  let countdownAt = 0;
+
+  const stopCountdown = (): void => {
+    if (countdown === null) return;
+    clearInterval(countdown);
+    countdown = null;
+  };
+
+  /** Print one countdown line, wherever it came from — our own clock or the host's message. */
+  const countdownLine = (n: number): void => {
+    append((strings?.string("TIMER_COUNTDOWN") ?? "Game starting in %d ...").replace("%d", String(n)));
+  };
+
+  /**
+   * One second of the host's countdown.
+   *
+   * It is abandoned the moment the lobby stops being startable — somebody left, or a joiner is
+   * still standing — which is the only way it ends early, and puts Start Game back under the
+   * host's hand.
+   */
+  const tick = (): void => {
+    if (!isHost() || !setup || !canStart(setup, lobby.snapshot.peers)) {
+      stopCountdown();
+      refresh();
+      return;
+    }
+    if (countdownAt <= 0) { stopCountdown(); launch(); return; }
+    lobby.send({ k: "lobbycount", n: countdownAt } satisfies LobbyCount);
+    countdownLine(countdownAt);
+    countdownAt -= 1;
+  };
+
+  const startMatch = (): void => {
+    if (!isHost() || !setup || countdown !== null) return;
+    countdownAt = COUNTDOWN_SECONDS;
+    countdown = window.setInterval(tick, 1000);
+    tick();     // the first line belongs to the press, not to a second later
+    refresh();  // …and Start Game is spent until the countdown ends or is abandoned
   };
 
   // --- lobby traffic -----------------------------------------------------------------------
@@ -310,6 +377,9 @@ export async function mountLanLobbyScreen(
     }
     if (msg.k === "lobbyreq") return onRequest(from, msg as LobbyRequest);
     if (msg.k === "lobbychat") return say(from, (msg as LobbyChat).text);
+    // Only the host counts, and only the host's own line is printed — a peer that sends one is
+    // no more the host than one that sends a seating (the relay's `from` stamp settles it).
+    if (msg.k === "lobbycount" && from === hostPeer()) return countdownLine((msg as LobbyCount).n);
   };
 
   lobby.onChange = (st) => {
@@ -355,7 +425,7 @@ export async function mountLanLobbyScreen(
     latePanels: ["TeamSetupContainer", "MapDisplayPanel"],
     handlers: {
       StartGameButton: () => startMatch(),
-      CancelButton: () => { alive = false; lobby.leave(); h.onCancel(); },
+      CancelButton: () => { alive = false; stopCountdown(); lobby.leave(); h.onCancel(); },
     },
     onBuild: (s) => render(s),
   });
@@ -376,7 +446,7 @@ export async function mountLanLobbyScreen(
   });
 
   const dispose = screen.dispose.bind(screen);
-  screen.dispose = (): void => { alive = false; dispose(); };
+  screen.dispose = (): void => { alive = false; stopCountdown(); dispose(); };
   return screen;
 
   /** Paint the seating onto the screen. Called after every build and every change. */
@@ -508,7 +578,7 @@ export async function mountLanLobbyScreen(
     // Start Game is the host's, and only once everybody in the room has a seat and there are
     // two PLAYERS to play (NEED_AT_LEAST_TWO): a lobby of one, or of one and a bench, is not a
     // match.
-    s.setEnabled("StartGameButton", isHost() && !!setup && canStart(setup, lobby.snapshot.peers));
+    s.setEnabled("StartGameButton", isHost() && !!setup && countdown === null && canStart(setup, lobby.snapshot.peers));
   }
 
   /**
