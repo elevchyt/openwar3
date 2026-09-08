@@ -1310,7 +1310,9 @@ export class MapViewerScene {
   private orderArrows: Array<{ inst: SpawnInstance; t: number }> = [];
   // One-shot spawn effects (e.g. the building cancel explosion), cached by path.
   private effectModels = new Map<string, SpawnModel | null>();
-  private effects: Array<{ inst: SpawnInstance; t: number; hold?: boolean }> = [];
+  /** `follow` is the sim unit this one-shot RIDES (0 = a point in the world), and `zOff` the
+   *  local height above that unit's feet the sim stamped — see followedFxPos. */
+  private effects: Array<{ inst: SpawnInstance; t: number; hold?: boolean; follow?: number; zOff?: number }> = [];
   /** Effects mid-Birth that owe a handoff to their looping Stand — the `"hold"` EffectAnim,
    *  the same shape as `itemBirthing`. */
   private effectBirthing: Array<{ inst: SpawnInstance; standIdx: number; birthEnd: number }> = [];
@@ -4314,14 +4316,41 @@ export class MapViewerScene {
     }
   }
 
+  /** Where an effect that RIDES a unit sits right now: the unit's feet on the terrain it is
+   *  standing on THIS frame, plus its flight altitude, plus the local height the sim stamped
+   *  (`SimSpellEffect.z` — a weapon's `impactz`, a buff model's own offset). Writes into
+   *  `loc3` and returns whether the unit is still there; a unit that has died or left simply
+   *  stops being followed and its effect plays out where it last stood.
+   *
+   *  The sim has always meant `targetId > 0` as "follow that unit" (drainSpellEffects says so
+   *  outright, and rts.fxEffectAt fog-tests the effect at the UNIT rather than at the stamp),
+   *  but every one-shot used to be nailed to the ground at the position the sim happened to
+   *  stamp — so a Heal's glow, a Moon Well's sparkle, a hero's revival burst and a level-up
+   *  nova were all left behind the moment their unit walked. `Targetart` is art worn by the
+   *  thing it is played ON. */
+  private followedFxPos(unitId: number, zOff: number): boolean {
+    const u = this.rts?.simView.units.get(unitId);
+    if (!u) return false;
+    this.loc3[0] = u.x;
+    this.loc3[1] = u.y;
+    // A flyer wears its art at ITS height, not on the terrain under it — the same
+    // ground + flyHeight the lightning overlay anchors a bolt's ends with.
+    this.loc3[2] = this.rts!.groundHeightAt(u.x, u.y) + (this.rts!.simView.getUnitFlyHeight(unitId) ?? 0) + zOff;
+    return true;
+  }
+
   /** Play a one-shot spawn-effect model (its "Birth" clip) at a point, then detach it
    *  after `life` seconds. Model is loaded+cached on demand.
    *
    *  `anim` overrides which clip it opens on, for the one-shots WC3 authors the other way
    *  round: `MassTeleportCaster.mdx`, the smoke a Mass Teleport leaves where its caster was
    *  standing, is a **Stand** — opened on Birth (the default) it shows nothing at all. Either
-   *  way it plays ONCE and never loops; see EffectAnim. */
-  private async spawnEffect(path: string, x: number, y: number, z: number, life = 2.5, anim?: EffectAnim): Promise<void> {
+   *  way it plays ONCE and never loops; see EffectAnim.
+   *
+   *  `follow` is a sim unit id: the effect then RIDES that unit for its whole life rather
+   *  than standing where it was spawned, and `z` is read as the local height above the
+   *  unit's feet instead of a world height (see followedFxPos). */
+  private async spawnEffect(path: string, x: number, y: number, z: number, life = 2.5, anim?: EffectAnim, follow = 0, zOff = 0): Promise<void> {
     const map = this.viewer.map;
     if (!map) return;
     let model = this.effectModels.get(path);
@@ -4332,9 +4361,13 @@ export class MapViewerScene {
     if (!model || !this.viewer.map) return;
     const inst = model.addInstance();
     inst.setScene(map.worldScene);
-    this.loc3[0] = x;
-    this.loc3[1] = y;
-    this.loc3[2] = z;
+    // The model loads asynchronously, so a followed effect takes the unit's position NOW
+    // (which may be a good way along from where the sim stamped it) rather than the stale one.
+    if (!follow || !this.followedFxPos(follow, zOff)) {
+      this.loc3[0] = x;
+      this.loc3[1] = y;
+      this.loc3[2] = z;
+    }
     inst.setLocation(this.loc3);
     const stand = anim === "stand" ? this.seqIndex(inst, /^stand/i) : -1;
     inst.setSequence(stand >= 0 ? stand : this.effectSequence(inst));
@@ -4350,7 +4383,7 @@ export class MapViewerScene {
       const iv = inst.model?.sequences?.[birth]?.interval;
       if (standIdx >= 0 && iv) this.effectBirthing.push({ inst, standIdx, birthEnd: iv[1] });
     }
-    this.effects.push({ inst, t: life, hold: anim === "hold" });
+    this.effects.push({ inst, t: life, hold: anim === "hold", follow: follow || undefined, zOff });
   }
 
   /** Spawn the ground model for a dropped item (its own .mdx, looping its stand/
@@ -4488,6 +4521,8 @@ export class MapViewerScene {
     this.updateEffectAnims();
     for (let i = this.effects.length - 1; i >= 0; i--) {
       const e = this.effects[i];
+      // An effect that rides a unit is walked with it every frame — see followedFxPos.
+      if (e.follow && this.followedFxPos(e.follow, e.zOff ?? 0)) e.inst.setLocation(this.loc3);
       e.t -= dt;
       if (e.t <= 0) {
         // A held effect DIES rather than vanishing: its own Death clip plays out (fadeOutFx
@@ -10666,7 +10701,9 @@ export class MapViewerScene {
           const x = t ? t.x : fx.x;
           const y = t ? t.y : fx.y;
           const z = this.rts!.groundHeightAt(x, y);
-          void this.spawnEffect(fx.art, x, y, z + (fx.z || 0), fx.life ?? 2, fx.anim);
+          // …and it FOLLOWS that unit for as long as it plays: `fx.z` is then a local height
+          // above the unit's feet rather than above the ground it was cast on (followedFxPos).
+          void this.spawnEffect(fx.art, x, y, z + (fx.z || 0), fx.life ?? 2, fx.anim, t ? fx.targetId : 0, fx.z || 0);
           // A wave field asked for its shard-fall sound (Blizzard): the WAV lives in
           // the effect model's own folder, so resolve it off the art like a cast sound.
           if (fx.sound) this.sounds?.playSpellSound([fx.art], undefined, { x, y, z });
@@ -10773,7 +10810,9 @@ export class MapViewerScene {
         // Hero level-up nova.
         for (const lu of world.drainLevelUps()) {
           const h = world.units.get(lu.unitId);
-          if (h) void this.spawnEffect(LEVEL_UP_FX, h.x, h.y, this.rts!.groundHeightAt(h.x, h.y), 1.5);
+          // The nova rides the hero — it is played ON him, and a hero who levels mid-fight
+          // keeps fighting while it burns.
+          if (h) void this.spawnEffect(LEVEL_UP_FX, h.x, h.y, this.rts!.groundHeightAt(h.x, h.y), 1.5, undefined, lu.unitId);
         }
         // Summoned / raised units — create their models on the nearest free tile (in front
         // of the caster, or ON the targeted point for a ward — see summonSpot), play their
@@ -10800,7 +10839,7 @@ export class MapViewerScene {
           const at = { x: u.x, y: u.y, z: this.rts!.groundHeightAt(u.x, u.y) };
           // The tome effects are a single 900ms Birth clip with no Death, so they are
           // reaped on a timer rather than by a clip ending.
-          if (p.art) void this.spawnEffect(p.art, at.x, at.y, at.z, 1.5);
+          if (p.art) void this.spawnEffect(p.art, at.x, at.y, at.z, 1.5, undefined, p.unitId);
           // BOTH sources sound, because in the engine they are independent: the SND event
           // is baked into the effect model's animation and fires by playing it at all,
           // while `Effectsound` is the ability's own. The Chest of Gold is the case that

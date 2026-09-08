@@ -1500,6 +1500,11 @@ export interface SimUnit {
   manaRegen: number; // mana per second (recomputed from INT + buffs)
   hpRegen: number; // hp per second
   lifesteal: number; // fraction of melee damage healed back (Vampiric Aura); derived
+  /** The one-shot the drain plays on the unit it heals — the winning lifesteal buff's own
+   *  `Specialart`, resolved once in recomputeStats rather than looked up on every blow.
+   *  "" for a lifesteal whose row names none (the Potion of Vampirism's `[BIpv]` is a button
+   *  icon and nothing else). See dealDamage. */
+  lifestealArt: string;
   thorns: number; // fraction of melee damage returned to attackers (Thorns Aura); derived
   /** Fraction of SPELL damage this unit shrugs off — Runed Bracers' 33% (`AIsr` dataB) and
    *  its two siblings. Derived from the inventory, not a buff, so it needs no expiry. */
@@ -6879,6 +6884,7 @@ export class SimWorld {
       | "manaRegen"
       | "hpRegen"
       | "lifesteal"
+      | "lifestealArt"
       | "thorns"
       | "magicReduction"
       | "rangedReduction"
@@ -7132,6 +7138,7 @@ export class SimWorld {
       manaRegen: opts?.manaRegen ?? 0, // recomputeStats derives the real value below
       hpRegen: 0,
       lifesteal: 0,
+      lifestealArt: "",
       thorns: 0,
       magicReduction: 0,
       rangedReduction: 0,
@@ -9560,6 +9567,7 @@ export class SimWorld {
     let damagePct = 0;
     let hpRegenBonus = 0;
     let lifesteal = 0;
+    let lifestealArt = "";
     let thorns = 0;
     let stun = false;
     let silence = false;
@@ -9576,7 +9584,12 @@ export class SimWorld {
       else if (b.kind === "damage") damageBonus += b.value;
       else if (b.kind === "damagePct") damagePct += b.value; // Command/Trueshot Aura
       else if (b.kind === "hpRegen") hpRegenBonus += b.value; // Unholy Aura
-      else if (b.kind === "lifesteal") lifesteal = Math.max(lifesteal, b.value); // Vampiric Aura
+      else if (b.kind === "lifesteal") {
+        // Vampiric Aura. The strongest wins (life steals do not stack) and its own drain art
+        // wins with it, which is why this is a compare rather than the Math.max it was: the
+        // flash belongs to the row that is actually doing the stealing.
+        if (b.value > lifesteal) { lifesteal = b.value; lifestealArt = this.lifestealArtOf(b.group); }
+      }
       else if (b.kind === "thorns") thorns = Math.max(thorns, b.value); // Thorns Aura
       else if (b.kind === "slow") {
         slowMove = Math.max(slowMove, b.value);
@@ -9782,6 +9795,7 @@ export class SimWorld {
     // Vampiric Aura only — the Mask of Death's life steal is an ORB (exclusive with every
     // other orb, and it works on a ranged attack), so it is applied at the blow instead.
     u.lifesteal = lifesteal;
+    u.lifestealArt = lifestealArt;
     // The two carried damage cuts (Runed Bracers, Arcanite Shield). Derived like every other
     // item stat; spent at the two places the damage they name arrives — spellDamage and the
     // ranged half of dealDamage.
@@ -10771,6 +10785,34 @@ export class SimWorld {
         }
       }
     }
+  }
+
+  /** Memo for lifestealArtOf, keyed by buff group: an ability's art cannot change mid-match. */
+  private readonly lifestealArts = new Map<string, string>();
+
+  /**
+   * The flash a life steal plays on the unit it heals, off the buff row's own `Specialart`:
+   * `[BUav] Specialart = Abilities\Spells\Undead\VampiricAura\VampiricAuraTarget.mdl`
+   * (`Specialattach = origin`). The data names this model as the drain FIRING rather than as
+   * something worn — ItemAbilityFunc says so in as many words over the Mask of Death's
+   * `[AIvd]`, "special art played on hero when ability fires", reaching for the same file —
+   * so it belongs on the blow, not on the buff's persistent art (`[BUav] Targetart` is the
+   * plain `GeneralAuraTarget.mdl` every aura wears, which the buff pass already hangs).
+   *
+   * Asked of the buff's GROUP because that is where the ability that granted it survives:
+   * applyAuras stamps `${ab.code}:${kind}`, so a Dread Lord's `AUav` and Scourge Bone Chimes
+   * (`AUav` again, carried) both name their own row. Anything else finds nothing and shows
+   * nothing, which is the data's answer too: the Potion of Vampirism's group names no ability
+   * at all, and its `[BIpv]` row carries no `Specialart` either.
+   */
+  private lifestealArtOf(group: string): string {
+    let art = this.lifestealArts.get(group);
+    if (art === undefined) {
+      const sep = group.indexOf(":");
+      art = (sep > 0 ? this.abilities?.get(group.slice(0, sep))?.buffSpecialArt : "") ?? "";
+      this.lifestealArts.set(group, art);
+    }
+    return art;
   }
 
   /** WHICH SIDE each aura ability lands on, memoised by ability id — see `applyAuras` for the
@@ -16365,9 +16407,15 @@ export class SimWorld {
     }
     // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
     if (dealt > 0) this.applyCleave(attacker, target, raw);
-    // Vampiric Aura: the attacker heals for a fraction of the melee damage dealt.
+    // Vampiric Aura: the attacker heals for a fraction of the melee damage dealt — and shows
+    // it. The drain's own one-shot (lifestealArtOf) plays on the unit that was healed, once
+    // per blow that actually restored something: a Ghoul already at full life drinks nothing
+    // and flashes nothing.
     if (attacker.lifesteal > 0 && dealt > 0 && attacker.hp > 0) {
+      const before = attacker.hp;
       attacker.hp = Math.min(attacker.maxHp, attacker.hp + dealt * attacker.lifesteal);
+      if (attacker.hp > before && attacker.lifestealArt)
+        this.spellEffects.push({ art: attacker.lifestealArt, x: attacker.x, y: attacker.y, targetId: attacker.id, z: 0 });
     }
     // Thorns Aura: the target returns a fraction of the damage to the attacker.
     if (target.thorns > 0 && dealt > 0) this.landDamage(attacker, dealt * target.thorns, target.id, false);
@@ -17434,7 +17482,10 @@ export class SimWorld {
     // ReincarnationTarget.mdl` — and it is the one field they all fill (`Casterart` and
     // `Targetart` are explicitly blank on `[AOre]`).
     const art = def.effectArt || def.targetArt || def.casterArt;
-    if (art) this.spellEffects.push({ art, x: u.x, y: u.y, targetId: 0, z: 0, life: window || 1, anim: "hold" });
+    // On the UNIT, not on the tile: the marker stands over the body for the whole delay, and
+    // an Ankh's owner can be a hero the sim moves while he is down (a script's SetUnitPosition,
+    // a transport that was carrying him). Costs nothing where the body simply lies still.
+    if (art) this.spellEffects.push({ art, x: u.x, y: u.y, targetId: u.id, z: 0, life: window || 1, anim: "hold" });
   }
 
   /** …and the unit gets up. */
