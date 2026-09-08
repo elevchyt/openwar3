@@ -10748,7 +10748,18 @@ export class MapViewerScene {
         // the owner's researched levels each tick, so a Footman fighting on the far side of the
         // map gets his new sword the moment the Blacksmith finishes.
         for (const r of world.drainResearchCompletions()) {
-          if (r.owner === this.localPlayer) this.sounds?.playUi(`ResearchComplete${UI_SOUND_RACE[this.localRace]}`);
+          if (r.owner !== this.localPlayer) continue;
+          this.sounds?.playUi(`ResearchComplete${UI_SOUND_RACE[this.localRace]}`);
+          // …and the same one-line "Completed: " the finished BUILDING prints above, for the
+          // same reason: the fanfare names nothing, and a base that researches two things at
+          // once plays the identical chime twice. What it names is the UPGRADE — the LEVEL's
+          // own name out of the registry ("Steel Forged Swords", not "Forged Swords"), which
+          // is the name the command card had on it when the click was made — never the
+          // building that paid for it.
+          const name = this.upgrades.name(r.upgradeId, r.level);
+          if (name && name !== r.upgradeId) {
+            this.hud?.showError(`${this.globalStrings?.strings.get("COLON_COMPLETED") ?? "Completed: "}${name}`);
+          }
         }
         // A building became something else: swap its model in place. The sim kept the SAME
         // entity — rally point, queue, selection and damage all carried over — so this only

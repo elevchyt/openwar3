@@ -2017,7 +2017,13 @@ body.hud-widget-skinned .hud-queue {
   inset: 0;
   display: block;
   gap: 0;
+  /* The row spans the WHOLE widget (see above) and is the last child of it, so as a hit
+     target it lies over the big slot as well — which is what swallowed every click on the
+     in-progress icon, the one job of the seven the player most wants to take back. Only the
+     six slots are clickable; the sheet between them is not. */
+  pointer-events: none;
 }
+body.hud-widget-skinned .hud-queue-slot { pointer-events: auto; }
 body.hud-widget-skinned .hud-queue-slot {
   position: absolute;
   top: 59.38%;
