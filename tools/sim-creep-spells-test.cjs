@@ -430,5 +430,97 @@ console.log("\nHide takes itself: standing about at night is the whole condition
   check("…and it does not come back by day", archer.cloaked, false);
 }
 
+console.log("\nHide is lying in wait, and the wait ends when the camp is attacked");
+{
+  // Liquipedia (Hide): "Hiding units lie in wait for enemies without attacking." A meld
+  // breaks on what the melded unit DOES — it moves, it swings, it casts — and a creep at its
+  // post does none of those, so nothing that happened to its CAMP could reach it: the camp
+  // died around an invisible Murloc Nightcrawler parked on the Hold Position the meld put it
+  // on. See SimWorld.unhideCreep.
+  const w = world();
+  w.timeOfDay = 21; // night — Hide takes itself
+  const crawler = creep(w, "nmrm", 1000, 1000);
+  const mate = creep(w, "nftr", 1080, 1000); // a camp-mate that does not hide
+  run(w, null, 4);
+  check("the Nightcrawler is hidden at its post", crawler.invisible, true);
+  check("…and standing to (the meld's own Hold)", crawler.order, "hold");
+  const f = footman(w, 1350, 1000); // inside the Berserker's acquisition: the camp engages
+  f.hp = f.maxHp = 4000; // nobody dies — a death would end the fight and the test with it
+  run(w, null, 3);
+  check("the camp is in a fight", w.creepInFight(mate), true);
+  check("…so the Nightcrawler is up", crawler.cloaked, false);
+  check("…off the hold the meld had parked it on", crawler.order !== "hold", true);
+  check("…and in the fight itself", crawler.order === "attack" && crawler.targetId === f.id, true);
+  check("…and it does not re-meld while the fight is on", crawler.cloaked, false);
+}
+
+console.log("\nan Ogre Magi Bloodlusts the OGRE, and itself only when there is nobody else");
+{
+  // Maintainer's observation against the real client: a camp's Bloodlust goes on another
+  // member first — the Magi takes its own only as the last one standing. Ranked purely by
+  // the numbers it buffed itself every time, because a player opens on the CASTER and "the
+  // unit being attacked" is the top of the ladder (autocastTarget).
+  const w = world();
+  const caster = new CreepCaster(w, ABILITIES);
+  const magi = creep(w, "nomg", 1000, 1000);
+  const ogre = creep(w, "nogr", 1100, 1000);
+  const f = footman(w, 1300, 1000);
+  f.hp = f.maxHp = 4000;
+  w.issueAttack(f.id, magi.id); // straight at the caster, as a player would
+  run(w, caster, 8);
+  check("the Ogre wears the Bloodlust", buffIdOn(ogre, "Bblo"), true);
+  check("…and the Magi, who was the one being hit, does not", buffIdOn(magi, "Bblo"), false);
+
+  // Last one standing: no camp-mate left to give it to.
+  const w2 = world();
+  const caster2 = new CreepCaster(w2, ABILITIES);
+  const lone = creep(w2, "nomg", 1000, 1000);
+  const f2 = footman(w2, 1300, 1000);
+  f2.hp = f2.maxHp = 4000;
+  w2.issueAttack(f2.id, lone.id);
+  run(w2, caster2, 8);
+  check("a lone Magi Bloodlusts itself", buffIdOn(lone, "Bblo"), true);
+}
+
+console.log("\nthe net is picked per target: the ground model, the air model, and three sizes");
+{
+  // `[Aens] buffid1 = Bena,Beng` — an AIR row (`ensnare_AirTarget.mdx`, attached chest,mount)
+  // and a GROUND row (`ensnareTarget.mdx`), told apart by the strings file's own EditorSuffix.
+  // The air row is listed FIRST, so the ordinary "buffs[0]" reading dressed every ensnared
+  // Footman in the flyer's net. Both models ship Birth/Stand/Death three times over — plain,
+  // "Medium" and "Large" — for the size of the body caught in them (SimWorld.bodySize).
+  const w = world();
+  const trapper = creep(w, "nftt", 1000, 1000);
+  const f = footman(w, 1200, 1000);
+  w.issueCast(trapper.id, "Aens", f.id, 0, 0);
+  run(w, null, 4);
+  const net = f.buffs.find((b) => b.kind === "root");
+  check("the Footman is ensnared", !!net, true);
+  check("…by the GROUND buff row", net && net.buffId, "Beng");
+  check("…wearing ensnareTarget.mdx", net && /ensnareTarget\.mdx$/i.test(net.art), true);
+  check("…in the Medium set (a Footman's collision is 31)", net && net.fx[0].anim, "Medium");
+
+  // The size classes, off the two numbers the data measures a body with.
+  check("a Peasant (collision 16) is the plain, small set", w.bodySize(spawn(w, "hpea", 2000, 2000, 0, 0)), "");
+  check("a Tauren (48) is Large", w.bodySize(spawn(w, "otau", 2100, 2000, 0, 0)), "Large");
+  const gar = spawn(w, "ugar", 2200, 2000, 0, 0);
+  gar.flying = true; // the flyers' collision is 8 across the board — scale is their size
+  check("a Gargoyle (scale 1.25) is small", w.bodySize(gar), "");
+  const wyrm = spawn(w, "ufro", 2300, 2000, 0, 0);
+  wyrm.flying = true;
+  check("a Frost Wyrm (2.25) is Large", w.bodySize(wyrm), "Large");
+  // …and an AIR target takes the air row, with its own attachment. A second trapper, because
+  // the first one's Ensnare is on its `cool1` = 15s cooldown.
+  const trapper2 = creep(w, "nftt", 1000, 1200);
+  const gar2 = spawn(w, "ugar", 1150, 1200, 0, 0);
+  gar2.flying = true;
+  w.issueCast(trapper2.id, "Aens", gar2.id, 0, 0);
+  run(w, null, 4);
+  const airNet = gar2.buffs.find((b) => b.kind === "root");
+  check("the Gargoyle is ensnared by the AIR row", airNet && airNet.buffId, "Bena");
+  check("…wearing ensnare_AirTarget.mdx", airNet && /ensnare_AirTarget\.mdx$/i.test(airNet.art), true);
+  check("…on its chest, where the row says", airNet && airNet.fx[0].attach.join(","), "chest,mount");
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nall creep-spell checks passed");
 process.exit(failed ? 1 : 0);

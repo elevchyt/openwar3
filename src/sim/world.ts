@@ -11815,10 +11815,38 @@ export class SimWorld {
         if (t) return this.issueCast(u.id, def.code, t.id, 0, 0, true);
         continue;
       }
-      const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags);
+      const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags, lvl.buffs.map((b) => b.toLowerCase()));
       if (target) return this.issueCast(u.id, def.code, target.id, 0, 0, true);
     }
     return false;
+  }
+
+  /**
+   * HOW BIG this body is, as the qualifier a size-varied target-art model names its clips with
+   * — "" (small), "Medium" or "Large". See `BuffFx.anim`; `ensnareTarget.mdx` is the family.
+   *
+   * WC3 states no size CLASS for a unit anywhere, so the classes are read off the two numbers
+   * that do measure a body, and the thresholds here are OURS:
+   *
+   *  · A GROUND unit is sized by its COLLISION, which the game gives every walker in exactly
+   *    three sizes: 16 (a Peasant, an Acolyte, a critter), 31/32 (a Footman, a Grunt, a
+   *    Rifleman) and 48 (a Tauren, a Kodo Beast, a Mountain Giant, an Abomination). Three
+   *    values, three sets of clips — the fit is the whole reason this is the number.
+   *  · A FLYER is sized by its model SCALE (`unitUI` "scale"), because collision is not a size
+   *    for a flyer at all: EVERY player air unit carries 8 (air units do not collide), from a
+   *    Gargoyle to a Frost Wyrm, while the creep dragons carry 48. Scale is the only number
+   *    the data gives an air body — Gargoyle 1.25, Gryphon 1.5, Wyvern 1.75, Chimaera 2,
+   *    Frost Wyrm 2.25, the dragons 2–2.25.
+   *
+   * A type the registry does not know (a bare test world) is small, which is the plain
+   * unqualified clip every one of these models ships.
+   */
+  bodySize(u: SimUnit): string {
+    if (u.flying) {
+      const scale = this.unitReg?.get(u.typeId)?.selScale ?? 1;
+      return scale >= 2 ? "Large" : scale >= 1.5 ? "Medium" : "";
+    }
+    return u.radius >= 48 ? "Large" : u.radius >= 24 ? "Medium" : "";
   }
 
   /** How many live units of a type a player has — the cap check behind Carrion Beetles'
@@ -11870,22 +11898,48 @@ export class SimWorld {
     return Math.max(castRange, u.weapon?.acquire ?? 0);
   }
 
-  private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean, flags: string[] = []): SimUnit | null {
+  private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean, flags: string[] = [], buffs: string[] = []): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = friendly ? 1.999 : Infinity;
+    /**
+     * THE CASTER IS THE LAST RESORT for a friendly buff, and it is held in its own slot
+     * rather than scored against the rest, because "behind everybody else" is not a number.
+     *
+     * An Ogre Magi buffs the OGRES: "creeps with Bloodlust tend to cast their first Bloodlust
+     * on another unit of their camp, and on themselves only when there is nobody better left"
+     * (maintainer's observation against the real client — the same kind of reading the rest of
+     * the creep rules here are built on). Ranked purely by the numbers, the Magi took its own
+     * Bloodlust every time a player opened on it — which is exactly what a player DOES open on
+     * — because being under attack is the top of the ladder and the Magi was the one under
+     * attack. So it is put behind every other ally that qualifies, and taken only when there
+     * is no such ally: the last creep standing buffs itself.
+     */
+    let onSelf: SimUnit | null = null;
+    let selfScore = 1.999;
     // A friendly BUFF (Frost Armor, Inner Fire, Bloodlust — anything friendly that is not a
-    // heal) goes on the ally UNDER ATTACK first, and only then on the most hurt: "Creeps will
+    // heal) goes on the ally IN THE FIGHT: the one UNDER ATTACK first — "Creeps will
     // cast frost armor on the unit being attacked" (warcraft-gym, "A summary on creep
     // mechanics"), which is the standing rule for the ability's own autocast too, and what makes
     // the guide's trick work — hit another creep first and the armor lands there, not on the
-    // wizard you want. A HEAL keeps its own reading: the most wounded, whoever is on it.
-    const targeted = friendly && !HEAL_SPELLS.has(code) ? this.targetedIds() : null;
+    // wizard you want — and then the ally that is SWINGING, which is the other half of being in
+    // a fight and the half that was missing: the Ogres charging the Footman are what the
+    // Bloodlust is FOR, and at full health they scored below the bar and were never eligible at
+    // all. Outside the fight it is the most hurt, as before. A HEAL keeps its own reading: the
+    // most wounded, whoever is on it.
+    const fight = friendly && !HEAL_SPELLS.has(code) ? this.fightSides() : null;
     for (const t of this.units.values()) {
       if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
-      if (!this.autocastWants(u, t, friendly, code, selfOk, flags)) continue;
+      if (!this.autocastWants(u, t, friendly, code, selfOk, flags, buffs)) continue;
       if (friendly) {
-        // heal the most-hurt ally; a buff, the one being hit (then the most hurt)
-        const frac = t.hp / t.maxHp + (targeted && !targeted.has(t.id) ? 1 : 0);
+        // heal the most-hurt ally; a buff, the one in the fight (then the most hurt)
+        const frac = t.hp / t.maxHp + (fight && !fight.has(t.id) ? 1 : 0);
+        if (fight && t === u) {
+          if (frac < selfScore) {
+            selfScore = frac;
+            onSelf = t;
+          }
+          continue;
+        }
         if (frac < bestScore) {
           bestScore = frac;
           best = t;
@@ -11898,7 +11952,7 @@ export class SimWorld {
         }
       }
     }
-    return best;
+    return best ?? onSelf;
   }
 
   /**
@@ -11940,7 +11994,7 @@ export class SimWorld {
    *  the search so the APPROACH can re-ask it (see PendingCast.auto): a Priest halfway to a
    *  wounded ally that someone else just healed turns around instead of arriving to spend
    *  mana on a full-health unit. */
-  private autocastWants(u: SimUnit, t: SimUnit, friendly: boolean, code: string, selfOk: boolean, flags: string[]): boolean {
+  private autocastWants(u: SimUnit, t: SimUnit, friendly: boolean, code: string, selfOk: boolean, flags: string[], buffs: string[] = []): boolean {
     if (t.building || t.hp <= 0) return false;
     // The pick must satisfy the same Targets Allowed gate the cast itself will run.
     // Without this the search happily returns a target issueCast then refuses — and a
@@ -11953,6 +12007,13 @@ export class SimWorld {
     if (friendly) {
       if (!this.allied(u, t) || t.mechanical) return false;
       if (HEAL_SPELLS.has(code) && t.hp >= t.maxHp) return false; // only wounded (the Priest's Heal and the creeps' Anhe alike)
+      // A BUFF ALREADY WORN IS NOT WORK. `buffs` is the ability's own `buffid1` list, and the
+      // test is the one the self-buff branch above already makes (`worn`) — an autocast
+      // SPREADS: the Ogre Magi's second Bloodlust goes on the second Ogre, and a Shaman does
+      // not stand there re-casting on the one unit it has already lit. Without it the pick
+      // was re-made every autocast tick on whoever was topmost in the fight, and the mana
+      // went with it.
+      if (!HEAL_SPELLS.has(code) && buffs.length && t.buffs.some((b) => b.buffId && buffs.includes(b.buffId.toLowerCase()))) return false;
       return true;
     }
     if (!this.hostile(u, t) || t.invulnerable) return false;
@@ -11963,14 +12024,18 @@ export class SimWorld {
     return true;
   }
 
-  /** The ids of every unit somebody hostile is currently attacking — one pass over the world,
-   *  for `autocastTarget`'s "the ally under attack" reading. */
-  private targetedIds(): Set<number> {
+  /** The ids of everyone IN a fight — both ends of every live attack — in one pass over the
+   *  world, for `autocastTarget`'s "the ally in the fight" reading. The attacker is in the set
+   *  as well as its victim: an Ogre swinging at the Footman is as much in the fight as the
+   *  Ogre the Footman is swinging back at, and a buff is for both. */
+  private fightSides(): Set<number> {
     const out = new Set<number>();
     for (const a of this.units.values()) {
       if (a.hp <= 0 || a.targetId === null || (a.order !== "attack" && a.order !== "attackmove")) continue;
       const t = this.units.get(a.targetId);
-      if (t && this.hostile(a, t)) out.add(t.id);
+      if (!t || !this.hostile(a, t)) continue;
+      out.add(t.id);
+      out.add(a.id);
     }
     return out;
   }
@@ -11983,7 +12048,10 @@ export class SimWorld {
     if (DISPEL_CODES.has(def.code)) return worthDispelling(t, this.units, !this.hostile(u, t));
     const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
     const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
-    return this.autocastWants(u, t, friendly, def.code, F.has("self"), def.targetFlags);
+    // The buff ids are read off level 1: no stock ability changes WHICH buff it applies
+    // between ranks (see abilities.ts buffIdOf), and the walk does not know the rank.
+    const worn = (def.levelData[0]?.buffs ?? []).map((b) => b.toLowerCase());
+    return this.autocastWants(u, t, friendly, def.code, F.has("self"), def.targetFlags, worn);
   }
 
   private findBuffFrom(t: SimUnit, sourceId: number): SimBuff | undefined {
@@ -13497,7 +13565,12 @@ export class SimWorld {
     stopLightning: (tag) => {
       if (tag) this.spellLightningStops.push(tag);
     },
-    buffFxOf: (buffId) => (buffId ? (this.abilities?.buffFx(buffId) ?? []) : []),
+    buffFxOf: (buffId) => (buffId ? (this.abilities?.buffFx?.(buffId) ?? []) : []),
+    // Optional-called, like `buffFx` above: a headless test hands the world a hand-built
+    // registry with only the rows it cares about, and a stub with no such method must read as
+    // "this install has nothing to say" rather than crash the tick.
+    domainBuff: (ids, flying) => this.abilities?.domainBuff?.(ids, flying) || ids[0] || "",
+    bodySize: (u) => this.bodySize(u),
     addSpellField: (f) => this.addSpellFieldInternal(f),
     burnMana: (t, amount) => {
       const burned = Math.min(t.mana, Math.max(0, amount));
@@ -15451,6 +15524,12 @@ export class SimWorld {
    */
   private tickAutoMeld(u: SimUnit): void {
     if (this.isDay || u.hp <= 0 || u.building || u.cloaked || u.stunned || u.paused) return;
+    // …and NOT while its camp is in a fight. Hiding is lying in wait (Liquipedia: "Hiding
+    // units lie in wait for enemies without attacking"), and the wait is over the moment the
+    // camp is attacked — see `unhideCreep`, which takes the meld back off. Without this the
+    // creep re-melded on the very next tick it stood still and a Murloc Nightcrawler spent
+    // the whole fight invisible at its post while its camp died around it.
+    if (u.isCreep && this.creepInFight(u)) return;
     if (u.order !== "idle" && u.order !== "hold") return;
     if (u.moving || u.swingLeft >= 0 || u.x !== u.prevX || u.y !== u.prevY) return;
     const own = u.abilities.find((a) => a.code === "Ashm" && a.level >= 1 && this.techMeets(u.owner, a.id));
@@ -15463,6 +15542,36 @@ export class SimWorld {
     // has no cooldown, so the effect is the whole of the cast.
     const carried = this.itemAbility(u, "Ashm");
     if (carried) this.applySpellEffect("Ashm", 1, u, { targetId: 0, x: u.x, y: u.y }, carried.def);
+  }
+
+  /**
+   * A HIDING creep gets up: the camp is being attacked, so the ambush is over.
+   *
+   * Hide is a MELD (`Ashm` — the Murloc Nightcrawler, the Bandit/Rogue/Assassin, the Satyr
+   * Shadowdancer take it by themselves at night, `tickAutoMeld`), and a meld breaks on what
+   * the melded unit DOES: it moves, it swings, it casts. A creep lying in wait does none of
+   * those, so every ordinary break missed it — the camp fought and died around a Nightcrawler
+   * that was still invisible at its post, because nothing that happens to somebody ELSE ends
+   * a meld and the camp's shout could not reach a unit the meld had parked on Hold Position.
+   *
+   * So the CAMP's fight is a break of its own, called from the two places a camp learns it is
+   * in one (`alertCamp`, the call for help, and `tickCreep`'s standing check). The hold goes
+   * back with it: melding put the unit into that stance (spells.ts `Ashm` — it is what stops
+   * a melded unit walking out of its own invisibility), and a creep left holding is one the
+   * camp's own cohesion (`campFightTarget`) and `tickAcquire` can no longer move.
+   *
+   * Creeps only. A night elf player's melded Archer is not roused by her neighbours being
+   * shot at — nothing in the game says she is, and the whole point of the racial is that the
+   * army standing in the dark chooses when to come out of it.
+   */
+  private unhideCreep(u: SimUnit): void {
+    if (!u.isCreep || u.hp <= 0 || !u.cloaked) return;
+    if (!u.buffs.some((b) => b.kind === "invisible" && b.meld)) return;
+    this.breakInvisibility(u);
+    if (u.order === "hold") {
+      u.order = "idle";
+      this.settle(u);
+    }
   }
 
   private tickMeld(u: SimUnit): void {
@@ -17338,6 +17447,10 @@ export class SimWorld {
       target.asleep = false;
       target.strayT = 0;
       target.campHelper = false; // being hit makes it an originator: it may now call for help
+      // …and a HIDING one gets up (unhideCreep). Before `passive` below is read, deliberately:
+      // a cloaked unit never returns fire, which is right for a hero walking past under Wind
+      // Walk and wrong for the ambusher somebody has just found and hit.
+      this.unhideCreep(target);
     } else if (target.guarding) {
       target.strayT = 0; // …and so does a placed AI unit on the same leash (tickGuardLeash)
     }
@@ -19601,6 +19714,10 @@ export class SimWorld {
    *  Returns true when it has handled the unit this tick (asleep or leashing
    *  home) so the caller skips the normal order logic. */
   private tickCreep(u: SimUnit, dt: number): boolean {
+    // A HIDING creep gets up the moment its camp is in a fight (unhideCreep). The standing
+    // form of the rule `alertCamp` states at the shout: it covers a creep that melded before
+    // the fight reached it and one whose camp-mate was pulled out of earshot.
+    if (this.creepInFight(u)) this.unhideCreep(u);
     const atHome = Math.hypot(u.x - u.guardX, u.y - u.guardY) <= CREEP_HOME_EPS;
     // --- sleep (night): doze off while guarding at the post with the camp quiet;
     // dawn (or a fight — see below) wakes it. ---
@@ -19940,6 +20057,7 @@ export class SimWorld {
       if (c === u || !c.isCreep || c.hp <= 0 || c.returning) continue;
       if (!this.sameCamp(c, u)) continue;
       c.asleep = false; // rouse the camp
+      this.unhideCreep(c); // …and a HIDING one gets up — the meld also parked it on Hold
       if (c.order === "idle" && c.weapon && this.hostile(c, target)) {
         const t = this.creepTargetOver(c, target); // a shout about a Peasant doesn't blind it
         this.issueAttack(c.id, t.id);

@@ -40,7 +40,9 @@ For what no file states:
 | A creep on a **tower** breaks off under **60 %** of its own health and does not return fire on it while walking home. | Wowpedia | `CREEP_TOWER_FLEE_HP`, tickCreep, `provoke` |
 | **Ensnare** goes on non-heroes that ENTER its 500 after the fight began; what was already inside is exempt. | 176 | `SimUnit.ensnareSeen`, `trackEnsnareSeen`, `autocastWants` |
 | **Lightning Shield** wants the wearer touching two others (three in `Area1` 160). **Purge** prefers a summon. **Hurl Boulder** prefers the hero. **Slam** wants three. | 176; warcraft-gym | `CAST_RULES` in casting.ts |
-| **Frost Armor / Inner Fire / Bloodlust** (any friendly autocast that is not a heal) go on the ally under attack first. | warcraft-gym | `autocastTarget`, `targetedIds` |
+| **Frost Armor / Inner Fire / Bloodlust** (any friendly autocast that is not a heal) go on the ally IN THE FIGHT — the one under attack first, then one that is swinging — and **never on the caster while there is anybody else**: an Ogre Magi buffs the Ogres and takes its own Bloodlust as the last one standing. A buff already worn is not work, so the second cast finds the second body. | warcraft-gym; maintainer vs. the real client | `autocastTarget`, `fightSides`, `autocastWants` |
+| A creep that is **HIDING gets up when its camp is attacked** — the meld is lying in wait, and so is the Hold Position it parked the unit on. | Liquipedia (Hide); maintainer | `unhideCreep`, `tickCreep`, `alertCamp`, `provoke`, `tickAutoMeld` |
+| **Ensnare's net is picked per target**: the AIR buff row or the GROUND one (`Bena`/`Beng`, told apart by their `EditorSuffix`), and the Birth/Stand/Death set for the SIZE of the body it landed on. | `[Aens] buffid1`; the models' own clip names | `netFx` in spells.ts, `bodySize`, `AbilityRegistry.domainBuff`, `sizedSeq` |
 | A creep **casts only while its camp is in a fight**; Heal is the one autocast it runs at rest. A casting creep counts as fighting. | (the whole reason a camp does not Cyclone passers-by) | `creepInFight`, `creepAggroed`, `tickAutocast`, `CreepView.engaged` |
 | **Sleep**, **call for help**, leash and return, the placement and shop notifications. | MiscGame/MiscData; creep basics | `tickCreep`, `alertCamp`, `notifyCreepsOf*` — see the code |
 
@@ -149,6 +151,48 @@ the behaviour:
   Liquipedia's Hide page prints and which was already the buff's `delay`. The Cloak of Shadows
   (`[clsd] abilList = Ashm`) is the same row carried, and on 1.30.4 it is night-only too — its
   own Ubertip says "invisibility at night", and the daytime version is a 1.31 change.
+
+  **…and it GETS UP when the camp is attacked.** A meld breaks on what the melded unit DOES —
+  it moves, it swings, it casts — and a creep lying in wait does none of those, so nothing
+  that happened to somebody ELSE could reach it: the camp died around an invisible Murloc
+  Nightcrawler. `SimWorld.unhideCreep` is the break, called from the two places a camp learns
+  it is in a fight (`alertCamp`'s shout and `tickCreep`'s standing check) and from `provoke`
+  for the ambusher somebody has found and hit — before `provoke` reads `passive`, since a
+  cloaked unit never returns fire. It takes the HOLD back off with the meld (melding is what
+  parked the unit there), or the camp's own cohesion and `tickAcquire` cannot move it; and
+  `tickAutoMeld` refuses to re-meld a creep whose camp is fighting, or it would vanish again
+  on the next tick it stood still. Creeps only: a night elf player's melded Archer is not
+  roused by her neighbours being shot at.
+
+## The net: one spell, four models, three sizes
+
+Ensnare is the one spell whose art is chosen per TARGET, twice over, and both halves are in
+the data rather than in the handler:
+
+- **Which model.** `[Aens] buffid1 = Bena,Beng` — an AIR row wearing
+  `ensnare_AirTarget.mdx` on the target's `chest,mount`, and a GROUND row wearing
+  `ensnareTarget.mdx` at its origin. The only thing in the data that says which is which is
+  the strings file's `EditorSuffix`: " (Air)" and " (Ground)" (`AbilityRegistry.domainBuff`
+  reads it). **The air row is listed FIRST**, so the ordinary "buffs[0]" reading every other
+  ability wants — `buffIdOf` still does it — dressed every ensnared Footman in the flyer's
+  net. Web is the same shape (`Bwea,Bweb` → `Web_AirTarget.mdx` / `WebTarget.mdx`) and takes
+  the GROUND row: Web lands on a flyer and leaves it on the ground, which is where it spends
+  the buff.
+- **Which clips.** Both models ship Birth/Stand/Death three times over — plain, `Medium` and
+  `Large` — because a net over a Peasant and one over a Kodo Beast are one model at three
+  sizes. (`ensnare_AirTarget.mdx` writes "Death medium" in lower case; matching is
+  case-insensitive.) The plain set IS the small one. Which set a cast wants is `SimWorld.
+  bodySize` and rides on the buff as `BuffFx.anim`; the renderer spends it in `sizedSeq`, and
+  a model with only one set falls back to it. WC3 states no size CLASS anywhere, so the
+  classes are read off the two numbers that measure a body and **the thresholds are ours**: a
+  ground unit by its COLLISION, which the game gives every walker in exactly three sizes
+  (16 / 31–32 / 48), and a flyer by its model SCALE, because collision is not a size for a
+  flyer at all — every player air unit carries 8 (they do not collide) while the creep dragons
+  carry 48.
+
+The MISSILE needed nothing: `[Aens] Missileart = EnsnareMissile.mdl` at `Missilespeed` 1500,
+so `resolveCast` throws it like any other unit-target spell with a missile, and the renderer
+already flies a missile on its `Stand` clip (`missileSequence`).
 
 **When a creep presses these** is `src/ai/creeps.ts` plus the sourced rules in `CAST_RULES`.
 Hurl Boulder's is `heroMana` — "The Golem will prioritize to target hero units that are

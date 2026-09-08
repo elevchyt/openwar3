@@ -7048,7 +7048,17 @@ export class RtsController {
     // `owner` leaves here as a COLOUR SLOT, which is what the HUD paints the dot with: a
     // player's own (SetPlayerColor can move it), or — for a watcher, whose dots carry no tone
     // — the team colour its filter gives them.
-    if (this.playerColors.size || this.observing) for (const d of dots) d.owner = this.dotColor(d.owner);
+    //
+    // A NEUTRAL IS NOT A SLOT and is left exactly as it arrived. Both neutrals reach us as
+    // owner -1, which the HUD reads as "paint this `FogColorCreepNormal`" — the game's own
+    // dark blue #000032 for every unowned unit (data/gameplayConstants.ts MINIMAP). Sent
+    // through `dotColor` it came back as `playerColor(-1)`, i.e. the install's BLACK neutral
+    // team-colour swatch (24 on 1.30.4, 12 on an older install) — a real number, ≥ 0, which
+    // the HUD then took modulo the twelve player colours and drew RED. So the creeps' dots
+    // went red the moment anything filled `playerColors` (any lobby that seats a colour) and
+    // on every observer's minimap. The swatch is right where it is asked for — a creep's
+    // team-coloured PARTS are black — and it was never a minimap-palette index.
+    if (this.playerColors.size || this.observing) for (const d of dots) if (d.owner >= 0) d.owner = this.dotColor(d.owner);
     return dots;
   }
 

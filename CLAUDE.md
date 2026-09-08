@@ -480,7 +480,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   Reincarnation holds the body off the field for `Ore1` "Reincarnation Delay" with
   `ReincarnationTarget` standing over it (the `"hold"` EffectAnim: Birth, Stand, Death), and
   **Hide takes itself** — a unit standing with no order melds at night after the row's own 1.5 s
-  Fade Duration.
+  Fade Duration — and a hiding creep GETS UP when its camp is attacked, since a meld breaks on
+  what the melded unit DOES and being ambushed is not something it did (`unhideCreep`, which
+  also takes back the Hold the meld parked it on). ENSNARE's net is picked per TARGET: the AIR
+  or the GROUND buff row (`Bena`/`Beng`, told apart by nothing but their `EditorSuffix`, with
+  the air one listed FIRST) and the Birth/Stand/Death set matching the SIZE of the body it
+  landed on (`bodySize` → `BuffFx.anim` → `sizedSeq`). And a friendly autocast buff — Bloodlust,
+  Frost Armor, Inner Fire — goes on the ally IN THE FIGHT and never on the caster while there
+  is anybody else: the Ogre Magi buffs the Ogres and takes its own last.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
   that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
   files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its

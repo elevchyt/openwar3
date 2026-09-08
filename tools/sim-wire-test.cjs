@@ -105,6 +105,12 @@ const hero = () => ({
       art: "Abilities\\Spells\\Orc\\CommandAura\\CommandAura.mdx", fx: [{ path: "cmd.mdx", attach: ["overhead"] }], delay: 0 },
     { kind: "invuln", group: "", buffId: "", timeLeft: 9.5, sourceId: 77, value: 0, value2: 0.5,
       art: "", fx: [{ path: "meld.mdx", attach: ["chest", "mount", "left"] }, { path: "second.mdx", attach: [] }], delay: 0.5, meld: true },
+    // …and one wearing a SIZE variant (BuffFx.anim — the ensnare family's Medium/Large clips),
+    // beside the two above that carry none: the key is written only when it is set, so both
+    // shapes have to survive the round trip.
+    { kind: "root", group: "ensnare", buffId: "Beng", timeLeft: 9, sourceId: 44, value: 1, value2: 0,
+      art: "Abilities\\Spells\\Orc\\Ensnare\\ensnareTarget.mdx",
+      fx: [{ path: "Abilities\\Spells\\Orc\\Ensnare\\ensnareTarget.mdx", attach: [], anim: "Large" }], delay: 0 },
   ],
   inventory: [
     { id: 5001, itemId: "pinv", charges: 1, cooldownLeft: 0 },

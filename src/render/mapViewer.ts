@@ -4639,6 +4639,11 @@ export class MapViewerScene {
   private buffFxParented = new Set<string>();
   /** buffFx keys still playing their Birth clip (settleBuffFx moves them to Stand). */
   private buffFxBirthing = new Set<string>();
+  /** buffFx keys whose model ships one set of clips PER TARGET SIZE, and which set this one
+   *  is playing — `BuffFx.anim`, "Medium" or "Large" (the ensnare family; see `sizedSeq`).
+   *  Kept beside the instance because the handoff to Stand and the Death on the way out
+   *  happen long after the fx record that named it has gone. */
+  private buffFxAnim = new Map<string, string>();
   /** Models playing out their Death clip before leaving the scene — buff art whose buff
    *  ended (dropBuffFx) and script effects a trigger destroyed (destroySpecialFx). */
   private dyingFx: Array<{ inst: SpawnInstance; ttl: number }> = [];
@@ -4979,8 +4984,8 @@ export class MapViewerScene {
    *  nothing advances its animation and it freezes on Death's first frame forever
    *  (measured: frame stuck at 2333, the start of DivineShieldTarget's [2333,3000]).
    *  Staying parented also matches the game, where the pop happens on the unit. */
-  private fadeOutFx(inst: SpawnInstance): void {
-    const death = this.seqIndex(inst, /death/i);
+  private fadeOutFx(inst: SpawnInstance, anim?: string): void {
+    const death = this.sizedSeq(inst, "death", anim);
     if (death < 0) {
       inst.setParent?.(null);
       inst.detach();
@@ -5003,7 +5008,9 @@ export class MapViewerScene {
     this.buffFx.delete(key);
     this.buffFxBirthing.delete(key);
     this.buffFxParented.delete(key);
-    this.fadeOutFx(inst);
+    const anim = this.buffFxAnim.get(key);
+    this.buffFxAnim.delete(key);
+    this.fadeOutFx(inst, anim);
   }
 
   /** Mark a persistent buff model live this frame: (re)position an existing instance,
@@ -5072,7 +5079,8 @@ export class MapViewerScene {
     // DivineShieldTarget.mdx and friends). Open on Birth, unlooped; settleBuffFx moves it
     // to a looping Stand the frame Birth ends, and dropBuffFx plays Death. Looping Birth
     // instead (what we used to do) replays the flash forever and the effect never settles.
-    const birth = this.seqIndex(inst, /birth/i);
+    if (fx.anim) this.buffFxAnim.set(key, fx.anim);
+    const birth = this.sizedSeq(inst, "birth", fx.anim);
     if (birth >= 0) {
       inst.setSequence(birth);
       inst.setSequenceLoopMode(0); // play once, then settleBuffFx takes over
@@ -5085,7 +5093,7 @@ export class MapViewerScene {
       // takes the first clip with a sane interval, picked **"nothing"**. So the Naga wore a
       // frozen yellow flare and no blue sphere at all, which is exactly the "wrong colour"
       // it looked like: the shield's own Blue_Star2/Blue_Glow2 layers only animate in Stand.
-      const idle = this.seqIndex(inst, /^stand/i);
+      const idle = this.sizedSeq(inst, "stand", fx.anim);
       inst.setSequence(idle >= 0 ? idle : this.effectSequence(inst));
       inst.setSequenceLoopMode(2);
     }
@@ -5099,7 +5107,7 @@ export class MapViewerScene {
     if (!this.buffFxBirthing.has(key)) return;
     if (!inst.sequenceEnded) return;
     this.buffFxBirthing.delete(key);
-    const stand = this.seqIndex(inst, /^stand/i);
+    const stand = this.sizedSeq(inst, "stand", this.buffFxAnim.get(key));
     if (stand < 0) return;
     inst.setSequence(stand);
     inst.setSequenceLoopMode(2); // the steady state: loop for the buff's lifetime
@@ -5373,6 +5381,36 @@ export class MapViewerScene {
   /** Index of the first sequence whose name matches `re` (-1 if none). */
   private seqIndex(inst: SpawnInstance, re: RegExp): number {
     return (inst.model?.sequences ?? []).findIndex((s) => re.test(s.name));
+  }
+
+  /**
+   * A model's Birth / Stand / Death clip IN THE SIZE THIS EFFECT WANTS.
+   *
+   * A few target-art models ship one set of clips per target size rather than one set full
+   * stop, qualified in the clip NAME: `ensnareTarget.mdx` is "Birth"/"Stand"/"Death",
+   * "Birth Medium"/"Stand Medium"/"Death Medium" and "Birth Large"/… — the same net drawn
+   * around a Peasant, a Grunt and a Kodo Beast. Which set a given cast wants is a fact about
+   * the body it landed on, so it rides on the buff (`BuffFx.anim`, filled in by the sim's
+   * `bodySize`) and this is where it is spent.
+   *
+   * The plain, unqualified clips ARE the small set, so no variant is a real answer and not a
+   * missing one — and every other buff model in the game ships only those, which is why an
+   * unknown variant falls back to them rather than showing nothing. Matching is
+   * case-insensitive because the data is: `ensnare_AirTarget.mdx` writes "Death medium".
+   */
+  private sizedSeq(inst: SpawnInstance, kind: "birth" | "stand" | "death", anim?: string): number {
+    if (anim) {
+      const sized = this.seqIndex(inst, new RegExp(`^${kind}\\s+${anim}`, "i"));
+      if (sized >= 0) return sized;
+    }
+    // The unqualified clip. Asked for exactly first — a bare name, or one wearing WC3's
+    // rarity suffix ("Stand - 1") — so that a model listing "Birth Medium" BEFORE "Birth"
+    // could not hand the small set the medium net. Then the loose match, which is what the
+    // callers asked before sizes existed: Death is `/death/i` unanchored there, because a
+    // handful of models name it "Dissipate"-style with a prefix.
+    const exact = this.seqIndex(inst, new RegExp(`^${kind}(\\s*-\\s*\\d+)?$`, "i"));
+    if (exact >= 0) return exact;
+    return this.seqIndex(inst, kind === "death" ? /death/i : new RegExp(`^${kind}`, "i"));
   }
 
   /** True for a unit type that carries the Sphere ability (only the Blood Mage in

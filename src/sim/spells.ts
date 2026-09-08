@@ -151,6 +151,13 @@ export interface SpellApi {
    *  several buffs picks between them off its own numbers, and the role matters as much as
    *  the flavour: the Drain's nine are caster/target/icon × life/mana/both. */
   buffFxOf(buffId: string): BuffFx[];
+  /** Of an ability's own `buffid1` list, the row for the domain a target is in — the AIR twin
+   *  for a flyer, the GROUND twin for anything else (`AbilityRegistry.domainBuff`). Ensnare's
+   *  `Bena,Beng` and Web's `Bwea,Bweb` are the whole family, and they wear different models. */
+  domainBuff(ids: readonly string[], flying: boolean): string;
+  /** How big a body is, as the SIZE QUALIFIER a target-art model names its clips with — ""
+   *  (small), "Medium" or "Large". See BuffFx.anim and world.ts `bodySize`. */
+  bodySize(u: SimUnit): string;
   /** Paint a temporary ground decal at a point — an `Splats\UberSplatData.slk` row id
    *  (Thunder Clap's `THND`). The row carries the texture, its half-width `Scale`, and
    *  the BirthTime/PauseTime/Decay fade the renderer plays it through. Which ability
@@ -302,6 +309,27 @@ export function fx(def: AbilityDef): { art: string; fx: BuffFx[]; buffId: string
   const buffId = buffIdOf(def);
   if (def.buffFx.length) return { art: def.buffArt, fx: def.buffFx, buffId };
   return { art: def.targetArt, fx: def.targetArt ? [{ path: def.targetArt, attach: [] }] : [], buffId };
+}
+
+/**
+ * The buff art for Ensnare and Web: the right one of the ability's AIR/GROUND buff rows, with
+ * the size of clips the caught body wants (see BuffFx.anim).
+ *
+ * `flying` overrides the target's own state, for Web — which lands on a flyer and leaves it on
+ * the ground. Returns the same `{ art, fx, buffId }` shape `fx()` does, so the caller spreads
+ * it exactly the same way.
+ */
+function netFx(
+  api: Pick<SpellApi, "domainBuff" | "buffFxOf" | "bodySize">,
+  def: AbilityDef,
+  lvl: AbilityLevel,
+  t: SimUnit,
+  flying = t.flying,
+): { art: string; fx: BuffFx[]; buffId: string } {
+  const buffId = api.domainBuff(lvl.buffs.length ? lvl.buffs : [buffIdOf(def)], flying);
+  const anim = api.bodySize(t);
+  const list = api.buffFxOf(buffId).map((f) => ({ ...f, anim }));
+  return { art: list[0]?.path ?? def.targetArt, fx: list, buffId };
 }
 
 /** An ability's buff row (`buffid<rank>`, first of the list). Rank is rarely worth passing:
@@ -1098,13 +1126,29 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 
-  // Ensnare (Raider) — bind an enemy to the ground: it cannot move (root pins movement
-  // to 1.0) for the duration (hero units get the shorter herodur). It can still attack.
+  /**
+   * Ensnare (Raider) — bind an enemy to the ground: it cannot move (root pins movement
+   * to 1.0) for the duration (hero units get the shorter herodur). It can still attack.
+   *
+   * THE NET IS THE ONE SPELL WHOSE ART IS PICKED PER TARGET, twice over, and both halves are
+   * in the data rather than here:
+   *
+   *  · WHICH MODEL — `[Aens] buffid1 = Bena,Beng`, an AIR row and a GROUND row wearing
+   *    `ensnare_AirTarget.mdx` (attached `chest,mount`) and `ensnareTarget.mdx`. `netFx`
+   *    asks the target which it is in. Note the air row is listed FIRST, so the ordinary
+   *    "buffs[0]" reading dressed every ensnared Footman in the flyer's net.
+   *  · WHICH CLIPS — both models ship Birth/Stand/Death three times over, plain, "Medium"
+   *    and "Large", for the size of the body caught in them (see BuffFx.anim / `bodySize`).
+   *
+   * The MISSILE needs nothing here: `[Aens] Missileart` is `EnsnareMissile.mdl` at
+   * `Missilespeed` 1500, so `resolveCast` throws it like any other unit-target spell with a
+   * missile and the effect below lands on impact.
+   */
   Aens: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.hostile(caster, t)) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "root", group: "ensnare", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: 1, ...fx(def) });
+    api.applyBuff(t, { kind: "root", group: "ensnare", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: 1, ...netFx(api, def, lvl, t) });
   },
 
   /**
@@ -1130,7 +1174,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.hostile(caster, t)) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "root", group: "web", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: 1, ...fx(def) });
+    // …and the same pair of buff rows Ensnare has (`[Aweb] buffid1 = Bwea,Bweb`, the air and
+    // ground twins), read the same way. The target is a flyer by definition here — Web's
+    // `targs1` is `air,enemy,neutral` — but it is a flyer being PULLED DOWN, and the ground
+    // is where it spends the buff, so `netFx` asks after the pull: `WebTarget.mdx`, not
+    // `Web_AirTarget.mdx`.
+    api.applyBuff(t, { kind: "root", group: "web", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: 1, ...netFx(api, def, lvl, t, false) });
   },
 
   // Lightning Shield (Shaman) — a shield of electricity around the TARGET: the target is

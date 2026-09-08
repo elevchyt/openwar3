@@ -224,6 +224,15 @@ console.log("\na camp cleared in the fog keeps its marker until you go and look"
   const other = set.viewpointFor(2);
   set.setStartFog("explored");
   check("another player who never looked still has it", camps.markers(other).length, 1);
+
+  // …and NO FOG ON THE GROUND is looking at it. `watching` asks `fogBlocksAt`, which is the
+  // fog's own answer and not a unit's: with the fog switched off (`FogEnable(false)`, the
+  // option, the dev `?fog=` flag) every explored cell reads Visible, so the player can see
+  // there is nothing standing there and the marker goes — no scout required.
+  set.setFogEnabled(false);
+  check("fog off: the empty camp is plainly empty", camps.markers(other).length, 0);
+  set.setFogEnabled(true);
+  check("…and knowing it is sticky, as ever", camps.markers(other).length, 0);
 }
 
 // ISSUE #71. A camp marker is a difficulty rating for a camp you have NOT fought — map-public

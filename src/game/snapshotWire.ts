@@ -50,7 +50,7 @@ export type WireSnapshot = Omit<WorldSnapshot, "units" | "projectiles"> & { hot:
 /** Bumped when the binary layout changes. Carried in the blob so a mismatched decode fails
  *  loudly at the header rather than as garbage fields three units in. The relay's
  *  `PROTOCOL_VERSION` still gates the SESSION; this gates the blob. */
-const CODEC_VERSION = 3; // 3: a pending build carries its `paid` flag (2: buffs carry their `B….` row id)
+const CODEC_VERSION = 4; // 4: a buff's art carries its SIZE variant (3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
 
 const TWO_PI = Math.PI * 2;
 
@@ -415,6 +415,9 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
     w.u8(b.fx.length);
     for (const fx of b.fx) {
       w.u16(w.intern(fx.path));
+      // Which SIZE of the model's clips to play (BuffFx.anim) — "" for all but the ensnare
+      // family, and interned, so it costs one repeated table entry for the whole payload.
+      w.u16(w.intern(fx.anim ?? ""));
       w.u8(fx.attach.length);
       for (const at of fx.attach) w.u16(w.intern(at));
     }
@@ -621,10 +624,13 @@ function readUnit(r: Reader): UnitSnapshot {
     const nFx = r.u8();
     for (let j = 0; j < nFx; j++) {
       const path = r.str();
+      const anim = r.str();
       const attach: string[] = [];
       const nAt = r.u8();
       for (let k = 0; k < nAt; k++) attach.push(r.str());
-      b.fx.push({ path, attach });
+      // …set only when there is one, so a decoded buff deep-equals the sim's own (the sim
+      // leaves the key off everywhere but the ensnare family).
+      b.fx.push(anim ? { path, attach, anim } : { path, attach });
     }
     s.buffs.push(b);
   }

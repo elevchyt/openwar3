@@ -97,6 +97,27 @@ one of them, and the ability's data says which:
   the ROLE picks the trio and the FLAVOUR picks within it. `buffid1` alone is `Bdcb` — the
   caster's life-drain art — which put a green life-drain swirl on a mana drain's victim until
   this was read properly.
+* **Ensnare and Web** — `Bena,Beng` and `Bwea,Bweb`: an AIR row and a GROUND row, one net for
+  a body in the air (`ensnare_AirTarget.mdx`, attached `chest,mount`) and one for a body on
+  the ground (`ensnareTarget.mdx`, at the origin). Nothing in AbilityData says which is which:
+  the marker is the STRINGS file's `EditorSuffix`, " (Air)" / " (Ground)", which is what
+  `AbilityRegistry.domainBuff` reads. **The air row is listed first in both**, so the ordinary
+  `buffs[0]` reading dressed every ensnared Footman in the flyer's net. Web takes the GROUND
+  row for a flying target, because Web's whole point is that the target is no longer flying.
+
+### …and a model may ship one set of clips PER TARGET SIZE
+
+`ensnareTarget.mdx` is not Birth/Stand/Death — it is Birth/Stand/Death, "Birth Medium"/"Stand
+Medium"/"Death Medium" and "Birth Large"/"Stand Large"/"Death Large": one net drawn at three
+sizes, because it goes over a Peasant and over a Kodo Beast. The plain, unqualified clips ARE
+the small set. (`ensnare_AirTarget.mdx` is the same, down to a lower-case "Death medium" —
+match case-insensitively.)
+
+Which set a given cast wants is a fact about the body it landed on, so it is decided where
+that is known (`SimWorld.bodySize`) and carried on the buff as `BuffFx.anim`; the renderer
+spends it in `sizedSeq`, which falls back to the plain clips for every other model in the
+game. WC3 states no size CLASS for a unit anywhere — see docs/creeps.md for the two numbers
+the classes are read off and the note that the thresholds are ours.
 
 ## 3. Lightning — a ribbon, not a model
 

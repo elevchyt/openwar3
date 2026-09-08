@@ -46,6 +46,21 @@ export interface BuffFx {
    *  model's attachment node names ("Chest Mount Left Ref"). [] = no attachment
    *  named, so the effect just sits at the unit's origin. */
   attach: string[];
+  /**
+   * Which SIZE of the model's clips to play — the qualifier its animation names carry.
+   *
+   * A handful of target-art models ship one set of clips per target size instead of one set
+   * full stop: `ensnareTarget.mdx` is Birth/Stand/Death, "Birth Medium"/"Stand Medium"/
+   * "Death Medium" and "Birth Large"/"Stand Large"/"Death Large" (`ensnare_AirTarget.mdx` the
+   * same, down to a lower-case "Death medium"), because a net thrown over a Peasant and one
+   * thrown over a Kodo Beast are the same model at three sizes. The plain, unqualified clips
+   * are the SMALL set, so "" is a real value and the default.
+   *
+   * Filled in by whoever applies the buff, because only they know what it landed ON (sim
+   * world.ts `bodySize`); the renderer just plays the clip that matches, falling back to the
+   * plain one on any model that ships only the one set — which is all but a few of them.
+   */
+  anim?: string;
 }
 
 /** A buff — its own object type in the data, with its own `[B….]` section in the same
@@ -67,6 +82,13 @@ export interface BuffDef {
   name: string; // Bufftip — the tooltip title
   tip: string; // Buffubertip — the tooltip body (WC3 markup intact)
   fx: BuffFx[]; // Targetart(s) — the models it hangs on its holder (see buffFxOf)
+  /** `EditorSuffix` — what the World Editor prints after the name to tell two rows with the
+   *  SAME name apart. Nearly always cosmetic, and load-bearing for exactly one family: the
+   *  buffs that come in an AIR twin and a GROUND twin. Ensnare's `buffid1` is `Bena,Beng` and
+   *  Web's is `Bwea,Bweb` — one row each per domain, wearing `ensnareTarget.mdx` and
+   *  `ensnare_AirTarget.mdx` — and this suffix (" (Air)" / " (Ground)") is the only thing in
+   *  the data that says which is which. See `AbilityRegistry.domainBuff`. */
+  suffix: string;
 }
 
 /** Per-level numbers pulled from AbilityData's level-indexed columns. */
@@ -843,6 +865,32 @@ export class AbilityRegistry {
   buffFx(buffId: string): BuffFx[] {
     return this.buff(buffId)?.fx ?? [];
   }
+
+  /**
+   * Of an ability's own buff list, the row for the DOMAIN the target is in — the air twin for
+   * a flyer, the ground twin for anything else.
+   *
+   * Two abilities in 1.30 list a pair like this, and both are the same spell aimed two ways:
+   * Ensnare (`buffid1 = Bena,Beng`) and Web (`Bwea,Bweb`). Each pair is one buff wearing two
+   * MODELS — `ensnareTarget.mdx` for a body standing on the ground, `ensnare_AirTarget.mdx`
+   * for one in the air, with its own `chest,mount` attachment — and the ONLY thing in the data
+   * that says which row is which is the strings file's `EditorSuffix`, " (Air)" / " (Ground)".
+   *
+   * Note the ORDER: the air row is listed FIRST in both. Taking `buffs[0]` — which is what
+   * every other ability in the game wants, and what `buffIdOf` still does — therefore dressed
+   * every ensnared Footman in the net meant for a Gargoyle's chest.
+   *
+   * Falls back to the first id, so a list with no such suffixes (every other ability) answers
+   * exactly as it did before.
+   */
+  domainBuff(ids: readonly string[], flying: boolean): string {
+    const want = flying ? "air" : "ground";
+    for (const id of ids) {
+      const suffix = this.buff(id)?.suffix.toLowerCase() ?? "";
+      if (suffix.includes(want)) return id;
+    }
+    return ids[0] ?? "";
+  }
   /** A buff's own row — icon/name/tooltip for the info panel's Status row.
    *
    *  Looked up CASE-INSENSITIVELY, because Blizzard's own data does not agree with itself:
@@ -1035,6 +1083,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       name: rawTip(s ? str(s, "Bufftip") : "") || id,
       tip: rawTip(s ? str(s, "Buffubertip") : ""),
       fx: buffFxOf(func, id),
+      suffix: s ? str(s, "EditorSuffix") : "",
     });
   }
   return new AbilityRegistry(defs, new Map(), buffs);
