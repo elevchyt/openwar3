@@ -77,6 +77,11 @@ const DIALOG_TABLE = "UI\\SoundInfo\\DialogSounds.slk"; // campaign dialogue lin
 // ambience beds, which we don't synthesize.)
 const LABEL_TABLES = ["ui", "ack", "anim", "combat", "ability", "ambience", "dialog"] as const;
 
+/** The SND event code a worker's model fires on every blow of its "Stand Work" clip —
+ *  AnimLookups `AREP` → AnimSounds `Repair`. Building and repairing are one gesture in WC3
+ *  (`Ahrp`/`Arep`/`Arst`/`Aren` are the same button), and this is its sound. */
+const REPAIR_EVENT = "AREP";
+
 /** The playback parameters a SoundInfo row carries — what `SetSoundParamsFromLabel`
  *  copies onto a `sound` handle, and what `CreateSoundFromLabel` builds one from.
  *  `volume` is the raw SLK 0–127 scale, because that is JASS's scale too
@@ -233,6 +238,12 @@ interface ModelSounds {
    *  the ability's own, uppercased (`SNDXAEFK` on HeroWarden.mdx is `[AEfk]` Fan of Knives),
    *  and a model that carries several of them must be asked for the right one. */
   abilityByCode: Map<string, Clip>;
+  /** WHEN each event fires, in model-global milliseconds, keyed by the same 4-char code.
+   *  The MDX writes an event object's tracks on the one timeline its sequences are intervals
+   *  on, so an event and the clip it belongs to can be paired by containment — which is how a
+   *  looping sound (the builder's hammer, `AREP`) gets both its period and its phase without
+   *  the renderer having to watch the instance's frame. See unitAnims.eventCycle. */
+  eventTimes: Map<string, number[]>;
 }
 
 /** A live `sound` handle the script started (StartSound). The nodes arrive a tick late —
@@ -604,6 +615,32 @@ export class SoundBoard {
     if (clips.length) this.playPool(clips[(Math.random() * clips.length) | 0], "impact", at);
   }
 
+  /** Play the HAMMER a worker's model swings while it builds or repairs — the SND `AREP`
+   *  event object every builder in the game carries (Peasant.mdx, Peon.mdx), resolved through
+   *  the same chain a gunshot is: AnimLookups `AREP` → AnimSounds `Repair` →
+   *  Abilities\Spells\Other\Repair\PeonRepair1-3.wav, three variants at ±10 % pitch.
+   *
+   *  On the "impact" channel rather than the uncapped "spell" one, because that is what the
+   *  row itself asks for: `Repair` is an AnimSounds row on channel 11 with CHANNELFULLPREEMPT,
+   *  so it is budgeted against the other world clangs and steals a slot when they are full —
+   *  the same treatment playModelAttack gives a rifle.
+   *  @returns whether the model carried the event (and the blow was cued). */
+  playRepairBlow(modelArt: string, at?: SoundPos): boolean {
+    if (!modelArt) return false;
+    const clip = this.resolveModelSounds(modelArt).abilityByCode.get(REPAIR_EVENT);
+    if (!clip) return false;
+    this.playPool(clip, "impact", at);
+    return true;
+  }
+
+  /** The model-global times (ms) at which `modelArt` fires its `AREP` hammer — one per work
+   *  clip the event is parked in. Empty for a model that carries none, which is the authentic
+   *  silence rather than a gap: the Acolyte authors no such event (it summons and walks away)
+   *  and neither does the Wisp. Paired with the clip's own interval by unitAnims.eventCycle. */
+  repairBlowTimes(modelArt: string): number[] {
+    return (modelArt ? this.resolveModelSounds(modelArt).eventTimes.get(REPAIR_EVENT) : undefined) ?? [];
+  }
+
   /** Play the crash a MODEL carries for its own death — the SND "D" event object. For the
    *  things with no sound set to ask instead: every gate in the game holds `SNDXDGAT` →
    *  AnimLookups `DGAT` → AnimSounds `GateDeath` → GateEpicDeath.wav, fired 33 ms into its
@@ -742,7 +779,7 @@ export class SoundBoard {
     const key = modelArt.toLowerCase();
     const cached = this.modelSounds.get(key);
     if (cached) return cached;
-    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map() };
+    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map(), eventTimes: new Map() };
     this.modelSounds.set(key, out); // memoize up-front so a missing/broken model isn't re-parsed
     const bytes = this.vfs.rawBytes(modelArt);
     if (!bytes) return out;
@@ -763,11 +800,14 @@ export class SoundBoard {
       if (!label) continue;
       const clip = this.resolve("anim", label); // AnimSounds row → clip (vol/pitch/3D/dist)
       if (!clip) continue;
+      const code = id.toUpperCase();
+      const times = out.eventTimes.get(code) ?? out.eventTimes.set(code, []).get(code)!;
+      for (const t of evt.tracks) times.push(t); // one track per clip the event is parked in
       if (cat === "K") out.attack.push(clip);
       else if (cat === "D") out.death.push(clip);
       else if (cat === "A") {
         out.ability.push(clip);
-        out.abilityByCode.set(id.toUpperCase(), clip);
+        out.abilityByCode.set(code, clip);
       }
       else if (/launch/i.test(label)) out.launch.push(clip);
       else out.impact.push(clip); // "…Hit"/"…Impact", or a single generic missile sound

@@ -610,6 +610,34 @@ export function pickSequence(a: AnimSet, u: RenderUnit, moving: boolean): number
 }
 
 
+/**
+ * WHERE IN A CLIP a model's SND event lands, and how often it comes round.
+ *
+ * `times` are the model-global milliseconds the event fires at (SoundBoard.repairBlowTimes
+ * reads them straight off the MDX's event object), and a sequence is an interval on that very
+ * same timeline — so the track belonging to THIS clip is simply the one inside it, and its
+ * phase is the distance from the clip's start. Peasant.mdx parks one `SNDXAREP` track in each
+ * of its three "Stand Work" clips (191567 inside [191333, 191933]), so the hammer lands 234 ms
+ * into a 600 ms swing rather than at the top of the loop; Peon.mdx does the same at 300 of 567.
+ *
+ * Seconds out, milliseconds in. Null when the clip holds no such event — which is a real
+ * answer and not a gap (an Acolyte's work pose carries none), so the caller stays silent.
+ */
+export function eventCycle(inst: SeqSource, idx: number, times: number[]): { period: number; phase: number } | null {
+  if (idx < 0 || !times.length) return null;
+  const iv = inst.model.sequences[idx]?.interval;
+  if (!iv || iv.length < 2) return null;
+  const [start, end] = [iv[0], iv[1]];
+  const period = (end - start) / 1000;
+  if (period <= 0) return null;
+  // The FIRST track inside the interval: a work clip holds exactly one blow, and a model that
+  // wrote two would still be led by the earlier of them.
+  for (const t of times) {
+    if (t >= start && t <= end) return { period, phase: (t - start) / 1000 };
+  }
+  return null;
+}
+
 export function seqDuration(inst: SeqSource, idx: number, fallback: number): number {
   if (idx < 0) return fallback;
   const iv = inst.model.sequences[idx]?.interval;

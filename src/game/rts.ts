@@ -21,6 +21,7 @@ import {
   walkAnim,
   pickSequence,
   seqDuration,
+  eventCycle,
 } from "../render/unitAnims";
 import { groupTargets, ringTargets, followOffsets } from "./formations";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
@@ -276,6 +277,11 @@ interface Entry {
   curRate: number; // last playback rate applied (avoid redundant sets)
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
+  /** Seconds until this worker's next HAMMER BLOW lands (build/repair). -1 = not hammering,
+   *  so the next blow re-arms off the work clip; `workBlowPeriod` 0 = this model carries no
+   *  hammer event and never will. See tickWorkBlow. */
+  workBlowT: number;
+  workBlowPeriod: number; // the work clip's own length — how often the hammer comes round
   castAnimT: number; // >0 while a cast animation is held (skips the normal picker)
   /** The held clip outlives the CAST: it neither ends with the order nor breaks on movement
    *  (Bladestorm — see ANIM_FOR_DURATION). Cleared when castAnimT runs out. */
@@ -2936,6 +2942,8 @@ export class RtsController {
         curRate: 1,
         lastSwingSeq: -1,
         lastChopSeq: -1,
+        workBlowT: -1,
+        workBlowPeriod: 0,
         castAnimT: 0,
         castAnimSticky: false,
         castAnimHeld: false,
@@ -3065,6 +3073,8 @@ export class RtsController {
       curRate: 1,
       lastSwingSeq: -1,
       lastChopSeq: -1,
+      workBlowT: -1,
+      workBlowPeriod: 0,
       castAnimT: 0,
         castAnimSticky: false,
         castAnimHeld: false,
@@ -3380,6 +3390,8 @@ export class RtsController {
       curRate: 1,
       lastSwingSeq: -1,
       lastChopSeq: -1,
+      workBlowT: -1,
+      workBlowPeriod: 0,
       castAnimT: 0,
         castAnimSticky: false,
         castAnimHeld: false,
@@ -3462,6 +3474,7 @@ export class RtsController {
     entry.curSeq = -1;
     entry.lastSwingSeq = -1;
     entry.lastChopSeq = -1;
+    entry.workBlowT = -1; // the hammer's clock is the OLD body's clip — re-arm off the new one
     entry.upgradeBirth = undefined; // resolved against the OLD body's sequence list
     if (entry.anims.stand >= 0) {
       instance.setSequence(entry.anims.stand);
@@ -4065,6 +4078,7 @@ export class RtsController {
           e.unit.instance.setSequenceLoopMode(SequenceLoopMode.Loop);
         }
       }
+      this.tickWorkBlow(e, u, dt); // the hammer, on the clock the clip just picked keeps
     }
     if (this.forgotten.length) {
       for (const e of this.forgotten) this.dropEntry(e);
@@ -4075,6 +4089,52 @@ export class RtsController {
     this.updateHealthBars();
     this.overlays.syncHoverTip(this.computeHoverTip());
     perfLog.end("sim.overlays");
+  }
+
+  /**
+   * The HAMMER a worker swings while it builds or repairs — one blow per turn of its work clip.
+   *
+   * WC3 writes this sound down in the MODEL, exactly as it writes a rifle's shot: Peasant.mdx
+   * and Peon.mdx each carry an `SNDXAREP` event object with one track parked inside each of
+   * their "Stand Work" clips, and that code resolves the same way every model sound does —
+   * AnimLookups `AREP` → AnimSounds `Repair` → Abilities\Spells\Other\Repair\PeonRepair1-3.wav.
+   * Building and repairing are one gesture in the data (`Ahrp`/`Arep`/`Arst`/`Aren` are the same
+   * button, and `pickSequence` gives both the same clip), so they are one sound here too.
+   *
+   * On a CLOCK rather than off the instance's frame, which is the obvious way and the wrong one:
+   * mdx-m3-viewer only advances an instance the camera can SEE (ModelInstance.update bails on
+   * `isVisible`), while the `Repair` row's own DistanceCutoff is 3000 — so a frame-driven blow
+   * would fall silent the moment you scrolled off your own base, which is exactly when a player
+   * listens for it. The clip supplies the period and the event's track its phase (the Peasant's
+   * blow lands 234 ms into a 600 ms swing, the Peon's 300 into 567), so the hammer still connects
+   * where the model says it does rather than at the top of the loop.
+   *
+   * YOU DO NOT HEAR A HAMMER YOU CANNOT SEE — `e.hidden` is the same gate the axe takes
+   * (playImpacts' chop loop), and here it also covers the Peon that has vanished INSIDE its
+   * building: WC3 does not animate a hidden unit, so it fires no event either, and what carries
+   * an orc site is the building's own construction bed instead.
+   *
+   * A model carrying no such event stays silent, which is the authentic answer and not a gap:
+   * the Acolyte authors none (it summons and walks away — docs/undead.md) and neither does the
+   * Wisp (it does not hit anything; see pickSequence's note on "Stand Lumber").
+   */
+  private tickWorkBlow(e: Entry, u: RenderUnit, dt: number): void {
+    const hammering = (u.constructing > 0 || !!u.repair?.active) && e.anims.build >= 0 && e.curSeq === e.anims.build;
+    if (!hammering || e.hidden || !this.sounds) {
+      e.workBlowT = -1; // re-armed off the work clip the next time it picks the hammer up
+      return;
+    }
+    const model = this.defOf(e.simId)?.model ?? "";
+    if (e.workBlowT < 0) {
+      const cycle = eventCycle(e.unit.instance, e.anims.build, this.sounds.repairBlowTimes(model));
+      e.workBlowPeriod = cycle?.period ?? 0; // 0 = this model has no hammer to swing
+      e.workBlowT = cycle?.phase ?? 0;
+    }
+    if (e.workBlowPeriod <= 0) return;
+    e.workBlowT -= dt;
+    if (e.workBlowT > 0) return;
+    e.workBlowT += e.workBlowPeriod;
+    this.sounds.playRepairBlow(model, { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) });
   }
 
   /** The sim removed this unit: play its death animation, then decay the corpse
