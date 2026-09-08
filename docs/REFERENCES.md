@@ -176,6 +176,18 @@ used is the one inside `Chains_silver.blp`.
   - [Collision Shapes — how to make your model selectable](https://www.hiveworkshop.com/threads/collision-shapes-how-to-make-your-model-selectable.156930/)
   - [Collision Size](https://www.hiveworkshop.com/threads/collision-size.309631/)
   - [Pathing/collision size values into real values](https://www.hiveworkshop.com/threads/pathing-collision-size-values-into-real-values.271205/)
+- **Creep camp behaviour** — indexed in [`creeps.md`](creeps.md), which quotes each rule next to
+  its code. [warcraft3.info 176, "Interacting With Creeps"](https://warcraft3.info/articles/176/interacting-with-creeps)
+  (the threat/retarget rule, the five triggered creep abilities: "Ensnare is cast on non-hero
+  units that enter the creep's cast range", "creeps tend to prioritize summoned units", Lightning
+  Shield "touching at least two of your other units"); [warcraft-gym, "A summary on creep
+  mechanics and how to abuse them"](https://warcraft-gym.com/a-summary-on-creep-mechanics-and-how-to-abuse-them/)
+  ("Creeps lvl 7 or over always attack the lowest hitpoint unit in reach", Frost Armor "on the
+  unit being attacked", Slam at 3); [Wowpedia "Creep"](https://wowpedia.fandom.com/wiki/Creep)
+  (the classic creep-basics text, the 1.03/1.10 patch notes, "500 or 200", the 60 % tower
+  retreat); [Hive 15660 "Creep Camp"](https://www.hiveworkshop.com/threads/creep-camp.15660/)
+  (the editor's "camp: (200)"). Gotchas: warcraft3.info is JS-rendered — fetch the article's HTML
+  with a browser `User-Agent`; reddit and YouTube are unreachable from the dev box.
 - **Orders / command system** overview: [WC3 basic commands & orders (YouTube)](https://www.youtube.com/watch?v=EehNLL7yYng)
 - **Core game rules (buildings, workers, rally, upkeep, etc.)** — the official
   classic WC3 "basics" pages are the ground truth for how the game actually works;

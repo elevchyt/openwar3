@@ -355,6 +355,8 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // -- Mountain King --
   AHtb: { target: "unit" }, // Storm Bolt — hammer: damage + stun
   AHtc: { target: "none" }, // Thunder Clap — PBAoE damage + slow
+  ACtb: { target: "unit" }, // Hurl Boulder — the golems' Storm Bolt, under its own code (`Ctb1`)
+  ACtc: { target: "none" }, // Slam — the golems' and Thunder Lizard's Thunder Clap, likewise (`Ctc1..4`; `ACt2` is its alias)
   AHbh: { target: "passive" }, // Bash — chance to stun on attack
   AHav: { target: "none" }, // Avatar — self-buff (HP/damage/immunity)
   // -- Archmage --

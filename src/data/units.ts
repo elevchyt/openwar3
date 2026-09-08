@@ -431,6 +431,25 @@ export interface UnitDef {
   classification: string[]; // UnitBalance "type": mechanical/undead/peon/ancient/… (lowercased)
 }
 
+/**
+ * Is ability slot `id` (base `code`) the one `UnitAbilities.slk`'s `auto` column arms at birth?
+ *
+ * The column names the BASE CODE for a creep and the slot id for a player unit — and for a
+ * player unit the two are the same string, which is how reading it as a slot id ever worked:
+ *
+ *     hmpr  auto=Ahea  abilList=Ahea,Ainf,Adis,Aihn      (the Priest: id === code)
+ *     nomg  auto=Ablo  abilList=ACbb                     (the Ogre Magi: ACbb IS code Ablo)
+ *     nkog  auto=Aslo  abilList=ACsw,ACdm                 (the Kobold Geomancer)
+ *     ndtp  auto=Anhe  abilList=Anh1                      (the Dark Troll Shadow Priest)
+ *
+ * Every creep caster in the file is written the second way, so `def.autoAbility === id` armed
+ * nothing on any of them: the Ogre Magi never Bloodlusted, the Geomancer never Slowed, the
+ * Shadow Priest never Healed. Matched on either, in the order the column is read.
+ */
+export function autoArmed(def: { autoAbility: string }, id: string, code: string): boolean {
+  return def.autoAbility !== "" && (def.autoAbility === id || def.autoAbility === code);
+}
+
 interface Row {
   string(key: string): string | undefined;
 }

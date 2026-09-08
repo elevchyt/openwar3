@@ -462,6 +462,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   ship lands on the beach). Unload All (`Adro`/`Sdro`) is a POINT order, "at a target location",
   one body per `Dur1` = 0.5 s; a refused unload says `Cantland` "Unable to land there." — at the
   click for a slot, and through `drainRefusals` when the transport only finds out on arrival.
+- **Creeps:** read [`docs/creeps.md`](docs/creeps.md) before touching `tickCreep`, `threatTier` /
+  `creepScore`, the creep caster ([`src/ai/creeps.ts`](src/ai/creeps.ts)) or creep seeding in
+  `trySeed`. A camp is a handful of measured RULES rather than numbers: **Camp (200)** is the
+  editor's acquisition setting and why most camps are "passive"; the threat ladder puts a SUMMON
+  first and then whatever is ATTACKING the camp (which is the retargeting trick every guide
+  teaches), and a level-7+ creep ignores it for the lowest hit points in reach; a poisoner
+  spreads itself around before fighting; a resting camp ignores a flyer under a plain move;
+  Ensnare goes on what ENTERS its reach after the fight starts. A creep casts only while its
+  camp is fighting — Heal excepted. Three wiring traps cost every creep ability at once:
+  map-placed creeps must be seeded WITH their card (`trySeed`), the `auto` column names the BASE
+  CODE on a creep (`autoArmed`), and a neutral owner meets every `Requires` (`techMeets`).
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
   that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
   files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its

@@ -6,7 +6,7 @@ import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, 
 import { BlightGrid } from "./blight";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
-import { slotMissileArt, type UnitDef, type UnitRegistry } from "../data/units";
+import { slotMissileArt, autoArmed, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
 import { RACE_INDEX, workerProfileFor, type PlayableRace } from "../data/races";
 import { type UpgradeRegistry } from "../data/upgrades";
@@ -1876,6 +1876,13 @@ export interface SimUnit {
   returning: boolean; // leashing back to the guard point (ignores enemies until home)
   campHelper: boolean; // fighting only because a camp-mate called for help (may not call for help itself)
   campGuard: boolean; // war3mapUnits.doo targetAcquisition -2 ("Camp") — guards its ground, deaf to new construction
+  /** Was this creep's camp in a fight on the previous tick? The edge `ensnareSeen` is taken on. */
+  creepFighting: boolean;
+  /** For a creep carrying Ensnare: the enemies already inside its cast range the moment its
+   *  camp's fight BEGAN, who it will not ensnare. warcraft3.info 176: "Ensnare is cast on
+   *  non-hero units that ENTER the creep's cast range… If a unit is within the cast range while
+   *  the camp is being started, it therefore won't be ensnared." Null between fights. */
+  ensnareSeen: Set<number> | null;
 
   strayT: number; // seconds chasing past GUARD_DISTANCE without being attacked (→ return)
   returnBestDist: number; // closest-to-home distance reached this return (stuck detection)
@@ -2547,6 +2554,25 @@ const CREEP_CALL_FOR_HELP = MISC_GAME.CreepCallForHelp; // camp cohesion: one ag
 // apart from anyone's acquisition range: this is why a gold mine's guards charge a Peasant
 // who starts an expansion from further out than they'd have noticed him merely walking by.
 const BUILDING_PLACEMENT_NOTIFY_RADIUS = MISC_DATA.BuildingPlacementNotifyRadius;
+/**
+ * A "Camp" creep's acquisition range. The World Editor's per-unit Target Acquisition radio has
+ * three settings — Normal (the type's own `acquire`, 500 on nearly every creep), **Camp (200)**
+ * and a custom value — and war3mapUnits.doo records them as -1 / -2 / the number, so the 200 is
+ * the editor's and never in the map. Melee mapmakers put Camp on every camp that is not on a
+ * gold mine, and it is the whole of what players mean by a "passive" camp: "Creeps have a
+ * different auto-acquire range which is usually set at a value of 500 or 200. The 200 value is
+ * frequently used as this prevents creeps from being immediately hostile from a distance"
+ * (Wowpedia, Creep); "you only need to click on the unit and put the target acquisition range
+ * to camp: (200)" (hiveworkshop 15660). Read as the weapon's 500 instead, every camp on the
+ * map charged anything that walked within 500 of it.
+ */
+export const CREEP_CAMP_ACQUIRE_RANGE = 200;
+/** The creep level from which a creep aims like the melee AI — see `creepScore`. */
+const CREEP_SMART_LEVEL = 7;
+/** A creep breaks off a TOWER it is chewing on below this fraction of its own bar — see tickCreep. */
+const CREEP_TOWER_FLEE_HP = 0.6;
+/** The poison-on-hit codes whose carriers spread themselves around — see `spreadsPoison`. */
+const POISON_ATTACK_CODES = new Set(["Aven", "Aspo", "Apoi", "Apo2"]);
 const CREEP_HOME_EPS = 64; // within this of the guard point counts as "home" (reset + can sleep)
 // Hysteresis for the "walk back to post" trigger (mirrors ATTACK_LEASH / FOLLOW_LEASH):
 // a return FINISHES at CREEP_HOME_EPS and settle() then snaps the creep to the grid —
@@ -2977,6 +3003,16 @@ export class SimWorld {
    *  upgrades work: they grant no stat, they simply satisfy an ability's requirement. Ids with
    *  no requirements pass, so this is safe to ask of anything. */
   techMeets(player: number, id: string): boolean {
+    // A NEUTRAL owner (our -1: Neutral Hostile and the map's creeps) meets everything. The
+    // creep copies of upgrade-gated abilities carry the same `Requires` the racial row does —
+    // `[ACen] Requires=Roen` (Ensnare (Creep) wants the orc Ensnare research), `[ACwb]`
+    // Web's the same — and no neutral player ever researches anything, so read literally the
+    // Forest Troll Trapper, the Murloc Huntsman and every other trapper in the game could
+    // never ensnare anyone. They do, in every melee match ever played; and the same rule seen
+    // from the other side is the known quirk that a CHARMED trapper's Ensnare goes dark for a
+    // player who lacks the upgrade — the requirement is real, and it is the neutral owner
+    // that is exempt from it, not the row.
+    if (player < 0) return true;
     return !this.tech || this.tech.meets(player, id);
   }
 
@@ -6519,7 +6555,7 @@ export class SimWorld {
     if (!this.abilities) return out;
     for (const id of def.abilities) {
       const a = this.abilities.get(id);
-      if (a && KNOWN_ABILITIES[a.code]) out.push({ id, code: a.code, level: 1, cooldownLeft: 0, autocastOn: def.autoAbility === id });
+      if (a && KNOWN_ABILITIES[a.code]) out.push({ id, code: a.code, level: 1, cooldownLeft: 0, autocastOn: autoArmed(def, id, a.code) });
     }
     for (const id of def.heroAbilities) {
       const a = this.abilities.get(id);
@@ -6894,6 +6930,8 @@ export class SimWorld {
       | "returning"
       | "campHelper"
       | "campGuard"
+      | "creepFighting"
+      | "ensnareSeen"
       | "strayT"
       | "returnBestDist"
       | "returnStuckT"
@@ -7144,6 +7182,8 @@ export class SimWorld {
       returning: false,
       campHelper: false,
       campGuard: false,
+      creepFighting: false,
+      ensnareSeen: null,
       strayT: 0,
       returnBestDist: 0,
       returnStuckT: 0,
@@ -11636,6 +11676,11 @@ export class SimWorld {
       // (Heal/Inner Fire/Frost Armor all carry it — verified in the real game data).
       const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
       const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
+      // A CREEP's standing orders fire only while its camp is fighting (creepInFight) — a
+      // Slow sought out beyond the camp's aggro range would pull the caster after a passer-by
+      // the camp never chose, and a Bloodlust on the camp at rest is a buff nobody in the real
+      // game ever sees on an idle camp. The heals are the exception, stated there.
+      if (u.isCreep && !HEAL_SPELLS.has(def.code) && !this.creepInFight(u)) continue;
       const range = inPlace ? lvl.castRange : this.autocastSearchRange(u, lvl.castRange);
       // A DISPEL IS NEITHER a friendly autocast nor a hostile one — it is BOTH, and it wants a
       // target with something on it. See `dispelAutocastTarget`; Abolish Magic (`Aadm`, the
@@ -11702,12 +11747,20 @@ export class SimWorld {
 
   private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean, flags: string[] = []): SimUnit | null {
     let best: SimUnit | null = null;
-    let bestScore = friendly ? 0.999 : Infinity;
+    let bestScore = friendly ? 1.999 : Infinity;
+    // A friendly BUFF (Frost Armor, Inner Fire, Bloodlust — anything friendly that is not a
+    // heal) goes on the ally UNDER ATTACK first, and only then on the most hurt: "Creeps will
+    // cast frost armor on the unit being attacked" (warcraft-gym, "A summary on creep
+    // mechanics"), which is the standing rule for the ability's own autocast too, and what makes
+    // the guide's trick work — hit another creep first and the armor lands there, not on the
+    // wizard you want. A HEAL keeps its own reading: the most wounded, whoever is on it.
+    const targeted = friendly && !HEAL_SPELLS.has(code) ? this.targetedIds() : null;
     for (const t of this.units.values()) {
       if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
       if (!this.autocastWants(u, t, friendly, code, selfOk, flags)) continue;
       if (friendly) {
-        const frac = t.hp / t.maxHp; // heal the most-hurt ally
+        // heal the most-hurt ally; a buff, the one being hit (then the most hurt)
+        const frac = t.hp / t.maxHp + (targeted && !targeted.has(t.id) ? 1 : 0);
         if (frac < bestScore) {
           bestScore = frac;
           best = t;
@@ -11774,12 +11827,27 @@ export class SimWorld {
     if (t === u && !(friendly && selfOk)) return false;
     if (friendly) {
       if (!this.allied(u, t) || t.mechanical) return false;
-      if (code === "Ahea" && t.hp >= t.maxHp) return false; // only wounded
+      if (HEAL_SPELLS.has(code) && t.hp >= t.maxHp) return false; // only wounded (the Priest's Heal and the creeps' Anhe alike)
       return true;
     }
     if (!this.hostile(u, t) || t.invulnerable) return false;
     if (u.buffs.length && this.findBuffFrom(t, u.id)) return false;
+    // A creep's Ensnare goes on what ENTERS its reach after the fight has begun, never on what
+    // was already standing there — see SimUnit.ensnareSeen.
+    if (u.isCreep && code === "Aens" && u.ensnareSeen?.has(t.id)) return false;
     return true;
+  }
+
+  /** The ids of every unit somebody hostile is currently attacking — one pass over the world,
+   *  for `autocastTarget`'s "the ally under attack" reading. */
+  private targetedIds(): Set<number> {
+    const out = new Set<number>();
+    for (const a of this.units.values()) {
+      if (a.hp <= 0 || a.targetId === null || (a.order !== "attack" && a.order !== "attackmove")) continue;
+      const t = this.units.get(a.targetId);
+      if (t && this.hostile(a, t)) out.add(t.id);
+    }
+    return out;
   }
 
   /** Re-ask autocastWants for a cast the unit is still walking to. Rebuilds the same
@@ -14900,26 +14968,90 @@ export class SimWorld {
     return own && this.threatTier(own) > this.threatTier(handed) ? own : handed;
   }
 
-  /** How much of a threat a target is to a creep, for target selection: armed
-   *  units (incl. heroes) rank above helpless units, which rank above buildings,
-   *  which rank above the workers and wards of lowPriorityTarget.
-   *  Creeps "attack enemy units first" instead of chewing a structure while an
-   *  army stands on them. Same tier → distance breaks the tie (see bestCreepTarget). */
+  /**
+   * How much of a THREAT a target is to a creep, for target selection.
+   *
+   * "Creeps will prioritize to attack units that are a threat to them. This allows you to
+   * manipulate which of your units will be attacked. You do this by issuing an attack with the
+   * attacked unit onto one of your other units. Your initial unit will no longer be viewed as
+   * a threat and the creeps will therefore change their target" (warcraft3.info 176; the same
+   * trick, with a Grubby video, in warcraft-gym's "A summary on creep mechanics"). So the top
+   * of the ladder is not "armed" but ATTACKING US — a unit whose attack is on one of the
+   * camp — and a unit that has been turned onto its own side drops a rung and the camp moves
+   * off it. An Ancient of War chewing on the camp sits up here too, which is why "the Archer
+   * won't be attacked as creeps always prioritize attacking buildings (like your AoW)": it is
+   * the building that is fighting, not the Archer.
+   *
+   * A SUMMON is the top rung whether or not it is swinging, above even the unit attacking the
+   * camp: "Creeps tend to prioritize summoned units with attacks (not spells like Purge) even
+   * though they are not a threat, so the Water Elemental will soak up damage from the creeps
+   * while your army attacks" (176) — the whole reason a summon is walked up first.
+   *
+   * Below that: armed units (heroes among them) over helpless ones, over buildings, over the
+   * workers and wards of `lowPriorityTarget` — "attack enemy units first" instead of chewing a
+   * structure while an army stands on them. An ENSNARED melee unit is a ward's equal: "Creeps
+   * won't attack ensnared units unless they can attack the creeps themselves" (176), and a
+   * rooted Grunt can attack nothing that has stepped back from it.
+   *
+   * Same tier → distance breaks the tie (see bestCreepTarget).
+   */
   private threatTier(t: SimUnit): number {
     if (this.lowPriorityTarget(t)) return 0; // workers and wards dead last
+    if (t.weapon && !t.weapon.ranged && t.buffs.some((b) => b.kind === "root")) return 0; // a snared swordsman is nobody's threat
+    if (t.isSummon && t.weapon) return 5; // a summon, fighting or not
+    if (this.attackingCreeps(t)) return 4; // fighting the camp
     if (t.building) return 1; // structures next
-    if (t.weapon) return 3; // armed units / heroes first
+    if (t.weapon) return 3; // armed units / heroes
     return 2; // unarmed units in between
   }
 
-  /** Highest-threat hostile within `range` for a creep — the biggest threat tier,
-   *  nearest within that tier. This is what makes a camp focus the real threat
-   *  rather than the nearest thing, and — through the bottom tier — what stops it
-   *  focusing the Peasant or the Serpent Ward standing in front of the real thing. */
-  private bestCreepTarget(u: SimUnit, range: number): SimUnit | null {
+  /** Is this unit's current attack on a creep? A unit on an attack order (its own or an
+   *  attack-move's engagement) whose target is one of Neutral Hostile's. */
+  private attackingCreeps(t: SimUnit): boolean {
+    if (t.targetId === null || (t.order !== "attack" && t.order !== "attackmove")) return false;
+    return this.units.get(t.targetId)?.isCreep === true;
+  }
+
+  /**
+   * How much a creep WANTS a target — the number `bestCreepTarget` maximises and the fight
+   * re-pick compares. Higher is better.
+   *
+   * Two creeps, and the level decides which: "Creeps of level 7 or higher will behave more
+   * intelligently in general" (patch 1.03, quoted on Wowpedia's Creep page), and every guide
+   * spells out what that means. Below 7 the threat ladder above rules, nearest within a tier.
+   * From 7 the creep "behaves like the melee AI": "Creeps lvl 7 or over always attack the
+   * lowest hitpoint unit in reach" (warcraft-gym), "tend to attack injured units before healthy
+   * ones, although summoned units generally take higher priority. Intelligently prioritize
+   * Heroes in attack range" (Wowpedia) — and the threat trick "does not always work as level
+   * 7+ creeps are a bit different" (176). IN REACH is the weapon's own range: what the smart
+   * creep can hit without moving is what it weighs by health, and anything further off falls
+   * back to the ladder, below everything in reach.
+   */
+  private creepScore(u: SimUnit, t: SimUnit, gap: number): number {
+    const ladder = this.threatTier(t) * 1e6 - gap; // nearest within a tier
+    if (u.level < CREEP_SMART_LEVEL || this.lowPriorityTarget(t)) return ladder;
+    const reach = (u.weapon?.range ?? 0) + (u.weapon?.rangeBuffer ?? 0);
+    if (gap > reach) return ladder;
+    if (t.isSummon) return 8e6 - t.hp;
+    if (t.isHero) return 7e6 - t.hp;
+    return 6e6 - t.hp; // the lowest hit points in reach
+  }
+
+  /**
+   * The hostile a creep most wants within `range` — see `creepScore`. This is what makes a camp
+   * focus the real threat rather than the nearest thing, and — through the bottom tier — what
+   * stops it focusing the Peasant or the Serpent Ward standing in front of the real thing.
+   *
+   * `idle` is the creep AT REST looking for a fight, and a resting creep is deaf to a FLYER
+   * passing over: "Creeps that are not in combat now ignore flying units. This means that if
+   * you move flying units around using 'move' instead of 'attack move', creeps will generally
+   * not attack them" (patch 1.10 notes) — "unless the unit stops directly above the creep camp"
+   * (Wowpedia). So a flyer under way on anything but an attack-move is not a target here, and a
+   * flyer that has stopped, or is attack-moving, is.
+   */
+  private bestCreepTarget(u: SimUnit, range: number, idle = false): SimUnit | null {
     let best: SimUnit | null = null;
-    let bestTier = -1;
-    let bestGap = Infinity;
+    let bestScore = -Infinity;
     for (const t of this.units.values()) {
       if (t === u) continue;
       // `gap > range` skips, so the bound is `range` itself and it never shrinks — the tier
@@ -14929,10 +15061,52 @@ export class SimWorld {
       if (!this.hostile(u, t)) continue;
       if (!this.canAttack(u, t)) continue; // a ground-only creep ignores the flyer overhead
       if (!this.canSee(u, t)) continue; // a creep aggroes only what it can see (issue #45)
+      if (idle && t.flying && t.moving && t.order !== "attackmove" && t.order !== "attack") continue;
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      const tier = this.threatTier(t);
-      if (tier > bestTier || (tier === bestTier && gap < bestGap)) {
-        bestTier = tier;
+      const score = this.creepScore(u, t, gap);
+      if (score > bestScore) {
+        bestScore = score;
+        best = t;
+      }
+    }
+    return best;
+  }
+
+  /** How far a creep looks while it is FIGHTING: its own weapon's acquisition, never less than
+   *  the range it was pulled at. The map's Camp (200) is how close you must come to START a
+   *  fight; once one is on, the creep weighs the Riflemen shooting from 500 like anybody else. */
+  private creepFightRange(u: SimUnit): number {
+    return Math.max(u.aggroRange, u.weapon?.acquire ?? 0);
+  }
+
+  /** Does this creep's attack carry a poison (Envenomed Weapons, Slow Poison, Poison Sting)? */
+  private spreadsPoison(u: SimUnit): boolean {
+    return u.abilities.some((a) => a.level >= 1 && POISON_ATTACK_CODES.has(a.code));
+  }
+
+  /** …and is `t` already wearing THIS creep's poison? */
+  private poisonedBy(t: SimUnit, u: SimUnit): boolean {
+    return t.buffs.some((b) => b.kind === "dot" && b.sourceId === u.id);
+  }
+
+  /**
+   * The next body a poisoner turns to: the nearest hostile in its fight range not yet
+   * carrying its poison, or null when everyone is. "Any creeps with the passive Envenomed
+   * Weapons or Slow Poison will prioritize applying the status onto all hostile units in range
+   * before following normal creep aggression regardless of their level" (Wowpedia, Creep);
+   * "instead of attacking one unit continuously until it dies, they'll try to attack all your
+   * units once" (warcraft3.info 176, of the Gnoll Assassin and the Murloc Nightcrawler).
+   */
+  private unpoisonedTarget(u: SimUnit): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestGap = this.creepFightRange(u);
+    for (const t of this.units.values()) {
+      if (t === u || t.building) continue;
+      if (distSkip(u, t, bestGap, true)) continue;
+      if (!this.hostile(u, t) || !this.canAttack(u, t) || !this.canSee(u, t)) continue;
+      if (this.lowPriorityTarget(t) || this.poisonedBy(t, u)) continue;
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (gap < bestGap) {
         bestGap = gap;
         best = t;
       }
@@ -16885,7 +17059,11 @@ export class SimWorld {
     // so it would otherwise be the one automatic path that could give a wind-walking hero
     // away without the player asking for it.
     const passive = target.isPeon || this.harvesting(target) || target.cloaked;
-    if (notFighting && target.weapon && !passive && !target.returning && attacker && this.hostile(target, attacker)) {
+    // …and a creep that a TOWER has worn under CREEP_TOWER_FLEE_HP does not come back for
+    // more: the retreat tickCreep makes would otherwise be undone by the next shot to land on
+    // the walk home (see the tower rule there).
+    const fleeing = target.isCreep && attacker?.building && attacker.weapon && target.hp < CREEP_TOWER_FLEE_HP * target.maxHp;
+    if (notFighting && !fleeing && target.weapon && !passive && !target.returning && attacker && this.hostile(target, attacker)) {
       // A creep hit by a WARD (or by a worker) returns fire on whatever it can see that
       // outranks the thing that hit it — see creepTargetOver. A Serpent Ward's whole job is
       // to be shot at instead of the army that planted it.
@@ -18888,7 +19066,7 @@ export class SimWorld {
     // fighting nearby"). This is what stops a back-rank unit idling while its group fights
     // a few paces ahead. Creeps keep their own camp cohesion (campFightTarget) instead.
     const best = u.isCreep
-      ? this.bestCreepTarget(u, range)
+      ? this.bestCreepTarget(u, range, true)
       : this.acquireTarget(u, range) ?? this.assistTarget(u, ASSIST_RANGE);
     if (best) {
       // A fight it chose for itself is leashed to where it stands (see setAutoGuardPost).
@@ -19010,7 +19188,28 @@ export class SimWorld {
    *  a live attack target. An idle/guarding/sleeping/leashing creep is NOT aggroed,
    *  so nearby player units won't auto-attack it until the camp has been triggered. */
   private creepAggroed(c: SimUnit): boolean {
+    // …or CASTING: a Trapper throwing its net is as much in the fight as the Troll beside it
+    // swinging, and read as "not aggroed" for the half-second of the cast it restarted the
+    // fight every time (SimUnit.ensnareSeen was re-taken with the newcomers inside it).
+    if (c.order === "cast") return true;
     return c.order === "attack" && c.targetId !== null && this.units.has(c.targetId);
+  }
+
+  /**
+   * Is this creep's CAMP in a fight — it is on somebody, or a camp-mate is (campFightTarget)?
+   *
+   * The gate on everything a creep does with its mana. A creep's spells are part of its
+   * fighting and not a second way of picking one: the Kobold Geomancer Slows what the camp is
+   * already hitting and never a Peasant walking past at the edge of his cast range, the Ogre
+   * Magi Bloodlusts an Ogre that is swinging and not the camp dozing at its post, the Harpy
+   * Queen Cyclones nobody until the camp is roused. Public because the creep caster
+   * (src/ai/creeps.ts) asks it from outside, and because `tickAutocast` asks it for the
+   * standing orders. Heal is the one autocast NOT gated on it, in `tickAutocast` — a Troll
+   * Priest patches his camp-mates up after the fight, which any player who has kited a camp
+   * and come back to it has seen.
+   */
+  creepInFight(u: SimUnit): boolean {
+    return this.creepAggroed(u) || this.campFightTarget(u) !== null;
   }
 
   // === neutral-hostile creep guard AI =======================================
@@ -19065,6 +19264,7 @@ export class SimWorld {
     // --- fighting: leash back once we've strayed too far from the post ---
     const engaged = u.order === "attack" && u.targetId !== null && this.units.has(u.targetId);
     const dist = Math.hypot(u.x - u.guardX, u.y - u.guardY);
+    this.trackEnsnareSeen(u);
     if (engaged) {
       // Stay on the biggest threat: periodically upgrade off a low-threat target
       // (e.g. a building) onto a real unit that walked into range.
@@ -19072,6 +19272,20 @@ export class SimWorld {
       if (u.acquireT <= 0) {
         u.acquireT = ACQUIRE_PERIOD;
         const cur = this.units.get(u.targetId!)!;
+        // A POISONER spreads itself first (unpoisonedTarget): once the body it is on wears
+        // its poison it turns to the nearest one that does not, and only when everyone in
+        // reach is poisoned does it fight like the rest of the camp. Asked before the ladder,
+        // because the source says so — "before following normal creep aggression" — and only
+        // between blows, so a committed swing still lands (a swing in flight is never
+        // re-decided; see tickAttack).
+        if (u.swingLeft < 0 && this.spreadsPoison(u) && this.poisonedBy(cur, u)) {
+          const next = this.unpoisonedTarget(u);
+          if (next && next.id !== cur.id) {
+            this.issueAttack(u.id, next.id);
+            u.campHelper = false;
+            return false;
+          }
+        }
         // ...unless it is already TRADING BLOWS with a WORKER. Ranking workers last decides
         // what a creep PICKS; a fight it has already closed on and is swinging at is not
         // re-opened, or a camp mobbing the Peasant that pulled it would walk off him the
@@ -19083,12 +19297,30 @@ export class SimWorld {
         // worker is a real kill the camp is most of the way through, while a Serpent Ward is
         // bait — standing there trading with it while the Riflemen shoot is precisely the
         // thing the ward was planted to buy.
+        //
+        // The comparison is `creepScore`, the same number the pick maximises — for a creep
+        // under level 7 that is the threat ladder (a unit that stops attacking drops a rung and
+        // the camp walks off it, which is the retargeting trick every creeping guide teaches),
+        // and for a level 7+ creep it is the most wounded thing in reach, which is why the
+        // trick does not work on those. Looked for over the FIGHT range, not the 200 the camp
+        // was pulled at.
         if (!(u.inCombat && cur.isPeon)) {
-          const best = this.bestCreepTarget(u, u.aggroRange);
-          if (best && best.id !== cur.id && this.threatTier(best) > this.threatTier(cur)) {
-            this.issueAttack(u.id, best.id);
-            u.campHelper = false; // picked this one out of its own aggro range
+          const best = this.bestCreepTarget(u, this.creepFightRange(u));
+          if (best && best.id !== cur.id) {
+            const gapCur = Math.hypot(cur.x - u.x, cur.y - u.y) - u.radius - cur.radius;
+            const gapBest = Math.hypot(best.x - u.x, best.y - u.y) - u.radius - best.radius;
+            if (this.creepScore(u, best, gapBest) > this.creepScore(u, cur, gapCur)) {
+              this.issueAttack(u.id, best.id);
+              u.campHelper = false; // picked this one out of its own aggro range
+            }
           }
+        }
+        // A TOWER is left alone once it hurts: "They are very aggressive with buildings, but
+        // will retreat from defensive towers if they fall below 60% health" (Wowpedia, Creep).
+        // Only a building that shoots back — a creep chewing on a Farm chews on.
+        if (cur.building && cur.weapon && u.hp < CREEP_TOWER_FLEE_HP * u.maxHp) {
+          this.beginCreepReturn(u);
+          return true;
         }
       }
       if (dist >= MAX_GUARD_DISTANCE) {
@@ -19269,6 +19501,30 @@ export class SimWorld {
     u.order = "idle";
     this.settle(u);
     u.desiredFacing = u.guardFacing;
+  }
+
+  /**
+   * Keep `ensnareSeen` for a creep that carries Ensnare (see the field): on the tick its camp's
+   * fight BEGINS, note every enemy already inside the spell's own `Rng1`; between fights, forget.
+   * Only a trapper pays for this — the in-fight test walks the camp — and only on the edge.
+   */
+  private trackEnsnareSeen(u: SimUnit): void {
+    const ab = u.abilities.find((a) => a.code === "Aens" && a.level >= 1);
+    if (!ab) return;
+    const fighting = this.creepInFight(u);
+    if (fighting && !u.creepFighting) {
+      const def = this.abilities?.get(ab.id);
+      const reach = def?.levelData[Math.min(ab.level, def.levelData.length) - 1]?.castRange ?? 0;
+      const seen = new Set<number>();
+      for (const t of this.units.values()) {
+        if (t === u || t.building || !this.hostile(u, t)) continue;
+        if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius <= reach) seen.add(t.id);
+      }
+      u.ensnareSeen = seen;
+    } else if (!fighting) {
+      u.ensnareSeen = null;
+    }
+    u.creepFighting = fighting;
   }
 
   /** Two creeps belong to the same camp when their guard posts were placed within

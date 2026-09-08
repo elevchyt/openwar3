@@ -206,6 +206,11 @@ const CAST_RULES: Record<string, CastRule> = {
   //  about the AI's aim generally, which is the one targeting preference the SCRIPTS state.
   AHtb: { when: "spam", prefer: "hero", restack: true },
   ANfb: { when: "spam", prefer: "hero", restack: true },
+  // HURL BOULDER, the creeps' Storm Bolt (`ACtb`, its own code — sim/spells.ts). Not in the
+  // thread; warcraft3.info's "Interacting With Creeps" (article 176) has the golems: "it'll
+  // cast Hurl Boulder, which damages and stuns the target. The Golem will prioritize to
+  // target hero units that are attacking it."
+  ACtb: { when: "spam", prefer: "hero", restack: true },
   // "~Forked Lightning - Spammed on enemy heroes and/or clusters of 2+ enemy units."
   ANfl: { when: "spam", prefer: "hero", restack: true },
   // "~Life Drain - Spammed at every cool down."
@@ -230,8 +235,12 @@ const CAST_RULES: Record<string, CastRule> = {
   ANso: { when: "spam", prefer: "hero" },
   // "~Purge -" and "~Cripple -" and "~Acid Bomb -" and "~Drunken Haze -" — listed with no
   // trigger recorded. Spam is the class default for a single-target enemy debuff anyway; the
-  // rows exist so the reading is on the record.
-  Aprg: { when: "spam" },
+  // rows exist so the reading is on the record. PURGE prefers a SUMMON, which is what it is
+  // for (it deals a summon 400): warcraft3.info 176, "If you are attacking with an army that
+  // contains a summoned unit with 200 HP or higher, said unit will be purged unless another
+  // unit becomes the target" — observed on the Gnoll Warden and the Renegade Wizard, and the
+  // same button on a Spirit Walker.
+  Aprg: { when: "spam", prefer: "summon" },
   Acri: { when: "spam" },
   ANab: { when: "spam" },
   ANdh: { when: "spam" },
@@ -250,9 +259,14 @@ const CAST_RULES: Record<string, CastRule> = {
   ANdo: { when: "spam" },
   // Entangling Roots — likewise absent from the thread. Single-target enemy hold.
   AEer: { when: "spam" },
-  // Lightning Shield — absent from the thread; a buff aimed at an enemy (it burns whoever
-  // wears it), so a fight is the gate.
-  Alsh: { when: "engaged" },
+  // Lightning Shield — absent from the thread, and a buff aimed at an ENEMY (it burns whoever
+  // stands beside the wearer), so it wants the wearer in a crowd. warcraft3.info 176, of the
+  // Renegade Wizard: "it will cast Lightning Shield on any unit that is touching at least two
+  // of your other units" — three bodies inside the shield's own `Area1`, the wearer included,
+  // and the whole reason night elves plant an Archer between the Ancient of War and a Wisp
+  // before pulling. A unit-target cluster: `pickTarget` counts the catchment around each
+  // candidate.
+  Alsh: { when: "cluster", count: 3 },
   // Transmute — absent from the thread. It kills a non-hero for gold, so a live enemy in
   // range is the whole condition.
   ANtm: { when: "spam", prefer: "nonhero" },
@@ -283,6 +297,10 @@ const CAST_RULES: Record<string, CastRule> = {
   //  be used if air units are present (despite being allowed to hit them to)."
   AHtc: { when: "cluster", noAir: true },
   AOws: { when: "cluster", noAir: true },
+  // SLAM, the creeps' Thunder Clap (`ACtc`, its own code): "The Granite Golem has the ability
+  // to … use clap/slam. This occurs if you have 3 units in range of a clap" (warcraft-gym, "A
+  // summary on creep mechanics"), so three rather than the thread's two.
+  ACtc: { when: "cluster", count: 3, noAir: true },
   // "~Bladestorm - Used at random, appears to use immediately if many enemies nearby."
   AOww: { when: "cluster" },
   // "~Locust Swarm / Voodoo Spirits -" — no trigger recorded; a PBAoE drain field wants
@@ -383,6 +401,15 @@ export interface CasterView {
   allied?(u: SimUnit): boolean;
   /** `AiPlayer.order`. */
   order(cmd: Command): boolean;
+  /**
+   * An extra gate on the DELIBERATE casts alone — the ones `tryCast` aims — asked after
+   * `canAct` and after the autocasts have been armed. Optional because only the creep caster
+   * (src/ai/creeps.ts) has one: a creep presses nothing until its camp is in a fight, while a
+   * computer player's Priest is at war from the first second. Left out, a Harpy Queen would
+   * Cyclone a Peasant walking past her camp — a cast that aggroes nobody in the real game
+   * because the creep never makes it.
+   */
+  engaged?(u: SimUnit): boolean;
 }
 
 /** One computer player's casters. */
@@ -407,6 +434,7 @@ export class AiCaster {
       if (!this.canAct(u)) continue;
       this.armAutocasts(u);
       this.tickDefend(u, foes);
+      if (this.view.engaged && !this.view.engaged(u)) continue;
       this.tryCast(u, own, foes);
     }
     this.lastHp.clear();
@@ -576,6 +604,9 @@ export class AiCaster {
       if (!near(u, t, reach)) continue;
       if (!rule.restack && this.alreadyOn(t, lvl)) continue;
       if (rule.when === "hurtAlly" && t.hp / Math.max(1, t.maxHp) > (rule.hp ?? HURT)) continue;
+      // A unit-target CLUSTER (Lightning Shield): the circle is drawn around the candidate,
+      // and it has to catch the quorum — the candidate itself included, at distance zero.
+      if (rule.when === "cluster" && this.catchment(u, t.x, t.y, def, lvl, rule, pool, friendly).length < (rule.count ?? CLUSTER)) continue;
       if (this.view.world.castError(u.id, code, t.id) !== null) continue;
       const s = this.score(u, t, rule.prefer);
       if (s > bestScore) {

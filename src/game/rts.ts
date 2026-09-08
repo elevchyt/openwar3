@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type EffectAnim } from "../sim/world";
+import { SimWorld, weaponsFromDef, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type EffectAnim } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -39,7 +39,7 @@ import { SnapshotIndex } from "./renderView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable, AllianceType } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
-import type { UnitRegistry, UnitDef } from "../data/units";
+import { autoArmed, type UnitRegistry, type UnitDef } from "../data/units";
 import { ArmorType, AttackType, MoveType, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import { MELEE, MISC_GAME, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
@@ -48,6 +48,7 @@ import { disabledIconPath } from "../data/commandStrings";
 import { type ItemRegistry } from "../data/items";
 import { workerProfileFor, depotRoleFor, isHarvestCode, type PlayableRace } from "../data/races";
 import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
+import { CreepCaster } from "../ai/creeps";
 import { ComputerPlusAi, type PlusHost } from "../ai/plus";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
@@ -951,6 +952,9 @@ export class RtsController {
   /** The Computer+ seats (issue #124, src/ai/plus/). A separate object from `meleeAi` on
    *  purpose: the two AIs share no mutable state, and a seat is in exactly one of them. */
   private computerPlus: ComputerPlusAi | null = null;
+  /** The creeps' spellcasting, made on the first authority tick of a seeded match and kept
+   *  for the match — see src/ai/creeps.ts. */
+  private creepCaster: CreepCaster | null = null;
 
   /**
    * A player has LEFT the game — raised for a Computer+ seat that has conceded.
@@ -2862,7 +2866,13 @@ export class RtsController {
           depotLumber: false,
         },
         null,
-        { level: def?.level ?? 0, mechanical: def?.classification.includes("mechanical") ?? false, isPeon: def?.classification.includes("peon") ?? false, ward: def?.classification.includes("ward") ?? false },
+        // …WITH ITS CARD. A map-placed creep was seeded with no abilities at all — every other
+        // route into the sim (addSimUnit) builds them, and this one, the route every creep on
+        // every melee map takes, did not. So the Ogre Magi had no Bloodlust to arm, the Trapper
+        // no Ensnare, the Nightcrawler no Envenomed Weapons, the golems no Spell Immunity (which
+        // recomputeStats reads off the card: `Amim`/`Arsk` on it is what makes a unit immune or
+        // resistant). It read as "creeps are missing their abilities", and they were.
+        { level: def?.level ?? 0, abilities: def ? this.buildInitialAbilities(def) : [], mechanical: def?.classification.includes("mechanical") ?? false, isPeon: def?.classification.includes("peon") ?? false, ward: def?.classification.includes("ward") ?? false },
       );
       // Map-placed movable units are Neutral Hostile creeps: give them guard AI —
       // home post at the spawn, an aggro range from the map's per-creep target-
@@ -2876,11 +2886,14 @@ export class RtsController {
       su.guardY = su.y;
       su.guardFacing = su.facing;
       const aggro = this.placed.creepAggroAt(loc[0], loc[1]);
-      su.aggroRange = aggro > 0 ? aggro : su.weapon?.acquire ?? def?.acquireRange ?? 0;
-      // Normal (-1) vs Camp (-2) — the World Editor's two-way "Target Acquisition Range"
-      // radio (WorldEditStrings WESTRING_UPROPS_AR_NORMAL / _AR_CAMP). Melee mapmakers put
-      // Normal on the gold-mine guards and Camp on everything else; a Camp creep ignores
-      // the building-placement notification, so you can build beside it in peace.
+      // Normal (-1) vs Camp (-2) vs a number — the World Editor's "Target Acquisition Range"
+      // radio (WorldEditStrings WESTRING_UPROPS_AR_NORMAL / _AR_CAMP). Camp is **200**
+      // (CREEP_CAMP_ACQUIRE_RANGE): the editor's own label reads "Camp (200)", and it is what
+      // makes a camp "passive" — a creep that has to be approached to 200 before it stirs.
+      // Melee mapmakers put Normal on the gold-mine guards and Camp on everything else; a
+      // Camp creep also ignores the building-placement notification, so you can build beside
+      // it in peace.
+      su.aggroRange = aggro > 0 ? aggro : aggro === -2 ? CREEP_CAMP_ACQUIRE_RANGE : su.weapon?.acquire ?? def?.acquireRange ?? 0;
       su.campGuard = aggro === -2;
       su.canSleep = def?.canSleep ?? false;
       this.sim.setUnitDrops(simId, this.placed.creepDropsAt(loc[0], loc[1])); // scatter loot on death
@@ -3556,7 +3569,7 @@ export class RtsController {
     for (const id of def.abilities) {
       const a = this.abilities.get(id);
       if (!a || !KNOWN_ABILITIES[a.code]) continue; // skip inventory/other passives
-      out.push({ id, code: a.code, level: 1, cooldownLeft: 0, autocastOn: def.autoAbility === id });
+      out.push({ id, code: a.code, level: 1, cooldownLeft: 0, autocastOn: autoArmed(def, id, a.code) });
     }
     for (const id of def.heroAbilities) {
       const a = this.abilities.get(id);
@@ -3655,6 +3668,9 @@ export class RtsController {
       perfLog.begin("sim.ai");
       if (this.meleeAi?.active && this.seeded) this.meleeAi.tick(dt);
       if (this.computerPlus?.active && this.seeded) this.computerPlus.tick(dt);
+      // …and the map's own creeps think here too (src/ai/creeps.ts): Neutral Hostile is a
+      // player with no seat, and its casting is the same authority-only pass as a computer's.
+      if (this.seeded) (this.creepCaster ??= new CreepCaster(this.sim, this.abilities)).tick(dt);
       perfLog.end("sim.ai");
       perfLog.begin("sim.world");
       this.sim.tick(dt);

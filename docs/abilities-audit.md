@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 367, **done** 249, **partial** 4, **passive** 13, **todo** 166.
+Totals: 799 rows — **alias** 368, **done** 248, **partial** 8, **passive** 13, **todo** 162.
 
 ## Art paths this install does not ship
 
@@ -83,7 +83,7 @@ Known gaps that are NOT ability rows, found while auditing:
 
 ## Unimplemented base codes, by alias fanout
 
-128 distinct base `code`s cover the 166 todo rows. Implementing one
+125 distinct base `code`s cover the 162 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -107,7 +107,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Apos` | Possession | 2 | ground,nonhero,enemy,organic,neutral | possession | `ACps` `Apos` |
 | `ANrc` | Rain of Chaos | 2 |  |  | `ANr3` `ANrc` |
 | `Aesn` | Sentinel | 2 | tree,vuln,invu | sentinel | `Aesn` `Aesr` |
-| `ACtc` | Slam | 2 | ground,neutral | creepthunderclap | `ACt2` `ACtc` |
 | `Atau` | Taunt | 2 | air,ground,enemy,vuln,invu | taunt | `ANta` `Atau` |
 | `Aimp` |  | 1 |  |  | `Aimp` |
 | `Ansp` |  | 1 |  |  | `Ansp` |
@@ -148,7 +147,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Agho` | Ghost | 1 |  |  | `Agho` |
 | `Agld` | Gold Mine ability | 1 |  |  | `Agld` |
 | `AHer` | Hero | 1 |  |  | `AHer` |
-| `ACtb` | Hurl Boulder | 1 | air,ground,organic,enemy,neutral | creepthunderbolt | `ACtb` |
 | `ANin` | Inferno | 1 | ground,structure,debris,enemy,neutral | inferno | `ANin` |
 | `Avul` | Invulnerable | 1 |  |  | `Avul` |
 | `AIdm` | Item Area tree/wall damage | 1 |  |  | `AIdm` |
@@ -212,7 +210,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Atol` | Tree of Life upgrade ability | 1 |  |  | `Atol` |
 | `Agyv` | True Sight | 1 | vuln,invu |  | `Agyv` |
 | `Attu` | Turret | 1 |  |  | `Attu` |
-| `Adri` | Unload Instant | 1 |  | unload | `Adri` |
 | `Awan` | Wander | 1 |  |  | `Awan` |
 | `Agra` | War Club | 1 | tree | grabtree | `Agra` |
 | `Awrp` | Waygate ability | 1 |  |  | `Awrp` |
@@ -540,7 +537,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AIhl` | `AHhb` | Holy Light | other |  | I | air,ground,organic,notself,invu,vuln,nonancient | 1 | holybolt | Holy Light (item) |
 | ~ | `Acht` | `ANht` | Howl of Terror | creeps |  |  | air,ground,enemy,neutral | 1 | howlofterror | Howl of Terror |
 | x | `ANht` | `ANht` | Howl of Terror | creeps | H |  | air,ground,enemy,neutral | 1 | howlofterror | Pit Lord - Howl of Terror |
-|   | `ACtb` | `ACtb` | Hurl Boulder | creeps |  |  | air,ground,organic,enemy,neutral | 1 | creepthunderbolt | Thunder Bolt (Creep) |
+| / | `ACtb` | `ACtb` | Hurl Boulder | creeps |  |  | air,ground,organic,enemy,neutral | 1 | creepthunderbolt | Thunder Bolt (Creep) |
 | ~ | `ACim` | `AEim` | Immolation | creeps |  |  | ground,enemy,neutral,organic |  | immolation | Immolation (creep) |
 | x | `AEim` | `AEim` | Immolation | nightelf | H |  | ground,enemy,neutral,organic |  | immolation | Demon Hunter - Immolation |
 | ~ | `ACmp` | `AUim` | Impale | creeps |  |  | ground,enemy,neutral,organic | 1 | impale | Impale(Creep) |
@@ -883,8 +880,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `ANsi` | `ANsi` | Silence | creeps | H |  | air,ground,enemy,organic,neutral | 1 | silence | Dark Ranger - Silence |
 | ~ | `ACsm` | `AHdr` | Siphon Mana | creeps |  |  | air,ground,organic |  |  | Siphon Mana (Creep) |
 | x | `AHdr` | `AHdr` | Siphon Mana | human | H |  | air,ground,organic,notself |  |  | Blood Mage - Siphon Mana |
-|   | `ACt2` | `ACtc` | Slam | creeps |  |  | ground,neutral | 1 | creepthunderclap | Thunder Clap (Thunder Lizard) |
-|   | `ACtc` | `ACtc` | Slam | creeps |  |  | ground,neutral | 1 | creepthunderclap | Thunder Clap (Creep) |
+| ~ | `ACt2` | `ACtc` | Slam | creeps |  |  | ground,neutral | 1 | creepthunderclap | Thunder Clap (Thunder Lizard) |
+| / | `ACtc` | `ACtc` | Slam | creeps |  |  | ground,neutral | 1 | creepthunderclap | Thunder Clap (Creep) |
 | ~ | `ACsl` | `AUsl` | Sleep | creeps |  |  | air,ground,enemy,organic,neutral |  | sleep | Sleep (creep) |
 |   | `ACsp` | `ACsp` | Sleep | creeps |  |  |  | 1 | creepsleep | Creep Sleep |
 | x | `AUsl` | `AUsl` | Sleep | undead | H |  | air,ground,enemy,organic,neutral |  | sleep | Dreadlord - Sleep |
@@ -942,7 +939,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `Asta` | `Asta` | Stasis Trap | orc |  |  | ground,neutral,enemy |  | stasistrap | Stasis Trap |
 | x | `Aste` | `Aste` | Steal | other |  | I | notself | 2 |  | ManaSteal |
 |   | `Astn` | `Astn` | Stone Form | undead |  |  |  |  | stoneform | Stone Form |
-| x | `AHtb` | `AHtb` | Storm Bolt | human | H |  | air,ground,debris,enemy,neutral,organic | 1 | thunderbolt | Mountain King - Thunder Bolt |
+| / | `AHtb` | `AHtb` | Storm Bolt | human | H |  | air,ground,debris,enemy,neutral,organic | 1 | thunderbolt | Mountain King - Thunder Bolt |
 | ~ | `ANsb` | `AHtb` | Storm Bolt | creeps | H |  | air,ground,debris,enemy,neutral,organic | 1 | thunderbolt | Rexxar - Storm Bolt |
 | x | `Arav` | `Arav` | Storm Crow Form | nightelf |  |  |  |  | ravenform | Raven Form (Druid) |
 | x | `Asth` | `Asth` | Storm Hammers | human |  |  |  |  |  | Storm Hammers |
@@ -966,7 +963,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Atau` | `Atau` | Taunt | nightelf |  |  | air,ground,enemy,vuln,invu | 1 | taunt | Taunt |
 | ~ | `ACah` | `AEah` | Thorns Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Thorns Aura (creep) |
 | x | `AEah` | `AEah` | Thorns Aura | nightelf | H |  | air,ground,friend,self,vuln,invu | 1 |  | Keeper - Thorns Aura |
-| x | `AHtc` | `AHtc` | Thunder Clap | human | H |  | ground,neutral,organic | 1 | thunderclap | Mountain King - Thunder Clap |
+| / | `AHtc` | `AHtc` | Thunder Clap | human | H |  | ground,neutral,organic | 1 | thunderclap | Mountain King - Thunder Clap |
 | x | `Aret` | `Aret` | Tome of Retraining | other |  | I |  | 1 |  | Retrain |
 | x | `ANto` | `ANto` | Tornado | creeps | H |  |  |  | tornado | Sea Witch - Tornado |
 |   | `Atsp` | `Atsp` | Tornado Spin | naga |  |  | ground,enemy |  |  | TornadoSpin |
@@ -995,7 +992,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `Aiun` | `AInv` | Unit Inventory | other |  |  |  |  |  | Inventory(2 slot unit) Undead |
 | x | `Adro` | `Adro` | Unload | other |  |  |  |  | unload | Drop |
 | ~ | `Sdro` | `Adro` | Unload | other |  |  |  |  | unload | Drop |
-|   | `Adri` | `Adri` | Unload Instant | other |  |  |  |  | unload | Drop Instant |
+| x | `Adri` | `Adri` | Unload Instant | other |  |  |  |  | unload | Drop Instant |
 | x | `Auco` | `Auco` | Unstable Concoction | orc |  |  | air,neutral,enemy |  | unstableconcoction | Unstable Concoction |
 | x | `Auns` | `Auns` | Unsummon Building | undead |  |  | structure,player |  | unsummon | Unsummon |
 | ~ | `ACvp` | `AUav` | Vampiric Aura | creeps |  |  | air,ground,friend,self,vuln,invu,organic | 1 |  | Vampiric Aura (creep) |

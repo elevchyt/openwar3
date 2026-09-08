@@ -475,8 +475,15 @@ function dur(lvl: AbilityLevel, target: SimUnit): number {
   // …and a RESISTANT unit takes the hero duration too — that is what Resistant Skin IS:
   // "effects last on resistant units as long as they would last on heroes" (Liquipedia).
   // Ensnare's 9 seconds become 3 on a Mountain Giant, a Tauren, an Avatar of Vengeance.
-  return (target.isHero || target.resistant) && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration;
+  // A CREEP of level 6 or more is resistant by LEVEL alone, with nothing on its card to say
+  // so: patch 1.03's own note, "All creeps of level 6 or higher now have Hero magic
+  // resistance" (quoted on Wowpedia's Creep page, whose own words are "Negative spells cast
+  // on a 6+ creep will last shorter compared to lower levels").
+  const resistant = target.isHero || target.resistant || (target.isCreep && target.level >= CREEP_HERO_RESIST_LEVEL);
+  return resistant && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration;
 }
+/** The creep level from which a creep takes a spell's HERO duration — see `dur`. */
+const CREEP_HERO_RESIST_LEVEL = 6;
 /** Read dataX (a=0..i=8); NaN-safe default. */
 function d(lvl: AbilityLevel, i: number, def = 0): number {
   const v = lvl.data[i];
@@ -823,7 +830,12 @@ export function worthDispelling(t: SimUnit, units: ReadonlyMap<number, SimUnit>,
  *  spells above heal too, but only their friendly half, so they're judged separately.
  *  A heal that would restore nothing is refused by WC3 rather than wasted (HPmaxed /
  *  UnitHPmaxed) — you cannot burn a Paladin's mana on an undamaged Footman. */
-export const HEAL_SPELLS = new Set(["Ahea", "Arpl"]); // Priest — Heal; Obsidian Statue — Essence of Blight
+// Priest — Heal; the creeps' Heal (`Anhe`, the code behind `Anh1`/`Anh2` on every Troll
+// Priest, Tuskarr Healer and Mur'gul Blood-Gill); Obsidian Statue — Essence of Blight. A
+// member is refused on a full bar ("Already at full health.") and is the one autocast a creep
+// runs outside a fight — leave the creep code out and its priests healed nobody but full-
+// health camp-mates, forever.
+export const HEAL_SPELLS = new Set(["Ahea", "Anhe", "Arpl"]);
 
 /** Spells that need the TARGET to have a mana pool, and the [Errors] line each says when
  *  it doesn't. Nothing in `targs1` can express this — Mana Burn's is
@@ -840,6 +852,31 @@ export const MANA_TARGET_SPELLS: Record<string, string> = {
   // positive wording the same file ships for exactly this shape. Without it an autocasting
   // Obsidian Statue spends its whole pool topping up Ghouls, which have no mana at all.
   Arpm: "Targetmanauser", // Obsidian Statue — Spirit Touch
+};
+
+/** Storm Bolt's shape, shared with the creeps' Hurl Boulder (see the `AHtb`/`ACtb` rows). */
+const stormBolt: Handler = (api, caster, def, rank, ctx) => {
+  const t = api.getUnit(ctx.targetId);
+  if (!t) return;
+  const lvl = def.levelData[rank - 1];
+  api.spellDamage(t, d(lvl, 0), caster.id);
+  api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t), sourceId: caster.id, ...fx(def) });
+};
+
+/** Thunder Clap's shape, shared with the creeps' Slam (see the `AHtc`/`ACtc` rows). */
+const thunderClap: Handler = (api, caster, def, rank, ctx) => {
+  const lvl = def.levelData[rank - 1];
+  if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
+  // The shockwave also scorches the ground under the caster: UberSplatData row THND
+  // ("ThunderClap", ReplaceableTextures\Splats\ThunderClapUbersplat.blp).
+  api.emitSplat("THND", caster.x, caster.y);
+  for (const t of api.unitsInArea(ctx.x, ctx.y, lvl.area)) {
+    if (t === caster || !api.hostile(caster, t) || t.flying) continue;
+    api.spellDamage(t, d(lvl, 0), caster.id);
+    // fx(def) → the slow buff BHtc's own Targetart, StasisTotemTarget.mdx worn
+    // `overhead` (the amber swirl — the same rig as the blue stun one).
+    api.applyBuff(t, { kind: "slow", timeLeft: dur(lvl, t), sourceId: caster.id, value: d(lvl, 2, 0.25), value2: d(lvl, 3, 0.25), ...fx(def) });
+  }
 };
 
 export const SPELL_HANDLERS: Record<string, Handler> = {
@@ -868,30 +905,22 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // Storm Bolt — throw a hammer: dataA damage + stun for dur/herodur.
-  AHtb: (api, caster, def, rank, ctx) => {
-    const t = api.getUnit(ctx.targetId);
-    if (!t) return;
-    const lvl = def.levelData[rank - 1];
-    api.spellDamage(t, d(lvl, 0), caster.id);
-    api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t), sourceId: caster.id, ...fx(def) });
-  },
+  AHtb: stormBolt,
+  // HURL BOULDER — the Rock Golem's and Granite Golem's `ACtb`, which `AbilityData.slk` files
+  // as "Thunder Bolt (Creep)" under its OWN code rather than as an alias of `AHtb`: the same
+  // shape (`Ctb1` DataA damage 100, Dur1 2 s, Rng1 800, `BPSE` stun) thrown as a
+  // RockBoltMissile. Left unhandled, the golems that every creeping guide warns about ("it'll
+  // cast Hurl Boulder, which damages and stuns the target" — warcraft3.info 176) threw
+  // nothing at all.
+  ACtb: stormBolt,
 
   // Thunder Clap — slam the ground: dataA damage + slow (move dataC, attack dataD)
   // to enemy ground units within `area`.
-  AHtc: (api, caster, def, rank, ctx) => {
-    const lvl = def.levelData[rank - 1];
-    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
-    // The shockwave also scorches the ground under the caster: UberSplatData row THND
-    // ("ThunderClap", ReplaceableTextures\Splats\ThunderClapUbersplat.blp).
-    api.emitSplat("THND", caster.x, caster.y);
-    for (const t of api.unitsInArea(ctx.x, ctx.y, lvl.area)) {
-      if (t === caster || !api.hostile(caster, t) || t.flying) continue;
-      api.spellDamage(t, d(lvl, 0), caster.id);
-      // fx(def) → the slow buff BHtc's own Targetart, StasisTotemTarget.mdx worn
-      // `overhead` (the amber swirl — the same rig as the blue stun one).
-      api.applyBuff(t, { kind: "slow", timeLeft: dur(lvl, t), sourceId: caster.id, value: d(lvl, 2, 0.25), value2: d(lvl, 3, 0.25), ...fx(def) });
-    }
-  },
+  AHtc: thunderClap,
+  // SLAM — `ACtc` "Thunder Clap (Creep)", the Granite Golem's, the Magnataur Destroyer's and
+  // (as `ACt2`) the Thunder Lizard's, again a code of its own with the Clap's columns:
+  // `Ctc1..4` = 70 damage, 0.25/0.25 slow over Area1 250 for Dur1 4 s, `BCtc` the buff.
+  ACtc: thunderClap,
 
   // Divine Shield — self-invulnerability for the duration.
   AHds: (api, caster, def, rank) => {
