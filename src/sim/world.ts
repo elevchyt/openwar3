@@ -14459,14 +14459,17 @@ export class SimWorld {
     // Committed to a swing: the attack animation is playing toward its damage point,
     // where the strike/projectile fires (a delayed frame WITHIN the animation). A
     // WC3 unit stands still for that whole wind-up — it NEVER walks mid-strike, so
-    // don't let a target drifting out of range start a chase now. Hold position and
-    // keep facing the swing's target; tickSwing lands the hit at the damage point,
-    // and only afterwards (swingLeft back to -1) do we re-check range and give chase.
+    // don't let a target drifting out of range start a chase now — and it does NOT TURN
+    // either: the heading is locked where the swing began (see the swing start below), and
+    // a target circling the attacker mid-swing is struck (or missed, on the weapon's Range
+    // Motion Buffer) from the angle the blow was committed at. Only once tickSwing has
+    // landed the hit at the damage point (swingLeft back to -1) does the unit track its
+    // target again, re-check range and give chase — in the game the turn resumes the moment
+    // the attack point is over, and a unit swinging at a kiting target visibly stands its
+    // ground, facing where the target WAS, until each blow has gone out.
     if (u.swingLeft >= 0) {
       if (u.moving) this.settle(u);
       u.inCombat = true;
-      const st = this.units.get(u.swingTargetId) ?? t;
-      u.desiredFacing = Math.atan2(st.y - u.y, st.x - u.x);
       return;
     }
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
@@ -14529,6 +14532,11 @@ export class SimWorld {
     u.swingLeft = Math.max(0, w.damagePoint);
     u.swingBroken = false; // a genuine new swing always animates (clears any prior break)
     u.swingTargetId = t.id;
+    // The heading is LOCKED for the attack point: the unit is within FACING_EPS of its
+    // target (the gate above), and that is the angle the blow goes out at — the shared
+    // turning pass has nothing left to add, and neither wind-up branch (engage's or
+    // tickAttackMove's) re-aims it until tickSwing has fired the strike.
+    u.desiredFacing = u.facing;
     u.swingWeapon = w; // the strike lands with the slot it was launched from
     // Roll this swing's procs now, before the clip is picked (see swingCrit/swingSlam).
     // Critical Strike is only ever applied by dealDamage, so only a melee swing rolls it —
@@ -14561,12 +14569,12 @@ export class SimWorld {
     const acq = this.acquireRange(u); // 0 for a worker — it just walks the route (issue #41)
     // Committed to a swing (see engage): stand still through the wind-up rather than
     // advancing toward the attack-move destination — a target fleeing past acquire
-    // range mustn't drag the unit into walking while its strike is still pending.
+    // range mustn't drag the unit into walking while its strike is still pending — and
+    // hold the heading the swing was committed at (no re-aim until the damage point;
+    // engage's own wind-up branch says why).
     if (u.swingLeft >= 0) {
       if (u.moving) this.settle(u);
       u.inCombat = true;
-      const st = this.units.get(u.swingTargetId);
-      if (st) u.desiredFacing = Math.atan2(st.y - u.y, st.x - u.x);
       return;
     }
     // Autocast outranks the auto-attack, and does so BEFORE the enemy scan (issue #94). An
