@@ -313,6 +313,13 @@ const ME = { id: 2, name: "Joiner", host: false };
     // The identity is the relay's `from` stamp, so a peer with no seat has no row to change —
     // which is the whole of the forgery rule: there is nothing in the payload to lie with.
     check("a peer with no seat changes nothing", applyRequest(seated, 9, { k: "lobbyreq", race: "orc" }), null);
+    // …and once Start Game has been pressed nothing moves at all: the rows are dead on every
+    // machine while the countdown runs, so a request that arrives is a stale menu or a forgery.
+    check(
+      "the countdown settles the seating",
+      applyRequest({ ...seated, counting: true }, 2, { k: "lobbyreq", race: "orc" }),
+      null,
+    );
   }
 
   console.log("\ngame lobby: an Open slot is an empty chair, not a free AI");

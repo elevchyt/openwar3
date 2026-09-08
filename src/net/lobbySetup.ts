@@ -102,6 +102,18 @@ export interface LobbySetup {
   /** What the host set on the create screen's Advanced Options pane. Fixed for the room's
    *  life, as in the real client — the lobby prints it, it does not edit it. */
   advanced: AdvancedOptions;
+  /**
+   * The start countdown is running (LobbyCount).
+   *
+   * The seating is locked while it is: every row's menus are dead on every machine and a
+   * request that arrives anyway is refused (`applyRequest`), because the seating the countdown
+   * is about to hand to `buildStart` must be the one the room is looking at. It rides the
+   * SEATING rather than the countdown's own messages so a client locks and unlocks off the
+   * broadcast it already renders — an abandoned countdown prints nothing (there is no string
+   * for one) but must still give the rows back, and that is one broadcast rather than a
+   * second kind of message that can go missing on its own.
+   */
+  counting?: boolean;
 }
 
 /**
@@ -422,6 +434,9 @@ export function moveToPlayers(setup: LobbySetup, benchIndex: number, team?: numb
  * anything — a watcher has no race to pick.
  */
 export function applyRequest(setup: LobbySetup, peer: number, req: LobbyRequest): LobbySetup | null {
+  // Nothing moves once the countdown is running: the rows are dead on every machine, so a
+  // request that gets here at all is a stale menu or a forged payload (see `counting`).
+  if (setup.counting) return null;
   const index = setup.slots.findIndex((s) => s.kind === "player" && s.peer === peer);
   if (index >= 0) {
     if (req.observe) return moveToObservers(setup, index);

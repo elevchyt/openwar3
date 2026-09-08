@@ -310,7 +310,13 @@ export async function mountLanLobbyScreen(
   // from 5 down to 1, one a second, with the match beginning a second after the last one. The
   // clock is the HOST's alone (LobbyCount): every line goes out as its own message and a client
   // prints what it is told, so no client can count out of step with the `start` that ends it.
-  // Nothing is sent for an abort — the lines just stop, which is all the real client shows.
+  // No LINE is sent for an abort — they just stop, which is all the real client shows.
+  //
+  // The SEATING LOCKS for the duration on every machine — the rows the countdown is about to
+  // hand to `buildStart` are the rows the room is looking at — and that lock rides the seating
+  // broadcast (`LobbySetup.counting`) rather than the countdown's own messages: a client greys
+  // its menus off the payload it already renders, and an abandoned countdown gives the rows
+  // back with one more broadcast instead of a second kind of message that could go missing.
 
   /** The host's countdown handle, or null while there is none. A client never runs one. */
   let countdown: number | null = null;
@@ -321,6 +327,13 @@ export async function mountLanLobbyScreen(
     if (countdown === null) return;
     clearInterval(countdown);
     countdown = null;
+  };
+
+  /** Give up on the countdown and hand the room its rows back — the host's side of an abort. */
+  const abortCountdown = (): void => {
+    stopCountdown();
+    if (setup?.counting) { setup = { ...setup, counting: false }; broadcast(); }
+    refresh();
   };
 
   /** Print one countdown line, wherever it came from — our own clock or the host's message. */
@@ -337,8 +350,7 @@ export async function mountLanLobbyScreen(
    */
   const tick = (): void => {
     if (!isHost() || !setup || !canStart(setup, lobby.snapshot.peers)) {
-      stopCountdown();
-      refresh();
+      abortCountdown();
       return;
     }
     if (countdownAt <= 0) { stopCountdown(); launch(); return; }
@@ -350,6 +362,10 @@ export async function mountLanLobbyScreen(
   const startMatch = (): void => {
     if (!isHost() || !setup || countdown !== null) return;
     countdownAt = COUNTDOWN_SECONDS;
+    // The lock goes out FIRST: from here the room's seating is settled, and the rows a client
+    // is looking at stop being ones it can still change under the start.
+    setup = { ...setup, counting: true };
+    broadcast();
     countdown = window.setInterval(tick, 1000);
     tick();     // the first line belongs to the press, not to a second later
     refresh();  // …and Start Game is spent until the countdown ends or is abandoned
@@ -471,6 +487,10 @@ export async function mountLanLobbyScreen(
     const me = lobby.snapshot.you?.id;
     const fixed = map.info.fixedPlayerSettings;
     const computerPlus = setup?.advanced.computerPlus ?? false;
+    // Every row is dead while the countdown runs, host and client alike — the seating is
+    // settled the moment Start Game is pressed. It is read off the SEATING rather than off our
+    // own `countdown`, which only the host has (see LobbySetup.counting).
+    const locked = setup?.counting ?? false;
     /** The team menu: the map's teams and, with a bench, the way onto it. */
     const teams: Option[] = [
       ...teamOptions(slots.length),
@@ -499,7 +519,7 @@ export async function mountLanLobbyScreen(
         );
         name.value = slot.kind === "computer" ? slotOptionValue("computer", slot.ai, computerPlus) : slot.kind;
         name.onChange = (v) => hostSetKind(i, v);
-        name.setEnabled(isHost() && slot.kind !== "player" && !slot.locked);
+        name.setEnabled(!locked && isHost() && slot.kind !== "player" && !slot.locked);
       }
 
       const race = s.popup(`RaceMenu${i}`);
@@ -507,7 +527,7 @@ export async function mountLanLobbyScreen(
         race.setOptions(RACES.map((r) => ({ value: r, label: RACE_LABEL[r] })));
         race.value = slot.race;
         race.onChange = (v) => change(i, { race: v });
-        race.setEnabled(seated && ours);
+        race.setEnabled(!locked && seated && ours);
       }
 
       const team = s.popup(`TeamButton${i}`);
@@ -517,7 +537,7 @@ export async function mountLanLobbyScreen(
         // "Observers" on a player's row is not a team but a move: off the slot, onto the bench.
         team.onChange = (v) => change(i, v === OBSERVERS_TEAM ? { observe: true } : { team: parseInt(v, 10) });
         // A fixed-settings map hands out everyone's team but your own (see MapInfo).
-        team.setEnabled(seated && ours && (!fixed || mine));
+        team.setEnabled(!locked && seated && ours && (!fixed || mine));
       }
 
       const colour = s.popup(`ColorButton${i}`);
@@ -538,7 +558,7 @@ export async function mountLanLobbyScreen(
           if (setup && !colorsFreeFor(setup, i).includes(color)) return false;
           return change(i, { color });
         };
-        colour.setEnabled(seated && ours);
+        colour.setEnabled(!locked && seated && ours);
       }
 
       const handicap = s.popup(`HandicapMenu${i}`);
@@ -546,7 +566,7 @@ export async function mountLanLobbyScreen(
         handicap.setOptions(HANDICAPS.map((p) => ({ value: String(p), label: `${p}%` })));
         handicap.value = String(slot.handicap);
         handicap.onChange = (v) => change(i, { handicap: parseInt(v, 10) });
-        handicap.setEnabled(seated && ours && (!fixed || mine));
+        handicap.setEnabled(!locked && seated && ours && (!fixed || mine));
       }
     });
 
@@ -564,14 +584,14 @@ export async function mountLanLobbyScreen(
         );
         name.value = seat.kind;
         name.onChange = (v) => hostSetBenchKind(j, v);
-        name.setEnabled(isHost() && seat.kind !== "player");
+        name.setEnabled(!locked && isHost() && seat.kind !== "player");
       }
       const team = s.popup(`TeamButton${i}`);
       if (team) {
         team.setOptions(teams);
         team.value = OBSERVERS_TEAM;
         team.onChange = (v) => { if (v !== OBSERVERS_TEAM) benchChange(j, parseInt(v, 10)); };
-        team.setEnabled(mine);
+        team.setEnabled(!locked && mine);
       }
     });
 
