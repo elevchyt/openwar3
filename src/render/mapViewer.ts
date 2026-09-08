@@ -9429,6 +9429,22 @@ export class MapViewerScene {
     }
   }
 
+  /** "Completed: Barracks" — the one line every finished JOB prints, wherever it came from:
+   *  a building's scaffolding coming down, a research, a structure upgrade, a hero revived.
+   *
+   *  The words are the game's own (`COLON_COMPLETED` out of GlobalStrings.fdf, so a localized
+   *  install says it in its own language); the line itself is a deliberate departure, since
+   *  none of the four completion sounds has an [Errors] row to print (see SimWorld.Alert and
+   *  the build-completion cue). One place for all four so they cannot drift apart, and so the
+   *  markup is stripped once: `showError` writes textContent, and a custom map colours the
+   *  names in its object editor ("|cffffaa00Boogie Kid"), which would otherwise print the
+   *  colour code on the line. Replaced, never stacked — two jobs finishing together leave the
+   *  last one's line up. */
+  private announceCompleted(name: string | undefined): void {
+    if (!name) return;
+    this.hud?.showError(`${this.globalStrings?.strings.get("COLON_COMPLETED") ?? "Completed: "}${wc3ToPlain(name)}`);
+  }
+
   /** Refuse a command the way the game does: the gold line above the console plus a sound,
    *  both named by a single commandstrings.txt [Errors] key. A handful of refusals have a
    *  race-specific line the worker SPEAKS (Nogold + Orc → NoGoldOrc →
@@ -10269,7 +10285,20 @@ export class MapViewerScene {
       // learned ranks, inventory, proper name — and sets the hit points and mana the altar
       // (full / 100) or the tavern (half / none) hands back. Done here, on the tick the unit
       // exists, so nothing ever sees the blank version of it.
-      if (t.reviveOf) world.reviveFallenHero(simId, t.reviveOf, t.tavern ? "tavern" : "altar");
+      if (t.reviveOf) {
+        world.reviveFallenHero(simId, t.reviveOf, t.tavern ? "tavern" : "altar");
+        // …and the same one-line "Completed: " the finished building, research and structure
+        // upgrade print (see the completion cues in the frame drain). A revival is the one
+        // job in a queue whose subject already has a NAME the player knows it by, so it is
+        // announced the way the info panel titles it — the given name if it has one, the
+        // class otherwise ("Completed: Uther the Lightbringer"). Read back off the unit
+        // rather than off the job, because the name only landed on it a line ago.
+        // A hero hired at a TAVERN is not a revival: `reviveOf` is only set for one that fell.
+        if (t.owner === this.localPlayer) {
+          const revived = world.units.get(simId);
+          this.announceCompleted(revived?.properName || d.name);
+        }
+      }
       // …and walk it to the rally point, but ONLY if this building has one. A `Sellunits`
       // shop does not (see BuildingState.producesUnits): a hired mercenary appears beside the
       // camp and stands there. Sending it to the default point 200 south instead is not just
@@ -10737,8 +10766,7 @@ export class MapViewerScene {
         for (const c of world.drainBuildCompletions()) {
           if (c.owner !== this.localPlayer) continue;
           this.sounds?.playUi(`JobDoneSound${UI_SOUND_RACE[this.localRace]}`);
-          const name = this.registry.get(world.units.get(c.buildingId)?.typeId ?? "")?.name;
-          if (name) this.hud?.showError(`${this.globalStrings?.strings.get("COLON_COMPLETED") ?? "Completed: "}${name}`);
+          this.announceCompleted(this.registry.get(world.units.get(c.buildingId)?.typeId ?? "")?.name);
         }
         // --- research + structure upgrades (issue #57) ---
         // WC3 keeps two DISTINCT completion cues, per race: ResearchComplete<Race> for an
@@ -10755,11 +10783,10 @@ export class MapViewerScene {
           // once plays the identical chime twice. What it names is the UPGRADE — the LEVEL's
           // own name out of the registry ("Steel Forged Swords", not "Forged Swords"), which
           // is the name the command card had on it when the click was made — never the
-          // building that paid for it.
+          // building that paid for it. `name()` falls back to the RAWCODE for an upgrade this
+          // install doesn't ship a name for, and "Completed: Rhri" is worse than silence.
           const name = this.upgrades.name(r.upgradeId, r.level);
-          if (name && name !== r.upgradeId) {
-            this.hud?.showError(`${this.globalStrings?.strings.get("COLON_COMPLETED") ?? "Completed: "}${name}`);
-          }
+          this.announceCompleted(name === r.upgradeId ? "" : name);
         }
         // A building became something else: swap its model in place. The sim kept the SAME
         // entity — rally point, queue, selection and damage all carried over — so this only
@@ -10777,7 +10804,14 @@ export class MapViewerScene {
           // Town Hall finishing its Keep announces itself, an Alchemist entering Chemical Rage
           // (or a Crypt Fiend burrowing, or a Peasant taking up arms) does not — it played the
           // "upgrade complete" fanfare over every hero morph.
-          if (u?.owner === this.localPlayer && u.building) this.sounds?.playUi(`UpgradeComplete${UI_SOUND_RACE[this.localRace]}`);
+          if (u?.owner === this.localPlayer && u.building) {
+            this.sounds?.playUi(`UpgradeComplete${UI_SOUND_RACE[this.localRace]}`);
+            // …and the line, naming what the building BECAME ("Completed: Keep"), which is
+            // what the card's button said ("Upgrade to Keep") and the only half of the swap
+            // that is news. Gated on the same `building` test as the chime, so a hero leaving
+            // Metamorphosis announces nothing here either.
+            this.announceCompleted(this.registry.get(m.to)?.name);
+          }
           void this.remodelUnit(m.unitId, m.to);
         }
         // --- spells / abilities ---
