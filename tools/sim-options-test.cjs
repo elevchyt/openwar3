@@ -35,6 +35,9 @@ const {
 const {
   applyVideoOptions, videoSettings, animStride, maxOmniLights, renderSize, renderScale,
 } = require(join(REPO, ".sim-build", "src", "render", "videoQuality.js"));
+const {
+  applyHealthBarOptions, healthBarsAlways, healthBarStyle,
+} = require(join(REPO, ".sim-build", "src", "render", "worldOverlays.js"));
 const { SOUND_GROUP } = require(join(REPO, ".sim-build", "src", "audio", "sounds.js"));
 
 console.log("defaults cover every option in the table");
@@ -75,6 +78,20 @@ console.log("\na stored value of the wrong shape is ignored (defaults stand)");
   check("bad-typed value rejected", back.musicVolume, 70);
   check("well-typed value accepted", back.soundVolume, 55);
   check("unknown key dropped", back.bogus, undefined);
+}
+
+console.log("\na store from before issue #141 does not turn the health bars off");
+{
+  store.clear();
+  // What every pre-#141 OK button wrote: the checkbox's own default, which nothing read, and
+  // no `healthBarStyle` beside it because that row did not exist yet.
+  store.set("openwar3.options", JSON.stringify({ healthBars: false, musicVolume: 20 }));
+  check("the unchosen value is dropped", loadOptions().healthBars, true);
+  check("…and the rest of the store is kept", loadOptions().musicVolume, 20);
+
+  // Once the player has committed the new row, an off IS a choice and is honoured.
+  store.set("openwar3.options", JSON.stringify({ healthBars: false, healthBarStyle: "team" }));
+  check("a deliberate off survives", loadOptions().healthBars, false);
 }
 
 console.log("\nthe audio applier maps the sound options onto the SoundBoard");
@@ -172,6 +189,30 @@ console.log("\nResolution picks the size of the buffer the world is drawn into")
   delete stale.resolution;
   applyVideoOptions(stale);
   check("…and so does a store that predates it", renderSize(), { width: 1920, height: 1080 });
+}
+
+console.log("\nthe Gameplay panel's two health-bar rows (issue #141)");
+{
+  // Both are ON-by-default questions, and the checkbox's default is the one a player who never
+  // opens this screen lives with: WC3 ships it off, OpenWar3 ships it ON.
+  applyHealthBarOptions(defaultOptions());
+  check("bars are shown by default", healthBarsAlways(), true);
+  check("…in the game's own colouring", healthBarStyle(), "default");
+
+  applyHealthBarOptions({ ...defaultOptions(), healthBars: false, healthBarStyle: "team" });
+  check("the checkbox reaches the overlays", healthBarsAlways(), false);
+  check("so does the pulldown", healthBarStyle(), "team");
+
+  // A store written before either option existed, or edited by hand: the bars must not vanish
+  // and the style must not become a junk string the stylesheet has no rule for.
+  const stale = { ...defaultOptions() };
+  delete stale.healthBars;
+  delete stale.healthBarStyle;
+  applyHealthBarOptions(stale);
+  check("a store that predates them keeps the bars", healthBarsAlways(), true);
+  check("…and the game's colouring", healthBarStyle(), "default");
+  applyHealthBarOptions({ ...defaultOptions(), healthBarStyle: "rainbow" });
+  check("an unknown style is the default one", healthBarStyle(), "default");
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");

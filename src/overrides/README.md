@@ -12,7 +12,7 @@ language that is layered onto the screen at mount time:
 | file | what it does |
 | --- | --- |
 | [`ui/GlobalStrings.fdf`](ui/GlobalStrings.fdf) | strings the game has no key for |
-| [`ui/OptionsMenu.fdf`](ui/OptionsMenu.fdf) | Options → Gameplay: drops two rows, adds one |
+| [`ui/OptionsMenu.fdf`](ui/OptionsMenu.fdf) | Options → Gameplay: drops two rows, adds two — the Computer+ default at the end, and the "Healthbars:" pulldown SPLICED IN under "Always show Health Bars" |
 | [`ui/AdvancedOptionsPane.fdf`](ui/AdvancedOptionsPane.fdf) | Custom Game → Advanced Options: adds a row, and replaces the Observers one. The LAN create screen layers the same file through a second manifest that adds the row and KEEPS the Observers one — on a hosted game that dropdown means what it says |
 | [`ui/AdvancedOptionsDisplay.fdf`](ui/AdvancedOptionsDisplay.fdf) | the LAN game lobby's Advanced Options summary: adds the Computer+ row to the seven the game prints |
 
@@ -27,12 +27,17 @@ language that is layered onto the screen at mount time:
   adds into a named container. It runs on every build, because an FDF screen rebuilds its
   whole tree on resize.
 
-`repoint` is the one of the three that is not obvious, and it is what replacing a row in the
+`repoint` is the one of the three that is not obvious, and it is what changing a row in the
 MIDDLE of a panel needs: an FDF panel is a chain, each row anchored by name to the row above
 it, so a retired row takes the rest of the panel with it (an anchor to a frame that is not
 there reads as "anchored to my parent"). An entry hands the retired frame's anchors to its
 replacement, with a `dx`/`dy` for what the swap changes about the anchor's box — a POPUPMENU's
 right edge does not sit where a checkbox's does.
+
+Its `only` clause is for the other case: a row SPLICED INTO the chain rather than replacing
+one. There the anchor frame stays exactly where it is and keeps whatever else hangs off it —
+"Always show Health Bars" keeps its own label — and the single row that was pushed down is the
+only one to follow the newcomer. `only` names it.
 
 Both are wired into `mountFdfScreen` through its `overrides` option, so a screen opts in with
 one line and everything else about it is unchanged.

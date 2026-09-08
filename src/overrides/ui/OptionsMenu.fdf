@@ -14,6 +14,34 @@
 // The removals are listed in the manifest (src/overrides/index.ts) rather than written here,
 // because FDF has no syntax for deleting a frame — it is a declaration language. Nothing else
 // anchors to the four frames that go, so the panel simply ends one row earlier.
+//
+// Issue #141 adds one more row, and it goes in the MIDDLE of the panel rather than at the end:
+// a "Healthbars:" pulldown directly under "Always show Health Bars", because it says what
+// those bars look like. Built as the Video panel's "Resolution:" row is built — a
+// `StandardInfoTextTemplate` label with an `OptionsPopupMenuBackdropTemplate` hung off its
+// right edge — so the two screens' pulldowns are the same control. The row it displaces
+// ("Automatically Save Replays", and the Computer+ box that hangs off THAT) is re-anchored by
+// the manifest's `repoint`, because an FDF panel is a chain of rows and this one is being
+// spliced into it.
+
+Frame "TEXT" "HealthBarStyleLabel" INHERITS "StandardInfoTextTemplate" {
+    // -0.02 under the checkbox above: the gap the file's own "GamePortLabel" used where a
+    // label row followed a checkbox row, rather than the -0.005 that separates two checkboxes.
+    SetPoint TOPLEFT, "HealthBarsCheckBox", BOTTOMLEFT, 0.0, -0.02,
+    Text "COLON_HEALTHBARS",
+}
+
+Frame "BACKDROP" "HealthBarStyleBackdrop" INHERITS "OptionsPopupMenuBackdropTemplate" {
+    SetPoint LEFT, "HealthBarStyleLabel", RIGHT, 0.01, 0.0,
+
+    Frame "POPUPMENU" "HealthBarStyleMenu" INHERITS WITHCHILDREN "OptionsPopupMenuTemplate" {
+        SetPoint TOPLEFT, "HealthBarStyleBackdrop", TOPLEFT, 0.012, -0.013,
+
+        PopupMenuFrame "HealthBarStylePopupMenuMenu",
+        Frame "MENU" "HealthBarStylePopupMenuMenu" INHERITS WITHCHILDREN "StandardPopupMenuMenuTemplate" {
+        }
+    }
+}
 
 Frame "GLUECHECKBOX" "ComputerPlusDefaultCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
     SetPoint TOPLEFT, "AutosaveReplayCheckBox", BOTTOMLEFT, 0.0, -0.005,

@@ -78,7 +78,7 @@ import {
   chatPrompt, chatRecipients, chatShowsPlayerDot, formatChatLine, hasChatAllies, observerLine,
   type ChatLine, type ChatTarget, type ChatWorld,
 } from "../game/chat";
-import { neutralTeamColor, teamColorHex, teamColorRgb } from "./teamColor";
+import { neutralTeamColor, teamColorCss, teamColorHex, teamColorRgb } from "./teamColor";
 import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
 import { MultiboardOverlay } from "../ui/multiboard";
@@ -1587,6 +1587,10 @@ export class MapViewerScene {
         viewport: () => map.worldScene.viewport,
         units: () => map.units as ReturnType<RtsHost["units"]>,
         unitsReady: () => map.unitsReady,
+        // A player-colour swatch is a VFS read, like the icons and the footprints below —
+        // the controller never opens the archives. Asked by the team-coloured health bars
+        // (issue #141).
+        teamColorCss: (slot) => teamColorCss(this.vfs, slot),
       };
       this.heightSampler = makeHeightSampler(terrain);
       this.footMaxHeight = makeFootprintMaxSampler(terrain);
@@ -11780,6 +11784,10 @@ export class MapViewerScene {
 
     this.followHeld(); // a held hero key / group digit: ride the selection (issue #114)
     this.rideLocked(); // …and Ctrl+C's lock, which rides one unit until it is let go
+    // ALT inverts "Always show Health Bars" while it is held — the game says so itself
+    // (GlobalStrings HEALTH_BARS_INFO; see RtsController.setAltHeld). Read off the same key
+    // set the camera pans from, so it is released by everything that releases those.
+    this.rts?.setAltHeld(this.keys.has("alt"));
 
     // Pan the ground target relative to view yaw. WASD only outside a match —
     // in-game the letters belong to command hotkeys (M/A/S), WC3 pans with
@@ -12633,7 +12641,13 @@ export class MapViewerScene {
     // Cursor left the page (or the window lost focus): stop edge-scrolling. Without this the
     // camera would keep panning off the last edge the cursor crossed on its way out.
     this.on(document, "pointerleave", () => (this.pointerInWindow = false));
-    this.on(window, "blur", () => (this.pointerInWindow = false));
+    this.on(window, "blur", () => {
+      this.pointerInWindow = false;
+      // …and every key is up as far as this window is concerned. A keyup that lands on
+      // somebody else's window never reaches us, so an alt-tab left the key STUCK: the camera
+      // scrolls on by itself, and (issue #141) ALT stays inverted over the health bars.
+      this.keys.clear();
+    });
     this.on(window, "pointermove", (e: PointerEvent) => {
       // Self-heal a stuck drag even while the pointer is off the canvas (over the
       // HUD): still "dragging" with the left button not held means the pointerup

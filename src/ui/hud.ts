@@ -650,6 +650,13 @@ const STATBAR_TINT = {
   yellow: [255, 255, 0],
   red: [255, 0, 0],
   mana: [16, 0, 230],
+  /** …and the slab UNTINTED, for the Team Colored bars (issue #141). A player's colour is not
+   *  one of four fixed tints — it is whatever slot the body is wearing this frame — so that
+   *  multiply cannot be baked here and is done by the stylesheet instead
+   *  (`background-blend-mode: multiply` over an inline `background-color`, which is the same
+   *  arithmetic this function performs). What it needs from here is the grey slab itself,
+   *  point-sampled to STATBAR_ROWS like its four tinted twins. */
+  plain: [255, 255, 255],
 } as const;
 
 /** Multi-selection grid tiers (issue #109). WC3's own selection stops at 12 units and draws

@@ -245,6 +245,11 @@ html body.loading-screen * { cursor: none !important; }
 .unit-hpbar-fill[data-state="yellow"] { background-color: #c8c800; }
 .unit-hpbar-fill[data-state="red"] { background-color: #c80000; }
 .unit-hpbar-mana { background-color: #0f0080; }
+/* "Healthbars: Team Colored" (issue #141) — a flat player colour that does NOT slide towards
+   red as the bar drains. There is no rule for the colour itself: it is written INLINE by
+   render/worldOverlays.ts, one owner at a time, and inline beats every rule here (including
+   the green/yellow/red ones above, which is why this state exists rather than a class beside
+   them). The placeholder's own vertical shading stays on top of it. */
 
 /* Occupancy bar — the row of slots WC3 floats under the health bar of a garrisoned building
    (an Orc Burrow's peons, an Entangled Gold Mine's wisps). One track per slot, laid across
@@ -376,6 +381,16 @@ body.hud-statbar-skinned .unit-hpbar-fill {
 body.hud-statbar-skinned .unit-hpbar-fill[data-state="yellow"] { background-image: var(--statbar-yellow); }
 body.hud-statbar-skinned .unit-hpbar-fill[data-state="red"] { background-image: var(--statbar-red); }
 body.hud-statbar-skinned .unit-hpbar-mana { background-image: var(--statbar-mana); }
+/* …and the team-coloured one, which the HUD cannot bake: the colour is a player's, not one of
+   four fixed tints, so the slab arrives UNTINTED (`--statbar-plain`) and is multiplied by the
+   inline background-color here. That is the same arithmetic `bakeStatBarFill` does — the
+   engine draws every bar by multiplying this one grey texture by the bar's colour — so a team
+   bar carries the same lit top row and barrel shading as the green one. Must come AFTER the
+   two rules above: they share this one's specificity. */
+body.hud-statbar-skinned .unit-hpbar-fill[data-state="team"] {
+  background-image: var(--statbar-plain);
+  background-blend-mode: multiply;
+}
 
 /* The floating name/owner slab WC3 shows above the unit (or gold mine / ground item)
    under the cursor — see rts.ts updateHoverTooltip. Anchored by its bottom-centre a

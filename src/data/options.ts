@@ -15,7 +15,9 @@ import { SOUND_GROUP, type SoundBoard } from "../audio/sounds";
 // faked behaviour, and are marked `applied:false` with the reason next to them. The rest have a
 // live backend: the Sound panel through `applyAudioOptions` here, the Video panel through
 // `applyVideoOptions` in render/videoQuality.ts, which is also where each video setting's
-// meaning (and which of its numbers are the game's) is written down.
+// meaning (and which of its numbers are the game's) is written down, and the Gameplay panel's
+// two health-bar rows through `applyHealthBarOptions` in render/worldOverlays.ts — the module
+// that draws the bars they describe.
 
 /** The kind of control an option is bound to, which decides how its value is read/written. */
 export type OptionKind = "bool" | "range" | "choice" | "text";
@@ -68,6 +70,23 @@ const ON_OFF = [
  * Ascending, as the game's own list was. Labels are plain text rather than GlobalStrings keys —
  * there are none for these, for the same reason the list was built at runtime.
  */
+/**
+ * What the "Healthbars:" pulldown offers (issue #141) — how the bar floating over every unit
+ * is COLOURED. Not a WC3 row: the 2003 options screen has no such setting, so the frame comes
+ * from `src/overrides/ui/OptionsMenu.fdf` and the labels from our GlobalStrings layer.
+ *
+ *  · `default` — WC3's own bar: one green slab that turns yellow past 60% lost and red past
+ *    70%, the same for your units, an ally's and an enemy's.
+ *  · `team` — the bar is the OWNER's colour and does not shift as it drains, so which player
+ *    a body belongs to is readable at a glance from the bar alone (Reforged's "Team Colored
+ *    Health Bars"). The colour follows the Ally Color Mode, because it is the same question
+ *    the body itself is painted by — see render/worldOverlays.ts.
+ */
+const HEALTH_BAR_STYLES = [
+  { value: "default", label: "DEFAULT_HEALTHBARS" },
+  { value: "team", label: "TEAM_COLORED_HEALTHBARS" },
+];
+
 const RESOLUTIONS = [
   { value: "800x450", label: "800 x 450" },
   { value: "1024x576", label: "1024 x 576" },
@@ -87,7 +106,14 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   { key: "subgroupModifier", frame: "SubgroupCheckBox", kind: "bool", panel: "gameplay", def: false, applied: false },
   { key: "formationToggle", frame: "FormationToggleCheckBox", kind: "bool", panel: "gameplay", def: true, applied: false },
   { key: "customKeys", frame: "CustomKeysCheckBox", kind: "bool", panel: "gameplay", def: false, applied: false },
-  { key: "healthBars", frame: "HealthBarsCheckBox", kind: "bool", panel: "gameplay", def: false, applied: false },
+  // Issue #141. ON by default, and live: `applyHealthBarOptions` (render/worldOverlays.ts)
+  // is what reads it. The game's own HEALTH_BARS_INFO says what it means and what ALT does to
+  // it — "This option will always show unit and building health bars. While this option is
+  // enabled, holding down the ALT key will temporarily hide these health bars."
+  { key: "healthBars", frame: "HealthBarsCheckBox", kind: "bool", panel: "gameplay", def: true },
+  // …and what those bars are COLOURED like (see HEALTH_BAR_STYLES). A row of ours, on a frame
+  // of ours, directly under the checkbox it qualifies.
+  { key: "healthBarStyle", frame: "HealthBarStyleMenu", kind: "choice", panel: "gameplay", def: "default", choices: HEALTH_BAR_STYLES },
   { key: "autosaveReplay", frame: "AutosaveReplayCheckBox", kind: "bool", panel: "gameplay", def: true, applied: false },
   // Issue #124. The one gameplay option with a live backend: it is the DEFAULT value of the
   // Custom Game screen's "Computer+ (Improved AI)" switch (ui/fdfSkirmish.ts), so ticking it
@@ -154,6 +180,14 @@ export function loadOptions(): Options {
     const raw = ls.getItem(STORAGE_KEY);
     if (!raw) return base;
     const saved = JSON.parse(raw) as Partial<Options>;
+    // A store written before issue #141 carries a `healthBars` NOBODY CHOSE. The checkbox was
+    // remembered but unapplied (`applied: false`) and defaulted to the game's own `false`, so
+    // pressing OK on this screen once was enough to write a `false` into the store — while the
+    // bars went on being drawn regardless, because nothing read it. Honouring that value now
+    // would turn the bars off for exactly the players who never touched the row. Such a store
+    // is precisely the one with no `healthBarStyle` in it (the sibling row that arrived with
+    // the backend), so there the stale value is dropped and the new default stands.
+    if (saved.healthBarStyle === undefined) delete saved.healthBars;
     for (const d of OPTION_DEFS) {
       const v = saved[d.key];
       // Only accept a stored value of the shape this option expects — a hand-edited or

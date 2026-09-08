@@ -1,5 +1,6 @@
 import { worldLayer } from "../ui/stage";
 import { wc3ToHtml } from "../ui/wc3Text";
+import type { Options } from "../data/options";
 
 // The floating world overlays: a status bar above every visible unit, and the hover
 // slab under the cursor. Both are DOM, both live in the world layer (ui/stage.ts),
@@ -54,6 +55,12 @@ export interface BarSpec {
    *  it. `slots` is the cargo hold's own capacity (5 for the mine, 4 for a burrow), so the
    *  bar has as many divisions as the thing has room for. null → nothing aboard, no bar. */
   garrison: { filled: number; slots: number } | null;
+  /** The player-colour SLOT this unit's body is wearing right now — `RtsController.unitColor`,
+   *  so the Ally Color Mode is already folded in and a bar re-colours with the unit it floats
+   *  over. **-1 is a NEUTRAL** (a creep, a shop, a critter), which is not a slot at all: the
+   *  neutral swatch is black (render/teamColor.ts `neutralTeamColor`) and a black bar reads as
+   *  an empty one. Only the "Team Colored" style looks at this. */
+  colorSlot: number;
   /** An ALLIED hero's learned spells, in the order the hero carries them — the discreet row
    *  of small icons floated over the bar so you can read what your teammate has to hand.
    *  null for everything else: your own hero's spells are already on your command card, and
@@ -86,7 +93,68 @@ export interface OverlayHost {
     worldToScreen(out: Float32Array, v: Float32Array, viewport: Float32Array): Float32Array;
   };
   viewport(): Float32Array;
+  /** One player-colour SLOT as a CSS colour — `render/teamColor.ts`'s `teamColorCss`, which
+   *  reads the install's own `TeamColorNN.blp`. Handed in rather than reached for, because a
+   *  swatch is a VFS read and neither this module nor the controller opens the archives; null
+   *  (or absent) when there is nothing mounted to read, and a team-coloured bar then falls
+   *  back to the ordinary green→red one rather than inventing a palette. */
+  teamColorCss?(slot: number): string | null;
 }
+
+// ---------------------------------------------------------------------------
+// The Gameplay panel's two health-bar rows (issue #141)
+// ---------------------------------------------------------------------------
+//
+// The Options screen's model is src/data/options.ts; what its rows MEAN lives with the thing
+// they describe, the way the Video panel's do in render/videoQuality.ts. These two describe
+// the bars in this file, so they live here.
+//
+//   "Always show Health Bars"  the checkbox the game ships, and finally wired up. Its own
+//                              GlobalStrings entry documents the whole feature, ALT included:
+//                              HEALTH_BARS_INFO "This option will always show unit and
+//                              building health bars. While this option is enabled, holding
+//                              down the ALT key will temporarily hide these health bars."
+//                              So ALT is not a second switch — it INVERTS this one for as
+//                              long as it is held, both ways round (RtsController).
+//   "Healthbars:"              Default, or Team Colored (a row of ours — see the option table).
+//
+// Read live, per frame, so a change on the screen is on the field the moment it is made.
+
+/** How the floating bar is coloured — `healthBarStyle`'s two values. */
+export type HealthBarStyle = "default" | "team";
+
+let barsAlways = true;
+let barStyle: HealthBarStyle = "default";
+
+/** Push the Gameplay panel's health-bar rows onto the overlays. Called at boot with the
+ *  committed options and again by the Options screen on every change, exactly as
+ *  `applyVideoOptions` is. */
+export function applyHealthBarOptions(opts: Options): void {
+  barsAlways = opts.healthBars !== false;
+  barStyle = opts.healthBarStyle === "team" ? "team" : "default";
+}
+
+/** "Always show Health Bars" — is every visible unit to carry a bar? (ALT inverts this; the
+ *  controller owns the key, because it is the one that knows what the cursor is over.) */
+export function healthBarsAlways(): boolean {
+  return barsAlways;
+}
+
+/** Which of the two colourings the bars wear. */
+export function healthBarStyle(): HealthBarStyle {
+  return barStyle;
+}
+
+/**
+ * What a NEUTRAL's bar is painted in under the Team Colored style.
+ *
+ * A creep has no player colour to wear: both neutrals reach the renderer as owner -1 and the
+ * swatch behind that owner is the palette's BLACK one (render/teamColor.ts `neutralTeamColor`),
+ * which inside a black frame is an empty bar. So this is a colour rather than a swatch, and it
+ * is the one issue #141 names — Reforged's own creep bar. It is given to the shops and critters
+ * too: they arrive under the same owner, and the issue names no second neutral colour.
+ */
+const CREEP_BAR_COLOR = "#974b58";
 
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 
@@ -143,6 +211,10 @@ interface HpBar {
     state: string;
     manaFrac: number | null;
     level: number | null;
+    /** The flat CSS colour a Team Colored bar is wearing, or "" for the ordinary green→red
+     *  one. Compared as well as `state`, because the style can change under a bar whose
+     *  fraction has not moved (a slot recoloured by the Ally Color Mode, the pulldown itself). */
+    teamColor: string;
     /** `filled/slots`, or "" for no bar — one string so the whole row is one comparison. */
     garrison: string;
     /** The ally spell row's signature (BarSpec.abilitySig) — one string so the whole row is
@@ -195,7 +267,7 @@ function makeHpBar(layer: HTMLElement): HpBar {
     root, bars, level, hp, manaTrack, mana, garrisonRow, abilRow,
     // NaN/undefined-ish seeds so the first sync writes everything; `hidden` matches the
     // element's actual initial state.
-    last: { hpFrac: NaN, state: "", manaFrac: NaN, level: NaN, garrison: "\0", abilities: "\0", barW: NaN, barH: NaN, left: NaN, top: NaN, hidden: true },
+    last: { hpFrac: NaN, state: "", teamColor: "\0", manaFrac: NaN, level: NaN, garrison: "\0", abilities: "\0", barW: NaN, barH: NaN, left: NaN, top: NaN, hidden: true },
   };
 }
 
@@ -275,6 +347,19 @@ export class WorldOverlays {
     return true;
   }
 
+  /** slot → the CSS colour a Team Colored bar wears, or null when there is no swatch to read
+   *  (no install mounted) and the bar keeps the ordinary green→red art. Cached: the swatches
+   *  never change (render/teamColor.ts), and this is asked once per bar per frame. */
+  private colorCache = new Map<number, string | null>();
+  private barColor(slot: number): string | null {
+    if (slot < 0) return CREEP_BAR_COLOR; // a creep/shop — see CREEP_BAR_COLOR
+    const hit = this.colorCache.get(slot);
+    if (hit !== undefined) return hit;
+    const css = this.host.teamColorCss?.(slot) ?? null;
+    this.colorCache.set(slot, css);
+    return css;
+  }
+
   /**
    * Draw one status bar per spec, in order, and hide the rest of the pool.
    *
@@ -292,6 +377,7 @@ export class WorldOverlays {
     const minW = g.clientW * STATBAR_W_FRAC;
     const maxW = minW * STATBAR_MAX_W;
     const barH = Math.max(STATBAR_MIN_H, Math.round(g.clientH * STATBAR_H_FRAC));
+    const teamStyle = healthBarStyle() === "team"; // frame-constant: one read, not one per bar
     const abilPx = Math.max(ABIL_ICON_MIN, Math.min(ABIL_ICON_MAX, Math.round(barH * ABIL_ICON_SCALE)));
 
     let n = 0;
@@ -305,14 +391,23 @@ export class WorldOverlays {
       if (last.hpFrac !== s.hpFrac) {
         last.hpFrac = s.hpFrac;
         bar.hp.style.width = `${s.hpFrac * 100}%`;
-        // WC3 tints the bar green→yellow→red by HP fraction (own, ally, and enemy
-        // alike — the floating bars aren't team-coloured). The tint is baked into the
-        // fill art, so the state picks an image rather than a colour.
-        const state = s.hpFrac > 0.6 ? "green" : s.hpFrac > 0.3 ? "yellow" : "red";
-        if (last.state !== state) {
-          last.state = state;
-          bar.hp.dataset.state = state;
-        }
+      }
+      // WC3 tints the bar green→yellow→red by HP fraction (own, ally, and enemy alike — the
+      // original's floating bars aren't team-coloured). The tint is baked into the fill art,
+      // so the state picks an image rather than a colour.
+      //
+      // Under "Team Colored" (issue #141) it is a flat colour instead, and it does NOT move as
+      // the bar drains: the bar answers *whose* rather than *how hurt*, and a colour that
+      // slid towards red would be saying both at once. The stylesheet takes it from here —
+      // `[data-state="team"]` multiplies the game's own untinted slab by this colour, which is
+      // exactly what the engine does to the green one.
+      const team = teamStyle ? this.barColor(s.colorSlot) : null;
+      const state = team ? "team" : s.hpFrac > 0.6 ? "green" : s.hpFrac > 0.3 ? "yellow" : "red";
+      if (last.state !== state || last.teamColor !== (team ?? "")) {
+        last.state = state;
+        last.teamColor = team ?? "";
+        bar.hp.dataset.state = state;
+        bar.hp.style.backgroundColor = team ?? ""; // "" hands the fill back to the stylesheet
       }
       // Mana bar (units/heroes with a mana pool). WC3 floats no mana bar of its own,
       // so it has no mana art either — the game builds one out of the SAME textures under

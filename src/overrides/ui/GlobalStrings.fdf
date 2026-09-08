@@ -30,4 +30,14 @@ StringList {
     // force with a colon (COLON_OBSERVERS "Observers:") and the mode by its full phrase
     // (FULL_OBSERVERS); the bare word a menu entry wants is nowhere in its table.
     OBSERVERS_TEAM              "Observers",
+
+    // Options, Gameplay panel: the row this engine adds directly UNDER "Always show Health
+    // Bars" (issue #141). Punctuated like every other pulldown label on this screen --
+    // COLON_RESOLUTION "Resolution:" is the row it is built to look like -- and its two
+    // entries are named the way the Video panel's are (LOW_MODELS, HIGH_PARTICLES): the
+    // value, then the row it belongs to, because GlobalStrings has no generic word for
+    // either of them.
+    COLON_HEALTHBARS            "Healthbars:",
+    DEFAULT_HEALTHBARS          "Default",
+    TEAM_COLORED_HEALTHBARS     "Team Colored",
 }

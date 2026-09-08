@@ -52,7 +52,7 @@ import { ComputerPlusAi, type PlusHost } from "../ai/plus";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
-import { WorldOverlays, type HoverLine, type BarAbility, type BarSpec } from "../render/worldOverlays";
+import { WorldOverlays, healthBarsAlways, type HoverLine, type BarAbility, type BarSpec } from "../render/worldOverlays";
 import { INSANE_HARVEST_FACTOR, MELEE_INSANE } from "../ai/ids";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
@@ -103,6 +103,11 @@ export interface RtsHost {
   viewport(): Float32Array;
   units(): MapUnit[];
   unitsReady(): boolean;
+  /** A player-colour SLOT as a CSS colour, off the install's own `TeamColorNN.blp`
+   *  (render/teamColor.ts). This object never opens the archives — same reason
+   *  `neutralColor` and `setIconResolver` are handed in — and the only thing that asks is the
+   *  team-coloured health bar (render/worldOverlays.ts `OverlayHost`, which this satisfies). */
+  teamColorCss?(slot: number): string | null;
 }
 
 export interface SelectionInfo {
@@ -1167,6 +1172,21 @@ export class RtsController {
 
   setInterfaceShown(on: boolean): void {
     this.interfaceShown = on;
+  }
+
+  /**
+   * Is ALT held down? It INVERTS "Always show Health Bars" for as long as it is, which is the
+   * game's own description of the pair — `GlobalStrings.fdf` HEALTH_BARS_INFO: "This option
+   * will always show unit and building health bars. While this option is enabled, holding down
+   * the ALT key will temporarily hide these health bars." So with the option OFF the same key
+   * shows them, which is the half issue #141 asks for.
+   *
+   * Pushed in per frame by the map viewer, which is where the keyboard is read.
+   */
+  private altHeld = false;
+
+  setAltHeld(on: boolean): void {
+    this.altHeld = on;
   }
 
   /** Which team's combined sight lifts the fog of war (allies share vision). */
@@ -7798,7 +7818,15 @@ export class RtsController {
       this.overlays.syncBars(specs);
       return;
     }
+    // "Always show Health Bars" (issue #141), with ALT inverting it for as long as it is held
+    // — the game's own HEALTH_BARS_INFO describes exactly that pair (see `altHeld`).
+    //
+    // When they are NOT all shown, the one under the CURSOR still is: a bar is how you read a
+    // body you are pointing at, and hiding that one leaves the hover slab naming a unit whose
+    // health you cannot see. Same `hovered` the ring and the tooltip use, so the three agree.
+    const showAll = healthBarsAlways() !== this.altHeld;
     for (const e of this.entries) {
+      if (!showAll && e.simId !== this.hovered) continue;
       // Same source as the model this bar floats over — that is the whole of item 10c-2c-2's
       // atomicity requirement. A bar drawn at the sim's position over a model drawn at the
       // snapshot's would track a unit it is not attached to.
@@ -7837,6 +7865,11 @@ export class RtsController {
         garrison: u.garrisonCap > 0 && u.garrison.length > 0
           ? { filled: u.garrison.length, slots: u.garrisonCap }
           : null,
+        // What the BODY is wearing this frame, so a Team Colored bar matches the unit it
+        // floats over — the Ally Color Mode and any `SetUnitColor`/`SetPlayerColor` included,
+        // because `unitColor` is the one call the model's own tint goes through too. A
+        // neutral has no slot (see BarSpec.colorSlot).
+        colorSlot: u.owner < 0 ? -1 : this.unitColor(u.owner, e.colorOverride),
         // …and what an ALLY's hero has to hand. Nothing for anything else, which is almost
         // every bar on the field.
         abilities: row?.list ?? null,

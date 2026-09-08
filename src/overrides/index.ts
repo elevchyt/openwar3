@@ -44,8 +44,13 @@ export interface FdfOverride {
    * …` in the tree to name `to` instead, and `dx`/`dy` are ADDED to that point's own offsets
    * for what the swap changed about the anchor's box (a dropdown's right edge does not sit
    * where a checkbox's does).
+   *
+   * `only` narrows that to the named frames. A retired row is anchored to by exactly the row
+   * under it, so the sweeping rewrite is right for it; a row SPLICED INTO the chain is not —
+   * its anchor frame stays put and keeps its own label hanging off it, and only the row it
+   * pushed down is to follow the new one.
    */
-  readonly repoint?: ReadonlyArray<{ from: string; to: string; dx?: number; dy?: number }>;
+  readonly repoint?: ReadonlyArray<{ from: string; to: string; dx?: number; dy?: number; only?: readonly string[] }>;
 }
 
 /** Strings the game has no key for. Layered by both screens below — a screen's own override
@@ -54,7 +59,7 @@ export const OW3_STRINGS: FdfOverride = { id: "ow3-strings", source: globalStrin
 
 /**
  * Options → Gameplay: out with the Game Port and the Chat Support gateway, in with the
- * Computer+ default (issue #124).
+ * Computer+ default (issue #124) and the "Healthbars:" pulldown (issue #141).
  *
  * The four retired frames are the label/control pairs of two settings this engine has no
  * meaning for; nothing else in the panel anchors to any of them, so the panel just ends a row
@@ -64,7 +69,20 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
   id: "ow3-options-menu",
   source: optionsMenuFdf,
   remove: ["GamePortLabel", "GamePortEditBox", "ChatSupportLabel", "ChatSupportBackdrop"],
+  // The "Healthbars:" pulldown is SPLICED IN under "Always show Health Bars" (issue #141), so
+  // the row beneath it — and only that row — re-anchors to the new one. `HealthBarsLabel`
+  // hangs off the same checkbox and must not move, which is what `only` is for.
+  //
+  // The dy is the pulldown's overhang. Its backdrop is 0.053 tall and centred on a
+  // 0.013-tall label (ui/fdf/layout.ts `textBoxHeight`: a one-line TEXT frame is exactly its
+  // font size), so it reaches 0.053 / 2 − 0.013 / 2 = 0.020 below the label's own bottom edge;
+  // the −0.005 the checkbox already carried is then the gap under the pulldown.
+  repoint: [
+    { from: "HealthBarsCheckBox", to: "HealthBarStyleLabel", dy: -0.02, only: ["AutosaveReplayCheckBox"] },
+  ],
   add: [
+    { frame: "HealthBarStyleLabel", into: "GameplayPanel" },
+    { frame: "HealthBarStyleBackdrop", into: "GameplayPanel" },
     { frame: "ComputerPlusDefaultCheckBox", into: "GameplayPanel" },
     { frame: "ComputerPlusDefaultLabel", into: "GameplayPanel" },
   ],
@@ -167,10 +185,11 @@ export function applyOverride(lib: FdfLibrary, root: FdfFrame, override: FdfOver
  * them: step past the relative frame's name and its point, and what is left is the pair. A
  * point that stated no offsets grows them, since it is being moved off a different box.
  */
-function repoint(root: FdfFrame, r: { from: string; to: string; dx?: number; dy?: number }): void {
+function repoint(root: FdfFrame, r: { from: string; to: string; dx?: number; dy?: number; only?: readonly string[] }): void {
   const dx = r.dx ?? 0;
   const dy = r.dy ?? 0;
   (function walk(f: FdfFrame): void {
+    if (r.only && !r.only.includes(f.name)) { f.children.forEach(walk); return; }
     for (const p of f.props) {
       if (p.key !== "SetPoint") continue;
       const at = p.args.findIndex((a) => a.str && a.s === r.from);

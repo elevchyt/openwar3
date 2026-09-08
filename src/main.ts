@@ -22,6 +22,7 @@ import { WebSocketTransport } from "./net/transport";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
 import { applyVideoOptions } from "./render/videoQuality";
+import { applyHealthBarOptions } from "./render/worldOverlays";
 import { GlueManager, type GlueScreenDef } from "./ui/glue";
 import { mountLoadingScreen, type LoadingScreen } from "./ui/loadingScreen";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
@@ -71,7 +72,12 @@ const ui = document.getElementById("ui") as HTMLElement;
 // HERE, at module scope, rather than beside the audio applier down in the gate: texture quality
 // is read as a texture is uploaded, so a setting applied after the first viewer exists would
 // miss everything that viewer had already loaded.
-applyVideoOptions(loadOptions());
+const bootOptions = loadOptions();
+applyVideoOptions(bootOptions);
+// …and the Gameplay panel's two health-bar rows (issue #141), which the world overlays read
+// live. Here beside the video half so a match started straight off a deep link is already
+// wearing the player's committed settings.
+applyHealthBarOptions(bootOptions);
 
 const resolver = new AssetResolver(null);
 
