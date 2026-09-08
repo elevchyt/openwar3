@@ -285,15 +285,25 @@ console.log("\nthe Amulet of Spell Shield eats one enemy spell, then grows back 
   check("…leaving the shield up", hero.buffs.filter((b) => b.kind === "spellShield").length, 1);
 }
 
-console.log("\nthe Ankh of Reincarnation is spent, and the hero is standing where he fell");
+console.log("\nthe Ankh of Reincarnation is spent, and the hero gets up where he fell");
 {
   world = newWorld();
   const hero = give(unit({ isHero: true, hp: 0 }), "ankh");
   hero.mana = 123;
-  check("the Ankh brings him back", world.tryReincarnate(hero), true);
-  near("…with DataB hit points", hero.hp, 500);
-  near("…and the mana he had (DataC = -1)", hero.mana, 123);
+  check("the Ankh catches the death", world.tryReincarnate(hero), true);
   check("…and the item is gone", hero.inventory[0], null);
+  // `AIrc` DataA "Delay After Death" = 7. He is DOWN for it: one hit point, untouchable and
+  // unable to act, with ReincarnationTarget standing over him (see SimWorld.goDown).
+  near("…he is down, not up", hero.hp, 1);
+  check("…off the field while he is", hero.vanished, true);
+  check("…and so untouchable", hero.invulnerable, true);
+  check("…for DataA's 7 seconds", Math.round(hero.reviveT), 7);
+  world.tickRevive(hero, 6.9);
+  near("…still down at 6.9s", hero.hp, 1);
+  world.tickRevive(hero, 0.2);
+  near("…and up at 7 with DataB hit points", hero.hp, 500);
+  near("…and the mana he had (DataC = -1)", hero.mana, 123);
+  check("…and back on the field", hero.vanished, false);
   hero.hp = 0;
   check("…so a second death is a death", world.tryReincarnate(hero), false);
 }

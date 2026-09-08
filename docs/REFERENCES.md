@@ -186,8 +186,15 @@ used is the one inside `Chains_silver.blp`.
   unit being attacked", Slam at 3); [Wowpedia "Creep"](https://wowpedia.fandom.com/wiki/Creep)
   (the classic creep-basics text, the 1.03/1.10 patch notes, "500 or 200", the 60 % tower
   retreat); [Hive 15660 "Creep Camp"](https://www.hiveworkshop.com/threads/creep-camp.15660/)
-  (the editor's "camp: (200)"). Gotchas: warcraft3.info is JS-rendered — fetch the article's HTML
-  with a browser `User-Agent`; reddit and YouTube are unreachable from the dev box.
+  (the editor's "camp: (200)"); and, for the abilities themselves,
+  [Wowpedia "Warcraft III creep abilities"](https://wowpedia.fandom.com/wiki/Warcraft_III_creep_abilities)
+  — the archive of all ~64 with their numbers ("Reduces all attacks on the unit by 12 damage.
+  Attacks cannot be reduced below 3 damage."; "dealing 5 damage per second"; "Increases this
+  unit's attack rate by 40%"). Gotchas: warcraft3.info is JS-rendered — fetch the article's HTML
+  with a browser `User-Agent`; the Wowpedia page is Cloudflare-blocked for a plain fetch and its
+  wikitext is nothing but template transclusions, so read it through the wiki API
+  (`api.php?action=parse&page=…&prop=text`); Liquipedia's API needs `curl --compressed` or it
+  answers "406 Gzip encoding is required"; reddit and YouTube are unreachable from the dev box.
 - **Orders / command system** overview: [WC3 basic commands & orders (YouTube)](https://www.youtube.com/watch?v=EehNLL7yYng)
 - **Core game rules (buildings, workers, rally, upkeep, etc.)** — the official
   classic WC3 "basics" pages are the ground truth for how the game actually works;

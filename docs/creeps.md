@@ -66,6 +66,109 @@ And nothing pressed a creep's NON-autocast buttons: the melee AI casts for its s
 Hostile has none. `src/ai/creeps.ts` is that caster — the same `AiCaster` and the same thread-
 sourced rules, gated on the camp being in a fight, leaving through `issueCast` on the authority.
 
+## The creep abilities themselves
+
+[Wowpedia's "Warcraft III creep abilities"](https://wowpedia.fandom.com/wiki/Warcraft_III_creep_abilities)
+is the archive of the sixty-odd abilities a creep can carry, with the numbers on each. Fetch it
+through the wiki's own API (`api.php?action=parse&prop=text`) — the rendered page is behind
+Cloudflare, and the wikitext is nothing but template transclusions.
+
+Every ability on it is now implemented. Most were already there as ALIASES (a creep row whose
+`code` is a racial ability's: `ACbb`/`ACbl` → `Ablo`, `ACen` → `Aens`, `ACvs` → `Aven`). The
+ones that were not fell into two groups, and both are worth recognising again:
+
+**A creep row with a code of its OWN, twinning something we had.** Invisible from the call site,
+because the effect exists and the id simply never reaches it.
+
+| Creep row | Twin | What was missing |
+|---|---|---|
+| `ACtb` Hurl Boulder | `AHtb` Storm Bolt | The golems threw nothing. Same shape: `Ctb1` 100 damage, `Dur1` 2 s stun, `Rng1` 800, `Cool1` 8, `BPSE`. |
+| `ACtc` Slam (`ACt2` on the Thunder Lizard) | `AHtc` Thunder Clap | 70 damage, 0.25/0.25 slow, `Area1` 250, `Dur1` 4 s, `BCtc`. |
+| `ACdv` Devour | `Adev` Kodo Devour | The dragons, the Dragon Turtle and the Salamander Lord swallowed nobody. |
+| `ACrn` Reincarnation | `AOre` Tauren Chieftain's | The Centaur Khan, Ancient Sasquatch and Ancient Wendigo never got up — and `tryReincarnate` also required a HERO, which no `ACrn` carrier is. |
+| `ANin` Inferno | `AUin` Dreadlord's | The creep/Pit Lord row summoned nothing. |
+
+**Abilities with no implementation at all**, each now reading its own named columns
+(`Units\AbilityMetaData.slk` field groups through `UI\WorldEditStrings.txt` — never inferred):
+
+- **Frenzy** `Afzy` (quillbeasts). Bloodlust's own field group: `Blo1..Blo3` is declared
+  `useSpecific = "Ablo,ACbl,Afzy"`, so DataA 0.4 attack speed and DataB 0.25 movement are
+  Bloodlust's columns. It is a SELF-target autocast (`targs1` "air,ground,self", no `friend`),
+  a shape `tickAutocast` did not have: the friendly search looked for somebody else and found
+  nobody. It fires with the buff not already up and a fight on — the fight half is ours.
+- **Hardened Skin** `Assk` (Mountain Giant; `Ansk` on the Dragon Turtle, same code).
+  `Ssk1..Ssk5` = chance 100 %, **Minimum Damage 3**, **Ignored Damage 12**, include ranged 1,
+  include melee 1. It lives in `applyDamage` and nowhere else, which is what confines it to
+  ATTACKS — a spell reaches `landDamage` directly.
+- **Permanent Immolation** `ANpi` (the Infernal; `Apig` is the same code). Immolation with the
+  toggle taken off — `Cost1` and DataB "Mana Drained per Second" are 0 — so it is the existing
+  machinery ALIGHT FROM BIRTH (lit in `recomputeStats`) rather than a second copy. The one
+  guard it needs: the buffer-mana test would read "mana ≤ 0" and douse a unit that has no mana
+  pool at all.
+
+**Two column reads that were wrong or missing**, both found by asking the metadata rather than
+the behaviour:
+
+- **Devour's digest rate is not on the Devour button.** `Dev1` is **"Max Creep Level"** for
+  `useSpecific = "Adev,ACdv"` — DataA on both — and the damage lives on the HOLD that carries
+  the prey, `Advc` "Cargo Hold (Devour)", whose `Dev2` is "Damage per Second" (DataB). Both read
+  5, so reading DataA gave the right number off the wrong column; the creep's own Ubertip cites
+  `<Advc,DataB1>` and settles it. (The Kodo's says `DataC1`, which is `Dev3` "Maximum Creep
+  Level" — Blizzard's typo, invisible because both are 5.)
+- **The Max Creep Level was never enforced**, so a Kodo Beast could swallow a level 10 Dragon.
+  It is the second member of `CREEP_LEVEL_CAP`, which is now a map of code → column because
+  Transmute keeps its cap in DataC and Devour in DataA. The refusal is the game's own
+  `Creeptoopowerful` line. (A dragon is refused for magic immunity before the level is asked.)
+
+## Three abilities that were half there
+
+- **Inferno** (`AUin`, and `ANin` under the creep code) never applied its STUN, which is most
+  of what the ultimate is for: `Dur1`/`HeroDur1` 4/2 with `BuffID1 = BNin` are the stun, and
+  the handler read them as nothing at all. It also landed everything at the press, where
+  `Uin3` **"Impact Delay"** = 1 s says the meteor is in the air first — so the damage arrived
+  a second before the picture of it. `SimWorld.startInferno` now plays `Effectart`
+  (`InfernalBirth.mdl`, once) at the press and lands the damage, the stun and the demon
+  together a second later. The Infernal that stands up is the Permanent Immolation carrier
+  above, so the two arrived in the same pass.
+- **Reincarnation** revived INSTANTLY, which left `Ore1` "Reincarnation Delay" (5 s on the
+  hero row, 7 on the creep's and the Ankh's) unspent and the effect with nothing to mark. The
+  unit is now DOWN for that window — `vanished`, the state a Blademaster spends mid-Mirror-
+  Image and a hero spends inside a Soul Gem, so it is off the field, untargetable and
+  unorderable — and `ReincarnationTarget.mdl` stands over the spot: Birth, then Stand held for
+  the window, then its DEATH clip as the unit rises. That lifecycle is the new `"hold"`
+  `EffectAnim` (world.ts) and its handling in `spawnEffect`/`updateEffects`. The Ankh of
+  Reincarnation goes through the same door with its own three columns (`AIrc` DataA delay 7,
+  DataB restored life 500, DataC restored mana −1 = keep).
+  **The trap:** an invulnerability buff plus a stun is NOT the way to hold a unit down — an
+  invulnerability RISING strips status effects (Divine Shield's own rule), so the stun comes
+  off in the same breath it goes on.
+- **Hide** (`Ashm`) was a button nobody pressed. It takes itself now: a unit that can meld and
+  is simply STANDING THERE — `idle` or `hold`, not moving, not swinging, not casting — melds
+  by itself at night, which is how the ability is actually met (nobody clicks Hide on every
+  Archer every night). The FADE is the row's own `Shm1` **"Fade Duration" = 1.5 s**, which
+  Liquipedia's Hide page prints and which was already the buff's `delay`. The Cloak of Shadows
+  (`[clsd] abilList = Ashm`) is the same row carried, and on 1.30.4 it is night-only too — its
+  own Ubertip says "invisibility at night", and the daytime version is a 1.31 change.
+
+**When a creep presses these** is `src/ai/creeps.ts` plus the sourced rules in `CAST_RULES`.
+Hurl Boulder's is `heroMana` — "The Golem will prioritize to target hero units that are
+attacking it" (warcraft3.info 176) plus "often prioritizing Heroes or casting units" (the
+Wowpedia summary) — and that second rung is deliberately NOT given to Storm Bolt, whose own
+source says heroes and nothing else.
+
+## Open, and worth measuring against the real client
+
+- **Where Hardened Skin sits in the damage pipeline.** The data names the two numbers and not
+  their order. It is applied LAST here, after armour and the attack-type multiplier, because
+  that is the only order under which the row's own guarantee — never below `Minimum Damage` —
+  is true; reduced first, a Footman's 12.5 floors at 3 and is then taken under it by six points
+  of armour.
+- **Reincarnation's delay.** `Ore1` "Reincarnation Delay" is 5 on the hero row and 7 on the
+  creep's; the revive is immediate for both here, as it is for the Ankh.
+- Whether the "Camp" flag does anything beyond the 200 (deafness to construction is an
+  inference), and the creep Shockwave's quorum (the hiveworkshop thread says 2, warcraft-gym
+  says 3 for the Ogre Lord; the thread's 2 is kept).
+
 ## Traps
 
 - `creepInFight` walks the camp (`campFightTarget`); ask it on an edge or for the few creeps that
@@ -77,4 +180,9 @@ sourced rules, gated on the camp being in a fight, leaving through `issueCast` o
   `null` there has spawned a unit that happens to look like a tower.
 - Reddit and YouTube are unreachable from the dev box (HTML shell / no data blocks); the video
   guides listed in the task (carsonnn's three-part creeping guide, Grubby's) overlap article 176
-  by its own account.
+  by its own account. Liquipedia is behind Cloudflare for a plain fetch but answers its API with
+  `curl --compressed` (it refuses an uncompressed API request outright).
+- A headless check of a damage-over-time field wants the caster DISARMED and the victims on
+  HOLD: an Infernal that is also punching makes its own burn unreadable (10 a second read as
+  45), and an idle ally rallies to the fight (`assistTarget`) and walks into the circle it was
+  placed outside.

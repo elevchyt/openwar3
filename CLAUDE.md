@@ -472,7 +472,15 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   Ensnare goes on what ENTERS its reach after the fight starts. A creep casts only while its
   camp is fighting — Heal excepted. Three wiring traps cost every creep ability at once:
   map-placed creeps must be seeded WITH their card (`trySeed`), the `auto` column names the BASE
-  CODE on a creep (`autoArmed`), and a neutral owner meets every `Requires` (`techMeets`).
+  CODE on a creep (`autoArmed`), and a neutral owner meets every `Requires` (`techMeets`). A
+  creep row with a code of ITS OWN twinning something we have is the standing bug in this area
+  (`ACtb` Hurl Boulder = Storm Bolt, `ACtc` Slam = Thunder Clap, `ACdv` Devour, `ACrn`
+  Reincarnation, `ANin` Inferno) — the effect exists and the id never reaches it. Also there:
+  Inferno's meteor is in the air for `Uin3` "Impact Delay" before its damage AND its stun land,
+  Reincarnation holds the body off the field for `Ore1` "Reincarnation Delay" with
+  `ReincarnationTarget` standing over it (the `"hold"` EffectAnim: Birth, Stand, Death), and
+  **Hide takes itself** — a unit standing with no order melds at night after the row's own 1.5 s
+  Fade Duration.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
   that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
   files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its

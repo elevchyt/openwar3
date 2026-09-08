@@ -211,6 +211,9 @@ export interface SpellApi {
   /** Mirror Image: run the caster-vanishes -> missiles -> illusions sequence (AOmi).
    *  Staged over time in the world, so the handler only kicks it off. */
   mirrorImage(caster: SimUnit, def: AbilityDef, rank: number): void;
+  /** Inferno — a staged ability like Mirror Image: the meteor is in the air for the row's own
+   *  "Impact Delay" before anything under it is touched. See SimWorld.startInferno. */
+  inferno(caster: SimUnit, def: AbilityDef, rank: number, x: number, y: number): void;
 
   /**
    * Light a patch of fog for a player, for a while — the ONE thing the scouting items do
@@ -854,6 +857,15 @@ export const MANA_TARGET_SPELLS: Record<string, string> = {
   Arpm: "Targetmanauser", // Obsidian Statue — Spirit Touch
 };
 
+/** Devour's shape, shared by the Kodo Beast (`Adev`) and the creeps (`ACdv`). The MAX CREEP
+ *  LEVEL both rows carry is enforced at the button (`SimWorld.castError`), not here. */
+const devourSpell: Handler = (api, caster, def, _rank, ctx) => {
+  const t = api.getUnit(ctx.targetId);
+  if (!t || !api.hostile(caster, t) || t.building || t.isHero) return;
+  api.devour(caster, t);
+  if (def.targetArt) api.emitEffect(def.targetArt, caster.x, caster.y, caster.id);
+};
+
 /** Storm Bolt's shape, shared with the creeps' Hurl Boulder (see the `AHtb`/`ACtb` rows). */
 const stormBolt: Handler = (api, caster, def, rank, ctx) => {
   const t = api.getUnit(ctx.targetId);
@@ -1358,11 +1370,23 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // Devour (Kodo Beast) — swallow an enemy land non-hero unit whole; it's digested inside
   // (tickDevour) and freed if the Kodo is slain first.
-  Adev: (api, caster, def, _rank, ctx) => {
-    const t = api.getUnit(ctx.targetId);
-    if (!t || !api.hostile(caster, t) || t.building || t.isHero) return;
-    api.devour(caster, t);
-    if (def.targetArt) api.emitEffect(def.targetArt, caster.x, caster.y, caster.id);
+  Adev: devourSpell,
+  // DEVOUR (CREEP) — `ACdv`, a code of its own rather than an alias of the Kodo's, and the
+  // same swallow: the dragons, the Dragon Turtle and the Salamander Lord carry it beside the
+  // `Advc` hold that digests. Its own Ubertip is the Kodo's with the creep's name in it, and
+  // it points at the same column — "dealing <Advc,DataB1> damage per second to it. If the
+  // creep is killed while the consumed unit is still digesting, the unit that was devoured
+  // will be released" — so it is one behaviour under two ids (SimWorld.tickDevour).
+  ACdv: devourSpell,
+
+  // FRENZY (`Afzy`) — the quillbeasts' self-Bloodlust, and Bloodlust is not a metaphor: the
+  // metadata declares `Blo1..Blo3` for "Ablo,ACbl,Afzy" together, so the columns ARE
+  // Bloodlust's (DataA attack-speed 0.4, DataB movement 0.25) and its own Ubertip prints
+  // both. `targs1` is "air,ground,self" and the button takes no target: the caster is the
+  // only unit it can land on.
+  Afzy: (api, caster, def, rank) => {
+    const lvl = def.levelData[rank - 1];
+    api.applyBuff(caster, { kind: "haste", group: "bloodlust", timeLeft: dur(lvl, caster) || 20, sourceId: caster.id, value: d(lvl, 1, 0.25), value2: d(lvl, 0, 0.4), ...fx(def) });
   },
 
   // Unstable Concoction (Batrider) — the rider blows himself up: dataB damage to the target
@@ -2757,15 +2781,16 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // Inferno (Dreadlord, ult) — an infernal crashes down at the point, dealing
   // dataA impact damage to enemies in `area`, then fights for the duration.
-  AUin: (api, caster, def, rank, ctx) => {
-    const lvl = def.levelData[rank - 1];
-    for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 250)) api.spellDamage(t, d(lvl, 0, 50), caster.id);
-    // How long the Infernal stays is `Uin2 "Duration"` = 180 — NOT the Dur/HeroDur columns,
-    // which on this row are the 4s/2s STUN the crash lands on everything under it. Reading
-    // them (as this did) gave the Dreadlord's ultimate a two-second demon.
-    if (lvl.summon) api.requestSummon(lvl.summon, ctx.x, ctx.y, caster.facing, caster.owner, caster.team, d(lvl, 1, 180), caster.id, { summon: def.effectArt, unsummon: def.buffEffectArt }, true);
-    if (def.specialArt) api.emitEffect(def.specialArt, ctx.x, ctx.y, 0);
-  },
+  // The Infernal FALLS: `Uin3 "Impact Delay"` = 1 second between the press and the crash, so
+  // the meteor is in the air while `InfernalBirth.mdl` (the row's `Effectart`) plays, and the
+  // damage, the stun and the demon all arrive together when it lands (SimWorld.startInferno).
+  // Everything under it is STUNNED — `Dur1` 4 / `HeroDur1` 2 with `BuffID1 = BNin` — which is
+  // most of what the ultimate is for and was the half this handler never applied.
+  AUin: (api, caster, def, rank, ctx) => api.inferno(caster, def, rank, ctx.x, ctx.y),
+  // …and `ANin` is the same ability under the CREEP's own code (the Pit Lord's, and the
+  // Scroll of the Infernal's twin), not an alias of it — so it needs the row here or the
+  // button does nothing at all.
+  ANin: (api, caster, def, rank, ctx) => api.inferno(caster, def, rank, ctx.x, ctx.y),
 
   // Animate Dead (Death Knight, ult) — `targs1 = air,ground,dead`, the same corpse-eating
   // family as Carrion Beetles, and cast the same way: pressed, not aimed. It sweeps `Area1`

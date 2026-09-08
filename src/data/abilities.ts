@@ -545,6 +545,12 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Aliq: { target: "passive" }, // Liquid Fire (Batrider) — on-attack building burn (sim hook)
   Auco: { target: "unit" }, // Unstable Concoction (Batrider) — suicide AoE vs air units
   Adev: { target: "unit" }, // Devour (Kodo Beast) — swallow & digest an enemy land unit
+  ACdv: { target: "unit" }, // Devour (creep) — the dragons' and Dragon Turtle's own code for it
+  Afzy: { target: "none", autocast: true }, // Frenzy — the quillbeasts' self-Bloodlust (Orderon/Orderoff)
+  Assk: { target: "passive" }, // Hardened Skin — Mountain Giant / Dragon Turtle: ignore DataC of every attack
+  ANpi: { target: "passive" }, // Permanent Immolation — the Infernal's fire, alight from birth
+  ACrn: { target: "passive" }, // Reincarnation (creep) — the Centaur Khan / Sasquatch / Wendigo row
+  ANin: { target: "point" }, // Inferno (creep/Pit Lord) — the Dreadlord's `AUin` under its own code
   Asal: { target: "passive" }, // Pillage — gold on building attacks (gated on the Ropg upgrade)
   Acpf: { target: "none" }, // Corporeal/Ethereal Form (Spirit Walker) — self toggle between forms
   // === ITEM abilities that must be AIMED ===

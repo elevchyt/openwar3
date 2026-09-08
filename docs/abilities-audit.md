@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 368, **done** 248, **partial** 8, **passive** 13, **todo** 162.
+Totals: 799 rows — **alias** 370, **done** 251, **partial** 10, **passive** 14, **todo** 154.
 
 ## Art paths this install does not ship
 
@@ -83,7 +83,7 @@ Known gaps that are NOT ability rows, found while auditing:
 
 ## Unimplemented base codes, by alias fanout
 
-125 distinct base `code`s cover the 162 todo rows. Implementing one
+119 distinct base `code`s cover the 154 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -97,12 +97,10 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `ANdc` | Dark Conversion | 2 | air,ground,organic,nonhero | darkconversion | `ANdc` `SNdc` |
 | `Advm` | Devour Magic | 2 | air,ground,ward,invu,vuln,tree |  | `ACde` `Advm` |
 | `AUfa` | Frost Armor | 2 | air,ground,friend,self,neutral | frostarmor | `ACfa` `AUfa` |
-| `Assk` | Hardened Skin | 2 | enemy,ally |  | `Ansk` `Assk` |
 | `ANmo` | Monsoon | 2 | air,ground,structure,enemy,neutral | monsoon | `ACmo` `ANmo` |
 | `Amgl` | Moon Glaive | 2 |  |  | `Amgl` `Amgr` |
 | `Acoi` | Mount Hippogryph | 2 | vuln,invu |  | `Aco2` `Aco3` |
 | `ANpa` | Parasite | 2 | air,ground,enemy,organic,neutral,nonhero | parasite | `ACpa` `ANpa` |
-| `ANpi` | Permanent Immolation | 2 | ground,enemy,neutral,organic |  | `ANpi` `Apmf` |
 | `Aply` | Polymorph | 2 | air,ground,nonhero,enemy,organic,neutral | polymorph | `ACpy` `Aply` |
 | `Apos` | Possession | 2 | ground,nonhero,enemy,organic,neutral | possession | `ACps` `Apos` |
 | `ANrc` | Rain of Chaos | 2 |  |  | `ANr3` `ANrc` |
@@ -128,7 +126,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Agyd` | Create Corpse | 1 |  |  | `Agyd` |
 | `ANdp` | Dark Portal | 1 |  |  | `ANdp` |
 | `Aave` | Destroyer Form | 1 |  | sphinxform | `Aave` |
-| `ACdv` | Devour | 1 | ground,nonhero,enemy,organic,neutral | creepdevour | `ACdv` |
 | `Advc` | Devour Cargo | 1 | ground,enemy,neutral,vuln,invu |  | `Advc` |
 | `Apts` | Disease Cloud | 1 | ground,enemy,structure,debris,tree,wall,organic,neutral |  | `Apts` |
 | `Adch` | Disenchant | 1 | air,ground,ward,invu,vuln,enemy |  | `Adch` |
@@ -142,12 +139,10 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Afla` | Flare | 1 |  | flare | `Afla` |
 | `Afsh` | Fragmentation Shards | 1 | ground,enemy,neutral |  | `Afsh` |
 | `Afrz` | Freezing Breath | 1 | structure,enemy | freezingbreath | `Afrz` |
-| `Afzy` | Frenzy | 1 | air,ground,self | frenzy | `Afzy` |
 | `Aeth` | Ghost | 1 |  |  | `Aeth` |
 | `Agho` | Ghost | 1 |  |  | `Agho` |
 | `Agld` | Gold Mine ability | 1 |  |  | `Agld` |
 | `AHer` | Hero | 1 |  |  | `AHer` |
-| `ANin` | Inferno | 1 | ground,structure,debris,enemy,neutral | inferno | `ANin` |
 | `Avul` | Invulnerable | 1 |  |  | `Avul` |
 | `AIdm` | Item Area tree/wall damage | 1 |  |  | `AIdm` |
 | `AIlb` | Item Attack Lightning Bonus | 1 | ground,air,ward |  | `AIlb` |
@@ -180,7 +175,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `ARal` | Rally | 1 |  |  | `ARal` |
 | `AIri` | Random Item | 1 | item |  | `AIri` |
 | `AIrb` | Rebirth | 1 |  |  | `AIrb` |
-| `ACrn` | Reincarnation | 1 |  |  | `ACrn` |
 | `Arbr` | Reinforced Burrows Upgrade | 1 |  |  | `Arbr` |
 | `Arpb` | Replenish | 1 | ground,air,friend,self,organic,vuln,invu | replenish | `Arpb` |
 | `Andt` | Reveal | 1 |  |  | `Andt` |
@@ -395,8 +389,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `Adtn` | `Adtn` | Detonate | nightelf |  |  | air,ground,ward,invu,vuln,tree | 2 | detonate | Detonate |
 | ~ | `ACav` | `AHad` | Devotion Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Aura - Devotion (Creep) |
 | x | `AHad` | `AHad` | Devotion Aura | human | H |  | air,ground,friend,self,vuln,invu | 1 |  | Paladin - Devotion Aura |
-|   | `ACdv` | `ACdv` | Devour | creeps |  |  | ground,nonhero,enemy,organic,neutral |  | creepdevour | Devour (Dragon Creep) |
-| x | `Adev` | `Adev` | Devour | orc |  |  | ground,nonhero,enemy,organic,neutral | 1 | devour | Devour |
+| / | `ACdv` | `ACdv` | Devour | creeps |  |  | ground,nonhero,enemy,organic,neutral |  | creepdevour | Devour (Dragon Creep) |
+| / | `Adev` | `Adev` | Devour | orc |  |  | ground,nonhero,enemy,organic,neutral | 1 | devour | Devour |
 |   | `Advc` | `Advc` | Devour Cargo | orc |  |  | ground,enemy,neutral,vuln,invu |  |  | Cargo Hold (Devour) |
 |   | `ACde` | `Advm` | Devour Magic | creeps |  |  | air,ground,ward,invu,vuln,tree | 1 |  | Devour Magic(creep) |
 |   | `Advm` | `Advm` | Devour Magic | undead |  |  | air,ground,ward,invu,vuln,tree | 2 |  | Devour Magic |
@@ -480,7 +474,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `ANfl` | `ANfl` | Forked Lightning | creeps | H |  | air,ground,enemy,neutral,organic | 1 | forkedlightning | Sea Witch - Forked Lightning |
 |   | `Afsh` | `Afsh` | Fragmentation Shards | human |  |  | ground,enemy,neutral | 1 |  | Frag Shards |
 |   | `Afrz` | `Afrz` | Freezing Breath | undead |  |  | structure,enemy | 1 | freezingbreath | Freezing Breath |
-|   | `Afzy` | `Afzy` | Frenzy | creeps |  |  | air,ground,self |  | frenzy | Frenzy |
+| x | `Afzy` | `Afzy` | Frenzy | creeps |  |  | air,ground,self |  | frenzy | Frenzy |
 | ~ | `ACf2` | `AUfu` | Frost Armor | creeps |  |  | air,ground,friend,self,neutral |  | frostarmor | Frost Armor (creep,autocast) |
 |   | `ACfa` | `AUfa` | Frost Armor | creeps |  |  | air,ground,friend,self,neutral |  | frostarmor | Frost Armor (creep,old) |
 | ~ | `ACfu` | `AUfu` | Frost Armor | naga |  |  | air,ground,friend,self,neutral |  | frostarmor | Frost Armor (Autocast, Naga) |
@@ -509,8 +503,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AIgu` | `AIgl` | Glyph of Fortification | other |  | I |  |  |  | UltraVisionGlyph |
 |   | `Agld` | `Agld` | Gold Mine ability | other |  |  |  |  |  | Gold Mine |
 | ~ | `APrr` | `AHre` | Greater Rune Resurrection | other |  | I | air,ground,dead,friend | 2 | resurrection | Rune of Greater Resurrection |
-|   | `Ansk` | `Assk` | Hardened Skin | naga |  |  | enemy,ally |  |  | Hardened Skin(Naga Turtle) |
-|   | `Assk` | `Assk` | Hardened Skin | nightelf |  |  | enemy,ally |  |  | Hardened Skin |
+| ~ | `Ansk` | `Assk` | Hardened Skin | naga |  |  | enemy,ally |  |  | Hardened Skin(Naga Turtle) |
+| x | `Assk` | `Assk` | Hardened Skin | nightelf |  |  | enemy,ally |  |  | Hardened Skin |
 | x | `Ahar` | `Ahar` | Harvest | other |  |  | tree,alive,dead |  | harvest | Harvest |
 | ~ | `Ahr2` | `Ahrl` | Harvest | creeps |  |  | tree,alive,dead |  | harvest | Harvest Lumber (Arch ghouls) |
 | ~ | `Ahr3` | `Ahrl` | Harvest | creeps |  |  | tree,alive,dead |  | harvest | Harvest Lumber (shredder) |
@@ -544,7 +538,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `AUim` | `AUim` | Impale | undead | H |  | ground,enemy,neutral,organic | 1 | impale | Crypt Lord - Impale |
 | x | `ANia` | `ANia` | Incinerate | creeps | H |  | enemy,neutral,organic,nonancient | 1 | incineratearrow | Firelord - Incinerate |
 | x | `ANic` | `ANic` | Incinerate | creeps | H |  | enemy,neutral,organic,nonancient | 1 | incinerate | Firelord - Incinerate |
-|   | `ANin` | `ANin` | Inferno | creeps | H |  | ground,structure,debris,enemy,neutral | 1 | inferno | Inferno |
+| x | `ANin` | `ANin` | Inferno | creeps | H |  | ground,structure,debris,enemy,neutral | 1 | inferno | Inferno |
 | x | `AUin` | `AUin` | Inferno | undead | H |  | ground,structure,debris,enemy,neutral | 1 | inferno | Dreadlord - Inferno |
 | ~ | `SNin` | `AUin` | Inferno | creeps | H |  | ground,structure,debris,enemy,neutral | 1 | inferno | Tichondrius - Inferno |
 | ~ | `ACif` | `Ainf` | Inner Fire | creeps |  |  | air,ground,friend,neutral,self |  | innerfire | Inner Fire (Creep) |
@@ -750,12 +744,12 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `ACpa` | `ANpa` | Parasite | creeps |  |  | air,ground,enemy,organic,neutral,nonhero | 1 | parasite | Parasite(eredar) |
 |   | `ANpa` | `ANpa` | Parasite | naga |  |  | air,ground,enemy,organic,neutral,nonhero | 1 | parasite | Parasite |
 | ~ | `AIpz` | `AIha` | Penguin Squeek | other |  | I |  |  |  | Penguin Squeek |
-|   | `ANpi` | `ANpi` | Permanent Immolation | other |  |  | ground,enemy,neutral,organic |  |  | Permanent Immolation |
+| x | `ANpi` | `ANpi` | Permanent Immolation | other |  |  | ground,enemy,neutral,organic |  |  | Permanent Immolation |
 |   | `Apig` | `Apig` | Permanent Immolation | other |  |  | ground,enemy,neutral,organic |  |  | Permanent Immolation (graphic) |
 |   | `Apiv` | `Apiv` | Permanent Invisibility | other |  |  |  |  |  | Permanent Invisibility |
 |   | `Apsh` | `Apsh` | Phase Shift | nightelf |  |  |  | 1 | phaseshift | Phase Shift |
 | x | `AHpx` | `AHpx` | Phoenix | human | H |  |  | 1 | summonphoenix | Blood Mage - Phoenix |
-|   | `Apmf` | `ANpi` | Phoenix Fire | other |  |  | air,enemy,neutral,organic |  |  | Permanent Immolation (flying) |
+| ~ | `Apmf` | `ANpi` | Phoenix Fire | other |  |  | air,enemy,neutral,organic |  |  | Permanent Immolation (flying) |
 |   | `Apxf` | `Apxf` | Phoenix Fire | human |  |  | ground,air,enemy | 1 |  | PhoenixFire |
 |   | `Aphx` | `Aphx` | Phoenix Morphing (Egg Related) | human |  |  |  |  |  | Phoenix |
 |   | `Aco3` | `Acoi` | Pick up Archer | nightelf |  |  | vuln,invu |  |  | Couple Instant (Hippogryph) |
@@ -797,7 +791,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AInd` | `ACad` | Reanimation | other |  | I | air,ground,dead | 1 | animatedead | Animate Dead (item, special) |
 |   | `AIrb` | `AIrb` | Rebirth | other |  | I |  |  |  | Rune of Rebirth |
 | ~ | `AIgx` | `Aoar` | Regeneration Aura | other |  | I | ground,air,organic,vuln,invu,friend,neutral,self |  |  | Aura - Regeneration (item) |
-|   | `ACrn` | `ACrn` | Reincarnation | creeps |  |  |  | 1 |  | Reincarnation (creep) |
+| x | `ACrn` | `ACrn` | Reincarnation | creeps |  |  |  | 1 |  | Reincarnation (creep) |
 | ~ | `ANr2` | `AOre` | Reincarnation | creeps | H |  |  | 1 |  | Reincarnation (generic) |
 | ~ | `ANrn` | `AOre` | Reincarnation | creeps | H |  |  | 1 |  | Mannoroth - Reincarnation |
 | ~ | `AOr3` | `AOre` | Reincarnation | orc | H |  |  | 1 |  | Cairne - Reincarnation |

@@ -1876,6 +1876,18 @@ export interface SimUnit {
   returning: boolean; // leashing back to the guard point (ignores enemies until home)
   campHelper: boolean; // fighting only because a camp-mate called for help (may not call for help itself)
   campGuard: boolean; // war3mapUnits.doo targetAcquisition -2 ("Camp") — guards its ground, deaf to new construction
+  /**
+   * REINCARNATING: seconds left of the ability's own "Reincarnation Delay" (`Ore1` — 5 on the
+   * Tauren Chieftain's row, 7 on the creeps' and the Ankh's). While it runs the unit is DOWN:
+   * held at 1 hit point, invulnerable and stunned for exactly that long, so nothing can touch
+   * it and it can do nothing — and `ReincarnationTarget.mdl` stands over it (the `"hold"`
+   * EffectAnim) until it gets up. 0 the rest of the time.
+   */
+  reviveT: number;
+  /** …what it gets up WITH: hit points, and mana (-1 = whatever it had). The Ankh states both
+   *  in its own columns, the ability restores the lot. */
+  reviveHp: number;
+  reviveMana: number;
   /** Was this creep's camp in a fight on the previous tick? The edge `ensnareSeen` is taken on. */
   creepFighting: boolean;
   /** For a creep carrying Ensnare: the enemies already inside its cast range the moment its
@@ -2450,7 +2462,18 @@ const IMMEDIATE = new Set(["AHds", "ACds", "AOwk", "Amil", "Amic"]);
  *  hero half is already the row's `nonhero` flag; this is the other half, and the game
  *  ships the line for it — `Creeptoopowerful` = "That creature is too powerful."
  *  (Units\CommandStrings.txt [Errors]). */
-const CREEP_LEVEL_CAP = new Set(["ANtm"]);
+/** Abilities that refuse a target for being TOO BIG, with the cap in their own `DataC`.
+ *  Transmute is the only one in 1.30 and its Ubertip names both the rule and the column:
+ *  "Transmute cannot be used on Heroes, or creeps above level <ANtm,DataC1>" (= 5). The
+ *  hero half is already the row's `nonhero` flag; this is the other half, and the game
+ *  ships the line for it — `Creeptoopowerful` = "That creature is too powerful."
+ *  (Units\CommandStrings.txt [Errors]).
+ *
+ *  DEVOUR is the second, and its cap is in a different column — which is why this is a map of
+ *  code → column rather than a set. `Units\AbilityMetaData.slk` declares `Dev1` **"Max Creep
+ *  Level"** for `useSpecific = "Adev,ACdv"`, i.e. **DataA** on both the Kodo's row and the
+ *  creeps', and both read 5. Without it a Kodo Beast swallowed a level 10 Dragon whole. */
+const CREEP_LEVEL_CAP: Record<string, number> = { ANtm: 2, Adev: 0, ACdv: 0 };
 /**
  * The ARROWS, the loudest members of the ATTACK MODIFIER (orb) family — abilities that ride
  * on a shot rather than being one. The family itself, and the rule that only ONE of its
@@ -2662,7 +2685,17 @@ export interface ItemReveal {
  * and never looped (issue #138). Naming the clip here rather than guessing from the path keeps
  * the decision with the code that knows which end of the spell it is emitting.
  */
-export type EffectAnim = "birth" | "stand";
+/**
+ * How an effect model plays.
+ *
+ *   "birth"  — the default: its Birth clip, once.
+ *   "stand"  — open on Stand instead (a model whose Birth is not what we want to see).
+ *   "hold"   — Birth once, then HOLD on Stand for the effect's `life`, then its DEATH clip,
+ *              and only then is it destroyed. The shape of an effect that marks a STATE
+ *              rather than an event: `ReincarnationTarget.mdl` stands over the body for as
+ *              long as the reincarnation takes and dies when the unit gets up.
+ */
+export type EffectAnim = "birth" | "stand" | "hold";
 
 /** A hidden attacker's position, given away to one team for a moment. */
 export interface AttackReveal {
@@ -6409,12 +6442,17 @@ export class SimWorld {
     if (!def || !ab) return this.douseImmolation(u);
     const lvl = def.levelData[Math.min(ab.level || 1, def.levelData.length) - 1];
     if (!lvl) return this.douseImmolation(u);
-    u.mana -= this.dataOf(lvl, 1, 7) * dt; // DataB "Mana Drained per Second"
-    // DataC "Buffer Mana Required": it goes out on its own once the pool is this low, which
-    // is what stops Immolation draining a Demon Hunter to zero and leaving him spell-less.
-    if (u.mana <= this.dataOf(lvl, 2, 10)) {
-      u.mana = Math.max(0, u.mana);
-      return this.douseImmolation(u);
+    // A PERMANENT one pays nothing and can never go out (see recomputeStats). Skipping both
+    // clauses is not a shortcut: its `DataB`/`DataC` are 0, so the buffer test would read
+    // "mana ≤ 0" and douse the Infernal's fire on the first tick — it has no mana pool at all.
+    if (def.code !== "ANpi") {
+      u.mana -= this.dataOf(lvl, 1, 7) * dt; // DataB "Mana Drained per Second"
+      // DataC "Buffer Mana Required": it goes out on its own once the pool is this low, which
+      // is what stops Immolation draining a Demon Hunter to zero and leaving him spell-less.
+      if (u.mana <= this.dataOf(lvl, 2, 10)) {
+        u.mana = Math.max(0, u.mana);
+        return this.douseImmolation(u);
+      }
     }
     const interval = lvl.duration || 1;
     u.immolationTick += dt;
@@ -6932,6 +6970,9 @@ export class SimWorld {
       | "campGuard"
       | "creepFighting"
       | "ensnareSeen"
+      | "reviveT"
+      | "reviveHp"
+      | "reviveMana"
       | "strayT"
       | "returnBestDist"
       | "returnStuckT"
@@ -7184,6 +7225,9 @@ export class SimWorld {
       campGuard: false,
       creepFighting: false,
       ensnareSeen: null,
+      reviveT: 0,
+      reviveHp: 0,
+      reviveMana: -1,
       strayT: 0,
       returnBestDist: 0,
       returnStuckT: 0,
@@ -9772,6 +9816,16 @@ export class SimWorld {
     // the ungated creep copy `ACrk`, whose row has no requirement at all. Both share `code =
     // Arsk`, so one derivation covers them and `techMeets` tells them apart.
     u.resistant = u.abilities.some((a) => a.code === "Arsk" && a.level >= 1 && this.techMeets(u.owner, a.id));
+    // PERMANENT IMMOLATION (`ANpi`, and the graphic-only twin `Apig` on the same code) — the
+    // Infernal's fire and another of Wowpedia's creep abilities: "Burns nearby enemy units for
+    // 10 points of damage per second." It is Immolation with the toggle taken off (no
+    // `Order`, `Cost1` 0, `DataB` "Mana Drained per Second" 0), so it is the same machinery
+    // ALIGHT FROM BIRTH rather than a second copy of it — lit here because this is where every
+    // other property of the ability list is derived, so a morph or a map's own unit gets it too.
+    if (!u.immolation) {
+      const perm = u.abilities.find((a) => a.code === "ANpi" && a.level >= 1);
+      if (perm) u.immolation = perm.id;
+    }
     // True Sight, likewise a property of the ability list. Three separate base codes do the
     // one job, so all three are read and the widest wins if a unit somehow carries more than
     // one. AbilityData.slk names them plainly:
@@ -10598,8 +10652,15 @@ export class SimWorld {
       if (u.devouring <= 0) continue;
       const prey = this.units.get(u.devouring);
       if (!prey || prey.hp <= 0) { u.devouring = 0; continue; }
-      const lvl = this.passiveLevelData(u, "Adev");
-      prey.hp -= (lvl ? this.dataOf(lvl, 0, 5) : 5) * dt; // dataA — digest damage/sec
+      // The DIGEST RATE is not on the Devour button: `Dev1` on `Adev`/`ACdv` is **"Max Creep
+      // Level"** (enforced at the click, see CREEP_LEVEL_CAP), and the damage lives on the
+      // HOLD that carries the prey — `Advc` "Cargo Hold (Devour)", whose `Dev2` is **"Damage
+      // per Second"** = DataB = 5. Both rows read 5, so the old reading was the right number
+      // off the wrong column; the creep's own Ubertip is what settles it, citing
+      // `<Advc,DataB1>` for the damage. (The Kodo's says `DataC1` — that slot is `Dev3`
+      // "Maximum Creep Level" and is Blizzard's own typo, invisible because both are 5.)
+      const lvl = this.passiveLevelData(u, "Advc");
+      prey.hp -= (lvl ? this.dataOf(lvl, 1, 5) : 5) * dt;
       this.breakItemRegen(prey); // being digested is being damaged — see breakItemRegen
       if (prey.hp <= 0) { u.devouring = 0; this.kill(prey, u.id); }
     }
@@ -10878,9 +10939,10 @@ export class SimWorld {
     // …and the ones that refuse a target for being too big (CREEP_LEVEL_CAP). Read off the
     // caster's own rank rather than a constant, because the cap is a data column: a map that
     // retunes `DataC` retunes what its Alchemist may melt down.
-    if (CREEP_LEVEL_CAP.has(code) && target.isCreep) {
+    const capColumn = CREEP_LEVEL_CAP[code];
+    if (capColumn !== undefined && target.isCreep) {
       const lvl = this.passiveLevelData(caster, code);
-      const cap = lvl ? this.dataOf(lvl, 2, 0) : 0;
+      const cap = lvl ? this.dataOf(lvl, capColumn, 0) : 0;
       if (cap > 0 && target.level > cap) return "Creeptoopowerful";
     }
     // A heal with nothing to heal is refused, not wasted — WC3 won't let you spend a
@@ -11632,6 +11694,8 @@ export class SimWorld {
       // (tickReplenish). Left in, this would re-issue a fresh cast every tick — and pick its
       // target off `Rng1 = 99999`, i.e. the whole map.
       if (ab.code === "Ambt") continue;
+      // …and the ability's own Targets Allowed, read once: every branch below asks it.
+      const F = new Set(this.abilities.get(ab.id)?.targetFlags.map((f) => f.toLowerCase()) ?? []);
       // Renew is not a cast either — it is the ordinary repair JOB under the wisp's own art
       // (see KNOWN_ABILITIES). tickRenew hands out the work.
       if (isRepairCode(ab.code)) continue;
@@ -11639,6 +11703,13 @@ export class SimWorld {
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (u.mana < lvl.cost) continue;
+      // A CREEP's standing orders fire only while its camp is fighting (creepInFight) — a
+      // Slow sought out beyond the camp's aggro range would pull the caster after a passer-by
+      // the camp never chose, and a Bloodlust or a Frenzy on the camp at rest is a buff
+      // nobody in the real game ever sees on an idle camp. The heals are the exception: a
+      // Troll Priest patches his camp-mates up after the fight. Asked HERE, above the shape
+      // the ability takes, so it covers the self-buffs and the corpse family too.
+      if (u.isCreep && !HEAL_SPELLS.has(def.code) && !this.creepInFight(u)) continue;
       // A CORPSE autocast: no target to click, and what it wants is a body. The data alone
       // says which abilities these are — `targs1` naming `dead` on a no-target row — and in
       // 1.30 that is Raise Dead (`Arai` and its copies), the Avatar of Vengeance's Spirits
@@ -11668,19 +11739,29 @@ export class SimWorld {
         }
         return this.issueCast(u.id, def.code, 0, u.x, u.y, true);
       }
+      // A SELF-BUFF autocast — no target to pick, and the caster is the only unit it can land
+      // on. FRENZY (`Afzy`, the quillbeasts') is the one in 1.30: `targs1` is
+      // "air,ground,self" with no `friend`, so `autocastTarget`'s friendly search would look
+      // for somebody else and find nobody, and the shape never reached this loop at all.
+      //
+      // Two gates, and only the first is the data's: it is not re-cast while its own buff is
+      // still up (`alreadyOn`, the same no-restack rule every other autocast keeps), and it
+      // wants a FIGHT — a self-haste spent on an empty field is spent for nothing. What
+      // counts as a fight for a creep is its camp's (above); for anyone else it is an enemy
+      // inside its own acquisition. OURS: nothing states when the engine fires this one.
+      if (def.target === "none" && !F.has("enemy") && F.has("self") && !F.has("friend")) {
+        const worn = lvl.buffs.map((b) => b.toLowerCase());
+        if (worn.length && u.buffs.some((b) => b.buffId && worn.includes(b.buffId.toLowerCase()))) continue;
+        if (!u.isCreep && !u.inCombat && !this.nearestEnemy(u, this.autocastSearchRange(u, 0), true)) continue;
+        return this.issueCast(u.id, def.code, 0, u.x, u.y, true);
+      }
       if (def.target !== "unit") continue;
       // Friendly vs hostile autocast is decided by the ability's real Targets
       // Allowed flags (targs1), not a hard-coded code list: a spell allowing
       // `friend`/`self`/`player` (and not `enemy`) buffs/heals allies; `enemy`
       // targets foes. `self` in the flags lets the caster be its own target
       // (Heal/Inner Fire/Frost Armor all carry it — verified in the real game data).
-      const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
       const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
-      // A CREEP's standing orders fire only while its camp is fighting (creepInFight) — a
-      // Slow sought out beyond the camp's aggro range would pull the caster after a passer-by
-      // the camp never chose, and a Bloodlust on the camp at rest is a buff nobody in the real
-      // game ever sees on an idle camp. The heals are the exception, stated there.
-      if (u.isCreep && !HEAL_SPELLS.has(def.code) && !this.creepInFight(u)) continue;
       const range = inPlace ? lvl.castRange : this.autocastSearchRange(u, lvl.castRange);
       // A DISPEL IS NEITHER a friendly autocast nor a hostile one — it is BOTH, and it wants a
       // target with something on it. See `dispelAutocastTarget`; Abolish Magic (`Aadm`, the
@@ -12921,6 +13002,92 @@ export class SimWorld {
       this.waveImpacts.splice(i, 1);
       this.landWave(w);
     }
+    // …and the Infernal, which falls on the same principle: what is standing there when it
+    // LANDS is what it crushes.
+    for (let i = this.infernoDrops.length - 1; i >= 0; i--) {
+      const drop = this.infernoDrops[i];
+      drop.t -= dt;
+      if (drop.t > 0) continue;
+      this.infernoDrops.splice(i, 1);
+      this.landInferno(drop);
+    }
+  }
+
+  /** Infernals in the air — see startInferno. */
+  private infernoDrops: Array<{
+    t: number; x: number; y: number; area: number; damage: number; stun: number; heroStun: number;
+    buffId: string; art?: string; fx: BuffFx[]; summon: string; duration: number; summonArt: string;
+    unsummonArt: string; casterId: number; owner: number; team: number; facing: number; flags: string[];
+  }> = [];
+
+  /**
+   * INFERNO (`AUin`, the Dreadlord's; `ANin`, the same ability under the creep/Pit Lord code).
+   *
+   * "Summons an Infernal from the sky, causing area effect damage where it lands" — and the
+   * row says the rest, through `Uin1..Uin4` (`Units\AbilityMetaData.slk` →
+   * `UI\WorldEditStrings.txt`):
+   *
+   *   DataA  "Damage"        50    to everything the crash catches
+   *   DataB  "Duration"     180    how long the Infernal stays — NOT `Dur1`
+   *   DataC  "Impact Delay"    1    the meteor's time in the air
+   *   UnitID1 "Summoned Unit" ninf
+   *   Dur1 / HeroDur1  4 / 2       the STUN, with `BuffID1 = BNin`
+   *
+   * Three things happen in order, and the delay is what separates them: `Effectart`
+   * (`Units\Demon\Infernal\InfernalBirth.mdl` — the meteor itself, played once) goes out at
+   * the press, and a second later the ground under it takes the damage AND the stun and the
+   * demon stands up. Landing it all at the press — which is what this did, minus the stun
+   * entirely — put the damage a second before the picture of it.
+   */
+  private startInferno(caster: SimUnit, def: AbilityDef, rank: number, x: number, y: number): void {
+    const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+    if (!lvl) return;
+    // The meteor. One shot, and it is the ability's `Effectart` rather than a target art —
+    // nothing is being hit yet.
+    if (def.effectArt) this.spellEffects.push({ art: def.effectArt, x, y, targetId: 0, z: 0 });
+    this.infernoDrops.push({
+      t: Math.max(0, this.dataOf(lvl, 2, 1)), // DataC "Impact Delay"
+      x, y,
+      area: lvl.area || 250,
+      damage: this.dataOf(lvl, 0, 50), // DataA "Damage"
+      stun: lvl.duration || 4,
+      heroStun: lvl.heroDuration || 2,
+      ...this.buffArtOf(def, rank),
+      fx: def.buffFx ?? [],
+      summon: lvl.summon,
+      duration: this.dataOf(lvl, 1, 180), // DataB "Duration"
+      summonArt: def.specialArt,
+      unsummonArt: def.buffEffectArt,
+      casterId: caster.id,
+      owner: caster.owner,
+      team: caster.team,
+      facing: caster.facing,
+      flags: def.targetFlags,
+    });
+  }
+
+  /** …and the crash itself. */
+  private landInferno(drop: (typeof this.infernoDrops)[number]): void {
+    for (const t of this.unitsInAreaInternal(drop.x, drop.y, drop.area)) {
+      if (!this.areaEffectAffects(drop.casterId, drop.team, drop.flags, t)) continue;
+      this.landDamage(t, drop.damage, drop.casterId, false);
+      if (t.hp <= 0 || t.building) continue; // a building takes the damage and is not stunned
+      this.applyBuffInternal(t, {
+        kind: "stun",
+        timeLeft: t.isHero || t.resistant ? drop.heroStun : drop.stun,
+        sourceId: drop.casterId,
+        buffId: drop.buffId,
+        art: drop.art,
+        fx: drop.fx,
+      });
+    }
+    if (drop.summon) {
+      this.summonRequests.push({
+        unitId: drop.summon, x: drop.x, y: drop.y, facing: drop.facing, owner: drop.owner, team: drop.team,
+        summonLeft: drop.duration, sourceId: drop.casterId, summonArt: drop.summonArt, unsummonArt: drop.unsummonArt,
+        atPoint: true, bound: false,
+      });
+    }
   }
 
   /** One wave of a repeating area field hitting the ground. */
@@ -13296,6 +13463,7 @@ export class SimWorld {
     teleport: (u, x, y) => this.teleportUnit(u, x, y),
     massTeleport: (caster, def, dest) => this.massTeleport(caster, def, dest),
     mirrorImage: (caster, def, rank) => this.startMirrorImage(caster, def, rank),
+    inferno: (caster, def, rank, x, y) => this.startInferno(caster, def, rank, x, y),
     changeOwner: (u, owner, team) => this.changeUnitOwner(u, owner, team),
     possess: (casterId, targetId, seconds) => this.beginPossession(casterId, targetId, seconds),
     killUnit: (u) => this.kill(u),
@@ -13732,7 +13900,9 @@ export class SimWorld {
     simProfile.begin("sim.world.units");
     for (const u of this.units.values()) {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
+      this.tickRevive(u, dt); // a reincarnating unit counting down to standing up again
       this.tickMeld(u); // Shadow Meld holds only while the unit is still and the sun is down
+      this.tickAutoMeld(u); // …and a unit standing about at night takes it by itself
       this.tickAltForm(u, dt); // a timed form (militia) running out and reverting
       this.tickImmolation(u, dt); // Immolation burns whatever it is standing next to, and pays for it
       this.tickVoodoo(u, dt); // …and Big Bad Voodoo renews its circle for as long as the ritual holds
@@ -13797,6 +13967,9 @@ export class SimWorld {
       // stands the caster still and then stops him, and every order `endCast` might resume is
       // refused by `castLocked` anyway.
       if (u.portalLeft > 0 && u.order !== "cast") continue;
+      // A REINCARNATING body does nothing at all: it is off the field for the window (goDown),
+      // and left in the switch it would go on acquiring and chasing from under the ground.
+      if (u.reviveT > 0) continue;
       // Neutral Hostile creeps run a guard/leash/sleep controller on top of the
       // normal order handling. It returns true when it has taken the unit over for
       // this tick (asleep at its post, or leashing home) — skip the order switch;
@@ -15204,6 +15377,50 @@ export class SimWorld {
    * somebody measures the real client. DataA "Fade Duration" (1.5) is spent, as the buff's
    * `delay` — Liquipedia names that one outright.
    */
+  /**
+   * HIDE TAKES ITSELF: a unit that can Shadowmeld and is simply STANDING THERE melds.
+   *
+   * This is how the ability is met in the real game — nobody clicks Hide on every Archer every
+   * night — and Liquipedia's Hide page describes the state rather than the press: "Hiding units
+   * lie in wait for enemies without attacking… Units will hold position and hold their fire, so
+   * when they are Shadowmelding, they will not break their own invisibility." The button stays,
+   * and pressing it does exactly what this does.
+   *
+   * The FADE is the ability's own `Shm1` "Fade Duration" — **1.5 s**, which Liquipedia prints
+   * for both variants and `[Ashm] DataA` reads — and it is already the buff's `delay`, so the
+   * unit spends a second and a half half-there before it is gone. Nothing new is needed for it.
+   *
+   * WHO: the ability may be the unit's own (`Ashm` on every night elf ground unit, on the
+   * Bandit/Rogue/Assassin, the Murloc Nightcrawler, the Satyr Shadowdancer) or CARRIED — the
+   * Cloak of Shadows (`[clsd] abilList = Ashm`), whose 1.30 tooltip is still "invisibility at
+   * night" (the daytime version is a 1.31 change and not ours). Both are the same row and get
+   * the same rule.
+   *
+   * WHEN: no order in hand. `idle` is the plain case; `hold` is here too, and not as a
+   * loophole — melding IS the hold stance (the handler puts the unit on Hold Position), so a
+   * unit that broke its meld and stood there could otherwise never take it again. Anything
+   * else — a march, an attack, a cast, a harvest — is a command, and a commanded unit does not
+   * hide. Nor does one mid-swing, mid-cast, or being carried along by anything.
+   *
+   * The day gate is the handler's own (`api.isDay()`), where it belongs; asking here as well
+   * only saves the work.
+   */
+  private tickAutoMeld(u: SimUnit): void {
+    if (this.isDay || u.hp <= 0 || u.building || u.cloaked || u.stunned || u.paused) return;
+    if (u.order !== "idle" && u.order !== "hold") return;
+    if (u.moving || u.swingLeft >= 0 || u.x !== u.prevX || u.y !== u.prevY) return;
+    const own = u.abilities.find((a) => a.code === "Ashm" && a.level >= 1 && this.techMeets(u.owner, a.id));
+    if (own) {
+      this.issueCast(u.id, own.code, 0, u.x, u.y, true);
+      return;
+    }
+    // …and the carried one. An item's ability is not in `u.abilities`, so it cannot go through
+    // `issueCast` — but it is the same row and the same handler, and `Ashm` costs nothing and
+    // has no cooldown, so the effect is the whole of the cast.
+    const carried = this.itemAbility(u, "Ashm");
+    if (carried) this.applySpellEffect("Ashm", 1, u, { targetId: 0, x: u.x, y: u.y }, carried.def);
+  }
+
   private tickMeld(u: SimUnit): void {
     if (!u.buffs.some((b) => b.kind === "invisible" && b.meld)) return;
     const moved = u.x !== u.prevX || u.y !== u.prevY;
@@ -16702,8 +16919,47 @@ export class SimWorld {
     let vuln = 0;
     for (const b of target.buffs) if (b.kind === "vuln") vuln = Math.max(vuln, b.value);
     const reduction = armorDamageReduction(target.armor);
-    const final = rawDamage * typeMult * (1 + vuln) * (1 - reduction);
+    const final = this.hardenedSkin(target, rawDamage * typeMult * (1 + vuln) * (1 - reduction), ranged);
     return this.landDamage(target, this.spiritLinkSplit(target, final), attackerId, true, weaponSound);
+  }
+
+  /**
+   * HARDENED SKIN (`Assk`, and the Dragon Turtle's ungated copy `Ansk` on the same code) — the
+   * Mountain Giant's, and one of the creep abilities Wowpedia lists: "Reduces all attacks on
+   * the unit by 12 damage. Attacks cannot be reduced below 3 damage."
+   *
+   * Five columns, all of them named by `Units\AbilityMetaData.slk`'s `Ssk1..Ssk5` (through
+   * `UI\WorldEditStrings.txt`) rather than inferred, and the unit's own Ubertip prints two of
+   * them: "Reduces all attacks on the Mountain Giant by <Assk,DataC1> damage. Attacks cannot
+   * be reduced below <Assk,DataB1> damage."
+   *
+   *   DataA  "Chance to Reduce Damage (%)"  100
+   *   DataB  "Minimum Damage"                 3
+   *   DataC  "Ignored Damage"                12
+   *   DataD  "Include Ranged Damage"          1
+   *   DataE  "Include Melee Damage"           1
+   *
+   * It lives in `applyDamage` and nowhere else, which is what confines it to ATTACKS: a spell's
+   * damage reaches `landDamage` directly and is never offered here. The two include flags are
+   * then the finer split, and `ranged` is the same fact the blow already carries.
+   *
+   * WHERE IN THE PIPELINE is OURS, and it is the one thing the data does not say: the
+   * subtraction is applied LAST, to what armour and the attack-type multiplier have already
+   * left, because that is the only order under which the row's own guarantee — an attack is
+   * never reduced below `Minimum Damage` — is actually true. Reduced first, a Footman's 12.5
+   * would floor at 3 and then be taken under it by six points of armour. Worth measuring
+   * against the real client; see docs/creeps.md.
+   */
+  private hardenedSkin(target: SimUnit, damage: number, ranged: boolean): number {
+    if (damage <= 0) return damage;
+    const lvl = this.passiveLevelData(target, "Assk");
+    if (!lvl) return damage;
+    if (!this.dataOf(lvl, ranged ? 3 : 4, 1)) return damage; // "Include Ranged/Melee Damage"
+    const chance = this.dataOf(lvl, 0, 100);
+    if (chance < 100 && this.random() * 100 >= chance) return damage;
+    const ignored = this.dataOf(lvl, 2, 12);
+    if (ignored <= 0) return damage;
+    return Math.max(this.dataOf(lvl, 1, 3), damage - ignored);
   }
 
   /** Spirit Link (Aspl): `linkShare` of a post-armor hit is spread equally across the linked
@@ -17103,22 +17359,99 @@ export class SimWorld {
     return amount - absorbable;
   }
 
-  /** Reincarnation (AOre): if a dying hero has it learned and off cooldown, revive
-   *  it in place at full HP/mana, put the ability on cooldown, and keep it alive. */
+  /**
+   * Reincarnation: a dying unit that has it, off cooldown, gets up again in place at full
+   * hit points and mana, and the ability goes on its 240-second cooldown.
+   *
+   * TWO ROWS, and the creep's is not an alias — `AOre` is the Tauren Chieftain's ultimate and
+   * `ACrn` is "Reincarnation (Neutral Hostile)" under its own code, which is why the three
+   * creeps that carry it never got up: the CENTAUR KHAN, the ANCIENT SASQUATCH and the
+   * ANCIENT WENDIGO, each the boss of a red camp. Wowpedia's Creep page states the behaviour
+   * and the catch in one line — "Centaur Khans, Ancient Wendigos and Ancient Sasquatches come
+   * with Reincarnation, reviving themselves, but will permanently die if they are killed
+   * before their Reincarnation is reset" — and the cooldown is what makes the second half
+   * true. So the hero test cannot stand: `ACrn` is on no hero in the game.
+   *
+   * (`Ore1` "Reincarnation Delay" — 5 on the hero's row, 7 on the creep's — is still not
+   * modelled: the revive is immediate for both, as it is for the Ankh. Modelling it for one
+   * only would make them behave unlike each other, which is the same reasoning tryAnkh gives.)
+   */
   private tryReincarnate(u: SimUnit): boolean {
-    if (!u.isHero || u.hp > 0) return false;
-    if (this.tryAnkh(u)) return true;
-    const ab = u.abilities.find((a) => a.code === "AOre" && a.level >= 1 && a.cooldownLeft <= 0);
+    if (u.hp > 0) return false;
+    if (u.isHero && this.tryAnkh(u)) return true;
+    const ab = u.abilities.find((a) => (a.code === "AOre" || a.code === "ACrn") && a.level >= 1 && a.cooldownLeft <= 0);
     if (!ab || !this.abilities) return false;
     const def = this.abilities.get(ab.id);
     if (!def) return false;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     ab.cooldownLeft = lvl.cooldown > 0 ? lvl.cooldown : 240;
-    u.hp = u.maxHp;
-    u.mana = u.maxMana;
-    u.buffs = u.buffs.filter((b) => b.kind === "manaShield"); // clear debuffs on revive
-    if (def.targetArt || def.casterArt) this.spellEffects.push({ art: def.targetArt || def.casterArt, x: u.x, y: u.y, targetId: u.id, z: 0 });
+    // `Ore1` "Reincarnation Delay" — 5 on the hero's row, 7 on the creeps'. See goDown.
+    this.goDown(u, def, this.dataOf(lvl, 0, u.isHero ? 5 : 7), u.maxHp, -2);
     return true;
+  }
+
+  /**
+   * A unit is REINCARNATING: it does not die, and it does not get up yet either.
+   *
+   * WC3 plays this as a window, not an instant — the body drops, `ReincarnationTarget.mdl`
+   * stands over the spot, and the unit rises when the ability's own "Reincarnation Delay" is
+   * up. So the effect is spawned with the `"hold"` EffectAnim and a `life` of exactly that
+   * delay: the renderer plays its Birth, holds its Stand for the window, and plays its DEATH
+   * as the unit gets up (spawnEffect / updateEffects).
+   *
+   * DOWN is `vanished` — the state a Blademaster spends mid-Mirror-Image and a hero spends
+   * inside a Soul Gem: OFF THE FIELD, hidden, untargetable and unorderable, with
+   * `recomputeStats` deriving the invulnerability from it. It is the right shape for a body
+   * on the ground, and it is why this is not built out of an invulnerability buff plus a
+   * stun: an invulnerability RISING strips a unit's status effects (Divine Shield's own rule,
+   * clearStatusForInvulnerable), so the stun would be taken off in the same breath it was put
+   * on. Its buffs go first either way, so nothing that was killing it is still on it when it
+   * stands up.
+   *
+   * `mana` of -2 means "the lot" (the ability restores a full bar); -1 keeps what it had,
+   * which is the Ankh's own `DataC`.
+   */
+  private goDown(u: SimUnit, def: AbilityDef, delay: number, hp: number, mana: number): void {
+    const window = Math.max(0, delay);
+    u.buffs = u.buffs.filter((b) => b.kind === "manaShield"); // clear debuffs on revive
+    this.cancelSwing(u);
+    u.targetId = null;
+    u.inCombat = false;
+    u.moving = false;
+    u.path = [];
+    u.order = "idle";
+    u.reviveHp = hp;
+    u.reviveMana = mana;
+    if (window <= 0) {
+      this.standUp(u);
+    } else {
+      u.hp = 1;
+      u.reviveT = window;
+      u.vanished = true;
+      this.recomputeStats(u); // off the field THIS tick, not next
+    }
+    // `Effectart` on every row that reincarnates — `Abilities\Spells\Orc\Reincarnation\
+    // ReincarnationTarget.mdl` — and it is the one field they all fill (`Casterart` and
+    // `Targetart` are explicitly blank on `[AOre]`).
+    const art = def.effectArt || def.targetArt || def.casterArt;
+    if (art) this.spellEffects.push({ art, x: u.x, y: u.y, targetId: 0, z: 0, life: window || 1, anim: "hold" });
+  }
+
+  /** …and the unit gets up. */
+  private standUp(u: SimUnit): void {
+    u.reviveT = 0;
+    u.vanished = false;
+    u.hp = Math.min(u.maxHp, u.reviveHp > 0 ? u.reviveHp : u.maxHp);
+    if (u.reviveMana === -2) u.mana = u.maxMana;
+    else if (u.reviveMana >= 0) u.mana = Math.min(u.maxMana, u.reviveMana);
+    this.recomputeStats(u);
+  }
+
+  /** Count a reincarnation down; the unit stands up when it runs out. */
+  private tickRevive(u: SimUnit, dt: number): void {
+    if (u.reviveT <= 0) return;
+    u.reviveT -= dt;
+    if (u.reviveT <= 0) this.standUp(u);
   }
 
   /** ANKH OF REINCARNATION (`AIrc`, "ItemReincarnation") — "Automatically brings the Hero back
@@ -17144,12 +17477,9 @@ export class SimWorld {
     const ankh = this.itemAbility(u, "AIrc");
     if (!ankh) return false;
     u.inventory[slot] = null; // spent — `uses` 1, `perishable` 1
-    u.hp = Math.min(u.maxHp, this.dataOf(ankh.level, 1, 500));
-    const mana = this.dataOf(ankh.level, 2, -1);
-    if (mana >= 0) u.mana = Math.min(u.maxMana, mana);
-    u.buffs = u.buffs.filter((b) => b.kind === "manaShield"); // clear debuffs on revive
-    this.recomputeStats(u);
-    if (ankh.def.fxArt || ankh.def.targetArt) this.spellEffects.push({ art: ankh.def.fxArt || ankh.def.targetArt, x: u.x, y: u.y, targetId: u.id, z: 0 });
+    // Its own three columns, through the same window the ability uses: DataA "Delay After
+    // Death" 7, DataB "Restored Life" 500, DataC "Restored Mana (-1 for current)".
+    this.goDown(u, ankh.def, this.dataOf(ankh.level, 0, 7), this.dataOf(ankh.level, 1, 500), this.dataOf(ankh.level, 2, -1));
     return true;
   }
 

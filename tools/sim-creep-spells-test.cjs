@@ -112,10 +112,13 @@ const footman = (w, x, y) => spawn(w, "hfoo", x, y, 0, 0);
 const buffOn = (u, kind) => u.buffs.some((b) => b.kind === kind);
 const buffIdOn = (u, id) => u.buffs.some((b) => b.buffId && b.buffId.toLowerCase() === id.toLowerCase());
 
+/** No caster at all — for the blocks that drive an ability by hand. */
+const caster0 = () => null;
+
 /** Step the world and the creeps' caster together, the way the authority tick does. */
 function run(w, caster, seconds) {
   for (let i = 0; i < seconds * 20; i++) {
-    caster.tick(0.05);
+    if (caster) caster.tick(0.05);
     w.tick(0.05);
   }
 }
@@ -228,6 +231,203 @@ console.log("\nthe Troll Priest heals a hurt camp-mate out of combat, and nothin
   run(geoW, geoCaster, 6);
   check("the Geomancer does not Slow a passer-by the camp is not fighting", buffOn(passer, "slow"), false);
   check("…nor walk out after him", geo.order, "idle");
+}
+
+// ======================================================================================
+//  The five abilities Wowpedia's "Warcraft III creep abilities" page lists that had no
+//  implementation at all. Each block quotes that page and names the columns the numbers come
+//  from (Units\AbilityMetaData.slk's field groups through UI\WorldEditStrings.txt).
+// ======================================================================================
+
+console.log("\nDevour: the creeps' own code, and the Max Creep Level nobody was reading");
+{
+  // "Consumes a target unit, slowly digesting it and dealing 5 damage per second to it. If
+  // the creep is killed while the consumed unit is still digesting, the unit that was
+  // devoured will pop out." `Dev1` "Max Creep Level" is DataA on BOTH `Adev` and `ACdv`; the
+  // damage is `Advc` DataB (`Dev2` "Damage per Second"), which the creep's Ubertip cites.
+  const w = world();
+  const dragon = creep(w, "nadr", 1000, 1000); // Blue Dragon: ACdv + the Advc hold
+  const f = footman(w, 1060, 1000);
+  check("the cast is legal", w.castError(dragon.id, "ACdv", f.id), null);
+  w.issueCast(dragon.id, "ACdv", f.id);
+  run(w, caster0(w), 2);
+  check("the Footman is inside the dragon", f.devouredBy, dragon.id);
+  check("…and the dragon is holding it", dragon.devouring, f.id);
+  const before = f.hp;
+  run(w, null, 4);
+  const dps = (before - f.hp) / 4;
+  check("…digesting at Advc DataB's 5 a second", Math.round(dps), 5);
+  w.kill(dragon);
+  check("killing the devourer frees the prey", f.devouredBy, 0);
+  check("…alive", f.hp > 0, true);
+}
+{
+  // The Kodo's own row says level 5, so the Dragon (level 10) is refused with the game's own
+  // line — `Units\CommandStrings.txt [Errors] Creeptoopowerful` "That creature is too powerful."
+  const w = world();
+  const kodo = spawn(w, "okod", 1000, 1000, 0, 0);
+  const gnoll = creep(w, "ngno", 1060, 1000); // level 1
+  const lord = creep(w, "nogl", 1000, 1060); // Ogre Lord, level 7 — and not magic-immune,
+  // which the dragons are: `ACmi` refuses a Devour before the level is ever asked about.
+  check("a Kodo may swallow a level 1 Gnoll", w.castError(kodo.id, "Adev", gnoll.id), null);
+  check("…and not a level 7 Ogre Lord", w.castError(kodo.id, "Adev", lord.id), "Creeptoopowerful");
+  const dragon = creep(w, "nadr", 940, 1000);
+  check("…and a Dragon is refused for its spell immunity first", w.castError(kodo.id, "Adev", dragon.id), "Immunetomagic");
+}
+
+console.log("\nReincarnation: the creep row (`ACrn`), on creeps rather than heroes");
+{
+  // Wowpedia (Creep): "Centaur Khans, Ancient Wendigos and Ancient Sasquatches come with
+  // Reincarnation, reviving themselves, but will permanently die if they are killed before
+  // their Reincarnation is reset." `[ACrn] Cool1` is 240.
+  const w = world();
+  const wendigo = creep(w, "nwna", 1000, 1000);
+  const ab = wendigo.abilities.find((a) => a.code === "ACrn");
+  check("the Ancient Wendigo carries it", !!ab, true);
+  w.landDamage(wendigo, 99999, 0, false);
+  check("killed, it is not dead", w.units.has(wendigo.id), true);
+  // `[ACrn] Ore1` "Reincarnation Delay" = 7. It is DOWN for that long — one hit point,
+  // untouchable, doing nothing, with ReincarnationTarget standing over it.
+  check("…it is down for the delay", Math.round(wendigo.reviveT), 7);
+  check("…off the field, and so untouchable", wendigo.vanished && wendigo.invulnerable, true);
+  check("…and a blow lands nothing on it", (w.landDamage(wendigo, 99999, 0, false), Math.round(wendigo.hp)), 1);
+  check("…with the 240-second cooldown running", Math.round(ab.cooldownLeft), 240);
+  run(w, null, 7.5);
+  check("…and it is on its feet at full health", Math.round(wendigo.hp), Math.round(wendigo.maxHp));
+  check("…back on the field", wendigo.vanished, false);
+  w.landDamage(wendigo, 99999, 0, false);
+  check("killed again before the 240 is up, it stays dead", w.units.has(wendigo.id), false);
+}
+
+console.log("\nFrenzy: a self-buff autocast, which no autocast shape reached before");
+{
+  // "Increases this unit's attack rate by 40% and movement speed by 25%." `Blo1..Blo3` are
+  // declared for "Ablo,ACbl,Afzy" together, so Frenzy's columns ARE Bloodlust's.
+  const w = world();
+  const caster = new CreepCaster(w, ABILITIES);
+  const quill = creep(w, "nqb2", 1000, 1000);
+  check("its `auto` column arms Frenzy", quill.abilities.find((a) => a.code === "Afzy")?.autocastOn, true);
+  run(w, caster, 4);
+  check("at rest the quillbeast does not frenzy", buffIdOn(quill, "Bfzy"), false);
+  const f = footman(w, 1200, 1000);
+  run(w, caster, 6);
+  check("in a fight it does", buffIdOn(quill, "Bfzy"), true);
+}
+
+console.log("\nHardened Skin: 12 off every attack, never below 3");
+{
+  // "Reduces all attacks on the unit by 12 damage. Attacks cannot be reduced below 3 damage."
+  // `Ssk2` Minimum Damage 3, `Ssk3` Ignored Damage 12. A Footman's 12-13 against the Mountain
+  // Giant's 6 medium armour would otherwise land ~9.
+  const w = world();
+  const giant = spawn(w, "emtg", 1000, 1000, 0, 0);
+  const f = spawn(w, "hfoo", 1080, 1000, 1, 1);
+  check("the Mountain Giant carries Hardened Skin", giant.abilities.some((a) => a.code === "Assk"), true);
+  w.issueAttack(f.id, giant.id, true, true);
+  const blows = [];
+  let prev = giant.hp;
+  for (let i = 0; i < 20 * 12; i++) {
+    w.tick(0.05);
+    if (giant.hp < prev - 0.01) blows.push(prev - giant.hp);
+    prev = giant.hp;
+  }
+  check("the Footman landed some blows", blows.length > 2, true);
+  const perHit = blows.reduce((a, b) => a + b, 0) / Math.max(1, blows.length);
+  check("each lands the 3-damage floor, not the ~9 armour alone would leave", Math.round(perHit), 3);
+}
+
+console.log("\nPermanent Immolation: alight from birth, on a unit with no mana");
+{
+  // "Burns nearby enemy units for 10 points of damage per second." `[ANpi] Area1` 220,
+  // `DataA` 10, `Cost1`/`DataB` 0 — no toggle, nothing to pay.
+  const w = world();
+  const inf = creep(w, "ninf", 1000, 1000);
+  check("the Infernal has no mana pool", inf.maxMana, 0);
+  check("…and is alight anyway", !!inf.immolation, true);
+  // Disarmed for the measurement: an Infernal that is also SWINGING at these Footmen makes
+  // the burn unreadable (it was 45 a second, most of it a fist).
+  inf.weapons = [];
+  inf.weapon = null;
+  inf.aggroRange = 0;
+  const near = footman(w, 1150, 1000); // inside 220
+  const far = footman(w, 1600, 1000); // outside it
+  // …and both HELD: the burn makes `near` retaliate, and an idle `far` rallies to the fight
+  // its ally has started (assistTarget) and walks into the circle it is meant to be outside.
+  w.issueHold(near.id);
+  w.issueHold(far.id);
+  const b0 = near.hp;
+  run(w, null, 4);
+  check("a Footman beside it burns", near.hp < b0, true);
+  check("…at DataA's 10 a second", Math.round((b0 - near.hp) / 4), 10);
+  check("…and one out of the circle does not", far.hp, far.maxHp);
+  check("the fire is still lit after four seconds of no mana", !!inf.immolation, true);
+}
+
+console.log("\nInferno: the meteor is in the air for its Impact Delay, and the crash stuns");
+{
+  // "Summons an Infernal from the sky, causing area effect damage where it lands."
+  // `Uin1..Uin4`: DataA 50 damage, DataB 360 s (the Dreadlord's own `AUin` says 180),
+  // DataC **1 s Impact Delay**, UnitID1 `ninf`; `Dur1`/`HeroDur1` 4/2 are the STUN with
+  // `BuffID1 = BNin`.
+  const w = world();
+  const def = ABILITIES.get("ANin");
+  check("`ANin` is a point ability with a handler", def && def.target, "point");
+  check("…its Impact Delay column reads 1", def.levelData[0].data[2], 1);
+  check("…and it summons an Infernal", def.levelData[0].summon, "ninf");
+  // The caster is parked far from the victims and the victims are HELD, or they simply walk
+  // out from under the meteor — which is the whole point of an impact delay, and cost this
+  // test a run to notice.
+  const lord = creep(w, "nbal", 1000, 1000);
+  lord.aggroRange = 0;
+  lord.abilities.push({ id: "ANin", code: "ANin", level: 1, cooldownLeft: 0, autocastOn: false });
+  lord.mana = lord.maxMana = 500;
+  const f = footman(w, 1700, 1000);
+  const f2 = footman(w, 1760, 1000);
+  w.issueHold(f.id);
+  w.issueHold(f2.id);
+  w.issueCast(lord.id, "ANin", 0, 1730, 1000);
+  run(w, null, 0.5);
+  check("half a second in, the Footmen are untouched", f.hp === f.maxHp && f2.hp === f2.maxHp, true);
+  check("…and nothing is owed yet", w.drainSummonRequests().length, 0);
+  run(w, null, 1);
+  check("a second later they are hurt", f.hp < f.maxHp && f2.hp < f2.maxHp, true);
+  check("…by DataA's 50", Math.round(f.maxHp - f.hp), 50);
+  check("…and stunned (`BNin`)", buffIdOn(f, "BNin") && buffIdOn(f2, "BNin"), true);
+  // The summon is a REQUEST the renderer drains (a headless host never does), so what the
+  // sim owes is the request — `ninf`, at the impact point, for DataB.
+  const req = w.drainSummonRequests().find((r) => r.unitId === "ninf");
+  check("…and an Infernal is owed", !!req, true);
+  check("…at the impact point", req && Math.round(req.x), 1730);
+  check("…for DataB's 360 seconds", req && Math.round(req.summonLeft), 360);
+}
+
+console.log("\nHide takes itself: standing about at night is the whole condition");
+{
+  // Liquipedia (Hide): "Hiding units lie in wait for enemies without attacking… Units will
+  // hold position and hold their fire". `[Ashm] DataA` "Fade Duration" is 1.5, which is the
+  // buff's own delay — so a unit is half-there for a second and a half before it is gone.
+  const w = world();
+  w.timeOfDay = 21; // night
+  const crawler = creep(w, "nmrm", 1000, 1000); // Murloc Nightcrawler — `Ashm` on its card
+  const archer = spawn(w, "earc", 2000, 2000, 0, 0); // …and every night elf ground unit
+  check("the Nightcrawler carries Hide", crawler.abilities.some((a) => a.code === "Ashm"), true);
+  run(w, null, 0.5);
+  // The FADE: under it, the unit is already under the effect and not yet gone.
+  check("half a second in, the Archer is fading rather than gone", archer.cloaked && !archer.invisible, true);
+  run(w, null, 2.5); // …the cast's own wind-up, then the 1.5s fade
+  check("…and past DataA's 1.5 seconds she is gone", archer.invisible, true);
+  check("the Nightcrawler at its post melds too", crawler.invisible, true);
+  // A COMMANDED unit does not hide: the meld is what an idle unit does.
+  const walker = spawn(w, "earc", 2400, 2000, 0, 0);
+  w.issueMove(walker.id, 3400, 2000);
+  run(w, null, 2);
+  check("one under a move order does not", walker.cloaked, false);
+  // …and daybreak takes it off everybody (tickMeld).
+  w.timeOfDay = 10;
+  run(w, null, 0.5);
+  check("dawn ends it", archer.cloaked || crawler.cloaked, false);
+  run(w, null, 2);
+  check("…and it does not come back by day", archer.cloaked, false);
 }
 
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nall creep-spell checks passed");

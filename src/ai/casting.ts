@@ -156,6 +156,7 @@ type Prefer =
   | "nonhero" // "Spammed on non-heroes, may target a lone hero" (Hex)
   | "summon" // "Prefers casting on summoned units" (Banish)
   | "mana" // "Spammed on anything with mana" (Mana Burn)
+  | "heroMana" // a hero first, then anything with a mana pool (Hurl Boulder)
   | "dying" // "uses it when the target is dying" (Black Arrow)
   | "furthest" // "always cast on the furthest target inside the range" (Parasite)
   | "level" // "may prefer units with higher levels" (Devour)
@@ -209,8 +210,11 @@ const CAST_RULES: Record<string, CastRule> = {
   // HURL BOULDER, the creeps' Storm Bolt (`ACtb`, its own code — sim/spells.ts). Not in the
   // thread; warcraft3.info's "Interacting With Creeps" (article 176) has the golems: "it'll
   // cast Hurl Boulder, which damages and stuns the target. The Golem will prioritize to
-  // target hero units that are attacking it."
-  ACtb: { when: "spam", prefer: "hero", restack: true },
+  // target hero units that are attacking it." Wowpedia's creep-ability summary adds the
+  // second rung — "often prioritizing Heroes or casting units" — which is `heroMana` and is
+  // deliberately NOT given to Storm Bolt itself: the thread says only "preference to target
+  // heroes" for that one, and a caster tier there would be ours rather than the source's.
+  ACtb: { when: "spam", prefer: "heroMana", restack: true },
   // "~Forked Lightning - Spammed on enemy heroes and/or clusters of 2+ enemy units."
   ANfl: { when: "spam", prefer: "hero", restack: true },
   // "~Life Drain - Spammed at every cool down."
@@ -627,6 +631,7 @@ export class AiCaster {
       case "nonhero": return (t.isHero ? 0 : 10) + near1;
       case "summon": return (t.isSummon ? 10 : 0) + near1;
       case "mana": return (t.mana >= SILENCE_MANA ? 10 : t.maxMana > 0 ? 5 : 0) + near1;
+      case "heroMana": return (t.isHero ? 20 : t.maxMana > 0 ? 10 : 0) + near1;
       case "dying": return (1 - t.hp / Math.max(1, t.maxHp)) * 10 + near1;
       case "level": return t.level + near1;
       case "hurt": return (1 - t.hp / Math.max(1, t.maxHp)) * 10 + near1;

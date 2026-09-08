@@ -1310,7 +1310,10 @@ export class MapViewerScene {
   private orderArrows: Array<{ inst: SpawnInstance; t: number }> = [];
   // One-shot spawn effects (e.g. the building cancel explosion), cached by path.
   private effectModels = new Map<string, SpawnModel | null>();
-  private effects: Array<{ inst: SpawnInstance; t: number }> = [];
+  private effects: Array<{ inst: SpawnInstance; t: number; hold?: boolean }> = [];
+  /** Effects mid-Birth that owe a handoff to their looping Stand — the `"hold"` EffectAnim,
+   *  the same shape as `itemBirthing`. */
+  private effectBirthing: Array<{ inst: SpawnInstance; standIdx: number; birthEnd: number }> = [];
   // Ground items (dropped / creep-dropped): one model instance per sim item id.
   private itemInstances = new Map<number, SpawnInstance>();
   private itemShown = new Map<number, boolean>(); // last fog visibility pushed to each item model
@@ -4337,7 +4340,17 @@ export class MapViewerScene {
     inst.setSequence(stand >= 0 ? stand : this.effectSequence(inst));
     inst.setSequenceLoopMode(0); // play once
     inst.show();
-    this.effects.push({ inst, t: life });
+    // A HELD effect marks a state, so it has three phases rather than one: Birth now, its
+    // looping Stand once that clip ends (updateEffectAnims, the same handoff a dropped item's
+    // model gets), and its Death when `life` runs out — `fadeOutFx` in updateEffects, instead
+    // of the snap-detach an ordinary one-shot gets.
+    if (anim === "hold") {
+      const standIdx = this.seqIndex(inst, /^stand/i);
+      const birth = inst.sequence;
+      const iv = inst.model?.sequences?.[birth]?.interval;
+      if (standIdx >= 0 && iv) this.effectBirthing.push({ inst, standIdx, birthEnd: iv[1] });
+    }
+    this.effects.push({ inst, t: life, hold: anim === "hold" });
   }
 
   /** Spawn the ground model for a dropped item (its own .mdx, looping its stand/
@@ -4472,13 +4485,33 @@ export class MapViewerScene {
   }
 
   private updateEffects(dt: number): void {
+    this.updateEffectAnims();
     for (let i = this.effects.length - 1; i >= 0; i--) {
       const e = this.effects[i];
       e.t -= dt;
       if (e.t <= 0) {
-        e.inst.detach();
+        // A held effect DIES rather than vanishing: its own Death clip plays out (fadeOutFx
+        // owns the instance from here, deadline included).
+        if (e.hold) {
+          const bi = this.effectBirthing.findIndex((b) => b.inst === e.inst);
+          if (bi >= 0) this.effectBirthing.splice(bi, 1);
+          this.fadeOutFx(e.inst);
+        } else {
+          e.inst.detach();
+        }
         this.effects.splice(i, 1);
       }
+    }
+  }
+
+  /** Hand a held effect off to its looping Stand once its Birth clip ends (see spawnEffect). */
+  private updateEffectAnims(): void {
+    for (let i = this.effectBirthing.length - 1; i >= 0; i--) {
+      const b = this.effectBirthing[i];
+      if (b.inst.frame < b.birthEnd) continue;
+      b.inst.setSequence(b.standIdx);
+      b.inst.setSequenceLoopMode(2); // hold on the idle until the state ends
+      this.effectBirthing.splice(i, 1);
     }
   }
 
@@ -11133,6 +11166,7 @@ export class MapViewerScene {
     this.orderArrows = [];
     for (const e of this.effects) e.inst.detach();
     this.effects = [];
+    this.effectBirthing = [];
     this.effectModels.clear();
     this.lightning?.clear(); // bolts hold unit ids the next match will reuse
     for (const inst of this.projectileInsts.values()) inst.detach();
