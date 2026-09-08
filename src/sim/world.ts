@@ -14512,9 +14512,16 @@ export class SimWorld {
     }
     // In range: halt onto a distinct tile (spread, don't cluster — settleSpread), face
     // the target, swing when ready (rotation itself is applied by the shared turning pass).
+    //
+    // …but face it only once the weapon is READY. Between blows a unit keeps the heading
+    // its last swing went out at — through the backswing and the rest of the cooldown — and
+    // turns after a target that has moved round it only when the cooldown has run out, as
+    // the first step of the next attack (the swing gate below then waits for the turn to
+    // finish). Re-aiming the moment the hit landed had the unit pivoting after a kiting
+    // target through the whole recovery, which the game does not do.
     this.settleSpread(u, t);
     u.inCombat = true;
-    u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
+    if (u.cooldownLeft <= 0) u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
     // Don't start a new swing while facing the wrong way, cooling down, or with a
     // swing already mid-flight toward its damage point.
     //
