@@ -38,6 +38,20 @@ created on either machine show up in the list. There is nothing else to start: t
 carries the relay on its own port, so one open port is enough. Each machine reads its own local
 Warcraft III install, as always.
 
+**Firewall.** One port, so one rule. On Windows and macOS the first launch raises the system's own
+"allow incoming connections?" prompt — say yes for **private** networks. On Linux, allow it
+explicitly:
+
+```bash
+sudo ufw allow 5173/tcp
+```
+
+The LAN screen tells you what it can: it names the address other players type, and it warns you
+outright when the server is bound to this machine only (`pnpm dev` without `--host`) — the one
+failure that is otherwise invisible, since the other machine just sees an empty list. It cannot
+see through your firewall, though, so if the address is shown and nobody can reach it, that rule
+is the thing to check.
+
 (Either player can create the game; whoever does runs the authoritative simulation. Games are found
 through the relay's room list rather than by broadcast, so both machines must be pointed at the same
 address — see [docs/multiplayer.md](docs/multiplayer.md) for the internet deployment and for why

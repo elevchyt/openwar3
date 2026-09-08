@@ -10,7 +10,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { LanLobby } = require(join(REPO, ".sim-build", "src", "net", "lobby.js"));
+const { LanLobby, reachabilityLine } = require(join(REPO, ".sim-build", "src", "net", "lobby.js"));
 const { reconnectPlan, memoryStore } = require(join(REPO, ".sim-build", "src", "net", "reconnect.js"));
 const {
   allSeated, applyRequest, buildStart, canStart, colorsFreeFor, editSlot, newSetup, observerSlots,
@@ -441,6 +441,26 @@ const ME = { id: 2, name: "Joiner", host: false };
     check("…and the classic AI is the absence of it", buildStart(setup, 7).slots.map((s) => s.aiPlus), [undefined, false]);
     check("the defaults are the defaults", isDefaultAdvanced(DEFAULT_ADVANCED), true);
     check("…and a Computer+ game is not", isDefaultAdvanced({ ...DEFAULT_ADVANCED, computerPlus: true }), false);
+  }
+
+  console.log("\nthe relay's reachability report is turned into one line, or none");
+  {
+    // The three answers, and the reason there is no fourth: a bound interface is not an open
+    // firewall, so the address is offered as the thing to TRY and never as a promise.
+    check("no report at all says nothing — a cloud relay cannot know", reachabilityLine(null), null);
+    const dev = reachabilityLine({ kind: "dev", lan: false, addresses: [] });
+    check("a dev server on loopback WARNS", dev.warn, true);
+    check("…and names the fix", dev.text.includes("--host"), true);
+    const app = reachabilityLine({ kind: "app", lan: false, addresses: [] });
+    check("the packaged game says the machine is not on a network", app.text.includes("not on a network"), true);
+    check("…and never tells a player to restart a server with a flag", app.text.includes("--host"), false);
+    const one = reachabilityLine({ kind: "dev", lan: true, addresses: ["192.168.1.7:5173"] });
+    check("reachable: the address to type, not a warning", [one.warn, one.text], [false, "Other players join at 192.168.1.7:5173"]);
+    const two = reachabilityLine({ kind: "app", lan: true, addresses: ["192.168.1.7:8787", "10.8.0.2:8787"] });
+    check("two networks offer BOTH — a wrong single address is worse than a list",
+      two.text, "Other players join at 192.168.1.7:8787 or 10.8.0.2:8787");
+    check("reachable with nothing to offer says nothing",
+      reachabilityLine({ kind: "app", lan: true, addresses: [] }), null);
   }
 
   console.log(failed === 0 ? "\nlobby: all checks passed" : `\nlobby: ${failed} FAILED`);

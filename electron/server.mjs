@@ -21,6 +21,7 @@ import { join, normalize, extname, sep } from "node:path";
 import { WebSocketServer } from "ws";
 import { RelayCore, PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { attachRelay } from "../server/wsAdapter.mjs";
+import { describeHost } from "../server/hostInfo.mjs";
 
 /** MUST equal `RELAY_PATH` in src/net/protocol.ts — the same hand-kept pairing the Vite plugin
  *  documents, and for the same reason: this file is outside the app's module graph. */
@@ -82,7 +83,15 @@ async function sendFile(res, path) {
  * machine types, so it must be reported rather than assumed.
  */
 export async function startServer({ root, port = PREFERRED_PORT, host = "0.0.0.0" } = {}) {
-  const core = new RelayCore();
+  // The handshake tells the client where other machines can reach this game — and, when it
+  // cannot be reached at all, that it cannot. We bind every interface, so for the desktop app
+  // that means "this computer is not on a network" rather than a switch somebody forgot.
+  const core = new RelayCore({
+    describeHost: () => {
+      const addr = http.address();
+      return addr && typeof addr !== "string" ? describeHost("app", host, addr.port) : null;
+    },
+  });
   const wss = new WebSocketServer({ noServer: true });
   const stopSweep = attachRelay(wss, core);
 

@@ -83,6 +83,13 @@ export class WebSocketTransport implements Transport {
           // First message must be the handshake.
           if (msg.t !== "hello") return;
           settled = true;
+          if (msg.protocol === PROTOCOL_VERSION) {
+            // Forwarded as well as consumed: the handshake carries what the relay knows about
+            // this machine's reachability (`HostInfo`), and that belongs to the screen, not to
+            // the socket. `onMessage` is already wired when `connect` is called (LanLobby.connect
+            // sets it first), so nothing is lost by handing it straight on.
+            this.onMessage(msg);
+          }
           if (msg.protocol !== PROTOCOL_VERSION) {
             refused = true;
             ws.close();

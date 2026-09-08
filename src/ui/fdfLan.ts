@@ -5,9 +5,10 @@ import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { ListItem } from "./fdf/widgets";
-import type { LanLobby, LobbyState } from "../net/lobby";
+import { reachabilityLine, type LanLobby, type LobbyState } from "../net/lobby";
 import type { StartMatch } from "../net/protocol";
 import { advancedOf, visibilityFog } from "../net/advancedOptions";
+import { LAN_JOIN_OVERRIDE, OW3_STRINGS } from "../overrides";
 import { OBSERVER_PLAYER, type MeleeConfig, type SlotConfig } from "./lobby";
 import type { Race } from "../data/races";
 import {
@@ -115,6 +116,9 @@ export async function mountLanScreen(
     rootFrame: "LocalMultiplayerJoin",
     buildRoot: (lib) => { strings = lib; return buildLanRoot(lib); },
     buttonWidthScale: 1.35,
+    // Our own line under the info text: whether other machines can reach this one, and where.
+    // The 2003 screen has no frame for it because the 2003 game broadcast — see the override.
+    overrides: [OW3_STRINGS, LAN_JOIN_OVERRIDE],
     // The engine's own strings assume Blizzard's LAN browser; ours says what it does.
     textOverrides: {
       CustomCreateTitle: "Local Area Network",
@@ -215,6 +219,13 @@ export async function mountLanScreen(
             : "No games found. Create one.",
       );
     }
+
+    // What the relay told us about this machine (`HostInfo`) — ours, not WC3's, in a frame of
+    // our own under the screen's own sentence. Empty when there is nothing to say, which is
+    // every case where the relay is not also the thing serving this page and so cannot know.
+    // A warning is red; an address is the info line's own gold, because it is not a problem.
+    const reach = reachabilityLine(st.host);
+    s.setText("NetworkStatusText", reach ? `|cff${reach.warn ? "ff8080" : LABEL_GOLD}${reach.text}|r` : "");
 
     // The map summary: the highlighted game's map, with its markers once they have been read.
     if (shown) fillMapInfo(s, shown, preview, minimapIcons);

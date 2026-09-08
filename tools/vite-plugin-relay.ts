@@ -44,9 +44,20 @@ export function relay(): Plugin {
     const { WebSocketServer } = await import("ws");
     const { RelayCore } = await import("../server/rooms.mjs");
     const { attachRelay } = await import("../server/wsAdapter.mjs");
+    const { describeHost } = await import("../server/hostInfo.mjs");
+
+    // What the handshake tells the client about this machine's reachability. Asked of the
+    // server we are mounted on, per connection, because the answer is ITS binding: `pnpm dev`
+    // without `--host` listens on 127.0.0.1 and no game created here can be seen by anybody —
+    // which is invisible from the page, and the single most likely way a LAN session fails.
+    const host = (): unknown => {
+      const addr = httpServer.address();
+      if (!addr || typeof addr === "string") return null;
+      return describeHost("dev", addr.address, addr.port);
+    };
 
     const wss = new WebSocketServer({ noServer: true });
-    const stop = attachRelay(wss, new RelayCore());
+    const stop = attachRelay(wss, new RelayCore({ describeHost: host }));
 
     httpServer.on("upgrade", (req, socket, head) => {
       // `req.url` is a path here, never absolute; the base is only to satisfy the parser.

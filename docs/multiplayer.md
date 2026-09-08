@@ -118,6 +118,30 @@ vite-hmr` at the HMR path and ignores the rest, so the two coexist without eithe
 other — but a listener here that claimed too broadly would eat HMR and turn every source edit into a
 manual reload.
 
+**Telling the player what is wrong.** Two of the three ways a LAN session fails are diagnosable,
+and the third is not, so the screen says exactly as much as it knows. A page cannot test its own
+reachability — it can only reach itself, and "I can load the game" is true precisely in the case
+that is broken — but the SERVER knows which interface it bound and what addresses this machine
+has. So it reports both with the handshake (`HostInfo` in `src/net/protocol.ts`, built by
+`server/hostInfo.mjs`, printed by `reachabilityLine` into the LAN screen's own
+`NetworkStatusText` frame — ours, `src/overrides/`, because the 2003 screen has no frame for a
+question the 2003 game never had):
+
+| | what the screen says |
+|---|---|
+| No relay at all | the existing connect error — the page is served by something that carries no relay |
+| Bound to loopback (`pnpm dev` with no `--host`) | "Other computers cannot see your games. Restart the server with `--host`." |
+| No network at all (packaged game) | the same consequence, with the cause it actually has |
+| Reachable | the address to type on the other machine, one per interface |
+| Firewall | **nothing** — see below |
+
+The firewall is the one that cannot be detected from inside this process, and no amount of
+cleverness changes that: a bound interface is not an open port, and only something OUTSIDE can
+tell the difference. So the address is offered as the thing to TRY and never as a promise, and
+the firewall is documented (README) rather than guessed at on screen. A relay that is not also
+serving the page — the cloud one — sends no report at all, because its own addresses say nothing
+about how a player reaches the game, and a wrong address is worse than none.
+
 **What this does NOT get us, and what would.** Somebody still types an IP. Real WC3 does not ask
 that: it broadcasts on UDP 6112 and the games appear. A browser cannot send a UDP datagram either,
 so **discovery is the second thing only a native shell can do** — which, with the native install

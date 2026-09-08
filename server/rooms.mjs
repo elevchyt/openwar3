@@ -49,11 +49,19 @@ const peerInfo = (p) => ({ id: p.id, name: p.name, host: p.host });
 const mkToken = () => globalThis.crypto.randomUUID();
 
 export class RelayCore {
-  constructor() {
+  /**
+   * `describeHost` is asked, per connection, what this machine looks like from the network —
+   * `HostInfo` in src/net/protocol.ts. Only a relay that also SERVES THE PAGE passes one (the
+   * dev plugin, the desktop app); a standalone or cloud relay leaves it out, because its own
+   * addresses say nothing about how a player reaches the game. Asked per connection rather than
+   * captured once, since an address can appear or vanish while the game sits on the menu.
+   */
+  constructor({ describeHost = null } = {}) {
     /** Rooms live only in memory. Losing them on restart loses lobbies, not matches. */
     this.rooms = new Map();
     this.conns = new Set();
     this.nextRoomId = 1;
+    this.describeHost = describeHost;
   }
 
   listing() {
@@ -80,7 +88,8 @@ export class RelayCore {
     conn.roomId = null;
     conn.peerId = 0;
     this.conns.add(conn);
-    conn.send({ t: "hello", protocol: PROTOCOL_VERSION });
+    const host = this.describeHost?.() ?? null;
+    conn.send(host ? { t: "hello", protocol: PROTOCOL_VERSION, host } : { t: "hello", protocol: PROTOCOL_VERSION });
     conn.send({ t: "rooms", rooms: this.listing() });
   }
 

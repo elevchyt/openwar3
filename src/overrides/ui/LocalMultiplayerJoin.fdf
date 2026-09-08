@@ -1,0 +1,33 @@
+// OpenWar3 override — `UI\FrameDef\Glue\LocalMultiplayerJoin.fdf`.
+//
+// One line the 2003 screen has no frame for, because the 2003 game never needed it: WHETHER
+// OTHER MACHINES CAN REACH THIS ONE, and at what address.
+//
+// Real WC3 broadcast on the local subnet, so nobody typed an address and nobody could be
+// unreachable in a way the screen had to explain. A browser can do neither — it cannot send a
+// datagram, and it cannot find out whether anything outside this machine can reach it. What CAN
+// know is the server that is serving this page, and it reports both with the handshake
+// (`HostInfo`, src/net/protocol.ts); this is where that report is printed.
+//
+// It is a frame of its own rather than more text on `CustomCreateInfo` because that frame is
+// ONE LINE — a TEXT is exactly its font tall (ui/fdf/layout.ts) and JUSTIFYMIDDLE grows a long
+// string in BOTH directions, so a second line lands on top of "Local Area Network" above it.
+// Measured: the info line's box is 0.245 wide, which is about 37 characters, and neither the
+// address nor the diagnosis fits beside the sentence already there.
+//
+// It sits in the empty panel under that sentence and to the LEFT of the Create Game button,
+// which is the space this screen has: the button's backdrop starts 0.213 in from the panel's
+// left margin, so the width below is that gap less a small gutter. The Height is THREE lines
+// of this font measured in the running screen rather than computed — a TEXT is clipped to its
+// own box, and a line box is taller than the font size — and three is also all the panel has
+// room for, so the strings that go here are written to that budget (src/net/lobby.ts
+// `reachabilityLine`). JUSTIFYTOP, so it grows DOWNWARD from under the info line rather than
+// back over it.
+
+Frame "TEXT" "NetworkStatusText" INHERITS "StandardInfoTextTemplate" {
+    Width 0.205,
+    Height 0.052,
+    FontJustificationH JUSTIFYLEFT,
+    FontJustificationV JUSTIFYTOP,
+    SetPoint TOPLEFT, "CustomCreateInfo", BOTTOMLEFT, 0.0, -0.004,
+}

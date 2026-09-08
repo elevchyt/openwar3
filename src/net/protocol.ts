@@ -62,7 +62,7 @@ export type ClientMessage =
 
 export type ServerMessage =
   /** Handshake: sent once on connect, before anything else. */
-  | { t: "hello"; protocol: number }
+  | { t: "hello"; protocol: number; host?: HostInfo }
   /** `token` is this peer's OWN rejoin token — secret, sent only to it, never in a peer list.
    *  Stash it; presenting it on a later `join` reclaims this exact slot (item 11). */
   | { t: "created"; room: RoomInfo; you: PeerInfo; token: string }
@@ -157,6 +157,34 @@ export type GameMessage =
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */
 export const PROTOCOL_VERSION = 13; // 13: observers, colours, advanced options — 12: per-slot AI difficulty
+
+/**
+ * What the relay knows about ITS OWN reachability, sent with the handshake.
+ *
+ * A page cannot find out whether other machines can reach it — it can only reach itself. The
+ * server can: it knows which interface it bound and what addresses this machine has. So the one
+ * LAN failure that is genuinely diagnosable is diagnosed on the side that can see it, and the
+ * screen prints the answer instead of the player discovering it from an empty game list on the
+ * other machine.
+ *
+ * Sent only by a relay that is SERVING THE PAGE (the dev server's plugin, the desktop app). A
+ * standalone or cloud relay omits it: its own addresses say nothing about how a player reaches
+ * the page, and a wrong address is worse than none. The field is therefore optional in both
+ * directions and needs no `PROTOCOL_VERSION` bump — an older client ignores it, and a client
+ * that does not get one simply says nothing about the network.
+ */
+export interface HostInfo {
+  /** Who is serving: the dev server (`pnpm dev`) or the packaged game. They fail differently
+   *  and the fixes are not the same sentence, so the client words it and the server does not. */
+  kind: "dev" | "app";
+  /** False when the server is bound to the LOOPBACK interface only — the `pnpm dev` without
+   *  `--host` case — or when this machine has no network address at all. Games created here
+   *  are then invisible to every other machine, and nothing at the far end will say so. */
+  lan: boolean;
+  /** `host:port` for each non-loopback IPv4 address, ready to be typed into a browser on
+   *  another machine. Empty when there is nothing to offer. */
+  addresses: string[];
+}
 
 /** Default relay port, for the STANDALONE server (`node server/relay.mjs`). Overridable via
  *  PORT (the env var Railway/Render both inject). A dev server or an exported build serves the

@@ -49,6 +49,11 @@ try {
   ok("hello, at the protocol the client speaks", hello.t === "hello" && hello.protocol === PROTOCOL_VERSION,
      `protocol ${hello.protocol}`);
 
+  // The handshake also reports what this machine looks like from the network. Bound to loopback
+  // — which is what this test does — that report is the one LAN failure a program can detect.
+  ok("the handshake reports this machine's reachability", hello.host?.kind === "app", JSON.stringify(hello.host));
+  ok("…and bound to loopback it says so", hello.host?.lan === false);
+
   const b = new WebSocket(`ws://127.0.0.1:${server.port}/relay`);
   await first(b);
   a.send(JSON.stringify({ t: "create", name: "Desktop Game", hostName: "Host", mapName: "Echo Isles",
@@ -67,6 +72,15 @@ try {
   ok("an upgrade off the relay path is refused", refused);
 
   a.close(); b.close();
+  const open = await startServer({ root, port: 0, host: "0.0.0.0" });
+  try {
+    const c = new WebSocket(`ws://127.0.0.1:${open.port}/relay`);
+    const h = await first(c);
+    ok("bound to every interface it offers the addresses to type",
+       h.host?.lan === true && h.host.addresses.every((a) => a.endsWith(`:${open.port}`)),
+       JSON.stringify(h.host));
+    c.close();
+  } finally { await open.stop(); }
 } finally {
   await server.stop();
 }

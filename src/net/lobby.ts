@@ -1,4 +1,4 @@
-import type { GameMessage, PeerInfo, RoomInfo, ServerMessage } from "./protocol";
+import type { GameMessage, HostInfo, PeerInfo, RoomInfo, ServerMessage } from "./protocol";
 import type { Transport } from "./transportTypes";
 import { localStorageStore, reconnectPlan, type SessionStore } from "./reconnect";
 
@@ -31,6 +31,10 @@ export interface LobbyState {
   peers: PeerInfo[];
   you: PeerInfo | null;
   error: string | null;
+  /** What the relay says about THIS machine's reachability, when it is the one serving the page
+   *  and therefore in a position to know (`HostInfo`). Null against a standalone or cloud relay,
+   *  which is not the same as "unreachable" — it is "nobody can tell you". */
+  host: HostInfo | null;
 }
 
 const EMPTY: LobbyState = {
@@ -40,7 +44,40 @@ const EMPTY: LobbyState = {
   peers: [],
   you: null,
   error: null,
+  host: null,
 };
+
+/** What to tell the player about this machine's reachability, given the relay's `HostInfo`.
+ *
+ *  Three answers and no fourth. **Nothing** — either no report (a standalone or cloud relay,
+ *  which cannot know) or nothing worth saying. **A warning**, for the one failure a program can
+ *  actually detect: the server is bound to loopback, so the game is invisible to every other
+ *  machine and NOTHING at the far end will ever say so — the other player just sees an empty
+ *  list and blames the network. **An address**, otherwise, because the remaining question is
+ *  "what do I type over there" and this is the only place that knows.
+ *
+ *  What it deliberately does NOT claim is that the game IS reachable. A bound interface is not
+ *  an open firewall, and no test from inside this process can tell the difference; the address
+ *  is offered as the thing to try, not as a promise. */
+export function reachabilityLine(host: HostInfo | null): { text: string; warn: boolean } | null {
+  if (!host) return null;
+  if (!host.lan) {
+    return {
+      warn: true,
+      // Three lines is what the panel has (src/overrides/ui/LocalMultiplayerJoin.fdf), so both
+      // say the CONSEQUENCE first and the cause second — a player who reads no further has
+      // still learned the thing that matters, which is that nobody can see them.
+      text: host.kind === "dev"
+        ? "Other computers cannot see your games. Restart the server with --host."
+        : "Other computers cannot see your games — this computer is not on a network.",
+    };
+  }
+  if (!host.addresses.length) return null;
+  // One address is the ordinary case. Several means several networks (wifi and ethernet, a VPN),
+  // and there is no way to know which one the other player is on, so offer them all rather than
+  // guessing — a wrong single address is worse than a short list.
+  return { warn: false, text: `Other players join at ${host.addresses.join(" or ")}` };
+}
 
 export class LanLobby {
   private transport: LobbyTransport | null = null;
@@ -258,7 +295,9 @@ export class LanLobby {
         this.reconnecting = false; // a refused rejoin (room full, wrong token) stops the attempt
         return this.set({ error: m.message });
       case "hello":
-        return; // handled during the transport handshake
+        // The version check is the transport's (it must fail before a lobby exists). What the
+        // screen wants from the handshake is the reachability report beside it.
+        return this.set({ host: m.host ?? null });
     }
   }
 

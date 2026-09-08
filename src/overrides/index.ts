@@ -3,6 +3,7 @@ import type { FdfLibrary } from "../ui/fdf/library";
 import advancedOptionsFdf from "./ui/AdvancedOptionsPane.fdf?raw";
 import advancedOptionsDisplayFdf from "./ui/AdvancedOptionsDisplay.fdf?raw";
 import globalStringsFdf from "./ui/GlobalStrings.fdf?raw";
+import localMultiplayerJoinFdf from "./ui/LocalMultiplayerJoin.fdf?raw";
 import optionsMenuFdf from "./ui/OptionsMenu.fdf?raw";
 
 // OpenWar3's own layer on top of the game's UI files (issue #124). Read `README.md` first.
@@ -134,6 +135,19 @@ export const LAN_ADVANCED_OPTIONS_OVERRIDE: FdfOverride = {
     { frame: "ComputerPlusLabel", into: "AdvancedOptionsPane" },
     { frame: "ComputerPlusCheckBox", into: "AdvancedOptionsPane" },
   ],
+};
+
+/**
+ * The LAN game list: one line saying whether other machines can reach this one.
+ *
+ * Nothing is retired and nothing moves — a frame is added into the empty panel under the
+ * screen's own info line, so no anchor chain is touched and there is no `repoint`. See
+ * `ui/LocalMultiplayerJoin.fdf` for why it cannot simply be more text on the line above it.
+ */
+export const LAN_JOIN_OVERRIDE: FdfOverride = {
+  id: "ow3-lan-join",
+  source: localMultiplayerJoinFdf,
+  add: [{ frame: "NetworkStatusText", into: "LocalMultiplayerJoin" }],
 };
 
 /**
