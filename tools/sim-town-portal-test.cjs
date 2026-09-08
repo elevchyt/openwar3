@@ -119,6 +119,11 @@ const give = (u, itemId) => { u.inventory[0] = { id: nextId++, itemId, charges: 
 const step = (secs) => { for (let i = 0; i < Math.round(secs * 60); i++) world.tick(1 / 60); };
 
 let failed = 0;
+/** Tick until `done()` or the clock runs out; true if it happened. */
+const runUntil = (done, seconds = 30) => {
+  for (let i = 0; i < Math.round(seconds * 60); i++) { world.tick(1 / 60); if (done()) return true; }
+  return false;
+};
 function check(what, got, want) {
   const ok = got === want;
   if (!ok) failed++;
@@ -131,6 +136,14 @@ const at = (what, u, x, y) => {
   const ok = d <= 400;
   if (!ok) failed++;
   console.log(`${ok ? "ok  " : "FAIL"}  ${what}${ok ? "" : `\n        want within 400 of (${x}, ${y}), got (${Math.round(u.x)}, ${Math.round(u.y)}) — ${Math.round(d)} away`}`);
+};
+
+/** …and the other way round: it did NOT arrive at that spot. */
+const away = (what, u, x, y) => {
+  const d = Math.hypot(u.x - x, u.y - y);
+  const ok = d > 2000;
+  if (!ok) failed++;
+  console.log(`${ok ? "ok  " : "FAIL"}  ${what}${ok ? "" : `\n        want nowhere near (${x}, ${y}), got (${Math.round(u.x)}, ${Math.round(u.y)}) — ${Math.round(d)} away`}`);
 };
 
 console.log("\n-- the five seconds ---------------------------------------------------------");
@@ -256,6 +269,53 @@ console.log("\n-- where it goes ------------------------------------------------
   step(4.2);
   at("the hall died mid-channel: the hero stays put", h, 6000, 6000);
   check("…and is mortal again", h.invulnerable, false);
+}
+
+console.log("\n-- a gatherer on the job is left on the job ---------------------------------");
+
+// Liquipedia (Scroll_of_Town_Portal): the scroll "does not teleport worker units (Peasants,
+// Peons, Wisps, Ghouls, and Acolytes) that were ordered to harvest Lumber or Gold." The rule is
+// about the ORDER, not about the unit type — which is why the list is worth nothing as a list:
+// a Ghoul is on it and is not a `Peon` in UnitBalance at all, and the GOBLIN SHREDDER is not on
+// it and is exactly the same case. `SimWorld.atWork` is that predicate, and it is asked of
+// every traveller alike.
+//
+// What it is FOR: a base is very often inside the scroll's 1100, and a teleport that scoops up
+// the harvesting crew answers the emergency by wrecking the economy that pays for the next army.
+{
+  const HARVEST = { id: "Ahr3", code: "Ahrl", level: 1, cooldownLeft: 0, autocastOn: false };
+  const chopper = (x, y, over = {}) => world.add(spec({
+    id: nextId++, typeId: "ngir", x, y, name: "Goblin Shredder", abilities: [HARVEST],
+    worker: { gold: false, lumber: true, harvestAbility: "Ahr3", lumberCapacity: 200,
+      baseLumberCapacity: 200, lumberPerChop: 10, chopPeriod: 1.35, goldPerTrip: 0,
+      damagesTree: true, deliversInPlace: false, minesInRing: false, carryGold: 0, carryLumber: 0 },
+    ...over,
+  }));
+
+  world = newWorld();
+  const h = give(heroAt(6000, 6000), "stwp");
+  const home = hall(1000, 1000);
+  home.depotLumber = true; // …so a full load has somewhere to be carried
+  const tree = world.addTree(6400, 6000, undefined, 0);
+  // Three units inside the circle: one shredder chopping, one shredder standing about, and a
+  // peasant carrying its load home (`return` is the other half of the round trip).
+  const working = chopper(6300, 6000);
+  const spare = chopper(6100, 6200);
+  const hauling = chopper(5900, 6300, { typeId: "hpea", name: "Peasant", isPeon: true });
+  world.issueHarvest(working.id, "lumber", tree.id);
+  world.issueHarvest(hauling.id, "lumber", tree.id);
+  hauling.worker.carryLumber = 200; // it fills on its first swing and sets off for the hall
+  check("the shredder is on the trees", working.order, "harvest");
+  check("…and the peasant sets off home with its load", runUntil(() => hauling.order === "return", 20), true);
+
+  world.useItem(h.id, 0, 0, h.x, h.y);
+  step(5.2);
+  at("the hero went", h, 1000, 1000);
+  at("…and the idle shredder went with it, like any other troop", spare, 1000, 1000);
+  at("…while the one on the trees stayed in the forest", working, 6300, 6000);
+  check("…still holding its job", working.order, "harvest");
+  away("…and the peasant walking a load home is still walking it", hauling, 1000, 1000);
+  check("…still carrying it", hauling.order, "return");
 }
 
 console.log("\n-- a map that edits the cast away -------------------------------------------");

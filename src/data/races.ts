@@ -92,6 +92,15 @@ export const MELEE_WORKER_CLUSTERS: Record<PlayableRace, WorkerCluster[]> = {
 // makes one reader serve all four: a Peasant's 10-lumber load and a Ghoul's 20 are the same
 // column, and the Wisp simply has no use for it.)
 //
+// A FIFTH gatherer answers to the same rows without being a worker of anybody's race: the
+// GOBLIN SHREDDER (`ngir`), hired from the Goblin Laboratory, whose entire `abilList` is
+// `Ahr3` — an alias of `Ahrl`. It therefore takes the Ghoul's profile here (lumber only, no
+// gold, and the tree falls) and its own row's rates, which are five times the Ghoul's: see
+// harvestAbilityOf. It is not `Peon` in UnitBalance's `type` column (it is `Mechanical`), so
+// none of the flags that keying is the gate for touch it — but WHAT IT IS DOING is what the
+// gathering rules are asked in, and those it answers exactly as a Peasant does
+// (SimWorld.atWork, and the Town Portal party it keeps out of).
+//
 // The WISP is the one whose behaviour is not the shared one: `Awha` is a different ability
 // CLASS, with no depot leg at all — the lumber is credited where it is cut (`deliversInPlace`).
 // 5 per 8s is 0.63 lumber/sec, which lands within a rounding error of a Peasant's 10-per-trip
@@ -179,6 +188,32 @@ const WORKER_BY_HARVEST: Record<string, WorkerProfile> = Object.fromEntries(
  */
 export function isHarvestCode(code: string): boolean {
   return Object.prototype.hasOwnProperty.call(WORKER_BY_HARVEST, code);
+}
+
+/**
+ * WHICH harvest row this unit carries — the alias out of its own `abilList`, not the base code
+ * the profile above was matched by.
+ *
+ * The two are the same thing for the four stock workers and differ for everything else, because
+ * `Ahrl` "Harvest Lumber" is a base code with THREE aliases in the install and each carries its
+ * own rate card (AbilityData.slk, DataA lumber per swing / DataB the load / `Dur1` the interval):
+ *
+ *     Ahrl  "Harvest Lumber"             2 per 1.35 s, load  20   the Ghoul
+ *     Ahr2  "Harvest Lumber (Arch ghouls)" 5 per 1.35 s, load  50   the campaign Arch Ghoul
+ *     Ahr3  "Harvest Lumber (shredder)"  10 per 1.35 s, load 200   the GOBLIN SHREDDER
+ *
+ * So the ability a unit is HANDED is the whole of how fast it gathers, and reading the profile's
+ * own alias instead handed a Shredder a Ghoul's rate — 2 and 20 against its own 10 and 200, a
+ * tenth of the wood it is bought for. (Ten a swing is also exactly what the wiki describes and
+ * what the shredder's second WEAPON does to a tree: `ngir` targs2 = tree, 10 damage, cooldown
+ * 1.35 — five swings to fell a 50-lumber trunk.)
+ *
+ * Read by SimWorld.applyHarvestData through WorkerState.harvestAbility. Falls back to the
+ * profile's own alias for a caller that has no ability list to offer.
+ */
+export function harvestAbilityOf(abilities: Iterable<{ id: string; code: string }>): string | null {
+  for (const a of abilities) if (isHarvestCode(a.code)) return a.id;
+  return null;
 }
 
 /** The worker profile for a type, by id first and then by the harvest ability it carries.

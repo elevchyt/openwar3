@@ -46,7 +46,7 @@ import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
 import { disabledIconPath } from "../data/commandStrings";
 import { type ItemRegistry } from "../data/items";
-import { workerProfileFor, depotRoleFor, isHarvestCode, type PlayableRace } from "../data/races";
+import { workerProfileFor, harvestAbilityOf, depotRoleFor, isHarvestCode, type PlayableRace } from "../data/races";
 import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
 import { CreepCaster } from "../ai/creeps";
 import { ComputerPlusAi, type PlusHost } from "../ai/plus";
@@ -3183,7 +3183,7 @@ export class RtsController {
     // (a map's `A000` cloned from `Ahar` is still `Ahar`) plus the rank-1 Data columns.
     const innate = def.abilities.map((id) => {
       const a = this.abilities.get(id);
-      return { code: a?.code ?? id, data: a?.levelData[0]?.data ?? [] };
+      return { id, code: a?.code ?? id, data: a?.levelData[0]?.data ?? [] };
     });
     // A worker is whatever CARRIES a harvest ability, not one of five known ids — see
     // workerProfileFor. The map's own builder is a Peasant with `Ahar` and a custom `Builds`
@@ -3195,7 +3195,12 @@ export class RtsController {
     const depot = depotRoleFor(def.classification, innate);
     // baseLumberCapacity is the pre-upgrade load; Improved Lumber Harvesting raises the live
     // `lumberCapacity` off it each tick (recomputeStats), so the profile stays the baseline.
-    const worker: WorkerState | null = profile ? { ...profile, baseLumberCapacity: profile.lumberCapacity, carryGold: 0, carryLumber: 0 } : null;
+    // …and the RATES come off the row this unit was handed, not off the profile's own alias —
+    // one base code, three rate cards (harvestAbilityOf). The Goblin Shredder is the whole of
+    // this: `ngir`'s abilList is `Ahr3`, which is `Ahrl` with ten lumber a swing and a 200 load.
+    const worker: WorkerState | null = profile
+      ? { ...profile, harvestAbility: harvestAbilityOf(innate) ?? profile.harvestAbility, baseLumberCapacity: profile.lumberCapacity, carryGold: 0, carryLumber: 0 }
+      : null;
     // Structures get building state (construction + a training queue); rally
     // point defaults to just south of the building.
     const building: BuildingState | null = def.isBuilding

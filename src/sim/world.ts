@@ -8,7 +8,7 @@ import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, 
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { slotMissileArt, autoArmed, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
-import { RACE_INDEX, workerProfileFor, type PlayableRace } from "../data/races";
+import { RACE_INDEX, workerProfileFor, harvestAbilityOf, type PlayableRace } from "../data/races";
 import { type UpgradeRegistry } from "../data/upgrades";
 import { TechState } from "./tech";
 import {
@@ -787,8 +787,10 @@ export type GarrisonJob =
 export interface WorkerState {
   gold: boolean;
   lumber: boolean;
-  /** The harvest ability this worker's `abilList` gives it (`Ahar`/`Ahrl`/`Awha`/`Aaha`) —
-   *  the row every rate below is read from. See WorkerProfile and applyHarvestData. */
+  /** The harvest ability this worker's `abilList` gives it — the ALIAS it actually carries
+   *  (`Ahar`/`Ahrl`/`Awha`/`Aaha`, and the Goblin Shredder's `Ahr3`), not the base code the
+   *  profile was matched by, because three aliases of `Ahrl` ship three different rate cards.
+   *  The row every rate below is read from. See harvestAbilityOf and applyHarvestData. */
   harvestAbility: string;
   /** Lumber carried per trip. LIVE value: Improved/Advanced Lumber Harvesting (`rlum`) raises
    *  it above `baseLumberCapacity`, which is why recomputeStats owns it (a Peasant already in
@@ -6049,7 +6051,7 @@ export class SimWorld {
     // worker has one pair of hands, and taking up a sword drops whatever was in them.
     const profile = u.isPeon ? workerProfileFor(toTypeId, u.abilities.map((a) => a.code)) : null;
     u.worker = profile
-      ? { ...profile, baseLumberCapacity: profile.lumberCapacity, carryGold: 0, carryLumber: 0 }
+      ? { ...profile, harvestAbility: harvestAbilityOf(u.abilities) ?? profile.harvestAbility, baseLumberCapacity: profile.lumberCapacity, carryGold: 0, carryLumber: 0 }
       : null;
     if (u.worker) this.applyHarvestData(u.worker); // rates off the harvest ability's own row
     // maxHp/maxMana now reflect the new type (+ any research already in). Both POOLS moving is
@@ -16103,10 +16105,15 @@ export class SimWorld {
    * out anywhere in the codebase (CLAUDE.md: never re-type a value the game data carries).
    *
    * Units\UnitAbilities.slk hands each worker the ability by name — Peasant and Peon `Ahar`,
-   * Ghoul `Ahrl`, Wisp `Awha`, Acolyte `Aaha` — and AbilityData.slk's row is the rate card:
-   * DataA lumber per interval, DataB the load it fills before hauling, DataC the gold a trip
-   * is worth, and `Dur1` the interval itself. A Peasant chops every **1.1** seconds and a
-   * Ghoul every **1.35**, not the round 1 and 1.1 that had been typed in by hand.
+   * Ghoul `Ahrl`, Wisp `Awha`, Acolyte `Aaha`, Goblin Shredder `Ahr3` — and AbilityData.slk's
+   * row is the rate card: DataA lumber per interval, DataB the load it fills before hauling,
+   * DataC the gold a trip is worth, and `Dur1` the interval itself. A Peasant chops every
+   * **1.1** seconds and a Ghoul every **1.35**, not the round 1 and 1.1 that had been typed
+   * in by hand.
+   *
+   * The name is the unit's OWN alias (harvestAbilityOf), which is why the Shredder gathers
+   * ten a swing into a 200 load off `Ahr3` while the Ghoul beside it takes two into twenty
+   * off `Ahrl` — one base code, three rows.
    *
    * Every field is left alone when its column is blank, which is what keeps one reader honest
    * across four rows that fill in different subsets: `Aaha` carries no rate at all (an Acolyte
@@ -19153,17 +19160,26 @@ export class SimWorld {
    * building, a garrisoned Burrow crew. Those have a position, so a circle finds them — and
    * teleporting one drags it out of the thing it is inside.
    *
-   * A WORKER AT WORK is not a troop either, and this is the one departure here from "whatever
-   * stands in the circle". A base is very often inside 1100 units of the hero pressing the
-   * scroll, and a teleport that scoops up the mining crew answers the emergency by wrecking
-   * the economy that would pay for the next army — the peasants come back to a mine they are
-   * no longer at, the half-built Barracks loses its builder, and the player has to re-issue
-   * every one of them by hand. So a unit on a job is left on its job: mining or chopping
-   * (`harvest`, and the walk home with the load, `return` — a Ghoul on lumber is exactly this
-   * and needs no case of its own), building or repairing (`constructing` / `repair` /
-   * `buildPending`, the last of which is the walk out to a site that has not been staked yet),
-   * and an Acolyte knelt in a Haunted Gold Mine's ring (`ringSlot`, whose crew is paid where
-   * it kneels — docs/undead.md). A worker standing idle is a troop like any other and travels.
+   * A WORKER AT WORK is not a troop either, and it is the game's own rule: the scroll "does not
+   * teleport worker units (Peasants, Peons, Wisps, Ghouls, and Acolytes) that were ordered to
+   * harvest Lumber or Gold" (Liquipedia, Scroll_of_Town_Portal). It is also the one departure
+   * here from "whatever stands in the circle", and what it is for: a base is very often inside
+   * 1100 units of the hero pressing the scroll, and a teleport that scoops up the mining crew
+   * answers the emergency by wrecking the economy that would pay for the next army — the
+   * peasants come back to a mine they are no longer at, the half-built Barracks loses its
+   * builder, and the player has to re-issue every one of them by hand. So a unit on a job is
+   * left on its job: mining or chopping (`harvest`, and the walk home with the load, `return`),
+   * building or repairing (`constructing` / `repair` / `buildPending`, the last of which is the
+   * walk out to a site that has not been staked yet), and an Acolyte knelt in a Haunted Gold
+   * Mine's ring (`ringSlot`, whose crew is paid where it kneels — docs/undead.md). A worker
+   * standing idle is a troop like any other and travels.
+   *
+   * Stated in the ORDER, which is why that list of five unit types is worth nothing AS a list.
+   * A Ghoul is on it and is not a `Peon` in UnitBalance at all; the GOBLIN SHREDDER is not on
+   * it and is exactly the same case — `ngir`'s whole abilList is the harvest row `Ahr3`, it is
+   * the best lumber gatherer in the game, and a base's whole wood income is often one of them.
+   * Both are covered by `atWork` without a case of their own, and tools/sim-town-portal-test.cjs
+   * pins the shredder in both directions: on the trees it stays, standing about it travels.
    *
    * The Amulet of Recall keeps the targs-filtered gatherer below: it is aimed at a bare point
    * and has no destination unit, so its `targs1 = ground,air,player,vuln,invu,nonancient`
@@ -19181,8 +19197,9 @@ export class SimWorld {
    *  `teleportParty` and the "-" select-all-army key (issue #131), which is what it exists
    *  for. Deliberately about the ORDER rather than
    *  about the unit type: "worker" is not a thing in the data (a Ghoul is a fighting unit that
-   *  also chops, a Wisp is a builder that is also consumed by one), and what matters is that
-   *  the unit is busy, not what it usually does. */
+   *  also chops, a Wisp is a builder that is also consumed by one, and the Goblin Shredder is
+   *  a 375-gold mercenary that does nothing BUT chop), and what matters is that the unit is
+   *  busy, not what it usually does. */
   atWork(u: SimUnit): boolean {
     return u.order === "harvest" || u.order === "return" || u.order === "repair" || u.constructing > 0 || !!u.repair || !!u.buildPending || u.ringSlot > 0;
   }

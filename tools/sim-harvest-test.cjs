@@ -335,5 +335,75 @@ console.log("\nthe mine's latch cannot be wedged shut");
   check("…so the other four keep mining", gold - before > 25 * GOLD_PER_TRIP, `${(gold - before) / GOLD_PER_TRIP} loads in the 60 s after the stop`);
 }
 
+// --- the GOBLIN SHREDDER gathers at its OWN rate ---------------------------------------
+//
+// `ngir`'s whole abilList is `Ahr3` "Harvest Lumber (shredder)" — an ALIAS of `Ahrl`, so it
+// takes the Ghoul's worker profile (lumber only, no gold, the tree falls). What it must NOT
+// take is the Ghoul's numbers: one base code ships three rate cards in AbilityData.slk, and
+// the shredder's is five times the Ghoul's.
+//
+//     Ahrl  DataA  2  DataB  20  Dur1 1.35   the Ghoul
+//     Ahr2  DataA  5  DataB  50  Dur1 1.35   the campaign Arch Ghoul
+//     Ahr3  DataA 10  DataB 200  Dur1 1.35   the Goblin Shredder
+//
+// Ten a swing is the wiki's own description ("gathers 10 wood at a time … cuts a healthy tree
+// down in 5 swings") and it is what the shredder's second WEAPON does to a tree as well
+// (`ngir` targs2 = tree, 10 damage, cooldown 1.35), so the two halves of the data agree.
+console.log("\nthe Goblin Shredder gathers off its own harvest row, not the Ghoul's");
+{
+  const { harvestAbilityOf } = require(join(REPO, ".sim-build", "src", "data", "races.js"));
+  const abil = (id, code) => ({ id, code, level: 1, cooldownLeft: 0, autocastOn: false });
+  check("harvestAbilityOf picks the alias a unit actually carries",
+    harvestAbilityOf([abil("Ahr3", "Ahrl")]) === "Ahr3", `${harvestAbilityOf([abil("Ahr3", "Ahrl")])}`);
+  check("…and a Peasant's is still `Ahar`",
+    harvestAbilityOf([abil("Ahar", "Ahar"), abil("Ahrp", "Ahrp")]) === "Ahar", `${harvestAbilityOf([abil("Ahar", "Ahar")])}`);
+  check("…and a unit with no harvest row has none",
+    harvestAbilityOf([abil("AHtb", "AHtb")]) === null, `${harvestAbilityOf([abil("AHtb", "AHtb")])}`);
+
+  // AbilityData.slk's two rows, verbatim: DataA lumber per swing, DataB the load, Dur1 the beat.
+  const D9 = (...v) => { const a = new Array(9).fill(NaN); v.forEach((x, i) => { a[i] = x; }); return a; };
+  const ROW = {
+    Ahrl: { code: "Ahrl", levelData: [{ castRange: 116, area: 900, duration: 1.35, data: D9(2, 20) }] },
+    Ahr3: { code: "Ahrl", levelData: [{ castRange: 116, area: 900, duration: 1.35, data: D9(10, 200) }] },
+  };
+  const W = 160, H = 160;
+  const grid = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [0, 0]);
+  const world = new SimWorld(grid, 1, { get: (id) => ROW[id] });
+  const tree = world.addTree(2560, 2560, undefined, 0); // a standard 50-lumber trunk
+  // Both are built with the GHOUL's numbers as their fallbacks, exactly as the profile hands
+  // them over: what separates them is only which row `harvestAbility` names.
+  const gatherer = (id, harvestAbility, x) => world.add({
+    id, owner: 0, team: 0, typeId: id === 1 ? "ngir" : "ugho", x, y: 2560, facing: 0,
+    hp: 600, maxHp: 600, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 0.5, radius: 24, scale: 1, armor: 3, armorType: "heavy", defUp: 0,
+    weapon: null, weapons: [], oldWeapons: [], sight: 1400, nsight: 800, baseSight: 1400,
+    sightDay: 1400, sightNight: 800, flying: false, mechanical: true, invulnerable: false,
+    race: "creeps", isBuilding: false, foodCost: 4, goldCost: 375, lumberCost: 100,
+    abilities: [{ id: harvestAbility, code: "Ahrl", level: 1, cooldownLeft: 0, autocastOn: false }],
+    upgrades: [], moveType: "foot", collisionSize: 24, canFlee: true, targetedAs: "ground",
+    deathTime: 2, name: "Goblin Shredder", castPoint: 0.3, castBackswing: 0.6,
+    worker: { gold: false, lumber: true, harvestAbility, lumberCapacity: 20, baseLumberCapacity: 20,
+      lumberPerChop: 2, chopPeriod: 1.35, goldPerTrip: 0, damagesTree: true, deliversInPlace: false,
+      minesInRing: false, carryGold: 0, carryLumber: 0 },
+    depotGold: false, depotLumber: false, isPeon: false,
+  });
+  const shred = gatherer(1, "Ahr3", 2400);
+  const ghoul = gatherer(2, "Ahrl", 2700);
+  check("the shredder's load is its own row's 200", shred.worker.lumberCapacity === 200, `${shred.worker.lumberCapacity}`);
+  check("…and its swing its own row's 10", shred.worker.lumberPerChop === 10, `${shred.worker.lumberPerChop}`);
+  check("…while the Ghoul beside it still carries 20", ghoul.worker.lumberCapacity === 20, `${ghoul.worker.lumberCapacity}`);
+  check("…two at a time", ghoul.worker.lumberPerChop === 2, `${ghoul.worker.lumberPerChop}`);
+  check("…and both keep the row's 1.35 s beat", shred.worker.chopPeriod === 1.35 && ghoul.worker.chopPeriod === 1.35,
+    `${shred.worker.chopPeriod} / ${ghoul.worker.chopPeriod}`);
+
+  // Five swings to fell a 50-lumber trunk, and nothing hauled yet: 50 is a quarter of the load.
+  world.issueHarvest(shred.id, "lumber", tree.id);
+  const felled = runUntil(world, () => !world.trees.has(tree.id), 60);
+  check("it fells a standard tree", felled, "still standing after 60 s");
+  check("…having taken the whole 50 into its arms, with room to spare",
+    shred.worker.carryLumber === 50, `${shred.worker.carryLumber} lumber`);
+  check("…so it is still in the forest, not walking a load home", shred.order === "harvest", `order ${shred.order}`);
+}
+
 console.log(failed ? `\nharvest: ${failed} check(s) FAILED` : "\nharvest: all checks passed");
 process.exit(failed ? 1 : 0);
