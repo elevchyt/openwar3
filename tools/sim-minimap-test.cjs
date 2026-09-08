@@ -162,12 +162,68 @@ console.log("\ncreep camps cluster by guard post and step aside when seen");
   set.setStartFog("revealall");
   check("a visible camp shows no marker", camps.markers(vp).length, 0);
 
-  // Killing the whole camp removes it for good. (revealall goes off; start-explored is sticky,
-  // so the viewpoint still knows the map and the surviving camp still rates a marker.)
+  // Killing the whole camp removes it for good — ONCE these eyes have been there to see it.
+  // (revealall goes off; start-explored is sticky, so the viewpoint still knows the map and the
+  // surviving camp still rates a marker.)
   set.setStartFog(null);
   world.units.delete(1);
   world.units.delete(2);
-  check("a cleared camp is gone", camps.markers(vp).map((c) => c.level), [9]);
+  check("cleared with nobody looking: the marker stands", camps.markers(vp).map((c) => c.level).sort((a, b) => a - b), [7, 9]);
+  set.setStartFog("revealall"); // eyes on the empty ground
+  camps.markers(vp);
+  set.setStartFog(null);
+  check("…and is gone for good once seen", camps.markers(vp).map((c) => c.level), [9]);
+}
+
+// A camp cleared inside the fog is somebody else's news. Dropping its marker the moment the
+// last creep died told a start-explored minimap where an opponent's army was standing RIGHT NOW
+// — the scouting the fog exists to make you go and do.
+console.log("\na camp cleared in the fog keeps its marker until you go and look");
+{
+  const creeps = [
+    unit({ id: 1, isCreep: true, level: 3, x: 100, y: 100, guardX: 100, guardY: 100, owner: 12, team: -1 }),
+    unit({ id: 2, isCreep: true, level: 4, x: 300, y: 100, guardX: 300, guardY: 100, owner: 12, team: -1 }),
+  ];
+  // Two viewpoints: player 0 is far away, player 1 is the one doing the creeping.
+  const scout = unit({ id: 3, owner: 0, team: 0, x: 7000, y: 7000, sightDay: 1400 });
+  const raider = unit({ id: 4, owner: 1, team: 1, x: 200, y: 100, sightDay: 1400 });
+  const world = worldOf([...creeps, scout, raider]);
+  const set = new VisionSet(world, noAlliances, () => [], 0, 0, 8192, 8192);
+  set.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }]);
+  set.setStartFog("explored"); // the lobby mode camp markers exist under at all
+  const far = set.viewpointFor(0);
+  const near = set.viewpointFor(1);
+  const camps = new CreepCamps(world);
+  far.rebuild([]);
+  near.rebuild([]);
+
+  // The far player gets the marker; the raider is standing in the camp, so for it the creeps
+  // themselves are the dots and the marker steps aside.
+  check("the far player is shown the camp", camps.markers(far).length, 1);
+  check("the raider sees the creeps instead", camps.markers(near).length, 0);
+  world.units.delete(1);
+  world.units.delete(2); // the raider clears it, in the far player's fog
+  far.rebuild([]);
+  near.rebuild([]);
+  check("the player who cleared it sees it go", camps.markers(near).length, 0);
+  check("the player across the map is told nothing", camps.markers(far).length, 1);
+
+  // Walk over and look: NOW it goes, and stays gone after walking away again.
+  scout.x = 200;
+  scout.y = 100;
+  far.rebuild([]);
+  check("standing in the empty camp: gone", camps.markers(far).length, 0);
+  scout.x = 7000;
+  scout.y = 7000;
+  far.rebuild([]);
+  check("…and it does not come back", camps.markers(far).length, 0);
+
+  // The memory is per viewpoint, not per camp: a third pair of eyes that never looked is
+  // still shown the marker. (Same clustering object — this is what the WeakMap buys.)
+  set.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }, { player: 2, team: 2 }]);
+  const other = set.viewpointFor(2);
+  set.setStartFog("explored");
+  check("another player who never looked still has it", camps.markers(other).length, 1);
 }
 
 // ISSUE #71. A camp marker is a difficulty rating for a camp you have NOT fought — map-public

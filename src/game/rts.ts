@@ -7062,7 +7062,9 @@ export class RtsController {
    *  dot, discovered or not. The marker is a stand-in for creeps you cannot see, so
    *  it yields the moment any of them is: exactly then `dots()` starts drawing that
    *  creep, and the two must never show at once. Gone for good once every creep in
-   *  the camp is dead. @see minimapView.CreepCamps.markers */
+   *  the camp is dead AND this viewpoint has been there to see it — a camp cleared inside
+   *  the fog keeps its marker until these eyes are on the empty ground, or the minimap
+   *  reports an opponent's creeping. @see minimapView.CreepCamps.markers */
   creepCamps(vp: Viewpoint = this.local): Array<{ x: number; y: number; level: number }> {
     // A frozen client paints the AUTHORITY's markers: its record store holds only the creeps
     // it was sent, so clustering it would report every unscouted camp as cleared — which is

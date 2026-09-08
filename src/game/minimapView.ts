@@ -181,6 +181,11 @@ interface Camp {
   y: number;
   level: number;
   members: number[];
+  /** Where those members STOOD — their guard posts, kept after they die.
+   *  `markers` asks the fog about this ground to decide whether a viewpoint has actually
+   *  WATCHED the camp fall; a dead creep is out of `world.units` and can no longer say
+   *  where it was. */
+  posts: Array<{ x: number; y: number }>;
 }
 
 /**
@@ -228,14 +233,15 @@ export class CreepCamps {
         if (dx * dx + dy * dy <= link2) parent[find(i)] = find(j);
       }
     }
-    const groups = new Map<number, { sx: number; sy: number; level: number; members: number[] }>();
+    const groups = new Map<number, { sx: number; sy: number; level: number; members: number[]; posts: Array<{ x: number; y: number }> }>();
     for (let i = 0; i < creeps.length; i++) {
       const r = find(i);
-      const g = groups.get(r) ?? { sx: 0, sy: 0, level: 0, members: [] };
+      const g = groups.get(r) ?? { sx: 0, sy: 0, level: 0, members: [], posts: [] };
       g.sx += creeps[i].gx;
       g.sy += creeps[i].gy;
       g.level += creeps[i].level;
       g.members.push(creeps[i].id);
+      g.posts.push({ x: creeps[i].gx, y: creeps[i].gy });
       groups.set(r, g);
     }
     return [...groups.values()].map((g) => ({
@@ -243,24 +249,10 @@ export class CreepCamps {
       y: g.sy / g.members.length,
       level: g.level,
       members: g.members,
+      posts: g.posts,
     }));
   }
 
-  /**
-   * The camps `vp` should be shown a marker for.
-   *
-   * **Only a viewpoint that was given the whole map gets any** (issue #71). A camp marker is not
-   * a memory of a camp you found — it is a difficulty rating for a camp you have not fought,
-   * which is map-public knowledge of the same kind as the loading-screen preview. Under normal
-   * WC3 fog the map is not public, so there are no markers at all: an unscouted camp is black
-   * ground, and a scouted-then-abandoned one is black ground again. Discovering a camp does not
-   * earn its dot — that was the bug. `knowsWholeMap` is true for the lobby's `explored` and
-   * `revealall` modes (and `iseedeadpeople`), which is where the markers came from all along.
-   *
-   * Past that gate: a camp whose creeps are all dead is gone, and a camp with a creep this
-   * viewpoint can currently SEE gets no marker — the creep speaks for itself through `dots()`,
-   * and the marker stands in for camps you know are there but cannot presently see.
-   */
   /**
    * Every camp on the map, clustered — no viewpoint, no fog.
    *
@@ -276,16 +268,82 @@ export class CreepCamps {
     return this.camps;
   }
 
+  /**
+   * Camps this viewpoint has WATCHED fall — indices into `camps`, one set per pair of eyes.
+   *
+   * A camp dying is a fact about the world; a camp being KNOWN to have died is a fact about a
+   * player, so it is remembered per viewpoint and not on the camp. Sticky, because knowledge
+   * is: once you have stood on the empty ground the marker never comes back, however long you
+   * stay away afterwards.
+   *
+   * A `WeakMap` so a viewpoint that goes away takes its memory with it; the camp list itself is
+   * built once and never re-clustered, so an INDEX is a stable name for a camp.
+   */
+  private readonly witnessed = new WeakMap<Viewpoint, Set<number>>();
+
+  /**
+   * The camps `vp` should be shown a marker for.
+   *
+   * **Only a viewpoint that was given the whole map gets any** (issue #71). A camp marker is not
+   * a memory of a camp you found — it is a difficulty rating for a camp you have not fought,
+   * which is map-public knowledge of the same kind as the loading-screen preview. Under normal
+   * WC3 fog the map is not public, so there are no markers at all: an unscouted camp is black
+   * ground, and a scouted-then-abandoned one is black ground again. Discovering a camp does not
+   * earn its dot — that was the bug. `knowsWholeMap` is true for the lobby's `explored` and
+   * `revealall` modes (and `iseedeadpeople`), which is where the markers came from all along.
+   *
+   * Past that gate: a camp with a creep this viewpoint can currently SEE gets no marker — the
+   * creep speaks for itself through `dots()`, and the marker stands in for camps you know are
+   * there but cannot presently see.
+   *
+   * **A camp is only "cleared" once these eyes have SEEN it cleared.** Being handed the map is
+   * being handed the map as it was placed, not a live feed of what is happening on it: the
+   * whole point of the fog is that what an opponent does inside it is theirs. Dropping the
+   * marker the instant the last creep died — off `world.units`, which is the authority's
+   * knowledge and nobody's eyes — announced somebody else's creeping across the map: a marker
+   * winking out on a start-explored minimap said "an enemy is at that expansion, right now",
+   * which is exactly the scouting a player is supposed to have to go and do. So the death is
+   * only believed while the camp's own ground is in sight (`watching`), and until then the
+   * marker stands, stale and honest — the same memory the terrain, the last-seen buildings and
+   * the neutral glyphs are already drawn from.
+   */
   markers(vp: Viewpoint): Array<{ x: number; y: number; level: number }> {
     if (!vp.knowsWholeMap) return [];
     this.camps ??= this.build();
+    let known = this.witnessed.get(vp);
     const out: Array<{ x: number; y: number; level: number }> = [];
-    for (const camp of this.camps) {
+    for (let i = 0; i < this.camps.length; i++) {
+      if (known?.has(i)) continue; // watched it fall: gone for good
+      const camp = this.camps[i];
       const alive = camp.members.filter((id) => this.world.units.has(id));
-      if (alive.length === 0) continue; // camp cleared
+      if (alive.length === 0) {
+        // Cleared — but only OUR eyes on the spot make that our news. Note the marker is still
+        // suppressed the frame we do look, so it never survives the look that ends it.
+        if (this.watching(vp, camp)) {
+          if (!known) this.witnessed.set(vp, (known = new Set<number>()));
+          known.add(i);
+          continue;
+        }
+        out.push({ x: camp.x, y: camp.y, level: camp.level });
+        continue;
+      }
       if (alive.some((id) => !hiddenFor(vp, this.world.units.get(id)!))) continue;
       out.push({ x: camp.x, y: camp.y, level: camp.level });
     }
     return out;
+  }
+
+  /**
+   * Does this viewpoint have eyes on the camp's ground right now?
+   *
+   * `fogBlocksAt` rather than `hasExplored`, because explored is precisely what a
+   * start-explored match hands out for free and this has to mean "something of mine is looking".
+   * Asked of the camp's CENTRE and of each member's guard post: a camp is up to `CAMP_LINK`
+   * across, its centre can sit behind a cliff or in the middle of a treeline, and walking in on
+   * one end of an empty camp is seeing it is empty.
+   */
+  private watching(vp: Viewpoint, camp: Camp): boolean {
+    if (!vp.fogBlocksAt(camp)) return true;
+    return camp.posts.some((p) => !vp.fogBlocksAt(p));
   }
 }

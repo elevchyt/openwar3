@@ -1271,6 +1271,21 @@ enumerated by body rather than by name.
    there are no camp markers, discovered or not: the creeps' own dots are the only thing that
    shows, which is what the marker was always standing in for.
 
+   **A camp is cleared when you have SEEN it cleared, not when it died.** The marker used to
+   yield the instant its last creep left `world.units` — the authority's knowledge, which is
+   nobody's eyes — so on a start-explored minimap a marker winking out announced that an
+   opponent was standing at that camp *right now*. Being handed the map is being handed the map
+   as it was PLACED; what happens on it afterwards is still behind the fog. So the death is
+   only believed while the camp's own ground is in sight (`CreepCamps.watching` — the camp
+   centre or any member's guard post, asked through `fogBlocksAt`, because `hasExplored` is
+   exactly what start-explored hands out for free), and the answer is then REMEMBERED per
+   viewpoint (`witnessed`), because knowledge is sticky the way the terrain memory is: you walk
+   into the empty camp once and the marker never comes back. Until you go, the marker stands —
+   stale and honest, the same memory the last-seen buildings and the neutral glyphs are drawn
+   from. The memory is per viewpoint and not per camp, which is what the host's per-recipient
+   `creepCampsFor` needs: the player who did the creeping watches the marker go, everyone else
+   keeps it.
+
    **The wire was left alone, and that is a scoped decision rather than an oversight.** Mine
    records and neutral-passive building records still ride every payload (`snapshotFor`), so
    the new gate is asked of the RECIPIENT's own fog grid — the same grid that client already
