@@ -10800,10 +10800,12 @@ export class SimWorld {
    * plain `GeneralAuraTarget.mdl` every aura wears, which the buff pass already hangs).
    *
    * Asked of the buff's GROUP because that is where the ability that granted it survives:
-   * applyAuras stamps `${ab.code}:${kind}`, so a Dread Lord's `AUav` and Scourge Bone Chimes
-   * (`AUav` again, carried) both name their own row. Anything else finds nothing and shows
-   * nothing, which is the data's answer too: the Potion of Vampirism's group names no ability
-   * at all, and its `[BIpv]` row carries no `Specialart` either.
+   * applyAuras stamps `${ab.code}:${kind}`, and the whole vampiric family shares the base
+   * code `AUav` — the Dread Lord's own row, the creep twin `ACvp` (the Overlord and the Ice
+   * Revenant) and `AIav`, Scourge Bone Chimes — so all three name it and all three flash the
+   * same drain, which is the same fact that makes them refuse to stack. Anything else finds
+   * nothing and shows nothing, which is the data's answer too: the Potion of Vampirism's
+   * group names no ability at all, and its `[BIpv]` row carries no `Specialart` either.
    */
   private lifestealArtOf(group: string): string {
     let art = this.lifestealArts.get(group);

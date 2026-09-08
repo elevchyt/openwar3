@@ -3281,7 +3281,14 @@ export const AURA_BUFFS: Record<string, (lvl: AbilityLevel) => AuraEffect[]> = {
   ],
   AEar: (lvl) => [{ kind: "damagePct", value: d(lvl, 0, 0.1), rangedOnly: true }], // Trueshot — +ranged damage
   AOac: (lvl) => [{ kind: "damagePct", value: d(lvl, 0, 0.1) }], // Command — +attack damage
-  AUav: (lvl) => [{ kind: "lifesteal", value: d(lvl, 0, 0.15), meleeOnly: true }], // Vampiric — melee life steal
+  // Vampiric — melee life steal. THREE rows ride this one entry, because the aura's whole
+  // family shares the base `code` `AUav`: the Dread Lord's `AUav` (DataA1 0.2), the creep
+  // twin `ACvp` (0.2, on the Overlord `nfov` and the Ice Revenant `nrvi`, both of which say
+  // "Vampiric Aura" in their own Ubertip) and `AIav`, "ItemAuraVampiric" — Scourge Bone
+  // Chimes, whose tooltip quotes `<AIav,DataA1,%>` (0.15). Each keeps its own number, they
+  // share one buff group, and so they do not stack: "Does not stack with Vampiric Aura",
+  // the chimes' own words. The default is `AUav`'s rank 1, this entry's own row.
+  AUav: (lvl) => [{ kind: "lifesteal", value: d(lvl, 0, 0.2), meleeOnly: true }],
   AEah: (lvl) => [{ kind: "thorns", value: d(lvl, 0, 0.1) }], // Thorns — return melee damage
   Aakb: (lvl) => [{ kind: "damagePct", value: d(lvl, 0, 0.1) }], // War Drums (Kodo) — +attack damage
   // Disease Cloud (Abomination) — the one HOSTILE aura here. Its targs1 is
