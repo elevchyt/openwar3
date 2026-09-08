@@ -158,5 +158,14 @@ export type GameMessage =
  *  rather than failing in a confusing way three messages later. */
 export const PROTOCOL_VERSION = 13; // 13: observers, colours, advanced options — 12: per-slot AI difficulty
 
-/** Default relay port. Overridable via PORT (the env var Railway/Render both inject). */
+/** Default relay port, for the STANDALONE server (`node server/relay.mjs`). Overridable via
+ *  PORT (the env var Railway/Render both inject). A dev server or an exported build serves the
+ *  relay on its own port instead — see RELAY_PATH. */
 export const DEFAULT_RELAY_PORT = 8787;
+
+/** Where the relay lives on a server that also serves the page — the dev server
+ *  (tools/vite-plugin-relay.ts) and, later, the exported game's own process. MUST equal the
+ *  path that plugin claims; the two are hand-kept in sync because the plugin is loaded by
+ *  Vite's config, outside this module graph. The standalone relay accepts any path, so this
+ *  suffix is harmless when VITE_RELAY_URL points at one. */
+export const RELAY_PATH = "/relay";

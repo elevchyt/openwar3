@@ -80,6 +80,57 @@ transport-agnostic (see Phase E).
 One `Authority` implementation in all three columns. It must not import a transport, a DOM, or a
 renderer — only `SimWorld`, the registries, and a command stream in / snapshot stream out.
 
+## Running it — where the relay lives
+
+The relay is a process, and a browser page cannot be one: nothing in the tab can listen on a
+socket, so "start the relay when a lobby is created" is not available to the client at any price.
+What IS available is making that process invisible — and there is only ever one honest answer to
+"which relay?", which is **whoever served the page**.
+
+So `defaultRelayUrl()` derives the address from `window.location` — origin and all — and the three
+deployments differ only in who is at that origin:
+
+| Deployment | Serves the page | Serves the relay | Address the client derives |
+|---|---|---|---|
+| `pnpm dev --host` | Vite | the same Vite server, at `/relay` (`tools/vite-plugin-relay.ts`) | `ws://<dev host>:5173/relay` |
+| `pnpm preview` | Vite preview | same, same plugin | `ws://<host>:4173/relay` |
+| Exported game (Electron) | its own process | its own process, beside it | `ws://<host>:<port>/relay` |
+| Internet | a static host (Vercel) | a cloud box (`server/relay.mjs`) | **`VITE_RELAY_URL`** — the one case where the two are not the same box |
+
+That collapses LAN play to **one command and one firewall hole**: `pnpm dev --host` on the host
+machine, `http://<its ip>:5173` on the other. It also makes the second machine's success follow
+from the first's: a box that can load the page can by construction reach the relay, because it is
+the same origin. The old two-port arrangement could fail with the page loading perfectly and the
+game list empty — a second process nobody started, or a second port nobody opened.
+
+Three files, three jobs, and the split is the point:
+
+- **`server/rooms.mjs`** — the rule (rooms, peers, routing). No sockets. Also runs in-process for
+  `tools/loopback.mjs`.
+- **`server/wsAdapter.mjs`** — the wire (JSON framing, parse errors, the ping/reap heartbeat).
+  Shared by every deployment above, so "which sockets are dead" has ONE answer.
+- **`server/relay.mjs`** — the port. Nothing else. This is the artifact that deploys to the cloud,
+  and it must keep deploying with no build step, which is why it and `rooms.mjs` are plain `.mjs`.
+
+The Vite plugin mounts with `noServer: true` and claims only `/relay`, because Vite's HMR socket is
+on that same HTTP server. Vite's own listener claims only upgrades carrying `sec-websocket-protocol:
+vite-hmr` at the HMR path and ignores the rest, so the two coexist without either knowing about the
+other — but a listener here that claimed too broadly would eat HMR and turn every source edit into a
+manual reload.
+
+**What this does NOT get us, and what would.** Somebody still types an IP. Real WC3 does not ask
+that: it broadcasts on UDP 6112 and the games appear. A browser cannot send a UDP datagram either,
+so **discovery is the second thing only a native shell can do** — which, with the native install
+path (OpenWar3_PLAN.md §8, no picker and no OPFS quota), is what decides the export as **Electron**
+rather than a plain launcher. The shape it takes is the one above with the last row filled in: the
+Electron main process serves the build and runs `attachRelay` on one port, exactly as the plugin
+does, and adds a `dgram` beacon. The cost that is NOT the beacon: the LAN list becomes an aggregate
+of beacons from several hosts rather than the room list of the ONE relay we are connected to, so a
+room carries its own relay URL and the connection is opened at JOIN rather than held across
+create→lobby (`lanSession()` in `src/main.ts`). Tauri was considered and rejected for this
+project: its renderer is the system webview, a different engine per platform, and this is a WebGL2
+engine with shader patches.
+
 ## Where we are
 
 Progress tracker — update this when a phase moves. Everything below it is the plan; this is the

@@ -360,7 +360,7 @@ async function devLanBoot(
 ): Promise<void> {
   const lobby = new LanLobby(() => new WebSocketTransport());
   log(`LAN ${side}: connecting to the relay…`);
-  await lobby.connect(); // ws://<page host>:8787 — node server/relay.mjs
+  await lobby.connect(); // ws://<page origin>/relay — served by the dev server itself
 
   let start: StartMatchMsg;
   if (side === "host") {

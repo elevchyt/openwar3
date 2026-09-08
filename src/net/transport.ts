@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from "./protocol";
+import { PROTOCOL_VERSION, RELAY_PATH, type ClientMessage, type ServerMessage } from "./protocol";
 import type { Transport } from "./transportTypes";
 
 // The transport seam.
@@ -14,17 +14,31 @@ import type { Transport } from "./transportTypes";
 
 export type { Transport };
 
-/** Where the relay lives. Local by default (`node server/relay.mjs`); override with
- *  VITE_RELAY_URL to point a build at a deployed one. */
+/** Where the relay lives. SAME ORIGIN as the page by default; override with VITE_RELAY_URL to
+ *  point a build at a deployed one (internet play, where the page and the relay are two boxes). */
 export function defaultRelayUrl(): string {
   const env = (import.meta as { env?: Record<string, string | undefined> }).env;
   const configured = env?.VITE_RELAY_URL;
   if (configured) return configured;
-  // Same host as the page, relay port — so opening the dev server from another machine on
-  // the LAN (http://192.168.x.x:5173) finds the relay on that machine too, not on 'localhost'
-  // which would resolve to the *visitor's* box and silently fail to find the game.
-  const host = window.location.hostname || "localhost";
-  return `ws://${host}:8787`;
+  // Same origin — host AND port — because whoever serves the page serves the relay: the dev
+  // server mounts it at /relay (tools/vite-plugin-relay.ts) and the exported game's own process
+  // will do the same. That is what makes LAN play one process and one firewall rule, and it is
+  // why the address is DERIVED rather than typed: a second machine that can load the page can by
+  // construction reach the relay. Deriving it from `location` also rules out the failure this
+  // replaced — a hardcoded 'localhost' resolves to the VISITOR's box and finds no games at all.
+  //
+  // The scheme follows the page's, so an https deployment gets wss and is not blocked as mixed
+  // content — which a fixed `ws://` would be.
+  const { protocol, host } = window.location;
+  const scheme = protocol === "https:" ? "wss" : "ws";
+  return `${scheme}://${host || "localhost:5173"}${RELAY_PATH}`;
+}
+
+/** The relay rides the page's own server now, so "no relay" almost always means the page is
+ *  being served by something that does not carry one — a bare static host — rather than a
+ *  second process somebody forgot to start. Name both, shortest fix first. */
+function noRelay(url: string): string {
+  return `No relay at ${url}. It is served by \`pnpm dev\` / \`pnpm preview\`; a static host needs \`node server/relay.mjs\` and VITE_RELAY_URL.`;
 }
 
 export class WebSocketTransport implements Transport {
@@ -86,11 +100,7 @@ export class WebSocketTransport implements Transport {
       ws.onerror = () => {
         if (!settled) {
           settled = true;
-          reject(
-            new Error(
-              `No relay at ${url}. Start one with:  node server/relay.mjs`,
-            ),
-          );
+          reject(new Error(noRelay(url)));
         }
       };
 
@@ -100,7 +110,7 @@ export class WebSocketTransport implements Transport {
         this.ws = null;
         if (refused) return; // we closed it, and the caller already has the reason why
         if (wasSettled) this.onClose("Connection to the game host was lost.");
-        else reject(new Error(`No relay at ${url}. Start one with:  node server/relay.mjs`));
+        else reject(new Error(noRelay(url)));
       };
     });
   }

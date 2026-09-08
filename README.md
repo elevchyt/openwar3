@@ -25,6 +25,24 @@ pnpm dev           # http://localhost:5173
 pnpm build         # typecheck + build to dist/
 ```
 
+### Playing on a LAN
+
+Two machines on the same network, no cloud and no accounts. On the machine hosting:
+
+```bash
+pnpm dev --host
+```
+
+The other machine opens `http://<that machine's ip>:5173` and picks **Local Area Network** — games
+created on either machine show up in the list. There is nothing else to start: the dev server
+carries the relay on its own port, so one open port is enough. Each machine reads its own local
+Warcraft III install, as always.
+
+(Either player can create the game; whoever does runs the authoritative simulation. Games are found
+through the relay's room list rather than by broadcast, so both machines must be pointed at the same
+address — see [docs/multiplayer.md](docs/multiplayer.md) for the internet deployment and for why
+broadcast discovery waits on a native build.)
+
 ## Legal
 
 OpenWar3 is original code with zero copyrighted assets. Assets read from your local install, client-side, never uploaded or hosted. Engine fully open.
