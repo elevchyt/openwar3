@@ -153,8 +153,8 @@ export const LAN_ADVANCED_OPTIONS_OVERRIDE: FdfOverride = {
 };
 
 /**
- * The LAN game list: one line saying whether other machines can reach this one, and the button
- * that opens the list of machines we are watching.
+ * The LAN game list: one line saying whether other machines can reach this one, and the Servers
+ * List button that opens the set of machines we are watching.
  *
  * Nothing is retired and nothing moves — both frames go into empty space the screen already has,
  * so no anchor chain is touched and there is no `repoint`. See `ui/LocalMultiplayerJoin.fdf` for
@@ -163,14 +163,18 @@ export const LAN_ADVANCED_OPTIONS_OVERRIDE: FdfOverride = {
 export const LAN_JOIN_OVERRIDE: FdfOverride = {
   id: "ow3-lan-join",
   source: localMultiplayerJoinFdf,
-  // The list moves 0.03 down and loses that much height — its bottom stays where the screen
-  // already had it, and the band that opens along its TOP is where the button goes. See the FDF
-  // for the three places it does not fit, and `resize` for why the height is not a collision.
-  repoint: [{ from: "PlayerNameEditBox", to: "PlayerNameEditBox", dy: -0.03, only: ["GameListContainer"] }],
-  resize: [{ frame: "GameListContainer", height: 0.245 }],
+  // The list gives up 0.055 of its height so the button has a band to sit in under it. See the
+  // FDF for the places it does not fit, and `resize` for why this is not a collision.
+  resize: [{ frame: "GameListContainer", height: 0.22 }],
+  // Both buttons move right in the panel. Only CREATE GAME is named: it is the install's own
+  // frame, anchored to the screen's bottom-left corner, and Servers List hangs off it — so one
+  // dx carries the pair and they cannot come apart. `from` and `to` are the same frame, which
+  // makes this a pure offset rather than a re-anchoring; `only` keeps it off everything else
+  // that measures from that corner (the panel's title, its info line, our status text).
+  repoint: [{ from: "LocalMultiplayerJoin", to: "LocalMultiplayerJoin", dx: 0.045, only: ["CreateBackdrop"] }],
   add: [
     { frame: "NetworkStatusText", into: "LocalMultiplayerJoin" },
-    { frame: "JoinAddressButtonBackdrop", into: "GameListPanel" },
+    { frame: "ServersListBackdrop", into: "GameListPanel" },
   ],
 };
 

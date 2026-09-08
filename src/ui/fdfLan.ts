@@ -126,6 +126,7 @@ export async function mountLanScreen(
       CustomCreateInfo: "Games on your network appear below.",
       GameListTitle: "Network Games",
       CreateButtonText: "Create Game",
+      ServersListButtonText: "Servers List",
       JoinButtonText: "Join Game",
     },
     // Load a saved game over the network — not in scope, and greying it out is more honest
@@ -142,7 +143,7 @@ export async function mountLanScreen(
       },
       // The machines we watch for games — OpenWar3's own dialog, because the game we are
       // copying broadcast and never needed one (src/ui/joinAddressDialog.ts).
-      JoinAddressButton: () => {
+      ServersListButton: () => {
         void showJoinAddressDialog({
           container,
           vfs,

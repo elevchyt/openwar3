@@ -396,6 +396,13 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     // Mid-transition: the screen is either leaving (disabled) or has not landed yet (inert).
     if (overlay.classList.contains("fdf-screen-disabled")) return;
     if (overlay.classList.contains("fdf-screen-inert")) return;
+    // A MODAL is up: the screen under it answers nothing, the keyboard included. Typing in the
+    // dialog's own field was already safe (the INPUT check below), but a keystroke with the
+    // focus anywhere else — after pressing one of its buttons, after clicking a list row —
+    // reached the accelerators of the screen behind and pressed Create Game from inside a
+    // dialog. The scrim is the modal (ui/glueDialog.ts, ui/joinAddressDialog.ts), and a screen
+    // mounted INSIDE one is the modal itself, which must keep its own keys.
+    if (modalOver(overlay)) return;
     const target = e.target as HTMLElement | null;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
     if (opts.noShortcutKeys) return; // the map-list screens: every letter is the search's
@@ -405,6 +412,15 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   window.addEventListener("keydown", onKey);
 
   return screen;
+}
+
+/** Is there a modal scrim over this screen? Every scrim in the document is asked, not just the
+ *  first, so a dialog raised from another dialog does not un-gate the screen at the bottom. */
+function modalOver(overlay: HTMLElement): boolean {
+  for (const scrim of document.querySelectorAll(".glue-dialog-scrim")) {
+    if (!scrim.contains(overlay)) return true;
+  }
+  return false;
 }
 
 interface RenderCtx {

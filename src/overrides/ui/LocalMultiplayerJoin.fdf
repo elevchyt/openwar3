@@ -32,7 +32,7 @@ Frame "TEXT" "NetworkStatusText" INHERITS "StandardInfoTextTemplate" {
     SetPoint TOPLEFT, "CustomCreateInfo", BOTTOMLEFT, 0.0, -0.004,
 }
 
-// Join a game on ANOTHER machine — the button that opens the list of addresses to watch.
+// Join a game on ANOTHER machine — the button that opens the list of servers to watch.
 //
 // The 2003 client had no such control because it never needed one: it broadcast on the subnet
 // and the games appeared. We cannot broadcast from a page, and the packaged game has no address
@@ -40,41 +40,36 @@ Frame "TEXT" "NetworkStatusText" INHERITS "StandardInfoTextTemplate" {
 // addresses are a thing the player MANAGES, so they live in a dialog of their own
 // (src/overrides/ui/JoinAddressDialog.fdf) and this is the way in.
 //
-// It is the SinglePlayerMenu's `ProfileButton` pattern, frame for frame: a tiny-button backdrop
-// carrying a GLUEBUTTON on `StandardIconicButtonTemplate`, with the Battle.net options icon as
-// its face. That is what an icon button IS on these screens, and copying its numbers is how this
-// one ends up the same size as the one the player has already used.
+// It is `CreateButton`'s own pair, frame for frame — a small-button backdrop, mirrored, holding a
+// 0.128 `StandardButtonTemplate` inset 0.012 / -0.0165 — because it belongs to the same family of
+// acts: one makes a game, the other says where to look for them. It carries NO
+// `ControlShortcutKey`; the screen's letters are spoken for (Create, Join, Cancel) and a caption
+// with no gilded letter is better than a second frame answering one that is taken.
 //
-// **Where it fits.** Nowhere, as the screen stands: the panel is exactly as wide as its list
-// (what looks like a margin to the right of it is the 3D background showing through), the name
-// box fills the row above, and the band under the list is 0.027 of clear panel against 0.031 of
-// button chrome. Measured, twice, after putting it through the name box and then out onto the
-// panel's own border. So the LIST gives up 0.017 — a name collision our layer wins
-// (src/overrides/README.md), about one row of a list sized for Battle.net's hundreds — and the
-// button sits in the band that opens up, right-aligned under the list it adds games to.
+// It sits directly ABOVE Create Game, in the band under the games list — which is the only place
+// on this screen a piece of button chrome fits at all. The panel below holds its title, its info
+// line and Create Game already, with 0.006 between the info line and the button, and the strip
+// that looks like a margin beside the list is the 3D background showing through. So the LIST
+// gives up 0.055 of its height — about four rows of a list sized for Battle.net's hundreds — and
+// the button takes the band that opens up. That resize is declared in src/overrides/index.ts
+// rather than restated here, because `GameListContainer` is a frame the install declares INSIDE
+// its parent, which a same-named declaration of ours never displaces (see `FdfOverride.resize`).
 
-Frame "FRAME" "GameListContainer" {
-    Width 0.37,
-    Height 0.258,
-    SetPoint TOPLEFT, "PlayerNameEditBox", BOTTOMLEFT, 0.0, -0.033,
-}
+Frame "BACKDROP" "ServersListBackdrop" INHERITS "StandardMenuSmallButtonBaseBackdrop" {
+    BackdropMirrored,
+    // Anchored to CREATE GAME, because being directly above it is the whole placement — the two
+    // read as one column of acts. The 0.078 lifts it clear of the panel between them, which
+    // holds its own title, its info line and Create Game with 0.006 to spare: measured off the
+    // running screen (Create's chrome starts 0.078 below where this one's has to end), not
+    // guessed, and it lands exactly against the bottom of the games list above.
+    SetPoint BOTTOMLEFT, "CreateBackdrop", TOPLEFT, 0.0, 0.078,
 
-Frame "BACKDROP" "JoinAddressButtonBackdrop" INHERITS "StandardMenuTinyButtonBaseBackdrop" {
-    SetPoint BOTTOMRIGHT, "GameListContainer", TOPRIGHT, 0.006, -0.004,
+    Frame "GLUETEXTBUTTON" "ServersListButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+        Width 0.128,
+        SetPoint TOPLEFT, "ServersListBackdrop", TOPLEFT, 0.012, -0.0165,
 
-    Frame "GLUEBUTTON" "JoinAddressButton" INHERITS WITHCHILDREN "StandardIconicButtonTemplate" {
-        Width 0.03,
-        Height 0.026,
-        SetPoint TOPRIGHT, "JoinAddressButtonBackdrop", TOPRIGHT, -0.009, -0.014,
-
-        ControlBackdrop "JoinAddressButtonFace",
-        Frame "BACKDROP" "JoinAddressButtonFace" {
-            BackdropBackground  "UI\Widgets\BattleNet\bnet-mainmenu-options-up.blp",
-            BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
-            BackdropCornerSize  0.013,
-            BackdropBackgroundSize  0.026,
-            BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
-            BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder.blp",
+        ButtonText "ServersListButtonText",
+        Frame "TEXT" "ServersListButtonText" INHERITS "StandardButtonTextTemplate" {
         }
     }
 }
