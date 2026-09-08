@@ -3,6 +3,8 @@ import type { FdfLibrary } from "../ui/fdf/library";
 import advancedOptionsFdf from "./ui/AdvancedOptionsPane.fdf?raw";
 import advancedOptionsDisplayFdf from "./ui/AdvancedOptionsDisplay.fdf?raw";
 import globalStringsFdf from "./ui/GlobalStrings.fdf?raw";
+import gameChatroomFdf from "./ui/GameChatroom.fdf?raw";
+import joinAddressDialogFdf from "./ui/JoinAddressDialog.fdf?raw";
 import localMultiplayerJoinFdf from "./ui/LocalMultiplayerJoin.fdf?raw";
 import optionsMenuFdf from "./ui/OptionsMenu.fdf?raw";
 
@@ -52,6 +54,19 @@ export interface FdfOverride {
    * pushed down is to follow the new one.
    */
   readonly repoint?: ReadonlyArray<{ from: string; to: string; dx?: number; dy?: number; only?: readonly string[] }>;
+  /**
+   * Change the size of a frame the INSTALL declares — the one thing a name collision cannot do.
+   *
+   * `layer` wins a collision for frames the library RESOLVES BY NAME, which is how a template
+   * or a root is replaced. A frame declared inline inside its parent is not looked up at all:
+   * the tree already carries it, so a same-named declaration of ours is simply never consulted.
+   * Discovered by restating `GameListContainer` twice and measuring no change either time.
+   *
+   * So a screen that has to give one of its own frames some room says so here, and the edit is
+   * made on the resolved tree like `repoint`'s. Sizes only: an anchor is `repoint`'s business,
+   * and a frame that needs to MOVE is usually a frame that should be re-anchored instead.
+   */
+  readonly resize?: ReadonlyArray<{ frame: string; width?: number; height?: number }>;
 }
 
 /** Strings the game has no key for. Layered by both screens below — a screen's own override
@@ -138,16 +153,54 @@ export const LAN_ADVANCED_OPTIONS_OVERRIDE: FdfOverride = {
 };
 
 /**
- * The LAN game list: one line saying whether other machines can reach this one.
+ * The LAN game list: one line saying whether other machines can reach this one, and the button
+ * that opens the list of machines we are watching.
  *
- * Nothing is retired and nothing moves — a frame is added into the empty panel under the
- * screen's own info line, so no anchor chain is touched and there is no `repoint`. See
- * `ui/LocalMultiplayerJoin.fdf` for why it cannot simply be more text on the line above it.
+ * Nothing is retired and nothing moves — both frames go into empty space the screen already has,
+ * so no anchor chain is touched and there is no `repoint`. See `ui/LocalMultiplayerJoin.fdf` for
+ * why the status line cannot simply be more text on the line above it.
  */
 export const LAN_JOIN_OVERRIDE: FdfOverride = {
   id: "ow3-lan-join",
   source: localMultiplayerJoinFdf,
-  add: [{ frame: "NetworkStatusText", into: "LocalMultiplayerJoin" }],
+  // The list moves 0.03 down and loses that much height — its bottom stays where the screen
+  // already had it, and the band that opens along its TOP is where the button goes. See the FDF
+  // for the three places it does not fit, and `resize` for why the height is not a collision.
+  repoint: [{ from: "PlayerNameEditBox", to: "PlayerNameEditBox", dy: -0.03, only: ["GameListContainer"] }],
+  resize: [{ frame: "GameListContainer", height: 0.245 }],
+  add: [
+    { frame: "NetworkStatusText", into: "LocalMultiplayerJoin" },
+    { frame: "JoinAddressButtonBackdrop", into: "GameListPanel" },
+  ],
+};
+
+/**
+ * OpenWar3's own dialog: the relay addresses this machine watches for games.
+ *
+ * Not a layer over anything — the install has no FrameDef for it, so the whole frame is ours
+ * (`ui/JoinAddressDialog.fdf`, built from the game's templates and art) and it is mounted as a
+ * root in its own right rather than adopted into somebody else's screen. It is layered onto
+ * `DialogWar3.fdf` purely to be in a library that has the glue templates loaded.
+ */
+export const JOIN_ADDRESS_DIALOG_OVERRIDE: FdfOverride = {
+  id: "ow3-join-address-dialog",
+  source: joinAddressDialogFdf,
+};
+
+/**
+ * The game lobby: the address other players type to reach this game.
+ *
+ * The other half of the LAN screen's join field — see `ui/GameChatroom.fdf` for why a game
+ * needs to be able to state its own address at all, and why the row copies itself rather than
+ * growing a button. Added under the Advanced Options summary in the map column; nothing moves.
+ */
+export const LAN_LOBBY_ADDRESS_OVERRIDE: FdfOverride = {
+  id: "ow3-lan-lobby-address",
+  source: gameChatroomFdf,
+  add: [
+    { frame: "JoinAddressLobbyLabel", into: "MapDisplayPanel" },
+    { frame: "JoinAddressLobbyValue", into: "MapDisplayPanel" },
+  ],
 };
 
 /**
@@ -181,6 +234,12 @@ export function layer(lib: FdfLibrary, override: FdfOverride): void {
 export function applyOverride(lib: FdfLibrary, root: FdfFrame, override: FdfOverride): void {
   // Before the removals, or the anchors we are redirecting would already be dangling.
   for (const r of override.repoint ?? []) repoint(root, r);
+  for (const r of override.resize ?? []) {
+    const f = findFrame(root, r.frame);
+    if (!f) continue;
+    if (r.width !== undefined) setSize(f, "Width", r.width);
+    if (r.height !== undefined) setSize(f, "Height", r.height);
+  }
   for (const name of override.remove ?? []) dropFrame(root, name);
   for (const { frame, into } of override.add ?? []) {
     const target = findFrame(root, into);
@@ -219,6 +278,15 @@ function repoint(root: FdfFrame, r: { from: string; to: string; dx?: number; dy?
     }
     f.children.forEach(walk);
   })(root);
+}
+
+/** Write a Width/Height onto a resolved frame, replacing whatever it declared. */
+function setSize(f: FdfFrame, key: "Width" | "Height", value: number): void {
+  const prop = f.props.find((p) => p.key === key);
+  // `args` is readonly on the prop, so the ARRAY is rewritten in place — the same way `repoint`
+  // edits an existing point rather than replacing the property.
+  if (prop) (prop.args as Array<{ s: string; n: number | null; str: boolean }>).splice(0, prop.args.length, numArg(value));
+  else f.props.push({ key, args: [numArg(value)] });
 }
 
 /** A numeric FDF argument, as the parser would have produced it. */

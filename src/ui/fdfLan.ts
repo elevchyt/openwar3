@@ -9,6 +9,7 @@ import { reachabilityLine, type LanLobby, type LobbyState } from "../net/lobby";
 import type { StartMatch } from "../net/protocol";
 import { advancedOf, visibilityFog } from "../net/advancedOptions";
 import { LAN_JOIN_OVERRIDE, OW3_STRINGS } from "../overrides";
+import { showJoinAddressDialog } from "./joinAddressDialog";
 import { OBSERVER_PLAYER, type MeleeConfig, type SlotConfig } from "./lobby";
 import type { Race } from "../data/races";
 import {
@@ -139,6 +140,16 @@ export async function mountLanScreen(
         remember();
         if (picked) lobby.join(picked, playerName());
       },
+      // The machines we watch for games — OpenWar3's own dialog, because the game we are
+      // copying broadcast and never needed one (src/ui/joinAddressDialog.ts).
+      JoinAddressButton: () => {
+        void showJoinAddressDialog({
+          container,
+          vfs,
+          lobby,
+          onChange: () => { if (alive) render(screen, lobby.snapshot); },
+        });
+      },
       CancelButton: () => h.onCancel(),
     },
     onBuild: (s) => render(s, lobby.snapshot),
@@ -185,7 +196,9 @@ export async function mountLanScreen(
     const observersTag = strings?.string("GAMELIST_OBSERVERS") ?? " (observers)";
     list?.setItems(
       st.rooms.map((r): ListItem => ({
-        value: r.id,
+        // The KEY, not the relay's room id: with more than one machine's games in the list
+        // those ids collide (src/net/lobby.ts `ListedRoom`).
+        value: r.key,
         label: `${r.name}${r.observers ? observersTag : ""} |cff${LABEL_GOLD}(${r.players}/${r.maxPlayers})|r`,
       })),
     );
@@ -195,7 +208,7 @@ export async function mountLanScreen(
     if (list) {
       list.onChange = (value) => {
         picked = value;
-        const room = lobby.snapshot.rooms.find((r) => r.id === value);
+        const room = lobby.snapshot.rooms.find((r) => r.key === value);
         void showMapOf(room ?? null);
       };
       list.onActivate = () => {
@@ -206,14 +219,14 @@ export async function mountLanScreen(
     s.setText("GameListTitle", "Network Games");
     // The two rows under the summary: who made the game, and the one speed we run at — WC3's
     // "Fast" (GlobalStrings FAST), the setting the create screen's slider is parked on.
-    const room = picked ? st.rooms.find((r) => r.id === picked) : null;
+    const room = picked ? st.rooms.find((r) => r.key === picked) : null;
     s.setText("GameCreatorValue", room?.hostName ?? "");
     s.setText("GameSpeedValue", room ? (strings?.string("FAST") ?? "Fast") : "");
     if (!st.error) {
       s.setText(
         "CustomCreateInfo",
         missing
-          ? `|cffff8080You do not have ${missing}. You cannot join this game.|r`
+              ? `|cffff8080You do not have ${missing}. You cannot join this game.|r`
           : st.rooms.length
             ? "Select a game and choose Join."
             : "No games found. Create one.",
@@ -221,11 +234,12 @@ export async function mountLanScreen(
     }
 
     // What the relay told us about this machine (`HostInfo`) — ours, not WC3's, in a frame of
-    // our own under the screen's own sentence. Empty when there is nothing to say, which is
-    // every case where the relay is not also the thing serving this page and so cannot know.
-    // A warning is red; an address is the info line's own gold, because it is not a problem.
+    // our own under the screen's own sentence. Only the WARNING half: this screen says when
+    // nobody can see your games, because nothing else ever will, but it does not print the
+    // address. That belongs where it is USED — on the game lobby, beside a game there is
+    // something to join, and in the Join Server dialog where the addresses live.
     const reach = reachabilityLine(st.host);
-    s.setText("NetworkStatusText", reach ? `|cff${reach.warn ? "ff8080" : LABEL_GOLD}${reach.text}|r` : "");
+    s.setText("NetworkStatusText", reach?.warn ? `|cffff8080${reach.text}|r` : "");
 
     // The map summary: the highlighted game's map, with its markers once they have been read.
     if (shown) fillMapInfo(s, shown, preview, minimapIcons);
@@ -338,3 +352,38 @@ const MAP_INFO_NUDGE = 0.052;
 /** LocalMultiplayerJoin.fdf's own MapInfoPaneContainer box. */
 const PANE_W = 0.271875;
 const PANE_H = 0.223125;
+
+/**
+ * Put a string on the clipboard, by whichever route this page is allowed.
+ *
+ * `navigator.clipboard` is gated on a SECURE CONTEXT, and the two ways OpenWar3 is served fall
+ * on opposite sides of that line: the desktop app's window is `http://127.0.0.1`, which browsers
+ * treat as trustworthy, while a second machine reaching the dev server at `http://192.168.x.x`
+ * is not — and that is exactly the player who most needs to copy an address. So the old
+ * selection trick stays as the fallback rather than the feature quietly doing nothing on half
+ * the machines that run it.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Denied or unavailable — fall through rather than fail.
+  }
+  try {
+    const box = document.createElement("textarea");
+    box.value = text;
+    // Off-screen but focusable: `execCommand` copies the SELECTION, so the text has to be in a
+    // real, selectable element in the document.
+    box.style.cssText = "position:fixed;top:-1000px;opacity:0";
+    document.body.appendChild(box);
+    box.select();
+    const ok = document.execCommand("copy");
+    box.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}

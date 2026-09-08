@@ -26,6 +26,15 @@ export interface ListItem {
   label: string;
   /** Optional leading icon (a decoded BLP canvas), e.g. the folder / player-count badge. */
   icon?: HTMLCanvasElement | null;
+  /**
+   * A control at the END of the row — OpenWar3's own, not the engine's: no 2003 list has one.
+   * It exists for a list whose rows are things the player MANAGES rather than picks from (the
+   * relay addresses of ui/joinAddressDialog.ts), where "select the row, then press the button
+   * under the list" is a step more than the row itself needs. Clicking it does NOT select the
+   * row — the click stops there, or removing the third row would first make it the highlighted
+   * one and then delete it.
+   */
+  action?: { label: string; title?: string; onClick: () => void };
 }
 
 interface Control {
@@ -553,6 +562,18 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
       // spelling the codes out.
       label.innerHTML = wc3ToHtml(it.label);
       row.appendChild(label);
+      if (it.action) {
+        const action = document.createElement("button");
+        action.type = "button";
+        action.className = "fdf-list-action";
+        action.textContent = it.action.label;
+        if (it.action.title) action.title = it.action.title;
+        action.addEventListener("click", (e) => {
+          e.stopPropagation(); // the row is not being PICKED, its control is being pressed
+          if (enabled) it.action?.onClick();
+        });
+        row.appendChild(action);
+      }
       row.addEventListener("click", () => {
         if (!enabled || value === it.value) return;
         value = it.value;

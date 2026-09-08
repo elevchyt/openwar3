@@ -10,7 +10,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { LanLobby, reachabilityLine } = require(join(REPO, ".sim-build", "src", "net", "lobby.js"));
+const { LanLobby, reachabilityLine, normalizeRelayUrl } = require(join(REPO, ".sim-build", "src", "net", "lobby.js"));
 const { reconnectPlan, memoryStore } = require(join(REPO, ".sim-build", "src", "net", "reconnect.js"));
 const {
   allSeated, applyRequest, buildStart, canStart, colorsFreeFor, editSlot, newSetup, observerSlots,
@@ -34,7 +34,7 @@ function fakeTransport() {
     onMessage: () => {},
     onClose: () => {},
     connected: true,
-    connect: () => Promise.resolve(),
+    connect: (url) => { t.url = url; return Promise.resolve(); },
     send: (m) => t.sent.push(m),
     close: () => {
       t.connected = false;
@@ -461,6 +461,80 @@ const ME = { id: 2, name: "Joiner", host: false };
       two.text, "Other players join at 192.168.1.7:8787 or 10.8.0.2:8787");
     check("reachable with nothing to offer says nothing",
       reachabilityLine({ kind: "app", lan: true, addresses: [] }), null);
+  }
+
+  console.log("\nan address is read the way a person writes it");
+  {
+    const want = "ws://192.168.1.42:8787/relay";
+    for (const typed of ["192.168.1.42", "192.168.1.42:8787", "http://192.168.1.42:8787",
+                         "  http://192.168.1.42:8787/  ", "ws://192.168.1.42:8787/relay"]) {
+      check(`"${typed}"`, normalizeRelayUrl(typed), want);
+    }
+    check("a port that is not ours is kept — a dev server is on 5173",
+      normalizeRelayUrl("192.168.1.42:5173"), "ws://192.168.1.42:5173/relay");
+    for (const bad of ["", "   ", "not an address", "nonsense!!", "-nope", "1.2.3.4:0", "1.2.3.4:99999", "1.2.3.4:abc"]) {
+      check(`"${bad}" is not an address`, normalizeRelayUrl(bad), null);
+    }
+  }
+
+  console.log("\nthe game list can hold more than one machine's games");
+  {
+    const made = [];
+    const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
+    await lobby.connect();
+    const own = made[0];
+    own.onMessage({ t: "hello", protocol: 99, host: { kind: "app", lan: true, addresses: ["192.168.1.34:8787"] } });
+    own.onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Mine" }] });
+    check("our own games carry no source", lobby.snapshot.rooms.map((r) => [r.key, r.source]), [["#1", ""]]);
+
+    await lobby.addRelay("192.168.1.42");
+    const remote = made[1];
+    check("a bare address takes the desktop game's port", remote.url, "ws://192.168.1.42:8787/relay");
+    remote.onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Theirs" }] });
+    // The whole reason `key` exists: both relays minted a room 1.
+    check("both machines' games are in ONE list", lobby.snapshot.rooms.map((r) => r.name), ["Mine", "Theirs"]);
+    check("…told apart by relay, not by the id they share",
+      lobby.snapshot.rooms.map((r) => r.key), ["#1", "ws://192.168.1.42:8787/relay#1"]);
+
+    lobby.join("ws://192.168.1.42:8787/relay#1", "Bob");
+    check("the join is sent to THEIR relay", remote.sent, [{ t: "join", roomId: "1", playerName: "Bob" }]);
+    check("…and ours is never asked about a room it does not have", own.sent, []);
+    check("…our connection is let go: the match wire is the host's", own.connected, false);
+    check("…and their list is now the list", lobby.snapshot.rooms.map((r) => [r.key, r.source]), [["#1", ""]]);
+  }
+
+  console.log("\na relay that goes away takes its games with it");
+  {
+    const made = [];
+    const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
+    await lobby.connect();
+    made[0].onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Mine" }] });
+    await lobby.addRelay("192.168.1.42");
+    made[1].onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Theirs" }] });
+    check("two machines", lobby.snapshot.rooms.length, 2);
+    made[1].drop("gone");
+    check("one machine, and it is ours", lobby.snapshot.rooms.map((r) => r.name), ["Mine"]);
+    check("…and it is no longer watched", lobby.relays, []);
+  }
+
+  console.log("\npasting your own address is answered rather than listing everything twice");
+  {
+    const made = [];
+    const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
+    await lobby.connect();
+    // The relay names its own addresses at the handshake, which is the only way to know that
+    // `192.168.1.34:8787` and the loopback connection we already hold are one machine.
+    made[0].onMessage({ t: "hello", protocol: 99, host: { kind: "app", lan: true, addresses: ["192.168.1.34:8787"] } });
+    let said = null;
+    await lobby.addRelay("http://192.168.1.34:8787").catch((e) => { said = e.message; });
+    check("it says so", said, "That address is this computer — your own games are already listed.");
+    check("…and opened nothing", made.length, 1);
+    check("…and watches nothing", lobby.relays, []);
+
+    let refused = null;
+    await lobby.addRelay("hello there").catch((e) => { refused = e.message; });
+    check("a typo is refused with the shape of an address",
+      refused, `"hello there" is not an address. Try 192.168.1.42 or 192.168.1.42:8787.`);
   }
 
   console.log(failed === 0 ? "\nlobby: all checks passed" : `\nlobby: ${failed} FAILED`);

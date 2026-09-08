@@ -1,0 +1,121 @@
+// OpenWar3's own glue dialog — the addresses this machine is watching for games.
+//
+// **Why it exists.** The 2003 client broadcast on the subnet, so a game on the network simply
+// appeared and nobody ever typed an address. We cannot broadcast from a page, and the packaged
+// game has no address bar to navigate with, so two copies of OpenWar3 on one network would never
+// find each other. Until the UDP beacon lands (docs/multiplayer.md), somebody has to say where
+// to look — and a thing the player MANAGES is a list, not a text field wedged into a corner of
+// the screen behind it.
+//
+// **Why a file of ours.** There is no FrameDef for this anywhere in the install, and
+// `UI\FrameDef\` is the player's (src/overrides/README.md). So it is declared here in the game's
+// own language, out of the game's own templates and art: the Battle.net dialogue box behind it,
+// `StandardTitleTextTemplate` / `StandardInfoTextTemplate` for its type, the small-button
+// backdrop pair for its buttons, and `StandardEditBoxTemplate` for its field. The one thing that
+// is not the game's is the per-row Remove control, which no 2003 list has (ui/fdf/widgets.ts
+// `ListItem.action`, and see the dialog's own file for why the row carries it).
+//
+// The list itself is not declared here: `ListBoxWar3` is the shared list box every screen drops
+// into an empty container, and this one does the same (ui/joinAddressDialog.ts `buildRoot`) —
+// the same composition the Single Player screen's Profile List is made by.
+//
+// It is a DIALOG frame with its own size and no anchors, which is what `centerRoot` wants: the
+// box states how big it is and the mount puts it in the middle of the screen.
+
+Frame "DIALOG" "JoinAddressDialog" {
+    Height 0.30,
+    Width 0.36,
+
+    DialogBackdrop "JoinAddressDialogBackdrop",
+    Frame "BACKDROP" "JoinAddressDialogBackdrop" {
+        BackdropTileBackground,
+        BackdropBackground  "UI\Widgets\BattleNet\bnet-dialoguebox-background.blp",
+        BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+        BackdropCornerSize  0.064,
+        BackdropBackgroundSize  0.128,
+        BackdropBackgroundInsets 0.01 0.01 0.01 0.01,
+        BackdropEdgeFile  "UI\Widgets\BattleNet\bnet-dialoguebox-border.blp",
+    }
+
+    // The title wears the LABEL gold (StandardLabelTextTemplate's 0.99 0.827 0.0705), not the
+    // white of `StandardTitleTextTemplate` — the box's own heading and the "Servers:" caption
+    // under it are one column of type, and a white line over gold reads as two.
+    Frame "TEXT" "JoinAddressDialogTitle" INHERITS "StandardTitleTextTemplate" {
+        Width 0.26,
+        Height 0.02,
+        SetPoint TOPLEFT, "JoinAddressDialog", TOPLEFT, 0.05, -0.028,
+        FontColor 0.99 0.827 0.0705 1.0,
+        FontJustificationH JUSTIFYLEFT,
+    }
+
+    Frame "TEXT" "JoinAddressDialogInfo" INHERITS "StandardInfoTextTemplate" {
+        Width 0.26,
+        Height 0.036,
+        SetPoint TOPLEFT, "JoinAddressDialogTitle", BOTTOMLEFT, 0.0, -0.004,
+        FontColor 1.0 1.0 1.0 1.0,
+        FontJustificationH JUSTIFYLEFT,
+        FontJustificationV JUSTIFYTOP,
+    }
+
+    Frame "EDITBOX" "JoinAddressDialogEditBox" INHERITS WITHCHILDREN "StandardEditBoxTemplate" {
+        Height 0.04,
+        Width 0.14,
+        SetPoint TOPLEFT, "JoinAddressDialogInfo", BOTTOMLEFT, 0.0, -0.004,
+    }
+
+    // The Add button, in the pair the glue screens always use: a small-button BACKDROP carrying
+    // the button itself, inset the way `AddProfileButton` is on SinglePlayerMenu.fdf.
+    // The Add button, in the pair the glue screens always use — and with `AddProfileButton`'s
+    // OWN numbers (SinglePlayerMenu.fdf): the backdrop is a piece of art with decorated ends, so
+    // a button centred in a box sized by eye hangs off it. 0.16 × 0.05 holding a 0.079 × 0.023
+    // button inset 0.008 / -0.013 is the size that art is drawn for, and `BackdropMirrored`
+    // turns it round to face the field on its left, exactly as the profile screen's does.
+    Frame "BACKDROP" "JoinAddressAddBackdrop" INHERITS "StandardMenuSmallButtonBaseBackdrop" {
+        Width 0.16,
+        Height 0.05,
+        SetPoint LEFT, "JoinAddressDialogEditBox", RIGHT, 0.001, 0.0,
+        BackdropMirrored,
+
+        Frame "GLUETEXTBUTTON" "JoinAddressAddButton" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
+            Width 0.079,
+            Height 0.023,
+            SetPoint TOPLEFT, "JoinAddressAddBackdrop", TOPLEFT, 0.008, -0.013,
+
+            ButtonText "JoinAddressAddButtonText",
+            Frame "TEXT" "JoinAddressAddButtonText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+    }
+
+    Frame "TEXT" "JoinAddressListLabel" INHERITS "StandardInfoTextTemplate" {
+        Width 0.26,
+        Height 0.014,
+        SetPoint TOPLEFT, "JoinAddressDialogEditBox", BOTTOMLEFT, 0.0, -0.008,
+        FontJustificationH JUSTIFYLEFT,
+    }
+
+    Frame "FRAME" "JoinAddressListContainer" {
+        Width 0.26,
+        Height 0.082,
+        SetPoint TOPLEFT, "JoinAddressListLabel", BOTTOMLEFT, 0.0, -0.003,
+    }
+
+    // Done, with `DialogButtonOK`'s OWN geometry (DialogWar3.fdf). The single-button chrome is
+    // not symmetrical about its box — its decorated end hangs off one side — so a button
+    // "centred" in it lands visibly left of the dialog's middle, which is what centring it by
+    // hand did. The game solves this by anchoring the backdrop 0.015 off centre and the button
+    // to its right edge, and those two numbers together are what makes the real dialog's OK look
+    // centred. Copied rather than re-derived.
+    Frame "BACKDROP" "JoinAddressDoneBackdrop" INHERITS "StandardMenuSingleButtonBaseBackdrop" {
+        SetPoint BOTTOM, "JoinAddressDialog", BOTTOM, -0.015, 0.012,
+
+        Frame "GLUETEXTBUTTON" "JoinAddressDoneButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.159,
+            SetPoint TOPRIGHT, "JoinAddressDoneBackdrop", TOPRIGHT, -0.032, -0.015625,
+
+            ButtonText "JoinAddressDoneButtonText",
+            Frame "TEXT" "JoinAddressDoneButtonText" INHERITS "StandardButtonTextTemplate" {
+            }
+        }
+    }
+}

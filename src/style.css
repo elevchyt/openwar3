@@ -169,6 +169,12 @@ body.in-game {
   inset: 0;
   z-index: 25;
 }
+/* A scrim that is SEEN, for OpenWar3's own modals. The game's own message box (DialogWar3)
+   deliberately does not darken what is behind it — it is a question about the screen you are
+   looking at, and the reference leaves that screen lit. A panel of ours that is a place of its
+   own reads better with the menu pushed back, and the darkening is also what says "this is
+   modal" on a screen whose chrome is otherwise identical to the one underneath. */
+.glue-dialog-scrim.dimmed { background: rgba(0, 0, 0, 0.55); }
 
 #loading { z-index: 8; background: #000; }
 .fdf-screen.fdf-loading { z-index: 9; }
@@ -2826,6 +2832,24 @@ body.in-game .fdf-screen.fdf-ingame {
 /* The row's badge (folder, or the melee icon with the map's player count in it) — the
    reference's is a good half again the height of the row's text. */
 .fdf-list-icon { width: 1.45em; height: 1.45em; flex: 0 0 auto; }
+
+/* A control at the end of a row (ListItem.action) — ours, for a list of things the player
+   MANAGES rather than picks from. Pushed to the far end so a column of them lines up, and quiet
+   until the row is under the cursor: a row of buttons shouting for attention is not what any of
+   this screen's other lists look like. */
+.fdf-list-action {
+  margin-left: auto;
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.35);
+}
+.fdf-list-row:hover .fdf-list-action { color: rgba(255, 255, 255, 0.75); }
+.fdf-list-action:hover { color: #ff8080; }
 
 /* The list's scrollbar is the FDF's own (ui/fdf/widgets.ts draws its four pieces from the
    SCROLLBAR frame's art), so the browser's must go. */

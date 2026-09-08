@@ -1,4 +1,4 @@
-import type { GameMessage, HostInfo, PeerInfo, RoomInfo, ServerMessage } from "./protocol";
+import { DEFAULT_RELAY_PORT, RELAY_PATH, type GameMessage, type HostInfo, type PeerInfo, type RoomInfo, type ServerMessage } from "./protocol";
 import type { Transport } from "./transportTypes";
 import { localStorageStore, reconnectPlan, type SessionStore } from "./reconnect";
 
@@ -24,9 +24,22 @@ export type LobbyTransport = Transport & { connect(url?: string): Promise<void> 
 
 export type LobbyPhase = "offline" | "browsing" | "hosting" | "joined";
 
+/**
+ * A game in the LIST, which is not the same thing as a game on our relay.
+ *
+ * `RoomInfo.id` is minted by one relay and is unique only within it, so the moment the list
+ * carries games from more than one machine the ids collide — two hosts both have a room 1. The
+ * `key` is what the screen selects by; `source` is which relay to talk to in order to join it,
+ * empty for our own.
+ */
+export interface ListedRoom extends RoomInfo {
+  source: string;
+  key: string;
+}
+
 export interface LobbyState {
   phase: LobbyPhase;
-  rooms: RoomInfo[];
+  rooms: ListedRoom[];
   room: RoomInfo | null;
   peers: PeerInfo[];
   you: PeerInfo | null;
@@ -46,6 +59,32 @@ const EMPTY: LobbyState = {
   error: null,
   host: null,
 };
+
+/**
+ * Turn what a person types into a relay URL, or null if it is not one.
+ *
+ * What they have in their hand is whatever the host's lobby offered to copy — today
+ * `http://192.168.1.42:8787` — but people also type the bare address off a screen, and paste
+ * things with spaces on the end. So every spelling of the same machine is accepted and folded
+ * into the one form the transport wants.
+ *
+ * A bare address with no port gets the DESKTOP GAME's port, because that is who is typing: a
+ * dev server is reached by people who know they are on 5173 and can say so.
+ */
+export function normalizeRelayUrl(input: string): string | null {
+  const raw = input.trim();
+  if (!raw) return null;
+  // Any scheme they might have copied, including our own ws:// — and the path with it, since
+  // the only path a relay has is the one we are about to add back.
+  const authority = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/\/.*$/, "");
+  if (!authority || /[\s/@?#]/.test(authority)) return null;
+  const [host, port = String(DEFAULT_RELAY_PORT)] = authority.split(":");
+  // A hostname or an IPv4 address, and nothing else — so a word somebody typed by mistake is
+  // answered as the typo it is rather than dialled and reported as a machine that did not reply.
+  if (!host || !/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(host)) return null;
+  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) return null;
+  return `ws://${host}:${port}${RELAY_PATH}`;
+}
 
 /** What to tell the player about this machine's reachability, given the relay's `HostInfo`.
  *
@@ -80,7 +119,24 @@ export function reachabilityLine(host: HostInfo | null): { text: string; warn: b
 }
 
 export class LanLobby {
+  /** The relay we HOST on, rejoin to, and hand to the match. One of these, always. */
   private transport: LobbyTransport | null = null;
+  /** …and where it is, so a dropped connection reconnects to the same place. Undefined means
+   *  the default (our own origin — `defaultRelayUrl`), which is what it is until we join a
+   *  game on somebody else's machine. */
+  private primaryUrl: string | undefined;
+  /**
+   * Other machines' relays, open for BROWSING only (`addRelay`).
+   *
+   * Until there is a beacon, the only way a second machine's games can appear in this list is
+   * for somebody to say where to look. Each address gets its own connection, its rooms merge
+   * into the one list, and joining one of them PROMOTES that connection to primary — because
+   * the match wire has to be with the host's relay, and nothing else about a match changes.
+   */
+  private remotes = new Map<string, { transport: LobbyTransport; rooms: RoomInfo[] }>();
+  /** Our own relay's game list, kept apart from the merged one so a remote's update cannot be
+   *  mistaken for ours (the reconnect consults OURS, and only ours). */
+  private ownRooms: RoomInfo[] = [];
   private state: LobbyState = { ...EMPTY };
   /** True while a dropped connection is being recovered — a rejoin is in flight and the
    *  incoming game list is about to be consulted for our room (item 11a-client). */
@@ -148,9 +204,10 @@ export class LanLobby {
     if (this.transport) return;
     const t = this.newTransport();
     t.onMessage = (m) => this.handle(m);
-    t.onClose = (reason) => this.onLost(reason, url);
-    await t.connect(url);
+    t.onClose = (reason) => this.onLost(reason);
+    await t.connect(url ?? this.primaryUrl);
     this.transport = t;
+    this.primaryUrl = url ?? this.primaryUrl;
     // A fresh connect lands on the game list. A RECONNECT keeps its "Reconnecting…" state
     // instead — flipping to "browsing" would blink the roster away for the beat between the
     // socket opening and the rejoin completing (item 11a-client). `tryRejoin` takes it from here.
@@ -166,7 +223,7 @@ export class LanLobby {
    * if the relay is unreachable the promise rejects, and only THEN do we surrender to the error,
    * so a momentary blip does not throw the player out of a game the host is still running.
    */
-  private onLost(reason: string, url?: string): void {
+  private onLost(reason: string): void {
     this.transport = null;
     if (!this.store.load()) {
       this.reconnecting = false;
@@ -178,7 +235,7 @@ export class LanLobby {
     this.set({ error: "Reconnecting…" });
     // Re-open the socket. On success the relay sends the game list, and `handle` consults it for
     // our room (`reconnectPlan`); on failure the game is truly unreachable, so give up cleanly.
-    void this.connect(url).catch(() => {
+    void this.connect(this.primaryUrl).catch(() => {
       this.reconnecting = false;
       this.store.save(null);
       this.state = { ...EMPTY, error: reason };
@@ -192,8 +249,107 @@ export class LanLobby {
     this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers, observers });
   }
 
-  join(roomId: string, playerName: string): void {
-    this.transport?.send({ t: "join", roomId, playerName });
+  /**
+   * Join a game from the list, wherever it is. `key` is a `ListedRoom.key`, not a relay's own
+   * room id — see that type for why they are not the same thing.
+   *
+   * A game on ANOTHER machine promotes that machine's connection to primary before the join is
+   * sent, because everything after this moment — the roster, the countdown, the match's whole
+   * wire — is with the HOST's relay and not with ours. Nothing else about a match changes: the
+   * promoted connection is a `LobbyTransport` like any other, and `handOff` hands it over the
+   * same way. The browse connections are kept until the join is answered, so a refusal (a full
+   * room, a game that ended while we read the list) leaves us still browsing.
+   */
+  join(key: string, playerName: string): void {
+    const room = this.state.rooms.find((r) => r.key === key);
+    if (!room) return;
+    if (room.source) this.promote(room.source);
+    this.transport?.send({ t: "join", roomId: room.id, playerName });
+  }
+
+  /**
+   * Watch another machine's relay as well as our own (`ws://host:port/relay`).
+   *
+   * This is the manual half of discovery, and until a UDP beacon exists it is the only half:
+   * an Electron window has no address bar, so a second machine cannot be reached by navigating
+   * to it, and the app's own relay is on loopback — two copies of the game on one network can
+   * otherwise never see each other. The host copies its address out of the game lobby and the
+   * joiner pastes it here.
+   *
+   * Rejects with a readable reason: the screen shows it, and "nothing happened" is the one
+   * answer a typed-in address must never give.
+   */
+  async addRelay(input: string): Promise<void> {
+    const url = normalizeRelayUrl(input);
+    if (!url) throw new Error(`"${input}" is not an address. Try 192.168.1.42 or 192.168.1.42:${DEFAULT_RELAY_PORT}.`);
+    if (this.isOurOwn(url)) throw new Error("That address is this computer — your own games are already listed.");
+    if (this.remotes.has(url)) { this.refresh(); return; }
+    const t = this.newTransport();
+    const entry = { transport: t, rooms: [] as RoomInfo[] };
+    t.onMessage = (m) => {
+      // A browse connection understands exactly one message. Everything else a relay can say is
+      // about a room we are in, and we are not in one — until we join, at which point this
+      // connection has been promoted and `handle` is the listener.
+      if (m.t === "rooms") { entry.rooms = m.rooms; this.mergeRooms(); }
+    };
+    t.onClose = () => { if (this.remotes.get(url) === entry) { this.remotes.delete(url); this.mergeRooms(); } };
+    await t.connect(url);
+    this.remotes.set(url, entry);
+    this.mergeRooms();
+  }
+
+  /** The addresses being watched besides our own, for a screen that wants to show them. */
+  get relays(): string[] {
+    return [...this.remotes.keys()];
+  }
+
+  /** Stop watching one. Its games leave the list with it — they were never ours to show once
+   *  nobody is listening to the machine hosting them. */
+  removeRelay(url: string): void {
+    const entry = this.remotes.get(url);
+    if (!entry) return;
+    this.remotes.delete(url);
+    entry.transport.close();
+    this.mergeRooms();
+  }
+
+  /** Is this address one of ours? The relay tells us its own addresses at the handshake
+   *  (`HostInfo`), so pasting your own link is answered rather than silently listing every game
+   *  twice — which, with our own port on loopback and a LAN address for the same server, is
+   *  otherwise indistinguishable from two machines that happen to agree. */
+  private isOurOwn(url: string): boolean {
+    const mine = this.state.host?.addresses ?? [];
+    const authority = url.replace(/^ws:\/\//, "").replace(/\/relay$/, "");
+    return mine.includes(authority);
+  }
+
+  /** Make a browse connection the primary one — see `join`. */
+  private promote(url: string): void {
+    const entry = this.remotes.get(url);
+    if (!entry) return;
+    this.remotes.delete(url);
+    this.transport?.close();
+    const t = entry.transport;
+    t.onMessage = (m) => this.handle(m);
+    t.onClose = (reason) => this.onLost(reason);
+    this.transport = t;
+    this.primaryUrl = url;
+    // Their list is now ours, and every OTHER machine's is no longer any of our business.
+    this.ownRooms = entry.rooms;
+    for (const other of this.remotes.values()) other.transport.close();
+    this.remotes.clear();
+    this.mergeRooms();
+  }
+
+  /** One list out of every relay we are watching. Ours first — it is the one the player made
+   *  their own game on, and a list that reorders itself as a remote answers is a list whose
+   *  rows move under the mouse. */
+  private mergeRooms(): void {
+    const listed: ListedRoom[] = this.ownRooms.map((r) => ({ ...r, source: "", key: `#${r.id}` }));
+    for (const [url, entry] of this.remotes) {
+      for (const r of entry.rooms) listed.push({ ...r, source: url, key: `${url}#${r.id}` });
+    }
+    this.set({ rooms: listed });
   }
 
   leave(): void {
@@ -237,6 +393,10 @@ export class LanLobby {
     this.store.save(null); // the match is over on our end; a fresh game starts a fresh session
     this.transport?.close();
     this.transport = null;
+    for (const entry of this.remotes.values()) entry.transport.close();
+    this.remotes.clear();
+    this.ownRooms = [];
+    this.primaryUrl = undefined;
     this.reconnecting = false;
     this.handedToMatch = false;
     this.state = { ...EMPTY };
@@ -245,8 +405,11 @@ export class LanLobby {
   private handle(m: ServerMessage): void {
     switch (m.t) {
       case "rooms":
-        this.set({ rooms: m.rooms });
-        // A reconnect in flight: the game list is the answer to "is my game still up?".
+        this.ownRooms = m.rooms;
+        this.mergeRooms();
+        // A reconnect in flight: the game list is the answer to "is my game still up?". Asked
+        // of OUR relay's list and never the merged one — the room we are crawling back into is
+        // on the machine we were playing on, whose id means nothing anywhere else.
         if (this.reconnecting) this.tryRejoin(m.rooms);
         return;
       case "created":

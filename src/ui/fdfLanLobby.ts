@@ -11,7 +11,7 @@ import {
   applyRequest, buildStart, canStart, colorsFreeFor, editSlot, isSeated, newSetup, rosterDiff,
   seatPeers, type LobbyChat, type LobbyCount, type LobbyRequest, type LobbySetup, type SlotKind,
 } from "../net/lobbySetup";
-import { ADVANCED_OPTIONS_DISPLAY_OVERRIDE, OW3_STRINGS } from "../overrides";
+import { ADVANCED_OPTIONS_DISPLAY_OVERRIDE, LAN_LOBBY_ADDRESS_OVERRIDE, OW3_STRINGS } from "../overrides";
 import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
 import { numProp, type FdfLibrary } from "./fdf/library";
@@ -28,7 +28,7 @@ import {
   fillForceLabels, forceGroups, labelOf, slotOption, slotOptionValue, slotOptionsFor, teamOptions,
   type Group,
 } from "./playerSlots";
-import { LABEL_GOLD, observerSeats, toConfig } from "./fdfLan";
+import { LABEL_GOLD, copyText, observerSeats, toConfig } from "./fdfLan";
 
 // The LAN GAME LOBBY (issue #77), built from the game's own UI\FrameDef\Glue\GameChatroom.fdf.
 //
@@ -485,7 +485,7 @@ export async function mountLanLobbyScreen(
     // glue's own StandardTemplates.fdf does not carry.
     includeFdf: [MAP_INFO_FDF, PLAYER_SLOT_FDF, NETWORK_STRINGS_FDF, ADVANCED_DISPLAY_FDF, BLURB_SCROLLBAR_FDF],
     // …and our one row on the options summary (Computer+), and the strings our menus need.
-    overrides: [OW3_STRINGS, ADVANCED_OPTIONS_DISPLAY_OVERRIDE],
+    overrides: [OW3_STRINGS, ADVANCED_OPTIONS_DISPLAY_OVERRIDE, LAN_LOBBY_ADDRESS_OVERRIDE],
     buildRoot: (lib) => { strings = lib; regroup(); return buildLobbyRoot(lib, groups); },
     // The dropdowns PlayerSlot declares as plain BUTTONs (TeamButton / ColorButton).
     dropdownButtons: dropdownButtonNames(),
@@ -524,6 +524,42 @@ export async function mountLanLobbyScreen(
   return screen;
 
   /** Paint the seating onto the screen. Called after every build and every change. */
+  /** How long "Copied." stands in for the address after a click. Long enough to be seen, short
+   *  enough that the row is back to being the thing it says before anybody needs it again. */
+  const COPIED_MS = 1500;
+  let copiedUntil = 0;
+
+  /**
+   * The address other machines type to reach this game (`HostInfo`, src/net/protocol.ts).
+   *
+   * Shown only when there is one — a relay that is not also serving this page cannot know its
+   * own reachability, and a machine with no network has nothing to offer. The row copies itself
+   * when clicked; `navigator.clipboard` needs a secure context, which `127.0.0.1` is and a plain
+   * `http://192.168.x.x` is NOT, so the desktop app takes the modern path and a browser on the
+   * LAN falls back to the selection trick that predates it.
+   */
+  function paintJoinAddress(s: FdfScreen): void {
+    const addresses = lobby.snapshot.host?.addresses ?? [];
+    const first = addresses[0];
+    if (!first) {
+      s.setText("JoinAddressLobbyLabel", "");
+      s.setText("JoinAddressLobbyValue", "");
+      return;
+    }
+    const url = `http://${first}`;
+    s.setText("JoinAddressLobbyLabel", "Others join at (click to copy):");
+    s.setText("JoinAddressLobbyValue", copiedUntil > Date.now() ? `|cff${LABEL_GOLD}Copied.|r` : url);
+    const el = s.frame("JoinAddressLobbyValue");
+    if (!el) return;
+    el.style.cursor = "pointer";
+    el.onclick = () => {
+      void copyText(url);
+      copiedUntil = Date.now() + COPIED_MS;
+      render(s);
+      setTimeout(() => { if (screen === s) render(s); }, COPIED_MS);
+    };
+  }
+
   function render(s: FdfScreen): void {
     screen = s;
     s.setText("GameNameValue", setup?.gameName ?? lobby.snapshot.room?.name ?? "");
@@ -532,6 +568,8 @@ export async function mountLanLobbyScreen(
     fillMapInfo(s, map.info, preview, minimapIcons, colorOf);
     fillForceLabels(s, groups);
     if (setup) fillAdvanced(s, setup.advanced);
+
+    paintJoinAddress(s);
 
     const area = s.textArea("ChatTextArea");
     area?.setLines(chat);

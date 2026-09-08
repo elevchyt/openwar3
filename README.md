@@ -46,16 +46,18 @@ explicitly:
 sudo ufw allow 5173/tcp
 ```
 
-The LAN screen tells you what it can: it names the address other players type, and it warns you
-outright when the server is bound to this machine only (`pnpm dev` without `--host`) — the one
-failure that is otherwise invisible, since the other machine just sees an empty list. It cannot
-see through your firewall, though, so if the address is shown and nobody can reach it, that rule
+The LAN screen warns you outright when the server is bound to this machine only (`pnpm dev`
+without `--host`) — the one failure that is otherwise invisible, since the other machine just sees
+an empty list. It cannot see through your firewall, though, so if nobody can reach you, that rule
 is the thing to check.
 
-(Either player can create the game; whoever does runs the authoritative simulation. Games are found
-through the relay's room list rather than by broadcast, so both machines must be pointed at the same
-address — see [docs/multiplayer.md](docs/multiplayer.md) for the internet deployment and for why
-broadcast discovery waits on a native build.)
+**Joining a game on another machine.** Games are found through a relay's room list rather than by
+broadcast, so a second machine has to be told where to look. The host's game lobby prints the
+address other players type (click it to copy); the joiner adds it under **Join Server**, the icon
+button above the games list, and games on every server in that list appear in their own. Either
+player can create the game — whoever does runs the authoritative simulation. See
+[docs/multiplayer.md](docs/multiplayer.md) for the internet deployment and for why broadcast
+discovery waits on a native build.
 
 ## Legal
 

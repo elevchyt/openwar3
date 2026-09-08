@@ -132,7 +132,7 @@ question the 2003 game never had):
 | No relay at all | the existing connect error — the page is served by something that carries no relay |
 | Bound to loopback (`pnpm dev` with no `--host`) | "Other computers cannot see your games. Restart the server with `--host`." |
 | No network at all (packaged game) | the same consequence, with the cause it actually has |
-| Reachable | the address to type on the other machine, one per interface |
+| Reachable | nothing on this screen — the address is printed on the game LOBBY, where there is a game to join, and copied from there |
 | Firewall | **nothing** — see below |
 
 The firewall is the one that cannot be detected from inside this process, and no amount of
@@ -141,6 +141,18 @@ tell the difference. So the address is offered as the thing to TRY and never as 
 the firewall is documented (README) rather than guessed at on screen. A relay that is not also
 serving the page — the cloud one — sends no report at all, because its own addresses say nothing
 about how a player reaches the game, and a wrong address is worse than none.
+
+**Being told where to look.** Discovery is manual until the beacon lands, and it is a LIST rather
+than a field: an address is kept, re-used and thrown away. **Join Server**
+(`src/ui/joinAddressDialog.ts`, an icon button over the games list) adds a machine to the set this
+one watches; `LanLobby` opens a browse connection per address and merges every relay's rooms into
+the one list. That is why a listed game carries a `ListedRoom.key` and not just its relay's room
+id — two hosts both have a room 1 — and why joining a remote game PROMOTES that connection to
+primary: everything after the join, the roster and the match's whole wire, is with the HOST's
+relay. The host reads its own address off the game lobby and copies it with a click.
+
+That shape is the beacon's too. When it lands, the addresses arrive from the subnet instead of
+from a person, and nothing above this line changes.
 
 **What this does NOT get us, and what would.** Somebody still types an IP. Real WC3 does not ask
 that: it broadcasts on UDP 6112 and the games appear. A browser cannot send a UDP datagram either,

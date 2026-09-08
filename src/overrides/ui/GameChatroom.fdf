@@ -1,0 +1,32 @@
+// OpenWar3 override — `UI\FrameDef\Glue\GameChatroom.fdf` (the game lobby).
+//
+// Where the other players type to reach this game — the other half of the LAN screen's
+// "Join by address" field (src/overrides/ui/LocalMultiplayerJoin.fdf).
+//
+// Real WC3 needed neither: it broadcast, and a game on the network simply appeared in the
+// list. We cannot broadcast from a page, and the packaged game has no address bar to navigate
+// with, so the host has to be able to READ its own address and the joiner to type it. This is
+// the reading half, and it belongs here rather than on the screen before it: an address is
+// worth passing on only once there is a game at it.
+//
+// The value is CLICKED to copy — there is no button because the game's smallest button chrome
+// is a fifth of the panel wide, and a row of text that copies itself is the smaller thing on a
+// column already carrying the map and the options summary. The label says so; nothing here is
+// discoverable by hovering.
+//
+// One row in the map column's own idiom (`GameNameLabel`/`GameNameValue` above it): the column
+// is 0.234375 wide, and both frames state a Height because our solver does not size a TEXT to
+// its string the way the engine does.
+
+Frame "TEXT" "JoinAddressLobbyLabel" INHERITS "StandardLabelTextTemplate" {
+    Width 0.234375,
+    Height 0.012,
+    SetPoint TOP, "AdvancedOptionsContainer", BOTTOM, 0.0, -0.010,
+}
+
+Frame "TEXT" "JoinAddressLobbyValue" INHERITS "StandardValueTextTemplate" {
+    Width 0.234375,
+    Height 0.012,
+    SetPoint TOPLEFT, "JoinAddressLobbyLabel", BOTTOMLEFT, 0.0, -0.002,
+    FontJustificationH JUSTIFYLEFT,
+}

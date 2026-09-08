@@ -31,3 +31,50 @@ Frame "TEXT" "NetworkStatusText" INHERITS "StandardInfoTextTemplate" {
     FontJustificationV JUSTIFYTOP,
     SetPoint TOPLEFT, "CustomCreateInfo", BOTTOMLEFT, 0.0, -0.004,
 }
+
+// Join a game on ANOTHER machine — the button that opens the list of addresses to watch.
+//
+// The 2003 client had no such control because it never needed one: it broadcast on the subnet
+// and the games appeared. We cannot broadcast from a page, and the packaged game has no address
+// bar to navigate with, so two copies of OpenWar3 on one network would never see each other. The
+// addresses are a thing the player MANAGES, so they live in a dialog of their own
+// (src/overrides/ui/JoinAddressDialog.fdf) and this is the way in.
+//
+// It is the SinglePlayerMenu's `ProfileButton` pattern, frame for frame: a tiny-button backdrop
+// carrying a GLUEBUTTON on `StandardIconicButtonTemplate`, with the Battle.net options icon as
+// its face. That is what an icon button IS on these screens, and copying its numbers is how this
+// one ends up the same size as the one the player has already used.
+//
+// **Where it fits.** Nowhere, as the screen stands: the panel is exactly as wide as its list
+// (what looks like a margin to the right of it is the 3D background showing through), the name
+// box fills the row above, and the band under the list is 0.027 of clear panel against 0.031 of
+// button chrome. Measured, twice, after putting it through the name box and then out onto the
+// panel's own border. So the LIST gives up 0.017 — a name collision our layer wins
+// (src/overrides/README.md), about one row of a list sized for Battle.net's hundreds — and the
+// button sits in the band that opens up, right-aligned under the list it adds games to.
+
+Frame "FRAME" "GameListContainer" {
+    Width 0.37,
+    Height 0.258,
+    SetPoint TOPLEFT, "PlayerNameEditBox", BOTTOMLEFT, 0.0, -0.033,
+}
+
+Frame "BACKDROP" "JoinAddressButtonBackdrop" INHERITS "StandardMenuTinyButtonBaseBackdrop" {
+    SetPoint BOTTOMRIGHT, "GameListContainer", TOPRIGHT, 0.006, -0.004,
+
+    Frame "GLUEBUTTON" "JoinAddressButton" INHERITS WITHCHILDREN "StandardIconicButtonTemplate" {
+        Width 0.03,
+        Height 0.026,
+        SetPoint TOPRIGHT, "JoinAddressButtonBackdrop", TOPRIGHT, -0.009, -0.014,
+
+        ControlBackdrop "JoinAddressButtonFace",
+        Frame "BACKDROP" "JoinAddressButtonFace" {
+            BackdropBackground  "UI\Widgets\BattleNet\bnet-mainmenu-options-up.blp",
+            BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+            BackdropCornerSize  0.013,
+            BackdropBackgroundSize  0.026,
+            BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
+            BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder.blp",
+        }
+    }
+}
