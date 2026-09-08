@@ -17866,18 +17866,33 @@ export class SimWorld {
         if (w && w.hp > 0) this.kill(w, killerId);
       }
     }
-    // Orc Burrow destroyed with peons inside: they die with it (WC3). Kill them first so
-    // each death is recorded, then this burrow's own death proceeds.
+    // A cargo hold that dies: who goes down with it is a DATA question, and the data answers
+    // it in one row. `Achd` "Cargo Hold Death" is an ability of its own, and in the whole
+    // install it is worn by exactly two units — the Goblin Zeppelin `nzep` and the air barge
+    // `uarb` (`UnitAbilities.slk`: "Sch3,Achd,Aloa,Adro") — so a transport's passengers fall
+    // out of the sky with it, and every hold WITHOUT that row simply opens. The Orc Burrow
+    // ("Abds,Aspi,Abun,Abtl,Astd,Arbr") has no `Achd`: knock it down and the peons manning
+    // the arrow slits walk out of the rubble alive. The Entangled Gold Mine (`Aenc`) is the
+    // same door, and `releaseEntangled` below hands the rock itself back.
+    //
+    // The stamp is already gone (releasePathStamp, above), so the crew may be put down on the
+    // cells the building was standing on rather than pushed out around a wreck. `unloadBurrow`
+    // with no `backToWork`: this is not the Stand Down button, so nobody resumes a job.
     if (u.garrison.length) {
-      for (const pid of [...u.garrison]) {
-        const p = this.units.get(pid);
-        if (p) {
-          p.inBurrow = false;
-          p.garrisonHost = 0;
-          this.kill(p, killerId);
+      if (this.isTransport(u)) {
+        // Kill them first so each death is recorded, then this transport's own death proceeds.
+        for (const pid of [...u.garrison]) {
+          const p = this.units.get(pid);
+          if (p) {
+            p.inBurrow = false;
+            p.garrisonHost = 0;
+            this.kill(p, killerId);
+          }
         }
+        u.garrison = [];
+      } else {
+        this.unloadBurrow(u.id);
       }
-      u.garrison = [];
     }
     // Kodo Devour: a Kodo slain mid-digest spits its prey back out alive; a prey unit that
     // dies inside (fully digested, or the whole Map cleared) frees the Kodo's slot.

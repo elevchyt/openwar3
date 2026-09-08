@@ -22,9 +22,13 @@ The FDF (`SimpleInfoPanelCargoDetail`) carries only the name and description str
 pocket grid is the engine's own layout, as the training queue's slots are. Its shape is read off
 the reference shot on the issue: 2×4 for the Zeppelin's eight.
 
-`Achd` "Cargo Hold Death" on the Zeppelin and the barge carries no art and is not wired to
-anything in the game we can find; a transport that dies takes its cargo with it, exactly as a
-Burrow does (`kill`).
+`Achd` "Cargo Hold Death" carries no art, and it is the row that decides who goes down with a
+hold: in the whole install it is worn by exactly two units — the Goblin Zeppelin `nzep` and the
+air barge `uarb` ("Sch3,Achd,Aloa,Adro") — so a transport that dies takes its cargo with it
+(`kill`). A hold WITHOUT the row simply opens: the Orc Burrow ("Abds,Aspi,Abun,Abtl,Astd,Arbr")
+and the Entangled Gold Mine have no `Achd`, so knocking one down turns its crew out alive
+(`unloadBurrow`, on the footprint the building has just stopped occupying) rather than burying
+it.
 
 ## How it plays
 

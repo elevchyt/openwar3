@@ -369,5 +369,42 @@ console.log("seats, not heads: a Mortar Team takes two of the eight");
   world.unloadBurrow(zep.id);
 }
 
+console.log("a hold that dies: `Achd` says who goes down with it");
+{
+  // `Achd` "Cargo Hold Death" is a row of its own, and in the whole install exactly two units
+  // wear it — the Goblin Zeppelin and the air barge ("Sch3,Achd,Aloa,Adro"). A Zeppelin shot
+  // down takes its cargo with it.
+  const zep = zeppelin({ x: 600, y: 1800 });
+  const rider = unit({ typeId: "hfoo", x: 600, y: 1800 });
+  world.issueGarrison(rider.id, zep.id);
+  check("aboard the Zeppelin", zep.garrison, [rider.id]);
+  world.kill(zep);
+  check("…and shot down, the passenger died with it", world.units.has(rider.id), false);
+
+  // The Orc Burrow's row list is "Abds,Aspi,Abun,Abtl,Astd,Arbr" — no `Achd`. Knock it down
+  // and the peons manning the arrow slits walk out of the rubble, onto the very cells the
+  // building was standing on (its stamp is released one line before they are put out). Ashore,
+  // of course — the land half of this map is x < 1024.
+  const burrow = unit({
+    typeId: "otrb", x: 400, y: 1200, radius: 48, footprint: 2,
+    building: { constructionLeft: 0, queue: [], builderIds: [] },
+  });
+  const peons = [];
+  for (let i = 0; i < 3; i++) {
+    const p = unit({ typeId: "hfoo", x: 400, y: 1200, worker: { gold: true, lumber: true } });
+    check(`peon ${i + 1} mans the burrow`, world.issueGarrison(p.id, burrow.id), true);
+    peons.push(p);
+  }
+  world.kill(burrow);
+  check("the burrow is gone", world.units.has(burrow.id), false);
+  check("…and every peon is still alive", peons.map((p) => world.units.has(p.id)), [true, true, true]);
+  check("…out of the hold", peons.map((p) => [p.inBurrow, p.garrisonHost]), [[false, 0], [false, 0], [false, 0]]);
+  check("…standing on ground they can stand on", peons.every((p) => {
+    const c = grid.worldToCell(p.x, p.y);
+    return grid.walkable(c[0], c[1]);
+  }), true);
+  check("…beside the wreck", peons.every((p) => Math.hypot(p.x - 400, p.y - 1200) < 400), true);
+}
+
 console.log(failed === 0 ? "\ntransport: all checks passed" : `\ntransport: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
