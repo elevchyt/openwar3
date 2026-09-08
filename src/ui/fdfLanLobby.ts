@@ -78,6 +78,14 @@ const SUMMARY_ROWS = INFO_ROWS.slice(0, 3);
  */
 const COUNTDOWN_SECONDS = 5;
 
+/**
+ * The last seconds of the countdown, in which Cancel is dead too.
+ *
+ * Until then a start can be called off and the room goes back to what it was; from the "2" the
+ * match is committed, and a Cancel that landed here would be racing the `start` message.
+ */
+const CANCEL_DEADLINE_SECONDS = 2;
+
 /** The team menu's value for "move onto the Observers bench" / "this row is on it". */
 const OBSERVERS_TEAM = "observers";
 
@@ -263,6 +271,9 @@ export async function mountLanLobbyScreen(
    *  in the payload — which is what stops one peer re-racing another's row. */
   const onRequest = (from: number, req: LobbyRequest): void => {
     if (!isHost() || !setup) return;
+    // Calling off the start is not a seating change and the seating model does not answer it —
+    // the countdown is a clock, and the clock is ours. The room hears in the broadcast.
+    if (req.abort) { if (countdown !== null && cancelLive()) abortCountdown(); return; }
     const next = applyRequest(setup, from, req);
     if (!next) return;
     setup = next;
@@ -317,11 +328,17 @@ export async function mountLanLobbyScreen(
   // broadcast (`LobbySetup.counting`) rather than the countdown's own messages: a client greys
   // its menus off the payload it already renders, and an abandoned countdown gives the rows
   // back with one more broadcast instead of a second kind of message that could go missing.
+  //
+  // CANCEL stays live and calls the start off (`cancel`) — a start is the room's, and until the
+  // last two seconds anybody may say no to it. From the "2" that button is dead too.
 
   /** The host's countdown handle, or null while there is none. A client never runs one. */
   let countdown: number | null = null;
   /** The number the NEXT tick announces; the match begins on the tick that finds it at zero. */
   let countdownAt = 0;
+  /** The number the room was LAST told, on any machine — the host off its own clock, a client
+   *  off the message. Null between countdowns. It is what Cancel's deadline is measured in. */
+  let showing: number | null = null;
 
   const stopCountdown = (): void => {
     if (countdown === null) return;
@@ -332,9 +349,21 @@ export async function mountLanLobbyScreen(
   /** Give up on the countdown and hand the room its rows back — the host's side of an abort. */
   const abortCountdown = (): void => {
     stopCountdown();
+    showing = null;
     if (setup?.counting) { setup = { ...setup, counting: false }; broadcast(); }
     refresh();
   };
+
+  /**
+   * May Cancel be pressed? Always, except in the countdown's last two seconds.
+   *
+   * A start is the ROOM's and anybody may call it off until then (see `cancel`) — but from the
+   * "2" it is committed: the host is about to send `start`, and a Cancel landing in that window
+   * would be racing it. `showing` is null for the instant between the lock going out and the
+   * first line landing, which is the top of the count and so not the deadline.
+   */
+  const cancelLive = (): boolean =>
+    !setup?.counting || showing === null || showing > CANCEL_DEADLINE_SECONDS;
 
   /** Print one countdown line, wherever it came from — our own clock or the host's message. */
   const countdownLine = (n: number): void => {
@@ -356,12 +385,35 @@ export async function mountLanLobbyScreen(
     if (countdownAt <= 0) { stopCountdown(); launch(); return; }
     lobby.send({ k: "lobbycount", n: countdownAt } satisfies LobbyCount);
     countdownLine(countdownAt);
+    showing = countdownAt;
     countdownAt -= 1;
+    syncButtons(); // the last seconds take Cancel with them
+  };
+
+  /**
+   * Cancel.
+   *
+   * While a countdown is running it calls the START off and the room stays exactly as it was —
+   * on the host directly, from anywhere else by asking (`abort`), which is a smaller act than
+   * the LEAVING that would stop the countdown anyway and cost the leaver their seat. With no
+   * countdown to stop it is what it has always been: leave the room, back to the game list.
+   */
+  const cancel = (): void => {
+    if (setup?.counting) {
+      if (isHost()) abortCountdown();
+      else lobby.send({ k: "lobbyreq", abort: true } satisfies LobbyRequest);
+      return;
+    }
+    alive = false;
+    stopCountdown();
+    lobby.leave();
+    h.onCancel();
   };
 
   const startMatch = (): void => {
     if (!isHost() || !setup || countdown !== null) return;
     countdownAt = COUNTDOWN_SECONDS;
+    showing = null;
     // The lock goes out FIRST: from here the room's seating is settled, and the rows a client
     // is looking at stop being ones it can still change under the start.
     setup = { ...setup, counting: true };
@@ -386,6 +438,7 @@ export async function mountLanLobbyScreen(
       const { joined, left } = rosterDiff(prev, setup);
       for (const name of joined) system("NETMESSAGE_PLAYERJOINED", name);
       for (const name of left) system("NETMESSAGE_PLAYERLEFT", name);
+      if (!setup.counting) showing = null; // a countdown that ended takes its number with it
       const rows = setup.slots.length + setup.observers.length;
       if (rows !== (prev ? prev.slots.length + prev.observers.length : -1)) { regroup(); syncHidden(); screen?.relayout(); }
       else refresh();
@@ -395,7 +448,12 @@ export async function mountLanLobbyScreen(
     if (msg.k === "lobbychat") return say(from, (msg as LobbyChat).text);
     // Only the host counts, and only the host's own line is printed — a peer that sends one is
     // no more the host than one that sends a seating (the relay's `from` stamp settles it).
-    if (msg.k === "lobbycount" && from === hostPeer()) return countdownLine((msg as LobbyCount).n);
+    if (msg.k === "lobbycount" && from === hostPeer()) {
+      showing = (msg as LobbyCount).n;
+      countdownLine(showing);
+      syncButtons(); // …and with the last two seconds, this machine's Cancel goes too
+      return;
+    }
   };
 
   lobby.onChange = (st) => {
@@ -441,7 +499,7 @@ export async function mountLanLobbyScreen(
     latePanels: ["TeamSetupContainer", "MapDisplayPanel"],
     handlers: {
       StartGameButton: () => startMatch(),
-      CancelButton: () => { alive = false; stopCountdown(); lobby.leave(); h.onCancel(); },
+      CancelButton: () => cancel(),
     },
     onBuild: (s) => render(s),
   });
@@ -595,10 +653,21 @@ export async function mountLanLobbyScreen(
       }
     });
 
-    // Start Game is the host's, and only once everybody in the room has a seat and there are
-    // two PLAYERS to play (NEED_AT_LEAST_TWO): a lobby of one, or of one and a bench, is not a
-    // match.
+    syncButtons();
+  }
+
+  /**
+   * The two buttons' greying — its own pass because the COUNTDOWN moves them between renders.
+   *
+   * Start Game is the host's, and only once everybody in the room has a seat and there are two
+   * PLAYERS to play (NEED_AT_LEAST_TWO): a lobby of one, or of one and a bench, is not a match.
+   * It is spent for as long as a countdown of ours is running.
+   */
+  function syncButtons(): void {
+    const s = screen;
+    if (!s) return;
     s.setEnabled("StartGameButton", isHost() && !!setup && countdown === null && canStart(setup, lobby.snapshot.peers));
+    s.setEnabled("CancelButton", cancelLive());
   }
 
   /**

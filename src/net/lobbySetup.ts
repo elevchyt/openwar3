@@ -133,6 +133,14 @@ export interface LobbyRequest {
   color?: number;
   /** Get up from a player slot onto the Observers bench. Only under Full Observers. */
   observe?: boolean;
+  /**
+   * Call off the start countdown — Cancel, pressed on a machine that is not the host's.
+   *
+   * It names no seating and `applyRequest` does not answer it: the countdown is a CLOCK, which
+   * only the host has, so the lobby screen acts on this itself and the room hears about it in
+   * the `counting: false` broadcast that follows.
+   */
+  abort?: boolean;
 }
 
 /** One line of lobby chat, sent to the room. The sender is the relay's `from` stamp. */
