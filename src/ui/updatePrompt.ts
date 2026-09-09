@@ -1,4 +1,5 @@
 import { showGlueDialog, type GlueDialog } from "./glueDialog";
+import { showUpdateOverlay, type UpdateOverlay } from "./updateOverlay";
 import { downloadUpdate, installUpdate, onUpdateState, type UpdateState } from "../assets/nativeInstall";
 import type { DataSource } from "../vfs/types";
 
@@ -11,16 +12,24 @@ import type { DataSource } from "../vfs/types";
 // every other question on that screen is asked in. A player who has just double-clicked the game
 // is not yet the person to interrupt; a player looking at the main menu is.
 //
-// Both steps are the player's. Downloading is one question and restarting is another, because a
-// game that replaced itself under somebody mid-match would be worse than one a version behind.
-// Saying no to either leaves them playing the version they have, and the offer comes back next
-// launch.
+// ONE question, and then the game gets on with it. The player is asked whether to fetch the new
+// build; saying no leaves them on the one they have and the offer comes back next launch. Saying
+// yes puts up a screen they cannot leave (ui/updateOverlay.ts) and the game downloads, installs
+// and restarts itself behind it — asking a second time, once the bytes are already on disk and
+// the player has been watching a progress bar, is asking somebody to confirm the thing they just
+// asked for.
 
 /** Only ever asked once per launch, however many times the state changes. */
 let asked = false;
+/** Set the moment Restart is pressed, so a late progress event cannot raise the overlay again
+ *  over a game that is quitting. */
+let installing = false;
 
 export function watchForUpdates(container: HTMLElement, vfs: DataSource): () => void {
   let dialog: GlueDialog | null = null;
+  /** Up from the moment the player says yes until the new build is on disk. Not dismissable —
+   *  see ui/updateOverlay.ts for why. */
+  let overlay: UpdateOverlay | null = null;
   let alive = true;
 
   const show = async (text: string, buttons: "ok" | "yesno", onConfirm?: () => void): Promise<void> => {
@@ -46,20 +55,34 @@ export function watchForUpdates(container: HTMLElement, vfs: DataSource): () => 
         void show(
           `A new version of OpenWar3 is available|n|n|cffffcc00Version ${state.version ?? "?"}|r|n|nDownload it now?`,
           "yesno",
-          () => downloadUpdate(),
+          () => {
+            downloadUpdate();
+            // The overlay goes up on the DECISION, not on the first progress event: a download
+            // that is slow to start would otherwise leave the player on a live menu wondering
+            // whether their Yes did anything.
+            void showUpdateOverlay(container, vfs, state.version).then((o) => {
+              if (alive && !installing) overlay = o;
+              else o.dispose();
+            });
+          },
         );
+        return;
+      case "downloading":
+        overlay?.setProgress((state.percent ?? 0) / 100);
         return;
       case "ready":
-        // The second question, and the only one that ends the session. It is asked whether or
-        // not they were watching the download: a finished update nobody is told about is one
-        // that installs itself at some surprising later moment instead.
-        void show(
-          `OpenWar3 ${state.version ?? ""} is ready to install.|n|nRestart the game now?`,
-          "yesno",
-          () => installUpdate(),
-        );
+        // No second question: the download is done, so the game restarts into it. The overlay
+        // stays up through the swap — it is the last thing on screen before the window goes, and
+        // it says what is happening rather than vanishing without a word.
+        if (installing) return;
+        installing = true;
+        overlay?.setProgress(1);
+        overlay?.setCaption(`Restarting into OpenWar3 ${state.version ?? ""}…`);
+        installUpdate();
         return;
       case "error":
+        overlay?.dispose();
+        overlay = null;
         // Not shown. Failing to REACH the releases page is not the player's problem to solve
         // mid-session, and a game that opens a box about it every launch on a machine with no
         // internet is a game with a bug in it. The console keeps the reason.
@@ -68,5 +91,5 @@ export function watchForUpdates(container: HTMLElement, vfs: DataSource): () => 
       default:
         return; // idle / checking / none / downloading — nothing to say
     }
-  }) && (() => { alive = false; dialog?.close(); });
+  }) && (() => { alive = false; dialog?.close(); overlay?.dispose(); });
 }

@@ -1,10 +1,11 @@
 // Checking the project's GitHub releases for a newer OpenWar3, fetching it, and restarting into
 // it — the desktop app's own updater.
 //
-// The whole flow is the player's to refuse. `autoDownload` is OFF, so nothing is fetched until
-// they say so, and nothing is INSTALLED until they say so again: a game that restarts itself
-// under somebody mid-match is worse than one that is a version behind. What this file does is
-// hold the state and let `main.mjs` put those two questions in front of them.
+// The flow is the player's to refuse, ONCE. `autoDownload` is OFF, so nothing is fetched until
+// they say so — a game that quietly pulls 130 MB and restarts itself under somebody mid-match is
+// worse than one that is a version behind. `autoInstallOnAppQuit` is off for the same reason:
+// the install happens where the player can see it, behind the screen the game puts up
+// (src/ui/updateOverlay.ts), and never as a surprise on some later quit.
 //
 // The source is the repo's Releases page (`publish` in package.json). electron-builder writes
 // `latest-linux.yml` / `latest.yml` beside each artifact when it publishes, and that file — not
@@ -35,12 +36,14 @@ export function startUpdates({ onChange, log, fakeVersion = null } = {}) {
       get state() { return state; },
       check() { return Promise.resolve(); },
       download() {
+        // Small steps over a few seconds, because what this exists to exercise is the overlay
+        // that is up WHILE a download runs — five jumps in a second and a half is not that.
         let percent = 0;
         const tick = setInterval(() => {
-          percent += 20;
+          percent += 5;
           if (percent >= 100) { clearInterval(tick); set({ phase: "ready", percent: 100 }); }
           else set({ phase: "downloading", percent });
-        }, 300);
+        }, 200);
       },
       install() { set({ phase: "installing" }); log?.info?.("[OpenWar3] pretend update: not restarting"); },
     };
@@ -76,7 +79,8 @@ export function startUpdates({ onChange, log, fakeVersion = null } = {}) {
       set({ phase: "downloading", percent: 0 });
       return autoUpdater.downloadUpdate().catch((err) => set({ phase: "error", error: String(err?.message ?? err) }));
     },
-    /** Replace this build and start the new one. Only ever reached from a player pressing Yes. */
+    /** Replace this build and start the new one. Reached when the download the player ASKED FOR
+     *  finishes, with the overlay still up saying so. */
     install() {
       if (state.phase !== "ready") return;
       // `isSilent` false, `isForceRunAfter` true: show the installer where a platform has one,

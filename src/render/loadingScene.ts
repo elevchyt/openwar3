@@ -46,6 +46,9 @@ interface Scene {
   removeInstance(instance: unknown): void;
 }
 interface Viewer {
+  /** The viewer's own context, and the per-frame clear it does with it — see `transparent`. */
+  gl: WebGLRenderingContext;
+  startFrame(): void;
   on(event: string, cb: (e: unknown) => void): void;
   addHandler(handler: unknown, ...args: unknown[]): boolean;
   addScene(): Scene;
@@ -69,7 +72,9 @@ interface MdxModel {
   addInstance(): MdxInstance;
 }
 
-const ViewerClass = ModelViewerCtor as unknown as { new(canvas: HTMLCanvasElement): Viewer };
+const ViewerClass = ModelViewerCtor as unknown as {
+  new(canvas: HTMLCanvasElement, options?: WebGLContextAttributes): Viewer;
+};
 
 /** `setSequenceLoopMode(1)` — hold the last frame instead of wrapping. The load bar's clip must
  *  not restart from empty when the playhead reaches the end (mode 0 and 2 both wrap it). */
@@ -86,29 +91,54 @@ export class LoadingScene {
   private last = 0;
   private progress = 0;
 
-  constructor(private canvas: HTMLCanvasElement, private vfs: DataSource) {
+  /** `transparent` composites the bar over whatever is behind the canvas instead of painting the
+   *  screen black — what the UPDATE overlay wants (ui/updateOverlay.ts), where the bar is the only
+   *  thing drawn and a scrim shows through around it. The loading screen is the whole picture and
+   *  leaves it off. */
+  constructor(private canvas: HTMLCanvasElement, private vfs: DataSource, transparent = false) {
     canvas.width = canvas.clientWidth || window.innerWidth;
     canvas.height = canvas.clientHeight || window.innerHeight;
-    const viewer = new ViewerClass(canvas);
+    // The viewer's own default is `{ alpha: false }`, which makes the CANVAS opaque whatever the
+    // scene does — a transparent scene over an opaque canvas is still a black rectangle. Both
+    // have to say so, which is why this is passed as well as `scene.alpha` below.
+    const viewer = new ViewerClass(canvas, transparent ? { alpha: true } : undefined);
     viewer.on("error", (e) => console.error("[loadingscene]", e));
     this.solver = (src) => (typeof src === "string" ? this.vfs.read(src) : src);
     viewer.addHandler(mdxHandler, this.solver, false);
     viewer.addHandler(blpHandler);
 
     const scene = viewer.addScene();
-    scene.alpha = false; // the loading screen is the whole picture; nothing shows behind it
+    scene.alpha = transparent; // the loading screen is the whole picture; nothing shows behind it
     scene.color.set([0, 0, 0]);
+
+    // `scene.alpha` is not enough, and neither is asking for an alpha CONTEXT: the viewer's own
+    // `startFrame` clears the whole canvas to `(0, 0, 0, 1)` before any scene draws, so the
+    // canvas comes out opaque black however either of them is set. Overridden on OUR instance
+    // rather than in the library patch — this is the one place that wants a see-through canvas,
+    // and the loading screen (a different instance) must go on clearing to black.
+    if (transparent) {
+      viewer.startFrame = (): void => {
+        const gl = viewer.gl;
+        gl.depthMask(true);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      };
+    }
     this.viewer = viewer;
     this.scene = scene;
   }
 
   /** Put `background` up, with the load bar over it. Resolves once both are decoded, so the
-   *  caller can reveal the screen with its art already on it rather than on a black frame. */
-  async load(background: LoadingBackground): Promise<void> {
-    const bg = await this.model(background.path);
+   *  caller can reveal the screen with its art already on it rather than on a black frame.
+   *
+   *  `null` mounts the BAR ALONE — the same model, seeked the same way, with nothing behind it.
+   *  That is the whole of the update overlay's art: the game already owns a progress bar, and a
+   *  second one drawn in CSS would be a second answer to what a filling bar looks like here. */
+  async load(background: LoadingBackground | null): Promise<void> {
+    const bg = background ? await this.model(background.path) : null;
     // A campaign background's clip is chosen by NUMBER, not by name — one model serves a whole
     // campaign and `[LoadingScreens]` says which of its clips is this chapter's.
-    if (bg) this.add(bg, Math.min(background.sequence, bg.sequences.length - 1));
+    if (bg && background) this.add(bg, Math.min(background.sequence, bg.sequences.length - 1));
 
     const barModel = await this.model(LOAD_BAR_MODEL);
     const birth = barModel?.sequences.findIndex((s) => /^birth$/i.test(s.name)) ?? -1;

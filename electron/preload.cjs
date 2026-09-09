@@ -44,10 +44,10 @@ contextBridge.exposeInMainWorld("ow3native", {
   },
 
   /**
-   * The updater (electron/updates.mjs). `state()` is `{ phase, version, percent, error }`, and
-   * the two verbs are the two decisions: nothing is fetched until `download()`, nothing replaces
-   * this build until `install()`. Both exist so the game can ASK — a game that restarted itself
-   * under somebody mid-match would be worse than one a version behind.
+   * The updater (electron/updates.mjs). `state()` is `{ phase, version, percent, error }`.
+   * Nothing is fetched until `download()` and nothing replaces this build until `install()`, so
+   * neither can happen to a player who did not ask: the game asks once, and then does both
+   * behind a screen that says so (src/ui/updateOverlay.ts).
    */
   update: {
     state: () => ipcRenderer.invoke("ow3:update-state"),

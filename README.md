@@ -63,9 +63,10 @@ is on first run and remembers, so the two are unrelated on disk. It will only ac
 folder, and re-checks it every launch.
 
 The desktop app **checks this repo's releases at launch** and asks, in the game's own message box,
-whether to fetch a newer version; saying yes downloads it in the background and offers to restart
-into it. Both steps are yours to refuse — nothing downloads until you say so and nothing replaces
-your build until you say so again — and declining just means the offer comes back next launch.
+whether to fetch a newer version. Saying yes puts up the game's own load bar — a screen you cannot
+leave, since the build under you is about to be replaced — and it downloads, installs and restarts
+into the new version by itself. Saying no leaves you on the build you have, and the offer comes
+back next launch.
 
 To cut a release, tag the version in `package.json` and:
 
