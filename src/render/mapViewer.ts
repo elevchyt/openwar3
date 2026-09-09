@@ -7052,6 +7052,7 @@ export class MapViewerScene {
       deselectUnit: (simId) => this.rts?.deselectUnit(simId),
       selectSingle: (simId) => this.rts?.selectSingle(simId),
       tryTargetArmedAt: (simId) => this.rts?.tryTargetArmedAt(simId) ?? false,
+      tryTargetArmedAtHero: (index) => this.rts?.tryTargetArmedAtHero(index) ?? false,
       cycleFocus: (reverse) => this.rts?.cycleFocus(reverse),
       cycleIdleWorker: () => {
         if (this.rts?.cycleIdleWorker()) {

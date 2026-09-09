@@ -2411,6 +2411,25 @@ export class RtsController {
     return false;
   }
 
+  /**
+   * The hero bar's half of `tryTargetArmedAt`: an armed spell, item or attack pointed at the
+   * (index+1)-th hero's BUTTON is pointed at that hero.
+   *
+   * Same rule as the group grid, for the same reason — the console is another way to NAME a
+   * target, not another rule about what may be targeted — and the hero bar is where it is
+   * needed most, since the hero a Heal or a Staff of Preservation is meant for is very often
+   * the one body on the map you cannot see. Everything below it (the refusals, the "stays
+   * armed" on a refusal, the disarm a point-target spell gets) is that method's, unchanged.
+   *
+   * Answers false for a dead slot and for nothing armed, so the click falls through to the
+   * button's ordinary meanings (hand an item over, select the hero).
+   */
+  tryTargetArmedAtHero(index: number): boolean {
+    const hero = this.heroBarUnit(index);
+    if (!hero) return false;
+    return this.tryTargetArmedAt(hero.id);
+  }
+
   /** A worker of the local player that's doing nothing (not gathering, building,
    *  moving, or constructing) — the ones the idle-worker button/F8/~ cycle.
    *
@@ -2718,6 +2737,17 @@ export class RtsController {
    * slot, an empty selection, a selection of somebody else's units.
    */
   rightClickHero(index: number, queued = false): boolean {
+    // A right-click DISARMS whatever is being aimed rather than ordering with it — WC3's own
+    // rule, and the one the minimap's right-click already follows (minimapClick). The LEFT
+    // button is what spends an armed order on a portrait (tryTargetArmedAtHero).
+    if (this.orderMode) {
+      this.orderMode = null;
+      this.armedCast = null;
+      this.armedItem = null;
+      this.armedLoad = null;
+      this.armedUnload = null;
+      return true;
+    }
     const hero = this.heroBarUnit(index);
     if (!hero) return false;
     const heroId = hero.id;

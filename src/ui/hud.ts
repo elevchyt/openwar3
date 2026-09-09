@@ -255,6 +255,9 @@ export interface HudDriver {
   selectSingle(simId: number): void;
   /** If a spell/attack is armed, apply it to this grid unit; true if consumed. */
   tryTargetArmedAt(simId: number): boolean;
+  /** The same, aimed at the hero behind hero-bar button `index` — a hero is targetable
+   *  through its portrait exactly as a unit is through its grid icon. */
+  tryTargetArmedAtHero(index: number): boolean;
   /** Cycle focus to the next (or, reversed, previous) sub-group (Tab / Shift+Tab). */
   cycleFocus(reverse: boolean): void;
   /** Select + centre on the next idle worker (idle-worker badge / F8 / ~). */
@@ -2376,24 +2379,39 @@ export class GameHud {
       // half of F1/F2/F3, which count in this same order. Bound through `onPress` so the
       // button sinks under the press exactly as a command-card button does.
       //
-      // …unless an ITEM is in hand. Right-clicking an inventory slot picks the item up and
-      // the next click spends it, and a hero's button stands in for the hero: clicking one
-      // hands the item over, exactly as clicking that hero's body on the map does. The give
-      // is tried first and only a refusal falls through to selecting.
+      // …unless something is AIMED. A hero's button stands in for the hero, so anything the
+      // player is holding over the map is spent on it here too, in the order the console
+      // spends them:
+      //
+      //  • an armed SPELL, ITEM or ATTACK targets the hero (`tryTargetArmedAtHero`, the same
+      //    door the group grid's icons use). This is what the portraits are for: the hero a
+      //    Heal or a Staff of Preservation is meant for is very often the one body on the map
+      //    you cannot see.
+      //  • an item PICKED UP out of the inventory (right-click, `mode: "move"`) is handed
+      //    over, exactly as clicking that hero's body on the map does.
+      //
+      // The two cannot both be true — one is an item being USED, the other an item being
+      // GIVEN — and only a refusal of both falls through to selecting.
       //
       // Right-click is the button's OTHER meaning (`alt`): the order a right-click on this
       // hero's BODY in the world would give — rally a selected production building onto it,
       // or send the selection to follow it — without having to find the body, which is very
-      // often off screen. It goes through `onPress` for the same
-      // reason the left button does, and it is the same lesson the autocast buttons already
-      // learned: hung off `contextmenu` the portrait never MOVED under the right press,
-      // because the browser fires that at whichever end of the click the platform chose
-      // rather than at the press. Bound here, the portrait sinks under the press and the
-      // order leaves on the release, so it can be backed out of by sliding off it.
-      // `contextmenu` is left doing the one thing it is for — suppressing the menu.
+      // often off screen. With something armed it DISARMS instead, as a right-click does
+      // everywhere else.
+      //
+      // It goes through `onPress` for the same reason the left button does, and it is the
+      // same lesson the autocast buttons already learned: hung off `contextmenu` the portrait
+      // never MOVED under the right press, because the browser fires that at whichever end of
+      // the click the platform chose rather than at the press. Bound here, the portrait sinks
+      // under the press and the order leaves on the release, so it can be backed out of by
+      // sliding off it. `contextmenu` is left doing the one thing it is for — the menu.
       onPress(
         btn,
         () => {
+          if (this.driver.tryTargetArmedAtHero(i)) {
+            this.clearOrderMode();
+            return;
+          }
           if (this.driver.dropItemOnHero(i)) {
             this.setArmed(false);
             this.refreshSelectionNow();
@@ -2402,7 +2420,9 @@ export class GameHud {
           this.driver.selectHero(i, false);
           this.refreshSelectionNow();
         },
-        (e) => this.driver.rightClickHero(i, e.shiftKey),
+        (e) => {
+          if (this.driver.rightClickHero(i, e.shiftKey)) this.clearOrderMode();
+        },
       );
       btn.addEventListener("dblclick", () => this.driver.selectHero(i, true));
       btn.oncontextmenu = (e) => e.preventDefault();
