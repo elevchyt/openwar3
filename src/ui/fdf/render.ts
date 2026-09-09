@@ -1,4 +1,5 @@
 import type { DataSource } from "../../vfs/types";
+import { modalOver } from "../modal";
 import { blpToCanvas } from "../../render/blputil";
 import { wc3StripMarkup, wc3ToHtml } from "../wc3Text";
 import { gameFontStack, gameFontsReady, onGameFontsReady } from "../gameFont";
@@ -400,8 +401,8 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     // dialog's own field was already safe (the INPUT check below), but a keystroke with the
     // focus anywhere else — after pressing one of its buttons, after clicking a list row —
     // reached the accelerators of the screen behind and pressed Create Game from inside a
-    // dialog. The scrim is the modal (ui/glueDialog.ts, ui/joinAddressDialog.ts), and a screen
-    // mounted INSIDE one is the modal itself, which must keep its own keys.
+    // dialog. The scrim is the modal (ui/modal.ts knows both kinds), and a screen mounted INSIDE
+    // one is the modal itself, which must keep its own keys.
     if (modalOver(overlay)) return;
     const target = e.target as HTMLElement | null;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
@@ -412,15 +413,6 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   window.addEventListener("keydown", onKey);
 
   return screen;
-}
-
-/** Is there a modal scrim over this screen? Every scrim in the document is asked, not just the
- *  first, so a dialog raised from another dialog does not un-gate the screen at the bottom. */
-function modalOver(overlay: HTMLElement): boolean {
-  for (const scrim of document.querySelectorAll(".glue-dialog-scrim")) {
-    if (!scrim.contains(overlay)) return true;
-  }
-  return false;
 }
 
 interface RenderCtx {

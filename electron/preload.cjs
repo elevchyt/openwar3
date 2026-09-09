@@ -42,4 +42,21 @@ contextBridge.exposeInMainWorld("ow3native", {
     ipcRenderer.on("ow3:servers", handler);
     return () => ipcRenderer.off("ow3:servers", handler);
   },
+
+  /**
+   * The updater (electron/updates.mjs). `state()` is `{ phase, version, percent, error }`, and
+   * the two verbs are the two decisions: nothing is fetched until `download()`, nothing replaces
+   * this build until `install()`. Both exist so the game can ASK — a game that restarted itself
+   * under somebody mid-match would be worse than one a version behind.
+   */
+  update: {
+    state: () => ipcRenderer.invoke("ow3:update-state"),
+    download: () => ipcRenderer.invoke("ow3:update-download"),
+    install: () => ipcRenderer.invoke("ow3:update-install"),
+    onChange: (fn) => {
+      const handler = (_event, next) => fn(next);
+      ipcRenderer.on("ow3:update", handler);
+      return () => ipcRenderer.off("ow3:update", handler);
+    },
+  },
 });

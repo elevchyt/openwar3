@@ -17,6 +17,7 @@ import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
+import { anyModalOpen } from "./modal";
 
 /** WC3's upkeep bands, as the resource bar colours them. */
 const UPKEEP_COLORS = { none: "#5be05a", low: "#e0c146", high: "#e05046" };
@@ -1532,12 +1533,12 @@ export class GameHud {
     // mapViewer.syncPauseUi, and deliberately NOT set for a pause that is only a panel being
     // open — the scrim test below is what covers those.
     if (document.body.classList.contains("game-paused")) return;
-    // So is every other in-game dialog — the Allies and Messaging panels, and a script's own.
-    // The two flags above do not cover them (`game-menu-open` is the F10 panel's alone, and
-    // `game-paused` is deliberately not set for a pause that is only a panel being open); what
-    // they ALL put up is the modal scrim, and that is the thing to ask about. Without this,
-    // Enter over an open Messaging panel opens a chat line behind it.
-    if (document.querySelector(".fdf-dialog-scrim")) return;
+    // So is every other dialog — the Allies and Messaging panels, a script's own, and OpenWar3's
+    // own (the update prompt). The two flags above do not cover them (`game-menu-open` is the F10
+    // panel's alone, and `game-paused` is deliberately not set for a pause that is only a panel
+    // being open); what they ALL put up is a modal scrim, and that is the thing to ask about.
+    // Without this, Enter over an open Messaging panel opens a chat line behind it.
+    if (anyModalOpen()) return;
     // Typing into an in-game field is TYPING, not commanding. The Allies dialog's gift
     // boxes are the first of these, and without this every
     // digit of "200" also recalls a control group and every letter fires a command-card

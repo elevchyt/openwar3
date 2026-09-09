@@ -1,6 +1,6 @@
 {
   "name": "openwar3",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Browser-first, asset-compatible re-creation of the Warcraft III engine (TypeScript). Ships zero Blizzard assets.",
   "type": "module",
@@ -30,21 +30,23 @@
     "dist:linux": "pnpm build && node tools/make-icon.mjs && electron-builder --linux",
     "dist:win": "pnpm build && node tools/make-icon.mjs && electron-builder --win",
     "dist:mac": "pnpm build && node tools/make-icon.mjs && electron-builder --mac",
+    "release": "pnpm build && node tools/make-icon.mjs && electron-builder --publish always",
     "relay": "node server/relay.mjs",
     "relay-kill": "node server/relay-kill.mjs",
     "relay:test": "node tools/relay-test.mjs && node tools/loopback-test.mjs",
     "loopback:test": "node tools/loopback-test.mjs"
   },
   "dependencies": {
-    "events": "^3.3.0",
-    "gl-matrix": "^3.4.3",
-    "mdx-m3-viewer": "^5.12.0",
-    "pako": "^3.0.1",
+    "electron-updater": "^6.6.2",
     "ws": "^8.21.1"
   },
   "devDependencies": {
     "electron": "^44.3.0",
     "electron-builder": "^26.15.3",
+    "events": "^3.3.0",
+    "gl-matrix": "^3.4.3",
+    "mdx-m3-viewer": "^5.12.0",
+    "pako": "^3.0.1",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   },
@@ -68,9 +70,7 @@
       "dist/**/*",
       "electron/**/*",
       "server/**/*",
-      "package.json",
-      "!node_modules/**/*",
-      "node_modules/ws/**/*"
+      "package.json"
     ],
     "directories": {
       "output": "release",
@@ -100,7 +100,14 @@
         "dmg"
       ],
       "category": "public.app-category.games"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "elevchyt",
+        "repo": "openwar3"
+      }
+    ]
   },
   "desktopName": "openwar3.desktop"
 }

@@ -27,6 +27,16 @@ export interface GlueDialogOptions {
   onConfirm?: () => void;
   /** No, and the Escape key. */
   onCancel?: () => void;
+  /**
+   * Darken what is behind it.
+   *
+   * Off by default, because the reference leaves the screen lit: the game's own message box asks
+   * about the screen you are looking at ("delete this profile?"), and pushing that screen back
+   * would be answering a different question. On by OpenWar3's OWN modals — an update is not
+   * about the main menu, it is about the game — which is the same line src/style.css draws for
+   * the Join Server panel.
+   */
+  dimmed?: boolean;
 }
 
 /** A dialog on screen; `close()` takes it and its scrim away. */
@@ -49,7 +59,7 @@ const HIDDEN: Record<GlueDialogButtons, string[]> = {
  */
 export async function showGlueDialog(opts: GlueDialogOptions): Promise<GlueDialog> {
   const scrim = document.createElement("div");
-  scrim.className = "glue-dialog-scrim";
+  scrim.className = opts.dimmed ? "glue-dialog-scrim dimmed" : "glue-dialog-scrim";
   opts.container.appendChild(scrim);
 
   let screen: FdfScreen | null = null;

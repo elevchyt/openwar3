@@ -22,6 +22,7 @@ import { existsSync } from "node:fs";
 import { startServer } from "./server.mjs";
 import { looksLikeInstall, serveInstall } from "./install.mjs";
 import { startBeacon } from "./beacon.mjs";
+import { startUpdates } from "./updates.mjs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { readSettings, useSettingsDir, writeSettings } from "./settings.mjs";
 
@@ -92,6 +93,11 @@ function createWindow(url) {
 
 let server = null;
 let beacon = null;
+let updates = null;
+/** The last update state pushed, so a page that starts listening late is told at once — the same
+ *  rule the beacon's own list follows, and for the same reason: the check finishes long before
+ *  the game is on screen. */
+let updateState = null;
 /** The machines heard on the network, kept here so a window that opens (or reloads) is told at
  *  once rather than at the next beat. */
 let heard = [];
@@ -136,6 +142,25 @@ app.whenReady().then(async () => {
   // whoever was already there — so without this a machine that has been quietly present the
   // whole time is never mentioned.
   ipcMain.handle("ow3:servers-now", () => heard);
+
+  // Updates. Both decisions are the PLAYER's — nothing downloads until they ask and nothing
+  // installs until they ask again — so all three of these are things the game calls, never
+  // things that happen to it.
+  updates = startUpdates({
+    // Unpackaged only — see `startUpdates`. A shipped app has no way to be told this.
+    fakeVersion: app.isPackaged ? null : process.env.OPENWAR3_FAKE_UPDATE || null,
+    onChange: (next) => {
+      updateState = next;
+      for (const win of BrowserWindow.getAllWindows()) win.webContents.send("ow3:update", next);
+    },
+  });
+  ipcMain.handle("ow3:update-state", () => updateState ?? updates.state);
+  ipcMain.handle("ow3:update-download", () => { updates.download(); });
+  ipcMain.handle("ow3:update-install", () => { updates.install(); });
+  // Only a PACKAGED app has a release to compare itself against; a dev run has no
+  // `app-update.yml` and the updater says so at length. Checked at start, as asked, because a
+  // player who is about to sit down for an hour is the one who wants to know.
+  if (app.isPackaged) void updates.check();
 
   let url = DEV_URL;
   if (!url) {

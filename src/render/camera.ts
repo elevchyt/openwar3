@@ -1,4 +1,5 @@
 import { mat4, vec3 } from "gl-matrix";
+import { anyModalOpen } from "../ui/modal";
 
 // RTS fly camera (plan Phase 2 exit: "fly the camera"). Z-up to match WC3 world
 // space. Orbits a ground target: WASD/arrows pan, drag rotates, wheel zooms.
@@ -12,6 +13,11 @@ export class FlyCamera {
   private dragging = false;
 
   attach(canvas: HTMLCanvasElement): void {
+    // A modal takes the keyboard with it: with the Allies panel or an update prompt open, WASD
+    // and the arrows belong to nothing, and the world behind must sit still. Asked when the key
+    // is READ rather than when it arrives, because a panel opened with the MOUSE sends no
+    // keydown — and a W that was already held would otherwise pan the camera for as long as the
+    // panel stayed up.
     window.addEventListener("keydown", (e) => this.keys.add(e.key.toLowerCase()));
     window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
 
@@ -48,6 +54,7 @@ export class FlyCamera {
       this.target[0] += dx;
       this.target[1] += dy;
     };
+    if (anyModalOpen()) return;
     if (this.keys.has("w") || this.keys.has("arrowup")) move(fwd[0] * speed, fwd[1] * speed);
     if (this.keys.has("s") || this.keys.has("arrowdown")) move(-fwd[0] * speed, -fwd[1] * speed);
     if (this.keys.has("d") || this.keys.has("arrowright")) move(right[0] * speed, right[1] * speed);

@@ -27,10 +27,40 @@ interface NativeBridge {
   forgetInstall(): Promise<void>;
   servers(): Promise<Array<{ id: string; url: string }>>;
   onServers(fn: (peers: Array<{ id: string; url: string }>) => void): () => void;
+  update: {
+    state(): Promise<UpdateState>;
+    download(): Promise<void>;
+    install(): Promise<void>;
+    onChange(fn: (state: UpdateState) => void): () => void;
+  };
+}
+
+/** Where an update has got to (electron/updates.mjs). `idle`/`checking`/`none` need no words;
+ *  `available` and `ready` are the two the player is asked about. */
+export interface UpdateState {
+  phase: "idle" | "checking" | "none" | "available" | "downloading" | "ready" | "error";
+  version: string | null;
+  percent: number;
+  error: string | null;
 }
 
 const bridge = (): NativeBridge | null =>
   (window as unknown as { ow3native?: NativeBridge }).ow3native ?? null;
+
+/** Watch the updater. A no-op in a browser, which updates by being reloaded. Like the beacon's,
+ *  this ASKS as well as subscribing: the check finishes seconds after launch and this is called
+ *  when the menu appears, which is a minute later. */
+export function onUpdateState(fn: (state: UpdateState) => void): () => void {
+  const native = bridge();
+  if (!native?.update) return () => {};
+  let live = true;
+  const stop = native.update.onChange((state) => { if (live) fn(state); });
+  void native.update.state().then((state) => { if (live && state) fn(state); });
+  return () => { live = false; stop(); };
+}
+
+export const downloadUpdate = (): void => void bridge()?.update?.download();
+export const installUpdate = (): void => void bridge()?.update?.install();
 
 /**
  * Subscribe to the OpenWar3s this machine can hear on the network (electron/beacon.mjs). A no-op

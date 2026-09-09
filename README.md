@@ -53,6 +53,22 @@ pnpm dist:mac      # release/… .dmg
 **The AppImage does not go in your Warcraft III folder** — put it anywhere. It asks where the game
 is on first run and remembers, so the two are unrelated on disk.
 
+The desktop app **checks this repo's releases at launch** and asks, in the game's own message box,
+whether to fetch a newer version; saying yes downloads it in the background and offers to restart
+into it. Both steps are yours to refuse — nothing downloads until you say so and nothing replaces
+your build until you say so again — and declining just means the offer comes back next launch.
+
+To cut a release, tag the version in `package.json` and:
+
+```bash
+GH_TOKEN=<a token with repo scope> pnpm release
+```
+
+That builds and uploads the artifacts **plus the `latest-*.yml` beside them**, which is what the
+updater actually reads — a release with the AppImage hand-uploaded and no metadata file is
+invisible to it. macOS auto-update additionally needs an Apple developer signature; unsigned mac
+builds install by hand.
+
 ### Playing on a LAN
 
 Two machines on the same network, no cloud and no accounts. On the machine hosting:

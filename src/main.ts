@@ -20,6 +20,7 @@ import { observerSlots } from "./net/lobbySetup";
 import type { AdvancedOptions } from "./net/advancedOptions";
 import { WebSocketTransport } from "./net/transport";
 import { onServersFound } from "./assets/nativeInstall";
+import { watchForUpdates } from "./ui/updatePrompt";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
 import { applyVideoOptions } from "./render/videoQuality";
@@ -919,6 +920,10 @@ function showMenu(load: GateLoad): void {
   void showMenuBackground(load.vfs).then(() => {
     glue.setScene(menuScene);
     void showMainMenu(load.vfs);
+    // The desktop app asked GitHub for a newer version seconds after launch; this is the first
+    // moment there is a screen worth interrupting, and the game's own message box to do it in
+    // (src/ui/updatePrompt.ts). A no-op in a browser, which updates by being reloaded.
+    watchForUpdates(ui, load.vfs);
   });
 }
 
