@@ -2047,6 +2047,12 @@ const ATTACK_LEASH = 48;
 // hundred expansions; a bigger flood only ever happens when the target is unreachable,
 // where we want to bail to a best-effort short path fast rather than flood the whole map
 // (the full 8192 cap × 100 units all probing one crowded target was the ~20fps stall).
+//
+// It is the FIRST search's budget and nothing more. A chase whose 700 cells fell short of
+// a target the ground provably connects to (same region — `escalate`) is allowed the same
+// funded detour a MOVE order gets, one at a time under the same `longSearchIn` allowance:
+// without that an attack order at an enemy across a treeline walked the unit INTO the
+// trees and parked it there, while a move order to the same spot went round (developer).
 const COMBAT_EXPANSIONS = 700;
 // The SHORTEST wait between two escalated (long-budget) path searches — see SimWorld.escalate.
 // Eight steps is ~7.5 a second, which is plenty for an army finding its way round a forest
@@ -2495,7 +2501,14 @@ function altFormOf(lvl: AbilityLevel | undefined): string {
   return lvl?.summon || lvl?.dataStr[1] || "";
 }
 
-const IMMEDIATE = new Set(["AHds", "ACds", "AOwk", "Amil", "Amic"]);
+//   - IMMOLATION. `[AEim]` is an order pair too (`Order=immolation` / `Unorder=unimmolation`)
+//     with `Cast1` = 0 and no `Animnames`: the press lights the Demon Hunter where he stands,
+//     mid-swing or mid-walk, and the OFF press puts him out the same way — neither costs him
+//     a gesture, his cast point, his backswing or the order he was on. Through the generic
+//     pipeline the ON press played his "Spell" clip and dropped whatever he was doing, and
+//     its mana was charged TWICE (once at the commit, once in the toggle). See castCost for
+//     the other half: switching it OFF is free.
+const IMMEDIATE = new Set(["AHds", "ACds", "AOwk", "Amil", "Amic", "AEim"]);
 /**
  * Casts with NO WIND-UP AT ALL: pressing the button IS the cast, the way it is for the
  * IMMEDIATE list above — except that these have a TARGET, so they still walk to it.
@@ -6640,7 +6653,10 @@ export class SimWorld {
    *   DataC "Buffer Mana Required"     10         below this it snuffs itself out
    * plus `Cost1` = 25 to light it. Deactivating is free — the Ubertip says so from both
    * sides ("Drains mana until deactivated." / "Deactivate Immolation to stop draining
-   * mana."), which is why only the ON half checks affordability.
+   * mana."), which is why only the ON half is priced (`castCost`). Both halves arrive
+   * through `castImmediate` (IMMEDIATE), which has already charged the press by the time
+   * this runs — so nothing is spent HERE: the double charge that made lighting it cost 50
+   * was this method paying a second time.
    *
    * The burn itself has to follow the Demon Hunter around, so it runs on his tick rather
    * than as a placed field (which is what the old handler made it: a stationary 12-second
@@ -6655,9 +6671,8 @@ export class SimWorld {
       return;
     }
     const lvl = def.levelData[Math.min(ab.level || 1, def.levelData.length) - 1];
-    if (!lvl || u.mana < lvl.cost) return;
-    u.mana -= lvl.cost; // the activation cost; the per-second drain starts on the next tick
-    u.immolation = ab.id;
+    if (!lvl) return;
+    u.immolation = ab.id; // paid for at the press (castImmediate); the per-second drain starts on the next tick
     // `[BEim] Targetart = …\NightElf\Immolation\ImmolationTarget.mdl` — the flames he
     // wears. Timeless: it holds until the toggle goes off, so the buff carries no clock.
     this.applyBuffInternal(u, { kind: "mark", group: "immolation", timeLeft: Infinity, sourceId: u.id, ...this.buffArtOf(def) });
@@ -6699,7 +6714,10 @@ export class SimWorld {
     for (const t of this.unitsInAreaInternal(u.x, u.y, lvl.area || 160)) {
       if (t === u || t.hp <= 0 || t.invulnerable || !this.hostile(u, t) || !this.targsAdmit(t, def.targetFlags)) continue;
       this.landDamage(t, dmg, u.id, false);
-      if (def.buffSpecialArt) this.spellEffects.push({ art: def.buffSpecialArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
+      // The flare rides the burnt unit's `Specialattach` bone (`head`) and lasts exactly as
+      // long as its Stand clip runs — the model is one Stand and nothing else, so opened on
+      // a Birth it has none it showed nothing, and a flat 2.5 s held its last frame.
+      if (def.buffSpecialArt) this.spellEffects.push({ art: def.buffSpecialArt, x: t.x, y: t.y, targetId: t.id, z: 0, life: 0, anim: "stand", attach: def.buffSpecialAttach });
     }
   }
 
@@ -8504,6 +8522,23 @@ export class SimWorld {
    *  the effect has fired the channel/backswing cancel for free (animation
    *  canceling), so neither phase is locked. Stuns still interrupt regardless
    *  (interruptForStun). */
+  /** May this unit do anything with its ITEMS right now — use, drop, give, sell, pick up,
+   *  rearrange? A stunned unit (Storm Bolt, War Stomp, Bash — and the Dreadlord's Sleep,
+   *  which `recomputeStats` folds into `stunned`) and a creep asleep for the night cannot,
+   *  any more than they can cast: the game greys the whole inventory out. A corpse cannot
+   *  either. One gate for every door in — the authority calls the sim's doors directly, so
+   *  the lock lives in the sim and the card only reads it (`itemReadyError`). */
+  private itemsLocked(u: SimUnit): boolean {
+    return u.hp <= 0 || u.stunned || u.asleep;
+  }
+
+  /** `itemsLocked`, for the controller's inventory row — so the six buttons can wear their
+   *  unavailable art while the hero is stunned, exactly as the command card's do. */
+  itemsLockedFor(unitId: number): boolean {
+    const u = this.units.get(unitId);
+    return !!u && this.itemsLocked(u);
+  }
+
   private castLocked(u: SimUnit): boolean {
     // An Ancient mid-root is locked for exactly the same reason a caster mid-wind-up is: it is
     // committed to something that takes time and cannot be re-tasked out of it.
@@ -11370,7 +11405,7 @@ export class SimWorld {
     if (this.alreadyHidden(u, code)) return SILENT_REFUSAL;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     if (ab.cooldownLeft > 0) return "Cooldown"; // "Spell is not ready yet."
-    if (u.mana < lvl.cost) return "Nomana"; // "Not enough mana."
+    if (u.mana < this.castCost(u, def, lvl)) return "Nomana"; // "Not enough mana."
     // …and last, for the corpse family: nothing to raise is a refusal with a sentence of its
     // own. Last because it is the least fundamental of the four — a Necromancer short of mana
     // is short of mana whether or not there is a body — and because it is the only one of them
@@ -11669,8 +11704,9 @@ export class SimWorld {
    *  the caller has already checked it is castable and within reach. Everything in IMMEDIATE
    *  aims at nobody and passes none. */
   private castImmediate(u: SimUnit, ab: SimAbility, def: AbilityDef, lvl: AbilityLevel, targetId = 0): boolean {
-    if (ab.cooldownLeft > 0 || u.mana < lvl.cost) return false;
-    u.mana -= lvl.cost;
+    const cost = this.castCost(u, def, lvl);
+    if (ab.cooldownLeft > 0 || u.mana < cost) return false;
+    u.mana -= cost;
     ab.cooldownLeft = lvl.cooldown;
     // A stand-in PendingCast purely to describe the cast to noteSpell/resolveCast —
     // it is never stored on the unit, so nothing can interrupt or resume it.
@@ -11702,6 +11738,15 @@ export class SimWorld {
     this.noteSpell(u, pc, "finish");
     this.noteSpell(u, pc, "endcast");
     return true;
+  }
+
+  /** What THIS press costs — the rank's `Cost1`, except for the half of a toggle that is
+   *  free: Immolation's `Cost1` = 25 lights it, and "Deactivate Immolation to stop draining
+   *  mana" (its own Ubertip) costs nothing, or a Demon Hunter drained to his buffer could
+   *  never have put it out by hand. */
+  private castCost(u: SimUnit, def: AbilityDef, lvl: AbilityLevel): number {
+    if (def.code === "AEim" && u.immolation) return 0;
+    return lvl.cost;
   }
 
   /** Drive a pending cast through its lifecycle (see PendingCast): approach + face
@@ -15010,7 +15055,7 @@ export class SimWorld {
     const ax = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.x + u.atkOffX : t.x;
     const ay = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.y + u.atkOffY : t.y;
     u.repathT = 0;
-    if (!this.pathTo(u, ax, ay, COMBAT_EXPANSIONS)) return false;
+    if (!this.pathTo(u, ax, ay, COMBAT_EXPANSIONS, false, undefined, true)) return false;
     u.gaveUp = false; // moving again — not holding
     return true;
   }
@@ -15051,12 +15096,22 @@ export class SimWorld {
     const reach = this.weaponVs(u, t)?.range ?? 0; // the range of the slot THIS target calls for
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
     if (gap <= reach) return true;
+    const start = this.grid.footprintAnchor(u.x, u.y, u.footprint);
+    const goal = this.grid.footprintAnchor(t.x, t.y, u.footprint);
+    // The ground's own answer first. The region labels are the static connectivity of the
+    // map for this domain and footprint, so a target whose ground is OUR ground is reachable
+    // whatever a 700-cell probe says about it — the probe was built to fail fast at a
+    // walled-off target, and it failed just as fast at one across a treeline, which is how
+    // an ordered attack was written off as unreachable and parked at the trunks while a
+    // move order to the same spot went round. The probe below keeps its old job for the
+    // targets the labels cannot vouch for (a hall whose footprint swallows the goal cell).
+    const domain = pathDomain(u);
+    const startRegion = this.grid.regionAt(start[0], start[1], domain, u.footprint);
+    if (startRegion >= 0 && this.grid.regionNear(goal[0], goal[1], domain, u.footprint, 2) === startRegion) return true;
     const wasReserved = u.hasReservation;
     this.unsettle(u);
-    const start = this.grid.footprintAnchor(u.x, u.y, u.footprint);
     const blocked = this.clearanceBlocker(u, start);
-    const goal = this.grid.footprintAnchor(t.x, t.y, u.footprint);
-    const cells = findPath(this.grid, start, goal, blocked, COMBAT_EXPANSIONS, pathDomain(u), undefined, u.footprint);
+    const cells = findPath(this.grid, start, goal, blocked, COMBAT_EXPANSIONS, domain, undefined, u.footprint);
     if (wasReserved) this.settle(u);
     if (!cells || cells.length <= 1) return false;
     const [ecx, ecy] = cells[cells.length - 1];
@@ -16263,7 +16318,7 @@ export class SimWorld {
       if (this.canReachToAttack(u, t)) this.chasePoint(u, t.x, t.y);
       return;
     }
-    if (this.pathTo(u, sx, sy, COMBAT_EXPANSIONS)) return;
+    if (this.pathTo(u, sx, sy, COMBAT_EXPANSIONS, false, undefined, true)) return;
     // The slot was unreachable. Only walk at the enemy itself if we can genuinely GET to
     // it — a best-effort path exists toward anything, so an unconditional fallback would
     // march a unit ordered at a walled-off enemy into the wall and then shuffle it along
@@ -16340,8 +16395,9 @@ export class SimWorld {
     // blocked/unreachable chase gives up after a small local flood instead of the full
     // 8192-cell map flood (issue #24 perf: 100 melee all probing paths to one crowded
     // target flooded the frame to ~20fps). A best-effort short path is fine here —
-    // chasePoint re-runs as the target moves anyway.
-    return this.pathTo(u, x, y, COMBAT_EXPANSIONS);
+    // chasePoint re-runs as the target moves anyway — and when the ground provably goes
+    // round (same region) the detour is bought like a move order's (`mayEscalate`).
+    return this.pathTo(u, x, y, COMBAT_EXPANSIONS, false, undefined, true);
   }
 
   // --- resource gathering ---------------------------------------------------
@@ -18346,7 +18402,7 @@ export class SimWorld {
   issueGetItem(unitId: number, itemId: number): boolean {
     const u = this.units.get(unitId);
     const it = this.items.get(itemId);
-    if (!u || !it || !u.inventory.length || this.castLocked(u)) return false;
+    if (!u || !it || !u.inventory.length || this.castLocked(u) || this.itemsLocked(u)) return false; // itemsLocked: stunned or asleep
     u.getItemId = itemId;
     u.pendingGive = null;
     u.pendingSell = null;
@@ -18373,7 +18429,7 @@ export class SimWorld {
   issueSellItem(unitId: number, slot: number, shopId: number): boolean {
     const u = this.units.get(unitId);
     const shop = this.units.get(shopId);
-    if (!u || !shop || !u.inventory[slot] || !this.canPawnAt(shop) || this.castLocked(u)) return false;
+    if (!u || !shop || !u.inventory[slot] || !this.canPawnAt(shop) || this.castLocked(u) || this.itemsLocked(u)) return false;
     if (!this.shopServes(shopId, u.owner)) return false; // an enemy's shop takes nothing of yours either
     const def = this.itemReg?.get(u.inventory[slot]!.itemId);
     if (!def?.pawnable) return false;
@@ -18429,7 +18485,7 @@ export class SimWorld {
   issueGiveItem(fromId: number, slot: number, toId: number): boolean {
     const u = this.units.get(fromId);
     const to = this.units.get(toId);
-    if (!u || !to || !u.inventory[slot] || !to.inventory.length || this.castLocked(u)) return false;
+    if (!u || !to || !u.inventory[slot] || !to.inventory.length || this.castLocked(u) || this.itemsLocked(u)) return false;
     u.pendingGive = { toId, slot };
     u.getItemId = 0;
     u.order = "getitem";
@@ -18578,6 +18634,7 @@ export class SimWorld {
   dropItem(unitId: number, slot: number, x: number, y: number): boolean {
     const u = this.units.get(unitId);
     if (!u || slot < 0 || slot >= u.inventory.length) return false;
+    if (this.itemsLocked(u)) return false; // stunned or asleep: the inventory is greyed (itemsLocked)
     const held = u.inventory[slot];
     if (!held) return false;
     if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE + u.radius) {
@@ -18607,6 +18664,7 @@ export class SimWorld {
     // entity behind them (see initIllusion), so letting a copy move one would either
     // duplicate the original's gear or hand out an item that does not exist.
     if (u.isIllusion) return;
+    if (this.itemsLocked(u)) return; // a walk-and-drop that arrives stunned drops nothing (yet)
     const held = u.inventory[slot];
     if (!held) return;
     u.inventory[slot] = null;
@@ -18621,6 +18679,7 @@ export class SimWorld {
     const u = this.units.get(unitId);
     if (u?.isIllusion) return false; // a copy's inventory is a picture — it cannot be rearranged
     if (!u || a === b || a < 0 || b < 0 || a >= u.inventory.length || b >= u.inventory.length) return false;
+    if (this.itemsLocked(u)) return false; // …nor a stunned or sleeping one's (itemsLocked)
     const tmp = u.inventory[a];
     u.inventory[a] = u.inventory[b];
     u.inventory[b] = tmp;
@@ -18642,6 +18701,8 @@ export class SimWorld {
     // this is the door the AUTHORITY calls (it does not ask the error first), so a command off
     // the wire would otherwise walk straight past the lock the order path already has.
     if (u.portalLeft > 0) return false;
+    // …nor a stunned or sleeping unit, for the same reason at the same door (itemsLocked).
+    if (this.itemsLocked(u)) return false;
     const held = u.inventory[slot];
     if (!held || held.cooldownLeft > 0) return false;
     const def = this.itemReg.get(held.itemId);
@@ -19023,6 +19084,9 @@ export class SimWorld {
     // for a morphing unit — WC3 greys the button rather than saying anything, so there is no
     // line to borrow. `useItem` refuses it too; this is the half that lets the CARD know.
     if (u.portalLeft > 0) return SILENT_REFUSAL;
+    // Stunned or asleep: the same silence the command card's spells get (castUseError) — the
+    // game greys the button rather than saying anything, so there is no line to borrow.
+    if (this.itemsLocked(u)) return SILENT_REFUSAL;
     if (held.cooldownLeft > 0) return "Itemcooldown"; // "This item is cooling down."
     const def = this.itemReg.get(held.itemId);
     if (!def?.usable) return "Cantuseitem";
@@ -20582,6 +20646,11 @@ export class SimWorld {
     maxExpansions?: number,
     avoidMovers = false,
     approach?: { hx: number; hy: number },
+    // May the search be ESCALATED past `maxExpansions` when the cheap pass fell short of a
+    // goal the ground connects to? A caller with no budget of its own always may; a combat
+    // chase names its 700 AND says yes, so the cap governs the common case (the target is
+    // right there) without barring the detour round a forest. See COMBAT_EXPANSIONS.
+    mayEscalate = maxExpansions === undefined,
   ): boolean {
     // A re-path at the SAME goal inherits the approach. Every reroute (blocked, stuck,
     // repath-poll) re-aims at chaseX/chaseY without knowing what is standing there, and
@@ -20704,7 +20773,7 @@ export class SimWorld {
         if (shared) cells = shared;
       }
     }
-    if (maxExpansions === undefined && !crowdWalls && this.escalate(u, cells, start, goal, domain, ring)) {
+    if (mayEscalate && !crowdWalls && this.escalate(u, cells, start, goal, domain, ring)) {
       if (PathSlicing.enabled) {
         // The detour is paid for across sim steps (pumpPathJob), not here. The unit keeps the
         // floor's best-effort route for now — it walks toward the obstacle exactly as it did

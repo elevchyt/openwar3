@@ -58,6 +58,7 @@ import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { AI_SCRIPT_FOR } from "../ai";
 import { slotLabel } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
+import { animPropsFor } from "./unitAnims";
 import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { perfLog } from "../dev/perfLog";
@@ -1185,6 +1186,9 @@ export class MapViewerScene {
   // Animated portrait of the selected unit (own small viewer + canvas).
   private portraitViewer: ModelViewerScene | null = null;
   private portraitFor: number | null = null;
+  /** The FORM the bust was loaded for (SelectionInfo.altModel) — a morph keeps the unit id,
+   *  so this is what says the bear's bust must replace the elf's. */
+  private portraitAlt = false;
   private portraitLoading = false;
   // Background portrait-model warming (kills the first-select spike): types whose
   // bust is already parsed/cached, the pending decode queue, and the idle-drain guard.
@@ -2071,9 +2075,11 @@ export class MapViewerScene {
     // watcher's is built from a viewpoint that sees the whole map (RtsController.seatObservers).
     // A client seating them would only be paying for fog grids nobody reads.
     if (this.observers.length && !this.rts!.frozenClient) this.rts!.seatObservers(this.observers.map((o) => o.id));
-    // The lobby's colours (`SlotConfig.color`, a LAN player's pick off their row) go through
-    // the same door a map's `SetPlayerColor` does, before a unit exists to wear the old one.
+    // The lobby's colours (`SlotConfig.color`, a player's pick off their row) go through the
+    // same door a map's `SetPlayerColor` does, before a unit exists to wear the old one.
     // Only a seat whose colour is not its own index says anything — that index is the default.
+    // A map's config() then writes that default back over it, so the pick is applied a
+    // second time between config() and main() (runMapScript's lobby → Runtime.applyLobby).
     for (const s of config.slots) if (s.color !== undefined && s.color !== s.id) this.rts!.setPlayerColor(s.id, s.color);
     // Seed the alliance matrix from those teams (7.22) BEFORE the map script runs, so the
     // script's own SetPlayerAlliance calls land on top of it rather than under it — and seed
@@ -3024,6 +3030,9 @@ export class MapViewerScene {
           controller: MAP_CONTROL_FOR[s.controller],
           team: s.team,
           startLocation: -1, // config()'s SetPlayerStartLocation already placed each slot
+          // The lobby's colour, re-applied AFTER config() has written the map's default over
+          // the one `setPlayerColor` below already gave the controller (see LobbySlot.color).
+          ...(s.color !== undefined && s.color !== s.id ? { color: s.color } : {}),
           // …and what the seat is CALLED, which only the lobby knows. `GetPlayerName` answered
           // a bare "Player N" for every slot, so blizzard.j's own victory broadcast — the
           // melee dialog's "%s was victorious." — never named the computer that had just won
@@ -7114,7 +7123,8 @@ export class MapViewerScene {
       unloadCargo: (hostId, passengerId) => !!this.rts?.unloadCargo(hostId, passengerId),
       inventory: () =>
         (this.rts?.inventorySlots() ?? []).map((s) =>
-          s ? { icon: s.icon ? this.blpIcon(s.icon) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable, pawnable: s.pawnable } : null,
+          // An unavailable pocket wears the icon's DIS* twin, never a tint (see disabledArt).
+          s ? { icon: s.icon ? this.inventoryIcon(s.icon, s.disabled) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable, pawnable: s.pawnable, disabled: s.disabled } : null,
         ),
       useInventory: (slot) => {
         this.rts?.useInventorySlot(slot);
@@ -7641,7 +7651,7 @@ export class MapViewerScene {
       }
       return;
     }
-    if (sel.id === this.portraitFor || this.portraitLoading || !sel.model) return;
+    if ((sel.id === this.portraitFor && sel.altModel === this.portraitAlt) || this.portraitLoading || !sel.model) return;
     // The sound-set of the unit now in the portrait — a voice line with this label
     // drives the bust's talk animation (see the onVoiceStart hook in the ctor).
     this.portraitLabel = this.registry.get(sel.typeId)?.soundSet ?? "";
@@ -7673,10 +7683,14 @@ export class MapViewerScene {
     // The Paladin's authored portrait camera crops the right of his face — pan
     // the bust camera a bit left so the whole face shows.
     const panLeft = /paladin/i.test(sel.model) ? 0.14 : 0;
+    // The half of a two-form bust this unit is in right now (ModelViewerScene.load).
+    const alt = sel.altModel;
+    const props = animPropsFor(this.registry.get(sel.typeId), alt) ?? [];
     this.portraitViewer
-      .load(path, this.rts.unitColor(sel.owner), true, panLeft)
+      .load(path, this.rts.unitColor(sel.owner), true, panLeft, props)
       .then(() => {
         this.portraitFor = id;
+        this.portraitAlt = alt;
         this.portraitViewer!.start();
         // The selection voice ("What") likely started before this bust finished
         // loading — its onVoiceStart no-op'd because the instance wasn't ready yet.
@@ -8366,7 +8380,10 @@ export class MapViewerScene {
 
   /** Upgrades this building can research (`Researches`). The button shows the NEXT level:
    *  a Blacksmith that has Iron Forged Swords offers Steel, with its own name, icon, cost
-   *  and prerequisite (a Keep). Once every level is in, the button drops off the card. */
+   *  and prerequisite (a Keep). Once every level is in, the button drops off the card — and
+   *  so does it WHILE a level is being researched anywhere: the game empties that slot until
+   *  the research lands, and only then shows the next rank (greyed or not on its own terms).
+   *  Steel is never queued behind Iron (developer, against the real client). */
   private pushResearchButtons(sel: SelectionInfo, out: CommandButton[]): void {
     if (sel.owner !== this.localPlayer) return; // you don't research at someone else's shop
     const world = this.rts!.simWorld;
@@ -8375,20 +8392,16 @@ export class MapViewerScene {
     const researches = this.tech.researches(sel.typeId);
     if (!researches.length) return; // nothing this building can research — don't sweep the units
     // An upgrade belongs to the PLAYER, not to the building paying for it, so a Blacksmith
-    // already on Iron Forged Swords takes the button off every OTHER Blacksmith's card until
-    // it lands (WC3 greys it out there). Read once for the whole card — it is one pass over
-    // the units, and the loop below asks it per button.
+    // already on Iron Forged Swords takes the button off EVERY Blacksmith's card — its own
+    // included — until it lands. Read once for the whole card — it is one pass over the
+    // units, and the loop below asks it per button.
     const busy = world.playerResearching(this.localPlayer);
     for (const upId of researches) {
       const d = this.upgrades.get(upId);
       if (!d) continue;
+      if (busy.has(upId)) continue; // in progress somewhere of ours — the slot stays EMPTY till it lands
       const have = state?.researchLevel(this.localPlayer, upId) ?? 0;
-      // Something already in this building's queue counts as done for the card's purposes,
-      // so you can't queue Steel Forged Swords twice.
-      const queued = world.researchingLevel(sel.id, upId);
-      const elsewhere = busy.get(upId);
-      const heldElsewhere = !!elsewhere && elsewhere.buildingId !== sel.id;
-      const next = Math.max(have, queued) + 1;
+      const next = have + 1;
       if (next > d.maxLevel) continue; // fully researched — the button is gone, as in WC3
       const cost = this.upgrades.cost(upId, next);
       const tier = next - 1; // requirement tier is 0-based on the LEVEL for an upgrade
@@ -8403,9 +8416,8 @@ export class MapViewerScene {
         desc: this.tipText(this.upgrades.uberTip(upId, next)) + this.requirementLine(upId, tier),
         gold: cost.gold, lumber: cost.lumber, food: 0,
         ...this.researchSlot(upId, d),
-        // Inert for a missing requirement, and inert for the same upgrade already running at
-        // another of the player's buildings — a hard NO with no line to say it either way.
-        disabled: !metTech || heldElsewhere,
+        // Inert for a missing requirement — a hard NO with no line to say it.
+        disabled: !metTech,
         cantAfford: !afford, // affordable-later → still clickable, still answered
       }));
     }
@@ -9822,7 +9834,7 @@ export class MapViewerScene {
     const d = this.upgrades.get(upgradeId);
     if (d && state) {
       const have = state.researchLevel(this.localPlayer, upgradeId);
-      const next = Math.max(have, world.researchingLevel(buildingId, upgradeId)) + 1;
+      const next = have + 1; // never one past a queued rank — nothing is queued behind a running research
       if (next <= d.maxLevel) {
         const cost = this.upgrades.cost(upgradeId, next);
         if (!this.canAfford(cost.gold, cost.lumber)) return;
@@ -10276,6 +10288,13 @@ export class MapViewerScene {
    *
    *  Null for the six icons in 1.30.4 that ship no twin — the caller falls back to
    *  desaturating the live art, which is the closest we can get without one. */
+  /** A pocket's icon: the item's own, or its DIS* twin while the carrier is stunned or asleep
+   *  (HudInvSlot.disabled) — the same swap `cmd()` makes, through the same `disabledArt`. */
+  private inventoryIcon(path: string, disabled: boolean): string | null {
+    const live = this.blpIcon(path);
+    return live && disabled ? (this.disabledArt(live) ?? live) : live;
+  }
+
   private disabledArt(iconUrl: string): string | null {
     const path = this.iconSource.get(iconUrl);
     if (!path) return null;
@@ -10846,7 +10865,7 @@ export class MapViewerScene {
       this.syncPauseUi();
       const wdt = this.paused ? 0 : dt;
       this.updateCamera(dt);
-      this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
+      this.metrics.frame(dt, this.rts?.unitCount() ?? 0, this.rts?.pingMs());
       this.hud?.frame(dt);
       this.updateClock(wdt);
       this.updatePortrait();

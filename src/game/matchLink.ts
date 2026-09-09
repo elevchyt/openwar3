@@ -225,6 +225,34 @@ export function isPauseStateMessage(data: unknown): data is PauseStateMessage {
   return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "pause";
 }
 
+/**
+ * A round-trip probe, and its echo. Every peer broadcasts a `ping` once a second carrying its
+ * OWN clock; whoever hears it answers `pong` with that clock untouched, addressed back; the
+ * sender reads the difference. What the metrics strip prints as "ping" is the WORST of the
+ * links this machine is on — on a client that is the host (and anybody else in the room), on
+ * the host the slowest client — because the slowest link is the one every order waits for.
+ * `at` is never read on the echoing side beyond being copied back, so a peer that lies in it
+ * can only lie to itself.
+ */
+export interface PingMessage {
+  k: "ping";
+  at: number;
+}
+export interface PongMessage {
+  k: "pong";
+  at: number;
+}
+export function isPingMessage(data: unknown): data is PingMessage {
+  return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "ping" && typeof (data as { at?: unknown }).at === "number";
+}
+export function isPongMessage(data: unknown): data is PongMessage {
+  return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "pong" && typeof (data as { at?: unknown }).at === "number";
+}
+/** Seconds between two probes. One a second is what the game's own F12 dialog refreshes at. */
+const PING_EVERY = 1;
+/** A monotonic millisecond clock, in the browser and in the headless tests alike. */
+const nowMs = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
+
 /** One seated slot: the player number and, for a human, the relay peer sitting in it. Same
  *  shape `CommandRouter` takes, and for the same reason — it comes straight off `StartMatch`. */
 export interface LinkSeat {
@@ -373,6 +401,26 @@ export class MatchLink {
   /** Client side: the host's ruling on the pause. Take it as given. */
   onPauseRuled: (msg: PauseStateMessage) => void = () => {};
 
+  /** The last measured round trip to each peer, in ms — see PingMessage. */
+  private readonly rtts = new Map<number, number>();
+  private pingAccum = PING_EVERY; // the first probe goes out on the first tick
+
+  /** Send the periodic probe. Called every sim step on host and client alike — a link is
+   *  measured from both ends, since both are waiting on it. */
+  tickPing(dt: number): void {
+    this.pingAccum += dt;
+    if (this.pingAccum < PING_EVERY) return;
+    this.pingAccum = 0;
+    this.channel.send({ k: "ping", at: nowMs() } satisfies PingMessage);
+  }
+
+  /** The slowest link this machine is on, in ms, or null before the first echo has come home. */
+  pingMs(): number | null {
+    let worst = -1;
+    for (const rtt of this.rtts.values()) if (rtt > worst) worst = rtt;
+    return worst < 0 ? null : worst;
+  }
+
   /** Host side: tell a peer its command was refused, and with which `[Errors]` voice. */
   sendRefusal(peer: number, key: string): void {
     this.channel.send({ k: "ref", key } satisfies RefusalMessage, peer);
@@ -428,6 +476,13 @@ export class MatchLink {
       }
       // Client side: it IS stopped (or running again), and here is who did it.
       else if (isPauseStateMessage(data)) this.onPauseRuled(data);
+      // A probe: echo the sender's clock straight back to the sender. Theirs, not ours.
+      else if (isPingMessage(data)) this.channel.send({ k: "pong", at: data.at } satisfies PongMessage, from);
+      // Our probe come home: the clock it carries is the one we stamped.
+      else if (isPongMessage(data)) {
+        const rtt = nowMs() - data.at;
+        if (Number.isFinite(rtt) && rtt >= 0) this.rtts.set(from, rtt);
+      }
       else previous(from, data);
     };
     // A returning peer is owed the world it missed, and owed it NOW rather than whenever the

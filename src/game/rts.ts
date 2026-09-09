@@ -157,6 +157,10 @@ export interface SelectionInfo {
   intelligenceBonus: number;
   primaryAttr: PrimaryAttribute; // None for non-heroes
   model: string;
+  /** Wearing the ALTERNATE half of its model (SimUnit.altModel): a bear-form Druid of the
+   *  Claw, a burrowed Crypt Fiend, a rooted Ancient. The portrait reads it to show the same
+   *  half the field does — the bust is keyed on the unit, and a morph keeps the unit. */
+  altModel: boolean;
   isWorker: boolean;
   isBuilding: boolean;
   underConstruction: boolean;
@@ -3516,6 +3520,14 @@ export class RtsController {
     // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
     // transitions ease instead of hard-cutting (issue #8).
     instance.setBlendTime?.(def.animBlend);
+    // The TYPE's own size (UnitUI `modelScale`), stated on the body HERE. A map-placed unit
+    // had it — mdx-m3-viewer's w3x `Unit` calls `uniformScale(row.modelScale)` when it builds
+    // the .doo instance — but every body WE mint (trained, bought, script-spawned) was handed
+    // to the entry with `curScale` already equal to `baseScale`, so the render loop's
+    // "re-apply when they differ" never fired and the instance kept the viewer's default 1.
+    // A creep-camp Ogre Mauler at its 1.6 stood beside a 1.0 one bought from the Mercenary
+    // Camp; every type whose scale is not exactly 1 was wrong the same way.
+    instance.setUniformScale(def.modelScale || 1);
     const entry: Entry = {
       simId,
       unit: { instance, state: WidgetState.IDLE },
@@ -3615,6 +3627,7 @@ export class RtsController {
     entry.modelPath = def.model;
     entry.baseScale = def.modelScale || 1;
     entry.curScale = def.modelScale || 1;
+    entry.unit.instance.setUniformScale(entry.baseScale); // a retype onto a shared model keeps the body — resize it (attachInstance's note)
     entry.selRadius = (def.selScale || 1) * SEL_RADIUS_PER_SCALE;
     entry.moveHeight = lift(def.moveHeight);
     // The new type's tint, STATED rather than left undefined — a morph between two types that
@@ -5697,16 +5710,20 @@ export class RtsController {
 
   /** The primary selected hero's 6 inventory slots for the HUD (null = empty). An
    *  empty array means the selection has no inventory (not a hero). */
-  inventorySlots(): Array<{ itemId: string; icon: string; name: string; desc: string; charges: number; cooldownLeft: number; cooldownFrac: number; usable: boolean; pawnable: boolean } | null> {
+  inventorySlots(): Array<{ itemId: string; icon: string; name: string; desc: string; charges: number; cooldownLeft: number; cooldownFrac: number; usable: boolean; pawnable: boolean; disabled: boolean } | null> {
     const id = this.primary;
     const u = id !== null ? this.sim.units.get(id) : undefined;
     if (!u || !u.inventory.length) return [];
+    // Stunned or asleep, the whole row is unavailable — the sim's own lock (itemsLocked), read
+    // once for the six, so the buttons wear their DIS* art exactly as the command card's do.
+    const disabled = this.sim.itemsLockedFor(u.id);
     return u.inventory.map((held) => {
       if (!held) return null;
       const def = this.items.get(held.itemId);
       const total = def ? this.itemActiveCooldown(def) : 0;
       return {
         itemId: held.itemId,
+        disabled,
         icon: def?.icon ?? "",
         name: def?.name ?? held.itemId,
         // The item's own Ubertip, with its <ID,Field> value references filled in — the
@@ -5816,6 +5833,7 @@ export class RtsController {
   moveInventorySlot(slot: number): void {
     const id = this.primary;
     if (id === null || !this.controls(id) || !this.sim.units.get(id)?.inventory[slot]) return;
+    if (this.sim.itemsLockedFor(id)) return; // stunned or asleep: nothing in the pockets may move
     this.armedItem = { slot, mode: "move" };
     this.orderMode = "item";
   }
@@ -5902,7 +5920,7 @@ export class RtsController {
       id: -2000 - itemId, // synthetic, negative — never clashes with a unit/mine id
       typeId: it.itemId, race: "", name: def?.name || it.itemId, owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: false, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, isHero: false, isIllusion: false, altModel: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -5929,7 +5947,7 @@ export class RtsController {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: true, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, isHero: false, isIllusion: false, altModel: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -6123,6 +6141,7 @@ export class RtsController {
       intelligenceBonus: u.isHero ? u.bonusInt : 0,
       primaryAttr: def?.primaryAttr ?? PrimaryAttribute.None,
       model: e.modelPath,
+      altModel: u.altModel,
       isWorker: !!u.worker,
       isBuilding: !!b,
       underConstruction: status && !!b && b.constructionLeft > 0,
@@ -7126,7 +7145,15 @@ export class RtsController {
         console.info("[sync] divergence checking stopped: a command has been applied, so the local sim and the authority are no longer running the same inputs (docs/multiplayer.md F5).");
       }
     }
+    link.tickPing(dt);
     this.matchLinkHeartbeat(link, drift);
+  }
+
+  /** The match's ping for the metrics strip: the slowest link this machine is on, null before
+   *  the first echo, and `undefined` in single player — where there is no wire to measure and
+   *  the strip prints no ping at all. */
+  pingMs(): number | null | undefined {
+    return this.matchLink ? this.matchLink.pingMs() : undefined;
   }
 
   /** The one-time notice that the drift comparison has ended (item F5) has been printed. */
@@ -8279,6 +8306,7 @@ export class RtsController {
           z: this.heightAt(m.x, m.y),
           radius: m.radius,
           text: crew.cap > 0 ? `${crew.count}/${crew.cap}` : String(crew.count),
+          full: crew.cap > 0 && crew.count >= crew.cap,
         });
       }
     }

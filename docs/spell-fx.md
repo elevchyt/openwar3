@@ -202,6 +202,18 @@ in the world has to go with it. There are two shapes, and they need different te
 Not channelled, despite looking it: Flame Strike, Volcano, Locust Swarm, Bladestorm (the
 Blademaster keeps moving), Immolation, Cluster Rockets.
 
+**Immolation is a toggle with two models on one buff row**, and nothing on the ability row at
+all. `[AEim]` carries only its two icons and an order pair (`immolation`/`unimmolation`),
+`Cast1` 0 and no `Animnames`, so the press is the whole cast (`IMMEDIATE` in world.ts): no
+"Spell" clip, no cast point, no backswing, and the Demon Hunter keeps the order he was on.
+`Cost1` = 25 lights it, once; the OFF press is free (`castCost`). The art is `[BEim]`'s:
+`Targetart = ImmolationTarget.mdl` is the flames he wears for as long as it is lit (Birth →
+Stand → Death through the ordinary buff-art lifecycle), and `Specialart =
+ImmolationDamage.mdl` with `Specialattach = head` is the flare stamped on each unit it burns
+— one Stand's worth (`life` 0, `anim` "stand"), parented to that unit's head bone. The
+`Specialattach` of a BUFF row is `AbilityDef.buffSpecialAttach`; the ability row's own
+`Specialattach` is a different field for a different model.
+
 ## See also
 
 * [`wc3-data-formats.md`](./wc3-data-formats.md) — where every table lives

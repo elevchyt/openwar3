@@ -265,6 +265,60 @@ console.log("and a UNIT sent past a treeline walks round it");
   check(`and never gave the order up (order ${u.order})`, u.order !== "idle" || u.x > goalX - 200);
 }
 
+console.log("…and a unit ordered to ATTACK past it walks round it the same way");
+{
+  // The same wall, and an enemy standing where the move above was aimed. An ATTACK order
+  // walked into the trunks instead: its chase searched with COMBAT_EXPANSIONS (700) and a
+  // budgeted search was barred from the funded detour a move order buys, so the best-effort
+  // path ended at the trees, the stall watchdog's 700-cell reachability probe agreed the
+  // target was "unreachable", and the unit parked facing it (developer). A chase may now
+  // escalate exactly as a move does, and reachability asks the region labels first.
+  const SIM_DT = 1 / 60;
+  const WALL = 120;
+  const flags = blank();
+  for (let y = 0; y < 150; y++) for (let k = 0; k < 4; k++) flags[y * W + WALL + k] = PathingFlag.Unwalkable;
+  const world = new SimWorld(grid(flags), 1);
+  const weapon = () => ({
+    enabled: true, targets: ["ground", "air", "structure"], ranged: false,
+    damage: 12, baseDamage: 12, dice: 1, baseDice: 1, sides: 6,
+    cooldown: 1.2, baseCooldown: 1.2, range: 90, baseRange: 90, rangeBuffer: 250,
+    damagePoint: 0.4, baseDamagePoint: 0.4, backswing: 0.3, baseBackswing: 0.3,
+    spillDist: 0, spillRadius: 0, baseSpillDist: 0, baseSpillRadius: 0, damageLoss: 0,
+    acquire: 500, attackType: "normal", missileArt: "", missileSpeed: 0,
+    launchX: 0, launchY: 0, launchZ: 0, impactZ: 0,
+  });
+  const footman = (id, owner, x, y) => ({
+    id, owner, team: owner, typeId: "hfoo", x, y, facing: 0,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 6000, sightNight: 6000,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [weapon()], oldWeapons: [weapon()],
+  });
+  world.add(footman(1, 0, 1000, 500));
+  const goalX = (WALL + 60) * 32;
+  world.add(footman(2, 1, goalX, 500)); // the enemy, the other side of the trunks
+  world.issueHold(2); // it stays put — this is the attacker's walk being measured
+  check("the attack order is accepted", world.issueAttack(1, 2, false, true));
+  let highest = 0;
+  let t = 0;
+  for (let i = 0; i < Math.round(90 / SIM_DT); i++) {
+    world.tick(SIM_DT);
+    t += SIM_DT;
+    const u = world.units.get(1);
+    highest = Math.max(highest, u.y);
+    if (u.x > goalX - 200) break;
+  }
+  const u = world.units.get(1);
+  check(`it reached its target (x ${u.x.toFixed(0)} of ${goalX}, in ${t.toFixed(1)}s)`, u.x > goalX - 200);
+  check(`by walking round the north end of the trees (reached y ${highest.toFixed(0)})`, highest > 150 * 32);
+  check(`and is still on the attack (order ${u.order})`, u.order === "attack");
+}
+
 console.log("…and a GROUP does, on a big map, past an obstacle sized for one");
 {
   // The report, end to end and at the size it was reported at. A 192x192 map's grid with a

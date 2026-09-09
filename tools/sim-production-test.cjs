@@ -113,20 +113,25 @@ console.log("\n-- an upgrade is the PLAYER's, so only one building may be on it 
 }
 
 {
-  // Chaining levels in ONE building is untouched: WC3 lets a Blacksmith queue Iron and Steel
-  // back to back, and each is priced from its own level (100, then 175).
+  // Chaining levels in ONE building is refused too: the game empties the button while a rank
+  // is in research, so Steel is never queued behind Iron — the SAME Barracks is shut out of
+  // the ladder until its own research lands, and then the next rank is priced from its own
+  // level (100, then 175).
   newWorld();
   world.initStash(0, 1000, 1000);
   const a = building("hbar", 0);
   const b = building("hbar", 0);
   check("level 1 at the first Barracks", research(0, a, "Rhme"), true);
-  check("level 2 behind it, same Barracks", research(0, a, "Rhme"), true);
-  check("…both queued, at 1 then 2", a.building.queue.map((j) => j.level), [1, 2]);
-  check("…and priced per level", world.stashOf(0).gold, 1000 - 100 - 175);
+  check("level 2 behind it, same Barracks, is refused", research(0, a, "Rhme"), false);
+  check("…only the one queued", a.building.queue.map((j) => j.level), [1]);
+  check("…and only the one charged", world.stashOf(0).gold, 1000 - 100);
   check("the other Barracks is shut out of the whole ladder", research(0, b, "Rhme"), false);
-  // …and the moment the first one finishes, the ladder is anybody's again.
+  // …and the moment the first one finishes, the ladder is anybody's again — at the next rank.
   a.building.queue.length = 0;
-  check("with the queue empty the other Barracks may take it", research(0, b, "Rhme"), true);
+  world.tech.setResearchLevel(0, "Rhme", 1);
+  check("with the research landed the other Barracks may take level 2", research(0, b, "Rhme"), true);
+  check("…queued at 2", b.building.queue.map((j) => j.level), [2]);
+  check("…and priced from its own level", world.stashOf(0).gold, 1000 - 100 - 175);
 }
 
 console.log("\n-- a train order charges AS IT GOES, which is what makes the spread fair ----------");

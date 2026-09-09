@@ -91,6 +91,10 @@ export interface CrewLabelSpec {
   z: number;
   radius: number; // the mine's world radius — sets how far up its body the label sits
   text: string;
+  /** The crew is at its cap (`5/5`). The game prints a full crew in GOLD and a short one in
+   *  white — the one glance that says "this mine is saturated, send the next worker to the
+   *  trees" — so the label carries the fact and the stylesheet carries the colour. */
+  full: boolean;
 }
 
 /** Where the hover slab floats and what it says. */
@@ -301,7 +305,7 @@ function makeHpBar(layer: HTMLElement): HpBar {
  *  `--hud-tooltip-fill`, lifted to `:root` by ui/hud.ts applyWidgetSkin). */
 interface CrewLabel {
   root: HTMLDivElement;
-  last: { text: string; left: number; top: number; hidden: boolean };
+  last: { text: string; full: boolean; left: number; top: number; hidden: boolean };
 }
 
 function makeCrewLabel(layer: HTMLElement): CrewLabel {
@@ -309,7 +313,7 @@ function makeCrewLabel(layer: HTMLElement): CrewLabel {
   root.className = "unit-crew-count";
   root.hidden = true;
   layer.appendChild(root);
-  return { root, last: { text: "\0", left: NaN, top: NaN, hidden: true } };
+  return { root, last: { text: "\0", full: false, left: NaN, top: NaN, hidden: true } };
 }
 
 /** The hover slab element, into the same world layer as the HP bars so its position
@@ -684,6 +688,10 @@ export class WorldOverlays {
       if (last.text !== s.text) {
         last.text = s.text;
         label.root.textContent = s.text;
+      }
+      if (last.full !== s.full) {
+        last.full = s.full;
+        label.root.classList.toggle("full", s.full);
       }
       if (last.hidden) {
         last.hidden = false;

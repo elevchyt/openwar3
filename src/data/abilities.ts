@@ -249,6 +249,10 @@ export interface AbilityDef {
    *  comment on `[BNlm]` says the Lava Spawn's "is used when the lava monster splits".
    *  Never treat it as a generic death/unsummon slot. */
   buffSpecialArt: string;
+  /** …and where on the target it hangs: the buff row's `Specialattach` tokens (`[BEim]
+   *  Specialattach = head` puts Immolation's flare on the burnt unit's head), the same shape
+   *  as `targetAttach`. Empty = the model's origin. */
+  buffSpecialAttach: string[];
   /** The PERSISTENT models worn by a unit carrying this ability's buff (buffid1),
    *  each with its attachment point: Divine Shield's bubble, Banish's ethereal glow,
    *  the small per-unit aura swirl (GeneralAuraTarget), Bloodlust's two hand flames.
@@ -1042,6 +1046,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       buffArt: buffFx[0]?.path ?? "",
       buffEffectArt: mdlPath(buffField(func, str(r, "buffid1"), "Effectart")),
       buffSpecialArt: mdlPath(buffField(func, str(r, "buffid1"), "Specialart")),
+      buffSpecialAttach: buffField(func, str(r, "buffid1"), "Specialattach").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       // …and the EFFECT OBJECT the `EfctID1` column names (see AbilityDef.fxArt) — read
       // from the same AbilityFunc file through the same helper the buff uses.
       fxArt: mdlPath(buffField(func, str(r, "efctid1"), "Effectart")),
@@ -1157,6 +1162,7 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     buffArt: "",
     buffEffectArt: "",
     buffSpecialArt: "",
+    buffSpecialAttach: [],
     fxArt: "",
     fxSpecialArt: "",
     fxMissileArt: "",

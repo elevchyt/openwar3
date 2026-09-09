@@ -310,6 +310,17 @@ frame, because its hall may be knocked down inside the five seconds.
   own `[Errors]` key — `Notownportalhalls` = *"There are no friendly Town Halls to Town Portal
   to."* was written for the Scroll of Town Portal, and `Needsummoned` for Control Magic.
 
+### A stunned or sleeping unit has no pockets
+
+Every door in — use, drop, give, sell, pick up, rearrange — is shut while the carrier is
+**stunned** (a Storm Bolt, a War Stomp, a Bash; and the Dreadlord's Sleep, which
+`recomputeStats` folds into the same `stunned` flag) or **asleep** for the night (a creep's
+`asleep`), or dead. One predicate, `SimWorld.itemsLocked`, sits in the sim rather than in the
+card, because the authority calls the sim's doors directly and a command off the wire never
+sees a card. The card only READS it: `itemReadyError` answers the same silent refusal a
+stunned caster's spell gets, and `inventorySlots` marks the row `disabled` so the six buttons
+wear their `DIS*` twins — the same texture swap the command card makes, never a tint.
+
 ## Whose shop it is
 
 A shop serves **its owner, its owner's allies, and — when nobody owns it — everybody**. It never

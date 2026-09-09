@@ -363,6 +363,49 @@ console.log("\nPermanent Immolation: alight from birth, on a unit with no mana")
   check("the fire is still lit after four seconds of no mana", !!inf.immolation, true);
 }
 
+console.log("\nImmolation: an instant toggle — priced once to light, free to put out, and no order lost");
+{
+  // `[AEim]` is an order pair (`immolation`/`unimmolation`) with `Cast1` 0 and no
+  // `Animnames`, so the press is the whole cast (IMMEDIATE): no wind-up, no cast clip, and
+  // the Demon Hunter keeps whatever he was doing. `Cost1` = 25 lights it, ONCE — it used to
+  // be charged at the commit and again in the toggle — and "Deactivate Immolation to stop
+  // draining mana" (its Ubertip) costs nothing (castCost).
+  const w = world();
+  const dh = spawn(w, "Edem", 1000, 1000, 0, 0);
+  // A hero's spells are `heroAbilList`, learned at rank 0; `spawn` seeds only `abilList`. So
+  // the Demon Hunter is handed Immolation at rank 1 here, as a learn-skill would.
+  check("the Demon Hunter's row names Immolation", UNITS.get("Edem").heroAbilities.includes("AEim"), true);
+  dh.abilities.push({ id: "AEim", code: "AEim", level: 1, cooldownLeft: 0, autocastOn: false });
+  dh.maxMana = 200;
+  dh.mana = 100;
+  w.issueMove(dh.id, 1000, 3000);
+  check("he is walking", dh.order, "move");
+  check("the press is accepted", w.issueCast(dh.id, "AEim"), true);
+  check("…and lights him on the spot", !!dh.immolation, true);
+  check("…for Cost1 = 25, charged once", Math.round(dh.mana), 75);
+  check("…with no pending cast to wind up", dh.pendingCast, null);
+  check("…and his walk untouched", dh.order, "move");
+  check("the second press is accepted", w.issueCast(dh.id, "AEim"), true);
+  check("…and puts him out", dh.immolation, "");
+  check("…for nothing", Math.round(dh.mana), 75);
+  // …and the flare on each unit he burns rides that unit's head: `[BEim] Specialart =
+  // ImmolationDamage.mdl`, `Specialattach = head`, one Stand's worth each second.
+  w.issueCast(dh.id, "AEim");
+  const f = spawn(w, "hfoo", 1100, 1000, 1, 1);
+  w.issueHold(f.id);
+  w.issueHold(dh.id);
+  dh.weapons = []; // disarmed, so the burn is the only thing that lands
+  dh.weapon = null;
+  const hp0 = f.hp;
+  run(w, null, 2.2);
+  check("a Footman inside Area1 burns", f.hp < hp0, true);
+  const flares = w.drainSpellEffects().filter((e) => /ImmolationDamage/i.test(e.art));
+  check("…and each burn stamps the flare", flares.length >= 2, true);
+  check("…hung on the burnt unit's head", flares[0] && flares[0].attach && flares[0].attach.join(","), "head");
+  check("…following that unit", flares[0] && flares[0].targetId, f.id);
+  check("…for exactly its Stand", flares[0] && [flares[0].anim, flares[0].life].join("/"), "stand/0");
+}
+
 console.log("\nInferno: the meteor is in the air for its Impact Delay, and the crash stuns");
 {
   // "Summons an Infernal from the sky, causing area effect damage where it lands."

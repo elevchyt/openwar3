@@ -1,8 +1,22 @@
-// Discrete on-screen performance metrics (FPS, frame time, sim units, ping) plus
-// a sound mute toggle. Bottom-left debug panel. Ping is a placeholder until the
-// Phase 8 multiplayer server exists.
+// Discrete on-screen performance metrics plus a sound mute toggle — the bottom corner strip.
+//
+// Two dresses, decided once at build time:
+//
+//   · A DEV build (`pnpm dev`) prints the whole developer's readout — fps, frame time, the
+//     sim's unit census, the ping — and carries the mute button, because the person reading it
+//     is debugging.
+//   · A PRODUCTION build — what the desktop app packages and what a release serves — prints
+//     what a PLAYER reads: the fps, and in a multiplayer match the ping. Nothing else, and no
+//     mute button (the Sound panel owns volume). Single player shows the fps alone: there is
+//     no wire to measure, so a ping label there would only ever say "—".
+//
+// The ping is the slowest link this machine is on (game/matchLink.ts PingMessage): `undefined`
+// means "no match link" (single player), `null` "linked, no echo home yet".
 
 const UPDATE_PERIOD = 500; // ms between DOM updates (readable, not flickery)
+
+/** The full readout is the developer's; a shipped build shows the player's two numbers. */
+const DEV_READOUT = import.meta.env.DEV;
 
 export class MetricsOverlay {
   private el: HTMLDivElement;
@@ -30,18 +44,22 @@ export class MetricsOverlay {
       this.muteBtn.title = this.muted ? "Unmute sound" : "Mute all sound";
       this.onToggleMute?.(this.muted);
     };
+    this.muteBtn.hidden = !DEV_READOUT; // a player's strip carries no debug control
     this.el.append(this.text, this.muteBtn);
     document.body.appendChild(this.el);
   }
 
-  /** Call once per rendered frame with the frame delta in ms. */
-  frame(dtMs: number, units: number): void {
+  /** Call once per rendered frame with the frame delta in ms. `ping` as `RtsController.pingMs`
+   *  answers it: a number, null (linked, nothing measured yet) or undefined (single player). */
+  frame(dtMs: number, units: number, ping: number | null | undefined): void {
     this.el.hidden = false;
     this.frames++;
     this.accMs += dtMs;
     if (this.accMs < UPDATE_PERIOD) return;
     const avg = this.accMs / this.frames;
-    this.text.textContent = `${Math.round(1000 / avg)} fps · ${avg.toFixed(1)} ms · ${units} units · ping — `;
+    const fps = `${Math.round(1000 / avg)} fps`;
+    const pingText = ping === undefined ? "" : ` · ping ${ping === null ? "—" : `${Math.round(ping)} ms`}`;
+    this.text.textContent = DEV_READOUT ? `${fps} · ${avg.toFixed(1)} ms · ${units} units${pingText}` : `${fps}${pingText}`;
     this.frames = 0;
     this.accMs = 0;
   }

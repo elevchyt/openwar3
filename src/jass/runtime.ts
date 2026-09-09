@@ -420,6 +420,17 @@ export interface LobbySlot {
   team: number;
   startLocation: number;
   /**
+   * The colour the lobby gave the seat (a playercolor index), or absent for the slot's own.
+   *
+   * It has to come through HERE and not only through the engine's `setPlayerColor` door,
+   * because every melee map's config() assigns the twelve defaults itself —
+   * `call SetPlayerColor(Player(0), ConvertPlayerColor(0))` and so on — and that runs AFTER
+   * the lobby has been read. Applied between config() and main(), the lobby's pick lands
+   * on top of the map's default exactly as the real client's does: a red-versus-blue field
+   * whatever the players had chosen was this arriving first (developer, Modes 1 and 2).
+   */
+  color?: number;
+  /**
    * What the slot is CALLED — `GetPlayerName`, and so the "%s was victorious." the melee
    * victory dialog broadcasts. The lobby is the only thing that knows it: a human's is the
    * name they typed, an AI's is the entry its row wore on the slot menu ("Computer (Insane)",
@@ -1456,6 +1467,13 @@ export class Runtime {
       p.controller = s.controller;
       p.team = s.team;
       if (s.startLocation >= 0) p.startLocation = s.startLocation;
+      // The lobby's colour — OVER config()'s default for the slot, which every melee map
+      // writes (see LobbySlot.color), and out through the same hook the native uses, or the
+      // engine keeps minting the map's colour for every unit it spawns from here on.
+      if (s.color !== undefined && s.color !== p.color) {
+        p.color = s.color;
+        this.hooks?.setPlayerColor?.(s.index, s.color);
+      }
       // The lobby's name for the seat — but never over a name the SCRIPT chose: config() runs
       // before this, and a map that called SetPlayerName meant it.
       if (s.name && p.name === undefined) p.name = s.name;

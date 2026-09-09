@@ -168,6 +168,25 @@ console.log("\n…and the Clarity Potion, which names neither, is the drinker's 
   check("…and nobody else, aimed or not", regenOf(ally), 0);
 }
 
+console.log("\na STUNNED or SLEEPING unit can do nothing with its items  (SimWorld.itemsLocked)");
+{
+  world = newWorld();
+  const hero = give(unit({ isHero: true, hp: 100 }), "phea");
+  give(hero, "hslv", 1);
+  hero.stunned = true; // what a Storm Bolt (or the Dreadlord's Sleep) leaves on recomputeStats
+  check("stunned, the potion is refused", world.useItem(hero.id, 0, 0, hero.x, hero.y), false);
+  check("…and the button says so silently, as a spell's does", world.itemReadyError(hero.id, 0), SimWorld.SILENT_REFUSAL);
+  check("…the salve cannot be dropped", world.dropItem(hero.id, 1, hero.x + 10, hero.y), false);
+  check("…nor the pockets rearranged", world.swapItems(hero.id, 0, 1), false);
+  check("…and the controller's row reads the same lock", world.itemsLockedFor(hero.id), true);
+  check("…with nothing spent", hero.inventory[0].charges, 1);
+  hero.stunned = false;
+  hero.asleep = true; // a creep asleep for the night
+  check("asleep, the potion is refused too", world.useItem(hero.id, 0, 0, hero.x, hero.y), false);
+  hero.asleep = false;
+  check("awake and free, it fires", world.useItem(hero.id, 0, 0, hero.x, hero.y), true);
+}
+
 console.log("\nthe three SCROLLS that were only ever runes  (pressed, they did nothing at all)");
 {
   world = newWorld();

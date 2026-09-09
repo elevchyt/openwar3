@@ -815,19 +815,19 @@ export class Authority {
         if (!d || !state) return false;
         // Does this building even research that? Same gap as `train` had.
         if (!this.tech.researches(b.typeId).includes(cmd.upgradeId)) return false;
-        // An upgrade is the PLAYER's, not the building's, so only one of your buildings may be
-        // researching a given one at a time — a second Barracks does not get its own Defend.
-        // The card greys the button out on the others (pushResearchButtons); this is the gate
-        // behind it, and it is the one that matters: without it the second purchase is money
-        // burnt for a level the player already owns by the time it lands.
-        const busy = this.sim.playerResearching(player).get(cmd.upgradeId);
-        if (busy && busy.buildingId !== cmd.buildingId) return false;
+        // An upgrade is the PLAYER's, not the building's, so only one rank of a given one may
+        // be in research at a time, ANYWHERE of theirs — a second Barracks does not get its
+        // own Defend, and a Blacksmith does not queue Steel behind Iron: the game takes the
+        // button off the card until the running rank lands (pushResearchButtons). This is
+        // the gate behind it, and it is the one that matters: a command comes over the wire
+        // with no card in front of it.
+        if (this.sim.playerResearching(player).has(cmd.upgradeId)) return false;
         if (this.sim.queueFull(cmd.buildingId)) return false; // before charging
         // The LEVEL is derived, not sent: an upgrade's price climbs with its level, so a
         // client naming its own level would buy level 3 at level 1's price. It is one past
-        // whatever the player already has, or already has queued here — whichever is further.
+        // whatever the player already has — nothing is ever queued ahead of it (above).
         const have = state.researchLevel(player, cmd.upgradeId);
-        const next = Math.max(have, this.sim.researchingLevel(cmd.buildingId, cmd.upgradeId)) + 1;
+        const next = have + 1;
         if (next > d.maxLevel) return false;
         if (!state.meets(player, cmd.upgradeId, next - 1)) return false;
         const cost = this.upgrades.cost(cmd.upgradeId, next);

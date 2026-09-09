@@ -176,10 +176,20 @@ export interface PropSeq {
  *  which is their own stand clip, and `rts.ts` already knows what to do with that (see its
  *  `standAttack` branch: keep looping the ready pose rather than re-trigger it per shot). */
 export function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[] = []): Array<PropSeq> {
-  const tier = animProps.filter((p) => TIER_PROPS.has(p));
   const BLANK = "(none)"; // matches none of the sequence patterns below
   const tokens = (n: string) => n.toLowerCase().split(/[\s\-_]+/).filter(Boolean);
   const propsOf = (n: string) => tokens(n).filter((t) => TIER_PROPS.has(t));
+  // `alternateex` is what UnitFunc gives the MORPHED half of a two-form unit — the Druid of
+  // the Claw's bear (`edcm`), the Druid of the Talon's crow (`edtm`), Metamorphosis' demon
+  // (`Edmm`) — and the WORLD models spell their clips with the plain token only ("Stand
+  // Alternate", "Attack Alternate - 2", "Morph Alternate"; not one of them says AlternateEx).
+  // Only the PORTRAIT busts spell both ("Portrait Alternate AlternateEx - 1"). Asked of the
+  // world model as written, the superset test below could match nothing, every alternate
+  // clip was blanked and the bear stood in the night elf's poses. So where a model spells no
+  // `alternateex` at all, the prop means `alternate` — the reading its author had — and where
+  // it does (the busts) it keeps its own name and its own clips.
+  const spellsEx = seqs.some((s) => propsOf(s.name).includes("alternateex"));
+  const tier = [...new Set(animProps.filter((p) => TIER_PROPS.has(p)).map((p) => (p === "alternateex" && !spellsEx ? "alternate" : p)))];
   const baseOf = (n: string) => tokens(n).filter((t) => !TIER_PROPS.has(t)); // original order kept
   // The ACTION a clip names, for override matching: base tokens minus the identity props AND the
   // numeric variant suffix, compared unordered. Dropping the number is what lets the alternate

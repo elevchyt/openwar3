@@ -122,6 +122,10 @@ export interface HudInvSlot {
   /** `ItemData` **ipaw** — a shop will buy it back, so the tooltip carries the game's grey
    *  "Drop item on shop to sell" line. A quest item or a campaign artifact does not. */
   pawnable: boolean;
+  /** The carrier is stunned or asleep: the pocket is unavailable and `icon` is already the
+   *  DIS* twin (the same texture swap the command card makes). Nothing in it may be pressed,
+   *  dragged or moved until the carrier can act again. */
+  disabled: boolean;
 }
 
 export interface HudSelection {
@@ -2888,7 +2892,7 @@ export class GameHud {
         cd.hidden = true;
       }
     }
-    const key = inv.map((s) => (s ? `${s.icon ? 1 : 0}:${s.name}:${s.charges}` : "-")).join("|");
+    const key = inv.map((s) => (s ? `${s.icon ? 1 : 0}:${s.name}:${s.charges}:${s.disabled ? 1 : 0}` : "-")).join("|");
     if (key === this.invKey) return;
     this.invKey = key;
     for (let i = 0; i < this.invSlots.length; i++) {
@@ -2902,8 +2906,9 @@ export class GameHud {
         continue;
       }
       btn.classList.remove("empty");
+      btn.classList.toggle("disabled", s.disabled);
       btn.style.backgroundImage = s.icon ? `url(${s.icon})` : "";
-      btn.draggable = true;
+      btn.draggable = !s.disabled; // a stunned hero's gear stays in its pockets
       setCount(this.invCount[i], s.charges > 0 ? String(s.charges) : "");
     }
     // The slot under the cursor just changed (a charge spent, the item swapped or

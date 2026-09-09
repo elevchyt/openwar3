@@ -28,7 +28,7 @@ const { join } = require("node:path");
 const { existsSync } = require("node:fs");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { buildAnimSet, animPropsFor, findBirthFields } = require(join(REPO, ".sim-build", "src", "render", "unitAnims.js"));
+const { buildAnimSet, animPropsFor, findBirthFields, applyAnimProps } = require(join(REPO, ".sim-build", "src", "render", "unitAnims.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -81,6 +81,28 @@ const FALLBACK = {
   // for the base tier, every furbolg would be left swinging its "Attack spell" cast.
   "units\\creeps\\Furbolg\\Furbolg.mdx": [
     "Walk", "Stand", "Death", "Attack upgrade", "Attack spell", "StandHit", "Decay Flesh", "Decay Bone",
+  ],
+  // The two DRUIDS: one model, two units, and the morphed unit's UnitFunc row says
+  // `Animprops=alternateex` — a token the WORLD model never spells (only "Alternate"), while
+  // the PORTRAIT bust spells both. Transcribed off the 1.30.4 install.
+  "Units\\NightElf\\DruidOfTheClaw\\DruidoftheClaw.mdx": [
+    "Stand - 1", "Morph", "Stand Channel", "Spell Slam", "Spell", "Death", "Attack", "Attack - 2", "walk",
+    "Stand - 2", "Decay Flesh", "Decay Flesh Alternate", "Stand Alternate", "Walk Alternate",
+    "Stand Alternate - 3", "Stand Alternate - 2", "Attack Alternate - 2", "Attack Spell Alternate",
+    "Death Alternate", "Morph Alternate", "Decay Bone", "Decay Alternate",
+  ],
+  "Units\\NightElf\\DruidOfTheClaw\\DruidoftheClaw_portrait.mdx": [
+    "Portrait Alternate AlternateEx - 1", "Portrait Alternate AlternateEx- 2", "Portrait Talk Alternate AlternateEx - 1",
+    "Portrait - 1", "Portrait - 2", "Portrait Talk - 1",
+  ],
+  "Units\\NightElf\\DruidOfTheTalon\\DruidoftheTalon.mdx": [
+    "Stand Alternate -1", "Walk Alternate -2", "Walk Alternate -3", "Stand Alternate", "Stand Alternate -2",
+    "Death Alternate", "Walk Alternate", "Stand -1", "Stand -2", "Spell", "Attack -1", "Attack -2", "Death",
+    "Walk", "Morph", "Morph Alternate", "Attack Alternate", "Spell Alternate", "Decay Flesh", "Decay Bone",
+  ],
+  "Units\\NightElf\\DruidOfTheTalon\\DruidoftheTalon_Portrait.mdx": [
+    "Portrait Talk Alternate AlternateEx", "Portrait Alternate AlternateEx", "Portrait -1", "Portrait -2",
+    "Portrait Talk -1", "Portrait Talk -2",
   ],
 };
 
@@ -135,6 +157,49 @@ console.log("the Ancient of War: planted is the ALTERNATE half");
   // The one that put a walking Ancient in the planted tree's working pose: its queue is
   // HALTED, not cancelled, so pickSequence still asks for a work clip while it walks.
   check("…and has no work pose to borrow while it walks", walking.a.standWork, -1);
+}
+
+console.log("the Druids: `Animprops=alternateex` on the morphed unit means the model's `Alternate` half");
+{
+  // `[edcm]`/`[edtm]` (NightElfUnitFunc.txt) carry `Animprops=alternateex`; `[edoc]`/`[edot]`
+  // carry none. The world models spell their clips "… Alternate" only, so the prop has to be
+  // read as the author read it, or the bear stands in the elf's poses (developer).
+  const druid = (path, props, alt) => {
+    const seqs = sequences(path).map((name) => ({ name }));
+    const a = buildAnimSet(seqs, animPropsFor({ animProps: props }, alt));
+    return { a, name: (i) => (i >= 0 && i < seqs.length ? seqs[i].name : null) };
+  };
+  const bear = druid("Units\\NightElf\\DruidOfTheClaw\\DruidoftheClaw.mdx", ["alternateex"], true);
+  check("the bear stands in its alternate stand", bear.name(bear.a.stand), "Stand Alternate");
+  check("…swings its alternate swing", bear.name(bear.a.attack), "Attack Alternate - 2");
+  check("…walks its alternate walk", bear.name(bear.a.walk), "Walk Alternate");
+  check("…dies its alternate death", bear.name(bear.a.death), "Death Alternate");
+  check("…and leaves the form on \"Morph Alternate\"", bear.name(bear.a.morph), "Morph Alternate");
+  const elf = druid("Units\\NightElf\\DruidOfTheClaw\\DruidoftheClaw.mdx", [], false);
+  check("the elf stands in the plain stand", elf.name(elf.a.stand), "Stand - 1");
+  check("…and dies the plain death", elf.name(elf.a.death), "Death");
+  const crow = druid("Units\\NightElf\\DruidOfTheTalon\\DruidoftheTalon.mdx", ["alternateex"], true);
+  check("the storm crow stands in its alternate stand", crow.name(crow.a.stand), "Stand Alternate -1");
+  check("…and swings its alternate swing", crow.name(crow.a.attack), "Attack Alternate");
+  // The PORTRAIT busts spell both tokens, and each half has its own talking head — the
+  // picker in render/modelViewer.ts reads the clips through applyAnimProps exactly like this.
+  const bust = (path, props) => {
+    const named = applyAnimProps(sequences(path).map((name) => ({ name })), props).map((s, index) => ({ index, name: s.name }));
+    const rest = named.find((s) => /^portrait/i.test(s.name) && !/talk/i.test(s.name));
+    const talk = named.find((s) => /portrait\s*talk/i.test(s.name));
+    const raw = sequences(path);
+    return { rest: rest ? raw[rest.index] : null, talk: talk ? raw[talk.index] : null };
+  };
+  const clawBear = bust("Units\\NightElf\\DruidOfTheClaw\\DruidoftheClaw_portrait.mdx", animPropsFor({ animProps: ["alternateex"] }, true));
+  check("the bear's bust rests on its own clip", clawBear.rest, "Portrait Alternate AlternateEx - 1");
+  check("…and talks with its own mouth", clawBear.talk, "Portrait Talk Alternate AlternateEx - 1");
+  const clawElf = bust("Units\\NightElf\\DruidOfTheClaw\\DruidoftheClaw_portrait.mdx", animPropsFor({ animProps: [] }, false));
+  check("the elf's bust rests on the plain one (it used to show the bear)", clawElf.rest, "Portrait - 1");
+  check("…and talks with the plain mouth", clawElf.talk, "Portrait Talk - 1");
+  const talonCrow = bust("Units\\NightElf\\DruidOfTheTalon\\DruidoftheTalon_Portrait.mdx", animPropsFor({ animProps: ["alternateex"] }, true));
+  check("the crow's bust is the alternate one", talonCrow.rest, "Portrait Alternate AlternateEx");
+  const talonElf = bust("Units\\NightElf\\DruidOfTheTalon\\DruidoftheTalon_Portrait.mdx", animPropsFor({ animProps: [] }, false));
+  check("…and the talon druid's the plain one", talonElf.rest, "Portrait -1");
 }
 
 console.log("…and the Morph pair is the clip each form plays to LEAVE itself");
