@@ -62,8 +62,14 @@ html, body {
    The HUD rides the same box (it is the game's console, not the browser's), so it stays
    welded to the bottom of the frame rather than to the bottom of the window. */
 :root {
-  --stage-w: min(100vw, calc(100vh * 16 / 9));
-  --stage-h: min(100vh, calc(100vw * 9 / 16));
+  /* The stage's true on-screen size. The CANVAS box is always this — it is where the world
+     is actually drawn — while `--stage-w`/`--stage-h`, which is what the interface measures
+     itself against, is this shrunk by the UI's own resolution (the PROTOTYPE block at the
+     foot of this file). At the default rung the two pairs are the same number. */
+  --stage-w-css: min(100vw, calc(100vh * 16 / 9));
+  --stage-h-css: min(100vh, calc(100vw * 9 / 16));
+  --stage-w: var(--stage-w-css);
+  --stage-h: var(--stage-h-css);
 }
 
 /* WebGL scenes (terrain / model / map) sit behind the UI. One shows at a time. */
@@ -91,8 +97,8 @@ html, body {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: var(--stage-w);
-  height: var(--stage-h);
+  width: var(--stage-w-css);
+  height: var(--stage-h-css);
 }
 
 /* The map is the one scene that is a GAME view rather than a backdrop, so it — alone — is
@@ -3079,4 +3085,79 @@ body.in-game .load-gate { display: none; }
 .hud-inventory-cover {
   background: var(--hud-inventory-cover) 0 0 / 100% 100% no-repeat;
   pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   PROTOTYPE: Options -> Video -> Resolution, applied to the DOM UI as well.
+
+   Warcraft III rasterized its interface into the same back buffer as the world, so the
+   resolution setting coarsened the console and the menus along with the terrain. Ours is DOM
+   and the browser draws it at the window's own density, so the setting stopped at the canvas:
+   at 800x450 the diorama went soft and the buttons stayed razor sharp.
+
+   `--ui-down` (= renderScale()) shrinks the UI root's LAYOUT box and `--ui-up` (= 1/that)
+   scales it back up, which leaves the apparent size untouched and asks the compositor for that
+   fraction of the pixels. `render/videoQuality.ts` publishes both and adds `.ui-lowres` only
+   off the default rung — a `transform` here makes these fixed elements the containing block
+   for anything fixed inside them, so `scale(1)` would not be the no-op it looks like.
+
+   ONE ROOT, and that is the whole trick. Every FDF screen is a `position: fixed` child of
+   `#ui`, so scaling both nested the transforms and SQUARED the factor: the main menu's buttons
+   were laid out correctly inside their 800px box and then drawn 2.4x too large, 1600px off
+   the right of the screen. `#ui` is the only DOM UI root under <body> (the canvases are its
+   siblings), so it is the only thing scaled, and the screens inside it resolve their
+   `inset: 0` against its box exactly as they resolved it against the window before.
+
+   Each screen fits itself to `overlay.clientWidth`, which is the LAYOUT box and so is already
+   the shrunken one — the frames lay themselves out small and the scale carries them back up.
+   --------------------------------------------------------------------------- */
+
+/* THE INTERFACE'S STAGE SHRINKS; THE CANVAS'S DOES NOT. Nothing in the HUD is a pixel count —
+   every offset, every font height and every border band is `calc(var(--stage-h) * k)`, which is
+   the whole reason the console holds its shape on any monitor (ui/hud.ts `uiPx`). Those lengths
+   are therefore also the reason the first version of this drew the console 2.4x too large and
+   off the bottom of the screen: `--stage-h` is derived from the VIEWPORT, so it did not follow
+   #ui into its smaller box and then took the scale on top. Redefining the pair here — on the
+   root, so that the `--font-*` and `--tt-*` values `ui/hud.ts` writes onto <html> resolve
+   against it too — moves the entire interface at once. `--stage-w-css` is untouched, so the
+   world canvas and the world-anchored overlay layer keep their true size. */
+html.ui-lowres {
+  --stage-w: calc(var(--stage-w-css) * var(--ui-down));
+  --stage-h: calc(var(--stage-h-css) * var(--ui-down));
+}
+
+html.ui-lowres #ui {
+  inset: auto;
+  left: 0;
+  top: 0;
+  width: calc(100vw * var(--ui-down));
+  height: calc(100vh * var(--ui-down));
+  /* The 6vw gutter belongs to the legacy `.menu-panel` layer and is measured against the
+     VIEWPORT, so it would eat the same 115px out of a box a fraction of the size. */
+  padding: 0;
+  transform-origin: 0 0;
+  transform: scale(var(--ui-up));
+}
+
+/* In a match the UI layer rides the game frame — which is now the SHRUNKEN `--stage-w`, so the
+   existing `body.in-game #ui` rule already states the right box and only the transform is new.
+   `scale() translate()` with the origin at 0 0 puts the box's own centre on the parent's. */
+html.ui-lowres body.in-game #ui {
+  left: 50%;
+  top: 50%;
+  width: var(--stage-w);
+  height: var(--stage-h);
+  transform: scale(var(--ui-up)) translate(-50%, -50%);
+}
+
+/* The loading screen is deliberately OUTSIDE #ui (a match re-boxes that to the game frame
+   while the bar is still moving), so it is a second, un-nested root. */
+html.ui-lowres #loading-layer {
+  inset: auto;
+  left: 0;
+  top: 0;
+  width: calc(100vw * var(--ui-down));
+  height: calc(100vh * var(--ui-down));
+  transform-origin: 0 0;
+  transform: scale(var(--ui-up));
 }
