@@ -557,7 +557,12 @@ export async function mountLanLobbyScreen(
       s.setText("JoinAddressLobbyValue", "");
       return;
     }
-    const url = `http://${first}`;
+    // No scheme. The address is going into the OTHER machine's Servers List box, and
+    // `normalizeRelayUrl` takes `192.168.1.42:8787` — it strips a scheme if one is there, so
+    // `http://` was never doing anything except making the line longer in a band that has no
+    // room to spare. A browser address bar accepts `host:port` too, for the player who would
+    // rather open the game that way.
+    const url = first;
     s.setText("JoinAddressLobbyLabel", "Others join at (click to copy):");
     s.setText("JoinAddressLobbyValue", copiedUntil > Date.now() ? `|cff${LABEL_GOLD}Copied.|r` : url);
     const el = s.frame("JoinAddressLobbyValue");

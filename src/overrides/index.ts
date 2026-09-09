@@ -196,15 +196,21 @@ export const JOIN_ADDRESS_DIALOG_OVERRIDE: FdfOverride = {
  *
  * The other half of the LAN screen's join field — see `ui/GameChatroom.fdf` for why a game
  * needs to be able to state its own address at all, and why the row copies itself rather than
- * growing a button. Added under the Advanced Options summary in the map column; nothing moves.
+ * growing a button. The row lives in the empty band BETWEEN the two panels at the bottom of
+ * the screen, and the chat entry box above it lifts clear of its own panel border.
  */
 export const LAN_LOBBY_ADDRESS_OVERRIDE: FdfOverride = {
   id: "ow3-lan-lobby-address",
   source: gameChatroomFdf,
   add: [
-    { frame: "JoinAddressLobbyLabel", into: "MapDisplayPanel" },
-    { frame: "JoinAddressLobbyValue", into: "MapDisplayPanel" },
+    // Into the ROOT, because the band it sits in belongs to neither panel — see the FDF.
+    { frame: "JoinAddressLobbyLabel", into: "GameChatroom" },
+    { frame: "JoinAddressLobbyValue", into: "GameChatroom" },
   ],
+  // The chat entry box lifts clear of the panel's bottom border. It is the install's own frame,
+  // anchored under the chat log, so the override nudges that anchor rather than restating it —
+  // `only` keeps the nudge off everything else measuring from the same frame.
+  repoint: [{ from: "ChatTextArea", to: "ChatTextArea", dy: 0.018, only: ["ChatEditBox"] }],
 };
 
 /**

@@ -14,19 +14,31 @@
 // column already carrying the map and the options summary. The label says so; nothing here is
 // discoverable by hovering.
 //
-// One row in the map column's own idiom (`GameNameLabel`/`GameNameValue` above it): the column
-// is 0.234375 wide, and both frames state a Height because our solver does not size a TEXT to
-// its string the way the engine does.
+// It sits in the BAND BETWEEN THE TWO PANELS at the bottom of the screen, not in the map column
+// above the buttons where it started. That band is empty at every aspect the game is actually
+// played at, so the row costs the screen nothing, and it reads as what it is — a note about this
+// machine rather than another line of the map's summary.
+//
+// Anchored to the RIGHT panel's own button backdrop rather than to the screen: the gap exists
+// because the button column is anchored to the right edge and the chat panel to the left, so
+// hanging off the column's edge keeps the row in the gap as the gap moves. Anchoring it to the
+// root's centre with a fixed offset would drift the moment the window is not 16:9.
+//
+// Both frames state a Height because our solver does not size a TEXT to its string the way the
+// engine does, and both are as WIDE AS THE BAND ITSELF and centred in it: the frame's right edge
+// is the button column's left edge and its width is the gap, so JUSTIFYCENTER puts the line on
+// the band's own middle rather than against one of its sides.
 
 Frame "TEXT" "JoinAddressLobbyLabel" INHERITS "StandardLabelTextTemplate" {
-    Width 0.234375,
+    Width 0.235,
     Height 0.012,
-    SetPoint TOP, "AdvancedOptionsContainer", BOTTOM, 0.0, -0.010,
+    SetPoint BOTTOMRIGHT, "CancelBackdrop", BOTTOMLEFT, 0.0, 0.040,
+    FontJustificationH JUSTIFYCENTER,
 }
 
 Frame "TEXT" "JoinAddressLobbyValue" INHERITS "StandardValueTextTemplate" {
-    Width 0.234375,
+    Width 0.235,
     Height 0.012,
-    SetPoint TOPLEFT, "JoinAddressLobbyLabel", BOTTOMLEFT, 0.0, -0.002,
-    FontJustificationH JUSTIFYLEFT,
+    SetPoint TOPRIGHT, "JoinAddressLobbyLabel", BOTTOMRIGHT, 0.0, -0.002,
+    FontJustificationH JUSTIFYCENTER,
 }
