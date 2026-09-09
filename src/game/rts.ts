@@ -8185,8 +8185,11 @@ export class RtsController {
         // What the BODY is wearing this frame, so a Team Colored bar matches the unit it
         // floats over — the Ally Color Mode and any `SetUnitColor`/`SetPlayerColor` included,
         // because `unitColor` is the one call the model's own tint goes through too. A
-        // neutral has no slot (see BarSpec.colorSlot).
-        colorSlot: u.owner < 0 ? -1 : this.unitColor(u.owner, e.colorOverride),
+        // neutral has no slot at all, and the two neutral PLAYERS are told apart there:
+        // -1 Neutral Hostile, -2 Neutral Passive (see BarSpec.colorSlot).
+        colorSlot: u.owner < 0
+          ? (u.neutralPassive ? -2 : -1)
+          : this.unitColor(u.owner, e.colorOverride),
         // …and what an ALLY's hero has to hand. Nothing for anything else, which is almost
         // every bar on the field.
         abilities: row?.list ?? null,

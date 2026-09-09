@@ -57,9 +57,10 @@ export interface BarSpec {
   garrison: { filled: number; slots: number } | null;
   /** The player-colour SLOT this unit's body is wearing right now — `RtsController.unitColor`,
    *  so the Ally Color Mode is already folded in and a bar re-colours with the unit it floats
-   *  over. **-1 is a NEUTRAL** (a creep, a shop, a critter), which is not a slot at all: the
-   *  neutral swatch is black (render/teamColor.ts `neutralTeamColor`) and a black bar reads as
-   *  an empty one. Only the "Team Colored" style looks at this. */
+   *  over. **A NEGATIVE is a NEUTRAL**, which is not a slot at all: -1 is Neutral Hostile (a
+   *  creep) and -2 is Neutral Passive (a shop, a tavern, a critter). Both wear the same black
+   *  swatch (render/teamColor.ts `neutralTeamColor`) and a black bar reads as an empty one, so
+   *  each is given a colour of its own here. Only the "Team Colored" style looks at this. */
   colorSlot: number;
   /** An ALLIED hero's learned spells, in the order the hero carries them — the discreet row
    *  of small icons floated over the bar so you can read what your teammate has to hand.
@@ -148,13 +149,18 @@ export function healthBarStyle(): HealthBarStyle {
 /**
  * What a NEUTRAL's bar is painted in under the Team Colored style.
  *
- * A creep has no player colour to wear: both neutrals reach the renderer as owner -1 and the
+ * A neutral has no player colour to wear: both neutrals reach the renderer as owner -1 and the
  * swatch behind that owner is the palette's BLACK one (render/teamColor.ts `neutralTeamColor`),
- * which inside a black frame is an empty bar. So this is a colour rather than a swatch, and it
- * is the one issue #141 names — Reforged's own creep bar. It is given to the shops and critters
- * too: they arrive under the same owner, and the issue names no second neutral colour.
+ * which inside a black frame is an empty bar. So these are colours rather than swatches.
+ *
+ * There are TWO of them, because the engine seats two neutral players and they are not the
+ * same side: Neutral Hostile (PLAYER_NEUTRAL_AGGRESSIVE, the creeps) wears the red issue #141
+ * names — Reforged's own creep bar — and Neutral Passive (PLAYER_NEUTRAL_PASSIVE, the shops,
+ * taverns, fountains and critters) wears the olive of Reforged's. `BarSpec.colorSlot` carries
+ * the two apart as -1 and -2, since neither is a palette slot.
  */
 const CREEP_BAR_COLOR = "#974b58";
+const PASSIVE_BAR_COLOR = "#656b0c";
 
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 
@@ -352,7 +358,9 @@ export class WorldOverlays {
    *  never change (render/teamColor.ts), and this is asked once per bar per frame. */
   private colorCache = new Map<number, string | null>();
   private barColor(slot: number): string | null {
-    if (slot < 0) return CREEP_BAR_COLOR; // a creep/shop — see CREEP_BAR_COLOR
+    // The two neutrals, told apart — see CREEP_BAR_COLOR / PASSIVE_BAR_COLOR.
+    if (slot === -2) return PASSIVE_BAR_COLOR;
+    if (slot < 0) return CREEP_BAR_COLOR;
     const hit = this.colorCache.get(slot);
     if (hit !== undefined) return hit;
     const css = this.host.teamColorCss?.(slot) ?? null;
