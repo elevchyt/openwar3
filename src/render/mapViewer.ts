@@ -7102,7 +7102,7 @@ export class MapViewerScene {
         return true;
       },
       heroBar: () => this.rts?.heroBar() ?? [],
-      rallyToHero: (index) => this.rts?.rallyToHero(index) ?? false,
+      rightClickHero: (index, queued) => this.rts?.rightClickHero(index, queued) ?? false,
       dropItemOnHero: (index, slot) => {
         const gave = this.rts?.dropItemOnHero(index, slot) ?? false;
         if (gave) this.hud?.setArmed(false); // the picked-up item has left the cursor

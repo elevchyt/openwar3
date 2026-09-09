@@ -2673,8 +2673,8 @@ export class RtsController {
    * Indexed against the ROSTER (`localHeroRoster`), which is what the bar draws — a dead hero
    * holds its slot, so counting the living alone would slide every button after it onto the
    * wrong hero. A dead slot answers undefined, and each of the three gestures the bar
-   * supports (select, rally onto, hand an item to) then simply does nothing: none of them
-   * means anything aimed at a corpse.
+   * supports (select, right-click an order at, hand an item to) then simply does nothing:
+   * none of them means anything aimed at a corpse.
    */
   private heroBarUnit(index: number): SimUnit | undefined {
     const entry = this.localHeroRoster()[index];
@@ -2696,30 +2696,57 @@ export class RtsController {
   }
 
   /**
-   * Right-click on the (index+1)-th hero's button in the top-left hero bar, with a
-   * unit-producing building selected: rally that building onto the hero.
+   * Right-click on the (index+1)-th hero's button in the top-left hero bar.
    *
    * The hero bar's buttons stand in for the heroes themselves — that is why clicking one
    * selects it and double-clicking jumps the camera to it — so the orders you can aim at a
-   * hero in the world can be aimed at its button too, without hunting for it on the map. This
-   * is the rally half; `dropItemOnHero` is the other.
+   * hero in the world can be aimed at its button too, without hunting for it on the map.
+   * `dropItemOnHero` is the third gesture; this is the right-click's, and what it means is
+   * decided by what is SELECTED, exactly as the world's right-click on that hero's body is:
    *
-   * Deliberately the SAME command the world right-click issues (`kind: "unit"`), so a rallied
-   * building's new units follow the hero as it moves, and the rally flag rides on it.
-   * Returns false when the selection has nothing to rally, so the caller can fall back.
+   *   • a unit-producing BUILDING — rally it onto the hero, deliberately the same command the
+   *     world click issues (`kind: "unit"`), so the new units follow the hero as it moves and
+   *     the rally flag rides on it;
+   *   • anything else — FOLLOW the hero, fanned into formation slots around it, which is what
+   *     a right-click on a friendly unit means everywhere else in the game (rightClick's own
+   *     friendly-unit branch, offsets and green ring and all). Marshalling an army on the hero
+   *     is the whole reason to aim at the button rather than hunt for the body, which may be
+   *     off screen — the case the gesture exists for.
+   *
+   * `queued` is shift, as it is for a world order. A rally is never queued (there is only ever
+   * one rally point), so it ignores it. Returns false when neither meaning applies — a dead
+   * slot, an empty selection, a selection of somebody else's units.
    */
-  rallyToHero(index: number): boolean {
+  rightClickHero(index: number, queued = false): boolean {
     const hero = this.heroBarUnit(index);
-    const heroId = hero?.id;
     if (!hero) return false;
-    if (this.primary === null || !this.sim.acceptsRally(this.primary)) return false;
+    const heroId = hero.id;
+    if (this.primary !== null && this.sim.acceptsRally(this.primary)) {
+      let any = false;
+      for (const id of this.selected) {
+        if (this.execute(this.localPlayer, { c: "rally", unitId: id, x: hero.x, y: hero.y, kind: "unit", targetId: heroId })) any = true;
+      }
+      if (!any) return false;
+      this.rallyFeedback({ x: hero.x, y: hero.y, kind: "unit", targetId: heroId });
+      this.sounds?.playUi("RallyPointPlace");
+      return true;
+    }
+    // Follow, with the world click's own formation offsets — a group told to follow one body
+    // holds a spread around it instead of stacking on its centre and shoving.
+    const followers = [...this.selected].filter((id) => id !== heroId);
+    if (!followers.length) return false;
+    const offs = followOffsets(this.sim, followers, hero);
     let any = false;
-    for (const id of this.selected) {
-      if (this.execute(this.localPlayer, { c: "rally", unitId: id, x: hero.x, y: hero.y, kind: "unit", targetId: heroId! })) any = true;
+    for (const id of followers) {
+      const o = offs.get(id);
+      if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "follow", targetId: heroId, offX: o?.[0], offY: o?.[1] }, queued })) any = true;
     }
     if (!any) return false;
-    this.rallyFeedback({ x: hero.x, y: hero.y, kind: "unit", targetId: heroId! });
-    this.sounds?.playUi("RallyPointPlace");
+    // The same green confirm the world click flashes on the body, at the body — the hero may
+    // be off screen, and a ring drawn in the world is the honest place to say where it went.
+    const selR = this.byId.get(heroId)?.selRadius ?? hero.radius;
+    this.ack(false); // the move quote: this is a move order, not an attack
+    this.flashRing(hero.x, hero.y, selR, FLASH_GREEN, false, this.byId.get(heroId)?.moveHeight ?? 0);
     return true;
   }
 

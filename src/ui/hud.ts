@@ -289,9 +289,10 @@ export interface HudDriver {
   /** The hero bar's buttons: the local player's living heroes in hire order, the order
    *  F1/F2/F3 also count in. */
   heroBar(): HeroBarEntry[];
-  /** Right-click a hero's button with a unit-producing building selected: rally it onto that
-   *  hero. False when the selection has nothing to rally (the click then means nothing). */
-  rallyToHero(index: number): boolean;
+  /** Right-click a hero's button: rally a selected production building onto that hero, or —
+   *  with anything else selected — send it to follow the hero, exactly as a right-click on
+   *  its body in the world does. `queued` is shift. False when the click means nothing. */
+  rightClickHero(index: number, queued: boolean): boolean;
   /** Give an inventory item to the hero behind button `index` — `slot` when the gesture was a
    *  drag out of the inventory grid, omitted to spend the item the player has already picked
    *  up with a right-click. False when there is nothing to give. */
@@ -2380,9 +2381,10 @@ export class GameHud {
       // hands the item over, exactly as clicking that hero's body on the map does. The give
       // is tried first and only a refusal falls through to selecting.
       //
-      // Right-click is the button's OTHER meaning (`alt`): rally a selected production
-      // building onto this hero — the same order a right-click on its body in the world
-      // gives, without having to find the body. It goes through `onPress` for the same
+      // Right-click is the button's OTHER meaning (`alt`): the order a right-click on this
+      // hero's BODY in the world would give — rally a selected production building onto it,
+      // or send the selection to follow it — without having to find the body, which is very
+      // often off screen. It goes through `onPress` for the same
       // reason the left button does, and it is the same lesson the autocast buttons already
       // learned: hung off `contextmenu` the portrait never MOVED under the right press,
       // because the browser fires that at whichever end of the click the platform chose
@@ -2400,7 +2402,7 @@ export class GameHud {
           this.driver.selectHero(i, false);
           this.refreshSelectionNow();
         },
-        () => this.driver.rallyToHero(i),
+        (e) => this.driver.rightClickHero(i, e.shiftKey),
       );
       btn.addEventListener("dblclick", () => this.driver.selectHero(i, true));
       btn.oncontextmenu = (e) => e.preventDefault();
