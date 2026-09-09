@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import { devInstall } from "./tools/vite-plugin-dev-install";
 import { perfLog, perfLogDefines } from "./tools/vite-plugin-perf-log";
@@ -21,9 +22,15 @@ import { relay } from "./tools/vite-plugin-relay";
 // Its `define`s, though, are declared HERE and unconditionally, OUTSIDE the serve-only plugin:
 // a build has no flag, and the client's `__OW3_PERF_MS__` must fold to the constant 0 rather
 // than survive as an undefined free identifier. See src/dev/perfLog.ts.
+// The version the game PRINTS, taken from the one thing that already decides it: package.json,
+// which is also what electron-builder stamps the artifact with and what the updater compares
+// against. A second copy in the source would be a second answer to "which version is this", and
+// the day they differ the one on screen is the one nobody trusts.
+const version = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version as string;
+
 export default defineConfig({
   plugins: [devInstall(), perfLog(), relay()],
-  define: perfLogDefines(),
+  define: { ...perfLogDefines(), __OW3_VERSION__: JSON.stringify(version) },
   server: { port: 5173 },
   build: { target: "es2022", outDir: "dist" },
 });

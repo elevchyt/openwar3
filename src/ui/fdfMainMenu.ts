@@ -25,7 +25,16 @@ import { arg, num, setProp, str } from "./mapBrowser";
  */
 const VERSION_FRAME = "OpenWar3VersionText";
 const REPO_URL = "https://github.com/elevchyt/openwar3";
-const REPO_TEXT = "github.com/elevchyt/openwar3";
+
+/** The running version, stamped in from package.json at build time (vite.config.ts) — the same
+ *  number electron-builder puts on the artifact and the updater compares against, so what is on
+ *  screen is what the release page is being asked about. */
+declare const __OW3_VERSION__: string;
+
+/** The line the reference gives its build number to, carrying ours: where the project lives,
+ *  and which version of it this is. Both, because a bug report needs the second and the first
+ *  is where it goes. */
+const REPO_TEXT = `github.com/elevchyt/openwar3 (${__OW3_VERSION__})`;
 
 /**
  * Where the line sits: hard into the bottom-right corner, UNDER the panel rather than on it.
