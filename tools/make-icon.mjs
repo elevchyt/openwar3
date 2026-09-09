@@ -1,7 +1,7 @@
 // The app's icon, drawn from scratch.
 //
 //   node tools/make-icon.mjs          → build/icon.png, the chosen variant
-//   node tools/make-icon.mjs --all    → build/icons/<name>.png, every variant, to choose from
+//   node tools/make-icon.mjs --all    → build/variants/<name>.png, every variant, to choose from
 //
 // It is CODE rather than a file in the repo for one reason: OpenWar3 ships zero Blizzard assets,
 // and the icon is the one image a packaged app must carry that no install can supply. Drawing it
@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** The one that ships. Change this word to change the app's icon. */
-const CHOSEN = "chevron";
+const CHOSEN = "orb";
 
 const SIZE = 512;
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -172,9 +172,12 @@ function png(raw) {
 const write = (path, bytes) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes); };
 
 if (process.argv.includes("--all")) {
+  // NOT `build/icons/`: electron-builder reads that name as an icon SET (a directory of
+  // `512x512.png` and friends), fails to make sense of `orb.png`, and quietly falls back to the
+  // default Electron icon — a packaged app with the wrong icon and one line of warning to say so.
   for (const name of Object.keys(VARIANTS)) {
-    write(join(root, "build", "icons", `${name}.png`), render(name));
-    console.log(`build/icons/${name}.png`);
+    write(join(root, "build", "variants", `${name}.png`), render(name));
+    console.log(`build/variants/${name}.png`);
   }
 } else {
   write(join(root, "build", "icon.png"), render(CHOSEN));

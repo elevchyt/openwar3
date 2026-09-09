@@ -63,6 +63,7 @@
     "appId": "dev.elevchyt.openwar3",
     "productName": "OpenWar3",
     "copyright": "OpenWar3 contributors",
+    "icon": "build/icon.png",
     "files": [
       "dist/**/*",
       "electron/**/*",
