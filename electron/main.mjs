@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { startServer } from "./server.mjs";
-import { looksLikeInstall, serveInstall } from "./install.mjs";
+import { installVersion, looksLikeInstall, serveInstall, REQUIRED_VERSION } from "./install.mjs";
 import { startBeacon } from "./beacon.mjs";
 import { startUpdates } from "./updates.mjs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
@@ -102,8 +102,9 @@ let updateState = null;
  *  once rather than at the next beat. */
 let heard = [];
 
-/** The remembered install, and whether it is still there. A folder that has been moved is worth
- *  saying so about rather than silently asking again. */
+/** The remembered install, and whether it is still usable. A folder that has been MOVED and one
+ *  that has been PATCHED to another version are both unusable and are not the same news, so the
+ *  answer carries enough for the game to say which happened (src/ui/gate.ts). */
 const currentInstall = () => {
   // `OPENWAR3_INSTALL` is the same variable the dev server's asset route reads
   // (tools/vite-plugin-dev-install.ts) and it is here for the same reason: so the app can be
@@ -111,7 +112,13 @@ const currentInstall = () => {
   // It is a FALLBACK, under what the player actually chose, and a packaged launch has no such
   // variable — nothing about it changes what a shipped app does.
   const path = readSettings().installPath ?? process.env.OPENWAR3_INSTALL ?? null;
-  return { path, valid: !!path && looksLikeInstall(path) };
+  return {
+    path,
+    valid: !!path && looksLikeInstall(path),
+    /** The folder is still THERE — told apart from "there but the wrong build". */
+    present: !!path && existsSync(path),
+    version: path ? installVersion(path) : null,
+  };
 };
 
 app.whenReady().then(async () => {
@@ -176,11 +183,15 @@ app.whenReady().then(async () => {
     console.log(`[OpenWar3] serving on ${server.url} — LAN players join at http://<this machine's ip>:${server.port} (protocol ${server.protocol})`);
   }
   const install = currentInstall();
+  // Three different pieces of news, said as three: it is there, it is gone, or it is there and
+  // is the wrong Warcraft III (src/vfs/version.ts). The screen draws the same distinction.
   console.log(install.valid
-    ? `[OpenWar3] install: ${install.path}`
-    : install.path
-      ? `[OpenWar3] install: ${install.path} — NOT FOUND, the game will ask for it`
-      : "[OpenWar3] no install remembered — the game will ask for it");
+    ? `[OpenWar3] install: ${install.path} (${install.version})`
+    : !install.path
+      ? "[OpenWar3] no install remembered — the game will ask for it"
+      : !install.present
+        ? `[OpenWar3] install: ${install.path} — NOT FOUND, the game will ask for it`
+        : `[OpenWar3] install: ${install.path} is ${install.version ?? "an unknown version"}, not ${REQUIRED_VERSION} — the game will ask for another`);
 
   // Announce this game on the subnet and listen for others (electron/beacon.mjs). This is the
   // half of LAN play a page cannot do at all, and it is why the export is native: with it,

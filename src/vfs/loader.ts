@@ -4,6 +4,7 @@ import { CascDataSource, isCascInstall } from "./casc";
 import type { DataSource } from "./types";
 import type { ContentProfile } from "./profiles";
 import { installMaps, type PickedInstall } from "../assets/opfs";
+import { checkVersion } from "./version";
 
 // Turn a picked install into a mounted VFS (plan §1 exit: "enumerate/extract any file by path
 // from a real install").
@@ -32,6 +33,14 @@ export async function loadProfile(
   profile: ContentProfile,
   onProgress?: (message: string) => void,
 ): Promise<LoadResult> {
+  // The version gate, BEFORE a byte is mounted (src/vfs/version.ts). Here rather than at either
+  // door, because both go through this function — the browser's picker, the desktop app reading
+  // the folder it remembered, and the scripted `?dev` boot — and a check that only one of them
+  // runs is a check the others are exempt from. It is also why a player who patches Warcraft III
+  // between launches is told on the next one.
+  const verdict = checkVersion(install);
+  if (!verdict.ok) throw new Error(verdict.message);
+
   const maps = installMaps(install.files);
 
   if (isCascInstall(install.casc)) {

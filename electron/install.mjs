@@ -16,7 +16,7 @@
 // The manifest's shape is the renderer's `InstallManifest` (src/assets/remoteInstall.ts), and
 // paths in it speak WC3's `\` separator so they can be used as `InstallFiles` keys verbatim.
 
-import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
@@ -95,16 +95,45 @@ export async function enumerateInstall(root) {
   return { archives, maps, casc };
 }
 
-/** Does this folder look like a Warcraft III install at all? Asked of what the player picked,
- *  so the answer can be "that is not it" rather than a broken menu ten seconds later. */
+/** The build OpenWar3 plays. MUST equal `REQUIRED_VERSION` in src/vfs/version.ts, which states
+ *  WHY there is a version rule at all and says it to the player; this side only has to agree, so
+ *  that a folder the game would refuse is never remembered in the first place. `pnpm app:test`
+ *  compares the two. */
+export const REQUIRED_VERSION = "1.30.4";
+
+/** What `.build.info` says this folder is — "1.30.4.11274" — or null if it says nothing. The
+ *  file is a `|`-separated table with a header row; the row to read is the ACTIVE branch. */
+export function installVersion(root) {
+  try {
+    const lines = readFileSync(join(root, BUILD_INFO), "utf8").split(/\r?\n/).filter((l) => l.trim());
+    if (lines.length < 2) return null;
+    const columns = lines[0].split("|").map((c) => c.split("!")[0].trim());
+    const rows = lines.slice(1).map((l) => {
+      const cells = l.split("|");
+      return Object.fromEntries(columns.map((c, i) => [c, cells[i] ?? ""]));
+    });
+    return (rows.find((r) => r.Active === "1") ?? rows[0]).Version || null;
+  } catch {
+    return null; // absent, unreadable, or not that file
+  }
+}
+
+/**
+ * Is this folder the Warcraft III OpenWar3 plays?
+ *
+ * Asked of what the player picked, so the answer arrives at the moment of choosing rather than as
+ * a mount failing three steps later — and, more importantly, so a folder the game would refuse is
+ * never SAVED as the remembered one. The game checks again every launch (src/vfs/version.ts);
+ * this is the same rule asked earlier, not a second one.
+ *
+ * A pre-1.30 (MPQ) folder has no `.build.info` at all and so cannot pass, which is correct: it is
+ * older than the build we play by construction.
+ */
 export function looksLikeInstall(root) {
   if (!root || !existsSync(root)) return false;
-  if (existsSync(join(root, BUILD_INFO)) && existsSync(join(root, "Data"))) return true; // CASC
-  try {
-    return readdirSync(root).some((name) => MPQ.test(name)); // MPQ-era
-  } catch {
-    return false; // unreadable is not an install we can use
-  }
+  if (!existsSync(join(root, "Data"))) return false;
+  const version = installVersion(root);
+  return !!version && version.split(".").slice(0, 3).join(".") === REQUIRED_VERSION;
 }
 
 /**

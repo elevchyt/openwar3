@@ -1,6 +1,7 @@
 import { pickInstall, requestPersistence, type PickedInstall } from "../assets/opfs";
 import { isDesktopApp, loadNativeInstall, pickNativeInstall, rememberedInstall } from "../assets/nativeInstall";
 import { loadProfile } from "../vfs/loader";
+import { REQUIRED_VERSION, wrongVersionMessage } from "../vfs/version";
 import { DEFAULT_PROFILE } from "../vfs/profiles";
 import type { DataSource } from "../vfs/types";
 
@@ -43,9 +44,11 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
 
   const sub = document.createElement("p");
   sub.className = "load-gate-sub";
+  // "Required", not "recommended": the version is a gate now (src/vfs/version.ts), and a screen
+  // that suggests where the game refuses is a screen that reads as broken.
   sub.textContent = native
-    ? "Select your Warcraft III (TFT 1.30.4) folder — that is the recommended version. You will only be asked once: the game remembers where it is. Nothing is uploaded; your install is read from your own disk."
-    : "Select your Warcraft III (TFT 1.30.4) folder to begin — that is the recommended version. The menu is built from the game's own files, so they're loaded first. Nothing is uploaded — your install is read locally in the browser.";
+    ? `Select your Warcraft III (The Frozen Throne ${REQUIRED_VERSION}) folder. That version is required — every player has to be on the same game data — and it is checked at every launch. You will only be asked once: the game remembers where it is. Nothing is uploaded; your install is read from your own disk.`
+    : `Select your Warcraft III (The Frozen Throne ${REQUIRED_VERSION}) folder to begin. That version is required — every player has to be on the same game data. The menu is built from the game's own files, so they're loaded first. Nothing is uploaded — your install is read locally in the browser.`;
 
   const btn = document.createElement("button");
   btn.className = "load-gate-btn";
@@ -108,14 +111,18 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
   // ever seen — this screen exists for the first run and for the day the folder moves.
   if (native) {
     btn.disabled = true;
-    void rememberedInstall().then(async ({ path, valid }) => {
+    void rememberedInstall().then(async ({ path, valid, present, version }) => {
       if (valid) return mount(await loadNativeInstall());
-      // A remembered folder that is GONE is named. "Pick your folder again" with no reason is
-      // the same screen as a first run, and the player has no way to tell that they moved it.
+      // A remembered folder that cannot be used is NAMED, and named for the right reason:
+      // "pick your folder again" with no explanation is the same screen as a first run, and a
+      // folder that is still exactly where it was but has been PATCHED is not a folder that
+      // moved. The game checks the version at every launch (src/vfs/version.ts), so this is the
+      // screen a player who updated Warcraft III between sessions arrives at.
       if (path) idleLabel = "Choose Warcraft III Folder";
       btn.disabled = false;
       btn.textContent = idleLabel;
-      if (path) fail(`Your Warcraft III folder is no longer at ${path}.`);
+      if (path && !present) fail(`Your Warcraft III folder is no longer at ${path}.`);
+      else if (path) fail(wrongVersionMessage(version));
     });
   }
 

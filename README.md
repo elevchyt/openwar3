@@ -2,7 +2,17 @@
 
 ![OpenWar3 screenshot](screenshot.png)
 
-A recreation of the **Warcraft III** engine in TypeScript. Ships **zero Blizzard assets** — uses your own install at runtime. **The Frozen Throne 1.30.4** is the recommended version — it is what OpenWar3 targets, and its CASC content store is the storage the engine is built around. Older MPQ-era installs still mount, but are supported only on a best-effort basis.
+A recreation of the **Warcraft III** engine in TypeScript. Ships **zero Blizzard assets** — uses your own install at runtime.
+
+**The Frozen Throne 1.30.4 is required**, and the game checks it. Every unit's stats, every
+ability, every cost and timing is read out of each player's own install, so two people on
+different patches would be playing different games — the host would resolve an order against its
+Footman while the client drew the one in its own tables, and nothing in the network protocol could
+catch it. So the version is a gate rather than a recommendation: an install that is not 1.30.4 is
+refused with a message naming what it found, at the folder dialog and again at **every launch**
+(the desktop app remembers your folder, and Warcraft III can be patched between one session and
+the next). Pre-1.30 MPQ-era installs are older than that build by construction and are not
+accepted.
 
 Goal: liberate WC3 from legacy constraints and bring the engine up to modern standards. Features planned:
 
@@ -51,7 +61,8 @@ pnpm dist:mac      # release/… .dmg
 ```
 
 **The AppImage does not go in your Warcraft III folder** — put it anywhere. It asks where the game
-is on first run and remembers, so the two are unrelated on disk.
+is on first run and remembers, so the two are unrelated on disk. It will only accept a 1.30.4
+folder, and re-checks it every launch.
 
 The desktop app **checks this repo's releases at launch** and asks, in the game's own message box,
 whether to fetch a newer version; saying yes downloads it in the background and offers to restart

@@ -6,7 +6,8 @@
 // it; this is verified by a test.
 
 import { startServer } from "../electron/server.mjs";
-import { looksLikeInstall, serveInstall } from "../electron/install.mjs";
+import { looksLikeInstall, serveInstall, installVersion, REQUIRED_VERSION } from "../electron/install.mjs";
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { WebSocket } from "ws";
 import { existsSync } from "node:fs";
@@ -73,6 +74,45 @@ try {
   ok("an upgrade off the relay path is refused", refused);
 
   a.close(); b.close();
+  console.log("only the Warcraft III OpenWar3 plays is accepted as an install");
+  {
+    // The rule is stated in src/vfs/version.ts, where it is also explained and said to the
+    // player; this side only has to AGREE, so that a folder the game would refuse at load is
+    // never remembered as the chosen one. Compared here rather than trusted, the way
+    // relay-test compares PROTOCOL_VERSION across its own two files.
+    const ts = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "vfs", "version.ts"), "utf8");
+    const declared = /REQUIRED_VERSION\s*=\s*"([^"]+)"/.exec(ts)?.[1];
+    ok("the shell asks for the same version the game does", declared === REQUIRED_VERSION,
+       `install.mjs ${REQUIRED_VERSION}, version.ts ${declared}`);
+
+    const tmp = join(process.env.TMPDIR ?? "/tmp", `ow3-version-test-${process.pid}`);
+    const build = (version) => {
+      rmSync(tmp, { recursive: true, force: true });
+      mkdirSync(join(tmp, "Data"), { recursive: true });
+      writeFileSync(join(tmp, ".build.info"),
+        `Branch!STRING:0|Active!DEC:1|Version!STRING:0\neu|1|${version}\n`);
+    };
+    try {
+      build("1.30.4.11274");
+      ok("the build we play is accepted", looksLikeInstall(tmp), installVersion(tmp));
+      build("1.29.2.9231");
+      ok("an older one is refused", !looksLikeInstall(tmp), installVersion(tmp));
+      build("1.31.1.12164");
+      ok("…and a newer one too — same data, not later data", !looksLikeInstall(tmp));
+      // The build NUMBER is not part of the rule: it varies with the download and says nothing
+      // about the data.
+      build("1.30.4.99999");
+      ok("a different build number of the same version still passes", looksLikeInstall(tmp));
+      rmSync(join(tmp, ".build.info"));
+      ok("a folder that says nothing is refused", !looksLikeInstall(tmp));
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+    // And the developer's own install, which is the one everything else here is measured against.
+    const wc3 = join(dirname(fileURLToPath(import.meta.url)), "..", "Warcraft III");
+    if (existsSync(wc3)) ok("the install in this repo is that version", looksLikeInstall(wc3), installVersion(wc3));
+  }
+
   console.log("the player's install is read over the app's own scheme, not over the port");
   {
     // `serveInstall` takes a Request and returns a Response — `protocol.handle`'s own contract,

@@ -87,6 +87,21 @@ function parseBuildInfo(text: string): Map<string, string> {
   return rows.find((r) => r.get("Active") === "1") ?? rows[0];
 }
 
+/**
+ * The version string of the ACTIVE branch — "1.30.4.11274" on the install OpenWar3 targets.
+ *
+ * `.build.info` is the only file in a CASC store that says which build it is, and it says it in
+ * plain text before anything is mounted, which is what makes it usable as a gate (src/vfs/version.ts).
+ * Null when the file is absent or carries no such column.
+ */
+export function buildInfoVersion(text: string): string | null {
+  try {
+    return parseBuildInfo(text).get("Version") || null;
+  } catch {
+    return null; // not a `.build.info` at all
+  }
+}
+
 /** A build/CDN config: `key = value`, `#` comments. Values with two hashes are `CKey EKey`. */
 function parseConfig(text: string): Map<string, string> {
   const out = new Map<string, string>();

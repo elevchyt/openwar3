@@ -22,7 +22,7 @@ import {
 /** What `electron/preload.cjs` exposes. Absent in a browser, which is how the gate tells the
  *  two boots apart. */
 interface NativeBridge {
-  installPath(): Promise<{ path: string | null; valid: boolean }>;
+  installPath(): Promise<InstalledFolder>;
   pickInstall(): Promise<string | null>;
   forgetInstall(): Promise<void>;
   servers(): Promise<Array<{ id: string; url: string }>>;
@@ -83,10 +83,20 @@ export function onServersFound(fn: (urls: string[]) => void): () => void {
 /** Running inside the desktop app. */
 export const isDesktopApp = (): boolean => bridge() !== null;
 
-/** The remembered folder and whether it is still an install — `valid: false` with a path is a
- *  folder that has been moved or deleted, which is worth saying rather than silently re-asking. */
-export async function rememberedInstall(): Promise<{ path: string | null; valid: boolean }> {
-  return (await bridge()?.installPath()) ?? { path: null, valid: false };
+/** The remembered folder, and why it is not usable when it is not. A folder that has been MOVED
+ *  and one that has been PATCHED to another Warcraft III are both `valid: false` and are not the
+ *  same news to the player. */
+export interface InstalledFolder {
+  path: string | null;
+  valid: boolean;
+  /** The folder is still on disk. False means it moved or went away. */
+  present: boolean;
+  /** What it says it is, when it is there and says anything. */
+  version: string | null;
+}
+
+export async function rememberedInstall(): Promise<InstalledFolder> {
+  return (await bridge()?.installPath()) ?? { path: null, valid: false, present: false, version: null };
 }
 
 /** Open the OS folder picker. Null if the player cancelled, or picked something that is not a
