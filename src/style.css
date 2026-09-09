@@ -1462,8 +1462,8 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
    other geoset. */
 .scroll-arrow {
   position: fixed;
-  width: 32px;
-  height: 32px;
+  width: var(--cursor-px, 32px);
+  height: var(--cursor-px, 32px);
   transform: translate(-50%, -50%);
   pointer-events: none;
   z-index: 8;
@@ -1472,15 +1472,17 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
   animation: scroll-arrow-frames 0.1s steps(3) infinite;
 }
 @keyframes scroll-arrow-frames {
-  /* In px, not %: the box is 32px and the strip 96px, so the three stops land exactly on
-     0 / -32 / -64 (a % here would be measured against box-minus-image and slide off). */
+  /* In px, not %: the box is one cell and the strip three of them, so the three stops land
+     exactly on 0 / -1 / -2 cells (a % here would be measured against box-minus-image and
+     slide off). --cursor-px is written by applyRaceCursor, so the strip and the box are cut
+     and sized off ONE number and cannot drift. */
   from { background-position-x: 0; }
-  to { background-position-x: -96px; }
+  to { background-position-x: calc(var(--cursor-px, 32px) * -3); }
 }
 .order-reticle {
   position: fixed;
-  width: 32px;
-  height: 32px;
+  width: var(--cursor-px, 32px);
+  height: var(--cursor-px, 32px);
   background: center / contain no-repeat;
   pointer-events: none;
   z-index: 7;
@@ -1506,7 +1508,8 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
 .carried-item { z-index: 9; }
 .carried-hand { z-index: 10; } /* in front of the icon — the fingers close OVER it */
 .order-reticle.reticle { transform: translate(-50%, -50%); } /* centred on the point */
-.order-reticle.hand { transform: translate(-3px, -3px); } /* CURSOR_HOTSPOT — near the tip */
+/* CURSOR_HOTSPOT — near the tip; written out by applyRaceCursor, scaled with the art. */
+.order-reticle.hand { transform: translate(calc(var(--cursor-hotspot-x, 3px) * -1), calc(var(--cursor-hotspot-y, 3px) * -1)); }
 /* Pulse the COLOUR intensity only — never opacity, never size. brightness()
    glows the tint brighter and back; opacity stays 1 the whole time. */
 .order-reticle.pulse { animation: reticle-pulse 0.8s ease-in-out infinite; }

@@ -8,6 +8,15 @@ import type { DataSource } from "../vfs/types";
 // menu is up. In-game, the race cursor system in mapViewer.ts (applyRaceCursor) owns
 // the cursor instead, so this rule is scoped to :not(.in-game).
 
+/** How much larger than its own art every cursor is drawn. The sheet's cell is 32 px — the
+ *  size WC3 drew a pointer at on a 2003 display — which reads as a very small pointer on a
+ *  modern one, so every cell we cut is blown up by this factor with smoothing OFF, keeping
+ *  the art's own pixels rather than blurring them. It is ONE number because the cursor is
+ *  several images that must agree: the `cursor:` rules here and in mapViewer, the DOM
+ *  stand-ins that replace the pointer (the reticle, the hover hand, the edge-scroll chevron,
+ *  the carried gauntlet) and the hotspot they all offset by. */
+export const CURSOR_SCALE = 2;
+
 let styleEl: HTMLStyleElement | null = null;
 
 /** Apply a race's hand cursor across the (non-in-game) menu screens. Human everywhere except
@@ -18,18 +27,23 @@ export function applyMenuCursor(vfs: DataSource, race: "Human" | "Orc" | "Undead
   const sheet = bytes ? blpToCanvas(bytes) : null;
   if (!sheet) return;
   const cell = Math.round(sheet.width / 8); // 8 cells wide; top-left = idle pointer
+  const size = cell * CURSOR_SCALE;
   const c = document.createElement("canvas");
-  c.width = cell;
-  c.height = cell;
-  c.getContext("2d")!.drawImage(sheet, 0, 0, cell, cell, 0, 0, cell, cell);
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext("2d")!;
+  ctx.imageSmoothingEnabled = false; // nearest-neighbour: the gauntlet's pixels, just bigger
+  ctx.drawImage(sheet, 0, 0, cell, cell, 0, 0, size, size);
   const url = c.toDataURL();
   if (!styleEl) {
     styleEl = document.createElement("style");
     document.head.appendChild(styleEl);
   }
-  // Hotspot near the gauntlet's fingertip (top-left), matching applyRaceCursor. Use
-  // !important so the hand shows in every state (buttons, hovers) — the reference menu
-  // never changes the cursor. The in-game race cursor is also !important and scoped to
-  // body.in-game, so it still wins during a match.
-  styleEl.textContent = `body:not(.in-game), body:not(.in-game) * { cursor: url(${url}) 3 3, auto !important; }`;
+  // Hotspot near the gauntlet's fingertip (top-left), matching applyRaceCursor — and scaled
+  // with the art, since it is a texel INSIDE the image we just enlarged. Use !important so
+  // the hand shows in every state (buttons, hovers) — the reference menu never changes the
+  // cursor. The in-game race cursor is also !important and scoped to body.in-game, so it
+  // still wins during a match.
+  const hot = 3 * CURSOR_SCALE;
+  styleEl.textContent = `body:not(.in-game), body:not(.in-game) * { cursor: url(${url}) ${hot} ${hot}, auto !important; }`;
 }
