@@ -2302,6 +2302,10 @@ const TREE_HP = 50;
 const TREE_RADIUS = 16; // half a tree's 2×2-cell footprint, for the reach latch
 const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
 const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
+// Trees a worker will test for reachability (pickTreeNear) before deciding there is nothing
+// here it can get to. Nothing deeper in a forest is reachable once the trunks in front of it
+// are not, so the cap only ever cuts short an answer that was already settled.
+const TREE_REACH_PROBES = 64;
 /** How far an autocasting Wisp looks for a damaged building to Renew. A wisp has no weapon,
  *  so it has no `acquire` of its own to borrow (the number every other friendly autocast uses
  *  — see autocastSearchRange); this is the Ancient of War's 500 acquisition range, the closest
@@ -3259,24 +3263,96 @@ export class SimWorld {
     return null;
   }
 
-  /** The nearest tree to (x, y) within `maxDist` that no other wisp has (treeWorkedBy).
-   *  The taken set is collected once and then read — a grove is thousands of trees and
-   *  asking each of them who has it would walk the unit list thousands of times. */
-  private freeTreeNear(u: SimUnit, x: number, y: number, maxDist: number): SimTree | null {
-    const taken = new Set<number>();
-    for (const o of this.units.values()) {
-      if (o.id === u.id || o.hp <= 0 || !o.worker?.deliversInPlace) continue;
-      if (o.order === "harvest" && o.resKind === "lumber") taken.add(o.resId);
+  /**
+   * How far from a trunk a worker may stand and still work it — `tickHarvest`'s own latch
+   * reach with a cell of slack, and deliberately the SAME number for both kinds of worker.
+   * A wisp's is the real one (it stops against the tree's BLOCKED footprint and slips in
+   * from there); a chopper's own latch is tighter, but this is asked to answer "is there
+   * ground beside this tree I could walk to", where being a little generous falls back on
+   * the arrival fix-up that has always been there and being tight would leave a lumberjack
+   * with no tree at all.
+   */
+  private treeProbeReach(u: SimUnit, t: SimTree): number {
+    return t.blockRadius + u.radius + 48;
+  }
+
+  /**
+   * Can this worker WALK to a spot it could work this tree from?
+   *
+   * A wisp does not stand at a trunk, it goes INSIDE it (tickHarvest), and it takes that last
+   * step by simply BEING at the trunk — so a tree chosen without asking this question is a
+   * tree the wisp teleports into. Sent at a grove whose front row was already taken, it
+   * parked against the treeline, the arrival fix-up handed it the nearest FREE trunk (the
+   * second row), and it hopped in behind trees nothing can walk past; once inside, the next
+   * pick was measured from THERE, so it worked its way into the middle of the forest one
+   * trunk at a time.
+   *
+   * Answered off the grid's static connectivity labels (PathingGrid.regionAt) rather than
+   * with an A*: it is asked of a few candidate trees at a time, the labels already answer
+   * "could a body this size get there if nobody were in the way" in O(1), and a crowd is a
+   * wait rather than a wall. What it looks for is a cell WITHIN WORKING REACH of the trunk
+   * that this worker's own footprint fits on and that lies in the region the worker is
+   * standing in — a tree hemmed in by other trees has no such cell, which is exactly the
+   * case being ruled out. Unknown at either end is not a verdict: answer true and leave the
+   * behaviour where it was.
+   */
+  private treeReachable(u: SimUnit, t: SimTree): boolean {
+    if (!this.grid || u.flying) return true;
+    const n = Math.max(u.footprint || footprintCells(u.radius), 1);
+    const domain = pathDomain(u);
+    // The worker's own region, read with the same nearest-ground fallback the trunk gets: a
+    // wisp asks this from INSIDE the trunk it is working, whose cells nothing may stand on.
+    const [sx, sy] = this.grid.footprintAnchor(u.x, u.y, n);
+    const from = this.grid.regionNear(sx, sy, domain, n, 3);
+    if (from < 0) return true;
+    const reach = this.treeProbeReach(u, t);
+    const [tcx, tcy] = this.grid.worldToCell(t.x, t.y);
+    const r = Math.max(1, Math.ceil(reach / PATHING_CELL));
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const [wx, wy] = this.grid.footprintCenter(tcx + dx, tcy + dy, n);
+        if (Math.hypot(wx - t.x, wy - t.y) > reach) continue;
+        if (this.grid.regionAt(tcx + dx, tcy + dy, domain, n) === from) return true;
+      }
     }
-    let best: SimTree | null = null;
-    let bestD = maxDist;
+    return false;
+  }
+
+  /**
+   * The nearest tree to (x, y) within `maxDist` that this worker can actually GET TO
+   * (treeReachable) and — for a wisp — that no other wisp has (treeWorkedBy). Null when
+   * there is none, which every caller reads as "keep the tree you have" or "go home", never
+   * as a reason to walk into the forest.
+   *
+   * The taken set is collected once and then read — a grove is thousands of trees and asking
+   * each of them who has it would walk the unit list thousands of times — and the
+   * reachability probe runs in DISTANCE ORDER and stops at the first tree that passes, so
+   * the ordinary case (the trunk in front of us is fine) costs exactly one probe. The cap is
+   * there for the other case, a worker looking at a forest it cannot enter at all: nothing
+   * further in is going to be reachable either, and a thousand probes would be paid to say so.
+   */
+  private pickTreeNear(u: SimUnit, x: number, y: number, maxDist: number): SimTree | null {
+    const taken = new Set<number>();
+    if (u.worker?.deliversInPlace) {
+      for (const o of this.units.values()) {
+        if (o.id === u.id || o.hp <= 0 || !o.worker?.deliversInPlace) continue;
+        if (o.order === "harvest" && o.resKind === "lumber") taken.add(o.resId);
+      }
+    }
+    const near: Array<{ t: SimTree; d: number }> = [];
     for (const t of this.trees.values()) {
       const d = Math.hypot(t.x - x, t.y - y);
-      if (d >= bestD || taken.has(t.id)) continue;
-      bestD = d;
-      best = t;
+      if (d >= maxDist || taken.has(t.id)) continue;
+      near.push({ t, d });
     }
-    return best;
+    // Ties broken on the id, so every machine in a lockstep match picks the same trunk.
+    near.sort((a, b) => a.d - b.d || a.t.id - b.t.id);
+    let probes = 0;
+    for (const e of near) {
+      if (this.treeReachable(u, e.t)) return e.t;
+      if (++probes >= TREE_REACH_PROBES) break;
+    }
+    return null;
   }
 
   /** Standing trees within `radius` of a point — the set an area spell that lists
@@ -8963,9 +9039,18 @@ export class SimWorld {
     // neighbouring tree rather than stacking two inside one trunk. Sent at a taken tree, take
     // the nearest free one instead; with none free anywhere near, keep the order as given (the
     // arrival re-asks, and by then a seat may have opened).
-    if (kind === "lumber" && u.worker.deliversInPlace && this.treeWorkedBy(nodeId, id)) {
+    //
+    // …and the same substitution for a tree the worker cannot WALK to (treeReachable), which
+    // is the other half of the same rule: a trunk in the middle of a grove is not a tree you
+    // queue for either. WC3 gathers from the closest ACCESSIBLE tree to the one you clicked,
+    // and for a wisp — which takes its last step by BEING in the trunk — the alternative is
+    // not "it never arrives" but "it is inside the forest".
+    if (kind === "lumber") {
       const t = this.trees.get(nodeId)!;
-      nodeId = (this.freeTreeNear(u, t.x, t.y, RETARGET_RANGE) ?? t).id;
+      const seatTaken = u.worker.deliversInPlace && !!this.treeWorkedBy(nodeId, id);
+      if (seatTaken || !this.treeReachable(u, t)) {
+        nodeId = (this.pickTreeNear(u, t.x, t.y, RETARGET_RANGE) ?? t).id;
+      }
     }
     u.order = "harvest";
     u.targetId = null;
@@ -16379,9 +16464,10 @@ export class SimWorld {
     // Lumber.
     let tree = this.trees.get(u.resId) ?? null;
     if (!tree) {
-      // Our tree is gone (chopped out from under us, burned, eaten). Take the next one —
-      // for a wisp, the next FREE one: one wisp to a tree (treeWorkedBy).
-      tree = w.deliversInPlace ? this.freeTreeNear(u, u.x, u.y, RETARGET_RANGE) : this.nearestTree(u.x, u.y, RETARGET_RANGE);
+      // Our tree is gone (chopped out from under us, burned, eaten). Take the next one it
+      // can WALK to (pickTreeNear) — and for a wisp the next FREE one with it: one wisp to a
+      // tree (treeWorkedBy).
+      tree = this.pickTreeNear(u, u.x, u.y, RETARGET_RANGE);
       if (!tree) {
         // No tree left to chop: haul the partial load home (startReturn clears the
         // working flag and paths to the depot), or idle if empty-handed.
@@ -16412,11 +16498,11 @@ export class SimWorld {
     // check cannot see a wisp that took this trunk while we were flying to it, and two wisps
     // sent at the same free tree in the same breath both set out for it. So the claim is made
     // HERE, at the trunk, against whoever is already WORKING it — the wisp in the tree keeps
-    // it and the one arriving moves on to the nearest free one, rather than the two of them
-    // sharing a trunk and paying double. (Ticking is in map order, so the pair that arrive on
+    // it and the one arriving moves on to the nearest free one it can walk to, rather than
+    // the two of them sharing a trunk and paying double. (Ticking is in map order, so the pair that arrive on
     // the same tick resolve the same way on every machine.)
     if (w.deliversInPlace && !u.working && this.treeWorkedBy(tree.id, u.id, true)) {
-      const free = this.freeTreeNear(u, u.x, u.y, RETARGET_RANGE);
+      const free = this.pickTreeNear(u, u.x, u.y, RETARGET_RANGE);
       if (free && free.id !== tree.id) {
         u.resId = free.id;
         u.atNode = false;
@@ -16438,10 +16524,12 @@ export class SimWorld {
     // WC3 gathers from the closest ACCESSIBLE tree to the one you clicked. Asked ONCE, on
     // the tick it parks: this is a fix-up for the approach, not a standing re-evaluation.
     if (!u.working && Math.hypot(tree.x - u.x, tree.y - u.y) > reach) {
-      // …and for a wisp the substitute has to be a FREE tree, or the fix-up for one problem
-      // (the tree it was sent to is walled off) would hand it straight into the other (a
-      // trunk another wisp is already inside).
-      const near = w.deliversInPlace ? this.freeTreeNear(u, u.x, u.y, reach + 48) : this.nearestTree(u.x, u.y, reach + 48);
+      // …and the substitute is picked the same way every other tree is (pickTreeNear): one
+      // this worker can walk to, and for a wisp a FREE one — otherwise the fix-up for one
+      // problem (the tree it was sent to is walled off) hands it straight into one of the
+      // other two, a trunk another wisp is already inside or a trunk deeper into the grove
+      // than the one it could not reach.
+      const near = this.pickTreeNear(u, u.x, u.y, reach + 48);
       if (near && near.id !== tree.id) {
         tree = near;
         u.resId = near.id;
@@ -16531,7 +16619,7 @@ export class SimWorld {
         // The tree we were chopping just fell. If we aren't full yet, walk to the
         // nearest remaining tree straight away and keep gathering (no idle frame).
         if (w.carryLumber < w.lumberCapacity) {
-          const next = this.nearestTree(u.x, u.y, RETARGET_RANGE);
+          const next = this.pickTreeNear(u, u.x, u.y, RETARGET_RANGE);
           if (next) {
             u.resId = next.id;
             u.atNode = false;
@@ -16641,7 +16729,7 @@ export class SimWorld {
       const [tx, ty] = this.mineApproach(u, mine);
       this.pathTo(u, tx, ty);
     } else if (u.resKind === "lumber") {
-      const tree = this.trees.get(u.resId) ?? this.nearestTree(u.x, u.y, RETARGET_RANGE);
+      const tree = this.trees.get(u.resId) ?? this.pickTreeNear(u, u.x, u.y, RETARGET_RANGE);
       if (tree) {
         u.resId = tree.id;
         u.order = "harvest";

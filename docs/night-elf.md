@@ -63,7 +63,7 @@ to fill.
 they do in the original; a wisp is *in* the tree, so an occupied one is not a queue you join but
 a seat that is taken — WC3 sends the second wisp to a neighbouring tree, and five wisps told to
 harvest one trunk end up in five. `SimWorld.treeWorkedBy` answers who has a tree and
-`freeTreeNear` finds the nearest one nobody does; `issueHarvest` redirects at the order and
+`pickTreeNear` finds the nearest one nobody does; `issueHarvest` redirects at the order and
 `tickHarvest` re-asks at the trunk, because a seat free when a wisp set out can be taken by the
 time it lands (and two wisps sent at one free tree in the same breath both set out for it). The
 order-time check counts a wisp *walking* to a tree as holding it — that is what splits a group
@@ -107,6 +107,18 @@ Two more things survive the orbit's removal, because they were never about the m
   wisp never enters those cells at all — it stops against them, further out than a chopper
   stands. Measured the chopper's way it arrives, is judged out of reach, re-targets the nearest
   tree, is out of reach again, and drifts across the map one tree at a time.
+* **And the tree has to be one it could have WALKED to** (`treeReachable`, asked by
+  `pickTreeNear` of every trunk it offers). This is the other end of the same fact: a wisp
+  takes the last step into a trunk by simply BEING there, so a tree chosen without asking is a
+  tree it teleports into. Sent at a grove whose front row was already taken, it parked against
+  the treeline, the arrival fix-up handed it the nearest FREE trunk — the second row — and it
+  hopped in behind trees nothing can walk past; measured from THERE, the next pick was deeper
+  again. The report was wisps sitting in the middle of a forest. The question is answered off
+  the pathing grid's static connectivity labels (`PathingGrid.regionAt`, keyed on the mover's
+  own footprint) rather than with an A*: is there a cell within working reach of the trunk that
+  this worker fits on and that lies in the region it is standing in? A trunk hemmed in by other
+  trunks has none. Choppers are asked the same question — WC3 gathers from the closest
+  ACCESSIBLE tree to the one you clicked, and that is what "accessible" means.
 * **A working wisp holds no cell** (`unsettle` + `noCollision`), or a body parked against the
   treeline would wall the forest off one wisp at a time. The cost is that where it stands can
   be inside a neighbouring trunk's block — a grove's footprints overlap — and A* cannot START

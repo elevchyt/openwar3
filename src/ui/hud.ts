@@ -1262,7 +1262,11 @@ export class GameHud {
     this.root.append(
       this.buildConsole(skin),
       this.buildHeroBar(),
-      this.buildCheatPanel(),
+      // The cheat panel is DEVELOPMENT ONLY, and it is gated the way every other dev-only
+      // thing in the app is (src/dev/devBoot.ts): `import.meta.env.DEV` is a compile-time
+      // constant that Vite folds to `false` in a build, so a packaged OpenWar3 has no
+      // +5000 Gold button, no Spawn Hero and no collider overlay to find.
+      ...(import.meta.env.DEV ? [this.buildCheatPanel()] : []),
       this.buildMessageLog(),
       this.buildChatLog(),
       this.buildChatBar(),
@@ -1741,7 +1745,10 @@ export class GameHud {
   }
 
   /** A small floating panel of debug cheats in the bottom-right corner: top up
-   *  gold/lumber/food and a Fast Build toggle (builds + trains finish in ~1s). */
+   *  gold/lumber/food and a Fast Build toggle (builds + trains finish in ~1s).
+   *
+   *  DEV SERVER ONLY — the call site is behind `import.meta.env.DEV`, so none of this is
+   *  built into a packaged game. */
   private buildCheatPanel(): HTMLDivElement {
     const panel = document.createElement("div");
     panel.className = "hud-cheats";
@@ -2372,22 +2379,31 @@ export class GameHud {
       // the next click spends it, and a hero's button stands in for the hero: clicking one
       // hands the item over, exactly as clicking that hero's body on the map does. The give
       // is tried first and only a refusal falls through to selecting.
-      onPress(btn, () => {
-        if (this.driver.dropItemOnHero(i)) {
-          this.setArmed(false);
+      //
+      // Right-click is the button's OTHER meaning (`alt`): rally a selected production
+      // building onto this hero — the same order a right-click on its body in the world
+      // gives, without having to find the body. It goes through `onPress` for the same
+      // reason the left button does, and it is the same lesson the autocast buttons already
+      // learned: hung off `contextmenu` the portrait never MOVED under the right press,
+      // because the browser fires that at whichever end of the click the platform chose
+      // rather than at the press. Bound here, the portrait sinks under the press and the
+      // order leaves on the release, so it can be backed out of by sliding off it.
+      // `contextmenu` is left doing the one thing it is for — suppressing the menu.
+      onPress(
+        btn,
+        () => {
+          if (this.driver.dropItemOnHero(i)) {
+            this.setArmed(false);
+            this.refreshSelectionNow();
+            return;
+          }
+          this.driver.selectHero(i, false);
           this.refreshSelectionNow();
-          return;
-        }
-        this.driver.selectHero(i, false);
-        this.refreshSelectionNow();
-      });
+        },
+        () => this.driver.rallyToHero(i),
+      );
       btn.addEventListener("dblclick", () => this.driver.selectHero(i, true));
-      // Right-click: rally a selected production building onto this hero — the same order a
-      // right-click on its body in the world gives, without having to find the body.
-      btn.oncontextmenu = (e) => {
-        e.preventDefault();
-        this.driver.rallyToHero(i);
-      };
+      btn.oncontextmenu = (e) => e.preventDefault();
       // …and the drag half of handing an item over: drop an inventory icon on the portrait.
       // preventDefault on dragover is what marks the button as a drop target at all.
       btn.addEventListener("dragover", (e) => {
@@ -2745,11 +2761,13 @@ export class GameHud {
       cd.appendChild(cdText);
       const count = countBadge();
       btn.append(cd, count);
-      onPress(btn, () => this.driver.useInventory(i));
-      btn.oncontextmenu = (e) => {
-        e.preventDefault();
-        this.driver.moveInventory(i);
-      };
+      // Both meanings through `onPress`, so the pocket sinks under EITHER button and the
+      // item leaves on the release — the same reason the hero bar's portraits and the
+      // autocast buttons do it, and the same bug when they did not: a right-click hung off
+      // `contextmenu` fires at whichever end of the click the platform chose, so the slot
+      // never moved. `contextmenu` keeps the menu off it and nothing else.
+      onPress(btn, () => this.driver.useInventory(i), () => this.driver.moveInventory(i));
+      btn.oncontextmenu = (e) => e.preventDefault();
       // Drag an item OUT of the pocket and onto another hero's button in the top-left bar to
       // hand it over. The slot index is the whole payload; where it lands decides what
       // happens (see the hero bar's `drop`). Only a slot holding something can be dragged —

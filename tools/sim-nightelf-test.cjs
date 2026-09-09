@@ -203,6 +203,77 @@ console.log("…and ONE wisp to a tree — a taken trunk sends the next one to a
   check("…and both are working a tree of their own", world.units.get(4).working && world.units.get(2).working);
 }
 
+console.log("…and only into a tree it could have WALKED to");
+{
+  // A wisp takes the last step into a trunk by simply BEING there (tickHarvest moves it onto
+  // the tree's own position), so a tree picked without asking whether it can be reached is a
+  // tree the wisp teleports into. Sent at a grove whose front row was taken it parked against
+  // the treeline, the arrival fix-up handed it the nearest FREE trunk — the second row — and
+  // it hopped in behind trees nothing can walk past; measured from THERE, the next pick was
+  // deeper again. The report: wisps sitting in the middle of a forest.
+  //
+  // A real forest is solid: map trees carry `4x4Default`, so a trunk blocks 4x4 cells (128
+  // units, footprintRadius 64) and they are placed on a 128 grid. A 5x5 block of them has a
+  // perimeter anybody can reach and an interior nothing can — which is the whole test.
+  const world = newWorld(200, 200);
+  world.initStash(0, 0, 0);
+  const GROVE = 5, SPACING = 128, X0 = 2000, Y0 = 2000;
+  const grove = [];
+  for (let row = 0; row < GROVE; row++) {
+    for (let col = 0; col < GROVE; col++) {
+      const t = world.addTree(X0 + col * SPACING, Y0 + row * SPACING, 50, 64);
+      const [cx, cy] = world.grid.worldToCell(t.x, t.y);
+      for (let dy = -2; dy <= 1; dy++) for (let dx = -2; dx <= 1; dx++) world.grid.block(cx + dx, cy + dy);
+      grove.push(t);
+    }
+  }
+  const centre = grove[Math.floor(grove.length / 2)]; // the middle of the 5x5 — walled in on every side
+  const perimeter = (t) => Math.abs(t.x - centre.x) >= 2 * SPACING || Math.abs(t.y - centre.y) >= 2 * SPACING;
+  check("the grove really is solid", (() => {
+    const [cx, cy] = world.grid.worldToCell(centre.x, centre.y);
+    return !world.grid.walkable(cx, cy) && !world.grid.walkable(cx + 2, cy) && !world.grid.walkable(cx - 3, cy);
+  })(), "the middle trunk has open ground beside it");
+
+  // Sent at the trunk in the middle of it, from outside.
+  world.add(wisp(1, X0 + 2 * SPACING, Y0 - 600));
+  world.issueHarvest(1, "lumber", centre.id);
+  const u = world.units.get(1);
+  check("a wisp sent at a walled-in trunk is given one it can reach instead",
+    u.resId !== centre.id && perimeter(world.trees.get(u.resId)), `tree ${u.resId}`);
+  for (let t = 0; t < 30 / 0.05; t++) world.tick(0.05);
+  check("…and that is the tree it works", u.working && perimeter(world.trees.get(u.resId)), `working ${u.working}, tree ${u.resId}`);
+  check("…from a trunk on the outside of the grove, not inside it", perimeter({ x: u.x, y: u.y }), `${Math.round(u.x)},${Math.round(u.y)}`);
+  check("…and it is paid for it", world.stashOf(0).lumber > 0, `${world.stashOf(0).lumber} lumber`);
+
+  // The other half of the report: the front row FILLS UP, and it is the wisps that arrive
+  // after it that used to hop over it. One wisp to a tree still holds, so with the outside of
+  // the grove taken they must go without rather than climb inside.
+  const world2 = newWorld(200, 200);
+  world2.initStash(0, 0, 0);
+  const trees2 = [];
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      const t = world2.addTree(X0 + col * SPACING, Y0 + row * SPACING, 50, 64);
+      const [cx, cy] = world2.grid.worldToCell(t.x, t.y);
+      for (let dy = -2; dy <= 1; dy++) for (let dx = -2; dx <= 1; dx++) world2.grid.block(cx + dx, cy + dy);
+      trees2.push(t);
+    }
+  }
+  const middle = trees2[4]; // the one trunk of a 3x3 grove nothing can stand beside
+  // Eight wisps for the eight trunks that have ground beside them, every one of them sent at
+  // the middle: the trunk in the centre of a grove is the one seat that stays empty.
+  for (let i = 0; i < 8; i++) world2.add(wisp(i + 1, X0 - 400 + i * 60, Y0 - 500));
+  for (let i = 0; i < 8; i++) world2.issueHarvest(i + 1, "lumber", middle.id);
+  for (let t = 0; t < 40 / 0.05; t++) world2.tick(0.05);
+  const seats2 = [...Array(8)].map((_, i) => world2.units.get(i + 1).resId);
+  const inside = [...Array(8)].map((_, i) => world2.units.get(i + 1))
+    .filter((w) => Math.hypot(w.x - middle.x, w.y - middle.y) < SPACING * 0.5).length;
+  check("eight wisps sent at a walled-in trunk fan out over the eight around it",
+    new Set(seats2).size === 8 && !seats2.includes(middle.id), seats2.join(","));
+  check("…all of them working", [...Array(8)].every((_, i) => world2.units.get(i + 1).working), seats2.join(","));
+  check("…and not one of them inside the grove", inside === 0, `${inside} inside`);
+}
+
 console.log("Build style — a Wisp grows a structure from inside it");
 {
   const world = newWorld();
