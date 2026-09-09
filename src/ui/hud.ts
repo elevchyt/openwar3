@@ -3579,58 +3579,47 @@ export class GameHud {
   }
 
   /** The map's own markers: creep-camp difficulty dots and the gold-mine / neutral-building
-   *  glyphs. They are laid out in ONE pass because they overlap each other — a camp dot is a
-   *  flat ellipse coloured and sized by the camp's combined level exactly as
+   *  glyphs. They are laid out in ONE pass because they land on top of one another — a camp dot
+   *  is a flat ellipse coloured and sized by the camp's combined level exactly as
    *  `UI\MiscData.txt` [Minimap] prescribes (green below level 10, orange to 19, red beyond,
-   *  and 1.3× wide from 10 up), and a guarded gold mine puts one of those on top of its glyph.
-   *  Two markers whose footprints TOUCH are both drawn at `MARKER_CROWD_ALPHA` so each can be
-   *  read through the other; a marker standing on its own is untouched. */
+   *  and 1.3× wide from 10 up), and the creeps guarding a gold mine have their centroid ON the
+   *  mine, so the camp's dot and the mine's glyph are very nearly concentric.
+   *
+   *  Two rules keep such a pair readable. A camp and a glyph that TOUCH are both drawn at
+   *  `MARKER_CROWD_ALPHA`, so each shows through the other — and only a MIXED pair: two camps
+   *  or two glyphs are the same kind of marker twice, where fading both says nothing and only
+   *  costs contrast. And the camp dots go on TOP, because a camp dot is a plain disc SMALLER
+   *  than a glyph: under the glyph it is covered entirely and 60 % of nothing is still nothing,
+   *  while over it the glyph's ring and its rim read around and through the disc. */
   private drawMapMarkers(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
     const s = MAP_GLYPH * MINIMAP_SIZE; // glyph side in the dots canvas's pixel space
-    const camps: Array<{ x: number; y: number; r: number; color: string }> = [];
-    const glyphs: Array<{ x: number; y: number; r: number; icon: string; img: HTMLImageElement }> = [];
+    const camps: Array<{ x: number; y: number; r: number; color: string; crowded: boolean }> = [];
+    const glyphs: Array<{ x: number; y: number; r: number; icon: string; img: HTMLImageElement; crowded: boolean }> = [];
     for (const camp of this.driver.creepCamps()) {
       const p = this.toMini(camp.x, camp.y, ox, oy, w, h);
       if (!p) continue;
       const { color, scale } = campMarker(camp.level);
-      camps.push({ x: p[0], y: p[1], r: (CAMP_DOT * MINIMAP_SIZE * scale) / 2, color });
+      camps.push({ x: p[0], y: p[1], r: (CAMP_DOT * MINIMAP_SIZE * scale) / 2, color, crowded: false });
     }
     for (const g of this.driver.minimapIcons()) {
       const img = this.mapGlyph(g.icon);
       if (!img?.complete || img.naturalWidth === 0) continue;
       const p = this.toMini(g.x, g.y, ox, oy, w, h);
       if (!p) continue;
-      glyphs.push({ x: p[0], y: p[1], r: s / 2, icon: g.icon, img });
+      glyphs.push({ x: p[0], y: p[1], r: s / 2, icon: g.icon, img, crowded: false });
     }
-    // Which markers are crowded: a pair touches when the distance between their centres is
-    // less than the sum of their radii. Camps and glyphs are one list here — a mine's glyph
-    // and the camp guarding it is the pair this exists for — and the count is small enough
-    // (a melee map has a couple of dozen markers) that the pairwise sweep costs nothing.
-    const marks = [...camps, ...glyphs];
-    const crowded = marks.map(() => false);
-    for (let i = 0; i < marks.length; i++) {
-      for (let j = i + 1; j < marks.length; j++) {
-        const dx = marks[i].x - marks[j].x, dy = marks[i].y - marks[j].y;
-        const reach = marks[i].r + marks[j].r;
-        if (dx * dx + dy * dy < reach * reach) { crowded[i] = true; crowded[j] = true; }
+    // Which markers are crowded: a camp and a glyph touch when the distance between their
+    // centres is less than the sum of their radii. Only the mixed pairs are asked, so the
+    // sweep is camps × glyphs — and both counts are small enough (a melee map has a couple
+    // of dozen markers all told) that it costs nothing at the minimap's redraw rate.
+    for (const c of camps) {
+      for (const g of glyphs) {
+        const dx = c.x - g.x, dy = c.y - g.y, reach = c.r + g.r;
+        if (dx * dx + dy * dy < reach * reach) { c.crowded = true; g.crowded = true; }
       }
     }
-    const alpha = (i: number): number => (crowded[i] ? MARKER_CROWD_ALPHA : 1);
-    for (let i = 0; i < camps.length; i++) {
-      const c = camps[i];
-      ctx.globalAlpha = alpha(i);
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
-      ctx.fillStyle = c.color;
-      ctx.fill();
-      ctx.lineWidth = MARKER_OUTLINE;
-      ctx.strokeStyle = "#000";
-      ctx.stroke();
-    }
-    // Glyphs over camps, as before: the mine's art is the thing you are looking for.
-    for (let i = 0; i < glyphs.length; i++) {
-      const g = glyphs[i];
-      ctx.globalAlpha = alpha(camps.length + i);
+    for (const g of glyphs) {
+      ctx.globalAlpha = g.crowded ? MARKER_CROWD_ALPHA : 1;
       const x = g.x - s / 2, y = g.y - s / 2;
       const rim = this.glyphOutline(g.icon, g.img, s);
       // The rim is the glyph's own silhouette stamped at eight one-pixel offsets — the art is
@@ -3642,6 +3631,16 @@ export class GameHud {
         }
       }
       ctx.drawImage(g.img, x, y, s, s);
+    }
+    for (const c of camps) {
+      ctx.globalAlpha = c.crowded ? MARKER_CROWD_ALPHA : 1;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+      ctx.fillStyle = c.color;
+      ctx.fill();
+      ctx.lineWidth = MARKER_OUTLINE;
+      ctx.strokeStyle = "#000";
+      ctx.stroke();
     }
     ctx.globalAlpha = 1;
   }
