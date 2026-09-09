@@ -25,6 +25,11 @@
     "app": "electron electron/main.mjs",
     "app:dev": "OPENWAR3_DEV=1 electron electron/main.mjs",
     "app:test": "node tools/electron-server-test.mjs && node tools/beacon-test.mjs",
+    "icon": "node tools/make-icon.mjs",
+    "dist": "pnpm build && node tools/make-icon.mjs && electron-builder",
+    "dist:linux": "pnpm build && node tools/make-icon.mjs && electron-builder --linux",
+    "dist:win": "pnpm build && node tools/make-icon.mjs && electron-builder --win",
+    "dist:mac": "pnpm build && node tools/make-icon.mjs && electron-builder --mac",
     "relay": "node server/relay.mjs",
     "relay-kill": "node server/relay-kill.mjs",
     "relay:test": "node tools/relay-test.mjs && node tools/loopback-test.mjs",
@@ -39,6 +44,7 @@
   },
   "devDependencies": {
     "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   },
@@ -50,5 +56,50 @@
     "patchedDependencies": {
       "mdx-m3-viewer@5.12.0": "patches/mdx-m3-viewer@5.12.0.patch"
     }
-  }
+  },
+  "main": "electron/main.mjs",
+  "author": "elevchyt",
+  "build": {
+    "appId": "dev.elevchyt.openwar3",
+    "productName": "OpenWar3",
+    "copyright": "OpenWar3 contributors",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "package.json",
+      "!node_modules/**/*",
+      "node_modules/ws/**/*"
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Game",
+      "synopsis": "Browser-first re-creation of the Warcraft III engine",
+      "syncDesktopName": true,
+      "executableName": "openwar3",
+      "desktop": {
+        "entry": {
+          "Name": "OpenWar3"
+        }
+      }
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.games"
+    }
+  },
+  "desktopName": "openwar3.desktop"
 }

@@ -42,6 +42,17 @@ and it finds the other copies on your network by itself. Open **Local Area Netwo
 machines and the games appear; nobody types an address. (The address box is still there under
 **Servers List**, for a machine on another subnet or one the broadcast cannot reach.)
 
+Packaged builds:
+
+```bash
+pnpm dist:linux    # release/OpenWar3-<version>.AppImage
+pnpm dist:win      # release/… .exe   (NSIS installer)
+pnpm dist:mac      # release/… .dmg
+```
+
+**The AppImage does not go in your Warcraft III folder** — put it anywhere. It asks where the game
+is on first run and remembers, so the two are unrelated on disk.
+
 ### Playing on a LAN
 
 Two machines on the same network, no cloud and no accounts. On the machine hosting:

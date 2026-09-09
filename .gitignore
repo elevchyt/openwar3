@@ -28,3 +28,5 @@ Warcraft III/
 # Per-match performance logs (src/dev/perfLog.ts + tools/vite-plugin-perf-log.ts).
 # Local recordings of local play — machine-specific, regenerated every match, never shared.
 .logs/
+release/
+build/
