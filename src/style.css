@@ -2200,6 +2200,9 @@ body.hud-widget-skinned .hud-queue-slot { color: transparent; }
 /* An EMPTY slot stays clickable (it's a drop target for a carried item) but reads
    as inert: no hover highlight until you're actually carrying something. */
 .hud-inv-slot.empty { cursor: default; }
+/* A press sinks the pocket exactly as it sinks a hero portrait or a command button — the
+   slot already goes through the same `onPress`, it just never had the rule. */
+.hud-inv-slot.pressed { transform: scale(0.98); }
 .hud-inv-slot:not(.empty):hover,
 body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
 .hud-console.hud-console-skinned .hud-inventory .hud-inv-slot { background-color: transparent; }

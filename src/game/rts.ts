@@ -4410,6 +4410,36 @@ export class RtsController {
     }
   }
 
+  /**
+   * Body a corpse that was never a unit — the Graveyard's Create Corpse lays Ghoul bodies on
+   * the ground from nothing (world.ts tickGraveyards), and a corpse without a death has no
+   * model to adopt. The renderer loads one (mapViewer.spawnCorpseBody) and hands it here to
+   * join the ordinary decay run at its FLESH stage: the body is already dead when it appears,
+   * so there is no Death clip to play, and from there it rots, fogs, is carried off and is
+   * raised exactly as a fallen unit's does (tickCorpses reads nothing but the sim corpse).
+   * Facing is the sim's, so every peer lays it the same way round.
+   */
+  adoptCorpseBody(corpseId: number, instance: Instance, anims: AnimSet, x: number, y: number, facing: number): boolean {
+    const sc = this.sim.corpses.get(corpseId);
+    if (!sc || sc.raised) return false; // spent while the model streamed in
+    this.loc[0] = x;
+    this.loc[1] = y;
+    this.loc[2] = this.groundHeightAt(x, y);
+    instance.setLocation(this.loc);
+    setZQuat(this.quat, facing);
+    instance.setRotation(this.quat);
+    const c = { instance, corpseId, anims, phaseT: 0, phase: "death" as CorpsePhase };
+    this.enterDecay(c, "flesh");
+    this.corpses.push(c);
+    return true;
+  }
+
+  /** Does a renderer body already lie for this sim corpse? (What mapViewer asks before it
+   *  loads one — a corpse that died on screen adopted its own model and needs none.) */
+  corpseBodied(corpseId: number): boolean {
+    return this.corpses.some((c) => c.corpseId === corpseId);
+  }
+
   /** The sim removed this unit WITHOUT a death (a cancelled building): drop it
    *  and hide its instance immediately — no death animation, no corpse. The
    *  renderer plays the cancel-explosion effect over the spot instead. */

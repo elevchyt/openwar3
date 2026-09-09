@@ -459,3 +459,29 @@ One last clause has a joke in it. `targs1` = `ground,air,friend,self,organic,vul
 `self` — and the statue still cannot mend itself, because `UnitBalance` gives `uobs`
 `type = Mechanical` and `organic` refuses it. Nor can it mend the statue standing next to it, nor
 a Meat Wagon. `tools/sim-undead-test.cjs` pins all of the above.
+
+## The Graveyard's hidden Create Corpse (`Agyd`)
+
+`Units\UnitAbilities.slk` gives `ugrv` `abilList = Abgs,Agyd,Arlm`, and the middle row is the
+one nobody can press: `UndeadAbilityStrings.txt [Agyd]` keeps its `Tip`, `Ubertip` and `Hotkey`
+commented out, so it has no button — it runs the moment the building stands. What it does is a
+SUPPLY of bodies for the Necromancers' Raise Dead and the Ghouls' Cannibalize on a field that has
+not provided any (`tickGraveyards` in `src/sim/world.ts`, pinned by
+`tools/sim-graveyard-test.cjs`). Every number is the row's own, with the editor's names for the
+columns read out of `UI\WorldEditStrings.txt`:
+
+| column   | value  | editor name                  | what it is                                              |
+|----------|--------|------------------------------|---------------------------------------------------------|
+| `Cool1`  | 15     |                              | the pulse — one body a pulse, the first a pulse after it stands |
+| `DataA`  | 5      | Maximum Number of Corpses    | the quota, counted over `DataC`                          |
+| `DataB`  | 200    | Radius of Gravestones        | how far out the `SpecialArt` (`GraveMarker.mdl`) goes   |
+| `DataC`  | 250    | Radius of Corpses            | how far out a body may lie                               |
+| `UnitID` | `ugho` | Corpse Unit Type             | a Ghoul — which is why they rise as skeletons            |
+
+Three things are not numbers. The counted bodies are the OWNER's own, lying FREE: one carried
+off in a Meat Wagon or spent by a spell opens a place in the quota, which is what makes it a
+supply rather than a pile; a site still being raised has no clock; and where a body lands is a
+cell the ground admits, past the building's own hull, at an angle off the sim's rng — so every
+peer lays the same corpse on the same tile. A corpse that was never a unit has no death to adopt
+a model from, so the renderer bodies it itself (`mapViewer.spawnCorpseBody` →
+`RtsController.adoptCorpseBody`), joining the ordinary decay run at its flesh stage.

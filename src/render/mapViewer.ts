@@ -58,7 +58,7 @@ import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { AI_SCRIPT_FOR } from "../ai";
 import { slotLabel } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
-import { animPropsFor } from "./unitAnims";
+import { animPropsFor, buildAnimSet } from "./unitAnims";
 import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { perfLog } from "../dev/perfLog";
@@ -4425,6 +4425,32 @@ export class MapViewerScene {
     this.effects.push({ inst, t: life, hold: anim === "hold", follow: follow || undefined, zOff, parented: !!node });
   }
 
+  /** Sim corpses this renderer has bodied (or is loading a body for) — see the corpse pass in
+   *  the drains block and spawnCorpseBody. Pruned as the sim forgets the corpse. */
+  private readonly corpseBodies = new Set<number>();
+
+  /** Lay a body for a corpse that never was a unit (the Graveyard's): the type's own model,
+   *  tinted for its owner, handed to the controller to rot in place (adoptCorpseBody). */
+  private async spawnCorpseBody(corpseId: number, unitId: string, x: number, y: number, facing: number): Promise<void> {
+    const def = this.registry.get(unitId);
+    const map = this.viewer.map;
+    if (!def?.model || !map || !this.rts) return;
+    const model = await this.viewer.load(def.model, this.solver);
+    const world = this.rts?.simWorld;
+    if (!model || !this.viewer.map || !world?.corpses.has(corpseId)) return; // gone while it streamed in
+    const instance = model.addInstance();
+    instance.setScene(map.worldScene);
+    const owner = world.corpses.get(corpseId)?.owner ?? -1;
+    instance.setTeamColor(this.rts.unitColor(owner));
+    if (def.modelScale && def.modelScale !== 1) instance.setUniformScale(def.modelScale); // the type's own scale, as a live body wears it (Entry.baseScale)
+    const anims = buildAnimSet(instance.model.sequences, animPropsFor(def, false));
+    if (!this.rts.adoptCorpseBody(corpseId, instance, anims, x, y, facing)) {
+      instance.hide();
+      return;
+    }
+    instance.show();
+  }
+
   /** Spawn the ground model for a dropped item (its own .mdx, looping its stand/
    *  birth clip) at the item's position. Cached by model path like spell effects. */
   private async spawnItemModel(itemId: number, itemDefId: string, x: number, y: number): Promise<void> {
@@ -7127,6 +7153,11 @@ export class MapViewerScene {
           s ? { icon: s.icon ? this.inventoryIcon(s.icon, s.disabled) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable, pawnable: s.pawnable, disabled: s.disabled } : null,
         ),
       useInventory: (slot) => {
+        // A press on something that can be USED — a potion, a scroll, a wand, a rod — is a
+        // command-card press in every respect and sounds like one: `InterfaceClick`
+        // (UISounds.slk: `Sound\Interface\MouseClick1.wav`), the same row runCommand plays.
+        // An empty pocket, or a passive item's, is not a command and stays silent.
+        if (this.rts?.inventorySlots()[slot]?.usable) this.sounds?.playUi("InterfaceClick");
         this.rts?.useInventorySlot(slot);
         this.hud?.setArmed(!!this.rts?.orderMode); // armed if this began a point-use targeting
       },
@@ -11141,6 +11172,17 @@ export class MapViewerScene {
         for (const m of world.drainMirrorMissiles()) void this.spawnMirrorMissile(m);
         // --- items on the ground (dropped / creep-dropped) ---
         for (const it of world.drainItemSpawns()) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
+        // Corpses that were never units — the Graveyard's Create Corpse (world.ts
+        // tickGraveyards) — have no death to adopt a model from, so they are bodied here.
+        // Read off the corpse map rather than a drain, so a corpse that reaches this machine
+        // any other way (a snapshot) is bodied the same; `deadId` 0 is what marks one, and a
+        // HELD one (Exhume Corpses, straight into the wagon) is bodied when it is dropped.
+        for (const c of world.corpses.values()) {
+          if (c.deadId || c.heldBy || c.raised || this.corpseBodies.has(c.id)) continue;
+          this.corpseBodies.add(c.id);
+          void this.spawnCorpseBody(c.id, c.unitId, c.x, c.y, c.facing);
+        }
+        if (this.corpseBodies.size) for (const id of this.corpseBodies) if (!world.corpses.has(id)) this.corpseBodies.delete(id);
         for (const r of world.drainItemRemovals()) this.removeItemModel(r.id, r.died);
         // A PowerUp was consumed: play the ability's own effect model on the unit that took
         // it, and sound it. The sound is the model's business first — a tome names no

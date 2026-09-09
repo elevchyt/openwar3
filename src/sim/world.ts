@@ -1369,6 +1369,7 @@ export interface SimUnit {
   acquireT: number; // seconds until the next auto-acquire scan
   stuckT: number; // seconds spent blocked while trying to move
   stuckRetries: number; // consecutive stuck-repath attempts without progress
+  corpseT: number; // a Graveyard's clock — seconds until its next Create Corpse pulse (tickGraveyards)
   stallT: number; // seconds an attacker has been unable to close on its target (issue #24)
   stallAnchorX: number; // position at the start of the current combat-approach window
   stallAnchorY: number;
@@ -5913,6 +5914,83 @@ export class SimWorld {
     u.working = false;
   }
 
+
+  /**
+   * The Graveyard's hidden CREATE CORPSE (`Agyd`): every `Cool1` = 15 seconds it lays a
+   * fresh Ghoul body on the ground beside itself, and keeps doing so until `DataA` = 5 of
+   * them lie within `DataC` = 250 units — the corpses a Necromancer's Raise Dead and a
+   * Ghoul's Cannibalize feed on when the field has not provided any. All of it is the
+   * row's own (`Units\AbilityData.slk` + the editor's names for the columns, read out of
+   * `UI\WorldEditStrings.txt`):
+   *
+   *     Cool1  15     the pulse
+   *     DataA  5      "Maximum Number of Corpses"
+   *     DataB  200    "Radius of Gravestones"  — how far out the `SpecialArt` gravestone
+   *                   (`…\Graveyard\GraveMarker.mdl`) is set down
+   *     DataC  250    "Radius of Corpses"      — how far out a body may lie, and the circle
+   *                   the count is taken over
+   *     UnitID ugho   "Corpse Unit Type"       — a Ghoul, which is why they raise as skeletons
+   *                   and never as the units that died
+   *
+   * `UnitAbilities.slk` puts it on `ugrv` beside Blight Growth and the lumber return, hidden
+   * (the row's Tip/Ubertip/Hotkey are commented out in UndeadAbilityStrings.txt), so there is
+   * no button and nothing to press: it runs the moment the building stands. A site still
+   * going up has no clock (raising); the counted bodies are the owner's own, lying free —
+   * one carried off in a Meat Wagon or spent by a spell no longer fills the quota, which is
+   * what makes it a SUPPLY rather than a pile. Where a body lands is a cell the ground
+   * admits, past the building's own hull and inside the radius, at an angle from the sim's
+   * rng — so every peer lays the same corpse on the same tile.
+   */
+  private tickGraveyards(dt: number): void {
+    if (!this.abilities) return;
+    for (const u of this.units.values()) {
+      if (u.hp <= 0 || !u.building || this.raising(u)) continue;
+      const ab = u.abilities.find((a) => a.code === "Agyd" && a.level >= 1 && this.techMeets(u.owner, a.id));
+      if (!ab) continue;
+      const def = this.abilities.get(ab.id);
+      const lvl = def?.levelData[0];
+      if (!def || !lvl) continue;
+      // A clock at exactly 0 has not been STARTED: the first body comes a full pulse after the
+      // building stands, not with its last brick — a fresh Graveyard's yard is empty for 15 s.
+      if (u.corpseT === 0) {
+        u.corpseT = lvl.cooldown || 15;
+        continue;
+      }
+      u.corpseT -= dt;
+      if (u.corpseT > 0) continue;
+      u.corpseT = lvl.cooldown || 15;
+      const unitId = lvl.summon || "ugho";
+      const max = this.dataOf(lvl, 0, 5);
+      const stoneRadius = this.dataOf(lvl, 1, 200);
+      const radius = this.dataOf(lvl, 2, 250);
+      let lying = 0;
+      for (const c of this.corpses.values()) {
+        if (c.owner !== u.owner || c.raised || c.heldBy) continue;
+        if (Math.hypot(c.x - u.x, c.y - u.y) <= radius) lying++;
+      }
+      if (lying >= max) continue;
+      // Past the hull (a building's `radius` is its shove hull, inside its stamp — a cell of
+      // slack clears the stamp's edge) and no further than the row allows.
+      const inner = Math.min(u.radius + PATHING_CELL, radius);
+      const angle = this.rng() * Math.PI * 2;
+      const dist = inner + this.rng() * Math.max(0, radius - inner);
+      let x = u.x + Math.cos(angle) * dist;
+      let y = u.y + Math.sin(angle) * dist;
+      if (this.grid) {
+        const [cx, cy] = this.grid.worldToCell(x, y);
+        const cell = this.grid.walkable(cx, cy) ? [cx, cy] as [number, number] : this.grid.nearestWalkable(cx, cy, 6);
+        if (!cell) continue; // nothing to lie on within reach this pulse — the clock simply comes round again
+        [x, y] = this.grid.cellToWorld(cell[0], cell[1]);
+      }
+      this.spawnCorpseOf(unitId, x, y, u.owner);
+      // …and the gravestone, set down within its own (smaller) radius on the same bearing.
+      if (def.specialArt) {
+        const sd = Math.min(dist, stoneRadius);
+        this.spellEffects.push({ art: def.specialArt, x: u.x + Math.cos(angle) * sd, y: u.y + Math.sin(angle) * sd, targetId: 0, z: 0, life: 0 });
+      }
+    }
+  }
+
   /** Pay out every mine with a crew — wisps inside, Acolytes around — and collapse one that
    *  runs dry. */
   private tickMineCrews(dt: number): void {
@@ -7079,6 +7157,7 @@ export class SimWorld {
       | "acquireT"
       | "stuckT"
       | "stuckRetries"
+      | "corpseT"
       | "stallT"
       | "stallAnchorX"
       | "stallAnchorY"
@@ -7326,6 +7405,7 @@ export class SimWorld {
       acquireT: 0,
       stuckT: 0,
       stuckRetries: 0,
+      corpseT: 0,
       stallT: 0,
       stallAnchorX: unit.x,
       stallAnchorY: unit.y,
@@ -14391,6 +14471,7 @@ export class SimWorld {
     this.tickSoulGems(); // …and the hero a Soul Gem is holding off it
     this.tickBuildings(dt);
     this.tickMineCrews(dt); // night elf and undead gold: no round trip, just a crew and a clock
+    this.tickGraveyards(dt); // the Graveyard's hidden Create Corpse — Ghoul bodies for the Necromancers
     this.tickShops(dt);
     this.tickShopBuyers(); // adopt a purchaser for whoever has just walked one up to a shop
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
