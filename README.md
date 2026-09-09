@@ -47,10 +47,8 @@ through the browser's picker, so there is no permission dance and no storage quo
 uploaded, and nothing about your install is reachable from the network: the app reads it over a
 scheme of its own that exists only inside the process, never over the port it serves the game on.
 
-The desktop app is also the host: starting it starts the relay, so a LAN game needs no terminal —
-and it finds the other copies on your network by itself. Open **Local Area Network** on both
-machines and the games appear; nobody types an address. (The address box is still there under
-**Servers List**, for a machine on another subnet or one the broadcast cannot reach.)
+It is also the host: starting it starts the relay, so a LAN game needs no terminal and no second
+command — see [Playing on a LAN](#playing-on-a-lan).
 
 Packaged builds:
 
@@ -82,37 +80,47 @@ builds install by hand.
 
 ### Playing on a LAN
 
-Two machines on the same network, no cloud and no accounts. On the machine hosting:
+Two machines on the same network, no cloud and no accounts.
+
+**With the desktop app, nobody types anything.** Run it on both machines and pick **Local Area
+Network** on each. Each copy announces itself on the subnet and listens for the others, so a game
+created on one appears in the other's list within a couple of seconds — the way Warcraft III's own
+LAN games always did. Either player can create the game; whoever does runs the authoritative
+simulation, and the other joins it.
+
+A machine the broadcast cannot reach — a different subnet, a network that drops broadcast traffic —
+is added by hand instead. The host's game lobby prints the address to type, in the band between the
+bottom panels (click it to copy); the joiner adds it under **Servers List**, the button above
+Create Game. Addresses you add are kept and retried, so it is fine to add one before the other
+player has started their game: the row waits, and their games appear when they do. Machines found
+by broadcast are listed too, marked *(on your network)*.
+
+**From a checkout**, one machine serves the page and the relay together:
 
 ```bash
 pnpm dev --host
 ```
 
-The other machine opens `http://<that machine's ip>:5173` and picks **Local Area Network** — games
-created on either machine show up in the list. There is nothing else to start: the dev server
-carries the relay on its own port, so one open port is enough. Each machine reads its own local
-Warcraft III install, as always.
+The other opens `http://<that machine's ip>:5173`. `--host` matters: without it the dev server
+binds to that machine only, and nothing it hosts can be seen by anybody. The LAN screen says so
+outright — that is the one failure that is otherwise invisible, since the far end just sees an
+empty list.
 
-**Firewall.** One port, so one rule. On Windows and macOS the first launch raises the system's own
-"allow incoming connections?" prompt — say yes for **private** networks. On Linux, allow it
-explicitly:
+**Firewall.** The desktop app wants two ports on the local network: **TCP 8787**, which carries
+both the page and the game, and **UDP 8788**, which is only the "here I am" broadcast. Blocking
+the UDP one costs you automatic discovery and nothing else — Servers List still works. From a
+checkout it is TCP 5173 instead, and there is no broadcast at all.
+
+On Windows and macOS the first launch raises the system's own "allow incoming connections?"
+prompt — say yes for **private** networks. On Linux:
 
 ```bash
-sudo ufw allow 5173/tcp
+sudo ufw allow 8787/tcp && sudo ufw allow 8788/udp
 ```
 
-The LAN screen warns you outright when the server is bound to this machine only (`pnpm dev`
-without `--host`) — the one failure that is otherwise invisible, since the other machine just sees
-an empty list. It cannot see through your firewall, though, so if nobody can reach you, that rule
-is the thing to check.
-
-**Joining a game on another machine.** Games are found through a relay's room list rather than by
-broadcast, so a second machine has to be told where to look. The host's game lobby prints the
-address other players type (click it to copy); the joiner adds it under **Join Server**, the icon
-button above the games list, and games on every server in that list appear in their own. Either
-player can create the game — whoever does runs the authoritative simulation. See
-[docs/multiplayer.md](docs/multiplayer.md) for the internet deployment and for why broadcast
-discovery waits on a native build.
+The game cannot see through your firewall, so if the address is shown and nobody can reach it,
+that rule is the thing to check. See [docs/multiplayer.md](docs/multiplayer.md) for how the
+authority is split, and for the internet deployment.
 
 ## Legal
 
