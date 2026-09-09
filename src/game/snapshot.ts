@@ -78,6 +78,9 @@ import { isOffField, type SimSpellEffect, type SimUnit, type SimMine, type SimIt
 export interface SnapshotWorld {
   readonly units: ReadonlyMap<number, SimUnit>;
   readonly mines: ReadonlyMap<number, SimMine>;
+  /** `SimWorld.mineCrewFor` — the worker count a side reads off a mine. Optional because a
+   *  hand-built test world has no workers to count; without it every mine floats nothing. */
+  mineCrewFor?(mine: SimMine, side: (owner: number) => boolean): { count: number; cap: number } | null;
   readonly items: ReadonlyMap<number, SimItem>;
   /** In-flight missiles. Optional because hand-built test worlds have none; the real
    *  `SimWorld` always does. */
@@ -367,6 +370,14 @@ export interface MineSnapshot {
    *  mine and an unscouted one are different facts, and a client that conflated them would
    *  route workers away from a full expansion. */
   gold: number;
+  /** The worker count floated over the mine, as THIS recipient's side reads it
+   *  (`SimWorld.mineCrewFor`): its own and its allies' workers only, so it is computed here
+   *  per recipient like the creep-camp markers rather than re-derived on a client that was
+   *  never sent the workers' harvest targets. `crewCap` > 0 is a crewed mine (`crew/crewCap`,
+   *  the Entangled and Haunted Gold Mines); `crewCap` = 0 is a classic mine reading the bare
+   *  `crew`; both 0 means nothing to float. */
+  crew: number;
+  crewCap: number;
 }
 
 export interface GroundItemSnapshot {
@@ -853,7 +864,10 @@ export function snapshotFor(
   const mines: MineSnapshot[] = [];
   for (const m of world.mines.values()) {
     const seen = !viewer.fogBlocksAt(m);
-    mines.push({ id: m.id, x: m.x, y: m.y, radius: m.radius, gold: seen ? m.gold : -1 });
+    // The crew is a LIVE reading like the gold, and one of the recipient's side's own: a mine
+    // nobody on the team is working floats nothing, however full the enemy has it.
+    const crew = seen ? world.mineCrewFor?.(m, (o) => viewer.seesFor(o)) ?? null : null;
+    mines.push({ id: m.id, x: m.x, y: m.y, radius: m.radius, gold: seen ? m.gold : -1, crew: crew?.count ?? 0, crewCap: crew?.cap ?? 0 });
   }
 
   // Ground items are the strict case and get no memory at all. `fogBlocksAt`'s own comment

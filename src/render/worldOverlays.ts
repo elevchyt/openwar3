@@ -78,6 +78,21 @@ export interface BarSpec {
   abilitySig: string;
 }
 
+/**
+ * The worker count floated over a gold mine — `5/5` over a crewed Entangled or Haunted Gold
+ * Mine, a bare `3` over a classic one — as the controller has already read it for the local
+ * side (rts.ts updateMineCrews, off `SimWorld.mineCrewFor` or the payload's `MineSnapshot.crew`).
+ * WHOSE workers count and whether there are eyes on the mine are decided there; this is only
+ * where it floats and what it says.
+ */
+export interface CrewLabelSpec {
+  x: number;
+  y: number;
+  z: number;
+  radius: number; // the mine's world radius — sets how far up its body the label sits
+  text: string;
+}
+
 /** Where the hover slab floats and what it says. */
 export interface HoverTip {
   x: number;
@@ -163,6 +178,9 @@ const CREEP_BAR_COLOR = "#974b58";
 const PASSIVE_BAR_COLOR = "#656b0c";
 
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
+/** How far up a gold mine's body its worker count sits, in the mine's own foreshortened
+ *  radii: a little above the centre of the pit, where the game prints it (syncCrewLabels). */
+const CREW_LABEL_LIFT = 0.45;
 
 // The bar's shape, measured off the real client (Warcraft III/Screenshots, 1424×720).
 //
@@ -277,6 +295,23 @@ function makeHpBar(layer: HTMLElement): HpBar {
   };
 }
 
+/** One mine's worker-count label. The game draws it in the tooltip's own dress — the
+ *  human-tooltip-border strip around the tooltip's slate fill — so it wears the same
+ *  nine-patch and fill the command tooltip and the hover slab do (`--hud-tooltip-border`,
+ *  `--hud-tooltip-fill`, lifted to `:root` by ui/hud.ts applyWidgetSkin). */
+interface CrewLabel {
+  root: HTMLDivElement;
+  last: { text: string; left: number; top: number; hidden: boolean };
+}
+
+function makeCrewLabel(layer: HTMLElement): CrewLabel {
+  const root = document.createElement("div");
+  root.className = "unit-crew-count";
+  root.hidden = true;
+  layer.appendChild(root);
+  return { root, last: { text: "\0", left: NaN, top: NaN, hidden: true } };
+}
+
 /** The hover slab element, into the same world layer as the HP bars so its position
  *  is written in canvas CSS pixels with no letterbox offset (see ui/stage.ts). Skinned
  *  by the human-tooltip-border nine-patch when a real install is mounted (the vars are
@@ -291,6 +326,7 @@ function makeHoverTip(layer: HTMLElement): HTMLDivElement {
 
 export class WorldOverlays {
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
+  private crewLabels: CrewLabel[] = []; // pool, one shown per worked gold mine on screen
   private hoverTip: HTMLDivElement | null = null;
   private hoverTipSig = ""; // caches the last rendered line set (rebuild the DOM only on change)
 
@@ -627,6 +663,51 @@ export class WorldOverlays {
   }
 
   /**
+   * Float one worker-count label per worked gold mine, and hide the rest of the pool. Same
+   * pooling and same dirty-cache discipline as the bars, at a fraction of their count.
+   *
+   * The label sits ON the mine rather than over it — WC3 prints the count across the mine's
+   * body, a little above its centre, under the health bar and clear of the "+10" that rises
+   * from the same spot — so it is anchored at the base and lifted by a share of the mine's own
+   * foreshortened radius, which is what keeps it on the body at every zoom.
+   */
+  syncCrewLabels(specs: readonly CrewLabelSpec[]): void {
+    this.sampleGeom();
+    const g = this.frameGeom;
+    let n = 0;
+    for (const s of specs) {
+      if (!this.project(s.x, s.y, s.z, s.radius)) continue;
+      const p = this.proj;
+      const label = this.crewLabels[n] ?? (this.crewLabels[n] = makeCrewLabel(worldLayer()));
+      n++;
+      const last = label.last;
+      if (last.text !== s.text) {
+        last.text = s.text;
+        label.root.textContent = s.text;
+      }
+      if (last.hidden) {
+        last.hidden = false;
+        label.root.hidden = false;
+      }
+      // gl y-up → css y-down, positioned by one transform like the bars (see syncBars).
+      const left = Math.round(p.sx / g.dpr);
+      const top = Math.round((g.h - p.sy) / g.dpr - p.ry * CREW_LABEL_LIFT);
+      if (last.left !== left || last.top !== top) {
+        last.left = left;
+        last.top = top;
+        label.root.style.transform = `translate(${left}px, ${top}px) translate(-50%, -50%)`;
+      }
+    }
+    for (let k = n; k < this.crewLabels.length; k++) {
+      const label = this.crewLabels[k];
+      if (!label.last.hidden) {
+        label.last.hidden = true;
+        label.root.hidden = true;
+      }
+    }
+  }
+
+  /**
    * Float the hover slab above whatever the cursor is over, tracking it in canvas
    * space like the HP bars. Rebuilds the DOM only when the lines change (cached by
    * `hoverTipSig`); repositions every frame. Anchored bottom-centre a small gap above
@@ -676,11 +757,17 @@ export class WorldOverlays {
       b.root.hidden = true;
       b.last.hidden = true; // …and the cache agrees, or syncBars would skip un-hiding them
     }
+    for (const l of this.crewLabels) {
+      l.root.hidden = true;
+      l.last.hidden = true;
+    }
   }
 
   dispose(): void {
     for (const b of this.hpBars) b.root.remove();
     this.hpBars = [];
+    for (const l of this.crewLabels) l.root.remove();
+    this.crewLabels = [];
     this.hoverTip?.remove();
     this.hoverTip = null;
   }

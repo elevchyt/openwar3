@@ -1,5 +1,5 @@
 import { isOffField } from "../sim/world";
-import type { UnitSnapshot, WorldSnapshot } from "./snapshot";
+import type { MineSnapshot, UnitSnapshot, WorldSnapshot } from "./snapshot";
 
 /**
  * The CLIENT's reading of the payload it was sent (docs/multiplayer.md Phase E item 10c-2c).
@@ -59,13 +59,18 @@ const EMPTY: readonly UnitSnapshot[] = [];
 export class SnapshotIndex {
   private snap: WorldSnapshot | null = null;
   private readonly byId = new Map<number, UnitSnapshot>();
+  private readonly mineById = new Map<number, MineSnapshot>();
 
   /** Adopt the newest payload. Cheap and idempotent when nothing has arrived since. */
   update(snap: WorldSnapshot | null): void {
     if (snap === this.snap) return;
     this.snap = snap;
     this.byId.clear();
-    if (snap) for (const u of snap.units) this.byId.set(u.id, u);
+    this.mineById.clear();
+    if (snap) {
+      for (const u of snap.units) this.byId.set(u.id, u);
+      for (const m of snap.mines) this.mineById.set(m.id, m);
+    }
   }
 
   /** Has a snapshot arrived? False on the host and in single-player — see the header. */
@@ -82,6 +87,15 @@ export class SnapshotIndex {
    *  alone and never ask the transport a second time. */
   get units(): readonly UnitSnapshot[] {
     return this.snap ? this.snap.units : EMPTY;
+  }
+
+  /** The worker count the authority floated over this mine for THIS recipient
+   *  (`MineSnapshot.crew`), or null when it floated none — the same per-recipient answer the
+   *  host reads off `SimWorld.mineCrewFor` for its own seat. */
+  mineCrew(id: number): { count: number; cap: number } | null {
+    const m = this.mineById.get(id);
+    if (!m || !(m.crew > 0 || m.crewCap > 0)) return null;
+    return { count: m.crew, cap: m.crewCap };
   }
 
   /** @see hiddenFromSnapshot — the authority's answer, not a second derivation of the grid. */

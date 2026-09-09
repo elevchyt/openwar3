@@ -5746,6 +5746,43 @@ export class SimWorld {
   }
 
   /**
+   * The worker count floated over a gold mine — `5/5` on a crewed mine, a plain `3` on a
+   * classic one — as ONE SIDE reads it, or null when there is nothing to float.
+   *
+   * The count is a per-viewer fact and never a mine's own: only the workers of the players
+   * `side` vouches for are counted, because the number is a live reading of an economy (how
+   * many of your Peasants are on this mine, whether your ally's Haunted Gold Mine is fully
+   * crewed) and an enemy's crew is scouting information the fog is there to keep — the same
+   * rule the health bar follows. The two answers differ in WHETHER the denominator exists:
+   *
+   *  • A CREWED mine (an Entangled or a Haunted Gold Mine standing on it, finished and one of
+   *    the side's own) reads `count/cap`, cap being the ability's own "Max Number of Miners"
+   *    (`Abgm` DataC, `Aenc` Car1 — `mineCrewOf`), and reads `0/5` while it stands empty,
+   *    because the point of the fraction is seeing the crew is short. A crewed mine nobody on
+   *    the side owns shows nothing at all, not even the enemy's `?/5`.
+   *  • A CLASSIC mine has no crew ceiling (workers queue at the shaft), so it reads the bare
+   *    number of the side's workers currently assigned to it (`cap` = 0) — the gatherers whose
+   *    `resKind`/`resId` name it, which is `jobOf`'s own test and so counts one walking its load
+   *    home as well as one down the shaft — and nothing when that number is zero.
+   */
+  mineCrewFor(mine: SimMine, side: (owner: number) => boolean): { count: number; cap: number } | null {
+    if (mine.entangledBy > 0) {
+      const host = this.units.get(mine.entangledBy);
+      if (!host || host.hp <= 0 || (host.building && host.building.constructionLeft > 0)) return null;
+      if (!side(host.owner)) return null;
+      const rules = this.mineCrewOf(host);
+      if (!rules) return null;
+      return { count: rules.ring ? this.ringCrew(host) : host.garrison.length, cap: rules.max };
+    }
+    let n = 0;
+    for (const o of this.units.values()) {
+      if (o.hp <= 0 || !o.worker || o.resKind !== "gold" || o.resId !== mine.id) continue;
+      if (side(o.owner)) n++;
+    }
+    return n > 0 ? { count: n, cap: 0 } : null;
+  }
+
+  /**
    * One tick of an Acolyte working a Haunted Gold Mine: claim a station, walk to it, kneel.
    *
    * This is the whole of Undead gold, and what is NOT here is the point — no shaft, no load,

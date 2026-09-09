@@ -466,6 +466,32 @@ body.hud-tooltip-skinned .unit-hover-tooltip {
 }
 .uht-line { white-space: nowrap; }
 
+/* The worker count a gold mine wears — "5/5" across a crewed Entangled or Haunted Gold Mine,
+   "3" across a classic one being worked (render/worldOverlays.ts syncCrewLabels, read for the
+   local side in rts.ts updateMineCrews). The game prints it in the TOOLTIP's dress — the
+   human-tooltip-border strip around the tooltip's slate — so once an install is mounted it
+   wears the same nine-patch and fill the two slabs above do; placeholder chrome until then. */
+.unit-crew-count {
+  position: absolute; /* moved by one transform, centring included — see .unit-hpbar */
+  left: 0;
+  top: 0;
+  padding: 0 calc(var(--tt-pad, 5px) * 1.2);
+  font: 400 var(--font-UnitTipDesc, 15px) / 1.35 var(--game-font);
+  color: #fff;
+  white-space: nowrap;
+  text-align: center;
+  pointer-events: none;
+  z-index: 2;
+  background: rgba(30, 40, 55, 0.9);
+  border: 1px solid rgba(126, 146, 176, 0.55);
+  border-radius: 2px;
+}
+body.hud-tooltip-skinned .unit-crew-count {
+  background: var(--hud-tooltip-fill);
+  border: none;
+  border-radius: calc(var(--tt-band, 10px) * 0.4);
+}
+
 /* ---------------------------------------------------------------------------
    In-game HUD (plan §10.1b). Placeholder skin via CSS; real BLP icons and the
    map's minimap image plug in when an install is mounted. #ui is
@@ -1268,7 +1294,8 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
   box-shadow: none;
 }
 .hud-tooltip.skinned::after,
-body.hud-tooltip-skinned .unit-hover-tooltip::after {
+body.hud-tooltip-skinned .unit-hover-tooltip::after,
+body.hud-tooltip-skinned .unit-crew-count::after {
   content: "";
   position: absolute;
   inset: calc(var(--tt-bg-inset, 3px) * -1);

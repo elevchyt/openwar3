@@ -231,6 +231,31 @@ file for every one of these (M/S/H/A/P/B/Y/O), and `[CmdCancel]`'s is the raw VK
 Reading them is the door to `CustomKeys.txt`, the player's own remap file, and belongs with that
 work rather than here.
 
+## The slab refreshes under a still cursor
+
+The command tooltip is re-shown **every frame** for the slot the cursor is on (`Hud.refreshCmdTooltip`),
+against whatever that slot holds now — not only on `pointerenter`. The reason is that most of what a
+tooltip says is a *reading*: the cost row reddens by comparing the price to the stash, the yellow
+"Requires:" line is the tech you are missing, and the DIS* twin is a prerequisite. Every one of those
+changes while the cursor sits still, and a `pointerenter` fires only when it moves. The twelve buttons
+are built once and only re-dressed, so the element under the cursor never changes either; the old
+code hid the slab whenever the card's key changed and waited for an enter that never came, which is
+why a Farm's red 80 stayed red after the gold arrived until you re-hovered. Every writer to the slab
+goes through `setTooltip`, which writes the DOM only when the HTML differs, so the per-frame re-show
+costs a string compare. `:hover` is asked directly because an emptied slot is a disabled button, and
+a disabled button is not told when the cursor leaves it.
+
+## The gold mine's worker count wears the same dress
+
+The `5/5` the game prints across an Entangled or a Haunted Gold Mine, and the bare `3` across a classic
+mine three Peasants are working, is drawn in the tooltip's own art — the `human-tooltip-border` strip
+around the tooltip's slate — so `.unit-crew-count` shares `.hud-tooltip.skinned`'s nine-patch and fill
+(`worldOverlays.ts syncCrewLabels`). What it *says* is a per-side fact: only the local player's and
+their allies' workers count, an enemy's crewed mine floats nothing (not even the `/5`), and it needs
+eyes on the mine. On the host that is `SimWorld.mineCrewFor` for the local seat; a client is sent the
+answer per recipient (`MineSnapshot.crew`/`crewCap`), because the harvest targets it would be counted
+from never cross the wire.
+
 ## Still open
 
 * **Cost-number colour.** Ours is `#fed312` gold, reddening when you cannot pay. The reference

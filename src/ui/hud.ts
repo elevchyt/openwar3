@@ -1190,6 +1190,13 @@ export class GameHud {
   private idleIconSet = false; // worker icon lazily applied once
   private cmdTooltip!: HTMLDivElement; // the ONE tooltip slab, above the command card
   private invHover = -1; // inventory slot under the cursor (-1 = none), so its tooltip can refresh
+  /** Command-card slot under the cursor (-1 = none), so its tooltip can refresh IN PLACE: the
+   *  cost row reddens and un-reddens with the stash and the "Requires:" line comes and goes
+   *  while the cursor sits still, and `pointerenter` fires only when it moves. */
+  private cmdHover = -1;
+  /** What the slab was last given, so a per-frame re-show writes the DOM only on a change —
+   *  every writer goes through `setTooltip`, or the memo would lie about what is on screen. */
+  private tooltipHtml = "";
   private buffHover = -1; // Status-line slot under the cursor, so an expiring buff drops its tooltip
   private cmdSlots: HTMLButtonElement[] = [];
   private cmdLabels: HTMLSpanElement[] = []; // per-slot fallback text (icon-less buttons)
@@ -2332,9 +2339,7 @@ export class GameHud {
       "MINIMAPALLYCOLORTOOLTIP_UBER",
       "This option cycles through three different unit color modes.",
     );
-    this.cmdTooltip.innerHTML =
-      `<div class="hud-tooltip-title">${wc3ToHtml(title)}</div><div class="hud-tooltip-desc">${wc3ToHtml(body)}</div>`;
-    this.cmdTooltip.hidden = false;
+    this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(title)}</div><div class="hud-tooltip-desc">${wc3ToHtml(body)}</div>`);
   }
 
   /**
@@ -2859,8 +2864,7 @@ export class GameHud {
     const use = s.usable ? `<div class="hud-tooltip-desc">${wc3ToHtml(useText)}</div>` : "";
     const pawnText = this.driver.uiString("ITEM_PAWN_TOOLTIP", "|cff808080Drop item on shop to sell|R");
     const pawn = s.pawnable ? `<div class="hud-tooltip-desc">${wc3ToHtml(pawnText)}</div>` : "";
-    this.cmdTooltip.innerHTML = `<div class="hud-tooltip-title">${title}</div>${desc}${use}${pawn}`;
-    this.cmdTooltip.hidden = false;
+    this.setTooltip(`<div class="hud-tooltip-title">${title}</div>${desc}${use}${pawn}`);
   }
 
   /** Rebuild the hero inventory slots from the driver's current inventory. Cheap
@@ -2965,13 +2969,11 @@ export class GameHud {
     // Storms, Stronghold" to "Stronghold" the moment the altar goes up. Leave it out and the
     // tooltip keeps showing the requirement the player has just met.
     const key = cmds.map((c) => `${c.id}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${c.desc}`).join("|");
-    if (key === this.cmdKey) return;
+    if (key === this.cmdKey) {
+      this.refreshCmdTooltip(cmds); // every frame: the stash moves without the card changing
+      return;
+    }
     this.cmdKey = key;
-    // The card changed (e.g. a building was cancelled and its buttons vanished):
-    // hide any hover tooltip so it doesn't linger over the now-empty slot — a
-    // removed button never fires pointerleave. An inventory hover owns the same
-    // slab and its slot didn't go anywhere, so leave that one alone.
-    if (this.invHover < 0) this.cmdTooltip.hidden = true;
     for (let i = 0; i < this.cmdSlots.length; i++) {
       const btn = this.cmdSlots[i];
       btn.disabled = true;
@@ -3040,9 +3042,61 @@ export class GameHud {
         inert || !c.altId ? null : () => this.driver.runCommand(c.altId!),
       );
       btn.oncontextmenu = (e) => e.preventDefault();
-      btn.onpointerenter = () => this.showTooltip(c);
-      btn.onpointerleave = () => (this.cmdTooltip.hidden = true);
+      btn.onpointerenter = () => {
+        this.cmdHover = idx;
+        this.showTooltip(c);
+      };
+      btn.onpointerleave = () => {
+        if (this.cmdHover === idx) this.cmdHover = -1;
+        this.cmdTooltip.hidden = true;
+      };
     }
+    // The card changed under a still cursor. The button under it is the SAME element (the
+    // twelve slots are built once and only re-dressed), so no `pointerenter` is coming — the
+    // slab has to be re-shown here, against what the slot holds NOW: a button gone red-to-white
+    // as the gold came in, a greyed one just unlocked, or nothing at all (a building was
+    // cancelled and its buttons vanished — a removed button never fires `pointerleave`, so
+    // hiding it here is the only thing that keeps the slab from lingering over the empty slot).
+    this.refreshCmdTooltip(cmds);
+  }
+
+  /**
+   * Re-show the command tooltip for the slot under the cursor against the card's CURRENT
+   * contents, or take it down if that slot has emptied.
+   *
+   * Called every frame, not only when the card's key changes: the cost row is a reading of the
+   * stash (`costItem`'s red is "more than you have"), and a hovered Farm goes from red to white
+   * the moment the fifth Peasant drops off its load — without the button changing at all. The
+   * slab's DOM is written only when the HTML differs (`setTooltip`), so a still cursor over an
+   * unchanging button costs a string compare a frame.
+   *
+   * `:hover` is asked rather than trusted from the events, because an EMPTIED slot is a
+   * disabled button, and a disabled button is told nothing — the cursor can leave it without
+   * a `pointerleave` ever arriving, and `cmdHover` would name a slot it is no longer over.
+   */
+  private refreshCmdTooltip(cmds: CommandButton[]): void {
+    if (this.cmdHover < 0) return;
+    const btn = this.cmdSlots[this.cmdHover];
+    if (!btn?.matches(":hover")) {
+      this.cmdHover = -1;
+      // Another slab owner (an item, a buff) may already have taken over; leave its text up.
+      if (this.invHover < 0 && this.buffHover < 0) this.cmdTooltip.hidden = true;
+      return;
+    }
+    const slot = this.cmdHover;
+    const c = cmds.find((b) => b.row * 4 + b.col === slot);
+    if (c) this.showTooltip(c);
+    else this.cmdTooltip.hidden = true; // …and `cmdHover` stands, so a button that lands here later gets its slab
+  }
+
+  /** The ONE write to the tooltip slab. Skips the DOM when the text is what is already there
+   *  (the per-frame re-show above), and never skips un-hiding it. */
+  private setTooltip(html: string): void {
+    if (html !== this.tooltipHtml) {
+      this.tooltipHtml = html;
+      this.cmdTooltip.innerHTML = html;
+    }
+    this.cmdTooltip.hidden = false;
   }
 
   /** Per-frame: draw a clockwise dark radial sweep + a seconds count over any
@@ -3078,9 +3132,7 @@ export class GameHud {
       this.costItem("supply", c.food, r.foodMax - r.foodUsed) +
       this.costItem("mana", c.mana ?? 0, sel?.mana ?? 0);
     const cost = costs ? `<div class="hud-tooltip-cost">${costs}</div>` : "";
-    this.cmdTooltip.innerHTML =
-      `<div class="hud-tooltip-title">${title}</div>${cost}<div class="hud-tooltip-desc">${wc3ToHtml(c.desc)}</div>`;
-    this.cmdTooltip.hidden = false;
+    this.setTooltip(`<div class="hud-tooltip-title">${title}</div>${cost}<div class="hud-tooltip-desc">${wc3ToHtml(c.desc)}</div>`);
   }
 
   // --- per-frame updates ----------------------------------------------------
@@ -3479,8 +3531,7 @@ export class GameHud {
       slot.onpointerenter = () => {
         this.buffHover = i;
         const desc = b.tip ? `<div class="hud-tooltip-desc">${wc3ToHtml(b.tip)}</div>` : "";
-        this.cmdTooltip.innerHTML = `<div class="hud-tooltip-title">${wc3ToHtml(b.name)}</div>${desc}`;
-        this.cmdTooltip.hidden = false;
+        this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(b.name)}</div>${desc}`);
       };
       slot.onpointerleave = () => {
         this.buffHover = -1;

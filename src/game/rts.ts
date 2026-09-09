@@ -55,7 +55,7 @@ import { ComputerPlusAi, type PlusHost } from "../ai/plus";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
-import { WorldOverlays, healthBarsAlways, type HoverLine, type BarAbility, type BarSpec } from "../render/worldOverlays";
+import { WorldOverlays, healthBarsAlways, type HoverLine, type BarAbility, type BarSpec, type CrewLabelSpec } from "../render/worldOverlays";
 import { INSANE_HARVEST_FACTOR, MELEE_INSANE } from "../ai/ids";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
@@ -246,6 +246,9 @@ interface Entry {
   birthStart: number; // Birth animation frame interval, for scrubbing
   birthEnd: number;
   hidden: boolean; // instance currently hidden (worker in a gold mine, OR fog of war)
+  /** This building's clock is STOPPED because it is drawn from fog memory — a picture of the
+   *  last thing you saw, and a picture does not move (see applyFogFreeze). */
+  frozen: boolean;
   inMine: boolean; // worker is inside a gold mine (the hide cause that also deselects)
   insideBuild: boolean; // Orc peon inside the structure it is building (also deselects)
   inBurrow: boolean; // peon garrisoned inside an Orc Burrow (also deselects)
@@ -1762,6 +1765,44 @@ export class RtsController {
     e.castAnimSticky = true;
   }
 
+  /**
+   * Stop a building's model while it is drawn from MEMORY, and start it again when eyes
+   * return. Returns whether it is stopped this frame, so the caller skips everything that
+   * would otherwise animate it.
+   *
+   * What the fog leaves standing is the last thing you SAW — a picture, not a feed — and a
+   * picture does not move. Without this, a scouted enemy Barracks kept assembling itself in
+   * the fog: the entry sync went on scrubbing its Birth clip to the LIVE construction timer,
+   * and a finished one went on looping its Stand, so the state of a base you had no eyes on
+   * could be read off its model. The same goes for the map's furniture — a Fountain of Life
+   * in explored fog went on pouring — and for a tier upgrade rising out of sight.
+   *
+   * It is the instance's own clock that is stopped (`timeScale` 0 — the loading screen's
+   * "seek, never play", and mdx-m3-viewer scales the whole update by it, so the clip, its
+   * particles and its cross-fade all stand still together) rather than a frame the entry
+   * re-pins, which costs nothing per frame and leaves whatever the model was showing exactly
+   * where it was. The thaw hands the rate back through `setAnimRate`, whose memo is reset
+   * first: it remembers the rate it last WROTE, and that rate is the one to write again. On
+   * a client the payload has already said `remembered` and redacted the construction timer
+   * to zero — which, unfrozen, read as a FINISHED building; frozen, the last-seen frame stays.
+   *
+   * A building that DIES out of sight is not this method's: its image is the ghost record's
+   * (`GhostMemory`), and a ghosted entry never reaches the picker at all.
+   */
+  private applyFogFreeze(e: Entry): boolean {
+    const frozen = !e.hidden && this.drawnFromMemory(e.simId);
+    if (frozen !== e.frozen) {
+      e.frozen = frozen;
+      if (frozen) {
+        e.unit.instance.timeScale = 0;
+      } else {
+        e.curRate = NaN; // force the re-write: setAnimRate skips a rate equal to its memo
+        setAnimRate(e, 1); // the picker re-rates a walk or a swing itself; a building has neither
+      }
+    }
+    return frozen;
+  }
+
   /** Dim an enemy/neutral BUILDING that's shown from fog memory (last-seen, out of
    *  current sight) to the same grey as the ground veil — WC3 greys remembered
    *  structures. Own units and anything currently in sight stay full colour; mobile
@@ -3061,6 +3102,7 @@ export class RtsController {
         inBurrow: false,
         devoured: false,
       ghosted: false,
+      frozen: false,
         curSeq: -1,
         animWalkSpeed: def?.animWalkSpeed ?? 0,
         animRunSpeed: def?.animRunSpeed ?? 0,
@@ -3192,6 +3234,7 @@ export class RtsController {
       inBurrow: false,
       devoured: false,
       ghosted: false,
+      frozen: false,
       curSeq: -1,
       animWalkSpeed: def?.animWalkSpeed ?? 0,
       animRunSpeed: def?.animRunSpeed ?? 0,
@@ -3509,6 +3552,7 @@ export class RtsController {
       inBurrow: false,
       devoured: false,
       ghosted: false,
+      frozen: false,
       curSeq: -1,
       animWalkSpeed: def?.animWalkSpeed ?? 0,
       animRunSpeed: def?.animRunSpeed ?? 0,
@@ -3964,6 +4008,9 @@ export class RtsController {
       // across the graveyard, is drawn from the sim like any other unit (see seedNeutral).
       if (u.neutralPassive && (u.building || e.borrowedBody)) {
         this.applyVisibility(e, u, this.modelHidden(e.simId), dt); // static & viewer-rendered, but fog still hides/reveals it
+        // …and fog still STOPS it: a Fountain of Life in explored fog does not pour. The
+        // viewer's own clock drives this instance, so this is the one place it is stopped.
+        if (u.building && !e.borrowedBody) this.applyFogFreeze(e);
         continue;
       }
       this.loc[0] = u.x;
@@ -3977,6 +4024,9 @@ export class RtsController {
       e.unit.instance.setRotation(this.quat);
       // Workers inside a gold mine vanish; enemy units vanish in the fog of war.
       this.applyVisibility(e, u, this.modelHidden(e.simId), dt);
+      // A building the fog has swallowed is a STILL PICTURE: no construction scrub, no
+      // upgrade scrub, no picker — nothing below may write to it until eyes return.
+      if (u.building && this.applyFogFreeze(e)) continue;
       // A unit that has changed FORM wears the other half of its model — a rooted Ancient, a
       // burrowed Crypt Fiend. Skipped entirely for the vast majority, which have only one.
       if (u.altModel || e.altModel !== undefined) this.applyFormAnims(e, u, this.registry.get(e.typeId));
@@ -4213,6 +4263,7 @@ export class RtsController {
     perfLog.end("sim.entries");
     perfLog.begin("sim.overlays");
     this.updateHealthBars();
+    this.updateMineCrews();
     this.overlays.syncHoverTip(this.computeHoverTip());
     perfLog.end("sim.overlays");
   }
@@ -6385,7 +6436,7 @@ export class RtsController {
       // two different progresses — a building that visibly stutters between two states of
       // construction on a client, and only on a client.
       const u = this.frameUnit(e.simId);
-      if (!u?.building) continue;
+      if (!u?.building || e.frozen) continue; // a fogged building is a still picture (applyFogFreeze)
       if (u.building.constructionLeft > 0) {
         if (e.birthSeq < 0) continue;
         const prog = 1 - u.building.constructionLeft / u.building.buildTimeTotal;
@@ -8198,6 +8249,44 @@ export class RtsController {
     }
     this.overlays.syncBars(specs);
   }
+
+  /**
+   * The worker count floated over every gold mine this side is working — `5/5` across an
+   * Entangled or a Haunted Gold Mine, `3` across a classic one with three Peasants on it.
+   *
+   * Three rules, and each is a rule the bars already follow. It is a reading of YOUR side's
+   * economy: only the local player's and their allies' workers are counted (`readsSideOf` —
+   * a watcher reads everybody's), and a crewed mine of the enemy's floats nothing, not even
+   * the denominator, because how full their mine is is what scouting is for. It needs EYES:
+   * a mine in the fog floats none (`fogBlocksMine`, the same gate its hover and its click
+   * take), though with a worker of yours on it you have them. And on a client it is the
+   * authority's answer (`MineSnapshot.crew`, computed per recipient by the same
+   * `mineCrewFor`), because the harvest targets it is counted from were never sent.
+   *
+   * The label is drawn in the tooltip's dress (worldOverlays.ts `CrewLabel`), which is how
+   * the game prints it.
+   */
+  private updateMineCrews(): void {
+    const specs: CrewLabelSpec[] = [];
+    if (this.interfaceShown) {
+      for (const m of this.sim.mines.values()) {
+        if (this.fogBlocksMine(m)) continue; // a live reading needs eyes on the mine
+        const crew = this.snapshot.active ? this.snapshot.mineCrew(m.id) : this.sim.mineCrewFor(m, this.crewSide);
+        if (!crew) continue;
+        specs.push({
+          x: m.x,
+          y: m.y,
+          z: this.heightAt(m.x, m.y),
+          radius: m.radius,
+          text: crew.cap > 0 ? `${crew.count}/${crew.cap}` : String(crew.count),
+        });
+      }
+    }
+    this.overlays.syncCrewLabels(specs);
+  }
+
+  /** `readsSideOf`, as the predicate `mineCrewFor` takes — one closure, not one per frame. */
+  private readonly crewSide = (owner: number): boolean => this.readsSideOf(owner);
 
   /**
    * The discreet row of spell icons floated over an ALLIED hero's health bar, or null.
