@@ -199,6 +199,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   strings on purpose ("Out of stock" against a `stockStart` that has not come round yet, "Coming soon"). The border
   is a 128×16 strip whose tile is a 4-texel stroke in 16 transparent ones, so the visible rule is a QUARTER of the
   band — size the band off the type, not off the ink.
+- **Selection & clicking:** read [`docs/selection.md`](docs/selection.md) before touching `pickAt`,
+  the drag box, or [`src/render/modelCollision.ts`](src/render/modelCollision.ts). A click is a RAY
+  against the model's own `COLLISIONSHAPE` nodes — 440 of the 530 models `UnitUI.slk` names carry
+  them, a unit is typically two overlapping SPHERES (head and chest), and a BUILDING's box is a
+  flat SLAB at its base rather than its silhouette (85 of 87 start at z=0; the Town Hall's is
+  **26** units tall against a 643-unit model), so a spire is not a click target. This is a
+  different system from `collisionSize`, which is PATHING and never asks the model anything. The
+  89 shapeless models are nearly all buildings and fall back on their own footprint. A DRAG BOX
+  is the other half: it hands you as many of your OWN units as it covers and never more than
+  **one** of anybody else's — a group is a thing you have command of — which is also why a box
+  over your army and an enemy's needs no rule to take only yours.
 - **Unplayable area:** read [`docs/unplayable-area.md`](docs/unplayable-area.md) before touching the map border, the
   camera clamp, `GetCameraMargin`/`GetPlayableMapRect`, or anything that asks "is this point on the map". A map
   states its boundary FOUR times over (two w3e flags that mean the same thing, one wpm bit, `SetCameraBounds` in its

@@ -63,6 +63,7 @@ import { MetricsOverlay } from "../ui/metrics";
 import { perfLog } from "../dev/perfLog";
 import { animStride, renderSize, videoSettings } from "./videoQuality";
 import { TerrainCull } from "./terrainCull";
+import type { PickVolume } from "./modelCollision";
 import { setSimProfiler } from "../sim/profile";
 import { wc3ToPlain } from "../ui/wc3Text";
 import { GameHud, isTyping, upkeepBand, PLAYER_COLORS, type HudDriver, type CommandButton } from "../ui/hud";
@@ -11900,8 +11901,11 @@ export class MapViewerScene {
   /** Rebuild the moving unit/building click rings (green) — every frame. */
   private rebuildUnitColliders(): void {
     const rings: number[] = [];
-    for (const c of this.rts?.debugUnitColliders() ?? []) {
-      pushColliderRing(rings, c.x, c.y, c.z, c.radius, COLLIDER_COLORS.click, c.building ? 24 : 16);
+    // The model's OWN collision spheres and boxes — the volumes the click ray is cast at
+    // (rts.pickAt / render/modelCollision.ts), drawn as wireframes where they really sit
+    // rather than as one flat ring on the ground.
+    for (const v of this.rts?.debugUnitColliders() ?? []) {
+      pushColliderVolume(rings, v, COLLIDER_COLORS.click);
     }
     // Ground items expose a click/selection radius too — draw it green like a unit's so
     // it's clear how large (or small, vs a nearby gold mine) an item's pickable area is.
@@ -13206,6 +13210,48 @@ function pushPathPolyline(a: number[], pts: Array<[number, number]>, h: HeightSa
       pushColliderVert(a, ax, ay, h(ax, ay) + PATH_LIFT, c);
       pushColliderVert(a, bx, by, h(bx, by) + PATH_LIFT, c);
     }
+  }
+}
+
+/** One world-space click volume as a wireframe — a sphere as three great circles, a box as
+ *  its twelve edges, a capsule as its two end rings joined up. Drawn where the volume really
+ *  is (no ground lift): these hang in the air around the model, which is the point. */
+function pushColliderVolume(a: number[], v: PickVolume, c: readonly number[]): void {
+  if (v.kind === "sphere") {
+    pushWireCircle(a, [v.x, v.y, v.z], [v.r, 0, 0], [0, v.r, 0], c, 16);
+    pushWireCircle(a, [v.x, v.y, v.z], [v.r, 0, 0], [0, 0, v.r], c, 16);
+    pushWireCircle(a, [v.x, v.y, v.z], [0, v.r, 0], [0, 0, v.r], c, 16);
+    return;
+  }
+  if (v.kind === "capsule") {
+    pushWireCircle(a, [v.x0, v.y0, v.z0], [v.r, 0, 0], [0, v.r, 0], c, 12);
+    pushWireCircle(a, [v.x1, v.y1, v.z1], [v.r, 0, 0], [0, v.r, 0], c, 12);
+    pushColliderVert(a, v.x0, v.y0, v.z0, c);
+    pushColliderVert(a, v.x1, v.y1, v.z1, c);
+    return;
+  }
+  // Eight corners in the box's own frame, then the twelve edges between them.
+  const corner = (sx: number, sy: number, sz: number): [number, number, number] => [
+    v.x + v.ax[0] * sx * v.hx + v.ay[0] * sy * v.hy + v.az[0] * sz * v.hz,
+    v.y + v.ax[1] * sx * v.hx + v.ay[1] * sy * v.hy + v.az[1] * sz * v.hz,
+    v.z + v.ax[2] * sx * v.hx + v.ay[2] * sy * v.hy + v.az[2] * sz * v.hz,
+  ];
+  const p: Array<[number, number, number]> = [];
+  for (const sz of [-1, 1]) for (const sy of [-1, 1]) for (const sx of [-1, 1]) p.push(corner(sx, sy, sz));
+  const edges = [[0, 1], [1, 3], [3, 2], [2, 0], [4, 5], [5, 7], [7, 6], [6, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
+  for (const [i, j] of edges) {
+    pushColliderVert(a, p[i][0], p[i][1], p[i][2], c);
+    pushColliderVert(a, p[j][0], p[j][1], p[j][2], c);
+  }
+}
+
+/** A circle of line segments around `o`, spanned by the two (already scaled) axes. */
+function pushWireCircle(a: number[], o: number[], u: number[], v: number[], c: readonly number[], segs: number): void {
+  for (let i = 0; i < segs; i++) {
+    const t0 = (i / segs) * Math.PI * 2, t1 = ((i + 1) / segs) * Math.PI * 2;
+    const c0 = Math.cos(t0), s0 = Math.sin(t0), c1 = Math.cos(t1), s1 = Math.sin(t1);
+    pushColliderVert(a, o[0] + u[0] * c0 + v[0] * s0, o[1] + u[1] * c0 + v[1] * s0, o[2] + u[2] * c0 + v[2] * s0, c);
+    pushColliderVert(a, o[0] + u[0] * c1 + v[0] * s1, o[1] + u[1] * c1 + v[1] * s1, o[2] + u[2] * c1 + v[2] * s1, c);
   }
 }
 

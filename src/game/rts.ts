@@ -40,6 +40,7 @@ import { SnapshotIndex } from "./renderView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable, AllianceType } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
+import { modelPickVolumes, rayVolume, type CollisionShapeNode, type PickVolume } from "../render/modelCollision";
 import { autoArmed, type UnitRegistry, type UnitDef } from "../data/units";
 import { ArmorType, AttackType, MoveType, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import { MELEE, MISC_GAME, xpToReachLevel } from "../data/gameplayConstants";
@@ -83,7 +84,16 @@ export interface Instance {
   show(): void;
   vertexColor?: Float32Array; // MDX tint; multiplied by fog brightness to dim in fog
   setVertexColor?(c: ArrayLike<number>): unknown;
-  model: { sequences: Array<{ name: string; interval?: ArrayLike<number> }> };
+  /** The instance's SKELETON — one node per generic object, a `COLLISIONSHAPE` included.
+   *  A node's `worldMatrix` is where that part of the model is actually DRAWN, which is what
+   *  the click ray has to be cast against (see render/modelCollision.ts). */
+  nodes?: ArrayLike<{ worldMatrix: ArrayLike<number> }>;
+  model: {
+    sequences: Array<{ name: string; interval?: ArrayLike<number> }>;
+    /** The model's own click volumes. Optional because a placed doodad body we have only
+     *  borrowed, or a stub in a test, need not carry any. */
+    collisionShapes?: ArrayLike<CollisionShapeNode>;
+  };
 }
 interface MapUnit {
   instance: Instance;
@@ -492,6 +502,25 @@ const TREE_COLLIDER_HEIGHT = 110; // pick trees against a raised plane so clicki
 // Max world distance from the click's ground point to a pickable unit. Gates out
 // far/behind-camera units that screen-projection alone would wrongly match.
 const PICK_WORLD_MAX = 700;
+// Slack around a model's collision shapes, in CSS pixels. OURS — the game's volumes are
+// exact and this is only give for the mouse; see pickAt.
+const PICK_PAD_PX = 4;
+/**
+ * How tall a BUILDING with no collision shape of its own is clickable to (world units).
+ *
+ * A building's click volume in WC3 is a low SLAB sitting on its footprint, not its
+ * silhouette — read straight off the install, where 85 of the 87 building collision boxes
+ * start at z = 0 and their height runs 26 (Town Hall, Ziggurat) to 300 (Temple of Tides),
+ * a median of 113 and 0.23 of the model's own height. So a Necropolis is clicked by its base
+ * and not by its spire, and that is the game's own answer, not ours.
+ *
+ * The number itself IS ours: it is the corpus's median, standing in for a slab the 89
+ * shapeless models' artists never drew. See docs/selection.md.
+ */
+const BUILDING_SLAB = 113;
+// How far PAST the terrain hit a click volume may still be reached (world units). OURS: slack
+// on the terrain-occlusion test, not a rule of the game's. See pickAt.
+const PICK_GROUND_SLACK = 48;
 // NOTE: there is deliberately NO selection cap here any more. WC3 stops a selection at 12 units
 // (we long stopped at 24), but OpenWar3 lifts it (issue #109): a box-select, a same-type grab or
 // a control group holds as many units as you put in it. The HUD absorbs the size instead of the
@@ -713,6 +742,8 @@ export class RtsController {
   private world2 = new Float32Array(3);
   private screen2 = new Float32Array(2);
   private ray = new Float32Array(6);
+  private groundT = Infinity; // ray parameter of the last groundHit (terrain occlusion in pickAt)
+  private volumes: PickVolume[] = []; // scratch: one body's click volumes, rebuilt per candidate
 
   constructor(
     grid: PathingGrid,
@@ -4759,30 +4790,41 @@ export class RtsController {
     return sx >= 0 && sy >= 0 && sx <= this.host.canvas.clientWidth && sy <= this.host.canvas.clientHeight;
   }
 
-  /** Drag-box: select all of the local player's mobile units whose on-screen
-   *  position falls inside the rectangle (CSS px). Empty box keeps the group.
-   *  `additive` (shift held) unions the boxed units into the current selection
-   *  instead of replacing it — matching WC3's shift-drag. */
-  /** Own entities whose screen position falls inside the CSS-space drag box, with
-   *  WC3's box priority applied: mobile units win, so a building is only box-picked
-   *  when the box catches NO units at all (drag a box over a unit + your town hall →
-   *  just the unit). Shared by the live marquee preview and the commit on mouse-up
-   *  so both agree exactly on what the box covers. */
-  private unitsInBox(x0: number, y0: number, x1: number, y1: number): number[] {
+  /**
+   * Everything the CSS-space drag box covers, split the three ways a box has to treat it.
+   *
+   * `own` is the local player's, with WC3's box priority already applied — mobile units win,
+   * so a building is only box-picked when the box catches NO units at all (drag a box over a
+   * unit and your town hall → just the unit). `foreign` is everyone else's (and the
+   * neutrals'), NEAREST THE BOX'S CENTRE FIRST, because a box may only ever take ONE of
+   * those: a multi-unit selection is a thing you have command of, and the original will not
+   * hand you a group of somebody else's units however you drag over them.
+   *
+   * Shared by the live marquee preview and the commit on mouse-up so both agree exactly on
+   * what the box covers.
+   */
+  private boxSweep(x0: number, y0: number, x1: number, y1: number): { own: number[]; foreign: number[] } {
     const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
     const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
+    const midX = (minX + maxX) / 2, midY = (minY + maxY) / 2;
     const viewport = this.host.viewport();
     const dpr = this.dpr();
     const h = this.host.canvas.height;
     const units: number[] = [];
     const buildings: number[] = [];
+    const foreign: Array<{ id: number; d: number; building: boolean }> = [];
     for (const e of this.entries) {
       // Projected to screen and compared against the drag box, so it must be the position the
       // model was DRAWN at — box-selecting off the sim while drawing off the snapshot would
       // catch units the player can see just outside the box and miss ones inside it.
       const u = this.frameUnit(e.simId);
       if (!u || e.hidden) continue;
-      if (u.owner !== this.localPlayer) continue; // own entities only
+      const own = u.owner === this.localPlayer;
+      // Somebody else's body has to pass the same fog gate a CLICK on it does — an explored
+      // enemy building is drawn but unseen, and a box may no more grab it than the cursor can
+      // (see pickAt). Our own units are never drawn from memory, so this only ever asks about
+      // the foreign ones.
+      if (!own && this.drawnFromMemory(e.simId)) continue;
       this.world[0] = u.x;
       this.world[1] = u.y;
       this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
@@ -4801,24 +4843,45 @@ export class RtsController {
       // Circle-vs-rect: distance from the centre to the nearest point inside the box.
       const nx = sx < minX ? minX : sx > maxX ? maxX : sx;
       const ny = sy < minY ? minY : sy > maxY ? maxY : sy;
-      if (Math.hypot(sx - nx, sy - ny) <= rCss) (u.building ? buildings : units).push(e.simId);
+      if (Math.hypot(sx - nx, sy - ny) > rCss) continue;
+      if (own) (u.building ? buildings : units).push(e.simId);
+      else foreign.push({ id: e.simId, d: Math.hypot(sx - midX, sy - midY), building: !!u.building });
     }
-    // Units take priority — buildings only when the box caught no units at all.
-    return units.length ? units : buildings;
+    // Units take priority — buildings only when the box caught no units at all. The same rule
+    // orders the foreign list, so a box thrown over an enemy army standing in its base takes a
+    // soldier rather than the barracks behind it.
+    foreign.sort((a, b) => (a.building === b.building ? a.d - b.d : a.building ? 1 : -1));
+    return { own: units.length ? units : buildings, foreign: foreign.map((f) => f.id) };
   }
 
-  /** What an ADDITIVE (Shift) box may actually take. A selection is units XOR
-   *  buildings, so a shift-drag over the army while three Moon Wells are held joins
-   *  nothing rather than mixing the two — the same rule the shift-click keeps
-   *  (`selectAt`) and the control groups enforce (`ownSelectionByKind`). A plain
-   *  (replacing) box has no selection to agree with, so it takes what it caught. */
+  /**
+   * What a drag box actually takes.
+   *
+   * OWN entities first and as a GROUP — that is the whole of what a marquee is for. Only when
+   * the box catches none of ours does it fall through to somebody else's, and there it takes
+   * exactly ONE: a group is a thing you have command of, so an enemy or a neutral is picked
+   * the way a click picks one, never as a squad. (Which is also why a box over your army and
+   * an enemy's takes only your army, with no need for a rule of its own.)
+   *
+   * An ADDITIVE (Shift) box may only join a selection it agrees with. A selection is units XOR
+   * buildings, so a shift-drag over the army while three Moon Wells are held joins nothing
+   * rather than mixing the two — the same rule the shift-click keeps (`selectAt`) and the
+   * control groups enforce (`ownSelectionByKind`) — and a foreign body joins nothing at all,
+   * since there is no group for it to be the second member of.
+   */
   private boxPicks(x0: number, y0: number, x1: number, y1: number, additive: boolean): number[] {
-    const picked = this.unitsInBox(x0, y0, x1, y1);
+    const { own, foreign } = this.boxSweep(x0, y0, x1, y1);
     const kind = additive ? this.ownSelectionByKind().kind : null;
-    if (!kind) return picked;
-    return picked.filter((id) => (this.sim.units.get(id)?.building ? "building" : "unit") === kind);
+    if (own.length) {
+      if (!kind) return own;
+      return own.filter((id) => (this.sim.units.get(id)?.building ? "building" : "unit") === kind);
+    }
+    if (additive) return []; // nothing of ours in the box, and a foreign body never joins one
+    return foreign.length ? [foreign[0]] : [];
   }
 
+  /** Commit a drag box. An empty box KEEPS the current group — WC3 has no
+   *  click-to-deselect, and dragging over bare ground is not one either. */
   selectBox(x0: number, y0: number, x1: number, y1: number, additive = false): void {
     const picked = this.boxPicks(x0, y0, x1, y1, additive);
     if (picked.length === 0) return; // empty box: keep the current selection
@@ -4831,8 +4894,10 @@ export class RtsController {
   }
 
   /** Update the live marquee preview: the units the drag-box currently covers get
-   *  a green ring (via previewRings) so the player sees exactly who will be picked
-   *  before releasing. Already-selected units are skipped — they keep their own
+   *  a ring (via previewRings) so the player sees exactly who will be picked
+   *  before releasing — in their own allegiance colour, so the ONE enemy a box may take
+   *  previews red rather than pretending to be a unit you command.
+   *  Already-selected units are skipped — they keep their own
    *  selection ring, so an additive (Shift) drag shows the union without stacking.
    *  `additive` is passed through so the preview promises exactly what the release
    *  will take: with buildings held, a shift-drag over units rings nobody. */
@@ -6072,15 +6137,17 @@ export class RtsController {
     return { hour: this.sim.timeOfDay, isDay: this.sim.isDay };
   }
 
-  /** CLICK/selection colliders for EVERY live unit (position, ground height, and
-   *  selection radius) — for the debug collider overlay. Pathing & LOS obstruction are
-   *  read straight off the grid/vision map by the renderer. */
-  debugUnitColliders(): Array<{ x: number; y: number; z: number; radius: number; building: boolean }> {
-    const out: Array<{ x: number; y: number; z: number; radius: number; building: boolean }> = [];
-    for (const [id, u] of this.sim.units) {
-      const e = this.byId.get(id);
-      if (!e) continue;
-      out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, building: u.building != null });
+  /** The REAL click volumes of every drawn body — for the debug collider overlay. These are
+   *  the model's OWN collision shapes wherever it carries any (which is what the cursor is
+   *  actually tested against; see pickAt), so what the overlay draws is the thing being hit
+   *  rather than a stand-in for it. Pathing & LOS obstruction are read straight off the
+   *  grid/vision map by the renderer, and are a different system entirely. */
+  debugUnitColliders(): PickVolume[] {
+    const out: PickVolume[] = [];
+    for (const e of this.entries) {
+      const u = this.frameUnit(e.simId);
+      if (!u || e.hidden) continue;
+      this.pickVolumes(e, u, out);
     }
     return out;
   }
@@ -6162,8 +6229,9 @@ export class RtsController {
     return out;
   }
 
-  /** Ground-circles for the units currently inside the live drag-box — drawn in
-   *  full selection green so the player previews the pick before releasing. */
+  /** Ground-circles for the units currently inside the live drag-box, so the player previews
+   *  the pick before releasing. Each wears its OWN allegiance colour (`ringAllegiance`) —
+   *  green for yours, red or yellow for the single foreign body a box may take. */
   previewRings(): RingInfo[] {
     const out: RingInfo[] = [];
     for (const id of this.previewIds) {
@@ -7832,29 +7900,47 @@ export class RtsController {
     return out;
   }
 
-  /** Sim id of the unit whose footprint the cursor is over. Uses each unit's
-   *  world-space collision radius projected to screen, so large units and
-   *  buildings are selectable anywhere on their body (not just dead-centre).
-   *  Ties break toward the smallest hit (a unit in front of a building wins). */
+  /**
+   * Sim id of the unit under the cursor — Warcraft III's own selection hit test.
+   *
+   * The click ray is cast against the model's OWN collision shapes (the invisible
+   * `COLLISIONSHAPE` spheres and boxes the artist put in the model's node hierarchy), not
+   * against a disc we invent around the unit. That is the mechanism the original uses, and
+   * it is why a custom model missing those nodes is famously impossible to click
+   * (hiveworkshop 156930) — see render/modelCollision.ts for the shapes, and
+   * `pickVolumes` for what a model that carries none is clickable by instead.
+   *
+   * NEAREST HIT WINS, and that subsumes the units-beat-buildings tie-break this used to
+   * need: whichever body the ray reaches first is the one drawn in front of the other, so a
+   * footman standing over a town hall is picked by being where the player can see him.
+   * A hit BEHIND the terrain is dropped, so a unit over the lip of a cliff is not clickable
+   * through the cliff.
+   */
   private pickAt(cssX: number, cssY: number): number | null {
-    // Hybrid pick: project each unit's mid-body to screen and test the cursor
-    // against it (this handles TALL buildings — you click the body, whose base's
-    // ground point sits well behind it), but GATE candidates by world distance
-    // to the click's ground point. The gate kills the zoomed-out / behind-camera
-    // false positives that pure screen-projection produced (distant creeps).
-    const ground = this.groundPoint(cssX, cssY);
-    const [glx, gly] = this.toGl(cssX, cssY);
-    const viewport = this.host.viewport();
     const dpr = this.dpr();
-    let bestUnit: number | null = null;
-    let bestUnitScore = Infinity;
-    let bestBldg: number | null = null;
-    let bestBldgScore = Infinity;
+    this.screen[0] = cssX * dpr;
+    this.screen[1] = cssY * dpr;
+    this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
+    const ground = this.groundHit();
+    const ox = this.ray[0], oy = this.ray[1], oz = this.ray[2];
+    const dx = this.ray[3] - ox, dy = this.ray[4] - oy, dz = this.ray[5] - oz;
+    // Anything the ray reaches only AFTER the terrain is behind a hill and cannot be clicked.
+    // With a body's thickness of slack on it: the ground march is a 256-step bisection, and a
+    // building's slab lies ON the terrain it stands on, so a hit level with the ground is on
+    // the ground rather than under it.
+    const tGround = ground ? this.groundT + PICK_GROUND_SLACK / Math.hypot(dx, dy, dz) : Infinity;
+    // Slack, in WORLD units, sized off how much world one screen pixel covers where the
+    // click landed. OURS, not the game's: a collision sphere is an exact volume and a mouse
+    // is not, and a few pixels of give is the difference between clicking a Wisp at full
+    // zoom-out and stabbing at it. Measured at the ground point's depth once per pick
+    // rather than per candidate — everything clickable is near it by construction.
+    const pad = ground ? PICK_PAD_PX * this.worldPerPixel(ground[0], ground[1]) : 0;
+    let best: number | null = null;
+    let bestT = Infinity;
     for (const e of this.entries) {
-      // The cursor must hit the unit WHERE IT IS DRAWN. This projects the unit's mid-body to
-      // screen and measures the click against it, so reading the sim while the model came from
-      // the snapshot would put the clickable disc somewhere the player cannot see it — the
-      // cursor lying is worse than the model being a frame stale (item 10c-2c-4).
+      // The cursor must hit the unit WHERE IT IS DRAWN, so this reads the frame's render
+      // record: picking off the sim while the model came from the snapshot would put the
+      // clickable volume somewhere the player cannot see it (item 10c-2c-4).
       const u = this.frameUnit(e.simId);
       if (u === undefined) continue; // gone from the sim, or never sent to this client
       // `hidden` is "no model on screen"; the memory test is "no eyes on it" — and an explored
@@ -7862,35 +7948,72 @@ export class RtsController {
       // grabbing a shop across the map (issue #62). Every click, hover, order and spell target
       // comes through here, so gating the pick gates all of them at once.
       if (e.hidden || this.drawnFromMemory(e.simId)) continue;
+      // Cheap reject before the volumes are built: nothing further from the click's ground
+      // point than PICK_WORLD_MAX has a body that could reach the cursor.
       if (ground && Math.hypot(u.x - ground[0], u.y - ground[1]) > PICK_WORLD_MAX) continue;
-      const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
-      // Project the unit's mid-body (base + ~half its height) to screen. Buildings
-      // sit lower (nearer their base) so their clickable area hugs the footprint
-      // on the ground rather than floating up the tall silhouette.
-      this.world[0] = u.x;
-      this.world[1] = u.y;
-      this.world[2] = baseZ + (u.building ? Math.max(e.selRadius * 0.45, 24) : Math.max(e.selRadius * 1.2, 60));
-      this.host.camera.worldToScreen(this.screen, this.world, viewport);
-      const cx = this.screen[0];
-      const cy = this.screen[1];
-      this.world2.set(this.world);
-      this.world2[0] = u.x + Math.max(u.radius, e.selRadius, 64);
-      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
-      const rPx = Math.hypot(this.screen2[0] - cx, this.screen2[1] - cy) + 14 * dpr;
-      const d = Math.hypot(glx - cx, gly - cy);
-      if (d > rPx) continue;
-      const score = d / rPx;
-      if (u.building) {
-        if (score < bestBldgScore) { bestBldgScore = score; bestBldg = e.simId; }
-      } else if (score < bestUnitScore) {
-        bestUnitScore = score;
-        bestUnit = e.simId;
+      this.volumes.length = 0;
+      this.pickVolumes(e, u, this.volumes);
+      for (const v of this.volumes) {
+        const t = rayVolume(v, ox, oy, oz, dx, dy, dz, pad);
+        if (t < 0 || t >= bestT || t > tGround) continue;
+        bestT = t;
+        best = e.simId;
       }
     }
-    return bestUnit ?? bestBldg;
+    return best;
   }
 
+  /**
+   * The world-space volumes this body is clicked by, appended to `out`.
+   *
+   * The model's own collision shapes when it has any — 440 of the 530 models the install's
+   * `UnitUI.slk` names do. The other 89 are nearly all BUILDINGS (the Orc Barracks, Great
+   * Hall, Spirit Lodge, Voodoo Lounge and Troll Burrow among them), and a building with no
+   * shape still has to be clickable, so it falls back on the thing it does state exactly:
+   * its own FOOTPRINT, extruded to the height of the model's bounding sphere. A shapeless
+   * MOBILE unit (the wards, the Locust, a Skink) keeps the sphere the pick used to use for
+   * everything, so nothing that was clickable before stops being so.
+   */
+  private pickVolumes(e: Entry, u: RenderUnit, out: PickVolume[]): void {
+    const inst = e.unit.instance;
+    if (modelPickVolumes(inst, out) > 0) return;
+    const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
+    if (u.building && (e.footHalfW > 0 || e.footHalfH > 0)) {
+      out.push({
+        kind: "box",
+        x: u.x, y: u.y, z: baseZ + BUILDING_SLAB / 2,
+        ax: [1, 0, 0], ay: [0, 1, 0], az: [0, 0, 1],
+        hx: e.footHalfW, hy: e.footHalfH, hz: BUILDING_SLAB / 2,
+      });
+      return;
+    }
+    out.push({
+      kind: "sphere",
+      x: u.x, y: u.y,
+      z: baseZ + (u.building ? Math.max(e.selRadius * 0.45, 24) : Math.max(e.selRadius * 1.2, 60)),
+      r: Math.max(u.radius, e.selRadius, 64),
+    });
+  }
+
+  /** World units one CSS pixel spans at (wx, wy) on the ground — the conversion the pick
+   *  slack and nothing else needs. Projects a 100-unit stick and measures it on screen. */
+  private worldPerPixel(wx: number, wy: number): number {
+    const viewport = this.host.viewport();
+    this.world[0] = wx;
+    this.world[1] = wy;
+    this.world[2] = this.heightAt(wx, wy);
+    this.host.camera.worldToScreen(this.screen, this.world, viewport);
+    this.world2.set(this.world);
+    this.world2[0] = wx + 100;
+    this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
+    const px = Math.hypot(this.screen2[0] - this.screen[0], this.screen2[1] - this.screen[1]) / this.dpr();
+    return px > 1e-3 ? 100 / px : 0;
+  }
+
+  /** Where the ray in `this.ray` first meets the terrain. Also records the ray PARAMETER of
+   *  that hit in `groundT`, which is what lets the pick reject a body behind a cliff. */
   private groundHit(): [number, number] | null {
+    this.groundT = Infinity;
     const r = this.ray;
     const nx = r[0], ny = r[1], nz = r[2];
     const dx = r[3] - nx, dy = r[4] - ny, dz = r[5] - nz;
@@ -7910,6 +8033,7 @@ export class RtsController {
           else hi = mid;
         }
         const t2 = (lo + hi) / 2;
+        this.groundT = t2;
         return [nx + dx * t2, ny + dy * t2];
       }
       prev = cur;
@@ -8128,12 +8252,6 @@ export class RtsController {
       return { x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: 32, lines: [{ text: name, color: HOVER_TEXT }] };
     }
     return null;
-  }
-
-  /** CSS px → GL px (device pixels, y-up) to match camera.worldToScreen. */
-  private toGl(cssX: number, cssY: number): [number, number] {
-    const dpr = this.dpr();
-    return [cssX * dpr, this.host.canvas.height - cssY * dpr];
   }
 
   private dpr(): number {
