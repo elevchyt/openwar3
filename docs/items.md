@@ -304,11 +304,58 @@ frame, because its hall may be knocked down inside the five seconds.
 * A charge is spent **only** on `true`, and `USE_ITEM` is raised *after* it — so
   `GetItemCharges` inside a use trigger reports what is left, which the classic
   `SetItemCharges(GetManipulatedItem(), n+1)` idiom relies on.
-* `cooldownid` is a GROUP: pressing one puts every item in that group on the same cooldown.
+* `cooldownid` is a GROUP — see below.
 * Refusals are answered **before** the click is spent, in `itemReadyError` (is it usable at all,
   is it cooling down) and `itemUseError` (may it be aimed at that). Every string is the game's
   own `[Errors]` key — `Notownportalhalls` = *"There are no friendly Town Halls to Town Portal
   to."* was written for the Scroll of Town Portal, and `Needsummoned` for Control Magic.
+
+### The cooldown belongs to the HERO, and `cooldownid` says who shares it
+
+`ItemData.slk` states an item's cooldown in two fields, and neither of them is a number of
+seconds.
+
+**`cooldownID` is the GROUP** — *"all items in Cooldown Group X will go on cooldown when you use
+ANY item from that group"* (hiveworkshop 323800). It is what stops a hero with a Potion of
+Healing, a Greater one and a Scroll of Healing drinking all three in a second. The field's
+editor type is `abilCode` and the ids look like ability codes, but it is only a **name**: four
+of the groups the stock items use — `AIhe` (the healing potions), `AIma` (the mana ones), `AIrg`
+(the regeneration family) and `Aami` — match no row in `AbilityData.slk` at all. So the group
+never says how LONG: the duration is the `Cool1` of the ability that was actually pressed
+(hiveworkshop 201233, *"the cooldown is getting from the spell's cooldown"*). Press the Potion of
+Healing and its Greater twin takes **20** seconds, not its own 40.
+
+Every usable item in the game names a group. The 39 that leave the field blank are campaign
+props and the four faction flags, none of which can be pressed.
+
+**The clock is the unit's, not the bottle's.** An item's active is an ability the hero is granted
+while carrying it, and a cooldown here is a fact about a unit's ability object
+(`docs/reverse-engineering/tinkerworx-repos.md`), so `SimUnit.itemCooldowns` holds one clock per
+group and it outlives whatever started it. Three things fall out of that which a per-item timer
+gets wrong, and all three are melee-relevant:
+
+* a fresh potion **bought or picked up** while the group is running arrives on cooldown — buying
+  a second one is not a way round the first;
+* **dropping** an item and picking it straight back up does not clear it;
+* **handing** it to another hero does, because the clock was never the item's.
+
+`HeldItem.cooldownLeft` is still what the console draws and what `useItem` gates on; it is that
+map's value, stamped onto each item of the group as it is spent and onto any that arrives while
+it runs (`itemCooldownOn`).
+
+**`ignoreCD` is the opt-out**: *"Even though the ability has a cooldown, it will be set to 0 when
+this is True. Almost 100% of the time, it's False"* (hiveworkshop 98895). Exactly one stock item
+sets it — the Wand of Negation — and `[AIdi]`'s own `Cool1` is 0 anyway, so nothing in the melee
+game turns on it; it is honoured for the maps that do use it, and such an item neither waits nor
+makes its group wait.
+
+Pinned by `tools/sim-item-cooldown-test.cjs`, which also pins the case that named this section:
+the Potion of Invulnerability and the **Lesser** one share group `AIvu` and go down together,
+while the Potion of Divinity — group `AHds` — does not.
+
+Not settled: whether a POWERUP walked over (a Rune of Healing is in `AIha`, the Scroll of
+Healing's group) starts that group's clock. It has no item left to put on cooldown, so the only
+way to see it is on the other items in the bag, and nothing in the install says. We do not.
 
 ### A stunned or sleeping unit has no pockets
 

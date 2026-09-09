@@ -169,7 +169,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   drinker, all three under one code — while the AIMING is not in the tables at all and has to be
   read out of the item's Ubertip. And a CARRIED ability is an ability: the Talisman of Evasion's
   row IS the Demon Hunter's Evasion, so the inventory has to be visible to `passiveLevelData`
-  and to `applyAuras` or fourteen aura items broadcast to nobody.
+  and to `applyAuras` or fourteen aura items broadcast to nobody. The COOLDOWN is two fields and
+  neither is a number of seconds: `cooldownID` names the GROUP that goes down together (a NAME,
+  not an ability — four of the stock groups match no ability row, so the duration is always the
+  pressed ability's own `Cool1`), and `ignoreCD` says the press costs no cooldown at all. The
+  clock belongs to the HERO and outlives the bottle (`SimUnit.itemCooldowns`), which is what
+  makes a potion bought mid-cooldown arrive on cooldown and one handed to another hero ready.
 - **Orb effects:** read [`docs/orbs.md`](docs/orbs.md) before touching any ATTACK MODIFIER — the orb items, the
   arrow abilities (Searing/Cold/Black/Incinerate), Slow Poison, Envenomed Spears, Feedback, Frost Attack or the
   Mask of Death. They are ONE family under one rule — only **one** orb effect may ride a blow, by a fixed priority

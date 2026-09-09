@@ -874,6 +874,7 @@ const ITEM_SETTERS: Record<string, (d: ItemDef, v: Val) => void> = {
   iabi: (d, v) => { d.abilities = s(v).split(",").map((x) => x.trim()).filter((x) => x && x !== "_" && x !== "-"); },
   iuse: (d, v) => { d.charges = n(v); },
   icid: (d, v) => { d.cooldownGroup = s(v); },
+  iicd: (d, v) => { d.ignoreCooldown = bool(v); }, // "Ignore Cooldown" — see ItemDef.ignoreCooldown
   iusa: (d, v) => { d.usable = bool(v); },
   iper: (d, v) => { d.perishable = bool(v); },
   ipow: (d, v) => { d.powerup = bool(v); },

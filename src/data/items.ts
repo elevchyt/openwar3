@@ -31,7 +31,24 @@ export interface ItemDef {
   classType: string; // Permanent/Charged/Purchasable/Artifact/PowerUp/Miscellaneous/Campaign
   abilities: string[]; // ability ids this item grants (first is the primary)
   charges: number; // `uses` — starting charges (0 = passive/unlimited)
-  cooldownGroup: string; // `cooldownid` — items in the same group share a use cooldown
+  /** `cooldownid` — the COOLDOWN GROUP. Every item naming the same group shares one clock on
+   *  the hero carrying them: use any of them and all of them go on cooldown, which is what
+   *  stops a hero with three different healing potions drinking all three at once
+   *  (hiveworkshop 323800: "all items in Cooldown Group X will go on cooldown when you use
+   *  ANY item from that group"). The field's editor type is `abilCode` and the ids look like
+   *  ability codes, but it is only a NAME: four of the groups the stock items use — `AIhe`
+   *  (the healing potions), `AIma` (the mana ones), `AIrg` (the regeneration family) and
+   *  `Aami` — name no ability in AbilityData.slk at all. So the group says WHO shares the
+   *  clock and never how long it runs: the duration is the cooldown of the ability that was
+   *  actually pressed (hiveworkshop 323800, and 201233: "the cooldown is getting from the
+   *  spell's cooldown"). Every USABLE item in the game names a group; the 39 that leave it
+   *  blank are campaign props and the flags, none of which can be pressed. */
+  cooldownGroup: string;
+  /** `ignoreCD` — "Even though the ability has a cooldown, it will be set to 0 when this is
+   *  True. Almost 100% of the time, it's False" (hiveworkshop 98895, All About Items). Exactly
+   *  ONE stock item sets it — the Wand of Negation — and its ability `[AIdi]` has `Cool1` = 0
+   *  anyway, so nothing in the melee game turns on it; it is honoured for the maps that use it. */
+  ignoreCooldown: boolean;
   usable: boolean; // has an active, player-triggered effect (potions, scrolls, wands)
   perishable: boolean; // destroyed when its charges hit 0
   powerup: boolean; // consumed instantly on pickup (tomes, runes, gold) — never stored
@@ -196,6 +213,7 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
       abilities,
       charges: num(r, "uses", 0),
       cooldownGroup: str(r, "cooldownid"),
+      ignoreCooldown: num(r, "ignoreCD", 0) === 1,
       usable: num(r, "usable", 0) === 1,
       perishable: num(r, "perishable", 0) === 1,
       powerup: num(r, "powerup", 0) === 1,

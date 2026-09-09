@@ -1936,6 +1936,31 @@ export interface SimUnit {
   returnStuckT: number; // seconds making no homeward progress while returning (→ give up, fight)
   // --- inventory (heroes) ---------------------------------------------------
   inventory: (HeldItem | null)[]; // 6 slots for heroes ([] for units without an inventory)
+  /**
+   * The COOLDOWN GROUP clocks — group id → seconds left — and the reason they live on the
+   * UNIT rather than on the bottle.
+   *
+   * An item's active is an ability the hero is granted while carrying it, and a cooldown in
+   * this engine is a fact about a unit's ability (docs/reverse-engineering: a `CUnit`'s own
+   * ability objects hold their `AbilityLevelData`). `ItemData.slk`'s `cooldownID` names which
+   * clock an item presses — "all items in Cooldown Group X will go on cooldown when you use
+   * ANY item from that group" (hiveworkshop 323800) — so the clock outlives the item that
+   * started it, and three things fall out of that which a per-item timer gets wrong:
+   *
+   *   • a FRESH potion bought or picked up while the group is running arrives on cooldown,
+   *     rather than handing the hero a second drink the moment the first is swallowed;
+   *   • dropping an item and picking it straight back up does NOT clear its cooldown;
+   *   • handing it to ANOTHER hero does, because the clock never belonged to the item.
+   *
+   * `HeldItem.cooldownLeft` stays what the console draws and what `useItem` gates on: it is
+   * this map's value, stamped onto each item of the group as it is spent and onto any item
+   * of that group that arrives later (itemCooldownOn).
+   *
+   * OPTIONAL because it is made on demand (`itemClocks`): `add()` gives every unit one, but
+   * the headless tests hand the world units they built themselves, and a unit that has never
+   * pressed an item has nothing to hold — the same caveat `dataStr` and `buffFx` carry.
+   */
+  itemCooldowns?: Map<string, number>;
   getItemId: number; // ground item this unit is walking to pick up (order === "getitem"; 0 = none)
   pendingGive: { toId: number; slot: number } | null; // walking to hand a slot's item to another hero
   /** Walking to a SHOP to sell a slot's item (WC3: right-click the item, click the shop —
@@ -3978,7 +4003,9 @@ export class SimWorld {
     stash.gold -= def.gold;
     stash.lumber -= def.lumber;
     const slot = buyer.inventory.indexOf(null);
-    const bought = { id: this.nextItemId++, itemId, charges: def.charges, cooldownLeft: 0 };
+    // A fresh potion off the shelf is still bound by the clock the last one started
+    // (itemCooldownOn) — buying another is not a way round a cooldown group.
+    const bought = { id: this.nextItemId++, itemId, charges: def.charges, cooldownLeft: this.itemCooldownOn(buyer, itemId) };
     buyer.inventory[slot] = bought;
     this.notifyCreepsOfShopUse(shop, buyer, MISC_GAME.ItemSaleAggroRange);
     // EVENT_(PLAYER_)UNIT_SELL_ITEM. Blizzard.j listens for this on every neutral-passive
@@ -7129,6 +7156,7 @@ export class SimWorld {
       | "order"
       | "targetId"
       | "cooldownLeft"
+      | "itemCooldowns" // starts empty — nothing has been drunk yet (see SimUnit.itemCooldowns)
       | "swingLeft"
       | "swingTargetId"
       | "swingSeq"
@@ -7374,6 +7402,7 @@ export class SimWorld {
       order: "idle",
       targetId: null,
       cooldownLeft: 0,
+      itemCooldowns: new Map(),
       swingLeft: -1,
       swingTargetId: 0,
       swingSeq: 0,
@@ -14504,6 +14533,15 @@ export class SimWorld {
       if (u.waitT > 0) u.waitT -= dt; // parked in a jam — counting down to the next try
       for (const a of u.abilities) if (a.cooldownLeft > 0) a.cooldownLeft -= dt;
       for (const it of u.inventory) if (it && it.cooldownLeft > 0) it.cooldownLeft -= dt;
+      // …and the group clocks behind them, which run whether or not an item of that group is
+      // still in the bag (SimUnit.itemCooldowns). Dropped when they lapse, so the map holds
+      // only what is actually ticking.
+      if (u.itemCooldowns?.size) {
+        for (const [group, left] of u.itemCooldowns) {
+          if (left - dt > 0) u.itemCooldowns.set(group, left - dt);
+          else u.itemCooldowns.delete(group);
+        }
+      }
       if (u.summonLeft > 0) {
         u.summonLeft -= dt;
         if (u.summonLeft <= 0) {
@@ -18794,7 +18832,7 @@ export class SimWorld {
       ? (wantSlot < u.inventory.length && !u.inventory[wantSlot] ? wantSlot : -1)
       : u.inventory.indexOf(null);
     if (slot < 0) return false; // inventory full (or that slot taken) — leave it on the ground
-    u.inventory[slot] = { id: it.id, itemId: it.itemId, charges: it.charges, cooldownLeft: 0 };
+    u.inventory[slot] = { id: it.id, itemId: it.itemId, charges: it.charges, cooldownLeft: this.itemCooldownOn(u, it.itemId) };
     this.removeGroundItem(it.id);
     this.noteItem(u, it, "pickup");
     this.recomputeStats(u); // reflect any stat bonus immediately
@@ -18814,7 +18852,7 @@ export class SimWorld {
     if (!held) return;
     const dest = to.inventory.indexOf(null);
     if (dest < 0) { this.spawnGroundItem(held.itemId, to.x, to.y, held.charges, held.id); }
-    else { to.inventory[dest] = { id: held.id, itemId: held.itemId, charges: held.charges, cooldownLeft: 0 }; }
+    else { to.inventory[dest] = { id: held.id, itemId: held.itemId, charges: held.charges, cooldownLeft: this.itemCooldownOn(to, held.itemId) }; }
     from.inventory[slot] = null;
     from.pendingGive = null;
     from.pendingSell = null;
@@ -18912,6 +18950,16 @@ export class SimWorld {
       if (fired === "unhandled") continue; // ability we don't handle — try the next one
       if (!fired) return false; // handled code but nothing to do (already full) — no charge spent
       this.consumeItemUse(u, slot, def, ad.levelData[0]?.cooldown || 0);
+      // A PRESSED ITEM SOUNDS, and it sounds the way a cast does. An item's active is an
+      // ability, so the same event a spell raises is raised here and the renderer walks the
+      // one chain it already has for a cast (mapViewer, drainFxCastFires): the caster
+      // model's own SND event for this code, then the row's `Effectsound` label, then the
+      // arts the row names — of which the last is the BUFF's model, and that is what carries
+      // the potions. A Potion of Invulnerability wears `[Bvul]`'s DivineShieldTarget.mdl,
+      // whose folder holds DivineShield.wav, so pressing it makes the noise the Paladin's
+      // own Divine Shield does. Nothing else pushes for a press, so nothing can double it —
+      // a POWERUP walked over is a different path with a sound of its own (drainPowerupPickups).
+      this.castFires.push({ casterId: u.id, code: ad.code, abilityId: abilId });
       // USE_ITEM is raised AFTER the charge is spent: GetItemCharges inside a use trigger
       // reports what's left, which is what the classic "give the item its charge back to
       // make it infinite" JASS idiom relies on (SetItemCharges(GetManipulatedItem(), n+1)).
@@ -19037,10 +19085,24 @@ export class SimWorld {
           }
           break;
         }
-        case "AIvu": // Potion of Invulnerability → brief invulnerability (`Bvul`, "Invulnerable")
-          this.applyBuffInternal(u, { kind: "invuln", group: "item:invuln", timeLeft: lvl?.duration || 15, sourceId: u.id, value: 0, value2: 0, buffId: buffIdOf(ad) });
+        // The two invulnerability potions, which are ONE code: `[AIvl]`, the Lesser one the
+        // Merchant stocks, carries `code = AIvu` and differs from `[AIvu]` only in `Dur1`
+        // (7 s against 15). Both name `BuffID1 = Bvul`, and that buff row — in
+        // CommonAbilityFunc, which is why neither ability names any art itself — is where the
+        // bubble comes from: `[Bvul] Targetart = …\Human\DivineShield\DivineShieldTarget.mdl`,
+        // `Targetattach = origin`, the very model the Potion of Divinity wears through
+        // `[BHds]`. Handing the buff its own `fx` is what puts it on: applyBuffInternal
+        // spawns what it is GIVEN and never looks a buff id up, so a `buffId` on its own
+        // left both potions with no bubble at all. The sound rides that model — it carries
+        // the SND event `AHDI`, which AnimLookups turns into the AnimSounds row
+        // `DivineShield` → DivineShield.wav — and is played off the item's press like any
+        // other cast (see the castFires push in useItem).
+        case "AIvu": {
+          const buffId = buffIdOf(ad); // `Bvul` for both potions
+          this.applyBuffInternal(u, { kind: "invuln", group: "item:invuln", timeLeft: lvl?.duration || 15, sourceId: u.id, value: 0, value2: 0, buffId, fx: this.abilities.buffFx(buffId) });
           fired = true;
           break;
+        }
         // The corpse-spending items are not item behaviour at all — they are the SPELL, with
         // the item's own numbers on it, so they run the spell's handler rather than a second
         // copy of it here. The Rod of Necromancy IS Raise Dead (`AIrd` carries `code = AIrd`
@@ -19345,8 +19407,16 @@ export class SimWorld {
     return null; // not an aimed item — nothing to check here
   }
 
-  /** Spend a charge + start the item's cooldown (shared across its cooldown group,
-   *  WC3-style: drinking one potion puts every item in that group on cooldown). */
+  /**
+   * Spend a charge and start the cooldown the press earns.
+   *
+   * The DURATION is the pressed ability's own `Cool1` — the group never states one, and four
+   * of the groups the stock items use name no ability at all (ItemDef.cooldownGroup). WHO it
+   * lands on is the group: the hero's clock for it (SimUnit.itemCooldowns), and through that
+   * every item of the group he is carrying now or picks up before it lapses. That is what
+   * stops three different healing potions being drunk back to back, and what stops a fourth
+   * bought mid-cooldown being a way round it.
+   */
   private consumeItemUse(u: SimUnit, slot: number, def: ItemDef, cooldown: number): void {
     const held = u.inventory[slot];
     if (!held) return;
@@ -19354,16 +19424,35 @@ export class SimWorld {
       held.charges -= 1;
       if (held.charges <= 0 && def.perishable) { u.inventory[slot] = null; this.recomputeStats(u); }
     }
-    if (cooldown > 0) {
-      held.cooldownLeft = Math.max(held.cooldownLeft, cooldown);
-      if (def.cooldownGroup && this.itemReg) {
-        for (const other of u.inventory) {
-          if (!other || other === held) continue;
-          const od = this.itemReg.get(other.itemId);
-          if (od && od.cooldownGroup === def.cooldownGroup) other.cooldownLeft = Math.max(other.cooldownLeft, cooldown);
-        }
-      }
+    // "Even though the ability has a cooldown, it will be set to 0 when this is True"
+    // (ItemDef.ignoreCooldown) — so such an item neither waits nor makes its group wait.
+    if (def.ignoreCooldown) return;
+    if (cooldown <= 0) return;
+    held.cooldownLeft = Math.max(held.cooldownLeft, cooldown);
+    const group = def.cooldownGroup;
+    if (!group) return; // a map's own item with no group: its cooldown is its alone
+    const clocks = this.itemClocks(u);
+    clocks.set(group, Math.max(clocks.get(group) ?? 0, cooldown));
+    if (!this.itemReg) return;
+    for (const other of u.inventory) {
+      if (!other || other === held) continue;
+      const od = this.itemReg.get(other.itemId);
+      if (od && !od.ignoreCooldown && od.cooldownGroup === group) other.cooldownLeft = Math.max(other.cooldownLeft, cooldown);
     }
+  }
+
+  /** The cooldown an item ARRIVING in `u`'s inventory starts on: whatever is left of its
+   *  group's clock. Zero for a hero who has not pressed anything in that group — including
+   *  the hero somebody just handed it to, whose clocks are his own (SimUnit.itemCooldowns). */
+  private itemCooldownOn(u: SimUnit, itemId: string): number {
+    const def = this.itemReg?.get(itemId);
+    if (!def || def.ignoreCooldown || !def.cooldownGroup) return 0;
+    return u.itemCooldowns?.get(def.cooldownGroup) ?? 0;
+  }
+
+  /** `u`'s cooldown-group clocks, made the first time it needs one (SimUnit.itemCooldowns). */
+  private itemClocks(u: SimUnit): Map<string, number> {
+    return (u.itemCooldowns ??= new Map());
   }
 
   /** Who an item's effect actually lands on. An ability with no `Area1` is the user's alone
