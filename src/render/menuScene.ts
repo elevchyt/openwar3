@@ -100,6 +100,28 @@ const LEFT_PANEL_CLIPS: Partial<Record<GlueChrome, ChromeClips>> = {
   },
 };
 
+/**
+ * Screens whose LEFT panel needs its own vertical framing.
+ *
+ * The left layer's ortho window maps to the FULL screen height, so how much of the panel model
+ * is visible and how big it is drawn are the same number: reveal more of it at the bottom and it
+ * shrinks. One window therefore cannot suit every screen, and the tuned default is the one the
+ * SKIRMISH screen wants — its Game Settings and Team Setup frames are aligned to it.
+ *
+ * The game LOBBY's chrome ("MultiplayerPreGameChat") reaches lower than that: its chat frame's
+ * bottom edge fell outside the window, so the panel ran off the bottom of the screen with no
+ * closing rivet strip under the chat box. Measured on the running screen rather than guessed —
+ * the window is opened downward with its TOP edge pinned (`cy + halfY` stays 0.09, so nothing
+ * above moves), and 0.30 is the last value where the frame closes AND the FDF's own chat edit
+ * box is still inside it. By 0.305 the box starts to hang below the panel it sits on.
+ *
+ * `?menudebug`'s sliders drive the shared tuning, so on this screen they will not match what is
+ * drawn — tune with the entry below, not with them.
+ */
+const LEFT_FRAMING: Partial<Record<GlueChrome, { cy: number; halfY: number }>> = {
+  MultiplayerPreGameChat: { cy: -0.21, halfY: 0.3 },
+};
+
 /** How long a screen's chrome takes to leave / arrive, in ms — read from the model's
  *  own sequence intervals, so the DOM panels can be animated over the same window. */
 export interface ChromeTiming { death: number; birth: number }
@@ -1211,8 +1233,10 @@ export class MenuScene {
     this.scenePanel.viewport.set([w - pVw, 0, pVw, h]);
 
     // The left-edge layer, by the same rules but anchored to the screen's LEFT edge.
-    const lVw = h * (t.leftHalfX / t.leftHalfY) * t.leftStretchX;
-    this.sceneLeft.camera.ortho(t.leftCx - t.leftHalfX, t.leftCx + t.leftHalfX, t.leftCy - t.leftHalfY, t.leftCy + t.leftHalfY, 1, 2000);
+    // Vertically, whichever framing this screen's chrome asks for — see LEFT_FRAMING.
+    const lf = (this.chrome && LEFT_FRAMING[this.chrome]) ?? { cy: t.leftCy, halfY: t.leftHalfY };
+    const lVw = h * (t.leftHalfX / lf.halfY) * t.leftStretchX;
+    this.sceneLeft.camera.ortho(t.leftCx - t.leftHalfX, t.leftCx + t.leftHalfX, lf.cy - lf.halfY, lf.cy + lf.halfY, 1, 2000);
     this.sceneLeft.camera.moveToAndFace(
       new Float32Array([0.5, 0.5, 1000]),
       new Float32Array([0.5, 0.5, 0]),
