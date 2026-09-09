@@ -181,6 +181,17 @@ body.in-game {
    own reads better with the menu pushed back, and the darkening is also what says "this is
    modal" on a screen whose chrome is otherwise identical to the one underneath. */
 .glue-dialog-scrim.dimmed { background: rgba(0, 0, 0, 0.55); }
+/* The update prompt's version line, made a link to the releases page (ui/updatePrompt.ts).
+   Every FDF frame is pointer-events: none, so the anchor takes the mouse back for itself; the
+   gold is the wrapped span's own, inherited rather than restated. */
+.update-release-link {
+  pointer-events: auto;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+  cursor: pointer;
+}
+.update-release-link:hover { filter: brightness(1.2); }
 
 /* The update overlay (ui/updateOverlay.ts): the game's own load bar over the modal scrim while
    a new build is being fetched. It sits ABOVE every other modal because it is the one that

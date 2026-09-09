@@ -42,6 +42,10 @@ export interface GlueDialogOptions {
 /** A dialog on screen; `close()` takes it and its scrim away. */
 export interface GlueDialog {
   close(): void;
+  /** The DOM element built for one of the box's frames (`DialogText`, a button), or null —
+   *  for a caller that has to do something the FDF cannot say, like make part of the message
+   *  a link (ui/updatePrompt.ts). */
+  frame(name: string): HTMLElement | null;
 }
 
 const DIALOG_FDF = "UI\\FrameDef\\Glue\\DialogWar3.fdf";
@@ -96,5 +100,5 @@ export async function showGlueDialog(opts: GlueDialogOptions): Promise<GlueDialo
     close();
     throw err;
   }
-  return { close };
+  return { close, frame: (name) => screen?.frame(name) ?? null };
 }

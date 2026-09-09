@@ -19,6 +19,36 @@ import type { DataSource } from "../vfs/types";
 // the player has been watching a progress bar, is asking somebody to confirm the thing they just
 // asked for.
 
+/** Where the new build lives — the same GitHub releases the shell's check reads
+ *  (electron/updates.mjs). The version line in the prompt is a link here, so a player who
+ *  wants to read what changed before saying yes can, in their own browser: in the desktop app
+ *  a `target="_blank"` link goes through `setWindowOpenHandler` to `shell.openExternal`
+ *  (electron/main.mjs) and never opens a second game window. */
+const RELEASES_URL = "https://github.com/elevchyt/openwar3/releases";
+
+/**
+ * Make the gold version line of the prompt a link to the releases page.
+ *
+ * The message is WC3 markup painted by the FDF renderer, which has no vocabulary for a link
+ * — `|cffffcc00` is a colour, not an anchor — so the version's coloured span is found in the
+ * painted frame and wrapped after the fact. It keeps its gold (the anchor inherits the span's
+ * colour) and gains an underline, and takes the pointer back: the frame it sits in is
+ * `pointer-events: none` like every FDF frame, so the anchor says otherwise for itself.
+ */
+function linkVersionLine(dialog: GlueDialog): void {
+  const text = dialog.frame("DialogText");
+  const gold = text?.querySelector<HTMLElement>("span[style]");
+  if (!gold || gold.closest("a")) return;
+  const a = document.createElement("a");
+  a.className = "update-release-link";
+  a.href = RELEASES_URL;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.title = RELEASES_URL;
+  gold.replaceWith(a);
+  a.appendChild(gold);
+}
+
 /** Only ever asked once per launch, however many times the state changes. */
 let asked = false;
 /** Set the moment Restart is pressed, so a late progress event cannot raise the overlay again
@@ -32,10 +62,10 @@ export function watchForUpdates(container: HTMLElement, vfs: DataSource): () => 
   let overlay: UpdateOverlay | null = null;
   let alive = true;
 
-  const show = async (text: string, buttons: "ok" | "yesno", onConfirm?: () => void): Promise<void> => {
+  const show = async (text: string, buttons: "ok" | "yesno", onConfirm?: () => void): Promise<GlueDialog | null> => {
     dialog?.close();
     dialog = null;
-    if (!alive) return;
+    if (!alive) return null;
     dialog = await showGlueDialog({
       container, vfs, text, buttons,
       // Ours, not the game's: this is not a question about the main menu behind it, so the menu
@@ -44,6 +74,7 @@ export function watchForUpdates(container: HTMLElement, vfs: DataSource): () => 
       onConfirm: () => { dialog = null; onConfirm?.(); },
       onCancel: () => { dialog = null; },
     });
+    return dialog;
   };
 
   return onUpdateState((state: UpdateState) => {
@@ -65,7 +96,7 @@ export function watchForUpdates(container: HTMLElement, vfs: DataSource): () => 
               else o.dispose();
             });
           },
-        );
+        ).then((d) => { if (d) linkVersionLine(d); });
         return;
       case "downloading":
         overlay?.setProgress((state.percent ?? 0) / 100);
