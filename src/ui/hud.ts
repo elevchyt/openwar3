@@ -520,6 +520,17 @@ export const PLAYER_COLORS = [
 const CAMP_DOT = 0.045; // weak-camp diameter (× MinimapMiddleCampScale from level 10)
 const MAP_GLYPH = 0.065; // gold-mine / neutral-building glyph side
 const UNIT_DOT = 5; // unit dot, in dots-canvas pixels
+// A camp dot and a gold-mine glyph are routinely placed on top of one another (a mine
+// with its guards is the commonest camp on any melee map), and at minimap scale the one
+// on top simply hides the other. So a marker that TOUCHES another is drawn translucent —
+// both of them, since neither is the more important — and each goes back to full opacity
+// the moment its neighbour is gone (the camp marker disappears when the camp is cleared).
+const MARKER_CROWD_ALPHA = 0.6;
+// Every camp dot and map glyph carries a thin black rim, as the real client's minimap art
+// does: the markers sit over terrain of every colour and an orange camp on orange rock or
+// a gold glyph on desert reads as nothing without one.
+const MARKER_OUTLINE = 1; // rim thickness, in dots-canvas pixels
+const GLYPH_RIM_PAD = MARKER_OUTLINE + 1; // slack around a cached silhouette, so no stamp clips
 
 // Console + tooltip chrome, straight out of the archives. Blizzard only ships the
 // "Human" variant of these widget textures — every race's console draws them (same
@@ -3480,6 +3491,7 @@ export class GameHud {
 
   private fogImage: ImageData | null = null; // reused fog-of-war mask (mmW × mmH)
   private mapGlyphs = new Map<string, HTMLImageElement>(); // BLP path → lazy-loaded glyph
+  private mapGlyphRims = new Map<string, HTMLCanvasElement>(); // …→ its black silhouette (outline)
 
   // --- minimap pings (7.24) --------------------------------------------------------
   // PingMinimap / PingMinimapEx: a marker that flashes at a world point for `duration`
@@ -3507,8 +3519,7 @@ export class GameHud {
     this.paintFog(ctx, ox, oy, w, h); // black/grey fog under the markers (own units always shown)
     // Camp dots and map glyphs ride ON TOP of the fog veil, at full brightness and
     // whatever the fog says — the real client paints them from the opening frame.
-    this.drawCreepCamps(ctx, ox, oy, w, h);
-    this.drawMapGlyphs(ctx, ox, oy, w, h);
+    this.drawMapMarkers(ctx, ox, oy, w, h);
     // Unit dots last, so a creep's dot sits over whatever it is standing on. Neutral
     // passives are absent from dots() — a glyph, or nothing, marks those.
     const d = UNIT_DOT / 2;
@@ -3567,31 +3578,91 @@ export class GameHud {
     return [u * this.mmW, v * this.mmH];
   }
 
-  /** Creep-camp difficulty dots: a flat ellipse per camp, coloured and sized by the
-   *  camp's combined level exactly as `UI\MiscData.txt` [Minimap] prescribes —
-   *  green below level 10, orange to 19, red beyond, and 1.3× wide from 10 up. */
-  private drawCreepCamps(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
+  /** The map's own markers: creep-camp difficulty dots and the gold-mine / neutral-building
+   *  glyphs. They are laid out in ONE pass because they overlap each other — a camp dot is a
+   *  flat ellipse coloured and sized by the camp's combined level exactly as
+   *  `UI\MiscData.txt` [Minimap] prescribes (green below level 10, orange to 19, red beyond,
+   *  and 1.3× wide from 10 up), and a guarded gold mine puts one of those on top of its glyph.
+   *  Two markers whose footprints TOUCH are both drawn at `MARKER_CROWD_ALPHA` so each can be
+   *  read through the other; a marker standing on its own is untouched. */
+  private drawMapMarkers(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
+    const s = MAP_GLYPH * MINIMAP_SIZE; // glyph side in the dots canvas's pixel space
+    const camps: Array<{ x: number; y: number; r: number; color: string }> = [];
+    const glyphs: Array<{ x: number; y: number; r: number; icon: string; img: HTMLImageElement }> = [];
     for (const camp of this.driver.creepCamps()) {
       const p = this.toMini(camp.x, camp.y, ox, oy, w, h);
       if (!p) continue;
       const { color, scale } = campMarker(camp.level);
-      ctx.beginPath();
-      ctx.arc(p[0], p[1], (CAMP_DOT * MINIMAP_SIZE * scale) / 2, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.fill();
+      camps.push({ x: p[0], y: p[1], r: (CAMP_DOT * MINIMAP_SIZE * scale) / 2, color });
     }
-  }
-
-  /** Gold-mine and neutral-building glyphs (the real WC3 minimap art, once loaded). */
-  private drawMapGlyphs(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
-    const s = MAP_GLYPH * MINIMAP_SIZE; // glyph side in the dots canvas's pixel space
     for (const g of this.driver.minimapIcons()) {
       const img = this.mapGlyph(g.icon);
       if (!img?.complete || img.naturalWidth === 0) continue;
       const p = this.toMini(g.x, g.y, ox, oy, w, h);
       if (!p) continue;
-      ctx.drawImage(img, p[0] - s / 2, p[1] - s / 2, s, s);
+      glyphs.push({ x: p[0], y: p[1], r: s / 2, icon: g.icon, img });
     }
+    // Which markers are crowded: a pair touches when the distance between their centres is
+    // less than the sum of their radii. Camps and glyphs are one list here — a mine's glyph
+    // and the camp guarding it is the pair this exists for — and the count is small enough
+    // (a melee map has a couple of dozen markers) that the pairwise sweep costs nothing.
+    const marks = [...camps, ...glyphs];
+    const crowded = marks.map(() => false);
+    for (let i = 0; i < marks.length; i++) {
+      for (let j = i + 1; j < marks.length; j++) {
+        const dx = marks[i].x - marks[j].x, dy = marks[i].y - marks[j].y;
+        const reach = marks[i].r + marks[j].r;
+        if (dx * dx + dy * dy < reach * reach) { crowded[i] = true; crowded[j] = true; }
+      }
+    }
+    const alpha = (i: number): number => (crowded[i] ? MARKER_CROWD_ALPHA : 1);
+    for (let i = 0; i < camps.length; i++) {
+      const c = camps[i];
+      ctx.globalAlpha = alpha(i);
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+      ctx.fillStyle = c.color;
+      ctx.fill();
+      ctx.lineWidth = MARKER_OUTLINE;
+      ctx.strokeStyle = "#000";
+      ctx.stroke();
+    }
+    // Glyphs over camps, as before: the mine's art is the thing you are looking for.
+    for (let i = 0; i < glyphs.length; i++) {
+      const g = glyphs[i];
+      ctx.globalAlpha = alpha(camps.length + i);
+      const x = g.x - s / 2, y = g.y - s / 2;
+      const rim = this.glyphOutline(g.icon, g.img, s);
+      // The rim is the glyph's own silhouette stamped at eight one-pixel offsets — the art is
+      // a shape with holes in it, so a box or a circle behind it would not follow the outline.
+      for (let dx = -MARKER_OUTLINE; dx <= MARKER_OUTLINE; dx += MARKER_OUTLINE) {
+        for (let dy = -MARKER_OUTLINE; dy <= MARKER_OUTLINE; dy += MARKER_OUTLINE) {
+          if (dx === 0 && dy === 0) continue;
+          ctx.drawImage(rim, x - GLYPH_RIM_PAD + dx, y - GLYPH_RIM_PAD + dy);
+        }
+      }
+      ctx.drawImage(g.img, x, y, s, s);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** A glyph's black silhouette, cached per icon path: the art drawn into an offscreen canvas
+   *  and then filled black through `source-in`, which keeps the art's own alpha shape. Padded
+   *  by `GLYPH_RIM_PAD` so the offset stamps above have room and nothing is clipped. */
+  private glyphOutline(icon: string, img: HTMLImageElement, s: number): HTMLCanvasElement {
+    const cached = this.mapGlyphRims.get(icon);
+    if (cached) return cached;
+    const side = Math.ceil(s) + GLYPH_RIM_PAD * 2;
+    const c = document.createElement("canvas");
+    c.width = side;
+    c.height = side;
+    const g = c.getContext("2d")!;
+    g.drawImage(img, GLYPH_RIM_PAD, GLYPH_RIM_PAD, s, s);
+    g.globalCompositeOperation = "source-in";
+    g.fillStyle = "#000";
+    g.fillRect(0, 0, side, side);
+    this.mapGlyphRims.set(icon, c);
+    return c;
   }
 
   /** Lazily fetch + cache a minimap glyph as a drawable image. */
