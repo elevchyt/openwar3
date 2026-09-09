@@ -14,8 +14,15 @@ import type { DataSource } from "../vfs/types";
  *  the art's own pixels rather than blurring them. It is ONE number because the cursor is
  *  several images that must agree: the `cursor:` rules here and in mapViewer, the DOM
  *  stand-ins that replace the pointer (the reticle, the hover hand, the edge-scroll chevron,
- *  the carried gauntlet) and the hotspot they all offset by. */
-export const CURSOR_SCALE = 2;
+ *  the carried gauntlet) and the hotspot they all offset by. Everything derived from it is
+ *  ROUNDED, since it need not be a whole number (1.5 puts the 32-px cell at 48) and neither
+ *  a canvas nor a `cursor:` hotspot wants half a pixel. */
+export const CURSOR_SCALE = 1.5;
+
+/** `n` cursor texels at the scale above, as whole pixels. */
+export function cursorPx(n: number): number {
+  return Math.round(n * CURSOR_SCALE);
+}
 
 let styleEl: HTMLStyleElement | null = null;
 
@@ -27,7 +34,7 @@ export function applyMenuCursor(vfs: DataSource, race: "Human" | "Orc" | "Undead
   const sheet = bytes ? blpToCanvas(bytes) : null;
   if (!sheet) return;
   const cell = Math.round(sheet.width / 8); // 8 cells wide; top-left = idle pointer
-  const size = cell * CURSOR_SCALE;
+  const size = cursorPx(cell);
   const c = document.createElement("canvas");
   c.width = size;
   c.height = size;
@@ -44,6 +51,6 @@ export function applyMenuCursor(vfs: DataSource, race: "Human" | "Orc" | "Undead
   // the hand shows in every state (buttons, hovers) — the reference menu never changes the
   // cursor. The in-game race cursor is also !important and scoped to body.in-game, so it
   // still wins during a match.
-  const hot = 3 * CURSOR_SCALE;
+  const hot = cursorPx(3);
   styleEl.textContent = `body:not(.in-game), body:not(.in-game) * { cursor: url(${url}) ${hot} ${hot}, auto !important; }`;
 }

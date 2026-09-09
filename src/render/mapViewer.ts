@@ -61,7 +61,7 @@ import { ModelViewerScene } from "./modelViewer";
 import { animPropsFor, buildAnimSet } from "./unitAnims";
 import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
-import { CURSOR_SCALE } from "../ui/cursor";
+import { cursorPx } from "../ui/cursor";
 import { perfLog } from "../dev/perfLog";
 import { animStride, renderSize, videoSettings } from "./videoQuality";
 import { TerrainCull } from "./terrainCull";
@@ -295,12 +295,12 @@ const SPELL_SOUND_ART: Record<string, (d: AbilityDef) => string[]> = {
 // The item icon carried on the cursor while moving it, as a fraction of an inventory
 // slot: just under it, so the hand looks like it's holding that same icon.
 const CARRIED_ITEM_SCALE = 0.85;
-// The race cursor's hotspot — the texel that sits ON the pointer. It is (3, 3) in the
-// sheet's own 32-px cell, and so CURSOR_SCALE times that in the enlarged art we actually
-// draw. Named once because THREE things have to agree on it: the `cursor:` rule, the hover
-// hand (.order-reticle.hand) and the carried gauntlet below. A DOM stand-in that skips it
-// moves the aiming point out from under the player mid-gesture, which is the whole complaint.
-const CURSOR_HOTSPOT: [number, number] = [3 * CURSOR_SCALE, 3 * CURSOR_SCALE];
+// The race cursor's hotspot — the texel that sits ON the pointer. It is (3, 3) in the sheet's
+// own 32-px cell, and so cursorPx(3) in the enlarged art we actually draw. Named once because
+// THREE things have to agree on it: the `cursor:` rule, the hover hand (.order-reticle.hand)
+// and the carried gauntlet below. A DOM stand-in that skips it moves the aiming point out
+// from under the player mid-gesture, which is the whole complaint.
+const CURSOR_HOTSPOT: [number, number] = [cursorPx(3), cursorPx(3)];
 // Where the carried item's icon sits against the gauntlet holding it, straight off
 // `UI\Cursor\<race>Cursor.mdx`: "HoldItem" shows geoset 1 — the replaceable-21 quad that is
 // the item's own icon — at model x[-0.020, 0.007] y[-0.0186, 0.008], BEHIND (z -0.0192) the
@@ -6435,7 +6435,7 @@ export class MapViewerScene {
     this.zoomT = 0;
   }
   private static readonly EDGE_MARGIN = 6; // px from a screen edge that triggers scrolling
-  private static readonly SCROLL_ARROW_PX = 32 * CURSOR_SCALE; // the edge-pan chevron's box, in step with .scroll-arrow
+  private static readonly SCROLL_ARROW_PX = cursorPx(32); // the edge-pan chevron's box, in step with .scroll-arrow
   private pointerInWindow = false; // the cursor is on the page at all — gates edge-scroll
   // The game frame's box in VIEWPORT coords, refreshed once a frame. Mouse input arrives in
   // viewport coords while everything that touches the world (picking, the ghost, the AoE
@@ -10160,9 +10160,9 @@ export class MapViewerScene {
     this.reticleUrls.clear();
     this.handUrls.clear();
     // The sheet is a grid of animation frames; the top-left cell is the idle
-    // pointer. Cells are one-eighth of the sheet width, blown up by CURSOR_SCALE.
+    // pointer. Cells are one-eighth of the sheet width, blown up by cursorPx.
     const cell = Math.round(sheet.width / 8);
-    const size = cell * CURSOR_SCALE;
+    const size = cursorPx(cell);
     // The DOM stand-ins for the pointer are sized in style.css off this same number, so the
     // reticle, the hover hand and the scroll chevron cannot drift from the art we cut here.
     document.documentElement.style.setProperty("--cursor-px", `${size}px`);
@@ -10240,7 +10240,7 @@ export class MapViewerScene {
     const sheet = this.cursorSheet;
     if (!sheet) return "";
     const cell = Math.round(sheet.width / 8);
-    const size = cell * CURSOR_SCALE;
+    const size = cursorPx(cell);
     const c = document.createElement("canvas");
     c.width = size * count;
     c.height = size;
@@ -10262,7 +10262,7 @@ export class MapViewerScene {
     if (!sheet) return "";
     const color = { green: [72, 255, 72], yellow: [255, 226, 58], red: [255, 26, 20] }[colorKey]; // harsher, purer red
     const cell = Math.round(sheet.width / 8);
-    const size = cell * CURSOR_SCALE;
+    const size = cursorPx(cell);
     const c = document.createElement("canvas");
     c.width = size;
     c.height = size;
@@ -10296,7 +10296,7 @@ export class MapViewerScene {
     if (!sheet) return "";
     const color = { green: [130, 255, 130], yellow: [255, 235, 110], red: [255, 48, 40] }[colorKey]; // harsh red, not pink
     const cell = Math.round(sheet.width / 8);
-    const size = cell * CURSOR_SCALE;
+    const size = cursorPx(cell);
     const c = document.createElement("canvas");
     c.width = size;
     c.height = size;
@@ -12818,7 +12818,7 @@ export class MapViewerScene {
     if (!this.carryHandEl) {
       this.carryHandEl = document.createElement("div");
       this.carryHandEl.className = "carried-hand";
-      const cell = Math.round((this.cursorSheet?.width ?? 256) / 8) * CURSOR_SCALE;
+      const cell = cursorPx(Math.round((this.cursorSheet?.width ?? 256) / 8));
       this.carryHandEl.style.width = `${cell}px`;
       this.carryHandEl.style.height = `${cell}px`;
       this.carryHandEl.style.backgroundImage = `url(${this.holdHandUrl})`;
