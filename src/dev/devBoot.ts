@@ -1,7 +1,9 @@
 import { loadProfile } from "../vfs/loader";
 import { DEFAULT_PROFILE } from "../vfs/profiles";
 import type { InstallFiles } from "../assets/opfs";
-import type { ByteReader, CascFiles } from "../vfs/casc";
+import {
+  fetchCasc, fetchInstallFile, type FileUrl, type InstallManifest,
+} from "../assets/remoteInstall";
 import type { GateLoad } from "../ui/gate";
 import type { FogMode, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
@@ -63,69 +65,11 @@ export interface DevBootHooks {
   startChapter(name: string, difficulty: string): Promise<void>;
 }
 
-interface CascManifest {
-  buildInfo: string;
-  config: string[];
-  idx: string[];
-  data: Record<number, string>;
-}
-
-interface Manifest {
-  archives: string[];
-  maps: string[];
-  /** Present when the served install is 1.30+ (issue #102); null for an MPQ-era one. */
-  casc: CascManifest | null;
-}
-
 const log = (msg: string): void => console.info(`[dev-boot] ${msg}`);
 
-async function fetchFile(path: string): Promise<File> {
-  const res = await fetch(`/wc3/file?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error(`${path}: ${res.status} ${res.statusText}`);
-  const name = path.split("\\").pop() ?? path;
-  return new File([await res.blob()], name);
-}
+const fileUrl: FileUrl = (path) => `/wc3/file?path=${encodeURIComponent(path)}`;
 
-const fetchBytes = async (path: string): Promise<Uint8Array> =>
-  new Uint8Array(await (await fetchFile(path)).arrayBuffer());
-
-const fetchText = async (path: string): Promise<string> => (await fetchFile(path)).text();
-
-/**
- * A `data.NNN` read over HTTP instead of off disk. The dev server honours `Range`
- * (tools/vite-plugin-dev-install.ts), so the mount slices a gigabyte file the same way it
- * slices a picked `File` — the alternative, downloading 1.7 GB per boot, is not one.
- */
-async function remoteReader(path: string): Promise<ByteReader> {
-  const head = await fetch(`/wc3/file?path=${encodeURIComponent(path)}`, { method: "HEAD" });
-  if (!head.ok) throw new Error(`${path}: ${head.status} ${head.statusText}`);
-  const size = Number(head.headers.get("content-length") ?? 0);
-  return {
-    size,
-    slice: async (start, end) => {
-      const res = await fetch(`/wc3/file?path=${encodeURIComponent(path)}`, {
-        headers: { Range: `bytes=${start}-${end - 1}` },
-      });
-      if (!res.ok) throw new Error(`${path} [${start},${end}): ${res.status}`);
-      return new Uint8Array(await res.arrayBuffer());
-    },
-  };
-}
-
-/** Fetch the CASC pieces the mount needs. The `data.NNN` files stay remote and ranged. */
-async function fetchCasc(manifest: CascManifest): Promise<CascFiles> {
-  const casc: CascFiles = {
-    buildInfo: await fetchText(manifest.buildInfo),
-    config: new Map(),
-    idx: new Map(),
-    data: new Map(),
-  };
-  const base = (p: string): string => (p.split("\\").pop() ?? p).toLowerCase();
-  for (const p of manifest.config) casc.config.set(base(p), await fetchText(p));
-  for (const p of manifest.idx) casc.idx.set(base(p), await fetchBytes(p));
-  for (const [n, p] of Object.entries(manifest.data)) casc.data.set(Number(n), await remoteReader(p));
-  return casc;
-}
+const fetchFile = (path: string): Promise<File> => fetchInstallFile(fileUrl, path);
 
 /**
  * Seat every slot the map declares, with `player` at the wheel. Deliberately NOT the skirmish
@@ -209,7 +153,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   log("fetching manifest…");
   const res = await fetch("/wc3/manifest.json");
   if (!res.ok) throw new Error("no dev install served — is OPENWAR3_INSTALL set?");
-  const manifest = (await res.json()) as Manifest;
+  const manifest = (await res.json()) as InstallManifest;
 
   // Only the archives the profile actually mounts, plus the one map we intend to play. The
   // install's Maps\ folder holds hundreds and fetching them all would add minutes to a boot
@@ -268,7 +212,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   for (const name of archives) files.set(name.toLowerCase(), await fetchFile(name));
   if (mapPath) files.set(mapPath, await fetchFile(mapPath));
   for (const name of listed) files.set(name, await fetchFile(name));
-  const casc = manifest.casc ? await fetchCasc(manifest.casc) : null;
+  const casc = manifest.casc ? await fetchCasc(fileUrl, manifest.casc) : null;
 
   const load = await loadProfile({ files, casc }, DEFAULT_PROFILE, (msg) => log(msg));
   log(`mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files`);

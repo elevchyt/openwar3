@@ -15,14 +15,42 @@
 //   • the port a peer connects to is the SAME port, so a second machine can join this game from
 //     a plain browser. That falls out for free and is worth keeping.
 
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { startServer } from "./server.mjs";
+import { looksLikeInstall, serveInstall } from "./install.mjs";
+import { readSettings, useSettingsDir, writeSettings } from "./settings.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DIST = join(here, "..", "dist");
+
+/** The scheme the page reads the player's install through (electron/install.mjs). It is NOT a
+ *  server: it lives inside this app's session, so the bytes never touch a socket and no other
+ *  machine can address them — which is what lets the desktop app read an install at all while
+ *  the page it serves is LAN-facing.
+ *
+ *  Registered before `ready` because that is the only time Chromium accepts it. `standard` gives
+ *  it an origin (so a page may fetch it), `supportFetchAPI` is the fetch itself, and `stream` is
+ *  what makes a ranged read of a gigabyte file a stream rather than a buffer. */
+const INSTALL_SCHEME = "ow3-install";
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: INSTALL_SCHEME,
+    // `corsEnabled` is the one that is easy to leave out and impossible to diagnose from here:
+    // the page is served over http from our own port, so reaching another scheme is a
+    // CROSS-ORIGIN fetch. Without it the renderer says "Failed to fetch" and the main process
+    // says nothing at all, which reads exactly like a handler that was never registered.
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
+  },
+]);
+
+// The desktop app boots straight into the menu when it already knows where the install is —
+// there is no folder picker to click, and so no click to open the autoplay gate with. On the web
+// that gate is the browser's to enforce and the load button pays for it; here the shell can say
+// what it is, and a game that starts silent because nobody pressed anything is not one.
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 /** Point the window at a running `pnpm dev` instead of the build. In that mode we start NO
  *  server of our own: the dev server is already carrying the relay at its own origin
@@ -40,11 +68,12 @@ function createWindow(url) {
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
-      // The renderer is a WEB PAGE and gets no privileges: it reads the player's install through
-      // the same browser APIs it uses on the web, and everything it needs from this process
-      // arrives over the same origin any other client uses. Nothing here is a step toward a
-      // preload bridge — if the desktop build ever needs one (the native install path will), it
-      // gets an explicit, named channel rather than node in the renderer.
+      preload: join(here, "preload.cjs"),
+      // The renderer is a WEB PAGE and gets no privileges: it reads the player's install with
+      // the same fetch it would use on the web, against this app's own scheme. What it cannot do
+      // from a page — ask the OS for a folder, and remember the answer past this window — is the
+      // whole of `preload.cjs`: three named calls, no node in the renderer, and deliberately no
+      // general "read this file", which would make the protocol handler's path checks pointless.
       nodeIntegration: false,
       contextIsolation: true,
     },
@@ -61,7 +90,42 @@ function createWindow(url) {
 
 let server = null;
 
+/** The remembered install, and whether it is still there. A folder that has been moved is worth
+ *  saying so about rather than silently asking again. */
+const currentInstall = () => {
+  // `OPENWAR3_INSTALL` is the same variable the dev server's asset route reads
+  // (tools/vite-plugin-dev-install.ts) and it is here for the same reason: so the app can be
+  // driven without a human at a folder dialog, which a native dialog cannot be automated past.
+  // It is a FALLBACK, under what the player actually chose, and a packaged launch has no such
+  // variable — nothing about it changes what a shipped app does.
+  const path = readSettings().installPath ?? process.env.OPENWAR3_INSTALL ?? null;
+  return { path, valid: !!path && looksLikeInstall(path) };
+};
+
 app.whenReady().then(async () => {
+  useSettingsDir(app.getPath("userData"));
+
+  // The install, served to the page over the app's own scheme. The root is read PER REQUEST
+  // rather than captured, so choosing a different folder takes effect without a relaunch.
+  protocol.handle(INSTALL_SCHEME, (request) => serveInstall(currentInstall().path, request));
+
+  ipcMain.handle("ow3:install-get", () => currentInstall());
+  ipcMain.handle("ow3:install-pick", async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: "Select your Warcraft III folder",
+      properties: ["openDirectory"],
+      defaultPath: readSettings().installPath || undefined,
+    });
+    const picked = canceled ? null : filePaths[0];
+    // A folder that is not an install is refused HERE, where the disk is: the page would have to
+    // mount it to find out, and "that is not a Warcraft III folder" is a better answer than a
+    // mount failing three steps later.
+    if (!picked || !looksLikeInstall(picked)) return null;
+    writeSettings({ installPath: picked });
+    return picked;
+  });
+  ipcMain.handle("ow3:install-forget", () => { writeSettings({ installPath: null }); });
+
   let url = DEV_URL;
   if (!url) {
     if (!existsSync(join(DIST, "index.html"))) {
@@ -75,6 +139,13 @@ app.whenReady().then(async () => {
     // beacon will carry it for exactly that reason.
     console.log(`[OpenWar3] serving on ${server.url} — LAN players join at http://<this machine's ip>:${server.port} (protocol ${server.protocol})`);
   }
+  const install = currentInstall();
+  console.log(install.valid
+    ? `[OpenWar3] install: ${install.path}`
+    : install.path
+      ? `[OpenWar3] install: ${install.path} — NOT FOUND, the game will ask for it`
+      : "[OpenWar3] no install remembered — the game will ask for it");
+
   createWindow(url);
 
   // macOS: the app outlives its windows.

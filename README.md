@@ -25,6 +25,20 @@ pnpm dev           # http://localhost:5173
 pnpm build         # typecheck + build to dist/
 ```
 
+### The desktop app
+
+```bash
+pnpm build && pnpm app
+```
+
+One window, one process. It asks for your Warcraft III folder **once** and remembers it — every
+launch after that goes straight to the menu — and it reads that folder off your disk rather than
+through the browser's picker, so there is no permission dance and no storage quota. Nothing is
+uploaded, and nothing about your install is reachable from the network: the app reads it over a
+scheme of its own that exists only inside the process, never over the port it serves the game on.
+
+The desktop app is also the host: starting it starts the relay, so a LAN game needs no terminal.
+
 ### Playing on a LAN
 
 Two machines on the same network, no cloud and no accounts. On the machine hosting:

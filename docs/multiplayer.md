@@ -154,6 +154,20 @@ relay. The host reads its own address off the game lobby and copies it with a cl
 That shape is the beacon's too. When it lands, the addresses arrive from the subnet instead of
 from a person, and nothing above this line changes.
 
+**The desktop app reads the install natively** (step 2, `pnpm app`). The folder is asked for once
+through the OS dialog and remembered by the shell — Electron's `userData`, not the page's storage,
+which belongs to an origin and would be lost the day the app is served from a different port — so
+an ordinary launch puts up no gate at all. The bytes reach the page over `ow3-install://`
+(`electron/install.mjs`), which is deliberately **not** a route on the LAN-facing port: a custom
+scheme lives inside the app's session only, so another machine loading the page resolves it to
+nothing. That keeps the rule the dev server's asset route states in its own header — the shipped
+artifact hosts no Blizzard content — while the app still reads the player's own copy. Two traps
+found building it: the fetch is CROSS-ORIGIN (the page is `http://127.0.0.1:<port>`), so the
+scheme needs `corsEnabled` and the responses need the headers, and `Range` has to be allowed by
+name or every boot dies reading a 1 GB `data.NNN`; and the maps are fetched LAZILY, because an
+install has hundreds and reading them all to print a list of names would spend a few hundred
+megabytes on it — the browser's own picker hands back handles, and this has to match.
+
 **What this does NOT get us, and what would.** Somebody still types an IP. Real WC3 does not ask
 that: it broadcasts on UDP 6112 and the games appear. A browser cannot send a UDP datagram either,
 so **discovery is the second thing only a native shell can do** — which, with the native install

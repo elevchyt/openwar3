@@ -6,6 +6,7 @@
 // it; this is verified by a test.
 
 import { startServer } from "../electron/server.mjs";
+import { looksLikeInstall, serveInstall } from "../electron/install.mjs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { WebSocket } from "ws";
 import { existsSync } from "node:fs";
@@ -72,6 +73,39 @@ try {
   ok("an upgrade off the relay path is refused", refused);
 
   a.close(); b.close();
+  console.log("the player's install is read over the app's own scheme, not over the port");
+  {
+    // `serveInstall` takes a Request and returns a Response — `protocol.handle`'s own contract,
+    // and plain web types — so the half that has to be right needs no window to check.
+    const wc3 = join(dirname(fileURLToPath(import.meta.url)), "..", "Warcraft III");
+    if (!existsSync(wc3)) {
+      console.log("  skip  no install at ./Warcraft III");
+    } else {
+      ok("a folder with a content store is an install", looksLikeInstall(wc3));
+      ok("…and an ordinary folder is not", !looksLikeInstall("/tmp"));
+
+      const man = await (await serveInstall(wc3, new Request("ow3-install://local/manifest.json"))).json();
+      ok("the manifest finds the maps and the content store",
+         man.maps.length > 0 && !!man.casc && man.casc.idx.length > 0,
+         `${man.maps.length} maps, ${man.casc?.idx.length ?? 0} idx, ${Object.keys(man.casc?.data ?? {}).length} data`);
+
+      // The one that decides whether a boot is possible at all: `data.NNN` is a gigabyte and the
+      // mount reads scattered slices of it.
+      const big = man.casc.data[Object.keys(man.casc.data)[0]];
+      const url = `ow3-install://local/file?path=${encodeURIComponent(big)}`;
+      const part = await serveInstall(wc3, new Request(url, { headers: { range: "bytes=1024-2047" } }));
+      const bytes = new Uint8Array(await part.arrayBuffer());
+      ok("a ranged read answers 206 with exactly that slice",
+         part.status === 206 && bytes.length === 1024, `${part.status}, ${bytes.length} bytes`);
+
+      const escape = await serveInstall(wc3, new Request(`ow3-install://local/file?path=${encodeURIComponent("..\\package.json")}`));
+      ok("a path that climbs out of the install is refused", escape.status === 404, `status ${escape.status}`);
+
+      const none = await serveInstall(null, new Request("ow3-install://local/manifest.json"));
+      ok("…and with no install chosen there is nothing to serve", none.status === 404);
+    }
+  }
+
   const open = await startServer({ root, port: 0, host: "0.0.0.0" });
   try {
     const c = new WebSocket(`ws://127.0.0.1:${open.port}/relay`);
