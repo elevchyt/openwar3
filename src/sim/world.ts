@@ -2509,6 +2509,20 @@ function altFormOf(lvl: AbilityLevel | undefined): string {
 //     its mana was charged TWICE (once at the commit, once in the toggle). See castCost for
 //     the other half: switching it OFF is free.
 const IMMEDIATE = new Set(["AHds", "ACds", "AOwk", "Amil", "Amic", "AEim"]);
+
+/**
+ * What THIS press costs — the rank's `Cost1`, except for the half of a toggle that is free:
+ * Immolation's `Cost1` = 25 lights it, and "Deactivate Immolation to stop draining mana" (its
+ * own Ubertip) costs nothing, or a Demon Hunter drained to his buffer could never have put it
+ * out by hand. ONE rule for the sim and the card alike: the sim charges it (castImmediate) and
+ * refuses on it (castUseError), and the command card prints it and paints the no-mana wash
+ * off it — priced off `Cost1` alone, the OFF button showed "25" and went deep blue at 24 mana
+ * for a press that was going to cost nothing.
+ */
+export function castCostOf(u: { immolation: string }, def: AbilityDef, lvl: AbilityLevel): number {
+  if (def.code === "AEim" && u.immolation) return 0;
+  return lvl.cost;
+}
 /**
  * Casts with NO WIND-UP AT ALL: pressing the button IS the cast, the way it is for the
  * IMMEDIATE list above — except that these have a TARGET, so they still walk to it.
@@ -11740,13 +11754,9 @@ export class SimWorld {
     return true;
   }
 
-  /** What THIS press costs — the rank's `Cost1`, except for the half of a toggle that is
-   *  free: Immolation's `Cost1` = 25 lights it, and "Deactivate Immolation to stop draining
-   *  mana" (its own Ubertip) costs nothing, or a Demon Hunter drained to his buffer could
-   *  never have put it out by hand. */
+  /** `castCostOf`, for the sim's own doors (castImmediate, castUseError). */
   private castCost(u: SimUnit, def: AbilityDef, lvl: AbilityLevel): number {
-    if (def.code === "AEim" && u.immolation) return 0;
-    return lvl.cost;
+    return castCostOf(u, def, lvl);
   }
 
   /** Drive a pending cast through its lifecycle (see PendingCast): approach + face

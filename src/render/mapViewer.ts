@@ -10,7 +10,7 @@ import { collectMapDestructibles, findDestructibleAt, type MapDestructible } fro
 import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { AllianceType } from "../sim/alliances";
-import { summonsBuildings, type Alert, type EffectAnim, type RallyKind, type ShopResult, type ShopStock, type SimUnit, type SimWorld } from "../sim/world";
+import { summonsBuildings, castCostOf, type Alert, type EffectAnim, type RallyKind, type ShopResult, type ShopStock, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -9304,7 +9304,10 @@ export class MapViewerScene {
       // grew a blank button in the top-left corner, on top of whatever was already there.
       if (passive && !def.icon) continue;
       const onCd = ab.cooldownLeft > 0;
-      const noMana = su.mana < lvl.cost;
+      // What THIS press costs — a toggle's OFF half is free (castCostOf), and the wash and the
+      // printed price both have to say so or the button reads as one the hero cannot afford.
+      const manaCost = castCostOf(su, def, lvl);
+      const noMana = su.mana < manaCost;
       // Silenced (Silence, Soul Burn) or stunned: the unit cannot cast at all. This is the
       // one refusal WC3 ships no [Errors] line for, and SimWorld.castRefusal says why —
       // the engine GREYS THE BUTTON, so the click never happens and nothing needs saying.
@@ -9340,7 +9343,7 @@ export class MapViewerScene {
         // …and the red line that says what to research for it, when it is not yours yet. Empty
         // for everything already unlocked, which is almost every button on almost every card.
         desc: (reversed ? def.unUberTip || this.abilityDesc(def, ab.level) : this.abilityDesc(def, ab.level)) + this.requirementLine(ab.id),
-        mana: lvl.cost,
+        mana: manaCost,
         col, row,
         // Mana is the ONE price WC3 draws: short of it, the icon goes deep blue (see
         // `noMana` on CommandButton). The button stays live and the click is still how you
