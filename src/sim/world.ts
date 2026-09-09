@@ -2307,11 +2307,22 @@ const TREE_LUMBER = 50; // lumber a standard tree yields before falling
 const TREE_HP = 50;
 const TREE_RADIUS = 16; // half a tree's 2×2-cell footprint, for the reach latch
 const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
-const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
+// How far a worker looks for the next tree — from where it STANDS when its trunk comes down,
+// and from the DEPOT when the trunk it was walking back to is gone by the time it unloads.
+// The second is the one that made this number matter: a base whose forest sits a good way
+// out (the hall at the mine, the trees past it) had its lumberjacks walk home, unload, look
+// 1200 units around the hall, find nothing, and stand down — "they just stop, with trees
+// right there" — because the tree they were coming back to had been felled while they
+// carried. The game keeps no such radius in its data (nothing in MiscGame/MiscData names
+// one), and a WC3 worker walks a long way for its next trunk; ours is a search cap, not a
+// rule, and nothing closer is ever passed over for something further, so the only cost of a
+// wider one is the length of a search that finds nothing.
+const RETARGET_RANGE = 2400;
 // Trees a worker will test for reachability (pickTreeNear) before deciding there is nothing
 // here it can get to. Nothing deeper in a forest is reachable once the trunks in front of it
-// are not, so the cap only ever cuts short an answer that was already settled.
-const TREE_REACH_PROBES = 64;
+// are not, so the cap only ever cuts short an answer that was already settled — sized with
+// the range above, since a wider search sees more of a forest's interior before its edge.
+const TREE_REACH_PROBES = 128;
 /** How far an autocasting Wisp looks for a damaged building to Renew. A wisp has no weapon,
  *  so it has no `acquire` of its own to borrow (the number every other friendly autocast uses
  *  — see autocastSearchRange); this is the Ancient of War's 500 acquisition range, the closest
@@ -8322,6 +8333,25 @@ export class SimWorld {
     // a holding unit has no attack order at all.
     if (!this.hostile(u, t)) u.aggroDropped = true;
     else if (ordered) u.aggroDropped = false;
+    // THE SAME ORDER TWICE IS ONE ORDER. A unit already attacking this very target has
+    // nothing to change — no new target, no new approach, no new slot — and above all no
+    // swing to throw away: `cancelSwing` below is the game's attack-cancel, the one thing a
+    // player's order may take from a committed blow, and it was firing on every repeat of an
+    // order the unit was already carrying out. Spam right-click on an enemy and the unit
+    // re-wound its swing on every click and never landed one — a group "attacking" with no
+    // attack animation at all. WC3 ignores a redundant order (the unit does not so much as
+    // twitch), so only the COMMITMENT is refreshed: an ordered repeat of an auto-acquired
+    // attack still makes it an order, and a solo click still makes it personal.
+    // (`gaveUp` is the one state a repeat may change: a unit that stopped chasing an
+    // unreachable target is being told to try again, and that IS a new order.)
+    if (u.order === "attack" && u.targetId === targetId && !u.gaveUp) {
+      if (ordered) {
+        u.attackOrdered = true;
+        u.attackSolo = solo;
+        u.noCollision = false; // manual control restores collision
+      }
+      return true;
+    }
     u.order = "attack";
     u.targetId = targetId;
     u.noCollision = false; // manual control restores collision
@@ -11269,11 +11299,15 @@ export class SimWorld {
     // full health." (a fact about a target he can't pick in the first place).
     if (target.hp <= 0) return "Notcorpse"; // "Target must be living."
     if (target.invulnerable && this.hostile(caster, target)) return "Notinvulnerable";
-    // Magic Immunity — "That unit is immune to magic." It refuses BOTH directions, which is
-    // the part people misremember: you cannot Polymorph an enemy Spell Breaker, and you
-    // cannot Bloodlust or Heal a friendly one either. See MAGIC_IMMUNE_EXEMPT for the
-    // handful of abilities the engine lets through anyway.
-    if (target.magicImmune && !MAGIC_IMMUNE_EXEMPT.has(code)) return "Immunetomagic";
+    // Magic Immunity — "That unit is immune to magic." It refuses the ENEMY's spells and
+    // only those: you cannot Polymorph, Sleep or Storm Bolt a Spell Breaker, but your own
+    // Priest may Inner Fire one, a Druid may Rejuvenate a Dryad and a Shaman may Bloodlust
+    // either, exactly as in the game — `[Amim]`'s "immune to all spells" reads as a tooltip,
+    // not as a rule, and the whole point of fielding Dryads and Spell Breakers is that
+    // they can still be buffed and healed by their own side. Measured with `hostile`, so an
+    // ALLY's caster is on the unit's side (any target that may be friendly may be an
+    // ally's). See MAGIC_IMMUNE_EXEMPT for the dispels the engine lets through regardless.
+    if (target.magicImmune && !MAGIC_IMMUNE_EXEMPT.has(code) && this.hostile(caster, target)) return "Immunetomagic";
     const flagError = this.targetAllowed(caster, target, flags);
     if (flagError !== null) return flagError;
     // Abilities whose legal targets are a rule, not a flag list — the data can't say
@@ -13834,6 +13868,15 @@ export class SimWorld {
       // Bomb's `Area1` splash catches everything around the unit it was thrown at, and only
       // the handler knows who that turned out to be.
       const src = this.units.get(buff.sourceId);
+      // Magic Immunity, the half `targetError` cannot reach: a debuff a HOSTILE spell lands
+      // on a unit it never named — Thunder Clap's slow on a Dryad standing in the ring,
+      // Frost Nova's on one beside the target, a Silence circle over a Spell Breaker. The
+      // damage was already zeroed (spellDamage), and the rider is refused the same way,
+      // from the same side: an ALLY's buff still lands, which is what lets the Druid's
+      // Rejuvenation reach the Dryad at all. Only what a SPELL applies passes through here —
+      // a blow's own riders (Bash, the orbs) are applied by the sim directly and are not
+      // spells, so they are untouched.
+      if (t.magicImmune && src && src !== t && this.hostile(src, t)) return;
       if (this.casting && src && src !== t && this.hostile(src, t)) this.provoke(t, src.id);
       this.applyBuffInternal(t, buff.buffId === undefined && this.casting ? { ...buff, buffId: buffIdOf(this.casting.def, this.casting.rank) } : buff);
     },
@@ -13878,8 +13921,8 @@ export class SimWorld {
         if (u.owner === owner && u.isSummon && u.hp > 0 && set.has(u.typeId)) this.unsummon(u);
       }
     },
-    emitEffect: (art, x, y, targetId, life, attach) => {
-      if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life, ...(attach?.length ? { attach } : {}) });
+    emitEffect: (art, x, y, targetId, life, attach, opts) => {
+      if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life, ...(attach?.length ? { attach } : {}), ...(opts?.sound ? { sound: true } : {}), ...(opts?.anim ? { anim: opts.anim } : {}) });
     },
     emitSplat: (splatId, x, y) => {
       if (splatId) this.spellSplats.push({ splatId, x, y });
@@ -14615,9 +14658,40 @@ export class SimWorld {
     // otherwise flag). Re-route around the crowd; a boxed-in lumberjack parks in
     // place so tickHarvest chops the nearest reachable tree instead of standing idle.
     if (u.worker && (u.order === "harvest" || u.order === "return")) {
+      // WHO GOES FIRST when two lumberjacks meet nose to nose in a one-cell gap between the
+      // trunks, each with a route through the other: the game's own answer is that NEITHER
+      // waits — a WC3 worker on the harvest loop has no unit collision at all (the gold crew
+      // already ghosts off the mine, `tickHarvest`), so the pair walk through each other and
+      // the question never arises. Here the lumber leg kept its body, and a pair could hold
+      // each other for good: the yield pause is one beat, the reroute came back to the same
+      // gap, and the "no way through" branch below parked the unit facing its blocker. So a
+      // jam is resolved the way the game resolves it — a lumberjack that has spent a second
+      // stuck window (~1 s, `stuckRetries` counts them below) without covering ground ghosts
+      // (`noCollision`) and walks THROUGH the crowd from here on, until the player next
+      // commands it (every manual order restores collision). Both halves of a pair may ghost;
+      // the point is that neither stands there. Ground and trees still block a ghost, so a
+      // worker jammed by TERRAIN takes the branch below as before.
+      const lumberjack = u.resKind === "lumber";
+      if (lumberjack && !u.noCollision && u.stuckRetries >= 1) {
+        u.noCollision = true;
+        this.releaseClaim(u); // a ghost holds no cells (claimsCells) — hand the walking claim back
+      }
       if (this.pathTo(u, u.chaseX, u.chaseY)) {
-        u.stuckRetries = 0;
+        // A lumberjack keeps count of consecutive stuck windows (reset above the moment it
+        // covers real ground); everyone else's retries belong to parkAndWait's backoff.
+        u.stuckRetries = lumberjack ? u.stuckRetries + 1 : 0;
         return;
+      }
+      // NO ROUTE AT ALL for a lumberjack still wearing its body: the bodies in the gap ARE the
+      // wall (the pathfinder routes around reservations), so ghost now rather than a window
+      // later, and ask again with only the terrain in the way.
+      if (lumberjack && !u.noCollision) {
+        u.noCollision = true;
+        this.releaseClaim(u);
+        if (this.pathTo(u, u.chaseX, u.chaseY)) {
+          u.stuckRetries = 0;
+          return;
+        }
       }
       // NO WAY THROUGH — and this is the branch that used to do NOTHING, which is the whole
       // of "the workers just freeze instead of going round each other".
@@ -15262,8 +15336,12 @@ export class SimWorld {
     // Critical Strike is only ever applied by dealDamage, so only a melee swing rolls it —
     // a ranged shooter must not slam for a crit it would never deal. And only against
     // something it may proc on: AOcr's `targs1` is "air,ground,enemy,neutral" — no `friend`
-    // — so a force-attack on your own unit never crits (and so never slams).
-    u.swingCrit = !w.ranged && this.hostile(u, t) && this.rollCriticalStrike(u);
+    // — so a force-attack on your own unit never crits (and so never slams). The same list
+    // names no `structure` either, and a BUILDING is not "ground" (targsKindError): the
+    // Blademaster's Critical Strike does not land on a Town Hall, which is the game's own
+    // reading of that row (critMayProcOn). Drunken Brawler's row is `_` — no kinds at all —
+    // and so is left as unrestricted as the data leaves it.
+    u.swingCrit = !w.ranged && this.hostile(u, t) && this.critMayProcOn(u, t) && this.rollCriticalStrike(u);
     // Bash (AHbh) rolls here for the same reason crit does — the Mountain King's
     // "Attack Slam" clip is picked as the swing begins. Unlike crit it is NOT melee-only
     // (the item Bash AIbx sits happily on a ranged hero), but like crit it only procs on
@@ -16719,17 +16797,20 @@ export class SimWorld {
       if (tree.lumber <= 0) {
         this.trees.delete(tree.id);
         this.felled.push(tree); // renderer plays "death" + leaves the stump
-        // The tree we were chopping just fell. If we aren't full yet, walk to the
-        // nearest remaining tree straight away and keep gathering (no idle frame).
-        if (w.carryLumber < w.lumberCapacity) {
-          const next = this.pickTreeNear(u, u.x, u.y, RETARGET_RANGE);
-          if (next) {
-            u.resId = next.id;
-            u.atNode = false;
-            u.working = false;
-            this.pathTo(u, next.x, next.y);
-            return;
-          }
+        // The tree we were chopping just fell. Pick the next one NOW, from HERE, whether or
+        // not the sack is full: a full worker walks home and comes back to `resId`, and if
+        // that still names the stump, the search for a replacement is made from the DEPOT
+        // (the deposit branch), which is the wrong end of the walk — the trees "nearby" are
+        // nearby the stump. Chosen at the treeline it always finds the neighbour.
+        const next = this.pickTreeNear(u, u.x, u.y, RETARGET_RANGE);
+        if (next) u.resId = next.id;
+        // …and if we aren't full yet, walk to it straight away and keep gathering (no idle
+        // frame).
+        if (w.carryLumber < w.lumberCapacity && next) {
+          u.atNode = false;
+          u.working = false;
+          this.pathTo(u, next.x, next.y);
+          return;
         }
       } else {
         this.treeHits.push({ x: tree.x, y: tree.y }); // still standing → "stand hit" wobble
@@ -16832,6 +16913,10 @@ export class SimWorld {
       const [tx, ty] = this.mineApproach(u, mine);
       this.pathTo(u, tx, ty);
     } else if (u.resKind === "lumber") {
+      // Back to the trunk it was working — re-picked at the treeline when that one fell
+      // (tickHarvest) — and only if THAT has gone too (felled by somebody else, burned, eaten
+      // while we carried) is a replacement looked for from here, the depot, which is why the
+      // search reaches as far as it does (RETARGET_RANGE).
       const tree = this.trees.get(u.resId) ?? this.pickTreeNear(u, u.x, u.y, RETARGET_RANGE);
       if (tree) {
         u.resId = tree.id;
@@ -17530,6 +17615,27 @@ export class SimWorld {
     if (!lvl) return false;
     const chance = this.dataOf(lvl, 0) / 100; // dataA — "Chance to Critical Strike" (%)
     return chance > 0 && this.rng() < chance;
+  }
+
+  /**
+   * May this unit's Critical Strike proc on `t` at all — the row's own Targets Allowed,
+   * asked of what the target IS (targsKindError, the same air/ground/structure reading a
+   * weapon slot gets).
+   *
+   * `[AOcr] targs1 = air,ground,enemy,neutral`: no `structure`, and a building is not
+   * "ground", so the Blademaster never crits a building — a rank-3 x4 on a Town Hall was the
+   * bug. `[ANdb]` (Drunken Brawler) carries `_`, no kinds, and the data is followed there
+   * too: an empty list restricts nothing. Read off the row the unit actually holds, so a
+   * map that retunes it retunes this.
+   */
+  private critMayProcOn(u: SimUnit, t: SimUnit): boolean {
+    if (!this.abilities) return false;
+    for (const ab of u.abilities) {
+      if (ab.level < 1 || !isCriticalStrikeCode(ab.code)) continue;
+      const def = this.abilities.get(ab.id);
+      if (def) return this.targsAdmit(t, def.targetFlags); // the same "first one found" criticalStrikeLevel reads
+    }
+    return false;
   }
 
   /** Critical Strike (AOcr / ANdb): multiply a swing the roll already marked as a crit by

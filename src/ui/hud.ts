@@ -1300,6 +1300,19 @@ export class GameHud {
     );
     parent.appendChild(this.root);
     this.applyWidgetSkin();
+    // A console button is PRESSED, never FOCUSED. The browser hands keyboard focus to any
+    // button on mousedown and then answers Enter by clicking the focused one — so the Allies
+    // button, clicked once, re-opened its panel every time the player pressed Enter to chat,
+    // and the chat line never came up. WC3's console has no focus ring and no such thing as
+    // "the current button": every key means what it means. Refusing the mousedown's default
+    // is what keeps focus where it was (the click itself still fires — only the default
+    // action, the focus move, is declined), and it does the same for the numpad/hotkey
+    // twins, which never went through the mouse at all. Text fields are the one exception,
+    // and they are the one thing left out: typing into the Allies gift boxes IS focus.
+    this.root.addEventListener("mousedown", (e) => {
+      const el = e.target as HTMLElement | null;
+      if (el?.closest?.("button") && !isTyping(el)) e.preventDefault();
+    });
     window.addEventListener("keydown", this.onKey);
     // Keyup and blur are NOT gated the way `onKey` is (hidden console, open dialog, typing):
     // whatever swallows the press, a hold that has already begun must always be released.

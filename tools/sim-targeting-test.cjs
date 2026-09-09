@@ -67,13 +67,14 @@ const CASES = [
 ];
 
 // Magic Immunity (`Amim`) — the Dryad, Spell Breaker, Destroyer, Faerie Dragon. It refuses
-// BOTH directions: no Polymorph on an enemy one, no Bloodlust or Heal on a friendly one.
+// the ENEMY's spells and only those: no Polymorph or Slow on an enemy one, but its own side's
+// Bloodlust, Heal and Rejuvenation land — a Dryad is still a unit a Druid may keep alive.
 const immuneFoe = unit({ owner: 1, team: 1, magicImmune: true });
-const immuneAlly = unit({ owner: 0, team: 0, magicImmune: true });
+const immuneAlly = unit({ owner: 0, team: 0, magicImmune: true, hp: 50 }); // hurt, so the Heal below is refused by nothing but immunity
 CASES.push(
   ["Aslo", "air,ground,enemy", immuneFoe, "Immunetomagic", "no Slow on an enemy Dryad"],
-  ["Ablo", "air,ground,friend,organic,self,neutral", immuneAlly, "Immunetomagic", "no Bloodlust on a friendly Spell Breaker"],
-  ["Ahea", "air,ground,friend,vuln,invu,self,organic,nonancient,neutral", immuneAlly, "Immunetomagic", "…nor a Priest's Heal"],
+  ["Ablo", "air,ground,friend,organic,self,neutral", immuneAlly, null, "Bloodlust on a friendly Spell Breaker lands"],
+  ["Ahea", "air,ground,friend,vuln,invu,self,organic,nonancient,neutral", immuneAlly, null, "…and so does a Priest's Heal"],
   // The dispels are exempt: a debuff placed before the immunity applied must be removable.
   ["Adis", "air,ground,ward,invu,vuln,tree", immuneFoe, null, "Dispel Magic still reaches it"],
   ["Aadm", "air,ground,ward,invu,vuln,tree", immuneAlly, null, "…and so does Abolish Magic"],

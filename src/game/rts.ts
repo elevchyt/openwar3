@@ -3125,6 +3125,13 @@ export class RtsController {
       };
       this.entries.push(entry);
       this.byId.set(simId, entry);
+      // The body is BORROWED from the viewer's own .doo pass, which tinted it with the .doo's
+      // player number — 12, `PLAYER_NEUTRAL_AGGRESSIVE` — and on a 1.30.4 install TeamColor12
+      // is MAROON (render/teamColor.ts), so every creep on the map came up red-shouldered
+      // until something ran `retintUnits` (cycling the Ally Color Mode did). Every other route
+      // into the sim tints through `unitColor` on the way in (mapViewer.spawnUnit); this one is
+      // the route every creep on every melee map takes, and it did not.
+      unit.instance.setTeamColor?.(this.unitColor(su.owner));
       this.creepCampView.reset(); // a creep arrived — re-cluster camps lazily
     }
     this.seeded = true;
@@ -3257,6 +3264,9 @@ export class RtsController {
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
+    // Same borrowed-body tint as a creep's (see trySeed): the viewer painted it with the .doo's
+    // player number, and a shop's is 15 — a live slot's colour, never the neutral swatch.
+    unit.instance.setTeamColor?.(this.unitColor(u.owner));
   }
 
   /**
@@ -3583,6 +3593,14 @@ export class RtsController {
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
+    // A borrowed .doo body arrives tinted with its SLOT; a slot's colour is not its index once
+    // `SetPlayerColor` has moved it (see playerColor), and the ally-colour filter paints over
+    // both — `unitColor` is the one call every other spawn goes through. A fresh instance from
+    // mapViewer.spawnUnit was tinted the same way already, so the write is idempotent there.
+    {
+      const owned = this.sim.units.get(simId);
+      if (owned) instance.setTeamColor?.(this.unitColor(owned.owner, entry.colorOverride));
+    }
     if (entry.baseColor) instance.setVertexColor?.(entry.baseColor); // a tinted type, worn now
     if (anims.stand >= 0) {
       // Play an idle stand on spawn; leave curSeq unset (-1) so the first idle tick starts the
@@ -5823,7 +5841,18 @@ export class RtsController {
       this.orderMode = "item";
       return;
     }
-    // self/instant consumable — fire immediately
+    // self/instant consumable — fire immediately …unless the sim would refuse it, in which case
+    // the player is TOLD. The aimed paths above already ask `itemUseError` before spending the
+    // click; the instant one did not, and the Rod of Necromancy is the item that made it
+    // matter: it is Raise Dead with no target (docs/items.md), so a press with no body within
+    // its `Rng1` = 600 was refused inside `useItem` — correctly, charge kept — and the button
+    // simply did nothing, over and over, with no "There are no usable corpses nearby." to say
+    // why. Same line, same query the sim refuses on (corpseRefusal), so the two cannot drift.
+    const refusal = this.sim.itemUseError(id, slot, 0);
+    if (refusal !== null) {
+      this.refuseOrder(refusal);
+      return;
+    }
     this.execute(this.localPlayer, { c: "useitem", unitId: id, slot, targetId: 0, x: u.x, y: u.y });
   }
 

@@ -1,6 +1,6 @@
 import type { AbilityDef, AbilityLevel, BuffFx } from "../data/abilities";
 import { corpseReach } from "./corpses";
-import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim } from "./world";
+import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim, EffectAnim } from "./world";
 
 // Spell effect handlers, dispatched on an ability's base `code` (data/abilities).
 // This is the modular seam: the sim executes a cast by looking up the handler for
@@ -13,6 +13,16 @@ import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim } from "./world";
 // caller (world.ts, from the ability's missileArt) — the handler is the same.
 
 /** What a handler can do to the world. Implemented by SimWorld. */
+/** The two things a one-shot effect may ask for beyond where and how long: `sound` plays the
+ *  WAV that ships beside the model (a Death Coil's `DeathCoilSpecialArt1.wav` — the renderer
+ *  resolves it off the art exactly as a cast sound is, see mapViewer's `fx.sound`), and `anim`
+ *  picks the clip — `stand` for a model whose whole show is its Stand rather than a Birth,
+ *  reaped when that clip ends (`life` 0). */
+export interface EffectOpts {
+  sound?: boolean;
+  anim?: EffectAnim;
+}
+
 export interface SpellApi {
   rng(): number;
   getUnit(id: number): SimUnit | undefined;
@@ -138,7 +148,7 @@ export interface SpellApi {
    *  as long as the clip it opens on runs" — which is what art whose whole life is one
    *  Birth wants. `attach` is an `*attach` token list (`origin`, `overhead`): the model
    *  rides that BONE of `targetId`'s unit instead of being walked along under it. */
-  emitEffect(art: string, x: number, y: number, targetId: number, life?: number, attach?: string[]): void;
+  emitEffect(art: string, x: number, y: number, targetId: number, life?: number, attach?: string[], opts?: EffectOpts): void;
   /** String a lightning bolt between two units (issue #97) — the ribbon art Chain Lightning,
    *  Healing Wave, the Drains, Mana Burn and Finger of Death use INSTEAD of an effect model.
    *  `id` is a LightningData row, normally taken straight off the ability
@@ -1049,13 +1059,22 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // Death Coil — the inverse: heal a friendly Undead unit, or harm an enemy
   // living unit, for dataA.
+  //
+  // Its art is the standing trap of docs/spell-fx.md in miniature: `[AUdc]` names NO
+  // Targetart at all (UndeadAbilityFunc.txt: Missileart, Specialart, and nothing else), so
+  // the reach for `targetArt` drew nothing and the coil landed in silence. What the unit hit
+  // wears is the row's SPECIALART — `Abilities\Spells\Undead\DeathCoil\DeathCoilSpecialArt.mdl`,
+  // the green skull-burst — on the healed and the harmed alike, played on its Stand (the
+  // model is a one-clip burst) and reaped when the clip ends; and the WAV beside it,
+  // `DeathCoilSpecialArt1.wav`, sounds at the target, which is where the game puts it.
   AUdc: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
     if (api.ally(caster, t) && t.race === "undead") api.spellHeal(t, d(lvl, 0));
     else if (api.hostile(caster, t) && t.race !== "undead") api.spellDamage(t, d(lvl, 0), caster.id);
-    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+    const art = def.specialArt || def.targetArt;
+    if (art) api.emitEffect(art, t.x, t.y, t.id, 0, def.specialAttach, { sound: true, anim: "stand" });
   },
 
   // Storm Bolt — throw a hammer: dataA damage + stun for dur/herodur.
@@ -1749,7 +1768,15 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // Frost Nova (Lich) — the missile impacts one unit; dataB to the primary target,
-  // dataA to others within `area`, and a movement/attack slow to all of them.
+  // dataA to EVERYTHING within `area` — the primary target included — and a movement/attack
+  // slow to all of them.
+  //
+  // The target takes BOTH. `AbilityData.slk` says so by what it does NOT do: `DataB` (target
+  // damage) is 100 at every rank while `DataA` (nova damage) climbs 50/100/150, and the
+  // Lich's 150/200/250 on the unit he aims at — the numbers every guide quotes — is only
+  // reachable as their SUM. The tooltip's "<DataB> damage to the target, and <DataA> nova
+  // damage" is a description of two blows, not of an either/or. Skipping the target in the
+  // nova loop left a rank-3 Nova doing 100 to the one unit it was cast on.
   AUfn: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
@@ -1760,7 +1787,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (def.effectArt) api.emitEffect(def.effectArt, t.x, t.y, 0);
     api.spellDamage(t, d(lvl, 1, 100), caster.id);
     for (const o of enemiesInArea(api, caster, def, t.x, t.y, lvl.area || 200)) {
-      if (o !== t) api.spellDamage(o, d(lvl, 0, 50), caster.id);
+      api.spellDamage(o, d(lvl, 0, 50), caster.id);
       // …and the frozen unit wears `Bfro`'s own art (FrostDamage.mdl) for as long as it is
       // slowed — the shared "Frozen" buff Frost Armor and the Frost Attacks also apply.
       api.applyBuff(o, { kind: "slow", group: "frostnova", timeLeft: dur(lvl, o) || 4, sourceId: caster.id, value: 0.4, value2: 0.4, ...fx(def) });

@@ -139,6 +139,11 @@ export class ChatDialogOverlay {
         this.container.appendChild(this.scrim);
       }
       this.container.appendChild(screen.element);
+      // …and only NOW scroll the history to its end. `onBuild` asked for it too, but it ran
+      // while the panel was still detached, where a scroll box has no height to scroll — the
+      // write to `scrollTop` was silently clamped to 0 and the log opened at its oldest line.
+      // Layout exists once the element is in the document, so the request is repeated here.
+      screen.textArea("ChatHistoryDisplay")?.scrollToBottom();
     } catch (err) {
       console.warn("[chat] could not mount the FDF panel:", err);
       this.screen = null;

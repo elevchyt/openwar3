@@ -500,7 +500,11 @@ body.hud-tooltip-skinned .unit-hover-tooltip {
 /* A FULL crew (5/5) is printed in the game's gold; a short one stays white — the colour is
    the whole "this mine is saturated" reading, so it is a class the label toggles rather than
    a second element. #ffcc00 is the same gold every engine-composed warning line wears. */
-.unit-crew-count.full { color: #ffcc00; }
+/* A FULL crew (5/5) reads green, not gold: gold is the game's "you still need something" tint
+   (the requirement line, the gold cost) and a mine at capacity is the one state that asks
+   nothing of the player. The exact green is ours — the label is engine-drawn and no string
+   in the install carries it. */
+.unit-crew-count.full { color: #00ff00; }
 body.hud-tooltip-skinned .unit-crew-count {
   background: var(--hud-tooltip-fill);
   border: none;
