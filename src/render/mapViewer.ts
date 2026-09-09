@@ -10172,7 +10172,7 @@ export class MapViewerScene {
     frame.width = size;
     frame.height = size;
     const fctx = frame.getContext("2d")!;
-    fctx.imageSmoothingEnabled = false; // nearest-neighbour — bigger pixels, not blurrier ones
+    fctx.imageSmoothingEnabled = true; // bilinear, as everywhere the cursor art is enlarged
     fctx.drawImage(sheet, 0, 0, cell, cell, 0, 0, size, size);
     const url = frame.toDataURL();
     // Hotspot near the gauntlet's fingertip (top-left).
@@ -10245,7 +10245,7 @@ export class MapViewerScene {
     c.width = size * count;
     c.height = size;
     const ctx = c.getContext("2d")!;
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true; // bilinear (see CURSOR_SCALE)
     for (let i = 0; i < count; i++) {
       ctx.drawImage(sheet, (col + i) * cell, row * cell, cell, cell, i * size, 0, size, size);
     }
@@ -10267,7 +10267,7 @@ export class MapViewerScene {
     c.width = size;
     c.height = size;
     const ctx = c.getContext("2d")!;
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true; // bilinear (see CURSOR_SCALE)
     ctx.drawImage(sheet, 0, cell * 2, cell, cell, 0, 0, size, size); // reticle = row 2, col 0
     const img = ctx.getImageData(0, 0, size, size);
     const d = img.data;
@@ -10301,7 +10301,7 @@ export class MapViewerScene {
     c.width = size;
     c.height = size;
     const ctx = c.getContext("2d")!;
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true; // bilinear (see CURSOR_SCALE)
     ctx.drawImage(sheet, 0, 0, cell, cell, 0, 0, size, size); // hand pointer = row 0, col 0
     const img = ctx.getImageData(0, 0, size, size);
     const d = img.data;

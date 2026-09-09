@@ -10,14 +10,18 @@ import type { DataSource } from "../vfs/types";
 
 /** How much larger than its own art every cursor is drawn. The sheet's cell is 32 px — the
  *  size WC3 drew a pointer at on a 2003 display — which reads as a very small pointer on a
- *  modern one, so every cell we cut is blown up by this factor with smoothing OFF, keeping
- *  the art's own pixels rather than blurring them. It is ONE number because the cursor is
- *  several images that must agree: the `cursor:` rules here and in mapViewer, the DOM
- *  stand-ins that replace the pointer (the reticle, the hover hand, the edge-scroll chevron,
- *  the carried gauntlet) and the hotspot they all offset by. Everything derived from it is
- *  ROUNDED, since it need not be a whole number (1.5 puts the 32-px cell at 48) and neither
- *  a canvas nor a `cursor:` hotspot wants half a pixel. */
-export const CURSOR_SCALE = 1.5;
+ *  modern one, so every cell we cut is blown up by this factor. It is ONE number because the
+ *  cursor is several images that must agree: the `cursor:` rules here and in mapViewer, the
+ *  DOM stand-ins that replace the pointer (the reticle, the hover hand, the edge-scroll
+ *  chevron, the carried gauntlet) and the hotspot they all offset by. Everything derived
+ *  from it is ROUNDED, since it need not be a whole number (1.25 puts the 32-px cell at 40)
+ *  and neither a canvas nor a `cursor:` hotspot wants half a pixel.
+ *
+ *  The blow-up is BILINEAR (`imageSmoothingEnabled`, the canvas default, left on and said
+ *  out loud at each of the five cuts) rather than nearest-neighbour: at a fractional scale
+ *  nearest-neighbour doubles some rows of the gauntlet and not others, which reads as a
+ *  ragged edge rather than as pixel art. */
+export const CURSOR_SCALE = 1.25;
 
 /** `n` cursor texels at the scale above, as whole pixels. */
 export function cursorPx(n: number): number {
@@ -39,7 +43,7 @@ export function applyMenuCursor(vfs: DataSource, race: "Human" | "Orc" | "Undead
   c.width = size;
   c.height = size;
   const ctx = c.getContext("2d")!;
-  ctx.imageSmoothingEnabled = false; // nearest-neighbour: the gauntlet's pixels, just bigger
+  ctx.imageSmoothingEnabled = true; // bilinear — a fractional scale has no clean pixel step
   ctx.drawImage(sheet, 0, 0, cell, cell, 0, 0, size, size);
   const url = c.toDataURL();
   if (!styleEl) {
