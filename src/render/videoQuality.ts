@@ -167,6 +167,15 @@ function resolution(v: unknown): [number, number] {
  * the buffer is scaled into the stage by CSS and the stage is a fixed 16:9 box, so the camera
  * sees exactly the same world however small this is (ui/stage.ts). The HUD is DOM and is not in
  * this buffer, so it stays sharp at every rung.
+ *
+ * AND IT REACHES THE WORLD ONLY. There was a prototype here that pushed the same factor onto
+ * the DOM interface — laying `#ui` out at `f` of its box and scaling it back up by `1/f`, so
+ * the console coarsened with the terrain the way it did in 2003, when the whole frame went
+ * through one back buffer. It is gone: the HUD already sizes itself off the viewport (every
+ * length in it is `calc(var(--stage-h) * k)` — ui/hud.ts `uiPx`), so it holds its shape on a
+ * small screen without being told to, and a second scale on top of that was one authority too
+ * many over the same lengths. A rung here changes how many pixels the WORLD is drawn into,
+ * and nothing else.
  */
 export function renderSize(): { width: number; height: number } {
   return { width: current.renderWidth, height: current.renderHeight };
@@ -216,49 +225,6 @@ export function applyVideoOptions(opts: Options): void {
   b.particleScale = PARTICLE_SCALE[current.particles];
   b.textureMipDrop = MIP_DROP[current.textureQuality];
   applyGamma(current.gamma);
-  applyUiScale(renderScale());
-}
-
-// ---------------------------------------------------------------------------
-// The UI's own resolution — PROTOTYPE
-// ---------------------------------------------------------------------------
-
-/**
- * PROTOTYPE (not settled): make Options -> Video -> Resolution reach the DOM UI too.
- *
- * WHY THIS EXISTS. Warcraft III drew the WHOLE frame through the 3D pipeline into one back
- * buffer at the display mode the player chose — the console, the panel art, the button art and
- * the text were all textured quads in that buffer — so lowering the resolution coarsened the
- * interface along with the world. Its layout was resolution-independent (the 0.8x0.6 frame
- * space), so the UI kept its RELATIVE size and simply got chunkier.
- *
- * Here the world is a canvas whose backing store `renderSize` sizes, and the interface is DOM
- * the browser rasterizes at the window's own pixel density, so the setting could not reach it:
- * at 800x450 the diorama went soft and the buttons stayed razor sharp, which reads as a broken
- * renderer rather than as a setting.
- *
- * HOW. An element's raster cost is its LAYOUT size times its raster scale, and its apparent
- * size is its layout size times its CSS transform. So laying a UI root out at `f` of its box
- * and scaling it back up by `1/f` keeps the apparent size exactly and asks the browser for `f`
- * as many pixels. `f` is `renderScale()` — the same ratio to 1080p the glue scene's canvas
- * takes (the device pixel ratio cancels out, because what we are matching is the CANVAS's own
- * pixel density rather than the display's).
- *
- * The transform is only ever emitted off the default rung, and that is deliberate rather than
- * tidiness: `transform` on a `position: fixed` element makes it the containing block for every
- * fixed thing beneath it, so a no-op `scale(1)` would quietly change layout at the setting that
- * is supposed to change nothing. Hence the class as well as the numbers.
- */
-function applyUiScale(f: number): void {
-  const doc = typeof document !== "undefined" ? document : null;
-  if (!doc) return;
-  const root = doc.documentElement;
-  const on = f > 0 && f < 1;
-  root.style.setProperty("--ui-down", on ? String(f) : "1");
-  root.style.setProperty("--ui-up", on ? String(1 / f) : "1");
-  // On <html> and not on <body>: this runs at boot as well as from the Options screen, and
-  // at boot there may be no body yet.
-  root.classList.toggle("ui-lowres", on);
 }
 
 // ---------------------------------------------------------------------------
