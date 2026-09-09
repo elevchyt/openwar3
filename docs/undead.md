@@ -388,3 +388,47 @@ The tech gates are `[uslh] Requires=unp1,ugrv` (a Slaughterhouse needs a Halls o
 Graveyard — tier 2) and `[uobs] Requires=utom`, the **Tomb of Relics**, which is also the race's
 shop. `uobs` UnitAbilities is `"Arpl,Arpm,Aave"`; the `Amb2` row in AbilityData, whose base code
 *is* `Ambt` and whose comment says "Mana Battery (Obsidian Statue)", is not what the unit carries.
+
+### What a replenish LOOKS like, and the two columns that lie about it
+
+`Units\UndeadAbilityFunc.txt` writes the same shape under `[Arpl]` and `[Arpm]`:
+
+| field | `[Arpl]` Essence of Blight | `[Arpm]` Spirit Touch |
+| --- | --- | --- |
+| `Casterart` / `Casterattach` | `…\ReplenishHealth\ReplenishHealthCaster.mdl`, **origin** | `…\ReplenishMana\ReplenishManaCaster.mdl`, **origin** |
+| `Specialart` / `Specialattach` | `…\ReplenishHealth\ReplenishHealthCasterOverhead.mdl`, **overhead** | `…\ReplenishMana\ReplenishManaCasterOverhead.mdl`, **overhead** |
+| `Targetart` | `…\Human\Heal\HealTarget.mdl` | `…\ReplenishMana\SpiritTouchTarget.mdl` |
+
+**`Specialart` here is CASTER art.** On a Flame Strike it is the pillar and on the Moon Well's
+`Ambt` it is what the drinker wears, so the field name reads like "the other end of the spell" —
+but both of these hang on the statue, one in the plinth and one over its head, and the only thing
+the replenished unit ever sees is `Targetart`. Both ride their own attachment BONE (`Origin Ref`,
+`OverHead Ref`, which `ObsidianStatue.mdx` authors for each of its two forms), so they inherit the
+statue's animation rather than being walked along under it. All four models are a single **Birth**
+clip and nothing else — 1.03 s for the two `…Caster`, 1.63 s for the two `…CasterOverhead` — so
+one pulse is one play and then they are gone. (Both overheads ship a decoy first sequence called
+`nothing`; ask for Birth by name, the same trap `ManaShieldCaster.mdx` sets.)
+
+And the statue **does not gesture**. Neither row carries `Animnames`, so the engine falls through
+to a plain "Spell" clip — which `ObsidianStatue.mdx` has not got: its list is Stand / Walk /
+**Attack Spell** / Death / Decay per form, and "Attack Spell" is the statue's `weapTp1 = missile`,
+`atkType1 = magic` bolt (`UnitWeapons` `uobs`), not a cast pose. It simply stands (`CAST_ANIM_STAND`
+in `rts.ts`).
+
+The other lying column is `Cast1 = 6`, and `AbilityMetaData.slk` names it outright: the replenish
+family (`Arpb`, `Arpl`, `Arpm`) gives its columns its own labels, and `Cast` there is
+`WESTRING_AEVAL_RPB6` = **"Maximum Units Affected"**. Six seconds of wind-up in front of a
+`Cool1 = 1` ability is what that reads as if you take it for a casting time. The rest of the
+family's labels, from the same rows:
+
+| column | label | `[Arpl]` | `[Arpm]` |
+| --- | --- | --- | --- |
+| `DataA` | Hit Points Gained | 10 | — |
+| `DataB` | Mana Points Gained | — | 3 |
+| `DataC` / `DataD` | Minimum Life / Mana Required | 0 | 0 |
+| `DataE` | Maximum Units Charged To Caster | 5 | 5 |
+| `Cast` | **Maximum Units Affected** | 6 | 6 |
+
+Two gaps still open against that table: our Spirit Touch restores `DataA` (absent, so the
+handler's own default of 10) instead of `DataB` = **3**, and both abilities pulse into ONE unit
+rather than up to `Cast1` = 6 of them for `DataE` = 5 charges.

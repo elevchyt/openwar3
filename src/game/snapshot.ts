@@ -1,4 +1,4 @@
-import { isOffField, type EffectAnim, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning, type CombatText, type FallenHero } from "../sim/world";
+import { isOffField, type SimSpellEffect, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning, type CombatText, type FallenHero } from "../sim/world";
 
 /**
  * What one client is TOLD about the world (docs/multiplayer.md Phase E item 5).
@@ -388,10 +388,10 @@ export interface GroundItemSnapshot {
  * still crosses as state; this is only what it looked and sounded like.
  */
 export interface FxSnapshot {
-  /** One-shot effect models (`drainSpellEffects`): follow `targetId`'s record when > 0.
-   *  `soundLabel` is an AbilitySounds label fired with the model, for a cue whose WAV does
-   *  not live beside its art (a shop's `ReceiveGold` — see the sim's `spellEffects`). */
-  effects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string; anim?: EffectAnim }>;
+  /** One-shot effect models (`drainSpellEffects`): follow `targetId`'s record when > 0, or
+   *  ride one of its BONES when the effect names an `attach`. See `SimSpellEffect` — the
+   *  shape is the sim's, spelled out there rather than restated here. */
+  effects: SimSpellEffect[];
   /** Spell ground decals (`drainSpellSplats`) — Thunder Clap's scorch and kin. */
   splats: Array<{ splatId: string; x: number; y: number }>;
   /** Lightning bolts (`drainSpellLightnings`) — Chain Lightning, Healing Wave, the Drains

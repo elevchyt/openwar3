@@ -134,8 +134,11 @@ export interface SpellApi {
   dismissSummons(owner: number, typeIds: string[]): void;
   /** Play an effect model at a unit (targetId>0) or a point (renderer). `life` = how
    *  long (s) the model instance is held before detaching (default ~2s); pass a longer
-   *  value for a sustained effect like Flame Strike's 7s fire pillar. */
-  emitEffect(art: string, x: number, y: number, targetId: number, life?: number): void;
+   *  value for a sustained effect like Flame Strike's 7s fire pillar, or **0** for "exactly
+   *  as long as the clip it opens on runs" — which is what art whose whole life is one
+   *  Birth wants. `attach` is an `*attach` token list (`origin`, `overhead`): the model
+   *  rides that BONE of `targetId`'s unit instead of being walked along under it. */
+  emitEffect(art: string, x: number, y: number, targetId: number, life?: number, attach?: string[]): void;
   /** String a lightning bolt between two units (issue #97) — the ribbon art Chain Lightning,
    *  Healing Wave, the Drains, Mana Burn and Finger of Death use INSTEAD of an effect model.
    *  `id` is a LightningData row, normally taken straight off the ability
@@ -894,6 +897,38 @@ const devourSpell: Handler = (api, caster, def, _rank, ctx) => {
   if (def.targetArt) api.emitEffect(def.targetArt, caster.x, caster.y, caster.id);
 };
 
+/**
+ * The two models the Obsidian Statue WEARS while it replenishes — and it wears BOTH of them,
+ * which is the part the field names hide.
+ *
+ * `Units\UndeadAbilityFunc.txt` writes the same four lines under both of the statue's rows:
+ *
+ *     [Arpl]  Casterart  = …\Undead\ReplenishHealth\ReplenishHealthCaster.mdl
+ *             Casterattach  = origin
+ *             Specialart = …\Undead\ReplenishHealth\ReplenishHealthCasterOverhead.mdl
+ *             Specialattach = overhead
+ *     [Arpm]  the same pair out of the ReplenishMana folder
+ *
+ * So `Specialart` here is NOT an effect thrown at the target (which is what it is on a Flame
+ * Strike, and what the Moon Well's `Ambt` uses it for): both of these belong to the CASTER,
+ * one at its feet and one over its head, and the ability's third art field — `Targetart` — is
+ * the only one the unit being replenished ever sees. Neither used to be played at all, which
+ * is why the statue healed with nothing on it while the glow appeared on the ally.
+ *
+ * Attached rather than followed. `origin` and `overhead` are the statue's own bones, so the
+ * glow sits in the plinth and the swirl hangs at the height the model author put the socket —
+ * a followed one-shot would have needed a height guessed from outside the model.
+ *
+ * `life` 0 = the clip's own length: all four models are a single **Birth** and nothing else
+ * (`ReplenishHealthCaster`/`ReplenishManaCaster` 1.03 s, both `…CasterOverhead` 1.63 s — the
+ * overheads also ship a decoy first clip called "nothing", which is why the renderer asks for
+ * Birth by name). One pulse of the ability, one play of the art, gone when it finishes.
+ */
+function replenishCasterArt(api: SpellApi, caster: SimUnit, def: AbilityDef): void {
+  if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id, 0, def.casterAttach);
+  if (def.specialArt) api.emitEffect(def.specialArt, caster.x, caster.y, caster.id, 0, def.specialAttach);
+}
+
 /** Storm Bolt's shape, shared with the creeps' Hurl Boulder (see the `AHtb`/`ACtb` rows). */
 const stormBolt: Handler = (api, caster, def, rank, ctx) => {
   const t = api.getUnit(ctx.targetId);
@@ -1036,6 +1071,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t) || t.mechanical) return;
     api.spellHeal(t, d(def.levelData[rank - 1], 0, 10));
+    replenishCasterArt(api, caster, def);
+    // `[Arpl] Targetart = …\Human\Heal\HealTarget.mdl` — the Priest's own glow, which is
+    // why an Obsidian Statue's heal looks like a heal.
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 
@@ -1046,6 +1084,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t) || t.mechanical || t.maxMana <= 0) return;
     t.mana = Math.min(t.maxMana, t.mana + d(def.levelData[rank - 1], 0, 10));
+    replenishCasterArt(api, caster, def);
+    // `[Arpm] Targetart = …\Undead\ReplenishMana\SpiritTouchTarget.mdl` — one Birth clip,
+    // 1.10 s, and the row's `Effectsound = SpiritTouch` rides the folder beside it.
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 

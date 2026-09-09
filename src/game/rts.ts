@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type EffectAnim } from "../sim/world";
+import { SimWorld, weaponsFromDef, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -416,6 +416,26 @@ const ANIM_MODIFIERS = new Set(["looping"]);
 const CAST_ANIM_FALLBACK: Record<string, RegExp> = {
   AOww: /\bspin\b/i,
 };
+/**
+ * Casts whose caster simply STANDS there — no gesture at all, whatever its model happens to
+ * carry. The Obsidian Statue's two replenishes are the case, and they are a trap rather than
+ * a preference:
+ *
+ *   • `Units\UndeadAbilityFunc.txt` gives `[Arpl]` and `[Arpm]` no `Animnames`, so the rule
+ *     below reaches for a plain "Spell" clip;
+ *   • `ObsidianStatue.mdx` has none. Its whole sequence list is Stand / Walk / **Attack
+ *     Spell** / Death / Decay, once per form (`… Alternate` is the Destroyer half) — and
+ *     "Attack Spell" is the statue's ATTACK, its `weapTp1 = missile`, `atkType1 = magic`
+ *     bolt (UnitWeapons `uobs`), not a cast pose.
+ *
+ * So both the `spell` token match and the loose `/spell/i` sweep under it land on the attack,
+ * and the statue took a swing at the air every time it healed or fed mana to something. The
+ * real client just leaves it standing — which is also what the model gives it, since the only
+ * thing that moves during a replenish is the art the ability hangs on it (spells.ts,
+ * `replenishCasterArt`). Returning here leaves the ordinary idle picker in charge, and a
+ * standing unit's idle IS its Stand.
+ */
+const CAST_ANIM_STAND = new Set(["Arpl", "Arpm"]);
 /** The engine's OWN buff rows, for the states no ability defines a buff for.
  *
  *  A stun is the case that matters: Storm Bolt, Firebolt and the Mountain King's Bash carry
@@ -4411,6 +4431,7 @@ export class RtsController {
   playCastAnim(casterId: number, code: string, hold: number, loop: boolean): void {
     const e = this.byId.get(casterId);
     if (!e) return;
+    if (CAST_ANIM_STAND.has(code)) return; // no gesture at all — see CAST_ANIM_STAND
     const def = this.abilityDefByCode(code);
     // `Animnames` is a list of NAME TOKENS that together pick one clip, not a list of
     // alternatives: `spell,slam` means the sequence called "Spell Slam", `spell,throw`
@@ -6703,7 +6724,7 @@ export class RtsController {
    *  from the sim's drains where the sim steps, from the payload's `fx` on a frozen client.
    *  Capped so a hidden window (rAF stopped, pump stepping the sim) cannot grow them without
    *  bound — flushing stale bursts on refocus would be worse than dropping them. */
-  private fxEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string; anim?: EffectAnim }> = [];
+  private fxEffects: SimSpellEffect[] = [];
   private fxSplats: Array<{ splatId: string; x: number; y: number }> = [];
   private fxLightnings: SimLightning[] = [];
   private fxLightningStops: string[] = [];

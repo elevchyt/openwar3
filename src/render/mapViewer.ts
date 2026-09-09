@@ -1311,8 +1311,10 @@ export class MapViewerScene {
   // One-shot spawn effects (e.g. the building cancel explosion), cached by path.
   private effectModels = new Map<string, SpawnModel | null>();
   /** `follow` is the sim unit this one-shot RIDES (0 = a point in the world), and `zOff` the
-   *  local height above that unit's feet the sim stamped — see followedFxPos. */
-  private effects: Array<{ inst: SpawnInstance; t: number; hold?: boolean; follow?: number; zOff?: number }> = [];
+   *  local height above that unit's feet the sim stamped — see followedFxPos. `parented` is
+   *  the stronger form of the same idea: the instance hangs off one of that unit's BONES and
+   *  so must not be positioned here at all (see spawnEffect's `attach`). */
+  private effects: Array<{ inst: SpawnInstance; t: number; hold?: boolean; follow?: number; zOff?: number; parented?: boolean }> = [];
   /** Effects mid-Birth that owe a handoff to their looping Stand — the `"hold"` EffectAnim,
    *  the same shape as `itemBirthing`. */
   private effectBirthing: Array<{ inst: SpawnInstance; standIdx: number; birthEnd: number }> = [];
@@ -4349,8 +4351,19 @@ export class MapViewerScene {
    *
    *  `follow` is a sim unit id: the effect then RIDES that unit for its whole life rather
    *  than standing where it was spawned, and `z` is read as the local height above the
-   *  unit's feet instead of a world height (see followedFxPos). */
-  private async spawnEffect(path: string, x: number, y: number, z: number, life = 2.5, anim?: EffectAnim, follow = 0, zOff = 0): Promise<void> {
+   *  unit's feet instead of a world height (see followedFxPos).
+   *
+   *  `attach` goes one better, and is what an ability's `*attach` field asks for: the
+   *  instance is PARENTED to that named bone of the followed unit (`origin`, `overhead`,
+   *  `hand,left`), so it inherits the unit's own animation and the height its author put the
+   *  socket at — the same `attachmentNode` a buff's art rides. Nothing then positions it per
+   *  frame, and it must be un-parented before it is detached (fadeOutFx does the same).
+   *
+   *  `life` **0** means "as long as the clip actually runs": the interval of whichever
+   *  sequence we just opened on, so a model that is one Birth and nothing else is taken down
+   *  the moment its Birth ends instead of holding its last frame for the rest of a flat 2 s.
+   *  (The Obsidian Statue's replenish art is four such models; see spells.ts.) */
+  private async spawnEffect(path: string, x: number, y: number, z: number, life = 2.5, anim?: EffectAnim, follow = 0, zOff = 0, attach?: string[]): Promise<void> {
     const map = this.viewer.map;
     if (!map) return;
     let model = this.effectModels.get(path);
@@ -4361,18 +4374,34 @@ export class MapViewerScene {
     if (!model || !this.viewer.map) return;
     const inst = model.addInstance();
     inst.setScene(map.worldScene);
-    // The model loads asynchronously, so a followed effect takes the unit's position NOW
-    // (which may be a good way along from where the sim stamped it) rather than the stale one.
-    if (!follow || !this.followedFxPos(follow, zOff)) {
-      this.loc3[0] = x;
-      this.loc3[1] = y;
-      this.loc3[2] = z;
+    // A bone was named and the unit is still standing: hang the model off it and let the
+    // unit's own animation carry it. Falls back to the ordinary follow/point placement when
+    // the host has gone (it died while the model was loading) or ships no such attachment.
+    const host = attach?.length && follow ? (this.rts?.unitInstance(follow) as unknown as SpawnInstance | undefined) : undefined;
+    const node = host ? this.attachmentNode(host, attach ?? []) : undefined;
+    if (node) {
+      inst.setParent?.(node);
+    } else {
+      // The model loads asynchronously, so a followed effect takes the unit's position NOW
+      // (which may be a good way along from where the sim stamped it) rather than the stale one.
+      if (!follow || !this.followedFxPos(follow, zOff)) {
+        this.loc3[0] = x;
+        this.loc3[1] = y;
+        this.loc3[2] = z;
+      }
+      inst.setLocation(this.loc3);
     }
-    inst.setLocation(this.loc3);
     const stand = anim === "stand" ? this.seqIndex(inst, /^stand/i) : -1;
-    inst.setSequence(stand >= 0 ? stand : this.effectSequence(inst));
+    const seq = stand >= 0 ? stand : this.effectSequence(inst);
+    inst.setSequence(seq);
     inst.setSequenceLoopMode(0); // play once
     inst.show();
+    // `life` 0 = however long that clip runs (see above). An interval we cannot read leaves
+    // the ordinary default rather than a zero-length effect that never appears.
+    if (life <= 0) {
+      const iv = inst.model?.sequences?.[seq]?.interval;
+      life = iv && iv[1] > iv[0] ? (iv[1] - iv[0]) / 1000 : 2.5;
+    }
     // A HELD effect marks a state, so it has three phases rather than one: Birth now, its
     // looping Stand once that clip ends (updateEffectAnims, the same handoff a dropped item's
     // model gets), and its Death when `life` runs out — `fadeOutFx` in updateEffects, instead
@@ -4383,7 +4412,7 @@ export class MapViewerScene {
       const iv = inst.model?.sequences?.[birth]?.interval;
       if (standIdx >= 0 && iv) this.effectBirthing.push({ inst, standIdx, birthEnd: iv[1] });
     }
-    this.effects.push({ inst, t: life, hold: anim === "hold", follow: follow || undefined, zOff });
+    this.effects.push({ inst, t: life, hold: anim === "hold", follow: follow || undefined, zOff, parented: !!node });
   }
 
   /** Spawn the ground model for a dropped item (its own .mdx, looping its stand/
@@ -4521,17 +4550,19 @@ export class MapViewerScene {
     this.updateEffectAnims();
     for (let i = this.effects.length - 1; i >= 0; i--) {
       const e = this.effects[i];
-      // An effect that rides a unit is walked with it every frame — see followedFxPos.
-      if (e.follow && this.followedFxPos(e.follow, e.zOff ?? 0)) e.inst.setLocation(this.loc3);
+      // An effect that rides a unit is walked with it every frame — see followedFxPos. One
+      // hung off a BONE needs none of that: the unit's own transform already carries it.
+      if (e.follow && !e.parented && this.followedFxPos(e.follow, e.zOff ?? 0)) e.inst.setLocation(this.loc3);
       e.t -= dt;
       if (e.t <= 0) {
         // A held effect DIES rather than vanishing: its own Death clip plays out (fadeOutFx
-        // owns the instance from here, deadline included).
+        // owns the instance from here, deadline included, and lets go of any bone itself).
         if (e.hold) {
           const bi = this.effectBirthing.findIndex((b) => b.inst === e.inst);
           if (bi >= 0) this.effectBirthing.splice(bi, 1);
           this.fadeOutFx(e.inst);
         } else {
+          if (e.parented) e.inst.setParent?.(null); // let go of the bone before detaching
           e.inst.detach();
         }
         this.effects.splice(i, 1);
@@ -10969,7 +11000,7 @@ export class MapViewerScene {
           const z = this.rts!.groundHeightAt(x, y);
           // …and it FOLLOWS that unit for as long as it plays: `fx.z` is then a local height
           // above the unit's feet rather than above the ground it was cast on (followedFxPos).
-          void this.spawnEffect(fx.art, x, y, z + (fx.z || 0), fx.life ?? 2, fx.anim, t ? fx.targetId : 0, fx.z || 0);
+          void this.spawnEffect(fx.art, x, y, z + (fx.z || 0), fx.life ?? 2, fx.anim, t ? fx.targetId : 0, fx.z || 0, fx.attach);
           // A wave field asked for its shard-fall sound (Blizzard): the WAV lives in
           // the effect model's own folder, so resolve it off the art like a cast sound.
           if (fx.sound) this.sounds?.playSpellSound([fx.art], undefined, { x, y, z });

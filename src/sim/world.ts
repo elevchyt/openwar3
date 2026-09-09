@@ -2438,11 +2438,20 @@ const CAST_START_ART: Record<string, (d: AbilityDef) => { art: string; follow: b
  * Cast1 = 3 there is the POISON TICK. Read as a wind-up it made the Warden stand still for
  * three seconds before every dagger — an ability that is instant in the real game. The
  * handler spends the number as what it is (see spells.ts AEsh); this is the other half,
- * keeping it out of the wind-up. Reincarnation (Cast=3, the revive delay), Replenish
- * (Cast=6, the pour) and Parasite (Cast=90) are the same kind of borrowing; they don't run
- * through the ordinary cast path, so they need no entry.
+ * keeping it out of the wind-up. Reincarnation (Cast=3, the revive delay) and Parasite
+ * (Cast=90) are the same kind of borrowing; they don't run through the ordinary cast path,
+ * so they need no entry.
+ *
+ * The OBSIDIAN STATUE's two do, and for them the borrowing is not a reading — it is stated
+ * outright. `AbilityMetaData.slk` gives the replenish family (`Arpb`, `Arpl`, `Arpm`) its own
+ * names for the columns it uses, and the `Cast` row among them is `WESTRING_AEVAL_RPB6` =
+ * **"Maximum Units Affected"**. So `Cast1 = 6` on Essence of Blight and Spirit Touch is a
+ * HEAD COUNT, and taken as a casting time it is six seconds of wind-up in front of an
+ * ability whose own `Cool1` is one — the statue spent its life winding up and pulsed roughly
+ * once in seven seconds, art and all. (The Moon Well's `Ambt` borrows the same column and is
+ * unaffected either way: it pours from `tickReplenish` and never enters this path.)
  */
-const CAST_TIME_IS_NOT_A_WINDUP = new Set(["AEsh"]);
+const CAST_TIME_IS_NOT_A_WINDUP = new Set(["AEsh", "Arpl", "Arpm"]);
 /** Abilities whose CAST ANIMATION runs for the ability's whole duration even though the
  *  caster is free to walk and fight through it — so they are NOT in CHANNELED, which would
  *  pin them in place. Bladestorm is the only one in 1.30: the Blademaster spins for `Dur1` =
@@ -2731,6 +2740,39 @@ export interface ItemReveal {
  */
 export type EffectAnim = "birth" | "stand" | "hold";
 
+/**
+ * One model the renderer is asked to play THIS frame — the whole payload of the sim's
+ * effect channel, named once because four places carry it and used to spell it out by hand:
+ * the sim's queue, its drain, the controller's own queue and the wire's `FxSnapshot`. A field
+ * added to three of those four arrives at the renderer as `undefined`.
+ *
+ *   `targetId` > 0 — the effect RIDES that unit rather than standing where it was stamped.
+ *   `z`            — a local height above the unit's feet when it is following one, else a
+ *                    world height (a weapon's `impactz`, a buff model's own offset).
+ *   `life`         — seconds before the instance is taken down; **0 means "as long as the
+ *                    clip it opens on actually runs"**, which is what an effect whose whole
+ *                    life is one Birth wants (see the renderer's `spawnEffect`).
+ *   `attach`       — an `*attach` token list (`origin`, `overhead`, `hand,left`): the model
+ *                    is PARENTED to that bone of the unit named by `targetId` and inherits
+ *                    its animation, instead of being walked along under it. This is the
+ *                    difference between the Obsidian Statue's replenish art sitting on the
+ *                    statue and hovering somewhere near its feet.
+ *   `soundLabel`   — an AbilitySounds.slk label fired with the model, for a cue whose WAV
+ *                    does NOT live beside its art (a shop's `ReceiveGold`).
+ */
+export interface SimSpellEffect {
+  art: string;
+  x: number;
+  y: number;
+  targetId: number;
+  z: number;
+  life?: number;
+  sound?: boolean;
+  soundLabel?: string;
+  anim?: EffectAnim;
+  attach?: string[];
+}
+
 /** A hidden attacker's position, given away to one team for a moment. */
 export interface AttackReveal {
   x: number;
@@ -2987,7 +3029,7 @@ export class SimWorld {
   // live beside its art (a shop paying you names `ReceiveGold`, which sits in
   // Abilities\Spells\Items\ResourceItems while the coins it plays with are a UI\Feedback
   // model; `sound` alone, which resolves off the art's own folder, would find nothing).
-  private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string; anim?: EffectAnim }> = [];
+  private spellEffects: SimSpellEffect[] = [];
   // Temporary ground decals a spell paints (Thunder Clap's scorch): an UberSplatData
   // row id + where. The row carries the texture, half-width and fade timings.
   private spellSplats: Array<{ splatId: string; x: number; y: number }> = [];
@@ -13612,8 +13654,8 @@ export class SimWorld {
         if (u.owner === owner && u.isSummon && u.hp > 0 && set.has(u.typeId)) this.unsummon(u);
       }
     },
-    emitEffect: (art, x, y, targetId, life) => {
-      if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life });
+    emitEffect: (art, x, y, targetId, life, attach) => {
+      if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life, ...(attach?.length ? { attach } : {}) });
     },
     emitSplat: (splatId, x, y) => {
       if (splatId) this.spellSplats.push({ splatId, x, y });
@@ -13971,7 +14013,7 @@ export class SimWorld {
   }
 
   /** Spell/effect models to play this frame (targetId>0 = follow that unit). */
-  drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean; soundLabel?: string; anim?: EffectAnim }> {
+  drainSpellEffects(): SimSpellEffect[] {
     if (!this.spellEffects.length) return this.spellEffects;
     const out = this.spellEffects;
     this.spellEffects = [];
