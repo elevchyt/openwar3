@@ -384,6 +384,12 @@ Both live on every statue and **both draw on the same mana pool**, so a statue w
 on does neither job well. That is why an undead player builds two and splits them, and it is what
 `ComputerPlusAi.statuePass` does (life to the first — see [`computer-plus.md`](./computer-plus.md)).
 
+It is also why they cannot *both* be switched on in the first place: **a unit has ONE autocast
+slot**, and turning one on turns the other off (`SimWorld.toggleAutocast`). The Priest is the
+other unit that shows it — Heal or Inner Fire, never both. What the slot limits is the TOGGLE and
+never the press, which is the whole of the trick every undead player knows: **hit both hotkeys in
+one breath and both go off**. That works because neither press winds up — see the next section.
+
 The tech gates are `[uslh] Requires=unp1,ugrv` (a Slaughterhouse needs a Halls of the Dead and a
 Graveyard — tier 2) and `[uobs] Requires=utom`, the **Tomb of Relics**, which is also the race's
 shop. `uobs` UnitAbilities is `"Arpl,Arpm,Aave"`; the `Amb2` row in AbilityData, whose base code
@@ -415,6 +421,14 @@ to a plain "Spell" clip — which `ObsidianStatue.mdx` has not got: its list is 
 `atkType1 = magic` bolt (`UnitWeapons` `uobs`), not a cast pose. It simply stands (`CAST_ANIM_STAND`
 in `rts.ts`).
 
+No gesture means no wind-up either, and that is what the two-hotkey trick is evidence of. The
+ability's own casting time is nothing (its `Cast` column is the head count below), which leaves
+only the CASTER's `castpt`/`castbsw` — 0.5 and 0.51 on `uobs` — and those are the wrong numbers to
+charge a press with nothing to wind up, exactly as they are for Call to Arms. So a replenish is
+`NO_WINDUP` (`sim/world.ts`): in range it resolves at ORDER TIME and takes no order slot, so the
+statue does not break stride and a second press finds the first already spent; out of range it
+still walks to whoever it was aimed at and fires the tick it arrives, with no backswing after.
+
 The other lying column is `Cast1 = 6`, and `AbilityMetaData.slk` names it outright: the replenish
 family (`Arpb`, `Arpl`, `Arpm`) gives its columns its own labels, and `Cast` there is
 `WESTRING_AEVAL_RPB6` = **"Maximum Units Affected"**. Six seconds of wind-up in front of a
@@ -429,6 +443,19 @@ family's labels, from the same rows:
 | `DataE` | Maximum Units Charged To Caster | 5 | 5 |
 | `Cast` | **Maximum Units Affected** | 6 | 6 |
 
-Two gaps still open against that table: our Spirit Touch restores `DataA` (absent, so the
-handler's own default of 10) instead of `DataB` = **3**, and both abilities pulse into ONE unit
-rather than up to `Cast1` = 6 of them for `DataE` = 5 charges.
+All of which `spells.ts`'s `replenishPulse` spends: one pulse reaches up to **six** nearby
+friendlies inside `Area1` = 700 (the Ubertips say "nearby friendly **units**", plural, and the
+statue is the unit the sentence is about, while `Rng1` = 250 is only how close it must stand to
+the ally it is *aimed* at), restoring `DataA` = 10 life or `DataB` = **3** mana, and it is charged
+`Cost1` = 2 for each of at most **five** of them — so a full six-ally pulse costs ten mana and the
+sixth rides free.
+
+Two things there are OURS, because no column states them. WHO gets the six slots: the ally the
+press was actually aimed at first, then the worst off, which is the same "worst off first" every
+other friendly autocast in the sim uses. And an ally already full of whichever bar this is takes
+no slot at all.
+
+One last clause has a joke in it. `targs1` = `ground,air,friend,self,organic,vuln,invu` lists
+`self` — and the statue still cannot mend itself, because `UnitBalance` gives `uobs`
+`type = Mechanical` and `organic` refuses it. Nor can it mend the statue standing next to it, nor
+a Meat Wagon. `tools/sim-undead-test.cjs` pins all of the above.

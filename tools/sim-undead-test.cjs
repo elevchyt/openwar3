@@ -16,6 +16,11 @@
 //   Web               `Aweb` — Ensnare aimed upward (they share AbilityMetaData's `Ens1..Ens3`
 //                     group): the target is pinned AND pulled out of the air, so ground units
 //                     can reach it.
+//   Replenish         `Arpl`/`Arpm` — an AREA pulse over up to `Cast1` = 6 nearby friendlies,
+//                     charged `Cost1` = 2 for up to DataE = 5 of them. Every one of those
+//                     column meanings is AbilityMetaData's own for the replenish family, and
+//                     none of them is what the bare SLK header says (`Cast` is not a casting
+//                     time; Spirit Touch's amount is DataB and its DataA is empty).
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
@@ -36,6 +41,15 @@ const lvl = (over) => ({ cost: 0, cooldown: 0, duration: 0, heroDuration: 0, cas
 // Blight Growth / Blight Dispel: Area1 the disc, DataA "Expansion Amount" 64 per Dur1 0.08s,
 // DataB "Creates Blight" the only thing that tells growth from dispel.
 const blight = (area, creates) => ({ target: "passive", targetFlags: [], levelData: [lvl({ area, duration: 0.08, data: [64, creates] })] });
+// One shape for both replenishes: `targs1 = ground,air,friend,self,organic,vuln,invu`,
+// Rng1 250 (how close the statue stands to the ally it aims at) against Area1 700 (how far
+// the pulse reaches), Cool1 1, Cost1 2 — per unit.
+const replenish = (data) => ({
+  target: "unit",
+  targetFlags: ["ground", "air", "friend", "self", "organic", "vuln", "invu"],
+  buffArt: "", buffFx: [], targetArt: "", casterArt: "", specialArt: "", casterAttach: [], specialAttach: [],
+  levelData: [lvl({ cost: 2, cooldown: 1, duration: 1, heroDuration: 1, castRange: 250, area: 700, castTime: 6, data })],
+});
 const ABILITIES = {
   Abgs: { id: "Abgs", code: "Abli", ...blight(768, 1) },
   Abgl: { id: "Abgl", code: "Abli", ...blight(960, 1) },
@@ -50,6 +64,14 @@ const ABILITIES = {
   Auns: { id: "Auns", code: "Auns", target: "unit", targetFlags: ["structure", "player"], levelData: [lvl({ data: [0.5, 50] })] },
   // Web: `targs1 = air,enemy,neutral`, Dur1 12 / HeroDur1 7 — Ensnare's own columns, aimed up.
   Aweb: { id: "Aweb", code: "Aweb", target: "unit", targetFlags: ["air", "enemy", "neutral"], buffArt: "", buffFx: [], targetArt: "", levelData: [lvl({ duration: 12, heroDuration: 7, castRange: 400, data: [0.6, 200, 128] })] },
+  // The Obsidian Statue's two autocasts, with the columns spelled as AbilityMetaData names
+  // them for the replenish family (`Arpb`,`Arpl`,`Arpm`) rather than as the SLK header does:
+  //   DataA "Hit Points Gained"   DataB "Mana Points Gained"   DataE "Max Units Charged"
+  //   Cast  "Maximum Units Affected"  — six, and NOT a six-second wind-up.
+  // Each row leaves the OTHER bar's column empty, which is the trap: read DataA for Spirit
+  // Touch and you get a handler default instead of the 3 its own Ubertip quotes.
+  Arpl: { id: "Arpl", code: "Arpl", ...replenish([10, NaN, 0, NaN, 5]) },
+  Arpm: { id: "Arpm", code: "Arpm", ...replenish([NaN, 3, NaN, 0, 5]) },
 };
 const abilities = { get: (id) => ABILITIES[id] };
 
@@ -61,6 +83,11 @@ const UNITS = {
   ucry: { id: "ucry", abilities: ["Aweb"], moveType: "foot", upgradesUsed: [], buildTime: 0, goldCost: 215, lumberCost: 40, manaRegen: 0, regenType: "none", hpRegen: 0, requirePlace: "" },
   ugar: { id: "ugar", abilities: [], moveType: "fly", upgradesUsed: [], buildTime: 0, goldCost: 220, lumberCost: 30, manaRegen: 0, regenType: "none", hpRegen: 0, requirePlace: "", moveHeight: 240 },
   ugol: { id: "ugol", abilities: ["Abgs", "Abgm"], moveType: "foot", upgradesUsed: [], buildTime: 100, goldCost: 225, lumberCost: 210, manaRegen: 0, regenType: "none", hpRegen: 0, requirePlace: "" },
+  // The Obsidian Statue (`UnitBalance` type = Mechanical — see the `organic` check below) and
+  // a Ghoul to pour into. Both regenerate on BLIGHT, of which these worlds have none, so the
+  // only thing moving either bar in the replenish checks is the pulse.
+  uobs: { id: "uobs", abilities: ["Arpl", "Arpm"], classification: ["mechanical"], moveType: "foot", upgradesUsed: [], buildTime: 0, goldCost: 275, lumberCost: 40, manaRegen: 0, regenType: "blight", hpRegen: 2, requirePlace: "" },
+  ugho: { id: "ugho", abilities: [], moveType: "foot", upgradesUsed: [], buildTime: 0, goldCost: 120, lumberCost: 0, manaRegen: 0, regenType: "blight", hpRegen: 2, requirePlace: "" },
   // A Human Farm — the dispel half of the same mechanism.
   hhou: { id: "hhou", abilities: ["Abds"], moveType: "foot", upgradesUsed: [], buildTime: 35, goldCost: 80, lumberCost: 20, manaRegen: 0, regenType: "none", hpRegen: 0, requirePlace: "" },
 };
@@ -337,6 +364,100 @@ console.log("Web (`Aweb`) — Ensnare aimed upward: pinned AND pulled to the gro
   check("the web wears off", gar.webbed === false);
   check("…and it takes to the air again", gar.flyHeight === 240, `${gar.flyHeight}`);
   void fiend;
+}
+
+// ---------------------------------------------------------------------------------------
+console.log("A replenish is an AREA pulse over up to six nearby friendlies, charged per unit");
+{
+  const world = newWorld();
+  const statue = world.add(
+    base({ id: 1, typeId: "uobs", x: 2000, y: 2000, hp: 425, maxHp: 425, mana: 100, maxMana: 200, speed: 190, radius: 16, mechanical: true, name: "Obsidian Statue" }),
+    null,
+    { mechanical: true, abilities: [{ id: "Arpl", code: "Arpl", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Arpm", code: "Arpm", level: 1, cooldownLeft: 0, autocastOn: false }] },
+  );
+  // Eight wounded Ghouls in a line, all inside Area1 = 700 — but only the first three inside
+  // Rng1 = 250, which is how close the statue has to STAND to whatever it is aimed at. The
+  // one it is aimed at is deliberately the LEAST wounded of the eight (170), so its slot can
+  // only have come from the aim.
+  const HP = [100, 110, 170, 120, 130, 140, 150, 160];
+  const ghouls = HP.map((hp, i) => world.add(base({ id: 10 + i, typeId: "ugho", x: 2000 + 80 * (i + 1), y: 2000, hp, maxHp: 500, speed: 270, radius: 16, name: `Ghoul ${i + 1}` })));
+  check("the handlers are wired", typeof SPELL_HANDLERS.Arpl === "function" && typeof SPELL_HANDLERS.Arpm === "function");
+  check("the cast lands", world.issueCast(1, "Arpl", ghouls[2].id));
+  world.tick(0.05);
+  const healed = ghouls.filter((g, i) => g.hp > HP[i] + 5).map((g) => g.name);
+  check("six of the eight are replenished — Cast1 is a HEAD COUNT", healed.length === 6, `${healed.length}: ${healed.join(", ")}`);
+  check("…the one it was aimed at among them, last in the queue though it is", ghouls[2].hp > 175, `${ghouls[2].hp}`);
+  check("…and the two least in need of it left out", ghouls[6].hp === 150 && ghouls[7].hp === 160, `${ghouls[6].hp}/${ghouls[7].hp}`);
+  check("each is restored DataA = 10 hit points", Math.abs(ghouls[0].hp - 110) < 0.5, `${ghouls[0].hp}`);
+  // Cost1 = 2 for each of at most DataE = 5 of them, so a full six-unit pulse costs ten and
+  // the sixth ally rides free. The cast path paid the first two before the handler ran.
+  check("…and the statue paid 2 mana for five of the six", Math.abs(statue.mana - 90) < 0.1, `${statue.mana}`);
+}
+
+// ---------------------------------------------------------------------------------------
+console.log("Spirit Touch restores DataB, and its DataA is empty on purpose");
+{
+  const world = newWorld();
+  const statue = world.add(
+    base({ id: 1, typeId: "uobs", x: 2000, y: 2000, hp: 425, maxHp: 425, mana: 100, maxMana: 200, speed: 190, radius: 16, mechanical: true, name: "Obsidian Statue" }),
+    null,
+    { mechanical: true, abilities: [{ id: "Arpm", code: "Arpm", level: 1, cooldownLeft: 0, autocastOn: false }] },
+  );
+  const banshee = world.add(base({ id: 2, typeId: "ugho", x: 2100, y: 2000, hp: 400, maxHp: 400, mana: 0, maxMana: 200, speed: 270, radius: 16, name: "Banshee" }));
+  check("the cast lands", world.issueCast(1, "Arpm", banshee.id));
+  world.tick(0.05);
+  // "Restores <Arpm,DataB1> mana to nearby friendly units." Three, not the ten a DataA read
+  // falls through to — the bar moves by a third of what it used to.
+  check("it gives DataB = 3 mana", banshee.mana >= 3 && banshee.mana < 4, `${banshee.mana}`);
+  check("…and nobody else was in reach to charge for", Math.abs(statue.mana - 98) < 0.1, `${statue.mana}`);
+}
+
+// ---------------------------------------------------------------------------------------
+console.log("`organic` beats `self`: a statue mends neither itself nor the one beside it");
+{
+  const world = newWorld();
+  const statue = world.add(
+    base({ id: 1, typeId: "uobs", x: 2000, y: 2000, hp: 200, maxHp: 425, mana: 100, maxMana: 200, speed: 190, radius: 16, mechanical: true, name: "Obsidian Statue" }),
+    null,
+    { mechanical: true, abilities: [{ id: "Arpl", code: "Arpl", level: 1, cooldownLeft: 0, autocastOn: false }] },
+  );
+  const other = world.add(base({ id: 2, typeId: "uobs", x: 2100, y: 2000, hp: 200, maxHp: 425, mana: 0, maxMana: 200, speed: 190, radius: 16, name: "Second Statue" }), null, { mechanical: true });
+  const ghoul = world.add(base({ id: 3, typeId: "ugho", x: 2200, y: 2000, hp: 100, maxHp: 500, speed: 270, radius: 16, name: "Ghoul" }));
+  // `targs1` lists `self`, and the statue is still refused — by `organic`, because
+  // UnitBalance gives `uobs` type = Mechanical. The same clause is why a Meat Wagon
+  // standing in the pulse gets nothing out of it.
+  check("a second statue may not even be aimed at", world.issueCast(1, "Arpl", other.id) === false);
+  check("the Ghoul may", world.issueCast(1, "Arpl", ghoul.id));
+  world.tick(0.05);
+  check("…and it is the only thing the pulse touched", Math.abs(ghoul.hp - 110) < 0.5 && other.hp === 200 && statue.hp === 200, `${ghoul.hp}/${other.hp}/${statue.hp}`);
+}
+
+// ---------------------------------------------------------------------------------------
+console.log("Both hotkeys in one breath cast both — and only one of them may be left on");
+{
+  const world = newWorld();
+  const statue = world.add(
+    base({ id: 1, typeId: "uobs", x: 2000, y: 2000, hp: 425, maxHp: 425, mana: 100, maxMana: 200, speed: 190, radius: 16, castPoint: 0.5, castBackswing: 0.51, name: "Obsidian Statue" }),
+    null,
+    { mechanical: true, abilities: [{ id: "Arpl", code: "Arpl", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Arpm", code: "Arpm", level: 1, cooldownLeft: 0, autocastOn: false }] },
+  );
+  const ghoul = world.add(base({ id: 2, typeId: "ugho", x: 2100, y: 2000, hp: 400, maxHp: 500, mana: 0, maxMana: 200, speed: 270, radius: 16, name: "Ghoul" }));
+  // The statue is walking somewhere when the player hits B and then C. Neither press is an
+  // order, so it never stops — and neither press winds up, so the second does not land inside
+  // the first and replace it. NO TICK between them: this is the same breath.
+  world.issueMove(1, 2600, 2000);
+  check("it is walking", statue.order === "move");
+  check("Essence of Blight goes off", world.issueCast(1, "Arpl", 2));
+  check("…and Spirit Touch right behind it", world.issueCast(1, "Arpm", 2));
+  check("both landed, before a single tick", ghoul.hp === 410 && ghoul.mana === 3, `${ghoul.hp} hp / ${ghoul.mana} mana`);
+  check("…paid for twice over", statue.mana === 96, `${statue.mana}`);
+  check("…and the statue never broke stride", statue.order === "move");
+
+  // The autocast slot is the engine's own, and it holds ONE. That limit is why the trick is
+  // worth knowing: it binds the toggle and not the press.
+  check("Essence of Blight can be left on", world.toggleAutocast(1, "Arpl") === true);
+  check("…and switching Spirit Touch on switches it back off", world.toggleAutocast(1, "Arpm") === true
+    && statue.abilities.find((a) => a.code === "Arpl").autocastOn === false);
 }
 
 console.log(failed ? `\nsim-undead: ${failed} FAILED` : "\nall passed");

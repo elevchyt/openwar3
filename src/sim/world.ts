@@ -2440,18 +2440,11 @@ const CAST_START_ART: Record<string, (d: AbilityDef) => { art: string; follow: b
  * handler spends the number as what it is (see spells.ts AEsh); this is the other half,
  * keeping it out of the wind-up. Reincarnation (Cast=3, the revive delay) and Parasite
  * (Cast=90) are the same kind of borrowing; they don't run through the ordinary cast path,
- * so they need no entry.
- *
- * The OBSIDIAN STATUE's two do, and for them the borrowing is not a reading — it is stated
- * outright. `AbilityMetaData.slk` gives the replenish family (`Arpb`, `Arpl`, `Arpm`) its own
- * names for the columns it uses, and the `Cast` row among them is `WESTRING_AEVAL_RPB6` =
- * **"Maximum Units Affected"**. So `Cast1 = 6` on Essence of Blight and Spirit Touch is a
- * HEAD COUNT, and taken as a casting time it is six seconds of wind-up in front of an
- * ability whose own `Cool1` is one — the statue spent its life winding up and pulsed roughly
- * once in seven seconds, art and all. (The Moon Well's `Ambt` borrows the same column and is
- * unaffected either way: it pours from `tickReplenish` and never enters this path.)
+ * so they need no entry. The OBSIDIAN STATUE's `Arpl`/`Arpm` borrow the column too (`Cast1`
+ * = 6 is "Maximum Units Affected") and DO run through it — they are in `NO_WINDUP` below,
+ * which zeroes the whole wind-up rather than just this term of it.
  */
-const CAST_TIME_IS_NOT_A_WINDUP = new Set(["AEsh", "Arpl", "Arpm"]);
+const CAST_TIME_IS_NOT_A_WINDUP = new Set(["AEsh"]);
 /** Abilities whose CAST ANIMATION runs for the ability's whole duration even though the
  *  caster is free to walk and fight through it — so they are NOT in CHANNELED, which would
  *  pin them in place. Bladestorm is the only one in 1.30: the Blademaster spins for `Dur1` =
@@ -2499,6 +2492,34 @@ function altFormOf(lvl: AbilityLevel | undefined): string {
 }
 
 const IMMEDIATE = new Set(["AHds", "ACds", "AOwk", "Amil", "Amic"]);
+/**
+ * Casts with NO WIND-UP AT ALL: pressing the button IS the cast, the way it is for the
+ * IMMEDIATE list above — except that these have a TARGET, so they still walk to it.
+ *
+ * The Obsidian Statue's two replenishes are the case, and the player-visible symptom is the
+ * one every undead player knows: **press both hotkeys in quick succession and BOTH go off**
+ * (only one of them can be left on autocast — that limit is the engine's, and it is a limit
+ * on the toggle, not on the press). That trick can only work if neither press occupies the
+ * statue for a moment first, and the data says it does not:
+ *
+ *   • `[Arpl]`/`[Arpm]` carry no `Animnames` in UndeadAbilityFunc, so there is no gesture to
+ *     wind up (and `ObsidianStatue.mdx` has no "Spell" clip to lend them — see
+ *     `CAST_ANIM_STAND` in rts.ts, which is why the statue simply stands);
+ *   • their `Cast1` is not a casting time at all — AbilityMetaData names it "Maximum Units
+ *     Affected" for the whole replenish family (`Arpb`, `Arpl`, `Arpm`), so the ability's own
+ *     casting time is nothing;
+ *   • which leaves only the CASTER's `castpt`/`castbsw` (0.5 / 0.51 on `uobs`), and those are
+ *     the wrong numbers to charge a press that has no gesture — the identical argument Call
+ *     to Arms is in IMMEDIATE for. Charged them, the statue stood still for half a second
+ *     before each pulse and half a second after, the second hotkey landed inside the first's
+ *     wind-up and REPLACED it, and only one of the two ever fired.
+ *
+ * So: in range, the press resolves at ORDER TIME (`castImmediate`) and takes no order slot,
+ * which is what lets the second press find the first already spent. Out of range it falls
+ * through to the ordinary pending cast so the statue still walks to whoever it was aimed at
+ * — and fires the moment it arrives, with neither the cast point nor the backswing.
+ */
+const NO_WINDUP = new Set(["Arpl", "Arpm"]);
 /** Abilities that refuse a target for being TOO BIG, with the cap in their own `DataC`.
  *  Transmute is the only one in 1.30 and its Ubertip names both the rule and the column:
  *  "Transmute cannot be used on Heroes, or creeps above level <ANtm,DataC1>" (= 5). The
@@ -11383,6 +11404,13 @@ export class SimWorld {
     // enhanced shot (see isArrowOrb). Checked after the target test so it inherits the
     // same data-driven rules — Searing Arrows may be aimed at a building, Cold Arrows may not.
     if (isArrowOrb(code)) return this.issueArrowShot(u, ab, lvl, targetId);
+    // A cast with NO WIND-UP that can already reach fires HERE, at order time, taking no
+    // order slot and leaving the caster's own alone — which is what lets a second hotkey
+    // pressed a moment later find the first already spent (see NO_WINDUP). Out of range it
+    // falls through to the pending cast below, walks in, and fires on arrival.
+    if (NO_WINDUP.has(code) && (!t || this.castGap(u, t.x, t.y, t) <= lvl.castRange)) {
+      return this.castImmediate(u, ab, def, lvl, t ? targetId : 0);
+    }
     // Remember an attack-move/follow/commanded-attack to resume after the cast — for an
     // AUTOMATIC cast only. That is the whole of what resuming is for: an autocast fired from
     // inside a commanded fight is a pause, not a defection, so the Priest heals and goes
@@ -11513,20 +11541,25 @@ export class SimWorld {
   /** Cast an IMMEDIATE ability on the spot: no PendingCast, no wind-up, no cast
    *  animation, and the caster's current order (an attack in mid-swing, a walk) is
    *  left completely alone. The whole cast collapses into this one call, so every
-   *  spell event fires here in the order tickCast would have raised them. */
-  private castImmediate(u: SimUnit, ab: SimAbility, def: AbilityDef, lvl: AbilityLevel): boolean {
+   *  spell event fires here in the order tickCast would have raised them.
+   *
+   *  `targetId` is for the NO_WINDUP abilities, which are the only members with a target —
+   *  the caller has already checked it is castable and within reach. Everything in IMMEDIATE
+   *  aims at nobody and passes none. */
+  private castImmediate(u: SimUnit, ab: SimAbility, def: AbilityDef, lvl: AbilityLevel, targetId = 0): boolean {
     if (ab.cooldownLeft > 0 || u.mana < lvl.cost) return false;
     u.mana -= lvl.cost;
     ab.cooldownLeft = lvl.cooldown;
     // A stand-in PendingCast purely to describe the cast to noteSpell/resolveCast —
     // it is never stored on the unit, so nothing can interrupt or resume it.
+    const t = targetId ? this.units.get(targetId) : undefined;
     const pc: PendingCast = {
       code: def.code,
       abilityId: ab.id,
       rank: ab.level,
-      targetId: 0,
-      x: u.x,
-      y: u.y,
+      targetId: t ? targetId : 0,
+      x: t?.x ?? u.x,
+      y: t?.y ?? u.y,
       range: 0,
       castLeft: 0,
       auto: false, // never stored on the unit, so nothing ever re-checks it
@@ -11658,7 +11691,9 @@ export class SimWorld {
       // Casting Time (they add — hiveworkshop "Cast Point and Backswing" 265781;
       // castPoint 0 → an instant cast). Storm Bolt = MK's 0.4; Blizzard = Archmage's
       // 0.3 + the spell's 1.0 Casting Time = 1.3s before the first shard.
-      pc.castLeft = u.castPoint + (CAST_TIME_IS_NOT_A_WINDUP.has(pc.code) ? 0 : lvl.castTime);
+      // …and NONE of it for an ability that has no gesture to wind up (see NO_WINDUP): the
+      // walk was the whole delay, and it fires the tick it arrives.
+      pc.castLeft = NO_WINDUP.has(pc.code) ? 0 : u.castPoint + (CAST_TIME_IS_NOT_A_WINDUP.has(pc.code) ? 0 : lvl.castTime);
       const channelLen = this.channelDuration(def, pc.rank);
       // Tell the renderer to play the cast clip and hold it for the whole cast
       // (wind-up + backswing, or wind-up + channel — looped for a channel). A
@@ -11730,7 +11765,7 @@ export class SimWorld {
     pc.channelLeft = this.channelDuration(def, pc.rank);
     // No channel → play the cast backswing recovery (0 = none). A channel holds
     // instead; there's no backswing after one.
-    pc.backLeft = pc.channelLeft > 0 ? 0 : u.castBackswing;
+    pc.backLeft = pc.channelLeft > 0 || NO_WINDUP.has(pc.code) ? 0 : u.castBackswing;
     if (u.moving) this.settle(u);
     if (pc.channelLeft <= 0 && pc.backLeft <= 0) this.endCast(u, pc); // instant, no recovery
   }
@@ -12833,12 +12868,24 @@ export class SimWorld {
     if (u) u.noCollision = !flag;
   }
 
-  /** Toggle an ability's autocast (Heal/Slow/…). Returns the new state. */
+  /**
+   * Toggle an ability's autocast (Heal/Slow/…). Returns the new state.
+   *
+   * **ONE autocast per unit.** Switching one on switches every other one off, because that is
+   * the engine's own limit: a unit has a single autocast slot, and the two units that can
+   * plainly show it both do — a Priest may leave Heal on or Inner Fire on and never both, and
+   * an Obsidian Statue may leave Essence of Blight on or Spirit Touch on. It is the whole
+   * reason an undead player builds a SECOND statue and splits the jobs between them
+   * (`ComputerPlusAi.statuePass` does the same), and the reason the two-hotkey trick is worth
+   * knowing at all: what the slot limits is the TOGGLE, never the press, so both may still be
+   * cast by hand in the same breath (see NO_WINDUP).
+   */
   toggleAutocast(unitId: number, code: string): boolean {
     const u = this.units.get(unitId);
     const ab = u ? this.findAbility(u, code) : undefined;
-    if (!ab) return false;
+    if (!ab || !u) return false;
     ab.autocastOn = !ab.autocastOn;
+    if (ab.autocastOn) for (const other of u.abilities) if (other !== ab) other.autocastOn = false;
     return ab.autocastOn;
   }
 

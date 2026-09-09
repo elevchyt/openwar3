@@ -929,6 +929,85 @@ function replenishCasterArt(api: SpellApi, caster: SimUnit, def: AbilityDef): vo
   if (def.specialArt) api.emitEffect(def.specialArt, caster.x, caster.y, caster.id, 0, def.specialAttach);
 }
 
+/**
+ * ONE PULSE of an Obsidian Statue's replenish — `Arpl` Essence of Blight into hit points,
+ * `Arpm` Spirit Touch into mana. Both are the same engine ability pointed at a different bar,
+ * so they are one function, and almost every number in it comes out of a column whose meaning
+ * the plain `AbilityData.slk` header hides.
+ *
+ * `AbilityMetaData.slk` names the replenish family's columns itself — the rows whose
+ * `useSpecific` lists `Arpb`, `Arpl`, `Arpm` — and resolved through `UI\WorldEditStrings.txt`
+ * they read:
+ *
+ *     DataA  Hit Points Gained                  [Arpl] 10
+ *     DataB  Mana Points Gained                 [Arpm] 3
+ *     DataC  Minimum Life Required              0
+ *     DataD  Minimum Mana Required              0
+ *     DataE  Maximum Units Charged To Caster    5
+ *     Cast   Maximum Units Affected             6      (NOT a casting time — see world.ts)
+ *
+ * Three things follow that the single-target reading got wrong:
+ *
+ *   • **It is an AREA ability.** Both Ubertips say so in as many words — "Restores … to nearby
+ *     friendly **units**" — and `Area1` = 700 is the reach, measured from the STATUE (the unit
+ *     the sentence is about), while `Rng1` = 250 is only how close it must stand to the ally
+ *     it is aimed at. Up to `Cast1` = 6 of them are replenished per pulse.
+ *   • **Spirit Touch restores DataB.** Its own Ubertip quotes `<Arpm,DataB1>` = **3**, and
+ *     DataA is empty on that row — read as DataA it fell through to a handler default of 10,
+ *     better than three times the mana the game gives.
+ *   • **The cost is PER UNIT.** `Cost1` = 2 is charged for each of up to `DataE` = 5 of them,
+ *     so a full six-unit pulse costs ten mana and the sixth ally is free. The cast path has
+ *     already paid once by the time a handler runs (`tickCast`), so this pays for the rest —
+ *     and a statue that runs dry mid-pulse simply reaches fewer allies.
+ *
+ * WHO gets the six slots is the one thing no column states, so it is OURS: the ally the player
+ * (or the autocast) actually aimed at first — the click means something — then the worst-off,
+ * which is the same "worst off first" every other friendly autocast in the sim uses
+ * (`SimWorld.replenishPick`, `autocastTarget`). An ally already full of whichever bar this is
+ * takes no slot at all.
+ *
+ * `targs1` = "ground,air,friend,self,organic,vuln,invu" does the rest of the filtering through
+ * `api.admits`, and it has a quiet joke in it: `self` is listed, but the Obsidian Statue is
+ * `UnitBalance` `type = Mechanical`, so `organic` refuses it — a statue can neither top itself
+ * up nor mend the one standing beside it, and neither can a Meat Wagon be healed by one.
+ */
+function replenishPulse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, ctx: CastContext, bar: "life" | "mana"): void {
+  const lvl = def.levelData[rank - 1];
+  // DataA "Hit Points Gained" / DataB "Mana Points Gained" — one column each, and the other
+  // is blank on that row, which is why reading the wrong one silently yields a default.
+  const gain = bar === "life" ? d(lvl, 0, 10) : d(lvl, 1, 3);
+  if (gain <= 0) return;
+  // How short of full this ally is, in the bar this ability fills. Zero = it takes no slot.
+  const room = (t: SimUnit): number => (bar === "life" ? t.maxHp - t.hp : t.maxMana > 0 ? t.maxMana - t.mana : 0);
+  const maxAffected = Math.max(1, Math.round(lvl.castTime) || 6);
+  const maxCharged = Math.max(1, Math.round(d(lvl, 4, 5)));
+  const picked = alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 700, { self: true })
+    .filter((t) => room(t) > 0)
+    .sort((a, b) => room(b) - room(a));
+  // The unit this cast was AIMED at goes first — it is inside `Area1` by construction
+  // (`Rng1` 250 against `Area1` 700) and the player's click is not a suggestion.
+  const aimed = picked.findIndex((t) => t.id === ctx.targetId);
+  if (aimed > 0) picked.unshift(picked.splice(aimed, 1)[0]);
+  if (!picked.length) return;
+  replenishCasterArt(api, caster, def);
+  let charged = 1; // the cast itself already paid `Cost1` for the first ally
+  for (const t of picked.slice(0, maxAffected)) {
+    if (t !== picked[0] && charged < maxCharged) {
+      if (caster.mana < lvl.cost) break; // nothing left to pay for another — the pulse ends here
+      caster.mana -= lvl.cost;
+      charged++;
+    }
+    if (bar === "life") api.spellHeal(t, gain);
+    else t.mana = Math.min(t.maxMana, t.mana + gain);
+    // `Targetart` is the ONLY one of the row's three models the replenished unit wears —
+    // `…\Human\Heal\HealTarget.mdl` for Essence of Blight (the Priest's own glow, which is
+    // why a statue's heal looks like a heal) and `…\ReplenishMana\SpiritTouchTarget.mdl`
+    // for Spirit Touch, one Birth clip of 1.10 s. The other two are the caster's; see
+    // `replenishCasterArt`.
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+  }
+}
+
 /** Storm Bolt's shape, shared with the creeps' Hurl Boulder (see the `AHtb`/`ACtb` rows). */
 const stormBolt: Handler = (api, caster, def, rank, ctx) => {
   const t = api.getUnit(ctx.targetId);
@@ -1059,36 +1138,20 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 
-  // Essence of Blight (`Arpl`) — the Obsidian Statue restores DataA hit points to a friendly
-  // living unit, one pulse per `Cool1`, for `Cost1` of its own mana. Its Targets Allowed is
-  // "ground,air,friend,self,organic,vuln,invu" (AbilityData) — `organic` is what keeps it off
-  // another statue and off a Meat Wagon, and `self` is why a statue can top ITSELF up.
+  // Essence of Blight (`Arpl`) — "Restores <Arpl,DataA1> hit points to nearby friendly units."
+  // (UndeadAbilityStrings.) An AREA pulse aimed THROUGH a unit, not at one: see
+  // `replenishPulse`, which both of the statue's autocasts are.
   //
-  // In HEAL_SPELLS, so the game's own rule applies: a heal that would restore nothing is
-  // REFUSED rather than wasted, which is what stops an autocasting statue emptying its mana
-  // into an undamaged Ghoul.
-  Arpl: (api, caster, def, rank, ctx) => {
-    const t = api.getUnit(ctx.targetId);
-    if (!t || !api.ally(caster, t) || t.mechanical) return;
-    api.spellHeal(t, d(def.levelData[rank - 1], 0, 10));
-    replenishCasterArt(api, caster, def);
-    // `[Arpl] Targetart = …\Human\Heal\HealTarget.mdl` — the Priest's own glow, which is
-    // why an Obsidian Statue's heal looks like a heal.
-    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
-  },
+  // In HEAL_SPELLS, so the game's own rule applies to the unit it is AIMED at: a heal that
+  // would restore nothing is REFUSED rather than wasted, which is what stops an autocasting
+  // statue emptying its mana into an undamaged Ghoul.
+  Arpl: (api, caster, def, rank, ctx) => replenishPulse(api, caster, def, rank, ctx, "life"),
 
-  // Spirit Touch (`Arpm`) — the same row shape pointed at the other bar. The mana half of the
-  // Obsidian Statue, and the reason an undead player builds two of them: the abilities are
-  // separate autocasts on one mana pool, so a statue doing both does neither well.
-  Arpm: (api, caster, def, rank, ctx) => {
-    const t = api.getUnit(ctx.targetId);
-    if (!t || !api.ally(caster, t) || t.mechanical || t.maxMana <= 0) return;
-    t.mana = Math.min(t.maxMana, t.mana + d(def.levelData[rank - 1], 0, 10));
-    replenishCasterArt(api, caster, def);
-    // `[Arpm] Targetart = …\Undead\ReplenishMana\SpiritTouchTarget.mdl` — one Birth clip,
-    // 1.10 s, and the row's `Effectsound = SpiritTouch` rides the folder beside it.
-    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
-  },
+  // Spirit Touch (`Arpm`) — "Restores <Arpm,DataB1> mana to nearby friendly units." The same
+  // row shape pointed at the other bar, and the reason an undead player builds two statues:
+  // the abilities are separate autocasts on one mana pool, so one doing both does neither
+  // well. Note the Ubertip quotes **DataB**, not DataA — see `replenishPulse`.
+  Arpm: (api, caster, def, rank, ctx) => replenishPulse(api, caster, def, rank, ctx, "mana"),
 
   // Inner Fire — buff a friendly unit: +armour (dataB) and +damage (dataA as a
   // fraction of base is complex; apply a flat bonus scaled by the caster's data).
