@@ -168,18 +168,45 @@ name or every boot dies reading a 1 GB `data.NNN`; and the maps are fetched LAZI
 install has hundreds and reading them all to print a list of names would spend a few hundred
 megabytes on it — the browser's own picker hands back handles, and this has to match.
 
-**What this does NOT get us, and what would.** Somebody still types an IP. Real WC3 does not ask
-that: it broadcasts on UDP 6112 and the games appear. A browser cannot send a UDP datagram either,
-so **discovery is the second thing only a native shell can do** — which, with the native install
-path (OpenWar3_PLAN.md §8, no picker and no OPFS quota), is what decides the export as **Electron**
-rather than a plain launcher. The shape it takes is the one above with the last row filled in: the
-Electron main process serves the build and runs `attachRelay` on one port, exactly as the plugin
-does, and adds a `dgram` beacon. The cost that is NOT the beacon: the LAN list becomes an aggregate
-of beacons from several hosts rather than the room list of the ONE relay we are connected to, so a
-room carries its own relay URL and the connection is opened at JOIN rather than held across
-create→lobby (`lanSession()` in `src/main.ts`). Tauri was considered and rejected for this
-project: its renderer is the system webview, a different engine per platform, and this is a WebGL2
-engine with shader patches.
+**Nobody types an address any more** (step 3, `electron/beacon.mjs`). Real WC3 broadcasts on UDP
+6112 and the games appear; a browser cannot send a datagram at all, so this is the second thing
+only a native shell can do — and with the native install path it is what decided the export as
+**Electron** rather than a plain launcher. Tauri was considered and rejected for this project: its
+renderer is the system webview, a different engine per platform, and this is a WebGL2 engine with
+shader patches.
+
+The beacon is deliberately the smaller half. It carries "an OpenWar3 speaking protocol N is at this
+address, and its relay is on this port" — no game state travels in a broadcast, and it is never
+trusted for anything but WHERE TO KNOCK. Everything after that is the relay conversation the Join
+Server work already built: `LanLobby` watches N machines, merges their rooms under a key that tells
+two relays' rooms apart, and promotes the right connection when you join. So discovery adds an
+ADDRESS and nothing else, and `setDiscovered` is one call. That is why this step was small — the
+LAN list had already stopped being "the room list of the ONE relay we are connected to", which was
+the expensive half when it was written down as future work.
+
+Choices worth knowing:
+
+- **Not port 6112.** That is Warcraft III's own, and a real install on the same subnet must never
+  be confused by us nor we by it. The beacon is on the relay's port plus one.
+- **The protocol version rides in the beacon**, so a build one version out of step is never listed
+  rather than listed-and-unjoinable — it would be refused at the relay's handshake anyway.
+- **Per-interface broadcast addresses**, not only 255.255.255.255: the limited broadcast is
+  refused by plenty of stacks, so a machine with wifi and ethernet ends up shouting down only one
+  of them.
+- **A launch id, not an address, is how we ignore ourselves** — we hear our own datagram on
+  whichever interface it left by, and on a machine running two copies (which is how this is
+  tested) both would look like "us".
+- **It broadcasts while the APP runs, not only while a game is hosted.** Two seconds and a hundred
+  bytes is nothing on a LAN, and it means the other machine is already being watched when a game
+  is created there: the games list fills in the moment somebody hosts rather than a beat later.
+- **A found address has no ✕.** It is not the player's to remove — the machine is broadcasting, so
+  it would be back within two seconds, and a button that undoes itself while you watch is worse
+  than no button. An address they typed stays theirs even when a beacon also carries it.
+
+The trap that cost a two-app run: the push fires when the set CHANGES, and the game subscribes
+when the LAN screen opens — long after the beacon found whoever was already running. A
+subscription on its own leaves a machine that had been there the whole time unmentioned until it
+quits and comes back, so `onServersFound` asks as well as subscribing.
 
 ## Where we are
 

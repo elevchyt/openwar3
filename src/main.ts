@@ -19,6 +19,7 @@ import { LanLobby } from "./net/lobby";
 import { observerSlots } from "./net/lobbySetup";
 import type { AdvancedOptions } from "./net/advancedOptions";
 import { WebSocketTransport } from "./net/transport";
+import { onServersFound } from "./assets/nativeInstall";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
 import { applyVideoOptions } from "./render/videoQuality";
@@ -214,7 +215,7 @@ function optionsScreen(vfs: DataSource): { chrome: "Options"; mount: () => Promi
 
 /** The live relay connection, and the promise that says whether it came up. Null while we
  *  are nowhere near the LAN screens. */
-let lan: { lobby: LanLobby; connected: Promise<void> } | null = null;
+let lan: { lobby: LanLobby; connected: Promise<void>; stopListening: () => void } | null = null;
 
 function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
   if (!lan) {
@@ -223,7 +224,16 @@ function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
     // its own `catch` to put the reason on screen.
     const connected = lobby.connect();
     connected.catch(() => {});
-    lan = { lobby, connected };
+    // What the desktop app can HEAR on the subnet (electron/beacon.mjs) goes straight into the
+    // same set of watched machines an address typed by hand goes into — discovery adds an
+    // ADDRESS and nothing else, which is what keeps it a small feature rather than a second way
+    // to learn about games. A no-op in a browser, which cannot hear anything.
+    const stopListening = onServersFound((urls) => lobby.setDiscovered(urls));
+    // Reachable for the same reason `openwar3.vfs` and `openwar3.mapScene` are: the LAN screens
+    // are driven headlessly, and "what does the lobby actually think" is the question every
+    // harness ends up asking.
+    ((window as unknown as { openwar3: Record<string, unknown> }).openwar3 ??= {}).lan = lobby;
+    lan = { lobby, connected, stopListening };
   }
   return lan;
 }
@@ -231,6 +241,7 @@ function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
 /** Leaving the LAN flow entirely (Cancel back to the main menu). A hand-off to a match has
  *  already made `dispose` a no-op, which is the point — see LanLobby.handedToMatch. */
 function endLanSession(): void {
+  lan?.stopListening();
   lan?.lobby.dispose();
   lan = null;
 }

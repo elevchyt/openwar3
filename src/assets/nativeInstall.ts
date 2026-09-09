@@ -25,10 +25,30 @@ interface NativeBridge {
   installPath(): Promise<{ path: string | null; valid: boolean }>;
   pickInstall(): Promise<string | null>;
   forgetInstall(): Promise<void>;
+  servers(): Promise<Array<{ id: string; url: string }>>;
+  onServers(fn: (peers: Array<{ id: string; url: string }>) => void): () => void;
 }
 
 const bridge = (): NativeBridge | null =>
   (window as unknown as { ow3native?: NativeBridge }).ow3native ?? null;
+
+/**
+ * Subscribe to the OpenWar3s this machine can hear on the network (electron/beacon.mjs). A no-op
+ * returning a no-op in a browser, which has no way to hear anything.
+ *
+ * It ASKS as well as subscribing. The push only fires when the set changes, and this is called
+ * when the LAN screen opens — long after the beacon found whoever was already running — so a
+ * subscription on its own would leave a machine that had been there the whole time unmentioned
+ * until it quit and came back. Cost a two-app run to find.
+ */
+export function onServersFound(fn: (urls: string[]) => void): () => void {
+  const native = bridge();
+  if (!native) return () => {};
+  let live = true;
+  const stop = native.onServers((peers) => { if (live) fn(peers.map((p) => p.url)); });
+  void native.servers().then((peers) => { if (live) fn(peers.map((p) => p.url)); });
+  return () => { live = false; stop(); };
+}
 
 /** Running inside the desktop app. */
 export const isDesktopApp = (): boolean => bridge() !== null;

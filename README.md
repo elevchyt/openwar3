@@ -37,7 +37,10 @@ through the browser's picker, so there is no permission dance and no storage quo
 uploaded, and nothing about your install is reachable from the network: the app reads it over a
 scheme of its own that exists only inside the process, never over the port it serves the game on.
 
-The desktop app is also the host: starting it starts the relay, so a LAN game needs no terminal.
+The desktop app is also the host: starting it starts the relay, so a LAN game needs no terminal —
+and it finds the other copies on your network by itself. Open **Local Area Network** on both
+machines and the games appear; nobody types an address. (The address box is still there under
+**Servers List**, for a machine on another subnet or one the broadcast cannot reach.)
 
 ### Playing on a LAN
 

@@ -21,4 +21,25 @@ contextBridge.exposeInMainWorld("ow3native", {
   pickInstall: () => ipcRenderer.invoke("ow3:install-pick"),
   /** Forget the remembered folder, so the next launch asks again. */
   forgetInstall: () => ipcRenderer.invoke("ow3:install-forget"),
+
+  /**
+   * The OpenWar3s this machine can hear on the local network (electron/beacon.mjs), pushed as
+   * the set changes. Each is `{ id, url }`, the url being one `LanLobby.addRelay` takes.
+   *
+   * A page cannot send or receive a datagram, which is the whole reason this call exists: it is
+   * the one thing the desktop shell knows that the game cannot find out for itself. Nothing but
+   * an ADDRESS crosses — no game state travels in a broadcast, and a beacon is never trusted for
+   * anything except where to knock.
+   *
+   * Returns its own unsubscribe, because a listener that outlives the screen that made it would
+   * keep a disposed lobby alive. Pair it with `servers()` for what is already known: the push
+   * fires on CHANGE, so a subscriber that arrives after the beacon found somebody hears nothing.
+   */
+  servers: () => ipcRenderer.invoke("ow3:servers-now"),
+
+  onServers: (fn) => {
+    const handler = (_event, peers) => fn(peers);
+    ipcRenderer.on("ow3:servers", handler);
+    return () => ipcRenderer.off("ow3:servers", handler);
+  },
 });

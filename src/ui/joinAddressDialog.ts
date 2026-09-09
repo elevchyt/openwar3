@@ -107,27 +107,36 @@ export async function showJoinAddressDialog(opts: {
     if (!s) return;
     const relays = opts.lobby.relays;
     s.list("JoinAddressList")?.setItems(
-      relays.map(({ url, connected }): ListItem => ({
-        value: url,
-        // An address nobody is hosting on YET is the ordinary case — two people sitting down to
-        // play, one of them not there yet — so it is a state on the row and never an error. The
-        // lobby keeps knocking; the row says so quietly until somebody answers.
-        label: connected
-          ? authorityOf(url)
-          : `${authorityOf(url)}  |cff808080(waiting)|r`,
-        // The row IS the address, so its control removes it — no "select the row, then press
-        // the button under the list", which is a step a three-row list does not need.
-        action: {
-          label: "✕",
-          title: `Remove ${authorityOf(url)}`,
-          onClick: () => {
-            opts.lobby.removeRelay(url);
-            message = null;
-            paint();
-            opts.onChange?.();
+      relays.map(({ url, connected, source }): ListItem => {
+        // Two states worth saying out loud, and they are not the same thing. An address nobody
+        // is hosting on YET is the ordinary case — two people sitting down to play, one of them
+        // not there yet — so it is a quiet marker on the row and never an error; the lobby keeps
+        // knocking. A machine the NETWORK told us about (the desktop app's beacon) says so
+        // instead, because the player did not put it there and should not wonder how it arrived.
+        const note = !connected ? "  |cff808080(waiting)|r"
+          : source === "found" ? "  |cff808080(on your network)|r"
+          : "";
+        return {
+          value: url,
+          label: `${authorityOf(url)}${note}`,
+          // The row IS the address, so its control removes it — no "select the row, then press
+          // the button under the list", which is a step a three-row list does not need.
+          //
+          // A FOUND one has no ✕: it is not the player's to remove. The machine is broadcasting,
+          // so it would be back on the list within two seconds, and a button that undoes itself
+          // while you watch is worse than no button. Theirs go when they close their game.
+          action: source === "found" ? undefined : {
+            label: "✕",
+            title: `Remove ${authorityOf(url)}`,
+            onClick: () => {
+              opts.lobby.removeRelay(url);
+              message = null;
+              paint();
+              opts.onChange?.();
+            },
           },
-        },
-      })),
+        };
+      }),
     );
     s.setText(
       "JoinAddressDialogInfo",

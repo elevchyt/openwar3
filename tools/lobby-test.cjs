@@ -520,7 +520,7 @@ const ME = { id: 2, name: "Joiner", host: false };
     made[1].drop("gone");
     check("one machine, and it is ours", lobby.snapshot.rooms.map((r) => r.name), ["Mine"]);
     // Still WATCHED, though — a host who quits may come back, and the row waits for them.
-    check("…but the address is still on the list, waiting", lobby.relays, [{ url: "ws://192.168.1.42:8787/relay", connected: false }]);
+    check("…but the address is still on the list, waiting", lobby.relays, [{ url: "ws://192.168.1.42:8787/relay", connected: false, source: "typed" }]);
     lobby.removeRelay("ws://192.168.1.42:8787/relay");
     check("removing it is what takes it off", lobby.relays, []);
   }
@@ -546,6 +546,37 @@ const ME = { id: 2, name: "Joiner", host: false };
     made[made.length - 1].onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Late" }] });
     check("…and their game appears with no second act from the player",
       lobby.snapshot.rooms.map((r) => r.name), ["Late"]);
+    lobby.close();
+  }
+
+  console.log("\nwhat the network says is there is watched like an address you typed");
+  {
+    const made = [];
+    const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
+    await lobby.connect();
+    lobby.addRelay("192.168.1.42");           // theirs, by hand
+    await tick();
+    lobby.setDiscovered(["ws://192.168.1.50:8787/relay", "ws://192.168.1.42:8787/relay"]);
+    await tick();
+    check("a heard machine joins the watched set",
+      lobby.relays.map((r) => `${r.url} ${r.source}`),
+      ["ws://192.168.1.42:8787/relay typed", "ws://192.168.1.50:8787/relay found"]);
+    // The one the player typed stays THEIRS even though the beacon also carries it — otherwise
+    // their row would lose its ✕ because a datagram happened to arrive.
+    check("…and one they typed is still theirs", lobby.relays[0].source, "typed");
+
+    // The far machine closes its game. A `found` row goes with it; a typed one never does.
+    lobby.setDiscovered([]);
+    await tick();
+    check("a machine that stops broadcasting is dropped",
+      lobby.relays.map((r) => r.url), ["ws://192.168.1.42:8787/relay"]);
+
+    // Our own address can legitimately arrive: two copies on one machine hear each other.
+    lobby.setDiscovered(["not an address", "ws://192.168.1.60:8787/relay"]);
+    await tick();
+    check("rubbish in the set is skipped rather than thrown",
+      lobby.relays.map((r) => r.url).sort(),
+      ["ws://192.168.1.42:8787/relay", "ws://192.168.1.60:8787/relay"]);
     lobby.close();
   }
 

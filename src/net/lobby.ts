@@ -38,7 +38,14 @@ export interface RelayInfo {
   /** Answering right now. False for one that has not been started yet, or has gone away — both
    *  of which are waited out rather than reported as failures. */
   connected: boolean;
+  /** Where the address came from. A `typed` one is the player's and only they take it off the
+   *  list; a `found` one is the network's (the desktop app's beacon) and comes and goes with the
+   *  machine that is broadcasting it, so it is not theirs to remove — it would be back within
+   *  two seconds. */
+  source: RelaySource;
 }
+
+export type RelaySource = "typed" | "found";
 
 /** How long between knocks at an address that is not answering. A failed connect on a LAN is
  *  immediate and costs nothing; this is really about how long a player will sit looking at a
@@ -51,6 +58,7 @@ interface RemoteRelay {
   rooms: RoomInfo[];
   connected: boolean;
   retry: ReturnType<typeof setTimeout> | null;
+  source: RelaySource;
 }
 
 export interface ListedRoom extends RoomInfo {
@@ -300,15 +308,43 @@ export class LanLobby {
    * Rejects with a readable reason: the screen shows it, and "nothing happened" is the one
    * answer a typed-in address must never give.
    */
-  addRelay(input: string): void {
+  addRelay(input: string, source: RelaySource = "typed"): void {
     const url = normalizeRelayUrl(input);
     if (!url) throw new Error(`"${input}" is not an address. Try 192.168.1.42 or 192.168.1.42:${DEFAULT_RELAY_PORT}.`);
     if (this.isOurOwn(url)) throw new Error("That address is this computer — your own games are already listed.");
-    if (this.remotes.has(url)) { this.refresh(); return; }
-    const entry: RemoteRelay = { transport: null, rooms: [], connected: false, retry: null };
+    const already = this.remotes.get(url);
+    if (already) {
+      // A machine the player had already typed in, now also heard on the network, stays THEIRS:
+      // it should not lose its ✕ because a beacon happened to arrive.
+      if (source === "typed") already.source = "typed";
+      this.refresh();
+      return;
+    }
+    const entry: RemoteRelay = { transport: null, rooms: [], connected: false, retry: null, source };
     this.remotes.set(url, entry);
     this.mergeRooms();
     this.dial(url, entry);
+  }
+
+  /**
+   * The machines the network says are there, as a whole set (src/net/discovery.ts).
+   *
+   * Given the SET rather than arrivals and departures, because the beacon already knows exactly
+   * who it can hear and the alternative is the same bookkeeping written twice, in two places
+   * that would disagree the first time a datagram went missing. Addresses the player typed are
+   * untouched: those are theirs, and a machine that stops broadcasting has not stopped being an
+   * address they asked to watch.
+   */
+  setDiscovered(urls: readonly string[]): void {
+    const wanted = new Set(urls.map((u) => normalizeRelayUrl(u)).filter((u): u is string => !!u));
+    for (const [url, entry] of [...this.remotes]) {
+      if (entry.source === "found" && !wanted.has(url)) this.removeRelay(url);
+    }
+    for (const url of wanted) {
+      // `isOurOwn` throws for our own address, and a beacon can legitimately carry it: two copies
+      // of the game on one machine hear each other, which is how this gets tested.
+      try { this.addRelay(url, "found"); } catch { /* ours, or unparseable — nothing to watch */ }
+    }
   }
 
   /**
@@ -353,7 +389,7 @@ export class LanLobby {
    *  shows both, because an address that nothing is hosting on yet is a normal thing to be
    *  looking at and should not read as an error. */
   get relays(): RelayInfo[] {
-    return [...this.remotes].map(([url, entry]) => ({ url, connected: entry.connected }));
+    return [...this.remotes].map(([url, entry]) => ({ url, connected: entry.connected, source: entry.source }));
   }
 
   /** Stop watching one. Its games leave the list with it — they were never ours to show once

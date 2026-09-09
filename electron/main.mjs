@@ -21,6 +21,8 @@ import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { startServer } from "./server.mjs";
 import { looksLikeInstall, serveInstall } from "./install.mjs";
+import { startBeacon } from "./beacon.mjs";
+import { PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { readSettings, useSettingsDir, writeSettings } from "./settings.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -89,6 +91,10 @@ function createWindow(url) {
 }
 
 let server = null;
+let beacon = null;
+/** The machines heard on the network, kept here so a window that opens (or reloads) is told at
+ *  once rather than at the next beat. */
+let heard = [];
 
 /** The remembered install, and whether it is still there. A folder that has been moved is worth
  *  saying so about rather than silently asking again. */
@@ -125,6 +131,11 @@ app.whenReady().then(async () => {
     return picked;
   });
   ipcMain.handle("ow3:install-forget", () => { writeSettings({ installPath: null }); });
+  // Asked by a page that has just started listening. The push below only fires when the SET
+  // CHANGES, and the game subscribes when the LAN screen opens — long after the beacon found
+  // whoever was already there — so without this a machine that has been quietly present the
+  // whole time is never mentioned.
+  ipcMain.handle("ow3:servers-now", () => heard);
 
   let url = DEV_URL;
   if (!url) {
@@ -146,6 +157,19 @@ app.whenReady().then(async () => {
       ? `[OpenWar3] install: ${install.path} — NOT FOUND, the game will ask for it`
       : "[OpenWar3] no install remembered — the game will ask for it");
 
+  // Announce this game on the subnet and listen for others (electron/beacon.mjs). This is the
+  // half of LAN play a page cannot do at all, and it is why the export is native: with it,
+  // nobody types an address. In DEV MODE the page is the dev server's, whose relay is on ITS
+  // port — so there is nothing of ours here worth announcing, and we listen only.
+  beacon = startBeacon({
+    protocol: PROTOCOL_VERSION,
+    port: () => server?.port ?? 0,
+    onChange: (peers) => {
+      heard = peers;
+      for (const win of BrowserWindow.getAllWindows()) win.webContents.send("ow3:servers", peers);
+    },
+  });
+
   createWindow(url);
 
   // macOS: the app outlives its windows.
@@ -166,6 +190,8 @@ app.on("before-quit", async (e) => {
   if (!server) return;
   const closing = server;
   server = null;
+  beacon?.close();
+  beacon = null;
   e.preventDefault();
   await closing.stop().catch(() => {});
   app.quit();

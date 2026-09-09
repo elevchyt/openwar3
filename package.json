@@ -24,7 +24,7 @@
     "perf:report": "node tools/perf-report.mjs",
     "app": "electron electron/main.mjs",
     "app:dev": "OPENWAR3_DEV=1 electron electron/main.mjs",
-    "app:test": "node tools/electron-server-test.mjs",
+    "app:test": "node tools/electron-server-test.mjs && node tools/beacon-test.mjs",
     "relay": "node server/relay.mjs",
     "relay-kill": "node server/relay-kill.mjs",
     "relay:test": "node tools/relay-test.mjs && node tools/loopback-test.mjs",
