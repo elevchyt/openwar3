@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "vite",
     "dev:log": "node tools/dev-log.mjs",
-    "build": "tsc --noEmit && vite build",
+    "build": "node tools/import-cycle-test.mjs && tsc --noEmit && vite build",
+    "cycles": "node tools/import-cycle-test.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "data:extract": "tsc -p tools/tsconfig.casc.json && node --max-old-space-size=8192 tools/extract-data.mjs",

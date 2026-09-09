@@ -6,6 +6,7 @@ import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { ListItem } from "./fdf/widgets";
 import { reachabilityLine, type LanLobby, type LobbyState } from "../net/lobby";
+import { LABEL_GOLD } from "./glueColors";
 import type { StartMatch } from "../net/protocol";
 import { advancedOf, visibilityFog } from "../net/advancedOptions";
 import { LAN_JOIN_OVERRIDE, OW3_STRINGS } from "../overrides";
@@ -264,11 +265,6 @@ export async function mountLanScreen(
 export function savedPlayerName(): string {
   return localStorage.getItem("openwar3.playerName") || "Player";
 }
-
-/** The gold every label on these screens is set in — `StandardLabelTextTemplate`'s FontColor
- *  0.99 0.827 0.0705, as a WC3 colour code. The list's own rows are white by default, so a
- *  row that wants to match its captions has to say so. */
-export const LABEL_GOLD = "fcd312";
 
 /**
  * The Observers bench as the match numbers it: the first watcher is `OBSERVER_PLAYER`, the

@@ -6,7 +6,7 @@ import type { FdfLibrary } from "./fdf/library";
 import type { ListItem } from "./fdf/widgets";
 import { adopt, setProp } from "./mapBrowser";
 import { JOIN_ADDRESS_DIALOG_OVERRIDE, OW3_STRINGS } from "../overrides";
-import { LABEL_GOLD } from "./fdfLan";
+import { LABEL_GOLD } from "./glueColors";
 
 // "Join by address" — the machines this one is watching for games (issue: LAN discovery).
 //

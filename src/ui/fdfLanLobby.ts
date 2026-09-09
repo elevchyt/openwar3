@@ -28,7 +28,8 @@ import {
   fillForceLabels, forceGroups, labelOf, slotOption, slotOptionValue, slotOptionsFor, teamOptions,
   type Group,
 } from "./playerSlots";
-import { LABEL_GOLD, copyText, observerSeats, toConfig } from "./fdfLan";
+import { copyText, observerSeats, toConfig } from "./fdfLan";
+import { LABEL_GOLD } from "./glueColors";
 
 // The LAN GAME LOBBY (issue #77), built from the game's own UI\FrameDef\Glue\GameChatroom.fdf.
 //
@@ -139,6 +140,21 @@ export async function mountLanLobbyScreen(
   const chat: string[] = [];
   /** Cleared the moment the screen stops owning the lobby — on the way out, and at Start. */
   let alive = true;
+  /** How long "Copied." stands in for the address after a click. Long enough to be seen, short
+   *  enough that the row is back to being the thing it says before anybody needs it again. */
+  const COPIED_MS = 1500;
+  /**
+   * Up here with the rest of the state, and not beside `paintJoinAddress` where it reads —
+   * because `mountFdfScreen` calls `onBuild` BEFORE it resolves, and everything declared after
+   * that `await` is still in its temporal dead zone when the first paint runs. It was written
+   * below and threw on the first build, taking the whole lobby screen with it.
+   *
+   * It did not throw under `pnpm dev`, which is what made it look like a build problem: without
+   * `--host` the dev server binds loopback, so `HostInfo` carries no address, `paintJoinAddress`
+   * returns before this line, and the bug is invisible. The desktop app binds every interface
+   * and always has an address to show.
+   */
+  let copiedUntil = 0;
   /** True once the relay has confirmed we are in a room. Until then a "browsing" state is
    *  simply the answer not having arrived; AFTER it, the same state means the room died. */
   let wasInRoom = false;
@@ -524,11 +540,6 @@ export async function mountLanLobbyScreen(
   return screen;
 
   /** Paint the seating onto the screen. Called after every build and every change. */
-  /** How long "Copied." stands in for the address after a click. Long enough to be seen, short
-   *  enough that the row is back to being the thing it says before anybody needs it again. */
-  const COPIED_MS = 1500;
-  let copiedUntil = 0;
-
   /**
    * The address other machines type to reach this game (`HostInfo`, src/net/protocol.ts).
    *
