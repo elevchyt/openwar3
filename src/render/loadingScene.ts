@@ -80,6 +80,32 @@ const ViewerClass = ModelViewerCtor as unknown as {
  *  not restart from empty when the playhead reaches the end (mode 0 and 2 both wrap it). */
 const HOLD_AT_END = 1;
 
+/**
+ * Give a SEE-THROUGH canvas the alpha channel its layers mean, for this context only.
+ *
+ * The viewer sets every MDX layer's blend with `blendFunc(src, dst)`, which applies the same two
+ * factors to ALPHA as to colour. On an opaque canvas nothing ever reads the alpha, so that is
+ * harmless — and on the loading screen it stays exactly that. On the update overlay's canvas the
+ * alpha is the page's own coverage, and `LoadBar.mdx`'s glow is the layer it ruins:
+ * `Textures\Loading-BarGlow.blp` is 512×128 texels of alpha 1, nearly all of them dark — a
+ * glow painted on black, drawn `Additive` (`SRC_ALPHA, ONE`). Its colour adds almost nothing,
+ * but its alpha becomes 1·1 + dst: the WHOLE quad goes opaque, a black box behind the bar that
+ * widened as the `Loading Bar Glow` bone scaled with the fill.
+ *
+ * So the colour keeps the factors the layer asked for, and the alpha takes the ones the
+ * browser's premultiplied compositor needs. An ordinary blend (`…, ONE_MINUS_SRC_ALPHA`) covers
+ * what is under it — `ONE, ONE_MINUS_SRC_ALPHA`, the "over" operator. Everything else the viewer
+ * uses (Additive and AddAlpha's `…, ONE`, both Modulates) is LIGHT on the picture under it and
+ * covers nothing — `ZERO, ONE`, which composites the glow additively over the scrim, exactly as it
+ * adds onto the black of a real loading screen.
+ */
+function separateAlphaBlend(gl: WebGLRenderingContext): void {
+  gl.blendFunc = (src: number, dst: number): void => {
+    if (dst === gl.ONE_MINUS_SRC_ALPHA) gl.blendFuncSeparate(src, dst, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    else gl.blendFuncSeparate(src, dst, gl.ZERO, gl.ONE);
+  };
+}
+
 export class LoadingScene {
   private viewer: Viewer;
   private scene: Scene;
@@ -123,6 +149,7 @@ export class LoadingScene {
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       };
+      separateAlphaBlend(viewer.gl);
     }
     this.viewer = viewer;
     this.scene = scene;
