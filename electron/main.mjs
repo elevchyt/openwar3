@@ -62,11 +62,15 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 const DEV_URL = process.env.OPENWAR3_DEV_URL || (process.env.OPENWAR3_DEV ? "http://localhost:5173" : null);
 
 /** A game window, not a browser window: no menu bar, and the world's own black behind it so a
- *  slow first paint is not a white flash. */
+ *  slow first paint is not a white flash.
+ *
+ *  It opens FULLSCREEN — the whole display, not a maximized window with the taskbar and title
+ *  bar still around it — as a game does. The 1600×900 is only what Alt+Enter drops it back to. */
 function createWindow(url) {
   const win = new BrowserWindow({
     width: 1600,
     height: 900,
+    fullscreen: true,
     backgroundColor: "#000000",
     autoHideMenuBar: true,
     show: false,
@@ -82,6 +86,25 @@ function createWindow(url) {
     },
   });
   win.once("ready-to-show", () => win.show());
+  // Alt+Enter toggles fullscreen, answered HERE rather than in the page. `before-input-event`
+  // runs before the renderer is sent the key, and cancelling it means the page never receives
+  // it at all — so the Enter half cannot press a focused glue button (ui/fdf/render.ts
+  // `wireButton` fires on Enter) or open the chat box in a match. Native fullscreen, not the
+  // page's Fullscreen API, because the window STARTS in the native kind and the two do not
+  // know about each other. The Enter's key-UP is swallowed with it, whatever became of Alt by
+  // then, so no half of the chord ever reaches the game.
+  let fullscreenEnter = false;
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.key !== "Enter") return;
+    if (input.type === "keyDown" && input.alt) {
+      event.preventDefault();
+      fullscreenEnter = true;
+      if (!input.isAutoRepeat) win.setFullScreen(!win.isFullScreen());
+    } else if (input.type === "keyUp" && fullscreenEnter) {
+      event.preventDefault();
+      fullscreenEnter = false;
+    }
+  });
   // A link out of the game opens in the player's browser, never in a second game window.
   win.webContents.setWindowOpenHandler(({ url: target }) => {
     void shell.openExternal(target);

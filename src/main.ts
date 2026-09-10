@@ -1,4 +1,6 @@
 import "./style.css";
+// First, so its capture listener is the page's first: Alt+Enter must reach nothing else.
+import "./ui/fullscreen";
 import { AssetResolver } from "./assets/resolver";
 import { decodeBlp } from "./assets/blp";
 import { mountMainMenu } from "./ui/mainMenu";

@@ -28,6 +28,42 @@ export function cursorPx(n: number): number {
   return Math.round(n * CURSOR_SCALE);
 }
 
+/** The largest custom cursor Chromium will draw wherever the pointer is — see `cursorValue`. */
+const MAX_UNCLIPPED_CURSOR = 32;
+
+/** The sheet's cell at (`sx`, `sy`) drawn `size` px square, as a data URL. */
+function cellUrl(sheet: CanvasImageSource, sx: number, sy: number, cell: number, size: number): string {
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext("2d")!;
+  ctx.imageSmoothingEnabled = true; // bilinear — a fractional scale has no clean pixel step
+  ctx.drawImage(sheet, sx, sy, cell, cell, 0, 0, size, size);
+  return c.toDataURL();
+}
+
+/**
+ * The `cursor:` value for the idle pointer (the sheet's top-left cell): the cell enlarged by
+ * CURSOR_SCALE, then the SAME cell at no more than 32 px, then `default`.
+ *
+ * The second image is what keeps the pointer the game's everywhere. Chromium refuses a custom
+ * cursor larger than 32 px whenever the image would reach outside the viewport — so a page cannot
+ * draw over the browser's own UI (Blink `EventHandler::SelectCursor`,
+ * `kMaximumCursorSizeWithoutFallback`) — and moves on to the NEXT entry in the list. At 1.25 the
+ * cell is 40 px, so within ~36 px of the right or bottom edge the enlarged hand was dropped and
+ * the old `auto` answered instead: the OS I-beam over the menu's bottom-right version line, the OS
+ * hand over a link. A 32 px image is never refused, so near an edge the gauntlet only draws at its
+ * own size for a moment; `default` is just the last word the syntax requires.
+ */
+export function cursorValue(sheet: CanvasImageSource, cell: number): string {
+  const big = cursorPx(cell);
+  const small = Math.min(cell, MAX_UNCLIPPED_CURSOR);
+  const hot = cursorPx(3);
+  const smallHot = Math.round((3 * small) / cell);
+  return `url(${cellUrl(sheet, 0, 0, cell, big)}) ${hot} ${hot}, ` +
+    `url(${cellUrl(sheet, 0, 0, cell, small)}) ${smallHot} ${smallHot}, default`;
+}
+
 let styleEl: HTMLStyleElement | null = null;
 
 /** Apply a race's hand cursor across the (non-in-game) menu screens. Human everywhere except
@@ -38,23 +74,14 @@ export function applyMenuCursor(vfs: DataSource, race: "Human" | "Orc" | "Undead
   const sheet = bytes ? blpToCanvas(bytes) : null;
   if (!sheet) return;
   const cell = Math.round(sheet.width / 8); // 8 cells wide; top-left = idle pointer
-  const size = cursorPx(cell);
-  const c = document.createElement("canvas");
-  c.width = size;
-  c.height = size;
-  const ctx = c.getContext("2d")!;
-  ctx.imageSmoothingEnabled = true; // bilinear — a fractional scale has no clean pixel step
-  ctx.drawImage(sheet, 0, 0, cell, cell, 0, 0, size, size);
-  const url = c.toDataURL();
   if (!styleEl) {
     styleEl = document.createElement("style");
     document.head.appendChild(styleEl);
   }
   // Hotspot near the gauntlet's fingertip (top-left), matching applyRaceCursor — and scaled
   // with the art, since it is a texel INSIDE the image we just enlarged. Use !important so
-  // the hand shows in every state (buttons, hovers) — the reference menu never changes the
-  // cursor. The in-game race cursor is also !important and scoped to body.in-game, so it
-  // still wins during a match.
-  const hot = cursorPx(3);
-  styleEl.textContent = `body:not(.in-game), body:not(.in-game) * { cursor: url(${url}) ${hot} ${hot}, auto !important; }`;
+  // the hand shows in every state (buttons, hovers, LINKS) — the reference menu never changes
+  // the cursor, and neither may an anchor or a line of text. The in-game race cursor is also
+  // !important and scoped to body.in-game, so it still wins during a match.
+  styleEl.textContent = `body:not(.in-game), body:not(.in-game) * { cursor: ${cursorValue(sheet, cell)} !important; }`;
 }

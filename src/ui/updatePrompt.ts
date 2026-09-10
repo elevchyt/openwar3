@@ -34,10 +34,14 @@ const RELEASES_URL = "https://github.com/elevchyt/openwar3/releases";
  * painted frame and wrapped after the fact. It keeps its gold (the anchor inherits the span's
  * colour) and gains an underline, and takes the pointer back: the frame it sits in is
  * `pointer-events: none` like every FDF frame, so the anchor says otherwise for itself.
+ *
+ * The gold span is the one INSIDE the frame's span, never the frame's span itself: `paintText`
+ * (ui/fdf/render.ts) writes the frame's FontColor inline on the outer span, so a bare
+ * `span[style]` matches that first and the whole message — question and all — became the link.
  */
 function linkVersionLine(dialog: GlueDialog): void {
   const text = dialog.frame("DialogText");
-  const gold = text?.querySelector<HTMLElement>("span[style]");
+  const gold = text?.querySelector<HTMLElement>("span span[style]");
   if (!gold || gold.closest("a")) return;
   const a = document.createElement("a");
   a.className = "update-release-link";
@@ -84,7 +88,9 @@ export function watchForUpdates(container: HTMLElement, vfs: DataSource): () => 
         if (asked) return;
         asked = true;
         void show(
-          `A new version of OpenWar3 is available|n|n|cffffcc00Version ${state.version ?? "?"}|r|n|nDownload it now?`,
+          // The gold line names the build the way the overlay's caption does ("Downloading
+          // OpenWar3 0.2.4…"), and it is the ONLY part of the message that is a link.
+          `A new version of OpenWar3 is available|n|n|cffffcc00OpenWar3 ${state.version ?? "?"}|r|n|nDownload it now?`,
           "yesno",
           () => {
             downloadUpdate();

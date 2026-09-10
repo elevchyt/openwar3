@@ -182,13 +182,13 @@ body.in-game {
 .glue-dialog-scrim.dimmed { background: rgba(0, 0, 0, 0.55); }
 /* The update prompt's version line, made a link to the releases page (ui/updatePrompt.ts).
    Every FDF frame is pointer-events: none, so the anchor takes the mouse back for itself; the
-   gold is the wrapped span's own, inherited rather than restated. */
+   gold is the wrapped span's own, inherited rather than restated. No `cursor:` — a link keeps
+   the game's hand like everything else on the screen (ui/cursor.ts). */
 .update-release-link {
   pointer-events: auto;
   color: inherit;
   text-decoration: underline;
   text-underline-offset: 0.12em;
-  cursor: pointer;
 }
 .update-release-link:hover { filter: brightness(1.2); }
 

@@ -61,7 +61,7 @@ import { ModelViewerScene } from "./modelViewer";
 import { animPropsFor, buildAnimSet } from "./unitAnims";
 import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
-import { cursorPx } from "../ui/cursor";
+import { cursorPx, cursorValue } from "../ui/cursor";
 import { perfLog } from "../dev/perfLog";
 import { animStride, renderSize, videoSettings } from "./videoQuality";
 import { TerrainCull } from "./terrainCull";
@@ -10168,15 +10168,10 @@ export class MapViewerScene {
     document.documentElement.style.setProperty("--cursor-px", `${size}px`);
     document.documentElement.style.setProperty("--cursor-hotspot-x", `${CURSOR_HOTSPOT[0]}px`);
     document.documentElement.style.setProperty("--cursor-hotspot-y", `${CURSOR_HOTSPOT[1]}px`);
-    const frame = document.createElement("canvas");
-    frame.width = size;
-    frame.height = size;
-    const fctx = frame.getContext("2d")!;
-    fctx.imageSmoothingEnabled = true; // bilinear, as everywhere the cursor art is enlarged
-    fctx.drawImage(sheet, 0, 0, cell, cell, 0, 0, size, size);
-    const url = frame.toDataURL();
-    // Hotspot near the gauntlet's fingertip (top-left).
-    const rule = `url(${url}) ${CURSOR_HOTSPOT[0]} ${CURSOR_HOTSPOT[1]}, auto`;
+    // Hotspot near the gauntlet's fingertip (top-left). With a 32 px twin behind the enlarged
+    // cell rather than `auto`, so the OS pointer never shows through near the right or bottom
+    // edge — which is where the whole command card is (ui/cursor.ts `cursorValue`).
+    const rule = cursorValue(sheet, cell);
     document.body.style.cursor = rule;
     // The other two states this sheet answers for, both read off `UI\Cursor\<race>Cursor.mdx`
     // rather than guessed at — the model names its sequences and drives the cell with a

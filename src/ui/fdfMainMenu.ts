@@ -81,6 +81,7 @@ export function mountFdfMainMenu(
     // The realm-select sub-panel is hidden until you enter Battle.net (as the engine's
     // glue script hides it), but the little search-region button (magnifying glass)
     // next to Online is kept — the developer wants it shown even without region logic.
+    // Both it and Online itself are DISABLED for now (see OFFLINE_BUTTONS).
     hidden: ["RealmSelect"],
     // Wider buttons than the 4:3-authored FDF, to fill the widescreen chain panel
     // (text stays its FDF size — only the widget widens).
@@ -109,10 +110,22 @@ export function mountFdfMainMenu(
       ExitButton: h.onQuit ?? (() => window.close()),
     },
     // Re-run on every build: a resize throws the DOM away and rebuilds it, taking the
-    // anchor with it (ui/fdf/render.ts).
-    onBuild: (s) => linkRepo(s),
+    // anchor AND the disabled state with it (ui/fdf/render.ts).
+    onBuild: (s) => {
+      linkRepo(s);
+      for (const name of OFFLINE_BUTTONS) s.setEnabled(name, false);
+    },
   });
 }
+
+/**
+ * Online and the realm button beside it (MainMenu.fdf's `BattleNetButton` and its
+ * `RealmButton`, the magnifying glass), greyed out: there is no online service behind them
+ * yet. Disabled rather than hidden, so the chain keeps the reference's shape, and each wears
+ * its own FDF `ControlDisabledBackdrop` — `setEnabled` also makes the click and the N
+ * accelerator do nothing (ui/fdf/render.ts `wireButton`).
+ */
+const OFFLINE_BUTTONS = ["BattleNetButton", "RealmButton"];
 
 /** MainMenuFrame with the version line added as a direct child — which also makes it one of
  *  the screen's PANELS, so it fades in and out with everything else on it. */
