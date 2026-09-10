@@ -12407,11 +12407,18 @@ export class SimWorld {
    * unqualified clip every one of these models ships.
    */
   bodySize(u: SimUnit): string {
-    if (u.flying) {
-      const scale = this.unitReg?.get(u.typeId)?.selScale ?? 1;
-      return scale >= 2 ? "Large" : scale >= 1.5 ? "Medium" : "";
-    }
-    return u.radius >= 48 ? "Large" : u.radius >= 24 ? "Medium" : "";
+    const props = this.unitReg?.get(u.typeId)?.attachAnimProps ?? [];
+    return props.includes("large") ? "Large" : props.includes("medium") ? "Medium" : "";
+  }
+
+  /** Is `u` held where it stands by a ROOT buff — Ensnare, Web, Entangling Roots? Every one
+   *  of them pins at value 1 (see spells.ts), so the buff's presence is the whole answer.
+   *
+   *  A pinned unit is not a tower: it keeps its move orders for when the net comes off, which
+   *  is why this is not `canPursue`. What it shares with a tower is the FIGHT — it can strike
+   *  only what is already in reach, and a target it picks up must be one of those. */
+  private pinned(u: SimUnit): boolean {
+    return u.buffs.some((b) => b.kind === "root");
   }
 
   /** How many live units of a type a player has — the cap check behind Carrion Beetles'
@@ -15222,6 +15229,12 @@ export class SimWorld {
       u.attackStalls = 0; // in the fight — clear the stall streak
       return;
     }
+    // A PINNED unit is not failing to close, it is held (see engage): no headway is the
+    // expected reading, and re-deciding would only hand it another target it cannot reach.
+    if (this.pinned(u)) {
+      u.stallT = 0;
+      return;
+    }
     // Committed to standing after giving up (or briefly cooling down after a block):
     // don't re-probe — engage() is already holding position while repathT ticks down.
     if (u.repathT > 0) {
@@ -15511,7 +15524,11 @@ export class SimWorld {
         this.stop(u.id);
         return;
       }
-      if (noChase) {
+      // PINNED, the unit fights as if on Hold Position. The order stands — when the net comes
+      // off it is carried out — but no step is taken toward it: "chasing" at speed 0 held the
+      // unit on a move it could not make and so out of the swing it could. tickAttack's
+      // in-strike-range switch hands a fight it picked up itself to whatever is beside it.
+      if (noChase || this.pinned(u)) {
         this.settle(u); // Hold Position: attack in range only, never step forward
         return;
       }
@@ -20338,9 +20355,18 @@ export class SimWorld {
     // ally (issue #24: "units stand behind after the first kill; they should help friends
     // fighting nearby"). This is what stops a back-rank unit idling while its group fights
     // a few paces ahead. Creeps keep their own camp cohesion (campFightTarget) instead.
+    //
+    // A PINNED unit (Ensnare, Web, Entangling Roots) looks no farther than it can strike. It
+    // cannot close on anything else, so a lock on the nearest enemy in its acquisition range
+    // left it aimed at an archer across the field while the Grunt beside it chopped away —
+    // and it answers no friend's fight for the same reason.
+    const pinned = this.pinned(u);
+    const reach = pinned ? Math.min(range, u.weapon.ranged ? u.weapon.range : u.weapon.range + ATTACK_LEASH) : range;
     const best = u.isCreep
-      ? this.bestCreepTarget(u, range, true)
-      : this.acquireTarget(u, range) ?? this.assistTarget(u, ASSIST_RANGE);
+      ? this.bestCreepTarget(u, reach, true)
+      : pinned
+        ? this.acquireTarget(u, reach)
+        : this.acquireTarget(u, range) ?? this.assistTarget(u, ASSIST_RANGE);
     if (best) {
       // A fight it chose for itself is leashed to where it stands (see setAutoGuardPost).
       // Only from IDLE: an attack-move or a patrol already has somewhere to be, and planting

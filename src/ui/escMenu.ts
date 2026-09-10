@@ -54,6 +54,9 @@ export interface EscMenuActions {
   onReturn(): void;
   /** Leave the match for the main menu — Quit Mission, and the End Game button's point. */
   onEndGame(): void;
+  /** Exit Program, once confirmed: close the GAME, not just the match. Absent falls back to
+   *  `onEndGame`, which is also what a page that cannot close itself should do. */
+  onExitProgram?(): void;
   /** Pause Game / Resume Game: close the menu and TOGGLE the match's own pause — the one
    *  button on the panel that does not simply put the world back the way it found it. */
   onPause?(): void;
@@ -267,12 +270,13 @@ export class EscMenu {
       EndGameButton: () => this.go("endgame"),
       ReturnButton: () => this.actions.onReturn(),
       // --- EndGamePanel. "Quit Mission" leaves the match; "Exit Program" asks first, as in
-      // the game — and in a browser the nearest honest thing to exiting is the same door.
+      // the game, and then closes the program (`onExitProgram` — in a browser, which cannot
+      // close a tab it did not open, the nearest honest thing is leaving the match).
       QuitButton: () => this.actions.onEndGame(),
       ExitButton: () => this.go("confirmquit"),
       PreviousButton: () => this.go("main"),
       // --- ConfirmQuitPanel
-      ConfirmQuitQuitButton: () => this.actions.onEndGame(),
+      ConfirmQuitQuitButton: () => (this.actions.onExitProgram ?? this.actions.onEndGame)(),
       ConfirmQuitCancelButton: () => this.go("endgame"),
       // --- HelpPanel / TipsPanel
       HelpOKButton: () => this.go("main"),

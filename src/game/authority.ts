@@ -263,6 +263,11 @@ export class Authority {
     let made = 0;
     for (const u of this.sim.units.values()) {
       if (u.owner !== owner) continue;
+      // An ILLUSION eats no food. Mirror Image and the Wand of Illusion both spawn the real
+      // unit type (so the copy is indistinguishable), and that type's `fused` came along with
+      // it — three Blademaster images read as 15 food on the bar and could block a Barracks
+      // queue. docs/illusions.md: "it costs no food, and it is meant to die".
+      if (u.isIllusion) continue;
       const def = this.registry.get(u.typeId);
       used += def?.foodUsed ?? 0;
       made += def?.foodMade ?? 0;

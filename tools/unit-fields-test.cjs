@@ -383,7 +383,7 @@ function baseDef(over = {}) {
   return {
     id: "uaco", name: "Acolyte", typeName: "acolyte", race: "undead",
     model: "units\\undead\\Acolyte\\Acolyte.mdx", modelScale: 1, selScale: 1,
-    animWalkSpeed: 200, animRunSpeed: 200, animBlend: 0.15, animProps: [],
+    animWalkSpeed: 200, animRunSpeed: 200, animBlend: 0.15, animProps: [], attachAnimProps: [],
     soundSet: "Acolyte", tint: [1, 1, 1], targType: "ground",
     weaponSound: "", lumberSound: "", armorSound: "Flesh",
     icon: "", description: "", tip: "", hotkey: "", buttonX: 0, buttonY: 0,

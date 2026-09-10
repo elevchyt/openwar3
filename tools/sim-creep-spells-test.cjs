@@ -525,6 +525,37 @@ console.log("\nan Ogre Magi Bloodlusts the OGRE, and itself only when there is n
   check("a lone Magi Bloodlusts itself", buffIdOn(lone, "Bblo"), true);
 }
 
+console.log("\na netted unit fights what is beside it, and chases nothing");
+{
+  // Ensnare, Web and Entangling Roots pin a unit where it stands (SimWorld.pinned). It still
+  // swings at an enemy in reach; what it must not do is lock onto one it could only reach by
+  // walking, which left it "chasing" at speed 0 while the enemy beside it chopped away.
+  const pin = (u) => u.buffs.push({ kind: "root", group: "ensnare", timeLeft: 60, sourceId: 0, value: 1, value2: 0, art: "", fx: [], buffId: "Beng", delay: 0 });
+
+  // Control: free, a Footman locks onto an enemy 350 away (its acquisition range is wider).
+  const w0 = world();
+  const free = footman(w0, 3000, 3000);
+  const far0 = spawn(w0, "hfoo", 3350, 3000, 1, 1);
+  pin(far0); // held, so it does not walk the fight to us
+  run(w0, null, 2);
+  check("free, a Footman acquires an enemy out of strike reach", free.targetId, far0.id);
+
+  const w = world();
+  const f = footman(w, 3000, 3000);
+  pin(f);
+  const far = spawn(w, "hfoo", 3350, 3000, 1, 1);
+  pin(far);
+  run(w, null, 2);
+  check("netted, it does not lock onto the one it cannot reach", f.targetId, null);
+  const at = [f.x, f.y].join(); // where it settled onto its cell, which is not a step
+  const near = spawn(w, "hfoo", 3070, 3000, 1, 1);
+  pin(near);
+  run(w, null, 3);
+  check("…but it does take the one beside it", f.targetId, near.id);
+  check("…and hits it", near.hp < near.maxHp, true);
+  check("…without taking a step", [f.x, f.y, f.moving].join(), `${at},false`);
+}
+
 console.log("\nthe net is picked per target: the ground model, the air model, and three sizes");
 {
   // `[Aens] buffid1 = Bena,Beng` — an AIR row (`ensnare_AirTarget.mdx`, attached chest,mount)
@@ -541,17 +572,20 @@ console.log("\nthe net is picked per target: the ground model, the air model, an
   check("the Footman is ensnared", !!net, true);
   check("…by the GROUND buff row", net && net.buffId, "Beng");
   check("…wearing ensnareTarget.mdx", net && /ensnareTarget\.mdx$/i.test(net.art), true);
-  check("…in the Medium set (a Footman's collision is 31)", net && net.fx[0].anim, "Medium");
+  check("…in the plain, small set (a Footman names no Attachmentanimprops)", net && net.fx[0].anim, "");
 
-  // The size classes, off the two numbers the data measures a body with.
-  check("a Peasant (collision 16) is the plain, small set", w.bodySize(spawn(w, "hpea", 2000, 2000, 0, 0)), "");
-  check("a Tauren (48) is Large", w.bodySize(spawn(w, "otau", 2100, 2000, 0, 0)), "Large");
+  // The size classes are the unit's own `Attachmentanimprops` ("Art - Required Animation
+  // Names - Attachments"). Reading them off collision size gave a Footman the Medium net,
+  // which hangs at a Knight's height — floating round its waist instead of at its feet.
+  check("a Peasant (none) is the plain, small set", w.bodySize(spawn(w, "hpea", 2000, 2000, 0, 0)), "");
+  check("a Tauren (medium) is Medium", w.bodySize(spawn(w, "otau", 2100, 2000, 0, 0)), "Medium");
+  check("a Kodo Beast (large) is Large", w.bodySize(spawn(w, "okod", 2150, 2000, 0, 0)), "Large");
   const gar = spawn(w, "ugar", 2200, 2000, 0, 0);
-  gar.flying = true; // the flyers' collision is 8 across the board — scale is their size
-  check("a Gargoyle (scale 1.25) is small", w.bodySize(gar), "");
+  gar.flying = true;
+  check("a Gargoyle (medium) is Medium", w.bodySize(gar), "Medium");
   const wyrm = spawn(w, "ufro", 2300, 2000, 0, 0);
   wyrm.flying = true;
-  check("a Frost Wyrm (2.25) is Large", w.bodySize(wyrm), "Large");
+  check("a Frost Wyrm (large) is Large", w.bodySize(wyrm), "Large");
   // …and an AIR target takes the air row, with its own attachment. A second trapper, because
   // the first one's Ensnare is on its `cool1` = 15s cooldown.
   const trapper2 = creep(w, "nftt", 1000, 1200);

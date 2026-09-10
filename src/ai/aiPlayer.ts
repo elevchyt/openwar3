@@ -1911,7 +1911,7 @@ export class AiPlayer {
     let used = 0;
     let made = 0;
     for (const u of this.host.world.units.values()) {
-      if (u.owner !== this.player || u.hp <= 0) continue;
+      if (u.owner !== this.player || u.hp <= 0 || u.isIllusion) continue; // an illusion eats no food (GameAuthority.foodFor)
       const def = this.host.registry.get(u.typeId);
       if (!def) continue;
       used += def.foodUsed;

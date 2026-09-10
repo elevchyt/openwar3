@@ -143,6 +143,16 @@ export interface UnitDef {
   // which set is its own — the Keep is `upgrade,first`, the Castle `upgrade,second`, the Arcane
   // Tower `upgrade,third`. Without this, every tier renders as tier 1. See applyAnimProps().
   animProps: string[];
+  /**
+   * UnitFunc `Attachmentanimprops` — "Art - Required Animation Names - Attachments": the
+   * qualifiers an effect ATTACHED to this unit plays its clips with. It is how the game sizes
+   * a buff model that ships one set of clips per body (Ensnare's net), and it is the whole
+   * size class: unset — the small set — on the Peasant, the Footman and the Grunt, `medium` on
+   * the Tauren, the Knight, the Gargoyle and the Gryphon Rider, `large` on the Kodo Beast and
+   * the Frost Wyrm. A tiered row carries its tier too (`upgrade,second,large`). See
+   * SimWorld.bodySize.
+   */
+  attachAnimProps: string[];
   soundSet: string; // unitUI "unitSound" label (e.g. "Footman") → UI\SoundInfo lookups
   /**
    * UnitUI `red`/`green`/`blue` — "Art - Tinting Color", the model's own vertex colour as
@@ -585,6 +595,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     // simply cannot attack.
     const slots = weaponSlots(w, fn, primaryVal, u);
     const animProps = fn ? (str(fn, "Animprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
+    const attachAnimProps = fn ? (str(fn, "Attachmentanimprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
 
     defs.set(id, {
       id,
@@ -598,6 +609,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       animRunSpeed: u ? num(u, "run", 0) : 0,
       animBlend: u ? num(u, "blend", 0.15) : 0.15,
       animProps,
+      attachAnimProps,
       soundSet: u ? str(u, "unitSound") : "",
       // "Art - Tinting Color": three 0–255 columns, absent on an untinted row. See UnitDef.tint.
       tint: u ? [num(u, "red", 255) / 255, num(u, "green", 255) / 255, num(u, "blue", 255) / 255] : [1, 1, 1],
@@ -981,6 +993,7 @@ export function destructibleUnitDef(d: {
     animRunSpeed: 0,
     animBlend: 0.15,
     animProps: [],
+    attachAnimProps: [],
     soundSet: "",
     tint: [1, 1, 1],
     // A destructible's own weapon-target class is carried in `classification` (see the tail of

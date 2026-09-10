@@ -160,6 +160,9 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // its tier here rendered as tier 1 without this. Note this arrives too late to re-pick the
   // `_V1` model variant (units.ts unitModelPath), which only the SLK path does.
   uani: (d, v) => { d.animProps = targetList(s(v)); },
+  // "Art - Required Animation Names - Attachments" (`Attachmentanimprops`) — the size of clip
+  // an effect riding this unit plays (Ensnare's net; see SimWorld.bodySize).
+  uaap: (d, v) => { d.attachAnimProps = targetList(s(v)); },
   uico: (d, v) => { d.icon = normIcon(s(v)); },
   ubpx: (d, v) => { d.buttonX = n(v); },
   ubpy: (d, v) => { d.buttonY = n(v); },
@@ -431,7 +434,7 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
 
   // Art we do not drive yet. Each names a real WC3 behaviour; the note is the feature that
   // has to exist before the field has anywhere to land.
-  uaap: "no attachment system (Attachmentanimprops)", ualp: "no attachment system (Attachmentlinkprops)",
+  ualp: "no attachment system (Attachmentlinkprops)",
   ubpr: "no per-bone art overrides (Boneprops)",
   ucua: "no caster-upgrade art (Casterupgradeart)", ussi: "no score screen (ScoreScreenIcon)",
   uspa: "no per-unit Specialart hook", utaa: "no per-unit Targetart hook",
@@ -582,6 +585,7 @@ function cloneDef(base: UnitDef, id: string): UnitDef {
     classification: [...base.classification],
     properNames: [...base.properNames],
     animProps: [...base.animProps],
+    attachAnimProps: [...base.attachAnimProps],
     upgradesUsed: [...base.upgradesUsed],
     tint: [base.tint[0], base.tint[1], base.tint[2]],
     weapons: base.weapons.map((w) => ({ ...w, targets: [...w.targets], splashTargets: [...w.splashTargets] })),

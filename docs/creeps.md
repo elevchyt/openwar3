@@ -213,12 +213,18 @@ the data rather than in the handler:
   sizes. (`ensnare_AirTarget.mdx` writes "Death medium" in lower case; matching is
   case-insensitive.) The plain set IS the small one. Which set a cast wants is `SimWorld.
   bodySize` and rides on the buff as `BuffFx.anim`; the renderer spends it in `sizedSeq`, and
-  a model with only one set falls back to it. WC3 states no size CLASS anywhere, so the
-  classes are read off the two numbers that measure a body and **the thresholds are ours**: a
-  ground unit by its COLLISION, which the game gives every walker in exactly three sizes
-  (16 / 31–32 / 48), and a flyer by its model SCALE, because collision is not a size for a
-  flyer at all — every player air unit carries 8 (they do not collide) while the creep dragons
-  carry 48.
+  a model with only one set falls back to it. The size CLASS is in the data: UnitFunc
+  `Attachmentanimprops` ("Art - Required Animation Names - Attachments") names the qualifier
+  every attached effect plays with — nothing (the small set) on the Peasant, the Footman and
+  the Grunt, `medium` on the Tauren, the Knight, the Gargoyle and the Gryphon Rider, `large`
+  on the Kodo Beast and the Frost Wyrm. It used to be guessed off collision size and model
+  scale, which put every Footman in the MEDIUM net — authored for a Knight's height, so it
+  hung round the waist instead of at the feet.
+- **The body under the net keeps living.** An ensnared unit keeps its move order with speed 0;
+  the renderer must not read that as walking (it froze mid-stride at walk rate 0, and the net —
+  parented to its attachment node, so updated on the host's dt × timeScale — froze with it).
+  And a pinned unit FIGHTS: it acquires only inside its strike reach and never chases
+  (`SimWorld.pinned`, `tickAcquire`, `engage`), so a netted Grunt swings at what is beside it.
 
 The MISSILE needed nothing: `[Aens] Missileart = EnsnareMissile.mdl` at `Missilespeed` 1500,
 so `resolveCast` throws it like any other unit-target spell with a missile, and the renderer

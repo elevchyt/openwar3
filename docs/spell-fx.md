@@ -116,8 +116,9 @@ match case-insensitively.)
 Which set a given cast wants is a fact about the body it landed on, so it is decided where
 that is known (`SimWorld.bodySize`) and carried on the buff as `BuffFx.anim`; the renderer
 spends it in `sizedSeq`, which falls back to the plain clips for every other model in the
-game. WC3 states no size CLASS for a unit anywhere — see docs/creeps.md for the two numbers
-the classes are read off and the note that the thresholds are ours.
+game. The size CLASS is the unit's own UnitFunc `Attachmentanimprops` ("Art - Required
+Animation Names - Attachments": `medium`, `large`, or nothing for the small set) — see
+docs/creeps.md.
 
 ## 3. Lightning — a ribbon, not a model
 

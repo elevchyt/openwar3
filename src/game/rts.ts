@@ -2480,6 +2480,28 @@ export class RtsController {
     return this.tryTargetArmedAt(hero.id);
   }
 
+  /**
+   * The 3D PORTRAIT's half of `tryTargetArmedAt`: an armed spell, item or attack clicked on
+   * the portrait is aimed at the unit the portrait shows — the primary selection. It is how a
+   * Priest puts Inner Fire on HIMSELF and how a hero drinks a Healing Salve without finding his
+   * own body under the cursor, and in the game it is simply one more place to click the unit.
+   *
+   * Answers what became of the click, not just whether it was taken, because the portrait's
+   * own meaning (snap the camera to the unit) must not ALSO fire on a refusal: `"refused"`
+   * keeps the order armed exactly as the same click on the body does, `"spent"` used or
+   * disarmed it, and `null` means nothing aimable was armed — the click is the camera's.
+   */
+  tryTargetArmedAtPortrait(): "spent" | "refused" | null {
+    const id = this.primary;
+    if (id === null || !this.sim.units.has(id)) return null;
+    const aimed =
+      this.orderMode === "attack" ||
+      (this.orderMode === "cast" && this.armedCast !== null) ||
+      (this.orderMode === "item" && this.armedItem?.mode === "useunit");
+    if (!aimed) return null;
+    return this.tryTargetArmedAt(id) ? "spent" : "refused";
+  }
+
   /** A worker of the local player that's doing nothing (not gathering, building,
    *  moving, or constructing) — the ones the idle-worker button/F8/~ cycle.
    *
@@ -4275,7 +4297,13 @@ export class RtsController {
         const expected = u.speed * dt;
         const ratio = expected > 1e-3 ? Math.hypot(u.x - prevX, u.y - prevY) / expected : 1;
         e.moveEma += (Math.min(ratio, 1) - e.moveEma) * MOVE_EMA_ALPHA;
-        const effMoving = u.moving && e.moveEma >= MOVE_ANIM_MIN_RATIO;
+        // …and a unit with no speed at all is not walking, whatever its order says. An
+        // ENSNARED (or Webbed, or Entangled) unit keeps its move or chase order under the net
+        // with `speed` 0, and `expected` 0 read as "on schedule" — so it held the walk clip at
+        // walkAnim's rate 0 and stood frozen mid-stride. Worse, a buff model parented to its
+        // attachment node is updated with the HOST's dt × timeScale (mdx-m3-viewer
+        // updateNodes → child.update), so the net froze with it. It stands, and breathes.
+        const effMoving = u.moving && u.speed > 0 && e.moveEma >= MOVE_ANIM_MIN_RATIO;
         let seq = pickSequence(e.anims, u, effMoving);
         // Walking re-rates the cycle to the unit's live move speed (and may swap in a
         // "Walk Fast" gait); every other pose plays at its authored rate — including the

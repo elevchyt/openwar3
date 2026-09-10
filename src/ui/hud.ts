@@ -262,6 +262,9 @@ export interface HudDriver {
   /** The same, aimed at the hero behind hero-bar button `index` — a hero is targetable
    *  through its portrait exactly as a unit is through its grid icon. */
   tryTargetArmedAtHero(index: number): boolean;
+  /** The same, aimed at the unit the 3D portrait shows (self-casts: Inner Fire on the Priest,
+   *  a Healing Salve on its own hero). `"refused"` stays armed; `null` = nothing was aimed. */
+  tryTargetArmedAtPortrait(): "spent" | "refused" | null;
   /** Cycle focus to the next (or, reversed, previous) sub-group (Tab / Shift+Tab). */
   cycleFocus(reverse: boolean): void;
   /** Select + centre on the next idle worker (idle-worker badge / F8 / ~). */
@@ -2570,11 +2573,32 @@ export class GameHud {
     this.portraitCanvasEl.className = "hud-portrait-canvas";
     this.portrait.appendChild(this.portraitCanvasEl);
     // Clicking the portrait snaps the camera to the unit; holding locks onto it.
+    //
+    // …unless something is AIMED. The portrait stands in for the unit it shows, as a hero-bar
+    // button and a group-grid icon do, so an armed spell, item or attack is spent on that unit
+    // (`tryTargetArmedAtPortrait`) — the self-cast. Neither a use nor a refusal also moves the
+    // camera, and the release of an aimed press must not either, hence `aimed`.
+    let aimed = false;
     this.portrait.addEventListener("pointerdown", (e) => {
+      aimed = false;
+      if (e.button === 0) {
+        const r = this.driver.tryTargetArmedAtPortrait();
+        if (r !== null) {
+          aimed = true;
+          if (r === "spent") this.clearOrderMode();
+          return;
+        }
+      }
       this.portrait.setPointerCapture(e.pointerId);
       this.driver.focusSelected(true);
     });
-    this.portrait.addEventListener("pointerup", () => this.driver.focusSelected(false));
+    this.portrait.addEventListener("pointerup", () => {
+      if (aimed) {
+        aimed = false;
+        return;
+      }
+      this.driver.focusSelected(false);
+    });
 
     this.selHpText = document.createElement("div");
     this.selHpText.className = "hud-hp-value";

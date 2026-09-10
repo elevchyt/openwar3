@@ -38,6 +38,7 @@ import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplat
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
 import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, requiredHeroLevel, aoeCursorRadius } from "../data/abilities";
+import { isDesktopApp } from "../assets/nativeInstall";
 import { loadCommandStrings, disabledIconPath, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
@@ -7145,6 +7146,7 @@ export class MapViewerScene {
       selectSingle: (simId) => this.rts?.selectSingle(simId),
       tryTargetArmedAt: (simId) => this.rts?.tryTargetArmedAt(simId) ?? false,
       tryTargetArmedAtHero: (index) => this.rts?.tryTargetArmedAtHero(index) ?? false,
+      tryTargetArmedAtPortrait: () => this.rts?.tryTargetArmedAtPortrait() ?? null,
       cycleFocus: (reverse) => this.rts?.cycleFocus(reverse),
       cycleIdleWorker: () => {
         if (this.rts?.cycleIdleWorker()) {
@@ -7253,6 +7255,12 @@ export class MapViewerScene {
     this.hud = new GameHud(ui, driver);
     this.mountScriptUi(ui);
     this.gameMenu?.dispose();
+    const endGame = (): void => {
+      this.gameMenu?.hide();
+      this.playerPaused = false;
+      this.syncPanelPause();
+      this.onExit?.();
+    };
     this.gameMenu = new EscMenu(ui, this.vfs, SKIN_SECTION[this.localRace], {
       // Return to Game puts back only what OPENING the menu took away. A match somebody
       // deliberately stopped stays stopped — that pause is not this panel's to lift, and the
@@ -7261,12 +7269,12 @@ export class MapViewerScene {
         this.gameMenu?.hide();
         this.syncPanelPause();
       },
-      onEndGame: () => {
-        this.gameMenu?.hide();
-        this.playerPaused = false;
-        this.syncPanelPause();
-        this.onExit?.();
-      },
+      onEndGame: endGame,
+      // Exit Program closes the GAME. The desktop app is one window, and closing it quits the
+      // process (electron/main.mjs `window-all-closed`), whose `before-quit` also takes a LAN
+      // host's relay down cleanly. A browser tab cannot close itself unless a script opened
+      // it, so there the button does the nearest honest thing and leaves the match.
+      onExitProgram: () => (isDesktopApp() ? window.close() : endGame()),
       // Pause Game / Resume Game — ONE button, and in a LAN match the request crosses the
       // wire before anything here moves (see `askPause`).
       onPause: () => {
