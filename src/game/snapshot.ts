@@ -276,6 +276,7 @@ export interface UnitSnapshot {
   swingSeq: number;
   chopSeq: number;
   swingBroken: boolean;
+  swingFollowThrough: boolean;
   swingSlam: boolean;
   altModel: boolean;
   /** Seconds left on a TIMED alternate form — a Militia's 40 (`[Amil]` HeroDur1), a raging
@@ -632,6 +633,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     swingSeq: 0,
     chopSeq: 0,
     swingBroken: false,
+    swingFollowThrough: false,
     swingSlam: false,
     altModel: u.altModel,
     altFormLeft: 0, // a memory has no live clock on it — the same rule the rest of this stub keeps
@@ -764,6 +766,7 @@ export function snapshotFor(
       swingSeq: u.swingSeq,
       chopSeq: u.chopSeq,
       swingBroken: u.swingBroken,
+      swingFollowThrough: u.swingFollowThrough,
       swingSlam: u.swingSlam,
       altModel: u.altModel,
       altFormLeft: u.altFormLeft,

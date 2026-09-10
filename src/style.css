@@ -476,8 +476,8 @@ body.hud-tooltip-skinned .unit-hover-tooltip {
 }
 .uht-line { white-space: nowrap; }
 
-/* The worker count a gold mine wears — "5/5" across a crewed Entangled or Haunted Gold Mine,
-   "3" across a classic one being worked (render/worldOverlays.ts syncCrewLabels, read for the
+/* The worker count a gold mine wears — "3/5" across a classic mine being worked and across a
+   crewed Entangled or Haunted Gold Mine alike (render/worldOverlays.ts syncCrewLabels, read for the
    local side in rts.ts updateMineCrews). The game prints it in the TOOLTIP's dress — the
    human-tooltip-border strip around the tooltip's slate — so once an install is mounted it
    wears the same nine-patch and fill the two slabs above do; placeholder chrome until then. */

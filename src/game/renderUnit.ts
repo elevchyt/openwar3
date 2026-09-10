@@ -173,6 +173,9 @@ export interface RenderUnit {
   readonly swingBroken: boolean;
   readonly swingSlam: boolean;
   readonly swingSeq: number;
+  /** The last swing KILLED its target and is being followed through (SimUnit
+   *  .swingFollowThrough) — the attack clip plays out instead of snapping to a stand. */
+  readonly swingFollowThrough: boolean;
   readonly chopSeq: number;
   /** Live move speed — the walk clip is re-rated against the model's authored gait. */
   readonly speed: number;

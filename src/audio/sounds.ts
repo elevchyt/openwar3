@@ -175,6 +175,18 @@ const MAX_VOICES = 8; // concurrent voice lines across all sources (safety cap o
  *  generous enough that a normal fight never drops, small enough to bound a mass battle. */
 const CHANNEL_VOICES = 16;
 
+/** The decoded-PCM cache (`SoundBoard.buffers`) may never hold more than this many bytes.
+ *  This budget is OURS — no file in the install describes one — and is sized so the cache
+ *  holds the music overlaps a real session actually touches: the menu theme is still fading
+ *  as the match's own track decodes (~40-60 MB decoded each), so two long tracks can sit in
+ *  the cache beside the whole voice/SFX set. It binds the memory the cache may hold while
+ *  staying quiet in play — see trimBuffers(), which sheds LRU and never flings a just-
+ *  decoded buffer straight back out. An eviction drops the NEXT request's decode cost (a few
+ *  ms off a warm VFS cache), not a live sound: a playing AudioBufferSourceNode holds its own
+ *  reference, so playback is untouched. Decoded PCM is float32 drawn from the decoder, so a
+ *  buffer's footprint is `length × channels × 4`. */
+const AUDIO_BUFFER_BUDGET = 192 * 1024 * 1024;
+
 /** A reserved slot on a channel. `src` is null until the clip's buffer finishes decoding
  *  (the reservation is taken synchronously, playback starts later); `dead` marks a voice
  *  preempted before it ever started, so the decode callback knows not to play it. */
@@ -310,6 +322,11 @@ export class SoundBoard {
   private master: GainNode | null = null;
   private tables = new Map<string, Table | null>();
   private buffers = new Map<string, Promise<AudioBuffer | null>>();
+  /** Decoded-PCM footprint in bytes per cached path, once resolved — the LRU's eviction
+   *  ledger for the budget above (AUDIO_BUFFER_BUDGET). Absent while a path is still being
+   *  decoded or failed, which is exactly what makes it "not yet worth shedding". */
+  private bufferBytes = new Map<string, number>();
+  private buffersBytes = 0;
   private decoded = new Map<string, number>(); // path → seconds, once decoded (GetSoundFileDuration)
   private clips = new Map<string, Clip | null>(); // memoized "table|key" → clip
   // Active voice lines keyed by SOURCE (unit/building instance id). One line per
@@ -521,10 +538,10 @@ export class SoundBoard {
    * A cheap census for the session performance log (src/dev/perfLog.ts), read once a second.
    *
    * Audio earns its own row there because it is one of the few things a long match can
-   * accumulate SILENTLY: `buffers` is a decoded-PCM cache that only ever grows, and a voice
-   * or a loop that is never retired holds a live graph node the mixer keeps summing. Neither
-   * is visible in a frame breakdown — the cost lands on the audio thread — so the only way to
-   * see it is to count it.
+   * accumulate SILENTLY: `buffers` is a decoded-PCM cache (grown, then held against the
+   * AUDIO_BUFFER_BUDGET by LRU eviction), and a voice or a loop that is never retired holds
+   * a live graph node the mixer keeps summing. Neither is visible in a frame breakdown —
+   * the cost lands on the audio thread — so the only way to see it is to count it.
    */
   perfCounts(): Record<string, number> {
     let pooled = 0;
@@ -534,6 +551,7 @@ export class SoundBoard {
       loops: this.loops.size + this.scripts.size,
       playing: this.playing.size,
       audioBuffers: this.buffers.size,
+      audioBufferMB: Math.round(this.buffersBytes / (1024 * 1024)), // decoded PCM against the budget
     };
   }
 
@@ -1768,14 +1786,54 @@ export class SoundBoard {
     return clip;
   }
 
-  /** Decode (and cache) a WAV file's AudioBuffer. */
+  /** Decode (and cache) a WAV file's AudioBuffer. The cache is an LRU under a decoded-byte
+   *  budget (AUDIO_BUFFER_BUDGET): a hit moves the path to the newest end, and insertion at
+   *  the size limit sheds the oldest entries — see decode()/trimBuffers(). */
   private buffer(path: string): Promise<AudioBuffer | null> {
     let p = this.buffers.get(path);
-    if (!p) {
-      p = this.decode(path);
-      this.buffers.set(path, p);
+    if (p) {
+      this.touchBuffer(path);
+      return p;
     }
+    p = this.decode(path);
+    this.buffers.set(path, p);
     return p;
+  }
+
+  /** Promote a cached path to the newest end of the LRU. Map.set on an existing key does NOT
+   *  change its iteration position, so the promote is a delete then re-set. */
+  private touchBuffer(path: string): void {
+    const p = this.buffers.get(path);
+    if (!p) return;
+    this.buffers.delete(path);
+    this.buffers.set(path, p);
+  }
+
+  /** Shed the least-recently-used buffer(s) until the decoded-PCM budget is met. Entries
+   *  still being decoded (or that failed) hold no accounted bytes, so they are skipped —
+   *  they will be accounted on resolve and shed then if the budget is still over.
+   *
+   *  `keep` is the path that just resolved and pushed us over: it must never be shed in this
+   *  pass. Shedding it would throw the very buffer the caller just asked for straight back
+   *  out, and on a long music track that shed cascade wiped the WHOLE cache — everything
+   *  older, then the track itself, at which point every sound re-decodes from cold. Keeping
+   *  the newest bounds the overshoot to one buffer and lets the next play come from a warm
+   *  cache. */
+  private trimBuffers(keep?: string): void {
+    while (this.buffersBytes > AUDIO_BUFFER_BUDGET && this.buffers.size > (keep ? 1 : 0)) {
+      let shed = false;
+      for (const [path] of this.buffers) {
+        if (path === keep) continue;
+        const bytes = this.bufferBytes.get(path);
+        if (bytes === undefined) continue;
+        this.buffers.delete(path);
+        this.bufferBytes.delete(path);
+        this.buffersBytes -= bytes;
+        shed = true;
+        break;
+      }
+      if (!shed) return; // only unresolved (or kept) entries left — nothing sized to shed
+    }
   }
 
   private async decode(path: string): Promise<AudioBuffer | null> {
@@ -1787,6 +1845,17 @@ export class SoundBoard {
       const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
       const buf = await this.ctx.decodeAudioData(ab);
       this.decoded.set(path, buf.duration); // so GetSoundFileDuration can answer synchronously
+      if (this.buffers.has(path)) {
+        // Account only while still cached. A decode in flight can't be shed (its entry has
+        // no bytes yet, and trimBuffers() skips the unsized and keeps the just-resolved), so
+        // the check is defensive against future eviction paths — and the duration above is
+        // set regardless, so a GetSoundFileDuration answer is never lost.
+        this.touchBuffer(path);
+        const bytes = buf.length * buf.numberOfChannels * 4; // float32 decode − see AUDIO_BUFFER_BUDGET
+        this.bufferBytes.set(path, bytes);
+        this.buffersBytes += bytes;
+        this.trimBuffers(path); // never shed the one that just landed
+      }
       return buf;
     } catch {
       return null;

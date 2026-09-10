@@ -785,7 +785,13 @@ export class Authority {
         //   · a TAVERN takes anything of yours. The classic manual is explicit that this is
         //     not limited to its own shelf: "you can also use it to instantly revive your
         //     Heroes (neutral and race specific ones)".
-        if (!(tavern ? t.sellunits.length > 0 : t.revive && t.trains.includes(f.typeId))) return false;
+        //
+        // …and "a Tavern" is not "a shop that sells units". A Mercenary Camp, a Goblin
+        // Laboratory and a Shipyard are all `Sellunits` shops, and none of them wakes a hero:
+        // the Tavern does it with an ABILITY, `Aawa` "Revive Hero Instantly"
+        // (CommonAbilityStrings), which `ntav` carries (`Ane2,Avul,Aawa`) and every Mercenary
+        // Camp does not (`Ane2,Avul`, Units\UnitAbilities.slk). See SimWorld.revivesInstantly.
+        if (!(tavern ? this.sim.revivesInstantly(cmd.buildingId) : t.revive && t.trains.includes(f.typeId))) return false;
         if (this.sim.queueFull(cmd.buildingId)) return false; // before charging
         const def = this.registry.get(f.typeId);
         if (!def) return false;

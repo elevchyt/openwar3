@@ -105,6 +105,12 @@ quarters full: the answer the ability exists to hide, printed on their own scree
 never sees this bar at all — they get the timer — which is exactly why it is easy to leave
 wrong.)
 
+**…and an image is never a SHARER of a kill's experience.** `isHero` is true on a hero's copy (it
+has to be, for the panel), so `awardKillXp` must skip `isIllusion` explicitly, and `gainXp` refuses
+one as well. Counted as a sharer, a Blademaster standing with his three images split every kill four
+ways and banked a quarter of it — and the three quarters went nowhere, because the mirror pass then
+wrote his smaller total back over the copies. Mirror Image made its own caster level *slower*.
+
 Nothing in the MPQs carries the tint (`AOmi` declares no colour field); like the ghosting on
 invisible/ethereal units it is a hardcoded engine look.
 

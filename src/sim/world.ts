@@ -975,9 +975,10 @@ export type QueuedOrder =
   | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number; ax?: number; ay?: number }
   // The other half of the Gather button. Every harvest row carries a pair of faces —
   // `Art=BTNGatherGold` / `Unart=BTNReturnGoods` (see isHarvestCode) — and this is what the
-  // second one orders: take what you are carrying to the nearest depot, now. It takes no
-  // target, because the depot is not a thing the player picks.
-  | { kind: "returnresources" }
+  // second one orders: take what you are carrying to the nearest depot, now. The BUTTON takes
+  // no target, because the depot is not a thing the player picks — but a RIGHT-CLICK on one of
+  // your own depots is exactly that pick, and `depotId` carries it (SimUnit.returnDepotId).
+  | { kind: "returnresources"; depotId?: number }
   // `paid` is whether the cost has already left the stash. A build placed outright is paid at
   // the click (the gold drops the instant you put the ghost down); a SHIFT-queued one is not —
   // it is priced when its turn in the queue comes round, because a building queued behind two
@@ -1321,6 +1322,12 @@ export interface SimUnit {
   // move-canceled), so its attack clip must NOT resume — it stands out the recovery
   // until the next real swing fires (the swing clears this). Reset every swing start.
   swingBroken: boolean;
+  // The swing that last landed KILLED its target, and the attacker is following it through.
+  // The sim stands a unit down the tick its target drops, which is right for the order and
+  // wrong for the body — the blow still has its backswing to play — so the renderer holds the
+  // attack clip on this until it ends. Set in kill(); cleared by the next swing's start and by
+  // any fresh order (dispatch), which is the Stop-cancel the game has.
+  swingFollowThrough: boolean;
   // Swing procs, rolled ONCE at the swing's start (see engage) and spent at its damage
   // point. They are decided up front — not at the blow — because the strike they modify
   // has its own animation: WC3 models that carry a proc-on-attack passive carry an
@@ -1425,6 +1432,10 @@ export interface SimUnit {
   hasClaim: boolean;
   blockedT: number; // seconds a mover has been unable to take the next tile (forces a reroute)
   resKind: "gold" | "lumber" | null; // active harvest target kind
+  // The depot a Return Goods was AIMED at — a right-click on one of your own halls with a laden
+  // worker (rts.ts orderOnBuilding) — or 0 for "the nearest", which is every other return.
+  // Honoured by nearestDepot while it still takes the load; spent on the deposit.
+  returnDepotId: number;
   resId: number; // mine/tree id being harvested
   /** Consecutive re-paths a gatherer has spent trying to actually REACH its node/depot
    *  after stopping short of it. Bounded so a boxed-in gatherer still parks and works
@@ -3494,6 +3505,23 @@ export class SimWorld {
     const u = this.units.get(shopId);
     if (!u || this.raising(u)) return false;
     return this.isShop(u.typeId) || (u.building?.stock?.size ?? 0) > 0;
+  }
+
+  /** Does this shop bring fallen heroes back — is it a TAVERN?
+   *
+   *  Not every shop that sells units is one. The Tavern revives with an ABILITY of its own,
+   *  `Aawa` "Revive Hero Instantly" (Units\CommonAbilityStrings.txt; its Func's `Order=awaken`
+   *  is MiscGame's `HeroAwaken*` half of the revive ladder), and the data puts it on exactly
+   *  the Tavern: `ntav` `abilList=Ane2,Avul,Aawa`, where every Mercenary Camp is `Ane2,Avul`
+   *  (Units\UnitAbilities.slk). Asking `Sellunits` instead let a player buy a dead hero back
+   *  at a Mercenary Camp. Read off the TYPE's `abilList` (the route `mineCrewOf` takes) and off
+   *  the unit's own abilities too, so a map that grants `Aawa` to a building of its own is
+   *  answered the way the engine would answer it. */
+  revivesInstantly(shopId: number): boolean {
+    const u = this.units.get(shopId);
+    if (!u || u.hp <= 0 || !this.isShopUnit(shopId)) return false;
+    if (u.abilities.some((a) => a.id === "Aawa" || a.code === "Aawa")) return true;
+    return this.unitReg?.get(u.typeId)?.abilities?.includes("Aawa") ?? false;
   }
 
   /** May `player` trade at this shop at all — the OTHER half of "is this a shop", and the
@@ -5826,10 +5854,15 @@ export class SimWorld {
    *    (`Abgm` DataC, `Aenc` Car1 — `mineCrewOf`), and reads `0/5` while it stands empty,
    *    because the point of the fraction is seeing the crew is short. A crewed mine nobody on
    *    the side owns shows nothing at all, not even the enemy's `?/5`.
-   *  • A CLASSIC mine has no crew ceiling (workers queue at the shaft), so it reads the bare
-   *    number of the side's workers currently assigned to it (`cap` = 0) — the gatherers whose
-   *    `resKind`/`resId` name it, which is `jobOf`'s own test and so counts one walking its load
-   *    home as well as one down the shaft — and nothing when that number is zero.
+   *  • A CLASSIC mine reads `count/5` too — the same denominator, since the crew a gold mine
+   *    is judged against is one number whoever mines it (see classicMineCrew) — counting the
+   *    side's gatherers still WORKING it: `resKind`/`resId` name it AND the order is `harvest`
+   *    or `return`, so one walking its load home counts as well as one down the shaft. The
+   *    order is half the test on purpose. `resKind`/`resId` outlive every other order (jobOf
+   *    reads them to put a worker back on its job), so they alone kept a worker the player had
+   *    pulled OFF the mine — laden or empty-handed — on the count until it mined somewhere
+   *    else, and the number never came down. Nothing when the count is zero; the controller
+   *    keeps a `0/5` up over a mine the side has already crewed (rts.ts updateMineCrews).
    */
   mineCrewFor(mine: SimMine, side: (owner: number) => boolean): { count: number; cap: number } | null {
     if (mine.entangledBy > 0) {
@@ -5843,9 +5876,20 @@ export class SimWorld {
     let n = 0;
     for (const o of this.units.values()) {
       if (o.hp <= 0 || !o.worker || o.resKind !== "gold" || o.resId !== mine.id) continue;
+      if (o.order !== "harvest" && o.order !== "return") continue; // pulled off the mine — not its crew any more
       if (side(o.owner)) n++;
     }
-    return n > 0 ? { count: n, cap: 0 } : null;
+    return n > 0 ? { count: n, cap: this.classicMineCrew() } : null;
+  }
+
+  /** The crew a CLASSIC gold mine is read against — the `5` in `3/5`. A bare mine carries no
+   *  ability and no column that states one, so the number is the only crew size the data
+   *  gives a gold mine at all: "Max Number of Miners", `Abgm` DataC = 5 (the Haunted Gold
+   *  Mine's ring) and `Aenc` Car1 = 5 (the Entangled one's hold). Read off `Abgm` when the
+   *  tables are loaded, so a map that re-authors it moves every mine's label together. */
+  private classicMineCrew(): number {
+    const lvl = this.abilities?.get("Abgm")?.levelData[0];
+    return lvl ? Math.max(1, Math.round(this.dataOf(lvl, 2, 5))) : 5;
   }
 
   /**
@@ -7161,6 +7205,7 @@ export class SimWorld {
       | "swingTargetId"
       | "swingSeq"
       | "swingBroken"
+      | "swingFollowThrough"
       | "swingCrit"
       | "swingBash"
       | "swingSlam"
@@ -7215,6 +7260,7 @@ export class SimWorld {
       | "hasClaim"
       | "blockedT"
       | "resKind"
+      | "returnDepotId"
       | "resId"
       | "nodeRetries"
       | "workT"
@@ -7407,6 +7453,7 @@ export class SimWorld {
       swingTargetId: 0,
       swingSeq: 0,
       swingBroken: false,
+      swingFollowThrough: false,
       swingCrit: false,
       swingBash: false,
       swingSlam: false,
@@ -7472,6 +7519,7 @@ export class SimWorld {
       hasClaim: false,
       blockedT: 0,
       resKind: null,
+      returnDepotId: 0,
       resId: 0,
       nodeRetries: 0,
       workT: 0,
@@ -9110,6 +9158,10 @@ export class SimWorld {
       u0.rootPending = null;
       u0.entanglePending = 0;
       u0.militiaCall = 0; // …and a Peasant told to do anything else is no longer answering the bell
+      // A fresh order is the one thing that cuts a killing blow's follow-through short (the
+      // renderer holds the swing clip on this flag) — the Stop-cancel of the game.
+      u0.swingFollowThrough = false;
+      u0.returnDepotId = 0; // a depot the player picked belongs to the order that picked it
     }
     switch (o.kind) {
       case "move": return this.issueMove(id, o.x, o.y, o.targetId);
@@ -9120,7 +9172,7 @@ export class SimWorld {
       case "attack": return this.issueAttack(id, o.targetId, o.force, true, o.solo); // a QueuedOrder is always a commanded attack (issue #83)
       case "follow": return this.issueFollow(id, o.targetId, o.offX, o.offY);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);
-      case "returnresources": return this.issueReturnResources(id);
+      case "returnresources": return this.issueReturnResources(id, o.depotId);
       case "buildresume": this.assignBuilder(id, o.buildingId, o.ax, o.ay); return true;
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
       case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber, o.paid); return true;
@@ -9384,12 +9436,19 @@ export class SimWorld {
    *  harvest row). Refused when there is nothing to carry home, which is exactly when WC3
    *  draws the button as Gather instead: the two are one button showing whichever of its two
    *  jobs is available. The worker keeps its node in `resKind`/`resId`, so tickReturn sends
-   *  it straight back to the same tree or mine after it has dropped the load. */
-  issueReturnResources(id: number): boolean {
+   *  it straight back to the same tree or mine after it has dropped the load.
+   *
+   *  `depotId` is the RIGHT-CLICK's version of the same order: the player pointed a laden worker
+   *  at one of their own depots, and the load goes THERE rather than to the nearest one. Kept
+   *  only if that building takes what is being carried (a Lumber Mill takes no gold); anything
+   *  else falls back to the nearest, exactly as the button does. */
+  issueReturnResources(id: number, depotId = 0): boolean {
     const u = this.units.get(id);
     const w = u?.worker;
     if (!u || !w || this.castLocked(u)) return false;
     if (w.carryGold <= 0 && w.carryLumber <= 0) return false;
+    const picked = depotId ? this.units.get(depotId) : undefined;
+    u.returnDepotId = picked && this.takesLoad(u, picked) ? picked.id : 0;
     this.detachBuilder(id);
     u.targetId = null;
     u.inCombat = false;
@@ -9431,6 +9490,13 @@ export class SimWorld {
   private nearestDepot(u: SimUnit): SimUnit | null {
     const w = u.worker;
     if (!w) return null;
+    // The depot the player pointed this load at (issueReturnResources), for as long as it still
+    // takes it. Knocked down or handed away on the walk, and the nearest one is the answer again.
+    if (u.returnDepotId) {
+      const picked = this.units.get(u.returnDepotId);
+      if (picked && this.takesLoad(u, picked)) return picked;
+      u.returnDepotId = 0;
+    }
     const wantGold = w.carryGold > 0;
     let depot: SimUnit | null = null;
     let bestD = Infinity;
@@ -9444,6 +9510,16 @@ export class SimWorld {
       }
     }
     return depot;
+  }
+
+  /** Would `d` take the load `u` is carrying — a finished, living depot of the worker's OWN, of
+   *  the kind the load is? The question a depot the player PICKED has to answer before the walk
+   *  (issueReturnResources) and again on the way (nearestDepot). */
+  private takesLoad(u: SimUnit, d: SimUnit): boolean {
+    const w = u.worker;
+    if (!w || d.hp <= 0 || d.owner !== u.owner) return false;
+    if (d.building && d.building.constructionLeft > 0) return false;
+    return w.carryGold > 0 ? d.depotGold : d.depotLumber;
   }
 
   // Different teams are enemies; creeps all share team -1 (hostile to every
@@ -12915,9 +12991,15 @@ export class SimWorld {
     // MaxLevelHeroesDrainExp=1, so a level-10 hero standing in range still claims a
     // share of the pool (which gainXp then discards), shrinking what its lower-level
     // team-mates receive. This is real WC3 behaviour, not an oversight.
+    //
+    // An ILLUSION is never a sharer. It is a hero as far as `isHero` goes — it wears his level,
+    // his bar and his panel — but it earns nothing (mirrorXpToIllusions hands it his total
+    // instead), so counting it here split every kill between the Blademaster and his images
+    // and banked him a quarter of it: Mirror Image made its own caster level SLOWER, and the
+    // share the images "took" went nowhere at all, because gainXp mirrors over it.
     const eligible: SimUnit[] = [];
     for (const h of this.units.values()) {
-      if (!h.isHero || h.hp <= 0 || h.team === victim.team) continue;
+      if (!h.isHero || h.isIllusion || h.hp <= 0 || h.team === victim.team) continue;
       if (killer && h.team !== killer.team) continue; // only the killer's side (team = alliance group)
       if (Math.hypot(h.x - victim.x, h.y - victim.y) <= XP_SHARE_RANGE) eligible.push(h);
     }
@@ -12925,7 +13007,7 @@ export class SimWorld {
       // No hero in range: GlobalExperience=1 — award to ALL the killer's heroes
       // regardless of distance (still split among them, no per-distance loss).
       for (const h of this.units.values()) {
-        if (h.isHero && h.hp > 0 && killer && h.team === killer.team) eligible.push(h);
+        if (h.isHero && !h.isIllusion && h.hp > 0 && killer && h.team === killer.team) eligible.push(h);
       }
     }
     if (!eligible.length) return;
@@ -12986,7 +13068,8 @@ export class SimWorld {
 
   /** Add XP to a hero, leveling it up (with stat growth) across thresholds. */
   gainXp(hero: SimUnit, amount: number, isCreep = false): void {
-    if (!hero.isHero || hero.level >= MAX_HERO_LEVEL || amount <= 0) return;
+    // An image never banks experience of its own — it is shown its hero's (mirrorXpToIllusions).
+    if (!hero.isHero || hero.isIllusion || hero.level >= MAX_HERO_LEVEL || amount <= 0) return;
     hero.xp += amount;
     while (hero.level < MAX_HERO_LEVEL && hero.xp >= xpToReachLevel(hero.level + 1)) {
       this.levelUp(hero);
@@ -15463,6 +15546,7 @@ export class SimWorld {
     u.cooldownLeft = w.cooldown;
     u.swingLeft = Math.max(0, w.damagePoint);
     u.swingBroken = false; // a genuine new swing always animates (clears any prior break)
+    u.swingFollowThrough = false; // …and is its own swing, not the last kill's backswing
     u.swingTargetId = t.id;
     // The heading is LOCKED for the attack point: the unit is within FACING_EPS of its
     // target (the gate above), and that is the angle the blow goes out at — the shared
@@ -17041,6 +17125,7 @@ export class SimWorld {
     this.floatCredit("lumber", lumber, u.owner, u);
     w.carryGold = 0;
     w.carryLumber = 0;
+    u.returnDepotId = 0; // the picked depot was for THIS load — the next one goes to the nearest
     // Head back to the same node (or the nearest remaining tree), WC3-style.
     u.atNode = false;
     if (u.resKind === "gold" && this.mines.has(u.resId)) {
@@ -18376,6 +18461,11 @@ export class SimWorld {
   }
 
   private kill(u: SimUnit, killerId = 0): void {
+    // The killing blow is FOLLOWED THROUGH (SimUnit.swingFollowThrough), whatever this death
+    // turns out to be below — a popped image and a Tauren getting back up were struck just as
+    // hard. Only the attack clip is held on it, so a spell's kill changes nothing on screen.
+    const striker = killerId && killerId !== u.id ? this.units.get(killerId) : undefined;
+    if (striker) striker.swingFollowThrough = true;
     // A Mirror Image illusion that is destroyed does not die — it pops, with BOmi's
     // Specialart (MirrorImageDeathCaster, whose AOMI SND event is MirrorImageDeath.wav).
     // It must not play the Blademaster's death, which would both look wrong and tell the

@@ -293,6 +293,11 @@ interface Entry {
   timeScale: number; // JASS SetUnitTimeScale — an override MULTIPLIED onto the animation rate
   curRate: number; // last playback rate applied (avoid redundant sets)
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
+  /** Seconds of a killing blow's follow-through still to hold (SimUnit.swingFollowThrough), or
+   *  -1 when none is being held. A CLOCK, not merely "until the clip ends": the viewer does not
+   *  advance an instance the camera is not looking at, so a kill made off-screen would otherwise
+   *  hold its frozen backswing until the player scrolled over, and play it out then. */
+  followLeft: number;
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
   /** Seconds until this worker's next HAMMER BLOW lands (build/repair). -1 = not hammering,
    *  so the next blow re-arms off the work clip; `workBlowPeriod` 0 = this model carries no
@@ -3113,6 +3118,7 @@ export class RtsController {
         timeScale: 1,
         curRate: 1,
         lastSwingSeq: -1,
+        followLeft: -1,
         lastChopSeq: -1,
         workBlowT: -1,
         workBlowPeriod: 0,
@@ -3252,6 +3258,7 @@ export class RtsController {
       timeScale: 1,
       curRate: 1,
       lastSwingSeq: -1,
+      followLeft: -1,
       lastChopSeq: -1,
       workBlowT: -1,
       workBlowPeriod: 0,
@@ -3581,6 +3588,7 @@ export class RtsController {
       timeScale: 1,
       curRate: 1,
       lastSwingSeq: -1,
+      followLeft: -1,
       lastChopSeq: -1,
       workBlowT: -1,
       workBlowPeriod: 0,
@@ -3674,6 +3682,7 @@ export class RtsController {
     entry.altModel = this.sim.units.get(simId)?.altModel ?? false;
     entry.curSeq = -1;
     entry.lastSwingSeq = -1;
+    entry.followLeft = -1;
     entry.lastChopSeq = -1;
     entry.workBlowT = -1; // the hammer's clock is the OLD body's clip — re-arm off the new one
     entry.upgradeBirth = undefined; // resolved against the OLD body's sequence list
@@ -4159,6 +4168,24 @@ export class RtsController {
       // (pickSequence's ring branch, which it never reached). `ringSlot` is the flag that
       // says which of the two jobs the harvest order is.
       const chopping = u.working && u.order === "harvest" && !u.moving && !u.ringSlot && e.anims.chopLumber >= 0;
+      // …and a KILLING blow is followed through (the `following` branch below). Held on a clock
+      // armed from what is LEFT of the clip at the rate it is being swung (Entry.followLeft
+      // says why the clip's own end is not enough on its own), and let go the moment the unit
+      // walks, is ordered, starts another swing or the clip is done.
+      let following = false;
+      if (!chopping && !attacking) {
+        const inst = e.unit.instance;
+        if (!u.swingFollowThrough || u.moving || !isSwingClip(e.anims, e.curSeq) || inst.sequenceEnded) {
+          e.followLeft = -1;
+        } else {
+          if (e.followLeft < 0) {
+            const end = inst.model?.sequences?.[e.curSeq]?.interval?.[1] ?? inst.frame;
+            e.followLeft = Math.max(0, end - inst.frame) / 1000 / Math.max(attackAnimRate(u), 1e-3);
+          }
+          e.followLeft = Math.max(0, e.followLeft - dt); // parks at 0, so a spent hold is not re-armed
+          following = e.followLeft > 0;
+        }
+      }
       if (chopping) {
         setAnimRate(e, 1);
         if (u.chopSeq !== e.lastChopSeq || e.curSeq !== e.anims.chopLumber) {
@@ -4232,6 +4259,15 @@ export class RtsController {
         // (a Bloodlust lands, a Slow wears off) and the clip must follow it at once. The
         // ready stance between swings is a stand and plays at its authored rate.
         setAnimRate(e, isSwingClip(e.anims, e.curSeq) ? attackAnimRate(u) : 1);
+      } else if (following) {
+        // The blow that KILLED its target. The sim stands the attacker down the tick the body
+        // drops (reacquireOrStop → stop), which is right for the ORDER and wrong for the BODY:
+        // the swing that landed it still has its backswing to play, and cutting straight to
+        // the stand made every killing blow snap back mid-follow-through. So the clip plays out
+        // here, at the rate it was swung at — unless the unit walks (the move-cancel, above) or
+        // is given an order, which is the one thing that clears the flag and so still cancels
+        // the backswing the way a Stop does in the game.
+        setAnimRate(e, attackAnimRate(u));
       } else {
         // Smooth the actual/expected displacement so the walk clip only plays
         // when the unit is really making progress — a unit wedged in a crowd
@@ -5361,7 +5397,14 @@ export class RtsController {
         return true;
       }
       if (cast.target === "unit") {
-        const picked = this.pickAt(cssX, cssY);
+        let picked = this.pickAt(cssX, cssY);
+        // A MASS TELEPORT dropped on the GROUND — in the yard of a town hall, between the
+        // buildings of a base — means the friendly body nearest that spot, as the same click
+        // on the minimap does (teleportDestNear). Every other unit spell still wants the unit.
+        if (picked === null && cast.code === "AHmt") {
+          const hit = this.groundHitAt(cssX, cssY);
+          if (hit) picked = this.teleportDestNear(cast.code, hit[0], hit[1]);
+        }
         const err = this.castRefusal(cast.code, picked ?? 0);
         if (err !== null) return this.refuseOrder(err);
         this.orderMode = null;
@@ -5594,6 +5637,10 @@ export class RtsController {
       }
       return "none";
     }
+    // A Town Portal or a Mass Teleport is the exception below, and the reason there is one:
+    // both are journeys to wherever the army is NOT, which is what the minimap is for.
+    const teleport = this.minimapTeleport(wx, wy, queued);
+    if (teleport) return teleport;
     // A spell, an item, a repair, a GATHER or a shop's purchaser pick is aimed at a thing in
     // the WORLD, never at the minimap — swallow the click and leave it armed (right-click,
     // above, is how you back out of one). A tree or a mine on the minimap is a pixel, not a
@@ -5629,6 +5676,71 @@ export class RtsController {
     this.ack(false);
     if (this.groupMove(wx, wy, queued)) this.queueArrow(wx, wy, MOVE_ARROW);
     return "ordered";
+  }
+
+  /** A SCROLL OF TOWN PORTAL or a MASS TELEPORT aimed on the minimap — or null when what is
+   *  armed is neither, and the minimap's ordinary rules apply.
+   *
+   *  The scroll is a point order already (`Rng1` 99999, resolved to the nearest finished hall
+   *  — SimWorld.itemTownPortal), so the minimap's point is simply its point. Mass Teleport
+   *  wants "a friendly ground unit or structure" (`[AHmt]` Ubertip), and a spot on the minimap
+   *  names none, so it is handed the one nearest the spot (teleportDestNear) — the same
+   *  reading its world click takes when it lands on the ground beside a town hall. A refusal
+   *  keeps the order armed and says why, as the same click in the world does. */
+  private minimapTeleport(wx: number, wy: number, queued: boolean): "ordered" | "ignored" | null {
+    const cast = this.orderMode === "cast" ? this.armedCast : null;
+    if (cast?.code === "AHmt") {
+      const dest = this.teleportDestNear(cast.code, wx, wy);
+      if (dest === null) {
+        this.refuseOrder(this.castRefusal(cast.code, 0, wx, wy) ?? "Canttargetloc");
+        return "ignored";
+      }
+      this.orderMode = null;
+      this.armedCast = null;
+      this.castFromSelection(cast.code, dest, 0, 0, queued);
+      return "ordered";
+    }
+    const item = this.orderMode === "item" ? this.armedItem : null;
+    if (item?.mode === "usepoint" && this.abilities.get(item.abilityId ?? "")?.code === "AItp") {
+      const id = this.primary;
+      if (id === null || !this.controls(id)) {
+        this.orderMode = null;
+        this.armedItem = null;
+        return "ordered";
+      }
+      const err = this.sim.itemReadyError(id, item.slot) ?? (this.sim.inPlayableArea(wx, wy) ? null : "Outofbounds");
+      if (err !== null) {
+        this.refuseOrder(err);
+        return "ignored";
+      }
+      this.orderMode = null;
+      this.armedItem = null;
+      this.execute(this.localPlayer, { c: "useitem", unitId: id, slot: item.slot, targetId: 0, x: wx, y: wy });
+      return "ordered";
+    }
+    return null;
+  }
+
+  /** What a MASS TELEPORT aimed at a SPOT rather than at a unit is taken to mean: of the units
+   *  the cast may legally be aimed at — the sim's own answer (castRefusal), the rule a click on
+   *  the unit itself is held to — the one whose BODY is nearest the spot.
+   *
+   *  Measured to the edge rather than to the centre, so a click in the yard of a town hall is
+   *  the hall and not the Peasant walking past it; and unbounded, as the Town Portal's own
+   *  nearest-hall reading is, because a spot on the minimap is a whole region of the field.
+   *  Null when nothing anywhere may be aimed at. */
+  private teleportDestNear(code: string, x: number, y: number): number | null {
+    let best: number | null = null;
+    let bestGap = Infinity;
+    for (const t of this.sim.units.values()) {
+      if (t.hp <= 0) continue;
+      const gap = Math.max(0, Math.hypot(t.x - x, t.y - y) - t.radius);
+      if (gap >= bestGap) continue; // the cheap test first — castRefusal walks the selection
+      if (this.castRefusal(code, t.id) !== null) continue;
+      best = t.id;
+      bestGap = gap;
+    }
+    return best;
   }
 
   // --- spellcasting ---------------------------------------------------------
@@ -5952,10 +6064,11 @@ export class RtsController {
 
   /** Order the selected workers to repair a damaged friendly building. WC3
    *  rates: 35% of the build cost and 150% of the build time to go 1 HP→full. */
-  private repairAt(picked: number | null, queued = false): boolean {
+  private repairAt(picked: number | null, queued = false, skip?: ReadonlySet<number>): boolean {
     if (picked === null) return false;
     let any = false;
     for (const id of this.selected) {
+      if (skip?.has(id)) continue; // already given this click's other meaning (orderOnBuilding)
       if (this.execute(this.localPlayer, { c: "repair", unitId: id, buildingId: picked, queued })) any = true;
     }
     return any;
@@ -7982,6 +8095,20 @@ export class RtsController {
         return;
       }
     }
+    // Own DEPOT, with workers in the selection carrying what it takes: they drop the load at
+    // THIS building — not at whichever depot is nearest — and walk straight back to the tree
+    // or mine they were working (SimWorld.issueReturnResources, handed the depot). That is the
+    // right-click's meaning for a laden worker; without it the click was a plain walk-up, and
+    // the worker stood beside the hall holding its ten gold. Only the carriers are taken: the
+    // rest of the selection is still ordered below, as though they had been clicked alone.
+    const carriers = new Set<number>();
+    if (own && target.building && target.building.constructionLeft <= 0 && (target.depotGold || target.depotLumber)) {
+      for (const id of this.selected) {
+        const w = this.sim.units.get(id)?.worker;
+        if (!w || !((w.carryGold > 0 && target.depotGold) || (w.carryLumber > 0 && target.depotLumber))) continue;
+        if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "returnresources", depotId: picked }, queued })) carriers.add(id);
+      }
+    }
     let handled = false;
     if (own && target.building && target.building.constructionLeft > 0) {
       // Own building still going up: workers resume/assist it. Fan the group
@@ -7998,9 +8125,9 @@ export class RtsController {
       }
       handled = workers.length > 0;
     } else if (own && target.hp < target.maxHp) {
-      handled = this.repairAt(picked, queued); // own damaged building: workers repair
+      handled = this.repairAt(picked, queued, carriers); // own damaged building: workers repair
     }
-    if (!handled) this.groupMoveTo(target, picked, queued); // walk up to it (no arrow)
+    if (!handled && carriers.size < this.selected.size) this.groupMoveTo(target, picked, queued, carriers); // walk up to it (no arrow)
     this.flashRing(target.x, target.y, selR, own ? FLASH_GREEN : FLASH_YELLOW);
   }
 
@@ -8044,8 +8171,9 @@ export class RtsController {
    *  some of the group a slot on the far side and they hike round the building to reach a
    *  spot no better than the one they were standing next to. Aimed at the target itself,
    *  each unit stops on the side it approached from and the group packs in from there. */
-  private groupMoveTo(target: SimUnit, targetId: number, queued = false): void {
+  private groupMoveTo(target: SimUnit, targetId: number, queued = false, skip?: ReadonlySet<number>): void {
     for (const id of this.selected) {
+      if (skip?.has(id)) continue;
       this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "move", x: target.x, y: target.y, targetId }, queued: queued });
     }
   }
@@ -8356,8 +8484,18 @@ export class RtsController {
     const specs: CrewLabelSpec[] = [];
     if (this.interfaceShown) {
       for (const m of this.sim.mines.values()) {
+        if (m.gold <= 0) {
+          this.crewedMines.delete(m.id); // a dry mine has no crew to be short of
+          continue;
+        }
         if (this.fogBlocksMine(m)) continue; // a live reading needs eyes on the mine
-        const crew = this.snapshot.active ? this.snapshot.mineCrew(m.id) : this.sim.mineCrewFor(m, this.crewSide);
+        let crew = this.snapshot.active ? this.snapshot.mineCrew(m.id) : this.sim.mineCrewFor(m, this.crewSide);
+        // A classic mine whose last worker has been pulled off it answers null (it counts only
+        // workers still ON the mine — SimWorld.mineCrewFor), and a label that simply vanished
+        // there would never read `0/5`, the one reading that says the crew is gone rather than
+        // that nobody ever mined here. So a mine this side HAS crewed keeps its denominator.
+        if (crew) this.crewedMines.set(m.id, crew.cap);
+        else if (this.crewedMines.has(m.id)) crew = { count: 0, cap: this.crewedMines.get(m.id)! };
         if (!crew) continue;
         specs.push({
           x: m.x,
@@ -8371,6 +8509,10 @@ export class RtsController {
     }
     this.overlays.syncCrewLabels(specs);
   }
+
+  /** Mines this side has had a crew on, and that crew's cap — so a mine whose last worker has
+   *  left reads `0/5` rather than nothing (see updateMineCrews). */
+  private readonly crewedMines = new Map<number, number>();
 
   /** `readsSideOf`, as the predicate `mineCrewFor` takes — one closure, not one per frame. */
   private readonly crewSide = (owner: number): boolean => this.readsSideOf(owner);

@@ -79,8 +79,8 @@ export interface BarSpec {
 }
 
 /**
- * The worker count floated over a gold mine — `5/5` over a crewed Entangled or Haunted Gold
- * Mine, a bare `3` over a classic one — as the controller has already read it for the local
+ * The worker count floated over a gold mine — `3/5` over a classic mine and over a crewed
+ * Entangled or Haunted Gold Mine alike — as the controller has already read it for the local
  * side (rts.ts updateMineCrews, off `SimWorld.mineCrewFor` or the payload's `MineSnapshot.crew`).
  * WHOSE workers count and whether there are eyes on the mine are decided there; this is only
  * where it floats and what it says.

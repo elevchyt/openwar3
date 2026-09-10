@@ -55,6 +55,18 @@ protocol.registerSchemesAsPrivileged([
 // what it is, and a game that starts silent because nobody pressed anything is not one.
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
+// State the renderer's V8 heap ceiling instead of inheriting one. Left to itself V8 derives
+// the old-space limit from the machine's physical memory, so the same long match meets a
+// different ceiling — and the collector starts working hard at a different point — on every
+// box; a stated one makes an out-of-memory a reproducible bug rather than a property of the
+// player's RAM. This is OUR number, not a game constant: 4 GiB is comfortably more
+// than the heaviest map needs (the compressed asset store is ~290 MB, the decoded caches
+// are budgeted, and the WebGL buffers live mostly in GPU memory). If a map ever crashes
+// with OOM, raise it 512 MiB at a time — never delete the flag. `js-flags` is how the
+// RENDERER's V8 is told; a plain `--max-old-space-size` on the command line would only
+// reach the main process, which barely allocates.
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
+
 /** Point the window at a running `pnpm dev` instead of the build. In that mode we start NO
  *  server of our own: the dev server is already carrying the relay at its own origin
  *  (tools/vite-plugin-relay.ts), and a second relay on a second port would be one the page never

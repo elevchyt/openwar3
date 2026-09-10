@@ -317,7 +317,10 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   w.f32(s.flyHeight);
   w.u16(quantU16(s.speed));
   w.u8(Math.min(255, Math.round(s.radius)));
-  w.u16(s.swingSeq & 0xffff);
+  // The swing counter's TOP bit carries `swingFollowThrough`, because the flags word above is
+  // full. The counter only ever has to CHANGE when a swing starts (the renderer compares, it
+  // never subtracts), so fifteen bits of it lose nothing.
+  w.u16((s.swingSeq & 0x7fff) | (s.swingFollowThrough ? 0x8000 : 0));
   w.u16(s.chopSeq & 0xffff);
   w.f32(s.spawning);
   w.f32(s.constructing);
@@ -474,6 +477,7 @@ function readUnit(r: Reader): UnitSnapshot {
     swingSeq: 0,
     chopSeq: 0,
     swingBroken: (flags & F_SWING_BROKEN) !== 0,
+    swingFollowThrough: false, // …read below, off the swing counter's top bit
     swingSlam: (flags & F_SWING_SLAM) !== 0,
     altModel: (flags & F_ALT_MODEL) !== 0,
     altFormLeft: 0,
@@ -537,7 +541,9 @@ function readUnit(r: Reader): UnitSnapshot {
   s.flyHeight = r.f32();
   s.speed = r.u16();
   s.radius = r.u8();
-  s.swingSeq = r.u16();
+  const swing = r.u16();
+  s.swingSeq = swing & 0x7fff;
+  s.swingFollowThrough = (swing & 0x8000) !== 0;
   s.chopSeq = r.u16();
   s.spawning = r.f32();
   s.constructing = r.f32();

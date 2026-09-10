@@ -247,8 +247,11 @@ a disabled button is not told when the cursor leaves it.
 
 ## The gold mine's worker count wears the same dress
 
-The `5/5` the game prints across an Entangled or a Haunted Gold Mine, and the bare `3` across a classic
-mine three Peasants are working, is drawn in the tooltip's own art — the `human-tooltip-border` strip
+The `3/5` the game prints across a gold mine — a classic one three Peasants are working, and an
+Entangled or a Haunted Gold Mine alike, green once it reads `5/5` — is drawn in the tooltip's own art
+(a classic mine has no crew column of its own, so its `/5` is the `Abgm`/`Aenc` "Max Number of
+Miners" — `SimWorld.classicMineCrew` — and a worker counts only while its order is still `harvest`
+or `return`, so pulling one off the mine takes it off the count) — the `human-tooltip-border` strip
 around the tooltip's slate — so `.unit-crew-count` shares `.hud-tooltip.skinned`'s nine-patch and fill
 (`worldOverlays.ts syncCrewLabels`). What it *says* is a per-side fact: only the local player's and
 their allies' workers count, an enemy's crewed mine floats nothing (not even the `/5`), and it needs

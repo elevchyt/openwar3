@@ -1440,10 +1440,65 @@ export class MapViewerScene {
     viewer.terrainModelExists = (path) => vfs.exists(path);
     viewer.on("error", (e) => console.error("[mapviewer]", e));
 
+    // Blob-url lifetime. Every model/texture path resolves to one stable blob URL (the
+    // dedupe win of issue #14), and the viewer NEVER refetches it after its resource
+    // lands: `load`/`loadGeneric` short-circuit the URL string through promiseMap, then
+    // resourceMap, so a later request for the same path returns the cached resource
+    // WITHOUT fetching — the URL is never read a second time. That makes each blob URL
+    // exactly ONE fetch, after which it is a full SECOND copy of the asset sitting in the
+    // Blob store (free on our own disk-backed scheme, not in RAM, where a map's collection
+    // of models/textures is worth hundreds of MB). Revoking a blob URL the moment nothing
+    // is in flight is therefore safe: the only future reads of it are the resourceMap
+    // short-circuits that never touch it. The one exception is a load that FAILED — it
+    // never reached resourceMap, so a retry WOULD refetch the URL, and its address is kept
+    // alive instead (neverRevoke).
+    let outstandingFetches = 0; // 'loadstart'/'loadend' are balanced per fetch (viewer.js:278/273)
+    let swept = 0; // `created` only ever grows, so everything before this index is dealt with
+    const neverRevoke = new Set<string>();
+    const revokeWhenIdle = () => {
+      if (outstandingFetches !== 0) return; // something is still in flight — its URL stays live
+      // Only what was minted since the last sweep. Walking all of `created` here made every
+      // model a long match streams in (a hero bought, a spell's art) pay again for each of the
+      // thousands of URLs the map itself made at load. (A URL revoked twice — by this and by
+      // dispose — is a no-op, so dispose keeps revoking the whole list.)
+      for (; swept < created.length; swept++) {
+        const url = created[swept];
+        if (!neverRevoke.has(url)) URL.revokeObjectURL(url);
+      }
+    };
+    viewer.on("loadstart", () => outstandingFetches++);
+    viewer.on("loadend", (e) => {
+      // The gate: base-FILE loads started inside the constructor, before these listeners
+      // existed, so their loadends outnumber the loadstarts we saw by exactly that many.
+      if (outstandingFetches > 0) outstandingFetches--;
+      const ev = e as { fetchUrl?: unknown; resource?: unknown };
+      if (typeof ev?.fetchUrl === "string" && ev.fetchUrl.startsWith("blob:") && !ev.resource) neverRevoke.add(ev.fetchUrl);
+      revokeWhenIdle();
+    });
+    viewer.on("error", (e) => {
+      // Failed fetches never reach resourceMap, so a retry WOULD refetch the URL — keep its
+      // address alive for reuse rather than revoking it in a later sweep. (Errors are logged
+      // by the listener bound above.)
+      const ev = e as { fetchUrl?: unknown };
+      if (typeof ev?.fetchUrl === "string" && ev.fetchUrl.startsWith("blob:")) neverRevoke.add(ev.fetchUrl);
+    });
+
     await new Promise<void>((resolve) => {
       if (viewer.loadedBaseFiles) resolve();
       else viewer.once("loadedbasefiles", resolve);
     });
+
+    // The 11 base SLK tables are the one fetch class the sweep above is not trusted to own:
+    // their loads begin inside the constructor, so they are not all observed by our loadstart
+    // counter and their settle could race the sweep. Make it deterministic here — the viewer
+    // keeps their parsed MappedData for the scene's life (loadBaseFiles → MappedData.load),
+    // so the raw text is dead once `loadedbasefiles` fires. Revoke those blob copies now and
+    // DROP the entries from `baseUrls`, so a late request for the same path falls through to
+    // the ordinary solver rather than being handed a URL that no longer fetches.
+    for (const [path, url] of baseUrls) {
+      URL.revokeObjectURL(url);
+      baseUrls.delete(path);
+    }
 
     return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), loadTechRegistry(vfs), loadUpgradeRegistry(vfs), solver, sounds);
   }
@@ -8258,9 +8313,11 @@ export class MapViewerScene {
     const food = this.rts!.foodFor(this.localPlayer);
     // Which heroes THIS building can bring back — the same two rules the authority applies
     // (see its `revive` case): an ALTAR takes the heroes it trains, i.e. its own race's four;
-    // a TAVERN takes any of yours, neutral and race-specific alike.
+    // a TAVERN takes any of yours, neutral and race-specific alike — and only a Tavern: a
+    // Mercenary Camp sells units too, but it is the Tavern's `Aawa` that wakes a hero
+    // (SimWorld.revivesInstantly), so a camp puts up no revive buttons at all.
     const tavern = world.isShopUnit(sel.id);
-    const here = fallen.filter((f) => (tavern ? t.sellunits.length > 0 : t.revive && t.trains.includes(f.typeId)));
+    const here = fallen.filter((f) => (tavern ? world.revivesInstantly(sel.id) : t.revive && t.trains.includes(f.typeId)));
     if (!here.length) return;
     const mode: ReviveMode = tavern ? "tavern" : "altar";
     for (const f of here) {
@@ -10719,7 +10776,12 @@ export class MapViewerScene {
   private startBackgroundPump(): void {
     if (this.bgPump) return;
     const src = "setInterval(() => postMessage(0), 50);";
-    this.bgPump = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+    const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    this.bgPump = new Worker(url);
+    // The worker holds its own reference to the script; the URL has done its job once the
+    // worker exists, so drop it rather than hold the blob copy for the whole match — the
+    // same reasoning as src/render/animClock.ts, which revokes for exactly this reason.
+    URL.revokeObjectURL(url);
     this.bgPump.onmessage = () => {
       const now = performance.now();
       if (now - this.lastFrameAt < 200) return; // rAF is alive — it is the driver
