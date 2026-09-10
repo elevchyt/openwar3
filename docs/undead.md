@@ -374,7 +374,9 @@ This milestone is the ECONOMY. The rest of the race is data-driven and largely a
 
 `uobs` carries two autocasts and **they are not the Moon Well's `Ambt`** — that is a battery a
 unit walks up to and drinks from, which is why a well stands in a base and a statue walks with the
-army. The statue's are ordinary unit-target autocasts it casts on somebody:
+army. The statue's are a PULSE it sends out around itself, with **no target** — the press is the
+cast. `UI\TriggerData.txt` files both orders (`replenishlife`, `replenishmana`) under
+`unitordernotarg`, and both Ubertips say "to nearby friendly units":
 
 - **`Arpl` Essence of Blight** — restores life. The important one: without it an undead army has
   to go home between fights, which on a melee map *is* the fight.
@@ -425,9 +427,9 @@ No gesture means no wind-up either, and that is what the two-hotkey trick is evi
 ability's own casting time is nothing (its `Cast` column is the head count below), which leaves
 only the CASTER's `castpt`/`castbsw` — 0.5 and 0.51 on `uobs` — and those are the wrong numbers to
 charge a press with nothing to wind up, exactly as they are for Call to Arms. So a replenish is
-`NO_WINDUP` (`sim/world.ts`): in range it resolves at ORDER TIME and takes no order slot, so the
-statue does not break stride and a second press finds the first already spent; out of range it
-still walks to whoever it was aimed at and fires the tick it arrives, with no backswing after.
+`NO_WINDUP` (`sim/world.ts`): it resolves at ORDER TIME and takes no order slot, so the statue
+does not break stride and a second press finds the first already spent. With no target there is
+no "out of range" either — every press goes off where the statue stands.
 
 The other lying column is `Cast1 = 6`, and `AbilityMetaData.slk` names it outright: the replenish
 family (`Arpb`, `Arpl`, `Arpm`) gives its columns its own labels, and `Cast` there is
@@ -445,15 +447,21 @@ family's labels, from the same rows:
 
 All of which `spells.ts`'s `replenishPulse` spends: one pulse reaches up to **six** nearby
 friendlies inside `Area1` = 700 (the Ubertips say "nearby friendly **units**", plural, and the
-statue is the unit the sentence is about, while `Rng1` = 250 is only how close it must stand to
-the ally it is *aimed* at), restoring `DataA` = 10 life or `DataB` = **3** mana, and it is charged
-`Cost1` = 2 for each of at most **five** of them — so a full six-ally pulse costs ten mana and the
-sixth rides free.
+statue is the unit the sentence is about; the row's `Rng1` = 250 is never read, since a no-target
+order has nothing to close on), restoring `DataA` = 10 life or `DataB` = **3** mana, and it is
+charged `Cost1` = 2 for each of at most **five** of them — so a full six-ally pulse costs ten mana
+and the sixth rides free.
 
-Two things there are OURS, because no column states them. WHO gets the six slots: the ally the
-press was actually aimed at first, then the worst off, which is the same "worst off first" every
-other friendly autocast in the sim uses. And an ally already full of whichever bar this is takes
-no slot at all.
+Two things there are OURS, because no column states them. WHO gets the six slots: the worst off
+first, which is the same "worst off first" every other friendly autocast in the sim uses. And an
+ally already full of whichever bar this is takes no slot at all.
+
+**A pulse with nobody to take a slot is never cast.** A press is refused in the game's own words —
+`UnitHPmaxed` "Already at full health." for Essence of Blight, `UnitManaMaxed` "Already at full
+mana." for Spirit Touch — rather than paying mana and a cooldown for nothing, and the autocast asks
+the same question before it fires (`replenishRefusal` in `spells.ts`, read by both). That is also
+what makes Spirit Touch autocast at all: it used to go through the friendly unit-target search,
+which ranks allies by LIFE and so never picked the full-health caster with an empty mana pool.
 
 One last clause has a joke in it. `targs1` = `ground,air,friend,self,organic,vuln,invu` lists
 `self` — and the statue still cannot mend itself, because `UnitBalance` gives `uobs`

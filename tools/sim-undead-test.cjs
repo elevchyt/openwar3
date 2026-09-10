@@ -41,11 +41,12 @@ const lvl = (over) => ({ cost: 0, cooldown: 0, duration: 0, heroDuration: 0, cas
 // Blight Growth / Blight Dispel: Area1 the disc, DataA "Expansion Amount" 64 per Dur1 0.08s,
 // DataB "Creates Blight" the only thing that tells growth from dispel.
 const blight = (area, creates) => ({ target: "passive", targetFlags: [], levelData: [lvl({ area, duration: 0.08, data: [64, creates] })] });
-// One shape for both replenishes: `targs1 = ground,air,friend,self,organic,vuln,invu`,
-// Rng1 250 (how close the statue stands to the ally it aims at) against Area1 700 (how far
-// the pulse reaches), Cool1 1, Cost1 2 — per unit.
+// One shape for both replenishes: `targs1 = ground,air,friend,self,organic,vuln,invu`, a
+// NO-TARGET order (`UI\TriggerData.txt` files `replenishlife`/`replenishmana` under
+// `unitordernotarg`) whose pulse reaches Area1 700 around the statue, Cool1 1, Cost1 2 — per
+// unit. Rng1 250 is on the row and goes unread.
 const replenish = (data) => ({
-  target: "unit",
+  target: "none",
   targetFlags: ["ground", "air", "friend", "self", "organic", "vuln", "invu"],
   buffArt: "", buffFx: [], targetArt: "", casterArt: "", specialArt: "", casterAttach: [], specialAttach: [],
   levelData: [lvl({ cost: 2, cooldown: 1, duration: 1, heroDuration: 1, castRange: 250, area: 700, castTime: 6, data })],
@@ -375,19 +376,17 @@ console.log("A replenish is an AREA pulse over up to six nearby friendlies, char
     null,
     { mechanical: true, abilities: [{ id: "Arpl", code: "Arpl", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Arpm", code: "Arpm", level: 1, cooldownLeft: 0, autocastOn: false }] },
   );
-  // Eight wounded Ghouls in a line, all inside Area1 = 700 — but only the first three inside
-  // Rng1 = 250, which is how close the statue has to STAND to whatever it is aimed at. The
-  // one it is aimed at is deliberately the LEAST wounded of the eight (170), so its slot can
-  // only have come from the aim.
+  // Eight wounded Ghouls in a line, all inside Area1 = 700. Nothing is aimed — the press is the
+  // cast — so the six slots go to the six most in need, and the two least wounded (170, 160)
+  // are the ones left out.
   const HP = [100, 110, 170, 120, 130, 140, 150, 160];
   const ghouls = HP.map((hp, i) => world.add(base({ id: 10 + i, typeId: "ugho", x: 2000 + 80 * (i + 1), y: 2000, hp, maxHp: 500, speed: 270, radius: 16, name: `Ghoul ${i + 1}` })));
   check("the handlers are wired", typeof SPELL_HANDLERS.Arpl === "function" && typeof SPELL_HANDLERS.Arpm === "function");
-  check("the cast lands", world.issueCast(1, "Arpl", ghouls[2].id));
+  check("the press lands, with no target", world.issueCast(1, "Arpl"));
   world.tick(0.05);
   const healed = ghouls.filter((g, i) => g.hp > HP[i] + 5).map((g) => g.name);
   check("six of the eight are replenished — Cast1 is a HEAD COUNT", healed.length === 6, `${healed.length}: ${healed.join(", ")}`);
-  check("…the one it was aimed at among them, last in the queue though it is", ghouls[2].hp > 175, `${ghouls[2].hp}`);
-  check("…and the two least in need of it left out", ghouls[6].hp === 150 && ghouls[7].hp === 160, `${ghouls[6].hp}/${ghouls[7].hp}`);
+  check("…and the two least in need of it left out", ghouls[2].hp === 170 && ghouls[7].hp === 160, `${ghouls[2].hp}/${ghouls[7].hp}`);
   check("each is restored DataA = 10 hit points", Math.abs(ghouls[0].hp - 110) < 0.5, `${ghouls[0].hp}`);
   // Cost1 = 2 for each of at most DataE = 5 of them, so a full six-unit pulse costs ten and
   // the sixth ally rides free. The cast path paid the first two before the handler ran.
@@ -404,7 +403,7 @@ console.log("Spirit Touch restores DataB, and its DataA is empty on purpose");
     { mechanical: true, abilities: [{ id: "Arpm", code: "Arpm", level: 1, cooldownLeft: 0, autocastOn: false }] },
   );
   const banshee = world.add(base({ id: 2, typeId: "ugho", x: 2100, y: 2000, hp: 400, maxHp: 400, mana: 0, maxMana: 200, speed: 270, radius: 16, name: "Banshee" }));
-  check("the cast lands", world.issueCast(1, "Arpm", banshee.id));
+  check("the cast lands", world.issueCast(1, "Arpm"));
   world.tick(0.05);
   // "Restores <Arpm,DataB1> mana to nearby friendly units." Three, not the ten a DataA read
   // falls through to — the bar moves by a third of what it used to.
@@ -426,8 +425,7 @@ console.log("`organic` beats `self`: a statue mends neither itself nor the one b
   // `targs1` lists `self`, and the statue is still refused — by `organic`, because
   // UnitBalance gives `uobs` type = Mechanical. The same clause is why a Meat Wagon
   // standing in the pulse gets nothing out of it.
-  check("a second statue may not even be aimed at", world.issueCast(1, "Arpl", other.id) === false);
-  check("the Ghoul may", world.issueCast(1, "Arpl", ghoul.id));
+  check("the pulse goes off for the Ghoul", world.issueCast(1, "Arpl"));
   world.tick(0.05);
   check("…and it is the only thing the pulse touched", Math.abs(ghoul.hp - 110) < 0.5 && other.hp === 200 && statue.hp === 200, `${ghoul.hp}/${other.hp}/${statue.hp}`);
 }
@@ -447,8 +445,8 @@ console.log("Both hotkeys in one breath cast both — and only one of them may b
   // the first and replace it. NO TICK between them: this is the same breath.
   world.issueMove(1, 2600, 2000);
   check("it is walking", statue.order === "move");
-  check("Essence of Blight goes off", world.issueCast(1, "Arpl", 2));
-  check("…and Spirit Touch right behind it", world.issueCast(1, "Arpm", 2));
+  check("Essence of Blight goes off", world.issueCast(1, "Arpl"));
+  check("…and Spirit Touch right behind it", world.issueCast(1, "Arpm"));
   check("both landed, before a single tick", ghoul.hp === 410 && ghoul.mana === 3, `${ghoul.hp} hp / ${ghoul.mana} mana`);
   check("…paid for twice over", statue.mana === 96, `${statue.mana}`);
   check("…and the statue never broke stride", statue.order === "move");
@@ -458,6 +456,76 @@ console.log("Both hotkeys in one breath cast both — and only one of them may b
   check("Essence of Blight can be left on", world.toggleAutocast(1, "Arpl") === true);
   check("…and switching Spirit Touch on switches it back off", world.toggleAutocast(1, "Arpm") === true
     && statue.abilities.find((a) => a.code === "Arpl").autocastOn === false);
+}
+
+// ---------------------------------------------------------------------------------------
+console.log("Nobody short of the bar in reach: the press is refused, and nothing is paid");
+{
+  const world = newWorld();
+  const statue = world.add(
+    base({ id: 1, typeId: "uobs", x: 2000, y: 2000, hp: 200, maxHp: 425, mana: 100, maxMana: 200, speed: 190, radius: 16, mechanical: true, name: "Obsidian Statue" }),
+    null,
+    { mechanical: true, abilities: [{ id: "Arpl", code: "Arpl", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Arpm", code: "Arpm", level: 1, cooldownLeft: 0, autocastOn: false }] },
+  );
+  // Everything here is either full, unable to take it, or out of reach: a Banshee full on both
+  // bars, a Ghoul with no mana bar at all, a wounded second statue (Mechanical — `organic`
+  // refuses it, and the caster is hurt too), and a wounded caster 900 away, past Area1 = 700.
+  world.add(base({ id: 2, typeId: "ugho", x: 2100, y: 2000, hp: 500, maxHp: 500, mana: 200, maxMana: 200, speed: 270, radius: 16, name: "Full Banshee" }));
+  world.add(base({ id: 3, typeId: "ugho", x: 2150, y: 2000, hp: 500, maxHp: 500, speed: 270, radius: 16, name: "Full Ghoul" }));
+  world.add(base({ id: 4, typeId: "uobs", x: 2200, y: 2000, hp: 100, maxHp: 425, mana: 0, maxMana: 200, speed: 190, radius: 16, name: "Hurt Statue" }), null, { mechanical: true });
+  world.add(base({ id: 5, typeId: "ugho", x: 2900, y: 2000, hp: 100, maxHp: 500, mana: 0, maxMana: 200, speed: 270, radius: 16, name: "Far Banshee" }));
+  check("Essence of Blight: \"Already at full health.\"", world.castError(1, "Arpl") === "UnitHPmaxed", `${world.castError(1, "Arpl")}`);
+  check("Spirit Touch: \"Already at full mana.\"", world.castError(1, "Arpm") === "UnitManaMaxed", `${world.castError(1, "Arpm")}`);
+  check("…and neither goes off", world.issueCast(1, "Arpl") === false && world.issueCast(1, "Arpm") === false);
+  check("…so no mana and no cooldown were spent", statue.mana === 100 && statue.abilities.every((a) => a.cooldownLeft === 0), `${statue.mana}`);
+  // One ally inside the reach short of life, another short of mana — each opens its own button,
+  // and only its own.
+  world.add(base({ id: 6, typeId: "ugho", x: 2300, y: 2000, hp: 450, maxHp: 500, speed: 270, radius: 16, name: "Scratched Ghoul" }));
+  check("an ally short of life opens Essence of Blight", world.castError(1, "Arpl") === null, `${world.castError(1, "Arpl")}`);
+  check("…but not Spirit Touch, for a unit with no mana bar", world.castError(1, "Arpm") === "UnitManaMaxed", `${world.castError(1, "Arpm")}`);
+  world.add(base({ id: 7, typeId: "ugho", x: 2350, y: 2000, hp: 400, maxHp: 400, mana: 199, maxMana: 200, speed: 270, radius: 16, name: "Thirsty Banshee" }));
+  check("…and one mana short of full opens Spirit Touch", world.castError(1, "Arpm") === null, `${world.castError(1, "Arpm")}`);
+}
+
+// ---------------------------------------------------------------------------------------
+console.log("Both replenishes AUTOCAST — and only when somebody in reach is short of the bar");
+{
+  const world = newWorld();
+  const statue = world.add(
+    base({ id: 1, typeId: "uobs", x: 2000, y: 2000, hp: 425, maxHp: 425, mana: 100, maxMana: 200, speed: 190, radius: 16, mechanical: true, name: "Obsidian Statue" }),
+    null,
+    { mechanical: true, abilities: [{ id: "Arpm", code: "Arpm", level: 1, cooldownLeft: 0, autocastOn: true }] },
+  );
+  // A caster at FULL LIFE and out of any fight — the unit the friendly unit-target search could
+  // never pick, because it ranked allies by their hit points.
+  const banshee = world.add(base({ id: 2, typeId: "ugho", x: 2100, y: 2000, hp: 400, maxHp: 400, mana: 200, maxMana: 200, speed: 270, radius: 16, name: "Banshee" }));
+  // The statue REGENERATES mana, so "nothing was spent" is "the pool never went down on a tick",
+  // not "the pool still reads 100".
+  let spent = false;
+  for (let i = 0; i < 40; i++) { const m = statue.mana; world.tick(0.05); if (statue.mana < m) spent = true; }
+  check("with every mana bar full, Spirit Touch stays quiet", !spent, `${statue.mana}`);
+  banshee.mana = 150;
+  const before = statue.mana;
+  for (let i = 0; i < 5; i++) world.tick(0.05);
+  check("a full-health Banshee down on mana is topped up", banshee.mana > 150, `${banshee.mana}`);
+  check("…and the statue paid for it", statue.mana < before - 1, `${before} -> ${statue.mana}`);
+}
+{
+  const world = newWorld();
+  const statue = world.add(
+    base({ id: 1, typeId: "uobs", x: 2000, y: 2000, hp: 425, maxHp: 425, mana: 100, maxMana: 200, speed: 190, radius: 16, mechanical: true, name: "Obsidian Statue" }),
+    null,
+    { mechanical: true, abilities: [{ id: "Arpl", code: "Arpl", level: 1, cooldownLeft: 0, autocastOn: true }] },
+  );
+  const ghoul = world.add(base({ id: 2, typeId: "ugho", x: 2100, y: 2000, hp: 500, maxHp: 500, speed: 270, radius: 16, name: "Ghoul" }));
+  let spent = false;
+  for (let i = 0; i < 40; i++) { const m = statue.mana; world.tick(0.05); if (statue.mana < m) spent = true; }
+  check("with every ally at full health, Essence of Blight stays quiet", !spent, `${statue.mana}`);
+  ghoul.hp = 300;
+  const before = statue.mana;
+  for (let i = 0; i < 5; i++) world.tick(0.05);
+  check("a wounded Ghoul is healed", ghoul.hp > 300, `${ghoul.hp}`);
+  check("…and the statue paid for it", statue.mana < before - 1, `${before} -> ${statue.mana}`);
 }
 
 console.log(failed ? `\nsim-undead: ${failed} FAILED` : "\nall passed");

@@ -875,11 +875,12 @@ export function worthDispelling(t: SimUnit, units: ReadonlyMap<number, SimUnit>,
  *  A heal that would restore nothing is refused by WC3 rather than wasted (HPmaxed /
  *  UnitHPmaxed) — you cannot burn a Paladin's mana on an undamaged Footman. */
 // Priest — Heal; the creeps' Heal (`Anhe`, the code behind `Anh1`/`Anh2` on every Troll
-// Priest, Tuskarr Healer and Mur'gul Blood-Gill); Obsidian Statue — Essence of Blight. A
-// member is refused on a full bar ("Already at full health.") and is the one autocast a creep
-// runs outside a fight — leave the creep code out and its priests healed nobody but full-
-// health camp-mates, forever.
-export const HEAL_SPELLS = new Set(["Ahea", "Anhe", "Arpl"]);
+// Priest, Tuskarr Healer and Mur'gul Blood-Gill). A member is refused on a full bar ("Already
+// at full health.") and is the one autocast a creep runs outside a fight — leave the creep code
+// out and its priests healed nobody but full-health camp-mates, forever. The Obsidian Statue's
+// Essence of Blight is NOT one: it takes no target, and its full-bar refusal is
+// `replenishRefusal`.
+export const HEAL_SPELLS = new Set(["Ahea", "Anhe"]);
 
 /** Spells that need the TARGET to have a mana pool, and the [Errors] line each says when
  *  it doesn't. Nothing in `targs1` can express this — Mana Burn's is
@@ -892,10 +893,6 @@ export const HEAL_SPELLS = new Set(["Ahea", "Anhe", "Arpl"]);
  *  Footman has no mana bar at all and the Demon Hunter simply may not pick him. */
 export const MANA_TARGET_SPELLS: Record<string, string> = {
   AEmb: "Cantmanaburn", // Demon Hunter — Mana Burn
-  // Spirit Touch restores mana, so a target with no mana bar is one it may not pick — the
-  // positive wording the same file ships for exactly this shape. Without it an autocasting
-  // Obsidian Statue spends its whole pool topping up Ghouls, which have no mana at all.
-  Arpm: "Targetmanauser", // Obsidian Statue — Spirit Touch
 };
 
 /** Devour's shape, shared by the Kodo Beast (`Adev`) and the creeps (`ACdv`). The MAX CREEP
@@ -934,6 +931,39 @@ const devourSpell: Handler = (api, caster, def, _rank, ctx) => {
  * overheads also ship a decoy first clip called "nothing", which is why the renderer asks for
  * Birth by name). One pulse of the ability, one play of the art, gone when it finishes.
  */
+/** Which bar each of the Obsidian Statue's replenishes fills — see `replenishPulse`. */
+export const REPLENISH_BAR: Readonly<Record<string, "life" | "mana">> = { Arpl: "life", Arpm: "mana" };
+
+/** The allies ONE pulse would restore, worst off first: inside `Area1` of the statue, admitted
+ *  by `targs1`, and short of the bar this ability fills (a unit with no mana bar is never short
+ *  of mana). The pulse and `replenishRefusal` both read this, so "is there anybody to restore"
+ *  and "who is restored" cannot disagree. */
+function replenishRecipients(api: SpellApi, caster: SimUnit, def: AbilityDef, lvl: AbilityDef["levelData"][number], bar: "life" | "mana"): SimUnit[] {
+  const room = (t: SimUnit): number => (bar === "life" ? t.maxHp - t.hp : t.maxMana > 0 ? t.maxMana - t.mana : 0);
+  return alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 700, { self: true })
+    .filter((t) => room(t) > 0)
+    .sort((a, b) => room(b) - room(a));
+}
+
+/**
+ * Why a replenish may not go off right now — a `Units\CommandStrings.txt` [Errors] key — or
+ * null when at least one ally in reach would be restored (or `code` is not a replenish).
+ *
+ * A pulse into nobody is refused rather than paid for, the same rule a Priest's Heal keeps on a
+ * full-health target, and in the same words: `UnitHPmaxed` "Already at full health." for
+ * Essence of Blight, `UnitManaMaxed` "Already at full mana." for Spirit Touch. It is the one
+ * gate for every route in — the button, a trigger, a command off the wire and the AUTOCAST,
+ * which asks it before firing so a statue left on autocast neither spends its pool on a field
+ * of full bars nor passes over the one Banshee down on mana.
+ */
+export function replenishRefusal(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number): string | null {
+  const bar = REPLENISH_BAR[def.code];
+  const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+  if (!bar || !lvl) return null;
+  if (replenishRecipients(api, caster, def, lvl, bar).length > 0) return null;
+  return bar === "life" ? "UnitHPmaxed" : "UnitManaMaxed";
+}
+
 function replenishCasterArt(api: SpellApi, caster: SimUnit, def: AbilityDef): void {
   if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id, 0, def.casterAttach);
   if (def.specialArt) api.emitEffect(def.specialArt, caster.x, caster.y, caster.id, 0, def.specialAttach);
@@ -958,10 +988,12 @@ function replenishCasterArt(api: SpellApi, caster: SimUnit, def: AbilityDef): vo
  *
  * Three things follow that the single-target reading got wrong:
  *
- *   • **It is an AREA ability.** Both Ubertips say so in as many words — "Restores … to nearby
- *     friendly **units**" — and `Area1` = 700 is the reach, measured from the STATUE (the unit
- *     the sentence is about), while `Rng1` = 250 is only how close it must stand to the ally
- *     it is aimed at. Up to `Cast1` = 6 of them are replenished per pulse.
+ *   • **It is an AREA ability with NO TARGET.** Both Ubertips say so in as many words —
+ *     "Restores … to nearby friendly **units**" — and `UI\TriggerData.txt` files both orders
+ *     (`replenishlife`, `replenishmana`) under `unitordernotarg`. `Area1` = 700 is the reach,
+ *     measured from the STATUE (the unit the sentence is about); the row's `Rng1` = 250 is
+ *     never read, because a no-target order has nothing to close on. Up to `Cast1` = 6 allies
+ *     are replenished per pulse.
  *   • **Spirit Touch restores DataB.** Its own Ubertip quotes `<Arpm,DataB1>` = **3**, and
  *     DataA is empty on that row — read as DataA it fell through to a handler default of 10,
  *     better than three times the mana the game gives.
@@ -970,34 +1002,26 @@ function replenishCasterArt(api: SpellApi, caster: SimUnit, def: AbilityDef): vo
  *     already paid once by the time a handler runs (`tickCast`), so this pays for the rest —
  *     and a statue that runs dry mid-pulse simply reaches fewer allies.
  *
- * WHO gets the six slots is the one thing no column states, so it is OURS: the ally the player
- * (or the autocast) actually aimed at first — the click means something — then the worst-off,
+ * WHO gets the six slots is the one thing no column states, so it is OURS: the worst-off first,
  * which is the same "worst off first" every other friendly autocast in the sim uses
  * (`SimWorld.replenishPick`, `autocastTarget`). An ally already full of whichever bar this is
- * takes no slot at all.
+ * takes no slot at all — and a pulse with NOBODY to take a slot is never cast, by hand or by
+ * autocast (`replenishRefusal`).
  *
  * `targs1` = "ground,air,friend,self,organic,vuln,invu" does the rest of the filtering through
  * `api.admits`, and it has a quiet joke in it: `self` is listed, but the Obsidian Statue is
  * `UnitBalance` `type = Mechanical`, so `organic` refuses it — a statue can neither top itself
  * up nor mend the one standing beside it, and neither can a Meat Wagon be healed by one.
  */
-function replenishPulse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, ctx: CastContext, bar: "life" | "mana"): void {
+function replenishPulse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, bar: "life" | "mana"): void {
   const lvl = def.levelData[rank - 1];
   // DataA "Hit Points Gained" / DataB "Mana Points Gained" — one column each, and the other
   // is blank on that row, which is why reading the wrong one silently yields a default.
   const gain = bar === "life" ? d(lvl, 0, 10) : d(lvl, 1, 3);
   if (gain <= 0) return;
-  // How short of full this ally is, in the bar this ability fills. Zero = it takes no slot.
-  const room = (t: SimUnit): number => (bar === "life" ? t.maxHp - t.hp : t.maxMana > 0 ? t.maxMana - t.mana : 0);
   const maxAffected = Math.max(1, Math.round(lvl.castTime) || 6);
   const maxCharged = Math.max(1, Math.round(d(lvl, 4, 5)));
-  const picked = alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 700, { self: true })
-    .filter((t) => room(t) > 0)
-    .sort((a, b) => room(b) - room(a));
-  // The unit this cast was AIMED at goes first — it is inside `Area1` by construction
-  // (`Rng1` 250 against `Area1` 700) and the player's click is not a suggestion.
-  const aimed = picked.findIndex((t) => t.id === ctx.targetId);
-  if (aimed > 0) picked.unshift(picked.splice(aimed, 1)[0]);
+  const picked = replenishRecipients(api, caster, def, lvl, bar);
   if (!picked.length) return;
   replenishCasterArt(api, caster, def);
   let charged = 1; // the cast itself already paid `Cost1` for the first ally
@@ -1164,13 +1188,13 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // In HEAL_SPELLS, so the game's own rule applies to the unit it is AIMED at: a heal that
   // would restore nothing is REFUSED rather than wasted, which is what stops an autocasting
   // statue emptying its mana into an undamaged Ghoul.
-  Arpl: (api, caster, def, rank, ctx) => replenishPulse(api, caster, def, rank, ctx, "life"),
+  Arpl: (api, caster, def, rank) => replenishPulse(api, caster, def, rank, "life"),
 
   // Spirit Touch (`Arpm`) — "Restores <Arpm,DataB1> mana to nearby friendly units." The same
   // row shape pointed at the other bar, and the reason an undead player builds two statues:
   // the abilities are separate autocasts on one mana pool, so one doing both does neither
   // well. Note the Ubertip quotes **DataB**, not DataA — see `replenishPulse`.
-  Arpm: (api, caster, def, rank, ctx) => replenishPulse(api, caster, def, rank, ctx, "mana"),
+  Arpm: (api, caster, def, rank) => replenishPulse(api, caster, def, rank, "mana"),
 
   // Inner Fire — buff a friendly unit: +armour (dataB) and +damage (dataA as a
   // fraction of base is complex; apply a flat bonus scaled by the caster's data).

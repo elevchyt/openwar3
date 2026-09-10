@@ -40,7 +40,7 @@ import {
   type ReviveMode,
 } from "../data/gameplayConstants";
 import { perfNow, simProfile } from "./profile";
-import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, DISPEL_CODES, worthDispelling, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -2562,7 +2562,7 @@ export function castCostOf(u: { immolation: string }, def: AbilityDef, lvl: Abil
 }
 /**
  * Casts with NO WIND-UP AT ALL: pressing the button IS the cast, the way it is for the
- * IMMEDIATE list above — except that these have a TARGET, so they still walk to it.
+ * IMMEDIATE list above — but through the ordinary cast checks rather than around them.
  *
  * The Obsidian Statue's two replenishes are the case, and the player-visible symptom is the
  * one every undead player knows: **press both hotkeys in quick succession and BOTH go off**
@@ -2582,10 +2582,10 @@ export function castCostOf(u: { immolation: string }, def: AbilityDef, lvl: Abil
  *     before each pulse and half a second after, the second hotkey landed inside the first's
  *     wind-up and REPLACED it, and only one of the two ever fired.
  *
- * So: in range, the press resolves at ORDER TIME (`castImmediate`) and takes no order slot,
- * which is what lets the second press find the first already spent. Out of range it falls
- * through to the ordinary pending cast so the statue still walks to whoever it was aimed at
- * — and fires the moment it arrives, with neither the cast point nor the backswing.
+ * So the press resolves at ORDER TIME (`castImmediate`) and takes no order slot, which is what
+ * lets the second press find the first already spent. Both orders take NO TARGET
+ * (`UI\TriggerData.txt` files `replenishlife`/`replenishmana` under `unitordernotarg`), so
+ * there is never a walk first: the pulse goes off where the statue stands.
  */
 const NO_WINDUP = new Set(["Arpl", "Arpm"]);
 /** Abilities that refuse a target for being TOO BIG, with the cap in their own `DataC`.
@@ -11573,6 +11573,11 @@ export class SimWorld {
     if (def.target === "none") {
       const missing = this.corpseRefusal(u, def, lvl, u.x, u.y);
       if (missing) return missing;
+      // …and the Obsidian Statue's replenishes, for the same reason and in the same place: a
+      // pulse with nobody short of its bar inside `Area1` is "Already at full health." / "Already
+      // at full mana." rather than mana and a cooldown spent on nothing. See replenishRefusal.
+      const full = replenishRefusal(this.spellApi, u, def, ab.level);
+      if (full) return full;
     }
     return null;
   }
@@ -11685,6 +11690,9 @@ export class SimWorld {
     // both on nothing. An `auto` cast lands here too and simply doesn't fire, which is exactly
     // what an autocast with no work to do should do.
     if (spawnsFromCorpse(code) && this.corpseRefusal(u, def, lvl, def.target === "point" ? x : u.x, def.target === "point" ? y : u.y)) return false;
+    // The same door for a replenish with nobody to restore (see replenishRefusal) — the button
+    // is told why in castUseError; everything else, the autocast included, simply doesn't fire.
+    if (replenishRefusal(this.spellApi, u, def, ab.level)) return false;
     // Immediate abilities (see IMMEDIATE) fire here and now: pay, run the effect, done.
     // They take no order and touch none of the unit's state below, so they neither need
     // the castLocked gate nor interrupt a swing, a walk, or another spell's wind-up.
@@ -11857,9 +11865,9 @@ export class SimWorld {
    *  left completely alone. The whole cast collapses into this one call, so every
    *  spell event fires here in the order tickCast would have raised them.
    *
-   *  `targetId` is for the NO_WINDUP abilities, which are the only members with a target —
-   *  the caller has already checked it is castable and within reach. Everything in IMMEDIATE
-   *  aims at nobody and passes none. */
+   *  `targetId` is for a unit-target NO_WINDUP member — the caller has already checked it is
+   *  castable and within reach. The statue's replenishes, the only members today, aim at
+   *  nobody, and neither does anything in IMMEDIATE, so all of them pass none. */
   private castImmediate(u: SimUnit, ab: SimAbility, def: AbilityDef, lvl: AbilityLevel, targetId = 0): boolean {
     const cost = this.castCost(u, def, lvl);
     if (ab.cooldownLeft > 0 || u.mana < cost) return false;
@@ -12268,6 +12276,17 @@ export class SimWorld {
         if (worn.length && u.buffs.some((b) => b.buffId && worn.includes(b.buffId.toLowerCase()))) continue;
         if (!u.isCreep && !u.inCombat && !this.nearestEnemy(u, this.autocastSearchRange(u, 0), true)) continue;
         return this.issueCast(u.id, def.code, 0, u.x, u.y, true);
+      }
+      // THE OBSIDIAN STATUE'S REPLENISHES — a no-target pulse around the statue, so there is
+      // nobody to pick and nothing to walk to: it fires the moment anyone inside `Area1` is short
+      // of the bar it fills, which is the same question the press is refused on
+      // (replenishRefusal). They used to fall through to the friendly unit-target search below,
+      // which ranks allies by LIFE and puts everyone outside a fight above its bar — so Spirit
+      // Touch never found the full-health caster standing at the back with an empty mana pool.
+      if (REPLENISH_BAR[def.code]) {
+        if (replenishRefusal(this.spellApi, u, def, ab.level)) continue;
+        if (this.issueCast(u.id, def.code, 0, u.x, u.y, true)) return true;
+        continue;
       }
       if (def.target !== "unit") continue;
       // Friendly vs hostile autocast is decided by the ability's real Targets

@@ -2046,11 +2046,11 @@ every army pass rather than only at home, because a statue's job is to heal the 
 standing in.
 
 Neither ability existed in the sim (`uobs` UnitAbilities is `"Arpl,Arpm,Aave"`, and they are *not*
-the Moon Well's `Ambt` — that is a battery a unit walks up to and drinks from). Both are now
-ordinary unit-target autocasts in `spells.ts`: `Arpl` joins `HEAL_SPELLS`, so the game's own rule
-applies and a heal that would restore nothing is refused rather than wasted, and `Arpm` joins
-`MANA_TARGET_SPELLS` under the game's own `Targetmanauser` string, without which an autocasting
-statue empties its pool topping up Ghouls.
+the Moon Well's `Ambt` — that is a battery a unit walks up to and drinks from). Both are no-target
+pulses around the statue (`replenishPulse` in `spells.ts`, see [`undead.md`](./undead.md)), and
+neither is ever spent into nothing: with nobody short of its bar inside `Area1` the pulse is
+refused, at the press and at the autocast alike (`replenishRefusal`), without which an autocasting
+statue empties its pool on a field of full bars.
 
 ### Moon Wells: the well has to be ARMED
 
