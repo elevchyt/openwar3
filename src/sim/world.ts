@@ -451,6 +451,8 @@ export type BuffKind =
   | "dot" // value = dps taken
   | "sleep" // cannot act (like stun) but wakes the instant it takes damage (Sleep)
   | "silence" // cannot cast spells (Silence, Soul Burn) — can still move & attack
+  | "hex" // Hex / Polymorph: the holder is a CRITTER — no attack, no spells, and it walks at
+  //       exactly HEX_MOVE_SPEED. The body it wears is `SimUnit.hexForm`; see hexUnit.
   | "manaShield" // absorb incoming damage into mana instead of hp; value = mana spent per hp
   | "root" // value = move-slow fraction (Entangling Roots pins to 1.0); can still attack
   | "vuln" // value = fraction of EXTRA damage the holder takes (Berserk +50%)
@@ -1553,6 +1555,15 @@ export interface SimUnit {
   paused: boolean; // JASS PauseUnit: frozen — no orders, movement, or turning (cinematics)
   waygate?: WaygateState | null; // JASS WaygateSetDestination/Activate — a Way Gate ('nwgt'), 7.22
   silenced: boolean; // derived from buffs (cannot cast spells)
+  /** Derived from a `hex` buff (Hex, Polymorph): a critter — no attack, no spells, walks at
+   *  HEX_MOVE_SPEED. */
+  hexed: boolean;
+  /** The CRITTER unit type a Hex or Polymorph has this unit wearing, "" when it wears its own
+   *  body. A SKIN and nothing more: `typeId` stays the unit's own, so its name, its hit points,
+   *  its pathing radius and its click volume are all still the original's — only the model
+   *  drawn changes (RtsController.retype's `skin`). Set by hexUnit, cleared by recomputeStats
+   *  on the tick the last `hex` buff goes, however it went (the clock, a dispel). */
+  hexForm: string;
   ethereal: boolean; // derived from buffs (Banish): can't attack, immune to physical damage
   /** Pulled out of the air and stuck to the ground — derived from a `web` root buff the way
    *  `ethereal` is derived from Banish's. While it is set the unit answers to `ground` rather
@@ -1974,6 +1985,9 @@ export interface SimUnit {
   itemCooldowns?: Map<string, number>;
   getItemId: number; // ground item this unit is walking to pick up (order === "getitem"; 0 = none)
   pendingGive: { toId: number; slot: number } | null; // walking to hand a slot's item to another hero
+  /** Walking to USE a slot's item on a unit that was out of its reach (issueUseItemWalk).
+   *  `itemId` pins the item, so one moved out of the slot on the way is not pressed. */
+  pendingUse: { slot: number; targetId: number; itemId: string } | null;
   /** Walking to a SHOP to sell a slot's item (WC3: right-click the item, click the shop —
    *  the same gesture as dropping it, but the shop takes it and pays). See issueSellItem. */
   pendingSell: { shopId: number; slot: number } | null;
@@ -2648,7 +2662,7 @@ const TINY_BUILDING_RACES = ["human", "orc", "undead", "nightelf"];
  *  it — "including with Purge" (Liquipedia), whose contribution is the plain `slow`. Every
  *  member is something holding the unit where it stands: a stun, a Sleep, Entangling Roots
  *  or Ensnare, a slow, or Banish's ethereal drag. */
-const CROWD_CONTROL_BUFFS = new Set<BuffKind>(["stun", "sleep", "root", "slow", "ethereal"]);
+const CROWD_CONTROL_BUFFS = new Set<BuffKind>(["stun", "sleep", "root", "slow", "ethereal", "hex"]);
 /** Abilities that may be aimed at a magic-immune unit anyway. There is no flag for this in
  *  the ability data — no `targs1` value means "may target the immune" — so the engine
  *  hardcodes it and so must we, which is why the list is short and explicit rather than
@@ -2713,6 +2727,37 @@ const DAY_END = MISC_DATA.Dusk;
 // the ~1.8×-aggro guess — the MPQ wins; see CLAUDE.md.)
 const GUARD_DISTANCE = MISC_GAME.GuardDistance; // strayed this far from home → start the return timer
 const MAX_GUARD_DISTANCE = MISC_GAME.MaxGuardDistance; // strayed this far → return home unconditionally, even under attack
+
+/**
+ * The ENGINE's movement ceiling, above the game's own `MaxUnitSpeed` (400, MiscGame.txt).
+ * Not a row in any file: every speed a unit can reach is clamped to the constant, and exactly
+ * two effects carry the hard-coded exemption that lets them past it to this — the
+ * Blademaster's Wind Walk and the Goblin Alchemist's Chemical Rage (see speedCeiling). The
+ * number is the developer's, stated with that rule.
+ */
+const ENGINE_MAX_UNIT_SPEED = 522;
+
+/** A hexed or polymorphed unit's movement speed. SET, not reduced — the developer's rule: the
+ *  critter walks at exactly this whatever its own speed was and whatever hastes it wears. */
+const HEX_MOVE_SPEED = 100;
+
+/** The art and sound a Hex or Polymorph plays on its target. Polymorph's own rows name the
+ *  models — `[Aply] Specialart = PolyMorphTarget.mdl` (the poof) and `[Bply] Effectart =
+ *  PolyMorphDoneGround.mdl` (turning back) — and the WAVs sit beside them in the same folder
+ *  (`PolymorphTarget1.wav`, `PolymorphTargetAir1.wav`, `PolymorphDone.wav`). Hex shares all of
+ *  it: `[BOhx] Effectart` is the same PolyMorphDoneGround.mdl. */
+const POLYMORPH_DIR = "Abilities\\Spells\\Human\\Polymorph\\";
+const HEX_TARGET_ART = `${POLYMORPH_DIR}PolyMorphTarget.mdx`;
+const HEX_TARGET_SOUND = `${POLYMORPH_DIR}PolymorphTarget1.wav`;
+const HEX_TARGET_SOUND_AIR = `${POLYMORPH_DIR}PolymorphTargetAir1.wav`;
+const HEX_DONE_ART = `${POLYMORPH_DIR}PolyMorphDoneGround.mdx`;
+const HEX_DONE_SOUND = `${POLYMORPH_DIR}PolymorphDone.wav`;
+
+/** What a hexed or polymorphed FLYER becomes, whichever spell did it: the Flying Sheep
+ *  (`nshf`, Units\Critters\FlyingSheep\FlyingSheep.mdx). Polymorph's own `DataC` ("air")
+ *  already names it; Hex's names three birds instead (`nalb,nvul,nsno`), and the developer's
+ *  rule puts every flyer in the sheep regardless. */
+const HEX_AIR_CRITTER = "nshf";
 const GUARD_RETURN_TIME = MISC_GAME.GuardReturnTime; // also the "can't get home, resume fighting" window
 const CREEP_CALL_FOR_HELP = MISC_GAME.CreepCallForHelp; // camp cohesion: one aggros → the whole camp wakes/joins
 // "Radius of creep notification when a new building gets placed" — Units\MiscData.txt's
@@ -2859,6 +2904,10 @@ export type EffectAnim = "birth" | "stand" | "hold";
  *                    statue and hovering somewhere near its feet.
  *   `soundLabel`   — an AbilitySounds.slk label fired with the model, for a cue whose WAV
  *                    does NOT live beside its art (a shop's `ReceiveGold`).
+ *   `soundFile`    — a WAV PATH fired with the model, for a cue with no label at all that
+ *                    the folder scan cannot pick out either: Hex and Polymorph's poof sounds
+ *                    `PolymorphTarget1.wav` on a walker and `PolymorphTargetAir1.wav` on a
+ *                    flyer, two files in one folder beside one model.
  */
 export interface SimSpellEffect {
   art: string;
@@ -2869,6 +2918,7 @@ export interface SimSpellEffect {
   life?: number;
   sound?: boolean;
   soundLabel?: string;
+  soundFile?: string;
   anim?: EffectAnim;
   attach?: string[];
 }
@@ -4079,6 +4129,15 @@ export class SimWorld {
     return best;
   }
 
+  /** What a shop pays for an item: `PawnItemRate` of its gold and lumber, rounded down — the
+   *  one price both the sale (pawnItem) and the inventory tooltip's gold line quote, so the
+   *  number the player reads is the number they are paid. 0/0 for an item nobody will buy. */
+  pawnPrice(itemId: string): { gold: number; lumber: number } {
+    const def = this.itemReg?.get(itemId);
+    if (!def?.pawnable) return { gold: 0, lumber: 0 };
+    return { gold: Math.floor(def.gold * MISC_GAME.PawnItemRate), lumber: Math.floor(def.lumber * MISC_GAME.PawnItemRate) };
+  }
+
   /** Sell an item back to a shop. WC3 pays `PawnItemRate` of its gold value (0.50 in the
    *  MiscGame.txt — NOT the 60% often quoted), and the hero must be within
    *  `PawnItemRange` (300) of the shop. The item is destroyed, not restocked. */
@@ -4102,8 +4161,7 @@ export class SimWorld {
     if (!this.inPawnRange(u, shop)) return false;
     u.inventory[slot] = null;
     const stash = this.stashOf(u.owner);
-    const gold = Math.floor(def.gold * MISC_GAME.PawnItemRate);
-    const lumber = Math.floor(def.lumber * MISC_GAME.PawnItemRate);
+    const { gold, lumber } = this.pawnPrice(held.itemId);
     stash.gold += gold;
     stash.lumber += lumber;
     // Being paid is a thing you SEE (issue #120), and the seller is where you are looking —
@@ -6362,6 +6420,71 @@ export class SimWorld {
    *  HP carries over as a FRACTION: a Town Hall at half health becomes a half-health Keep,
    *  not a Keep with 750/2000. The renderer picks the swap up from `morphs` and re-attaches
    *  the new model. */
+  /**
+   * The fastest this unit may move: the game's `MaxUnitSpeed` / `MaxBldgSpeed` (400 both,
+   * Units\MiscGame.txt), which every haste stops at — a Scroll of Speed's +200% included.
+   * Wind Walk and Chemical Rage are the two effects with the engine's hard-coded exemption,
+   * and they stop at ENGINE_MAX_UNIT_SPEED instead.
+   */
+  private speedCeiling(u: SimUnit): number {
+    // Wind Walk's speed is a `haste` in the "windwalk" group (spells.ts SELF_INVIS_GROUP.AOwk).
+    const windWalk = u.buffs.some((b) => b.kind === "haste" && b.group === "windwalk");
+    // Chemical Rage is a FORM — the ogre is a unit type of its own — so it is recognised by the
+    // ability that put the unit in it (morphToggle's `altFormAbil`).
+    const chemicalRage = !!u.altFormAbil && this.abilities?.get(u.altFormAbil)?.code === "ANcr";
+    if (windWalk || chemicalRage) return ENGINE_MAX_UNIT_SPEED;
+    return u.building ? MISC_GAME.MaxBldgSpeed : MISC_GAME.MaxUnitSpeed;
+  }
+
+  /**
+   * HEX / POLYMORPH: make `t` a critter for as long as the `hex` buff runs.
+   *
+   * The buff is the whole of the RULES (recomputeStats: no attack, no spells, HEX_MOVE_SPEED)
+   * and `hexForm` is the whole of the PICTURE — a skin over the unit's own type, so its name,
+   * its hit points, its pathing and its click volume stay exactly what they were. Which critter
+   * comes off the spell's own row: both families share the `Ply2..Ply5` columns
+   * (AbilityMetaData useSpecific "Aply,ACpy,AOhx,AChx"), DataB for a walker, DataD for an
+   * amphibious body, DataE for a ship — Polymorph's `nshe`/`nsha`/`nshw`, Hex's pig-seal-crab
+   * list and so on, one picked at random per cast. A FLYER is always the Flying Sheep
+   * (HEX_AIR_CRITTER).
+   *
+   * Re-casting on a unit already a critter refreshes the clock (the buff) and poofs again, but
+   * keeps the critter it is.
+   */
+  private hexUnit(t: SimUnit, lvl: AbilityLevel | undefined, buff: SimBuffInit): void {
+    this.spellApi.applyBuff(t, buff); // through the spell door: magic immunity refuses it there
+    if (!t.buffs.some((b) => b.kind === "hex")) return;
+    if (!t.hexForm) {
+      const critter = this.hexCritterFor(t, lvl);
+      if (critter) {
+        t.hexForm = critter;
+        // The renderer re-skins off `hexForm` (MapViewerScene.remodelUnit); `typeId` is untouched.
+        this.morphs.push({ unitId: t.id, from: t.typeId, to: t.typeId });
+      }
+    }
+    // The poof, on the unit — with the flyer's own version of its sound.
+    this.spellEffects.push({ art: HEX_TARGET_ART, x: t.x, y: t.y, targetId: t.id, z: 0, soundFile: t.flying ? HEX_TARGET_SOUND_AIR : HEX_TARGET_SOUND });
+  }
+
+  /** The critter `hexUnit` turns `t` into, or "" when this install ships none of them. */
+  private hexCritterFor(t: SimUnit, lvl: AbilityLevel | undefined): string {
+    if (t.flying) return this.unitReg?.get(HEX_AIR_CRITTER) ? HEX_AIR_CRITTER : "";
+    const moveType = this.unitReg?.get(t.typeId)?.moveType;
+    const column = moveType === MoveType.Float ? 4 : moveType === MoveType.Amphibious ? 3 : 1;
+    const pool = (lvl?.dataStr[column] ?? "").split(",").map((s) => s.trim()).filter((id) => id && this.unitReg?.get(id));
+    return pool.length ? pool[Math.floor(this.rng() * pool.length)] : "";
+  }
+
+  /** Give a critter its own body back — the hex ran out or was dispelled (recomputeStats). */
+  private unhex(u: SimUnit): void {
+    u.hexForm = "";
+    this.morphs.push({ unitId: u.id, from: u.typeId, to: u.typeId });
+    // `[Bply] Effectart`, "played on the ground under the unit when it turns back into the
+    // original unit" (HumanAbilityFunc.txt's own Polymorph art notes) — so at the spot, not on
+    // the body. Not for a unit that is dying: a corpse does not turn back.
+    if (u.hp > 0) this.spellEffects.push({ art: HEX_DONE_ART, x: u.x, y: u.y, targetId: 0, z: 0, soundFile: HEX_DONE_SOUND });
+  }
+
   private morphUnit(u: SimUnit, toTypeId: string): void {
     const def = this.unitReg?.get(toTypeId);
     if (!def) return;
@@ -7328,6 +7451,8 @@ export class SimWorld {
       | "stunned"
       | "paused"
       | "silenced"
+      | "hexed"
+      | "hexForm"
       | "ethereal"
       | "webbed"
       | "magicImmune"
@@ -7414,6 +7539,7 @@ export class SimWorld {
       | "inventory"
       | "getItemId"
       | "pendingGive"
+      | "pendingUse"
       | "pendingSell"
       | "pendingDrop"
       | "baseSightDay"
@@ -7587,6 +7713,8 @@ export class SimWorld {
       stunned: false,
       paused: false,
       silenced: false,
+      hexed: false,
+      hexForm: "",
       ethereal: false,
       webbed: false,
       magicImmune: false, // recomputeStats derives it from the unit's ability list
@@ -7677,6 +7805,7 @@ export class SimWorld {
       inventory: hero ? [null, null, null, null, null, null] : [],
       getItemId: 0,
       pendingGive: null,
+      pendingUse: null,
       pendingSell: null,
       pendingDrop: null,
     };
@@ -10093,6 +10222,7 @@ export class SimWorld {
     let thorns = 0;
     let stun = false;
     let silence = false;
+    let hexed = false;
     let ethereal = false;
     let webbed = false;
     let invisible = false;
@@ -10130,6 +10260,7 @@ export class SimWorld {
         slowMove = Math.max(slowMove, b.value); // Banish's Movement Speed Reduction (DataA)
       } else if (b.kind === "stun" || b.kind === "sleep") stun = true; // sleep disables like a stun (wakes on damage)
       else if (b.kind === "silence") silence = true;
+      else if (b.kind === "hex") hexed = true; // a critter casts nothing either (u.silenced below)
       else if (b.kind === "invisible") {
         cloaked = true; // under the effect from the moment it lands
         if (b.delay <= 0) invisible = true; // …but not actually faded until the transition elapses
@@ -10298,6 +10429,11 @@ export class SimWorld {
       || this.itemAbilityLevel(u, "Ault") !== null;
     u.sightNight = ultravision ? u.sightDay : u.baseSightNight + upg.sight;
     u.speed = Math.max(0, (u.baseSpeed + upg.speed + item.speed) * (1 - slowMove) * (1 + hasteMove));
+    // …under the game's ceiling. Without it a Scroll of Speed's +200% walked a Footman at 810.
+    u.speed = Math.min(u.speed, this.speedCeiling(u));
+    // A critter walks at exactly its own pace, whatever it was before (HEX_MOVE_SPEED) — and
+    // the zeroing rules below still hold it, so an ensnared sheep stays put.
+    if (hexed) u.speed = HEX_MOVE_SPEED;
     // Root (`Aroo`) — an Ancient is a building that can decide to walk. UnitBalance already
     // gives every carrier a real movement speed (eaom spd=40): that is its UPROOTED walk, and
     // what makes it a building the rest of the time is simply that we refuse to spend it.
@@ -10326,7 +10462,12 @@ export class SimWorld {
     // Spiked Carapace also returns a fraction of melee damage (dataA), like Thorns.
     u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
     u.stunned = stun;
-    u.silenced = silence;
+    u.silenced = silence || hexed;
+    u.hexed = hexed;
+    // The critter's clock ran out, or somebody dispelled it: give the unit its own body back,
+    // with the poof it went in with played the other way (HEX_DONE_ART). One place for every
+    // way a hex can end, because every one of them ends up recomputing stats.
+    if (!hexed && u.hexForm) this.unhex(u);
     u.ethereal = ethereal || u.etherealForm; // Banish (timed) OR the Spirit Walker's ethereal FORM (persistent)
     // Web, landing and letting go. The altitude it returns to is the TYPE's own `moveheight`
     // — the same number the spawner starts it at — rather than one stashed at cast time: a
@@ -11522,6 +11663,29 @@ export class SimWorld {
     return null;
   }
 
+  /**
+   * Would a creep's own judgement REFUSE to net `t`? warcraft3.info 176: "Ensnare is cast on
+   * units that come into range after the camp is being started" — so a camp in a fight nets
+   * what ARRIVES and never what is already in it.
+   *
+   * What is "in the fight" is `ensnareSeen`: whoever stood inside the net's reach when the fight
+   * began, and everyone the camp has netted since (noteEnsnared) — so a unit is netted once, as
+   * it arrives, and not again every time the net comes off cooldown.
+   *
+   * A rule about how a creep CHOOSES, asked by the two things that choose for it — the creep
+   * caster's pick (src/ai/creeps.ts) and the autocast search — and not by `targetError`: an
+   * order a trigger or a test gives a creep is not the creep's decision, and must not be
+   * refused by it. Ensnare used to ride the autocast search alone; it is a target spell now
+   * (`[Aens]` has no `Orderon`), and the creep caster presses it.
+   */
+  creepNetRefused(u: SimUnit, code: string, t: SimUnit): boolean {
+    if (!u.isCreep || code !== "Aens" || !this.creepInFight(u)) return false;
+    // The fight may have begun after this creep's own tick took its set (a camp-mate pulled
+    // later in the same pass), so take it now rather than read a stale null as "nobody".
+    this.trackEnsnareSeen(u);
+    return !!u.ensnareSeen?.has(t.id);
+  }
+
   /** Would casting `code` on this target HEAL it? For a polarity spell the friendly half
    *  of its rule is the healing half (Holy Light heals the friendly living and smites the
    *  enemy Undead), so allegiance decides; polarityOk has already vouched for the race. */
@@ -12590,9 +12754,8 @@ export class SimWorld {
     }
     if (!this.hostile(u, t) || t.invulnerable) return false;
     if (u.buffs.length && this.findBuffFrom(t, u.id)) return false;
-    // A creep's Ensnare goes on what ENTERS its reach after the fight has begun, never on what
-    // was already standing there — see SimUnit.ensnareSeen.
-    if (u.isCreep && code === "Aens" && u.ensnareSeen?.has(t.id)) return false;
+    // A creep's Ensnare goes on what ENTERS its reach after the fight has begun (creepNetRefused).
+    if (this.creepNetRefused(u, code, t)) return false;
     return true;
   }
 
@@ -14096,6 +14259,7 @@ export class SimWorld {
       // spells, so they are untouched.
       if (t.magicImmune && src && src !== t && this.hostile(src, t)) return;
       if (this.casting && src && src !== t && this.hostile(src, t)) this.provoke(t, src.id);
+      if (buff.group === "ensnare" && src?.isCreep) this.noteEnsnared(src, t);
       this.applyBuffInternal(t, buff.buffId === undefined && this.casting ? { ...buff, buffId: buffIdOf(this.casting.def, this.casting.rank) } : buff);
     },
     dispel: (t) => this.dispelUnit(t),
@@ -14131,6 +14295,7 @@ export class SimWorld {
     },
     setReplenishTarget: (well, targetId) => { well.replenishTargetId = targetId; },
     morphToggle: (unit, def, rank) => this.morphToggle(unit, def, rank),
+    hexUnit: (t, lvl, buff) => this.hexUnit(t, lvl, buff),
     callToArms: (unit, hallId) => this.callToArms(unit, hallId),
     abilityOf: (id) => this.abilities?.get(id),
     dismissSummons: (owner, typeIds) => {
@@ -15008,6 +15173,7 @@ export class SimWorld {
     // that strike is what reveals you. Gated on `cloaked`, not `invisible`, so the 0.6s
     // Transition Time isn't a window in which he auto-attacks his own wind-up away.
     if (u.cloaked) return 0;
+    if (u.hexed) return 0; // a critter has no attack to pick a fight with (see tickAttack)
     if (u.isPeon || this.harvesting(u)) return 0;
     if (u.isCreep) return u.aggroRange;
     return u.weapon ? u.weapon.acquire : 0;
@@ -15015,8 +15181,9 @@ export class SimWorld {
 
   private tickAttack(u: SimUnit, dt: number): void {
     // Banished mid-fight (issue #49): an ethereal unit can't attack — drop the order
-    // and stand down rather than chase a target it can never hit.
-    if (u.ethereal) {
+    // and stand down rather than chase a target it can never hit. A HEXED unit likewise: a
+    // sheep has no attack at all.
+    if (u.ethereal || u.hexed) {
       this.cancelSwing(u);
       this.stop(u.id);
       return;
@@ -15460,8 +15627,8 @@ export class SimWorld {
   private engage(u: SimUnit, t: SimUnit, noChase = false): void {
     // Ethereal (Banished) units can't swing — cancel any pending strike and hold,
     // never chase (issue #49). Covers the Hold / attack-move callers of engage; the
-    // plain "attack" order is stood down in tickAttack.
-    if (u.ethereal) {
+    // plain "attack" order is stood down in tickAttack. The same for a hexed critter.
+    if (u.ethereal || u.hexed) {
       this.cancelSwing(u);
       u.inCombat = false;
       this.settle(u);
@@ -18766,6 +18933,7 @@ export class SimWorld {
     if (!u || !it || !u.inventory.length || this.castLocked(u) || this.itemsLocked(u)) return false; // itemsLocked: stunned or asleep
     u.getItemId = itemId;
     u.pendingGive = null;
+    u.pendingUse = null;
     u.pendingSell = null;
     u.order = "getitem";
     u.targetId = null;
@@ -18774,12 +18942,26 @@ export class SimWorld {
     this.cancelSwing(u);
     this.detachBuilder(unitId);
     if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE) {
-      this.pickUpItem(u, it);
+      this.pickUpOrRefuse(u, it);
       this.stop(unitId);
     } else {
       this.pathTo(u, it.x, it.y);
     }
     return true;
+  }
+
+  /**
+   * The ORDERED pickup — a right-click on the item, whether the hero was already standing on it
+   * or walked over. When the bag has no room the item stays where it lies and the owner is told
+   * so, late and to them alone, through the channel a refused unload uses (drainRefusals):
+   * `[Errors] Inventoryfull` = "Inventory is full." (Units\CommandStrings.txt), on the gold line
+   * with the error sound. A powerup never reaches that — it is used, not carried — and neither
+   * does an illusion, which picks up nothing at all. A trigger's UnitAddItem goes straight to
+   * pickUpItem and is not a player's order, so it says nothing.
+   */
+  private pickUpOrRefuse(u: SimUnit, it: SimItem): void {
+    if (this.pickUpItem(u, it) || u.isIllusion) return;
+    if (u.inventory.length && u.inventory.indexOf(null) < 0) this.refusals.push({ owner: u.owner, key: "Inventoryfull" });
   }
 
   /** Order a hero to walk to another hero and hand over the item in `slot`. */
@@ -18796,6 +18978,7 @@ export class SimWorld {
     if (!def?.pawnable) return false;
     u.pendingSell = { shopId, slot };
     u.pendingGive = null;
+    u.pendingUse = null;
     u.pendingDrop = null;
     u.getItemId = 0;
     u.order = "getitem";
@@ -18843,11 +19026,42 @@ export class SimWorld {
     return [shop.x + (dx / d) * reach, shop.y + (dy / d) * reach];
   }
 
+  /** The reach of the first UNIT-aimed ability an item grants (`Rng1` — a staff's 700), or 0
+   *  for an item that aims at nothing. What `useItem` walks a unit into before pressing it. */
+  private itemAimReach(def: { abilities: string[] }): number {
+    for (const id of def.abilities) {
+      const ad = this.abilities?.get(id);
+      if (ad?.target === "unit") return ad.levelData[0]?.castRange ?? 0;
+    }
+    return 0;
+  }
+
+  /** Walk `u` into its item's reach of `t` and use it there — the item's half of what a cast
+   *  does with a target out of range (see useItem). Driven by the "getitem" order, like every
+   *  other errand an item sends a hero on. */
+  private issueUseItemWalk(u: SimUnit, slot: number, t: SimUnit): boolean {
+    const held = u.inventory[slot];
+    if (!held || this.castLocked(u)) return false;
+    u.pendingUse = { slot, targetId: t.id, itemId: held.itemId };
+    u.pendingDrop = null;
+    u.pendingGive = null;
+    u.pendingSell = null;
+    u.getItemId = 0;
+    u.order = "getitem";
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.cancelSwing(u);
+    this.pathTo(u, t.x, t.y);
+    return true;
+  }
+
   issueGiveItem(fromId: number, slot: number, toId: number): boolean {
     const u = this.units.get(fromId);
     const to = this.units.get(toId);
     if (!u || !to || !u.inventory[slot] || !to.inventory.length || this.castLocked(u) || this.itemsLocked(u)) return false;
     u.pendingGive = { toId, slot };
+    u.pendingUse = null;
     u.getItemId = 0;
     u.order = "getitem";
     u.targetId = null;
@@ -18874,6 +19088,23 @@ export class SimWorld {
         this.stop(u.id);
       } else if (!u.moving) {
         this.pathTo(u, x, y);
+      }
+      return;
+    }
+    // Walking to use an item on a unit that was out of its reach (issueUseItemWalk). The target
+    // walks too, so the route is re-taken toward where it is now whenever the last one runs out.
+    if (u.pendingUse) {
+      const { slot, targetId, itemId } = u.pendingUse;
+      const t = this.units.get(targetId);
+      const def = this.itemReg?.get(itemId);
+      if (!t || t.hp <= 0 || !def || u.inventory[slot]?.itemId !== itemId) { this.stop(u.id); return; }
+      if (Math.hypot(t.x - u.x, t.y - u.y) <= this.itemAimReach(def) + u.radius + t.radius) {
+        u.pendingUse = null;
+        this.stop(u.id);
+        this.useItem(u.id, slot, targetId, t.x, t.y);
+      } else if (!u.moving) {
+        if (u.waypoint < u.path.length) u.moving = true;
+        else if (u.waitT <= 0 && !this.pathTo(u, t.x, t.y)) this.holdOrGiveUp(u, t.x, t.y);
       }
       return;
     }
@@ -18906,7 +19137,7 @@ export class SimWorld {
     const it = this.items.get(u.getItemId);
     if (!it) { this.stop(u.id); return; } // item gone (someone else grabbed it)
     if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE) {
-      this.pickUpItem(u, it);
+      this.pickUpOrRefuse(u, it);
       this.stop(u.id);
     } else if (!u.moving) {
       // Arrived-but-not-close (blocked) or needing a repath — and, when there is no route at
@@ -19006,6 +19237,7 @@ export class SimWorld {
     u.pendingDrop = { slot, x, y };
     u.getItemId = 0;
     u.pendingGive = null;
+    u.pendingUse = null;
     u.pendingSell = null;
     u.order = "getitem";
     u.targetId = null;
@@ -19068,6 +19300,14 @@ export class SimWorld {
     if (!held || held.cooldownLeft > 0) return false;
     const def = this.itemReg.get(held.itemId);
     if (!def || !def.usable) return false;
+    // Aimed at a unit it cannot REACH from here: walk over and press it on arrival, the way a
+    // spell cast at the same unit walks into its range. A unit that can move is never told
+    // "Target is outside range." — it closes the distance (issueUseItemWalk / tickGetItem).
+    if (targetId && targetId !== u.id) {
+      const t = this.units.get(targetId);
+      const reach = this.itemAimReach(def);
+      if (t && reach > 0 && Math.hypot(t.x - u.x, t.y - u.y) > reach + u.radius + t.radius) return this.issueUseItemWalk(u, slot, t);
+    }
     // The active behaviour is the first granted ability with a code we handle.
     for (const abilId of def.abilities) {
       const ad = this.abilities.get(abilId);
@@ -19399,7 +19639,7 @@ export class SimWorld {
    *  units — it now can only affect its owner's units." That is what `player` means in the
    *  flag list, and it is stricter than the generic friend test targetAllowed applies, so
    *  it is checked here rather than left to the flags. */
-  private staffTargetError(u: SimUnit, ad: AbilityDef, t: SimUnit): string | null {
+  private staffTargetError(u: SimUnit, ad: AbilityDef, t: SimUnit, walk = false): string | null {
     if (t.hp <= 0) return "Notthisunit";
     const flagErr = this.targetError(u, t, ad.targetFlags, ad.code);
     if (flagErr !== null) return flagErr;
@@ -19410,7 +19650,7 @@ export class SimWorld {
     // possible if a second staff may be aimed at a unit the first one is already holding.
     if (t.buffs.some((b) => !b.untilHealed && CROWD_CONTROL_BUFFS.has(b.kind))) return "Teleportfail"; // "A unit could not be teleported."
     const range = ad.levelData[0]?.castRange ?? 0;
-    if (range > 0 && Math.hypot(t.x - u.x, t.y - u.y) > range + u.radius + t.radius) return "Notinrange";
+    if (!walk && range > 0 && Math.hypot(t.x - u.x, t.y - u.y) > range + u.radius + t.radius) return "Notinrange";
     return null;
   }
 
@@ -19482,10 +19722,14 @@ export class SimWorld {
    *  as a commandstrings.txt [Errors] key (null = it goes through). The HUD asks this before
    *  it spends an aimed item-use, the way it asks `castError` before an aimed spell — so a
    *  bad target draws the game's own gold line and leaves the item armed to click again. */
-  itemUseError(unitId: number, slot: number, targetId: number): string | null {
+  itemUseError(unitId: number, slot: number, targetId: number, walk = false): string | null {
     const ready = this.itemReadyError(unitId, slot);
     if (ready !== null) return ready;
     const u = this.units.get(unitId)!;
+    // `walk`: the asker is going to ORDER the use, and a unit that can move walks into reach
+    // rather than being refused it (useItem → issueUseItemWalk) — so reach is not a refusal
+    // for it. The AI asks without it: it presses only what it can use from where it stands.
+    const walkable = walk && u.baseSpeed > 0;
     const def = this.itemReg!.get(u.inventory[slot]!.itemId)!;
     if (!this.abilities) return "Cantuseitem";
     for (const abilId of def.abilities) {
@@ -19499,7 +19743,7 @@ export class SimWorld {
       if (ad.code === "ANpr" || ad.code === "ANsa") {
         const t = this.units.get(targetId);
         if (!t) return "Targetunit"; // "Must target a unit with this action." — clicked bare ground
-        const err = this.staffTargetError(u, ad, t);
+        const err = this.staffTargetError(u, ad, t, walkable);
         if (err !== null) return err;
         const lvl = ad.levelData[0];
         const mask = lvl?.data[0] === undefined || Number.isNaN(lvl.data[0]) ? 0 : lvl.data[0];
@@ -19518,7 +19762,7 @@ export class SimWorld {
       const flagErr = this.targetError(u, t, ad.targetFlags, ad.code);
       if (flagErr !== null) return flagErr;
       const range = ad.levelData[0]?.castRange ?? 0;
-      if (range > 0 && Math.hypot(t.x - u.x, t.y - u.y) > range + u.radius + t.radius) return "Notinrange";
+      if (!walkable && range > 0 && Math.hypot(t.x - u.x, t.y - u.y) > range + u.radius + t.radius) return "Notinrange";
       // Control Magic (`Acmg`) takes SUMMONED units and nothing else — "Grants the ability to
       // control summoned units", which no `targs1` value can say.
       // (`Needsummoned` = "Must target summoned units." — the positive line, not `Notsummoned`,
@@ -20832,6 +21076,15 @@ export class SimWorld {
    * fight BEGINS, note every enemy already inside the spell's own `Rng1`; between fights, forget.
    * Only a trapper pays for this — the in-fight test walks the camp — and only on the edge.
    */
+  private noteEnsnared(src: SimUnit, t: SimUnit): void {
+    // A unit a camp has netted is IN the fight from then on: into the set of every trapper of
+    // that camp, so neither the one that threw it nor its camp-mate throws a second net at it
+    // when the first comes off (see the Ensnare rule in targetError).
+    for (const c of this.units.values()) {
+      if (c.isCreep && c.ensnareSeen && (c === src || this.sameCamp(c, src))) c.ensnareSeen.add(t.id);
+    }
+  }
+
   private trackEnsnareSeen(u: SimUnit): void {
     const ab = u.abilities.find((a) => a.code === "Aens" && a.level >= 1);
     if (!ab) return;

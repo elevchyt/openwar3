@@ -75,6 +75,7 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   u.isHero = s.isHero;
   u.properName = s.properName;
   u.isCreep = s.isCreep;
+  u.hexForm = s.hexForm;
 
   // Pose. `prev*` is rolled forward first so anything reading "where was it last frame"
   // sees the previous payload's position rather than garbage.
@@ -264,7 +265,8 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
       u = create(s) ?? undefined;
       if (!u) continue;
       created.push(s);
-    } else if (u.typeId !== s.typeId && !s.remembered) {
+    } else if ((u.typeId !== s.typeId || u.hexForm !== s.hexForm) && !s.remembered) {
+      // (…or it put on or took off a Hex's critter skin, which is owed the same swap.)
       // The entity MORPHED in place (Scout Tower → Arcane Tower): the write below carries the
       // new type, but the model is the renderer's and it is owed the swap. Not for a
       // remembered image — its whole point is showing what was last SEEN.

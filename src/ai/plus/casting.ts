@@ -669,7 +669,8 @@ export class PlusCaster {
 
   /** Switch on every autocast the unit owns, and let `SimWorld.tickAutocast` run them. That
    *  covers Heal, Inner Fire, Slow, Bloodlust, Curse, Faerie Fire, Frost Armor, Abolish Magic,
-   *  Ensnare, Web, Raise Dead, Get Corpse and every arrow orb, with none of it restated here. */
+   *  Web, Raise Dead, Get Corpse and every arrow orb, with none of it restated here. (Ensnare is
+   *  a target spell, not an autocast, and is cast off `roleOf` as a disable.) */
   private armAutocasts(u: SimUnit): void {
     for (const ab of u.abilities) {
       if (ab.level < 1 || ab.autocastOn) continue;

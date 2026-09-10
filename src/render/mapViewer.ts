@@ -3753,26 +3753,38 @@ export class MapViewerScene {
    *  future upgrade DID change footprint, that would need handling here. */
   private async remodelUnit(simId: number, toTypeId: string): Promise<void> {
     const map = this.viewer.map;
-    const def = this.registry.get(toTypeId);
-    if (!map || !this.rts || !def) return;
+    if (!map || !this.rts) return;
     const su = this.rts.simView.units.get(simId);
     if (!su || su.hp <= 0) return; // died while the new model streamed in
+    // What the unit IS and what it is DRAWN AS are two answers since Hex and Polymorph: a
+    // critter skin (`hexForm`) swaps the model and nothing else. Both are read off the unit as
+    // it stands, not off the event, so a hex and its undoing arriving together land on the truth.
+    const typeId = su.typeId || toTypeId;
+    const hexForm = su.hexForm;
+    const def = this.registry.get(typeId);
+    if (!def) return;
+    const skin = hexForm ? this.registry.get(hexForm) ?? null : null;
+    const drawn = skin ?? def;
     // A morph onto the SAME model file needs no new body — and must not be given one. Most
     // WC3 form pairs are one MDX under two unit ids (Nalc↔Nalm↔Nal2↔Nal3 are all
     // HeroGoblinAlchemist.mdx, ucry↔ucrm both CryptFiend.mdx), and swapping the instance
     // resets the pose, which lands squarely on the "Morph" transition applyFormAnims starts
     // the same frame — the Alchemist snapped into his ogre instead of shuffling into it.
-    if (this.rts.renderedModelPath(simId) !== def.model) {
-      const model = await this.viewer.load(def.model, this.solver);
+    if (this.rts.renderedModelPath(simId) !== drawn.model) {
+      const model = await this.viewer.load(drawn.model, this.solver);
       if (!model) return;
+      // …and a unit that changed shape AGAIN while this streamed in belongs to the swap that
+      // changed it (a Hex dispelled before the sheep finished loading).
+      const now = this.rts.simView.units.get(simId);
+      if (!now || now.typeId !== typeId || now.hexForm !== hexForm) return;
       const instance = model.addInstance();
       instance.setScene(map.worldScene);
       instance.setTeamColor(this.rts.unitColor(su.owner)); // the owner's COLOUR, not its slot (and the ally-colour filter over it)
-      if (!this.rts.remodel(simId, instance, def)) {
+      if (!this.rts.remodel(simId, instance, def, skin)) {
         instance.hide(); // the unit went away while we were loading
         return;
       }
-    } else if (!this.rts.retype(simId, def)) {
+    } else if (!this.rts.retype(simId, def, skin)) {
       return; // the unit went away
     }
     // Re-lay the ground splat: a Keep's foundation is a different texture and scale from a
@@ -7172,6 +7184,7 @@ export class MapViewerScene {
         if (jump) this.jumpToSelection();
         return true;
       },
+      addHeroToSelection: (index) => this.rts?.addHeroToSelection(index) ?? false,
       followSelection: (on) => {
         this.groupFollow = on;
         if (on) {
@@ -7209,7 +7222,7 @@ export class MapViewerScene {
       inventory: () =>
         (this.rts?.inventorySlots() ?? []).map((s) =>
           // An unavailable pocket wears the icon's DIS* twin, never a tint (see disabledArt).
-          s ? { icon: s.icon ? this.inventoryIcon(s.icon, s.disabled) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable, pawnable: s.pawnable, disabled: s.disabled } : null,
+          s ? { icon: s.icon ? this.inventoryIcon(s.icon, s.disabled) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable, pawnable: s.pawnable, sellGold: s.sellGold, sellLumber: s.sellLumber, disabled: s.disabled } : null,
         ),
       useInventory: (slot) => {
         // A press on something that can be USED — a potion, a scroll, a wand, a rod — is a
@@ -10512,6 +10525,9 @@ export class MapViewerScene {
         // own `spawning` keeps crossing with every payload, so the clip ends on the
         // host's clock like everything else.
         if (s.spawning > 0) this.rts?.beginSummonBirth(s.id);
+        // …and a unit that walks into view ALREADY a critter is owed its critter: the body just
+        // attached is its own type's, and the swap that hexed it happened out of our sight.
+        if (s.hexForm) void this.remodelUnit(s.id, s.typeId);
       });
     }
     for (const it of this.rts?.drainSnapshotItemSpawns() ?? []) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
@@ -11143,6 +11159,8 @@ export class MapViewerScene {
           // …and the cue that names its WAV by LABEL instead, because the wav does not live
           // beside the art it plays with (a shop's `ReceiveGold` under the coin pile).
           if (fx.soundLabel) this.sounds?.playAbilitySound(fx.soundLabel, { x, y, z });
+          // …and the one named by PATH (Hex/Polymorph's air and ground poofs; SimSpellEffect).
+          if (fx.soundFile) this.sounds?.playSpellFile(fx.soundFile, { x, y, z });
         }
         // Ground decals a spell painted this frame (Thunder Clap's scorch, THND).
         for (const s of this.rts!.drainFxSplats()) this.addSpellSplat(s.splatId, s.x, s.y);
@@ -11195,6 +11213,13 @@ export class MapViewerScene {
           // spell's art (see playModelAbilityEvent). Asking her model by code is exact; the
           // art chain below is the guess we fall back to.
           if (this.sounds?.playModelAbilityEvent(this.rts!.renderedModelPath(c.casterId), c.code, at)) continue;
+          // An ITEM's press is keyed by its own ability code straight into AnimLookups — `AIMA`
+          // → "ManaPotion", `AIRE` → "RestorationPotion" (UI\SoundInfo\AnimLookups.slk) — which is
+          // the game naming that press's sound outright. The art chain below only reaches
+          // whichever event the shared effect model happens to carry, and a Potion of Mana or of
+          // Restoration drank to the wrong sound. Items only: a SPELL's code event is keyed into
+          // a model at a moment of its own (Flame Strike's ignition), not at the cast.
+          if (def.isItem && this.sounds?.playAbilityCodeSound(c.code, at)) continue;
           // …THEN the sound the row NAMES. `Effectsound` is a label into
           // UI\SoundInfo\AbilitySounds.slk (`[AOwk] Effectsound=WindWalk` → that table's
           // `WindWalk` row → Abilities\Spells\Orc\WindWalk\WindWalk.wav), and it is the

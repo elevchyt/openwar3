@@ -127,6 +127,9 @@ export interface SpellApi {
   /** Swap a unit between the two forms its ability names (DataA "Normal Form Unit" and
    *  UnitID1 "Alternate Form Unit") — Burrow and every other two-form ability. */
   morphToggle(unit: SimUnit, def: AbilityDef, rank?: number): boolean;
+  /** Hex / Polymorph: make `target` a critter under `buff` (kind `hex`) — the critter its
+   *  body calls for off `lvl`'s own Data columns, and the poof. See SimWorld.hexUnit. */
+  hexUnit(target: SimUnit, lvl: AbilityLevel | undefined, buff: SimBuffInit): void;
   /** Look up another ability's own row. The town bell reaches for `Amil` this way so the
    *  militia's stats and timer stay stated once, on the ability that owns them. */
   abilityOf(id: string): AbilityDef | undefined;
@@ -1939,13 +1942,24 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(t, { kind: "sleep", group: "sleep", timeLeft: dur(lvl, t) || 5, sourceId: caster.id, ...fx(def) });
   },
 
-  // Hex (Shadow Hunter) — transform a target into a critter: disabled (can't
-  // attack or cast) for the duration; modelled as a stun.
+  // Hex (Shadow Hunter) — "Transforms an enemy unit into a random critter" (the Ubertip).
+  // Not a stun: the critter WALKS, it just cannot attack or cast, at HEX_MOVE_SPEED. Its
+  // `Dur1`/`HeroDur1` split (15/4 at rank 1) is the usual hero short-change. The creep row
+  // `AChx` shares the code and lands here too.
   AOhx: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "stun", group: "hex", timeLeft: dur(lvl, t) || 4, sourceId: caster.id, ...fx(def) });
+    api.hexUnit(t, lvl, { kind: "hex", group: "hex", timeLeft: dur(lvl, t) || 4, sourceId: caster.id, ...fx(def) });
+  },
+  // Polymorph (Sorceress, and the creeps' `ACpy`) — the same spell with a sheep for every body
+  // (`DataB..E` = nshe/nshf/nsha/nshw) and a minute on the clock. One `group` with Hex, so the
+  // two refresh each other rather than stacking two critters on one unit.
+  Aply: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = def.levelData[rank - 1];
+    api.hexUnit(t, lvl, { kind: "hex", group: "hex", timeLeft: dur(lvl, t) || 60, sourceId: caster.id, ...fx(def) });
   },
 
   // Banish (Blood Mage) — turn a target ETHEREAL for the duration (issue #49). While

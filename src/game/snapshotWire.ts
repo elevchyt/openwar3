@@ -50,7 +50,7 @@ export type WireSnapshot = Omit<WorldSnapshot, "units" | "projectiles"> & { hot:
 /** Bumped when the binary layout changes. Carried in the blob so a mismatched decode fails
  *  loudly at the header rather than as garbage fields three units in. The relay's
  *  `PROTOCOL_VERSION` still gates the SESSION; this gates the blob. */
-const CODEC_VERSION = 4; // 4: a buff's art carries its SIZE variant (3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
+const CODEC_VERSION = 5; // 5: a unit carries its Hex critter skin (4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
 
 const TWO_PI = Math.PI * 2;
 
@@ -447,6 +447,9 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   }
   if (s.orderQueue) w.u16(w.intern(JSON.stringify(s.orderQueue)));
   if (s.pendingCastCode !== null) w.u16(w.intern(s.pendingCastCode));
+  // The critter skin, unconditionally: every one of the 32 flag bits is spoken for (see
+  // `altFormLeft` above), and an interned "" is two bytes.
+  w.u16(w.intern(s.hexForm));
 }
 
 function readUnit(r: Reader): UnitSnapshot {
@@ -529,6 +532,7 @@ function readUnit(r: Reader): UnitSnapshot {
     buildPending: null,
     orderQueue: null,
     pendingCastCode: null,
+    hexForm: "",
   };
   // The fixed block, in the writer's exact order. Kept as assignments rather than inlined
   // into the literal above because argument evaluation order is the one thing that must
@@ -658,6 +662,7 @@ function readUnit(r: Reader): UnitSnapshot {
   if (flags & F_HAS_BUILD_PENDING) s.buildPending = { defId: r.str(), x: r.f32(), y: r.f32(), paid: r.u8() !== 0 };
   if (flags & F_HAS_ORDER_QUEUE) s.orderQueue = JSON.parse(r.str());
   if (flags & F_HAS_PENDING_CAST) s.pendingCastCode = r.str();
+  s.hexForm = r.str();
 
   return s;
 }

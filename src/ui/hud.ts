@@ -122,6 +122,9 @@ export interface HudInvSlot {
   /** `ItemData` **ipaw** — a shop will buy it back, so the tooltip carries the game's grey
    *  "Drop item on shop to sell" line. A quest item or a campaign artifact does not. */
   pawnable: boolean;
+  /** What a shop pays for it (`PawnItemRate` of its price) — the tooltip's gold/lumber row. */
+  sellGold: number;
+  sellLumber: number;
   /** The carrier is stunned or asleep: the pocket is unavailable and `icon` is already the
    *  DIS* twin (the same texture swap the command card makes). Nothing in it may be pressed,
    *  dragged or moved until the carrier can act again. */
@@ -287,6 +290,9 @@ export interface HudDriver {
   /** F1/F2/F3 — select hero `index`; `jump` (double-tap) also centres the camera. False when
    *  the player has no such hero. */
   selectHero(index: number, jump: boolean): boolean;
+  /** Shift+F1/F2/F3 — ADD hero `index` to the current selection (the selection, not a control
+   *  group). False when the player has no such hero. */
+  addHeroToSelection(index: number): boolean;
   /** Hold the key down on that double-tap (a hero key or a control-group digit) and the
    *  camera RIDES the recalled selection until the key comes back up — WC3's hold-to-follow. */
   followSelection(on: boolean): void;
@@ -1633,6 +1639,13 @@ export class GameHud {
     // that second tap down keeps the camera on him as he moves).
     if (e.key === "F1" || e.key === "F2" || e.key === "F3") {
       e.preventDefault();
+      // SHIFT adds the hero to what is already selected — a shift-click on its body, made from
+      // the keyboard. It moves no camera and starts no double-tap.
+      if (e.shiftKey) {
+        this.driver.addHeroToSelection(Number(e.key[1]) - 1);
+        this.refreshSelectionNow();
+        return;
+      }
       const again = this.tapAgain(e.key);
       // Only a hero who is actually THERE may be followed — F3 with two heroes selects
       // nothing, and must not leave the camera riding whatever was already selected.
@@ -2905,7 +2918,13 @@ export class GameHud {
     const use = s.usable ? `<div class="hud-tooltip-desc">${wc3ToHtml(useText)}</div>` : "";
     const pawnText = this.driver.uiString("ITEM_PAWN_TOOLTIP", "|cff808080Drop item on shop to sell|R");
     const pawn = s.pawnable ? `<div class="hud-tooltip-desc">${wc3ToHtml(pawnText)}</div>` : "";
-    this.setTooltip(`<div class="hud-tooltip-title">${title}</div>${desc}${use}${pawn}`);
+    // What a shop PAYS for it, on the same cost row a command button's price sits on and in the
+    // same ToolTip*Icon glyphs — the real client prints it right under the name. It is money
+    // coming IN, so it is never drawn short (the Infinity), whatever the bank holds.
+    const sale = s.pawnable ? this.costItem("gold", s.sellGold, Infinity) + this.costItem("lumber", s.sellLumber, Infinity) : "";
+    const cost = sale ? `<div class="hud-tooltip-cost">${sale}</div>` : "";
+    // The client's order: name, price, the sell hint, the use hint, and then what it does.
+    this.setTooltip(`<div class="hud-tooltip-title">${title}</div>${cost}${pawn}${use}${desc}`);
   }
 
   /** Rebuild the hero inventory slots from the driver's current inventory. Cheap

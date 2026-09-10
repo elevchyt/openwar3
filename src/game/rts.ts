@@ -244,6 +244,9 @@ interface Entry {
   isHero: boolean;
   level: number;
   modelPath: string; // for the HUD portrait
+  /** The model actually DRAWN when it is not the type's own — a Hex or Polymorph critter
+   *  (SimUnit.hexForm). Absent/"" for a unit wearing its own body. See `retype`. */
+  skinPath?: string;
   baseScale: number; // model scale at full size (buildings scale up while built)
   curScale: number; // last uniform scale applied (avoid redundant sets)
   birthSeq: number; // "Birth" sequence index (-1 = none → scale-up fallback)
@@ -410,7 +413,8 @@ const MOVE_ANIM_MIN_RATIO = 0.2;
 const MOVE_EMA_ALPHA = 0.25; // per-tick blend toward the current ratio
 
 /** A payload-to-payload jump longer than this snaps instead of gliding (poseLerp). The
- *  fastest ground speed the game data allows is 522 (MiscData MaxUnitSpeed), so even a
+ *  fastest any unit can move is the engine's 522 (Wind Walk and Chemical Rage, the two let past
+ *  MiscGame's MaxUnitSpeed of 400 — SimWorld.speedCeiling), so even a
  *  quad-length 0.4 s segment covers ~209 world units — anything past this is a teleport
  *  (Blink, a Zeppelin unload, a Town Portal), and a glide would smear it across the map. */
 const POSE_SNAP_DIST = 400;
@@ -2435,7 +2439,7 @@ export class RtsController {
         this.armedItem = null;
         return true;
       }
-      const err = this.sim.itemUseError(id, armed.slot, simId);
+      const err = this.sim.itemUseError(id, armed.slot, simId, true); // out of reach walks, never refuses
       if (err !== null) return this.refuseOrder(err); // stays armed, exactly as on the map
       this.orderMode = null;
       this.armedItem = null;
@@ -2875,6 +2879,33 @@ export class RtsController {
     this.armedItem = null; // whichever way it was aimed, the gesture is spent
     this.orderMode = null;
     return this.execute(this.localPlayer, { c: "giveitem", unitId: from, slot: armed, targetId: heroId });
+  }
+
+  /**
+   * Shift+F1/F2/F3: ADD the (index+1)-th hero to the current selection — the selection, not a
+   * control group.
+   *
+   * The same join a shift-click on the hero's body makes (selectAt's additive branch): a
+   * selection is the player's own units XOR buildings, so only a selection of own units (or
+   * nothing) can take a hero. With a building or somebody else's unit held there is nothing to
+   * join, and the key selects the hero alone rather than doing nothing. False when there is no
+   * such living hero.
+   */
+  addHeroToSelection(index: number): boolean {
+    const hero = this.heroBarUnit(index);
+    if (!hero) return false;
+    if (this.selected.has(hero.id)) return true;
+    const joins = [...this.selected].every((id) => {
+      const s = this.sim.units.get(id);
+      return !!s && s.owner === this.localPlayer && !s.building;
+    });
+    if (!joins) return this.selectHero(index);
+    this.selected.add(hero.id);
+    this.selectedMine = null;
+    this.selectedItem = null;
+    this.refocus(this.focusedKey);
+    this.announceSelection();
+    return true;
   }
 
   /** F1/F2/F3: select the (index+1)-th of the local player's heroes (stable order),
@@ -3656,13 +3687,18 @@ export class RtsController {
    * It deliberately leaves the POSE alone (`curSeq`, the swing/chop latches, `altModel`):
    * that is the body's state, not the type's, and the body has not changed.
    */
-  retype(simId: number, def: UnitDef): boolean {
+  retype(simId: number, def: UnitDef, skin: UnitDef | null = null): boolean {
     const entry = this.byId.get(simId);
     if (!entry) return false;
     // A morph is how a unit ENTERS its alternate form (a Crypt Fiend burrowing), so the
     // sequence list has to be read with that form's props or it arrives wearing the plain
     // half — the burrowed Fiend standing above ground.
-    const props = animPropsFor(def, this.sim.units.get(simId)?.altModel ?? false);
+    //
+    // A SKIN (a Hex critter) is the other way round: everything the model decides — its clips,
+    // its scale, its tint — is the critter's, and everything the TYPE decides — the name, the
+    // food, the selection ring, the flying height — stays the unit's own, because that is all
+    // still the same unit underneath.
+    const props = skin ? animPropsFor(skin, false) : animPropsFor(def, this.sim.units.get(simId)?.altModel ?? false);
     const seqs = entry.unit.instance.model.sequences;
     entry.anims = buildAnimSet(seqs, props);
     Object.assign(entry, findBirthFields(seqs, props));
@@ -3673,8 +3709,9 @@ export class RtsController {
     entry.foodMade = def.foodMade;
     entry.level = def.level;
     entry.modelPath = def.model;
-    entry.baseScale = def.modelScale || 1;
-    entry.curScale = def.modelScale || 1;
+    entry.skinPath = skin ? skin.model : "";
+    entry.baseScale = (skin ?? def).modelScale || 1;
+    entry.curScale = (skin ?? def).modelScale || 1;
     entry.unit.instance.setUniformScale(entry.baseScale); // a retype onto a shared model keeps the body — resize it (attachInstance's note)
     entry.selRadius = (def.selScale || 1) * SEL_RADIUS_PER_SCALE;
     entry.moveHeight = lift(def.moveHeight);
@@ -3682,7 +3719,7 @@ export class RtsController {
     // share one model (Nalc→Nalm) keeps its instance, so an untinted new type would otherwise
     // fall through to applyFogTint sampling the body, and sample the OLD type's colour (already
     // fog-dimmed) as its base. A retype always knows the answer, so it gives it.
-    entry.baseColor = tintColor(def) ?? new Float32Array([1, 1, 1, 1]);
+    entry.baseColor = tintColor(skin ?? def) ?? new Float32Array([1, 1, 1, 1]);
     entry.fogTintB = NaN; // …and force the next fog pass to re-emit from it
     entry.unit.instance.setVertexColor?.(entry.baseColor);
     return true;
@@ -3694,13 +3731,13 @@ export class RtsController {
    *
    *  Selection survives: the entry (and its simId) is the thing the selection holds, and it
    *  is not replaced. Returns false if the unit vanished while the new model was streaming. */
-  remodel(simId: number, instance: Instance, def: UnitDef): boolean {
+  remodel(simId: number, instance: Instance, def: UnitDef, skin: UnitDef | null = null): boolean {
     const entry = this.byId.get(simId);
     if (!entry) return false;
     entry.unit.instance.hide(); // drop the old body
-    instance.setBlendTime?.(def.animBlend);
+    instance.setBlendTime?.((skin ?? def).animBlend);
     entry.unit = { instance, state: WidgetState.IDLE };
-    if (!this.retype(simId, def)) return false;
+    if (!this.retype(simId, def, skin)) return false;
     entry.altModel = this.sim.units.get(simId)?.altModel ?? false;
     entry.curSeq = -1;
     entry.lastSwingSeq = -1;
@@ -4832,7 +4869,8 @@ export class RtsController {
   /** The model file a unit is currently DRAWN with. A morph that lands on the same file
    *  wants `retype`, not `remodel` — see the note on retype. */
   renderedModelPath(simId: number): string {
-    return this.byId.get(simId)?.modelPath ?? "";
+    const e = this.byId.get(simId);
+    return e ? e.skinPath || e.modelPath : ""; // what is DRAWN — a hexed unit's critter
   }
 
   /** The rendered model instance for a unit — for effects that ride the model's
@@ -5471,7 +5509,7 @@ export class RtsController {
       const picked = point ? null : this.pickAt(cssX, cssY);
       const err = point
         ? this.sim.itemReadyError(id, aimedItem.slot)
-        : this.sim.itemUseError(id, aimedItem.slot, picked ?? 0);
+        : this.sim.itemUseError(id, aimedItem.slot, picked ?? 0, true); // out of reach walks (SimWorld.useItem)
       if (err !== null) return this.refuseOrder(err);
       const hit = point ? this.groundHitAt(cssX, cssY) : null;
       if (point && !hit) return this.refuseOrder("Canttargetloc"); // "Unable to target there."
@@ -5898,7 +5936,7 @@ export class RtsController {
 
   /** The primary selected hero's 6 inventory slots for the HUD (null = empty). An
    *  empty array means the selection has no inventory (not a hero). */
-  inventorySlots(): Array<{ itemId: string; icon: string; name: string; desc: string; charges: number; cooldownLeft: number; cooldownFrac: number; usable: boolean; pawnable: boolean; disabled: boolean } | null> {
+  inventorySlots(): Array<{ itemId: string; icon: string; name: string; desc: string; charges: number; cooldownLeft: number; cooldownFrac: number; usable: boolean; pawnable: boolean; sellGold: number; sellLumber: number; disabled: boolean } | null> {
     const id = this.primary;
     const u = id !== null ? this.sim.units.get(id) : undefined;
     if (!u || !u.inventory.length) return [];
@@ -5925,6 +5963,13 @@ export class RtsController {
         // hint, which is the only place the game ever tells you that dropping an item onto a
         // shop sells it (SimWorld.pawnItem is the thing it is talking about).
         pawnable: def?.pawnable ?? false,
+        // …and what that sale PAYS, which the game prints on the tooltip's cost row above the
+        // hint. The sim's own price (SimWorld.pawnPrice), so the line cannot quote a number the
+        // shop will not pay.
+        ...(() => {
+          const p = this.sim.pawnPrice(held.itemId);
+          return { sellGold: p.gold, sellLumber: p.lumber };
+        })(),
       };
     });
   }
@@ -8326,7 +8371,10 @@ export class RtsController {
    */
   private pickVolumes(e: Entry, u: RenderUnit, out: PickVolume[]): void {
     const inst = e.unit.instance;
-    if (modelPickVolumes(inst, out) > 0) return;
+    // A hexed unit keeps its OWN hitbox: the critter is a picture over it, and a Tauren turned
+    // into a frog is no harder to click than the Tauren was. So not the critter's shapes — the
+    // sphere below, sized off the unit's own ring and hull.
+    if (!e.skinPath && modelPickVolumes(inst, out) > 0) return;
     const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
     if (u.building && (e.footHalfW > 0 || e.footHalfH > 0)) {
       out.push({

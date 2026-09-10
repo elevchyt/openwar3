@@ -562,9 +562,13 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // pair at all, where `[Aslo]` right above it carries `slowon`/`slowoff`. Slow is the one
   // button on her card that arms itself.
   Aivs: { target: "unit" },
+  Aply: { target: "unit" }, // Polymorph (Sorceress) — a sheep for Dur1 (see spells.ts, SimWorld.hexUnit)
   Ablo: { target: "unit", autocast: true }, // Bloodlust (Shaman) — +attack & move speed
   Aprg: { target: "unit" }, // Purge (Shaman) — strip buffs, slow enemy, destroy summons
-  Aens: { target: "unit", autocast: true }, // Ensnare (Raider) — root a target (air pulled down)
+  // Ensnare (Raider) — root a target (air pulled down). A TARGET spell, not an autocast:
+  // `[Aens]` (OrcAbilityFunc) and `[ACen]` (NeutralAbilityFunc) both carry `Order=ensnare`
+  // and no `Orderon`/`Orderoff` pair, which is what every autocast here has (see Slow above).
+  Aens: { target: "unit" },
   Alsh: { target: "unit" }, // Lightning Shield (Shaman) — damaging shield around a unit
   Absk: { target: "none" }, // Berserk (Troll Berserker) — self: faster attack, +damage taken
   Aeye: { target: "point" }, // Sentry Ward (Witch Doctor) — summon a vision ward

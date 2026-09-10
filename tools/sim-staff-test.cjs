@@ -241,5 +241,27 @@ const near = (what, got, want, tol = 0.5) => {
   check("…but only ever one stun", target.buffs.filter((x) => x.kind === "stun").length, 1);
 }
 
+{
+  // OUT OF REACH is a walk, not a refusal. The player's order is taken, the bearer walks into
+  // the staff's 700 and presses it there (SimWorld.useItem → issueUseItemWalk → tickGetItem);
+  // the AI's question, asked without `walk`, still answers "Target is outside range."
+  world = newWorld();
+  const hero = give(unit({ isHero: true }), "spre");
+  const target = unit({ x: 2500, y: 1000, prevX: 2500, prevY: 1000 });
+  building("htow", 5000, 5000);
+  check("the AI's question refuses a target out of reach", world.itemUseError(hero.id, 0, target.id), "Notinrange");
+  check("…the player's order does not", world.itemUseError(hero.id, 0, target.id, true), null);
+  check("the press is taken", world.useItem(hero.id, 0, target.id, 0, 0), true);
+  check("…as a walk to the target", `${hero.order}:${hero.pendingUse && hero.pendingUse.targetId}`, `getitem:${target.id}`);
+  check("…with nothing spent yet", hero.inventory[0].cooldownLeft, 0);
+  check("…and nobody sent anywhere", target.x, 2500);
+  hero.x = hero.prevX = 1900; // arrived: 600 from the target, inside the staff's reach
+  hero.moving = false;
+  world.tickGetItem(hero);
+  near("on arrival the staff fires (x)", target.x, 5000, 200);
+  check("…and spends its 30s cooldown", hero.inventory[0].cooldownLeft, 30);
+  check("…and the errand is over", hero.pendingUse, null);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall staff checks passed");
 process.exit(failed ? 1 : 0);

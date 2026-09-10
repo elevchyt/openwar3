@@ -285,6 +285,10 @@ export interface UnitSnapshot {
    *  have a clock on one. 0 for a toggle you switch off yourself — Burrow, a rooted Ancient.
    *  The selection panel's expiry bar is the only reader; see RtsController.timedFormOf. */
   altFormLeft: number;
+  /** The critter a Hex or Polymorph has this unit DRAWN as, "" for its own body (SimUnit.hexForm).
+   *  A client needs it for the model alone — the rules it implies already arrive as the buff
+   *  and the speed. */
+  hexForm: string;
   spawning: number;
   constructing: number;
   /** Whether this worker is hammering. Kept as an OBJECT rather than the flat `repairing`
@@ -637,6 +641,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     swingSlam: false,
     altModel: u.altModel,
     altFormLeft: 0, // a memory has no live clock on it — the same rule the rest of this stub keeps
+    hexForm: "", // …nor a critter skin: only organic units are hexed, and only buildings are remembered
     spawning: 0,
     constructing: 0,
     repair: null,
@@ -770,6 +775,7 @@ export function snapshotFor(
       swingSlam: u.swingSlam,
       altModel: u.altModel,
       altFormLeft: u.altFormLeft,
+      hexForm: u.hexForm,
       spawning: u.spawning,
       constructing: u.constructing,
       repair: u.repair ? { active: u.repair.active } : null,

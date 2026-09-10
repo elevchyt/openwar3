@@ -89,6 +89,12 @@ class CreepView implements CasterView {
     return u.isCreep && !u.asleep && !u.returning && this.world.creepInFight(u);
   }
 
+  /** A trapper nets what ARRIVES at its camp's fight, never what is already in it — warcraft3.info
+   *  176, kept by the sim (SimWorld.creepNetRefused) because the autocast search asks it too. */
+  refuses(u: SimUnit, code: string, t: SimUnit): boolean {
+    return this.world.creepNetRefused(u, code, t);
+  }
+
   order(cmd: Command): boolean {
     switch (cmd.c) {
       case "cast":

@@ -173,6 +173,11 @@ body.in-game {
   position: fixed;
   inset: 0;
   z-index: 25;
+  /* STATED, because it is inherited: a scrim is mounted into #ui, which is pointer-events:none
+     so the map under the HUD stays clickable — and a scrim that inherits that takes no click at
+     all. The update overlay (ui/updateOverlay.ts) darkened the menu while every button under
+     the dark went on answering the mouse. */
+  pointer-events: auto;
 }
 /* A scrim that is SEEN, for OpenWar3's own modals. The game's own message box (DialogWar3)
    deliberately does not darken what is behind it — it is a question about the screen you are

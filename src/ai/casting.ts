@@ -34,7 +34,7 @@ import type { SimUnit, SimWorld } from "../sim/world";
  *
  * What is NOT here, because the sim already does it: **autocast**. "Autocast spells have the
  * same event for firing for their autocast and for their AI use" (post 20), so Heal, Slow,
- * Bloodlust, Curse, Faerie Fire, Frost Armor, Ensnare, Web, Raise Dead and the arrow orbs are
+ * Bloodlust, Curse, Faerie Fire, Frost Armor, Web, Raise Dead and the arrow orbs are
  * handled by ARMING them (see `armAutocasts`) and letting `SimWorld.tickAutocast` — a working,
  * data-driven "should this unit cast right now" — run them.
  */
@@ -414,6 +414,14 @@ export interface CasterView {
    * because the creep never makes it.
    */
   engaged?(u: SimUnit): boolean;
+  /**
+   * A target this caster's own judgement will not spend `code` on, though the cast would be
+   * LEGAL — asked beside `castError` in the target pick. Optional for the same reason as
+   * `engaged`: only the creep caster has one, Ensnare's "only what arrives after the fight
+   * began" (SimWorld.creepNetRefused), which is a rule about how a camp chooses and so no
+   * business of the sim's target door.
+   */
+  refuses?(u: SimUnit, code: string, t: SimUnit): boolean;
 }
 
 /** One computer player's casters. */
@@ -476,7 +484,7 @@ export class AiCaster {
    * machinery that already exists, rather than a second copy of it in here.
    *
    * That covers Heal, Inner Fire, Slow, Bloodlust, Curse, Faerie Fire, Frost Armor, Abolish
-   * Magic, Ensnare, Web, Raise Dead, the Meat Wagon's Get Corpse and every arrow orb —
+   * Magic, Web, Raise Dead, the Meat Wagon's Get Corpse and every arrow orb —
    * "~Searing Arrows - Uses it whenever the CD is off", "~Cold Arrows - PREFERRED over Searing
    * Arrows in the case the hero/unit has both spells" (which is `src/sim/orbs.ts`' priority
    * ladder, not a decision made here).
@@ -612,6 +620,7 @@ export class AiCaster {
       // and it has to catch the quorum — the candidate itself included, at distance zero.
       if (rule.when === "cluster" && this.catchment(u, t.x, t.y, def, lvl, rule, pool, friendly).length < (rule.count ?? CLUSTER)) continue;
       if (this.view.world.castError(u.id, code, t.id) !== null) continue;
+      if (this.view.refuses?.(u, code, t)) continue;
       const s = this.score(u, t, rule.prefer);
       if (s > bestScore) {
         bestScore = s;

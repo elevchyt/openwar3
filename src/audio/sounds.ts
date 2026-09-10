@@ -60,6 +60,9 @@ export interface SoundPos {
 
 const ACK_TABLE = "UI\\SoundInfo\\UnitAckSounds.slk";
 const ANIM_TABLE = "UI\\SoundInfo\\AnimSounds.slk";
+/** How a WAV with no SLK row of its own plays as a spell sound (an effect folder's cast sound,
+ *  a Polymorph poof): a WANT3D world sound, panned and attenuated from where it happens. */
+const EFFECT_WAV_META = { gain: 0.8, pitch: 1, pitchVar: 0.03, threeD: true, refDist: 800, maxDist: 10000, cutoff: 3500 };
 const COMBAT_TABLE = "UI\\SoundInfo\\UnitCombatSounds.slk";
 const UI_TABLE = "UI\\SoundInfo\\UISounds.slk";
 const AMBIENCE_TABLE = "UI\\SoundInfo\\AmbienceSounds.slk"; // dawn/dusk cries, weather beds
@@ -720,6 +723,26 @@ export class SoundBoard {
     return true;
   }
 
+  /**
+   * Play the sound AnimLookups files under an ABILITY CODE itself — `AIMA` → "ManaPotion",
+   * `AIRE` → "RestorationPotion" — whether or not any model carries that event. False when the
+   * table has no row for the code.
+   */
+  playAbilityCodeSound(code: string, at?: SoundPos): boolean {
+    const label = code ? this.animLabel(code.toUpperCase()) : null;
+    const clip = label ? this.resolve("anim", label) : null;
+    if (!clip) return false;
+    this.playPool(clip, "spell", at);
+    return true;
+  }
+
+  /** Play one WAV by PATH as a world spell sound — a cue no table names and no folder scan can
+   *  pick out (Polymorph's `PolymorphTarget1.wav` vs `PolymorphTargetAir1.wav`, side by side). */
+  playSpellFile(path: string, at?: SoundPos): void {
+    if (!path || !this.vfs.exists(path)) return;
+    this.playPool({ paths: [path], ...EFFECT_WAV_META }, "spell", at);
+  }
+
   /** Play a spell's cast/effect sound. Prefers the effect model's own embedded SND "A"
    *  event (see playModelSound), and only then falls back to a WAV that ships in the
    *  effect model's folder (HolyBoltSpecialArt.mdx → HolyBolt.wav, HealTarget.mdx →
@@ -728,7 +751,7 @@ export class SoundBoard {
     for (const art of arts) if (art && this.playModelSound(art, at)) return;
     // As with missiles, effect-folder WAVs have no SLK row — treat them as WANT3D
     // world sounds so a spell cast pans + attenuates from where it's cast.
-    const meta = { gain: 0.8, pitch: 1, pitchVar: 0.03, threeD: true, refDist: 800, maxDist: 10000, cutoff: 3500 };
+    const meta = EFFECT_WAV_META;
     // A cast sound is player-initiated and one-per-cast — route it through the
     // uncapped "spell" channel, NOT the shared weapon-impact pool. That pool sits
     // at its MAX_IMPACTS cap all through a fight, so casting a spell mid-combat
