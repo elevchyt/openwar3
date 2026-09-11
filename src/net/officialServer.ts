@@ -1,6 +1,6 @@
 // The OpenWar3 server — the relay every copy of the game watches out of the box.
 //
-// It is `server/relay.mjs` deployed exactly as it is to Railway (`server/railway.json`: EU West,
+// It is `server/relay.mjs` deployed exactly as it is to Railway (`.railway/railway.ts`: EU West,
 // Amsterdam, ONE replica — the room table lives in memory, and two replicas would be two game
 // lists with a random load balancer dealing the players between them). It runs no match: a game
 // created there is still simulated by the player who created it, and the server only forwards

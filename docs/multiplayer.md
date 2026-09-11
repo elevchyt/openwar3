@@ -122,11 +122,18 @@ manual reload.
 ### The OpenWar3 server (Railway)
 
 `server/` is a deployable of its own: `server/package.json` (`ws` and nothing else — the repo
-root's install would pull an Electron binary) and `server/railway.json`, Railway's config as code:
-Railpack, `node relay.mjs`, **EU West (Amsterdam), ONE replica**, sleeping off, and
-`watchPatterns: ["server/**"]`. The service's Root Directory is `/server`, and its config-file path
-must be set to `/server/railway.json` as well — Railway does not look for the file under the root
-directory by itself. The relay reads `PORT`, which Railway injects.
+root's install would pull an Electron binary). It runs as the Railway project `openwar3`, service
+`openwar3`, at `openwar3.up.railway.app`, and its settings are declared in
+**`.railway/railway.ts`** — Railway's Infrastructure as Code, written against the `railway` dev
+dependency: the GitHub source with Root Directory `/server`, Railpack, `node relay.mjs`,
+**EU West (Amsterdam), ONE replica**, restart on failure, sleeping off, `PORT=8787` (the generated
+domain targets that port; IaC does not manage generated domains), and `watchPatterns: ["/server/**"]`.
+
+That file is NOT applied on push. It is applied with the Railway CLI (5.42.1 or newer) from a
+logged-in, linked checkout: `railway config plan`, then `railway config apply`. A dashboard edit
+made since drifts from it, and the next plan says so. There is no `railway.json`: Config as Code is
+deprecated (read until 2026-12-01), and a service created after 2026-08-28 — this one — cannot opt
+into it at all, which is why the one this section used to name was never read.
 
 Three rules it lives by, each of which is a way to lose every game on it:
 
