@@ -1,6 +1,7 @@
 import { MELEE_NORMAL } from "../ai/ids";
 import { MELEE } from "../data/gameplayConstants";
 import { resolveRace, type Race } from "../data/races";
+import { meleeSeat } from "../ui/lobby";
 import { DEFAULT_ADVANCED, type AdvancedOptions } from "./advancedOptions";
 import type { PeerInfo, StartMatch } from "./protocol";
 
@@ -33,6 +34,8 @@ export interface SetupMap {
     controller: "user" | "computer";
     team: number;
   }>;
+  /** A melee map opens its seats on Random, in two teams (`meleeSeat`, ui/lobby.ts). */
+  isMelee?: boolean;
 }
 
 /**
@@ -187,11 +190,10 @@ export function newSetup(
     mapPath,
     mapName,
     gameName,
-    slots: map.slots.map((s) => ({
+    slots: map.slots.map((s, i) => ({
       id: s.id,
       kind: s.controller === "computer" ? "computer" : "open",
-      race: s.defaultRace,
-      team: s.team,
+      ...(map.isMelee ? meleeSeat(i, map.slots.length) : { race: s.defaultRace, team: s.team }),
       handicap: 100,
       color: s.id,
       locked: s.controller === "computer",

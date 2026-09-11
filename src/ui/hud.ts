@@ -15,6 +15,7 @@ import { allyButtonSkin, type AllyColorMode } from "../game/allyColor";
 import type { MinimapDot } from "../game/minimapView";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
+import { MinimapModel } from "./minimapModel";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 import { anyModalOpen } from "./modal";
@@ -336,6 +337,8 @@ export interface HudDriver {
    *  tooltip border ships as an 8-tile strip that has to be re-sliced. Null if the
    *  file isn't in the mounted archives. */
   blpCanvas(path: string): HTMLCanvasElement | null;
+  /** A file's raw bytes out of the mounted archives (the minimap's MDX models), or null. */
+  modelBytes(path: string): Uint8Array | null;
   /** Current game time for the clock (hour 0–24, day/night flag). */
   /** The chat entry line's prompt for a target — the game's own `COLON_MESSAGE_*` string
    *  ("To All:", "To Allies:", or plain "Message:" in a single-player match). */
@@ -1124,6 +1127,9 @@ const INVENTORY_NUMPAD: readonly number[] = [7, 8, 4, 5, 1, 2];
 const INV_DRAG_TYPE = "application/x-openwar3-item-slot";
 
 const MINIMAP_SIZE = 168; // px along the minimap canvas's LONGEST side
+/** Dots-canvas pixels to one UI unit — the unit the minimap's MODELS are authored in (ui/minimapModel.ts).
+ *  The canvas's longest side spans the console's minimap socket, which is square. */
+const MINIMAP_PX_PER_UNIT = MINIMAP_SIZE / CONSOLE_ZONES.minimap.w;
 const DOTS_PERIOD = 100; // ms between minimap dot redraws
 const TEXT_PERIOD = 250; // ms between resource/info text refreshes
 
@@ -3635,6 +3641,8 @@ export class GameHud {
     // Unit dots last, so a creep's dot sits over whatever it is standing on. Neutral
     // passives are absent from dots() — a glyph, or nothing, marks those.
     const d = UNIT_DOT / 2;
+    const heroModel = this.minimapModel("hero");
+    const heroes: Array<{ x: number; y: number; colour: string }> = [];
     for (const dot of this.driver.dots()) {
       const p = this.toMini(dot.x, dot.y, ox, oy, w, h);
       if (!p) continue;
@@ -3642,7 +3650,7 @@ export class GameHud {
       // are `FogColorPlayer` white on your own minimap in EVERY mode, and an ally/enemy takes
       // the minimap's own teal/red from mode 2 up. All three are the game's own [FogOfWar]
       // palette, the same section the neutral dot below already comes from.
-      ctx.fillStyle =
+      const colour =
         dot.tone === "self"
           ? SELF_DOT_COLOR
           : dot.tone === "ally"
@@ -3652,20 +3660,60 @@ export class GameHud {
               : dot.owner >= 0
                 ? PLAYER_COLORS[dot.owner % PLAYER_COLORS.length]
                 : NEUTRAL_DOT_COLOR;
+      // A hero is not a dot: it is `MinimapHero`, drawn after every plain dot so an army
+      // standing on it cannot bury it.
+      if (dot.hero && heroModel) {
+        heroes.push({ x: p[0], y: p[1], colour });
+        continue;
+      }
+      ctx.fillStyle = colour;
       ctx.fillRect(p[0] - d, p[1] - d, UNIT_DOT, UNIT_DOT);
     }
+    for (const hero of heroes) heroModel!.draw(ctx, hero.x, hero.y, MINIMAP_PX_PER_UNIT, "Stand", 0, 0, hero.colour);
     this.drawPings(ctx, ox, oy, w, h); // over everything: a ping is meant to be seen
   }
 
-  /** A ping is a ring that expands and fades, once per PING_PULSE, for its duration. The
-   *  "flashy" flag (PingMinimapEx's extraEffects) is WC3's louder ping — here, a second ring
-   *  half a pulse out of phase, so it reads as a double blip against a busy minimap. */
+  /**
+   * The minimap's two models (ui/minimapModel.ts), loaded on first use off the paths
+   * `UI\war3skins.txt` gives them — `MinimapHero` and `MinimapIndicator`, which name the `.mdl`
+   * the World Editor saw; the archives hold the `.mdx`. Null when the install has no such file,
+   * and the caller draws its placeholder.
+   */
+  private minimapModel(kind: "hero" | "ping"): MinimapModel | null {
+    const cached = this.minimapModels.get(kind);
+    if (cached !== undefined) return cached;
+    const path = this.driver.skinPath(kind === "hero" ? "MinimapHero" : "MinimapIndicator").replace(/\.mdl$/i, ".mdx");
+    const bytes = /\.mdx$/i.test(path) ? this.driver.modelBytes(path) : null;
+    let model: MinimapModel | null = null;
+    try {
+      model = bytes ? new MinimapModel(bytes, (p) => this.driver.blpCanvas(p)) : null;
+    } catch (err) {
+      console.warn(`[OpenWar3] couldn't read ${path}:`, err);
+    }
+    this.minimapModels.set(kind, model);
+    return model;
+  }
+  private minimapModels = new Map<"hero" | "ping", MinimapModel | null>();
+
+  /**
+   * A ping is `MinimapIndicator` (`UI\Minimap\Minimap-Ping.mdx`) played through: its Birth, its
+   * Stand looped for as long as the ping lasts, and its Death over the last of it. The model
+   * carries two sets of the three, and which one plays is the ping's kind: a script's plain
+   * `PingMinimap` plays the arrows converging on a ring; the LOUDER ping — `PingMinimapEx`'s
+   * `extraEffects`, and a player's own alt-click signal, which raises one — plays the
+   * "AllyPing" set, the exclamation mark and its wide echo. Tinted in the ping's colour.
+   *
+   * Without the model (an install that lacks it) the old placeholder stands: a ring that
+   * expands and fades once per PING_PULSE, doubled for the louder ping.
+   */
   private drawPings(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
+    const model = this.minimapModel("ping");
     const PING_PULSE = 0.5; // seconds per expand-and-fade cycle
     const PING_R = 0.06 * MINIMAP_SIZE; // the ring's full radius, in dots-canvas pixels
     for (const p of this.pings) {
       const c = this.toMini(p.x, p.y, ox, oy, w, h);
       if (!c) continue;
+      if (model && this.drawPingModel(model, ctx, c, p)) continue;
       const ring = (phase: number): void => {
         const t = ((p.age / PING_PULSE + phase) % 1 + 1) % 1;
         ctx.beginPath();
@@ -3681,6 +3729,23 @@ export class GameHud {
       ctx.fillStyle = `rgb(${p.r}, ${p.g}, ${p.b})`;
       ctx.fill();
     }
+  }
+
+  /** One ping through the model's Birth → Stand (looped) → Death. False if the model lacks the
+   *  sequences, and the placeholder is drawn instead. */
+  private drawPingModel(model: MinimapModel, ctx: CanvasRenderingContext2D, at: [number, number], p: MinimapPing & { age: number }): boolean {
+    const set = p.extraEffects ? "AllyPing " : "";
+    const birth = model.sequence(`${set}Birth`), stand = model.sequence(`${set}Stand`), death = model.sequence(`${set}Death`);
+    if (!birth || !stand || !death) return false;
+    const ms = p.age * 1000;
+    const birthLen = birth.end - birth.start, standLen = Math.max(1, stand.end - stand.start), deathLen = death.end - death.start;
+    const colour = `rgb(${p.r}, ${p.g}, ${p.b})`;
+    const draw = (seq: string, t: number): void => model.draw(ctx, at[0], at[1], MINIMAP_PX_PER_UNIT, seq, t, ms, colour);
+    const dying = p.duration * 1000 - deathLen;
+    if (ms >= dying && ms >= birthLen) draw(`${set}Death`, ms - Math.max(dying, birthLen));
+    else if (ms < birthLen) draw(`${set}Birth`, ms);
+    else draw(`${set}Stand`, (ms - birthLen) % standLen);
+    return true;
   }
 
   /** World point → minimap canvas pixel (north-up), or null if off-map. */

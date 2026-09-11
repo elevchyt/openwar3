@@ -7182,6 +7182,7 @@ export class MapViewerScene {
         const bytes = this.vfs.rawBytes(path);
         return bytes ? blpToCanvas(bytes) : null;
       },
+      modelBytes: (path) => this.vfs.rawBytes(path),
       chatPrompt: (target) =>
         chatPrompt(this.chatTargetFor(target), this.multiplayerMatch, (p) => this.playerLabel(p), (k) => this.globalStrings?.strings.get(k)),
       sendChat: (text, target) => this.sendChat(text, target),

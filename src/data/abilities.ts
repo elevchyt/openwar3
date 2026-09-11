@@ -991,6 +991,46 @@ const FUNC_FILES = [
 ];
 const STRING_FILES = FUNC_FILES.map((f) => f.replace("Func", "Strings"));
 
+/**
+ * The order string of an ability whose AbilityFunc row names none.
+ *
+ * `Order=` is how a trigger casts an ability by name (`IssueTargetOrder(u, "holybolt", t)`), and
+ * almost every row carries it — but the order belongs to the ability CLASS, and five classes
+ * leave it out of every row they have: Finger of Death (`ANfd` — both `[Afod]` and the creep's
+ * `[ACf3]`), Siphon Mana (`AHdr`), Cold Arrows (`AHca`), Dark Portal (`ANdp`) and Rain of Fire
+ * (`ANrc`). With no string to match, a script's order fell through to the generic "smart" and
+ * became a FOLLOW: Extreme Candy War's `Delayed_Initialization_Triggers` orders its six Candy
+ * Mages to `"fingerofdeath"` their barriers (a map clone of `ACf3`, beam and no damage), and ours
+ * walked off their posts instead — across the rect `Basic_Movement_Alliance_Middle` watches, which
+ * sends every Player 11 unit entering it down the middle lane.
+ *
+ * The strings are the game's own, from `UI\TriggerData.txt`, which files every ability TWICE
+ * under one name — `HeroSkillFingerOfDeath=0,heroskillcode,'ANfd',…` (the class) and
+ * `UnitOrderFingerOfDeath=0,unitorderutarg,\`fingerofdeath\`,…` (its order) — so joining the two
+ * tables on that name is the class → order map, with nothing typed here. Only a row that has no
+ * `Order` of its own takes one: where the Func file speaks, it wins.
+ */
+function fillIntrinsicOrders(defs: Map<string, AbilityDef>, vfs: DataSource): void {
+  const bytes = vfs.rawBytes("UI\\TriggerData.txt");
+  if (!bytes) return;
+  const skillCode = new Map<string, string>(); // "fingerofdeath" (the NAME) → "ANfd"
+  const orderOf = new Map<string, string>(); // "fingerofdeath" (the NAME) → "fingerofdeath"
+  for (const line of new TextDecoder("windows-1252").decode(bytes).split(/\r?\n/)) {
+    const skill = /^HeroSkill(\w+)=\d+,heroskillcode,'(\w{4})'/.exec(line);
+    if (skill) skillCode.set(skill[1].toLowerCase(), skill[2]);
+    const order = /^UnitOrder(\w+)=\d+,unitorder\w+,`(\w+)`/.exec(line);
+    if (order && !orderOf.has(order[1].toLowerCase())) orderOf.set(order[1].toLowerCase(), order[2].toLowerCase());
+  }
+  const byCode = new Map<string, string>();
+  for (const [name, code] of skillCode) {
+    const order = orderOf.get(name);
+    if (order) byCode.set(code, order);
+  }
+  for (const def of defs.values()) {
+    if (!def.order) def.order = byCode.get(def.code) ?? "";
+  }
+}
+
 export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
   const defs = new Map<string, AbilityDef>();
   const bytes = vfs.rawBytes("Units\\AbilityData.slk");
@@ -1113,6 +1153,8 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     });
   }
   for (const id of UI_BUTTON_IDS) addUiButton(defs, id, func, strs);
+  fillIntrinsicOrders(defs, vfs);
+
   // Index every buff section — its models (so an ability that lists several buffs can pick
   // the one its numbers call for) AND its icon/name/tooltip (the info panel's Status row).
   //

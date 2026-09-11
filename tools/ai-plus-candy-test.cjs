@@ -82,8 +82,10 @@ check("i'll take bottom", chat.readCandyCall("i'll take bottom"), { kind: "lane"
 check("glhf is nothing", chat.readCandyCall("glhf"), null);
 
 // --- 3. naming a hero --------------------------------------------------------------------------
-check("class name, markup stripped", chat.heroCallName("|cffffaa00Orc Warlock|r", ""), "the orc warlock");
-check("given name and class", chat.heroCallName("Human Mage", "Boogie Kid"), "boogie kid the human mage");
+check("the hero's name, markup stripped", chat.heroCallName("|cffffaa00Orc Warlock|r", ""), "Orc Warlock");
+check("the hero's name only, never the given one", chat.heroCallName("Undead Priest", "Boogie Kid"), "Undead Priest");
+check("a nameless type falls back on the given name", chat.heroCallName("", "Boogie Kid"), "Boogie Kid");
+check("an engage names the hero and nothing else", chat.engageLines(chat.heroCallName("Undead Priest", "Boogie Kid")).every((l) => l.includes("Undead Priest") && !/boogie| the undead/i.test(l)), true);
 check("by given name", chat.namedHero("focus boogie", heroes), 2);
 check("by whole class", chat.namedHero("kill the troll mage", heroes), 3);
 check("by last word", chat.namedHero("attack the warlock", heroes), 1);

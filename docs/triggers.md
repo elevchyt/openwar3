@@ -2078,7 +2078,9 @@ so out loud: flag **`0x0040` "use custom forces"** (set on WarChasers, **not** o
 **FORCE** records — force 0 = players 0/1/5/6, force 1 = player 11 — which is precisely what `InitCustomTeams` restates.
 So `parseMapInfo` now derives `PlayerSlot.team` from the map's forces when that flag is set, and the lobby defaults to
 it (and greys race/team out under `0x0020` "fixed player settings", which WarChasers also sets). Without the flag —
-i.e. every melee map — each slot still opens on its own team, so **melee is untouched**.
+i.e. every melee map — the map says nothing about teams, so **melee is untouched** by this: the teams there are
+the lobby's to hand out. (What the lobby hands out has since changed: a melee map now opens every seat on Random, in
+two teams split down the slot order — `meleeSeat` in `src/ui/lobby.ts` — rather than a seat per team.)
 
 The rest of Theme A came back **clean**: an audit of every hard-coded common.j index in `src/` against `Scripts\common.j`
 found `mapcontrol` (fixed in 7.24) to have been the only wrong one. The **7.25 enum-index gate** in

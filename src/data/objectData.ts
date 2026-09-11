@@ -710,9 +710,13 @@ function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, tr
       case "levels": def.levels = n(m.value); break;
       case "reqlevel": def.reqLevel = n(m.value); break;
       case "levelskip": def.levelSkip = n(m.value); break;
-      case "hotkey": def.hotkey = (s(m.value).trim()[0] ?? "").toUpperCase(); break;
-      case "researchhotkey": def.researchHotkey = (s(m.value).trim()[0] ?? "").toUpperCase(); break;
-      case "unhotkey": def.unHotkey = (s(m.value).trim()[0] ?? "").toUpperCase(); break;
+      // A hotkey is a STRING field like any tip, so the World Editor stores it the same way: as a
+      // TRIGSTR key into war3map.wts. Extreme Candy War's Concussive Shot and Wing Clip write
+      // `ahky` = "TRIGSTR_1737" / "TRIGSTR_2047" ("C" / "W"), and taking the first letter of the
+      // KEY bound both buttons to "T". Resolve first, then take the letter.
+      case "hotkey": def.hotkey = (trigStr(s(m.value)).trim()[0] ?? "").toUpperCase(); break;
+      case "researchhotkey": def.researchHotkey = (trigStr(s(m.value)).trim()[0] ?? "").toUpperCase(); break;
+      case "unhotkey": def.unHotkey = (trigStr(s(m.value)).trim()[0] ?? "").toUpperCase(); break;
       // Buttonpos is TWO codes writing one field name (x, then y), so these go by code.
       case "buttonpos": if (m.id === "abpx") def.buttonX = n(m.value); else def.buttonY = n(m.value); break;
       case "researchbuttonpos": if (m.id === "arpx") def.learnX = n(m.value); else def.learnY = n(m.value); break;

@@ -285,13 +285,19 @@ export class MapBrowser {
   private async readFolder(folder: string): Promise<void> {
     for (const e of this.entries.filter((x) => x.folder === folder)) {
       if (!this.alive) return; // the player left; stop reading files for a screen that is gone
+      // An INVALID map is hidden, the way the game leaves out of its list a file it cannot open
+      // as a map: one whose w3i will not parse (five of the install's Download maps are saved in
+      // a later editor's format, and `parseMapInfo` runs out of bytes in them), one with no w3i
+      // at all, and one that declares no slot anybody could be seated in. Each was a row that
+      // did nothing when picked — `choose` never gets an info to show.
       try {
         const info = await readMapInfo(this.maps, e.path);
-        if (!info) continue;
+        if (!info || info.slots.length === 0) { e.invalid = true; continue; }
         e.label = info.name || e.label;
         e.melee = info.isMelee;
         if (info.maxPlayers) e.players = info.maxPlayers;
       } catch (err) {
+        e.invalid = true;
         console.warn(`[OpenWar3] couldn't read ${e.path}:`, err);
       }
     }
@@ -365,7 +371,7 @@ export class MapBrowser {
 
   /** The best fit for `q` across every folder — the ranking is ui/mapSearch.ts's. */
   private search(q: string): MapEntry | null {
-    return bestMatch(this.entries, q, this.cwd);
+    return bestMatch(this.entries.filter((e) => !e.invalid), q, this.cwd);
   }
 
   /** Go to a map the search found — walking into its folder first when it is in another. */
@@ -596,6 +602,8 @@ interface MapEntry {
    *  the list can sort on before a single map has been read; the map's own w3i replaces it. */
   players: number;
   melee: boolean; // drives the row icon; only known once the map has been read
+  /** The map could not be read as a map — see `readFolder`. Such a row is never listed. */
+  invalid?: boolean;
 }
 
 /** Every playable map in the install, with the folder it lives in. */
@@ -616,7 +624,9 @@ function mapEntries(maps: Map<string, File>): MapEntry[] {
 }
 
 /** The rows for one folder: (up one level), the sub-folders, then the maps. */
-function folderRows(entries: MapEntry[], cwd: string): Array<MapEntry | FolderRow> {
+function folderRows(all: MapEntry[], cwd: string): Array<MapEntry | FolderRow> {
+  // An invalid map is not a row — and a folder holding nothing else is not a row either.
+  const entries = all.filter((e) => !e.invalid);
   const inCwd = entries.filter((e) => e.folder === cwd);
   const prefix = cwd ? `${cwd}\\` : "";
   const subFolders = [...new Set(

@@ -62,6 +62,7 @@ const TYPEDEFS = {
   hkee: { isHero: false, isBuilding: true, moveType: 0, race: "human", classification: [], typeName: "keep" },
   hhou: { isHero: false, isBuilding: true, moveType: 0, race: "human", classification: [], typeName: "farm" },
   hfoo: { isHero: false, isBuilding: false, moveType: 0, race: "human", classification: [], typeName: "footman" },
+  Hpal: { isHero: true, isBuilding: false, moveType: 0, race: "human", classification: [], typeName: "paladin" },
 };
 
 console.log("the pure-world half of the hook table is complete");
@@ -290,16 +291,23 @@ check("a player not in the force does not", vset.viewpointFor(0).isExposed(victi
 
 // --- the roster half --------------------------------------------------------------------------
 //
-// These seven were filed under "presentation, by nature" alongside camera and sound, because the
+// These were filed under "presentation, by nature" alongside camera and sound, because the
 // list they sat in ended "...text, selection, and the registries". A registry is a DATA TABLE, not
 // presentation, and every one of these reads sim.units, sim.mines and the unit registry with no
 // renderer field anywhere. Same classify-by-name mistake Phase B paid for four times.
 console.log("\nthe roster natives enumerate and classify from the sim alone");
 const roster = rosterHooks(world, { get: (id) => TYPEDEFS[id] }, teamOf);
-check("rosterHooks is exactly the seven", Object.keys(roster).sort(), [
-  "enumUnits", "findPlacedUnit", "isUnitAlly", "isUnitType",
+check("rosterHooks is exactly the eight", Object.keys(roster).sort(), [
+  "enumUnits", "findPlacedUnit", "isUnitAlly", "isUnitIdType", "isUnitType",
   "playerStructureCount", "playerTypedUnitCount", "playerUnitCount",
 ].sort());
+
+// IsUnitIdType is the same reading asked of a TYPE. Extreme Candy War's Hero_Death trigger is
+// "a unit dies" conditioned on IsUnitIdType(GetUnitTypeId(GetDyingUnit()), UNIT_TYPE_HERO) — the
+// native missing kept its scoreboard at 0 / 0 for the whole match.
+check("a hero TYPE is a HERO", roster.isUnitIdType("Hpal", 0), true);
+check("…a soldier type is not", roster.isUnitIdType("hfoo", 0), false);
+check("…and a type is never DEAD", roster.isUnitIdType("Hpal", 1), false);
 
 // enumUnits must include the MINES, or blizzard.j's MeleeFindNearestMine finds nothing: it
 // enumerates UNITS and keeps the nearest 'ngol'.

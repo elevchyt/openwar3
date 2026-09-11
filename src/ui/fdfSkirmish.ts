@@ -11,7 +11,7 @@ import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { savedPlayerName } from "./fdfLan";
 import { VISIBILITY_ITEMS, visibilityFog, type Visibility } from "../net/advancedOptions";
 import { freeColorsFor, swapColors } from "../net/lobbySetup";
-import { OBSERVER_PLAYER, type Controller, type FogMode, type MeleeConfig, type SlotConfig } from "./lobby";
+import { OBSERVER_PLAYER, meleeSeat, type Controller, type FogMode, type MeleeConfig, type SlotConfig } from "./lobby";
 import {
   BLURB_SCROLLBAR_FDF, MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, nudgeY, num,
   setProp, size, str,
@@ -193,8 +193,9 @@ export async function mountSkirmish(
         // A spare seat opens on the difficulty the reference opens on — the menu's own
         // middle entry, which is also what a slot the MAP owns is greyed at.
         ai: MELEE_NORMAL,
-        race: s.defaultRace,
-        team: s.team,
+        // A melee map opens every seat on Random and splits them into two teams (`meleeSeat`);
+        // a custom map's races and forces are the map's own.
+        ...(info.isMelee ? meleeSeat(i, info.slots.length) : { race: s.defaultRace, team: s.team }),
         handicap: 100,
         color: s.id,
         locked: s.controller === "computer",

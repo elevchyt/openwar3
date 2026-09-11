@@ -135,19 +135,24 @@ export const CANDY_RALLY_NO_LINES = {
 // --- naming a hero -----------------------------------------------------------------------------
 
 /**
- * What a hero is CALLED in chat: its class (the unit type's name — "Undead Warlock") and, when it
- * has one, its given name in front ("boogie kid the undead warlock").
+ * What a hero is CALLED in chat: the hero's name, which on this map is its class — the unit type's
+ * name, "Undead Priest" — and nothing else. The given name a hero also carries ("Boogie Kid") is
+ * left out, and so is any article: the developer's rule is that a line names the enemy hero by
+ * that name only ("going in on Undead Priest").
  *
- * Both are the MAP's strings, never typed here: a custom map colours its unit names in the object
- * editor, so the markup is stripped (`wc3StripMarkup`) and the rest is lowercased, which is how a
- * person types it. The class is the part a teammate acts on — "the warlock" says what is coming —
- * and the given name is the part that tells two of the same class apart.
+ * It is the MAP's string, never typed here: a custom map colours its unit names in the object
+ * editor, so the markup is stripped (`wc3StripMarkup`) and the words are kept as the map spells
+ * them. Only a hero whose type has no name falls back on its given name.
  */
 export function heroCallName(typeName: string, properName: string): string {
-  const title = plain(typeName);
-  const given = plain(properName);
-  if (!title) return given ? given : "their hero";
-  return given && given !== title ? `${given} the ${title}` : `the ${title}`;
+  const title = spoken(typeName);
+  if (title) return title;
+  return spoken(properName) || "their hero";
+}
+
+/** A map string as a NAME in chat: markup gone, spaces collapsed, the map's own capitals kept. */
+function spoken(raw: string): string {
+  return wc3StripMarkup(raw ?? "").replace(/\s+/g, " ").trim();
 }
 
 /** A map string as chat: markup gone, lowercase, spaces collapsed. */

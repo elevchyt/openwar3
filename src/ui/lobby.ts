@@ -71,6 +71,23 @@ export interface SlotConfig {
   aiPlus?: boolean;
 }
 
+/**
+ * How a MELEE map's lobby opens a slot: its race and its team.
+ *
+ * A melee map's w3i records a race per slot, and it is the World Editor's placeholder rather than
+ * a choice — 144 of the install's 191 melee maps read human/orc/undead/nightelf down their slots
+ * and 29 read human/orc — so the lobby does not take it: every seat opens on **Random**.
+ *
+ * And the map declares no forces (one nameless force holding everybody, `MapInfo.forces` empty),
+ * which left every seat on a team of its own — a free-for-all nobody asked for. A melee game of
+ * more than two is a TEAM game, so the seats split into two teams down the slot order: the first
+ * half is Team 1 and the rest Team 2 (a 4-player map is 2v2, an 8-player map 4v4, a 12-player map
+ * 6v6; an odd count gives the first team the extra seat). Two slots are the two teams already.
+ */
+export function meleeSeat(index: number, slotCount: number): { race: Race; team: number } {
+  return { race: "random", team: index < Math.ceil(slotCount / 2) ? 0 : 1 };
+}
+
 /** Fog-of-war start mode chosen in the lobby:
  *   • explored   — whole map begins dimmed grey (terrain memory), live fog still on
  *   • unexplored — normal WC3 fog: unseen ground is pitch black

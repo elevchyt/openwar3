@@ -28,6 +28,9 @@ export interface MinimapDot {
   y: number;
   owner: number;
   tone?: MinimapTone;
+  /** A HERO — drawn as `UI\Minimap\MiniMap-Hero.mdx` (war3skins `MinimapHero`) over the plain
+   *  dots rather than as one of them. A fact about the unit, so it is set here with the dot. */
+  hero?: boolean;
 }
 
 /** The slice of the world the minimap reads. Narrow on purpose, the same discipline as
@@ -76,7 +79,7 @@ export function minimapDots(world: MinimapWorld, vp: Viewpoint): MinimapDot[] {
   for (const u of world.units.values()) {
     if (u.neutralPassive) continue;
     if (isOffField(u)) continue;
-    if (!hiddenFor(vp, u) || u.owner === vp.player) out.push({ x: u.x, y: u.y, owner: u.owner });
+    if (!hiddenFor(vp, u) || u.owner === vp.player) out.push({ x: u.x, y: u.y, owner: u.owner, hero: !!u.isHero });
   }
   return out;
 }
@@ -87,6 +90,7 @@ export interface SnapshotDotUnit {
   x: number;
   y: number;
   owner: number;
+  isHero?: boolean;
   neutralPassive: boolean;
   inMine: boolean;
   insideBuild: boolean;
@@ -113,7 +117,7 @@ export function dotsFromSnapshot(units: readonly SnapshotDotUnit[]): MinimapDot[
   for (const u of units) {
     if (u.neutralPassive) continue;
     if (isOffField(u)) continue;
-    out.push({ x: u.x, y: u.y, owner: u.owner });
+    out.push({ x: u.x, y: u.y, owner: u.owner, hero: !!u.isHero });
   }
   return out;
 }

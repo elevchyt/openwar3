@@ -470,6 +470,12 @@ export function rosterHooks(
         default: return false;
       }
     },
+    /** IsUnitIdType — asked of a TYPE, so it is `deadTypeIs`'s reading of the unit table, minus
+     *  UNIT_TYPE_DEAD: a type is never dead. Extreme Candy War's whole scoreboard hangs off it —
+     *  `Hero_Death` is "a unit dies" conditioned on `IsUnitIdType(GetUnitTypeId(GetDyingUnit()),
+     *  UNIT_TYPE_HERO)`, and with the native missing that answered false for every hero, so no
+     *  kill, death or streak was ever counted. */
+    isUnitIdType: (typeId, t) => t !== 1 && deadTypeIs(t, typeId),
     // IsUnitAlly/IsUnitEnemy: TEAM-based, so neutral hostile (team -1) is nobody's ally. This is
     // a team question rather than an alliance one, which is why it is here and not in
     // `visionHooks` beside `isPlayerAlly` — see 1e-note.

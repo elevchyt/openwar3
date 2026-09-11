@@ -361,6 +361,10 @@ export function registerWorldNatives(rt: Runtime): void {
     const u = unit(c, a[0]);
     return jBool(u ? c.rt.hooks?.isUnitType?.(u.simId, c.rt.enumIndex(a[1]), u.typeId) ?? false : false);
   });
+  // `native IsUnitIdType takes integer unitId, unittype whichUnitType returns boolean` — the type
+  // question with no unit in hand, which is how the World Editor compiles "Unit-type Classification
+  // Check" on a `GetUnitTypeId(…)`.
+  def(rt, "IsUnitIdType", (c, a) => jBool(c.rt.hooks?.isUnitIdType?.(intToRawcode(asInt(a[0])), c.rt.enumIndex(a[1])) ?? false));
 
   // --- way gates (7.22) ---
   // A Way Gate ('nwgt') teleports anything entering its box to a destination point. The

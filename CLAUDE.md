@@ -490,7 +490,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   writes `enemies`/`vulnerable`, the SLK `enemy`/`vuln`), folded by `normalizeTargetFlags`; a PAIR
   (`hero,nonhero`, `ancient,nonancient`) restricts nothing; and an AREA helper asks the row's
   ALLEGIANCE as well as its kinds (`World.allegianceAdmits`) — that is what makes a map's
-  `self`-only Scroll of Speed haste its carrier alone.
+  `self`-only Scroll of Speed haste its carrier alone. Two more traps on the same path: a HOTKEY is
+  a string field and the World Editor stores it as a `TRIGSTR_` key like any tip (resolve before
+  taking the letter, or every such button answers to "T"); and five ability CLASSES carry no
+  `Order=` in any Func row (`ANfd` Finger of Death, `AHdr`, `AHca`, `ANdp`, `ANrc`), so a script's
+  order by name has nothing to match and falls through to "smart" — a FOLLOW. Their strings come
+  from `UI\TriggerData.txt`, joining `HeroSkill<Name>`'s code to `UnitOrder<Name>`'s string
+  (`fillIntrinsicOrders`); that is what keeps Extreme Candy War's Candy Mages at their posts.
 - **Extreme Candy War:** read [`docs/candy-war-ai.md`](docs/candy-war-ai.md) before touching
   [`src/ai/plus/candy/`](src/ai/plus/candy/). It is Computer+ as a HERO player for Blizzard's lane
   map, seated by `startCustom` when the script has the map's four triggers (never by file name), on

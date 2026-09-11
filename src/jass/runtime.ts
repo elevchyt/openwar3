@@ -613,6 +613,8 @@ export interface EngineHooks {
    *  `typeId` is the unit's rawcode, so a unit that has already left the sim (a corpse —
    *  what GetDyingUnit hands a death trigger) can still be classified from its type. */
   isUnitType?(unitId: number, unitType: number, typeId?: string): boolean;
+  /** IsUnitIdType — the same classification asked of a unit TYPE (a rawcode), not a unit. */
+  isUnitIdType?(typeId: string, unitType: number): boolean;
   /** IsUnitAlly/IsUnitEnemy — is the unit allied to `player` (same team)? */
   isUnitAlly?(unitId: number, player: number): boolean;
   /** IsPlayerAlly/IsPlayerEnemy — are two player slots on the same team? */

@@ -71,8 +71,8 @@ The full reference is in the source comments of `map.ts`; the rules that shape t
 5. **Fights** (`decide` / `chooseTarget` / `worthFighting`): a free swing at a hero in reach when it is
    safe (harass), a commit when the fight reads as won — its side against theirs as √Σ(life × damage),
    a tower with nobody else to shoot counted against it — and a kill it is close to. It announces who it
-   is going in on ("going in on the undead warlock", `heroCallName`: class name, given name when there is
-   one) and joins what an ally near it is visibly fighting or has declared.
+   is going in on ("going in on Undead Warlock", `heroCallName`: the hero's name as the map spells it, and
+   nothing else — never the given name, never an article) and joins what an ally near it is visibly fighting or has declared.
 6. **Leaving** at `retreatHp`, when a fight has turned, or (casters) out of mana — to the fountain, until
    `returnHp`. With three of them on it and a bad read it tells the team to back off.
 7. **Spells** (`spells.ts`) per class, keyed on the map's ids and the map's triggers (Charge teleports
