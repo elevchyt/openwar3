@@ -10873,7 +10873,7 @@ export class MapViewerScene {
     let steps = 0;
     while (this.simAccum >= SIM_DT && steps < MAX_STEPS_PER_FRAME) {
       // A frozen client must not start builds off its own records (option 2): the worker's
-      // position is the HOST's answer arriving at 10 Hz, and the host runs the real
+      // position is the HOST's answer arriving at the snapshot cadence, and the host runs the real
       // tickPendingBuild — a local start here would mint a local id, which is the
       // collision family this whole phase removes.
       perfLog.begin("sim"); // …the world's own step, timed apart from the map script's (dev/perfLog.ts)

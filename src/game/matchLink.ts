@@ -320,17 +320,24 @@ export interface HostSources {
   drainDeaths?(): Array<{ id: number; x: number; y: number }>;
 }
 
-/** How often the host emits. 60 Hz — the sim's own rate, so a client's world moves every
- *  tick the authority's does and the cadence half of order-to-motion latency is one sim
- *  tick. The march 10 → 20 → 30 → 60 tracked the playtests calling the client sluggish;
- *  what held it at 30 was never the sim (it always ran 60) but the WIRE — JSON payloads ×
- *  recipients were megabits upstream on the internet relay path. The binary hot lane
- *  (`snapshotWire.ts`, PROTOCOL_VERSION 10) shrank the payload 7–9x measured (teamfight
- *  synthetic and the live Echo Isles world alike) and halved the per-send encode cost, so
- *  60 Hz binary costs LESS wire than 30 Hz JSON did. Going
- *  further (more recipients, bigger maps) wants the deferred DELTA encoding — per-client
- *  ack tracking and keyframe recovery, still its own future item — not a constant. */
-export const SNAPSHOT_INTERVAL = 1 / 60;
+/** How often the host emits. 20 Hz.
+ *
+ *  The march 10 → 20 → 30 → 60 tracked playtests calling the client sluggish, and what held it
+ *  at 30 for a while was the WIRE — until the binary hot lane (`snapshotWire.ts`,
+ *  PROTOCOL_VERSION 10) shrank a payload 7–9x and 60 Hz cost less than 30 Hz JSON had. It came
+ *  back DOWN to 20 when the OpenWar3 server (src/net/officialServer.ts) made the wire a BILL:
+ *  every payload now goes host → relay → player, the relay's egress is what Railway charges
+ *  for, and the host's own upload carries one stream per player — a third of the cadence is a
+ *  third of both.
+ *
+ *  What keeps 20 Hz from LOOKING like 20 Hz is the client's pose buffer (src/game/poseInterp.ts):
+ *  measured over a simulated wire (tools/pose-interp-test.cjs), a unit walks steadier at 20 Hz
+ *  buffered than it did at 60 Hz with the old glide, for about one interval more of drawn delay.
+ *  A client's own ORDERS are not paced by this at all: `expedite` sends the payload carrying a
+ *  command's first consequences the tick it is applied. Going further (more recipients, bigger
+ *  maps) wants the deferred DELTA encoding — per-client ack tracking and keyframe recovery —
+ *  not a smaller constant. */
+export const SNAPSHOT_INTERVAL = 1 / 20;
 
 /**
  * Everything the match needs to join the wire, assembled where the lobby still exists.
@@ -654,7 +661,9 @@ export class MatchLink {
     const deaths = sources.drainDeaths?.();
     if (deaths?.length) this.deathBuf.push(...deaths);
     this.accum += dt;
-    const due = this.accum >= SNAPSHOT_INTERVAL;
+    // A hair of slack: three sim steps of 1/60 sum to 0.049999…, a whisker short of 1/20 in
+    // floating point, and without it the cadence silently slips to every FOURTH step — 15 Hz.
+    const due = this.accum >= SNAPSHOT_INTERVAL - 1e-6;
     if (due) this.accum = 0;
     if (!due && this.owed.size === 0) return 0;
     let sent = 0;

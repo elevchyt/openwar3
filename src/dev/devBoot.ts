@@ -330,7 +330,10 @@ async function devLanBoot(
     // before the filter said otherwise.
     const joinable = (s: LobbyState) => s.rooms.find((r) => r.players < r.maxPlayers);
     await waitForLobby(lobby, (s) => joinable(s) !== undefined, 60000);
-    lobby.join(joinable(lobby.snapshot)!.id, "Joiner");
+    // By KEY, not relay room id: `LanLobby.join` takes a `ListedRoom.key` since the list merges
+    // other machines' games, and an id matched nothing — the joiner sent no join at all and this
+    // harness timed out on both sides.
+    lobby.join(joinable(lobby.snapshot)!.key, "Joiner");
     // 60 s, not the 15 s default: two game tabs booting at once saturate the harness
     // machine, and a timer that fires before the ack's onChange has run reads as a dead lobby.
     await waitForLobby(lobby, (s) => s.phase === "joined" && s.you !== null, 60000);

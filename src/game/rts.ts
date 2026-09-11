@@ -28,6 +28,7 @@ import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
 import { MatchLink, SNAPSHOT_INTERVAL, type DialogMessage, type MatchLinkSetup } from "./matchLink";
+import { PoseInterpolator, type PoseOut } from "./poseInterp";
 import type { ChatLine } from "./chat";
 import { applyWorldSnapshot } from "./snapshotApply";
 import { perfLog } from "../dev/perfLog";
@@ -417,12 +418,6 @@ export type { FogArea, FogModifier } from "./fog";
 const MOVE_ANIM_MIN_RATIO = 0.2;
 const MOVE_EMA_ALPHA = 0.25; // per-tick blend toward the current ratio
 
-/** A payload-to-payload jump longer than this snaps instead of gliding (poseLerp). The
- *  fastest any unit can move is the engine's 522 (Wind Walk and Chemical Rage, the two let past
- *  MiscGame's MaxUnitSpeed of 400 — SimWorld.speedCeiling), so even a
- *  quad-length 0.4 s segment covers ~209 world units — anything past this is a teleport
- *  (Blink, a Zeppelin unload, a Town Portal), and a glide would smear it across the map. */
-const POSE_SNAP_DIST = 400;
 // Corpse lifecycle (WC3): a dead unit plays Death, then — if the model has them —
 // Decay Flesh and Decay Bone, and the bones linger until the sim corpse fully
 // decays (88s after death; see world.ts CORPSE_TOTAL_TIME). Units that leave no
@@ -1704,8 +1699,8 @@ export class RtsController {
   private frameUnit(id: number): RenderUnit | undefined {
     // ONE source now, even on a client — the record store. Under option 2 the applier makes
     // the records ≡ the payload (create/update/REMOVE, so "absent → undefined → hide" is the
-    // same maphack-safe answer the SnapshotIndex gave), and the records are what `poseLerp`
-    // glides between payloads. Drawing the raw payload here was the July playtest's
+    // same maphack-safe answer the SnapshotIndex gave), and the records are what the pose
+    // buffer (`poses`) draws between payloads. Drawing the raw payload here was the July playtest's
     // "incredibly choppy" client: the interpolation wrote smooth poses into records nobody's
     // frame ever read, while every model jumped at the wire's 10 Hz.
     return this.sim.units.get(id);
@@ -4075,9 +4070,9 @@ export class RtsController {
         // the shop's overhead arrow never appeared on a client.
         this.sim.adoptShopBuyers();
       }
-      // Glide the records between payloads (see poseLerp) — the payload wrote where every
-      // unit IS, this writes where the frame should DRAW it, one interval behind.
-      this.tickPoseLerp(dt);
+      // Draw the records between payloads (see `poses`) — the payload wrote where every unit
+      // IS, this writes where the frame should DRAW it, a measured delay behind.
+      this.tickPoses(dt);
       this.tickClientProjectiles(dt);
     } else {
       // The computer players think BEFORE the step, so an order given this tick is acted on
@@ -4375,7 +4370,7 @@ export class RtsController {
       // the unit stands in its READY stance (below); everything else loops. A unit that walked
       // after firing (`swingBroken` — its backswing was move-canceled) does NOT show
       // the attack clip: it stands out the recovery until its next real swing.
-      const attacking = u.inCombat && !u.moving && !u.swingBroken && e.anims.attack >= 0;
+      const attacking = u.inCombat && !this.walkingOn(u, e.simId) && !u.swingBroken && e.anims.attack >= 0;
       // Chopping is chop-driven, like the attack swing: re-trigger the "Attack
       // Lumber" clip ONCE per chop so the swing stays in phase with the chop SFX
       // (a free-running loop drifted out of sync with the sound).
@@ -4385,7 +4380,7 @@ export class RtsController {
       // hacking at the rock on the chop clock instead of holding its "Stand Work Gold"
       // (pickSequence's ring branch, which it never reached). `ringSlot` is the flag that
       // says which of the two jobs the harvest order is.
-      const chopping = u.working && u.order === "harvest" && !u.moving && !u.ringSlot && e.anims.chopLumber >= 0;
+      const chopping = u.working && u.order === "harvest" && !this.walkingOn(u, e.simId) && !u.ringSlot && e.anims.chopLumber >= 0;
       // …and a KILLING blow is followed through (the `following` branch below). Held on a clock
       // armed from what is LEFT of the clip at the rate it is being swung (Entry.followLeft
       // says why the clip's own end is not enough on its own), and let go the moment the unit
@@ -4393,7 +4388,7 @@ export class RtsController {
       let following = false;
       if (!chopping && !attacking) {
         const inst = e.unit.instance;
-        if (!u.swingFollowThrough || u.moving || !isSwingClip(e.anims, e.curSeq) || inst.sequenceEnded) {
+        if (!u.swingFollowThrough || this.walkingOn(u, e.simId) || !isSwingClip(e.anims, e.curSeq) || inst.sequenceEnded) {
           e.followLeft = -1;
         } else {
           if (e.followLeft < 0) {
@@ -4499,7 +4494,7 @@ export class RtsController {
         // walkAnim's rate 0 and stood frozen mid-stride. Worse, a buff model parented to its
         // attachment node is updated with the HOST's dt × timeScale (mdx-m3-viewer
         // updateNodes → child.update), so the net froze with it. It stands, and breathes.
-        const effMoving = u.moving && u.speed > 0 && e.moveEma >= MOVE_ANIM_MIN_RATIO;
+        const effMoving = this.walkingOn(u, e.simId) && u.speed > 0 && e.moveEma >= MOVE_ANIM_MIN_RATIO;
         let seq = pickSequence(e.anims, u, effMoving);
         // Walking re-rates the cycle to the unit's live move speed (and may swap in a
         // "Walk Fast" gait); every other pose plays at its authored rate — including the
@@ -7204,44 +7199,26 @@ export class RtsController {
    *  sim-internal fields the wire does not carry, and the reserved id is the whole point:
    *  a client allocates no ids of its own, so none can collide (playtest bugs 5/6). */
   private applySnapshot(snap: WorldSnapshot): void {
-    // Interpolation start poses are captured BEFORE the applier overwrites the records: a
-    // record's pose right now is the pose the last frame DREW (tickPoseLerp wrote it), which
-    // is exactly where this segment must depart from or every arrival visibly snaps.
-    this.poseLerp.clear();
-    const starts = this.poseStarts;
-    starts.clear();
-    for (const s of snap.units) {
-      const u = this.sim.units.get(s.id);
-      if (u && !s.remembered) starts.set(s.id, { x: u.x, y: u.y, f: u.facing, h: u.flyHeight });
-    }
     const res = applyWorldSnapshot(this.sim, snap, (s) => {
       const def = this.registry.get(s.typeId);
       if (!def) return null;
       this.addSimUnit(def, s.x, s.y, s.facing, s.owner, s.team, 0, s.id);
       return this.sim.units.get(s.id) ?? null;
     });
-    // Build this interval's pose segments: from the drawn pose to the payload's. A unit the
-    // payload CREATED has no start and simply appears at its position; one that jumped a
-    // teleport's distance snaps rather than glides (a Blink must not smear across the map).
+    // Every LIVE pose in the payload goes into the pose buffer under the host time it was built
+    // at: the applier has just written where each unit IS, and `tickPoses` rewrites the records
+    // every step with where the frame should DRAW it. A unit the payload no longer carries live —
+    // fogged, dead, or kept only as a remembered stub — has its poses dropped, so a remembered
+    // building is drawn where it was remembered rather than where it last stood.
+    this.poses.arrive(snap.time);
+    const live = this.poseLive;
+    live.clear();
     for (const s of snap.units) {
       if (s.remembered) continue;
-      const from = starts.get(s.id);
-      if (!from) continue;
-      const dx = s.x - from.x;
-      const dy = s.y - from.y;
-      const df = s.facing - from.f;
-      const dh = s.flyHeight - from.h;
-      if (dx === 0 && dy === 0 && df === 0 && dh === 0) continue; // parked — nothing to glide
-      if (Math.hypot(dx, dy) > POSE_SNAP_DIST) continue;
-      this.poseLerp.set(s.id, { x0: from.x, y0: from.y, f0: from.f, h0: from.h, x1: s.x, y1: s.y, f1: s.facing, h1: s.flyHeight });
+      live.add(s.id);
+      this.poses.push(s.id, snap.time, s.x, s.y, s.facing, s.flyHeight);
     }
-    // The segment plays out over the HOST-TIME gap between this payload and the last one, so
-    // a dropped snapshot yields one double-length segment at the unit's true speed instead of
-    // a half-speed crawl followed by a jump. Clamped: the first payload has no predecessor,
-    // and a rejoin's catch-up gap is minutes nobody should spend gliding.
-    const prevTime = this.lastApplied?.time ?? snap.time;
-    this.poseLerpDur = Math.min(Math.max(snap.time - prevTime, SNAPSHOT_INTERVAL), 4 * SNAPSHOT_INTERVAL);
-    this.poseLerpT = 0;
+    this.poses.retain((id) => live.has(id));
     // Bodies owed (item 2c): entries for `removed` retire through the ordinary removal
     // drain (`removeUnit` queued them); entries for `created` are owed to the renderer,
     // which grows a model over the existing record exactly like a script spawn.
@@ -7311,43 +7288,44 @@ export class RtsController {
     return out;
   }
 
-  /** This interval's pose segments (docs/multiplayer.md item 2c-interp): what the applier
-   *  wrote is the unit's pose AT THE SNAPSHOT, and drawing it verbatim renders the match at
-   *  10 Hz — every unit hops a tenth-second of travel each payload, and the walk-clip gate
-   *  (which smooths drawn displacement against `speed * dt`) reads the hops as standing.
-   *  So on a frozen client the RECORD pose is re-written every frame, gliding from where the
-   *  last frame drew to where the payload said, one snapshot interval behind the authority —
-   *  and every consumer (models, bars, minimap dots, picking, the walk gate) inherits the
-   *  60 fps motion because they all read the same records. */
-  private poseLerp = new Map<number, { x0: number; y0: number; f0: number; h0: number; x1: number; y1: number; f1: number; h1: number }>();
-  private poseStarts = new Map<number, { x: number; y: number; f: number; h: number }>();
-  private poseLerpT = 0;
-  private poseLerpDur = SNAPSHOT_INTERVAL;
+  /** Where a frozen client DRAWS each unit between payloads (docs/multiplayer.md "Snapshot
+   *  cadence"): a short per-unit history of the host's poses, played back a measured delay
+   *  behind the newest — src/game/poseInterp.ts says why the glide this replaced, restarted on
+   *  every arrival, stuttered at 20 Hz. What the applier writes is the unit's pose AT THE
+   *  SNAPSHOT, and drawing that verbatim renders the match at the cadence, which the walk-clip
+   *  gate (displacement smoothed against `speed * dt`) also reads as standing. So the RECORD
+   *  pose is rewritten every step, and every consumer — models, bars, picking, the walk gate,
+   *  the camera — inherits the motion, because they all read the records. Public for the dev
+   *  heartbeat and the live harness (`jitter`, `delay`). */
+  readonly poses = new PoseInterpolator(SNAPSHOT_INTERVAL);
+  private readonly poseOut: PoseOut = { x: 0, y: 0, f: 0, h: 0, gliding: false };
+  private readonly poseLive = new Set<number>();
+  /** Units still sliding toward the newest pose the host sent. The clip picker counts them as
+   *  moving (`walkingOn`): a payload's `moving` flag lands the moment it arrives and the pose a
+   *  delay later, and a unit that started its swing on the flag would skate the rest of the way
+   *  into range mid-swing. Always empty on the host. */
+  private readonly poseGliding = new Set<number>();
 
-  /** Advance the glide and write the interpolated pose into the records. Runs only on a
-   *  frozen client, from `tick`, after any fresh payload has (re)built the segments. */
-  private tickPoseLerp(dt: number): void {
-    if (!this.poseLerp.size) return;
-    this.poseLerpT += dt;
-    const f = Math.min(1, this.poseLerpT / this.poseLerpDur);
-    for (const [id, p] of this.poseLerp) {
-      const u = this.sim.units.get(id);
-      if (!u) {
-        this.poseLerp.delete(id);
-        continue;
-      }
-      u.x = p.x0 + (p.x1 - p.x0) * f;
-      u.y = p.y0 + (p.y1 - p.y0) * f;
-      u.flyHeight = p.h0 + (p.h1 - p.h0) * f;
-      // Shortest arc, so a unit crossing the ±π seam turns a few degrees rather than a lap.
-      let df = (p.f1 - p.f0) % (2 * Math.PI);
-      if (df > Math.PI) df -= 2 * Math.PI;
-      else if (df < -Math.PI) df += 2 * Math.PI;
-      u.facing = p.f0 + df * f;
+  /** Advance the pose clock and write the drawn pose into the records. Runs only on a frozen
+   *  client, from `tick`, after any fresh payload has been pushed into the buffer. */
+  private tickPoses(dt: number): void {
+    this.poses.advance(dt);
+    this.poseGliding.clear();
+    const out = this.poseOut;
+    for (const u of this.sim.units.values()) {
+      if (!this.poses.sample(u.id, out)) continue;
+      u.x = out.x;
+      u.y = out.y;
+      u.facing = out.f;
+      u.flyHeight = out.h;
+      if (out.gliding) this.poseGliding.add(u.id);
     }
-    // Hold at the payload's pose once the segment is spent (a late snapshot pauses units
-    // where the authority last put them — never extrapolate past what the host said).
-    if (f >= 1) this.poseLerp.clear();
+  }
+
+  /** Is this unit on the move as the frame should SHOW it: the sim's own flag, or — on a frozen
+   *  client — still gliding the last of a walk the host has already finished (`poseGliding`). */
+  private walkingOn(u: { readonly moving: boolean }, simId: number): boolean {
+    return u.moving || this.poseGliding.has(simId);
   }
 
   /** Records the applier created since the last drain — a client's trained peon, a

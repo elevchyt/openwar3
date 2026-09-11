@@ -28,8 +28,8 @@ import type { ProjectileSnapshot, UnitSnapshot, WeaponSnapshot, WorldSnapshot } 
  * the small JSON blob it is.)
  *
  * **What quantization costs, stated rather than discovered:** positions round to 1 world
- * unit (the map is ±~15k; a footman covers ~5 u per payload at 60 Hz, and `poseLerp`
- * glides between payload poses either way), hp/mana/speed round to integers (the HUD never
+ * unit (the map is ±~15k; a footman covers ~14 u per payload at 20 Hz, and the client's pose
+ * buffer, poseInterp.ts, draws between payload poses either way), hp/mana/speed round to integers (the HUD never
  * shows fractions), facing rounds to 1/65536 of a turn. Time-shaped floats (cooldowns,
  * construction clocks, buff durations) cross as f32, which is exact for anything a player
  * can perceive. Deep round-trip fidelity is pinned by `tools/sim-wire-test.cjs`.

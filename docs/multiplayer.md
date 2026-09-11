@@ -150,6 +150,53 @@ Game screen's "Server:" row (`LAN_CREATE_OVERRIDE`) picks WHERE a room is announ
 official server whenever it answers. `VITE_OFFICIAL_SERVER` points a build at another server, or
 empty at none.
 
+### Snapshot cadence — 20 Hz, and the pose buffer
+
+The host sends each player a snapshot every `SNAPSHOT_INTERVAL` = 1/20 s (`src/game/matchLink.ts`),
+down from 60. With the OpenWar3 server every payload is relayed and the relay's egress is billed,
+and the host's own upload carries one stream per player — a third of the cadence is a third of
+both. Measured through a stand-in server, an Echo Isles opening averaged ~1.9 KB a payload: about
+0.9 Mbit/s per player at 60 Hz, a third of that now. The gate needed an epsilon on the way: three
+sim steps of 1/60 sum to a whisker under 1/20 in floating point, which silently made it 15 Hz.
+
+What keeps 20 Hz from LOOKING like 20 Hz is `PoseInterpolator` (`src/game/poseInterp.ts`) on the
+client. The glide it replaced restarted a segment from the drawn pose on every arrival and ran it
+over the host-time gap — but arrivals are not even (the host sends from inside its own uneven frame
+loop, and the internet adds its own spread), so an early payload sped every unit up and a late one
+stopped them: a stutter at 20 Hz, and six held steps in a row flip the walk clip to a stand. The
+buffer keeps four host-stamped poses per unit and draws them on a clock of its own, running
+`interval + max(20 ms, 2.5 × measured jitter)` behind the newest host time, corrected by at most
+5 % of a step and snapped only past 250 ms. It never extrapolates. Only POSES are delayed — the
+rest of a payload still applies on arrival — so `RtsController.walkingOn` counts a unit that is
+still gliding as moving, and a swing waits until the unit has arrived instead of skating it in.
+
+Headless A/B over a simulated wire (`tools/pose-interp-test.cjs`: one unit walking at 300, the host
+in uneven 10–27 ms frames, the client stepping at 60 Hz). CV is the spread of the drawn step
+lengths, "held" the steps with no visible motion while the host had the unit walking, and lag how
+far behind the host's truth it is drawn, network included:
+
+| wire | glide @ 60 Hz (before) | glide @ 20 Hz | buffer @ 20 Hz (now) |
+|---|---|---|---|
+| LAN — 1 ms + 2 ms jitter | CV 0.47 · 11 % held · 22 ms | CV 0.25 · 5 % held · 54 ms | CV 0.05 · 0 % held · 88 ms |
+| EU relay — 45 ms + 25 ms, 1 % spikes of 150 ms | CV 0.55 · 15 % held · 80 ms | CV 0.41 · 12 % held · 110 ms | CV 0.06 · 0.1 % held · 152 ms |
+| bad wifi — 80 ms + 60 ms, 3 % spikes of 250 ms | CV 0.69 · 20 % held · 133 ms | CV 0.56 · 19 % held · 165 ms | CV 0.06 · 0.1 % held · 221 ms |
+
+Live, in a real two-client match on one machine (devBoot `?dev&lan=host|join`, the joiner walking
+five workers out and back, every drawn record pose sampled per frame): the 60 Hz glide showed 4.3 %
+of walking frames stalled (worst run 7, speed CV 0.33) on 1 300 payloads; the 20 Hz buffer showed
+1.5–2.7 % (worst 5–7, CV 0.24–0.28) on 439. The CONTROL is the host's own records of the same units,
+sampled the same way in the same match — 5.8 % stalled, worst 9, CV 0.35. The authority's motion is
+rougher than what the client draws, because a worker group jostling through a crowd really does stop
+and start: what is left on a client is the sim's, not the wire's.
+
+The price is the delay: roughly one interval (50–70 ms) more drawn lag than the 60 Hz glide had. A
+client's own ORDERS are not paced by the cadence — `expedite` sends the payload carrying a
+command's first consequences the tick it is applied — so what that player waits for is the
+network, then the delay, and not the next broadcast.
+
+Fixed alongside: `swingFollowThrough` crossed the wire and was never written by the applier, so
+on a client every killing blow snapped straight back to a stand.
+
 **Telling the player what is wrong.** Two of the three ways a LAN session fails are diagnosable,
 and the third is not, so the screen says exactly as much as it knows. A page cannot test its own
 reachability — it can only reach itself, and "I can load the game" is true precisely in the case
