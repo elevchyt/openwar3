@@ -285,6 +285,45 @@ stayed where it was. Note what the table says about the OTHER side of the trade:
 second against ~1.5 served, so the queue never empties at either budget. What would make detours
 both cheaper and sooner is fewer units needing one, not a smaller purse for the ones that do.
 
+**MOST OF THE DETOUR QUEUE WAS ASKING FOR NOTHING.** Instrumenting every ask in a live match
+(who called `pathTo`, what the cheap search had come back with, what became of the ask at its
+turn, what the search it bought was worth) answered the question above in two parts.
+
+*Volume.* Three first asks in four came from WORKERS RETURNING A LOAD, and the top four goals were
+four town halls. `depotApproach` aims at the hall's edge, which lies under the hall, so `prepare`
+snaps the goal to the nearest open cell and the walk arrives there — and `escalate` compared the
+path's end with the cell it was HANDED, called that "short", and bought a detour that found the
+same route. Those asks were then dropped at their turn as "the route already gets there", or
+landed as the same route: 28 asks a second against 1.5 served. `pathArrived()` is the fix: a
+search reports whether it reached the goal it SEARCHED for, and that is what an arrival is.
+
+*Cost.* The expansions went somewhere else entirely. Two thirds of everything the detour search
+spent landed on asks whose cheap search had stopped within three cells of the goal — a unit
+resuming a walk into a jam, or ordered into a crowd — each flooding ~240,000 cells and handing back
+the cell it had started from, because the thing in the way was BODIES and the licence to flood is
+a proof about terrain. `onlyBodiesBetween` refuses those: a route that ended within BODY_GAP_CELLS
+of its searched goal, with every cell on the straight run between them clear for the body by
+terrain and stamps, is as close as the crowd allows. A treeline never passes that line test.
+
+Measured in live matches, each run alone on the machine, ~11 game minutes: the two rules
+prototyped in the page first, then the source implementation on its own.
+
+| | today | + arrival fix (prototype) | + both (prototype) | both, as shipped |
+|---|---|---|---|---|
+| detour asks / s | 28.2 | 13.4 | 3.6 | 4.4 |
+| detour expansions / s | 112k | 129k | 66k | 80k |
+| detour job, ms / step | 1.03 | 1.08 | 0.62 | 0.79 |
+| all path expansions / step | 3,036 | 2,952 | 1,963 | 2,125 |
+| real detours (> 8,192 cells) landed | 137, 5.6 s wait | 140, 7.1 s | 285, 1.5 s | 213, 1.5 s |
+
+The arrival fix alone halves the asks and saves nothing — the floods are what cost — and the two
+together take a quarter to two fifths off the job (the runs diverge; that is the spread between
+two of them) while landing more real detours about four times sooner. That
+is the answer to "a smaller budget or fewer asks": halving the budget saved 0.9 ms a step and
+doubled every wait; refusing the asks that cannot pay off saved 0.4 ms and cut the wait by three
+quarters. (A single 30-second CPU profile at minute 10 did NOT show the drop — one window of a
+diverged game is a moment, not a match; the whole-match log is the measurement.)
+
 **AND THE CHEAP ONES, EACH EXACT.** A whole-world scan run per unit per step pays for its dearest
 predicate on every unit, so order them cheapest first: a creep asked `creepInFight` (a walk over
 every unit) before learning it had no meld to break (`tickCreep`) or no Hide to take

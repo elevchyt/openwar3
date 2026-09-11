@@ -150,6 +150,28 @@ export function pathExpansionsSpent(): number {
 }
 
 /**
+ * Did the last `findPath` ARRIVE — at the goal it searched for, which is its goal as `prepare`
+ * snapped it (or, for an approach, ring 0)?
+ *
+ * Not the same question as "does the path end on the cell I asked for", and the difference is
+ * most of the detour queue. A point inside a building's footprint snaps to the nearest open cell:
+ * a worker returning to its town hall is sent to the hall's edge (`depotApproach`), which lies
+ * under the hall, so the walk ends a cell or two from the asked-for cell — having arrived. Read as
+ * "fell short", every such trip bought an escalated search that found the same route again.
+ */
+let lastArrived = false;
+export function pathArrived(): boolean {
+  return lastArrived;
+}
+
+/** The goal the last `findPath` actually searched for — the asked-for cell as `prepare` snapped
+ *  it — or null when it had nothing to search. What "how far short" is measured from. */
+let lastGoal: Cell | null = null;
+export function pathGoal(): Cell | null {
+  return lastGoal;
+}
+
+/**
  * The search's working set, allocated ONCE for the map and reused by every call.
  *
  * A* used a `Map`/`Map`/`Set` triple keyed on the cell index. Measured on a 256×256 grid
@@ -315,12 +337,16 @@ export function findPath(
   footprint = 1,
 ): Cell[] | null {
   lastExpansions = 0;
+  lastArrived = false;
+  lastGoal = null;
   const prep = prepare(grid, start, goal, maxExpansions, domain, ring, footprint);
   if (!prep) return null;
   const { from, to, budget } = prep;
+  lastGoal = to;
   const search = new PathSearch(scratch, grid, from, to, blocked, domain, ring, budget);
   search.run(Infinity);
   lastExpansions = search.expansions;
+  lastArrived = search.arrived();
   return search.result();
 }
 
@@ -506,6 +532,11 @@ export class PathSearch {
     }
     this.finished = true;
     return true;
+  }
+
+  /** Did it get there: the (snapped) goal cell, or ring 0 of an approach? Read once it is over. */
+  arrived(): boolean {
+    return this.bestKey === this.goalKey || this.bestH <= 0;
   }
 
   /** The path — to the goal, or as close as the search got. */

@@ -357,6 +357,107 @@ console.log("…and a GROUP does, on a big map, past an obstacle sized for one")
   check(`all ${N} got to the far side (${there()}/${N}, in ${t.toFixed(0)}s)`, there() === N);
 }
 
+// A walk that ends on its SNAPPED goal has arrived, and buys no detour.
+//
+// `prepare` snaps a goal under a building to the nearest open cell, so the path to it ends a cell
+// or two from the cell the order named — having arrived. `escalate` used to compare the path's end
+// with the NAMED cell, read that as "fell short", and license a full detour search that found the
+// same route again. Every worker returning to its town hall does exactly this (`depotApproach`
+// aims at the hall's edge, which is under the hall): in a twelve-player Emerald Gardens match those
+// trips were three asks in four and kept the detour queue full for the whole game.
+console.log("a walk to a goal under a building arrives, and asks for no detour");
+{
+  const { pathArrived } = require(join(REPO, ".sim-build", "src", "sim", "pathfind.js"));
+  const SIM_DT = 1 / 60;
+  const flags = blank();
+  const B0 = 200, B1 = 212; // a 12x12 footprint — a town hall's
+  for (let y = B0; y < B1; y++) for (let x = B0; x < B1; x++) flags[y * W + x] = PathingFlag.Unwalkable;
+  const g = grid(flags);
+
+  // Half a cell inside the near face — where `depotApproach` lands a returning worker, and near
+  // enough to open ground that the detour is licensed (a goal buried deeper under the building
+  // has no open cell within reach of `escalate`'s licence, and was never escalated at all).
+  // Measured against the old rule: this exact order started a detour search.
+  const asked = [B0, 205];
+  const p = findPath(g, [100, 205], asked);
+  const end = p[p.length - 1];
+  check(`the path ends on open ground outside the footprint (${end[0]},${end[1]}), not on the named cell`,
+    end[0] < B0 && !(end[0] === asked[0] && end[1] === asked[1]));
+  check("…and the search says it ARRIVED", pathArrived() === true);
+
+  const world = new SimWorld(g, 1);
+  world.add({
+    id: 1, owner: 0, team: 0, typeId: "hfoo", x: 100 * 32, y: 205 * 32, facing: 0,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 3000, sightNight: 3000,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [], oldWeapons: [],
+  });
+  world.issueMove(1, asked[0] * 32 + 16, asked[1] * 32);
+  check(`the order started no detour search (job ${world.pathJob ? "running" : "none"})`, world.pathJob === null);
+  check(`…and queued none (queue ${world.detourQueue.size})`, world.detourQueue.size === 0);
+  for (let i = 0; i < Math.round(20 / SIM_DT); i++) world.tick(SIM_DT);
+  const u = world.units.get(1);
+  check(`and the unit walked up to the building's face (x ${u.x.toFixed(0)}, face at ${B0 * 32})`,
+    u.x > (B0 - 4) * 32 && u.x < B0 * 32);
+  check(`…and stopped there, order done (order ${u.order})`, u.order === "idle");
+}
+
+// A walk that stops a few cells short with only BODIES in between buys no detour either.
+//
+// `escalate` licenses its flood off the region labels, which are terrain; a crowd standing round the
+// goal is not in them, so the labels say "fund it" and the flood spends ~140,000 cells to hand back
+// the cell the cheap search already had (the BODIES test below proves the search cannot do better).
+// In a twelve-player match that was two thirds of every expansion the detour search spent: units
+// resuming a walk into a jam, and units ordered into a crowd. `onlyBodiesBetween` refuses it when
+// the route ended within BODY_GAP_CELLS of its goal on a straight run the terrain leaves open.
+// Both arms below — the rule, and the rule switched off — must leave the walker in the same place.
+console.log("a walk stopped short by a ring of BODIES asks for no detour, and ends where it would have");
+{
+  const SIM_DT = 1 / 60;
+  const GX = 250 * 32, GY = 200 * 32, RING_R = 64, RING_N = 8;
+  const body = (id, x, y) => ({
+    id, owner: 0, team: 0, typeId: "hfoo", x, y, facing: 0,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 3000, sightNight: 3000,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [], oldWeapons: [],
+  });
+  const arm = (withRule) => {
+    const world = new SimWorld(grid(blank()), 1);
+    if (!withRule) world.onlyBodiesBetween = () => false; // the old behaviour
+    for (let k = 0; k < RING_N; k++) {
+      const a = (k / RING_N) * Math.PI * 2;
+      world.add(body(10 + k, GX + Math.cos(a) * RING_R, GY + Math.sin(a) * RING_R));
+      world.issueHold(10 + k);
+    }
+    for (let i = 0; i < 30; i++) world.tick(SIM_DT); // the ring settles and reserves its cells
+    world.add(body(1, 100 * 32, GY));
+    world.issueMove(1, GX, GY);
+    const started = !!world.pathJob;
+    const queued = world.detourQueue.size;
+    for (let i = 0; i < Math.round(25 / SIM_DT); i++) world.tick(SIM_DT);
+    const u = world.units.get(1);
+    return { started, queued, x: u.x, y: u.y, order: u.order };
+  };
+  const rule = arm(true);
+  const old = arm(false);
+  check("without the rule this order DOES buy a detour (the scenario exercises it)", old.started);
+  check(`with it, no detour search (job ${rule.started ? "running" : "none"}, queue ${rule.queued})`, !rule.started && rule.queued === 0);
+  check(`…and the walker ends exactly where it did before (${rule.x.toFixed(1)},${rule.y.toFixed(1)} vs ${old.x.toFixed(1)},${old.y.toFixed(1)}, order ${rule.order})`,
+    rule.x === old.x && rule.y === old.y && rule.order === old.order);
+}
+
 // A CROWD-AVOIDING reroute must not buy the escalated flood.
 //
 // `escalate` licenses the big search off the static region labels, which are built on terrain

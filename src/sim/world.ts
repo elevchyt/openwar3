@@ -1,5 +1,5 @@
 import { BUILD_CELL, BUILD_CELL_CELLS, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
-import { findPath, smoothPath, pathExpansionsSpent, PATH_FLOOR_EXPANSIONS, beginPath, PathScratch, type PathSearch } from "./pathfind";
+import { findPath, smoothPath, pathExpansionsSpent, pathArrived, pathGoal, PATH_FLOOR_EXPANSIONS, beginPath, PathScratch, type PathSearch } from "./pathfind";
 import { targsKindError } from "./targeting";
 import { corpseAdmits, corpseMissingError, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
@@ -2327,6 +2327,12 @@ export const PathSlicing = {
    *  slice·rate/(slice+rate) expansions a step on detours. Live-tunable so a match can A/B it. */
   expansionsPerStep: LONG_SEARCH_EXPANSIONS_PER_STEP,
 };
+/** How short of its goal a route may stop, with only bodies in between, and still not be worth an
+ *  escalated search (SimWorld.onlyBodiesBetween). Ours: four cells is two bodies' width, and it
+ *  took two thirds of the detour search's expansions off a twelve-player match while every
+ *  treeline and forest test still walks round — those gaps are terrain, and never pass the line
+ *  test however short they are. */
+const BODY_GAP_CELLS = 4;
 /** The collision pass's spatial grid (SimWorld.resolveCollisions). On, unless a test or a live A/B
  *  turns it off to run the all-pairs loop it replaced — it changes what the pass COSTS and never
  *  what it does (tools/sim-collision-grid-test.cjs). */
@@ -21703,6 +21709,10 @@ export class SimWorld {
     const searchAt = perfNow();
     let cells = findPath(this.grid, start, goal, blocked, first, domain, ring, u.footprint);
     simProfile.tally("pathExpansions", pathExpansionsSpent());
+    // Whether that search ARRIVED — at its goal as snapped, not at the cell it was handed
+    // (pathArrived). Taken now, because the searches below overwrite it.
+    let arrived = pathArrived();
+    let searchedGoal = pathGoal();
     // Are the CROWD's bodies still among this search's walls? See the escalation guard below.
     let crowdWalls = avoidMovers;
     // Routing around the live crowd can leave nowhere to go at all (hemmed in on every
@@ -21712,6 +21722,8 @@ export class SimWorld {
       blocked = this.clearanceBlocker(u, start);
       crowdWalls = false; // …and this is an ordinary search again, so it may escalate
       cells = findPath(this.grid, start, goal, blocked, first, domain, ring, u.footprint);
+      arrived = pathArrived();
+      searchedGoal = pathGoal();
     }
     // A CROWD-AVOIDING search never escalates, because the licence to flood is a proof about
     // the wrong graph. `escalate` reads the static region labels, and those are built on
@@ -21743,13 +21755,12 @@ export class SimWorld {
     }
     // Came back short of a place somebody else has already found the way to? Take their way.
     if (!ring && !crowdWalls && cells && cells.length > 1) {
-      const end = cells[cells.length - 1];
-      if (end[0] !== goal[0] || end[1] !== goal[1]) {
+      if (!arrived) {
         const shared = this.adoptSharedRoute(u, start, goal, blocked, domain);
         if (shared) cells = shared;
       }
     }
-    if (mayEscalate && !crowdWalls && this.escalate(u, cells, start, goal, domain, ring)) {
+    if (mayEscalate && !crowdWalls && this.escalate(u, cells, start, goal, domain, ring, arrived, searchedGoal)) {
       cells = this.beginDetour(u, tx, ty, approach, start, goal, blocked, domain, ring) ?? cells;
     }
     simProfile.gauge("pathSearch", perfNow() - searchAt);
@@ -22093,13 +22104,27 @@ export class SimWorld {
     start: [number, number],
     goal: [number, number],
     domain: PathDomain,
-    ring?: (cx: number, cy: number) => number,
+    ring: ((cx: number, cy: number) => number) | undefined,
+    // The cheap search reached the goal it searched for (pathArrived) — the snapped cell, when the
+    // one asked for is under a building. That is an arrival, whatever the last cell says.
+    arrived: boolean,
+    // The goal the cheap search actually searched for (pathGoal) — the snapped cell.
+    searchedGoal: [number, number] | null,
   ): boolean {
+    if (arrived) return false;
     if (!cells || !cells.length) return false;
     const [ecx, ecy] = cells[cells.length - 1];
     // Arrived? An approach arrives when it is up against the thing (ring 0); a plain move
     // when it is standing on the goal cell.
     if (ring ? ring(ecx, ecy) <= 0 : ecx === goal[0] && ecy === goal[1]) return false;
+    // …and a walk that stopped a few cells short with nothing but BODIES in between is as close
+    // as the crowd allows. The licence below is a proof about TERRAIN, and so is every cell on the
+    // way from the end of this route to the goal — so what stopped the search is somebody standing
+    // there, and a flood cannot walk through them either (the BODIES test in sim-detour-test).
+    // Measured 2026-09-11 in a twelve-player Emerald Gardens match: two thirds of every expansion
+    // the detour search spent went on exactly these — units resuming a walk into a jam, or ordered
+    // into a crowd — each flooding ~240,000 cells to hand back the cell it started from.
+    if (!ring && searchedGoal && this.onlyBodiesBetween(u, [ecx, ecy], searchedGoal, domain)) return false;
     if (!this.detourLicensed(u, start, goal, domain, ring)) return false;
     // Licensed, so the slot is the only question left. Busy — or free with somebody already
     // waiting for it, who is served first (`pumpPathJob` runs after the units' own orders in a
@@ -22120,6 +22145,22 @@ export class SimWorld {
     // Reserve the slot up front so nothing re-enters before the caller has billed it; the
     // minimum wait stands in until the caller replaces it with what the search really spent.
     this.longSearchIn = LONG_SEARCH_EVERY;
+    return true;
+  }
+
+  /** Is the straight run from where a route ENDED to the goal it was searching for short (within
+   *  BODY_GAP_CELLS) and clear of everything but bodies — every cell on it one this body's
+   *  footprint fits on, by terrain and building stamps alone? Then what the search could not get
+   *  past was a crowd, not a detour's worth of ground. */
+  private onlyBodiesBetween(u: SimUnit, end: [number, number], goal: [number, number], domain: PathDomain): boolean {
+    const gap = Math.max(Math.abs(goal[0] - end[0]), Math.abs(goal[1] - end[1]));
+    if (gap === 0 || gap > BODY_GAP_CELLS) return false;
+    const n = Math.max(1, u.footprint);
+    for (let k = 1; k <= gap; k++) {
+      const x = Math.round(end[0] + ((goal[0] - end[0]) * k) / gap);
+      const y = Math.round(end[1] + ((goal[1] - end[1]) * k) / gap);
+      if (!this.grid.footprintClear(x, y, n, domain)) return false;
+    }
     return true;
   }
 
