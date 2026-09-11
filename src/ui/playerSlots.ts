@@ -124,9 +124,9 @@ export function slotLabel(slot: NamedSlot, melee: boolean): string {
   return slotNaming(slot, melee).label;
 }
 
-/** `slotLabel`'s answer, and whether it was the LOBBY's to give — the only names
+/** `slotLabel`'s answer, and whether it is a PERSON's own name — the only names
  *  `playerLabels` numbers apart. */
-function slotNaming(slot: NamedSlot, melee: boolean): { label: string; lobby: boolean } {
+function slotNaming(slot: NamedSlot, melee: boolean): { label: string; numbered: boolean } {
   const seated = slot.controller === "user" || slot.controller === "computer";
   // The lobby's own answer: WHO is in the seat. An AI slot reads back the exact entry its name
   // menu showed, Computer+ included — one table answers both — so the in-game name is the lobby
@@ -134,25 +134,27 @@ function slotNaming(slot: NamedSlot, melee: boolean): { label: string; lobby: bo
   const lobby = slot.controller === "computer"
     ? labelOf(slotOptionValue("computer", slot.aiDifficulty, slot.aiPlus === true))
     : slot.playerName?.trim() || `Player ${slot.id + 1}`;
-  if (melee && seated) return { label: lobby, lobby: true };
+  const human = slot.controller === "user";
+  if (melee && seated) return { label: lobby, numbered: human };
   const map = slot.name?.trim();
-  if (map) return { label: map, lobby: false };
-  return seated ? { label: lobby, lobby: true } : { label: `Player ${slot.id + 1}`, lobby: false };
+  if (map) return { label: map, numbered: false };
+  return seated ? { label: lobby, numbered: human } : { label: `Player ${slot.id + 1}`, numbered: false };
 }
 
 /**
  * Every name a match plays under, by player id: `slotLabel` for each slot and the typed name for
- * each seat on a LAN bench — with TWINS told apart. Two people who both kept the profile's
- * "Player", or three "Computer (Normal)" seats, read "Player (1)" / "Player (2)" and
- * "Computer (Normal) (1)" … "(3)", numbered in seat order.
+ * each seat on a LAN bench — with HUMAN twins told apart. Two people who both kept the
+ * profile's "Player" read "Player (1)" / "Player (2)", numbered in seat order.
  *
  * One function rather than a pass in each caller, because the in-game names (owner line, chat,
  * Allies rows, `GetPlayerName`) and the loading screen's roster have to number the SAME twins
  * the same way — so both hand it the whole config, bench included, even though the roster
  * never prints the bench: an observer who shares a player's name numbers that player on both.
  *
- * Only names the LOBBY gave are numbered. A mission's own side names are the map's text, read
- * back by its triggers through `GetPlayerName`, and two sides a map chose to call alike stay so.
+ * Only PEOPLE are numbered. Three "Computer (Normal)" seats stay three "Computer (Normal)" —
+ * the label says what the seat is, not who, and the developer asked for computers to be left
+ * alone. Nor is a mission's own side name: that is the map's text, read back by its triggers
+ * through `GetPlayerName`, and two sides a map chose to call alike stay so.
  */
 export function playerLabels(
   slots: readonly NamedSlot[],
@@ -161,14 +163,14 @@ export function playerLabels(
 ): Map<number, string> {
   const named = [
     ...[...slots].sort((a, b) => a.id - b.id).map((s) => ({ id: s.id, ...slotNaming(s, melee) })),
-    ...observers.map((o) => ({ id: o.id, label: o.name.trim() || OBSERVER_NAME, lobby: true })),
+    ...observers.map((o) => ({ id: o.id, label: o.name.trim() || OBSERVER_NAME, numbered: true })),
   ];
   const total = new Map<string, number>();
-  for (const n of named) if (n.lobby) total.set(n.label, (total.get(n.label) ?? 0) + 1);
+  for (const n of named) if (n.numbered) total.set(n.label, (total.get(n.label) ?? 0) + 1);
   const seen = new Map<string, number>();
   const out = new Map<number, string>();
   for (const n of named) {
-    if (!n.lobby || (total.get(n.label) ?? 0) < 2) {
+    if (!n.numbered || (total.get(n.label) ?? 0) < 2) {
       out.set(n.id, n.label);
       continue;
     }
