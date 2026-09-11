@@ -1599,6 +1599,46 @@ export class RtsController {
     return m && !this.fogBlocksMine(m) ? m : null;
   }
 
+  /**
+   * What a ground point over a gold mine PICKS — the mine itself, or the building standing on it.
+   *
+   * A Haunted or an Entangled Gold Mine is raised OVER the rock rather than in its place (the
+   * SimMine goes on holding the gold — SimMine.entangledBy), so the mine's broad ground pick sat
+   * underneath the building and took every click that missed the building's own flat base slab
+   * (docs/selection.md): aiming at your Haunted Gold Mine selected the Gold Mine. In the original
+   * the building IS the mine from then on — `BlightGoldMineForPlayerBJ` removes the mine unit
+   * outright — so a covered mine is never a click target of its own. The point picks the
+   * BUILDING (select, hover, right-click), or nothing while that building's model is still
+   * loading (`entangledBy` -1) or is not one the cursor may take (hidden, fog memory).
+   * Rally points and the Gather cursor still resolve to the mine, which is what they work.
+   */
+  private minePickAt(x: number, y: number, radius: number): { mine: SimMine | null; cover: number | null } {
+    const m = this.mineAt(x, y, radius);
+    if (!m || !m.entangledBy) return { mine: m, cover: null };
+    const id = m.entangledBy;
+    if (id < 0) return { mine: null, cover: null };
+    const e = this.byId.get(id);
+    const takes = !!e && !e.hidden && !this.drawnFromMemory(id) && this.frameUnit(id) !== undefined;
+    return { mine: null, cover: takes ? id : null };
+  }
+
+  /** `pickAt`'s fallback for a click that missed a covered mine's building but landed on its
+   *  rock (see minePickAt). A ground item at the same point wins, as it does over a bare mine. */
+  private mineCoverAt(cssX: number, cssY: number): number | null {
+    const g = this.groundPoint(cssX, cssY);
+    if (!g || this.itemAt(g[0], g[1], ITEM_PICK_RADIUS)) return null;
+    return this.minePickAt(g[0], g[1], 300).cover;
+  }
+
+  /** The gold left in the mine this building stands on — a Haunted or an Entangled Gold Mine,
+   *  finished or rising — or null for any other unit, and for a mine this viewer has not seen
+   *  (the snapshot's -1). */
+  private coverGold(id: number): number | null {
+    const mineId = this.sim.units.get(id)?.mineId ?? 0;
+    const m = mineId > 0 ? this.sim.mines.get(mineId) : undefined;
+    return m && m.entangledBy === id && m.gold >= 0 ? m.gold : null;
+  }
+
   /** The ground item at a point — the ONLY way an item is picked, so the fog gate holds for
    *  hover, select and right-click-to-pick-up alike (the same deal mineAt gives a mine).
    *
@@ -3040,7 +3080,9 @@ export class RtsController {
     let changed = false;
     for (const id of this.selected) if (!this.sim.units.has(id)) { this.selected.delete(id); changed = true; }
     if (changed || (this.primary !== null && !this.sim.units.has(this.primary))) this.refocus(this.focusedKey);
-    if (this.selectedMine !== null && !this.sim.mines.has(this.selectedMine)) this.selectedMine = null;
+    // …and a mine a building has been raised over, which is no longer a thing to hold (minePickAt).
+    const sm = this.selectedMine !== null ? this.sim.mines.get(this.selectedMine) : undefined;
+    if (this.selectedMine !== null && (!sm || sm.entangledBy)) this.selectedMine = null;
     if (this.selectedItem !== null && !this.sim.items.has(this.selectedItem)) this.selectedItem = null;
   }
 
@@ -4133,7 +4175,8 @@ export class RtsController {
     this.tickCorpses(dt);
     perfLog.end("sim.deaths");
     if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;
-    if (this.hoveredMine !== null && !this.sim.mines.has(this.hoveredMine)) this.hoveredMine = null;
+    const hm = this.hoveredMine !== null ? this.sim.mines.get(this.hoveredMine) : undefined;
+    if (this.hoveredMine !== null && (!hm || hm.entangledBy)) this.hoveredMine = null; // gone, or covered (minePickAt)
     if (this.hoveredItem !== null && !this.sim.items.has(this.hoveredItem)) this.hoveredItem = null;
     // Fog of war: rebuild the "currently visible" layer a few times a second — WC3
     // refreshes fog periodically, not every frame, and this keeps circle-stamping
@@ -5056,7 +5099,7 @@ export class RtsController {
    *  a player grabs every Moon Well to replenish or every Burrow to man (the group
    *  is still units XOR buildings; see `ownSelectionByKind`). */
   selectAt(cssX: number, cssY: number, mods: { additive?: boolean; sameType?: boolean } = {}): void {
-    const id = this.pickAt(cssX, cssY);
+    const id = this.pickAt(cssX, cssY) ?? this.mineCoverAt(cssX, cssY);
     if (id !== null) {
       const u = this.sim.units.get(id);
       const e = this.byId.get(id);
@@ -5124,7 +5167,8 @@ export class RtsController {
         this.lastVoiceId = null;
         return;
       }
-      const m = this.mineAt(g[0], g[1], 300); // fogged mines are images, not click targets
+      // Fogged mines are images, not click targets — and a covered one is its building (above).
+      const m = this.minePickAt(g[0], g[1], 300).mine;
       if (m) {
         this.selected.clear();
         this.primary = null;
@@ -5314,7 +5358,12 @@ export class RtsController {
         // (broad radius) so an item near a mine gets its own hover ring, not the mine's.
         const it = this.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
         if (it) this.hoveredItem = it.id;
-        else this.hoveredMine = this.mineAt(g[0], g[1], 300)?.id ?? null;
+        else {
+          // A covered mine hovers as its BUILDING, never as the rock under it (minePickAt).
+          const pick = this.minePickAt(g[0], g[1], 300);
+          this.hoveredMine = pick.mine?.id ?? null;
+          this.hovered = pick.cover;
+        }
       }
     }
   }
@@ -7869,7 +7918,7 @@ export class RtsController {
       }
       return;
     }
-    const picked = this.pickAt(cssX, cssY);
+    const picked = this.pickAt(cssX, cssY) ?? this.mineCoverAt(cssX, cssY);
     // A PLANTED BUILDING with no rally point to set has almost nothing a right-click can mean,
     // and the one thing it does mean is an attack — for the buildings the data gave a weapon
     // you are allowed to aim (UnitWeapons `showUI`: every tower, the Orc Burrow, the Ancient
@@ -7996,7 +8045,8 @@ export class RtsController {
     // Workers in the selection right-clicking a resource start harvesting.
     // Generous pick radii: mines are 4×4 tiles, and clicking a tree canopy
     // lands the ground ray well behind the trunk.
-    const mine = this.mineAt(hit[0], hit[1], 320); // …and you cannot mine what you cannot see
+    // …and you cannot mine what you cannot see. A covered mine was its building, above.
+    const mine = this.minePickAt(hit[0], hit[1], 320).mine;
     if (mine) {
       // An UPROOTED Tree of Life right-clicked onto a free mine goes and TAKES it — the night
       // elf expansion in one click. It is not a harvest and no wisp is involved: the tree
@@ -8148,7 +8198,7 @@ export class RtsController {
    */
   private harvestAt(cssX: number, cssY: number, queued: boolean): void {
     const prim = this.primary !== null ? this.sim.units.get(this.primary) ?? undefined : undefined;
-    const picked = this.pickAt(cssX, cssY);
+    const picked = this.pickAt(cssX, cssY) ?? this.mineCoverAt(cssX, cssY);
     const target = picked !== null ? this.sim.units.get(picked) : undefined;
     let mine = target?.mineId ? this.sim.mines.get(target.mineId) ?? null : null;
     const hit = this.groundPoint(cssX, cssY);
@@ -8215,6 +8265,13 @@ export class RtsController {
     if (picked !== null) {
       const t = this.sim.units.get(picked);
       if (t && !t.building) return { x: t.x, y: t.y, kind: "unit", targetId: picked };
+      // A Haunted or Entangled Gold Mine IS the mine it stands on (minePickAt), so a flag
+      // planted on the building is a flag on the gold — finished or still rising, since a
+      // worker rallied onto a rising one walks over and waits for it (issueGoldWork).
+      const covered = t?.building && t.mineId ? this.sim.mines.get(t.mineId) : undefined;
+      if (covered && covered.entangledBy === picked && this.rallyCanHarvest("gold")) {
+        return { x: covered.x, y: covered.y, kind: "mine", targetId: covered.id };
+      }
     }
     const hit = this.groundPoint(cssX, cssY);
     if (!hit) return null;
@@ -8326,8 +8383,11 @@ export class RtsController {
     // meaning "go and mine" lands on it rather than on the mine. Aim the order at the mine
     // UNDERNEATH — that is what an Acolyte harvests (SimWorld.tickRingHarvest) — and let
     // anything that is not a ring miner fall through to the ordinary walk-up. Mirrors the
-    // Entangled Gold Mine's branch below, where the same click means the crew instead.
-    if (!enemy && target.mineId && this.sim.hauntedMine(target.mineId)) {
+    // Entangled Gold Mine's branch below, where the same click means the crew instead — and
+    // like it, the click means it while the building is still RISING: the Acolytes walk up
+    // and wait at the ring, and kneel the moment it stands (SimWorld.tickRingHarvest). Asked
+    // before the resume branch, which an Undead structure has no use for (nobody builds it).
+    if (!enemy && target.mineId && this.sim.hauntedMine(target.mineId, true)) {
       let any = false;
       for (const id of this.selected) {
         if (!this.sim.units.get(id)?.worker?.minesInRing) continue;
@@ -8853,6 +8913,9 @@ export class RtsController {
       const e = this.byId.get(this.hovered);
       if (!u || !e || e.hidden || this.drawnFromMemory(this.hovered)) return null;
       const lines: HoverLine[] = [];
+      // A Haunted or Entangled Gold Mine is the gold mine now — the rock under it is no longer
+      // a thing the cursor can find (minePickAt) — so its slab carries the mine's "Gold: N".
+      const gold = this.coverGold(this.hovered);
       if (u.owner < 0) {
         // Neutral. A passive prop is name only; a hostile creep also shows its level.
         lines.push({ text: e.name, color: HOVER_TEXT });
@@ -8861,10 +8924,11 @@ export class RtsController {
           if (lvl > 0) lines.push({ text: `Level ${lvl}`, color: HOVER_TEXT });
         }
       } else if (u.owner === this.localPlayer) {
-        // Your own units wear no owner line; only a hero is worth a slab (name + level).
-        if (!u.isHero) return null;
+        // Your own units wear no owner line; only a hero (name + level) and a covered gold
+        // mine (name + gold) are worth a slab.
+        if (!u.isHero && gold === null) return null;
         lines.push({ text: u.properName || e.name, color: HOVER_TEXT });
-        lines.push({ text: `Level ${u.level}`, color: HOVER_TEXT });
+        if (u.isHero) lines.push({ text: `Level ${u.level}`, color: HOVER_TEXT });
       } else {
         // Another player's unit: the owner's name, coloured by diplomacy to us.
         const ally = this.localAlly(u.owner);
@@ -8874,6 +8938,7 @@ export class RtsController {
           lines.push({ text: `Level ${u.level}`, color: HOVER_TEXT });
         }
       }
+      if (gold !== null) lines.push({ text: `Gold: ${gold}`, color: HOVER_TEXT });
       return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, lines };
     }
     if (this.hoveredMine !== null) {

@@ -5870,13 +5870,15 @@ export class SimWorld {
   }
 
   /** The finished building standing over this mine that a WORKER may work — a Haunted Gold
-   *  Mine with a mining ring. Null for a bare mine, for one still rising, and for an
-   *  Entangled Gold Mine (whose crew climbs INSIDE it instead — issueGarrison). */
-  hauntedMine(mineId: number): SimUnit | null {
+   *  Mine with a mining ring. Null for a bare mine and for an Entangled Gold Mine (whose crew
+   *  climbs INSIDE it instead — issueGarrison). One still RISING is null too, unless
+   *  `orRising`: that is the mine a worker may already be SENT to, to wait at the ring until
+   *  it stands (tickRingHarvest). */
+  hauntedMine(mineId: number, orRising = false): SimUnit | null {
     const id = this.mines.get(mineId)?.entangledBy ?? 0;
     if (id <= 0) return null;
     const u = this.units.get(id);
-    if (!u || u.hp <= 0 || (u.building && u.building.constructionLeft > 0)) return null;
+    if (!u || u.hp <= 0 || (!orRising && u.building && u.building.constructionLeft > 0)) return null;
     return this.mineCrewOf(u)?.ring ? u : null;
   }
 
@@ -6051,6 +6053,19 @@ export class SimWorld {
       const walled = u.blockedT >= BLOCKED_REPATH_TIME / 2;
       if (!this.arriveAtNode(u, mine.x, mine.y, u.radius + rules.ring, () => this.pathToNode(u)) && !walled) {
         u.working = false;
+        return;
+      }
+      // …and a mine that is still RISING is walked up to and WAITED at. An Acolyte sent at a
+      // Haunted Gold Mine whose summoning has not finished — a right-click on the building, a
+      // Necropolis rallied onto it — keeps its harvest order and stands at the ring (it is on
+      // a job, so the idle-worker badge leaves it alone) and takes its mark on the first tick
+      // the building stands. The mirror of an Entangled Gold Mine's crew waiting at the door
+      // (tickGarrison, patch 1.10). No mark is held while it waits: marks are claimed at a
+      // FINISHED mine, below, so a queue of waiters cannot starve the ring.
+      if (mine.building && mine.building.constructionLeft > 0) {
+        u.working = false;
+        u.moving = false;
+        u.path = [];
         return;
       }
       // Claimed at ARRIVAL, not at the order (see the note above) — and re-asked here rather
@@ -7281,6 +7296,10 @@ export class SimWorld {
     this.unsettle(u); // free its reserved cells
     this.releaseClaim(u); // …and any tile it was walking onto
     this.releasePathStamp(u); // …and its footprint's collision
+    // A Haunted or Entangled Gold Mine cancelled while it rises hands the mine back. Without
+    // this `entangledBy` went on naming a building that no longer existed, and the mine was
+    // closed to every worker and every later haunting for the rest of the match.
+    this.releaseEntangled(u);
     this.units.delete(u.id);
     this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
     this.removals.push(u.id);
@@ -9494,9 +9513,10 @@ export class SimWorld {
     //  • HAUNTED — the ring outside is the way in, and it is open to a worker of the owning
     //    side and to nobody else ([Errors] `Notblightedmine` = "Unable to use a Haunted Gold
     //    Mine."). Every Undead worker in the game is a `Aaha` Acolyte, so no further test is
-    //    needed than whose mine it is.
+    //    needed than whose mine it is. Open while it is still RISING, too: the worker walks up
+    //    and waits at the ring for it to stand (tickRingHarvest).
     if (kind === "gold" && this.mines.get(nodeId)?.entangledBy) {
-      const haunt = this.hauntedMine(nodeId);
+      const haunt = this.hauntedMine(nodeId, true);
       if (!haunt || !this.allied(u, haunt)) return false;
     }
     // …and the mirror, for both races whose gold stays in the ground. A wisp has no pick:
@@ -9504,7 +9524,7 @@ export class SimWorld {
     // miner, it is a wisp standing next to a hole. An Acolyte has no pick either — it has a
     // ring to kneel in, and there is no ring until the mine is haunted ([Errors]
     // `Blightminefirst` = "Must haunt gold mine first.").
-    if (kind === "gold" && (u.worker.deliversInPlace || (u.worker.minesInRing && !this.hauntedMine(nodeId)))) return false;
+    if (kind === "gold" && (u.worker.deliversInPlace || (u.worker.minesInRing && !this.hauntedMine(nodeId, true)))) return false;
     // ONE WISP TO A TREE. A wisp does not chop from outside, it goes IN — so an occupied tree
     // is not a queue you join, it is a seat that is taken, and WC3 sends the second wisp to a
     // neighbouring tree rather than stacking two inside one trunk. Sent at a taken tree, take
@@ -17209,10 +17229,19 @@ export class SimWorld {
       }
       // A HAUNTED mine is worked from outside: take a station in its ring and stay there.
       // There is no shaft, no load and no walk home — the gold is credited off the building's
-      // own clock (tickMineCrews) for as long as anyone is kneeling.
-      const haunt = this.hauntedMine(mine.id);
+      // own clock (tickMineCrews) for as long as anyone is kneeling. One still rising is
+      // walked up to and waited at (tickRingHarvest).
+      const haunt = this.hauntedMine(mine.id, true);
       if (haunt) {
         this.tickRingHarvest(u, haunt);
+        return;
+      }
+      // An Acolyte has no pick. With no Haunted Gold Mine standing or rising here — knocked
+      // down, cancelled or unsummoned under its crew — there is nothing it can work, and
+      // walking on into the shaft would be a Peasant's job ([Errors] `Blightminefirst`).
+      if (w.minesInRing) {
+        this.popFromRing(u);
+        this.stop(u.id);
         return;
       }
       // Walk up to the mine and duck inside from WHATEVER side we reached — the reach

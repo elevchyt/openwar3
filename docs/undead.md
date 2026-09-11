@@ -253,6 +253,24 @@ enter: the order was refused and the Acolyte fell through to a plain move and st
 doing nothing. `garrisonCap` is the question, asked in the same terms `mineCrewOf` reads the two
 rows in — a hold, or a ring.
 
+**A mine still being summoned is already a job.** An Acolyte sent at a Haunted Gold Mine that is
+still rising — a right-click on the building, a Necropolis rallied onto it — keeps its harvest
+order, walks up to the ring and waits there, and takes its mark the first tick the building
+stands (`hauntedMine(id, true)` → `tickRingHarvest`). It holds no mark while it waits, and it
+is not idle: the order is `harvest`. That is the same wait the wisps keep at an Entangled Gold
+Mine's door (docs/night-elf.md). An Acolyte left at a mine with no Haunted Gold Mine standing
+or rising — the building was knocked down, cancelled or unsummoned — stops, because walking on
+into the shaft would be a Peasant's job. Cancelling a rising one hands the mine back
+(`cancelBuilding` → `releaseEntangled`). Before that fix the mine stayed claimed by a building
+that no longer existed.
+
+**The rock under it is not a click target.** The building stands over the `SimMine` rather than
+replacing it, so the mine's broad ground pick used to sit underneath and win every click that
+missed the building's flat base slab. `RtsController.minePickAt` sends that point to the
+BUILDING instead (select, hover, right-click), which is what `RemoveUnit` on the mine makes true
+in the original. The building's hover slab carries the mine's own `Gold: N` line (`coverGold`).
+Rally flags and the Gather cursor still resolve to the mine, because the mine is what they work.
+
 **Placement snaps to the mine.** A building carrying `Abgm` is valid exactly where a free gold
 mine is and nowhere else, so the ghost jumps from mine to mine rather than sliding over the
 ground — and the ordinary footprint test is bypassed, because the mine's own cells are stamped

@@ -308,6 +308,13 @@ over one, so the plain gold mine's map widget is hidden while the building stand
 again if it falls. Its `NGOL` foundation decal comes up with it (`egol` paints `EMDB` in the
 same place, and two ubersplats in one spot blend to a dark smear).
 
+Hiding the widget does not stop the CURSOR from finding the mine, and that is a separate job.
+The mine's ground pick is broad and the building's click shape is a flat slab at its base, so a
+click that missed the slab used to select the Gold Mine underneath. `RtsController.minePickAt`
+answers every select, hover and right-click near a covered mine with the building instead.
+The building's hover slab carries the mine's `Gold: N` (`coverGold`), exactly as a bare mine's
+does. The Haunted Gold Mine shares all of this (docs/undead.md §4).
+
 ## 4. An Ancient is a building that can walk
 
 Root / Unroot (`Aroo`, aliases `Aro1`/`Aro2`) — `Order=root` / `Unorder=unroot`, one ability,
