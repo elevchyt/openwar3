@@ -229,6 +229,12 @@ the clock a walker that cannot take its next tile already waits. It is a field o
 not `repathT`, because `repathT` also pauses the stall watchdog: a wait re-armed on every failed
 search would have kept the watchdog from ever giving the target up. `pathSearches` is the rate
 that tells this shape apart — a search that is ASKED too often, not one that costs too much.
+Measured on the same headless match before and after, at the same ~500 units: `pathSearches`
+136–341 → 65–137 a second and `pathExpansions` 268–339k → 194–248k, and in the 14-minute CPU
+profile `tickAttack` fell from 9.9 % of main-thread time to 3.3 % and `pathTo` from 11.7 % to
+6.4 %. Compare those RATES and SHARES, not ms per step: the two runs drew 3× different frame
+rates on one machine, and the budgeted detour job — a FIXED amount of work a step — took 22 %
+longer in the faster-rendering one.
 
 **A VALUE PUSHED ON A CLOCK INTO SOMEBODY ELSE'S QUEUE.** `SoundBoard.setListener` wrote nine
 AudioParams every frame. An AudioParam's `.value` is not a field: it schedules an event on the
