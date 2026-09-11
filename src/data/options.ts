@@ -120,7 +120,11 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // here decides which AI a match starts with. Its frame is not the game's — no 2003 UI file
   // has a row for a second melee AI — it comes from `src/overrides/ui/OptionsMenu.fdf`, which
   // is also where the Game Port and Chat Support rows that used to sit under this one go.
-  { key: "computerPlusDefault", frame: "ComputerPlusDefaultCheckBox", kind: "bool", panel: "gameplay", def: false },
+  //
+  // ON by default: Computer+ is the AI we want a new player to meet (and the only one that plays
+  // Extreme Candy War at all — src/ai/plus/candy/). See `loadOptions` for the stored `false` an
+  // older store carries without anybody having chosen it.
+  { key: "computerPlusDefault", frame: "ComputerPlusDefaultCheckBox", kind: "bool", panel: "gameplay", def: true },
 
   // --- Video (applied through render/videoQuality.ts, which documents what each rung does) ---
   { key: "gamma", frame: "GammaSlider", kind: "range", panel: "video", def: 50 },
@@ -188,6 +192,13 @@ export function loadOptions(): Options {
     // is precisely the one with no `healthBarStyle` in it (the sibling row that arrived with
     // the backend), so there the stale value is dropped and the new default stands.
     if (saved.healthBarStyle === undefined) delete saved.healthBars;
+    // The same trap, one row down. "Use Computer+ as default AI" opened UNTICKED until it became
+    // the default, and the OK button writes every row — so a stored `false` is what every store
+    // from before then says whether or not its player ever looked at the row. Such a store is the
+    // one without `computerPlusOn` (the marker this row's new default arrived with, written by
+    // `saveOptions`), so there the stale value is dropped and the new default stands. A stored
+    // `true` was a choice either way and is kept.
+    if (saved.computerPlusOn === undefined && saved.computerPlusDefault === false) delete saved.computerPlusDefault;
     for (const d of OPTION_DEFS) {
       const v = saved[d.key];
       // Only accept a stored value of the shape this option expects — a hand-edited or
@@ -206,7 +217,8 @@ export function saveOptions(opts: Options): void {
   const ls = typeof localStorage !== "undefined" ? localStorage : null;
   if (!ls) return;
   try {
-    ls.setItem(STORAGE_KEY, JSON.stringify(opts));
+    // `computerPlusOn` marks a store written since Computer+ became the default — see `loadOptions`.
+    ls.setItem(STORAGE_KEY, JSON.stringify({ ...opts, computerPlusOn: true }));
   } catch {
     /* quota exceeded / storage disabled — settings are best-effort */
   }
