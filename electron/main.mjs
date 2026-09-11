@@ -15,7 +15,7 @@
 //   • the port a peer connects to is the SAME port, so a second machine can join this game from
 //     a plain browser. That falls out for free and is worth keeping.
 
-import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
@@ -73,8 +73,8 @@ app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
  *  connects to — two rooms tables, one of them invisible, which is the confusing kind of bug. */
 const DEV_URL = process.env.OPENWAR3_DEV_URL || (process.env.OPENWAR3_DEV ? "http://localhost:5173" : null);
 
-/** A game window, not a browser window: no menu bar, and the world's own black behind it so a
- *  slow first paint is not a white flash.
+/** A game window, not a browser window: no menu (see `Menu.setApplicationMenu(null)` below), and
+ *  the world's own black behind it so a slow first paint is not a white flash.
  *
  *  It opens FULLSCREEN — the whole display, not a maximized window with the taskbar and title
  *  bar still around it — as a game does. The 1600×900 is only what Alt+Enter drops it back to. */
@@ -84,7 +84,6 @@ function createWindow(url) {
     height: 900,
     fullscreen: true,
     backgroundColor: "#000000",
-    autoHideMenuBar: true,
     show: false,
     webPreferences: {
       preload: join(here, "preload.cjs"),
@@ -158,6 +157,12 @@ const currentInstall = () => {
 
 app.whenReady().then(async () => {
   useSettingsDir(app.getPath("userData"));
+
+  // No application menu at all. `autoHideMenuBar` only HID Electron's default File/Edit/View
+  // bar, and a lone Alt brought it back over the game — Alt is the WC3 key for showing health
+  // bars, so a player pressed it constantly. Removing the menu also removes its accelerators
+  // (Ctrl+R reload, Ctrl+W close, Ctrl+± zoom), none of which a game window should answer.
+  Menu.setApplicationMenu(null);
 
   // The install, served to the page over the app's own scheme. The root is read PER REQUEST
   // rather than captured, so choosing a different folder takes effect without a relaunch.
