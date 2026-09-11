@@ -2125,6 +2125,11 @@ const LONG_SEARCH_EVERY = 8;
 // crush that note measured is unchanged — while one hard detour may spend eight times as much
 // in one go and simply waits eight times as long for the next.
 const LONG_SEARCH_EXPANSIONS_PER_STEP = 32768 / LONG_SEARCH_EVERY;
+// How recently a unit that is neither walking nor parked must have asked for its detour for
+// the ask to still stand when its turn comes (SimWorld.detourStillWanted). A stalled chaser
+// asks again every step it stands, so half a second only ever drops the units that stopped
+// asking because they no longer need a route. Ours.
+const DETOUR_ASK_FRESH = 0.5;
 const ATTACK_STALL_TIME = 0.6;
 const ATTACK_PROGRESS = PATHING_CELL * 1.5; // 48 world units per window
 // After a unit gives up on an unreachable target with nothing else reachable, it
@@ -16906,6 +16911,13 @@ export class SimWorld {
   private chasePoint(u: SimUnit, x: number, y: number): boolean {
     if (u.repathT > 0) return true;
     if (u.moving && Math.hypot(x - u.chaseX, y - u.chaseY) < CHASE_REPATH) return true;
+    // A detour already being paid for toward about here: wait for it. A unit that has walked
+    // its short route into the trees is standing still, so the rule above lets it re-plan
+    // every step — and each re-plan at a leader or a target that had drifted a few units threw
+    // the job away before it could land. A unit rallied onto a hero across a treeline, ordered
+    // while the slot was busy, lost its detour 661 times in 90 s and never got round.
+    const job = this.pathJob;
+    if (job && job.unitId === u.id && Math.hypot(x - job.tx, y - job.ty) < CHASE_REPATH) return true;
     // Chasing (an attack target or a follow leader) is LOCAL — the thing is within
     // acquisition/leader range, a couple of dozen cells off. Cap the search low so a
     // blocked/unreachable chase gives up after a small local flood instead of the full
@@ -21473,19 +21485,7 @@ export class SimWorld {
     let blocked = this.clearanceBlocker(u, start, avoidMovers);
     const domain = pathDomain(u);
     const goal = this.grid.footprintAnchor(tx, ty, u.footprint);
-    // How many whole cells clear of the target this cell leaves us — 0 is "up against it".
-    // Measured from the mover's own block edge (half its footprint), because that block is
-    // the thing that actually has to fit, and rounded to cells so an entire face ties and
-    // the cheapest one to walk to wins (findPath's `ring`).
-    const half = (u.footprint || 1) * PATHING_CELL * 0.5;
-    const ring = approach
-      ? (cx: number, cy: number) => {
-          const [wx, wy] = this.grid.footprintCenter(cx, cy, u.footprint);
-          const dx = Math.max(0, Math.abs(wx - tx) - approach.hx);
-          const dy = Math.max(0, Math.abs(wy - ty) - approach.hy);
-          return Math.max(0, Math.round((Math.hypot(dx, dy) - half) / PATHING_CELL));
-        }
-      : undefined;
+    const ring = this.approachRing(u, tx, ty, approach);
     // Search CHEAP first. A caller that named its own budget keeps it; everyone else gets the
     // floor, and pays for more only if the floor fell short — see `escalate`.
     const first = maxExpansions ?? PATH_FLOOR_EXPANSIONS;
@@ -21526,8 +21526,17 @@ export class SimWorld {
     // Nothing is lost by refusing: this reroute is a local manoeuvre on a 0.3 s clock
     // (BLOCKED_REPATH_TIME), and when it finds nothing the fallback above has already turned
     // it into an ordinary search, which may escalate like any other.
-    // A new plan for this unit supersedes any escalated search still running for it.
-    if (this.pathJob && this.pathJob.unitId === u.id) this.pathJob = null;
+    // A new plan for this unit supersedes any escalated search still running for it — to
+    // anywhere ELSE. A re-plan to the SAME place (a stall at the end of a best-effort route, a
+    // wait lapsing, the poll, a crowd reroute, a follower standing at the trees) is precisely
+    // the search that cannot buy the detour back: a floor or crowd search, under a throttle
+    // the job itself has just spent. Dropping the job there threw away the only way round and
+    // left the unit facing the trunks — a stalled follower re-plans every step it stands, and
+    // lost its detour 661 times in 90 s. Kept, it lands onto whatever this plan installs
+    // (pumpPathJob). "The same place" is routeStillServes' two cells.
+    if (this.pathJob && this.pathJob.unitId === u.id && Math.hypot(this.pathJob.tx - tx, this.pathJob.ty - ty) > PATHING_CELL * 2) {
+      this.pathJob = null;
+    }
     // Came back short of a place somebody else has already found the way to? Take their way.
     if (!ring && !crowdWalls && cells && cells.length > 1) {
       const end = cells[cells.length - 1];
@@ -21537,24 +21546,7 @@ export class SimWorld {
       }
     }
     if (mayEscalate && !crowdWalls && this.escalate(u, cells, start, goal, domain, ring)) {
-      if (PathSlicing.enabled) {
-        // The detour is paid for across sim steps (pumpPathJob), not here. The unit keeps the
-        // floor's best-effort route for now — it walks toward the obstacle exactly as it did
-        // while the whole search ran in one frame — and takes the full route when it lands.
-        this.jobScratch ??= new PathScratch();
-        const search = beginPath(this.jobScratch, this.grid, start, goal, blocked, undefined, domain, ring, u.footprint);
-        if (search) this.pathJob = { search, unitId: u.id, tx, ty, approach, blocked, domain };
-      } else {
-        cells = findPath(this.grid, start, goal, blocked, undefined, domain, ring, u.footprint) ?? cells;
-        // Bill the allowance for what the search ACTUALLY cost, not for the ceiling it was
-        // allowed to reach. Nearly every escalation arrives long before the ceiling — the way
-        // round a forest is a fifth of it — and charging those the full wait is what made the
-        // ceiling a frame-time decision instead of a "how big can an obstacle be" one.
-        this.longSearchIn = Math.max(
-          LONG_SEARCH_EVERY,
-          Math.ceil(pathExpansionsSpent() / LONG_SEARCH_EXPANSIONS_PER_STEP),
-        );
-      }
+      cells = this.beginDetour(u, tx, ty, approach, start, goal, blocked, domain, ring) ?? cells;
     }
     simProfile.gauge("pathSearch", perfNow() - searchAt);
     // A single-cell (or empty) result means the unit can't get any closer.
@@ -21569,6 +21561,26 @@ export class SimWorld {
     // real travel direction rather than zig-zagging and snapping on arrival.
     this.installRoute(u, cells, tx, ty, approach, blocked, domain);
     return true;
+  }
+
+  /** How many whole cells clear of the target a cell leaves an APPROACH — 0 is "up against
+   *  it" (findPath's `ring`); undefined for a plain point. Measured from the mover's own block
+   *  edge (half its footprint), because that block is the thing that actually has to fit, and
+   *  rounded to cells so an entire face ties and the cheapest one to walk to wins. */
+  private approachRing(
+    u: SimUnit,
+    tx: number,
+    ty: number,
+    approach: { hx: number; hy: number } | undefined,
+  ): ((cx: number, cy: number) => number) | undefined {
+    if (!approach) return undefined;
+    const half = (u.footprint || 1) * PATHING_CELL * 0.5;
+    return (cx, cy) => {
+      const [wx, wy] = this.grid.footprintCenter(cx, cy, u.footprint);
+      const dx = Math.max(0, Math.abs(wx - tx) - approach.hx);
+      const dy = Math.max(0, Math.abs(wy - ty) - approach.hy);
+      return Math.max(0, Math.round((Math.hypot(dx, dy) - half) / PATHING_CELL));
+    };
   }
 
   /** Turn a cell path into the unit's route: string-pull it, put each waypoint where the
@@ -21644,14 +21656,102 @@ export class SimWorld {
   }
 
   /**
-   * Advance the escalated search in flight by one slice, and land it when it is done.
+   * Start the detour the slot was just reserved for — as a job paid for across sim steps, or
+   * (PathSlicing off) here and now. Returns the route when it was found at once; null when it
+   * is on its way (`pumpPathJob`) or there is none. Shared by a fresh plan (pathTo) and a
+   * queued ask being served (`serveDetourQueue`).
+   */
+  private beginDetour(
+    u: SimUnit,
+    tx: number,
+    ty: number,
+    approach: { hx: number; hy: number } | undefined,
+    start: [number, number],
+    goal: [number, number],
+    blocked: ((cx: number, cy: number) => boolean) | undefined,
+    domain: PathDomain,
+    ring?: (cx: number, cy: number) => number,
+  ): Array<[number, number]> | null {
+    this.detourQueue.delete(u.id); // this is its turn
+    if (PathSlicing.enabled) {
+      // The detour is paid for across sim steps (pumpPathJob), not here. The unit keeps the
+      // floor's best-effort route for now — it walks toward the obstacle exactly as it did
+      // while the whole search ran in one frame — and takes the full route when it lands.
+      this.jobScratch ??= new PathScratch();
+      const search = beginPath(this.jobScratch, this.grid, start, goal, blocked, undefined, domain, ring, u.footprint);
+      if (search) this.pathJob = { search, unitId: u.id, tx, ty, approach, blocked, domain };
+      return null;
+    }
+    const cells = findPath(this.grid, start, goal, blocked, undefined, domain, ring, u.footprint);
+    // Bill the allowance for what the search ACTUALLY cost, not for the ceiling it was
+    // allowed to reach. Nearly every escalation arrives long before the ceiling — the way
+    // round a forest is a fifth of it — and charging those the full wait is what made the
+    // ceiling a frame-time decision instead of a "how big can an obstacle be" one.
+    this.longSearchIn = Math.max(
+      LONG_SEARCH_EVERY,
+      Math.ceil(pathExpansionsSpent() / LONG_SEARCH_EXPANSIONS_PER_STEP),
+    );
+    return cells;
+  }
+
+  /**
+   * Hand the free slot to whoever has waited longest for it (`detourQueue`), passing over
+   * every ask that is no longer true. The search starts from where the unit has GOT TO — it
+   * has been walking its best-effort route all this while — and is licensed again from there,
+   * exactly as a fresh plan's would be.
+   */
+  private serveDetourQueue(): void {
+    for (const [id, want] of this.detourQueue) {
+      this.detourQueue.delete(id);
+      const u = this.units.get(id);
+      if (!u || !this.detourStillWanted(u, want)) continue;
+      const n = u.footprint;
+      const domain = pathDomain(u);
+      const start = this.grid.footprintAnchor(u.x, u.y, n);
+      const goal = this.grid.footprintAnchor(u.chaseX, u.chaseY, n);
+      const approach = u.chaseHX > 0 ? { hx: u.chaseHX, hy: u.chaseHY } : undefined;
+      const ring = this.approachRing(u, u.chaseX, u.chaseY, approach);
+      if (!this.detourLicensed(u, start, goal, domain, ring)) continue;
+      simProfile.tally("pathDetourServed");
+      this.longSearchIn = LONG_SEARCH_EVERY; // reserved as escalate reserves it; billed when it lands
+      const blocked = this.clearanceBlocker(u, start);
+      const cells = this.beginDetour(u, u.chaseX, u.chaseY, approach, start, goal, blocked, domain, ring);
+      if (cells && cells.length > 1) this.installRoute(u, cells, u.chaseX, u.chaseY, approach, blocked, domain);
+      return;
+    }
+  }
+
+  /**
+   * Is a queued ask still worth the slot? The unit is alive and under an order, still bound
+   * for the place it asked about, not there already, and not walking a route that gets there
+   * — a later plan of its own may have, or the wave's (sharedRoute). And it is still on its
+   * WAY: walking, parked in a jam, or asking again this very moment. A unit that has stopped
+   * both walking and asking — an archer that reached its range — no longer wants a route at
+   * all, and a detour landing on it would walk it out of its fight.
+   */
+  private detourStillWanted(u: SimUnit, want: { tx: number; ty: number; at: number }): boolean {
+    if (u.hp <= 0 || u.order === "idle" || u.flying || u.footprint <= 0) return false;
+    if (Math.hypot(u.chaseX - want.tx, u.chaseY - want.ty) > PATHING_CELL * 2) return false;
+    if (this.nearMoveGoal(u, u.x, u.y)) return false;
+    if (u.waypoint < u.path.length) {
+      const [lx, ly] = u.path[u.path.length - 1];
+      if (this.nearMoveGoal(u, lx, ly)) return false;
+    }
+    return u.moving || u.waitT > 0 || this.elapsed - want.at <= DETOUR_ASK_FRESH;
+  }
+
+  /**
+   * Advance the escalated search in flight by one slice, and land it when it is done — and,
+   * with the slot free, hand it to the next unit waiting for one first (`detourQueue`).
    *
    * Landing is conditional on the unit still wanting it: alive, still under an order, and
-   * still aimed at the same point. A unit re-ordered meanwhile already dropped the job in
-   * pathTo; one that died or arrived simply lets it go. A search that lands is billed to the
-   * allowance exactly as the one-frame search was, for what it actually spent.
+   * still aimed at the same place (routeStillServes' two cells — a re-plan to the same place
+   * keeps the job, see pathTo). A unit re-ordered elsewhere meanwhile already dropped the job
+   * in pathTo; one that died or arrived simply lets it go. A search that lands is billed to
+   * the allowance exactly as the one-frame search was, for what it actually spent.
    */
   private pumpPathJob(): void {
+    if (!this.pathJob && this.longSearchIn <= 0 && this.detourQueue.size > 0) this.serveDetourQueue();
     const job = this.pathJob;
     if (!job) return;
     simProfile.begin("sim.world.move.job");
@@ -21667,7 +21767,7 @@ export class SimWorld {
     );
     simProfile.tally("pathJobsLanded");
     const u = this.units.get(job.unitId);
-    if (!u || u.hp <= 0 || u.order === "idle" || u.chaseX !== job.tx || u.chaseY !== job.ty) return;
+    if (!u || u.hp <= 0 || u.order === "idle" || Math.hypot(u.chaseX - job.tx, u.chaseY - job.ty) > PATHING_CELL * 2) return;
     const cells = job.search.result();
     if (cells.length <= 1) return; // no better than what it is already walking
     // …and it is the WAVE's route now, not only this unit's — see sharedRoute. A plain move
@@ -21710,6 +21810,24 @@ export class SimWorld {
   /** The job's own working set — allocated on the first escalation, kept for the match. */
   private jobScratch: PathScratch | null = null;
   /**
+   * Units whose detour was LICENSED and refused only because the slot was somebody else's,
+   * in the order they first asked — served by `pumpPathJob` whenever the slot comes free.
+   *
+   * The slot used to go to whoever happened to ask at the step it came free, and in a real
+   * match it is never idle: the 2026-09-10 Road to Stratholme 4v4 landed a detour a steady two
+   * a second, which is the throttle itself. A wave re-asks every pass and a jam every step,
+   * so they won that race; a unit that asked ONCE lost it. That is a trained unit on its
+   * way to its rally point — `applyRally` orders it the moment it exists and nothing ever
+   * re-states it — so it walked its floor route into the trees and asked again only when it
+   * next stalled there, into the same race. A queue changes who is served, never how much:
+   * one search at a time, billed exactly as before. Warsmash queues its path requests the
+   * same way (docs/REFERENCES.md).
+   *
+   * Keyed on the unit, so a re-ask keeps its place and only refreshes the aim and the time
+   * (`at`, sim seconds) — see `detourStillWanted` for what an entry has to still be true of.
+   */
+  private detourQueue = new Map<number, { tx: number; ty: number; at: number }>();
+  /**
    * The last detour the sliced search landed, kept for the wave that is coming the same way.
    * The escalated search serves one unit at a time, so a wave of fifty past a treeline was
    * fifty detours found one after another, a second apart, with the other forty-nine walking
@@ -21747,7 +21865,7 @@ export class SimWorld {
    *
    * …and then only so often, globally. A jammed army asks this hundreds of times a second and
    * it is the same wasted flood every time; one unit an eighth of a second finds its way
-   * round, and the rest re-path a moment later and take their turn. Counted in sim STEPS
+   * round, and the rest wait their turn in `detourQueue` rather than race for it. Counted in sim STEPS
    * rather than seconds so it cannot drift with the frame rate, and spent in the sim's own
    * deterministic iteration order.
    *
@@ -21764,23 +21882,47 @@ export class SimWorld {
     domain: PathDomain,
     ring?: (cx: number, cy: number) => number,
   ): boolean {
-    if (this.longSearchIn > 0) return false;
-    if (this.pathJob) return false; // one in flight is enough — see pumpPathJob
     if (!cells || !cells.length) return false;
     const [ecx, ecy] = cells[cells.length - 1];
     // Arrived? An approach arrives when it is up against the thing (ring 0); a plain move
     // when it is standing on the goal cell.
     if (ring ? ring(ecx, ecy) <= 0 : ecx === goal[0] && ecy === goal[1]) return false;
+    if (!this.detourLicensed(u, start, goal, domain, ring)) return false;
+    // Licensed, so the slot is the only question left. Busy — or free with somebody already
+    // waiting for it, who is served first (`pumpPathJob` runs after the units' own orders in a
+    // step, so a fresh ask could otherwise take a just-freed slot out from under the queue) —
+    // and this unit takes its place in `detourQueue` rather than walk off into the trees and
+    // hope to be asking again at the step the slot comes free. Our OWN job already in flight
+    // is the answer itself (pathTo keeps it for a re-plan to the same place).
+    if (this.longSearchIn > 0 || this.pathJob || this.detourQueue.size > 0) {
+      if (this.pathJob?.unitId !== u.id) {
+        if (!this.detourQueue.has(u.id)) simProfile.tally("pathDetourQueued");
+        this.detourQueue.set(u.id, { tx: u.chaseX, ty: u.chaseY, at: this.elapsed });
+      }
+      return false;
+    }
+    // Reserve the slot up front so nothing re-enters before the caller has billed it; the
+    // minimum wait stands in until the caller replaces it with what the search really spent.
+    this.longSearchIn = LONG_SEARCH_EVERY;
+    return true;
+  }
+
+  /** `escalate`'s question about the GROUND: do the region labels connect this body to the
+   *  goal, so that what stopped the cheap search was distance round something rather than a
+   *  wall? Asked again when a queued ask is served, from wherever the unit has got to. */
+  private detourLicensed(
+    u: SimUnit,
+    start: [number, number],
+    goal: [number, number],
+    domain: PathDomain,
+    ring?: (cx: number, cy: number) => number,
+  ): boolean {
     const startRegion = this.grid.regionAt(start[0], start[1], domain, u.footprint);
     if (startRegion < 0) return false;
     const goalRegion = ring
       ? this.grid.regionNear(goal[0], goal[1], domain, u.footprint)
       : this.grid.regionNear(goal[0], goal[1], domain, u.footprint, 2);
-    if (goalRegion !== startRegion) return false; // a wall, not a detour
-    // Reserve the slot up front so nothing re-enters before the caller has billed it; the
-    // minimum wait stands in until the caller replaces it with what the search really spent.
-    this.longSearchIn = LONG_SEARCH_EVERY;
-    return true;
+    return goalRegion === startRegion; // otherwise a wall, not a detour
   }
 
   /** The way is shut by other bodies. KEEP the order and park: settle onto our own tile so
@@ -21983,8 +22125,14 @@ export class SimWorld {
    *  the middle of the thing, ground the unit can never stand on, so arrival there is
    *  standing against its box. */
   private atMoveGoal(u: SimUnit): boolean {
-    const dx = Math.abs(u.chaseX - u.x);
-    const dy = Math.abs(u.chaseY - u.y);
+    return this.nearMoveGoal(u, u.x, u.y);
+  }
+
+  /** `atMoveGoal` asked of any point: would a unit standing at (x, y) have arrived? Also how
+   *  a queued detour recognises a route that already gets there (`detourStillWanted`). */
+  private nearMoveGoal(u: SimUnit, x: number, y: number): boolean {
+    const dx = Math.abs(u.chaseX - x);
+    const dy = Math.abs(u.chaseY - y);
     if (u.chaseHX > 0) {
       const ox = Math.max(0, dx - u.chaseHX);
       const oy = Math.max(0, dy - u.chaseHY);

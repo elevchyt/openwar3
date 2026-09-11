@@ -194,6 +194,20 @@ it or has its detour pending). A landed detour is now the wave's (`SimWorld.shar
 short search. Twelve units re-issued every 1.5 s past a 300-cell treeline: 1 of 12 in 300 s
 before, 12 of 12 in 68 s after, on one landed detour shared fourteen times.
 
+**A UNIT THAT ASKS ONCE WAITS ITS TURN.** The slot went to whoever asked at the step it came
+free, and in a busy match it is barely ever free — the 2026-09-10 Road to Stratholme 4v4 landed a
+steady two detours a second, which is the throttle itself. A wave re-asks every pass and a jam
+every step, so they won that race, and a unit that asked ONCE lost it: a trained unit on its way
+to its rally point, which `applyRally` orders exactly once. It walked its floor route into the
+trees and asked again only when it stalled there, into the same race — against ten soldiers
+jammed round a ringed-in spot, landing under half a detour a second, it never got past at all. A
+licensed ask the slot refuses now waits in `SimWorld.detourQueue` (`pathDetourQueued` /
+`pathDetourServed` rates), first come first served and checked again when its turn comes; and a
+re-plan to the SAME place keeps a detour still being paid for rather than dropping it (a stalled
+follower re-plans every step it stands, and had dropped its own 661 times in 90 s). Same jam:
+past the trees in 37 s instead of never, point rally and hero rally alike. The queue decides WHO
+is served and never how much — one search at a time, billed exactly as before.
+
 ## A counter that is not a cost
 
 `pathNodes` is the sum of every unit's remaining WAYPOINTS. It is a census of what the units are

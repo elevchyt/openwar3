@@ -664,5 +664,70 @@ console.log("a wave re-issued every pass still gets past the treeline");
   check(`and ${searches} searches in all, not tens of thousands`, searches < 1000);
 }
 
+// A unit RALLIED past a treeline waits its turn for the detour; it does not race for it.
+//
+// A trained unit is ordered to its rally point exactly once (mapViewer's applyRally, the moment
+// it exists) and nothing ever re-states it. The escalated search serves one unit at a time, and
+// the slot went to whoever asked at the step it came free — so with a jam anywhere on the map
+// (soldiers ordered onto a spot ringed in by bodies: licensed by the terrain, re-asking from the
+// crowd, under half a detour landed a second) the rallied unit's one ask was refused, its floor
+// route ended in the trees and every later ask from there lost the same race. It stood at the
+// trunks for the whole 90 s. A unit rallied onto a HERO fared the same, and worse: its chase
+// re-planned every step it stood and threw away the one detour it did win. A licensed ask the
+// slot refuses now waits in SimWorld.detourQueue, and a re-plan to the same place keeps the
+// detour it is waiting for.
+console.log("a unit rallied past a treeline gets its detour while a jam elsewhere holds the slot");
+for (const kind of ["point", "hero"]) {
+  const { setSimProfiler } = require(join(REPO, ".sim-build", "src", "sim", "profile.js"));
+  const SIM_DT = 1 / 60;
+  const SIDE = 768, WALL = 120, WALL_TOP = 150, JX = 600, JY = 600, N = 10;
+  const flags = new Uint8Array(SIDE * SIDE);
+  for (let y = 0; y < WALL_TOP; y++) for (let k = 0; k < 4; k++) flags[y * SIDE + WALL + k] = PathingFlag.Unwalkable;
+  const g = new PathingGrid({ width: SIDE, height: SIDE, flags }, [0, 0]);
+  const world = new SimWorld(g, 1);
+  const footman = (id, x, y) => ({
+    id, owner: 0, team: 0, typeId: "hfoo", x, y, facing: (3 * Math.PI) / 2,
+    hp: 1e6, maxHp: 1e6, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 6, radius: 16, scale: 1,
+    armor: 0, armorType: "medium", defUp: 0, sightDay: 300, sightNight: 300,
+    flying: false, mechanical: false, invulnerable: false, race: "human",
+    isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0,
+    upgrades: [], moveType: "foot", collisionSize: 16,
+    canFlee: true, targetedAs: "ground", deathTime: 2, name: "Footman",
+    worker: null, depotGold: false, depotLumber: false, castPoint: 0, castBackswing: 0,
+    weapons: [], oldWeapons: [],
+  });
+  const goalX = (WALL + 60) * 32, goalY = 40 * 32;
+  if (kind === "hero") { world.add(footman(2, goalX, goalY)); world.issueHold(2); }
+  // The jam: a closed ring of held bodies two cells out round (JX, JY), and ten soldiers sent
+  // onto the middle of it.
+  let id = 100;
+  for (let dx = -4; dx <= 4; dx += 2) for (let dy = -4; dy <= 4; dy += 2) {
+    if (Math.max(Math.abs(dx), Math.abs(dy)) !== 4) continue;
+    world.add(footman(id, ...g.footprintCenter(JX + dx, JY + dy, 2)));
+    world.issueHold(id++);
+  }
+  for (let i = 0; i < N; i++) world.add(footman(10 + i, (JX - 40) * 32 + (i % 5) * 48, (JY - 40) * 32 + Math.floor(i / 5) * 48));
+  let served = 0;
+  setSimProfiler({ begin() {}, end() {}, gauge() {}, tally(name, n = 1) { if (name === "pathDetourServed") served += n; } });
+  for (let i = 0; i < N; i++) world.issueMove(10 + i, ...g.footprintCenter(JX, JY, 2));
+  for (let i = 0; i < Math.round(10 / SIM_DT); i++) world.tick(SIM_DT);
+  // Out of the barracks beside the trees and straight to the rally, as the drain does it.
+  world.add(footman(1, ...g.footprintCenter(103, 39, 2)));
+  if (kind === "hero") world.issueFollow(1, 2);
+  else world.issueMove(1, goalX, goalY);
+  const u = world.units.get(1);
+  let t = 0, highest = 0;
+  for (let i = 0; i < Math.round(90 / SIM_DT) && u.x <= goalX - 250; i++) {
+    world.tick(SIM_DT);
+    t += SIM_DT;
+    highest = Math.max(highest, u.y);
+  }
+  setSimProfiler(null);
+  check(`${kind} rally: it got past the trees (x ${u.x.toFixed(0)} of ${goalX}, in ${t.toFixed(1)}s)`, u.x > goalX - 250 && t < 60);
+  check(`${kind} rally: round the north end of them (reached y ${highest.toFixed(0)})`, highest > WALL_TOP * 32);
+  check(`${kind} rally: on a detour it waited its turn for (${served} served from the queue)`, served >= 1);
+}
+
 console.log(failures ? `\ndetour: ${failures} check(s) FAILED` : "\ndetour: all checks passed");
 process.exit(failures ? 1 : 0);
