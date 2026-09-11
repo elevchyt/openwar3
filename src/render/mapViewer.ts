@@ -1088,6 +1088,7 @@ export class MapViewerScene {
    *  loading screen is still holding for "PRESS ANY KEY TO CONTINUE" (see `holdAtStart`). */
   private startHeld = false;
   private simAccum = 0; // unspent real time, in seconds, waiting to become whole sim steps
+  private drawOwed = 0; // steps retired since the models were last synced (RtsController.syncEntries)
   /** Ticks elapsed since the match began. THE match clock — the number a multiplayer
    *  command is stamped with and a snapshot is taken at (docs/multiplayer.md). */
   private simTick = 0;
@@ -4844,14 +4845,22 @@ export class MapViewerScene {
     }
     return this.abilityByCode.get(code);
   }
+  /** updateAuraEffects' per-unit dedupe set (cleared, never re-made) and its group → aura-code
+   *  memo — a buff group string names the same ability for the whole match. */
+  private readonly auraSeenScratch = new Set<string>();
+  private readonly auraCodeOfGroup = new Map<string, string>();
   private updateAuraEffects(): void {
     const world = this.rts?.simWorld;
     const map = this.viewer.map;
     if (!world || !map) return;
     const active = new Set<string>();
+    // Every frame, over every buffed unit in the world — so the per-unit set is one set cleared,
+    // not one set made, and a group's aura code is split out once per group string for the match
+    // rather than once per buff per frame (a late-game army wears a couple of hundred of them).
+    const seen = this.auraSeenScratch;
     for (const u of world.units.values()) {
       if (u.hp <= 0 || !u.buffs.length) continue;
-      const seen = new Set<string>();
+      seen.clear();
       for (const b of u.buffs) {
         // Aura buffs are grouped "code:kind". A colon alone does NOT make one, though:
         // the item buffs are grouped "item:invuln" / "item:regen" too, and treating those
@@ -4860,7 +4869,11 @@ export class MapViewerScene {
         // ability and the loop skipped the unit entirely instead of falling through. So an
         // aura is a group whose first half RESOLVES to an ability, and everything else is a
         // plain single-target buff wearing its own models.
-        const auraCode = b.group.includes(":") ? b.group.split(":")[0] : "";
+        let auraCode = this.auraCodeOfGroup.get(b.group);
+        if (auraCode === undefined) {
+          auraCode = b.group.includes(":") ? b.group.split(":")[0] : "";
+          this.auraCodeOfGroup.set(b.group, auraCode);
+        }
         const def = auraCode ? this.abilityDefByCode(auraCode) : undefined;
         if (def) {
           if (seen.has("a:" + auraCode)) continue;
@@ -10866,7 +10879,15 @@ export class MapViewerScene {
       perfLog.begin("sim"); // …the world's own step, timed apart from the map script's (dev/perfLog.ts)
       const stepAt = performance.now();
       if (!this.rts?.frozenClient) this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
-      this.rts?.tick(SIM_DT); // sim runs in seconds; advance + sync before render
+      // The entry sync (where each model stands, which clip it plays, the health bars) is the
+      // DRAWING half of a step, and a frame only ever draws its last one — so only the last
+      // step of the frame pays for it, handed every step it is owed (RtsController.syncEntries).
+      // Predicted with the loop's own condition, and nothing in the loop body touches
+      // `simAccum`, so the prediction is exact; a frame of one step is exactly as before.
+      this.drawOwed++;
+      const lastStep = !(this.simAccum - SIM_DT >= SIM_DT && steps + 1 < MAX_STEPS_PER_FRAME);
+      this.rts?.tick(SIM_DT, lastStep ? this.drawOwed : 0); // sim runs in seconds; advance, then sync before render
+      if (lastStep) this.drawOwed = 0;
       // Engine combat text ages on the SIM clock, like a script's text tags do inside the
       // interpreter — so the F10 menu freezes a crit number in place instead of running it
       // out while the game is stopped. Both machines do this: a frozen client is fed the

@@ -1422,6 +1422,11 @@ export interface SimUnit {
   stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
   stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
+  // Seconds a CHASE that found no way any closer waits before searching again (chaseToAttack).
+  // Kept apart from `repathT` on purpose: that one also pauses tickAttack's stall watchdog, and a
+  // wait re-armed on every failed search would keep the watchdog from ever deciding the target
+  // is out of reach — the unit would stand there for good instead of picking one it can hit.
+  chaseWaitT: number;
   // Seconds a PARKED mover waits before trying its route again. A move/attack-move whose
   // way is shut by other bodies keeps its order and parks (see parkAndWait) instead of
   // being cancelled — a unit does not forget where it was sent because somebody stood in
@@ -7393,6 +7398,7 @@ export class SimWorld {
       | "stuckAnchorX"
       | "stuckAnchorY"
       | "repathT"
+      | "chaseWaitT"
       | "waitT"
       | "repollT"
       | "yieldT"
@@ -7649,6 +7655,7 @@ export class SimWorld {
       stuckAnchorX: unit.x,
       stuckAnchorY: unit.y,
       repathT: 0,
+      chaseWaitT: 0,
       waitT: 0,
       // Staggered, not zero. The poll is what makes a unit re-run A* around a crowd that has
       // stopped across its route, and every unit used to start its clock at 0 — so an army
@@ -8678,6 +8685,7 @@ export class SimWorld {
     u.attackOrdered = ordered; // an automatic re-target ends the previous order's commitment
     u.attackSolo = ordered && solo; // …and so ends the "you, personally" of a solo-selected one
     u.repathT = 0; // clear any lingering hold/repath cooldown so we chase the new target
+    u.chaseWaitT = 0; // …and any wait a chase at the OLD target left behind
     // NOW — otherwise a freshly re-acquired enemy (e.g. after the first kill) inherited
     // the previous target's multi-second hold cooldown and the unit just stood there.
     // A PLAYER's order cancels a swing already in flight — that is WC3's "attack cancel", and
@@ -10930,6 +10938,7 @@ export class SimWorld {
   private tickBuffs(u: SimUnit, dt: number): boolean {
     if (!u.buffs.length) return false;
     let burned = false; // a dot bit this tick — the regeneration items break on it
+    let expired = false;
     for (const b of u.buffs) {
       // `delay` gates a heal-over-time the same way it gates Wind Walk's fade: the buff is
       // already on the unit and its clock is already running, the healing just hasn't
@@ -10952,8 +10961,12 @@ export class SimWorld {
       // so the pass that tops the unit up is also the pass that drops the stun with it —
       // the caller recomputes stats straight after this, so the unit acts again the same tick.
       if (b.untilHealed && u.hp >= u.maxHp) b.timeLeft = 0;
+      if (b.timeLeft <= 0) expired = true;
     }
-    u.buffs = u.buffs.filter((b) => b.timeLeft > 0);
+    // A fresh array only when something actually ran out. An aura re-applies itself every step
+    // (applyAuras), so a unit standing in one never empties its list — and rebuilding it anyway
+    // was a new array per buffed unit per step, ~12,000 a second in a late-game army.
+    if (expired) u.buffs = u.buffs.filter((b) => b.timeLeft > 0);
     if (burned) this.breakItemRegen(u);
     if (u.hp <= 0) {
       this.kill(u);
@@ -14312,7 +14325,14 @@ export class SimWorld {
     const out: SimUnit[] = [];
     for (const t of this.units.values()) {
       if (t.hp <= 0) continue;
-      if (Math.hypot(t.x - x, t.y - y) - t.radius <= radius) out.push(t);
+      // Too far along either axis is too far: `hypot` is never below either leg, so this drops
+      // exactly the units the test below would, without paying for it. Every Moon Well asks
+      // this twice a step of the whole map (tickReplenish), and nearly all of the map is out.
+      const dx = t.x - x;
+      const dy = t.y - y;
+      const reach = radius + t.radius;
+      if (dx > reach || dx < -reach || dy > reach || dy < -reach) continue;
+      if (Math.hypot(dx, dy) - t.radius <= radius) out.push(t);
     }
     return out;
   }
@@ -14905,6 +14925,7 @@ export class SimWorld {
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired
       if (u.repathT > 0) u.repathT -= dt;
+      if (u.chaseWaitT > 0) u.chaseWaitT -= dt;
       if (u.waitT > 0) u.waitT -= dt; // parked in a jam — counting down to the next try
       for (const a of u.abilities) if (a.cooldownLeft > 0) a.cooldownLeft -= dt;
       for (const it of u.inventory) if (it && it.cooldownLeft > 0) it.cooldownLeft -= dt;
@@ -16472,23 +16493,28 @@ export class SimWorld {
    */
   private tickAutoMeld(u: SimUnit): void {
     if (this.isDay || u.hp <= 0 || u.building || u.cloaked || u.stunned || u.paused) return;
+    if (u.order !== "idle" && u.order !== "hold") return;
+    if (u.moving || u.swingLeft >= 0 || u.x !== u.prevX || u.y !== u.prevY) return;
+    const own = u.abilities.find((a) => a.code === "Ashm" && a.level >= 1 && this.techMeets(u.owner, a.id));
+    // …and the carried one. An item's ability is not in `u.abilities`, so it cannot go through
+    // `issueCast` — but it is the same row and the same handler, and `Ashm` costs nothing and
+    // has no cooldown, so the effect is the whole of the cast.
+    const carried = own ? null : this.itemAbility(u, "Ashm");
+    if (!own && !carried) return;
     // …and NOT while its camp is in a fight. Hiding is lying in wait (Liquipedia: "Hiding
     // units lie in wait for enemies without attacking"), and the wait is over the moment the
     // camp is attacked — see `unhideCreep`, which takes the meld back off. Without this the
     // creep re-melded on the very next tick it stood still and a Murloc Nightcrawler spent
     // the whole fight invisible at its post while its camp died around it.
+    //
+    // Asked LAST, of the few units that can hide at all: it is a walk over every unit in the
+    // world, and this runs for every creep on every step of every night. Every test above it is
+    // pure, so the order changes what the question costs and never its answer.
     if (u.isCreep && this.creepInFight(u)) return;
-    if (u.order !== "idle" && u.order !== "hold") return;
-    if (u.moving || u.swingLeft >= 0 || u.x !== u.prevX || u.y !== u.prevY) return;
-    const own = u.abilities.find((a) => a.code === "Ashm" && a.level >= 1 && this.techMeets(u.owner, a.id));
     if (own) {
       this.issueCast(u.id, own.code, 0, u.x, u.y, true);
       return;
     }
-    // …and the carried one. An item's ability is not in `u.abilities`, so it cannot go through
-    // `issueCast` — but it is the same row and the same handler, and `Ashm` costs nothing and
-    // has no cooldown, so the effect is the whole of the cast.
-    const carried = this.itemAbility(u, "Ashm");
     if (carried) this.applySpellEffect("Ashm", 1, u, { targetId: 0, x: u.x, y: u.y }, carried.def);
   }
 
@@ -16909,9 +16935,24 @@ export class SimWorld {
     // is how an attack-moved squad ended up with members frozen mid-field, in range of
     // nothing, staring at a grunt 250 units away (issue #108).
     if (u.repathT > 0) return; // committed to a hold / cooling down after a block
+    // A chase that found NO way any closer waits before asking again (SimUnit.chaseWaitT).
+    //
+    // It used to ask again on the very next step, and the step after that. A unit shut behind
+    // its own army's backs — the rear ranks of every big fight — gets back a route of one cell
+    // (`pathTo` false), stands, and is handed straight back here, where the slot's 700-cell
+    // search fails and the fallback's 700-cell search fails with it: two full floods a step,
+    // sixty steps a second, per unit, for as long as the jam lasts. In a 643-unit Emerald Gardens
+    // that was a fifth of all main-thread time and the largest single cost in the game.
+    //
+    // The wait is BLOCKED_REPATH_TIME, the clock a walker that cannot take its next tile already
+    // waits before routing round whoever holds it — the same question asked of the same crowd.
+    // Nothing else is held back: `engage` still strikes the moment the target is in reach (it
+    // never comes here then), a new target clears the wait (issueAttack), and tickAttack's stall
+    // watchdog keeps its own clock, so a target that stays out of reach is still given up on.
+    if (u.chaseWaitT > 0) return;
     const slotted = u.atkOffTarget === t.id && (u.atkOffX !== 0 || u.atkOffY !== 0);
     if (!slotted) {
-      this.chasePoint(u, t.x, t.y);
+      if (!this.chasePoint(u, t.x, t.y)) u.chaseWaitT = BLOCKED_REPATH_TIME;
       return;
     }
     const sx = t.x + u.atkOffX;
@@ -16932,7 +16973,7 @@ export class SimWorld {
     // let it go, and take a fresh one on the next stall or hand the chase to the enemy itself.
     if (Math.hypot(sx - u.x, sy - u.y) <= PATHING_CELL) {
       u.atkOffTarget = -1;
-      if (this.canReachToAttack(u, t)) this.chasePoint(u, t.x, t.y);
+      if (!this.canReachToAttack(u, t) || !this.chasePoint(u, t.x, t.y)) u.chaseWaitT = BLOCKED_REPATH_TIME;
       return;
     }
     if (this.pathTo(u, sx, sy, COMBAT_EXPANSIONS, false, undefined, true)) return;
@@ -16940,7 +16981,7 @@ export class SimWorld {
     // it — a best-effort path exists toward anything, so an unconditional fallback would
     // march a unit ordered at a walled-off enemy into the wall and then shuffle it along
     // that wall forever, which the give-up watchdog reads as headway and so never fires.
-    if (this.canReachToAttack(u, t)) this.chasePoint(u, t.x, t.y);
+    if (!this.canReachToAttack(u, t) || !this.chasePoint(u, t.x, t.y)) u.chaseWaitT = BLOCKED_REPATH_TIME;
   }
 
   /** Follow a leader: trail it at FOLLOW_GAP, parking when close and re-approaching
@@ -20940,7 +20981,10 @@ export class SimWorld {
     // A HIDING creep gets up the moment its camp is in a fight (unhideCreep). The standing
     // form of the rule `alertCamp` states at the shout: it covers a creep that melded before
     // the fight reached it and one whose camp-mate was pulled out of earshot.
-    if (this.creepInFight(u)) this.unhideCreep(u);
+    // Only a HIDDEN creep has anything to get up from (unhideCreep's own first test), so only one
+    // asks: `creepInFight` walks every unit in the world, and this line runs for every creep on
+    // every step. Both are pure until the unhide, so the guard changes the cost, not the answer.
+    if (u.cloaked && this.creepInFight(u)) this.unhideCreep(u);
     const atHome = Math.hypot(u.x - u.guardX, u.y - u.guardY) <= CREEP_HOME_EPS;
     // --- sleep (night): doze off while guarding at the post with the camp quiet;
     // dawn (or a fight — see below) wakes it. ---
@@ -22398,11 +22442,6 @@ export class SimWorld {
     const ownX0 = sx - half; // the unit's own footprint (reservation-exempt) origin
     const ownY0 = sy - half;
     const domain = pathDomain(self);
-    // Normally only STOPPED units are walls (see pathTo's `avoidMovers`); a blocked unit's
-    // reroute widens it to everyone currently holding ground, walkers included.
-    const held = avoidMovers
-      ? (x: number, y: number) => this.grid.isOccupied(x, y)
-      : (x: number, y: number) => this.grid.isReserved(x, y);
     return (cx, cy) => {
       // TERRAIN first, and in one read. `walkable` is the dearer of the two tests (bounds,
       // the wpm flag, then both stamp layers) and it is the one that rejects — so asking it
@@ -22411,17 +22450,10 @@ export class SimWorld {
       // labels are already built on (PathingGrid.footprintClear), and it is exact: the map
       // is rebuilt with them whenever a stamp changes, and bodies were never in it.
       if (!this.grid.footprintClear(cx, cy, n, domain)) return true;
-      const cx0 = cx - half;
-      const cy0 = cy - half;
-      for (let y = cy0; y < cy0 + n; y++) {
-        for (let x = cx0; x < cx0 + n; x++) {
-          if (held(x, y)) {
-            const own = x >= ownX0 && x < ownX0 + n && y >= ownY0 && y < ownY0 + n;
-            if (!own) return true;
-          }
-        }
-      }
-      return false;
+      // …then BODIES: any held cell of the block that is not one of the unit's own. Normally only
+      // STOPPED units are walls (see pathTo's `avoidMovers`); a blocked unit's reroute widens it
+      // to everyone currently holding ground, walkers included.
+      return this.grid.footprintHeldOutside(cx - half, cy - half, n, ownX0, ownY0, avoidMovers);
     };
   }
 
@@ -22662,15 +22694,47 @@ export class SimWorld {
       u.velX = u.x - u.prevX;
       u.velY = u.y - u.prevY;
     }
+    // The pair loop is every mobile body against every other, twice — ~200,000 pairs a step in a
+    // late-game 600-unit match — and nearly every pair is two units nowhere near each other. So
+    // the reject reads FLAT COPIES of the four things it asks (position, radius, moving) instead
+    // of two unit objects per pair, and only a pair that is actually close touches the units.
+    // Exact, not approximate: a nudge moves the one unit it is handed and changes nothing else
+    // those copies hold (claimStep writes x/y and the claim), so each copy is written back the
+    // moment its unit is nudged and every pair still sees exactly what the object loop saw.
+    const m = list.length;
+    if (this.collideX.length < m) {
+      const size = Math.max(m, this.collideX.length * 2);
+      this.collideX = new Float64Array(size);
+      this.collideY = new Float64Array(size);
+      this.collideR = new Float64Array(size);
+      this.collideMoving = new Uint8Array(size);
+    }
+    const xs = this.collideX;
+    const ys = this.collideY;
+    const rs = this.collideR;
+    const mv = this.collideMoving;
+    for (let i = 0; i < m; i++) {
+      const u = list[i];
+      xs[i] = u.x;
+      ys[i] = u.y;
+      rs[i] = u.radius;
+      mv[i] = u.moving ? 1 : 0;
+    }
     for (let iter = 0; iter < 2; iter++) {
-      for (let i = 0; i < list.length; i++) {
-        for (let j = i + 1; j < list.length; j++) {
+      for (let i = 0; i < m; i++) {
+        for (let j = i + 1; j < m; j++) {
+          if (mv[i] === 0 && mv[j] === 0) continue; // nobody to blame — leave them
+          const min = rs[i] + rs[j];
+          // Apart along either axis already means apart: `hypot` is never less than either leg,
+          // so this rejects exactly the pairs the `d >= min` test below would, without the call.
+          const ddx = xs[j] - xs[i];
+          if (ddx >= min || ddx <= -min) continue;
+          const ddy = ys[j] - ys[i];
+          if (ddy >= min || ddy <= -min) continue;
           const a = list[i];
           const b = list[j];
-          if (!a.moving && !b.moving) continue; // nobody to blame — leave them
-          let dx = b.x - a.x;
-          let dy = b.y - a.y;
-          const min = a.radius + b.radius;
+          let dx = ddx;
+          let dy = ddy;
           let d = Math.hypot(dx, dy);
           if (d >= min) continue;
           if (d === 0) {
@@ -22706,10 +22770,21 @@ export class SimWorld {
           } else {
             this.nudge(b, (dx / d) * overlap, (dy / d) * overlap);
           }
+          // …and the copies follow whatever the nudges did (a refused nudge moved nothing).
+          xs[i] = a.x;
+          ys[i] = a.y;
+          xs[j] = b.x;
+          ys[j] = b.y;
         }
       }
     }
   }
+
+  /** resolveCollisions' flat copies — kept and grown rather than allocated per step. */
+  private collideX = new Float64Array(0);
+  private collideY = new Float64Array(0);
+  private collideR = new Float64Array(0);
+  private collideMoving = new Uint8Array(0);
 
 
   // Fan stopped air units apart (issue #31). Flyers cruise with no collision (they

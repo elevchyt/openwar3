@@ -577,12 +577,55 @@ export class PathingGrid {
     return this.clearanceMap(domain)[y0 * this.width + x0] >= Math.max(1, n);
   }
 
+  /**
+   * Is any cell of the n×n block with low corner (x0, y0) HELD by a body — reserved by a stopped
+   * unit, or with `occupied` also claimed by a walking one — other than the cells of the n×n block
+   * with low corner (ownX0, ownY0), which is the asker's own footprint?
+   *
+   * The body half of the pathfinder's clearance test (SimWorld.clearanceBlocker), asked for every
+   * cell a search considers. It used to be n² calls through a closure onto `isReserved` /
+   * `isOccupied`, each re-checking the layer and the bounds; the answer is "is there ANY such
+   * cell", so reading the two layers directly returns exactly the same thing.
+   */
+  footprintHeldOutside(x0: number, y0: number, n: number, ownX0: number, ownY0: number, occupied: boolean): boolean {
+    const res = this.reservations;
+    const claims = occupied ? this.claims : null;
+    if (res === null && claims === null) return false;
+    const w = this.width;
+    for (let y = y0 < 0 ? 0 : y0, ye = Math.min(y0 + n, this.height); y < ye; y++) {
+      const row = y * w;
+      const ownRow = y >= ownY0 && y < ownY0 + n;
+      for (let x = x0 < 0 ? 0 : x0, xe = Math.min(x0 + n, w); x < xe; x++) {
+        const i = row + x;
+        if ((res !== null && res[i] > 0) || (claims !== null && claims[i] > 0)) {
+          if (!(ownRow && x >= ownX0 && x < ownX0 + n)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** The clearance maps and label arrays that are current RIGHT NOW, per domain (and footprint)
+   *  — what `clearanceMap` / `regionLabels` would answer, kept where asking costs one Map read.
+   *  Both are asked for every cell a search considers, and the long way builds a key string and
+   *  consults a Set each time. Emptied by `freshenRegions` in the same breath as
+   *  `regionsBuilt`, so they can never be staler than it is. */
+  private clearanceReady = new Map<PathDomain, Uint8Array>();
+  private labelsReady = new Map<PathDomain, Array<Int32Array | undefined>>();
+
   /** Largest all-walkable square (side, capped at FOOT_MAX) with its LOW corner on each cell.
    *  One backward DP pass; rebuilt with the region labels. */
   private clearanceMap(domain: PathDomain): Uint8Array {
+    if (!this.regionsDirty) {
+      const ready = this.clearanceReady.get(domain);
+      if (ready) return ready;
+    }
     this.freshenRegions();
     const cached = this.clearances.get(domain);
-    if (cached && this.regionsBuilt.has(`c/${domain}`)) return cached;
+    if (cached && this.regionsBuilt.has(`c/${domain}`)) {
+      this.clearanceReady.set(domain, cached);
+      return cached;
+    }
     const w = this.width;
     const h = this.height;
     let c = cached;
@@ -602,6 +645,7 @@ export class PathingGrid {
       }
     }
     this.regionsBuilt.add(`c/${domain}`);
+    this.clearanceReady.set(domain, c);
     return c;
   }
 
@@ -610,7 +654,17 @@ export class PathingGrid {
   private freshenRegions(): void {
     if (!this.regionsDirty) return;
     this.regionsBuilt.clear();
+    this.clearanceReady.clear();
+    this.labelsReady.clear();
     this.regionsDirty = false;
+  }
+
+  /** Remember a label array as current for (domain, n) — see `labelsReady`. */
+  private labelsAreReady(domain: PathDomain, n: number, label: Int32Array): Int32Array {
+    let byFootprint = this.labelsReady.get(domain);
+    if (!byFootprint) this.labelsReady.set(domain, (byFootprint = []));
+    byFootprint[n] = label;
+    return label;
   }
 
   /** Labels for one (domain, footprint), flood-filled on demand. A stamp change dirties every
@@ -618,9 +672,13 @@ export class PathingGrid {
    *  deferred to the next question — so stamping a whole treeline at map load costs one fill,
    *  not one per tree, and a key nothing ever asks about is never built at all. */
   private regionLabels(domain: PathDomain, n: number): Int32Array {
+    if (!this.regionsDirty) {
+      const ready = this.labelsReady.get(domain)?.[n];
+      if (ready) return ready;
+    }
     this.freshenRegions();
     const key = `${domain}/${n}`;
-    if (this.regionsBuilt.has(key)) return this.regions.get(key)!;
+    if (this.regionsBuilt.has(key)) return this.labelsAreReady(domain, n, this.regions.get(key)!);
 
     const w = this.width;
     const h = this.height;
@@ -666,7 +724,7 @@ export class PathingGrid {
     }
     this.regionCounts.set(key, Int32Array.from(counts));
     this.regionsBuilt.add(key);
-    return label;
+    return this.labelsAreReady(domain, n, label);
   }
 
   /** Nearest cell (spiralling out from cx,cy) where an n×n footprint fits — for

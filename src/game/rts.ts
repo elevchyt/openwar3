@@ -4011,7 +4011,10 @@ export class RtsController {
     this.trySeed();
   }
 
-  tick(dt: number): void {
+  /** One sim step of `dt` seconds. `drawSteps` is how many steps the models have not been
+   *  synced for, this one included — 0 when another step follows in the same frame and will be
+   *  the one drawn (see `syncEntries`). */
+  tick(dt: number, drawSteps = 1): void {
     this.trySeed();
     if (this.worldHeld) return; // adoption yes, simulation no — see holdWorld
     if (this.frozenClient) {
@@ -4152,7 +4155,26 @@ export class RtsController {
     // being a question we answer and becomes one we were answered (`modelHidden`).
     this.snapshot.update(this.matchLink?.latest() ?? null);
     perfLog.end("sim.link");
+    if (drawSteps > 0) this.syncEntries(dt * drawSteps, drawSteps);
+  }
+
+  /**
+   * The DRAWING half of a step: every model put where its unit stands, every clip picked, the
+   * health bars and the hover slab. None of it is simulation — nothing here writes a sim record —
+   * so it is owed once per FRAME, not once per step.
+   *
+   * It used to run inside every step, and a frame that retires several steps draws only the
+   * last of them. That is the slow frame's own tax: at 17 fps the fixed timestep runs three or
+   * four steps a frame, and a 600-unit Emerald Gardens paid this 2.5 ms pass three or four
+   * times over, for one picture — the part of `sim` that grew with the frame time rather than
+   * with the world. `dt` is the whole stretch since the last sync (`steps` × the step), so every
+   * clock in here (a cast hold, a fade, the hammer) still runs down in game time.
+   */
+  private syncEntries(dt: number, steps: number): void {
     perfLog.begin("sim.entries");
+    // MOVE_EMA_ALPHA is a per-STEP blend; `steps` of them folded into one keeps the walk clip's
+    // smoothing the same length of game time however many steps a frame carries.
+    const emaAlpha = steps === 1 ? MOVE_EMA_ALPHA : 1 - (1 - MOVE_EMA_ALPHA) ** steps;
     for (const e of this.entries) {
       // The FRAME's record: the local sim on the host and in single-player, the received
       // snapshot on a client (item 10c-2c-2). `undefined` means there is nothing to draw —
@@ -4427,7 +4449,7 @@ export class RtsController {
         // (moving ordered, but barely inching) stands instead of jogging in place.
         const expected = u.speed * dt;
         const ratio = expected > 1e-3 ? Math.hypot(u.x - prevX, u.y - prevY) / expected : 1;
-        e.moveEma += (Math.min(ratio, 1) - e.moveEma) * MOVE_EMA_ALPHA;
+        e.moveEma += (Math.min(ratio, 1) - e.moveEma) * emaAlpha;
         // …and a unit with no speed at all is not walking, whatever its order says. An
         // ENSNARED (or Webbed, or Entangled) unit keeps its move or chase order under the net
         // with `speed` 0, and `expected` 0 read as "on schedule" — so it held the walk clip at

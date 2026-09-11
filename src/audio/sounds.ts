@@ -446,8 +446,12 @@ export class SoundBoard {
       this.master.connect(this.ctx.destination);
       this.applyListener(); // push the camera frame captured before the first gesture
     }
-    if (this.ctx.state === "suspended") void this.ctx.resume().then(() => this.startPending());
-    else this.startPending();
+    if (this.ctx.state === "suspended") {
+      void this.ctx.resume().then(() => {
+        this.applyListener(); // a context that was not running was not being told where the camera is
+        this.startPending();
+      });
+    } else this.startPending();
   }
 
   /**
@@ -516,6 +520,15 @@ export class SoundBoard {
     fx /= len;
     fy /= len;
     fz /= len;
+    // Only a camera that MOVED is worth telling the mixer about. Writing an AudioParam's
+    // `.value` is not a field store: it schedules a set-value event on that param's timeline,
+    // and the timeline is only trimmed as the audio thread renders past it. Nine of them a
+    // frame, every frame, for a camera that is mostly standing still — and on a context that
+    // is not rendering (no gesture yet, a headless or muted browser) the list never shrinks
+    // and every insert walks it, which measured as a THIRD of all main-thread time twenty
+    // minutes into a match.
+    const l = this.listener;
+    if (l && l.px === target[0] && l.py === target[1] && l.pz === target[2] && l.fx === fx && l.fy === fy && l.fz === fz) return;
     this.listener = { px: target[0], py: target[1], pz: target[2], fx, fy, fz };
     this.applyListener();
   }
@@ -524,6 +537,9 @@ export class SoundBoard {
     const L = this.ctx?.listener;
     const f = this.listener;
     if (!L || !f) return;
+    // …and a context that is not rendering is not listening: the frame is kept in `listener`
+    // and pushed when it starts (`unlock` resumes it and calls back here).
+    if (this.ctx!.state !== "running") return;
     // Modern API sets AudioParams; older Safari uses the deprecated setter pair.
     if (L.positionX) {
       L.positionX.value = f.px;

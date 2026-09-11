@@ -208,6 +208,47 @@ follower re-plans every step it stands, and had dropped its own 661 times in 90 
 past the trees in 37 s instead of never, point rally and hero rally alike. The queue decides WHO
 is served and never how much — one search at a time, billed exactly as before.
 
+**THE DRAWING HALF OF A STEP IS OWED ONCE A FRAME.** `RtsController.tick` ran the entry sync —
+every model put where its unit stands, the animation picker, the health bars, the hover slab —
+inside every sim step, and a frame that retires several steps draws only the last of them. So
+the slower a frame got, the more steps it ran, and the more times it paid for a picture nobody
+would see: the 2026-09-11 twelve-player Emerald Gardens session ran 2–4 steps a frame for its
+last ten minutes, and `sim.entries` + `sim.overlays` (2.5 ms a pass at 600 units) was paid that
+many times over. It now runs on a frame's LAST step only (`syncEntries`, handed every step it is
+owed, so its clocks still run in game time), predicted with the fixed-timestep loop's own
+condition. A frame of one step is exactly as before. **Look for this wherever the render's half
+of the work lives inside the sim's loop** — a slow frame should never make the next one slower.
+
+**A CHASE THAT CANNOT GET ANY CLOSER WAITS BEFORE IT ASKS AGAIN.** At 643 units the largest
+single cost in the game was `tickAttack → engage → chaseToAttack`: a fifth of main-thread time,
+all of it path search. A unit shut behind its own army's backs gets a one-cell route back
+(`pathTo` false), stands, and was handed straight back to the chase next step — the slot's
+700-cell search failing, then the fallback's failing with it, sixty steps a second per unit for
+as long as the jam lasted. `SimUnit.chaseWaitT` holds that one question for BLOCKED_REPATH_TIME,
+the clock a walker that cannot take its next tile already waits. It is a field of its own and
+not `repathT`, because `repathT` also pauses the stall watchdog: a wait re-armed on every failed
+search would have kept the watchdog from ever giving the target up. `pathSearches` is the rate
+that tells this shape apart — a search that is ASKED too often, not one that costs too much.
+
+**A VALUE PUSHED ON A CLOCK INTO SOMEBODY ELSE'S QUEUE.** `SoundBoard.setListener` wrote nine
+AudioParams every frame. An AudioParam's `.value` is not a field: it schedules an event on the
+param's timeline, trimmed only as the audio thread renders past it. On a context that is not
+rendering — no gesture yet, a muted or headless browser — the list only grows, and every insert
+walks it: in a headless 25-minute match it was a third of main-thread time, arriving as a `ui`
+phase that grew ~0.35 ms/frame per MINUTE with nothing on screen changing. It writes on a change
+now, and only to a running context. The same lesson as the bone-matrix uploads above, with a
+worse failure mode: that one wasted a call, this one accumulated.
+
+**AND THE CHEAP ONES, EACH EXACT.** A whole-world scan run per unit per step pays for its dearest
+predicate on every unit, so order them cheapest first: a creep asked `creepInFight` (a walk over
+every unit) before learning it had no meld to break (`tickCreep`) or no Hide to take
+(`tickAutoMeld`); `unitsInAreaInternal` and `resolveCollisions` called `Math.hypot` on pairs one
+axis already rejects (`hypot` is never below either leg); the collision pair loop reads flat copies
+of position/radius/moving, written back after each nudge; the pathfinder's clearance test built a
+template-string key per cell (`PathingGrid.clearanceReady`/`labelsReady`) and called a closure n²
+times per cell (`footprintHeldOutside`); `tickBuffs` rebuilt every buffed unit's array every step
+though an aura keeps re-applying itself; the renderer's aura pass made a Set per unit per frame.
+
 ## A counter that is not a cost
 
 `pathNodes` is the sum of every unit's remaining WAYPOINTS. It is a census of what the units are
