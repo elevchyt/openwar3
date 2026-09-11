@@ -479,6 +479,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   never fire. `tools/ai-plus-ladder-test.cjs` runs ten headless minutes of the ladder per build.
   **AMAI is GPL** — it was studied for the shape of the strategy table and nothing else; never
   lift its code or its numbers.
+- **Extreme Candy War:** read [`docs/candy-war-ai.md`](docs/candy-war-ai.md) before touching
+  [`src/ai/plus/candy/`](src/ai/plus/candy/). It is Computer+ as a HERO player for Blizzard's lane
+  map, seated by `startCustom` when the script has the map's four triggers (never by file name), on
+  hero seats 0–4/6–10 only — 5 and 11 are the map's own army computers. It PICKS through the map's
+  `Pick_Heroes` by selecting a costume twice (`RtsController.selectForAi`), gets the +300 gold and
+  food cap 10 `Initialize_Players` gives a person and nothing more, and its objective is the candy
+  monster (a hero within 600 pushes it; creeps never do), not the creeps. Three traps: a cast
+  command is matched on the BASE code, and the map rebuilt its spells on unrelated bases, so
+  everything is keyed on the map's ability ids and cast with that ability's own `code`; a dead hero
+  is a ghost that must WALK to its corpse or the Spirit Healer and press a revive; and the item slot
+  rules are triggers that destroy and refund, so the AI enforces them itself (`mayCarry`).
 - **Transports:** read [`docs/transports.md`](docs/transports.md) before touching the Goblin
   Zeppelin, a transport ship, a cargo hold, or the cargo panel. A transport is the BURROW's
   hold on a body that moves (`Acar` beside `Abun`/`Aenc`, one `garrison` roster), and three

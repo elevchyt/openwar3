@@ -52,6 +52,8 @@ import { workerProfileFor, harvestAbilityOf, depotRoleFor, isHarvestCode, type P
 import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
 import { CreepCaster } from "../ai/creeps";
 import { ComputerPlusAi, type PlusHost } from "../ai/plus";
+import { CandyWarAi, type CandyHost } from "../ai/plus/candy";
+import { START_FOOD_CAP as CANDY_FOOD_CAP, START_GOLD as CANDY_START_GOLD } from "../ai/plus/candy/map";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -970,6 +972,10 @@ export class RtsController {
     };
     this.meleeAi = new MeleeAi(host);
     this.computerPlus = new ComputerPlusAi(host);
+    // Kept for the one AI that is not seated by a melee script — Extreme Candy War's heroes, which
+    // a custom map's start seats itself (`startCandyWarAI`). A new match starts it over.
+    this.plusHost = host;
+    this.candyWar = null;
   }
 
   /** The lobby's answer for each computer seat — where it starts, how hard it plays, and which
@@ -1029,6 +1035,54 @@ export class RtsController {
   /** The Computer+ seats (issue #124, src/ai/plus/). A separate object from `meleeAi` on
    *  purpose: the two AIs share no mutable state, and a seat is in exactly one of them. */
   private computerPlus: ComputerPlusAi | null = null;
+  /** The host `prepareMeleeAI` built, for `startCandyWarAI`. */
+  private plusHost: PlusHost | null = null;
+  /** Computer+ on Extreme Candy War (src/ai/plus/candy/) — null on every other map. */
+  private candyWar: CandyWarAi | null = null;
+  /** Selections a COMPUTER made this step (`selectForAi`), raised with the local player's own in
+   *  `drainSelectionEvents`. */
+  private aiSelections: SelectionEvent[] = [];
+
+  /**
+   * Seat Computer+ on EXTREME CANDY WAR's hero seats (src/ai/plus/candy/, docs/candy-war-ai.md).
+   *
+   * Called by the custom-map start once the script has run, and only for that map: a scenario runs
+   * none of the melee library, so nothing else would ever seat a computer there, and in the real
+   * game a computer seat on this map stands in the hero picker for the whole match. `readBool` reads
+   * a boolean global of the running script (`udg_GameOn`), which is how the AI knows the intro is
+   * over and the picker is open.
+   *
+   * Each seat is also given what the map's `Initialize_Players` gives a PERSON and filters computers
+   * out of — the starting gold and the food cap (see `START_GOLD` for why that is parity).
+   */
+  startCandyWarAI(seats: ReadonlyArray<{ player: number; difficulty: number }>, readBool: (name: string) => boolean | null): void {
+    if (!this.plusHost || !seats.length) return;
+    const host: CandyHost = {
+      ...this.plusHost,
+      select: (player, unitId) => this.selectForAi(player, unitId),
+      scriptBool: readBool,
+      heroKills: () => this.sim.heroKills,
+    };
+    const ai = (this.candyWar ??= new CandyWarAi(host));
+    for (const s of seats) {
+      ai.add(s.player, s.difficulty, this.meleeSeed);
+      this.sim.stashOf(s.player).gold += CANDY_START_GOLD;
+      this.authority.setFoodCap(s.player, CANDY_FOOD_CAP);
+    }
+  }
+
+  /**
+   * A computer player SELECTS a unit — for the map's selection triggers and nothing else.
+   *
+   * WC3 raises `EVENT_PLAYER_UNIT_SELECTED` for a player's selection, and a whole genre of custom map
+   * reads it (a hero picker, a vote sign). A computer has no selection panel, so it has no other way
+   * to use one; this raises exactly the event a person's click would, for that player, and touches no
+   * one's actual selection. Authority-side, like every AI decision.
+   */
+  selectForAi(player: number, unitId: number): void {
+    this.aiSelections.push({ unitId, player, selected: true });
+  }
+
   /** The creeps' spellcasting, made on the first authority tick of a seeded match and kept
    *  for the match — see src/ai/creeps.ts. */
   private creepCaster: CreepCaster | null = null;
@@ -2252,7 +2306,10 @@ export class RtsController {
    * aren't playing, and inventing selections for them would fire triggers that never fired.
    */
   drainSelectionEvents(): SelectionEvent[] {
-    const out: SelectionEvent[] = [];
+    // A COMPUTER's selections first (`selectForAi`) — they are not part of the local selection the
+    // diff below reads, and they never change it.
+    const out: SelectionEvent[] = this.aiSelections;
+    this.aiSelections = [];
     // WC3's order within one change: what left, then what arrived.
     for (const id of this.reselected) {
       if (!this.selectionSeen.has(id) || !this.selected.has(id)) continue; // a real change; the diff has it
@@ -3992,6 +4049,7 @@ export class RtsController {
       perfLog.begin("sim.ai");
       if (this.meleeAi?.active && this.seeded) this.meleeAi.tick(dt);
       if (this.computerPlus?.active && this.seeded) this.computerPlus.tick(dt);
+      if (this.candyWar?.active && this.seeded) this.candyWar.tick(dt);
       // …and the map's own creeps think here too (src/ai/creeps.ts): Neutral Hostile is a
       // player with no seat, and its casting is the same authority-only pass as a computer's.
       if (this.seeded) (this.creepCaster ??= new CreepCaster(this.sim, this.abilities)).tick(dt);
@@ -6971,6 +7029,7 @@ export class RtsController {
    */
   heardChat(line: ChatLine, heard: readonly number[]): void {
     this.computerPlus?.heard(line, heard);
+    this.candyWar?.heard(line, heard);
   }
 
   /** HOST: a client asked for the match to stop or start again (already stamped with a real

@@ -57,6 +57,7 @@ interface CreepSeed {
 import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, isHarvestCode, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
 import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { AI_SCRIPT_FOR } from "../ai";
+import { HERO_SEATS as CANDY_HERO_SEATS, isCandyWarScript } from "../ai/plus/candy/map";
 import { playerLabels } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
 import { animPropsFor, buildAnimSet } from "./unitAnims";
@@ -2604,6 +2605,22 @@ export class MapViewerScene {
     // main() fires the map's initialization triggers, so its welcome text / quest
     // messages appear in the HUD message log.
     this.runMapScript({ melee: false, slots: config.slots });
+    // COMPUTER+ ON EXTREME CANDY WAR (src/ai/plus/candy/, docs/candy-war-ai.md). A scenario runs none
+    // of the melee library, so no script will ever call `StartMeleeAI` here — the lobby's computers
+    // in the map's HERO seats are seated by us, once the script has shown it is this map. The two
+    // ARMY seats the map itself declares computer (5 and 11) are the map's own and never ours. Every
+    // computer seat gets Computer+, whatever the Advanced Options switch says: the classic AI is a
+    // melee build order and has nothing to play on a lane map.
+    const scriptGlobals = this.mapScript?.interp.rt.globals;
+    if (scriptGlobals && isCandyWarScript(scriptGlobals)) {
+      const seats = config.slots
+        .filter((s) => s.controller === "computer" && CANDY_HERO_SEATS.has(s.id))
+        .map((s) => ({ player: s.id, difficulty: s.aiDifficulty ?? MELEE_AI_NORMAL }));
+      this.rts.startCandyWarAI(seats, (name) => {
+        const v = scriptGlobals.get(name);
+        return v?.k === "bool" ? v.b : null;
+      });
+    }
     this.rts.holdWorld(false); // the map has had its say — let the world run
     console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33)${dummies ? `, plus ${dummies} model-less dummy unit(s)` : ""}.`);
   }

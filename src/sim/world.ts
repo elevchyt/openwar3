@@ -360,6 +360,22 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
   return out;
 }
 
+/** One hero death, as the Computer+ hero AI reads it (`SimWorld.heroKills`). `seq` only grows, so a
+ *  reader keeps the last one it has seen rather than draining the list. `killerOwner` is -1 when
+ *  nothing is credited (a hero that burned itself out on Hellfire). */
+export interface HeroKill {
+  seq: number;
+  victimId: number;
+  victimOwner: number;
+  victimType: string;
+  victimName: string;
+  killerId: number;
+  killerOwner: number;
+}
+
+/** How many hero deaths `SimWorld.heroKills` keeps — far more than a pass can miss. */
+const HERO_KILL_LOG = 32;
+
 export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem" | "garrison" | "load" | "unload";
 
 /** A learned/innate ability on a unit. `code` is the base ability code (dispatch
@@ -3036,6 +3052,10 @@ export class SimWorld {
   captureSellUnits = false; // EVENT_(PLAYER_)UNIT_SELL — a unit bought from a shop (269/286)
   captureLoads = false; // EVENT_UNIT_LOADED (88) / EVENT_PLAYER_UNIT_LOADED (51)
   private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
+  /** The last `HERO_KILL_LOG` hero deaths, oldest first, each numbered — read, never drained, by
+   *  the Computer+ hero AI (src/ai/plus/candy/). See the push in `kill`. */
+  readonly heroKills: HeroKill[] = [];
+  private heroKillSeq = 0;
   private damageEvents: Array<{ target: EventUnitInfo; source: EventUnitInfo | null; amount: number }> = [];
   private attackEvents: Array<{ attacked: EventUnitInfo; attacker: EventUnitInfo }> = [];
   private orderEvents: Array<{ unit: EventUnitInfo; orderId: number; kind: "immediate" | "point" | "target"; x: number; y: number; target: EventUnitInfo | null }> = [];
@@ -18819,6 +18839,14 @@ export class SimWorld {
         killer: killer?.isHero ? { properName: killer.properName, typeId: killer.typeId } : undefined,
       });
       this.recordFallenHero(u);
+      // …and on the READ-ONLY log a computer player reads (`heroKills`), because the alert above
+      // is drained by the HUD and the death event by the map's script, and a Computer+ hero that
+      // wants to know "did I just kill that hero" must not steal either of them.
+      this.heroKills.push({
+        seq: ++this.heroKillSeq, victimId: u.id, victimOwner: u.owner, victimType: u.typeId, victimName: u.properName,
+        killerId: killer?.id ?? 0, killerOwner: killer?.owner ?? -1,
+      });
+      if (this.heroKills.length > HERO_KILL_LOG) this.heroKills.splice(0, this.heroKills.length - HERO_KILL_LOG);
     }
     this.releaseEntangled(u); // an Entangled Gold Mine knocked down hands the mine back
     // The body goes on seeing while it falls — read off the unit here, one line before it
