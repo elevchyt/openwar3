@@ -1,0 +1,15 @@
+{
+  "//": "The relay as its OWN deployable (Railway service Root Directory = /server). It needs `ws` and nothing else — no Vite, no Electron, no build step — which is why it is not the repo root's package.json, whose install alone pulls an Electron binary. See docs/multiplayer.md \"Running it\".",
+  "name": "openwar3-relay",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node relay.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.21.1"
+  }
+}

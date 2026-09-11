@@ -1,5 +1,6 @@
 import type { DataSource } from "../vfs/types";
-import type { LanLobby } from "../net/lobby";
+import { relayAuthority, type LanLobby } from "../net/lobby";
+import { OFFICIAL_SERVER_NAME } from "../net/officialServer";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
@@ -42,9 +43,6 @@ export interface JoinAddressDialog {
 
 /** Strip the wire's own dressing back to what the player typed: `ws://1.2.3.4:8787/relay` is
  *  our business, `1.2.3.4:8787` is theirs. */
-function authorityOf(url: string): string {
-  return url.replace(/^wss?:\/\//, "").replace(/\/relay$/, "");
-}
 
 /** The dialog's own root: our frame, with the shared list box dropped into the empty container
  *  it leaves — the same composition the Single Player screen's Profile List is made by. */
@@ -113,21 +111,29 @@ export async function showJoinAddressDialog(opts: {
         // not there yet — so it is a quiet marker on the row and never an error; the lobby keeps
         // knocking. A machine the NETWORK told us about (the desktop app's beacon) says so
         // instead, because the player did not put it there and should not wonder how it arrived.
-        const note = !connected ? "  |cff808080(waiting)|r"
+        //
+        // The OFFICIAL server is named rather than addressed, and not answering means something
+        // else there: nobody "has not started their game yet" on a server that is always up, so
+        // it says offline — which is also what an outdated copy of the game sees, refused at the
+        // handshake by a server speaking a newer protocol.
+        const official = source === "official";
+        const note = !connected ? `  |cff808080(${official ? "offline" : "waiting"})|r`
           : source === "found" ? "  |cff808080(on your network)|r"
           : "";
         return {
           value: url,
-          label: `${authorityOf(url)}${note}`,
+          label: `${official ? OFFICIAL_SERVER_NAME : relayAuthority(url)}${note}`,
           // The row IS the address, so its control removes it — no "select the row, then press
           // the button under the list", which is a step a three-row list does not need.
           //
           // A FOUND one has no ✕: it is not the player's to remove. The machine is broadcasting,
           // so it would be back on the list within two seconds, and a button that undoes itself
-          // while you watch is worse than no button. Theirs go when they close their game.
-          action: source === "found" ? undefined : {
+          // while you watch is worse than no button. Theirs go when they close their game. The
+          // official server has none either: it is on every copy's list by design
+          // (src/net/officialServer.ts), and the lobby would refuse the removal anyway.
+          action: source === "found" || official ? undefined : {
             label: "✕",
-            title: `Remove ${authorityOf(url)}`,
+            title: `Remove ${relayAuthority(url)}`,
             onClick: () => {
               opts.lobby.removeRelay(url);
               message = null;

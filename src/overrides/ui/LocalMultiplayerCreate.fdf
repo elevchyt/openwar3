@@ -1,0 +1,34 @@
+// OpenWar3 override — `UI\FrameDef\Glue\LocalMultiplayerCreate.fdf`.
+//
+// One row the 2003 screen has no frame for: WHERE the game is announced.
+//
+// Real WC3 created a LAN game on the one network there was — it broadcast, and the game was
+// wherever the host sat. OpenWar3 has two kinds of place to put one: this machine's own relay,
+// which only the local network can reach, and the servers the Servers List watches — the
+// OpenWar3 server (src/net/officialServer.ts) first among them, which every copy of the game can
+// see. A game goes up on exactly ONE of them, and it has to be chosen before the room exists, so
+// the choice belongs on the screen that announces the room.
+//
+// A label and a dropdown in the Advanced Options pane's own style (`AdvancedPopupMenuTemplate`,
+// out of AdvancedOptionsPane.fdf, which this screen already includes for its right-hand column),
+// so it reads as one of the screen's settings rather than something bolted on. Anchored to the
+// map list's container, so it travels with the column — and the container is 0.03 shorter than
+// the install declares (`LAN_CREATE_OVERRIDE.resize` in src/overrides/index.ts), because under the
+// full-height list the dropdown sat across the panel's own bottom border.
+
+Frame "TEXT" "HostServerLabel" INHERITS "StandardLabelTextTemplate" {
+    SetPoint TOPLEFT, "MapListContainer", BOTTOMLEFT, 0.0, -0.018,
+    Text "COLON_SERVER",
+}
+
+// Wider than the pane's 0.145: the entries are server NAMES ("OpenWar3 Server (EU)") and
+// addresses, not the pane's one-word settings.
+Frame "POPUPMENU" "HostServerMenu" INHERITS WITHCHILDREN "AdvancedPopupMenuTemplate" {
+    Width 0.21,
+    SetPoint LEFT, "HostServerLabel", RIGHT, 0.012, 0.0,
+
+    PopupMenuFrame "HostServerPopupMenuMenu",
+    Frame "MENU" "HostServerPopupMenuMenu" INHERITS WITHCHILDREN "StandardPopupMenuMenuTemplate" {
+        UseActiveContext,
+    }
+}

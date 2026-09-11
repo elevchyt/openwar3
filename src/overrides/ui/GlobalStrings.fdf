@@ -40,4 +40,12 @@ StringList {
     COLON_HEALTHBARS            "Healthbars:",
     DEFAULT_HEALTHBARS          "Default",
     TEAM_COLORED_HEALTHBARS     "Team Colored",
+
+    // LAN → Create Game, the row under the map list: which relay the game is announced on
+    // (src/overrides/ui/LocalMultiplayerCreate.fdf). The game broadcast its LAN games and never
+    // had to ask; the nearest thing in its table is Battle.net's COLON_SELECTED_REALM
+    // ("Selected Gateway:"), which names a Blizzard gateway and not a place to put a game.
+    COLON_SERVER                "Server:",
+    // …and its first entry: this machine's own relay, reachable from the local network only.
+    THIS_COMPUTER               "This Computer",
 }

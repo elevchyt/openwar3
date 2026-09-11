@@ -1,5 +1,7 @@
 import { computerPlusDefault } from "../data/options";
-import { LAN_ADVANCED_OPTIONS_OVERRIDE, OW3_STRINGS } from "../overrides";
+import { relayAuthority, type HostTarget, type LanLobby } from "../net/lobby";
+import { OFFICIAL_SERVER_NAME } from "../net/officialServer";
+import { LAN_ADVANCED_OPTIONS_OVERRIDE, LAN_CREATE_OVERRIDE, OW3_STRINGS } from "../overrides";
 import {
   DEFAULT_ADVANCED, OBSERVER_ITEMS, VISIBILITY_ITEMS,
   type AdvancedOptions, type ObserverSetting, type Visibility,
@@ -38,6 +40,12 @@ import { savedPlayerName } from "./fdfLan";
 // sim's tick rate, ours is fixed at the fastest by Phase A (docs/multiplayer.md), and a slider
 // that says "Fast" and takes no other answer is the truth of it. It stays on screen because
 // the reference has it, and because "Select Map:" hangs off it.
+//
+// Under the map list is a row of OURS, "Server:" (src/overrides/ui/LocalMultiplayerCreate.fdf):
+// which relay the room is announced on — this computer, which only the local network can reach,
+// or a server the Servers List watches, the OpenWar3 server first (src/net/officialServer.ts).
+// It opens on wherever the host last put a game (`HOST_SERVER_KEY`) while that still answers,
+// and otherwise on the official server.
 
 const MAP_LIST_FDF = "UI\\FrameDef\\Glue\\MapListBox.fdf";
 const MAP_INFO_FDF = "UI\\FrameDef\\Glue\\MapInfoPane.fdf";
@@ -50,11 +58,16 @@ const PANEL_FACES = { info: "MapInfoPanel", advanced: "AdvancedOptionsPanel" } a
 /** LocalMultiplayerCreate.fdf's own `GameSpeedSlider` range: 0 slow, 1 normal, 2 fast. */
 const GAME_SPEED_FAST = 2;
 
+/** Where the host last announced a game (a `HostTarget.url`, "" for this computer). The Server
+ *  menu opens on it again, as long as it is still answering. */
+const HOST_SERVER_KEY = "openwar3.hostServer";
+
 export interface LanCreateHandlers {
   /** The host settled on a map: announce the room and drop into the game lobby (issue #77).
    *  `gameName` is the game's own default — GlobalStrings' GAMENAME, "Local Game (%s)";
-   *  `advanced` is what the pane was left on, fixed for the room's life. */
-  onCreate: (path: string, info: MapInfo, gameName: string, advanced: AdvancedOptions) => void;
+   *  `advanced` is what the pane was left on, fixed for the room's life; `server` is the Server
+   *  menu's pick, a `HostTarget.url` ("" for this computer). */
+  onCreate: (path: string, info: MapInfo, gameName: string, advanced: AdvancedOptions, server: string) => void;
   onCancel: () => void;
 }
 
@@ -62,6 +75,9 @@ export async function mountLanCreateScreen(
   container: HTMLElement,
   vfs: DataSource,
   maps: Map<string, File>,
+  /** The LAN session's lobby — asked where a game can be announced (`hostTargets`), and followed
+   *  while this screen is up, since a server can start answering with nobody touching anything. */
+  lobby: LanLobby,
   h: LanCreateHandlers,
 ): Promise<FdfScreen> {
   const browser = new MapBrowser(vfs, maps);
@@ -83,10 +99,27 @@ export async function mountLanCreateScreen(
    * host's own preference is what a fresh game should assume about its computers.
    */
   const advanced: AdvancedOptions = { ...DEFAULT_ADVANCED, computerPlus: computerPlusDefault() };
+  /** The Server menu's last pick — null when the host has never picked one. */
+  let server: string | null = null;
+  try { server = localStorage.getItem(HOST_SERVER_KEY); } catch { /* no storage: no memory */ }
+
+  /**
+   * Where the game would be announced right now: the pick, while it is still answering; else the
+   * OpenWar3 server, because a game there is one every player can see; else whatever answers at
+   * all, which is this computer. Null only while nothing is answering yet.
+   */
+  const target = (): HostTarget | null => {
+    const targets = lobby.hostTargets;
+    return targets.find((t) => t.url === server)
+      ?? targets.find((t) => t.kind === "official")
+      ?? targets[0]
+      ?? null;
+  };
 
   const create = (): void => {
     const picked = browser.selected;
-    if (picked) h.onCreate(picked.path, picked.info, gameName, { ...advanced });
+    const where = target();
+    if (picked && where) h.onCreate(picked.path, picked.info, gameName, { ...advanced }, where.url);
   };
 
   browser.onChange = () => screen.relayout();
@@ -103,7 +136,7 @@ export async function mountLanCreateScreen(
     includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, ADVANCED_OPTIONS_FDF, BLURB_SCROLLBAR_FDF],
     // …and our own layer on the Advanced Options pane: the Computer+ switch, which the 2003 UI
     // has no frame for. The game's Observers row is KEPT on this screen — see src/overrides/.
-    overrides: [OW3_STRINGS, LAN_ADVANCED_OPTIONS_OVERRIDE],
+    overrides: [OW3_STRINGS, LAN_ADVANCED_OPTIONS_OVERRIDE, LAN_CREATE_OVERRIDE],
     buildRoot: (l) => {
       lib = l;
       browser.useStrings(l);
@@ -135,11 +168,41 @@ export async function mountLanCreateScreen(
     screen.relayout();
   }
 
+  // The Server menu follows the lobby: the official server answering a beat after this screen
+  // came up — or dropping — changes what can be offered with nobody having clicked anything. The
+  // screen that comes next installs its own handler; `alive` quiets this one if it outlives us.
+  let alive = true;
+  lobby.onChange = () => { if (alive) fillServer(screen); };
+
   const dispose = screen.dispose.bind(screen);
-  screen.dispose = (): void => { browser.dispose(); dispose(); };
+  screen.dispose = (): void => { alive = false; browser.dispose(); dispose(); };
 
   void browser.openFolder(browser.cwd);
   return screen;
+
+  /** The Server row, and Create Game with it: there is nothing to host ON until something answers. */
+  function fillServer(s: FdfScreen): void {
+    const targets = lobby.hostTargets;
+    const where = target();
+    const menu = s.popup("HostServerMenu");
+    if (menu) {
+      menu.setOptions(targets.map((t) => ({ value: t.url, label: targetLabel(t) })));
+      if (where) menu.value = where.url;
+      menu.setEnabled(targets.length > 1);
+      menu.onChange = (v) => {
+        server = v;
+        try { localStorage.setItem(HOST_SERVER_KEY, v); } catch { /* no storage: no memory */ }
+      };
+    }
+    s.setEnabled("PlayButton", !!browser.selected && !!where);
+  }
+
+  /** A place as a player reads it: the machine, the server's name, or the address they typed. */
+  function targetLabel(t: HostTarget): string {
+    if (t.kind === "own") return lib?.string("THIS_COMPUTER") ?? "This Computer";
+    if (t.kind === "official") return OFFICIAL_SERVER_NAME;
+    return relayAuthority(t.url);
+  }
 
   /** (Re)fill every widget from the state above — called after each build/rebuild. */
   function fill(s: FdfScreen): void {
@@ -159,6 +222,7 @@ export async function mountLanCreateScreen(
     s.setText("GameSpeedValue", lib?.string("FAST") ?? "Fast");
 
     fillAdvanced(s);
+    fillServer(s);
   }
 
   /**

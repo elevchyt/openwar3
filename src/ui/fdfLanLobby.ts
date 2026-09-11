@@ -4,7 +4,8 @@ import type { MapInfo } from "../world/mapInfo";
 import type { MapPreview } from "../world/mapPreview";
 import { sanitizeChat } from "../game/chat";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
-import type { LanLobby } from "../net/lobby";
+import { relayAuthority, type LanLobby } from "../net/lobby";
+import { OFFICIAL_SERVER_NAME } from "../net/officialServer";
 import type { PeerInfo, StartMatch } from "../net/protocol";
 import { isDefaultAdvanced, type AdvancedOptions } from "../net/advancedOptions";
 import {
@@ -550,7 +551,21 @@ export async function mountLanLobbyScreen(
    * LAN falls back to the selection trick that predates it.
    */
   function paintJoinAddress(s: FdfScreen): void {
-    const addresses = lobby.snapshot.host?.addresses ?? [];
+    // A game on the OFFICIAL server needs no address at all: it is in the game list of every copy
+    // of OpenWar3, since every copy watches that server. So the row says where the game is, and
+    // is not a thing to copy.
+    const here = lobby.primary;
+    if (here?.kind === "official") {
+      s.setText("JoinAddressLobbyLabel", "Hosted on:");
+      s.setText("JoinAddressLobbyValue", OFFICIAL_SERVER_NAME);
+      const el = s.frame("JoinAddressLobbyValue");
+      if (el) { el.style.cursor = ""; el.onclick = null; }
+      return;
+    }
+    // A game on ANOTHER server is reached by adding that server, so its address is the one to
+    // hand on; this machine's own addresses have nothing to do with it (the lobby dropped them
+    // when that server's connection became the one we play on).
+    const addresses = here && here.kind !== "own" ? [relayAuthority(here.url)] : lobby.snapshot.host?.addresses ?? [];
     const first = addresses[0];
     if (!first) {
       s.setText("JoinAddressLobbyLabel", "");

@@ -188,6 +188,9 @@ export async function mountLanScreen(
   // fix is a command, so say it on screen rather than only in the console.
   connected.catch((err: Error) => {
     screen.setText("CustomCreateInfo", `|cffff8080${err.message}|r`);
+    // …but a server that IS answering is still a list to play from — the official one, on a page
+    // served with no relay of its own — and `render` gives the buttons back as the lobby says so.
+    if (lobby.snapshot.phase === "browsing") return;
     screen.setEnabled("CreateButton", false);
     screen.setEnabled("JoinButton", false);
   });

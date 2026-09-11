@@ -96,6 +96,7 @@ deployments differ only in who is at that origin:
 | `pnpm preview` | Vite preview | same, same plugin | `ws://<host>:4173/relay` |
 | Exported game (Electron) | its own process | its own process, beside it | `ws://<host>:<port>/relay` |
 | Internet | a static host (Vercel) | a cloud box (`server/relay.mjs`) | **`VITE_RELAY_URL`** — the one case where the two are not the same box |
+| The OpenWar3 server | any of the above | Railway (`server/`, see below), watched by every client as well as its own | `wss://openwar3.up.railway.app/relay` — `src/net/officialServer.ts` |
 
 That collapses LAN play to **one command and one firewall hole**: `pnpm dev --host` on the host
 machine, `http://<its ip>:5173` on the other. It also makes the second machine's success follow
@@ -117,6 +118,37 @@ on that same HTTP server. Vite's own listener claims only upgrades carrying `sec
 vite-hmr` at the HMR path and ignores the rest, so the two coexist without either knowing about the
 other — but a listener here that claimed too broadly would eat HMR and turn every source edit into a
 manual reload.
+
+### The OpenWar3 server (Railway)
+
+`server/` is a deployable of its own: `server/package.json` (`ws` and nothing else — the repo
+root's install would pull an Electron binary) and `server/railway.json`, Railway's config as code:
+Railpack, `node relay.mjs`, **EU West (Amsterdam), ONE replica**, sleeping off, and
+`watchPatterns: ["server/**"]`. The service's Root Directory is `/server`, and its config-file path
+must be set to `/server/railway.json` as well — Railway does not look for the file under the root
+directory by itself. The relay reads `PORT`, which Railway injects.
+
+Three rules it lives by, each of which is a way to lose every game on it:
+
+- **One replica.** The room table is in memory (`rooms.mjs`). Two replicas behind Railway's random
+  load balancer are two game lists, and players dealt onto different ones never see each other.
+- **A deploy ends every game on it.** Rooms do not survive a restart, and a host whose socket drops
+  closes its room. The watch pattern is what keeps an ordinary push to `main` from redeploying it;
+  a change under `server/` still does — which a `PROTOCOL_VERSION` bump in `rooms.mjs` must, since
+  a client whose number differs is refused at the handshake (and shows the row "(offline)").
+- **It costs BANDWIDTH, not CPU.** It simulates nothing; it forwards every snapshot the host sends
+  to each other player, and Railway bills egress ($0.05/GB). A snapshot is ~190 bytes per unit on
+  the wire (`tools/sim-wire-test.cjs`: 240 units + 60 projectiles = 45 KB), so at 60 Hz a non-host
+  player costs roughly 4–12 Mbit/s — and so does the host's upload, per player.
+
+On the client: `LanLobby.addRelay(url, "official")` (main.ts `lanSession`) watches it as a Servers
+List row with no ✕, listed first, never removed — not by `removeRelay`, not by the beacon's set, and
+not by `promote`, so joining a friend's LAN game leaves it watched. `normalizeRelayUrl` dials a
+public hostname with no port `wss://` on 443, where Railway serves a generated domain. The Create
+Game screen's "Server:" row (`LAN_CREATE_OVERRIDE`) picks WHERE a room is announced —
+`LanLobby.host(…, on)` promotes that server's connection exactly as `join` does — and opens on the
+official server whenever it answers. `VITE_OFFICIAL_SERVER` points a build at another server, or
+empty at none.
 
 **Telling the player what is wrong.** Two of the three ways a LAN session fails are diagnosable,
 and the third is not, so the screen says exactly as much as it knows. A page cannot test its own

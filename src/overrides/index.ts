@@ -5,6 +5,7 @@ import advancedOptionsDisplayFdf from "./ui/AdvancedOptionsDisplay.fdf?raw";
 import globalStringsFdf from "./ui/GlobalStrings.fdf?raw";
 import gameChatroomFdf from "./ui/GameChatroom.fdf?raw";
 import joinAddressDialogFdf from "./ui/JoinAddressDialog.fdf?raw";
+import localMultiplayerCreateFdf from "./ui/LocalMultiplayerCreate.fdf?raw";
 import localMultiplayerJoinFdf from "./ui/LocalMultiplayerJoin.fdf?raw";
 import optionsMenuFdf from "./ui/OptionsMenu.fdf?raw";
 
@@ -175,6 +176,27 @@ export const LAN_JOIN_OVERRIDE: FdfOverride = {
   add: [
     { frame: "NetworkStatusText", into: "LocalMultiplayerJoin" },
     { frame: "ServersListBackdrop", into: "GameListPanel" },
+  ],
+};
+
+/**
+ * LAN → Create Game: the Server row — which relay the game is announced on (this computer, the
+ * OpenWar3 server, or another server the Servers List watches).
+ *
+ * Nothing is retired and nothing is re-anchored: both frames hang under the map list, in the
+ * settings panel that already holds it. See `ui/LocalMultiplayerCreate.fdf`.
+ */
+export const LAN_CREATE_OVERRIDE: FdfOverride = {
+  id: "ow3-lan-create",
+  source: localMultiplayerCreateFdf,
+  // The list gives up 0.03 of its 0.29 so the row lands INSIDE the panel: measured in the
+  // running screen, the unshortened list put the dropdown straight across the panel's bottom
+  // border. Two rows of a list that holds a folder's worth of maps; the same trade, and the same
+  // `resize` rather than a collision, as the LAN game list's (LAN_JOIN_OVERRIDE).
+  resize: [{ frame: "MapListContainer", height: 0.26 }],
+  add: [
+    { frame: "HostServerLabel", into: "GameSettingsPanel" },
+    { frame: "HostServerMenu", into: "GameSettingsPanel" },
   ],
 };
 

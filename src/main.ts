@@ -18,6 +18,7 @@ import { mountLanScreen, savedPlayerName } from "./ui/fdfLan";
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
 import { mountLanLobbyScreen } from "./ui/fdfLanLobby";
 import { LanLobby } from "./net/lobby";
+import { OFFICIAL_SERVER_ADDRESS } from "./net/officialServer";
 import { observerSlots } from "./net/lobbySetup";
 import type { AdvancedOptions } from "./net/advancedOptions";
 import { WebSocketTransport } from "./net/transport";
@@ -232,6 +233,12 @@ function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
     // ADDRESS and nothing else, which is what keeps it a small feature rather than a second way
     // to learn about games. A no-op in a browser, which cannot hear anything.
     const stopListening = onServersFound((urls) => lobby.setDiscovered(urls));
+    // The OpenWar3 server (src/net/officialServer.ts): on every Servers List out of the box, and
+    // removable from none. Watched like any other address, so its games merge into the one list.
+    const official = officialServerAddress();
+    if (official) {
+      try { lobby.addRelay(official, "official"); } catch { /* a malformed override: no official row */ }
+    }
     // Reachable for the same reason `openwar3.vfs` and `openwar3.mapScene` are: the LAN screens
     // are driven headlessly, and "what does the lobby actually think" is the question every
     // harness ends up asking.
@@ -239,6 +246,13 @@ function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
     lan = { lobby, connected, stopListening };
   }
   return lan;
+}
+
+/** The official server's address for THIS build: `VITE_OFFICIAL_SERVER` when the build sets it
+ *  — to another server, or empty to watch none — and the shipped one otherwise. */
+function officialServerAddress(): string {
+  const configured = (import.meta.env as Record<string, string | undefined>).VITE_OFFICIAL_SERVER;
+  return configured ?? OFFICIAL_SERVER_ADDRESS;
 }
 
 /** Leaving the LAN flow entirely (Cancel back to the main menu). A hand-off to a match has
@@ -274,17 +288,25 @@ function lanScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => P
 function lanCreateScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
   return {
     chrome: "BattlenetCustom",
-    mount: () => mountLanCreateScreen(ui, vfs, installMaps, {
-      onCreate: (path, info, gameName, advanced) => {
+    mount: () => mountLanCreateScreen(ui, vfs, installMaps, lanSession().lobby, {
+      onCreate: (path, info, gameName, advanced, server) => {
         const { lobby, connected } = lanSession();
         // The room is as big as the lobby: the map's slots, plus the Observers bench when the
         // host opened one — the relay caps joins at this, so it has to count the bench.
         const seats = info.slots.length + observerSlots(info.slots.length, advanced);
-        // WAIT for the socket: a `LanLobby` with no transport yet drops a send on the floor
-        // without a word, and this runs well before `connect()` has resolved.
-        void connected.then(() => {
-          lobby.host(gameName, savedPlayerName(), info.name, path, seats, advanced.observers === "FULL_OBSERVERS");
-        }).catch(() => {}); // the failure is already on screen, on the list we came from
+        const announce = (): void => {
+          lobby.host(gameName, savedPlayerName(), info.name, path, seats, advanced.observers === "FULL_OBSERVERS", server);
+        };
+        if (server) {
+          // A watched SERVER is answering already — the Server menu offers no other kind — so the
+          // room goes up on it at once. It throws only if that server dropped in the instant since
+          // the menu was painted, and then there is no lobby to go to.
+          try { announce(); } catch { return; }
+        } else {
+          // This machine's own relay may still be connecting: WAIT for the socket, since a
+          // `LanLobby` with no transport yet drops a send on the floor without a word.
+          void connected.then(announce).catch(() => {}); // the failure is already on screen, on the list we came from
+        }
         void glue.goTo(lanLobbyScreen(vfs, { path, info }, advanced));
       },
       onCancel: () => void glue.goTo(lanScreen(vfs)),

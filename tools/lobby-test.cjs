@@ -10,7 +10,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { LanLobby, reachabilityLine, normalizeRelayUrl } = require(join(REPO, ".sim-build", "src", "net", "lobby.js"));
+const { LanLobby, reachabilityLine, normalizeRelayUrl, relayAuthority } = require(join(REPO, ".sim-build", "src", "net", "lobby.js"));
 const { reconnectPlan, memoryStore } = require(join(REPO, ".sim-build", "src", "net", "reconnect.js"));
 const {
   allSeated, applyRequest, buildStart, canStart, colorsFreeFor, editSlot, newSetup, observerSlots,
@@ -598,6 +598,155 @@ const ME = { id: 2, name: "Joiner", host: false };
     try { lobby.addRelay("hello there"); } catch (e) { refused = e.message; }
     check("a typo is refused with the shape of an address",
       refused, `"hello there" is not an address. Try 192.168.1.42 or 192.168.1.42:8787.`);
+  }
+
+  const OFFICIAL = "wss://openwar3.up.railway.app/relay";
+  const FRIEND = "ws://192.168.1.42:8787/relay";
+
+  console.log("\na server on the internet is dialled the way a cloud host serves it");
+  {
+    for (const typed of ["openwar3.up.railway.app", "https://openwar3.up.railway.app/",
+                         "wss://openwar3.up.railway.app/relay", "openwar3.up.railway.app:443"]) {
+      check(`"${typed}" is TLS on 443`, normalizeRelayUrl(typed), OFFICIAL);
+    }
+    check("a TCP proxy's port is plain ws — it forwards raw TCP",
+      normalizeRelayUrl("shuttle.proxy.rlwy.net:15140"), "ws://shuttle.proxy.rlwy.net:15140/relay");
+    check("a typed http:// is taken at its word", normalizeRelayUrl("http://play.example.com"), "ws://play.example.com:8787/relay");
+    for (const [typed, want] of [["desktop-pc", "ws://desktop-pc:8787/relay"], ["gaming-pc.local", "ws://gaming-pc.local:8787/relay"],
+                                 ["localhost", "ws://localhost:8787/relay"], ["router.lan", "ws://router.lan:8787/relay"]]) {
+      check(`"${typed}" is a machine on the network, not the internet`, normalizeRelayUrl(typed), want);
+    }
+    check("a secure server is shown as just its name", relayAuthority(OFFICIAL), "openwar3.up.railway.app");
+  }
+
+  console.log("\nthe official server is on the list, first, and nobody takes it off");
+  {
+    const made = [];
+    const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
+    await lobby.connect();
+    lobby.addRelay("192.168.1.42");
+    lobby.addRelay("openwar3.up.railway.app", "official");
+    await tick();
+    check("it is watched, and listed FIRST", lobby.relays.map((r) => `${r.url} ${r.source}`), [`${OFFICIAL} official`, `${FRIEND} typed`]);
+    lobby.removeRelay(OFFICIAL);
+    check("removing it does nothing", lobby.relays.map((r) => r.url), [OFFICIAL, FRIEND]);
+    lobby.addRelay("https://openwar3.up.railway.app");
+    check("typing its address in does not demote it to a row with a ✕", lobby.relays[0].source, "official");
+    lobby.setDiscovered([]);
+    check("…and the network going quiet does not drop it", lobby.relays.length, 2);
+    lobby.close();
+  }
+
+  console.log("\na game can be CREATED on a server, not only joined there");
+  {
+    const made = [];
+    const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
+    await lobby.connect();
+    const own = made[0];
+    own.onMessage({ t: "hello", protocol: 99, host: { kind: "app", lan: true, addresses: ["192.168.1.34:8787"] } });
+    lobby.addRelay("openwar3.up.railway.app", "official");
+    lobby.addRelay("192.168.1.42");
+    await tick();
+    const official = made.find((t) => t.url === OFFICIAL);
+    const friend = made.find((t) => t.url === FRIEND);
+    check("the Server menu offers this computer, then each server that answers",
+      lobby.hostTargets, [{ url: "", kind: "own" }, { url: OFFICIAL, kind: "official" }, { url: FRIEND, kind: "typed" }]);
+    lobby.host("G", "Host", "Echo Isles", "m", 2, false, OFFICIAL);
+    check("the room is announced on the SERVER", official.sent.map((m) => m.t), ["create"]);
+    check("…and never on this computer", own.sent, []);
+    check("…whose connection is let go: the room's wire is the server's", own.connected, false);
+    check("…as is every other machine's", friend.connected, false);
+    check("…and this machine's LAN address is no longer the lobby's to print", lobby.snapshot.host, null);
+    check("the server stays a row in the Servers List while we play on it",
+      lobby.relays, [{ url: OFFICIAL, connected: true, source: "official" }]);
+    check("…and it is where we stand now", lobby.primary, { url: OFFICIAL, kind: "official" });
+    lobby.close();
+  }
+
+  console.log("\na server that is still knocking cannot have a game put on it");
+  {
+    const made = [];
+    const lobby = new LanLobby(() => { const t = fakeTransport(made.length > 0); made.push(t); return t; }, memoryStore());
+    await lobby.connect();
+    lobby.addRelay("openwar3.up.railway.app", "official");
+    await tick();
+    check("it is not offered", lobby.hostTargets.map((t) => t.kind), ["own"]);
+    let said = null;
+    try { lobby.host("G", "Host", "Echo Isles", "m", 2, false, OFFICIAL); } catch (e) { said = e.message; }
+    check("…and naming it anyway is refused out loud", said, "That server is not answering.");
+    check("…with nothing sent anywhere", made[0].sent, []);
+    lobby.close();
+  }
+
+  console.log("\na page with no relay of its own can still play on the official server");
+  {
+    const made = [];
+    const lobby = new LanLobby(() => { const t = fakeTransport(made.length === 0); made.push(t); return t; }, memoryStore());
+    await lobby.connect().catch(() => {});
+    check("our own relay is not there", lobby.snapshot.phase, "offline");
+    lobby.addRelay("openwar3.up.railway.app", "official");
+    await tick();
+    check("the server answering makes it a list to browse", lobby.snapshot.phase, "browsing");
+    check("…and the one place to create a game", lobby.hostTargets.map((t) => t.kind), ["official"]);
+    lobby.close();
+  }
+
+  console.log("\njoining a friend's game keeps the official server watched");
+  {
+    const made = [];
+    const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
+    await lobby.connect();
+    lobby.addRelay("openwar3.up.railway.app", "official");
+    lobby.addRelay("192.168.1.42");
+    await tick();
+    made.find((t) => t.url === FRIEND).onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Theirs" }] });
+    lobby.join(`${FRIEND}#1`, "Bob");
+    check("the friend's relay is where we play", lobby.primary, { url: FRIEND, kind: "typed" });
+    check("…and the official server is still on the list", lobby.relays.map((r) => `${r.url} ${r.source}`), [`${OFFICIAL} official`]);
+    lobby.close();
+  }
+
+  console.log("\nletting go of a relay is not LOSING one — its close event lands after the promotion");
+  {
+    // A real socket fires its close event even when WE closed it, a beat later. `fakeTransport`
+    // does not, which is how a host on the official server came to send its countdown, its
+    // start and every snapshot into a fresh socket that was in no room: the old relay's close
+    // ran `onLost`, which nulled the promoted connection and went "reconnecting".
+    const realClose = (t) => { t.close = () => { t.connected = false; setTimeout(() => t.onClose("Connection to the game host was lost."), 0); }; return t; };
+    {
+      const made = [];
+      const lobby = new LanLobby(() => { const t = realClose(fakeTransport()); made.push(t); return t; }, memoryStore());
+      await lobby.connect();
+      lobby.addRelay("openwar3.up.railway.app", "official");
+      await tick();
+      const official = made.find((t) => t.url === OFFICIAL);
+      lobby.host("G", "Host", "Echo Isles", "m", 2, false, OFFICIAL);
+      official.onMessage({ t: "created", room: { ...ROOM, id: "4" }, you: { id: 1, name: "Host", host: true }, token: "tok" });
+      await tick();
+      await tick();
+      check("the host is still standing on the server once the old close lands", lobby.primary, { url: OFFICIAL, kind: "official" });
+      check("…hosting, and not reconnecting", [lobby.snapshot.phase, lobby.snapshot.error], ["hosting", null]);
+      lobby.send({ k: "lobbycount", n: 5 });
+      check("…with the room's traffic on the server's connection", official.sent[official.sent.length - 1], { t: "relay", data: { k: "lobbycount", n: 5 } });
+      check("…and no second socket opened to crawl back in", made.length, 2);
+      lobby.close();
+    }
+    {
+      const made = [];
+      const lobby = new LanLobby(() => { const t = realClose(fakeTransport()); made.push(t); return t; }, memoryStore());
+      await lobby.connect();
+      lobby.addRelay("192.168.1.42");
+      await tick();
+      const friend = made.find((t) => t.url === FRIEND);
+      friend.onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Theirs" }] });
+      lobby.join(`${FRIEND}#1`, "Bob");
+      friend.onMessage({ t: "joined", room: { ...ROOM, id: "1" }, you: ME, peers: [ME], token: "tok" });
+      await tick();
+      await tick();
+      check("a joiner on another machine stays joined once its own relay's close lands",
+        [lobby.primary, lobby.snapshot.phase, made.length], [{ url: FRIEND, kind: "typed" }, "joined", 2]);
+      lobby.close();
+    }
   }
 
   console.log(failed === 0 ? "\nlobby: all checks passed" : `\nlobby: ${failed} FAILED`);

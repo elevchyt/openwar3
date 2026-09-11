@@ -41,11 +41,25 @@ export interface RelayInfo {
   /** Where the address came from. A `typed` one is the player's and only they take it off the
    *  list; a `found` one is the network's (the desktop app's beacon) and comes and goes with the
    *  machine that is broadcasting it, so it is not theirs to remove — it would be back within
-   *  two seconds. */
+   *  two seconds. The `official` one is the OpenWar3 server every copy of the game watches out
+   *  of the box (src/net/officialServer.ts), and nobody removes it. */
   source: RelaySource;
 }
 
-export type RelaySource = "typed" | "found";
+export type RelaySource = "typed" | "found" | "official";
+
+/** Which claim on an address wins when two arrive for the same one: the official server stays
+ *  official whoever else types it, and a machine the player typed stays theirs when a beacon
+ *  also carries it. */
+const SOURCE_RANK: Record<RelaySource, number> = { found: 0, typed: 1, official: 2 };
+
+/** A place a game can be announced (`LanLobby.hostTargets`). */
+export interface HostTarget {
+  /** The relay's URL — or "" for this machine's own, which the page reaches at its own origin. */
+  url: string;
+  /** `own` is this machine's relay; the rest are the watched set's own sources. */
+  kind: "own" | RelaySource;
+}
 
 /** How long between knocks at an address that is not answering. A failed connect on a LAN is
  *  immediate and costs nothing; this is really about how long a player will sit looking at a
@@ -99,20 +113,63 @@ const EMPTY: LobbyState = {
  *
  * A bare address with no port gets the DESKTOP GAME's port, because that is who is typing: a
  * dev server is reached by people who know they are on 5173 and can say so.
+ *
+ * Except a PUBLIC hostname with no port, which is a server on the internet rather than a machine
+ * on the desk. The OpenWar3 server is one (src/net/officialServer.ts): a cloud host terminates
+ * TLS and serves WebSockets on 443, and nothing at all on 8787 — Railway's "Specs & Limits" page
+ * redirects even plain port-80 HTTP to HTTPS. So a dotted name that is neither an IPv4 address
+ * nor a name a home network hands out (`LOCAL_SUFFIXES`) is dialled `wss://` on the default
+ * port. A typed scheme is taken at its word either way — `https://`/`wss://` secure,
+ * `http://`/`ws://` plain — which is how a LAN box with a DNS name, or a Railway TCP proxy
+ * (`x.proxy.rlwy.net:15140`, raw TCP and so plain `ws`), is still reachable. A typed PORT means
+ * plain too — the secure servers this is for are on 443 — unless the port typed IS 443.
  */
 export function normalizeRelayUrl(input: string): string | null {
   const raw = input.trim();
   if (!raw) return null;
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(raw)?.[1]?.toLowerCase();
   // Any scheme they might have copied, including our own ws:// — and the path with it, since
   // the only path a relay has is the one we are about to add back.
   const authority = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/\/.*$/, "");
   if (!authority || /[\s/@?#]/.test(authority)) return null;
-  const [host, port = String(DEFAULT_RELAY_PORT)] = authority.split(":");
+  const [host, port] = authority.split(":");
   // A hostname or an IPv4 address, and nothing else — so a word somebody typed by mistake is
   // answered as the typo it is rather than dialled and reported as a machine that did not reply.
   if (!host || !/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(host)) return null;
-  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) return null;
-  return `ws://${host}:${port}${RELAY_PATH}`;
+  if (port !== undefined && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535)) return null;
+  const secure = scheme === "https" || scheme === "wss" ? true
+    : scheme === "http" || scheme === "ws" ? false
+    : port === undefined ? isPublicName(host) : port === "443";
+  if (secure) return `wss://${host}${port && port !== "443" ? `:${port}` : ""}${RELAY_PATH}`;
+  return `ws://${host}:${port ?? DEFAULT_RELAY_PORT}${RELAY_PATH}`;
+}
+
+/** Close a connection we are done with WITHOUT hearing about it: its handlers are unhooked
+ *  first, because a socket closed on purpose still fires its close event, and whatever is
+ *  listening would take that for a dropped connection (see `LanLobby.promote`). */
+function letGo(t: LobbyTransport | null): void {
+  if (!t) return;
+  t.onClose = () => {};
+  t.onMessage = () => {};
+  t.close();
+}
+
+/** A relay URL the way a player writes it: `ws://1.2.3.4:8787/relay` is our business,
+ *  `1.2.3.4:8787` is theirs — and a secure server is just its name. */
+export function relayAuthority(url: string): string {
+  return url.replace(/^wss?:\/\//, "").replace(/\/relay$/, "");
+}
+
+/** The last labels a home network's own DNS hands out (mDNS `.local`, a router's `.lan`/`.home`,
+ *  RFC 8375's `home.arpa`…). A name under one is a machine on the LAN, dialled like an address. */
+const LOCAL_SUFFIXES = ["local", "lan", "home", "internal", "localdomain", "arpa", "localhost"];
+
+/** Is this a name on the internet rather than on the local network? An IPv4 address is not a
+ *  NAME, and a single label (`localhost`, `desktop-pc`) is a machine the router is naming. */
+function isPublicName(host: string): boolean {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
+  const labels = host.toLowerCase().split(".");
+  return labels.length >= 2 && !LOCAL_SUFFIXES.includes(labels[labels.length - 1]);
 }
 
 /** What to tell the player about this machine's reachability, given the relay's `HostInfo`.
@@ -163,6 +220,10 @@ export class LanLobby {
    * the match wire has to be with the host's relay, and nothing else about a match changes.
    */
   private remotes = new Map<string, RemoteRelay>();
+  /** The official server's URL, once it has been added (`addRelay(…, "official")`). Kept apart
+   *  from `remotes` because it stays ours to show when it has been PROMOTED out of that map —
+   *  see `relays`. */
+  private officialUrl: string | null = null;
   /** Our own relay's game list, kept apart from the merged one so a remote's update cannot be
    *  mistaken for ours (the reconnect consults OURS, and only ours). */
   private ownRooms: RoomInfo[] = [];
@@ -272,10 +333,43 @@ export class LanLobby {
     });
   }
 
-  /** Announce a game. `maxPlayers` is every seat the lobby has — the map's slots plus the
-   *  Observers bench under Full Observers — and `observers` is what the game list prints. */
-  host(name: string, playerName: string, mapName: string, mapPath: string, maxPlayers = 12, observers = false): void {
+  /**
+   * Announce a game. `maxPlayers` is every seat the lobby has — the map's slots plus the
+   * Observers bench under Full Observers — and `observers` is what the game list prints.
+   *
+   * `on` is WHERE (a `HostTarget.url`): omitted or "" is the connection we already stand on. A
+   * watched server's URL announces it there instead, and that server's connection becomes the one
+   * we play on — the same promotion `join` makes, for the same reason: everything after this
+   * moment, roster, countdown and match, is with the relay that holds the room. Throws for a
+   * server that is not answering, because a `create` sent into a connection that is still
+   * knocking is dropped without a word, and the host would sit in a lobby that does not exist.
+   */
+  host(name: string, playerName: string, mapName: string, mapPath: string, maxPlayers = 12, observers = false, on = ""): void {
+    if (on && on !== this.primaryUrl) {
+      const entry = this.remotes.get(on);
+      if (!entry?.connected || !entry.transport) throw new Error("That server is not answering.");
+      this.promote(on);
+    }
     this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers, observers });
+  }
+
+  /** Every place a game could be announced right now: the connection we stand on, then each
+   *  watched server that is answering. What the create screen's Server menu offers. */
+  get hostTargets(): HostTarget[] {
+    const out: HostTarget[] = [];
+    const here = this.primary;
+    if (here) out.push(here);
+    for (const [url, entry] of this.remotes) {
+      if (entry.connected && entry.transport) out.push({ url, kind: entry.source });
+    }
+    return out;
+  }
+
+  /** The connection we host on and play on, or null while there is none. */
+  get primary(): HostTarget | null {
+    if (!this.transport?.connected) return null;
+    const url = this.primaryUrl ?? "";
+    return { url, kind: url === "" ? "own" : url === this.officialUrl ? "official" : "typed" };
   }
 
   /**
@@ -312,11 +406,15 @@ export class LanLobby {
     const url = normalizeRelayUrl(input);
     if (!url) throw new Error(`"${input}" is not an address. Try 192.168.1.42 or 192.168.1.42:${DEFAULT_RELAY_PORT}.`);
     if (this.isOurOwn(url)) throw new Error("That address is this computer — your own games are already listed.");
+    if (source === "official") this.officialUrl = url;
+    // Already the connection we play on (a promoted server): its games are already the list.
+    if (url === this.primaryUrl) return;
     const already = this.remotes.get(url);
     if (already) {
       // A machine the player had already typed in, now also heard on the network, stays THEIRS:
-      // it should not lose its ✕ because a beacon happened to arrive.
-      if (source === "typed") already.source = "typed";
+      // it should not lose its ✕ because a beacon happened to arrive. And the official server
+      // stays official when somebody types its address in as well (`SOURCE_RANK`).
+      if (SOURCE_RANK[source] > SOURCE_RANK[already.source]) already.source = source;
       this.refresh();
       return;
     }
@@ -379,6 +477,10 @@ export class LanLobby {
       () => {
         if (this.remotes.get(url) !== entry) return t.close(); // removed mid-dial
         entry.connected = true;
+        // A server answering is a game list to browse even when our OWN relay is not: a page
+        // served by a bare static host has none, and the official server is then the only list
+        // there is. `host` and `join` both promote the server's connection, so nothing needs ours.
+        if (this.state.phase === "offline" && !this.transport) this.state = { ...this.state, phase: "browsing" };
         this.mergeRooms();
       },
       again,
@@ -389,14 +491,24 @@ export class LanLobby {
    *  shows both, because an address that nothing is hosting on yet is a normal thing to be
    *  looking at and should not read as an error. */
   get relays(): RelayInfo[] {
-    return [...this.remotes].map(([url, entry]) => ({ url, connected: entry.connected, source: entry.source }));
+    const rows = [...this.remotes].map(([url, entry]) => ({ url, connected: entry.connected, source: entry.source }));
+    // The official server is still a row while it is the connection we PLAY on: it cannot be
+    // removed, and a row that vanished whenever you hosted or joined a game there would read as
+    // exactly that.
+    const official = this.officialUrl;
+    if (official && official === this.primaryUrl && !this.remotes.has(official)) {
+      rows.push({ url: official, connected: this.transport?.connected ?? false, source: "official" });
+    }
+    // Official first — it is on every player's list, and the rows the player manages go under it.
+    return rows.sort((a, b) => Number(b.source === "official") - Number(a.source === "official"));
   }
 
   /** Stop watching one. Its games leave the list with it — they were never ours to show once
-   *  nobody is listening to the machine hosting them — and its retry stops with it. */
+   *  nobody is listening to the machine hosting them — and its retry stops with it. The official
+   *  server is the exception: it is on everybody's list, and nobody takes it off. */
   removeRelay(url: string): void {
     const entry = this.remotes.get(url);
-    if (!entry) return;
+    if (!entry || entry.source === "official") return;
     this.remotes.delete(url);
     if (entry.retry !== null) clearTimeout(entry.retry);
     entry.transport?.close();
@@ -409,30 +521,41 @@ export class LanLobby {
    *  otherwise indistinguishable from two machines that happen to agree. */
   private isOurOwn(url: string): boolean {
     const mine = this.state.host?.addresses ?? [];
-    const authority = url.replace(/^ws:\/\//, "").replace(/\/relay$/, "");
+    const authority = url.replace(/^wss?:\/\//, "").replace(/\/relay$/, "");
     return mine.includes(authority);
   }
 
-  /** Make a browse connection the primary one — see `join`. */
+  /** Make a browse connection the primary one — see `join` and `host`. */
   private promote(url: string): void {
     const entry = this.remotes.get(url);
-    if (!entry) return;
+    const t = entry?.transport;
+    if (!entry || !t) return; // still knocking: there is nothing yet to promote
     this.remotes.delete(url);
     if (entry.retry !== null) clearTimeout(entry.retry);
-    this.transport?.close();
-    const t = entry.transport;
-    if (!t) return; // still knocking: there is nothing yet to promote
+    // The connection we are LEAVING is let go, not lost. A socket we close ourselves still fires
+    // its close event a beat later, and the handlers on it are the primary's: `onLost` nulled the
+    // transport we are about to promote and went "reconnecting" on a fresh socket that is in no
+    // room — so a host on the official server sent its countdown, its start and every snapshot
+    // into nothing, and a joiner's did the same, the instant the old relay's close landed.
+    letGo(this.transport);
     t.onMessage = (m) => this.handle(m);
     t.onClose = (reason) => this.onLost(reason);
     this.transport = t;
     this.primaryUrl = url;
-    // Their list is now ours, and every OTHER machine's is no longer any of our business.
+    // What our old relay said about this machine's reachability (`HostInfo`) is not true of a
+    // room held somewhere else: the game lobby would print our LAN address beside a game hosted
+    // on a server, and a cloud relay has nothing to say in its place.
+    this.state = { ...this.state, host: null };
+    // Their list is now ours, and every OTHER machine's is no longer any of our business — bar
+    // the official server's, which stays watched (see `relays`), so that leaving a game on a
+    // friend's machine puts you back in front of the list everyone else can see.
     this.ownRooms = entry.rooms;
-    for (const other of this.remotes.values()) {
+    for (const [otherUrl, other] of [...this.remotes]) {
+      if (other.source === "official") continue;
       if (other.retry !== null) clearTimeout(other.retry);
-      other.transport?.close();
+      this.remotes.delete(otherUrl);
+      letGo(other.transport);
     }
-    this.remotes.clear();
     this.mergeRooms();
   }
 
@@ -486,13 +609,17 @@ export class LanLobby {
    *  hand-off, `dispose()` does. */
   close(): void {
     this.store.save(null); // the match is over on our end; a fresh game starts a fresh session
-    this.transport?.close();
+    // Silently, like `promote`'s: the close event of a socket we ended is not news, and landing
+    // after the reset below it would paint "Connection to the game host was lost." on whatever
+    // screen is up next.
+    letGo(this.transport);
     this.transport = null;
     for (const entry of this.remotes.values()) {
       if (entry.retry !== null) clearTimeout(entry.retry);
-      entry.transport?.close();
+      letGo(entry.transport);
     }
     this.remotes.clear();
+    this.officialUrl = null;
     this.ownRooms = [];
     this.primaryUrl = undefined;
     this.reconnecting = false;
