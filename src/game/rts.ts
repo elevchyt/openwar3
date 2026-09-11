@@ -5330,7 +5330,14 @@ export class RtsController {
   /** Armed command-card order; the next left-click executes it instead of
    *  selecting. "rally" sets a building's rally point; "repair" targets a
    *  damaged friendly building; "cast" targets a spell (see armedCast). */
-  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "harvest" | "cast" | "item" | "selectuser" | "load" | "unload" | null = null;
+  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "harvest" | "cast" | "item" | "selectuser" | "load" | "unload" | "signal" | null = null;
+  /**
+   * The Minimap Signal was aimed and spent: a point on the ground or on the minimap. Not an
+   * ORDER — it needs no selection and names no unit, which is why `orderClickAt` and
+   * `minimapClick` answer it before either asks what is selected — so it leaves here for the
+   * scene to route to the player's allies (MapViewerScene.signalPing).
+   */
+  onSignal: (x: number, y: number) => void = () => {};
   /** The transport awaiting the POINT its Unload All was aimed at when orderMode === "unload"
    *  (`Adro`/`Sdro`: "Unloads all carried units at a target location"). */
   armedUnload: { hostId: number } | null = null;
@@ -5488,6 +5495,15 @@ export class RtsController {
   }
 
   orderClickAt(cssX: number, cssY: number, queued = false): boolean {
+    // The Minimap Signal aimed at the game world ("Targeting a position on the minimap or in the
+    // game world…", MINIMAPSIGNALTOOLTIP_UBER). A click that finds no ground keeps it armed.
+    if (this.orderMode === "signal") {
+      const ground = this.groundPoint(cssX, cssY);
+      if (!ground) return false;
+      this.orderMode = null;
+      this.onSignal(ground[0], ground[1]);
+      return true;
+    }
     // Nominating a shop's purchaser is checked BEFORE the "do I control the selection"
     // gate: the selection here is the SHOP, and the whole point of a neutral Goblin
     // Merchant is that nobody controls it. What must be controllable is the unit picked.
@@ -5779,6 +5795,13 @@ export class RtsController {
    *  "none" → not a command at all (a plain left-click, which pans the camera). */
   minimapClick(wx: number, wy: number, right: boolean, queued: boolean): "ordered" | "ignored" | "none" {
     const mode = this.orderMode;
+    // An armed signal spent on the minimap — before the selection gate below, since a signal
+    // is nobody's order. A right-click disarms it, as it disarms every armed order.
+    if (mode === "signal") {
+      this.orderMode = null;
+      if (!right) this.onSignal(wx, wy);
+      return "ordered";
+    }
     if (right && mode) {
       this.orderMode = null; // right-click disarms a pending target (WC3), never orders
       this.armedCast = null;
@@ -6969,6 +6992,7 @@ export class RtsController {
     // sender; on a client the host's ruling that we were meant to hear this. Both end up at
     // the same renderer callback, which routes (host) or just shows it (client).
     link.onChatSaid = (line) => this.onChatSaid?.(line);
+    link.onSignal = (from, x, y) => this.onSignalHeard?.(from, x, y);
     // The pause, both ways round: on the host a player's request to judge, on a client the
     // ruling to obey. Neither is state this controller keeps — the pause belongs to the
     // renderer, which owns the world's clock — so both are passed straight through.
@@ -7012,6 +7036,9 @@ export class RtsController {
 
   /** A chat line arrived over the wire. The renderer fills this in; see mapViewer.deliverChat. */
   onChatSaid: ((line: ChatLine) => void) | null = null;
+  /** A minimap signal arriving over the wire (matchLink `signal` / `signals`) — the chat
+   *  split: on the host a client asking to signal, on a client the host's routed ruling. */
+  onSignalHeard: ((from: number, x: number, y: number) => void) | null = null;
 
   /**
    * A line was said, and these are the players who HEARD it — the routing

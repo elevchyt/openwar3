@@ -222,6 +222,8 @@ export interface HudDriver {
   /** …unless the map has taken the button away (`EnableMinimapFilterButtons`), in which
    *  case it wears the greyed face and neither the click nor Alt-A answers. */
   allyColorButtonEnabled(): boolean;
+  /** …and the same for the creep-display button, `EnableMinimapFilterButtons`'s second switch. */
+  creepButtonEnabled(): boolean;
   /** A `UI\FrameDef\GlobalStrings.fdf` string by key, with a literal to fall back on when
    *  no install is mounted. (The game writes the minimap buttons' tooltips in it.) */
   uiString(key: string, fallback: string): string;
@@ -248,6 +250,8 @@ export interface HudDriver {
   /** Alt-click on the minimap: mark a spot for your allies (`Allyminimapping`, "%s has
    *  marked the way."). The binding is ours — no data file names a key for it. */
   minimapPing(wx: number, wy: number): void;
+  /** Arm the Minimap Signal's target: the next left-click on the world or the minimap spends it. */
+  armSignal(): void;
   /** Portrait clicked: snap the camera to the selected unit; `lock` follows it. */
   focusSelected(lock: boolean): void;
   setOrderMode(mode: OrderMode): void;
@@ -401,8 +405,10 @@ export interface HudDriver {
  * below was: four holes 42 texels wide (x 311…352) and 37 tall, on a 44-texel pitch (rows
  * 226, 270, 314, 358), with a ROUND socket under them at row 411 — five buttons in all, and
  * `UI\war3skins.txt` names exactly five: the signal (ping), terrain, ally-colour, creep-camp
- * and formation buttons. The circle is the ping's: its art is the only one of the five drawn
- * as a disc with a gold ring of its own.
+ * and formation buttons. They run down the column in that order, which is also the order
+ * `UI\MiscUI.txt` [Hotkeys] lists their keys in (MinimapSignal G, MinimapTerrain T,
+ * MinimapColors A, MinimapCreeps R, FormationToggle F): the four squares are the signal, the
+ * terrain, the ally colour and the creeps, and the round socket is the formation toggle's.
  *
  * Times the tile's own 1 texel = 0.0005 world, y counted UP from row 512 — the same reading
  * every rect in CONSOLE_ZONES is (see its block comment for why the scan is not alpha alone).
@@ -460,10 +466,17 @@ function minimapButtonSocket(index: number): { x: number; y: number; w: number; 
  */
 const CONSOLE_ZONES = {
   minimap: { x: 0.0095, y: 0.0070, w: 0.1390, h: 0.1390 },
+  /** The Minimap Signal button, the FIRST socket of the minimap's button column. */
+  signal: minimapButtonSocket(0),
+  /** Toggle Minimap Terrain, the SECOND (`UI\TipStrings.txt` Tip11: "…the Toggle Minimap
+   *  Terrain button to the right of the minimap"). */
+  terrain: minimapButtonSocket(1),
   /** The Ally Color Mode button, in the THIRD socket of the minimap's button column
    *  (`UI\TipStrings.txt` Tip12: "…the Toggle Minimap Ally Colors button to the right of
    *  the minimap"). See `minimapButtonSocket`. */
   allyColor: minimapButtonSocket(2),
+  /** Toggle Minimap Creep Display, the FOURTH. */
+  creep: minimapButtonSocket(3),
   portrait: { x: 0.2157, y: 0.0320, w: 0.0747, h: 0.0795 },
   /** The first strip under the arch — the unit's hit points. */
   portraitHp: { x: 0.2157, y: 0.0165, w: 0.0747, h: 0.0115 },
@@ -1191,7 +1204,8 @@ export class GameHud {
   private minimapDrag: number | null = null; // pointerId of a held left-press dragging the camera
   /** The Ally Color Mode button in the socket right of the minimap (buildAllyColorButton).
    *  Absent with no install mounted: the socket is part of the console ART. */
-  private allyColorBtn?: HTMLButtonElement;
+  /** The minimap's button column, each with the socket it sits in (see minimapButtonSocket). */
+  private minimapButtonZones: Array<[HTMLButtonElement, { x: number; y: number; w: number; h: number }]> = [];
   private idleWorkerBadge!: HTMLButtonElement;
   private idleWorkerCount!: HTMLSpanElement;
   /** The hero bar's seven slots (issue #95), built once and shown per living hero. */
@@ -1714,6 +1728,15 @@ export class GameHud {
       }
       return;
     }
+    // …and the column's other three: `UI\MiscUI.txt` [Hotkeys] MinimapSignal='G' (Alt-G),
+    // MinimapTerrain='T' (Alt-T) and MinimapCreeps='R' (Alt-R), each printed in its tooltip.
+    if (e.altKey && (e.code === "KeyG" || e.code === "KeyT" || e.code === "KeyR")) {
+      e.preventDefault();
+      if (e.code === "KeyG") this.armSignal();
+      else if (e.code === "KeyT") this.toggleMinimapTerrain();
+      else if (this.driver.creepButtonEnabled()) this.toggleMinimapCreeps();
+      return;
+    }
     // Trigger the command whose hotkey matches the pressed key. A passive isn't a
     // command, so its letter isn't taken — it can't shadow a real order sharing it.
     // Neither is an unavailable one (a greyed DISBTN button has no hotkey in WC3
@@ -1758,7 +1781,16 @@ export class GameHud {
     console_.append(minimap, portraitWrap, infoText, inventory, command);
     // The minimap's button column is punched through the console ART, so the button only
     // exists when that art is on screen; the placeholder strip has nowhere to put it.
-    if (skinned) console_.append(this.buildAllyColorButton());
+    if (skinned) {
+      // The minimap's button column, top to bottom (see minimapButtonSocket).
+      this.minimapButtonZones = [
+        [this.buildSignalButton(), CONSOLE_ZONES.signal],
+        [this.buildTerrainButton(), CONSOLE_ZONES.terrain],
+        [this.buildAllyColorButton(), CONSOLE_ZONES.allyColor],
+        [this.buildCreepButton(), CONSOLE_ZONES.creep],
+      ];
+      for (const [btn] of this.minimapButtonZones) console_.append(btn);
+    }
     if (skinned) console_.append(this.selHpText, this.selMpText);
     // The crest that replaces the six slots when the selection carries nothing. LAST, so it
     // paints over them; only the console art's own version of this corner is under it.
@@ -1781,7 +1813,7 @@ export class GameHud {
       this.root.classList.add("hud-skinned-console");
 
       place(minimap, CONSOLE_ZONES.minimap);
-      if (this.allyColorBtn) place(this.allyColorBtn, CONSOLE_ZONES.allyColor);
+      for (const [btn, zone] of this.minimapButtonZones) place(btn, zone);
       place(portraitWrap, CONSOLE_ZONES.portrait);
       place(this.selHpText, CONSOLE_ZONES.portraitHp);
       place(this.selMpText, CONSOLE_ZONES.portraitMana);
@@ -2217,6 +2249,8 @@ export class GameHud {
     if (image) {
       const cropped = cropMinimapLetterbox(image, aspect);
       cropped.className = "hud-minimap-img";
+      cropped.hidden = !this.minimapTerrainShown;
+      this.minimapImg = cropped;
       view.appendChild(cropped);
     }
     this.dotsCanvas = document.createElement("canvas");
@@ -2328,57 +2362,176 @@ export class GameHud {
    * drew the Human one.
    */
   private buildAllyColorButton(): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.className = "hud-minimap-ally hud-iconbtn";
-    this.allyColorBtn = btn;
-    // The press: `onPress` gives it the same sink-and-release every other console button has.
-    // A button the map has taken away (EnableMinimapFilterButtons) is bound all the same and
-    // simply does nothing — the same discipline the upper button bar follows, so a button that
-    // comes back does not need re-binding.
-    onPress(btn, () => {
-      if (!this.driver.allyColorButtonEnabled()) return;
-      this.driver.cycleAllyColorMode();
-      this.refreshAllyColorButton(); // the face IS the mode, so it changes under the cursor
+    const { btn, refresh } = this.buildMinimapButton({
+      cls: "hud-minimap-ally",
+      skin: (press) => allyButtonSkin(this.driver.allyColorMode(), press),
+      enabled: () => this.driver.allyColorButtonEnabled(),
+      press: () => this.driver.cycleAllyColorMode(), // the face IS the mode, so it changes under the cursor
+      // `|Cff…` runs in the body are what paint "Allies" teal and "Enemies" red in the text.
+      tooltip: ["MINIMAPALLYCOLORTOOLTIP", "Set Ally Color Mode (|Cfffed312Alt-A|R)", "This option cycles through three different unit color modes."],
     });
-    btn.oncontextmenu = (e) => e.preventDefault();
-    // The game's own pushed face while it is held, over the top of the pressed transform.
-    btn.addEventListener("pointerdown", (e) => {
-      if (e.button === 0 && this.driver.allyColorButtonEnabled()) this.paintAllyColorButton("Pushed");
-    });
-    btn.addEventListener("pointerup", () => this.refreshAllyColorButton());
-    btn.onpointerenter = () => this.showAllyColorTooltip();
-    btn.onpointerleave = () => {
-      this.cmdTooltip.hidden = true;
-      this.refreshAllyColorButton(); // a press dragged off the button never got its pointerup
-    };
-    this.refreshAllyColorButton();
+    this.allyColorRefresh = refresh;
     return btn;
   }
+  private allyColorRefresh: (() => void) | null = null;
 
   /** Redress the button for the mode it is now in — after a click, Alt-A, or a script's
    *  `SetAllyColorFilterState` / `EnableMinimapFilterButtons`. Public because the mode can
    *  change from outside the HUD entirely (mapViewer wires both). */
   refreshAllyColorButton(): void {
-    this.paintAllyColorButton(this.driver.allyColorButtonEnabled() ? "Enabled" : "Disabled");
+    this.allyColorRefresh?.();
   }
 
-  private paintAllyColorButton(press: "Enabled" | "Pushed" | "Disabled"): void {
-    if (!this.allyColorBtn) return;
-    const url = this.driver.blpUrl(this.driver.skinPath(allyButtonSkin(this.driver.allyColorMode(), press)));
-    this.allyColorBtn.style.backgroundImage = url ? `url(${url})` : "";
-    this.allyColorBtn.classList.toggle("disabled", press === "Disabled");
+  /** …and the same for the creep button, which `EnableMinimapFilterButtons` also reaches. */
+  refreshCreepButton(): void {
+    this.creepRefresh?.();
+  }
+  private creepRefresh: (() => void) | null = null;
+
+  /**
+   * The Minimap Signal button — the FIRST socket of the column. Pressed (or Alt-G) it arms a
+   * target: the next left-click on the game world or on the minimap puts a signal there for the
+   * player's allies ("Targeting a position on the minimap or in the game world will display a
+   * signal at that location on your allies' minimaps", MINIMAPSIGNALTOOLTIP_UBER). Alt+left-click
+   * does the same with no reticle at all. One face, `MiniMapSignalButton{Enabled,Pushed,Disabled}`.
+   */
+  private buildSignalButton(): HTMLButtonElement {
+    return this.buildMinimapButton({
+      cls: "hud-minimap-signal",
+      skin: (press) => `MiniMapSignalButton${press}`,
+      enabled: () => true,
+      press: () => this.armSignal(),
+      tooltip: [
+        "MINIMAPSIGNALTOOLTIP",
+        "Minimap Signal (|Cfffed312Alt-G|R)",
+        "This option will allow you to send a minimap signal notification to all your allies.",
+      ],
+    }).btn;
   }
 
-  /** The button's tooltip, in the same slab above the command card every other HUD tooltip
-   *  uses — and in the game's own words: `MINIMAPALLYCOLORTOOLTIP` over its `_UBER` body,
-   *  whose `|Cff…` runs are what paints "Allies" teal and "Enemies" red in the text. */
-  private showAllyColorTooltip(): void {
-    const title = this.driver.uiString("MINIMAPALLYCOLORTOOLTIP", "Set Ally Color Mode (|Cfffed312Alt-A|R)");
-    const body = this.driver.uiString(
-      "MINIMAPALLYCOLORTOOLTIP_UBER",
-      "This option cycles through three different unit color modes.",
-    );
-    this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(title)}</div><div class="hud-tooltip-desc">${wc3ToHtml(body)}</div>`);
+  /** Arm the Minimap Signal's target — the button and Alt-G. */
+  private armSignal(): void {
+    this.driver.armSignal();
+    this.setArmed(true);
+  }
+
+  /**
+   * Toggle Minimap Terrain — the SECOND socket. Whether the map's picture is drawn under the
+   * dots ("You can use this feature if you are having difficulty seeing units on top of the
+   * terrain", MINIMAPTERRAINTOOLTIP_UBER). Its face is the state it is in: `…TerrainButtonActive…`
+   * while the terrain shows, `…Inactive…` while it is hidden.
+   */
+  private buildTerrainButton(): HTMLButtonElement {
+    const { btn, refresh } = this.buildMinimapButton({
+      cls: "hud-minimap-terrain",
+      skin: (press) => `MiniMapTerrainButton${this.minimapTerrainShown ? "Active" : "Inactive"}${press}`,
+      enabled: () => true,
+      press: () => this.toggleMinimapTerrain(),
+      tooltip: [
+        "MINIMAPTERRAINTOOLTIP",
+        "Toggle Minimap Terrain (|Cfffed312Alt-T|R)",
+        "This option will toggle the display of the terrain on the minimap.",
+      ],
+    });
+    this.terrainRefresh = refresh;
+    return btn;
+  }
+
+  /** Whether the minimap draws the map's picture (Toggle Minimap Terrain). */
+  private minimapTerrainShown = true;
+  private minimapImg: HTMLElement | null = null; // the map's picture, which that toggle hides
+  private terrainRefresh: (() => void) | null = null;
+
+  private toggleMinimapTerrain(): void {
+    this.minimapTerrainShown = !this.minimapTerrainShown;
+    if (this.minimapImg) this.minimapImg.hidden = !this.minimapTerrainShown;
+    this.terrainRefresh?.();
+  }
+
+  /**
+   * Toggle Minimap Creep Display — the FOURTH socket, under the Ally Color Mode button. Whether
+   * the creep camp indicators are drawn (MINIMAPCREEPCOLORTOOLTIP_UBER: "the glowing circles on
+   * the minimap which denote the location of creep camps"). `…CreepButtonActive…` while they
+   * show, `…Inactive…` while they are hidden, and greyed when the map takes the button away —
+   * `EnableMinimapFilterButtons`'s SECOND argument is this button, as its first is the ally one.
+   */
+  private buildCreepButton(): HTMLButtonElement {
+    const { btn, refresh } = this.buildMinimapButton({
+      cls: "hud-minimap-creep",
+      skin: (press) => `MiniMapCreepButton${this.minimapCreepsShown ? "Active" : "Inactive"}${press}`,
+      enabled: () => this.driver.creepButtonEnabled(),
+      press: () => this.toggleMinimapCreeps(),
+      tooltip: [
+        "MINIMAPCREEPCOLORTOOLTIP",
+        "Toggle Minimap Creep Display (|Cfffed312Alt-R|R)",
+        "This option will toggle the display of the creep camp indicators on the minimap.",
+      ],
+    });
+    this.creepRefresh = refresh;
+    return btn;
+  }
+
+  /** Whether the minimap draws the creep camp indicators (Toggle Minimap Creep Display). */
+  private minimapCreepsShown = true;
+
+  private toggleMinimapCreeps(): void {
+    this.minimapCreepsShown = !this.minimapCreepsShown;
+    this.dotsT = DOTS_PERIOD; // the markers are on the dots canvas: redraw it now, not in 100 ms
+    this.creepRefresh?.();
+  }
+
+  /**
+   * One button of the minimap's column, and everything the four have in common.
+   *
+   * The art is the game's own and carries its whole look — the gold rim included — so there is
+   * no border of ours around it, the same rule every command button follows. Named by war3skins
+   * KEY rather than by path, which is also what lets the four races share one button honestly:
+   * the keys sit in the file's [Default] section because Blizzard only ever drew the Human ones.
+   * Held down it wears the face's `…Pushed` twin, and a button the map has taken away wears its
+   * own `…Disabled` one — never a filter of ours over a live face.
+   *
+   * The press: `onPress` gives it the same sink-and-release every other console button has. A
+   * disabled button is bound all the same and simply does nothing — the same discipline the
+   * upper button bar follows, so a button that comes back does not need re-binding. The tooltip
+   * is the game's own two strings, `KEY` over `KEY_UBER`, in the slab every HUD tooltip uses.
+   */
+  private buildMinimapButton(opts: {
+    cls: string;
+    skin: (press: "Enabled" | "Pushed" | "Disabled") => string;
+    enabled: () => boolean;
+    press: () => void;
+    tooltip: [key: string, title: string, body: string];
+  }): { btn: HTMLButtonElement; refresh: () => void } {
+    const btn = document.createElement("button");
+    btn.className = `hud-minimap-btn ${opts.cls} hud-iconbtn`;
+    const paint = (press: "Enabled" | "Pushed" | "Disabled"): void => {
+      const url = this.driver.blpUrl(this.driver.skinPath(opts.skin(press)));
+      btn.style.backgroundImage = url ? `url(${url})` : "";
+      btn.classList.toggle("disabled", press === "Disabled");
+    };
+    const refresh = (): void => paint(opts.enabled() ? "Enabled" : "Disabled");
+    onPress(btn, () => {
+      if (!opts.enabled()) return;
+      opts.press();
+      refresh();
+    });
+    btn.oncontextmenu = (e) => e.preventDefault();
+    btn.addEventListener("pointerdown", (e) => {
+      if (e.button === 0 && opts.enabled()) paint("Pushed");
+    });
+    btn.addEventListener("pointerup", refresh);
+    btn.onpointerenter = () => {
+      const [key, title, body] = opts.tooltip;
+      const t = this.driver.uiString(key, title);
+      const b = this.driver.uiString(`${key}_UBER`, body);
+      this.setTooltip(`<div class="hud-tooltip-title">${wc3ToHtml(t)}</div><div class="hud-tooltip-desc">${wc3ToHtml(b)}</div>`);
+    };
+    btn.onpointerleave = () => {
+      this.cmdTooltip.hidden = true;
+      refresh(); // a press dragged off the button never got its pointerup
+    };
+    refresh();
+    return { btn, refresh };
   }
 
   /**
@@ -3772,7 +3925,8 @@ export class GameHud {
     const s = MAP_GLYPH * MINIMAP_SIZE; // glyph side in the dots canvas's pixel space
     const camps: Array<{ x: number; y: number; r: number; color: string; crowded: boolean }> = [];
     const glyphs: Array<{ x: number; y: number; r: number; icon: string; img: HTMLImageElement; crowded: boolean }> = [];
-    for (const camp of this.driver.creepCamps()) {
+    // Toggle Minimap Creep Display hides the camp indicators and nothing else — the glyphs stay.
+    for (const camp of this.minimapCreepsShown ? this.driver.creepCamps() : []) {
       const p = this.toMini(camp.x, camp.y, ox, oy, w, h);
       if (!p) continue;
       const { color, scale } = campMarker(camp.level);

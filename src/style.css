@@ -951,13 +951,15 @@ body.hud-tooltip-skinned .hud-chatbar::after {
    to draw around it; `.hud-iconbtn` already stretches it edge to edge and sinks it on a
    press. A button the map has taken away (EnableMinimapFilterButtons) wears the game's own
    greyed face — no filter of ours over a live one (CLAUDE.md: never fake a DIS* twin). */
-.hud-minimap-ally {
+/* …and the same for all four of the column's buttons: Minimap Signal, Toggle Minimap Terrain,
+   Ally Color Mode and Toggle Minimap Creep Display (ui/hud.ts buildMinimapButton). */
+.hud-minimap-btn {
   z-index: 4;
 }
-.hud-minimap-ally.disabled {
+.hud-minimap-btn.disabled {
   cursor: default;
 }
-.hud-minimap-ally.disabled:hover {
+.hud-minimap-btn.disabled:hover {
   filter: none;
 }
 

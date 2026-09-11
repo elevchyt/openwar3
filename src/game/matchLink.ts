@@ -186,6 +186,39 @@ export function isChatSaidMessage(data: unknown): data is ChatSaidMessage {
 }
 
 /**
+ * A MINIMAP SIGNAL — the Minimap Signal button right of the minimap, Alt-G, or Alt+left-click
+ * (`MINIMAPSIGNALTOOLTIP_UBER`: "…will display a signal at that location on your allies'
+ * minimaps"). The same split chat makes, for the same reasons: `signal` goes client → host
+ * with only WHERE, because a `from` in the payload would let anybody ping as anybody; `signals`
+ * goes host → each ALLY with the sender the relay stamped, and only to the players the
+ * authority's own alliance matrix says are allied, so a client cannot see an enemy's signal by
+ * lying about who its friends are. (Not `ping`: that name is the latency probe's.)
+ */
+export interface SignalMessage {
+  k: "signal";
+  x: number;
+  y: number;
+}
+
+export function isSignalMessage(data: unknown): data is SignalMessage {
+  const d = data as { k?: unknown; x?: unknown; y?: unknown } | null;
+  return typeof d === "object" && d !== null && d.k === "signal" && Number.isFinite(d.x) && Number.isFinite(d.y);
+}
+
+/** The host's ruling: this player signalled here, and you are one of their allies. */
+export interface SignalSentMessage {
+  k: "signals";
+  from: number;
+  x: number;
+  y: number;
+}
+
+export function isSignalSentMessage(data: unknown): data is SignalSentMessage {
+  const d = data as { k?: unknown; from?: unknown; x?: unknown; y?: unknown } | null;
+  return typeof d === "object" && d !== null && d.k === "signals" && Number.isInteger(d.from) && Number.isFinite(d.x) && Number.isFinite(d.y);
+}
+
+/**
  * **The pause, both directions.** A player asked to stop or restart the match; the host ruled.
  *
  * Two messages, and the split is the same one chat and commands make: `pausereq` says only
@@ -393,6 +426,11 @@ export class MatchLink {
    *  — the host has already decided this machine was meant to hear it. */
   onChatSaid: (line: ChatLine) => void = () => {};
 
+  /** A minimap signal to act on — the chat split again. On the HOST it is a client asking to
+   *  signal (route it to that player's allies and show it if we are one); on a client, the
+   *  host's ruling that we are one of the allies who sees it. */
+  onSignal: (from: number, x: number, y: number) => void = () => {};
+
   /** Host side: this player asked to stop or restart the match. The sender is the relay's
    *  stamp, never the payload's. Whether they may is the authority's ruling, not this
    *  module's — it only says who asked. */
@@ -469,6 +507,13 @@ export class MatchLink {
       }
       // Client side: the host's ruling on something somebody said.
       else if (isChatSaidMessage(data)) this.onChatSaid({ from: data.from, text: data.text, target: data.target });
+      // Host side: a client's minimap signal, stamped with the relay's sender like chat.
+      else if (isSignalMessage(data)) {
+        const player = this.seats.find((s) => s.peer === from)?.id;
+        if (player !== undefined) this.onSignal(player, data.x, data.y);
+      }
+      // Client side: an ally's signal the host routed to us.
+      else if (isSignalSentMessage(data)) this.onSignal(data.from, data.x, data.y);
       // Host side: somebody wants the match stopped (or started again). Stamped, like chat.
       else if (isPauseRequestMessage(data)) {
         const player = this.seats.find((s) => s.peer === from)?.id;
@@ -549,6 +594,20 @@ export class MatchLink {
     const peer = this.peerFor(player);
     if (peer === undefined) return;
     this.channel.send({ k: "chats", from: line.from, text: line.text, target: line.target } satisfies ChatSaidMessage, peer);
+  }
+
+  /** Client side: ask the host to put a signal on our allies' minimaps. Nothing is shown here
+   *  until the host routes it back — the same rule `askToSay` follows. */
+  askToSignal(x: number, y: number): void {
+    this.channel.send({ k: "signal", x, y } satisfies SignalMessage, this.hostPeer);
+  }
+
+  /** Host side: hand one ally the signal `from` raised. The host decided who is an ally. */
+  relaySignal(player: number, from: number, x: number, y: number): void {
+    if (player === this.localPlayer) return;
+    const peer = this.peerFor(player);
+    if (peer === undefined) return;
+    this.channel.send({ k: "signals", from, x, y } satisfies SignalSentMessage, peer);
   }
 
   /** The peer sitting behind a player slot — the reverse of `CommandRouter`'s lookup, because

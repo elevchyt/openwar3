@@ -505,6 +505,52 @@ console.log("the authority's verdict reaches the player it is about, and nobody 
   check("…while the loser got this one too", seen.length, 2);
 }
 
+// A MINIMAP SIGNAL (the Minimap Signal button, Alt-G, Alt+click) takes chat's road: the client
+// says only WHERE, the host stamps WHO from the relay, and the host alone addresses the allies.
+console.log("a minimap signal is stamped by the relay and reaches only the ally it is addressed to");
+{
+  const relay = new LoopbackRelay();
+  const host = relay.connect("host");
+  const peer = relay.connect("peer");
+  const third = relay.connect("third");
+  await tick();
+  host.send({ ...CREATE, maxPlayers: 3 });
+  await tick();
+  const roomId = host.last("created").room.id;
+  peer.send({ t: "join", roomId, playerName: "Joiner" });
+  third.send({ t: "join", roomId, playerName: "Bystander" });
+  await tick();
+  const THREE = [{ id: 0, peer: 1 }, { id: 1, peer: 2 }, { id: 2, peer: 3 }];
+  // One channel per connection, kept: a second `channelFor` on the same connection takes its
+  // traffic away from the link built on the first. The host is peer 1 in this room, so the
+  // clients are told so — `askToSignal` aims at `hostPeer`.
+  const hostCh = channelFor(host), peerCh = channelFor(peer), thirdCh = channelFor(third);
+  const hostLink = new MatchLink(hostCh, 0, THREE);
+  const peerLink = new MatchLink(peerCh, 1, THREE, 1);
+  const thirdLink = new MatchLink(thirdCh, 2, THREE, 1);
+  const atHost = [], atPeer = [], atThird = [];
+  hostLink.onSignal = (from, x, y) => atHost.push([from, x, y]);
+  peerLink.onSignal = (from, x, y) => atPeer.push([from, x, y]);
+  thirdLink.onSignal = (from, x, y) => atThird.push([from, x, y]);
+
+  peerLink.askToSignal(512, -256);
+  await tick();
+  check("the host hears it from the seat the relay says sent it", atHost, [[1, 512, -256]]);
+  // A payload that claims a sender is not believed: the `from` field is not read on the host side.
+  thirdCh.send({ k: "signal", from: 0, x: 1, y: 2 }, 1);
+  await tick();
+  check("…and a forged sender is ignored — the stamp is the relay's", atHost.at(-1), [2, 1, 2]);
+  peerCh.send({ k: "signal", x: "left", y: 2 }, 1);
+  await tick();
+  check("a malformed signal is not a signal", atHost.length, 2);
+
+  // The host has ruled player 1 an ally of player 1's own signal and player 2 not: it addresses 1.
+  hostLink.relaySignal(1, 1, 512, -256);
+  await tick();
+  check("the addressed ally gets the ruling, with the stamped sender", atPeer, [[1, 512, -256]]);
+  check("…and a player it was not addressed to gets nothing", atThird, []);
+}
+
 // Phase G item 1: once the victory/defeat screen is up the match is officially decided, so the
 // wire is dropped and every machine keeps its own private idea of the world from there — the
 // developer's rule, and how WC3 behaves. What matters on the wire is that the AUTHORITY says

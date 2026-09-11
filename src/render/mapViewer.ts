@@ -42,7 +42,7 @@ import { isDesktopApp } from "../assets/nativeInstall";
 import { loadCommandStrings, disabledIconPath, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
-import { CAMERA, MELEE, MISC_DATA, TEXT_TAG, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
+import { CAMERA, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
 import { makeMapFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
@@ -1143,6 +1143,7 @@ export class MapViewerScene {
   /** `EnableMinimapFilterButtons(enableAlly, …)` — a map may take the Ally Color Mode button
    *  away (the greyed `…Disabled` face, and Alt-A stops answering). On by default. */
   private allyColorButtonOn = true;
+  private creepButtonOn = true; // EnableMinimapFilterButtons' second switch
   private screen3 = new Float32Array(3); // scratch for the world→screen projection
   private world3 = new Float32Array(3);
   private minimap: HTMLCanvasElement | null = null;
@@ -2791,9 +2792,11 @@ export class MapViewerScene {
       // `call SetAllyColorFilterState( 0 )` to put the player back in player colours.
       allyColorFilter: () => this.rts?.allyColorMode() ?? 0,
       setAllyColorFilter: (state) => this.rts?.setAllyColorMode(state),
-      enableMinimapFilterButtons: (ally) => {
+      enableMinimapFilterButtons: (ally, creep) => {
         this.allyColorButtonOn = ally;
+        this.creepButtonOn = creep;
         this.hud?.refreshAllyColorButton();
+        this.hud?.refreshCreepButton();
       },
       // The quit button of the victory/defeat dialog. `doScoreScreen` asks for WC3's
       // post-game score screen (Glue\ScoreScreen.fdf) — we don't build one yet, so both
@@ -3354,6 +3357,11 @@ export class MapViewerScene {
         // On the HOST this is a client asking to be heard, so it goes through the full
         // routing. On a CLIENT it is the host's ruling, already routed — just show it.
         this.rts?.frozenClient ? this.showChat(line) : this.deliverChat(line);
+      // A minimap signal, both ways it arrives: an armed click on this machine (rts.onSignal),
+      // or over the wire — where the chat split holds again: the host routes, a client shows.
+      this.rts.onSignal = (x, y) => this.signalPing(this.localPlayer, x, y);
+      this.rts.onSignalHeard = (from, x, y) =>
+        this.rts?.frozenClient ? this.showSignal(from, x, y) : this.deliverSignal(from, x, y);
       // A Computer+ player conceding (issue #124). Raised as the ORDINARY player-left event on
       // the map's own script, which is what makes the buildings survive: Blizzard.j's
       // `MeleeTriggerActionPlayerLeft` shares the units with a surviving ally or hands them to
@@ -7129,11 +7137,23 @@ export class MapViewerScene {
         };
       },
       minimapPing: (wx, wy) => this.signalPing(this.localPlayer, wx, wy),
+      // The Minimap Signal button / Alt-G. Arming it drops whatever else was being aimed, the
+      // way arming any order does; the click that spends it is rts.orderClickAt/minimapClick.
+      armSignal: () => {
+        if (!this.rts) return;
+        if (this.placement) this.cancelPlacement();
+        this.rts.armedCast = null;
+        this.rts.armedItem = null;
+        this.rts.armedLoad = null;
+        this.rts.armedUnload = null;
+        this.rts.orderMode = "signal";
+      },
       selection: () => this.rts?.selectedInfo() ?? null,
       dots: () => this.rts?.dots() ?? [],
       allyColorMode: () => this.rts?.allyColorMode() ?? 0,
       cycleAllyColorMode: () => this.rts?.cycleAllyColorMode() ?? 0,
       allyColorButtonEnabled: () => this.allyColorButtonOn,
+      creepButtonEnabled: () => this.creepButtonOn,
       uiString: (key, fallback) => this.globalStrings?.strings.get(key) ?? fallback,
       creepCamps: () => this.rts?.creepCamps() ?? [],
       minimapIcons: () => this.rts?.minimapIcons() ?? [],
@@ -7616,21 +7636,67 @@ export class MapViewerScene {
    * Mark a spot on the minimap for the team, and — when somebody else is the one marking —
    * say so ("%s has marked the way.").
    *
-   * MINIMAL, and knowingly so. The ping is raised and shown locally; nothing carries it to
-   * the other machines yet, so today only this player and a map script (`PingMinimapForPlayer`
-   * lands here too) can raise one. The audience test and the line are the parts worth having
-   * early — when the wire learns to carry a ping, it calls this with the sender's id and the
-   * message is already right.
+   * Raised by the Minimap Signal button (Alt-G, then a click on the world or the minimap) and by
+   * Alt+left-click on either. It reaches the signaller and their allies and nobody else, over
+   * the wire in a LAN game (matchLink `signal`/`signals`, routed by the authority the way chat
+   * is), and every machine draws it in the colour ITS OWN Ally Color Mode gives (`signalColor`).
    */
   signalPing(player: number, x: number, y: number): void {
-    const co = player === this.localPlayer || (this.rts?.playersAreCoAllied(player, this.localPlayer) ?? false);
-    if (!co) return; // an enemy's marker is not ours to see
-    // The pinging player's own colour, so two allies marking two places are told apart.
-    const [r, g, b] = teamColorRgb(this.vfs, this.rts?.playerColor(player) ?? player);
-    this.hud?.ping({ x, y, duration: 0, r, g, b, extraEffects: true });
-    if (player !== this.localPlayer) {
-      this.announce(fillSlots(this.strings.forRace("Allyminimapping", this.localRace), [this.playerLabel(player)]));
+    // On a CLIENT our own signal goes to the host, which routes it to our allies and back to
+    // us — nothing is shown optimistically, for the reason `sendChat` gives.
+    const link = this.rts?.matchLinkHandle ?? null;
+    if (link && this.rts?.frozenClient && player === this.localPlayer) {
+      link.askToSignal(x, y);
+      return;
     }
+    this.deliverSignal(player, x, y);
+  }
+
+  /**
+   * The AUTHORITY's path for a signal: hand it to the signaller and every one of their allies
+   * (the authority's own alliance matrix decides who that is, so an enemy is never sent one),
+   * then show it here if this machine is among them.
+   */
+  private deliverSignal(from: number, x: number, y: number): void {
+    const link = this.rts?.matchLinkHandle ?? null;
+    if (link) {
+      for (let p = 0; p < MELEE.MAX_PLAYERS; p++) {
+        if (p === from || this.rts?.playersAreCoAllied(from, p)) link.relaySignal(p, from, x, y);
+      }
+    }
+    this.showSignal(from, x, y);
+  }
+
+  /** Put a signal on this machine's minimap, with its sound and — when an ally raised it —
+   *  "%s has marked the way." An enemy's signal is not ours to see. */
+  private showSignal(from: number, x: number, y: number): void {
+    const co = from === this.localPlayer || (this.rts?.playersAreCoAllied(from, this.localPlayer) ?? false);
+    if (!co) return;
+    const [r, g, b] = this.signalColor(from);
+    this.hud?.ping({ x, y, duration: 0, r, g, b, extraEffects: true });
+    // `UI\SoundInfo\UISounds.slk` MapPing (Sound\Interface\MapPing.wav) — every signal sounds,
+    // yours included, which is how you hear that the one you just placed went out.
+    this.sounds?.playUi("MapPing");
+    if (from !== this.localPlayer) {
+      this.announce(fillSlots(this.strings.forRace("Allyminimapping", this.localRace), [this.playerLabel(from)]));
+    }
+  }
+
+  /**
+   * The colour a signal is drawn in on THIS machine, read off this machine's Ally Color Mode —
+   * the viewer's setting, not the signaller's. In mode 1 (player colours) it is the signaller's
+   * own colour, so two allies marking two places are told apart. From mode 2 up the minimap is
+   * filtered, and a signal takes the tone a dot of the same player would: `FogColorPlayer` for
+   * your own and `FogColorAlly` for an ally's (`UI\MiscData.txt` [FogOfWar], A-R-G-B).
+   */
+  private signalColor(from: number): [number, number, number] {
+    const mode = this.rts?.allyColorMode() ?? 0;
+    if (mode === 0) {
+      const [r, g, b] = teamColorRgb(this.vfs, this.rts?.playerColor(from) ?? from);
+      return [r, g, b];
+    }
+    const [, r, g, b] = from === this.localPlayer ? MINIMAP.FogColorPlayer : MINIMAP.FogColorAlly;
+    return [r, g, b];
   }
 
   /**
@@ -13130,6 +13196,14 @@ export class MapViewerScene {
         return;
       }
       if (e.button === 0) {
+        // Alt+left-click is the Minimap Signal's quickcast in the game world as on the minimap
+        // ("Alternately, you can hold down Alt and left-click on the minimap or game world…",
+        // MINIMAPSIGNALTOOLTIP_UBER): no reticle, and never an order, a placement or a select.
+        if (e.altKey && this.rts) {
+          const ground = this.rts.groundPoint(e.offsetX, e.offsetY);
+          if (ground) this.signalPing(this.localPlayer, ground[0], ground[1]);
+          return;
+        }
         // WC3 commits a targeted order the instant the button goes DOWN — the
         // build placement, the attack-move point, the spell's aim click. Doing it
         // on pointerup instead (as we used to) meant a fast click that slid a few
