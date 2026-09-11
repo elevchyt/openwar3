@@ -3316,9 +3316,34 @@ refactor can pass every suite while showing an enemy base through the fog.
   instance of exactly that, done for the victory/defeat dialog. The half-populated-record risk in
   option 2 is bounded and testable, and sizing it is the first move.
 - **Host input delay.** Handicap the host to the room's median RTT, or accept the advantage in v1?
-- **NAT traversal.** Pure relay (simple, all traffic through the free box, bandwidth-bound) vs. WebRTC
-  data channels with the cloud box as signaling only (cheaper to host, much more moving parts).
-  Bandwidth on a free tier likely decides this.
+- **NAT traversal — a FUTURE PLAN: direct peer-to-peer (WebRTC), the server only introduces the
+  players.** Not started; written down after the first real internet test (2026-09-12).
+
+  *Why.* Every message in a relayed match hairpins through the server. Two players in Greece on the
+  OpenWar3 server (Amsterdam) saw an in-game ping of 130–150 ms, although one round trip to the
+  relay measured ~64 ms: the probe goes player → Amsterdam → host → Amsterdam → player, two round
+  trips, before the pose buffer adds its ~70 ms of drawn delay. Players connected directly would pay
+  their own distance only — tens of milliseconds within a country — and the server's egress, the one
+  thing it is billed for, would drop to the lobby's trickle. (A relay nearer the players is the
+  cheaper half-measure: a small box in Athens/Sofia/Milan runs `server/relay.mjs` as it is.)
+
+  *Shape.* The authority does not move and the topology stays a STAR: each client opens an
+  `RTCDataChannel` to the HOST, since the host is the only machine anybody needs to reach. The
+  server becomes signaling only, and needs no change to be that — the SDP offer/answer and ICE
+  candidates ride the existing opaque `relay`/`deliver` envelope, addressed by peer id like any
+  other game traffic. Two channels per link: one unordered and unreliable for snapshots (a late
+  payload is stale anyway, and the pose buffer already holds through a missing one), one ordered and
+  reliable for commands, chat, lobby traffic and deaths. The match already talks to a channel, not
+  to a socket (`LanLobby` satisfies `MatchChannel` structurally), so a peer channel is a new
+  implementation behind that seam rather than a change to `MatchLink`.
+
+  *What is hard.* Some home and mobile networks cannot be punched through (symmetric NAT); those
+  links need a TURN server, which costs bandwidth exactly as the relay does — so the relay we have
+  IS the fallback, and a link whose ICE fails simply stays on the WebSocket path. Public STUN is
+  enough for discovery. The host's IP becomes visible to its players, which is acceptable among
+  friends and worth stating in the UI. Headless tests need a Node WebRTC binding
+  (`node-datachannel` or similar) for the node-peer harness. Reconnect (item 11) must re-run the
+  handshake on a rejoin instead of only re-sending a token.
 - ~~**Snapshot encoding.**~~ **Decided — JSON first, binary when it hurts.** The developer's call,
   taken knowingly rather than inherited: this file had leaned that way since before there was a
   snapshot to encode, which made it a guess and not a decision. Snapshots are new code and will be
