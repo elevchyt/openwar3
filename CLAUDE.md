@@ -519,7 +519,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   the air one listed FIRST) and the Birth/Stand/Death set matching the SIZE of the body it
   landed on (`bodySize` → `BuffFx.anim` → `sizedSeq`). And a friendly autocast buff — Bloodlust,
   Frost Armor, Inner Fire — goes on the ally IN THE FIGHT and never on the caster while there
-  is anybody else: the Ogre Magi buffs the Ogres and takes its own last.
+  is anybody else: the Ogre Magi buffs the Ogres and takes its own last. A camp acts as ONE
+  unit, and every creep in its fight speaks for it (`campFightAnchor`) — a HELPER too, measured
+  against the post of the call it answered, which is what keeps the call from hopping camps;
+  skipping helpers is what left "one creep fighting, the rest standing there" the moment the
+  creep that pulled the camp stopped. A creep's meld takes its Hold with it however the meld
+  ends (`breakInvisibility`) — a Hold that outlived one at dawn froze the Nightcrawler at its
+  post for the rest of the game.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
   that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
   files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its

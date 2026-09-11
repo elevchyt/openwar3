@@ -313,5 +313,67 @@ console.log("\nLightning Shield wants a crowd");
   check("one touching two others is", trio.some((x) => buffIdOn(x, "Blsh")), true);
 }
 
+console.log("\nevery creep in a fight speaks for its camp, not only the one that started it");
+{
+  // Battle.net creep basics: "a creep camp acts as one unit; attack one and they all attack."
+  // Only the ORIGINATOR used to anchor the camp (SimWorld.campFightAnchor) — and when one creep
+  // pulls a camp, everybody else in the fight is a helper — so once it stopped fighting, the
+  // camp's fight was invisible to its own members.
+  const w = world();
+  const x = creep(w, "ngno", 1000, 1000, CREEP_CAMP_ACQUIRE_RANGE);
+  const y = creep(w, "ngno", 1150, 1000, CREEP_CAMP_ACQUIRE_RANGE);
+  const z = creep(w, "ngno", 1300, 1000, CREEP_CAMP_ACQUIRE_RANGE);
+  const f1 = footman(w, 1000, 800); // inside x's 200 only
+  w.issueHold(f1.id);
+  runKeeping(w, null, 2, immortal(y, z, f1));
+  check("x pulled the camp, y and z answered it", x.order === "attack" && y.campHelper && z.campHelper, true);
+  w.killUnit(x.id);
+  const late = creep(w, "ngno", 1150, 1150, CREEP_CAMP_ACQUIRE_RANGE); // a camp-mate that missed the shout
+  runKeeping(w, null, 3, immortal(y, z, f1));
+  check("with the originator dead, a camp-mate still joins the helpers' fight", late.targetId, f1.id);
+
+  // …and a creep that finishes its target is still in the fight: it looks as far as its
+  // weapon's acquisition (creepFightRange), not the Camp 200 it was pulled at.
+  const f2 = footman(w, 1300, 1400); // 400 off z — past the 200, inside the Gnoll's 500
+  w.issueHold(f2.id);
+  f2.hp = f2.maxHp = 4000;
+  w.killUnit(f1.id);
+  run(w, null, 4);
+  check("its target down, the camp rolls onto the Footman still standing there", [y, z, late].every((c) => c.targetId === f2.id), true);
+  check("…rather than walking home past it", [y, z, late].some((c) => c.returning), false);
+
+  // The helper's camp is the camp that CALLED it, which is what keeps issue #55's rule: the
+  // call does not hop. A creep 600 past the helper, and 900 from the post that shouted, stays put.
+  const w2 = world();
+  const a = creep(w2, "ngno", 1000, 1000, CREEP_CAMP_ACQUIRE_RANGE);
+  const b = creep(w2, "ngno", 1500, 1000, CREEP_CAMP_ACQUIRE_RANGE); // a's camp (500)
+  const far = creep(w2, "ngno", 1900, 1000, CREEP_CAMP_ACQUIRE_RANGE); // b's neighbour, 900 from a
+  const g = footman(w2, 1000, 850);
+  w2.issueHold(g.id);
+  runKeeping(w2, null, 4, immortal(a, b, g));
+  check("the helper answers", b.targetId, g.id);
+  check("…and the camp next door does not answer the helper", far.order, "idle");
+}
+
+console.log("\na poisoner that has moved on is not pulled back onto the body it already poisoned");
+{
+  // The spread (unpoisonedTarget) moves a Nightcrawler off a poisoned body; the half-second
+  // re-pick then moved it back whenever that body was on a higher rung — a SUMMON is the top
+  // one — so it turned every tick of the pick and never reached the Footman at all.
+  const w = world();
+  const nc = creep(w, "nmrm", 1000, 1000);
+  const ele = spawn(w, "hwat", 1090, 1000, 0, 0);
+  ele.isSummon = true;
+  const a = footman(w, 1000, 1090);
+  w.issueHold(ele.id);
+  w.issueHold(a.id);
+  w.issueAttack(ele.id, nc.id, false, true);
+  let switches = 0, last = null;
+  runKeeping(w, null, 12, () => { immortal(nc, ele, a)(); if (nc.targetId !== last) { switches++; last = nc.targetId; } });
+  const poisoned = (u) => u.buffs.some((b) => b.kind === "dot" && b.sourceId === nc.id);
+  check("both the Water Elemental and the Footman carry its poison", poisoned(ele) && poisoned(a), true);
+  check("…without thrashing between them", switches <= 5, true);
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nall creep-behaviour checks passed");
 process.exit(failed ? 1 : 0);

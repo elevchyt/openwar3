@@ -497,6 +497,30 @@ console.log("\nHide is lying in wait, and the wait ends when the camp is attacke
   check("…and it does not re-meld while the fight is on", crawler.cloaked, false);
 }
 
+console.log("\n…and however the meld ends, the Hold it put the creep on ends with it");
+{
+  // The meld parks a creep on Hold Position (spells.ts `Ashm`), and nothing a creep does takes
+  // a Hold off: the camp's shout rouses the IDLE, tickAcquire never runs for Hold, and return
+  // fire answers only from idle or attack. So a Nightcrawler whose meld ended at DAWN stood on
+  // Hold at its post for the rest of the game and joined no fight its camp had
+  // (SimWorld.breakInvisibility).
+  const w = world();
+  w.timeOfDay = 21;
+  const crawler = creep(w, "nmrm", 1000, 1000, 200);
+  const mate = creep(w, "ngno", 1080, 1000, 200);
+  run(w, null, 4);
+  check("hidden on the meld's Hold overnight", crawler.invisible && crawler.order === "hold", true);
+  w.timeOfDay = 10;
+  run(w, null, 1);
+  check("dawn ends the meld", crawler.cloaked, false);
+  check("…and the Hold with it", crawler.order, "idle");
+  const f = footman(w, 1080, 1150); // inside the Gnoll's Camp 200, outside the Nightcrawler's
+  f.hp = f.maxHp = 4000;
+  run(w, null, 4);
+  check("the Gnoll engages", mate.targetId, f.id);
+  check("…and the Nightcrawler is in the fight with it", crawler.order === "attack" && crawler.targetId === f.id, true);
+}
+
 console.log("\nan Ogre Magi Bloodlusts the OGRE, and itself only when there is nobody else");
 {
   // Maintainer's observation against the real client: a camp's Bloodlust goes on another

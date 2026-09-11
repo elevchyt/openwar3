@@ -1913,6 +1913,8 @@ export interface SimUnit {
   asleep: boolean; // currently asleep (won't auto-acquire; wakes on damage/proximity/camp)
   returning: boolean; // leashing back to the guard point (ignores enemies until home)
   campHelper: boolean; // fighting only because a camp-mate called for help (may not call for help itself)
+  campCallX: number; // …and, while it is, the guard post of the creep whose call it answered (campFightAnchor)
+  campCallY: number;
   campGuard: boolean; // war3mapUnits.doo targetAcquisition -2 ("Camp") — guards its ground, deaf to new construction
   /**
    * REINCARNATING: seconds left of the ability's own "Reincarnation Delay" (`Ore1` — 5 on the
@@ -7520,6 +7522,8 @@ export class SimWorld {
       | "asleep"
       | "returning"
       | "campHelper"
+      | "campCallX"
+      | "campCallY"
       | "campGuard"
       | "aggroDropped"
       | "creepFighting"
@@ -7784,6 +7788,8 @@ export class SimWorld {
       asleep: false,
       returning: false,
       campHelper: false,
+      campCallX: 0,
+      campCallY: 0,
       aggroDropped: false,
       campGuard: false,
       creepFighting: false,
@@ -15472,6 +15478,19 @@ export class SimWorld {
    *  camp controller, so they just fall idle here and re-engage via tickCreep/
    *  tickAcquire next tick. */
   private reacquireOrStop(u: SimUnit): void {
+    // A CREEP that loses its target is still IN its fight, and a creep in a fight looks as far as
+    // its own weapon's acquisition (`creepFightRange`), not the 200 a Camp creep is pulled at.
+    // Stood down instead, it asked `tickAcquire` the 200 — so a Gnoll that had just killed the
+    // Footman in front of it, with the Riflemen who were shooting its camp-mates 300 off, walked
+    // home past them (tickCreep's displaced-and-idle return), dozed off beside them at night, or
+    // hid from them. The pick is the ladder's, as for any other creep target, and it does NOT
+    // shout: the camp is already in this fight, and a helper stays one (campFightAnchor).
+    // Not the same target handed back (a target this very call is abandoning), nothing it may
+    // not attack, and no tower it would only break off again (fleesTower).
+    if (u.isCreep) {
+      const next = this.bestCreepTarget(u, this.creepFightRange(u));
+      if (next && next.id !== u.targetId && !next.invulnerable && !this.fleesTower(u, next) && this.issueAttack(u.id, next.id)) return;
+    }
     const acq = this.acquireRange(u);
     if (acq > 0 && !u.isCreep) {
       const next = this.acquireTarget(u, acq);
@@ -16384,9 +16403,7 @@ export class SimWorld {
    *
    * So the CAMP's fight is a break of its own, called from the two places a camp learns it is
    * in one (`alertCamp`, the call for help, and `tickCreep`'s standing check). The hold goes
-   * back with it: melding put the unit into that stance (spells.ts `Ashm` — it is what stops
-   * a melded unit walking out of its own invisibility), and a creep left holding is one the
-   * camp's own cohesion (`campFightTarget`) and `tickAcquire` can no longer move.
+   * back with it — in `breakInvisibility`, which is where EVERY meld ends.
    *
    * Creeps only. A night elf player's melded Archer is not roused by her neighbours being
    * shot at — nothing in the game says she is, and the whole point of the racial is that the
@@ -16396,10 +16413,6 @@ export class SimWorld {
     if (!u.isCreep || u.hp <= 0 || !u.cloaked) return;
     if (!u.buffs.some((b) => b.kind === "invisible" && b.meld)) return;
     this.breakInvisibility(u);
-    if (u.order === "hold") {
-      u.order = "idle";
-      this.settle(u);
-    }
   }
 
   private tickMeld(u: SimUnit): void {
@@ -16453,9 +16466,11 @@ export class SimWorld {
   private breakInvisibility(u: SimUnit): number {
     if (!u.cloaked) return 0;
     let bonus = 0;
+    let melded = false;
     const groups = new Set<string>();
     for (const b of u.buffs) {
       if (b.kind !== "invisible") continue;
+      melded ||= b.meld === true;
       // THE BREAK IS OWED FROM THE PRESS; THE BONUS ONLY FROM THE FADE. Attacking during the
       // Transition Time still gives the unit away — it is an attack, and the ability ends —
       // but the Backstab Damage is what full invisibility BUYS, so a blow struck inside the
@@ -16466,6 +16481,19 @@ export class SimWorld {
     }
     u.buffs = u.buffs.filter((b) => b.kind !== "invisible" && !(b.group && groups.has(b.group)));
     this.recomputeStats(u);
+    // A CREEP's meld takes its Hold Position with it, however the meld ends. Melding is what
+    // put the creep on Hold (spells.ts `Ashm`), and nothing else a creep does ever takes a
+    // Hold off again: a holding unit is skipped by the camp's shout (`alertCamp` rouses the
+    // IDLE), by `tickAcquire` (never run for Hold) and by return fire (`provoke` answers only
+    // from idle or attack). Taken back off only by `unhideCreep`, a Murloc Nightcrawler whose
+    // meld ended any other way — DAWN (tickMeld), its own swing at something beside it
+    // (tickSwing), a shove — stood on Hold at its post for the rest of the game, striking what
+    // touched it and joining no fight its camp had. A player's melded Archer keeps the stance:
+    // there it is the player's, and whether to come out of it is the player's call.
+    if (melded && u.isCreep && u.order === "hold") {
+      u.order = "idle";
+      this.settle(u);
+    }
     return bonus;
   }
 
@@ -18347,7 +18375,7 @@ export class SimWorld {
     // …and a creep that a TOWER has worn under CREEP_TOWER_FLEE_HP does not come back for
     // more: the retreat tickCreep makes would otherwise be undone by the next shot to land on
     // the walk home (see the tower rule there).
-    const fleeing = target.isCreep && attacker?.building && attacker.weapon && target.hp < CREEP_TOWER_FLEE_HP * target.maxHp;
+    const fleeing = attacker !== undefined && this.fleesTower(target, attacker);
     if (notFighting && !fleeing && target.weapon && !passive && !target.returning && attacker && this.hostile(target, attacker)) {
       // A creep hit by a WARD (or by a worker) returns fire on whatever it can see that
       // outranks the thing that hit it — see creepTargetOver. A Serpent Ward's whole job is
@@ -20628,11 +20656,8 @@ export class SimWorld {
     } else if (u.isCreep) {
       // Nothing in our own aggro range, but if a camp-mate is still fighting, go
       // help — no creep sits idle at the post while its camp is in a fight.
-      const help = this.campFightTarget(u);
-      if (help) {
-        this.issueAttack(u.id, help.id);
-        u.campHelper = true; // answering the shout — don't relay it onward
-      }
+      const help = this.campFightAnchor(u);
+      if (help) this.joinCampFight(u, help); // answering the shout — don't relay it onward
     }
   }
 
@@ -20872,9 +20897,18 @@ export class SimWorld {
         // the trick "does not always work as level 7+ creeps are a bit different" (176).
         //
         // Looked for over the FIGHT range, not the 200 the camp was pulled at.
-        if (!(u.inCombat && cur.isPeon)) {
+        //
+        // Two things are never re-opened by it, whatever the ladder says. A SWING IN FLIGHT —
+        // tickAttack's own rule, and `issueAttack` is what throws the blow away. And a POISONER
+        // part-way through spreading itself (above) is not taken back onto a body that is
+        // already wearing its poison: the spread moved it off that body for exactly that
+        // reason, so on the next pass the ladder moved it back — a Nightcrawler between a Water
+        // Elemental (a summon, the top rung) and a Footman turned fifteen times in twelve
+        // seconds, landed eight blows, and never poisoned the Footman at all.
+        if (u.swingLeft < 0 && !(u.inCombat && cur.isPeon)) {
           const best = this.bestCreepTarget(u, this.creepFightRange(u));
-          if (best && best.id !== cur.id) {
+          const respread = best !== null && this.spreadsPoison(u) && this.poisonedBy(best, u) && !this.poisonedBy(cur, u);
+          if (best && best.id !== cur.id && !respread) {
             const gapCur = Math.hypot(cur.x - u.x, cur.y - u.y) - u.radius - cur.radius;
             const gapBest = Math.hypot(best.x - u.x, best.y - u.y) - u.radius - best.radius;
             const upgrade =
@@ -20890,7 +20924,7 @@ export class SimWorld {
         // A TOWER is left alone once it hurts: "They are very aggressive with buildings, but
         // will retreat from defensive towers if they fall below 60% health" (Wowpedia, Creep).
         // Only a building that shoots back — a creep chewing on a Farm chews on.
-        if (cur.building && cur.weapon && u.hp < CREEP_TOWER_FLEE_HP * u.maxHp) {
+        if (this.fleesTower(u, cur)) {
           this.beginCreepReturn(u);
           return true;
         }
@@ -20905,7 +20939,13 @@ export class SimWorld {
         // while a camp-mate is still in the fight — the camp commits as one and
         // breaks off together (or at the hard MaxGuardDistance above). This is what
         // stops a single creep being left fighting at max range while the rest sit.
-        if (this.campFightTarget(u)) {
+        //
+        // Only a camp-mate fighting INSIDE its own GuardDistance holds it here, though. Every
+        // fighter now speaks for its camp (campFightAnchor), and two creeps both dragged out
+        // past 600 would otherwise hold each other's clocks at zero and chase a kiting hero
+        // to the 1000 together. Out there the rule is MiscGame's own, per creep: a creep that
+        // is still being hit stays (landDamage resets its clock), one that is not goes home.
+        if (this.campFightTarget(u, true)) {
           u.strayT = 0;
         } else {
           u.strayT += dt;
@@ -20928,10 +20968,9 @@ export class SimWorld {
     if (u.order === "idle" && dist > CREEP_RETURN_TRIGGER && !this.nearestEnemy(u, u.aggroRange, true)) {
       // About to walk home — but if a camp-mate is still fighting, go help instead
       // of standing down while the camp is engaged.
-      const help = u.weapon ? this.campFightTarget(u) : null;
+      const help = u.weapon ? this.campFightAnchor(u) : null;
       if (help) {
-        this.issueAttack(u.id, help.id);
-        u.campHelper = true; // answering the shout — don't relay it onward
+        this.joinCampFight(u, help); // answering the shout — don't relay it onward
         return false;
       }
       this.beginCreepReturn(u);
@@ -21146,6 +21185,10 @@ export class SimWorld {
         // picked something better found it inside its OWN aggro range, which is exactly what
         // makes a creep an originator in tickAcquire — so it may shout in its turn.
         c.campHelper = t === target;
+        // …and a helper remembers WHOSE camp it is helping: the shouter's post, which is what
+        // `sameCamp` just measured this creep against (campFightAnchor).
+        c.campCallX = u.guardX;
+        c.campCallY = u.guardY;
       }
     }
   }
@@ -21178,24 +21221,66 @@ export class SimWorld {
     }
   }
 
-  /** A hostile currently being fought by a live camp-mate of `u`, or null. Used to
-   *  keep the camp committed as one: while any member is engaged, the rest rejoin
-   *  rather than idling at the post or peeling off home — even when the fight has
-   *  been kited out near the leash limit (the exact case where a lone creep used to
-   *  be left fighting while its camp sat back).
+  /**
+   * The live camp-mate of `u` whose fight `u` would join, or null. Used to keep the camp
+   * committed as one: while any member is engaged, the rest rejoin rather than idling at the
+   * post, dozing off, hiding, or peeling off home — even when the fight has been kited out
+   * near the leash limit (the exact case where a lone creep used to be left fighting while
+   * its camp sat back). `atHome` narrows it to a mate still inside its own GuardDistance (the
+   * leash, in tickCreep).
    *
-   *  Only an ORIGINATOR anchors the camp — one that acquired the enemy inside its own
-   *  aggro range or was struck by it. A camp-mate that is itself only answering a shout
-   *  (campHelper) is skipped, so the call can't hop from camp to camp (issue #55). */
-  private campFightTarget(u: SimUnit): SimUnit | null {
+   * EVERY fighter speaks for its camp, and what a fighter's camp IS depends on why it is
+   * fighting. An ORIGINATOR — it acquired the enemy inside its own aggro range, or was struck —
+   * speaks for the creeps within CreepCallForHelp of its own post, which is `sameCamp`. A
+   * HELPER speaks for the creeps within CreepCallForHelp of the post of the creep whose call it
+   * answered (`campCallX/Y`) — the very set that call reached — and never for its own
+   * neighbours, which is what keeps the call from hopping camp to camp (issue #55: a creep 2200
+   * units from the player charging out of a camp nobody touched).
+   *
+   * Helpers used to be skipped outright, and that was the "one creep fights, the rest of its
+   * camp stands there" report: pull a camp with one creep, and everybody else in the fight was
+   * a helper. The moment the originator stopped fighting — killed, its own target down, leashed
+   * home — the camp's fight was invisible to its own members. A creep that had missed the shout
+   * (mid-cast, on a meld's Hold, walking back to its post) never joined; one that finished its
+   * target walked home out of the middle of it; a Nightcrawler between blows re-melded
+   * (`tickAutoMeld` asks `creepInFight`) and stood invisible at its post while the camp died.
+   */
+  private campFightAnchor(u: SimUnit, atHome = false): SimUnit | null {
     for (const c of this.units.values()) {
-      if (c === u || !c.isCreep || c.hp <= 0 || c.returning || c.campHelper) continue;
+      if (c === u || !c.isCreep || c.hp <= 0 || c.returning) continue;
       if (c.order !== "attack" || c.targetId === null) continue;
-      if (!this.sameCamp(c, u)) continue;
+      const ax = c.campHelper ? c.campCallX : c.guardX;
+      const ay = c.campHelper ? c.campCallY : c.guardY;
+      if (Math.hypot(u.guardX - ax, u.guardY - ay) > CREEP_CALL_FOR_HELP) continue;
+      if (atHome && Math.hypot(c.x - c.guardX, c.y - c.guardY) >= GUARD_DISTANCE) continue;
       const t = this.units.get(c.targetId);
-      if (t && this.hostile(u, t) && this.canAttack(u, t)) return t;
+      // …and a fight `u` could actually be in: an enemy of its own that it has a weapon for, and
+      // not a tower it is too hurt to stand under (it would only walk out and break off again).
+      if (t && this.hostile(u, t) && this.canAttack(u, t) && !this.fleesTower(u, t)) return c;
     }
     return null;
+  }
+
+  /** The enemy a live camp-mate of `u` is fighting — see `campFightAnchor`. */
+  private campFightTarget(u: SimUnit, atHome = false): SimUnit | null {
+    const c = this.campFightAnchor(u, atHome);
+    return c ? (this.units.get(c.targetId!) ?? null) : null;
+  }
+
+  /** `u` answers its camp: onto the anchor's target, as a HELPER of the same call the anchor
+   *  speaks for (its own post if it is an originator, the post it was called from if not). */
+  private joinCampFight(u: SimUnit, anchor: SimUnit): void {
+    if (!this.issueAttack(u.id, anchor.targetId!)) return;
+    u.campHelper = true;
+    u.campCallX = anchor.campHelper ? anchor.campCallX : anchor.guardX;
+    u.campCallY = anchor.campHelper ? anchor.campCallY : anchor.guardY;
+  }
+
+  /** Is this a TOWER a creep is too hurt to fight? "They are very aggressive with buildings,
+   *  but will retreat from defensive towers if they fall below 60% health" (Wowpedia, Creep) —
+   *  only a building that shoots back, and only below CREEP_TOWER_FLEE_HP of the creep's own. */
+  private fleesTower(u: SimUnit, t: SimUnit): boolean {
+    return u.isCreep && !!t.building && !!t.weapon && u.hp < CREEP_TOWER_FLEE_HP * u.maxHp;
   }
 
   // --- movement -----------------------------------------------------------

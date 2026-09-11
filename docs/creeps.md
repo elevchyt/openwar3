@@ -46,6 +46,37 @@ For what no file states:
 | **Ensnare's net is picked per target**: the AIR buff row or the GROUND one (`Bena`/`Beng`, told apart by their `EditorSuffix`), and the Birth/Stand/Death set for the SIZE of the body it landed on. | `[Aens] buffid1`; the models' own clip names | `netFx` in spells.ts, `bodySize`, `AbilityRegistry.domainBuff`, `sizedSeq` |
 | A creep **casts only while its camp is in a fight**; Heal is the one autocast it runs at rest. A casting creep counts as fighting. | (the whole reason a camp does not Cyclone passers-by) | `creepInFight`, `creepAggroed`, `tickAutocast`, `CreepView.engaged` |
 | **Sleep**, **call for help**, leash and return, the placement and shop notifications. | MiscGame/MiscData; creep basics | `tickCreep`, `alertCamp`, `notifyCreepsOf*` — see the code |
+| **A camp acts as one unit**: every creep in a fight speaks for its camp — an originator for the creeps round its own post, a helper for the creeps round the post that CALLED it (so the call still never hops, issue #55). A creep that loses its target rolls onto the next inside its fight range instead of standing down. | Battle.net creep basics | `campFightAnchor`, `joinCampFight`, `SimUnit.campCallX/Y`, `reacquireOrStop` |
+| Past `GuardDistance` only a camp-mate fighting INSIDE its own 600 holds a creep's leash; out there each creep is on MiscGame's own clock. | MiscGame `GuardDistance`/`GuardReturnTime` | the leash in `tickCreep` |
+| A creep's meld takes its **Hold** with it however it ends (dawn, its own swing, a shove). | (the stance is the meld's, not the creep's) | `breakInvisibility` |
+| The re-pick never throws away a **swing in flight**, and never takes a poisoner back onto a body already wearing its poison. | tickAttack's own rule; Wowpedia (poisoners) | the re-pick in `tickCreep` |
+
+## Why a camp came apart in the middle of a fight
+
+Two reports — "one creep fights and the rest of its camp stands there", and "the Murloc
+Nightcrawler freezes while its camp fights" — were four bugs, each reproduced headless first
+(`tools/sim-creep-behaviour-test.cjs`, `tools/sim-creep-spells-test.cjs` pin them):
+
+1. **Only the originator anchored the camp.** `campFightTarget` skipped every helper to stop the
+   call hopping camp to camp. But when one creep pulls a camp, EVERY other creep in the fight is
+   a helper, so once the originator stopped fighting (killed, its target down, leashed) the fight
+   was invisible to the camp: a creep that had missed the shout never joined, one that finished
+   its target walked home, and a Nightcrawler between blows re-melded (`tickAutoMeld` asks
+   `creepInFight`). A helper now anchors too — measured against the post of the call it answered,
+   which is exactly the set that call could reach, so nothing hops.
+2. **A creep that killed its target stood down** and asked `tickAcquire` its Camp 200, with the
+   rest of the enemy 300 off. It now rolls onto the next target over `creepFightRange`, the rule
+   the table's second row already states for a creep in a fight.
+3. **A meld's Hold outlived the meld.** Only `unhideCreep` took the Hold back off; a meld that ended
+   at DAWN left the Nightcrawler on Hold for the rest of the game, and nothing a creep does lifts
+   a Hold — the shout rouses the idle, `tickAcquire` never runs for Hold, return fire answers only
+   from idle or attack.
+4. **The poison spread and the re-pick undid each other.** The spread moves a poisoner off a
+   poisoned body; the re-pick moved it back whenever that body was on a higher rung (a summon is
+   the top one). Fifteen turns in twelve seconds, eight blows, the Footman never poisoned.
+
+With helpers anchoring, the leash needed one narrowing: two creeps both dragged past 600 held each
+other's clocks at zero and chased a kiting hero to the 1000 together.
 
 ## The three wiring bugs that made "creeps are missing their abilities"
 
