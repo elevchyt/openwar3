@@ -13,6 +13,8 @@
 // The ping is the slowest link this machine is on (game/matchLink.ts PingMessage): `undefined`
 // means "no match link" (single player), `null` "linked, no echo home yet".
 
+import { setGameTip } from "./gameTip";
+
 const UPDATE_PERIOD = 500; // ms between DOM updates (readable, not flickery)
 
 /** The full readout is the developer's; a shipped build shows the player's two numbers. */
@@ -37,11 +39,11 @@ export class MetricsOverlay {
     this.muteBtn = document.createElement("button");
     this.muteBtn.className = "metrics-mute";
     this.muteBtn.textContent = "🔊";
-    this.muteBtn.title = "Mute all sound";
+    setGameTip(this.muteBtn, "Mute all sound");
     this.muteBtn.onclick = () => {
       this.muted = !this.muted;
       this.muteBtn.textContent = this.muted ? "🔇" : "🔊";
-      this.muteBtn.title = this.muted ? "Unmute sound" : "Mute all sound";
+      setGameTip(this.muteBtn, this.muted ? "Unmute sound" : "Mute all sound");
       this.onToggleMute?.(this.muted);
     };
     this.muteBtn.hidden = !DEV_READOUT; // a player's strip carries no debug control

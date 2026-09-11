@@ -1,6 +1,7 @@
 import type { FdfFrame } from "./parser";
 import { firstProp, hasFlag, strProp } from "./library";
 import { wc3ToHtml } from "../wc3Text";
+import { setGameTip } from "../gameTip";
 
 // The interactive FDF widgets beyond the button family (issue #61): EDITBOX (text
 // input), POPUPMENU (the race / team / colour / handicap dropdowns) and the LISTBOX-
@@ -567,7 +568,7 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
         action.type = "button";
         action.className = "fdf-list-action";
         action.textContent = it.action.label;
-        if (it.action.title) action.title = it.action.title;
+        if (it.action.title) setGameTip(action, it.action.title);
         action.addEventListener("click", (e) => {
           e.stopPropagation(); // the row is not being PICKED, its control is being pressed
           if (enabled) it.action?.onClick();

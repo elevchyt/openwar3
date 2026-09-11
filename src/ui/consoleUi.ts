@@ -38,6 +38,7 @@ import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { type FdfLibrary } from "./fdf/library";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { setGameTip } from "./gameTip";
 
 const CONSOLE_FDF = "UI\\FrameDef\\UI\\ConsoleUI.fdf";
 const UPPER_BAR_FDF = "UI\\FrameDef\\UI\\UpperButtonBar.fdf";
@@ -262,7 +263,7 @@ export class ConsoleUi {
     const slot = this.clockSlot ?? document.createElement("div");
     if (!reused) {
       slot.className = "hud-clock hud-clock-skinned";
-      slot.title = "Day/night cycle";
+      setGameTip(slot, "Day/night cycle");
     }
     slot.style.left = `${gap.left - host.left}px`;
     slot.style.top = `${gap.top - host.top}px`;

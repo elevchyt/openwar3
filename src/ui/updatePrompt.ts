@@ -1,5 +1,6 @@
 import { showGlueDialog, type GlueDialog } from "./glueDialog";
 import { showUpdateOverlay, type UpdateOverlay } from "./updateOverlay";
+import { setGameTip } from "./gameTip";
 import { downloadUpdate, installUpdate, onUpdateState, type UpdateState } from "../assets/nativeInstall";
 import type { DataSource } from "../vfs/types";
 
@@ -48,7 +49,7 @@ function linkVersionLine(dialog: GlueDialog): void {
   a.href = RELEASES_URL;
   a.target = "_blank";
   a.rel = "noopener noreferrer";
-  a.title = RELEASES_URL;
+  setGameTip(a, RELEASES_URL);
   gold.replaceWith(a);
   a.appendChild(gold);
 }

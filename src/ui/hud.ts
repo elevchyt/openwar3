@@ -16,6 +16,7 @@ import type { MinimapDot } from "../game/minimapView";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { MinimapModel } from "./minimapModel";
+import { setGameTip } from "./gameTip";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 import { anyModalOpen } from "./modal";
@@ -2331,7 +2332,7 @@ export class GameHud {
     // under the press exactly as a hero-bar button does — same `onPress`, same `.pressed`.
     this.idleWorkerBadge = document.createElement("button");
     this.idleWorkerBadge.className = "hud-idle-worker hud-iconbtn";
-    this.idleWorkerBadge.title = "Select idle worker (F8 / ~)";
+    setGameTip(this.idleWorkerBadge, "Select idle worker (F8 / ~)");
     this.idleWorkerBadge.hidden = true;
     // Its count wears the same boxed badge every other count in the game does (countBadge).
     // This button is OpenWar3's own — 1.30 has no idle-worker button to copy — so there is no
@@ -2808,7 +2809,7 @@ export class GameHud {
     statusLine.className = "hud-status-line";
     this.statusIcon = document.createElement("div");
     this.statusIcon.className = "hud-status-icon";
-    this.statusIcon.title = "Cancel";
+    setGameTip(this.statusIcon, "Cancel");
     // Clicking the in-progress icon cancels the unit currently training (queue
     // slot 0) — only when it's a training job, never a building under construction.
     this.statusIcon.onclick = () => {
@@ -2821,7 +2822,7 @@ export class GameHud {
     // timer and the queue backdrop — so this button is ours rather than the original's.
     this.builderBtn = document.createElement("button");
     this.builderBtn.className = "hud-status-builder hud-iconbtn";
-    this.builderBtn.title = "Select the worker building this";
+    setGameTip(this.builderBtn, "Select the worker building this");
     this.builderBtn.hidden = true;
     onPress(this.builderBtn, () => {
       const id = this.driver.selection()?.builderId ?? 0;
@@ -3497,13 +3498,13 @@ export class GameHud {
           // The bar reads "Level 1 Demon Hunter", as the game writes it; the raw XP
           // numbers are the bar's hover tooltip, not its label.
           this.xpText.innerHTML = `Level ${sel.level} ${wc3ToHtml(sel.name)}`;
-          this.xpBar.title = span > 0 ? `Experience: ${into} / ${span}` : "Experience: (max level)";
+          setGameTip(this.xpBar, span > 0 ? `Experience: ${into} / ${span}` : "Experience: (max level)");
           this.xpFill.style.width = `${span > 0 ? Math.max(0, Math.min(1, into / span)) * 100 : 100}%`;
         } else if (sel.isSummon) {
           this.selSub.textContent = "";
           this.xpBar.hidden = false;
           this.xpBar.classList.add("summon");
-          this.xpBar.title = "";
+          setGameTip(this.xpBar, null);
           this.xpText.textContent = `Summoned Unit (${sel.summonSecondsLeft}s)`;
           this.xpFill.style.width = `${sel.summonFrac * 100}%`;
         } else if (sel.timedFormLabel) {
@@ -3514,7 +3515,7 @@ export class GameHud {
           this.selSub.textContent = "";
           this.xpBar.hidden = false;
           this.xpBar.classList.add("summon");
-          this.xpBar.title = "";
+          setGameTip(this.xpBar, null);
           this.xpText.textContent = `${sel.timedFormLabel} (${sel.timedFormSecondsLeft}s)`;
           this.xpFill.style.width = `${sel.timedFormFrac * 100}%`;
         } else {

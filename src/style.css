@@ -481,6 +481,31 @@ body.hud-tooltip-skinned .unit-hover-tooltip {
 }
 .uht-line { white-space: nowrap; }
 
+/* OpenWar3's own hover hints (ui/gameTip.ts) — the idle-worker button, the XP bar's numbers, the
+   clock — in place of the browser's `title` bubble, which grows DOWN from the pointer. Pinned by
+   its BOTTOM edge above the element (`bottom` is written by gameTip.ts) so it grows upward like
+   every other tooltip in the game, and dressed like the unit slab above. */
+.game-tip {
+  position: fixed;
+  transform: translateX(-50%);
+  padding: var(--tt-pad, 5px) calc(var(--tt-pad, 5px) * 2);
+  font: 400 var(--font-UnitTipDesc, 15px) / 1.3 var(--game-font);
+  color: #fff;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 10000;
+  background: rgba(30, 40, 55, 0.9);
+  border: 1px solid rgba(126, 146, 176, 0.55);
+  border-radius: 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+body.hud-tooltip-skinned .game-tip {
+  background: var(--hud-tooltip-fill);
+  border: none;
+  border-radius: calc(var(--tt-band, 10px) * 0.4);
+  box-shadow: none;
+}
+
 /* The worker count a gold mine wears — "3/5" across a classic mine being worked and across a
    crewed Entangled or Haunted Gold Mine alike (render/worldOverlays.ts syncCrewLabels, read for the
    local side in rts.ts updateMineCrews). The game prints it in the TOOLTIP's dress — the
@@ -1320,6 +1345,7 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
 }
 .hud-tooltip.skinned::after,
 body.hud-tooltip-skinned .unit-hover-tooltip::after,
+body.hud-tooltip-skinned .game-tip::after,
 body.hud-tooltip-skinned .unit-crew-count::after {
   content: "";
   position: absolute;
