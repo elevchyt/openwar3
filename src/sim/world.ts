@@ -12509,7 +12509,12 @@ export class SimWorld {
   /** Deliver a cast's effect: launch the spell missile (if the ability has one)
    *  or apply the effect immediately (instant / point / no-target). */
   private resolveCast(u: SimUnit, def: AbilityDef, pc: PendingCast): void {
-    if (def.target === "unit" && def.missileArt && pc.targetId) {
+    // A row that strings a LIGHTNING is delivered by the bolt, not by a missile: `[AOcl]`
+    // (and its `ACcl`/`AIcl` twins) also names `Missileart = LightningBoltMissile.mdl`, but
+    // the game throws no orb — the CLPB/CLSB ribbon IS the spell (docs/spell-fx.md), and
+    // launching the missile drew a Far Seer-looking projectile ahead of the chain and held
+    // the whole chain back until it landed.
+    if (def.target === "unit" && def.missileArt && !def.lightning.length && pc.targetId) {
       // Travelling spell (Storm Bolt, Death Coil): the effect fires on impact.
       this.spawnSpellProjectile(u, pc.targetId, def, pc.rank);
       return;
