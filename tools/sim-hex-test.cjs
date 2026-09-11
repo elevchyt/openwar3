@@ -151,6 +151,25 @@ console.log("\na flyer takes its spell's own DataC: Polymorph's Flying Sheep, He
   check("Hex makes a flyer one of its three birds", ["nalb", "nvul", "nsno"].includes(g2.hexForm), true);
 }
 
+console.log("\na unit killed while it is a critter dies as itself");
+{
+  const w = world();
+  const hunter = caster(w, "Oshd", "AOhx", 1000, 1000);
+  const f = spawn(w, "hfoo", 1300, 1000, 1, 1);
+  w.issueCast(hunter.id, "AOhx", f.id, 0, 0);
+  run(w, 2);
+  check("the Footman is a critter", !!f.hexForm, true);
+  w.drainSpellEffects();
+  w.drainDeaths();
+  w.spellApi.spellDamage(f, 100000, hunter.id);
+  check("it dies", w.drainDeaths().includes(f.id), true);
+  check("…out of the hex: no critter left on it", f.hexForm, "");
+  check("…and no hex buff", f.buffs.some((b) => b.kind === "hex"), false);
+  const done = w.drainSpellEffects().find((e) => /PolyMorphDoneGround\.mdx$/i.test(e.art));
+  check("…with the turn-back poof where it fell", done && `${done.x},${done.y}`, `${f.x},${f.y}`);
+  check("…and PolymorphDone.wav", done && /PolymorphDone\.wav$/i.test(done.soundFile), true);
+}
+
 console.log("\nevery speed stops at MaxUnitSpeed, and only Wind Walk and Chemical Rage go past it");
 {
   const w = world();

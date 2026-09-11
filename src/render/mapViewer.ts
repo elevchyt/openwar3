@@ -3755,7 +3755,7 @@ export class MapViewerScene {
     const map = this.viewer.map;
     if (!map || !this.rts) return;
     const su = this.rts.simView.units.get(simId);
-    if (!su || su.hp <= 0) return; // died while the new model streamed in
+    if (!su) return;
     // What the unit IS and what it is DRAWN AS are two answers since Hex and Polymorph: a
     // critter skin (`hexForm`) swaps the model and nothing else. Both are read off the unit as
     // it stands, not off the event, so a hex and its undoing arriving together land on the truth.
@@ -3765,6 +3765,11 @@ export class MapViewerScene {
     if (!def) return;
     const skin = hexForm ? this.registry.get(hexForm) ?? null : null;
     const drawn = skin ?? def;
+    // Out of a hex: the body it wore before is still standing by, hidden (RtsController.unskin),
+    // so it goes straight back with nothing to load. Ahead of the dead-unit guard, because a hero
+    // held off the field by Reincarnation is at 0 hp and must still stand back up as itself.
+    if (!skin && this.rts.unskin(simId, def)) return;
+    if (su.hp <= 0) return; // died while the new model streamed in
     // A morph onto the SAME model file needs no new body — and must not be given one. Most
     // WC3 form pairs are one MDX under two unit ids (Nalc↔Nalm↔Nal2↔Nal3 are all
     // HeroGoblinAlchemist.mdx, ucry↔ucrm both CryptFiend.mdx), and swapping the instance

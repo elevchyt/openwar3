@@ -247,6 +247,10 @@ interface Entry {
   /** The model actually DRAWN when it is not the type's own — a Hex or Polymorph critter
    *  (SimUnit.hexForm). Absent/"" for a unit wearing its own body. See `retype`. */
   skinPath?: string;
+  /** While a critter skin is on, the unit's OWN body — hidden, kept for the way back out: the
+   *  moment the hex ends, and above all the moment the unit DIES, when there is no time to load a
+   *  model before the Death clip has to play on it (see `unskin`). */
+  ownBody?: { instance: Instance; modelPath: string };
   baseScale: number; // model scale at full size (buildings scale up while built)
   curScale: number; // last uniform scale applied (avoid redundant sets)
   birthSeq: number; // "Birth" sequence index (-1 = none → scale-up fallback)
@@ -3725,6 +3729,34 @@ export class RtsController {
     return true;
   }
 
+  /**
+   * Take a hexed unit out of its critter skin and put its OWN body back — the one `remodel` kept
+   * hidden when the skin went on — in the pose the critter was standing in. Synchronous, with no
+   * model to load, which is the whole point: `onDeath` calls it before the Death clip, so a unit
+   * killed as a sheep falls as a Footman, and the hex ending alive swaps back in the same frame.
+   *
+   * False when there is no kept body to use: the unit was never skinned, or it changed TYPE under
+   * the hex (the kept body is then the wrong model) — the caller loads the right one instead.
+   */
+  unskin(simId: number, def: UnitDef): boolean {
+    const entry = this.byId.get(simId);
+    const own = entry ? this.takeOwnBody(entry) : null;
+    if (!entry || !own) return false;
+    this.remodel(simId, own.instance, def, null);
+    if (!entry.hidden) own.instance.show(); // it was put away hidden; fog still decides
+    return true;
+  }
+
+  /** The kept body, posed where the critter stands, or null (see `unskin`). Always clears it. */
+  private takeOwnBody(e: Entry): { instance: Instance; modelPath: string } | null {
+    const own = e.ownBody;
+    e.ownBody = undefined;
+    if (!own || !e.skinPath || own.modelPath !== e.modelPath) return null;
+    own.instance.setLocation(e.unit.instance.localLocation);
+    own.instance.setRotation(e.unit.instance.localRotation);
+    return own;
+  }
+
   /** Swap a live unit's model + type-derived render facts, keeping the SAME entry — the
    *  Town Hall that just finished becoming a Keep (issue #57). The old instance is dropped
    *  and every field that came from the old UnitDef is re-read from the new one.
@@ -3734,7 +3766,12 @@ export class RtsController {
   remodel(simId: number, instance: Instance, def: UnitDef, skin: UnitDef | null = null): boolean {
     const entry = this.byId.get(simId);
     if (!entry) return false;
-    entry.unit.instance.hide(); // drop the old body
+    const old = entry.unit.instance;
+    // Going INTO a critter skin, the body it replaces is the unit's own: keep it, hidden, for the
+    // way back out (`unskin`). A body of its own arriving any other way retires the kept one.
+    if (skin && !entry.skinPath) entry.ownBody = { instance: old, modelPath: entry.modelPath };
+    else if (!skin) entry.ownBody = undefined;
+    old.hide(); // drop the old body
     instance.setBlendTime?.((skin ?? def).animBlend);
     entry.unit = { instance, state: WidgetState.IDLE };
     if (!this.retype(simId, def, skin)) return false;
@@ -4481,6 +4518,10 @@ export class RtsController {
     // Death cry (friend or foe — you hear the battlefield, as long as you can SEE it).
     // Buildings have no Death sound-set → resolves to nothing.
     const def = this.registry.get(e.typeId);
+    // A unit killed while HEXED dies as ITSELF: its own body goes back on before anything below
+    // reads the instance, so the Death clip, the corpse and the decay are the unit's and not the
+    // critter's. The sim has already taken the hex off and played the poof (SimWorld.kill).
+    if (e.skinPath && def) this.unskin(simId, def);
     // Death cry rings out from where the unit fell (its model's last location)…
     const loc = e.unit.instance.localLocation;
     // …and only if the player has eyes on that spot. A scream out of unscouted fog is a

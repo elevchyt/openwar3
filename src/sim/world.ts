@@ -6474,8 +6474,9 @@ export class SimWorld {
     this.morphs.push({ unitId: u.id, from: u.typeId, to: u.typeId });
     // `[Bply] Effectart`, "played on the ground under the unit when it turns back into the
     // original unit" (HumanAbilityFunc.txt's own Polymorph art notes) — so at the spot, not on
-    // the body. Not for a unit that is dying: a corpse does not turn back.
-    if (u.hp > 0) this.spellEffects.push({ art: HEX_DONE_ART, x: u.x, y: u.y, targetId: 0, z: 0, soundFile: HEX_DONE_SOUND });
+    // the body. A unit that DIES a critter turns back too (kill): it falls as itself, and the
+    // poof is what says the critter was never the thing that died.
+    this.spellEffects.push({ art: HEX_DONE_ART, x: u.x, y: u.y, targetId: 0, z: 0, soundFile: HEX_DONE_SOUND });
   }
 
   private morphUnit(u: SimUnit, toTypeId: string): void {
@@ -18653,6 +18654,16 @@ export class SimWorld {
     }
     // Reincarnation (Tauren Chieftain / Elder Sage, AOre): a fatal blow instead
     // revives the hero in place, on a long cooldown (stored on the ability).
+    // A unit killed while HEXED dies as itself, not as the critter: the hex comes off at the
+    // blow, with its poof, before anything else about the death is decided — so the renderer
+    // puts the unit's own body back under the Death clip (RtsController.onDeath), and a hero that
+    // reincarnates stands up in its own shape. `kill` recomputes nothing, so the buff is taken
+    // off here rather than left for recomputeStats to notice.
+    if (u.hexForm) {
+      u.buffs = u.buffs.filter((b) => b.kind !== "hex");
+      u.hexed = false;
+      this.unhex(u);
+    }
     if (this.tryReincarnate(u)) return;
     // A DENY: this unit was killed by its own side. WC3 marks it with a bare "!" floating up
     // from the body in the colour of the player who owned it — the tell that the kill was
