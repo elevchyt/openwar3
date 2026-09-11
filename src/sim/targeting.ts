@@ -18,6 +18,8 @@
 // hand-write its own approximation (`if (t.flying) continue`, a `hitBuildings` argument,
 // or nothing at all), and the approximations drifted from the table they were copied from.
 
+import { normalizeTargetFlags } from "../data/abilities";
+
 /** The unit fields a Targets Allowed decision reads. Structural, so both the sim's SimUnit
  *  and a test's plain object satisfy it. */
 export interface TargetKind {
@@ -41,11 +43,18 @@ export interface TargetKind {
  * — or null when it may. Allegiance is not consulted (see the file header).
  */
 export function targsKindError(target: TargetKind, flags: readonly string[] = []): string | null {
-  const F = new Set((flags ?? []).map((f) => f.toLowerCase()));
+  const F = new Set(normalizeTargetFlags(flags ?? []));
   // Clear-cut unit-type gates.
+  //
+  // A PAIR names both halves of one question, and then it restricts nothing: `hero,nonhero` is
+  // "heroes and non-heroes", `ancient,nonancient` is "ancients and everything else". The stock
+  // Finger of Death row is `air,ground,nonhero,structure,ancient,nonancient` for exactly that
+  // reason, and Extreme Candy War's mage beams (`A00G`, built on it) are aimed at an ANCIENT
+  // barrier — reading `nonancient` as a bare exclusion refused all six at the map's first second.
   const heroLike = target.isHero || !!target.resistant; // Resistant Skin — see TargetKind.resistant
-  if (F.has("nonhero") && heroLike) return "Nohero";
-  if (F.has("hero") && !heroLike) return "Targethero";
+  const bothHero = F.has("hero") && F.has("nonhero");
+  if (!bothHero && F.has("nonhero") && heroLike) return "Nohero";
+  if (!bothHero && F.has("hero") && !heroLike) return "Targethero";
   // "organic" is the absence of the two inorganic kinds — WC3 has no organic flag on the
   // unit, it has `mechanical` in UnitData and buildings, and everything else is flesh.
   if (F.has("organic") && (target.mechanical || target.building)) return "Notmechanical"; // "Must target organic units."
@@ -70,7 +79,7 @@ export function targsKindError(target: TargetKind, flags: readonly string[] = []
   // Restoration and the orc's Repair all list it and only the night elf's Renew does not
   // (see repairRefusal). commandstrings.txt [Errors] Notancient = "Unable to target
   // Ancients." — which exists for precisely this flag and nothing else.
-  if (F.has("nonancient") && target.ancient) return "Notancient";
+  if (F.has("nonancient") && !F.has("ancient") && target.ancient) return "Notancient";
   if (F.has("air") || F.has("ground") || F.has("structure")) {
     const kind = target.building ? "structure" : target.flying ? "air" : "ground";
     if (!F.has(kind)) return kind === "air" ? "Noair" : kind === "structure" ? "Nostructure" : "Noground";

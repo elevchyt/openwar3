@@ -66,6 +66,22 @@ const CASES = [
   ["Arep", "structure,friend,self", enemyGround, "Targetstructure", "must target a building"],
 ];
 
+// The World Editor's LONG vocabulary is the SLK's short one (`UI\UnitEditorData.txt` [targetList]):
+// Extreme Candy War's Immolate is Unholy Frenzy re-aimed with `air,enemies,ground,neutral,organic`,
+// and reading `enemies` as nothing refused every enemy as "Notenemy".
+const ancientAlly = unit({ owner: 0, team: 0, ancient: true });
+const heroFoe = unit({ owner: 1, team: 1, isHero: true });
+CASES.push(
+  ["Auhf", "air,enemies,ground,neutral,organic", enemyGround, null, "`enemies` is `enemy` (a map's Immolate)"],
+  ["Auhf", "air,enemies,ground,neutral,organic", allyGround, "Notfriendly", "…and still not an ally"],
+  ["Aabs", "playerunits,vulnerable,invulnerable", allyGround, null, "`playerunits`/`vulnerable` read as `player`/`vuln`"],
+  // A PAIR restricts nothing — the stock Finger of Death names `ancient,nonancient`, and the map's
+  // mage beams built on it are aimed at an ancient barrier.
+  ["ANfd", "air,ground,nonhero,structure,ancient,nonancient,friend", ancientAlly, null, "ancient AND nonancient admits an ancient"],
+  ["Aslo", "air,ground,enemy,nonancient", unit({ owner: 1, team: 1, ancient: true }), "Notancient", "…while nonancient alone still refuses one"],
+  ["Aslo", "air,ground,enemy,hero,nonhero", heroFoe, null, "hero AND nonhero admits a hero"],
+);
+
 // Magic Immunity (`Amim`) — the Dryad, Spell Breaker, Destroyer, Faerie Dragon. It refuses
 // the ENEMY's spells and only those: no Polymorph or Slow on an enemy one, but its own side's
 // Bloodlust, Heal and Rejuvenation land — a Dryad is still a unit a Druid may keep alive.
@@ -136,6 +152,24 @@ for (const [target, commanded, want, what] of ATTACK_CASES) {
   console.log(`${ok ? "ok  " : "FAIL"}  attack  ${what}\n        want ${want ?? "(allowed)"}, got ${got ?? "(allowed)"}`);
 }
 
-const total = CASES.length + ATTACK_CASES.length;
+// An AREA ability's allegiance (SimWorld.allegianceAdmits) — what `alliesInArea` asks. Extreme
+// Candy War's Boots of Haste are the stock Scroll of Speed (`AIsa`) with Targets Allowed = `self`:
+// the Hero alone, never the allies around it.
+const ALLEGIANCE_CASES = [
+  [caster, "self", true, "a self-only area reaches its caster"],
+  [allyGround, "self", false, "…and nobody else"],
+  [allyGround, "air,ground,friend,self,vuln,invu,nonsapper", true, "the stock Scroll of Speed reaches an ally"],
+  [caster, "air,ground,friend", true, "an ally word keeps the caster in its own area"],
+  [allyGround, "air,ground", true, "no allegiance word restricts nothing"],
+  [caster, "air,ground,enemy", false, "an enemy-only area leaves its caster out"],
+];
+for (const [target, flags, want, what] of ALLEGIANCE_CASES) {
+  const got = world.allegianceAdmits(caster, target, flags.split(","));
+  const ok = got === want;
+  if (!ok) failed++;
+  console.log(`${ok ? "ok  " : "FAIL"}  area  ${what}\n        want ${want}, got ${got}`);
+}
+
+const total = CASES.length + ATTACK_CASES.length + ALLEGIANCE_CASES.length;
 console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

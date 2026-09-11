@@ -36,6 +36,45 @@ export function isCriticalStrikeCode(code: string): boolean {
 /** How an ability is aimed. Derived from its `code` (see KNOWN_ABILITIES). */
 export type TargetType = "none" | "unit" | "point" | "passive";
 
+/**
+ * TARGETS ALLOWED, in one vocabulary.
+ *
+ * The game writes the same flag two ways and reads both. `UI\UnitEditorData.txt` [targetList] is
+ * the list, and it names each word's alternates: `enemies` is also `enem`/`enemy`, `allies` is
+ * `alli`/`ally`, `invulnerable` is `invu`, `vulnerable` is `vuln`, `player` is `play`, `notself`
+ * is `nots`, `organic` is `orga`, `mechanical` is `mech`, `structure` is `stru`, `ground` is
+ * `grou`, `neutral` is `neut`, `nonhero` is `nonh`, `alive` is `aliv`, `debris` is `debr`,
+ * `terrain` is `terr`. Blizzard's own SLK rows mostly use the SHORT forms (`[AIsa] targs1 =
+ * air,ground,friend,self,vuln,invu,nonsapper`), and a map saved by the World Editor writes the
+ * LONG ones (Extreme Candy War's Immolate is `air,enemies,ground,neutral,organic`).
+ *
+ * Every reader in the engine asks for one spelling, so every list is folded to it where it is
+ * LOADED (the SLK here, a map's w3a in objectData.ts) and again where it is judged (targeting.ts,
+ * `World.targetAllowed`), which is what makes a hand-built list in a test mean the same thing.
+ * Reading `enemies` as nothing was the whole of "Immolate cannot target enemy units": the list
+ * then named `neutral` as its only allegiance and every enemy was refused as `Notenemy`.
+ */
+const TARGET_FLAG_ALIASES: Readonly<Record<string, string>> = {
+  enemies: "enemy", enem: "enemy",
+  allies: "allies", alli: "allies", ally: "allies",
+  invulnerable: "invu", vulnerable: "vuln",
+  play: "player", playerunits: "player",
+  nots: "notself", orga: "organic", mech: "mechanical", stru: "structure", grou: "ground",
+  neut: "neutral", nonh: "nonhero", aliv: "alive", debr: "debris", terr: "terrain",
+};
+
+export function normalizeTargetFlags(list: string | readonly string[]): string[] {
+  const words = typeof list === "string" ? list.split(",") : list;
+  const out: string[] = [];
+  for (const raw of words) {
+    const w = raw.trim().toLowerCase();
+    if (!w || w === "_" || w === "-") continue;
+    const canon = TARGET_FLAG_ALIASES[w] ?? w;
+    if (!out.includes(canon)) out.push(canon);
+  }
+  return out;
+}
+
 /** One persistent model a buff hangs on the unit it is applied to, with the
  *  attachment point it rides. A buff row can list SEVERAL — Bloodlust puts a
  *  model on each hand, Spiked Carapace four on the chest (see parseBuffFx). */
@@ -1013,7 +1052,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       reqLevel: num(r, "reqlevel", 0),
       levelSkip: num(r, "levelskip", 0),
       target: known ? known.target : "passive",
-      targetFlags: (str(r, "targs1") || "").split(",").map((x) => x.trim()).filter((x) => x && x !== "_"),
+      targetFlags: normalizeTargetFlags(str(r, "targs1") || ""),
       autocast: !!known?.autocast,
       name: (s && str(s, "Name")) || id,
       icon: f ? str(f, "art") : "",

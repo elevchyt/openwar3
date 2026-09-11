@@ -36,6 +36,10 @@ export interface SpellApi {
    *  (World.targsAdmit), shared with single-target casts, spell fields and orbs, so a
    *  handler never has to hand-write `if (t.flying) continue` and get it wrong. */
   admits(def: AbilityDef, target: SimUnit): boolean;
+  /** …and by ALLEGIANCE — `self`, `friend`, `allies`, `enemy` (World.allegianceAdmits). What lets
+   *  a map narrow a stock area ability to its caster alone: Extreme Candy War's Boots of Haste are
+   *  the Scroll of Speed with Targets Allowed = `self`. */
+  allows(caster: SimUnit, def: AbilityDef, target: SimUnit): boolean;
   /**
    * Launch a travelling WAVE from the caster toward (tx,ty): `dist` far, `halfWidth` to
    * either side. Each unit the front sweeps over gets the handler called again with
@@ -661,7 +665,7 @@ function enemiesInArea(api: SpellApi, caster: SimUnit, def: AbilityDef, x: numbe
 /** Living allies of `caster` within `radius` of a point (optionally including the caster),
  *  filtered by the ability's Targets Allowed the same way. */
 function alliesInArea(api: SpellApi, caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, opts: { self?: boolean } = {}): SimUnit[] {
-  return api.unitsInArea(x, y, radius).filter((t) => (opts.self || t !== caster) && api.ally(caster, t) && api.admits(def, t));
+  return api.unitsInArea(x, y, radius).filter((t) => (opts.self || t !== caster) && api.ally(caster, t) && api.admits(def, t) && api.allows(caster, def, t));
 }
 
 /** Units struck by a line from the caster toward (tx,ty): within `length` forward

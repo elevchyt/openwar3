@@ -67,6 +67,7 @@ function cast(code, d, target) {
     hostile: (a, b) => a.team !== b.team,
     ally: (a, b) => a.team === b.team,
     admits: () => true,
+    allows: () => true,
     isDay: () => false,
     holdPosition: () => {},
     emitEffect: (art) => log.effects.push(art),

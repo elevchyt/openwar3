@@ -4,7 +4,7 @@ import { targsKindError } from "./targeting";
 import { corpseAdmits, corpseMissingError, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { BlightGrid } from "./blight";
-import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, normalizeTargetFlags, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { slotMissileArt, autoArmed, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
@@ -11748,11 +11748,14 @@ export class SimWorld {
    *  Codes with no allegiance flag (Banish) stay unrestricted.
    *  Returns an [Errors] key, or null when allowed. */
   private targetAllowed(caster: SimUnit, target: SimUnit, flags: string[]): string | null {
-    const F = new Set(flags.map((f) => f.toLowerCase()));
+    // One vocabulary — `enemies` IS `enemy` (see normalizeTargetFlags).
+    const F = new Set(normalizeTargetFlags(flags));
     const kindError = targsKindError(target, flags);
     if (kindError !== null) return kindError;
     const enemy = F.has("enemy");
-    const friend = F.has("friend") || F.has("player"); // `player` = own units (Death Pact/Dark Ritual)
+    // `player` = own units (Death Pact/Dark Ritual); `allies` = the allied players' — both are the
+    // caster's side, which is all this reading distinguishes.
+    const friend = F.has("friend") || F.has("player") || F.has("allies");
     const self = F.has("self");
     const neutral = F.has("neutral");
     const notself = F.has("notself");
@@ -11763,6 +11766,28 @@ export class SimWorld {
     if (this.hostile(caster, target)) return enemy ? null : "Notenemy";
     if (target.neutralPassive) return neutral || friend ? null : "Notneutral";
     return friend ? null : "Notfriendly";
+  }
+
+  /**
+   * May an AREA effect reach this unit, by the ability's ALLEGIANCE flags?
+   *
+   * The area helpers in spells.ts gather a side first (`alliesInArea` — everybody on the caster's
+   * side in the radius) and used to ask the row only what KIND of unit it may touch. That is how a
+   * map's own edit went unread: Extreme Candy War keeps the stock Scroll of Speed ability (`AIsa`)
+   * for its Boots of Haste and narrows its Targets Allowed to `self`, so the item hastes the Hero
+   * alone — and ours hasted every ally in 600, because nothing asked. The row is now asked the
+   * same allegiance question a single-target cast is (`targetAllowed`).
+   *
+   * The CASTER is the one case it answers differently: an ally word (`friend`, `player`) has
+   * always meant the caster's own side INCLUDING the caster for an area — a Healing Ward's
+   * `friend`, a Scroll's `friend,self` — so it stays in unless the list names an allegiance and
+   * none of `self`/`friend`/`player` is among it.
+   */
+  allegianceAdmits(caster: SimUnit, target: SimUnit, flags: string[]): boolean {
+    if (target.id !== caster.id) return this.targetAllowed(caster, target, flags) === null;
+    const F = new Set(normalizeTargetFlags(flags));
+    const named = ["enemy", "friend", "player", "allies", "self", "neutral", "notself"].some((w) => F.has(w));
+    return !named || F.has("self") || F.has("friend") || F.has("player");
   }
 
   /** A refusal the game has no words for: the click is rejected and the error beeps, but no
@@ -14251,6 +14276,7 @@ export class SimWorld {
     hostile: (a, b) => this.hostile(a, b),
     ally: (a, b) => this.allied(a, b),
     admits: (def, t) => this.targsAdmit(t, def.targetFlags),
+    allows: (caster, def, t) => this.allegianceAdmits(caster, t, def.targetFlags),
     launchWave: (caster, def, rank, opts) => this.spawnWaveProjectile(caster, def, rank, opts),
     // Untyped ability damage ignores armor; a Banished (ethereal) target takes +66%
     // (ETHEREAL_SPELL_BONUS — the file's Spells column), the flip side of its physical

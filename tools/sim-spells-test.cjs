@@ -39,6 +39,7 @@ function harness(units) {
     hostile: (a, b) => a.team !== b.team,
     ally: (a, b) => a.team === b.team,
     admits: (d, t) => targsAdmit(t, d.targetFlags),
+    allows: () => true,
     // The wave launch: records the request the way the world would act on it, and answers
     // false for a row with no Missileart so the artless fallback can be tested too.
     launchWave: (c, d, rank, o) => {

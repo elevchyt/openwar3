@@ -29,7 +29,7 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toPrimaryAttribute, toRegenType, toWeaponType } from "./enums";
 import { MISC_GAME } from "./gameplayConstants";
 import { syncPrimaryWeapon, type UnitDef, type UnitRegistry, type WeaponSlotDef } from "./units";
-import { emptyAbilityLevel, mdlPath, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
+import { emptyAbilityLevel, mdlPath, normalizeTargetFlags, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import type { ItemDef, ItemRegistry } from "./items";
 import type { UpgradeDef, UpgradeRegistry } from "./upgrades";
 import type { TechDef, TechRegistry } from "./techtree";
@@ -659,8 +659,30 @@ function cloneAbility(base: AbilityDef, id: string): AbilityDef {
   };
 }
 
-/** Apply one custom ability's modifications, routed through AbilityMetaData. */
-function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, trigStr: (v: string) => string): void {
+/**
+ * Apply one custom ability's modifications, routed through AbilityMetaData.
+ *
+ * This is the translator that lets a map build a spell out of another one without the engine
+ * knowing the spell: the clone keeps its base `code` (so the base ability's BEHAVIOUR runs) and
+ * every column the map changed lands on the same `AbilityDef` field the SLK loader fills
+ * (data/abilities.ts). So a field the loader reads and this does not is a map edit the engine
+ * silently throws away — and that is exactly how Extreme Candy War's "Summon Void Walker" summoned
+ * a Water Elemental: it is the stock `AHwe` with `Hwe1` "Summoned Unit Type" = `nvdw`, and the
+ * `UnitID` field it names was not routed, so the clone went on summoning the base `hwat`.
+ *
+ * Two rules keep it whole:
+ *
+ *  · The meta `field` column is matched CASE-INSENSITIVELY. The meta file and the SLK files spell
+ *    the same column differently (`EffectArt` / `Effectart`, `Effectsound` / `EffectSound`,
+ *    `CasterArt` / `Casterart`), and a case-sensitive switch dropped every one it spelled the
+ *    other way.
+ *  · Every field the loader reads is routed here too: the summon (`UnitID`), the buffs
+ *    (`BuffID`, with the buff's art re-resolved), level gates, button and learn positions, the
+ *    Research/Un- tooltips and hotkeys, orders, lightning, animation names and attachment points.
+ *    What is left in `default` has no `AbilityDef` field at all (editor suffix, race, `checkDep`,
+ *    missile arc); requirements are the tech graph's (applyMapTechData).
+ */
+function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, trigStr: (v: string) => string, registry?: AbilityRegistry): void {
   // Grow levelData to cover the highest rank any override touches (+ an `alev` bump).
   let maxLevel = def.levels;
   for (const m of mods) {
@@ -670,44 +692,97 @@ function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, tr
   while (def.levelData.length < maxLevel) def.levelData.push(cloneLevel(def.levelData[def.levelData.length - 1] ?? emptyLevel()));
   if (maxLevel > def.levels) def.levels = maxLevel;
 
+  const list = (v: Val, lower: boolean): string[] =>
+    s(v).split(",").map((x) => (lower ? x.trim().toLowerCase() : x.trim())).filter((x) => x && x !== "_" && x !== "-");
+  let buffsChanged = false;
   for (const m of mods) {
     const row = meta.getRow(m.id) as { string(k: string): string | undefined } | undefined;
     if (!row) continue;
-    const field = row.string("field") ?? "";
+    const field = (row.string("field") ?? "").toLowerCase();
     const lvl = def.levelData[Math.max(0, m.levelOrVariation - 1)];
     switch (field) {
       // Level-independent.
-      case "Name": def.name = trigStr(s(m.value)); break;
-      case "Art": def.icon = s(m.value).replace(/\//g, "\\"); break;
+      case "name": def.name = trigStr(s(m.value)); break;
+      case "art": def.icon = s(m.value).replace(/\//g, "\\"); break;
+      case "unart": def.unIcon = s(m.value).replace(/\//g, "\\"); break;
       case "hero": def.isHero = n(m.value) === 1; def.research = def.isHero; break;
+      case "item": def.isItem = n(m.value) === 1; break;
       case "levels": def.levels = n(m.value); break;
-      case "Hotkey": def.hotkey = (s(m.value).trim()[0] ?? "").toUpperCase(); break;
-      case "Missileart": def.missileArt = mdlPath(s(m.value)); break;
-      case "CasterArt": def.casterArt = mdlPath(s(m.value)); break;
-      case "TargetArt": def.targetArt = mdlPath(s(m.value)); break;
-      case "SpecialArt": def.specialArt = mdlPath(s(m.value)); break;
-      case "Effectart": def.effectArt = mdlPath(s(m.value)); break;
-      case "Areaeffectart": def.areaArt = mdlPath(s(m.value)); break;
-      case "EffectSound": def.effectSound = s(m.value).trim(); break; // a SLK label, not a path
+      case "reqlevel": def.reqLevel = n(m.value); break;
+      case "levelskip": def.levelSkip = n(m.value); break;
+      case "hotkey": def.hotkey = (s(m.value).trim()[0] ?? "").toUpperCase(); break;
+      case "researchhotkey": def.researchHotkey = (s(m.value).trim()[0] ?? "").toUpperCase(); break;
+      case "unhotkey": def.unHotkey = (s(m.value).trim()[0] ?? "").toUpperCase(); break;
+      // Buttonpos is TWO codes writing one field name (x, then y), so these go by code.
+      case "buttonpos": if (m.id === "abpx") def.buttonX = n(m.value); else def.buttonY = n(m.value); break;
+      case "researchbuttonpos": if (m.id === "arpx") def.learnX = n(m.value); else def.learnY = n(m.value); break;
+      case "unbuttonpos": if (m.id === "aubx") def.unButtonX = n(m.value); else def.unButtonY = n(m.value); break;
+      case "researchtip": def.researchTip = trigStr(s(m.value)); break;
+      case "researchubertip": def.researchUberTip = trigStr(s(m.value)); break;
+      case "untip": def.unTip = trigStr(s(m.value)); break;
+      case "unubertip": def.unUberTip = trigStr(s(m.value)); break;
+      case "missileart": def.missileArt = mdlPath(s(m.value)); break;
+      case "missilespeed": def.missileSpeed = n(m.value); break;
+      case "casterart": def.casterArt = mdlPath(s(m.value)); break;
+      case "targetart":
+        def.targetArts = list(m.value, false).map(mdlPath);
+        def.targetArt = def.targetArts[0] ?? "";
+        break;
+      case "specialart": def.specialArt = mdlPath(s(m.value)); break;
+      case "effectart": def.effectArt = mdlPath(s(m.value)); break;
+      case "areaeffectart": def.areaArt = mdlPath(s(m.value)); break;
+      case "effectsound": def.effectSound = s(m.value).trim(); break; // a SLK label, not a path
+      case "effectsoundlooped": def.effectSoundLooped = s(m.value).trim(); break;
+      case "casterattach": def.casterAttach = list(m.value, true); break;
+      case "targetattach": def.targetAttach = list(m.value, true); break;
+      case "specialattach": def.specialAttach = list(m.value, true); break;
+      case "lightningeffect": def.lightning = list(m.value, false).map((x) => x.toUpperCase()); break;
+      case "animnames": def.animNames = list(m.value, true); break;
+      case "order": def.order = s(m.value).trim().toLowerCase(); break;
+      case "orderon": def.orderOn = s(m.value).trim().toLowerCase(); break;
+      case "orderoff": def.orderOff = s(m.value).trim().toLowerCase(); break;
+      case "unorder": def.unOrder = s(m.value).trim().toLowerCase(); break;
+      // `targs` is per level in the file and one list on the def; the World Editor writes the
+      // LONG vocabulary (`enemies`), folded here to the one the engine reads.
+      case "targs": def.targetFlags = normalizeTargetFlags(s(m.value)); break;
       // Per-level.
-      case "Area": if (lvl) lvl.area = n(m.value); break;
-      case "Cool": if (lvl) lvl.cooldown = n(m.value); break;
-      case "Cost": if (lvl) lvl.cost = n(m.value); break;
-      case "Dur": if (lvl) lvl.duration = n(m.value); break;
-      case "HeroDur": if (lvl) lvl.heroDuration = n(m.value); break;
-      case "Rng": if (lvl) lvl.castRange = n(m.value); break;
-      case "Cast": if (lvl) lvl.castTime = n(m.value); break;
-      case "targs": def.targetFlags = s(m.value).split(",").map((x) => x.trim()).filter((x) => x && x !== "_"); break;
-      case "Tip": def.tips[Math.max(0, m.levelOrVariation - 1)] = trigStr(s(m.value)); break;
-      case "Ubertip": def.uberTips[Math.max(0, m.levelOrVariation - 1)] = trigStr(s(m.value)); break;
-      case "Data": {
+      case "area": if (lvl) lvl.area = n(m.value); break;
+      case "cool": if (lvl) lvl.cooldown = n(m.value); break;
+      case "cost": if (lvl) lvl.cost = n(m.value); break;
+      case "dur": if (lvl) lvl.duration = n(m.value); break;
+      case "herodur": if (lvl) lvl.heroDuration = n(m.value); break;
+      case "rng": if (lvl) lvl.castRange = n(m.value); break;
+      case "cast": if (lvl) lvl.castTime = n(m.value); break;
+      // The SUMMONED UNIT — Water Elemental's `Hwe1`, a Feral Spirit's `Osf1`, every "Summoned Unit
+      // Type" column in the meta file names this one field.
+      case "unitid": if (lvl) lvl.summon = s(m.value).trim(); break;
+      case "buffid": if (lvl) { lvl.buffs = list(m.value, false); buffsChanged = true; } break;
+      case "tip": def.tips[Math.max(0, m.levelOrVariation - 1)] = trigStr(s(m.value)); break;
+      case "ubertip": def.uberTips[Math.max(0, m.levelOrVariation - 1)] = trigStr(s(m.value)); break;
+      case "data": {
         // DataA..DataI slot from the meta `data` column (1–9). Behaviour (Holy Light's
-        // heal, Critical Strike's chance) reads these off `code`, which the clone kept.
+        // heal, Critical Strike's chance) reads these off `code`, which the clone kept. A
+        // column can hold a STRING (a unit list, an order id), which goes on `dataStr`.
         const slot = parseInt(row.string("data") ?? "0", 10) - 1;
-        if (lvl && slot >= 0 && slot < lvl.data.length) lvl.data[slot] = n(m.value);
+        if (!lvl || slot < 0 || slot >= lvl.data.length) break;
+        if (typeof m.value === "string") {
+          lvl.dataStr[slot] = m.value;
+          const num = Number(m.value);
+          if (m.value.trim() !== "" && Number.isFinite(num)) lvl.data[slot] = num;
+        } else lvl.data[slot] = n(m.value);
         break;
       }
-      default: break; // unhandled field (race, buttonpos, buff art, …) — inherit from base
+      default: break; // no AbilityDef field (editor suffix, race, checkDep, missile arc, …)
+    }
+  }
+  // A new buff brings its own worn art — re-resolved off the registry's buff rows, and only when
+  // the registry knows the buff (a map's own `B00x` from war3map.w3h keeps the base art).
+  const firstBuff = def.levelData[0]?.buffs[0];
+  if (buffsChanged && registry && firstBuff) {
+    const fx = registry.buffFx(firstBuff);
+    if (fx.length) {
+      def.buffFx = fx.map((f) => ({ ...f, attach: [...f.attach] }));
+      def.buffArt = fx[0]?.path ?? "";
     }
   }
 }
@@ -728,7 +803,7 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
     const base = registry.base(obj.oldId) ?? registry.get(obj.oldId);
     if (!base) continue; // base ability unknown — skip (the clone would have no `code`)
     const def = cloneAbility(base, obj.newId);
-    applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr);
+    applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr, registry);
     registry.setCustom(obj.newId, def);
     count++;
   }
@@ -736,7 +811,7 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
     const base = registry.base(obj.oldId);
     if (!base) continue;
     const def = cloneAbility(base, obj.oldId);
-    applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr);
+    applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr, registry);
     registry.setCustom(obj.oldId, def);
     count++;
   }
