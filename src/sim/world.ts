@@ -2317,7 +2317,27 @@ const SHARED_ROUTE_GOAL_SLACK = 4;
 const SHARED_ROUTE_JOIN_REACH = 48;
 /** Turns the slicing off (the escalated search runs in one go, as before) so its worth can be
  *  measured in a real match, the way TerrainCull.enabled and SightStamps.enabled are. */
-export const PathSlicing = { enabled: true };
+export const PathSlicing = {
+  enabled: true,
+  /** What the sliced search may spend in one step — PATH_SLICE_EXPANSIONS, its spike ceiling. */
+  sliceExpansions: PATH_SLICE_EXPANSIONS,
+  /** What a landed search is BILLED at — LONG_SEARCH_EXPANSIONS_PER_STEP, so the slot waits
+   *  `expansions / expansionsPerStep` steps before serving the next ask. Together with the slice
+   *  this is the detour budget: a queue that never empties spends about
+   *  slice·rate/(slice+rate) expansions a step on detours. Live-tunable so a match can A/B it. */
+  expansionsPerStep: LONG_SEARCH_EXPANSIONS_PER_STEP,
+};
+/** The collision pass's spatial grid (SimWorld.resolveCollisions). On, unless a test or a live A/B
+ *  turns it off to run the all-pairs loop it replaced — it changes what the pass COSTS and never
+ *  what it does (tools/sim-collision-grid-test.cjs). */
+export const CollisionGrid = { enabled: true };
+/** The grid's cell, in world units. Ours, and free to be anything: the reach a body is offered is
+ *  computed from the radii, so the size only decides how many cells a query walks and how many
+ *  bodies each one holds — four footman-sized bodies a side at 128. */
+const COLLIDE_CELL = 128;
+/** A ceiling on the grid's width and height in cells, so one body sent off to a far corner cannot
+ *  size it to the whole map; anything beyond is clamped into the edge cells, which stays exact. */
+const COLLIDE_MAX_CELLS = 256;
 /** Reroutes (a full A* each) any ONE sim step may run. The stagger above is what normally
  *  keeps this slack; this is the backstop for the case it cannot help — a hundred units
  *  shoved into the same corridor by the same event, all blocked on the same step. A skipped
@@ -21855,6 +21875,7 @@ export class SimWorld {
     blocked: ((cx: number, cy: number) => boolean) | undefined,
     domain: PathDomain,
     ring?: (cx: number, cy: number) => number,
+    askedAt = this.elapsed, // when the unit first asked — a queued ask has been waiting since then
   ): Array<[number, number]> | null {
     this.detourQueue.delete(u.id); // this is its turn
     if (PathSlicing.enabled) {
@@ -21863,7 +21884,7 @@ export class SimWorld {
       // while the whole search ran in one frame — and takes the full route when it lands.
       this.jobScratch ??= new PathScratch();
       const search = beginPath(this.jobScratch, this.grid, start, goal, blocked, undefined, domain, ring, u.footprint);
-      if (search) this.pathJob = { search, unitId: u.id, tx, ty, approach, blocked, domain };
+      if (search) this.pathJob = { search, unitId: u.id, askedAt, tx, ty, approach, blocked, domain };
       return null;
     }
     const cells = findPath(this.grid, start, goal, blocked, undefined, domain, ring, u.footprint);
@@ -21873,7 +21894,7 @@ export class SimWorld {
     // ceiling a frame-time decision instead of a "how big can an obstacle be" one.
     this.longSearchIn = Math.max(
       LONG_SEARCH_EVERY,
-      Math.ceil(pathExpansionsSpent() / LONG_SEARCH_EXPANSIONS_PER_STEP),
+      Math.ceil(pathExpansionsSpent() / PathSlicing.expansionsPerStep),
     );
     return cells;
   }
@@ -21899,7 +21920,7 @@ export class SimWorld {
       simProfile.tally("pathDetourServed");
       this.longSearchIn = LONG_SEARCH_EVERY; // reserved as escalate reserves it; billed when it lands
       const blocked = this.clearanceBlocker(u, start);
-      const cells = this.beginDetour(u, u.chaseX, u.chaseY, approach, start, goal, blocked, domain, ring);
+      const cells = this.beginDetour(u, u.chaseX, u.chaseY, approach, start, goal, blocked, domain, ring, want.since);
       if (cells && cells.length > 1) this.installRoute(u, cells, u.chaseX, u.chaseY, approach, blocked, domain);
       return;
     }
@@ -21940,16 +21961,22 @@ export class SimWorld {
     if (!job) return;
     simProfile.begin("sim.world.move.job");
     const before = job.search.expansions;
-    const done = job.search.run(PATH_SLICE_EXPANSIONS);
+    const done = job.search.run(PathSlicing.sliceExpansions);
     simProfile.tally("pathExpansions", job.search.expansions - before);
     simProfile.end("sim.world.move.job");
     if (!done) return;
     this.pathJob = null;
     this.longSearchIn = Math.max(
       LONG_SEARCH_EVERY,
-      Math.ceil(job.search.expansions / LONG_SEARCH_EXPANSIONS_PER_STEP),
+      Math.ceil(job.search.expansions / PathSlicing.expansionsPerStep),
     );
     simProfile.tally("pathJobsLanded");
+    // How long the unit waited for it, from its FIRST ask to this landing, in sim milliseconds —
+    // the price of the budget above, in the one unit a player notices. Summed, so the report's
+    // rate divided by `pathJobsLanded` is the mean wait; the gauge keeps the worst.
+    const waitMs = Math.round((this.elapsed - job.askedAt) * 1000);
+    simProfile.tally("pathDetourWaitMs", waitMs);
+    simProfile.gauge("detourWaitMs", waitMs);
     const u = this.units.get(job.unitId);
     if (!u || u.hp <= 0 || u.order === "idle" || Math.hypot(u.chaseX - job.tx, u.chaseY - job.ty) > PATHING_CELL * 2) return;
     const cells = job.search.result();
@@ -21985,6 +22012,8 @@ export class SimWorld {
   private pathJob: {
     search: PathSearch;
     unitId: number;
+    /** Sim seconds at which the unit first asked for this detour — see pathDetourWaitMs. */
+    askedAt: number;
     tx: number;
     ty: number;
     approach: { hx: number; hy: number } | undefined;
@@ -22010,7 +22039,7 @@ export class SimWorld {
    * Keyed on the unit, so a re-ask keeps its place and only refreshes the aim and the time
    * (`at`, sim seconds) — see `detourStillWanted` for what an entry has to still be true of.
    */
-  private detourQueue = new Map<number, { tx: number; ty: number; at: number }>();
+  private detourQueue = new Map<number, { tx: number; ty: number; at: number; since: number }>();
   /**
    * The last detour the sliced search landed, kept for the wave that is coming the same way.
    * The escalated search serves one unit at a time, so a wave of fifty past a treeline was
@@ -22081,7 +22110,10 @@ export class SimWorld {
     if (this.longSearchIn > 0 || this.pathJob || this.detourQueue.size > 0) {
       if (this.pathJob?.unitId !== u.id) {
         if (!this.detourQueue.has(u.id)) simProfile.tally("pathDetourQueued");
-        this.detourQueue.set(u.id, { tx: u.chaseX, ty: u.chaseY, at: this.elapsed });
+        // `at` is refreshed by every re-ask (detourStillWanted's freshness); `since` is the FIRST ask,
+        // which is what the unit has actually been waiting from (pathDetourWaitMs).
+        const since = this.detourQueue.get(u.id)?.since ?? this.elapsed;
+        this.detourQueue.set(u.id, { tx: u.chaseX, ty: u.chaseY, at: this.elapsed, since });
       }
       return false;
     }
@@ -22699,13 +22731,28 @@ export class SimWorld {
       u.velX = u.x - u.prevX;
       u.velY = u.y - u.prevY;
     }
-    // The pair loop is every mobile body against every other, twice — ~200,000 pairs a step in a
-    // late-game 600-unit match — and nearly every pair is two units nowhere near each other. So
-    // the reject reads FLAT COPIES of the four things it asks (position, radius, moving) instead
-    // of two unit objects per pair, and only a pair that is actually close touches the units.
-    // Exact, not approximate: a nudge moves the one unit it is handed and changes nothing else
-    // those copies hold (claimStep writes x/y and the claim), so each copy is written back the
-    // moment its unit is nudged and every pair still sees exactly what the object loop saw.
+    // Each body is only ever tested against the bodies that could be touching it. The old loop
+    // tried every mobile body against every other, twice — ~200,000 pairs a step in a late-game
+    // 600-unit match, nearly all of them two units nowhere near each other, and the one pass in
+    // the step whose cost grew with the SQUARE of the army.
+    //
+    // The pass reads FLAT COPIES of the four things a pair asks about (position, radius,
+    // moving), and files every body in a coarse grid of COLLIDE_CELL squares. A body is offered
+    // only the bodies in the cells its reach covers — its own radius plus the largest radius in
+    // the pass, which is the farthest any partner could be and still overlap it — sorted back
+    // into the order the old loop took them in.
+    //
+    // It is a different LOOP and not a different ANSWER, and tools/sim-collision-grid-test.cjs
+    // holds it to that, unit for unit, step for step. The pairs still run in the old (i, j)
+    // order. Nudges move bodies mid-pass, so the grid follows each one as it lands: a nudged body
+    // is re-filed at once, and when the body whose turn it is (i) is the one that moved, its
+    // remaining partners are gathered again from where it now stands. Nothing else moves a body
+    // during i's turn — a nudge moves only the unit it is handed (claimStep writes x/y and the
+    // claim) — so a partner the grid did not offer is provably clear of i at the moment the old
+    // loop would have reached it. (`CollisionGrid.enabled` = false runs the old loop, for that test
+    // and for a live A/B. A body with a non-finite position is filed in the first cell: no nudge
+    // can move it either way — footprintWalkableAt refuses a NaN target — so where it is filed
+    // decides nothing.)
     const m = list.length;
     if (this.collideX.length < m) {
       const size = Math.max(m, this.collideX.length * 2);
@@ -22713,83 +22760,208 @@ export class SimWorld {
       this.collideY = new Float64Array(size);
       this.collideR = new Float64Array(size);
       this.collideMoving = new Uint8Array(size);
+      this.collideNext = new Int32Array(size);
+      this.collidePrev = new Int32Array(size);
+      this.collideCellOf = new Int32Array(size);
+      this.collideCand = new Int32Array(size);
     }
     const xs = this.collideX;
     const ys = this.collideY;
     const rs = this.collideR;
     const mv = this.collideMoving;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxR = 0;
     for (let i = 0; i < m; i++) {
       const u = list[i];
       xs[i] = u.x;
       ys[i] = u.y;
       rs[i] = u.radius;
       mv[i] = u.moving ? 1 : 0;
+      if (u.x < minX) minX = u.x;
+      if (u.x > maxX) maxX = u.x;
+      if (u.y < minY) minY = u.y;
+      if (u.y > maxY) maxY = u.y;
+      if (u.radius > maxR) maxR = u.radius;
     }
+    if (m < 2) return;
+    if (!CollisionGrid.enabled) {
+      for (let iter = 0; iter < 2; iter++) {
+        for (let i = 0; i < m; i++) {
+          for (let j = i + 1; j < m; j++) {
+            if (mv[i] === 0 && mv[j] === 0) continue; // nobody to blame — leave them
+            const min = rs[i] + rs[j];
+            // Apart along either axis already means apart: `hypot` is never less than either
+            // leg, so this rejects exactly the pairs collidePair's `d >= min` would.
+            const ddx = xs[j] - xs[i];
+            if (ddx >= min || ddx <= -min) continue;
+            const ddy = ys[j] - ys[i];
+            if (ddy >= min || ddy <= -min) continue;
+            this.collidePair(list, i, j, ddx, ddy, min);
+          }
+        }
+      }
+      return;
+    }
+    if (!(maxX >= minX)) minX = maxX = 0;
+    if (!(maxY >= minY)) minY = maxY = 0;
+    const C = COLLIDE_CELL;
+    const cols = Math.min(COLLIDE_MAX_CELLS, Math.floor((maxX - minX) / C) + 1);
+    const rows = Math.min(COLLIDE_MAX_CELLS, Math.floor((maxY - minY) / C) + 1);
+    const cellCount = cols * rows;
+    if (this.collideHead.length < cellCount) this.collideHead = new Int32Array(Math.max(cellCount, this.collideHead.length * 2));
+    const head = this.collideHead;
+    head.fill(-1, 0, cellCount);
+    const next = this.collideNext;
+    const prev = this.collidePrev;
+    const cellOf = this.collideCellOf;
+    const cand = this.collideCand;
+    // Clamped into the grid, so a body nudged past the box it started in stays findable: a range
+    // clamped the same way still covers it. (`c > 0` is false for NaN, which lands in cell 0.)
+    const cellX = (x: number): number => {
+      const c = Math.floor((x - minX) / C);
+      return c > 0 ? (c < cols ? c : cols - 1) : 0;
+    };
+    const cellY = (y: number): number => {
+      const c = Math.floor((y - minY) / C);
+      return c > 0 ? (c < rows ? c : rows - 1) : 0;
+    };
+    const file = (i: number): void => {
+      const cell = cellY(ys[i]) * cols + cellX(xs[i]);
+      cellOf[i] = cell;
+      prev[i] = -1;
+      next[i] = head[cell];
+      if (next[i] >= 0) prev[next[i]] = i;
+      head[cell] = i;
+    };
+    const refile = (i: number): void => {
+      if (cellY(ys[i]) * cols + cellX(xs[i]) === cellOf[i]) return;
+      if (prev[i] >= 0) next[prev[i]] = next[i];
+      else head[cellOf[i]] = next[i];
+      if (next[i] >= 0) prev[next[i]] = prev[i];
+      file(i);
+    };
+    // Every partner of i numbered above `after` that could be touching it, ascending.
+    const gather = (i: number, after: number): number => {
+      const reach = rs[i] + maxR;
+      const x0 = cellX(xs[i] - reach);
+      const x1 = cellX(xs[i] + reach);
+      const y0 = cellY(ys[i] - reach);
+      const y1 = cellY(ys[i] + reach);
+      const idle = mv[i] === 0;
+      let n = 0;
+      for (let cy = y0; cy <= y1; cy++) {
+        for (let cx = x0; cx <= x1; cx++) {
+          for (let j = head[cy * cols + cx]; j >= 0; j = next[j]) {
+            if (j <= after || (idle && mv[j] === 0)) continue; // taken already, or nobody to blame
+            cand[n++] = j;
+          }
+        }
+      }
+      if (n > 24) cand.subarray(0, n).sort();
+      else {
+        for (let k = 1; k < n; k++) {
+          const v = cand[k];
+          let h = k;
+          while (h > 0 && cand[h - 1] > v) {
+            cand[h] = cand[h - 1];
+            h--;
+          }
+          cand[h] = v;
+        }
+      }
+      return n;
+    };
+    for (let i = 0; i < m; i++) file(i);
     for (let iter = 0; iter < 2; iter++) {
       for (let i = 0; i < m; i++) {
-        for (let j = i + 1; j < m; j++) {
-          if (mv[i] === 0 && mv[j] === 0) continue; // nobody to blame — leave them
+        let n = gather(i, i);
+        for (let k = 0; k < n; k++) {
+          const j = cand[k];
           const min = rs[i] + rs[j];
-          // Apart along either axis already means apart: `hypot` is never less than either leg,
-          // so this rejects exactly the pairs the `d >= min` test below would, without the call.
           const ddx = xs[j] - xs[i];
           if (ddx >= min || ddx <= -min) continue;
           const ddy = ys[j] - ys[i];
           if (ddy >= min || ddy <= -min) continue;
-          const a = list[i];
-          const b = list[j];
-          let dx = ddx;
-          let dy = ddy;
-          let d = Math.hypot(dx, dy);
-          if (d >= min) continue;
-          if (d === 0) {
-            dx = 1;
-            dy = 0;
-            d = 1;
+          const ax = xs[i];
+          const ay = ys[i];
+          const bx = xs[j];
+          const by = ys[j];
+          this.collidePair(list, i, j, ddx, ddy, min);
+          if (xs[j] !== bx || ys[j] !== by) refile(j);
+          if (xs[i] !== ax || ys[i] !== ay) {
+            // i itself moved: whoever is left to try is whoever is near where it stands NOW.
+            refile(i);
+            n = gather(i, j);
+            k = -1;
           }
-          const overlap = min - d;
-          if (a.moving && b.moving) {
-            const nx = dx / d; // unit vector a→b
-            const ny = dy / d;
-            const half = overlap / 2;
-            // Tangential slide ONLY when the pair is genuinely closing head-on
-            // (relative velocity shrinks the gap) — that's the deadlock case the
-            // slide is meant to break. Parallel/circling pairs (relative velocity
-            // perpendicular to the gap) get pure radial separation, so nothing
-            // keeps spinning them around each other.
-            const closing = (b.velX - a.velX) * nx + (b.velY - a.velY) * ny < -1e-4;
-            if (closing && a.yieldT <= 0 && b.yieldT <= 0) {
-              // Head-on: rather than both sidestepping forever (the "dance"), the
-              // lower-priority unit (higher id) pauses a beat so the other clears.
-              // The guard (neither already yielding) keeps it a one-shot pause per
-              // encounter, not a re-armed freeze; checkStuck() is the backstop if the
-              // way never opens.
-              (a.id > b.id ? a : b).yieldT = YIELD_TIME;
-            }
-            const tx = closing ? -ny * half : 0;
-            const ty = closing ? nx * half : 0;
-            this.nudge(a, -nx * half + tx, -ny * half + ty);
-            this.nudge(b, nx * half - tx, ny * half - ty);
-          } else if (a.moving) {
-            this.nudge(a, (-dx / d) * overlap, (-dy / d) * overlap);
-          } else {
-            this.nudge(b, (dx / d) * overlap, (dy / d) * overlap);
-          }
-          // …and the copies follow whatever the nudges did (a refused nudge moved nothing).
-          xs[i] = a.x;
-          ys[i] = a.y;
-          xs[j] = b.x;
-          ys[j] = b.y;
         }
       }
     }
   }
 
-  /** resolveCollisions' flat copies — kept and grown rather than allocated per step. */
+  /** One pair of resolveCollisions that survived the far-apart reject: separate them if they
+   *  overlap, and bring the flat copies up to date with whatever the nudges did. */
+  private collidePair(list: SimUnit[], i: number, j: number, ddx: number, ddy: number, min: number): void {
+    const a = list[i];
+    const b = list[j];
+    let dx = ddx;
+    let dy = ddy;
+    let d = Math.hypot(dx, dy);
+    if (d >= min) return;
+    if (d === 0) {
+      dx = 1;
+      dy = 0;
+      d = 1;
+    }
+    const overlap = min - d;
+    if (a.moving && b.moving) {
+      const nx = dx / d; // unit vector a→b
+      const ny = dy / d;
+      const half = overlap / 2;
+      // Tangential slide ONLY when the pair is genuinely closing head-on
+      // (relative velocity shrinks the gap) — that's the deadlock case the
+      // slide is meant to break. Parallel/circling pairs (relative velocity
+      // perpendicular to the gap) get pure radial separation, so nothing
+      // keeps spinning them around each other.
+      const closing = (b.velX - a.velX) * nx + (b.velY - a.velY) * ny < -1e-4;
+      if (closing && a.yieldT <= 0 && b.yieldT <= 0) {
+        // Head-on: rather than both sidestepping forever (the "dance"), the
+        // lower-priority unit (higher id) pauses a beat so the other clears.
+        // The guard (neither already yielding) keeps it a one-shot pause per
+        // encounter, not a re-armed freeze; checkStuck() is the backstop if the
+        // way never opens.
+        (a.id > b.id ? a : b).yieldT = YIELD_TIME;
+      }
+      const tx = closing ? -ny * half : 0;
+      const ty = closing ? nx * half : 0;
+      this.nudge(a, -nx * half + tx, -ny * half + ty);
+      this.nudge(b, nx * half - tx, ny * half - ty);
+    } else if (a.moving) {
+      this.nudge(a, (-dx / d) * overlap, (-dy / d) * overlap);
+    } else {
+      this.nudge(b, (dx / d) * overlap, (dy / d) * overlap);
+    }
+    // …and the copies follow whatever the nudges did (a refused nudge moved nothing).
+    this.collideX[i] = a.x;
+    this.collideY[i] = a.y;
+    this.collideX[j] = b.x;
+    this.collideY[j] = b.y;
+  }
+
+  /** resolveCollisions' working set — flat copies and the grid's per-cell linked lists, kept and
+   *  grown rather than allocated per step. */
   private collideX = new Float64Array(0);
   private collideY = new Float64Array(0);
   private collideR = new Float64Array(0);
   private collideMoving = new Uint8Array(0);
+  private collideNext = new Int32Array(0);
+  private collidePrev = new Int32Array(0);
+  private collideCellOf = new Int32Array(0);
+  private collideCand = new Int32Array(0);
+  private collideHead = new Int32Array(0);
 
 
   // Fan stopped air units apart (issue #31). Flyers cruise with no collision (they

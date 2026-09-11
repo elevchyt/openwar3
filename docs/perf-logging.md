@@ -245,6 +245,32 @@ phase that grew ~0.35 ms/frame per MINUTE with nothing on screen changing. It wr
 now, and only to a running context. The same lesson as the bone-matrix uploads above, with a
 worse failure mode: that one wasted a call, this one accumulated.
 
+**A PASS THAT GROWS WITH THE SQUARE OF THE ARMY GETS A GRID, NOT A FASTER INNER LOOP.** The
+collision pass (`resolveCollisions`) tried every mobile ground body against every other, twice
+a step. Flat copies of the four fields a pair reads made each try cheap; they could not make there
+be fewer of them. `CollisionGrid` files every body in COLLIDE_CELL squares and offers a body only
+the bodies within its reach (its radius plus the largest in the pass), sorted back into the old
+pair order — and it follows the nudges as they land, re-filing a nudged body at once and
+re-gathering the partners of the body whose turn it is when that body is the one that moved. That
+is the whole argument for exactness: nothing else moves a body during its turn, so a partner the
+grid did not offer is provably clear at the moment the old loop would have reached it.
+`tools/sim-collision-grid-test.cjs` holds it to that, position and facing, step for step, over
+crossing crowds and a single dense pile, against `CollisionGrid.enabled = false`. The pass alone,
+headless: 450 bodies 0.61 → 0.12 ms, 1,000 bodies 2.53 → 0.31, 1,600 bodies 5.63 → 0.58 — the
+all-pairs cost quadruples as the army doubles, the grid's roughly doubles. **Look for this
+wherever a pass compares everything with everything** — and note what kept it exact: the grid is
+told about every change to what it indexes, in the same loop that makes the change.
+
+**THE DETOUR BUDGET, AND WHAT IT COSTS A UNIT.** The sliced detour search spends a fixed budget
+whenever anybody is queued for one, which in a busy match is always: 7.3 % of main-thread time at
+520 units, the largest single pathing cost left. `PathSlicing.sliceExpansions` (the per-step
+ceiling) and `PathSlicing.expansionsPerStep` (the rate a landed search is billed at) are that
+budget, and live-tunable so a real match can A/B them. What a smaller budget costs is TIME — a
+unit walks its best-effort route into the trees for longer before the real one lands — so the log
+counts it: `pathDetourWaitMs` sums each landed detour's wait from its unit's FIRST ask (a re-ask
+refreshes the queue entry's `at`, so the entry keeps `since`), which the report's rate divided by
+`pathJobsLanded` makes a mean, and the `detourWaitMs` gauge keeps the worst.
+
 **AND THE CHEAP ONES, EACH EXACT.** A whole-world scan run per unit per step pays for its dearest
 predicate on every unit, so order them cheapest first: a creep asked `creepInFight` (a walk over
 every unit) before learning it had no meld to break (`tickCreep`) or no Hide to take
