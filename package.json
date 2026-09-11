@@ -83,6 +83,7 @@
         "AppImage"
       ],
       "category": "Game",
+      "icon": "build/icons",
       "synopsis": "Browser-first re-creation of the Warcraft III engine",
       "syncDesktopName": true,
       "executableName": "openwar3",
@@ -95,13 +96,15 @@
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "mac": {
       "target": [
         "dmg"
       ],
-      "category": "public.app-category.games"
+      "category": "public.app-category.games",
+      "icon": "build/icon.icns"
     },
     "publish": [
       {

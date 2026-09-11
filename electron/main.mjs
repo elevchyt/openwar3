@@ -29,6 +29,13 @@ import { readSettings, useSettingsDir, writeSettings } from "./settings.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const DIST = join(here, "..", "dist");
 
+/** The icon the WINDOW wears, for the places Linux asks the running process for one rather than
+ *  reading the .desktop entry (the task bar, the alt-tab switcher, the AppImage run straight from
+ *  a download with nothing installed). Windows and macOS take theirs from the packaged bundle and
+ *  ignore this. It is read out of `dist/` because that is what electron-builder packages —
+ *  `build/` is build INPUT and never ships — and tools/make-icon.mjs writes both. */
+const WINDOW_ICON = join(DIST, "icon-512.png");
+
 /** The scheme the page reads the player's install through (electron/install.mjs). It is NOT a
  *  server: it lives inside this app's session, so the bytes never touch a socket and no other
  *  machine can address them — which is what lets the desktop app read an install at all while
@@ -84,6 +91,10 @@ function createWindow(url) {
     height: 900,
     fullscreen: true,
     backgroundColor: "#000000",
+    // Only when it is actually there: a missing path here is not an error Electron reports, it is
+    // a window that silently wears the default Electron icon — and in `pnpm app:dev` there may be
+    // no `dist/` at all, since that mode loads the page from the vite server instead.
+    ...(existsSync(WINDOW_ICON) ? { icon: WINDOW_ICON } : {}),
     show: false,
     webPreferences: {
       preload: join(here, "preload.cjs"),
