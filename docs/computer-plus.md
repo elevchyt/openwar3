@@ -3640,13 +3640,33 @@ says being kept out of the reading below it:
    help that nobody made;
 2. the **declines**, because every one of them contains the word a request is recognised by ("i
    can't help right now" is not a request for help);
-3. the **attack announcement**, which is additionally gated on a **colour** being named — that
+3. **being attacked** (`VICTIM`) is set aside first — "im under attack by the undead" and "the
+   orc is rushing me" carry the attack verbs and name a race, and both are calls for HELP;
+4. the **rally** — "attack", "lets hit", "push mid", "lets attack the undead" — a REQUEST for
+   company, recognised by its SHAPE (the line opens with the verb, or it is "lets …", "… with me",
+   "time to …") and not by a name, because "attack!" names nobody and is the commonest rally there
+   is. Nothing a computer announces has one of those shapes: "attacking blue" opens with a subject,
+   and `attacking` is not the word `attack`;
+5. the **attack announcement**, which is additionally gated on a **colour** being named — that
    gate is what keeps it from eating the file's own `HELP_CALLS`, one of which reads *"i'm under
    attack from multiple sides, need help"*. A request for help names no colour; an announcement
    always does, because naming who is the point of it. `namedColour` matches **longest first**,
    or every call to hit light blue is heard as a call to hit blue — a different player, usually
    on the other side of the map;
-4. and only then `help`.
+6. and only then `help`.
+
+**A rally is owed an answer; an announcement is not.** "im going to hit the undead" from a
+teammate who is not interested gets silence, which is how a team game reads. "attack!" is a
+question, and every allied Computer+ player answers it — yes (`RALLY_ACCEPT_LINES`, and the wave
+actually goes), already doing it (`RALLY_ALREADY_LINES`), or no and WHY (`RALLY_BUSY_LINES`: base
+under attack, in a fight, creeping, army dead, army too small, too early, helping somebody else).
+Once per `RALLY_ANSWER_GAP` per computer, so "attack attack ATTACK" is answered once. An unnamed
+rally is aimed by each listener (`rallyFoe`): the opponent whose base is nearest the CALLER's army,
+which is who a person typing "lets attack" is standing in front of. It is joined on the
+difficulty's earliest attack alone rather than on the wave's own clocks — a teammate asking is a
+reason of its own to go. Every answer line opens with a word `BUSY` or `JOINING` reads, and the
+test pins it: a "can't join, my base is under attack" heard as a call for help would march the
+next computer's army to a base nobody asked it to defend.
 
 Without that ordering two computers answer each other's answers for the rest of the match, which
 is why `tools/ai-plus-teamchat-test.cjs` runs the file's own vocabulary through its own parser and

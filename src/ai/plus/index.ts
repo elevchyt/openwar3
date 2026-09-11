@@ -24,6 +24,7 @@ import {
   OVERRUN_EDGE, PORTAL_LINES, PORTAL_WALK, STRATEGY_TIER, SWITCH_MARGIN, TALK_GAP, attackLine,
   namedColour, namedPlayer, playerNames,
   openerLine, readAllyCall, switchLine,
+  RALLY_ACCEPT_LINES, RALLY_ALREADY_LINES, RALLY_ANSWER_GAP, RALLY_BUSY_LINES,
   type PlayerName, type SwitchReason,
 } from "./teamchat";
 import { plusProfile, type PlusProfile } from "./profile";
@@ -1814,9 +1815,13 @@ interface Brain {
   /** An ally's ATTACK announcement that has not been acted on yet (null = none): who said it,
    *  and which player they named. Parked by `heard` and answered by the manners pass, for the
    *  same reason `called` is — see `Brain.called`. */
-  joinCall: { from: number; foe: number } | null;
-  /** …and when this computer's turn to answer it comes (`JOIN_STAGGER`). */
+  joinCall: { from: number; foe: number; ask: boolean } | null;
+  /** …and when this computer's turn to answer it comes (`JOIN_STAGGER`). `ask` is a RALLY
+   *  ("attack!", "lets hit the undead") rather than an announcement, and `foe` is -1 when the
+   *  rally named nobody — see `answerAttack`. */
   joinAt: number;
+  /** When this computer last answered a rally (`RALLY_ANSWER_GAP`). */
+  rallyAnsweredAt: number;
   /** The player this computer said it was coming with (-1 = none), and the clock that promise
    *  runs out on. */
   joining: number;
@@ -2004,6 +2009,7 @@ export class ComputerPlusAi {
       attackSaidAt: -Infinity,
       joinCall: null,
       joinAt: 0,
+      rallyAnsweredAt: -Infinity,
       joining: -1,
       joinUntil: 0,
       helping: -1,
@@ -2040,12 +2046,13 @@ export class ComputerPlusAi {
    */
   heard(line: ChatLine, recipients: readonly number[]): void {
     const call = readAllyCall(line.text);
-    if (call !== "help" && call !== "attack") return;
+    if (call !== "help" && call !== "attack" && call !== "rally") return;
     // WHO an attack announcement named, resolved once for every listener. The RACE is what these
     // computers say ("the undead at the top", `playerNames`) and a COLOUR is what a person still
     // types, so both readings are tried — either way what comes out is a seat, which is the only
-    // thing an army can be pointed at.
-    const foe = call === "attack"
+    // thing an army can be pointed at. A RALLY may name nobody at all ("attack!"), and then -1
+    // travels on to `answerAttack`, where each listener aims it from its own side (`rallyFoe`).
+    const foe = call !== "help"
       ? (() => {
         const named = namedPlayer(line.text, this.namesFor(line.from));
         return named >= 0 ? named : this.playerWearing(namedColour(line.text));
@@ -2071,8 +2078,8 @@ export class ComputerPlusAi {
       // …and an ATTACK call is only worth answering if the player named is somebody THIS
       // computer is also at war with. An ally announcing a target we are allied to is not an
       // invitation to break an alliance.
-      if (foe === me || this.host.coAllied(me, foe)) continue;
-      b.joinCall = { from: line.from, foe };
+      if (foe >= 0 && (foe === me || this.host.coAllied(me, foe))) continue;
+      b.joinCall = { from: line.from, foe, ask: call === "rally" };
       b.joinAt = b.clock + JOIN_STAGGER * turn++;
     }
   }
@@ -5774,13 +5781,35 @@ export class ComputerPlusAi {
   private answerAttack(b: Brain): void {
     if (!b.joinCall) return;
     if (b.clock < b.joinAt) return; // its turn — see JOIN_STAGGER
-    const { from, foe } = b.joinCall;
+    const { from, ask } = b.joinCall;
+    const named = b.joinCall.foe;
     b.joinCall = null;
     if (!b.allies.includes(from)) return;
-    if (b.helping >= 0) return; // already promised to be somewhere else
-    if (b.joining === foe && b.clock < b.joinUntil) return; // already coming, and said so
-    if (this.busyLines(b)) return; // not interested — and says nothing
-    if (!this.waveReady(b)) return;
+    // A RALLY ("attack!", "lets hit the undead") is a question put to the team, and it is OWED an
+    // answer — yes, or no and why (teamchat.ts `AllyCall`). Once per `RALLY_ANSWER_GAP`, so a
+    // player typing it three times is answered once. An ANNOUNCEMENT keeps the old rule: an ally
+    // that is not interested says nothing.
+    if (ask) {
+      if (b.clock - b.rallyAnsweredAt < RALLY_ANSWER_GAP) return;
+      b.rallyAnsweredAt = b.clock;
+    }
+    const decline = (lines: readonly string[]): void => { if (ask) this.tell(b, lines); };
+    if (b.helping >= 0) return decline(RALLY_BUSY_LINES.helping); // already promised elsewhere
+    // WHO. A rally that named nobody is aimed by the listener — see `rallyFoe`.
+    const foe = named >= 0 ? named : this.rallyFoe(b, from);
+    if (foe < 0) return; // nobody left to attack: nothing honest to say either
+    if (b.joining === foe && b.clock < b.joinUntil) return decline(RALLY_ALREADY_LINES); // already coming
+    // …and already DOING it: the wave is walking at that very player. Nothing to change, and
+    // "already on it" is the answer a person gives.
+    if (b.mode === "attacking" && !b.creeping && this.targetOwner(b) === foe) return decline(RALLY_ALREADY_LINES);
+    const busy = this.rallyBusy(b);
+    if (busy) return decline(busy);
+    // READY. An announcement is joined on this wave's own clocks (`waveReady`), because a
+    // computer that walked out because somebody else happened to attack would be attacking with
+    // less than it has decided an attack takes. A rally is a teammate ASKING, which is a reason
+    // of its own to go early: only the difficulty's earliest attack still stands (and an army
+    // big enough to be one — `rallyBusy`'s "small").
+    if (ask ? b.clock < b.profile.firstAttack : !this.waveReady(b)) return decline(RALLY_BUSY_LINES.notReady);
     const spot = this.foeBase(b, foe);
     if (!spot) return;
     b.joining = foe;
@@ -5793,8 +5822,46 @@ export class ComputerPlusAi {
     b.attackSaid = foe;
     b.attackSaidAt = b.clock;
     this.setMode(b, "attacking");
-    this.tell(b, JOIN_LINES);
+    this.tell(b, ask ? RALLY_ACCEPT_LINES : JOIN_LINES);
     this.commit(b, spot.x, spot.y);
+  }
+
+  /**
+   * WHO AN UNNAMED RALLY MEANS — "attack!" with nobody in it.
+   *
+   * The opponent whose base is nearest the CALLER's army: a person who types "lets attack" is
+   * standing with their army and means whoever is in front of it, which is also the opponent a
+   * teammate walking over could actually reach alongside them. Their army's position is asked of
+   * `AiPlayer.knows` exactly as a rescue's is (`allyArmy`, usually yes through the shared vision a
+   * team grants), then their base, then our own. Only players still on the map count, and never
+   * one we are allied to.
+   */
+  private rallyFoe(b: Brain, caller: number): number {
+    const me = b.ai.player;
+    const from = this.allyArmy(b, caller) ?? this.allyBase(b, caller) ?? b.ai.home();
+    const playing = new Set<number>();
+    for (const u of this.host.world.units.values()) if (u.hp > 0) playing.add(u.owner);
+    let best = -1;
+    let bestD = Infinity;
+    for (const s of this.host.startLocations()) {
+      const p = s.player;
+      if (p === me || p === caller || !playing.has(p) || this.host.coAllied(me, p)) continue;
+      const spot = this.foeBase(b, p);
+      if (!spot) continue;
+      const d = Math.hypot(spot.x - from.x, spot.y - from.y);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  }
+
+  /** Why it cannot join a rally, or null if it can — `busyLines`' reasons, said as a no to an
+   *  attack rather than to a rescue (`RALLY_BUSY_LINES`). */
+  private rallyBusy(b: Brain): readonly string[] | null {
+    if (b.mode === "defending" || b.ai.townThreatened()) return RALLY_BUSY_LINES.attacked;
+    if (b.mode === "retreating") return RALLY_BUSY_LINES.broken;
+    if (this.squadFood(b) < b.profile.attackFood) return RALLY_BUSY_LINES.small;
+    if (b.mode === "attacking") return b.creeping ? RALLY_BUSY_LINES.creeping : RALLY_BUSY_LINES.fighting;
+    return null;
   }
 
   /** How long the promise binds. After that the army manager owns the wave again — it is a

@@ -23,6 +23,7 @@ const {
   readAllyCall, namedColour, namedRace, namedPlayer, playerNames, plural, switchLine, openerLine,
   attackLine,
   HELP_CALLS, COMING_LINES, PORTAL_LINES, BUSY_LINES, JOIN_LINES, COLOUR_NAMES, RACE_WORDS,
+  RALLY_ACCEPT_LINES, RALLY_ALREADY_LINES, RALLY_BUSY_LINES,
 } = require(join(REPO, ".sim-build", "src", "ai", "plus", "teamchat.js"));
 
 let failed = 0;
@@ -43,7 +44,7 @@ for (const said of [
 ]) check(`hears a call: ${JSON.stringify(said)}`, readAllyCall(said), "help");
 
 // …and the other direction, which matters more. A word that merely CONTAINS "help" is not one.
-for (const said of ["", "gg", "glhf", "nice one", "that helped", "helping you", "helpful", "attack now"]) {
+for (const said of ["", "gg", "glhf", "nice one", "that helped", "helping you", "helpful", "im attacking", "kill me"]) {
   check(`not a call: ${JSON.stringify(said)}`, readAllyCall(said), null);
 }
 // A DECLINE contains the word and is not a request — with or without the apostrophe, which the
@@ -60,6 +61,36 @@ for (const said of [
 ]) {
   const got = readAllyCall(said);
   check(`its own answer is not a call: ${JSON.stringify(said)}`, got === "help", false);
+  // …nor a RALLY: a rally is owed an answer, so a computer line read as one is a computer
+  // answering every other computer's attack with a yes or a no.
+  check(`its own line is not a rally: ${JSON.stringify(said)}`, got === "rally", false);
+}
+// The answers to a rally are the same loop one step further out: each has to read as an answer
+// (joining / busy) or as nothing — never as help, a rally or an attack.
+for (const said of [...RALLY_ACCEPT_LINES, ...RALLY_ALREADY_LINES, ...Object.values(RALLY_BUSY_LINES).flat()]) {
+  const got = readAllyCall(said);
+  check(`a rally answer is no call: ${JSON.stringify(said)}`, got === "help" || got === "rally" || got === "attack", false);
+}
+for (const said of RALLY_ACCEPT_LINES) check(`a yes reads as joining: ${JSON.stringify(said)}`, readAllyCall(said), "joining");
+for (const said of Object.values(RALLY_BUSY_LINES).flat()) check(`a no reads as busy: ${JSON.stringify(said)}`, readAllyCall(said), "busy");
+
+// --- a RALLY: "attack!", "lets hit", "lets attack the undead" -----------------------------------
+// The request in as many words — understood with or without a player named, in the forms a person
+// types it.
+for (const said of [
+  "attack", "ATTACK!", "attack now", "lets attack", "let's attack", "Let's hit", "lets hit them",
+  "let's attack the undead", "lets all push", "push mid", "ok attack", "guys attack now", "lets go",
+  "gogo", "all in", "attack with me", "come push with me", "join me", "who's with me", "we attack now",
+  "time to push", "hit the orc", "lets push green", "go attack", "let's go hit them",
+]) check(`hears a rally: ${JSON.stringify(said)}`, readAllyCall(said), "rally");
+// BEING attacked is a call for help, never a rally or an announcement — even with a race named.
+for (const said of [
+  "im under attack", "i'm under attack by the undead", "they are hitting my base", "the orc is rushing me",
+  "getting attacked", "they're attacking us",
+]) check(`being attacked is help: ${JSON.stringify(said)}`, readAllyCall(said), "help");
+// A negation in front of the verb is a decline, not a rally.
+for (const said of ["dont attack yet", "don't push", "not now", "can't join"]) {
+  check(`a no to attacking is busy: ${JSON.stringify(said)}`, readAllyCall(said), "busy");
 }
 // …and everything it ASKS with must read as one, or a computer could never call another computer.
 for (const said of HELP_CALLS) check(`its own call is a call: ${JSON.stringify(said)}`, readAllyCall(said), "help");
@@ -81,13 +112,14 @@ for (const said of JOIN_LINES) {
   check(`joining is joining, not coming: ${JSON.stringify(said)}`, readAllyCall(said), "joining");
 }
 for (const said of [
-  "im going to hit blue", "attacking yellow's base", "hitting RED now", "lets push green",
+  "im going to hit blue", "attacking yellow's base", "hitting RED now",
   "going in on light blue", "im rushing brown",
 ]) check(`hears an attack call: ${JSON.stringify(said)}`, readAllyCall(said), "attack");
 
-// An attack call with no colour in it is not one — which is what keeps the file's OWN request
-// for help ("i'm under attack from multiple sides") out of this reading.
-for (const said of ["attack now", "im attacking", "lets push"]) {
+// An ANNOUNCEMENT with no colour in it is not one — which is what keeps the file's OWN request
+// for help ("i'm under attack from multiple sides") out of this reading. (An unnamed REQUEST is a
+// rally, pinned above.)
+for (const said of ["im attacking", "attacking now"]) {
   check(`no colour, no attack call: ${JSON.stringify(said)}`, readAllyCall(said) === "attack", false);
 }
 

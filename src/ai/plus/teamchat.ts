@@ -71,12 +71,19 @@ function fold(text: string): string {
 /**
  * What a heard line is asking for.
  *
- * Two of them move an army — `help` (come to my base) and `attack` (I am hitting that player,
- * come with me if you like). The other three are recognised so a computer does not read another
- * computer's ANSWER as a fresh request and answer the answer: `coming` and `joining` are the two
- * answers, `busy` is the decline.
+ * Three of them move an army — `help` (come to my base), `attack` (I am hitting that player,
+ * come with me if you like) and `rally` (LET'S attack — a request for company, with or without a
+ * player named). The other three are recognised so a computer does not read another computer's
+ * ANSWER as a fresh request and answer the answer: `coming` and `joining` are the two answers,
+ * `busy` is the decline.
+ *
+ * `attack` and `rally` are two readings of one wish on purpose, and the difference is whether an
+ * answer is OWED. "im going to hit the undead" is an announcement: an ally that is not interested
+ * says nothing, which is how a team game reads (see `JOIN_LINES`). "attack!" / "lets hit them" is
+ * a QUESTION put to the team, and silence is not an answer to a question — so a rally is always
+ * answered, yes or no, and the no says why (`RALLY_BUSY_LINES`).
  */
-export type AllyCall = "help" | "coming" | "busy" | "attack" | "joining";
+export type AllyCall = "help" | "coming" | "busy" | "attack" | "rally" | "joining";
 
 /**
  * What an ally just said, or null for anything this AI has no reading of.
@@ -99,12 +106,23 @@ export function readAllyCall(text: string): AllyCall | null {
   if (JOINING.some((re) => re.test(said))) return "joining";
   if (COMING.some((re) => re.test(said))) return "coming";
   if (BUSY.some((re) => re.test(said))) return "busy";
+  // BEING attacked is not attacking. "im under attack", "they are hitting my base" and "the orc is
+  // rushing me" all carry the word both attack readings are recognised by, and every one of them
+  // is a call for HELP — so neither attack reading may have them, and they fall through to `HELP`.
+  const victim = VICTIM.some((re) => re.test(said));
+  // A REQUEST for company — "attack", "lets hit them", "push mid", "lets attack the undead". Named
+  // or not: an unnamed rally is aimed by the listener (`ComputerPlusAi.rallyFoe`).
+  if (!victim && RALLY.some((re) => re.test(said))) return "rally";
   // …and the ATTACK announcement, which is the one reading that also has to NAME SOMEBODY (see
   // `ATTACK` for why that is a condition rather than a detail). Either name will do: a race
   // ("the undead") is what these computers say now, a colour ("blue") is what a person still
   // types and what a seat of unknown race is called.
-  if ((namedRace(said) !== null || namedColour(said) >= 0) && ATTACK.some((re) => re.test(said))) return "attack";
+  if (!victim && (namedRace(said) !== null || namedColour(said) >= 0) && ATTACK.some((re) => re.test(said))) return "attack";
   if (HELP.some((re) => re.test(said))) return "help";
+  // Only the victim phrases that are unmistakably about US are a call in their own right. The
+  // looser ones ("they are pushing") only keep a line out of the attack readings — "kill me" is
+  // not a request to march an army anywhere.
+  if (VICTIM_HELP.some((re) => re.test(said))) return "help";
   return null;
 }
 
@@ -113,11 +131,67 @@ export function readAllyCall(text: string): AllyCall | null {
  * and tested before `COMING` for exactly that reason: every line in `JOIN_LINES` contains the
  * word "coming", so without this a computer that said "im coming with you" would be heard by the
  * third teammate as somebody answering a call for help that nobody made.
+ *
+ * The anchored patterns are the short agreements `RALLY_ACCEPT_LINES` says. Anchored because the
+ * words are everywhere else: "im in" is an agreement, "im in trouble" is a call for help.
  */
 const JOINING: readonly RegExp[] = [
   /\b(coming|come|going|go|rolling|roll) with (you|u|ya)\b/,
   /\b(ill|i ll|i will|im|i m) (join|joining|coming|going) (you|with you|in with you)\b/,
   /\bcount me in\b/,
+  /\bright behind (you|u|ya)\b/,
+  /^ (?:[a-z]+ ){0,2}(im|i m) in $/,
+  /^ (?:[a-z]+ ){0,2}on it $/,
+];
+
+/** The verbs a rally is made of. `go in`, `all in` and `gank` are how it is typed as often as
+ *  `attack` is. */
+const RALLY_VERB = "(attack|atk|hit|push|rush|siege|raid|gank|kill|fight|engage|charge|go in|all in)";
+
+/**
+ * "LET'S attack." A request for company, as a person types it into a team game.
+ *
+ * Four shapes, and every one of them is a request rather than a report:
+ *
+ *  · the IMPERATIVE — the line opens with the verb, after at most a couple of filler words
+ *    ("attack", "ok attack now", "guys push mid", "hit the undead"). A report opens with a
+ *    subject instead ("im attacking", "attacking blue" — `attacking` is not the word `attack`);
+ *  · LET'S — "lets attack", "let's all push", "lets go hit them", and "lets go" said on its own;
+ *  · the INVITATION — "attack with me", "come push with me", "join me", "who's with me";
+ *  · the TEAM — "we attack now", "time to push", "we should hit them".
+ *
+ * Nothing a computer says as an ANNOUNCEMENT (`attackLine`) has any of these shapes, and
+ * `tools/ai-plus-teamchat-test.cjs` pins that: an announcement read as a rally would make every
+ * teammate answer every computer's attack with a yes or a no.
+ */
+const RALLY: readonly RegExp[] = [
+  new RegExp(`^ (?:(?:ok|okay|guys|team|all|everyone|now|go|gogo|come on|pls|plz|please|and) ){0,3}${RALLY_VERB}\\b`),
+  new RegExp(`\\b(lets|let s|let us)\\b(?: (?:all|go|now|just|together|and)){0,2} ${RALLY_VERB}\\b`),
+  /^ (?:ok |okay |guys |come on )?(lets|let s) go(?: (?:guys|team|all|now|in))? $/,
+  /^ (?:gogo|go go|go go go|all in) $/,
+  new RegExp(`\\b${RALLY_VERB} with me\\b`),
+  /\b(join me|come with me|who s with me|whos with me|who is with me)\b/,
+  new RegExp(`\\b(we|we should|we must|time to|go|come|come and)\\b ${RALLY_VERB}\\b`),
+];
+
+/**
+ * BEING the one attacked, in the forms that carry an attack verb — see `readAllyCall`.
+ *
+ * Tested ahead of both attack readings, so "they're hitting my base" and "the orc is rushing me"
+ * are calls for help rather than an invitation to go and hit the orc.
+ */
+const VICTIM: readonly RegExp[] = [
+  /\bunder (attack|siege|fire)\b/,
+  /\b(attack|attacking|attacked|hit|hitting|push|pushing|rush|rushing|raid|raiding|kill|killing) (me|us|my|our)\b/,
+  /\b(being|getting|got|been) (attacked|hit|pushed|rushed|raided|killed)\b/,
+  /\b(they|they re|theyre|he|she|he s|she s|it s|enemy|enemies|someone|somebody) (is |are )?(attacking|hitting|pushing|rushing|raiding|killing)\b/,
+];
+
+/** …and the victim phrases that are a call for help by themselves (see `readAllyCall`). */
+const VICTIM_HELP: readonly RegExp[] = [
+  /\bunder (attack|siege)\b/,
+  /\b(attacking|hitting|pushing|rushing|raiding) (me|us|my base|our base|my town|my main)\b/,
+  /\b(being|getting) (attacked|rushed|raided)\b/,
 ];
 
 /**
@@ -149,6 +223,14 @@ const BUSY: readonly RegExp[] = [
   /\b(cant|can t|cannot|wont|won t|dont|don t|not)\b[a-z ]{0,20}\b(come|coming|help|there)\b/,
   /\bno\b[a-z ]{0,6}\bhelp\b/,
   /\bbusy\b/,
+  // …and the declines of a RALLY (`RALLY_BUSY_LINES`), which have to read as declines for the
+  // same loop reason: "can't join, my base is under attack" must not be heard as a call for help
+  // by the third computer. The negation sits RIGHT BEFORE the verb here, so "i can't hold, i'm
+  // under attack" is still the call for help it is.
+  /\b(cant|can t|cannot|wont|won t|dont|don t)\b (join|attack|push|hit|go)\b/,
+  /\bnot (now|yet|ready)\b/,
+  /\btoo (early|soon)\b/,
+  /\b(wait a|give me a)\b/,
 ];
 
 /**
@@ -700,6 +782,44 @@ export function attackLine(name: string): readonly string[] {
  * loudest thing on the channel.
  */
 export const JOIN_LINES = ["im coming with you", "coming with you", "ill join you"] as const;
+
+/**
+ * YES to a rally ("attack!", "lets hit the undead") — see `AllyCall` for why a rally, unlike an
+ * announcement, is always answered. Wide, because one "attack" is answered by every allied
+ * computer on the team and four of them saying the same word reads as one stuck key.
+ *
+ * Every line reads as `joining` (the anchored agreements in `JOINING`), so no teammate hears
+ * another's yes as a fresh request.
+ */
+export const RALLY_ACCEPT_LINES = [
+  "ok, coming with you", "im in", "ok im in", "right behind you", "on it", "count me in",
+  "ill join you", "yep, im coming with you", "sure, right behind you",
+] as const;
+
+/** …already doing it: the wave is attacking the very player the rally is about. */
+export const RALLY_ALREADY_LINES = ["already on it", "already there", "already hitting them"] as const;
+
+/**
+ * NO to a rally, and WHY — the useful half of the answer, exactly as it is for a call for help
+ * (`BUSY_LINES`): a player told "my army is too small" attacks alone knowing it, or waits.
+ *
+ * Every line opens with a decline `BUSY` reads ("can't join", "not yet", "too early", "wait a",
+ * "give me a"), which is what keeps "can't join, my base is under attack" from being heard as a
+ * call for help by the next computer along.
+ */
+export const RALLY_BUSY_LINES = {
+  attacked: ["can't join, my base is under attack", "not now, they're in my base", "can't join, i'm getting hit at home"],
+  fighting: ["can't come right now, i'm in a fight", "not now, i'm fighting"],
+  creeping: ["can't join, i'm creeping", "not yet, finishing this camp first"],
+  broken: ["can't join, my army is dead", "can't attack, i have nothing left"],
+  small: ["not yet, i don't have an army", "give me a minute, my army is too small"],
+  notReady: ["too early, i'm not ready yet", "not yet, need a bit more time", "wait a bit, still building up"],
+  helping: ["can't join, i'm helping an ally", "can't join, i'm helping someone else"],
+} as const;
+
+/** How long one computer's answer to a rally stands — a player typing "attack attack ATTACK" is
+ *  asking once, and four computers answering all three is twelve lines of chat. */
+export const RALLY_ANSWER_GAP = 20;
 
 /** Seconds before the same wave announces a target again, so a wave that re-aims at the same
  *  player mid-push does not re-announce it. Longer than `TALK_GAP`: an attack is one event. */
