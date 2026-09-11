@@ -2752,12 +2752,6 @@ const HEX_TARGET_SOUND = `${POLYMORPH_DIR}PolymorphTarget1.wav`;
 const HEX_TARGET_SOUND_AIR = `${POLYMORPH_DIR}PolymorphTargetAir1.wav`;
 const HEX_DONE_ART = `${POLYMORPH_DIR}PolyMorphDoneGround.mdx`;
 const HEX_DONE_SOUND = `${POLYMORPH_DIR}PolymorphDone.wav`;
-
-/** What a hexed or polymorphed FLYER becomes, whichever spell did it: the Flying Sheep
- *  (`nshf`, Units\Critters\FlyingSheep\FlyingSheep.mdx). Polymorph's own `DataC` ("air")
- *  already names it; Hex's names three birds instead (`nalb,nvul,nsno`), and the developer's
- *  rule puts every flyer in the sheep regardless. */
-const HEX_AIR_CRITTER = "nshf";
 const GUARD_RETURN_TIME = MISC_GAME.GuardReturnTime; // also the "can't get home, resume fighting" window
 const CREEP_CALL_FOR_HELP = MISC_GAME.CreepCallForHelp; // camp cohesion: one aggros → the whole camp wakes/joins
 // "Radius of creep notification when a new building gets placed" — Units\MiscData.txt's
@@ -6443,10 +6437,10 @@ export class SimWorld {
    * and `hexForm` is the whole of the PICTURE — a skin over the unit's own type, so its name,
    * its hit points, its pathing and its click volume stay exactly what they were. Which critter
    * comes off the spell's own row: both families share the `Ply2..Ply5` columns
-   * (AbilityMetaData useSpecific "Aply,ACpy,AOhx,AChx"), DataB for a walker, DataD for an
-   * amphibious body, DataE for a ship — Polymorph's `nshe`/`nsha`/`nshw`, Hex's pig-seal-crab
-   * list and so on, one picked at random per cast. A FLYER is always the Flying Sheep
-   * (HEX_AIR_CRITTER).
+   * (AbilityMetaData useSpecific "Aply,ACpy,AOhx,AChx"), DataB for a walker, DataC for a
+   * flyer, DataD for an amphibious body, DataE for a ship — Polymorph's `nshe`/`nshf`/`nsha`/
+   * `nshw`, Hex's pig-seal-crab list, its three birds (`nalb,nvul,nsno`) and so on, one picked
+   * at random per cast.
    *
    * Re-casting on a unit already a critter refreshes the clock (the buff) and poofs again, but
    * keeps the critter it is.
@@ -6468,9 +6462,8 @@ export class SimWorld {
 
   /** The critter `hexUnit` turns `t` into, or "" when this install ships none of them. */
   private hexCritterFor(t: SimUnit, lvl: AbilityLevel | undefined): string {
-    if (t.flying) return this.unitReg?.get(HEX_AIR_CRITTER) ? HEX_AIR_CRITTER : "";
     const moveType = this.unitReg?.get(t.typeId)?.moveType;
-    const column = moveType === MoveType.Float ? 4 : moveType === MoveType.Amphibious ? 3 : 1;
+    const column = t.flying ? 2 : moveType === MoveType.Float ? 4 : moveType === MoveType.Amphibious ? 3 : 1;
     const pool = (lvl?.dataStr[column] ?? "").split(",").map((s) => s.trim()).filter((id) => id && this.unitReg?.get(id));
     return pool.length ? pool[Math.floor(this.rng() * pool.length)] : "";
   }

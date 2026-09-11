@@ -1,7 +1,7 @@
 // Headless check of HEX and POLYMORPH, and of the movement ceiling — with the real 1.30.4 rows.
 //
 //   [AOhx] Dur1 15 / HeroDur1 4, DataB "npig,nsea,ncrb,nhmc,nrat,nfro,nech,necr,nrac" (walkers),
-//          DataC "nalb,nvul,nsno" (flyers — overruled: every flyer is the Flying Sheep `nshf`)
+//          DataC "nalb,nvul,nsno" (flyers)
 //   [Aply] Dur1 60, DataB "nshe", DataC "nshf", DataD "nsha", DataE "nshw"
 //
 // A hexed unit is a CRITTER over its own type: `typeId` does not move, `hexForm` names the
@@ -129,7 +129,7 @@ console.log("\nHex turns a Footman into one of its own row's walkers");
   check("…and PolymorphDone.wav", done && /PolymorphDone\.wav$/i.test(done.soundFile), true);
 }
 
-console.log("\nPolymorph makes every flyer the Flying Sheep, and says so in the air's own sound");
+console.log("\na flyer takes its spell's own DataC: Polymorph's Flying Sheep, Hex's three birds");
 {
   const w = world();
   const sorc = caster(w, "hsor", "Aply", 1000, 1000);
@@ -148,7 +148,7 @@ console.log("\nPolymorph makes every flyer the Flying Sheep, and says so in the 
   g2.flying = true;
   w.issueCast(hunter.id, "AOhx", g2.id, 0, 0);
   run(w, 2);
-  check("Hex makes a flyer the Flying Sheep too, not one of its three birds", g2.hexForm, "nshf");
+  check("Hex makes a flyer one of its three birds", ["nalb", "nvul", "nsno"].includes(g2.hexForm), true);
 }
 
 console.log("\nevery speed stops at MaxUnitSpeed, and only Wind Walk and Chemical Rage go past it");
