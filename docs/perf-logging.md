@@ -271,6 +271,20 @@ counts it: `pathDetourWaitMs` sums each landed detour's wait from its unit's FIR
 refreshes the queue entry's `at`, so the entry keeps `since`), which the report's rate divided by
 `pathJobsLanded` makes a mean, and the `detourWaitMs` gauge keeps the worst.
 
+Measured 2026-09-11, two headless twelve-player Emerald Gardens matches side by side (same load
+on both), minutes 3–10 at 440–525 units, today's budget (8192 / 4096) against half (4096 / 2048):
+
+| | job ms / step | expansions / step | detours landed / s | mean wait | worst wait |
+|---|---|---|---|---|---|
+| today's budget | ~2.1 | ~3,700 | ~1.45 | ~6 s | 22 s |
+| half | ~1.2 | ~2,300 | ~0.76 | ~12.5 s | 28 s |
+
+Half saves ~0.9 ms a step — about 5 % of one core — and doubles the wait: the same queue is
+served at half the rate while its units walk their best-effort routes into the trees. The default
+stayed where it was. Note what the table says about the OTHER side of the trade: 6–10 asks a
+second against ~1.5 served, so the queue never empties at either budget. What would make detours
+both cheaper and sooner is fewer units needing one, not a smaller purse for the ones that do.
+
 **AND THE CHEAP ONES, EACH EXACT.** A whole-world scan run per unit per step pays for its dearest
 predicate on every unit, so order them cheapest first: a creep asked `creepInFight` (a walk over
 every unit) before learning it had no meld to break (`tickCreep`) or no Hide to take
