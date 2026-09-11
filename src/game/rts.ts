@@ -4070,7 +4070,10 @@ export class RtsController {
       if (fxS.length) this.fxSplats.push(...fxS);
       if (fxL.length) this.fxLightnings.push(...fxL);
       if (fxLs.length) this.fxLightningStops.push(...fxLs);
-      if (fxCs.length) this.fxCastStarts.push(...fxCs);
+      if (fxCs.length) {
+        this.fxCastStarts.push(...fxCs);
+        this.disarmOnCast(fxCs);
+      }
       if (fxCf.length) this.fxCastFires.push(...fxCf);
       if (fxT.length) this.fxCombatTexts.push(...fxT);
       if (this.matchLinkIsHost && this.matchLink && (fxE.length || fxS.length || fxL.length || fxLs.length || fxCs.length || fxCf.length || fxT.length)) {
@@ -5353,6 +5356,9 @@ export class RtsController {
   /** The spell armed for targeting when orderMode === "cast". `area` (>0) shows an
    *  AoE cast circle at the cursor for point-target area spells. */
   armedCast: { code: string; target: "unit" | "point"; area?: number } | null = null;
+  /** An armed order was dropped by the WORLD rather than by a click or a key (disarmOnCast) —
+   *  the host takes the armed cursor down with it. */
+  onDisarmed: (() => void) | null = null;
   /** The inventory item armed for targeting when orderMode === "item": a point-use
    *  item (blink) awaiting a ground click, a unit-use item (the staves) awaiting a unit,
    *  or a passive item awaiting a drop/give target (ground → drop, allied hero → give).
@@ -5991,6 +5997,40 @@ export class RtsController {
    *  place (`MeleeUI.onClick` enters targeting mode only `if (isUseOk())`).
    *
    *  Returns true when the spell is armed and the HUD should show it. */
+  /**
+   * A unit that would have cast the armed spell has just begun casting ANOTHER one — so the
+   * targeting is dropped, normal reticle and AoE circle alike.
+   *
+   * The case this is for is an autocast: a Priest with Heal on autocast, aimed at somebody
+   * with Dispel Magic, starts healing on his own. The Dispel the player was holding is not
+   * going to be cast by a unit that is busy with something else, and in the game the cursor
+   * goes back to the hand the moment he does. Asked of the cast STARTS (`drainCastStarts`, and
+   * the client's payload of the same) so it holds for a trigger's order as much as for an
+   * autocast, and on a client exactly as on the host.
+   *
+   * Only the units that could have answered the click count — the ones in the selection that
+   * carry the armed ability's code; a Sorceress autocasting Slow beside those Priests aimed
+   * nothing. An aimed ITEM belongs to the primary unit alone, and an item being CARRIED to
+   * another pocket is not an aimed order at all.
+   */
+  private disarmOnCast(starts: ReadonlyArray<{ casterId: number }>): void {
+    const cast = this.orderMode === "cast" ? this.armedCast : null;
+    const item = this.orderMode === "item" && this.armedItem?.mode !== "move" ? this.armedItem : null;
+    if (!cast && !item) return;
+    for (const s of starts) {
+      if (item) {
+        if (s.casterId !== this.primary) continue;
+      } else if (!this.selected.has(s.casterId) || !this.sim.units.get(s.casterId)?.abilities.some((a) => a.code === cast!.code)) {
+        continue;
+      }
+      this.orderMode = null;
+      this.armedCast = null;
+      this.armedItem = null;
+      this.onDisarmed?.();
+      return;
+    }
+  }
+
   armCast(code: string, target: "unit" | "point", area = 0): boolean {
     const err = this.castUseRefusal(code);
     if (err !== null) {
@@ -7163,6 +7203,7 @@ export class RtsController {
       this.fxLightnings.push(...(fx.lightnings ?? []));
       this.fxLightningStops.push(...(fx.lightningStops ?? []));
       this.fxCastStarts.push(...fx.castStarts);
+      this.disarmOnCast(fx.castStarts);
       this.fxCastFires.push(...fx.castFires);
       this.fxCombatTexts.push(...(fx.texts ?? []));
     }

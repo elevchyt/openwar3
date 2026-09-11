@@ -194,11 +194,14 @@ in the world has to go with it. There are two shapes, and they need different te
 * **The Drain** (`AHdr` — Life Drain / Siphon Mana) — the effect is a pair of ordinary timed
   BUFFS, one on each end, and a buff does not know its caster walked away. `tickDrains` runs
   the same interrupt test and strips the drain buffs off **both** units, then cuts the beam by
-  tag. A drain transfers: what leaves the victim arrives in the caster, at the rate its own
-  columns name — DataA "Life Transferred Per Second" (a dot paired with a hot), DataB "Mana
-  Transferred Per Second" (a *negative* mana-regen buff on the victim, positive on the
-  caster). Which of `DRAB,DRAL,DRAM` and which buff trio it wears follow from the same two
-  numbers.
+  tag. It also snaps when the pair comes apart: the row's `Area1` (800, against a `Rng1` of
+  600/500) is the LEASH, measured hull to hull like the cast range. A drain transfers, and
+  which way depends on the target: from an ENEMY, DataA "Hit Points Drained" / DataB "Mana
+  Points Drained" flow to the caster (a dot paired with a hot; a *negative* mana-regen buff on
+  the victim, positive on the caster); to an ALLY, DataD "Life Transferred Per Second" / DataE
+  "Mana Transferred Per Second" flow out of the caster's own pools — Siphon Mana fills a
+  friend's bar, it never drains it. The art stays with the role either way. Which of
+  `DRAB,DRAL,DRAM` and which buff trio it wears follow from the same numbers.
 
 Not channelled, despite looking it: Flame Strike, Volcano, Locust Swarm, Bladestorm (the
 Blademaster keeps moving), Immolation, Cluster Rockets.

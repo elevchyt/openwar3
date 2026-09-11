@@ -102,6 +102,9 @@ import { parseWar3Skins, skinValue, WAR3SKINS } from "../data/war3skins";
 // is what decorates a `DecorateFileNames` frame's textures. WC3 skins the in-game panels
 // (leaderboard, dialogs, quest log) with the LOCAL player's race, so an Orc player's
 // victory dialog wears the orc border. See src/ui/fdf/library.ts `decorate`.
+/** The console's two mouse clicks, as Game.dll names them (see `moveInventory`). */
+const INVENTORY_CLICKS = ["Sound\\Interface\\MouseClick1.wav", "Sound\\Interface\\MouseClick2.wav"] as const;
+
 const SKIN_SECTION: Record<PlayableRace, string> = {
   human: "Human",
   orc: "Orc",
@@ -1670,7 +1673,9 @@ export class MapViewerScene {
       this.rts.setFootprintReader((tex) => this.footprintFor(tex)); // pathTex decode is a VFS read
       this.rts.setIconResolver((path) => this.blpIcon(path)); // BLP decode is a VFS read, too — for the ally spell row
       this.rts.setSoundBoard(this.sounds);
+      this.rts.simWorld.tileset = terrain.tileset; // which critters belong here (itemMechanicalCritter)
       this.rts.onRefuse = (key) => this.refuse(key); // refused orders → the gold line + error sound
+      this.rts.onDisarmed = () => this.hud?.clearOrderMode(); // a cast began under the aim (RtsController.disarmOnCast)
       // Somebody handed us the keys to their army (or took them back). SHARED CONTROL only:
       // the other alliance settings change constantly and silently, and the data keeps a line
       // for this one alone.
@@ -7230,7 +7235,11 @@ export class MapViewerScene {
       },
       idleWorkerCount: () => this.rts?.idleWorkerCount() ?? 0,
       workerIcon: () => this.workerIcon(),
-      selectAllArmy: () => this.rts?.selectAllArmy() ?? false,
+      selectAllArmy: (jump) => {
+        if (!this.rts?.selectAllArmy()) return false;
+        if (jump) this.jumpToSelection();
+        return true;
+      },
       assignControlGroup: (key) => this.rts?.assignGroup(key),
       appendControlGroup: (key) => this.rts?.appendGroup(key),
       recallControlGroup: (key, jump) => {
@@ -7288,11 +7297,21 @@ export class MapViewerScene {
         // command-card press in every respect and sounds like one: `InterfaceClick`
         // (UISounds.slk: `Sound\Interface\MouseClick1.wav`), the same row runCommand plays.
         // An empty pocket, or a passive item's, is not a command and stays silent.
-        if (this.rts?.inventorySlots()[slot]?.usable) this.sounds?.playUi("InterfaceClick");
+        // …and so is setting a CARRIED item down in a pocket, swap or no swap (see moveInventory).
+        const carrying = this.rts?.orderMode === "item" && this.rts.armedItem?.mode === "move";
+        if (carrying) this.sounds?.playUiVariants("InterfaceClick", INVENTORY_CLICKS);
+        else if (this.rts?.inventorySlots()[slot]?.usable) this.sounds?.playUi("InterfaceClick");
         this.rts?.useInventorySlot(slot);
         this.hud?.setArmed(!!this.rts?.orderMode); // armed if this began a point-use targeting
       },
       moveInventory: (slot) => {
+        // Picking an item UP to carry it is a click like any other press on the console, and
+        // sounds like one — `Sound\Interface\MouseClick1.wav` and `MouseClick2.wav`, the pair the
+        // engine names side by side in Game.dll's own strings (docs/reverse-engineering/
+        // game-dll-thread.md, next to CGameUI.cpp). UISounds.slk's `InterfaceClick` row carries
+        // only the first, so the row lends its volume and flags and the two are its variants.
+        // Only a pocket with something in it: an empty one picks nothing up.
+        if (this.rts?.inventorySlots()[slot]) this.sounds?.playUiVariants("InterfaceClick", INVENTORY_CLICKS);
         this.rts?.moveInventorySlot(slot);
         this.hud?.setArmed(!!this.rts?.orderMode); // enter "target to move" mode
       },
@@ -10796,6 +10815,8 @@ export class MapViewerScene {
         // level has to be applied and the stats rebuilt off it before hp/mana can be set
         // (see initIllusion), which is not something the renderer should be sequencing.
         if (su && s.illusion) world.initIllusion(su, s.sourceId, s.illusion);
+        // …and a hidden ward starts the clock on its fade (Sentry Ward, Stasis Trap).
+        if (su && s.cloakAfter !== undefined) world.cloakSummon(su, s.cloakAfter);
         this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
       });
     }

@@ -74,7 +74,9 @@ export interface SpellApi {
    *  `bound` ties the summon's life to the caster's — it leaves when the caster does. Rare,
    *  and only for an ability that says so: the Avatar of Vengeance's Spirits last "50 seconds
    *  or until the avatar dies", while an Archmage's Water Elemental outlives him. */
-  requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number, art?: { summon: string; unsummon: string }, atPoint?: boolean, bound?: boolean): void;
+  /** `cloakAfter`: the summon is an INVISIBLE ward, fading out that many seconds after it lands
+   *  (SimWorld.cloakSummon). Omitted for everything that stays in plain sight. */
+  requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number, art?: { summon: string; unsummon: string }, atPoint?: boolean, bound?: boolean, cloakAfter?: number): void;
   /**
    * TAKE up to `max` corpses within `radius` — the one door onto the corpse pool, shared by
    * every ability that spends bodies (see sim/corpses.ts for the family and the filter).
@@ -773,12 +775,12 @@ function chainBolts(api: SpellApi, caster: SimUnit, def: AbilityDef, chain: SimU
 
 /** Summon `count` copies of a unit for the caster, fanned around a point (each
  *  request is placed on the nearest free tile by the renderer). */
-function summonMany(api: SpellApi, caster: SimUnit, def: AbilityDef, unitId: string, x: number, y: number, count: number, durationSec: number, atPoint = false): void {
+function summonMany(api: SpellApi, caster: SimUnit, def: AbilityDef, unitId: string, x: number, y: number, count: number, durationSec: number, atPoint = false, cloakAfter?: number): void {
   if (!unitId) return;
   const art = summonArt(def);
   for (let i = 0; i < Math.max(1, count); i++) {
     const facing = caster.facing + (i - (count - 1) / 2) * 0.5;
-    api.requestSummon(unitId, x, y, facing, caster.owner, caster.team, durationSec, caster.id, art, atPoint);
+    api.requestSummon(unitId, x, y, facing, caster.owner, caster.team, durationSec, caster.id, art, atPoint, false, cloakAfter);
   }
 }
 
@@ -1613,9 +1615,10 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Witch Doctor wards — each summons an immobile ward at the point (unitid1). Sentry
   // gives vision for free (an owned unit reveals fog); the Healing Ward's heal and the
   // Stasis Trap's proximity stun run in world.tickWards, keyed off the ward's own data.
-  Aeye: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true }, ctx),
-  Ahwd: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true }, ctx),
-  Asta: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true }, ctx),
+  // Two of the three fade out once planted — see WARDS.
+  Aeye: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true, ward: WARDS.Aeye }, ctx),
+  Ahwd: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true, ward: WARDS.Ahwd }, ctx),
+  Asta: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true, ward: WARDS.Asta }, ctx),
 
   // Berserk (Troll Berserker) — self only: attack dataB% faster (haste) but take dataC%
   // more damage (vuln) for the duration. dataA rides the haste's move-speed slot.
@@ -2699,20 +2702,28 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // --- drains / sacrifices ---
 
-  // Siphon Mana / Life Drain (Blood Mage / Dark Ranger) — drain the target: a
-  // damage-over-time on it and an equal heal-over-time on the caster.
+  // Siphon Mana / Life Drain (Blood Mage / Dark Ranger) — drain an ENEMY (a damage-over-time
+  // on it, an equal heal-over-time on the caster), or feed an ALLY out of the caster's own.
   AHdr: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
     const d0 = lvl.duration || 6;
-    // What the drain TAKES decides everything it looks like. dataA is "Life Transferred Per
-    // Second" and dataB "Mana Transferred Per Second" (AbilityMetaData Ndr4/Ndr5), so the
-    // Dark Ranger's Drain is a life drain, the Blood Mage's Siphon Mana a mana one, and an
-    // ability that sets both is the combined drain. `flavour` indexes all three of the
-    // ability's art lists in that same order.
-    const lifeRate = d(lvl, 0, 0);
-    const manaRate = d(lvl, 1, 0);
+    // WHICH SIDE the target is on picks the columns, because the row is two spells in one.
+    // `Ndr1`/`Ndr2` (DataA/DataB) are "Hit Points Drained" / "Mana Points Drained" — what an
+    // enemy loses to the caster — and `Ndr4`/`Ndr5` (DataD/DataE) are "Life Transferred Per
+    // Second" / "Mana Transferred Per Second" — what the caster GIVES an ally (WorldEditStrings
+    // WESTRING_AEVAL_NDR1..5). The Ubertip says both halves in one sentence: "Drains
+    // <AHdr,DataB1> mana per second from an enemy, or transfers <AHdr,DataE1> mana per second to
+    // an ally." — 15 taken, 30 given, at rank 1. So an ally's bar is FILLED, never drained.
+    const give = t !== caster && api.ally(caster, t);
+    const from = give ? caster : t; // whose pool the transfer is paid out of
+    const to = give ? t : caster;
+    // What the drain MOVES decides everything it looks like: the Dark Ranger's Drain is a life
+    // drain, the Blood Mage's Siphon Mana a mana one, and an ability that sets both is the
+    // combined drain. `flavour` indexes all three of the ability's art lists in that order.
+    const lifeRate = d(lvl, give ? 3 : 0, 0);
+    const manaRate = d(lvl, give ? 4 : 1, 0);
     const flavour = lifeRate > 0 && manaRate > 0 ? 0 : manaRate > 0 ? 2 : 1; // both | life | mana
     // Nine buffs, and the FIRST one is the wrong one for everybody: `BuffID1 =
     // Bdcb,Bdcl,Bdcm, Bdtb,Bdtl,Bdtm, Bdbb,Bdbl,Bdbm` is caster-trio, target-trio, then the
@@ -2722,23 +2733,27 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     // (which is what put a life drain's swirl on a mana drain's victim).
     const casterFx = api.buffFxOf(DRAIN_BUFFS.caster[flavour]);
     const targetFx = api.buffFxOf(DRAIN_BUFFS.target[flavour]);
-    // A drain TRANSFERS: what leaves the victim arrives in the caster, at the same rate, for
-    // the same seconds. Life is a damage-over-time paired with a heal-over-time; mana is the
-    // same shape with the mana-regen buff, negative on the victim. A row that names neither
-    // (a custom ability with no data) falls back to a small life drain rather than doing
-    // nothing at all, which is what the old single-rate reading effectively did for everyone.
-    const life = lifeRate || (manaRate > 0 ? 0 : 15);
+    // A drain TRANSFERS: what leaves `from` arrives in `to`, at the same rate, for the same
+    // seconds. Life is a damage-over-time paired with a heal-over-time; mana is the same shape
+    // with the mana-regen buff, negative on the giver. The ART stays with the role either way —
+    // the caster wears the caster's model and the target the target's, whichever way it flows.
+    // A hostile row that names neither (a custom ability with no data) falls back to a small
+    // life drain rather than doing nothing at all; an ally's zero is a real zero (the Dark
+    // Ranger's `DataD` is 0 at every rank, so her Drain gives a friend nothing).
+    const life = lifeRate || (give || manaRate > 0 ? 0 : 15);
+    const fxOf = (u: SimUnit, withArt: boolean): { art: string; fx: BuffFx[] } => {
+      const f = !withArt ? [] : u === caster ? casterFx : targetFx;
+      return { art: f[0]?.path ?? "", fx: f };
+    };
     if (life > 0) {
-      api.applyBuff(t, { kind: "dot", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: life, art: targetFx[0]?.path ?? "", fx: targetFx });
-      api.applyBuff(caster, { kind: "hot", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: life, art: casterFx[0]?.path ?? "", fx: casterFx });
+      api.applyBuff(from, { kind: "dot", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: life, ...fxOf(from, true) });
+      api.applyBuff(to, { kind: "hot", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: life, ...fxOf(to, true) });
     }
     if (manaRate > 0) {
       // One set of models, not two: when a drain takes both, the life half above is already
       // wearing the art.
-      const artT = life > 0 ? [] : targetFx;
-      const artC = life > 0 ? [] : casterFx;
-      api.applyBuff(t, { kind: "manaRegen", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: -manaRate, art: artT[0]?.path ?? "", fx: artT });
-      api.applyBuff(caster, { kind: "manaRegen", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: manaRate, art: artC[0]?.path ?? "", fx: artC });
+      api.applyBuff(from, { kind: "manaRegen", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: -manaRate, ...fxOf(from, life <= 0) });
+      api.applyBuff(to, { kind: "manaRegen", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: manaRate, ...fxOf(to, life <= 0) });
     }
     // The tether: the beam holds between caster and victim for the whole drain, its texture
     // crawling BACK toward the caster (TexCoordScale is negative on all three drain rows).
@@ -3455,18 +3470,63 @@ function raiseCorpses(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: num
 /** Generic summon: place `count` (0 ⇒ read dataA/dataB) copies of the ability's
  *  summoned unit (SLK `unitid`, or a per-code fallback) beside the caster or at a
  *  target point, for the (hero) duration. */
-function summonSpell(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, opts: { count: number; atPoint: boolean }, ctx?: CastContext): void {
+function summonSpell(
+  api: SpellApi,
+  caster: SimUnit,
+  def: AbilityDef,
+  rank: number,
+  opts: { count: number; atPoint: boolean; ward?: WardRule },
+  ctx?: CastContext,
+): void {
   const lvl = lv(def, rank);
   const unitId = lvl.summon || SUMMON_FALLBACK[def.code] || "";
   if (!unitId) return;
   const count = opts.count > 0 ? opts.count : Math.max(1, d(lvl, 1, d(lvl, 0, 1)));
   const x = opts.atPoint && ctx ? ctx.x : caster.x;
   const y = opts.atPoint && ctx ? ctx.y : caster.y;
+  // A WARD lives for its `Dur1` and nothing else. The hero column is not a second reading of
+  // the same number on every row: `[Asta]` is Dur1 150 / HeroDur1 2.5, and the 2.5 is the stun
+  // a HERO gets from the trap ("Target stunned for 6 (Hero 2.5) sec.", classic.battle.net's
+  // Witch Doctor page) — read as the trap's life it vanished two and a half seconds after it
+  // was planted. Every other summon keeps the old reading, which no stock row tells apart.
+  const life = opts.ward ? lvl.duration || 60 : lvl.heroDuration || lvl.duration || 60;
+  const cloak = opts.ward ? opts.ward.cloakAfter(lvl) : undefined;
   // The summon burst rides each unit (requestSummon's `art.summon`), fired where it
   // actually materializes. It used to be emitted once, here, at the CASTER's feet — so
   // three wolves fanned out around the Far Seer shared a single puff behind them.
-  summonMany(api, caster, def, unitId, x, y, count, lvl.heroDuration || lvl.duration || 60, opts.atPoint);
+  summonMany(api, caster, def, unitId, x, y, count, life, opts.atPoint, cloak);
 }
+
+/**
+ * What a ward IS beyond a unit standing on a point: whether, and when, it disappears.
+ *
+ * Both of the Witch Doctor's hidden wards say so in their own Ubertip — `[Aeye]` "Summons an
+ * invisible and immovable ward that provides vision in an area" and `[Asta]` "Summons an
+ * invisible and immovable ward that stuns enemy land units around it" — while `[Ahwd]`'s says
+ * "Summons an immovable ward" and nothing more. None of the three ward UNITS carries an
+ * invisibility of its own (`UnitAbilities.slk`: oeye `Adt1,Aeth`, otot `Aeth`, ohwd `Aoar`), so
+ * the cloak belongs to the ABILITY that planted it, which is where this keys it.
+ *
+ * `cloakAfter` is how long the ward stands in plain sight before it fades.
+ */
+interface WardRule {
+  cloakAfter: (lvl: AbilityLevel) => number | undefined;
+}
+
+const WARDS: Record<"Aeye" | "Ahwd" | "Asta", WardRule> = {
+  // The Stasis Trap states its fade: `Sta1` = DataA "Activation Delay" (WorldEditStrings
+  // WESTRING_AEVAL_STA1), 10 seconds — the same ten seconds it cannot yet go off in
+  // (world.ts tickWards). classic.battle.net's counter-advice is the two facts side by side:
+  // "Kill the Stasis Trap before it becomes invisible… It takes 10 seconds to activate a Stasis
+  // Trap."
+  Asta: { cloakAfter: (lvl) => d(lvl, 0, 10) },
+  // The Sentry Ward states NO delay — its row has no Data column at all, only `UnitID` — so
+  // it takes the one fade rule every invisibility with a zero transition takes
+  // (`invisTransition`, applied where the buff lands).
+  Aeye: { cloakAfter: () => 0 },
+  // …and the Healing Ward is not hidden at all.
+  Ahwd: { cloakAfter: () => undefined },
+};
 
 /** One stat effect an aura grants to a unit in range. */
 export interface AuraEffect {

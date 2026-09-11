@@ -402,10 +402,13 @@ time you can pick it up. Not guessed at. It wants a measurement against the real
 the `wc3-ground-truth` convention in [`abilities-audit.md`](./abilities-audit.md)).
 
 **`Amec` Mechanical Critter.** Its row names no unit — `UnitID1` is empty, and no unit type
-called "Mechanical Critter" exists anywhere in the install. The engine picks the map's own
-critter and nothing in the data says which one, so the item does nothing and **keeps its
-charge** rather than perishing to summon something invented. A custom map that fills the column
-in gets its critter.
+called "Mechanical Critter" exists anywhere in the install — so the critter is one the MAP
+already has (`SimWorld.itemMechanicalCritter`). What the data does say is which critters belong
+on which map: every critter row carries a `UnitBalance.slk` `tilesets` list (the Sheep
+`L,F,W,Y,X,V,Q,J`, the Penguin `I,N`, the Rat `D,G`), so the pool is the walking critters
+(`UnitData` race `critters`, `movetp` foot) listed for the map's tileset, one picked off the
+sim's rng, permanent and the player's. **Which one the engine picks is ours** — no file says.
+A custom map that fills `UnitID1` in gets exactly the critter it named.
 
 **`Aspb` Spell Book.** `DataA "Spell List"` = `AEer,Adis,Aroa`, `DataC/DataD "Minimum/Maximum
 Spells"` = 3, `DataE "Base Order ID"` = `spellbook`. It is not an effect but a **sub-command

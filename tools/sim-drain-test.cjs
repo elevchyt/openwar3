@@ -27,13 +27,14 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 const { PathingGrid } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
 
-/** The Dark Ranger's Drain (`ANdr`, base code `AHdr`): 25 life/sec for 8s at 800 range. */
+/** The Dark Ranger's Drain (`ANdr`, base code `AHdr`): 25 life/sec for 8s, cast from 500
+ *  (`Rng1`) and holding to 800 (`Area1`, the leash). */
 const DRAIN = {
   id: "ANdr", code: "AHdr", target: "unit",
   targetFlags: ["air", "ground", "organic", "enemy"],
   lightning: ["DRAB", "DRAL", "DRAM"],
   buffFx: [], buffArt: "", targetArt: "", casterArt: "", specialArt: "", effectArt: "", areaArt: "", missileArt: "",
-  levelData: [{ cost: 75, cooldown: 8, castRange: 800, area: 500, duration: 8, heroDuration: 8, castTime: 0, data: [25, 0], buffs: [], summon: "" }],
+  levelData: [{ cost: 75, cooldown: 8, castRange: 500, area: 800, duration: 8, heroDuration: 8, castTime: 0, data: [25, 0], buffs: [], summon: "" }],
 };
 
 let failed = 0;
@@ -180,6 +181,48 @@ const step = (w, seconds, dt = 0.05) => { for (let i = 0; i < Math.round(seconds
   // own mana the whole time, which the drain has nothing to do with.)
   check("…at dataB's 15 a second", Math.abs(300 - victim.mana - 15 * 2) <= 2, true);
   DRAIN.levelData[0].data = [25, 0];
+}
+
+// --- the LEASH: a target that gets away breaks the link ----------------------------------
+//
+// `Area1` is 800 on both rows against a cast range of 600/500 — "If the enemy passes out of
+// range, the spell will end prematurely" (classic.battle.net, Blood Mage). The caster never
+// moved, so this is not the interrupt test above: it is the pair coming apart.
+{
+  const { w, ranger, victim } = pair();
+  w.issueCast(ranger.id, "AHdr", victim.id);
+  step(w, 1);
+  w.drainSpellLightnings();
+  w.drainLightningStops();
+  victim.x = 700; // still inside the leash
+  step(w, 0.2);
+  check("a target inside Area1 stays drained", [drainBuffs(victim), ranger.order], [["dot"], "cast"]);
+  victim.x = 1200; // …and out of it
+  step(w, 0.2);
+  check("past Area1 the link snaps", [drainBuffs(victim), drainBuffs(ranger)], [[], []]);
+  check("…and its beam is cut", w.drainLightningStops(), [`drain:${ranger.id}`]);
+}
+
+// --- Siphon Mana on an ALLY gives mana instead of taking it -----------------------------
+//
+// `[AHdr]` DataB 15 "Mana Points Drained" is what an enemy loses; DataE 30 "Mana Transferred
+// Per Second" is what an ally is GIVEN, out of the Blood Mage's own bar ("Drains <AHdr,DataB1>
+// mana per second from an enemy, or transfers <AHdr,DataE1> mana per second to an ally.").
+{
+  const w = world();
+  const mage = add(w, { x: 0, y: 0, mana: 300, maxMana: 300, name: "Blood Mage" });
+  mage.abilities = [{ id: "ANdr", code: "AHdr", level: 1, cooldownLeft: 0, autocastOn: false }];
+  const friend = add(w, { x: 200, y: 0, mana: 0, maxMana: 300, name: "Friend" });
+  DRAIN.levelData[0].data = [0, 15, 1, 0, 30];
+  DRAIN.levelData[0].cost = 0;
+  DRAIN.targetFlags = ["air", "ground", "organic", "notself"];
+  w.issueCast(mage.id, "AHdr", friend.id);
+  step(w, 2);
+  check("an ally's mana goes UP", friend.mana > 30, true);
+  check("…at DataE's 30 a second, not DataB's 15", Math.abs(friend.mana - 30 * 2) <= 3, true);
+  check("…paid out of the caster's own bar", mage.mana < 300 - 30, true);
+  DRAIN.levelData[0].data = [25, 0];
+  DRAIN.targetFlags = ["air", "ground", "organic", "enemy"];
 }
 
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);

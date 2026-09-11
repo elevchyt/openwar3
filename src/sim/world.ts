@@ -40,7 +40,7 @@ import {
   type ReviveMode,
 } from "../data/gameplayConstants";
 import { perfNow, simProfile } from "./profile";
-import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -642,6 +642,9 @@ export interface SummonRequest {
    *  avatar dies" (`Avng`, the Avatar of Vengeance's Spirits). */
   bound?: boolean;
   illusion?: IllusionInit;
+  /** An INVISIBLE ward: it stands in plain sight for this many seconds and then fades out for
+   *  the rest of its life (SimWorld.cloakSummon, spells.ts WARDS). Absent: never hidden. */
+  cloakAfter?: number;
 }
 
 /**
@@ -3045,6 +3048,9 @@ export class SimWorld {
   captureAttacks = false;
   captureOrders = false;
   captureSpells = false; // EVENT_(PLAYER_)UNIT_SPELL_* (7.17)
+  /** The map's tileset letter (war3map.w3e — "L" Lordaeron Summer, "N" Northrend, …), set by
+   *  the host at load. Empty when unknown, which every reader must tolerate. */
+  tileset = "";
   captureConstruct = false; // EVENT_(PLAYER_)UNIT_CONSTRUCT_* (7.17)
   captureTrain = false; // EVENT_(PLAYER_)UNIT_TRAIN_* (7.17)
   captureHeroEvents = false; // EVENT_PLAYER_HERO_LEVEL / _SKILL (7.17)
@@ -11317,20 +11323,52 @@ export class SimWorld {
       if (u.typeId === "otot") {
         const astaDef = this.abilities?.get("Asta");
         const asta = astaDef?.levelData[0];
-        const trig = asta ? this.dataOf(asta, 1, 250) : 250; // dataB — trigger radius
-        const blast = asta ? this.dataOf(asta, 2, 400) : 400; // dataC — stun radius
-        const stunDur = asta ? this.dataOf(asta, 3, 6) : 6; // dataD — stun duration
+        // `Sta1` "Activation Delay" (DataA, 10 — WorldEditStrings WESTRING_AEVAL_STA1): a trap
+        // younger than that cannot go off. It is the counterplay, and classic.battle.net's
+        // Witch Doctor page states it as one: "It takes 10 seconds to activate a Stasis Trap.
+        // If players run before the trap stuns they can get away." The same ten seconds are
+        // what it takes to fade out (spells.ts WARDS).
+        const activation = asta ? this.dataOf(asta, 0, 10) : 10;
+        if (u.summonMax > 0 && u.summonMax - u.summonLeft < activation) continue;
+        const trig = asta ? this.dataOf(asta, 1, 250) : 250; // dataB — "Detection Radius"
+        const blast = asta ? this.dataOf(asta, 2, 400) : 400; // dataC — "Detonation Radius"
+        const stunDur = asta ? this.dataOf(asta, 3, 6) : 6; // dataD — "Stun Duration"
+        // …and a HERO's stun is the row's hero column, `HeroDur1` = 2.5: "Target stunned for 6
+        // (Hero 2.5) sec." (classic.battle.net). The trap's own LIFE is `Dur1` (summonSpell).
+        const heroStun = asta && asta.heroDuration > 0 ? asta.heroDuration : stunDur;
         const armed = this.unitsInAreaInternal(u.x, u.y, trig).some((e) => e.hp > 0 && !e.flying && !e.building && this.hostile(u, e));
         if (armed) {
           // Bsta, Stasis Trap's own buff, wears the same overhead stun swirl as BPSE.
           const stunFx = astaDef ? fx(astaDef) : undefined;
           for (const e of this.unitsInAreaInternal(u.x, u.y, blast)) {
-            if (e.hp > 0 && !e.flying && !e.building && this.hostile(u, e)) this.applyBuffInternal(e, { kind: "stun", timeLeft: stunDur, sourceId: u.id, ...stunFx });
+            // The Ubertip: "The trap activates when an enemy land unit approaches and destroys
+            // all other stasis wards in its area of effect" — whoever planted them, which is
+            // why a line of traps is spent one at a time rather than all at once.
+            if (e !== u && e.typeId === u.typeId && e.hp > 0) {
+              this.removeUnit(e.id);
+              continue;
+            }
+            if (e.hp > 0 && !e.flying && !e.building && this.hostile(u, e)) this.applyBuffInternal(e, { kind: "stun", timeLeft: e.isHero ? heroStun : stunDur, sourceId: u.id, ...stunFx });
           }
           this.removeUnit(u.id); // trap consumed
         }
       }
     }
+  }
+
+  /**
+   * A ward that FADES OUT once planted — the Sentry Ward and the Stasis Trap (spells.ts WARDS).
+   *
+   * An invisibility buff for as long as the ward stands, whose transition is the ward's own
+   * fade: it spends `after` seconds in plain sight first, where anybody may shoot it, and is
+   * then seen only by True Sight. Through the one fade rule (`invisTransition`), so a ward that
+   * states no delay still takes the engine's reaction window rather than vanishing on the frame
+   * it lands. Undispellable, because the cloak is not a spell cast ON the ward but what the
+   * ward IS: a Dispel Magic that catches one hurts it as a summon instead.
+   */
+  cloakSummon(u: SimUnit, after: number): void {
+    this.applyBuffInternal(u, { kind: "invisible", group: "ward", timeLeft: Infinity, sourceId: u.id, delay: invisTransition(after), undispellable: true });
+    this.recomputeStats(u);
   }
 
   /** Kodo Devour: swallow an enemy land non-hero unit — it vanishes inside the Kodo (hidden,
@@ -13050,7 +13088,14 @@ export class SimWorld {
     // one drain per caster, and the old buffs are re-applied over rather than stacked.
     if (code === "AHdr" && ctx.targetId > 0) {
       this.drains = this.drains.filter((x) => x.casterId !== caster.id);
-      this.drains.push({ casterId: caster.id, targetId: ctx.targetId });
+      // …with its LEASH, which is the row's `Area1`: 800 on both the Blood Mage's `[AHdr]` and
+      // the Dark Ranger's `[ANdr]`, against a cast range (`Rng1`) of only 600 / 500. A drain
+      // has no area to catch anybody in, so the column is the distance the link holds to —
+      // classic.battle.net's Blood Mage page lists Siphon Mana's range as "60-80" and says it
+      // "will keep draining mana until the target is at a distance of 80[0]… If the enemy
+      // passes out of range, the spell will end prematurely."
+      const lvl = d.levelData[Math.max(1, rank) - 1];
+      this.drains.push({ casterId: caster.id, targetId: ctx.targetId, leash: lvl && Number.isFinite(lvl.area) ? lvl.area : 0 });
     }
   }
 
@@ -13061,11 +13106,13 @@ export class SimWorld {
    *  know its caster walked away. This is the same interrupt test tickSpellFields makes for
    *  Blizzard and friends, applied to a channel whose effect lives on two units instead of in
    *  a field: re-tasked away from "cast" with channel time left, stunned, dead, or started
-   *  another spell → strip the drain buffs off BOTH ends and cut the beam.
+   *  another spell → strip the drain buffs off BOTH ends and cut the beam. So does the pair
+   *  coming apart: past the ability's `leash` (its `Area1`, see applySpellEffect) the link
+   *  snaps, whichever of the two did the walking.
    *
    *  A channel that simply ran out is not an interrupt: `channelLeft` has reached 0 and the
    *  buffs expire on their own clock the same tick, so they are left alone. */
-  private drains: Array<{ casterId: number; targetId: number }> = [];
+  private drains: Array<{ casterId: number; targetId: number; leash: number }> = [];
 
   /**
    * Spend an Anti-magic Shell's pool against incoming SPELL damage and return what is left to
@@ -13161,7 +13208,10 @@ export class SimWorld {
       const target = this.units.get(dr.targetId);
       const pc = caster?.pendingCast;
       const channelling = !!caster && caster.hp > 0 && !!pc && pc.code === "AHdr" && pc.channelLeft > 0 && caster.order === "cast";
-      if (channelling && target && target.hp > 0) {
+      // The leash is measured the way the cast range was (castGap, hull to hull), so a link
+      // made at the edge of `Rng1` has exactly `Area1 - Rng1` of slack before it snaps.
+      const leashed = !caster || !target || dr.leash <= 0 || this.castGap(caster, target.x, target.y, target) <= dr.leash;
+      if (channelling && target && target.hp > 0 && leashed) {
         this.drains[w++] = dr; // still draining
         continue;
       }
@@ -14314,8 +14364,8 @@ export class SimWorld {
       this.applyBuffInternal(t, buff.buffId === undefined && this.casting ? { ...buff, buffId: buffIdOf(this.casting.def, this.casting.rank) } : buff);
     },
     dispel: (t) => this.dispelUnit(t),
-    requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint, bound) => {
-      this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint, bound: !!bound });
+    requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint, bound, cloakAfter) => {
+      this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint, bound: !!bound, cloakAfter });
     },
     claimCorpses: (caster, def, x, y, radius, max, o) => this.claimCorpses(caster, def, x, y, radius, max, o),
     dropHeldCorpses: (holderId, x, y) => this.dropHeldCorpses(holderId, x, y),
@@ -19674,16 +19724,10 @@ export class SimWorld {
         // holding, so it is only reachable from the press (a powerup has no held item).
         case "AIso": fired = !!held && this.itemSoulGem(u, held, targetId); break;
         // MECHANICAL CRITTER (`Amec`) — "Creates a player-controlled critter that can be used
-        // to scout enemies." `DataA "Number of Units Created"` = 1, no Dur1 at all (it is
-        // permanent, not a timed summon).
-        //
-        // Here rather than in SPELL_HANDLERS for one reason: its row names NO unit. `UnitID1`
-        // is empty and no "Mechanical Critter" unit type exists anywhere in the install — the
-        // engine picks the map's own critter and nothing in the data says which. So the item
-        // does nothing and KEEPS ITS ONE CHARGE (`mcri` is uses 1, perishable 1) rather than
-        // vanishing to summon something we invented. A custom map that fills the column in
-        // gets its critter.
-        case "Amec": fired = this.itemSummonUnits(u, ad, 0); break;
+        // to scout enemies." Here rather than in SPELL_HANDLERS because its row names NO unit
+        // — see itemMechanicalCritter, which picks the map's own. A custom map that fills the
+        // `UnitID1` column in gets exactly the critter it named.
+        case "Amec": fired = this.itemSummonUnits(u, ad, 0) || this.itemMechanicalCritter(u, ad); break;
         // The FLAGS (`AIfe`/`AIfl`/`AIfm`/`AIfn`/`AIfo`) — Human/Orc/Night Elf/Undead Flag and
         // the orc Battle Standard. Their ability rows are EMPTY: no duration, no data, no
         // buff, no targets. That is not a gap in our reading, it is what the item is — "an
@@ -20365,6 +20409,43 @@ export class SimWorld {
         unitId: typeId, x: u.x, y: u.y, facing: u.facing + (i - (count - 1) / 2) * 0.5,
         owner: u.owner, team: u.team, summonLeft: lvl.duration || 0, sourceId: u.id,
         summonArt: ad.specialArt || ad.targetArt, unsummonArt: ad.buffEffectArt, atPoint: false,
+      });
+    }
+    return true;
+  }
+
+  /**
+   * MECHANICAL CRITTER (`Amec`, the Goblin Merchant's `mcri`) — "Creates a player-controlled
+   * critter that can be used to scout enemies." `DataA` "Number of Units Created" = 1 and no
+   * `Dur1` at all: the critter is the player's for good, not a timed summon.
+   *
+   * The row names no unit (`UnitID1` is empty) and no "Mechanical Critter" unit type exists
+   * anywhere in the install, so the critter is one the MAP already has. What the data does say
+   * is which critters belong on which map: every critter row carries a `UnitBalance.slk`
+   * `tilesets` list — the Sheep `L,F,W,Y,X,V,Q,J`, the Penguin `I,N`, the Rat `D,G`, the Skink
+   * and the Crab `Z` — the same column the World Editor files its palette under. So the pool is
+   * the WALKING critters (`UnitData.slk` race "critters", `movetp` foot; the amphibious, floating
+   * and flying sheep are Polymorph's forms, not critters one finds) listed for this map's
+   * tileset, and one of them is picked off the sim's own rng. Which one the engine itself picks
+   * is written nowhere — that choice is OURS. A tileset no critter names falls back to every
+   * walking critter rather than to nothing.
+   */
+  private itemMechanicalCritter(u: SimUnit, ad: AbilityDef): boolean {
+    const walkers = (this.unitReg?.all() ?? []).filter((def) => def.race === "critters" && def.moveType === MoveType.Foot);
+    if (!walkers.length) return false;
+    const tileset = this.tileset.toUpperCase();
+    const local = walkers.filter((def) => def.tilesets.includes("*") || (!!tileset && def.tilesets.includes(tileset)));
+    const pool = local.length ? local : walkers;
+    const typeId = pool[Math.floor(this.rng() * pool.length)].id;
+    const lvl = ad.levelData[0] ?? emptyAbilityLevel();
+    const count = Math.max(1, Math.round(this.dataOf(lvl, 0, 1)));
+    for (let i = 0; i < count; i++) {
+      // Beside the user, like every other unit an item conjures (`Area1` 200 is where it may
+      // appear, not an area anything is caught in) — and permanent: summonLeft 0.
+      this.summonRequests.push({
+        unitId: typeId, x: u.x, y: u.y, facing: u.facing + (i - (count - 1) / 2) * 0.5,
+        owner: u.owner, team: u.team, summonLeft: 0, sourceId: u.id,
+        summonArt: ad.specialArt || ad.targetArt, unsummonArt: "", atPoint: false,
       });
     }
     return true;

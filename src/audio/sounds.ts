@@ -275,6 +275,8 @@ interface ScriptVoice {
 interface Track {
   src: AudioBufferSourceNode;
   gain: GainNode;
+  /** AudioContext time at which the track's position 0 went out (see stopMusic). */
+  startedAt: number;
 }
 
 /** StopSound(…, fadeOut) / a pre-empted music track ramp out over this. WC3's own
@@ -364,7 +366,7 @@ export class SoundBoard {
   private scripts = new Map<number, ScriptVoice>();
   /** The map's music (SetMapMusic / PlayMusic) — one track at a time, advancing through
    *  the playlist as each finishes. `thematic` pre-empts it and restores it on End. */
-  private music: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+  private music: Track | null = null;
   private musicList: string[] = [];
   private musicIndex = 0;
   private musicRandom = false;
@@ -383,7 +385,9 @@ export class SoundBoard {
    *  token: a start claims the channel the moment it is asked for, and a decode that lands
    *  against a stale token is discarded instead of played. */
   private musicGen = 0;
-  private thematic: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+  /** The playlist's way back after a StopMusic — see stopMusic. */
+  private musicReturn: ReturnType<typeof setTimeout> | null = null;
+  private thematic: Track | null = null;
   /** A thematic track cued while the loading gate was shut — see `setLoadingGate`. */
   private pendingThematic: { file: string; fromMs: number } | null = null;
   private skins: Map<string, Map<string, string>> | null = null;
@@ -894,6 +898,16 @@ export class SoundBoard {
     this.playPool(this.resolve("ui", name), "ui");
   }
 
+  /** A UISounds row's sound, drawn from a different set of VARIANTS than the row lists — its
+   *  volume, pitch and flags, `paths` instead of its FileNames. For the clicks the engine names
+   *  itself and no table row carries (see MapViewerScene's inventory carry). Paths the install
+   *  does not ship are dropped; with none left, the row's own file plays. */
+  playUiVariants(name: string, paths: readonly string[]): void {
+    const clip = this.resolve("ui", name);
+    const have = paths.filter((p) => this.vfs.exists(p));
+    this.playPool(clip && have.length ? { ...clip, paths: have } : clip, "ui");
+  }
+
   /** Play a sound an ability names in its `Effectsound` field, by its AbilitySounds.slk
    *  label (`PowerupSound` → Abilities\Spells\Items\AIam\Tomes.wav, `ReceiveGold`,
    *  `ReceiveLumber`). A LABEL, not a path: the row carries the WAV name, its folder and
@@ -1248,12 +1262,56 @@ export class SoundBoard {
     this.startMusicTrack(fromMs / 1000);
   }
 
+  /**
+   * StopMusic — stop the SONG. Not the playlist.
+   *
+   * The map's list survives it: only `ClearMapMusic` drops that, and Blizzard's own scenario
+   * maps are written knowing so. Every one of them that wants the music GONE says both —
+   * Azure Tower Defense's round triggers and Skibi's Castle TD's setup are `StopMusicBJ(false)`
+   * then `ClearMapMusicBJ()`, and Azeroth Grand Prix calls `ClearMapMusic()` + `StopMusic(true)`
+   * before cueing its race music. The two that say only StopMusic are the ones that went
+   * silent here for the whole match: Extreme Candy War stops it for its Halloween intro sting,
+   * WarChasers the moment a hero is rescued, and neither ever calls ResumeMusic.
+   *
+   * So the list picks up again with its NEXT song once the stopped one would have ended — the
+   * song's slot runs out rather than the song being skipped, which leaves a victory sting or
+   * an intro that the stop was made for in the clear. That timing is ours: nothing in the
+   * install states it. A ResumeMusic, a new SetMapMusic/PlayMusic, a thematic or the end of
+   * the match all take the channel first, and the wait simply finds it taken.
+   */
   stopMusic(fadeOut: boolean): void {
+    const stopped = this.music;
     this.musicPaused = true;
     this.fadeOutTrack(this.music, fadeOut);
     this.music = null;
     this.musicGen++; // a track still decoding must not start up after a StopMusic
     this.musicCueing = false;
+    this.scheduleMusicReturn(stopped);
+  }
+
+  /** Bring the playlist back when the stopped song's time is up (see stopMusic). A song that
+   *  never got going — still decoding, or held behind the loading screen — has its whole
+   *  length still to run. */
+  private scheduleMusicReturn(stopped: Track | null): void {
+    if (this.musicReturn !== null) clearTimeout(this.musicReturn);
+    this.musicReturn = null;
+    const list = this.musicList;
+    const path = list[this.musicIndex];
+    if (!path) return;
+    const gen = this.musicGen;
+    const elapsed = stopped && this.ctx ? this.ctx.currentTime - stopped.startedAt : 0;
+    void this.buffer(path).then((buf) => {
+      if (gen !== this.musicGen || list !== this.musicList || !this.musicPaused) return;
+      const left = Math.max(0, (buf?.duration ?? 0) - elapsed);
+      this.musicReturn = setTimeout(() => {
+        this.musicReturn = null;
+        // Somebody else has had the channel since — or cleared the list, or resumed it.
+        if (gen !== this.musicGen || list !== this.musicList || !this.musicPaused) return;
+        this.musicPaused = false;
+        this.musicIndex = this.musicRandom ? Math.floor(Math.random() * list.length) : (this.musicIndex + 1) % list.length;
+        this.startMusicTrack();
+      }, left * 1000);
+    });
   }
 
   /** ResumeMusic — pick the list back up where StopMusic left it. */
@@ -1397,7 +1455,7 @@ export class SoundBoard {
     gain.gain.value = this.musicVolume * (this.groups[VG_MUSIC] ?? 1);
     src.connect(gain).connect(this.master);
     src.start(0, Math.max(0, offsetSec));
-    return { src, gain };
+    return { src, gain, startedAt: this.ctx.currentTime - Math.max(0, offsetSec) };
   }
 
   private fadeOutTrack(t: Track | null, fade: boolean): void {

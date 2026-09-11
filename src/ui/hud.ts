@@ -284,8 +284,9 @@ export interface HudDriver {
   workerIcon(): string | null;
   /** "-" — select the player's whole ARMY: every own unit that is not a worker, not a
    *  harvesting Ghoul or Shredder and not a transport (issue #131). False when there is
-   *  none, so an empty grab leaves the current selection alone. */
-  selectAllArmy(): boolean;
+   *  none, so an empty grab leaves the current selection alone. `jump` (double-tap) also
+   *  centres the camera, exactly as a control-group digit does. */
+  selectAllArmy(jump: boolean): boolean;
   /** Ctrl+N — bind the current selection to control group N ("0".."9"). */
   assignControlGroup(key: string): void;
   /** Shift+N — append the current selection to control group N. */
@@ -1650,9 +1651,12 @@ export class GameHud {
     // "-" selects the whole army (issue #131). Read off `e.key` rather than `e.code`, so the
     // numpad's minus is the same key and no keyboard layout can move it. Placed above the
     // command card below because a card hotkey is a LETTER — nothing can shadow this.
+    // It is a control group the game keeps for you, and it behaves like one: a double tap
+    // recalls AND jumps the camera to the army, and holding that second tap rides it.
     if (e.key === "-") {
       e.preventDefault();
-      this.driver.selectAllArmy();
+      const again = this.tapAgain("-");
+      if (this.driver.selectAllArmy(again) && again) this.holdFollow(GameHud.followToken(e));
       this.refreshSelectionNow();
       return;
     }

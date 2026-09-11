@@ -120,6 +120,10 @@ export interface UnitDef {
    *  is how blizzard.j's melee library counts a team's main halls (7.3). */
   typeName: string;
   race: string; // human | orc | undead | nightelf | ...
+  /** UnitBalance.slk `tilesets` — the tileset letters the World Editor lists the unit under
+   *  ("L,F,W,Y,X,V,Q,J" for the Sheep, "*" for anywhere). Upper-case, and empty when the row
+   *  names none. Read by the Mechanical Critter, which picks a critter that belongs on the map. */
+  tilesets: string[];
   model: string; // MDX path, backslashes, with extension
   modelScale: number;
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
@@ -602,6 +606,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       name: (strings && str(strings, "Name")) || (u && (str(u, "Name") || str(u, "name"))) || id,
       typeName: u ? str(u, "name") : "",
       race: d ? str(d, "race") : "",
+      tilesets: (b ? str(b, "tilesets") : "").split(",").map((s) => s.trim().toUpperCase()).filter((s) => s && s !== "_" && s !== "-"),
       model: unitModelPath(vfs, file, animProps),
       modelScale: u ? num(u, "modelScale", 1) : 1,
       selScale: u ? num(u, "scale", 1) : 1,
@@ -976,6 +981,7 @@ export function destructibleUnitDef(d: {
     name: d.name || "Destructible",
     typeName: "destructible",
     race: "other",
+    tilesets: [],
     // The renderer never spawns a body for one of these (the doodad batch already drew it),
     // so `model` is read for exactly one thing: the selection portrait. The data ships a
     // dedicated bust for that — the doodad's own model is a piece of terrain.

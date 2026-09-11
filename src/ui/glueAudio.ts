@@ -57,6 +57,10 @@ export class GlueAudio {
   /** The menu is gone (a match is starting): the theme fades, the wind stops dead. From
    *  here the map's own script owns the music channel (SetMapMusic in its main()). */
   stop(): void {
+    // The theme is a one-song PLAYLIST, and StopMusic leaves a playlist standing to come back
+    // (SoundBoard.stopMusic) — so it is cleared first, or a map that cues no music of its own
+    // would hear the menu theme return a few minutes into the match.
+    this.sounds.clearMapMusic();
     this.sounds.stopMusic(true);
     this.sounds.setAmbienceLoop(this.ambience, false);
   }

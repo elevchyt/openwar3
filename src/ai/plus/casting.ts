@@ -519,6 +519,10 @@ const IMMOLATION = "AEim";
  * See `imagesStanding` for the gate.
  */
 const MIRROR_IMAGE = "AOmi";
+
+/** Sentry Ward's base code — the Witch Doctor's `[Aeye]` and the item `[AIsw]` alike. Its
+ *  planting is spaced out (`wardsWatching`). */
+const SENTRY_WARD = "Aeye";
 /** How long nothing may be in reach before Immolation is put out — see `douseImmolation`. */
 const IMMOLATION_HOLD = 4;
 
@@ -1340,8 +1344,10 @@ export class PlusCaster {
     const legal: Array<{ x: number; y: number }> = [];
     let best: { x: number; y: number } | null = null;
     let bestValue = 0;
+    const watched = def.code === SENTRY_WARD ? this.wardsWatching(def, lvl) : null;
     for (const t of pool) {
       if (!near(u, t, reach)) continue;
+      if (watched && watched.some((w) => Math.hypot(t.x - w.x, t.y - w.y) < w.r)) continue;
       const hits = wave ? this.corridor(u, t, def, lvl, role, pool, friendly) : this.catchment(u, t.x, t.y, def, lvl, role, pool, friendly);
       if (hits.count < need) continue;
       if (this.view.world.castError(u.id, code, 0, t.x, t.y) !== null) continue;
@@ -1455,6 +1461,39 @@ export class PlusCaster {
    * `levelData[0]` rather than the learned rank because what a row summons does not change with
    * rank — only how long it lives does.
    */
+  /**
+   * WHERE OUR SENTRY WARDS ALREADY SEE — the ground a new one must not be planted on.
+   *
+   * Reported: the Computer+ Witch Doctor plants its Sentry Wards "very close to each other".
+   * The aim is the enemy it is fighting (a `summon` aimed like any point spell), so every ward
+   * of a fight went down on the same few bodies, one on top of the last. A ward is worth what
+   * it REVEALS, and a second one inside the first one's sight circle reveals next to nothing:
+   * so each standing ward of ours rules out its own sight radius (`sightDay`/`sightNight`, the
+   * smaller of the two — the ground it sees at every hour; `[oeye]` is 1600 both). A ward
+   * still being CAST — ours, the same code, the point already chosen — rules its point out
+   * too, or two Witch Doctors in one pass pick the same spot; its radius is a standing ward's
+   * if there is one, and otherwise the ability's own `Rng1`, which is a stand-in of OURS for a
+   * body that does not exist yet.
+   */
+  private wardsWatching(def: AbilityDef, lvl: AbilityLevel): Array<{ x: number; y: number; r: number }> {
+    const type = lvl.summon || def.levelData[0]?.summon || "";
+    const out: Array<{ x: number; y: number; r: number }> = [];
+    const pending: Array<{ x: number; y: number }> = [];
+    let sight = 0;
+    for (const o of this.view.world.units.values()) {
+      if (o.hp <= 0 || o.owner !== this.view.player) continue;
+      if (type && o.typeId === type) {
+        const r = Math.min(o.sightDay, o.sightNight);
+        sight = Math.max(sight, r);
+        out.push({ x: o.x, y: o.y, r });
+      }
+      const pc = o.pendingCast;
+      if (pc && pc.code === def.code && !pc.fired) pending.push({ x: pc.x, y: pc.y });
+    }
+    for (const p of pending) out.push({ ...p, r: sight || lvl.castRange });
+    return out;
+  }
+
   private summonStanding(u: SimUnit, def: AbilityDef): boolean {
     const lvl = def.levelData[0];
     const type = lvl?.summon;
