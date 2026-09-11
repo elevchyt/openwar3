@@ -47,17 +47,6 @@ export function isCandyWarScript(globals: { has(name: string): boolean }): boole
  */
 export const HERO_SEATS: ReadonlySet<number> = new Set([0, 1, 2, 3, 4, 6, 7, 8, 9, 10]);
 
-/**
- * What `Initialize_Players` hands a PERSON at the start and nobody else — `SetPlayerStateBJ(…,
- * PLAYER_STATE_RESOURCE_FOOD_CAP, 10)` and `AdjustPlayerStateBJ(300, …, PLAYER_STATE_RESOURCE_GOLD)`,
- * both under a `MAP_CONTROL_USER` filter. The map never imagined a computer in a hero seat, so a
- * Computer+ seat is given exactly these two and nothing more (`RtsController.startCandyWarAI`) — the
- * same starting purse as the person beside it, which is parity and not a cheat. (The user-made AI
- * map SETS its computers' gold to 550.)
- */
-export const START_GOLD = 300;
-export const START_FOOD_CAP = 10;
-
 /** One team's half of the map. */
 export interface Side {
   readonly name: "horde" | "alliance";

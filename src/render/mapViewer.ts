@@ -3128,7 +3128,23 @@ export class MapViewerScene {
         neutralColor: neutralTeamColor(this.vfs),
         // Publish the engine BEFORE config()/main() run: a hook fired during init may need
         // the interpreter itself (ChooseRandomItem draws from its seeded RNG — 7.18).
-        onBoot: (e) => { this.mapScript = e; },
+        onBoot: (e) => {
+          this.mapScript = e;
+          // COMPUTER+ SEATS ON EXTREME CANDY WAR are PLAYER seats to the script. The map was written
+          // for people in them: `Initialize_Players`, `Multiboard_Create` and `Incremental_Gold` all
+          // filter on `MAP_CONTROL_USER`, so a computer seated there got no leaderboard row, no
+          // starting gold, no food cap and was left out of the player count — the map simply never
+          // imagined one. Computer+ plays the seat the way a person does (src/ai/plus/candy/), so
+          // the script is told what it would be told about a person, and the map's own init hands
+          // it all of the above. Asked here, after the globals exist and before `config()`/
+          // `applyLobby`, so every trigger that ever reads the controller reads the same answer.
+          // (The user-made ExtremeCandyWarAI.w3x changes those same conditions to accept computers.)
+          if (!opts.melee && isCandyWarScript(e.interp.rt.globals)) {
+            for (const s of lobby.slots) {
+              if (s.controller === MAP_CONTROL_FOR.computer && CANDY_HERO_SEATS.has(s.index)) s.controller = MAP_CONTROL_FOR.user;
+            }
+          }
+        },
       });
       if (!engine) return null;
       this.mapScript = engine; // pumped each tick (timers + region + death/damage/attack events — 7.4b/c)

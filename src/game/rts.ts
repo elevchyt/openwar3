@@ -53,7 +53,6 @@ import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
 import { CreepCaster } from "../ai/creeps";
 import { ComputerPlusAi, type PlusHost } from "../ai/plus";
 import { CandyWarAi, type CandyHost } from "../ai/plus/candy";
-import { START_FOOD_CAP as CANDY_FOOD_CAP, START_GOLD as CANDY_START_GOLD } from "../ai/plus/candy/map";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -1052,8 +1051,9 @@ export class RtsController {
    * a boolean global of the running script (`udg_GameOn`), which is how the AI knows the intro is
    * over and the picker is open.
    *
-   * Each seat is also given what the map's `Initialize_Players` gives a PERSON and filters computers
-   * out of — the starting gold and the food cap (see `START_GOLD` for why that is parity).
+   * Nothing is GRANTED here. The seat's starting gold, food cap, leaderboard row and share of the
+   * player count all come from the map's own init, because the script is told the seat is a
+   * player's (`MapViewerScene.runMapScript`'s `onBoot`).
    */
   startCandyWarAI(seats: ReadonlyArray<{ player: number; difficulty: number }>, readBool: (name: string) => boolean | null): void {
     if (!this.plusHost || !seats.length) return;
@@ -1064,11 +1064,7 @@ export class RtsController {
       heroKills: () => this.sim.heroKills,
     };
     const ai = (this.candyWar ??= new CandyWarAi(host));
-    for (const s of seats) {
-      ai.add(s.player, s.difficulty, this.meleeSeed);
-      this.sim.stashOf(s.player).gold += CANDY_START_GOLD;
-      this.authority.setFoodCap(s.player, CANDY_FOOD_CAP);
-    }
+    for (const s of seats) ai.add(s.player, s.difficulty, this.meleeSeed);
   }
 
   /**

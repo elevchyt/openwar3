@@ -479,12 +479,25 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   never fire. `tools/ai-plus-ladder-test.cjs` runs ten headless minutes of the ladder per build.
   **AMAI is GPL** — it was studied for the shape of the strategy table and nothing else; never
   lift its code or its numbers.
+- **A map's custom abilities are translated, never hand-coded.** A w3a object keeps its base
+  `code` (so the base ability's behaviour runs) and every column the map changed is routed through
+  `Units\AbilityMetaData.slk` onto the same `AbilityDef` field the SLK loader fills
+  (`applyAbilityMods` in [`src/data/objectData.ts`](src/data/objectData.ts)). A field the loader
+  reads and the applier does not is a map edit thrown away — "Summon Void Walker" summoned a Water
+  Elemental because `UnitID` was not routed — and the meta `field` column is matched
+  CASE-INSENSITIVELY, because the meta file and the SLKs spell columns differently (`EffectArt` /
+  `Effectart`). Targets Allowed has TWO vocabularies (`UI\UnitEditorData.txt` [targetList]: a map
+  writes `enemies`/`vulnerable`, the SLK `enemy`/`vuln`), folded by `normalizeTargetFlags`; a PAIR
+  (`hero,nonhero`, `ancient,nonancient`) restricts nothing; and an AREA helper asks the row's
+  ALLEGIANCE as well as its kinds (`World.allegianceAdmits`) — that is what makes a map's
+  `self`-only Scroll of Speed haste its carrier alone.
 - **Extreme Candy War:** read [`docs/candy-war-ai.md`](docs/candy-war-ai.md) before touching
   [`src/ai/plus/candy/`](src/ai/plus/candy/). It is Computer+ as a HERO player for Blizzard's lane
   map, seated by `startCustom` when the script has the map's four triggers (never by file name), on
   hero seats 0–4/6–10 only — 5 and 11 are the map's own army computers. It PICKS through the map's
-  `Pick_Heroes` by selecting a costume twice (`RtsController.selectForAi`), gets the +300 gold and
-  food cap 10 `Initialize_Players` gives a person and nothing more, and its objective is the candy
+  `Pick_Heroes` by selecting a costume twice (`RtsController.selectForAi`), is presented to the
+  SCRIPT as a `MAP_CONTROL_USER` seat (so the map's own init gives it the gold, food cap and
+  leaderboard row it gives a person — nothing is granted by the engine), and its objective is the candy
   monster (a hero within 600 pushes it; creeps never do), not the creeps. Three traps: a cast
   command is matched on the BASE code, and the map rebuilt its spells on unrelated bases, so
   everything is keyed on the map's ability ids and cast with that ability's own `code`; a dead hero

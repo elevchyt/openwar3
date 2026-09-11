@@ -51,10 +51,15 @@ The full reference is in the source comments of `map.ts`; the rules that shape t
    and hands it Boots of Haste and a Scroll of Teleportation itself. It picks for the TEAM (`choosePick`):
    a healer if there is none, a front line if there is none, never a class already on its side if
    another is free.
-2. **Parity, not a cheat.** `Initialize_Players` gives a PERSON +300 gold and food cap 10 under a
-   `MAP_CONTROL_USER` filter. The seat gets exactly those two (`START_GOLD` / `START_FOOD_CAP`). The
-   user-made `ExtremeCandyWarAI.w3x` (Maps\Download) sets its computers to 550 gold and creates their
-   items from nothing; it was studied for the shape of a computer on this map and nothing was lifted.
+2. **A player seat, to the script.** The map filters on `MAP_CONTROL_USER` wherever it deals with a
+   player — `Initialize_Players` (+300 gold, food cap 10, the player count `Incremental_Gold` reads),
+   `Multiboard_Create` (the leaderboard rows) — because it never imagined a computer in a hero seat.
+   So `MapViewerScene.runMapScript` tells the script, at `onBoot` (after the globals exist, before
+   `config()` and `applyLobby`), that a computer hero seat on this map is a USER seat, and the map's
+   own init does the rest: starting gold, food cap, a leaderboard row with kills and deaths. Nothing
+   is granted by the engine. The user-made `ExtremeCandyWarAI.w3x` (Maps\Download) edits those same
+   conditions to accept computers — and sets its computers to 550 gold and creates their items from
+   nothing; it was studied for the shape of a computer on this map and nothing was lifted.
 3. **Lane split** (`pickLane`): the lane with the fewest of its side, counting the other computers,
    the lanes people CLAIMED in chat ("im going top"), and where a quiet person's hero is standing. It
    says its lane on the allies channel as it leaves the base.
