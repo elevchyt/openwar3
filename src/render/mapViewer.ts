@@ -10656,7 +10656,15 @@ export class MapViewerScene {
       // …but not through the fog: a ward planted on ground nobody is watching announces
       // itself to nobody. (The `summonArt` branch above goes out through the sim's effect
       // queue, which RtsController.drainFxEffects already gates by the same test.)
-      else if (this.pointVisible(sx, sy)) this.sounds?.playModelSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
+      // …and never for an ILLUSION. A copy is not a ward whose Birth clip carries its arrival: it
+      // is a picture of a unit that already exists, and the sound of it arriving is the CAST's
+      // (`[AOmi]` Specialart MirrorImageCaster → SND…AOMC → MirrorImage.wav, played at the cast
+      // point). Asking the copied unit's own model for "an A event" instead drew at random from
+      // whatever abilities that model keys — on HeroBladeMaster.mdx those are `SNDXAOCR`
+      // (Critical Strike) and `SNDxAOWW` → AnimLookups AOWW "Whirlwind" → BladeMasterWhirlwind.wav
+      // — so every Mirror Image landed to the sound of Bladestorm. The Wand of Illusion copies
+      // any unit and would have played whatever that unit's model happened to key.
+      else if (!s.illusion && this.pointVisible(sx, sy)) this.sounds?.playModelSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
       void this.spawnUnit(d, sx, sy, s.owner, s.team).then((simId) => {
         if (simId === null) return;
         const su = world.units.get(simId);
