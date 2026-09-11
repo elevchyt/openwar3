@@ -1,5 +1,7 @@
+import { CHAT_PLAYER_DOT } from "../game/chat";
 import { blpToCanvas } from "../render/blputil";
 import { LoadingScene } from "../render/loadingScene";
+import { teamColorHex } from "../render/teamColor";
 import {
   GENERIC_LOADING_SCREEN, loadLoadingScreens, multiplayerLoadingScreen,
   type LoadingScreenDef,
@@ -13,6 +15,7 @@ import type { FdfFrame } from "./fdf/parser";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { MapPreview } from "../world/mapPreview";
 import type { MeleeConfig, SlotConfig } from "./lobby";
+import { playerLabels } from "./playerSlots";
 import {
   adopt, arg, drawPreviewMarkers, findFrame, loadMinimapIcons, num, setProp, str,
   type MinimapIcons,
@@ -152,7 +155,7 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
   const rows = rosterRows(config);
   const melee = info.isMelee;
   // GlobalStrings.fdf, read up front — for the handful of captions the ENGINE fills in rather
-  // than the FDF ("Team %d", "Computer", the game types), and BEFORE the screen is mounted
+  // than the FDF ("Team %d", the game types), and BEFORE the screen is mounted
   // because those captions have to be in hand as `textOverrides` (see `captions`).
   const lib = new FdfLibrary(vfs);
   await lib.load(LOADING_FDF);
@@ -523,11 +526,25 @@ function captions(
     LoadingMeleeMapName: config.mapName ?? info.name,
     LoadingMeleeGameTypeValue: gameType(rows, text),
   };
+  // The names the MATCH will use, letter for letter — a computer as its lobby row read
+  // ("Computer+ (Insane)", never a bare "Computer"), and twin names numbered exactly as the
+  // owner line and chat number them. The bench goes in too, though it is never listed here,
+  // because it takes part in that numbering (see `playerLabels`).
+  const names = playerLabels(config.slots, info.isMelee, config.observers);
+  // The player-colour dot the in-game chat puts in front of a name (game/chat.ts
+  // `CHAT_PLAYER_DOT`), under the same rule: only with more than two players, since with one
+  // opponent there is nobody to tell apart. The roster lists seated players only, so no
+  // observer or referee ever wears one.
+  const dotted = rows.length > 2;
   rows.forEach((row, i) => {
     if (row.heading !== null) {
       out[`LoadingTeamLabel${i}`] = text("TEAM_FORMAT", "Team %d").replace("%d", String(row.heading + 1));
     }
-    out[`LoadingPlayerSlotName${i}`] = playerLabel(row.slot, text);
+    const name = names.get(row.slot.id) ?? `${text("PLAYER", "Player")} ${row.slot.id + 1}`;
+    // The lobby's colour, which is the one `SetPlayerColor` gives the seat at match start —
+    // absent reads as the slot's own index (SlotConfig.color).
+    const dot = dotted ? teamColorHex(opts.vfs, row.slot.color ?? row.slot.id) : null;
+    out[`LoadingPlayerSlotName${i}`] = dot ? `|c${dot}${CHAT_PLAYER_DOT}|r ${name}` : name;
     out[`LoadingPlayerSlotRace${i}`] = RACE_LABEL[row.slot.race];
     // LoadingPlayerSlotLevel is the ladder level Battle.net puts beside a name. A local game
     // has no ladder, so it stays empty — as it does in the real client's local games.
@@ -563,13 +580,6 @@ type Strings = (key: string, fallback: string) => string;
 function string(lib: FdfLibrary, key: string, fallback: string): string {
   const value = lib.string(key);
   return value === key ? fallback : value;
-}
-
-/** Who is in the seat: their own name, else what they are. */
-function playerLabel(slot: SlotConfig, text: Strings): string {
-  if (slot.playerName) return slot.playerName;
-  if (slot.controller === "computer") return text("COMPUTER", "Computer");
-  return `${text("PLAYER", "Player")} ${slot.id + 1}`;
 }
 
 /**

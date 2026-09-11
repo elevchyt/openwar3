@@ -57,7 +57,7 @@ interface CreepSeed {
 import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, isHarvestCode, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
 import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { AI_SCRIPT_FOR } from "../ai";
-import { slotLabel } from "../ui/playerSlots";
+import { playerLabels } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
 import { animPropsFor, buildAnimSet } from "./unitAnims";
 import { OBSERVER_NAME, type Controller, type MeleeConfig, type SlotConfig } from "../ui/lobby";
@@ -2091,16 +2091,16 @@ export class MapViewerScene {
     // Owner-line names for the hover tooltip, the Allies rows and every chat line — and, from
     // here, `GetPlayerName` too (see `runMapScript`). Who names a slot is `slotLabel`'s rule and
     // turns on one thing: a MELEE map's slots are the lobby's (a computer plays under the exact
-    // entry its row wore, "Computer+ (Insane)" included), a mission's are the map's.
-    this.playerNames = new Map(
-      config.slots.map((s) => [s.id, slotLabel(s, melee)]),
-    );
-    // …and the watcher's own seat is in nobody's slot list, so it names itself. The one place
-    // it is ever read is a line the observer types: their own chat comes back to them labelled.
-    if (this.observer) this.playerNames.set(this.localPlayer, OBSERVER_NAME);
-    // A LAN bench is named by the people on it — their lines arrive under their own names, on
-    // every machine, exactly as a seated player's do.
-    for (const o of this.observers) this.playerNames.set(o.id, o.name || OBSERVER_NAME);
+    // entry its row wore, "Computer+ (Insane)" included), a mission's are the map's. A LAN bench
+    // is named by the people on it — their lines arrive under their own names, on every machine,
+    // exactly as a seated player's do. Twin names come back numbered, "(1)", "(2)", the same way
+    // the loading screen's roster numbers them (`playerLabels`).
+    this.playerNames = playerLabels(config.slots, melee, this.observers);
+    // …and the single-player watcher's seat is in nobody's list, so it names itself. The one
+    // place it is ever read is a line the observer types: their own chat comes back labelled.
+    if (this.observer && !this.playerNames.has(this.localPlayer)) {
+      this.playerNames.set(this.localPlayer, OBSERVER_NAME);
+    }
     this.humanPlayers = config.slots.filter((s) => s.controller === "user").length;
     this.rts!.setPlayerNames(this.playerNames);
     // Whose placed units hold their ground (see SimUnit.guarding). Set before seeding, since
