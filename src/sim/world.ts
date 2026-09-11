@@ -22101,7 +22101,14 @@ export class SimWorld {
       // holds no cell, and shuffling a mining Peon out of a doorway it is not standing in
       // would only take it off its round trip.
       if (o === u || o.moving || o.building || o.speed <= 0 || o.footprint <= 0 || o.noCollision) continue;
-      if (o.team !== u.team || o.hp <= 0 || isOffField(o)) continue;
+      // Only the mover's OWN units make way. Warcraft III shuffles your idle units aside for your
+      // other units and never an ALLY's — which is why an allied body blocks a lane, and why a
+      // team game's base traffic jams on a teammate's idle Footman. Asking the whole team moved
+      // things a map had placed to stand still: on Extreme Candy War an Alliance hero walking out
+      // past its Candy Vault shoved the Candy Mages (Player 11, the same force) off their posts,
+      // one step across the rect `Basic_Movement_Alliance_Middle` watches — and that trigger
+      // orders every Player 11 unit entering it to attack down the middle lane.
+      if (o.owner !== u.owner || o.team !== u.team || o.hp <= 0 || isOffField(o)) continue;
       if (!(o.waitT > 0 || o.order === "idle")) continue; // busy with something of its own
       const m = o.footprint;
       const [ox0, oy0] = this.grid.footprintOrigin(o.x, o.y, m);
