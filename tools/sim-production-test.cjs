@@ -9,12 +9,16 @@
 //     the gate behind it — the one that matters, because a command comes over the wire without
 //     a card in front of it.
 //
-//   • Training is spread across the whole selected sub-group (`RtsController.focusedGroupIds`
-//     → `MapViewerScene.trainUnit`): two Barracks with a Footman clicked once start one each,
-//     so they walk out together. That needs no bookkeeping — each click adds one job per
-//     building — and the fairness rests entirely on the authority charging AS IT GOES, so that
-//     a stash covering one Footman buys exactly one. That property is what is checked here;
-//     the spread itself lives in the renderer.
+//   • Training goes to the EMPTIEST queue in the selected sub-group
+//     (`RtsController.focusedGroupIds` → `MapViewerScene.trainUnit`): a click is one unit, and
+//     with three Barracks held, five clicks buy five Footmen — two, two and one. The pick
+//     itself lives in the renderer; what is checked here is the authority property it rests
+//     on — that it charges AS IT GOES, so a stash covering one Footman buys exactly one.
+//
+//   • FOOD is paid at the HEAD of the queue, never when the button is pressed. A job behind
+//     another costs the player nothing, pays when its turn comes, and STANDS THERE at 0
+//     seconds of progress if there is no supply to pay with — then starts on its own the
+//     moment a Farm lands. `BuildJob.foodPaid` is the receipt, and `foodFor` reads it.
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
@@ -75,13 +79,30 @@ function newWorld() {
   nextId = 1;
 }
 function building(typeId, owner) {
-  const u = { id: nextId++, owner, team: owner, typeId, hp: 100, x: 0, y: 0, building: { queue: [], constructionLeft: 0 } };
+  // `builderIds` and the two costs are there for `tickBuildings`' CONSTRUCTION branch, which
+  // one block below deliberately walks (a Farm pegged out but not finished). With nobody
+  // hammering, that branch advances nothing — which is exactly the state being checked.
+  const u = {
+    id: nextId++, owner, team: owner, typeId, hp: 100, x: 0, y: 0,
+    building: { queue: [], constructionLeft: 0, buildTimeTotal: 0, builderIds: [], goldCost: 0, lumberCost: 0 },
+  };
+  world.units.set(u.id, u);
+  world.tech.invalidate();
+  return u;
+}
+/** A standing unit — no `building`, so it eats food and holds no queue. */
+function soldier(typeId, owner) {
+  const u = { id: nextId++, owner, team: owner, typeId, hp: 100, x: 0, y: 0 };
   world.units.set(u.id, u);
   world.tech.invalidate();
   return u;
 }
 const research = (player, b, upgradeId) => authority.execute(player, { c: "research", buildingId: b.id, upgradeId });
 const train = (player, b, unitId) => authority.execute(player, { c: "train", buildingId: b.id, unitId });
+// Advance the production queues and nothing else. A whole `world.tick` wants real SimUnits
+// (buffs, orders, pathing) and the fixtures above are the three fields a building needs —
+// which is the point of them: this file is about the queue, and `tickBuildings` is the queue.
+const tickQueues = (dt) => world.tickBuildings(dt);
 
 console.log("\n-- an upgrade is the PLAYER's, so only one building may be on it ------------------");
 
@@ -163,9 +184,13 @@ console.log("\n-- a train order charges AS IT GOES, which is what makes the spre
     [a.building.queue.length, b.building.queue.length], [1, 0]);
 }
 
+console.log("\n-- FOOD is paid at the HEAD of the queue, and an unpaid head does not move --------");
+
 {
-  // FOOD is committed at the same moment, so the spread stops at the supply block too: a Farm
-  // is 12 food and a Footman is 2, leaving room for six however much gold is in the bank.
+  // A Farm is 12 food and a Footman is 2, so there is room for six standing units — and the
+  // QUEUE is not bound by that at all. Queueing costs a player nothing but gold: the job pays
+  // when it reaches the front, so ten of them get in and the supply only ever holds back what
+  // is actually training.
   newWorld();
   world.initStash(0, 10000, 10000);
   building("hhou", 0);
@@ -173,9 +198,42 @@ console.log("\n-- a train order charges AS IT GOES, which is what makes the spre
   const b = building("hbar", 0);
   const taken = [];
   for (let i = 0; i < 5; i++) taken.push(train(0, a, "hfoo"), train(0, b, "hfoo"));
-  check("six get in, the rest are refused on food", taken.filter(Boolean).length, 6);
-  check("…three from each, evenly",
-    [a.building.queue.length, b.building.queue.length], [3, 3]);
+  check("every one of them is queued — food does not gate the button", taken.filter(Boolean).length, 10);
+  check("…five apiece", [a.building.queue.length, b.building.queue.length], [5, 5]);
+  check("…and nothing has been charged food yet", authority.foodFor(0), { used: 0, made: 12 });
+  // One tick, and only the two at the FRONT have taken their food. The eight behind them are
+  // free, which is the whole point: a player may load a line deeper than their supply.
+  tickQueues(0.1);
+  check("one tick in, the two heads have paid", authority.foodFor(0), { used: 4, made: 12 });
+  check("…and the eight behind them still cost nothing",
+    [a.building.queue.filter((j) => j.foodPaid).length, b.building.queue.filter((j) => j.foodPaid).length], [1, 1]);
+}
+
+{
+  // …and at the cap, a head job STANDS THERE. One Footman's worth of room, two Barracks with a
+  // Footman at the front of each: the first to be ticked pays and trains, the second holds at
+  // its full build time — 0 seconds of progress — rather than both reading "we are over" and
+  // neither moving. The moment the supply arrives it pays and starts, with no second click.
+  newWorld();
+  world.initStash(0, 10000, 10000);
+  building("hhou", 0);
+  const a = building("hbar", 0);
+  const b = building("hbar", 0);
+  // 12 made, and 10 already eaten by standing units, leaves room for exactly one Footman.
+  for (let i = 0; i < 5; i++) soldier("hfoo", 0);
+  check("five Footmen standing, one place left", authority.foodFor(0), { used: 10, made: 12 });
+  train(0, a, "hfoo");
+  train(0, b, "hfoo");
+  tickQueues(1);
+  check("the first head paid and is training", [a.building.queue[0].foodPaid === true, a.building.queue[0].timeLeft < 20], [true, true]);
+  check("…the second is halted at 0s, unpaid",
+    [b.building.queue[0].foodPaid === true, b.building.queue[0].timeLeft], [false, 20]);
+  check("…and the halt did not overrun the cap", authority.foodFor(0), { used: 12, made: 12 });
+  // A second Farm finishes: the halted job takes its food on the next tick and gets going.
+  building("hhou", 0);
+  tickQueues(1);
+  check("with supply raised it pays and starts",
+    [b.building.queue[0].foodPaid === true, b.building.queue[0].timeLeft < 20], [true, true]);
 }
 
 console.log("\n-- a FOOD building pays when it is finished (issue #144) --------------------------");
@@ -189,10 +247,17 @@ console.log("\n-- a FOOD building pays when it is finished (issue #144) --------
   farm.building.constructionLeft = 35; // a Farm's own build time
   const a = building("hbar", 0);
   check("the site makes no food", authority.foodFor(0), { used: 0, made: 0 });
-  check("…so nothing can be trained on it", train(0, a, "hfoo"), false);
+  // The Footman is QUEUED — food gates the head of the queue, not the button — but the head
+  // cannot pay on a Farm that is still a foundation, so it stands there at 0s.
+  check("…the Footman is still queued on it", train(0, a, "hfoo"), true);
+  tickQueues(1);
+  check("…but it cannot pay, so nothing moves",
+    [a.building.queue[0].foodPaid === true, a.building.queue[0].timeLeft], [false, 20]);
   farm.building.constructionLeft = 0;
   check("finished, it makes its twelve", authority.foodFor(0), { used: 0, made: 12 });
-  check("…and now the Footman gets in", train(0, a, "hfoo"), true);
+  tickQueues(1);
+  check("…and now the Footman pays and starts",
+    [a.building.queue[0].foodPaid === true, a.building.queue[0].timeLeft < 20], [true, true]);
 }
 
 {

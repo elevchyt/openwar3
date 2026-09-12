@@ -855,21 +855,29 @@ export type RallyKind = "none" | "point" | "mine" | "tree" | "unit";
  *  Defend — so they share one list and are told apart by `kind`:
  *   - "unit"     — train a unit; spawns it at the rally point.
  *   - "research" — an upgrade at `level`; raises the player's researched level on completion.
- *   - "upgrade"  — the building becomes `unitId` (Town Hall → Keep). Morphs in place. */
+ *   - "upgrade"  — the building becomes `unitId` (Town Hall → Keep). Morphs in place.
+ *
+ *  `foodPaid` is on the two kinds that cost food (a unit, and a hero coming back), and it is
+ *  the whole of FOOD IS PAID AT THE HEAD OF THE QUEUE: a job standing behind another costs
+ *  the player nothing, and pays when its turn comes. Once paid it stays paid for the job's
+ *  life — the finished unit's own food takes over seamlessly (`SimWorld.pendingTrained` is
+ *  counted too, so there is no tick in between where the food is free) — and a job cancelled
+ *  or a building destroyed hands it back by simply leaving the queue. See `tickBuildings`
+ *  for the halt and `GameAuthority.foodFor` for the reading. */
 export type BuildJob =
   // `free` marks the melee free first hero — charged nothing, so it must be refunded nothing.
   // `buyer` is who the job belongs to when the BUILDING's owner isn't the answer: a Tavern is
   // Neutral Passive, so a hero queued there is nobody's by ownership. Without it, a hero player
   // A is hiring counts toward player B's copy count — which is what selects B's requirement
   // tier ("your 2nd hero needs a Keep"). Harmless in 1v1, wrong the moment there are three.
-  | { kind: "unit"; unitId: string; timeLeft: number; buildTime: number; free?: boolean; buyer?: number }
+  | { kind: "unit"; unitId: string; timeLeft: number; buildTime: number; free?: boolean; buyer?: number; foodPaid?: boolean }
   | { kind: "research"; unitId: string; level: number; timeLeft: number; buildTime: number }
   | { kind: "upgrade"; unitId: string; timeLeft: number; buildTime: number }
   // A HERO coming back. `unitId` is the hero's TYPE (so the card and the queue draw its icon
   // like any other job) and `heroId` is WHICH hero — the sim id it died under, which is the
   // identity its level, items and name are filed against. `buyer` is the Tavern's rule again:
   // a neutral shop's queue belongs to nobody, so the job says whose hero is being woken.
-  | { kind: "revive"; unitId: string; heroId: number; timeLeft: number; buildTime: number; buyer?: number };
+  | { kind: "revive"; unitId: string; heroId: number; timeLeft: number; buildTime: number; buyer?: number; foodPaid?: boolean };
 
 /** What a finished structure does to the ground under it — see SimWorld.blightPaintOf. */
 interface BlightPaint {
@@ -3292,6 +3300,18 @@ export class SimWorld {
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
    *  has no tech tree, and every requirement check then trivially passes. */
   readonly tech: TechState | null;
+
+  /**
+   * "Has `owner` got `need` food free RIGHT NOW?" — set by whoever owns the food count
+   * (GameAuthority), asked by `tickBuildings` when a job reaches the head of a queue.
+   *
+   * A hook rather than a computation here because the supply cap is not the sim's: the
+   * script's own offset, WC3's ceiling and the debug cheat all live in the authority, and a
+   * second reading of the cap in here would be a second answer to the same question. Unset
+   * on a bare sim (headless combat/pathing tests), where food has never existed and every
+   * job trains freely — the same way `tech` being null lets every requirement pass.
+   */
+  foodRoom?: (owner: number, need: number) => boolean;
 
   constructor(
     readonly grid: PathingGrid,
@@ -6442,6 +6462,20 @@ export class SimWorld {
       }
       const job = b.queue[0];
       if (job) {
+        // FOOD IS PAID AT THE HEAD OF THE QUEUE, and an unpaid head does not move.
+        //
+        // A job queued behind others costs nothing while it waits; the moment it reaches the
+        // front it takes its food, and if there is none to take it stands there at its full
+        // build time — 0 seconds of progress — until a Farm finishes or a unit dies. Then it
+        // pays and starts, with no further click from the player. (`foodPaid` is what makes
+        // that a one-way door: a job already training keeps its food even if the player goes
+        // over the cap behind it, which is what stops a Farm's death from rewinding a
+        // Knight that is nearly out of the door.)
+        //
+        // Asked PER JOB and in queue order, so two Barracks with one food between them do not
+        // deadlock over it: the first to be ticked pays, and the second waits — rather than
+        // both reading "we are over the cap" and neither moving.
+        if (!this.payJobFood(u, job)) continue;
         // Debug cheat compresses any train time to ~1 second.
         job.timeLeft -= this.fastBuild ? Math.max(dt, job.buildTime * dt) : dt;
         if (job.timeLeft <= 0) {
@@ -6461,6 +6495,32 @@ export class SimWorld {
         }
       }
     }
+  }
+
+  /**
+   * Take a head-of-queue job's food, or refuse — the gate `tickBuildings` halts on.
+   *
+   * True means "this job may run this tick", which is the answer for everything that costs no
+   * food at all: a research, a tier upgrade, a unit worth 0 food (a Wisp's Ancient, a summoned
+   * anything), and every job on a bare sim with no `foodRoom` hook. Only a job that actually
+   * needs food and has not taken it yet can be refused.
+   *
+   * The OWNER is the job's buyer where it has one, for the reason a Tavern's queue has one at
+   * all: the building is Neutral Passive, and it is the player who pressed the button whose
+   * supply the hero will eat (see `completeTrain`).
+   */
+  private payJobFood(u: SimUnit, job: BuildJob): boolean {
+    if (job.kind !== "unit" && job.kind !== "revive") return true;
+    if (job.foodPaid) return true;
+    const need = this.unitReg?.get(job.unitId)?.foodUsed ?? 0;
+    if (need <= 0) {
+      job.foodPaid = true;
+      return true;
+    }
+    const owner = u.neutralPassive && job.buyer !== undefined ? job.buyer : u.owner;
+    if (this.foodRoom && !this.foodRoom(owner, need)) return false;
+    job.foodPaid = true;
+    return true;
   }
 
   /** A structure's last tick of construction: let its builders go, then announce it.

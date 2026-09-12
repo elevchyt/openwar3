@@ -1929,6 +1929,12 @@ export class AiPlayer {
       if (!def) continue;
       used += def.foodUsed;
       if (!u.building || u.building.constructionLeft <= 0) made += def.foodMade;
+      // Every QUEUED unit counts here, and deliberately not the same reading as
+      // GameAuthority.foodFor, which counts only what a queue has actually PAID for (food is
+      // taken at the head of the queue — SimWorld.payJobFood). This is the COMMITTED number:
+      // a computer deciding whether to put up another Farm wants to know what it has already
+      // ordered, not only what is training this second, or it would order the supply a pass
+      // too late every time and stall its own line at the head.
       for (const job of u.building?.queue ?? []) {
         if (job.kind === "unit") used += this.host.registry.get(job.unitId)?.foodUsed ?? 0;
       }

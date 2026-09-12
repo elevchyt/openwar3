@@ -92,7 +92,17 @@ export class Authority {
     private abilities: AbilityRegistry,
     private tech: TechRegistry,
     private upgrades: UpgradeRegistry,
-  ) {}
+  ) {
+    // The supply cap is THIS object's (the script's offset, WC3's ceiling, the debug cheat),
+    // and a production queue has to ask it every time a job reaches its head — so the answer
+    // is installed here rather than by whoever happens to build the controller. Anything that
+    // owns an Authority gets the rule, a headless host and a test world included. See
+    // SimWorld.foodRoom and SimWorld.payJobFood.
+    this.sim.foodRoom = (owner, need) => {
+      const food = this.foodFor(owner);
+      return food.used + need <= food.made;
+    };
+  }
 
   /**
    * Does `player` own unit `id`? The AUTHORITY's ownership question, and deliberately not
@@ -280,7 +290,13 @@ export class Authority {
       // throughout, as does a Ziggurat growing into a Spirit Tower. (`AiPlayer.foodOf` has
       // always read it this way — this is the player's half catching up.)
       if (!u.building || u.building.constructionLeft <= 0) made += def?.foodMade ?? 0;
-      if (u.building) for (const job of u.building.queue) used += this.registry.get(job.unitId)?.foodUsed ?? 0;
+      // …and whatever this building's queue has actually PAID for. Only the job at the head
+      // of a queue holds food — the ones lined up behind it cost the player nothing until
+      // their turn comes, which is what lets a Barracks be loaded with seven Footmen on six
+      // food and work through them as Farms go up (SimWorld.payJobFood sets the flag, and
+      // `tickBuildings` stalls a head job it cannot pay for). Read off `foodPaid` rather than
+      // off "is it index 0" so the two halves cannot disagree: the flag is the receipt.
+      if (u.building) for (const job of u.building.queue) if ("foodPaid" in job && job.foodPaid) used += this.registry.get(job.unitId)?.foodUsed ?? 0;
     }
     // …and whatever is finished but not yet born (SimWorld.pendingTrained) — a shop hire is
     // never in a queue at all, so without this its food is free for the tick before it spawns.
@@ -756,9 +772,16 @@ export class Authority {
         const lumber = freeHero ? 0 : def.lumberCost;
         const stash = this.sim.stashOf(player);
         if (stash.gold < gold || stash.lumber < lumber) return false;
-        // Food is committed when training BEGINS, exactly like gold and lumber.
-        const food = this.foodFor(player);
-        if (food.used + def.foodUsed > food.made) return false;
+        // FOOD IS NOT CHARGED HERE — it is charged when the job reaches the head of the
+        // building's queue (SimWorld.payJobFood), so a player may line up more than their
+        // supply allows and the line works through it as Farms finish. A HIRE is the one
+        // exception, because it is not queued at all: a shop hands the unit over on the spot
+        // (SHOP_HIRE_TIME = 0, and `enqueueTrain` completes it immediately), so there is no
+        // later turn for it to take its food at and it has to fit now.
+        if (isSold) {
+          const food = this.foodFor(player);
+          if (food.used + def.foodUsed > food.made) return false;
+        }
         // A unit the building SELLS comes off its shelf, and hiring is loud — purchaseUnit
         // both depletes the stock and shouts to the creeps. It can still refuse (sold out,
         // requirements), so it runs before anything is charged.
@@ -819,10 +842,11 @@ export class Authority {
         const cost = heroReviveCost(mode, def.goldCost, def.lumberCost, def.buildTime || 1, f.level);
         const stash = this.sim.stashOf(player);
         if (stash.gold < cost.gold || stash.lumber < cost.lumber) return false;
-        // A hero costs food again on the way back — it stopped costing any the moment it
-        // died, and WC3 takes it when the job STARTS, like gold and like training.
-        const food = this.foodFor(player);
-        if (food.used + def.foodUsed > food.made) return false;
+        // A hero costs food again on the way back — it stopped costing any the moment it died
+        // — but, exactly as with training, it takes that food when the job reaches the head of
+        // the altar's queue rather than when the button is pressed (SimWorld.payJobFood). A
+        // revive is never instant (`heroReviveCost` gives it the level's own seconds), so it
+        // always has a turn to take it at.
         stash.gold -= cost.gold;
         stash.lumber -= cost.lumber;
         return this.sim.enqueueRevive(cmd.buildingId, cmd.heroId, cost.time, tavern ? player : undefined);

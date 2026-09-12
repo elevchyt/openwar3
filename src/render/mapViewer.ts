@@ -8607,7 +8607,12 @@ export class MapViewerScene {
       const metTech = gated
         ? world.canMake(this.localPlayer, uid, owned)
         : world.tech?.maxAllowed(this.localPlayer, uid) !== 0;
-      const afford = stash.gold >= gold && stash.lumber >= lumber && food.used + d.foodUsed <= food.made;
+      // FOOD only greys a HIRE. A trained unit may be queued past the supply cap and takes
+      // its food when it reaches the head of the queue (SimWorld.payJobFood), so a greyed
+      // Footman would be refusing a click that in fact succeeds. A shop hire is instant and
+      // really is refused, so it keeps the test — the same split `trainRefusal` makes.
+      const afford = stash.gold >= gold && stash.lumber >= lumber
+        && (!sold.has(uid) || food.used + d.foodUsed <= food.made);
       const inStock = stock !== 0; // -1 = not stock-limited, 0 = sold out
       const [col, row] = place(d.buttonX, d.buttonY);
       used.add(`${col},${row}`);
@@ -10024,8 +10029,14 @@ export class MapViewerScene {
     const stash = this.rts.stashFor(this.localPlayer);
     if (stash.gold < (freeHero ? 0 : d.goldCost)) return ERR_NOGOLD;
     if (stash.lumber < (freeHero ? 0 : d.lumberCost)) return ERR_NOLUMBER;
-    const food = this.rts.foodFor(this.localPlayer);
-    if (food.used + d.foodUsed > food.made) return ERR_NOFOOD;
+    // "Not enough food" is a HIRE's answer only. A trained unit joins the queue whatever the
+    // supply says and waits at the head for the food (SimWorld.payJobFood) — refusing the
+    // click here would be the client vetoing an order the authority accepts.
+    const bType = this.rts.simWorld.units.get(buildingId)?.typeId ?? "";
+    if (this.tech.get(bType).sellunits.includes(unitId)) {
+      const food = this.rts.foodFor(this.localPlayer);
+      if (food.used + d.foodUsed > food.made) return ERR_NOFOOD;
+    }
     // A sold-out shelf has its own line ("That unit is not available") — worth keeping,
     // since a Tavern with no stock looks identical to one that just refused silently.
     if (this.rts.simView.shopStock(buildingId, unitId) === 0) return SHOP_ERROR.nostock;
@@ -10067,12 +10078,10 @@ export class MapViewerScene {
     if (f && d) {
       const mode: ReviveMode = world.isShopUnit(buildingId) ? "tavern" : "altar";
       const cost = heroReviveCost(mode, d.goldCost, d.lumberCost, d.buildTime || 1, f.level);
+      // Gold and lumber only: a revive takes its FOOD at the head of the altar's queue, like
+      // a trained unit (SimWorld.payJobFood), so being at the supply cap delays the hero
+      // rather than refusing the button.
       if (!this.canAfford(cost.gold, cost.lumber)) return;
-      const food = this.rts.foodFor(this.localPlayer);
-      if (food.used + d.foodUsed > food.made) {
-        this.refuse(ERR_NOFOOD);
-        return;
-      }
     }
     this.rts.execute(this.localPlayer, { c: "revive", buildingId, heroId });
   }

@@ -7551,7 +7551,10 @@ export class RtsController {
     switch (cmd.c) {
       case "train":
         def = this.registry.get(cmd.unitId);
-        food = true;
+        // Food refuses a HIRE and nothing else: a trained unit is queued whatever the supply
+        // says and takes its food at the head of the queue (SimWorld.payJobFood), so naming
+        // food here would answer a full-queue refusal with the wrong reason.
+        food = this.tech.get(this.sim.units.get(cmd.buildingId)?.typeId ?? "").sellunits.includes(cmd.unitId);
         break;
       case "build":
         def = this.registry.get(cmd.defId);
