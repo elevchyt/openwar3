@@ -879,17 +879,18 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   size(findFrame(root, "GameNameLabel"), PANE_W, 0.019);
   size(findFrame(root, "GameNameValue"), PANE_W, 0.019);
 
-  // The chat log sits INSIDE the lower-left panel of the 16:9 chrome, whose top rail runs
-  // lower than the 4:3 file's anchor (0.453125 down) expects: as authored, the first line of
-  // chat was drawn across the rail. The area drops by the rail's clearance…
-  nudgeY(findFrame(root, "ChatTextArea"), -CHAT_RAIL);
+  // The chat log sits INSIDE the lower-left panel of the 16:9 chrome, and our panel's inner
+  // edge is HIGHER than the 4:3 file's anchor (0.453125 down) assumes: as authored the log
+  // began a good twenty pixels below the border, with the newest lines pushed down into the
+  // entry box. It starts just under the border instead (`CHAT_TOP_LIFT`)…
+  nudgeY(findFrame(root, "ChatTextArea"), CHAT_TOP_LIFT);
   // …and the LOG'S FLOOR IS THE ENTRY LINE'S CEILING (issue #146). The entry box hangs off
   // this frame's BOTTOMLEFT, so there is only ever one number here: shortening the log lifts
   // the box with it, and the box has to clear the panel's bottom border. It used to be lifted
   // on its own instead (a `repoint` in src/overrides/index.ts) while the log kept its full
   // height — so the log's last line, which is the one just said and the one it is scrolled to,
   // was drawn BEHIND the box. One height decides both.
-  setProp(findFrame(root, "ChatTextArea"), "Height", [num(CHAT_H - CHAT_RAIL - CHAT_FLOOR)]);
+  setProp(findFrame(root, "ChatTextArea"), "Height", [num(CHAT_H + CHAT_TOP_LIFT - CHAT_FLOOR)]);
   // …and in from the panel's left rail by the same margin, narrowing to keep its right edge.
   nudgeX(findFrame(root, "ChatTextArea"), CHAT_INSET);
   setProp(findFrame(root, "ChatTextArea"), "Width", [num(CHAT_W - CHAT_INSET)]);
@@ -922,11 +923,12 @@ const DISPLAY_ROW_H = 0.012;
 /** GameChatroom.fdf gives AdvancedOptionsContainer 0.125 for seven rows; ours has eight. */
 const DISPLAY_H = 0.138;
 
-/** GameChatroom.fdf's own ChatTextArea box, how far the chrome's top rail runs into it, and
- *  the margin it keeps off the left one. */
+/** GameChatroom.fdf's own ChatTextArea box, how far ABOVE its own anchor the log starts in our
+ *  16:9 chrome (whose panel border is higher than the 4:3 file's), and the margin it keeps off
+ *  the left one. Measured against the border: the log's first line clears it by a few pixels. */
 const CHAT_W = 0.461875;
 const CHAT_H = 0.094375;
-const CHAT_RAIL = 0.008;
+const CHAT_TOP_LIFT = 0.008;
 const CHAT_INSET = 0.006;
 /** …and how much of the log's height the ENTRY BOX takes, so that it clears the panel's bottom
  *  border. The box is anchored under the log (`SetPoint TOPLEFT, "ChatTextArea", BOTTOMLEFT,
