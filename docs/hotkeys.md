@@ -65,6 +65,14 @@ A section is an OBJECT ID — a unit, an ability, an upgrade, an item — or one
 | button positions | `Buttonpos`, `Unbuttonpos`, `Researchbuttonpos` — `x,y`, x=0 leftmost … x=3 rightmost, y=0 top … y=2 bottom |
 | tooltips | `Tip`, `Untip`, `Researchtip`, `Revivetip` (the altar's), `Awakentip` (the tavern's) |
 
+A tavern does not *revive* a hero, it **awakens** one — the game's own word, in its own comment:
+`Units\MiscGame.txt` says "Max awaken (tavern) cost of a hero" over `HeroMaxAwakenCostGold`, and
+the whole ladder that prices it is spelled `Awaken*` where the altar's is `Revive*`. So the two
+tips are two fields on two buttons. The stock data writes them **alike** on all 89 hero rows that
+carry either (Blizzard wrote "Revive <hero>" for both, because "Revive" is still the word the
+player sees), which means a `CustomKeys.txt` that moves only one of them is the only way to
+watch them being read separately.
+
 A comma list is one value **per level**, for the actions that have levels: `[Rhme]
 Hotkey=X,Y,Z` is the three ranks of the human melee upgrade, and `Tip=` takes three to match.
 
@@ -125,10 +133,9 @@ reason the version gate is asked there.
 
 * **A map's own object data wins.** `w3u`/`w3a` edits are applied after the SLKs. A map's custom
   ability has an id no CustomKeys.txt could have named anyway; a base ability whose hotkey a map
-  deliberately moved keeps the map's.
-* **`Awakentip` has nowhere to land** — nothing reads a tavern-revive title yet (see the `uawt`
-  note in [`src/data/objectData.ts`](../src/data/objectData.ts)). It is carried so that the day
-  something does, the player's file is already being asked.
+  deliberately moved keeps the map's. (`uawt`, the map-data half of `Awakentip`, was itself on
+  that unimplemented list until issue #142 — so a map that set it was setting nothing. It lands
+  now, on `UnitDef.awakenTip`.)
 
 ## When a change takes effect
 

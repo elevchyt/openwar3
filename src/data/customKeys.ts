@@ -16,8 +16,10 @@ import { hotkeyMode } from "./hotkeys";
 //   * **button positions** — `Buttonpos`, `Unbuttonpos`, `Researchbuttonpos`, each `x,y` with
 //     x=0 the leftmost column, x=3 the rightmost, y=0 the top row, y=2 the bottom.
 //   * **tool tips** — `Tip`, `Untip`, `Researchtip`, `Revivetip` (the altar's button) and
-//     `Awakentip` (the tavern's), so the words can be made to match the keys. The file's own
-//     example is "[ogru] Hotkey=T / Tip=Train Orc Grunt (|cffffcc00T|r)".
+//     `Awakentip` (the tavern's — a tavern does not revive a hero, it AWAKENS one, which is
+//     the game's own word for it: MiscGame's "Max awaken (tavern) cost of a hero"), so the
+//     words can be made to match the keys. The file's own example is "[ogru] Hotkey=T /
+//     Tip=Train Orc Grunt (|cffffcc00T|r)".
 //
 // **ELEVEN KEYS AND NOT ONE MORE.** `OVERRIDABLE` is a closed list on purpose. This file is the
 // player's — hand-edited, or written by one of the hotkey generators everybody uses — and it is
@@ -33,13 +35,15 @@ import { hotkeyMode } from "./hotkeys";
 // what the file says it does: "Entries in this file will override the existing default
 // shortcuts."
 //
-// Two things it does NOT reach, both worth knowing before hunting one:
-//   * A MAP's own object data (`w3u`/`w3a`) is applied after the SLKs and therefore WINS. A
-//     custom ability has an id of its own that no CustomKeys.txt can have named anyway; a base
-//     ability whose hotkey a map deliberately moved keeps the map's.
-//   * `Awakentip` has nowhere to land yet — nothing reads a tavern-revive title (see
-//     `objectData.ts`'s `uawt` note). It is carried here so that the day something does, the
-//     player's file is already being asked.
+// One thing it does NOT reach, worth knowing before hunting it: a MAP's own object data
+// (`w3u`/`w3a`) is applied after the SLKs and therefore WINS. A custom ability has an id of its
+// own that no CustomKeys.txt can have named anyway; a base ability whose hotkey a map
+// deliberately moved keeps the map's.
+//
+// And one worth knowing because it looks like nothing happens: `Revivetip` and `Awakentip` are
+// two fields — the ALTAR's button and the TAVERN's — and the stock data writes them ALIKE on
+// all 89 hero rows that carry either. So a file that moves only one of them is the only way to
+// see that they are read separately, which is exactly what this file is for.
 
 /** The eleven fields a CustomKeys.txt may override, lowercased as `MappedData` keys them. */
 const OVERRIDABLE: readonly string[] = [

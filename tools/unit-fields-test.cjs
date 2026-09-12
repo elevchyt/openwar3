@@ -386,7 +386,7 @@ function baseDef(over = {}) {
     animWalkSpeed: 200, animRunSpeed: 200, animBlend: 0.15, animProps: [], attachAnimProps: [],
     soundSet: "Acolyte", tint: [1, 1, 1], targType: "ground",
     weaponSound: "", lumberSound: "", armorSound: "Flesh",
-    icon: "", description: "", tip: "", hotkey: "", buttonX: 0, buttonY: 0,
+    icon: "", description: "", tip: "", reviveTip: "", awakenTip: "", hotkey: "", buttonX: 0, buttonY: 0,
     isHero: false, properNames: [], priority: 1, buffType: "",
     moveType: "foot", isBuilding: false, pathTex: "", requirePlace: "", uberSplat: "",
     minimapIcon: false, unitShadow: "Shadow", buildingShadow: "",
@@ -409,6 +409,27 @@ function baseDef(over = {}) {
     classification: ["undead", "peon"],
     ...over,
   };
+}
+
+// The two titles a fallen HERO's button can wear, which are two fields and not one: an ALTAR
+// revives (`utpr` Revivetip) and a TAVERN awakens (`uawt` Awakentip) — the game's own word for
+// it, in MiscGame's own comment, "Max awaken (tavern) cost of a hero". The stock data writes
+// both alike on all 89 hero rows that carry either, so a map that moves only one of them is
+// precisely the case that proves they are being read separately — and `uawt` was on the
+// unimplemented list until issue #142, so a map that set it was setting nothing.
+console.log("\n[unit fields] an altar REVIVES and a tavern AWAKENS, and they are two fields");
+{
+  const reg = new UnitRegistry(new Map([["Edem", baseDef({
+    id: "Edem", name: "Demon Hunter", isHero: true,
+    reviveTip: "Revive |cffffcc00D|remon Hunter",
+    awakenTip: "Revive |cffffcc00D|remon Hunter",
+  })]]));
+  applyMapUnitData(reg, w3u([], [obj("Edem", "\0\0\0\0", [
+    mod("uawt", "Wake the |cffffcc00D|remon Hunter"),
+  ])]));
+  const hero = reg.get("Edem");
+  check("a map's Awakentip lands", hero.awakenTip, "Wake the |cffffcc00D|remon Hunter");
+  check("...and the altar's title is NOT what it moved", hero.reviveTip, "Revive |cffffcc00D|remon Hunter");
 }
 
 console.log("\n[unit fields] Azure Tower Defense's Azure Wisp — an edited STANDARD unit");

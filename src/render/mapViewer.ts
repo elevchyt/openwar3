@@ -8509,8 +8509,17 @@ export class MapViewerScene {
         hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
         // `Revivetip` is the game's own title for this button — "Revive |cffffcc00D|remon
         // Hunter" — and it is a different field from the hero's `Tip` ("Train …"), authored
-        // per hero in every race's UnitStrings. Falls back only for data that ships none.
-        tip: d.reviveTip || `Revive ${d.name}`,
+        // per hero in every race's UnitStrings.
+        //
+        // A TAVERN reads `Awakentip` instead, because a tavern does not revive a hero, it
+        // AWAKENS one: that is the game's own word for this building's version of the button
+        // (MiscGame's "Max awaken (tavern) cost of a hero", and the whole `Awaken*` ladder
+        // that prices it — see heroReviveCost). The two read alike in the stock data, so this
+        // is invisible until the install is not stock — a `CustomKeys.txt` that sets one and
+        // not the other, a map that sets `uawt`, a localization that split them — which is
+        // exactly when reading the right field is the whole point of reading a field at all.
+        // Each falls back through the other, then to a name, for data that ships neither.
+        tip: (tavern ? d.awakenTip || d.reviveTip : d.reviveTip) || `Revive ${d.name}`,
         desc: `Revives ${name}, restoring the Hero's level, experience and items.`,
         gold: cost.gold, lumber: cost.lumber, food: d.foodUsed,
         col: index % 4, row: Math.floor(index / 4),

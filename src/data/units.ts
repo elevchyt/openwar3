@@ -200,6 +200,24 @@ export interface UnitDef {
    *  "Revive", and the gilded hotkey letter can differ between them. Empty for everything
    *  that is not a hero. */
   reviveTip: string;
+  /**
+   * …and the same title again for the TAVERN's button (UnitStrings "Awakentip").
+   *
+   * A Tavern does not revive a hero, it **awakens** one — the game's own word for it, in its
+   * own comment: `Units\MiscGame.txt` says "Max awaken (tavern) cost of a hero" over
+   * `HeroMaxAwakenCostGold`, and the whole ladder beside it is spelled `Awaken*` where the
+   * altar's is `Revive*`. It is a different button on a different building at a different
+   * price, so it gets a field of its own rather than sharing the altar's.
+   *
+   * In the stock 1.30.4 data it reads the SAME as `reviveTip` on all 89 hero rows that carry
+   * either — Blizzard wrote "Revive <hero>" for both, because "Revive" is still the word the
+   * player sees — so wiring it changes nothing on a stock install. What it changes is every
+   * install that is not stock: a player's `CustomKeys.txt` may set one and not the other (it
+   * is one of the eleven fields — see data/customKeys.ts), a map may set `uawt` without
+   * setting `utpr`, and a localized install may have translated the two differently. Falls
+   * back to `reviveTip` for data that ships only one.
+   */
+  awakenTip: string;
   hotkey: string; // command hotkey letter (UnitStrings "Hotkey")
   buttonX: number; // command-card grid column (0-3), from "buttonpos"
   buttonY: number; // command-card grid row (0-2)
@@ -635,6 +653,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       description: strings ? rawTip(str(strings, "Ubertip")) : "",
       tip: strings ? rawTip(str(strings, "Tip")) : "",
       reviveTip: strings ? rawTip(str(strings, "Revivetip")) : "",
+      awakenTip: strings ? rawTip(str(strings, "Awakentip")) : "",
       hotkey: strings ? (str(strings, "Hotkey").trim()[0] ?? "").toUpperCase() : "",
       buttonX: bx,
       buttonY: by,
@@ -1019,6 +1038,7 @@ export function destructibleUnitDef(d: {
     description: "",
     tip: "",
     reviveTip: "",
+    awakenTip: "",
     hotkey: "",
     buttonX: 0,
     buttonY: 0,
