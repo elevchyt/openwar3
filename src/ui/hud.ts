@@ -320,6 +320,10 @@ export interface HudDriver {
    *  drag out of the inventory grid, omitted to spend the item the player has already picked
    *  up with a right-click. False when there is nothing to give. */
   dropItemOnHero(index: number, slot?: number): boolean;
+  /** The same hand-over aimed at a unit named through the GROUP GRID (issue #145): the icon
+   *  stands in for the body, exactly as it does for an armed spell. False when there is nothing
+   *  to give or that unit has no pockets — the click then keeps its ordinary meaning. */
+  dropItemOnUnit(simId: number, slot?: number): boolean;
   /** Command-card buttons for the current selection (empty = no card). */
   commandCard(): CommandButton[];
   /** Run a command-card button by id. */
@@ -3610,6 +3614,8 @@ export class GameHud {
         slot.hidden = true;
         onPress(slot, null);
         slot.ondblclick = null;
+        slot.ondragover = null;
+        slot.ondrop = null;
         return;
       }
       slot.hidden = false;
@@ -3633,13 +3639,20 @@ export class GameHud {
       const showMore = overflow > 0 && i === SEL_GRID_MAX - 1;
       bars.more.hidden = !showMore;
       if (showMore) bars.more.textContent = `+${overflow}`;
-      // A click with a spell/attack armed targets this unit through the console;
-      // Shift+click removes just this unit from the selection; otherwise a plain click
-      // focuses this unit's sub-group (like Tab), and clicking again (group now focused)
-      // drills down to just this unit.
+      // A click with a spell/attack armed targets this unit through the console; an item PICKED
+      // UP out of the inventory (right-click, `mode: "move"`) is handed over to it, the same two
+      // meanings in the same order a hero's portrait gives them (issue #145); Shift+click
+      // removes just this unit from the selection; otherwise a plain click focuses this unit's
+      // sub-group (like Tab), and clicking again (group now focused) drills down to just this
+      // unit.
       onPress(slot, (e) => {
         if (this.driver.tryTargetArmedAt(ic.simId)) {
           this.clearOrderMode();
+          return;
+        }
+        if (this.driver.dropItemOnUnit(ic.simId)) {
+          this.setArmed(false);
+          this.refreshSelectionNow();
           return;
         }
         if (e.shiftKey) {
@@ -3650,6 +3663,19 @@ export class GameHud {
         this.refreshSelectionNow();
       });
       slot.ondblclick = null;
+      // …and the DRAG half of it, as the hero bar's buttons have: drop an inventory icon
+      // straight onto the unit's icon. preventDefault on dragover is what marks it a target.
+      slot.ondragover = (e) => {
+        if (e.dataTransfer?.types.includes(INV_DRAG_TYPE)) e.preventDefault();
+      };
+      slot.ondrop = (e) => {
+        e.preventDefault();
+        const raw = e.dataTransfer?.getData(INV_DRAG_TYPE) ?? "";
+        const n = Number(raw);
+        if (raw === "" || !Number.isInteger(n)) return; // not one of ours — `Number("")` is 0
+        this.driver.dropItemOnUnit(ic.simId, n);
+        this.refreshSelectionNow();
+      };
     });
   }
 

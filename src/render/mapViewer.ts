@@ -7297,6 +7297,11 @@ export class MapViewerScene {
         if (gave) this.hud?.setArmed(false); // the picked-up item has left the cursor
         return gave;
       },
+      dropItemOnUnit: (simId, slot) => {
+        const gave = this.rts?.dropItemOn(simId, slot) ?? false;
+        if (gave) this.hud?.setArmed(false);
+        return gave;
+      },
       commandCard: () => this.commandCard(),
       runCommand: (id) => this.runCommand(id),
       unloadCargo: (hostId, passengerId) => !!this.rts?.unloadCargo(hostId, passengerId),

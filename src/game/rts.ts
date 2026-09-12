@@ -2961,16 +2961,35 @@ export class RtsController {
    * Returns false if there was nothing to give or nobody to give it to.
    */
   dropItemOnHero(index: number, slot?: number): boolean {
-    const from = this.primary;
     const heroId = this.heroBarUnit(index)?.id;
-    if (from === null || heroId === undefined || heroId === from || !this.controls(from)) return false;
+    return heroId === undefined ? false : this.dropItemOn(heroId, slot);
+  }
+
+  /**
+   * …and the same hand-over aimed at ANY unit named through the console — the group grid's
+   * icons (issue #145).
+   *
+   * A console icon stands in for the body it shows, for giving an item exactly as for casting a
+   * spell at it (`tryTargetArmedAt`): a hero whose inventory you want to fill is very often the
+   * one body on the map you cannot see, and the grid is where you can always find it. Every rule
+   * is the world gesture's — the same `giveitem` command, so the giver walks into range, a full
+   * inventory refuses, and nothing is given to the giver itself.
+   *
+   * The one thing it asks of the target that the world click does not have to: that it HAS
+   * pockets. A right-click on a Footman's body in the world simply moves the hero there; there
+   * is no such fallback behind a grid icon, and false here leaves the click its ordinary
+   * meaning (focus that sub-group).
+   */
+  dropItemOn(targetId: number, slot?: number): boolean {
+    const from = this.primary;
+    if (from === null || targetId === from || !this.controls(from)) return false;
     const armed = slot === undefined ? (this.orderMode === "item" && this.armedItem?.mode === "move" ? this.armedItem.slot : undefined) : slot;
     if (armed === undefined || !this.sim.units.get(from)?.inventory[armed]) return false;
-    const to = this.sim.units.get(heroId);
-    if (!to?.inventory.length) return false;
+    const to = this.sim.units.get(targetId);
+    if (!to || to.hp <= 0 || !to.inventory.length) return false;
     this.armedItem = null; // whichever way it was aimed, the gesture is spent
     this.orderMode = null;
-    return this.execute(this.localPlayer, { c: "giveitem", unitId: from, slot: armed, targetId: heroId });
+    return this.execute(this.localPlayer, { c: "giveitem", unitId: from, slot: armed, targetId });
   }
 
   /**
