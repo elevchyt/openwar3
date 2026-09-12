@@ -111,9 +111,19 @@ export class ChatDialogOverlay {
     if (this.mounting) return;
     this.mounting = true;
     try {
+      // The SCRIM first, and the panel mounted INSIDE it — see EscMenu.build: `modalOver`
+      // (ui/modal.ts) asks whether a scrim CONTAINS the screen, so a panel that is its own
+      // scrim's SIBLING reads as having a modal over itself and stands its own accelerators
+      // down (issue #147). Modal as in the game: the world behind must not take the click that
+      // missed a button, and the scrim is invisible.
+      if (!this.scrim) {
+        this.scrim = document.createElement("div");
+        this.scrim.className = "fdf-dialog-scrim";
+        this.container.appendChild(this.scrim);
+      }
       const prev = this.screen;
       const screen = await mountFdfScreen({
-        container: this.container,
+        container: this.scrim,
         vfs: this.vfs,
         fdfPath: CHAT_FDF,
         rootFrame: "ChatDialog",
@@ -133,12 +143,6 @@ export class ChatDialogOverlay {
       }
       prev?.dispose();
       this.screen = screen;
-      if (!this.scrim) {
-        this.scrim = document.createElement("div");
-        this.scrim.className = "fdf-dialog-scrim";
-        this.container.appendChild(this.scrim);
-      }
-      this.container.appendChild(screen.element);
       // …and only NOW scroll the history to its end. `onBuild` asked for it too, but it ran
       // while the panel was still detached, where a scroll box has no height to scroll — the
       // write to `scrollTop` was silently clamped to 0 and the log opened at its oldest line.

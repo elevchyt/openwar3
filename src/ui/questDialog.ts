@@ -193,9 +193,19 @@ export class QuestDialogOverlay {
           void this.build(); // reselect = repaint the details pane
         };
       }
+      // The SCRIM first, and the panel mounted INSIDE it — see EscMenu.build: `modalOver`
+      // (ui/modal.ts) asks whether a scrim CONTAINS the screen, so a panel that is its own
+      // scrim's SIBLING reads as having a modal over itself and stands its own accelerators
+      // down (issue #147). Modal as in the game: the world behind must not take the
+      // click that missed a button, and the scrim is invisible.
+      if (!this.scrim) {
+        this.scrim = document.createElement("div");
+        this.scrim.className = "fdf-dialog-scrim";
+        this.container.appendChild(this.scrim);
+      }
       const prev = this.screen;
       const screen = await mountFdfScreen({
-        container: this.container,
+        container: this.scrim,
         vfs: this.vfs,
         fdfPath: QUEST_FDF,
         rootFrame: "QuestDialog",
@@ -215,12 +225,6 @@ export class QuestDialogOverlay {
       }
       prev?.dispose();
       this.screen = screen;
-      if (!this.scrim) {
-        this.scrim = document.createElement("div");
-        this.scrim.className = "fdf-dialog-scrim";
-        this.container.appendChild(this.scrim);
-      }
-      this.container.appendChild(screen.element);
     } catch (err) {
       console.warn("[quests] could not mount the FDF panel:", err);
       this.screen = null;

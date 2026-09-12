@@ -97,9 +97,20 @@ export class GameDialogOverlay {
       const textOverrides: Record<string, string> = { ScriptDialogText: d.message };
       d.buttons.forEach((b, i) => (textOverrides[textName(i)] = b.text));
 
+      // The SCRIM first, and the panel mounted INSIDE it — see EscMenu.build: `modalOver`
+      // (ui/modal.ts) asks whether a scrim CONTAINS the screen, so a panel that is its own
+      // scrim's SIBLING reads as having a modal over itself and stands its own accelerators
+      // down (issue #147). A dialog is modal: WC3 stops the world behind it
+      // taking the click that dismissed it, and the scrim is invisible — the game does not dim
+      // the map under a script dialog.
+      if (!this.scrim) {
+        this.scrim = document.createElement("div");
+        this.scrim.className = "fdf-dialog-scrim";
+        this.container.appendChild(this.scrim);
+      }
       const prev = this.screen;
       const screen = await mountFdfScreen({
-        container: this.container,
+        container: this.scrim,
         vfs: this.vfs,
         fdfPath: SCRIPT_DIALOG_FDF,
         rootFrame: "ScriptDialog",
@@ -112,15 +123,6 @@ export class GameDialogOverlay {
       });
       prev?.dispose();
       this.screen = screen;
-      // A dialog is modal: WC3 stops the world behind it taking the click that dismissed
-      // it. The scrim is invisible — the game does not dim the map under a script dialog.
-      if (!this.scrim) {
-        this.scrim = document.createElement("div");
-        this.scrim.className = "fdf-dialog-scrim";
-        this.container.appendChild(this.scrim);
-      }
-      // The scrim must sit under the dialog itself, and both over everything else.
-      this.container.appendChild(screen.element);
     } catch (err) {
       console.warn("[dialog] could not mount the FDF panel:", err);
       this.screen = null;

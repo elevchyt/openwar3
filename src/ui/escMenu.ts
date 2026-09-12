@@ -155,9 +155,21 @@ export class EscMenu {
       if (this.panel === "tips" && !this.tips.length) this.tips = await loadTips(this.vfs);
       if (!this.shown) return; // closed while we were reading
 
+      // The SCRIM first, and the panel mounted INSIDE it — not beside it. `modalOver` (ui/modal.ts)
+      // is the one answer to "is a modal over this screen", and what it asks is whether a scrim
+      // CONTAINS the screen: a panel that is its scrim's sibling is read as having a modal over
+      // itself and stands its own keyboard down, which is exactly what killed every accelerator on
+      // this panel — Pause Game's M, Help's H, Quit Mission's Q (issue #147). Modal, as in the
+      // game: the world behind must not take the click that missed a button. The scrim is
+      // invisible — WC3 does not dim the map under the Esc menu.
+      if (!this.scrim) {
+        this.scrim = document.createElement("div");
+        this.scrim.className = "fdf-dialog-scrim";
+        this.container.appendChild(this.scrim);
+      }
       const prev = this.screen;
       const screen = await mountFdfScreen({
-        container: this.container,
+        container: this.scrim,
         vfs: this.vfs,
         fdfPath: ESC_MENU_FDF,
         rootFrame: "EscMenuMainPanel",
@@ -180,14 +192,6 @@ export class EscMenu {
       }
       prev?.dispose();
       this.screen = screen;
-      // Modal, as in the game: the world behind must not take the click that missed a
-      // button. The scrim is invisible — WC3 does not dim the map under the Esc menu.
-      if (!this.scrim) {
-        this.scrim = document.createElement("div");
-        this.scrim.className = "fdf-dialog-scrim";
-        this.container.appendChild(this.scrim);
-      }
-      this.container.appendChild(screen.element); // scrim under the panel, both over the rest
     } catch (err) {
       console.warn("[escmenu] could not mount the FDF panel:", err);
       this.screen = null;
