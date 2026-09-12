@@ -155,9 +155,11 @@ export interface SimProjectile {
    *  shooter may be dead by the time the arrow has to ask whether its target has gone
    *  invisible, and "invisible" is a question with a side (see missileDisjointed). */
   sourceTeam?: number;
-  /** `SimUnit.teleports` read at the loosing. If the target's count has moved on when the
-   *  missile next looks, the target was teleported out from under it and the shot MISSES
-   *  (see missileDisjointed). Undefined on the artillery/wave shots, which have no target. */
+  /** `SimUnit.teleports` read when the ATTACK INSTANCE was created — the start of the swing for
+   *  an attack (`SimUnit.swingTeleports`), the cast for a spell missile. If the target's count
+   *  has moved on when the missile next looks, the target was teleported out from under it and
+   *  the shot MISSES (see missileDisjointed). Undefined on the artillery/wave shots, which have
+   *  no target. */
   targetTeleports?: number;
   attackType?: AttackType; // attacker's weapon attack type, carried so the damage-table
   // multiplier is correct even if the attacker dies before the arrow lands
@@ -1338,6 +1340,14 @@ export interface SimUnit {
   // the attack animation begins (the weapon's damage point), not instantly.
   swingLeft: number; // -1 = no pending strike
   swingTargetId: number; // whom the pending strike is aimed at
+  /**
+   * The target's `teleports` count when this swing BEGAN — i.e. when the attack instance was
+   * created, which is the moment WC3 judges an attack against (Liquipedia, Weapon Types; see
+   * `missileDisjointed`). A missile loosed at the damage point carries this stamp rather than
+   * the count it reads at the fire frame, so a target that Blinks — or takes a Scroll of Town
+   * Portal — DURING the wind-up disjoints the shot instead of being chased across the map.
+   */
+  swingTeleports: number;
   swingSeq: number; // increments each swing start (renderer re-triggers the attack clip)
   // "Animation break": the unit walked after firing (an attack's backswing was
   // move-canceled), so its attack clip must NOT resume — it stands out the recovery
@@ -7403,6 +7413,7 @@ export class SimWorld {
       | "itemCooldowns" // starts empty — nothing has been drunk yet (see SimUnit.itemCooldowns)
       | "swingLeft"
       | "swingTargetId"
+      | "swingTeleports"
       | "swingSeq"
       | "swingBroken"
       | "swingFollowThrough"
@@ -7657,6 +7668,7 @@ export class SimWorld {
       itemCooldowns: new Map(),
       swingLeft: -1,
       swingTargetId: 0,
+      swingTeleports: 0,
       swingSeq: 0,
       swingBroken: false,
       swingFollowThrough: false,
@@ -15922,6 +15934,8 @@ export class SimWorld {
     u.swingBroken = false; // a genuine new swing always animates (clears any prior break)
     u.swingFollowThrough = false; // …and is its own swing, not the last kill's backswing
     u.swingTargetId = t.id;
+    // …and WHERE IT STANDS, for the missile this swing may loose (see SimUnit.swingTeleports).
+    u.swingTeleports = t.teleports;
     // The heading is LOCKED for the attack point: the unit is within FACING_EPS of its
     // target (the gate above), and that is the angle the blow goes out at — the shared
     // turning pass has nothing left to add, and neither wind-up branch (engage's or
@@ -16446,7 +16460,9 @@ export class SimWorld {
     // Damage; a melee swing that then whiffs still spends it, having already given the unit up.
     const backstab = this.breakInvisibility(u);
     if (launchesMissile(w.weaponType)) {
-      this.spawnProjectile(u, t, w, backstab);
+      // The teleport stamp is the one read when this swing BEGAN — the attack instance's own
+      // moment (see SimUnit.swingTeleports and missileDisjointed).
+      this.spawnProjectile(u, t, w, backstab, u.swingTeleports);
     } else if (w.ranged) {
       // `instant` — ranged HITSCAN. The damage lands on the fire frame with nothing in
       // flight, and the slot's `Missileart` is a one-shot burst played on the unit struck:
@@ -16681,7 +16697,7 @@ export class SimWorld {
 
   /** Launch a homing projectile from attacker to target. Damage is rolled now
    *  and applied when it lands (armor is applied at impact). */
-  private spawnProjectile(u: SimUnit, t: SimUnit, w: SimWeapon, bonus = 0): void {
+  private spawnProjectile(u: SimUnit, t: SimUnit, w: SimWeapon, bonus = 0, teleports = t.teleports): void {
     const id = this.nextProjectileId++;
     // The orb this shot carries is decided — and paid for — HERE, at the loosing, because
     // the orb owns the missile: every member of the family carries its own `Missileart`
@@ -16719,7 +16735,12 @@ export class SimWorld {
       impactZ: impactBase + t.flyHeight,
       startDist: Math.hypot(t.x - lx, t.y - ly),
       sourceTeam: u.team,
-      targetTeleports: t.teleports,
+      // The stamp is the ATTACK INSTANCE's, not the fire frame's: `tickSwing` hands over the
+      // count read when the swing began. A target that left WITHOUT WALKING during the wind-up
+      // is one this shot has already missed, and this is what makes it miss — without it the
+      // arrow was stamped with the post-teleport count, matched it for ever, and homed on a
+      // hero that had gone back to its base (reported for the Scroll of Town Portal).
+      targetTeleports: teleports,
       spill: w.spillDist > 0 && w.spillRadius > 0
         ? { dist: w.spillDist, radius: w.spillRadius, loss: w.damageLoss, ox: lx, oy: ly }
         : undefined,
@@ -16811,6 +16832,14 @@ export class SimWorld {
    * Blink, then, does not disjoint because the Warden covered 600 units in an instant; it
    * disjoints because she covered them WITHOUT WALKING. Every teleport in the game goes
    * through `teleportUnit`, which is what `teleports` counts.
+   *
+   * WHEN the count is read matters as much as what it counts, and it is read at the moment the
+   * ATTACK INSTANCE was created — the start of the swing (`SimUnit.swingTeleports`), which is
+   * the moment Liquipedia hangs every other attack rule on. Read at the FIRE FRAME instead, a
+   * target that teleported during the wind-up was stamped with its new count, matched it for
+   * ever, and was chased the whole way home: reported as "projectiles fired at units while they
+   * got teleported follow them all the way to their base" (the Scroll of Town Portal, whose
+   * three-second channel ends inside somebody's wind-up almost every time).
    */
   private missileDisjointed(p: SimProjectile, t: SimUnit): boolean {
     // "The target is teleported." A Blink, a Mass Teleport, a Way Gate, a Staff of

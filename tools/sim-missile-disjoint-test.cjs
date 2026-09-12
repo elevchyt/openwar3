@@ -146,6 +146,59 @@ console.log("\nTELEPORTED: the Blink case");
   check("a 40-unit hop still disjoints", r.fizzled && r.hp === 100000);
 }
 
+console.log("\nTELEPORTED DURING THE WIND-UP: the Scroll of Town Portal case");
+{
+  // The reported bug: "projectiles fired at units while they got teleported seem to follow them
+  // all the way to their base". The arrows ALREADY in the air disjointed correctly; the one
+  // loosed in the ~0.3 s between the teleport and the fire frame did not, because the stamp was
+  // read at the loosing and so matched the count the teleport had just bumped.
+  //
+  // The ATTACK INSTANCE is what an attack is judged against and it was created when the swing
+  // began (Liquipedia gives Normal and Instant that rule in as many words), so the stamp is the
+  // swing's: see SimUnit.swingTeleports.
+  const w = new SimWorld(grid(), 2);
+  const a = addUnit(w, 1, 0, 500, 500, ARCHER);
+  const t = addUnit(w, 2, 1, 1100, 500, []);
+  w.issueOrder(a.id, { kind: "attack", targetId: t.id, force: true });
+
+  let swungAt = -1, launched = false, impacts = 0, removals = 0;
+  for (let i = 0; i < 1200; i++) {
+    // The instant a swing is pending — the wind-up — whisk the target home, as a Town Portal
+    // that came round mid-swing does.
+    if (swungAt < 0 && a.swingLeft >= 0) {
+      swungAt = i;
+      w.setUnitPosition(t.id, t.x + 3000, t.y);
+    }
+    w.tick(SIM_DT);
+    if (w.drainSpawnedProjectiles().length) launched = true;
+    impacts += w.drainProjectileImpacts().length;
+    removals += w.drainRemovedProjectiles().length;
+    if (launched && removals) break;
+  }
+  check("the swing was caught mid-wind-up", swungAt >= 0);
+  check("the teleport was stamped on the unit", t.teleports === 1);
+  check("the arrow still LEAVES the bow", launched);
+  check("…and is disjointed rather than chasing", removals > 0 && impacts === 0);
+  check("…so nothing reaches the target", t.hp === 100000, `hp ${t.hp}`);
+  check("and nothing is left in the air", w.projectiles.size === 0);
+}
+{
+  // The control: the same wind-up, the same displacement, WALKED. Distance is not a disjoint,
+  // so this one chases it down and lands — the arrow has to keep working.
+  const w = new SimWorld(grid(), 2);
+  const a = addUnit(w, 1, 0, 500, 500, ARCHER);
+  const t = addUnit(w, 2, 1, 1100, 500, []);
+  w.issueOrder(a.id, { kind: "attack", targetId: t.id, force: true });
+  let swung = false, hits = 0;
+  for (let i = 0; i < 1200; i++) {
+    if (!swung && a.swingLeft >= 0) { swung = true; t.x += 3000; }
+    w.tick(SIM_DT);
+    hits += w.drainHits().length;
+    if (swung && hits) break;
+  }
+  check("a target SHOVED mid-wind-up is still hit", hits > 0 && t.teleports === 0, `hp ${t.hp}`);
+}
+
 console.log("\nINVISIBLE: the Wind Walk case");
 {
   const r = shot((w, a, t) => { fade(t); });
