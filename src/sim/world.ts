@@ -40,7 +40,7 @@ import {
   type ReviveMode,
 } from "../data/gameplayConstants";
 import { perfNow, simProfile } from "./profile";
-import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -396,6 +396,11 @@ export interface SimBuff {
   kind: BuffKind;
   group: string; // non-stacking key ("" = always its own instance)
   timeLeft: number; // seconds (Infinity for auras, refreshed while in range)
+  /** What `timeLeft` started at — the duration the last application (or refresh) put on the
+   *  clock. The DENOMINATOR of any bar that draws a buff running out, and the one number
+   *  `timeLeft` alone cannot supply: a Hex is 15 seconds on a Grunt and 4 on a hero, and the
+   *  bar has to know which before it can be half full. Infinity for an aura, like timeLeft. */
+  total: number;
   sourceId: number;
   value: number; // primary magnitude (armour, slow %, hp/sec, damage, …)
   value2: number; // secondary magnitude (e.g. attack-speed slow)
@@ -9015,7 +9020,11 @@ export class SimWorld {
    *  either. One gate for every door in — the authority calls the sim's doors directly, so
    *  the lock lives in the sim and the card only reads it (`itemReadyError`). */
   private itemsLocked(u: SimUnit): boolean {
-    return u.hp <= 0 || u.stunned || u.asleep;
+    // …and a HEXED one, for the plainest reason of all: it is a critter. A chicken has no
+    // hands and no inventory — Hex and Polymorph take the unit's whole command card away, the
+    // six pockets with it, and a hero who drinks his way out of a Hex would make the spell
+    // cost the Shadow Hunter his mana for nothing.
+    return u.hp <= 0 || u.stunned || u.asleep || u.hexed;
   }
 
   /** `itemsLocked`, for the controller's inventory row — so the six buttons can wear their
@@ -11726,6 +11735,10 @@ export class SimWorld {
         existing.value = Math.max(existing.value, init.value ?? 0);
         existing.value2 = Math.max(existing.value2, init.value2 ?? 0);
         existing.timeLeft = Math.max(existing.timeLeft, init.timeLeft);
+        // A refresh re-fills the bar: whatever the clock now holds IS the full duration of the
+        // buff the unit is under, so a Hex re-cast at 2 seconds left reads full rather than
+        // ending up over 100% of the first cast's window.
+        existing.total = existing.timeLeft;
         existing.sourceId = init.sourceId;
         existing.delay = init.delay ?? 0; // a re-cast restarts the transition
         if (init.art) existing.art = init.art;
@@ -11734,7 +11747,7 @@ export class SimWorld {
       }
     }
     const art = init.art ?? "";
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed, undispellable: init.undispellable });
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, total: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed, undispellable: init.undispellable });
   }
 
   private interruptForStun(u: SimUnit): void {
@@ -11841,6 +11854,14 @@ export class SimWorld {
     // may not pick a Footman at all — see MANA_TARGET_SPELLS.
     const manaTarget = MANA_TARGET_SPELLS[code];
     if (manaTarget && target.maxMana <= 0) return manaTarget;
+    // …and the TRANSFORMS, which refuse a summoned unit outright — "Unable to target summoned
+    // units." The third rule of the same shape and known the same way (see NO_SUMMON_TARGET:
+    // 1.30.4's target-flag vocabulary has no `summoned`, and the engine ships the error line
+    // anyway). An ILLUSION counts: it is a summon in every reading the sim makes of one, and a
+    // Hex spent on a picture of a Blademaster would be the cheapest possible answer to Mirror
+    // Image.
+    const noSummon = NO_SUMMON_TARGET[code];
+    if (noSummon && (target.isSummon || target.isIllusion)) return noSummon;
     // …and the ones that refuse a target for being too big (CREEP_LEVEL_CAP). Read off the
     // caster's own rank rather than a constant, because the cap is a data column: a map that
     // retunes `DataC` retunes what its Alchemist may melt down.
@@ -13407,9 +13428,18 @@ export class SimWorld {
     // instead), so counting it here split every kill between the Blademaster and his images
     // and banked him a quarter of it: Mirror Image made its own caster level SLOWER, and the
     // share the images "took" went nowhere at all, because gainXp mirrors over it.
+    //
+    // A HEXED hero is never a sharer either, and it is the same shape of bug: it is a critter
+    // for the duration (`hexed`), and a critter standing in a fight is not fighting it. That
+    // is most of what Hex is FOR against a hero — it does not merely silence him, it takes him
+    // out of the experience he would otherwise have banked by being there — and, exactly as
+    // with an illusion, the share it "took" went nowhere, because the pool is split evenly
+    // among the sharers before anybody is paid. Left in, a Hex on the only hero present fed a
+    // whole creep camp's experience to a chicken.
+    const sharer = (h: SimUnit): boolean => h.isHero && !h.isIllusion && !h.hexed && h.hp > 0;
     const eligible: SimUnit[] = [];
     for (const h of this.units.values()) {
-      if (!h.isHero || h.isIllusion || h.hp <= 0 || h.team === victim.team) continue;
+      if (!sharer(h) || h.team === victim.team) continue;
       if (killer && h.team !== killer.team) continue; // only the killer's side (team = alliance group)
       if (Math.hypot(h.x - victim.x, h.y - victim.y) <= XP_SHARE_RANGE) eligible.push(h);
     }
@@ -13417,7 +13447,7 @@ export class SimWorld {
       // No hero in range: GlobalExperience=1 — award to ALL the killer's heroes
       // regardless of distance (still split among them, no per-distance loss).
       for (const h of this.units.values()) {
-        if (h.isHero && !h.isIllusion && h.hp > 0 && killer && h.team === killer.team) eligible.push(h);
+        if (sharer(h) && killer && h.team === killer.team) eligible.push(h);
       }
     }
     if (!eligible.length) return;
@@ -19515,6 +19545,13 @@ export class SimWorld {
     // expire. Blocked here rather than at the order, because every route in (walking over
     // an item, a right-click, a trigger's UnitAddItem) funnels through this one door.
     if (u.isIllusion) return false;
+    // …and neither does a HEXED one, at the same door for the same reason: a critter has no
+    // inventory to put anything in. `issueGetItem` already refuses the ORDER (itemsLocked),
+    // but the order is only one of the ways here — a hero hexed mid-walk is still standing on
+    // the rune he was sent to fetch, and a tome walked over is picked up by nobody's order at
+    // all. A powerup CONSUMED this way would be gone for good, which is the case that makes
+    // this the door to hold rather than the order.
+    if (u.hexed) return false;
     if (!this.itemReg) return false;
     const def = this.itemReg.get(it.itemId);
     if (!def) { this.removeGroundItem(it.id); return true; }

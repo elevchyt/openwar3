@@ -101,14 +101,14 @@ const hero = () => ({
     { id: "AOcr", code: "AOcr", level: 1, cooldownLeft: 0, autocastOn: true },
   ],
   buffs: [
-    { kind: "damagePct", group: "aura:command", buffId: "Boac", timeLeft: Infinity, sourceId: 1042, value: 0.25, value2: 0,
+    { kind: "damagePct", group: "aura:command", buffId: "Boac", timeLeft: Infinity, total: Infinity, sourceId: 1042, value: 0.25, value2: 0,
       art: "Abilities\\Spells\\Orc\\CommandAura\\CommandAura.mdx", fx: [{ path: "cmd.mdx", attach: ["overhead"] }], delay: 0 },
-    { kind: "invuln", group: "", buffId: "", timeLeft: 9.5, sourceId: 77, value: 0, value2: 0.5,
+    { kind: "invuln", group: "", buffId: "", timeLeft: 9.5, total: 12, sourceId: 77, value: 0, value2: 0.5,
       art: "", fx: [{ path: "meld.mdx", attach: ["chest", "mount", "left"] }, { path: "second.mdx", attach: [] }], delay: 0.5, meld: true },
     // …and one wearing a SIZE variant (BuffFx.anim — the ensnare family's Medium/Large clips),
     // beside the two above that carry none: the key is written only when it is set, so both
     // shapes have to survive the round trip.
-    { kind: "root", group: "ensnare", buffId: "Beng", timeLeft: 9, sourceId: 44, value: 1, value2: 0,
+    { kind: "root", group: "ensnare", buffId: "Beng", timeLeft: 9, total: 9, sourceId: 44, value: 1, value2: 0,
       art: "Abilities\\Spells\\Orc\\Ensnare\\ensnareTarget.mdx",
       fx: [{ path: "Abilities\\Spells\\Orc\\Ensnare\\ensnareTarget.mdx", attach: [], anim: "Large" }], delay: 0 },
   ],
@@ -247,7 +247,7 @@ const grunt = (i) => ({
   order: "attack", moving: true, inCombat: true, swingSeq: i % 11, hp: 520, maxHp: 700,
   weapon: weapon({ damage: 19 }),
   abilities: [{ id: "Sbsk", code: "Sbsk", level: 1, cooldownLeft: 0, autocastOn: false }],
-  buffs: [{ kind: "damagePct", group: "aura:command", buffId: "Boac", timeLeft: Infinity, sourceId: 1042, value: 0.25, value2: 0,
+  buffs: [{ kind: "damagePct", group: "aura:command", buffId: "Boac", timeLeft: Infinity, total: Infinity, sourceId: 1042, value: 0.25, value2: 0,
     art: "Abilities\\Spells\\Orc\\CommandAura\\CommandAura.mdx", fx: [{ path: "cmd.mdx", attach: ["overhead"] }], delay: 0 }],
 });
 

@@ -195,6 +195,11 @@ export interface SelectionInfo {
   timedFormLabel: string;
   timedFormSecondsLeft: number;
   timedFormFrac: number;
+  /** …and so does a HEXED one, which is the same fact about it once more: a clock is running
+   *  and it will be itself again when the clock stops. "" = not hexed. See hexBarOf. */
+  hexLabel: string;
+  hexSecondsLeft: number;
+  hexFrac: number;
   /** Active auras/buffs/debuffs, as the info panel's Status row shows them: the BUFF's
    *  own icon, name and tooltip body (`Buffart`/`Bufftip`/`Buffubertip`). */
   buffs: Array<{ icon: string; name: string; tip: string }>;
@@ -404,6 +409,15 @@ const castErrorRank = (key: string): number => {
   const i = CAST_ERROR_RANK.indexOf(key);
   return i < 0 ? CAST_ERROR_RANK.length : i;
 };
+
+/** The word a `hex` buff's expiry bar prints, by the BUFF ROW that landed it — the STATE the
+ *  clock is counting down, which is what that bar is for. Both words are the game's own, out of
+ *  the rows' `Buffubertip`s: "This unit is Hexed; it has been transformed into a critter."
+ *  (`[BOhx]`, Units\OrcAbilityStrings.txt) and "This unit is Polymorphed; it is transformed
+ *  into a sheep." (`[Bply]`, HumanAbilityStrings.txt). Their `Bufftip`s say "Hex" and
+ *  "Polymorph" instead — the ABILITY's name, which the Status icon beside the bar already
+ *  shows. Hex is the fallback, for a map's own transform built on either base. */
+const HEX_BAR_LABEL: Record<string, string> = { BOhx: "Hexed", Bply: "Polymorphed" };
 
 
 // Brightness of a remembered-but-not-seen building in fog — matches the ground veil's
@@ -6433,7 +6447,7 @@ export class RtsController {
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: false, goldRemaining: 0,
       isItem: true, description: def ? this.tipText(def.description) : "",
-      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
+      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
     };
   }
 
@@ -6460,7 +6474,7 @@ export class RtsController {
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: true, goldRemaining: m.gold,
       isItem: false, description: "",
-      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
+      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
     };
   }
 
@@ -6563,6 +6577,27 @@ export class RtsController {
     return null;
   }
 
+  /**
+   * The HEXED bar: what a `hex` buff (Hex, Polymorph) is counting down, or null.
+   *
+   * Read off the buff rather than off `SimUnit.hexed`, because the bar needs the CLOCK and the
+   * buff is what carries it — `timeLeft` against the `total` the last cast put on it
+   * (SimBuff.total). A unit can wear only one: both spells share one buff `group`, so a
+   * Polymorph on a hexed unit refreshes rather than stacking.
+   *
+   * The LABEL is the state, not the spell. The game's own rows say it in as many words —
+   * `[BOhx] Buffubertip` = "This unit is Hexed; it has been transformed into a critter."
+   * (Units\OrcAbilityStrings.txt), `[Bply]` = "This unit is Polymorphed; it is transformed
+   * into a sheep." (HumanAbilityStrings.txt) — while their `Bufftip`s name the ABILITY ("Hex",
+   * "Polymorph"), which is what the Status row beside this bar already shows.
+   */
+  private hexBarOf(u: RenderUnit): { label: string; left: number; frac: number } | null {
+    const b = u.buffs.find((x) => x.kind === "hex");
+    if (!b || !Number.isFinite(b.timeLeft) || b.timeLeft <= 0) return null;
+    const total = Number.isFinite(b.total) && b.total > 0 ? b.total : b.timeLeft;
+    return { label: HEX_BAR_LABEL[b.buffId] ?? HEX_BAR_LABEL.BOhx, left: b.timeLeft, frac: Math.max(0, Math.min(1, b.timeLeft / total)) };
+  }
+
   private infoFor(id: number): SelectionInfo | null {
     // The authority's numbers, not our own prediction of them (item 10c-2c-3). A panel is
     // drawn at a fixed place in the HUD rather than over the terrain, so this could wait for
@@ -6579,6 +6614,7 @@ export class RtsController {
     const upgradeBoxes = this.upgradeBoxes(e.typeId);
     const builderId = b && b.constructionLeft > 0 ? this.builderInside(e.simId) : 0;
     const form = u.altFormLeft > 0 ? this.timedFormOf(id) : null;
+    const hex = this.hexBarOf(u);
     /**
      * May this viewer read the building's STATUS — what it is making, and how many seconds
      * are left on it?
@@ -6692,6 +6728,11 @@ export class RtsController {
       timedFormLabel: form?.name ?? "",
       timedFormSecondsLeft: Math.max(0, Math.ceil(u.altFormLeft)),
       timedFormFrac: form && form.total > 0 ? Math.max(0, Math.min(1, u.altFormLeft / form.total)) : 0,
+      // …and once more for a HEX. No viewpoint gate, unlike the summon triple above: the
+      // critter is standing there in plain sight and everybody watching already knows.
+      hexLabel: hex?.label ?? "",
+      hexSecondsLeft: hex ? Math.max(0, Math.ceil(hex.left)) : 0,
+      hexFrac: hex?.frac ?? 0,
       buffs: this.statusBuffsFor(u),
       // The cargo panel: whoever is inside, in boarding order, with the seats each takes.
       // Read by the OWNER'S side only — `garrison` is on the wire for allies as well (a

@@ -191,6 +191,12 @@ export interface HudSelection {
   timedFormLabel: string;
   timedFormSecondsLeft: number;
   timedFormFrac: number;
+  /** A HEXED (or Polymorphed) unit wears it too, and is the one case that OUTRANKS the hero
+   *  bar — see the branch below. "" = not hexed; the label names the state ("Hexed",
+   *  "Polymorphed"). */
+  hexLabel: string;
+  hexSecondsLeft: number;
+  hexFrac: number;
   /** Active auras/buffs/debuffs, as the info panel's Status row shows them: the BUFF's
    *  own icon, name and tooltip body (`Buffart`/`Bufftip`/`Buffubertip`). */
   buffs: Array<{ icon: string; name: string; tip: string }>;
@@ -3516,7 +3522,22 @@ export class GameHud {
         // (`mirrorXpToIllusions`). Left at the spawn default it would read 0 into the level
         // while the real hero's read three quarters, which is the answer the ability exists to
         // hide, printed on the enemy's own panel.
-        if (sel.isHero && sel.level > 0 && !sel.isSummon) {
+        if (sel.hexLabel) {
+          // HEXED / POLYMORPHED — the same countdown bar, and the ONE case that outranks the
+          // hero branch below (a summon, a timed form and a hero all sit under it). Two
+          // reasons, and they are the same reason twice: while the clock runs this unit is a
+          // critter, and "how many seconds until I have my hero back" is the only number on
+          // the panel anybody is reading. The XP bar would be worse than merely displaced —
+          // a hexed hero banks NO experience (World.awardKillXp skips it), so a purple bar
+          // ticking along beside the fight he is standing in would be telling the player the
+          // opposite of what is happening.
+          this.selSub.textContent = "";
+          this.xpBar.hidden = false;
+          this.xpBar.classList.add("summon");
+          setGameTip(this.xpBar, null);
+          this.xpText.textContent = `${sel.hexLabel} (${sel.hexSecondsLeft}s)`;
+          this.xpFill.style.width = `${sel.hexFrac * 100}%`;
+        } else if (sel.isHero && sel.level > 0 && !sel.isSummon) {
           const span = sel.xpNext - sel.xpThis;
           const into = Math.max(0, Math.round(sel.xp - sel.xpThis));
           this.selSub.textContent = ""; // level + XP live inside the bar; no extra label

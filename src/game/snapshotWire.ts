@@ -50,7 +50,7 @@ export type WireSnapshot = Omit<WorldSnapshot, "units" | "projectiles"> & { hot:
 /** Bumped when the binary layout changes. Carried in the blob so a mismatched decode fails
  *  loudly at the header rather than as garbage fields three units in. The relay's
  *  `PROTOCOL_VERSION` still gates the SESSION; this gates the blob. */
-const CODEC_VERSION = 5; // 5: a unit carries its Hex critter skin (4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
+const CODEC_VERSION = 6; // 6: a buff carries the duration it started at (the denominator of an expiry bar) (5: a unit carries its Hex critter skin; 4: a buff's art carries its SIZE variant; 3: a pending build's `paid` flag; 2: buffs carry their `B….` row id)
 
 const TWO_PI = Math.PI * 2;
 
@@ -410,6 +410,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
     w.u16(w.intern(b.art));
     w.u32(b.sourceId);
     w.f32(b.timeLeft); // f32 carries an aura's Infinity, which JSON never could
+    w.f32(b.total); // …and the duration that clock started at — see SimBuff.total
     w.f32(b.value);
     w.f32(b.value2);
     w.f32(b.delay);
@@ -623,6 +624,7 @@ function readUnit(r: Reader): UnitSnapshot {
       art: r.str(),
       sourceId: r.u32(),
       timeLeft: r.f32(),
+      total: r.f32(),
       value: r.f32(),
       value2: r.f32(),
       delay: r.f32(),

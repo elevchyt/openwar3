@@ -10868,7 +10868,7 @@ export class MapViewerScene {
         // …and Animate Dead's raise cannot be hurt at all (`Hre2 "Raised Units Are
         // Invulnerable"`), which is why the ultimate is six bodies you can only wait out.
         if (su && s.invulnerable) {
-          su.buffs.push({ kind: "invuln", group: "raised", timeLeft: summonLeft > 0 ? summonLeft : Infinity, sourceId: s.sourceId, value: 0, value2: 0, art: "", fx: [], buffId: "", delay: 0 });
+          su.buffs.push({ kind: "invuln", group: "raised", timeLeft: summonLeft > 0 ? summonLeft : Infinity, total: summonLeft > 0 ? summonLeft : Infinity, sourceId: s.sourceId, value: 0, value2: 0, art: "", fx: [], buffId: "", delay: 0 });
         }
         // Turn the fresh copy into an illusion of its original. The sim owns this: the
         // level has to be applied and the stats rebuilt off it before hp/mana can be set

@@ -170,6 +170,73 @@ console.log("\na unit killed while it is a critter dies as itself");
   check("…and PolymorphDone.wav", done && /PolymorphDone\.wav$/i.test(done.soundFile), true);
 }
 
+console.log("\na SUMMONED unit may not be hexed or polymorphed at all");
+{
+  const w = world();
+  const hunter = caster(w, "Oshd", "AOhx", 1000, 1000);
+  const sorc = caster(w, "hsor", "Aply", 1000, 1400);
+  const wolf = spawn(w, "osp1", 1200, 1000, 1, 1); // stands in for any summon
+  wolf.isSummon = true;
+  wolf.magicImmune = false; // a Serpent Ward IS magic immune — this test is about the summon rule
+  // "Unable to target summoned units." — Units\CommandStrings.txt [Errors] Notsummoned, the line
+  // the engine ships for a rule no `targs1` can state (1.30.4's [targetList] has no `summoned`).
+  check("Hex refuses a summon at the button", w.castError(hunter.id, "AOhx", wolf.id, 0, 0), "Notsummoned");
+  check("…and Polymorph too", w.castError(sorc.id, "Aply", wolf.id, 0, 0), "Notsummoned");
+  check("…and the order itself is refused", w.issueCast(hunter.id, "AOhx", wolf.id, 0, 0), false);
+  run(w, 2);
+  check("…so nothing was transformed", wolf.hexed, false);
+  const f = spawn(w, "hfoo", 1200, 1400, 1, 1);
+  check("an ordinary enemy is still a legal target", w.castError(sorc.id, "Aply", f.id, 0, 0), null);
+}
+
+console.log("\na hexed hero banks no experience from a kill beside it");
+{
+  // The hero has to be on the KILLER's side to be a sharer at all (awardKillXp), so the hex is
+  // applied straight through the buff door rather than by an enemy caster — the buff IS the
+  // rules (recomputeStats), and the cast that lands it is tested above.
+  const setUp = (hexIt) => {
+    const w = world();
+    const killer = caster(w, "Oshd", "AOhx", 1000, 1000); // owner 0, team 0
+    const hero = caster(w, "Hamg", "AHbz", 1200, 1000);
+    hero.isHero = true;
+    const victim = spawn(w, "hfoo", 1250, 1000, 2, 2);
+    if (hexIt) {
+      w.spellApi.applyBuff(hero, { kind: "hex", group: "hex", timeLeft: 15, sourceId: killer.id });
+      w.recomputeStats(hero);
+    }
+    const before = hero.xp;
+    w.spellApi.spellDamage(victim, 100000, killer.id);
+    run(w, 0.2);
+    return { hexed: hero.hexed, gained: hero.xp - before };
+  };
+  const plain = setUp(false);
+  check("an ordinary hero beside the kill banks it", plain.gained > 0, true);
+  const hexed = setUp(true);
+  check("a hexed one is a critter", hexed.hexed, true);
+  check("…and the same kill pays it nothing", hexed.gained, 0);
+}
+
+console.log("\na critter has no hands: the whole inventory row goes dead");
+{
+  const w = world();
+  const hunter = caster(w, "Oshd", "AOhx", 1000, 1000);
+  const hero = caster(w, "Hamg", "AHbz", 1200, 1000);
+  hero.isHero = true;
+  hero.team = 1;
+  hero.owner = 1;
+  hero.inventory = [null, null, null, null, null, null];
+  check("the inventory is live to start with", w.itemsLockedFor(hero.id), false);
+  check("…and its slots can be rearranged", w.swapItems(hero.id, 0, 1), true);
+  w.issueCast(hunter.id, "AOhx", hero.id, 0, 0);
+  run(w, 2);
+  check("the hero is hexed", hero.hexed, true);
+  // One gate behind every door in — use, drop, give, sell, pick up, rearrange (itemsLocked) —
+  // which is also what greys the six buttons out, exactly as a stun does.
+  check("…and the whole inventory row is locked", w.itemsLockedFor(hero.id), true);
+  check("…so its slots cannot be rearranged", w.swapItems(hero.id, 0, 1), false);
+  check("…nor dropped from", w.dropItem(hero.id, 0, hero.x, hero.y), false);
+}
+
 console.log("\nevery speed stops at MaxUnitSpeed, and only Wind Walk and Chemical Rage go past it");
 {
   const w = world();

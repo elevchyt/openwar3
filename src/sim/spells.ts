@@ -914,6 +914,34 @@ export const MANA_TARGET_SPELLS: Record<string, string> = {
   AEmb: "Cantmanaburn", // Demon Hunter — Mana Burn
 };
 
+/**
+ * THE TRANSFORMS — Hex and Polymorph, and the creep copies that share their codes — may not
+ * be aimed at a SUMMONED unit. "Casting Hex on a summoned unit does nothing… summoned units
+ * are immune to being hexed by design" (classic.battle.net, Shadow Hunter), and Polymorph
+ * carries the same clause; Liquipedia lists summons under both spells' refused targets.
+ *
+ * A rule and not a flag, exactly like the two sets above, and the data proves it twice over:
+ * `UI\UnitEditorData.txt`'s [targetList] — the whole vocabulary a `targs1` may draw on — has
+ * no "summoned" entry at all in 1.30.4, and yet `Units\CommandStrings.txt` [Errors] ships
+ * **`Notsummoned` = "Unable to target summoned units."** for the engine to say. A line written
+ * for a rule no ability row can state is the engine telling us it keeps that rule itself.
+ *
+ * Keyed on the base `code`, so the creeps' `AChx`/`ACpy` and a map's own rows built on either
+ * base inherit it — the same door every other transform behaviour comes through.
+ *
+ * WHY it exists is worth stating, because it is not arbitrary: a summon is on a clock already.
+ * Turning a Water Elemental into a sheep for 15 seconds would spend a 175-mana Hex to delay
+ * something that was going to expire on its own — but far worse, a critter takes no damage it
+ * cannot dodge and gives none, so Hex would be the cheapest possible ANSWER to every summon in
+ * the game. The engine refuses it instead.
+ */
+export const NO_SUMMON_TARGET: Record<string, string> = {
+  AOhx: "Notsummoned", // Shadow Hunter — Hex
+  AChx: "Notsummoned", // …and the creep row that shares its code
+  Aply: "Notsummoned", // Sorceress — Polymorph
+  ACpy: "Notsummoned", // …and its creep twin
+};
+
 /** Devour's shape, shared by the Kodo Beast (`Adev`) and the creeps (`ACdv`). The MAX CREEP
  *  LEVEL both rows carry is enforced at the button (`SimWorld.castError`), not here. */
 const devourSpell: Handler = (api, caster, def, _rank, ctx) => {

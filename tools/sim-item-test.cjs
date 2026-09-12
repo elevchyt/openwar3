@@ -336,5 +336,28 @@ console.log("\nthe Tome of Power is a level");
   check("…with the skill point that comes with it", hero.skillPoints, 1);
 }
 
+console.log("\na HEXED hero uses nothing and picks up nothing — a critter has no hands");
+{
+  world = newWorld();
+  const hero = give(unit({ isHero: true }), "phea");
+  hero.hp = 100; // hurt, so a Potion of Healing has something to do
+  check("un-hexed, the potion is drunk", world.useItem(hero.id, 0, 0, hero.x, hero.y), true);
+
+  world = newWorld();
+  const hexed = give(unit({ isHero: true }), "phea");
+  hexed.hp = 100;
+  world.spellApi.applyBuff(hexed, { kind: "hex", group: "hex", timeLeft: 15, sourceId: hexed.id });
+  world.recomputeStats(hexed);
+  check("…hexed, it is a critter", hexed.hexed, true);
+  check("…and the same potion does nothing", world.useItem(hexed.id, 0, 0, hexed.x, hexed.y), false);
+  check("…with the charge still on it", hexed.inventory[0] && hexed.inventory[0].charges, 1);
+  // The PICK-UP is a door of its own, and the one an order never reaches: a hero hexed
+  // mid-walk is already standing on the rune, and a tome taken this way would be gone for good.
+  const ground = { id: nextId++, itemId: "tkno", x: hexed.x, y: hexed.y, charges: 1 };
+  world.items.set(ground.id, ground);
+  check("…and nothing is picked up off the ground", world.pickUpItem(hexed, ground), false);
+  check("…the item is still lying there", world.items.has(ground.id), true);
+}
+
 console.log(failed ? `\nitems: ${failed} check(s) FAILED` : "\nitems: all checks passed");
 process.exit(failed ? 1 : 0);

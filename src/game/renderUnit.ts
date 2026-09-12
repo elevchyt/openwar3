@@ -67,6 +67,12 @@ export interface RenderBuff {
    *  down (see SimBuff.delay). The renderer reads it to draw the vanish as the BLEND it is
    *  rather than as a snap; it crosses the wire with the rest of the buff. */
   readonly delay: number;
+  /** How long this buff still has, and what it started with (SimBuff.timeLeft / .total) —
+   *  the two numbers an EXPIRY BAR is drawn from. `Infinity` for an aura, which is exactly
+   *  what says "this one has no bar". The panel reads them for a Hex's countdown; the
+   *  Status line beside it still asks only which row the buff is. */
+  readonly timeLeft: number;
+  readonly total: number;
 }
 
 /**
