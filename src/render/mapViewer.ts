@@ -474,14 +474,24 @@ const MOON_WELL_WATER_LIFT = 32;
 /**
  * Where the same pool sits when the well is down to its last drop — the floor of the basin.
  *
- * Read off the geometry rather than by eye, because the basin is a dish and its floor is not
- * one number: raycasting `MoonWell.mdx`'s body straight down over the pool's own footprint
- * puts the stone at z = 11.2 dead centre and z ≈ 17.5 out at the hexagon's rim (r = 55), and
- * a flat plane can only rest on the shallowest part of a dish. The pool's own surface lies
- * 7.28 above its origin, so 17.5 − 7.3 ≈ 10 is the height at which the water is just touching
- * the stone all round: the last puddle before `mana <= 0` takes the model away entirely.
+ * Read off the geometry rather than by eye, because the basin is a DISH and its floor is not
+ * one number. Raycasting `MoonWell.mdx`'s body straight down puts the stone at z = 10.72 dead
+ * centre, rising to z ≈ 15 by r = 52, where the rim wall starts and climbs to ≈ 30. The pool
+ * (`MoonWellTarget.mdx`) is a flat hexagon of six vertices lying at z = 7.28, 64.4 units to a
+ * corner — WIDER than the basin it drops into.
+ *
+ * Those two facts together are what fixes the number: 10.72 − 7.28 ≈ 3.4 rests the sheet on
+ * the DEEPEST point of the dish, and because the sheet is wider than the dish, everything
+ * outside the middle is then behind the stone. So a nearly-empty well shows a puddle in the
+ * centre of bare rock, which is what "nearly empty" has to look like.
+ *
+ * It was 10 — the height at which the sheet clears the SHALLOWEST part of the dish (the
+ * stone at the hexagon's rim) — and that is the wrong half of a dish to measure from: it
+ * floated the water a good 6 units off the basin floor, so a well with one drop left read as
+ * a well still a third full. The gauge's whole job is telling those two apart (developer,
+ * against the running game).
  */
-const MOON_WELL_WATER_LIFT_DRY = 10;
+const MOON_WELL_WATER_LIFT_DRY = 3.4;
 
 /**
  * The half-extents a building's SEAT HEIGHT is sampled over — its BODY, not its whole
