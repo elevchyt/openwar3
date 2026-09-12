@@ -891,9 +891,15 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   // height — so the log's last line, which is the one just said and the one it is scrolled to,
   // was drawn BEHIND the box. One height decides both.
   setProp(findFrame(root, "ChatTextArea"), "Height", [num(CHAT_H + CHAT_TOP_LIFT - CHAT_FLOOR)]);
-  // …and in from the panel's left rail by the same margin, narrowing to keep its right edge.
+  // …and in from the panel's left rail by the same margin. It keeps that off its WIDTH, and
+  // then both boxes take the room our 16:9 panel has to the RIGHT of where the 4:3 file stops
+  // (`CHAT_WIDEN`): the lower-left panel runs another 130-odd pixels that way, and a chat log
+  // wrapping in half of its own panel is the same waste as one starting below its border. The
+  // entry line takes exactly the same widening, so it goes on overhanging the log by the few
+  // pixels of chrome the file gives it rather than drifting away from it.
   nudgeX(findFrame(root, "ChatTextArea"), CHAT_INSET);
-  setProp(findFrame(root, "ChatTextArea"), "Width", [num(CHAT_W - CHAT_INSET)]);
+  setProp(findFrame(root, "ChatTextArea"), "Width", [num(CHAT_W - CHAT_INSET + CHAT_WIDEN)]);
+  setProp(findFrame(root, "ChatEditBox"), "Width", [num(CHAT_EDIT_W + CHAT_WIDEN)]);
 
   // Start Game / Cancel grow to fill the slot the 3D chrome leaves them, keeping the file's
   // own base:button ratio — the same correction, and the same numbers, as Skirmish.
@@ -930,6 +936,12 @@ const CHAT_W = 0.461875;
 const CHAT_H = 0.094375;
 const CHAT_TOP_LIFT = 0.008;
 const CHAT_INSET = 0.006;
+/** GameChatroom.fdf's own ChatEditBox width, and how much wider than the file's boxes our
+ *  panel is on the RIGHT. Measured against the border the same way the lift above is: the
+ *  entry line — the wider of the two, and the one with chrome around it — clears it by a few
+ *  pixels, and the log keeps the file's own relationship to it. */
+const CHAT_EDIT_W = 0.469375;
+const CHAT_WIDEN = 0.0985;
 /** …and how much of the log's height the ENTRY BOX takes, so that it clears the panel's bottom
  *  border. The box is anchored under the log (`SetPoint TOPLEFT, "ChatTextArea", BOTTOMLEFT,
  *  -0.003125, 0.000625`) and is 0.04 tall (StandardEditBoxTemplate), so this is the one number
