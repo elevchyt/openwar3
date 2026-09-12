@@ -14,6 +14,7 @@ import {
 } from "../data/options";
 import { applyVideoOptions } from "../render/videoQuality";
 import { applyHealthBarOptions } from "../render/worldOverlays";
+import { applyHotkeyOptions } from "../data/hotkeys";
 
 // The Options screen (issue #81), built from the game's own UI\FrameDef\Glue\OptionsMenu.fdf:
 // the three category buttons (Gameplay / Video / Sound) down the right, the settings for the
@@ -91,8 +92,9 @@ export async function mountOptions(
   // putting the committed values back through the same two calls is a complete undo.
   const applyVideo = (opts: Options): void => applyVideoOptions(opts);
   // The Gameplay panel has a live half too now (issue #141): the two health-bar rows are read
-  // per frame by the world overlays, so a bar changes colour as the pulldown is used.
-  const applyGameplay = (opts: Options): void => applyHealthBarOptions(opts);
+  // per frame by the world overlays, so a bar changes colour as the pulldown is used — and the
+  // "Hotkeys:" row (issue #142), which the HUD's key handler asks before every keystroke.
+  const applyGameplay = (opts: Options): void => { applyHealthBarOptions(opts); applyHotkeyOptions(opts); };
 
   const num = (v: unknown, fallback: number): number => (typeof v === "number" ? v : fallback);
   const str = (v: unknown, fallback: string): string => (typeof v === "string" ? v : fallback);

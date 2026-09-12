@@ -209,7 +209,11 @@ Hotkey=H
 ```
 
 The `Tip` already gilds the hotkey letter, so the title pairs itself with the letter on the
-button's corner with nothing for us to do. The Ubertips are much fuller than a one-line
+button's corner with nothing for us to do — under LEGACY hotkeys. Under **grid** hotkeys
+(Options → Gameplay → "Hotkeys:", [`src/data/hotkeys.ts`](../src/data/hotkeys.ts)) the key is
+the button's PLACE on the card and is nowhere in its name, so `gridTitle` strips the gilding —
+which would now point at a key that does nothing — and prints the real key after the name, in
+the parentheses and the `|cfffed312` gold `ITEM_NAME_HOTKEY` uses for exactly this. The Ubertips are much fuller than a one-line
 paraphrase and they say things a player actually needs: that a Move onto a **unit** follows it,
 that Hold Position will not chase, that a rally point can be set on a mine or on trees to
 auto-harvest. `cmdText` reads them; the fallbacks are the file's own English.
@@ -266,7 +270,9 @@ from never cross the wire.
 * **The gap above the card** is 48 px at a 1080 reference, chosen to clear the console art's own
   top edge rather than measured off anything.
 * **Enhanced Tooltips.** The Options panel's `TooltipsCheckBox` (`ENHANCED_TOOLTIPS`,
-  `EscMenuOptionsPanel.fdf`) is wired in [`src/data/options.ts`](../src/data/options.ts) as
-  `applied: false` — a tooltip switch that changes nothing. What the real option adds has not
-  been established.
+  `EscMenuOptionsPanel.fdf`) is GONE from the panel as of issue #142 — it was wired
+  `applied: false`, a tooltip switch that changed nothing, and what the real option adds has
+  never been established. The slab described above is the one OpenWar3 draws, always. If the
+  difference is ever established, the row comes back rather than the behaviour changing under
+  a setting nobody can see.
 * **`ToolTipStonesIcon`** is unused: nothing in melee spends Mana Stones. A custom map might.

@@ -20,6 +20,7 @@ import { setGameTip } from "./gameTip";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 import { anyModalOpen } from "./modal";
+import { gridCommandKey, gridCommandSlot, gridHotkeys, gridInventoryKey, gridInventorySlot } from "../data/hotkeys";
 
 /** WC3's upkeep bands, as the resource bar colours them. */
 const UPKEEP_COLORS = { none: "#5be05a", low: "#e0c146", high: "#e05046" };
@@ -1765,6 +1766,29 @@ export class GameHud {
       else if (this.driver.creepButtonEnabled()) this.toggleMinimapCreeps();
       return;
     }
+    // GRID hotkeys (Options → Gameplay → "Hotkeys:", issue #142): the key is the button's PLACE
+    // on the card rather than a letter the data gave it, so it is matched on the slot index and
+    // read off `e.code` — QWER is the card's top row whatever the layout prints on those four
+    // keys (data/hotkeys.ts). The POCKETS move with the card and are asked first: the two sets
+    // of letters do not overlap, but an inventory key is the more specific claim, the same way
+    // round as the numpad block read further up this handler.
+    //
+    // The legacy letters stand DOWN entirely here — that is what choosing a scheme means — but
+    // everything above this point (Escape, the control groups, the numpad pockets, Alt-A and
+    // its column) is a binding of its own and is untouched by the row.
+    if (gridHotkeys()) {
+      const pocket = gridInventorySlot(e.code);
+      if (pocket >= 0) {
+        e.preventDefault();
+        this.driver.useInventory(pocket);
+        return;
+      }
+      const slot = gridCommandSlot(e.code);
+      if (slot < 0) return;
+      const c = this.driver.commandCard().find((b) => b.row * 4 + b.col === slot && !b.disabled && !b.passive);
+      if (c) this.driver.runCommand(c.id);
+      return;
+    }
     // Trigger the command whose hotkey matches the pressed key. A passive isn't a
     // command, so its letter isn't taken — it can't shadow a real order sharing it.
     // Neither is an unavailable one (a greyed DISBTN button has no hotkey in WC3
@@ -3097,8 +3121,14 @@ export class GameHud {
       this.cmdTooltip.hidden = true;
       return;
     }
-    // "%s (…NumPad %u…)" — fill the file's own two slots, in its own order.
-    const nameFmt = this.driver.uiString("ITEM_NAME_HOTKEY", "%s (|cfffed312NumPad %u|r)");
+    // "%s (…NumPad %u…)" — fill the file's own two slots, in its own order. Under GRID hotkeys
+    // (issue #142) the slot answers a LETTER as well, and that is the key the hand on the card
+    // is next to — so the hint names it instead. The shape is the file's own (name, then the
+    // key in parentheses, gilded in its gold); the string is ours, because 1.30.4 shipped no
+    // grid and so has no format for one.
+    const nameFmt = gridHotkeys()
+      ? `%s (|cfffed312${gridInventoryKey(i)}|r)`
+      : this.driver.uiString("ITEM_NAME_HOTKEY", "%s (|cfffed312NumPad %u|r)");
     const title = wc3ToHtml(nameFmt.replace("%s", s.name).replace("%u", String(INVENTORY_NUMPAD[i])));
     const desc = s.desc ? `<div class="hud-tooltip-desc">${wc3ToHtml(s.desc)}</div>` : "";
     const useText = this.driver.uiString("ITEM_USE_TOOLTIP", "|CFFFED312Left-Click to Use|R");
@@ -3371,7 +3401,9 @@ export class GameHud {
    *  runs and `|n` breaks intact. Where a button has no game string behind it (the
    *  hand-written Move/Stop/… orders) the name + hotkey stand in. */
   private showTooltip(c: CommandButton): void {
-    const title = c.tip ? wc3ToHtml(c.tip) : highlightHotkey(c.id.startsWith("build:") ? `Build ${c.name}` : c.name, c.hotkey);
+    const title = gridHotkeys()
+      ? gridTitle(c)
+      : c.tip ? wc3ToHtml(c.tip) : highlightHotkey(c.id.startsWith("build:") ? `Build ${c.name}` : c.name, c.hotkey);
     const r = this.driver.resources();
     const sel = this.driver.selection();
     const costs =
@@ -4271,6 +4303,26 @@ function onPress(
     setPressed(null);
     forButton(e.button)?.(e);
   };
+}
+
+/**
+ * A command button's tooltip title under GRID hotkeys (issue #142).
+ *
+ * The legacy title gilds the button's key INSIDE its name, because that is where the key came
+ * from — the ability's `Hotkey` column is a letter of the word ("|cffffcc00M|rove"). A grid key
+ * is a fact about the card's SHAPE and is nowhere in the name, so the gilding is stripped (it
+ * would now point at a key that does nothing) and the real key is printed after it, in the
+ * parentheses and the gold the game's own ITEM_NAME_HOTKEY uses for exactly this.
+ *
+ * Colour codes are stripped from the WHOLE title rather than just the first pair: a Tip string
+ * is one line with one highlight in it, and a map that coloured more of its own is still saying
+ * "this letter" with all of it.
+ */
+function gridTitle(c: CommandButton): string {
+  const raw = c.tip || (c.id.startsWith("build:") ? `Build ${c.name}` : c.name);
+  const plain = raw.replace(/\|[cC][0-9a-fA-F]{8}/g, "").replace(/\|[rR]/g, "");
+  const key = gridCommandKey(c.row, c.col);
+  return wc3ToHtml(key ? `${plain} (|cfffed312${key}|r)` : plain);
 }
 
 // Highlight the hotkey letter (first occurrence, case-insensitive) in gold inside

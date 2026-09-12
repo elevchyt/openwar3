@@ -41,6 +41,16 @@ StringList {
     DEFAULT_HEALTHBARS          "Default",
     TEAM_COLORED_HEALTHBARS     "Team Colored",
 
+    // ...and the row under it (issue #142): which KEY presses a command button. The game had a
+    // checkbox here instead -- CUSTOM_KEYS "Custom Keyboard Shortcuts", one of whose two states
+    // is now this row's third entry -- and its COLON_CUSTOM_KEYS names the FILE it reads rather
+    // than the question, so the label is ours. The three entries are bare words for the same
+    // reason the healthbar pair above them are: the label already says what they are three of.
+    COLON_HOTKEYS               "Hotkeys:",
+    HOTKEYS_LEGACY              "Legacy",
+    HOTKEYS_GRID                "Grid",
+    HOTKEYS_CUSTOM              "Custom",
+
     // LAN → Create Game, the row under the map list: which relay the game is announced on
     // (src/overrides/ui/LocalMultiplayerCreate.fdf). The game broadcast its LAN games and never
     // had to ask; the nearest thing in its table is Battle.net's COLON_SELECTED_REALM

@@ -28,6 +28,7 @@ import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
 import { applyVideoOptions } from "./render/videoQuality";
 import { applyHealthBarOptions } from "./render/worldOverlays";
+import { applyHotkeyOptions } from "./data/hotkeys";
 import { GlueManager, type GlueScreenDef } from "./ui/glue";
 import { mountLoadingScreen, type LoadingScreen } from "./ui/loadingScreen";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
@@ -83,6 +84,8 @@ applyVideoOptions(bootOptions);
 // live. Here beside the video half so a match started straight off a deep link is already
 // wearing the player's committed settings.
 applyHealthBarOptions(bootOptions);
+// …and the panel's "Hotkeys:" row (issue #142), which the HUD's key handler reads live.
+applyHotkeyOptions(bootOptions);
 
 const resolver = new AssetResolver(null);
 

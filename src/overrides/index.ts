@@ -76,32 +76,46 @@ export const OW3_STRINGS: FdfOverride = { id: "ow3-strings", source: globalStrin
 
 /**
  * Options → Gameplay: out with the Game Port and the Chat Support gateway, in with the
- * Computer+ default (issue #124) and the "Healthbars:" pulldown (issue #141).
- *
- * The four retired frames are the label/control pairs of two settings this engine has no
- * meaning for; nothing else in the panel anchors to any of them, so the panel just ends a row
- * earlier. See `ui/OptionsMenu.fdf` for the reasons.
+ * Computer+ default (issue #124), the "Healthbars:" pulldown (issue #141) and the "Hotkeys:"
+ * one (issue #142) — which also retires four of the game's own checkbox rows and re-orders
+ * what is left. See `ui/OptionsMenu.fdf` for the panel this adds up to, and
+ * src/data/options.ts for why each retired row goes.
  */
 export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
   id: "ow3-options-menu",
   source: optionsMenuFdf,
-  remove: ["GamePortLabel", "GamePortEditBox", "ChatSupportLabel", "ChatSupportBackdrop"],
-  // The "Healthbars:" pulldown is SPLICED IN under "Always show Health Bars" (issue #141), so
-  // the row beneath it — and only that row — re-anchors to the new one. `HealthBarsLabel`
-  // hangs off the same checkbox and must not move, which is what `only` is for.
-  //
-  // The dy is the pulldown's overhang. Its backdrop is 0.053 tall and centred on a
-  // 0.013-tall label (ui/fdf/layout.ts `textBoxHeight`: a one-line TEXT frame is exactly its
-  // font size), so it reaches 0.053 / 2 − 0.013 / 2 = 0.020 below the label's own bottom edge;
-  // the −0.005 the checkbox already carried is then the gap under the pulldown.
+  remove: [
+    // Two settings this engine has no meaning for (issue #124), label and control each.
+    "GamePortLabel", "GamePortEditBox", "ChatSupportLabel", "ChatSupportBackdrop",
+    // …and four whose only honest value is ON, or which the "Hotkeys:" pulldown now answers
+    // (issue #142). Each is a checkbox with its label hanging off it, so both go.
+    "TooltipsCheckBox", "TooltipsLabel",
+    "SubgroupCheckBox", "SubgroupLabel",
+    "FormationToggleCheckBox", "FormationToggleLabel",
+    "CustomKeysCheckBox", "CustomKeysLabel",
+  ],
+  // The panel is a CHAIN, and issue #142 cuts four links out of the middle of it and swaps the
+  // order of two more. Both moved rows are the game's own frames, so they move by re-anchoring
+  // rather than by being restated in our FDF; both are narrowed with `only`, because the frame
+  // each of them is being pointed AT is still standing and still has its own label hanging off
+  // it (the sweeping rewrite is for a row that is going away, not for one being spliced past).
   repoint: [
-    { from: "HealthBarsCheckBox", to: "HealthBarStyleLabel", dy: -0.02, only: ["AutosaveReplayCheckBox"] },
+    // "Automatically Save Replays" takes the retired Enhanced Tooltips row's place at the top of
+    // the block, directly under the Keyboard Scroll slider's label. -0.005 (the gap it carried
+    // under Always show Health Bars) + -0.025 = the -0.03 that row used under `KeyScrollLabel`,
+    // which is wider than a checkbox-to-checkbox gap because it clears the slider.
+    { from: "HealthBarsCheckBox", to: "KeyScrollLabel", dy: -0.025, only: ["AutosaveReplayCheckBox"] },
+    // …and "Always show Health Bars" follows the Computer+ box that follows it, one
+    // checkbox-gap down — the same -0.005 it already carried, so no dy.
+    { from: "CustomKeysCheckBox", to: "ComputerPlusDefaultCheckBox", only: ["HealthBarsCheckBox"] },
   ],
   add: [
-    { frame: "HealthBarStyleLabel", into: "GameplayPanel" },
-    { frame: "HealthBarStyleBackdrop", into: "GameplayPanel" },
     { frame: "ComputerPlusDefaultCheckBox", into: "GameplayPanel" },
     { frame: "ComputerPlusDefaultLabel", into: "GameplayPanel" },
+    { frame: "HealthBarStyleLabel", into: "GameplayPanel" },
+    { frame: "HealthBarStyleBackdrop", into: "GameplayPanel" },
+    { frame: "HotkeysLabel", into: "GameplayPanel" },
+    { frame: "HotkeysBackdrop", into: "GameplayPanel" },
   ],
 };
 

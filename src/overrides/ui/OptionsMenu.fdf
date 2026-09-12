@@ -19,10 +19,24 @@
 // a "Healthbars:" pulldown directly under "Always show Health Bars", because it says what
 // those bars look like. Built as the Video panel's "Resolution:" row is built — a
 // `StandardInfoTextTemplate` label with an `OptionsPopupMenuBackdropTemplate` hung off its
-// right edge — so the two screens' pulldowns are the same control. The row it displaces
-// ("Automatically Save Replays", and the Computer+ box that hangs off THAT) is re-anchored by
-// the manifest's `repoint`, because an FDF panel is a chain of rows and this one is being
-// spliced into it.
+// right edge — so the two screens' pulldowns are the same control.
+//
+// Issue #142 then RESHAPES the panel, and this file's frames move with it. Four of the game's
+// own checkbox rows are retired (the manifest says which and src/data/options.ts says why), a
+// second pulldown — "Hotkeys:" — closes the panel under the health-bar pair, and the two rows
+// that are about the MATCH rather than about the screen ("Automatically Save Replays" and the
+// Computer+ default hanging off it) move to the TOP of what is left. So the panel now reads:
+//
+//     Mouse Scroll / Keyboard Scroll sliders     (the game's, untouched)
+//     [x] Automatically Save Replays             (the game's, re-anchored by the manifest)
+//     [x] Use Computer+ as default AI            (ours, still hanging off it)
+//     [x] Always show Health Bars                (the game's, re-anchored by the manifest)
+//     Healthbars:  [ Default ]                   (ours)
+//     Hotkeys:     [ Legacy  ]                   (ours)
+//
+// The two re-anchorings are the manifest's `repoint`, because an FDF panel is a chain of rows
+// and those two rows are the game's own frames: only their SetPoints change, so their labels
+// come along without being restated here.
 
 Frame "TEXT" "HealthBarStyleLabel" INHERITS "StandardInfoTextTemplate" {
     // -0.02 under the checkbox above: the gap the file's own "GamePortLabel" used where a
@@ -39,6 +53,32 @@ Frame "BACKDROP" "HealthBarStyleBackdrop" INHERITS "OptionsPopupMenuBackdropTemp
 
         PopupMenuFrame "HealthBarStylePopupMenuMenu",
         Frame "MENU" "HealthBarStylePopupMenuMenu" INHERITS WITHCHILDREN "StandardPopupMenuMenuTemplate" {
+        }
+    }
+}
+
+// "Hotkeys:" (issue #142) — the second pulldown row, and the last row of the panel. Spaced off
+// the row above it by the Video panel's own numbers for two consecutive pulldowns, which is the
+// one place in this file a pulldown ever follows a pulldown (AnimQualityLabel/Backdrop under
+// ModelDetail's, and the three rows under those): the LABELS are **-0.02625** apart and the
+// BACKDROPS hang off each other at **+0.01375** rather than off their labels, so the boxes line
+// up however tall the type is. The two numbers are one measurement — a backdrop is 0.053 tall
+// against a 0.013 label, so 0.053 − 0.01375 is the 0.0393 that 0.013 + 0.02625 also comes to,
+// and using the other pair's -0.002 (which pays for a retired row between them) walks the box
+// 21 px down off its own label by the second row.
+Frame "TEXT" "HotkeysLabel" INHERITS "StandardInfoTextTemplate" {
+    SetPoint TOPLEFT, "HealthBarStyleLabel", BOTTOMLEFT, 0.0, -0.02625,
+    Text "COLON_HOTKEYS",
+}
+
+Frame "BACKDROP" "HotkeysBackdrop" INHERITS "OptionsPopupMenuBackdropTemplate" {
+    SetPoint TOPLEFT, "HealthBarStyleBackdrop", BOTTOMLEFT, 0.0, 0.01375,
+
+    Frame "POPUPMENU" "HotkeysMenu" INHERITS WITHCHILDREN "OptionsPopupMenuTemplate" {
+        SetPoint TOPLEFT, "HotkeysBackdrop", TOPLEFT, 0.012, -0.013,
+
+        PopupMenuFrame "HotkeysPopupMenuMenu",
+        Frame "MENU" "HotkeysPopupMenuMenu" INHERITS WITHCHILDREN "StandardPopupMenuMenuTemplate" {
         }
     }
 }

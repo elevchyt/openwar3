@@ -17,7 +17,8 @@ import { SOUND_GROUP, type SoundBoard } from "../audio/sounds";
 // `applyVideoOptions` in render/videoQuality.ts, which is also where each video setting's
 // meaning (and which of its numbers are the game's) is written down, and the Gameplay panel's
 // two health-bar rows through `applyHealthBarOptions` in render/worldOverlays.ts — the module
-// that draws the bars they describe.
+// that draws the bars they describe — and its "Hotkeys:" row through `applyHotkeyOptions` in
+// data/hotkeys.ts, which is where the three keyboard schemes are written down.
 
 /** The kind of control an option is bound to, which decides how its value is read/written. */
 export type OptionKind = "bool" | "range" | "choice" | "text";
@@ -87,6 +88,17 @@ const HEALTH_BAR_STYLES = [
   { value: "team", label: "TEAM_COLORED_HEALTHBARS" },
 ];
 
+/**
+ * What the "Hotkeys:" pulldown offers (issue #142) — which KEY presses a command button.
+ * Another row of ours on a frame of ours, directly under the health-bar pair it closes the
+ * panel with. What each mode means is in data/hotkeys.ts, which is what reads this value.
+ */
+const HOTKEY_MODES = [
+  { value: "legacy", label: "HOTKEYS_LEGACY" },
+  { value: "grid", label: "HOTKEYS_GRID" },
+  { value: "custom", label: "HOTKEYS_CUSTOM" },
+];
+
 const RESOLUTIONS = [
   { value: "800x450", label: "800 x 450" },
   { value: "1024x576", label: "1024 x 576" },
@@ -102,20 +114,20 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   { key: "mouseScrollSpeed", frame: "MouseScrollSlider", kind: "range", panel: "gameplay", def: 50, applied: false },
   { key: "mouseScrollDisable", frame: "MouseScrollDisableCheckBox", kind: "bool", panel: "gameplay", def: false, applied: false },
   { key: "keyScrollSpeed", frame: "KeyScrollSlider", kind: "range", panel: "gameplay", def: 50, applied: false },
-  { key: "enhancedTooltips", frame: "TooltipsCheckBox", kind: "bool", panel: "gameplay", def: true, applied: false },
-  { key: "subgroupModifier", frame: "SubgroupCheckBox", kind: "bool", panel: "gameplay", def: false, applied: false },
-  { key: "formationToggle", frame: "FormationToggleCheckBox", kind: "bool", panel: "gameplay", def: true, applied: false },
-  { key: "customKeys", frame: "CustomKeysCheckBox", kind: "bool", panel: "gameplay", def: false, applied: false },
-  // Issue #141. ON by default, and live: `applyHealthBarOptions` (render/worldOverlays.ts)
-  // is what reads it. The game's own HEALTH_BARS_INFO says what it means and what ALT does to
-  // it — "This option will always show unit and building health bars. While this option is
-  // enabled, holding down the ALT key will temporarily hide these health bars."
-  { key: "healthBars", frame: "HealthBarsCheckBox", kind: "bool", panel: "gameplay", def: true },
-  // …and what those bars are COLOURED like (see HEALTH_BAR_STYLES). A row of ours, on a frame
-  // of ours, directly under the checkbox it qualifies.
-  { key: "healthBarStyle", frame: "HealthBarStyleMenu", kind: "choice", panel: "gameplay", def: "default", choices: HEALTH_BAR_STYLES },
+  // Four rows the game had here are GONE (issue #142), and the panel is shorter for it. Three
+  // of them — Enhanced Tooltips, the Subgroup order modifier key and Enable formation movement
+  // toggle — are simply how OpenWar3 behaves: all three are what a player wants on, none of
+  // them was ever a question this engine asked (they were remembered and unread, `applied:
+  // false`), and a setting whose only honest value is ON is not a setting. The fourth, "Custom
+  // Keyboard Shortcuts", is not retired so much as PROMOTED: a checkbox that turns
+  // CustomKeys.txt on is one of three answers to "which keys?", which is the `hotkeys` row at
+  // the bottom of this panel.
+  //
+  // Issue #142 also REORDERS what is left: the two rows that are about the match itself sit
+  // above the three that are about the screen, so the health bars and the keyboard read as one
+  // block at the bottom.
   { key: "autosaveReplay", frame: "AutosaveReplayCheckBox", kind: "bool", panel: "gameplay", def: true, applied: false },
-  // Issue #124. The one gameplay option with a live backend: it is the DEFAULT value of the
+  // Issue #124. The first gameplay option with a live backend: it is the DEFAULT value of the
   // Custom Game screen's "Computer+ (Improved AI)" switch (ui/fdfSkirmish.ts), so ticking it
   // here decides which AI a match starts with. Its frame is not the game's — no 2003 UI file
   // has a row for a second melee AI — it comes from `src/overrides/ui/OptionsMenu.fdf`, which
@@ -125,6 +137,17 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // Extreme Candy War at all — src/ai/plus/candy/). See `loadOptions` for the stored `false` an
   // older store carries without anybody having chosen it.
   { key: "computerPlusDefault", frame: "ComputerPlusDefaultCheckBox", kind: "bool", panel: "gameplay", def: true },
+  // Issue #141. ON by default, and live: `applyHealthBarOptions` (render/worldOverlays.ts)
+  // is what reads it. The game's own HEALTH_BARS_INFO says what it means and what ALT does to
+  // it — "This option will always show unit and building health bars. While this option is
+  // enabled, holding down the ALT key will temporarily hide these health bars."
+  { key: "healthBars", frame: "HealthBarsCheckBox", kind: "bool", panel: "gameplay", def: true },
+  // …and what those bars are COLOURED like (see HEALTH_BAR_STYLES). A row of ours, on a frame
+  // of ours, directly under the checkbox it qualifies.
+  { key: "healthBarStyle", frame: "HealthBarStyleMenu", kind: "choice", panel: "gameplay", def: "default", choices: HEALTH_BAR_STYLES },
+  // …and which KEY presses a command button (issue #142). Live, through `applyHotkeyOptions`
+  // in data/hotkeys.ts, which is where the three rungs are written down.
+  { key: "hotkeys", frame: "HotkeysMenu", kind: "choice", panel: "gameplay", def: "legacy", choices: HOTKEY_MODES },
 
   // --- Video (applied through render/videoQuality.ts, which documents what each rung does) ---
   { key: "gamma", frame: "GammaSlider", kind: "range", panel: "video", def: 50 },
