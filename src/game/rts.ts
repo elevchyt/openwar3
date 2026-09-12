@@ -492,6 +492,19 @@ const PISSED_AFTER = 3;
 // The gold-mine ring is drawn a bit larger than the mine's collision radius (which
 // drives worker entry) so it reads as a ring hugging the mine base, not its footprint.
 const MINE_RING_SCALE = 1.4;
+/**
+ * How far a same-type grab (Ctrl-click / double-click) reaches, as a multiple of the
+ * viewport, grown about the screen's own centre: 1.5 = a quarter of a screen of slack
+ * beyond every edge.
+ *
+ * OURS, not the game's — nothing in the install states a reach and WC3's own rule is the
+ * visible screen. The slack is there because the edge is a cliff: a unit whose feet are a
+ * few pixels under the console, or one walking level with the army and a body outside the
+ * frame, is plainly part of the group the player meant and was silently left behind. Pick
+ * the whole group and the odd straggler comes with it, which is the failure a player would
+ * rather have of the two.
+ */
+const SAME_TYPE_REACH = 1.5;
 const ITEM_PICK_RADIUS = 72; // click/hover pick radius around a ground item
 const ITEM_RING_RADIUS = 40; // yellow selection/hover ring radius under a ground item
 // Extra world-unit gap added to the builder fan-out when several workers speed-
@@ -5197,7 +5210,7 @@ export class RtsController {
   }
 
   /** Select every on-screen own entity of a given type (Ctrl-click / double-click).
-   *  WC3 limits this to what's visible, so off-screen kin are left out. BUILDINGS
+   *  The reach is a little WIDER than the viewport — see SAME_TYPE_REACH. BUILDINGS
    *  answer to it exactly as units do — the type is what's matched, and one typeId is
    *  all units or all buildings, so the units-XOR-buildings rule holds by itself.
    *  `additive` (shift held) unions them into the current selection instead of
@@ -5225,7 +5238,8 @@ export class RtsController {
     this.announceSelection();
   }
 
-  /** True if a unit currently projects inside the viewport (for same-type select). */
+  /** True if a unit projects inside the same-type grab's reach (SAME_TYPE_REACH) — the
+   *  viewport grown about its own centre, so a unit a step off the edge still answers. */
   private onScreen(u: RenderUnit, e: Entry): boolean {
     const viewport = this.host.viewport();
     const dpr = this.dpr();
@@ -5236,7 +5250,11 @@ export class RtsController {
     this.host.camera.worldToScreen(this.screen, this.world, viewport);
     const sx = this.screen[0] / dpr;
     const sy = (h - this.screen[1]) / dpr;
-    return sx >= 0 && sy >= 0 && sx <= this.host.canvas.clientWidth && sy <= this.host.canvas.clientHeight;
+    const w = this.host.canvas.clientWidth;
+    const ch = this.host.canvas.clientHeight;
+    const padX = (w * (SAME_TYPE_REACH - 1)) / 2;
+    const padY = (ch * (SAME_TYPE_REACH - 1)) / 2;
+    return sx >= -padX && sy >= -padY && sx <= w + padX && sy <= ch + padY;
   }
 
   /**
