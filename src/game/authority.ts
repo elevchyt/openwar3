@@ -270,7 +270,16 @@ export class Authority {
       if (u.isIllusion) continue;
       const def = this.registry.get(u.typeId);
       used += def?.foodUsed ?? 0;
-      made += def?.foodMade ?? 0;
+      // A FOOD BUILDING PAYS WHEN IT IS FINISHED, not when it is pegged out (issue #144). A
+      // Farm under construction is a foundation: WC3 shows the six it will make only once the
+      // last hammer blow has landed, which is exactly why a player queues the Farm BEFORE the
+      // units that need it. Counting the site let a 7/6 player train on a Farm that was still
+      // going up — and then lose the units' food again if it was cancelled or killed.
+      // `constructionLeft` is the one predicate for "not a building yet" (SimWorld.raising),
+      // and an UPGRADE is not one: a Town Hall becoming a Keep is a queue job and keeps its 12
+      // throughout, as does a Ziggurat growing into a Spirit Tower. (`AiPlayer.foodOf` has
+      // always read it this way — this is the player's half catching up.)
+      if (!u.building || u.building.constructionLeft <= 0) made += def?.foodMade ?? 0;
       if (u.building) for (const job of u.building.queue) used += this.registry.get(job.unitId)?.foodUsed ?? 0;
     }
     // …and whatever is finished but not yet born (SimWorld.pendingTrained) — a shop hire is
@@ -286,11 +295,15 @@ export class Authority {
 
   /** What this player's own units MAKE — the half of the cap the world derives, without the
    *  script's offset, the ceiling or the cheat. Only a script write needs it (see setFoodCap),
-   *  so it walks the units again rather than complicating the hot path above. */
+   *  so it walks the units again rather than complicating the hot path above. Same reading as
+   *  `foodFor`'s, construction included: the offset is measured against what the buildings were
+   *  making at the moment of the write, so the two halves have to agree about a Farm that is
+   *  still going up or the write lands six food out. */
   private unitFoodMade(owner: number): number {
     let made = 0;
     for (const u of this.sim.units.values()) {
-      if (u.owner === owner) made += this.registry.get(u.typeId)?.foodMade ?? 0;
+      if (u.owner !== owner || (u.building && u.building.constructionLeft > 0)) continue;
+      made += this.registry.get(u.typeId)?.foodMade ?? 0;
     }
     return made;
   }

@@ -178,6 +178,34 @@ console.log("\n-- a train order charges AS IT GOES, which is what makes the spre
     [a.building.queue.length, b.building.queue.length], [3, 3]);
 }
 
+console.log("\n-- a FOOD building pays when it is finished (issue #144) --------------------------");
+
+{
+  // The report: "food buildings are providing food before they're finished". A Farm pegged out
+  // a second ago is a foundation — it makes nothing until the last hammer blow lands.
+  newWorld();
+  world.initStash(0, 10000, 10000);
+  const farm = building("hhou", 0);
+  farm.building.constructionLeft = 35; // a Farm's own build time
+  const a = building("hbar", 0);
+  check("the site makes no food", authority.foodFor(0), { used: 0, made: 0 });
+  check("…so nothing can be trained on it", train(0, a, "hfoo"), false);
+  farm.building.constructionLeft = 0;
+  check("finished, it makes its twelve", authority.foodFor(0), { used: 0, made: 12 });
+  check("…and now the Footman gets in", train(0, a, "hfoo"), true);
+}
+
+{
+  // An UPGRADE is not a construction site: a hall becoming a Keep (or a Ziggurat a Spirit
+  // Tower) keeps its food the whole way through, because an upgrade is a queue job and carries
+  // no `constructionLeft` at all.
+  newWorld();
+  world.initStash(0, 10000, 10000);
+  const farm = building("hhou", 0);
+  farm.building.queue = [{ kind: "upgrade", unitId: "hhou", level: 1 }];
+  check("a building UPGRADING still makes its food", authority.foodFor(0).made, 12);
+}
+
 console.log("\n-- a building still going up is not part of the spread ---------------------------");
 
 {
