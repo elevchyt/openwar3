@@ -3439,9 +3439,11 @@ and reading them wants them apart.
 
 ### Conceding, without demolishing the base
 
-`hopeless()` is deliberately conservative — five clauses, and the position has to *stay*
-hopeless for `concedeAfter` seconds (35 on Easy, 12 on Insane: a weaker player takes longer to
-accept it). Then it says gg, waits five seconds, and **leaves**.
+`hopeless()` reads the position **twice**: five CLAUSES, each of which is a complete defeat on
+its own, and then a **weighed** reading above them (`despair`) for the games that are being lost
+in three places at once without being wholly lost in any one of them. Either is enough. Then the
+position has to *stay* hopeless for `concedeAfter` seconds (24 on Easy, 8 on Insane: a weaker
+player takes longer to accept it), and it says gg, waits five seconds, and **leaves**.
 
 The first three each mean "there is no route back from here" and are about **what is left
 standing** — no hall and no way to put one up; raiders in the base with no army and no workers;
@@ -3480,8 +3482,52 @@ refuses to say: a razing is **not** lost while a hall stands — that position c
 rebuild, and the AI plays it out. And it un-latches on its own, because `hopelessSince` resets
 the moment the raiders leave (`invaders`) or anything at all goes into production (`armyFood`).
 
-`tools/ai-plus-concede-test.cjs` pins both directions, and the "plays on" half is the half that
-matters: an AI that concedes a game it could still play is worse than one that never concedes.
+### The weighed reading: no hero, and no hall
+
+Five clauses of "there is no move from here" is an honest rule and a **narrow** one. Every term
+of a clause has to be true all the way through, so a position that is two thirds of the way into
+three different clauses at once — which is what a game looks like while it is actually being
+lost — matches none of them and reads as perfectly healthy. Reported as exactly that: the AI
+plays on long after a person would have typed gg, because *every hero dead and the hall razed* is
+not itself any of the five. Clause 1 is vetoed by a worker with the gold for another hall,
+clauses 2, 3 and 5 want somebody standing in the base, and clause 4 wants an enemy **hero** in
+it.
+
+So the clauses stay as the **floor** and `despair()` is the second reading above them: each term
+is what that part of the position is worth on its own, they add up, and `CONCEDE_AT` (1 — one
+whole defeat) is the line.
+
+| term | weight | |
+| --- | --- | --- |
+| `heroesDead` | **0.5** | not one of ours up and at least one down (+`heroEach` 0.1 for a second and a third) |
+| `hallDown` | **0.5** | no town centre anywhere, expansions folded in |
+| `armyGone` | 0.3 | nothing on the field and nothing in a queue |
+| `invaded` | 0.2 | somebody standing in our towns |
+| `invaderHero` | 0.1 | …and one of them is a hero |
+| `noWorkers` | 0.25 | nothing left to mine, build or repair with |
+| `broke` | 0.15 | not the gold for a hall, which is what makes losing one permanent |
+
+**The two heavy ones are the two that were asked to weigh.** A player with no hero left alive and
+a player with no hall left standing is each halfway out of the game, and together they are out of
+it: those two are what `CONCEDE_AT` is calibrated on, and the *only* pair that reaches it
+unaided. Nothing in the light half adds up to a concession on its own — a razing with a hero and
+a hall still in it scores 0.75 and plays on.
+
+Two guards carry over unchanged. `heroesDead` asks `heroesLost > 0` as well as `heroes === 0`,
+for clause 4's reason: "we have no hero" describes every player who has not built one yet. And a
+hero on an altar's revival clock still counts as one we *have*.
+
+What makes the lower bar safe is the same thing that makes clause 4 safe — the **dwell**, not the
+reading. Every term un-latches the instant the position recovers: a hall that goes back up, a
+hero that revives, a raid that dies or walks off, or one soldier coming out of a Barracks all
+reset `hopelessSince` inside a second. Which is also why `concedeAfter` came down a second time
+(24 / 14 / 8): the dwell is only ever paying for a position that was never lost, and half a
+minute of a decided game is half a minute nobody wants to play.
+
+None of these numbers are Warcraft III's — nothing in the install describes an AI that resigns —
+so they are ours, and `tools/ai-plus-concede-test.cjs` pins both directions. The "plays on" half
+is the half that matters: an AI that concedes a game it could still play is worse than one that
+never concedes.
 
 Leaving is `EVENT_PLAYER_LEAVE`, raised on the map's own script:
 

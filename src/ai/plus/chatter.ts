@@ -98,11 +98,115 @@ export interface Standing {
 }
 
 /**
+ * HALF THE TEAM HAS GONE — the concession that is NOT a reading of the board.
+ *
+ * Asked for in as many words: *"if half or more of the allies have left the game, then the rest
+ * of the Computer+ AI teammates must concede"*. It sits beside `hopeless` rather than inside it
+ * because it is a different question entirely: `hopeless` reads this player's own base, army and
+ * heroes, and a computer whose two teammates walked out can be sitting on a perfectly healthy
+ * economy while the match is over. A 3v3 that is now a 1v3 is not a game anybody plays out. For
+ * the same reason `mannersPass` does not put it behind `CONCEDE_NOT_BEFORE`: a teammate leaving
+ * at ninety seconds has decided the game as thoroughly as one leaving at ten minutes.
+ *
+ * `team` is the roster as it STARTED and `allies` who is still playing, and the caller's job is
+ * that the first only ever grows (`Brain.team`): "left" is seen as *nothing on the map*, because
+ * leaving runs `MeleeTriggerActionPlayerLeft` and the leaver's units go to Neutral Passive — so
+ * a re-derived roster would lose the departed from both sides of the ratio at once and it would
+ * never move. It also means a teammate who was WIPED OUT counts, which is right: either way
+ * there is nobody there to fight beside.
+ *
+ * Half or MORE, against the team as it started: two of four concedes, one of three does not.
+ * An empty team is a 1v1 or a free-for-all and can never concede for this reason.
+ */
+export function teamLost(team: readonly number[], allies: readonly number[]): boolean {
+  if (!team.length) return false;
+  let gone = 0;
+  for (const p of team) if (!allies.includes(p)) gone++;
+  return gone * 2 >= team.length;
+}
+
+/**
+ * The WEIGHTS the position is read with, once no single clause of `hopeless` has fired.
+ *
+ * Five clauses of "there is no move from here" is an honest rule and a narrow one: every one of
+ * them has to be true all the way through, so a position that is two thirds of the way into
+ * three different clauses at once — which is what a game actually looks like while it is being
+ * lost — matches none of them and reads as perfectly healthy. Reported as exactly that: the AI
+ * plays on long after a person would have typed gg, because losing the hall and losing every
+ * hero is not *itself* any of the five.
+ *
+ * So the clauses stay as the FLOOR and this is the second reading above them: each term is what
+ * that part of the position is worth on its own, they add up, and `CONCEDE_AT` is the line. It
+ * is a lower bar than the clauses by construction — nothing here has to be the whole of a defeat
+ * — and the dwell (`PlusProfile.concedeAfter`) is what keeps it safe, exactly as it does for
+ * clause 4: every term un-latches the instant the position recovers, and a hall that goes back
+ * up, a hero that revives, a raid that dies or walks off, or one soldier coming out of a
+ * Barracks all reset `hopelessSince`.
+ *
+ * **The two heavy ones are heavy because they were asked to be**: a player with no hero and a
+ * player with no hall are each halfway out of the game, and together they are out of it — those
+ * are the two `CONCEDE_AT` is calibrated on, and they alone reach it. The rest are the ordinary
+ * terms of a losing position and none of them is worth a third of one.
+ *
+ *  • `heroesDead` — not one of ours up (an altar's revival clock still counts as up, see
+ *    `Standing.heroes`) and at least one down. The `heroesLost > 0` half is the same guard
+ *    clause 4 carries and for the same reason: "we have no hero" describes every player who has
+ *    not built one yet. `heroEach` adds for the SECOND and THIRD as well, capped there — losing
+ *    a three-hero roster outright is worse than losing the one hero you had.
+ *  • `hallDown` — every hall of ours gone (`townCountDone` folds a Castle into a Town Hall, so
+ *    this is "no town centre anywhere", expansions included). Losing it with a worker and the
+ *    gold for another is not clause 1, which is why it needs a weight at all: the position CAN
+ *    rebuild, and it is still a player who has been knocked out of their own base.
+ *  • `armyGone` — nothing on the field and nothing in a queue (`armyFood` counts production).
+ *  • `invaded` / `invaderHero` — somebody is standing in our towns, and one of them is a hero.
+ *  • `noWorkers` — nothing left to mine, build or repair with.
+ *  • `broke` — not the gold for a hall, which is what makes the loss of one permanent.
+ *
+ * None of these numbers are Warcraft III's — nothing in the install describes an AI that resigns
+ * (docs/computer-plus.md) — so they are OURS, and `tools/ai-plus-concede-test.cjs` pins them.
+ */
+export const DESPAIR = {
+  heroesDead: 0.5,
+  heroEach: 0.1,
+  hallDown: 0.5,
+  armyGone: 0.3,
+  invaded: 0.2,
+  invaderHero: 0.1,
+  noWorkers: 0.25,
+  broke: 0.15,
+} as const;
+
+/** Where the weighed reading tips into a concession. One whole defeat's worth — which the two
+ *  heavy terms make exactly, and nothing else in `DESPAIR` reaches without one of them. */
+export const CONCEDE_AT = 1;
+
+/** How lost this position is, in `DESPAIR`'s units. Pure, and 0 for a healthy player. */
+export function despair(s: Standing, hallCost: number): number {
+  let d = 0;
+  if (s.heroes === 0 && s.heroesLost > 0) {
+    d += DESPAIR.heroesDead + DESPAIR.heroEach * Math.min(s.heroesLost - 1, 2);
+  }
+  if (s.halls === 0) d += DESPAIR.hallDown;
+  if (s.armyFood === 0) d += DESPAIR.armyGone;
+  if (s.invaders > 0) d += DESPAIR.invaded;
+  if (s.invaderHeroes > 0) d += DESPAIR.invaderHero;
+  if (s.workers === 0) d += DESPAIR.noWorkers;
+  if (s.gold < hallCost) d += DESPAIR.broke;
+  return d;
+}
+
+/**
  * Is this position beyond saving?
  *
- * Deliberately conservative — an AI that concedes a game it could still play is worse than one
- * that never concedes at all — and every clause is stated as "there is no MOVE from here",
- * never as "this looks bad". Anything softer describes an opening as well as a defeat:
+ * TWO readings, and a position only has to fail one of them. First the five CLAUSES below, each
+ * of which is a complete defeat on its own; then the weighed one above them (`despair`), which
+ * is what catches a game that is being lost in three places at once without being wholly lost in
+ * any of them. The clauses are the older half and the narrower, and they are still the reason
+ * nothing here reads an opening as a defeat.
+ *
+ * Each clause is deliberately conservative — an AI that concedes a game it could still play is
+ * worse than one that never concedes at all — and every one is stated as "there is no MOVE from
+ * here", never as "this looks bad". Anything softer describes an opening as well as a defeat:
  *
  *  1. **No hall, and no way to put one back up** — nobody left to build it, or not enough gold
  *     to pay for it. This is the real losing condition of a melee game one step before the
@@ -160,49 +264,23 @@ export interface Standing {
  * field, which is why both are kept rather than one replacing the other.
  *
  * Clause 4 is also the loosest of the five, and `concedeAfter` is what makes that safe rather
- * than the clause itself: the position has to hold for 20-45 s, and it un-latches if the raiders
+ * than the clause itself: the position has to hold for 8-24 s, and it un-latches if the raiders
  * die or leave (`invaders`), if their hero dies or walks out (`invaderHeroes`), or the moment
  * ours is back on the field. A defence that wins, or a revival that lands, resets the clock.
  * What it will NOT wait for is the last building — which is the whole point.
  *
- * `structures` is not tested by any clause and is kept for the same reason `invaders` is a
- * count: they are what a future reading of the position would be written in terms of, and they
- * are cheap. `hallCost` is the race's own tier-1 hall price, read from the registry rather than
- * typed here, so clause 1 asks the real question on every race.
+ * `structures` is tested by neither reading and is kept for the same reason `invaders` is a
+ * count rather than a boolean: they are what a further reading of the position would be written
+ * in terms of, and they are cheap. `hallCost` is the race's own tier-1 hall price, read from the
+ * registry rather than typed here, so clause 1 — and `DESPAIR.broke` with it — asks the real
+ * question on every race.
  */
-/**
- * HALF THE TEAM HAS GONE — the concession that is NOT a reading of the board.
- *
- * Asked for in as many words: *"if half or more of the allies have left the game, then the rest
- * of the Computer+ AI teammates must concede"*. It sits beside `hopeless` rather than inside it
- * because it is a different question entirely: `hopeless` reads this player's own base, army and
- * heroes, and a computer whose two teammates walked out can be sitting on a perfectly healthy
- * economy while the match is over. A 3v3 that is now a 1v3 is not a game anybody plays out. For
- * the same reason `mannersPass` does not put it behind `CONCEDE_NOT_BEFORE`: a teammate leaving
- * at ninety seconds has decided the game as thoroughly as one leaving at ten minutes.
- *
- * `team` is the roster as it STARTED and `allies` who is still playing, and the caller's job is
- * that the first only ever grows (`Brain.team`): "left" is seen as *nothing on the map*, because
- * leaving runs `MeleeTriggerActionPlayerLeft` and the leaver's units go to Neutral Passive — so
- * a re-derived roster would lose the departed from both sides of the ratio at once and it would
- * never move. It also means a teammate who was WIPED OUT counts, which is right: either way
- * there is nobody there to fight beside.
- *
- * Half or MORE, against the team as it started: two of four concedes, one of three does not.
- * An empty team is a 1v1 or a free-for-all and can never concede for this reason.
- */
-export function teamLost(team: readonly number[], allies: readonly number[]): boolean {
-  if (!team.length) return false;
-  let gone = 0;
-  for (const p of team) if (!allies.includes(p)) gone++;
-  return gone * 2 >= team.length;
-}
-
 export function hopeless(s: Standing, hallCost: number): boolean {
   if (s.halls === 0 && (s.workers === 0 || s.gold < hallCost)) return true;
   if (s.invaders > 0 && s.armyFood === 0 && s.workers === 0) return true;
   if (s.invaders > 0 && s.armyFood === 0 && s.halls === 0) return true;
   if (s.heroesLost > 0 && s.heroes === 0 && s.invaderHeroes > 0) return true;
   if (s.heroesLost > 0 && s.heroes === 0 && s.armyFood === 0 && s.invaders > 0) return true;
-  return false;
+  // …and the positions no single clause describes but every one of them is partly true of.
+  return despair(s, hallCost) >= CONCEDE_AT;
 }

@@ -244,10 +244,13 @@ export interface PlusProfile {
    * takes longer to accept it — the ORDERING is what carries the meaning here, not the
    * absolute values.
    *
-   * All three came down after a real game reported the wait as too long. The dwell is a guard
-   * against a position that recovers, and `hopeless` is already five clauses of "there is no
-   * move from here": a third of a minute of a decided game is a third of a minute nobody wants
-   * to play, and every clause un-latches the moment the position recovers anyway.
+   * All three came down twice, after the wait was reported as too long both times. The dwell is
+   * a guard against a position that recovers, and `hopeless` is five clauses of "there is no
+   * move from here" plus a weighed reading (`despair`) on top of them: a third of a minute of a
+   * decided game is a third of a minute nobody wants to play, and every term of both readings
+   * un-latches the moment the position recovers anyway. So the dwell is the only thing paying
+   * for a position that was never lost, and it does not have to be long to do that — a defence
+   * that holds, a revived hero or one soldier out of a Barracks resets it inside a second.
    */
   readonly concedeAfter: number;
 }
@@ -288,7 +291,7 @@ export const PLUS_EASY: PlusProfile = {
   focusFire: false, pullOutHp: 0, creeps: false, creepAt: Infinity, creepFood: Infinity,
   harass: false, scout: false,
   shopping: 0, itemReserve: Infinity, keepPortal: false,
-  concedeAfter: 35,
+  concedeAfter: 24,
 };
 
 /**
@@ -339,7 +342,7 @@ export const PLUS_NORMAL: PlusProfile = {
   // something to cast with; making room for it is what turns `RACE_MANA` from a list into a
   // habit. Insane keeps the full six.
   shopping: 4, itemReserve: 300, keepPortal: true,
-  concedeAfter: 20,
+  concedeAfter: 14,
 };
 
 /**
@@ -371,7 +374,7 @@ export const PLUS_INSANE: PlusProfile = {
   // A full belt and a Town Portal on the hero. Both are what separates a player who has been
   // here before from one who has not.
   shopping: 6, itemReserve: 200, keepPortal: true,
-  concedeAfter: 12,
+  concedeAfter: 8,
 };
 
 /** The profile a lobby difficulty seats. Anything unrecognised plays Normal, which is what

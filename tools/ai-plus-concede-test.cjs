@@ -6,7 +6,12 @@
 // up", clause 2 by `workers === 0` — and a worker is precisely the last thing a player kills.
 // Two Peons in a corner with gold banked held the concession open indefinitely.
 //
-// `hopeless` is pure — six numbers in, a boolean out, no world — so the positions it has to
+// The bug BESIDE it, and the reason for the second half of the file: each of those clauses is a
+// whole defeat, so a position two thirds of the way into three of them at once matched none and
+// read as perfectly healthy — every hero dead and the hall razed is not itself any of the five.
+// `despair` weighs the parts instead, and those two are the heavy terms.
+//
+// `hopeless` is pure — nine numbers in, a boolean out, no world — so the positions it has to
 // read correctly are testable exactly as written. Both directions matter and the false one
 // matters more: an AI that concedes a game it could still play is worse than one that never
 // concedes at all, so every "plays on" case below is a position a real melee player recovers.
@@ -19,7 +24,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { hopeless, teamLost, CONCEDE_NOT_BEFORE, LEAVE_AFTER } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
+const { hopeless, despair, teamLost, CONCEDE_AT, CONCEDE_NOT_BEFORE, LEAVE_AFTER } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -134,6 +139,32 @@ check("…and concedes at two of three", teamLost([1, 2, 3], [3]), true);
 // from both sides of the ratio at once and the rule would never fire.
 check("a shrinking roster would never fire — the latched one does", teamLost([1, 2, 3], [1]), true);
 
+console.log("\n-- the weighed reading -----------------------------------------------------");
+
+// The second half of `hopeless`: the five clauses each describe a WHOLE defeat, so a position
+// two thirds of the way into three of them at once matched none and read as healthy. `despair`
+// adds the parts up instead, and the two heavy terms are the two the developer asked to weigh:
+// no hero left alive, and no hall left standing. Either alone is half a lost game; both is one.
+check("all heroes dead is half a lost game on its own, and not a concession",
+  hopeless(holding({ heroesLost: 1 }), HALL), false);
+check("…and so is the hall going down with the gold and the workers to put one back up",
+  hopeless(at({ structures: 6, workers: 5, armyFood: 30, gold: 900 }), HALL), false);
+// THE ASK. No clause reaches this: a hall can be rebuilt (clause 1's veto), nobody is standing
+// in the base (clauses 2, 3 and 5) and there is no enemy hero in it (clause 4) — and the army
+// is still on the field. Together the two are a player who has been knocked out of their game.
+check("…but every hero dead AND the hall razed is a concession, army or no army",
+  hopeless(at({ structures: 6, workers: 5, armyFood: 30, gold: 900, heroesLost: 1 }), HALL), true);
+check("…and the heavier for a second and a third hero on the floor",
+  despair(at({ structures: 6, workers: 5, armyFood: 30, gold: 900, heroesLost: 3 }), HALL)
+    > despair(at({ structures: 6, workers: 5, armyFood: 30, gold: 900, heroesLost: 1 }), HALL), true);
+// Neither heavy term is reachable by the light ones adding up — that is what CONCEDE_AT is for.
+check("a bad position with a hero and a hall in it is still a game",
+  hopeless(at({ halls: 1, structures: 4, workers: 3, gold: 0, invaders: 5, invaderHeroes: 1, heroes: 1 }), HALL), false);
+check("an opening nowhere near a defeat scores nowhere near the line",
+  despair(at({ halls: 1, structures: 3, workers: 5, gold: 200 }), HALL) < CONCEDE_AT, true);
+check("a healthy player scores nothing at all",
+  despair(holding({ heroes: 2 }), HALL), 0);
+
 console.log("\n-- the rails ---------------------------------------------------------------");
 
 // The floor exists because the failure it guards actually happened — see the constant.
@@ -142,6 +173,10 @@ check("it says gg before it goes", LEAVE_AFTER > 0, true);
 // A weaker player takes longer to accept a lost game. This ordering IS the difficulty.
 check("Easy takes longest to accept it", PLUS_EASY.concedeAfter > PLUS_NORMAL.concedeAfter, true);
 check("…and Insane the least", PLUS_NORMAL.concedeAfter > PLUS_INSANE.concedeAfter, true);
+// The dwell only ever pays for a position that was never lost, and every term of both readings
+// un-latches the instant one recovers — so it is short. Half a minute of a decided game is half
+// a minute nobody wants to play.
+check("even the slowest of them accepts it inside half a minute", PLUS_EASY.concedeAfter <= 30, true);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);
