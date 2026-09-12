@@ -706,8 +706,17 @@ export function buildTextArea(el: HTMLElement, f: FdfFrame, scale: number, bar?:
       paint();
     },
     scrollToBottom(): void {
-      rows.scrollTop = rows.scrollHeight;
-      scrollbar?.sync();
+      const stick = (): void => {
+        rows.scrollTop = rows.scrollHeight;
+        scrollbar?.sync();
+      };
+      stick();
+      // …AND AGAIN ON THE NEXT FRAME. A box that has no layout yet — built detached, or
+      // mounted into a screen that is still being assembled — has nothing for the write to
+      // land in, and the browser silently clamps `scrollTop` to 0: the log then opens at its
+      // OLDEST line, which is the one thing a log must never do (issue #146; ui/chatDialog.ts
+      // met the same clamp and worked around it at its own call site).
+      requestAnimationFrame(stick);
     },
     setEnabled(on: boolean): void {
       el.classList.toggle("fdf-disabled", !on);

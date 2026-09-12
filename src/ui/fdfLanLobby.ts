@@ -881,11 +881,15 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
 
   // The chat log sits INSIDE the lower-left panel of the 16:9 chrome, whose top rail runs
   // lower than the 4:3 file's anchor (0.453125 down) expects: as authored, the first line of
-  // chat was drawn across the rail. The area drops by the rail's height and gives that much
-  // back off its bottom, so the entry line (anchored to its BOTTOMLEFT) stays on the panel's
-  // floor where the file put it.
+  // chat was drawn across the rail. The area drops by the rail's clearance…
   nudgeY(findFrame(root, "ChatTextArea"), -CHAT_RAIL);
-  setProp(findFrame(root, "ChatTextArea"), "Height", [num(CHAT_H - CHAT_RAIL)]);
+  // …and the LOG'S FLOOR IS THE ENTRY LINE'S CEILING (issue #146). The entry box hangs off
+  // this frame's BOTTOMLEFT, so there is only ever one number here: shortening the log lifts
+  // the box with it, and the box has to clear the panel's bottom border. It used to be lifted
+  // on its own instead (a `repoint` in src/overrides/index.ts) while the log kept its full
+  // height — so the log's last line, which is the one just said and the one it is scrolled to,
+  // was drawn BEHIND the box. One height decides both.
+  setProp(findFrame(root, "ChatTextArea"), "Height", [num(CHAT_H - CHAT_RAIL - CHAT_FLOOR)]);
   // …and in from the panel's left rail by the same margin, narrowing to keep its right edge.
   nudgeX(findFrame(root, "ChatTextArea"), CHAT_INSET);
   setProp(findFrame(root, "ChatTextArea"), "Width", [num(CHAT_W - CHAT_INSET)]);
@@ -922,8 +926,14 @@ const DISPLAY_H = 0.138;
  *  the margin it keeps off the left one. */
 const CHAT_W = 0.461875;
 const CHAT_H = 0.094375;
-const CHAT_RAIL = 0.016;
+const CHAT_RAIL = 0.008;
 const CHAT_INSET = 0.006;
+/** …and how much of the log's height the ENTRY BOX takes, so that it clears the panel's bottom
+ *  border. The box is anchored under the log (`SetPoint TOPLEFT, "ChatTextArea", BOTTOMLEFT,
+ *  -0.003125, 0.000625`) and is 0.04 tall (StandardEditBoxTemplate), so this is the one number
+ *  that positions it: measured against the 16:9 chrome, it leaves the box resting just inside
+ *  the border with the log ending on its top edge. */
+const CHAT_FLOOR = 0.018625;
 
 /** How far left the map panel's contents move to sit inside the 3D chrome. */
 const MAP_INFO_NUDGE = 0.052;
