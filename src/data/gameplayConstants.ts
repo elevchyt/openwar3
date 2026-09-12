@@ -20,8 +20,7 @@ import { ArmorType, AttackType } from "./enums";
 // govern exist, so a stray constant never reads as "implemented" when it isn't:
 //   • ability-system toggles — the ~20 `CanDeactivate*`, the `Illusions*` block,
 //     `MagicImmunesResist*`, the `Drain*`/`*Cluster`/`Morph*` behaviour flags;
-//   • misc combat flags — `DefendDeflection`, `AbolishMagicDispelSmart`,
-//     `UnitSaleAggroRange`, `RelativeUpgradeCost`.
+//   • misc combat flags — `DefendDeflection`, `RelativeUpgradeCost`.
 // Everything the sim, renderer, or HUD reads should live here rather than as a
 // literal in place.
 
@@ -157,6 +156,20 @@ export const MISC_GAME = {
   ItemSaleAggroRange: 0,
   UnitSaleAggroRange: 600,
   AbilSaleAggroRange: 0,
+
+  // --- dispels ---------------------------------------------------------------
+  /**
+   * **Abolish Magic's AUTOCAST is a SMART dispel** — 1, i.e. on.
+   *
+   * The one flag in the file that describes an autocast's judgement rather than a number, and
+   * it is what tells a Dryad's automatic press apart from the player's own: on autocast she
+   * takes a BUFF off — a negative one off an ally, a positive one off an enemy — and nothing
+   * else. A SUMMON is the manual press's business, because killing one is a decision about the
+   * fight (a Water Elemental is worth 75 mana, a Wand of Illusion's doubles are not) rather
+   * than the housekeeping the toggle is for. Read by `worthDispelling`, whose `auto` half is
+   * this flag; with it off the autocast goes back to hunting summons too.
+   */
+  AbolishMagicDispelSmart: 1,
 
   // --- refunds --------------------------------------------------------------
   ConstructionRefundRate: 0.75, // cancelled construction

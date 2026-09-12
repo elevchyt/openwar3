@@ -309,12 +309,35 @@ const from = (src, over = {}) => ({
   check("our own summon is not dispelled", w.tickAutocast(d), false);
 }
 {
-  // …and theirs is, because that is a kill rather than a strip.
+  // …AND NEITHER IS THEIRS, which is the `AbolishMagicDispelSmart` = 1 half (MiscGame.txt):
+  // the toggle is a SMART dispel and it strips buffs. Killing a summon costs the same 50 mana
+  // and is a decision about the fight, so it stays the player's own press — which still works,
+  // and is what the next case checks.
   const w = world();
   const d = dryad(w, { x: 0, y: 0 });
   const wolf = add(w, { owner: 1, team: 1, x: 300, y: 0 });
   wolf.summonLeft = 45;
-  check("an enemy summon is", w.tickAutocast(d), true);
+  check("an enemy summon is NOT taken by the autocast", w.tickAutocast(d), false);
+  check("…and the Dryad keeps its mana for a buff worth stripping", d.mana, 200);
+}
+{
+  // The MANUAL press at the same wolf is accepted: nothing about the smart autocast changes
+  // what the button may be pointed at (`issueCast` asks `targetError`, never `worthDispelling`).
+  const w = world();
+  const d = dryad(w, { x: 0, y: 0 });
+  const wolf = add(w, { owner: 1, team: 1, x: 300, y: 0 });
+  wolf.summonLeft = 45;
+  check("a player may still point Abolish Magic at it", w.issueCast(d.id, "Aadm", wolf.id), true);
+}
+{
+  // …and a buff on an enemy summon IS autocast at, because then there is a buff to strip.
+  const w = world();
+  const d = dryad(w, { x: 0, y: 0 });
+  const shaman = add(w, { owner: 1, team: 1, x: 400, y: 0 });
+  const wolf = add(w, { owner: 1, team: 1, x: 300, y: 0 });
+  wolf.summonLeft = 45;
+  wolf.buffs = [from(shaman)];
+  check("a Bloodlusted enemy summon is", w.tickAutocast(d), true);
   check("…aimed at it", d.pendingCast && d.pendingCast.targetId, wolf.id);
 }
 

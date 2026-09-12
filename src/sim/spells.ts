@@ -1,4 +1,5 @@
 import type { AbilityDef, AbilityLevel, BuffFx } from "../data/abilities";
+import { MISC_GAME } from "../data/gameplayConstants";
 import { corpseReach } from "./corpses";
 import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim, EffectAnim } from "./world";
 
@@ -867,9 +868,18 @@ export const DISPEL_CODES = new Set(["Aprg", "Adis", "Aadm"]);
  * is therefore back the tick after the dispel lands. A buff whose source is GONE — a Bloodlust
  * from a dead Shaman — cannot be placed and does not count; that is the safe direction, since
  * the cost of missing one is a dispel not cast.
+ *
+ * `auto` says the question is being asked FOR AN AUTOCAST, and it takes the SUMMON away: the
+ * game's own `MiscGame.txt` [Misc] `AbolishMagicDispelSmart` = 1 is what says the toggle is a
+ * smart dispel, and the behaviour behind that flag is the one players know — a Dryad left on
+ * autocast strips buffs (a debuff off an ally, a buff off an enemy) and leaves the Water
+ * Elementals alone until you point her at one yourself. Killing a summon is a decision about
+ * the fight and costs the same 75 mana as taking a Bloodlust off, so it stays the manual
+ * press's. Abolish Magic (`Aadm`) is the only member of the family with a toggle at all, so
+ * this is its rule in practice whatever the other two codes are asked.
  */
-export function worthDispelling(t: SimUnit, units: ReadonlyMap<number, SimUnit>, ours = false): boolean {
-  if (!ours && t.summonLeft > 0) return true;
+export function worthDispelling(t: SimUnit, units: ReadonlyMap<number, SimUnit>, ours = false, auto = false): boolean {
+  if (!ours && t.summonLeft > 0 && !(auto && MISC_GAME.AbolishMagicDispelSmart)) return true;
   return t.buffs.some((b) => {
     if (b.undispellable || !Number.isFinite(b.timeLeft)) return false;
     const src = units.get(b.sourceId);

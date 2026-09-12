@@ -12856,11 +12856,16 @@ export class SimWorld {
    * carried anything, which is both halves wrong: mana spent on nothing, and an entangled ally
    * left standing in the roots beside her.
    *
-   * `worthDispelling` is the gate and it is asked from the side each body is on. The caster is
-   * deliberately NOT excluded — a Dryad rooted by an enemy Keeper freeing herself is the cast
-   * working exactly as intended, and the flags permit it.
+   * `worthDispelling` is the gate and it is asked from the side each body is on, and asked as
+   * an AUTOCAST (`auto`) — which is what keeps an enemy SUMMON off this list. The game's own
+   * `AbolishMagicDispelSmart` = 1 says the toggle is a *smart* dispel, and that is the
+   * behaviour: the Dryad on autocast takes buffs off, and the Water Elemental is killed when
+   * the player points her at it. The caster is deliberately NOT excluded — a Dryad rooted by
+   * an enemy Keeper freeing herself is the cast working exactly as intended, and the flags
+   * permit it.
    *
-   * A SUMMON first, because that is a kill rather than a strip, then whatever is nearest.
+   * Whatever is nearest, then. (A summon ranked first here for as long as the autocast hunted
+   * them; with the kill gone there is nothing left to rank.)
    */
   private dispelAutocastTarget(u: SimUnit, range: number, def: AbilityDef): SimUnit | null {
     let best: SimUnit | null = null;
@@ -12870,9 +12875,8 @@ export class SimWorld {
       if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
       if (this.targetError(u, t, def.targetFlags, def.code) !== null) continue;
       const ours = !this.hostile(u, t);
-      if (!worthDispelling(t, this.units, ours)) continue;
-      const kill = !ours && t.summonLeft > 0 ? 1e6 : 0;
-      const score = kill - Math.hypot(t.x - u.x, t.y - u.y);
+      if (!worthDispelling(t, this.units, ours, true)) continue;
+      const score = -Math.hypot(t.x - u.x, t.y - u.y);
       if (score > bestScore) { bestScore = score; best = t; }
     }
     return best;
@@ -12932,7 +12936,7 @@ export class SimWorld {
   private autocastStillWanted(u: SimUnit, t: SimUnit, def: AbilityDef): boolean {
     // …and the dispel family re-asks its own question: somebody else's Dryad may have taken the
     // buff off while this one was walking, and then there is nothing here to spend mana on.
-    if (DISPEL_CODES.has(def.code)) return worthDispelling(t, this.units, !this.hostile(u, t));
+    if (DISPEL_CODES.has(def.code)) return worthDispelling(t, this.units, !this.hostile(u, t), true);
     const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
     const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
     // The buff ids are read off level 1: no stock ability changes WHICH buff it applies
