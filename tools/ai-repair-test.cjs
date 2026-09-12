@@ -89,7 +89,7 @@ function seat(units, opts = {}) {
       repairRefusal: (w, b) => (opts.refuse ? opts.refuse(w, b) : null),
     },
     registry: { get: (id) => DEFS[id] },
-    tech: { get: () => ({ upgrade: [] }), trains: () => [] },
+    tech: { get: () => ({ upgrade: [] }), trains: () => [], builds: () => ["hhou", "hbar", "htow"] },
     execute: (_player, cmd) => {
       asked.push(cmd);
       // Mirror what the authority does, so a second pass in the same fixture sees the crew.
@@ -274,6 +274,31 @@ console.log("\n-- what is worth mending ----------------------------------------
   });
   ai.applyRepairs();
   check("a worker the sim refuses is passed over", asked.map((c) => c.unitId), [able.id]);
+}
+
+// ==========================================================================================
+console.log("\n-- and nothing else takes the crew off it ---------------------------------");
+// ==========================================================================================
+// The other half of the report ("the peasants jitter instead of standing there hammering"): a
+// mending worker is standing STILL in the middle of the base, so it looked like the best body
+// on the field to everything else that wants one — and the nearest to almost any new site.
+// `applyRepairs` hires it at the top of the build pass and `runBuildLoop` took it away again
+// at the bottom of the same one, every pass. It is spoken for.
+{
+  const hall = building("htow", 30);
+  const near = worker(`repair:${hall.id}`, { x: 0, y: 0 });
+  const far = worker("lumber", { x: 900, y: 0 });
+  const { ai } = seat([hall, near, far]);
+  const pick = Object.getPrototypeOf(ai).freeWorker.call(ai, "hhou", 0, 0);
+  check("a builder is fetched from the trees, not off the repair", pick && pick.id, far.id);
+}
+{
+  // …but it is a PREFERENCE, not a ban: with nobody else on the field, the mender builds.
+  const hall = building("htow", 30);
+  const only = worker(`repair:${hall.id}`, { x: 0, y: 0 });
+  const { ai } = seat([hall, only]);
+  const pick = Object.getPrototypeOf(ai).freeWorker.call(ai, "hhou", 0, 0);
+  check("…and it is still the last resort", pick && pick.id, only.id);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

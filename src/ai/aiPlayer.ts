@@ -1174,12 +1174,23 @@ export class AiPlayer {
    * walked it home to put up a Ziggurat. Observed as "the Acolyte came home before it had
    * finished scouting". Still a preference and not a ban, for the same reason the sunk tier is
    * one: a player whose every worker is spoken for must still be able to build.
+   *
+   * A FOURTH, between the sunk and the spoken: a worker that is MENDING. It looks like the
+   * best body on the field — it is standing still, in the base, and therefore nearer almost
+   * any new site than the crew in the mine or the trees — so the build loop took the repair
+   * crew off a damaged building every pass it had something to place, `applyRepairs` hired a
+   * replacement at the top of the NEXT pass, and the loop took that one too: two workers
+   * walking a few steps at a hall and turning round again, which is what "the peasants jitter
+   * instead of standing there hammering" looks like from the outside. A miner is pulled out
+   * before them, because a repair is the shorter job and usually the more urgent one.
    */
   private freeWorker(defId: string, x: number, y: number): SimUnit | null {
     let best: SimUnit | null = null;
     let bestD = Infinity;
     let sunk: SimUnit | null = null;
     let sunkD = Infinity;
+    let mending: SimUnit | null = null;
+    let mendingD = Infinity;
     let spoken: SimUnit | null = null;
     let spokenD = Infinity;
     for (const u of this.host.world.units.values()) {
@@ -1191,9 +1202,11 @@ export class AiPlayer {
         if (d < spokenD) { spokenD = d; spoken = u; }
       } else if (isOffField(u)) {
         if (d < sunkD) { sunkD = d; sunk = u; }
+      } else if (u.repair) {
+        if (d < mendingD) { mendingD = d; mending = u; }
       } else if (d < bestD) { bestD = d; best = u; }
     }
-    return best ?? sunk ?? spoken;
+    return best ?? sunk ?? mending ?? spoken;
   }
 
   // ======================================================================================

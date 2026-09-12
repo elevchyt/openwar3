@@ -3107,20 +3107,29 @@ export class ComputerPlusAi {
    * out of the mine to put up buildings with and to send to go and look"*) — standing in the
    * base for the whole match. `onGold` is what closes that hole, and it asks the question the
    * undead's way as well as everybody else's.
+   *
+   * A WORKER THAT IS MENDING IS NOT A SPARE either, and it looks like the best one there is: it
+   * holds no harvest order and is standing still in the middle of the base. So the tour was
+   * handed the crew off a damaged building — `applyRepairs` hired a replacement on the next
+   * pass and the tour would have taken that one too, had it not already left — which is the
+   * same hole `AiPlayer.freeWorker` had on the BUILD side. Last, not banned: a player whose
+   * every worker is on a job still sends one.
    */
   private freeWorker(b: Brain): SimUnit | null {
     let spare: SimUnit | null = null;
     let chopper: SimUnit | null = null;
     let miner: SimUnit | null = null;
+    let mending: SimUnit | null = null;
     for (const u of this.host.world.units.values()) {
       if (u.owner !== b.ai.player || u.hp <= 0 || !u.isPeon) continue;
       if (u.buildPending || u.constructing || isOffField(u)) continue;
       if (b.held.has(u.id)) continue; // already the scout, or standing in the wave
-      if (onGoldDuty(u)) miner ??= u;
+      if (u.repair) mending ??= u;
+      else if (onGoldDuty(u)) miner ??= u;
       else if (u.order === "harvest" || u.order === "return") chopper ??= u; // a haul home is still the axe
       else spare ??= u;
     }
-    return spare ?? chopper ?? miner;
+    return spare ?? chopper ?? miner ?? mending;
   }
 
 
