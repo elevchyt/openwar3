@@ -17,7 +17,7 @@ import type { Plugin } from "vite";
  * The install is read from `OPENWAR3_INSTALL`, defaulting to `Warcraft III/` beside the repo
  * (which is where it already sits, and where `pnpm data:extract` looks). Two endpoints:
  *
- *   GET /wc3/manifest.json          → { archives, maps, casc }
+ *   GET /wc3/manifest.json          → { archives, maps, casc, customKeys }
  *   GET /wc3/file?path=<encoded>    → the bytes of one of those paths
  *
  * Paths speak WC3's `\` separator, matching the keys `InstallFiles` uses (assets/opfs.ts), so
@@ -34,6 +34,9 @@ const IDX = /^[0-9a-f]{10}\.idx$/i;
 const DATA_FILE = /^data\.\d{3}$/i;
 const CONFIG_HASH = /^[0-9a-f]{32}$/i;
 const BUILD_INFO = ".build.info";
+/** The player's own hotkeys/tooltips, a loose file in the folder (issue #142, data/customKeys.ts).
+ *  Named in the manifest rather than assumed, because most folders have none. */
+const CUSTOM_KEYS = "CustomKeys.txt";
 
 /** Reject anything that escapes the install root — `..`, absolute paths, symlink games. */
 function safeJoin(root: string, rel: string): string | null {
@@ -101,8 +104,9 @@ export function devInstall(): Plugin {
             const mapsDir = entries.find((e) => e.isDirectory() && e.name.toLowerCase() === "maps");
             if (mapsDir) await collectMaps(join(root, mapsDir.name), mapsDir.name, maps);
             const casc = await collectCasc(root);
+            const customKeys = existsSync(join(root, CUSTOM_KEYS)) ? CUSTOM_KEYS : null;
             res.setHeader("content-type", "application/json");
-            res.end(JSON.stringify({ archives, maps, casc }));
+            res.end(JSON.stringify({ archives, maps, casc, customKeys }));
           })();
           return;
         }

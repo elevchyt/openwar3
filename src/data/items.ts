@@ -1,4 +1,5 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
+import { layCustomKeys } from "./customKeys";
 import type { DataSource } from "../vfs/types";
 
 // Item data registry (issue #22). Merges WC3's ItemData.slk (numbers/flags),
@@ -181,6 +182,9 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
   const strs = new MappedData();
   const sb = vfs.rawBytes("Units\\ItemStrings.txt");
   if (sb) strs.load(new TextDecoder("windows-1252").decode(sb));
+  // The player's own file over both (data/customKeys.ts) — an item's row is a SHOP button, so
+  // this is what moves "Purchase Potion of Healing" onto another key and another slot.
+  layCustomKeys(strs, func);
 
   for (const id of Object.keys(data.map)) {
     const r = data.getRow(id) as Row | undefined;

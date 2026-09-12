@@ -1,4 +1,5 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
+import { layCustomKeys } from "./customKeys";
 import type { DataSource } from "../vfs/types";
 
 // Upgrade (research) registry — WC3's `Units\UpgradeData.slk` plus the per-race
@@ -162,6 +163,10 @@ export function loadUpgradeRegistry(vfs: DataSource): UpgradeRegistry {
     const b = vfs.rawBytes(p);
     if (b) strs.load(new TextDecoder("windows-1252").decode(b));
   }
+  // The player's own file over both (data/customKeys.ts). An upgrade is the case CustomKeyInfo
+  // spells out a comma list for — "[Rhme] Hotkey=X,Y,Z" is one key per RANK — and `csv` below
+  // already splits it, so the three arrive as the three.
+  layCustomKeys(strs, funcs);
 
   for (const id of Object.keys(data.map)) {
     const r = data.getRow(id) as Row | undefined;

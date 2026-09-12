@@ -92,7 +92,12 @@ export async function enumerateInstall(root) {
   const mapsDir = entries.find((e) => e.isDirectory() && e.name.toLowerCase() === "maps");
   if (mapsDir) await collectMaps(join(root, mapsDir.name), mapsDir.name, maps);
   const casc = await collectCasc(root);
-  return { archives, maps, casc };
+  // The player's own hotkeys/tooltips, a loose file in the folder (issue #142) — named here
+  // rather than assumed, because most folders have none. See src/data/customKeys.ts.
+  const customKeys = entries.some((e) => e.isFile() && e.name.toLowerCase() === "customkeys.txt")
+    ? "CustomKeys.txt"
+    : null;
+  return { archives, maps, casc, customKeys };
 }
 
 /** The build OpenWar3 plays. MUST equal `REQUIRED_VERSION` in src/vfs/version.ts, which states

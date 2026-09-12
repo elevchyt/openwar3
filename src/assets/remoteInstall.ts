@@ -18,6 +18,10 @@ export interface InstallManifest {
   maps: string[];
   /** Present when the install is 1.30+ (issue #102); null for an MPQ-era one. */
   casc: CascManifest | null;
+  /** The folder's own `CustomKeys.txt`, as an install-relative path — or null when it has
+   *  none (issue #142). A loose file the PLAYER writes, so it is named rather than assumed:
+   *  a folder with no such file is the normal case. */
+  customKeys: string | null;
 }
 
 export interface CascManifest {
@@ -44,6 +48,13 @@ export const fetchInstallBytes = async (url: FileUrl, path: string): Promise<Uin
 
 export const fetchInstallText = async (url: FileUrl, path: string): Promise<string> =>
   (await fetchInstallFile(url, path)).text();
+
+/** …and one read as a Warcraft III DATA file: **windows-1252**, the encoding every `*Strings.txt`
+ *  in the game is written in. `fetchInstallText` decodes UTF-8, which is right for `.build.info`
+ *  and wrong for anything carrying a localized tooltip (assets/opfs.ts `readAnsi` is the picker's
+ *  half of the same rule). */
+export const fetchInstallAnsi = async (url: FileUrl, path: string): Promise<string> =>
+  new TextDecoder("windows-1252").decode(await fetchInstallBytes(url, path));
 
 /**
  * A `data.NNN` read in ranges instead of whole. Both servers honour `Range`, so the mount slices

@@ -129,6 +129,19 @@ try {
          man.maps.length > 0 && !!man.casc && man.casc.idx.length > 0,
          `${man.maps.length} maps, ${man.casc?.idx.length ?? 0} idx, ${Object.keys(man.casc?.data ?? {}).length} data`);
 
+      // CustomKeys.txt is a LOOSE file the player writes (issue #142), so the manifest names it
+      // rather than assuming it; a folder without one must say so rather than leaving the field
+      // off, or the browser side cannot tell "no such file" from "an older manifest".
+      ok("the manifest answers whether the folder keeps a CustomKeys.txt",
+         man.customKeys === null || man.customKeys === "CustomKeys.txt",
+         String(man.customKeys));
+      if (man.customKeys) {
+        const keys = await serveInstall(wc3, new Request(`ow3-install://local/file?path=${encodeURIComponent(man.customKeys)}`));
+        const text = await keys.text();
+        ok("…and it is served, and reads like the file it claims to be",
+           keys.status === 200 && /^\s*(\/\/|\[)/.test(text), `${keys.status}, ${text.length} bytes`);
+      }
+
       // The one that decides whether a boot is possible at all: `data.NNN` is a gigabyte and the
       // mount reads scattered slices of it.
       const big = man.casc.data[Object.keys(man.casc.data)[0]];

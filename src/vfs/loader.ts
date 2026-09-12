@@ -5,6 +5,7 @@ import type { DataSource } from "./types";
 import type { ContentProfile } from "./profiles";
 import { installMaps, type PickedInstall } from "../assets/opfs";
 import { checkVersion } from "./version";
+import { setCustomKeys } from "../data/customKeys";
 
 // Turn a picked install into a mounted VFS (plan §1 exit: "enumerate/extract any file by path
 // from a real install").
@@ -40,6 +41,12 @@ export async function loadProfile(
   // between launches is told on the next one.
   const verdict = checkVersion(install);
   if (!verdict.ok) throw new Error(verdict.message);
+
+  // The player's own `CustomKeys.txt` (issue #142), handed to the data layer HERE for the same
+  // reason the version gate is asked here: this is the one function all three doors pass
+  // through. It is a loose file in the folder rather than an archive entry, so it cannot arrive
+  // through the `DataSource` every other table is read from — see src/data/customKeys.ts.
+  setCustomKeys(install.customKeys);
 
   const maps = installMaps(install.files);
 

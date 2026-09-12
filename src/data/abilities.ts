@@ -1,4 +1,5 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
+import { layCustomKeys } from "./customKeys";
 import type { DataSource } from "../vfs/types";
 import { MISC_GAME } from "./gameplayConstants";
 
@@ -1047,6 +1048,9 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     const b = vfs.rawBytes(p);
     if (b) strs.load(new TextDecoder("windows-1252").decode(b));
   }
+  // The player's own file over both (data/customKeys.ts), which is where an ability's whole
+  // `Un*` family comes from too: `Unhotkey`, `Untip` and `Unbuttonpos` are three of the eleven.
+  layCustomKeys(strs, func);
 
   for (const id of Object.keys(data.map)) {
     const r = data.getRow(id) as Row | undefined;

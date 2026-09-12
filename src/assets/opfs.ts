@@ -69,7 +69,37 @@ const isMpq = (name: string): boolean => name.toLowerCase().endsWith(".mpq");
 export interface PickedInstall {
   files: InstallFiles;
   casc: CascFiles | null;
+  /**
+   * The text of the folder's own `CustomKeys.txt`, or null when it has none (issue #142).
+   *
+   * A loose file beside the exe rather than an archive entry, which is why it rides here
+   * instead of arriving through the VFS like everything else the game reads. It is the player's
+   * to write — `CustomKeyInfo.txt` ships next to it saying how, and `CustomKeysSample.txt` is
+   * the whole default set ready to edit — and it is read only when Options → Gameplay →
+   * "Hotkeys:" is on Custom. See src/data/customKeys.ts.
+   */
+  customKeys: string | null;
 }
+
+/**
+ * Where a `CustomKeys.txt` may sit inside the picked folder, in the order the two are tried.
+ *
+ * Blizzard's own `CustomKeyInfo.txt` names BOTH and does it in two consecutive paragraphs: the
+ * first says the 1.30 user-data path, "Warcraft III user data under CustomKeyBindings", and the
+ * next says "once a customization file has been created in the installed folder". The real
+ * user-data folder is `Documents\Warcraft III\CustomKeyBindings\`, which is outside the
+ * install and therefore outside everything a folder pick can see — so what is honoured here is
+ * the installed-folder spelling, plus the same `CustomKeyBindings\` sub-folder in case the
+ * player kept that shape when they moved the file where the game could be pointed at it.
+ */
+const CUSTOM_KEYS_PATHS = ["customkeys.txt", "customkeybindings\\customkeys.txt"];
+
+/** One of those files as TEXT. **windows-1252**, not UTF-8: it is a Warcraft III data file like
+ *  every other `*Strings.txt`, and its tooltips are whatever the player's localized install
+ *  writes — `File.text()` would mangle the first accented character in a German or French one
+ *  into a replacement char and put it on a command button. */
+const readAnsi = async (file: File): Promise<string> =>
+  new TextDecoder("windows-1252").decode(await file.arrayBuffer());
 
 /** `.build.info` is the marker of a CASC install; an MPQ-era folder has no such file. */
 const BUILD_INFO = ".build.info";
@@ -102,18 +132,23 @@ export async function pickInstall(): Promise<PickedInstall | null> {
     }
     const files: InstallFiles = new Map();
     const casc = emptyCasc();
+    let customKeys: string | null = null;
     for await (const entry of handle.values()) {
       if (entry.kind === "file" && isMpq(entry.name)) {
         files.set(entry.name.toLowerCase(), await entry.getFile());
       } else if (entry.kind === "file" && entry.name.toLowerCase() === BUILD_INFO) {
         casc.buildInfo = await (await entry.getFile()).text();
+      } else if (entry.kind === "file" && entry.name.toLowerCase() === CUSTOM_KEYS_PATHS[0]) {
+        customKeys = await readAnsi(await entry.getFile());
       } else if (entry.kind === "directory" && entry.name.toLowerCase() === "maps") {
         await collectMaps(entry, entry.name, files);
+      } else if (entry.kind === "directory" && entry.name.toLowerCase() === "customkeybindings") {
+        customKeys ??= await customKeysIn(entry);
       } else if (entry.kind === "directory" && entry.name.toLowerCase() === "data") {
         await collectCasc(entry, casc);
       }
     }
-    return { files, casc: casc.buildInfo ? casc : null };
+    return { files, casc: casc.buildInfo ? casc : null, customKeys };
   }
 
   return pickViaInput();
@@ -156,6 +191,17 @@ async function collectMaps(dir: DirEntry, prefix: string, into: InstallFiles): P
   }
 }
 
+/** The `CustomKeys.txt` inside a `CustomKeyBindings\\` folder, if it holds one — the second of
+ *  the two places CustomKeyInfo.txt names (see CUSTOM_KEYS_PATHS). */
+async function customKeysIn(dir: DirEntry): Promise<string | null> {
+  for await (const entry of dir.values()) {
+    if (entry.kind === "file" && entry.name.toLowerCase() === CUSTOM_KEYS_PATHS[0]) {
+      return readAnsi(await entry.getFile());
+    }
+  }
+  return null;
+}
+
 /** Firefox/Safari fallback: a directory <input>. webkitRelativePath gives the same keys. */
 function pickViaInput(): Promise<PickedInstall | null> {
   return new Promise((resolve) => {
@@ -168,6 +214,7 @@ function pickViaInput(): Promise<PickedInstall | null> {
         if (!list || list.length === 0) return resolve(null);
         const files: InstallFiles = new Map();
         const casc = emptyCasc();
+        let customKeys: string | null = null;
         for (const file of Array.from(list)) {
           // webkitRelativePath is "<pickedFolder>/Maps/FrozenThrone/(2)EchoIsles.w3x";
           // drop the folder the user picked, and speak WC3's separator.
@@ -175,6 +222,10 @@ function pickViaInput(): Promise<PickedInstall | null> {
           const top = parts[0]?.toLowerCase();
           if (parts.length === 1 && isMpq(file.name)) { files.set(file.name.toLowerCase(), file); continue; }
           if (parts.length === 1 && file.name.toLowerCase() === BUILD_INFO) { casc.buildInfo = await file.text(); continue; }
+          // Either of the two places a CustomKeys.txt may be (CUSTOM_KEYS_PATHS), matched on the
+          // whole relative path so the root one wins over the sub-folder's.
+          const at = CUSTOM_KEYS_PATHS.indexOf(parts.join("\\").toLowerCase());
+          if (at === 0 || (at === 1 && customKeys === null)) { customKeys = await readAnsi(file); continue; }
           if (top === "data") {
             if (isIdx(file.name)) { casc.idx.set(file.name.toLowerCase(), new Uint8Array(await file.arrayBuffer())); continue; }
             const number = dataFileNumber(file.name);
@@ -187,7 +238,7 @@ function pickViaInput(): Promise<PickedInstall | null> {
           if (isUnderMaps(rel)) files.set(rel, file);
         }
         if (!files.size && !casc.buildInfo) return resolve(null);
-        resolve({ files, casc: casc.buildInfo ? casc : null });
+        resolve({ files, casc: casc.buildInfo ? casc : null, customKeys });
       })();
     };
     input.oncancel = () => resolve(null);

@@ -1,4 +1,5 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
+import { layCustomKeys } from "./customKeys";
 import type { DataSource } from "../vfs/types";
 import {
   ArmorType,
@@ -556,6 +557,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     const bytes = vfs.rawBytes(path);
     if (bytes) funcs.load(new TextDecoder("windows-1252").decode(bytes));
   }
+  // …and the player's own hotkeys/tips/slots over the top of both, when Options → Gameplay →
+  // "Hotkeys:" is on Custom (data/customKeys.ts). Here, at the table, rather than on each
+  // `UnitDef` below: everything that reads a unit's Hotkey, Tip, Revivetip or Buttonpos reads
+  // it through these two tables.
+  layCustomKeys(names, funcs);
 
   const defs = new Map<string, UnitDef>();
   if (!data || !ui) return new UnitRegistry(defs);

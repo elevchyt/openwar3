@@ -16,9 +16,12 @@ import type { Options } from "./options";
 //     in place of the numpad, which stays live either way (the numpad is a PLACE too).
 //   · `custom` — the player's own bindings, from the file `CustomKeys.txt` the retired "Custom
 //     Keyboard Shortcuts" checkbox used to enable (CUSTOM_KEYS_INFO says as much: "custom
-//     hotkey and tip data from the file CustomKeys.txt"). Nothing reads it yet; it is here so
-//     the row that will offer it is already the row the player chooses from, and it behaves as
-//     `legacy` until there is a file to read.
+//     hotkey and tip data from the file CustomKeys.txt"). It is LEGACY with the data changed
+//     underneath it rather than a scheme of its own: the file overrides the `Hotkey`, `Tip` and
+//     `Buttonpos` columns the game's own tables carry, and the card then reads a letter off a
+//     button exactly as it always did. Which is why the dispatch below knows nothing about it
+//     and `gridHotkeys()` answers false — everything custom about it happened at the data
+//     boundary, in [`customKeys.ts`](./customKeys.ts).
 //
 // Every key here is read off `KeyboardEvent.code` rather than `.key`, because grid is a claim
 // about the SHAPE of the keyboard: the top-left three keys are the top row of the card whatever
@@ -64,8 +67,9 @@ export function hotkeyMode(): HotkeyMode {
   return mode;
 }
 
-/** True while the card is keyed by PLACE. `custom` answers false: with no CustomKeys.txt read
- *  yet it is the legacy scheme, which is what the player gets until there is one. */
+/** True while the card is keyed by PLACE. `custom` answers FALSE on purpose: it presses buttons
+ *  by the letter written on them like `legacy` does — the player's file changed which letter
+ *  that is, not how the key is found (customKeys.ts). */
 export function gridHotkeys(): boolean {
   return mode === "grid";
 }

@@ -2,7 +2,7 @@ import { loadProfile } from "../vfs/loader";
 import { DEFAULT_PROFILE } from "../vfs/profiles";
 import type { InstallFiles } from "../assets/opfs";
 import {
-  fetchCasc, fetchInstallFile, type FileUrl, type InstallManifest,
+  fetchCasc, fetchInstallAnsi, fetchInstallFile, type FileUrl, type InstallManifest,
 } from "../assets/remoteInstall";
 import type { GateLoad } from "../ui/gate";
 import type { FogMode, MeleeConfig, SlotConfig } from "../ui/lobby";
@@ -213,8 +213,11 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   if (mapPath) files.set(mapPath, await fetchFile(mapPath));
   for (const name of listed) files.set(name, await fetchFile(name));
   const casc = manifest.casc ? await fetchCasc(fileUrl, manifest.casc) : null;
+  // The developer's own CustomKeys.txt, when the served install has one (issue #142) — so the
+  // Custom rung of Options → Gameplay → "Hotkeys:" can be exercised from a scripted boot.
+  const customKeys = manifest.customKeys ? await fetchInstallAnsi(fileUrl, manifest.customKeys) : null;
 
-  const load = await loadProfile({ files, casc }, DEFAULT_PROFILE, (msg) => log(msg));
+  const load = await loadProfile({ files, casc, customKeys }, DEFAULT_PROFILE, (msg) => log(msg));
   log(`mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files`);
   hooks.mountInstall(load);
 

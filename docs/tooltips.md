@@ -8,7 +8,7 @@ the world.
 Read this before touching `.hud-tooltip` in [`src/style.css`](../src/style.css),
 `TOOLTIP_BOX` / `FONT_HEIGHTS` / `showTooltip` / `showItemTooltip` in
 [`src/ui/hud.ts`](../src/ui/hud.ts), or `requirementLine` / `stockLine` / `patronLine` /
-`cmdText` in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts).
+`cmdSection` in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts).
 
 ## There is no FDF for it, and the game says so
 
@@ -209,14 +209,33 @@ Hotkey=H
 ```
 
 The `Tip` already gilds the hotkey letter, so the title pairs itself with the letter on the
-button's corner with nothing for us to do — under LEGACY hotkeys. Under **grid** hotkeys
-(Options → Gameplay → "Hotkeys:", [`src/data/hotkeys.ts`](../src/data/hotkeys.ts)) the key is
-the button's PLACE on the card and is nowhere in its name, so `gridTitle` strips the gilding —
-which would now point at a key that does nothing — and prints the real key after the name, in
-the parentheses and the `|cfffed312` gold `ITEM_NAME_HOTKEY` uses for exactly this. The Ubertips are much fuller than a one-line
+button's corner with nothing for us to do. The Ubertips are much fuller than a one-line
 paraphrase and they say things a player actually needs: that a Move onto a **unit** follows it,
 that Hold Position will not chase, that a rally point can be set on a mine or on trees to
-auto-harvest. `cmdText` reads them; the fallbacks are the file's own English.
+auto-harvest. `cmdSection` reads them — and the `Hotkey` beside them, which is the **only**
+place Move's M and Rally's Y are written down anywhere in the game. The fallbacks passed in
+beside each call are the file's own English and the file's own letter, so an unmounted install
+reads and answers the same.
+
+> **The trap that hid all of this for a year.** `MappedData` lower-cases every property key as
+> it loads, so `map["Tip"]` is `undefined` and always was. Read with the file's own
+> capitalisation, `loadCommandStrings` found nothing in any `[Cmd*]` section and every engine
+> command button silently fell back to the English beside its call — invisible on an English
+> install, and exactly the bug reading the file is supposed to prevent on any other one. Found
+> while wiring `Hotkey` (issue #142). The `[Errors]` half never had it, because that loop
+> lower-cases the keys it finds rather than naming them.
+
+Two options change what this paragraph produces, both under Options → Gameplay → "Hotkeys:"
+([`src/data/hotkeys.ts`](../src/data/hotkeys.ts)):
+
+* **Grid.** The key is the button's PLACE on the card and is nowhere in its name, so `gridTitle`
+  strips the gilding — which would now point at a key that does nothing — and prints the real key
+  after the name, in the parentheses and the `|cfffed312` gold `ITEM_NAME_HOTKEY` uses for
+  exactly this: "Train Peasant (Q)".
+* **Custom.** The player's `CustomKeys.txt` ([`src/data/customKeys.ts`](../src/data/customKeys.ts))
+  rewrites the `Tip` and the `Hotkey` in the table above before anything reads them, so nothing
+  here knows it happened. That file is also the only thing that ever gives a `[Cmd*]` section a
+  `Buttonpos` — the stock file carries none.
 
 Three things the sections settle that a paraphrase gets wrong:
 

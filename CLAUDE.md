@@ -192,6 +192,25 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   and progress is just where you park the playhead. It is also the one screen laid out **stretched** rather than
   height-scaled (it is a picture with things printed on it) and the one that must live OUTSIDE `#ui`, which a match
   re-boxes to the 16:9 game frame while the bar is still moving.
+- **Hotkeys:** read [`docs/hotkeys.md`](docs/hotkeys.md) before touching
+  [`src/data/hotkeys.ts`](src/data/hotkeys.ts), [`src/data/customKeys.ts`](src/data/customKeys.ts)
+  or the HUD's key handler. Options → Gameplay → "Hotkeys:" has THREE rungs and only two of them
+  are implementations: **Grid** is a KEYBOARD scheme (the key is the button's PLACE on the 4×3
+  card — QWER/ASDF/ZXCV, with the pockets on T/Y·G/H·B/N — so it is read off `e.code`, never
+  `.key`), while **Custom** is a DATA overlay (the player's `CustomKeys.txt` rewrites the
+  `Hotkey`/`Tip`/`Buttonpos` columns at the SLK boundary and the card then finds the letter
+  exactly as Legacy does — which is why `gridHotkeys()` answers FALSE for it and the key handler
+  never mentions it). `CustomKeys.txt` documents itself in the install (`CustomKeyInfo.txt`,
+  `CustomKeysSample.txt`) and may set **eleven** fields and no others — it may rebind and
+  re-word, never change the game. It is a LOOSE file beside the exe, so it rides on
+  `PickedInstall.customKeys` and is handed over by `loadProfile`, the one function all three
+  install doors pass through. Three silent traps: mdx-m3-viewer's `IniFile` splits on `\r\n`
+  ALONE and this is the one game file a player writes; the two sides never agree on CASE
+  (`[cmdrally]` against `CmdRally`), so the overlay walks the TARGET's rows and a row is
+  overridden, never invented; and `Hotkey=` is sometimes a NUMBER (`[CmdCancel] Hotkey=27` is
+  VK_ESCAPE, "2" if you read it as a letter). The engine's own buttons have no object row, so
+  theirs land in `Units\CommandStrings.txt` — which is why the letters are no longer retyped at
+  `cmdSection`'s call sites.
 - **Tooltips:** read [`docs/tooltips.md`](docs/tooltips.md) before touching the slab a command button raises, the
   world hover slab, or anything that composes a line into either. Do **not** go looking for its FrameDef — there
   isn't one, and `UI\MiscUI.txt` says why in as many words ("not created through the use of FrameDef files"). Its

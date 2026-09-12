@@ -8915,21 +8915,36 @@ export class MapViewerScene {
   }
 
   /**
-   * The card text for one of the ENGINE's own command buttons — Move, Stop, Hold Position,
-   * Attack, Patrol, Build, Set Rally Point, Hero Abilities, Cancel.
+   * What one of the ENGINE's own command buttons says and answers to — Move, Stop, Hold
+   * Position, Attack, Patrol, Build, Set Rally Point, Hero Abilities, Cancel.
    *
    * These are not abilities, so they have no `AbilityStrings` row; the game keeps them in
    * `Units\CommandStrings.txt` instead, one `[Cmd*]` section each carrying the `Tip` (with the
-   * hotkey already gilded — `|cffffcc00M|rove`) and the `Ubertip`. Those Ubertips are much
-   * fuller than a one-line paraphrase, and they say things a player actually needs: that a Move
-   * onto a UNIT follows it, that Hold Position will not chase, that a rally point can be set on
-   * a mine or on trees to auto-harvest.
+   * hotkey already gilded — `|cffffcc00M|rove`), the `Ubertip`, and the `Hotkey` itself. Those
+   * Ubertips are much fuller than a one-line paraphrase, and they say things a player actually
+   * needs: that a Move onto a UNIT follows it, that Hold Position will not chase, that a rally
+   * point can be set on a mine or on trees to auto-harvest.
    *
-   * The fallbacks are the file's own English, so an unmounted install reads the same.
+   * Everything passed in is a FALLBACK — the file's own English and the file's own letter — so
+   * an unmounted install reads and answers the same. The three fields the section can carry are
+   * spread over the call's own literals, and they are conditional for exactly that reason: a
+   * section that names no `Hotkey` must leave the caller's letter standing rather than blanking
+   * it, and `Buttonpos` is a field the STOCK file never carries at all (issue #142). It is here
+   * because a player's CustomKeys.txt does — "[cmdcancelbuild] Buttonpos=3,2" — and the engine's
+   * buttons are the only ones in the game with no object row of their own to carry the
+   * player's edits, so this is where theirs have to land.
+   *
+   * Which is also why the letters are no longer retyped at the fifteen call sites: a letter
+   * written in this file is a letter a CustomKeys.txt cannot move.
    */
-  private cmdText(key: string, tip: string, ubertip: string): { tip: string; desc: string } {
+  private cmdSection(key: string, tip: string, ubertip: string): Partial<CommandButton> {
     const text = this.strings.command(key);
-    return { tip: text.tip || tip, desc: text.ubertip || ubertip };
+    return {
+      tip: text.tip || tip,
+      desc: text.ubertip || ubertip,
+      ...(text.hotkey ? { hotkey: text.hotkey } : {}),
+      ...(text.pos ? { col: text.pos[0], row: text.pos[1] } : {}),
+    };
   }
 
   /**
@@ -9092,7 +9107,7 @@ export class MapViewerScene {
     if (this.isTargeting()) {
       out.push(this.cmd({
         id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
-        ...this.cmdText("CmdCancel", "Cancel (|cffffcc00ESC|r)",
+        ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
           "Drops the current un-issued order and allows you to select a different order."),
       }));
       return out;
@@ -9102,7 +9117,7 @@ export class MapViewerScene {
       // [CmdCancelBuild] — the file gives the half-built structure's Cancel its own section.
       out.push(this.cmd({
         id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
-        ...this.cmdText("CmdCancelBuild", "Cancel (|cffffcc00ESC|r)",
+        ...this.cmdSection("CmdCancelBuild", "Cancel (|cffffcc00ESC|r)",
           "Drops the current un-issued order and allows you to select a different order."),
       }));
       return out;
@@ -9168,13 +9183,13 @@ export class MapViewerScene {
         out.push(this.cmd({
           id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A",
           col: 3, row: 0, active: active === "attack",
-          ...this.cmdText("CmdAttack", "|cffffcc00A|rttack",
+          ...this.cmdSection("CmdAttack", "|cffffcc00A|rttack",
             "Orders your units to move to the target area and attack any enemy units they see on the way. If you order them to attack a specific unit, your units will ignore other enemy units and will attack the targeted unit until it is destroyed."),
         }));
         out.push(this.cmd({
           id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S",
           col: 1, row: 0, active: active === "stop",
-          ...this.cmdText("CmdStop", "|cffffcc00S|rtop",
+          ...this.cmdSection("CmdStop", "|cffffcc00S|rtop",
             "Orders your units to stop whatever order they were previously given. Units that have been told to stop will attack enemy units and move to engage nearby enemies."),
         }));
       }
@@ -9215,7 +9230,7 @@ export class MapViewerScene {
         // and a building has no "current command" to keep it lit afterwards.
         out.push(this.cmd({
           id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", col: 3, row: 1,
-          ...this.cmdText("CmdRally", "Set Rall|cffffcc00y|r Point",
+          ...this.cmdSection("CmdRally", "Set Rall|cffffcc00y|r Point",
             "Orders units that pop out of the building to immediately attack move to the targeted area. You can rally point gold mines or trees to auto-harvest. You can rally point a unit to have new units follow it when they finish building."),
         }));
       }
@@ -9225,7 +9240,7 @@ export class MapViewerScene {
       if (sel.queueLength) {
         out.push(this.cmd({
           id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
-          ...this.cmdText("CmdCancelTrain", "Cancel (|cffffcc00ESC|r)", "Stops training the current unit."),
+          ...this.cmdSection("CmdCancelTrain", "Cancel (|cffffcc00ESC|r)", "Stops training the current unit."),
         }));
       }
       // …and the abilities the building's own UnitAbilities row gives it, at the slots their
@@ -9264,7 +9279,7 @@ export class MapViewerScene {
       }
       out.push(this.cmd({
         id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
-        ...this.cmdText("CmdCancel", "Cancel (|cffffcc00ESC|r)",
+        ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
           "Drops the current un-issued order and allows you to select a different order."),
       }));
       return out;
@@ -9313,7 +9328,7 @@ export class MapViewerScene {
         }
         out.push(this.cmd({
         id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
-        ...this.cmdText("CmdCancel", "Cancel (|cffffcc00ESC|r)",
+        ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
           "Drops the current un-issued order and allows you to select a different order."),
       }));
       }
@@ -9324,20 +9339,20 @@ export class MapViewerScene {
     // (0,1); a worker's Build (or a hero's learn-skill) at (3,1); the bottom row
     // is reserved for learned skills/abilities.
     const active = this.activeCommandId();
-    // Every one of these speaks from its own `Units\CommandStrings.txt` section — see cmdText.
+    // Every one of these speaks from its own `Units\CommandStrings.txt` section — see cmdSection.
     out.push(this.cmd({
       id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", col: 0, row: 0, active: active === "move",
-      ...this.cmdText("CmdMove", "|cffffcc00M|rove",
+      ...this.cmdSection("CmdMove", "|cffffcc00M|rove",
         "Orders your units to move to the target area while ignoring enemy units and attacks. Issuing a move order onto a target unit will cause your unit to follow the target using move orders."),
     }));
     out.push(this.cmd({
       id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", col: 1, row: 0, active: active === "stop",
-      ...this.cmdText("CmdStop", "|cffffcc00S|rtop",
+      ...this.cmdSection("CmdStop", "|cffffcc00S|rtop",
         "Orders your units to stop whatever order they were previously given. Units that have been told to stop will attack enemy units and move to engage nearby enemies."),
     }));
     out.push(this.cmd({
       id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", col: 2, row: 0, active: active === "hold",
-      ...this.cmdText("CmdHoldPos", "|cffffcc00H|rold Position",
+      ...this.cmdSection("CmdHoldPos", "|cffffcc00H|rold Position",
         "Orders your units to stand where they are and attack units that are within range. When on Hold Position your units will not chase down enemy units that run away, nor move to engage ranged attackers."),
     }));
     // Attack is a WEAPON's button. A Goblin Zeppelin, a Wisp, a transport ship carry none
@@ -9348,13 +9363,13 @@ export class MapViewerScene {
     if (this.rts?.selectionCanAttack()) {
       out.push(this.cmd({
         id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", col: 3, row: 0, active: active === "attack",
-        ...this.cmdText("CmdAttack", "|cffffcc00A|rttack",
+        ...this.cmdSection("CmdAttack", "|cffffcc00A|rttack",
           "Orders your units to move to the target area and attack any enemy units they see on the way. If you order them to attack a specific unit, your units will ignore other enemy units and will attack the targeted unit until it is destroyed."),
       }));
     }
     out.push(this.cmd({
       id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", col: 0, row: 1, active: active === "patrol",
-      ...this.cmdText("CmdPatrol", "|cffffcc00P|ratrol",
+      ...this.cmdSection("CmdPatrol", "|cffffcc00P|ratrol",
         "Orders your units to continually move from their current position to the targeted area until given another command. Units on patrol will move to engage enemy units that come within range. Issuing a patrol order onto a target unit will cause your unit to imitate the targeted unit's behavior."),
     }));
     // Build sits at the bottom-left of a worker's card (developer spec) — but only on a worker
@@ -9377,7 +9392,7 @@ export class MapViewerScene {
       // …and the VERB is the worker's race's: build / create / summon (see buildCmdKey).
       out.push(this.cmd({
         id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", col: 0, row: 2, active: active === "build",
-        ...this.cmdText(this.buildCmdKey(sel.typeId), "|cffffcc00B|ruild Structure",
+        ...this.cmdSection(this.buildCmdKey(sel.typeId), "|cffffcc00B|ruild Structure",
           "Brings up a list of the available buildings that you may choose to construct."),
       }));
     }
@@ -9652,15 +9667,19 @@ export class MapViewerScene {
         icon: this.blpIcon("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp"),
         name: "Hero Abilities",
         hotkey: "O",
-        // …and its words are [CmdSelectSkill]'s, "Her|cffffcc00o|r Abilities" — the gilded
-        // letter in the Tip is what pairs the title with the O on the button's corner.
-        ...this.cmdText("CmdSelectSkill", "Her|cffffcc00o|r Abilities",
-          "Opens the abilities menu and allows you to assign unused points to the Heroes' abilities."),
+        col: 3, row: 1,
         // No `modal` sparkle here, deliberately: the button already says there are points to
         // spend — it only exists while there are, and it wears the count. The hero's PORTRAIT
         // up in the corner is where the model goes, because that is the one that has to catch
         // your eye while you are looking somewhere else entirely.
-        col: 3, row: 1, count: su.skillPoints,
+        count: su.skillPoints,
+        // …and its words, its letter and (from a CustomKeys.txt) its slot are
+        // [CmdSelectSkill]'s, "Her|cffffcc00o|r Abilities" — the gilded letter in the Tip is
+        // what pairs the title with the O on the button's corner. LAST in the literal, like
+        // every other `cmdSection` spread: what the section says has to be able to win over the
+        // fallbacks above it, and the `col`/`row` it can carry are two of them.
+        ...this.cmdSection("CmdSelectSkill", "Her|cffffcc00o|r Abilities",
+          "Opens the abilities menu and allows you to assign unused points to the Heroes' abilities."),
       }));
     }
   }

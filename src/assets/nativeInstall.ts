@@ -1,6 +1,6 @@
 import type { PickedInstall, InstallFiles } from "./opfs";
 import {
-  fetchCasc, fetchInstallFile, lazyMapFile,
+  fetchCasc, fetchInstallAnsi, fetchInstallFile, lazyMapFile,
   type FileUrl, type InstallManifest,
 } from "./remoteInstall";
 
@@ -139,5 +139,9 @@ export async function loadNativeInstall(): Promise<PickedInstall> {
     }
   }
 
-  return { files, casc: manifest.casc ? await fetchCasc(fileUrl, manifest.casc) : null };
+  // The player's own hotkeys, if they keep any (issue #142) — text, not a handle: it is a few
+  // kilobytes and it is parsed at mount either way.
+  const customKeys = manifest.customKeys ? await fetchInstallAnsi(fileUrl, manifest.customKeys) : null;
+
+  return { files, casc: manifest.casc ? await fetchCasc(fileUrl, manifest.casc) : null, customKeys };
 }
