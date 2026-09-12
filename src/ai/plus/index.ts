@@ -10,7 +10,7 @@ import { PlusCaster } from "./casting";
 import { EnemyMemory, counterScore, type EnemyRead } from "./counter";
 import {
   CONCEDE_NOT_BEFORE, CONCESSIONS, GREETINGS, GREET_AT, GREET_SPREAD, GREET_STAGGER, LEAVE_AFTER,
-  hopeless, teamLost,
+  goneShare, hopeless, teamLost,
   type Standing,
 } from "./chatter";
 import { PlusItems, type ItemCtx } from "./items";
@@ -6253,6 +6253,9 @@ export class ComputerPlusAi {
       // struck off it the instant it is actually revived (SimWorld.reviveFallenHero) and put
       // back on if the revival is cancelled (dropJob), so this never lags the field.
       heroesLost: fallen.length,
+      // The same two lists `teamCollapsed` reads, through the same helper — so the weight and
+      // the bar can never disagree about who is still playing. 0 on a 1v1 and a free-for-all.
+      teamGone: goneShare(b.team, b.allies),
     };
   }
 }

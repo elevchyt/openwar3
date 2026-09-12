@@ -95,6 +95,9 @@ export interface Standing {
    *  struck off the moment it is actually revived. So this is "one of ours is down right now",
    *  and it is empty both for a player who has lost none and for one who never built any. */
   heroesLost: number;
+  /** What SHARE of the team we started with is no longer playing — `goneShare`, the same
+   *  measurement `teamLost` is a bar on. 0 on a 1v1 or a free-for-all, which have no team. */
+  teamGone: number;
 }
 
 /**
@@ -117,12 +120,21 @@ export interface Standing {
  *
  * Half or MORE, against the team as it started: two of four concedes, one of three does not.
  * An empty team is a 1v1 or a free-for-all and can never concede for this reason.
+ *
+ * The bar is all this is. The measurement under it — `goneShare`, the share of the team that is
+ * no longer playing — is also a term of the weighed reading (`DESPAIR.teamGone`), so the two
+ * rules are one reading of the team taken at two heights: below half a departure LEANS on the
+ * decision, at half it settles it by itself. They cannot disagree about who has gone.
  */
-export function teamLost(team: readonly number[], allies: readonly number[]): boolean {
-  if (!team.length) return false;
+export function goneShare(team: readonly number[], allies: readonly number[]): number {
+  if (!team.length) return 0;
   let gone = 0;
   for (const p of team) if (!allies.includes(p)) gone++;
-  return gone * 2 >= team.length;
+  return gone / team.length;
+}
+
+export function teamLost(team: readonly number[], allies: readonly number[]): boolean {
+  return team.length > 0 && goneShare(team, allies) >= 0.5;
 }
 
 /**
@@ -159,8 +171,30 @@ export function teamLost(team: readonly number[], allies: readonly number[]): bo
  *    rebuild, and it is still a player who has been knocked out of their own base.
  *  • `armyGone` — nothing on the field and nothing in a queue (`armyFood` counts production).
  *  • `invaded` / `invaderHero` — somebody is standing in our towns, and one of them is a hero.
- *  • `noWorkers` — nothing left to mine, build or repair with.
+ *  • `workersShort` — the ECONOMY, and the one term that is not a boolean. It is live below
+ *    `WORKER_ECONOMY` (10, about what a melee player is running once their opening is down) and
+ *    worth its full weight only at none left at all, in proportion between. A step at 10 was
+ *    asked for and a step is what it deliberately is not, for two reasons that are the same
+ *    reason: `PlusProfile.workers` is 8 on Easy, so a step would be ON for that whole difficulty
+ *    from its first minute to its last and would be reading nothing; and at a flat weight it
+ *    flipped three positions a melee player plainly recovers (a razed hall with two workers and
+ *    900 gold — which is the `hopeless` header's own "it can rebuild" — among them). A ramp says
+ *    what a worker count actually means: nine is a scratch, two is a player who has been mined
+ *    out. It reads BODIES, so a night elf running fewer because its Wisps went into Ancients
+ *    carries a little of this for nothing — at 0.02 a Wisp, which is the size of mistake a ramp
+ *    can afford and a step cannot.
  *  • `broke` — not the gold for a hall, which is what makes the loss of one permanent.
+ *  • `teamGone` — the TEAM, and the only term that is not about this player's own board at all.
+ *    A teammate who quits or concedes is one fewer army on our side of a map that was drawn for
+ *    two of them, and it makes the game harder for everyone left in a way none of the other
+ *    terms can see. It is `goneShare` — the share of the starting team no longer playing —
+ *    scaled, which is deliberately the SAME measurement `teamLost` is a bar on: below half, a
+ *    departure leans on the decision; at half `teamLost` settles it outright, and does so
+ *    exempt from `CONCEDE_NOT_BEFORE`. So this term's own ceiling in practice is just under
+ *    `teamGone / 2`, and it bites only where the hard rule says nothing — a 4v4 down one of
+ *    three, a 6v6 down two of five. A 1v1 and a free-for-all have no team and score 0.
+ *    "Gone" is nothing on the map, so a teammate who was WIPED OUT counts alongside one who
+ *    left: either way there is nobody there to fight beside (see `teamLost`).
  *
  * None of these numbers are Warcraft III's — nothing in the install describes an AI that resigns
  * (docs/computer-plus.md) — so they are OURS, and `tools/ai-plus-concede-test.cjs` pins them.
@@ -172,9 +206,14 @@ export const DESPAIR = {
   armyGone: 0.3,
   invaded: 0.2,
   invaderHero: 0.1,
-  noWorkers: 0.25,
+  workersShort: 0.2,
   broke: 0.15,
+  teamGone: 0.7,
 } as const;
+
+/** The worker count `DESPAIR.workersShort` measures the shortfall against — a working melee
+ *  economy, and above every difficulty's own target but Insane's 14 (`PlusProfile.workers`). */
+export const WORKER_ECONOMY = 10;
 
 /** Where the weighed reading tips into a concession. One whole defeat's worth — which the two
  *  heavy terms make exactly, and nothing else in `DESPAIR` reaches without one of them. */
@@ -190,8 +229,11 @@ export function despair(s: Standing, hallCost: number): number {
   if (s.armyFood === 0) d += DESPAIR.armyGone;
   if (s.invaders > 0) d += DESPAIR.invaded;
   if (s.invaderHeroes > 0) d += DESPAIR.invaderHero;
-  if (s.workers === 0) d += DESPAIR.noWorkers;
+  if (s.workers < WORKER_ECONOMY) {
+    d += DESPAIR.workersShort * ((WORKER_ECONOMY - s.workers) / WORKER_ECONOMY);
+  }
   if (s.gold < hallCost) d += DESPAIR.broke;
+  d += DESPAIR.teamGone * s.teamGone;
   return d;
 }
 

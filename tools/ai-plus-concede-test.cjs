@@ -24,7 +24,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { hopeless, despair, teamLost, CONCEDE_AT, CONCEDE_NOT_BEFORE, LEAVE_AFTER } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
+const { hopeless, despair, goneShare, teamLost, DESPAIR, CONCEDE_AT, WORKER_ECONOMY, CONCEDE_NOT_BEFORE, LEAVE_AFTER } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -38,7 +38,7 @@ function check(what, got, want) {
 // The Great Hall's own price, which is what `mannersPass` reads off the registry for an orc.
 const HALL = 385;
 const at = (o) => ({ halls: 0, structures: 0, workers: 0, armyFood: 0, gold: 0, invaders: 0,
-  invaderHeroes: 0, heroes: 0, heroesLost: 0, ...o });
+  invaderHeroes: 0, heroes: 0, heroesLost: 0, teamGone: 0, ...o });
 // A position with a base and an army standing — what clause 4's cases vary the HEROES of, so
 // that nothing in them can be passing for one of the first three clauses' reasons.
 const holding = (o) => at({ halls: 1, structures: 6, workers: 5, armyFood: 30, gold: 500, ...o });
@@ -139,6 +139,25 @@ check("…and concedes at two of three", teamLost([1, 2, 3], [3]), true);
 // from both sides of the ratio at once and the rule would never fire.
 check("a shrinking roster would never fire — the latched one does", teamLost([1, 2, 3], [1]), true);
 
+// …and BELOW that bar a departure is not nothing either: `goneShare` is the measurement
+// `teamLost` is a bar on AND a term of the weighed reading, so the two can never disagree about
+// who is still playing. Under a half it leans on the decision instead of settling it.
+check("a 1v1 has no team to lose", goneShare([], []), 0);
+check("a 4v4 down one of its three is a third of a team gone", goneShare([1, 2, 3], [2, 3]), 1 / 3);
+check("…which is a real weight, even though the bar itself has not been reached",
+  despair(holding({ heroes: 1, workers: 12, teamGone: 1 / 3 }), HALL) > 0.2, true);
+// The one place it can change an answer: a position the hard rule and every clause are silent
+// about, which a teammate walking out of tips over. This is the 4v4 the request is about.
+// Hero dead, army traded, the raid seen off — 0.8, and every clause silent: the hall stands
+// (1, 3), a worker is on it (2), and nobody is in the base (2, 3, 5) let alone a hero (4).
+const wounded = { halls: 2, structures: 9, workers: 12, gold: 800, heroesLost: 1 };
+check("no hero and no army left, in a 4v4 with the team intact — plays on",
+  hopeless(at(wounded), HALL), false);
+check("…and the same position concedes once one of the three teammates has gone",
+  hopeless(at({ ...wounded, teamGone: 1 / 3 }), HALL), true);
+check("a healthy player on a broken team still plays on — this term does not carry a game alone",
+  hopeless(at({ halls: 2, structures: 9, workers: 12, armyFood: 40, gold: 800, heroes: 2, teamGone: 1 / 3 }), HALL), false);
+
 console.log("\n-- the weighed reading -----------------------------------------------------");
 
 // The second half of `hopeless`: the five clauses each describe a WHOLE defeat, so a position
@@ -162,8 +181,26 @@ check("a bad position with a hero and a hall in it is still a game",
   hopeless(at({ halls: 1, structures: 4, workers: 3, gold: 0, invaders: 5, invaderHeroes: 1, heroes: 1 }), HALL), false);
 check("an opening nowhere near a defeat scores nowhere near the line",
   despair(at({ halls: 1, structures: 3, workers: 5, gold: 200 }), HALL) < CONCEDE_AT, true);
+// A WHOLE economy on it: `workersShort` is live below WORKER_ECONOMY, so five workers is not
+// "nothing wrong" any more — it is a fifth of that term, which is the point of the ramp.
 check("a healthy player scores nothing at all",
-  despair(holding({ heroes: 2 }), HALL), 0);
+  despair(holding({ heroes: 2, workers: 12 }), HALL), 0);
+
+// The worker term, which is the one thing in `DESPAIR` that is not a boolean. It is live below
+// WORKER_ECONOMY and worth its full weight only at none left, in proportion between — a step at
+// the same weight read an Easy computer (`PlusProfile.workers` is 8) as permanently short from
+// its first minute, and flipped three positions a melee player plainly recovers.
+check("ten workers is a working economy and costs nothing",
+  despair(holding({ heroes: 1, workers: WORKER_ECONOMY }), HALL), 0);
+check("…nine is a scratch, not a verdict",
+  despair(holding({ heroes: 1, workers: 9 }), HALL) < 0.05, true);
+check("…and the fewer are left the more it weighs",
+  despair(holding({ heroes: 1, workers: 2 }), HALL) > despair(holding({ heroes: 1, workers: 8 }), HALL), true);
+check("…but a mined-out economy is still not a concession on its own",
+  hopeless(holding({ heroes: 1, workers: 0 }), HALL), false);
+// The position the header calls "it can rebuild" — and the one a flat step at 10 flipped.
+check("a razed hall with two workers and the gold for another still plays on",
+  hopeless(at({ structures: 2, workers: 2, gold: 900 }), HALL), false);
 
 console.log("\n-- the rails ---------------------------------------------------------------");
 

@@ -3504,18 +3504,52 @@ whole defeat) is the line.
 | `armyGone` | 0.3 | nothing on the field and nothing in a queue |
 | `invaded` | 0.2 | somebody standing in our towns |
 | `invaderHero` | 0.1 | …and one of them is a hero |
-| `noWorkers` | 0.25 | nothing left to mine, build or repair with |
+| `workersShort` | ≤0.2 | the economy — see below, the one term that is not a boolean |
 | `broke` | 0.15 | not the gold for a hall, which is what makes losing one permanent |
+| `teamGone` | ≤0.7 | × the share of the starting team no longer playing — see below |
 
 **The two heavy ones are the two that were asked to weigh.** A player with no hero left alive and
 a player with no hall left standing is each halfway out of the game, and together they are out of
 it: those two are what `CONCEDE_AT` is calibrated on, and the *only* pair that reaches it
-unaided. Nothing in the light half adds up to a concession on its own — a razing with a hero and
-a hall still in it scores 0.75 and plays on.
+unaided: a razing with a hero and a hall still in it scores 0.74 and plays on.
+
+The light half cannot get there in **twos** — the largest such pair is 0.64 — and reaching the
+line without a heavy term takes essentially all six at once (1.16): no army, one worker, an empty
+purse, a hero-led raid standing in the base, and a teammate gone, with only the hall and one hero
+to its name. That is a lost game by any reading, so the ceiling is where it should be; what the
+weights rule out is any *one or two* of them carrying a concession.
 
 Two guards carry over unchanged. `heroesDead` asks `heroesLost > 0` as well as `heroes === 0`,
 for clause 4's reason: "we have no hero" describes every player who has not built one yet. And a
 hero on an altar's revival clock still counts as one we *have*.
+
+**`workersShort` is a ramp, not a step**, and it is the only term that is not a boolean. It is
+live below `WORKER_ECONOMY` (10, about what a melee player runs once their opening is down) and
+worth its full 0.2 only at none left at all, in proportion between — nine workers is 0.02, two is
+0.16. A step at 10 was the obvious way to write it and is wrong twice over for the same reason:
+`PlusProfile.workers` is **8 on Easy**, so a step would be on for that whole difficulty from its
+first minute to its last and would be reading nothing at all; and at a flat weight it flipped
+three positions a melee player plainly recovers, the razed hall with two workers and 900 gold —
+which is the section above's own *"it can rebuild"* — among them. A ramp says what a worker count
+means: nine is a scratch, two is a player who has been mined out. It counts **bodies**, so a
+night elf running fewer because its Wisps went into Ancients carries a little of it for nothing —
+at 0.02 a Wisp, which is the size of mistake a ramp can afford and a step cannot.
+
+**`teamGone` is the only term that is not about this player's own board.** A teammate who quits
+or concedes is one fewer army on our side of a map drawn for two of them, and that makes the game
+harder for everyone left in a way no other term can see. It is `goneShare` — the share of the
+starting team no longer playing — and that is *deliberately the same measurement `teamLost` is a
+bar on*, so the weight and the bar can never disagree about who is still playing. Read at two
+heights: below half a departure **leans** on the decision, at half `teamLost` settles it outright
+(and does so exempt from `CONCEDE_NOT_BEFORE`). Which means this term's practical ceiling is just
+under `0.7 / 2`, and it bites exactly where the hard rule says nothing — a 4v4 down one of three
+(0.23), a 6v6 down two of five (0.28). A 1v1 and a free-for-all have no team and score 0.
+
+That 0.23 is worth what it looks like: a 4v4 player with no hero left alive and no army on the
+field sits at 0.8 and plays on, and the same position with one teammate walked out is 1.03 and
+says gg. As with the roster, "gone" is *nothing on the map*, so a teammate who was wiped out
+counts alongside one who quit — either way there is nobody there to fight beside. And it carries
+nothing on its own: a healthy player on a broken team is still playing a game.
 
 What makes the lower bar safe is the same thing that makes clause 4 safe — the **dwell**, not the
 reading. Every term un-latches the instant the position recovers: a hall that goes back up, a
