@@ -1,6 +1,6 @@
 {
   "name": "openwar3",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Browser-first, asset-compatible re-creation of the Warcraft III engine (TypeScript). Ships zero Blizzard assets.",
   "type": "module",
