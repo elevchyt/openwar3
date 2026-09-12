@@ -1589,6 +1589,14 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
   min-height: 1.3em;
 }
 .hud-hp-value { font-size: 13px; color: #46e05a; white-space: nowrap; }
+/* …and it drains green→yellow→red with the unit, at the bars' own two thresholds (hud.ts
+   `barState`). The hues are the bar palette's (#46e05a / #c8c800 / #c80000) lifted for TYPE:
+   a stroke a couple of pixels wide on a near-black plate needs more light than a filled slab
+   does, and the bar's red in particular all but disappears as a glyph. `[data-state]` rather
+   than a class so the readout is driven exactly as every other health level in the console
+   is — one attribute, set from one function. */
+.hud-hp-value[data-state="yellow"] { color: #e0d84a; }
+.hud-hp-value[data-state="red"] { color: #e85048; }
 .hud-mp-value { font-size: 13px; color: #4a7cff; white-space: nowrap; }
 .hud-mp-value:empty { display: none; }
 

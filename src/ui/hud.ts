@@ -1047,6 +1047,19 @@ function setCount(box: HTMLElement, text: string): void {
 const POOL_PAIR_MAX = 9999;
 
 /**
+ * WC3 tints every health readout green→yellow→red by fraction, at these two thresholds
+ * (render/worldOverlays.ts holds the same rule for the floating bars, where a TEAM-coloured
+ * bar is a third state this has nothing to say about).
+ *
+ * One function for every place the console draws a health level — the hero bar, the group
+ * grid, a transport's cargo pockets and the HP number under the portrait — because they are
+ * one rule and four copies of a ternary is four chances for them to stop agreeing.
+ */
+function barState(frac: number): "green" | "yellow" | "red" {
+  return frac > 0.6 ? "green" : frac > 0.3 ? "yellow" : "red";
+}
+
+/**
  * One of the two numbers under the portrait — hit points, or mana.
  *
  * The strips the console art cuts out below the arch (issue #92) are only as wide as the arch
@@ -2691,7 +2704,7 @@ export class GameHud {
         const hpFrac = Math.max(0, Math.min(1, h.hpFrac));
         s.hpFill.style.width = `${hpFrac * 100}%`;
         // WC3 tints every status bar green→yellow→red by fraction, the hero bar's included.
-        s.hpFill.dataset.state = hpFrac > 0.6 ? "green" : hpFrac > 0.3 ? "yellow" : "red";
+        s.hpFill.dataset.state = barState(hpFrac);
         s.manaFill.style.width = `${Math.max(0, Math.min(1, h.manaFrac)) * 100}%`;
       }
       // The revival countdown stands where the skill-point badge does — they cannot both be
@@ -3389,6 +3402,12 @@ export class GameHud {
       // raw string put the code on screen instead of the colour on the name.
       this.selName.innerHTML = wc3ToHtml(sel.isHero && sel.properName ? sel.properName : sel.name);
       this.selHpText.textContent = poolReadout(Math.ceil(sel.hp), sel.maxHp);
+      // …and the NUMBER carries the bar's own tint: green→yellow→red as it drains, at the same
+      // two thresholds every health bar in the console uses (barState). The readout under the
+      // portrait is the one place a player reads health as a number rather than as a length,
+      // and a wounded unit's "412 / 1100" said nothing at a glance while the bars all did.
+      // Mana keeps its blue — the ramp is what HEALTH means, not what a pool means.
+      this.selHpText.dataset.state = barState(sel.maxHp > 0 ? sel.hp / sel.maxHp : 1);
       this.selMpText.textContent = poolReadout(Math.floor(sel.mana), sel.maxMana);
       const icons = this.driver.selectionIcons();
       if (icons.length > 0) {
@@ -3628,9 +3647,9 @@ export class GameHud {
       // squashing with it. Clip rather than width because the grid's tracks have no fixed
       // pixel width to bake a background-size from.
       bars.hp.style.clipPath = `inset(0 ${(1 - frac) * 100}% 0 0)`;
-      // Green→yellow→red by HP fraction, at WC3's thresholds (render/worldOverlays.ts). The
-      // tint is baked into the fill art, so the state picks an image rather than a colour.
-      bars.hp.dataset.state = frac > 0.6 ? "green" : frac > 0.3 ? "yellow" : "red";
+      // Green→yellow→red by HP fraction, at WC3's thresholds (see barState). The tint is
+      // baked into the fill art, so the state picks an image rather than a colour.
+      bars.hp.dataset.state = barState(frac);
       // Mana, under the HP bar, only for a unit that has a pool (issue #109) — the same
       // -1 = "no pool" contract the hero bar uses.
       bars.manaTrack.hidden = ic.manaFrac < 0;
@@ -3729,7 +3748,7 @@ export class GameHud {
         const frac = Math.max(0, Math.min(1, c.hpFrac));
         // Same bar the group grid draws: the slab clipped to the fraction, tinted by state.
         p.fill.style.clipPath = `inset(0 ${(1 - frac) * 100}% 0 0)`;
-        p.fill.dataset.state = frac > 0.6 ? "green" : frac > 0.3 ? "yellow" : "red";
+        p.fill.dataset.state = barState(frac);
         onPress(p.slot, () => {
           this.driver.unloadCargo(sel.id, c.simId);
           this.refreshSelectionNow();
