@@ -50,9 +50,14 @@ export interface AdvancedOptions {
 
 /**
  * What the pane opens on — the real client's own defaults: teams locked and together, no
- * observers, default fog. Visibility opens on DEFAULT here where the Custom Game screen opens
- * on Map Explored: that screen chose its own default long before there was a pane to say
- * otherwise, while a LAN game has always been the game's own pitch-black fog.
+ * observers.
+ *
+ * VISIBILITY is the one row that is OURS: the pane opens on **Map Explored**, the same choice
+ * the Custom Game screen has always opened on, rather than on the `DEFAULT` pitch-black fog the
+ * 2003 LAN pane opens on. One default for both screens, on the developer's call — a player who
+ * picks a map wants to see the map they picked, and the row is still right there to put the fog
+ * back. It is the default in BOTH senses, so a LAN game on it prints no Advanced Options block
+ * (`isDefaultAdvanced`) and an older client's silence reads as it too (`advancedOf`).
  *
  * `computerPlus` is false HERE and only here — a host's own preference (Options → Gameplay)
  * decides what the create screen opens on, but the game's default is what the lobby's summary
@@ -65,7 +70,7 @@ export const DEFAULT_ADVANCED: AdvancedOptions = {
   randomRaces: false,
   randomHero: false,
   observers: "NO_OBSERVERS",
-  visibility: "DEFAULT",
+  visibility: "MAP_EXPLORED",
   computerPlus: false,
 };
 
