@@ -10043,18 +10043,29 @@ export class MapViewerScene {
     return "";
   }
 
-  /** Ask to train (or hire) a unit — at EVERY building of the selected sub-group, which is
-   *  where a command-card order goes in WC3 (RtsController.focusedGroupIds): two Barracks
-   *  selected and Footman clicked once starts one Footman in each, so they walk out together.
+  /** Ask to train (or hire) a unit — ONE of them, at the EMPTIEST queue in the selected
+   *  sub-group (RtsController.focusedGroupIds).
    *
-   *  Fairness needs no bookkeeping because each click adds exactly one job per building, and
-   *  the affordability question answers itself: `execute` charges as it goes, so with 200 gold
-   *  in hand the first Barracks takes the Footman and the second one's check already sees the
-   *  emptied stash. The refusal is spoken only when NOTHING took the order — a full queue on
-   *  the leader is not worth a "Not enough gold." when the barracks beside it started the unit. */
+   *  A click is one unit, not one per building. That is the click a player makes: with three
+   *  Barracks held, clicking Footman five times buys five Footmen — two, two and one — rather
+   *  than fifteen, and the group behaves as one production line with a shared card. Clicking
+   *  once per building instead meant a selection of Barracks could not be asked for a single
+   *  unit at all, and a player who had grouped them spent gold in multiples of three.
+   *
+   *  "Emptiest" is the queue with the fewest jobs standing in it, ties going to whichever
+   *  comes first in the group (which is the focus order, so the leader takes the first of a
+   *  round). Re-read per click, so repeated clicks fill the line round-robin on their own and
+   *  a queue the player had already loaded by hand is filled last. `simWorld` rather than the
+   *  view because the queue is the BUILDING's own state and the length is what we compare.
+   *
+   *  The refusal is spoken only when NOTHING took the order, and the search skips a building
+   *  that would refuse rather than reporting it: a full Barracks is not worth a "Not enough
+   *  gold." when the one beside it started the unit. */
   private trainUnit(buildings: number[], unitId: string): void {
     if (!this.rts) return;
-    let started = 0;
+    const world = this.rts.simWorld;
+    let pick = -1;
+    let shortest = Infinity;
     let refusal = "";
     for (const buildingId of buildings) {
       const err = this.trainRefusal(buildingId, unitId);
@@ -10062,9 +10073,20 @@ export class MapViewerScene {
         refusal ||= err;
         continue;
       }
-      if (this.rts.execute(this.localPlayer, { c: "train", buildingId, unitId })) started++;
+      // A queue the authority would refuse outright (7 deep — MAX_BUILD_QUEUE) is not a
+      // candidate, and neither is a longer one while a shorter is on offer.
+      if (world.queueFull(buildingId)) continue;
+      const depth = world.units.get(buildingId)?.building?.queue.length ?? 0;
+      if (depth < shortest) {
+        shortest = depth;
+        pick = buildingId;
+      }
     }
-    if (!started && refusal) this.refuse(refusal);
+    if (pick < 0) {
+      if (refusal) this.refuse(refusal);
+      return;
+    }
+    if (!this.rts.execute(this.localPlayer, { c: "train", buildingId: pick, unitId }) && refusal) this.refuse(refusal);
   }
 
   /** Bring a fallen hero back. Feedback only — the price and the wait are the LEVEL's and
