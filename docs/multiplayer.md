@@ -2790,6 +2790,16 @@ each break is its own item, not a bigger commit.
    browser**: the host chose End Game and the client's screen froze under the dialog, whose button
    returned it to the main menu.
 
+   **Later replaced by the real ending.** The hand-built CSS modal ("Game over. / You were
+   disconnected.") is gone. To a player still in the match the host leaving is an opponent
+   LEAVING, which Blizzard.j answers with `MeleeVictoryDialogBJ` — the screen a conceding
+   Computer+ player produces — so `showMatchOver` builds that dialog exactly as the function
+   does ("%s has left the game.", "%s was victorious.", **Victory!** / Continue Game / Quit Game,
+   the `QuestCompleted` sting) and hands it to the same FDF `GameDialog` every other ending uses.
+   It does not freeze the world. An observer gets `GameOverDialogBJ` instead ("Game over." / OK),
+   and a screen that already ends the player's game — a defeat relayed a moment earlier — is
+   left standing.
+
 7. ~~**The loser was never told it lost.**~~ **Fixed.** The stop condition says "play a match to a
    natural end", so the match was played to one: the host marched its five peasants across Echo
    Isles and razed the client's Great Hall. The host got the real **Victory!** screen and the log

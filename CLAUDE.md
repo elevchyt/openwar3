@@ -256,8 +256,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   And the three rects (world bounds ⊃ playable area ⊃ camera bounds) are 512/256 apart and not interchangeable.
 - **The pause:** read [`docs/pause.md`](docs/pause.md) before touching `paused` in
   `src/render/mapViewer.ts`, the F10 panel's Pause button or the Quest Log's Done button. The
-  pause has FOUR independent owners (a modal panel, the map's own `PauseGame`, a player, a dead
-  match) and folding them into one boolean makes them clobber each other. A stopped world is a
+  pause has THREE independent owners (a modal panel, the map's own `PauseGame`, a player) and
+  folding them into one boolean makes them clobber each other. A stopped world is a
   STILL PICTURE — every clock that ages the world reads `wdt`, not the frame's `dt` — and the
   whole feature documents itself in `GlobalStrings.fdf`: `KEY_RESUME_GAME` sits next to
   `KEY_PAUSE_GAME` for one and the same button, and pauses are counted in TIMEOUTS, three per

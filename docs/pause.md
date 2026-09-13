@@ -34,9 +34,9 @@ Four things fall out of that block, and all four are implemented:
 4. **A solo game has no tally.** That is what the second notify line is for; the timeout ledger
    is only consulted when there is somebody else waiting on you.
 
-## Four sources, not one boolean
+## Three sources, not one boolean
 
-`MapViewerScene` keeps the pause in four independent fields because it has four independent
+`MapViewerScene` keeps the pause in three independent fields because it has three independent
 owners, and folding them into one flag makes them clobber each other:
 
 | field          | written by                                                              |
@@ -44,11 +44,15 @@ owners, and folding them into one flag makes them clobber each other:
 | `panelPaused`  | something MODAL is open, in single-player: any of the four console panels, or a script's dialog |
 | `scriptPaused` | the map's own `PauseGame` native (CustomVictoryDialogBJ uses it)          |
 | `playerPaused` | a PLAYER — the Pause Game button, and over the wire in a LAN match        |
-| `matchPaused`  | the match ending out from under us (v1: the host left)                   |
 
 `paused` is any of them, and it is what stops the world and raises the veil. `hardPaused` is
 all of them EXCEPT `panelPaused` — the state where the mouse stops issuing orders, the camera
-stops moving and the HUD's own hotkeys stand down (`body.game-paused`). Panel pause is left out
+stops moving and the HUD's own hotkeys stand down (`body.game-paused`).
+
+There used to be a fourth, `matchPaused`, for a match that ended out from under us (the host
+left). It is gone: that ending is now the ordinary victory screen (`showMatchOver`), and
+`MeleeVictoryDialogBJ` never calls `PauseGame` — Continue Game leaves the player in the world.
+A player's pause is dropped at the same moment, because nobody is left to rule its resume. Panel pause is left out
 of that one because a panel already covers the screen with its own `.fdf-dialog-scrim`, which
 swallows the same input by itself.
 

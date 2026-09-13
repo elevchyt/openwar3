@@ -73,7 +73,6 @@ import { setSimProfiler } from "../sim/profile";
 import { wc3ToPlain } from "../ui/wc3Text";
 import { GameHud, isTyping, upkeepBand, PLAYER_COLORS, type HudDriver, type CommandButton } from "../ui/hud";
 import { GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
-import { MatchOverDialog } from "../ui/gameMenu";
 import { EscMenu } from "../ui/escMenu";
 import { AllianceDialogOverlay } from "../ui/allianceDialog";
 import { ChatDialogOverlay } from "../ui/chatDialog";
@@ -1048,17 +1047,16 @@ export class MapViewerScene {
   /** This machine has hung up (or is about to). Also what stops a `room-closed` arriving
    *  afterwards from putting "You were disconnected." over a perfectly good Victory screen. */
   private matchEnded = false;
-  /** Shown when the match ends out from under the player — v1's only cause is the host
-   *  leaving, since there is no migration (docs/multiplayer.md Phase F item 6). */
-  private matchOver: MatchOverDialog | null = null;
+  /** The seat of the machine holding the authoritative sim, when this machine is a client of
+   *  one — so a room that closes under us can say who left (`showMatchOver`). */
+  private hostSeat: number | null = null;
   /**
-   * **The pause, in four independent sources.**
+   * **The pause, in three independent sources.**
    *
    * They are separate fields and not one boolean because they overlap and each has its own
    * owner: the map's script writes `scriptPaused` (`PauseGame`, which CustomVictoryDialogBJ
    * uses to freeze a single-player game under its dialog), a modal panel writes `panelPaused`,
-   * a PLAYER writes `playerPaused`, and a match that ended out from under us writes
-   * `matchPaused`. Folded into one flag they clobbered each other — closing the Quest Log
+   * and a PLAYER writes `playerPaused`. Folded into one flag they clobbered each other — closing the Quest Log
    * un-paused a game the map itself had stopped, and `syncPanelPause` recomputing from what
    * was on screen wiped out a player's own pause the moment any panel closed.
    */
@@ -1069,18 +1067,16 @@ export class MapViewerScene {
    *  anybody's). STICKY: it outlives the menu that set it, which is the whole difference
    *  between that button and Return to Game. */
   private playerPaused = false;
-  /** The match is over out from under us (v1: the host left). */
-  private matchPaused = false;
   /** Anything at all stopping the world. */
   private get paused(): boolean {
-    return this.panelPaused || this.scriptPaused || this.playerPaused || this.matchPaused;
+    return this.panelPaused || this.scriptPaused || this.playerPaused;
   }
   /** Stopped for a reason that is NOT "a panel is open on top of it" — the state the console's
    *  buttons and the F-keys go dead for. Panel pause is excluded on purpose: the panel that
    *  caused it is covering those buttons anyway (`.fdf-dialog-scrim`), and keying them on it
    *  would mean F11 could not swap the open Quest Log for the Allies dialog. */
   private get hardPaused(): boolean {
-    return this.scriptPaused || this.playerPaused || this.matchPaused;
+    return this.scriptPaused || this.playerPaused;
   }
   /** The two paused-nesses the UI was last dressed for, so `syncPauseUi` is free to call per
    *  frame. Both, because they move independently: opening the F10 panel over an already
@@ -2275,6 +2271,7 @@ export class MapViewerScene {
     // (exactly how the two-tab harness kills it). The pump stands down while rAF is alive,
     // so arming it early costs nothing on a visible window.
     this.startBackgroundPump();
+    this.hostSeat = setup.isHost ? null : (setup.seats.find((s) => s.peer === setup.hostPeer)?.id ?? null);
     // A client turns the authority's payload back into the same `DialogObj` its own script
     // would have built, so `GameDialog` renders the real screen off the game's own FDF and the
     // two engine button behaviours (any click closes; a quit button leaves) work unchanged.
@@ -7769,39 +7766,62 @@ export class MapViewerScene {
   /**
    * The match ended out from under us: the room is gone, which in v1 means the host left.
    *
-   * Freeze the world and say so. Freezing is the point — a client whose authority has gone
-   * would otherwise keep simulating a world nobody owns, drifting further from a truth that no
-   * longer exists, and every order it issued would go into a socket with nothing at the other
-   * end. The words are the GAME'S (`UI\FrameDef\GlobalStrings.fdf`), not ours, so a localized
+   * To a player still in the game that is the opponent LEAVING, and Blizzard.j already says
+   * what leaving does: `MeleeTriggerActionPlayerLeft` → `MeleeDoLeave` removes the leaver, and
+   * the victory check that follows hands everybody left standing `MeleeVictoryDialogBJ` — the
+   * same screen a conceding Computer+ player produces (issue #124). Nothing of that can run
+   * here: a client's script never judges the match (docs/multiplayer.md F7) and the machine
+   * that did is the one that just left. So the screen is built HERE, exactly as that function
+   * builds it — "Victory!", Continue Game, a quit button — and handed to the same FDF dialog
+   * every other ending uses. It is not a pause: `MeleeVictoryDialogBJ` never calls `PauseGame`,
+   * and Continue Game leaves the player in the world as it last stood.
+   *
+   * An OBSERVER has nothing to win, and gets what `MeleeRemoveObservers` gives one when the
+   * match ends: `GameOverDialogBJ` — "Game over." and a single quit button. A screen that
+   * already ends this player's game (a defeat relayed a moment ago) is left where it is.
+   *
+   * The words are the GAME'S (`UI\FrameDef\GlobalStrings.fdf`), not ours, so a localized
    * install says what it says; the literals are the fallback for a table that never loaded.
    */
   showMatchOver(): void {
     // A match that ENDED does not also get disconnected. Once the victory/defeat screen is up
     // this machine hangs up on purpose (Phase G item 1), and on the host that closes the room —
     // so every client is about to be told `room-closed` for a game that finished properly. That
-    // is news about a wire nobody needs any more, not about the match.
+    // is news about a wire nobody needs any more, not about the match. It is also what makes a
+    // second `room-closed` not a second screen.
     if (this.matchEnded) return;
-    if (this.matchOver) return; // already said; a second `room-closed` is not a second dialog
-    this.matchPaused = true;
+    this.matchEnded = true;
+    // A player's pause was the room's to rule, and nobody is left to rule its resume.
+    this.playerPaused = false;
+    if (this.remoteDialog?.buttons.some((b) => b.quit)) return; // already an ending
     const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
-    // The same root the HUD and the F10 menu mount into (`mountHud`).
-    const ui = document.getElementById("ui") ?? document.body;
-    this.matchOver = new MatchOverDialog(
-      ui,
-      {
-        title: s("GAMEOVER_GAME_OVER", "Game over."),
-        message: s("GAMEOVER_DISCONNECTED", "You were disconnected."),
-        // The colour codes in GAMEOVER_QUIT_GAME mark the accelerator letter; we render text,
-        // so strip them rather than print "|CFFFFFFFFQ|Ruit Game".
-        quit: s("GAMEOVER_QUIT_GAME", "Quit Game").replace(/\|[cC][0-9a-fA-F]{8}|\|[rR]/g, ""),
-      },
-      () => {
-        this.matchOver?.dispose();
-        this.matchOver = null;
-        this.matchPaused = false;
-        this.onExit?.();
-      },
-    );
+    // "%s has left the game." — said of the leaver by every route that removes one.
+    if (this.hostSeat !== null) this.announce(fillSlots(s("PLAYER_LEFT_GAME", "%s has left the game."), [this.playerLabel(this.hostSeat)]));
+    const quit = (text: string): DialogObj["buttons"][number] =>
+      ({ handleId: -3, dialogId: -1, text, hotkey: 0, quit: true, doScoreScreen: false });
+    if (this.observer) {
+      // GameOverDialogBJ, for a watcher: "Game over." + OK, to bj_defeatDialogSound.
+      this.remoteDialog = {
+        handleId: -1, message: s("GAMEOVER_GAME_OVER", "Game over."),
+        buttons: [quit(s("GAMEOVER_OK", "OK"))], visibleFor: new Set([this.localPlayer]), revision: 0,
+      };
+      this.sounds?.playUi("QuestFailed");
+    } else {
+      // MeleeVictoryDialogBJ: "%s was victorious." from the winner, then the screen, to
+      // bj_victoryDialogSound ("QuestCompleted", blizzard.j InitBlizzardGlobals).
+      this.announce(fillSlots(s("PLAYER_VICTORIOUS", "%s was victorious."), [this.playerLabel(this.localPlayer)]));
+      this.remoteDialog = {
+        handleId: -1, message: s("GAMEOVER_VICTORY_MSG", "Victory!"),
+        buttons: [
+          { handleId: -2, dialogId: -1, text: s("GAMEOVER_CONTINUE_GAME", "Continue Game"), hotkey: 0, quit: false, doScoreScreen: false },
+          quit(s("GAMEOVER_QUIT_GAME", "Quit Game")),
+        ],
+        visibleFor: new Set([this.localPlayer]), revision: 0,
+      };
+      this.sounds?.playUi("QuestCompleted");
+    }
+    // Shown now rather than on the next script-UI pass, which a match with no script never runs.
+    this.showDialog(this.remoteDialog);
   }
 
   /** Give the HUD's clock slot the local race's real TimeIndicator model, on its own
@@ -8030,10 +8050,10 @@ export class MapViewerScene {
     return this.chatDialog?.visible === true;
   }
 
-  /** Is anything MODAL on screen — one of the four panels, a script's own dialog
-   *  (`DialogDisplay`, see showDialog), or the match-over screen? */
+  /** Is anything MODAL on screen — one of the four panels, or a dialog (a script's own
+   *  `DialogDisplay`, a relayed one, or the match-over screen — see showDialog)? */
   private get modalUp(): boolean {
-    return this.dialogUp || this.matchOver !== null || MapViewerScene.ALL_PANELS.some((p) => this.panelOpen(p));
+    return this.dialogUp || MapViewerScene.ALL_PANELS.some((p) => this.panelOpen(p));
   }
   private static readonly ALL_PANELS: readonly ConsolePanel[] = ["quests", "menu", "allies", "chat"];
 
@@ -11882,9 +11902,8 @@ export class MapViewerScene {
     this.questLog = null;
     this.consoleUi?.dispose();
     this.consoleUi = null;
-    this.matchOver?.dispose();
-    this.matchOver = null;
-    this.panelPaused = this.scriptPaused = this.playerPaused = this.matchPaused = false;
+    this.hostSeat = null;
+    this.panelPaused = this.scriptPaused = this.playerPaused = false;
     this.pauseVeil?.remove();
     this.pauseVeil = null;
     this.ghost?.remove();
