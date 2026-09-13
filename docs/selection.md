@@ -138,6 +138,9 @@ focused (Tab / Shift+Tab, or a click on a grid icon). Ctrl bends both halves of 
 
 - **Ctrl+click a grid icon** keeps that icon's sub-group and drops the rest of the selection
   (`selectGridType`). A plain click only moves the focus; a second plain click drills to one unit.
+  A HERO BAR portrait gets the same result from any click, Ctrl or not: a hero is a sub-group of
+  one, and the portrait selects that hero alone. Ctrl+right-click on it is an order (a follow or
+  a rally) like any other, so it reaches the focused sub-group only.
 - **Ctrl held while an order is given** sends it to the focused sub-group ALONE. The game's own
   key list says so — `UI\HelpStrings.txt`: "Ctrl (when held issuing a command) - Send action to
   currently active subgroup only." Every order site in `RtsController` iterates `orderees`

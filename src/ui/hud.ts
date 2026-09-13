@@ -2703,6 +2703,8 @@ export class GameHud {
             this.refreshSelectionNow();
             return;
           }
+          // Ctrl+click needs no branch of its own: it keeps the clicked icon's sub-group
+          // (`selectGridType`), and a hero is a sub-group of one, which is this selection.
           this.driver.selectHero(i, false);
           this.refreshSelectionNow();
         },
