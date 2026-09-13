@@ -148,6 +148,11 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // …and which KEY presses a command button (issue #142). Live, through `applyHotkeyOptions`
   // in data/hotkeys.ts, which is where the three rungs are written down.
   { key: "hotkeys", frame: "HotkeysMenu", kind: "choice", panel: "gameplay", def: "legacy", choices: HOTKEY_MODES },
+  // …and whether that key is PRINTED on the button, in the corner box the game already stamps a
+  // quantity into (`.hud-count-badge`). Not a WC3 row — the 2003 card shows its key only inside
+  // the tooltip — so it is ours, on a frame of ours, under the row whose answer it prints. ON by
+  // default, and live through the same `applyHotkeyOptions`.
+  { key: "showHotkeys", frame: "ShowHotkeysCheckBox", kind: "bool", panel: "gameplay", def: true },
 
   // --- Video (applied through render/videoQuality.ts, which documents what each rung does) ---
   { key: "gamma", frame: "GammaSlider", kind: "range", panel: "video", def: 50 },

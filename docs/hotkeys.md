@@ -137,6 +137,23 @@ reason the version gate is asked there.
   that unimplemented list until issue #142 — so a map that set it was setting nothing. It lands
   now, on `UnitDef.awakenTip`.)
 
+## Showing the key on the button
+
+Options → Gameplay → **"Show hotkeys on action buttons"** (ON by default) prints the key that
+presses each command button in the button's bottom-right corner. It is not a 2003 row — the game
+names a key only inside the tooltip — so the checkbox is ours (`ShowHotkeysCheckBox` in
+`src/overrides/ui/OptionsMenu.fdf`) and so is its string. The box is NOT new art: it is the same
+`countBadge` / `CommandButtonNumberOverlay` box the game stamps a quantity into (item charges, a
+shop's stock, unspent skill points), so the key and a count read as one family.
+
+* **What it prints follows the scheme.** Legacy and Custom print the button's own `hotkey`; Grid
+  prints the slot's letter (`gridCommandKey`). A named key is shortened to its keycap —
+  `[CmdCancel] Hotkey=27` is VK_ESCAPE and prints "Esc", in a smaller face (`.long`).
+* **A passive prints nothing**, because it takes no press and the key handler skips it.
+* **The corner is the count's first.** A button that carries a count (a shop's stock, the
+  learn-skill button's points) keeps the number bottom-right and moves its key to the top-right
+  (`.top`).
+
 ## When a change takes effect
 
 The overlay is applied when the registries are built, which is at the start of a match. The

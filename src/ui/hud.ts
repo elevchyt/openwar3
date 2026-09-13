@@ -20,7 +20,7 @@ import { setGameTip } from "./gameTip";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 import { anyModalOpen } from "./modal";
-import { gridCommandKey, gridCommandSlot, gridHotkeys, gridInventoryKey, gridInventorySlot } from "../data/hotkeys";
+import { gridCommandKey, gridCommandSlot, gridHotkeys, gridInventoryKey, gridInventorySlot, hotkeyMode, hotkeysOnButtons } from "../data/hotkeys";
 
 /** WC3's upkeep bands, as the resource bar colours them. */
 const UPKEEP_COLORS = { none: "#5be05a", low: "#e0c146", high: "#e05046" };
@@ -1262,6 +1262,7 @@ export class GameHud {
   private cmdCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
   private cmdCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
   private cmdCount: HTMLSpanElement[] = []; // per-slot corner count badge (skill points)
+  private cmdHotkey: HTMLSpanElement[] = []; // per-slot corner key box ("Show hotkeys on action buttons")
   private cmdKey = "";
   // Hero inventory: 6 slot buttons (2×3) with icon, charge badge, cooldown sweep.
   private invSlots: HTMLButtonElement[] = [];
@@ -3205,6 +3206,7 @@ export class GameHud {
     this.cmdCdOverlay = [];
     this.cmdCdText = [];
     this.cmdCount = [];
+    this.cmdHotkey = [];
     this.cmdFx = [];
     for (let i = 0; i < 12; i++) {
       const btn = document.createElement("button");
@@ -3222,10 +3224,14 @@ export class GameHud {
       // button's unspent points. A persistent child so a card rebuild never wipes it, like
       // the label/cooldown nodes.
       const count = countBadge();
+      // …and the button's KEY, in the same box (Options → Gameplay → "Show hotkeys on action
+      // buttons"). A second box rather than the count's, because a shop's button has both.
+      const hotkey = countBadge();
+      hotkey.classList.add("hud-hotkey-badge");
       // …and the "standing on" sparkle, likewise persistent. Last child so it draws over the
       // icon and the cooldown sweep, exactly as the model does over the button in the game.
       const fx = this.modalFx.makeOverlay();
-      btn.append(label, cd, count, fx);
+      btn.append(label, cd, hotkey, count, fx);
       this.cmdFx.push(fx);
       card.appendChild(btn);
       this.cmdSlots.push(btn);
@@ -3233,6 +3239,7 @@ export class GameHud {
       this.cmdCdOverlay.push(cd);
       this.cmdCdText.push(cdText);
       this.cmdCount.push(count);
+      this.cmdHotkey.push(hotkey);
     }
     return card;
   }
@@ -3246,7 +3253,10 @@ export class GameHud {
     // TEXT — a tavern hero stays greyed while its yellow "Requires:" line goes from "Altar of
     // Storms, Stronghold" to "Stronghold" the moment the altar goes up. Leave it out and the
     // tooltip keeps showing the requirement the player has just met.
-    const key = cmds.map((c) => `${c.id}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${c.desc}`).join("|");
+    // The printed keys hang off two options rather than off the buttons, so the options are in
+    // the key too: `applyHotkeyOptions` switching either has to re-dress a card that did not change.
+    const printKeys = hotkeysOnButtons();
+    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${c.desc}`).join("|");
     if (key === this.cmdKey) {
       this.refreshCmdTooltip(cmds); // every frame: the stash moves without the card changing
       return;
@@ -3260,6 +3270,7 @@ export class GameHud {
       this.cmdFx[i].hidden = true;
       this.cmdLabels[i].textContent = "";
       setCount(this.cmdCount[i], "");
+      setCount(this.cmdHotkey[i], "");
       onPress(btn, null);
       btn.onpointerenter = null;
       btn.onpointerleave = null;
@@ -3300,6 +3311,16 @@ export class GameHud {
       else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
 
       if (c.count && c.count > 0) setCount(this.cmdCount[idx], String(c.count));
+      // The key that presses it. A passive takes no press, so it has no key to print (the key
+      // handler skips it for the same reason). The corner is the count's too: when a button
+      // carries a quantity — a shop's stock, the learn-skill button's points — the number keeps
+      // the bottom-right it has always had and the key moves up to the top-right.
+      if (printKeys && !c.passive) {
+        const k = printedKey(c);
+        setCount(this.cmdHotkey[idx], k);
+        this.cmdHotkey[idx].classList.toggle("long", k.length > 1);
+        this.cmdHotkey[idx].classList.toggle("top", !!c.count && c.count > 0);
+      }
       // A passive takes no press — it's an indicator, so it never sinks and never
       // fires. Nor does an UNAVAILABLE button: WC3's greyed DISBTN state is inert,
       // and letting the click through is how a Barracks you have no Great Hall for
@@ -4318,6 +4339,24 @@ function onPress(
  * is one line with one highlight in it, and a map that coloured more of its own is still saying
  * "this letter" with all of it.
  */
+/**
+ * The key a command button's corner box prints — whatever the active scheme presses it with.
+ * Under GRID that is the slot's letter; under legacy and custom it is the button's own
+ * `hotkey`, which for the engine's Cancel is a NAMED key (`Hotkey=27`, VK_ESCAPE —
+ * data/commandStrings.ts) and is shortened to what a keycap says.
+ */
+function printedKey(c: CommandButton): string {
+  if (gridHotkeys()) return gridCommandKey(c.row, c.col);
+  const k = c.hotkey;
+  if (!k || k === " ") return "";
+  return KEYCAP[k] ?? (k.length === 1 ? k.toUpperCase() : k);
+}
+
+const KEYCAP: Record<string, string> = {
+  Escape: "Esc", Backspace: "Bksp", Enter: "Ent", Delete: "Del",
+  ArrowLeft: "\u2190", ArrowUp: "\u2191", ArrowRight: "\u2192", ArrowDown: "\u2193",
+};
+
 function gridTitle(c: CommandButton): string {
   const raw = c.tip || (c.id.startsWith("build:") ? `Build ${c.name}` : c.name);
   const plain = raw.replace(/\|[cC][0-9a-fA-F]{8}/g, "").replace(/\|[rR]/g, "");

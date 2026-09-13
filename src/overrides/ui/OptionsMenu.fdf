@@ -33,6 +33,7 @@
 //     [x] Always show Health Bars                (the game's, re-anchored by the manifest)
 //     Healthbars:  [ Default ]                   (ours)
 //     Hotkeys:     [ Legacy  ]                   (ours)
+//     [x] Show hotkeys on action buttons         (ours)
 //
 // The two re-anchorings are the manifest's `repoint`, because an FDF panel is a chain of rows
 // and those two rows are the game's own frames: only their SetPoints change, so their labels
@@ -81,6 +82,20 @@ Frame "BACKDROP" "HotkeysBackdrop" INHERITS "OptionsPopupMenuBackdropTemplate" {
         Frame "MENU" "HotkeysPopupMenuMenu" INHERITS WITHCHILDREN "StandardPopupMenuMenuTemplate" {
         }
     }
+}
+
+// "Show hotkeys on action buttons" — a checkbox row under the "Hotkeys:" pulldown, and the last
+// row of the panel. It hangs off the LABEL rather than the backdrop, because the backdrop starts
+// right of the label and the checkbox column is the label's. The gap is the pulldown pair's own
+// label-to-label step (-0.02625) less the half a checkbox is taller than a label, so the box sits
+// where a third pulldown's label would have been centred.
+Frame "GLUECHECKBOX" "ShowHotkeysCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
+    SetPoint TOPLEFT, "HotkeysLabel", BOTTOMLEFT, 0.0, -0.02075,
+}
+
+Frame "TEXT" "ShowHotkeysLabel" INHERITS "StandardInfoTextTemplate" {
+    SetPoint LEFT, "ShowHotkeysCheckBox", RIGHT, 0.01, 0.0,
+    Text "SHOW_HOTKEYS_ON_BUTTONS",
 }
 
 Frame "GLUECHECKBOX" "ComputerPlusDefaultCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {

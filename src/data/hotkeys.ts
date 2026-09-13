@@ -54,12 +54,20 @@ export const GRID_INVENTORY_CODES: readonly string[] = ["KeyT", "KeyY", "KeyG", 
 const letterOf = (code: string): string => code.slice(-1);
 
 let mode: HotkeyMode = "legacy";
+/** Options → Gameplay → "Show hotkeys on action buttons". */
+let printed = true;
 
 /** Push the Gameplay panel's "Hotkeys:" row onto the live binding — the same shape
  *  `applyHealthBarOptions` (render/worldOverlays.ts) has, and called from the same two places. */
 export function applyHotkeyOptions(opts: Options): void {
   const v = opts.hotkeys;
   mode = v === "grid" || v === "custom" ? v : "legacy";
+  printed = opts.showHotkeys !== false;
+}
+
+/** True while the command card prints each button's key in its bottom-right corner box. */
+export function hotkeysOnButtons(): boolean {
+  return printed;
 }
 
 /** Which scheme the keyboard is on right now. */

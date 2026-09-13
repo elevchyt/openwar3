@@ -116,6 +116,8 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     { frame: "HealthBarStyleBackdrop", into: "GameplayPanel" },
     { frame: "HotkeysLabel", into: "GameplayPanel" },
     { frame: "HotkeysBackdrop", into: "GameplayPanel" },
+    { frame: "ShowHotkeysCheckBox", into: "GameplayPanel" },
+    { frame: "ShowHotkeysLabel", into: "GameplayPanel" },
   ],
 };
 
