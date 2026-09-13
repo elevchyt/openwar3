@@ -1,6 +1,7 @@
 # OpenWar3
 
-![OpenWar3 screenshot](screenshot.png)
+<img src="public/demoscreens/game2.png" width="800">
+<img src="public/demoscreens/game1.png" width="800">
 
 A recreation of the **Warcraft III** engine in TypeScript. Ships **zero Blizzard assets** — uses your own install at runtime.
 
