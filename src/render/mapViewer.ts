@@ -9299,7 +9299,9 @@ export class MapViewerScene {
       if (su) {
         for (const ab of su.abilities) {
           const def = this.abilities.get(ab.id);
-          if (!def) continue;
+          // Only the hero's SKILLS: an innate unit ability on a hero's sheet (the Warden's
+          // Shadow Meld) is a command-card button and never a row here (SimWorld.learnable).
+          if (!def || !this.rts!.simView.learnable(su, ab.id)) continue;
           const col = def.learnX; // researchbuttonpos — the WC3 learn-page slot (row 0)
           const row = def.learnY;
           const maxed = ab.level >= def.levels;
@@ -9579,6 +9581,8 @@ export class MapViewerScene {
       // the 5-second cooldown it also carries — and the cooldown keeps running and drawing
       // underneath, because the two are different facts about the same button.
       const hidden = this.rts.simView.alreadyHidden(su, ab.code);
+      // …and a NIGHT ability while the sun is up: Shadow Meld is dead by day (barredByDay).
+      const daylight = this.rts.simView.barredByDay(ab.code);
       // …and a cargo hold's two buttons answer to the hold: Load with no seat left, Unload
       // All with nobody aboard, are each a press that could only be refused (holdRoom /
       // garrison — docs/transports.md).
@@ -9643,10 +9647,11 @@ export class MapViewerScene {
         // it just isn't a button you press (see `passive` below).
         noMana,
         // Unavailable: the button goes inert and wears the DIS* art with no frame, so it reads
-        // as unpressable at a glance. Five things say so — a silenced or stunned caster, a
+        // as unpressable at a glance. Six things say so — a silenced or stunned caster, a
         // planted Ancient with a queue that cannot pull itself up, a unit mid-morph, an
-        // ability whose research is not in, and one whose effect is already on the presser.
-        disabled: muted || rootBlocked || morphing || !techMet || hidden || holdGate,
+        // ability whose research is not in, one whose effect is already on the presser, and
+        // a night ability by day.
+        disabled: muted || rootBlocked || morphing || !techMet || hidden || daylight || holdGate,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and

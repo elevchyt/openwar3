@@ -55,6 +55,8 @@ export interface SimView {
    *  while he is wind walking? A READ, and the same one the sim refuses the order on, so the
    *  greyed button and the rule cannot disagree. */
   alreadyHidden(u: SimUnit, code: string): boolean;
+  barredByDay(code: string): boolean;
+  learnable(u: SimUnit, abilityId: string): boolean;
 
   /** The seats a cargo hold has left (its capacity less what its passengers TAKE — a
    *  Demolisher counts two). A READ the command card greys the Load button on, and the same

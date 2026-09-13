@@ -12339,6 +12339,19 @@ export class SimWorld {
     return !!group && u.buffs.some((b) => b.kind === "invisible" && b.group === group);
   }
 
+  /**
+   * Is this a NIGHT ability and is the sun up? Shadow Meld (`Ashm`, and its `Sshm` instant
+   * twin, which shares the code) is the one: its own Ubertip is "remain unseen at night", and
+   * by day the button is DEAD — greyed on the card with its DIS twin, refused at every door
+   * into the sim — rather than a press that holds the unit and melds nothing (the handler's
+   * `api.isDay()` refusal, which stays as the backstop for a carried Cloak of Shadows). The
+   * meld already in force ends at dawn in `tickMeld`. A Moonstone's eclipse IS night here,
+   * because it moves `timeOfDay` itself.
+   */
+  barredByDay(code: string): boolean {
+    return code === "Ashm" && this.isDay;
+  }
+
   /** WHY this unit can't cast this ability AT ALL right now, target or no target — the
    *  caster-side half of `castError`, in the engine's own order: does it have the spell,
    *  is it able to cast, is the spell ready, can it pay. A commandstrings.txt [Errors]
@@ -12375,6 +12388,8 @@ export class SimWorld {
     // is nothing to say. Above the cooldown and mana lines deliberately — a wind walking hero
     // is off cooldown for most of its walk, and "not ready yet" would be a lie.
     if (this.alreadyHidden(u, code)) return SILENT_REFUSAL;
+    // …nor a night ability in daylight (see barredByDay) — greyed, so silent too.
+    if (this.barredByDay(code)) return SILENT_REFUSAL;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     if (ab.cooldownLeft > 0) return "Cooldown"; // "Spell is not ready yet."
     if (u.mana < this.castCost(u, def, lvl)) return "Nomana"; // "Not enough mana."
@@ -12489,6 +12504,8 @@ export class SimWorld {
     // alreadyHidden). Refused at this door as well as at the button, so a trigger, a hotkey
     // and a command off the wire all mean the same thing the card shows.
     if (this.alreadyHidden(u, code)) return false;
+    // …and a night ability by day (barredByDay): the card's grey button, kept at the door.
+    if (this.barredByDay(code)) return false;
     // Entangle pressed on a WALKING tree, which is the only card it is on (UPROOTED_ONLY).
     // Roots in the air hold nothing, so the press is not a cast: it is the errand
     // (`entangleat`), and the tree plants itself within reach of the mine first.
@@ -13940,13 +13957,30 @@ export class SimWorld {
     this.levelUps.push({ unitId: im.id, level: im.level }); // the same nova, on every image
   }
 
+  /**
+   * Is this one of the hero's LEARNABLE abilities — a row on the Hero Abilities page?
+   *
+   * Not everything a hero carries is. The Warden's `[Ewar] abilList` gives her `Ashm` Shadow
+   * Meld beside the four skills of her `heroAbilList`, and the Keeper of the Grove, the Priestess
+   * of the Moon and the Demon Hunter all carry it too — an innate UNIT ability at rank 1, which
+   * the learn page listed (and a skill point could "rank up") because it walked every ability
+   * on the sheet. The game's own word for the other kind is AbilityData.slk's `hero` column
+   * (`AbilityDef.research`, which a map's `aher` edit overrides too); the type's
+   * `heroAbilList` is asked as well, since that list is where a hero's skills come from
+   * (`buildAbilitiesFor` seeds them at rank 0) and a map may put anything in it.
+   */
+  learnable(u: SimUnit, abilityId: string): boolean {
+    if (this.abilities?.get(abilityId)?.research) return true;
+    return this.unitReg?.get(u.typeId)?.heroAbilities.includes(abilityId) ?? false;
+  }
+
   /** Learn (or rank up) a hero ability by spending a skill point. Returns true on
    *  success. Enforces the hero level requirement, max ranks, and points. */
   learnAbility(unitId: number, abilityId: string): boolean {
     const u = this.units.get(unitId);
     if (!u || !u.isHero || u.skillPoints <= 0 || !this.abilities) return false;
     const def = this.abilities.get(abilityId);
-    if (!def) return false;
+    if (!def || !this.learnable(u, abilityId)) return false;
     const ab = u.abilities.find((a) => a.id === abilityId);
     if (!ab || ab.level >= def.levels) return false;
     if (u.level < requiredHeroLevel(def, ab.level + 1)) return false;

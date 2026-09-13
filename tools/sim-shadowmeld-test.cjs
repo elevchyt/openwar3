@@ -141,5 +141,37 @@ const stillMelded = (u) => u.buffs.some((b) => b.kind === "invisible");
   check("Wind Walk survives moving in broad daylight", stillMelded(u), true);
 }
 
+// By day the BUTTON is dead, not just the effect: every door into the sim refuses the order
+// (so the unit is not parked on Hold for a meld that never comes), and the card greys it off
+// the same answer. At night the same ability is live.
+{
+  world.timeOfDay = 12;
+  check("Shadow Meld is barred by day", world.barredByDay("Ashm"), true);
+  check("…Wind Walk is not", world.barredByDay("AOwk"), false);
+  world.timeOfDay = 22;
+  check("…and Shadow Meld is live at night", world.barredByDay("Ashm"), false);
+}
+
+// The Hero Abilities page lists a hero's SKILLS only. The Warden carries Shadow Meld as an
+// innate unit ability beside her heroAbilList; it is not learnable and a point cannot rank it.
+{
+  const defs = new Map([
+    ["Ashm", { id: "Ashm", code: "Ashm", research: false, levels: 3, reqLevel: 1, levelSkip: 2, levelData: [{}, {}, {}] }],
+    ["AEbl", { id: "AEbl", code: "AEbl", research: true, levels: 3, reqLevel: 1, levelSkip: 2, levelData: [{}, {}, {}] }],
+  ]);
+  const w = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8Array(64) }, 1);
+  w.abilities = defs;
+  const hero = {
+    id: 7, typeId: "Ewar", isHero: true, level: 1, skillPoints: 1, owner: 0,
+    abilities: [{ id: "Ashm", code: "Ashm", level: 1 }, { id: "AEbl", code: "AEbl", level: 0 }],
+  };
+  w.units.set(hero.id, hero);
+  check("a hero's innate Shadow Meld is not learnable", w.learnable(hero, "Ashm"), false);
+  check("…her Blink is", w.learnable(hero, "AEbl"), true);
+  // (given three ranks here, so it is the learnable gate that refuses and not "already maxed")
+  check("learnskill refuses Shadow Meld", w.learnAbility(7, "Ashm"), false);
+  check("…and keeps the point", hero.skillPoints, 1);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);
