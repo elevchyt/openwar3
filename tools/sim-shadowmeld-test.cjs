@@ -152,6 +152,34 @@ const stillMelded = (u) => u.buffs.some((b) => b.kind === "invisible");
   check("…and Shadow Meld is live at night", world.barredByDay("Ashm"), false);
 }
 
+// HIDE TAKES ITSELF — but never out of a fight. Measured live on Echo Isles before the fix:
+// an Archer on Hold re-melded between every two arrows, and one whose ATTACK target died was
+// handed back as idle for a tick and melded with the next Footman still shooting at her.
+{
+  const w = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8Array(64) }, 1);
+  w.timeOfDay = 22;
+  let casts = 0;
+  let enemyNear = false;
+  w.issueCast = () => { casts++; return true; };
+  w.techMeets = () => true;
+  w.acquireTarget = () => (enemyNear ? { id: 99 } : null);
+  const archer = (over = {}) => ({
+    id: 3, owner: 0, hp: 100, x: 0, y: 0, prevX: 0, prevY: 0, order: "idle", moving: false, swingLeft: -1,
+    targetId: null, inCombat: false, cloaked: false, stunned: false, paused: false, isCreep: false,
+    weapon: { acquire: 700, range: 500 }, inventory: [], buffs: [],
+    abilities: [{ id: "Ashm", code: "Ashm", level: 1 }], ...over,
+  });
+  const tries = (over, near = false) => { casts = 0; enemyNear = near; w.tickAutoMeld(archer(over)); return casts; };
+  check("an idle Archer alone at night melds", tries({}), 1);
+  check("…on Hold with nobody about too", tries({ order: "hold" }), 1);
+  check("an Archer on Hold shooting (between arrows) does not", tries({ order: "hold", targetId: 9, inCombat: true }), 0);
+  check("…nor one still holding a target it has not reached", tries({ order: "hold", targetId: 9 }), 0);
+  check("an attack's target died, an enemy still in acquisition range: no meld", tries({}, true), 0);
+  check("…nor on Hold with one in range", tries({ order: "hold" }, true), 0);
+  check("an Archer on an attack order never melds", tries({ order: "attack", targetId: 9 }), 0);
+  check("…nor one attack-moving", tries({ order: "attackmove" }), 0);
+}
+
 // The Hero Abilities page lists a hero's SKILLS only. The Warden carries Shadow Meld as an
 // innate unit ability beside her heroAbilList; it is not learnable and a point cannot rank it.
 {

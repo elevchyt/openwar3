@@ -17019,6 +17019,17 @@ export class SimWorld {
    * else — a march, an attack, a cast, a harvest — is a command, and a commanded unit does not
    * hide. Nor does one mid-swing, mid-cast, or being carried along by anything.
    *
+   * …and NOT IN A FIGHT, whatever the order says. Two orders are only "idle" or "hold" on
+   * paper while the unit is fighting: HOLD POSITION shoots from where it stands (`tickHold`
+   * keeps a `targetId` and `inCombat`), and between two arrows it is still and swingless — so
+   * an Archer on Hold melded after every shot, broke it with the next and melded again. And an
+   * ATTACK or ATTACK-MOVE whose target dies hands the unit back as `idle` for the tick before
+   * the throttled `tickAcquire` looks round — long enough to meld, and a melded unit
+   * acquires nothing and returns no fire (`acquireRange` is 0 while `cloaked`), so it sat out
+   * the rest of the fight invisible beside the enemy still shooting at it. So a unit with a
+   * target, or with an enemy in its acquisition range that it would pick a fight with, does
+   * not hide: the fight is what its attack command is for.
+   *
    * The day gate is the handler's own (`api.isDay()`), where it belongs; asking here as well
    * only saves the work.
    */
@@ -17026,12 +17037,22 @@ export class SimWorld {
     if (this.isDay || u.hp <= 0 || u.building || u.cloaked || u.stunned || u.paused) return;
     if (u.order !== "idle" && u.order !== "hold") return;
     if (u.moving || u.swingLeft >= 0 || u.x !== u.prevX || u.y !== u.prevY) return;
+    if (u.targetId !== null || u.inCombat) return; // fighting — on Hold, or between orders
     const own = u.abilities.find((a) => a.code === "Ashm" && a.level >= 1 && this.techMeets(u.owner, a.id));
     // …and the carried one. An item's ability is not in `u.abilities`, so it cannot go through
     // `issueCast` — but it is the same row and the same handler, and `Ashm` costs nothing and
     // has no cooldown, so the effect is the whole of the cast.
     const carried = own ? null : this.itemAbility(u, "Ashm");
     if (!own && !carried) return;
+    // …nor with an enemy in reach that it would auto-acquire: the gap between a kill and the
+    // next `tickAcquire` scan is not the fight being over. Asked here, of the few units that
+    // can hide at all, and only while `cloaked` is still false (acquireRange reads 0 once it
+    // is), so it is never a scan a melded unit pays for. A creep's ambush is its camp's call
+    // (`creepInFight` below), not this one.
+    if (!u.isCreep) {
+      const acq = this.acquireRange(u);
+      if (acq > 0 && this.acquireTarget(u, acq)) return;
+    }
     // …and NOT while its camp is in a fight. Hiding is lying in wait (Liquipedia: "Hiding
     // units lie in wait for enemies without attacking"), and the wait is over the moment the
     // camp is attacked — see `unhideCreep`, which takes the meld back off. Without this the
