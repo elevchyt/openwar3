@@ -7240,6 +7240,7 @@ export class MapViewerScene {
       controlEnabled: () => this.userControl,
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
       selectGridUnit: (simId) => this.rts?.selectGridUnit(simId),
+      selectGridType: (simId) => this.rts?.selectGridType(simId),
       deselectUnit: (simId) => this.rts?.deselectUnit(simId),
       selectSingle: (simId) => this.rts?.selectSingle(simId),
       tryTargetArmedAt: (simId) => this.rts?.tryTargetArmedAt(simId) ?? false,
@@ -13424,6 +13425,15 @@ export class MapViewerScene {
     this.on(window, "pointermove", trackCursor, { capture: true });
     this.on(window, "pointerdown", trackCursor, { capture: true });
     this.on(window, "contextmenu", trackCursor, { capture: true });
+    // Ctrl held while a command is given sends it to the ACTIVE SUB-GROUP only
+    // (`UI\HelpStrings.txt`: "Send action to currently active subgroup only."). Read off every
+    // key and button event on the way DOWN (capture), so whichever door the order leaves by —
+    // a right-click on the world or the minimap, a card button, the click that aims an armed
+    // Move — sees the state the event itself carried. Cmd stands in for it, as at selectAt.
+    const trackCtrl = (e: KeyboardEvent | PointerEvent) => {
+      if (this.rts) this.rts.subgroupOrders = e.ctrlKey || e.metaKey;
+    };
+    for (const type of ["keydown", "keyup", "pointerdown", "pointerup"] as const) this.on(window, type, trackCtrl, { capture: true });
     // Cursor left the page (or the window lost focus): stop edge-scrolling. Without this the
     // camera would keep panning off the last edge the cursor crossed on its way out.
     this.on(document, "pointerleave", () => (this.pointerInWindow = false));
@@ -13433,6 +13443,7 @@ export class MapViewerScene {
       // somebody else's window never reaches us, so an alt-tab left the key STUCK: the camera
       // scrolls on by itself, and (issue #141) ALT stays inverted over the health bars.
       this.keys.clear();
+      if (this.rts) this.rts.subgroupOrders = false;
     });
     this.on(window, "pointermove", (e: PointerEvent) => {
       // Self-heal a stuck drag even while the pointer is off the canvas (over the

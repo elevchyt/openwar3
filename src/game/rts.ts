@@ -2460,6 +2460,19 @@ export class RtsController {
     return out;
   }
 
+  /** Ctrl is held while an order is given: it goes to the ACTIVE SUB-GROUP alone. The game's
+   *  own key list says so in as many words — `UI\HelpStrings.txt`: "Ctrl (when held issuing a
+   *  command) - Send action to currently active subgroup only." Set by the input layer from
+   *  the live key state, so a Move pressed on the card and aimed with Ctrl down counts too. */
+  subgroupOrders = false;
+
+  /** Who an order given right now reaches: the whole selection, or — Ctrl held — the focused
+   *  sub-group of it (`subgroupOrders`). Every site that ISSUES an order iterates this rather
+   *  than `selected`; what the selection merely IS (rings, control groups, the diff) does not. */
+  private get orderees(): ReadonlySet<number> {
+    return this.subgroupOrders && this.primary !== null ? new Set(this.focusedGroupIds()) : this.selected;
+  }
+
   /** Recompute the focused group + primary from the current selection, keeping
    *  `preferKey` focused if it still exists. */
   private refocus(preferKey = ""): void {
@@ -2506,6 +2519,21 @@ export class RtsController {
     // focusing isn't a fresh selection — same as cycleFocus/Tab.
     this.focusedKey = this.groupKeyOf(simId);
     this.primary = this.firstOfGroup(this.focusedKey);
+  }
+
+  /** Ctrl-click a unit's grid icon: keep only its sub-group — every selected unit of that
+   *  type (a hero is a sub-group of one) — and drop the rest of the selection. It is a
+   *  narrowing of what you already hold, like the drill-down to one unit, so it speaks. */
+  selectGridType(simId: number): void {
+    if (!this.selected.has(simId)) return;
+    const key = this.groupKeyOf(simId);
+    for (const id of [...this.selected]) if (this.groupKeyOf(id) !== key) this.selected.delete(id);
+    this.selectedMine = null;
+    this.selectedItem = null;
+    this.focusedKey = key;
+    this.primary = this.firstOfGroup(key);
+    this.voiceStreak = 0;
+    this.announceSelection();
   }
 
   /** Shift-click a unit's grid icon: remove just that one unit from the CURRENT

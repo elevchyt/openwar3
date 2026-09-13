@@ -281,6 +281,8 @@ export interface HudDriver {
   /** Grid icon click: focus the unit's sub-group (like Tab), or (if that group is
    *  already focused) drill down to just this one unit. */
   selectGridUnit(simId: number): void;
+  /** Ctrl-click a grid icon: keep only that unit's sub-group, dropping the rest of the selection. */
+  selectGridType(simId: number): void;
   /** Shift-click a grid icon: remove just that unit from the current selection. */
   deselectUnit(simId: number): void;
   /** Select ONLY this unit (used internally once a focused sub-group is drilled into). */
@@ -3767,7 +3769,8 @@ export class GameHud {
       // A click with a spell/attack armed targets this unit through the console; an item PICKED
       // UP out of the inventory (right-click, `mode: "move"`) is handed over to it, the same two
       // meanings in the same order a hero's portrait gives them (issue #145); Shift+click
-      // removes just this unit from the selection; otherwise a plain click focuses this unit's
+      // removes just this unit from the selection; Ctrl+click keeps only this unit's sub-group;
+      // otherwise a plain click focuses this unit's
       // sub-group (like Tab), and clicking again (group now focused) drills down to just this
       // unit.
       onPress(slot, (e) => {
@@ -3782,6 +3785,11 @@ export class GameHud {
         }
         if (e.shiftKey) {
           this.driver.deselectUnit(ic.simId);
+          return;
+        }
+        if (e.ctrlKey || e.metaKey) {
+          this.driver.selectGridType(ic.simId);
+          this.refreshSelectionNow();
           return;
         }
         this.driver.selectGridUnit(ic.simId);

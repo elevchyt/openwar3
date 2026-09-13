@@ -131,6 +131,23 @@ still be drag-selected over its base" means.
 
 ---
 
+## 3. Sub-groups and Ctrl
+
+A selection splits into SUB-GROUPS — one per unit type, one per hero — and one of them is
+focused (Tab / Shift+Tab, or a click on a grid icon). Ctrl bends both halves of that:
+
+- **Ctrl+click a grid icon** keeps that icon's sub-group and drops the rest of the selection
+  (`selectGridType`). A plain click only moves the focus; a second plain click drills to one unit.
+- **Ctrl held while an order is given** sends it to the focused sub-group ALONE. The game's own
+  key list says so — `UI\HelpStrings.txt`: "Ctrl (when held issuing a command) - Send action to
+  currently active subgroup only." Every order site in `RtsController` iterates `orderees`
+  rather than `selected`; `subgroupOrders` is set from the live key state by a capture listener
+  in `attachControls`, so a right-click, a minimap click, a card button and the click that aims
+  an armed Move all see it. Iterate `selected` only for what the selection IS (rings, control
+  groups, the selection-event diff) — a new order loop over `selected` ignores Ctrl.
+
+---
+
 ## Where it lives
 
 | | |
