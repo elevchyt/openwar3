@@ -34,7 +34,7 @@
  * openings a four-player map needs.
  */
 export const GREETINGS = [
-  "glhf", "hf", "glgl", "gl hf", "hf gl", "gl", "gl & hf", "hfgl",
+  "glhf", "hf", "glgl", "gl hf", "glhf :)"
 ] as const;
 
 /** …and what it says on the way out. */

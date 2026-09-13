@@ -2580,7 +2580,7 @@ export class RtsController {
       const t = this.sim.units.get(simId);
       if (t && simId !== this.primary) {
         let any = false;
-        for (const id of this.selected) if (id !== simId && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: simId, force: true, solo: this.soloOrder(simId) }, queued: false })) any = true;
+        for (const id of this.orderees) if (id !== simId && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: simId, force: true, solo: this.soloOrder(simId) }, queued: false })) any = true;
         // Refused for everyone — a tower aimed past its range — says why and stays armed,
         // exactly as the same click on the MAP does (orderClickAt). The console is another
         // way to name a target, not another rule about what may be attacked.
@@ -2959,7 +2959,7 @@ export class RtsController {
     const heroId = hero.id;
     if (this.primary !== null && this.sim.acceptsRally(this.primary)) {
       let any = false;
-      for (const id of this.selected) {
+      for (const id of this.orderees) {
         if (this.execute(this.localPlayer, { c: "rally", unitId: id, x: hero.x, y: hero.y, kind: "unit", targetId: heroId })) any = true;
       }
       if (!any) return false;
@@ -2969,7 +2969,7 @@ export class RtsController {
     }
     // Follow, with the world click's own formation offsets — a group told to follow one body
     // holds a spread around it instead of stacking on its centre and shoving.
-    const followers = [...this.selected].filter((id) => id !== heroId);
+    const followers = [...this.orderees].filter((id) => id !== heroId);
     if (!followers.length) return false;
     const offs = followOffsets(this.sim, followers, hero);
     let any = false;
@@ -5579,7 +5579,7 @@ export class RtsController {
   private boardTransport(host: SimUnit, hostId: number): boolean {
     let room = this.sim.holdRoom(host);
     let any = false;
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       if (id === hostId || room <= 0) continue;
       const u = this.sim.units.get(id);
       if (!u || u.building || u.flying || u.garrisonCap > 0 || u.cargoSize > room) continue;
@@ -5601,7 +5601,7 @@ export class RtsController {
     const p = this.sim.units.get(picked);
     if (!p || p.building || p.flying || p.garrisonCap > 0 || !this.controls(picked)) return false;
     let any = false;
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       const t = this.sim.units.get(id);
       if (!t || !this.sim.isTransport(t) || this.sim.holdRoom(t) < p.cargoSize) continue;
       if (this.execute(this.localPlayer, { c: "load", transportId: id, unitId: picked })) any = true;
@@ -5621,7 +5621,7 @@ export class RtsController {
   /** Is a transport among the selected units? Decides what a right-click on a friendly
    *  ground unit means — pick it up, rather than follow it. */
   private selectionHasTransport(): boolean {
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       const u = this.sim.units.get(id);
       if (u && this.sim.isTransport(u)) return true;
     }
@@ -5787,7 +5787,7 @@ export class RtsController {
         // The Attack command FORCE-attacks whatever is under the cursor — including
         // friendly/own units and buildings (WC3 force attack).
         let any = false;
-        for (const id of this.selected) if (id !== picked && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true, solo: this.soloOrder(picked) }, queued: queued })) any = true;
+        for (const id of this.orderees) if (id !== picked && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true, solo: this.soloOrder(picked) }, queued: queued })) any = true;
         if (any) {
           this.orderMode = null;
           this.ack(true);
@@ -5829,7 +5829,7 @@ export class RtsController {
     if (mode === "rally") {
       const r = this.resolveRally(cssX, cssY);
       if (r) {
-        for (const id of this.selected) {
+        for (const id of this.orderees) {
           this.execute(this.localPlayer, { c: "rally", unitId: id, x: r.x, y: r.y, kind: r.kind, targetId: r.targetId });
         }
         this.rallyFeedback(r);
@@ -5903,7 +5903,7 @@ export class RtsController {
     // issueAttackMove / issuePatrol all refuse outright for a unit that cannot pursue).
     if (mode === "patrol") {
       let any = false;
-      for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "patrol", x: wx, y: wy }, queued: queued })) any = true;
+      for (const id of this.orderees) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "patrol", x: wx, y: wy }, queued: queued })) any = true;
       if (any) this.queueArrow(wx, wy, MOVE_ARROW);
     } else if (mode === "attack") {
       // distinct formation slot per unit (like move)
@@ -5975,7 +5975,7 @@ export class RtsController {
     }
     if (mode === "rally") {
       this.orderMode = null;
-      for (const id of this.selected) {
+      for (const id of this.orderees) {
         this.execute(this.localPlayer, { c: "rally", unitId: id, x: wx, y: wy, kind: "point", targetId: 0 });
       }
       this.rallyFeedback({ x: wx, y: wy, kind: "point", targetId: 0 });
@@ -6077,7 +6077,7 @@ export class RtsController {
    *  cast to each unit's order queue instead of interrupting what it is doing. */
   private castFromSelection(code: string, targetId: number, x: number, y: number, queued = false): void {
     let any = false;
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       if (this.execute(this.localPlayer, { c: "cast", unitId: id, code, targetId, x, y, queued })) any = true;
     }
     if (any) this.ack(false);
@@ -6103,7 +6103,7 @@ export class RtsController {
   private bestRefusal(errorOf: (unitId: number) => string | null): string | null {
     let worst: string | null = null;
     let worstRank = -1;
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       if (this.sim.units.get(id)?.owner !== this.localPlayer) continue;
       const err = errorOf(id);
       if (err === null) return null; // someone can cast — the order stands
@@ -6192,7 +6192,7 @@ export class RtsController {
    *  Only consulted once the order has already failed for everyone, so a mixed selection that
    *  DID attack never hears it. Returns whether something was said. */
   private refuseAttackTarget(targetId: number, commanded = false): boolean {
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       const err = this.sim.attackRefusal(id, targetId, commanded);
       if (err) {
         this.refuseOrder(err);
@@ -6375,7 +6375,7 @@ export class RtsController {
 
   /** Toggle an autocast ability (Heal, Slow, …) on the whole own selection. */
   toggleAutocast(code: string): void {
-    for (const id of this.selected) this.execute(this.localPlayer, { c: "autocast", unitId: id, code });
+    for (const id of this.orderees) this.execute(this.localPlayer, { c: "autocast", unitId: id, code });
   }
 
   /** The primary-selected unit's live sim state (for the command card + HUD). */
@@ -6403,7 +6403,7 @@ export class RtsController {
    *  `issueOrder` does the queue-clearing itself, and exempts stop from the cast-lock guard
    *  so it keeps its one special power: aborting a wind-up that has started but not fired. */
   stopSelected(): void {
-    for (const id of this.selected) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "stop" }, queued: false });
+    for (const id of this.orderees) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "stop" }, queued: false });
   }
 
   /** Hold Position on the selection: each unit plants where it stands and attacks
@@ -6418,7 +6418,7 @@ export class RtsController {
    *  for a Hold that `issueHold`'s own castLocked guard then refused ("don't even drop the
    *  queue for an ignored order", world.ts). */
   holdSelected(): void {
-    for (const id of this.selected) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "hold" }, queued: false });
+    for (const id of this.orderees) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "hold" }, queued: false });
   }
 
   /** Order the selected workers to repair a damaged friendly building. WC3
@@ -6426,7 +6426,7 @@ export class RtsController {
   private repairAt(picked: number | null, queued = false, skip?: ReadonlySet<number>): boolean {
     if (picked === null) return false;
     let any = false;
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       if (skip?.has(id)) continue; // already given this click's other meaning (orderOnBuilding)
       if (this.execute(this.localPlayer, { c: "repair", unitId: id, buildingId: picked, queued })) any = true;
     }
@@ -7992,7 +7992,7 @@ export class RtsController {
 
   /** True if the selection holds at least one unit the local player controls. */
   private hasControllable(): boolean {
-    for (const id of this.selected) if (this.controls(id)) return true;
+    for (const id of this.orderees) if (this.controls(id)) return true;
     return false;
   }
 
@@ -8010,7 +8010,7 @@ export class RtsController {
     if (this.primary !== null && this.sim.acceptsRally(this.primary)) {
       const r = this.resolveRally(cssX, cssY);
       if (r) {
-        for (const id of this.selected) {
+        for (const id of this.orderees) {
           this.execute(this.localPlayer, { c: "rally", unitId: id, x: r.x, y: r.y, kind: r.kind, targetId: r.targetId });
         }
         this.rallyFeedback(r);
@@ -8053,7 +8053,7 @@ export class RtsController {
       const gitem = g ? this.itemAt(g[0], g[1], ITEM_PICK_RADIUS) : null;
       if (gitem) {
         let any = false;
-        for (const id of this.selected) {
+        for (const id of this.orderees) {
           const u = this.sim.units.get(id);
           if (this.controls(id) && u?.inventory.length) {
             if (this.execute(this.localPlayer, { c: "getitem", unitId: id, itemId: gitem.id })) any = true;
@@ -8075,7 +8075,7 @@ export class RtsController {
         if (enemy && !target.building) {
           // Hostile UNIT: attack + red flash (constant ring, matching its hover).
           let any = false;
-          for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, solo: this.soloOrder() }, queued: queued })) any = true;
+          for (const id of this.orderees) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, solo: this.soloOrder() }, queued: queued })) any = true;
           if (any) {
             this.flashRing(target.x, target.y, selR, FLASH_RED, false, lift);
             return;
@@ -8087,7 +8087,7 @@ export class RtsController {
           // FORCED — the same "attack that anyway" a force-attack command issues. Red flash,
           // because breaking it is what the click means.
           let any = false;
-          for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true, solo: this.soloOrder() }, queued: queued })) any = true;
+          for (const id of this.orderees) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true, solo: this.soloOrder() }, queued: queued })) any = true;
           if (any) {
             this.flashRing(target.x, target.y, selR, FLASH_RED, false, lift);
             return;
@@ -8119,7 +8119,7 @@ export class RtsController {
           // marshalling large forces or scouting a unit you can't attack (WC3). Fan
           // the group into distinct slots around the leader (formation offsets) so
           // they hold a spread instead of stacking on its centre and shoving.
-          const followers = [...this.selected].filter((id) => id !== picked);
+          const followers = [...this.orderees].filter((id) => id !== picked);
           const offs = followOffsets(this.sim, followers, target);
           let any = false;
           for (const id of followers) {
@@ -8155,7 +8155,7 @@ export class RtsController {
       // and would otherwise fall straight through to a plain move and stand beside the rock.
       // Uprooted only, like the button itself (UPROOTED_ONLY) — a planted one is a building,
       // and its right-click is the rally point it never got past `acceptsRally` anyway.
-      const trees = [...this.selected].filter((id) => {
+      const trees = [...this.orderees].filter((id) => {
         const t = this.sim.units.get(id);
         return !!t?.uprooted && t.abilities.some((a) => a.code === "Aent" && a.level >= 1);
       });
@@ -8183,7 +8183,7 @@ export class RtsController {
       // Asked before the harvest below because an Ancient is not a worker and would otherwise
       // fall through to a plain move and stand beside the trunk doing nothing — the same shape
       // of bug the Tree of Life's right-click on a gold mine had.
-      const eaters = [...this.selected].filter((id) => {
+      const eaters = [...this.orderees].filter((id) => {
         const a = this.sim.units.get(id);
         return !!a?.uprooted && a.abilities.some((ab) => ab.code === "Aeat" && ab.level >= 1);
       });
@@ -8234,7 +8234,7 @@ export class RtsController {
         return true;
       }
     }
-    const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker?.gold);
+    const workers = [...this.orderees].filter((id) => !!this.sim.units.get(id)?.worker?.gold);
     const spread = ringTargets(this.sim, workers, mine.x, mine.y, mine.radius, MINE_APPROACH_SPREAD);
     let any = false;
     for (const id of workers) {
@@ -8255,7 +8255,7 @@ export class RtsController {
    */
   private sendToTrees(tree: { id: number; x: number; y: number }, queued: boolean): boolean {
     const workers: number[] = [];
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       if (this.sim.units.get(id)?.worker?.lumber) workers.push(id);
     }
     if (!workers.length) return false;
@@ -8314,7 +8314,7 @@ export class RtsController {
    *  gather cursor for the workers that are empty-handed. */
   returnResourcesSelected(): boolean {
     let any = false;
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "returnresources" }, queued: false })) any = true;
     }
     if (any) this.ack(false);
@@ -8326,7 +8326,7 @@ export class RtsController {
    *  unit alone, so a tower swept up with a group of soldiers doesn't silence the group's
    *  right-click: the soldiers still walk, and the tower still ignores it. */
   private selectionIsPlanted(): boolean {
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       const u = this.sim.units.get(id);
       if (u && (!u.building || u.uprooted)) return false;
     }
@@ -8349,7 +8349,7 @@ export class RtsController {
     const destructible = !!target.targetKey;
     if (!destructible && !this.sim.hostile(prim, target)) return;
     let any = false;
-    for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: destructible, solo: this.soloOrder() }, queued })) any = true;
+    for (const id of this.orderees) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: destructible, solo: this.soloOrder() }, queued })) any = true;
     if (any) {
       const e = this.byId.get(picked);
       this.flashRing(target.x, target.y, e?.selRadius ?? target.radius, FLASH_RED, !!target.building, e?.moveHeight ?? 0);
@@ -8441,7 +8441,7 @@ export class RtsController {
    *  loops there skip it, so it is not one of the recipients being counted. */
   private soloOrder(except?: number): boolean {
     let n = 0;
-    for (const id of this.selected) if (id !== except) n++;
+    for (const id of this.orderees) if (id !== except) n++;
     return n === 1;
   }
 
@@ -8450,7 +8450,7 @@ export class RtsController {
    *  worker) else move, green; allied/neutral → move, yellow. */
   private orderOnBuilding(target: SimUnit, picked: number, enemy: boolean, selR: number, queued: boolean): void {
     if (enemy) {
-      for (const id of this.selected) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, solo: this.soloOrder() }, queued: queued });
+      for (const id of this.orderees) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, solo: this.soloOrder() }, queued: queued });
       this.flashRing(target.x, target.y, selR, FLASH_RED);
       return;
     }
@@ -8468,7 +8468,7 @@ export class RtsController {
       // fire). Both can happen at once in a mixed selection: the workers repair, the rest drink.
       const mending = own && target.hp < target.maxHp;
       let any = false;
-      for (const id of this.selected) {
+      for (const id of this.orderees) {
         if (mending && this.sim.units.get(id)?.worker) continue;
         if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "drink", wellId: picked }, queued })) any = true;
       }
@@ -8489,7 +8489,7 @@ export class RtsController {
     // before the resume branch, which an Undead structure has no use for (nobody builds it).
     if (!enemy && target.mineId && this.sim.hauntedMine(target.mineId, true)) {
       let any = false;
-      for (const id of this.selected) {
+      for (const id of this.orderees) {
         if (!this.sim.units.get(id)?.worker?.minesInRing) continue;
         if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "harvest", res: "gold", nodeId: target.mineId }, queued })) any = true;
       }
@@ -8522,7 +8522,7 @@ export class RtsController {
     // rest of the selection is still ordered below, as though they had been clicked alone.
     const carriers = new Set<number>();
     if (own && target.building && target.building.constructionLeft <= 0 && (target.depotGold || target.depotLumber)) {
-      for (const id of this.selected) {
+      for (const id of this.orderees) {
         const w = this.sim.units.get(id)?.worker;
         if (!w || !((w.carryGold > 0 && target.depotGold) || (w.carryLumber > 0 && target.depotLumber))) continue;
         if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "returnresources", depotId: picked }, queued })) carriers.add(id);
@@ -8533,7 +8533,7 @@ export class RtsController {
       // Own building still going up: workers resume/assist it. Fan the group
       // around the footprint (distinct approach points) so they don't all walk
       // onto the one centre point and shove — WC3 builders spread over a structure.
-      const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker);
+      const workers = [...this.orderees].filter((id) => !!this.sim.units.get(id)?.worker);
       // Speed-build: fan the builders WIDE around the structure (extra spacing) so
       // they ring the whole footprint instead of bunching on the near edge and
       // shoving. A gold-mine approach stays tight; this doesn't need to.
@@ -8546,7 +8546,7 @@ export class RtsController {
     } else if (own && target.hp < target.maxHp) {
       handled = this.repairAt(picked, queued, carriers); // own damaged building: workers repair
     }
-    if (!handled && carriers.size < this.selected.size) this.groupMoveTo(target, picked, queued, carriers); // walk up to it (no arrow)
+    if (!handled && carriers.size < this.orderees.size) this.groupMoveTo(target, picked, queued, carriers); // walk up to it (no arrow)
     this.flashRing(target.x, target.y, selR, own ? FLASH_GREEN : FLASH_YELLOW);
   }
 
@@ -8567,7 +8567,7 @@ export class RtsController {
   private manHold(host: SimUnit, hostId: number): boolean {
     const room = host.garrisonCap - host.garrison.length;
     if (room <= 0) return false;
-    const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker).slice(0, room);
+    const workers = [...this.orderees].filter((id) => !!this.sim.units.get(id)?.worker).slice(0, room);
     let any = false;
     for (const id of workers) if (this.execute(this.localPlayer, { c: "garrison", unitId: id, buildingId: hostId })) any = true;
     return any;
@@ -8576,7 +8576,7 @@ export class RtsController {
   /** Issue a formation move for the whole selection to a ground point (or queue
    *  each unit's slot move when Shift is held). */
   private groupMove(tx: number, ty: number, queued = false): boolean {
-    const targets = groupTargets(this.sim, [...this.selected], tx, ty);
+    const targets = groupTargets(this.sim, [...this.orderees], tx, ty);
     let any = false;
     for (const [id, [x, y]] of targets) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "move", x, y }, queued: queued })) any = true;
     return any; // …did anyone actually take it? The ground arrow hangs off this
@@ -8591,7 +8591,7 @@ export class RtsController {
    *  spot no better than the one they were standing next to. Aimed at the target itself,
    *  each unit stops on the side it approached from and the group packs in from there. */
   private groupMoveTo(target: SimUnit, targetId: number, queued = false, skip?: ReadonlySet<number>): void {
-    for (const id of this.selected) {
+    for (const id of this.orderees) {
       if (skip?.has(id)) continue;
       this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "move", x: target.x, y: target.y, targetId }, queued: queued });
     }
@@ -8602,7 +8602,7 @@ export class RtsController {
    *  spread out there instead of cramming on one tile — but issued as attack-move, so
    *  each unit fights the nearest enemy in its path and resumes to its slot afterwards. */
   private groupAttackMove(tx: number, ty: number, queued = false): boolean {
-    const targets = groupTargets(this.sim, [...this.selected], tx, ty);
+    const targets = groupTargets(this.sim, [...this.orderees], tx, ty);
     let any = false;
     for (const [id, [x, y]] of targets) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attackmove", x, y }, queued: queued })) any = true;
     return any;
