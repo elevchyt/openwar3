@@ -8,7 +8,7 @@ import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
-import { savedPlayerName } from "./fdfLan";
+import { profilePlayerName } from "../data/profiles";
 import { VISIBILITY_ITEMS, visibilityFog, type Visibility } from "../net/advancedOptions";
 import { freeColorsFor, swapColors } from "../net/lobbySetup";
 import { OBSERVER_PLAYER, meleeSeat, type Controller, type FogMode, type MeleeConfig, type SlotConfig } from "./lobby";
@@ -320,7 +320,7 @@ export async function mountSkirmish(
         // when the checkbox is ticked"). A slot the MAP owns still shows the plain label —
         // there is no choice on that row to make.
         name.setOptions(
-          mine ? [{ value: "user", label: "Player" }]
+          mine ? [{ value: "user", label: profilePlayerName() }]
           : slot.locked ? [{ value: "computer", label: labelOf("computer") }]
           : slotOptionsFor(advanced.computerPlus).map((o) => ({ value: o.value, label: o.label })),
         );
@@ -564,9 +564,9 @@ function toConfig(
         // Which computer the row picked, and which AI plays it. Only a computer has either
         // — see SlotConfig.
         ...(s.controller === "computer" ? { aiDifficulty: s.ai, aiPlus: opts.computerPlus } : {}),
-        // The one seat a human is in on this screen is theirs, under the name the profile
-        // saved — the loading screen's roster is the only thing that reads it.
-        ...(s.controller === "user" ? { playerName: savedPlayerName() } : {}),
+        // The one seat a human is in on this screen is theirs, under the PROFILE in play — the
+        // loading screen's roster and every in-game name read it (`playerLabels`).
+        ...(s.controller === "user" ? { playerName: profilePlayerName() } : {}),
       };
     });
   // The map's neutral/rescuable players had no row to be seated in and are in the match all

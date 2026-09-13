@@ -26,6 +26,7 @@ import { onServersFound } from "./assets/nativeInstall";
 import { watchForUpdates } from "./ui/updatePrompt";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
+import { profilePlayerName } from "./data/profiles";
 import { applyVideoOptions } from "./render/videoQuality";
 import { applyHealthBarOptions } from "./render/worldOverlays";
 import { applyHotkeyOptions } from "./data/hotkeys";
@@ -523,9 +524,9 @@ function campaignConfig(info: MapInfo, difficulty: Difficulty, title: string): M
     startX: s.startX,
     startY: s.startY,
     name: s.name, // the map's own name for the side ("Illidan's Naga"), for the hover tooltip
-    // …and, in the seat the player is actually in, who they are — the loading screen's roster
-    // never shows for a chapter (it is not a melee map), but the seating is the same shape.
-    ...(i === local ? { playerName: savedPlayerName() } : {}),
+    // …and, in the seat the player is actually in, who they are: the profile the chapter is
+    // being played on (data/profiles.ts `profilePlayerName`), not the LAN screen's typed name.
+    ...(i === local ? { playerName: profilePlayerName() } : {}),
   });
   // The map's neutral/rescuable players ride along at the end, keeping the controller the map
   // gave them — they are nobody's AI and nobody's seat, but they own units and the mission

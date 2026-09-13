@@ -98,6 +98,21 @@ export function activeProfile(): string | null {
   return read().active;
 }
 
+/**
+ * The name the local player plays under in a SINGLE-PLAYER match — the Custom Game screen's own
+ * row, the loading screen's roster and every in-game name (`GetPlayerName`, the owner line, chat).
+ * It is the profile in play: the Single Player screen will not let a game start without one,
+ * so a profile name is who you are there. The LAN screens keep their own typed name
+ * (`savedPlayerName`, ui/fdfLan.ts) — that is the name a machine announces itself under, and
+ * not the same thing as whose campaign this is.
+ *
+ * "Player" only when no profile exists at all (a dev boot straight into a map), which is also
+ * what the slot row showed before profiles were read here.
+ */
+export function profilePlayerName(): string {
+  return activeProfile() ?? "Player";
+}
+
 /** Put `name` in play. Silently ignored for a profile that doesn't exist. */
 export function selectProfile(name: string): void {
   const store = read();
