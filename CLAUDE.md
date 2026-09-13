@@ -229,7 +229,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `REQUIRESTOOLTIP` bakes its colour into the string and it is **yellow**, and the two empty-shelf strings are two
   strings on purpose ("Out of stock" against a `stockStart` that has not come round yet, "Coming soon"). The border
   is a 128×16 strip whose tile is a 4-texel stroke in 16 transparent ones, so the visible rule is a QUARTER of the
-  band — size the band off the type, not off the ink.
+  band — size the band off the type, not off the ink. The info panel's Damage / Armor / Hero Attributes hover
+  slabs are the same slab, worded entirely out of `UI\FrameDef\InfoPanelStrings.fdf`, with range and speed printed
+  as WORDS off `UI\MiscData.txt` [InfoPanel] and "Damage Reduction" computed off the UNROUNDED armour (a Death
+  Knight's `realdef` 2.6 reads "3" on the panel and "13%" in the slab).
 - **Selection & clicking:** read [`docs/selection.md`](docs/selection.md) before touching `pickAt`,
   the drag box, or [`src/render/modelCollision.ts`](src/render/modelCollision.ts). A click is a RAY
   against the model's own `COLLISIONSHAPE` nodes — 440 of the 530 models `UnitUI.slk` names carry

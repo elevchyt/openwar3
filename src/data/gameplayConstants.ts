@@ -432,6 +432,52 @@ export const GLUE = {
 } as const;
 
 /**
+ * `UI\MiscData.txt` [InfoPanel] — the words the info panel's Damage and Armor hover slabs print
+ * for a unit's RANGE and its two SPEEDS. The game does not show the numbers: a 100-range weapon
+ * is "Melee", a 320 walk is "Fast", a 1.77 s swing is "Average", and these are the bands.
+ *
+ * The file's own comments settle which way each end is open: `SpeedVerySlow` is a LOWER bound
+ * ("everything below this is very slow") and `SpeedFast` an UPPER one ("everything above this
+ * is very fast"); the attack rungs run the other way round, since a longer cooldown is a SLOWER
+ * attack. The cooldown banded is the live one, agility and haste already divided in — which is
+ * why a Death Knight's 2.2 s `cool1` reads "Average" at 12 Agility and not "Slow".
+ */
+export const INFO_PANEL = {
+  /** A weapon reaching this far or less is "Melee" rather than a number. */
+  MeleeRangeMax: 128,
+  SpeedVerySlow: 175,
+  SpeedSlow: 220,
+  SpeedAverage: 280,
+  SpeedFast: 350,
+  AttackVerySlow: 3,
+  AttackSlow: 2,
+  AttackAverage: 1.5,
+  AttackFast: 1,
+} as const;
+
+/** The five-rung speed word as a `GlobalStrings.fdf` key — `MOVESPEEDVERYSLOW` … `MOVESPEEDVERYFAST`,
+ *  the only rungs of that vocabulary the game ships, so the attack line borrows them too. */
+export type SpeedRung = "MOVESPEEDVERYSLOW" | "MOVESPEEDSLOW" | "MOVESPEEDAVERAGE" | "MOVESPEEDFAST" | "MOVESPEEDVERYFAST";
+
+/** A move speed's rung, off `INFO_PANEL.Speed*`. */
+export function moveSpeedRung(speed: number): SpeedRung {
+  if (speed < INFO_PANEL.SpeedVerySlow) return "MOVESPEEDVERYSLOW";
+  if (speed < INFO_PANEL.SpeedSlow) return "MOVESPEEDSLOW";
+  if (speed < INFO_PANEL.SpeedAverage) return "MOVESPEEDAVERAGE";
+  if (speed <= INFO_PANEL.SpeedFast) return "MOVESPEEDFAST";
+  return "MOVESPEEDVERYFAST";
+}
+
+/** An attack cooldown's rung, off `INFO_PANEL.Attack*` (seconds between swings). */
+export function attackSpeedRung(cooldown: number): SpeedRung {
+  if (cooldown > INFO_PANEL.AttackVerySlow) return "MOVESPEEDVERYSLOW";
+  if (cooldown >= INFO_PANEL.AttackSlow) return "MOVESPEEDSLOW";
+  if (cooldown >= INFO_PANEL.AttackAverage) return "MOVESPEEDAVERAGE";
+  if (cooldown >= INFO_PANEL.AttackFast) return "MOVESPEEDFAST";
+  return "MOVESPEEDVERYFAST";
+}
+
+/**
  * `UI\MiscData.txt` [Misc] — the ENGINE's own floating text tags, one spec per kind.
  *
  * The game does not eyeball these: it keeps a colour, a drift, a lifetime and a fade point

@@ -698,7 +698,10 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       mana: isHero && realm > 0 ? realm : b ? num(b, "manaN", 0) : 0,
       manaStart: b ? num(b, "mana0", 0) : 0,
       manaRegen: b ? num(b, "regenMana", 0) : 0,
-      armor: Math.round(isHero && realdef > 0 ? realdef : b ? num(b, "def", 0) : 0),
+      // NOT rounded: armour is a real in WC3 and a hero's is fractional off its Agility
+      // (`realdef` 2.6 on a Death Knight — 1 − 2 + 12×0.3). The info panel prints 3, and the
+      // Armor slab's "Damage Reduction: 13%" is only right off the 2.6.
+      armor: isHero && realdef > 0 ? realdef : b ? num(b, "def", 0) : 0,
       defUp: b ? num(b, "defUp", 0) : 0,
       stockMax: b ? num(b, "stockMax", 0) : 0,
       stockRegen: b ? num(b, "stockRegen", 0) : 0,

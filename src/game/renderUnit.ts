@@ -35,6 +35,10 @@ export interface RenderWeapon {
   readonly damage: number;
   readonly dice: number;
   readonly sides: number;
+  /** The Damage hover slab's "Range:" and "Speed:" lines — the live reach and the live
+   *  seconds between swings, upgrades and attack speed already applied. */
+  readonly range: number;
+  readonly cooldown: number;
 }
 
 /**

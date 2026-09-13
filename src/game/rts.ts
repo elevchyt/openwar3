@@ -144,6 +144,16 @@ export interface SelectionInfo {
   armorType: ArmorType; // → the damage-table column (info-card icon)
   attackUpgrade: number; // level of the owner's melee/ranged research, printed IN the icon; -1 = none reaches this type
   armorUpgrade: number; // level of the owner's armour research, printed IN the icon; -1 = none reaches this type
+  /** The Damage / Armor hover slabs' "Upgrade:" lines — the research's NAME at the level the
+   *  owner holds ("Unholy Strength" at 0 and 1, "Improved Unholy Strength" at 2). "" = none. */
+  attackUpgradeName: string;
+  armorUpgradeName: string;
+  /** The LIVE armour, unrounded — what "Damage Reduction" is computed from. A hero's is
+   *  fractional (`realdef` 2.6 on a Death Knight): the panel prints 3 and the slab says 13 %. */
+  armorTotal: number;
+  attackRange: number; // the live weapon's reach — "Range: Melee" at MeleeRangeMax or less
+  attackCooldown: number; // seconds between swings, attack speed divided in — the "Speed:" rung
+  moveSpeed: number; // live move speed — the Armor slab's "Move Speed:" rung (0 = never moves)
   isHero: boolean;
   properName: string; // hero's given name ("Painkiller"); "" for non-heroes
   level: number;
@@ -6441,7 +6451,7 @@ export class RtsController {
       id: -2000 - itemId, // synthetic, negative — never clashes with a unit/mine id
       typeId: it.itemId, race: "", name: def?.name || it.itemId, owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: false, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, isHero: false, isIllusion: false, altModel: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, attackUpgradeName: "", armorUpgradeName: "", armorTotal: 0, attackRange: 0, attackCooldown: 0, moveSpeed: 0, isHero: false, isIllusion: false, altModel: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -6468,7 +6478,7 @@ export class RtsController {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: true, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, isHero: false, isIllusion: false, altModel: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, attackUpgradeName: "", armorUpgradeName: "", armorTotal: 0, attackRange: 0, attackCooldown: 0, moveSpeed: 0, isHero: false, isIllusion: false, altModel: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -6525,11 +6535,12 @@ export class RtsController {
    *  both sides already hold — unlike the LEVEL, which is the owner's research and rides on
    *  the unit so that clicking an enemy still scouts it. Cached: fixed per type, asked every
    *  frame the panel draws. */
-  private upgradeBoxCache = new Map<string, { attack: boolean; armor: boolean }>();
-  private upgradeBoxes(typeId: string): { attack: boolean; armor: boolean } {
+  private upgradeBoxCache = new Map<string, { attack: boolean; armor: boolean; attackId: string; armorId: string }>();
+  private upgradeBoxes(typeId: string): { attack: boolean; armor: boolean; attackId: string; armorId: string } {
     const hit = this.upgradeBoxCache.get(typeId);
     if (hit) return hit;
-    const boxes = { attack: false, armor: false };
+    // The ids ride along for the hover slabs' "Upgrade:" line, which names the research.
+    const boxes = { attack: false, armor: false, attackId: "", armorId: "" };
     const def = this.registry.get(typeId);
     if (def?.isBuilding) {
       this.upgradeBoxCache.set(typeId, boxes);
@@ -6537,8 +6548,13 @@ export class RtsController {
     }
     for (const upId of def?.upgradesUsed ?? []) {
       const cls = this.upgrades.get(upId)?.className;
-      if (cls === "melee" || cls === "ranged") boxes.attack = true;
-      else if (cls === "armor") boxes.armor = true;
+      if (cls === "melee" || cls === "ranged") {
+        boxes.attack = true;
+        boxes.attackId ||= upId;
+      } else if (cls === "armor") {
+        boxes.armor = true;
+        boxes.armorId ||= upId;
+      }
     }
     this.upgradeBoxCache.set(typeId, boxes);
     return boxes;
@@ -6665,6 +6681,12 @@ export class RtsController {
       // icon and prints nothing (see upgradeBoxes). A 0 means "researchable, not yet".
       attackUpgrade: upgradeBoxes.attack ? u.attackUpgrade : -1,
       armorUpgrade: upgradeBoxes.armor ? u.armorUpgrade : -1,
+      attackUpgradeName: upgradeBoxes.attack ? this.upgrades.name(upgradeBoxes.attackId, u.attackUpgrade) : "",
+      armorUpgradeName: upgradeBoxes.armor ? this.upgrades.name(upgradeBoxes.armorId, u.armorUpgrade) : "",
+      armorTotal: u.armor,
+      attackRange: w?.range ?? 0,
+      attackCooldown: w?.cooldown ?? 0,
+      moveSpeed: u.speed,
       isHero: u.isHero,
       properName: u.properName,
       // Heroes carry their LIVE level/attributes on the sim unit (they grow with

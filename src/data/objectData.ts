@@ -105,6 +105,8 @@ function shadowName(v: string): string {
 }
 
 const bool01 = (v: Val): boolean => n(v) === 1;
+/** An armour value with the float noise of the Agility fold cleared (13 × 0.3 is 3.9000000000000004). */
+const snapArmor = (v: number): number => Math.round(v * 1e6) / 1e6;
 
 /** One weapon SLOT, addressed the way the `ua1*` / `ua2*` code families do. A row that
  *  declares no such slot simply ignores the override, exactly as the SLK loader does. */
@@ -554,10 +556,12 @@ function applyMods(def: UnitDef, mods: Array<{ id: string; value: Val }>, trigSt
   else if (hero) def.hitPoints += (def.strength - was.str) * MISC_GAME.StrHitPointBonus;
   if (rawMana !== undefined) def.mana = rawMana + (hero ? def.intelligence * MISC_GAME.IntManaBonus : 0);
   else if (hero) def.mana += (def.intelligence - was.int) * MISC_GAME.IntManaBonus;
+  // Unrounded, as the SLK's own `realdef` is (units.ts): the 0.3-per-point fold leaves tenths,
+  // and "Damage Reduction" is computed off them. Snapped only to clear the float noise.
   if (rawArmor !== undefined) {
-    def.armor = Math.round(rawArmor + (hero ? MISC_GAME.AgiDefenseBase + def.agility * MISC_GAME.AgiDefenseBonus : 0));
+    def.armor = snapArmor(rawArmor + (hero ? MISC_GAME.AgiDefenseBase + def.agility * MISC_GAME.AgiDefenseBonus : 0));
   } else if (hero) {
-    def.armor = Math.round(def.armor + (def.agility - was.agi) * MISC_GAME.AgiDefenseBonus);
+    def.armor = snapArmor(def.armor + (def.agility - was.agi) * MISC_GAME.AgiDefenseBonus);
   }
   const primary = primaryVal(def);
   def.weapons.forEach((w, i) => {

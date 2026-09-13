@@ -148,7 +148,10 @@ early. `width: max-content` with `max-width` doing the wrapping is the fix.
 Where it wraps is stated in **ems of its own body text** (`TOOLTIP_BOX.wrapEm`), because that is
 the relationship the shot shows — the box is as wide as the text it has to fit. The number is
 ours; the shot is what it matches: an Ancient of War's Ubertip breaks after "Keeper of primary
-assault troops. Trains Archers," — 48 characters, where ours broke at 35.
+assault troops. Trains Archers," — 48 characters, where ours broke at 35. The info panel's
+slabs (below) share the box and pinned it tighter: measured in Friz Quadrata, "Hero attacks do
+reduced damage to Fortified armor." has to fit whole while "Normal attacks do extra damage
+against Medium" has to break before "armor," — a window of 25.2–27.3 em, hence `26.25`.
 
 Also from the shot, and also ours: leading is **tight** (1.2, not the 1.4 that opened the body
 into a paragraph), and a cost icon is the **height of the digit beside it** — the art is 32
@@ -192,6 +195,42 @@ one refusal the card states in **advance**, because it is the one you cannot fix
 `ITEM_PAWN_TOOLTIP` is the only place the game ever tells you that dropping an item onto a shop
 sells it. It is grey because it is an affordance and not an instruction, and it is gated on the
 item's own **`ipaw`** — a quest item cannot be pawned, so the offer does not apply to it.
+
+## The info panel's three slabs: Damage, Armor, Hero Attributes
+
+Hovering the Damage icon, the Armor icon or a hero's primary-attribute icon raises the same slab,
+in the same place. Every word is in **`UI\FrameDef\InfoPanelStrings.fdf`** — the table
+`FrameDef.toc` loads second, right after GlobalStrings — so `FdfLibrary.load` reads both, and
+`Hud.statTooltipHtml` composes them exactly as the client lays them out:
+
+```
+Damage: 25 - 35                          Armor: 3
+Type: Hero            DAMAGE_HERO        Type: Hero                ARMOR_HERO
+Range: Melee          COLON_RANGE+MELEE  Damage Reduction: 13%     COLON_DAMAGE_REDUCTION
+Speed: Average        COLON_SPEED        Move Speed: Fast          COLON_MOVE_SPEED
+Upgrade: Unholy Strength - Level 0       Upgrade: Unholy Armor - Level 0   (UPGRADE_TOOLTIP)
+Hero attacks do reduced damage …         Heroes take reduced damage …      (DAMAGETIP_/ARMORTIP_)
+```
+
+* The four fact lines are **grey** and the explanation under them white; the gold on the type
+  name is the string's own `|Cffffcc00`. The grey is not in any string — it is matched off the
+  real client.
+* The game prints **words, not numbers**, for range and both speeds, and the bands are
+  `UI\MiscData.txt` **[InfoPanel]** (`INFO_PANEL` in gameplayConstants): `MeleeRangeMax=128`,
+  `Speed*` for walking, `Attack*` for the cooldown. The cooldown banded is the LIVE one, with
+  agility divided in — a Death Knight's 2.2 s `cool1` is "Average" at 12 Agility. There are no
+  attack-speed words in the tables, so both lines use `MOVESPEED*`.
+* **Damage Reduction is computed off the unrounded armour.** A hero's armour is fractional —
+  `realdef` 2.6 on a Death Knight — and the client prints "3" on the panel but "13%" in the slab
+  (2.6 → 13.5 %; 3 would be 15 %). That is why `UnitDef.armor` is no longer rounded at load.
+* The Upgrade line appears only where the panel's corner box does (`upgradeBoxes`), and names the
+  research at the owner's level (`UpgradeRegistry.name`, which clamps level 0 to the first name).
+* Hero Attributes: `COLON_HERO_ATTRIBUTES`, an empty line, then one block per attribute; the
+  primary one carries ` - ` + `PRIMARY_ATTRIBUTE` and the damage line. The per-point numbers are
+  MiscGame's (`StrAttackBonus`, `StrHitPointBonus`, `IntManaBonus`, and `BONUS_DEFENSE_FIXED`
+  with 1 / `AgiDefenseBonus` = 3).
+* The file also carries `_V0C`/`_V0M` twins of every tip — the Reign of Chaos damage tables. We
+  read the TFT rows.
 
 ## The engine's own command buttons
 

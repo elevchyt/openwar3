@@ -5,7 +5,10 @@
 // used when available (asset-resolver philosophy: authentic when present).
 
 import { ArmorType, AttackType, PrimaryAttribute } from "../data/enums";
-import { ALLY_DOT_COLOR, campMarker, ENEMY_DOT_COLOR, NEUTRAL_DOT_COLOR, SELF_DOT_COLOR } from "../data/gameplayConstants";
+import {
+  ALLY_DOT_COLOR, armorDamageReduction, attackSpeedRung, campMarker, ENEMY_DOT_COLOR, INFO_PANEL, MISC_GAME, moveSpeedRung,
+  NEUTRAL_DOT_COLOR, SELF_DOT_COLOR,
+} from "../data/gameplayConstants";
 import type { MinimapPing } from "../jass/runtime";
 import { escapeHtml, wc3StripMarkup, wc3ToHtml } from "./wc3Text";
 
@@ -154,6 +157,12 @@ export interface HudSelection {
   armorType: ArmorType;
   attackUpgrade: number; // level of the owner's melee/ranged research; NEGATIVE = none reaches this unit
   armorUpgrade: number; // level of the owner's armour research; NEGATIVE = none reaches this unit
+  attackUpgradeName: string; // that research's name at the owner's level ("" = none) — the slab's "Upgrade:" line
+  armorUpgradeName: string;
+  armorTotal: number; // live armour, UNROUNDED — the Armor slab's "Damage Reduction"
+  attackRange: number; // live weapon reach — "Range: Melee" at MeleeRangeMax or less
+  attackCooldown: number; // live seconds between swings — the "Speed:" rung
+  moveSpeed: number; // live move speed — the "Move Speed:" rung (0 = never moves: no line)
   isHero: boolean;
   properName: string; // hero's given name ("Painkiller"); "" for non-heroes
   level: number;
@@ -902,8 +911,15 @@ const TOOLTIP_BOX = {
    * where ours broke at 35. Stated in ems (not in UI units) because that IS the relationship
    * the shot shows: the box is as wide as the text it has to fit, so it tracks ToolTipDesc and
    * cannot drift out of step with it. The number itself is OURS; the shot is what it matches.
+   *
+   * 24 honoured that break and was still a word short for the info panel's slabs, which share
+   * this box: four more breaks off the real client pin it tighter. Measured in Friz Quadrata
+   * against ToolTipDesc, the CONTENT (this less both `pad`s, 0.9 em) must fit "Hero attacks do
+   * reduced damage to Fortified armor." whole (24.3 em) and "Heroes take reduced damage from
+   * Piercing, Magic," (24.0), and must break "Normal attacks do extra damage against Medium" before
+   * "armor," (26.4) and "…Magic," before "Siege" (26.9). 26.25 sits in the middle of that window.
    */
-  wrapEm: 24,
+  wrapEm: 26.25,
   /** …and a floor, so a one-word tip ("Cancel") isn't a tall sliver. Ours. */
   minEm: 13,
 } as const;
@@ -1260,6 +1276,9 @@ export class GameHud {
    *  every writer goes through `setTooltip`, or the memo would lie about what is on screen. */
   private tooltipHtml = "";
   private buffHover = -1; // Status-line slot under the cursor, so an expiring buff drops its tooltip
+  /** Which info-panel ICON is under the cursor — Damage, Armor or the hero's primary attribute —
+   *  so its slab re-reads the live numbers (a buff lands, a level comes in) while it is up. */
+  private statHover: StatTip | null = null;
   private cmdSlots: HTMLButtonElement[] = [];
   private cmdLabels: HTMLSpanElement[] = []; // per-slot fallback text (icon-less buttons)
   private cmdCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
@@ -1529,6 +1548,7 @@ export class GameHud {
     if (this.textT >= TEXT_PERIOD) {
       this.textT = 0;
       this.updateTexts();
+      this.refreshStatTooltip(); // at the panel's own rate: it reads the numbers the panel just drew
     }
     // A live ping PULSES, so while one is up the minimap redraws every frame instead of at
     // the 10 Hz the static dots are content with.
@@ -2948,6 +2968,9 @@ export class GameHud {
     const rightCol = document.createElement("div");
     rightCol.className = "hud-attr-col";
     rightCol.append(this.attrIconEl, this.attrLines);
+    this.bindStatTooltip(this.attackStat.icon, "attack");
+    this.bindStatTooltip(this.armorStat.icon, "armor");
+    this.bindStatTooltip(this.attrIconEl, "attributes");
     const cols = document.createElement("div");
     cols.className = "hud-stat-cols";
     cols.append(leftCol, rightCol);
@@ -3388,7 +3411,7 @@ export class GameHud {
     if (!btn?.matches(":hover")) {
       this.cmdHover = -1;
       // Another slab owner (an item, a buff) may already have taken over; leave its text up.
-      if (this.invHover < 0 && this.buffHover < 0) this.cmdTooltip.hidden = true;
+      if (this.invHover < 0 && this.buffHover < 0 && !this.statHover) this.cmdTooltip.hidden = true;
       return;
     }
     const slot = this.cmdHover;
@@ -3853,6 +3876,121 @@ export class GameHud {
   }
 
 
+  /** Hovering an info-panel icon raises its slab in the command tooltip's place. */
+  private bindStatTooltip(el: HTMLElement, which: StatTip): void {
+    el.addEventListener("pointerenter", () => {
+      this.statHover = which;
+      this.refreshStatTooltip();
+    });
+    el.addEventListener("pointerleave", () => {
+      if (this.statHover !== which) return;
+      this.statHover = null;
+      this.cmdTooltip.hidden = true;
+    });
+  }
+
+  /** Re-draw the hovered icon's slab off the CURRENT selection, or take it down when the icon
+   *  has gone — hidden from under the pointer (a multi-select, a building queue) sends no
+   *  `pointerleave`, the same trap `refreshCmdTooltip` asks `:hover` about. */
+  private refreshStatTooltip(): void {
+    const which = this.statHover;
+    if (!which) return;
+    const el = which === "attack" ? this.attackStat.icon : which === "armor" ? this.armorStat.icon : this.attrIconEl;
+    const sel = this.driver.selection();
+    const html = sel && el.matches(":hover") && el.getClientRects().length > 0 ? this.statTooltipHtml(which, sel) : "";
+    if (!html) {
+      this.statHover = null;
+      this.cmdTooltip.hidden = true;
+      return;
+    }
+    this.setTooltip(html);
+  }
+
+  /**
+   * The info panel's three hover slabs, composed as the game composes them — every word out of
+   * `UI\FrameDef\InfoPanelStrings.fdf` (plus `COLON_ARMOR`/`COLON_HERO_ATTRIBUTES` and the speed
+   * words, which live in GlobalStrings), the bands out of `UI\MiscData.txt` [InfoPanel]:
+   *
+   *   Damage: 25 - 35                      Armor: 3
+   *   Type: Hero          (grey)           Type: Hero                 (grey)
+   *   Range: Melee        (grey)           Damage Reduction: 13%      (grey)
+   *   Speed: Average      (grey)           Move Speed: Fast           (grey)
+   *   Upgrade: … - Level 0 (grey, if any)  Upgrade: … - Level 0       (grey, if any)
+   *   DAMAGETIP_HERO                       ARMORTIP_HERO
+   *
+   * and the hero's "Hero Attributes:" slab, one block per attribute with the PRIMARY one
+   * flagged and carrying the damage line. The per-point numbers are MiscGame's, never retyped.
+   */
+  private statTooltipHtml(which: StatTip, sel: HudSelection): string {
+    const str = (key: string): string => this.driver.uiString(key, "");
+    const title = (html: string): string => `<div class="hud-tooltip-title">${html}</div>`;
+    const stats = (lines: string[]): string =>
+      `<div class="hud-tooltip-desc hud-tooltip-stats">${lines.filter(Boolean).map(wc3ToHtml).join("<br>")}</div>`;
+    const tip = (key: string): string => {
+      const t = str(key);
+      return t ? `<div class="hud-tooltip-desc">${wc3ToHtml(t)}</div>` : "";
+    };
+    const upgrade = (name: string, level: number): string =>
+      name ? `${str("COLON_UPGRADE")} ${fdfFormat(str("UPGRADE_TOOLTIP"), name, Math.max(0, level))}` : "";
+    if (which === "attack") {
+      if (sel.damageMax <= 0) return "";
+      const key = ATTACK_STRING_KEY[sel.attackType] ?? "UNKNOWN";
+      const range = sel.attackRange <= INFO_PANEL.MeleeRangeMax ? str("MELEE") : String(Math.round(sel.attackRange));
+      return (
+        title(`${wc3ToHtml(str("COLON_DAMAGE"))} ${sel.damageMin} - ${sel.damageMax}${bonusHtml(sel.damageBonus)}`) +
+        stats([
+          str(`DAMAGE_${key}`),
+          `${str("COLON_RANGE")} ${range}`,
+          `${str("COLON_SPEED")} ${str(attackSpeedRung(sel.attackCooldown))}`,
+          upgrade(sel.attackUpgradeName, sel.attackUpgrade),
+        ]) +
+        tip(`DAMAGETIP_${key}`)
+      );
+    }
+    if (which === "armor") {
+      const key = ARMOR_STRING_KEY[sel.armorType] ?? "UNKNOWN";
+      const value = sel.invulnerable ? wc3ToHtml(str("INVULNERABLE")) : `${sel.armor}${bonusHtml(sel.armorBonus)}`;
+      return (
+        title(`${wc3ToHtml(str("COLON_ARMOR"))} ${value}`) +
+        stats([
+          str(`ARMOR_${key}`),
+          `${str("COLON_DAMAGE_REDUCTION")} ${Math.round(armorDamageReduction(sel.armorTotal) * 100)}%`,
+          sel.moveSpeed > 0 ? `${str("COLON_MOVE_SPEED")} ${str(moveSpeedRung(sel.moveSpeed))}` : "",
+          upgrade(sel.armorUpgradeName, sel.armorUpgrade),
+        ]) +
+        tip(`ARMORTIP_${key}`)
+      );
+    }
+    if (!sel.isHero) return "";
+    // One block per attribute, in the panel's own order. The PRIMARY one is flagged and is the
+    // one that carries "Each point increases damage" — `StrAttackBonus` is the per-point bonus
+    // whichever attribute is primary (World.refreshDerived folds `primaryDelta` the same way).
+    const block = (attr: PrimaryAttribute, label: string, own: string[]): string[] => [
+      str(label),
+      ...(sel.primaryAttr === attr
+        ? [` - ${str("PRIMARY_ATTRIBUTE")}`, fdfFormat(str("BONUS_DAMAGE"), MISC_GAME.StrAttackBonus)]
+        : []),
+      ...own,
+    ];
+    const lines = [
+      ...block(PrimaryAttribute.Strength, "COLON_STRENGTH", [
+        fdfFormat(str("BONUS_HITPOINTS"), MISC_GAME.StrHitPointBonus),
+        str("BONUS_HPREGEN"),
+      ]),
+      ...block(PrimaryAttribute.Agility, "COLON_AGILITY", [
+        // "Every 3 points increase armor by 1" — the FIXED form, since 0.3 a point is a third.
+        fdfFormat(str("BONUS_DEFENSE_FIXED"), Math.round(1 / MISC_GAME.AgiDefenseBonus)),
+        str("BONUS_ATTACK_SPEED"),
+      ]),
+      ...block(PrimaryAttribute.Intelligence, "COLON_INTELLECT", [
+        fdfFormat(str("BONUS_MANA"), MISC_GAME.IntManaBonus),
+        str("BONUS_MANAREGEN"),
+      ]),
+    ];
+    // The body opens with an empty line under the title, as the game's does.
+    return title(wc3ToHtml(str("COLON_HERO_ATTRIBUTES"))) + `<div class="hud-tooltip-desc hud-tooltip-attrs"><br>${lines.filter(Boolean).map(wc3ToHtml).join("<br>")}</div>`;
+  }
+
   /** Render the active buff / aura / debuff icons on the Status line.
    *
    *  Hovering one tooltips it exactly as the game does — the buff's `Bufftip` as the title
@@ -4186,6 +4324,38 @@ function makeStatBlock(label: string): StatBlock {
   row.append(icon, text);
   return { row, icon, level, value };
 }
+type StatTip = "attack" | "armor" | "attributes";
+
+/** The `InfoPanelStrings.fdf` suffix for each attack type (`DAMAGE_*`, `DAMAGETIP_*`). There is
+ *  no SPELLS row in the file, so Spells reads as Magic — the same stand-in the icon makes. */
+const ATTACK_STRING_KEY: Partial<Record<AttackType, string>> = {
+  [AttackType.Normal]: "NORMAL",
+  [AttackType.Pierce]: "PIERCE",
+  [AttackType.Siege]: "SIEGE",
+  [AttackType.Magic]: "MAGIC",
+  [AttackType.Chaos]: "CHAOS",
+  [AttackType.Hero]: "HERO",
+  [AttackType.Spells]: "MAGIC",
+};
+/** …and for each armour type (`ARMOR_*`, `ARMORTIP_*`). The file's names are the SLK's
+ *  (`SMALL`, `LARGE`, `FORT`); only the words inside them are the renamed ones. */
+const ARMOR_STRING_KEY: Partial<Record<ArmorType, string>> = {
+  [ArmorType.None]: "NONE",
+  [ArmorType.Small]: "SMALL",
+  [ArmorType.Medium]: "MEDIUM",
+  [ArmorType.Large]: "LARGE",
+  [ArmorType.Fort]: "FORT",
+  [ArmorType.Normal]: "NORMAL",
+  [ArmorType.Hero]: "HERO",
+  [ArmorType.Divine]: "DIVINE",
+};
+
+/** Fill a printf-style game string's `%d` / `%s` slots in order ("%s - Level %d"). */
+function fdfFormat(template: string, ...args: Array<string | number>): string {
+  let i = 0;
+  return template.replace(/%[ds]/g, () => String(args[i++] ?? ""));
+}
+
 // A bonus span from buffs/auras/items: green "+N" when positive, red "-N" when
 // negative (WC3 shows debuffed stats in red), empty when there's none.
 function bonusHtml(bonus: number): string {

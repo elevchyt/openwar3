@@ -1361,6 +1361,15 @@ body.hud-tooltip-skinned .unit-crew-count::after {
 /* Tight leading, as the reference shot has it — 1.4 opened the body into a paragraph. */
 .hud-tooltip-desc { font-size: var(--font-ToolTipDesc, 14px); color: #fff; line-height: 1.2; }
 .hud-tooltip-desc + .hud-tooltip-desc { margin-top: 0.5em; }
+/* The info panel's Damage / Armor slabs: the facts under the title are GREY, and the type name
+   inside the first of them keeps its own |Cffffcc00 gold. The strings carry no colour for the
+   rest of the line, so the grey is the engine's — matched off the real client's shot. The
+   explanation under them is the ordinary white body, run straight on with no gap. */
+.hud-tooltip-desc.hud-tooltip-stats { color: #a8a8a8; }
+.hud-tooltip-desc.hud-tooltip-stats + .hud-tooltip-desc { margin-top: 0; }
+/* The Hero Attributes slab's bullets are " - Each point…" with a LEADING space, which the
+   client keeps as an indent under each attribute's name. */
+.hud-tooltip-desc.hud-tooltip-attrs { white-space: pre-wrap; }
 .hud-tooltip-cost { font-size: var(--font-ToolTipCost, 14px); display: flex; gap: 1.2em; }
 .tt-cost-item { display: inline-flex; align-items: center; gap: 0.3em; color: #fed312; } /* WC3 tooltip gold */
 .tt-cost-item.short { color: #ff2020; } /* can't pay it right now — WC3 reddens the number */

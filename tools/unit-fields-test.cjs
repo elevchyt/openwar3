@@ -552,7 +552,7 @@ console.log("\n[unit fields] a HERO's vitals are the game's PRECOMPUTED ones, so
   const paladin = () => baseDef({
     id: "Hpal", name: "Paladin", isHero: true, primaryAttr: "STR", // PrimaryAttribute.Strength
     strength: 22, agility: 13, intelligence: 17,
-    hitPoints: 650, mana: 255, armor: 4 /* round(3.9) */, weapons: [slot()],
+    hitPoints: 650, mana: 255, armor: 3.9 /* realdef, unrounded */, weapons: [slot()],
   });
   const run = (mods) => {
     const reg = new UnitRegistry(new Map([["Hpal", paladin()]]));
@@ -561,18 +561,18 @@ console.log("\n[unit fields] a HERO's vitals are the game's PRECOMPUTED ones, so
   };
 
   const plain = run([mod("unam", "Custom Paladin")]);
-  check("a clone that retunes nothing keeps the folded stats exactly", [plain.hitPoints, plain.mana, plain.armor, plain.weapons[0].damage], [650, 255, 4, 22]);
+  check("a clone that retunes nothing keeps the folded stats exactly", [plain.hitPoints, plain.mana, plain.armor, plain.weapons[0].damage], [650, 255, 3.9, 22]);
 
   const retuned = run([mod("uhpm", 500), mod("umpm", 100), mod("udef", 5), mod("ua1b", 10)]);
   check("a stated BASE hp folds the hero's Strength back in (500 + 22×25)", retuned.hitPoints, 1050);
   check("...a stated base mana folds Intelligence (100 + 17×15)", retuned.mana, 355);
-  check("...a stated base armour folds Agility (5 − 2 + 13×0.3)", retuned.armor, 7);
+  check("...a stated base armour folds Agility (5 − 2 + 13×0.3)", retuned.armor, 6.9);
   check("...and a stated base damage folds the PRIMARY attribute (10 + STR 22)", retuned.weapons[0].damage, 32);
 
   const stronger = run([mod("ustr", 40)]);
   check("a bare Strength override moves hit points with it (650 + 18×25)", stronger.hitPoints, 1100);
   check("...and the attack damage, because Strength is the primary (22 + 18)", stronger.weapons[0].damage, 40);
-  check("...but not mana or armour", [stronger.mana, stronger.armor], [255, 4]);
+  check("...but not mana or armour", [stronger.mana, stronger.armor], [255, 3.9]);
 
   const swapped = run([mod("upra", "INT")]);
   check("moving the PRIMARY attribute moves the damage to it (22 − STR 22 + INT 17)", swapped.weapons[0].damage, 17);

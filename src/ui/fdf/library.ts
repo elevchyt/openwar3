@@ -8,6 +8,11 @@ import { parseFdf, type FdfFrame, type FdfProp } from "./parser";
 // files and construct the UIs" half of issue #54; layout/render is the other half.
 
 const GLOBAL_STRINGS = "UI\\FrameDef\\GlobalStrings.fdf";
+/** The info panel's own string table — `FrameDef.toc` loads it second, straight after
+ *  GlobalStrings, and its header declares its keys unique across both. The Damage / Armor /
+ *  Hero Attributes hover slabs are written entirely out of it (`DAMAGETIP_*`, `ARMOR_*`,
+ *  `BONUS_*`, `UPGRADE_TOOLTIP`). */
+const INFO_PANEL_STRINGS = "UI\\FrameDef\\InfoPanelStrings.fdf";
 
 function cloneFrame(f: FdfFrame): FdfFrame {
   return {
@@ -36,6 +41,7 @@ export class FdfLibrary {
   /** Load GlobalStrings + the skin table + the given screen file (and their includes). */
   async load(path: string): Promise<void> {
     await this.loadFile(GLOBAL_STRINGS);
+    await this.loadFile(INFO_PANEL_STRINGS);
     await this.loadSkins();
     await this.loadFile(path);
   }
