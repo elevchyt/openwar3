@@ -74,6 +74,16 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // reach the main process, which barely allocates.
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
 
+// VSYNC OFF, and Chromium's own frame-rate limit with it. A vsynced page shows each frame at the
+// display's next refresh, and everything the page draws to follow the mouse sits that much behind
+// the hardware pointer. Off, requestAnimationFrame fires back to back (~6,300 Hz on an empty
+// WebGL page on the dev box), so the page caps itself at MAX_FPS instead — Chromium has no switch
+// for "uncapped, but no faster than N" (src/render/frameCap.ts). The price is tearing, which is
+// the usual price of vsync off. OURS, not the game's: 1.30.4 has no frame-rate setting.
+app.commandLine.appendSwitch("disable-gpu-vsync");
+app.commandLine.appendSwitch("disable-frame-rate-limit");
+const MAX_FPS = 300;
+
 /** Point the window at a running `pnpm dev` instead of the build. In that mode we start NO
  *  server of our own: the dev server is already carrying the relay at its own origin
  *  (tools/vite-plugin-relay.ts), and a second relay on a second port would be one the page never
@@ -98,6 +108,8 @@ function createWindow(url) {
     show: false,
     webPreferences: {
       preload: join(here, "preload.cjs"),
+      // Read back by preload.cjs as `ow3native.maxFps`; argv is how a sandboxed preload is told.
+      additionalArguments: [`--ow3-max-fps=${MAX_FPS}`],
       // The renderer is a WEB PAGE and gets no privileges: it reads the player's install with
       // the same fetch it would use on the web, against this app's own scheme. What it cannot do
       // from a page — ask the OS for a folder, and remember the answer past this window — is the

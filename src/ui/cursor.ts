@@ -64,6 +64,27 @@ export function cursorValue(sheet: CanvasImageSource, cell: number): string {
     `url(${cellUrl(sheet, 0, 0, cell, small)}) ${smallHot} ${smallHot}, default`;
 }
 
+/**
+ * A `cursor:` value for ANY enlarged cursor image — the same three-entry list as `cursorValue`
+ * (the image, a ≤32 px twin Chromium never refuses near the viewport's edge, then `default`), for
+ * cursor art that is not a plain cell of the sheet: the tinted hover hand and the target reticle,
+ * each already enlarged by CURSOR_SCALE. `hotX`/`hotY` are in `img`'s own pixels; the twin's are
+ * scaled down with it.
+ */
+export function cursorImageValue(img: HTMLCanvasElement, hotX: number, hotY: number): string {
+  const size = Math.max(img.width, img.height);
+  if (size <= MAX_UNCLIPPED_CURSOR) return `url(${img.toDataURL()}) ${Math.round(hotX)} ${Math.round(hotY)}, default`;
+  const k = MAX_UNCLIPPED_CURSOR / size;
+  const c = document.createElement("canvas");
+  c.width = Math.round(img.width * k);
+  c.height = Math.round(img.height * k);
+  const ctx = c.getContext("2d")!;
+  ctx.imageSmoothingEnabled = true; // bilinear, like every other cut (see CURSOR_SCALE)
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  return `url(${img.toDataURL()}) ${Math.round(hotX)} ${Math.round(hotY)}, ` +
+    `url(${c.toDataURL()}) ${Math.round(hotX * k)} ${Math.round(hotY * k)}, default`;
+}
+
 let styleEl: HTMLStyleElement | null = null;
 
 /** Apply a race's hand cursor across the (non-in-game) menu screens. Human everywhere except

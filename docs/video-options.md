@@ -136,6 +136,27 @@ server and delete `node_modules/.vite`, or Vite serves the pre-patch bundle (CLA
 follows the dropdown. **Texture Quality is read as a texture uploads**, so it reaches the next
 map rather than the one on screen.
 
+## Frame rate: vsync off, capped at 300 (desktop app only)
+
+The Video panel has no frame-rate row, because 1.30.4's has none. The desktop app always launches
+with **vsync off** (`disable-gpu-vsync` + `disable-frame-rate-limit` in `electron/main.mjs`),
+since a vsynced page is at least a refresh behind the hardware pointer. It is capped at **300 fps**,
+and that number is OURS. A browser tab keeps the browser's own vsync, because a page cannot turn
+it off.
+
+Chromium has no "uncapped, but no faster than N" switch, so [`src/render/frameCap.ts`](../src/render/frameCap.ts)
+patches `requestAnimationFrame` itself. That way every loop and poll in the page sees a 300 Hz
+display, with no call site that has to remember the cap. The trap in it cost a run: with the
+limit off, **a real frame that draws nothing is followed by a ~16 ms pause**. A cap that polled
+real frames until one was due therefore held a match at ~110 fps. The cap sleeps on a timer
+instead, and every real frame it asks for runs the batch. Measured on Echo Isles in a
+1280×720 window: 144 fps with vsync on, ~530 uncapped, 301 capped.
+
+The reticle and the tinted hover hand are real `cursor:` images for the same reason
+(`overlayCursor` in `mapViewer.ts`). A DOM element moved to the pointer trails it by a frame or
+two at any frame rate. Their pulse is 8 baked frames stepped on the wall clock, and Chromium
+re-reads a changed `cursor:` without the mouse moving.
+
 ## Verifying a change
 
 `tools/sim-options-test.cjs` (run by `pnpm sim:test`) pins the applier: every rung's number,

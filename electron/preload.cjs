@@ -11,7 +11,12 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
+const maxFpsArg = process.argv.find((arg) => arg.startsWith("--ow3-max-fps="));
+
 contextBridge.exposeInMainWorld("ow3native", {
+  /** The frame-rate cap the page keeps (src/render/frameCap.ts), because the shell turned vsync
+   *  off (electron/main.mjs). A number, not a call: it is fixed for the life of the window. */
+  maxFps: maxFpsArg ? Number(maxFpsArg.slice("--ow3-max-fps=".length)) : 0,
   /** `{ path, valid }` — the remembered folder, and whether it is still an install. A folder
    *  that has been moved or deleted is reported rather than silently re-asked for, so the
    *  screen can say which one it lost. */

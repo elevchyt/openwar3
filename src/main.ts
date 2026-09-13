@@ -1,3 +1,4 @@
+import "./render/frameCap"; // first: the desktop app's 300 fps cap patches requestAnimationFrame
 import "./style.css";
 // First, so its capture listener is the page's first: Alt+Enter must reach nothing else.
 import "./ui/fullscreen";
