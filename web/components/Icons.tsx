@@ -47,3 +47,17 @@ export function PlayIcon() {
     </svg>
   );
 }
+
+/** A coffee cup with a heart on it — Ko-fi's mark, drawn in two colours: the cup takes the
+ *  caption's colour and the heart is Ko-fi red. */
+export function KofiIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="1em" height="1em" aria-hidden>
+      <path
+        fill="currentColor"
+        d="M3 6.5h14.2c2.9 0 4.8 1.9 4.8 4.4 0 2.6-2 4.5-4.7 4.5h-.8c-.7 2.3-2.8 3.9-5.3 3.9H8.1c-2.8 0-5.1-2.3-5.1-5.1V6.5Zm14 2.3v4.4h.4c1.4 0 2.4-.9 2.4-2.2 0-1.3-1-2.2-2.4-2.2H17Z"
+      />
+      <path fill="#ff5e5b" d="M10 10.2c-.6-.8-2.2-.6-2.2.8 0 1.3 1.6 2.4 2.2 2.9.6-.5 2.2-1.6 2.2-2.9 0-1.4-1.6-1.6-2.2-.8Z" />
+    </svg>
+  );
+}

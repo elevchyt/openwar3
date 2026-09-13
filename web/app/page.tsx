@@ -3,9 +3,11 @@ import { Downloads } from "@/components/Downloads";
 import { FeatureCard, type Media } from "@/components/FeatureCard";
 import { GlueButton } from "@/components/GlueButton";
 import { Hotkeys } from "@/components/Hotkeys";
-import { GitHubIcon, StarIcon } from "@/components/Icons";
+import { GitHubIcon, KofiIcon, StarIcon } from "@/components/Icons";
 import { Panel } from "@/components/Panel";
 import { REPO_URL, latestRelease, stargazers } from "@/lib/github";
+
+const KOFI_URL = "https://ko-fi.com/lefterisdev";
 
 // Re-rendered in the background at most every five minutes (lib/github.ts REVALIDATE — Next
 // wants a literal here), so a new release shows up without a redeploy.
@@ -69,15 +71,23 @@ export default async function Home() {
             <a href="#roadmap">Roadmap</a>
             <a href="#contribute">Contribute</a>
           </nav>
-          <a className="resource" href={REPO_URL} target="_blank" rel="noopener noreferrer" title="Star OpenWar3 on GitHub">
-            <span className="resource__icon">
-              <StarIcon />
-            </span>
-            <span className="resource__value">{stars ?? "Star"}</span>
-            <span className="resource__github">
-              <GitHubIcon />
-            </span>
-          </a>
+          <div className="topbar__resources">
+            <a className="resource resource--kofi" href={KOFI_URL} target="_blank" rel="noopener noreferrer" title="Support OpenWar3 on Ko-fi">
+              <span className="resource__icon">
+                <KofiIcon />
+              </span>
+              <span className="resource__label">Support</span>
+            </a>
+            <a className="resource" href={REPO_URL} target="_blank" rel="noopener noreferrer" title="Star OpenWar3 on GitHub">
+              <span className="resource__icon">
+                <StarIcon />
+              </span>
+              <span className="resource__value">{stars ?? "Star"}</span>
+              <span className="resource__github">
+                <GitHubIcon />
+              </span>
+            </a>
+          </div>
         </div>
       </header>
 
