@@ -16,6 +16,18 @@
         "tools/dev-log.mjs"
       ],
       "port": 5173
+    },
+    {
+      "name": "openwar3-web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "web/node_modules/next/dist/bin/next",
+        "dev",
+        "web",
+        "-p",
+        "3210"
+      ],
+      "port": 3210
     }
   ]
 }

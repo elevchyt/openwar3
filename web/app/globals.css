@@ -1,0 +1,664 @@
+/* OpenWar3 landing page — the Frozen Throne glue screens, redrawn.
+ *
+ * Nothing here is a game texture. The frames in public/ui/ are drawn by scripts/frames.mjs
+ * with colours sampled off the 1.30.4 install's own BLPs, and every text colour below is the
+ * one the FrameDef files state:
+ *   --gold      StandardButtonTextTemplate FontColor          0.99 0.827 0.0705  (Glue/StandardTemplates.fdf)
+ *   hover       StandardButtonTextTemplate FontHighlightColor 1.0 1.0 1.0
+ *   --disabled  StandardButtonTextTemplate FontDisabledColor  0.5 0.5 0.5
+ *   hotkey      GlobalStrings.fdf "|CffffffffS|Ringle Player" — the letter is white
+ *   --tip-gold  the |cffffcc00 every tooltip string highlights with
+ */
+
+:root {
+  --gold: rgb(252 211 18);
+  --tip-gold: #ffcc00;
+  --disabled: rgb(128 128 128);
+  --text: #f2f2f2;
+  --text-dim: #b8bcc8;
+  --ground: #02040b;
+  --font: var(--font-game), "Trebuchet MS", system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 64px;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgb(20 40 90 / 0.35), transparent 70%),
+    var(--ground);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a {
+  color: var(--tip-gold);
+  text-decoration: none;
+}
+a:hover {
+  color: #fff;
+}
+
+.gold {
+  color: var(--tip-gold);
+}
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ─── Top bar: the console's resource strip ────────────────────────────── */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: linear-gradient(#000 0%, rgb(4 6 14 / 0.92) 100%);
+  border-bottom: 1px solid #000;
+  box-shadow:
+    0 1px 0 rgb(171 130 14 / 0.55),
+    0 6px 18px rgb(0 0 0 / 0.6);
+  backdrop-filter: blur(6px);
+}
+.topbar__inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  height: 52px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+.topbar__brand {
+  color: var(--gold);
+  font-size: 1.15rem;
+  text-shadow: 1px 1px 0 #000;
+}
+.topbar__nav {
+  display: flex;
+  gap: 22px;
+  margin-right: auto;
+}
+.topbar__nav a {
+  color: var(--text-dim);
+  font-size: 0.95rem;
+}
+.topbar__nav a:hover {
+  color: #fff;
+}
+.resource {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 14px 4px 8px;
+  background: linear-gradient(#0b0d14, #000);
+  border: 1px solid #000;
+  box-shadow:
+    inset 0 0 0 1px #3a3c3c,
+    inset 0 0 0 2px #000;
+  color: #fff;
+}
+.resource__icon {
+  color: var(--gold);
+  font-size: 1.1rem;
+  display: inline-flex;
+  filter: drop-shadow(1px 1px 0 #000);
+}
+.resource__value {
+  min-width: 2ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.resource:hover {
+  color: var(--gold);
+}
+
+/* ─── Glue button (GlueScreen-Button1-BackdropBorder) ──────────────────── */
+
+.glue-btn-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.glue-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 0 10px;
+  border-style: solid;
+  border-width: 18px;
+  border-image: url("/ui/glue-button.svg") 22 fill / 18px stretch;
+  background: none;
+  color: var(--gold);
+  font: inherit;
+  cursor: pointer;
+  text-shadow: 1.5px 1.5px 0 rgb(0 0 0 / 0.9);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.glue-btn--bordered {
+  border-width: 19px;
+  border-image: url("/ui/glue-button-bordered.svg") 24 fill / 19px stretch;
+}
+.glue-btn--lg {
+  min-width: 232px;
+  min-height: 80px;
+}
+
+/* The border is drawn in the border box, so the content is pulled back out over it. */
+.glue-btn__text {
+  position: relative;
+  z-index: 1;
+  margin: -14px -6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  transition: transform 40ms;
+}
+.glue-btn__caption {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+}
+.glue-btn__label {
+  font-size: 1.05rem;
+  white-space: nowrap;
+}
+.glue-btn--lg .glue-btn__label {
+  font-size: 1.3rem;
+}
+.glue-btn__sub {
+  font-size: 0.78rem;
+  color: #aab3d6;
+  white-space: nowrap;
+}
+.glue-btn__icon {
+  display: inline-flex;
+  font-size: 1.25rem;
+  filter: drop-shadow(1.5px 1.5px 0 rgb(0 0 0 / 0.9));
+}
+.glue-btn--lg .glue-btn__icon {
+  font-size: 1.8rem;
+}
+.hk {
+  color: #fff;
+}
+
+/* bnet-button01-highlight-mouse.blp: a soft blue bloom, added over the button */
+.glue-btn__glow {
+  position: absolute;
+  inset: -10px -4px;
+  background: radial-gradient(ellipse 60% 55% at 50% 50%, rgb(70 110 200 / 0.75), rgb(40 70 150 / 0.25) 55%, transparent 75%);
+  mix-blend-mode: screen;
+  opacity: 0;
+  transition: opacity 90ms;
+  pointer-events: none;
+}
+
+.glue-btn:not(.is-disabled):hover,
+.glue-btn:not(.is-disabled):focus-visible {
+  color: #fff;
+  outline: none;
+}
+.glue-btn:not(.is-disabled):hover .glue-btn__glow,
+.glue-btn:not(.is-disabled):focus-visible .glue-btn__glow {
+  opacity: 1;
+}
+.glue-btn:not(.is-disabled):hover .glue-btn__sub {
+  color: #d6dcf5;
+}
+
+/* Pressed: the Down border, and ButtonPushedTextOffset −0.002 −0.003 moves the caption. */
+.glue-btn:not(.is-disabled):active,
+.glue-btn.is-pressed {
+  border-image-source: url("/ui/glue-button-down.svg");
+  border-image-slice: 22 fill;
+}
+.glue-btn--bordered:not(.is-disabled):active,
+.glue-btn--bordered.is-pressed {
+  border-image-slice: 22 fill;
+}
+.glue-btn:not(.is-disabled):active .glue-btn__text,
+.glue-btn.is-pressed .glue-btn__text {
+  transform: translate(-1px, 2px);
+}
+
+.glue-btn.is-disabled {
+  border-image: url("/ui/glue-button-disabled.svg") 22 fill / 18px stretch;
+  color: var(--disabled);
+  cursor: default;
+}
+.glue-btn--bordered.is-disabled {
+  border-width: 19px;
+  border-image-width: 19px;
+}
+.glue-btn.is-disabled .glue-btn__sub {
+  color: #6c6c6c;
+}
+
+/* ─── Tooltip slab (human-tooltip-border.blp: a 2-texel gold stroke) ───── */
+
+.tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  width: max-content;
+  max-width: 290px;
+  padding: 9px 12px 10px;
+  background: rgb(0 0 0 / 0.86);
+  border: 1px solid #ffcb2e;
+  box-shadow:
+    inset 0 0 0 1px #e2aa00,
+    0 0 0 1px rgb(0 0 0 / 0.56),
+    0 0 0 2px rgb(0 0 0 / 0.18),
+    0 8px 20px rgb(0 0 0 / 0.6);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 4px);
+  transition:
+    opacity 100ms,
+    transform 100ms,
+    visibility 0s 100ms;
+  pointer-events: none;
+}
+/* the name line is NOT larger than the body ([FontHeights] ToolTipName = ToolTipDesc = 0.011) */
+.tooltip__title {
+  display: block;
+  color: #fff;
+  margin-bottom: 3px;
+}
+.tooltip__body {
+  display: block;
+  color: #e6e6e6;
+}
+.glue-btn-wrap:hover .tooltip,
+.glue-btn-wrap:focus-within .tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+  transition-delay: 0s;
+}
+
+/* ─── Panel (EscMenu\Human\human-options-menu-border + -background) ───── */
+
+.panel {
+  position: relative;
+  isolation: isolate;
+  padding: 32px 34px 36px;
+}
+/* The marble sits under the gold rule's inner edge… */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 17px;
+  z-index: -1;
+  background: url("/ui/marble.svg") 0 0 / 256px 256px;
+}
+/* …and the frame is drawn over it. (On the element itself, a negative-z ::before would
+   paint the marble OVER its own border-image.) */
+.panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-style: solid;
+  border-width: 26px;
+  border-image: url("/ui/esc-panel.svg") 29 / 26px round;
+  pointer-events: none;
+}
+
+/* ─── Hero ─────────────────────────────────────────────────────────────── */
+
+.hero {
+  position: relative;
+  min-height: calc(100svh - 52px);
+  display: grid;
+  place-items: center;
+  padding: 36px 20px 72px;
+  overflow: hidden;
+}
+.hero__backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+}
+.hero__backdrop img {
+  object-fit: cover;
+  opacity: 0.3;
+  filter: saturate(0.75) blur(1.5px);
+  transform: scale(1.04);
+}
+.hero__backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 70% 60% at 50% 42%, transparent 0%, rgb(2 4 11 / 0.65) 70%, var(--ground) 100%),
+    linear-gradient(transparent 55%, var(--ground) 100%);
+}
+.hero__content {
+  width: 100%;
+  max-width: 900px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.hero__logo {
+  width: min(640px, 88vw);
+  height: auto;
+  filter: drop-shadow(0 12px 30px rgb(0 0 0 / 0.8));
+}
+.hero__tagline {
+  margin: 4px 0 6px;
+  color: var(--gold);
+  font-size: clamp(1.25rem, 3.2vw, 1.8rem);
+  text-shadow:
+    2px 2px 0 #000,
+    0 0 18px rgb(0 0 0 / 0.9);
+}
+.hero__lede {
+  margin: 0 0 30px;
+  max-width: 620px;
+  color: #d4d8e2;
+  font-size: 1.05rem;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.downloads__row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px 16px;
+}
+.downloads__meta {
+  margin: 18px 0 0;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  text-shadow: 1px 1px 0 #000;
+}
+
+/* ─── Sections ─────────────────────────────────────────────────────────── */
+
+.section {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 72px 20px 24px;
+}
+.section__title {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 0;
+  color: var(--gold);
+  font-size: clamp(1.7rem, 4vw, 2.3rem);
+  font-weight: normal;
+  text-align: center;
+  text-shadow: 2px 2px 0 #000;
+}
+.section__title::before,
+.section__title::after {
+  content: "";
+  flex: 1;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #ab820e 60%, #ffcb2e);
+  box-shadow: 0 1px 0 #000;
+}
+.section__title::after {
+  background: linear-gradient(270deg, transparent, #ab820e 60%, #ffcb2e);
+}
+.section__lede {
+  margin: 8px 0 32px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 26px;
+}
+.feature {
+  display: flex;
+  flex-direction: column;
+}
+.feature__media {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  margin: 4px 0 14px;
+  background: #000;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px #000,
+    0 0 0 3px #3a3c3c,
+    0 0 0 4px #000,
+    0 4px 14px rgb(0 0 0 / 0.7);
+}
+.feature__media img,
+.feature__media video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.feature__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background:
+    radial-gradient(ellipse at 50% 45%, rgb(20 36 80 / 0.7), rgb(0 0 0 / 0.95) 75%),
+    url("/ui/marble.svg") 0 0 / 256px 256px;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+}
+.feature__play {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  color: var(--gold);
+  font-size: 1.6rem;
+  background: radial-gradient(circle at 50% 40%, #0a1464, #00003a 70%);
+  box-shadow:
+    0 0 0 2px #000,
+    0 0 0 3px #1010af,
+    0 0 0 5px #000,
+    0 0 22px rgb(40 80 200 / 0.45);
+}
+.feature__play svg {
+  margin-left: 3px;
+  filter: drop-shadow(1px 1px 0 #000);
+}
+.feature__title {
+  margin: 0 0 6px;
+  color: var(--gold);
+  font-size: 1.25rem;
+  font-weight: normal;
+  text-shadow: 1.5px 1.5px 0 #000;
+}
+.feature__body {
+  margin: 0;
+  color: #e4e6ec;
+  font-size: 0.95rem;
+}
+
+/* ─── Roadmap: the Quest Log ───────────────────────────────────────────── */
+
+.quests {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 34px 44px 38px;
+}
+.quests__heading {
+  margin: 0 0 12px;
+  color: var(--gold);
+  font-weight: normal;
+  font-size: 1.15rem;
+  text-shadow: 1.5px 1.5px 0 #000;
+}
+.quests__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px 30px;
+}
+.quest {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.quest__marker {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin-top: 7px;
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, #ffcb2e, #6e580f);
+  box-shadow:
+    0 0 0 1px #000,
+    0 0 8px rgb(255 203 46 / 0.35);
+}
+.quest__title {
+  display: block;
+  color: #fff;
+}
+.quest__body {
+  display: block;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+/* ─── Call to arms ─────────────────────────────────────────────────────── */
+
+.cta {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 48px 56px 54px;
+  text-align: center;
+}
+.cta__title {
+  margin: 0 0 8px;
+  color: var(--gold);
+  font-size: clamp(1.7rem, 4vw, 2.4rem);
+  font-weight: normal;
+  text-shadow: 2px 2px 0 #000;
+}
+.cta__lede {
+  margin: 0 auto 26px;
+  max-width: 640px;
+  font-size: 1.08rem;
+  color: #e4e6ec;
+}
+.cta__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px 18px;
+  margin-bottom: 30px;
+}
+.cta__ways {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 22px;
+  text-align: left;
+  padding-top: 22px;
+  border-top: 1px solid rgb(0 0 0 / 0.7);
+  box-shadow: inset 0 1px 0 rgb(171 130 14 / 0.35);
+}
+.cta__ways h3 {
+  margin: 0 0 4px;
+  color: #fff;
+  font-weight: normal;
+  font-size: 1.05rem;
+}
+.cta__ways p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.93rem;
+}
+
+/* ─── Footer ───────────────────────────────────────────────────────────── */
+
+.footer {
+  max-width: 900px;
+  margin: 56px auto 0;
+  padding: 26px 20px 40px;
+  text-align: center;
+  color: #7c8190;
+  font-size: 0.8rem;
+  border-top: 1px solid #10131c;
+}
+.footer p {
+  margin: 0 0 6px;
+}
+
+@media (max-width: 720px) {
+  .topbar__nav {
+    display: none;
+  }
+  .topbar__brand {
+    margin-right: auto;
+  }
+  .features {
+    grid-template-columns: 1fr;
+  }
+  .glue-btn--lg {
+    min-width: min(300px, 86vw);
+  }
+  .panel {
+    padding: 26px 22px 28px;
+  }
+  .panel::before {
+    inset: 13px;
+  }
+  .panel::after {
+    border-width: 20px;
+    border-image-width: 20px;
+  }
+  .cta,
+  .quests {
+    padding: 34px 26px 36px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
