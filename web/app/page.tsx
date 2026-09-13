@@ -39,7 +39,7 @@ const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
   },
   {
     title: "Keeps itself up to date",
-    body: "The desktop app checks for a new release at launch and offers it in the game's own message box. Say yes and it downloads, installs and restarts on its own.",
+    body: "The game checks for a new release at launch and offers it in its own message box. Say yes and it downloads, installs and restarts on its own.",
     media: { kind: "image", src: "/media/updater.jpg", alt: "The OpenWar3 main menu downloading an update" },
   },
 ];
@@ -74,6 +74,9 @@ export default async function Home() {
               <StarIcon />
             </span>
             <span className="resource__value">{stars ?? "Star"}</span>
+            <span className="resource__github">
+              <GitHubIcon />
+            </span>
           </a>
         </div>
       </header>
