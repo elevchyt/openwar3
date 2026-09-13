@@ -52,7 +52,7 @@ StringList {
     HOTKEYS_CUSTOM              "Custom",
     // ...and the checkbox under it: whether that key is printed in the corner of every button
     // that takes a press. The game prints a key only inside the tooltip, so it has no string.
-    SHOW_HOTKEYS_ON_BUTTONS     "Show hotkeys on action buttons",
+    SHOW_HOTKEYS_ON_BUTTONS     "Show hotkeys on command buttons",
 
     // LAN → Create Game, the row under the map list: which relay the game is announced on
     // (src/overrides/ui/LocalMultiplayerCreate.fdf). The game broadcast its LAN games and never

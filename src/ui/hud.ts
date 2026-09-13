@@ -1262,7 +1262,7 @@ export class GameHud {
   private cmdCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
   private cmdCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
   private cmdCount: HTMLSpanElement[] = []; // per-slot corner count badge (skill points)
-  private cmdHotkey: HTMLSpanElement[] = []; // per-slot corner key box ("Show hotkeys on action buttons")
+  private cmdHotkey: HTMLSpanElement[] = []; // per-slot corner key box ("Show hotkeys on command buttons")
   private cmdKey = "";
   // Hero inventory: 6 slot buttons (2×3) with icon, charge badge, cooldown sweep.
   private invSlots: HTMLButtonElement[] = [];
@@ -3311,11 +3311,12 @@ export class GameHud {
       else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
 
       if (c.count && c.count > 0) setCount(this.cmdCount[idx], String(c.count));
-      // The key that presses it. A passive takes no press, so it has no key to print (the key
-      // handler skips it for the same reason). The corner is the count's too: when a button
+      // The key that presses it. A passive takes no press and neither does a greyed-out
+      // (`disabled`) button, so neither has a key to print — the key handler skips both for the
+      // same reason. A button you merely cannot AFFORD does answer its key, so it keeps it. The corner is the count's too: when a button
       // carries a quantity — a shop's stock, the learn-skill button's points — the number keeps
       // the bottom-right it has always had and the key moves up to the top-right.
-      if (printKeys && !c.passive) {
+      if (printKeys && !c.passive && !c.disabled) {
         const k = printedKey(c);
         setCount(this.cmdHotkey[idx], k);
         this.cmdHotkey[idx].classList.toggle("long", k.length > 1);

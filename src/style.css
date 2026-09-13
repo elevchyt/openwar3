@@ -1461,7 +1461,7 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
   text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000;
 }
 
-/* The command button's KEY (Options → Gameplay → "Show hotkeys on action buttons"): the very
+/* The command button's KEY (Options → Gameplay → "Show hotkeys on command buttons"): the very
    same box, in the same corner. A button that also wears a count keeps the count there and
    takes its key in the top-right instead (`.top`). A named key ("Esc") is set smaller so its
    three glyphs stay inside the frame a single letter fills. */

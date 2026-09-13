@@ -33,7 +33,7 @@
 //     [x] Always show Health Bars                (the game's, re-anchored by the manifest)
 //     Healthbars:  [ Default ]                   (ours)
 //     Hotkeys:     [ Legacy  ]                   (ours)
-//     [x] Show hotkeys on action buttons         (ours)
+//     [x] Show hotkeys on command buttons        (ours)
 //
 // The two re-anchorings are the manifest's `repoint`, because an FDF panel is a chain of rows
 // and those two rows are the game's own frames: only their SetPoints change, so their labels
@@ -84,7 +84,7 @@ Frame "BACKDROP" "HotkeysBackdrop" INHERITS "OptionsPopupMenuBackdropTemplate" {
     }
 }
 
-// "Show hotkeys on action buttons" — a checkbox row under the "Hotkeys:" pulldown, and the last
+// "Show hotkeys on command buttons" — a checkbox row under the "Hotkeys:" pulldown, and the last
 // row of the panel. It hangs off the LABEL rather than the backdrop, because the backdrop starts
 // right of the label and the checkbox column is the label's. The gap is the pulldown pair's own
 // label-to-label step (-0.02625) less the half a checkbox is taller than a label, so the box sits

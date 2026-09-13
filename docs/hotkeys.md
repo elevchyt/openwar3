@@ -139,7 +139,7 @@ reason the version gate is asked there.
 
 ## Showing the key on the button
 
-Options → Gameplay → **"Show hotkeys on action buttons"** (ON by default) prints the key that
+Options → Gameplay → **"Show hotkeys on command buttons"** (ON by default) prints the key that
 presses each command button in the button's bottom-right corner. It is not a 2003 row — the game
 names a key only inside the tooltip — so the checkbox is ours (`ShowHotkeysCheckBox` in
 `src/overrides/ui/OptionsMenu.fdf`) and so is its string. The box is NOT new art: it is the same
@@ -149,7 +149,8 @@ shop's stock, unspent skill points), so the key and a count read as one family.
 * **What it prints follows the scheme.** Legacy and Custom print the button's own `hotkey`; Grid
   prints the slot's letter (`gridCommandKey`). A named key is shortened to its keycap —
   `[CmdCancel] Hotkey=27` is VK_ESCAPE and prints "Esc", in a smaller face (`.long`).
-* **A passive prints nothing**, because it takes no press and the key handler skips it.
+* **A passive or a greyed-out button prints nothing**, because neither takes a press and the key
+  handler skips both. A button you merely cannot afford answers its key, so it keeps it.
 * **The corner is the count's first.** A button that carries a count (a shop's stock, the
   learn-skill button's points) keeps the number bottom-right and moves its key to the top-right
   (`.top`).

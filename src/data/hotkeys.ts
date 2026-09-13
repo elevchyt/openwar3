@@ -54,7 +54,7 @@ export const GRID_INVENTORY_CODES: readonly string[] = ["KeyT", "KeyY", "KeyG", 
 const letterOf = (code: string): string => code.slice(-1);
 
 let mode: HotkeyMode = "legacy";
-/** Options → Gameplay → "Show hotkeys on action buttons". */
+/** Options → Gameplay → "Show hotkeys on command buttons". */
 let printed = true;
 
 /** Push the Gameplay panel's "Hotkeys:" row onto the live binding — the same shape
