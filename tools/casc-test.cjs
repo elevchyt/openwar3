@@ -117,6 +117,38 @@ function isMdx(b) {
     check(listed.length === archive.list().length, `${path} enumerates`, `${listed.length} names via (listfile)`);
   }
 
+  // The tileset overlay (issue #152). Cliffs, water and ubersplats are one logical path per
+  // set and one SET PER TILESET, told apart by the archive they sit in — which 1.30.4 kept
+  // under the MPQ names it had, as `<letter>.mpq:<path>` entries inside War3.mpq. If this
+  // resolution is wrong nothing errors: every map quietly draws Lordaeron Summer's cliffs.
+  console.log('\ntileset overlay (src/vfs/tileset.ts):');
+  const { tilesetOverlay } = require(join(REPO, '.casc-build', 'src', 'vfs', 'tileset.js'));
+  const overlay = tilesetOverlay(vfs);
+  const CLIFF = 'ReplaceableTextures\\Cliff\\Cliff0.blp';
+  const WATER = 'ReplaceableTextures\\Water\\Water00.blp';
+  const plainCliff = vfs.rawBytes(CLIFF);
+  const same = (a, b) => !!a && !!b && a.length === b.length && a.every((v, i) => v === b[i]);
+  // The eighteen tilesets `TerrainArt\Terrain.slk` names, in the World Editor's own order.
+  for (const letter of 'ABCDFGIJKLNOQVWXYZ') {
+    const hit = overlay(CLIFF, letter);
+    const bytes = hit.source.rawBytes(hit.path);
+    // `L` is the one tileset with no archive of its own: the UNPREFIXED default IS
+    // Lordaeron Summer's, which is why a map on it looked right all along.
+    const wanted = letter === 'L' ? CLIFF : `${letter}.mpq:${CLIFF}`;
+    check(
+      hit.key === wanted && !!bytes && isBlp(bytes) && (letter === 'L') === same(bytes, plainCliff),
+      `tileset ${letter} cliff`,
+      `${hit.key} (${bytes ? bytes.length.toLocaleString() : 'MISSING'} bytes)`,
+    );
+  }
+  const water = overlay(WATER, 'Z');
+  check(water.key === `Z.mpq:${WATER}` && isBlp(water.source.rawBytes(water.path) ?? []),
+    'the overlay is not cliff-only', `water → ${water.key}`);
+  const shared = overlay('Units\\Human\\Footman\\Footman.mdx', 'Z');
+  check(shared.key === 'Units\\Human\\Footman\\Footman.mdx',
+    'a path no tileset overrides is left alone', shared.key);
+  check(overlay(CLIFF, undefined).key === CLIFF, 'no tileset means no overlay');
+
   // Every path the root offers must decode. This is the check that would catch an encrypted
   // ('E') BLTE chunk, a stale .idx bucket, or a truncated data file — none of which show up
   // on the handful of files above.

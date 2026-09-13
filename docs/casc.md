@@ -92,6 +92,42 @@ exes, the `.app` bundles — they carry no `<archive>:` prefix), and `Custom_V0/
 and `Melee_V0/` copies of the data tables, which are 1.29's game-data-set variants. The
 unprefixed path is the one the engine asks for.
 
+## A tileset is an archive, not a suffix (issue #152)
+
+Warcraft III ships a set of cliff faces, water frames and building ubersplats **per tileset**,
+and every set is filed under the *same* logical path: the Sunken Ruins cliff and the Lordaeron
+Summer cliff are both `ReplaceableTextures\Cliff\Cliff0.blp`, and `TerrainArt\CliffTypes.slk`
+has only the one `texDir`/`texFile` to name them with. What tells them apart is the archive —
+war3.mpq carried a nested MoPaQ per tileset letter and the engine mounts the one the loaded map
+names on top of everything else. That is *why* a tileset is a map-level property.
+
+The root kept that too, one level deeper than the three archives above:
+
+```
+War3.mpq:Z.mpq:ReplaceableTextures\Cliff\Cliff0.blp|…|
+```
+
+so in the mount a tileset's own copy is reachable at `Z.mpq:<path>` and the unprefixed path is
+the default. `src/vfs/tileset.ts` is the whole rule; `tools/casc-test.cjs` pins all eighteen.
+
+Four things about it are easy to get wrong:
+
+- **`L` has no cliffs and no water of its own** — because the *unprefixed default is Lordaeron
+  Summer's*. Which is exactly why this went unnoticed for so long: Echo Isles is `L`, so the
+  canonical test map was the one map that looked right.
+- **It is not cliff-only.** A tileset archive holds the two cliff textures, the 45 water frames,
+  the nine ubersplats a town centre stamps, and the two or three creep skins the game re-tints
+  (the bear, the war eagle, the quillbeast). It is an overlay, not a cliff rule with a list.
+- **The `<letter>_Cliff0.blp` naming in `Deprecated.mpq` is a different, older copy.** It covers
+  twelve tilesets, is a few kilobytes apart from the live art each time, and is absent for every
+  tileset The Frozen Throne added (I, J, K, O, Z) — so resolving through it leaves precisely the
+  expansion's own maps rendering Lordaeron dirt. It stays as the last rung, for an install old
+  enough to have only that.
+- **Not every asset reaches the overlay through the viewer.** The path solver in
+  `src/render/mapViewer.ts` covers everything the map handler loads, because the viewer hands the
+  tileset letter down with each of those loads — but the ubersplat/shadow/weather loader reads the
+  mount directly and has to be given the tileset itself.
+
 ## What is held in memory, and what is not
 
 `rawBytes()` is synchronous and half the engine reads through it — the SLK tables, the fonts,

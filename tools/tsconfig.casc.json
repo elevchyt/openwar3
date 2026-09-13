@@ -15,5 +15,5 @@
     "outDir": "../.casc-build",
     "noEmit": false
   },
-  "files": ["../src/vfs/casc.ts", "../src/vfs/mapArchive.ts"]
+  "files": ["../src/vfs/casc.ts", "../src/vfs/mapArchive.ts", "../src/vfs/tileset.ts"]
 }

@@ -4,6 +4,7 @@ import type { DataSource } from "../vfs/types";
 import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
+import { tilesetOverlay } from "../vfs/tileset";
 import { CAMERA_MARGIN, cameraBoundsOf, parseW3E, type TerrainData, type WorldRect } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { collectMapDestructibles, findDestructibleAt, type MapDestructible } from "../world/mapDestructibles";
@@ -1426,28 +1427,24 @@ export class MapViewerScene {
     // (cached here, tracked in `created` for revocation on dispose) means each
     // shared model/texture is fetched once and parsed exactly once.
     const blobUrls = new Map<string, string | null>();
+    // The map's tileset archive, layered over the mount for the whole match (issue #152).
+    // Cliff faces, water frames and ubersplats are one path per set and one SET PER TILESET,
+    // told apart by the archive they sit in, so this has to go here — at the one place a
+    // logical path becomes bytes — rather than at any single asset's call site.
+    const overlay = tilesetOverlay(vfs);
     const solver: Solver = (src, params) => {
       if (typeof src !== "string") return src; // in-memory loads pass through
-      let path = src.replace(/\//g, "\\");
-      // Tileset-specific cliff textures: CliffTypes.slk just says "Cliff0"/
-      // "Cliff1", but the game prepends the tileset letter (W_Cliff0.blp on
-      // winter maps, …). Not every tileset ships prefixed files — fall back to
-      // the plain (Lordaeron summer) texture when absent.
-      const tileset = params?.tileset?.toUpperCase();
-      if (tileset) {
-        const cliffTex = /^(.*\\cliff\\)(cliff[01]\.(?:blp|dds))$/i.exec(path);
-        if (cliffTex) {
-          const variant = `${cliffTex[1]}${tileset}_${cliffTex[2]}`;
-          if (vfs.exists(variant)) path = variant;
-        }
-      }
-      const cached = baseUrls.get(path);
+      // The viewer hands the tileset letter down with every load the map handler makes,
+      // its own models and their textures included — which is exactly the reach the
+      // overlay wants, since the re-tinted creep skins ride in the same archive.
+      const { key, source, path } = overlay(src.replace(/\//g, "\\"), params?.tileset);
+      const cached = baseUrls.get(key);
       if (cached) return cached; // preloaded base SLKs
-      let url = blobUrls.get(path);
+      let url = blobUrls.get(key);
       if (url === undefined) {
-        const bytes = vfs.rawBytes(path); // MPQ decode is synchronous (mpq.ts)
+        const bytes = source.rawBytes(path); // MPQ decode is synchronous (mpq.ts)
         url = bytes ? URL.createObjectURL(new Blob([bytes as BlobPart])) : null;
-        blobUrls.set(path, url);
+        blobUrls.set(key, url);
         if (url) created.push(url);
       }
       return url ?? src; // string ⇒ the viewer caches+dedupes by this url
@@ -1632,8 +1629,16 @@ export class MapViewerScene {
       // Building ground-texture (ubersplat) overlay — needs only terrain + the GL
       // context, both ready here, so build it now (unlike fog, which waits on vision).
       // stampMapPathing (pre-placed buildings) and spawnUnit register splats into it.
+      // The tileset overlay a second time (issue #152, src/vfs/tileset.ts). This loader
+      // reads the mount DIRECTLY rather than through the viewer's path solver, and an
+      // ubersplat is one of the nine the tileset archive carries its own copy of — a town
+      // hall's foundation is not the same decal on snow as it is in a jungle. Nothing else
+      // this loader is shared with (weather, lightning, shadows) is tileset art, and those
+      // paths pass through untouched.
+      const tilesetArt = tilesetOverlay(this.vfs);
       const splatLoader = (p: string) => {
-        const b = this.vfs.rawBytes(p);
+        const art = tilesetArt(p, terrain.tileset);
+        const b = art.source.rawBytes(art.path);
         return b ? blpToCanvas(b) : null;
       };
       // Terrain camera culling (render/terrainCull.ts) — built off the same terrain the

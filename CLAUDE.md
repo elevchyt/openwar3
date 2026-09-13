@@ -26,6 +26,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
      campaign maps. 1.30 kept the MPQ *names* after dropping the format. A legacy MPQ-era install is still
      mountable and layers `war3 < war3x < war3xlocal < war3patch` (`src/vfs/profiles.ts`), but 1.30.4 is what we
      target and what the developer runs.
+   - **Tileset overlay** (`src/vfs/tileset.ts`; docs/casc.md): a tileset is an ARCHIVE, not a suffix. Every
+     tileset's cliff faces, water frames, ubersplats and re-tinted creep skins sit at the SAME logical path
+     (`ReplaceableTextures\Cliff\Cliff0.blp`) and are told apart by the nested archive they live in, reachable
+     in the mount as `Z.mpq:<path>`. `L` has none because the UNPREFIXED default is Lordaeron Summer's — which
+     is why Echo Isles, the canonical test map, was the one map that looked right while every other tileset drew
+     Lordaeron cliffs. The `<letter>_Cliff0.blp` names in `Deprecated.mpq` are an older, different copy missing
+     for all five tilesets TFT added.
    - **TFT audio (Huffman+ADPCM):** WC3 stores every WAV as **Huffman(+ADPCM)**. Stock `mdx-m3-viewer` threw
      `compression type 'huffman' not supported`, muting every expansion sound. Fixed in
      `patches/mdx-m3-viewer@5.12.0.patch` (Storm-Huffman port in `huffman.js` + `file.js` wiring + an `adpcm.js`
