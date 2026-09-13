@@ -153,7 +153,9 @@ shop's stock, unspent skill points), so the key and a count read as one family.
   handler skips both. A button you merely cannot afford answers its key, so it keeps it.
 * **The corner is the count's first.** A button that carries a count (a shop's stock, the
   learn-skill button's points) keeps the number bottom-right and moves its key to the top-right
-  (`.top`).
+  (`.top`). The learn-skill button is the exception (`countBesideKey`): its key keeps the
+  bottom-right and the unspent points sit immediately to its left (`.beside-key`). That button is
+  on every hero's card whether or not there is a point to spend; with none it wears no count.
 
 ## When a change takes effect
 

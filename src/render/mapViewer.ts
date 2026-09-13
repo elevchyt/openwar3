@@ -9661,24 +9661,29 @@ export class MapViewerScene {
         cooldownFrac: onCd && lvl.cooldown > 0 ? Math.max(0, Math.min(1, ab.cooldownLeft / lvl.cooldown)) : 0,
       }));
     }
-    if (su.isHero && su.skillPoints > 0) {
+    if (su.isHero) {
       // Hero Abilities (learn-skill): opens the skill list to spend unspent points.
       // WC3's canonical learn-abilities "Skillz" book art, default hotkey O, and a
-      // corner badge showing the points available. Take the CommandButtons copy, not
-      // the CommandButtonsDisabled one — the button is live (there are points to
-      // spend), and DISBTN* is just the desaturated art the engine swaps in when a
-      // button is unavailable.
+      // corner badge showing the points available. The button is on the card for EVERY
+      // hero, points or not — the game never takes it away; with nothing to spend it simply
+      // wears no badge, and the page it opens shows every row greyed. Take the
+      // CommandButtons copy, not the CommandButtonsDisabled one — the button is live either
+      // way, and DISBTN* is just the desaturated art the engine swaps in when a button is
+      // unavailable.
       out.push(this.cmd({
         id: "learnpage",
         icon: this.blpIcon("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp"),
         name: "Hero Abilities",
         hotkey: "O",
         col: 3, row: 1,
-        // No `modal` sparkle here, deliberately: the button already says there are points to
-        // spend — it only exists while there are, and it wears the count. The hero's PORTRAIT
-        // up in the corner is where the model goes, because that is the one that has to catch
-        // your eye while you are looking somewhere else entirely.
+        // No `modal` sparkle here, deliberately: the badge already says there are points to
+        // spend. The hero's PORTRAIT up in the corner is where the model goes, because that is
+        // the one that has to catch your eye while you are looking somewhere else entirely.
+        // A 0 prints no badge at all (the HUD skips a count that is not positive).
         count: su.skillPoints,
+        // With the key printed too, the points sit to the LEFT of it along the bottom edge
+        // rather than pushing the key up to the top-right as a shop's stock does.
+        countBesideKey: true,
         // …and its words, its letter and (from a CustomKeys.txt) its slot are
         // [CmdSelectSkill]'s, "Her|cffffcc00o|r Abilities" — the gilded letter in the Tip is
         // what pairs the title with the O on the button's corner. LAST in the literal, like

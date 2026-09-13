@@ -1469,6 +1469,11 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
   bottom: auto;
   top: 0;
 }
+/* …except on the learn-skill button, where the key keeps the corner and the skill points sit
+   immediately to its LEFT along the same bottom edge (`.beside-key`, on the COUNT box). */
+.hud-count-badge.beside-key {
+  right: var(--count-box);
+}
 .hud-count-badge.hud-hotkey-badge.long > span {
   font-size: max(7px, 30cqw);
 }

@@ -111,6 +111,9 @@ export interface CommandButton {
   cooldownLeft?: number; // seconds remaining on the ability's cooldown (0/undefined = ready)
   cooldownFrac?: number; // remaining fraction 0..1 (drives the radial sweep)
   count?: number; // corner badge (0/undefined = none) — e.g. a hero's unspent skill points
+  /** When the key is printed as well, the count sits to the LEFT of it on the bottom edge
+   *  instead of the key moving up to the top-right (the learn-skill button). */
+  countBesideKey?: boolean;
 }
 
 /** One hero inventory slot (null = empty). */
@@ -3256,7 +3259,7 @@ export class GameHud {
     // The printed keys hang off two options rather than off the buttons, so the options are in
     // the key too: `applyHotkeyOptions` switching either has to re-dress a card that did not change.
     const printKeys = hotkeysOnButtons();
-    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${c.desc}`).join("|");
+    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${!!c.countBesideKey}:${c.desc}`).join("|");
     if (key === this.cmdKey) {
       this.refreshCmdTooltip(cmds); // every frame: the stash moves without the card changing
       return;
@@ -3271,6 +3274,7 @@ export class GameHud {
       this.cmdLabels[i].textContent = "";
       setCount(this.cmdCount[i], "");
       setCount(this.cmdHotkey[i], "");
+      this.cmdCount[i].classList.remove("beside-key");
       onPress(btn, null);
       btn.onpointerenter = null;
       btn.onpointerleave = null;
@@ -3315,12 +3319,16 @@ export class GameHud {
       // (`disabled`) button, so neither has a key to print — the key handler skips both for the
       // same reason. A button you merely cannot AFFORD does answer its key, so it keeps it. The corner is the count's too: when a button
       // carries a quantity — a shop's stock, the learn-skill button's points — the number keeps
-      // the bottom-right it has always had and the key moves up to the top-right.
+      // the bottom-right it has always had and the key moves up to the top-right — except on a
+      // `countBesideKey` button (the learn-skill one), where the key keeps the corner and the
+      // number sits just left of it.
       if (printKeys && !c.passive && !c.disabled) {
         const k = printedKey(c);
         setCount(this.cmdHotkey[idx], k);
         this.cmdHotkey[idx].classList.toggle("long", k.length > 1);
-        this.cmdHotkey[idx].classList.toggle("top", !!c.count && c.count > 0);
+        const counted = !!c.count && c.count > 0;
+        this.cmdHotkey[idx].classList.toggle("top", counted && !c.countBesideKey);
+        this.cmdCount[idx].classList.toggle("beside-key", counted && !!c.countBesideKey);
       }
       // A passive takes no press — it's an indicator, so it never sinks and never
       // fires. Nor does an UNAVAILABLE button: WC3's greyed DISBTN state is inert,
