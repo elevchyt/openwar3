@@ -7839,6 +7839,16 @@ export class RtsController {
    * which is the point of having moved it.
    */
   execute(player: number, cmd: Command): boolean {
+    // A channeller given an order AS PART OF A GROUP keeps channelling (developer request): an
+    // Archmage raining Blizzard among five Footmen the player moves does not drop the storm to
+    // walk with them. Decided here because only the controller knows what the order was ISSUED
+    // to; the flag rides on the command, so the host's authority defers it exactly as ours does.
+    if (player === this.localPlayer && this.channelSpared(cmd)) {
+      if (cmd.c === "order") cmd = { ...cmd, group: true };
+      // The group's other right-click doors (pick up that item, board that burrow, drink from
+      // that well) have no queued form to wait in, so the channeller simply sits them out.
+      else return false;
+    }
     const applied = this.authority.execute(player, cmd);
     // On a CLIENT, forward the local player's accepted commands to the host's authoritative
     // sim (item 9b). We still applied it locally just above — sequencing B keeps the client
@@ -7850,6 +7860,34 @@ export class RtsController {
       this.matchLink.sendCommand(cmd);
     }
     return applied;
+  }
+
+  /**
+   * Does this command reach a unit holding a channel (SimWorld.holdsChannel) as one of a GROUP
+   * — the orderees hold it and at least one unit that is not channelling? A selection of
+   * nothing but channellers is the player talking to them, and a SHIFT-queued order never
+   * interrupted anything to begin with. A CAST is not spared: it is a button on the caster's
+   * own card, pressed at him — re-aiming a Blizzard among the Footmen is exactly that.
+   */
+  private channelSpared(cmd: Command): boolean {
+    let id: number;
+    switch (cmd.c) {
+      case "order":
+        if (cmd.queued) return false;
+        id = cmd.unitId;
+        break;
+      case "getitem":
+      case "garrison":
+      case "drink":
+        id = cmd.unitId;
+        break;
+      default:
+        return false;
+    }
+    const ids = this.orderees;
+    if (ids.size < 2 || !ids.has(id) || !this.sim.holdsChannel(id)) return false;
+    for (const other of ids) if (!this.sim.holdsChannel(other)) return true;
+    return false;
   }
 
   /** @see Authority.stashFor — a frozen copy; the renderer may read, never spend. */

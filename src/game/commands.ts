@@ -25,8 +25,10 @@ import type { QueuedOrder, RallyKind } from "../sim/world";
 // the command dropped there.
 
 export type Command =
-  /** Any queueable unit order — move, attack, harvest, build, hold, stop… */
-  | { c: "order"; unitId: number; order: QueuedOrder; queued: boolean }
+  /** Any queueable unit order — move, attack, harvest, build, hold, stop… `group`: the order
+   *  went to a selection that holds this unit AND something not channelling, so a channel this
+   *  unit is holding outlives it and the order waits in the queue (SimWorld.deferPastChannel). */
+  | { c: "order"; unitId: number; order: QueuedOrder; queued: boolean; group?: boolean }
   /** Cast an ability. `targetId` 0 and x/y 0 for a self/instant cast; one or the other is
    *  set for unit- and point-target spells respectively (the ability's own data says which).
    *  `queued` (Shift) appends it to the unit's order queue instead of casting now — WC3 chains

@@ -575,7 +575,7 @@ export class Authority {
   private dispatch(player: number, cmd: Command): boolean {
     switch (cmd.c) {
       case "order":
-        return this.applyOrder(player, cmd.unitId, cmd.order, cmd.queued);
+        return this.applyOrder(player, cmd.unitId, cmd.order, cmd.queued, cmd.group === true);
       case "cast":
         if (!this.ownedBy(player, cmd.unitId)) return false;
         // SHIFT-queued: through `applyOrder` with the rest of them, so a chained cast gets the
@@ -1025,7 +1025,7 @@ export class Authority {
    * the audit that caught it: closing the direct *sim* calls is only half of it, because
    * `order()` is itself a door.
    */
-  private applyOrder(player: number, id: number, o: QueuedOrder, queued: boolean): boolean {
+  private applyOrder(player: number, id: number, o: QueuedOrder, queued: boolean, group = false): boolean {
     if (!this.ownedBy(player, id)) return false;
     // No UI can address an OFF-FIELD unit — a worker inside a mine, a garrisoned peon, a
     // devoured sheep — because it is not in the selection to be named: the game drops it the
@@ -1057,6 +1057,13 @@ export class Authority {
     }
     if (queued) {
       this.sim.queueOrder(id, o);
+      return true;
+    }
+    // A GROUP order does not break a channel: the Archmage raining Blizzard among the Footmen it
+    // moves keeps raining, and takes the order when the channel ends. Selected alone (or with
+    // only other channellers) the order is meant for him and interrupts as it always has.
+    if (group && this.sim.holdsChannel(id)) {
+      this.sim.deferPastChannel(id, o);
       return true;
     }
     return this.sim.issueOrder(id, o);

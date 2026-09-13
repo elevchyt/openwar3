@@ -9056,6 +9056,37 @@ export class SimWorld {
     return u.order === "cast" && pc !== null && pc.started && !pc.fired;
   }
 
+  /**
+   * Is this unit holding a CHANNEL that a group order must not break — a Blizzard, a Starfall,
+   * a Drain, a Town Portal or Mass Teleport? True from the channel's wind-up (already locked,
+   * see castLocked) until the channel ends; false for a one-shot cast's wind-up or backswing,
+   * and for a caster still walking into range, which an order is free to re-task.
+   */
+  holdsChannel(id: number): boolean {
+    const u = this.units.get(id);
+    if (!u || u.hp <= 0) return false;
+    if (u.portalLeft > 0) return true;
+    const pc = u.pendingCast;
+    if (u.order !== "cast" || !pc || pc.ended) return false;
+    return pc.fired ? pc.channelLeft > 0 : pc.started && CHANNELED.has(pc.code);
+  }
+
+  /**
+   * Hand a channeller an unqueued GROUP order without breaking its channel: the order
+   * REPLACES the queue as an unqueued order does, but waits in it for the channel to end
+   * (developer request — an Archmage raining Blizzard keeps raining while the Footmen selected
+   * with him walk off, then follows). It also replaces what the cast would have RESUMED
+   * (`PendingCast.resume`), which is the order the player just overrode. A Stop has nothing to
+   * wait for: it is "forget the queue" and the channel is left to run.
+   */
+  deferPastChannel(id: number, order: QueuedOrder): void {
+    const u = this.units.get(id);
+    if (!u) return;
+    this.clearQueue(id);
+    if (u.pendingCast) u.pendingCast.resume = null;
+    if (order.kind !== "stop") this.queueOrder(id, order);
+  }
+
   stop(id: number): void {
     const u = this.units.get(id);
     if (u) this.standDown(u, false);
