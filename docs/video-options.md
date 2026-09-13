@@ -152,10 +152,19 @@ real frames until one was due therefore held a match at ~110 fps. The cap sleeps
 instead, and every real frame it asks for runs the batch. Measured on Echo Isles in a
 1280×720 window: 144 fps with vsync on, ~530 uncapped, 301 capped.
 
-The reticle and the tinted hover hand are real `cursor:` images for the same reason
-(`overlayCursor` in `mapViewer.ts`). A DOM element moved to the pointer trails it by a frame or
-two at any frame rate. Their pulse is 8 baked frames stepped on the wall clock, and Chromium
-re-reads a changed `cursor:` without the mouse moving.
+The reticle, the tinted hover hand and the carried item are real `cursor:` images for the same
+reason (`overlayCursor` / `carriedCursor` in `mapViewer.ts`). A DOM element moved to the pointer
+trails it by a frame or two at any frame rate. The pulse is 8 baked frames stepped on the wall
+clock, and Chromium re-reads a changed `cursor:` without the mouse moving. The carried item is ONE
+image, the icon composed behind the closed gauntlet, with the hotspot on the gauntlet's fingertip.
+
+Chromium refuses any cursor over 32 px whose rect reaches outside the viewport and moves to the
+next list entry, and the bottom inventory row sits ~5 px off the bottom edge. So
+`cursorImageValue` lists EDGE CROPS between the image and its ≤32 px twin, 8 px apart per side.
+Near an edge the cursor looks clipped rather than shrinking (63×53 → 45 → 37 → 29 approaching
+the bottom). To measure it, use Electron's `cursor-changed` in a **frameless** window: a framed
+test window on this desktop hides ~25 px of the page that `innerHeight` still counts, and every
+edge reading comes out wrong by exactly that.
 
 ## Verifying a change
 

@@ -1482,28 +1482,6 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
   from { background-position-x: 0; }
   to { background-position-x: calc(var(--cursor-px, 32px) * -3); }
 }
-/* An item being moved between inventory slots: the icon, and the closed gauntlet gripping
-   it. Both are DOM, because the gauntlet is set a whole icon away from the pointer's tip
-   and a CSS `cursor:` can only offset itself by a hotspot inside its own image — so while
-   `carrying-item` is on the OS pointer is hidden (see applyRaceCursor) and this pair is the
-   cursor. Placed entirely from JS (updateCarriedItem): the icon is sized off the live
-   inventory slot, since the console scales with the window, and the hand's offset is a
-   fraction of that size. Neither ever captures the pointer — the drop target does. */
-.carried-item,
-.carried-hand {
-  position: fixed;
-  background: center / contain no-repeat;
-  pointer-events: none;
-  image-rendering: pixelated;
-}
-/* No frame and no drop shadow: WC3's own carried icon is the bare art (its geoset is a
-   plain replaceable-texture quad), and a border or a cast shadow reads as a second,
-   floating UI element rather than as the thing in the gauntlet's fist. */
-.carried-item { z-index: 9; }
-/* In front of the icon — the fingers close OVER it. The gauntlet (unlike the item's own icon
-   above it) is cursor art enlarged bilinearly, so it keeps that filtering here. */
-.carried-hand { z-index: 10; image-rendering: auto; }
-
 /* Drag-box selection rectangle (WC3 green marquee). */
 .select-box {
   /* Absolute inside #world-layer — the drag box is drawn in canvas (offsetX/offsetY) coords. */

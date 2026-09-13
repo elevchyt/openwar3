@@ -64,25 +64,68 @@ export function cursorValue(sheet: CanvasImageSource, cell: number): string {
     `url(${cellUrl(sheet, 0, 0, cell, small)}) ${smallHot} ${smallHot}, default`;
 }
 
+/** How far apart the edge crops in `cursorImageValue` are cut. */
+const EDGE_CROP_STEP = 8;
+
 /**
- * A `cursor:` value for ANY enlarged cursor image — the same three-entry list as `cursorValue`
- * (the image, a ≤32 px twin Chromium never refuses near the viewport's edge, then `default`), for
- * cursor art that is not a plain cell of the sheet: the tinted hover hand and the target reticle,
- * each already enlarged by CURSOR_SCALE. `hotX`/`hotY` are in `img`'s own pixels; the twin's are
- * scaled down with it.
+ * A `cursor:` value for ANY enlarged cursor image that is not a plain cell of the sheet: the
+ * tinted hover hand, the target reticle and the carried item. `hotX`/`hotY` are in `img`'s own
+ * pixels.
+ *
+ * The list is `cursorValue`'s (the image, a ≤32 px twin, `default`) with EDGE CROPS between the
+ * image and the twin. Chromium refuses any entry over 32 px whose rect would reach outside the
+ * viewport (see `cursorValue`), and the twin is a SHRUNKEN picture — a 40-px reticle drops to 32,
+ * but the carried item is 62×53 and halves, and the bottom inventory row it is dropped on sits a
+ * few pixels off the bottom edge. So each side the image reaches past the hotspot is also offered
+ * cut back EDGE_CROP_STEP px at a time. Near an edge the first crop that fits is the one drawn —
+ * which looks like the screen edge clipping the cursor, as an OS clips its own, instead of the
+ * cursor changing size. Entries are tried in order and a position near one edge can satisfy only
+ * that edge's crops, so each side's run goes from least cut to most; a corner falls through to
+ * the twin.
  */
 export function cursorImageValue(img: HTMLCanvasElement, hotX: number, hotY: number): string {
-  const size = Math.max(img.width, img.height);
-  if (size <= MAX_UNCLIPPED_CURSOR) return `url(${img.toDataURL()}) ${Math.round(hotX)} ${Math.round(hotY)}, default`;
-  const k = MAX_UNCLIPPED_CURSOR / size;
+  const hx = Math.round(hotX);
+  const hy = Math.round(hotY);
+  const w = img.width;
+  const h = img.height;
+  const fits = (cw: number, ch: number): boolean => cw <= MAX_UNCLIPPED_CURSOR && ch <= MAX_UNCLIPPED_CURSOR;
+  if (fits(w, h)) return `url(${img.toDataURL()}) ${hx} ${hy}, default`;
+
+  const entries = [`url(${img.toDataURL()}) ${hx} ${hy}`];
+  /** `img` cut to (sx, sy, cw, ch), with the hotspot moved along with the cut. */
+  const crop = (sx: number, sy: number, cw: number, ch: number): string => {
+    const c = document.createElement("canvas");
+    c.width = cw;
+    c.height = ch;
+    c.getContext("2d")!.drawImage(img, sx, sy, cw, ch, 0, 0, cw, ch);
+    return `url(${c.toDataURL()}) ${hx - sx} ${hy - sy}`;
+  };
+  // Each side: how many pixels the image reaches past the hotspot's own row/column, and the cut
+  // that keeps `e` of them. A cut that brings the image to ≤32 px is never refused, so nothing
+  // cut further on that side could ever be reached.
+  const sides: Array<[number, (e: number) => [number, number, number, number]]> = [
+    [h - hy - 1, (e) => [0, 0, w, hy + 1 + e]], // bottom
+    [w - hx - 1, (e) => [0, 0, hx + 1 + e, h]], // right
+    [hy, (e) => [0, hy - e, w, h - (hy - e)]], // top
+    [hx, (e) => [hx - e, 0, w - (hx - e), h]], // left
+  ];
+  for (const [reach, cut] of sides) {
+    for (let e = reach - EDGE_CROP_STEP; e >= 0; e -= EDGE_CROP_STEP) {
+      const [sx, sy, cw, ch] = cut(e);
+      entries.push(crop(sx, sy, cw, ch));
+      if (fits(cw, ch)) break;
+    }
+  }
+
+  const k = MAX_UNCLIPPED_CURSOR / Math.max(w, h);
   const c = document.createElement("canvas");
-  c.width = Math.round(img.width * k);
-  c.height = Math.round(img.height * k);
+  c.width = Math.round(w * k);
+  c.height = Math.round(h * k);
   const ctx = c.getContext("2d")!;
   ctx.imageSmoothingEnabled = true; // bilinear, like every other cut (see CURSOR_SCALE)
   ctx.drawImage(img, 0, 0, c.width, c.height);
-  return `url(${img.toDataURL()}) ${Math.round(hotX)} ${Math.round(hotY)}, ` +
-    `url(${c.toDataURL()}) ${Math.round(hotX * k)} ${Math.round(hotY * k)}, default`;
+  entries.push(`url(${c.toDataURL()}) ${Math.round(hx * k)} ${Math.round(hy * k)}`);
+  return `${entries.join(", ")}, default`;
 }
 
 let styleEl: HTMLStyleElement | null = null;
