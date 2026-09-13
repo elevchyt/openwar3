@@ -594,6 +594,11 @@ function supply(c: PlusCtx): void {
   const cap = ai.foodCap();
   const headroom = Math.max(1, ai.foodMade(table.farm));
   if (used + headroom < cap) return;
+  // At the food CEILING (100 in melee) a supply building makes nothing more — `foodCap` reads
+  // no higher — so without this the row would ask for another one every pass for ever. A Farm
+  // LOST at the ceiling is still replaced: the cap drops below it the moment the survivors no
+  // longer reach it.
+  if (cap >= ai.foodCeiling()) return;
   ai.setBuildUnit(ai.townCountDone(table.farm) + (used >= cap ? 2 : 1), table.farm);
 }
 

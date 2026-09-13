@@ -197,6 +197,7 @@ check("the Horde walks east", map.HORDE.forward, 1);
       items: { get: () => ({ gold: 400 }) },
       coAllied: (a, b) => (a <= 5) === (b <= 5),
       visible: () => true,
+      foodCeiling: () => 100,
       say: (player, text, scope) => lines.push({ player, text, scope: scope ?? "all" }),
       execute: (player, cmd) => {
         commands.push({ player, ...cmd });

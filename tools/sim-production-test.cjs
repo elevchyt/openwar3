@@ -15,10 +15,11 @@
 //     itself lives in the renderer; what is checked here is the authority property it rests
 //     on — that it charges AS IT GOES, so a stash covering one Footman buys exactly one.
 //
-//   • FOOD is paid at the HEAD of the queue, never when the button is pressed. A job behind
-//     another costs the player nothing, pays when its turn comes, and STANDS THERE at 0
-//     seconds of progress if there is no supply to pay with — then starts on its own the
-//     moment a Farm lands. `BuildJob.foodPaid` is the receipt, and `foodFor` reads it.
+//   • FOOD gates the BUTTON: a unit the supply has no room for right now is refused, and nothing
+//     is queued or charged. It is still PAID at the head of the queue — a job behind another
+//     costs the player nothing until its turn, and STANDS THERE at 0 seconds of progress if the
+//     supply has gone by then — then starts on its own the moment a Farm lands.
+//     `BuildJob.foodPaid` is the receipt, and `foodFor` reads it.
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
@@ -184,13 +185,25 @@ console.log("\n-- a train order charges AS IT GOES, which is what makes the spre
     [a.building.queue.length, b.building.queue.length], [1, 0]);
 }
 
-console.log("\n-- FOOD is paid at the HEAD of the queue, and an unpaid head does not move --------");
+console.log("\n-- FOOD gates the button, and is paid at the HEAD of the queue ---------------------");
 
 {
-  // A Farm is 12 food and a Footman is 2, so there is room for six standing units — and the
-  // QUEUE is not bound by that at all. Queueing costs a player nothing but gold: the job pays
-  // when it reaches the front, so ten of them get in and the supply only ever holds back what
-  // is actually training.
+  // At the cap the click is refused outright: nothing queued, no gold taken.
+  newWorld();
+  world.initStash(0, 10000, 10000);
+  building("hhou", 0);
+  const a = building("hbar", 0);
+  for (let i = 0; i < 6; i++) soldier("hfoo", 0);
+  check("six Footmen standing, the Farm is full", authority.foodFor(0), { used: 12, made: 12 });
+  check("a seventh is refused", train(0, a, "hfoo"), false);
+  check("…nothing is queued", a.building.queue.length, 0);
+  check("…and nothing is charged", world.stashOf(0).gold, 10000);
+}
+
+{
+  // Queueing is measured against what the player eats NOW — which is what the supply readout
+  // shows — and a job behind another costs nothing until its turn: the job pays when it
+  // reaches the front, so a line may still be loaded while there is room.
   newWorld();
   world.initStash(0, 10000, 10000);
   building("hhou", 0);
@@ -198,7 +211,7 @@ console.log("\n-- FOOD is paid at the HEAD of the queue, and an unpaid head does
   const b = building("hbar", 0);
   const taken = [];
   for (let i = 0; i < 5; i++) taken.push(train(0, a, "hfoo"), train(0, b, "hfoo"));
-  check("every one of them is queued — food does not gate the button", taken.filter(Boolean).length, 10);
+  check("with room in the supply every one of them is queued", taken.filter(Boolean).length, 10);
   check("…five apiece", [a.building.queue.length, b.building.queue.length], [5, 5]);
   check("…and nothing has been charged food yet", authority.foodFor(0), { used: 0, made: 12 });
   // One tick, and only the two at the FRONT have taken their food. The eight behind them are
@@ -229,11 +242,34 @@ console.log("\n-- FOOD is paid at the HEAD of the queue, and an unpaid head does
   check("…the second is halted at 0s, unpaid",
     [b.building.queue[0].foodPaid === true, b.building.queue[0].timeLeft], [false, 20]);
   check("…and the halt did not overrun the cap", authority.foodFor(0), { used: 12, made: 12 });
+  check("…and now at the cap a third click is refused", train(0, a, "hfoo"), false);
   // A second Farm finishes: the halted job takes its food on the next tick and gets going.
   building("hhou", 0);
   tickQueues(1);
   check("with supply raised it pays and starts",
     [b.building.queue[0].foodPaid === true, b.building.queue[0].timeLeft < 20], [true, true]);
+}
+
+console.log("\n-- the melee food CEILING: 100, however many Farms --------------------------------");
+
+{
+  // Nine Farms make 108, and the cap reads 100 (MISC_ENGINE.FoodCeiling). Past it another Farm
+  // makes nothing — but it is not wasted either: lose one of the nine and the survivors' 96
+  // shows, lose it with ten standing and the spare one's food fills the gap.
+  newWorld();
+  world.initStash(0, 10000, 10000);
+  const farms = [];
+  for (let i = 0; i < 9; i++) farms.push(building("hhou", 0));
+  const a = building("hbar", 0);
+  check("nine Farms, capped at 100", authority.foodFor(0).made, 100);
+  for (let i = 0; i < 50; i++) soldier("hfoo", 0);
+  check("a Footman past 100/100 is refused", train(0, a, "hfoo"), false);
+  world.units.delete(farms[0].id); // the fixture units are bare, so not removeUnit
+  check("one Farm lost from nine: 96", authority.foodFor(0).made, 96);
+  building("hhou", 0);
+  building("hhou", 0);
+  world.units.delete(farms[1].id); // the fixture units are bare, so not removeUnit
+  check("…a surplus Farm covers the next loss", authority.foodFor(0).made, 100);
 }
 
 console.log("\n-- a FOOD building pays when it is finished (issue #144) --------------------------");
@@ -247,14 +283,11 @@ console.log("\n-- a FOOD building pays when it is finished (issue #144) --------
   farm.building.constructionLeft = 35; // a Farm's own build time
   const a = building("hbar", 0);
   check("the site makes no food", authority.foodFor(0), { used: 0, made: 0 });
-  // The Footman is QUEUED — food gates the head of the queue, not the button — but the head
-  // cannot pay on a Farm that is still a foundation, so it stands there at 0s.
-  check("…the Footman is still queued on it", train(0, a, "hfoo"), true);
-  tickQueues(1);
-  check("…but it cannot pay, so nothing moves",
-    [a.building.queue[0].foodPaid === true, a.building.queue[0].timeLeft], [false, 20]);
+  // A foundation's six do not exist yet, so the Footman cannot be queued on them.
+  check("…the Footman is refused on it", train(0, a, "hfoo"), false);
   farm.building.constructionLeft = 0;
   check("finished, it makes its twelve", authority.foodFor(0), { used: 0, made: 12 });
+  check("…and the Footman is taken", train(0, a, "hfoo"), true);
   tickQueues(1);
   check("…and now the Footman pays and starts",
     [a.building.queue[0].foodPaid === true, a.building.queue[0].timeLeft < 20], [true, true]);

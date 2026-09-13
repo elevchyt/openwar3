@@ -102,7 +102,7 @@ function recorder(table, strategy, profile, opts = {}) {
     // crew on: a haunt still going up is a mine nobody can kneel at (plan.ts `mineWorkable`).
     countAt: (id, town) => opts.perTown?.[town]?.[id] ?? count(id),
     minesOwned: () => 1, goldOwned: () => 20000,
-    foodUsed: () => opts.foodUsed ?? 0, foodCap: () => opts.foodCap ?? 100,
+    foodUsed: () => opts.foodUsed ?? 0, foodCap: () => opts.foodCap ?? 100, foodCeiling: () => opts.foodCeiling ?? 100,
     foodMade: (id) => opts.foodMade?.[id] ?? 6,
     gold: () => opts.gold ?? 500, wood: () => opts.wood ?? 500,
     clearHarvestAI: () => { harvest.length = 0 },
@@ -320,6 +320,14 @@ for (const [race, table] of Object.entries(PLUS_RACES)) {
   // The row has to out-ask what the loop already sees, or `startUnit` answers it for free.
   check(`${race} asks for MORE than TownCount already sees`,
     (row?.qty ?? 0) > r.ai.townCount(table.farm), true);
+  // …and at the CEILING (100 in melee) another supply building makes nothing, so the row that
+  // asked for one every pass would buy Farms for the rest of the match.
+  const capped = recorder(table, table.strategies[0], PLUS_NORMAL, {
+    standing: { [table.halls[0]]: 1, [upgraded]: 10 },
+    foodUsed: 100, foodCap: 100, foodMade: { [table.farm]: 10 },
+  });
+  buildPlan(capped.ctx);
+  check(`${race} asks for no supply at the food ceiling`, capped.build.some((x) => x.item === table.farm), false);
 }
 
 // --- the crews are the top of the ladder ------------------------------------------------
@@ -615,7 +623,8 @@ function runEconomy() {
       minesOwned: () => S.mines, goldOwned: () => 20000,
       foodUsed: () => Object.entries(S.units).reduce((n, [id, q]) => n + (def(id)?.foodUsed ?? 0) * q, 0)
         + jobs().filter((j) => j.kind === "unit").reduce((n, j) => n + (def(j.id)?.foodUsed ?? 0), 0),
-      foodCap: () => S.bldgs.filter((b) => b.ready).reduce((n, b) => n + (def(b.type)?.foodMade ?? 0), 0),
+      foodCap: () => Math.min(100, S.bldgs.filter((b) => b.ready).reduce((n, b) => n + (def(b.type)?.foodMade ?? 0), 0)),
+      foodCeiling: () => 100,
       foodMade: (id) => def(id)?.foodMade ?? 0,
       gold: () => S.gold, wood: () => S.lumber,
       clearHarvestAI: () => {}, harvestGold: () => {}, harvestWood: () => {},

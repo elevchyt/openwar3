@@ -977,6 +977,7 @@ export class RtsController {
       // The computer's OWN eyes, not the local player's — every seat has a viewpoint from
       // tick 0 (VisionSet.seat), so this is the same grid its units acquire through.
       visible: (player, x, y) => this.viewpoints.viewpointFor(player).vision.stateAt(x, y) === FogState.Visible,
+      foodCeiling: (player) => this.authority.foodCapCeilingOf(player),
       // The two things only Computer+ asks for (src/ai/plus/). Both leave through the SAME
       // doors a person's would: a line of chat is routed and relayed exactly as a typed one,
       // and "I have lost, I am leaving" is the ordinary player-left event the map's own melee
@@ -7610,10 +7611,8 @@ export class RtsController {
     switch (cmd.c) {
       case "train":
         def = this.registry.get(cmd.unitId);
-        // Food refuses a HIRE and nothing else: a trained unit is queued whatever the supply
-        // says and takes its food at the head of the queue (SimWorld.payJobFood), so naming
-        // food here would answer a full-queue refusal with the wrong reason.
-        food = this.tech.get(this.sim.units.get(cmd.buildingId)?.typeId ?? "").sellunits.includes(cmd.unitId);
+        // A unit the supply has no room for is refused, trained or hired (Authority.execute).
+        food = true;
         break;
       case "build":
         def = this.registry.get(cmd.defId);
@@ -7629,8 +7628,8 @@ export class RtsController {
     if (stash.gold < def.goldCost) return "Nogold";
     if (stash.lumber < def.lumberCost) return "Nolumber";
     if (food) {
-      const f = this.authority.foodFor(player);
-      if (f.used + def.foodUsed > f.made) return "Nofood";
+      const err = this.foodRefusal(player, def.foodUsed);
+      if (err) return err;
     }
     return "";
   }
@@ -7816,6 +7815,26 @@ export class RtsController {
   /** @see Authority.foodFor */
   foodFor(owner: number): { used: number; made: number } {
     return this.authority.foodFor(owner);
+  }
+
+  /** @see Authority.foodCapCeilingOf — the most food this player's buildings can ever make
+   *  (100 in melee, MISC_ENGINE.FoodCeiling). */
+  foodCeilingOf(owner: number): number {
+    return this.authority.foodCapCeilingOf(owner);
+  }
+
+  /**
+   * Why a unit worth `need` food cannot be queued for this player, or "" when it can. Two
+   * different lines, both `Units\CommandStrings.txt [Errors]`: `Nofood` ("Build more Farms to
+   * continue unit production.", race-indexed) while more supply would help, and `Maxsupply`
+   * ("Unable to create unit due to maximum food limit.") once the cap already sits at the
+   * ceiling and no Farm can raise it.
+   */
+  foodRefusal(owner: number, need: number): "" | "Nofood" | "Maxsupply" {
+    if (need <= 0) return "";
+    const f = this.authority.foodFor(owner);
+    if (f.used + need <= f.made) return "";
+    return f.made >= this.authority.foodCapCeilingOf(owner) ? "Maxsupply" : "Nofood";
   }
 
   /** @see Authority.setMapFoodCeiling — the map's own `war3mapMisc.txt` `[Misc] FoodCeiling`. */

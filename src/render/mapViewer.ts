@@ -386,10 +386,10 @@ const SHOP_ERROR: Record<ShopResult, string> = {
 
 // The [Errors] keys that aren't spoken by any one subsystem — the resource refusals the
 // command card hands out. The strings themselves come out of the archive (data/commandStrings.ts).
-// Nofood is race-indexed: each race names its own supply building.
+// Nofood is race-indexed: each race names its own supply building. (Its sibling at the food
+// ceiling, `Maxsupply`, has no UISounds.slk row and so gets the plain error beep.)
 const ERR_NOGOLD = "Nogold";
 const ERR_NOLUMBER = "Nolumber";
-const ERR_NOFOOD = "Nofood";
 
 // The [Errors] keys that get a spoken warning rather than the generic error beep, and the
 // UISounds.slk cue prefix each maps to (NoGold + Orc → NoGoldOrc).
@@ -8625,12 +8625,10 @@ export class MapViewerScene {
       const metTech = gated
         ? world.canMake(this.localPlayer, uid, owned)
         : world.tech?.maxAllowed(this.localPlayer, uid) !== 0;
-      // FOOD only greys a HIRE. A trained unit may be queued past the supply cap and takes
-      // its food when it reaches the head of the queue (SimWorld.payJobFood), so a greyed
-      // Footman would be refusing a click that in fact succeeds. A shop hire is instant and
-      // really is refused, so it keeps the test — the same split `trainRefusal` makes.
+      // FOOD is part of the price: a unit the supply has no room for is refused at the click
+      // (trainRefusal), trained or hired alike.
       const afford = stash.gold >= gold && stash.lumber >= lumber
-        && (!sold.has(uid) || food.used + d.foodUsed <= food.made);
+        && (d.foodUsed <= 0 || food.used + d.foodUsed <= food.made);
       const inStock = stock !== 0; // -1 = not stock-limited, 0 = sold out
       const [col, row] = place(d.buttonX, d.buttonY);
       used.add(`${col},${row}`);
@@ -10066,14 +10064,11 @@ export class MapViewerScene {
     const stash = this.rts.stashFor(this.localPlayer);
     if (stash.gold < (freeHero ? 0 : d.goldCost)) return ERR_NOGOLD;
     if (stash.lumber < (freeHero ? 0 : d.lumberCost)) return ERR_NOLUMBER;
-    // "Not enough food" is a HIRE's answer only. A trained unit joins the queue whatever the
-    // supply says and waits at the head for the food (SimWorld.payJobFood) — refusing the
-    // click here would be the client vetoing an order the authority accepts.
-    const bType = this.rts.simWorld.units.get(buildingId)?.typeId ?? "";
-    if (this.tech.get(bType).sellunits.includes(unitId)) {
-      const food = this.rts.foodFor(this.localPlayer);
-      if (food.used + d.foodUsed > food.made) return ERR_NOFOOD;
-    }
+    // Food: the authority refuses to queue a unit the supply has no room for, trained or hired
+    // alike — "Build more Farms…" in the race's own voice, or "maximum food limit" at the
+    // ceiling (RtsController.foodRefusal).
+    const foodErr = this.rts.foodRefusal(this.localPlayer, d.foodUsed);
+    if (foodErr) return foodErr;
     // A sold-out shelf has its own line ("That unit is not available") — worth keeping,
     // since a Tavern with no stock looks identical to one that just refused silently.
     if (this.rts.simView.shopStock(buildingId, unitId) === 0) return SHOP_ERROR.nostock;
@@ -10137,10 +10132,10 @@ export class MapViewerScene {
     if (f && d) {
       const mode: ReviveMode = world.isShopUnit(buildingId) ? "tavern" : "altar";
       const cost = heroReviveCost(mode, d.goldCost, d.lumberCost, d.buildTime || 1, f.level);
-      // Gold and lumber only: a revive takes its FOOD at the head of the altar's queue, like
-      // a trained unit (SimWorld.payJobFood), so being at the supply cap delays the hero
-      // rather than refusing the button.
       if (!this.canAfford(cost.gold, cost.lumber)) return;
+      // …and the food, which the authority checks for a revive exactly as for training.
+      const foodErr = this.rts.foodRefusal(this.localPlayer, d.foodUsed);
+      if (foodErr) return this.refuse(foodErr);
     }
     this.rts.execute(this.localPlayer, { c: "revive", buildingId, heroId });
   }

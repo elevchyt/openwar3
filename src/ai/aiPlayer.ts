@@ -73,6 +73,9 @@ export interface AiHost {
    *  computer's own viewpoint (game/viewpoint.ts) rather than the local one. What
    *  `AiPlayer.knows` is built on. */
   visible(player: number, x: number, y: number): boolean;
+  /** `GetPlayerState(p, PLAYER_STATE_FOOD_CAP_CEILING)` — the most food this player's buildings
+   *  can make (100 in melee). `FoodCap()` never reads past it (Authority.foodFor). */
+  foodCeiling(player: number): number;
 }
 
 /** One row of the build array — `build_qty`/`build_type`/`build_item`/`build_town`. */
@@ -438,7 +441,14 @@ export class AiPlayer {
   }
 
   foodCap(): number {
-    return this.foodOf().made;
+    // Clamped to the ceiling like the real state is: past 100 another Farm makes nothing, so a
+    // computer reading 106 would be told it has room for units the authority refuses.
+    return Math.min(this.foodOf().made, this.host.foodCeiling(this.player));
+  }
+
+  /** `GetPlayerState(PLAYER_STATE_FOOD_CAP_CEILING)`. */
+  foodCeiling(): number {
+    return this.host.foodCeiling(this.player);
   }
 
   /** `GetFoodMade(id)` — a type's supply contribution, off its own registry row. */
