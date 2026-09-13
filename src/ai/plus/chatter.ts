@@ -83,6 +83,9 @@ export interface Standing {
   workers: number;
   /** Food spent on fighters. */
   armyFood: number;
+  /** Fighting UNITS, heroes left out (they have `heroes`) — standing or in a queue, the same
+   *  bodies `armyFood` prices. What `DESPAIR.armyGone` is a bar on. */
+  armyUnits: number;
   gold: number;
   /** Enemy fighters standing in our towns. */
   invaders: number;
@@ -169,7 +172,13 @@ export function teamLost(team: readonly number[], allies: readonly number[]): bo
  *    this is "no town centre anywhere", expansions included). Losing it with a worker and the
  *    gold for another is not clause 1, which is why it needs a weight at all: the position CAN
  *    rebuild, and it is still a player who has been knocked out of their own base.
- *  • `armyGone` — nothing on the field and nothing in a queue (`armyFood` counts production).
+ *  • `armyGone` — fewer than `ARMY_REMNANT` (3) soldiers left, on the field and in the queues
+ *    together. Measured in UNITS, like `workersShort`, and not in food: it used to be
+ *    `armyFood === 0`, and a Grunt and a Peon left standing beside a razed hall is not an army
+ *    any more than no Grunt is — two stragglers un-latched the term that exists to read their
+ *    loss. Heroes are left out because they have terms of their own. A step rather than a ramp,
+ *    unlike the workers: three soldiers is too short a range to grade. Like every term it is
+ *    read only past `CONCEDE_NOT_BEFORE`, and at 0.3 it cannot carry a concession on its own.
  *  • `invaded` / `invaderHero` — somebody is standing in our towns, and one of them is a hero.
  *  • `workersShort` — the ECONOMY, and the one term that is not a boolean. It is live below
  *    `WORKER_ECONOMY` (10, about what a melee player is running once their opening is down) and
@@ -215,6 +224,10 @@ export const DESPAIR = {
  *  economy, and above every difficulty's own target but Insane's 14 (`PlusProfile.workers`). */
 export const WORKER_ECONOMY = 10;
 
+/** The soldier count below which `DESPAIR.armyGone` reads the army as gone — two stragglers
+ *  are not an army. Counted in units, like `WORKER_ECONOMY`, heroes aside. */
+export const ARMY_REMNANT = 3;
+
 /** Where the weighed reading tips into a concession. One whole defeat's worth — which the two
  *  heavy terms make exactly, and nothing else in `DESPAIR` reaches without one of them. */
 export const CONCEDE_AT = 1;
@@ -226,7 +239,7 @@ export function despair(s: Standing, hallCost: number): number {
     d += DESPAIR.heroesDead + DESPAIR.heroEach * Math.min(s.heroesLost - 1, 2);
   }
   if (s.halls === 0) d += DESPAIR.hallDown;
-  if (s.armyFood === 0) d += DESPAIR.armyGone;
+  if (s.armyUnits < ARMY_REMNANT) d += DESPAIR.armyGone;
   if (s.invaders > 0) d += DESPAIR.invaded;
   if (s.invaderHeroes > 0) d += DESPAIR.invaderHero;
   if (s.workers < WORKER_ECONOMY) {

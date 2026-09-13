@@ -6237,12 +6237,21 @@ export class ComputerPlusAi {
     let structures = 0;
     let workers = 0;
     let heroes = 0;
+    // SOLDIERS, the bodies `armyFood` prices minus the heroes: standing, and in the queues. A
+    // summon costs no food and is not counted, since it is gone in a minute either way.
+    let armyUnits = 0;
     for (const u of this.host.world.units.values()) {
       if (u.owner !== b.ai.player || u.hp <= 0) continue;
+      for (const job of u.building?.queue ?? []) {
+        if (job.kind !== "unit") continue;
+        const made = this.host.registry.get(job.unitId);
+        if (made && !made.isHero && made.foodUsed > 0 && !made.classification.includes("peon")) armyUnits++;
+      }
       if (u.building) {
         if (u.building.constructionLeft <= 0) structures++;
       } else if (u.isPeon) workers++;
       else if (u.isHero) heroes++;
+      else if (!isCopy(u) && (this.host.registry.get(u.typeId)?.foodUsed ?? 0) > 0) armyUnits++;
     }
     // A hero on an altar's clock is one we HAVE — it is coming back at full strength inside
     // the minute, which is a move from here (see `hopeless` clause 4). `revivingAt` is the
@@ -6254,6 +6263,7 @@ export class ComputerPlusAi {
       structures,
       workers,
       armyFood: this.armyFood(b),
+      armyUnits,
       gold: b.ai.gold(),
       invaders: this.invaders(b),
       invaderHeroes: this.invaderHeroes(b),

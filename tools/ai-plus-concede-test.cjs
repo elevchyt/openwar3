@@ -24,7 +24,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { hopeless, despair, goneShare, teamLost, DESPAIR, CONCEDE_AT, WORKER_ECONOMY, CONCEDE_NOT_BEFORE, LEAVE_AFTER } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
+const { hopeless, despair, goneShare, teamLost, DESPAIR, CONCEDE_AT, WORKER_ECONOMY, ARMY_REMNANT, CONCEDE_NOT_BEFORE, LEAVE_AFTER } = require(join(REPO, ".sim-build", "src", "ai", "plus", "chatter.js"));
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 
 let failed = 0;
@@ -37,11 +37,11 @@ function check(what, got, want) {
 
 // The Great Hall's own price, which is what `mannersPass` reads off the registry for an orc.
 const HALL = 385;
-const at = (o) => ({ halls: 0, structures: 0, workers: 0, armyFood: 0, gold: 0, invaders: 0,
+const at = (o) => ({ halls: 0, structures: 0, workers: 0, armyFood: 0, armyUnits: 0, gold: 0, invaders: 0,
   invaderHeroes: 0, heroes: 0, heroesLost: 0, teamGone: 0, ...o });
 // A position with a base and an army standing — what clause 4's cases vary the HEROES of, so
 // that nothing in them can be passing for one of the first three clauses' reasons.
-const holding = (o) => at({ halls: 1, structures: 6, workers: 5, armyFood: 30, gold: 500, ...o });
+const holding = (o) => at({ halls: 1, structures: 6, workers: 5, armyFood: 30, armyUnits: 10, gold: 500, ...o });
 
 console.log("\n-- positions that are still games ------------------------------------------");
 
@@ -54,7 +54,7 @@ check("the base is being razed, but the hall still stands",
   hopeless(at({ halls: 1, structures: 2, workers: 3, gold: 600, invaders: 8 }), HALL), false);
 // `armyFood` counts production queues too, so a building still making soldiers is an answer.
 check("hall gone and raiders in the base, but a Barracks is still training",
-  hopeless(at({ structures: 2, workers: 2, armyFood: 5, gold: 900, invaders: 6 }), HALL), false);
+  hopeless(at({ structures: 2, workers: 2, armyFood: 6, armyUnits: 3, gold: 900, invaders: 6 }), HALL), false);
 check("hall gone, but nothing is standing on the base — it can rebuild",
   hopeless(at({ structures: 2, workers: 2, gold: 900, invaders: 0 }), HALL), false);
 check("no hall yet the purse and the builders are there (clause 1's own veto)",
@@ -80,7 +80,7 @@ console.log("\n-- clause 4: heroless against a live enemy hero in the base -----
 check("our hero is dead, theirs is alive and in our base",
   hopeless(holding({ heroesLost: 1, invaders: 9, invaderHeroes: 1 }), HALL), true);
 check("…still true with a whole base and army standing: this clause reads the FIGHT",
-  hopeless(holding({ halls: 3, structures: 14, armyFood: 60, gold: 2000, heroesLost: 3, invaders: 12, invaderHeroes: 2 }), HALL), true);
+  hopeless(holding({ halls: 3, structures: 14, armyFood: 60, armyUnits: 20, gold: 2000, heroesLost: 3, invaders: 12, invaderHeroes: 2 }), HALL), true);
 
 check("…but not while one of ours is still on the field",
   hopeless(holding({ heroes: 1, heroesLost: 1, invaders: 9, invaderHeroes: 1 }), HALL), false);
@@ -111,7 +111,7 @@ check("…still true with a full purse and a base standing: there is nothing to 
 
 // …and the three ways out of it, each of which is a real route back.
 check("…but not while an army of ours is still on the field",
-  hopeless(at({ halls: 2, structures: 8, workers: 4, armyFood: 12, gold: 700, heroesLost: 1, invaders: 7 }), HALL), false);
+  hopeless(at({ halls: 2, structures: 8, workers: 4, armyFood: 12, armyUnits: 4, gold: 700, heroesLost: 1, invaders: 7 }), HALL), false);
 check("…nor once the raiders have left",
   hopeless(at({ halls: 2, structures: 8, workers: 4, gold: 700, heroesLost: 1, invaders: 0 }), HALL), false);
 check("…nor while a hero of ours is up (or on the altar's clock)",
@@ -156,7 +156,7 @@ check("no hero and no army left, in a 4v4 with the team intact — plays on",
 check("…and the same position concedes once one of the three teammates has gone",
   hopeless(at({ ...wounded, teamGone: 1 / 3 }), HALL), true);
 check("a healthy player on a broken team still plays on — this term does not carry a game alone",
-  hopeless(at({ halls: 2, structures: 9, workers: 12, armyFood: 40, gold: 800, heroes: 2, teamGone: 1 / 3 }), HALL), false);
+  hopeless(at({ halls: 2, structures: 9, workers: 12, armyFood: 40, armyUnits: 12, gold: 800, heroes: 2, teamGone: 1 / 3 }), HALL), false);
 
 console.log("\n-- the weighed reading -----------------------------------------------------");
 
@@ -167,15 +167,15 @@ console.log("\n-- the weighed reading ------------------------------------------
 check("all heroes dead is half a lost game on its own, and not a concession",
   hopeless(holding({ heroesLost: 1 }), HALL), false);
 check("…and so is the hall going down with the gold and the workers to put one back up",
-  hopeless(at({ structures: 6, workers: 5, armyFood: 30, gold: 900 }), HALL), false);
+  hopeless(at({ structures: 6, workers: 5, armyFood: 30, armyUnits: 10, gold: 900 }), HALL), false);
 // THE ASK. No clause reaches this: a hall can be rebuilt (clause 1's veto), nobody is standing
 // in the base (clauses 2, 3 and 5) and there is no enemy hero in it (clause 4) — and the army
 // is still on the field. Together the two are a player who has been knocked out of their game.
 check("…but every hero dead AND the hall razed is a concession, army or no army",
-  hopeless(at({ structures: 6, workers: 5, armyFood: 30, gold: 900, heroesLost: 1 }), HALL), true);
+  hopeless(at({ structures: 6, workers: 5, armyFood: 30, armyUnits: 10, gold: 900, heroesLost: 1 }), HALL), true);
 check("…and the heavier for a second and a third hero on the floor",
-  despair(at({ structures: 6, workers: 5, armyFood: 30, gold: 900, heroesLost: 3 }), HALL)
-    > despair(at({ structures: 6, workers: 5, armyFood: 30, gold: 900, heroesLost: 1 }), HALL), true);
+  despair(at({ structures: 6, workers: 5, armyFood: 30, armyUnits: 10, gold: 900, heroesLost: 3 }), HALL)
+    > despair(at({ structures: 6, workers: 5, armyFood: 30, armyUnits: 10, gold: 900, heroesLost: 1 }), HALL), true);
 // Neither heavy term is reachable by the light ones adding up — that is what CONCEDE_AT is for.
 check("a bad position with a hero and a hall in it is still a game",
   hopeless(at({ halls: 1, structures: 4, workers: 3, gold: 0, invaders: 5, invaderHeroes: 1, heroes: 1 }), HALL), false);
@@ -201,6 +201,24 @@ check("…but a mined-out economy is still not a concession on its own",
 // The position the header calls "it can rebuild" — and the one a flat step at 10 flipped.
 check("a razed hall with two workers and the gold for another still plays on",
   hopeless(at({ structures: 2, workers: 2, gold: 900 }), HALL), false);
+
+// The army term is a bar on SOLDIERS, not on food: two stragglers left over from a traded army
+// are not an army, and reading `armyFood === 0` let them un-latch the term that measures it.
+check("three soldiers is still an army and costs nothing",
+  despair(holding({ heroes: 1, workers: 12, armyUnits: ARMY_REMNANT }), HALL), 0);
+check("…two is an army gone, whatever food they stand for",
+  despair(holding({ heroes: 1, workers: 12, armyFood: 10, armyUnits: 2 }), HALL), DESPAIR.armyGone);
+check("…and a hero with two soldiers beside it is an army gone too — the hero has its own terms",
+  despair(holding({ heroes: 1, workers: 12, armyFood: 11, armyUnits: 2 }), HALL), DESPAIR.armyGone);
+check("…but two stragglers alone do not carry a concession",
+  hopeless(holding({ heroes: 1, workers: 12, armyUnits: 2 }), HALL), false);
+// The reported shape: the hall razed and every hero dead is already a concession, so the case
+// that moved is the lighter one — no hero left and the raid in the base, with two Grunts
+// alive that used to hold it open (0.5 + 0.3 + 0.2, and a scratch on the economy).
+check("no hero, a raid in the base, and two Grunts left is a lost game",
+  hopeless(holding({ heroesLost: 1, workers: 8, armyFood: 4, armyUnits: 2, invaders: 6 }), HALL), true);
+check("…where four Grunts were enough to play it on",
+  hopeless(holding({ heroesLost: 1, workers: 8, armyFood: 8, armyUnits: 4, invaders: 6 }), HALL), false);
 
 console.log("\n-- the rails ---------------------------------------------------------------");
 

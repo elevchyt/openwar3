@@ -3501,7 +3501,7 @@ whole defeat) is the line.
 | --- | --- | --- |
 | `heroesDead` | **0.5** | not one of ours up and at least one down (+`heroEach` 0.1 for a second and a third) |
 | `hallDown` | **0.5** | no town centre anywhere, expansions folded in |
-| `armyGone` | 0.3 | nothing on the field and nothing in a queue |
+| `armyGone` | 0.3 | fewer than `ARMY_REMNANT` (3) soldiers, on the field and in the queues together, heroes aside |
 | `invaded` | 0.2 | somebody standing in our towns |
 | `invaderHero` | 0.1 | …and one of them is a hero |
 | `workersShort` | ≤0.2 | the economy — see below, the one term that is not a boolean |
@@ -3534,6 +3534,15 @@ which is the section above's own *"it can rebuild"* — among them. A ramp says 
 means: nine is a scratch, two is a player who has been mined out. It counts **bodies**, so a
 night elf running fewer because its Wisps went into Ancients carries a little of it for nothing —
 at 0.02 a Wisp, which is the size of mistake a ramp can afford and a step cannot.
+
+**`armyGone` is counted in soldiers, not food.** It used to be `armyFood === 0`, and two Grunts
+left over from a traded army held it at zero — the stragglers un-latched the very term that
+exists to read the army's loss. Below `ARMY_REMNANT` (3) units, standing or queued, the army is
+gone; heroes are left out because they have terms of their own, and summons because they cost no
+food and are gone in a minute anyway. It is a step and not a ramp like the workers — three is too
+short a range to grade — and like every term it is read only past `CONCEDE_NOT_BEFORE` and cannot
+carry a concession alone. The five clauses still ask `armyFood === 0`: each of them is a whole
+defeat, and "no army at all" is what they mean.
 
 **`teamGone` is the only term that is not about this player's own board.** A teammate who quits
 or concedes is one fewer army on our side of a map drawn for two of them, and that makes the game
