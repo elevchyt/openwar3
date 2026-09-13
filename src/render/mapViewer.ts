@@ -11,7 +11,7 @@ import { collectMapDestructibles, findDestructibleAt, type MapDestructible } fro
 import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { AllianceType } from "../sim/alliances";
-import { summonsBuildings, castCostOf, type Alert, type EffectAnim, type RallyKind, type ShopResult, type ShopStock, type SimUnit, type SimWorld } from "../sim/world";
+import { summonsBuildings, castCostOf, isOffField, type Alert, type EffectAnim, type RallyKind, type ShopResult, type ShopStock, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -4199,16 +4199,17 @@ export class MapViewerScene {
         void this.spawnUnit(def, pb.x, pb.y, w.owner, this.teamOf(w.owner), def.buildTime || 60).then((simId) => {
           this.buildSpawning.delete(workerId);
           if (simId !== null) {
+            world.clearRaisedSite(simId, workerId); // anyone of ours caught walking across it
             world.assignBuilder(workerId, simId); // clears buildPending
             this.playSummonGesture(workerId);
           } else world.cancelPendingBuild(workerId); // model failed to load → refund
         });
         continue;
       }
-      // Units are standing where the building must go: shove our own off the
-      // footprint and count down the patience window; when it expires, cancel
-      // (the sim refunds the spent cost).
-      this.clearFootprint(fp!, pb.x, pb.y, occupants);
+      // Units are standing where the building must go. Our own were already walked off it
+      // when the order was given (SimWorld.clearBuildSite, every tick while it is pending, and
+      // keeping whatever job they had), so what is left is somebody else's or boxed in: count
+      // down the patience window; when it expires, cancel (the sim refunds the spent cost).
       const waited = (this.buildWait.get(w.id) ?? 0) + dt;
       if (waited >= BUILD_CLEAR_TIMEOUT) {
         this.buildWait.delete(w.id);
@@ -4220,34 +4221,27 @@ export class MapViewerScene {
   }
 
   /** Movable ground units whose hull overlaps a building footprint (excluding the
-   *  builder). These are what must vacate before the structure can rise. */
+   *  builder). These are what must vacate before the structure can rise.
+   *
+   *  Two kinds of body do NOT hold the raise up. A unit of the BUILDER's own that is walking
+   *  is leaving the site or crossing it — the sim sends ours off the moment the order is given
+   *  (SimWorld.clearBuildSite) — and a gold crew on its round trip is an unbroken stream of
+   *  them, so waiting for a gap cancelled any site laid across the mine→hall line; whoever is
+   *  caught on the cells when the stamp lands is put back on open ground by clearRaisedSite.
+   *  And a Wisp working a tree is up in the canopy, standing on no ground at all. */
   private footprintOccupants(fp: Footprint, x: number, y: number, excludeId: number): SimUnit[] {
     const world = this.rts!.simWorld;
     const halfW = fp.w * 16; // cell = 32 world units → half-extent = cells × 16
     const halfH = fp.h * 16;
+    const owner = world.units.get(excludeId)?.owner;
     const out: SimUnit[] = [];
     for (const u of world.units.values()) {
-      if (u.id === excludeId || u.building || u.flying || u.speed <= 0) continue;
+      if (u.id === excludeId || u.building || u.flying || u.speed <= 0 || u.hp <= 0 || isOffField(u)) continue;
+      if (u.owner === owner && u.moving) continue;
+      if (u.worker?.deliversInPlace && u.working) continue;
       if (Math.abs(u.x - x) < halfW + u.radius && Math.abs(u.y - y) < halfH + u.radius) out.push(u);
     }
     return out;
-  }
-
-  /** Order our own footprint occupants to step off the site (radially outward).
-   *  Only pushes settled units so a unit already walking away isn't re-pathed
-   *  every frame; foreign units we can't command stay and let the timeout fire. */
-  private clearFootprint(fp: Footprint, x: number, y: number, occupants: SimUnit[]): void {
-    const world = this.rts!.simWorld;
-    const push = Math.max(fp.w, fp.h) * 16 + 96; // clear of the footprint edge
-    for (const u of occupants) {
-      if (u.owner !== this.localPlayer || u.moving) continue;
-      let dx = u.x - x;
-      let dy = u.y - y;
-      const d = Math.hypot(dx, dy);
-      if (d < 1) { dx = 1; dy = 0; } // dead-centre → push along +x
-      const n = Math.hypot(dx, dy);
-      world.issueMove(u.id, x + (dx / n) * push, y + (dy / n) * push);
-    }
   }
 
   private teamOf(owner: number): number {

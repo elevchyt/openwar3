@@ -2796,6 +2796,14 @@ const REPAIR_TIME_RATIO = 1.5;
 // own cast range: `Ahrp`/`Arep`/`Arst`/`Aren` all carry Rng1 = 50, i.e. a worker standing
 // against the wall. Read per worker in SimWorld.repairReach.
 const REPAIR_REACH = 50;
+/** How far from a building's wall a builder displaced by a new build site is walked to — well
+ *  inside tickBuildings' 96 "nearby", so it hammers from the spot it is sent to. */
+const BUILDER_STAND_GAP = 48;
+/** How often one unit is asked off a pending build site (seconds) — see clearBuildSite. */
+const SITE_NUDGE_COOLDOWN = 0.5;
+/** Directions tried round a depot for a side clear of a pending build site (depotApproach). */
+const DEPOT_SIDE_STEPS = 16;
+const NO_SITES: ReadonlyArray<{ x: number; y: number; half: number; builderId: number }> = [];
 
 // WC3 day/night (Units\MiscData.txt): a full cycle is DayLength=480 real seconds =
 // DayHours=24 game hours (so one game hour = 20 real seconds); daytime runs from
@@ -3567,6 +3575,7 @@ export class SimWorld {
     near.sort((a, b) => a.d - b.d || a.t.id - b.t.id);
     let probes = 0;
     for (const e of near) {
+      if (this.treeStand(u, e.t) === null) continue; // every side of it is under one of our build sites
       if (this.treeReachable(u, e.t)) return e.t;
       if (++probes >= TREE_REACH_PROBES) break;
     }
@@ -6338,7 +6347,7 @@ export class SimWorld {
       // stands there holding a job it will never do. On the same repath cooldown a blocked
       // chaser keeps, so a site nothing can reach costs one A* every ATTACK_GIVEUP_COOLDOWN
       // rather than one a frame.
-      if (!u.moving && u.repathT <= 0 && !this.pathTo(u, b.x, b.y, undefined, false, this.approachExtent(b))) {
+      if (!u.moving && u.repathT <= 0 && !this.walkToBuilding(u, b, this.repairReach(u))) {
         u.repathT = ATTACK_GIVEUP_COOLDOWN;
       }
       return;
@@ -6432,7 +6441,7 @@ export class SimWorld {
             // every ATTACK_GIVEUP_COOLDOWN rather than one a tick. (A builder still PARKED
             // on its move order — waitT running — is resumeRoute's, not ours.)
             builder.order = "move";
-            if (!this.pathTo(builder, u.x, u.y, undefined, false, this.approachExtent(u))) builder.order = "idle";
+            if (!this.walkToBuilding(builder, u, BUILDER_STAND_GAP)) builder.order = "idle";
             builder.repathT = ATTACK_GIVEUP_COOLDOWN;
           }
         }
@@ -8086,7 +8095,7 @@ export class SimWorld {
    *  block that gets reserved (no even-footprint off-by-one). Bounded; null if the
    *  whole neighbourhood is packed (caller then settles in place — a rare overlap beats
    *  a teleport across the map). */
-  private nearestFreeBlock(sx: number, sy: number, n: number, maxR = 6, unitsBlockLine = true): [number, number] | null {
+  private nearestFreeBlock(sx: number, sy: number, n: number, maxR = 6, unitsBlockLine = true, accept?: (wx: number, wy: number) => boolean): [number, number] | null {
     // The unit's own footprint — exempt from the reachability block-check so it can leave
     // the tile it's overlapping. footprintOrigin, NOT worldToCell − half: for an EVEN
     // footprint the two disagree by a cell half the time, and the exemption then covers the
@@ -8100,6 +8109,7 @@ export class SimWorld {
           const wy = sy + dy * PATHING_CELL;
           const [cx0, cy0] = this.grid.footprintOrigin(wx, wy, n);
           if (!this.blockFree(cx0, cy0, n)) continue;
+          if (accept && !accept(wx, wy)) continue;
           // Must be REACHABLE in a straight shot — the line to it crosses no wall (and,
           // when unitsBlockLine, no other unit's tile). This stops a unit at a choke from
           // snapping ACROSS a plug into unreachable space. Held attackers de-conflicting
@@ -9272,6 +9282,9 @@ export class SimWorld {
     if (!paid) this.payPendingBuild(id);
     const [ax, ay] = this.buildApproach(u, defId, x, y);
     if (!this.issueMove(id, ax, ay)) u.moving = false; // already at the site → raise now
+    // …and the ground is cleared NOW, with the order, rather than when the worker gets there.
+    this.siteCacheAt = -1;
+    this.clearBuildSite(u);
   }
 
   /**
@@ -9301,6 +9314,287 @@ export class SimWorld {
     const reach = half + u.radius + PATHING_CELL;
     if (d <= reach) return [u.x, u.y]; // already clear of it — don't walk backwards to a mark
     return [x + (dx / d) * reach, y + (dy / d) * reach];
+  }
+
+  // === Build sites that are ordered but not yet raised ===============================
+  //
+  // A silhouette the player has put down is ground their own units are to leave — and it is
+  // left the moment the ORDER is given, not when the builder finally walks up: a Footman idling
+  // on the spot is walked off it straight away, so the foundation can rise the instant the
+  // worker arrives rather than after a shuffle there. (The raise itself still waits on bodies
+  // it cannot command — an ally's, an enemy's — exactly as before; see mapViewer's
+  // tickPendingBuild.)
+  //
+  // The part that is easy to get wrong is a unit that is WORKING there. Walking a Peasant off
+  // with a plain move is a new order, and a new order throws its job away: the lumberjack
+  // stepped aside and stood there for the rest of the game. So a worker keeps its order and
+  // takes the job up again from ground outside the site — another side of the same tree (or
+  // the next tree along when that tree has no other side), another stretch of the mine's rim
+  // or the hall's wall, another face of the building it was hammering or mending. And because
+  // every one of those round trips picks its stand spot afresh, the same keep-out is asked by
+  // the pickers themselves (`onBuildSite`), or the next trip walks straight back in.
+
+  /** The pending build sites of one player, as centre + half-extent. Cached per sim tick
+   *  (and dropped when a new order lands): `depotApproach` asks this every tick of every
+   *  returning worker's walk, and the answer only changes with the orders. A haunted mine's
+   *  site is the mine itself, already stamped, and keeps nobody out. */
+  private pendingSites(owner: number): ReadonlyArray<{ x: number; y: number; half: number; builderId: number }> {
+    if (this.siteCacheAt !== this.elapsed) {
+      this.siteCache.clear();
+      this.siteCacheAt = this.elapsed;
+      for (const u of this.units.values()) {
+        const pb = u.buildPending;
+        if (!pb || pb.mineId !== undefined || u.hp <= 0) continue;
+        const half = this.buildHalfExtent(pb.defId);
+        if (half <= 0) continue; // footprint unknown (a headless sim): nothing to keep out of
+        let list = this.siteCache.get(u.owner);
+        if (!list) this.siteCache.set(u.owner, (list = []));
+        list.push({ x: pb.x, y: pb.y, half, builderId: u.id });
+      }
+    }
+    return this.siteCache.get(owner) ?? NO_SITES;
+  }
+  private siteCache = new Map<number, Array<{ x: number; y: number; half: number; builderId: number }>>();
+  private siteCacheAt = -1;
+
+  /** Would `u`'s body, standing at (x,y), be on one of its owner's pending build sites? The
+   *  body is the reserved cell block (or the hull, whichever is wider), so a spot that passes
+   *  is one the stamp will not land on. */
+  private onBuildSite(u: SimUnit, x: number, y: number): boolean {
+    const sites = this.pendingSites(u.owner);
+    if (!sites.length) return false;
+    const body = Math.max(u.radius, (u.footprint * PATHING_CELL) / 2);
+    for (const s of sites) {
+      if (s.builderId === u.id) continue; // its own site is walked up to by buildApproach
+      const r = s.half + body;
+      if (Math.abs(x - s.x) < r && Math.abs(y - s.y) < r) return true;
+    }
+    return false;
+  }
+
+  /** Is any of `owner`'s pending build sites within `reach` of (x,y)'s neighbourhood? The
+   *  cheap question the stand-spot pickers ask before doing any work of their own. */
+  private buildSiteNear(owner: number, x: number, y: number, reach: number): boolean {
+    for (const s of this.pendingSites(owner)) {
+      const r = s.half + reach;
+      if (Math.abs(x - s.x) < r && Math.abs(y - s.y) < r) return true;
+    }
+    return false;
+  }
+
+  /** Walk the player's own units off every build site that has been ordered. Called once a
+   *  tick (and at once from issueBuildNew, so the order and the shuffle are one moment), and
+   *  idempotent: a unit already walking to ground off the site is left to walk. */
+  private tickBuildSites(): void {
+    let any = false;
+    for (const w of this.units.values()) {
+      if (!w.buildPending || w.buildPending.mineId !== undefined || w.hp <= 0) continue;
+      any = true;
+      this.clearBuildSite(w);
+    }
+    if (!any && this.siteNudgedAt.size) this.siteNudgedAt.clear(); // nothing pending: forget who was asked
+  }
+
+  private clearBuildSite(w: SimUnit): void {
+    const pb = w.buildPending;
+    if (!pb) return;
+    const half = this.buildHalfExtent(pb.defId);
+    if (half <= 0) return;
+    for (const o of this.units.values()) {
+      // Only the builder's OWN units are asked to move — the same line makeWay draws: an
+      // ally's body is not yours to shuffle, and neither is an enemy's.
+      if (o === w || o.owner !== w.owner || o.hp <= 0 || o.building || o.flying || o.speed <= 0 || isOffField(o)) continue;
+      // A Wisp inside a tree holds no ground, and an Acolyte kneeling at a haunted mine is on
+      // the mine's ring, which no site can be laid over.
+      if ((o.worker?.deliversInPlace && o.working) || o.ringSlot > 0) continue;
+      const body = Math.max(o.radius, (o.footprint * PATHING_CELL) / 2);
+      const r = half + body;
+      const on = (x: number, y: number): boolean => Math.abs(x - pb.x) < r && Math.abs(y - pb.y) < r;
+      const dest = o.moving && o.path.length ? o.path[o.path.length - 1] : null;
+      // Standing on it, or on its way to STOP on it. A unit merely crossing is left alone —
+      // the raise does not wait on a unit of ours that is walking (tickPendingBuild).
+      if (!on(o.x, o.y) && !(dest && on(dest[0], dest[1]))) continue;
+      if (dest && !on(dest[0], dest[1])) continue; // already leaving
+      if ((this.siteNudgedAt.get(o.id) ?? -Infinity) > this.elapsed - SITE_NUDGE_COOLDOWN) continue;
+      this.siteNudgedAt.set(o.id, this.elapsed);
+      this.resumeOffSite(o, pb.x, pb.y, half);
+    }
+  }
+  /**
+   * A foundation has just been stamped: put every ground body still standing on its cells back
+   * on open ground, and re-plan whoever was about to walk THROUGH them.
+   *
+   * The raise does not wait on a unit of ours that is merely walking (tickPendingBuild), and a
+   * gold crew on its round trip is the reason it must not: a site laid across the mine→hall line
+   * would otherwise never find a gap in the traffic and be cancelled. So a walker can be caught
+   * on the cells when the stamp lands, and a ghosting worker (`noCollision`, which claims no
+   * cells and so is never told a block is unwalkable) would carry on along a route drawn before
+   * the building existed, straight through its walls. Every body keeps its order; the builder is
+   * left to assignBuilder, which places each race's builder its own way.
+   */
+  clearRaisedSite(buildingId: number, builderId: number): void {
+    const b = this.units.get(buildingId);
+    const st = b?.pathStamp;
+    if (!b || !st) return;
+    const hx = (st.fp.w * PATHING_CELL) / 2;
+    const hy = (st.fp.h * PATHING_CELL) / 2;
+    const inBox = (x: number, y: number, pad: number): boolean => Math.abs(x - st.x) < hx + pad && Math.abs(y - st.y) < hy + pad;
+    for (const o of this.units.values()) {
+      if (o.id === builderId || o.hp <= 0 || o.building || o.flying || o.footprint <= 0 || isOffField(o)) continue;
+      if (o.worker?.deliversInPlace && o.working) continue; // up a tree, on no ground at all
+      const domain = pathDomain(o);
+      const [ax, ay] = this.grid.footprintAnchor(o.x, o.y, o.footprint);
+      const caught = inBox(o.x, o.y, o.radius) && !this.grid.footprintClear(ax, ay, o.footprint, domain);
+      let crosses = false;
+      if (!caught && o.moving && o.noCollision) {
+        // Does the rest of its route pass over the new walls? Sampled at half a cell.
+        let px = o.x;
+        let py = o.y;
+        for (let i = o.waypoint; i < o.path.length && !crosses; i++) {
+          const [qx, qy] = o.path[i];
+          const steps = Math.max(1, Math.ceil(Math.hypot(qx - px, qy - py) / (PATHING_CELL / 2)));
+          for (let k = 1; k <= steps; k++) {
+            if (inBox(px + ((qx - px) * k) / steps, py + ((qy - py) * k) / steps, 0)) { crosses = true; break; }
+          }
+          px = qx;
+          py = qy;
+        }
+      }
+      if (!caught && !crosses) continue;
+      if (caught) {
+        this.unsettle(o);
+        this.releaseClaim(o);
+        const fit = this.grid.nearestFit(ax, ay, o.footprint, 24, undefined, domain) ?? this.grid.nearestWalkable(ax, ay);
+        if (fit) [o.x, o.y] = this.grid.footprintCenter(fit[0], fit[1], o.footprint);
+      }
+      if (o.moving) {
+        const approach = o.chaseHX > 0 ? { hx: o.chaseHX, hy: o.chaseHY } : undefined;
+        if (!this.pathTo(o, o.chaseX, o.chaseY, undefined, false, approach)) this.settle(o);
+      } else if (o.worker && o.order === "harvest") {
+        // Parked at its node on ground that is now a wall: the node is approached afresh.
+        o.atNode = false;
+        o.working = false;
+        this.settle(o);
+        this.pathToNode(o);
+      } else {
+        this.settle(o);
+      }
+    }
+  }
+
+  /** When each unit was last asked off a site — a unit that cannot get off (boxed in) is
+   *  asked again on this clock rather than paying for a search every tick. */
+  private siteNudgedAt = new Map<number, number>();
+
+  /** Take `o` off the site at (x,y) — keeping whatever it was doing. */
+  private resumeOffSite(o: SimUnit, x: number, y: number, half: number): void {
+    // Hammering another building (the Peasant's hammer is order "idle" + `constructing`),
+    // or mending one: step round to another face of it and carry on.
+    const job = o.constructing ? this.units.get(o.constructing) : o.order === "repair" && o.repair ? this.units.get(o.repair.targetId) : undefined;
+    if (job?.building) {
+      if (o.constructing) o.order = "move"; // the same walk tickBuildings gives a builder that ended short
+      else if (o.repair) o.repair.active = false;
+      this.walkToBuilding(o, job, o.constructing ? BUILDER_STAND_GAP : this.repairReach(o));
+      if (o.constructing && !o.moving) o.order = "idle";
+      return;
+    }
+    const w = o.worker;
+    if (w && o.order === "harvest") {
+      o.atNode = false;
+      o.working = false;
+      o.nodeRetries = 0;
+      // A tree whose every side is under the site is swapped for the nearest one that is not
+      // — pathToNode asks, since the round trip asks it too.
+      this.pathToNode(o);
+      return;
+    }
+    if (w && o.order === "return") {
+      this.startReturn(o);
+      return;
+    }
+    // Anything else standing about is walked off to the nearest ground clear of the site.
+    const spot = this.nearestOffSite(o, x, y, half);
+    if (spot) this.issueMove(o.id, spot[0], spot[1]);
+  }
+
+  /** Nearest spot `o` can stand on that is off every one of its owner's pending sites —
+   *  spiralling out from where it stands, so the shuffle is as short as the site allows. */
+  private nearestOffSite(o: SimUnit, x: number, y: number, half: number): [number, number] | null {
+    const n = Math.max(o.footprint, 1);
+    const [cx, cy] = this.grid.footprintAnchor(o.x, o.y, n);
+    const maxR = Math.ceil((half * 2) / PATHING_CELL) + n + 2;
+    const fit = this.grid.nearestFit(cx, cy, n, maxR, (ax, ay) => {
+      const [wx, wy] = this.grid.footprintCenter(ax, ay, n);
+      return !this.onBuildSite(o, wx, wy);
+    }, pathDomain(o));
+    if (fit) return this.grid.footprintCenter(fit[0], fit[1], n);
+    // Nothing free in range: at least get out of the footprint, radially.
+    let dx = o.x - x;
+    let dy = o.y - y;
+    const d = Math.hypot(dx, dy);
+    if (d < 1) { dx = 1; dy = 0; } else { dx /= d; dy /= d; }
+    return [x + dx * (half + 96), y + dy * (half + 96)];
+  }
+
+  /** Walk a builder or repairer up to `b` — to its box, as ever, unless one of the worker's
+   *  own pending sites is against that box, in which case to a spot on one of the building's
+   *  OTHER faces (`gap` from its wall at most, so the job is in reach from there). */
+  private walkToBuilding(u: SimUnit, b: SimUnit, gap: number): boolean {
+    const ext = this.approachExtent(b);
+    if (this.buildSiteNear(u.owner, b.x, b.y, Math.max(ext.hx, ext.hy) + gap + PATHING_CELL * 2)) {
+      const spot = this.besideBuilding(u, b, gap);
+      if (spot) return this.pathTo(u, spot[0], spot[1]);
+    }
+    return this.pathTo(u, b.x, b.y, undefined, false, ext);
+  }
+
+  /** A spot against `b`'s wall (within `gap` of it, measured as siteGap measures) that `u` can
+   *  stand on and that is off its owner's pending sites — the nearest to `u`. */
+  private besideBuilding(u: SimUnit, b: SimUnit, gap: number): [number, number] | null {
+    const n = Math.max(u.footprint, 1);
+    const half = Math.max(b.radius, this.buildHalfExtent(b.typeId));
+    const domain = pathDomain(u);
+    const span = Math.ceil((half + u.radius + gap) / PATHING_CELL) + n;
+    const [bcx, bcy] = this.grid.worldToCell(b.x, b.y);
+    let best: [number, number] | null = null;
+    let bestD = Infinity;
+    for (let ay = bcy - span; ay <= bcy + span; ay++) {
+      for (let ax = bcx - span; ax <= bcx + span; ax++) {
+        const [wx, wy] = this.grid.footprintCenter(ax, ay, n);
+        const g = Math.max(Math.abs(wx - b.x), Math.abs(wy - b.y)) - half - u.radius;
+        if (g >= gap || g < -PATHING_CELL) continue; // out of reach, or inside the wall
+        if (!this.grid.footprintClear(ax, ay, n, domain) || this.onBuildSite(u, wx, wy)) continue;
+        const d = Math.hypot(wx - u.x, wy - u.y);
+        if (d < bestD) { bestD = d; best = [wx, wy]; }
+      }
+    }
+    return best;
+  }
+
+  /** Where a chopper stands to work `tree` when one of its owner's pending sites is against
+   *  it: a clear spot within the axe's reach of the trunk and off the site, nearest the
+   *  worker. `undefined` = no site near, walk at the trunk as ever; `null` = the site covers
+   *  every side of it this worker could chop from, so it is not a tree for it right now. */
+  private treeStand(u: SimUnit, tree: SimTree): [number, number] | null | undefined {
+    if (u.worker?.deliversInPlace) return undefined; // a Wisp goes INTO the tree, not beside it
+    const reach = u.radius + TREE_RADIUS + 40; // tickHarvest's own chopper reach
+    if (!this.buildSiteNear(u.owner, tree.x, tree.y, reach + u.radius)) return undefined;
+    const n = Math.max(u.footprint, 1);
+    const domain = pathDomain(u);
+    const span = Math.ceil(reach / PATHING_CELL) + n;
+    const [tcx, tcy] = this.grid.worldToCell(tree.x, tree.y);
+    let best: [number, number] | null = null;
+    let bestD = Infinity;
+    for (let ay = tcy - span; ay <= tcy + span; ay++) {
+      for (let ax = tcx - span; ax <= tcx + span; ax++) {
+        const [wx, wy] = this.grid.footprintCenter(ax, ay, n);
+        if (Math.hypot(wx - tree.x, wy - tree.y) > reach - 4) continue;
+        if (!this.grid.footprintClear(ax, ay, n, domain) || this.onBuildSite(u, wx, wy)) continue;
+        const d = Math.hypot(wx - u.x, wy - u.y);
+        if (d < bestD) { bestD = d; best = [wx, wy]; }
+      }
+    }
+    return best;
   }
 
   /**
@@ -9659,8 +9953,26 @@ export class SimWorld {
       this.pathTo(u, tx, ty);
       return;
     }
-    const tree = this.trees.get(u.resId);
-    if (tree) this.pathTo(u, tree.x, tree.y); // a tree is one cell — walk at its trunk
+    this.pathToTree(u, this.trees.get(u.resId));
+  }
+
+  /** Walk a chopper at `tree`: at its trunk, or — when one of its owner's pending build sites
+   *  is against the tree — to a side of it off the site (treeStand). A tree the site covers
+   *  from every side is traded for the nearest one that is not, which is "carry on from a
+   *  nearby spot" when the spot you were chopping from is about to be a Farm. */
+  private pathToTree(u: SimUnit, tree: SimTree | undefined): void {
+    if (!tree) return;
+    let stand = this.treeStand(u, tree);
+    if (stand === null) {
+      const alt = this.pickTreeNear(u, u.x, u.y, RETARGET_RANGE);
+      if (alt && alt.id !== tree.id) {
+        u.resId = alt.id;
+        tree = alt;
+        stand = this.treeStand(u, alt);
+      }
+    }
+    if (stand) this.pathTo(u, stand[0], stand[1]);
+    else this.pathTo(u, tree.x, tree.y); // a tree is one cell — walk at its trunk
   }
 
   /** A point on the mine's edge facing the drop-off (town hall). Workers enter the
@@ -9705,6 +10017,12 @@ export class SimWorld {
     if (n <= 0) return [x, y];
     const [sx, sy] = this.grid.snapForFootprint(x, y, n);
     const [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+    // One of our own build sites is against the rim here: go round to a stretch of it that is
+    // not (clearBuildSite) — far enough to spiral past the whole site if need be.
+    if (this.onBuildSite(u, sx, sy)) {
+      const off = (wx: number, wy: number): boolean => !this.onBuildSite(u, wx, wy);
+      return this.nearestFreeBlock(sx, sy, n, 16, false, off) ?? [sx, sy];
+    }
     if (this.blockFree(cx0, cy0, n)) return [sx, sy];
     // Terrain-only reachability line: the workers already queued at the rim are exactly
     // what we're spiralling past, so letting THEIR tiles veto the hop would defeat it.
@@ -9779,7 +10097,24 @@ export class SimWorld {
     const dx = u.x - depot.x;
     const dy = u.y - depot.y;
     const d = Math.hypot(dx, dy) || 1;
-    return [depot.x + (dx / d) * depot.radius, depot.y + (dy / d) * depot.radius];
+    const aim: [number, number] = [depot.x + (dx / d) * depot.radius, depot.y + (dy / d) * depot.radius];
+    // One of our own build sites is against the hall on this side: deliver to the nearest
+    // side that is clear of it. The worker parks where the pathfinder stops short of `aim`,
+    // just outside the wall, so that is the spot asked about.
+    const standOff = depot.radius + u.radius + PATHING_CELL;
+    if (!this.buildSiteNear(u.owner, depot.x, depot.y, standOff + u.radius)) return aim;
+    if (!this.onBuildSite(u, depot.x + (dx / d) * standOff, depot.y + (dy / d) * standOff)) return aim;
+    const base = Math.atan2(dy, dx);
+    for (let k = 1; k <= DEPOT_SIDE_STEPS / 2; k++) {
+      for (const sign of [1, -1]) {
+        const a = base + (sign * k * 2 * Math.PI) / DEPOT_SIDE_STEPS;
+        const c = Math.cos(a);
+        const sn = Math.sin(a);
+        if (this.onBuildSite(u, depot.x + c * standOff, depot.y + sn * standOff)) continue;
+        return [depot.x + c * depot.radius, depot.y + sn * depot.radius];
+      }
+    }
+    return aim;
   }
 
   private nearestDepot(u: SimUnit): SimUnit | null {
@@ -15051,6 +15386,7 @@ export class SimWorld {
     this.tickMoonstone(dt); // …and the eclipse a Moonstone is holding over the map
     this.tickSoulGems(); // …and the hero a Soul Gem is holding off it
     this.tickBuildings(dt);
+    this.tickBuildSites(); // our own units walked off every silhouette that has been put down
     this.tickMineCrews(dt); // night elf and undead gold: no round trip, just a crew and a clock
     this.tickGraveyards(dt); // the Graveyard's hidden Create Corpse — Ghoul bodies for the Necromancers
     this.tickShops(dt);
@@ -17419,7 +17755,7 @@ export class SimWorld {
       u.resId = tree.id;
       u.atNode = false;
       u.working = false;
-      this.pathTo(u, tree.x, tree.y); // walk to the freshly-picked tree
+      this.pathToTree(u, tree); // walk to the freshly-picked tree
     }
     // Approach until parked next to the tree, then chop in place (never re-path
     // once working — that was the source of the mining "jiggle").
@@ -17569,7 +17905,7 @@ export class SimWorld {
         if (w.carryLumber < w.lumberCapacity && next) {
           u.atNode = false;
           u.working = false;
-          this.pathTo(u, next.x, next.y);
+          this.pathToTree(u, next);
           return;
         }
       } else {
@@ -17602,7 +17938,10 @@ export class SimWorld {
    *  round trip gets a fresh pair of attempts. */
   private arriveAtNode(u: SimUnit, x: number, y: number, reach: number, repath?: () => void): boolean {
     if (u.atNode) return true;
-    const short = Math.hypot(x - u.x, y - u.y) > reach;
+    // Standing on one of our own pending build sites is not "there" however close it is: the
+    // worker was sent round to a spot off it (clearBuildSite), and latching here would park it
+    // on the site again the very tick it set off.
+    const short = Math.hypot(x - u.x, y - u.y) > reach || this.onBuildSite(u, u.x, u.y);
     if (u.moving && short) return false;
     // PARKED in a jam is not "as close as we can get" — it is a countdown that is itself the
     // retry (parkAndWait, and the same rule tickGarrison's walk-up keeps). Without this the
