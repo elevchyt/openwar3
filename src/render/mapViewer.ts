@@ -9730,8 +9730,8 @@ export class MapViewerScene {
         // the one that has to catch your eye while you are looking somewhere else entirely.
         // A 0 prints no badge at all (the HUD skips a count that is not positive).
         count: su.skillPoints,
-        // …in the bottom-LEFT corner, always.
-        countAtLeft: true,
+        // …at the printed key's size, in the bottom-right corner.
+        countKeySize: true,
         // …and its words, its letter and (from a CustomKeys.txt) its slot are
         // [CmdSelectSkill]'s, "Her|cffffcc00o|r Abilities" — the gilded letter in the Tip is
         // what pairs the title with the O on the button's corner. LAST in the literal, like

@@ -1442,24 +1442,24 @@ body.hud-number-skinned .hud-count-badge:not(.plain) {
 /* The command button's KEY (Options → Gameplay → "Show hotkeys on command buttons"): the very
    same framed box, in the TOP-LEFT corner and smaller than a count's, so it never shares a
    corner with a quantity. A named key ("Esc") is set smaller so its three glyphs stay inside
-   the frame a single letter fills. */
-.hud-count-badge.hud-hotkey-badge {
+   the frame a single letter fills. The learn-skill button's unspent points are drawn at the
+   key's size too (`.key-size`, from `countKeySize`), in the ordinary bottom-right corner. */
+.hud-count-badge.hud-hotkey-badge,
+.hud-count-badge.key-size {
   --count-box: 32%;
+}
+.hud-count-badge.hud-hotkey-badge {
   top: 0;
   left: 0;
   right: auto;
   bottom: auto;
 }
-.hud-count-badge.hud-hotkey-badge > span {
+.hud-count-badge.hud-hotkey-badge > span,
+.hud-count-badge.key-size > span {
   font-size: max(8px, 58cqw);
 }
 .hud-count-badge.hud-hotkey-badge.long > span {
   font-size: max(6px, 32cqw);
-}
-/* The learn-skill button's unspent points sit in the bottom-LEFT, always (`countAtLeft`). */
-.hud-count-badge.at-left {
-  right: auto;
-  left: 0;
 }
 
 /* Build-placement ghost: a box under the cursor, green = valid, red = blocked. */

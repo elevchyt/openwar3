@@ -114,9 +114,9 @@ export interface CommandButton {
   cooldownLeft?: number; // seconds remaining on the ability's cooldown (0/undefined = ready)
   cooldownFrac?: number; // remaining fraction 0..1 (drives the radial sweep)
   count?: number; // corner badge (0/undefined = none) — e.g. a hero's unspent skill points
-  /** The count sits in the bottom-LEFT corner instead of the bottom-right (the learn-skill
-   *  button's unspent points). */
-  countAtLeft?: boolean;
+  /** The count is drawn at the printed KEY's size rather than a count's (the learn-skill
+   *  button's unspent points), still in the bottom-right corner. */
+  countKeySize?: boolean;
 }
 
 /** One hero inventory slot (null = empty). */
@@ -3303,7 +3303,7 @@ export class GameHud {
     // The printed keys hang off two options rather than off the buttons, so the options are in
     // the key too: `applyHotkeyOptions` switching either has to re-dress a card that did not change.
     const printKeys = hotkeysOnButtons();
-    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${!!c.countAtLeft}:${c.desc}`).join("|");
+    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${!!c.countKeySize}:${c.desc}`).join("|");
     if (key === this.cmdKey) {
       this.refreshCmdTooltip(cmds); // every frame: the stash moves without the card changing
       return;
@@ -3318,7 +3318,7 @@ export class GameHud {
       this.cmdLabels[i].textContent = "";
       setCount(this.cmdCount[i], "");
       setCount(this.cmdHotkey[i], "");
-      this.cmdCount[i].classList.remove("at-left");
+      this.cmdCount[i].classList.remove("key-size");
       onPress(btn, null);
       btn.onpointerenter = null;
       btn.onpointerleave = null;
@@ -3359,7 +3359,7 @@ export class GameHud {
       else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
 
       if (c.count && c.count > 0) setCount(this.cmdCount[idx], String(c.count));
-      this.cmdCount[idx].classList.toggle("at-left", !!c.countAtLeft);
+      this.cmdCount[idx].classList.toggle("key-size", !!c.countKeySize);
       // The key that presses it. A passive takes no press and neither does a greyed-out
       // (`disabled`) button, so neither has a key to print — the key handler skips both for the
       // same reason. A button you merely cannot AFFORD does answer its key, so it keeps it. The
