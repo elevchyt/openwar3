@@ -54,6 +54,7 @@ import { MeleeAi, AI_SCRIPT_RACES } from "../ai";
 import { CreepCaster } from "../ai/creeps";
 import { ComputerPlusAi, type PlusHost } from "../ai/plus";
 import { CandyWarAi, type CandyHost } from "../ai/plus/candy";
+import { WarChasersAi } from "../ai/plus/warchasers";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -1008,6 +1009,7 @@ export class RtsController {
     // a custom map's start seats itself (`startCandyWarAI`). A new match starts it over.
     this.plusHost = host;
     this.candyWar = null;
+    this.warChasers = null;
   }
 
   /** The lobby's answer for each computer seat — where it starts, how hard it plays, and which
@@ -1071,6 +1073,8 @@ export class RtsController {
   private plusHost: PlusHost | null = null;
   /** Computer+ on Extreme Candy War (src/ai/plus/candy/) — null on every other map. */
   private candyWar: CandyWarAi | null = null;
+  /** Computer+ on WarChasers (src/ai/plus/warchasers/) — null on every other map. */
+  private warChasers: WarChasersAi | null = null;
   /** Selections a COMPUTER made this step (`selectForAi`), raised with the local player's own in
    *  `drainSelectionEvents`. */
   private aiSelections: SelectionEvent[] = [];
@@ -1097,6 +1101,20 @@ export class RtsController {
       heroKills: () => this.sim.heroKills,
     };
     const ai = (this.candyWar ??= new CandyWarAi(host));
+    for (const s of seats) ai.add(s.player, s.difficulty, this.meleeSeed);
+  }
+
+  /**
+   * Seat Computer+ on WARCHASERS' hero seats (src/ai/plus/warchasers/, docs/warchasers-ai.md).
+   *
+   * The same seam as `startCandyWarAI` and for the same reason: a scenario runs none of the melee
+   * library, so nothing else would seat a computer, and in the real game a computer seat on this map
+   * stands on the hero picker's floor as a wisp for the whole match. It needs nothing but the plain
+   * Computer+ host — it picks by walking its wisp, which the map's own region triggers see.
+   */
+  startWarChasersAI(seats: ReadonlyArray<{ player: number; difficulty: number }>): void {
+    if (!this.plusHost || !seats.length) return;
+    const ai = (this.warChasers ??= new WarChasersAi(this.plusHost));
     for (const s of seats) ai.add(s.player, s.difficulty, this.meleeSeed);
   }
 
@@ -4171,6 +4189,7 @@ export class RtsController {
       if (this.meleeAi?.active && this.seeded) this.meleeAi.tick(dt);
       if (this.computerPlus?.active && this.seeded) this.computerPlus.tick(dt);
       if (this.candyWar?.active && this.seeded) this.candyWar.tick(dt);
+      if (this.warChasers?.active && this.seeded) this.warChasers.tick(dt);
       // …and the map's own creeps think here too (src/ai/creeps.ts): Neutral Hostile is a
       // player with no seat, and its casting is the same authority-only pass as a computer's.
       if (this.seeded) (this.creepCaster ??= new CreepCaster(this.sim, this.abilities)).tick(dt);
@@ -7288,6 +7307,7 @@ export class RtsController {
   heardChat(line: ChatLine, heard: readonly number[]): void {
     this.computerPlus?.heard(line, heard);
     this.candyWar?.heard(line, heard);
+    this.warChasers?.heard(line, heard);
   }
 
   /** HOST: a client asked for the match to stop or start again (already stamped with a real

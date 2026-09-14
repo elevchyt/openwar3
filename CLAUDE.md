@@ -563,6 +563,20 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   everything is keyed on the map's ability ids and cast with that ability's own `code`; a dead hero
   is a ghost that must WALK to its corpse or the Spirit Healer and press a revive; and the item slot
   rules are triggers that destroy and refund, so the AI enforces them itself (`mayCarry`).
+- **WarChasers:** read [`docs/warchasers-ai.md`](docs/warchasers-ai.md) before touching
+  [`src/ai/plus/warchasers/`](src/ai/plus/warchasers/). It is Computer+ as a PARTY MEMBER on
+  Blizzard's co-op dungeon map, seated by `startCustom` on hero seats 0/1/5/6 when the script has the
+  map's triggers (seat 11 is the dungeon's). It does not play the dungeon — it FOLLOWS a person (the
+  leader: whoever last said "follow me", else the first person seated), fights beside them, and OBEYS
+  the party's chat ("wait", "back", "lets go", "follow me", "attack", typos and all — `readCommand`),
+  and an order overrides its own decision to rest. Only a PERSON is obeyed, never another computer.
+  Four traps: the eight pedestal triggers fire for whatever walks into them (and are not named for
+  the hero they make), so the wisp walks up the AISLE before it turns; a hero that dies without an
+  `ankh`/`IC17` is gone for good (`Game_Over`), so it buys an Ankh before anything else and saves for
+  one; KEYS open a door only in the carrier's hands, so a computer never picks one up; and while a
+  player drives a `hC25` steam tank, the tank is the body. Spells and potions are the melee
+  Computer+'s own (`PlusCaster`, `PlusItems.beltPass`); loot and shopping value an item for ITS hero
+  (an intelligence hero drops Strength items first).
 - **Transports:** read [`docs/transports.md`](docs/transports.md) before touching the Goblin
   Zeppelin, a transport ship, a cargo hold, or the cargo panel. A transport is the BURROW's
   hold on a body that moves (`Acar` beside `Abun`/`Aenc`, one `garrison` roster), and three

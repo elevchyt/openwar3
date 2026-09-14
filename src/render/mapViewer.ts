@@ -59,6 +59,7 @@ import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_C
 import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { AI_SCRIPT_FOR } from "../ai";
 import { HERO_SEATS as CANDY_HERO_SEATS, isCandyWarScript } from "../ai/plus/candy/map";
+import { HERO_SEATS as WARCHASERS_HERO_SEATS, isWarChasersScript } from "../ai/plus/warchasers/map";
 import { playerLabels } from "../ui/playerSlots";
 import { ModelViewerScene } from "./modelViewer";
 import { animPropsFor, buildAnimSet } from "./unitAnims";
@@ -2646,6 +2647,14 @@ export class MapViewerScene {
         const v = scriptGlobals.get(name);
         return v?.k === "bool" ? v.b : null;
       });
+    }
+    // COMPUTER+ ON WARCHASERS (src/ai/plus/warchasers/, docs/warchasers-ai.md) — the same seam. The
+    // lobby's computers in the map's four hero seats become party members that follow a person; the
+    // dungeon's own seat (11) is the map's.
+    if (scriptGlobals && isWarChasersScript(scriptGlobals)) {
+      this.rts.startWarChasersAI(config.slots
+        .filter((s) => s.controller === "computer" && WARCHASERS_HERO_SEATS.has(s.id))
+        .map((s) => ({ player: s.id, difficulty: s.aiDifficulty ?? MELEE_AI_NORMAL })));
     }
     this.rts.holdWorld(false); // the map has had its say — let the world run
     console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33)${dummies ? `, plus ${dummies} model-less dummy unit(s)` : ""}.`);

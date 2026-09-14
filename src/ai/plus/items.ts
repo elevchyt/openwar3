@@ -754,6 +754,31 @@ export class PlusItems {
     this.shop(now, own, ctx);
   }
 
+  /**
+   * THE BELT ALONE — press what the heroes carry, and nothing else: no looting, no pawning, no shop.
+   *
+   * For the hero players that are not melee computers (plus/warchasers/): a party member on a dungeon
+   * map picks its own loot and does its own shopping by rules that are that map's, but when to drink
+   * a potion is the same question it is everywhere, and it is answered here once.
+   */
+  beltPass(ctx: ItemCtx): void {
+    const own: SimUnit[] = [];
+    const foes: SimUnit[] = [];
+    const friends: SimUnit[] = [];
+    for (const u of this.view.world.units.values()) {
+      if (u.hp <= 0) continue;
+      if (u.owner === this.view.player) {
+        own.push(u);
+        friends.push(u);
+      } else if (this.view.hostile(u)) foes.push(u);
+      else if (this.view.allied?.(u)) friends.push(u);
+    }
+    for (const u of own) {
+      if (!u.inventory.length || !this.canAct(u)) continue;
+      this.press(u, own, friends, foes, ctx);
+    }
+  }
+
   // ==========================================================================================
   //  Selling what a second copy of is worth nothing
   // ==========================================================================================
