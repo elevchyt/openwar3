@@ -50,18 +50,22 @@ the world. 1280×720 is 2.25× fewer pixels than 1080p and 800×450 is 5.8× few
 whose GPU is the bottleneck it is the largest single thing on this screen.
 
 It costs no framing at all, which is why it can be a plain number rather than a compromise. The
-buffer is scaled into the stage by CSS and the stage is a fixed 16:9 box, so the camera sees
-exactly the same world at 800×450 as at 1440p — and the HUD is DOM, so it is not in this buffer
+buffer is scaled into the stage by CSS, so the camera sees exactly the same world at 800×450 as
+at 1440p — and the HUD is DOM, so it is not in this buffer
 and stays sharp at every rung. `GAME_WIDTH`/`GAME_HEIGHT` in `ui/stage.ts` remain the LOGICAL
 frame; this is only how many pixels are drawn into it.
 
-**Every rung is exactly 16:9, and that is not a style choice.** This is the one list WC3 built at
-runtime rather than writing into the FDF — the `MENU` frame under `ResolutionMenu` is empty in
+**Every rung is NAMED at 16:9, and what it fixes is the HEIGHT.** This is the one list WC3 built
+at runtime rather than writing into the FDF — the `MENU` frame under `ResolutionMenu` is empty in
 the file, because the game enumerated the display modes the hardware offered. A browser has no
-display modes, so the analogue is the ladder of buffer sizes; and since the stage is 16:9 by
-construction (a wider box quietly hands the player more map than the real game gives), a 4:3 rung
-off the 2003 list would have to distort or letterbox and would not mean what it says. The test
-asserts the ratio of every rung rather than trusting the table.
+display modes, so the analogue is the ladder of buffer sizes. The stage takes the window's aspect
+between 4:3 and 16:9 (`ui/stage.ts`, issue #151) — never wider, because a wider box quietly hands
+the player more map than the real game gives — and the buffer has to take the same aspect or the
+world is drawn stretched. So `renderSize` keeps the rung's height and takes the stage's width:
+"1920 x 1080" is 1920×1080 on a 16:9 screen, 1728×1080 on 16:10 and 1440×1080 on 4:3 (and on
+5:4, whose stage is held at 4:3 and letterboxed). The lens is vertical, so the height is the
+dimension that decides how sharp the world is. The test asserts both: that every rung is named
+at exactly 16:9, and what each window shape draws.
 
 The glue screens take the same setting as a FACTOR rather than a pair of numbers: that canvas is
 the whole window at whatever shape the window is, not a game frame, so what carries over is the

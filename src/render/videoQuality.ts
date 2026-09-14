@@ -1,4 +1,5 @@
 import type { Options } from "../data/options";
+import { stageAspect } from "../ui/stage";
 
 // The Video panel, wired to the engine (issue #81 follow-up).
 //
@@ -27,7 +28,8 @@ export type Quality = "low" | "medium" | "high";
 
 /** Everything the Video panel decides, parsed out of the stored option values. */
 export interface VideoSettings {
-  /** The buffer the world is drawn into, in device pixels. Always exactly 16:9. */
+  /** The rung the world is drawn at, as its 16:9 size in device pixels. The HEIGHT is what is
+   *  drawn; the width follows the stage's aspect (`renderSize`), so it is this only at 16:9. */
   renderWidth: number;
   renderHeight: number;
   modelDetail: Quality;
@@ -164,9 +166,14 @@ function resolution(v: unknown): [number, number] {
  * is 2.25× fewer pixels than 1080p and 800×450 is 5.8× fewer.
  *
  * It costs no framing at all, which is why it can be a plain number rather than a compromise:
- * the buffer is scaled into the stage by CSS and the stage is a fixed 16:9 box, so the camera
- * sees exactly the same world however small this is (ui/stage.ts). The HUD is DOM and is not in
- * this buffer, so it stays sharp at every rung.
+ * the buffer is scaled into the stage by CSS, so the camera sees exactly the same world however
+ * small this is (ui/stage.ts). The HUD is DOM and is not in this buffer, so it stays sharp at
+ * every rung.
+ *
+ * A rung is named by its 16:9 size, and what it really fixes is the HEIGHT: the stage takes the
+ * window's aspect between 4:3 and 16:9 (issue #151), and the buffer has to take the same one or
+ * the world is drawn stretched — so "1920 x 1080" on a 4:3 screen draws 1440 × 1080. The lens is
+ * vertical, so the height is the dimension that decides how sharp the world is.
  *
  * AND IT REACHES THE WORLD ONLY. There was a prototype here that pushed the same factor onto
  * the DOM interface — laying `#ui` out at `f` of its box and scaling it back up by `1/f`, so
@@ -178,7 +185,8 @@ function resolution(v: unknown): [number, number] {
  * and nothing else.
  */
 export function renderSize(): { width: number; height: number } {
-  return { width: current.renderWidth, height: current.renderHeight };
+  const height = current.renderHeight;
+  return { width: Math.round(height * stageAspect()), height };
 }
 
 /**

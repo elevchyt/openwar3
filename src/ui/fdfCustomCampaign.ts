@@ -5,6 +5,7 @@ import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { DIFFICULTIES } from "./fdfCampaign";
 import { adopt, arg, findFrame, nudgeX, num, setProp, size, str } from "./mapBrowser";
+import { widescreen } from "./widescreen";
 
 // The Custom Campaign screen, built from the game's own UI\FrameDef\Glue\CustomCampaignMenu.fdf:
 // the list of installed custom campaigns down the left with the difficulty box under it, the
@@ -121,6 +122,6 @@ function buildCustomCampaignRoot(lib: FdfLibrary): FdfFrame {
   size(name, NAME_W, NAME_H);
 
   // …and the whole right-hand column moves left to sit inside the 3D chrome that frames it.
-  nudgeX(findFrame(root, "CampaignInfoPane"), -PANE_NUDGE);
+  nudgeX(findFrame(root, "CampaignInfoPane"), -widescreen(PANE_NUDGE));
   return root;
 }

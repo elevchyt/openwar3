@@ -289,7 +289,7 @@ export class CinematicPanelOverlay {
     // (see fitBox), and a 0.8-wide bar would stop short of both edges.
     //
     // Measured off the STAGE, not the window. The panel is mounted inside the stage box —
-    // the largest 16:9 frame the window allows, with the rest letterboxed off (ui/stage.ts) —
+    // the game frame the window allows, with the rest letterboxed off (ui/stage.ts) —
     // and `mountFdfScreen` fits the layout to that same box. Sizing the bars off `window`
     // instead made them as wide as the WINDOW while the box they sit in is narrower, and
     // because each bar is anchored by one corner (the top one TOPLEFT, the bottom one

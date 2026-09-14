@@ -17,6 +17,7 @@ import {
   INFO_ROWS, adopt, baseName, clearMapInfo, fillMapInfo, findFrame, layoutInfoPane,
   loadMinimapIcons, nudgeX, paneRowsToHide, readMapInfo, readMapPreviewFor, setProp,
 } from "./mapBrowser";
+import { widescreen } from "./widescreen";
 
 // The Local Area Network screen, built from the game's own
 // UI\FrameDef\Glue\LocalMultiplayerJoin.fdf.
@@ -347,7 +348,7 @@ function buildLanRoot(lib: FdfLibrary): FdfFrame {
   // …and the summary panel moves left to sit inside the 3D chrome that frames it, exactly as
   // the Custom Game screen's does (see nudgeX). The Game Creator / Game Speed rows are
   // anchored to the pane's own BOTTOM, so they travel with it.
-  nudgeX(findFrame(root, "MapInfoPaneContainer"), -MAP_INFO_NUDGE);
+  nudgeX(findFrame(root, "MapInfoPaneContainer"), -widescreen(MAP_INFO_NUDGE));
   return root;
 }
 

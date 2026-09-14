@@ -133,7 +133,7 @@ type DOWN from the file's own 0.013 until the paragraph clears the bar:
 
 ## 4. It is a full-WINDOW screen, and `#ui` stops being one mid-load
 
-`body.in-game` puts a **`transform`** on `#ui` to re-box it to the 16:9 game frame — and a
+`body.in-game` puts a **`transform`** on `#ui` to re-box it to the game frame — and a
 transform makes an element the containing block for every `position: fixed` thing under it.
 The loading screen is up across exactly the moment that class is set (`enterMap` sets it while
 the bar is still moving), so anything of its own mounted inside `#ui` is silently re-boxed

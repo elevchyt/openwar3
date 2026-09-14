@@ -5,6 +5,7 @@ import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import {
   INFO_ROWS, adopt, clearMapInfo, findFrame, layoutInfoPane, nudgeX, paneRowsToHide, setProp,
 } from "./mapBrowser";
+import { widescreen } from "./widescreen";
 
 // The View Replay screen, built from the game's own UI\FrameDef\Glue\ViewReplayScreen.fdf:
 // the replay list down the left, the map of the highlighted replay top-right, and
@@ -105,7 +106,7 @@ function buildViewReplayRoot(lib: FdfLibrary): FdfFrame {
 
   // The pane and the "Number of Players" row under it move left together — the row is
   // anchored to the container's own BOTTOMLEFT, so nudging the container carries it.
-  nudgeX(findFrame(root, "MapInfoPaneContainer"), -MAP_INFO_NUDGE);
+  nudgeX(findFrame(root, "MapInfoPaneContainer"), -widescreen(MAP_INFO_NUDGE));
   return root;
 }
 

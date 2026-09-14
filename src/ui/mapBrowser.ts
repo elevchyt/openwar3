@@ -964,7 +964,9 @@ export function adopt(root: FdfFrame, container: string, children: FdfFrame[]): 
  *
  * Every glue screen needs this for the same reason: the right-hand chrome is a 3D model
  * (render/menuScene.ts) stretched to frame a 16:9 screen, so its panels sit a little left of
- * where these 4:3-authored FDFs put their contents.
+ * where these 4:3-authored FDFs put their contents. That stretch shrinks back to nothing on a
+ * 4:3 screen, so a nudge is stated at 16:9 and handed over through `widescreen` at every call
+ * site (ui/widescreen.ts) — applied flat, it pushed the contents off the chrome at 4:3.
  */
 export function nudgeX(f: FdfFrame | undefined, dx: number): void { nudge(f, 3, dx); }
 export function nudgeY(f: FdfFrame | undefined, dy: number): void { nudge(f, 4, dy); }

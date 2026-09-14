@@ -15,6 +15,7 @@ import {
   BLURB_SCROLLBAR_FDF, MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, setProp,
 } from "./mapBrowser";
 import { savedPlayerName } from "./fdfLan";
+import { widescreen } from "./widescreen";
 
 // "Create Game" on the LAN screen, built from UI\FrameDef\Glue\LocalMultiplayerCreate.fdf:
 // pick the map you are going to host, set the game's Advanced Options, then Create Game.
@@ -296,7 +297,7 @@ function buildCreateRoot(lib: FdfLibrary): FdfFrame {
   // (and the same distance) the Custom Game and LAN screens make — see nudgeX. Both, so the
   // swap reads as a swap rather than a jump.
   for (const name of ["MapInfoPaneContainer", "MapInfoBackdrop", "AdvancedOptionsPaneContainer", "AdvancedOptionsBackdrop"]) {
-    nudgeX(findFrame(root, name), -MAP_INFO_NUDGE);
+    nudgeX(findFrame(root, name), -widescreen(MAP_INFO_NUDGE));
   }
 
   return root;

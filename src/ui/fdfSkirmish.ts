@@ -20,6 +20,7 @@ import {
   HANDICAPS, PLAYER_SLOT_FDF, buildSlotRows, dropdownButtonNames, fillForceLabels,
   forceGroups, labelOf, slotOption, slotOptionValue, slotOptionsFor, teamOptions, type Group,
 } from "./playerSlots";
+import { widescreen } from "./widescreen";
 
 // The Custom Game screen (issue #61), built from UI\FrameDef\Glue\Skirmish.fdf: the map
 // list, the player-slot rows, the map-info pane, and Start Game / Cancel.
@@ -472,7 +473,9 @@ function buildSkirmishRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
 
   // The right-hand chrome is a 3D model (render/menuScene.ts) stretched to frame a 16:9
   // screen, so its two panels sit a little left of where Skirmish.fdf's 4:3 anchors put
-  // their contents. Two nudges put the DOM back inside the chrome that carries it:
+  // their contents. Two nudges put the DOM back inside the chrome that carries it — both
+  // measured at 16:9 and blended back to the file's own layout on a 4:3 screen, where the
+  // chrome is not stretched at all (ui/widescreen.ts):
   //
   //  · the map-info panel (the pane and the Advanced Options button) moves left, so the
   //    minimap, the stat rows and the blurb centre on the panel rather than hugging its
@@ -482,16 +485,16 @@ function buildSkirmishRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   //    file's own base:button ratio (0.24 : 0.168), so the ornate ends still frame the button.
   //    …and its twin the same way, since the two faces of the column have to land on the
   //    same spot for the swap to read as a swap rather than a jump.
-  nudgeX(findFrame(root, "MapInfoPaneContainer"), -MAP_INFO_NUDGE);
-  nudgeX(findFrame(root, "MapInfoBackdrop"), -MAP_INFO_NUDGE);
-  nudgeX(findFrame(root, "AdvancedOptionsPaneContainer"), -MAP_INFO_NUDGE);
-  nudgeX(findFrame(root, "AdvancedOptionsBackdrop"), -MAP_INFO_NUDGE);
+  nudgeX(findFrame(root, "MapInfoPaneContainer"), -widescreen(MAP_INFO_NUDGE));
+  nudgeX(findFrame(root, "MapInfoBackdrop"), -widescreen(MAP_INFO_NUDGE));
+  nudgeX(findFrame(root, "AdvancedOptionsPaneContainer"), -widescreen(MAP_INFO_NUDGE));
+  nudgeX(findFrame(root, "AdvancedOptionsBackdrop"), -widescreen(MAP_INFO_NUDGE));
   // …and the map list rides up off the panel's bottom rail, which its lower border was
   // resting on, to sit centred between the two.
   nudgeY(findFrame(root, "MapListContainer"), MAP_LIST_NUDGE);
   for (const [base, button] of [["PlayGameBackdrop", "PlayGameButton"], ["CancelBackdrop", "CancelButton"]]) {
-    setProp(findFrame(root, base), "Width", [num(BOTTOM_BUTTON_BASE_W)]);
-    setProp(findFrame(root, button), "Width", [num(BOTTOM_BUTTON_BASE_W * BUTTON_TO_BASE)]);
+    setProp(findFrame(root, base), "Width", [num(widescreen(BOTTOM_BUTTON_BASE_W, FILE_BUTTON_BASE_W))]);
+    setProp(findFrame(root, button), "Width", [num(widescreen(BOTTOM_BUTTON_BASE_W, FILE_BUTTON_BASE_W) * BUTTON_TO_BASE)]);
   }
 
   // The "Game Settings" title anchors itself to the screen's top-left but declares no
@@ -517,7 +520,9 @@ const MAP_INFO_NUDGE = 0.052;
  *  share and you don't get a bigger button in the same frame, you get a button that has eaten
  *  its own frame — which is what a share of 0.79 did here. */
 const BOTTOM_BUTTON_BASE_W = 0.3;
-const BUTTON_TO_BASE = 0.168 / 0.24;
+/** …Skirmish.fdf's own base width, which is what a 4:3 screen's chrome leaves the slot. */
+const FILE_BUTTON_BASE_W = 0.24;
+const BUTTON_TO_BASE = 0.168 / FILE_BUTTON_BASE_W;
 
 /** How far up the map list moves to centre between the panel's two rails. */
 const MAP_LIST_NUDGE = 0.006;

@@ -31,6 +31,7 @@ import {
 } from "./playerSlots";
 import { copyText, observerSeats, toConfig } from "./fdfLan";
 import { LABEL_GOLD } from "./glueColors";
+import { widescreen } from "./widescreen";
 
 // The LAN GAME LOBBY (issue #77), built from the game's own UI\FrameDef\Glue\GameChatroom.fdf.
 //
@@ -871,7 +872,7 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   // …and the map panel moves left to sit inside the 3D chrome that frames it, exactly as the
   // Custom Game and LAN screens do (see nudgeX). GameNameLabel/Value and the Advanced Options
   // container are anchored to the pane itself, so they travel with it.
-  nudgeX(findFrame(root, "MapInfoPaneContainer"), -MAP_INFO_NUDGE);
+  nudgeX(findFrame(root, "MapInfoPaneContainer"), -widescreen(MAP_INFO_NUDGE));
 
   // The game name is a label/value pair sharing one line over the pane — the FDF's own idiom
   // (GameNameValue sits TOPLEFT on GameNameLabel and justifies right). Neither declares a
@@ -898,14 +899,14 @@ function buildLobbyRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   // entry line takes exactly the same widening, so it goes on overhanging the log by the few
   // pixels of chrome the file gives it rather than drifting away from it.
   nudgeX(findFrame(root, "ChatTextArea"), CHAT_INSET);
-  setProp(findFrame(root, "ChatTextArea"), "Width", [num(CHAT_W - CHAT_INSET + CHAT_WIDEN)]);
-  setProp(findFrame(root, "ChatEditBox"), "Width", [num(CHAT_EDIT_W + CHAT_WIDEN)]);
+  setProp(findFrame(root, "ChatTextArea"), "Width", [num(CHAT_W - CHAT_INSET + widescreen(CHAT_WIDEN))]);
+  setProp(findFrame(root, "ChatEditBox"), "Width", [num(CHAT_EDIT_W + widescreen(CHAT_WIDEN))]);
 
   // Start Game / Cancel grow to fill the slot the 3D chrome leaves them, keeping the file's
   // own base:button ratio — the same correction, and the same numbers, as Skirmish.
   for (const [base, button] of [["StartGameBackdrop", "StartGameButton"], ["CancelBackdrop", "CancelButton"]]) {
-    setProp(findFrame(root, base), "Width", [num(BOTTOM_BUTTON_BASE_W)]);
-    setProp(findFrame(root, button), "Width", [num(BOTTOM_BUTTON_BASE_W * BUTTON_TO_BASE)]);
+    setProp(findFrame(root, base), "Width", [num(widescreen(BOTTOM_BUTTON_BASE_W, FILE_BUTTON_BASE_W))]);
+    setProp(findFrame(root, button), "Width", [num(widescreen(BOTTOM_BUTTON_BASE_W, FILE_BUTTON_BASE_W) * BUTTON_TO_BASE)]);
   }
   return root;
 }
@@ -955,4 +956,6 @@ const MAP_INFO_NUDGE = 0.052;
 /** Start Game / Cancel: the ornate base's width, and the button's share of it (the FDF's own
  *  0.168 / 0.24 — see fdfSkirmish for why the share must not grow with the base). */
 const BOTTOM_BUTTON_BASE_W = 0.3;
-const BUTTON_TO_BASE = 0.168 / 0.24;
+/** …GameChatroom.fdf's own base width, the slot a 4:3 screen's chrome leaves (ui/widescreen.ts). */
+const FILE_BUTTON_BASE_W = 0.24;
+const BUTTON_TO_BASE = 0.168 / FILE_BUTTON_BASE_W;

@@ -173,8 +173,23 @@ console.log("\nResolution picks the size of the buffer the world is drawn into")
   check("a chosen rung is the buffer size", renderSize(), { width: 1280, height: 720 });
   check("…and the same rung as a factor", +renderScale().toFixed(4), +(720 / 1080).toFixed(4));
 
-  // EVERY rung must be exactly 16:9. The stage scales this buffer into a fixed 16:9 box, so a
-  // rung that is not would either distort the world or show more of it than the game gives.
+  // On a NARROWER stage the rung keeps its height and takes the stage's width (issue #151): the
+  // stage follows the window between 4:3 and 16:9, and a buffer of any other shape is drawn
+  // stretched into it. Past either end the stage stops, and so does the buffer.
+  applyVideoOptions(defaultOptions());
+  const windowAt = (innerWidth, innerHeight) => { globalThis.window = { innerWidth, innerHeight }; };
+  windowAt(1024, 768);
+  check("a 4:3 window draws the rung's height at 4:3", renderSize(), { width: 1440, height: 1080 });
+  windowAt(1440, 900);
+  check("…a 16:10 one at 16:10", renderSize(), { width: 1728, height: 1080 });
+  windowAt(1280, 1024);
+  check("…a 5:4 one is held at 4:3", renderSize(), { width: 1440, height: 1080 });
+  windowAt(2560, 1080);
+  check("…and an ultrawide one at 16:9", renderSize(), { width: 1920, height: 1080 });
+  delete globalThis.window;
+
+  // EVERY rung is NAMED at 16:9 — the widest stage, where the rung is exactly the buffer — so
+  // the label says what is drawn on a 16:9 screen and the height on every other one.
   const res = OPTION_DEFS.find((d) => d.key === "resolution");
   const offRatio = (res.choices ?? []).filter((c) => {
     const [w, h] = c.value.split("x").map(Number);

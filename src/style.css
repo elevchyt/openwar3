@@ -54,21 +54,26 @@ html, body {
   color: #e8e2d0;
 }
 
-/* The STAGE: the game frame is 16:9, always — the aspect Warcraft III renders at, and the
-   aspect our camera's 70° lens is framed for (docs/camera.md). Let the window dictate it and
-   a tall window quietly widens the lens horizontally, so a match frames differently on every
-   monitor. Instead we take the largest 16:9 box that fits and letterbox the rest in black.
-   Fullscreen on a 16:9 display simply makes the box the whole screen and the bars vanish.
+/* The STAGE: the game frame takes the window's own aspect between 4:3 and 16:9 — the two
+   Warcraft III 1.30 renders at — and is letterboxed in black only outside that range. The lens
+   is VERTICAL (docs/camera.md), so the height of the world on screen is the same at every
+   aspect and the width is what varies: a 4:3 screen sees less map at the sides, exactly as it
+   does in the real client. Past 16:9 the width stops growing, because a wider box would hand the
+   player more map than the real game ever gives; narrower than 4:3 (a 5:4 monitor) the height
+   stops, because the console is authored 0.8 wide and has nothing to fill a narrower screen
+   with. A fixed 16:9 frame used to letterbox a 4:3 monitor too, throwing a quarter of its
+   height away for no gain (issue #151).
    The HUD rides the same box (it is the game's console, not the browser's), so it stays
    welded to the bottom of the frame rather than to the bottom of the window. */
 :root {
-  /* The stage's on-screen size — the largest 16:9 box the window holds. ONE pair, and the
+  /* The stage's on-screen size — the largest box of an aspect in [4:3, 16:9] the window holds:
+     the width is capped at 16:9 of the height, the height at 3:4 of the width. ONE pair, and the
      interface measures itself against the same one the canvas is drawn into: every length in
      the HUD is a fraction of `--stage-h` (ui/hud.ts `uiPx`), which is what makes the console
      hold its shape on a small screen by itself. Options -> Video -> Resolution does NOT reach
      these — it sizes the world's backing buffer, which this box then scales. */
   --stage-w: min(100vw, calc(100vh * 16 / 9));
-  --stage-h: min(100vh, calc(100vw * 9 / 16));
+  --stage-h: min(100vh, calc(100vw * 3 / 4));
 }
 
 /* WebGL scenes (terrain / model / map) sit behind the UI. One shows at a time. */
@@ -101,8 +106,9 @@ html, body {
 }
 
 /* The map is the one scene that is a GAME view rather than a backdrop, so it — alone — is
-   letterboxed. The backing buffer is a fixed 1920x1080 (GAME_WIDTH/GAME_HEIGHT), which this
-   box scales: pixel-for-pixel at 1080p fullscreen, never a stretched aspect anywhere else. */
+   letterboxed. The backing buffer is sized to this box's aspect (render/videoQuality.ts
+   `renderSize`), which this box scales: pixel-for-pixel at 1080p fullscreen, never a stretched
+   aspect anywhere else. */
 #map {
   background: #000;
   /* Options -> Video -> Gamma (render/videoQuality.ts). The property is set on :root and only
@@ -2329,7 +2335,7 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
   pointer-events: none;
 }
 
-/* In a match the UI layer IS the game's UI, so it rides the 16:9 stage with the map —
+/* In a match the UI layer IS the game's UI, so it rides the stage with the map —
    otherwise the console would sit at the bottom of the WINDOW, floating over the black
    bar with a strip of map above it. (Out of a match #ui stays full-window: the menus,
    the lobby and the load gate are the browser's frame, not the game's.) */
@@ -2341,6 +2347,25 @@ body.in-game #ui {
   width: var(--stage-w);
   height: var(--stage-h);
   padding: 0;
+}
+
+/* A window NARROWER than 4:3 (a 5:4 monitor) boxes the menus too (issue #151). The glue FDFs
+   are authored 0.8 wide and scale by height (ui/fdf/layout.ts fitBox), so a narrower window has
+   less than 0.8 of width to put them in: the right-hand chrome ran over the left-hand panel and
+   the file's left-anchored contents. Out of a match the stage is exactly that box — the largest
+   4:3 one the window holds — so the glue and its 3D chrome ride it, letterboxed top and bottom,
+   the way the match already does. At 4:3 and wider this never applies: the menus spread to the
+   window's edges and ui/widescreen.ts decides how the chrome takes up the extra width. */
+@media (max-aspect-ratio: 4/3) {
+  body:not(.in-game) #ui,
+  body:not(.in-game) #menubg {
+    inset: auto;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: var(--stage-w);
+    height: var(--stage-h);
+  }
 }
 
 /* Same for the in-game FDF screens (multiboard, leaderboard, dialogs): they anchor frames

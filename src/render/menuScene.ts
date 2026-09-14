@@ -5,6 +5,7 @@ import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
 import type { DataSource } from "../vfs/types";
 import { makeFog, type DistFog } from "./fog";
 import { animTimeout, onAnimFrame, type AnimTimer } from "./animClock";
+import { widescreen } from "../ui/widescreen";
 
 // The main-menu background + chrome (issue #54). WC3 composes the menu from three
 // layers, all animated MDX glue models read from the user's install:
@@ -431,7 +432,8 @@ export class MenuScene {
   // in-browser tuning against the reference). The panel is posed by bone animation, so
   // its ortho window can't be derived from the bind pose — it's tuned by eye. panelHalfX
   // / panelHalfY are independent so the [0,1]²-authored (4:3) panel can be stretched to
-  // frame the buttons on a 16:9 screen.
+  // frame the buttons on a 16:9 screen. The three `*StretchX` values are the 16:9 ones; at any
+  // narrower aspect they are blended back towards 1 (ui/widescreen.ts), which is 4:3's.
   readonly tuning = {
     camZoom: 0.82, // dolly the eye toward the target (<1 closer)
     camPanX: 0, // pan the eye+target screen-right (world units)
@@ -1202,7 +1204,7 @@ export class MenuScene {
     if (this.logo && this.chrome === "MainMenu" && !this.panelsHidden) {
       const px = h / 0.6; // world units → pixels (UI_HEIGHT; see ui/fdf/layout.ts fitBox)
       const halfY = LOGO_HALF * t.logoScale * px;
-      const halfX = halfY * t.logoStretchX; // …the widescreen widening (see `logoStretchX`)
+      const halfX = halfY * widescreen(t.logoStretchX, 1, w / h); // …the widescreen widening (see `logoStretchX`)
       this.sceneLogo.camera.ortho(-LOGO_HALF, LOGO_HALF, -LOGO_HALF, LOGO_HALF, 1, 2000);
       this.sceneLogo.camera.moveToAndFace(
         new Float32Array([0, 0, 1000]),
@@ -1223,7 +1225,10 @@ export class MenuScene {
       return;
     }
 
-    const pVw = h * (t.panelHalfX / t.panelHalfY) * t.panelStretchX;
+    // The stretch is the 16:9 one blended back to 1 at the window's aspect (ui/widescreen.ts):
+    // a 4:3 screen draws the chrome at the aspect it was authored at, because a 4:3 screen has
+    // no extra width for it to take up — stretched anyway, the right panel runs over the left.
+    const pVw = h * (t.panelHalfX / t.panelHalfY) * widescreen(t.panelStretchX, 1, w / h);
     this.scenePanel.camera.ortho(t.panelCx - t.panelHalfX, t.panelCx + t.panelHalfX, t.panelCy - t.panelHalfY, t.panelCy + t.panelHalfY, 1, 2000);
     this.scenePanel.camera.moveToAndFace(
       new Float32Array([0.5, 0.5, 1000]),
@@ -1235,7 +1240,7 @@ export class MenuScene {
     // The left-edge layer, by the same rules but anchored to the screen's LEFT edge.
     // Vertically, whichever framing this screen's chrome asks for — see LEFT_FRAMING.
     const lf = (this.chrome && LEFT_FRAMING[this.chrome]) ?? { cy: t.leftCy, halfY: t.leftHalfY };
-    const lVw = h * (t.leftHalfX / lf.halfY) * t.leftStretchX;
+    const lVw = h * (t.leftHalfX / lf.halfY) * widescreen(t.leftStretchX, 1, w / h);
     this.sceneLeft.camera.ortho(t.leftCx - t.leftHalfX, t.leftCx + t.leftHalfX, lf.cy - lf.halfY, lf.cy + lf.halfY, 1, 2000);
     this.sceneLeft.camera.moveToAndFace(
       new Float32Array([0.5, 0.5, 1000]),

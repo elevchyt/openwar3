@@ -127,14 +127,22 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   Quality must not stride the SKELETONS, because the sim moves a unit by writing onto its instance
   and a skipped instance stops moving. **RESOLUTION is the one rung that changes how many PIXELS
   are drawn**, and so the one a weak GPU cares most about: it sizes the world's drawing buffer,
-  which CSS then scales into the same fixed 16:9 stage, so the camera sees the same world at every
-  rung and the DOM HUD stays sharp (`GAME_WIDTH`/`GAME_HEIGHT` remain the LOGICAL frame). Every
-  rung is EXACTLY 16:9 because the stage is — a 4:3 rung off the 2003 list would distort or hand
-  the player more map. Measured on a fill-bound frame it halves it (6.8 → 3.1 ms at 800×450); on a
+  which CSS then scales into the stage, so the camera sees the same world at every rung and the
+  DOM HUD stays sharp (`GAME_WIDTH`/`GAME_HEIGHT` remain the LOGICAL frame). Every rung is NAMED
+  at 16:9 and fixes the HEIGHT: the stage follows the window between 4:3 and 16:9 (never wider —
+  that hands the player more map), and the buffer takes the stage's aspect or the world stretches. Measured on a fill-bound frame it halves it (6.8 → 3.1 ms at 800×450); on a
   CPU-bound one it does almost nothing, which is the whole point of who it is for.
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
   in `src/render/mapViewer.ts`, HUD DOM in `src/ui/hud.ts`, data tables in `src/data/` (units, techtree, `abilities.ts`),
   audio in `src/audio/`, styles in `src/style.css`.
+- **4:3 screens:** read [`src/ui/widescreen.ts`](src/ui/widescreen.ts) before tuning any glue
+  chrome, button width or `nudgeX` by eye. Every glue FDF and its 3D chrome is AUTHORED at 4:3,
+  and the corrections that fill a wider screen (`panelStretchX`/`leftStretchX`/`logoStretchX`,
+  `buttonWidthScale`, the map-info nudges) were measured at 16:9 — a 4:3 screen has none of that
+  extra width, so each is stated at 16:9 and blended back to the file's own value through
+  `widescreen()`. Applied flat, the right-hand chrome ran over the left-hand panel (issue #151).
+  The match stage (`ui/stage.ts`) likewise takes the window's aspect between 4:3 and 16:9, and a
+  window narrower than 4:3 boxes the menus as well as the match.
 - **Camera:** read [`docs/camera.md`](docs/camera.md) before touching `GAME_FOV`, the zoom constants, or a map's
   camera. The FOV *field* the data carries (70) is **not** the angle the game renders with (**45°**, measured off
   the real client) — conflate them and every distance changes meaning and every map camera breaks.

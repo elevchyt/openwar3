@@ -1,5 +1,6 @@
 import type { FdfFrame } from "../ui/fdf/parser";
 import type { FdfLibrary } from "../ui/fdf/library";
+import { widescreen } from "../ui/widescreen";
 import advancedOptionsFdf from "./ui/AdvancedOptionsPane.fdf?raw";
 import advancedOptionsDisplayFdf from "./ui/AdvancedOptionsDisplay.fdf?raw";
 import globalStringsFdf from "./ui/GlobalStrings.fdf?raw";
@@ -53,8 +54,12 @@ export interface FdfOverride {
    * under it, so the sweeping rewrite is right for it; a row SPLICED INTO the chain is not —
    * its anchor frame stays put and keeps its own label hanging off it, and only the row it
    * pushed down is to follow the new one.
+   *
+   * `widescreen` says `dx` is a correction tuned against the 16:9 chrome, so it is blended back
+   * to nothing on a 4:3 screen, whose chrome is drawn at the aspect the file was written for
+   * (ui/widescreen.ts, issue #151).
    */
-  readonly repoint?: ReadonlyArray<{ from: string; to: string; dx?: number; dy?: number; only?: readonly string[] }>;
+  readonly repoint?: ReadonlyArray<{ from: string; to: string; dx?: number; dy?: number; only?: readonly string[]; widescreen?: boolean }>;
   /**
    * Change the size of a frame the INSTALL declares — the one thing a name collision cannot do.
    *
@@ -188,7 +193,9 @@ export const LAN_JOIN_OVERRIDE: FdfOverride = {
   // dx carries the pair and they cannot come apart. `from` and `to` are the same frame, which
   // makes this a pure offset rather than a re-anchoring; `only` keeps it off everything else
   // that measures from that corner (the panel's title, its info line, our status text).
-  repoint: [{ from: "LocalMultiplayerJoin", to: "LocalMultiplayerJoin", dx: 0.045, only: ["CreateBackdrop"] }],
+  // The 0.045 is the room the 16:9 panel has past the file's anchor; a 4:3 panel has none, and
+  // the pair's ornate ends hung over its border until it was blended (`widescreen`).
+  repoint: [{ from: "LocalMultiplayerJoin", to: "LocalMultiplayerJoin", dx: 0.045, only: ["CreateBackdrop"], widescreen: true }],
   add: [
     { frame: "NetworkStatusText", into: "LocalMultiplayerJoin" },
     { frame: "ServersListBackdrop", into: "GameListPanel" },
@@ -307,8 +314,8 @@ export function applyOverride(lib: FdfLibrary, root: FdfFrame, override: FdfOver
  * them: step past the relative frame's name and its point, and what is left is the pair. A
  * point that stated no offsets grows them, since it is being moved off a different box.
  */
-function repoint(root: FdfFrame, r: { from: string; to: string; dx?: number; dy?: number; only?: readonly string[] }): void {
-  const dx = r.dx ?? 0;
+function repoint(root: FdfFrame, r: { from: string; to: string; dx?: number; dy?: number; only?: readonly string[]; widescreen?: boolean }): void {
+  const dx = r.widescreen ? widescreen(r.dx ?? 0) : r.dx ?? 0;
   const dy = r.dy ?? 0;
   (function walk(f: FdfFrame): void {
     if (r.only && !r.only.includes(f.name)) { f.children.forEach(walk); return; }

@@ -70,7 +70,7 @@ const modelCanvas = document.getElementById("model") as HTMLCanvasElement;
 let mapCanvas = document.getElementById("map") as HTMLCanvasElement;
 // The loading screen (issue #78): its art canvas and the layer its DOM goes in. Not part of
 // `show()`'s one-at-a-time set — it is up over the top of whichever of those is mid-swap,
-// which is the whole point of it — and not inside `#ui`, which a match re-boxes to the 16:9
+// which is the whole point of it — and not inside `#ui`, which a match re-boxes to the
 // game frame while this is still on screen (see index.html).
 const loadingCanvas = document.getElementById("loading") as HTMLCanvasElement;
 const loadingLayer = document.getElementById("loading-layer") as HTMLElement;

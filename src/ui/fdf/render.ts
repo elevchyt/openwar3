@@ -11,6 +11,7 @@ import {
 } from "./layout";
 import { fadePanels, FADE_MS, LATE_PANEL_DELAY_MS, type PanelDirection } from "./anim";
 import { applyOverride, layer, type FdfOverride } from "../../overrides";
+import { widescreen } from "../widescreen";
 import {
   buildCheckBox, buildEditBox, buildList, buildPopup, buildScrollFrame, buildSlider, buildTextArea,
   widgetKind,
@@ -136,7 +137,9 @@ export interface FdfScreenOptions {
   sprites?: Record<string, string>;
   /** Frame names to skip (WC3's glue scripts hide these sub-panels initially). */
   hidden?: string[];
-  /** Widen the button widgets by this factor (text size unchanged). Default 1. */
+  /** Widen the button widgets by this factor (text size unchanged) — as tuned at 16:9, and
+   *  blended back to 1 on a 4:3 screen, which has no extra width to fill (ui/widescreen.ts).
+   *  Default 1. */
   buttonWidthScale?: number;
   /** The frames that make up this screen's PANELS — the groups whose contents fade out and
    *  back in between menus (issue #61). Each named frame fades as one. Defaults to the
@@ -284,7 +287,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     // Use one number for both and the box comes out `xScale` too wide for its own text, which
     // on the loading screen parked "WAITING FOR OTHER PLAYERS" 45px left of its bar.
     const { tree } = layout(
-      root, box, opts.buttonWidthScale ?? 1,
+      root, box, widescreen(opts.buttonWidthScale ?? 1, 1, vw / vh),
       (f) => measureTextFrame(f, lib, opts.textOverrides ?? {}, fit),
       (f, w) => measureTextFrameLines(f, lib, opts.textOverrides ?? {}, fit, w),
     );

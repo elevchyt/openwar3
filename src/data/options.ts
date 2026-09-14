@@ -63,10 +63,12 @@ const ON_OFF = [
  * under `ResolutionMenu` is empty in the file), because it enumerated the display modes the
  * hardware would give it. A browser has no display modes: the page renders into a canvas and CSS
  * scales it into the window. So the analogue is the ladder of buffer sizes, and the frame it is
- * scaled into is unchanged — which is why every rung here is EXACTLY 16:9. The stage is a fixed
- * 16:9 box by construction (ui/stage.ts: a wider one quietly hands the player more map than the
- * real game gives), so a 4:3 rung off the 2003 list would have to distort or letterback, and
- * either way it would not mean what it says.
+ * scaled into is unchanged — which is why every rung here is named EXACTLY 16:9. The stage is
+ * at most 16:9 (ui/stage.ts: a wider one quietly hands the player more map than the real game
+ * gives), and a narrower one — a 4:3 or 16:10 screen — draws the rung's HEIGHT at its own
+ * aspect (render/videoQuality.ts `renderSize`), so a rung names what a 16:9 screen draws and
+ * how many lines every other one does. A 4:3 rung off the 2003 list would name a width that
+ * only some screens draw.
  *
  * Ascending, as the game's own list was. Labels are plain text rather than GlobalStrings keys —
  * there are none for these, for the same reason the list was built at runtime.
