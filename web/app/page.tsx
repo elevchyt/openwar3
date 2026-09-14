@@ -19,7 +19,7 @@ const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
   },
   {
     title: "Computer+",
-    body: "A second melee AI beside Blizzard's own, which is ported script for script. Computer+ never cheats at any difficulty, rolls a named build every match, creeps, shops, and talks to its allies in team games.",
+    body: "A second melee AI beside Blizzard's own, which is ported script for script. Computer+ never cheats at any difficulty, creeps, shops, and talks to its allies in team games.",
     media: { kind: "placeholder" },
   },
   {
@@ -34,7 +34,7 @@ const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
   },
   {
     title: "Hotkeys your way",
-    body: "Legacy, Grid, or your own CustomKeys.txt — the same three options the game has, with the grid read off the key's position, so it works on any keyboard layout.",
+    body: "Legacy, Grid, or your own CustomKeys.txt along with a hotkey option and the ability to customize hotkeys in-game.",
     media: { kind: "placeholder" },
   },
   {
@@ -100,6 +100,7 @@ export default async function Home() {
               className="hero__logo"
               src="/openwar3-logo.png"
               alt="OpenWar3"
+              draggable={false}
               width={1683}
               height={935}
               priority
