@@ -29,9 +29,10 @@
     "icon": "node tools/make-icon.mjs",
     "dist": "pnpm build && node tools/make-icon.mjs && electron-builder",
     "dist:linux": "pnpm build && node tools/make-icon.mjs && electron-builder --linux",
-    "dist:win": "pnpm build && node tools/make-icon.mjs && electron-builder --win",
+    "dist:win": "pnpm build && node tools/make-icon.mjs && electron-builder --win -c.electronVersion=43.7.0",
     "dist:mac": "pnpm build && node tools/make-icon.mjs && electron-builder --mac",
     "release": "pnpm build && node tools/make-icon.mjs && electron-builder --publish always",
+    "release:win": "pnpm build && node tools/make-icon.mjs && electron-builder --win -c.electronVersion=43.7.0 --publish always",
     "relay": "node server/relay.mjs",
     "relay-kill": "node server/relay-kill.mjs",
     "relay:test": "node tools/relay-test.mjs && node tools/loopback-test.mjs",
@@ -96,9 +97,24 @@
     },
     "win": {
       "target": [
-        "nsis"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        }
       ],
       "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "include": "packaging/windows-installer.nsh",
+      "artifactName": "OpenWar3-Setup-${version}.${ext}",
+      "shortcutName": "OpenWar3",
+      "uninstallDisplayName": "OpenWar3"
     },
     "mac": {
       "target": [

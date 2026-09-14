@@ -16,8 +16,9 @@ export function Downloads({ release }: { release: LatestRelease | null }) {
       <div className="downloads__row">
         {PLATFORMS.map((p) => {
           const asset = release?.assets[p.id];
-          // GitHub unreachable: keep Linux live through the redirect route, which retries it.
-          const live = asset || (!release && p.id === "linux");
+          // GitHub unreachable: keep every platform that ships live through the redirect route,
+          // which retries it (and lands on the releases page if it still cannot).
+          const live = asset || (!release && p.ships);
           if (!live) {
             return (
               <GlueButton
@@ -56,6 +57,7 @@ export function Downloads({ release }: { release: LatestRelease | null }) {
                     <span className="mono">{asset.name}</span>
                     <br />
                     Needs <span className="ow3-gold">Warcraft III: The Frozen Throne 1.30.4</span>.
+                    {p.id === "windows" ? <> 32- and 64-bit; installs into your Warcraft III folder.</> : null}
                   </>
                 ) : (
                   <>The newest release&apos;s {p.format}.</>

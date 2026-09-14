@@ -132,6 +132,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   at 16:9 and fixes the HEIGHT: the stage follows the window between 4:3 and 16:9 (never wider —
   that hands the player more map), and the buffer takes the stage's aspect or the world stretches. Measured on a fill-bound frame it halves it (6.8 → 3.1 ms at 800×450); on a
   CPU-bound one it does almost nothing, which is the whole point of who it is for.
+- **Windows:** read [`docs/windows.md`](docs/windows.md) before touching the NSIS include
+  ([`packaging/windows-installer.nsh`](packaging/windows-installer.nsh)), the `win`/`nsis` build
+  blocks or [`electron/locate.mjs`](electron/locate.mjs). ONE installer carries the 64- and the
+  32-bit app, which is why the Windows build is pinned to **Electron 43** (`-c.electronVersion`
+  in `dist:win`/`release:win`) — 44 publishes no `win32-ia32`. The installer asks for the
+  WARCRAFT III folder and installs into `<it>\OpenWar3`, and electron-builder's uninstaller is
+  `RMDir /r $INSTDIR`, so `$INSTDIR` is kept off the game folder by three guards (after the
+  directory page, in `.onInit` for silent installs, and in the uninstaller) — never remove one.
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
   in `src/render/mapViewer.ts`, HUD DOM in `src/ui/hud.ts`, data tables in `src/data/` (units, techtree, `abilities.ts`),
   audio in `src/audio/`, styles in `src/style.css`.

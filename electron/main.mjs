@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { startServer } from "./server.mjs";
 import { installVersion, looksLikeInstall, serveInstall, REQUIRED_VERSION } from "./install.mjs";
+import { detectInstall } from "./locate.mjs";
 import { startBeacon } from "./beacon.mjs";
 import { startUpdates } from "./updates.mjs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
@@ -72,7 +73,13 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // with OOM, raise it 512 MiB at a time — never delete the flag. `js-flags` is how the
 // RENDERER's V8 is told; a plain `--max-old-space-size` on the command line would only
 // reach the main process, which barely allocates.
-app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
+//
+// A 32-BIT build (the Windows installer carries one, build/installer.nsh) cannot have that: the
+// renderer's whole address space is 2 GiB, or 4 on 64-bit Windows, and a heap ceiling above what
+// the process can map only moves the out-of-memory from V8's tidy report to a crash. 1536 MiB is
+// also ours, the most that leaves the GPU process and the decoded textures room beside it.
+const HEAP_MIB = process.arch === "ia32" ? 1536 : 4096;
+app.commandLine.appendSwitch("js-flags", `--max-old-space-size=${HEAP_MIB}`);
 
 // VSYNC OFF, and Chromium's own frame-rate limit with it. A vsynced page shows each frame at the
 // display's next refresh, and everything the page draws to follow the mouse sits that much behind
@@ -180,6 +187,16 @@ const currentInstall = () => {
 
 app.whenReady().then(async () => {
   useSettingsDir(app.getPath("userData"));
+
+  // Nothing remembered, or what was remembered is gone or patched: look for the install before
+  // the page asks (electron/locate.mjs). The Windows installer put this app INSIDE the player's
+  // Warcraft III folder, so on a fresh install this finds it without a single click. What it
+  // finds is remembered exactly as a picked folder is, and what it cannot find is left to the
+  // gate's folder picker — the fallback, never replaced.
+  if (!currentInstall().valid) {
+    const found = await detectInstall({ packaged: app.isPackaged }).catch(() => null);
+    if (found) writeSettings({ installPath: found });
+  }
 
   // No application menu at all. `autoHideMenuBar` only HID Electron's default File/Edit/View
   // bar, and a lone Alt brought it back over the game — Alt is the WC3 key for showing health

@@ -7,6 +7,7 @@
 
 import { startServer } from "../electron/server.mjs";
 import { looksLikeInstall, serveInstall, installVersion, REQUIRED_VERSION } from "../electron/install.mjs";
+import { detectInstall } from "../electron/locate.mjs";
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { WebSocket } from "ws";
@@ -84,6 +85,11 @@ try {
     const declared = /REQUIRED_VERSION\s*=\s*"([^"]+)"/.exec(ts)?.[1];
     ok("the shell asks for the same version the game does", declared === REQUIRED_VERSION,
        `install.mjs ${REQUIRED_VERSION}, version.ts ${declared}`);
+    // The Windows installer asks the same question before it will install anywhere
+    // (packaging/windows-installer.nsh), in NSIS, where it cannot import either file.
+    const nsh = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "packaging", "windows-installer.nsh"), "utf8");
+    const installer = /!define OW3_REQUIRED_VERSION "([^"]+)"/.exec(nsh)?.[1];
+    ok("…and so does the Windows installer", installer === REQUIRED_VERSION, `windows-installer.nsh ${installer}`);
 
     const tmp = join(process.env.TMPDIR ?? "/tmp", `ow3-version-test-${process.pid}`);
     const build = (version) => {
@@ -105,6 +111,16 @@ try {
       ok("a different build number of the same version still passes", looksLikeInstall(tmp));
       rmSync(join(tmp, ".build.info"));
       ok("a folder that says nothing is refused", !looksLikeInstall(tmp));
+      // The installer puts the app INSIDE the game folder, so a packaged app finds the install
+      // from where its own executable sits (electron/locate.mjs) — and an unpackaged one, run
+      // out of node_modules, must not go looking there.
+      build("1.30.4.11274");
+      const exe = join(tmp, "OpenWar3", "OpenWar3.exe");
+      const linux = { platform: "linux", env: {} };
+      ok("a packaged app inside the game folder finds it", (await detectInstall({ packaged: true, execPath: exe, ...linux })) === tmp);
+      ok("…an unpackaged one does not look", (await detectInstall({ packaged: false, execPath: exe, ...linux })) === null);
+      ok("…and an AppImage is placed by its FILE, not its mount",
+         (await detectInstall({ packaged: true, execPath: "/tmp/.mount_x/openwar3", platform: "linux", env: { APPIMAGE: join(tmp, "OpenWar3.AppImage") } })) === tmp);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

@@ -3,7 +3,7 @@ import { GlueButton, Hotkeys, Panel } from "@openwar3/ui/react";
 import { Downloads } from "@/components/Downloads";
 import { FeatureCard, type Media } from "@/components/FeatureCard";
 import { GitHubIcon, KofiIcon, StarIcon } from "@/components/Icons";
-import { REPO_URL, latestRelease, stargazers } from "@/lib/github";
+import { REPO_URL, homeData } from "@/lib/github";
 
 const KOFI_URL = "https://ko-fi.com/lefterisdev";
 
@@ -45,7 +45,7 @@ const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
 ];
 
 const ROADMAP: ReadonlyArray<{ title: string; body: string }> = [
-  { title: "Windows & macOS builds", body: "The same desktop app on every platform, and in any browser." },
+  { title: "macOS build", body: "The same desktop app on the Mac, beside Linux and Windows." },
   { title: "Multiplayer reconnect", body: "A dropped connection no longer costs you the game." },
   { title: "Huge control groups", body: "Dozens of units bound to a single group key." },
   { title: "Select army hotkey", body: "Every combat unit you own on one key." },
@@ -54,7 +54,7 @@ const ROADMAP: ReadonlyArray<{ title: string; body: string }> = [
 ];
 
 export default async function Home() {
-  const [release, stars] = await Promise.all([latestRelease(), stargazers()]);
+  const { release, stars } = await homeData();
 
   return (
     <>

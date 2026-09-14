@@ -18,6 +18,16 @@ pnpm build        # typecheck + production build
 - A platform whose artifact is missing from the latest release shows **Coming soon** — so the
   day a release carries a `.exe`, the Windows button goes live with no change here.
 - The star count in the top bar and the call-to-action comes from the same API.
+- The Windows button is ONE installer for 32- and 64-bit Windows (`OpenWar3-Setup-<version>.exe`,
+  built with `pnpm release:win` at the repo root, see `../docs/windows.md`).
+
+**A failed GitHub call never replaces a good page.** The home page is ISR (`revalidate = 300`),
+and a rate-limited revalidation used to render a page with no version and every button on
+"Coming soon" — then serve it for five minutes. `homeData()` throws instead, which is Next's
+contract for "keep the last generated page and retry on the next request". Only the BUILD falls
+back to rendering without GitHub, so a deploy never fails on it. Adding an asset to an existing
+release (as the Windows installer was added to v0.3.4) is picked up the same way: within five
+minutes, plus the one request that is served the stale page while the new one renders.
 
 The unauthenticated GitHub API allows 60 requests an hour per IP; the 5-minute cache stays well
 under it. To lift the limit anyway, set a read-only `GITHUB_TOKEN` in the Vercel project.
