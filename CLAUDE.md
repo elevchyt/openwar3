@@ -131,7 +131,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   DOM HUD stays sharp (`GAME_WIDTH`/`GAME_HEIGHT` remain the LOGICAL frame). Every rung is NAMED
   at 16:9 and fixes the HEIGHT: the stage follows the window between 4:3 and 16:9 (never wider —
   that hands the player more map), and the buffer takes the stage's aspect or the world stretches. Measured on a fill-bound frame it halves it (6.8 → 3.1 ms at 800×450); on a
-  CPU-bound one it does almost nothing, which is the whole point of who it is for.
+  CPU-bound one it does almost nothing, which is the whole point of who it is for. **VERTICAL SYNC** (the
+  last row, ours, on by default) is a Chromium LAUNCH switch in the desktop app, so the SHELL's
+  `settings.json` owns it and a change lands on the next launch; with it off the page caps itself
+  at 300 fps (`src/render/frameCap.ts`), and in a browser tab the box is greyed.
 - **Windows:** read [`docs/windows.md`](docs/windows.md) before touching the NSIS include
   ([`packaging/windows-installer.nsh`](packaging/windows-installer.nsh)), the `win`/`nsis` build
   blocks or [`electron/locate.mjs`](electron/locate.mjs). ONE installer carries the 64- and the

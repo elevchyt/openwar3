@@ -81,15 +81,26 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 const HEAP_MIB = process.arch === "ia32" ? 1536 : 4096;
 app.commandLine.appendSwitch("js-flags", `--max-old-space-size=${HEAP_MIB}`);
 
-// VSYNC OFF, and Chromium's own frame-rate limit with it. A vsynced page shows each frame at the
+// VSYNC — the player's choice, Options → Video → "Vertical Sync" (src/data/options.ts), ON unless
+// they turned it off. It is a Chromium LAUNCH switch with no runtime twin, which is why the choice
+// is kept HERE, in the shell's own settings file, rather than only in the page's localStorage:
+// this has to be read before there is a page at all, and a change takes effect on the next launch.
+// `getPath("userData")` is answerable before `ready`, so the store is pointed at it now.
+//
+// OFF means Chromium's own frame-rate limit goes with it. A vsynced page shows each frame at the
 // display's next refresh, and everything the page draws to follow the mouse sits that much behind
 // the hardware pointer. Off, requestAnimationFrame fires back to back (~6,300 Hz on an empty
 // WebGL page on the dev box), so the page caps itself at MAX_FPS instead — Chromium has no switch
 // for "uncapped, but no faster than N" (src/render/frameCap.ts). The price is tearing, which is
-// the usual price of vsync off. OURS, not the game's: 1.30.4 has no frame-rate setting.
-app.commandLine.appendSwitch("disable-gpu-vsync");
-app.commandLine.appendSwitch("disable-frame-rate-limit");
-const MAX_FPS = 300;
+// the usual price of vsync off. OURS, not the game's: 1.30.4 has no frame-rate or vsync setting.
+useSettingsDir(app.getPath("userData"));
+const VSYNC = readSettings().vsync !== false;
+if (!VSYNC) {
+  app.commandLine.appendSwitch("disable-gpu-vsync");
+  app.commandLine.appendSwitch("disable-frame-rate-limit");
+}
+/** The page's cap with vsync off; with it on the display's refresh is the cap and there is none. */
+const MAX_FPS = VSYNC ? 0 : 300;
 
 /** Point the window at a running `pnpm dev` instead of the build. In that mode we start NO
  *  server of our own: the dev server is already carrying the relay at its own origin
@@ -116,6 +127,7 @@ function createWindow(url) {
     webPreferences: {
       preload: join(here, "preload.cjs"),
       // Read back by preload.cjs as `ow3native.maxFps`; argv is how a sandboxed preload is told.
+      // 0 (vsync on) leaves requestAnimationFrame unpatched.
       additionalArguments: [`--ow3-max-fps=${MAX_FPS}`],
       // The renderer is a WEB PAGE and gets no privileges: it reads the player's install with
       // the same fetch it would use on the web, against this app's own scheme. What it cannot do
@@ -186,7 +198,6 @@ const currentInstall = () => {
 };
 
 app.whenReady().then(async () => {
-  useSettingsDir(app.getPath("userData"));
 
   // Nothing remembered, or what was remembered is gone or patched: look for the install before
   // the page asks (electron/locate.mjs). The Windows installer put this app INSIDE the player's
@@ -224,6 +235,10 @@ app.whenReady().then(async () => {
     return picked;
   });
   ipcMain.handle("ow3:install-forget", () => { writeSettings({ installPath: null }); });
+  // Options → Video → "Vertical Sync". The SAVED choice, not the running one: a player who turns it
+  // off and reopens the panel before relaunching should see the box they left, not the old state.
+  ipcMain.handle("ow3:vsync-get", () => readSettings().vsync !== false);
+  ipcMain.handle("ow3:vsync-set", (_event, on) => { writeSettings({ vsync: on === true }); });
   // Asked by a page that has just started listening. The push below only fires when the SET
   // CHANGES, and the game subscribes when the LAN screen opens — long after the beacon found
   // whoever was already there — so without this a machine that has been quietly present the

@@ -41,6 +41,7 @@ in `OPTION_DEFS` for it was bound to a frame that has never existed.
 | **Lights** | Caps the glue scene's uploaded omni lights at 8 / 4 / 0. |
 | **Unit Shadows** | Skips the unit and building shadow passes (and the batch rebuild that feeds them). |
 | **Occlusion** | *Nothing* — see below. |
+| **Vertical Sync** | Ours. A Chromium launch switch in the desktop app — see the last section. |
 
 ## Resolution is the one that changes how many pixels are drawn
 
@@ -140,13 +141,19 @@ server and delete `node_modules/.vite`, or Vite serves the pre-patch bundle (CLA
 follows the dropdown. **Texture Quality is read as a texture uploads**, so it reaches the next
 map rather than the one on screen.
 
-## Frame rate: vsync off, capped at 300 (desktop app only)
+## Vertical Sync, and the 300 fps cap (desktop app only)
 
-The Video panel has no frame-rate row, because 1.30.4's has none. The desktop app always launches
-with **vsync off** (`disable-gpu-vsync` + `disable-frame-rate-limit` in `electron/main.mjs`),
-since a vsynced page is at least a refresh behind the hardware pointer. It is capped at **300 fps**,
-and that number is OURS. A browser tab keeps the browser's own vsync, because a page cannot turn
-it off.
+The panel's last row, **"Vertical Sync (requires restart)"**, is OURS: 1.30.4's panel has no
+frame-rate or vsync row. It is **on by default**. In the desktop app it is a Chromium LAUNCH
+switch (`disable-gpu-vsync` + `disable-frame-rate-limit` in `electron/main.mjs`) with no runtime
+twin, so the choice is kept by the SHELL, in its own `settings.json`, which is read before the
+window exists — the page's localStorage is read far too late for it. The Options screen asks
+the shell for the saved choice when it mounts (it wins over localStorage), hands a change back on
+OK, and the next launch uses it. A browser tab keeps the browser's own vsync and no page can turn
+it off, so there the box is shown ticked and greyed.
+
+Why a player would turn it off: a vsynced page is at least a refresh behind the hardware pointer.
+With it off the page caps itself at **300 fps**, and that number is OURS.
 
 Chromium has no "uncapped, but no faster than N" switch, so [`src/render/frameCap.ts`](../src/render/frameCap.ts)
 patches `requestAnimationFrame` itself. That way every loop and poll in the page sees a 300 Hz

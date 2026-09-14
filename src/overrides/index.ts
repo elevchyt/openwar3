@@ -83,7 +83,7 @@ export const OW3_STRINGS: FdfOverride = { id: "ow3-strings", source: globalStrin
  * Options → Gameplay: out with the Game Port and the Chat Support gateway, in with the
  * Computer+ default (issue #124), the "Healthbars:" pulldown (issue #141) and the "Hotkeys:"
  * one (issue #142) — which also retires four of the game's own checkbox rows and re-orders
- * what is left. See `ui/OptionsMenu.fdf` for the panel this adds up to, and
+ * what is left — and, on the Video panel, the "Vertical Sync" checkbox. See `ui/OptionsMenu.fdf` for the panel this adds up to, and
  * src/data/options.ts for why each retired row goes.
  */
 export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
@@ -123,6 +123,9 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     { frame: "HotkeysBackdrop", into: "GameplayPanel" },
     { frame: "ShowHotkeysCheckBox", into: "GameplayPanel" },
     { frame: "ShowHotkeysLabel", into: "GameplayPanel" },
+    // Options → Video: "Vertical Sync", under the game's last row (Occlusion).
+    { frame: "VsyncCheckBox", into: "VideoPanel" },
+    { frame: "VsyncLabel", into: "VideoPanel" },
   ],
 };
 

@@ -27,6 +27,10 @@ interface NativeBridge {
   forgetInstall(): Promise<void>;
   servers(): Promise<Array<{ id: string; url: string }>>;
   onServers(fn: (peers: Array<{ id: string; url: string }>) => void): () => void;
+  vsync?: {
+    get(): Promise<boolean>;
+    set(on: boolean): Promise<void>;
+  };
   update: {
     state(): Promise<UpdateState>;
     download(): Promise<void>;
@@ -58,6 +62,18 @@ export function onUpdateState(fn: (state: UpdateState) => void): () => void {
   void native.update.state().then((state) => { if (live && state) fn(state); });
   return () => { live = false; stop(); };
 }
+
+/**
+ * Options → Video → "Vertical Sync". Null in a browser, where vsync is the BROWSER's and a page
+ * cannot turn it off. In the desktop app it is a Chromium launch switch (electron/main.mjs), so
+ * the shell keeps the choice and this is the SAVED one — which the next launch will use, not
+ * necessarily the one this window is running with.
+ */
+export const nativeVsync = async (): Promise<boolean | null> => {
+  const vsync = bridge()?.vsync;
+  return vsync ? vsync.get().catch(() => null) : null;
+};
+export const setNativeVsync = (on: boolean): void => void bridge()?.vsync?.set(on);
 
 export const downloadUpdate = (): void => void bridge()?.update?.download();
 export const installUpdate = (): void => void bridge()?.update?.install();

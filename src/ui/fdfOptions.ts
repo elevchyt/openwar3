@@ -15,6 +15,7 @@ import {
 import { applyVideoOptions } from "../render/videoQuality";
 import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
+import { nativeVsync, setNativeVsync } from "../assets/nativeInstall";
 
 // The Options screen (issue #81), built from the game's own UI\FrameDef\Glue\OptionsMenu.fdf:
 // the three category buttons (Gameplay / Video / Sound) down the right, the settings for the
@@ -76,6 +77,11 @@ export async function mountOptions(
   h: OptionsHandlers,
 ): Promise<FdfScreen> {
   const committed = loadOptions();
+  // "Vertical Sync" is the SHELL's (electron/main.mjs — a launch switch), so in the desktop app its
+  // saved choice wins over whatever this page's store remembers; in a browser there is no choice
+  // to make, and the box is shown ticked and greyed (see `bindOne`).
+  const shellVsync = await nativeVsync();
+  if (shellVsync !== null) committed.vsync = shellVsync;
   // The screen edits this copy; OK commits it, Cancel discards it. So a player who fiddles
   // and cancels is exactly where they started, audio included.
   const working: Options = { ...committed };
@@ -122,7 +128,12 @@ export async function mountOptions(
       GameplayButton: () => void showPanel("gameplay"),
       VideoButton: () => void showPanel("video"),
       SoundButton: () => void showPanel("sound"),
-      OKButton: () => { saveOptions(working); h.onClose(); },
+      OKButton: () => {
+        saveOptions(working);
+        // Handed to the shell only on OK, like every other commit; it takes effect next launch.
+        if (shellVsync !== null && working.vsync !== committed.vsync) setNativeVsync(working.vsync === true);
+        h.onClose();
+      },
       // Undo everything this visit changed — including the audio applied live along the way.
       CancelButton: () => { Object.assign(working, committed); applyAudio(committed); applyVideo(committed); applyGameplay(committed); h.onClose(); },
     },
@@ -182,6 +193,12 @@ export async function mountOptions(
     if (d.kind === "bool") {
       const c = s.checkBox(d.frame);
       if (!c) return;
+      if (d.key === "vsync" && shellVsync === null) {
+        // A browser tab keeps the browser's own vsync, and no page can switch it off.
+        c.checked = true;
+        c.setEnabled(false);
+        return;
+      }
       c.checked = bool(working[d.key]);
       c.onChange = (v) => commit(v);
     } else if (d.kind === "range") {

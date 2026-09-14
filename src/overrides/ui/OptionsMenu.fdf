@@ -106,3 +106,18 @@ Frame "TEXT" "ComputerPlusDefaultLabel" INHERITS "StandardInfoTextTemplate" {
     SetPoint LEFT, "ComputerPlusDefaultCheckBox", RIGHT, 0.01, 0.0,
     Text "COMPUTER_PLUS_DEFAULT",
 }
+
+// ---------------------------------------------------------------------------------------------
+// Video panel: "Vertical Sync (requires restart)", a checkbox row under the game's last row,
+// "Occlusion:". 1.30.4's panel has no frame-rate or vsync control, so the row is ours, and in the
+// desktop app it is a Chromium LAUNCH switch — hence the label's warning (electron/main.mjs,
+// src/data/options.ts). Spaced exactly as "Show hotkeys on command buttons" is under the
+// Gameplay panel's "Hotkeys:" pulldown: the same checkbox-under-a-pulldown-label step.
+Frame "GLUECHECKBOX" "VsyncCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
+    SetPoint TOPLEFT, "OcclusionLabel", BOTTOMLEFT, 0.0, -0.02075,
+}
+
+Frame "TEXT" "VsyncLabel" INHERITS "StandardInfoTextTemplate" {
+    SetPoint LEFT, "VsyncCheckBox", RIGHT, 0.01, 0.0,
+    Text "VSYNC",
+}

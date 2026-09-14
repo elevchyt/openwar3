@@ -4,15 +4,16 @@
 //
 // Deliberately tiny and deliberately not a settings SYSTEM: the game's own options already have
 // a home (src/data/options.ts, in the page's storage where the game can read them). This is only
-// for what the SHELL needs to know before there is a page at all, which today is one thing —
-// where the player's Warcraft III folder is.
+// for what the SHELL needs to know before there is a page at all, which today is two things —
+// where the player's Warcraft III folder is, and whether to launch Chromium with vsync
+// (electron/main.mjs; a launch switch, so the page's own store is read too late for it).
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 let file = null;
 
-/** Point the store at Electron's `userData`. Called once, after `app` is ready. */
+/** Point the store at Electron's `userData`. Called once, before `ready` — the vsync switch is read before there is a window. */
 export function useSettingsDir(dir) {
   file = join(dir, "settings.json");
 }

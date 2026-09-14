@@ -177,6 +177,13 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   { key: "occlusion", frame: "OcclusionMenu", kind: "choice", panel: "video", def: "on", choices: ON_OFF, applied: false },
   // …and no Spell Detail row: the shipped 1.30.4 OptionsMenu.fdf has the whole `SpellFilterMenu`
   // block commented out, so the panel it is bound to has never had one.
+  // "Vertical Sync" — not a WC3 row (1.30.4's panel has no frame-rate or vsync control), so it is
+  // ours, on a frame of ours at the bottom of the panel. It means something only in the DESKTOP
+  // app, where it is a Chromium launch switch the shell keeps in its own settings file
+  // (electron/main.mjs); ui/fdfOptions.ts reads the shell's saved choice over this one, hands a
+  // change to it on OK, and greys the box out in a browser tab, whose vsync is the browser's.
+  // ON by default: tear-free is what a new player should meet, and vsync off is an opt-in.
+  { key: "vsync", frame: "VsyncCheckBox", kind: "bool", panel: "video", def: true },
 
   // --- Sound (all live-applied through applyAudioOptions) ---
   { key: "soundEnabled", frame: "SoundCheckBox", kind: "bool", panel: "sound", def: true },
