@@ -6278,12 +6278,15 @@ export class SimWorld {
       // An empty mine simply stops paying; its clock is left where it is rather than reset, so
       // marching wisps in and out cannot buy a fresh payout on every entry.
       if (crew <= 0) continue;
-      // The clock runs on the BUILDING (`workT` is free on a structure), so a crew that
-      // changes mid-interval simply changes what the next payout is worth.
-      u.workT -= dt;
+      // The clock runs on the BUILDING (`workT` is free on a structure) and ticks at the CREW's
+      // share of the capacity, so every payout is the row's whole `DataA` 10 and a short crew
+      // simply waits longer for it: five pay 10 every second, one pays 10 every five. Each
+      // worker earns 2 gold/sec either way — the same rate for every race — and a crew that
+      // changes mid-interval changes how fast the rest of the wave fills, not what it is worth.
+      u.workT -= dt * (Math.min(crew, rules.max) / rules.max);
       if (u.workT > 0) continue;
       u.workT += rules.interval;
-      const gold = Math.min(mine.gold, Math.round(rules.gold * (Math.min(crew, rules.max) / rules.max)));
+      const gold = Math.min(mine.gold, rules.gold);
       mine.gold -= gold;
       this.stashOf(u.owner).gold += gold;
       // Paid where the gold is dug — the crewed mine IS the drop-off for both races that work

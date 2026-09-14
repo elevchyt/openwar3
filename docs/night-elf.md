@@ -252,15 +252,17 @@ The crew rides the same cargo-hold machinery as the Orc Burrow (`cargoHold` matc
 **10 gold a second is the FULL mine's rate, not one wisp's.** Nothing in the data states the
 scaling in so many words; the parity between the four races' mining rates does. Five wisps in
 an entangled mine must earn what five peasants earn out of a classic one, and a peasant's cycle
-is `Agld`'s 1s inside plus the walk — about 2 gold/sec each, 10 for the line. So the payout
-scales with how much of the capacity is actually aboard, which makes one lone wisp worth
-2 gold/sec and a full mine worth 10.
+is `Agld`'s 1s inside plus the walk — about 2 gold/sec each, 10 for the line. So one lone wisp
+is worth 2 gold/sec and a full mine 10 — a hard per-worker rate, the same for every race.
 
-**It arrives on the interval, in whole gold.** `DataB1` = 1 second is a CLOCK, not a unit to
-divide by: paying a fraction of a coin every frame put a running `656.5666666` in the treasury
-and made the counter creep where WC3's steps. `SimUnit.workT` on the mine building is that
-clock, and the crew is read when it comes round — so a crew that changes mid-interval simply
-changes what the next payout is worth, and marching wisps in and out cannot buy an early one.
+**It arrives in whole WAVES of 10.** `DataB1` = 1 second is a CLOCK, not a unit to divide by:
+paying a fraction of a coin every frame put a running `656.5666666` in the treasury and made the
+counter creep where WC3's steps. The short crew is not paid a smaller wave either (a lone wisp
+floating "+2" every second): every payout is the row's whole `DataA` 10, and the CLOCK
+(`SimUnit.workT` on the mine building) runs at the crew's share of the capacity — five wisps pay
+10 every second, one pays 10 every five. A crew that changes mid-interval changes how fast the
+rest of the wave fills, and the clock is never reset, so marching wisps in and out cannot buy an
+early one.
 
 **The crew is visible from the map.** WC3 floats a second bar under a garrisoned building's
 health bar, cut into one division per slot — five for the mine (`Aenc` `Car1`), four for an Orc

@@ -175,7 +175,9 @@ Two things "then leaves" has to mean literally, and both were missing:
 Ten gold a second at a full crew is **two gold a second per Acolyte** — which is a Peasant's
 10-per-trip round trip exactly, and the reason the race is not simply richer. `Aegm`, the
 Entangled Gold Mine's row, says the same two numbers in the same two columns, so one reader
-serves both (`mineCrewOf`) and the only difference is where the crew stands.
+serves both (`mineCrewOf`) and the only difference is where the crew stands. A short crew is
+paid in the same waves of 10, slower — the clock runs at the crew's share of `DataC` (one
+Acolyte: 10 every five seconds), not a smaller payout every second (docs/night-elf.md).
 
 And *that* is the whole trade. A Wisp is **safe and stuck** — it is cargo inside a building with
 800 hit points. An Acolyte is **exposed and free** — it kneels in the open at 200 units, where

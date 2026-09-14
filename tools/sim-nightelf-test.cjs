@@ -326,13 +326,20 @@ console.log("Entangled Gold Mine (`Aegm` 10 gold/s at `Aenc` Car1 = 5 wisps)");
       world.add(wisp(60 + i, 2200 + i * 40, 2200));
       world.issueGarrison(60 + i, 50);
     }
-    for (let t = 0; t < 12 / 0.05; t++) world.tick(0.05);
+    const waves = new Set();
+    for (let t = 0; t < 30 / 0.05; t++) {
+      const before = world.stashOf(0).gold;
+      world.tick(0.05);
+      if (world.stashOf(0).gold !== before) waves.add(world.stashOf(0).gold - before);
+    }
     const aboard = world.units.get(50).garrison.length;
-    const rate = world.stashOf(0).gold / 12;
+    const rate = world.stashOf(0).gold / 30;
     check(`${crew} wisp(s) aboard`, aboard === crew, `${aboard}`);
-    // 2 gold/sec per wisp — the mine's 10 shared out over its capacity of 5. Measured over
+    // 2 gold/sec per wisp — the mine's 10 a second over its capacity of 5. Measured over
     // the whole window, so the walk-in costs a little; the floor allows for it.
     check(`…paying ~${crew * 2} gold/sec`, rate > crew * 1.5 && rate <= crew * 2 + 0.5, `${rate.toFixed(2)}/s`);
+    // …and always in whole waves of 10: a short crew waits longer for it, it is not paid less.
+    check("…in waves of 10", waves.size === 1 && waves.has(10), [...waves].join(","));
   }
 }
 

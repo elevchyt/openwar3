@@ -225,7 +225,12 @@ console.log("Haunted Gold Mine (`Abgm` 10 gold/s at DataC = 5 miners, in a DataD
       world.add(acolyte(60 + i, 4000 + 400, 4000 - 400 + i * 64));
       check(`Acolyte ${i + 1} takes the order`, world.issueHarvest(60 + i, "gold", mine.id));
     }
-    for (let t = 0; t < 20 / 0.05; t++) world.tick(0.05);
+    const waves = new Set();
+    for (let t = 0; t < 20 / 0.05; t++) {
+      const before = world.stashOf(0).gold;
+      world.tick(0.05);
+      if (world.stashOf(0).gold !== before) waves.add(world.stashOf(0).gold - before);
+    }
     const kneeling = [...world.units.values()].filter((u) => u.ringSlot > 0 && u.working).length;
     check(`${crew} Acolyte(s) kneeling in the ring`, kneeling === crew, `${kneeling}`);
     // 2 gold/sec each — the mine's 10 shared over its five stations, which is a Peasant's
@@ -233,6 +238,8 @@ console.log("Haunted Gold Mine (`Abgm` 10 gold/s at DataC = 5 miners, in a DataD
     // little; the floor allows for it.
     const rate = world.stashOf(0).gold / 20;
     check(`…paying ~${crew * 2} gold/sec`, rate > crew * 1.4 && rate <= crew * 2 + 0.5, `${rate.toFixed(2)}/s`);
+    // …and always in whole waves of 10: a short crew waits longer for it, it is not paid less.
+    check("…in waves of 10", waves.size === 1 && waves.has(10), [...waves].join(","));
     check("…and nobody is carrying anything", [...world.units.values()].every((u) => !u.worker || u.worker.carryGold === 0));
     check("…each on its own station", new Set([...world.units.values()].filter((u) => u.ringSlot).map((u) => u.ringSlot)).size === crew);
   }
