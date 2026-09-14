@@ -3853,11 +3853,14 @@ export class GameHud {
       this.cargoPockets = [];
       // Four to a row is the game's own arrangement (the eight of a Zeppelin as 2×4); a
       // ship's ten goes 5 wide so its two rows stay two rows, and the Entangled Gold Mine's
-      // five (`Aenc` Car1) stay ONE row rather than four and a straggler.
-      this.cargoGrid.style.setProperty("--cargo-cols", String(seats === 5 || seats > 8 ? 5 : 4));
+      // five (`Aenc` Car1) stay ONE row rather than four and a straggler. An Orc Burrow's
+      // four are a 2×2 SQUARE in the middle of the panel, as the original draws them — at
+      // the Zeppelin's pocket size (`.hud-cargo.square`), not stretched to half the panel.
+      this.cargoGrid.style.setProperty("--cargo-cols", String(seats === 4 ? 2 : seats === 5 || seats > 8 ? 5 : 4));
       // A hold that is a single row has the panel's height to spare, so its pockets take more
       // of the panel's WIDTH (`.hud-cargo.one-row`) rather than sitting small in the middle.
       this.cargoGrid.classList.toggle("one-row", seats === 5);
+      this.cargoGrid.classList.toggle("square", seats === 4);
       for (let i = 0; i < seats; i++) {
         const slot = document.createElement("button");
         slot.className = "hud-cargo-slot";
