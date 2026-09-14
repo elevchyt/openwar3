@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld("ow3native", {
     get: () => ipcRenderer.invoke("ow3:vsync-get"),
     set: (on) => ipcRenderer.invoke("ow3:vsync-set", on === true),
   },
+  /** Quit and start the game again — how a saved vsync choice is applied without the player
+   *  having to do it by hand. */
+  relaunch: () => ipcRenderer.invoke("ow3:relaunch"),
   /** `{ path, valid }` — the remembered folder, and whether it is still an install. A folder
    *  that has been moved or deleted is reported rather than silently re-asked for, so the
    *  screen can say which one it lost. */

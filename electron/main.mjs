@@ -84,7 +84,8 @@ app.commandLine.appendSwitch("js-flags", `--max-old-space-size=${HEAP_MIB}`);
 // VSYNC — the player's choice, Options → Video → "Vertical Sync" (src/data/options.ts), ON unless
 // they turned it off. It is a Chromium LAUNCH switch with no runtime twin, which is why the choice
 // is kept HERE, in the shell's own settings file, rather than only in the page's localStorage:
-// this has to be read before there is a page at all, and a change takes effect on the next launch.
+// this has to be read before there is a page at all. A change is applied by relaunching the app,
+// which the Options screen offers the moment it is saved (`ow3:relaunch` below).
 // `getPath("userData")` is answerable before `ready`, so the store is pointed at it now.
 //
 // OFF means Chromium's own frame-rate limit goes with it. A vsynced page shows each frame at the
@@ -239,6 +240,16 @@ app.whenReady().then(async () => {
   // off and reopens the panel before relaunching should see the box they left, not the old state.
   ipcMain.handle("ow3:vsync-get", () => readSettings().vsync !== false);
   ipcMain.handle("ow3:vsync-set", (_event, on) => { writeSettings({ vsync: on === true }); });
+  // …and the restart that applies it. Vsync is a launch switch (see VSYNC above), so the Options
+  // screen offers to relaunch rather than make the player quit and start the game again. `quit`,
+  // not `exit`, so `before-quit` still closes the relay cleanly and the new process finds the port
+  // free. An AppImage's `execPath` is inside its own squashfs mount, which is gone the moment this
+  // process exits, so there the file the player launched (`APPIMAGE`, set by its runtime) is what
+  // is started again.
+  ipcMain.handle("ow3:relaunch", () => {
+    app.relaunch(process.env.APPIMAGE ? { execPath: process.env.APPIMAGE, args: process.argv.slice(1) } : {});
+    app.quit();
+  });
   // Asked by a page that has just started listening. The push below only fires when the SET
   // CHANGES, and the game subscribes when the LAN screen opens — long after the beacon found
   // whoever was already there — so without this a machine that has been quietly present the

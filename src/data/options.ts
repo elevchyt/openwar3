@@ -181,7 +181,8 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // ours, on a frame of ours at the bottom of the panel. It means something only in the DESKTOP
   // app, where it is a Chromium launch switch the shell keeps in its own settings file
   // (electron/main.mjs); ui/fdfOptions.ts reads the shell's saved choice over this one, hands a
-  // change to it on OK, and greys the box out in a browser tab, whose vsync is the browser's.
+  // change to it on OK and offers to relaunch the game to apply it, and greys the box out in a
+  // browser tab, whose vsync is the browser's.
   // ON by default: tear-free is what a new player should meet, and vsync off is an opt-in.
   { key: "vsync", frame: "VsyncCheckBox", kind: "bool", panel: "video", def: true },
 

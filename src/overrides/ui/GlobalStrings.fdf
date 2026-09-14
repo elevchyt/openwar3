@@ -55,9 +55,10 @@ StringList {
     SHOW_HOTKEYS_ON_BUTTONS     "Show hotkeys on command buttons",
 
     // Options, Video panel, under "Occlusion:": the desktop app's vsync switch. The game has no
-    // such row. The restart is part of the label because vsync is a Chromium LAUNCH switch there
-    // (electron/main.mjs), and a box that visibly does nothing when ticked reads as broken.
-    VSYNC                       "Vertical Sync (requires restart)",
+    // such row. It is a Chromium LAUNCH switch there (electron/main.mjs), so OK asks the second
+    // string -- in the menus' own Yes/No box -- and Yes relaunches the game to apply it.
+    VSYNC                       "Vertical Sync",
+    VSYNC_RESTART               "OpenWar3 must restart to change Vertical Sync. Restart now?",
 
     // LAN → Create Game, the row under the map list: which relay the game is announced on
     // (src/overrides/ui/LocalMultiplayerCreate.fdf). The game broadcast its LAN games and never

@@ -15,7 +15,8 @@ import {
 import { applyVideoOptions } from "../render/videoQuality";
 import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
-import { nativeVsync, setNativeVsync } from "../assets/nativeInstall";
+import { nativeVsync, relaunchNative, setNativeVsync } from "../assets/nativeInstall";
+import { showGlueDialog } from "./glueDialog";
 
 // The Options screen (issue #81), built from the game's own UI\FrameDef\Glue\OptionsMenu.fdf:
 // the three category buttons (Gameplay / Video / Sound) down the right, the settings for the
@@ -130,15 +131,41 @@ export async function mountOptions(
       SoundButton: () => void showPanel("sound"),
       OKButton: () => {
         saveOptions(working);
-        // Handed to the shell only on OK, like every other commit; it takes effect next launch.
-        if (shellVsync !== null && working.vsync !== committed.vsync) setNativeVsync(working.vsync === true);
-        h.onClose();
+        if (shellVsync !== null && working.vsync !== committed.vsync) void commitVsync(working.vsync === true);
+        else h.onClose();
       },
       // Undo everything this visit changed — including the audio applied live along the way.
       CancelButton: () => { Object.assign(working, committed); applyAudio(committed); applyVideo(committed); applyGameplay(committed); h.onClose(); },
     },
     onBuild: (s) => bind(s),
   });
+
+  /**
+   * Hand a changed "Vertical Sync" to the shell and offer to apply it NOW.
+   *
+   * It is a Chromium launch switch (electron/main.mjs), and nothing in Electron changes it on a
+   * running window — the GPU process reads it once, and restarting that process loses every WebGL
+   * context the game holds. So the one way to apply it is a new launch, and the game does that for
+   * the player rather than telling them to: Yes relaunches, No keeps the choice for next time.
+   * Saved to the shell BEFORE asking, so both answers leave it saved. The Options screen is only
+   * reachable from the menus, so a relaunch never costs a match.
+   */
+  async function commitVsync(on: boolean): Promise<void> {
+    screen.setInteractive(false);
+    await setNativeVsync(on);
+    try {
+      await showGlueDialog({
+        container,
+        vfs,
+        text: lib?.string("VSYNC_RESTART") ?? "VSYNC_RESTART",
+        buttons: "yesno",
+        onConfirm: () => relaunchNative(),
+        onCancel: () => h.onClose(),
+      });
+    } catch {
+      h.onClose(); // no dialog to ask with — the choice is saved, and applies next launch
+    }
+  }
 
   /**
    * Switch the visible settings panel — as a TRANSITION, not a swap.

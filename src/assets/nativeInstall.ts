@@ -31,6 +31,7 @@ interface NativeBridge {
     get(): Promise<boolean>;
     set(on: boolean): Promise<void>;
   };
+  relaunch?(): Promise<void>;
   update: {
     state(): Promise<UpdateState>;
     download(): Promise<void>;
@@ -67,13 +68,16 @@ export function onUpdateState(fn: (state: UpdateState) => void): () => void {
  * Options → Video → "Vertical Sync". Null in a browser, where vsync is the BROWSER's and a page
  * cannot turn it off. In the desktop app it is a Chromium launch switch (electron/main.mjs), so
  * the shell keeps the choice and this is the SAVED one — which the next launch will use, not
- * necessarily the one this window is running with.
+ * necessarily the one this window is running with. The Options screen offers that launch at once
+ * (`relaunchNative`).
  */
 export const nativeVsync = async (): Promise<boolean | null> => {
   const vsync = bridge()?.vsync;
   return vsync ? vsync.get().catch(() => null) : null;
 };
-export const setNativeVsync = (on: boolean): void => void bridge()?.vsync?.set(on);
+export const setNativeVsync = async (on: boolean): Promise<void> => { await bridge()?.vsync?.set(on); };
+/** Quit and start the desktop app again (electron/main.mjs `ow3:relaunch`). */
+export const relaunchNative = (): void => void bridge()?.relaunch?.();
 
 export const downloadUpdate = (): void => void bridge()?.update?.download();
 export const installUpdate = (): void => void bridge()?.update?.install();

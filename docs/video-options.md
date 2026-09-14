@@ -143,14 +143,23 @@ map rather than the one on screen.
 
 ## Vertical Sync, and the 300 fps cap (desktop app only)
 
-The panel's last row, **"Vertical Sync (requires restart)"**, is OURS: 1.30.4's panel has no
-frame-rate or vsync row. It is **on by default**. In the desktop app it is a Chromium LAUNCH
-switch (`disable-gpu-vsync` + `disable-frame-rate-limit` in `electron/main.mjs`) with no runtime
-twin, so the choice is kept by the SHELL, in its own `settings.json`, which is read before the
-window exists — the page's localStorage is read far too late for it. The Options screen asks
-the shell for the saved choice when it mounts (it wins over localStorage), hands a change back on
-OK, and the next launch uses it. A browser tab keeps the browser's own vsync and no page can turn
-it off, so there the box is shown ticked and greyed.
+The panel's last row, **"Vertical Sync"**, is OURS: 1.30.4's panel has no frame-rate or vsync
+row. It is **on by default**. In the desktop app it is a Chromium LAUNCH switch
+(`disable-gpu-vsync` + `disable-frame-rate-limit` in `electron/main.mjs`), so the choice is kept
+by the SHELL, in its own `settings.json`, which is read before the window exists — the page's
+localStorage is read far too late for it. The Options screen asks the shell for the saved choice
+when it mounts (it wins over localStorage). On OK with the box changed it saves the choice to the
+shell first and then asks `VSYNC_RESTART` in the menus' own Yes/No box: **Yes relaunches the
+game** (`ow3:relaunch`), No keeps the choice for the next launch. A browser tab keeps the
+browser's own vsync and no page can turn it off, so there the box is shown ticked and greyed.
+
+**Why not live.** Nothing in Electron changes vsync on a running window: `setFrameRate` is for
+offscreen rendering only, `commandLine.removeSwitch` does not reach a GPU process that is already
+running, and restarting the GPU process to re-read its flags loses every WebGL context the game
+holds. A live "vsync" that capped the page at the display's refresh rate was rejected: it matches
+the rate but not the phase of the refresh, so it judders, and on by default it would have been
+what every player got. The relaunch is safe because Options is only reachable from the menus. An
+AppImage relaunches `APPIMAGE` rather than `execPath`, which sits inside its own squashfs mount.
 
 Why a player would turn it off: a vsynced page is at least a refresh behind the hardware pointer.
 With it off the page caps itself at **300 fps**, and that number is OURS.
