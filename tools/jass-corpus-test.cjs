@@ -341,6 +341,54 @@ if (existsSync(warchasers)) {
   reg.clearCustom();
   if (reg.get('EC12') === undefined) ok(`clearCustom() drops the per-map overlay`);
   else fail(`clearCustom left EC12 resolvable`);
+
+  // …and the ITEM rows in the same file. A Reign of Chaos map keeps its item edits in the unit file
+  // (one format, one field table — UnitMetaData.slk's `useItem` column), and WarChasers has no w3t
+  // at all: its shop prices and its Ankh of Reincarnation Deluxe live here. Checked against the
+  // install's REAL ItemData, so the stock price the map overrides is the game's own.
+  {
+    const { loadItemRegistry } = require(join(BUILD, '..', 'data', 'items.js'));
+    const { applyMapItemData } = require(join(BUILD, '..', 'data', 'objectData.js'));
+    const EXTRACT = join(WC3, 'ExtractedData', 'merged');
+    const vfs = {
+      label: 'ExtractedData', exists: () => false, list: () => [],
+      rawBytes(p) {
+        let dir = EXTRACT;
+        for (const part of p.split('\\')) {
+          const hit = readdirSync(dir).find((n) => n.toLowerCase() === part.toLowerCase());
+          if (!hit) return null;
+          dir = join(dir, hit);
+        }
+        return new Uint8Array(readFileSync(dir));
+      },
+    };
+    if (existsSync(join(EXTRACT, 'Units', 'ItemData.slk'))) {
+      const items = loadItemRegistry(vfs);
+      const stock = items.get('ankh')?.gold;
+      if (readBytes(wc, 'war3map.w3t') === null) ok(`WarChasers has no war3map.w3t — its item edits can only be in the w3u`);
+      else fail(`WarChasers unexpectedly has a war3map.w3t`);
+      const n = applyMapItemData(items, w3u, wts);
+      if (n === 35) ok(`35 item rows routed out of war3map.w3u (34 repriced stock items + IC17)`);
+      else fail(`item rows from war3map.w3u: ${n} (want 35)`);
+      const ankh = items.get('ankh');
+      if (ankh && ankh.gold === 3000 && stock !== 3000) ok(`Ankh of Reincarnation costs the map's 3000 (stock ${stock})`);
+      else fail(`ankh gold: ${ankh && ankh.gold} (want 3000, stock ${stock})`);
+      const deluxe = items.get('IC17');
+      if (deluxe && deluxe.gold === 5000 && deluxe.name === 'Ankh of Reincarnation Deluxe' && deluxe.abilities.join() === ankh.abilities.join()) {
+        ok(`IC17 resolves: "${deluxe.name}", 5000 gold, and the Ankh's own abilities (${deluxe.abilities.join(',')})`);
+      } else fail(`IC17: ${JSON.stringify(deluxe && { name: deluxe.name, gold: deluxe.gold, abilities: deluxe.abilities })}`);
+      // …and the unit loader leaves every one of those rows alone (none of their bases is a unit).
+      const units = new UnitRegistry(new Map([['Emoo', base]]));
+      applyMapUnitData(units, w3u, wts);
+      if (units.get('IC17') === undefined && units.get('ankh') === undefined) ok(`the unit registry takes none of the item rows`);
+      else fail(`an item row landed in the unit registry`);
+      items.clearCustom();
+      if (items.get('ankh')?.gold === stock && items.get('IC17') === undefined) ok(`clearCustom() restores the stock Ankh and drops IC17`);
+      else fail(`item overlay survived clearCustom`);
+    } else {
+      console.log('  (no extracted ItemData.slk — item-row check skipped)');
+    }
+  }
 } else {
   console.log('  (WarChasers not present — skipped)');
 }

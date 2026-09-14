@@ -334,6 +334,12 @@ concern for the future JASS/object-data pass):
 | `war3map.w3a` | Abilities | | `war3map.w3q` | Upgrades |
 | `war3map.w3b` | Destructibles | | | |
 
+`war3map.w3u` and `war3map.w3t` are one format over one field table — the install has no `ItemMetaData.slk`;
+`Units\UnitMetaData.slk` declares the item fields itself (`useItem` = 1, `slk` = ItemData for `igol`/`ilev`/`iabi`).
+A Reign of Chaos-era map keeps its **item** edits in the **unit** file: `(4)WarChasers.w3m` has no w3t and 35
+item rows in a version-1 w3u. A row belongs to the class of its BASE id (no stock rawcode is both a unit and an
+item), which is how `applyMapItemData` reads both files.
+
 ### MPQ archive metadata
 
 Not map data proper — the container's own bookkeeping, common to every MPQ:

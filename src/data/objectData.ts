@@ -983,8 +983,21 @@ function cloneItem(base: ItemDef, id: string): ItemDef {
 }
 
 /**
- * Load a map's war3map.w3t custom items into the registry overlay. Returns how many
- * were installed. `wtsBytes` resolves TRIGSTR_ name/tooltip refs.
+ * Load a map's custom items into the registry overlay. Returns how many were installed.
+ * `wtsBytes` resolves TRIGSTR_ name/tooltip refs.
+ *
+ * `bytes` is war3map.w3t — or war3map.w3u, because an item edit is not always in the item file.
+ * The item and unit object files are ONE format over ONE field table: the install ships no
+ * ItemMetaData.slk, and Units\UnitMetaData.slk declares the item fields itself, told apart only
+ * by its `useItem` column (`igol`/`ilev`/`iabi` are `slk=ItemData`, `useItem=1`, and nothing
+ * else). A Reign of Chaos-era map therefore keeps its item edits in the unit file: (4)WarChasers
+ * has no w3t, a version-1 w3u, and 35 item rows in it — 34 stock items repriced (`ankh`
+ * `igol`=3000) and a custom `IC17` "Ankh of Reincarnation Deluxe" built on `ankh`. Unread, its
+ * shops sold at stock prices and the Deluxe Ankh its `Game_Over` trigger names did not exist.
+ *
+ * A row is an ITEM row when its BASE is an item, which is exact: no stock rawcode is both a unit
+ * and an item (ItemData.slk's 273 ids and UnitData/UnitBalance's 836 do not meet). So both
+ * loaders are simply offered the w3u, and each takes the rows whose base is in its own registry.
  */
 export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, wtsBytes?: Uint8Array): number {
   const trigStr = makeTrigStr(wtsBytes);

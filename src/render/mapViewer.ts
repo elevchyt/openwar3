@@ -3070,6 +3070,13 @@ export class MapViewerScene {
       console.warn("[jass] custom ability data failed (non-fatal):", err);
     }
     try {
+      // A Reign of Chaos map keeps its ITEM edits in the unit file (see applyMapItemData), so the
+      // w3u is offered to the item registry too — before the w3t, which is the later format and
+      // wins where a map has both.
+      if (w3u) {
+        const n = applyMapItemData(this.items, w3u, wts);
+        if (n) console.info(`[jass] custom object data: ${n} custom item(s) (war3map.w3u).`);
+      }
       if (w3t) console.info(`[jass] custom object data: ${applyMapItemData(this.items, w3t, wts)} custom item(s) (war3map.w3t).`);
     } catch (err) {
       console.warn("[jass] custom item data failed (non-fatal):", err);
