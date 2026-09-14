@@ -378,7 +378,7 @@ export interface HeroKill {
 /** How many hero deaths `SimWorld.heroKills` keeps — far more than a pass can miss. */
 const HERO_KILL_LOG = 32;
 
-export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem" | "garrison" | "load" | "unload";
+export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "attacktree" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem" | "garrison" | "load" | "unload";
 
 /** A learned/innate ability on a unit. `code` is the base ability code (dispatch
  *  key — see data/abilities). `level` 0 = a hero ability not yet learned. */
@@ -1003,6 +1003,9 @@ export type QueuedOrder =
   // about the attack itself; it decides whether an autocast may interrupt it (see
   // SimUnit.attackSolo).
   | { kind: "attack"; targetId: number; force?: boolean; solo?: boolean }
+  // The Attack command aimed at a TREE (issueAttackTree). A tree is not a unit, so it has its
+  // own order rather than a `targetId` every attack path would look up and fail to find.
+  | { kind: "attacktree"; treeId: number }
   // offX/offY: optional formation offset from the leader's centre, so a group told
   // to follow one unit fans into distinct slots instead of stacking on its centre.
   | { kind: "follow"; targetId: number; offX?: number; offY?: number }
@@ -1335,6 +1338,11 @@ export interface SimUnit {
   /** The slot the in-flight swing was launched with (weaponVs at swing start) — a Gargoyle
    *  that starts a ground swing must land THAT hit, not re-pick a weapon at the damage point. */
   swingWeapon: SimWeapon | null;
+  /** The TREE the in-flight swing is aimed at, or 0 when it is aimed at a unit
+   *  (`swingTargetId`). Set only by tickAttackTree; tickSwing strikes the trunk with it. */
+  swingTreeId: number;
+  /** The tree an `attacktree` order is swinging at (issueAttackTree), or 0. */
+  treeTargetId: number;
   // Ability cast animation timing (UnitWeapons.slk castpt/castbsw), per-unit — not
   // per-weapon, so a weaponless pure caster still has them. castPoint = wind-up
   // before a spell's effect fires (added to the ability's Casting Time); castBackswing
@@ -7626,6 +7634,8 @@ export class SimWorld {
       | "baseSpeed"
       | "weapon"
       | "swingWeapon"
+      | "swingTreeId"
+      | "treeTargetId"
       | "manaRegen"
       | "hpRegen"
       | "lifesteal"
@@ -7754,6 +7764,8 @@ export class SimWorld {
       ...unit,
       weapon,
       swingWeapon: null,
+      swingTreeId: 0,
+      treeTargetId: 0,
       // Which medium it moves through, straight off the unit's own `movetype` — see
       // SimUnit.waterborne. Derived rather than passed because it is a fact about the TYPE,
       // and every caller that spawns a unit would otherwise have to remember to look it up.
@@ -8774,6 +8786,114 @@ export class SimWorld {
     u.acquireT = 0; // scan for an in-range enemy immediately
     this.settle(u); // stop any current movement and hold this cell
     return true;
+  }
+
+  /**
+   * The Attack command aimed at a TREE — A, then a click on a trunk. Not a harvest: a right-click
+   * on a tree gathers (sendToTrees), while this swings the unit's WEAPON at the tree's own hit
+   * points and banks nothing, which is how a Ghoul cuts a path through a treeline.
+   *
+   * Who may is the data's answer and nobody else's: a weapon slot whose Targets Allowed lists
+   * `tree` (weaponVsTree). UnitWeapons.slk gives the Ghoul one in its SECOND slot —
+   * `[ugho] weapsOn=3 targs2=tree dmgplus2=0 dice2=2 sides2=1 cool2=1.35 rangeN2=66` — and the
+   * workers carry the same slot (`hpea`/`opeo` targs2=tree, 1 damage), so it is the same rule
+   * for all of them. False when nothing it carries may strike a tree.
+   */
+  issueAttackTree(id: number, treeId: number): boolean {
+    const u = this.units.get(id);
+    const tree = this.trees.get(treeId);
+    if (!u || !tree || u.ethereal || !this.weaponVsTree(u) || !this.canPursue(u) || this.castLocked(u)) return false;
+    // The same order twice is one order (see issueAttack): a repeat must not throw away the
+    // swing it is already committed to.
+    if (u.order === "attacktree" && u.treeTargetId === treeId) return true;
+    u.order = "attacktree";
+    u.treeTargetId = treeId;
+    u.targetId = null;
+    u.inCombat = false;
+    u.resKind = null; // a lumberjack told to attack its tree is not harvesting it any more
+    u.working = false;
+    u.atNode = false;
+    u.noCollision = false; // manual control restores collision
+    u.stuckT = 0;
+    u.stuckRetries = 0;
+    u.waitT = 0;
+    u.nodeRetries = 0;
+    this.cancelSwing(u);
+    this.detachBuilder(id);
+    const stand = this.treeStand(u, tree);
+    if (stand) this.pathTo(u, stand[0], stand[1]);
+    else this.pathTo(u, tree.x, tree.y); // pathToTree's own fallback: walk at the trunk
+    return true;
+  }
+
+  /** The weapon `u` would strike a TREE with — the first enabled slot whose Targets Allowed
+   *  names `tree` — or null. Melee slots only: a trunk is struck where the unit stands, and a
+   *  shot at one would need a missile with no unit to fly at (the Mortar Team's `tree` is its
+   *  artillery splash, which already fells trees where it lands). */
+  weaponVsTree(u: SimUnit): SimWeapon | null {
+    if (this.raising(u)) return null;
+    for (const w of u.weapons) if (w.enabled && !w.ranged && w.targets.includes("tree")) return w;
+    return null;
+  }
+
+  /** Walk to the tree an `attacktree` order names, then swing at it on the weapon's own
+   *  cooldown — engage's rhythm (face, commit, strike at the damage point in tickSwing),
+   *  aimed at a trunk instead of a unit. The order ends when the tree is gone. */
+  private tickAttackTree(u: SimUnit): void {
+    const tree = this.trees.get(u.treeTargetId);
+    const w = tree ? this.weaponVsTree(u) : null;
+    if (!tree || !w || u.ethereal || u.hexed) {
+      this.stop(u.id);
+      return;
+    }
+    // Committed to a swing: stand through the wind-up, exactly as engage does.
+    if (u.swingLeft >= 0) {
+      if (u.moving) this.settle(u);
+      u.inCombat = true;
+      return;
+    }
+    const reach = u.radius + TREE_RADIUS + w.range;
+    if (!this.arriveAtNode(u, tree.x, tree.y, reach)) {
+      u.inCombat = false;
+      return;
+    }
+    // Parked as near as the ground allows and still out of reach: a trunk inside the grove.
+    if (Math.hypot(tree.x - u.x, tree.y - u.y) > reach + ATTACK_LEASH) {
+      this.stop(u.id);
+      return;
+    }
+    u.inCombat = true;
+    if (u.cooldownLeft <= 0) u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x);
+    if (!this.facesTarget(u, FACING_EPS) || u.cooldownLeft > 0 || this.fading(u)) return;
+    u.cooldownLeft = w.cooldown;
+    u.swingLeft = Math.max(0, w.damagePoint);
+    u.swingBroken = false;
+    u.swingFollowThrough = false;
+    u.swingTargetId = 0;
+    u.swingTreeId = tree.id;
+    u.swingWeapon = w;
+    u.swingCrit = false; // crit, bash and backstab are all blows on a UNIT
+    u.swingBash = false;
+    u.swingSlam = false;
+    u.desiredFacing = u.facing;
+    u.swingSeq++; // renderer restarts the attack clip so the blow lines up
+  }
+
+  /** A swing at a tree reached its damage point: the weapon's roll comes off the tree's hit
+   *  points (a tree has no damage-table armour — its `Wood` is a sound), and at 0 it falls
+   *  through the same `felled` queue a harvest or a Flame Strike uses. No lumber is banked. */
+  private strikeTree(u: SimUnit, w: SimWeapon, treeId: number): void {
+    const tree = this.trees.get(treeId);
+    if (!tree) return; // somebody else felled it first — the swing whiffs
+    this.breakInvisibility(u); // attacking reveals, whatever was struck
+    this.chops.push(u.id); // the axe on wood (the unit's `weap2` material against "Wood")
+    tree.hp -= this.rollDamage(w);
+    if (tree.hp > 0) {
+      this.treeHits.push({ x: tree.x, y: tree.y }); // still standing → "stand hit" wobble
+      return;
+    }
+    this.trees.delete(tree.id);
+    this.felled.push(tree);
   }
 
   /** Order a unit to attack another. Normally requires the target to be hostile;
@@ -9822,6 +9942,7 @@ export class SimWorld {
       case "hold": return this.issueHold(id);
       case "stop": this.stop(id); return true;
       case "attack": return this.issueAttack(id, o.targetId, o.force, true, o.solo); // a QueuedOrder is always a commanded attack (issue #83)
+      case "attacktree": return this.issueAttackTree(id, o.treeId);
       case "follow": return this.issueFollow(id, o.targetId, o.offX, o.offY);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);
       case "returnresources": return this.issueReturnResources(id, o.depotId);
@@ -9975,6 +10096,15 @@ export class SimWorld {
     // queue for either. WC3 gathers from the closest ACCESSIBLE tree to the one you clicked,
     // and for a wisp — which takes its last step by BEING in the trunk — the alternative is
     // not "it never arrives" but "it is inside the forest".
+    // THE SAME ORDER TWICE IS ONE ORDER (issue #155) — issueAttack's rule, for the same reason.
+    // Everything below resets the job: the worker is un-latched from its tree, walks the last
+    // step again and begins a fresh swing. Spam right-click on the tree a lumberjack is already
+    // working and it threw away the swing in progress on every click and started a new one,
+    // whose wood lands at the weapon's damage point (0.433 s for a Peasant) rather than a whole
+    // `Dur1` (1.1 s) after the last — so the faster you clicked, the faster the lumber came in.
+    // Only for a worker already AT WORK there — one still walking up may be re-clicked to re-path —
+    // and only on a TREE: re-issuing a mine's crew is the reset AiPlayer.kickStalledMines relies on.
+    if (kind === "lumber" && u.order === "harvest" && u.working && u.resKind === "lumber" && u.resId === nodeId) return true;
     if (kind === "lumber") {
       const t = this.trees.get(nodeId)!;
       const seatTaken = u.worker.deliversInPlace && !!this.treeWorkedBy(nodeId, id);
@@ -15627,6 +15757,9 @@ export class SimWorld {
         case "attack":
           this.tickAttack(u, dt);
           break;
+        case "attacktree":
+          this.tickAttackTree(u);
+          break;
         case "cast":
           this.tickCast(u, dt); // walk into range, then fire the spell effect
           break;
@@ -16499,6 +16632,7 @@ export class SimWorld {
     // tickAttackMove's) re-aims it until tickSwing has fired the strike.
     u.desiredFacing = u.facing;
     u.swingWeapon = w; // the strike lands with the slot it was launched from
+    u.swingTreeId = 0; // …at a unit, not a trunk
     // Roll this swing's procs now, before the clip is picked (see swingCrit/swingSlam).
     // Critical Strike is only ever applied by dealDamage, so only a melee swing rolls it —
     // a ranged shooter must not slam for a crit it would never deal. And only against
@@ -17007,6 +17141,12 @@ export class SimWorld {
     u.swingLeft -= dt;
     if (u.swingLeft > 0) return;
     u.swingLeft = -1;
+    if (u.swingTreeId) {
+      const treeId = u.swingTreeId;
+      u.swingTreeId = 0;
+      this.strikeTree(u, w, treeId);
+      return;
+    }
     const t = this.units.get(u.swingTargetId);
     if (!t) return; // target gone before impact — the swing whiffs
     // The swing reached its fire frame: play the attacker's own weapon sound (its
@@ -17051,6 +17191,7 @@ export class SimWorld {
   /** Cancel any pending swing (unit re-tasked away from its attack). */
   private cancelSwing(u: SimUnit): void {
     u.swingLeft = -1;
+    u.swingTreeId = 0;
   }
 
   /**
@@ -17974,9 +18115,22 @@ export class SimWorld {
     // A chopper's clock is the SWING CYCLE, and it starts here too — on the tick it parks,
     // with the first axe going up at once (`chopSeq`). What that swing cuts arrives partway
     // through it rather than with it; see the damage point below.
+    // …but not before the LAST swing's beat is over. A chop is an attack (see the damage point
+    // below) and its beat is the unit's attack cooldown, which belongs to the UNIT and survives
+    // every order — issueAttack's cooldownLeft does not reset on a new target either. Without
+    // it the no-op above still left two ways to cut the beat short (issue #155): alternate the
+    // clicks between two trees in reach, or Stop and click again. Either way the worker now
+    // parks and waits out the rest of `chopPeriod` before its axe goes up.
+    if (!u.working && !w.deliversInPlace && u.cooldownLeft > 0) {
+      u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x);
+      return;
+    }
     if (!u.working) {
       u.workT = w.chopPeriod;
-      if (!w.deliversInPlace) u.chopSeq++; // the first swing goes up now; its wood lands later
+      if (!w.deliversInPlace) {
+        u.chopSeq++; // the first swing goes up now; its wood lands later
+        u.cooldownLeft = w.chopPeriod;
+      }
     }
     u.working = true;
     // …and a Wisp works from INSIDE the tree, not from a spot in front of it: it takes the
@@ -18017,7 +18171,10 @@ export class SimWorld {
     const landed = before >= landAt && u.workT < landAt;
     if (u.workT <= 0) {
       u.workT = w.chopPeriod;
-      if (!w.deliversInPlace) u.chopSeq++; // the cycle rolled over — the next axe goes up
+      if (!w.deliversInPlace) {
+        u.chopSeq++; // the cycle rolled over — the next axe goes up
+        u.cooldownLeft = w.chopPeriod;
+      }
     }
     if (!landed) return;
     // The load, and how it gets home. Everyone else fills a sack and walks it to a depot;

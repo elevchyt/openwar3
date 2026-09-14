@@ -405,5 +405,117 @@ console.log("\nthe Goblin Shredder gathers off its own harvest row, not the Ghou
   check("…so it is still in the forest, not walking a load home", shred.order === "harvest", `order ${shred.order}`);
 }
 
+// --- SPAM RIGHT-CLICK does not chop faster (issue #155) -------------------------------
+//
+// Every harvest order used to reset the job, and a fresh job's first wood lands at the
+// weapon's DAMAGE POINT (0.433 s for a Peasant) rather than a whole `Dur1` (1.1 s) after the
+// last. Clicking the tree faster than the beat therefore banked lumber faster than the beat.
+// Three ways to click: the same tree again, two trees in reach turn about, and Stop + click.
+
+/** A melee slot, both halves set (see sim-attack-order-test's WEAPON). */
+const SLOT = (over = {}) => ({
+  enabled: true, targets: ["ground", "structure"], ranged: false,
+  damage: 4, baseDamage: 4, dice: 1, baseDice: 1, sides: 2,
+  cooldown: 2, baseCooldown: 2, range: 90, baseRange: 90, rangeBuffer: 250,
+  damagePoint: 0.433, baseDamagePoint: 0.433, backswing: 0.567, baseBackswing: 0.567,
+  spillDist: 0, spillRadius: 0, baseSpillDist: 0, baseSpillRadius: 0, damageLoss: 0,
+  acquire: 0, attackType: "normal", missileArt: "", missileSpeed: 0,
+  launchX: 0, launchY: 0, launchZ: 0, impactZ: 0, ...over,
+});
+
+/** One Peasant beside two trees, armed with its real `hpea` slots (the chop lands at the
+ *  weapon's 0.433 damage point), with a sack big enough never to walk home. */
+function chopWorld() {
+  const W = 160, H = 160;
+  const grid = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [0, 0]);
+  const world = new SimWorld(grid, 1);
+  const a = world.addTree(2560, 2560, 5000);
+  const b = world.addTree(2560, 2624, 5000);
+  const weapons = [SLOT(), SLOT({ targets: ["tree"], damage: 0, baseDamage: 0, sides: 1, cooldown: 1.1, baseCooldown: 1.1, range: 66, baseRange: 66 })];
+  const u = world.add({
+    id: 1, owner: 0, team: 0, typeId: "hpea", x: 2480, y: 2592, facing: 0,
+    hp: 220, maxHp: 220, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 190, turnRate: 3, radius: 16, scale: 1, armor: 0, armorType: "medium", defUp: 0,
+    weapon: weapons[0], weapons, oldWeapons: weapons, sight: 1400, nsight: 800, baseSight: 1400,
+    sightDay: 1400, sightNight: 800, flying: false, mechanical: false, invulnerable: false,
+    race: "human", isBuilding: false, foodCost: 1, goldCost: 0, lumberCost: 0, abilities: [],
+    upgrades: [], moveType: "foot", collisionSize: 16, canFlee: true, targetedAs: "ground",
+    deathTime: 2, name: "Peasant", castPoint: 0, castBackswing: 0,
+    worker: { gold: true, lumber: true, lumberCapacity: 100000, baseLumberCapacity: 100000, lumberPerChop: 1, chopPeriod: 1.1, damagesTree: true, carryGold: 0, carryLumber: 0 },
+    depotGold: false, depotLumber: false, isPeon: true,
+  });
+  return { world, a, b, u };
+}
+
+/** Chop for `seconds`, calling `click(world, u, a, b, n)` every `every` seconds once the
+ *  first wood is in. Returns the lumber cut after that point. */
+function chopRun(seconds, every, click) {
+  const { world, a, b, u } = chopWorld();
+  world.issueHarvest(u.id, "lumber", a.id);
+  const DT = 1 / 30;
+  if (!runUntil(world, () => u.worker.carryLumber > 0, 20)) return -1;
+  const start = u.worker.carryLumber;
+  let next = every, n = 0;
+  for (let t = 0; t < seconds / DT; t++) {
+    if (click && t * DT >= next) { click(world, u, a, b, n++); next += every; }
+    world.tick(DT);
+  }
+  return u.worker.carryLumber - start;
+}
+
+console.log("\nspam-clicking a tree does not chop any faster (issue #155)");
+{
+  const SECONDS = 30;
+  const beat = chopRun(SECONDS, 0, null);
+  check("left alone, a Peasant chops on its 1.1 s beat", beat >= 26 && beat <= 28, `${beat} chops in ${SECONDS} s`);
+  const same = chopRun(SECONDS, 0.3, (w, u, a) => w.issueHarvest(u.id, "lumber", a.id));
+  check("…clicking the same tree every 0.3 s is no faster", same <= beat, `${same} chops against ${beat}`);
+  check("…and no slower either — the swing in progress is not thrown away", same >= beat - 1, `${same} chops against ${beat}`);
+  const swap = chopRun(SECONDS, 0.5, (w, u, a, b, n) => w.issueHarvest(u.id, "lumber", n % 2 ? a.id : b.id));
+  check("…nor turn about between two trees in reach", swap <= beat, `${swap} chops against ${beat}`);
+  const stop = chopRun(SECONDS, 0.5, (w, u, a) => { w.stop(u.id); w.issueHarvest(u.id, "lumber", a.id); });
+  check("…nor Stop and click again", stop <= beat, `${stop} chops against ${beat}`);
+}
+
+// --- the ATTACK command on a tree -------------------------------------------------------
+//
+// A right-click on a tree gathers; A + a click on one swings the unit's tree-capable WEAPON at
+// the trunk's hit points. `[ugho] targs2=tree dmgplus2=0 dice2=2 sides2=1 cool2=1.35`: two a
+// blow against a 50-HP trunk is 25 blows, and not one piece of lumber.
+console.log("\nthe Attack command fells a tree with the weapon that may strike one");
+{
+  const W = 160, H = 160;
+  const grid = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [0, 0]);
+  const world = new SimWorld(grid, 1);
+  const tree = world.addTree(2560, 2560, undefined, 0);
+  const ghoulSlots = [
+    SLOT({ damage: 10, baseDamage: 10, dice: 2, baseDice: 2, sides: 2, cooldown: 1.3, baseCooldown: 1.3, damagePoint: 0.39, baseDamagePoint: 0.39 }),
+    SLOT({ targets: ["tree"], damage: 0, baseDamage: 0, dice: 2, baseDice: 2, sides: 1, cooldown: 1.35, baseCooldown: 1.35, range: 66, baseRange: 66 }),
+  ];
+  const spec = (id, x, weapons, typeId) => ({
+    id, owner: 0, team: 0, typeId, x, y: 2400, facing: 0,
+    hp: 340, maxHp: 340, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 270, turnRate: 3, radius: 16, scale: 1, armor: 0, armorType: "heavy", defUp: 0,
+    weapon: weapons[0] ?? null, weapons, oldWeapons: weapons, sight: 1400, nsight: 800, baseSight: 1400,
+    sightDay: 1400, sightNight: 800, flying: false, mechanical: false, invulnerable: false,
+    race: "undead", isBuilding: false, foodCost: 2, goldCost: 0, lumberCost: 0, abilities: [],
+    upgrades: [], moveType: "foot", collisionSize: 16, canFlee: true, targetedAs: "ground",
+    deathTime: 2, name: typeId, castPoint: 0, castBackswing: 0, worker: null,
+    depotGold: false, depotLumber: false,
+  });
+  const ghoul = world.add(spec(1, 2400, ghoulSlots, "ugho"));
+  const footman = world.add(spec(2, 2700, [SLOT()], "hfoo"));
+  check("a Footman has no weapon for a tree, so the order is refused", !world.issueAttackTree(footman.id, tree.id));
+  check("a Ghoul takes it", world.issueAttackTree(ghoul.id, tree.id), ghoul.order);
+  const swingsAt = ghoul.swingSeq;
+  const felled = runUntil(world, () => !world.trees.has(tree.id), 60);
+  const swings = ghoul.swingSeq - swingsAt;
+  check("…and fells the tree", felled, `hp ${tree.hp} after 60 s`);
+  check("…with its tree slot's 2 a blow: 25 swings for 50 HP", swings === 25, `${swings} swings`);
+  check("…banking no lumber", world.stashOf(0).lumber === 0, `${world.stashOf(0).lumber}`);
+  runUntil(world, () => false, 0.1);
+  check("…and stands down once it is gone", ghoul.order === "idle", ghoul.order);
+}
+
 console.log(failed ? `\nharvest: ${failed} check(s) FAILED` : "\nharvest: all checks passed");
 process.exit(failed ? 1 : 0);

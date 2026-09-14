@@ -5856,6 +5856,15 @@ export class RtsController {
         }
         if (this.refuseAttackTarget(picked, true)) return false; // a tower pointed past its range, or an invulnerable target
       }
+      // …or a TREE under the cursor. Whoever carries a weapon that may strike one (a Ghoul, a
+      // worker — SimWorld.weaponVsTree) swings at the trunk; this is the Attack command's
+      // answer and never a right-click's, which gathers (sendToTrees). The rest of a mixed
+      // group falls through to the attack-move below, as it did before trees were a target.
+      if (!target && this.attackTreeAt(cssX, cssY, queued)) {
+        this.orderMode = null;
+        this.ack(true);
+        return true;
+      }
       // Nothing under the cursor: fall through to the attack-MOVE on the ground point below.
     }
     this.orderMode = null;
@@ -7206,6 +7215,10 @@ export class RtsController {
       }
       case "rootat":
         return { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) };
+      case "attacktree": {
+        const t = this.sim.trees.get(o.treeId);
+        return t ? { x: t.x, y: t.y, z: this.heightAt(t.x, t.y) + TREE_FLAG_HEIGHT } : null;
+      }
       case "entangleat": {
         const m = this.sim.mines.get(o.mineId);
         return m ? { x: m.x, y: m.y, z: this.heightAt(m.x, m.y) } : null;
@@ -8406,6 +8419,27 @@ export class RtsController {
     const treeHit = this.treePickPoint() ?? hit; // raised plane → clicking up the tree still hits
     const tree = treeHit ? this.sim.nearestTree(treeHit[0], treeHit[1], 140) : null;
     if (tree && this.sendToTrees(tree, queued)) this.ack(false);
+  }
+
+  /** An armed Attack clicked on a tree: order every orderee that may strike one at it (see
+   *  SimWorld.issueAttackTree). Returns whether anybody took the order; when somebody did but
+   *  not everybody, the rest are sent on the attack-move to the trunk's spot instead. */
+  private attackTreeAt(cssX: number, cssY: number, queued: boolean): boolean {
+    const hit = this.groundPoint(cssX, cssY);
+    const treeHit = this.treePickPoint() ?? hit; // raised plane → clicking up the tree still hits
+    const tree = treeHit ? this.sim.nearestTree(treeHit[0], treeHit[1], 140) : null;
+    if (!tree) return false;
+    const rest: number[] = [];
+    let any = false;
+    for (const id of this.orderees) {
+      const u = this.sim.units.get(id);
+      if (u && this.sim.weaponVsTree(u) && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attacktree", treeId: tree.id }, queued })) any = true;
+      else rest.push(id);
+    }
+    if (!any) return false;
+    for (const id of rest) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attackmove", x: tree.x, y: tree.y }, queued });
+    this.flashAttack(tree.x, tree.y, 76); // red, and no yellow trunk pulse — that one means "gather"
+    return true;
   }
 
   /** The Gather row's OTHER face: take what the selection is carrying to the nearest depot.
