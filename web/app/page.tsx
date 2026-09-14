@@ -20,22 +20,22 @@ const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
   {
     title: "Computer+",
     body: "A second melee AI beside Blizzard's own, which is ported script for script. Computer+ never cheats at any difficulty, creeps, shops, and talks to its allies in team games.",
-    media: { kind: "placeholder" },
+    media: { kind: "image", src: "/media/computerplus.avif", alt: "Three Computer+ (Normal) opponents seated in a game lobby", fit: "inset" },
   },
   {
     title: "LAN with zero setup",
     body: "Run the desktop app on two machines and pick Local Area Network. Games show up in each other's list within seconds — no terminal, no accounts, no cloud.",
-    media: { kind: "placeholder" },
+    media: { kind: "image", src: "/media/lan.avif", alt: "An eight-player Local Area Network lobby on Twilight Ruins counting down to start" },
   },
   {
     title: "Campaigns & custom maps",
     body: "Maps run their own JASS scripts on OpenWar3's interpreter, from the campaign chapters to custom games like Extreme Candy War.",
-    media: { kind: "placeholder" },
+    media: { kind: "image", src: "/media/worldeditor.avif", alt: "The World Editor's map-and-quill icon", fit: "inset" },
   },
   {
     title: "Hotkeys your way",
     body: "Legacy, Grid, or your own CustomKeys.txt along with a hotkey option and the ability to customize hotkeys in-game.",
-    media: { kind: "placeholder" },
+    media: { kind: "image", src: "/media/commandkeys.avif", alt: "A command card on the Grid hotkeys, lettered QWER, ASDF and ZXCV", fit: "inset" },
   },
   {
     title: "Keeps itself up to date",

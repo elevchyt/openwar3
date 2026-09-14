@@ -280,6 +280,7 @@ a:hover {
   object-fit: cover;
   display: block;
 }
+.feature__inset,
 .feature__placeholder {
   position: absolute;
   inset: 0;
@@ -294,6 +295,13 @@ a:hover {
   color: var(--text-dim);
   font-size: 0.85rem;
   letter-spacing: 0.02em;
+}
+.feature__inset-box {
+  position: absolute;
+  inset: 14px;
+}
+.feature__media .feature__inset-box img {
+  object-fit: scale-down;
 }
 .feature__play {
   display: grid;
