@@ -50,6 +50,7 @@ function FeatureImage({ src, alt }: { src: string; alt: string }) {
     <Image
       src={src}
       alt={alt}
+      draggable={false}
       fill
       unoptimized={src.endsWith(".avif")}
       sizes="(max-width: 720px) 100vw, (max-width: 1100px) 50vw, 400px"

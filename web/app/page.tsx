@@ -92,7 +92,7 @@ export default async function Home() {
       <main id="top">
         <section className="hero">
           <div className="hero__backdrop" aria-hidden>
-            <Image src="/media/game2.jpg" alt="" fill priority sizes="100vw" />
+            <Image src="/media/game2.jpg" alt="" draggable={false} fill priority sizes="100vw" />
           </div>
           <div className="hero__content">
             <h1 className="sr-only">OpenWar3</h1>
