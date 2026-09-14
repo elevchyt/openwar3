@@ -307,9 +307,11 @@
   transition: width 160ms linear;
 }
 /* The head sits on the fill's leading edge, `--head` in from the glow box's right side; the tail
-   trails back over what is already loaded, as Loading-BarGlow.blp's does. */
+   trails back over what is already loaded, as Loading-BarGlow.blp's does. With a fill under it the
+   box ENDS at that edge (`--head` 0): anything past it lands on the empty track, where the head's
+   front half screened over bare black read as a darker blue block with a hard edge at the box. */
 .ow3-progress__glow {
-  --head: calc(18px * var(--s));
+  --head: 0px;
   position: absolute;
   top: 50%;
   left: calc(var(--ow3-progress, 0) * 100%);
@@ -356,7 +358,11 @@
 .ow3-progress.is-indeterminate .ow3-progress__fill {
   width: 0;
 }
+/* …while the sweep has no fill to end on, so its head keeps a front half and fades it out rather
+   than letting the box cut it. */
 .ow3-progress.is-indeterminate .ow3-progress__glow {
+  --head: calc(18px * var(--s));
+  mask-image: linear-gradient(to left, transparent, #000 var(--head));
   opacity: 1;
   animation: ow3-progress-sweep 1.6s ease-in-out infinite;
   transition: none;
