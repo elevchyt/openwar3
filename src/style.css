@@ -1907,6 +1907,12 @@ body.hud-statbar-skinned .hud-sel-icon-fill.mana { background-image: var(--statb
   padding: 2px 8%;
   align-content: start;
 }
+/* One row (the Entangled Gold Mine's five): nothing below it to make room for, so the pockets
+   grow to fill most of the panel's width instead of keeping the two-row holds' 8% margins. */
+.hud-cargo.one-row {
+  gap: 5px;
+  padding: 2px 1%;
+}
 .hud-cargo-slot {
   position: relative;
   aspect-ratio: 1;

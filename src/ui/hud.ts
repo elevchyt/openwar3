@@ -3855,6 +3855,9 @@ export class GameHud {
       // ship's ten goes 5 wide so its two rows stay two rows, and the Entangled Gold Mine's
       // five (`Aenc` Car1) stay ONE row rather than four and a straggler.
       this.cargoGrid.style.setProperty("--cargo-cols", String(seats === 5 || seats > 8 ? 5 : 4));
+      // A hold that is a single row has the panel's height to spare, so its pockets take more
+      // of the panel's WIDTH (`.hud-cargo.one-row`) rather than sitting small in the middle.
+      this.cargoGrid.classList.toggle("one-row", seats === 5);
       for (let i = 0; i < seats; i++) {
         const slot = document.createElement("button");
         slot.className = "hud-cargo-slot";
