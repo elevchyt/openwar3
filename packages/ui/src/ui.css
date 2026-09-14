@@ -304,8 +304,10 @@
     #0b0b47 100%
   );
   opacity: 0.65;
-  transition: width 160ms linear;
 }
+/* Neither the fill nor the glow EASES to a new value: a mount reports once per read, many times
+   a second, and a transition restarted on every report trails the number it is drawing — the
+   gate's label read 100% over a half-full bar, frozen there by the menu build that follows. */
 /* The head sits on the fill's leading edge, `--head` in from the glow box's right side; the tail
    trails back over what is already loaded, as Loading-BarGlow.blp's does. With a fill under it the
    box ENDS at that edge (`--head` 0): anything past it lands on the empty track, where the head's
@@ -323,9 +325,7 @@
     radial-gradient(calc(150px * var(--s)) calc(9px * var(--s)) at calc(100% - var(--head)) 50%, rgb(32 86 161 / 0.95) 0%, rgb(24 66 122 / 0.6) 35%, rgb(12 34 62 / 0.25) 70%, transparent 100%);
   mix-blend-mode: screen;
   opacity: 1;
-  transition:
-    left 160ms linear,
-    opacity 200ms;
+  transition: opacity 200ms;
   pointer-events: none;
 }
 .ow3-progress__glass {
@@ -386,7 +386,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ow3-progress__fill,
   .ow3-progress__glow {
     transition: none;
   }

@@ -108,6 +108,9 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
       });
       bar.set(1);
       bar.setLabel(`Mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files, ${load.maps.size} maps. Building menu…`);
+      // Let the full bar reach the screen first: building the menu holds the main thread, and
+      // whatever frame was painted last is what the player looks at until it lets go.
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
       onLoaded(load);
     } catch (err) {
       fail(`Couldn't load that folder: ${(err as Error).message}`);
