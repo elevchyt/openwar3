@@ -65,7 +65,7 @@ export function applyHotkeyOptions(opts: Options): void {
   printed = opts.showHotkeys !== false;
 }
 
-/** True while the command card prints each button's key in its bottom-right corner box. */
+/** True while the command card prints each button's key in its top-left corner. */
 export function hotkeysOnButtons(): boolean {
   return printed;
 }

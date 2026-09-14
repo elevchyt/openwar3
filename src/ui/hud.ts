@@ -114,9 +114,9 @@ export interface CommandButton {
   cooldownLeft?: number; // seconds remaining on the ability's cooldown (0/undefined = ready)
   cooldownFrac?: number; // remaining fraction 0..1 (drives the radial sweep)
   count?: number; // corner badge (0/undefined = none) — e.g. a hero's unspent skill points
-  /** When the key is printed as well, the count sits to the LEFT of it on the bottom edge
-   *  instead of the key moving up to the top-right (the learn-skill button). */
-  countBesideKey?: boolean;
+  /** The count sits in the bottom-LEFT corner instead of the bottom-right (the learn-skill
+   *  button's unspent points). */
+  countAtLeft?: boolean;
 }
 
 /** One hero inventory slot (null = empty). */
@@ -3271,10 +3271,10 @@ export class GameHud {
       // button's unspent points. A persistent child so a card rebuild never wipes it, like
       // the label/cooldown nodes.
       const count = countBadge();
-      // …and the button's KEY, in the same box (Options → Gameplay → "Show hotkeys on action
-      // buttons"). A second box rather than the count's, because a shop's button has both.
+      // …and the button's KEY, in the same box but frameless (Options → Gameplay → "Show hotkeys
+      // on action buttons"). A second box rather than the count's, because a shop's button has both.
       const hotkey = countBadge();
-      hotkey.classList.add("hud-hotkey-badge");
+      hotkey.classList.add("hud-hotkey-badge", "plain");
       // …and the "standing on" sparkle, likewise persistent. Last child so it draws over the
       // icon and the cooldown sweep, exactly as the model does over the button in the game.
       const fx = this.modalFx.makeOverlay();
@@ -3303,7 +3303,7 @@ export class GameHud {
     // The printed keys hang off two options rather than off the buttons, so the options are in
     // the key too: `applyHotkeyOptions` switching either has to re-dress a card that did not change.
     const printKeys = hotkeysOnButtons();
-    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${!!c.countBesideKey}:${c.desc}`).join("|");
+    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${!!c.countAtLeft}:${c.desc}`).join("|");
     if (key === this.cmdKey) {
       this.refreshCmdTooltip(cmds); // every frame: the stash moves without the card changing
       return;
@@ -3318,7 +3318,7 @@ export class GameHud {
       this.cmdLabels[i].textContent = "";
       setCount(this.cmdCount[i], "");
       setCount(this.cmdHotkey[i], "");
-      this.cmdCount[i].classList.remove("beside-key");
+      this.cmdCount[i].classList.remove("at-left");
       onPress(btn, null);
       btn.onpointerenter = null;
       btn.onpointerleave = null;
@@ -3359,20 +3359,15 @@ export class GameHud {
       else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
 
       if (c.count && c.count > 0) setCount(this.cmdCount[idx], String(c.count));
+      this.cmdCount[idx].classList.toggle("at-left", !!c.countAtLeft);
       // The key that presses it. A passive takes no press and neither does a greyed-out
       // (`disabled`) button, so neither has a key to print — the key handler skips both for the
-      // same reason. A button you merely cannot AFFORD does answer its key, so it keeps it. The corner is the count's too: when a button
-      // carries a quantity — a shop's stock, the learn-skill button's points — the number keeps
-      // the bottom-right it has always had and the key moves up to the top-right — except on a
-      // `countBesideKey` button (the learn-skill one), where the key keeps the corner and the
-      // number sits just left of it.
+      // same reason. A button you merely cannot AFFORD does answer its key, so it keeps it. The
+      // key always takes the top-left corner, so it never collides with a count below it.
       if (printKeys && !c.passive && !c.disabled) {
         const k = printedKey(c);
         setCount(this.cmdHotkey[idx], k);
         this.cmdHotkey[idx].classList.toggle("long", k.length > 1);
-        const counted = !!c.count && c.count > 0;
-        this.cmdHotkey[idx].classList.toggle("top", counted && !c.countBesideKey);
-        this.cmdCount[idx].classList.toggle("beside-key", counted && !!c.countBesideKey);
       }
       // A passive takes no press — it's an indicator, so it never sinks and never
       // fires. Nor does an UNAVAILABLE button: WC3's greyed DISBTN state is inert,
