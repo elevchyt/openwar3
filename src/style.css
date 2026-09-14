@@ -695,13 +695,25 @@ body.hud-tooltip-skinned .hud-chatbar::after {
 .hud-chatline {
   font-family: var(--game-font);
   font-size: var(--font-WorldFrameChatMessage);
+  font-weight: 400;
   line-height: 1;
   color: #f4f0e0;
-  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  /* A crisp drop shadow at the FDF's own text offset (FontShadowOffset 0.001 -0.001, the
+     common value across UI\FrameDef — y is up there, so it falls down-right), not the blurred
+     black halo the message line wears: blurred on all sides, that halo thickens every stroke
+     and made the chat read as BOLD at a weight of 400. */
+  --chat-shadow: calc(var(--stage-h) * 0.001 / 0.6);
+  text-shadow: var(--chat-shadow) var(--chat-shadow) 0 #000;
   white-space: pre-wrap;
   word-break: break-word;
   /* No entry animation, unlike the message line above: chat is a live conversation and a
      140 ms slide in front of it reads as lag. It appears the instant it is said. */
+}
+/* …but it does not VANISH the instant its time is up: an expiring line fades away over
+   --fade-secs (ui/hud.ts CHAT_FADE_SECS) and is removed once it has. */
+.hud-chatline.fading {
+  opacity: 0;
+  transition: opacity var(--fade-secs, 1s) linear;
 }
 @keyframes hud-msg-in {
   from { opacity: 0; transform: translateY(-3px); }

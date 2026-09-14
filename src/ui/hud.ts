@@ -966,6 +966,10 @@ const MSG_MAX = 16; // max lines kept on screen at once (WC3 scrolls the oldest 
 // deep stack climbs towards the top of the frame instead of scrolling off it.
 const CHAT_MAX = 8;
 const MSG_DEFAULT_SECS = 12; // how long an untimed DisplayTextToPlayer line lingers
+// How long an expiring chat line takes to fade away once its time is up. OURS: the chat display
+// lets a line go gradually rather than blinking it off, and no file states for how long (there
+// is no FDF for CChatDisplay — see CHAT_AREA). Kept in step with `.hud-chatline.fading`.
+const CHAT_FADE_SECS = 1;
 const ERROR_SECS = 2.5; // how long the gold command-error line above the console holds
 
 /** Escape HTML, then translate WC3 text colour codes to spans: `|cAARRGGBB…|r`
@@ -2228,7 +2232,7 @@ export class GameHud {
    *  MiscUI sizes them apart too: WorldFrameChatMessage (0.013) against the message area's
    *  WorldFrameUnitMessage (0.015). */
   showChatMessage(render: () => string, duration: number): void {
-    const line = this.pushLine(this.chatLog, this.chatTimers, "hud-chatline", CHAT_MAX, render(), duration);
+    const line = this.pushLine(this.chatLog, this.chatTimers, "hud-chatline", CHAT_MAX, render(), duration, CHAT_FADE_SECS);
     if (line) this.chatRenders.set(line, render);
   }
 
@@ -2249,7 +2253,9 @@ export class GameHud {
 
   /** One line into one of the two stacks: newest at the bottom, oldest scrolled off past
    *  `max`, and removed again on its own timer. WC3 colour codes are honoured. Returns the
-   *  element, so a caller that can re-render it later (see `showChatMessage`) can hold it. */
+   *  element, so a caller that can re-render it later (see `showChatMessage`) can hold it.
+   *  With a `fadeSecs`, a line whose time is up is faded out over that long (the `fading`
+   *  class) and only then removed; one scrolled off past `max` still goes at once. */
   private pushLine(
     log: HTMLDivElement,
     timers: Set<number>,
@@ -2257,6 +2263,7 @@ export class GameHud {
     max: number,
     text: string,
     duration: number,
+    fadeSecs = 0,
   ): HTMLDivElement | null {
     if (!text) return null;
     const line = document.createElement("div");
@@ -2266,8 +2273,18 @@ export class GameHud {
     while (log.childElementCount > max) log.firstElementChild?.remove();
     const secs = duration >= 0 ? duration : MSG_DEFAULT_SECS;
     const id = window.setTimeout(() => {
-      line.remove();
       timers.delete(id);
+      if (fadeSecs <= 0 || !line.isConnected) {
+        line.remove();
+        return;
+      }
+      line.style.setProperty("--fade-secs", `${fadeSecs}s`);
+      line.classList.add("fading");
+      const gone = window.setTimeout(() => {
+        line.remove();
+        timers.delete(gone);
+      }, fadeSecs * 1000);
+      timers.add(gone);
     }, Math.max(0.5, secs) * 1000);
     timers.add(id);
     return line;
@@ -3835,8 +3852,9 @@ export class GameHud {
       this.cargoGrid.replaceChildren();
       this.cargoPockets = [];
       // Four to a row is the game's own arrangement (the eight of a Zeppelin as 2×4); a
-      // ship's ten goes 5 wide so its two rows stay two rows.
-      this.cargoGrid.style.setProperty("--cargo-cols", String(seats > 8 ? 5 : 4));
+      // ship's ten goes 5 wide so its two rows stay two rows, and the Entangled Gold Mine's
+      // five (`Aenc` Car1) stay ONE row rather than four and a straggler.
+      this.cargoGrid.style.setProperty("--cargo-cols", String(seats === 5 || seats > 8 ? 5 : 4));
       for (let i = 0; i < seats; i++) {
         const slot = document.createElement("button");
         slot.className = "hud-cargo-slot";
