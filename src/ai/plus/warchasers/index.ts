@@ -7,10 +7,15 @@ import type { PlusHost } from "../index";
 import { PlusItems, type ItemCtx } from "../items";
 import { plusProfile, type PlusProfile } from "../profile";
 import {
-  ACK_LINES, ANKH_BOUGHT_LINES, ANKH_USED_LINES, DEAD_LINES, GOING_HURT_LINES, NO_ANKH_LINES, READY_LINES,
+  ACK_LINES, ANKH_BOUGHT_LINES, ANKH_USED_LINES, DEAD_LINES, FULL_HP_LINES, GOING_HURT_LINES, HEAL_CANT_LINES,
+  HEAL_COOLDOWN_LINES, HEAL_NOW_LINES, HEAL_OOM_LINES, NO_ANKH_LINES, NO_HEAL_LINES, READY_LINES,
   REST_HP_LINES, REST_MANA_LINES, REST_TALK_GAP, TALK_GAP,
-  leaderLines, namesHero, pickLines, readCommand, type Command,
+  healSoonLines, leaderLines, namesHero, pickLines, readCommand, readHealRequest, type Command,
 } from "./chat";
+import {
+  HEAL_CALL_TTL, HEAL_CALL_WINDOW, HEAL_FULL, HEAL_WALK, HEAL_WALK_SURPLUS, HERO_HEAL_HP, PARTY_HEALS, SURPLUS_CASTS,
+  healCards, healEta, healsInBank, type HealCard,
+} from "./heal";
 import { ANKH_VALUE, isAnkh, wantsItem, worstSlot, type ItemEye } from "./items";
 import {
   DUNGEON, FOUNTAIN, KEYS, PICKS, PICK_AISLE_X, PICK_OF, SHOPS, SKILLS, TANK, TANK_ENTER, TANK_LEAVE, WISP,
@@ -34,8 +39,12 @@ import { warChasersProfile, type WarChasersProfile } from "./profile";
 //     `readCommand`, typos and all) — and an order OVERRIDES what it had decided for itself.
 //  4. REST when it needs to, and SAY so ("wait i need a bit more health") — and say when it is
 //     ready again ("right behind you").
-//  5. CAST everything it has, heals on the party included (the melee Computer+ caster), and drink
-//     what it carries (the melee Computer+ belt).
+//  5. CAST everything it has (the melee Computer+ caster), and drink what it carries (the melee
+//     Computer+ belt) — but HEAL the party's heroes first (heal.ts `healPass`): an allied hero
+//     below 65 % before any unit of its own, eagerly with mana to spare, and a person who asks
+//     for a heal ("heal me") as soon as the heal can land.
+//  5b. KITE when it has summons: a summoner with something on it steps back and lets its
+//     Water Elemental take the blows (`kitePass`).
 //  6. LOOT — pick up what is worth carrying, and drop the least useful thing for something better,
 //     by what the item is worth to ITS hero (items.ts): an intelligence hero gives up Strength first.
 //  7. SHOP when a shop is at hand — an Ankh of Reincarnation before anything else, because a hero
@@ -82,6 +91,13 @@ interface Brain {
   shopTried: Map<string, number>;
   errandUntil: number;
   ankhs: number;
+  // --- heals and kiting
+  /** A heal it has PROMISED a person who asked for one (`answerHealAsk`), kept until it lands. */
+  healCall: HealCall | null;
+  /** Until when it is stepping back out of a chaser's reach so its summons take the aggro. */
+  kiteUntil: number;
+  /** The earliest it may start another kite. */
+  kiteNext: number;
   // --- orders and talk
   orderKey: string;
   orderAt: number;
@@ -91,6 +107,22 @@ interface Brain {
   dead: boolean;
   queue: Array<{ command: Command; turn: number; claimsLead: boolean }>;
   replies: Array<{ at: number; lines: readonly string[] }>;
+}
+
+/** A heal promised to a seat: which of the healer's abilities, since when, and when it was ordered. */
+interface HealCall {
+  seat: number;
+  abilityId: string;
+  since: number;
+  castAt: number;
+}
+
+/** A heal request heard in chat, parked until the next tick (nothing is acted on inside `heard`). */
+interface HealAsk {
+  from: number;
+  after: string;
+  text: string;
+  party: number[];
 }
 
 /** What one body sees around itself this pass. */
@@ -139,6 +171,18 @@ const REST_TRAIL = 1150;
 const NO_ANKH_FLOOR = 0.15;
 /** Seconds between two computers answering the same order, so a party of three is not one voice. */
 const REPLY_STAGGER = 1.1;
+/** KITING (`kitePass`): a summon this close to the hero is one that can take the aggro… */
+const KITE_SUMMON_NEAR = 900;
+/** …a melee chaser this close to the hero is one to step away from… */
+const KITE_THREAT = 350;
+/** …and a summon this close to that chaser is the next thing it reaches once the hero is gone. */
+const KITE_COVER = 450;
+/** How far one step back goes, how long a kite lasts at most, and how long before the next. */
+const KITE_STEP = 380;
+const KITE_TIME = 2.2;
+const KITE_GAP = 7;
+/** At the start of a fight a summoner holds back this long while its summons walk in first. */
+const KITE_OPEN = 1.5;
 
 export class WarChasersAi {
   private readonly brains: Brain[] = [];
@@ -146,6 +190,7 @@ export class WarChasersAi {
    *  seated. Null until anybody is. */
   private leaderSeat: number | null = null;
   private frame: SimUnit[] | null = null;
+  private healAsks: HealAsk[] = [];
 
   constructor(private readonly host: PlusHost) {}
 
@@ -160,7 +205,10 @@ export class WarChasersAi {
     const allied = (u: SimUnit): boolean => u.owner !== player && this.alliedSeat(player, u.owner);
     const hostile = (u: SimUnit): boolean => this.hostileTo(player, u);
     const order = (cmd: Parameters<PlusHost["execute"]>[1]): boolean => this.host.execute(player, cmd);
-    const view = { world: this.host.world, player, def: (id: string) => this.host.abilities.get(id), hostile, allied, order };
+    // A party HERO is never the melee caster's to heal: its heals come from `healPass`, on the
+    // party's own bar (heal.ts `HERO_HEAL_HP`) rather than the melee ladder's 75 %.
+    const refuses = (_u: SimUnit, code: string, t: SimUnit): boolean => t.isHero && !hostile(t) && PARTY_HEALS[code] === "unit";
+    const view = { world: this.host.world, player, def: (id: string) => this.host.abilities.get(id), hostile, allied, order, refuses };
     this.brains.push({
       player, profile: warChasersProfile(difficulty), plus, rng,
       clock: 0, thinkIn: rng() * 0.5, castIn: rng() * plus.castPeriod,
@@ -175,7 +223,7 @@ export class WarChasersAi {
       }, plus, "human"),
       pick: null, pickAt: 8 + this.brains.length * 4 + rng() * 3, pickSince: 0, heroId: 0,
       stance: "follow", stanceSince: 0, holdAt: null, obeyUntil: 0, resting: null,
-      target: 0, targetAt: -Infinity, fightSince: -1,
+      target: 0, targetAt: -Infinity, fightSince: -1, healCall: null, kiteUntil: 0, kiteNext: 0,
       lootId: 0, lootDrop: -1, lootAt: -Infinity, dropped: new Map(), shopTried: new Map(), errandUntil: 0, ankhs: -1,
       orderKey: "", orderAt: -Infinity, spokeAt: -Infinity, restSaidAt: -Infinity, leaderSaid: -1, dead: false,
       queue: [], replies: [],
@@ -185,12 +233,14 @@ export class WarChasersAi {
   reset(): void {
     this.brains.length = 0;
     this.leaderSeat = null;
+    this.healAsks = [];
   }
 
   tick(dt: number): void {
     this.frame = null;
+    for (const b of this.brains) b.clock += dt;
+    this.healAsksPass();
     for (const b of this.brains) {
-      b.clock += dt;
       this.speakPass(b);
       b.thinkIn -= dt;
       b.castIn -= dt;
@@ -207,10 +257,13 @@ export class WarChasersAi {
    */
   heard(line: ChatLine, recipients: readonly number[]): void {
     if (this.brains.some((b) => b.player === line.from)) return;
-    const heard = readCommand(line.text);
-    if (!heard) return;
     const party = this.brains.filter((b) => recipients.includes(b.player) && this.alliedSeat(b.player, line.from));
     if (!party.length) return;
+    // A heal request is read apart from the orders — "wait i need a heal" is both.
+    const heal = readHealRequest(line.text);
+    if (heal) this.healAsks.push({ from: line.from, after: heal.after, text: line.text, party: party.map((b) => b.player) });
+    const heard = readCommand(line.text);
+    if (!heard) return;
     // A line that NAMES one of the computers' heroes ("optimus wait") is for those alone.
     const named = party.filter((b) => b.pick && namesHero(line.text, b.pick.name));
     const to = named.length ? named : party;
@@ -241,16 +294,20 @@ export class WarChasersAi {
     this.orderPass(b, body, leader);
     const s = this.sense(b, body);
     this.restDecision(b, body, s);
+    // HEALS FIRST — a promised heal, then an allied hero below `HERO_HEAL_HP` — ahead of the melee
+    // caster, which would otherwise spend the same button (and the same mana) by its own ladder.
+    const healing = body.order !== "cast" && this.healPass(b, body, s);
 
     if (b.castIn <= 0) {
       b.castIn = b.plus.castPeriod;
       const home = leader ?? body;
-      b.caster.pass(b.clock, { holdsPortal: () => false, home: { x: home.x, y: home.y } });
+      b.caster.pass(b.clock, { holdsPortal: () => false, home: { x: home.x, y: home.y }, holds: (u, code) => this.holds(b, u, code) });
       const ctx: ItemCtx = { home: { x: home.x, y: home.y }, losing: !!b.resting, portalWorthIt: false, creeping: false, mayShop: false };
       b.belt.beltPass(ctx);
     }
     // A cast winding up or a channel held is left alone unless the hero is getting out — breaking a
     // Tranquility to walk two steps behind the leader is how a healer wastes its ultimate.
+    if (healing) return;
     const leaving = !!b.resting || b.stance === "back";
     if (body.order === "cast" && !leaving) return;
 
@@ -622,8 +679,251 @@ export class WarChasersAi {
     // INTO — something already hitting the party is answered at once.
     const answering = t.targetId === body.id || friendIds.has(t.targetId ?? 0);
     if (!answering && b.clock - b.fightSince < P.react) return true;
+    if (this.kitePass(b, body, leader, s, t, answering)) return true;
     this.attack(b, body, t);
     return true;
+  }
+
+  /**
+   * KITING, for a hero with SUMMONS out. A monster on the hero is walked out of its reach, and the
+   * Water Elemental, the Feral Spirits or the raised dead standing beside that monster become the
+   * thing it can hit — the sim's own rule for an auto-acquired chaser whose target has left its
+   * strike range while another enemy is inside it (`SimWorld` "a melee unit must never walk past an
+   * enemy it can reach"). Then the hero turns round and fights again, from behind its summons.
+   *
+   * SOMETIMES, not every time: only with a summon close enough to the chaser to take it, only
+   * against a MELEE chaser (stepping back from an archer changes nothing), at most `KITE_TIME` a go
+   * and one go per `KITE_GAP`, and a difficulty's own chance of seeing it at all
+   * (`WarChasersProfile.kite`). And at the START of a fight it walks in behind its summons rather
+   * than ahead of them (`KITE_OPEN`), so the first thing the camp swings at is not the hero.
+   */
+  private kitePass(b: Brain, body: SimUnit, leader: SimUnit | null, s: Sense, t: SimUnit, answering: boolean): boolean {
+    const P = b.profile;
+    if (P.kite <= 0 || !body.isHero || body.typeId === TANK) return false;
+    const summons = this.units().filter((u) => u.owner === b.player && u.isSummon && !u.isIllusion && !u.hidden && dist(u, body) <= KITE_SUMMON_NEAR);
+    if (!summons.length) {
+      b.kiteUntil = 0;
+      return false;
+    }
+    const chasers = s.foes.filter((f) => !f.building && f.targetId === body.id && dist(f, body) <= KITE_THREAT && (f.weapon?.range ?? 100) <= 250);
+    if (b.clock < b.kiteUntil) {
+      // The aggro has gone to the summons: back in.
+      if (!chasers.length) {
+        b.kiteUntil = 0;
+        return false;
+      }
+      const p = this.awayFrom(body, chasers, leader, KITE_STEP);
+      this.move(b, body, p.x, p.y);
+      return true;
+    }
+    // The opening: let the summons reach the monster first.
+    const reach = (body.weapon?.range ?? 100) + 60;
+    if (!answering && b.clock - b.fightSince < KITE_OPEN && dist(body, t) > reach && summons.some((m) => dist(m, t) < dist(body, t))) return true;
+    if (!chasers.length || b.clock < b.kiteNext) return false;
+    if (!chasers.some((c) => summons.some((m) => dist(m, c) <= KITE_COVER))) return false;
+    b.kiteNext = b.clock + KITE_GAP;
+    if (b.rng() >= P.kite) return false;
+    b.kiteUntil = b.clock + KITE_TIME;
+    const p = this.awayFrom(body, chasers, leader, KITE_STEP);
+    this.move(b, body, p.x, p.y);
+    return true;
+  }
+
+  // --- healing -----------------------------------------------------------------------------------
+
+  /** Heal requests heard since the last tick, answered once each (see `answerHealAsk`). */
+  private healAsksPass(): void {
+    if (!this.healAsks.length) return;
+    const asks = this.healAsks;
+    this.healAsks = [];
+    for (const ask of asks) this.answerHealAsk(ask);
+  }
+
+  /**
+   * A PERSON ASKED FOR A HEAL. Whoever of the party's healers can land one soonest takes it — if any
+   * can within `HEAL_CALL_WINDOW` — and says so ("healing you", "heal in 4 sec"); from then until it
+   * lands, the heal and the mana it needs are theirs (`healCall`, `holds`). If nobody can, the healer
+   * says why ("my heal is on cooldown", "no mana for a heal"), so the person knows to drink instead.
+   *
+   * For the speaker, unless the words after the heal name another hero of the party ("heal
+   * optimus"). Asked of the computers the line names ("snake heal me"), else of all of them.
+   */
+  private answerHealAsk(ask: HealAsk): void {
+    const party = this.brains.filter((b) => ask.party.includes(b.player));
+    let seat = ask.from;
+    if (ask.after) {
+      for (let p = 0; p < MELEE.MAX_PLAYERS; p++) {
+        const other = p === DUNGEON || !this.alliedSeat(ask.from, p) ? null : this.bodyOf(p);
+        if (other && namesHero(ask.after, this.heroName(other))) {
+          seat = p;
+          break;
+        }
+      }
+    }
+    const target = this.bodyOf(seat);
+    if (!target) return;
+    const named = party.filter((b) => b.player !== seat && b.pick && namesHero(ask.text, b.pick.name));
+    const asked = named.length ? named : party;
+    let best: { b: Brain; card: HealCard; eta: number; score: number } | null = null;
+    let healer: Brain | null = null;
+    let why: readonly string[] | null = null;
+    for (const b of asked) {
+      const body = this.bodyOf(b.player);
+      if (!body || body.typeId === TANK || b.player === seat) continue;
+      for (const card of healCards(body, (id) => this.host.abilities.get(id))) {
+        healer ??= b;
+        if (!this.healLegal(body, target, card)) {
+          why ??= HEAL_CANT_LINES;
+          continue;
+        }
+        const eta = healEta(body, card);
+        if (eta > HEAL_CALL_WINDOW) {
+          healer = b;
+          why = card.ab.cooldownLeft > HEAL_CALL_WINDOW ? HEAL_COOLDOWN_LINES : HEAL_OOM_LINES;
+          continue;
+        }
+        // Soonest to LAND, walk included.
+        const score = eta + dist(body, target) / Math.max(150, body.speed);
+        if (!best || score < best.score) best = { b, card, eta, score };
+      }
+    }
+    const reply = (b: Brain, lines: readonly string[]): void => void b.replies.push({ at: b.clock + 0.4 + b.rng() * 0.6, lines });
+    if (!best) {
+      if (healer && why) reply(healer, why);
+      else if (named.length) reply(named[0], NO_HEAL_LINES);
+      return;
+    }
+    if (pct(target) >= HEAL_FULL) return void reply(best.b, FULL_HP_LINES);
+    best.b.healCall = { seat, abilityId: best.card.ab.id, since: best.b.clock, castAt: -Infinity };
+    reply(best.b, best.eta <= 1.5 ? HEAL_NOW_LINES : healSoonLines(best.eta));
+  }
+
+  /** Could this heal EVER land on this body — cooldown and mana aside? The sim's own doors. */
+  private healLegal(body: SimUnit, target: SimUnit, card: HealCard): boolean {
+    if (target.hp <= 0 || target.hidden) return false;
+    if (this.host.world.castUseError(body.id, card.ab.code) === "Notthisunit") return false;
+    if (card.aim === "area") return !target.building;
+    return this.host.world.targetError(body, target, card.def.targetFlags, card.ab.code) === null;
+  }
+
+  /**
+   * THE PARTY'S HEALS, ahead of everything else the hero does this pass. True when it has acted (or
+   * is walking to), and the rest of the pass is skipped.
+   *
+   *  1. A PROMISED heal (`healCall`): cast the moment it is ready; until then, stand within reach of
+   *     the person it is for. A resting healer with something swinging at it does not walk.
+   *  2. An allied HERO below `HERO_HEAL_HP`, the most hurt first — in a fight always, and between
+   *     fights only with `SURPLUS_CASTS` in the bank (short of mana, the hero rests and the mana is
+   *     kept for the next fight). With mana to spare it also walks further to reach one.
+   *
+   * Units are not here: with mana to spare the melee caster heals them by its own ladder, and short
+   * of it the heal is the heroes' (`holds`).
+   */
+  private healPass(b: Brain, body: SimUnit, s: Sense): boolean {
+    if (body.typeId === TANK) {
+      b.healCall = null;
+      return false;
+    }
+    const cards = healCards(body, (id) => this.host.abilities.get(id));
+    if (!cards.length) {
+      b.healCall = null;
+      return false;
+    }
+    const threatened = s.foes.some((f) => !f.building && dist(f, body) <= 450);
+    if (b.healCall) return this.keepHealCall(b, body, cards, !b.resting || !threatened);
+    return this.healHeroes(b, body, cards, s);
+  }
+
+  private keepHealCall(b: Brain, body: SimUnit, cards: readonly HealCard[], mayWalk: boolean): boolean {
+    const call = b.healCall!;
+    const card = cards.find((c) => c.ab.id === call.abilityId);
+    const target = this.bodyOf(call.seat);
+    const drop = (): boolean => {
+      b.healCall = null;
+      return false;
+    };
+    if (!card || !target || target.typeId === TANK || b.clock - call.since > HEAL_CALL_TTL) return drop();
+    // Landed: ordered, and the cooldown is running.
+    if (call.castAt > -Infinity && card.ab.cooldownLeft > 0) return drop();
+    if (pct(target) >= HEAL_FULL) return drop(); // somebody else got there first
+    const eta = healEta(body, card);
+    const reach = card.aim === "unit" ? card.lvl.castRange : Math.max(150, card.lvl.area * 0.6);
+    const d = dist(body, target);
+    if (eta <= 0) {
+      if (card.aim === "unit") {
+        if (!mayWalk && d > reach) return false;
+        if (this.host.world.castError(body.id, card.ab.code, target.id) !== null) return drop();
+        // The cast order walks the healer into range itself, exactly as a person's click does.
+        if (this.host.execute(b.player, { c: "cast", unitId: body.id, code: card.ab.code, targetId: target.id, x: 0, y: 0, queued: false })) {
+          call.castAt = b.clock;
+          b.orderKey = "";
+        }
+        return true;
+      }
+      if (d > reach) {
+        if (!mayWalk) return false;
+        const p = this.behind(target, body, reach * 0.5);
+        this.move(b, body, p.x, p.y);
+        return true;
+      }
+      if (this.host.execute(b.player, { c: "cast", unitId: body.id, code: card.ab.code, targetId: 0, x: body.x, y: body.y, queued: false })) {
+        call.castAt = b.clock;
+        b.orderKey = "";
+      }
+      return true;
+    }
+    // Not ready yet: be in reach when it is. Already in reach, it goes on with what it was doing.
+    if (d > reach * 0.85 && mayWalk) {
+      const p = this.behind(target, body, reach * 0.6);
+      this.move(b, body, p.x, p.y);
+      return true;
+    }
+    return false;
+  }
+
+  private healHeroes(b: Brain, body: SimUnit, cards: readonly HealCard[], s: Sense): boolean {
+    const fighting = (u: SimUnit): boolean => s.foes.some((f) => !f.building && dist(f, u) <= 900);
+    for (const card of cards) {
+      if (card.aim !== "unit" || this.host.world.castUseError(body.id, card.ab.code) !== null) continue;
+      const surplus = healsInBank(body, card) >= SURPLUS_CASTS;
+      const reach = card.lvl.castRange + (b.resting ? 0 : surplus ? HEAL_WALK_SURPLUS : HEAL_WALK);
+      let best: SimUnit | null = null;
+      for (const u of this.units()) {
+        if (!u.isHero || u.isIllusion || u.hidden || !this.alliedSeat(b.player, u.owner)) continue;
+        if (pct(u) >= HERO_HEAL_HP || dist(u, body) > reach) continue;
+        if (best && pct(u) >= pct(best)) continue;
+        if (!surplus && !fighting(u) && !fighting(body)) continue;
+        if (this.host.world.targetError(body, u, card.def.targetFlags, card.ab.code) !== null) continue;
+        best = u;
+      }
+      if (!best) continue;
+      if (this.host.execute(b.player, { c: "cast", unitId: body.id, code: card.ab.code, targetId: best.id, x: 0, y: 0, queued: false })) {
+        b.orderKey = "";
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * What the melee caster must leave alone this pass (`CastCtx.holds`): the promised heal itself,
+   * and any spell that would leave too little mana for it; and a single-target heal while the bar
+   * holds fewer than `SURPLUS_CASTS` of it — those are the party's heroes' (`healHeroes`), not the
+   * Water Elemental's.
+   */
+  private holds(b: Brain, u: SimUnit, code: string): boolean {
+    if (u.owner !== b.player || !u.isHero) return false;
+    const ab = u.abilities.find((a) => a.code === code);
+    const def = ab ? this.host.abilities.get(ab.id) : undefined;
+    const lvl = ab && def ? def.levelData[Math.min(ab.level, def.levelData.length) - 1] : undefined;
+    const cards = healCards(u, (id) => this.host.abilities.get(id));
+    const promised = b.healCall ? cards.find((c) => c.ab.id === b.healCall!.abilityId) : undefined;
+    if (promised) {
+      if (promised.ab.code === code) return true;
+      if (lvl && lvl.cost > 0 && u.mana - lvl.cost < promised.lvl.cost) return true;
+    }
+    const heal = cards.find((c) => c.ab.code === code);
+    return !!heal && heal.aim === "unit" && healsInBank(u, heal) < SURPLUS_CASTS;
   }
 
   // --- following ---------------------------------------------------------------------------------

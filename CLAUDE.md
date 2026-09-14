@@ -575,7 +575,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `ankh`/`IC17` is gone for good (`Game_Over`), so it buys an Ankh before anything else and saves for
   one; KEYS open a door only in the carrier's hands, so a computer never picks one up; and while a
   player drives a `hC25` steam tank, the tank is the body. Spells and potions are the melee
-  Computer+'s own (`PlusCaster`, `PlusItems.beltPass`); loot and shopping value an item for ITS hero
+  Computer+'s own (`PlusCaster`, `PlusItems.beltPass`) EXCEPT the party's HEALS
+  (`warchasers/heal.ts`): an allied hero below 65 % is healed before any unit, a person who asks
+  ("heal me", "hael") is promised the heal and its mana if it can land within 10 s, and the melee
+  caster is kept off both (`CasterView.refuses`, `CastCtx.holds`); a summoner KITES behind its
+  summons (`kitePass`). Loot and shopping value an item for ITS hero
   (an intelligence hero drops Strength items first).
 - **Transports:** read [`docs/transports.md`](docs/transports.md) before touching the Goblin
   Zeppelin, a transport ship, a cargo hold, or the cargo panel. A transport is the BURROW's

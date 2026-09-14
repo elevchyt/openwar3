@@ -198,6 +198,9 @@ function negated(t: readonly string[], i: number): boolean {
  */
 export function readCommand(text: string): HeardCommand | null {
   const t = words(text);
+  // A line that is nothing but "b" is BACK — the one-key retreat people type mid-fight (the
+  // developer's own rule). Only the whole line: a "b" inside a sentence ("plan b") is a letter.
+  if (t.length === 1 && t[0] === "b") return { command: "back", claimsLead: false };
   let command: Command | null = null;
   let claimsLead = false;
   for (let i = 0; i < t.length; i++) {
@@ -247,6 +250,81 @@ export function readCommand(text: string): HeardCommand | null {
     command = negated(t, i) ? OPPOSITE[v] : v;
   }
   return command === null ? null : { command, claimsLead };
+}
+
+// --- asking for a heal ----------------------------------------------------------------------------
+
+export interface HeardHeal {
+  /** The words after the heal word, for "heal optimus" — who the heal is FOR when that is somebody
+   *  other than the speaker. Empty (or "me") means the speaker. */
+  readonly after: string;
+}
+
+/** Words before a heal word that make it an OFFER or news rather than a request: "i heal", "ill
+ *  heal", "i can heal", "thanks for the heals". */
+const HEAL_NOT_ASKED: ReadonlySet<string> = new Set(["i", "ill", "im", "will", "for", "the", "nice", "good", "thanks", "thx", "ty", "great", "gj"]);
+/** …and the negations: "dont heal", "no heal", "stop healing". */
+const HEAL_NEGATED: ReadonlySet<string> = new Set(["dont", "don", "no", "not", "never", "cant", "wont", "stop", "without"]);
+/** Before "healing" / "hp" / "health", the words that make it wanted: "need healing", "low hp". */
+const HEAL_WANTED: ReadonlySet<string> = new Set(["need", "needs", "want", "some", "get", "low"]);
+/** Filler after the heal word that names nobody. */
+const HEAL_FILLER: ReadonlySet<string> = new Set(["me", "pls", "plz", "please", "now", "asap", "quick", "fast", "up", "on", "a", "bit", "us"]);
+
+/**
+ * Is this line somebody ASKING the party's healer for a heal, and for whom?
+ *
+ * "heal", "heal me", "heal pls", "need heal", "can i get a heal", "healz", "hael", "i need healing",
+ * "need hp", "im low", "heal optimus" — and not "i heal", "ill heal you", "thanks for the heals",
+ * "dont heal me", "no need to heal", "im healing" or "healing now", which are offers, thanks,
+ * refusals and news. A request can share a line with an order ("wait i need heal"); the two are
+ * read apart, and both are acted on.
+ */
+export function readHealRequest(text: string): HeardHeal | null {
+  const t = words(text);
+  let asked: HeardHeal | null = null;
+  const tail = (i: number): string => t.slice(i + 1).filter((w) => !HEAL_FILLER.has(w)).join(" ");
+  const negated = (i: number): boolean => {
+    const p = t[i - 1];
+    if (p && HEAL_NEGATED.has(p)) return true;
+    // "dont need heal", "no need to heal", "i dont need healing"
+    const needAt = p === "need" ? i - 1 : p === "to" && t[i - 2] === "need" ? i - 2 : -1;
+    return needAt > 0 && HEAL_NEGATED.has(t[needAt - 1]);
+  };
+  for (let i = 0; i < t.length; i++) {
+    const w = t[i];
+    const prev = t[i - 1];
+    const next = t[i + 1];
+    if (w === "healing" || w === "healin") {
+      // A gerund is news ("im healing", "healing now") unless something WANTS it.
+      if (prev && HEAL_WANTED.has(prev) && !negated(i)) asked = { after: "" };
+      continue;
+    }
+    if (w === "healer" || w === "healers") {
+      if (prev === "need" && !negated(i)) asked = { after: "" };
+      continue;
+    }
+    if (w === "hp" || w === "health") {
+      // "need hp", "low hp", "im low on health", "hp pls" — and never "his hp", "the boss is low hp".
+      const wanted = (prev === "need" && !negated(i)) || (prev === "low" && (!t[i - 2] || t[i - 2] === "im"))
+        || (prev === "on" && t[i - 2] === "low" && t[i - 3] === "im") || next === "pls" || next === "plz" || next === "please";
+      if (wanted && !(prev && ["his", "her", "its", "their", "boss", "the"].includes(prev))) asked = { after: "" };
+      continue;
+    }
+    if (w === "low" && prev === "im" && (!next || next === "pls" || next === "plz")) {
+      asked = { after: "" };
+      continue;
+    }
+    if (!(w === "heal" || w === "heals" || w === "healz" || w === "heel" || (w.length >= 4 && w.length <= 6 && !NOT_A_COMMAND.has(w) && sounds(w, "heal")))) continue;
+    if (negated(i)) {
+      asked = null; // "heal me… no dont heal me" — the last word on it wins
+      continue;
+    }
+    if (prev && HEAL_NOT_ASKED.has(prev)) continue;
+    if (prev === "can" && t[i - 2] === "i") continue; // "i can heal"
+    if (next === "you" || next === "u" || next === "yourself") continue; // "heal you" is an offer
+    asked = { after: tail(i) };
+  }
+  return asked;
 }
 
 // --- naming a computer ----------------------------------------------------------------------------
@@ -309,6 +387,20 @@ export function pickLines(heroName: string): readonly string[] {
 export const ANKH_BOUGHT_LINES = ["bought an ankh", "got a new ankh"] as const;
 export const ANKH_USED_LINES = ["ankh saved me", "phew, that was my ankh", "used my ankh"] as const;
 export const DEAD_LINES = ["im dead for good, sorry", "out of ankhs, im gone. good luck"] as const;
+
+/** Answering a heal request — it is coming now. */
+export const HEAL_NOW_LINES = ["healing you", "on it, healing", "heal incoming"] as const;
+/** …in a few seconds (the heal is on cooldown, or the mana is nearly there). */
+export function healSoonLines(seconds: number): readonly string[] {
+  const s = Math.max(1, Math.ceil(seconds));
+  return [`heal in ${s} sec`, `ok, heal ready in ${s}s`, `hold on, heal in ${s} sec`];
+}
+/** …it cannot, and why. */
+export const HEAL_COOLDOWN_LINES = ["my heal is on cooldown, sorry", "heal on cd"] as const;
+export const HEAL_OOM_LINES = ["no mana for a heal", "im oom, cant heal"] as const;
+export const HEAL_CANT_LINES = ["my heal cant target you", "cant heal you with that"] as const;
+export const NO_HEAL_LINES = ["i dont have a heal"] as const;
+export const FULL_HP_LINES = ["youre at full hp"] as const;
 
 /** Seconds between two lines one computer says of its own accord (an answer to an order is not held
  *  to it — somebody asked). */

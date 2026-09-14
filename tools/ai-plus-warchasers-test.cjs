@@ -11,6 +11,13 @@
 //  4. **Items are valued for the hero carrying them**: an intelligence hero rates Intelligence over
 //     Strength and gives the Strength up first; nobody ever gives up an Ankh; a key is never ours.
 //  5. **The hero picker's geometry**: eight pedestals, none of them on the aisle the wisp walks up.
+//  6. **Heal requests are heard** ("heal me", "need heal", "hael pls", "heal optimus") and offers,
+//     thanks and news are not ("i heal", "thanks for the heals", "im healing"); a lone "b" is back.
+//  7. **The party's heals go to its heroes** (index.ts `healPass`, heal.ts), driven through
+//     `WarChasersAi.tick` on a stub world: an allied hero below 65 % is healed, before a summon and
+//     between fights only with three heals in the bank; a person who asks is answered and healed
+//     the moment the heal is ready; and a summoner with a monster on it steps back behind its
+//     Water Elemental.
 //
 // Nothing here is Warcraft III's except what map.ts cites from the map itself.
 const { join } = require("node:path");
@@ -19,6 +26,9 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const chat = require(join(REPO, ".sim-build", "src", "ai", "plus", "warchasers", "chat.js"));
 const items = require(join(REPO, ".sim-build", "src", "ai", "plus", "warchasers", "items.js"));
 const map = require(join(REPO, ".sim-build", "src", "ai", "plus", "warchasers", "map.js"));
+const heal = require(join(REPO, ".sim-build", "src", "ai", "plus", "warchasers", "heal.js"));
+const { WarChasersAi } = require(join(REPO, ".sim-build", "src", "ai", "plus", "warchasers", "index.js"));
+const ids = require(join(REPO, ".sim-build", "src", "ai", "ids.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -115,6 +125,201 @@ check("the aisle crosses no pedestal", map.PICKS.every((p) => map.PICK_AISLE_X <
 check("the four hero seats", [...map.HERO_SEATS], [0, 1, 5, 6]);
 check("recognised by its triggers", map.isWarChasersScript(new Set(map.WARCHASERS_SCRIPT_MARKERS)), true);
 check("…all four of them", map.isWarChasersScript(new Set(map.WARCHASERS_SCRIPT_MARKERS.slice(1))), false);
+
+// --- 6. heal requests ------------------------------------------------------------------------------
+check('"b" is back', cmd("b"), "back");
+check('"b!" is back', cmd("b!"), "back");
+check('"plan b" is not', cmd("plan b"), null);
+const asks = (s) => chat.readHealRequest(s) !== null;
+for (const said of [
+  "heal", "heal me", "hael", "hael me", "heal!", "heal me!", "Heal me please", "heal plz", "HEAL ME PLS", "heal pls", "need heal", "i need a heal", "can i get a heal", "healz", "hael", "heall me",
+  "heals pls", "i need healing", "need hp", "hp pls", "low hp", "im low", "im low on health", "wait i need heal", "snake heal me",
+]) check(`${JSON.stringify(said)} asks for a heal`, asks(said), true);
+for (const said of [
+  "i heal", "ill heal you", "i can heal", "heal you", "thanks for the heals", "dont heal me", "no need to heal", "i dont need heal",
+  "im healing", "healing now", "the boss is low hp", "his hp", "help", "deal", "hell", "real", "wait", "im back", "",
+]) check(`${JSON.stringify(said)} does not`, asks(said), false);
+check("heal optimus is for Optimus", chat.readHealRequest("heal optimus pls")?.after, "optimus");
+check("heal me is for the speaker", chat.readHealRequest("heal me")?.after, "");
+check("…and the order in the same line is still read", cmd("wait i need heal"), "wait");
+check("heal eta: the cooldown", heal.healEta({ mana: 300, manaRegen: 1 }, { ab: { cooldownLeft: 4 }, lvl: { cost: 65 } }), 4);
+check("heal eta: the mana it is short of, at its regeneration", heal.healEta({ mana: 45, manaRegen: 2 }, { ab: { cooldownLeft: 0 }, lvl: { cost: 65 } }), 10);
+check("heals in the bank", heal.healsInBank({ mana: 260 }, { lvl: { cost: 65 } }), 4);
+
+// --- 7. the party's heals, on a stub world ------------------------------------------------------------
+{
+  const PERSON = 0;
+  const COMPUTER = 1;
+  const DUNGEON = map.DUNGEON;
+  const lvlRow = (o = {}) => ({ area: 0, castRange: 800, cost: 65, cooldown: 5, duration: 0, heroDuration: 0, data: [200, NaN], buffs: [], summon: "", ...o });
+  const ABILS = new Map([
+    ["AHhb", { id: "AHhb", code: "AHhb", target: "unit", autocast: false, targetFlags: ["air", "ground", "organic", "notself", "vuln", "invu", "nonancient"], levelData: [lvlRow()] }],
+    ["ANrf", { id: "ANrf", code: "ANrf", target: "point", autocast: false, targetFlags: ["ground", "enemy"], levelData: [lvlRow({ area: 200, cost: 75 })] }],
+  ]);
+  let nextId = 1;
+  const unit = (o = {}) => ({
+    id: nextId++, owner: DUNGEON, typeId: "nC00", x: 0, y: 0, radius: 16, hp: 500, maxHp: 500, mana: 0, maxMana: 0, manaRegen: 0,
+    isHero: false, isPeon: false, isCreep: false, isSummon: false, isIllusion: false, hidden: false, vanished: false, invulnerable: false,
+    invisible: false, neutralPassive: false, building: null, paused: false, stunned: false, silenced: false, morphT: 0, order: "idle",
+    constructing: false, repair: false, immolation: "", altModel: false, altFormLeft: 0, reviveT: 0, skillPoints: 0, level: 1,
+    race: "human", weapon: { range: 100, acquire: 500, cooldown: 1.5 }, weapons: [], abilities: [], buffs: [], inventory: [], speed: 300,
+    targetId: 0, summonLeft: 0, illusionOf: 0, ...o,
+  });
+  const snake = (o = {}) => unit({
+    owner: COMPUTER, typeId: "EC12", isHero: true, hp: 700, maxHp: 700, mana: 300, maxMana: 400, manaRegen: 1, weapon: { range: 600, acquire: 600, cooldown: 1.5 },
+    abilities: [{ id: "AHhb", code: "AHhb", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "ANrf", code: "ANrf", level: 1, cooldownLeft: 0, autocastOn: false }], ...o,
+  });
+  const optimus = (o = {}) => unit({ owner: PERSON, typeId: "HC07", isHero: true, hp: 1000, maxHp: 1000, x: 300, ...o });
+
+  /** One WarChasers match on a stub world: `ticks` seconds of passes, and the commands and lines it produced. */
+  function match(units, { difficulty = ids.MELEE_INSANE, seconds = 1, before, lines = [] } = {}) {
+    const cmds = [];
+    const said = [];
+    const world = {
+      units: new Map(units.map((u) => [u.id, u])),
+      items: new Map(),
+      stashOf: () => ({ gold: 0, lumber: 0 }),
+      techMeets: () => true,
+      targsAdmit: () => true,
+      canWalkTo: () => true,
+      castUseError: (id, code) => {
+        const u = world.units.get(id);
+        const ab = u?.abilities.find((a) => a.code === code);
+        if (!ab) return "Notthisunit";
+        if (ab.cooldownLeft > 0) return "Cooldown";
+        return u.mana < ABILS.get(ab.id).levelData[0].cost ? "Nomana" : null;
+      },
+      // Holy Light's polarity and "Unable to target self.", the two refusals the heal pass must respect.
+      targetError: (caster, t, flags, code) => (t === caster ? "Notself" : code === "AHhb" && (t.race === "undead" || t.owner === DUNGEON) ? "Holybolttarget" : null),
+      castError: (id, code, targetId) => {
+        const use = world.castUseError(id, code);
+        if (use || !targetId) return use;
+        return world.targetError(world.units.get(id), world.units.get(targetId), [], code);
+      },
+    };
+    const allied = (a, b) => (a === PERSON || a === COMPUTER) && (b === PERSON || b === COMPUTER);
+    const host = {
+      world,
+      abilities: ABILS,
+      items: new Map(),
+      tech: { get: () => ({ sellitems: [] }) },
+      registry: new Map([["EC12", { primaryAttr: "AGI" }], ["UC13", { primaryAttr: "STR" }]]),
+      coAllied: allied,
+      visible: () => true,
+      execute: (player, cmd) => {
+        cmds.push({ player, ...cmd });
+        // A cast lands at once here: its mana and its cooldown are paid, as `tickCast` pays them.
+        const u = cmd.c === "cast" ? world.units.get(cmd.unitId) : null;
+        const ab = u?.abilities.find((a) => a.code === cmd.code);
+        if (ab) {
+          const row = ABILS.get(ab.id).levelData[0];
+          ab.cooldownLeft = row.cooldown;
+          u.mana -= row.cost;
+        }
+        return true;
+      },
+      say: (player, text) => said.push({ player, text }),
+    };
+    const ai = new WarChasersAi(host);
+    ai.add(COMPUTER, difficulty, 7);
+    // Seated and picked: skip the pick delay.
+    ai.brains[0].heroId = units.find((u) => u.owner === COMPUTER && u.isHero)?.id ?? 0;
+    before?.(ai, world);
+    for (const text of lines) ai.heard({ from: PERSON, text }, [PERSON, COMPUTER]);
+    const dt = 0.05;
+    for (let t = 0; t < seconds; t += dt) {
+      for (const u of world.units.values()) for (const ab of u.abilities) ab.cooldownLeft = Math.max(0, ab.cooldownLeft - dt);
+      ai.tick(dt);
+    }
+    return { cmds, said, casts: cmds.filter((c) => c.c === "cast") };
+  }
+
+  {
+    const s = snake();
+    const o = optimus({ hp: 500 });
+    const r = match([s, o]);
+    check("an allied hero at 50 % is Holy Lit, between fights, with four heals in the bank", r.casts[0]?.targetId, o.id);
+  }
+  {
+    const s = snake();
+    const o = optimus({ hp: 700 });
+    check("…a hero at 70 % is not", match([s, o]).casts.filter((c) => c.code === "AHhb").length, 0);
+  }
+  {
+    const s = snake({ mana: 100 });
+    const o = optimus({ hp: 500 });
+    check("short of mana, a hero between fights is left to rest", match([s, o]).casts.length, 0);
+    const s2 = snake({ mana: 100 });
+    const o2 = optimus({ hp: 500 });
+    const ghoul = unit({ x: 450, targetId: o2.id });
+    check("…and healed the moment it is in a fight", match([s2, o2, ghoul]).casts[0]?.targetId, o2.id);
+  }
+  {
+    const s = snake({ mana: 150 });
+    const o = optimus({ hp: 600 });
+    const elemental = unit({ owner: COMPUTER, typeId: "hwat", isSummon: true, summonLeft: 40, hp: 100, maxHp: 600, x: -200 });
+    const ghoul = unit({ x: 450, targetId: o.id });
+    const r = match([s, o, elemental, ghoul]);
+    check("the hero before the healer's own Water Elemental", r.casts.find((c) => c.code === "AHhb")?.targetId, o.id);
+    const s2 = snake({ mana: 150 });
+    const o2 = optimus({ hp: 900 });
+    const el2 = unit({ owner: COMPUTER, typeId: "hwat", isSummon: true, summonLeft: 40, hp: 100, maxHp: 600, x: -200 });
+    const g2 = unit({ x: 450, targetId: el2.id });
+    check("…and short of mana, not on the Water Elemental at all", match([s2, o2, el2, g2]).casts.filter((c) => c.code === "AHhb").length, 0);
+  }
+  {
+    const s = snake({ mana: 400 });
+    s.abilities[0].cooldownLeft = 3;
+    const o = optimus({ hp: 900 });
+    const r = match([s, o], { lines: ["heal me pls"], seconds: 4 });
+    check("a person asks: it answers with how long", r.said.some((l) => /heal .*3/.test(l.text)), true);
+    check("…and heals them the moment the cooldown is up, at 90 %", r.casts.find((c) => c.code === "AHhb")?.targetId, o.id);
+    check("…not before", r.casts.filter((c) => c.code === "AHhb").length, 1);
+  }
+  {
+    const s = snake({ mana: 400 });
+    s.abilities[0].cooldownLeft = 30;
+    const o = optimus({ hp: 600 });
+    const r = match([s, o], { lines: ["heal"], seconds: 1 });
+    check("…a heal 30 seconds away is not promised, and it says why", r.said.some((l) => /cooldown|cd/.test(l.text)), true);
+  }
+  {
+    const s = snake({ mana: 100, manaRegen: 2 });
+    s.abilities[0].cooldownLeft = 2;
+    const o = optimus({ hp: 900 });
+    const ghouls = [0, 1, 2].map((i) => unit({ x: 300 + i * 40, y: 300, race: "undead", targetId: s.id }));
+    const r = match([s, o, ...ghouls], { lines: ["heal me"], seconds: 1.5 });
+    check("a promised heal keeps its mana: no Rain of Fire that would leave too little for it", r.casts.filter((c) => c.code === "ANrf").length, 0);
+  }
+  {
+    const s = snake({ mana: 400 });
+    const o = optimus({ hp: 600, race: "undead" });
+    const r = match([s, o], { lines: ["heal me"], seconds: 1 });
+    check("an undead hero asking a Holy Light is told it cannot", r.said.some((l) => /cant/.test(l.text)), true);
+  }
+  {
+    // KITING: a Beast Knight with its Water Elemental beside the Ghoul that is on him.
+    const bk = unit({ owner: COMPUTER, typeId: "UC13", isHero: true, hp: 900, maxHp: 1000, x: 0 });
+    const o = optimus({ x: -300 });
+    const el = unit({ owner: COMPUTER, typeId: "hwat", isSummon: true, summonLeft: 40, hp: 600, maxHp: 600, x: 150, y: 120 });
+    const ghoul = unit({ x: 100, targetId: bk.id, order: "attack" });
+    const r = match([bk, o, el, ghoul], { seconds: 1 });
+    const step = r.cmds.find((c) => c.c === "order" && c.order.kind === "move");
+    check("a summoner with a monster on it steps back", !!step, true);
+    check("…away from the monster", step && step.order.x < bk.x, true);
+    const bk2 = unit({ owner: COMPUTER, typeId: "UC13", isHero: true, hp: 900, maxHp: 1000, x: 0 });
+    const o2 = optimus({ x: -300 });
+    const g2 = unit({ x: 100, targetId: bk2.id, order: "attack" });
+    const r2 = match([bk2, o2, g2], { seconds: 1 });
+    check("…and with no summon to take it, it fights", r2.cmds.some((c) => c.c === "order" && c.order.kind === "attack" && c.order.targetId === g2.id), true);
+    const bk3 = unit({ owner: COMPUTER, typeId: "UC13", isHero: true, hp: 900, maxHp: 1000, x: 0 });
+    const o3 = optimus({ x: -300 });
+    const el3 = unit({ owner: COMPUTER, typeId: "hwat", isSummon: true, summonLeft: 40, hp: 600, maxHp: 600, x: 150, y: 120 });
+    const g3 = unit({ x: 100, targetId: bk3.id, order: "attack" });
+    const r3 = match([bk3, o3, el3, g3], { seconds: 1, difficulty: ids.MELEE_NEWBIE });
+    check("…an easy computer never kites", r3.cmds.some((c) => c.c === "order" && c.order.kind === "move"), false);
+  }
+}
 
 if (failed) {
   console.log(`\n${failed} check(s) failed`);

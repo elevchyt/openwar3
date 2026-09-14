@@ -57,17 +57,37 @@ every map fact is cited in `map.ts` against the trigger, rect or object it came 
    anything in sight; waiting, what comes to it. The leader's own target first, then whatever is
    hitting a party member (a hero above a summon), then the wounded. A spawner hut only once the
    leader goes for it. Leashed to the leader.
-5. **Spells and potions** are the melee Computer+'s: `PlusCaster` (heals land on the party — a Snake
-   Aes Holy Lights a person) and `PlusItems.beltPass` (the belt alone, no melee shopping).
-6. **Rest** (`restDecision` / `restPass`): below `restHp` (or an intelligence hero below `restMana`) it stops, out
+5. **Spells and potions** are the melee Computer+'s: `PlusCaster` and `PlusItems.beltPass` (the belt
+   alone, no melee shopping) — with the party's HEALS taken out of the caster's hands (`heal.ts`,
+   `healPass`), because a dungeon party is not an army:
+   - An allied **hero below 65 %** (`HERO_HEAL_HP`) is healed, the most hurt first — before the
+     healer's own Water Elemental or anybody's unit. The melee caster never heals a party hero
+     (`CasterView.refuses`); its 75 % ladder is for units.
+   - **Mana to spare** is `SURPLUS_CASTS` = 3 heals in the bank. With it, a hero is topped up between
+     fights too and the healer walks further for one (`HEAL_WALK_SURPLUS`). Short of it, a hero is
+     healed only in a fight, and the heal is never spent on a unit or on a Holy Light nuke
+     (`CastCtx.holds`).
+   - **A person who asks** ("heal", "heal me", "hael", "need heal", "im low", "heal optimus" —
+     `readHealRequest`) is answered by the healer that can land a heal soonest, if one can within
+     `HEAL_CALL_WINDOW` = 10 s: "healing you" / "heal in 3 sec", and from then until it lands the heal
+     and the mana for it are theirs, above any other spell and any order (`healCall`). Otherwise it
+     says why: "my heal is on cooldown", "no mana for a heal", "my heal cant target you" (Holy Light on
+     an undead hero). Offers, thanks and news are not requests ("i heal", "thanks for the heals",
+     "im healing").
+6. **Kite** (`kitePass`): a hero with SUMMONS out and a melee monster on it steps `KITE_STEP` back when
+   a summon is beside that monster, so the monster turns on the summon — the sim's own rule for an
+   auto-acquired chaser whose target has left its strike range. Sometimes, not always: one kite per
+   `KITE_GAP`, at most `KITE_TIME` long, at the difficulty's `kite` chance. At the start of a fight a
+   summoner also lets its summons reach the monster first (`KITE_OPEN`).
+7. **Rest** (`restDecision` / `restPass`): below `restHp` (or an intelligence hero below `restMana`) it stops, out
    of reach of whatever is swinging, at a Fountain of Health if one is at hand, and SAYS so — "wait i
    need a bit more health" — again while the leader keeps walking away. A leader who does not wait is
    trailed (`REST_TRAIL`), out of the fight, rather than left to heal alone; it says "right behind you"
    when it is fit again.
-7. **Loot** (`lootPass`): the most valuable item within reach for ITS hero (`items.ts`), dropping the
+8. **Loot** (`lootPass`): the most valuable item within reach for ITS hero (`items.ts`), dropping the
    least valuable thing it carries when the belt is full. Never in a fight, never a key, never one a
    person is walking to, never one it just dropped.
-8. **Shop** (`shopPass`): at a shop it can walk to, with the leader close: an **Ankh first** if it has
+9. **Shop** (`shopPass`): at a shop it can walk to, with the leader close: an **Ankh first** if it has
    none — and while it cannot afford one it buys nothing else — then the most valuable ware worth a
    slot, selling (or at a shop that does not buy, dropping) the least valuable thing to make room.
 
@@ -80,7 +100,7 @@ that computer alone.
 | Order | Said as | Does |
 |---|---|---|
 | wait | wait, lets wait, hold on, stop, stay, one sec | holds where it stands, fights what comes to it |
-| back | back, go back, fall back, retreat, run, get out | leaves the fight to the leader's side, then waits |
+| back | back, b, go back, fall back, retreat, run, get out | leaves the fight to the leader's side, then waits |
 | go | lets go, go, come on, move, push, dont wait, stop waiting | follows again |
 | follow | follow me, follow, come, come back, on me, i lead | follows (and "me"/"i lead" takes the lead) |
 | attack | attack, hit, hit them, kill them, get them, charge | fights anything in sight for 40 s |
@@ -105,6 +125,7 @@ A wait the leader then walks far away from is not held for ever (`WAIT_ABANDON`)
 | rests for mana (intelligence heroes only) | no | 15% | 20% |
 | focuses (leader's target, what hits the party) | no | yes | yes |
 | first swing into a fight | 1.2 s | 0.5 s | 0.1 s |
+| kites with summons out | never | half the time | 90% of the time |
 | spells | `PLUS_EASY` | `PLUS_NORMAL` | `PLUS_INSANE` |
 
 ## Engine facts it leans on
@@ -115,5 +136,6 @@ A wait the leader then walks far away from is not held for ever (`WAIT_ABANDON`)
 - The map's item prices (`ankh` 3000, the Deluxe `IC17` 5000) live in its `war3map.w3u`, and are read
   from there (`applyMapItemData`). The AI prices from the registry, so it agrees with the shop.
 
-`tools/ai-plus-warchasers-test.cjs` pins the parser (orders, typos, non-orders, names), the item values
-and the picker geometry.
+`tools/ai-plus-warchasers-test.cjs` pins the parser (orders, typos, non-orders, names, heal requests),
+the item values, the picker geometry, and — on a stub world through `WarChasersAi.tick` — who a heal
+goes to, the mana rule, a promised heal, and kiting.

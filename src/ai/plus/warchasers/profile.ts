@@ -26,21 +26,24 @@ export interface WarChasersProfile {
   readonly focus: boolean;
   /** How long a PLAYER sees a monster before swinging: the first beat of a fight. */
   readonly react: number;
+  /** The chance a summoner KITES when a melee monster is on it and a summon is there to take it
+   *  (index.ts `kitePass`) — 0 never. */
+  readonly kite: number;
 }
 
-/** Easy — follows, fights what is closest, stops to heal late and gets up early. */
+/** Easy — follows, fights what is closest, stops to heal late and gets up early, never kites. */
 export const WC_EASY: WarChasersProfile = {
-  difficulty: MELEE_NEWBIE, think: 1.0, restHp: 0.22, readyHp: 0.6, restMana: 0, focus: false, react: 1.2,
+  difficulty: MELEE_NEWBIE, think: 1.0, restHp: 0.22, readyHp: 0.6, restMana: 0, focus: false, react: 1.2, kite: 0,
 };
 
 /** Normal — focuses with the leader, rests at a third, keeps a caster's mana for the fight. */
 export const WC_NORMAL: WarChasersProfile = {
-  difficulty: MELEE_NORMAL, think: 0.5, restHp: 0.33, readyHp: 0.8, restMana: 0.15, focus: true, react: 0.5,
+  difficulty: MELEE_NORMAL, think: 0.5, restHp: 0.33, readyHp: 0.8, restMana: 0.15, focus: true, react: 0.5, kite: 0.5,
 };
 
 /** Insane — reacts at once, rests before it is in danger rather than after, gets up full. */
 export const WC_INSANE: WarChasersProfile = {
-  difficulty: MELEE_INSANE, think: 0.25, restHp: 0.4, readyHp: 0.9, restMana: 0.2, focus: true, react: 0.1,
+  difficulty: MELEE_INSANE, think: 0.25, restHp: 0.4, readyHp: 0.9, restMana: 0.2, focus: true, react: 0.1, kite: 0.9,
 };
 
 /** The profile a lobby difficulty seats — anything unrecognised plays Normal. */

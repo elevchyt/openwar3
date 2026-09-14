@@ -556,6 +556,14 @@ export interface CastCtx {
   /** Where a hero that has just Wind Walked out of a fight runs TO — the AI's own main base,
    *  the same point `ComputerPlusAi.escapePass` then holds it at. */
   home: { x: number; y: number };
+  /**
+   * A button this caster must NOT press this pass, though it is legal and it would like to — asked
+   * of every deliberate cast after `castUseError`. Optional because only a map AI with promises of
+   * its own has one: a WarChasers party member keeps its heal (and the mana for it) for the hero it
+   * has told "heal in 3 sec", and keeps a single-target heal for the party's HEROES while its bar
+   * is short (warchasers/heal.ts).
+   */
+  holds?(u: SimUnit, code: string): boolean;
 }
 
 /** One Computer+ player's casters. */
@@ -801,6 +809,7 @@ export class PlusCaster {
       // Mana, cooldown, the upgrade gate and "is there even a corpse" — asked of the sim, at
       // the same door a player's click asks, so this can never be more permissive.
       if (this.view.world.castUseError(u.id, card.ab.code) !== null) continue;
+      if (this.ctx.holds?.(u, card.ab.code)) continue;
       if (!this.wants(u, card.def, card.role, foes, engaged)) continue;
       if (this.aim(u, card.ab.code, card.def, card.lvl, card.role, friends, foes)) return true;
     }
@@ -1190,6 +1199,9 @@ export class PlusCaster {
       if (polarity && half === "nuke" && this.offense.get(u.id) === false) continue;
       if (!buffFree(t, lvl)) continue;
       if (this.view.world.castError(u.id, code, t.id) !== null) continue;
+      // …and a target the owner's own judgement keeps off this button (`CasterView.refuses`) —
+      // a WarChasers party member's heroes, whose heals have a pass of their own.
+      if (this.view.refuses?.(u, code, t)) continue;
       legal.push(t);
       // Worth first, distance only as the tie-break — and `bestScore` starts below every
       // possible score, because a cheap target at the edge of a long cast range scores
