@@ -2842,6 +2842,7 @@ const HEX_DONE_ART = `${POLYMORPH_DIR}PolyMorphDoneGround.mdx`;
 const HEX_DONE_SOUND = `${POLYMORPH_DIR}PolymorphDone.wav`;
 const GUARD_RETURN_TIME = MISC_GAME.GuardReturnTime; // also the "can't get home, resume fighting" window
 const CREEP_CALL_FOR_HELP = MISC_GAME.CreepCallForHelp; // camp cohesion: one aggros → the whole camp wakes/joins
+const CALL_FOR_HELP = MISC_GAME.CallForHelp; // a PLAYER's attacked unit or building calls its owner's idle units in — see callForHelp
 // "Radius of creep notification when a new building gets placed" — Units\MiscData.txt's
 // own comment on this constant. Laying a foundation shouts to the creeps around it, quite
 // apart from anyone's acquisition range: this is why a gold mine's guards charge a Peasant
@@ -19146,6 +19147,9 @@ export class SimWorld {
     if (target.isCreep && attacker && this.hostile(target, attacker)) {
       this.alertCamp(target, attacker);
     }
+    // …and a PLAYER's unit or building calls its own side's idle units in (MiscGame
+    // `CallForHelp`). A spawner hut on a Player 12 RPG map is the case that needs it most.
+    if (!target.isCreep && attacker && this.hostile(target, attacker)) this.callForHelp(target, attacker);
     // "Creeps will also call for help if you attack another unit currently being
     // targeted by those creeps." Only a NON-creep attacker striking a NON-creep
     // victim can trigger this (a creep is never hostile to a fellow creep, and no
@@ -19157,6 +19161,41 @@ export class SimWorld {
           this.alertCamp(c, attacker);
         }
       }
+    }
+  }
+
+  /**
+   * CALL FOR HELP, for a player's units — the rule `MiscGame.txt` states as `CallForHelp=600`
+   * beside the creeps' own `CreepCallForHelp=600`, and the one the sim was missing: only a
+   * creep ever shouted. So a Player 12 camp on an RPG map — WarChasers' Gnoll Huts, whose
+   * Murlocs are `CreateNUnitsAtLoc(…, Player(11), GetUnitLoc(udg_MonsterSpawners[i]), …)`
+   * beside the hut that spawns them — stood and watched a hero chop the hut down from just
+   * outside their own acquisition range, where the real game sends them at him.
+   *
+   * What it reaches: the victim OWNER's units within `CallForHelp` of the victim (edge to edge,
+   * so a big building calls from its walls and not its centre) that are IDLE and would pick
+   * a fight up by themselves — `acquireRange` > 0, which is what keeps a worker, a harvester,
+   * a wind-walker and a sheep out of it, exactly as it keeps them out of every other automatic
+   * path. Hive 119830 is the behaviour seen from a mapmaker's side: an ORPG on Player 12 —
+   * "When I attack an enemie all enemies around this enemie moves and help this enemie" — with
+   * "Combat - Call for help range" the constant that governs it. A unit already fighting keeps its own fight, a Hold keeps its
+   * ground, and a building (a tower) has nowhere to come from.
+   *
+   * A helper is an AUTO-acquired attacker, not an ordered one: it gets the leash it would get
+   * for a fight it picked itself (`setAutoGuardPost`; a map-placed guard keeps the post the map
+   * gave it), so the chase ends and it walks back. The allies of the victim are not called —
+   * nothing we have says they are — and a creep camp has its own shout (`alertCamp`).
+   */
+  private callForHelp(victim: SimUnit, attacker: SimUnit): void {
+    if (victim.owner < 0 || victim.neutralPassive) return;
+    for (const h of this.units.values()) {
+      if (h === victim || h.owner !== victim.owner || h.order !== "idle") continue;
+      if (h.building || h.isCreep || h.hp <= 0 || !h.weapon || h.returning || isOffField(h)) continue;
+      if (distSkip(victim, h, CALL_FOR_HELP)) continue;
+      if (this.acquireRange(h) <= 0 || this.pinned(h)) continue;
+      if (!this.hostile(h, attacker) || !this.canAttack(h, attacker) || this.fleesTower(h, attacker)) continue;
+      this.setAutoGuardPost(h);
+      this.issueAttack(h.id, attacker.id);
     }
   }
 
