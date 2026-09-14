@@ -203,6 +203,10 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // `setUnitAnimation` is NOT here: an animation is a model's, not the world's.
     setUnitInvulnerable: (id, flag) => sim.setInvulnerable(id, flag),
     setUnitPathing: (id, flag) => sim.setPathing(id, flag),
+    // `ShowUnit` / `IsUnitHidden` — a WORLD flag, not a model one: a hidden unit is off the field
+    // for every seat (untargetable, no collision, no minimap dot), and the renderer only follows.
+    hideUnit: (id, hidden) => sim.setHidden(id, hidden),
+    isUnitHidden: (id) => sim.units.get(id)?.hidden ?? false,
     // --- items (7.18): a trigger creates/gives/drops/uses an item ---
     // The sim already owns the item system (ground items, hero inventories, charges, powerups,
     // item abilities), so each of these is a one-line bridge into it. A trigger-created item is

@@ -136,6 +136,8 @@ export interface RenderUnit {
   readonly inBurrow: boolean;
   readonly devouredBy: number;
   readonly vanished: boolean;
+  /** `ShowUnit(u, false)` — see `SimUnit.hidden`. Off the field like the five above. */
+  readonly hidden: boolean;
 
   // --- how it is tinted ------------------------------------------------------
   /** Already viewpoint-resolved on the wire: item 5 masks it, so an enemy's snapshot says

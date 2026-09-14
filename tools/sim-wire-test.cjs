@@ -67,7 +67,7 @@ const base = () => ({
   order: "idle", moving: false, inCombat: false, working: false, ringSlot: 0,
   swingSeq: 0, chopSeq: 0, swingBroken: false, swingFollowThrough: false, swingSlam: false, altModel: false, altFormLeft: 0, hexForm: "",
   spawning: 0, constructing: 0, repair: null,
-  inMine: false, insideBuild: false, inBurrow: false, devouredBy: 0, vanished: false,
+  inMine: false, insideBuild: false, inBurrow: false, devouredBy: 0, vanished: false, hidden: false,
   invisible: false, ethereal: false,
   hp: 420, maxHp: 420, mana: 0, maxMana: 0, armor: 2.5, bonusArmor: 0, bonusDamage: 0,
   attackUpgrade: 0, armorUpgrade: 0,
@@ -90,7 +90,9 @@ const hero = () => ({
   speed: 320, radius: 24, flying: true, order: "attack", moving: true, inCombat: true,
   swingSeq: 17, chopSeq: 3, swingBroken: true, swingFollowThrough: true, swingSlam: true, altModel: true, altFormLeft: 32.5, hexForm: "nshf",
   spawning: 0.75, constructing: 0, repair: { active: true },
-  devouredBy: 88, vanished: true, invisible: true, ethereal: true,
+  // `hidden` rides the CHOP counter's top bit (the flags word is full) — set beside a non-zero
+  // counter, so a mask that ate either one shows up as a diff.
+  devouredBy: 88, vanished: true, hidden: true, invisible: true, ethereal: true,
   hp: 875, maxHp: 1050, mana: 240, maxMana: 405, armor: 6.25, bonusArmor: 1.25,
   bonusDamage: -7, invulnerable: true,
   weapon: weapon(), swingWeapon: weapon({ damage: 12, range: 600, cooldown: 2.25 }),

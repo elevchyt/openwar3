@@ -31,7 +31,7 @@ const noAlliances = { sharesVisionWith: () => false, coAllied: () => false };
 /** A unit with every flag hiddenFor() reads, defaulted to "plainly visible". */
 const unit = (o) => ({
   id: 0, owner: 0, team: 0, x: 0, y: 0, hp: 100, sight: 1400,
-  inMine: false, insideBuild: false, inBurrow: false, devouredBy: 0, vanished: false,
+  inMine: false, insideBuild: false, inBurrow: false, devouredBy: 0, vanished: false, hidden: false,
   neutralPassive: false, invisible: false, cloaked: false, isCreep: false, level: 0,
   guardX: 0, guardY: 0, flying: false, building: null, ...o,
 });
@@ -114,9 +114,9 @@ console.log("\nunits nobody can see are hidden for everyone, whatever the fog sa
   set.seat([{ player: 0, team: 0 }]);
   set.setStartFog("revealall");
   const vp = set.viewpointFor(0);
-  // These five are viewpoint-INDEPENDENT: a unit in a mine or a burrow is off the map for
+  // These are viewpoint-INDEPENDENT: a unit in a mine or a burrow (or hidden by a script) is off the map for
   // everybody, and conflating them with fog is what made Entry.hidden unusable for anyone else.
-  for (const flag of ["inMine", "insideBuild", "inBurrow", "vanished"]) {
+  for (const flag of ["inMine", "insideBuild", "inBurrow", "vanished", "hidden"]) {
     check(`${flag} hides it even under reveal-all`, hiddenFor(vp, unit({ [flag]: true })), true);
   }
   check("devoured hides it too", hiddenFor(vp, unit({ devouredBy: 7 })), true);

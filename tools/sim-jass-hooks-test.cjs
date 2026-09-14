@@ -54,6 +54,8 @@ const EXPECTED = [
   "unitDropItemSlot", "unitDropItemTarget", "unitInventorySize", "unitItemInSlot",
   "unitRemoveAbility", "unitRemoveItem", "unitRemoveItemFromSlot", "unitUseItem",
   "waygateActivate", "waygateDestination", "waygateIsActive", "waygateSetDestination",
+  // ShowUnit / IsUnitHidden — a WORLD flag (SimUnit.hidden): off the field for every seat.
+  "hideUnit", "isUnitHidden",
 ].sort();
 
 // Minimal unit-type rows for the roster checks. A Keep ('hkee') is deliberately NOT named
@@ -73,7 +75,7 @@ const teamOf = (p) => TEAMS[p] ?? p;
 const hooks = simHooks(world, teamOf);
 const got = Object.keys(hooks).sort();
 check("every expected native is present, and no extra", got, EXPECTED);
-check("all 66 of them are functions", got.filter((k) => typeof hooks[k] !== "function"), []);
+check(`all ${EXPECTED.length} of them are functions`, got.filter((k) => typeof hooks[k] !== "function"), []);
 check("setPlayerState is NOT here — it is the authority's", got.includes("setPlayerState"), false);
 
 // Not just present — actually wired to THIS world. A hook bound to the wrong object, or to a

@@ -97,6 +97,7 @@ export interface SnapshotDotUnit {
   inBurrow: boolean;
   devouredBy: number;
   vanished: boolean;
+  hidden: boolean;
 }
 
 /**

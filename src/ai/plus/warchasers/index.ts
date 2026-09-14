@@ -336,7 +336,8 @@ export class WarChasersAi {
   private sense(b: Brain, body: SimUnit): Sense {
     const s: Sense = { foes: [], friends: [] };
     for (const u of this.units()) {
-      if (dist(u, body) > LOOK) continue;
+      // A unit the map has HIDDEN (`ShowUnit`) is nobody's foe or friend — no blow or spell reaches it.
+      if (u.hidden || dist(u, body) > LOOK) continue;
       if (this.hostileTo(b.player, u)) {
         if (u.invulnerable || u.invisible || !this.host.visible(b.player, u.x, u.y)) continue;
         s.foes.push(u);

@@ -1518,6 +1518,31 @@ export interface SimUnit {
    *  Blademaster is whisked away while MirrorImageCaster plays and the missiles fly out, then
    *  set down on one of the destination tiles as if he had been a copy all along. */
   vanished: boolean;
+  /**
+   * HIDDEN by a script — `ShowUnit(u, false)` ("Unit - Hide"), until `ShowUnit(u, true)`.
+   *
+   * Not a buff and not an effect: a map's own switch, and nothing in the game data describes it,
+   * so its meaning is taken from the people who measured it (hiveworkshop 325292, 221667, 245444):
+   *
+   *  · it is OFF THE FIELD (`isOffField`) — no model, no health bar, no minimap dot, and it
+   *    cannot be selected, clicked or collided with ("Other units will also be able to target the
+   *    unhidden unit as well as collide with it", 221667);
+   *  · nothing may TARGET it — "Both unselectable and untargetable … You can't order unit to target
+   *    hidden or locust unit" (325292) — so no weapon reaches it (`weaponVs`), no spell may be
+   *    aimed at it (`targetError`) and no area effect finds it (`unitsInAreaInternal`);
+   *  · but it is NOT invulnerable and NOT gone: "Hidden units are vulnerable to code damage …
+   *    Both retain order … Both die and decay" (325292). A trigger can still hurt it, it keeps
+   *    the order it had, and `GroupEnumUnitsOfPlayer`/`InRect` still return it — the JASS group
+   *    natives read their own snapshot path and are untouched here.
+   *
+   * What the threads do NOT settle is whether a hidden unit picks FIGHTS of its own; 325292 says
+   * it "can move, attack, cast", 221667 that "the hidden one will not" fight. Ours: it keeps any
+   * order it is given, but auto-acquires nothing (`acquireRange`) — a model nobody can see or hit
+   * swinging at whatever walks past it is the one reading that could only ever look like a bug.
+   * WarChasers is the case: every hero is hidden where it stood while its player drives a steam
+   * tank (`Player_N_Enters_Tank`), and the monsters around the tank entrance kept killing it.
+   */
+  hidden: boolean;
   /** How many times this unit has been TELEPORTED (`teleportUnit` — Blink, Mass Teleport, a
    *  Way Gate, the staves, a script's `SetUnitPosition`). A counter and not a flag because
    *  the only thing that ever asks is an in-flight missile comparing the count it recorded at
@@ -2047,7 +2072,8 @@ export interface SimUnit {
  * Is this unit OFF THE FIELD — carried inside something, swallowed, or whisked away?
  *
  * Inside a gold mine, inside the structure it is building (the Orc peon), garrisoned in a
- * Burrow, digesting inside a Kodo, or `vanished` for the beat of Mirror Image's shuffle. The
+ * Burrow, digesting inside a Kodo, `vanished` for the beat of Mirror Image's shuffle, or
+ * `hidden` by the map's script (`ShowUnit`). The
  * common fact is that the unit has no position anybody can see: it is not merely fogged, it is
  * not on the map. Nothing draws it, nothing can target it, and — measured against the real
  * client — **it gets no minimap dot, not even its owner's**.
@@ -2059,7 +2085,7 @@ export interface SimUnit {
  * now `dotsFromSnapshot` (item 10c — the client's minimap reading the same off-field rule off a
  * `UnitSnapshot`). Copies of a five-term disjunction are chances to add a sixth term to some.
  *
- * The parameter is a STRUCTURAL type, not `SimUnit`: a `UnitSnapshot` carries the same five
+ * The parameter is a STRUCTURAL type, not `SimUnit`: a `UnitSnapshot` carries the same six
  * flags and must give the same answer, so the client's snapshot minimap and the host's sim
  * minimap cannot drift on what counts as off the field.
  *
@@ -2073,8 +2099,9 @@ export function isOffField(u: {
   inBurrow: boolean;
   devouredBy: number;
   vanished: boolean;
+  hidden: boolean;
 }): boolean {
-  return u.inMine || u.insideBuild || u.inBurrow || u.devouredBy > 0 || u.vanished;
+  return u.inMine || u.insideBuild || u.inBurrow || u.devouredBy > 0 || u.vanished || u.hidden;
 }
 
 /** The [Errors] key for "refused, but the game has no line for this" — an empty key finds no
@@ -7663,6 +7690,7 @@ export class SimWorld {
       | "exhumeLeft"
       | "unsummonArt"
       | "vanished"
+      | "hidden"
       | "teleports"
       | "isIllusion"
       | "illusionOf"
@@ -7929,6 +7957,7 @@ export class SimWorld {
       exhumeLeft: 0,
       unsummonArt: "",
       vanished: false,
+      hidden: false,
       teleports: 0,
       isIllusion: false,
       illusionOf: 0,
@@ -10705,6 +10734,10 @@ export class SimWorld {
     // scan and hold-position go through canAttack, an ordered attack through issueAttack, and
     // the cursor turns red off the same answer. See raising().
     if (this.raising(u)) return null;
+    // Nothing strikes a HIDDEN unit (`SimUnit.hidden`): asked here, the one question every
+    // attacking path asks, so the idle scan never picks one, an ordered attack is refused, and an
+    // attacker whose target is hidden mid-fight rolls onto the next enemy (tickAttack).
+    if (t.hidden) return null;
     for (const w of u.weapons) {
       if (!w.enabled) continue;
       // No Targets Allowed data at all (a summon or custom unit with no weapons row) → treat
@@ -12198,6 +12231,9 @@ export class SimWorld {
     // Paladin aimed at himself hears "Unable to target self." (the flag), not "Hero has
     // full health." (a fact about a target he can't pick in the first place).
     if (target.hp <= 0) return "Notcorpse"; // "Target must be living."
+    // A HIDDEN unit is no target at all, friend or foe — "You can't order unit to target hidden
+    // or locust unit" (SimUnit.hidden). Nobody can click one, so the game has no line for it.
+    if (target.hidden && target.id !== caster.id) return SILENT_REFUSAL;
     if (target.invulnerable && this.hostile(caster, target)) return "Notinvulnerable";
     // Magic Immunity — "That unit is immune to magic." It refuses the ENEMY's spells and
     // only those: you cannot Polymorph, Sleep or Storm Bolt a Spell Breaker, but your own
@@ -14132,6 +14168,29 @@ export class SimWorld {
   }
 
   /**
+   * `ShowUnit(u, show)` — take a unit off the field for a script, or put it back (`SimUnit.hidden`
+   * says what that means and where each rule comes from).
+   *
+   * Hiding hands back the ground it held — the cells it reserved standing and the block it had
+   * claimed walking — because a hidden unit is in nobody's way (`claimsCells` asks `isOffField`,
+   * so it takes none back while it stays hidden). Its ORDER is left alone: "Both retain order"
+   * (hiveworkshop 325292). Shown again, a unit standing still takes its ground back at once, the
+   * way a passenger stepping off a transport does; one with somewhere to walk claims it with its
+   * next step.
+   */
+  setHidden(unitId: number, hidden: boolean): void {
+    const u = this.units.get(unitId);
+    if (!u || u.hidden === hidden) return;
+    u.hidden = hidden;
+    if (hidden) {
+      this.unsettle(u);
+      this.releaseClaim(u);
+    } else if (u.order === "idle" && u.hp > 0) {
+      this.settle(u);
+    }
+  }
+
+  /**
    * Toggle an ability's autocast (Heal/Slow/…). Returns the new state.
    *
    * **ONE autocast per unit.** Switching one on switches every other one off, because that is
@@ -14882,7 +14941,9 @@ export class SimWorld {
   private unitsInAreaInternal(x: number, y: number, radius: number): SimUnit[] {
     const out: SimUnit[] = [];
     for (const t of this.units.values()) {
-      if (t.hp <= 0) continue;
+      // A HIDDEN unit is in no area: no spell, item circle or aura around it finds it
+      // (SimUnit.hidden). The one enumeration every area handler walks, so it is said once.
+      if (t.hp <= 0 || t.hidden) continue;
       // Too far along either axis is too far: `hypot` is never below either leg, so this drops
       // exactly the units the test below would, without paying for it. Every Moon Well asks
       // this twice a step of the whole map (tickReplenish), and nearly all of the map is out.
@@ -15854,6 +15915,7 @@ export class SimWorld {
     // that strike is what reveals you. Gated on `cloaked`, not `invisible`, so the 0.6s
     // Transition Time isn't a window in which he auto-attacks his own wind-up away.
     if (u.cloaked) return 0;
+    if (u.hidden) return 0; // a hidden unit picks no fights of its own — see SimUnit.hidden
     if (u.hexed) return 0; // a critter has no attack to pick a fight with (see tickAttack)
     if (u.isPeon || this.harvesting(u)) return 0;
     if (u.isCreep) return u.aggroRange;

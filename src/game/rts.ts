@@ -282,6 +282,7 @@ interface Entry {
   insideBuild: boolean; // Orc peon inside the structure it is building (also deselects)
   inBurrow: boolean; // peon garrisoned inside an Orc Burrow (also deselects)
   devoured: boolean; // unit swallowed by a Kodo (also deselects)
+  scriptHidden: boolean; // hidden by the map's script, ShowUnit (also deselects)
   /** This building DIED while this client could not see it, so the authority is still sending
    *  us its last-seen image (item 6d). The model stays standing and the entry stays alive —
    *  it is now drawn from the ghost record, not from a unit. Only ever set on a client. */
@@ -1851,6 +1852,15 @@ export class RtsController {
         if (this.hovered === e.simId) this.hovered = null;
       }
     }
+    if (u.hidden !== e.scriptHidden) {
+      e.scriptHidden = u.hidden;
+      if (u.hidden) {
+        // `ShowUnit(u, false)`: "unselectable and untargetable" (hiveworkshop 325292) — out of the
+        // selection it was in, like a peon into a burrow. Shown again, it is not re-selected.
+        this.deselect(e.simId);
+        if (this.hovered === e.simId) this.hovered = null;
+      }
+    }
     if (hide !== e.hidden) {
       // The flag is tracked for EVERY entry — the health bar, the hover slab and the
       // selection all read it — but a borrowed body's instance is not ours to toggle, and
@@ -3360,6 +3370,7 @@ export class RtsController {
         insideBuild: false,
         inBurrow: false,
         devoured: false,
+        scriptHidden: false,
       ghosted: false,
       frozen: false,
         curSeq: -1,
@@ -3500,6 +3511,7 @@ export class RtsController {
       insideBuild: false,
       inBurrow: false,
       devoured: false,
+      scriptHidden: false,
       ghosted: false,
       frozen: false,
       curSeq: -1,
@@ -3830,6 +3842,7 @@ export class RtsController {
       insideBuild: false,
       inBurrow: false,
       devoured: false,
+      scriptHidden: false,
       ghosted: false,
       frozen: false,
       curSeq: -1,

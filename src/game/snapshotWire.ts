@@ -321,7 +321,9 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   // full. The counter only ever has to CHANGE when a swing starts (the renderer compares, it
   // never subtracts), so fifteen bits of it lose nothing.
   w.u16((s.swingSeq & 0x7fff) | (s.swingFollowThrough ? 0x8000 : 0));
-  w.u16(s.chopSeq & 0xffff);
+  // …and the CHOP counter's top bit carries `hidden` (`ShowUnit`), for the same reason and on the
+  // same terms: the counter is only ever compared for a change, never subtracted.
+  w.u16((s.chopSeq & 0x7fff) | (s.hidden ? 0x8000 : 0));
   w.f32(s.spawning);
   w.f32(s.constructing);
   if (flags & F_DEVOURED) w.u32(s.devouredBy);
@@ -493,6 +495,7 @@ function readUnit(r: Reader): UnitSnapshot {
     inBurrow: (flags & F_IN_BURROW) !== 0,
     devouredBy: 0,
     vanished: (flags & F_VANISHED) !== 0,
+    hidden: false, // …read below, off the chop counter's top bit
     invisible: (flags & F_INVISIBLE) !== 0,
     ethereal: (flags & F_ETHEREAL) !== 0,
     hp: 0,
@@ -549,7 +552,9 @@ function readUnit(r: Reader): UnitSnapshot {
   const swing = r.u16();
   s.swingSeq = swing & 0x7fff;
   s.swingFollowThrough = (swing & 0x8000) !== 0;
-  s.chopSeq = r.u16();
+  const chop = r.u16();
+  s.chopSeq = chop & 0x7fff;
+  s.hidden = (chop & 0x8000) !== 0;
   s.spawning = r.f32();
   s.constructing = r.f32();
   if (flags & F_DEVOURED) s.devouredBy = r.u32();

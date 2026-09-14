@@ -347,7 +347,10 @@ export function registerWorldNatives(rt: Runtime): void {
   });
   def(rt, "GetUnitUserData", (c, a) => jInt(unit(c, a[0])?.userData ?? 0));
 
-  def(rt, "IsUnitHidden", () => jBool(false));
+  def(rt, "IsUnitHidden", (c, a) => {
+    const u = unit(c, a[0]);
+    return jBool(!!u && u.simId >= 0 && (c.rt.hooks?.isUnitHidden?.(u.simId) ?? false));
+  });
   // IsUnitType(u, UNIT_TYPE_*) — the classification half of every "matching unit"
   // filter ("is A structure", "is alive", "is A Hero"). The unittype is a
   // ConvertUnitType index (0 HERO, 1 DEAD, 2 STRUCTURE, …); the bridge answers it from

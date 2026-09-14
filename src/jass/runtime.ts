@@ -568,7 +568,8 @@ export interface EngineHooks {
   setPlayerNeutral?(player: number, neutral: boolean): void;
   removeUnit?(unitId: number): void; // RemoveUnit — no death/corpse
   killUnit?(unitId: number): void; // KillUnit — death animation + corpse
-  hideUnit?(unitId: number, hidden: boolean): void;
+  hideUnit?(unitId: number, hidden: boolean): void; // ShowUnit(u, show) — hidden = !show
+  isUnitHidden?(unitId: number): boolean; // IsUnitHidden
   // --- unit-mutation effects (7.7 cont. — a trigger visibly moves/alters a unit) ---
   setUnitPosition?(unitId: number, x: number, y: number): void; // SetUnitPosition/X/Y/Loc (teleport)
   setUnitFacing?(unitId: number, facingRad: number, instant: boolean): void; // SetUnitFacing[Timed]

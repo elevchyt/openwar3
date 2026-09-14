@@ -115,6 +115,7 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   u.inBurrow = s.inBurrow;
   u.devouredBy = s.devouredBy;
   u.vanished = s.vanished;
+  u.hidden = s.hidden;
   u.invisible = s.invisible;
   u.ethereal = s.ethereal;
 

@@ -306,6 +306,7 @@ export interface UnitSnapshot {
   inBurrow: boolean;
   devouredBy: number;
   vanished: boolean;
+  hidden: boolean;
   invisible: boolean;
   ethereal: boolean;
 
@@ -651,6 +652,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     inBurrow: false,
     devouredBy: 0,
     vanished: false,
+    hidden: false,
     invisible: false,
     ethereal: false,
 
@@ -785,6 +787,7 @@ export function snapshotFor(
       inBurrow: u.inBurrow,
       devouredBy: u.devouredBy,
       vanished: u.vanished,
+      hidden: u.hidden,
       invisible: u.invisible,
       ethereal: u.ethereal,
 

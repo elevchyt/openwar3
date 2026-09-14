@@ -107,13 +107,13 @@ A wait the leader then walks far away from is not held for ever (`WAIT_ABANDON`)
 | first swing into a fight | 1.2 s | 0.5 s | 0.1 s |
 | spells | `PLUS_EASY` | `PLUS_NORMAL` | `PLUS_INSANE` |
 
-## Known engine gaps it lives with
+## Engine facts it leans on
 
-- `ShowUnit` has no hook, so a hero whose owner is driving a tank stays on the field. The AI treats
-  the tank as the body either way.
-- This RoC map keeps its item price changes (`ankh` 3000 gold, …) in `war3map.w3u`, which the engine
-  does not route to the item registry, so the shop charges stock prices. The AI prices from the
-  registry, so it agrees with the shop.
+- `ShowUnit` is a WORLD flag (`SimUnit.hidden`): a hero whose owner drives a steam tank is off the field
+  — not drawn, not selectable, untargetable, colliding with nothing — until `Player_N_Leaves_Tank` shows
+  it again. `sense` skips hidden units; the tank is the body either way.
+- The map's item prices (`ankh` 3000, the Deluxe `IC17` 5000) live in its `war3map.w3u`, and are read
+  from there (`applyMapItemData`). The AI prices from the registry, so it agrees with the shop.
 
 `tools/ai-plus-warchasers-test.cjs` pins the parser (orders, typos, non-orders, names), the item values
 and the picker geometry.
