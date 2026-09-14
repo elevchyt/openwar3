@@ -142,17 +142,16 @@ reason the version gate is asked there.
 Options → Gameplay → **"Show hotkeys on command buttons"** (ON by default) prints the key that
 presses each command button in the button's top-left corner. It is not a 2003 row — the game
 names a key only inside the tooltip — so the checkbox is ours (`ShowHotkeysCheckBox` in
-`src/overrides/ui/OptionsMenu.fdf`) and so is its string. The box is the same
-`countBadge` element a quantity uses (item charges, a shop's stock, unspent skill points), but
-`.plain`: it leaves off the `CommandButtonNumberOverlay` gold frame, so a key is never mistaken
-for a count.
+`src/overrides/ui/OptionsMenu.fdf`) and so is its string. The box is NOT new art: it is the same
+`countBadge` / `CommandButtonNumberOverlay` box the game stamps a quantity into (item charges, a
+shop's stock, unspent skill points), so the key and a count read as one family.
 
 * **What it prints follows the scheme.** Legacy and Custom print the button's own `hotkey`; Grid
   prints the slot's letter (`gridCommandKey`). A named key is shortened to its keycap —
   `[CmdCancel] Hotkey=27` is VK_ESCAPE and prints "Esc", in a smaller face (`.long`).
 * **A passive or a greyed-out button prints nothing**, because neither takes a press and the key
   handler skips both. A button you merely cannot afford answers its key, so it keeps it.
-* **The key is always top-left**, on a plain dark tile with no gold frame, a bit over a quarter of the button (a count's box is half), so it
+* **The key is always top-left**, in a box about a third of the button (a count's is half), so it
   never collides with a count. A count (a shop's stock) keeps the bottom-right; the learn-skill
   button's unspent points always sit bottom-LEFT (`countAtLeft` → `.at-left`). That button is
   on every hero's card whether or not there is a point to spend; with none it wears no count.

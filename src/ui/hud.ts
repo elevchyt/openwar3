@@ -3271,10 +3271,10 @@ export class GameHud {
       // button's unspent points. A persistent child so a card rebuild never wipes it, like
       // the label/cooldown nodes.
       const count = countBadge();
-      // …and the button's KEY, in the same box but frameless (Options → Gameplay → "Show hotkeys
-      // on action buttons"). A second box rather than the count's, because a shop's button has both.
+      // …and the button's KEY, in the same box (Options → Gameplay → "Show hotkeys on action
+      // buttons"). A second box rather than the count's, because a shop's button has both.
       const hotkey = countBadge();
-      hotkey.classList.add("hud-hotkey-badge", "plain");
+      hotkey.classList.add("hud-hotkey-badge");
       // …and the "standing on" sparkle, likewise persistent. Last child so it draws over the
       // icon and the cooldown sweep, exactly as the model does over the button in the game.
       const fx = this.modalFx.makeOverlay();
