@@ -1,4 +1,4 @@
-// Generates the nine-slice frame art in public/ui/ — node scripts/frames.mjs
+// Generates the nine-slice frame art in src/frames/ — node scripts/frames.mjs (pnpm frames)
 //
 // OpenWar3 ships zero Blizzard assets, and this site is no exception: nothing here is a copy of
 // a game texture. Each frame is drawn from scratch as concentric rings whose COLOURS were
@@ -8,10 +8,12 @@
 //   glue-button-bordered.svg  ...-Button1-BorderedBackdropBorder.blp (the grey outer rim)
 //   esc-panel.svg     UI\Widgets\EscMenu\Human\human-options-menu-border.blp  (64×64 cells, drawn at 192 so the tiled edge carries its grain)
 //   marble.svg        ...\Human\human-options-menu-background.blp — mean (0,9,26)
+//   progress-frame.svg  UI\Glues\Loading\LoadBar\Loading-BarBorder.blp (512×64; the iron rail
+//                     and its two end caps — the fill, glass and glow are CSS, see src/ui.css)
 // CSS draws them with `border-image-slice: <SLICE> fill`.
 import { writeFileSync } from "node:fs";
 
-const out = new URL("../public/ui/", import.meta.url);
+const out = new URL("../src/frames/", import.meta.url);
 
 /** A 45°-chamfered rectangle inset `d` from a `size` square, chamfer leg `c`. */
 function chamfer(size, d, c) {
@@ -87,4 +89,41 @@ glue([["#000", 0.55], ["#000"], ["#01020e"], ["#030520"], ["#04072a"], ["#050834
 <rect width="256" height="256" fill="#000814"/><rect width="256" height="256" filter="url(#c)" opacity="0.34"/><rect width="256" height="256" filter="url(#v)" opacity="0.7"/></svg>`;
   writeFileSync(new URL("marble.svg", out), svg);
 }
+// The loading bar's frame (Loading-BarBorder.blp), 128×40, sliced 13 / 30 / 12 / 30. The rail is
+// the texture's own column profile at x = 256, one texel per row, outside in — so the middle
+// slice stretches along x without losing anything. Each cap is two iron posts either side of a
+// groove, with a spike pointing out of the bar (the texture's row at y = 24: shadow ramp, a
+// six-texel post, a three-texel groove at alpha ~0.65, an eight-texel post, then the hole).
+{
+  const W = 128, H = 40;
+  const top = [["#000", 0.05], ["#000", 0.16], ["#000", 0.3], ["#090909", 0.72], ["#6a625b"], ["#343027"], ["#080501"], ["#525451"],
+    ["#6c6b6a"], ["#242322"], ["#211e20", 0.97], ["#080605", 0.88], ["#050505", 0.72]];
+  const bottom = [["#020204", 0.69], ["#000", 0.83], ["#393939", 0.93], ["#4c4a49"], ["#242322"], ["#2a1d1a"], ["#1c1b1a"], ["#2c2b2a"],
+    ["#392c2a"], ["#090806", 0.72], ["#000", 0.3], ["#000", 0.16]];
+  const rect = (x, y, w, h, [fill, op]) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}"${op ? ` fill-opacity="${op}"` : ""}/>`;
+  const rail = [
+    ...top.map((c, y) => rect(0, y, W, 1, c)),
+    ...bottom.map((c, i) => rect(0, H - bottom.length + i, W, 1, c)),
+  ].join("");
+  const cap = [
+    // the spike: a dark iron point with a lit upper edge, like the cap's flourish
+    `<polygon points="1,20 8,13 14,9 14,31 8,27" fill="#1c1b1a"/>`,
+    `<polyline points="1.5,20 8,13.5 14,9.5" fill="none" stroke="#6e6f70" stroke-width="1"/>`,
+    `<polyline points="1.5,20 8,26.5 14,30.5" fill="none" stroke="#000" stroke-opacity="0.8" stroke-width="1"/>`,
+    // outer post, a little taller than the rail
+    ...["#0c0a0a", "#2f302d", "#4e4d4c", "#393939", "#151412", "#242322"].map((c, i) => rect(13 + i, 1, 1, H - 2, [c])),
+    // the groove
+    rect(19, 3, 3, H - 6, ["#000", 0.65]),
+    // inner post
+    ...["#393533", "#454545", "#373738", "#090909", "#211e20", "#11100e", "#6e6f70", "#1c1b1a"].map((c, i) => rect(22 + i, 3, 1, H - 6, [c])),
+    // rivets: one light fleck on each post
+    rect(15, 19, 2, 2, ["#8c908f"]), rect(25, 19, 2, 2, ["#6a625b"]),
+  ].join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" shape-rendering="crispEdges">` +
+    // the rail runs under the posts but stops where the spikes begin
+    `<defs><mask id="m"><rect x="13" y="0" width="${W - 26}" height="${H}" fill="#fff"/></mask></defs>` +
+    `<g mask="url(#m)">${rail}</g>${cap}<g transform="translate(${W} 0) scale(-1 1)">${cap}</g></svg>`;
+  writeFileSync(new URL("progress-frame.svg", out), svg);
+}
+
 console.log("frames written");

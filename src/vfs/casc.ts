@@ -1,5 +1,5 @@
 import { decodeBlte } from "./blte";
-import { type DataSource, normalizeMpqPath } from "./types";
+import { type DataSource, type LoadProgress, normalizeMpqPath } from "./types";
 
 /**
  * CASC — the storage a Warcraft III 1.30+ install uses in place of MPQ archives (issue #102).
@@ -303,7 +303,7 @@ export class CascDataSource implements DataSource {
 
   static async open(
     files: CascFiles,
-    onProgress?: (message: string) => void,
+    onProgress?: LoadProgress,
   ): Promise<CascDataSource> {
     const info = parseBuildInfo(files.buildInfo);
     const buildKey = info.get("Build Key");
@@ -385,7 +385,7 @@ export class CascDataSource implements DataSource {
    * less than the ~1 GB the four MPQs already cost us; the 1.3 GB of audio and video is what
    * we leave on disk, because every one of those goes through the async path.
    */
-  private async preload(onProgress?: (message: string) => void): Promise<void> {
+  private async preload(onProgress?: LoadProgress): Promise<void> {
     // Unique by location: the eleven locales share most of their content, and even inside one
     // locale `Units\MiscData.txt` and `Melee_V0\Units\MiscData.txt` are one stored file.
     const wanted = new Map<string, Location>();
@@ -432,7 +432,7 @@ export class CascDataSource implements DataSource {
         }
         done += j - i;
         i = j;
-        onProgress?.(`Loading game data… ${Math.round((done / wanted.size) * 100)}%`);
+        onProgress?.(`Loading game data… ${Math.round((done / wanted.size) * 100)}%`, done / wanted.size);
       }
     }
 

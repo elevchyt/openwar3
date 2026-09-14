@@ -1,10 +1,8 @@
 import Image from "next/image";
+import { GlueButton, Hotkeys, Panel } from "@openwar3/ui/react";
 import { Downloads } from "@/components/Downloads";
 import { FeatureCard, type Media } from "@/components/FeatureCard";
-import { GlueButton } from "@/components/GlueButton";
-import { Hotkeys } from "@/components/Hotkeys";
 import { GitHubIcon, KofiIcon, StarIcon } from "@/components/Icons";
-import { Panel } from "@/components/Panel";
 import { REPO_URL, latestRelease, stargazers } from "@/lib/github";
 
 const KOFI_URL = "https://ko-fi.com/lefterisdev";
@@ -15,7 +13,7 @@ export const revalidate = 300;
 
 const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
   {
-    title: "Your Frozen Throne, rebuilt",
+    title: "A faithful recreation",
     body: "Every unit, ability, cost and timing is read straight out of your own Warcraft III: The Frozen Throne 1.30.4 install. OpenWar3 is original code and ships zero Blizzard assets.",
     media: { kind: "image", src: "/media/game1.jpg", alt: "An orc base in OpenWar3, training from the Altar of Storms" },
   },
@@ -117,7 +115,7 @@ export default async function Home() {
         </section>
 
         <section id="features" className="section">
-          <h2 className="section__title">Features</h2>
+          <h2 className="ow3-heading">Features</h2>
           <p className="section__lede">Everything below runs in the current release. Footage is on its way.</p>
           <div className="features">
             {FEATURES.map((f) => (
@@ -129,7 +127,7 @@ export default async function Home() {
         </section>
 
         <section id="roadmap" className="section">
-          <h2 className="section__title">Roadmap</h2>
+          <h2 className="ow3-heading">Roadmap</h2>
           <p className="section__lede">Where the engine goes past what the original ever did.</p>
           <Panel className="quests">
             <h3 className="quests__heading">Main Quests</h3>
@@ -151,7 +149,7 @@ export default async function Home() {
           <Panel className="cta">
             <h2 className="cta__title">Rally to the cause</h2>
             <p className="cta__lede">
-              OpenWar3 is built in the open by people who still love this game. A <span className="gold">star on GitHub</span> is
+              OpenWar3 is built in the open by people who still love this game. A <span className="ow3-gold">star on GitHub</span> is
               the single easiest way to help — it tells other players the project exists and keeps us going.
             </p>
             <div className="cta__buttons">

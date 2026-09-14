@@ -1,7 +1,7 @@
 # OpenWar3 — landing page
 
 The site at the project's public URL: a Next.js (App Router) app, deployed to Vercel by hand with
-**Root Directory = `web`**. It shares nothing with the engine in `../src` and has its own lockfile.
+**Root Directory = `web`**. It has its own lockfile and shares one thing with the engine: the UI kit in `../packages/ui`.
 
 ```bash
 pnpm install
@@ -29,16 +29,13 @@ The page is dressed as the Frozen Throne glue screens: navy glue buttons with th
 the Human options-menu panel (stone frame, gold rule, blue marble), the gold-stroke tooltip slab,
 gold captions with a white hotkey letter (the letters work — press **L**, **S** or **C**).
 
-OpenWar3 ships **zero Blizzard assets**, and that includes this site. Every frame in `public/ui/`
-is drawn from scratch by `scripts/frames.mjs` (`pnpm frames` regenerates them); only the
-*colours* were sampled from the 1.30.4 install's own BLPs, and the header of that script names
-each texture it matches. Text colours are the ones the FrameDef files state — see the comment at
-the top of `app/globals.css`.
-
-The typeface is **Nowar Sans** (nowar-fonts/Nowar-Sans-War3, SIL OFL 1.1), the engine's own
-fallback face. `app/fonts/OpenWar3Sans.woff2` is a 22 KB Latin subset of the 9.7 MB original;
-because the OFL does not let a modified copy carry the Reserved Font Name, the subset is renamed
-**OpenWar3 Sans**. Its licence sits beside it.
+None of that lives here. It is the shared UI kit in [`../packages/ui`](../packages/ui) — the
+same one the game's first screen is built from — imported as `@openwar3/ui` (the stylesheet in
+`app/layout.tsx`, the React components from `@openwar3/ui/react`). This folder only lays the page
+out. The kit is a `file:` dependency, hard-linked into `node_modules`: **after adding or renaming
+a file in the kit, run `pnpm install` here.** Its README covers how the frames are drawn with zero
+Blizzard assets, and the typeface (**OpenWar3 Sans**, an OFL subset of Nowar Sans) that
+`app/layout.tsx` loads out of it.
 
 ## Adding feature footage
 

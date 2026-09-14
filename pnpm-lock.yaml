@@ -20,6 +20,9 @@ importers:
         specifier: ^8.21.1
         version: 8.21.1
     devDependencies:
+      '@openwar3/ui':
+        specifier: link:packages/ui
+        version: link:packages/ui
       electron:
         specifier: ^44.3.0
         version: 44.3.0

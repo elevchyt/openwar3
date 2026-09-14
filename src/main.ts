@@ -1,4 +1,7 @@
 import "./render/frameCap"; // first: the desktop app's 300 fps cap patches requestAnimationFrame
+// The shared UI kit (packages/ui) first, so the game's own sheet can lay its pieces out.
+import "@openwar3/ui/fonts.css";
+import "@openwar3/ui/ui.css";
 import "./style.css";
 // First, so its capture listener is the page's first: Alt+Enter must reach nothing else.
 import "./ui/fullscreen";

@@ -11,7 +11,7 @@ export type Media =
 // switch a card's `media` from "placeholder" to { kind: "video", src: "/media/<file>.mp4" }.
 export function FeatureCard({ title, children, media }: { title: string; children: ReactNode; media: Media }) {
   return (
-    <article className="panel feature">
+    <article className="ow3-panel feature">
       <div className="feature__media">
         {media.kind === "video" && (
           <video src={media.src} poster={media.poster} autoPlay muted loop playsInline preload="metadata" />

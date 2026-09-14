@@ -1,4 +1,4 @@
-import { GlueButton } from "./GlueButton";
+import { GlueButton } from "@openwar3/ui/react";
 import { AppleIcon, LinuxIcon, WindowsIcon } from "./Icons";
 import { PLATFORMS, RELEASES_URL, formatBytes, type LatestRelease, type Platform } from "@/lib/github";
 
@@ -32,7 +32,7 @@ export function Downloads({ release }: { release: LatestRelease | null }) {
                   title: `${p.label} — Coming soon`,
                   body: (
                     <>
-                      A {p.label} build is on the way. <span className="gold">Star the repository</span> to hear when it lands.
+                      A {p.label} build is on the way. <span className="ow3-gold">Star the repository</span> to hear when it lands.
                     </>
                   ),
                 }}
@@ -55,7 +55,7 @@ export function Downloads({ release }: { release: LatestRelease | null }) {
                   <>
                     <span className="mono">{asset.name}</span>
                     <br />
-                    Needs <span className="gold">Warcraft III: The Frozen Throne 1.30.4</span>.
+                    Needs <span className="ow3-gold">Warcraft III: The Frozen Throne 1.30.4</span>.
                   </>
                 ) : (
                   <>The newest release&apos;s {p.format}.</>

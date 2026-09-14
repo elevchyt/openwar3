@@ -135,6 +135,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
   in `src/render/mapViewer.ts`, HUD DOM in `src/ui/hud.ts`, data tables in `src/data/` (units, techtree, `abilities.ts`),
   audio in `src/audio/`, styles in `src/style.css`.
+- **UI kit:** [`packages/ui`](packages/ui/README.md) (`@openwar3/ui`) is the glue-screen look drawn from scratch
+  (glue button, Human panel, tooltip, heading, loading bar) that BOTH the landing page (`web/`, React binding) and the
+  game's load gate (`src/ui/gate.ts`, DOM binding) are built from, because that screen runs before any FrameDef can be
+  read. Classes are `ow3-*` and it sets no `cursor`. `web/` takes it as a hard-linked `file:` dependency: after ADDING
+  a file to the kit, run `pnpm install` in `web/`.
 - **4:3 screens:** read [`src/ui/widescreen.ts`](src/ui/widescreen.ts) before tuning any glue
   chrome, button width or `nudgeX` by eye. Every glue FDF and its 3D chrome is AUTHORED at 4:3,
   and the corrections that fill a wider screen (`panelStretchX`/`leftStretchX`/`logoStretchX`,

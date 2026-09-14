@@ -1,23 +1,16 @@
-/* OpenWar3 landing page — the Frozen Throne glue screens, redrawn.
- *
- * Nothing here is a game texture. The frames in public/ui/ are drawn by scripts/frames.mjs
- * with colours sampled off the 1.30.4 install's own BLPs, and every text colour below is the
- * one the FrameDef files state:
- *   --gold      StandardButtonTextTemplate FontColor          0.99 0.827 0.0705  (Glue/StandardTemplates.fdf)
- *   hover       StandardButtonTextTemplate FontHighlightColor 1.0 1.0 1.0
- *   --disabled  StandardButtonTextTemplate FontDisabledColor  0.5 0.5 0.5
- *   hotkey      GlobalStrings.fdf "|CffffffffS|Ringle Player" — the letter is white
- *   --tip-gold  the |cffffcc00 every tooltip string highlights with
- */
+/* OpenWar3 landing page — the page's own layout. The glue buttons, panels, tooltips and headings
+ * are the shared kit, @openwar3/ui (packages/ui), imported ahead of this file in app/layout.tsx;
+ * everything here is only how this page arranges them. */
 
 :root {
-  --gold: rgb(252 211 18);
-  --tip-gold: #ffcc00;
-  --disabled: rgb(128 128 128);
-  --text: #f2f2f2;
-  --text-dim: #b8bcc8;
+  --gold: var(--ow3-gold);
+  --tip-gold: var(--ow3-tip-gold);
+  --text: var(--ow3-text);
+  --text-dim: var(--ow3-text-dim);
   --ground: #02040b;
   --font: var(--font-game), "Trebuchet MS", system-ui, sans-serif;
+  /* the kit draws its captions in the same face next/font loaded */
+  --ow3-font: var(--font);
   color-scheme: dark;
 }
 
@@ -53,9 +46,6 @@ a:hover {
   color: #fff;
 }
 
-.gold {
-  color: var(--tip-gold);
-}
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9em;
@@ -173,204 +163,9 @@ a:hover {
   color: #fff;
 }
 
-/* ─── Glue button (GlueScreen-Button1-BackdropBorder) ──────────────────── */
-
-.glue-btn-wrap {
-  position: relative;
-  display: inline-flex;
-}
-
-.glue-btn {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 52px;
-  padding: 0 10px;
-  border-style: solid;
-  border-width: 18px;
-  border-image: url("/ui/glue-button.svg") 22 fill / 18px stretch;
-  background: none;
-  color: var(--gold);
-  font: inherit;
+/* The kit leaves the cursor to its host (the game shows only its own); a web page points. */
+.ow3-glue-btn:not(.is-disabled) {
   cursor: pointer;
-  text-shadow: 1.5px 1.5px 0 rgb(0 0 0 / 0.9);
-  user-select: none;
-  -webkit-tap-highlight-color: transparent;
-}
-.glue-btn--bordered {
-  border-width: 19px;
-  border-image: url("/ui/glue-button-bordered.svg") 24 fill / 19px stretch;
-}
-.glue-btn--lg {
-  min-width: 232px;
-  min-height: 80px;
-}
-
-/* The border is drawn in the border box, so the content is pulled back out over it. */
-.glue-btn__text {
-  position: relative;
-  z-index: 1;
-  margin: -14px -6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  transition: transform 40ms;
-}
-.glue-btn__caption {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  line-height: 1.2;
-}
-.glue-btn__label {
-  font-size: 1.05rem;
-  white-space: nowrap;
-}
-.glue-btn--lg .glue-btn__label {
-  font-size: 1.3rem;
-}
-.glue-btn__sub {
-  font-size: 0.78rem;
-  color: #aab3d6;
-  white-space: nowrap;
-}
-.glue-btn__icon {
-  display: inline-flex;
-  font-size: 1.25rem;
-  filter: drop-shadow(1.5px 1.5px 0 rgb(0 0 0 / 0.9));
-}
-.glue-btn--lg .glue-btn__icon {
-  font-size: 1.8rem;
-}
-.hk {
-  color: #fff;
-}
-
-/* bnet-button01-highlight-mouse.blp: a soft blue bloom, added over the button */
-.glue-btn__glow {
-  position: absolute;
-  inset: -10px -4px;
-  background: radial-gradient(ellipse 60% 55% at 50% 50%, rgb(70 110 200 / 0.75), rgb(40 70 150 / 0.25) 55%, transparent 75%);
-  mix-blend-mode: screen;
-  opacity: 0;
-  transition: opacity 90ms;
-  pointer-events: none;
-}
-
-.glue-btn:not(.is-disabled):hover,
-.glue-btn:not(.is-disabled):focus-visible {
-  color: #fff;
-  outline: none;
-}
-.glue-btn:not(.is-disabled):hover .glue-btn__glow,
-.glue-btn:not(.is-disabled):focus-visible .glue-btn__glow {
-  opacity: 1;
-}
-.glue-btn:not(.is-disabled):hover .glue-btn__sub {
-  color: #d6dcf5;
-}
-
-/* Pressed: the Down border, and ButtonPushedTextOffset −0.002 −0.003 moves the caption. */
-.glue-btn:not(.is-disabled):active,
-.glue-btn.is-pressed {
-  border-image-source: url("/ui/glue-button-down.svg");
-  border-image-slice: 22 fill;
-}
-.glue-btn--bordered:not(.is-disabled):active,
-.glue-btn--bordered.is-pressed {
-  border-image-slice: 22 fill;
-}
-.glue-btn:not(.is-disabled):active .glue-btn__text,
-.glue-btn.is-pressed .glue-btn__text {
-  transform: translate(-1px, 2px);
-}
-
-.glue-btn.is-disabled {
-  border-image: url("/ui/glue-button-disabled.svg") 22 fill / 18px stretch;
-  color: var(--disabled);
-  cursor: default;
-}
-.glue-btn--bordered.is-disabled {
-  border-width: 19px;
-  border-image-width: 19px;
-}
-.glue-btn.is-disabled .glue-btn__sub {
-  color: #6c6c6c;
-}
-
-/* ─── Tooltip slab (human-tooltip-border.blp: a 2-texel gold stroke) ───── */
-
-.tooltip {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 6px);
-  z-index: 20;
-  width: max-content;
-  max-width: 290px;
-  padding: 9px 12px 10px;
-  background: rgb(0 0 0 / 0.86);
-  border: 1px solid #ffcb2e;
-  box-shadow:
-    inset 0 0 0 1px #e2aa00,
-    0 0 0 1px rgb(0 0 0 / 0.56),
-    0 0 0 2px rgb(0 0 0 / 0.18),
-    0 8px 20px rgb(0 0 0 / 0.6);
-  font-size: 0.85rem;
-  line-height: 1.45;
-  text-align: left;
-  opacity: 0;
-  visibility: hidden;
-  transform: translate(-50%, 4px);
-  transition:
-    opacity 100ms,
-    transform 100ms,
-    visibility 0s 100ms;
-  pointer-events: none;
-}
-/* the name line is NOT larger than the body ([FontHeights] ToolTipName = ToolTipDesc = 0.011) */
-.tooltip__title {
-  display: block;
-  color: #fff;
-  margin-bottom: 3px;
-}
-.tooltip__body {
-  display: block;
-  color: #e6e6e6;
-}
-.glue-btn-wrap:hover .tooltip,
-.glue-btn-wrap:focus-within .tooltip {
-  opacity: 1;
-  visibility: visible;
-  transform: translate(-50%, 0);
-  transition-delay: 0s;
-}
-
-/* ─── Panel (EscMenu\Human\human-options-menu-border + -background) ───── */
-
-.panel {
-  position: relative;
-  isolation: isolate;
-  padding: 32px 34px 36px;
-}
-/* The marble sits under the gold rule's inner edge… */
-.panel::before {
-  content: "";
-  position: absolute;
-  inset: 17px;
-  z-index: -1;
-  background: url("/ui/marble.svg") 0 0 / 256px 256px;
-}
-/* …and the frame is drawn over it. (On the element itself, a negative-z ::before would
-   paint the marble OVER its own border-image.) */
-.panel::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-style: solid;
-  border-width: 26px;
-  border-image: url("/ui/esc-panel.svg") 29 / 26px round;
-  pointer-events: none;
 }
 
 /* ─── Hero ─────────────────────────────────────────────────────────────── */
@@ -451,28 +246,6 @@ a:hover {
   margin: 0 auto;
   padding: 72px 20px 24px;
 }
-.section__title {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  margin: 0;
-  color: var(--gold);
-  font-size: clamp(1.7rem, 4vw, 2.3rem);
-  font-weight: normal;
-  text-align: center;
-  text-shadow: 2px 2px 0 #000;
-}
-.section__title::before,
-.section__title::after {
-  content: "";
-  flex: 1;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, #ab820e 60%, #ffcb2e);
-  box-shadow: 0 1px 0 #000;
-}
-.section__title::after {
-  background: linear-gradient(270deg, transparent, #ab820e 60%, #ffcb2e);
-}
 .section__lede {
   margin: 8px 0 32px;
   color: var(--text-dim);
@@ -517,7 +290,7 @@ a:hover {
   gap: 10px;
   background:
     radial-gradient(ellipse at 50% 45%, rgb(20 36 80 / 0.7), rgb(0 0 0 / 0.95) 75%),
-    url("/ui/marble.svg") 0 0 / 256px 256px;
+    url("@openwar3/ui/frames/marble.svg") 0 0 / 256px 256px;
   color: var(--text-dim);
   font-size: 0.85rem;
   letter-spacing: 0.02em;
@@ -676,16 +449,16 @@ a:hover {
   .features {
     grid-template-columns: 1fr;
   }
-  .glue-btn--lg {
+  .ow3-glue-btn--lg {
     min-width: min(300px, 86vw);
   }
-  .panel {
+  .ow3-panel {
     padding: 26px 22px 28px;
   }
-  .panel::before {
+  .ow3-panel::before {
     inset: 13px;
   }
-  .panel::after {
+  .ow3-panel::after {
     border-width: 20px;
     border-image-width: 20px;
   }

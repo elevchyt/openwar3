@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@openwar3/ui':
+        specifier: file:../packages/ui
+        version: file:../packages/ui(react@19.3.0)
       next:
         specifier: 16.3.5
         version: 16.3.5(@types/node@24.13.4)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -252,6 +255,14 @@ packages:
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
+
+  '@openwar3/ui@file:../packages/ui':
+    resolution: {directory: ../packages/ui, type: directory}
+    peerDependencies:
+      react: '>=19'
+    peerDependenciesMeta:
+      react:
+        optional: true
 
   '@swc/helpers@0.5.23':
     resolution: {integrity: sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw==}
@@ -511,6 +522,10 @@ snapshots:
 
   '@next/swc-win32-x64-msvc@16.3.5':
     optional: true
+
+  '@openwar3/ui@file:../packages/ui(react@19.3.0)':
+    optionalDependencies:
+      react: 19.3.0
 
   '@swc/helpers@0.5.23':
     dependencies:

@@ -9,7 +9,7 @@ export function HotkeyLabel({ text, hotkey }: { text: string; hotkey?: string })
   return (
     <>
       {text.slice(0, i)}
-      <span className="hk">{text[i]}</span>
+      <span className="ow3-hk">{text[i]}</span>
       {text.slice(i + 1)}
     </>
   );

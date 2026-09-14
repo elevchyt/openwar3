@@ -2448,62 +2448,61 @@ body.in-game .fdf-screen.fdf-ingame {
   pointer-events: none;
 }
 
+/* The panel, heading, glue button and loading bar are the shared UI kit (packages/ui, imported
+   ahead of this file in main.ts); these rules only lay the screen out. The kit's classes set no
+   cursor, so the screen keeps whatever cursor the page has — never an OS pointer. */
 .load-gate-panel {
   pointer-events: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  width: min(460px, 84vw);
-  padding: 40px 44px;
+  gap: 18px;
+  width: min(580px, 90vw);
+  padding: 40px 48px 42px;
   text-align: center;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  backdrop-filter: blur(4px);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+  font-family: var(--ow3-font);
 }
 
 .load-gate-title {
-  margin: 0;
-  font-size: 30px;
-  letter-spacing: 3px;
-  color: var(--gold);
-  text-shadow: 0 2px 8px #000;
+  align-self: stretch;
+  font-size: 34px;
 }
 
 .load-gate-sub {
   margin: 0;
-  font-size: 14px;
-  line-height: 1.5;
-  color: #c7cedb;
+  font-size: 15px;
+  line-height: 1.55;
+  color: #d4d8e2;
+  text-shadow: 1px 1px 0 #000;
 }
 
-.load-gate-btn {
-  margin-top: 6px;
-  padding: 16px 30px;
-  font: inherit;
-  font-size: 17px;
-  letter-spacing: 0.5px;
-  color: #1a1206;
-  background: linear-gradient(#e7c877, #c79a3f);
-  border: 1px solid #6a531d;
-  border-radius: 5px;
-  cursor: pointer;
-  transition: filter 0.12s, transform 0.12s;
+/* One slot, two tenants: the button, then the bar in its place while the install mounts. Sized
+   for the taller of the two, so swapping them does not move the panel. */
+.load-gate-action {
+  align-self: stretch;
+  min-height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.load-gate-btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
-.load-gate-btn:active { transform: translateY(1px); }
-.load-gate-btn:disabled { filter: grayscale(0.6) brightness(0.8); cursor: default; transform: none; }
+.load-gate-progress {
+  width: 100%;
+}
+.load-gate-progress .ow3-progress__label {
+  margin-top: 4px;
+  font-size: 13px;
+}
 
 .load-gate-status {
   min-height: 16px;
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.4;
-  color: #9aa4b4;
+  color: var(--ow3-text-dim);
+  text-shadow: 1px 1px 0 #000;
 }
-.load-gate-status.error { color: #e07a6a; }
+.load-gate-status:empty { display: none; }
+.load-gate-status.error { color: #ff6a55; }
 
 /* --- FDF-driven frames (issue #54): the WC3 UI system, built from UI\FrameDef\*.fdf.
    Frames are absolutely positioned over the 3D background; only interactive frames

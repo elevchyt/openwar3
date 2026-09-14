@@ -1,7 +1,7 @@
 import { MpqDataSource } from "./mpq";
 import { LayeredDataSource } from "./layered";
 import { CascDataSource, isCascInstall } from "./casc";
-import type { DataSource } from "./types";
+import type { DataSource, LoadProgress } from "./types";
 import type { ContentProfile } from "./profiles";
 import { installMaps, type PickedInstall } from "../assets/opfs";
 import { checkVersion } from "./version";
@@ -32,7 +32,7 @@ export interface LoadResult {
 export async function loadProfile(
   install: PickedInstall,
   profile: ContentProfile,
-  onProgress?: (message: string) => void,
+  onProgress?: LoadProgress,
 ): Promise<LoadResult> {
   // The version gate, BEFORE a byte is mounted (src/vfs/version.ts). Here rather than at either
   // door, because both go through this function — the browser's picker, the desktop app reading
@@ -60,13 +60,13 @@ export async function loadProfile(
   const missing: string[] = [];
 
   // Build lowest→highest as declared; skip archives the folder doesn't have.
-  for (const name of profile.archives) {
+  for (const [i, name] of profile.archives.entries()) {
     const file = install.files.get(name.toLowerCase());
     if (!file) {
       missing.push(name);
       continue;
     }
-    onProgress?.(`Mounting ${name}…`);
+    onProgress?.(`Mounting ${name}…`, i / profile.archives.length);
     const buffer = new Uint8Array(await file.arrayBuffer());
     sources.push(new MpqDataSource(name, buffer));
     mounted.push(name);

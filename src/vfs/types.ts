@@ -23,6 +23,13 @@ export interface DataSource {
 }
 
 /**
+ * What mounting an install says as it goes: a line for a person to read, and — when the stage
+ * knows its own size — how far through the whole mount it is, 0…1. A stage with no fraction is
+ * one whose length is not known yet (the load gate sweeps its bar for it, src/ui/gate.ts).
+ */
+export type LoadProgress = (message: string, fraction?: number) => void;
+
+/**
  * Normalize a logical path to MPQ form: backslash separators, no leading slash.
  * MPQ hashing upper-cases names (so lookups are case-insensitive) but does NOT
  * convert '/' to '\', so we must do that here.

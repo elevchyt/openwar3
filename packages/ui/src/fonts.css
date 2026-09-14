@@ -1,0 +1,11 @@
+/* OpenWar3 Sans — Nowar Sans (nowar-fonts/Nowar-Sans-War3, SIL OFL 1.1), the engine's own
+ * fallback face, cut down to a 22 KB Latin subset. The OFL does not let a modified copy carry the
+ * Reserved Font Name, so the subset is renamed; its licence sits beside it in fonts/.
+ *
+ * Optional: import this where nothing else loads the face. The landing page loads the same file
+ * through next/font instead and points --ow3-font at it. */
+@font-face {
+  font-family: "OpenWar3 Sans";
+  src: url("./fonts/OpenWar3Sans.woff2") format("woff2");
+  font-display: swap;
+}
