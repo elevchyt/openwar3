@@ -1638,9 +1638,18 @@ after we turn it off"*.
 //     is a cinematic scene to display.
 ```
 
-`ShowInterface(false)` brings the bars in; `SetCinematicScene` shows the portrait. A transmission
-during ordinary play — an ally warning you mid-melee — shows the bust with **no** letterbox, and a
-silent flythrough shows the letterbox with no bust. So they toggle separately (`src/ui/cinematicPanel.ts`).
+`ShowInterface(false)` brings the bars in; `SetCinematicScene` shows the portrait. A silent
+flythrough shows the letterbox with no bust, so they toggle separately (`src/ui/cinematicPanel.ts`).
+
+**A transmission during ordinary play does not use the panel at all.** With the console on screen
+(no letterbox), `SetCinematicScene` takes over the CONSOLE's portrait and puts the line in the
+message area (`MapViewerScene.consoleTransmission`). This covers WarChasers' Soul Keeper talking
+mid-dungeon, and Maiev's voiceovers in Rise of the Naga once its intro is over. The speaker's
+`_Portrait.mdx` replaces the selection's bust whatever is selected, mouths "Portrait Talk" for
+the voice line, and hands the portrait back when the scene's `sceneDuration` (the line plus
+`bj_TRANSMISSION_PORT_HANGTIME`) runs out. The text is a message line, never chat: `UI\MiscUI.txt`
+names that frame for exactly this (`WorldFrameUnitMessage` — "small text that is used for
+in-game trigger based dialog"). The speaker's name leads the line in the panel's own gold.
 Three adaptations the file can't state: the bars are authored **0.8 wide** (a 4:3 screen) and are
 stretched to the viewport; the portrait is a **SPRITE** (a live model — it gets its own
 `ModelViewerScene`, like the HUD's bust); and the **unsized-frame trap** bit for the fourth time

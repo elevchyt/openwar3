@@ -1266,6 +1266,9 @@ export class GameHud {
   private cargoHostId = 0; // the hold the pockets were last built for
   private portrait!: HTMLDivElement;
   private portraitCanvasEl!: HTMLCanvasElement;
+  /** A transmission's speaker is in the portrait (mapViewer `consoleTalk`), so the bust is shown
+   *  even with nothing selected. */
+  private portraitForced = false;
   private dotsCanvas!: HTMLCanvasElement;
   // Minimap frame (the console zone) and the map picture contain-fitted inside it.
   private minimapBox?: HTMLDivElement;
@@ -1867,6 +1870,13 @@ export class GameHud {
    *  unit's animated portrait model into it. */
   portraitCanvas(): HTMLCanvasElement {
     return this.portraitCanvasEl;
+  }
+
+  /** Keep the portrait on screen for a speaker who is not the selection — a transmission during
+   *  ordinary play puts its bust here (mapViewer `consoleTransmission`). */
+  setPortraitForced(on: boolean): void {
+    this.portraitForced = on;
+    this.portrait.classList.toggle("empty", !on && !this.driver.selection());
   }
 
   private buildConsole(skinned: boolean): HTMLDivElement {
@@ -3522,7 +3532,7 @@ export class GameHud {
     });
 
     const sel = this.driver.selection();
-    this.portrait.classList.toggle("empty", !sel);
+    this.portrait.classList.toggle("empty", !sel && !this.portraitForced);
     if (!sel || this.driver.selectionIcons().length > 0) this.xpBar.hidden = true; // no single hero shown
     if (sel) {
       // A hero is titled by its GIVEN name ("Painkiller"); its class ("Demon Hunter")

@@ -16,7 +16,7 @@ import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footp
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
 import { EVENT_PLAYER_END_CINEMATIC, EVENT_PLAYER_LEAVE } from "../jass/interpreter";
-import { MAP_CONTROL, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
+import { MAP_CONTROL, type CinematicScene, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay, type BoundaryMask } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
@@ -1219,6 +1219,13 @@ export class MapViewerScene {
   private portraitWarmScheduled = false;
   private portraitWarmAccum = 0; // ms since the last on-map type re-scan
   private portraitLabel = ""; // sound-set of the unit currently in the portrait (drives talk anim)
+  /** A TRANSMISSION during ordinary play (`consoleTransmission`): whose bust the console portrait
+   *  is showing instead of the selection's, for how long, and how long its mouth moves. `age` is
+   *  on the same world clock the cinematic panel's scenes age on. */
+  private consoleTalk: { key: string; typeId: string; color: number; talk: number; duration: number; age: number } | null = null;
+  /** The `consoleTalk.key` of the speaker's bust the console viewer holds right now, or "" while
+   *  it holds the selection's. */
+  private portraitTalkKey = "";
   private lastVoice: { label: string; until: number } | null = null; // most recent voice line (label + when it ends), so a bust that finishes loading mid-line still mouths it
   private cameraLock = false; // portrait held → camera follows the selected unit
   private groupFollow = false; // hero key / control-group digit held after its double-tap → camera rides the group
@@ -2741,6 +2748,15 @@ export class MapViewerScene {
       },
       displayCineFilter: (filter) => this.cinematic?.setFilter(filter),
       setCinematicScene: (scene) => {
+        // OUTSIDE a cinematic there is no panel to talk in: the console is on screen, so the
+        // speaker takes over ITS portrait and the line goes to the message area (see
+        // `consoleTransmission`). Keyed on the letterbox, exactly as the console itself is.
+        if (scene && this.interfaceShown) {
+          if (this.cinematic?.sceneActive) this.cinematic.setScene(null);
+          this.consoleTransmission(scene);
+          return;
+        }
+        if (!scene) this.endConsoleTransmission();
         this.cinematic?.setScene(scene);
         // Ask for the bust the CURRENT scene wants, every time — never on a "did it change?"
         // answer from the panel. See loadCinematicPortrait and CinematicPanelOverlay.setScene.
@@ -3393,6 +3409,8 @@ export class MapViewerScene {
     this.gameSpeed = 2; // MAP_SPEED_NORMAL
     this.cinePortraitFor = "";
     this.cinePortraitWant = "";
+    this.consoleTalk = null; // …and out of any transmission the last one was speaking
+    this.portraitTalkKey = "";
     this.destructibleDeaths = []; // …and out of any gate the last one broke
     this.chatHistory = []; // last match's conversation is not this one's
     // Chat arriving over the wire lands in the same place a locally typed line does.
@@ -7961,6 +7979,7 @@ export class MapViewerScene {
   /** Keep the portrait canvas showing the selected unit's animated bust. */
   private updatePortrait(): void {
     if (!this.hud || !this.rts) return;
+    if (this.consoleTalk) return void this.updateTalkPortrait(this.consoleTalk);
     const sel = this.rts.selectedInfo();
     if (!sel) {
       if (this.portraitFor !== null) {
@@ -8023,6 +8042,91 @@ export class MapViewerScene {
       .catch(() => {})
       .finally(() => {
         this.portraitLoading = false;
+      });
+  }
+
+  /**
+   * A TRANSMISSION DURING ORDINARY PLAY — `SetCinematicScene` with the console on screen, which is
+   * what `TransmissionFromUnitWithNameBJ` does whenever the map is not in cinematic mode:
+   * WarChasers' Kel'Thuzad talking to the party mid-dungeon, the Naga taunting Maiev in Rise of the
+   * Naga. There is no letterbox and so no `CinematicPanel` to talk in; the game uses the console
+   * it has instead — blizzard.j's own description of the BJ is "display a text message … with an
+   * accompanying sound, portrait, speech indicator".
+   *
+   *  · The PORTRAIT: the console's bust is taken over by the SPEAKER's `_Portrait.mdx`, mouthing
+   *    "Portrait Talk" for the voice line's length, whatever is selected — and handed back to the
+   *    selection when the scene's own `sceneDuration` runs out (`endConsoleTransmission`).
+   *  · The TEXT: a line in the MESSAGE area, the frame `UI\MiscUI.txt` names for exactly this
+   *    (`WorldFrameUnitMessage` — "small text that is used for in-game trigger based dialog") —
+   *    never the chat display. The speaker's name leads it in the transmission panel's own gold
+   *    (`EscMenuTitleTextTemplate`'s FontColor 0.99 0.827 0.0705, see cinematicPanel.ts).
+   */
+  private consoleTransmission(scene: CinematicScene): void {
+    const duration = scene.sceneDuration;
+    const speaker = scene.speaker.trim();
+    const text = speaker ? `|cfffcd312${speaker}:|r ${scene.text}` : scene.text;
+    this.hud?.showMessage(text, duration > 0 ? duration : -1);
+    if (!scene.portraitUnitId) {
+      // A transmission from nobody (DoTransmissionBasicsXYBJ's null unit): text only.
+      this.endConsoleTransmission();
+      return;
+    }
+    const key = `${scene.portraitUnitId}|${scene.playerColor}`;
+    const talk = Math.max(0, scene.voiceoverDuration);
+    this.consoleTalk = { key, typeId: scene.portraitUnitId, color: scene.playerColor, talk, duration, age: 0 };
+    this.hud?.setPortraitForced(true);
+    // The same speaker again: the bust is already there, only the mouth has a new line to say.
+    if (key === this.portraitTalkKey && !this.portraitLoading) this.portraitViewer?.playTalk(talk);
+  }
+
+  /** The transmission is over: the portrait goes back to whatever is selected. */
+  private endConsoleTransmission(): void {
+    if (!this.consoleTalk && !this.portraitTalkKey) return;
+    this.consoleTalk = null;
+    this.hud?.setPortraitForced(false);
+    if (this.portraitTalkKey) {
+      this.portraitTalkKey = "";
+      this.portraitFor = null; // the viewer holds the speaker: reload the selection's bust
+      this.portraitLabel = "";
+      this.portraitViewer?.stop();
+    }
+  }
+
+  /** `updatePortrait` while a transmission holds the console: load the speaker's bust, once. */
+  private updateTalkPortrait(talk: NonNullable<MapViewerScene["consoleTalk"]>): void {
+    if (talk.key === this.portraitTalkKey || this.portraitLoading || !this.hud) return;
+    const def = this.registry.get(talk.typeId);
+    if (!def?.model) {
+      this.portraitTalkKey = talk.key; // no model for this type: nothing to show, stop asking
+      this.portraitViewer?.stop();
+      return;
+    }
+    this.portraitViewer ??= new ModelViewerScene(this.hud.portraitCanvas(), this.vfs);
+    const viewer = this.portraitViewer;
+    viewer.setTint([1, 1, 1, 1]);
+    const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
+    const path = this.vfs.exists(portraitPath) ? portraitPath : def.model;
+    // The selection's voice lines must not work the speaker's mouth.
+    this.portraitLabel = "";
+    this.portraitFor = null;
+    this.portraitLoading = true;
+    const key = talk.key;
+    viewer
+      .load(path, talk.color, true, /paladin/i.test(def.model) ? 0.14 : 0, animPropsFor(def, false) ?? [])
+      .then(() => {
+        this.portraitTalkKey = key;
+        viewer.start();
+        // Loading took some of the line: mouth what is left of it (`load` resets the talk clock).
+        const now = this.consoleTalk;
+        if (now?.key === key && now.talk > now.age) viewer.playTalk(now.talk - now.age);
+      })
+      .catch(() => {
+        this.portraitTalkKey = key;
+      })
+      .finally(() => {
+        this.portraitLoading = false;
+        // The transmission ended while its bust was still loading: hand the portrait back.
+        if (!this.consoleTalk && this.portraitTalkKey) this.endConsoleTransmission();
       });
   }
 
@@ -8318,7 +8422,7 @@ export class MapViewerScene {
       // breathing over a stopped battlefield. `stop` is already a pause there rather than a
       // teardown ("fresh dt on resume"), so the clip picks up mid-breath when the match does.
       if (on) this.portraitViewer?.stop();
-      else if (this.portraitFor !== null) this.portraitViewer?.start();
+      else if (this.portraitFor !== null || this.portraitTalkKey) this.portraitViewer?.start();
     }
     const hard = this.hardPaused;
     if (hard !== this.pauseUiHard) {
@@ -11349,6 +11453,10 @@ export class MapViewerScene {
       // (`simAdvanced` is drained here, right after the sim was stepped, so a frame that
       // stepped nothing ages nothing — which is also what a paused game should do.)
       this.cinematic?.update(this.simAdvanced);
+      if (this.consoleTalk) {
+        this.consoleTalk.age += this.simAdvanced;
+        if (this.consoleTalk.duration > 0 && this.consoleTalk.age >= this.consoleTalk.duration) this.endConsoleTransmission();
+      }
       this.simAdvanced = 0;
       perfLog.end("ui");
       // Map units load async — hide the start-location props as they stream in.

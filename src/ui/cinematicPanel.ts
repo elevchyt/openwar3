@@ -20,9 +20,10 @@
 //         Frame "BACKDROP" "CinematicTopBorder"    { Width 0.8, Height 0.0275, … } }
 //
 // **The bars and the scene are independent**, and that comment is why. `ShowInterface(false)`
-// brings the letterbox in; `SetCinematicScene` shows the talking head. A transmission during
-// normal play — an ally warning you mid-melee — shows the portrait with NO letterbox, and a
-// silent camera flythrough shows the letterbox with no portrait. So they toggle separately.
+// brings the letterbox in; `SetCinematicScene` shows the talking head, and a silent camera
+// flythrough shows the letterbox with no portrait. So they toggle separately. (A transmission
+// during normal play — no letterbox — never reaches this panel: it talks in the CONSOLE's
+// portrait and the message area instead, see mapViewer `consoleTransmission`.)
 //
 // Three adaptations the file cannot state:
 //   • **The bars are 0.8 wide**, i.e. exactly a 4:3 screen. On a widescreen that would leave
