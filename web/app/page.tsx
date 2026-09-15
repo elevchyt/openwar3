@@ -15,7 +15,7 @@ const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
   {
     title: "A faithful recreation",
     body: "Every unit, ability, cost and timing is read straight out of your own Warcraft III: The Frozen Throne 1.30.4 install. OpenWar3 is original code and ships zero Blizzard assets.",
-    media: { kind: "image", src: "/media/game1.jpg", alt: "An orc base in OpenWar3, training from the Altar of Storms" },
+    media: { kind: "image", src: "/media/game1.avif", alt: "An orc base in OpenWar3, training from the Altar of Storms" },
   },
   {
     title: "Computer+",
@@ -34,13 +34,13 @@ const FEATURES: ReadonlyArray<{ title: string; body: string; media: Media }> = [
   },
   {
     title: "Hotkeys your way",
-    body: "Legacy, Grid, or your own CustomKeys.txt along with a hotkey option and the ability to customize hotkeys in-game.",
-    media: { kind: "image", src: "/media/commandkeys.avif", alt: "A command card on the Grid hotkeys, lettered QWER, ASDF and ZXCV", fit: "inset" },
+    body: "Legacy, Grid, or your own CustomKeys.txt along with a hotkey indicator and the ability to customize hotkeys with a new editor.",
+    media: { kind: "image", src: "/media/hotkeys.avif", alt: "A command card on the Grid hotkeys, lettered QWER, ASDF and ZXCV", fit: "inset" },
   },
   {
     title: "Keeps itself up to date",
     body: "The game checks for a new release at launch and offers it in its own message box. Say yes and it downloads, installs and restarts on its own.",
-    media: { kind: "image", src: "/media/updater.jpg", alt: "The OpenWar3 main menu downloading an update" },
+    media: { kind: "image", src: "/media/updater.avif", alt: "The OpenWar3 main menu downloading an update" },
   },
 ];
 
@@ -92,13 +92,13 @@ export default async function Home() {
       <main id="top">
         <section className="hero">
           <div className="hero__backdrop" aria-hidden>
-            <Image src="/media/game2.jpg" alt="" draggable={false} fill priority sizes="100vw" />
+            <Image src="/media/game2.avif" alt="" draggable={false} fill priority sizes="100vw" />
           </div>
           <div className="hero__content">
             <h1 className="sr-only">OpenWar3</h1>
             <Image
               className="hero__logo"
-              src="/openwar3-logo.png"
+              src="/openwar3-logo.avif"
               alt="OpenWar3"
               draggable={false}
               width={1683}

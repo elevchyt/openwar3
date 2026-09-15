@@ -25,10 +25,10 @@ export const metadata: Metadata = {
   openGraph: {
     title: "OpenWar3",
     description: "A modern, open-source reimplementation of the Warcraft III engine.",
-    images: ["/media/game2.jpg"],
+    images: ["/media/game2.avif"],
     type: "website",
   },
-  twitter: { card: "summary_large_image", images: ["/media/game2.jpg"] },
+  twitter: { card: "summary_large_image", images: ["/media/game2.avif"] },
 };
 
 export const viewport: Viewport = {
