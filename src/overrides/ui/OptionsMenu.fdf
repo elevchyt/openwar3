@@ -86,41 +86,52 @@ Frame "BACKDROP" "HotkeysBackdrop" INHERITS "OptionsPopupMenuBackdropTemplate" {
 
 // The hotkey EDITOR's door (issue #156) — an icon button to the right of the "Hotkeys:" pulldown,
 // shown only while the pulldown says Custom, because Custom is the one rung with a file to edit
-// (src/ui/fdfOptions.ts toggles it). It is Battle.net's PROFILE button (BattleNetChatPanel.fdf
-// `ProfileButton`) restated: the glue's 0.031 square `StandardIconicButtonTemplate` with the
-// `bnet-mainmenu-profile-*` faces in the `GlueScreen-Button2` border, up, down and disabled —
-// the game's own small "open a panel about you" button, which is what this is.
-Frame "GLUEBUTTON" "HotkeyEditorButton" INHERITS WITHCHILDREN "StandardIconicButtonTemplate" {
-    SetPoint LEFT, "HotkeysBackdrop", RIGHT, -0.036, 0.0,
+// (src/ui/fdfOptions.ts toggles it).
+//
+// It is built exactly as the Single Player menu builds the lens button beside the profile name
+// (SinglePlayerMenu.fdf `ProfileButtonBackdrop`): the glue's TINY socket
+// (`StandardMenuTinyButtonBaseBackdrop`, 0.11 x 0.055) holding a 0.03 x 0.026
+// `StandardIconicButtonTemplate` 0.009 in from its right and 0.014 down, whose faces are Battle.net's
+// PROFILE button (BattleNetChatPanel.fdf `ProfileButton`): `bnet-mainmenu-profile-*` in the
+// `GlueScreen-Button2` border, up, down and disabled. The socket's texture is transparent for its
+// left ~40%, so its frame starts well left of the ornament it shows — hence the negative offset.
+Frame "BACKDROP" "HotkeyEditorBackdrop" INHERITS "StandardMenuTinyButtonBaseBackdrop" {
+    SetPoint LEFT, "HotkeysBackdrop", RIGHT, -0.062, 0.0,
 
-    ControlBackdrop "HotkeyEditorButtonBackdrop",
-    Frame "BACKDROP" "HotkeyEditorButtonBackdrop" {
-        BackdropBackground  "UI\Widgets\BattleNet\bnet-mainmenu-profile-up.blp",
-        BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
-        BackdropCornerSize  0.016,
-        BackdropBackgroundSize  0.032,
-        BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
-        BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder.blp",
-    }
+    Frame "GLUEBUTTON" "HotkeyEditorButton" INHERITS WITHCHILDREN "StandardIconicButtonTemplate" {
+        Width 0.03,
+        Height 0.026,
+        SetPoint TOPRIGHT, "HotkeyEditorBackdrop", TOPRIGHT, -0.009, -0.014,
 
-    ControlPushedBackdrop "HotkeyEditorButtonPushedBackdrop",
-    Frame "BACKDROP" "HotkeyEditorButtonPushedBackdrop" {
-        BackdropBackground  "UI\Widgets\BattleNet\bnet-mainmenu-profile-down.blp",
-        BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
-        BackdropCornerSize  0.016,
-        BackdropBackgroundSize  0.032,
-        BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
-        BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder-Down.blp",
-    }
+        ControlBackdrop "HotkeyEditorButtonBackdrop",
+        Frame "BACKDROP" "HotkeyEditorButtonBackdrop" {
+            BackdropBackground  "UI\Widgets\BattleNet\bnet-mainmenu-profile-up.blp",
+            BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+            BackdropCornerSize  0.013,
+            BackdropBackgroundSize  0.026,
+            BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
+            BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder.blp",
+        }
 
-    ControlDisabledBackdrop "HotkeyEditorButtonDisabledBackdrop",
-    Frame "BACKDROP" "HotkeyEditorButtonDisabledBackdrop" {
-        BackdropBackground  "UI\Widgets\BattleNet\bnet-mainmenu-profile-disabled.blp",
-        BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
-        BackdropCornerSize  0.016,
-        BackdropBackgroundSize  0.032,
-        BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
-        BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder-Disabled.blp",
+        ControlPushedBackdrop "HotkeyEditorButtonPushedBackdrop",
+        Frame "BACKDROP" "HotkeyEditorButtonPushedBackdrop" {
+            BackdropBackground  "UI\Widgets\BattleNet\bnet-mainmenu-profile-down.blp",
+            BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+            BackdropCornerSize  0.013,
+            BackdropBackgroundSize  0.026,
+            BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
+            BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder-Down.blp",
+        }
+
+        ControlDisabledBackdrop "HotkeyEditorButtonDisabledBackdrop",
+        Frame "BACKDROP" "HotkeyEditorButtonDisabledBackdrop" {
+            BackdropBackground  "UI\Widgets\BattleNet\bnet-mainmenu-profile-disabled.blp",
+            BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+            BackdropCornerSize  0.013,
+            BackdropBackgroundSize  0.026,
+            BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
+            BackdropEdgeFile  "UI\Widgets\Glues\GlueScreen-Button2-BackdropBorder-Disabled.blp",
+        }
     }
 }
 

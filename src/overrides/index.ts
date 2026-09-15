@@ -122,7 +122,7 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     { frame: "HealthBarStyleBackdrop", into: "GameplayPanel" },
     { frame: "HotkeysLabel", into: "GameplayPanel" },
     { frame: "HotkeysBackdrop", into: "GameplayPanel" },
-    { frame: "HotkeyEditorButton", into: "GameplayPanel" },
+    { frame: "HotkeyEditorBackdrop", into: "GameplayPanel" },
     { frame: "ShowHotkeysCheckBox", into: "GameplayPanel" },
     { frame: "ShowHotkeysLabel", into: "GameplayPanel" },
     // Options → Video: "Vertical Sync", under the game's last row (Occlusion).

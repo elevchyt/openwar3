@@ -217,7 +217,7 @@ export async function mountOptions(
   /** The editor's button stands beside "Hotkeys:" only while it says Custom — the one rung with
    *  a file behind it. Asked of the WORKING copy, so it appears the moment Custom is picked. */
   function syncEditorButton(s: FdfScreen): void {
-    const el = s.frame("HotkeyEditorButton");
+    const el = s.frame("HotkeyEditorBackdrop");
     if (el) el.hidden = working.hotkeys !== "custom";
   }
 
