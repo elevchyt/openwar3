@@ -31,6 +31,9 @@ export interface GateLoad {
   maps: Map<string, File>;
 }
 
+/** What the bar says while the install mounts. */
+const LOADING = "Loading game data…";
+
 export interface LoadGate {
   dispose(): void;
 }
@@ -93,7 +96,10 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
     status.textContent = "";
     status.classList.remove("error");
     bar.set(null);
-    bar.setLabel("Mounting archives…");
+    // One line for the whole wait. The mount narrates itself stage by stage (which archive,
+    // the content index, a percentage) and that is a developer's reading, not a player's: what a
+    // player needs from this screen is "it is loading", then "it loaded" — or, in red, why not.
+    bar.setLabel(LOADING);
     showBar(true);
     try {
       // Browser only: the desktop app reads the folder off disk and has no quota to be evicted
@@ -102,14 +108,13 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
       // A CASC mount reads a few hundred megabytes off disk before the first file can be
       // asked for (vfs/casc.ts), so it reports as it goes rather than sitting mute — and says
       // how far through it is once it knows, which is what the bar draws.
-      const load = await loadProfile(install, DEFAULT_PROFILE, (msg, fraction) => {
-        bar.setLabel(msg);
-        bar.set(fraction ?? null);
-      });
+      const load = await loadProfile(install, DEFAULT_PROFILE, (_msg, fraction) => bar.set(fraction ?? null));
       bar.set(1);
-      bar.setLabel(`Mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files, ${load.maps.size} maps. Building menu…`);
-      // Let the full bar reach the screen first: building the menu holds the main thread, and
-      // whatever frame was painted last is what the player looks at until it lets go.
+      bar.setLabel("Data successfully loaded");
+      // Let the full bar and that line reach the screen and be READ first: building the menu
+      // holds the main thread, and whatever frame was painted last is what the player looks at
+      // until it lets go — a confirmation shown for one frame is a confirmation nobody saw.
+      await new Promise((r) => setTimeout(r, 600));
       await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
       onLoaded(load);
     } catch (err) {

@@ -48,6 +48,16 @@ export const isRequiredVersion = (version: string | null): boolean =>
 
 /** Check a picked folder before it is mounted. */
 export function checkVersion(install: PickedInstall): VersionVerdict {
+  if (!isCascInstall(install.casc) && ![...install.files.keys()].some((k) => k.toLowerCase().endsWith(".mpq"))) {
+    // Neither a content store nor an archive: not an old Warcraft III, not a Warcraft III at all
+    // (or one whose data has gone). "Older than 1.30.4" would send the player to patch a folder
+    // that has nothing in it to patch.
+    return {
+      ok: false,
+      version: null,
+      message: `That folder has no Warcraft III game data in it (no Data folder). Select the Warcraft III ${REQUIRED_VERSION} folder itself — the one with Warcraft III.exe in it.`,
+    };
+  }
   if (!isCascInstall(install.casc)) {
     // No content store: this is an MPQ-era folder, i.e. older than 1.30 by construction. Said
     // that way round because "no .build.info" means nothing to a player.
