@@ -43,48 +43,87 @@ Frame "DIALOG" "HotkeyEditor" {
         FontJustificationH JUSTIFYLEFT,
     }
 
-    // --- The race tabs. Five small glue buttons in a row; the screen greys the chosen one. ---
-    Frame "GLUETEXTBUTTON" "HotkeyRaceHuman" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
-        Width 0.09,
-        Height 0.025,
-        SetPoint TOPLEFT, "HotkeyEditorTitle", BOTTOMLEFT, 0.0, -0.008,
-        ButtonText "HotkeyRaceHumanText",
-        Frame "TEXT" "HotkeyRaceHumanText" INHERITS "StandardButtonTextTemplate" { }
+    // --- The race tabs: five small glue buttons, each in the decorated socket Save and Cancel sit
+    // in (`StandardMenuSingleSmallButtonBaseBackdrop`). The screen greys the chosen one.
+    //
+    // That socket is a 512x128 texture whose LEFT THIRD is transparent (its art runs from texel
+    // ~170 to ~506), so at DialogWar3's 0.2325 one socket SHOWS 0.153 — and five of those are
+    // wider than the dialog. So these are drawn at 0.195 (0.128 showing each, 0.008 apart), and
+    // the button is placed by the same texel columns DialogWar3's own 0.2325 socket puts its
+    // 0.095 button at (234..444 of 512): 0.080 wide, 0.013 in from the right. Each socket is
+    // anchored to the dialog rather than to its neighbour, because the transparent third means a
+    // socket's frame and its picture do not start in the same place.
+    Frame "BACKDROP" "HotkeyRaceHumanBackdrop" INHERITS "StandardMenuSingleSmallButtonBaseBackdrop" {
+        Width 0.195,
+        Height 0.0525,
+        SetPoint TOPLEFT, "HotkeyEditor", TOPLEFT, -0.036, -0.048,
+
+        Frame "GLUETEXTBUTTON" "HotkeyRaceHuman" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.08,
+            Height 0.025,
+            SetPoint TOPRIGHT, "HotkeyRaceHumanBackdrop", TOPRIGHT, -0.013, -0.013,
+            ButtonText "HotkeyRaceHumanText",
+            Frame "TEXT" "HotkeyRaceHumanText" INHERITS "StandardButtonTextTemplate" { }
+        }
     }
-    Frame "GLUETEXTBUTTON" "HotkeyRaceOrc" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
-        Width 0.09,
-        Height 0.025,
-        SetPoint LEFT, "HotkeyRaceHuman", RIGHT, 0.004, 0.0,
-        ButtonText "HotkeyRaceOrcText",
-        Frame "TEXT" "HotkeyRaceOrcText" INHERITS "StandardButtonTextTemplate" { }
+    Frame "BACKDROP" "HotkeyRaceOrcBackdrop" INHERITS "StandardMenuSingleSmallButtonBaseBackdrop" {
+        Width 0.195,
+        Height 0.0525,
+        SetPoint TOPLEFT, "HotkeyEditor", TOPLEFT, 0.100, -0.048,
+
+        Frame "GLUETEXTBUTTON" "HotkeyRaceOrc" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.08,
+            Height 0.025,
+            SetPoint TOPRIGHT, "HotkeyRaceOrcBackdrop", TOPRIGHT, -0.013, -0.013,
+            ButtonText "HotkeyRaceOrcText",
+            Frame "TEXT" "HotkeyRaceOrcText" INHERITS "StandardButtonTextTemplate" { }
+        }
     }
-    Frame "GLUETEXTBUTTON" "HotkeyRaceNightElf" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
-        Width 0.09,
-        Height 0.025,
-        SetPoint LEFT, "HotkeyRaceOrc", RIGHT, 0.004, 0.0,
-        ButtonText "HotkeyRaceNightElfText",
-        Frame "TEXT" "HotkeyRaceNightElfText" INHERITS "StandardButtonTextTemplate" { }
+    Frame "BACKDROP" "HotkeyRaceNightElfBackdrop" INHERITS "StandardMenuSingleSmallButtonBaseBackdrop" {
+        Width 0.195,
+        Height 0.0525,
+        SetPoint TOPLEFT, "HotkeyEditor", TOPLEFT, 0.236, -0.048,
+
+        Frame "GLUETEXTBUTTON" "HotkeyRaceNightElf" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.08,
+            Height 0.025,
+            SetPoint TOPRIGHT, "HotkeyRaceNightElfBackdrop", TOPRIGHT, -0.013, -0.013,
+            ButtonText "HotkeyRaceNightElfText",
+            Frame "TEXT" "HotkeyRaceNightElfText" INHERITS "StandardButtonTextTemplate" { }
+        }
     }
-    Frame "GLUETEXTBUTTON" "HotkeyRaceUndead" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
-        Width 0.09,
-        Height 0.025,
-        SetPoint LEFT, "HotkeyRaceNightElf", RIGHT, 0.004, 0.0,
-        ButtonText "HotkeyRaceUndeadText",
-        Frame "TEXT" "HotkeyRaceUndeadText" INHERITS "StandardButtonTextTemplate" { }
+    Frame "BACKDROP" "HotkeyRaceUndeadBackdrop" INHERITS "StandardMenuSingleSmallButtonBaseBackdrop" {
+        Width 0.195,
+        Height 0.0525,
+        SetPoint TOPLEFT, "HotkeyEditor", TOPLEFT, 0.372, -0.048,
+
+        Frame "GLUETEXTBUTTON" "HotkeyRaceUndead" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.08,
+            Height 0.025,
+            SetPoint TOPRIGHT, "HotkeyRaceUndeadBackdrop", TOPRIGHT, -0.013, -0.013,
+            ButtonText "HotkeyRaceUndeadText",
+            Frame "TEXT" "HotkeyRaceUndeadText" INHERITS "StandardButtonTextTemplate" { }
+        }
     }
-    Frame "GLUETEXTBUTTON" "HotkeyRaceNeutral" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
-        Width 0.09,
-        Height 0.025,
-        SetPoint LEFT, "HotkeyRaceUndead", RIGHT, 0.004, 0.0,
-        ButtonText "HotkeyRaceNeutralText",
-        Frame "TEXT" "HotkeyRaceNeutralText" INHERITS "StandardButtonTextTemplate" { }
+    Frame "BACKDROP" "HotkeyRaceNeutralBackdrop" INHERITS "StandardMenuSingleSmallButtonBaseBackdrop" {
+        Width 0.195,
+        Height 0.0525,
+        SetPoint TOPLEFT, "HotkeyEditor", TOPLEFT, 0.508, -0.048,
+
+        Frame "GLUETEXTBUTTON" "HotkeyRaceNeutral" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.08,
+            Height 0.025,
+            SetPoint TOPRIGHT, "HotkeyRaceNeutralBackdrop", TOPRIGHT, -0.013, -0.013,
+            ButtonText "HotkeyRaceNeutralText",
+            Frame "TEXT" "HotkeyRaceNeutralText" INHERITS "StandardButtonTextTemplate" { }
+        }
     }
 
     // --- Column 1: the units of the chosen race (ListBoxWar3 is dropped in by the screen). ---
     Frame "FRAME" "HotkeyUnitListContainer" {
         Width 0.2,
         Height 0.37,
-        SetPoint TOPLEFT, "HotkeyRaceHuman", BOTTOMLEFT, 0.0, -0.012,
+        SetPoint TOPLEFT, "HotkeyEditor", TOPLEFT, 0.04, -0.1,
     }
 
     // --- Column 2: the command card, and the pages a unit has (its Build and Learn cards). ---
@@ -169,13 +208,22 @@ Frame "DIALOG" "HotkeyEditor" {
         FontColor 0.75 0.75 0.75 1.0,
     }
 
-    Frame "GLUETEXTBUTTON" "HotkeyResetButton" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
-        Width 0.1,
-        Height 0.025,
-        // Level with the card's hint line in the next column, so the two columns end on one row.
-        SetPoint TOPLEFT, "HotkeyCardHint", TOPRIGHT, 0.018, -0.001,
-        ButtonText "HotkeyResetButtonText",
-        Frame "TEXT" "HotkeyResetButtonText" INHERITS "StandardButtonTextTemplate" { }
+    // Reset, in the same socket as Save and Cancel (0.2325 with the button 0.031 in from its
+    // right edge, DialogWar3's own numbers), level with the card's hint line in the next column.
+    // The socket's frame starts 0.1065 left of its button — its left third is transparent — so
+    // it is anchored by where the BUTTON should land.
+    Frame "BACKDROP" "HotkeyResetBackdrop" INHERITS "StandardMenuSingleSmallButtonBaseBackdrop" {
+        Width 0.2325,
+        Height 0.0525,
+        SetPoint TOPLEFT, "HotkeyCardHint", TOPRIGHT, -0.0765, 0.012,
+
+        Frame "GLUETEXTBUTTON" "HotkeyResetButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.095,
+            Height 0.025,
+            SetPoint TOPRIGHT, "HotkeyResetBackdrop", TOPRIGHT, -0.031, -0.013,
+            ButtonText "HotkeyResetButtonText",
+            Frame "TEXT" "HotkeyResetButtonText" INHERITS "StandardButtonTextTemplate" { }
+        }
     }
 
     // --- The three decisions, in the glue's decorated sockets (DialogWar3's Yes/No pair). ---

@@ -91,7 +91,7 @@ Frame "BACKDROP" "HotkeysBackdrop" INHERITS "OptionsPopupMenuBackdropTemplate" {
 // `bnet-mainmenu-profile-*` faces in the `GlueScreen-Button2` border, up, down and disabled —
 // the game's own small "open a panel about you" button, which is what this is.
 Frame "GLUEBUTTON" "HotkeyEditorButton" INHERITS WITHCHILDREN "StandardIconicButtonTemplate" {
-    SetPoint LEFT, "HotkeysBackdrop", RIGHT, -0.03, 0.0,
+    SetPoint LEFT, "HotkeysBackdrop", RIGHT, -0.036, 0.0,
 
     ControlBackdrop "HotkeyEditorButtonBackdrop",
     Frame "BACKDROP" "HotkeyEditorButtonBackdrop" {

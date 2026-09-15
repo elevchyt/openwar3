@@ -283,7 +283,7 @@ export async function showHotkeyEditor(opts: HotkeyEditorOptions): Promise<void>
   const paintDetails = (s: FdfScreen): void => {
     const b = selected;
     const show = (name: string, on: boolean): void => { const el = s.frame(name); if (el) el.hidden = !on; };
-    for (const name of ["HotkeyKeyLabel", "HotkeyKeyEditBox", "HotkeyResetButton"]) show(name, !!b);
+    for (const name of ["HotkeyKeyLabel", "HotkeyKeyEditBox", "HotkeyResetBackdrop"]) show(name, !!b);
     const un = !!b && hasUn(b);
     show("HotkeyUnCheckBox", un);
     show("HotkeyUnLabel", un);
