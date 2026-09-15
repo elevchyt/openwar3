@@ -18,9 +18,7 @@ import { applyHotkeyOptions } from "../data/hotkeys";
 import { nativeVsync, relaunchNative, setNativeVsync } from "../assets/nativeInstall";
 import { showGlueDialog } from "./glueDialog";
 import { showHotkeyEditor } from "./hotkeyEditor";
-import { setGameTip, setGameTipSkin } from "./gameTip";
-import { tooltipSkinVars } from "./hud";
-import { blpToCanvas } from "../render/blputil";
+import { setGameTip } from "./gameTip";
 
 // The Options screen (issue #81), built from the game's own UI\FrameDef\Glue\OptionsMenu.fdf:
 // the three category buttons (Gameplay / Video / Sound) down the right, the settings for the
@@ -81,11 +79,6 @@ export async function mountOptions(
   vfs: DataSource,
   h: OptionsHandlers,
 ): Promise<FdfScreen> {
-  // The editor button's hover hint wears the game's tooltip art, as the in-game ones do.
-  setGameTipSkin(tooltipSkinVars((path) => {
-    const bytes = vfs.rawBytes(path);
-    return bytes ? blpToCanvas(bytes) : null;
-  }));
   const committed = loadOptions();
   // "Vertical Sync" is the SHELL's (electron/main.mjs — a launch switch), so in the desktop app its
   // saved choice wins over whatever this page's store remembers; in a browser there is no choice

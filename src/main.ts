@@ -57,6 +57,9 @@ import { LoadGate } from "./game/loadGate";
 import { MenuScene } from "./render/menuScene";
 import { applyMenuCursor } from "./ui/cursor";
 import { applyGameFont } from "./ui/gameFont";
+import { setGameTipSkin } from "./ui/gameTip";
+import { tooltipSkinVars } from "./ui/hud";
+import { blpToCanvas } from "./render/blputil";
 
 // Entry point (plan §6). WebGL scenes, one visible at a time:
 //   #menubg — the animated main-menu glue scene (issue #54), behind the FDF menu
@@ -929,6 +932,13 @@ function mountInstall(load: GateLoad): void {
   gate = null;
   applyMenuCursor(load.vfs); // WC3 human hand cursor in the menus
   applyGameFont(load.vfs); // Friz Quadrata TT, out of the install's own Fonts\ (issue #72)
+  // Every `setGameTip` hover hint from here on wears the game's tooltip art (the command card's border strip
+  // and fill), menus included — the update prompt's release link is up before any screen that
+  // could otherwise have dressed it (src/ui/updatePrompt.ts).
+  setGameTipSkin(tooltipSkinVars((path) => {
+    const bytes = load.vfs.rawBytes(path);
+    return bytes ? blpToCanvas(bytes) : null;
+  }));
   // Audio: every sound comes out of the archives, so this is the first moment it can exist.
   // The gate button the player just pressed is also the gesture that opens the browser's
   // autoplay gate, so the theme can start with the menu.
