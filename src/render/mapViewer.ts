@@ -5600,6 +5600,19 @@ export class MapViewerScene {
     return vision.revealed || vision.stateAt(x, y) === FogState.Visible;
   }
 
+  /** Is the TREE at (x, y) in live sight — asked of its whole footprint, the way the fog pass
+   *  lights it (`fogWidgets`), never of its origin. A tree blocks sight on every cell it covers,
+   *  so a 4×4 tree shadows its own back half and its origin sits where its four cells meet:
+   *  `pointVisible` there answered "out of sight" for a tree the player was looking straight
+   *  at whenever the worker stood on the wrong side of it (#43's trap again). Every chop was
+   *  then a wobble nobody "saw", and the felling went to `pendingFells` and came back as a
+   *  stump with no fall. */
+  private treeVisible(x: number, y: number): boolean {
+    const vision = this.rts?.getVision();
+    if (!vision) return true;
+    return vision.revealed || vision.bestStateAt(x, y, this.treeFogRadius.get(fogKey(x, y)) ?? 0) === FogState.Visible;
+  }
+
   /** DestroyEffect — the model dies where it stands (fadeOutFx plays its Death clip). */
   private destroySpecialFx(id: number): void {
     const fx = this.specialFx.get(id);
@@ -5961,7 +5974,7 @@ export class MapViewerScene {
       // asked BEFORE `doodadActor`, because spawning the stand-in is itself a visible change:
       // it retires the static doodad, which the fog pass tints, in favour of an instance that
       // (until this) nothing dimmed.
-      if (!this.pointVisible(h.x, h.y)) continue;
+      if (!this.treeVisible(h.x, h.y)) continue;
       const w = this.nearestDoodadWidget(h.x, h.y, map.doodads);
       if (!w) continue;
       const a = this.doodadActor(w);
@@ -6048,7 +6061,7 @@ export class MapViewerScene {
     // Not deferred with the picture: it is the same fact the footprint above is.
     const rec = this.destructibles.find((r) => r.isTree && r.life > 0 && r.x === x && r.y === y);
     if (rec) rec.life = 0;
-    if (!this.pointVisible(x, y)) {
+    if (!this.treeVisible(x, y)) {
       this.pendingFells.push({ x, y });
       return;
     }
@@ -6099,7 +6112,7 @@ export class MapViewerScene {
     if (!doodads) return;
     const held: Array<{ x: number; y: number }> = [];
     for (const t of this.pendingFells) {
-      if (this.pointVisible(t.x, t.y)) this.dropTreeModel(t.x, t.y, doodads, true);
+      if (this.treeVisible(t.x, t.y)) this.dropTreeModel(t.x, t.y, doodads, true);
       else held.push(t);
     }
     this.pendingFells = held;
