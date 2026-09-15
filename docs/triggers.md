@@ -1646,7 +1646,7 @@ flythrough shows the letterbox with no bust, so they toggle separately (`src/ui/
 message area (`MapViewerScene.consoleTransmission`). This covers WarChasers' Soul Keeper talking
 mid-dungeon, and Maiev's voiceovers in Rise of the Naga once its intro is over. The speaker's
 `_Portrait.mdx` replaces the selection's bust whatever is selected, mouths "Portrait Talk" for
-the voice line, and hands the portrait back when the scene's `sceneDuration` (the line plus
+the voice line, hides the selection's life and mana numbers under it, and hands the portrait back when the scene's `sceneDuration` (the line plus
 `bj_TRANSMISSION_PORT_HANGTIME`) runs out. The text is a message line, never chat: `UI\MiscUI.txt`
 names that frame for exactly this (`WorldFrameUnitMessage` — "small text that is used for
 in-game trigger based dialog"). The speaker's name leads the line in the panel's own gold.

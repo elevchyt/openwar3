@@ -1877,6 +1877,10 @@ export class GameHud {
   setPortraitForced(on: boolean): void {
     this.portraitForced = on;
     this.portrait.classList.toggle("empty", !on && !this.driver.selection());
+    // The numbers under the portrait are the SELECTION's life and mana, and the bust above them
+    // is somebody else's for as long as the line lasts — so they go with it (the developer's
+    // rule, 2026-09-15), and come back when the portrait does.
+    for (const el of [this.selHpText, this.selMpText]) el.style.visibility = on ? "hidden" : "";
   }
 
   private buildConsole(skinned: boolean): HTMLDivElement {
