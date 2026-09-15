@@ -63,6 +63,9 @@ const ABILITIES = new Map([
   ["AIrc", ability("AIrc", "AIrc", { levelData: [lvl({ data: D(7, 500, -1) })] })],
   // Tome of Power — DataA 1 "Levels Gained"
   ["AIlm", ability("AIlm", "AIlm", { levelData: [lvl({ data: D(1) })] })],
+  // Tome of Intelligence / Strength — DataA agi, DataB int, DataC str (the +2 tomes)
+  ["AIim", ability("AIim", "AIim", { levelData: [lvl({ data: D(0, 2, 0) })] })],
+  ["AIsm", ability("AIsm", "AIsm", { levelData: [lvl({ data: D(0, 0, 2) })] })],
 ]);
 
 const item = (id, abils, over = {}) => ({
@@ -76,7 +79,7 @@ const passive = (id, abils) => item(id, abils, { charges: 0, usable: false, peri
 const ITEMS = new Map([
   ["sreg", item("sreg", ["AIsl"])], ["hslv", item("hslv", ["AIrl"])], ["pclr", item("pclr", ["AIpr"])],
   ["phea", item("phea", ["AIh1"])], ["shea", item("shea", ["AIha"])], ["sres", item("sres", ["AIra"])],
-  ["tkno", item("tkno", ["AIlm"])],
+  ["tkno", item("tkno", ["AIlm"])], ["tint", item("tint", ["AIim"])], ["tstr", item("tstr", ["AIsm"])],
   ["evtl", passive("evtl", ["AIev"])], ["penr", passive("penr", ["AImb"])],
   ["brac", passive("brac", ["AIsr"])], ["arsh", passive("arsh", ["AIdd"])],
   ["nspi", passive("nspi", ["AImx"])], ["gemt", passive("gemt", ["Adt1"])],
@@ -105,7 +108,7 @@ function unit(over = {}) {
     pendingCast: null, followLeaderId: null, inCombat: false, working: false, atNode: false,
     noCollision: false, stallT: 0, waitT: 0, gaveUp: false, acquireT: 0, arrowShot: null,
     constructing: 0, cooldownLeft: 0, linkT: 0, linkGroup: [], repathT: 0, stunned: false,
-    baseStr: 0, baseAgi: 0, baseInt: 0, str: 0, agi: 0, int: 0, strPerLevel: 0, agiPerLevel: 0,
+    baseStr: 0, baseAgi: 0, baseInt: 0, startStr: 0, startAgi: 0, startInt: 0, str: 0, agi: 0, int: 0, strPerLevel: 0, agiPerLevel: 0,
     intPerLevel: 0, primaryAttr: 0, magicImmune: false, detectRadius: 0, summonLeft: 0,
     immolation: "", cloakBurnTick: 0, spellShieldCooldown: 0, vanished: false,
     ...over,
@@ -334,6 +337,18 @@ console.log("\nthe Tome of Power is a level");
   check("the tome fires", world.useItem(hero.id, 0, 0, hero.x, hero.y), true);
   check("…the hero is level 2", hero.level, 2);
   check("…with the skill point that comes with it", hero.skillPoints, 1);
+}
+
+console.log("\na tome's attribute points confer what attribute points confer  (recomputeStats' startInt)");
+{
+  world = newWorld();
+  const hero = give(unit({ isHero: true, baseInt: 17, startInt: 17, int: 17, mana: 250 }), "tint");
+  check("the Tome of Intelligence fires", world.useItem(hero.id, 0, 0, hero.x, hero.y), true);
+  check("…the hero has two more Intelligence", hero.int, 19);
+  check("…and 15 mana ceiling for each of them", hero.maxMana, 530);
+  const brute = give(unit({ isHero: true, baseStr: 22, startStr: 22, str: 22 }), "tstr");
+  check("a Tome of Strength fires", world.useItem(brute.id, 0, 0, brute.x, brute.y), true);
+  check("…and 25 hit points ceiling for each point", brute.maxHp, 1050);
 }
 
 console.log("\na HEXED hero uses nothing and picks up nothing — a critter has no hands");

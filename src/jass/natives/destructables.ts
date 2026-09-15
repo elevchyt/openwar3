@@ -139,7 +139,10 @@ export function registerDestructableNatives(rt: Runtime): void {
   });
   def(rt, "SetDestructableInvulnerable", (c, a) => {
     const d = dest(c, a[0]);
-    if (d) d.invulnerable = truthy(a[1]);
+    if (d) {
+      d.invulnerable = truthy(a[1]);
+      if (d.mapId > 0) c.rt.hooks?.setDestructableInvulnerable?.(d.mapId, d.invulnerable);
+    }
     return JNULL;
   });
   def(rt, "IsDestructableInvulnerable", (c, a) => jBool(!!dest(c, a[0])?.invulnerable));

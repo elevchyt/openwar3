@@ -110,7 +110,7 @@ function unit(over = {}) {
     pendingCast: null, followLeaderId: null, inCombat: false, working: false, atNode: false,
     noCollision: false, stallT: 0, waitT: 0, gaveUp: false, acquireT: 0, arrowShot: null,
     constructing: 0, cooldownLeft: 0, linkT: 0, linkGroup: [], repathT: 0, stunned: false,
-    baseStr: 0, baseAgi: 0, baseInt: 0, str: 0, agi: 0, int: 0, strPerLevel: 0, agiPerLevel: 0,
+    baseStr: 0, baseAgi: 0, baseInt: 0, startStr: 0, startAgi: 0, startInt: 0, str: 0, agi: 0, int: 0, strPerLevel: 0, agiPerLevel: 0,
     intPerLevel: 0, primaryAttr: 0, magicImmune: false, detectRadius: 0, summonLeft: 0,
     immolation: "", cloakBurnTick: 0, spellShieldCooldown: 0, vanished: false,
     ...over,
@@ -174,7 +174,7 @@ console.log("\nA hero's image shares HIS experience bar — the one the ENEMY se
   const im = hero({ x: 1100, y: 1000, prevX: 1100, prevY: 1000 });
   world.initIllusion(im, h.id, {
     dealt: 0, taken: 2, properName: "Samuro", mana: 0, level: h.level, xp: h.xp,
-    baseStr: 0, baseAgi: 0, baseInt: 0, baseMaxHp: 1000, inventory: [null, null, null, null, null, null],
+    baseStr: 0, baseAgi: 0, baseInt: 0, startStr: 0, startAgi: 0, startInt: 0, baseMaxHp: 1000, inventory: [null, null, null, null, null, null],
   });
   check("the copy arrives on the hero's level", im.level, 4);
   check("…and at the same place in the bar under it", im.xp, 1000);

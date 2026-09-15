@@ -551,5 +551,44 @@ console.log("a crowd on one enemy closes without wiggling");
   check(`no slot lies outside the strike band (${outOfBand} did)`, outOfBand === 0);
 }
 
+// ── A melee blow does not cross a cliff (SimWorld.cliffApart) ─────────────────────────────
+// Two melee units a swing apart, one a cliff level above the other: they trade no blows. The
+// same pair on one level fights, and a RANGED unit shoots up the cliff as before. The grid has
+// no cliff pathing here on purpose — only the levels differ — so nothing but the rule stops it.
+console.log("a melee blow does not cross a cliff");
+{
+  const cliff = (x) => (x >= 592 ? 128 : 0); // the high ground starts at x = 592
+  // The cliff FACE: one unwalkable column the whole height of the map, so there is no ramp.
+  const face = new Uint8Array(W * H);
+  for (let cy = 0; cy < H; cy++) face[cy * W + 18] = PathingFlag.Unwalkable; // x 576..607
+  const w = new SimWorld(new PathingGrid({ width: W, height: H, flags: face }, [0, 0]), 1);
+  w.setCliffLevelField((x) => cliff(x));
+  const low = addUnit(w, 1, 0, 550, 500);
+  const high = addUnit(w, 2, 1, 634, 500);
+  w.issueOrder(1, { kind: "attack", targetId: high.id, force: false });
+  w.issueOrder(2, { kind: "attack", targetId: low.id, force: false });
+  run(w, 6);
+  check(`the melee unit below never lands a blow on the one above (hp ${high.hp}/${high.maxHp})`, high.hp === high.maxHp);
+  check(`…nor the one above on the one below (hp ${low.hp}/${low.maxHp})`, low.hp === low.maxHp);
+
+  const flat = new SimWorld(grid(), 1);
+  flat.setCliffLevelField(() => 0);
+  addUnit(flat, 1, 0, 550, 500);
+  const same = addUnit(flat, 2, 1, 634, 500, { speed: 0 });
+  flat.issueOrder(1, { kind: "attack", targetId: same.id, force: false });
+  run(flat, 4);
+  check("on one level the same pair fights", same.hp < same.maxHp);
+
+  const ranged = new SimWorld(grid(), 1);
+  ranged.setCliffLevelField((x) => cliff(x));
+  const bow = WEAPON();
+  Object.assign(bow, { ranged: true, range: 500, baseRange: 500, missileSpeed: 0, weaponType: "instant" });
+  addUnit(ranged, 1, 0, 400, 500, { weapons: [bow] });
+  const shotAt = addUnit(ranged, 2, 1, 640, 500, { speed: 0 });
+  ranged.issueOrder(1, { kind: "attack", targetId: shotAt.id, force: false });
+  run(ranged, 4);
+  check("a ranged unit still shoots up the cliff", shotAt.hp < shotAt.maxHp);
+}
+
 console.log(failures === 0 ? "\nattack-order: all checks passed" : `\nattack-order: ${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

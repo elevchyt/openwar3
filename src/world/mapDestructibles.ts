@@ -75,6 +75,8 @@ export interface MapDestructible {
    *  (`SNDXDGAT` → AnimLookups `DGAT` → `GateDeath` → GateEpicDeath.wav). Two sources, one
    *  table: whoever plays this has to try the column and then the model. */
   deathSound: string;
+  /** Set by the SCRIPT (`SetDestructableInvulnerable`) — nothing in the .doo or the SLK says it. */
+  invulnerable?: boolean;
   /** The SLK's `Name` — usually a `WESTRING_*` key into `UI\WorldEditStrings.txt`, resolved
    *  by the caller (GetDestructableName is the only thing that reads it). */
   name: string;

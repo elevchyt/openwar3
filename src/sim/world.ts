@@ -1577,9 +1577,17 @@ export interface SimUnit {
   xp: number; // hero experience
   skillPoints: number; // unspent skill points (1 gained per level)
   primaryAttr: PrimaryAttribute;
-  baseStr: number; // level-1 attributes (growth is added per level)
+  baseStr: number; // level-1 attributes (growth is added per level), INCLUDING permanent tome gains
   baseAgi: number;
   baseInt: number;
+  /** The TYPE's level-1 attributes — the ones `baseMaxHp`/`baseMaxMana`/`baseArmor`/the base
+   *  damage were already computed from. Never moved by a tome: every attribute point above THESE
+   *  is what confers hit points, mana, armour and damage (recomputeStats). Measured against
+   *  `baseStr` instead, a tome raised both sides of the subtraction and conferred nothing — an
+   *  Intelligence tome added no mana, a Strength tome no hit points. */
+  startStr: number;
+  startAgi: number;
+  startInt: number;
   strPerLevel: number;
   agiPerLevel: number;
   intPerLevel: number;
@@ -2515,6 +2523,8 @@ function snapPool(v: number): number {
 // Attribute → stat conversions (MiscGame Str/Int/Agi bonuses; Liquipedia: Hero).
 const HP_PER_STR = MISC_GAME.StrHitPointBonus;
 const MANA_PER_INT = MISC_GAME.IntManaBonus;
+/** One cliff layer in world units (world/terrain.ts `CELL`) — see SimWorld.cliffApart. */
+const CLIFF_STEP = 128;
 const ARMOR_PER_AGI = MISC_GAME.AgiDefenseBonus;
 const REGEN_PER_STR = MISC_GAME.StrRegenBonus; // hp/sec per Strength point
 const REGEN_PER_INT = MISC_GAME.IntRegenBonus; // mana/sec per Intelligence point
@@ -3444,6 +3454,25 @@ export class SimWorld {
   setHarvestBonus(player: number, factor: number): void {
     if (factor === 1) this.harvestBonus.delete(player);
     else this.harvestBonus.set(player, factor);
+  }
+
+  /**
+   * `PLAYER_STATE_GIVES_BOUNTY` for the players a script has SET it on (`SetPlayerFlagBJ`). Only the
+   * writes are stored: a player nobody has written keeps the engine's default, which is Neutral
+   * Hostile's on and every other slot's off (see awardBounty). WarChasers is the map that needs it —
+   * its whole dungeon is owned by Player(11), a playable slot, and its init turns the flag on for
+   * exactly that player (`SetPlayerFlagBJ( PLAYER_STATE_GIVES_BOUNTY, true, Player(11) )`), so its
+   * monsters paid nothing while only creeps were paid.
+   */
+  private readonly bountyFlags = new Map<number, boolean>();
+
+  setGivesBounty(player: number, on: boolean): void {
+    this.bountyFlags.set(player, on);
+  }
+
+  /** Does a body this player owns pay its bounty? `team` is the owner's sim team (-1 = Neutral Hostile). */
+  givesBounty(player: number, team: number): boolean {
+    return this.bountyFlags.get(player) ?? team === -1;
   }
 
   stashOf(owner: number): { gold: number; lumber: number } {
@@ -7619,6 +7648,9 @@ export class SimWorld {
       | "skillPoints"
       | "primaryAttr"
       | "baseStr"
+      | "startStr"
+      | "startAgi"
+      | "startInt"
       | "baseAgi"
       | "baseInt"
       | "strPerLevel"
@@ -7893,6 +7925,9 @@ export class SimWorld {
       baseStr: hero?.str ?? 0,
       baseAgi: hero?.agi ?? 0,
       baseInt: hero?.int ?? 0,
+      startStr: hero?.str ?? 0,
+      startAgi: hero?.agi ?? 0,
+      startInt: hero?.int ?? 0,
       strPerLevel: hero?.strPerLevel ?? 0,
       agiPerLevel: hero?.agiPerLevel ?? 0,
       intPerLevel: hero?.intPerLevel ?? 0,
@@ -9041,7 +9076,7 @@ export class SimWorld {
    *  sim is measured. False when nothing in the loadout may strike it at all. */
   private inWeaponRange(u: SimUnit, t: SimUnit): boolean {
     const w = this.weaponVs(u, t);
-    if (!w) return false;
+    if (!w || this.cliffApart(u, t, w)) return false;
     return Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius <= w.range;
   }
 
@@ -10881,6 +10916,31 @@ export class SimWorld {
     return null;
   }
 
+  /**
+   * The terrain's CLIFF LEVEL at a point, in world units (layer × 128, ramps interpolated) — the
+   * same sampler the fog's line of sight is cast over (heightmap.ts makeCliffLevelSampler), so
+   * rolling ground height is not a level. Null in a headless world with no terrain, where
+   * `cliffApart` is never true.
+   */
+  private cliffLevelAt: ((x: number, y: number) => number) | null = null;
+
+  setCliffLevelField(sampler: ((x: number, y: number) => number) | null): void {
+    this.cliffLevelAt = sampler;
+  }
+
+  /**
+   * A MELEE blow cannot cross a cliff: a ground attacker and a ground target standing on
+   * different cliff levels are not in reach of each other however close they stand, so the
+   * attacker has to walk round by a ramp (the developer's rule, 2026-09-15 — Footmen were
+   * hitting archers on the ledge above them). "Different" is more than half a level apart,
+   * so two bodies on the same ramp still fight. A ranged weapon, a flyer on either end and a
+   * world with no terrain are all untouched.
+   */
+  private cliffApart(u: SimUnit, t: SimUnit, w: SimWeapon | null | undefined = this.weaponVs(u, t)): boolean {
+    if (!this.cliffLevelAt || !w || w.ranged || u.flying || t.flying) return false;
+    return Math.abs(this.cliffLevelAt(u.x, u.y) - this.cliffLevelAt(t.x, t.y)) > CLIFF_STEP / 2;
+  }
+
   /** Whether `u` has any weapon that may strike `t`. Every automatic target scan asks this, so
    *  a Footman never walks across the map at a passing Gargoyle it can never hit. */
   private canAttack(u: SimUnit, t: SimUnit): boolean {
@@ -10903,9 +10963,10 @@ export class SimWorld {
       u.agi = Math.floor(u.baseAgi + u.agiPerLevel * (u.level - 1)) + item.agi;
       u.int = Math.floor(u.baseInt + u.intPerLevel * (u.level - 1)) + item.int;
     }
-    const dStr = u.isHero ? u.str - Math.floor(u.baseStr) : 0;
-    const dAgi = u.isHero ? u.agi - Math.floor(u.baseAgi) : 0;
-    const dInt = u.isHero ? u.int - Math.floor(u.baseInt) : 0;
+    // Measured from the TYPE's own attributes (startStr), not from baseStr, which a tome raises.
+    const dStr = u.isHero ? u.str - Math.floor(u.startStr) : 0;
+    const dAgi = u.isHero ? u.agi - Math.floor(u.startAgi) : 0;
+    const dInt = u.isHero ? u.int - Math.floor(u.startInt) : 0;
     const primaryDelta = u.primaryAttr === PrimaryAttribute.Strength ? dStr : u.primaryAttr === PrimaryAttribute.Agility ? dAgi : u.primaryAttr === PrimaryAttribute.Intelligence ? dInt : 0;
     let armorBonus = 0;
     let manaRegenBonus = 0;
@@ -14031,10 +14092,12 @@ export class SimWorld {
    * what it bothers to change: `ConfigureNeutralVictim` explicitly zeroes the state for Neutral
    * Victim ("Neutral Victim does not give bounties", Blizzard.j 5044) and touches no other
    * player — so the neutrals give bounty and the twelve human slots do not. In a melee match
-   * that reduces to exactly the rule everyone knows: creeps pay, players don't.
+   * that reduces to exactly the rule everyone knows: creeps pay, players don't. A map's own script
+   * may say otherwise for any player (`setGivesBounty`).
    */
   private awardBounty(victim: SimUnit, killerId: number): void {
-    if (victim.team !== -1) return; // not Neutral Hostile — nobody is paying (see above)
+    // Neutral Hostile unless a script switched the flag for the owner (bountyFlags).
+    if (!this.givesBounty(victim.owner, victim.team)) return;
     const killer = killerId ? this.units.get(killerId) : undefined;
     if (!killer || !this.hostile(killer, victim)) return; // unattributed, or your own doing
     const def = this.unitReg?.get(victim.typeId);
@@ -16173,7 +16236,7 @@ export class SimWorld {
     if (u.gaveUp) {
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       const band = w.ranged ? w.range : w.range + ATTACK_LEASH;
-      if (gap <= band) {
+      if (gap <= band && !this.cliffApart(u, t, w)) {
         u.gaveUp = false; // it wandered into reach — fight
       } else if (Math.abs(gap - u.gaveUpGap) > ATTACK_LEASH) {
         // The target moved relative to us since we settled to wait — the fight has
@@ -16218,12 +16281,12 @@ export class SimWorld {
         u.acquireT = 0.2;
         const strike = w.ranged ? w.range : w.range + ATTACK_LEASH;
         const curGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-        if (curGap > strike) {
+        if (curGap > strike || this.cliffApart(u, t, w)) {
           // A creep asks the same tier-ordered question it asks everywhere else: the enemy
           // that is RIGHT HERE is worth turning on, but not when the thing right here is the
           // Peasant or the Serpent Ward standing in front of the army (see threatTier).
-          const near = u.isCreep ? this.bestCreepTarget(u, strike) : this.acquireTarget(u, strike);
-          if (near && near.id !== t.id) {
+          const near = u.isCreep ? this.bestCreepTarget(u, strike) : this.acquireTarget(u, strike, true);
+          if (near && near.id !== t.id && !this.cliffApart(u, near)) {
             this.issueAttack(u.id, near.id);
             t = near;
             w = this.weaponVs(u, t) ?? w; // the new target may want the other slot
@@ -16270,7 +16333,7 @@ export class SimWorld {
     // uses, ranged and melee alike: weapon range while there is still road to walk,
     // range + leash once the approach has run out or the fight has already started.
     const band = u.inCombat || !u.moving ? w.range + ATTACK_LEASH : w.range;
-    if (gap <= band) {
+    if (gap <= band && !this.cliffApart(u, t, w)) {
       u.stallT = 0;
       u.attackStalls = 0; // in the fight — clear the stall streak
       return;
@@ -16472,7 +16535,11 @@ export class SimWorld {
     if (u.flying) return true;
     const reach = this.weaponVs(u, t)?.range ?? 0; // the range of the slot THIS target calls for
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    if (gap <= reach) return true;
+    // Across a cliff a melee unit is only "able to reach" a target by WALKING to its level, so
+    // the probe below — which ends wherever the path runs out, at the foot of the cliff, and
+    // calls that close enough — cannot vouch for it; only the region labels can.
+    const cliff = this.cliffApart(u, t);
+    if (gap <= reach && !cliff) return true;
     const start = this.grid.footprintAnchor(u.x, u.y, u.footprint);
     const goal = this.grid.footprintAnchor(t.x, t.y, u.footprint);
     // The ground's own answer first. The region labels are the static connectivity of the
@@ -16485,6 +16552,7 @@ export class SimWorld {
     const domain = pathDomain(u);
     const startRegion = this.grid.regionAt(start[0], start[1], domain, u.footprint);
     if (startRegion >= 0 && this.grid.regionNear(goal[0], goal[1], domain, u.footprint, 2) === startRegion) return true;
+    if (cliff) return false;
     const wasReserved = u.hasReservation;
     this.unsettle(u);
     const blocked = this.clearanceBlocker(u, start);
@@ -16573,7 +16641,7 @@ export class SimWorld {
     // has started, where it is re-chase hysteresis. The wide reach is honest either way:
     // range + leash is what tickSwing actually connects a hit from.
     const chaseGap = u.inCombat || !u.moving ? w.range + ATTACK_LEASH : w.range;
-    if (gap > chaseGap) {
+    if (gap > chaseGap || this.cliffApart(u, t, w)) {
       u.inCombat = false;
       // A tower cannot follow. Whatever it was shooting at has left, so the order is over and
       // it goes back to watching its ground — otherwise an ordered target that walks away
@@ -16775,7 +16843,7 @@ export class SimWorld {
     const w = this.weaponVs(u, t);
     if (!w) return true;
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    if (gap <= w.range + ATTACK_LEASH) {
+    if (gap <= w.range + ATTACK_LEASH && !this.cliffApart(u, t, w)) {
       u.stallT = 0; // in the fight — nothing to watch
       u.attackStalls = 0;
       return false;
@@ -17184,7 +17252,7 @@ export class SimWorld {
       // target turned and ran — the animation played, the cooldown was spent, and nothing
       // happened — which is a fraction of the ground WC3 actually allows.
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap <= w.range + w.rangeBuffer) this.dealDamage(u, t, w, backstab);
+      if (gap <= w.range + w.rangeBuffer && !this.cliffApart(u, t, w)) this.dealDamage(u, t, w, backstab);
     }
   }
 
@@ -21705,7 +21773,7 @@ export class SimWorld {
     const best = u.isCreep
       ? this.bestCreepTarget(u, reach, true)
       : pinned
-        ? this.acquireTarget(u, reach)
+        ? this.acquireTarget(u, reach, true)
         : this.acquireTarget(u, range) ?? this.assistTarget(u, ASSIST_RANGE);
     if (best) {
       // A fight it chose for itself is leashed to where it stands (see setAutoGuardPost).
@@ -21751,12 +21819,12 @@ export class SimWorld {
     const reach = w.range + (u.inCombat ? ATTACK_LEASH : 0);
     let t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
     if (t && !this.canAttack(u, t)) t = undefined; // nothing in hand for it (air/ground/structure)
-    if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > reach)) t = undefined;
+    if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > reach || this.cliffApart(u, t))) t = undefined;
     if (!t) {
       u.acquireT -= dt;
       if (u.acquireT <= 0) {
         u.acquireT = ACQUIRE_PERIOD;
-        t = this.acquireTarget(u, w.range) ?? undefined; // striking distance only
+        t = this.acquireTarget(u, w.range, true) ?? undefined; // striking distance only
       }
     }
     if (t) {
@@ -21774,7 +21842,7 @@ export class SimWorld {
    *  team — WC3 units never aggro a target hidden in the fog of war — and (b) not
    *  an un-triggered neutral-hostile creep camp: you only pull a camp by attacking
    *  it or walking into its own aggro range, never by an idle unit noticing it. */
-  private acquireTarget(u: SimUnit, range: number): SimUnit | null {
+  private acquireTarget(u: SimUnit, range: number, strikeOnly = false): SimUnit | null {
     let best: SimUnit | null = null;
     let bestGap = range;
     for (const t of this.units.values()) {
@@ -21785,6 +21853,9 @@ export class SimWorld {
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't wake an idle creep camp
       if (!this.canAttack(u, t)) continue; // a Footman never turns on the Gryphon overhead
       if (!this.canSee(u, t)) continue; // out of sight (fog, night, or a treeline) → don't aggro
+      // A unit that may not step toward what it picks (Hold Position, pinned) takes only what it
+      // can strike from where it stands — never a target on the ledge above it (cliffApart).
+      if (strikeOnly && this.cliffApart(u, t)) continue;
       bestGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       best = t;
     }

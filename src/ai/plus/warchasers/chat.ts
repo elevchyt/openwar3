@@ -365,9 +365,6 @@ export const REST_HP_LINES = [
   "wait i need a bit more health", "hold on, i need to heal", "wait, low hp", "give me a sec to heal up", "wait up, im hurt",
 ] as const;
 
-/** …out of mana. */
-export const REST_MANA_LINES = ["wait i need some mana", "hold on, low mana", "give me a sec, im oom"] as const;
-
 /** Told to go while it is still hurt — it goes, and says so. */
 export const GOING_HURT_LINES = ["ok, but im still low", "coming, careful im low on hp", "ok ok, coming"] as const;
 

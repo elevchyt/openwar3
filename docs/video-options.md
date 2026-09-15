@@ -172,11 +172,16 @@ real frames until one was due therefore held a match at ~110 fps. The cap sleeps
 instead, and every real frame it asks for runs the batch. Measured on Echo Isles in a
 1280×720 window: 144 fps with vsync on, ~530 uncapped, 301 capped.
 
-The reticle, the tinted hover hand and the carried item are real `cursor:` images for the same
-reason (`overlayCursor` / `carriedCursor` in `mapViewer.ts`). A DOM element moved to the pointer
-trails it by a frame or two at any frame rate. The pulse is 8 baked frames stepped on the wall
-clock, and Chromium re-reads a changed `cursor:` without the mouse moving. The carried item is ONE
-image, the icon composed behind the closed gauntlet, with the hotspot on the gauntlet's fingertip.
+The reticle and the tinted hover hand are real `cursor:` images for the same reason
+(`overlayCursor` in `mapViewer.ts`). A DOM element moved to the pointer trails it by a frame or
+two at any frame rate. The pulse is 8 baked frames stepped on the wall clock, and Chromium re-reads
+a changed `cursor:` without the mouse moving.
+
+The CARRIED ITEM is the exception, on purpose: it is DOM again (`updateCarriedItem` /
+`placeCarriedItem`, moved on pointermove as well as on the frame). As one composed cursor image it
+did not trail, but every right-click on an item built a fresh canvas plus its dozen edge crops and
+wrote them into a custom property on `<body>` — a whole-document style recalc — and the pick-up
+hitched visibly. The reticle and the hand are baked once and reused, so they do not pay that.
 
 Chromium refuses any cursor over 32 px whose rect reaches outside the viewport and moves to the
 next list entry, and the bottom inventory row sits ~5 px off the bottom edge. So

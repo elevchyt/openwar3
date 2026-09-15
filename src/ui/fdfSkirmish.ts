@@ -139,10 +139,9 @@ export async function mountSkirmish(
     sharedControl: false,
     randomRaces: false,
     randomHero: false,
-    /** Opens on Map Explored, which is what this screen has always started a match with —
-     *  the whole map as grey terrain memory, live fog still hiding enemy movement. DEFAULT is
-     *  a real fourth choice here (WC3's normal pitch-black fog), not a rename of that one. */
-    visibility: "MAP_EXPLORED" as Visibility,
+    /** Opens on DEFAULT — WC3's normal pitch-black fog, the real client's own default. Map
+     *  Explored (the whole map as grey terrain memory) is still one click away on the row. */
+    visibility: "DEFAULT" as Visibility,
     /**
      * **Computer+** — play the computer seats with OpenWar3's own improved melee AI
      * (src/ai/plus/, docs/computer-plus.md) rather than Blizzard's ported scripts.
@@ -587,8 +586,7 @@ function toConfig(
   return {
     slots: playing,
     // Advanced Options → Visibility. Was hardcoded to "explored" while there was no screen
-    // to say otherwise; the pane's own default still opens on Map Explored, so a match
-    // started without touching it plays exactly as it did before.
+    // to say otherwise; the pane now opens on Default (advancedOptions.ts DEFAULT_ADVANCED).
     fog: opts.fog,
     forces: info.forces.map((f) => ({ allied: f.allied, sharedVision: f.sharedVision })),
     seed: 1 + Math.floor(Math.random() * 2147483645),

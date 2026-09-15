@@ -1318,10 +1318,11 @@ export class MapViewerScene {
   private queueFlags: SpawnInstance[] = []; // pool: small flags at queued-order positions
   private selectBoxEl: HTMLDivElement | null = null;
   private cursorStyleEl: HTMLStyleElement | null = null;
-  private holdHandImg: HTMLCanvasElement | null = null; // the model's "HoldItem" cell (see applyRaceCursor)
+  private carryEl: HTMLDivElement | null = null; // the item icon "held" by the hand while moving it
+  private carryHandEl: HTMLDivElement | null = null; // the closed gauntlet over that icon
+  private carryIconUrl = ""; // the icon carryEl is showing, so it is only re-set when it changes
+  private holdHandUrl = ""; // the model's "HoldItem" cell (see applyRaceCursor)
   private carryPx = 0; // the carried icon's size, measured off an inventory slot at pick-up; 0 = not carrying
-  private carryCursors = new Map<string, string>(); // `cursor:` values by icon url|size; "" while its icon decodes
-  private pointerRule = ""; // the plain race cursor's `cursor:` value (applyRaceCursor)
   private lastCursor = { x: 0, y: 0 }; // viewport cursor position, tracked everywhere (see trackCursor)
   private cursorSheet: HTMLCanvasElement | null = null; // race cursor sprite sheet
   private reticleImgs = new Map<string, HTMLCanvasElement>(); // tinted WC3 reticle by colour key
@@ -1782,6 +1783,7 @@ export class MapViewerScene {
       this.destSimIds.set(simId, d.id);
       this.destSimByDoo.set(d.id, simId);
       this.destAwaitingBody.add(simId);
+      if (d.invulnerable) rts.simWorld.setInvulnerable(simId, true);
     }
   }
 
@@ -2808,6 +2810,7 @@ export class MapViewerScene {
       killDestructable: (id, clip) => this.killDestructible(id, clipRe(clip)),
       restoreDestructable: (id, life, birth) => this.restoreDestructible(id, life, birth),
       setDestructableLife: (id, life) => this.setDestructibleLife(id, life),
+      setDestructableInvulnerable: (id, on) => this.setDestructibleInvulnerable(id, on),
       setDestructableAnimation: (id, name) => this.setDestructibleAnimation(id, name),
       removeDestructable: (id) => this.removeDestructible(id),
       showDestructable: (id, show) => this.showDestructible(id, show),
@@ -6275,6 +6278,18 @@ export class MapViewerScene {
     d.life = life;
     this.syncDestructibleToSim(d);
     this.restampDestructible(d, wasAlive);
+  }
+
+  /** `SetDestructableInvulnerable` — onto the destructible's sim unit, where every attack, spell
+   *  and auto-acquire already refuses an invulnerable target. It used to stop at the JASS record, so
+   *  WarChasers' locked gates (`DoorHealth`) could simply be cut down instead of opened with a key.
+   *  Kept on the record too, for a body seeded after the script ran. */
+  setDestructibleInvulnerable(id: number, on: boolean): void {
+    const d = this.destructibleById(id);
+    if (!d) return;
+    d.invulnerable = on;
+    const simId = this.destSimByDoo.get(d.id);
+    if (simId !== undefined) this.rts?.simWorld.setInvulnerable(simId, on);
   }
 
   /** `SetDestructableAnimation` — the clip name the script asked for ("stand", "death",
@@ -10496,7 +10511,6 @@ export class MapViewerScene {
     this.reticleImgs.clear();
     this.handImgs.clear();
     this.overlayCursors.clear();
-    this.carryCursors.clear();
     // The sheet is a grid of animation frames; the top-left cell is the idle
     // pointer. Cells are one-eighth of the sheet width, blown up by cursorPx.
     const cell = Math.round(sheet.width / 8);
@@ -10508,7 +10522,6 @@ export class MapViewerScene {
     // cell rather than `auto`, so the OS pointer never shows through near the right or bottom
     // edge — which is where the whole command card is (ui/cursor.ts `cursorValue`).
     const rule = cursorValue(sheet, cell);
-    this.pointerRule = rule;
     document.body.style.cursor = rule;
     // The other two states this sheet answers for, both read off `UI\Cursor\<race>Cursor.mdx`
     // rather than guessed at — the model names its sequences and drives the cell with a
@@ -10517,13 +10530,13 @@ export class MapViewerScene {
     //    with geoset 1 (a replaceable-21 quad — the item's own icon). The sequence keys TWO
     //    cells: col 4 (the finger still out) for its length and col 3 (the finger curled
     //    shut) on its very last frame — so col 3 is the pose it comes to REST in, and the
-    //    one that reads as a grip. The icon hangs up and to the left of the pointer's tip, so
-    //    the two are composed into ONE image whose hotspot is the gauntlet's (carriedCursor).
+    //    one that reads as a grip. It is drawn as DOM rather than set as a `cursor:` (see
+    //    updateCarriedItem for why).
     //  - "Scroll *" (edge-panning) = row 3, cols 5/6/7 — the three chevron frames, stepped
     //    every 33ms (the model's keys sit 33 apart, interpolation NONE). All eight
     //    directions play THOSE SAME three cells and differ only by a Z rotation on the
     //    node, so one strip + a CSS rotate is the whole thing (see showScrollArrow).
-    this.holdHandImg = this.cursorStripCanvas(3, 3, 1);
+    this.holdHandUrl = this.cursorStripUrl(3, 3, 1);
     this.scrollStripUrl = this.cursorStripUrl(3, 5, 3);
     // Force the WC3 cursor over the ENTIRE in-game UI — buttons, the map, the
     // minimap, everything — overriding the default pointer/crosshair cursors so
@@ -10546,13 +10559,14 @@ export class MapViewerScene {
     //    cinematic that raises one has just asked the player to click something — so the
     //    cursor comes back for as long as it is on screen, and goes again with it.
     //  - `carrying-item` is the model's "HoldItem": the gauntlet CLOSES around what you
-    //    picked up (carriedCursor). Body-wide, because every drop target (another slot,
+    //    picked up. Both halves of it are DOM (updateCarriedItem), so this rule only has to
+    //    get the pointer out from in front of them. Body-wide, because every drop target (another slot,
     //    the ground, an allied hero) is somewhere else on the screen.
     //  - `scroll-on` is the edge-pan chevron, which IS the cursor while it is up — the
     //    model hides every other geoset during its "Scroll *" sequences.
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
-      `body.in-game.carrying-item, body.in-game.carrying-item * { cursor: var(--ow3-overlay-cursor) !important; }\n` +
+      `body.in-game.carrying-item, body.in-game.carrying-item * { cursor: none !important; }\n` +
       `body.in-game.reticle-on #map { cursor: var(--ow3-overlay-cursor) !important; }\n` +
       `body.in-game.armed-on, body.in-game.armed-on * { cursor: var(--ow3-overlay-cursor) !important; }\n` +
       `body.in-game.scroll-on, body.in-game.scroll-on * { cursor: none !important; }\n` +
@@ -10674,47 +10688,6 @@ export class MapViewerScene {
       : cursorImageValue(c, CURSOR_HOTSPOT[0], CURSOR_HOTSPOT[1]);
     this.overlayCursors.set(key, rule);
     return rule;
-  }
-
-  /** The `cursor:` value for carrying the item whose icon is `iconUrl`, drawn `px` square —
-   *  the model's "HoldItem": the closed gauntlet with the item's icon BEHIND it (the icon quad
-   *  sits at z -0.0192, under the hand's), both composed into one image, cached. "" while the
-   *  icon is still decoding; the caller shows the plain pointer for those few milliseconds.
-   *
-   *  One image, not a cursor plus a DOM icon, for the reason the reticle is one: anything the
-   *  page draws at the pointer trails it. The icon hangs up and to the LEFT of the gauntlet
-   *  (CARRIED_ITEM_OFFSET is negative on both axes), so the image grows that way and the
-   *  hotspot moves in by the same amount — it stays on the gauntlet's fingertip, where the
-   *  plain pointer's was, so picking an item up does not move the point you are aiming with. */
-  private carriedCursor(iconUrl: string, px: number): string {
-    const key = `${iconUrl}|${px}`;
-    const cached = this.carryCursors.get(key);
-    if (cached !== undefined) return cached;
-    this.carryCursors.set(key, "");
-    const icon = new Image();
-    icon.onload = () => {
-      if (this.carryCursors.get(key) !== "") return; // the caches were cleared under us
-      const hand = this.holdHandImg;
-      const hw = hand?.width ?? 0;
-      const hh = hand?.height ?? 0;
-      // The icon's top-left against the gauntlet's, and so how far the image reaches past the
-      // gauntlet on each side.
-      const ix = Math.round(px * CARRIED_ITEM_OFFSET[0]);
-      const iy = Math.round(px * CARRIED_ITEM_OFFSET[1]);
-      const left = Math.max(0, -ix);
-      const top = Math.max(0, -iy);
-      const c = document.createElement("canvas");
-      c.width = Math.max(left + hw, left + ix + px);
-      c.height = Math.max(top + hh, top + iy + px);
-      const ctx = c.getContext("2d")!;
-      ctx.imageSmoothingEnabled = false; // the icon is drawn pixelated, as it was on the slot
-      ctx.drawImage(icon, left + ix, top + iy, px, px);
-      ctx.imageSmoothingEnabled = true;
-      if (hand) ctx.drawImage(hand, left, top); // already enlarged bilinearly (see CURSOR_SCALE)
-      this.carryCursors.set(key, cursorImageValue(c, left + CURSOR_HOTSPOT[0], top + CURSOR_HOTSPOT[1]));
-    };
-    icon.src = iconUrl;
-    return "";
   }
 
   /** Point --ow3-overlay-cursor at `rule`. Written only when it changes: this runs every frame,
@@ -12009,7 +11982,12 @@ export class MapViewerScene {
     this.ghost = null;
     this.selectBoxEl?.remove();
     this.selectBoxEl = null;
-    this.holdHandImg = null;
+    this.carryEl?.remove();
+    this.carryEl = null;
+    this.carryHandEl?.remove();
+    this.carryHandEl = null;
+    this.carryIconUrl = "";
+    this.holdHandUrl = "";
     this.carryPx = 0;
     this.cursorStyleEl?.remove();
     this.cursorStyleEl = null;
@@ -12039,7 +12017,6 @@ export class MapViewerScene {
     this.reticleImgs.clear();
     this.handImgs.clear();
     this.overlayCursors.clear();
-    this.carryCursors.clear();
     this.scrollStripUrl = "";
     this.disposeFog(); // the veil mesh and its GL texture — loadMap dropped these, exit didn't
     document.body.classList.remove("reticle-on", "armed-on", "carrying-item", "scroll-on", "game-paused");
@@ -13153,10 +13130,10 @@ export class MapViewerScene {
    *  Patrol/Rally/Repair) it is the WC3 **target reticle**; while merely hovering a
    *  unit/mine it keeps the race **hand cursor** but recoloured. Both pulse (colour
    *  only, constant size) — green friendly / yellow neutral / red enemy. While an item is
-   *  being moved it is the gauntlet holding it. All three are real `cursor:` images, swapped
-   *  in through --ow3-overlay-cursor under the `armed-on` (screen-wide), `reticle-on`
-   *  (map-only) or `carrying-item` (screen-wide) class — never DOM chasing the pointer, which
-   *  trails it by a frame or two however fast the game draws. */
+   *  being moved it is the gauntlet holding it (updateCarriedItem, DOM). The reticle and the
+   *  hand are real `cursor:` images, swapped in through --ow3-overlay-cursor under the
+   *  `armed-on` (screen-wide) or `reticle-on` (map-only) class — never DOM chasing the
+   *  pointer, which trails it by a frame or two however fast the game draws. */
   private updateReticle(): void {
     if (!this.rts) return this.hideCursorOverlay();
     const mode = this.rts.orderMode;
@@ -13186,15 +13163,35 @@ export class MapViewerScene {
     document.body.classList.toggle("reticle-on", kind === "hand");
   }
 
-  /** The carried cursor — the model's "HoldItem" (carriedCursor) — for inventory `slot`, or
-   *  back off with `slot` < 0. Returns whether an item is being carried. Body-wide, over the
-   *  map AND the console, because every one of those is a legal drop target (another slot,
-   *  the ground, an allied hero). */
+  /** The carried cursor — the model's "HoldItem": the closed gauntlet with the item's icon
+   *  under its fingers — for inventory `slot`, or back off with `slot` < 0. Returns whether an
+   *  item is being carried. Body-wide, over the map AND the console, because every one of those
+   *  is a legal drop target (another slot, the ground, an allied hero).
+   *
+   *  Two DOM elements chasing the pointer, NOT a composed `cursor:` image. The composed cursor
+   *  (1c07fee) did not trail, but every pick-up built a fresh canvas and the edge-crop list
+   *  `cursorImageValue` makes of it (a dozen PNG encodes) and wrote the lot into a custom
+   *  property on <body> — a style recalc of the whole document — and right-clicking an item
+   *  hitched the game for it (the developer, 2026-09-15). The reticle and the hover hand, which
+   *  are baked once and reused, stay real cursors.
+   *
+   *  The GAUNTLET is placed exactly where the pointer it replaces was drawn — same cell of the
+   *  same sheet, offset by the same CURSOR_HOTSPOT — so picking an item up does not move the
+   *  point you are aiming with; the icon then hangs off it by the model's own offset. */
   private updateCarriedItem(slot: number): boolean {
     document.body.classList.toggle("carrying-item", slot >= 0);
-    if (slot < 0) {
+    const icon = slot >= 0 ? this.rts?.inventorySlots()[slot]?.icon : "";
+    const url = icon ? this.blpIcon(icon) : null;
+    if (slot < 0 || !url) {
       this.carryPx = 0;
-      return false;
+      if (this.carryEl) this.carryEl.hidden = true;
+      if (this.carryHandEl) this.carryHandEl.hidden = true;
+      return slot >= 0;
+    }
+    if (!this.carryEl) {
+      this.carryEl = document.createElement("div");
+      this.carryEl.className = "carried-item";
+      document.body.appendChild(this.carryEl);
     }
     if (!this.carryPx) {
       // Sized off the REAL inventory slot (the console scales with the window), a touch
@@ -13203,12 +13200,39 @@ export class MapViewerScene {
       // would force a layout.
       const slotPx = document.querySelector(".hud-inv-slot")?.clientWidth || 32;
       this.carryPx = Math.max(12, Math.round(slotPx * CARRIED_ITEM_SCALE));
+      this.carryEl.style.width = `${this.carryPx}px`;
+      this.carryEl.style.height = `${this.carryPx}px`;
     }
-    const icon = this.rts?.inventorySlots()[slot]?.icon;
-    const url = icon ? this.blpIcon(icon) : null;
-    // No icon, or one still decoding: the plain pointer rather than no cursor at all.
-    this.setOverlayCursor((url && this.carriedCursor(url, this.carryPx)) || this.pointerRule);
+    if (url !== this.carryIconUrl) {
+      this.carryIconUrl = url;
+      this.carryEl.style.backgroundImage = `url(${url})`;
+    }
+    this.carryEl.hidden = false;
+    if (this.holdHandUrl && !this.carryHandEl) {
+      this.carryHandEl = document.createElement("div");
+      this.carryHandEl.className = "carried-hand";
+      const cell = cursorPx(Math.round((this.cursorSheet?.width ?? 256) / 8));
+      this.carryHandEl.style.width = `${cell}px`;
+      this.carryHandEl.style.height = `${cell}px`;
+      this.carryHandEl.style.backgroundImage = `url(${this.holdHandUrl})`;
+      document.body.appendChild(this.carryHandEl);
+    }
+    if (this.carryHandEl) this.carryHandEl.hidden = false;
+    this.placeCarriedItem();
     return true;
+  }
+
+  /** Move the carried pair to the pointer. Called from the frame AND from pointermove, so it is
+   *  never more than the event's own age behind; a `transform`, so it moves without a layout. */
+  private placeCarriedItem(): void {
+    if (!this.carryPx || !this.carryEl) return;
+    // The gauntlet's own top-left, which is where the idle pointer's art was: the pointer minus
+    // the hotspot. Both halves are laid out from THAT, never from the raw pointer.
+    const hx = this.lastCursor.x - CURSOR_HOTSPOT[0];
+    const hy = this.lastCursor.y - CURSOR_HOTSPOT[1];
+    const px = this.carryPx;
+    this.carryEl.style.transform = `translate(${hx + px * CARRIED_ITEM_OFFSET[0]}px, ${hy + px * CARRIED_ITEM_OFFSET[1]}px)`;
+    if (this.carryHandEl) this.carryHandEl.style.transform = `translate(${hx}px, ${hy}px)`;
   }
 
   /** Back to the plain WC3 cursor: the reticle and the tinted hand are only the two classes. */
@@ -13480,6 +13504,7 @@ export class MapViewerScene {
       this.lastCursor.x = e.clientX;
       this.lastCursor.y = e.clientY;
       this.pointerInWindow = true;
+      this.placeCarriedItem();
     };
     this.on(window, "pointermove", trackCursor, { capture: true });
     this.on(window, "pointerdown", trackCursor, { capture: true });

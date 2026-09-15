@@ -18,6 +18,9 @@
 //     between fights only with three heals in the bank; a person who asks is answered and healed
 //     the moment the heal is ready; and a summoner with a monster on it steps back behind its
 //     Water Elemental.
+//  8. **It rests for life, never for mana**, and never alone: with the party out of reach it
+//     follows them instead of asking them to wait.
+//  9. **Mumm-Rah's Sleep waits for 85 % mana**, so the bar is there for Frost Nova.
 //
 // Nothing here is Warcraft III's except what map.ts cites from the map itself.
 const { join } = require("node:path");
@@ -318,6 +321,37 @@ check("heals in the bank", heal.healsInBank({ mana: 260 }, { lvl: { cost: 65 } }
     const g3 = unit({ x: 100, targetId: bk3.id, order: "attack" });
     const r3 = match([bk3, o3, el3, g3], { seconds: 1, difficulty: ids.MELEE_NEWBIE });
     check("…an easy computer never kites", r3.cmds.some((c) => c.c === "order" && c.order.kind === "move"), false);
+  }
+  {
+    // RESTING is for life alone: an intelligence hero with an empty bar walks on with the party.
+    const mumm = (o = {}) => unit({ owner: COMPUTER, typeId: "UC11", isHero: true, hp: 700, maxHp: 700, mana: 10, maxMana: 500, x: 0, ...o });
+    let ai;
+    match([mumm(), optimus({ x: 200 })], { seconds: 1, before: (a) => { ai = a; } });
+    check("out of mana, it does not stop to rest", ai.brains[0].resting, null);
+    // Hurt, with the party far off: it gives the rest up and goes after them.
+    const m2 = mumm({ hp: 150, mana: 500 });
+    const far = optimus({ x: 4000 });
+    let ai2;
+    const r2 = match([m2, far], { seconds: 1.5, before: (a) => { ai2 = a; } });
+    check("hurt, with the party out of reach, it does not rest alone", ai2.brains[0].resting, null);
+    check("…it follows them", r2.cmds.some((c) => c.c === "order" && c.order.kind === "follow" && c.order.targetId === far.id), true);
+    check("…without asking them to wait", r2.said.some((l) => /wait|hold on|sec/.test(l.text)), false);
+    // Hurt with the party beside it: it rests.
+    let ai3;
+    match([mumm({ hp: 150, mana: 500 }), optimus({ x: 300 })], { seconds: 1, before: (a) => { ai3 = a; } });
+    check("…and with the party beside it, it rests", ai3.brains[0].resting, "hp");
+  }
+  {
+    // SLEEP beside FROST NOVA waits for a near-full bar (index.ts `holds`).
+    const kit = [{ id: "AUsl", code: "AUsl", level: 1, cooldownLeft: 0 }, { id: "AUfn", code: "AUfn", level: 1, cooldownLeft: 0 }];
+    const m = unit({ owner: COMPUTER, typeId: "UC11", isHero: true, mana: 400, maxMana: 500, abilities: kit });
+    let ai;
+    match([m, optimus()], { seconds: 0.05, before: (a) => { ai = a; } });
+    check("at 80 % mana Mumm-Rah holds Sleep", ai.holds(ai.brains[0], m, "AUsl"), true);
+    m.mana = 450;
+    check("…at 90 % it may sleep", ai.holds(ai.brains[0], m, "AUsl"), false);
+    m.mana = 100;
+    check("…and Frost Nova is never held for it", ai.holds(ai.brains[0], m, "AUfn"), false);
   }
 }
 

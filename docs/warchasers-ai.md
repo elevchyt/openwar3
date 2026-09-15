@@ -67,6 +67,9 @@ every map fact is cited in `map.ts` against the trigger, rect or object it came 
      fights too and the healer walks further for one (`HEAL_WALK_SURPLUS`). Short of it, a hero is
      healed only in a fight, and the heal is never spent on a unit or on a Holy Light nuke
      (`CastCtx.holds`).
+   - **Sleep waits for a full bar.** A hero that has Frost Nova (Mumm-Rah) presses Sleep only above
+     85 % mana (`SLEEP_MANA`, `CastCtx.holds`) — the caster ranks a hold above a nuke, so without it
+     every pull was spent on Sleep and the Nova had nothing left.
    - **A person who asks** ("heal", "heal me", "hael", "need heal", "im low", "heal optimus" —
      `readHealRequest`) is answered by the healer that can land a heal soonest, if one can within
      `HEAL_CALL_WINDOW` = 10 s: "healing you" / "heal in 3 sec", and from then until it lands the heal
@@ -79,10 +82,11 @@ every map fact is cited in `map.ts` against the trigger, rect or object it came 
    auto-acquired chaser whose target has left its strike range. Sometimes, not always: one kite per
    `KITE_GAP`, at most `KITE_TIME` long, at the difficulty's `kite` chance. At the start of a fight a
    summoner also lets its summons reach the monster first (`KITE_OPEN`).
-7. **Rest** (`restDecision` / `restPass`): below `restHp` (or an intelligence hero below `restMana`) it stops, out
+7. **Rest** (`restDecision` / `restPass`): below `restHp` it stops (never for MANA — a caster short of it walks on with the party), out
    of reach of whatever is swinging, at a Fountain of Health if one is at hand, and SAYS so — "wait i
-   need a bit more health" — again while the leader keeps walking away. A leader who does not wait is
-   trailed (`REST_TRAIL`), out of the fight, rather than left to heal alone; it says "right behind you"
+   need a bit more health" — again while the leader keeps walking away. A party that does not wait is
+   not waited for: once every person is past `REST_TRAIL` it gives the rest up and goes after them
+   (`rejoining`, no new rest until it is back within `REJOIN_NEAR` of the leader); it says "right behind you"
    when it is fit again.
 8. **Loot** (`lootPass`): the most valuable item within reach for ITS hero (`items.ts`), dropping the
    least valuable thing it carries when the belt is full. Never in a fight, never a key, never one a
@@ -122,7 +126,6 @@ A wait the leader then walks far away from is not held for ever (`WAIT_ABANDON`)
 |---|---|---|---|
 | looks every | 1.0 s | 0.5 s | 0.25 s |
 | rests at / ready at | 22% / 60% | 33% / 80% | 40% / 90% |
-| rests for mana (intelligence heroes only) | no | 15% | 20% |
 | focuses (leader's target, what hits the party) | no | yes | yes |
 | first swing into a fight | 1.2 s | 0.5 s | 0.1 s |
 | kites with summons out | never | half the time | 90% of the time |

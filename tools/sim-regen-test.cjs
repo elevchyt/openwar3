@@ -60,7 +60,7 @@ function unit(typeId, over = {}) {
     manaRegen: 0, hpRegen: 0, buffs: [], inventory: [], weapons: [], abilities: [], level: 1,
     isHero: false, building: null, mechanical: false, flying: false, invulnerable: false,
     neutralPassive: false, isIllusion: false, race: "human", str: 0, agi: 0, int: 0,
-    baseStr: 0, baseAgi: 0, baseInt: 0, strPerLevel: 0, agiPerLevel: 0, intPerLevel: 0,
+    baseStr: 0, baseAgi: 0, baseInt: 0, startStr: 0, startAgi: 0, startInt: 0, strPerLevel: 0, agiPerLevel: 0, intPerLevel: 0,
     bonusStr: 0, bonusAgi: 0, bonusInt: 0, baseDamage: 0,
     baseMaxHp: 1000, baseMaxMana: 0, baseArmor: 0, armor: 0, baseSpeed: 270, speed: 270,
     baseSightDay: 1400, baseSightNight: 800, ...over,
@@ -152,7 +152,7 @@ check("Barracks never regenerates", regenAt(unit("hbar"), NIGHT), 0);
 
 // --- heroes: the type's own regen ADDS to the Strength regen (MiscGame StrRegenBonus 0.05) ---
 {
-  const pal = unit("Hpal", { isHero: true, str: 22, baseStr: 22, agi: 13, baseAgi: 13, int: 17, baseInt: 17 });
+  const pal = unit("Hpal", { isHero: true, str: 22, baseStr: 22, startStr: 22, agi: 13, baseAgi: 13, startAgi: 13, int: 17, baseInt: 17, startInt: 17 });
   check("Paladin = 0.25 base + 22 Strength * 0.05", regenAt(pal, DAY), 0.25 + 22 * 0.05);
 }
 

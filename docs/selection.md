@@ -79,9 +79,11 @@ clickable stops being so.
 
 ### Rules that fall out of using a real ray
 
-- **Nearest hit wins**, and that is the entire tie-break. The old code had to prefer units over
-  buildings by hand; a ray does it for free, because whichever body it reaches first is the one
-  drawn in front of the other.
+- **A unit beats a building**, then **nearest hit wins** among each. The ray alone was not enough:
+  a building's slab reaches out past its walls, so a Footman standing against a Barracks was
+  often entered through the slab first and the click took the Barracks. Where a unit's volume and
+  a building's are both under the cursor the unit is picked, whichever the ray met first; the
+  nearest building answers only when no unit was hit at all.
 - **A hit behind the terrain is dropped** (`tGround`), so a unit over the lip of a cliff is not
   clickable through the cliff. With `PICK_GROUND_SLACK` of give, because a building's slab lies
   *on* the ground it stands on.

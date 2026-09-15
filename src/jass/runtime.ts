@@ -660,6 +660,9 @@ export interface EngineHooks {
   /** DestructableRestoreLife — back up, full collider, birth clip if `birth`. */
   restoreDestructable?(id: number, life: number, birth: boolean): void;
   setDestructableLife?(id: number, life: number): void;
+  /** SetDestructableInvulnerable — nothing may attack it (WarChasers' `DoorHealth` makes every
+   *  locked gate one, so the keys are the only way through). */
+  setDestructableInvulnerable?(id: number, on: boolean): void;
   setDestructableAnimation?(id: number, name: string): void;
   removeDestructable?(id: number): void;
   showDestructable?(id: number, show: boolean): void;

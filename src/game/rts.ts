@@ -1603,6 +1603,8 @@ export class RtsController {
    *  (see hiveworkshop "About high ground advantage" #255594). */
   initVisionBlockers(cliffHeightAt: HeightSampler): void {
     this.viewpoints.initBlockers(cliffHeightAt);
+    // …and the same levels decide whether a MELEE blow can reach (SimWorld.cliffApart).
+    this.sim.setCliffLevelField(cliffHeightAt);
   }
 
   /** A tree was felled — it stops blocking sight (harvesting can open a sight line).
@@ -7854,6 +7856,9 @@ export class RtsController {
         // grants through SetPlayerState like any other starting resource.
         heroTokensFor: (p) => this.authority.heroTokensFor(p),
         setHeroTokens: (p, v) => this.authority.setHeroTokens(p, v),
+        // PLAYER_STATE_GIVES_BOUNTY — straight onto the sim, which pays the bounty (awardBounty).
+        setGivesBounty: (p, on) => this.sim.setGivesBounty(p, on),
+        givesBounty: (p) => this.sim.givesBounty(p, teamOf(p)),
         currentOrderId: (id) => this.authority.currentOrderId(id),
         issueUnitOrder: (id, oid, o, k, x, y, t) => this.authority.issueUnitOrder(id, oid, o, k, x, y, t),
         // The mine handle is a JASS fiction (MINE_ID_BASE), so it is resolved here, on the
@@ -8809,8 +8814,14 @@ export class RtsController {
     // zoom-out and stabbing at it. Measured at the ground point's depth once per pick
     // rather than per candidate — everything clickable is near it by construction.
     const pad = ground ? PICK_PAD_PX * this.worldPerPixel(ground[0], ground[1]) : 0;
+    // A UNIT beats a BUILDING wherever their volumes overlap under the cursor, whichever the ray
+    // meets first: a Footman standing against a Barracks is the thing you meant, and a building's
+    // footprint slab reaches out past its walls to swallow whoever is beside it. The nearest of
+    // each is kept, and a building is only answered when no unit was hit at all.
     let best: number | null = null;
     let bestT = Infinity;
+    let bestBuilding: number | null = null;
+    let bestBuildingT = Infinity;
     for (const e of this.entries) {
       // The cursor must hit the unit WHERE IT IS DRAWN, so this reads the frame's render
       // record: picking off the sim while the model came from the snapshot would put the
@@ -8829,12 +8840,19 @@ export class RtsController {
       this.pickVolumes(e, u, this.volumes);
       for (const v of this.volumes) {
         const t = rayVolume(v, ox, oy, oz, dx, dy, dz, pad);
-        if (t < 0 || t >= bestT || t > tGround) continue;
-        bestT = t;
-        best = e.simId;
+        if (t < 0 || t > tGround) continue;
+        if (u.building) {
+          if (t >= bestBuildingT) continue;
+          bestBuildingT = t;
+          bestBuilding = e.simId;
+        } else {
+          if (t >= bestT) continue;
+          bestT = t;
+          best = e.simId;
+        }
       }
     }
-    return best;
+    return best ?? bestBuilding;
   }
 
   /**

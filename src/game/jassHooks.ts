@@ -262,6 +262,8 @@ export function authorityHooks(authority: {
   foodCapCeilingOf(player: number): number;
   heroTokensFor(player: number): number;
   setHeroTokens(player: number, value: number): void;
+  setGivesBounty(player: number, on: boolean): void;
+  givesBounty(player: number): boolean;
   currentOrderId(unitId: number): number;
   createScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number): number;
   issueUnitOrder(
@@ -309,7 +311,7 @@ export function authorityHooks(authority: {
     createUnit: (player, typeId, x, y, facing) => authority.createScriptUnit(player, typeId, x, y, facing),
     // SetPlayerState → the live stash, via the authority's named setter. This is what grants a
     // custom map its starting gold/lumber (its init triggers set it).
-    // state: 1=gold 2=lumber 3=hero tokens 4=food cap 5=food used 6=food cap ceiling (common.j).
+    // state: 1=gold 2=lumber 3=hero tokens 4=food cap 5=food used 6=food cap ceiling 7=gives bounty (common.j).
     //
     // HERO_TOKENS (3) is the "first hero is free" allowance, and it is a real resource the
     // SCRIPT hands out — `MeleeStartingUnits*` is the only thing in Blizzard.j that ever grants
@@ -327,6 +329,9 @@ export function authorityHooks(authority: {
       else if (state === 3) authority.setHeroTokens(p, value);
       else if (state === 4) authority.setFoodCap(p, value);
       else if (state === 6) authority.setFoodCapCeiling(p, value);
+      // GIVES_BOUNTY (7): whether this player's units pay their bounty when killed — a flag, set
+      // through `SetPlayerFlagBJ` (WarChasers turns it on for its dungeon, Player(11)).
+      else if (state === 7) authority.setGivesBounty(p, value !== 0);
     },
     getPlayerState: (p, state) => {
       if (state === 1) return Math.floor(authority.stashFor(p).gold);
@@ -335,6 +340,7 @@ export function authorityHooks(authority: {
       if (state === 4) return authority.foodFor(p).made; // FOOD_CAP
       if (state === 5) return authority.foodFor(p).used; // FOOD_USED
       if (state === 6) return authority.foodCapCeilingOf(p); // FOOD_CAP_CEILING
+      if (state === 7) return authority.givesBounty(p) ? 1 : 0; // GIVES_BOUNTY
       return 0;
     },
   };

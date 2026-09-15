@@ -1,6 +1,5 @@
 import type { ChatLine } from "../../../game/chat";
 import { MELEE } from "../../../data/gameplayConstants";
-import { PrimaryAttribute } from "../../../data/enums";
 import type { SimUnit } from "../../../sim/world";
 import { PlusCaster } from "../casting";
 import type { PlusHost } from "../index";
@@ -9,7 +8,7 @@ import { plusProfile, type PlusProfile } from "../profile";
 import {
   ACK_LINES, ANKH_BOUGHT_LINES, ANKH_USED_LINES, DEAD_LINES, FULL_HP_LINES, GOING_HURT_LINES, HEAL_CANT_LINES,
   HEAL_COOLDOWN_LINES, HEAL_NOW_LINES, HEAL_OOM_LINES, NO_ANKH_LINES, NO_HEAL_LINES, READY_LINES,
-  REST_HP_LINES, REST_MANA_LINES, REST_TALK_GAP, TALK_GAP,
+  REST_HP_LINES, REST_TALK_GAP, TALK_GAP,
   healSoonLines, leaderLines, namesHero, pickLines, readCommand, readHealRequest, type Command,
 } from "./chat";
 import {
@@ -78,7 +77,9 @@ interface Brain {
   holdAt: Pt | null;
   /** Until when an order from the party overrides its own decision to rest. */
   obeyUntil: number;
-  resting: "hp" | "mana" | null;
+  resting: "hp" | null;
+  /** Walking back to the party after it left a rest behind (`restPass`) — no new rest until it is there. */
+  rejoining: boolean;
   target: number;
   targetAt: number;
   /** When a monster first came into this fight — `WarChasersProfile.react` is measured from it. */
@@ -165,8 +166,15 @@ const ERRAND = 20;
 const BUY_RETRY = 25;
 /** An item it has just dropped is not picked back up for this long. */
 const DROP_FORGET = 60;
-/** A resting hero trails a leader who has walked further than this rather than rest alone. */
+/** Sleep (`AUsl`) beside Frost Nova (`AUfn`) is pressed only above this share of the bar (`holds`) —
+ *  the developer's rule for Mumm-Rah (2026-09-15), OURS and not the game's. */
+const SLEEP = "AUsl";
+const FROST_NOVA = "AUfn";
+const SLEEP_MANA = 0.85;
+/** A resting hero whose party has walked further than this gives the rest up and goes after them. */
 const REST_TRAIL = 1150;
+/** …and may rest again once it is back within this of the leader. */
+const REJOIN_NEAR = 500;
 /** Below this, with no Ankh, it backs off whatever it was told (`NO_ANKH_LINES`). */
 const NO_ANKH_FLOOR = 0.15;
 /** Seconds between two computers answering the same order, so a party of three is not one voice. */
@@ -222,7 +230,7 @@ export class WarChasersAi {
         gold: () => this.host.world.stashOf(player).gold,
       }, plus, "human"),
       pick: null, pickAt: 8 + this.brains.length * 4 + rng() * 3, pickSince: 0, heroId: 0,
-      stance: "follow", stanceSince: 0, holdAt: null, obeyUntil: 0, resting: null,
+      stance: "follow", stanceSince: 0, holdAt: null, obeyUntil: 0, resting: null, rejoining: false,
       target: 0, targetAt: -Infinity, fightSince: -1, healCall: null, kiteUntil: 0, kiteNext: 0,
       lootId: 0, lootDrop: -1, lootAt: -Infinity, dropped: new Map(), shopTried: new Map(), errandUntil: 0, ankhs: -1,
       orderKey: "", orderAt: -Infinity, spokeAt: -Infinity, restSaidAt: -Infinity, leaderSaid: -1, dead: false,
@@ -293,7 +301,7 @@ export class WarChasersAi {
     const leader = this.leaderBody(b, body);
     this.orderPass(b, body, leader);
     const s = this.sense(b, body);
-    this.restDecision(b, body, s);
+    this.restDecision(b, body, leader, s);
     // HEALS FIRST — a promised heal, then an allied hero below `HERO_HEAL_HP` — ahead of the melee
     // caster, which would otherwise spend the same button (and the same mana) by its own ladder.
     const healing = body.order !== "cast" && this.healPass(b, body, s);
@@ -311,7 +319,7 @@ export class WarChasersAi {
     const leaving = !!b.resting || b.stance === "back";
     if (body.order === "cast" && !leaving) return;
 
-    if (b.resting) return void this.restPass(b, body, leader, s);
+    if (b.resting && this.restPass(b, body, leader, s)) return;
     if (b.stance === "back") return void this.backPass(b, body, leader, s);
     if (this.fightPass(b, body, leader, s)) return;
     b.fightSince = -1;
@@ -534,27 +542,24 @@ export class WarChasersAi {
   // --- resting -------------------------------------------------------------------------------
 
   /**
-   * WHEN TO STOP AND HEAL. Below `restHp` of its life (or, a caster, `restMana` of its mana) it stops,
-   * says so, and holds until it is at `readyHp` — unless the party has told it to come
-   * (`obeyUntil`), which it does. The one order it will not follow is into its own death with no
-   * Ankh left: that is the end of the hero on this map, not a setback (`Game_Over`).
+   * WHEN TO STOP AND HEAL. Below `restHp` of its life it stops, says so, and holds until it is at
+   * `readyHp` — unless the party has told it to come (`obeyUntil`), which it does. The one order it
+   * will not follow is into its own death with no Ankh left: that is the end of the hero on this map,
+   * not a setback (`Game_Over`). It never stops for MANA: a party member standing about for its bar
+   * while the party walked on was the one complaint about it (the developer, 2026-09-15) — a caster
+   * short of mana walks with the party and regenerates on the way.
    */
-  private restDecision(b: Brain, body: SimUnit, s: Sense): void {
+  private restDecision(b: Brain, body: SimUnit, leader: SimUnit | null, s: Sense): void {
     const P = b.profile;
     // A steam tank has no fountain to go to and no Ankh to lose — it drives.
     if (body.typeId === TANK) {
       b.resting = null;
+      b.rejoining = false;
       return;
     }
     const hp = pct(body);
-    const mp = body.maxMana > 0 ? body.mana / body.maxMana : 1;
-    // Only a CASTER stops for mana — an intelligence hero, whose fight is its bar. A Blade Berserker's
-    // mana is Immolation's to burn and comes back at a hero's trickle; one that stopped for it stood in
-    // a corridor for two minutes while the party walked on.
-    const caster = P.restMana > 0 && this.host.registry.get(body.typeId)?.primaryAttr === PrimaryAttribute.Intelligence;
     if (b.resting) {
-      const manaOk = b.resting !== "mana" || mp >= Math.min(0.5, P.restMana * 3);
-      if (hp >= P.readyHp && manaOk) {
+      if (hp >= P.readyHp) {
         b.resting = null;
         this.say(b, READY_LINES);
       }
@@ -564,55 +569,71 @@ export class WarChasersAi {
     if (hp < NO_ANKH_FLOOR && noAnkh && s.foes.some((f) => dist(f, body) <= 700)) {
       b.resting = "hp";
       b.obeyUntil = 0;
+      b.rejoining = false;
       this.say(b, NO_ANKH_LINES);
       return;
     }
     if (b.clock < b.obeyUntil) return;
+    // Walking back to a party it gave a rest up for: not another rest until it is WITH them, or it
+    // stops again two steps into the walk.
+    if (b.rejoining) {
+      if (leader && dist(leader, body) > REJOIN_NEAR) return;
+      b.rejoining = false;
+    }
     // Not in the middle of a fight the party is winning at a third life — only when it is the one
     // being hit, or the fight is over.
     const beingHit = s.foes.some((f) => f.targetId === body.id);
     if (hp < P.restHp && (beingHit || !s.foes.some((f) => dist(f, body) <= 600) || hp < P.restHp * 0.6)) {
+      // Nobody to wait with: go after the party instead of asking it to wait (restPass).
+      if (leader && this.partyAway(b, body, leader)) {
+        b.rejoining = true;
+        return;
+      }
       b.resting = "hp";
+      // One "wait" per stop, not one per stop in a party that keeps walking off and being caught up.
+      if (b.clock - b.restSaidAt > REST_TALK_GAP) this.say(b, REST_HP_LINES, true);
       b.restSaidAt = b.clock;
-      this.say(b, REST_HP_LINES, true);
-      return;
-    }
-    if (caster && mp < P.restMana && !s.foes.some((f) => dist(f, body) <= 700) && hp < 0.98) {
-      b.resting = "mana";
-      b.restSaidAt = b.clock;
-      this.say(b, REST_MANA_LINES, true);
     }
   }
 
   /**
    * RESTING: out of reach of whatever is swinging at it, at a Fountain of Health when there is one at
    * hand, and otherwise where it stands. It keeps TELLING the leader while the leader walks away — the
-   * brief's "wait i need a bit more health" — and it does not let itself be left behind on its own:
-   * past a long way it trails after the party without joining a fight.
+   * brief's "wait i need a bit more health" — but it does not rest alone: once every person in the
+   * party is further than `REST_TRAIL` away, it gives the rest up and goes after them (`rejoining`),
+   * regenerating on the walk.
    */
-  private restPass(b: Brain, body: SimUnit, leader: SimUnit | null, s: Sense): void {
+  private restPass(b: Brain, body: SimUnit, leader: SimUnit | null, s: Sense): boolean {
     const threats = s.foes.filter((f) => f.targetId === body.id || dist(f, body) <= 450);
     if (threats.length) {
       const away = this.awayFrom(body, threats, leader, 650);
-      return void this.move(b, body, away.x, away.y);
+      this.move(b, body, away.x, away.y);
+      return true;
+    }
+    if (leader && this.partyAway(b, body, leader)) {
+      b.resting = null;
+      b.rejoining = true;
+      this.say(b, GOING_HURT_LINES, true);
+      return false;
     }
     if (leader && dist(leader, body) > 700 && b.clock - b.restSaidAt > REST_TALK_GAP) {
       b.restSaidAt = b.clock;
-      this.say(b, b.resting === "mana" ? REST_MANA_LINES : REST_HP_LINES, true);
+      this.say(b, REST_HP_LINES, true);
     }
     const fountain = this.units().find((u) => u.typeId === FOUNTAIN && dist(u, body) <= 1600 && (!leader || dist(u, leader) <= REST_TRAIL));
     if (fountain && !s.foes.some((f) => dist(f, fountain) <= 700)) {
       if (dist(body, fountain) > 260) this.move(b, body, fountain.x, fountain.y);
-      return;
-    }
-    // The leader has not waited: keep up, well behind and out of the fight, rather than heal alone in
-    // a corridor the party has left (it still regenerates on the walk).
-    if (leader && dist(leader, body) > REST_TRAIL) {
-      const p = this.behind(leader, body, REST_TRAIL * 0.6);
-      this.move(b, body, p.x, p.y);
-      return;
+      return true;
     }
     if (body.order === "move" || body.order === "attackmove" || body.order === "attack") this.stop(b, body);
+    return true;
+  }
+
+  /** Is every PERSON in the party (else the leader, when nobody is standing) past `REST_TRAIL`? */
+  private partyAway(b: Brain, body: SimUnit, leader: SimUnit): boolean {
+    const bodies = this.people(b).map((p) => this.bodyOf(p)).filter((u): u is SimUnit => !!u);
+    if (!bodies.length) bodies.push(leader);
+    return bodies.every((u) => dist(u, body) > REST_TRAIL);
   }
 
   /** "back": out of the fight to the leader's side of it, then a wait (`orderPass`). */
@@ -913,6 +934,9 @@ export class WarChasersAi {
    */
   private holds(b: Brain, u: SimUnit, code: string): boolean {
     if (u.owner !== b.player || !u.isHero) return false;
+    // A hero with FROST NOVA sleeps only off a near-full bar (`SLEEP_MANA`): the caster ranks a hold
+    // above a nuke, so Mumm-Rah spent every pull on Sleep and stood with no mana for the Nova.
+    if (code === SLEEP && u.maxMana > 0 && u.mana / u.maxMana <= SLEEP_MANA && u.abilities.some((a) => a.code === FROST_NOVA)) return true;
     const ab = u.abilities.find((a) => a.code === code);
     const def = ab ? this.host.abilities.get(ab.id) : undefined;
     const lvl = ab && def ? def.levelData[Math.min(ab.level, def.levelData.length) - 1] : undefined;

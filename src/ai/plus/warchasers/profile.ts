@@ -19,8 +19,6 @@ export interface WarChasersProfile {
   readonly restHp: number;
   /** Life fraction it is ready to go on at. */
   readonly readyHp: number;
-  /** Mana fraction a caster stops for (0 = never stops for mana). */
-  readonly restMana: number;
   /** Does it pick its target — the leader's, whatever is hitting the party, the wounded — rather
    *  than whatever is nearest? */
   readonly focus: boolean;
@@ -33,17 +31,17 @@ export interface WarChasersProfile {
 
 /** Easy — follows, fights what is closest, stops to heal late and gets up early, never kites. */
 export const WC_EASY: WarChasersProfile = {
-  difficulty: MELEE_NEWBIE, think: 1.0, restHp: 0.22, readyHp: 0.6, restMana: 0, focus: false, react: 1.2, kite: 0,
+  difficulty: MELEE_NEWBIE, think: 1.0, restHp: 0.22, readyHp: 0.6, focus: false, react: 1.2, kite: 0,
 };
 
-/** Normal — focuses with the leader, rests at a third, keeps a caster's mana for the fight. */
+/** Normal — focuses with the leader, rests at a third. */
 export const WC_NORMAL: WarChasersProfile = {
-  difficulty: MELEE_NORMAL, think: 0.5, restHp: 0.33, readyHp: 0.8, restMana: 0.15, focus: true, react: 0.5, kite: 0.5,
+  difficulty: MELEE_NORMAL, think: 0.5, restHp: 0.33, readyHp: 0.8, focus: true, react: 0.5, kite: 0.5,
 };
 
 /** Insane — reacts at once, rests before it is in danger rather than after, gets up full. */
 export const WC_INSANE: WarChasersProfile = {
-  difficulty: MELEE_INSANE, think: 0.25, restHp: 0.4, readyHp: 0.9, restMana: 0.2, focus: true, react: 0.1, kite: 0.9,
+  difficulty: MELEE_INSANE, think: 0.25, restHp: 0.4, readyHp: 0.9, focus: true, react: 0.1, kite: 0.9,
 };
 
 /** The profile a lobby difficulty seats — anything unrecognised plays Normal. */

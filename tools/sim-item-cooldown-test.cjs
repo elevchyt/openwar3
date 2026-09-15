@@ -99,7 +99,7 @@ function hero(over = {}) {
     pendingCast: null, followLeaderId: null, inCombat: false, working: false, atNode: false,
     noCollision: false, stallT: 0, waitT: 0, gaveUp: false, acquireT: 0, arrowShot: null,
     constructing: 0, cooldownLeft: 0, linkT: 0, linkGroup: [], repathT: 0, stunned: false,
-    baseStr: 0, baseAgi: 0, baseInt: 0, str: 0, agi: 0, int: 0, strPerLevel: 0, agiPerLevel: 0,
+    baseStr: 0, baseAgi: 0, baseInt: 0, startStr: 0, startAgi: 0, startInt: 0, str: 0, agi: 0, int: 0, strPerLevel: 0, agiPerLevel: 0,
     intPerLevel: 0, primaryAttr: 0, magicImmune: false, detectRadius: 0, summonLeft: 0,
     immolation: "", cloakBurnTick: 0, spellShieldCooldown: 0, vanished: false, garrison: [], orderQueue: [], buildPending: null,
     ...over,
