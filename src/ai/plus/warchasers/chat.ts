@@ -28,12 +28,17 @@ export type Command =
   | "go"
   /** Stay on the leader ("follow me", "follow", "come here", "with me"). */
   | "follow"
-  /** Fight ("attack", "hit", "hit them", "kill them", "charge"). */
-  | "attack";
+  /** Fight ("attack", "hit", "hit them", "kill them", "charge", "help"). */
+  | "attack"
+  /** Go FIRST — one computer walks ahead of the party and takes the fights before the person does
+   *  ("go ahead", "tank", "take the lead", "lead the way", "you first"). For a while only
+   *  (index.ts `LEAD_HOLD`), and by a strength or agility hero before an intelligence one. */
+  | "lead";
 
 export interface HeardCommand {
   command: Command;
-  /** "follow me" / "i lead" — the speaker is taking the lead. */
+  /** "follow me" / "i lead" — the speaker is taking the lead. (The opposite, a computer TAKING it,
+   *  is its own command: `lead`.) */
   claimsLead: boolean;
 }
 
@@ -108,6 +113,10 @@ const NOT_A_COMMAND: ReadonlySet<string> = new Set([
   "sit", "kit", "fill", "hill", "will", "gold", "hole", "role", "goal", "good", "god", "got", "get", "gg",
   "attach", "hunt", "tank", "bank", "black", "right", "light", "night", "might", "sight", "tight", "fine", "wit",
   "rust", "best", "test", "most", "just", "must", "past", "fast", "hush", "rush", "bush", "mush", "cash", "case", "came",
+  // …one slip from "help": "hell" is p-for-l (neighbours), "helps" a letter more.
+  "hell", "helo", "helps", "yelp",
+  // "ill" is one dropped letter from "kill" — and the start of "ill take the lead", "ill heal you".
+  "ill",
 ]);
 
 /** The fuzzy allowance for a word of this length: short words must be exact (or two letters
@@ -142,6 +151,9 @@ const VERBS: ReadonlyArray<{ word: string; command: Command }> = [
   { word: "attack", command: "attack" }, { word: "hit", command: "attack" }, { word: "kill", command: "attack" },
   { word: "fight", command: "attack" }, { word: "charge", command: "attack" }, { word: "engage", command: "attack" },
   { word: "focus", command: "attack" }, { word: "atk", command: "attack" }, { word: "smash", command: "attack" },
+  // "help" is a call INTO the fight — the developer's rule (2026-09-15): "help", "hlep", "hepl" do what
+  // "fight" does. A HEAL request is a different line (`readHealRequest`), and "help" is not one.
+  { word: "help", command: "attack" },
 ];
 
 /** The word a typed token is, if it is one of `VERBS` — an exact match first, then the nearest typo. */
@@ -158,12 +170,36 @@ function verbOf(token: string): Command | null {
 
 const isWord = (token: string | undefined, ...ws: string[]): boolean => !!token && ws.some((w) => sounds(token, w));
 /** The opposite of a command, for "dont wait" / "stop waiting" / "dont go". */
-const OPPOSITE: Readonly<Record<Command, Command>> = { wait: "go", back: "go", go: "wait", follow: "wait", attack: "wait" };
+const OPPOSITE: Readonly<Record<Command, Command>> = { wait: "go", back: "go", go: "wait", follow: "wait", attack: "wait", lead: "follow" };
 /** Words after which "back" is news rather than an order: "im back", "be right back", "ill be back". */
 const BACK_IS_NEWS: ReadonlySet<string> = new Set(["im", "am", "be", "is", "its", "right", "come", "came", "got"]);
 
 /** Words after which an ATTACK verb is praise: "nice hit", "good kill". */
 const PRAISE: ReadonlySet<string> = new Set(["nice", "good", "great", "big", "gj", "sick", "wp", "lucky", "what"]);
+
+/** Words before "help" that make it thanks, an offer or nothing: "thanks for the help", "i help", "no help". */
+const HELP_NOT_ASKED: ReadonlySet<string> = new Set(["the", "for", "i", "ill", "im", "will", "thx", "thanks", "ty", "no", "any", "of", "some", "your", "ur"]);
+
+/** Who a LEAD word is about — the SPEAKER ("i lead", "ill take the lead", "let me tank", "im the
+ *  leader") or whoever it is said to ("you lead", "take the lead", "can you tank", "optimus lead the
+ *  way"). Read off the first word before it that is not part of the phrase: a speaker's pronoun
+ *  claims it, anything else — a "you", a hero's name, nothing at all — hands it over. */
+const SPEAKER: ReadonlySet<string> = new Set(["i", "ill", "im", "id", "me", "let", "lemme", "imma", "we", "well"]);
+const LEAD_FILLER: ReadonlySet<string> = new Set([
+  "the", "take", "takes", "be", "are", "r", "is", "will", "can", "could", "should", "to", "pls", "plz", "please", "now", "just", "a", "bit", "ok", "okay",
+]);
+function speakerLeads(t: readonly string[], i: number): boolean {
+  for (let j = i - 1; j >= 0 && j >= i - 5; j--) {
+    if (LEAD_FILLER.has(t[j])) continue;
+    return SPEAKER.has(t[j]);
+  }
+  return false;
+}
+/** Before "tank", the words that make it the map's steam TANK rather than the verb: "get in the tank". */
+const TANK_NOUN_BEFORE: ReadonlySet<string> = new Set([
+  "the", "a", "an", "my", "your", "ur", "his", "her", "our", "their", "steam", "that", "this", "in", "into", "get", "enter", "drive", "driving", "of", "no", "need",
+]);
+const TANK_NOUN_AFTER: ReadonlySet<string> = new Set(["is", "ride", "room", "area", "was", "gone", "died", "dead", "broke", "time", "part", "level"]);
 
 /** An "-ing" form's stem, doubled consonant and all: "waiting" → "wait", "hitting" → "hit", "going" → "go". */
 function stem(w: string): string | null {
@@ -190,7 +226,10 @@ function negated(t: readonly string[], i: number): boolean {
  *  · "go back", "get back", "fall back", "pull back", "move back" are a BACK, never a go; "come back"
  *    is a FOLLOW (come back to me); and "im back", "be right back" are nothing at all.
  *  · "hold on", "hang on", "one sec", "wait up" are a WAIT; "come on" is a GO.
- *  · "follow me", "on me", "with me", "i lead", "im the leader" take the LEAD as well.
+ *  · "follow me", "on me", "with me", "i lead", "im the leader" take the LEAD as well — and the same
+ *    words said to the computers hand it to one of THEM: "you lead", "take the lead", "lead the way",
+ *    "go ahead", "go first", "you first", "after you", "tank" (not "the tank", which is the map's).
+ *  · "help" is an ATTACK ("help", "hlep", "i need help"); "thanks for the help" and "i help" are not.
  *  · a NEGATION turns a command round: "dont wait", "no need to wait" and "stop waiting" are a go,
  *    "dont go" and "stop attacking" a wait. "stop" by itself is still a wait.
  *  · an "-ing" form on its own is NEWS, not an order ("im waiting", "attacking now") — it only counts
@@ -223,11 +262,41 @@ export function readCommand(text: string): HeardCommand | null {
       claimsLead ||= w === "me";
       continue;
     }
-    if ((w === "lead" || w === "leader") && (prev === "i" || prev === "im" || prev === "the" || prev === "ill")) {
-      command ??= "follow";
-      claimsLead = true;
+    // --- who goes first --------------------------------------------------------------------
+    if (w === "lead" || w === "leader") {
+      // "i lead", "ill take the lead", "im the leader" — the speaker; "you lead", "take the lead",
+      // "lead the way", "lead" — one of the computers.
+      if (speakerLeads(t, i)) {
+        command ??= "follow";
+        claimsLead = true;
+      } else command = negated(t, i) ? "follow" : "lead";
       continue;
     }
+    if (w === "ahead" && isWord(prev ?? "", "go")) {
+      // "go ahead" / "you go ahead"; "ill go ahead" is the speaker going, and "dont go ahead" stays.
+      if (speakerLeads(t, i - 1)) {
+        command = "follow";
+        claimsLead = true;
+      } else command = negated(t, i - 1) ? "follow" : "lead";
+      continue;
+    }
+    if (w === "first" && (isWord(prev ?? "", "go") || prev === "you" || prev === "u")) {
+      if (prev !== "you" && prev !== "u" && speakerLeads(t, i - 1)) {
+        command = "follow";
+        claimsLead = true;
+      } else command = negated(t, i - 1) ? "follow" : "lead";
+      continue;
+    }
+    if ((w === "you" || w === "u") && prev === "after") { command = "lead"; continue; }
+    if (w === "tank" && !(prev && TANK_NOUN_BEFORE.has(prev)) && !(next && TANK_NOUN_AFTER.has(next))) {
+      if (speakerLeads(t, i)) {
+        command ??= "follow";
+        claimsLead = true;
+      } else command = negated(t, i) ? "follow" : "lead";
+      continue;
+    }
+    // "thanks for the help", "i help", "help you" — not a call for it.
+    if (verbOf(w) === "attack" && sounds(w, "help") && ((prev && HELP_NOT_ASKED.has(prev)) || next === "you" || next === "u" || next === "yourself")) continue;
     // Praise is not an order: "nice hit", "good kill", "great charge".
     if (prev && PRAISE.has(prev) && verbOf(w) === "attack") continue;
     if (w === "get" && (next === "them" || next === "em" || next === "him" || next === "it")) { command = "attack"; continue; }
@@ -358,7 +427,11 @@ export const ACK_LINES: Readonly<Record<Command, readonly string[]>> = {
   go: ["right behind you", "ok lets go", "coming", "im following you"],
   follow: ["right behind you", "im following you", "on you", "ok, following"],
   attack: ["attacking!", "on it", "going in", "ok, hitting them"],
+  lead: ["ok, ill lead", "ill go first", "on it, stay behind me", "ok, tanking"],
 };
+
+/** A lead it took (`lead`) has run its course: the person has it back. */
+export const LEAD_DONE_LINES = ["ok, your lead again", "you lead now", "back to following you"] as const;
 
 /** Stopping for itself — out of life. */
 export const REST_HP_LINES = [

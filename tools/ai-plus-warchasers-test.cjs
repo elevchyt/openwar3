@@ -21,6 +21,11 @@
 //  8. **It rests for life, never for mana**, and never alone: with the party out of reach it
 //     follows them instead of asking them to wait.
 //  9. **Mumm-Rah's Sleep waits for 85 % mana**, so the bar is there for Frost Nova.
+// 10. **"help" is a fight** ("hlep", "hepl"), and **"go ahead" / "tank" / "take the lead" hands the
+//     lead to ONE computer** — a strength or agility hero before an intelligence one — for a while,
+//     while "i lead", "ill tank" and "get in the tank" do not.
+// 11. **Summons go on ahead** of the party when they are not fighting, and into the hero's fight
+//     when there is one.
 //
 // Nothing here is Warcraft III's except what map.ts cites from the map itself.
 const { join } = require("node:path");
@@ -48,7 +53,8 @@ const ORDERS = {
   back: ["back", "back!", "bakc", "bak", "go back", "fall back", "get back", "retreat", "retreet", "run", "get out"],
   go: ["lets go", "let's go", "lets goo", "letsgo", "go", "go go go", "gogo", "come on", "move", "push", "dont wait", "stop waiting", "no need to wait"],
   follow: ["follow me", "follow", "folow", "fallow me", "follwo", "come", "come back", "on me", "with me", "i lead", "im the leader"],
-  attack: ["attack", "atack", "attak", "hit", "hit them", "hti them", "kill them", "get them", "charge", "fight"],
+  attack: ["attack", "atack", "attak", "hit", "hit them", "hti them", "kill them", "get them", "charge", "fight", "help", "hlep", "hepl", "halp", "HELP!!", "help me", "i need help", "help us"],
+  lead: ["go ahead", "you go ahead", "tank", "you tank", "tank pls", "can you tank", "take the lead", "you take the lead", "take lead", "lead the way", "you lead", "lead", "go first", "you first", "after you", "optimus lead the way", "wait... ok go ahead"],
 };
 for (const [want, lines] of Object.entries(ORDERS)) for (const said of lines) check(`${JSON.stringify(said)} is ${want}`, cmd(said), want);
 check("the last order in a line wins", cmd("wait... ok lets go"), "go");
@@ -56,11 +62,15 @@ check("dont go is a wait", cmd("dont go"), "wait");
 check("stop attacking is a wait", cmd("stop attacking"), "wait");
 check("follow me takes the lead", chat.readCommand("follow me"), { command: "follow", claimsLead: true });
 check("follow does not", chat.readCommand("follow"), { command: "follow", claimsLead: false });
+for (const said of ["i lead", "ill take the lead", "let me take the lead", "im the leader", "ill lead the way", "i tank", "ill go first", "ill go ahead"]) {
+  check(`${JSON.stringify(said)} is the speaker taking the lead`, chat.readCommand(said), { command: "follow", claimsLead: true });
+}
 
 // --- 2. not orders -------------------------------------------------------------------------------
 for (const said of [
   "im back", "be right back", "what", "shop", "yellow", "hollow", "no", "ok", "gg", "lol", "thanks", "good job", "the hut",
   "hot", "nice hit", "im waiting", "attacking now", "where are you going", "i need gold", "buy an ankh", "",
+  "thanks for the help", "hell", "hello", "helps", "get in the tank", "the tank", "tank ride", "we need a tank", "im helping",
 ]) check(`${JSON.stringify(said)} is not an order`, cmd(said), null);
 check("a typo is not a different word", chat.sounds("what", "wait"), false);
 check("…but a slip of the finger is the word", chat.sounds("waot", "wait"), true);
@@ -175,7 +185,7 @@ check("heals in the bank", heal.healsInBank({ mana: 260 }, { lvl: { cost: 65 } }
   const optimus = (o = {}) => unit({ owner: PERSON, typeId: "HC07", isHero: true, hp: 1000, maxHp: 1000, x: 300, ...o });
 
   /** One WarChasers match on a stub world: `ticks` seconds of passes, and the commands and lines it produced. */
-  function match(units, { difficulty = ids.MELEE_INSANE, seconds = 1, before, lines = [] } = {}) {
+  function match(units, { difficulty = ids.MELEE_INSANE, seconds = 1, before, each, lines = [] } = {}) {
     const cmds = [];
     const said = [];
     const world = {
@@ -200,13 +210,13 @@ check("heals in the bank", heal.healsInBank({ mana: 260 }, { lvl: { cost: 65 } }
         return world.targetError(world.units.get(id), world.units.get(targetId), [], code);
       },
     };
-    const allied = (a, b) => (a === PERSON || a === COMPUTER) && (b === PERSON || b === COMPUTER);
+    const allied = (a, b) => a !== DUNGEON && b !== DUNGEON && a >= 0 && b >= 0;
     const host = {
       world,
       abilities: ABILS,
       items: new Map(),
       tech: { get: () => ({ sellitems: [] }) },
-      registry: new Map([["EC12", { primaryAttr: "AGI" }], ["UC13", { primaryAttr: "STR" }]]),
+      registry: new Map([["EC12", { primaryAttr: "AGI" }], ["UC13", { primaryAttr: "STR" }], ["UC11", { primaryAttr: "INT" }], ["UC09", { primaryAttr: "INT" }]]),
       coAllied: allied,
       visible: () => true,
       execute: (player, cmd) => {
@@ -224,14 +234,18 @@ check("heals in the bank", heal.healsInBank({ mana: 260 }, { lvl: { cost: 65 } }
       say: (player, text) => said.push({ player, text }),
     };
     const ai = new WarChasersAi(host);
-    ai.add(COMPUTER, difficulty, 7);
-    // Seated and picked: skip the pick delay.
-    ai.brains[0].heroId = units.find((u) => u.owner === COMPUTER && u.isHero)?.id ?? 0;
+    const seats = [...new Set(units.filter((u) => u.owner !== PERSON && u.owner !== DUNGEON && u.isHero).map((u) => u.owner))].sort();
+    for (const seat of seats.length ? seats : [COMPUTER]) {
+      ai.add(seat, difficulty, 7);
+      // Seated and picked: skip the pick delay.
+      ai.brains[ai.brains.length - 1].heroId = units.find((u) => u.owner === seat && u.isHero)?.id ?? 0;
+    }
     before?.(ai, world);
-    for (const text of lines) ai.heard({ from: PERSON, text }, [PERSON, COMPUTER]);
+    for (const text of lines) ai.heard({ from: PERSON, text }, [PERSON, ...seats, COMPUTER]);
     const dt = 0.05;
     for (let t = 0; t < seconds; t += dt) {
       for (const u of world.units.values()) for (const ab of u.abilities) ab.cooldownLeft = Math.max(0, ab.cooldownLeft - dt);
+      each?.(t, world);
       ai.tick(dt);
     }
     return { cmds, said, casts: cmds.filter((c) => c.c === "cast") };
@@ -352,6 +366,59 @@ check("heals in the bank", heal.healsInBank({ mana: 260 }, { lvl: { cost: 65 } }
     check("…at 90 % it may sleep", ai.holds(ai.brains[0], m, "AUsl"), false);
     m.mana = 100;
     check("…and Frost Nova is never held for it", ai.holds(ai.brains[0], m, "AUfn"), false);
+  }
+  {
+    // THE LEAD goes to a strength or agility hero before an intelligence one, and ends on its own.
+    const mumm = unit({ owner: 2, typeId: "UC11", isHero: true, hp: 700, maxHp: 700, x: 100 });
+    const bk = unit({ owner: 3, typeId: "UC13", isHero: true, hp: 600, maxHp: 1000, x: -100 });
+    const o = optimus({ x: 0, order: "move", path: [[2000, 0]] });
+    let ai;
+    const r = match([mumm, bk, o], { lines: ["go ahead"], seconds: 1, before: (a) => { ai = a; } });
+    const stances = Object.fromEntries(ai.brains.map((b) => [b.player, b.stance]));
+    check("go ahead: the strength hero leads, not Mumm-Rah", stances, { 2: "follow", 3: "lead" });
+    const walk = r.cmds.find((c) => c.player === 3 && c.c === "order" && c.order.kind === "attackmove");
+    check("…walking out in front of the person, along their route", !!walk && walk.order.x > 400, true);
+    check("…and says so", r.said.some((l) => l.player === 3), true);
+    let ai2;
+    const mumm2 = unit({ owner: 2, typeId: "UC11", isHero: true, hp: 700, maxHp: 700, x: 100 });
+    const bk2 = unit({ owner: 3, typeId: "UC13", isHero: true, hp: 600, maxHp: 1000, x: -100 });
+    match([mumm2, bk2, optimus({ x: 0 })], { lines: ["mumm take the lead"], seconds: 0.2, before: (a) => { ai2 = a; } });
+    check("…unless the line names somebody", ai2.brains.find((b) => b.player === 2).stance, "lead");
+    let ai3;
+    const bk3 = unit({ owner: 3, typeId: "UC13", isHero: true, hp: 900, maxHp: 1000, x: -100 });
+    match([bk3, optimus({ x: 0 })], { lines: ["tank"], seconds: 25, before: (a) => { ai3 = a; } });
+    check("…and after a while the person has the lead back", ai3.brains[0].stance, "follow");
+  }
+  {
+    // SUMMONS go on ahead of the party when there is nothing to fight…
+    const bk = unit({ owner: COMPUTER, typeId: "UC13", isHero: true, hp: 900, maxHp: 1000, x: -200 });
+    const o = optimus({ x: 0, order: "move", path: [[3000, 0]] });
+    const el = unit({ owner: COMPUTER, typeId: "hwat", isSummon: true, summonLeft: 40, hp: 600, maxHp: 600, x: -400 });
+    const r = match([bk, o, el], { seconds: 0.5 });
+    const go = r.cmds.find((c) => c.unitId === el.id && c.c === "order");
+    check("an idle summon is sent on ahead of the person", go?.order.kind === "attackmove" && go.order.x > 300, true);
+    // …and into the hero's fight when there is one.
+    const bk2 = unit({ owner: COMPUTER, typeId: "UC13", isHero: true, hp: 900, maxHp: 1000, x: -200 });
+    const o2 = optimus({ x: 0 });
+    const el2 = unit({ owner: COMPUTER, typeId: "hwat", isSummon: true, summonLeft: 40, hp: 600, maxHp: 600, x: -700 });
+    const ghoul = unit({ x: 300, targetId: o2.id, order: "attack" });
+    const r2 = match([bk2, o2, el2, ghoul], { seconds: 1.5 });
+    check("…a summon joins its hero's fight", r2.cmds.some((c) => c.unitId === el2.id && c.order?.kind === "attack" && c.order.targetId === ghoul.id), true);
+    // A summon already fighting is left to it.
+    const bk3 = unit({ owner: COMPUTER, typeId: "UC13", isHero: true, hp: 900, maxHp: 1000, x: -200 });
+    const o3 = optimus({ x: 0, order: "move", path: [[3000, 0]] });
+    const g3 = unit({ x: -2600 });
+    const el3 = unit({ owner: COMPUTER, typeId: "hwat", isSummon: true, summonLeft: 40, hp: 600, maxHp: 600, x: -2500, order: "attack", targetId: g3.id });
+    const r3 = match([bk3, o3, el3, g3], { seconds: 0.5 });
+    check("…and one already in a fight is not pulled out of it", r3.cmds.some((c) => c.unitId === el3.id), false);
+    // …but one hitting a spawner hut nobody went for walks on, on a plain move (an attack-move takes the hut again).
+    const bk4 = unit({ owner: COMPUTER, typeId: "UC13", isHero: true, hp: 900, maxHp: 1000, x: -200 });
+    const o4 = optimus({ x: 0, order: "move", path: [[3000, 0]] });
+    const hut = unit({ x: -2600, building: { queue: [] } });
+    const el4 = unit({ owner: COMPUTER, typeId: "hwat", isSummon: true, summonLeft: 40, hp: 600, maxHp: 600, x: -2400, order: "attack", targetId: hut.id });
+    const r4 = match([bk4, o4, el4, hut], { seconds: 0.5 });
+    const off = r4.cmds.find((c) => c.unitId === el4.id);
+    check("…a summon hitting a hut nobody went for is walked on past it", off?.order.kind === "move" && off.order.x > 300, true);
   }
 }
 

@@ -583,7 +583,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   (`warchasers/heal.ts`): an allied hero below 65 % is healed before any unit, a person who asks
   ("heal me", "hael") is promised the heal and its mana if it can land within 10 s, and the melee
   caster is kept off both (`CasterView.refuses`, `CastCtx.holds`); a summoner KITES behind its
-  summons (`kitePass`). Loot and shopping value an item for ITS hero
+  summons (`kitePass`), and sends them on AHEAD of the party whenever they are not fighting
+  (`summonPass`, along the front's own route, never onto a spawner hut nobody went for). "go ahead",
+  "tank", "take the lead" hands the lead to ONE computer, strength or agility before intelligence,
+  for 12–20 s (`leadPass`); "help" is an attack order. Loot and shopping value an item for ITS hero
   (an intelligence hero drops Strength items first).
 - **Transports:** read [`docs/transports.md`](docs/transports.md) before touching the Goblin
   Zeppelin, a transport ship, a cargo hold, or the cargo panel. A transport is the BURROW's

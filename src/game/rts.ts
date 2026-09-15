@@ -8999,6 +8999,11 @@ export class RtsController {
       // payload already said so — `remembered` — and its hp is redacted to 0 anyway, so drawing
       // one would show a full-empty bar over every scouted building.
       if (this.drawnFromMemory(e.simId)) continue;
+      // An INVULNERABLE Neutral Passive building floats no bar at all — a shop, a tavern, a
+      // Fountain of Health, a waygate (`Avul` "Invulnerable (Neutral)", SimUnit.baseInvulnerable).
+      // A bar is how you read a body you can hurt, and nobody can hurt these; the developer's
+      // rule (2026-09-15), under the cursor as well as under "Always show Health Bars".
+      if (u.building && u.neutralPassive && u.invulnerable) continue;
       const row = this.allyAbilityRow(u);
       specs.push({
         x: u.x,

@@ -1,4 +1,5 @@
 import type { ChatLine } from "../../../game/chat";
+import { PrimaryAttribute } from "../../../data/enums";
 import { MELEE } from "../../../data/gameplayConstants";
 import type { SimUnit } from "../../../sim/world";
 import { PlusCaster } from "../casting";
@@ -7,7 +8,7 @@ import { PlusItems, type ItemCtx } from "../items";
 import { plusProfile, type PlusProfile } from "../profile";
 import {
   ACK_LINES, ANKH_BOUGHT_LINES, ANKH_USED_LINES, DEAD_LINES, FULL_HP_LINES, GOING_HURT_LINES, HEAL_CANT_LINES,
-  HEAL_COOLDOWN_LINES, HEAL_NOW_LINES, HEAL_OOM_LINES, NO_ANKH_LINES, NO_HEAL_LINES, READY_LINES,
+  HEAL_COOLDOWN_LINES, HEAL_NOW_LINES, HEAL_OOM_LINES, LEAD_DONE_LINES, NO_ANKH_LINES, NO_HEAL_LINES, READY_LINES,
   REST_HP_LINES, REST_TALK_GAP, TALK_GAP,
   healSoonLines, leaderLines, namesHero, pickLines, readCommand, readHealRequest, type Command,
 } from "./chat";
@@ -43,7 +44,12 @@ import { warChasersProfile, type WarChasersProfile } from "./profile";
 //     below 65 % before any unit of its own, eagerly with mana to spare, and a person who asks
 //     for a heal ("heal me") as soon as the heal can land.
 //  5b. KITE when it has summons: a summoner with something on it steps back and lets its
-//     Water Elemental take the blows (`kitePass`).
+//     Water Elemental take the blows (`kitePass`) — and send those summons ON AHEAD of the party
+//     whenever they are not fighting (`summonPass`), so they neither stand in the corridor the
+//     party is walking down nor get left behind in the last room.
+//  5c. GO FIRST when told to ("go ahead", "tank", "take the lead" — `leadPass`): for a while, one
+//     computer walks in front of the person and takes the fights before they do, a strength or
+//     agility hero before an intelligence one.
 //  6. LOOT — pick up what is worth carrying, and drop the least useful thing for something better,
 //     by what the item is worth to ITS hero (items.ts): an intelligence hero gives up Strength first.
 //  7. SHOP when a shop is at hand — an Ankh of Reincarnation before anything else, because a hero
@@ -54,7 +60,7 @@ import { warChasersProfile, type WarChasersProfile } from "./profile";
 
 /** What the party last told it to do. `rest` is not here: resting is its own decision, and an order
  *  is what overrides it. */
-type Stance = "follow" | "wait" | "back" | "attack";
+type Stance = "follow" | "wait" | "back" | "attack" | "lead";
 
 interface Brain {
   player: number;
@@ -108,6 +114,27 @@ interface Brain {
   dead: boolean;
   queue: Array<{ command: Command; turn: number; claimsLead: boolean }>;
   replies: Array<{ at: number; lines: readonly string[] }>;
+  /** The last order given to each of its SUMMONS (`summonPass`) — one per unit, apart from the
+   *  hero's own `orderKey`, so ordering a Water Elemental does not make the hero repeat itself. */
+  summonOrders: Map<number, { key: string; at: number }>;
+}
+
+/** Where a body has been going — sampled every `TRAIL_SAMPLE` seconds (`trailPass`), so "forward"
+ *  is the way the party is actually walking and not merely the way a hero happens to face. */
+interface Trail {
+  x: number;
+  y: number;
+  at: number;
+  /** The unit heading, or 0,0 before it has walked anywhere. */
+  hx: number;
+  hy: number;
+}
+
+/** "go ahead" / "tank" heard in chat, parked until the next tick like a heal request. */
+interface LeadAsk {
+  from: number;
+  text: string;
+  party: number[];
 }
 
 /** A heal promised to a seat: which of the healer's abilities, since when, and when it was ordered. */
@@ -191,6 +218,29 @@ const KITE_TIME = 2.2;
 const KITE_GAP = 7;
 /** At the start of a fight a summoner holds back this long while its summons walk in first. */
 const KITE_OPEN = 1.5;
+/** SUMMONS (`summonPass`): how far AHEAD of the party's front an idle summon is sent… */
+const SUMMON_AHEAD = 450;
+/** …how far to either side of that line each one stands, so two wolves are not one heap… */
+const SUMMON_SPREAD = 90;
+/** …the reach within which a summon joins a fight on its own (a monster this close to it)… */
+const SUMMON_ENGAGE = 600;
+/** …and within which it joins the fight its HERO is in. */
+const SUMMON_JOIN = 1100;
+/** Seconds between two orders to one summon while the spot ahead keeps moving with the party. */
+const SUMMON_REORDER = 0.8;
+/** THE LEAD (`leadPass`): how far in front of the person the leading computer walks… */
+const LEAD_AHEAD = 520;
+/** …how far from the person a monster may be for the leader to go and take it… */
+const LEAD_PULL = 1100;
+/** …and how long the lead lasts: `LEAD_HOLD` seconds, stretched to `LEAD_MAX` while the leader is
+ *  still in the fight it walked into — the developer's "around 10-20 seconds" (2026-09-15). */
+const LEAD_HOLD = 12;
+const LEAD_MAX = 20;
+/** How often a body's heading is resampled, the least it must have walked in that time for the
+ *  sample to count, and the jump past which it went through a waygate rather than walked. */
+const TRAIL_SAMPLE = 0.75;
+const TRAIL_MIN = 50;
+const TRAIL_JUMP = 1200;
 
 export class WarChasersAi {
   private readonly brains: Brain[] = [];
@@ -199,6 +249,10 @@ export class WarChasersAi {
   private leaderSeat: number | null = null;
   private frame: SimUnit[] | null = null;
   private healAsks: HealAsk[] = [];
+  private leadAsks: LeadAsk[] = [];
+  /** Headings of the bodies the party is led by (`trailPass`), keyed on the unit. */
+  private readonly trails = new Map<number, Trail>();
+  private now = 0;
 
   constructor(private readonly host: PlusHost) {}
 
@@ -234,7 +288,7 @@ export class WarChasersAi {
       target: 0, targetAt: -Infinity, fightSince: -1, healCall: null, kiteUntil: 0, kiteNext: 0,
       lootId: 0, lootDrop: -1, lootAt: -Infinity, dropped: new Map(), shopTried: new Map(), errandUntil: 0, ankhs: -1,
       orderKey: "", orderAt: -Infinity, spokeAt: -Infinity, restSaidAt: -Infinity, leaderSaid: -1, dead: false,
-      queue: [], replies: [],
+      queue: [], replies: [], summonOrders: new Map(),
     });
   }
 
@@ -242,12 +296,18 @@ export class WarChasersAi {
     this.brains.length = 0;
     this.leaderSeat = null;
     this.healAsks = [];
+    this.leadAsks = [];
+    this.trails.clear();
+    this.now = 0;
   }
 
   tick(dt: number): void {
     this.frame = null;
     for (const b of this.brains) b.clock += dt;
+    this.now += dt;
+    this.trailPass();
     this.healAsksPass();
+    this.leadAsksPass();
     for (const b of this.brains) {
       this.speakPass(b);
       b.thinkIn -= dt;
@@ -272,6 +332,8 @@ export class WarChasersAi {
     if (heal) this.healAsks.push({ from: line.from, after: heal.after, text: line.text, party: party.map((b) => b.player) });
     const heard = readCommand(line.text);
     if (!heard) return;
+    // "go ahead" is for ONE of them, and which one is a question about bodies (`leadAsksPass`).
+    if (heard.command === "lead") return void this.leadAsks.push({ from: line.from, text: line.text, party: party.map((b) => b.player) });
     // A line that NAMES one of the computers' heroes ("optimus wait") is for those alone.
     const named = party.filter((b) => b.pick && namesHero(line.text, b.pick.name));
     const to = named.length ? named : party;
@@ -302,6 +364,8 @@ export class WarChasersAi {
     this.orderPass(b, body, leader);
     const s = this.sense(b, body);
     this.restDecision(b, body, leader, s);
+    // The summons are ordered every pass, whatever the hero itself goes on to do below.
+    this.summonPass(b, body, leader);
     // HEALS FIRST — a promised heal, then an allied hero below `HERO_HEAL_HP` — ahead of the melee
     // caster, which would otherwise spend the same button (and the same mana) by its own ladder.
     const healing = body.order !== "cast" && this.healPass(b, body, s);
@@ -323,6 +387,8 @@ export class WarChasersAi {
     if (b.stance === "back") return void this.backPass(b, body, leader, s);
     if (this.fightPass(b, body, leader, s)) return;
     b.fightSince = -1;
+    // Leading, it walks in front and does not stop to shop or loot — that is what "go ahead" asked.
+    if (b.stance === "lead" && leader) return void this.leadPass(b, body, leader);
     if (hero && this.shopPass(b, hero, leader, s)) return;
     if (hero && this.lootPass(b, hero, leader, s)) return;
     if (b.stance === "wait") return void this.waitPass(b, body);
@@ -511,6 +577,9 @@ export class WarChasersAi {
         case "follow":
           b.stance = "follow";
           break;
+        case "lead":
+          b.stance = "lead";
+          break;
       }
       // An order that sends it on OVERRIDES the rest it is taking, or the one it is about to take — it
       // is hurt and has been told to come anyway. An order given to a healthy hero overrides nothing
@@ -529,6 +598,14 @@ export class WarChasersAi {
       if (q.turn === 0 || b.rng() < 0.4) b.replies.push({ at: b.clock + 0.3 + REPLY_STAGGER * q.turn + b.rng() * 0.6, lines });
     }
     if (b.stance === "attack" && b.clock - b.stanceSince > ATTACK_HOLD) b.stance = "follow";
+    // The lead is a LOAN: `LEAD_HOLD`, or up to `LEAD_MAX` while the fight it walked into lasts.
+    const led = b.clock - b.stanceSince;
+    if (b.stance === "lead" && (led > LEAD_MAX || (led > LEAD_HOLD && b.fightSince < 0) || !leader)) {
+      b.stance = "follow";
+      b.stanceSince = b.clock;
+      b.orderKey = "";
+      this.say(b, LEAD_DONE_LINES, true);
+    }
     if (b.stance === "back" && b.clock - b.stanceSince > BACK_HOLD) {
       b.stance = "wait";
       b.holdAt = { x: body.x, y: body.y };
@@ -659,9 +736,11 @@ export class WarChasersAi {
    */
   private fightPass(b: Brain, body: SimUnit, leader: SimUnit | null, s: Sense): boolean {
     const P = b.profile;
-    const attack = b.stance === "attack";
+    // Leading is attacking with a shorter reach: it takes what is in front of the PERSON, first.
+    const leading = b.stance === "lead";
+    const attack = b.stance === "attack" || leading;
     const anchor: Pt = b.stance === "wait" ? b.holdAt ?? body : leader ?? body;
-    const leash = attack ? LEASH * 1.6 : b.stance === "wait" ? 800 : LEASH;
+    const leash = leading ? LEAD_PULL : attack ? LEASH * 1.6 : b.stance === "wait" ? 800 : LEASH;
     const friendIds = new Set(s.friends.map((f) => f.id));
     const inFight = (f: SimUnit): boolean => {
       if (dist(f, anchor) > leash) return false;
@@ -699,7 +778,8 @@ export class WarChasersAi {
     // The first beat of a fight: a player sees the monster, then swings. Only for a fight it walks
     // INTO — something already hitting the party is answered at once.
     const answering = t.targetId === body.id || friendIds.has(t.targetId ?? 0);
-    if (!answering && b.clock - b.fightSince < P.react) return true;
+    // …and a leader goes in without the beat: it was told to be the first thing the monster sees.
+    if (!answering && !leading && b.clock - b.fightSince < P.react) return true;
     if (this.kitePass(b, body, leader, s, t, answering)) return true;
     this.attack(b, body, t);
     return true;
@@ -979,6 +1059,246 @@ export class WarChasersAi {
     this.order(b, body, `f${leader.id}`, {
       c: "order", unitId: body.id, order: { kind: "follow", targetId: leader.id, offX: Math.cos(a) * P_, offY: Math.sin(a) * P_ }, queued: false,
     });
+  }
+
+  // --- going first ---------------------------------------------------------------------------------
+
+  /**
+   * "go ahead" / "tank" / "take the lead" — which ONE of the computers the line hands the lead to.
+   *
+   * The one it names, if it names one ("optimus go ahead"); otherwise a STRENGTH or AGILITY hero
+   * before an INTELLIGENCE one (the developer's rule, 2026-09-15: a caster in front of the party is
+   * the first thing to die), then the party's tanks (map.ts `Role`), then the healthiest. Never one
+   * that is resting, unless nobody else can. Any other computer that was leading hands it over.
+   */
+  private leadAsksPass(): void {
+    if (!this.leadAsks.length) return;
+    const asks = this.leadAsks;
+    this.leadAsks = [];
+    for (const ask of asks) {
+      const party = this.brains.filter((b) => ask.party.includes(b.player) && !b.dead);
+      const named = party.filter((b) => {
+        const body = this.bodyOf(b.player);
+        return !!body && namesHero(ask.text, this.heroName(body));
+      });
+      let best: { b: Brain; score: number } | null = null;
+      for (const b of named.length ? named : party) {
+        const body = this.bodyOf(b.player);
+        if (!body) continue;
+        const attr = this.host.registry.get(body.typeId)?.primaryAttr;
+        let score = attr === PrimaryAttribute.Strength ? 20 : attr === PrimaryAttribute.Agility ? 18 : 0;
+        if (b.pick?.role === "tank") score += 4;
+        if ((body.weapon?.range ?? 100) <= 200) score += 2;
+        score += pct(body) * 3;
+        if (b.resting) score -= 40;
+        if (!best || score > best.score) best = { b, score };
+      }
+      if (!best) continue;
+      for (const o of this.brains) {
+        if (o === best.b || o.stance !== "lead") continue;
+        o.stance = "follow";
+        o.stanceSince = o.clock;
+        o.orderKey = "";
+      }
+      best.b.queue.push({ command: "lead", turn: 0, claimsLead: false });
+    }
+  }
+
+  /**
+   * LEADING: `LEAD_AHEAD` in front of the person, along the way they are walking (`forwardOf`) —
+   * the fights on the way are `fightPass`'s, which takes anything within `LEAD_PULL` of the person
+   * and goes in without the reaction beat. With no way forward known (the person has not walked
+   * anywhere yet) it stands a step in front of them, on its own side.
+   */
+  private leadPass(b: Brain, body: SimUnit, leader: SimUnit): void {
+    const ahead = this.forwardOf(leader, body, LEAD_AHEAD, 0);
+    if (!ahead) {
+      if (dist(leader, body) > FOLLOW_GAP + 160) {
+        const p = this.behind(leader, body, FOLLOW_GAP);
+        this.move(b, body, p.x, p.y);
+      }
+      return;
+    }
+    if (dist(ahead, body) <= 140) return;
+    // An ATTACK-move: a leader walking into a room is the thing that meets what is in it.
+    this.order(b, body, `lead${Math.round(ahead.x / 96)},${Math.round(ahead.y / 96)}`, {
+      c: "order", unitId: body.id, order: { kind: "attackmove", x: ahead.x, y: ahead.y }, queued: false,
+    });
+  }
+
+  // --- summons -------------------------------------------------------------------------------------
+
+  /**
+   * ITS SUMMONS — the Water Elemental, the Feral Spirits, the animated dead. Left to themselves they
+   * stood where they were summoned: in the corridor the party was about to walk down, or two rooms
+   * back once it had (the developer, 2026-09-15). So, every pass:
+   *
+   *  · a summon in a fight is left to it — but not one hitting a spawner HUT nobody asked for, the
+   *    same rule the heroes keep (`fightPass`): an attack-move acquires buildings, and a Water
+   *    Elemental stood hitting a hut two rooms back while the party walked on (seen live);
+   *  · one with a monster within `SUMMON_ENGAGE` (or anything hitting it), or with its hero's target
+   *    within `SUMMON_JOIN`, is sent at it (the hero's target first — a party that focuses kills things);
+   *  · every other one is sent `SUMMON_AHEAD` in FRONT of the party (`forwardOf`), on an attack-move
+   *    so it fights whatever it walks into — a plain move while a hut is near, for the reason above —
+   *    each on its own side of the line. The front is the person it follows — or its own hero while
+   *    that hero is the one leading — and a hero told to WAIT keeps its summons at the spot it is holding.
+   *
+   * Wards (a Serpent Ward cannot walk) and illusions are not summons to order.
+   */
+  private summonPass(b: Brain, body: SimUnit, leader: SimUnit | null): void {
+    const summons = this.units().filter((u) => u.owner === b.player && u.isSummon && !u.isIllusion && !u.hidden && !u.building && u.speed > 0);
+    for (const id of b.summonOrders.keys()) if (!summons.some((u) => u.id === id)) b.summonOrders.delete(id);
+    if (!summons.length) return;
+    const heroTarget = b.target ? this.host.world.units.get(b.target) : undefined;
+    const front = b.stance === "lead" || !leader ? body : leader;
+    // The huts the party HAS gone for: its hero's target, and the leader's.
+    const wanted = new Set([b.target, leader && leader.order === "attack" ? leader.targetId : 0].filter(Boolean));
+    const huts = this.units().filter((u) => u.building && !wanted.has(u.id) && this.hostileTo(b.player, u));
+    summons.forEach((m, i) => {
+      const on = m.targetId ? this.host.world.units.get(m.targetId) : undefined;
+      if ((m.order === "attack" || m.order === "attackmove") && on && on.hp > 0 && (!on.building || wanted.has(on.id))) return;
+      // --- a fight
+      let foe: SimUnit | null = null;
+      if (heroTarget && heroTarget.hp > 0 && dist(heroTarget, m) <= SUMMON_JOIN) foe = heroTarget;
+      else {
+        let best = SUMMON_ENGAGE;
+        for (const u of this.units()) {
+          if (u.hidden || u.building || u.invulnerable || u.invisible || !this.hostileTo(b.player, u)) continue;
+          const d = u.targetId === m.id ? 0 : dist(u, m);
+          if (d < best && dist(u, m) <= LOOK && this.host.visible(b.player, u.x, u.y)) {
+            best = d;
+            foe = u;
+          }
+        }
+      }
+      if (foe) return void this.orderSummon(b, m, `t${foe.id}`, { kind: "attack", targetId: foe.id });
+      // --- the way on
+      const side = summons.length > 1 ? (i - (summons.length - 1) / 2) * SUMMON_SPREAD : 0;
+      let to: Pt | null;
+      if (b.stance === "wait" && b.holdAt) to = dist(m, b.holdAt) > 350 ? b.holdAt : null;
+      else if (b.stance === "back") to = dist(m, body) > 300 ? { x: body.x, y: body.y } : null;
+      else {
+        to = this.forwardOf(front, m, SUMMON_AHEAD, side);
+        // No way forward known yet: not left behind, and not in the front's way either.
+        if (!to && dist(m, front) > SUMMON_AHEAD + 250) to = this.behind(front, m, 200);
+      }
+      const offHut = !!on?.building && !wanted.has(on.id);
+      // Nowhere ahead to go, but off a hut it was not sent at: back to the front.
+      if (!to && offHut) to = this.behind(front, m, 200);
+      if (!to || (dist(to, m) <= 120 && !offHut)) return;
+      const nearHut = huts.some((h) => dist(h, m) <= 900 || dist(h, to!) <= 900);
+      const kind = b.stance === "back" || nearHut ? "move" : "attackmove";
+      this.orderSummon(b, m, `${kind === "move" ? "m" : "w"}${Math.round(to.x / 96)},${Math.round(to.y / 96)}`, { kind, x: to.x, y: to.y } as const);
+    });
+  }
+
+  /** One order to one summon — the same order not repeated, and a moving spot not re-chased faster
+   *  than `SUMMON_REORDER`. Keys: `t<id>` attack, `w<x,y>` attack-move, `m<x,y>` move. */
+  private orderSummon(
+    b: Brain, m: SimUnit, key: string,
+    order: { kind: "attack"; targetId: number } | { kind: "attackmove" | "move"; x: number; y: number },
+  ): void {
+    const last = b.summonOrders.get(m.id);
+    if (last && m.order !== "idle") {
+      if (last.key === key && b.clock - last.at < 3) return;
+      if (last.key[0] === key[0] && key[0] !== "t" && b.clock - last.at < SUMMON_REORDER) return;
+    }
+    if (this.host.execute(b.player, { c: "order", unitId: m.id, order, queued: false })) b.summonOrders.set(m.id, { key, at: b.clock });
+  }
+
+  // --- which way is forward ---------------------------------------------------------------------------
+
+  /** Samples the heading of every body the party is fronted by (`forwardOf`) — the leaders and the
+   *  computers' own heroes. A waygate jump is not a heading. */
+  private trailPass(): void {
+    const bodies = new Set<SimUnit>();
+    for (let p = 0; p < MELEE.MAX_PLAYERS; p++) {
+      if (p === DUNGEON) continue;
+      const u = this.bodyOf(p);
+      if (u) bodies.add(u);
+    }
+    for (const u of bodies) {
+      const t = this.trails.get(u.id);
+      if (!t) {
+        this.trails.set(u.id, { x: u.x, y: u.y, at: this.now, hx: 0, hy: 0 });
+        continue;
+      }
+      if (this.now - t.at < TRAIL_SAMPLE) continue;
+      const dx = u.x - t.x;
+      const dy = u.y - t.y;
+      const d = Math.hypot(dx, dy);
+      if (d >= TRAIL_MIN && d < TRAIL_JUMP) {
+        t.hx = dx / d;
+        t.hy = dy / d;
+      }
+      t.x = u.x;
+      t.y = u.y;
+      t.at = this.now;
+    }
+    for (const id of this.trails.keys()) if (![...bodies].some((u) => u.id === id)) this.trails.delete(id);
+  }
+
+  /**
+   * The point `ahead` world units in FRONT of `front`, `side` to its right, for `walker` to go to —
+   * or null when there is no front to speak of.
+   *
+   *  1. Walking: along its own ROUTE (`SimUnit.path`, the waypoints the pathfinder handed it), which
+   *     turns the dungeon's corners as the party will, and stops at its end — past where the person
+   *     is going is not ahead, it is elsewhere.
+   *  2. Standing: along the way it was last walking (`trailPass`), shortened to the last cell the
+   *     walker can stand on before a wall (`PathingGrid.walkable`).
+   *
+   * A point that ends up within a body of the front is none: that is exactly the heap in the
+   * corridor this exists to clear.
+   */
+  private forwardOf(front: SimUnit, walker: SimUnit, ahead: number, side: number): Pt | null {
+    let p: Pt | null = null;
+    let hx = 0;
+    let hy = 0;
+    const path = front.order !== "idle" && front.order !== "hold" ? front.path : undefined;
+    if (path?.length) {
+      let at: Pt = front;
+      let left = ahead;
+      for (const [wx, wy] of path) {
+        const d = dist(at, { x: wx, y: wy });
+        if (d > 0) {
+          hx = (wx - at.x) / d;
+          hy = (wy - at.y) / d;
+        }
+        if (d >= left) {
+          p = { x: at.x + hx * left, y: at.y + hy * left };
+          break;
+        }
+        left -= d;
+        at = { x: wx, y: wy };
+      }
+      p ??= at;
+    } else {
+      const t = this.trails.get(front.id);
+      if (!t || (t.hx === 0 && t.hy === 0)) return null;
+      hx = t.hx;
+      hy = t.hy;
+      p = this.walkLine(walker, front, hx, hy, ahead);
+    }
+    // To the side, as far as the ground goes before a wall.
+    if (side && (hx || hy)) p = this.walkLine(walker, p, -hy * Math.sign(side), hx * Math.sign(side), Math.abs(side));
+    return dist(p, front) < 160 ? null : p;
+  }
+
+  /** From `from`, up to `len` along (hx, hy), stopping at the last cell `walker` could stand on. */
+  private walkLine(walker: SimUnit, from: Pt, hx: number, hy: number, len: number): Pt {
+    const grid = this.host.world.grid;
+    if (!grid || walker.flying) return { x: from.x + hx * len, y: from.y + hy * len };
+    const domain = walker.waterborne ? "water" : "ground";
+    let last: Pt = { x: from.x, y: from.y };
+    for (let s = 32; s <= len; s += 32) {
+      const x = from.x + hx * s;
+      const y = from.y + hy * s;
+      const [cx, cy] = grid.worldToCell(x, y);
+      if (!grid.walkable(cx, cy, domain)) break;
+      last = { x, y };
+    }
+    return last;
   }
 
   /** Waiting: stand at the spot it was told to, and walk back to it after a fight moved it. */

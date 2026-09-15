@@ -82,6 +82,20 @@ every map fact is cited in `map.ts` against the trigger, rect or object it came 
    auto-acquired chaser whose target has left its strike range. Sometimes, not always: one kite per
    `KITE_GAP`, at most `KITE_TIME` long, at the difficulty's `kite` chance. At the start of a fight a
    summoner also lets its summons reach the monster first (`KITE_OPEN`).
+6b. **Summons go on ahead** (`summonPass`): a summon that is not fighting is sent `SUMMON_AHEAD` in
+   FRONT of the party, on an attack-move, each on its own side of the line — so it neither stands in
+   the corridor the party is walking down nor gets left in the last room. "Front" is `forwardOf`:
+   along the front body's own ROUTE (`SimUnit.path`) while it walks, else along the way it last
+   walked (`trailPass`, cut short at the first wall). A summon near a monster (or hit by one) or near
+   its hero's target is sent at it. A spawner HUT is the one fight it is pulled out of, the rule the
+   heroes already keep: an attack-move acquires buildings, and live, a Water Elemental stood hitting
+   a hut two rooms back while the party walked on, so near a hut the walk is a plain move.
+6c. **Going first** (`leadAsksPass` / `leadPass`): "go ahead", "tank", "take the lead", "lead the
+   way", "you first" hand the lead to ONE computer. It is the one the line names, else a STRENGTH or
+   AGILITY hero before an INTELLIGENCE one, then a tank, then the healthiest. It walks `LEAD_AHEAD`
+   in front of the person along their route and takes every monster within `LEAD_PULL` of them with
+   no reaction beat. The lead lasts `LEAD_HOLD` = 12 s, stretched to `LEAD_MAX` = 20 s while it is
+   still in the fight it walked into, and then it says "your lead again" and follows.
 7. **Rest** (`restDecision` / `restPass`): below `restHp` it stops (never for MANA — a caster short of it walks on with the party), out
    of reach of whatever is swinging, at a Fountain of Health if one is at hand, and SAYS so — "wait i
    need a bit more health" — again while the leader keeps walking away. A party that does not wait is
@@ -107,13 +121,16 @@ that computer alone.
 | back | back, b, go back, fall back, retreat, run, get out | leaves the fight to the leader's side, then waits |
 | go | lets go, go, come on, move, push, dont wait, stop waiting | follows again |
 | follow | follow me, follow, come, come back, on me, i lead | follows (and "me"/"i lead" takes the lead) |
-| attack | attack, hit, hit them, kill them, get them, charge | fights anything in sight for 40 s |
+| attack | attack, hit, hit them, kill them, get them, charge, fight, help (hlep, hepl) | fights anything in sight for 40 s |
+| lead | go ahead, tank, take the lead, lead the way, you lead, go first, you first, after you | ONE computer walks in front and takes the fights, 12–20 s |
 
 **Typos** are read the way people make them (`typoDistance`): a neighbouring key or a vowel for a vowel
 is one slip, any other letter two, and a word of three letters or fewer must be exact or two letters
 swapped. "wiat", "folow", "fallow", "atack", "bakc", "lets goo" are orders; "what", "shop", "yellow",
 "hot" are not. "im back", "be right back", "nice hit" and "-ing" forms on their own ("im waiting") are
-news. The last order in a line wins, and a negation turns one round ("dont go" is a wait).
+news, and so are "thanks for the help", "i help" and the map's own steam tank ("get in the tank",
+"the tank"). Lead words said about the SPEAKER ("i lead", "ill take the lead", "i tank", "ill go
+first") are a follow that takes the lead for them, not a lead order. The last order in a line wins, and a negation turns one round ("dont go" is a wait).
 
 **An order overrides its own decision.** "lets go" to a resting computer ends the rest — "ok, but im
 still low" — and holds off the next one for `OBEY_HOLD`. The one thing it will not be ordered into is
@@ -141,4 +158,5 @@ A wait the leader then walks far away from is not held for ever (`WAIT_ABANDON`)
 
 `tools/ai-plus-warchasers-test.cjs` pins the parser (orders, typos, non-orders, names, heal requests),
 the item values, the picker geometry, and — on a stub world through `WarChasersAi.tick` — who a heal
-goes to, the mana rule, a promised heal, and kiting.
+goes to, the mana rule, a promised heal, kiting, who takes the lead and for how long, and where the
+summons go.
