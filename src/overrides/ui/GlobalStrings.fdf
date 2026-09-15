@@ -67,4 +67,9 @@ StringList {
     COLON_SERVER                "Server:",
     // …and its first entry: this machine's own relay, reachable from the local network only.
     THIS_COMPUTER               "This Computer",
+
+    // The hotkey editor's fifth race tab (issue #156): the tavern heroes and the neutral shops.
+    // The game names four races in this table and never a neutral one -- the World Editor's
+    // palette calls that column by its PLAYER ("Neutral Passive"), which is not a race.
+    NEUTRAL                     "Neutral",
 }

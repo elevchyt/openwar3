@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld("ow3native", {
   pickInstall: () => ipcRenderer.invoke("ow3:install-pick"),
   /** Forget the remembered folder, so the next launch asks again. */
   forgetInstall: () => ipcRenderer.invoke("ow3:install-forget"),
+  /** Write the folder's CustomKeys.txt — the hotkey editor's Save (issue #156). ONE named file
+   *  the shell resolves inside the install itself; the page names no path, so this is not the
+   *  general write primitive the note above rules out. */
+  saveCustomKeys: (bytes) => ipcRenderer.invoke("ow3:customkeys-save", bytes),
 
   /**
    * The OpenWar3s this machine can hear on the local network (electron/beacon.mjs), pushed as

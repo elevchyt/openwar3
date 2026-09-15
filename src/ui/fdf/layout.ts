@@ -181,7 +181,10 @@ function scaleButtonWidths(root: LaidOutFrame, scale: number): void {
     f.children.forEach(findKnobs);
   })(root.frame);
   (function walk(n: LaidOutFrame): void {
-    if (BUTTON_TYPES.has(n.frame.type) && !(n.frame.name && knobs.has(n.frame.name))) {
+    // A GLUEBUTTON is the glue's ICON button (`StandardIconicButtonTemplate`, a 0.031 square) —
+    // it carries no caption to fill a chain slot with, and widened it stretches its picture (the
+    // hotkey editor's door beside Options → Gameplay → "Hotkeys:", issue #156).
+    if (BUTTON_TYPES.has(n.frame.type) && n.frame.type !== "GLUEBUTTON" && !(n.frame.name && knobs.has(n.frame.name))) {
       widen(n);
       if (n.parent && n.parent.frame.type === "BACKDROP") widen(n.parent);
     }

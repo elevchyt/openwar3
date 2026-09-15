@@ -17,7 +17,7 @@
 // paths in it speak WC3's `\` separator so they can be used as `InstallFiles` keys verbatim.
 
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 
@@ -98,6 +98,21 @@ export async function enumerateInstall(root) {
     ? "CustomKeys.txt"
     : null;
   return { archives, maps, casc, customKeys };
+}
+
+/**
+ * Write the folder's `CustomKeys.txt` — the hotkey editor's Save (issue #156).
+ *
+ * The one write this module does, and deliberately narrow: the page hands over BYTES and names no
+ * path, and the file lands beside the exe under whatever case the folder already spells it with
+ * (`enumerateInstall` found it case-insensitively, and a second `customkeys.txt` beside the first
+ * is exactly what a case-sensitive disk would otherwise get). The bytes are windows-1252 already.
+ */
+export async function writeCustomKeys(root, bytes) {
+  if (!root || !existsSync(root)) throw new Error("No Warcraft III folder is selected.");
+  const entries = await readdir(root, { withFileTypes: true });
+  const name = entries.find((e) => e.isFile() && e.name.toLowerCase() === "customkeys.txt")?.name ?? "CustomKeys.txt";
+  await writeFile(join(root, name), Buffer.from(bytes));
 }
 
 /** The build OpenWar3 plays. MUST equal `REQUIRED_VERSION` in src/vfs/version.ts, which states

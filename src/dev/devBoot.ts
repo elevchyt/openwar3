@@ -217,7 +217,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // Custom rung of Options → Gameplay → "Hotkeys:" can be exercised from a scripted boot.
   const customKeys = manifest.customKeys ? await fetchInstallAnsi(fileUrl, manifest.customKeys) : null;
 
-  const load = await loadProfile({ files, casc, customKeys }, DEFAULT_PROFILE, (msg) => log(msg));
+  // …and the hotkey editor's Save writes it back through the same dev server (issue #156).
+  const saveCustomKeys = async (bytes: Uint8Array): Promise<void> => {
+    const res = await fetch("/wc3/customkeys", { method: "POST", body: bytes.slice() });
+    if (!res.ok) throw new Error(`CustomKeys.txt could not be written (${res.status}).`);
+  };
+  const load = await loadProfile({ files, casc, customKeys, saveCustomKeys }, DEFAULT_PROFILE, (msg) => log(msg));
   log(`mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files`);
   hooks.mountInstall(load);
 

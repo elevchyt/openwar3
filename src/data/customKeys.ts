@@ -114,11 +114,48 @@ export class CustomKeys {
  * INSTALL, which is what the VFS already is.
  */
 let parsed: CustomKeys | null = null;
+/** …and the text it was parsed from, which the hotkey editor edits (issue #156). */
+let source: string | null = null;
+
+/**
+ * Writes a CustomKeys.txt back to the install it came from — windows-1252 bytes, the encoding
+ * it is read in (customKeysDoc.ts `encodeAnsi`). Each install door brings its own, because each
+ * reaches the folder differently: the browser's picker through its directory HANDLE, the desktop
+ * app through its shell, the `?dev` boot through the dev server. Null for a door with no way to
+ * write — a Firefox `<input webkitdirectory>` pick hands the page copies of the files and nothing
+ * to put one back with.
+ */
+export type CustomKeysWriter = (bytes: Uint8Array) => Promise<void>;
+let writer: CustomKeysWriter | null = null;
 
 /** Hand the mounted install's CustomKeys.txt over, or null when the folder has none. Parsed
- *  eagerly so a malformed file costs nothing at the start of a match. */
-export function setCustomKeys(text: string | null): void {
+ *  eagerly so a malformed file costs nothing at the start of a match. `save` is the install
+ *  door's way of writing it back, when it has one. */
+export function setCustomKeys(text: string | null, save: CustomKeysWriter | null = writer): void {
+  source = text;
   parsed = text ? new CustomKeys(text) : null;
+  writer = save;
+}
+
+/** The player's file as it stands — what the hotkey editor opens. */
+export function customKeysText(): string | null {
+  return source;
+}
+
+/** True when this install door can write the file back to the folder. */
+export function canSaveCustomKeys(): boolean {
+  return writer !== null;
+}
+
+/**
+ * The hotkey editor's Save: write the file to the install, THEN make it the one the next match
+ * reads. In that order, so a write that fails leaves the game reading what is really on disk.
+ * With no writer the text still becomes this session's file — the editor says so — since a
+ * player who pressed Save expects the keys they just set in the next game either way.
+ */
+export async function saveCustomKeys(text: string, bytes: Uint8Array): Promise<void> {
+  if (writer) await writer(bytes);
+  setCustomKeys(text, writer);
 }
 
 /**

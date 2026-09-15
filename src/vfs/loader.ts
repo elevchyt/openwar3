@@ -46,7 +46,7 @@ export async function loadProfile(
   // reason the version gate is asked here: this is the one function all three doors pass
   // through. It is a loose file in the folder rather than an archive entry, so it cannot arrive
   // through the `DataSource` every other table is read from — see src/data/customKeys.ts.
-  setCustomKeys(install.customKeys);
+  setCustomKeys(install.customKeys, install.saveCustomKeys ?? null);
 
   const maps = installMaps(install.files);
 

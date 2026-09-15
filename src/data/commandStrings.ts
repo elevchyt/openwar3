@@ -60,7 +60,7 @@ const VIRTUAL_KEYS: Record<number, string> = {
 
 /** One `Hotkey=` value as the HUD's key matcher spells keys: an upper-case letter, or one of
  *  the named keys above. */
-function keyName(value: string): string {
+export function keyName(value: string): string {
   const raw = value.trim();
   if (!raw) return "";
   if (/^\d+$/.test(raw)) return VIRTUAL_KEYS[Number(raw)] ?? "";

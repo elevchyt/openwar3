@@ -1,0 +1,231 @@
+// OpenWar3's own glue dialog — the CustomKeys.txt editor (issue #156).
+//
+// **Why it exists.** Options → Gameplay → "Hotkeys:" → Custom reads the player's CustomKeys.txt
+// (issue #142), and until now the only way to write one was a text editor or one of the
+// community's web generators (the issue links jcfields' warcraft3-hotkey-editor). This is that
+// generator, inside the game: pick a unit, see its card, press a button, press a key.
+//
+// **Why a file of ours.** 1.30.4 has no FrameDef for a hotkey editor — Reforged's was never in
+// this build — and `UI\FrameDef\` is the player's (src/overrides/README.md). So it is declared
+// here in the game's own language out of the game's own templates and art, the way the Join
+// Server dialog is: the Battle.net dialogue box behind it, the glue's text templates, its buttons
+// in their decorated sockets, `ListBoxWar3` for the unit list and `StandardEditBoxTemplate` for
+// the key box. The COMMAND CARD in the middle is not FDF: it is the in-game card's own DOM
+// (ui/hotkeyEditor.ts), because the thing being edited is exactly that card — the same icons, the
+// same corner key badge — and a picture of it built out of glue frames would be a second
+// drawing of one thing.
+//
+// It is a DIALOG with its own size and no anchors (`centerRoot`): the box says how big it is
+// and the mount centres it. Three columns hang off its top-left — the unit list, the card, the
+// selected button's details — and the three action buttons off its bottom.
+
+Frame "DIALOG" "HotkeyEditor" {
+    Height 0.54,
+    Width 0.74,
+
+    DialogBackdrop "HotkeyEditorBackdrop",
+    Frame "BACKDROP" "HotkeyEditorBackdrop" {
+        BackdropTileBackground,
+        BackdropBackground  "UI\Widgets\BattleNet\bnet-dialoguebox-background.blp",
+        BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R",
+        BackdropCornerSize  0.064,
+        BackdropBackgroundSize  0.128,
+        BackdropBackgroundInsets 0.01 0.01 0.01 0.01,
+        BackdropEdgeFile  "UI\Widgets\BattleNet\bnet-dialoguebox-border.blp",
+    }
+
+    // The title in the LABEL gold, as the Join Server dialog's is.
+    Frame "TEXT" "HotkeyEditorTitle" INHERITS "StandardTitleTextTemplate" {
+        Width 0.4,
+        Height 0.02,
+        SetPoint TOPLEFT, "HotkeyEditor", TOPLEFT, 0.04, -0.03,
+        FontColor 0.99 0.827 0.0705 1.0,
+        FontJustificationH JUSTIFYLEFT,
+    }
+
+    // --- The race tabs. Five small glue buttons in a row; the screen greys the chosen one. ---
+    Frame "GLUETEXTBUTTON" "HotkeyRaceHuman" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
+        Width 0.09,
+        Height 0.025,
+        SetPoint TOPLEFT, "HotkeyEditorTitle", BOTTOMLEFT, 0.0, -0.008,
+        ButtonText "HotkeyRaceHumanText",
+        Frame "TEXT" "HotkeyRaceHumanText" INHERITS "StandardButtonTextTemplate" { }
+    }
+    Frame "GLUETEXTBUTTON" "HotkeyRaceOrc" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
+        Width 0.09,
+        Height 0.025,
+        SetPoint LEFT, "HotkeyRaceHuman", RIGHT, 0.004, 0.0,
+        ButtonText "HotkeyRaceOrcText",
+        Frame "TEXT" "HotkeyRaceOrcText" INHERITS "StandardButtonTextTemplate" { }
+    }
+    Frame "GLUETEXTBUTTON" "HotkeyRaceNightElf" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
+        Width 0.09,
+        Height 0.025,
+        SetPoint LEFT, "HotkeyRaceOrc", RIGHT, 0.004, 0.0,
+        ButtonText "HotkeyRaceNightElfText",
+        Frame "TEXT" "HotkeyRaceNightElfText" INHERITS "StandardButtonTextTemplate" { }
+    }
+    Frame "GLUETEXTBUTTON" "HotkeyRaceUndead" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
+        Width 0.09,
+        Height 0.025,
+        SetPoint LEFT, "HotkeyRaceNightElf", RIGHT, 0.004, 0.0,
+        ButtonText "HotkeyRaceUndeadText",
+        Frame "TEXT" "HotkeyRaceUndeadText" INHERITS "StandardButtonTextTemplate" { }
+    }
+    Frame "GLUETEXTBUTTON" "HotkeyRaceNeutral" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
+        Width 0.09,
+        Height 0.025,
+        SetPoint LEFT, "HotkeyRaceUndead", RIGHT, 0.004, 0.0,
+        ButtonText "HotkeyRaceNeutralText",
+        Frame "TEXT" "HotkeyRaceNeutralText" INHERITS "StandardButtonTextTemplate" { }
+    }
+
+    // --- Column 1: the units of the chosen race (ListBoxWar3 is dropped in by the screen). ---
+    Frame "FRAME" "HotkeyUnitListContainer" {
+        Width 0.2,
+        Height 0.37,
+        SetPoint TOPLEFT, "HotkeyRaceHuman", BOTTOMLEFT, 0.0, -0.012,
+    }
+
+    // --- Column 2: the command card, and the pages a unit has (its Build and Learn cards). ---
+    Frame "TEXT" "HotkeyCardTitle" INHERITS "StandardInfoTextTemplate" {
+        Width 0.23,
+        Height 0.016,
+        SetPoint TOPLEFT, "HotkeyUnitListContainer", TOPRIGHT, 0.018, 0.0,
+        FontJustificationH JUSTIFYLEFT,
+    }
+    Frame "FRAME" "HotkeyCardContainer" {
+        Width 0.23,
+        Height 0.175,
+        SetPoint TOPLEFT, "HotkeyCardTitle", BOTTOMLEFT, 0.0, -0.006,
+    }
+    // The unit's other cards — the ones the game opens behind a button (Build Structure, Hero
+    // Abilities). Hidden when the unit has none.
+    Frame "GLUETEXTBUTTON" "HotkeyPageMain" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
+        Width 0.092,
+        Height 0.025,
+        SetPoint TOPLEFT, "HotkeyCardContainer", BOTTOMLEFT, 0.0, -0.006,
+        ButtonText "HotkeyPageMainText",
+        Frame "TEXT" "HotkeyPageMainText" INHERITS "StandardButtonTextTemplate" { }
+    }
+    Frame "GLUETEXTBUTTON" "HotkeyPageSub" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
+        Width 0.092,
+        Height 0.025,
+        SetPoint LEFT, "HotkeyPageMain", RIGHT, 0.004, 0.0,
+        ButtonText "HotkeyPageSubText",
+        Frame "TEXT" "HotkeyPageSubText" INHERITS "StandardButtonTextTemplate" { }
+    }
+    Frame "FRAME" "HotkeyPageContainer" {
+        Width 0.23,
+        Height 0.025,
+        SetPoint TOPLEFT, "HotkeyCardContainer", BOTTOMLEFT, 0.0, -0.006,
+    }
+    Frame "TEXT" "HotkeyCardHint" INHERITS "StandardSmallTextTemplate" {
+        Width 0.23,
+        Height 0.1,
+        SetPoint TOPLEFT, "HotkeyPageContainer", BOTTOMLEFT, 0.0, -0.008,
+        FontJustificationH JUSTIFYLEFT,
+        FontJustificationV JUSTIFYTOP,
+        FontColor 0.75 0.75 0.75 1.0,
+    }
+
+    // --- Column 3: the selected button. ---
+    Frame "TEXT" "HotkeyButtonName" INHERITS "StandardInfoTextTemplate" {
+        Width 0.205,
+        Height 0.034,
+        SetPoint TOPLEFT, "HotkeyCardTitle", TOPRIGHT, 0.018, 0.0,
+        FontJustificationH JUSTIFYLEFT,
+        FontJustificationV JUSTIFYTOP,
+        FontColor 1.0 1.0 1.0 1.0,
+    }
+
+    Frame "TEXT" "HotkeyKeyLabel" INHERITS "StandardInfoTextTemplate" {
+        Height 0.016,
+        SetPoint TOPLEFT, "HotkeyButtonName", BOTTOMLEFT, 0.0, -0.012,
+        FontJustificationH JUSTIFYLEFT,
+    }
+    Frame "EDITBOX" "HotkeyKeyEditBox" INHERITS WITHCHILDREN "StandardEditBoxTemplate" {
+        Width 0.06,
+        Height 0.036,
+        SetPoint LEFT, "HotkeyKeyLabel", RIGHT, 0.01, 0.0,
+    }
+
+    // A toggle's ACTIVE state (Stop Defend, Repair's autocast) is a second button in the same
+    // slot with a key and tip of its own — `Unhotkey`/`Untip`. Hidden for everything else.
+    Frame "GLUECHECKBOX" "HotkeyUnCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
+        SetPoint TOPLEFT, "HotkeyKeyLabel", BOTTOMLEFT, 0.0, -0.022,
+    }
+    Frame "TEXT" "HotkeyUnLabel" INHERITS "StandardInfoTextTemplate" {
+        SetPoint LEFT, "HotkeyUnCheckBox", RIGHT, 0.008, 0.0,
+        FontJustificationH JUSTIFYLEFT,
+    }
+
+    Frame "TEXT" "HotkeyButtonInfo" INHERITS "StandardSmallTextTemplate" {
+        Width 0.205,
+        Height 0.1,
+        SetPoint TOPLEFT, "HotkeyUnCheckBox", BOTTOMLEFT, 0.0, -0.012,
+        FontJustificationH JUSTIFYLEFT,
+        FontJustificationV JUSTIFYTOP,
+        FontColor 0.75 0.75 0.75 1.0,
+    }
+
+    Frame "GLUETEXTBUTTON" "HotkeyResetButton" INHERITS WITHCHILDREN "StandardSmallButtonTemplate" {
+        Width 0.1,
+        Height 0.025,
+        // Level with the card's hint line in the next column, so the two columns end on one row.
+        SetPoint TOPLEFT, "HotkeyCardHint", TOPRIGHT, 0.018, -0.001,
+        ButtonText "HotkeyResetButtonText",
+        Frame "TEXT" "HotkeyResetButtonText" INHERITS "StandardButtonTextTemplate" { }
+    }
+
+    // --- The three decisions, in the glue's decorated sockets (DialogWar3's Yes/No pair). ---
+    // Reset All is the one with a longer caption, so it takes the FULL single-button socket —
+    // `DialogButtonOK`'s own geometry (DialogWar3.fdf), mirrored to face into the dialog — where
+    // the small socket Save and Cancel sit in is sized for a 0.095 button and cut it off.
+    Frame "BACKDROP" "HotkeyResetAllBackdrop" INHERITS "StandardMenuSingleButtonBaseBackdrop" {
+        SetPoint BOTTOMLEFT, "HotkeyEditor", BOTTOMLEFT, 0.012, 0.006,
+        BackdropMirrored,
+
+        Frame "GLUETEXTBUTTON" "HotkeyResetAllButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.159,
+            SetPoint TOPLEFT, "HotkeyResetAllBackdrop", TOPLEFT, 0.032, -0.015625,
+            ButtonText "HotkeyResetAllButtonText",
+            Frame "TEXT" "HotkeyResetAllButtonText" INHERITS "StandardButtonTextTemplate" { }
+        }
+    }
+
+    Frame "BACKDROP" "HotkeySaveBackdrop" INHERITS "StandardMenuSingleSmallButtonBaseBackdrop" {
+        Width 0.2325,
+        Height 0.0525,
+        SetPoint BOTTOMRIGHT, "HotkeyEditor", BOTTOMRIGHT, -0.012, 0.012,
+
+        Frame "GLUETEXTBUTTON" "HotkeySaveButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.095,
+            Height 0.025,
+            SetPoint TOPRIGHT, "HotkeySaveBackdrop", TOPRIGHT, -0.031, -0.013,
+            ButtonText "HotkeySaveButtonText",
+            Frame "TEXT" "HotkeySaveButtonText" INHERITS "StandardButtonTextTemplate" { }
+        }
+    }
+
+    Frame "BACKDROP" "HotkeyCancelBackdrop" INHERITS "StandardMenuSingleSmallButtonBaseBackdrop" {
+        Width 0.2325,
+        Height 0.0525,
+        SetPoint RIGHT, "HotkeySaveBackdrop", LEFT, 0.07, 0.0,
+
+        Frame "GLUETEXTBUTTON" "HotkeyCancelButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.095,
+            Height 0.025,
+            SetPoint TOPRIGHT, "HotkeyCancelBackdrop", TOPRIGHT, -0.031, -0.013,
+            ButtonText "HotkeyCancelButtonText",
+            Frame "TEXT" "HotkeyCancelButtonText" INHERITS "StandardButtonTextTemplate" { }
+        }
+    }
+
+    Frame "TEXT" "HotkeyStatus" INHERITS "StandardSmallTextTemplate" {
+        Width 0.3,
+        Height 0.02,
+        SetPoint BOTTOM, "HotkeyEditor", BOTTOM, -0.02, 0.03,
+        FontJustificationH JUSTIFYCENTER,
+    }
+}

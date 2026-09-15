@@ -137,6 +137,44 @@ reason the version gate is asked there.
   that unimplemented list until issue #142 — so a map that set it was setting nothing. It lands
   now, on `UnitDef.awakenTip`.)
 
+## The editor (issue #156)
+
+With "Hotkeys:" on **Custom**, an icon button stands to the right of the pulldown
+(`HotkeyEditorButton` — Battle.net's Profile button restated: `StandardIconicButtonTemplate`
+with the `bnet-mainmenu-profile-up/down/disabled.blp` faces) and opens the hotkey editor — the in-game version of the web
+generators players write this file with (the issue links jcfields' warcraft3-hotkey-editor). It
+is a modal glue dialog of ours ([`src/overrides/ui/HotkeyEditor.fdf`](../src/overrides/ui/HotkeyEditor.fdf),
+[`src/ui/hotkeyEditor.ts`](../src/ui/hotkeyEditor.ts)): race tabs, the race's units, the chosen
+unit's command card, and the selected button's key.
+
+* **The catalog is read, not listed.** [`src/data/hotkeyCatalog.ts`](../src/data/hotkeyCatalog.ts)
+  builds every card from the tables the game builds its own from — `abilList`/`heroAbilList`,
+  the func rows' `Trains`/`Researches`/`Upgrade`/`Builds`/`Sell*`/`Makeitems`, and the `[Cmd*]`
+  sections with `CommandFunc.txt`'s positions. The roster is `UnitUI.slk` `special` = 0,
+  `campaign` = 0, `inEditor` = 1, plus the tavern heroes, the neutral shops and three melee
+  forms. A hero has a second card (`Research*` fields), a worker a Build card.
+* **The card is the in-game card.** Its buttons wear the same corner key badge
+  (`.hud-count-badge.hud-hotkey-badge`), a key two buttons share goes red, and a button is
+  DRAGGED to another slot to move it (swapping `Buttonpos` with whatever was there). The drag is
+  pointer events and a picture of the icon, never HTML5 drag-and-drop: that would put the
+  browser's drag cursor on screen.
+* **Tooltips are not edited.** The heading shows the tooltip as the game draws it, and its
+  gilded letter follows the key on its own (`retip`) — in the game's style (`|cffffcc00M|rove`)
+  or a generator's bracket (`(|cffffcc00Q|r) Move`), whichever the tip already uses.
+* **The file is edited in place** ([`src/data/customKeysDoc.ts`](../src/data/customKeysDoc.ts)):
+  comments, blank lines, section order and sections the editor has no button for all survive a
+  save, and a value set back to the install's own is taken OUT of the file. It reads INI itself,
+  because mdx-m3-viewer's `IniFile` strips a value's outer quotes and so reads a quoted per-level
+  list (`Tip="a, b","c"`) wrong. The bytes are windows-1252, like the read.
+* **Saving goes back through the door the install came in by** (`PickedInstall.saveCustomKeys`):
+  the browser picker's directory handle (asking for write permission on the Save click), the
+  desktop shell's `ow3:customkeys-save` (bytes only; the shell names the path), and the dev
+  server's `POST /wc3/customkeys`. A Firefox `webkitdirectory` pick has no writer, so there the
+  saved keys last for the session and the editor says so. Either way the text becomes the file
+  the next match reads (`saveCustomKeys` → `setCustomKeys`).
+
+`tools/custom-keys-editor-test.cjs` pins the in-place writer, the re-gilding and the catalog.
+
 ## Showing the key on the button
 
 Options → Gameplay → **"Show hotkeys on command buttons"** (ON by default) prints the key that

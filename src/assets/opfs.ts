@@ -1,4 +1,5 @@
 import { fileReader, type CascFiles } from "../vfs/casc";
+import type { CustomKeysWriter } from "../data/customKeys";
 
 // Asset import + persistence (plan §1.2). Import once → read the user's own WC3
 // install client-side → cache in OPFS later. Copyrighted bytes never touch a
@@ -54,6 +55,34 @@ interface DirEntry {
 interface DirHandle {
   name: string;
   values(): AsyncIterableIterator<DirEntry>;
+  /** The write half, used only by `customKeysWriter`. */
+  getFileHandle?(name: string, opts: { create: boolean }): Promise<{ createWritable(): Promise<WritableFile> }>;
+  requestPermission?(opts: { mode: "readwrite" }): Promise<"granted" | "denied" | "prompt">;
+}
+interface WritableFile {
+  write(data: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * The picker's way of saving a CustomKeys.txt (issue #156): back into the folder it was read
+ * from, under the name it had there — or `CustomKeys.txt` beside the exe when there was none,
+ * which is the spelling `CustomKeyInfo.txt` names first.
+ *
+ * The pick was READ access. Writing asks the browser for more, and that prompt has to come out of
+ * a user gesture — which the editor's Save click is. A player who refuses gets an error back, and
+ * the editor reports it rather than pretending the keys were saved.
+ */
+function customKeysWriter(dir: DirHandle, name: string): CustomKeysWriter | undefined {
+  if (!dir.getFileHandle) return undefined;
+  return async (bytes) => {
+    const allowed = (await dir.requestPermission?.({ mode: "readwrite" })) ?? "granted";
+    if (allowed !== "granted") throw new Error("Permission to write to the Warcraft III folder was refused.");
+    const file = await dir.getFileHandle!(name, { create: true });
+    const out = await file.createWritable();
+    await out.write(bytes);
+    await out.close();
+  };
 }
 
 const isMpq = (name: string): boolean => name.toLowerCase().endsWith(".mpq");
@@ -79,6 +108,11 @@ export interface PickedInstall {
    * "Hotkeys:" is on Custom. See src/data/customKeys.ts.
    */
   customKeys: string | null;
+  /**
+   * Write a `CustomKeys.txt` back into the folder (issue #156, the hotkey editor's Save), or
+   * absent when this pick cannot — see `CustomKeysWriter` in src/data/customKeys.ts.
+   */
+  saveCustomKeys?: CustomKeysWriter;
 }
 
 /**
@@ -133,6 +167,9 @@ export async function pickInstall(): Promise<PickedInstall | null> {
     const files: InstallFiles = new Map();
     const casc = emptyCasc();
     let customKeys: string | null = null;
+    /** Where the file was found, so a save goes back to the same place. */
+    let keysDir: DirHandle = handle;
+    let keysName = "CustomKeys.txt";
     for await (const entry of handle.values()) {
       if (entry.kind === "file" && isMpq(entry.name)) {
         files.set(entry.name.toLowerCase(), await entry.getFile());
@@ -140,15 +177,24 @@ export async function pickInstall(): Promise<PickedInstall | null> {
         casc.buildInfo = await (await entry.getFile()).text();
       } else if (entry.kind === "file" && entry.name.toLowerCase() === CUSTOM_KEYS_PATHS[0]) {
         customKeys = await readAnsi(await entry.getFile());
+        keysDir = handle;
+        keysName = entry.name;
       } else if (entry.kind === "directory" && entry.name.toLowerCase() === "maps") {
         await collectMaps(entry, entry.name, files);
       } else if (entry.kind === "directory" && entry.name.toLowerCase() === "customkeybindings") {
-        customKeys ??= await customKeysIn(entry);
+        if (customKeys === null) {
+          const found = await customKeysIn(entry);
+          if (found) {
+            customKeys = found.text;
+            keysDir = entry as unknown as DirHandle;
+            keysName = found.name;
+          }
+        }
       } else if (entry.kind === "directory" && entry.name.toLowerCase() === "data") {
         await collectCasc(entry, casc);
       }
     }
-    return { files, casc: casc.buildInfo ? casc : null, customKeys };
+    return { files, casc: casc.buildInfo ? casc : null, customKeys, saveCustomKeys: customKeysWriter(keysDir, keysName) };
   }
 
   return pickViaInput();
@@ -193,10 +239,10 @@ async function collectMaps(dir: DirEntry, prefix: string, into: InstallFiles): P
 
 /** The `CustomKeys.txt` inside a `CustomKeyBindings\\` folder, if it holds one — the second of
  *  the two places CustomKeyInfo.txt names (see CUSTOM_KEYS_PATHS). */
-async function customKeysIn(dir: DirEntry): Promise<string | null> {
+async function customKeysIn(dir: DirEntry): Promise<{ text: string; name: string } | null> {
   for await (const entry of dir.values()) {
     if (entry.kind === "file" && entry.name.toLowerCase() === CUSTOM_KEYS_PATHS[0]) {
-      return readAnsi(await entry.getFile());
+      return { text: await readAnsi(await entry.getFile()), name: entry.name };
     }
   }
   return null;

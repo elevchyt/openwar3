@@ -242,7 +242,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   overridden, never invented; and `Hotkey=` is sometimes a NUMBER (`[CmdCancel] Hotkey=27` is
   VK_ESCAPE, "2" if you read it as a letter). The engine's own buttons have no object row, so
   theirs land in `Units\CommandStrings.txt` — which is why the letters are no longer retyped at
-  `cmdSection`'s call sites.
+  `cmdSection`'s call sites. The Custom rung has an EDITOR (issue #156, the icon button beside the
+  pulldown): its cards are READ out of the tables (`data/hotkeyCatalog.ts`), it edits the player's
+  file IN PLACE and takes a value set back to the game's own out of it (`data/customKeysDoc.ts` —
+  never regenerate the file), tooltips are not editable and re-gild themselves, and Save goes back
+  through the install door's own writer (`PickedInstall.saveCustomKeys`).
 - **Tooltips:** read [`docs/tooltips.md`](docs/tooltips.md) before touching the slab a command button raises, the
   world hover slab, or anything that composes a line into either. Do **not** go looking for its FrameDef — there
   isn't one, and `UI\MiscUI.txt` says why in as many words ("not created through the use of FrameDef files"). Its

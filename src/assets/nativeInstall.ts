@@ -32,6 +32,8 @@ interface NativeBridge {
     set(on: boolean): Promise<void>;
   };
   relaunch?(): Promise<void>;
+  /** Write the install's CustomKeys.txt (issue #156). Absent on a shell older than the editor. */
+  saveCustomKeys?(bytes: Uint8Array): Promise<void>;
   update: {
     state(): Promise<UpdateState>;
     download(): Promise<void>;
@@ -163,5 +165,10 @@ export async function loadNativeInstall(): Promise<PickedInstall> {
   // kilobytes and it is parsed at mount either way.
   const customKeys = manifest.customKeys ? await fetchInstallAnsi(fileUrl, manifest.customKeys) : null;
 
-  return { files, casc: manifest.casc ? await fetchCasc(fileUrl, manifest.casc) : null, customKeys };
+  // The hotkey editor's Save goes back through the SHELL, which knows the folder: the page has
+  // no path to name, and `ow3-install://` is a read-only scheme on purpose (electron/install.mjs).
+  const native = bridge();
+  const saveCustomKeys = native?.saveCustomKeys ? (bytes: Uint8Array) => native.saveCustomKeys!(bytes) : undefined;
+
+  return { files, casc: manifest.casc ? await fetchCasc(fileUrl, manifest.casc) : null, customKeys, saveCustomKeys };
 }

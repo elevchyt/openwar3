@@ -6,6 +6,7 @@ import advancedOptionsDisplayFdf from "./ui/AdvancedOptionsDisplay.fdf?raw";
 import globalStringsFdf from "./ui/GlobalStrings.fdf?raw";
 import gameChatroomFdf from "./ui/GameChatroom.fdf?raw";
 import joinAddressDialogFdf from "./ui/JoinAddressDialog.fdf?raw";
+import hotkeyEditorFdf from "./ui/HotkeyEditor.fdf?raw";
 import localMultiplayerCreateFdf from "./ui/LocalMultiplayerCreate.fdf?raw";
 import localMultiplayerJoinFdf from "./ui/LocalMultiplayerJoin.fdf?raw";
 import optionsMenuFdf from "./ui/OptionsMenu.fdf?raw";
@@ -121,6 +122,7 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     { frame: "HealthBarStyleBackdrop", into: "GameplayPanel" },
     { frame: "HotkeysLabel", into: "GameplayPanel" },
     { frame: "HotkeysBackdrop", into: "GameplayPanel" },
+    { frame: "HotkeyEditorButton", into: "GameplayPanel" },
     { frame: "ShowHotkeysCheckBox", into: "GameplayPanel" },
     { frame: "ShowHotkeysLabel", into: "GameplayPanel" },
     // Options → Video: "Vertical Sync", under the game's last row (Occlusion).
@@ -237,6 +239,15 @@ export const LAN_CREATE_OVERRIDE: FdfOverride = {
 export const JOIN_ADDRESS_DIALOG_OVERRIDE: FdfOverride = {
   id: "ow3-join-address-dialog",
   source: joinAddressDialogFdf,
+};
+
+/**
+ * The hotkey editor (issue #156) — like the Join Server dialog, a root of its own layered onto
+ * `DialogWar3.fdf` only to share a library with the glue templates. See `ui/HotkeyEditor.fdf`.
+ */
+export const HOTKEY_EDITOR_OVERRIDE: FdfOverride = {
+  id: "ow3-hotkey-editor",
+  source: hotkeyEditorFdf,
 };
 
 /**

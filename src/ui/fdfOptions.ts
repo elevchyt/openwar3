@@ -17,6 +17,7 @@ import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
 import { nativeVsync, relaunchNative, setNativeVsync } from "../assets/nativeInstall";
 import { showGlueDialog } from "./glueDialog";
+import { showHotkeyEditor } from "./hotkeyEditor";
 
 // The Options screen (issue #81), built from the game's own UI\FrameDef\Glue\OptionsMenu.fdf:
 // the three category buttons (Gameplay / Video / Sound) down the right, the settings for the
@@ -134,6 +135,8 @@ export async function mountOptions(
         if (shellVsync !== null && working.vsync !== committed.vsync) void commitVsync(working.vsync === true);
         else h.onClose();
       },
+      // The hotkey editor (issue #156) — its own modal over this screen, saving its own file.
+      HotkeyEditorButton: () => void openHotkeyEditor(),
       // Undo everything this visit changed — including the audio applied live along the way.
       CancelButton: () => { Object.assign(working, committed); applyAudio(committed); applyVideo(committed); applyGameplay(committed); h.onClose(); },
     },
@@ -208,6 +211,28 @@ export async function mountOptions(
   function bind(s: FdfScreen): void {
     applyPanelState(s);
     for (const d of OPTION_DEFS) bindOne(s, d);
+    syncEditorButton(s);
+  }
+
+  /** The editor's button stands beside "Hotkeys:" only while it says Custom — the one rung with
+   *  a file behind it. Asked of the WORKING copy, so it appears the moment Custom is picked. */
+  function syncEditorButton(s: FdfScreen): void {
+    const el = s.frame("HotkeyEditorButton");
+    if (el) el.hidden = working.hotkeys !== "custom";
+  }
+
+  /**
+   * Put the hotkey editor up. The screen underneath is left exactly as it is: the editor is a
+   * modal with its own scrim, so this screen's keys and clicks are already gated by `modalOver`
+   * while it is open, and its Save writes the FILE — nothing on this screen's working copy
+   * changes, so OK and Cancel here mean what they meant before it opened.
+   */
+  async function openHotkeyEditor(): Promise<void> {
+    try {
+      await showHotkeyEditor({ container, vfs });
+    } catch (err) {
+      console.error("[options] hotkey editor failed to open", err);
+    }
   }
 
   function bindOne(s: FdfScreen, d: OptionDef): void {
@@ -216,6 +241,7 @@ export async function mountOptions(
       if (d.panel === "sound") applyAudio(working); // heard the instant it changes
       if (d.panel === "video") applyVideo(working); // …and seen the instant it changes
       if (d.panel === "gameplay") applyGameplay(working); // …so are the health-bar rows
+      if (d.key === "hotkeys") syncEditorButton(s);
     };
     if (d.kind === "bool") {
       const c = s.checkBox(d.frame);

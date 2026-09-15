@@ -12,9 +12,10 @@ language that is layered onto the screen at mount time:
 | file | what it does |
 | --- | --- |
 | [`ui/GlobalStrings.fdf`](ui/GlobalStrings.fdf) | strings the game has no key for |
-| [`ui/OptionsMenu.fdf`](ui/OptionsMenu.fdf) | Options → Gameplay: drops two rows, adds two — the Computer+ default at the end, and the "Healthbars:" pulldown SPLICED IN under "Always show Health Bars" |
+| [`ui/OptionsMenu.fdf`](ui/OptionsMenu.fdf) | Options → Gameplay: drops two rows, adds two — the Computer+ default at the end, and the "Healthbars:" pulldown SPLICED IN under "Always show Health Bars" — and the hotkey editor's icon button beside "Hotkeys:" |
 | [`ui/AdvancedOptionsPane.fdf`](ui/AdvancedOptionsPane.fdf) | Custom Game → Advanced Options: adds a row, and replaces the Observers one. The LAN create screen layers the same file through a second manifest that adds the row and KEEPS the Observers one — on a hosted game that dropdown means what it says |
 | [`ui/AdvancedOptionsDisplay.fdf`](ui/AdvancedOptionsDisplay.fdf) | the LAN game lobby's Advanced Options summary: adds the Computer+ row to the seven the game prints |
+| [`ui/HotkeyEditor.fdf`](ui/HotkeyEditor.fdf) | the hotkey editor, a glue dialog of its own opened from Options → Gameplay (issue #156) — see docs/hotkeys.md |
 | [`ui/LocalMultiplayerCreate.fdf`](ui/LocalMultiplayerCreate.fdf) | LAN → Create Game: adds the "Server:" row under the map list — this computer, the OpenWar3 server, or another watched server |
 
 ## How a layer is applied

@@ -1,5 +1,5 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type { Plugin } from "vite";
 
@@ -19,6 +19,8 @@ import type { Plugin } from "vite";
  *
  *   GET /wc3/manifest.json          → { archives, maps, casc, customKeys }
  *   GET /wc3/file?path=<encoded>    → the bytes of one of those paths
+ *   POST /wc3/customkeys            → write the body to the install's CustomKeys.txt — the hotkey
+ *                                      editor's Save (issue #156), and the ONE write the plugin does
  *
  * Paths speak WC3's `\` separator, matching the keys `InstallFiles` uses (assets/opfs.ts), so
  * what the manifest hands back can be used as a map key verbatim.
@@ -108,6 +110,26 @@ export function devInstall(): Plugin {
             res.setHeader("content-type", "application/json");
             res.end(JSON.stringify({ archives, maps, casc, customKeys }));
           })();
+          return;
+        }
+
+        if (url.pathname === "/customkeys" && req.method === "POST") {
+          const chunks: Buffer[] = [];
+          req.on("data", (c: Buffer) => chunks.push(c));
+          req.on("end", () => {
+            void (async () => {
+              try {
+                const entries = await readdir(root, { withFileTypes: true });
+                const name = entries.find((e) => e.isFile() && e.name.toLowerCase() === CUSTOM_KEYS.toLowerCase())?.name ?? CUSTOM_KEYS;
+                await writeFile(join(root, name), Buffer.concat(chunks));
+                res.statusCode = 204;
+                res.end();
+              } catch (err) {
+                res.statusCode = 500;
+                res.end(String(err));
+              }
+            })();
+          });
           return;
         }
 

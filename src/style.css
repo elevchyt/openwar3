@@ -203,6 +203,55 @@ body.in-game {
 }
 .update-release-link:hover { filter: brightness(1.2); }
 
+/* The hotkey editor's command card (ui/hotkeyEditor.ts, issue #156). A 4×3 grid of the game's
+   own button icons in their Buttonpos slots, each wearing the in-game card's key badge — the
+   `.hud-count-badge.hud-hotkey-badge` rules below are reused as they are, so the key reads
+   exactly as it does on the console. Its framed box art is the HUD's `--hud-number-overlay`
+   there; the menus have no HUD, so the editor hands the same texture over as its own variable. */
+.hk-card {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 4%;
+  padding: 2%;
+  pointer-events: auto;
+  user-select: none;
+  touch-action: none;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(216, 180, 90, 0.35);
+  border-radius: 2px;
+}
+.hk-slot {
+  position: relative;
+  background: #050608;
+  border: 1px solid rgba(216, 180, 90, 0.18);
+  border-radius: 2px;
+}
+.hk-slot.drop { border-color: rgba(252, 211, 18, 0.9); }
+.hk-btn {
+  position: absolute;
+  inset: 0;
+  background: center / 100% 100% no-repeat;
+}
+.hk-btn.selected { outline: 2px solid #fcd312; outline-offset: 1px; }
+.hk-btn.clash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 2px rgba(255, 64, 64, 0.85);
+}
+.hk-ghost {
+  position: fixed;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.85;
+  background: center / 100% 100% no-repeat;
+}
+.hk-card .hud-count-badge { background: var(--hk-number-overlay) center / 100% 100% no-repeat; }
+.hk-card .hud-count-badge.dupe > span { color: #ff6060; }
+
 /* The update overlay (ui/updateOverlay.ts): the game's own load bar over the modal scrim while
    a new build is being fetched. It sits ABOVE every other modal because it is the one that
    cannot be dismissed — nothing may be raised over it and left unreachable. The canvas fills the
