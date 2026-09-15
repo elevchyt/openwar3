@@ -1002,6 +1002,29 @@ function formatColorCodes(text: string): string {
   return out;
 }
 
+/**
+ * The tooltip slab's dress as custom properties, for a hover hint OUTSIDE a match (issue #156:
+ * the Options screen's hotkey editor button). In a match `GameHud.applyWidgetSkin` lifts the
+ * same art and geometry to `:root`; the menus have no HUD, so `setGameTipSkin` (ui/gameTip.ts)
+ * puts these on the slab itself instead. Same border strip, same fill, same band and type —
+ * the "Cancel" slab and this one are one tooltip. Null without an install to read the art from.
+ */
+export function tooltipSkinVars(blpCanvas: (path: string) => HTMLCanvasElement | null): Record<string, string> | null {
+  const strip = blpCanvas(TOOLTIP_BORDER);
+  const border = strip ? sliceTooltipBorder(strip) : null;
+  const bg = blpCanvas(TOOLTIP_BACKGROUND);
+  const fill = bg ? tooltipFill(bg) : null;
+  if (!border || !fill) return null;
+  return {
+    "--hud-tooltip-border": `url(${border})`,
+    "--hud-tooltip-fill": fill,
+    "--tt-band": uiPx(TOOLTIP_BOX.band),
+    "--tt-bg-inset": uiPx(TOOLTIP_BOX.bgInset),
+    "--tt-pad": uiPx(TOOLTIP_BOX.pad),
+    "--font-UnitTipDesc": uiPx(FONT_HEIGHTS.UnitTipDesc),
+  };
+}
+
 const BORDER_TILE = 16;
 function sliceTooltipBorder(strip: HTMLCanvasElement): string | null {
   if (strip.width < BORDER_TILE * 8 || strip.height < BORDER_TILE) return null;

@@ -23,6 +23,24 @@ let watching = false;
 const texts = new WeakMap<HTMLElement, string>();
 const bound = new WeakSet<HTMLElement>();
 
+/** The slab's dress when no HUD has put it on `:root` — see `setGameTipSkin`. */
+let menuSkin: Record<string, string> | null = null;
+
+/**
+ * Dress the slab in the game's tooltip art outside a match (issue #156). In a match the HUD lifts
+ * the art to `:root` and `body.hud-tooltip-skinned` does this; the menus have no HUD, so the
+ * properties (ui/hud.ts `tooltipSkinVars`) go on the slab itself, under `.skinned`.
+ */
+export function setGameTipSkin(vars: Record<string, string> | null): void {
+  menuSkin = vars;
+  if (slab) dress(slab);
+}
+
+function dress(el: HTMLDivElement): void {
+  el.classList.toggle("skinned", !!menuSkin);
+  for (const [k, v] of Object.entries(menuSkin ?? {})) el.style.setProperty(k, v);
+}
+
 /**
  * Give `el` a hover hint (or take it away with null). Safe to call every frame — the XP bar
  * re-states its numbers as they tick — and a hint that changes while it is up is re-drawn in
@@ -51,6 +69,7 @@ function show(el: HTMLElement): void {
   if (!slab) {
     slab = document.createElement("div");
     slab.className = "game-tip";
+    dress(slab);
     document.body.appendChild(slab);
   }
   anchor = el;

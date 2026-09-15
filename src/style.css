@@ -554,7 +554,8 @@ body.hud-tooltip-skinned .unit-hover-tooltip {
   border-radius: 2px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
 }
-body.hud-tooltip-skinned .game-tip {
+body.hud-tooltip-skinned .game-tip,
+.game-tip.skinned {
   background: var(--hud-tooltip-fill);
   border: none;
   border-radius: calc(var(--tt-band, 10px) * 0.4);
@@ -1364,6 +1365,7 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
 .hud-tooltip.skinned::after,
 body.hud-tooltip-skinned .unit-hover-tooltip::after,
 body.hud-tooltip-skinned .game-tip::after,
+.game-tip.skinned::after,
 body.hud-tooltip-skinned .unit-crew-count::after {
   content: "";
   position: absolute;
