@@ -282,8 +282,9 @@ export function observerSeats(msg: StartMatch): Array<{ id: number; peer: number
 
 /** A start message as THIS machine's `MeleeConfig` — the same match, seen from our seat.
  *  Exported for the game lobby (which sends it) and for the dev-LAN boot, which overrides
- *  only `fog`. */
-export function toConfig(msg: StartMatch, me: number | undefined): MeleeConfig {
+ *  only `fog`. `isMelee` is the MAP's (MapInfo.isMelee) — every machine resolves the map itself,
+ *  and Default visibility means something different on a melee map (`visibilityFog`). */
+export function toConfig(msg: StartMatch, me: number | undefined, isMelee: boolean): MeleeConfig {
   const slots: SlotConfig[] = msg.slots.map((s) => ({
     id: s.id,
     controller: s.controller,
@@ -307,8 +308,8 @@ export function toConfig(msg: StartMatch, me: number | undefined): MeleeConfig {
   return {
     slots,
     // Advanced Options → Visibility. An older host's `start` carries none and reads as the
-    // pane's own default, the game's ordinary fog.
-    fog: visibilityFog(advanced.visibility),
+    // pane's own default, the map's own visibility.
+    fog: visibilityFog(advanced.visibility, isMelee),
     seed: msg.seed,
     localPlayer: watching ? watching.id : seat,
     ...(watching ? { observer: true } : {}),

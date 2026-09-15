@@ -139,8 +139,8 @@ export async function mountSkirmish(
     sharedControl: false,
     randomRaces: false,
     randomHero: false,
-    /** Opens on DEFAULT — WC3's normal pitch-black fog, the real client's own default. Map
-     *  Explored (the whole map as grey terrain memory) is still one click away on the row. */
+    /** Opens on DEFAULT, the real client's own default — the MAP's visibility, which on a melee
+     *  map is Map Explored and on a custom map the black mask (advancedOptions.ts `visibilityFog`). */
     visibility: "DEFAULT" as Visibility,
     /**
      * **Computer+** — play the computer seats with OpenWar3's own improved melee AI
@@ -273,7 +273,7 @@ export async function mountSkirmish(
     const picked = browser.selected;
     if (!picked) return;
     h.onStart(picked.file, picked.info, toConfig(slots, picked.info, {
-      fog: visibilityFog(advanced.visibility),
+      fog: visibilityFog(advanced.visibility, picked.info.isMelee),
       computerPlus: advanced.computerPlus,
       observer: advanced.observerMode,
     }));
@@ -586,7 +586,7 @@ function toConfig(
   return {
     slots: playing,
     // Advanced Options → Visibility. Was hardcoded to "explored" while there was no screen
-    // to say otherwise; the pane now opens on Default (advancedOptions.ts DEFAULT_ADVANCED).
+    // to say otherwise; the pane now opens on Default, which is the map's own (`visibilityFog`).
     fog: opts.fog,
     forces: info.forces.map((f) => ({ allied: f.allied, sharedVision: f.sharedVision })),
     seed: 1 + Math.floor(Math.random() * 2147483645),

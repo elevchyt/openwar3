@@ -318,7 +318,7 @@ export async function mountLanLobbyScreen(
     lobby.onChange = () => {};
     lobby.onStart = () => {};
     lobby.onPeerData = () => {};
-    h.onStart(msg.mapPath, map.info, toConfig(msg, me), link);
+    h.onStart(msg.mapPath, map.info, toConfig(msg, me, map.info.isMelee), link);
   };
 
   /** Actually begin the match: the host's own countdown has run out. */
