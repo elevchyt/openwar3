@@ -5467,22 +5467,31 @@ export class RtsController {
    *  hovered. Gold mines aren't sim units, so they're picked from the ground
    *  point — this is what gives a neutral mine its yellow ring on hover. */
   hoverAt(cssX: number, cssY: number): void {
-    this.hovered = this.pickAt(cssX, cssY);
     this.hoveredMine = null;
     this.hoveredItem = null;
-    if (this.hovered === null) {
-      const g = this.groundPoint(cssX, cssY);
-      if (g) {
-        // Mirror selectAt's priority: a ground item (tight radius) wins over a mine
-        // (broad radius) so an item near a mine gets its own hover ring, not the mine's.
-        const it = this.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
-        if (it) this.hoveredItem = it.id;
-        else {
-          // A covered mine hovers as its BUILDING, never as the rock under it (minePickAt).
-          const pick = this.minePickAt(g[0], g[1], 300);
-          this.hoveredMine = pick.mine?.id ?? null;
-          this.hovered = pick.cover;
-        }
+    // A ground item under the cursor wins the hover over a unit standing on it, the way it
+    // wins the right-click (`rightClickAt`): the slab names the item and the ring is its
+    // yellow one, so what the cursor says is what a right-click will do — pick it up. Only
+    // with NO order armed: an armed order is a LEFT click, and a left click keeps the unit
+    // first (selectAt), so the reticle has to keep reading the unit it will land on.
+    const g = this.groundPoint(cssX, cssY);
+    const item = g && this.orderMode === null ? this.itemAt(g[0], g[1], ITEM_PICK_RADIUS) : null;
+    if (item) {
+      this.hovered = null;
+      this.hoveredItem = item.id;
+      return;
+    }
+    this.hovered = this.pickAt(cssX, cssY);
+    if (this.hovered === null && g) {
+      // Mirror selectAt's priority: a ground item (tight radius) wins over a mine
+      // (broad radius) so an item near a mine gets its own hover ring, not the mine's.
+      const it = this.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
+      if (it) this.hoveredItem = it.id;
+      else {
+        // A covered mine hovers as its BUILDING, never as the rock under it (minePickAt).
+        const pick = this.minePickAt(g[0], g[1], 300);
+        this.hoveredMine = pick.mine?.id ?? null;
+        this.hovered = pick.cover;
       }
     }
   }
@@ -8152,22 +8161,15 @@ export class RtsController {
       this.buildingRightClick(picked, queued);
       return;
     }
-    // Acknowledge the order with the focused unit's voice — attack quote if it
-    // targets a hostile unit, otherwise the move quote.
-    {
-      const t = picked !== null ? this.sim.units.get(picked) : undefined;
-      this.ack(!!(t && prim && !t.building && this.sim.hostile(prim, t)));
-    }
     // Right-click directly on a ground item → send the selected hero(es) to pick it
     // up. Checked BEFORE the unit-order logic (and with the same tight pick radius as
-    // hover/selection) so a friendly unit standing near the item can't intercept the
-    // click into a "follow" and leave the item on the ground — the intermittent
-    // "sometimes doesn't get picked up". A hostile unit under the cursor still wins
-    // (attacking through an item is the WC3 priority).
+    // hover/selection) so a unit standing on or near the item — friend OR foe — can't
+    // intercept the click into a "follow" or an attack and leave the item on the ground.
+    // The hover gives the item the same priority (hoverAt), so the slab over it names what
+    // this click does. A left click is the other way round: the unit is selected (selectAt).
+    // A selection with no inventory to carry it falls through to the ordinary orders.
     {
-      const pu = picked !== null ? this.sim.units.get(picked) : undefined;
-      const hostilePick = !!(pu && prim && !pu.building && this.sim.hostile(prim, pu));
-      const g = hostilePick ? null : this.groundPoint(cssX, cssY);
+      const g = this.groundPoint(cssX, cssY);
       const gitem = g ? this.itemAt(g[0], g[1], ITEM_PICK_RADIUS) : null;
       if (gitem) {
         let any = false;
@@ -8178,11 +8180,18 @@ export class RtsController {
           }
         }
         if (any) {
+          this.ack(false); // going to pick something up is a move, never the attack quote
           // Yellow (neutral) twin-blink at the item's own hover/selection ring size.
           this.flashRing(gitem.x, gitem.y, ITEM_RING_RADIUS, FLASH_YELLOW, true);
           return;
         }
       }
+    }
+    // Acknowledge the order with the focused unit's voice — attack quote if it
+    // targets a hostile unit, otherwise the move quote.
+    {
+      const t = picked !== null ? this.sim.units.get(picked) : undefined;
+      this.ack(!!(t && prim && !t.building && this.sim.hostile(prim, t)));
     }
     if (picked !== null && !this.selected.has(picked)) {
       const target = this.sim.units.get(picked);
