@@ -123,7 +123,8 @@ export class ModelViewerScene {
     viewer.addHandler(blpHandler);
 
     const scene = viewer.addScene();
-    scene.color.set([0.1, 0.11, 0.14]);
+    // Black behind the bust, as the game's portrait is: the model is drawn over nothing.
+    scene.color.set([0, 0, 0]);
 
     this.viewer = viewer;
     this.scene = scene;

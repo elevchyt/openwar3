@@ -1736,8 +1736,15 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
   font-size: var(--hud-stat-font); color: #cfc7ab; line-height: 1.5;
 }
 .hud-sel-carry { font-size: 12px; color: #d8c88a; margin-top: 2px; }
-/* Item description shown when a ground item is selected (in place of the stat block). */
-.hud-sel-desc { font-size: 12px; color: #c9cfd8; line-height: 1.35; margin-top: 4px; max-width: 240px; text-align: center; }
+/* Item description shown when a ground item is selected (in place of the stat block).
+   SimpleInfoPanel.fdf `SimpleItemDescriptionValue`: SimpleInfoPanelDescriptionTextTemplate is
+   GOLD (0.99 0.827 0.0705) at font 0.01 — a notch above the stats' 0.009, so 10/9 of their
+   4.5cqw — in a 0.188-wide box hung centred under the name (TOP to its BOTTOM, 0.008 down). */
+.hud-sel-desc {
+  font-size: clamp(13px, 5cqw, 31px); color: #fcd312; line-height: 1.35;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
+  width: 94cqw; max-width: 100%; margin: 4cqw auto 0; text-align: center;
+}
 /* Two columns (WC3 info panel): damage/armor blocks (left), hero attributes (right).
    Every size below is a PERCENTAGE OF THE PANEL, not a pixel count — `cqw` against the
    container established on .hud-info-text. The FDF writes this panel in screen-height units

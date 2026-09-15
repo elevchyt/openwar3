@@ -16,7 +16,12 @@ import type { DataSource } from "../vfs/types";
 export interface ItemDef {
   id: string; // item rawcode
   name: string;
-  description: string; // Ubertip, WC3 markup intact — shown on the HUD when the ground item is selected
+  description: string; // Ubertip, WC3 markup intact — the long body a shop button or an inventory slot raises
+  /** ItemStrings "Description" — the ONE-LINER the info panel prints under the name when the
+   *  item is selected ("Increases attack speed."), which is a different string from the Ubertip
+   *  ("Increases the attack speed of the Hero by 15% when worn."). SimpleInfoPanel.fdf's
+   *  `SimpleItemDescriptionValue` is the frame that shows it. */
+  summary: string;
   icon: string; // command-button BLP path (ItemFunc "Art")
   tip: string; // shop-button tooltip TITLE, hotkey already gilded (ItemStrings "Tip")
   hotkey: string; // ItemStrings "Hotkey"
@@ -203,6 +208,7 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
       id,
       name: (s && str(s, "Name")) || id,
       description: rawTip(s ? str(s, "Ubertip") : ""),
+      summary: rawTip(s ? str(s, "Description") : ""),
       icon: f ? str(f, "Art") : "",
       tip: rawTip(s ? str(s, "Tip") : ""),
       hotkey: s ? str(s, "Hotkey") : "",

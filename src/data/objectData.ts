@@ -1008,7 +1008,8 @@ export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, w
   const applyItemMods = (def: ItemDef, mods: AbilMod[]): void => {
     for (const m of mods) {
       if (m.id === "unam") { def.name = trigStr(s(m.value)); continue; }
-      if (m.id === "utub" || m.id === "ides") { def.description = trigStr(s(m.value)); continue; } // Ubertip / Description
+      if (m.id === "utub") { def.description = trigStr(s(m.value)); continue; } // Ubertip
+      if (m.id === "ides") { def.summary = trigStr(s(m.value)); continue; } // Description (the info panel's line)
       ITEM_SETTERS[m.id]?.(def, m.value);
     }
   };

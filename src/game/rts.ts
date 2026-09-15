@@ -6528,7 +6528,8 @@ export class RtsController {
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: false, goldRemaining: 0,
-      isItem: true, description: def ? this.tipText(def.description) : "",
+      // The info panel prints the item's short `Description`, not the Ubertip a shop button raises.
+      isItem: true, description: def ? this.tipText(def.summary) : "",
       isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
     };
   }
