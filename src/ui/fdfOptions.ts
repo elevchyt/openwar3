@@ -18,6 +18,7 @@ import { applyHotkeyOptions } from "../data/hotkeys";
 import { nativeVsync, relaunchNative, setNativeVsync } from "../assets/nativeInstall";
 import { showGlueDialog } from "./glueDialog";
 import { showHotkeyEditor } from "./hotkeyEditor";
+import { setGameTip } from "./gameTip";
 
 // The Options screen (issue #81), built from the game's own UI\FrameDef\Glue\OptionsMenu.fdf:
 // the three category buttons (Gameplay / Video / Sound) down the right, the settings for the
@@ -219,6 +220,9 @@ export async function mountOptions(
   function syncEditorButton(s: FdfScreen): void {
     const el = s.frame("HotkeyEditorBackdrop");
     if (el) el.hidden = working.hotkeys !== "custom";
+    // An icon says nothing by itself, so it names what it opens in the game's own tooltip slab.
+    const btn = s.frame("HotkeyEditorButton");
+    if (btn) setGameTip(btn, "Hotkey Editor");
   }
 
   /**

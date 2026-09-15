@@ -50,7 +50,7 @@ Frame "DIALOG" "HotkeyEditor" {
     // ~170 to ~506), so at DialogWar3's 0.2325 one socket SHOWS 0.153 — and five of those are
     // wider than the dialog. So these are drawn at 0.195 (0.128 showing each, 0.008 apart), and
     // the button is placed by the same texel columns DialogWar3's own 0.2325 socket puts its
-    // 0.095 button at (234..444 of 512): 0.080 wide, 0.013 in from the right. Each socket is
+    // 0.095 button at (234..444 of 512): 0.080 wide, 0.026 in from the right. Each socket is
     // anchored to the dialog rather than to its neighbour, because the transparent third means a
     // socket's frame and its picture do not start in the same place.
     Frame "BACKDROP" "HotkeyRaceHumanBackdrop" INHERITS "StandardMenuSingleSmallButtonBaseBackdrop" {
@@ -61,7 +61,7 @@ Frame "DIALOG" "HotkeyEditor" {
         Frame "GLUETEXTBUTTON" "HotkeyRaceHuman" INHERITS WITHCHILDREN "StandardButtonTemplate" {
             Width 0.08,
             Height 0.025,
-            SetPoint TOPRIGHT, "HotkeyRaceHumanBackdrop", TOPRIGHT, -0.013, -0.013,
+            SetPoint TOPRIGHT, "HotkeyRaceHumanBackdrop", TOPRIGHT, -0.026, -0.013,
             ButtonText "HotkeyRaceHumanText",
             Frame "TEXT" "HotkeyRaceHumanText" INHERITS "StandardButtonTextTemplate" { }
         }
@@ -74,7 +74,7 @@ Frame "DIALOG" "HotkeyEditor" {
         Frame "GLUETEXTBUTTON" "HotkeyRaceOrc" INHERITS WITHCHILDREN "StandardButtonTemplate" {
             Width 0.08,
             Height 0.025,
-            SetPoint TOPRIGHT, "HotkeyRaceOrcBackdrop", TOPRIGHT, -0.013, -0.013,
+            SetPoint TOPRIGHT, "HotkeyRaceOrcBackdrop", TOPRIGHT, -0.026, -0.013,
             ButtonText "HotkeyRaceOrcText",
             Frame "TEXT" "HotkeyRaceOrcText" INHERITS "StandardButtonTextTemplate" { }
         }
@@ -87,7 +87,7 @@ Frame "DIALOG" "HotkeyEditor" {
         Frame "GLUETEXTBUTTON" "HotkeyRaceNightElf" INHERITS WITHCHILDREN "StandardButtonTemplate" {
             Width 0.08,
             Height 0.025,
-            SetPoint TOPRIGHT, "HotkeyRaceNightElfBackdrop", TOPRIGHT, -0.013, -0.013,
+            SetPoint TOPRIGHT, "HotkeyRaceNightElfBackdrop", TOPRIGHT, -0.026, -0.013,
             ButtonText "HotkeyRaceNightElfText",
             Frame "TEXT" "HotkeyRaceNightElfText" INHERITS "StandardButtonTextTemplate" { }
         }
@@ -100,7 +100,7 @@ Frame "DIALOG" "HotkeyEditor" {
         Frame "GLUETEXTBUTTON" "HotkeyRaceUndead" INHERITS WITHCHILDREN "StandardButtonTemplate" {
             Width 0.08,
             Height 0.025,
-            SetPoint TOPRIGHT, "HotkeyRaceUndeadBackdrop", TOPRIGHT, -0.013, -0.013,
+            SetPoint TOPRIGHT, "HotkeyRaceUndeadBackdrop", TOPRIGHT, -0.026, -0.013,
             ButtonText "HotkeyRaceUndeadText",
             Frame "TEXT" "HotkeyRaceUndeadText" INHERITS "StandardButtonTextTemplate" { }
         }
@@ -113,7 +113,7 @@ Frame "DIALOG" "HotkeyEditor" {
         Frame "GLUETEXTBUTTON" "HotkeyRaceNeutral" INHERITS WITHCHILDREN "StandardButtonTemplate" {
             Width 0.08,
             Height 0.025,
-            SetPoint TOPRIGHT, "HotkeyRaceNeutralBackdrop", TOPRIGHT, -0.013, -0.013,
+            SetPoint TOPRIGHT, "HotkeyRaceNeutralBackdrop", TOPRIGHT, -0.026, -0.013,
             ButtonText "HotkeyRaceNeutralText",
             Frame "TEXT" "HotkeyRaceNeutralText" INHERITS "StandardButtonTextTemplate" { }
         }

@@ -186,7 +186,18 @@ function scaleButtonWidths(root: LaidOutFrame, scale: number): void {
     // hotkey editor's door beside Options → Gameplay → "Hotkeys:", issue #156).
     if (BUTTON_TYPES.has(n.frame.type) && n.frame.type !== "GLUEBUTTON" && !(n.frame.name && knobs.has(n.frame.name))) {
       widen(n);
-      if (n.parent && n.parent.frame.type === "BACKDROP") widen(n.parent);
+      if (n.parent && n.parent.frame.type === "BACKDROP") {
+        // …but its SOCKET still widens, so the width the icon did not take goes to the caption
+        // button it shares the socket with. The main menu's Single Player and Online each sit
+        // beside one (`EditionButton`, `RealmButton`, chained TOPRIGHT → TOPLEFT), and without
+        // this the pair stopped short of the socket's left end by the icon's missing share.
+        if (done.has(n)) {
+          for (const icon of n.parent.children) {
+            if (icon.frame.type === "GLUEBUTTON" && !Number.isNaN(icon.w)) n.w += icon.w * (scale - 1);
+          }
+        }
+        widen(n.parent);
+      }
     }
     n.children.forEach(walk);
   })(root);
