@@ -200,6 +200,10 @@ export class Viewpoint {
     if (this.vision.revealed) return false;
     if (this.isOurs(u) && !u.neutralPassive) return false;
     if (this.isExposed(u)) return false;
+    // A DESTRUCTIBLE — a crate, a barricade, a gate (RtsController.addDestructible) — is the
+    // map's own ground, not somebody's army: once the black mask is off it, it is there in the
+    // fog, exactly as the trees are. See fogBlocksClick for the half of this that was a bug.
+    if (u.targetKey) return !this.hasExplored(u);
     if (u.building != null) {
       // A PLAYER's structure has to be SEEN before it is drawn — a town hall in start-explored
       // grey is somebody's base you have not scouted, and handing it over was the bug
@@ -233,6 +237,14 @@ export class Viewpoint {
     if (this.vision.revealed) return false;
     if (this.isOurs(u) && !u.neutralPassive) return false;
     if (this.isExposed(u)) return false;
+    // …except a DESTRUCTIBLE, which is clickable wherever the ground is explored. Issue #62's
+    // rule is about a live thing whose state is news — a shop's stock, a building's life — and
+    // a barrel is scenery with hit points. It is also the rule the TREES have always had: a
+    // Gather or an Attack aimed into fogged forest is taken (nearestTree asks nobody's eyes).
+    // Gated like a unit, a shift-queued string of barrels on WarChasers — a dungeon held at
+    // midnight, so a hero sees 800 — picked only the first one in sight and turned every
+    // barrel past it into a queued MOVE: the hero broke the first and walked off.
+    if (u.targetKey) return !this.hasExplored(u);
     return this.vision.stateAt(u.x, u.y) !== FogState.Visible;
   }
 

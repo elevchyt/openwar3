@@ -142,6 +142,22 @@ console.log("\nstart-explored hands over the FURNITURE, not the enemy  (Viewpoin
   check("the enemy's town hall on the same cell stays hidden", vp.fogHides(foeHall), true);
 }
 
+// A DESTRUCTIBLE is the ground, not a garrison: once explored it is drawn AND clickable in the
+// fog, as the trees always were. Gated like a unit, a shift-queued string of barrels on
+// WarChasers (night, 800 sight) picked the one in sight and made every other click a MOVE.
+console.log("\na destructible in explored fog can still be aimed at  (Viewpoint.fogBlocksClick)");
+{
+  const crate = { id: 3, owner: -1, team: -2, x: 900, y: 900, building: null, neutralPassive: true, targetKey: "debris" };
+  const set = setOf();
+  const vp = set.viewpointFor(0);
+  vp.setTeam(0);
+  check("unexplored: the crate is not drawn", vp.fogHides(crate), true);
+  check("…nor clickable", vp.fogBlocksClick(crate), true);
+  set.setStartFog("explored");
+  check("explored, nobody looking: drawn", vp.fogHides(crate), false);
+  check("…and clickable — a right-click on it is an attack, not a move", vp.fogBlocksClick(crate), false);
+}
+
 console.log("\nreveal-all is set both ways, so clearing it clears it");
 {
   const set = setOf();
