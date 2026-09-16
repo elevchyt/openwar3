@@ -388,6 +388,10 @@ export interface SimAbility {
   level: number; // current rank (0 = unlearned hero ability, ≥1 = active)
   cooldownLeft: number; // seconds until castable again
   autocastOn: boolean; // autocast toggle (Heal/Slow/…)
+  /** Put on the sheet by a CARRIED item rather than by the unit's type or a trigger — the Cloak
+   *  of Shadows' Shadow Meld (see `syncCarriedAbilities`), taken off again with the item. Host
+   *  bookkeeping only: it does not cross the wire, and nothing but the sync reads it. */
+  carried?: true;
 }
 
 /** A timed effect on a unit. `kind` is our gameplay category; `group` de-dupes
@@ -2697,6 +2701,10 @@ function altFormOf(lvl: AbilityLevel | undefined): string {
 //     its mana was charged TWICE (once at the commit, once in the toggle). See castCost for
 //     the other half: switching it OFF is free.
 const IMMEDIATE = new Set(["AHds", "ACds", "AOwk", "Amil", "Amic", "AEim"]);
+
+/** The abilities a CARRIED item puts on its carrier's command card (see
+ *  SimWorld.syncCarriedAbilities): `[clsd] abilList = Ashm`, the Cloak of Shadows. */
+const CARRIED_ONTO_SHEET = ["Ashm"] as const;
 
 /**
  * What THIS press costs — the rank's `Cost1`, except for the half of a toggle that is free:
@@ -15727,6 +15735,7 @@ export class SimWorld {
     for (const u of this.units.values()) {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
       this.tickRevive(u, dt); // a reincarnating unit counting down to standing up again
+      this.syncCarriedAbilities(u); // a Cloak of Shadows' Shadow Meld comes and goes with the cloak
       this.tickMeld(u); // Shadow Meld holds only while the unit is still and the sun is down
       this.tickAutoMeld(u); // …and a unit standing about at night takes it by itself
       this.tickAltForm(u, dt); // a timed form (militia) running out and reverting
@@ -17405,12 +17414,10 @@ export class SimWorld {
     if (u.order !== "idle" && u.order !== "hold") return;
     if (u.moving || u.swingLeft >= 0 || u.x !== u.prevX || u.y !== u.prevY) return;
     if (u.targetId !== null || u.inCombat) return; // fighting — on Hold, or between orders
+    // A carried Cloak of Shadows is on the sheet too (syncCarriedAbilities), so this one test
+    // covers the unit's own Shadow Meld and the cloak's alike.
     const own = u.abilities.find((a) => a.code === "Ashm" && a.level >= 1 && this.techMeets(u.owner, a.id));
-    // …and the carried one. An item's ability is not in `u.abilities`, so it cannot go through
-    // `issueCast` — but it is the same row and the same handler, and `Ashm` costs nothing and
-    // has no cooldown, so the effect is the whole of the cast.
-    const carried = own ? null : this.itemAbility(u, "Ashm");
-    if (!own && !carried) return;
+    if (!own) return;
     // …nor with an enemy in reach that it would auto-acquire: the gap between a kill and the
     // next `tickAcquire` scan is not the fight being over. Asked here, of the few units that
     // can hide at all, and only while `cloaked` is still false (acquireRange reads 0 once it
@@ -17430,11 +17437,7 @@ export class SimWorld {
     // world, and this runs for every creep on every step of every night. Every test above it is
     // pure, so the order changes what the question costs and never its answer.
     if (u.isCreep && this.creepInFight(u)) return;
-    if (own) {
-      this.issueCast(u.id, own.code, 0, u.x, u.y, true);
-      return;
-    }
-    if (carried) this.applySpellEffect("Ashm", 1, u, { targetId: 0, x: u.x, y: u.y }, carried.def);
+    this.issueCast(u.id, own.code, 0, u.x, u.y, true);
   }
 
   /** Is this creep lying in wait under a MELD (Hide / Shadow Meld — the `meld` invisibility)? */
@@ -17494,6 +17497,42 @@ export class SimWorld {
     if (!u.isCreep || u.hp <= 0 || !u.cloaked) return;
     if (!u.buffs.some((b) => b.kind === "invisible" && b.meld)) return;
     this.breakInvisibility(u);
+  }
+
+  /**
+   * An item that GIVES its carrier an ability puts that ability on the carrier's sheet, button
+   * and all. The Cloak of Shadows is the case: `[clsd] abilList = Ashm` — the night elves' own
+   * Shadow Meld row, not an item class (`AI*`) — and its ItemStrings Description says it in
+   * as many words, "Provides the Shadowmeld ability." So the hero wears the same button an
+   * Archer does, at the same `Buttonpos`, dead by day like hers (`barredByDay`; the 1.30.4
+   * Ubertip is "invisibility at night" — the daytime cloak is a 1.31 change), and it melds by
+   * itself standing about at night through the same `tickAutoMeld` test.
+   *
+   * On the sheet rather than asked of the inventory at each door, because every door already
+   * reads the sheet — the card, the hotkey, `issueCast`, the cast refusals, a client's snapshot
+   * — and a second path beside each would be one more to forget.
+   *
+   * Only the codes in CARRIED_ONTO_SHEET: every other non-`AI*` row an item names (Dust of
+   * Appearance's `Adt1`, the runes, the wands) is spent by USING the item and would be a
+   * second, wrong button. A unit that already has the ability of its own (the Warden, every
+   * night elf) gains nothing, and a cloak entry is taken back off with the last cloak — along
+   * with the meld it was holding, which nothing is holding any more.
+   */
+  private syncCarriedAbilities(u: SimUnit): void {
+    if (!u.inventory.length && !u.abilities.some((a) => a.carried)) return;
+    for (const code of CARRIED_ONTO_SHEET) {
+      const carried = this.itemAbility(u, code);
+      const i = u.abilities.findIndex((a) => a.code === code);
+      const entry = i >= 0 ? u.abilities[i] : undefined;
+      if (carried && !entry) {
+        u.abilities.push({ id: carried.def.id, code, level: 1, cooldownLeft: 0, autocastOn: false, carried: true });
+      } else if (!carried && entry?.carried) {
+        u.abilities.splice(i, 1);
+        if (u.pendingCast?.code === code) this.stop(u.id);
+        const group = SELF_INVIS_GROUP[code];
+        if (group && u.buffs.some((b) => b.kind === "invisible" && b.group === group)) this.breakInvisibility(u);
+      }
+    }
   }
 
   private tickMeld(u: SimUnit): void {

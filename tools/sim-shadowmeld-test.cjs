@@ -201,5 +201,35 @@ const stillMelded = (u) => u.buffs.some((b) => b.kind === "invisible");
   check("…and keeps the point", hero.skillPoints, 1);
 }
 
+// THE CLOAK OF SHADOWS: `[clsd] abilList = Ashm`, "Provides the Shadowmeld ability." The
+// carrier gets the ability on its SHEET — so the card's button, the hotkey and issueCast all
+// see it — and loses it with the cloak, along with any meld the cloak was holding.
+{
+  const w = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8Array(64) }, 1);
+  w.abilities = new Map([["Ashm", { id: "Ashm", code: "Ashm", research: false, levels: 1, levelData: [{ data: [1.5, 2.5, 0.5] }] }]]);
+  w.itemReg = new Map([["clsd", { id: "clsd", abilities: ["Ashm"] }], ["rat6", { id: "rat6", abilities: ["AItg"] }]]);
+  const hero = { id: 8, owner: 0, abilities: [], buffs: [], inventory: [{ id: 1, itemId: "clsd", charges: 0 }, null], pendingCast: null };
+  w.syncCarriedAbilities(hero);
+  check("a hero carrying a Cloak of Shadows has Shadow Meld on its sheet", hero.abilities.map((a) => [a.code, a.level]), [["Ashm", 1]]);
+  w.syncCarriedAbilities(hero);
+  check("…once, however many ticks pass", hero.abilities.length, 1);
+  let broke = 0;
+  w.breakInvisibility = () => { broke++; };
+  hero.buffs.push({ kind: "invisible", group: "shadowmeld", meld: true });
+  hero.inventory[0] = null;
+  w.syncCarriedAbilities(hero);
+  check("dropping the cloak takes the ability back off", hero.abilities.length, 0);
+  check("…and ends the meld it was holding", broke, 1);
+  const warden = { id: 9, owner: 0, abilities: [{ id: "Ashm", code: "Ashm", level: 1, cooldownLeft: 0, autocastOn: false }], buffs: [], inventory: [{ id: 2, itemId: "clsd", charges: 0 }] };
+  w.syncCarriedAbilities(warden);
+  check("a Warden's own Shadow Meld is not doubled by a cloak", warden.abilities.length, 1);
+  warden.inventory[0] = null;
+  w.syncCarriedAbilities(warden);
+  check("…nor taken away when she drops it", warden.abilities.length, 1);
+  const other = { id: 10, owner: 0, abilities: [], buffs: [], inventory: [{ id: 3, itemId: "rat6", charges: 0 }] };
+  w.syncCarriedAbilities(other);
+  check("an ordinary item puts nothing on the sheet", other.abilities.length, 0);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);
