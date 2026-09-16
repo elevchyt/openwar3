@@ -2044,6 +2044,7 @@ export interface SimUnit {
   ensnareSeen: Set<number> | null;
 
   strayT: number; // seconds chasing past GUARD_DISTANCE without being attacked (→ return)
+  struckAt: number; // `elapsed` when a creep was last struck or hit by a harmful spell (provoke) — the sleep calm (campQuiet)
   returnBestDist: number; // closest-to-home distance reached this return (stuck detection)
   returnStuckT: number; // seconds making no homeward progress while returning (→ give up, fight)
   // --- inventory (heroes) ---------------------------------------------------
@@ -7773,6 +7774,7 @@ export class SimWorld {
       | "reviveHp"
       | "reviveMana"
       | "strayT"
+      | "struckAt"
       | "returnBestDist"
       | "returnStuckT"
       | "inventory"
@@ -8047,6 +8049,7 @@ export class SimWorld {
       reviveHp: 0,
       reviveMana: -1,
       strayT: 0,
+      struckAt: -Infinity,
       returnBestDist: 0,
       returnStuckT: 0,
       // Only heroes carry an inventory in melee WC3 (6 slots). Other units get an
@@ -17177,28 +17180,83 @@ export class SimWorld {
   }
 
   /**
-   * The next body a poisoner turns to: the nearest hostile in its fight range not yet
-   * carrying its poison, or null when everyone is. "Any creeps with the passive Envenomed
-   * Weapons or Slow Poison will prioritize applying the status onto all hostile units in range
-   * before following normal creep aggression regardless of their level" (Wowpedia, Creep);
-   * "instead of attacking one unit continuously until it dies, they'll try to attack all your
-   * units once" (warcraft3.info 176, of the Gnoll Assassin and the Murloc Nightcrawler).
+   * The next body a poisoner turns to: the nearest hostile not yet carrying its poison, out of
+   * everything in its fight range AND everything FIGHTING ITS CAMP wherever it stands
+   * (`fightsCamp`), or null when everyone is. "Any creeps with the passive Envenomed Weapons or
+   * Slow Poison will prioritize applying the status onto all hostile units in range before
+   * following normal creep aggression regardless of their level" (Wowpedia, Creep); "instead of
+   * attacking one unit continuously until it dies, they'll try to attack all your units once"
+   * (warcraft3.info 176, of the Gnoll Assassin and the Murloc Nightcrawler).
+   *
+   * "All your units" is the party the camp is fighting, not the ones that happen to be beside
+   * the poisoner: reading "in range" as the weapon's 500 left the Riflemen shooting from the
+   * back and the Footman a camp-mate had pulled aside unpoisoned while the Nightcrawler
+   * finished its round on the front line (maintainer, against the real client). The one bound
+   * on the reach is the leash: a body further than MaxGuardDistance from the post is one the
+   * creep would be dragged home from before it landed the blow.
    */
   private unpoisonedTarget(u: SimUnit): SimUnit | null {
+    // Who the camp is on: every live camp-mate's attack target (the poisoner's own included).
+    const campTargets = new Set<number>();
+    for (const c of this.units.values()) {
+      if (!c.isCreep || c.hp <= 0 || c.returning || c.order !== "attack" || c.targetId === null) continue;
+      if (c === u || this.sameCamp(c, u)) campTargets.add(c.targetId);
+    }
+    const near = this.creepFightRange(u);
     let best: SimUnit | null = null;
-    let bestGap = this.creepFightRange(u);
+    let bestGap = Infinity;
     for (const t of this.units.values()) {
-      if (t === u || t.building) continue;
+      if (t === u || t.building || t.hp <= 0) continue;
       if (distSkip(u, t, bestGap, true)) continue;
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (gap >= bestGap) continue;
+      if (gap > near) {
+        if (!campTargets.has(t.id) && !this.fightsCamp(u, t)) continue;
+        if (Math.hypot(t.x - u.guardX, t.y - u.guardY) >= MAX_GUARD_DISTANCE) continue;
+      }
       if (!this.hostile(u, t) || !this.canAttack(u, t) || !this.canSee(u, t)) continue;
       if (this.lowPriorityTarget(t) || this.poisonedBy(t, u)) continue;
-      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = t;
-      }
+      bestGap = gap;
+      best = t;
     }
     return best;
+  }
+
+  /** Is `t` fighting `u`'s CAMP — its attack (its own, or an attack-move's engagement) on `u`
+   *  or on a camp-mate of `u`? The creep-side reading of `attackingCreeps`, narrowed to one camp. */
+  private fightsCamp(u: SimUnit, t: SimUnit): boolean {
+    if (t.targetId === null || (t.order !== "attack" && t.order !== "attackmove")) return false;
+    const v = this.units.get(t.targetId);
+    return v !== undefined && v.isCreep && v.hp > 0 && (v === u || this.sameCamp(v, u));
+  }
+
+  /**
+   * Is `u`'s camp QUIET enough to doze off? Sleep is broken by combat alone (tickCreep), and it
+   * must not START in the middle of one either — but `campFightTarget`, which used to be the
+   * whole test, only sees a camp-mate that is on an enemy it could itself fight. So a creep
+   * back at its post between targets fell asleep while the rest of the fight went on around
+   * it: a ground-only Gnoll camp shot by a Gryphon Rider snored between every blow (the blow
+   * woke it, the next tick put it back down), and so did a creep that had leashed home with the
+   * Riflemen still shooting its camp-mates. So the camp is quiet only when
+   *   • no camp-mate is on an attack or a cast (whatever its enemy — `creepAggroed`),
+   *   • nothing hostile has its attack on the camp (`fightsCamp`), and
+   *   • no member of it has been struck for GuardReturnTime — MiscGame's own measure of how
+   *     long a creep must go UNATTACKED before it gives up a fight and heads home, used here
+   *     for the same question (the reuse is ours; no file states a sleep delay).
+   * A camp whose fight has really ended still dozes off on the very next tick of that calm.
+   */
+  private campQuiet(u: SimUnit): boolean {
+    const calm = this.elapsed - GUARD_RETURN_TIME;
+    if (u.struckAt > calm) return false;
+    for (const c of this.units.values()) {
+      if (c.hp <= 0) continue;
+      if (c.isCreep && (c === u || this.sameCamp(c, u))) {
+        if (c !== u && (c.struckAt > calm || this.creepAggroed(c))) return false;
+      } else if (this.fightsCamp(u, c) && this.hostile(u, c)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /** Advance an in-progress attack swing; when it reaches the weapon's damage
@@ -19388,6 +19446,7 @@ export class SimWorld {
     if (target.isCreep) {
       target.asleep = false;
       target.strayT = 0;
+      target.struckAt = this.elapsed; // …and the camp is not quiet enough to doze off (campQuiet)
       target.campHelper = false; // being hit makes it an originator: it may now call for help
       // …and a HIDING one gets up (unhideCreep). Before `passive` below is read, deliberately:
       // a cloaked unit never returns fire, which is right for a hero walking past under Wind
@@ -19424,7 +19483,14 @@ export class SimWorld {
     // more: the retreat tickCreep makes would otherwise be undone by the next shot to land on
     // the walk home (see the tower rule there).
     const fleeing = attacker !== undefined && this.fleesTower(target, attacker);
-    if (notFighting && !fleeing && target.weapon && !passive && !target.returning && attacker && this.hostile(target, attacker)) {
+    // …and a POISONER walking out to spread itself (unpoisonedTarget) is not turned back onto a
+    // body already wearing its poison by that body's next blow — the re-pick's own rule in
+    // tickCreep, seen from the return-fire side. Without it the Footman beside a Nightcrawler
+    // pulled it back off every Rifleman it set out for.
+    const spreading =
+      target.isCreep && attacker !== undefined && target.targetId !== null && target.targetId !== attacker.id &&
+      this.spreadsPoison(target) && this.poisonedBy(attacker, target);
+    if (notFighting && !fleeing && !spreading && target.weapon && !passive && !target.returning && attacker && this.hostile(target, attacker)) {
       // A creep hit by a WARD (or by a worker) returns fire on whatever it can see that
       // outranks the thing that hit it — see creepTargetOver. A Serpent Ward's whole job is
       // to be shot at instead of the army that planted it.
@@ -21951,7 +22017,8 @@ export class SimWorld {
     //     under its nose (`notifyCreepsOfShopUse`).
     if (u.canSleep && !u.returning) {
       if (this.isDay) u.asleep = false;
-      else if (!u.asleep && u.order === "idle" && atHome && !this.campFightTarget(u)) u.asleep = true;
+      // …and only once the CAMP is quiet (campQuiet), not merely once this creep has nobody.
+      else if (!u.asleep && u.order === "idle" && atHome && this.campQuiet(u)) u.asleep = true;
     } else if (!u.canSleep) {
       u.asleep = false;
     }

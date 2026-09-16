@@ -375,5 +375,29 @@ console.log("\na poisoner that has moved on is not pulled back onto the body it 
   check("…without thrashing between them", switches <= 5, true);
 }
 
+console.log("\na poisoner spreads itself over EVERYONE fighting its camp, not only what is beside it");
+{
+  // "they'll try to attack all your units once" (176): the Riflemen shooting the camp from
+  // beyond the Nightcrawler's own 500 are part of the fight it spreads over (unpoisonedTarget).
+  const w = world();
+  const nc = creep(w, "nmrm", 1000, 1000);
+  const mate = creep(w, "ngno", 1000, 1150);
+  const a = footman(w, 1080, 1000);
+  const r1 = spawn(w, "hrif", 1700, 1000, 0, 0);
+  const r2 = spawn(w, "hrif", 1650, 1350, 0, 0);
+  // …shooting from where they stand: a reach past the poisoner's 500, or they walk in to their
+  // own 400 and are "beside it" after all.
+  for (const r of [r1, r2]) for (const wp of r.weapons) wp.range = wp.baseRange = 800;
+  w.issueAttack(a.id, nc.id, false, true);
+  w.issueAttack(r1.id, nc.id, false, true);
+  w.issueAttack(r2.id, mate.id, false, true);
+  const poisoned = (u) => u.buffs.some((b) => b.kind === "dot" && b.sourceId === nc.id);
+  const gap = Math.hypot(r1.x - nc.x, r1.y - nc.y);
+  check("the Riflemen stand outside the Nightcrawler's own fight range", gap > Math.max(nc.aggroRange, nc.weapon.acquire) + 50, true);
+  runKeeping(w, null, 20, immortal(nc, mate, a, r1, r2));
+  check("the Footman beside it carries its poison", poisoned(a), true);
+  check("…and so do both Riflemen shooting the camp from the back", poisoned(r1) && poisoned(r2), true);
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nall creep-behaviour checks passed");
 process.exit(failed ? 1 : 0);

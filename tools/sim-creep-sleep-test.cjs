@@ -173,5 +173,36 @@ console.log("\n…and so does a camp-mate that never sleeps");
   check("…which joins it", creep.order, "attack");
 }
 
+console.log("\nit does not doze off in the middle of a fight");
+{
+  // A ground-only camp shot by a flyer it cannot answer: every blow woke it (provoke) and the
+  // very next tick put it back to sleep, because the only "is the camp fighting" test was a
+  // camp-mate on an enemy it could itself fight (SimWorld.campQuiet).
+  const { world, creep } = camp(true);
+  creep.weapon.targets = ["ground", "structure"];
+  const mate = addCreep(world, 3, creep.x + 150, creep.y, true);
+  mate.weapon.targets = ["ground", "structure"];
+  world.timeOfDay = NIGHT;
+  run(world, 1);
+  check("the camp is asleep before the flyer arrives", creep.asleep && mate.asleep, true);
+  const gry = intruder(world, creep, 250);
+  gry.flying = true;
+  gry.flyHeight = 200;
+  gry.targetedAs = "air";
+  world.issueAttack(gry.id, creep.id, false, true);
+  let napped = 0;
+  for (let i = 0; i < 20 * 8; i++) {
+    world.tick(0.05);
+    creep.hp = creep.maxHp; // watch the fight, not the funeral
+    if (i > 40 && (creep.asleep || mate.asleep)) napped++;
+  }
+  check("…and nobody in it naps while it is being shot", napped, 0);
+  world.issueMove(gry.id, gry.x + 3000, gry.y); // the flyer leaves
+  run(world, 1.5);
+  check("…still awake right after the last blow", creep.asleep, false);
+  run(world, 6); // MiscGame GuardReturnTime (5) of calm
+  check("…and back asleep once the camp has been quiet a while", creep.asleep && mate.asleep, true);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
 process.exit(failed ? 1 : 0);

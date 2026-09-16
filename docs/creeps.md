@@ -37,7 +37,7 @@ For what no file states:
 | **Level 7+**: summon > hero > **lowest hit points**, among what is in weapon reach; the ladder for the rest. The retarget trick does not work on them. | warcraft-gym; Wowpedia; 176 | `creepScore`, `CREEP_SMART_LEVEL` |
 | **Level 6+** take a spell's HERO duration ("Hero magic resistance"). | patch 1.03 | `dur()` in spells.ts |
 | A resting camp **ignores a flyer under a plain move**; one that stops overhead, or attack-moves, is fair game. | patch 1.10; Wowpedia | `bestCreepTarget(idle)` |
-| A **poisoner** (Envenomed Weapons / Slow Poison / Poison Sting) turns to the nearest unpoisoned body after each victim wears its poison, before the ladder. | Wowpedia; 176 | `unpoisonedTarget`, tickCreep |
+| A **poisoner** (Envenomed Weapons / Slow Poison / Poison Sting) turns to the nearest unpoisoned body after each victim wears its poison, before the ladder — out of everything in its fight range **and everything fighting its camp wherever it stands** (an attack on any camp-mate, or a camp-mate's target), bounded only by `MaxGuardDistance` from its post. The return fire of a body it has already poisoned does not pull it back. | Wowpedia; 176 ("all your units"); maintainer | `unpoisonedTarget`, `fightsCamp`, tickCreep, `provoke` |
 | A creep on a **tower** breaks off under **60 %** of its own health and does not return fire on it while walking home. | Wowpedia | `CREEP_TOWER_FLEE_HP`, tickCreep, `provoke` |
 | **Ensnare** goes on non-heroes that ENTER its 500 after the fight began; what was already inside is exempt, and so is anything the camp has already netted once. It is a TARGET spell (`[Aens]`/`[ACen]` carry no `Orderon`), so the creep caster presses it and asks the rule in its target pick (`CasterView.refuses`). A rule about how the camp CHOOSES — a direct order is never refused by it. | 176; the func rows | `SimUnit.ensnareSeen`, `trackEnsnareSeen`, `noteEnsnared`, `creepNetRefused` |
 | **Lightning Shield** wants the wearer touching two others (three in `Area1` 160). **Purge** prefers a summon. **Hurl Boulder** prefers the hero. **Slam** wants three. | 176; warcraft-gym | `CAST_RULES` in casting.ts |
@@ -46,6 +46,7 @@ For what no file states:
 | **Ensnare's net is picked per target**: the AIR buff row or the GROUND one (`Bena`/`Beng`, told apart by their `EditorSuffix`), and the Birth/Stand/Death set for the SIZE of the body it landed on. | `[Aens] buffid1`; the models' own clip names | `netFx` in spells.ts, `bodySize`, `AbilityRegistry.domainBuff`, `sizedSeq` |
 | A creep **casts only while its camp is in a fight**; Heal is the one autocast it runs at rest. A casting creep counts as fighting. | (the whole reason a camp does not Cyclone passers-by) | `creepInFight`, `creepAggroed`, `tickAutocast`, `CreepView.engaged` |
 | **Sleep**, **call for help**, leash and return, the placement and shop notifications. | MiscGame/MiscData; creep basics | `tickCreep`, `alertCamp`, `notifyCreepsOf*` — see the code |
+| A creep dozes off only once its **camp is quiet**: no camp-mate attacking or casting (at any enemy, not only one it could fight itself), nothing hostile with its attack on the camp, and no member struck for `GuardReturnTime` (5 s). A camp whose fight has ended still sleeps straight away after that. The 5 s is MiscGame's "unattacked" clock reused — no file states a sleep delay. | MiscGame `GuardReturnTime`; maintainer | `campQuiet`, `SimUnit.struckAt`, tickCreep |
 | **A camp acts as one unit**: every creep in a fight speaks for its camp — an originator for the creeps round its own post, a helper for the creeps round the post that CALLED it (so the call still never hops, issue #55). A creep that loses its target rolls onto the next inside its fight range instead of standing down. | Battle.net creep basics | `campFightAnchor`, `joinCampFight`, `SimUnit.campCallX/Y`, `reacquireOrStop` |
 | **A PLAYER's camp calls for help too** (`CallForHelp` 600, beside the creeps' `CreepCallForHelp`): a hit on a player-owned unit OR BUILDING sends that owner's idle, armed non-workers within 600 of it at the attacker, leashed as a fight they picked themselves. This is what an RPG's Player 12 "creeps" are — WarChasers' Gnoll Huts spawn Player 12 Murlocs, and a hero shooting the hut from outside their 400 used to be left alone. Not the victim's allies; not a unit on Hold or already fighting. | MiscGame; Hive 119830 | `callForHelp`, `provoke`; `tools/sim-call-for-help-test.cjs` |
 | Past `GuardDistance` only a camp-mate fighting INSIDE its own 600 holds a creep's leash; out there each creep is on MiscGame's own clock. | MiscGame `GuardDistance`/`GuardReturnTime` | the leash in `tickCreep` |
@@ -75,6 +76,11 @@ Nightcrawler freezes while its camp fights" — were four bugs, each reproduced 
 4. **The poison spread and the re-pick undid each other.** The spread moves a poisoner off a
    poisoned body; the re-pick moved it back whenever that body was on a higher rung (a summon is
    the top one). Fifteen turns in twelve seconds, eight blows, the Footman never poisoned.
+
+A later report, "creeps go back to sleep in the middle of a fight at night", was the sleep test
+being `campFightTarget` alone, which only sees a camp-mate on an enemy the sleeper could itself
+fight: a ground-only camp shot by a Gryphon Rider was woken by every blow and asleep again the
+next tick. `campQuiet` is the test now (the table's sleep row).
 
 With helpers anchoring, the leash needed one narrowing: two creeps both dragged past 600 held each
 other's clocks at zero and chased a kiting hero to the 1000 together.
