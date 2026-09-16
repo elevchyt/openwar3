@@ -11862,6 +11862,9 @@ export class SimWorld {
     const used = toLife + toMana;
     // The order is spent whether or not there was anything left to pour: a unit that walked
     // to a dry well has had its drink, and standing there waiting for nightfall is not it.
+    // One sent HERE is also still walking in (the well may tick before it does, and so
+    // pour before tickDrinkWalk sees it inside the reach): its walk ends with the drink.
+    if (t.drinkWellId === u.id && t.order === "move") this.endWalk(t);
     t.drinkWellId = 0;
     u.replenishTargetId = 0;
     if (used <= 0) return;
@@ -11888,6 +11891,22 @@ export class SimWorld {
     if (def.specialArt) this.spellEffects.push({ art: def.specialArt, x: t.x, y: t.y, targetId: t.id, z: 0, sound: true });
   }
 
+  /** A unit walking to a Moon Well it was sent to drink from stops as soon as it is inside the
+   *  well's pour — the ability's own `Area1` (400), measured exactly as `tickReplenish`'s
+   *  `reached` and `replenishSent` measure it, so the unit that stops is the unit that is
+   *  poured into. The walk is only the way INTO that circle: the order was a move at the
+   *  well, and left alone it walked on up to the stonework and stood among the other drinkers
+   *  instead of stopping at the edge of the reach as it does in the game. Ended with
+   *  `endWalk`, which keeps `drinkWellId` — the pour still owes it its drink. */
+  private tickDrinkWalk(u: SimUnit): void {
+    if (u.order !== "move" || u.hp <= 0) return;
+    const well = this.units.get(u.drinkWellId);
+    const def = well && this.replenishAbility(well);
+    if (!well || !def) return;
+    const area = def.levelData[0]?.area || 400;
+    if (Math.hypot(u.x - well.x, u.y - well.y) - u.radius <= area) this.endWalk(u);
+  }
+
   /** The nearest unit that was SENT to this well and has arrived (`{kind:"drink"}`). */
   private replenishSent(u: SimUnit, def: AbilityDef, area: number): SimUnit | undefined {
     let best: SimUnit | undefined;
@@ -11897,6 +11916,7 @@ export class SimWorld {
       // Arrived with nothing left to gain (it healed on the way, or the well is the wrong
       // kind for it): the order is simply finished.
       if (!this.replenishWants(u, t, def)) {
+        if (t.order === "move") this.endWalk(t); // …and there is no reason to walk on in
         t.drinkWellId = 0;
         continue;
       }
@@ -15778,6 +15798,7 @@ export class SimWorld {
       if (u.rootPending) this.tickRootAt(u); // an Ancient that walked to the spot it was told to plant on
       if (u.entanglePending) this.tickEntangleAt(u); // …and a Tree of Life that planted there to take a mine
       if (u.militiaCall) this.tickMilitiaCall(u); // …and a Peasant running to the hall to be armed
+      if (u.drinkWellId) this.tickDrinkWalk(u); // …and a unit sent to a Moon Well stopping once it is in reach
       this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired

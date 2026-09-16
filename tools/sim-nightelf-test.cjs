@@ -710,6 +710,10 @@ console.log("…and a unit RIGHT-CLICKED onto a well drinks from it with autocas
   check("it arrives and drinks", world.units.get(81).hp > 350, `${world.units.get(81).hp.toFixed(0)}/600`);
   check("…spending the well", world.units.get(80).mana < 1, `${world.units.get(80).mana.toFixed(1)}`);
   check("…and the order is spent with it", world.units.get(81).drinkWellId === 0);
+  // It STOPS at the edge of the pour (Area1 = 400) rather than walking on up to the well.
+  const d = Math.hypot(world.units.get(81).x - 2000, world.units.get(81).y - 2000);
+  check("…having stopped once it was in reach, not beside the well", d > 300 && d - 16 <= 400 + 32, `${d.toFixed(0)} from the well`);
+  check("…and it stands there idle", world.units.get(81).order === "idle" && !world.units.get(81).moving, world.units.get(81).order);
 }
 
 console.log("Well Spring (`Rews`) — +125 mana, +0.52/sec, and both only after dark");
