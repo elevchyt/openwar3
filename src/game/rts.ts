@@ -6179,13 +6179,43 @@ export class RtsController {
     return this.groundHit();
   }
 
-  /** Cast an ability from every selected own unit that knows it (WC3 casts from
-   *  the whole selection — e.g. two priests both Dispel). `queued` (Shift held) appends the
-   *  cast to each unit's order queue instead of interrupting what it is doing. */
-  private castFromSelection(code: string, targetId: number, x: number, y: number, queued = false): void {
+  /** Cast an ability from the selection. `queued` (Shift held) appends the cast to the
+   *  caster's order queue instead of interrupting what it is doing.
+   *
+   *  An AIMED spell (a unit or a point) is cast by ONE unit, as in the game: four Dryads told
+   *  to Abolish Magic on one Footman do not all spend their mana on him. The caster is the one
+   *  NEAREST the target among the units that may cast it at that target right now (castError —
+   *  cooldown, mana, silence and the target rules alike), so a Dryad with an empty bar is
+   *  simply skipped. A unit already on its way to cast this very spell goes to the back, which
+   *  is what hands the NEXT click to another Dryad rather than re-aiming the first one; and
+   *  the focused sub-group (the card the button was pressed on) is asked before the rest of
+   *  the selection. A NO-TARGET press (castNoTarget) still reaches everyone who knows it. */
+  private castFromSelection(code: string, targetId: number, x: number, y: number, queued = false, aimed = true): void {
     let any = false;
+    if (!aimed) {
+      for (const id of this.orderees) {
+        if (this.execute(this.localPlayer, { c: "cast", unitId: id, code, targetId, x, y, queued })) any = true;
+      }
+      if (any) this.ack(false);
+      return;
+    }
+    const t = targetId ? this.sim.units.get(targetId) : undefined;
+    const tx = t ? t.x : x;
+    const ty = t ? t.y : y;
+    const focused = new Set(this.focusedGroupIds());
+    const ranked: Array<{ id: number; rank: number; d: number }> = [];
     for (const id of this.orderees) {
-      if (this.execute(this.localPlayer, { c: "cast", unitId: id, code, targetId, x, y, queued })) any = true;
+      const u = this.sim.units.get(id);
+      if (!u || u.owner !== this.localPlayer || u.isIllusion) continue;
+      if (this.sim.castError(id, code, targetId, x, y) !== null) continue;
+      const busy = u.order === "cast" && u.pendingCast?.code === code && !u.pendingCast.fired;
+      ranked.push({ id, rank: (focused.has(id) ? 0 : 2) + (busy ? 1 : 0), d: Math.hypot(u.x - tx, u.y - ty) });
+    }
+    ranked.sort((a, b) => a.rank - b.rank || a.d - b.d);
+    for (const r of ranked) {
+      if (!this.execute(this.localPlayer, { c: "cast", unitId: r.id, code, targetId, x, y, queued })) continue;
+      any = true;
+      break; // one caster — the nearest that took the order
     }
     if (any) this.ack(false);
   }
@@ -6322,7 +6352,7 @@ export class RtsController {
       this.refuseOrder(err);
       return;
     }
-    this.castFromSelection(code, 0, 0, 0);
+    this.castFromSelection(code, 0, 0, 0, false, false);
   }
 
   // --- inventory (hero items) ----------------------------------------------

@@ -9701,6 +9701,31 @@ export class MapViewerScene {
     return !!alt && su.typeId === alt;
   }
 
+  /** Of a sub-group's units, the one whose copy of this ability is READIEST — pressable at all
+   *  (not silenced, stunned, mid-morph or already hidden by it), then affordable, then the
+   *  shortest cooldown — with the first in `peers` winning ties. `face` (a toggle's) keeps
+   *  to the units showing the same half of it. Null when none carries the ability. */
+  private readiestPeer(peers: SimUnit[], abilityId: string, def: AbilityDef, face: boolean | null): { unit: SimUnit; ab: SimUnit["abilities"][number]; lvl: AbilityDef["levelData"][number] } | null {
+    if (!this.rts) return null;
+    let best: { unit: SimUnit; ab: SimUnit["abilities"][number]; lvl: AbilityDef["levelData"][number] } | null = null;
+    let bestScore = Infinity;
+    for (const unit of peers) {
+      const ab = unit.abilities.find((a) => a.id === abilityId && a.level >= 1);
+      if (!ab) continue;
+      if (face !== null && this.toggleIsOn(unit, ab.code, def) !== face) continue;
+      const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      const locked = unit.silenced || unit.stunned || unit.morphT > 0 || this.rts.simView.alreadyHidden(unit, ab.code);
+      const broke = unit.mana < castCostOf(unit, def, lvl);
+      // Lexicographic in one number: a cooldown is never anywhere near 1e6 seconds.
+      const score = (locked ? 2e6 : 0) + (broke ? 1e6 : 0) + Math.max(0, ab.cooldownLeft);
+      if (score < bestScore) {
+        best = { unit, ab, lvl };
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
   /** Append a movable unit's learned/innate abilities (and a hero's Learn Skill
    *  button) to its command card. Auras show as passive (disabled) indicators;
    *  autocast abilities (Heal/Slow) toggle; the rest arm a target or fire. */
@@ -9714,6 +9739,16 @@ export class MapViewerScene {
     if (su.isIllusion) return;
     const active = this.activeCommandId();
     const rootable = su.abilities.some((a) => a.code === "Aroo" && a.level >= 1); // an Ancient
+    // The rest of the ACTIVE SUB-GROUP — the units this card speaks for. With four Dryads
+    // selected the Abolish Magic button is available while ANY of them could cast it, and its
+    // cooldown sweep is the one that ends FIRST, because an aimed press goes to whichever of
+    // them can take it (RtsController.castFromSelection). The primary is first, so it wins
+    // every tie and a lone unit reads exactly as it did.
+    const peers: SimUnit[] = [su];
+    for (const id of this.rts.focusedGroupIds()) {
+      const p = id === su.id ? undefined : this.rts.simView.units.get(id);
+      if (p && p.owner === this.localPlayer && !p.isIllusion && p.typeId === su.typeId) peers.push(p);
+    }
     for (const ab of su.abilities) {
       if (ab.level < 1) continue; // unlearned hero abilities don't show as buttons
       // An ability can be gated by an upgrade — `[Adef] Requires=Rhde` (Defend), `[Acmg]
@@ -9768,6 +9803,12 @@ export class MapViewerScene {
       // so a PLANTED Ancient wears the `un` half because pulling itself up is the move
       // available to it. See AbilityDef.unIcon and toggleIsOn for the other three shapes.
       const reversed = !!def.unIcon && this.toggleIsOn(su, ab.code, def);
+      // …and the READINESS half of the button (mana, cooldown, silence, a morph, an active
+      // walk) is read off the best-placed unit of the sub-group rather than off the primary:
+      // one that can press it at all, then one that can pay for it, then the shortest
+      // cooldown. Only a peer showing the same FACE of a toggle stands in, since the two halves
+      // are priced differently (castCostOf).
+      const ready = this.readiestPeer(peers, ab.id, def, !!def.unIcon ? reversed : null) ?? { unit: su, ab, lvl };
       // …and a planted Ancient with anything in its queue cannot pull itself up at all: WC3
       // greys Uproot out for as long as it is training or researching, because the work would
       // have nowhere to go. The sim refuses it too (SimWorld.rootRefusal) — this is the half
@@ -9778,13 +9819,13 @@ export class MapViewerScene {
       // the ground). The sim refuses every cast for the duration (castLocked); this is the
       // half that lets the card say so, which is what stops Unburrow reading as available
       // the instant Burrow was pressed.
-      const morphing = su.morphT > 0;
+      const morphing = ready.unit.morphT > 0;
       // …and a unit ALREADY under this button's own invisibility presses nothing either: a
       // Blademaster who is wind walking may not wind walk (SimWorld.alreadyHidden). The button
       // wears its `DISBTNWindWalkOn` twin for the whole walk, which is a good deal longer than
       // the 5-second cooldown it also carries — and the cooldown keeps running and drawing
       // underneath, because the two are different facts about the same button.
-      const hidden = this.rts.simView.alreadyHidden(su, ab.code);
+      const hidden = this.rts.simView.alreadyHidden(ready.unit, ab.code);
       // …and a NIGHT ability while the sun is up: Shadow Meld is dead by day (barredByDay).
       const daylight = this.rts.simView.barredByDay(ab.code);
       // …and a cargo hold's two buttons answer to the hold: Load with no seat left, Unload
@@ -9800,16 +9841,16 @@ export class MapViewerScene {
       // Dragons) carries neither art nor position and does not. Without this the Frost Wyrm
       // grew a blank button in the top-left corner, on top of whatever was already there.
       if (passive && !def.icon) continue;
-      const onCd = ab.cooldownLeft > 0;
+      const onCd = ready.ab.cooldownLeft > 0;
       // What THIS press costs — a toggle's OFF half is free (castCostOf), and the wash and the
       // printed price both have to say so or the button reads as one the hero cannot afford.
-      const manaCost = castCostOf(su, def, lvl);
-      const noMana = su.mana < manaCost;
+      const manaCost = castCostOf(ready.unit, def, ready.lvl);
+      const noMana = ready.unit.mana < manaCost;
       // Silenced (Silence, Soul Burn) or stunned: the unit cannot cast at all. This is the
       // one refusal WC3 ships no [Errors] line for, and SimWorld.castRefusal says why —
       // the engine GREYS THE BUTTON, so the click never happens and nothing needs saying.
       // A passive is untouched: Silence stops spellcasting, not Critical Strike.
-      const muted = !passive && (su.silenced || su.stunned);
+      const muted = !passive && (ready.unit.silenced || ready.unit.stunned);
       out.push(this.cmd({
         // An autocastable ability answers to BOTH mouse buttons, as in the game: left casts
         // it here and now (Heal that wounded Footman), right flips whether the unit casts it
@@ -9868,8 +9909,8 @@ export class MapViewerScene {
         // row, so an un-researched Web read as "on" for an ability that could not fire. The
         // sim agrees from the other side — tickAutocast skips it (and issueCast refuses it).
         modal: def.autocast && ab.autocastOn && techMet,
-        cooldownLeft: onCd ? ab.cooldownLeft : 0,
-        cooldownFrac: onCd && lvl.cooldown > 0 ? Math.max(0, Math.min(1, ab.cooldownLeft / lvl.cooldown)) : 0,
+        cooldownLeft: onCd ? ready.ab.cooldownLeft : 0,
+        cooldownFrac: onCd && ready.lvl.cooldown > 0 ? Math.max(0, Math.min(1, ready.ab.cooldownLeft / ready.lvl.cooldown)) : 0,
       }));
     }
     if (su.isHero) {
