@@ -6719,7 +6719,9 @@ export class MapViewerScene {
       // Facing it down the line it sweeps is what makes the art read as the spell; without
       // it every wave pointed at world +x, so a Breath of Fire cast southward laid its
       // flame out sideways across the caster and looked like no model at all.
-      const ang = p.wave ? Math.atan2(p.wave.dirY, p.wave.dirX) : t ? Math.atan2(t.y - p.y, t.x - p.x) : 0;
+      // A missile that lost its target to invisibility points at the spot it is dying at.
+      const aim = p.lost ?? t;
+      const ang = p.wave ? Math.atan2(p.wave.dirY, p.wave.dirX) : aim ? Math.atan2(aim.y - p.y, aim.x - p.x) : 0;
       zQuat(this.mq, ang);
       inst.setRotation(this.mq);
     }

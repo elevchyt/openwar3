@@ -901,11 +901,14 @@ export function snapshotFor(
     // A WAVE (Shock Wave, Carrion Swarm) chases nobody, so its aim is where the front is
     // headed — the end of its run. Without this the client would hold it still between
     // payloads instead of sweeping it (tickClientProjectiles).
+    // A missile that LOST its target to invisibility is headed for where the target was last
+    // seen — and its `targetId` is already 0, so the client cannot home on the (hidden) unit.
     const w = p.wave;
+    const l = p.lost;
     projectiles.push({
       id: p.id, x: p.x, y: p.y, z: p.z, targetId: p.targetId,
-      tx: w ? w.ox + w.dirX * w.dist : (t?.x ?? p.x),
-      ty: w ? w.oy + w.dirY * w.dist : (t?.y ?? p.y),
+      tx: w ? w.ox + w.dirX * w.dist : l ? l.x : (t?.x ?? p.x),
+      ty: w ? w.oy + w.dirY * w.dist : l ? l.y : (t?.y ?? p.y),
       speed: p.speed, art: p.art, startZ: p.startZ, impactZ: p.impactZ, startDist: p.startDist,
     });
   }

@@ -82,18 +82,19 @@ const fade = (t) => {
  * came off) or FIZZLED (the projectile was removed with no impact point — the renderer's own
  * test for a disjoint: see mapViewer, "a fizzle just detaches").
  */
-function shot(duringFlight, setUp = () => {}) {
+function shot(duringFlight, setUp = () => {}, eachTick = () => {}) {
   const w = new SimWorld(grid(), 2);
   const a = addUnit(w, 1, 0, 500, 500, ARCHER);
   const t = addUnit(w, 2, 1, 1100, 500, []);
   setUp(w, a, t);
   w.issueOrder(a.id, { kind: "attack", targetId: t.id, force: true });
 
-  let launched = false, meddled = false, impacts = 0, removals = 0, hits = 0;
+  let launched = false, meddled = false, impacts = 0, removals = 0, hits = 0, impactAt = null;
   for (let i = 0; i < 1200; i++) {
+    if (meddled) eachTick(w, a, t);
     w.tick(SIM_DT);
     if (w.drainSpawnedProjectiles().length) launched = true;
-    impacts += w.drainProjectileImpacts().length;
+    for (const im of w.drainProjectileImpacts()) { impacts++; impactAt = im; }
     removals += w.drainRemovedProjectiles().length;
     hits += w.drainHits().length;
     if (launched && !meddled) {
@@ -105,6 +106,8 @@ function shot(duringFlight, setUp = () => {}) {
   }
   return {
     launched, fizzled: removals > 0 && impacts === 0, landed: hits > 0 && t.hp < 100000,
+    // LOST: flew on to a spot and burst there with nothing delivered (SimProjectile.lost).
+    lost: removals > 0 && impacts > 0 && hits === 0, impactAt,
     stillFlying: w.projectiles.size > 0, hp: t.hp, teleports: t.teleports,
   };
 }
@@ -201,8 +204,32 @@ console.log("\nTELEPORTED DURING THE WIND-UP: the Scroll of Town Portal case");
 
 console.log("\nINVISIBLE: the Wind Walk case");
 {
-  const r = shot((w, a, t) => { fade(t); });
-  check("fading mid-flight disjoints the arrow", r.fizzled, `hp ${r.hp}`);
+  // The missile loses the UNIT, not the shot: it flies on to the last place its side saw the
+  // target and dissipates there, however far the (now invisible) target walks meanwhile.
+  let vanishedAt = null;
+  const r = shot((w, a, t) => { fade(t); vanishedAt = { x: t.x, y: t.y }; }, () => {}, (w, a, t) => { t.y += 4; });
+  check("fading mid-flight makes the arrow miss", r.lost && r.hp === 100000, `hp ${r.hp}`);
+  // Within one tick's walk (4 units here): the fade takes hold at the next stat pass.
+  check("it bursts where the target VANISHED, not where it walked to",
+    r.impactAt && Math.hypot(r.impactAt.x - vanishedAt.x, r.impactAt.y - vanishedAt.y) <= 4.5,
+    r.impactAt ? `(${r.impactAt.x.toFixed(0)}, ${r.impactAt.y.toFixed(0)}) vs (${vanishedAt.x}, ${vanishedAt.y})` : "no impact");
+}
+{
+  // Once lost it stays lost: the Wind Walk ending mid-flight does not hand the target back.
+  let reappear = 0;
+  const r = shot((w, a, t) => { fade(t); }, () => {}, (w, a, t) => {
+    if (++reappear === 5) t.buffs = t.buffs.filter((b) => b.kind !== "invisible");
+  });
+  check("the target reappearing does not bring the arrow back", r.lost && r.hp === 100000, `hp ${r.hp}`);
+}
+{
+  // The TEST is the shooter's side seeing it RIGHT NOW: detected at the fade, then the dust
+  // runs out mid-flight — the step it stops being seen is the step the arrow loses it.
+  let n = 0;
+  const r = shot((w, a, t) => { fade(t); }, (w, a, t) => {
+    w.addItemReveal(0, 0, { x: 1100, y: 500, radius: 900, seconds: 60, detect: true });
+  }, (w) => { if (++n === 10) w.itemReveals.length = 0; });
+  check("losing detection mid-flight makes it miss", r.lost && r.hp === 100000, `hp ${r.hp}`);
 }
 {
   // …unless the shooter's side has TRUE SIGHT over the vanishing point. Detection is a team

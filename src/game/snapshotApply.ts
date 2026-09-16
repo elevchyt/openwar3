@@ -323,6 +323,10 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
         rec.x = p.x;
         rec.y = p.y;
         rec.z = p.z;
+        // The host dropped the target mid-flight: it went invisible to the shooter's side and
+        // the missile is now bound for where it was last seen (SimProjectile.lost) — which is
+        // also what the renderer points the model at.
+        if (rec.targetId !== 0 && p.targetId === 0) rec.lost = { x: p.tx, y: p.ty };
         rec.targetId = p.targetId;
         rec.speed = p.speed;
         rec.startZ = p.startZ;

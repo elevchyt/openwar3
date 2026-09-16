@@ -161,6 +161,10 @@ export interface SimProjectile {
    *  the shot MISSES (see missileDisjointed). Undefined on the artillery/wave shots, which have
    *  no target. */
   targetTeleports?: number;
+  /** Set the moment the target went INVISIBLE to the shooter's side mid-flight: where it was
+   *  last seen. The missile stops homing (`targetId` is cleared), flies on to this spot and
+   *  dissipates there with nothing delivered — see missileDisjointed. */
+  lost?: { x: number; y: number };
   attackType?: AttackType; // attacker's weapon attack type, carried so the damage-table
   // multiplier is correct even if the attacker dies before the arrow lands
   /** The firing weapon's impact base, carried for the same reason `attackType` is: the shot
@@ -18032,16 +18036,16 @@ export class SimWorld {
    * got teleported follow them all the way to their base" (the Scroll of Town Portal, whose
    * three-second channel ends inside somebody's wind-up almost every time).
    */
-  private missileDisjointed(p: SimProjectile, t: SimUnit): boolean {
+  private missileDisjointed(p: SimProjectile, t: SimUnit): "fizzle" | "lost" | null {
     // "The target is teleported." A Blink, a Mass Teleport, a Way Gate, a Staff of
     // Sanctuary, the Blademaster stepping out of a Mirror Image — one counter covers them
     // all, and covers a unit teleported twice mid-flight too.
-    if (p.targetTeleports !== undefined && t.teleports !== p.targetTeleports) return true;
+    if (p.targetTeleports !== undefined && t.teleports !== p.targetTeleports) return "fizzle";
     // "The target is loaded into another unit… Orc Burrow, Goblin Zeppelin and Devour."
     // `isOffField` is that list plus the two other ways a unit leaves the map entirely (into
     // a gold mine, into the structure an orc peon is raising) — in every case there is no
     // longer anything standing there for the missile to reach.
-    if (isOffField(t)) return true;
+    if (isOffField(t)) return "fizzle";
     // "The target is invisible." `invisible` is the fade IN FORCE, not the Transition Time —
     // which is precisely why a Wind Walk cut short to a fraction of a second disjoints while
     // the unit is still perfectly targetable during its wind-up.
@@ -18050,7 +18054,16 @@ export class SimWorld {
     // Sight cancels the disjoint (a Sentry Ward over the vanishing point and the arrow still
     // lands), and a unit is never hidden from its own team, so an allied missile — a Death
     // Coil sent to heal a Wind Walking Ghoul — is not thrown away by its target fading.
-    if (p.sourceTeam !== undefined && t.team !== p.sourceTeam && t.invisible && !this.teamDetects(p.sourceTeam, t.x, t.y)) return true;
+    //
+    // The test is whether the SHOOTER'S SIDE sees the target right now, asked every step of
+    // the flight: a Wind Walker standing in a Sentry Ward's circle, under Dust of Appearance
+    // or inside a Reveal is struck as though it were visible, and the step it leaves that
+    // circle (or the detector dies, or the dust runs out) is the step the arrow loses it.
+    //
+    // Such a missile does not simply vanish mid-air, either: it has lost the UNIT, not the
+    // shot, so it carries on to the last place its side saw the target and dissipates there
+    // (`lost`, tickLostProjectile) — which is what makes a Wind Walk read as a dodge.
+    if (p.sourceTeam !== undefined && t.team !== p.sourceTeam && t.invisible && !this.teamDetects(p.sourceTeam, t.x, t.y)) return "lost";
     // INVULNERABLE — a Divine Shield, a potion, the Town Portal ward — and here we part with
     // the letter of the page. Liquipedia files invulnerability one line above the miss list,
     // as "the missile will deal no damage, if the target is invulnerable, when the missile
@@ -18061,8 +18074,8 @@ export class SimWorld {
     // spill, and — for a spell missile — `applySpellEffect`, so a Storm Bolt would stun a unit
     // nothing is supposed to be able to touch. `landDamage`'s invulnerable check guards the
     // DAMAGE and nothing else; this guards the whole delivery.
-    if (t.invulnerable) return true;
-    return false;
+    if (t.invulnerable) return "fizzle";
+    return null;
   }
 
   /** Advance in-flight projectiles toward their (moving) targets; deal damage on
@@ -18081,10 +18094,23 @@ export class SimWorld {
         this.tickWaveProjectile(p, dt);
         continue;
       }
+      // Already lost its target to invisibility: it is flying at a spot now, not a unit, and
+      // nothing the target does next — reappearing included — brings it back.
+      if (p.lost) {
+        this.tickLostProjectile(p, dt);
+        continue;
+      }
       const t = this.units.get(p.targetId);
       // The target DIED (killUnit deletes it) — the first of the ways a missile misses. The
       // rest are the disjoint (Blink, a Wind Walk, a step into a Burrow, a Divine Shield).
-      if (!t || this.missileDisjointed(p, t)) {
+      const disjoint = t ? this.missileDisjointed(p, t) : "fizzle";
+      if (t && disjoint === "lost") {
+        p.lost = { x: t.x, y: t.y };
+        p.targetId = 0; // chasing nobody — a client's copy aims at `lost` (snapshot tx/ty)
+        this.tickLostProjectile(p, dt);
+        continue;
+      }
+      if (!t || disjoint) {
         this.removeProjectile(p.id); // a fizzle: the renderer detaches it without an impact
         continue;
       }
@@ -18123,6 +18149,29 @@ export class SimWorld {
         p.z = p.startZ + (p.impactZ - p.startZ) * prog;
       }
     }
+  }
+
+  /** Fly a missile whose target went invisible to the spot it was last seen and let it burst
+   *  there EMPTY: the impact clip plays (the arrow hits the ground, the Death Coil pops) but no
+   *  damage, orb, spill or spell effect rides it, and no weapon clang sounds — nothing was hit.
+   *  See missileDisjointed. */
+  private tickLostProjectile(p: SimProjectile, dt: number): void {
+    const l = p.lost!;
+    const dx = l.x - p.x;
+    const dy = l.y - p.y;
+    const dist = Math.hypot(dx, dy);
+    const step = p.speed * dt;
+    if (dist > step) {
+      p.x += (dx / dist) * step;
+      p.y += (dy / dist) * step;
+      const prog = p.startDist > 1 ? Math.max(0, Math.min(1, (p.startDist - dist) / p.startDist)) : 1;
+      p.z = p.startZ + (p.impactZ - p.startZ) * prog;
+      return;
+    }
+    p.x = l.x;
+    p.y = l.y;
+    this.projectileImpacts.push({ id: p.id, x: l.x, y: l.y, z: p.impactZ });
+    this.removeProjectile(p.id);
   }
 
   /** Fly an ARTILLERY shell to the spot it was thrown at and burst there. Same straight-line
