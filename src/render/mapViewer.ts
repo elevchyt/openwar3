@@ -10093,12 +10093,18 @@ export class MapViewerScene {
     }
     if (id.startsWith("research:")) {
       const sel = this.rts.selectedInfo();
-      if (sel) this.startResearch(sel.id, id.slice(9));
+      if (sel) {
+        const group = this.rts.focusedGroupIds();
+        this.startResearch(group.includes(sel.id) ? group : [sel.id], id.slice(9));
+      }
       return;
     }
     if (id.startsWith("upgrade:")) {
       const sel = this.rts.selectedInfo();
-      if (sel) this.startBuildingUpgrade(sel.id, id.slice(8));
+      if (sel) {
+        const group = this.rts.focusedGroupIds();
+        this.startBuildingUpgrade(group.includes(sel.id) ? group : [sel.id], id.slice(8));
+      }
       return;
     }
     if (id.startsWith("buy:")) {
@@ -10295,50 +10301,49 @@ export class MapViewerScene {
     return "";
   }
 
-  /** Ask to train (or hire) a unit — ONE of them, at the EMPTIEST queue in the selected
-   *  sub-group (RtsController.focusedGroupIds).
+  /** The selected buildings in the order a production click fills them: the EMPTIEST queue
+   *  first, fewest jobs standing in it, ties to whichever comes first in the group (the focus
+   *  order, so the leader takes the first of a round). Read once, BEFORE the click places
+   *  anything — a building that has just taken a job does not go back into the running.
+   *  `simWorld` rather than the view because the queue is the BUILDING's own state. */
+  private byQueueDepth(buildings: number[]): number[] {
+    const world = this.rts!.simWorld;
+    const depth = (id: number): number => world.units.get(id)?.building?.queue.length ?? 0;
+    return buildings.map((id, i) => ({ id, i, d: depth(id) }))
+      .sort((a, b) => a.d - b.d || a.i - b.i)
+      .map((e) => e.id);
+  }
+
+  /** Ask to train (or hire) a unit at EVERY building in the selected sub-group
+   *  (RtsController.focusedGroupIds) — one each, placed emptiest queue first (byQueueDepth).
    *
-   *  A click is one unit, not one per building. That is the click a player makes: with three
-   *  Barracks held, clicking Footman five times buys five Footmen — two, two and one — rather
-   *  than fifteen, and the group behaves as one production line with a shared card. Clicking
-   *  once per building instead meant a selection of Barracks could not be asked for a single
-   *  unit at all, and a player who had grouped them spent gold in multiples of three.
+   *  Three Barracks held and one Rifleman click is three Riflemen, one per Barracks. The ORDER
+   *  is what matters when the purse runs out part-way: with gold for two, the two SHORTEST
+   *  queues take them and the third building simply gets nothing, rather than the leader's
+   *  already-loaded queue growing while an idle Barracks beside it stands empty.
    *
-   *  "Emptiest" is the queue with the fewest jobs standing in it, ties going to whichever
-   *  comes first in the group (which is the focus order, so the leader takes the first of a
-   *  round). Re-read per click, so repeated clicks fill the line round-robin on their own and
-   *  a queue the player had already loaded by hand is filled last. `simWorld` rather than the
-   *  view because the queue is the BUILDING's own state and the length is what we compare.
-   *
-   *  The refusal is spoken only when NOTHING took the order, and the search skips a building
-   *  that would refuse rather than reporting it: a full Barracks is not worth a "Not enough
-   *  gold." when the one beside it started the unit. */
+   *  Every building is still sent through `execute`, which is the gate: a full queue, a
+   *  half-built Barracks or a hero the roster already holds is refused there, silently, and
+   *  the round moves on to the next building. The refusal is re-read per building because the
+   *  previous one has just spent the gold, and it is spoken once when any building of the
+   *  round was left without its unit for a reason the player can act on — gold, lumber, food,
+   *  stock. A full queue is not worth a "Not enough gold." when the one beside it took the unit. */
   private trainUnit(buildings: number[], unitId: string): void {
     if (!this.rts) return;
     const world = this.rts.simWorld;
-    let pick = -1;
-    let shortest = Infinity;
     let refusal = "";
-    for (const buildingId of buildings) {
+    for (const buildingId of this.byQueueDepth(buildings)) {
+      // A queue the authority would refuse outright (7 deep — MAX_BUILD_QUEUE) is skipped
+      // before it is asked, so it cannot claim the refusal line.
+      if (world.queueFull(buildingId)) continue;
       const err = this.trainRefusal(buildingId, unitId);
       if (err) {
         refusal ||= err;
         continue;
       }
-      // A queue the authority would refuse outright (7 deep — MAX_BUILD_QUEUE) is not a
-      // candidate, and neither is a longer one while a shorter is on offer.
-      if (world.queueFull(buildingId)) continue;
-      const depth = world.units.get(buildingId)?.building?.queue.length ?? 0;
-      if (depth < shortest) {
-        shortest = depth;
-        pick = buildingId;
-      }
+      this.rts.execute(this.localPlayer, { c: "train", buildingId, unitId });
     }
-    if (pick < 0) {
-      if (refusal) this.refuse(refusal);
-      return;
-    }
-    if (!this.rts.execute(this.localPlayer, { c: "train", buildingId: pick, unitId }) && refusal) this.refuse(refusal);
+    if (refusal) this.refuse(refusal);
   }
 
   /** Bring a fallen hero back. Feedback only — the price and the wait are the LEVEL's and
@@ -10363,10 +10368,12 @@ export class MapViewerScene {
     this.rts.execute(this.localPlayer, { c: "revive", buildingId, heroId });
   }
 
-  /** Start researching an upgrade at a building. Charges the level's own cost (Steel Forged
-   *  Swords is dearer than Iron) and shares the building's ONE production queue with training,
-   *  exactly as WC3 does. */
-  private startResearch(buildingId: number, upgradeId: string): void {
+  /** Start researching an upgrade at ONE of the selected buildings — the one with the
+   *  emptiest queue (byQueueDepth). Charges the level's own cost (Steel Forged Swords is dearer
+   *  than Iron) and shares the building's ONE production queue with training, exactly as WC3
+   *  does. Only one: an upgrade is the PLAYER's, and `execute` refuses a rank already in
+   *  research anywhere of theirs, so a round stops at the first building that took it. */
+  private startResearch(buildings: number[], upgradeId: string): void {
     if (!this.rts) return;
     // Feedback only: work out the level the authority will pick so the refusal can name the
     // resource the player is short of. `execute` derives the level and the price again, and
@@ -10382,21 +10389,31 @@ export class MapViewerScene {
         if (!this.canAfford(cost.gold, cost.lumber)) return;
       }
     }
-    this.rts.execute(this.localPlayer, { c: "research", buildingId, upgradeId });
+    for (const buildingId of this.byQueueDepth(buildings)) {
+      if (world.queueFull(buildingId)) continue;
+      if (this.rts.execute(this.localPlayer, { c: "research", buildingId, upgradeId })) return;
+    }
   }
 
-  /** Start a building's transformation (Town Hall → Keep, Scout Tower → Guard Tower). The
-   *  cost and time are the TARGET's own; the structure keeps working while it upgrades. */
-  private startBuildingUpgrade(buildingId: number, toTypeId: string): void {
+  /** Start a building's transformation (Town Hall → Keep, Scout Tower → Guard Tower) at every
+   *  selected building of the sub-group, emptiest queue first (byQueueDepth) — so three Scout
+   *  Towers and gold for two Guard Towers upgrade the two least busy. The cost and time are the
+   *  TARGET's own; the structure keeps working while it upgrades. */
+  private startBuildingUpgrade(buildings: number[], toTypeId: string): void {
     if (!this.rts) return;
+    const world = this.rts.simWorld;
     const d = this.registry.get(toTypeId);
-    if (d) {
-      // Feedback only — the same difference `execute` will compute, purely so a refusal can
-      // say "Not enough gold" rather than nothing at all.
-      const [gold, lumber] = this.upgradeCost(this.rts.simView.units.get(buildingId)?.typeId, d);
-      if (!this.canAfford(gold, lumber)) return;
+    for (const buildingId of this.byQueueDepth(buildings)) {
+      if (world.queueFull(buildingId) || world.isUpgrading(buildingId)) continue;
+      if (d) {
+        // Feedback only — the same difference `execute` will compute, purely so a refusal can
+        // say "Not enough gold" rather than nothing at all. The purse only shrinks through a
+        // round, so the first building it cannot pay for ends it.
+        const [gold, lumber] = this.upgradeCost(this.rts.simView.units.get(buildingId)?.typeId, d);
+        if (!this.canAfford(gold, lumber)) return;
+      }
+      this.rts.execute(this.localPlayer, { c: "upgradebuilding", buildingId, toTypeId });
     }
-    this.rts.execute(this.localPlayer, { c: "upgradebuilding", buildingId, toTypeId });
   }
 
   /** Buy an item from a shop. WC3 hands it to a "valid patron" — a nearby unit with an
