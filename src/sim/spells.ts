@@ -868,8 +868,15 @@ export const POLARITY_SPELLS: Record<string, { healsUndead: boolean; error: stri
  * Disenchant is the one worth naming out loud: it is a different ability with a different
  * icon, radius and range, and its `code` IS `Adis` — so it dispatches to Dispel Magic's own
  * handler and is covered by anything keyed on the code, here included.
+ *
+ *     Advm   Devour Magic     — the Destroyer's, and `ACde` the creep copy
+ *
+ * Devour Magic is the fourth: the same blind circle as Dispel Magic (every unit in `Area1`,
+ * summons damaged), with the Destroyer PAID for each unit it eats magic off. Who pays is the
+ * same polarity `worthDispelling` reads — enemy buffs and allied debuffs (see `Advm` below) —
+ * so an aim that asks `worthDispelling` is also an aim at the Destroyer's mana.
  */
-export const DISPEL_CODES = new Set(["Aprg", "Adis", "Aadm"]);
+export const DISPEL_CODES = new Set(["Aprg", "Adis", "Aadm", "Advm"]);
 
 /**
  * IS THERE ANYTHING ON THIS UNIT WORTH DISPELLING? — the one reading the whole family shares.

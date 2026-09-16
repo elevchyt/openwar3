@@ -2217,6 +2217,30 @@ constant of ours, and it is exactly what the spell is *for*: a hero below its ch
 already out of the fight's magic. It is applied at legality rather than as a penalty on the score,
 so the misclick cannot land there either.
 
+### The Destroyer: a statue spent on purpose, and a dispel that feeds
+
+`Rusp` Destroyer Form is on the undead's upgrade list (off the Slaughterhouse; `[Rusp]
+Requires=unp2,utom` makes it wait for the Black Citadel by itself), and `Aave` is a `morph` with a
+rule of its own (`destroyerWanted`), because the press is permanent and it spends the race's only
+healer plus 100/50/2:
+
+* a statue **about to be lost** (`NEAR_DEATH`, in a fight) is morphed, last statue or not —
+  "Morph your low health statues into destroyers and produce new ones to replace them"
+  (Liquipedia, Obsidian Statue); `always` rebuilds it, since it counts `uobs` alone;
+* otherwise only with **magic worth eating** in the fight (`DESTROYER_MAGIC` bodies Devour Magic
+  would pay for, or enemy casters) and **a second statue still healing**;
+* never past `DESTROYER_CAP` Destroyers — two against one opponent, four in a team game ("one or
+  two Destroyers are needed when playing alone, but in team matches three or four", Wowpedia).
+
+A statue already ORDERED into the form counts as a Destroyer: the body only changes when the
+order fires, and two statues read in one pass both morphed before this.
+
+`Advm` Devour Magic is in `DISPEL_CODES` (sim/spells.ts) and graded a `nuke`, so every difficulty
+presses it and `pickSpot` aims it as a dispel — both sides, `worthDispelling` per body, never over
+our own summon. Those are exactly the bodies that pay the Destroyer (enemy buffs, allied debuffs),
+and it is the unit's only mana. `Aabs` Absorb Mana is on `NEVER`: `targs1 = player` derives to a
+HEAL, and the Destroyer walked home to empty its own statue.
+
 ### Skill builds: a hero's ten levels are ROLLED, not fixed
 
 `PlusRaceTable.skills` carries a **list** of ten-level builds per hero and `pickHeroes` rolls one

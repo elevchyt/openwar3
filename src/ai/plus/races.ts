@@ -21,7 +21,7 @@ import {
   SLEEP, SORCERESS, SPELL_BREAKER, SPIRIT_WOLF, STARFALL, STRONGHOLD, SUMMON_PHOENIX, TAUREN,
   TAUREN_CHIEF, THORNS_AURA, THORNY_SHIELD, THUNDER_BOLT, THUNDER_CLAP, TOTEM, TOWN_HALL,
   TRANQUILITY, TREE_AGES, TREE_ETERNITY, TREE_LIFE, TRUESHOT, UNHOLY_AURA, UPG_ABOLISH,
-  UPG_ARMOR, UPG_BANSHEE, UPG_BOWS, UPG_BREEDING, UPG_CHIM_ACID, UPG_CLOUD, UPG_CR_ARMOR,
+  UPG_ARMOR, UPG_BANSHEE, UPG_BLK_SPHINX, UPG_BOWS, UPG_BREEDING, UPG_CHIM_ACID, UPG_CLOUD, UPG_CR_ARMOR,
   UPG_CR_ATTACK, UPG_DEFEND, UPG_DRUID_CLAW, UPG_DRUID_TALON, UPG_FIEND_WEB, UPG_GHOUL_FRENZY,
   UPG_GUN_RANGE,
   UPG_HAMMERS, UPG_HIDES, UPG_LEATHER, UPG_MASONRY, UPG_MELEE, UPG_MOON_ARMOR, UPG_NECROS,
@@ -700,6 +700,15 @@ const UNDEAD: PlusRaceTable = {
     { id: UPG_FIEND_WEB, from: CRYPT, ranks: 1, after: 10 },
     { id: UPG_NECROS, from: DAMNED_TEMPLE, ranks: 2, after: 20 },
     { id: UPG_BANSHEE, from: DAMNED_TEMPLE, ranks: 2, after: 24 },
+    // DESTROYER FORM, off the Slaughterhouse that already makes both statues (`always`). Without
+    // it the statue's third button is dead for the whole match — `[Aave] Requires=Rusp`, and
+    // `[Rusp] Requires=unp2,utom` (UndeadUpgradeFunc.txt), so the row waits for the Black
+    // Citadel by itself; an upgrade row never halts the ladder (plan.ts `upgrades`). When a
+    // statue is worth morphing is the caster's call (plus/casting.ts `destroyerWanted`), and the
+    // statue it spends is rebuilt by `always`, which counts `uobs` alone — Liquipedia's own
+    // advice: "Morph your low health statues into destroyers and produce new ones to replace
+    // them" (Obsidian Statue, Strategy). 75 gold / 150 lumber, 60 seconds.
+    { id: UPG_BLK_SPHINX, from: SLAUGHTERHOUSE, ranks: 1, after: 30 },
   ],
   strategies: [
     // DEATH KNIGHT, GHOULS AND FIENDS — the standard one. The Lich comes with tier 2, WEB comes

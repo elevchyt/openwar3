@@ -75,6 +75,14 @@ const ABILS = {
   // **`Cool1` 3** against a **`Dur1` 60**, `Area1` 1000, `Rng1` 128, `DataA` 1/2/3 images —
   // and `BuffID1` `BOmi`, which is NOT a state the caster carries: it is the effect an image
   // POPS with. So `buffFree` sees nothing here, which is why the rung needed its own gate.
+  // DEVOUR MAGIC, with its real row: `[Advm] targs1` "air,ground,ward,invu,vuln,tree" (no
+  // allegiance), `Area1` 200, `Rng1` 600, `Cool1` 7, no mana. A dispel that feeds the Destroyer.
+  Advm: { code: "Advm", target: "point", autocast: false, targetFlags: ["air", "ground", "ward", "invu", "vuln", "tree"], levelData: [lvl({ area: 200, castRange: 600, data: [50, 75, 0, 0, 160, 1] })] },
+  // ABSORB MANA, with its real row: `[Aabs] targs1` "player,vuln,invu", `Rng1` 900, free.
+  Aabs: { code: "Aabs", target: "unit", autocast: false, targetFlags: ["player", "vuln", "invu"], levelData: [lvl({ castRange: 900, data: [0, 99999] })] },
+  // DESTROYER FORM, with its real row: `[Aave]` no target, `Cast1` 1, `Dur1` 1.1, `DataA1` uobs,
+  // `UnitID1` ubsp. Its price and its research are `castUseError`'s, answered yes by the stub.
+  Aave: { code: "Aave", target: "none", autocast: false, targetFlags: [], levelData: [lvl({ castTime: 1, duration: 1.1, dataStr: ["uobs"], summon: "ubsp", data: [NaN, 31, 1, 0, 8] })] },
   AOmi: { code: "AOmi", target: "none", autocast: false, targetFlags: [], levelData: [lvl({ area: 1000, castRange: 128, cost: 100, duration: 60, heroDuration: 60, buffs: ["BOmi"], data: [1, 0, 2, 0.5] })] },
 };
 
@@ -146,7 +154,12 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
     def: (id) => ABILS[id],
     hostile: (u) => u.owner === 1,
     allied: (u) => u.owner === 2,
-    order: (cmd) => { orders.push(cmd); return true; },
+    order: (cmd) => {
+      orders.push(cmd);
+      // What `issueCast` leaves on the unit at once — the body only changes when it fires.
+      if (opts.pending && cmd.c === "cast") { const u = units.find((x) => x.id === cmd.unitId); if (u) u.pendingCast = { code: cmd.code, fired: false }; }
+      return true;
+    },
   }, profile, () => (rolls && rolls.length ? rolls.shift() : (opts.roll ?? 0)));
   // `opts.passes` is for the REACTION DELAY alone (`PlusProfile.castDelay`): the fight is first
   // seen on the pass that starts it, so a difficulty that waits two and a half seconds cannot
@@ -157,6 +170,7 @@ function cast(units, profile = PLUS_INSANE, opts = {}) {
     if (i > 0) orders.length = 0;
     c.pass(t0 + i * 10, { holdsPortal: () => false, home: { x: 0, y: 0 } });
   }
+  if (opts.all) return orders.filter((o) => o.c === "cast");
   return orders.find((o) => o.c === "cast") ?? null;
 }
 
@@ -618,6 +632,77 @@ const pack = () => [unit({ owner: 1, x: 200 }), unit({ owner: 1, x: 260 })];
 }
 {
   check("…and nothing is pressed with no fight at all", cast([caster({ abilId: "AOmi" })]), null);
+}
+
+// ==========================================================================================
+console.log("\n-- The Destroyer devours magic, and a statue becomes one when it should ---------");
+// ==========================================================================================
+{
+  const d = caster({ abilId: "Advm", isHero: false, typeId: "ubsp", mana: 0, maxMana: 400 });
+  const plain = [1, 2].map((i) => unit({ owner: 1, x: 250 + 30 * i }));
+  check("a Destroyer does not Devour a pack with no magic on it", cast([d, ...plain]), null);
+}
+{
+  const d = caster({ abilId: "Advm", isHero: false, typeId: "ubsp", mana: 0, maxMana: 400 });
+  const src = shaman();
+  const lusted = unit({ owner: 1, x: 300, buffs: [theirBuff(src)] });
+  check("…and Devours a Bloodlusted one", spotOf(cast([d, lusted, src])), { x: 300, y: 0 });
+  // …at every difficulty: it is the Destroyer's only mana, so it is not an Insane-only rung.
+  const d2 = caster({ abilId: "Advm", isHero: false, typeId: "ubsp", mana: 0, maxMana: 400 });
+  const src2 = shaman();
+  const lusted2 = unit({ owner: 1, x: 300, buffs: [theirBuff(src2)] });
+  check("…an EASY computer's Destroyer too", spotOf(cast([d2, lusted2, src2], PLUS_EASY, { passes: 2 })), { x: 300, y: 0 });
+}
+{
+  // A summon is worth devouring by itself — 160 damage is what the button does to one.
+  const d = caster({ abilId: "Advm", isHero: false, typeId: "ubsp" });
+  const elemental = unit({ owner: 1, x: 350, summonLeft: 40, isSummon: true });
+  check("…and an enemy summon", spotOf(cast([d, elemental])), { x: 350, y: 0 });
+}
+{
+  const d = caster({ abilId: "Advm", isHero: false, typeId: "ubsp" });
+  const src = shaman();
+  const lusted = unit({ owner: 1, x: 300, buffs: [theirBuff(src)] });
+  const ours = unit({ x: 320, summonLeft: 40, isSummon: true });
+  check("…but never over our own summon", cast([d, lusted, src, ours]), null);
+}
+
+{
+  // Absorb Mana is never pressed: `targs1 = player` reads as a friendly no-duration spell, a
+  // HEAL, and the Destroyer spent it emptying its own Necromancer.
+  const d = unit({ typeId: "ubsp", mana: 0, maxMana: 400, abilities: [{ id: "Aabs", code: "Aabs", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const necro = unit({ x: 200, hp: 300, maxHp: 400, mana: 300, maxMana: 300 });
+  check("…and never drains its own units with Absorb Mana", cast([d, necro, unit({ owner: 1, x: 300, maxMana: 0 }), unit({ owner: 1, x: 330, maxMana: 0 })]), null);
+}
+const statue = (o = {}) => caster({ abilId: "Aave", isHero: false, typeId: "uobs", maxHp: 500, hp: 500, ...o });
+const soldiers = (n, o = {}) => Array.from({ length: n }, (_, i) => unit({ owner: 1, x: 300 + 20 * i, maxMana: 0, mana: 0, ...o }));
+{
+  const s1 = statue();
+  const s2 = unit({ typeId: "uobs", x: -100 });
+  check("a healthy statue is not spent on a fight with no magic in it", cast([s1, s2, ...soldiers(4)]), null);
+  const casters = soldiers(3, { maxMana: 200, mana: 200 });
+  const cmd = cast([statue({ id: s1.id }), s2, ...casters]);
+  check("…but one facing three enemy casters, with a second statue healing, becomes a Destroyer", cmd && cmd.code, "Aave");
+}
+{
+  // Two healthy statues judged in ONE pass: the first is ordered into the form, and the second
+  // must count it as gone — or the army loses both its healers to one fight.
+  const casters = soldiers(3, { maxMana: 200, mana: 200 });
+  const pair = [statue(), statue({ x: -90 })];
+  const presses = cast([...pair, ...casters], PLUS_INSANE, { all: true, pending: true });
+  check("…and of two statues in one pass, only ONE becomes a Destroyer", presses.map((c) => c.code), ["Aave"]);
+}
+{
+  const casters = soldiers(3, { maxMana: 200, mana: 200 });
+  check("…never the LAST statue while it is healthy", cast([statue(), ...casters]), null);
+  const lost = cast([statue({ hp: 200 }), ...soldiers(2)]);
+  check("…but a statue about to be lost is morphed, last or not", lost && lost.code, "Aave");
+  check("…and not with no fight at all", cast([statue({ hp: 200 })]), null);
+}
+{
+  const casters = soldiers(3, { maxMana: 200, mana: 200 });
+  const two = [unit({ typeId: "ubsp", x: -200 }), unit({ typeId: "ubsp", x: -250 })];
+  check("…and not past two Destroyers against one opponent", cast([statue({ hp: 200 }), unit({ typeId: "uobs", x: -100 }), ...two, ...casters]), null);
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");

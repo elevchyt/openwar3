@@ -109,6 +109,10 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
     "ANrg", // Robo-Goblin
     "ANef", // Storm, Earth and Fire
     "Abur", // Burrow — a Crypt Fiend hiding to regenerate (see MORPH_WHEN)
+    // Destroyer Form. Named, because the derivation would grade it `summon` off its `UnitID1`
+    // (`ubsp`) — and a "summon" is pressed in every fight, which spends the race's only healer
+    // and 100/50/2 on the first scuffle it walks into. See `destroyerWanted`.
+    "Aave",
   ],
   disable: [
     "AHtb", "ANfb", // Storm Bolt / Fire Bolt
@@ -173,6 +177,14 @@ const ROLES: Partial<Record<Role, readonly string[]>> = {
     "ANso", // Soul Burn
     "AHdr", // Life Drain
     "AEsh", // Shadow Strike
+    // DEVOUR MAGIC — with the nukes for the reason Mana Burn and Impale are here: it is the
+    // button the unit exists to press, and a rung only Insane speaks (`debuff`, where Dispel
+    // Magic sits) would leave every other Destroyer standing with it. It is the Destroyer's ONLY
+    // mana — its regeneration is −3 a second (UnitBalance `ubsp`) and Orb of Annihilation costs
+    // 25 a shot — and 160 to every summon in the circle. It is aimed as a DISPEL, not as a nuke:
+    // `DISPEL_CODES` has it, so `pickSpot` draws the circle over both sides and counts only the
+    // bodies `worthDispelling` answers for, which are exactly the ones that pay (sim `Advm`).
+    "Advm",
     "ANab", // Acid Bomb
     "ANtm", // Transmute
   ],
@@ -380,6 +392,13 @@ const NEVER = new Set<string>([
   "Asds", // Kaboom!
   "Auco", // Unstable Concoction
   "Adtn", // Detonate — a Wisp is a worker, and the economy has already assigned it
+  // ABSORB MANA takes ALL of one of our own units' mana — `[Aabs] targs1 = player`, which the
+  // derivation reads as a friendly spell with no duration, i.e. a HEAL, and a heal is the second
+  // rung of the ladder: the Destroyer walked home to empty its own statue. It is a trade between
+  // two of our own bars and the answer is almost always no — "seldom used because of the
+  // Destroyer's high mana pool, which would result in draining Necromancers, Banshees and your
+  // Heroes of a considerable amount of mana" (Wowpedia, Destroyer). Its mana comes from Devour.
+  "Aabs",
   // 3. Buttons whose value is entirely in information or logistics, which this AI does not
   //    model: it scouts with a worker and it has one army in one place.
   "AOfs", // Far Sight
@@ -411,20 +430,54 @@ const NEVER = new Set<string>([
 
 /** Autocasts the AI must not simply switch on — the same two the classic caster holds back,
  *  for the same reasons (Defend costs 30% move speed and has a condition; Replenish is a job). */
-const HAND_AUTOCAST = new Set<string>(["Adef", "Ambt"]);
+const HAND_AUTOCAST = new Set<string>([
+  "Adef", "Ambt",
+  // …and the Obsidian Statue's two, which are one statue's CHOICE rather than two switches: a
+  // statue autocasts one of them at a time, and `ComputerPlusAi.statuePass` decides which (life
+  // on the first, mana on the second). Armed here as well, the two passes took turns flipping
+  // the statue between them every pass for as long as it lived.
+  "Arpl", "Arpm",
+]);
 
 /**
  * A morph's condition. The classic caster refuses this whole family; Computer+ is asked to use
  * it, so each one needs a rule of its own — a shape change is not a spell you spam.
  */
-const MORPH_WHEN: Record<string, "engage" | "regen"> = {
+const MORPH_WHEN: Record<string, "engage" | "regen" | "destroyer"> = {
   Abrf: "engage", // Bear Form: the Druid's fighting body. Morph when a fight starts and stay.
   AEme: "engage", // Metamorphosis
   ANcr: "engage", // Chemical Rage
   ANrg: "engage", // Robo-Goblin
   ANef: "engage", // Storm, Earth and Fire
   Abur: "regen", // Burrow: a hurt Crypt Fiend digs in to heal, and only with nothing near it
+  Aave: "destroyer", // Destroyer Form: a one-way, paid morph with rules of its own — see `destroyerWanted`
 };
+
+/**
+ * DESTROYER FORM'S RULES. A statue is the undead's only healer and the morph cannot be undone,
+ * so it is spent on one of the two occasions the guides name, and never on a whim:
+ *
+ *  · A STATUE ABOUT TO BE LOST. "Morph your low health statues into destroyers and produce new
+ *    ones to replace them" (Liquipedia, Obsidian Statue — Strategy): a statue is Mechanical, so
+ *    nothing but an Acolyte's repair ever heals it, and a Destroyer is a flyer with 850 life at
+ *    the same share. `NEAR_DEATH` in a fight.
+ *  · MAGIC WORTH EATING, with a statue to spare. The Destroyer is "an anti-caster unit designed
+ *    to fight spellcasters" (Liquipedia, Destroyer), and "you can morph your statue into a
+ *    Destroyer at any time, including in the middle of a fight, to have dispel at your
+ *    disposal" (Obsidian Statue). So: `DESTROYER_MAGIC` bodies in the fight that Devour Magic
+ *    would pay for, or enemy casters to stand among — and only while another statue keeps
+ *    healing, since "you generally want to have 2 statues".
+ *
+ * And not past `DESTROYER_CAP`: "one or two Destroyers are needed when playing alone, but in team
+ * matches three or four of them may prove useful" (Wowpedia, Destroyer). The statue spent is
+ * rebuilt by the plan (races.ts `always` counts `uobs` alone). The price and the research are
+ * `castUseError`'s, asked before this.
+ */
+const DESTROYER_MAGIC = 3;
+const DESTROYER_CAP = 2;
+const DESTROYER_CAP_TEAM = 4;
+/** Destroyer Form, by base code. */
+const DESTROYER_FORM = "Aave";
 
 /** How hurt something has to be before a heal is spent on it. */
 const HURT = 0.75;
@@ -810,7 +863,7 @@ export class PlusCaster {
       // the same door a player's click asks, so this can never be more permissive.
       if (this.view.world.castUseError(u.id, card.ab.code) !== null) continue;
       if (this.ctx.holds?.(u, card.ab.code)) continue;
-      if (!this.wants(u, card.def, card.role, foes, engaged)) continue;
+      if (!this.wants(u, card.def, card.role, friends, foes, engaged)) continue;
       if (this.aim(u, card.ab.code, card.def, card.lvl, card.role, friends, foes)) return true;
     }
     return false;
@@ -862,7 +915,7 @@ export class PlusCaster {
   }
 
   /** Does the caster want this ability at all, before anything is aimed? */
-  private wants(u: SimUnit, def: AbilityDef, role: Role, foes: SimUnit[], engaged: boolean): boolean {
+  private wants(u: SimUnit, def: AbilityDef, role: Role, friends: SimUnit[], foes: SimUnit[], engaged: boolean): boolean {
     switch (role) {
       case "panic":
         // WIND WALK'S EXIT has already asked the two questions that decide it — the hit points
@@ -875,6 +928,7 @@ export class PlusCaster {
         // Both are here: hit right now, or hurt badly enough to leave.
         return this.underAttack(u, foes) || u.hp / Math.max(1, u.maxHp) <= NEAR_DEATH;
       case "morph":
+        if (MORPH_WHEN[def.code] === "destroyer") return this.destroyerWanted(u, def, friends, foes, engaged);
         return this.morphWanted(u, def, foes, engaged);
       case "heal":
         // A WARD ALREADY STANDING IS THE HEAL — see `summonStanding`. `[Ahwd] Cool1` is ZERO,
@@ -935,6 +989,52 @@ export class PlusCaster {
     }
     // A fighting form is entered once and kept: it is the body this unit fights in.
     return engaged && !u.altModel;
+  }
+
+  /**
+   * Is this the moment to spend an Obsidian Statue on a Destroyer? See `DESTROYER_MAGIC` for the
+   * two occasions and where each is quoted from.
+   *
+   * Asked only of the statue half: a Destroyer carries `Aave` too, and `castUseError` has already
+   * refused it there (a permanent form has no way back), but the check here is cheaper to read.
+   */
+  private destroyerWanted(u: SimUnit, def: AbilityDef, friends: SimUnit[], foes: SimUnit[], engaged: boolean): boolean {
+    if (!engaged) return false;
+    const lvl = def.levelData[0];
+    const statue = lvl?.dataStr[0] ?? "";
+    const destroyer = lvl?.summon ?? "";
+    if (!statue || u.typeId !== statue) return false;
+    let statues = 0;
+    let destroyers = 0;
+    const opponents = new Set<number>();
+    for (const o of this.view.world.units.values()) {
+      if (o.hp <= 0) continue;
+      if (o.owner === this.view.player) {
+        // A statue already ORDERED into the form is a Destroyer for this count. Two statues read
+        // in the same pass both saw "a second statue is still healing" and both morphed, because
+        // the body only changes when the order fires — the army lost both its healers at once.
+        const going = o.pendingCast?.code === DESTROYER_FORM && !o.pendingCast.fired;
+        if (o.typeId === statue && !going) statues++;
+        else if (o.typeId === destroyer || going) destroyers++;
+      } else if (!o.isCreep && o.owner >= 0 && o.owner < MELEE.MAX_PLAYERS && this.view.hostile(o)) {
+        opponents.add(o.owner);
+      }
+    }
+    if (destroyers >= (opponents.size > 1 ? DESTROYER_CAP_TEAM : DESTROYER_CAP)) return false;
+    // About to be lost: a Destroyer it becomes, whatever else is true.
+    if (u.hp / Math.max(1, u.maxHp) <= NEAR_DEATH) return true;
+    // Magic worth eating — and a second statue still pouring life into the army.
+    if (statues < 2) return false;
+    const units = this.view.world.units;
+    let magic = 0;
+    for (const f of foes) {
+      if (f.building || f.hp <= 0 || !near(u, f, ENGAGE_LOOK)) continue;
+      if (worthDispelling(f, units, false) || (!f.isHero && !f.isCreep && f.maxMana > 0)) magic++;
+    }
+    for (const f of friends) {
+      if (f.hp > 0 && !f.building && near(u, f, ENGAGE_LOOK) && worthDispelling(f, units, true)) magic++;
+    }
+    return magic >= DESTROYER_MAGIC;
   }
 
   /** Point the ability at something and issue it. */
