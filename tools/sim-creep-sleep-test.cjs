@@ -200,7 +200,7 @@ console.log("\nit does not doze off in the middle of a fight");
   world.issueMove(gry.id, gry.x + 3000, gry.y); // the flyer leaves
   run(world, 1.5);
   check("…still awake right after the last blow", creep.asleep, false);
-  run(world, 6); // MiscGame GuardReturnTime (5) of calm
+  run(world, 4); // CREEP_SLEEP_CALM (3 s) of calm
   check("…and back asleep once the camp has been quiet a while", creep.asleep && mate.asleep, true);
 }
 

@@ -2887,6 +2887,9 @@ const HEX_TARGET_SOUND_AIR = `${POLYMORPH_DIR}PolymorphTargetAir1.wav`;
 const HEX_DONE_ART = `${POLYMORPH_DIR}PolyMorphDoneGround.mdx`;
 const HEX_DONE_SOUND = `${POLYMORPH_DIR}PolymorphDone.wav`;
 const GUARD_RETURN_TIME = MISC_GAME.GuardReturnTime; // also the "can't get home, resume fighting" window
+// Seconds a camp must go unstruck before a creep may doze off (campQuiet). OURS, not the game's —
+// no file states a sleep delay; the maintainer's value, short so a camp still sleeps quickly.
+const CREEP_SLEEP_CALM = 3;
 const CREEP_CALL_FOR_HELP = MISC_GAME.CreepCallForHelp; // camp cohesion: one aggros → the whole camp wakes/joins
 const CALL_FOR_HELP = MISC_GAME.CallForHelp; // a PLAYER's attacked unit or building calls its owner's idle units in — see callForHelp
 // "Radius of creep notification when a new building gets placed" — Units\MiscData.txt's
@@ -17240,13 +17243,12 @@ export class SimWorld {
    * Riflemen still shooting its camp-mates. So the camp is quiet only when
    *   • no camp-mate is on an attack or a cast (whatever its enemy — `creepAggroed`),
    *   • nothing hostile has its attack on the camp (`fightsCamp`), and
-   *   • no member of it has been struck for GuardReturnTime — MiscGame's own measure of how
-   *     long a creep must go UNATTACKED before it gives up a fight and heads home, used here
-   *     for the same question (the reuse is ours; no file states a sleep delay).
+   *   • no member of it has been struck for CREEP_SLEEP_CALM (3 s) — OURS: no file states a
+   *     sleep delay, and the maintainer set it short so a camp still dozes off quickly.
    * A camp whose fight has really ended still dozes off on the very next tick of that calm.
    */
   private campQuiet(u: SimUnit): boolean {
-    const calm = this.elapsed - GUARD_RETURN_TIME;
+    const calm = this.elapsed - CREEP_SLEEP_CALM;
     if (u.struckAt > calm) return false;
     for (const c of this.units.values()) {
       if (c.hp <= 0) continue;
