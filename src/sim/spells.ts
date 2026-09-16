@@ -1597,11 +1597,14 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // that never takes effect would be guessing. A custom map that raises the rate would need
   // it, and that is the point at which to work out what it actually caps.
   //
+  // The body is RESERVED rather than spent (`eat`): it lies there while the Ghoul eats and is
+  // gone when the meal ends (SimWorld.tickCorpses).
+  //
   // The press is refused with no body in reach (corpseRefusal, sim/corpses.ts), so this claim
   // only comes up empty if the body went in the wind-up; the channel then ends at once.
   Acan: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    if (!api.claimCorpses(caster, def, ctx.x || caster.x, ctx.y || caster.y, corpseReach(def.code, lvl), 1, corpseNeed(def.code)).length) return;
+    if (!api.claimCorpses(caster, def, ctx.x || caster.x, ctx.y || caster.y, corpseReach(def.code, lvl), 1, { ...corpseNeed(def.code), eat: true }).length) return;
     api.applyBuff(caster, {
       kind: "hot", group: CANNIBALIZE_GROUP, timeLeft: dur(lvl, caster) || 20,
       sourceId: caster.id, value: d(lvl, 0, 16), untilHealed: true, ...fx(def),

@@ -455,6 +455,9 @@ export interface CorpseSnapshot {
    *  so a client has to know which bodies are aboard to draw them off the ground — and to
    *  answer the same "is there a corpse here?" question the host does. */
   heldBy: number;
+  /** The unit eating it (Cannibalize; 0 = nobody). Host state like `heldBy`: a client asks the
+   *  same "is there a usable corpse here?" question, and a meal is not one. */
+  eatenBy: number;
 }
 
 /** One in-flight missile, as a client that did not simulate it draws one: where it is, what
@@ -918,7 +921,7 @@ export function snapshotFor(
   const corpses: CorpseSnapshot[] = [];
   for (const c of world.corpses?.values() ?? []) {
     if (viewer.fogBlocksAt(c)) continue;
-    corpses.push({ id: c.id, deadId: c.deadId, unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner: c.owner, isHero: c.isHero, mechanical: c.mechanical, decayLeft: c.decayLeft, raised: c.raised, heldBy: c.heldBy });
+    corpses.push({ id: c.id, deadId: c.deadId, unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner: c.owner, isHero: c.isHero, mechanical: c.mechanical, decayLeft: c.decayLeft, raised: c.raised, heldBy: c.heldBy, eatenBy: c.eatenBy });
   }
 
   // Copied, not referenced: the payload must be a frozen reading, not a live handle the

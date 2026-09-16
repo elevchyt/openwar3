@@ -587,6 +587,9 @@ export interface SimCorpse {
    *  Meat Wagon does this; its cargo stays usable where it stands. */
   heldBy: number;
   raised: boolean; // consumed by a spell (renderer hides it immediately)
+  /** The unit eating it (Cannibalize), 0 for nobody — see CorpseKind.eatenBy. The body stays
+   *  drawn until the meal ends, and tickCorpses spends it then. */
+  eatenBy: number;
 }
 
 /** An item held in a hero's inventory (one of 6 slots). Its stat bonus / active
@@ -619,6 +622,9 @@ export interface CorpseClaim extends CorpseNeed {
   order?: CorpseOrder;
   /** Load into the caster's cargo rather than consume (the Meat Wagon, and only it). */
   hold?: boolean;
+  /** Reserve it as the caster's MEAL rather than consume it now (Cannibalize): the body stays
+   *  where it is until the meal ends — see SimCorpse.eatenBy. */
+  eat?: boolean;
 }
 
 export interface ClaimedCorpse {
@@ -13014,8 +13020,26 @@ export class SimWorld {
    */
   private corpseRefusal(u: SimUnit, def: AbilityDef, lvl: AbilityLevel | undefined, x: number, y: number): string | null {
     if (!lvl || !spawnsFromCorpse(def.code)) return null;
+    if (def.code === "Acan") return this.mealFor(u, def, lvl) ? null : corpseMissingError(def.targetFlags);
     if (this.corpsesFor(u, def, x, y, corpseReach(def.code, lvl), corpseNeed(def.code)).length > 0) return null;
     return corpseMissingError(def.targetFlags);
+  }
+
+  /**
+   * The body a CANNIBALIZE press walks to: the nearest one the unit can SEE work at.
+   *
+   * `Rng1` = 50 is where it EATS, not how far it looks — a Ghoul told to cannibalize beside a
+   * battlefield trots over to the nearest body rather than refusing because none is lying
+   * under its feet. How far it looks is NOT in the row (`Area1` is blank on `Acan` and `Acn2`)
+   * and no source we have states it, so this is OURS: the caster's acquisition range, the same
+   * "how far does a caster look for work" answer the autocasts use (autocastSearchRange).
+   * The Ghoul's `acquire` is 600. Ordered nearest-first by corpsesFor, a wagon's cargo at the
+   * wagon's own position.
+   */
+  private mealFor(u: SimUnit, def: AbilityDef, lvl: AbilityLevel): SimCorpse | null {
+    const reach = corpseReach(def.code, lvl);
+    const [body] = this.corpsesFor(u, def, u.x, u.y, this.autocastSearchRange(u, reach) + u.radius, corpseNeed(def.code));
+    return body ?? null;
   }
 
   /**
@@ -13186,14 +13210,18 @@ export class SimWorld {
     u.inCombat = false;
     u.targetId = null;
     u.order = "cast";
+    // Cannibalize aims its no-target press at a BODY (mealFor) and walks there like a point
+    // cast: to within the `Rng1` its handler eats from, then the channel faces the meal.
+    const meal = code === "Acan" ? this.mealFor(u, def, lvl) : null;
+    const [mealX, mealY] = meal ? this.corpseAt(meal) : [u.x, u.y];
     u.pendingCast = {
       code,
       abilityId: ab.id,
       rank: ab.level,
       targetId: def.target === "unit" ? targetId : 0,
-      x: def.target === "point" ? x : (t?.x ?? u.x),
-      y: def.target === "point" ? y : (t?.y ?? u.y),
-      range: def.target === "none" ? 0 : lvl.castRange + this.aimedBlockRadius(code, u, x, y),
+      x: def.target === "point" ? x : meal ? mealX : (t?.x ?? u.x),
+      y: def.target === "point" ? y : meal ? mealY : (t?.y ?? u.y),
+      range: meal ? corpseReach(code, lvl) : def.target === "none" ? 0 : lvl.castRange + this.aimedBlockRadius(code, u, x, y),
       castLeft: -1,
       started: false,
       committed: false,
@@ -15356,12 +15384,25 @@ export class SimWorld {
       decayLeft: CORPSE_TOTAL_TIME,
       raised: false,
       heldBy: 0,
+      eatenBy: 0,
     });
     this.nextCorpseId++;
   }
 
   private tickCorpses(dt: number): void {
     for (const c of this.corpses.values()) {
+      if (c.eatenBy) {
+        // A MEAL lasts exactly as long as the eating does: the moment the eater's buff is gone
+        // — finished, full, walked off, stunned, dead — the body is spent, as the Warcraft Wiki
+        // Ghoul page describes. It does not rot away while it is being eaten either; a body with
+        // seconds left on its clock would otherwise vanish out from under the Ghoul mid-channel.
+        const eater = this.units.get(c.eatenBy);
+        if (eater && eater.hp > 0 && eater.buffs.some((b) => b.group === CANNIBALIZE_GROUP)) continue;
+        c.eatenBy = 0;
+        c.raised = true; // spent; the renderer drops the model
+        c.heldBy = 0; // …and leaves any wagon it was eaten out of (see claimCorpses)
+        continue;
+      }
       c.decayLeft -= dt;
       if (c.decayLeft <= 0) this.corpses.delete(c.id);
     }
@@ -15428,6 +15469,8 @@ export class SimWorld {
       const [cx, cy] = this.corpseAt(c);
       if (o.hold) {
         c.heldBy = caster.id; // loaded, not consumed — the renderer takes it off the ground
+      } else if (o.eat) {
+        c.eatenBy = caster.id; // a meal: still lying there, but nobody else's (tickCorpses spends it)
       } else {
         c.raised = true; // spent; the renderer drops the model
         // …and it leaves the hold it was in, if it was in one. A Necromancer raising out of a
@@ -15496,7 +15539,7 @@ export class SimWorld {
     this.corpses.set(this.nextCorpseId, {
       id: this.nextCorpseId, deadId: 0, unitId, x, y, facing: 0, owner,
       isHero: false, mechanical: !!def?.classification.includes("mechanical"),
-      decayLeft: CORPSE_TOTAL_TIME, raised: false, heldBy,
+      decayLeft: CORPSE_TOTAL_TIME, raised: false, heldBy, eatenBy: 0,
     });
     this.nextCorpseId++;
   }

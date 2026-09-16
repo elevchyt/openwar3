@@ -55,6 +55,14 @@ export interface CorpseKind {
    *
    *  The one thing it does forbid is being loaded a second time — see `forLoad`. */
   heldBy: number;
+  /** The unit EATING this body (0 = nobody). A Cannibalize meal is not spent at the first
+   *  bite: the body stays on the ground under the Ghoul for as long as it eats, and is gone
+   *  when the meal ends however it ends. Warcraft Wiki (Ghoul): "Since the corpse is being
+   *  devoured by the ghoul, it cannot be used for reanimation or the summoning of skeletons.
+   *  If the ghoul dies or is forcibly moved while cannibalizing the corpse, then it
+   *  automatically disappears." So while it is being eaten nobody else may have it. Optional
+   *  so a record from before the field existed reads as uneaten. */
+  eatenBy?: number;
 }
 
 /** What a claim intends to do with the bodies it takes. */
@@ -96,6 +104,7 @@ export function corpseUseError(
   need: CorpseNeed = {},
 ): string | null {
   if (c.raised) return "spent";
+  if (c.eatenBy) return "eaten"; // somebody's meal — see CorpseKind.eatenBy
   if (c.isHero) return "hero";
   if (c.mechanical) return "mechanical";
   if (need.forLoad && c.heldBy) return "held"; // already in a wagon — one cargo at a time

@@ -92,6 +92,7 @@ function pool(corpses, owned = {}) {
       const taken = live.slice(0, max);
       for (const k of taken) {
         if (o.hold) k.heldBy = c.id; // loaded — borrowed, not used up
+        else if (o.eat) k.eatenBy = c.id; // a meal — reserved, spent when the eating stops
         else { k.raised = true; k.heldBy = 0; } // spent — and it leaves whatever hold it was in
       }
       return taken.map((k) => ({ x: k.x, y: k.y, facing: k.facing || 0, unitId: k.unitId, owner: k.owner }));
@@ -189,7 +190,8 @@ console.log("shape C — the body spent on something that is not a unit");
   const { api, log } = pool([body]);
   SPELL_HANDLERS.Acan(api, caster, def("Acan", { data: [10, 800], duration: 33, castRange: 50 }), 1, { targetId: 0, x: 0, y: 0 });
   eq("Cannibalize eats it for hit points", log.buffs, [{ kind: "hot", value: 10, timeLeft: 33 }]);
-  ok("…and the body is spent", body.raised);
+  ok("…and the body is the Ghoul's meal, still lying there", body.eatenBy === caster.id && !body.raised);
+  eq("…which nobody else may have", corpseUseError(body, TARGS.Arai, "ally"), "eaten");
 }
 {
   const { api, log } = pool([]);
