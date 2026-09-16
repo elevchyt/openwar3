@@ -181,6 +181,16 @@ interface CastRule {
    *  damages) or something wearing a timed buff. Dispel Magic's quorum is otherwise "any two
    *  enemies", which is every fight. */
   dispellable?: boolean;
+  /** A unit-target cluster counted the way Lightning Shield's quorum is: "TOUCHING" — edge to
+   *  edge, as the shield's own burn measures (SimWorld.unitsInAreaInternal) — and with
+   *  BUILDINGS in the count, because warcraft3.info 176 is explicit that the Ancient of War is
+   *  "included in said unit count". The building is one of the bodies the target is standing
+   *  against, not one the shield will hurt (tickLightningShields spares structures). */
+  touching?: boolean;
+  /** Never aim this where the caster's OWN side stands inside `Area1` of the target — itself
+   *  included. The spell hurts whoever is beside its wearer, whoever they belong to, and a
+   *  caster that shielded a unit tangled with its own camp would be burning its camp. */
+  spares?: boolean;
 }
 
 /**
@@ -265,12 +275,21 @@ const CAST_RULES: Record<string, CastRule> = {
   AEer: { when: "spam" },
   // Lightning Shield — absent from the thread, and a buff aimed at an ENEMY (it burns whoever
   // stands beside the wearer), so it wants the wearer in a crowd. warcraft3.info 176, of the
-  // Renegade Wizard: "it will cast Lightning Shield on any unit that is touching at least two
-  // of your other units" — three bodies inside the shield's own `Area1`, the wearer included,
-  // and the whole reason night elves plant an Archer between the Ancient of War and a Wisp
-  // before pulling. A unit-target cluster: `pickTarget` counts the catchment around each
-  // candidate.
-  Alsh: { when: "cluster", count: 3 },
+  // Renegade Wizard: "When the Renegade Wizard is attacked from afar, it will cast Lightning
+  // Shield on any unit that is touching at least two of your other units" — three bodies
+  // inside the shield's own `Area1`, the wearer included — and "As Ancient of War (AoW) is
+  // included in said unit count, Night Elf oftentimes trigger the effect by placing an Archer
+  // between the AoW and a Wisp before attacking the Wizard with the Archer" (`touching`).
+  //
+  // THE CREEP TRICK is the other half: the wizard never shields a unit its own side is beside
+  // (`spares`, the caster itself included), because the shield would burn them. That is why it
+  // has to be "attacked from afar", why the same article says it "can be procced by melee
+  // units alone, but it requires a bit of finesse" (a melee attacker stands against the wizard,
+  // so the wizard is inside its own circle), and why the shielded unit is then walked INTO the
+  // camp — and the shield keeps the wizard's name on it, so a creep it finishes pays no
+  // experience ("that won't grant you any experience due to Lightning Shield having been cast
+  // by Renegade Wizard", ibid.; see SimBuff.sourceOwner).
+  Alsh: { when: "cluster", count: 3, touching: true, spares: true },
   // Transmute — absent from the thread. It kills a non-hero for gold, so a live enemy in
   // range is the whole condition.
   ANtm: { when: "spam", prefer: "nonhero" },
@@ -619,6 +638,7 @@ export class AiCaster {
       // A unit-target CLUSTER (Lightning Shield): the circle is drawn around the candidate,
       // and it has to catch the quorum — the candidate itself included, at distance zero.
       if (rule.when === "cluster" && this.catchment(u, t.x, t.y, def, lvl, rule, pool, friendly).length < (rule.count ?? CLUSTER)) continue;
+      if (rule.spares && this.burnsOwn(t, lvl, own)) continue;
       if (this.view.world.castError(u.id, code, t.id) !== null) continue;
       if (this.view.refuses?.(u, code, t)) continue;
       const s = this.score(u, t, rule.prefer);
@@ -730,11 +750,23 @@ export class AiCaster {
     const area = lvl.area || MIN_LOOK;
     const out: SimUnit[] = [];
     for (const t of pool) {
-      if (Math.hypot(t.x - x, t.y - y) > area) continue;
+      if (Math.hypot(t.x - x, t.y - y) - (rule?.touching ? t.radius : 0) > area) continue;
       if (!this.counts(u, t, def, rule, friendly)) continue;
       out.push(t);
     }
     return out;
+  }
+
+  /** Would a shield on `t` burn the caster's own side? Anything of ours standing where the
+   *  shield's burn reaches — measured as the burn measures it (edge to edge, structures and
+   *  the wearer spared, see SimWorld.tickLightningShields), and the caster counts. */
+  private burnsOwn(t: SimUnit, lvl: AbilityLevel, own: SimUnit[]): boolean {
+    const area = lvl.area || MIN_LOOK;
+    for (const o of own) {
+      if (o === t || o.building || o.invulnerable || o.hidden) continue;
+      if (Math.hypot(o.x - t.x, o.y - t.y) - o.radius <= area) return true;
+    }
+    return false;
   }
 
   /** …and who a wave aimed through `at` would sweep: the corridor from the caster, as long and
@@ -765,6 +797,9 @@ export class AiCaster {
   private counts(u: SimUnit, t: SimUnit, def: AbilityDef, rule: CastRule | undefined, friendly: boolean): boolean {
     if (t === u && !friendly) return false;
     if (t.invulnerable) return false;
+    // A structure the target is TOUCHING is counted without asking `targs1`: Lightning Shield
+    // says "ground", which no building is, and the Ancient of War still counts (see `touching`).
+    if (t.building && rule?.touching && !friendly) return true;
     if (!this.view.world.targsAdmit(t, def.targetFlags)) return false;
     if (friendly) {
       // A friendly field is worth casting for units it will actually change: hurt ones for a

@@ -307,7 +307,12 @@ console.log("\nLightning Shield wants a crowd");
   const w2 = world();
   const caster2 = new CreepCaster(w2, ABILITIES);
   const wiz2 = creep(w2, "nwzg", 1000, 1000);
-  const trio = [footman(w2, 1500, 970), footman(w2, 1500, 1000), footman(w2, 1500, 1030)];
+  // …"when the Renegade Wizard is attacked from AFAR": a Rifleman shooting from the middle of
+  // the three, the Footmen holding. Three Footmen WALKING up to it would end touching the
+  // wizard, and it never shields a unit whose neighbour is its own side (casting.ts `spares`).
+  const trio = [footman(w2, 1400, 970), spawn(w2, "hrif", 1400, 1000, 0, 0), footman(w2, 1400, 1030)];
+  w2.issueHold(trio[0].id);
+  w2.issueHold(trio[2].id);
   w2.issueAttack(trio[1].id, wiz2.id, false, true);
   runKeeping(w2, caster2, 6, immortal(wiz2, ...trio));
   check("one touching two others is", trio.some((x) => buffIdOn(x, "Blsh")), true);

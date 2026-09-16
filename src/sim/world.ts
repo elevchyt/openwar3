@@ -11903,17 +11903,43 @@ export class SimWorld {
     return false;
   }
 
+  /**
+   * The casters of the Lightning Shields still burning, KEPT past their deaths. A shield
+   * outlives whoever cast it, and what it kills is still that caster's kill: the experience
+   * and the bounty go to whoever OWNS the ability. That is the whole of the creep trick's
+   * warning — "that won't grant you any experience due to Lightning Shield having been cast by
+   * Renegade Wizard and not by one of your own units" (warcraft3.info 176) — and it has to
+   * survive the Wizard dying, which is the usual order a camp comes apart in. A dead caster
+   * is gone from `units`, and an unknown killer's kill is paid to every hero standing near
+   * the body (awardKillXp), so without this the orphaned shield fed the camp's experience to
+   * whoever was closest — and a Shaman's owner lost what his dead Shaman's shield earned.
+   */
+  private shieldCasters = new Map<number, SimUnit>();
+
+  /** Who `killerId` is, for crediting a kill: the live unit, else a Lightning Shield's dead
+   *  caster (`shieldCasters`). */
+  private killerUnit(killerId: number): SimUnit | undefined {
+    return this.units.get(killerId) ?? this.shieldCasters.get(killerId);
+  }
+
   /** Lightning Shield (Alsh): the shielded unit itself is unharmed, but every OTHER unit
    *  within the buff's radius takes `value` dps (spell damage, bypasses armor) — friend or
    *  foe, which is why it's cast on an enemy (or an expendable own unit). */
   private tickLightningShields(dt: number): void {
     // Snapshot holders first — a shield can kill units (including other holders) mid-pass.
     const shields = [];
+    const casters = new Map<number, SimUnit>();
     for (const u of this.units.values()) {
       for (const b of u.buffs) {
-        if (b.kind === "shield" && b.value > 0) shields.push({ holder: u, dps: b.value, radius: b.value2 || 160, killerId: b.sourceId });
+        if (b.kind !== "shield" || b.value <= 0) continue;
+        shields.push({ holder: u, dps: b.value, radius: b.value2 || 160, killerId: b.sourceId });
+        const caster = this.units.get(b.sourceId) ?? this.shieldCasters.get(b.sourceId);
+        if (caster) casters.set(caster.id, caster);
       }
     }
+    // Remember every shield's caster for as long as the shield is up, dead or alive — rebuilt
+    // each pass, so a caster is let go with its last shield (see `shieldCasters`).
+    this.shieldCasters = casters;
     for (const s of shields) {
       if (s.holder.hp <= 0) continue;
       for (const t of this.unitsInAreaInternal(s.holder.x, s.holder.y, s.radius)) {
@@ -14291,7 +14317,7 @@ export class SimWorld {
   /** Award XP to the killer's heroes for a kill (Liquipedia sharing rules). */
   private awardKillXp(victim: SimUnit, killerId: number): void {
     if (victim.building || !killerId) return; // structures / unattributed deaths grant no XP
-    const killer = this.units.get(killerId);
+    const killer = this.killerUnit(killerId);
     // Only an ENEMY kill grants XP: killing your own or an allied unit (same team),
     // or a neutral-passive critter/shop, awards nothing (issue #21). Without this the
     // even-share loop finds no eligible hero and the global fallback below would still
@@ -14369,7 +14395,7 @@ export class SimWorld {
   private awardBounty(victim: SimUnit, killerId: number): void {
     // Neutral Hostile unless a script switched the flag for the owner (bountyFlags).
     if (!this.givesBounty(victim.owner, victim.team)) return;
-    const killer = killerId ? this.units.get(killerId) : undefined;
+    const killer = killerId ? this.killerUnit(killerId) : undefined;
     if (!killer || !this.hostile(killer, victim)) return; // unattributed, or your own doing
     const def = this.unitReg?.get(victim.typeId);
     if (!def) return;

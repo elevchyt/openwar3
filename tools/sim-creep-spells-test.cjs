@@ -623,5 +623,101 @@ console.log("\nthe net is picked per target: the ground model, the air model, an
   check("…on its chest, where the row says", airNet && airNet.fx[0].attach.join(","), "chest,mount");
 }
 
+console.log("\nthe Renegade Wizard's Lightning Shield: the creep trick");
+{
+  // warcraft3.info 176: "When the Renegade Wizard is attacked from afar, it will cast
+  // Lightning Shield on any unit that is touching at least two of your other units" — and
+  // never on one its own side is beside, since the shield would burn them (casting.ts
+  // `Alsh`: `touching`, `spares`). `[ACls]`: Area1 160, Rng1 600, Cool1 8.
+  const setUp = (atX) => {
+    const w = world();
+    const caster = new CreepCaster(w, ABILITIES);
+    const wiz = creep(w, "nwzg", 1000, 1000);
+    const rifle = spawn(w, "hrif", atX, 1000, 0, 0); // the bait, and the one shooting
+    // 120 either side: each Footman touches the Rifleman (inside Area1 160, edge to edge) and
+    // not the other Footman, so the Rifleman is the one body touching two others.
+    const left = footman(w, atX, 1120);
+    const right = footman(w, atX, 880);
+    for (const f of [left, right]) w.issueHold(f.id);
+    const mine = [rifle, left, right];
+    const runKeeping = (secs) => { for (let i = 0; i < secs * 20; i++) { caster.tick(0.05); w.tick(0.05); for (const u of mine) u.hp = u.maxHp; wiz.hp = wiz.maxHp; } };
+    w.issueAttack(rifle.id, wiz.id);
+    return { w, wiz, mine, runKeeping };
+  };
+  const shielded = (mine) => mine.filter((u) => buffOn(u, "shield"));
+
+  const far = setUp(1380); // shooting from afar: the wizard is 380 from the Rifleman
+  check("the Renegade Wizard carries Lightning Shield (`ACls`, code Alsh)", far.wiz.abilities.some((a) => a.id === "ACls" && a.code === "Alsh"), true);
+  far.runKeeping(6);
+  check("attacked from afar, it shields one of the three touching units", shielded(far.mine).length, 1);
+  check("…the one in the MIDDLE, the only one touching two others", buffOn(far.mine[0], "shield"), true);
+  check("…and the shield is the wizard's", far.mine[0].buffs.some((b) => b.kind === "shield" && b.sourceId === far.wiz.id), true);
+
+  // The same three standing against the wizard: the shield would burn the wizard, so no cast.
+  const close = setUp(1090);
+  close.runKeeping(6);
+  check("the same three pressed up against the wizard get no shield", shielded(close.mine).length, 0);
+
+  // …nor with a camp-mate beside the bait.
+  const mate = setUp(1380);
+  const gnoll = creep(mate.w, "ngno", 1460, 1000);
+  mate.w.issueHold(gnoll.id);
+  for (let i = 0; i < 6 * 20; i++) { gnoll.hp = gnoll.maxHp; mate.runKeeping(0.05); }
+  check("a camp-mate touching the three keeps the shield off them", shielded(mate.mine).length, 0);
+
+  // An Ancient of War is "included in said unit count": an Archer between it and a Wisp.
+  const aow = (() => {
+    const w = world();
+    const caster = new CreepCaster(w, ABILITIES);
+    const wiz = creep(w, "nwzg", 1000, 1000);
+    const archer = spawn(w, "earc", 1450, 1000, 0, 0);
+    const wisp = spawn(w, "ewsp", 1450, 880, 0, 0);
+    const ancient = spawn(w, "eaom", 1450, 1180, 0, 0);
+    ancient.building = { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, producesUnits: false };
+    ancient.radius = 60; // edge 120 from the Archer; the Wisp is 120 the other way
+    w.issueHold(wisp.id);
+    w.issueAttack(archer.id, wiz.id);
+    for (let i = 0; i < 6 * 20; i++) { caster.tick(0.05); w.tick(0.05); archer.hp = archer.maxHp; wisp.hp = wisp.maxHp; wiz.hp = wiz.maxHp; }
+    return { archer, wisp };
+  })();
+  check("an Archer between an Ancient of War and a Wisp is shielded", buffOn(aow.archer, "shield"), true);
+  check("…and the Wisp, touching only the Archer, is not", buffOn(aow.wisp, "shield"), false);
+}
+
+console.log("\na shield's kill belongs to whoever OWNS the shield — even once the caster is dead");
+{
+  // "be very careful not to last-hit units with the effect as that won't grant you any
+  // experience due to Lightning Shield having been cast by Renegade Wizard and not by one of
+  // your own units" (warcraft3.info 176). A player's own Shaman is the other side of that.
+  const trial = (casterType, casterOwner, killCaster) => {
+    const w = world();
+    const src = casterOwner < 0 ? creep(w, casterType, 400, 400) : spawn(w, casterType, 400, 400, casterOwner, casterOwner);
+    const wearer = footman(w, 1000, 1000);
+    w.issueHold(wearer.id);
+    const hero = spawn(w, "Hpal", 1100, 900, 0, 0);
+    hero.isHero = true;
+    w.issueHold(hero.id);
+    const victim = creep(w, "ngno", 1060, 1000);
+    w.issueHold(victim.id);
+    victim.hp = 30;
+    w.spellApi.applyBuff(wearer, { kind: "shield", group: "lightningshield", timeLeft: 20, sourceId: src.id, value: 20, value2: 160 });
+    w.tick(0.05); // the shield is up while its caster lives…
+    if (killCaster) w.spellApi.spellDamage(src, 100000, 0); // …and then the caster falls
+    const before = hero.xp;
+    run(w, null, 3);
+    return { dead: victim.hp <= 0 && !w.units.has(victim.id), gained: hero.xp - before };
+  };
+  const wiz = trial("nwzg", -1, false);
+  check("the Renegade Wizard's shield kills the creep", wiz.dead, true);
+  check("…and the hero beside it banks NO experience", wiz.gained, 0);
+  const wizDead = trial("nwzg", -1, true);
+  check("with the wizard already dead the shield still kills", wizDead.dead, true);
+  check("…and still pays no experience", wizDead.gained, 0);
+  const shaman = trial("oshm", 0, false);
+  check("a player's own Shaman's shield kill DOES pay the hero", shaman.dead && shaman.gained > 0, true);
+  const shamanDead = trial("oshm", 0, true);
+  check("…and still does after the Shaman has died", shamanDead.dead && shamanDead.gained > 0, true);
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nall creep-spell checks passed");
 process.exit(failed ? 1 : 0);
