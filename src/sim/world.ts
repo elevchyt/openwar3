@@ -7721,6 +7721,27 @@ export class SimWorld {
     return this.cancelBuilding(target.id);
   }
 
+  /**
+   * The share of its FULL hit points a building under construction has lost to damage, 0..1 —
+   * the `dmg%` in the cancel refund, `(3/4 × Cost) × (1 − dmg%)` (r/WC3 9y8939, "What is the
+   * amount of gold lost when a building…").
+   *
+   * Not `1 − hp/maxHp`: a site is STAMPED at a tenth of its life and earns the rest as it goes
+   * up (`BUILD_START_HP_FRAC`, `addConstructionHp`), so a Farm cancelled a second after it was
+   * placed is missing 90% of its pool without a scratch on it, and would refund 7.5%. What it
+   * has lost is measured against the life the ramp has given it by now, which is exact — the
+   * ramp only ever ADDS its own delta, so every point below that line is a blow it took.
+   * 0 for anything that is not a construction site.
+   */
+  constructionDamageFrac(id: number): number {
+    const u = this.units.get(id);
+    const b = u?.building;
+    if (!u || !b || b.constructionLeft <= 0 || u.maxHp <= 0) return 0;
+    const built = b.buildTimeTotal > 0 ? 1 - b.constructionLeft / b.buildTimeTotal : 1;
+    const due = Math.min(u.maxHp, u.maxHp * (BUILD_START_HP_FRAC + BUILD_RAMP_HP_FRAC * built));
+    return Math.min(1, Math.max(0, due - u.hp) / u.maxHp);
+  }
+
   /** Cancel a building (manual cancel of an under-construction structure): free
    *  its builder and remove it WITHOUT a death animation — a cancelled building
    *  isn't destroyed in combat, it simply vanishes (the caller plays the race's

@@ -7,6 +7,9 @@
 // pays back from: a tier upgrade is the DIFFERENCE between the two buildings, never the new
 // one's whole cost (a cancelled Keep used to refund 75% of the Keep's full price).
 //
+// And a CONSTRUCTION SITE, which has no queue: CANCELLED it pays (3/4 × Cost) × (1 − dmg%), and
+// DESTROYED it pays nothing at all.
+//
 // Run: pnpm sim:test
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
@@ -143,6 +146,54 @@ console.log("\n-- the enemy is not paid for the building they razed ------------
   world.kill(bar, killer.id);
   check("the owner gets the Footman back", stash(0)[0], 1000);
   check("…and the killer gets none of it", stash(1)[0], 0);
+}
+
+console.log("\n-- a construction site: cancelled pays (3/4 × Cost) × (1 − dmg%), destroyed pays nothing");
+function site(typeId, owner, built, damage) {
+  // A site `built` of the way up, with the life the ramp has given it by now (10% at the stamp,
+  // the rest across the build time) less `damage`.
+  const u = building(typeId, owner);
+  const maxHp = 1000;
+  u.maxHp = maxHp;
+  u.building.buildTimeTotal = 60;
+  u.building.constructionLeft = 60 * (1 - built);
+  u.hp = maxHp * (0.1 + 0.9 * built) - damage;
+  return u;
+}
+{
+  newWorld();
+  world.initStash(0, 0, 0);
+  const bar = site("hbar", 0, 0, 0);
+  check("a site cancelled the instant it is placed is undamaged", world.constructionDamageFrac(bar.id), 0);
+  check("cancel it", x(0, { c: "cancelbuild", buildingId: bar.id }), true);
+  check("…75% of 160/60 back: 120/45", stash(0), [120, 45]);
+}
+{
+  newWorld();
+  world.initStash(0, 0, 0);
+  const bar = site("hbar", 0, 0.5, 400); // 550 life due, 150 left: 40% of the pool is gone
+  check("half built, 400 of 1000 life knocked off: dmg% = 40%", world.constructionDamageFrac(bar.id), 0.4);
+  x(0, { c: "cancelbuild", buildingId: bar.id });
+  check("…(3/4 × 160/60) × 0.6 = 72/27", stash(0), [72, 27]);
+}
+{
+  newWorld();
+  world.initStash(0, 0, 0);
+  world.initStash(1, 0, 0);
+  const bar = site("hbar", 0, 0.5, 100);
+  const enemy = building("hbar", 1);
+  world.kill(bar, enemy.id);
+  check("a site DESTROYED under construction pays nothing", stash(0), [0, 0]);
+  check("…and nothing to the killer either", stash(1), [0, 0]);
+}
+{
+  newWorld();
+  world.initStash(0, 0, 0);
+  const bar = building("hbar", 0);
+  bar.maxHp = 1000;
+  bar.hp = 300;
+  check("a FINISHED building cannot be cancelled, damaged or not", x(0, { c: "cancelbuild", buildingId: bar.id }), false);
+  check("…and pays nothing", stash(0), [0, 0]);
 }
 
 if (failed) {

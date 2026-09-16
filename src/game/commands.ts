@@ -138,7 +138,8 @@ export type Command =
    * It used to carry the building's **typeId**, taken from the client's own selection, and
    * the renderer paid the refund out of it — so a client could cancel a Farm while naming a
    * Castle and collect 75% of a Castle. The authority reads the typeId off the sim unit it
-   * is actually destroying, and `ConstructionRefundRate` out of MiscGame.txt.
+   * is actually destroying, `ConstructionRefundRate` out of MiscGame.txt, and the share of
+   * its life it has lost to damage off the sim (`SimWorld.constructionDamageFrac`).
    */
   | { c: "cancelbuild"; buildingId: number }
   /**

@@ -985,11 +985,19 @@ export class Authority {
         // The typeId comes off the sim unit, never off the caller. It used to ride along in
         // the call from the renderer's own selection, so cancelling a Farm while naming a
         // Castle would have refunded a Castle.
+        //
+        // Refund = (3/4 × Cost) × (1 − dmg%) (r/WC3 9y8939): `ConstructionRefundRate` of the
+        // whole price, less the share of the building's life the enemy has already knocked off
+        // it — so pulling a site that is about to fall does not hand its price back. Only
+        // CANCELLING pays: a site DESTROYED under construction pays nothing at all, which is
+        // why nothing on the death path refunds one (SimWorld.kill). A finished building being
+        // repaired is not under construction and cannot be cancelled (the gate above).
         const def = this.registry.get(b.typeId);
         if (def) {
           const stash = this.sim.stashOf(player);
-          stash.gold += Math.round(def.goldCost * MISC_GAME.ConstructionRefundRate);
-          stash.lumber += Math.round(def.lumberCost * MISC_GAME.ConstructionRefundRate);
+          const rate = MISC_GAME.ConstructionRefundRate * (1 - this.sim.constructionDamageFrac(b.id));
+          stash.gold += Math.round(def.goldCost * rate);
+          stash.lumber += Math.round(def.lumberCost * rate);
         }
         return this.sim.cancelBuilding(cmd.buildingId); // frees its footprint's cells too
       }

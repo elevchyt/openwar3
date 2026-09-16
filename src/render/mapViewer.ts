@@ -10492,8 +10492,8 @@ export class MapViewerScene {
     this.rts.execute(this.localPlayer, { c: "buyitem", shopId, itemId });
   }
 
-  /** Cancel an under-construction building: refund **75%** of its cost (WC3
-   *  cancelled-construction rate), free its pathing footprint, remove it, and
+  /** Cancel an under-construction building: refund **75%** of its cost less the share of its
+   *  life it has lost to damage (the authority's `cancelbuild`), free its pathing footprint, remove it, and
    *  play the race's dedicated **cancel explosion** (`<Race>CancelDeath.mdx` —
    *  distinct from the building's own Death collapse used for combat). */
   private cancelConstruction(buildingId: number): void {
