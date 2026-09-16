@@ -5033,7 +5033,11 @@ export class RtsController {
     // Shock Wave on the Naga heroes, Death and Decay's `stand,channel`, and ~60 others.
     const tags = (def?.animNames ?? []).filter((t) => !ANIM_MODIFIERS.has(t));
     const names = e.anims.seqNames;
-    const pick = (re: RegExp) => names.findIndex((n) => re.test(n));
+    // Set by the form pass below: while true, only the clips of the form the unit is WEARING
+    // are candidates.
+    let ownOnly = false;
+    const own = e.anims.seqMine ?? [];
+    const pick = (re: RegExp) => names.findIndex((n, i) => (!ownOnly || own[i]) && re.test(n));
     // `looping` in an Animnames list is the OTHER half of the same fact the sim's `loop` flag
     // carries: the gesture is held and repeated for the cast rather than played once. Healing
     // Spray is the row that needs it said here — `[ANhs] Animnames = spell,looping` while the
@@ -5085,6 +5089,7 @@ export class RtsController {
       let bestIdx = -1;
       let fewest = Infinity;
       for (let i = 0; i < wordLists.length; i++) {
+        if (ownOnly && !own[i]) continue;
         const w = wordLists[i];
         if (!want.every((t) => w.includes(t))) continue;
         if (w.includes("swim") && !want.includes("swim")) continue;
@@ -5098,21 +5103,34 @@ export class RtsController {
       return bestIdx;
     };
     let seq = -1;
-    // A looping/channelled cast prefers a dedicated "channel" clip (Blizzard, Starfall,
-    // Healing Spray). Under the alternate half of a two-form model the lookup needs no help:
-    // applyAnimProps has already renamed "Spell Channel Alternate" to a plain "spell channel"
-    // and blanked the walking form's, so a raging Alchemist sprays from his ogre body.
-    if (loops) seq = pick(/channel/i);
-    for (let n = tags.length; seq < 0 && n > 0; n--) seq = best(tags.slice(0, n));
-    // …else the plain "Spell" clip, which is what a row with NO `Animnames` means — Shadow
-    // Strike and Vengeance are both bare rows in NightElfAbilityFunc.txt. Asked for as a
-    // token so the same best-match rule applies: the Warden has a clip called exactly
-    // "Spell" and that is the one she should cast with.
-    if (seq < 0) seq = best(["spell"]);
-    // …and only then loosely, for a model whose spell clips are ALL compound and so match no
-    // token cleanly — the Priest's "Spell Attack", the Spirit Walker's "Spell Morph", the
-    // Sea Elemental's "blaSpell".
-    if (seq < 0) seq = pick(/spell/i);
+    // The whole ladder runs TWICE on a unit wearing its props' own clips: first over those
+    // alone, then over everything. applyAnimProps only blanks a first-form clip when the other
+    // form authors the SAME action, so the ones it has no twin for stay visible — and a cast
+    // would take them over the form's own. The Druid of the Claw is the case: bear Roar
+    // (`[Ara2] Animnames = spell,slam`) found DruidoftheClaw.mdx's "Spell Slam", which is the
+    // NIGHT ELF's roar — the model swapped back to the druid for the cast — when the bear's
+    // own is "Attack Spell Alternate", reached here by dropping `slam` to a loose `spell`.
+    // A unit with no own clips (no props, or none its model spells) skips straight to pass two.
+    for (const pass of own.some(Boolean) ? [true, false] : [false]) {
+      ownOnly = pass;
+      // A looping/channelled cast prefers a dedicated "channel" clip (Blizzard, Starfall,
+      // Healing Spray). Under the alternate half of a two-form model applyAnimProps has
+      // already renamed "Spell Channel Alternate" to a plain "spell channel" and blanked the
+      // walking form's, so a raging Alchemist sprays from his ogre body.
+      if (loops) seq = pick(/channel/i);
+      for (let n = tags.length; seq < 0 && n > 0; n--) seq = best(tags.slice(0, n));
+      // …else the plain "Spell" clip, which is what a row with NO `Animnames` means — Shadow
+      // Strike and Vengeance are both bare rows in NightElfAbilityFunc.txt. Asked for as a
+      // token so the same best-match rule applies: the Warden has a clip called exactly
+      // "Spell" and that is the one she should cast with.
+      if (seq < 0) seq = best(["spell"]);
+      // …and only then loosely, for a model whose spell clips are ALL compound and so match no
+      // token cleanly — the Priest's "Spell Attack", the Spirit Walker's "Spell Morph", the
+      // Sea Elemental's "blaSpell", the bear's "Attack Spell (Alternate)".
+      if (seq < 0) seq = pick(/spell/i);
+      if (seq >= 0) break;
+    }
+    ownOnly = false;
     // …and last, the ability's own named clip for the handful whose AbilityFunc row carries
     // no Animnames at all yet whose caster has a dedicated animation waiting (see
     // CAST_ANIM_FALLBACK). Bladestorm is the one that matters: `[AOww]` names nothing, the

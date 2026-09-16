@@ -61,6 +61,14 @@ const FALLBACK = {
     "Stand", "Stand - 2", "Stand Victory", "Stand - 4", "Walk", "Walk - 2", "attack", "Spell",
     "Death", "Stand Hit",
   ],
+  // Two forms in one model: the bear's clips carry "Alternate", the night elf's carry nothing,
+  // and the elf's "Spell Slam" has no bear twin — so it stays visible to the bear.
+  "units\\nightelf\\DruidoftheClaw\\DruidoftheClaw.mdx": [
+    "Stand - 1", "Morph", "Stand Channel", "Spell Slam", "Spell", "Death", "Attack", "Attack - 2",
+    "walk", "Stand - 2", "Decay Flesh", "Decay Flesh Alternate", "Stand Alternate",
+    "Walk Alternate", "Stand Alternate - 3", "Stand Alternate - 2", "Attack Alternate - 2",
+    "Attack Spell Alternate", "Death Alternate", "Morph Alternate", "Decay Bone", "Decay Alternate",
+  ],
   "units\\human\\Priest\\Priest.mdx": [
     "Stand", "Stand - 2", "Spell Attack", "Spell", "Death", "Walk", "Decay Flesh", "Decay Bone",
   ],
@@ -152,6 +160,19 @@ console.log("a caster whose ONLY attack is a spell keeps it");
   const seqs = names.map((name) => ({ name }));
   const a = buildAnimSet(seqs);
   check("the Priest still has a swing to play", named(a, seqs)(a.attack), "Spell Attack");
+}
+
+console.log("a two-form unit marks its OWN form's clips for the cast picker");
+{
+  const path = "units\\nightelf\\DruidoftheClaw\\DruidoftheClaw.mdx";
+  const seqs = sequences(path).map((name) => ({ name }));
+  const raw = sequences(path);
+  const own = (props) => { const a = buildAnimSet(seqs, props); return raw.filter((_, i) => a.seqMine[i]); };
+  // Roar is `spell,slam` in both forms; the bear must cast it from "Attack Spell Alternate"
+  // (RtsController.playCastAnim asks these clips before the elf's "Spell Slam").
+  check("the bear's own clips include its roar", own(["alternateex"]).includes("Attack Spell Alternate"), true);
+  check("…and none of the night elf's", own(["alternateex"]).some((n) => !/alternate/i.test(n)), false);
+  check("the night elf form marks nothing (it owns the plain clips)", own([]), []);
 }
 
 console.log(failed === 0 ? "\nattack animations: all checks passed" : `\nattack animations: ${failed} FAILED`);

@@ -98,6 +98,10 @@ export interface AnimSet {
    *  transition is read off the state being moved FROM (see RtsController.applyFormAnims). */
   morph: number;
   seqNames: string[]; // raw sequence names (for cast-animation tag matching)
+  /** Parallel to `seqNames`: true for the clips that carried this unit's OWN state props
+   *  (`alternate`/`alternateex` — `mine` in applyAnimProps). Under a two-form model's other half, the untokened clips left visible are
+   *  the FIRST form's body, so a cast asks these first (RtsController.playCastAnim). */
+  seqMine: boolean[];
 }
 
 // The `Animprops` tokens that select a tiered building's LOOK. A tiered structure is a single
@@ -466,6 +470,9 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     // clip and is already renamed to a plain "Morph" whenever the alternate props are on.
     morph: find(/^morph(\s*-?\s*\d+)?\s*$/i),
     seqNames: seqs.map((s) => s.name),
+    // Only for a two-form STATE: a tier's untokened clips are shared by design (see
+    // applyAnimProps), so there is no other body for a cast to wander into.
+    seqMine: seqs.map((s) => !!s.mine && animProps.some((p) => STATE_PROPS.has(p.toLowerCase()))),
   };
 }
 

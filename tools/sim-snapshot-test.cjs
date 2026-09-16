@@ -686,7 +686,7 @@ console.log("the animation picker answers the same off the payload as off the si
     stand: 1, standVariants: [1], walk: 2, walkFast: 3, attack: 4, attackVariants: [4],
     attackGold: [], attackLumber: [], attackSlam: -1, death: 5,
     standGold: 6, walkGold: 7, standLumber: 8, walkLumber: 9, chopLumber: 10, build: 11,
-    decayFlesh: -1, decayBone: -1, morph: -1, seqNames: [],
+    decayFlesh: -1, decayBone: -1, morph: -1, seqNames: [], seqMine: [],
   };
   const entry = {
     unit: { instance: { timeScale: 1 } }, anims,
