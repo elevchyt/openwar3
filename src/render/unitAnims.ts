@@ -83,6 +83,19 @@ export interface AnimSet {
    *  and working it where it stands. -1 for everyone else, including the Peasant and Peon,
    *  whose mining happens out of sight inside the shaft and needs no pose at all. */
   standWorkGold: number;
+  /** "Stand Work First" … "Stand Work Fifth", indexed by CREW SIZE (slot 0 unused, -1 where
+   *  the model has no such clip). One model in the game authors them, and it authors them as
+   *  the whole of its occupied look:
+   *
+   *      EntangledGoldMine.mdx: Birth · Stand Work Fifth · Stand Work Fourth · Stand Work Second
+   *                             · Stand Work First · Stand Work Third · Stand · Death · Decay
+   *
+   *  — the roots glow with one wisp per ordinal, and a mine with nobody in it is the plain
+   *  "Stand". The ordinals are TIER tokens to `applyAnimProps`, but the mine carries no
+   *  Animprops (NightElfUnitFunc.txt [egol] has only `Attachmentanimprops`), so they reach here
+   *  unrenamed; a clip must name exactly stand + work + one ordinal, which keeps a tiered
+   *  building's "Stand Work Upgrade First" out. Empty for every other model. */
+  standWorkCrew: number[];
   build: number; // a WORKER's hammering pose: its "Stand Work", else its attack swing
   decayFlesh: number; // corpse decay — flesh rots (heroes lack this)
   decayBone: number; // corpse decay — bones linger, then vanish
@@ -424,6 +437,16 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
   // `standWork` above (it is a mining pose, not a production one) and is found here instead.
   // See the field's own note for why only the Acolyte has one.
   const standWorkGold = find(/^stand work gold\s*$/i);
+  const CREW_ORDINALS = ["first", "second", "third", "fourth", "fifth"];
+  const standWorkCrew: number[] = [];
+  seqs.forEach((s, i) => {
+    const t = workTokens(s.name);
+    if (t.length !== 3 || t[0] !== "stand" || t[1] !== "work") return;
+    const n = CREW_ORDINALS.indexOf(t[2]) + 1;
+    if (n <= 0) return;
+    while (standWorkCrew.length <= n) standWorkCrew.push(-1);
+    if (standWorkCrew[n] < 0) standWorkCrew[n] = i;
+  });
   return {
     stand,
     standVariants: standVariants.length ? standVariants : stand >= 0 ? [stand] : [],
@@ -454,6 +477,7 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     chopLumber: or(find(/attack lumber/i), attack),
     standWork,
     standWorkGold,
+    standWorkCrew,
     // A worker with no work clip hammers with its attack swing — which is exactly what a
     // Peasant does, and why this fallback cannot be shared with `standWork` above.
     //
@@ -602,6 +626,13 @@ export function pickSequence(a: AnimSet, u: RenderUnit, moving: boolean): number
   // is most of them, and for an UPROOTED Ancient: its queue is halted rather than
   // cancelled, and a walking tree must not play the planted one's working pose.
   if (u.building && u.building.queue.length > 0) return a.standWork;
+  // A building that shows its CREW: the Entangled Gold Mine wears "Stand Work First" for one
+  // wisp inside up to "Stand Work Fifth" for five, and its plain stand when empty (see
+  // AnimSet.standWorkCrew). A count past the last ordinal the model authors holds the last.
+  if (u.building && u.garrison.length > 0 && a.standWorkCrew.length > 1) {
+    const clip = a.standWorkCrew[Math.min(u.garrison.length, a.standWorkCrew.length - 1)];
+    if (clip >= 0) return clip;
+  }
   // Only the ACTIVE chop plays the harvest swing — a worker merely holding
   // lumber while standing (its tree fell and it's about to return, so `working`
   // isn't cleared yet) shows the Stand Lumber pose, not the chop.

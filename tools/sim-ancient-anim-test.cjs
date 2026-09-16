@@ -28,7 +28,7 @@ const { join } = require("node:path");
 const { existsSync } = require("node:fs");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { buildAnimSet, animPropsFor, findBirthFields, applyAnimProps } = require(join(REPO, ".sim-build", "src", "render", "unitAnims.js"));
+const { buildAnimSet, animPropsFor, findBirthFields, applyAnimProps, pickSequence } = require(join(REPO, ".sim-build", "src", "render", "unitAnims.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -66,6 +66,11 @@ const FALLBACK = {
   ],
   // A night elf building that is NOT an Ancient: no alternate half at all, and its production
   // pose is the plain "Stand Work" every other race's buildings use.
+  // The Entangled Gold Mine: one "Stand Work <ordinal>" per wisp inside, authored out of order.
+  "buildings\\nightelf\\EntangledGoldMine\\EntangledGoldMine.mdx": [
+    "Birth", "Stand Work Fifth", "Stand Work Fourth", "Stand Work Second", "Stand Work First",
+    "Stand Work Third", "Stand", "Death", "Decay", "Portrait -1",
+  ],
   "buildings\\nightelf\\ChimaeraRoost\\ChimaeraRoost.mdx": ["Birth", "stand", "Stand Work", "Portrait", "Death"],
   // The four human towers in one file. Note there is no plain "Attack" ANYWHERE — every tier's
   // armed idle and its swing are one and the same clip — and that the tier tokens are reordered
@@ -331,6 +336,21 @@ console.log("…but a propped clip the base tier has no answer for is still ITS 
   const life = buildAnimSet(tseqs, animPropsFor({ animProps: [] }, false));
   check("the Tree of Life still stands", tname(life.stand), "Stand Upgrade First Second");
   check("…and dies its OWN death, not the planted half's", tname(life.death), "Death");
+}
+
+console.log("an Entangled Gold Mine wears one work clip per wisp inside it");
+{
+  const EGM = "buildings\\nightelf\\EntangledGoldMine\\EntangledGoldMine.mdx";
+  const eseqs = sequences(EGM).map((name) => ({ name }));
+  const ename = (i) => (i >= 0 && i < eseqs.length ? eseqs[i].name : null);
+  const a = buildAnimSet(eseqs, []);
+  const mine = (n) => ({ building: { queue: [], constructionLeft: 0, buildTimeTotal: 0 }, garrison: Array(n).fill(1), worker: null, working: false, order: "stop", ringSlot: 0, constructing: 0, repair: null });
+  const got = [0, 1, 2, 3, 4, 5].map((n) => ename(pickSequence(a, mine(n), false)));
+  check("empty → Stand, 1..5 wisps → First..Fifth", got,
+    ["Stand", "Stand Work First", "Stand Work Second", "Stand Work Third", "Stand Work Fourth", "Stand Work Fifth"]);
+  // A tiered building's work clip names an ordinal too, and must not be read as a crew size.
+  const hall = buildAnimSet([{ name: "Stand" }, { name: "Stand Work" }, { name: "Stand Work Upgrade First" }], []);
+  check("…and nothing else has a crew set", hall.standWorkCrew, []);
 }
 
 console.log(failed === 0 ? "\nancient animations: all checks passed" : `\nancient animations: ${failed} FAILED`);
