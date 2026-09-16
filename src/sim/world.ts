@@ -17401,6 +17401,7 @@ export class SimWorld {
    */
   private tickAutoMeld(u: SimUnit): void {
     if (this.isDay || u.hp <= 0 || u.building || u.cloaked || u.stunned || u.paused) return;
+    if (u.asleep) return; // a sleeper does nothing — see hidesAtNight
     if (u.order !== "idle" && u.order !== "hold") return;
     if (u.moving || u.swingLeft >= 0 || u.x !== u.prevX || u.y !== u.prevY) return;
     if (u.targetId !== null || u.inCombat) return; // fighting — on Hold, or between orders
@@ -17434,6 +17435,41 @@ export class SimWorld {
       return;
     }
     if (carried) this.applySpellEffect("Ashm", 1, u, { targetId: 0, x: u.x, y: u.y }, carried.def);
+  }
+
+  /** Is this creep lying in wait under a MELD (Hide / Shadow Meld — the `meld` invisibility)? */
+  private creepMelded(u: SimUnit): boolean {
+    return u.isCreep && u.cloaked && u.buffs.some((b) => b.kind === "invisible" && b.meld);
+  }
+
+  /** Can this creep HIDE (`Ashm`)? Such a creep does not doze off at night: it melds instead
+   *  (tickAutoMeld) and keeps watch — an invisible creep is never asleep (maintainer's rule).
+   *  Asleep first, it pressed Hide and the cast never ran, so it spent the night neither
+   *  hidden nor awake, stuck on a "cast" order that read as a camp in a fight. */
+  private hidesAtNight(u: SimUnit): boolean {
+    return u.abilities.some((a) => a.code === "Ashm" && a.level >= 1);
+  }
+
+  /**
+   * A melded creep's AMBUSH: `acquireRange` is 0 while a unit is cloaked (an invisible unit
+   * picks no fights of its own), which left a hidden Nightcrawler watching an army walk up to
+   * its sleeping camp and doing nothing. A creep's meld is lying in wait FOR that army, so it
+   * keeps looking over its own aggro range, and the first thing it wants (`bestCreepTarget`,
+   * resting — a flyer under a plain move passes) ends the meld and starts the fight as an
+   * originator: it shouts, and the shout wakes the camp (`alertCamp`). True when it sprang.
+   */
+  private creepAmbush(u: SimUnit, dt: number): boolean {
+    if (!u.weapon || u.returning) return false;
+    u.acquireT -= dt;
+    if (u.acquireT > 0) return false;
+    u.acquireT = ACQUIRE_PERIOD;
+    const best = this.bestCreepTarget(u, u.aggroRange, true);
+    if (!best) return false;
+    this.unhideCreep(u); // …which takes the meld's Hold back off with it
+    if (!this.issueAttack(u.id, best.id)) return false;
+    u.campHelper = false;
+    this.alertCamp(u, best);
+    return true;
   }
 
   /**
@@ -22000,6 +22036,13 @@ export class SimWorld {
     // asks: `creepInFight` walks every unit in the world, and this line runs for every creep on
     // every step. Both are pure until the unhide, so the guard changes the cost, not the answer.
     if (u.cloaked && this.creepInFight(u)) this.unhideCreep(u);
+    // A creep lying in wait under a meld is AWAKE — it is the camp's eyes, as a `cansleep=0`
+    // camp-mate is — and the enemy that walks into its aggro range is its ambush sprung
+    // (creepAmbush), which rouses the whole camp. Maintainer's rule.
+    if (this.creepMelded(u)) {
+      u.asleep = false;
+      if (this.creepAmbush(u, dt)) return false;
+    }
     const atHome = Math.hypot(u.x - u.guardX, u.y - u.guardY) <= CREEP_HOME_EPS;
     // --- sleep (night): doze off while guarding at the post with the camp quiet;
     // dawn (or a fight — see below) wakes it. ---
@@ -22018,7 +22061,7 @@ export class SimWorld {
     //   • a foundation laid nearby (`notifyCreepsOfPlacement`) or a neutral shop used
     //     under its nose (`notifyCreepsOfShopUse`).
     if (u.canSleep && !u.returning) {
-      if (this.isDay) u.asleep = false;
+      if (this.isDay || this.hidesAtNight(u)) u.asleep = false;
       // …and only once the CAMP is quiet (campQuiet), not merely once this creep has nobody.
       else if (!u.asleep && u.order === "idle" && atHome && this.campQuiet(u)) u.asleep = true;
     } else if (!u.canSleep) {

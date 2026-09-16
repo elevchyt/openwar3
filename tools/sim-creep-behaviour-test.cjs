@@ -399,5 +399,25 @@ console.log("\na poisoner spreads itself over EVERYONE fighting its camp, not on
   check("…and so do both Riflemen shooting the camp from the back", poisoned(r1) && poisoned(r2), true);
 }
 
+console.log("\na hiding creep does not sleep: it keeps watch, and its ambush wakes the camp");
+{
+  // Maintainer's rule: an invisible (melded) creep is awake. Asleep first, the Nightcrawler
+  // pressed Hide and the cast never ran — neither hidden nor awake all night.
+  const w = world();
+  w.timeOfDay = 21;
+  const nc = creep(w, "nmrm", 1000, 1000);
+  const mate = creep(w, "ngno", 1000, 1150);
+  nc.canSleep = true;
+  mate.canSleep = true;
+  run(w, null, 3);
+  check("the Nightcrawler melds instead of dozing off", nc.cloaked && !nc.asleep, true);
+  check("…while its camp-mate sleeps", mate.asleep, true);
+  const f = footman(w, 1250, 1000); // inside the Nightcrawler's own aggro range
+  run(w, null, 1);
+  check("the hidden creep springs its ambush on the Footman", nc.targetId, f.id);
+  check("…coming out of hiding to do it", nc.cloaked, false);
+  check("…and the whole camp wakes and joins", !mate.asleep && mate.order === "attack", true);
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nall creep-behaviour checks passed");
 process.exit(failed ? 1 : 0);
