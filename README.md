@@ -1,7 +1,7 @@
 # OpenWar3
 
-<img src="public/demoscreens/game2.png" width="800">
-<img src="public/demoscreens/game1.png" width="800">
+<img src="public/demoscreens/game2.avif" width="800">
+<img src="public/demoscreens/game1.avif" width="800">
 
 A recreation of the **Warcraft III** engine in TypeScript. Ships **zero Blizzard assets** — uses your own install at runtime.
 
