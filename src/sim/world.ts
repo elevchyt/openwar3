@@ -40,7 +40,7 @@ import {
   type ReviveMode,
 } from "../data/gameplayConstants";
 import { perfNow, simProfile } from "./profile";
-import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -13135,7 +13135,9 @@ export class SimWorld {
       // (wind-up + backswing, or wind-up + channel — looped for a channel). A
       // spin-for-the-duration ability (Bladestorm) holds and loops the same way without
       // being a channel; see ANIM_FOR_DURATION.
-      const animLen = ANIM_FOR_DURATION.has(pc.code) ? lvl.heroDuration || lvl.duration || 0 : this.loopingCastLength(def, lvl);
+      // Sized off `Dur1`, the column the handler runs the storm for — HeroDur1 is 5 and the
+      // storm 7, so reading it first stopped the spin two seconds before the damage did.
+      const animLen = ANIM_FOR_DURATION.has(pc.code) ? lvl.duration || lvl.heroDuration || 0 : this.loopingCastLength(def, lvl);
       const hold = pc.castLeft + (channelLen > 0 ? channelLen : animLen > 0 ? animLen : u.castBackswing);
       const warnArt = PRECAST_WARNING.has(pc.code) ? def.effectArt : "";
       // tx/ty/targetId let the renderer aim cast-triggered visuals at the target —
@@ -14429,7 +14431,7 @@ export class SimWorld {
    *  They live OUTSIDE their field on purpose: shards already in the air still land
    *  when the channel is broken, so a Blizzard cancelled the instant before impact
    *  still deals that last wave. */
-  private waveImpacts: Array<{ t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean }> = [];
+  private waveImpacts: Array<{ t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean }> = [];
 
   // --- Mirror Image (AOmi) ------------------------------------------------------------
   //
@@ -14737,6 +14739,17 @@ export class SimWorld {
           continue;
         }
       }
+      // A field AROUND its caster (Bladestorm) is his, not the ground's: it ends when he
+      // dies, and every wave is centred wherever he is standing now.
+      if (f.followCaster) {
+        const caster = this.units.get(f.casterId);
+        if (!caster || caster.hp <= 0) {
+          this.spellFields.splice(i, 1);
+          continue;
+        }
+        f.x = caster.x;
+        f.y = caster.y;
+      }
       f.timer -= dt;
       if (f.timer <= 0) {
         f.timer = f.interval;
@@ -14771,6 +14784,7 @@ export class SimWorld {
           pctOfMax: f.damagePctOfMax ?? false,
           buildingsOnly: f.buildingsOnly ?? false,
           fellsTrees: f.fellsTrees ?? false,
+          skipEthereal: f.skipEthereal ?? false,
         };
         if (impact.t > 0) this.waveImpacts.push(impact);
         else this.landWave(impact);
@@ -14910,6 +14924,8 @@ export class SimWorld {
       // Earthquake's `Oeq2` is "Damage per Second to BUILDINGS" and its units half is a
       // slow, so its waves pass straight through anything that walks.
       if (w.buildingsOnly && !t.building) continue;
+      // Bladestorm's blades pass through a Banished or Ethereal body (skipEthereal).
+      if (w.skipEthereal && t.ethereal) continue;
       // "Building Reduction" (DataD): structures shrug off this fraction of the wave.
       let dmg = t.building ? each * (1 - w.buildingReduction) : each;
       // …and Death and Decay's is not a number of hit points at all but a SHARE of the
@@ -19223,6 +19239,9 @@ export class SimWorld {
    * ability rather than a crit bolted to an evasion (see tryEvade).
    */
   private rollCriticalStrike(u: SimUnit): boolean {
+    // "The Blademaster can still attack while casting Bladestorm, but Critical Strike is
+    // disabled" (classic.battle.net, Blademaster).
+    if (u.buffs.some((b) => b.group === BLADESTORM_GROUP)) return false;
     const lvl = this.criticalStrikeLevel(u);
     if (!lvl) return false;
     const chance = this.dataOf(lvl, 0) / 100; // dataA — "Chance to Critical Strike" (%)

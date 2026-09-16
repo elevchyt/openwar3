@@ -409,6 +409,12 @@ export interface SpellFieldInit {
    *  Second to Buildings" and its units half is a slow, not a wound — the tooltip says so
    *  outright ("damages buildings … slows units"). */
   buildingsOnly?: boolean;
+  /** Each wave lands wherever the CASTER now stands, and the field ends with him. Bladestorm:
+   *  the storm is "around the Blademaster", who keeps walking and fighting inside it. */
+  followCaster?: boolean;
+  /** Ethereal units are spared. Bladestorm is the one field whose blades are PHYSICAL — the
+   *  classic.battle.net Blademaster page: "Does not damage Ethereal units." */
+  skipEthereal?: boolean;
   /** The field rocks the CAMERA while it runs (Earthquake, the one thing in the game that
    *  does). Presentation only — see MapViewerScene.updateFieldLoops. */
   shake?: boolean;
@@ -599,6 +605,9 @@ export function invisTransition(seconds: number): number {
  * Only the SELF casts are here. The Sorceress's `[Aivs]` and the Potions hide somebody the
  * caster chose, so "you are already hidden" is not a fact about the presser at all.
  */
+/** The buff group Bladestorm puts on the Blademaster for its whole run — its spell immunity,
+ *  and the flag that switches his Critical Strike off (world.ts rollCriticalStrike). */
+export const BLADESTORM_GROUP = "bladestorm";
 export const SELF_INVIS_GROUP: Record<string, string> = {
   AOwk: "windwalk", // Wind Walk
   Ashm: "shadowmeld", // Shadow Meld — a stance, and re-taking one you are already in is a no-op
@@ -2327,11 +2336,35 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // --- self buffs / channels ---
 
-  // Bladestorm (Blademaster, ult) — the caster becomes a whirlwind, dealing dataA
-  // damage per second to surrounding enemies for the channel.
+  // Bladestorm (Blademaster, ult) — "Causes a bladestorm of destructive force around the
+  // Blademaster, rendering him immune to magic and dealing <AOww,DataA1> damage per second to
+  // nearby enemy land units. |nLasts <AOww,Dur1> seconds." (OrcAbilityStrings.txt). 1.30.4's
+  // row: DataA1 = 110, Dur1 = 7, Area1 = 200, Cost1 = 200, Cool1 = 180, targs1 =
+  // `ground,structure,debris,enemy,neutral` — no `air`, which is the "land units".
+  //
+  // It lasts `Dur1` and NOT `dur()`'s hero duration, although the caster is a hero and
+  // HeroDur1 reads 5: the tooltip is Blizzard's own statement of which column the engine
+  // reads, and it quotes Dur1 — where Metamorphosis, the one self-cast whose hero column IS
+  // its length, quotes `<AEme,HeroDur1>`.
+  //
+  // Three halves beside the damage, all from the classic.battle.net Blademaster page's notes:
+  //   • "not invulnerable while casting Bladestorm, but has Spell Immunity" — the timed
+  //     `magicImmune` the Anti-magic Potion rides, under BOww;
+  //   • "can still attack while casting Bladestorm, but Critical Strike is disabled" — the
+  //     BLADESTORM_GROUP buff is what rollCriticalStrike asks;
+  //   • "Does not damage Ethereal units" — `skipEthereal` on the field.
+  // The storm is AROUND the Blademaster, so the field walks with him (`followCaster`): cast
+  // at his feet and left there, it went on cutting the ground he had long since walked off.
   AOww: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    api.addSpellField({ code: def.code, x: caster.x, y: caster.y, area: lvl.area || 200, damagePerWave: d(lvl, 0, 110), waves: Math.max(3, Math.round(lvl.duration || 7)), interval: 1, casterId: caster.id, art: def.casterArt || def.specialArt });
+    const total = lvl.duration || 7;
+    api.applyBuff(caster, { kind: "magicImmune", group: BLADESTORM_GROUP, timeLeft: total, sourceId: caster.id, ...fx(def) });
+    api.addSpellField({
+      code: def.code, x: caster.x, y: caster.y, area: lvl.area || 200,
+      damagePerWave: d(lvl, 0, 110), waves: Math.max(1, Math.round(total)), interval: 1,
+      casterId: caster.id, art: def.casterArt || def.specialArt,
+      followCaster: true, skipEthereal: true,
+    });
   },
 
   // Immolation (Demon Hunter) — a TOGGLE, not a cast: pressing it lights the Demon Hunter
