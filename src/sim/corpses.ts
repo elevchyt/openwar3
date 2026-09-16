@@ -146,9 +146,11 @@ export type CorpseOrder = "nearest" | "freshest";
  * spending a charge and starting its cooldown. `ACad`/`AIan`/`AIrs` keep their own codes the
  * same way. List the code, not the family, and check the column rather than assuming.
  *
- * Cannibalize and the Meat Wagon are deliberately NOT here. Neither spawns anything: one eats
- * the body for hit points and the other borrows it, so "there is nothing to raise" is not what
- * a failed press means for either. The mechanism generalises to them the day that is wanted.
+ * CANNIBALIZE is here although it spawns nothing, because it is a CHANNEL: a Ghoul pressed
+ * with no body in reach would otherwise stand in its "Stand Channel" pose for the whole
+ * `Dur1` eating air. It is the one member that does not care what died (see corpseNeed).
+ * The Meat Wagon is still deliberately NOT here: it borrows the body, so "there is nothing to
+ * raise" is not what a failed press means for it.
  *
  * The number is the radius the ability's own handler sweeps, so the gate and the effect cannot
  * disagree about what "nearby" means. The sweep is centred where the cast is AIMED, which for
@@ -172,6 +174,9 @@ const CORPSE_SPAWNERS: ReadonlyMap<string, (lvl: CorpseSpellRow) => number> = ne
   // …and Ancestral Spirit, the one member the player actually aims: a point-target raise of a
   // single body, at the 250 its handler takes.
   ["Aast", () => 250],
+  // …and Cannibalize (`Acan`, also `Acn2` the Abomination's and `ACcn` the creep's), which
+  // eats the body it is standing on: `Rng1` = 50.
+  ["Acan", (l: CorpseSpellRow) => l.castRange || 50],
 ]);
 
 /** The two columns a sweep's reach is read out of (`Rng1` / `Area1`). Structural, like the
@@ -207,7 +212,14 @@ export function corpseReach(code: string, lvl: CorpseSpellRow): number {
   return CORPSE_SPAWNERS.get(code)?.(lvl) ?? 0;
 }
 
-/** Does this ability build something out of a body, and therefore need one? */
+/** What a member of the family needs of the body. Only Cannibalize eats it rather than
+ *  rebuilding the unit that died, so only it takes a body whose type is unknown — and the
+ *  refusal has to look with the same eyes the handler takes with, or they disagree. */
+export function corpseNeed(code: string): CorpseNeed {
+  return code === "Acan" ? { needsType: false } : {};
+}
+
+/** Does this ability need a body, and therefore refuse without one? */
 export function spawnsFromCorpse(code: string): boolean {
   return CORPSE_SPAWNERS.has(code);
 }

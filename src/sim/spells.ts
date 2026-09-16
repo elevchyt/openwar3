@@ -1,6 +1,6 @@
 import type { AbilityDef, AbilityLevel, BuffFx } from "../data/abilities";
 import { MISC_GAME } from "../data/gameplayConstants";
-import { corpseReach } from "./corpses";
+import { corpseNeed, corpseReach } from "./corpses";
 import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim, EffectAnim } from "./world";
 
 // Spell effect handlers, dispatched on an ability's base `code` (data/abilities).
@@ -786,6 +786,8 @@ export function drainTag(casterId: number): string {
 /** The buff group every drain effect shares — the handle world.ts uses to strip a broken
  *  channel's damage-over-time, heal-over-time and buff art off both ends at once. */
 export const DRAIN_GROUP = "drain";
+/** The buff group a Cannibalize meal carries, so a broken channel strips that and nothing else. */
+export const CANNIBALIZE_GROUP = "cannibalize";
 /** The non-stacking key the two halves of a Possession wear — the stun on the body and the
  *  vulnerability on the Banshee. One key so `SimWorld.stripPossession` can lift both off in a
  *  single pass when the soul changes hands. */
@@ -1583,26 +1585,26 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // it. Its allegiance is deliberately unrestricted — the same cast cleanses a poisoned
   // ally and strips an enemy's Bloodlust, which is exactly why `targs1` names neither
   // `friend` nor `enemy`.
-  // Cannibalize (Ghoul) — eat a nearby corpse and regenerate off it. dataA is "Hit Points
-  // per Second" (10) across the row's duration (33s), so a body is worth 330 hit points if
-  // the meal is not interrupted.
+  // Cannibalize (Ghoul, Abomination) — eat the corpse underfoot and regenerate off it. dataA
+  // is "Hit Points per Second" (16 Ghoul, 25 Abomination) for the row's `Dur1` (20s).
   //
-  // dataB is "Max Hit Points" (800) and is deliberately unused: at the stock rate and
-  // duration the total is 330, so the cap cannot bind, and inventing a meaning for a number
+  // A CHANNEL (see CHANNELED in world.ts): the buff is the meal, and the world strips it the
+  // tick the channel breaks. It is also `untilHealed` — a full Ghoul has nothing left to eat
+  // for, and the channel ends with the buff.
+  //
+  // dataB is "Max Hit Points" (800) and is deliberately unused: at the stock rates the most a
+  // meal is worth is 320 / 500, so the cap cannot bind, and inventing a meaning for a number
   // that never takes effect would be guessing. A custom map that raises the rate would need
   // it, and that is the point at which to work out what it actually caps.
   //
-  // No corpse, no ability — the cast simply does nothing rather than granting the buff,
-  // which is why this reads the corpse first.
+  // The press is refused with no body in reach (corpseRefusal, sim/corpses.ts), so this claim
+  // only comes up empty if the body went in the wind-up; the channel then ends at once.
   Acan: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    const reach = lvl.castRange || 50;
-    // `needsType = false`: a meal does not care what died, only that something did. Every
-    // other consumer rebuilds the unit and so needs its type.
-    if (!api.claimCorpses(caster, def, ctx.x || caster.x, ctx.y || caster.y, reach, 1, { needsType: false }).length) return;
+    if (!api.claimCorpses(caster, def, ctx.x || caster.x, ctx.y || caster.y, corpseReach(def.code, lvl), 1, corpseNeed(def.code)).length) return;
     api.applyBuff(caster, {
-      kind: "hot", group: "cannibalize", timeLeft: dur(lvl, caster) || 33,
-      sourceId: caster.id, value: d(lvl, 0, 10), ...fx(def),
+      kind: "hot", group: CANNIBALIZE_GROUP, timeLeft: dur(lvl, caster) || 20,
+      sourceId: caster.id, value: d(lvl, 0, 16), untilHealed: true, ...fx(def),
     });
   },
 

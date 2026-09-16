@@ -1,7 +1,7 @@
 import { BUILD_CELL, BUILD_CELL_CELLS, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath, pathExpansionsSpent, pathArrived, pathGoal, PATH_FLOOR_EXPANSIONS, beginPath, PathScratch, type PathSearch } from "./pathfind";
 import { targsKindError } from "./targeting";
-import { corpseAdmits, corpseMissingError, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
+import { corpseAdmits, corpseMissingError, corpseNeed, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { BlightGrid } from "./blight";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, normalizeTargetFlags, requiredHeroLevel, KNOWN_ABILITIES, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT } from "../data/abilities";
@@ -40,7 +40,7 @@ import {
   type ReviveMode,
 } from "../data/gameplayConstants";
 import { perfNow, simProfile } from "./profile";
-import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -2582,7 +2582,13 @@ const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // Shadow Hunter stands in his own circle for the whole 30 seconds. Its protection is renewed
 // off the caster's tick rather than off the field (see tickVoodoo), so it needs no field of
 // its own; what CHANNELED buys it is the standing, the looped channel clip, and the break.
-const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd"]);
+// CANNIBALIZE (`Acan`, the code `Acn2`/`ACcn` share) is the same `Animnames = stand,channel`,
+// and both models that carry it author the pose ("Stand Channel" on Ghoul.mdx and
+// Abomination.mdx). Its channel is `Dur1` (20s) and the meal is the caster's own heal buff,
+// torn down by tickBuffs the tick the channel breaks. classic.battle.net's Ghoul and
+// Abomination pages confirm the lock from the other side: "Group orders won't apply to Ghouls
+// (and Abominations) that are busy Cannibalizing corpses" — which is holdsChannel.
+const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr", "AOvd", "Acan"]);
 // Delayed-strike abilities that drop their Effectart (a ground "beware" warning) the
 // moment the cast WIND-UP begins — not when it lands — so it charges up in place and
 // REMAINS visible even if the cast is interrupted before ignition. Flame Strike's
@@ -11936,6 +11942,9 @@ export class SimWorld {
       // so the pass that tops the unit up is also the pass that drops the stun with it —
       // the caller recomputes stats straight after this, so the unit acts again the same tick.
       if (b.untilHealed && u.hp >= u.maxHp) b.timeLeft = 0;
+      // A Cannibalize meal is the channel's, not the clock's: moved, re-ordered, stunned or
+      // done, and the heal stops with it (see CHANNELED). Same test tickDrains makes.
+      if (b.group === CANNIBALIZE_GROUP && !this.channelling(u, "Acan")) b.timeLeft = 0;
       if (b.timeLeft <= 0) expired = true;
     }
     // A fresh array only when something actually ran out. An aura re-applies itself every step
@@ -13005,7 +13014,7 @@ export class SimWorld {
    */
   private corpseRefusal(u: SimUnit, def: AbilityDef, lvl: AbilityLevel | undefined, x: number, y: number): string | null {
     if (!lvl || !spawnsFromCorpse(def.code)) return null;
-    if (this.corpsesFor(u, def, x, y, corpseReach(def.code, lvl)).length > 0) return null;
+    if (this.corpsesFor(u, def, x, y, corpseReach(def.code, lvl), corpseNeed(def.code)).length > 0) return null;
     return corpseMissingError(def.targetFlags);
   }
 
@@ -13361,6 +13370,9 @@ export class SimWorld {
         // Channelling: keep facing the target point (Blizzard aims where you cast).
         u.desiredFacing = Math.atan2(pc.y - u.y, pc.x - u.x);
         pc.channelLeft -= dt;
+        // A meal ends when there is nothing left to heal: the buff is `untilHealed`, and the
+        // Ghoul gets up the tick it goes, rather than standing out the rest of `Dur1`.
+        if (pc.code === "Acan" && !u.buffs.some((b) => b.group === CANNIBALIZE_GROUP)) pc.channelLeft = 0;
         if (pc.channelLeft > 0) return;
       } else if (pc.backLeft > 0) {
         // Backswing: the effect already happened; just stand out the recovery.
@@ -14318,6 +14330,13 @@ export class SimWorld {
   /** The ability whose handler is running right now, if any — see applySpellEffect. Only
    *  the SpellApi's applyBuff reads it, to fill in the buff row a handler didn't name. */
   private casting: { def: AbilityDef; rank: number } | null = null;
+
+  /** Is `u` inside the channel of ability `code` right now — ordered to cast it, not yet
+   *  run out, and not stunned out of it? */
+  private channelling(u: SimUnit, code: string): boolean {
+    const pc = u.pendingCast;
+    return u.hp > 0 && !u.stunned && u.order === "cast" && !!pc && pc.code === code && pc.fired && pc.channelLeft > 0;
+  }
 
   private tickDrains(): void {
     if (!this.drains.length) return;
