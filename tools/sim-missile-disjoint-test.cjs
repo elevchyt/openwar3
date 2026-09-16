@@ -290,14 +290,33 @@ console.log("\nLOADED INTO ANOTHER UNIT: the Burrow / Zeppelin / Devour case");
   check("…and it bursts where the unit climbed in, not at the hold", near(r.impactAt, from), at(r.impactAt, from));
 }
 {
-  const r = shot((w, a, t) => { t.devouredBy = 99; });
-  check("being swallowed by a Kodo does too", r.fizzled && r.hp === 100000);
+  // Swallowed where it stood, and the missile bursts on that spot — even as the Kodo walks off.
+  let from = null;
+  const r = shot((w, a, t) => {
+    from = { x: t.x, y: t.y };
+    w.devourInternal(w.units.get(3), t);
+  }, (w) => { addUnit(w, 3, 1, 1150, 500, []); }, (w) => { w.units.get(3).y += 4; });
+  // `lost` means no hit landed; the hp that does come off is the Kodo's digestion.
+  check("being swallowed by a Kodo does too", r.lost, `hp ${r.hp}`);
+  check("…bursting where it was swallowed", near(r.impactAt, from), at(r.impactAt, from));
 }
 {
   // Mirror Image whisks the Blademaster off the field for the beat the copies fly out on
   // (`vanished`), and that is a disjoint on the same grounds: there is nothing standing there.
+  // It is a DODGE: the missile bursts where he cast it.
+  let from = null;
+  const r = shot((w, a, t) => {
+    from = { x: t.x, y: t.y };
+    t.vanished = true;
+    w.mirrorCasts.push({ casterId: t.id, delayLeft: 999, thrown: false, spots: [] });
+  });
+  check("and so does Mirror Image's shuffle", r.lost && r.hp === 100000, `hp ${r.hp}`);
+  check("…bursting where he cast it", near(r.impactAt, from), at(r.impactAt, from));
+}
+{
+  // Off the field for any OTHER reason (a Soul Gem, a Reincarnation's wait) still just fizzles.
   const r = shot((w, a, t) => { t.vanished = true; });
-  check("and so does Mirror Image's shuffle", r.fizzled && r.hp === 100000);
+  check("a vanish that is not Mirror Image still fizzles", r.fizzled && r.hp === 100000);
 }
 
 console.log(`\n${failures ? `${failures} FAILED` : "all passed"}`);

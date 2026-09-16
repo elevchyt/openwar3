@@ -18067,11 +18067,18 @@ export class SimWorld {
     // A HOLD (Burrow, Entangled Gold Mine, a transport) sends the missile on to where the unit
     // stood as it climbed in — boarding puts the passenger at the host's centre, and a
     // transport then carries it away, so its position now is not the spot it vanished from.
-    // The other ways off the field still simply fizzle.
     if (t.inBurrow) {
       const b = this.boardedFrom.get(t.id);
       return b && b.host === t.garrisonHost ? { x: b.x, y: b.y } : { x: t.x, y: t.y };
     }
+    // DEVOUR and MIRROR IMAGE leave the same kind of spot behind, and neither has to be written
+    // down: a swallowed unit keeps the position it was eaten at until the Kodo lets it out
+    // (devourInternal moves nothing), and the Blademaster stays where he cast until his image
+    // lands and `teleportUnit` sets him down. Mirror Image is a DODGE in the original game —
+    // cast under an incoming Storm Bolt and it bursts on the empty ground he vanished from.
+    if (t.devouredBy > 0) return { x: t.x, y: t.y };
+    if (t.vanished && this.mirrorCasts.some((m) => m.casterId === t.id)) return { x: t.x, y: t.y };
+    // The rest — a gold mine, a build site, a Reincarnation's wait, a Soul Gem — still fizzle.
     if (isOffField(t)) return "fizzle";
     // "The target is invisible." `invisible` is the fade IN FORCE, not the Transition Time —
     // which is precisely why a Wind Walk cut short to a fraction of a second disjoints while
