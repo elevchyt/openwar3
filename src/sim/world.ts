@@ -40,7 +40,7 @@ import {
   type ReviveMode,
 } from "../data/gameplayConstants";
 import { perfNow, simProfile } from "./profile";
-import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -14431,7 +14431,7 @@ export class SimWorld {
    *  They live OUTSIDE their field on purpose: shards already in the air still land
    *  when the channel is broken, so a Blizzard cancelled the instant before impact
    *  still deals that last wave. */
-  private waveImpacts: Array<{ t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean }> = [];
+  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean }> = [];
 
   // --- Mirror Image (AOmi) ------------------------------------------------------------
   //
@@ -14770,6 +14770,7 @@ export class SimWorld {
           wy += Math.sin(a) * r;
         }
         const impact = {
+          code: f.code,
           t: f.impactDelay ?? 0,
           x: wx,
           y: wy,
@@ -14926,6 +14927,15 @@ export class SimWorld {
       if (w.buildingsOnly && !t.building) continue;
       // Bladestorm's blades pass through a Banished or Ethereal body (skipEthereal).
       if (w.skipEthereal && t.ethereal) continue;
+      // …and a MAGIC field passes through a spell-immune one: Blizzard on a Destroyer, Flame
+      // Strike on a Spell Breaker, anything but the physical and Universal fields on a
+      // Blademaster in his own storm (FIELD_PIERCES_SPELL_IMMUNITY). Asked of every
+      // allegiance, as spellDamage asks it: it is the damage TYPE that fails to land, not a
+      // hostile spell being refused. And asked only HERE, after `each` — "the unit still
+      // counts toward ability damage caps … the unit with Spell Immunity will soak the
+      // damage" (Liquipedia, Spell Immunity), so a Destroyer in a capped Blizzard still
+      // thins what everyone beside it takes.
+      if (t.magicImmune && !FIELD_PIERCES_SPELL_IMMUNITY.has(w.code)) continue;
       // "Building Reduction" (DataD): structures shrug off this fraction of the wave.
       let dmg = t.building ? each * (1 - w.buildingReduction) : each;
       // …and Death and Decay's is not a number of hit points at all but a SHARE of the

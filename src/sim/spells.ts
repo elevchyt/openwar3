@@ -412,8 +412,9 @@ export interface SpellFieldInit {
   /** Each wave lands wherever the CASTER now stands, and the field ends with him. Bladestorm:
    *  the storm is "around the Blademaster", who keeps walking and fighting inside it. */
   followCaster?: boolean;
-  /** Ethereal units are spared. Bladestorm is the one field whose blades are PHYSICAL — the
-   *  classic.battle.net Blademaster page: "Does not damage Ethereal units." */
+  /** Ethereal units are spared: the field's damage type is physical. Bladestorm (Enhanced —
+   *  the classic.battle.net Blademaster page: "Does not damage Ethereal units") and Volcano
+   *  (Normal), per FIELD_PIERCES_SPELL_IMMUNITY's source. */
   skipEthereal?: boolean;
   /** The field rocks the CAMERA while it runs (Earthquake, the one thing in the game that
    *  does). Presentation only — see MapViewerScene.updateFieldLoops. */
@@ -622,6 +623,28 @@ export const SELF_INVIS_GROUP: Record<string, string> = {
  *  it's fixed in the engine at one second (Liquipedia "Blizzard": "Wave Duration:
  *  1 second"), so Blizzard's 6 waves fill its 6s channel and cooldown exactly. */
 export const WAVE_FIELDS = new Set(["AHbz", "ANrf"]);
+
+/**
+ * The damage fields (base `code`) whose damage REACHES a spell-immune unit. Every other field
+ * is spared by it (world.ts landWave).
+ *
+ * Immunity is decided by the ability's DAMAGE TYPE, which the Object Editor cannot change —
+ * Hive "Spell/Ability Damage Types and what they mean" (thread 316271, Bribe with Tasyen,
+ * every damaging ability tested): Magic, Fire, Cold, Force and the rest "Cannot damage spell
+ * immune"; Normal and Enhanced "can affect Spell immune" but not Ethereal; Universal affects
+ * both. Liquipedia's Damage Calculation page says the same of the two ends ("Spell immune
+ * units take no damage from magic damage", "Universal damage … also affects spell immune
+ * units. Most damaging ultimates have damage type universal"). Of the fields we run:
+ *
+ *   Universal  AUdd Death and Decay · AEsf Starfall · ANst Stampede · AOeq Earthquake
+ *   Normal     ANvc Volcano         (so it also passes through Ethereal — see its handler)
+ *   Enhanced   AOww Bladestorm      (likewise)
+ *   spared     AHbz Blizzard (Cold) · ANrf Rain of Fire, AHfs Flame Strike (Fire) ·
+ *              ANcs Cluster Rockets (Force)
+ *
+ * The thread's Monsoon and Doom are Universal too; neither is a field here.
+ */
+export const FIELD_PIERCES_SPELL_IMMUNITY = new Set(["AUdd", "AEsf", "ANst", "AOeq", "ANvc", "AOww"]);
 const WAVE_INTERVAL = 1; // seconds between waves — engine constant, in no data file
 
 /** Wave schedule for a repeating area field, shared by the spell handler (which
@@ -2297,10 +2320,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     });
   },
 
-  // Volcano (Firelord, ult) — sustained eruption damaging the target area.
+  // Volcano (Firelord, ult) — sustained eruption damaging the target area. Its damage type is
+  // NORMAL (Hive 316271, and Tasyen's own test in that thread: "Vulkan DAMAGE_TYPE_NORMAL"),
+  // so it reaches a spell-immune unit (FIELD_PIERCES_SPELL_IMMUNITY) and not an ethereal one.
   ANvc: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 500, damagePerWave: d(lvl, 1, 8), waves: 12, interval: 1, casterId: caster.id, art: fieldArt(def), loopSound: fieldLoop(def) });
+    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 500, damagePerWave: d(lvl, 1, 8), waves: 12, interval: 1, casterId: caster.id, art: fieldArt(def), loopSound: fieldLoop(def), skipEthereal: true });
   },
 
   // Earthquake (Far Seer, ult) — the ground itself comes apart. Columns Oeq1..Oeq4:
