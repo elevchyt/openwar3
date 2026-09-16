@@ -104,6 +104,9 @@ export interface RenderUnit {
   readonly x: number;
   readonly y: number;
   readonly facing: number;
+  /** Altitude above the ground the SIM holds the unit at. Read for a unit whose form moved it
+   *  between the ground and the air (Entry.liftFromSim) — the climb is the sim's. */
+  readonly flyHeight: number;
   readonly radius: number;
   readonly owner: number;
   readonly team: number;

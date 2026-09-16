@@ -38,7 +38,7 @@ import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
-import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, requiredHeroLevel, aoeCursorRadius } from "../data/abilities";
+import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, requiredHeroLevel, aoeCursorRadius, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, type AbilityLevel } from "../data/abilities";
 import { isDesktopApp } from "../assets/nativeInstall";
 import { loadCommandStrings, disabledIconPath, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
@@ -3854,6 +3854,20 @@ export class MapViewerScene {
    *  one footprint (`htow`/`hkee`/`hcas` all use the same pathing texture and a 176 collision),
    *  and re-stamping would mean unsettling a building with units standing around it. If a
    *  future upgrade DID change footprint, that would need handling here. */
+  /** A paid form toggle's price — the alternate unit's over the normal one's (see
+   *  SimWorld.morphPriceOf, which charges it) — or null for every other ability. */
+  private morphPriceFor(lvl: AbilityLevel | undefined): { gold: number; lumber: number; food: number } | null {
+    if (!lvl || !(morphFlags(lvl) & MORPH_FLAG_REQUIRES_PAYMENT)) return null;
+    const from = this.registry.get(lvl.dataStr[0] ?? "");
+    const to = this.registry.get(lvl.summon || lvl.dataStr[1] || "");
+    if (!from || !to) return null;
+    return {
+      gold: Math.max(0, to.goldCost - from.goldCost),
+      lumber: Math.max(0, to.lumberCost - from.lumberCost),
+      food: Math.max(0, to.foodUsed - from.foodUsed),
+    };
+  }
+
   private async remodelUnit(simId: number, toTypeId: string): Promise<void> {
     const map = this.viewer.map;
     if (!map || !this.rts) return;
@@ -9735,6 +9749,20 @@ export class MapViewerScene {
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      // A PERMANENT form has no second face at all: a Destroyer still lists `Aave` in its
+      // abilList, but "Once morphed, the Destroyer cannot turn back into an Obsidian Statue"
+      // (Liquipedia, Destroyer), so there is no button to draw (SimWorld.morphIsPermanent).
+      if (morphFlags(lvl) & MORPH_FLAG_PERMANENT && def.levelData.some((l) => (l.summon || l.dataStr?.[1]) === su.typeId)) continue;
+      // …and a PAID one carries a price like a trained unit's, printed and checked the same way:
+      // the Destroyer's gold, lumber and food over the statue's (SimWorld.morphPriceOf).
+      const morphPrice = this.morphPriceFor(lvl);
+      // …and a form toggle that writes no words of its own borrows the FORM's. `[Aave]` has a
+      // Name and nothing else in UndeadAbilityStrings.txt; the button's "Morph into
+      // Des|cffffcc00t|rroyer", its T and its whole Ubertip are the `[ubsp]` row's in
+      // UndeadUnitStrings.txt — the Destroyer is described the way a trained unit is, because it
+      // is priced like one.
+      const formUnit = !def.tips.some(Boolean) && lvl?.summon ? this.registry.get(lvl.summon) : undefined;
+      const formWords = formUnit?.tip ? formUnit : undefined;
       // A toggle shows the face of what it can do NEXT: one row, two directions
       // (`[Aroo]` Order=root Art=BTNRoot "Root" / Unorder=unroot Unart=BTNUproot "Uproot"),
       // so a PLANTED Ancient wears the `un` half because pulling itself up is the move
@@ -9806,13 +9834,15 @@ export class MapViewerScene {
         icon: this.blpIcon(reversed ? def.unIcon : def.icon),
         // The reverse direction has no `Unname` of its own — the row carries one Name — so
         // the title comes from `Untip`, which is where WC3 keeps it ("Up|cffffcc00r|root").
-        name: reversed ? wc3ToPlain(def.unTip) || def.name : def.levels > 1 ? `${def.name} (Level ${ab.level})` : def.name,
-        hotkey: reversed ? def.unHotkey || def.hotkey : def.hotkey,
-        tip: reversed ? def.unTip || this.abilityTip(def, ab.level) : this.abilityTip(def, ab.level),
+        name: reversed ? wc3ToPlain(def.unTip) || def.name : formWords ? wc3ToPlain(formWords.tip) : def.levels > 1 ? `${def.name} (Level ${ab.level})` : def.name,
+        hotkey: reversed ? def.unHotkey || def.hotkey : def.hotkey || formWords?.hotkey || "",
+        tip: reversed ? def.unTip || this.abilityTip(def, ab.level) : formWords ? formWords.tip : this.abilityTip(def, ab.level),
         // …and the red line that says what to research for it, when it is not yours yet. Empty
         // for everything already unlocked, which is almost every button on almost every card.
-        desc: (reversed ? def.unUberTip || this.abilityDesc(def, ab.level) : this.abilityDesc(def, ab.level)) + this.requirementLine(ab.id),
+        desc: (reversed ? def.unUberTip || this.abilityDesc(def, ab.level) : formWords ? this.tipText(formWords.description) : this.abilityDesc(def, ab.level)) + this.requirementLine(ab.id),
         mana: manaCost,
+        ...(morphPrice ?? {}),
+        cantAfford: !!morphPrice && this.rts.stashFor(su.owner).gold < morphPrice.gold || !!morphPrice && this.rts.stashFor(su.owner).lumber < morphPrice.lumber || !!morphPrice && this.rts.foodRefusal(su.owner, morphPrice.food) !== "",
         col, row,
         // Mana is the ONE price WC3 draws: short of it, the icon goes deep blue (see
         // `noMana` on CommandButton). The button stays live and the click is still how you

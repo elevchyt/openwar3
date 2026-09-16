@@ -401,6 +401,53 @@ function druid(id, typeId = "edoc") {
   check("…with the rage's stats gone with it", [u.speed, u.weapon.cooldown, u.altFormLeft], [290, 2.5, 0]);
 }
 
+// --- Destroyer Form: a PAID, PERMANENT morph from the ground into the air --------------------
+// `[Aave]` Cast1 1, Dur1 1.1, DataA1 uobs, DataB1 31 (every Morphing Flag), DataC1 1 ("Altitude
+// Adjustment Duration"), UnitID1 ubsp (Units\AbilityData.slk). The two units off UnitBalance.slk /
+// UnitData.slk: uobs 200/35 gold/lumber, 3 food, foot, collision 32, mana 600 (starts 400);
+// ubsp 300/85, 5 food, fly at moveHeight 240, collision 8, mana 400 (starts 0), regen -3.
+{
+  UNITS.uobs = { id: "uobs", classification: ["mechanical"], acquireRange: 600, hitPoints: 500, mana: 600, manaStart: 400, armor: 4, armorType: "large", sightDay: 1200, sightNight: 800, speed: 270, moveType: "foot", moveHeight: 0, collision: 32, goldCost: 200, lumberCost: 35, foodUsed: 3, abilities: ["Aave"], heroAbilities: [], autoAbility: "", weapons: [] };
+  UNITS.ubsp = { id: "ubsp", classification: [], acquireRange: 500, hitPoints: 850, mana: 400, manaStart: 0, armor: 3, armorType: "small", sightDay: 1400, sightNight: 1000, speed: 320, moveType: "fly", moveHeight: 240, collision: 8, goldCost: 300, lumberCost: 85, foodUsed: 5, abilities: ["Aave"], heroAbilities: [], autoAbility: "", weapons: [] };
+  ABILS.Aave = { id: "Aave", code: "Aave", unOrder: "unsphinxform", levelData: [lvl({ dataStr: ["uobs"], summon: "ubsp", data: [NaN, 31, 1, 0, 8], castTime: 1, duration: 1.1 })] };
+  let room = true;
+  world.foodRoom = (_owner, need) => room && need === 2;
+
+  const u = fiend("uobs");
+  Object.assign(u, { id: 77, hp: 250, maxHp: 500, baseMaxHp: 500, baseMaxMana: 600, maxMana: 600, mana: 600, radius: 32, flying: false, webbed: false, flyHeight: 0, altitudeShift: null, altFormLeft: 0, altFormAbil: "", morphT: 0, abilities: [{ id: "Aave", code: "Aave", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  world.units.delete(1);
+  world.units.set(u.id, u);
+  const stash = world.stashOf(0);
+
+  stash.gold = 99; stash.lumber = 500;
+  check("the morph is refused short of its 100 gold", [world.castUseError(u.id, "Aave"), world.morphToggle(u, ABILS.Aave), u.typeId], ["Nogold", false, "uobs"]);
+  stash.gold = 500; stash.lumber = 49;
+  check("…and of its 50 lumber", world.castUseError(u.id, "Aave"), "Nolumber");
+  stash.lumber = 500; room = false;
+  check("…and of its 2 food", world.castUseError(u.id, "Aave"), "Nofood");
+  room = true;
+  check("…and allowed once all three are there", world.castUseError(u.id, "Aave"), null);
+
+  check("the statue becomes a Destroyer", [world.morphToggle(u, ABILS.Aave), u.typeId], [true, "ubsp"]);
+  check("…for the difference in price", [stash.gold, stash.lumber], [400, 450]);
+  check("…locked through Cast1 + Dur1 (the 2s Morph clip)", Math.round(u.morphT * 100) / 100, 2.1);
+  check("…with the Destroyer's starting mana, not a share of the statue's", u.mana, 0);
+  check("…at the same share of its life", Math.round(u.hp), 425);
+  check("…still on the ground while it changes shape", [u.flying, u.flyHeight], [false, 0]);
+
+  // The lock runs out, and only then does it leave the ground — over DataC1's one second.
+  u.morphT = 0;
+  world.tickAltitude(u, 0.5);
+  check("…then takes off as a flyer with its own collision", [u.flying, u.footprint, u.radius], [true, 0, 8]);
+  check("…climbing at the row's rate (half way in half a second)", u.flyHeight, 120);
+  world.tickAltitude(u, 0.6);
+  check("…and holding at the Destroyer's moveHeight", [u.flyHeight, u.altitudeShift], [240, null]);
+
+  // Permanent: the Destroyer still lists Aave, but there is no way back.
+  check("a Destroyer cannot become a statue again", [world.castUseError(u.id, "Aave"), world.morphToggle(u, ABILS.Aave), u.typeId], [world.constructor.SILENT_REFUSAL, false, "ubsp"]);
+  world.foodRoom = undefined;
+}
+
 console.log(`
 ${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

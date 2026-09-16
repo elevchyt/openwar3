@@ -249,6 +249,11 @@ interface Entry {
   unit: MapUnit;
   anims: AnimSet;
   moveHeight: number;
+  /** This unit changed shape between a walker and a flyer (an Obsidian Statue into a
+   *  Destroyer), so its height is the SIM's (`flyHeight`) rather than its type's: it stays on
+   *  the ground through its Morph clip and climbs over the row's Altitude Adjustment Duration
+   *  (SimWorld.shiftAltitude) instead of popping 240 units up the frame the type swaps. */
+  liftFromSim?: boolean;
   // Building footprint half-extents in WORLD units (0 for mobile units). When set, the
   // render Z seats the structure on the tallest terrain its footprint spans (issue #15).
   footHalfW: number;
@@ -3914,6 +3919,9 @@ export class RtsController {
     const seqs = entry.unit.instance.model.sequences;
     entry.anims = buildAnimSet(seqs, props);
     Object.assign(entry, findBirthFields(seqs, props));
+    // A form that moved it between the ground and the air: from here on the SIM says how high.
+    const was = this.registry.get(entry.typeId);
+    if (!skin && was && (was.moveType === MoveType.Fly) !== (def.moveType === MoveType.Fly)) entry.liftFromSim = true;
     entry.typeId = def.id;
     entry.race = def.race;
     entry.name = def.name;
@@ -4387,6 +4395,7 @@ export class RtsController {
       }
       this.loc[0] = u.x;
       this.loc[1] = u.y;
+      if (e.liftFromSim) e.moveHeight = lift(u.flyHeight); // the climb is the sim's — see Entry.liftFromSim
       // Buildings seat on the tallest terrain their footprint spans (issue #15); mobile
       // units (footHalfW 0) ride the centre-sampled ground + their fly height.
       this.loc[2] =

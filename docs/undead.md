@@ -384,11 +384,31 @@ This milestone is the ECONOMY. The rest of the race is data-driven and largely a
   `Asac` (the Pit's own). Both are `todo` in [`abilities-audit.md`](./abilities-audit.md).
 * **Ziggurat towers** — `uzg1`/`uzg2` upgrade through the ordinary building-upgrade path, but
   `Afra` Frost Attack (the Nerubian Tower's) is an ORB effect and belongs with [`orbs.md`](./orbs.md).
-* The Obsidian Statue's `Arpl`/`Arpm`/`Arpb`, the Destroyer's `Aave`/`Advm`/`Aabs`, the Banshee's
+* The Obsidian Statue's `Arpl`/`Arpm`/`Arpb`, the Banshee's
   `Acrs`/`Aams`/`Apos`, the Necromancer's `Arai`, the Meat Wagon's `Amel`/`Amed`/`Aexh`, the
   Graveyard's `Agyd`, the Gargoyle's `Astn`, the Shade's `Agho` — all still `todo`; see the
   audit for the full list. (The Crypt Fiend's `Aweb` came off it — see §7.)
 * Blight on TREES, and the blight doodads (see §1).
+
+## Destroyer Form is a paid, permanent morph into a flyer
+
+`[Aave]` is the one form toggle that sets every `Eme2` Morphing Flag (`DataB1` = 31 — the bits are
+named in `UI\UnitEditorData.txt` [morphFlags]), and two of them are the ability:
+
+* **Requires Payment** — the press charges `ubsp`'s price over `uobs`'s, 100 gold / 50 lumber /
+  2 food (`SimWorld.morphPriceOf`), refused with `Nogold`/`Nolumber`/`Nofood` like a trained unit.
+  The row writes no Tip of its own: the button's "Morph into Des**t**royer", its T and its Ubertip
+  are the `[ubsp]` unit row's.
+* **Permanent** — no way back, although `ubsp` still lists `Aave` and the row has an `Unorder`.
+  The card draws no button for it.
+
+`Cast1` 1 + `Dur1` 1.1 is the statue LOCKED through ObsidianStatue.mdx's 2-second "Morph" clip (a
+form toggle has no wind-up; its cast time is part of the transition), and `DataC1` 1 ("Altitude
+Adjustment Duration") is the second it then takes to climb to the Destroyer's `moveHeight` of 240
+(`SimWorld.shiftAltitude`). A paid morph arrives with the new type's `mana0` — 0 — and the
+Destroyer's mana regeneration is −3/s, so its mana comes from `Advm` Devour Magic (+50 hp / +75
+mana per unit devoured, nothing for a FRIENDLY buff — `DataF1` "Ignore Friendly Buffs") and `Aabs`
+Absorb Mana (all of one of your OWN units' mana — `targs1 = player` → `Targetowned`).
 
 ## The Obsidian Statue is the race's only healer
 

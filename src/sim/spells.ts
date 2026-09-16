@@ -65,6 +65,9 @@ export interface SpellApi {
   applyBuff(target: SimUnit, buff: SimBuffInit): void;
   /** Remove timed (dispellable) buffs from a unit (Dispel Magic, etc.). */
   dispel(target: SimUnit): void;
+  /** Throw `def`'s `Missileart` from `from` to `to` carrying nothing — the picture of magic being
+   *  taken back to its taker (Devour Magic, Absorb Mana). */
+  missileBack(from: SimUnit, to: SimUnit, def: AbilityDef): void;
   /** Ask the renderer to create a summoned/raised unit (deferred, like training).
    *  `art.summon` plays where the unit materializes; `art.unsummon` replaces it when its
    *  timer runs out or it is dismissed (see summonArt/unsummonArt).
@@ -2694,6 +2697,96 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // toggles the player turns off rather than timed forms — `morphToggle` reads exactly that.
   Abrf: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
   Arav: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
+
+  // DESTROYER FORM (`[Aave]`, "Morph into Destroyer") — uobs ⇄ ubsp, the Obsidian Statue
+  // breaking out of its stone as a Destroyer. The same swap as the Druid forms, and the row is
+  // the one member of the family that sets EVERY morphing flag (`DataB1` = 31), two of which
+  // change what the press is:
+  //   • Requires Payment — the Destroyer's price over the statue's, 100 gold / 50 lumber / 2
+  //     food (morphPriceOf; both wikis print exactly that), refused like a trained unit;
+  //   • Permanent — "Once morphed, the Destroyer cannot turn back into an Obsidian Statue"
+  //     (Liquipedia, Destroyer), although `ubsp` still lists `Aave` and the row still has its
+  //     `Unorder=unsphinxform`.
+  // `Cast1` 1 + `Dur1` 1.1 is the statue standing locked through ObsidianStatue.mdx's 2-second
+  // "Morph" clip, and `DataC1` 1 ("Altitude Adjustment Duration") the second it then takes to
+  // climb to the Destroyer's `moveHeight` of 240 — see morphToggle / shiftAltitude.
+  // Gated on `Requires=Rusp` (Destroyer Form, researched at the Slaughterhouse).
+  Aave: (api, caster, def, rank) => { api.morphToggle(caster, def, rank); },
+
+  // DEVOUR MAGIC (`[Advm]`, the Destroyer) — a dispel that FEEDS. Every unit in `Area1` = 200
+  // around the point loses its buffs, a summon takes `DataE1` = 160, and the Destroyer is paid
+  // for each unit it ate magic off: AbilityMetaData names the columns (WorldEditStrings):
+  //   DataA1 50   "Life Per Unit"          DataC1 0   "Life Per Buff"
+  //   DataB1 75   "Mana Per Unit"          DataD1 0   "Mana Per Buff"
+  //   DataE1 160  "Summoned Unit Damage"   DataF1 1   "Ignore Friendly Buffs"
+  // and the tooltip's "Each unit that is devoured of magic gives the Destroyer <DataA1> hit
+  // points and <DataB1> mana" is the whole reward — a Destroyer's mana regeneration is −3 a
+  // second (UnitBalance `ubsp` regenMana), and this is how it gets any.
+  //
+  // "Ignore Friendly Buffs" is the 1.17 fix: "Devour Magic no longer gives health or mana when a
+  // player devours friendly buffs" (Wowpedia, Destroyer, patch 1.17 — the Destroyer lives on
+  // "enemy buffs or allied debuffs"). A friendly buff is one the bearer's own side hung on a unit
+  // of the caster's side, read the way worthDispelling reads polarity: by who put it there. They
+  // are still EATEN — only the payment skips them. An aura (`timeLeft` Infinity, back next tick)
+  // and a Doom (undispellable) are nothing to eat and pay nothing either.
+  //
+  // `Specialart` DispelMagicTarget.mdl plays on each unit devoured, and the magic flies back to
+  // the Destroyer as `Missileart` DevourMagicBirthMissile.mdl — one per unit that paid.
+  Advm: (api, caster, def, rank, ctx) => {
+    const lvl = def.levelData[rank - 1];
+    const perUnitLife = d(lvl, 0, 50);
+    const perUnitMana = d(lvl, 1, 75);
+    const perBuffLife = d(lvl, 2, 0);
+    const perBuffMana = d(lvl, 3, 0);
+    const summonDamage = d(lvl, 4, 160);
+    const ignoreFriendly = d(lvl, 5, 1) !== 0;
+    let life = 0;
+    let mana = 0;
+    for (const t of api.unitsInArea(ctx.x, ctx.y, lvl.area || 200)) {
+      if (t.hp <= 0 || !api.admits(def, t)) continue;
+      const eaten = t.buffs.filter((b) => {
+        if (b.undispellable || !Number.isFinite(b.timeLeft)) return false;
+        if (!ignoreFriendly || api.hostile(caster, t)) return true;
+        // On our side: a buff our side put there is a friendly buff, and pays nothing.
+        const src = api.getUnit(b.sourceId);
+        return !!src && api.hostile(caster, src);
+      });
+      const hadAny = t.buffs.some((b) => !b.undispellable && Number.isFinite(b.timeLeft));
+      if (hadAny) {
+        api.dispel(t);
+        if (def.specialArt) api.emitEffect(def.specialArt, t.x, t.y, t.id);
+      }
+      if (t.summonLeft > 0) api.spellDamage(t, summonDamage, caster.id);
+      if (eaten.length > 0) {
+        life += perUnitLife + perBuffLife * eaten.length;
+        mana += perUnitMana + perBuffMana * eaten.length;
+        if (t !== caster) api.missileBack(t, caster, def);
+      }
+    }
+    if (caster.hp > 0 && life > 0) api.spellHeal(caster, life);
+    if (mana > 0) caster.mana = Math.min(caster.maxMana, caster.mana + mana);
+  },
+
+  // ABSORB MANA (`[Aabs]`, the Destroyer) — "Takes all mana from one of your units and gives it
+  // to the Destroyer." `targs1` = player,vuln,invu: one of YOUR units (targetAllowed answers
+  // anyone else with `Targetowned`), from `Rng1` = 900, for no mana and no cooldown. The columns
+  // are `DataA1` "Maximum Life Absorbed" = 0 and `DataB1` "Maximum Mana Absorbed" = 99999 — so
+  // all of it, and none of the life. ALL of it leaves the unit even when the Destroyer's pool
+  // cannot hold it: the ability takes rather than tops up, and the tooltip says "all mana".
+  // `AbsorbManaBirthMissile.mdl` flies back from the unit drained (MISSILE_COMES_BACK).
+  Aabs: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || t === caster || t.hp <= 0) return;
+    const lvl = def.levelData[rank - 1];
+    const mana = api.burnMana(t, d(lvl, 1, 99999));
+    const life = Math.min(Math.max(0, t.hp - 1), d(lvl, 0, 0));
+    if (life > 0) {
+      t.hp -= life;
+      api.spellHeal(caster, life);
+    }
+    if (mana > 0) caster.mana = Math.min(caster.maxMana, caster.mana + mana);
+    if (mana > 0 || life > 0) api.missileBack(t, caster, def);
+  },
 
   // Frost Armor (Lich) — buff a friendly unit with +armour (dataB) for the
   // duration (WC3 also slows melee attackers, which we don't model). Autocasts.

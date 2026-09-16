@@ -64,6 +64,19 @@ const TARGET_FLAG_ALIASES: Readonly<Record<string, string>> = {
   neut: "neutral", nonh: "nonhero", aliv: "alive", debr: "debris", terr: "terrain",
 };
 
+/**
+ * A form toggle's `Eme2` "Morphing Flags" (DataB), as `UI\UnitEditorData.txt` [morphFlags] numbers
+ * the bits: 0 Uninterruptable, 1 Immediate Landing, 2 Immediate Take Off, 3 Permanent, 4 Requires
+ * Payment. Only a row that names its alternate unit in `UnitID1` carries the column — Call to Arms
+ * keeps its militia's id in DataB — so anything else reads 0.
+ */
+export const MORPH_FLAG_PERMANENT = 8;
+export const MORPH_FLAG_REQUIRES_PAYMENT = 16;
+export function morphFlags(lvl: { summon: string; data: number[] } | undefined): number {
+  const v = lvl?.summon ? lvl.data[1] : 0;
+  return v === undefined || Number.isNaN(v) ? 0 : v;
+}
+
 export function normalizeTargetFlags(list: string | readonly string[]): string[] {
   const words = typeof list === "string" ? list.split(",") : list;
   const out: string[] = [];
@@ -833,6 +846,14 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // turned it up.
   Abrf: { target: "none" },
   Arav: { target: "none" },
+  // The Obsidian Statue's third button and the Destroyer's two actives (`[uobs] abilList =
+  // Arpl,Arpm,Aave`, `[ubsp] abilList = Advm,Afak,Aave,Aabs,ACmi`). Destroyer Form is the
+  // same form toggle as the two above, with a price and no way back (spells.ts `Aave`); Devour
+  // Magic is aimed at the GROUND (`Area1` 200 at `Rng1` 600 — Liquipedia "Area Target"); Absorb
+  // Mana at one of your own units (`targs1 = player`).
+  Aave: { target: "none" },
+  Advm: { target: "point" },
+  Aabs: { target: "unit" },
   // The three REGENERATION auras — and the two Fountains, which are nothing else. A Fountain
   // of Health's whole ability list is `Avul,ACnr` and a Fountain of Mana's `Avul,ANre`
   // (Units\UnitAbilities.slk); those rows' base codes are `Aoar` and `Aarm`, which are also

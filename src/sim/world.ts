@@ -4,7 +4,7 @@ import { targsKindError } from "./targeting";
 import { corpseAdmits, corpseMissingError, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { BlightGrid } from "./blight";
-import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, normalizeTargetFlags, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, normalizeTargetFlags, requiredHeroLevel, KNOWN_ABILITIES, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { slotMissileArt, autoArmed, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
@@ -213,6 +213,9 @@ export interface SimProjectile {
    *  World.resolveOrb). It travels with the missile because the orb is what the missile is
    *  DRAWN as — swapping art at launch and re-resolving at impact could disagree. */
   orb?: ResolvedOrb;
+  /** A missile that CARRIES nothing: the magic a Destroyer devours or absorbs, flying from the
+   *  unit it was taken off back to the Destroyer (SpellApi.missileBack). It lands and dies. */
+  visual?: boolean;
 }
 
 /** One lightning bolt the renderer should string up (issue #97).
@@ -1062,6 +1065,7 @@ const ROOT_MORPH_TIME = 2.5;
  *  so this only ever bites a custom row that means something else by the column. */
 const MAX_MORPH_TRANSITION = 3;
 
+
 /** How much faster than the settle itself a planting Ancient TURNS back to `builtFacing`
  *  (developer request: "double speed").
  *
@@ -1784,6 +1788,15 @@ export interface SimUnit {
    *  move (`recomputeStats` zeroes the speed). Without it a walking Ancient slid across the
    *  ground mid-morph, and a planting one was already a building before it had sat down. */
   morphT: number;
+  /**
+   * A change of ALTITUDE still being flown: a form toggle that moved the unit between the ground
+   * and the air (an Obsidian Statue becoming a Destroyer, a Druid of the Talon taking Storm Crow
+   * Form). `to` is the height being made for and `rate` the world units a second it climbs or
+   * sinks at, off the row's own `Eme3` "Altitude Adjustment Duration". `wait` holds a TAKE-OFF
+   * until the shape change is over (`morphT`): the statue grows its wings standing on the ground
+   * and only leaves it once it is a Destroyer. Null for everything else, which is almost always.
+   */
+  altitudeShift: { to: number; rate: number; wait: boolean } | null;
   /**
    * Seconds left on a Scroll of Town Portal's channel, or 0.
    *
@@ -2747,6 +2760,15 @@ export function castCostOf(u: { immolation: string }, def: AbilityDef, lvl: Abil
  * there is never a walk first: the pulse goes off where the statue stands.
  */
 const NO_WINDUP = new Set(["Arpl", "Arpm"]);
+/**
+ * Unit-target rows whose `Missileart` flies the OTHER way — from the target to the caster — so the
+ * spell lands at the press and the missile is the picture of what it took (SpellApi.missileBack).
+ * The art's own name says which: `[Aabs]` Absorb Mana throws `AbsorbManaBirthMissile.mdl`, the
+ * mana BORN out of the unit being drained, the same family as Devour Magic's
+ * `DevourMagicBirthMissile.mdl`. Sent outbound, the Destroyer lobbed its own mana at the
+ * Necromancer it was taking it from.
+ */
+const MISSILE_COMES_BACK = new Set(["Aabs"]);
 /** Abilities that refuse a target for being TOO BIG, with the cap in their own `DataC`.
  *  Transmute is the only one in 1.30 and its Ubertip names both the rule and the column:
  *  "Transmute cannot be used on Heroes, or creeps above level <ANtm,DataC1>" (= 5). The
@@ -6928,10 +6950,34 @@ export class SimWorld {
     // became rank 1's, with a fresh 15 seconds, for ever.
     const to = inAlt && (byTimer || def.unOrder) ? normal : alternate;
     if (!this.unitReg?.get(to)) return false; // this install doesn't ship the other form
+    // A PERMANENT form is a one-way door, whatever the row's `Unorder` says. `[Aave]` carries
+    // `Unorder=unsphinxform` and an Unart, and `ubsp` lists `Aave` in its own abilList — but its
+    // morph flags say Permanent, and a Destroyer never becomes a statue again.
+    if (inAlt && to === normal && this.morphIsPermanent(lvl)) return false;
+    // …and a PAID one is paid here, at the moment the body actually changes, against the same
+    // three questions the button was asked (morphPaymentError). Re-asked rather than trusted:
+    // the price may have gone on something else while the order was in flight.
+    if (to === alternate && to !== u.typeId) {
+      const price = this.morphPriceOf(lvl);
+      if (price) {
+        if (this.morphPaymentError(u.owner, price)) return false;
+        const stash = this.stashOf(u.owner);
+        stash.gold -= price.gold;
+        stash.lumber -= price.lumber;
+        // The FOOD needs no charge: supply in use is counted off the living units' own types,
+        // so the moment this unit is a `ubsp` it eats the Destroyer's five.
+      }
+    }
     // Re-casting a form the unit is ALREADY wearing is not a morph, it is a re-arming: the
     // clock below goes back to full and nothing else about the body changes. Skipped rather
     // than run as a from===to morph so the renderer isn't asked to re-skin a unit into itself.
+    const paid = to === alternate && to !== u.typeId && !!this.morphPriceOf(lvl);
     if (to !== u.typeId) this.morphUnit(u, to);
+    // A PAID morph is a unit being bought, and it arrives with the mana a bought one is born
+    // with — UnitBalance `mana0`, 0 for the Destroyer against its pool of 400 — rather than a
+    // share of the statue's: "Destroyers start with 0 mana" (Liquipedia, Destroyer), which is
+    // the whole reason the unit has to eat magic before its Orb of Annihilation can fire.
+    if (paid) u.mana = Math.min(u.maxMana, this.unitReg?.get(to)?.manaStart ?? 0);
     // Both forms share one MDX (ucrm is CryptFiend.mdx too), so the alternate FORM also wears
     // the alternate half of the model — the burrowed pose is "Stand Alternate", reached
     // through the same Morph clip an Ancient uses. See SimUnit.altModel.
@@ -6968,8 +7014,17 @@ export class SimWorld {
     // them — Burrow 1.45/0, Robo-Goblin 1.5/0, Chemical Rage 0.35/15, Metamorphosis 1.5/45 —
     // so "the two columns disagree" is exactly "Dur is a transition". Capped, because a lock
     // is a unit standing helpless and no authored transition is anywhere near it.
-    const transition = lvl && lvl.duration !== lvl.heroDuration ? Math.min(lvl.duration, MAX_MORPH_TRANSITION) : 0;
+    //
+    // …and `Cast1` belongs to the transition too. A form toggle has no gesture to wind up (see
+    // isFormToggle), so its casting time is not a pause in front of the morph but the first part
+    // of it, and the models are authored to the SUM: ObsidianStatue.mdx's "Morph" runs 2.0s
+    // against `[Aave]` Cast1 1 + Dur1 1.1, DruidOfTheTalon.mdx's 1.667 against `[Arav]` 1.05 +
+    // 0.6, DruidOfTheClaw.mdx's 1.5 against `[Abrf]` 0 + 1.45. tickCast fires the toggle the
+    // moment it is pressed (so the clip starts with the press) and the lock carries the rest.
+    const transition = lvl && lvl.duration !== lvl.heroDuration ? Math.min((lvl.castTime || 0) + lvl.duration, MAX_MORPH_TRANSITION) : 0;
     if (transition > 0) u.morphT = transition;
+    // Between the GROUND and the AIR: the statue that leaves the ground as a Destroyer.
+    this.shiftAltitude(u, lvl);
     // The stats the ABILITY adds on top of whatever the alternate unit already carries.
     // DataE/DataF are NOT one meaning across the family — AbilityMetaData scopes each pair
     // to the rows that own it, so the column has to be read against the base code:
@@ -7038,6 +7093,108 @@ export class SimWorld {
     const lvl = def.levelData[0];
     // `dataStr` is absent on hand-built defs (tests, custom rows), same caveat buffIdOf carries.
     return !!lvl?.dataStr && !!altFormOf(lvl) && !!this.unitReg?.get(lvl.dataStr[0] ?? "");
+  }
+
+  /** The row's `Eme2` Morphing Flags (see MORPH_FLAG_PERMANENT), or 0. Only a row that names
+   *  its alternate unit in `UnitID1` has the column: Call to Arms keeps its militia in DataB. */
+  private morphFlagsOf(lvl: AbilityLevel | undefined): number {
+    return morphFlags(lvl);
+  }
+
+  /** Is this form toggle a one-way door — Destroyer Form? The flag is PERMANENT, and it is the
+   *  one Destroyer Form alone sets: "Once morphed, the Destroyer cannot turn back into an
+   *  Obsidian Statue" (Liquipedia, Destroyer). A PAID one (REQUIRES_PAYMENT, also Destroyer Form
+   *  alone) charges the alternate unit's price over the normal one's — "an additional 100 gold, 50
+   *  wood and 2 food" (Wowpedia, Obsidian Statue), exactly `ubsp` 300/85/5 less `uobs` 200/35/3. */
+  morphIsPermanent(lvl: AbilityLevel | undefined): boolean {
+    return (this.morphFlagsOf(lvl) & MORPH_FLAG_PERMANENT) !== 0;
+  }
+
+  /**
+   * What a PAID form toggle costs, or null for the rest of the family: the alternate unit's
+   * price less the normal one's, in all three currencies. `[Aave]` is the only stock row with the
+   * flag, and it comes to the 100 gold, 50 lumber and 2 food both wikis print for "Morph into
+   * Destroyer" — nothing the ability row states itself, which is why it has to be derived.
+   */
+  morphPriceOf(lvl: AbilityLevel | undefined): { gold: number; lumber: number; food: number } | null {
+    if (!lvl || (this.morphFlagsOf(lvl) & MORPH_FLAG_REQUIRES_PAYMENT) === 0) return null;
+    const from = this.unitReg?.get(lvl.dataStr[0] ?? "");
+    const to = this.unitReg?.get(altFormOf(lvl));
+    if (!from || !to) return null;
+    return {
+      gold: Math.max(0, to.goldCost - from.goldCost),
+      lumber: Math.max(0, to.lumberCost - from.lumberCost),
+      food: Math.max(0, to.foodUsed - from.foodUsed),
+    };
+  }
+
+  /** Why `owner` cannot pay for a morph right now — the same three [Errors] lines, in the same
+   *  order, that a trained unit is refused with (RtsController.trainRefusal) — or null. */
+  private morphPaymentError(owner: number, price: { gold: number; lumber: number; food: number }): string | null {
+    const stash = this.stashOf(owner);
+    if (stash.gold < price.gold) return "Nogold";
+    if (stash.lumber < price.lumber) return "Nolumber";
+    if (price.food > 0 && this.foodRoom && !this.foodRoom(owner, price.food)) return "Nofood";
+    return null;
+  }
+
+  /**
+   * A form toggle that moved the unit between the GROUND and the AIR, carried out on the body.
+   *
+   * The unit TYPE is the whole of the change (`ubsp` is `movetp fly` at `moveHeight` 240, `uobs`
+   * is `foot`), but a morph used to leave `flying` where it found it, so a Destroyer went on
+   * pathing, colliding and being shot at as the statue it had been. What moves with the domain is
+   * what `spawn` derives from it: `flying`, the collision radius, the cells a walker holds, and
+   * the height it stands at.
+   *
+   * The height is not a snap. The row says how long it takes — `Eme3` "Altitude Adjustment
+   * Duration", 1 second for `[Aave]` and `[Arav]` alike — and a TAKE-OFF waits for the morph
+   * lock to run out: the statue grows its wings on the ground and only then rises. A LANDING
+   * starts at once, because the ground form's clip is the one that has to reach the ground.
+   */
+  private shiftAltitude(u: SimUnit, lvl: AbilityLevel | undefined): void {
+    const def = this.unitReg?.get(u.typeId);
+    if (!def || u.building) return;
+    const flies = def.moveType === MoveType.Fly;
+    if (flies === (u.flying || !!u.altitudeShift?.wait)) return;
+    const height = flies ? Math.max(0, def.moveHeight) : 0;
+    const secs = lvl?.summon ? this.dataOf(lvl, 2, 0) : 0; // Eme3 — "Altitude Adjustment Duration"
+    const climb = Math.abs(height - u.flyHeight);
+    const rate = secs > 0 ? climb / secs : Infinity;
+    if (flies) {
+      u.altitudeShift = { to: height, rate, wait: true };
+      if (u.morphT <= 0) this.tickAltitude(u, 0);
+      return;
+    }
+    // Down: a walker again from this instant, holding ground the way `spawn` gives it.
+    u.flying = false;
+    u.radius = def.collision || u.radius;
+    u.footprint = u.baseSpeed > 0 ? footprintCells(u.radius) : 0;
+    u.altitudeShift = { to: 0, rate, wait: false };
+  }
+
+  /** Fly the altitude change `shiftAltitude` booked, one tick at a time. */
+  private tickAltitude(u: SimUnit, dt: number): void {
+    const a = u.altitudeShift;
+    if (!a) return;
+    if (a.wait) {
+      if (u.morphT > 0) return; // still changing shape, on the ground
+      a.wait = false;
+      // Off the ground: the cells it stood on are somebody else's now, and it collides as the
+      // FLYER's own radius (`ubsp` collision 8 against the statue's 32).
+      this.unsettle(u);
+      this.releaseClaim(u);
+      u.flying = true;
+      u.footprint = 0;
+      u.radius = this.unitReg?.get(u.typeId)?.collision || u.radius;
+    }
+    const step = a.rate * dt;
+    if (!Number.isFinite(step) || Math.abs(a.to - u.flyHeight) <= step) {
+      u.flyHeight = a.to;
+      u.altitudeShift = null;
+    } else {
+      u.flyHeight += Math.sign(a.to - u.flyHeight) * step;
+    }
   }
 
   /** Run a timed alternate form down, and revert it when the clock does. Call to Arms is the
@@ -7743,6 +7900,7 @@ export class SimWorld {
       | "entangler"
       | "ringSlot"
       | "morphT"
+      | "altitudeShift"
       | "portalLeft"
       | "portalX"
       | "portalY"
@@ -8016,6 +8174,7 @@ export class SimWorld {
       entangler: 0, // …and the Tree of Life that grew it (attachEntangled)
       ringSlot: 0,
       morphT: 0,
+      altitudeShift: null,
       portalLeft: 0,
       portalX: 0,
       portalY: 0,
@@ -12605,6 +12764,12 @@ export class SimWorld {
     if (notself) return null; // anything but the caster
     if (this.hostile(caster, target)) return enemy ? null : "Notenemy";
     if (target.neutralPassive) return neutral || friend ? null : "Notneutral";
+    // `player` ALONE is the player's own units and no one else's — `UI\UnitEditorData.txt`
+    // [targetList] lists it apart from `allies`, and the rows that mean "our side" say both
+    // (`[AHmt]` Mass Teleport is `player,…,ally`). Absorb Mana is the row that needs it: "Takes
+    // all mana from one of your units", with the game's own line for the refusal,
+    // `Targetowned` "Must target one of your own units." (Units\CommandStrings.txt [Errors]).
+    if (F.has("player") && !F.has("friend") && !F.has("allies") && target.owner !== caster.owner) return "Targetowned";
     return friend ? null : "Notfriendly";
   }
 
@@ -12706,8 +12871,17 @@ export class SimWorld {
     // …nor a night ability in daylight (see barredByDay) — greyed, so silent too.
     if (this.barredByDay(code)) return SILENT_REFUSAL;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+    // A PERMANENT form has nothing to press once it is worn (the card hides the button, see
+    // morphIsPermanent) — a Destroyer is not a statue that can go back.
+    if (this.isFormToggle(def) && this.morphIsPermanent(lvl) && def.levelData.some((l) => altFormOf(l) === u.typeId)) return SILENT_REFUSAL;
     if (ab.cooldownLeft > 0) return "Cooldown"; // "Spell is not ready yet."
     if (u.mana < this.castCost(u, def, lvl)) return "Nomana"; // "Not enough mana."
+    // …and a PAID morph asks the purse, with the lines a Slaughterhouse asks a new statue with.
+    const price = this.morphPriceOf(lvl);
+    if (price) {
+      const short = this.morphPaymentError(u.owner, price);
+      if (short) return short;
+    }
     // …and last, for the corpse family: nothing to raise is a refusal with a sentence of its
     // own. Last because it is the least fundamental of the four — a Necromancer short of mana
     // is short of mana whether or not there is a body — and because it is the only one of them
@@ -13168,7 +13342,12 @@ export class SimWorld {
       // 0.3 + the spell's 1.0 Casting Time = 1.3s before the first shard.
       // …and NONE of it for an ability that has no gesture to wind up (see NO_WINDUP): the
       // walk was the whole delay, and it fires the tick it arrives.
-      pc.castLeft = NO_WINDUP.has(pc.code) ? 0 : u.castPoint + (CAST_TIME_IS_NOT_A_WINDUP.has(pc.code) ? 0 : lvl.castTime);
+      // …and none for a FORM TOGGLE either: it has no gesture, and its `Cast1` is the first part
+      // of the shape change rather than a pause in front of it (morphToggle folds it into the
+      // lock). Waiting it out left an Obsidian Statue standing still for a second and a half
+      // before its Morph clip began.
+      const formToggle = this.isFormToggle(def);
+      pc.castLeft = NO_WINDUP.has(pc.code) || formToggle ? 0 : u.castPoint + (CAST_TIME_IS_NOT_A_WINDUP.has(pc.code) ? 0 : lvl.castTime);
       const channelLen = this.channelDuration(def, pc.rank);
       // Tell the renderer to play the cast clip and hold it for the whole cast
       // (wind-up + backswing, or wind-up + channel — looped for a channel). A
@@ -13183,7 +13362,7 @@ export class SimWorld {
       // e.g. the Blood Mage hurling one of his orbiting spheres (issue #37).
       // A FORM TOGGLE raises none: its animation is the morph transition the renderer plays
       // when the body swaps, not a gesture in front of it (see isFormToggle).
-      if (!this.isFormToggle(def)) {
+      if (!formToggle) {
         this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0 || animLen > 0, tx, ty, targetId: pc.targetId, warnArt });
       }
       // The caster has begun: SPELL_CHANNEL then SPELL_CAST (7.17). WC3 raises both at
@@ -13242,7 +13421,7 @@ export class SimWorld {
     pc.channelLeft = this.channelDuration(def, pc.rank);
     // No channel → play the cast backswing recovery (0 = none). A channel holds
     // instead; there's no backswing after one.
-    pc.backLeft = pc.channelLeft > 0 || NO_WINDUP.has(pc.code) ? 0 : u.castBackswing;
+    pc.backLeft = pc.channelLeft > 0 || NO_WINDUP.has(pc.code) || this.isFormToggle(def) ? 0 : u.castBackswing;
     if (u.moving) this.settle(u);
     if (pc.channelLeft <= 0 && pc.backLeft <= 0) this.endCast(u, pc); // instant, no recovery
   }
@@ -13322,7 +13501,7 @@ export class SimWorld {
     // the game throws no orb — the CLPB/CLSB ribbon IS the spell (docs/spell-fx.md), and
     // launching the missile drew a Far Seer-looking projectile ahead of the chain and held
     // the whole chain back until it landed.
-    if (def.target === "unit" && def.missileArt && !def.lightning.length && pc.targetId) {
+    if (def.target === "unit" && def.missileArt && !def.lightning.length && pc.targetId && !MISSILE_COMES_BACK.has(def.code)) {
       // Travelling spell (Storm Bolt, Death Coil): the effect fires on impact.
       this.spawnSpellProjectile(u, pc.targetId, def, pc.rank);
       return;
@@ -13749,6 +13928,28 @@ export class SimWorld {
       // arrow is, so a spell missile carries the same two stamps an attack's does.
       sourceTeam: u.team,
       targetTeleports: t?.teleports ?? 0,
+    };
+    this.projectiles.set(id, proj);
+    this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
+  }
+
+  /** A missile that carries nothing, from `from` to `to` (SimProjectile.visual) — the art and
+   *  pace of `def`'s own `Missileart`/`Missilespeed`. */
+  private spawnVisualMissile(from: SimUnit, to: SimUnit, def: AbilityDef): void {
+    if (!def.missileArt || from.id === to.id) return;
+    const id = this.nextProjectileId++;
+    const z = DEFAULT_MISSILE_HEIGHT + from.flyHeight;
+    const proj: SimProjectile = {
+      id, x: from.x, y: from.y, z,
+      sourceId: from.id,
+      targetId: to.id,
+      speed: def.missileSpeed || 900,
+      damage: 0,
+      art: def.missileArt,
+      startZ: z,
+      impactZ: DEFAULT_MISSILE_HEIGHT + to.flyHeight,
+      startDist: Math.hypot(to.x - from.x, to.y - from.y),
+      visual: true,
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
@@ -15278,6 +15479,7 @@ export class SimWorld {
       this.applyBuffInternal(t, buff.buffId === undefined && this.casting ? { ...buff, buffId: buffIdOf(this.casting.def, this.casting.rank) } : buff);
     },
     dispel: (t) => this.dispelUnit(t),
+    missileBack: (from, to, def) => this.spawnVisualMissile(from, to, def),
     requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint, bound, cloakAfter) => {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint, bound: !!bound, cloakAfter });
     },
@@ -15812,6 +16014,7 @@ export class SimWorld {
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking
       if (u.morphT > 0) u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
+      if (u.altitudeShift) this.tickAltitude(u, dt); // …and a Destroyer lifting off once its morph is done
       if (u.portalLeft > 0) this.tickTownPortal(u, dt); // …and a hero mid-Town-Portal
       if (u.rootSettle) this.tickRootSettle(u); // …and one mid-ROOT is still lowering itself onto its site
       if (u.rootPending) this.tickRootAt(u); // an Ancient that walked to the spot it was told to plant on
@@ -17891,7 +18094,9 @@ export class SimWorld {
       const step = p.speed * dt;
       if (dist <= step + t.radius) {
         this.projectileImpacts.push({ id: p.id, x: t.x, y: t.y, z: p.impactZ }); // record the hit point
-        if (p.spell) {
+        if (p.visual) {
+          // nothing rides it — the spell already happened (missileBack)
+        } else if (p.spell) {
           // Spell missile (Storm Bolt/Death Coil): run the ability effect on impact.
           // Resolve the exact ability by id (several abilities share a base code).
           const caster = this.units.get(p.sourceId) ?? t; // caster may have died mid-flight

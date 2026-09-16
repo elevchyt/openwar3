@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 370, **done** 251, **partial** 10, **passive** 14, **todo** 154.
+Totals: 799 rows — **alias** 372, **done** 257, **partial** 10, **passive** 14, **todo** 146.
 
 ## Art paths this install does not ship
 
@@ -83,7 +83,7 @@ Known gaps that are NOT ability rows, found while auditing:
 
 ## Unimplemented base codes, by alias fanout
 
-119 distinct base `code`s cover the 154 todo rows. Implementing one
+113 distinct base `code`s cover the 146 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -95,20 +95,17 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Aspd` | Spawn Hydra | 3 |  |  | `Aspy` `Aspt` `Aspd` |
 | `ANsu` | Submerge | 3 |  | submerge | `Asb1` `Asb2` `Asb3` |
 | `ANdc` | Dark Conversion | 2 | air,ground,organic,nonhero | darkconversion | `ANdc` `SNdc` |
-| `Advm` | Devour Magic | 2 | air,ground,ward,invu,vuln,tree |  | `ACde` `Advm` |
 | `AUfa` | Frost Armor | 2 | air,ground,friend,self,neutral | frostarmor | `ACfa` `AUfa` |
 | `ANmo` | Monsoon | 2 | air,ground,structure,enemy,neutral | monsoon | `ACmo` `ANmo` |
 | `Amgl` | Moon Glaive | 2 |  |  | `Amgl` `Amgr` |
 | `Acoi` | Mount Hippogryph | 2 | vuln,invu |  | `Aco2` `Aco3` |
 | `ANpa` | Parasite | 2 | air,ground,enemy,organic,neutral,nonhero | parasite | `ACpa` `ANpa` |
-| `Aply` | Polymorph | 2 | air,ground,nonhero,enemy,organic,neutral | polymorph | `ACpy` `Aply` |
 | `Apos` | Possession | 2 | ground,nonhero,enemy,organic,neutral | possession | `ACps` `Apos` |
 | `ANrc` | Rain of Chaos | 2 |  |  | `ANr3` `ANrc` |
 | `Aesn` | Sentinel | 2 | tree,vuln,invu | sentinel | `Aesn` `Aesr` |
 | `Atau` | Taunt | 2 | air,ground,enemy,vuln,invu | taunt | `ANta` `Atau` |
 | `Aimp` |  | 1 |  |  | `Aimp` |
 | `Ansp` |  | 1 |  |  | `Ansp` |
-| `Aabs` | Absorb Mana | 1 | player,vuln,invu | absorbmana | `Aabs` |
 | `Amls` | Aerial Shackles | 1 | air,enemy,organic | magicleash | `Amls` |
 | `Aalr` | Alarm | 1 | air,ground,enemy,vuln,invu |  | `Aalr` |
 | `Aamk` | Attribute Bonus | 1 |  | attributemodskill | `Aamk` |
@@ -123,9 +120,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Achl` | Chaos Cargo Load | 1 |  |  | `Achl` |
 | `AAns` | Charge Gold and Lumber | 1 |  |  | `AAns` |
 | `Acor` | Corrosive Breath | 1 | structure | corrosivebreath | `Acor` |
-| `Agyd` | Create Corpse | 1 |  |  | `Agyd` |
 | `ANdp` | Dark Portal | 1 |  |  | `ANdp` |
-| `Aave` | Destroyer Form | 1 |  | sphinxform | `Aave` |
 | `Advc` | Devour Cargo | 1 | ground,enemy,neutral,vuln,invu |  | `Advc` |
 | `Apts` | Disease Cloud | 1 | ground,enemy,structure,debris,tree,wall,organic,neutral |  | `Apts` |
 | `Adch` | Disenchant | 1 | air,ground,ward,invu,vuln,enemy |  | `Adch` |
@@ -180,7 +175,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Andt` | Reveal | 1 |  |  | `Andt` |
 | `Arng` | Revenge | 1 |  |  | `Arng` |
 | `Arev` | Revive Hero | 1 |  | revive | `Arev` |
-| `Aawa` | Revive Hero Instantly | 1 |  | awaken | `Aawa` |
 | `Alam` | Sacrifice | 1 | structure,player | sacrifice | `Alam` |
 | `Asac` | Sacrifice | 1 | ground,player,organic,nonhero | sacrifice | `Asac` |
 | `Asid` | Sell Items | 1 |  |  | `Asid` |
@@ -216,7 +210,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACd2` | `Aadm` | Abolish Magic | creeps |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic (Creep, 1,2 pos) |
 | ~ | `ACdm` | `Aadm` | Abolish Magic | creeps |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic (Creep) |
 | ~ | `Andm` | `Aadm` | Abolish Magic | naga |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic(naga) |
-|   | `Aabs` | `Aabs` | Absorb Mana | undead |  |  | player,vuln,invu | 1 | absorbmana | Absorb Mana |
+| x | `Aabs` | `Aabs` | Absorb Mana | undead |  |  | player,vuln,invu | 1 | absorbmana | Absorb Mana |
 | x | `ANab` | `ANab` | Acid Bomb | creeps | H |  | ground,enemy,neutral,organic,air | 1 | acidbomb | Alchemist - Acid Bomb |
 | ~ | `ACss` | `AEsh` |  | creeps |  |  | ground,air,enemy,neutral | 1 | shadowstrike | Shadow Strike(Creep) |
 |   | `Amls` | `Amls` | Aerial Shackles | human |  |  | air,enemy,organic |  | magicleash | Aerial Shackles |
@@ -349,7 +343,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AIcm` | `Acmg` | Control Magic | other |  | I | air,ground,enemy,neutral,ward | 2 | spellsteal | Control Magic (item) |
 | x | `Acpf` | `Acpf` | Corporeal Form | orc |  |  |  | 1 | corporealform | Corporeal Form |
 |   | `Acor` | `Acor` | Corrosive Breath | nightelf |  |  | structure | 1 | corrosivebreath | Corrosive Breath |
-|   | `Agyd` | `Agyd` | Create Corpse | undead |  |  |  | 1 |  | Graveyard |
+| x | `Agyd` | `Agyd` | Create Corpse | undead |  |  |  | 1 |  | Graveyard |
 | ~ | `ACcr` | `Acri` | Cripple | creeps |  |  | air,ground,enemy,organic,neutral |  | cripple | Cripple (creep) |
 | x | `Acri` | `Acri` | Cripple | undead |  |  | air,ground,enemy,organic,neutral |  | cripple | Cripple |
 | ~ | `Scri` | `Acri` | Cripple | undead |  |  | air,ground,enemy,organic,neutral |  | cripple | Cripple (Warlock) |
@@ -384,7 +378,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `ANd2` | `ANde` | Demolish | creeps | H |  | enemy,structure |  | demolish | Tinkerer - Demolish (Level 2) |
 |   | `ANd3` | `ANde` | Demolish | creeps | H |  | enemy,structure |  | demolish | Tinkerer - Demolish (Level 3) |
 |   | `ANde` | `ANde` | Demolish | creeps | H |  | enemy,structure |  | demolish | Tinkerer - Demolish (Level 0) |
-|   | `Aave` | `Aave` | Destroyer Form | undead |  |  |  |  | sphinxform | Avenger Form |
+| x | `Aave` | `Aave` | Destroyer Form | undead |  |  |  |  | sphinxform | Avenger Form |
 | ~ | `Adt1` | `Adet` | Detector | orc |  |  | vuln,invu |  |  | Detect (Sentry Ward) |
 | x | `Adtn` | `Adtn` | Detonate | nightelf |  |  | air,ground,ward,invu,vuln,tree | 2 | detonate | Detonate |
 | ~ | `ACav` | `AHad` | Devotion Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Aura - Devotion (Creep) |
@@ -392,8 +386,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | / | `ACdv` | `ACdv` | Devour | creeps |  |  | ground,nonhero,enemy,organic,neutral |  | creepdevour | Devour (Dragon Creep) |
 | / | `Adev` | `Adev` | Devour | orc |  |  | ground,nonhero,enemy,organic,neutral | 1 | devour | Devour |
 |   | `Advc` | `Advc` | Devour Cargo | orc |  |  | ground,enemy,neutral,vuln,invu |  |  | Cargo Hold (Devour) |
-|   | `ACde` | `Advm` | Devour Magic | creeps |  |  | air,ground,ward,invu,vuln,tree | 1 |  | Devour Magic(creep) |
-|   | `Advm` | `Advm` | Devour Magic | undead |  |  | air,ground,ward,invu,vuln,tree | 2 |  | Devour Magic |
+| ~ | `ACde` | `Advm` | Devour Magic | creeps |  |  | air,ground,ward,invu,vuln,tree | 1 |  | Devour Magic(creep) |
+| x | `Advm` | `Advm` | Devour Magic | undead |  |  | air,ground,ward,invu,vuln,tree | 2 |  | Devour Magic |
 | ~ | `Aap1` | `Aapl` | Disease Cloud | undead |  |  | ground,enemy,organic,neutral | 1 |  | Aura - Plague (Abomination) |
 | ~ | `Aap2` | `Aapl` | Disease Cloud | undead |  |  | ground,enemy,organic,neutral |  |  | Aura - Plague (Plague Ward) |
 | ~ | `Aap3` | `Aapl` | Disease Cloud | creeps |  |  | ground,enemy,organic,neutral | 1 |  | Aura - Plague (Creep) |
@@ -762,8 +756,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `AEpa` | `AEpa` | Poison Arrows | creeps | H |  | air,ground,organic | 1 | poisonarrowstarg | Poison Arrows |
 | x | `Apo2` | `Apo2` | Poison Sting | other |  | I | ground,air,organic | 1 |  | Orb of Venom (Poison Attack) |
 | x | `Apoi` | `Apoi` | Poison Sting | other |  |  | air,ground,organic | 1 |  | Poison Attack |
-|   | `ACpy` | `Aply` | Polymorph | creeps |  |  | air,ground,nonhero,enemy,organic,neutral | 2 | polymorph | Polymorph (creep) |
-|   | `Aply` | `Aply` | Polymorph | human |  |  | air,ground,nonhero,enemy,organic,neutral | 2 | polymorph | Polymorph |
+| ~ | `ACpy` | `Aply` | Polymorph | creeps |  |  | air,ground,nonhero,enemy,organic,neutral | 2 | polymorph | Polymorph (creep) |
+| x | `Aply` | `Aply` | Polymorph | human |  |  | air,ground,nonhero,enemy,organic,neutral | 2 | polymorph | Polymorph |
 |   | `ACps` | `Apos` | Possession | creeps |  |  | ground,nonhero,enemy,organic,neutral | 1 | possession | Possession (creep) |
 |   | `Apos` | `Apos` | Possession | undead |  |  | ground,nonhero,enemy,organic,neutral | 1 | possession | Possession |
 | x | `Aps2` | `Aps2` | Possession | undead |  |  | ground,nonhero,enemy,organic,neutral | 1 | possession | Possession (Channeling) |
@@ -818,7 +812,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Andt` | `Andt` | Reveal | creeps |  |  |  |  |  | Neutral Detection (Reveal ability) |
 |   | `Arng` | `Arng` | Revenge | other |  |  |  | 3 |  | Revenge |
 |   | `Arev` | `Arev` | Revive Hero | other |  |  |  | 1 | revive | Revive |
-|   | `Aawa` | `Aawa` | Revive Hero Instantly | other |  |  |  | 1 | awaken | Awaken |
+| x | `Aawa` | `Aawa` | Revive Hero Instantly | other |  |  |  | 1 | awaken | Awaken |
 | ~ | `ACr1` | `Aroa` | Roar | creeps |  |  | air,ground,friend,self | 1 | roar | Roar (creep) -- Skeletal Orc |
 | ~ | `ACro` | `Aroa` | Roar | creeps |  |  | air,ground,friend,self | 1 | roar | Roar (creep) |
 | ~ | `AIrr` | `Aroa` | Roar | other |  | I | air,ground,friend,self | 1 | roar | Roar |
