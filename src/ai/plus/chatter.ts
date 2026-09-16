@@ -94,6 +94,10 @@ export interface Standing {
   /** Our own heroes still on the field — plus any already on an altar's revival clock, which
    *  is a hero on the way back rather than a hero we no longer have. */
   heroes: number;
+  /** …and how many of THOSE are not on the field but on a revival clock that will actually
+   *  finish (`SimWorld.revivalUnderway`). A subset of `heroes`, never larger — so the heroes
+   *  standing on the map are `heroes - heroesReviving`. */
+  heroesReviving: number;
   /** Heroes of ours lying DEAD — the fallen roster (SimWorld.fallenHeroesOf), which a hero is
    *  struck off the moment it is actually revived. So this is "one of ours is down right now",
    *  and it is empty both for a player who has lost none and for one who never built any. */
@@ -163,11 +167,22 @@ export function teamLost(team: readonly number[], allies: readonly number[]): bo
  * are the two `CONCEDE_AT` is calibrated on, and they alone reach it. The rest are the ordinary
  * terms of a losing position and none of them is worth a third of one.
  *
- *  • `heroesDead` — not one of ours up (an altar's revival clock still counts as up, see
- *    `Standing.heroes`) and at least one down. The `heroesLost > 0` half is the same guard
- *    clause 4 carries and for the same reason: "we have no hero" describes every player who has
- *    not built one yet. `heroEach` adds for the SECOND and THIRD as well, capped there — losing
- *    a three-hero roster outright is worse than losing the one hero you had.
+ *  • `heroesDead` — not one of ours on the field and at least one down. The `heroesLost > 0`
+ *    half is the same guard clause 4 carries and for the same reason: "we have no hero"
+ *    describes every player who has not built one yet. `heroEach` adds for the SECOND and THIRD
+ *    as well, capped there — losing a three-hero roster outright is worse than losing the one
+ *    hero you had.
+ *  • `heroesReviving` — the same position with a hero on an altar's clock that will finish. It
+ *    REPLACES `heroesDead` rather than adding to it, and it is half of it rather than nothing.
+ *    It used to be nothing — a revival counted as a hero on the field — and that was a player
+ *    with no hall, no army and every hero dead reading as healthy the moment it had the gold to
+ *    press Revive: 0.5 + 0.3 and a scratch on the economy, under the line, for the whole of a
+ *    110-second revival and again for the next one. Reported from a 1v1 as "it lost its army,
+ *    its heroes and a lot of workers, and I razed its hall, and it still didn't concede". A
+ *    hero coming back is a better position than a hero gone, and it is still a player with
+ *    nothing on the field, which is what this weight says. It is a LIGHT term: beside the hall
+ *    alone it is 0.75, beside the hall and the army 1.05, and beside the hall and a raid on a
+ *    working economy 0.95 — it takes the army or the economy going as well.
  *  • `hallDown` — every hall of ours gone (`townCountDone` folds a Castle into a Town Hall, so
  *    this is "no town centre anywhere", expansions included). Losing it with a worker and the
  *    gold for another is not clause 1, which is why it needs a weight at all: the position CAN
@@ -210,6 +225,7 @@ export function teamLost(team: readonly number[], allies: readonly number[]): bo
  */
 export const DESPAIR = {
   heroesDead: 0.5,
+  heroesReviving: 0.25,
   heroEach: 0.1,
   hallDown: 0.5,
   armyGone: 0.3,
@@ -235,8 +251,9 @@ export const CONCEDE_AT = 1;
 /** How lost this position is, in `DESPAIR`'s units. Pure, and 0 for a healthy player. */
 export function despair(s: Standing, hallCost: number): number {
   let d = 0;
-  if (s.heroes === 0 && s.heroesLost > 0) {
-    d += DESPAIR.heroesDead + DESPAIR.heroEach * Math.min(s.heroesLost - 1, 2);
+  if (s.heroes - s.heroesReviving === 0 && s.heroesLost > 0) {
+    d += (s.heroesReviving > 0 ? DESPAIR.heroesReviving : DESPAIR.heroesDead)
+      + DESPAIR.heroEach * Math.min(s.heroesLost - 1, 2);
   }
   if (s.halls === 0) d += DESPAIR.hallDown;
   if (s.armyUnits < ARMY_REMNANT) d += DESPAIR.armyGone;

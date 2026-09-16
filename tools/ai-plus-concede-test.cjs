@@ -38,7 +38,7 @@ function check(what, got, want) {
 // The Great Hall's own price, which is what `mannersPass` reads off the registry for an orc.
 const HALL = 385;
 const at = (o) => ({ halls: 0, structures: 0, workers: 0, armyFood: 0, armyUnits: 0, gold: 0, invaders: 0,
-  invaderHeroes: 0, heroes: 0, heroesLost: 0, teamGone: 0, ...o });
+  invaderHeroes: 0, heroes: 0, heroesReviving: 0, heroesLost: 0, teamGone: 0, ...o });
 // A position with a base and an army standing — what clause 4's cases vary the HEROES of, so
 // that nothing in them can be passing for one of the first three clauses' reasons.
 const holding = (o) => at({ halls: 1, structures: 6, workers: 5, armyFood: 30, armyUnits: 10, gold: 500, ...o });
@@ -219,6 +219,27 @@ check("no hero, a raid in the base, and two Grunts left is a lost game",
   hopeless(holding({ heroesLost: 1, workers: 8, armyFood: 4, armyUnits: 2, invaders: 6 }), HALL), true);
 check("…where four Grunts were enough to play it on",
   hopeless(holding({ heroesLost: 1, workers: 8, armyFood: 8, armyUnits: 4, invaders: 6 }), HALL), false);
+
+console.log("\n-- a hero on the altar is not a hero on the field ---------------------------");
+
+// THE 1v1 REPORT: army gone, every hero dead, most of the workers dead and the hall razed — and
+// no concession, because the AI had the gold to press Revive and a revival counted as a hero on
+// the field. That read 0.5 (hall) + 0.3 (army) + a scratch on the economy: under the line for
+// the whole revival, and again for the next one. `standing()` feeds it `heroesReviving`.
+const razed = { structures: 5, workers: 4, gold: 600, heroesLost: 1, heroes: 1, heroesReviving: 1 };
+check("no hall, no army, and the one hero on the altar's clock is a lost game",
+  hopeless(at(razed), HALL), true);
+check("…and it was not while a revival counted as a hero on the field",
+  hopeless(at({ ...razed, heroesReviving: 0 }), HALL), false);
+check("a revival is still worth something: it weighs less than a hero simply dead",
+  despair(at(razed), HALL) < despair(at({ ...razed, heroes: 0, heroesReviving: 0 }), HALL), true);
+// It is a LIGHT term, so it cannot carry a concession with the hall standing, or with an army.
+check("…with the hall still standing it plays on",
+  hopeless(at({ ...razed, halls: 1 }), HALL), false);
+check("…and with an army and an economy still on the field it plays on, raid or no raid",
+  hopeless(at({ ...razed, workers: WORKER_ECONOMY, armyFood: 20, armyUnits: 6, invaders: 5 }), HALL), false);
+check("…and a hero on the field beside the one on the altar is a hero on the field",
+  hopeless(at({ ...razed, heroes: 2, heroesLost: 1 }), HALL), false);
 
 console.log("\n-- the rails ---------------------------------------------------------------");
 

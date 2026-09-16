@@ -6250,14 +6250,22 @@ export class ComputerPlusAi {
       if (u.building) {
         if (u.building.constructionLeft <= 0) structures++;
       } else if (u.isPeon) workers++;
-      else if (u.isHero) heroes++;
+      else if (u.isHero) {
+        // A Mirror Image of our hero is not a hero we have — see `isCopy`.
+        if (!isCopy(u)) heroes++;
+      }
       else if (!isCopy(u) && (this.host.registry.get(u.typeId)?.foodUsed ?? 0) > 0) armyUnits++;
     }
     // A hero on an altar's clock is one we HAVE — it is coming back at full strength inside
-    // the minute, which is a move from here (see `hopeless` clause 4). `revivingAt` is the
-    // altar it was queued at, and 0 is "nobody is bringing this one back".
+    // the minute, which is a move from here (see `hopeless` clause 4) — but only if that clock
+    // will actually run out: `revivalUnderway` refuses a revival whose altar has gone or which
+    // is stuck at the head of the queue for FOOD, which for a player whose hall and farms have
+    // been razed is for ever. Kept apart as well (`heroesReviving`), because the weighed
+    // reading does not count a hero on the altar as a hero on the field.
     const fallen = this.host.world.fallenHeroesOf(b.ai.player);
-    for (const f of fallen) if (f.revivingAt) heroes++;
+    let heroesReviving = 0;
+    for (const f of fallen) if (this.host.world.revivalUnderway(f)) heroesReviving++;
+    heroes += heroesReviving;
     return {
       halls: b.ai.townCountDone(b.table.halls[0]),
       structures,
@@ -6268,6 +6276,7 @@ export class ComputerPlusAi {
       invaders: this.invaders(b),
       invaderHeroes: this.invaderHeroes(b),
       heroes,
+      heroesReviving,
       // Heroes of ours lying dead. The roster is authoritative for "right now": a hero is
       // struck off it the instant it is actually revived (SimWorld.reviveFallenHero) and put
       // back on if the revival is cancelled (dropJob), so this never lags the field.

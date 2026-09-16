@@ -3523,7 +3523,8 @@ whole defeat) is the line.
 
 | term | weight | |
 | --- | --- | --- |
-| `heroesDead` | **0.5** | not one of ours up and at least one down (+`heroEach` 0.1 for a second and a third) |
+| `heroesDead` | **0.5** | not one of ours on the field and at least one down (+`heroEach` 0.1 for a second and a third) |
+| `heroesReviving` | 0.25 | …the same, but one is on a revival clock that will finish — replaces `heroesDead` |
 | `hallDown` | **0.5** | no town centre anywhere, expansions folded in |
 | `armyGone` | 0.3 | fewer than `ARMY_REMNANT` (3) soldiers, on the field and in the queues together, heroes aside |
 | `invaded` | 0.2 | somebody standing in our towns |
@@ -3543,9 +3544,25 @@ purse, a hero-led raid standing in the base, and a teammate gone, with only the 
 to its name. That is a lost game by any reading, so the ceiling is where it should be; what the
 weights rule out is any *one or two* of them carrying a concession.
 
-Two guards carry over unchanged. `heroesDead` asks `heroesLost > 0` as well as `heroes === 0`,
-for clause 4's reason: "we have no hero" describes every player who has not built one yet. And a
-hero on an altar's revival clock still counts as one we *have*.
+`heroesDead` asks `heroesLost > 0` as well as no hero on the field, for clause 4's reason: "we
+have no hero" describes every player who has not built one yet.
+
+**A hero on the altar is not a hero on the field.** The weighed reading used to count a revival
+as a hero we have, like the clauses do, and that is how a 1v1 was reported as never ending: army
+gone, every hero dead, most of the workers dead, the hall razed — and the AI had the gold to press
+Revive, so it read 0.5 (hall) + 0.3 (army) + a scratch on the economy, under the line for the
+whole revival and again for the next. A revival now scores `heroesReviving` (0.25) in place of
+`heroesDead`: half of it, because a hero coming back is a better position than a hero gone, and
+still something, because it is a player with nothing on the field. It is light — hall alone 0.75,
+hall and army 1.05, hall and a raid on a working economy 0.95. The clauses keep counting a
+revival as a hero (`Standing.heroes`); only the weighed reading tells the two apart.
+
+And a revival is only a revival if it will **finish** (`SimWorld.revivalUnderway`): an altar razed
+mid-revival used to leave the hero's `revivingAt` pointing at nothing — no altar would ever offer
+it again and the AI counted it as on its way back for the rest of the match (`releaseRevivals` now
+hands it back as merely dead) — and a revival stuck at the head of the queue for **food**, which
+for a player whose hall and farms are gone is for ever, is not one either. A Mirror Image of a
+hero is not a hero (`isCopy`).
 
 **`workersShort` is a ramp, not a step**, and it is the only term that is not a boolean. It is
 live below `WORKER_ECONOMY` (10, about what a melee player runs once their opening is down) and

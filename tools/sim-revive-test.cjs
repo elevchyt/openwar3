@@ -130,6 +130,63 @@ console.log("\ndeath files the hero, it does not lose it");
   check("a CREEP hero is not filed — there is no altar behind it", world.fallen.has(8), false);
 }
 
+console.log("\na revival that cannot finish is not a hero on its way back");
+{
+  // Reported as a Computer+ player that never conceded: an altar razed mid-revival left its
+  // hero's `revivingAt` pointing at a building that no longer existed, so no altar would ever
+  // offer that hero again and the AI counted it as a hero it had for the rest of the match.
+  const fresh = (foodRoom) => {
+    const grid = new PathingGrid({ width: 64, height: 64, flags: new Uint8Array(64 * 64) }, [0, 0]);
+    const reg = { get: (id) => (id === "Hamg" ? { foodUsed: 5 } : undefined) };
+    const world = new SimWorld(grid, 1, { get: () => undefined }, undefined, reg);
+    if (foodRoom) world.foodRoom = foodRoom;
+    const altar = {
+      id: 20, owner: 0, team: 0, typeId: "halt", hp: 900, maxHp: 900, x: 300, y: 300,
+      isCreep: false, neutralPassive: false, isIllusion: false, isHero: false,
+      buffs: [], weapons: [], orderQueue: [], path: [], footprint: 0, hasReservation: false,
+      building: { queue: [], builderIds: [], constructionLeft: 0, rallyX: 0, rallyY: 0, rallyKind: "none", rallyTargetId: 0 },
+      worker: null, order: "idle", targetId: null, garrison: [], garrisonCap: 0, inMine: false,
+      inBurrow: false, insideBuild: false, isSummon: false, summonLeft: 0, constructing: 0,
+      mineId: 0, entangledBy: 0, heldCorpses: [], moving: false, noCollision: false, radius: 64, facing: 0,
+      abilities: [], inventory: [],
+    };
+    world.units.set(altar.id, altar);
+    world.fallen.set(7, {
+      id: 7, owner: 0, team: 0, typeId: "Hamg", properName: "", level: 3, xp: 0, skillPoints: 0,
+      abilities: [], inventory: [], baseStr: 10, baseAgi: 10, baseInt: 10, baseMaxHp: 100,
+      x: 0, y: 0, revivingAt: 0, bodyLeft: 0,
+    });
+    return { world, altar, f: world.fallen.get(7) };
+  };
+
+  {
+    const { world, altar, f } = fresh();
+    check("a hero queued at a standing altar is on its way back",
+      [world.enqueueRevive(altar.id, 7, 60), world.revivalUnderway(f)], [true, true]);
+    world.killUnit(altar.id);
+    check("the altar is razed: the hero is merely dead again", f.revivingAt, 0);
+    check("…and not a hero on its way back", world.revivalUnderway(f), false);
+    check("…and still on the roster, for another altar to bring back", world.fallenHeroesOf(0).length, 1);
+    check("…and the dead altar's queue holds no revival", altar.building.queue.some((j) => j.kind === "revive"), false);
+  }
+  {
+    const { world, altar, f } = fresh();
+    world.enqueueRevive(altar.id, 7, 60);
+    world.removeUnit(altar.id);
+    check("an altar removed outright releases its hero the same way", f.revivingAt, 0);
+  }
+  {
+    // The hall and the farms razed: a revival at the head of the queue cannot take its 5 food,
+    // and stands at its full time for ever (`payJobFood`).
+    let room = false;
+    const { world, altar, f } = fresh(() => room);
+    world.enqueueRevive(altar.id, 7, 60);
+    check("a revival stuck on food is not on its way back", world.revivalUnderway(f), false);
+    room = true;
+    check("…and is again the moment there is supply to pay it", world.revivalUnderway(f), true);
+  }
+}
+
 console.log("\nthe light a hero comes back in is picked by its race");
 {
   // `[Arev]` "Revive Hero" carries FIVE models in one comma-separated `Targetart`, indexed by

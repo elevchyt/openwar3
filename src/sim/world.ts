@@ -4615,6 +4615,52 @@ export class SimWorld {
     return [...this.fallen.values()].filter((f) => f.owner === player).sort((a, b) => a.id - b.id);
   }
 
+  /**
+   * Is this fallen hero's revival actually going to FINISH? — the question "is a hero on the
+   * altar's clock one we still have" has to ask, and `revivingAt` alone does not answer it.
+   *
+   * Two ways a revival can be marked and still never land. The ALTAR has gone (see
+   * `releaseRevivals`, which is what keeps that from happening, and this re-checks it anyway
+   * because the mark and the queue are two records). And the job cannot take its FOOD: a head
+   * of queue with no supply to pay stands at its full time until a Farm finishes
+   * (`payJobFood`), which for a player whose hall and farms have been razed is never. Asked
+   * the way `payJobFood` asks it, so the two cannot disagree about who is stalled.
+   */
+  revivalUnderway(f: FallenHero): boolean {
+    if (!f.revivingAt) return false;
+    const u = this.units.get(f.revivingAt);
+    if (!u || u.hp <= 0 || !u.building) return false;
+    const job = u.building.queue.find((j) => j.kind === "revive" && j.heroId === f.id);
+    if (!job || job.kind !== "revive") return false;
+    if (job.foodPaid) return true;
+    const need = this.unitReg?.get(job.unitId)?.foodUsed ?? 0;
+    const owner = u.neutralPassive && job.buyer !== undefined ? job.buyer : u.owner;
+    return need <= 0 || !this.foodRoom || this.foodRoom(owner, need);
+  }
+
+  /**
+   * A building is leaving the world with revivals in its queue: every hero it was bringing
+   * back goes back on the roster as merely DEAD, exactly as a cancelled revival does
+   * (`dropJob`). Nothing is refunded: the queue goes down with the building, as every other
+   * job in it already does here.
+   *
+   * Without this `revivingAt` kept pointing at an altar that no longer existed: no altar would
+   * ever offer that hero again (`enqueueRevive` refuses a hero already on a clock, and so does
+   * the AI's `reviveFallen`), and Computer+ counted it as a hero on its way back for the rest of
+   * the match — which is a player whose heroes are all dead reading as one who has a hero, and
+   * it never conceded.
+   */
+  private releaseRevivals(u: SimUnit): void {
+    const b = u.building;
+    if (!b || !b.queue.some((j) => j.kind === "revive")) return;
+    for (const job of b.queue) {
+      if (job.kind !== "revive") continue;
+      const f = this.fallen.get(job.heroId);
+      if (f && f.revivingAt === u.id) f.revivingAt = 0;
+    }
+    b.queue = b.queue.filter((j) => j.kind !== "revive");
+  }
+
   /** Drop a fallen hero's record — a script that removes the unit outright, or a match
    *  cleaning up. Also un-marks whatever building was reviving it. */
   forgetFallenHero(heroId: number): void {
@@ -7669,6 +7715,7 @@ export class SimWorld {
     this.releaseClaim(u); // a unit that leaves the world takes its walking claim with it
     this.releasePathStamp(u);
     if (u.building) for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
+    this.releaseRevivals(u); // …and a hero it was bringing back is merely dead again
     if (u.constructing) this.detachBuilder(u.id);
     if (u.garrison.length) this.unloadBurrow(u.id); // eject passengers before it vanishes
     if (u.garrisonHost) {
@@ -20342,6 +20389,7 @@ export class SimWorld {
     // non-Ancient building such as a Moon Well it will survive" (Warcraft Wiki, Wisp). Killed
     // rather than removed here, unlike the merge at completion: this one IS a death — it is
     // the enemy's kill, and the credit belongs to them.
+    this.releaseRevivals(u); // an altar razed mid-revival: the hero is dead, not on its way back
     if (u.building) {
       const eatsBuilder = u.ancient && u.building.constructionLeft > 0;
       for (const bid of [...u.building.builderIds]) {
