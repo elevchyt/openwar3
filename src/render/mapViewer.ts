@@ -10249,11 +10249,16 @@ export class MapViewerScene {
     const stash = this.rts.stashFor(this.localPlayer);
     if (stash.gold < (freeHero ? 0 : d.goldCost)) return ERR_NOGOLD;
     if (stash.lumber < (freeHero ? 0 : d.lumberCost)) return ERR_NOLUMBER;
-    // Food: the authority refuses to queue a unit the supply has no room for, trained or hired
-    // alike — "Build more Farms…" in the race's own voice, or "maximum food limit" at the
-    // ceiling (RtsController.foodRefusal).
-    const foodErr = this.rts.foodRefusal(this.localPlayer, d.foodUsed);
-    if (foodErr) return foodErr;
+    // Food: the authority refuses to queue a unit the supply has no room for into an EMPTY
+    // queue, trained or hired alike — "Build more Farms…" in the race's own voice, or "maximum
+    // food limit" at the ceiling (RtsController.foodRefusal). Behind a job already there it is
+    // queued anyway and waits at the head for the food (SimWorld.payJobFood); a hire has no
+    // later turn and is always tested.
+    const world = this.rts.simWorld;
+    if (!world.units.get(buildingId)?.building?.queue.length || world.isShopUnit(buildingId)) {
+      const foodErr = this.rts.foodRefusal(this.localPlayer, d.foodUsed);
+      if (foodErr) return foodErr;
+    }
     // A sold-out shelf has its own line ("That unit is not available") — worth keeping,
     // since a Tavern with no stock looks identical to one that just refused silently.
     if (this.rts.simView.shopStock(buildingId, unitId) === 0) return SHOP_ERROR.nostock;
@@ -10318,9 +10323,12 @@ export class MapViewerScene {
       const mode: ReviveMode = world.isShopUnit(buildingId) ? "tavern" : "altar";
       const cost = heroReviveCost(mode, d.goldCost, d.lumberCost, d.buildTime || 1, f.level);
       if (!this.canAfford(cost.gold, cost.lumber)) return;
-      // …and the food, which the authority checks for a revive exactly as for training.
-      const foodErr = this.rts.foodRefusal(this.localPlayer, d.foodUsed);
-      if (foodErr) return this.refuse(foodErr);
+      // …and the food, which the authority checks for a revive exactly as for training: only
+      // into an empty queue.
+      if (!world.units.get(buildingId)?.building?.queue.length) {
+        const foodErr = this.rts.foodRefusal(this.localPlayer, d.foodUsed);
+        if (foodErr) return this.refuse(foodErr);
+      }
     }
     this.rts.execute(this.localPlayer, { c: "revive", buildingId, heroId });
   }
@@ -11549,6 +11557,13 @@ export class MapViewerScene {
         // Nothing else to do for research: recomputeStats() re-derives every unit's stats from
         // the owner's researched levels each tick, so a Footman fighting on the far side of the
         // map gets his new sword the moment the Blacksmith finishes.
+        // A queued unit reached the head of its queue with no food to take: its bar stands at
+        // 0 and the player hears why, once per stall (SimWorld.foodStalls).
+        for (const st of world.drainFoodStalls()) {
+          if (st.owner !== this.localPlayer || !this.rts) continue;
+          const err = this.rts.foodRefusal(st.owner, st.need);
+          if (err) this.refuse(err);
+        }
         for (const r of world.drainResearchCompletions()) {
           if (r.owner !== this.localPlayer) continue;
           this.sounds?.playUi(`ResearchComplete${UI_SOUND_RACE[this.localRace]}`);

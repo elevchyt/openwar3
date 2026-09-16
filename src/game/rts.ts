@@ -7737,8 +7737,13 @@ export class RtsController {
     switch (cmd.c) {
       case "train":
         def = this.registry.get(cmd.unitId);
-        // A unit the supply has no room for is refused, trained or hired (Authority.execute).
-        food = true;
+        // A unit the supply has no room for is refused into an EMPTY queue (Authority.execute);
+        // behind another job it queues and waits at the head instead.
+        // A hire (a shop's shelf) has no later turn, so it is always tested.
+        {
+          const b = this.sim.units.get(cmd.buildingId);
+          food = !b?.building?.queue.length || this.sim.isShopUnit(cmd.buildingId);
+        }
         break;
       case "build":
         def = this.registry.get(cmd.defId);

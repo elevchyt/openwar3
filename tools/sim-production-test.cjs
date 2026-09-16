@@ -242,12 +242,39 @@ console.log("\n-- FOOD gates the button, and is paid at the HEAD of the queue --
   check("…the second is halted at 0s, unpaid",
     [b.building.queue[0].foodPaid === true, b.building.queue[0].timeLeft], [false, 20]);
   check("…and the halt did not overrun the cap", authority.foodFor(0), { used: 12, made: 12 });
-  check("…and now at the cap a third click is refused", train(0, a, "hfoo"), false);
+  check("…and the stall is announced once", world.drainFoodStalls().map((st) => [st.buildingId, st.need]), [[b.id, 2]]);
+  tickQueues(1);
+  check("…not once per tick", world.drainFoodStalls().length, 0);
   // A second Farm finishes: the halted job takes its food on the next tick and gets going.
   building("hhou", 0);
   tickQueues(1);
   check("with supply raised it pays and starts",
     [b.building.queue[0].foodPaid === true, b.building.queue[0].timeLeft < 20], [true, true]);
+}
+
+{
+  // At the cap a BUSY queue still takes another unit: it costs nothing until its turn, and a Farm
+  // may be up by then. An EMPTY queue beside it refuses, because its unit would stall at once.
+  newWorld();
+  world.initStash(0, 10000, 10000);
+  building("hhou", 0);
+  const a = building("hbar", 0);
+  const b = building("hbar", 0);
+  for (let i = 0; i < 5; i++) soldier("hfoo", 0);
+  train(0, a, "hfoo");
+  tickQueues(1); // the head pays: 12 of 12
+  check("the supply is full", authority.foodFor(0), { used: 12, made: 12 });
+  check("a busy Barracks queues another Footman anyway", train(0, a, "hfoo"), true);
+  check("…charged its gold", world.stashOf(0).gold, 10000 - 270);
+  check("…an empty Barracks refuses", train(0, b, "hfoo"), false);
+  check("…and queues nothing", b.building.queue.length, 0);
+  // The head finishes; the queued one reaches the front with no food and stands at 0s.
+  a.building.queue[0].timeLeft = 0.01;
+  tickQueues(0.1);
+  tickQueues(1);
+  check("the next one halts at the head, unpaid",
+    [a.building.queue.length, a.building.queue[0].foodPaid === true, a.building.queue[0].timeLeft], [1, false, 20]);
+  check("…and the player is told", world.drainFoodStalls().length, 1);
 }
 
 console.log("\n-- the melee food CEILING: 100, however many Farms --------------------------------");

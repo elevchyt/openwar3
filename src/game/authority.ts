@@ -772,16 +772,21 @@ export class Authority {
         const lumber = freeHero ? 0 : def.lumberCost;
         const stash = this.sim.stashOf(player);
         if (stash.gold < gold || stash.lumber < lumber) return false;
-        // No room in the supply, no unit: the click is refused ("Not enough food" — the race's
-        // own `Nofood` line and voice, MapViewerScene.trainRefusal) and nothing is queued. The
-        // test is against what the player is eating NOW, which is what the HUD's supply readout
-        // shows. Food is still TAKEN when the job reaches the head of the queue
-        // (SimWorld.payJobFood) — a job lined up behind another on spare food can still find
-        // the supply gone by its turn (a Farm razed, another building's unit starting first),
-        // and that job waits at the head as before. A HIRE has no later turn at all
-        // (SHOP_HIRE_TIME = 0), so for it this is the only test there is.
-        const food = this.foodFor(player);
-        if (def.foodUsed > 0 && food.used + def.foodUsed > food.made) return false;
+        // No room in the supply and NOTHING ELSE IN THE QUEUE: the click is refused ("Not
+        // enough food" — the race's own `Nofood` line and voice, MapViewerScene.trainRefusal)
+        // and nothing is queued. The test is against what the player is eating NOW, which is
+        // what the HUD's supply readout shows.
+        //
+        // Behind a job that is already there, the unit is queued whatever the supply says: food
+        // is TAKEN when a job reaches the head (SimWorld.payJobFood), so a job lined up behind
+        // another costs nothing yet, and a Farm may well be up by its turn. If it is not, the
+        // job stands at the head with its bar at 0 and the player is told then (SimWorld.
+        // foodStalls). A HIRE has no later turn at all (SHOP_HIRE_TIME = 0), so for it this is
+        // the only test there is, queue or no queue.
+        if (isSold || b.building.queue.length === 0) {
+          const food = this.foodFor(player);
+          if (def.foodUsed > 0 && food.used + def.foodUsed > food.made) return false;
+        }
         // A unit the building SELLS comes off its shelf, and hiring is loud — purchaseUnit
         // both depletes the stock and shouts to the creeps. It can still refuse (sold out,
         // requirements), so it runs before anything is charged.
@@ -843,10 +848,13 @@ export class Authority {
         const stash = this.sim.stashOf(player);
         if (stash.gold < cost.gold || stash.lumber < cost.lumber) return false;
         // A hero costs food again on the way back — it stopped costing any the moment it died.
-        // Same rule as training: refused while the supply has no room for it, and the food
-        // itself taken when the job reaches the head of the altar's queue (SimWorld.payJobFood).
-        const food = this.foodFor(player);
-        if (def.foodUsed > 0 && food.used + def.foodUsed > food.made) return false;
+        // Same rule as training: refused while the supply has no room for it and the queue is
+        // empty, queued behind another job regardless, and the food itself taken when the job
+        // reaches the head of the altar's queue (SimWorld.payJobFood).
+        if (b.building.queue.length === 0) {
+          const food = this.foodFor(player);
+          if (def.foodUsed > 0 && food.used + def.foodUsed > food.made) return false;
+        }
         stash.gold -= cost.gold;
         stash.lumber -= cost.lumber;
         return this.sim.enqueueRevive(cmd.buildingId, cmd.heroId, cost.time, tavern ? player : undefined);

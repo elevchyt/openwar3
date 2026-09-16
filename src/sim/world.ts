@@ -879,14 +879,14 @@ export type BuildJob =
   // Neutral Passive, so a hero queued there is nobody's by ownership. Without it, a hero player
   // A is hiring counts toward player B's copy count — which is what selects B's requirement
   // tier ("your 2nd hero needs a Keep"). Harmless in 1v1, wrong the moment there are three.
-  | { kind: "unit"; unitId: string; timeLeft: number; buildTime: number; free?: boolean; buyer?: number; foodPaid?: boolean }
+  | { kind: "unit"; unitId: string; timeLeft: number; buildTime: number; free?: boolean; buyer?: number; foodPaid?: boolean; foodWarned?: boolean }
   | { kind: "research"; unitId: string; level: number; timeLeft: number; buildTime: number }
   | { kind: "upgrade"; unitId: string; timeLeft: number; buildTime: number }
   // A HERO coming back. `unitId` is the hero's TYPE (so the card and the queue draw its icon
   // like any other job) and `heroId` is WHICH hero — the sim id it died under, which is the
   // identity its level, items and name are filed against. `buyer` is the Tavern's rule again:
   // a neutral shop's queue belongs to nobody, so the job says whose hero is being woken.
-  | { kind: "revive"; unitId: string; heroId: number; timeLeft: number; buildTime: number; buyer?: number; foodPaid?: boolean };
+  | { kind: "revive"; unitId: string; heroId: number; timeLeft: number; buildTime: number; buyer?: number; foodPaid?: boolean; foodWarned?: boolean };
 
 /** What a finished structure does to the ground under it — see SimWorld.blightPaintOf. */
 interface BlightPaint {
@@ -3277,6 +3277,8 @@ export class SimWorld {
   private trainCompletions: Array<{ buildingId: number; unitId: string; owner: number; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number; reviveOf?: number; tavern?: boolean }> = [];
   // Finished research (renderer plays the "upgrade complete" sound + refreshes the card).
   private researchCompletions: Array<{ buildingId: number; upgradeId: string; level: number; owner: number }> = [];
+  // Head-of-queue jobs that just found no food to take (renderer shows the "Nofood" warning).
+  private foodStalls: Array<{ buildingId: number; owner: number; need: number }> = [];
   // Buildings that finished being BUILT this tick (renderer plays the "job's done" sound).
   private buildCompletions: Array<{ buildingId: number; owner: number }> = [];
   // News the engine announces by itself — see Alert.
@@ -4377,6 +4379,14 @@ export class SimWorld {
       this.issueAttack(c.id, buyer.id);
       this.alertCamp(c, buyer);
     }
+  }
+
+  /** Jobs that reached the head of a queue with no food to take since the last drain — once
+   *  per stall, not once per tick (renderer shows the race's "Nofood" warning). */
+  drainFoodStalls(): Array<{ buildingId: number; owner: number; need: number }> {
+    const out = this.foodStalls;
+    this.foodStalls = [];
+    return out;
   }
 
   /** Research finished since the last drain (renderer plays the completion sound). */
@@ -6612,7 +6622,16 @@ export class SimWorld {
       return true;
     }
     const owner = u.neutralPassive && job.buyer !== undefined ? job.buyer : u.owner;
-    if (this.foodRoom && !this.foodRoom(owner, need)) return false;
+    if (this.foodRoom && !this.foodRoom(owner, need)) {
+      // Told once, when it first stalls — a Barracks waiting a minute for a Farm must not
+      // repeat "Build more Farms" every tick.
+      // (Capped: a headless host nobody drains must not grow it for a whole match.)
+      if (!job.foodWarned && this.foodStalls.length < 64) {
+        job.foodWarned = true;
+        this.foodStalls.push({ buildingId: u.id, owner, need });
+      }
+      return false;
+    }
     job.foodPaid = true;
     return true;
   }
