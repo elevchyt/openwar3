@@ -25,6 +25,7 @@ const { divergence, describeDivergence } = require(join(REPO, ".sim-build", "src
 // The animation picker (`src/render/unitAnims.ts`) imports only a TYPE, so it compiles into the
 // sim build and can be driven headlessly against both structs -- see the equivalence block below.
 const { pickSequence, walkAnim, attackAnimRate } = require(join(REPO, ".sim-build", "src", "render", "unitAnims.js"));
+const { encodeSnapshot, decodeSnapshot } = require(join(REPO, ".sim-build", "src", "game", "snapshotWire.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -721,6 +722,32 @@ console.log("the animation picker answers the same off the payload as off the si
   // picker that returned 1 for everything would pass every line above.
   const clips = new Set(Object.values(states).map((o) => pickSequence(anims, unit({ id: 1, ...o }), !!o.moving)));
   check("the states reach distinct branches", clips.size >= 7, true);
+}
+
+console.log("an Entangled Gold Mine's crew pose reaches EVERY client that can see the mine");
+{
+  // The mine wears "Stand Work First".."Fifth" by how many wisps are inside (AnimSet.standWorkCrew).
+  // The wisps themselves are off the field and omitted from an enemy's payload, so the pose can
+  // only reach an enemy through the MINE's own garrison list — which must therefore cross to
+  // anybody who sees the mine live, over the real wire encoding, and not be redacted as if it
+  // were the owner's business. A fogged (remembered) mine carries no crew: that is live state.
+  const anims = { stand: 1, standVariants: [1], standWork: -1, standWorkCrew: [-1, 21, 22, 23, 24, 25],
+    worker: null, walk: -1, attack: -1, standGold: 1, standLumber: 1, build: -1 };
+  const BUILT = { constructionLeft: 0, buildTimeTotal: 60, queue: [], producesUnits: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0 };
+  // `unit()` predates a few fields the WIRE interns; the payload itself never omits them.
+  const wireUnit = (o) => unit({ hexForm: "", hidden: false, swingFollowThrough: false, attackUpgrade: 0, armorUpgrade: 0, ringSlot: 0, ...o });
+  const mine = wireUnit({ id: 50, owner: 0, typeId: "egol", race: "nightelf", speed: 0, building: BUILT, garrison: [61, 62, 63], garrisonCap: 5 });
+  const wisps = [61, 62, 63].map((id) => wireUnit({ id, owner: 0, typeId: "ewsp", inBurrow: true }));
+  const world = worldOf([mine, ...wisps]);
+  const onWire = (v, p) => decodeSnapshot(encodeSnapshot(snapshotFor(world, v, p, 1))).units;
+  for (const [who, v, p] of [["its owner", viewer(0, { 0: 0, 1: 1 }), 0], ["an enemy", viewer(1, { 0: 0, 1: 1 }), 1]]) {
+    const units = onWire(v, p);
+    const m = units.find((u) => u.id === 50);
+    check(`${who}: the mine plays Stand Work Third`, pickSequence(anims, m, false), 23);
+  }
+  check("…while the enemy is still sent no wisp", onWire(viewer(1, { 0: 0, 1: 1 }), 1).filter((u) => u.typeId === "ewsp").length, 0);
+  const fogged = snapshotFor(world, viewer(1, { 0: 0, 1: 1 }, { fogBlocksClick: () => true }), 1, 1).units.find((u) => u.id === 50);
+  check("a remembered mine stands empty", [fogged?.remembered, fogged && pickSequence(anims, fogged, false)], [true, 1]);
 }
 
 console.log("every number the selection panel prints survives the trip (item 10c-2c-3)");
