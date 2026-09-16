@@ -161,8 +161,8 @@ export interface SimProjectile {
    *  the shot MISSES (see missileDisjointed). Undefined on the artillery/wave shots, which have
    *  no target. */
   targetTeleports?: number;
-  /** Set the moment the target went INVISIBLE to the shooter's side mid-flight: where it was
-   *  last seen. The missile stops homing (`targetId` is cleared), flies on to this spot and
+  /** Set the moment the target is LOST mid-flight — it went invisible to the shooter's side,
+   *  was teleported, or climbed into a hold: where it was last seen. The missile stops homing (`targetId` is cleared), flies on to this spot and
    *  dissipates there with nothing delivered — see missileDisjointed. */
   lost?: { x: number; y: number };
   attackType?: AttackType; // attacker's weapon attack type, carried so the damage-table
@@ -3222,6 +3222,12 @@ export class SimWorld {
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
   private nextProjectileId = 1;
+  /** Where each unit stood before its LATEST teleport, and before it last climbed into a hold
+   *  (with the hold, so a stale entry from an earlier boarding is never read). A missile that
+   *  loses its target to either flies to this spot rather than to where the unit is now — the
+   *  far end of a Blink, or the centre of the Burrow it walked into. See missileDisjointed. */
+  private readonly teleportedFrom = new Map<number, { x: number; y: number }>();
+  private readonly boardedFrom = new Map<number, { x: number; y: number; host: number }>();
   private spawnedProjectiles: Array<{ id: number; art: string; x: number; y: number; z: number }> = [];
   private removedProjectiles: number[] = [];
   // Projectiles that actually HIT (vs fizzled) — the renderer plays the impact
@@ -5317,6 +5323,7 @@ export class SimWorld {
   private enterHost(passenger: SimUnit, host: SimUnit): void {
     this.unsettle(passenger); // no cell block while inside
     this.releaseClaim(passenger); // …and no walker's claim either: one met mid-stride boards mid-stride
+    this.boardedFrom.set(passenger.id, { x: passenger.x, y: passenger.y, host: host.id });
     passenger.inBurrow = true;
     passenger.garrisonHost = host.id;
     passenger.order = "idle";
@@ -7646,6 +7653,8 @@ export class SimWorld {
     this.releaseEntangled(u);
     this.units.delete(u.id);
     this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
+    this.teleportedFrom.delete(u.id); // a missile at a unit that is gone fizzles; nothing reads these again
+    this.boardedFrom.delete(u.id);
     this.removals.push(u.id);
     return true;
   }
@@ -7672,6 +7681,8 @@ export class SimWorld {
     this.releaseEntangled(u); // an Entangled Gold Mine leaving hands the mine back
     this.units.delete(u.id);
     this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
+    this.teleportedFrom.delete(u.id); // a missile at a unit that is gone fizzles; nothing reads these again
+    this.boardedFrom.delete(u.id);
     this.removals.push(u.id);
     this.unitDrops.delete(u.id);
     this.dismissBoundSummons(u.id);
@@ -15641,6 +15652,7 @@ export class SimWorld {
     // air (missileDisjointed). Bumped before the snap below, since even a teleport the
     // pathing grid then nudges a few units is still a teleport.
     u.teleports++;
+    this.teleportedFrom.set(u.id, { x: u.x, y: u.y });
     this.popFromMine(u); // a body moved out of the shaft is out of the shaft — and off the mine's latch
     this.unsettle(u);
     this.releaseClaim(u); // the tile it was walking onto is behind it now
@@ -18036,15 +18048,30 @@ export class SimWorld {
    * got teleported follow them all the way to their base" (the Scroll of Town Portal, whose
    * three-second channel ends inside somebody's wind-up almost every time).
    */
-  private missileDisjointed(p: SimProjectile, t: SimUnit): "fizzle" | "lost" | null {
+  private missileDisjointed(p: SimProjectile, t: SimUnit): "fizzle" | { x: number; y: number } | null {
     // "The target is teleported." A Blink, a Mass Teleport, a Way Gate, a Staff of
     // Sanctuary, the Blademaster stepping out of a Mirror Image — one counter covers them
     // all, and covers a unit teleported twice mid-flight too.
-    if (p.targetTeleports !== undefined && t.teleports !== p.targetTeleports) return "fizzle";
+    //
+    // The missile flies on to where the target stood before it went (`teleportedFrom`) and
+    // bursts there empty — the same rule as the invisible case below, and for a teleport in
+    // the WIND-UP too: that shot was aimed at the spot the unit left, so that is where it goes.
+    if (p.targetTeleports !== undefined && t.teleports !== p.targetTeleports) {
+      return this.teleportedFrom.get(t.id) ?? { x: t.x, y: t.y };
+    }
     // "The target is loaded into another unit… Orc Burrow, Goblin Zeppelin and Devour."
     // `isOffField` is that list plus the two other ways a unit leaves the map entirely (into
     // a gold mine, into the structure an orc peon is raising) — in every case there is no
     // longer anything standing there for the missile to reach.
+    //
+    // A HOLD (Burrow, Entangled Gold Mine, a transport) sends the missile on to where the unit
+    // stood as it climbed in — boarding puts the passenger at the host's centre, and a
+    // transport then carries it away, so its position now is not the spot it vanished from.
+    // The other ways off the field still simply fizzle.
+    if (t.inBurrow) {
+      const b = this.boardedFrom.get(t.id);
+      return b && b.host === t.garrisonHost ? { x: b.x, y: b.y } : { x: t.x, y: t.y };
+    }
     if (isOffField(t)) return "fizzle";
     // "The target is invisible." `invisible` is the fade IN FORCE, not the Transition Time —
     // which is precisely why a Wind Walk cut short to a fraction of a second disjoints while
@@ -18063,7 +18090,7 @@ export class SimWorld {
     // Such a missile does not simply vanish mid-air, either: it has lost the UNIT, not the
     // shot, so it carries on to the last place its side saw the target and dissipates there
     // (`lost`, tickLostProjectile) — which is what makes a Wind Walk read as a dodge.
-    if (p.sourceTeam !== undefined && t.team !== p.sourceTeam && t.invisible && !this.teamDetects(p.sourceTeam, t.x, t.y)) return "lost";
+    if (p.sourceTeam !== undefined && t.team !== p.sourceTeam && t.invisible && !this.teamDetects(p.sourceTeam, t.x, t.y)) return { x: t.x, y: t.y };
     // INVULNERABLE — a Divine Shield, a potion, the Town Portal ward — and here we part with
     // the letter of the page. Liquipedia files invulnerability one line above the miss list,
     // as "the missile will deal no damage, if the target is invulnerable, when the missile
@@ -18094,8 +18121,8 @@ export class SimWorld {
         this.tickWaveProjectile(p, dt);
         continue;
       }
-      // Already lost its target to invisibility: it is flying at a spot now, not a unit, and
-      // nothing the target does next — reappearing included — brings it back.
+      // Already lost its target (a fade, a teleport, a hold): it is flying at a spot now, not a
+      // unit, and nothing the target does next — reappearing included — brings it back.
       if (p.lost) {
         this.tickLostProjectile(p, dt);
         continue;
@@ -18104,8 +18131,8 @@ export class SimWorld {
       // The target DIED (killUnit deletes it) — the first of the ways a missile misses. The
       // rest are the disjoint (Blink, a Wind Walk, a step into a Burrow, a Divine Shield).
       const disjoint = t ? this.missileDisjointed(p, t) : "fizzle";
-      if (t && disjoint === "lost") {
-        p.lost = { x: t.x, y: t.y };
+      if (disjoint && disjoint !== "fizzle") {
+        p.lost = disjoint;
         p.targetId = 0; // chasing nobody — a client's copy aims at `lost` (snapshot tx/ty)
         this.tickLostProjectile(p, dt);
         continue;
@@ -18151,7 +18178,7 @@ export class SimWorld {
     }
   }
 
-  /** Fly a missile whose target went invisible to the spot it was last seen and let it burst
+  /** Fly a missile whose target was lost (a fade, a teleport, a hold) to the spot it was last seen and let it burst
    *  there EMPTY: the impact clip plays (the arrow hits the ground, the Death Coil pops) but no
    *  damage, orb, spill or spell effect rides it, and no weapon clang sounds — nothing was hit.
    *  See missileDisjointed. */
@@ -20374,6 +20401,8 @@ export class SimWorld {
     this.revealDyingUnit(u);
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
+    this.teleportedFrom.delete(u.id); // a missile at a unit that is gone fizzles; nothing reads these again
+    this.boardedFrom.delete(u.id);
     this.deaths.push(u.id);
     // …and anything BOUND to it goes with it — "Lasts 50 seconds or until the avatar dies".
     // Death does not run through removeUnit (a corpse stays behind, a hero goes to the

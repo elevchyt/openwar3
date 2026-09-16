@@ -112,6 +112,9 @@ function shot(duringFlight, setUp = () => {}, eachTick = () => {}) {
   };
 }
 
+const near = (im, p, tol = 4.5) => !!im && !!p && Math.hypot(im.x - p.x, im.y - p.y) <= tol;
+const at = (im, p) => im && p ? `(${im.x.toFixed(0)}, ${im.y.toFixed(0)}) vs (${p.x.toFixed(0)}, ${p.y.toFixed(0)})` : "no impact";
+
 // ---------------------------------------------------------------------------------------
 console.log("\nthe baseline: an arrow that is left alone lands");
 {
@@ -135,9 +138,12 @@ console.log("\nTELEPORTED: the Blink case");
 {
   // The same displacement as above, through the teleport path this time (SetUnitPosition is
   // the JASS door onto `teleportUnit`, which is also Blink's and Mass Teleport's).
-  const r = shot((w, a, t) => { w.setUnitPosition(t.id, t.x + 3000, t.y); });
+  let from = null;
+  const r = shot((w, a, t) => { from = { x: t.x, y: t.y }; w.setUnitPosition(t.id, t.x + 3000, t.y); });
   check("the teleport was stamped on the unit", r.teleports === 1);
-  check("the arrow is disjointed", r.fizzled, `hits ${r.landed}`);
+  check("the arrow is disjointed", r.lost, `hits ${r.landed}`);
+  // It flies on to the spot the target LEFT and bursts there empty, not to the far end.
+  check("it bursts where the target blinked FROM", near(r.impactAt, from), at(r.impactAt, from));
   check("and nothing is left in the air", !r.stillFlying);
   check("the target took no damage", r.hp === 100000);
 }
@@ -146,7 +152,7 @@ console.log("\nTELEPORTED: the Blink case");
   // ends the missile, not the distance covered. (Blink's own minimum is nothing like this
   // small — the point is that the rule never consults the number.)
   const r = shot((w, a, t) => { w.setUnitPosition(t.id, t.x + 40, t.y); });
-  check("a 40-unit hop still disjoints", r.fizzled && r.hp === 100000);
+  check("a 40-unit hop still disjoints", r.lost && r.hp === 100000);
 }
 
 console.log("\nTELEPORTED DURING THE WIND-UP: the Scroll of Town Portal case");
@@ -164,24 +170,26 @@ console.log("\nTELEPORTED DURING THE WIND-UP: the Scroll of Town Portal case");
   const t = addUnit(w, 2, 1, 1100, 500, []);
   w.issueOrder(a.id, { kind: "attack", targetId: t.id, force: true });
 
-  let swungAt = -1, launched = false, impacts = 0, removals = 0;
+  let swungAt = -1, launched = false, impacts = 0, removals = 0, impactAt = null, from = null;
   for (let i = 0; i < 1200; i++) {
     // The instant a swing is pending — the wind-up — whisk the target home, as a Town Portal
     // that came round mid-swing does.
     if (swungAt < 0 && a.swingLeft >= 0) {
       swungAt = i;
+      from = { x: t.x, y: t.y };
       w.setUnitPosition(t.id, t.x + 3000, t.y);
     }
     w.tick(SIM_DT);
     if (w.drainSpawnedProjectiles().length) launched = true;
-    impacts += w.drainProjectileImpacts().length;
+    for (const im of w.drainProjectileImpacts()) { impacts++; impactAt = im; }
     removals += w.drainRemovedProjectiles().length;
     if (launched && removals) break;
   }
   check("the swing was caught mid-wind-up", swungAt >= 0);
   check("the teleport was stamped on the unit", t.teleports === 1);
   check("the arrow still LEAVES the bow", launched);
-  check("…and is disjointed rather than chasing", removals > 0 && impacts === 0);
+  check("…and is disjointed rather than chasing", removals > 0 && impacts > 0 && t.hp === 100000);
+  check("…bursting at the spot it was aimed at, not at the portal's far end", near(impactAt, from), at(impactAt, from));
   check("…so nothing reaches the target", t.hp === 100000, `hp ${t.hp}`);
   check("and nothing is left in the air", w.projectiles.size === 0);
 }
@@ -266,7 +274,20 @@ console.log("\nINVULNERABLE: the Divine Shield case");
 console.log("\nLOADED INTO ANOTHER UNIT: the Burrow / Zeppelin / Devour case");
 {
   const r = shot((w, a, t) => { t.inBurrow = true; });
-  check("climbing into a hold disjoints the arrow", r.fizzled && r.hp === 100000);
+  check("climbing into a hold disjoints the arrow", r.lost && r.hp === 100000);
+}
+{
+  // Boarding for real: `enterHost` puts the passenger at the HOLD's centre (and a transport
+  // then carries it off), so the missile has to remember where the unit stood as it climbed
+  // in — a Burrow, an Entangled Gold Mine and a Zeppelin alike.
+  let from = null;
+  const r = shot((w, a, t) => {
+    const host = w.units.get(3);
+    from = { x: t.x, y: t.y };
+    w.enterHost(t, host);
+  }, (w) => { addUnit(w, 3, 1, 1100, 900, []); });
+  check("boarding a hold 400 units away disjoints the arrow", r.lost && r.hp === 100000, `hp ${r.hp}`);
+  check("…and it bursts where the unit climbed in, not at the hold", near(r.impactAt, from), at(r.impactAt, from));
 }
 {
   const r = shot((w, a, t) => { t.devouredBy = 99; });
