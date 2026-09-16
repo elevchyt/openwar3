@@ -1,4 +1,4 @@
-import { isOffField, type SimWorld, type QueuedOrder } from "../sim/world";
+import { isOffField, type SimWorld, type SimUnit, type BuildJob, type QueuedOrder } from "../sim/world";
 import type { UnitRegistry } from "../data/units";
 import type { AbilityRegistry } from "../data/abilities";
 import { isHarvestCode } from "../data/races";
@@ -102,6 +102,66 @@ export class Authority {
       const food = this.foodFor(owner);
       return food.used + need <= food.made;
     };
+    // A building that leaves the world with jobs queued pays every one of them back IN FULL, to
+    // whoever paid — a hard rule for all buildings (see SimWorld.onQueueLost). Not at the
+    // cancel rates: nobody cancelled anything, the building was taken away from them.
+    this.sim.onQueueLost = (building, jobs) => {
+      for (const job of jobs) this.refundJob(building, job, 1);
+    };
+  }
+
+  /**
+   * What a queued job was CHARGED, read off the same tables the charge was — the one pricing
+   * both a cancel and a building destroyed under its queue pay back from.
+   *
+   * A tier upgrade is the DIFFERENCE between the two buildings (a Stronghold over a Great Hall
+   * is 315/190, `upgradebuilding`), and the building is still its old type while the job runs,
+   * so the subtraction is the same one. A revival is its level's ladder, not the hero's unit
+   * cost. The melee free first hero was charged nothing (`free`).
+   */
+  private jobCost(building: SimUnit, job: BuildJob): { gold: number; lumber: number } {
+    const none = { gold: 0, lumber: 0 };
+    switch (job.kind) {
+      case "research":
+        return this.upgrades.cost(job.unitId, job.level);
+      case "revive": {
+        const f = this.sim.fallen.get(job.heroId);
+        const rd = this.registry.get(job.unitId);
+        if (!f || !rd) return none;
+        const mode: ReviveMode = this.sim.isShopUnit(building.id) ? "tavern" : "altar";
+        return heroReviveCost(mode, rd.goldCost, rd.lumberCost, rd.buildTime || 1, f.level);
+      }
+      case "upgrade": {
+        const to = this.registry.get(job.unitId);
+        if (!to) return none;
+        const from = this.registry.get(building.typeId);
+        return {
+          gold: Math.max(0, to.goldCost - (from?.goldCost ?? 0)),
+          lumber: Math.max(0, to.lumberCost - (from?.lumberCost ?? 0)),
+        };
+      }
+      case "unit": {
+        if (job.free) return none;
+        const d = this.registry.get(job.unitId);
+        return d ? { gold: d.goldCost, lumber: d.lumberCost } : none;
+      }
+    }
+  }
+
+  /** Pay a job that left a queue back to the player who paid for it, at `rate` — its BUYER when
+   *  it has one (a Tavern is Neutral Passive: the hero in its queue is somebody else's), else
+   *  the building's owner. A free first hero hands its token back instead of gold. */
+  private refundJob(building: SimUnit, job: BuildJob, rate: number): void {
+    const payer = (job.kind === "unit" || job.kind === "revive") && job.buyer !== undefined ? job.buyer : building.owner;
+    if (payer < 0) return;
+    if (job.kind === "unit" && job.free) {
+      this.restoreFreeHero(payer);
+      return;
+    }
+    const c = this.jobCost(building, job);
+    const stash = this.sim.stashOf(payer);
+    stash.gold += Math.round(c.gold * rate);
+    stash.lumber += Math.round(c.lumber * rate);
   }
 
   /**
@@ -951,42 +1011,16 @@ export class Authority {
         // Refund the job the SIM removed, at the rate its own kind carries in MiscGame.txt:
         // training and research come back in full (Train/ResearchRefundRate = 1.0), a
         // structure upgrade only 75% (UpgradeRefundRate) — the same haircut as cancelling a
-        // building mid-construction.
-        const stash = this.sim.stashOf(player);
-        if (job.kind === "research") {
-          const c = this.upgrades.cost(job.unitId, job.level);
-          stash.gold += Math.round(c.gold * MISC_GAME.ResearchRefundRate);
-          stash.lumber += Math.round(c.lumber * MISC_GAME.ResearchRefundRate);
-          return true;
-        }
-        // A cancelled REVIVAL comes back in full (ReviveRefundRate = 1.0) — and off the same
-        // ladder that charged it, because what was paid was the LEVEL's price and the hero's
-        // unit-type cost is a different (smaller) number. The record is still on the roster:
-        // `dropJob` only cleared its `revivingAt`, so its level is still there to price.
-        if (job.kind === "revive") {
-          const f = this.sim.fallen.get(job.heroId);
-          const rd = this.registry.get(job.unitId);
-          if (f && rd) {
-            const mode: ReviveMode = this.sim.isShopUnit(cmd.buildingId) ? "tavern" : "altar";
-            const c = heroReviveCost(mode, rd.goldCost, rd.lumberCost, rd.buildTime || 1, f.level);
-            stash.gold += Math.round(c.gold * MISC_GAME.ReviveRefundRate);
-            stash.lumber += Math.round(c.lumber * MISC_GAME.ReviveRefundRate);
-          }
-          return true;
-        }
-        // The melee free first hero cost nothing, so it refunds nothing — otherwise queueing
-        // and cancelling one would simply mint 425 gold. It does hand the freebie back. That
-        // `free` flag is the sim's own, set when the authority granted it.
-        if (job.kind === "unit" && job.free) {
-          this.restoreFreeHero(player);
-          return true;
-        }
-        const d = this.registry.get(job.unitId);
-        if (d) {
-          const rate = job.kind === "upgrade" ? MISC_GAME.UpgradeRefundRate : MISC_GAME.TrainRefundRate;
-          stash.gold += Math.round(d.goldCost * rate);
-          stash.lumber += Math.round(d.lumberCost * rate);
-        }
+        // building mid-construction — and a revival in full (ReviveRefundRate = 1.0), off the
+        // same ladder that charged it: `dropJob` only cleared its `revivingAt`, so its level is
+        // still there to price. The price is what was CHARGED (`jobCost`) — an upgrade's
+        // difference, never the new building's whole cost. Paid to the canceller: the owner
+        // check above already made them the building's owner or the job's buyer.
+        const rate = job.kind === "research" ? MISC_GAME.ResearchRefundRate
+          : job.kind === "revive" ? MISC_GAME.ReviveRefundRate
+          : job.kind === "upgrade" ? MISC_GAME.UpgradeRefundRate
+          : MISC_GAME.TrainRefundRate;
+        this.refundJob(b, job, rate);
         return true;
       }
       case "battlestations":

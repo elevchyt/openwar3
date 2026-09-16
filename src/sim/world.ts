@@ -3430,6 +3430,22 @@ export class SimWorld {
    */
   foodRoom?: (owner: number, need: number) => boolean;
 
+  /**
+   * A building is leaving the world — destroyed, or removed outright — with jobs still in its
+   * production queue, and everything those jobs were paid with goes back to whoever paid it.
+   * That is a HARD RULE for every building: a Barracks razed with three Footmen queued, an
+   * altar mid-revival, a Town Hall halfway to a Keep and a Blacksmith mid-research all hand
+   * their gold and lumber back in full. The FOOD needs no hook — it is read off the live
+   * queues (`GameAuthority.foodFor`), and a building that is gone holds none.
+   *
+   * A hook for the same reason `foodRoom` is one: the PRICE of a job is not the sim's. A tier
+   * upgrade was charged the difference between two buildings, a revival the level's ladder, a
+   * free first hero nothing but a token — all of it read by the authority when it charged, so
+   * the authority is the one that can say what to give back. Unset on a bare sim, where nothing
+   * was ever charged. Called while the building is still in `units`, before `releaseRevivals`.
+   */
+  onQueueLost?: (building: SimUnit, jobs: readonly BuildJob[]) => void;
+
   constructor(
     readonly grid: PathingGrid,
     seed = 1,
@@ -4653,8 +4669,8 @@ export class SimWorld {
   /**
    * A building is leaving the world with revivals in its queue: every hero it was bringing
    * back goes back on the roster as merely DEAD, exactly as a cancelled revival does
-   * (`dropJob`). Nothing is refunded: the queue goes down with the building, as every other
-   * job in it already does here.
+   * (`dropJob`). The gold is not this function's: `refundQueue`, called just before it, has
+   * already paid the whole queue back.
    *
    * Without this `revivingAt` kept pointing at an altar that no longer existed: no altar would
    * ever offer that hero again (`enqueueRevive` refuses a hero already on a clock, and so does
@@ -4671,6 +4687,18 @@ export class SimWorld {
       if (f && f.revivingAt === u.id) f.revivingAt = 0;
     }
     b.queue = b.queue.filter((j) => j.kind !== "revive");
+  }
+
+  /** Hand a leaving building's whole production queue to `onQueueLost` to be paid back, then
+   *  empty it — revivals included, which `releaseRevivals` (called next) finds by the hero's
+   *  own `revivingAt` rather than by the queue. Emptied so that no second path out of the world
+   *  can pay the same queue twice. */
+  private refundQueue(u: SimUnit): void {
+    const b = u.building;
+    if (!b || !b.queue.length) return;
+    const jobs = [...b.queue];
+    this.onQueueLost?.(u, jobs);
+    b.queue = b.queue.filter((j) => j.kind === "revive"); // releaseRevivals clears the rest
   }
 
   /** Drop a fallen hero's record — a script that removes the unit outright, or a match
@@ -7727,6 +7755,7 @@ export class SimWorld {
     this.releaseClaim(u); // a unit that leaves the world takes its walking claim with it
     this.releasePathStamp(u);
     if (u.building) for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
+    this.refundQueue(u); // …its production queue is paid back to whoever paid for it
     this.releaseRevivals(u); // …and a hero it was bringing back is merely dead again
     if (u.constructing) this.detachBuilder(u.id);
     if (u.garrison.length) this.unloadBurrow(u.id); // eject passengers before it vanishes
@@ -20451,6 +20480,7 @@ export class SimWorld {
     // non-Ancient building such as a Moon Well it will survive" (Warcraft Wiki, Wisp). Killed
     // rather than removed here, unlike the merge at completion: this one IS a death — it is
     // the enemy's kill, and the credit belongs to them.
+    this.refundQueue(u); // a building razed with jobs queued pays every one of them back
     this.releaseRevivals(u); // an altar razed mid-revival: the hero is dead, not on its way back
     if (u.building) {
       const eatsBuilder = u.ancient && u.building.constructionLeft > 0;
