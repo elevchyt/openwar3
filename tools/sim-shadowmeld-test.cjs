@@ -178,6 +178,11 @@ const stillMelded = (u) => u.buffs.some((b) => b.kind === "invisible");
   check("…nor on Hold with one in range", tries({ order: "hold" }, true), 0);
   check("an Archer on an attack order never melds", tries({ order: "attack", targetId: 9 }), 0);
   check("…nor one attack-moving", tries({ order: "attackmove" }), 0);
+  // A cinematic's actors stand idle between lines because the script is directing them.
+  w.inCinematic = () => true;
+  check("nobody hides of their own accord during a cinematic", tries({}), 0);
+  w.inCinematic = () => false;
+  check("…and melds again once it is over", tries({}), 1);
 }
 
 // The Hero Abilities page lists a hero's SKILLS only. The Warden carries Shadow Meld as an
@@ -229,6 +234,32 @@ const stillMelded = (u) => u.buffs.some((b) => b.kind === "invisible");
   const other = { id: 10, owner: 0, abilities: [], buffs: [], inventory: [{ id: 3, itemId: "rat6", charges: 0 }] };
   w.syncCarriedAbilities(other);
   check("an ordinary item puts nothing on the sheet", other.abilities.length, 0);
+}
+
+// NO GESTURE. `[Ashm]`/`[Sshm]` in NightElfAbilityFunc carry no `Animnames`, so the unit just
+// stands and fades. Through the wound-up pipeline the Warden played her "Spell" clip every time
+// tickAutoMeld hid her at night; the press must now resolve at once and start no cast clip.
+{
+  const w = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8Array(64) }, 1);
+  w.timeOfDay = 22;
+  w.techMeets = () => true;
+  w.abilities = new Map([["Ashm", {
+    id: "Ashm", code: "Ashm", target: "none", targetFlags: [], animNames: [],
+    buffFx: [], effectArt: [], casterArt: [], targetArt: [], specialArt: [], lightning: [],
+    levelData: [{ cost: 0, cooldown: 0, castTime: 0, castRange: 0, area: 0, data: [1.5, 2.5, 0.5], dataStr: [] }],
+  }]]);
+  const warden = {
+    id: 5, owner: 0, team: 0, hp: 500, x: 0, y: 0, prevX: 0, prevY: 0, mana: 0, order: "idle", moving: false,
+    swingLeft: -1, targetId: null, inCombat: false, cloaked: false, stunned: false, silenced: false, paused: false,
+    isCreep: false, castPoint: 0.3, castBackswing: 0.5, pendingCast: null, inventory: [], buffs: [], weapons: [],
+    abilities: [{ id: "Ashm", code: "Ashm", level: 1, cooldownLeft: 0 }],
+  };
+  w.units.set(warden.id, warden);
+  check("an automatic meld is accepted", w.issueCast(5, "Ashm", 0, 0, 0, true), true);
+  check("…resolves at once, with no pending cast to wind up", warden.pendingCast, null);
+  check("…starts no cast animation", w.drainCastStarts().length, 0);
+  check("…still plays its Effectsound", w.drainCastFires().length, 1);
+  check("…and lays the meld", warden.buffs.map((b) => b.group), ["shadowmeld"]);
 }
 
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);

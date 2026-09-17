@@ -3198,6 +3198,15 @@ export class MapViewerScene {
         // the interpreter itself (ChooseRandomItem draws from its seeded RNG — 7.18).
         onBoot: (e) => {
           this.mapScript = e;
+          // The sim asks whether a cinematic is playing (SimWorld.inCinematic) — Blizzard.j's own
+          // flag, set in CinematicModeExBJ's global half, so it is the same answer everywhere.
+          const globals = e.interp.rt.globals;
+          if (this.rts) {
+            this.rts.simWorld.inCinematic = () => {
+              const v = globals.get("bj_cineModeAlreadyIn");
+              return v?.k === "bool" && v.b;
+            };
+          }
           // COMPUTER+ SEATS ON EXTREME CANDY WAR are PLAYER seats to the script. The map was written
           // for people in them: `Initialize_Players`, `Multiboard_Create` and `Incremental_Gold` all
           // filter on `MAP_CONTROL_USER`, so a computer seated there got no leaderboard row, no

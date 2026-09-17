@@ -3182,6 +3182,16 @@ export class SimWorld {
    *  EnableDawnDusk is the cinematic's, restored the moment the cinematic ends. One must not
    *  hand the other's answer back. */
   timeOfDaySuspended = false;
+  /**
+   * Is a CINEMATIC playing? Blizzard.j's own `bj_cineModeAlreadyIn`, which CinematicModeExBJ
+   * sets in its GLOBAL half (outside the `GetLocalPlayer()` block), so every machine agrees on
+   * it. A predicate rather than a field because the script owns the answer — the map viewer
+   * points it at the running script's global; a match with no script is never in one.
+   *
+   * Asked by `tickAutoMeld` alone: a cinematic's actors stand about between lines, and a night
+   * elf left idle there hid itself in the middle of the shot (Terror of the Tides).
+   */
+  inCinematic: () => boolean = () => false;
   private deaths: number[] = [];
   /** Dead STRUCTURES, kept whole for the ghost path — see drainDeadStructures. */
   private deadStructures: SimUnit[] = [];
@@ -13227,6 +13237,15 @@ export class SimWorld {
     // do it again, and `toggleRoot`'s own rootRefusal is not the only thing that should
     // say so.
     if (code === "Aroo") return this.castImmediate(u, ab, def, lvl);
+    // Shadow Meld (`Ashm`, and `Sshm` under the same code) is the same case once more: `[Ashm]`
+    // and `[Sshm]` in NightElfAbilityFunc carry no `Animnames` — `Order=ambush` and an
+    // `Effectsound`, nothing else — so the unit simply STANDS and fades. Through the generic
+    // pipeline it fell back to the caster's "Spell" clip, and because `tickAutoMeld` presses
+    // the button every night for everything standing idle, the Warden (and every Archer,
+    // Huntress and Cloak of Shadows carrier) threw a spell gesture each time she hid — and
+    // was charged her `castpt` and `castbsw`, which belong to Fan of Knives, on top of the
+    // row's own 1.5 s Fade Duration. The handler's Hold Position is still its own business.
+    if (code === "Ashm") return this.castImmediate(u, ab, def, lvl);
     // The point twin of the target test below, and gated at the same door for the same
     // reason: a spot in the unplayable black is not a spot (issue #117), and `castError` only
     // speaks to the local player's click. A trigger's IssuePointOrder, an order off the wire
@@ -17937,6 +17956,10 @@ export class SimWorld {
   private tickAutoMeld(u: SimUnit): void {
     if (this.isDay || u.hp <= 0 || u.building || u.cloaked || u.stunned || u.paused) return;
     if (u.asleep) return; // a sleeper does nothing — see hidesAtNight
+    // …and nobody hides of their own accord during a CINEMATIC (see inCinematic): the actors
+    // stand still between lines because the script is directing them, not lying in wait. The
+    // button still works — a script that orders `ambush` gets its meld.
+    if (this.inCinematic()) return;
     if (u.order !== "idle" && u.order !== "hold") return;
     if (u.moving || u.swingLeft >= 0 || u.x !== u.prevX || u.y !== u.prevY) return;
     if (u.targetId !== null || u.inCombat) return; // fighting — on Hold, or between orders
