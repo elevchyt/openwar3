@@ -160,11 +160,40 @@ export function mountCampaignScreen(
     // A locked campaign, a locked chapter, and every cinematic row answer to nothing.
     if (state.chapters) {
       rows.forEach((row, i) => {
-        s.setEnabled(rowButton(i), playable(row, state.campaign, rows, i, progress));
+        const on = playable(row, state.campaign, rows, i, progress);
+        s.setEnabled(rowButton(i), on);
+        if (on) wireRowText(s, i);
       });
     } else {
-      campaigns.forEach((_, i) => s.setEnabled(rowButton(i), isCampaignOpen(campaigns, i, progress)));
+      campaigns.forEach((_, i) => {
+        const on = isCampaignOpen(campaigns, i, progress);
+        s.setEnabled(rowButton(i), on);
+        if (on) wireRowText(s, i);
+      });
     }
+  }
+}
+
+/**
+ * A row is ONE target: its two lines of text answer the click exactly as the arrow beside them
+ * does (by pressing that button, so its disabled/mid-transition gates and its click sound
+ * still apply), and hovering any part of it lights the arrow and turns both lines white.
+ * Wired per build — `relayout` replaces every element, listeners and all.
+ */
+function wireRowText(s: FdfScreen, i: number): void {
+  const button = s.frame(rowButton(i));
+  if (!button) return;
+  const parts = [button, s.frame(rowLabel(i)), s.frame(rowDesc(i))].filter((e): e is HTMLElement => !!e);
+  const hot = (on: boolean): void => {
+    const live = on && !button.classList.contains("fdf-disabled") && !button.closest(".fdf-screen-disabled, .fdf-screen-inert");
+    for (const el of parts) el.classList.toggle("campaign-row-hot", live);
+  };
+  for (const el of parts) {
+    el.addEventListener("mouseenter", () => hot(true));
+    el.addEventListener("mouseleave", () => hot(false));
+    if (el === button) continue;
+    el.classList.add("campaign-row-text");
+    el.addEventListener("click", () => button.click());
   }
 }
 

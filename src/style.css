@@ -2663,6 +2663,11 @@ body.in-game .fdf-screen.fdf-ingame {
   /* No cursor override — the WC3 hand cursor (ui/cursor.ts) stays in every state. */
 }
 .fdf-button:hover .fdf-button-glow { opacity: 1; }
+/* A campaign/chapter row's text is part of its button (ui/fdfCampaign.ts): it takes the click,
+   and hovering anywhere on the row lights the arrow and whitens both lines. */
+.campaign-row-text { pointer-events: auto; }
+.fdf-button.campaign-row-hot .fdf-button-glow { opacity: 1; }
+.campaign-row-hot span { color: #fff !important; }
 
 .fdf-button-glow {
   position: absolute;
