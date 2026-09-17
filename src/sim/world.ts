@@ -4321,13 +4321,24 @@ export class SimWorld {
     if (this.missingForShop(shopId, itemId, player).length) return "req";
     if (!buyer || buyer.owner !== player || !this.isPatron(buyer)) return "nopatron";
     if (!this.inShopRange(shop, buyer)) return "nopatron";
-    if (buyer.inventory.indexOf(null) < 0) return "full";
+    // A POWERUP never takes a slot, so a full belt does not refuse one (see below).
+    if (!def.powerup && buyer.inventory.indexOf(null) < 0) return "full";
     const stash = this.stashOf(player);
     if (stash.gold < def.gold || stash.lumber < def.lumber) return "cost";
 
     if (!this.takeStock(shop, itemId)) return "nostock";
     stash.gold -= def.gold;
     stash.lumber -= def.lumber;
+    // A POWERUP bought is a powerup USED: a Tome of Experience off a shelf lands on the patron
+    // the instant it is paid for, exactly as one walked over does (`pickUpItem`) — it is never
+    // carried, so it has no slot to wait in and nothing to press. Handed to the inventory like
+    // an ordinary item it sat there as a button, which is not a thing the game ever shows.
+    if (def.powerup) {
+      this.notifyCreepsOfShopUse(shop, buyer, MISC_GAME.ItemSaleAggroRange);
+      this.noteItem(buyer, { id: this.nextItemId++, itemId, charges: def.charges }, "sell", shop);
+      this.applyPowerup(buyer, def);
+      return "ok";
+    }
     const slot = buyer.inventory.indexOf(null);
     // A fresh potion off the shelf is still bound by the clock the last one started
     // (itemCooldownOn) — buying another is not a way round a cooldown group.

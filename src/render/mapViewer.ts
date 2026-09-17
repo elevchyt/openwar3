@@ -10608,11 +10608,11 @@ export class MapViewerScene {
       this.refuse(SHOP_ERROR.nostock);
       return;
     }
-    if (buyer.inventory.indexOf(null) < 0) {
+    const def = this.items.get(itemId);
+    if (!def?.powerup && buyer.inventory.indexOf(null) < 0) { // a tome is used, never stored
       this.refuse(SHOP_ERROR.full);
       return;
     }
-    const def = this.items.get(itemId);
     if (def && !this.canAfford(def.gold, def.lumber)) return; // refuses with the resource's own line
     this.rts.execute(this.localPlayer, { c: "buyitem", shopId, itemId });
   }

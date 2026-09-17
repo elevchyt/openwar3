@@ -20,6 +20,11 @@
 // masked on the wire), so a copy left at the spawn default reads 0 into its level on their
 // panel while the real Blademaster reads three quarters full — the real one, named.
 //
+// The last part is a POWERUP on the shelf. Bought, it is USED on the patron the moment it is
+// paid for — never put in a slot to be pressed later, and so never refused for a full belt —
+// the same as one walked over (`pickUpItem`). A Bundle of Lumber stands in for the tomes: one
+// dispatcher serves every powerup, and its effect is readable without a hero's XP tables.
+//
 // Run: pnpm sim:test
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
@@ -68,6 +73,17 @@ const ABILITIES = new Map([
     buffSpecialArt: "", lightning: [], animNames: [], order: "", orderOn: "", orderOff: "",
     levelData: [],
   }],
+  // `[AIlu]` Bundle of Lumber — DataA is the lumber it hands over.
+  ["AIlu", {
+    id: "AIlu", code: "AIlu", isHero: false, isItem: true, levels: 1, reqLevel: 0, levelSkip: 0,
+    target: "none", targetFlags: [], autocast: false, name: "Item Lumber", icon: "", hotkey: "",
+    researchHotkey: "", buttonX: 0, buttonY: 0, learnX: 0, learnY: 0, research: false,
+    tips: [], uberTips: [], researchTip: "", researchUberTip: "",
+    missileArt: "", targetArt: "", targetAttach: [], casterArt: "", specialArt: "", effectArt: "",
+    areaArt: "", fxArt: "", effectSound: "", buffFx: [], buffArt: "", buffEffectArt: "",
+    buffSpecialArt: "", lightning: [], animNames: [], order: "", orderOn: "", orderOff: "",
+    levelData: [lvl({ data: D(150) })],
+  }],
 ]);
 
 // A Potion of Healing on a Goblin Merchant's shelf: 150 gold, one charge.
@@ -78,6 +94,13 @@ const ITEMS = new Map([
     classType: "Purchasable", abilities: ["AIh1"], charges: 1, cooldownGroup: "phea",
     usable: true, perishable: true, powerup: false, droppable: true, sellable: true,
     pawnable: true, pickRandom: false, maxHp: 75, stockMax: 1, stockRegen: 120, stockStart: 0,
+  }],
+  ["lmbr", {
+    id: "lmbr", name: "Bundle of Lumber", description: "", icon: "", tip: "", hotkey: "",
+    buttonX: -1, buttonY: -1, model: "", scale: 1, gold: 100, lumber: 0, level: 1,
+    classType: "PowerUp", abilities: ["AIlu"], charges: 0, cooldownGroup: "",
+    usable: false, perishable: false, powerup: true, droppable: true, sellable: false,
+    pawnable: false, pickRandom: false, maxHp: 75, stockMax: 1, stockRegen: 120, stockStart: 0,
   }],
 ]);
 
@@ -93,7 +116,7 @@ const newWorld = () =>
     { get: (id) => ITEMS.get(id), has: (id) => ITEMS.has(id) },
     { get: (id) => (id === SHOP ? { ...UNIT_DEF, abilities: ["Aneu", "Apit"] }
       : id === VAULT ? { ...UNIT_DEF, abilities: ["Aall", "Apit"] } : UNIT_DEF), has: () => false },
-    { get: (id) => (id === SHOP || id === VAULT ? { makeitems: [], sellitems: ["phea"], sellunits: [] } : undefined),
+    { get: (id) => (id === SHOP || id === VAULT ? { makeitems: [], sellitems: ["phea", "lmbr"], sellunits: [] } : undefined),
       has: (id) => id === SHOP || id === VAULT });
 
 let world = newWorld();
@@ -246,6 +269,25 @@ console.log("\n…and an alliance REVOKED closes the shelf again on the same tic
   allied = false; // SetPlayerAlliance(…, false)
   check("…and stops being one when the alliance ends", world.shopBuyer(v.id, 2), null);
   check("…arrow and all", world.shopArrowUnits(2).has(h.id), false);
+}
+
+console.log("\nA POWERUP bought is used on the spot, never stored");
+{
+  world = newWorld();
+  const s = shop();
+  const h = hero({ x: 2200, y: 2000, prevX: 2200, prevY: 2000 });
+  world.stashOf(0).gold = 500;
+  world.stashOf(0).lumber = 0;
+  check("the hero buys the bundle", world.purchaseItem(s.id, h.id, "lmbr", 0), "ok");
+  check("…pays for it", world.stashOf(0).gold, 400);
+  check("…and it is USED: the lumber is in the stash", world.stashOf(0).lumber, 150);
+  check("…with nothing left in the inventory", h.inventory.every((x) => x === null), true);
+  const full = hero({ x: 2200, y: 2100, prevX: 2200, prevY: 2100 });
+  full.inventory = full.inventory.map((_, i) => ({ id: 900 + i, itemId: "phea", charges: 1, cooldownLeft: 0 }));
+  world.stashOf(0).lumber = 0;
+  check("a FULL belt still buys a powerup", world.purchaseItem(s.id, full.id, "lmbr", 0), "ok");
+  check("…and uses it", world.stashOf(0).lumber, 150);
+  check("…while an ordinary item is refused for the full belt", world.purchaseItem(s.id, full.id, "phea", 0), "full");
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nall ok");
