@@ -40,7 +40,7 @@ import {
   type ReviveMode,
 } from "../data/gameplayConstants";
 import { perfNow, simProfile } from "./profile";
-import { SPELL_HANDLERS, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, NO_SUMMON_TARGET, DISPEL_CODES, REPLENISH_BAR, replenishRefusal,worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -15692,6 +15692,11 @@ export class SimWorld {
       this.applyBuffInternal(t, buff.buffId === undefined && this.casting ? { ...buff, buffId: buffIdOf(this.casting.def, this.casting.rank) } : buff);
     },
     dispel: (t) => this.dispelUnit(t),
+    endBuffGroup: (t, group) => {
+      if (!t.buffs.some((b) => b.group === group)) return;
+      t.buffs = t.buffs.filter((b) => b.group !== group);
+      this.recomputeStats(t); // `invulnerable` and friends are derived off the buffs
+    },
     missileBack: (from, to, def) => this.spawnVisualMissile(from, to, def),
     requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint, bound, cloakAfter) => {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint, bound: !!bound, cloakAfter });
@@ -21314,7 +21319,7 @@ export class SimWorld {
         // other cast (see the castFires push in useItem).
         case "AIvu": {
           const buffId = buffIdOf(ad); // `Bvul` for both potions
-          this.applyBuffInternal(u, { kind: "invuln", group: "item:invuln", timeLeft: lvl?.duration || 15, sourceId: u.id, value: 0, value2: 0, buffId, fx: this.abilities.buffFx(buffId) });
+          this.applyBuffInternal(u, { kind: "invuln", group: ITEM_INVULN_GROUP, timeLeft: lvl?.duration || 15, sourceId: u.id, value: 0, value2: 0, buffId, fx: this.abilities.buffFx(buffId) });
           fired = true;
           break;
         }

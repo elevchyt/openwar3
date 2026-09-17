@@ -4,6 +4,10 @@
 // Dur1 45, Area1 1000, DataA "Damage Dealt" 50, DataB "Damage Interval" 1.5, DataC "Building
 // Reduction" 0.35, targs1 air,ground,structure,enemy,neutral.
 //
+// And two potions a player drinks before casting it (the developer, from the original game):
+// casting Starfall ENDS a Potion of Invulnerability (`AIvu`, buff `Bvul`, Dur1 15), while an
+// Anti-magic Potion (`AIxs`, code `Aami`, Dur1 15 — spell immunity) survives the cast.
+//
 // The rules, from Liquipedia's Starfall page:
 //   - "If you use potions it will interrupt the Starfall."
 //   - "Starfall damage vs. buildings is reduced to 35%."
@@ -32,9 +36,13 @@ const ABILITIES = {
   }),
   // Potion of Healing (`AIh1`, code AIhe): DataA 250, the drinker's own.
   AIh1: ability("AIh1", "AIhe", { isItem: true, levelData: [{ cost: 0, cooldown: 20, castRange: 0, area: 0, duration: 0, heroDuration: 0, castTime: 0, data: D(250), buffs: [], summon: "" }] }),
+  AIvu: ability("AIvu", "AIvu", { isItem: true, targetFlags: ["vuln", "invu"], levelData: [{ cost: 0, cooldown: 0, castRange: 0, area: 0, duration: 15, heroDuration: 15, castTime: 0, data: D(), buffs: ["Bvul"], summon: "" }] }),
+  AIxs: ability("AIxs", "Aami", { isItem: true, targetFlags: ["air", "ground"], levelData: [{ cost: 0, cooldown: 0, castRange: 0, area: 0, duration: 15, heroDuration: 15, castTime: 0, data: D(0), buffs: ["Bams", "Bam2"], summon: "" }] }),
 };
 const ITEMS = {
   phea: { id: "phea", name: "Potion of Healing", abilities: ["AIh1"], charges: 1, usable: true, perishable: true, powerup: false, cooldownGroup: "phea", classType: "Purchasable" },
+  pnvu: { id: "pnvu", name: "Potion of Invulnerability", abilities: ["AIvu"], charges: 1, usable: true, perishable: true, powerup: false, cooldownGroup: "pnvu", classType: "Purchasable" },
+  pams: { id: "pams", name: "Anti-magic Potion", abilities: ["AIxs"], charges: 1, usable: true, perishable: true, powerup: false, cooldownGroup: "pams", classType: "Purchasable" },
 };
 
 let failed = 0;
@@ -78,17 +86,19 @@ const step = (w, seconds, dt = 0.05) => { for (let i = 0; i < Math.round(seconds
 
 /** The Priestess at the origin with Starfall, an enemy footman 400 away, an enemy building 600
  *  away, one enemy well outside the 1000 circle — and the cast pressed and landed. */
-function scene() {
+function scene(before) {
   const w = world();
   const pom = add(w, { name: "Priestess", hp: 500, maxHp: 800 });
   pom.isHero = true;
   pom.abilities = [{ id: "AEsf", code: "AEsf", level: 1, cooldownLeft: 0, autocastOn: false }];
-  pom.inventory = [{ id: nextId++, itemId: "phea", charges: 1, cooldownLeft: 0 }, null, null, null, null, null];
+  pom.inventory = [{ id: nextId++, itemId: "phea", charges: 1, cooldownLeft: 0 }, { id: nextId++, itemId: "pnvu", charges: 1, cooldownLeft: 0 },
+    { id: nextId++, itemId: "pams", charges: 1, cooldownLeft: 0 }, null, null, null];
   const foe = add(w, { owner: 1, team: 1, x: 400, name: "Footman" });
   const tower = add(w, { owner: 1, team: 1, x: -600, name: "Tower", isBuilding: true, speed: 0, radius: 48 },
     { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: -600, rallyY: 0, rallyKind: "point", rallyTargetId: 0, producesUnits: false });
   const far = add(w, { owner: 1, team: 1, y: 1400, name: "Far away" });
   step(w, 0.05);
+  before?.(w, pom);
   const ok = w.issueCast(pom.id, "AEsf", 0, pom.x, pom.y);
   step(w, 0.05); // the first wave lands the tick the effect fires
   return { w, pom, foe, tower, far, ok };
@@ -142,6 +152,36 @@ const fields = (w) => w.activeSpellFields().filter((f) => f.code === "AEsf").len
   check("a stun breaks the channel too", fields(s.w), 0);
   step(s.w, 4.5);
   check("…and no wave lands after it", s.foe.hp, before);
+}
+
+{
+  // A Potion of Invulnerability, then Starfall: the cast takes the bubble off.
+  let wasInvulnerable = false;
+  const s = scene((w, pom) => {
+    w.useItem(pom.id, 1, 0, pom.x, pom.y);
+    step(w, 0.05);
+    wasInvulnerable = pom.invulnerable;
+  });
+  check("(the Potion of Invulnerability made her invulnerable)", wasInvulnerable, true);
+  check("an invulnerable Priestess can still cast Starfall", [s.ok, fields(s.w)], [true, 1]);
+  check("…and casting it ends the invulnerability", [s.pom.invulnerable, s.pom.buffs.some((b) => b.group === "item:invuln")], [false, false]);
+  step(s.w, 1);
+  check("…for good (not re-derived next tick)", s.pom.invulnerable, false);
+}
+
+{
+  // An Anti-magic Potion, then Starfall: the immunity stays.
+  let wasImmune = false;
+  const s = scene((w, pom) => {
+    w.useItem(pom.id, 2, 0, pom.x, pom.y);
+    step(w, 0.05);
+    wasImmune = pom.magicImmune;
+  });
+  check("(the Anti-magic Potion made her spell immune)", wasImmune, true);
+  check("a spell-immune Priestess can cast Starfall", [s.ok, fields(s.w)], [true, 1]);
+  step(s.w, 1);
+  check("…and casting it does NOT remove the immunity", [s.pom.magicImmune, s.pom.buffs.some((b) => b.group === "item:antimagic")], [true, true]);
+  check("…while the stars still fall", s.foe.hp < 1000, true);
 }
 
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);

@@ -65,6 +65,10 @@ export interface SpellApi {
   applyBuff(target: SimUnit, buff: SimBuffInit): void;
   /** Remove timed (dispellable) buffs from a unit (Dispel Magic, etc.). */
   dispel(target: SimUnit): void;
+  /** Take ONE named buff group off a unit and re-derive its stats — narrower than `dispel`,
+   *  for a rule that ends a single effect and leaves everything else it wears alone
+   *  (Starfall ending the Potion of Invulnerability, ITEM_INVULN_GROUP). */
+  endBuffGroup(target: SimUnit, group: string): void;
   /** Throw `def`'s `Missileart` from `from` to `to` carrying nothing — the picture of magic being
    *  taken back to its taker (Devour Magic, Absorb Mana). */
   missileBack(from: SimUnit, to: SimUnit, def: AbilityDef): void;
@@ -636,6 +640,10 @@ export const SELF_INVIS_GROUP: Record<string, string> = {
  *  Neither the Duration column nor any Data column holds the gap between waves —
  *  it's fixed in the engine at one second (Liquipedia "Blizzard": "Wave Duration:
  *  1 second"), so Blizzard's 6 waves fill its 6s channel and cooldown exactly. */
+/** The buff group both Potions of Invulnerability put on the drinker (`AIvu`, world.ts
+ *  applyItemAbility) — named once because Starfall takes it off again (SPELL_HANDLERS.AEsf). */
+export const ITEM_INVULN_GROUP = "item:invuln";
+
 export const WAVE_FIELDS = new Set(["AHbz", "ANrf"]);
 
 /**
@@ -2296,7 +2304,14 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   //          AnimSounds `StarfallArea` → StarfallCaster1.wav, the cast's one sound.
   //   [AEsd] Targetart = …\Starfall\StarfallTarget.mdl   (BuffID1, attach origin) — a single
   //          Birth, played on EVERY unit each wave strikes and riding it (hitArt).
+  //
+  // Casting it ENDS a Potion of Invulnerability the Priestess is standing in — the stars do
+  // not fall from an invulnerable caster. That is the potion's bubble (`[AIvu]`/`[AIvl]`,
+  // buff `Bvul`) and nothing else: an Anti-magic Potion (`AIxs`, spell immunity on
+  // `item:antimagic`) drunk before the cast is NOT an invulnerability and stays on her, so
+  // this names the one group rather than dispelling.
   AEsf: (api, caster, def, rank) => {
+    api.endBuffGroup(caster, ITEM_INVULN_GROUP);
     const lvl = def.levelData[rank - 1];
     const interval = d(lvl, 1, 1.5) || 1.5;
     const waves = Math.max(4, Math.round((lvl.duration || 45) / interval));
