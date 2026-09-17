@@ -437,6 +437,17 @@ export interface SpellFieldInit {
    *  one star per unit per wave. */
   hitArt?: string;
   hitAttach?: string[];
+  /** A HEALING field: every wave restores this much life to each unit standing in the circle
+   *  that the ability's own row admits (allegiance and kinds, the test `alliesInArea` asks)
+   *  and that is not mechanical — scaled by `buildingReduction` on a structure like damage.
+   *  Healed WAVE BY WAVE rather than handed out as a heal-over-time at the press, so it obeys
+   *  a field's rules: a unit that walks in is healed, one that walks out stops being healed,
+   *  and a broken channel stops the healing with the field (Tranquility). */
+  healPerWave?: number;
+  /** The buff a healed unit WEARS for as long as the waves keep reaching it — re-applied each
+   *  wave for a little over one interval, so its model holds its Stand while the unit stays in
+   *  and plays its Death once the waves stop coming (Tranquility's `[AEtr]` TranquilityTarget). */
+  healBuff?: { group: string; art: string; fx: BuffFx[]; buffId: string };
 }
 
 /** Play a field's art ONCE, at its centre, held for the whole run — for the effects that are
@@ -445,10 +456,10 @@ export interface SpellFieldInit {
  *  Which a field is comes from its own data. Blizzard and Rain of Fire carry `DataC "Number
  *  of Shards"` and scatter that many BlizzardTarget/RainOfFireTarget copies per wave; the
  *  ones with no count column at all are single effects sized for the whole circle, and their
- *  models say so — Tranquility.mdx runs Birth 0–2.7s then Stand to 5.6s, EarthQuakeTarget.mdx
- *  Birth then a 9-second Stand. Scattering a dozen of THOSE per second (which is what a
- *  shard-style field did to Tranquility) buries the map in overlapping light pillars and
- *  costs a third of the frame rate. */
+ *  models say so — EarthQuakeTarget.mdx is Birth then a 9-second Stand. Scattering a dozen of
+ *  THOSE per second (which is what a shard-style field once did to Tranquility) buries the map
+ *  in overlapping light pillars and costs a third of the frame rate. A CHANNEL's model wants
+ *  `casterArt` instead, which dies with the channel (Tranquility, Starfall). */
 function fieldOnce(api: SpellApi, def: AbilityDef, x: number, y: number, seconds: number): void {
   const art = fieldArt(def);
   if (art) api.emitEffect(art, x, y, 0, seconds);
@@ -1972,6 +1983,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // the player picks. Columns Etq1..Etq4:
   //   DataA "Life Healed"                40    per interval
   //   DataB "Heal Interval"              1
+  //   DataC "Building Reduction"         1     the share a structure gets (see landWave)
   //   DataD "Initial Immunity Duration"  3     the tooltip names it; nothing else reads it
   //
   // Both models come from outside the ability row, which is why it used to rain nothing:
@@ -1979,23 +1991,29 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   //          Effectsoundlooped = TranquilityLoop
   //   [AEtr] Targetart = …\Tranquility\TranquilityTarget.mdl      (BuffID1 — worn by each
   //          healed unit; note the buff id is an ABILITY row, see the buff index)
+  //
+  // It is a CHANNEL and obeys Starfall's rules (tools/sim-starfall-test.cjs): moving, a stun or
+  // a pressed potion ends it, and the healing ends WITH it — which is why it heals wave by wave
+  // off the field (`healPerWave`) instead of handing every ally a 15-second heal-over-time at
+  // the press, which kept healing after any interrupt and never reached a unit that walked in.
+  // The downpour is the CASTER's model for the same reason (`casterArt`: Birth, Stand, and
+  // Death the frame the channel breaks) rather than a clock that ran its full length regardless.
+  // And like Starfall, casting it ends a Potion of Invulnerability and leaves an Anti-magic
+  // Potion alone.
   AEtq: (api, caster, def, rank) => {
+    api.endBuffGroup(caster, ITEM_INVULN_GROUP);
     const lvl = def.levelData[rank - 1];
     const total = lvl.heroDuration || lvl.duration || 30;
     const area = lvl.area || 900;
     const interval = d(lvl, 1, 1) || 1;
-    // The downpour is ONE model over the whole circle (see fieldOnce); the field beside it
-    // deals nothing and exists only to hold the loop for exactly as long as the channel runs
-    // and to be torn down with it on an interrupt.
-    fieldOnce(api, def, caster.x, caster.y, total);
+    const worn = fx(def);
     api.addSpellField({
       code: def.code, x: caster.x, y: caster.y, area,
       damagePerWave: 0, waves: Math.max(1, Math.round(total / interval)), interval,
-      casterId: caster.id, art: "", loopSound: fieldLoop(def),
+      casterId: caster.id, art: "", loopSound: fieldLoop(def), casterArt: fieldArt(def),
+      healPerWave: d(lvl, 0, 40), buildingReduction: d(lvl, 2, 1),
+      healBuff: { group: "tranquility", art: worn.art, fx: worn.fx, buffId: worn.buffId },
     });
-    for (const t of alliesInArea(api, caster, def, caster.x, caster.y, area, { self: true })) {
-      if (!t.mechanical) api.applyBuff(t, { kind: "hot", group: "tranquility", timeLeft: total, sourceId: caster.id, value: d(lvl, 0, 40) / interval, ...fx(def) });
-    }
   },
 
   // Healing Spray (Alchemist) — the Alchemist lobs potion bottles into the area, wave after

@@ -15216,6 +15216,7 @@ export class SimWorld {
         };
         if (impact.t > 0) this.waveImpacts.push(impact);
         else this.landWave(impact);
+        if (f.healPerWave) this.healWave(f, wx, wy);
         // Scatter the wave effect over the area (WC3 drops the ice shards across the
         // whole circle each wave, not just the centre). `artPerWave` copies land per
         // wave — Blizzard rains a cluster of 6, most fields just one. Each shard gets
@@ -15335,6 +15336,22 @@ export class SimWorld {
         summonLeft: drop.duration, sourceId: drop.casterId, summonArt: drop.summonArt, unsummonArt: drop.unsummonArt,
         atPoint: true, bound: false,
       });
+    }
+  }
+
+  /** One wave of a HEALING field (SpellFieldInit.healPerWave — Tranquility): whoever is in the
+   *  circle NOW, admitted by the row as `alliesInArea` admits (the caster's allies, and the
+   *  caster itself when `self` is listed), and never a mechanical unit. */
+  private healWave(f: (typeof this.spellFields)[number], x: number, y: number): void {
+    const caster = this.units.get(f.casterId);
+    if (!caster) return;
+    for (const t of this.unitsInAreaInternal(x, y, f.area)) {
+      if (t.hp <= 0 || t.mechanical) continue;
+      if (!this.allied(caster, t) || !this.targsAdmit(t, f.flags) || !this.allegianceAdmits(caster, t, f.flags)) continue;
+      const share = t.building && (f.buildingReduction ?? 0) > 0 ? f.buildingReduction! : 1;
+      t.hp = Math.min(t.maxHp, t.hp + (f.healPerWave ?? 0) * share);
+      // The worn model, kept alive a beat past the next wave so it does not blink between two.
+      if (f.healBuff) this.applyBuffInternal(t, { kind: "mark", group: f.healBuff.group, timeLeft: f.interval + 0.25, sourceId: caster.id, art: f.healBuff.art, fx: f.healBuff.fx, buffId: f.healBuff.buffId });
     }
   }
 
