@@ -183,6 +183,7 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   u.isSummon = s.isSummon;
   u.summonLeft = s.summonLeft;
   u.summonMax = s.summonMax;
+  u.raisedBy = s.raisedBy;
   u.isIllusion = s.isIllusion;
   u.illusionOf = s.illusionOf;
 

@@ -661,6 +661,8 @@ export interface SummonRequest {
    *  is not the same fact at all — EVERY timed summon has one, so the Phoenix lost Phoenix
    *  Fire and the Avatar of Vengeance arrived with an empty command card. */
   stripped?: boolean;
+  /** The ability id a timed raise came from (SimUnit.raisedBy). Only the raise path sets it. */
+  raisedBy?: string;
   /** The summon lives only as long as its summoner does. Rare — a Water Elemental outlives
    *  the Archmage — and stated by the ability that says so: "Lasts 50 seconds or until the
    *  avatar dies" (`Avng`, the Avatar of Vengeance's Spirits). */
@@ -1950,6 +1952,11 @@ export interface SimUnit {
    *  be findable FROM their original — they level with it — and matching on owner+typeId
    *  would be a guess that quietly breaks the moment a player fields two of the same type. */
   illusionOf: number;
+  /** The ability that RAISED this unit from a corpse on a clock ("" = anything else) — Animate
+   *  Dead's shell. Its id, not its code, so the timer bar can print that row's own Name
+   *  ("Animate Dead") where every other summon reads "Summoned Unit", and the renderer can give
+   *  it the raised dead's colour (rts.ts RAISED_TINT). */
+  raisedBy: string;
   illusionDamageDealt: number; // fraction of its damage that lands (AOmi DataB) — 0 = none
   illusionDamageTaken: number; // multiplier on damage it receives (AOmi DataC) — 2 = double
 
@@ -8052,6 +8059,7 @@ export class SimWorld {
       | "teleports"
       | "isIllusion"
       | "illusionOf"
+      | "raisedBy"
       | "illusionDamageDealt"
       | "illusionDamageTaken"
       | "pendingCast"
@@ -8326,6 +8334,7 @@ export class SimWorld {
       teleports: 0,
       isIllusion: false,
       illusionOf: 0,
+      raisedBy: "",
       illusionDamageDealt: 1,
       illusionDamageTaken: 1,
       pendingCast: null,
@@ -15637,6 +15646,7 @@ export class SimWorld {
         // `stripped`, which is what strips it.
         summonLeft: opts?.durationSec ?? 0,
         stripped: (opts?.durationSec ?? 0) > 0, // a TIMED raise is a shell; Resurrection gives the unit back whole
+        raisedBy: (opts?.durationSec ?? 0) > 0 ? opts?.raisedBy : undefined,
         invulnerable: opts?.invulnerable ?? false,
         sourceId: 0, summonArt: opts?.art ?? "", unsummonArt: opts?.unsummonArt ?? "", atPoint: true,
       });

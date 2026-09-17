@@ -352,6 +352,7 @@ export interface UnitSnapshot {
   isSummon: boolean;
   summonLeft: number;
   summonMax: number;
+  raisedBy: string;
   isIllusion: boolean;
   illusionOf: number;
 
@@ -693,6 +694,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     isSummon: false,
     summonLeft: 0,
     summonMax: 0,
+    raisedBy: "",
     isIllusion: false,
     illusionOf: 0,
 
@@ -853,6 +855,7 @@ export function snapshotFor(
       isSummon: showSummon,
       summonLeft: showSummon ? u.summonLeft : 0,
       summonMax: showSummon ? u.summonMax : 0,
+      raisedBy: showSummon ? u.raisedBy : "",
       isIllusion: knowsIllusion,
       illusionOf: knowsIllusion ? u.illusionOf : 0,
 

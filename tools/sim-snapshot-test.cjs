@@ -51,7 +51,7 @@ const unit = (o) => ({
   level: 0, xp: 0, skillPoints: 0, str: 0, agi: 0, int: 0, bonusStr: 0, bonusAgi: 0, bonusInt: 0,
   worker: null, building: null, abilities: [], buffs: [], inventory: [],
   garrison: [], garrisonCap: 0,
-  isSummon: false, summonLeft: 0, summonMax: 0, isIllusion: false, illusionOf: 0,
+  isSummon: false, summonLeft: 0, summonMax: 0, raisedBy: "", isIllusion: false, illusionOf: 0,
   guardX: 0, guardY: 0,
   buildPending: null, orderQueue: [], pendingCast: null,
 

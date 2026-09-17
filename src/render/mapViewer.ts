@@ -27,7 +27,7 @@ import { WeatherOverlay } from "./weather";
 import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
-import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo, type PlacedRef } from "../game/rts";
+import { RtsController, ILLUSION_TINT, RAISED_TINT, type RtsHost, type SelectionInfo, type PlacedRef } from "../game/rts";
 import type { Instance as RtsInstance } from "../game/rts";
 import type { MatchLinkSetup } from "../game/matchLink";
 import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
@@ -8099,7 +8099,7 @@ export class MapViewerScene {
     // so selecting the real Blademaster right after one of his images would otherwise
     // inherit the blue and show the hero as a copy. (sel.isIllusion is viewpoint-gated:
     // an enemy's image reports false and its bust stays untinted. See docs/illusions.md.)
-    this.portraitViewer.setTint(sel.isIllusion ? [ILLUSION_TINT[0], ILLUSION_TINT[1], ILLUSION_TINT[2], 1] : [1, 1, 1, 1]);
+    this.portraitViewer.setTint(sel.isIllusion ? [ILLUSION_TINT[0], ILLUSION_TINT[1], ILLUSION_TINT[2], 1] : sel.isRaised ? [RAISED_TINT[0], RAISED_TINT[1], RAISED_TINT[2], 1] : [1, 1, 1, 1]);
     // WC3 ships dedicated talking-head models alongside most units.
     const portraitPath = sel.model.replace(/\.mdx$/i, "_Portrait.mdx");
     const path = this.vfs.exists(portraitPath) ? portraitPath : sel.model;
@@ -11273,6 +11273,7 @@ export class MapViewerScene {
         // Resistant Skin, and no way to raise a single Spirit: an empty command card on a
         // 180-second ultimate whose whole job is that autocast.
         if (su && s.stripped && su.abilities.length) su.abilities = [];
+        if (su && s.raisedBy) su.raisedBy = s.raisedBy; // Animate Dead's bar label and red-brown tint
         // …and a BOUND summon goes when its summoner does (see SimUnit.summonerId).
         if (su && s.bound) su.summonerId = s.sourceId;
         // …and Animate Dead's raise cannot be hurt at all (`Hre2 "Raised Units Are

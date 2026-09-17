@@ -201,6 +201,11 @@ export interface SelectionInfo {
    *  HUD gives it away. See docs/illusions.md. */
   isIllusion: boolean;
   summonSecondsLeft: number; // seconds until the summon expires
+  /** What the summon bar says: the raising ability's Name for a timed raise ("Animate Dead"),
+   *  "Summoned Unit" for everything else. */
+  summonLabel: string;
+  /** Wears Animate Dead's RAISED_TINT (the portrait bust too). */
+  isRaised: boolean;
   summonFrac: number; // remaining fraction of its lifetime (bar fill)
   /** A TIMED ALTERNATE FORM wears the same expiry bar — see the HudSelection twin. "" = none. */
   timedFormLabel: string;
@@ -366,6 +371,7 @@ interface Entry {
   fogTintB?: number; // last fog brightness applied (avoids redundant setVertexColor)
   aoeHi?: boolean; // last AoE-target green-tint state applied (avoids redundant setVertexColor)
   illus?: boolean; // last Mirror-Image blue-wash state applied (owner/allies only)
+  raised?: boolean; // last Animate Dead tint state applied
   fade?: number; // last ghost fade applied (invisible/ethereal) — see INVIS_ALPHA
   /** How long the invisibility now coming on takes in total, captured the first frame this
    *  entry saw it — a buff carries what is LEFT of its transition, never what it started
@@ -409,6 +415,10 @@ const GHOST_FADE_TIME = 0.9;
 // Exported so the HUD's 3D portrait bust wears the same wash as the unit on the terrain —
 // see docs/illusions.md.
 export const ILLUSION_TINT = [0.22, 0.42, 1.9] as const;
+// The colour Animate Dead's raised bodies wear: "Art - Tinting Color" 60/40/40 (red/green/blue,
+// 0–255), as the developer read it off the World Editor. A multiply like the illusion wash, so
+// the type's own tint and the fog dimming still compose underneath it.
+export const RAISED_TINT = [60 / 255, 40 / 255, 40 / 255] as const;
 
 // Green multiply-tint on a unit's whole mesh while it's a valid target of an armed
 // AoE spell (issue #20) — the same idea as the dark-blue "about to be built" ghost
@@ -2012,7 +2022,9 @@ export class RtsController {
     // colour and this method re-emits from it every time the fog brightness changes, so
     // an alpha written anywhere else would be clobbered on the next re-emit.
     const fade = this.ghostAlpha(e, u, dt);
-    if (e.fogTintB === b && e.aoeHi === hi && e.fade === fade && e.illus === illus) return; // unchanged since last tick
+    const raised = u.raisedBy !== "";
+    if (e.fogTintB === b && e.aoeHi === hi && e.fade === fade && e.illus === illus && e.raised === raised) return; // unchanged since last tick
+    e.raised = raised;
     e.fogTintB = b;
     e.aoeHi = hi;
     e.illus = illus;
@@ -2024,7 +2036,8 @@ export class RtsController {
     const base = e.baseColor;
     const g = hi ? AOE_TARGET_TINT : ([1, 1, 1] as const);
     const m = illus ? ILLUSION_TINT : ([1, 1, 1] as const);
-    inst.setVertexColor([base[0] * b * g[0] * m[0], base[1] * b * g[1] * m[1], base[2] * b * g[2] * m[2], base[3] * fade]);
+    const r = raised ? RAISED_TINT : ([1, 1, 1] as const);
+    inst.setVertexColor([base[0] * b * g[0] * m[0] * r[0], base[1] * b * g[1] * m[1] * r[1], base[2] * b * g[2] * m[2] * r[2], base[3] * fade]);
   }
 
   /**
@@ -6599,7 +6612,7 @@ export class RtsController {
       isMine: false, goldRemaining: 0,
       // The info panel prints the item's short `Description`, not the Ubertip a shop button raises.
       isItem: true, description: def ? this.tipText(def.summary) : "",
-      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
+      isSummon: false, summonLabel: "", isRaised: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
     };
   }
 
@@ -6626,7 +6639,7 @@ export class RtsController {
       queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: true, goldRemaining: m.gold,
       isItem: false, description: "",
-      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
+      isSummon: false, summonLabel: "", isRaised: false, summonSecondsLeft: 0, summonFrac: 0, timedFormLabel: "", timedFormSecondsLeft: 0, timedFormFrac: 0, hexLabel: "", hexSecondsLeft: 0, hexFrac: 0, buffs: [], cargo: [], cargoSlots: 0,
     };
   }
 
@@ -6886,6 +6899,8 @@ export class RtsController {
       isIllusion: u.isIllusion && (this.snapshot.active || this.readsSideOf(u.owner)), // same viewpoint rule as the tint
 
       summonSecondsLeft: Math.max(0, Math.ceil(u.summonLeft)),
+      summonLabel: (u.raisedBy && this.abilities.get(u.raisedBy)?.name) || "Summoned Unit",
+      isRaised: u.raisedBy !== "",
       summonFrac: u.summonMax > 0 ? Math.max(0, Math.min(1, u.summonLeft / u.summonMax)) : 0,
       // …and the same bar for a TIMED ALTERNATE FORM, which is the same fact about the unit:
       // a clock is running and it will be something else when it stops. See timedFormOf.

@@ -504,6 +504,7 @@ export interface RaiseOptions {
   invulnerable?: boolean; // `Hre2 "Raised Units Are Invulnerable"`
   art?: string; // the burst each body rises in
   unsummonArt?: string; // …and the one that replaces it when the timer runs out
+  raisedBy?: string; // the raising ability's id (SimUnit.raisedBy) — a timed raise's bar label and tint
 }
 
 /** Where a cast is aimed. */
@@ -3308,6 +3309,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       invulnerable: d(lvl, 1, 0) !== 0,
       art: def.specialArt || def.casterArt,
       unsummonArt: def.buffEffectArt,
+      raisedBy: def.id,
     });
   },
 

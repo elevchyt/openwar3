@@ -194,6 +194,7 @@ export interface HudSelection {
   isItem: boolean; // selected ground item (show name + description instead of stats)
   description: string; // item description (shown when isItem)
   isSummon: boolean; // temporary summon — show the "Summoned Unit" timer bar
+  summonLabel: string; // the bar's words: "Summoned Unit", or the raising ability's name ("Animate Dead")
   summonSecondsLeft: number; // seconds until it expires
   summonFrac: number; // remaining fraction of its lifetime (bar fill)
   /** A unit standing in a TIMED ALTERNATE FORM wears the same expiry bar, because it is the
@@ -3691,7 +3692,7 @@ export class GameHud {
           this.xpBar.hidden = false;
           this.xpBar.classList.add("summon");
           setGameTip(this.xpBar, null);
-          this.xpText.textContent = `Summoned Unit (${sel.summonSecondsLeft}s)`;
+          this.xpText.textContent = `${sel.summonLabel} (${sel.summonSecondsLeft}s)`;
           this.xpFill.style.width = `${sel.summonFrac * 100}%`;
         } else if (sel.timedFormLabel) {
           // A TIMED FORM is the same bar for the same reason — a Militia has 40 seconds

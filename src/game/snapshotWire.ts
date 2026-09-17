@@ -352,6 +352,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   if (flags & F_IS_SUMMON) {
     w.f32(s.summonLeft);
     w.f32(s.summonMax);
+    w.u16(w.intern(s.raisedBy));
   }
   // The TIMED-FORM clock rides the flag that already says "this unit is wearing the other half
   // of its model", because only a unit in an alternate form can have one — `altFormLeft` is set
@@ -529,6 +530,7 @@ function readUnit(r: Reader): UnitSnapshot {
     isSummon: (flags & F_IS_SUMMON) !== 0,
     summonLeft: 0,
     summonMax: 0,
+    raisedBy: "",
     isIllusion: (flags & F_IS_ILLUSION) !== 0,
     illusionOf: 0,
     guardX: 0,
@@ -581,6 +583,7 @@ function readUnit(r: Reader): UnitSnapshot {
   if (flags & F_IS_SUMMON) {
     s.summonLeft = r.f32();
     s.summonMax = r.f32();
+    s.raisedBy = r.str();
   }
   if (flags & F_ALT_MODEL) s.altFormLeft = r.u16() / 10;
   if (flags & F_IS_ILLUSION) s.illusionOf = r.u32();

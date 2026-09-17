@@ -174,6 +174,7 @@ export interface RenderUnit {
   readonly isSummon: boolean;
   readonly summonLeft: number;
   readonly summonMax: number;
+  readonly raisedBy: string; // SimUnit.raisedBy
   /** The status row's icons. `SimBuff` is a plain data record and crosses whole. */
   readonly buffs: readonly RenderBuff[];
   /** What it can cast, and at what rank. Read by the world layer for an ALLY's hero only —
