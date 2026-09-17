@@ -542,6 +542,11 @@ const AOE_TREE_TINT = [0.2, 2.6, 0.2, 1];
 // its whole body visible, like the AoE indicator (issue #34). The overlay draws the ring
 // PROCEDURALLY in the alliance colour (green/red/yellow); it just needs a real, loadable
 // BLP named per entry so the entry draws (the pixels are ignored — see uberSplatOverlay).
+/** One blink of a ring flash: `FLASH_ON` seconds lit out of every `INDICATOR_BLINK`. An order
+ *  flash blinks twice; an indicator (UnitAddIndicator) once. The timings are ours — nothing in
+ *  the install states how long either blink lasts. */
+const INDICATOR_BLINK = 0.35;
+const FLASH_ON = 0.23;
 const RING_TEX_UNIT = "ui\\Feedback\\selectioncircle\\SelectionCircleUnit.blp";
 const RING_TEX_BUILDING = "ui\\Feedback\\selectioncircle\\SelectionCircleBuilding.blp";
 // selectioncircle.mdx's native half-width in world units — the ring's outer edge sat at
@@ -1347,6 +1352,9 @@ export class MapViewerScene {
   // is (re)painted into ringSplats each frame it's "on" (see tickFlashCircles).
   private flashRings: Array<{ id: number; t: number; x: number; y: number; radius: number; color: number[]; sizeToRadius: boolean }> = [];
   private flashSeq = 0;
+  // Rings an INDICATOR is blinking round a unit (UnitAddIndicator — the speaker of a
+  // transmission). Keyed to the unit rather than to a spot, so the blink follows it.
+  private indicatorRings: Array<{ id: number; unitId: number; t: number; color: number[] }> = [];
   // Order-feedback arrows (Confirmation.mdx), green=move / red=attack-move.
   private arrowModel: SpawnModel | null = null;
   private orderArrows: Array<{ inst: SpawnInstance; t: number }> = [];
@@ -2768,6 +2776,13 @@ export class MapViewerScene {
         void this.loadCinematicPortrait(scene?.portraitUnitId ?? "", scene?.playerColor ?? 0, scene?.voiceoverDuration ?? 0);
       },
       pingMinimap: (ping) => this.hud?.ping(ping),
+      // A speaker's white blink (TransmissionFromUnitWithNameBJ → UnitAddIndicator). The
+      // colour MULTIPLIES the white ring, alpha scaling all three — see tickFlashCircles.
+      unitAddIndicator: (unitId, r, g, b, a) => {
+        const k = Math.max(0, Math.min(255, a)) / 255 / 255;
+        this.indicatorRings = this.indicatorRings.filter((f) => f.unitId !== unitId); // a new line restarts its blink
+        this.indicatorRings.push({ id: this.flashSeq++, unitId, t: INDICATOR_BLINK, color: [r * k, g * k, b * k] });
+      },
       // SetCameraBounds: the map moving the wall the focus stops at. A WRITER of this
       // machine's view, hence here — and it arrives with the same rect the terrain's boundary
       // flags already gave us (issue #117), so a muzzled one costs nothing.
@@ -6630,10 +6645,21 @@ export class MapViewerScene {
         continue;
       }
       // Two on/off blinks over 0.7s — paint the ring only on the "on" phase.
-      const on = (f.t % 0.35) > 0.12;
+      const on = (f.t % INDICATOR_BLINK) > INDICATOR_BLINK - FLASH_ON;
       // A flash carries its OWN colour (the order it confirms picked it), so its allegiance
       // is never consulted — it is stated only because every ring record carries one.
       if (on) this.addRing(`flash-${f.id}`, { x: f.x, y: f.y, z: 0, radius: f.radius, owner: -2, team: -2, allegiance: "neutral" }, f.color, false, live);
+    }
+    // An indicator blinks ONCE — the same blink an order flash makes twice — and is gone.
+    for (let i = this.indicatorRings.length - 1; i >= 0; i--) {
+      const f = this.indicatorRings[i];
+      f.t -= dt;
+      const ring = f.t > 0 ? this.rts?.indicatorRing(f.unitId) : null;
+      if (!ring) {
+        this.indicatorRings.splice(i, 1);
+        continue;
+      }
+      if (f.t > INDICATOR_BLINK - FLASH_ON) this.addRing(`indicator-${f.id}`, ring, f.color, false, live);
     }
   }
 

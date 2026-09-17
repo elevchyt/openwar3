@@ -347,6 +347,21 @@ export function registerWorldNatives(rt: Runtime): void {
   });
   def(rt, "GetUnitUserData", (c, a) => jInt(unit(c, a[0])?.userData ?? 0));
 
+  // UnitAddIndicator(u, red, green, blue, alpha) — the ring that blinks round a unit to say
+  // "this one". Its caller in every campaign is blizzard.j's TransmissionFromUnitWithNameBJ,
+  // which blinks the SPEAKER white (bj_TRANSMISSION_IND_RED/BLUE/GREEN/ALPHA = 255) — inside
+  // its `GetLocalPlayer()` block and only `if (not IsUnitHidden(whichUnit))`, so this is a
+  // picture on one screen and never a change to the world. NB common.j's argument order is
+  // red, GREEN, blue; blizzard.j passes its constants as red, BLUE, green, which is harmless
+  // only because all three are 255. AddIndicator is the same for any widget; a unit is the
+  // only widget with a ring, so an item or a destructable blinks nothing.
+  const indicator: NativeFn = (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.unitAddIndicator?.(u.simId, asInt(a[1]), asInt(a[2]), asInt(a[3]), asInt(a[4]));
+    return JNULL;
+  };
+  def(rt, "UnitAddIndicator", indicator);
+  def(rt, "AddIndicator", indicator);
   def(rt, "IsUnitHidden", (c, a) => {
     const u = unit(c, a[0]);
     return jBool(!!u && u.simId >= 0 && (c.rt.hooks?.isUnitHidden?.(u.simId) ?? false));

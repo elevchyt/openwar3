@@ -996,6 +996,9 @@ export interface EngineHooks {
   setCinematicScene?(scene: CinematicScene | null): void;
   /** PingMinimap / PingMinimapEx — flash a marker on the minimap for `duration` seconds. */
   pingMinimap?(ping: MinimapPing): void;
+  /** UnitAddIndicator / AddIndicator — blink a ring around a unit, in `r,g,b` (0–255) at `a`.
+   *  blizzard.j's TransmissionFromUnitWithNameBJ calls it, WHITE, on whoever is speaking. */
+  unitAddIndicator?(unitId: number, r: number, g: number, b: number, a: number): void;
 }
 
 /** One camera move: the fields to blend and (optionally) where to pan the focus.

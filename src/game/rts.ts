@@ -7082,6 +7082,16 @@ export class RtsController {
     return out;
   }
 
+  /** The ring an INDICATOR blinks round one unit (UnitAddIndicator — a transmission's speaker):
+   *  the unit's own selection ring, where the unit stands NOW, so a speaker walking while it
+   *  talks carries the blink with it. Null for a unit that is gone or off the field. */
+  indicatorRing(id: number): RingInfo | null {
+    const u = this.frameUnit(id);
+    const e = this.byId.get(id);
+    if (!u || !e || isOffField(u)) return null;
+    return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building };
+  }
+
   /** Ground-circles for the units currently inside the live drag-box, so the player previews
    *  the pick before releasing. Each wears its OWN allegiance colour (`ringAllegiance`) —
    *  green for yours, red or yellow for the single foreign body a box may take. */
