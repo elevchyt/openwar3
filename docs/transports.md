@@ -70,6 +70,17 @@ icon and health bar in the first, the same icon **dimmed with no bar** in the re
 "this one takes two seats" rather than "there are two of these". The panel replaces the stat
 lines while anybody is aboard and the stats come back the moment the last one steps off.
 
+## The sound
+
+Every body that boards or steps off plays the hold's own `Effectsound` once — `LoadUnload`
+(`[Acar]`, `[Sch3]`, `[Sch5]` and the Burrow's `[Abun]` in `Units\NeutralAbilityFunc.txt`), which
+`UI\SoundInfo\AbilitySounds.slk` resolves to `Abilities\Spells\Other\LoadUnload\Loading.wav`.
+The Entangled Gold Mine's `[Aenc]` names none, so a wisp going to work is silent. Only the
+hold's OWNER hears it. `playCargoSounds` in `render/mapViewer.ts` reads it off the garrison
+rosters frame to frame rather than off a sim event, so a LAN client (snapshot rosters, no sim)
+hears what the host does; only a LIVING passenger counts, so a transport shot down with its
+cargo, or a razed burrow turning its crew out, plays nothing.
+
 ## Checks
 
 `tools/sim-transport-test.cjs` (in `pnpm sim:test`) pins the meeting, the idle-only nudge, the

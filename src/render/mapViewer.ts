@@ -10262,6 +10262,62 @@ export class MapViewerScene {
     this.hud?.showError(`${this.globalStrings?.strings.get("COLON_COMPLETED") ?? "Completed: "}${wc3ToPlain(name)}`);
   }
 
+  /** Every cargo hold of the local player's, by the passengers it held last frame (playCargoSounds). */
+  private cargoSeen = new Map<number, readonly number[]>();
+  /** A unit type's hold `Effectsound` label, or "" for a type whose hold names none (cached). */
+  private cargoSoundLabels = new Map<string, string>();
+
+  /**
+   * The load/unload clunk — one per body that climbs into or steps out of a cargo hold, and
+   * heard by the hold's OWNER alone. The sound is the hold's own row saying so: `[Acar]` (the
+   * Goblin Zeppelin), `[Sch3]`/`[Sch5]` (the transport ships) and `[Abun]` (the Orc Burrow) all
+   * carry `Effectsound=LoadUnload` in Units\NeutralAbilityFunc.txt, which UI\SoundInfo\
+   * AbilitySounds.slk plays as Abilities\Spells\Other\LoadUnload\Loading.wav; the Entangled
+   * Gold Mine's `[Aenc]` names nothing, so a wisp going to work is silent.
+   *
+   * Read off the garrison rosters rather than off a sim event so a LAN client — which has the
+   * snapshot's rosters but runs no sim of its own — hears exactly what the host does. Only a
+   * LIVING body counts either way: a transport shot down kills its cargo and a burrow razed
+   * turns its crew out, and neither is somebody pressing Load or Unload. A hold seen for the
+   * first time (just trained, just handed over) sets its baseline and plays nothing.
+   */
+  private playCargoSounds(): void {
+    const view = this.rts?.simView;
+    if (!view || !this.sounds) return;
+    const seen = this.cargoSeen;
+    const now = new Set<number>();
+    for (const u of view.units.values()) {
+      if (u.owner !== this.localPlayer || u.garrisonCap <= 0) continue;
+      now.add(u.id);
+      const before = seen.get(u.id);
+      seen.set(u.id, [...u.garrison]);
+      if (!before || u.hp <= 0) continue;
+      let label = this.cargoSoundLabels.get(u.typeId);
+      if (label === undefined) {
+        label = "";
+        for (const id of this.registry.get(u.typeId)?.abilities ?? []) {
+          const ab = this.abilities.get(id);
+          if (ab && (ab.code === "Acar" || ab.code === "Abun" || ab.code === "Aenc")) {
+            label = ab.effectSound;
+            break;
+          }
+        }
+        this.cargoSoundLabels.set(u.typeId, label);
+      }
+      if (!label) continue;
+      const alive = (id: number): boolean => {
+        const p = view.units.get(id);
+        return !!p && p.hp > 0;
+      };
+      let n = 0;
+      for (const id of u.garrison) if (!before.includes(id) && alive(id)) n++; // boarded
+      for (const id of before) if (!u.garrison.includes(id) && alive(id) && !view.units.get(id)!.inBurrow) n++; // stepped off
+      const at = { x: u.x, y: u.y, z: this.rts!.groundHeightAt(u.x, u.y) };
+      for (let i = 0; i < n; i++) this.sounds.playAbilitySound(label, at);
+    }
+    for (const id of seen.keys()) if (!now.has(id)) seen.delete(id);
+  }
+
   /** Refuse a command the way the game does: the gold line above the console plus a sound,
    *  both named by a single commandstrings.txt [Errors] key. A handful of refusals have a
    *  race-specific line the worker SPEAKS (Nogold + Orc → NoGoldOrc →
@@ -11799,6 +11855,7 @@ export class MapViewerScene {
         // frame the field ends — waves exhausted OR caster interrupted (world tears the
         // field down either way, so this needs no interrupt handling of its own).
         this.updateFieldLoops(world.activeSpellFields());
+        this.playCargoSounds();
         // Cast animations (throw/slam/spell) begin at the wind-up.
         for (const c of this.rts!.drainFxCastStarts()) {
           // The two ends of a cast are tested separately (see drainFxCastStarts): the gesture
