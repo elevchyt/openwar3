@@ -165,6 +165,9 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // "Art - Required Animation Names - Attachments" (`Attachmentanimprops`) — the size of clip
   // an effect riding this unit plays (Ensnare's net; see SimWorld.bodySize).
   uaap: (d, v) => { d.attachAnimProps = targetList(s(v)); },
+  // `Attachmentlinkprops` (UnitMetaData `ualp`, Profile, a stringList) — which set of attachment
+  // points effects ride on this type (`alternate` on a metamorphosed hero; UnitDef.attachLinkProps).
+  ualp: (d, v) => { d.attachLinkProps = targetList(s(v)); },
   uico: (d, v) => { d.icon = normIcon(s(v)); },
   ubpx: (d, v) => { d.buttonX = n(v); },
   ubpy: (d, v) => { d.buttonY = n(v); },
@@ -436,7 +439,6 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
 
   // Art we do not drive yet. Each names a real WC3 behaviour; the note is the feature that
   // has to exist before the field has anywhere to land.
-  ualp: "no attachment system (Attachmentlinkprops)",
   ubpr: "no per-bone art overrides (Boneprops)",
   ucua: "no caster-upgrade art (Casterupgradeart)", ussi: "no score screen (ScoreScreenIcon)",
   uspa: "no per-unit Specialart hook", utaa: "no per-unit Targetart hook",
@@ -590,6 +592,7 @@ function cloneDef(base: UnitDef, id: string): UnitDef {
     properNames: [...base.properNames],
     animProps: [...base.animProps],
     attachAnimProps: [...base.attachAnimProps],
+    attachLinkProps: [...base.attachLinkProps],
     upgradesUsed: [...base.upgradesUsed],
     tint: [base.tint[0], base.tint[1], base.tint[2]],
     weapons: base.weapons.map((w) => ({ ...w, targets: [...w.targets], splashTargets: [...w.splashTargets] })),

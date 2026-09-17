@@ -2031,11 +2031,14 @@ export class RtsController {
    * How faded this unit's model is drawn THIS step: 1 solid, `INVIS_ALPHA` ghosted.
    *
    * Two things decide it. `ghostTarget` says where the fade is up to according to the sim,
-   * and this walks the drawn value toward that at no more than the whole swing per
-   * `GHOST_FADE_TIME` — in BOTH directions, so a unit that is revealed swims back into
-   * solidity instead of popping. The limit is what makes a quarter-second transition look
-   * like a dissolve rather than a switch; everything longer than it (a Shadow Meld's 1.5s
-   * "Fade Duration") is already slower and is simply followed.
+   * and this walks the drawn value DOWN toward that at no more than the whole swing per
+   * `GHOST_FADE_TIME`. The limit is what makes a quarter-second transition look like a
+   * dissolve rather than a switch; everything longer than it (a Shadow Meld's 1.5s "Fade
+   * Duration") is already slower and is simply followed.
+   *
+   * Coming OUT is not a fade at all: a unit leaving Shadow Meld, Wind Walk, Invisibility or
+   * any other hiding is back to its full opacity the instant it is revealed — there is no
+   * "Fade Duration" on the way back in any of their rows, and the game draws none.
    *
    * Seeded AT the target the first time an entry is drawn, not at 1: a unit that walks into
    * view already invisible is already invisible, and easing it in from solid would announce
@@ -2045,7 +2048,7 @@ export class RtsController {
     const target = this.ghostTarget(e, u);
     const prev = e.fade ?? target;
     const step = ((1 - INVIS_ALPHA) / GHOST_FADE_TIME) * Math.max(0, dt);
-    return target > prev ? Math.min(target, prev + step) : Math.max(target, prev - step);
+    return target >= prev ? target : Math.max(target, prev - step);
   }
 
   /**

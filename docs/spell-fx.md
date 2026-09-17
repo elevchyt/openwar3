@@ -190,7 +190,12 @@ in the world has to go with it. There are two shapes, and they need different te
 
 * **Field channels** — Blizzard, Rain of Fire, Starfall, Tranquility, Death and Decay,
   Stampede, Earthquake. The effect is a repeating `SpellField`; `tickSpellFields` drops the
-  field the moment the caster is re-tasked away from `cast` with channel time left.
+  field the moment the caster is re-tasked away from `cast` with channel time left. A model
+  the field holds on its CASTER (`SpellFieldInit.casterArt` — Starfall's `[XEsf]`
+  StarfallCaster, a Birth/Stand/Death model) is drawn off `activeSpellFields`, so it plays its
+  Death the same frame. Not every field's effect-object art is a shard to scatter: Starfall's
+  is that caster swirl, and its stars are the BUFF row's (`[AEsd]` StarfallTarget), played on
+  each unit a wave hurts and riding it (`hitArt`).
 * **The Drain** (`AHdr` — Life Drain / Siphon Mana) — the effect is a pair of ordinary timed
   BUFFS, one on each end, and a buff does not know its caster walked away. `tickDrains` runs
   the same interrupt test and strips the drain buffs off **both** units, then cuts the beam by

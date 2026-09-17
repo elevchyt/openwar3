@@ -289,6 +289,11 @@ const SPELL_SOUND_FALLBACK: Record<string, string> = {
 const SPELL_SOUND_ART: Record<string, (d: AbilityDef) => string[]> = {
   AOmi: (d) => [d.specialArt],
   AEbl: (d) => [d.areaArt],
+  // Starfall: the cast's sound is the SNDXAESF event on its effect object's model
+  // (`[XEsf]` StarfallCaster.mdl → AnimSounds `StarfallArea` → StarfallCaster1.wav) — named
+  // outright so the buff row's StarfallTarget (whose event is the per-impact Rain of Fire
+  // crash) can never be the one the chain finds first.
+  AEsf: (d) => [d.fxArt],
 };
 // The looping bed a channelled area field lays down for as long as it runs. This is DATA,
 // not a hardcode: the label rides on the field (SpellFieldInit.loopSound), taken from the
@@ -4574,7 +4579,7 @@ export class MapViewerScene {
     // unit's own animation carry it. Falls back to the ordinary follow/point placement when
     // the host has gone (it died while the model was loading) or ships no such attachment.
     const host = attach?.length && follow ? (this.rts?.unitInstance(follow) as unknown as SpawnInstance | undefined) : undefined;
-    const node = host ? this.attachmentNode(host, attach ?? []) : undefined;
+    const node = host ? this.attachmentNode(host, attach ?? [], follow) : undefined;
     if (node) {
       inst.setParent?.(node);
     } else {
@@ -4888,8 +4893,12 @@ export class MapViewerScene {
   private buffFx = new Map<string, SpawnInstance>();
   private buffFxLoading = new Set<string>();
   /** buffFx keys whose instance is parented to an attachment node — it moves with the
-   *  unit on its own, so trackBuffFx must not fight it with a ground setLocation. */
-  private buffFxParented = new Set<string>();
+   *  unit on its own, so trackBuffFx must not fight it with a ground setLocation. The value
+   *  is what the node was chosen FOR: the host instance and its attachment link set. Either
+   *  changes when the unit changes form (Metamorphosis swaps "Origin Ref" for "Origin
+   *  Alternate Ref", and a morph onto another model swaps the whole instance), and a model
+   *  left hanging off the old node is drawn under a switched-off node or a detached body. */
+  private buffFxParented = new Map<string, { host: SpawnInstance; link: string }>();
   /** buffFx keys still playing their Birth clip (settleBuffFx moves them to Stand). */
   private buffFxBirthing = new Set<string>();
   /** buffFx keys whose model ships one set of clips PER TARGET SIZE, and which set this one
@@ -4959,6 +4968,7 @@ export class MapViewerScene {
     }
     this.collectShopArrows(active);
     this.collectTeleportFx(active);
+    this.collectFieldCasterFx(active);
     this.collectOrbAttachments(active);
     this.collectMoonWellWater(active);
     this.collectMineCircles(active);
@@ -5225,6 +5235,26 @@ export class MapViewerScene {
     }
   }
 
+  /**
+   * The model a running field holds on its CASTER (SpellFieldInit.casterArt) — Starfall's
+   * `StarfallCaster.mdx` standing where the Priestess stands.
+   *
+   * Rides the persistent-FX pool for the same reason the teleport swirl does: it is a
+   * three-act model whose middle act has to last exactly as long as something the sim decides.
+   * Birth as the field opens, Stand looped while it is listed, and Death the frame
+   * `activeSpellFields` stops listing it — its waves spent, or the channel broken, which the
+   * sim tears the field down for (tickSpellFields). Unattached (`ground`): the model is a
+   * swirl on the ground around the caster, not something worn on a bone.
+   */
+  private collectFieldCasterFx(active: Set<string>): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    for (const f of world.activeSpellFields()) {
+      if (!f.casterArt) continue;
+      this.trackBuffFx(active, `fieldc|${f.casterId}|${f.code}`, { path: f.casterArt, attach: [] }, f.casterId, undefined, true);
+    }
+  }
+
   /** Dying models are no longer tracked by anything: hold each until its Death clip has
    *  played out (or its deadline passes), then take it off the scene. Ticked from the
    *  frame loop, not from updateAuraEffects — buff art is no longer its only source, and
@@ -5295,7 +5325,20 @@ export class MapViewerScene {
       // the ally-colour filter repaints every body when it toggles, and art spawned under
       // the old mode would otherwise keep the old colour until it died.
       if (teamColor !== undefined) inst.setTeamColor?.(teamColor);
-      if (this.buffFxParented.has(key)) return; // rides its attachment node
+      const parent = this.buffFxParented.get(key);
+      if (parent) {
+        // Rides its attachment node — unless the unit has changed form under it since.
+        const host = this.rts?.unitInstance(simId) as unknown as SpawnInstance | undefined;
+        const link = this.attachLink(simId).join(",");
+        if (host && (host !== parent.host || link !== parent.link)) {
+          const node = this.attachmentNode(host, fx.attach, simId);
+          if (node) {
+            inst.setParent?.(node);
+            this.buffFxParented.set(key, { host, link });
+          }
+        }
+        return;
+      }
       const u = this.rts?.simView.units.get(simId);
       if (u) {
         this.loc3[0] = u.x;
@@ -5330,10 +5373,10 @@ export class MapViewerScene {
     // own height above the unit's feet (the Moon Well's water) must stand on the ground and
     // inherit nothing, or the building's own transform swallows it.
     const host = ground ? undefined : (this.rts?.unitInstance(simId) as unknown as SpawnInstance | undefined);
-    const node = host ? this.attachmentNode(host, fx.attach) : undefined;
-    if (node) {
+    const node = host ? this.attachmentNode(host, fx.attach, simId) : undefined;
+    if (node && host) {
       inst.setParent?.(node); // ride the unit's own animated attachment point
-      this.buffFxParented.add(key);
+      this.buffFxParented.set(key, { host, link: this.attachLink(simId).join(",") });
     } else {
       this.loc3[0] = u.x;
       this.loc3[1] = u.y;
@@ -5390,29 +5433,55 @@ export class MapViewerScene {
    *  "Hand Left Ref" — then take the most qualifiers matched, tie-broken by the fewest
    *  extra words so `chest` picks "Chest Ref" over "Chest Mount Left Ref". A model with
    *  no such part at all falls back to its origin, as the engine does; only a model with
-   *  no attachments returns undefined, leaving the caller to walk it along the ground. */
-  private attachmentNode(host: SpawnInstance, attach: string[]): unknown {
+   *  no attachments returns undefined, leaving the caller to walk it along the ground.
+   *
+   *  `hostId` (the sim unit the host draws) adds the unit's attachment LINK set — see
+   *  attachLink. A two-form model ships every point twice ("Origin Ref" / "Origin Alternate
+   *  Ref") and switches the set its current form is not using OFF, so the link word decides
+   *  between them before anything else does: a node carrying a link word the unit is not
+   *  using is never preferred to one that carries none, and one carrying the unit's own
+   *  link word wins a tie. */
+  private attachmentNode(host: SpawnInstance, attach: string[], hostId = 0): unknown {
     const atts = host.model?.attachments ?? [];
     if (!atts.length) return undefined;
     // No tokens named ("Targetattach" absent) means the model's root — same as origin.
     const want = attach.length ? attach : ["origin"];
+    const link = hostId ? this.attachLink(hostId) : [];
     const wordsOf = (name: string) => name.toLowerCase().replace(/\bref\b/g, "").split(/[\s-]+/).filter(Boolean);
-    let best = -1;
-    let bestScore = 0;
-    let bestExtra = Infinity;
-    atts.forEach((a, i) => {
-      const words = wordsOf(a.name);
-      if (!words.includes(want[0])) return;
-      const score = want.filter((t) => words.includes(t)).length;
-      const extra = words.length - score;
-      if (score > bestScore || (score === bestScore && extra < bestExtra)) {
-        bestScore = score;
-        bestExtra = extra;
-        best = i;
-      }
-    });
-    if (best < 0) best = atts.findIndex((a) => wordsOf(a.name).includes("origin"));
+    const pick = (part: string, tokens: string[]): number => {
+      let best = -1;
+      let bestRank: number[] = [];
+      atts.forEach((a, i) => {
+        const words = wordsOf(a.name);
+        if (!words.includes(part)) return;
+        const linked = words.filter((w) => ATTACH_LINK_WORDS.has(w) || link.includes(w));
+        const linkOk = linked.every((w) => link.includes(w)) ? 1 : 0;
+        const score = tokens.filter((t) => words.includes(t)).length;
+        const extra = words.length - score - linked.length;
+        const rank = [linkOk, score, linked.length, -extra];
+        const k = rank.findIndex((v, j) => v !== bestRank[j]);
+        if (best < 0 || (k >= 0 && rank[k] > bestRank[k])) {
+          best = i;
+          bestRank = rank;
+        }
+      });
+      return best;
+    };
+    let best = pick(want[0], want);
+    if (best < 0) best = pick("origin", ["origin"]);
     return best >= 0 ? host.getAttachment?.(best) : undefined;
+  }
+
+  /** The attachment LINK words a unit's effects ride on (`Attachmentlinkprops`,
+   *  UnitDef.attachLinkProps) — `alternate` for a Metamorphosed Demon Hunter. A form the sim
+   *  holds on the same type (a rooted Ancient, a burrowed Crypt Fiend: SimUnit.altModel) wears
+   *  the alternate half of its model and so its alternate points too, as animPropsFor gives it
+   *  the alternate clips. */
+  private attachLink(simId: number): string[] {
+    const u = this.rts?.simView.units.get(simId);
+    if (!u) return [];
+    const own = this.registry.get(u.hexForm || u.typeId)?.attachLinkProps ?? [];
+    return u.altModel && !own.includes("alternate") ? [...own, "alternate"] : own;
   }
 
   // --- Special effects: a trigger puts a model in the world (7.26 — issue #68) ------
@@ -5513,7 +5582,7 @@ export class MapViewerScene {
     if (!inst) return;
     if (fx.hostId >= 0 && !fx.parented) {
       const host = this.rts?.unitInstance(fx.hostId) as unknown as SpawnInstance | undefined;
-      const node = host ? this.attachmentNode(host, fx.attach) : undefined;
+      const node = host ? this.attachmentNode(host, fx.attach, fx.hostId) : undefined;
       if (node) {
         inst.setParent?.(node);
         fx.parented = true;
@@ -13855,6 +13924,11 @@ function zQuat(out: Float32Array, angle: number): void {
   out[2] = Math.sin(half);
   out[3] = Math.cos(half);
 }
+
+/** The words a model's attachment point names carry to say which FORM's set it belongs to —
+ *  every `Attachmentlinkprops` in the shipped Units\*Func.txt is `alternate` (11 rows). A
+ *  node carrying one belongs to that form only (see attachmentNode). */
+const ATTACH_LINK_WORDS = new Set(["alternate"]);
 
 // --- Debug collider overlay geometry helpers (interleaved [x,y,z, r,g,b,a]) ---
 // Hard dark-blue vertex tint for the "pending build" ghost (issue #18). setVertexColor

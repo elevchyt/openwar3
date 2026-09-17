@@ -158,6 +158,16 @@ export interface UnitDef {
    * SimWorld.bodySize.
    */
   attachAnimProps: string[];
+  /**
+   * `Attachmentlinkprops` — which SET of the model's attachment points ("… Ref" nodes) this
+   * type's effects hang off. A two-form model carries both sets and hides the one its current
+   * form is not using (a KATV visibility track at 0 across the other form's clips): the
+   * Demon Hunter's `HeroDemonHunter.mdx` has "Origin Ref" AND "Origin Alternate Ref", and
+   * `[Edmm]` (Metamorphosis) names `alternate`. Parent Immolation's flames to the plain
+   * "Origin Ref" on the demon and they are drawn under a node that is switched off — the
+   * spell burned with no fire on him. See mapViewer attachmentNode.
+   */
+  attachLinkProps: string[];
   soundSet: string; // unitUI "unitSound" label (e.g. "Footman") → UI\SoundInfo lookups
   /**
    * UnitUI `red`/`green`/`blue` — "Art - Tinting Color", the model's own vertex colour as
@@ -624,6 +634,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     const slots = weaponSlots(w, fn, primaryVal, u);
     const animProps = fn ? (str(fn, "Animprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
     const attachAnimProps = fn ? (str(fn, "Attachmentanimprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
+    const attachLinkProps = fn ? (str(fn, "Attachmentlinkprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
 
     defs.set(id, {
       id,
@@ -639,6 +650,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       animBlend: u ? num(u, "blend", 0.15) : 0.15,
       animProps,
       attachAnimProps,
+      attachLinkProps,
       soundSet: u ? str(u, "unitSound") : "",
       // "Art - Tinting Color": three 0–255 columns, absent on an untinted row. See UnitDef.tint.
       tint: u ? [num(u, "red", 255) / 255, num(u, "green", 255) / 255, num(u, "blue", 255) / 255] : [1, 1, 1],
@@ -1028,6 +1040,7 @@ export function destructibleUnitDef(d: {
     animBlend: 0.15,
     animProps: [],
     attachAnimProps: [],
+    attachLinkProps: [],
     soundSet: "",
     tint: [1, 1, 1],
     // A destructible's own weapon-target class is carried in `classification` (see the tail of

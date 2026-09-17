@@ -422,6 +422,17 @@ export interface SpellFieldInit {
   /** The field rocks the CAMERA while it runs (Earthquake, the one thing in the game that
    *  does). Presentation only — see MapViewerScene.updateFieldLoops. */
   shake?: boolean;
+  /** A model held on the CASTER's spot for exactly as long as the field runs — Birth as it
+   *  opens, its Stand looped, Death the frame the field ends (its waves spent, or the channel
+   *  broken). Starfall's `[XEsf] Effectart = StarfallCaster.mdl` is this: a three-act model
+   *  (Birth 0–2667, Stand 3567–4567, Death 5200–5467) standing where the Priestess stands, not
+   *  a shard to scatter. Drawn off `activeSpellFields` (mapViewer collectFieldCasterFx). */
+  casterArt?: string;
+  /** A model played ON every unit a wave hurts, riding it (`hitAttach`, the buff row's
+   *  `Targetattach`) for its own clip — Starfall's `[AEsd] Targetart = StarfallTarget.mdl`,
+   *  one star per unit per wave. */
+  hitArt?: string;
+  hitAttach?: string[];
 }
 
 /** Play a field's art ONCE, at its centre, held for the whole run — for the effects that are
@@ -2276,11 +2287,24 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // Starfall (Priestess, ult) — channelled: stars rain on enemies around the
   // caster (dataA per wave, dataB apart) for the duration.
+  //
+  // Its two models are on two OTHER rows, and neither is a shard to scatter over the circle
+  // (which is what `fieldArt` made of the first, the stars coming down as copies of the
+  // caster's own swirl in random places):
+  //   [XEsf] Effectart = …\Starfall\StarfallCaster.mdl   (EfctID1) — Birth/Stand/Death, held
+  //          on the caster for the whole channel (casterArt). Its Birth carries SNDXAESF →
+  //          AnimSounds `StarfallArea` → StarfallCaster1.wav, the cast's one sound.
+  //   [AEsd] Targetart = …\Starfall\StarfallTarget.mdl   (BuffID1, attach origin) — a single
+  //          Birth, played on EVERY unit each wave strikes and riding it (hitArt).
   AEsf: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     const interval = d(lvl, 1, 1.5) || 1.5;
     const waves = Math.max(4, Math.round((lvl.duration || 45) / interval));
-    api.addSpellField({ code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800, damagePerWave: d(lvl, 0, 50), waves, interval, casterId: caster.id, art: fieldArt(def), loopSound: fieldLoop(def) });
+    const hit = fx(def).fx[0];
+    api.addSpellField({
+      code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800, damagePerWave: d(lvl, 0, 50), waves, interval, casterId: caster.id,
+      art: "", loopSound: fieldLoop(def), casterArt: def.fxArt, hitArt: hit?.path ?? "", hitAttach: hit?.attach,
+    });
   },
 
   // Stampede (Beastmaster, ult) — a herd of thunder lizards stampedes THROUGH the area,

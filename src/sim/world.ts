@@ -14856,7 +14856,7 @@ export class SimWorld {
    *  They live OUTSIDE their field on purpose: shards already in the air still land
    *  when the channel is broken, so a Blizzard cancelled the instant before impact
    *  still deals that last wave. */
-  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean }> = [];
+  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean; hitArt?: string; hitAttach?: string[] }> = [];
 
   // --- Mirror Image (AOmi) ------------------------------------------------------------
   //
@@ -15211,6 +15211,8 @@ export class SimWorld {
           buildingsOnly: f.buildingsOnly ?? false,
           fellsTrees: f.fellsTrees ?? false,
           skipEthereal: f.skipEthereal ?? false,
+          hitArt: f.hitArt,
+          hitAttach: f.hitAttach,
         };
         if (impact.t > 0) this.waveImpacts.push(impact);
         else this.landWave(impact);
@@ -15346,6 +15348,7 @@ export class SimWorld {
     // and ten for 15 each — the classic WC3 AoE cap that stops a channelled nuke from
     // scaling forever with the size of the clump it lands on.
     const each = w.maxDamage > 0 && hit.length * w.damage > w.maxDamage ? w.maxDamage / hit.length : w.damage;
+    let cued = false; // hitArt's sound, once per wave
     for (const t of hit) {
       // Earthquake's `Oeq2` is "Damage per Second to BUILDINGS" and its units half is a
       // slow, so its waves pass straight through anything that walks.
@@ -15368,6 +15371,13 @@ export class SimWorld {
       // makes it the one spell a Town Hall genuinely fears.
       if (w.pctOfMax) dmg = t.maxHp * dmg;
       if (dmg > 0) this.landDamage(t, dmg, w.casterId, false); // spell damage: ignore armor
+      // The wave's mark on the unit it struck (Starfall's star — SpellFieldInit.hitArt): rides
+      // it for its own clip (`life` 0), so a unit that runs keeps its star over it. The
+      // model's own SND event is cued once per wave, not once per victim, as Blizzard's is.
+      if (w.hitArt && dmg > 0) {
+        this.spellEffects.push({ art: w.hitArt, x: t.x, y: t.y, targetId: t.id, z: 0, life: 0, ...(w.hitAttach?.length ? { attach: w.hitAttach } : {}), ...(cued ? {} : { sound: true }) });
+        cued = true;
+      }
       // Rain of Fire's burn: every wave (re)lights whatever it hits for DataE dps.
       if (w.dot && w.dot.dps > 0 && !t.building) {
         this.applyBuffInternal(t, { kind: "dot", group: w.dot.group, timeLeft: t.isHero && w.dot.heroDuration > 0 ? w.dot.heroDuration : w.dot.duration, sourceId: w.casterId, value: w.dot.dps, art: w.dot.art, buffId: w.dot.buffId });
@@ -16066,8 +16076,8 @@ export class SimWorld {
    *  drain* channels this is a live view, not a one-shot queue: the renderer polls it
    *  each frame to sustain a channel's looping bed and to stop it the moment the field
    *  ends — whether it exhausted its waves or the caster was interrupted. */
-  activeSpellFields(): Array<{ code: string; x: number; y: number; loopSound: string; shake: boolean }> {
-    return this.spellFields.map((f) => ({ code: f.code, x: f.x, y: f.y, loopSound: f.loopSound ?? "", shake: f.shake ?? false }));
+  activeSpellFields(): Array<{ code: string; x: number; y: number; loopSound: string; shake: boolean; casterId: number; casterArt: string }> {
+    return this.spellFields.map((f) => ({ code: f.code, x: f.x, y: f.y, loopSound: f.loopSound ?? "", shake: f.shake ?? false, casterId: f.casterId, casterArt: f.casterArt ?? "" }));
   }
 
   /** Play a one-shot effect model at a point. For the spawn paths the renderer owns:
