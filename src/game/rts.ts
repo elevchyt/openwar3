@@ -254,6 +254,9 @@ interface Entry {
   unit: MapUnit;
   anims: AnimSet;
   moveHeight: number;
+  /** `movetp` = "float": the unit rides the WATER SURFACE rather than the ground under it
+   *  (see `standZ`). Ships and shipyards; set wherever `moveHeight` is. */
+  floats?: boolean;
   /** This unit changed shape between a walker and a flyer (an Obsidian Statue into a
    *  Destroyer), so its height is the SIM's (`flyHeight`) rather than its type's: it stays on
    *  the ground through its Morph clip and climbs over the row's Altitude Adjustment Duration
@@ -3061,7 +3064,7 @@ export class RtsController {
     // be off screen, and a ring drawn in the world is the honest place to say where it went.
     const selR = this.byId.get(heroId)?.selRadius ?? hero.radius;
     this.ack(false); // the move quote: this is a move order, not an attack
-    this.flashRing(hero.x, hero.y, selR, FLASH_GREEN, false, this.byId.get(heroId)?.moveHeight ?? 0);
+    this.flashRing(hero.x, hero.y, selR, FLASH_GREEN, false, this.liftOver(this.byId.get(heroId), hero.x, hero.y));
     return true;
   }
 
@@ -3374,6 +3377,7 @@ export class RtsController {
         // seeded here is drawn in its plain half, which is what `anims` above already assumes.
         altModel: false,
         moveHeight: lift(def?.moveHeight ?? 0),
+        floats: def?.moveType === MoveType.Float,
         footHalfW: 0, // creeps are mobile — centre-sampled ground, no footprint seat
         footHalfH: 0,
         selRadius: (def?.selScale || 1) * SEL_RADIUS_PER_SCALE,
@@ -3515,6 +3519,7 @@ export class RtsController {
       // A static neutral keeps its map-placed Z (tick() does not drive it); a mobile one is
       // drawn like any unit, so it needs the same flight lift its sim unit carries.
       moveHeight: isBuilding ? 0 : lift(def?.moveHeight ?? 0),
+      floats: def?.moveType === MoveType.Float,
       footHalfW: 0, // neutral-passive buildings keep their map-placed Z (not driven here)
       footHalfH: 0,
       selRadius: (def?.selScale || 1) * SEL_RADIUS_PER_SCALE,
@@ -3840,6 +3845,7 @@ export class RtsController {
       // player just paid for. Stating it here is what lets the transition clip play.
       altModel: alt,
       moveHeight: lift(def.moveHeight),
+      floats: def.moveType === MoveType.Float,
       footHalfW: 0, // set by setBuildingFootprint() once the footprint is stamped
       footHalfH: 0,
       selRadius: (def.selScale || 1) * SEL_RADIUS_PER_SCALE,
@@ -3951,6 +3957,7 @@ export class RtsController {
     entry.unit.instance.setUniformScale(entry.baseScale); // a retype onto a shared model keeps the body — resize it (attachInstance's note)
     entry.selRadius = (def.selScale || 1) * SEL_RADIUS_PER_SCALE;
     entry.moveHeight = lift(def.moveHeight);
+    entry.floats = def.moveType === MoveType.Float;
     // The new type's tint, STATED rather than left undefined — a morph between two types that
     // share one model (Nalc→Nalm) keeps its instance, so an untinted new type would otherwise
     // fall through to applyFogTint sampling the body, and sample the OLD type's colour (already
@@ -4415,7 +4422,9 @@ export class RtsController {
       // Buildings seat on the tallest terrain their footprint spans (issue #15); mobile
       // units (footHalfW 0) ride the centre-sampled ground + their fly height.
       this.loc[2] =
-        (e.footHalfW > 0 ? this.footMaxHeight(u.x, u.y, e.footHalfW, e.footHalfH) : this.heightAt(u.x, u.y)) + e.moveHeight;
+        (e.footHalfW > 0 ? this.footMaxHeight(u.x, u.y, e.footHalfW, e.footHalfH) : this.heightAt(u.x, u.y));
+      if (e.floats) this.loc[2] = Math.max(this.loc[2], this.waterAt(u.x, u.y)); // a hull rides the surface, not the sea floor
+      this.loc[2] += e.moveHeight;
       e.unit.instance.setLocation(this.loc);
       setZQuat(this.quat, u.facing);
       e.unit.instance.setRotation(this.quat);
@@ -5376,7 +5385,7 @@ export class RtsController {
     const h = this.host.canvas.height;
     this.world[0] = u.x;
     this.world[1] = u.y;
-    this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
+    this.world[2] = this.standZ(e, u.x, u.y) + e.moveHeight;
     this.host.camera.worldToScreen(this.screen, this.world, viewport);
     const sx = this.screen[0] / dpr;
     const sy = (h - this.screen[1]) / dpr;
@@ -5424,7 +5433,7 @@ export class RtsController {
       if (!own && this.drawnFromMemory(e.simId)) continue;
       this.world[0] = u.x;
       this.world[1] = u.y;
-      this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
+      this.world[2] = this.standZ(e, u.x, u.y) + e.moveHeight;
       this.host.camera.worldToScreen(this.screen, this.world, viewport);
       const sx = this.screen[0] / dpr;
       const sy = (h - this.screen[1]) / dpr; // gl y-up → css y-down
@@ -5905,7 +5914,7 @@ export class RtsController {
         if (any) {
           this.orderMode = null;
           this.ack(true);
-          this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius, this.byId.get(picked)?.moveHeight ?? 0);
+          this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius, this.liftOver(this.byId.get(picked), target.x, target.y));
           return true;
         }
         if (this.refuseAttackTarget(picked, true)) return false; // a tower pointed past its range, or an invulnerable target
@@ -6002,7 +6011,7 @@ export class RtsController {
         const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
         const own = !!prim && target.owner === prim.owner;
         this.groupMoveTo(target, picked, queued);
-        this.flashRing(target.x, target.y, e?.selRadius ?? target.radius, own ? FLASH_GREEN : FLASH_YELLOW, !!target.building, e?.moveHeight ?? 0);
+        this.flashRing(target.x, target.y, e?.selRadius ?? target.radius, own ? FLASH_GREEN : FLASH_YELLOW, !!target.building, this.liftOver(e, target.x, target.y));
         return true;
       }
     }
@@ -6972,6 +6981,27 @@ export class RtsController {
   }
 
   /** Terrain height at a world point (for placing ground-hugging ghosts). */
+  /** Where a unit's body STANDS before its fly height: the ground — or, for a floating unit,
+   *  whichever is higher of the ground and the water surface (`makeWaterSampler`). The max
+   *  keeps a ship honest in the shallows, where the beach rises above the water plane. */
+  private standZ(e: Entry, x: number, y: number): number {
+    const ground = this.heightAt(x, y);
+    return e.floats ? Math.max(ground, this.waterAt(x, y)) : ground;
+  }
+
+  /** How far above the GROUND a flash ring round this unit sits — its fly height, plus the
+   *  water it floats on (`flashRing` adds the ground itself). */
+  private liftOver(e: Entry | undefined, x: number, y: number): number {
+    return e ? this.standZ(e, x, y) - this.heightAt(x, y) + e.moveHeight : 0;
+  }
+
+  /** The water surface sampler — set once the terrain is known (`setWaterSampler`); flat
+   *  ground until then, so nothing floats anywhere before a map is loaded. */
+  private waterAt: HeightSampler = () => -Infinity;
+  setWaterSampler(sampler: HeightSampler): void {
+    this.waterAt = sampler;
+  }
+
   groundHeightAt(x: number, y: number): number {
     return this.heightAt(x, y);
   }
@@ -7067,7 +7097,7 @@ export class RtsController {
       // entities ring yellow.
       // Air units' ring floats at their flight altitude (e.moveHeight matches the
       // model's drawn base), so it hugs the unit instead of sitting on the ground.
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building });
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building });
     }
     if (this.selectedMine !== null) {
       const m = this.sim.mines.get(this.selectedMine);
@@ -7089,7 +7119,7 @@ export class RtsController {
     const u = this.frameUnit(id);
     const e = this.byId.get(id);
     if (!u || !e || isOffField(u)) return null;
-    return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building };
+    return { x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building };
   }
 
   /** Ground-circles for the units currently inside the live drag-box, so the player previews
@@ -7100,7 +7130,7 @@ export class RtsController {
     for (const id of this.previewIds) {
       const u = this.frameUnit(id);
       const e = this.byId.get(id);
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building });
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building });
     }
     return out;
   }
@@ -7112,7 +7142,7 @@ export class RtsController {
     if (this.hovered !== null && !this.selected.has(this.hovered)) {
       const u = this.frameUnit(this.hovered);
       const e = this.byId.get(this.hovered);
-      if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building };
+      if (u && e) return { x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building };
     }
     if (this.hoveredMine !== null && this.hoveredMine !== this.selectedMine) {
       const m = this.sim.mines.get(this.hoveredMine);
@@ -8590,7 +8620,7 @@ export class RtsController {
     for (const id of this.orderees) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: destructible, solo: this.soloOrder() }, queued })) any = true;
     if (any) {
       const e = this.byId.get(picked);
-      this.flashRing(target.x, target.y, e?.selRadius ?? target.radius, FLASH_RED, !!target.building, e?.moveHeight ?? 0);
+      this.flashRing(target.x, target.y, e?.selRadius ?? target.radius, FLASH_RED, !!target.building, this.liftOver(e, target.x, target.y));
       return;
     }
     this.refuseAttackTarget(picked); // "Target is outside range." — the tower cannot come to it
@@ -8972,7 +9002,7 @@ export class RtsController {
     // into a frog is no harder to click than the Tauren was. So not the critter's shapes — the
     // sphere below, sized off the unit's own ring and hull.
     if (!e.skinPath && modelPickVolumes(inst, out) > 0) return;
-    const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
+    const baseZ = this.standZ(e, u.x, u.y) + e.moveHeight;
     if (u.building && (e.footHalfW > 0 || e.footHalfH > 0)) {
       out.push({
         kind: "box",
@@ -9109,7 +9139,7 @@ export class RtsController {
         x: u.x,
         y: u.y,
         // Bar floats at the unit's drawn base — for air units, their altitude.
-        z: this.heightAt(u.x, u.y) + e.moveHeight,
+        z: this.standZ(e, u.x, u.y) + e.moveHeight,
         selRadius: e.selRadius,
         hpFrac: u.maxHp > 0 ? Math.max(0, Math.min(1, u.hp / u.maxHp)) : 0,
         manaFrac: u.maxMana > 0 ? Math.max(0, Math.min(1, u.mana / u.maxMana)) : null,
@@ -9295,7 +9325,7 @@ export class RtsController {
         }
       }
       if (gold !== null) lines.push({ text: `Gold: ${gold}`, color: HOVER_TEXT });
-      return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, lines };
+      return { x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, lines };
     }
     if (this.hoveredMine !== null) {
       const m = this.sim.mines.get(this.hoveredMine);

@@ -27,6 +27,39 @@ export function makeHeightSampler(terrain: TerrainData): HeightSampler {
   };
 }
 
+/**
+ * The WATER SURFACE's world height at any (x, y) — what a floating unit (`movetp` = "float":
+ * every ship, the shipyards, the Naga Turtle) rides on, where `makeHeightSampler` answers the
+ * sea FLOOR beneath it. A boat seated on the floor draws sunk to its mast in anything deeper
+ * than a puddle.
+ *
+ * The same sum the viewer's water shader draws the surface at (mdx-m3-viewer
+ * `water.vert`: `waterHeight + u_offsetHeight`, both in cell units, × 128), so a hull sits on
+ * exactly the plane the player sees: each corner's own w3e water level plus the tileset's
+ * `TerrainArt\Water.slk` `[<tileset>Sha] height` (−0.7 for most tilesets, −1.5 for Outland).
+ * That offset is read LAZILY because the viewer only fills it in once its async terrain load
+ * reaches the water row, which may be after this sampler is built.
+ */
+export function makeWaterSampler(terrain: TerrainData, offset: () => number): HeightSampler {
+  const { width, height, centerOffset, corners } = terrain;
+  const h = (cx: number, cy: number): number => {
+    const gx = cx < 0 ? 0 : cx >= width ? width - 1 : cx;
+    const gy = cy < 0 ? 0 : cy >= height ? height - 1 : cy;
+    return corners[gy * width + gx].waterHeight;
+  };
+  return (wx, wy) => {
+    const fx = (wx - centerOffset[0]) / CELL;
+    const fy = (wy - centerOffset[1]) / CELL;
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+    const tx = fx - x0;
+    const ty = fy - y0;
+    const bottom = h(x0, y0) * (1 - tx) + h(x0 + 1, y0) * tx;
+    const top = h(x0, y0 + 1) * (1 - tx) + h(x0 + 1, y0 + 1) * tx;
+    return (bottom * (1 - ty) + top * ty + offset()) * CELL;
+  };
+}
+
 // Seat height for a building's axis-aligned footprint rectangle, centred at (cx, cy)
 // with half-extents (halfW, halfH). Sampling only the CENTRE (as moving units do)
 // sinks a building into any hill/slope its far corners sit on (issue #15); seating on

@@ -17,7 +17,7 @@ import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnit
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
 import { EVENT_PLAYER_END_CINEMATIC, EVENT_PLAYER_LEAVE } from "../jass/interpreter";
 import { MAP_CONTROL, type CinematicScene, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
-import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
+import { makeHeightSampler, makeWaterSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay, type BoundaryMask } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
 import { ShadowOverlay } from "./shadowOverlay";
@@ -638,6 +638,9 @@ interface W3xMap {
    *  frames Animation Quality skips that call — see `updateMapWidgets`. */
   waterIndex: number;
   waterIncreasePerFrame: number;
+  /** `TerrainArt\Water.slk` `[<tileset>Sha] height`, in cell units — the offset the water
+   *  shader lifts every corner's water level by. Filled in by the async terrain load. */
+  waterHeightOffset: number;
   waterTextures: ArrayLike<unknown>;
   units: unknown[];
   doodads: HideableWidget[];
@@ -1711,6 +1714,9 @@ export class MapViewerScene {
       this.heightSampler = makeHeightSampler(terrain);
       this.footMaxHeight = makeFootprintMaxSampler(terrain);
       this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.items, this.tech, this.upgrades, this.footMaxHeight, neutralTeamColor(this.vfs));
+      // Ships ride the water the viewer draws, at the viewer's own tileset offset (read lazily —
+      // see makeWaterSampler).
+      this.rts.setWaterSampler(makeWaterSampler(terrain, () => map.waterHeightOffset));
       this.rts.setFootprintReader((tex) => this.footprintFor(tex)); // pathTex decode is a VFS read
       this.rts.setIconResolver((path) => this.blpIcon(path)); // BLP decode is a VFS read, too — for the ally spell row
       this.rts.setSoundBoard(this.sounds);
