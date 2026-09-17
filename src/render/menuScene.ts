@@ -366,6 +366,52 @@ const BACKDROP_DEFAULTS: Record<string, Partial<BackdropTuning>> = {
     fogStart: 0, fogEnd: 12200, fogR: 0.7, fogG: 0.2, fogB: 0.2,
     lightAmbient: 0.83, // the grade stays the shared one (NEUTRAL_BACKDROP)
   },
+  // --- Reign of Chaos (docs/editions.md) -------------------------------------------------
+  // The five `*Campaign3D` sets, the `_V0` twins of the four above. Every one of them is a
+  // SMALLER diorama than the expansion's — an authored 4:3 shot with the set built only as wide
+  // as that frame — so at 16:9 each showed the black past its sky plane in a top or bottom
+  // corner, even though `frameCameras` already keeps the authored HORIZONTAL extent and gives up
+  // height for it. The fix is the lens rather than the pose: every entry here narrows `camFov`
+  // until the frame is inside the set, and the two that also tilt do it by 2° to put the corner
+  // that was left behind the ground. Measured on the running screen at 16:9, one set at a time.
+  //
+  // The FOG on three of them is pushed out for the reason the expansion's entries give: these
+  // campaigns' own `BackgroundFog*` keys end at 1600–2950 units, which in our linear distance fog
+  // buries the set itself in haze where Blizzard's renderer wanted a tint on the far wall.
+  "ui\\glues\\singleplayer\\tutorialcampaign3d\\tutorialcampaign3d.mdx": {
+    // Prologue / Exodus of the Horde — Thrall, torch in hand, in the ravine. Its sky plane stops
+    // just past the top-left rock, so the lens comes in and the eye drops 2°.
+    camFov: 0.7, camPitch: -2,
+    fogStart: 1500, fogEnd: 9000, // its own 0→2000 hazed the rock Thrall is standing on
+  },
+  "ui\\glues\\singleplayer\\humancampaign3d\\humancampaign3d.mdx": {
+    // Human / The Scourge of Lordaeron — the knight under Lordaeron's gate. The arch is the set:
+    // nothing is built outside it, so this is the narrowest lens of the five that still shows the
+    // whole span, and the subject slides right to clear the Difficulty Level box.
+    camFov: 0.7, camPanX: 20,
+    // Its own fog (0→9000, warm grey) lands on the keep behind the gate, which is where it belongs.
+  },
+  "ui\\glues\\singleplayer\\undeadcampaign3d\\undeadcampaign3d.mdx": {
+    // Undead / Path of the Damned — the crypt lord in the ice cavern. A CLOSED set (walls, roof
+    // and floor all built), so it needs the least of the five and keeps its own fog.
+    camFov: 0.78,
+  },
+  "ui\\glues\\singleplayer\\orccampaign3d\\orccampaign3d.mdx": {
+    // Orc / The Invasion of Kalimdor — Grom at the campfire in the canyon. Same shape of fix as
+    // the Prologue's, and the same set dressing: its own 0→2950 fog painted the whole canyon the
+    // flat ochre of `BackgroundFogColor`, so it is pushed back onto the far mesas and the sunset
+    // sky the model actually carries comes through.
+    camFov: 0.7, camPitch: -2,
+    fogStart: 2000, fogEnd: 12000,
+  },
+  "ui\\glues\\singleplayer\\nightelfcampaign3d\\nightelfcampaign3d.mdx": {
+    // Night Elf / Eternity's End — Tyrande among the Ashenvale trees. The tightest lens of the
+    // five: the canopy ends a little way past the top-left tree and nothing but narrowing moved
+    // that corner (a tilt made it worse, which is how you can tell it is the set's edge and not
+    // the horizon).
+    camFov: 0.66,
+    fogStart: 800, fogEnd: 7000, // its own 0→1600 put haze between the camera and Tyrande
+  },
   // Bonus / The Founding of Durotar. Its camera sits ~990 units from its subject while the
   // model's lights only reach 200, so this set is mostly ambient-lit — hence the dolly in and
   // the ambient a notch above the shared default. Its fog is the campaign's own colour with a

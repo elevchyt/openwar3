@@ -99,6 +99,14 @@ The menu's CAMERA is ours, per scene: `TFT_SCENE_TUNING` sits Icecrown behind th
 `ROC_SCENE_TUNING` dollies Reign of Chaos's meadow in until a 16:9 frame no longer shows the
 black past its edges (the authored camera is a 4:3 shot).
 
+The same is true of the campaign BACKDROPS, and more so: each RoC `*Campaign3D` set is a small
+diorama built only as wide as the 4:3 shot it was authored for, so all five needed an entry in
+`BACKDROP_DEFAULTS` (menuScene.ts) before a 16:9 frame stopped showing the black past the sky
+plane. The lens does the work — every entry narrows `camFov`, two drop the eye 2°, and a TILT
+makes it worse rather than better, which is how you can tell the corner is the set's edge and
+not the horizon. Three also push their fog out: those campaigns' own `BackgroundFog*` keys end
+at 1600–2950 units, which in our linear distance fog hazes the subject itself.
+
 ### 5. Campaigns
 
 `UI\CampaignStrings.txt` is the SAME format as `_exp` on 1.30.4 (an older note in this repo
@@ -130,6 +138,4 @@ still open.
 ## Known gaps
 
 - Reign of Chaos's melee AI scripts are adapted, not ported.
-- The RoC campaign backdrops have no per-model framing yet (`BACKDROP_DEFAULTS`); at 16:9 their
-  authored cameras can show the edge of the set.
 - `ScoreScreenVictory_V0` and the other score-screen keys are unread, as their `_V1` twins are.
