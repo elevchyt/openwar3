@@ -1206,6 +1206,9 @@ function always(c: PlusCtx): void {
 function shop(c: PlusCtx): void {
   const { ai, profile, table } = c;
   if (profile.shopping <= 0) return;
+  // Reign of Chaos has no race shop to put up (`tableForEdition` leaves this empty): its heroes
+  // buy at whatever neutral shelf the map has, which plus/items.ts has always looked for.
+  if (!table.shop) return;
   if (c.armyFood < SHOP_AFTER) return;
   ai.setBuildUnit(1, table.shop);
 }

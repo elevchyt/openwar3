@@ -94,6 +94,8 @@ function matches(ours, theirs) {
 const source = fs.readFileSync(SOURCE, "utf8");
 const files = {
   MISC_GAME: { label: "Units\\MiscGame.txt", data: parseMiscIni(read(path.join(merged, "Units", "MiscGame.txt"))) },
+  // Reign of Chaos's copy of the same file (docs/editions.md) — the rows MISC_GAME_V0 restates.
+  MISC_GAME_V0: { label: "Melee_V0\\Units\\MiscGame.txt", data: parseMiscIni(read(path.join(merged, "Melee_V0", "Units", "MiscGame.txt"))) },
   MISC_DATA: { label: "Units\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "Units", "MiscData.txt"))) },
   MELEE: { label: "Scripts\\Blizzard.j", data: parseJassConstants(read(path.join(merged, "Scripts", "Blizzard.j"))) },
   // Note the different MiscData.txt: the minimap's palette lives in the *UI* one.

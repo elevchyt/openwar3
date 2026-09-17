@@ -1,4 +1,5 @@
 import War3MapViewer from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/viewer";
+import { isRoc } from "../data/edition";
 import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import type { DataSource } from "../vfs/types";
 import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
@@ -2371,7 +2372,11 @@ export class MapViewerScene {
    *  playable — the numbers are the same ones blizzard.j uses (src/data/races.ts). */
   private async startMeleeFallback(config: MeleeConfig, races: Map<number, PlayableRace>): Promise<void> {
     if (!this.rts) return;
-    for (const slot of config.slots) this.rts.simWorld.initStash(slot.id, MELEE.MELEE_STARTING_GOLD_V1, MELEE.MELEE_STARTING_LUMBER_V1);
+    // Blizzard.j MeleeStartingResources: `VersionGet() == VERSION_REIGN_OF_CHAOS` → the V0 pair.
+    const roc = isRoc();
+    const gold = roc ? MELEE.MELEE_STARTING_GOLD_V0 : MELEE.MELEE_STARTING_GOLD_V1;
+    const lumber = roc ? MELEE.MELEE_STARTING_LUMBER_V0 : MELEE.MELEE_STARTING_LUMBER_V1;
+    for (const slot of config.slots) this.rts.simWorld.initStash(slot.id, gold, lumber);
     // …and the free-hero token, which is a melee STARTING RESOURCE like the gold and the lumber
     // (Blizzard.j MeleeStartingUnits*: `SetPlayerState(p, PLAYER_STATE_RESOURCE_HERO_TOKENS,
     // bj_MELEE_STARTING_HERO_TOKENS)`). The scripted melee path gets it through that very call;

@@ -165,6 +165,29 @@ check('every campaign map\'s object data parses', broken.length === 0, broken.sl
 check('both doodad-table layouts appear in the campaigns',
   w3dLayouts.withInts > 0 && w3dLayouts.without > 0, JSON.stringify(w3dLayouts));
 
+// --- Reign of Chaos (docs/editions.md) ---------------------------------------------------
+// The other edition's index is `CampaignFile_V0`, the same format, with its backdrops under `_V0`
+// and its keys prefixed `RoC.` so its progress never mixes with the expansion's four same-named
+// sections.
+check('war3skins names both campaign files',
+  skins.get('Default')?.get('CampaignFile_V1') === 'UI\\CampaignStrings_exp.txt'
+  && skins.get('Default')?.get('CampaignFile_V0') === 'UI\\CampaignStrings.txt');
+const rocBackground = (key) => skins.get('Default')?.get(`${key}_V0`)?.replace(/\.mdl$/i, '.mdx') ?? null;
+const roc = parseCampaigns(text('UI\\CampaignStrings.txt'), rocBackground, 'RoC.');
+check('five RoC campaigns, prefixed, in CampaignList order',
+  roc.map((c) => c.key).join(',') === 'RoC.Tutorial,RoC.Human,RoC.Undead,RoC.Orc,RoC.NightElf', roc.map((c) => c.key).join(','));
+check('RoC Human is The Scourge of Lordaeron', roc[1]?.name === 'The Scourge of Lordaeron', String(roc[1]?.name));
+check('every RoC backdrop is in the archives',
+  roc.every((c) => c.background && read(c.background)),
+  roc.filter((c) => !c.background || !read(c.background)).map((c) => c.key).join(', '));
+const rocMissing = [];
+for (const c of roc) {
+  for (const m of c.missions) {
+    if (m.playable && !(await install.readMapBytes(m.file))) rocMissing.push(m.file);
+  }
+}
+check('every playable RoC chapter map is in the archives', rocMissing.length === 0, rocMissing.join(', '));
+
 console.log(failures ? `\n${failures} check(s) FAILED` : `\nall ${campaigns.length} campaigns verified against the ${install.kind === 'casc' ? 'content store' : 'archives'}`);
 process.exit(failures ? 1 : 0);
 

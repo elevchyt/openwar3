@@ -160,6 +160,21 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `widescreen()`. Applied flat, the right-hand chrome ran over the left-hand panel (issue #151).
   The match stage (`ui/stage.ts`) likewise takes the window's aspect between 4:3 and 16:9, and a
   window narrower than 4:3 boxes the menus as well as the match.
+- **Editions:** read [`docs/editions.md`](docs/editions.md) before touching
+  [`src/data/edition.ts`](src/data/edition.ts), [`src/vfs/edition.ts`](src/vfs/edition.ts), a
+  `_V0`/`_V1` war3skins key, or a constant the two games disagree on. The main menu's
+  `EditionButton` (beside Single Player, wearing the emblem of the edition it goes TO) switches
+  Reign of Chaos ↔ The Frozen Throne through black. Nearly all of RoC is DATA already in the
+  install: its object tables are a data set at `Melee_V0\<same path>`, laid over the live paths
+  by `EditionDataSource` at the install door and asked at EVERY lookup (so a cache that outlives
+  a switch must drop itself on `onEditionChange`); its glue art, music and campaign file are the
+  `_V0` twins of versioned war3skins keys (`skinVersionSuffix()`, never a literal `_V1`); and
+  `VersionGet()` answers the switch so Blizzard.j picks 750/200 and a three-hero roll itself.
+  Two things are NOT data and are restated: `MISC_GAME_V0` (RoC's `MiscGame.txt` rows —
+  its damage table and XP rules, checked by `pnpm data:verify`; read them through
+  `damageTable()`/`miscGame()`, never `MISC_GAME` directly) and the engine's food ceiling (90).
+  A RoC client lists only `.w3m` maps and only RoC LAN rooms (`RoomInfo.edition`), and both
+  melee AIs drop rows the edition's tech tree lacks rather than naming TFT ids.
 - **Camera:** read [`docs/camera.md`](docs/camera.md) before touching `GAME_FOV`, the zoom constants, or a map's
   camera. The FOV *field* the data carries (70) is **not** the angle the game renders with (**45°**, measured off
   the real client) — conflate them and every distance changes meaning and every map camera breaks.

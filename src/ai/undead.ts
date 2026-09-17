@@ -381,9 +381,17 @@ export const UNDEAD_AI: MeleeScript = {
       allowAirCreeps: 3 * ai.townCountDone(GARGOYLE) + 6 * ai.countDone(FROST_WYRM) + 2 * webFiends >= 6,
     };
   },
-  /** `if basic_opening and (b_hero2_done or (NEWBIE and c_tomb_done >= 1))` */
+  /** `if basic_opening and (b_hero2_done or (NEWBIE and c_tomb_done >= 1))`.
+   *
+   *  The easy computer's half keys on the Tomb of Relics, which Reign of Chaos does not have
+   *  (`[uaco] Builds` in `Melee_V0\Units\UndeadUnitFunc.txt` ends at `ugol`, and there is no
+   *  `[utom]`) — and an easy computer never asks for its second hero in the opening, so read
+   *  literally its opening would never end. The Tomb row sits between the second and third Crypt
+   *  Fiend in the opening above, so under an edition without it the third fiend is the same
+   *  point in the same build order. */
   openingDone: (ai) =>
-    ai.countDone(ai.heroId2) >= 1 || (ai.meleeDifficulty() === MELEE_NEWBIE && ai.countDone(TOMB_OF_RELICS) >= 1),
+    ai.countDone(ai.heroId2) >= 1 || (ai.meleeDifficulty() === MELEE_NEWBIE
+      && (ai.makeable(TOMB_OF_RELICS) ? ai.countDone(TOMB_OF_RELICS) >= 1 : ai.countDone(CRYPT_FIEND) >= 3)),
   buildSequence,
   peonAssignment,
 };

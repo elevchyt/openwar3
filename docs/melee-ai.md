@@ -404,3 +404,10 @@ Two consequences worth keeping:
 `?dev&map=EchoIsles` seats you against a computer. Advanced Options → Visibility → **Always
 Visible** on the Custom Game screen (`src/ui/fdfSkirmish.ts`) turns the whole map on, which is
 how you watch a base go up without scouting it.
+
+## Reign of Chaos
+
+The race files here are the EXPANSION's scripts. On Reign of Chaos (docs/editions.md) a build
+row for an id the loaded tech tree lacks never enters the build list (`AiPlayer.makeable`), and
+`pickMeleeHero` draws from three heroes — common.ai's own `VersionCompatible(VERSION_FROZEN_THRONE)`
+branch. RoC's own scripts (`Melee_V0\Scripts\*.ai`) are a different strategy and are not ported.

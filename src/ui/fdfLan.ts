@@ -1,4 +1,5 @@
 import type { DataSource } from "../vfs/types";
+import { edition } from "../data/edition";
 import type { MapInfo } from "../world/mapInfo";
 import type { MapPreview } from "../world/mapPreview";
 import type { FdfFrame } from "./fdf/parser";
@@ -201,6 +202,9 @@ export async function mountLanScreen(
   /** Paint the current lobby state onto the screen. */
   function render(s: FdfScreen, st: LobbyState): void {
     const list = s.list("MapListBox");
+    // Only games on THIS client's edition: a Reign of Chaos match and an expansion one read
+    // different object tables and cannot be joined across (src/net/protocol.ts RoomInfo.edition).
+    st = { ...st, rooms: st.rooms.filter((r) => (r.edition ?? "tft") === edition()) };
     // A row is the game's name and its seats, "(1/2)", in the same face as the name and in the
     // LABEL gold the screen's own captions wear (StandardLabelTextTemplate's 0.99 0.827 0.0705)
     // — and, for a game that takes observers, the game's own GAMELIST_OBSERVERS " (observers)".

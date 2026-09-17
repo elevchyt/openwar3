@@ -75,6 +75,13 @@ function forceLevel(ai: AiPlayer): number {
  * is that it plays like the original, bugs and all.
  */
 function hunterCode(ai: AiPlayer): string {
+  // …except under Reign of Chaos, which has no Berserker to flip to: `[obar] Trains=ogru,ohun,
+  // ocat` in `Melee_V0\Units\OrcUnitFunc.txt` and no `[otbk]` section anywhere, while `Robs` is
+  // still researched there as Berserker Strength. The branch that "cannot be satisfied" would
+  // then never be satisfied at all, and the orc would train no Head Hunter outside its opening
+  // for the whole match. RoC's own script asks for the hunter by name (`Melee_V0\Scripts\orc.ai`
+  // 279/323, `FoodPool(…, HEAD_HUNTER, …)`), so that is what it gets.
+  if (!ai.makeable(BERSERKER)) return HEAD_HUNTER;
   return ai.upgradeLevel(UPG_ORC_BERSERK) >= 1 ? HEAD_HUNTER : BERSERKER;
 }
 

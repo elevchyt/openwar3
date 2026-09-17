@@ -25,6 +25,7 @@
 import type { NativeCtx, Runtime } from "../runtime";
 import { asInt, asNum, asStr, jBool, jInt, jReal, JNULL, truthy, type JassValue } from "../values";
 import { intToRawcode } from "../lexer";
+import { versionIndex } from "../../data/edition";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -32,18 +33,21 @@ const playerIndex = (ctx: NativeCtx, v: JassValue): number => ctx.rt.data<{ inde
 
 /** common.j: `constant fgamestate GAME_STATE_TIME_OF_DAY = ConvertFGameState(2)`. */
 const GAME_STATE_TIME_OF_DAY = 2;
-/** common.j: `constant version VERSION_FROZEN_THRONE = ConvertVersion(1)`. We are TFT
- *  — which is what picks the V1 melee constants (500 gold / 150 lumber, a 4-hero
- *  random-hero roll, 1 twinked hero) over the Reign-of-Chaos V0 ones. */
+/** common.j: `VERSION_REIGN_OF_CHAOS = ConvertVersion(0)`, `VERSION_FROZEN_THRONE =
+ *  ConvertVersion(1)`. Answered by the edition the client is on (data/edition.ts) — which is
+ *  what picks Blizzard.j's V0 melee constants (750 gold / 200 lumber, a 3-hero random-hero roll,
+ *  `bj_MELEE_MAX_TWINKED_HEROES_V0`) over the Frozen Throne V1 ones (500 / 150, 4 heroes). */
 const VERSION_FROZEN_THRONE = 1;
 /** common.j: `PLAYER_NEUTRAL_PASSIVE = 15` — a gold mine's owner. */
 const PLAYER_NEUTRAL_PASSIVE = 15;
 
 export function registerMeleeNatives(rt: Runtime): void {
   // --- version + map flags ---
-  def(rt, "VersionGet", (c) => c.rt.enumHandle("Version", VERSION_FROZEN_THRONE));
-  def(rt, "VersionCompatible", () => jBool(true));
-  def(rt, "VersionSupported", () => jBool(true));
+  def(rt, "VersionGet", (c) => c.rt.enumHandle("Version", versionIndex()));
+  // "Is this game at least that version": a Reign of Chaos client is not compatible with the
+  // expansion — common.ai's PickMeleeHero reads exactly that to draw from three heroes, not four.
+  def(rt, "VersionCompatible", (c, a) => jBool(c.rt.enumIndex(a[0]) <= versionIndex()));
+  def(rt, "VersionSupported", (c, a) => jBool(c.rt.enumIndex(a[0]) <= VERSION_FROZEN_THRONE));
   // IsMapFlagSet(MAP_RANDOM_HERO) — a lobby melee option. We expose none of them yet, so
   // every flag reads false: WC3's default melee game (no random hero → each player gets a
   // free-hero token instead; no random races; no fixed teams).

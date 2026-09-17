@@ -6,6 +6,7 @@ import type { ContentProfile } from "./profiles";
 import { installMaps, type PickedInstall } from "../assets/opfs";
 import { checkVersion } from "./version";
 import { setCustomKeys } from "../data/customKeys";
+import { EditionDataSource } from "./edition";
 
 // Turn a picked install into a mounted VFS (plan §1 exit: "enumerate/extract any file by path
 // from a real install").
@@ -50,9 +51,12 @@ export async function loadProfile(
 
   const maps = installMaps(install.files);
 
+  // Both storages are handed out through the EDITION overlay (src/vfs/edition.ts): while the
+  // client is on Reign of Chaos, an object table with a `Melee_V0\` twin reads the twin. Wrapped
+  // here, at the one door, so nothing downstream can read the expansion's tables by accident.
   if (isCascInstall(install.casc)) {
-    const vfs = await CascDataSource.open(install.casc, onProgress);
-    return { vfs, mounted: vfs.mounted, missing: [], fileCount: vfs.list().length, maps };
+    const casc = await CascDataSource.open(install.casc, onProgress);
+    return { vfs: new EditionDataSource(casc), mounted: casc.mounted, missing: [], fileCount: casc.list().length, maps };
   }
 
   const sources: DataSource[] = [];
@@ -79,6 +83,6 @@ export async function loadProfile(
   }
 
   // LayeredDataSource wants highest priority first, so reverse the mount order.
-  const vfs = new LayeredDataSource(sources.slice().reverse());
+  const vfs = new EditionDataSource(new LayeredDataSource(sources.slice().reverse()));
   return { vfs, mounted, missing, fileCount: vfs.list().length, maps };
 }

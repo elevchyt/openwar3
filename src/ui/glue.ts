@@ -34,6 +34,14 @@ const GAP_MS = 120;
  */
 const FADE_MS = 260;
 
+/**
+ * How long the edition switch takes to reach black, and to come back off it. Longer than a
+ * scene swap's FADE_MS on purpose: that one covers a cut between two screens of one menu, this
+ * one is the whole game changing under the player, and a quarter-second blink read as a glitch
+ * rather than as a deliberate fade. OURS — the reference's timing is not in any file.
+ */
+const WORLD_FADE_MS = 700;
+
 /** A screen that can be built on demand — the manager mounts it only when navigated to. */
 export interface GlueScreenDef {
   /** Which of the panel model's chrome sets this screen wears. Ignored when `backdrop` is
@@ -200,6 +208,44 @@ export class GlueManager {
   }
 
   /**
+   * Cross the whole menu through black and come back up on `def` in a different WORLD — what the
+   * main menu's edition button does (docs/editions.md). Unlike every other transition nothing
+   * slides away first: switching between Reign of Chaos and The Frozen Throne replaces the 3D
+   * scene, both panel models, the logo, the music and the object tables at once, so the screen
+   * fades out to black as it stands, `rebuild` swaps everything underneath, and the new edition's
+   * main menu arrives on its own chrome Birth as the black lifts.
+   */
+  async crossWorlds(rebuild: () => Promise<void>, def: GlueScreenDef): Promise<FdfScreen | null> {
+    if (this.busy) return null;
+    this.busy = true;
+    let black = false;
+    try {
+      this.current?.setAllDisabled(true);
+      await this.toBlack(true, WORLD_FADE_MS);
+      black = true;
+      this.current?.dispose();
+      this.current = null;
+      this.backdropUp = false;
+      await rebuild();
+      const next = await def.mount();
+      this.current = next;
+      next.setInteractive(false);
+      const birth = await this.arrive(def);
+      const reveal = this.toBlack(false, WORLD_FADE_MS);
+      await next.animatePanels("in", birth || NO_CHROME_IN_MS);
+      await reveal;
+      next.setInteractive(true);
+      return next;
+    } catch (err) {
+      console.error("[OpenWar3] couldn't switch editions:", err);
+      if (black) await this.toBlack(false, WORLD_FADE_MS);
+      return null;
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /**
    * Send the current screen away and put nothing in its place — the menus are over.
    *
    * This is the LEAVING half of `goTo`, on its own, and it is what starting a match runs
@@ -226,16 +272,17 @@ export class GlueManager {
   /** Cover the screen in black (or take the cover away), and resolve once it has finished.
    *  The overlay swallows clicks while it is up, so the dead beat mid-swap cannot be clicked
    *  through to whichever screen happens to be mounted underneath. */
-  private async toBlack(on: boolean): Promise<void> {
+  private async toBlack(on: boolean, ms = FADE_MS): Promise<void> {
     if (!this.fade) {
       this.fade = document.createElement("div");
       this.fade.className = "glue-fade";
       document.body.appendChild(this.fade);
+      void this.fade.offsetWidth; // commit the transparent start, or the first fade is a cut
     }
     const el = this.fade;
-    el.style.transitionDuration = `${FADE_MS}ms`;
+    el.style.transitionDuration = `${ms}ms`;
     el.classList.toggle("glue-fade-on", on);
-    await wait(FADE_MS);
+    await wait(ms);
   }
 
   /** The screen currently on the menu (null while nothing is mounted). */

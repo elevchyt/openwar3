@@ -1,4 +1,5 @@
 import { DEFAULT_RELAY_PORT, RELAY_PATH, type GameMessage, type HostInfo, type PeerInfo, type RoomInfo, type ServerMessage } from "./protocol";
+import { edition } from "../data/edition";
 import type { Transport } from "./transportTypes";
 import { localStorageStore, reconnectPlan, type SessionStore } from "./reconnect";
 
@@ -350,7 +351,7 @@ export class LanLobby {
       if (!entry?.connected || !entry.transport) throw new Error("That server is not answering.");
       this.promote(on);
     }
-    this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers, observers });
+    this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers, observers, edition: edition() });
   }
 
   /** Every place a game could be announced right now: the connection we stand on, then each

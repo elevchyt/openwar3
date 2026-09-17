@@ -1,4 +1,5 @@
 import type { DataSource } from "../vfs/types";
+import { onEditionChange } from "../data/edition";
 import { blpToCanvas } from "../render/blputil";
 import { mapSizeLabel } from "../data/gameplayConstants";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
@@ -59,6 +60,8 @@ const readFolders = new Set<string>();
 /** The install's unit table, loaded on the first map picked (it says which neutral buildings
  *  earn a minimap glyph). Module-level for the same reason as the map cache. */
 let registry: UnitRegistry | null = null;
+// …and it is the EDITION's unit table (src/vfs/edition.ts), so a switch drops it.
+onEditionChange(() => { registry = null; });
 
 /** A map the player has settled on: the file, and what is inside it. */
 export interface ChosenMap {

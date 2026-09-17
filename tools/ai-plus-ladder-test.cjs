@@ -29,13 +29,19 @@
 // the costs, build times, food and supply out of `Units\UnitBalance.slk`.
 //
 // Run: pnpm sim:test
+//
+// …and `OW3_EDITION=roc node tools/ai-plus-ladder-test.cjs` runs part two on REIGN OF CHAOS's
+// data instead: `Melee_V0\Units\UnitBalance.csv` for the prices, and every race table put through
+// `tableForEdition` off the `Melee_V0\Units\*Func.txt` profiles, exactly as `ComputerPlusAi.add`
+// does when the client is on RoC. Part one is our own plan logic and is the same in both.
 const { join } = require("node:path");
 const { existsSync, readFileSync, writeFileSync } = require("node:fs");
 
 const REPO = join(__dirname, "..");
 writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { buildPlan, harvestPlan } = require(join(REPO, ".sim-build", "src", "ai", "plus", "plan.js"));
-const { PLUS_RACES } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
+const { PLUS_RACES, tableForEdition } = require(join(REPO, ".sim-build", "src", "ai", "plus", "races.js"));
+const EDITION = process.env.OW3_EDITION === "roc" ? "roc" : "tft";
 const { PLUS_EASY, PLUS_NORMAL, PLUS_INSANE } = require(join(REPO, ".sim-build", "src", "ai", "plus", "profile.js"));
 const { TOWN_COUNT_EQUIVALENTS } = require(join(REPO, ".sim-build", "src", "ai", "ids.js"));
 
@@ -481,7 +487,10 @@ console.log("\n--- a thin budget still asks for a body ---");
 //  Part two: ten minutes of economy. Needs the unpacked install (`pnpm data:extract`).
 // ======================================================================================
 
-const BALANCE = join(REPO, "Warcraft III", "ExtractedData", "merged", "Units", "UnitBalance.csv");
+const MERGED = join(REPO, "Warcraft III", "ExtractedData", "merged");
+/** Where this edition's object tables live — the live paths, or RoC's `Melee_V0\` twins. */
+const UNITS_DIR = EDITION === "roc" ? join(MERGED, "Melee_V0", "Units") : join(MERGED, "Units");
+const BALANCE = join(UNITS_DIR, "UnitBalance.csv");
 if (!existsSync(BALANCE)) {
   console.log("\n(skipping the economy run: no Warcraft III/ExtractedData — run `pnpm data:extract`)");
 } else {
@@ -521,6 +530,69 @@ function runEconomy() {
   }
   const def = (id) => DATA[id];
 
+  // --- the edition's tech tree, and the tables it can play ---------------------------------
+  //
+  // The `*Func.txt` profiles, read the way src/data/techtree.ts reads them: every section is a
+  // tech node, and a list key that repeats inside a section means the union (`mergeRepeatedLists`).
+  const TECH = new Map();
+  for (const file of require("node:fs").readdirSync(UNITS_DIR)) {
+    if (!/Func\.txt$/i.test(file)) continue;
+    let cur = null;
+    for (const line of readFileSync(join(UNITS_DIR, file), "latin1").split(/\r?\n/)) {
+      const head = /^\[([^\]]+)\]/.exec(line);
+      if (head) {
+        cur = TECH.get(head[1]) ?? { requires: [], builds: [] };
+        TECH.set(head[1], cur);
+        continue;
+      }
+      const kv = /^(Requires|Builds)=(.*)$/i.exec(line);
+      if (!cur || !kv) continue;
+      const list = kv[2].split(",").map((x) => x.trim().replace(/^"|"$/g, "")).filter(Boolean);
+      cur[kv[1].toLowerCase()].push(...list);
+    }
+  }
+  const editionTech = {
+    has: (id) => TECH.has(id),
+    requires: (id) => TECH.get(id)?.requires ?? [],
+    builds: (id) => TECH.get(id)?.builds ?? [],
+  };
+  const TABLES = Object.fromEntries(Object.entries(PLUS_RACES).map(([race, table]) =>
+    [race, EDITION === "roc" ? tableForEdition(table, editionTech) : table]));
+  console.log(`\n--- the ${EDITION === "roc" ? "Reign of Chaos" : "Frozen Throne"} tables ---`);
+  for (const [race, table] of Object.entries(TABLES)) {
+    // Every id a table can put in the build array has a row in this edition's data — the thing
+    // `tableForEdition` is for. (The expansion's own tables pass this untouched.)
+    const named = new Set([
+      table.worker, ...table.halls, table.farm, table.altar, table.barracks, table.tower,
+      ...(table.shop ? [table.shop] : []), ...(table.mineBuilding ? [table.mineBuilding] : []),
+      ...table.heroes, ...Object.keys(table.units), ...Object.values(table.units).flatMap((r) => [r.from, ...(r.needs ?? [])]),
+      ...table.support.map((r) => r.build), ...table.upgrades.flatMap((r) => [r.id, r.from]),
+      ...(table.towerUpgrades ?? []).map((r) => r.id), ...(table.antiAir ? [table.antiAir.unit] : []),
+      ...table.strategies.flatMap((st) => [...Object.keys(st.mix), ...(st.heroes ?? []), ...Object.keys(st.factories ?? {})]),
+    ]);
+    const missing = [...named].filter((id) => id && !TECH.has(id));
+    check(`${race}: every id the table names exists in this edition`, missing.join(","), "");
+    check(`${race}: three or more heroes to draw from`, table.heroes.length >= 3, true);
+    check(`${race}: every strategy still has an army`, table.strategies.every((st) => Object.keys(st.mix).length > 0), true);
+    if (EDITION === "tft") {
+      // …and on the expansion's data the projection is not a filter at all: nothing is dropped.
+      const same = tableForEdition(PLUS_RACES[race], editionTech);
+      check(`${race}: the Frozen Throne keeps every unit, hero and build`,
+        [Object.keys(same.units).length, same.heroes.length, same.strategies.length, same.shop].join("/"),
+        [Object.keys(table.units).length, table.heroes.length, table.strategies.length, table.shop].join("/"));
+    }
+    console.log(`      ${race.padEnd(9)} heroes=${table.heroes.join(",")} shop=${table.shop || "-"}`
+      + ` antiAir=${table.antiAir?.unit ?? "-"} builds=${table.strategies.map((st) => st.id).join(",")}`);
+  }
+  if (EDITION === "roc") {
+    // The RoC `Requires` that move a unit a tier later (races.ts `tableForEdition`).
+    check("roc: the Wind Rider waits for the Fortress", TABLES.orc.units.owyv.tier, 3);
+    check("roc: the Gargoyle waits for the Black Citadel", TABLES.undead.units.ugar.tier, 3);
+    check("roc: the Glaive Thrower waits for the Tree of Ages", TABLES.nightelf.units.ebal.tier, 2);
+    check("roc: the Chimaera Roost wants an Ancient of Wind", (TABLES.nightelf.units.echm.needs ?? []).includes("eaow"), true);
+    check("roc: no race shop", Object.values(TABLES).every((t) => t.shop === ""), true);
+  }
+
   // `TOWN_COUNT_EQUIVALENTS` for the halls, which is all this run needs of it: a Keep going up
   // over your Town Hall still means you have a hall.
   const EQUIV = {
@@ -553,7 +625,7 @@ function runEconomy() {
   const ATTRITION_SHARE = 0.25;
 
   function run(race, strategyId, profile, seconds, opts = {}) {
-    const table = PLUS_RACES[race];
+    const table = TABLES[race];
     const strategy = table.strategies.find((s) => s.id === strategyId);
     // The build's own POWER SPIKE building: the producer of the heaviest tier-2 unit in its mix
     // — the human's Arcane Sanctum, the orc's Spirit Lodge, the undead's Temple of the Damned.
@@ -600,16 +672,25 @@ function runEconomy() {
     };
 
     let list = [];
+    // A row naming an id this edition's BALANCE table has no price for — a Reign of Chaos table
+    // that still asked for an Arcane Vault. Recorded and kept out of the list (it would read as a
+    // free building), and checked empty below.
+    const foreign = new Set();
+    const known = (item) => {
+      if (def(item)) return true;
+      foreign.add(item);
+      return false;
+    };
     const ai = {
       heroId: (strategy.heroes ?? table.heroes)[0],
       heroId2: (strategy.heroes ?? table.heroes)[1],
       heroId3: (strategy.heroes ?? table.heroes)[2],
       initBuildArray: () => { list = [] },
-      setBuildUnit: (q, item) => { if (q > 0) list.push({ type: "u", qty: q, item }) },
-      setBuildNext: (q, item) => { if (countRaw(item) < q) list.push({ type: "u", qty: doneRaw(item) + 1, item }) },
+      setBuildUnit: (q, item) => { if (q > 0 && known(item)) list.push({ type: "u", qty: q, item }) },
+      setBuildNext: (q, item) => { if (countRaw(item) < q && known(item)) list.push({ type: "u", qty: doneRaw(item) + 1, item }) },
       setBuildUpgr: (lvl, item) => list.push({ type: "r", qty: lvl, item }),
-      setBuildExpa: (q, item) => list.push({ type: "e", qty: q, item }),
-      secondaryTown: (t, q, item) => { if (q > 0) list.push({ type: "u", qty: q, item }) },
+      setBuildExpa: (q, item) => { if (known(item)) list.push({ type: "e", qty: q, item }) },
+      secondaryTown: (t, q, item) => { if (q > 0 && known(item)) list.push({ type: "u", qty: q, item }) },
       basicExpansion: (go, hall) => { if (go && townCount(hall) === townCountDone(hall)) ai.setBuildExpa(townCount(hall) + 1, hall) },
       meleeTownHall: () => {},
       guardSecondary: () => {},
@@ -830,6 +911,7 @@ function runEconomy() {
       tier2At: Math.round(S.tier2At), spike, spikeAt: Math.round(S.spikeAt),
       back,
       foodCap: ai.foodCap(), foodUsed: ai.foodUsed(),
+      foreign: [...foreign],
     };
   }
 
@@ -846,8 +928,8 @@ function runEconomy() {
   // much supply a player wants depends on the army), and it is therefore the one that can go
   // wrong quietly — see the Spirit Tower fixture in part one.
   console.log("\n--- a razed base is rebuilt ---");
-  for (const [race, table] of Object.entries(PLUS_RACES)) {
-    const types = [table.farm, table.barracks, table.shop, table.altar, table.support[0].build];
+  for (const [race, table] of Object.entries(TABLES)) {
+    const types = [table.farm, table.barracks, table.shop, table.altar, table.support[0].build].filter(Boolean);
     const r = run(race, table.strategies[0].id, PLUS_NORMAL, 900, { raze: { at: 300, types } });
     const worst = Math.max(...types.map((t) => r.back[t]));
     check(`${race} rebuilds every razed building`, types.every((t) => r.back[t] < REBUILD_BY), true);
@@ -858,7 +940,7 @@ function runEconomy() {
   }
 
   console.log("\n--- ten minutes of build ladder ---");
-  for (const [race, table] of Object.entries(PLUS_RACES)) {
+  for (const [race, table] of Object.entries(TABLES)) {
     for (const s of table.strategies) {
       for (const [name, profile] of [["EASY", PLUS_EASY], ["NORM", PLUS_NORMAL], ["INSA", PLUS_INSANE]]) {
         if (s.tier > profile.techTier) continue;
@@ -869,6 +951,7 @@ function runEconomy() {
           + ` tier2@${String(r.tier2At).padStart(3)}s`
           + (r.spike ? ` ${r.spike}@${String(r.spikeAt).padStart(3)}s` : "")
           + ` openingStuckOnTier=${Math.round(r.tierHaltShare * 100)}%`);
+        check(`${EDITION} ${name} ${race}/${s.id} asks for nothing this edition lacks`, r.foreign.join(","), "");
         if (name !== "NORM") continue;
         // A NORMAL computer that is not stuck reaches its second tier and fields a real army.
         // The bar is deliberately well under what the fixed plan actually manages (24–37 food):

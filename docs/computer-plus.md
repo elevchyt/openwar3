@@ -3946,3 +3946,13 @@ use-map-settings map get no Computer+ for the same reason they get no classic AI
 ```
 
 …or the real screen: Custom Game → pick a map → **Advanced Options** → tick **Computer+**.
+
+## Reign of Chaos
+
+Every race table was measured on the expansion. On Reign of Chaos (docs/editions.md)
+`ComputerPlusAi.add` runs it through `tableForEdition` (plus/races.ts), which drops every id
+the loaded tech tree lacks (the fourth hero, the race shop, Spell Breakers, Batriders…) and
+moves a unit up a tier where RoC's own `Requires` says so (Wind Rider → Fortress, Gargoyle →
+Black Citadel). `tools/ai-plus-ladder-test.cjs` runs the ladder on RoC data with
+`OW3_EDITION=roc`. The orc has no `antiAir` row there: the Batrider does not exist and the Wind
+Rider is tier 3.

@@ -1,4 +1,5 @@
 import type { DataSource } from "../vfs/types";
+import { onEditionChange } from "../data/edition";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
@@ -69,6 +70,8 @@ export interface HotkeyEditorOptions {
 
 /** The catalog is the same for the life of an install, and reading it is ~90 tables. */
 let cachedCatalog: { vfs: DataSource; catalog: HotkeyCatalog } | null = null;
+// …of an EDITION: Reign of Chaos reads a different set of tables (src/vfs/edition.ts).
+onEditionChange(() => { cachedCatalog = null; });
 
 export async function showHotkeyEditor(opts: HotkeyEditorOptions): Promise<void> {
   const catalog = cachedCatalog?.vfs === opts.vfs ? cachedCatalog.catalog : new HotkeyCatalog(opts.vfs);

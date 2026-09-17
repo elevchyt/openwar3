@@ -41,13 +41,17 @@ export interface RoomInfo {
   /** The host chose Full Observers: the game list prints the game's own `GAMELIST_OBSERVERS`
    *  " (observers)" after it, and `maxPlayers` counts the bench. */
   observers: boolean;
+  /** The edition the host is playing (src/data/edition.ts) — a Reign of Chaos client reads
+   *  different object tables, so the two can never share a match and each lists only its own.
+   *  Absent from a relay older than this field, and read as the expansion then. */
+  edition?: "roc" | "tft";
 }
 
 // --- client → relay ---------------------------------------------------------------
 
 export type ClientMessage =
   /** Announce a game. The sender becomes the room's host, hence its authority. */
-  | { t: "create"; name: string; playerName: string; mapName: string; mapPath: string; maxPlayers: number; observers?: boolean }
+  | { t: "create"; name: string; playerName: string; mapName: string; mapPath: string; maxPlayers: number; observers?: boolean; edition?: "roc" | "tft" }
   /** Ask for the game list. The relay also pushes `rooms` unprompted when it changes. */
   | { t: "list" }
   /** Join a room. `token` is a REJOIN token from an earlier `created`/`joined` in this room —

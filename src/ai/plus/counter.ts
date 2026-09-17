@@ -1,4 +1,4 @@
-import { DAMAGE_TABLE } from "../../data/gameplayConstants";
+import { damageTable } from "../../data/gameplayConstants";
 import { ArmorType, AttackType, MoveType } from "../../data/enums";
 import type { UnitDef } from "../../data/units";
 import type { SimUnit } from "../../sim/world";
@@ -118,7 +118,7 @@ export function counterScore(def: UnitDef, read: EnemyRead): number {
     let weighted = 0;
     let covered = 0;
     for (const [type, share] of Object.entries(read.armor) as Array<[ArmorType, number]>) {
-      const row = DAMAGE_TABLE[attack];
+      const row = damageTable()[attack]; // the edition's — RoC reads Melee_V0\Units\MiscGame.txt
       const mult = row?.[type];
       if (mult === undefined) continue;
       weighted += mult * share;

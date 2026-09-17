@@ -29,7 +29,8 @@ import {
 } from "./teamchat";
 import { plusProfile, type PlusProfile } from "./profile";
 import { aimCtx, HERO_KILL_HP, heroKillable, isSiege, isTower, killValue, razeValue } from "./targeting";
-import { PLUS_RACES, rollStrategy, type PlusRaceTable, type PlusStrategy } from "./races";
+import { PLUS_RACES, rollStrategy, tableForEdition, type PlusRaceTable, type PlusStrategy } from "./races";
+import { isRoc } from "../../data/edition";
 import { CAMP_GREEN_MAX, armyPower, maxCampLevel, type CreepForce, type Fighter } from "./power";
 
 // Computer+ — the improved melee AI (issue #124). Start at docs/computer-plus.md.
@@ -1880,8 +1881,20 @@ export class ComputerPlusAi {
    *  (`StartMeleeAI`, i.e. the map's own Melee Initialization) — the checkbox decides which of
    *  the two objects the seat lands in, and nothing else changes. */
   add(player: number, race: PlayableRace, difficulty: number, startX: number, startY: number, seed: number): void {
-    const table = PLUS_RACES[race];
-    if (!table) return;
+    const base = PLUS_RACES[race];
+    if (!base) return;
+    // THE EDITION'S TABLE. Every row in plus/races.ts was written against The Frozen Throne's
+    // data; under Reign of Chaos the race has no fourth hero, no shop and a handful of units that
+    // arrive a tier later, and a hero order that opens on a Blood Mage never produces a hero at
+    // all. `tableForEdition` reads what the loaded tech tree (`Melee_V0\Units\*`) actually has.
+    const tech = this.host.tech;
+    const table = isRoc()
+      ? tableForEdition(base, {
+        has: (id) => tech.has(id),
+        requires: (id) => tech.requirements(id).map((r) => r.tech),
+        builds: (id) => tech.builds(id),
+      })
+      : base;
     // ONE BRAIN PER SEAT. `StartMeleeAI` is the map script's to call and nothing here can stop
     // it being called twice — a melee init that ran and a fallback that ran on top of it did
     // exactly that (see `MapViewerScene.startMelee`), and two brains on one seat is not a

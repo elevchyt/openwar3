@@ -15,6 +15,7 @@ import { mountCampaignScreen, type CampaignScreenState } from "./ui/fdfCampaign"
 import { mountCustomCampaignScreen } from "./ui/fdfCustomCampaign";
 import { mountViewReplayScreen } from "./ui/fdfViewReplay";
 import { loadCampaigns, type Campaign } from "./data/campaigns";
+import { isRoc, setEdition } from "./data/edition";
 import {
   loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
 } from "./data/campaignProgress";
@@ -197,11 +198,38 @@ function mainMenuScreen(vfs: DataSource): { chrome: "MainMenu"; mount: () => Pro
     chrome: "MainMenu",
     mount: () => mountFdfMainMenu(ui, vfs, {
       onSinglePlayer: () => void glue.goTo(singlePlayerScreen(vfs)),
+      onEdition: () => void switchEdition(vfs),
       onLan: () => void glue.goTo(lanScreen(vfs)),
       onOptions: () => void glue.goTo(optionsScreen(vfs)),
       onQuit: () => window.close(),
     }),
   };
+}
+
+/**
+ * The main menu's edition button: Reign of Chaos ↔ The Frozen Throne (docs/editions.md).
+ *
+ * The whole menu fades to black as it stands; under the black the edition flips — which re-points
+ * every object table (src/vfs/edition.ts) and every versioned war3skins key — the 3D scene, both
+ * panel models and the logo are reloaded as the other edition's, the glue theme and wind swap, and
+ * everything this module remembered about the other edition's campaigns is dropped. The new main
+ * menu then arrives on its own chrome Birth as the black lifts.
+ */
+async function switchEdition(vfs: DataSource): Promise<void> {
+  await glue.crossWorlds(async () => {
+    setEdition(isRoc() ? "tft" : "roc");
+    campaigns = [];
+    campaignState = null;
+    await menuScene?.reloadEdition();
+    glueAudio?.swapEdition();
+  }, mainMenuScreen(vfs));
+}
+
+/** The install's maps the current edition can open. A Reign of Chaos client never could read a
+ *  `.w3x` — that extension IS the expansion's map format — so its lists offer the `.w3m`s only. */
+function editionMaps(): Map<string, File> {
+  if (!isRoc()) return installMaps;
+  return new Map([...installMaps].filter(([path]) => !/\.w3x$/i.test(path)));
 }
 
 /** The Options screen (issue #81), built from the game's own OptionsMenu.fdf. Its chrome is
@@ -284,7 +312,7 @@ function lanScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => P
     chrome: "BattlenetCustom",
     mount: () => {
       const { lobby, connected } = lanSession();
-      return mountLanScreen(ui, vfs, installMaps, lobby, connected, {
+      return mountLanScreen(ui, vfs, editionMaps(), lobby, connected, {
         onCancel: () => { endLanSession(); void glue.goTo(mainMenuScreen(vfs)); },
         onCreateGame: () => void glue.goTo(lanCreateScreen(vfs)),
         // The relay confirmed a join: everyone in a room sits in the lobby, host or not.
@@ -299,7 +327,7 @@ function lanScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => P
 function lanCreateScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
   return {
     chrome: "BattlenetCustom",
-    mount: () => mountLanCreateScreen(ui, vfs, installMaps, lanSession().lobby, {
+    mount: () => mountLanCreateScreen(ui, vfs, editionMaps(), lanSession().lobby, {
       onCreate: (path, info, gameName, advanced, server) => {
         const { lobby, connected } = lanSession();
         // The room is as big as the lobby: the map's slots, plus the Observers bench when the
@@ -336,7 +364,7 @@ function lanLobbyScreen(
 ): { chrome: "MultiplayerPreGameChat"; mount: () => Promise<FdfScreen> } {
   return {
     chrome: "MultiplayerPreGameChat",
-    mount: () => mountLanLobbyScreen(ui, vfs, installMaps, lanSession().lobby, map, {
+    mount: () => mountLanLobbyScreen(ui, vfs, editionMaps(), lanSession().lobby, map, {
       onCancel: () => void glue.goTo(lanScreen(vfs)),
       onStart: (path, info, config, link) => void startGame(mapFileFor(path), info, config, link),
     }, advanced),
@@ -410,9 +438,8 @@ let campaignState: CampaignScreenState | null = null;
 async function openCampaignScreen(vfs: DataSource): Promise<void> {
   if (!campaigns.length) campaigns = await loadCampaigns(vfs);
   if (!campaigns.length) {
-    // A Reign-of-Chaos-only install: UI\CampaignStrings_exp.txt is a TFT file, and RoC's
-    // same-named predecessor is a different format we don't read yet (data/campaigns.ts).
-    console.warn("[OpenWar3] no TFT campaign index in this install — Campaign unavailable");
+    // An install that ships neither edition's index (data/campaigns.ts `loadCampaigns`).
+    console.warn("[OpenWar3] no campaign index for this edition in this install — Campaign unavailable");
     return;
   }
   campaignState ??= { campaign: campaigns[0], chapters: false, difficulty: loadDifficulty() };
@@ -572,7 +599,7 @@ const DIFFICULTY_INDEX: Record<Difficulty, number> = { easy: 0, normal: 1, hard:
 function skirmishScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; mount: () => Promise<FdfScreen> } {
   return {
     chrome: "SinglePlayerSkirmish",
-    mount: () => mountSkirmish(ui, vfs, installMaps, {
+    mount: () => mountSkirmish(ui, vfs, editionMaps(), {
       onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
       onStart: (file, info, config) => void startGame(file, info, config),
     }),

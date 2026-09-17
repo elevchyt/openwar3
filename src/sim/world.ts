@@ -31,6 +31,7 @@ import {
   GAME_HOURS_PER_SEC,
   armorDamageReduction,
   creepXpFactor,
+  miscGame,
   damageMultiplier,
   etherealDamageMultiplier,
   ETHEREAL_SPELL_BONUS,
@@ -14499,7 +14500,9 @@ export class SimWorld {
 
   /** Award XP to the killer's heroes for a kill (Liquipedia sharing rules). */
   private awardKillXp(victim: SimUnit, killerId: number): void {
-    if (victim.building || !killerId) return; // structures / unattributed deaths grant no XP
+    // Structures grant no XP — on the expansion. Reign of Chaos's MiscGame.txt says
+    // `BuildingKillsGiveExp=1` (MISC_GAME_V0), so razing a building there pays like a kill.
+    if (!killerId || (victim.building && !miscGame("BuildingKillsGiveExp"))) return;
     const killer = this.killerUnit(killerId);
     // Only an ENEMY kill grants XP: killing your own or an allied unit (same team),
     // or a neutral-passive critter/shop, awards nothing (issue #21). Without this the
@@ -14530,15 +14533,21 @@ export class SimWorld {
     // with an illusion, the share it "took" went nowhere, because the pool is split evenly
     // among the sharers before anybody is paid. Left in, a Hex on the only hero present fed a
     // whole creep camp's experience to a chicken.
-    const sharer = (h: SimUnit): boolean => h.isHero && !h.isIllusion && !h.hexed && h.hp > 0;
+    //
+    // Reign of Chaos turned that drain OFF (`MaxLevelHeroesDrainExp=0`, MISC_GAME_V0): there a
+    // max-level hero is simply not a sharer, and the heroes still levelling split the kill.
+    const drains = !!miscGame("MaxLevelHeroesDrainExp");
+    const sharer = (h: SimUnit): boolean =>
+      h.isHero && !h.isIllusion && !h.hexed && h.hp > 0 && (drains || h.level < MAX_HERO_LEVEL);
     const eligible: SimUnit[] = [];
     for (const h of this.units.values()) {
       if (!sharer(h) || h.team === victim.team) continue;
       if (killer && h.team !== killer.team) continue; // only the killer's side (team = alliance group)
       if (Math.hypot(h.x - victim.x, h.y - victim.y) <= XP_SHARE_RANGE) eligible.push(h);
     }
-    if (!eligible.length) {
-      // No hero in range: GlobalExperience=1 — award to ALL the killer's heroes
+    if (!eligible.length && miscGame("GlobalExperience")) {
+      // No hero in range: GlobalExperience=1 (the expansion's; Reign of Chaos's is 0, and there a
+      // kill with no hero near it pays nobody) — award to ALL the killer's heroes
       // regardless of distance (still split among them, no per-distance loss).
       for (const h of this.units.values()) {
         if (sharer(h) && killer && h.team === killer.team) eligible.push(h);

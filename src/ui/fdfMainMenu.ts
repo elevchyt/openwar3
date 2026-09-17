@@ -3,6 +3,7 @@ import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { arg, num, setProp, str } from "./mapBrowser";
+import { isRoc } from "../data/edition";
 
 // The main menu, constructed from the game's own UI\FrameDef\Glue\MainMenu.fdf
 // (issue #54) rather than hand-authored DOM. This is the payoff of the FDF engine:
@@ -59,6 +60,8 @@ const VERSION_FONT = 0.013;
 
 export interface MainMenuHandlers {
   onSinglePlayer: () => void;
+  /** The square beside Single Player: switch Reign of Chaos ↔ The Frozen Throne. */
+  onEdition?: () => void;
   onOnline?: () => void;
   onLan?: () => void;
   onOptions?: () => void;
@@ -103,6 +106,7 @@ export function mountFdfMainMenu(
     shortcutOverrides: { BattleNetButton: "N" },
     handlers: {
       SinglePlayerButton: h.onSinglePlayer,
+      EditionButton: h.onEdition ?? log("Edition"),
       BattleNetButton: h.onOnline ?? log("Online"),
       LocalAreaNetworkButton: h.onLan ?? log("Local Area Network"),
       OptionsButton: h.onOptions ?? log("Options"),
@@ -133,6 +137,8 @@ function buildMainMenuRoot(lib: FdfLibrary): FdfFrame {
   const root = lib.resolveRoot("MainMenuFrame");
   if (!root) throw new Error("MainMenu.fdf: no MainMenuFrame frame");
 
+  wearOtherEdition(root);
+
   const line = lib.resolveRoot("StandardSmallTitleTextTemplate");
   if (line) {
     line.name = VERSION_FRAME;
@@ -150,6 +156,23 @@ function buildMainMenuRoot(lib: FdfLibrary): FdfFrame {
     root.children.push(line);
   }
   return root;
+}
+
+/**
+ * THE EDITION BUTTON shows the edition it takes you TO. MainMenu.fdf dresses `EditionButton` in
+ * `UI\Widgets\Glues\GlueScreen-ROC-EditionButton-{up,down,disabled}.blp` — the Reign of Chaos
+ * emblem, on the expansion's menu, because pressing it goes there — and the install ships the
+ * `-TFT-` twin of all three for the other way round. The file is the expansion's, so on a Reign
+ * of Chaos menu its three backdrops are pointed at the twin.
+ */
+function wearOtherEdition(frame: FdfFrame): void {
+  if (isRoc() && frame.name.startsWith("EditionButton")) {
+    frame.props = frame.props.map((p) => ({
+      key: p.key,
+      args: p.args.map((a) => (a.str ? { ...a, s: a.s.replace(/-ROC-EditionButton/i, "-TFT-EditionButton") } : a)),
+    }));
+  }
+  for (const child of frame.children) wearOtherEdition(child);
 }
 
 /**

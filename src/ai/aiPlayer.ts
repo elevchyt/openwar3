@@ -8,6 +8,7 @@ import { HALL_MINE_DISTANCE, isOffField, type SimMine, type SimUnit, type SimWor
 import { footprintBuildable, footprintCellsAt, footprintRadius, type Footprint } from "../sim/destructibles";
 import { PATHING_CELL } from "../sim/pathing";
 import { heroReviveCost } from "../data/gameplayConstants";
+import { isRoc } from "../data/edition";
 import {
   BUILD_EXPAND, BUILD_UNIT, BUILD_UPGRADE, ELF_MINE, MELEE_INSANE, MELEE_NEWBIE, TOWN_COUNT_EQUIVALENTS,
 } from "./ids";
@@ -533,9 +534,41 @@ export class AiPlayer {
     this.buildList = [];
   }
 
-  /** `SetBuildAll(t, qty, id, town)` — the one push every setter below goes through. */
+  /** `SetBuildAll(t, qty, id, town)` — the one push every setter below goes through.
+   *
+   *  …and the one place a row for something this EDITION does not have is dropped (`makeable`),
+   *  so no setter above it and no race file has to know which game it is playing. */
   private setBuildAll(type: number, qty: number, item: string, town: number): void {
-    if (qty > 0) this.buildList.push({ type, qty, item, town });
+    if (qty > 0 && this.makeable(item)) this.buildList.push({ type, qty, item, town });
+  }
+
+  /**
+   * Does the loaded tech tree have this id AT ALL — a unit, a building or an upgrade this
+   * edition's data declares?
+   *
+   * Both AIs' build orders are written against The Frozen Throne: `human.ai`/`orc.ai`/… are the
+   * expansion's scripts, and plus/races.ts was measured on the expansion's tables. Reign of Chaos
+   * reads its object tables out of `Melee_V0\Units\` (src/vfs/edition.ts), and those have no
+   * section at all for anything the expansion added — no `[hvlt]`/`[ovln]`/`[utom]`/`[eden]` in
+   * any `Melee_V0\Units\*UnitFunc.txt`, no fourth hero (`Hblm`/`Oshd`/`Ucrl`/`Ewar`), no
+   * `hspt`/`hdhw`/`otbr`/`ospw`/`uobs`/`emtg`/`efdr`, no `hatw`/`uzg2` tower upgrade, and none
+   * of `Rhss`/`Rhfc`/`Rhfs`/`Rhrt`/`Rhcd`/`Robk`/`Rolf`/`Rorb`/`Rowt`/`Rubu`/`Rusm`/`Rusp`/
+   * `Reeb`/`Reec`/`Rehs`/`Rers`/`Rews` in the `*UpgradeFunc.txt`. (`UnitData.slk` still carries
+   * a row for the units — the World Editor lists them — but `UnitBalance.slk` has no price for
+   * them and no building `Trains` or `Builds` them.)
+   *
+   * A row for such an id is not harmless. `startUnit` read a missing BALANCE row as a free unit
+   * and went on to `SetProduce` it every pass, and a Computer+ hero row naming a Blood Mage never
+   * produced the first hero at all — which the rows under it wait on. Asked of the tech tree's
+   * own `has` rather than of a list of expansion ids, so it is the DATA that decides: the
+   * expansion's own tables answer yes for every id both AIs name, and a custom melee map's
+   * object data (the overlay `has` reads too) can add to it. A host with no `has` (the headless
+   * stub hosts in tools/) is taken at its word, as before.
+   */
+  makeable(id: string): boolean {
+    if (!id) return false;
+    const tech = this.host.tech as Partial<TechRegistry> | undefined;
+    return typeof tech?.has !== "function" || tech.has(id);
   }
 
   /** `SetBuildUnit(qty, id)` — "have at least qty of these". */
@@ -1817,13 +1850,21 @@ export class AiPlayer {
   // ======================================================================================
 
   /**
-   * `PickMeleeHero(race)` — three of the race's four heroes, in a random order, drawn exactly
-   * as common.ai draws them: pick one of `last`, swap the last into its slot, pick one of
-   * `last-1`, and so on. (TFT makes `last` 4; Reign of Chaos made it 3.)
+   * `PickMeleeHero(race)` — three of the race's heroes, in a random order, drawn exactly as
+   * common.ai draws them: pick one of `last`, swap the last into its slot, pick one of
+   * `last-1`, and so on.
+   *
+   * `last` is the EDITION's, and common.ai says so itself (2565–2569):
+   * `if VersionCompatible(VERSION_FROZEN_THRONE) then set last = 4 else set last = 3`. The
+   * array is filled in the same order for both (common.ai 2533–2560, the fourth hero last), so
+   * under Reign of Chaos the draw simply never reaches it — which is also the only hero
+   * `Melee_V0\Scripts\*.ai` (RoC's own race scripts) never names in their `set_skills`. With
+   * three in the pool the third pick is `GetRandomInt(1, 1)`: whichever hero the two swaps left
+   * in slot one.
    */
   pickMeleeHero(heroes: readonly string[]): void {
     const pool = [...heroes];
-    const last = pool.length; // 4 — VersionCompatible(VERSION_FROZEN_THRONE)
+    const last = Math.min(pool.length, isRoc() ? 3 : 4);
     const first = this.randomInt(1, last);
     const second = this.randomInt(1, last - 1);
     const third = this.randomInt(1, last - 2);

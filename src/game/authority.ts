@@ -6,7 +6,7 @@ import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
 import type { Command } from "./commands";
-import { MISC_ENGINE, MISC_GAME, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
+import { engineFoodCeiling, MISC_GAME, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
 
 // The authority half of the bridge (docs/multiplayer.md Phase B): the questions whose
 // answers are THE GAME'S, not one machine's view of it — who owns what, what a player can
@@ -84,7 +84,7 @@ export class Authority {
    * one. Set once at the start of a match (RtsController.setMapFoodCeiling), before a line of
    * the map's script runs, so a `SetPlayerState(…, FOOD_CAP_CEILING, …)` still wins over it.
    */
-  private defaultFoodCeiling: number = MISC_ENGINE.FoodCeiling;
+  private defaultFoodCeiling: number = engineFoodCeiling(); // 90 on Reign of Chaos (MISC_ENGINE)
 
   constructor(
     private sim: SimWorld,
@@ -405,7 +405,7 @@ export class Authority {
   /** The ceiling this MAP asks for (`war3mapMisc.txt` `[Misc] FoodCeiling`), or null for the
    *  engine's own 100. Applies to every player who has not been given one of their own. */
   setMapFoodCeiling(value: number | null): void {
-    this.defaultFoodCeiling = value === null ? MISC_ENGINE.FoodCeiling : Math.max(0, Math.floor(value));
+    this.defaultFoodCeiling = value === null ? engineFoodCeiling() : Math.max(0, Math.floor(value));
   }
 
   /** Debug "add food" cheat — raise a player's supply cap. */

@@ -1,6 +1,7 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
-import { parseWar3Skins, skinValue, SKIN_VERSION_SUFFIX, WAR3SKINS } from "../data/war3skins";
+import { parseWar3Skins, skinValue, WAR3SKINS } from "../data/war3skins";
+import { skinVersionSuffix } from "../data/edition";
 import { LayeredDataSource } from "../vfs/layered";
 import type { DataSource } from "../vfs/types";
 
@@ -1398,8 +1399,15 @@ export class SoundBoard {
       candidates = [name];
     } else {
       const skins = this.loadSkins();
-      const list = skinValue(skins, this.musicSkin, name + SKIN_VERSION_SUFFIX) ?? skinValue(skins, this.musicSkin, name) ?? "";
+      const list = skinValue(skins, this.musicSkin, name + skinVersionSuffix()) ?? skinValue(skins, this.musicSkin, name) ?? "";
       candidates = list.split(";");
+      // A Reign of Chaos playlist whose songs this install never downloaded (1.30.4 streams the
+      // mp3s, and a store can hold the expansion's and not the original's) plays the expansion
+      // list rather than nothing (docs/editions.md).
+      const tft = skinValue(skins, this.musicSkin, name + "_V1");
+      if (tft && !candidates.some((p) => p.trim() && this.vfs.exists(p.trim().replace(/\//g, "\\")))) {
+        candidates = tft.split(";");
+      }
     }
     return candidates.map((p) => p.trim().replace(/\//g, "\\")).filter((p) => p && this.vfs.exists(p));
   }

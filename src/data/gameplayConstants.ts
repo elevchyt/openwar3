@@ -1,3 +1,4 @@
+import { isRoc } from "./edition";
 import { ArmorType, AttackType } from "./enums";
 
 // WC3's "Gameplay Constants" — the numbers the engine reads out of two INI files
@@ -316,6 +317,44 @@ export const MISC_DATA = {
 } as const;
 
 /**
+ * `Melee_V0\Units\MiscGame.txt` [Misc] — REIGN OF CHAOS's copy of the file above, for the rows it
+ * disagrees on (docs/editions.md). Only the differences are restated; every other key is the
+ * same in both files, and `miscGame()` falls back to MISC_GAME for it. `pnpm data:verify` checks
+ * this block against the RoC file exactly as it checks MISC_GAME against the live one.
+ *
+ * Most of what made Reign of Chaos play differently is here rather than in the unit tables: its
+ * damage table (Normal hits SMALL for 150 %, Magic hits MEDIUM for 200 %), creep XP that never
+ * tapers (`HeroFactorXP=100`), experience that is shared only by heroes in range
+ * (`GlobalExperience=0`), and buildings that pay experience when razed.
+ */
+export const MISC_GAME_V0 = {
+  DamageBonusNormal: [1.5, 1.0, 1.0, 0.5, 1.0, 1.0, 0.05, 1.0],
+  DamageBonusPierce: [0.75, 1.0, 1.5, 0.35, 1.0, 0.5, 0.05, 1.5],
+  DamageBonusSiege: [0.5, 1.0, 1.0, 1.5, 1.0, 0.5, 0.05, 1.5],
+  DamageBonusMagic: [1.0, 2.0, 1.0, 0.35, 1.0, 0.5, 0.05, 1.0],
+  DamageBonusSpells: [1.0, 1.0, 1.0, 1.0, 1.0, 0.75, 0.05, 1.0],
+  GlobalExperience: 0,
+  MaxLevelHeroesDrainExp: 0,
+  BuildingKillsGiveExp: 1,
+  HeroFactorXP: [100],
+  MinUnitSpeed: 10,
+  MinBldgSpeed: 10,
+  DisplayEnemyInventory: 0,
+} as const;
+
+/** The engine's food ceiling for the edition the client is on — 100, or Reign of Chaos's 90. */
+export function engineFoodCeiling(): number {
+  return isRoc() ? MISC_ENGINE.FoodCeiling_V0 : MISC_ENGINE.FoodCeiling;
+}
+
+/** The `[Misc]` row `key` for the edition the client is on: Reign of Chaos's where its file
+ *  differs (MISC_GAME_V0), the live file's everywhere else. */
+export function miscGame<K extends keyof typeof MISC_GAME>(key: K): (typeof MISC_GAME)[K] | number | readonly number[] {
+  if (isRoc() && key in MISC_GAME_V0) return MISC_GAME_V0[key as keyof typeof MISC_GAME_V0];
+  return MISC_GAME[key];
+}
+
+/**
  * `Misc` gameplay constants whose base value the ENGINE holds — keys the World Editor's
  * Gameplay Constants dialog exposes and a map may state in its own `war3mapMisc.txt`
  * (src/data/mapMisc.ts), but which no shipped `MiscGame.txt` / `MiscData.txt` row carries. They
@@ -336,6 +375,12 @@ export const MISC_ENGINE = {
    * would be clamped straight back off.
    */
   FoodCeiling: 100,
+  /**
+   * …and Reign of Chaos's, **90** — the food limit the original shipped with and the expansion
+   * raised (docs/editions.md). Like the 100 it is in no file: RoC's own MiscMetaData caps the
+   * editor field at 300 and says nothing of the default.
+   */
+  FoodCeiling_V0: 90,
 } as const;
 
 /** `UI\MiscData.txt` [Minimap] + [FogOfWar]. The minimap's own palette: how a creep
@@ -622,29 +667,44 @@ export const ARMOR_TYPE_ORDER: readonly ArmorType[] = [
   ArmorType.None,
 ];
 
-const DAMAGE_BONUS_ROWS: ReadonlyArray<readonly [AttackType, readonly number[]]> = [
-  [AttackType.Normal, MISC_GAME.DamageBonusNormal],
-  [AttackType.Pierce, MISC_GAME.DamageBonusPierce],
-  [AttackType.Siege, MISC_GAME.DamageBonusSiege],
-  [AttackType.Magic, MISC_GAME.DamageBonusMagic],
-  [AttackType.Chaos, MISC_GAME.DamageBonusChaos],
-  [AttackType.Spells, MISC_GAME.DamageBonusSpells],
-  [AttackType.Hero, MISC_GAME.DamageBonusHero],
-];
+type DamageTable = Readonly<Record<string, Readonly<Record<string, number>>>>;
 
-/** attack type → armor type → damage multiplier, unpacked from the `DamageBonus*` lists. */
-export const DAMAGE_TABLE: Readonly<Record<string, Readonly<Record<string, number>>>> =
-  Object.fromEntries(
-    DAMAGE_BONUS_ROWS.map(([attack, bonuses]) => [
+/** attack type → armor type → multiplier, unpacked from one file's `DamageBonus*` lists. */
+function unpackDamageTable(misc: Record<string, unknown>): DamageTable {
+  const row = (key: string): readonly number[] =>
+    (misc[key] ?? (MISC_GAME as Record<string, unknown>)[key]) as readonly number[];
+  const rows: ReadonlyArray<readonly [AttackType, readonly number[]]> = [
+    [AttackType.Normal, row("DamageBonusNormal")],
+    [AttackType.Pierce, row("DamageBonusPierce")],
+    [AttackType.Siege, row("DamageBonusSiege")],
+    [AttackType.Magic, row("DamageBonusMagic")],
+    [AttackType.Chaos, row("DamageBonusChaos")],
+    [AttackType.Spells, row("DamageBonusSpells")],
+    [AttackType.Hero, row("DamageBonusHero")],
+  ];
+  return Object.fromEntries(
+    rows.map(([attack, bonuses]) => [
       attack,
       Object.fromEntries(ARMOR_TYPE_ORDER.map((armor, i) => [armor, bonuses[i]])),
     ]),
   );
+}
+
+/** attack type → armor type → damage multiplier, unpacked from the `DamageBonus*` lists. The
+ *  expansion's; `damageTable()` is the one for the edition the client is on. */
+export const DAMAGE_TABLE: DamageTable = unpackDamageTable(MISC_GAME);
+/** …and Reign of Chaos's, off `Melee_V0\Units\MiscGame.txt`. */
+export const DAMAGE_TABLE_V0: DamageTable = unpackDamageTable(MISC_GAME_V0);
+
+/** The damage table of the edition the client is on (data/edition.ts). */
+export function damageTable(): DamageTable {
+  return isRoc() ? DAMAGE_TABLE_V0 : DAMAGE_TABLE;
+}
 
 /** Damage multiplier for `attack` striking `armor`. An unknown pair (a weaponless
  *  attacker, a unit with no defType) scales by 1.0 rather than vanishing. */
 export function damageMultiplier(attack: AttackType, armor: ArmorType): number {
-  return DAMAGE_TABLE[attack]?.[armor] ?? 1;
+  return damageTable()[attack]?.[armor] ?? 1;
 }
 
 /** The attack-type order of the `EtherealDamageBonus` list, per MiscGame.txt's own
@@ -829,7 +889,8 @@ export function grantedXp(victimLevel: number, victimIsHero: boolean): number {
  *  fraction). 80% at level 1, tapering to nothing from level 5 — high heroes cannot
  *  farm camps. Heroes are always level ≥ 1; level 0 is treated as level 1. */
 export function creepXpFactor(heroLevel: number): number {
-  const table = MISC_GAME.HeroFactorXP;
+  // Reign of Chaos's is the one-entry list `100`: a creep pays in full at every level.
+  const table = miscGame("HeroFactorXP") as readonly number[];
   const i = Math.max(1, Math.min(heroLevel, table.length)) - 1;
   return table[i] / 100;
 }

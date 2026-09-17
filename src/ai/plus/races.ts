@@ -865,6 +865,96 @@ export const PLUS_RACES: Record<PlayableRace, PlusRaceTable> = {
 };
 
 /**
+ * What `tableForEdition` needs to know of the loaded tech tree — `TechRegistry.has`, a type's
+ * tier-0 `Requires` and a worker's `Builds`, and nothing else. An interface rather than the
+ * registry so the headless ladder test can hand it a parsed `Melee_V0` profile.
+ */
+export interface EditionTech {
+  has(id: string): boolean;
+  requires(id: string): readonly string[];
+  builds(id: string): readonly string[];
+}
+
+/**
+ * A race's table as REIGN OF CHAOS's data can play it.
+ *
+ * Every table above was written — and measured, tools/ai-plus-ladder-test.cjs — against The
+ * Frozen Throne's object tables. Reign of Chaos reads `Melee_V0\Units\*` instead
+ * (src/vfs/edition.ts), and the difference that matters here is all in those profiles:
+ *
+ *  · **What does not exist.** No section at all for any race's fourth hero (`Hblm`, `Oshd`,
+ *    `Ucrl`, `Ewar`), its shop (`hvlt`, `ovln`, `utom`, `eden`), the Spell Breaker, the
+ *    Dragonhawk Rider, the Troll Batrider, the Spirit Walker, the Obsidian Statue, the Mountain
+ *    Giant, the Faerie Dragon or the Arcane Tower — and none of the upgrades that came with them.
+ *    Dropped from every place a table names them: the unit catalogue, the mixes, the hero
+ *    orders and their skill builds, the `factories`, `always`, `antiAir`, `towerUpgrades`,
+ *    `support`, the upgrade list and `shop` (left empty — plus/plan.ts `shop` then asks for
+ *    nothing, and plus/items.ts shops at whatever neutral shelf the map has, as it always could).
+ *    A build whose whole army was expansion units would be dropped too; none of the twenty-one is,
+ *    and a `thenAt3` pointing at a dropped build is cut rather than left dangling.
+ *  · **What moved.** Five RoC `Requires` put a unit a TIER later than the expansion does, and a
+ *    row that is asked for a tier early is a `SetBuildNext` the authority refuses every pass
+ *    while `OneBuildLoop` still reserves its price off the running budget: `[owyv] Requires=ofrt`
+ *    (the Wind Rider waits for the Fortress), `[ugar] Requires=ugrv,unp2` (the Gargoyle for the
+ *    Black Citadel), `[ebal] Requires=etoa,edob` (the Glaive Thrower for the Tree of Ages),
+ *    `[hgra] Requires=hcas,hlum` (the Aviary for the Castle) and `[edos] Requires=etoe,eaow`
+ *    (the Chimaera Roost wants an Ancient of Wind). So a row's `tier` and `needs` are RAISED off
+ *    the data — the unit's own `Requires` and its producer's — and never lowered: a hall id in
+ *    them is a tier, a building the race's worker `Builds` is a need, and nothing else is read.
+ *
+ * Applied at seat time and only on Reign of Chaos (`ComputerPlusAi.add`): the expansion's
+ * tables are the ones these rows were tuned on, and they are left exactly as written.
+ */
+export function tableForEdition(table: PlusRaceTable, tech: EditionTech): PlusRaceTable {
+  const has = (id: string | undefined): boolean => !!id && tech.has(id);
+  const buildings = new Set(tech.builds(table.worker));
+
+  const units: Record<string, UnitRow> = {};
+  for (const [unit, row] of Object.entries(table.units)) {
+    if (!has(unit) || (row.from && !has(row.from)) || (row.needs ?? []).some((n) => !has(n))) continue;
+    let tier = row.tier;
+    const needs = [...(row.needs ?? [])];
+    for (const req of [...tech.requires(unit), ...(row.from ? tech.requires(row.from) : [])]) {
+      const hall = table.halls.indexOf(req);
+      if (hall >= 0) tier = Math.max(tier, hall + 1);
+      else if (req !== row.from && buildings.has(req) && !needs.includes(req)) needs.push(req);
+    }
+    units[unit] = { ...row, tier, ...(needs.length ? { needs } : {}) };
+  }
+  const known = (unit: string): boolean => unit in units;
+
+  const heroes = table.heroes.filter(has);
+  const kept = table.strategies
+    .map((s): PlusStrategy | null => {
+      const mix = Object.fromEntries(Object.entries(s.mix).filter(([u]) => known(u)));
+      if (!Object.keys(mix).length) return null;
+      const order = s.heroes?.filter(has);
+      const factories = s.factories
+        ? Object.fromEntries(Object.entries(s.factories).filter(([b]) => has(b)))
+        : undefined;
+      return { ...s, mix, heroes: order?.length ? order : undefined, factories };
+    })
+    .filter((s): s is PlusStrategy => s !== null);
+  const ids = new Set(kept.map((s) => s.id));
+  const strategies = kept.map((s) => (s.thenAt3 && !ids.has(s.thenAt3) ? { ...s, thenAt3: undefined } : s));
+
+  return {
+    ...table,
+    units,
+    heroes,
+    skills: Object.fromEntries(Object.entries(table.skills).filter(([h]) => has(h))),
+    // Never an empty table: `rollStrategy` has to be able to answer. No real data set gets here.
+    strategies: strategies.length ? strategies : table.strategies,
+    support: table.support.filter((r) => has(r.build)),
+    upgrades: table.upgrades.filter((r) => has(r.id) && has(r.from)),
+    shop: has(table.shop) ? table.shop : "",
+    towerUpgrades: table.towerUpgrades?.filter((r) => has(r.id)),
+    antiAir: table.antiAir && known(table.antiAir.unit) ? table.antiAir : undefined,
+    always: table.always?.filter((r) => known(r.unit)),
+  };
+}
+
+/**
  * Roll one of a race's strategies.
  *
  * Weighted, off the AI's own stream (never `SimWorld.random` — see `AiPlayer`'s constructor),

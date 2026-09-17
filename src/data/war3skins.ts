@@ -15,10 +15,9 @@
 
 export const WAR3SKINS = "UI\\war3skins.txt";
 
-/** The `_V<n>` suffix the engine appends to a versioned key. Warcraft III keys its music
- *  lists by game version — `Music_V0` is Reign of Chaos, `Music_V1` is The Frozen Throne.
- *  We target TFT, so V1. (A `_V1Beta` set also ships; the engine ignores it.) */
-export const SKIN_VERSION_SUFFIX = "_V1";
+// The `_V<n>` suffix the engine appends to a versioned key (`Music_V0` is Reign of Chaos,
+// `Music_V1` The Frozen Throne) follows the edition the client is on: `skinVersionSuffix()` in
+// data/edition.ts.
 
 /** Parse war3skins.txt into `section → key → value`. */
 export function parseWar3Skins(src: string): Map<string, Map<string, string>> {

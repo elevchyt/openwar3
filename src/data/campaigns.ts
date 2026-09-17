@@ -1,5 +1,6 @@
 import type { DataSource } from "../vfs/types";
-import { parseWar3Skins, skinValue, SKIN_VERSION_SUFFIX, WAR3SKINS } from "./war3skins";
+import { parseWar3Skins, skinValue, WAR3SKINS } from "./war3skins";
+import { isRoc, skinVersionSuffix } from "./edition";
 
 // The campaign index (issue #101) — what the Campaign screen is a view of.
 //
@@ -25,13 +26,20 @@ import { parseWar3Skins, skinValue, SKIN_VERSION_SUFFIX, WAR3SKINS } from "./war
 // UI\Glues\SinglePlayer\NightElf_Exp\NightElf_Exp.mdl, the TFT backdrop, while `_V0` would give
 // the RoC one. That is the same `_V1` suffix the music playlists use (data/war3skins.ts).
 //
-// TFT ONLY, deliberately: Reign of Chaos's UI\CampaignStrings.txt predates this format (its
-// campaigns are hardcoded frames in RoC's CampaignMenu.fdf, and its missions are parallel
-// `TitleN`/`MissionN`/`FileN` keys with no CampaignList at all). OpenWar3 targets TFT first;
-// the RoC layout is a content profile for later, not a second code path today.
+// WHICH file is itself a versioned war3skins key: `[Default] CampaignFile_V1=UI\CampaignStrings_exp.txt`
+// and `CampaignFile_V0=UI\CampaignStrings.txt` (docs/editions.md). On 1.30.4 the Reign of Chaos
+// file is the SAME format — a CampaignList of five sections (Tutorial, Human, Undead, Orc,
+// NightElf), `MissionN` rows naming `Maps\Campaign\*.w3m` — so one parser reads both.
+//
+// Four of RoC's section names are also TFT's (`Human` is The Scourge of Lordaeron in one file and
+// Curse of the Blood Elves in the other), so a Reign of Chaos campaign's KEY carries a `RoC.`
+// prefix: the key is what progress is saved under (campaignProgress.ts), and finishing one
+// edition's Human campaign must not open the other's.
 
-/** The expansion campaign index. RoC's same-named file is the older format — see above. */
+/** The expansion campaign index — `CampaignFile_V1`, and the fallback when war3skins is absent. */
 export const CAMPAIGN_INDEX = "UI\\CampaignStrings_exp.txt";
+/** Reign of Chaos's — `CampaignFile_V0`. */
+export const ROC_CAMPAIGN_INDEX = "UI\\CampaignStrings.txt";
 
 /** The racial cursor a campaign screen wears. From the file's own header comment:
  *  "Human = 0, Orc = 1, Undead = 2, Night Elf = 3." */
@@ -72,7 +80,7 @@ export interface Campaign {
   name: string;
   /** Selectable from a fresh profile (`DefaultOpen=1`); the others unlock in list order. */
   defaultOpen: boolean;
-  /** The war3skins key for the 3D backdrop, already `_V1`-resolved to a model path. */
+  /** The war3skins key for the 3D backdrop, already resolved (`_V0`/`_V1`, by edition) to a model path. */
   background: string | null;
   /** The screen's distance fog, straight out of the campaign's `BackgroundFog*` keys. */
   fog: { style: number; r: number; g: number; b: number; a: number; density: number; start: number; end: number };
@@ -89,23 +97,31 @@ export interface Campaign {
   end: CampaignEntry | null;
 }
 
-/** Read and parse the campaign index out of the mounted install. Returns [] when the file
- *  isn't there (a Reign-of-Chaos-only install). */
+/** Read and parse the current edition's campaign index out of the mounted install. Returns []
+ *  when the file isn't there. */
 export async function loadCampaigns(vfs: DataSource): Promise<Campaign[]> {
-  if (!vfs.exists(CAMPAIGN_INDEX)) return [];
-  const src = new TextDecoder("latin1").decode(await vfs.read(CAMPAIGN_INDEX));
   const skins = vfs.exists(WAR3SKINS)
     ? parseWar3Skins(new TextDecoder("latin1").decode(await vfs.read(WAR3SKINS)))
     : new Map<string, Map<string, string>>();
+  const file = skinValue(skins, "Default", "CampaignFile" + skinVersionSuffix())
+    ?? (isRoc() ? ROC_CAMPAIGN_INDEX : CAMPAIGN_INDEX);
+  if (!vfs.exists(file)) return [];
+  const src = new TextDecoder("latin1").decode(await vfs.read(file));
   // war3skins spells the backdrop `.mdl` (the World Editor's own spelling); the archives ship
   // the compiled `.mdx`. Same swap as everywhere else a data file names a model
   // (render/dayNight.ts, mapViewer.ts) — without it the campaign screen has no background.
   return parseCampaigns(src, (key) =>
-    skinValue(skins, "Default", key + SKIN_VERSION_SUFFIX)?.replace(/\.mdl$/i, ".mdx") ?? null);
+    skinValue(skins, "Default", key + skinVersionSuffix())?.replace(/\.mdl$/i, ".mdx") ?? null,
+  isRoc() ? "RoC." : "");
 }
 
 /** The parse itself, split out so it can be run headlessly over the raw file. */
-export function parseCampaigns(src: string, resolveBackground: (key: string) => string | null): Campaign[] {
+export function parseCampaigns(
+  src: string,
+  resolveBackground: (key: string) => string | null,
+  /** Prepended to every campaign's key — `RoC.` for Reign of Chaos's file (see the header). */
+  keyPrefix = "",
+): Campaign[] {
   const sections = parseSections(src);
   const list = splitValues(sections.get("Index")?.get("CampaignList") ?? "")
     .map(unquote)
@@ -117,7 +133,7 @@ export function parseCampaigns(src: string, resolveBackground: (key: string) => 
     if (!s) continue;
     const bg = unquote(s.get("Background") ?? "");
     out.push({
-      key,
+      key: keyPrefix + key,
       header: unquote(s.get("Header") ?? key),
       name: unquote(s.get("Name") ?? ""),
       defaultOpen: (s.get("DefaultOpen") ?? "0").trim() === "1",

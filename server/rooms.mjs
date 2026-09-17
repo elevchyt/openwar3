@@ -40,6 +40,9 @@ const roomInfo = (r) => ({
   maxPlayers: r.maxPlayers,
   // Full Observers: the list prints " (observers)" after the game, as the real client does.
   observers: r.observers,
+  // Which game the host is on — Reign of Chaos or The Frozen Throne. Passed through untouched;
+  // the clients list only their own edition's games (src/net/protocol.ts RoomInfo.edition).
+  edition: r.edition,
 });
 
 const peerInfo = (p) => ({ id: p.id, name: p.name, host: p.host });
@@ -171,6 +174,7 @@ export class RelayCore {
           mapPath: msg.mapPath || "",
           maxPlayers: Math.max(2, Math.min(12, msg.maxPlayers || 12)),
           observers: msg.observers === true,
+          edition: msg.edition === "roc" ? "roc" : "tft",
           peers: new Map([[peer.id, peer]]),
           nextPeerId: 2,
         };

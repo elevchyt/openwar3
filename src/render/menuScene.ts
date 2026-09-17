@@ -3,6 +3,7 @@ import { maxOmniLights, renderScale } from "./videoQuality";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
 import type { DataSource } from "../vfs/types";
+import { isRoc } from "../data/edition";
 import { makeFog, type DistFog } from "./fog";
 import { animTimeout, onAnimFrame, type AnimTimer } from "./animClock";
 import { widescreen } from "../ui/widescreen";
@@ -36,6 +37,26 @@ const LEFT_ROC = "UI\\Glues\\SpriteLayers\\TopLeftPanel.mdx";
 // scene's lights nor its fog; it is UI printed over the seascape, not part of it.
 const LOGO_TFT = "UI\\Glues\\MainMenu\\WarCraftIIILogo_exp\\WarCraftIIILogo_exp.mdx";
 const LOGO_ROC = "UI\\Glues\\MainMenu\\WarCraftIIILogo\\WarCraftIIILogo.mdx";
+
+/** The expansion scene's camera, fog and light — the values `MenuScene.tuning` is declared with,
+ *  restated so switching back from Reign of Chaos restores them (see `MenuScene.load`). */
+const TFT_SCENE_TUNING = {
+  camZoom: 0.82, camPanX: 0, camPanY: 10, camFov: 0.72, camYaw: 0, camPitch: 0, camRoll: 0,
+  lightAmbient: 0.65, fogStart: 1800, fogEnd: 4800, fogR: 0.67, fogG: 0.7, fogB: 0.83,
+};
+
+/**
+ * Reign of Chaos's main-menu scene (`MainMenu3d.mdx` — the sunlit meadow, not Icecrown). Its own
+ * authored camera frames it with the dolly below; the fog is pushed past the set,
+ * because the expansion's lavender haze belongs to a snowbound seascape. Tuned by eye against the
+ * running scene (`?menudebug`), not read from a file — the engine's framing is not in one.
+ */
+const ROC_SCENE_TUNING = {
+  // Dollied in and narrowed so the widescreen frame stays inside the set: at the authored camera
+  // (1 / 1) a 16:9 screen shows the black past the meadow's edges down the left and the bottom.
+  camZoom: 0.8, camPanX: 0, camPanY: 0, camFov: 0.85, camYaw: 0, camPitch: 0, camRoll: 0,
+  lightAmbient: 0.5, fogStart: 6000, fogEnd: 20000, fogR: 0.6, fogG: 0.65, fogB: 0.7,
+};
 
 /**
  * Half-width of the logo's ortho window, in the model's OWN units.
@@ -586,8 +607,14 @@ export class MenuScene {
 
   /** Load the background scene + the sprite-layer panels and loop their idle clips. */
   async load(): Promise<void> {
-    const tft = this.vfs.exists(TFT_MENU);
+    // The edition the client is on (data/edition.ts) — war3skins' `GlueSpriteLayer*_V0/_V1` and
+    // `MainMenuLogo_V0/_V1` name exactly these pairs. An install with no expansion scene at all
+    // (an MPQ-era Reign of Chaos folder) wears Reign of Chaos's whatever the switch says.
+    const tft = !isRoc() && this.vfs.exists(TFT_MENU);
     const bgPath = tft ? TFT_MENU : ROC_MENU;
+    // The camera/fog/light block is tuned per SCENE: the expansion's numbers sit the Icecrown
+    // seascape behind the panel, and would put Reign of Chaos's set somewhere else entirely.
+    Object.assign(this.tuning, tft ? TFT_SCENE_TUNING : ROC_SCENE_TUNING);
 
     const bytes = await this.vfs.read(bgPath);
     const bg = (await this.viewer.load(bytes, this.solver)) as MdxModel | undefined;
@@ -1057,6 +1084,15 @@ export class MenuScene {
     // by the ambient rather than dropped back onto the stock 0.7 wash.
     o.count = n;
     this.scene3d.omniLights = o;
+  }
+
+  /** The edition changed (data/edition.ts): throw the scene's instances away and load the other
+   *  edition's set — background, both panel models and the logo — on the SAME viewer and GL
+   *  context. Models already parsed stay in the viewer's cache, so switching back is quick. */
+  async reloadEdition(): Promise<void> {
+    this.dispose();
+    await this.load();
+    this.start();
   }
 
   stop(): void {
