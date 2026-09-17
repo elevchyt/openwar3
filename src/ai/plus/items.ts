@@ -743,7 +743,7 @@ export class PlusItems {
       else if (this.view.allied?.(u)) friends.push(u);
     }
     for (const u of own) {
-      if (!u.inventory.length || !this.canAct(u)) continue;
+      if (!u.inventory.length || !this.canAct(u) || this.view.world.holdsChannel(u.id)) continue;
       this.press(u, own, friends, foes, ctx);
     }
     this.loot(now, own, foes);
@@ -774,7 +774,7 @@ export class PlusItems {
       else if (this.view.allied?.(u)) friends.push(u);
     }
     for (const u of own) {
-      if (!u.inventory.length || !this.canAct(u)) continue;
+      if (!u.inventory.length || !this.canAct(u) || this.view.world.holdsChannel(u.id)) continue;
       this.press(u, own, friends, foes, ctx);
     }
   }
@@ -993,6 +993,10 @@ export class PlusItems {
    *  worker clauses — a hero is never harvesting. Silence does NOT stop an item (that is the
    *  point of items), but being stunned, paused or mid-morph does. */
   private canAct(u: SimUnit): boolean {
+    // (The BELT additionally leaves a hero holding a channel alone — the pass and beltPass: a pressed
+    // item breaks the channel in the sim, so a Salve drunk mid-Starfall would throw the Starfall
+    // away. The Town Portal escape (portalTo) asks only this, because breaking the channel to leave IS
+    // the decision there.)
     if (u.building || u.paused || u.stunned || u.isIllusion || u.morphT > 0) return false;
     return u.spawning <= 0;
   }

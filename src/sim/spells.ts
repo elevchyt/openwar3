@@ -388,8 +388,8 @@ export interface SpellFieldInit {
   maxDamagePerWave?: number; // "Maximum Damage per Wave" (DataF): the total a single wave may
   //                            deal across everything it hits. Over that, the wave splits its
   //                            budget evenly — Blizzard's 30/wave hits 5 units for full, 10 for 15.
-  buildingReduction?: number; // "Building Reduction" (DataD): fraction of the wave's damage a
-  //                             BUILDING shrugs off (0.5 → structures take half).
+  buildingReduction?: number; // "Building Reduction": the SHARE of the wave's damage a BUILDING
+  //                             takes (0.5 → half, Starfall's 0.35 → 35%). 0/absent = full.
   dot?: { dps: number; duration: number; heroDuration: number; group: string; art: string; buffId: string }; // per-wave
   //       burn left on everything the wave hits (Rain of Fire's "and N damage per second for 3 seconds").
   impactDelay?: number; // seconds between a wave's art SPAWNING and its damage landing. The shard
@@ -2301,8 +2301,10 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const interval = d(lvl, 1, 1.5) || 1.5;
     const waves = Math.max(4, Math.round((lvl.duration || 45) / interval));
     const hit = fx(def).fx[0];
+    // DataC "Building Reduction" 0.35 — a structure takes 35% of a wave (landWave).
     api.addSpellField({
       code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800, damagePerWave: d(lvl, 0, 50), waves, interval, casterId: caster.id,
+      buildingReduction: d(lvl, 2, 0.35),
       art: "", loopSound: fieldLoop(def), casterArt: def.fxArt, hitArt: hit?.path ?? "", hitAttach: hit?.attach,
     });
   },

@@ -190,7 +190,10 @@ in the world has to go with it. There are two shapes, and they need different te
 
 * **Field channels** — Blizzard, Rain of Fire, Starfall, Tranquility, Death and Decay,
   Stampede, Earthquake. The effect is a repeating `SpellField`; `tickSpellFields` drops the
-  field the moment the caster is re-tasked away from `cast` with channel time left. A model
+  field the moment the caster is re-tasked away from `cast` with channel time left — and a
+  stun or a PRESSED ITEM re-tasks it too ("If you use potions it will interrupt the
+  Starfall", Liquipedia; `SimWorld.useItem`), which is why Computer+'s belt leaves a
+  channelling hero alone. A model
   the field holds on its CASTER (`SpellFieldInit.casterArt` — Starfall's `[XEsf]`
   StarfallCaster, a Birth/Stand/Death model) is drawn off `activeSpellFields`, so it plays its
   Death the same frame. Not every field's effect-object art is a shard to scatter: Starfall's

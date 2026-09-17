@@ -250,6 +250,8 @@ function pressed(units, profile, ctx, opts = {}) {
     items: new Map((opts.ground ?? []).map((it) => [it.id, it])),
     itemReadyError: () => opts.notReady ?? null,
     itemUseError: () => opts.badTarget ?? null,
+    // A pressed item breaks the presser's own channel in the sim (SimWorld.useItem).
+    holdsChannel: (id) => (opts.channelling ?? []).includes(id),
     shopReaches: () => false,
     shopStock: () => -1,
     missingForShop: () => [],
@@ -306,6 +308,12 @@ const itemOf = (cmd) => (cmd ? cmd.slot : null);
   const cmd = pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY);
   check("a hurt hero in a fight drinks its healing potion", itemOf(cmd), 0);
   check("…on itself, with no target", cmd && cmd.targetId, 0);
+}
+{
+  // "If you use potions it will interrupt the Starfall" (Liquipedia): the same hurt hero, but
+  // holding a channel, keeps it — a Salve is not worth an ultimate.
+  const h = belt(hero({ hp: 400 }), "phea");
+  check("…but not while it holds a channel (a potion would break it)", pressed([h, enemy({ x: 200 })], PLUS_INSANE, AWAY, { channelling: [h.id] }), null);
 }
 {
   const h = belt(hero({ hp: 400 }), "phea");
@@ -793,6 +801,7 @@ function wand(units, profile = PLUS_INSANE) {
     units: new Map(units.map((u) => [u.id, u])),
     items: new Map(),
     itemReadyError: () => null, itemUseError: () => null,
+    holdsChannel: () => false,
     shopReaches: () => false, shopStock: () => -1, missingForShop: () => [], isShopUnit: () => false,
     canUseShop: () => false,
     canPawnAt: () => false,
@@ -881,6 +890,7 @@ function shopped(units, profile, opts = {}) {
     items: new Map((opts.ground ?? []).map((it) => [it.id, it])), // ground drops — see `pressed`
     itemReadyError: () => null,
     itemUseError: () => null,
+    holdsChannel: () => false,
     shopReaches: () => opts.inRange ?? true,
     // -1 is "not stock-limited"; 0 is "sold out" — the sim's own distinction.
     shopStock: (_id, ware) => (opts.soldOut?.includes(ware) ? 0 : -1),
@@ -1192,6 +1202,7 @@ const spend = (h, id) => { const i = h.inventory.findIndex((s) => s?.itemId === 
     units: new Map([[h.id, h], [MERCHANT.id, MERCHANT]]),
     items: new Map(), // no drops on the grass — see `pressed`
     itemReadyError: () => null, itemUseError: () => null,
+    holdsChannel: () => false,
     shopReaches: () => false, shopStock: () => -1, missingForShop: () => [],
     isShopUnit: (id) => id === MERCHANT.id,
     canUseShop: (id) => id === MERCHANT.id,
@@ -1252,6 +1263,7 @@ function pawned(units, opts = {}) {
     units: new Map([...units, PAWNSHOP].map((u) => [u.id, u])),
     items: new Map(),
     itemReadyError: () => null, itemUseError: () => null,
+    holdsChannel: () => false,
     shopReaches: () => true, shopStock: () => 0, missingForShop: () => [],
     isShopUnit: (id) => id === PAWNSHOP.id,
     canUseShop: (id) => id === PAWNSHOP.id,

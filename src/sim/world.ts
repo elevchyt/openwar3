@@ -15364,8 +15364,11 @@ export class SimWorld {
       // damage" (Liquipedia, Spell Immunity), so a Destroyer in a capped Blizzard still
       // thins what everyone beside it takes.
       if (t.magicImmune && !FIELD_PIERCES_SPELL_IMMUNITY.has(w.code)) continue;
-      // "Building Reduction" (DataD): structures shrug off this fraction of the wave.
-      let dmg = t.building ? each * (1 - w.buildingReduction) : each;
+      // "Building Reduction": the SHARE of the wave a structure takes. Starfall's `Esf3` is 0.35
+      // and "Starfall damage vs. buildings is reduced to 35%" (Liquipedia, Starfall) — to, not by
+      // — which is the same reading Blizzard's and Rain of Fire's 0.5 give either way. 0 (a row
+      // that leaves the column blank) is no reduction at all.
+      let dmg = t.building && w.buildingReduction > 0 ? each * w.buildingReduction : each;
       // …and Death and Decay's is not a number of hit points at all but a SHARE of the
       // victim's pool (`Udd1 "Max Life Drained per Second (%)"` = 0.04), which is what
       // makes it the one spell a Town Hall genuinely fears.
@@ -21140,6 +21143,9 @@ export class SimWorld {
       const reach = this.itemAimReach(def);
       if (t && reach > 0 && Math.hypot(t.x - u.x, t.y - u.y) > reach + u.radius + t.radius) return this.issueUseItemWalk(u, slot, t);
     }
+    // The channel this press will break, read BEFORE the item works: an item that starts a
+    // channel of its own (the Town Portal's wait) must not be mistaken for the one it ended.
+    const channel = this.holdsChannel(u.id) ? u.pendingCast : null;
     // The active behaviour is the first granted ability with a code we handle.
     for (const abilId of def.abilities) {
       const ad = this.abilities.get(abilId);
@@ -21148,6 +21154,17 @@ export class SimWorld {
       if (fired === "unhandled") continue; // ability we don't handle — try the next one
       if (!fired) return false; // handled code but nothing to do (already full) — no charge spent
       this.consumeItemUse(u, slot, def, ad.levelData[0]?.cooldown || 0);
+      // …and a pressed item BREAKS A CHANNEL, the user's own. Using an item is an order, and a
+      // channel is held only for as long as the caster is given no other: "If you use potions it
+      // will interrupt the Starfall" (Liquipedia, Starfall) — the Keeper who drinks mid-
+      // Tranquility loses it the same way. The item still works; what goes is the channel, torn
+      // down exactly as a stun tears it down (interruptForStun), and its field and drain with it
+      // (tickSpellFields / tickDrains read the order). A press made DURING a Town Portal never
+      // gets here: nothing may be pressed during one (the `portalLeft` refusal above).
+      if (channel && u.pendingCast === channel && u.order === "cast") {
+        this.clearCast(u); // interrupted mid-channel → SPELL_ENDCAST
+        u.order = "idle";
+      }
       // A PRESSED ITEM SOUNDS, and it sounds the way a cast does. An item's active is an
       // ability, so the same event a spell raises is raised here and the renderer walks the
       // one chain it already has for a cast (mapViewer, drainFxCastFires): the caster
