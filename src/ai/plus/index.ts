@@ -1890,7 +1890,9 @@ export class ComputerPlusAi {
     const tech = this.host.tech;
     const table = isRoc()
       ? tableForEdition(base, {
-        has: (id) => tech.has(id),
+        // "does this edition MAKE it" — see TechRegistry.produces (never `has`, which answers
+        // a different question and loses the Moon Well).
+        has: (id) => tech.produces(id),
         requires: (id) => tech.requirements(id).map((r) => r.tech),
         builds: (id) => tech.builds(id),
       })

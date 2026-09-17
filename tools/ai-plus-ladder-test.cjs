@@ -534,7 +534,17 @@ function runEconomy() {
   //
   // The `*Func.txt` profiles, read the way src/data/techtree.ts reads them: every section is a
   // tech node, and a list key that repeats inside a section means the union (`mergeRepeatedLists`).
+  //
+  // "Does this edition have `id`" is `PRODUCED` — is it named by some section's Trains, Builds,
+  // Researches, Upgrade or Sellunits — which is what `TechRegistry.produces` answers and what
+  // both AIs ask. It is NOT "is there a section for it": every unit in the game has a section
+  // somewhere (art, tooltips, button position), so that test answers yes for the Blood Mage on
+  // Reign of Chaos, and this test passed while the live game had no Orc Burrows and no Moon
+  // Wells — their sections carry art and nothing else, so the engine's own node for them does
+  // not exist and the AI dropped its supply row.
   const TECH = new Map();
+  const PRODUCED = new Set();
+  const MAKES = ["trains", "builds", "researches", "upgrade", "sellunits"];
   for (const file of require("node:fs").readdirSync(UNITS_DIR)) {
     if (!/Func\.txt$/i.test(file)) continue;
     let cur = null;
@@ -545,17 +555,27 @@ function runEconomy() {
         TECH.set(head[1], cur);
         continue;
       }
-      const kv = /^(Requires|Builds)=(.*)$/i.exec(line);
+      const kv = /^(Requires|Builds|Trains|Researches|Upgrade|Sellunits)=(.*)$/i.exec(line);
       if (!cur || !kv) continue;
-      const list = kv[2].split(",").map((x) => x.trim().replace(/^"|"$/g, "")).filter(Boolean);
-      cur[kv[1].toLowerCase()].push(...list);
+      const key = kv[1].toLowerCase();
+      const list = kv[2].split(",").map((x) => x.trim().replace(/^"|"$/g, "")).filter((x) => x && x !== "_" && x !== "-");
+      if (key === "requires" || key === "builds") cur[key].push(...list);
+      if (MAKES.includes(key)) for (const made of list) PRODUCED.add(made);
     }
   }
   const editionTech = {
-    has: (id) => TECH.has(id),
+    has: (id) => PRODUCED.has(id),
     requires: (id) => TECH.get(id)?.requires ?? [],
     builds: (id) => TECH.get(id)?.builds ?? [],
   };
+  // The pieces a race cannot play WITHOUT, checked against the same question the AI asks. The
+  // supply building is the one this exists for: dropped, the seat is food-blocked for the whole
+  // match with its gold piling up, and every other check here still passes.
+  for (const [race, table] of Object.entries(PLUS_RACES)) {
+    const core = { worker: table.worker, supply: table.farm, altar: table.altar, hall: table.halls[0] };
+    const gone = Object.entries(core).filter(([, id]) => id && !editionTech.has(id)).map(([what, id]) => `${what} ${id}`);
+    check(`${race}: this edition makes its worker, supply, altar and hall`, gone.join(","), "");
+  }
   const TABLES = Object.fromEntries(Object.entries(PLUS_RACES).map(([race, table]) =>
     [race, EDITION === "roc" ? tableForEdition(table, editionTech) : table]));
   console.log(`\n--- the ${EDITION === "roc" ? "Reign of Chaos" : "Frozen Throne"} tables ---`);
@@ -570,7 +590,7 @@ function runEconomy() {
       ...(table.towerUpgrades ?? []).map((r) => r.id), ...(table.antiAir ? [table.antiAir.unit] : []),
       ...table.strategies.flatMap((st) => [...Object.keys(st.mix), ...(st.heroes ?? []), ...Object.keys(st.factories ?? {})]),
     ]);
-    const missing = [...named].filter((id) => id && !TECH.has(id));
+    const missing = [...named].filter((id) => id && !editionTech.has(id));
     check(`${race}: every id the table names exists in this edition`, missing.join(","), "");
     check(`${race}: three or more heroes to draw from`, table.heroes.length >= 3, true);
     check(`${race}: every strategy still has an army`, table.strategies.every((st) => Object.keys(st.mix).length > 0), true);

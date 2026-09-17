@@ -4,7 +4,7 @@ import type { ItemRegistry } from "../data/items";
 import type { UnitDef, UnitRegistry } from "../data/units";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
-import { HALL_MINE_DISTANCE, isOffField, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
+import { HALL_MINE_DISTANCE, isOffField, type SimMine, type SimTree, type SimUnit, type SimWorld } from "../sim/world";
 import { footprintBuildable, footprintCellsAt, footprintRadius, type Footprint } from "../sim/destructibles";
 import { PATHING_CELL } from "../sim/pathing";
 import { heroReviveCost } from "../data/gameplayConstants";
@@ -559,16 +559,21 @@ export class AiPlayer {
    *
    * A row for such an id is not harmless. `startUnit` read a missing BALANCE row as a free unit
    * and went on to `SetProduce` it every pass, and a Computer+ hero row naming a Blood Mage never
-   * produced the first hero at all — which the rows under it wait on. Asked of the tech tree's
-   * own `has` rather than of a list of expansion ids, so it is the DATA that decides: the
-   * expansion's own tables answer yes for every id both AIs name, and a custom melee map's
-   * object data (the overlay `has` reads too) can add to it. A host with no `has` (the headless
+   * produced the first hero at all — which the rows under it wait on.
+   *
+   * The question is `TechRegistry.produces` — does anything TRAIN, BUILD, RESEARCH, UPGRADE INTO
+   * or SELL this id — and not `has`, which only says whether the id has a node of its own. The
+   * difference is a whole race's supply: RoC's Orc Burrow and Moon Well research nothing and so
+   * have no node, while `[opeo] Builds=…,otrb` and `[ewsp] Builds=…,emow` build them all game.
+   * Read through `has`, both AIs dropped their supply row and sat food-blocked at 10/10 with
+   * thousands of gold banked (see `produces` in data/techtree.ts). It is the DATA that decides
+   * either way, including a custom map's object overlay. A host with no registry (the headless
    * stub hosts in tools/) is taken at its word, as before.
    */
   makeable(id: string): boolean {
     if (!id) return false;
     const tech = this.host.tech as Partial<TechRegistry> | undefined;
-    return typeof tech?.has !== "function" || tech.has(id);
+    return typeof tech?.produces !== "function" || tech.produces(id);
   }
 
   /** `SetBuildUnit(qty, id)` — "have at least qty of these". */
@@ -1713,11 +1718,51 @@ export class AiPlayer {
   }
 
   private sendToWood(u: SimUnit, town: Town): boolean {
-    const tree = this.host.world.nearestTree(town.x, town.y, 3000);
+    const tree = this.safeTree(town);
     if (!tree) return false;
     return this.host.execute(this.player, {
       c: "order", unitId: u.id, order: { kind: "harvest", res: "lumber", nodeId: tree.id }, queued: false,
     });
+  }
+
+  /**
+   * THE TREE A LUMBERJACK IS SENT TO IS NEVER ONE A CREEP CAMP IS STANDING IN.
+   *
+   * The slice under every race's harvest plan is `HarvestWood(0, 10..40)` — everybody the gold
+   * slices did not take goes to the forest — and the forest at a base runs out. The nearest tree
+   * then walks outward, camp by camp, and the plan cheerfully sent the WHOLE worker force to
+   * stand inside one: watched in a real match on Lost Temple (both editions), an orc's fourteen
+   * peons chopped their way to 4,400 units from their hall, were eaten by the ogres and forest
+   * trolls out there, and the seat sat at 0 food with 22 gold and no way to train a replacement
+   * for the rest of the match. Its hero died with them.
+   *
+   * So a candidate is skipped while anything HOSTILE and able to fight is within `WOOD_CREEP_CLEAR`
+   * of it. That is the tree's own neighbourhood rather than the route to it, because a creep only
+   * pulls what comes inside its own acquisition ring (docs/creeps.md: "Camp (200)") — a worker
+   * that walks past one and keeps going is not what killed these.
+   *
+   * Two deliberate softenings, because starving the forest is its own deadlock (`LUMBER_DRY` —
+   * a lumber shortfall with no lumber income never shrinks):
+   *  · trees are considered nearest-first out to the same reach as before, so the cheap
+   *    uncontested tree next door is still the one that is picked;
+   *  · and if EVERY tree in reach has a creep in it, the nearest is taken anyway. A base ringed
+   *    by camps has to chop somewhere, and that is the AI's own problem to survive — the same
+   *    answer a player gives.
+   */
+  private safeTree(town: Town): SimTree | null {
+    const world = this.host.world;
+    const trees = world.nearestTrees(town.x, town.y, WOOD_REACH, WOOD_CANDIDATES);
+    if (!trees.length) return null;
+    const threats: SimUnit[] = [];
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || u.building || u.owner === this.player) continue;
+      if (!u.weapons.length || !this.hostileTo(u)) continue;
+      threats.push(u);
+    }
+    for (const tree of trees) {
+      if (!threats.some((t) => Math.hypot(t.x - tree.x, t.y - tree.y) < WOOD_CREEP_CLEAR)) return tree;
+    }
+    return trees[0];
   }
 
   /** "Go back to the trees" — a single worker, at whichever of our towns has one within reach,
@@ -2256,6 +2301,17 @@ export class AiPlayer {
  *  clustering's own `CAMP_LINK` is 600 (MiscGame CreepCallForHelp), so this is one camp's
  *  radius plus the slack a party's objective is allowed to have drifted by. */
 const CAMP_MATCH = 900;
+
+/** How far from a town the harvest plan will look for a tree — the reach `sendToWood` has
+ *  always had. */
+const WOOD_REACH = 3000;
+/** How many of them to consider before giving up on finding an uncontested one (nearest-first,
+ *  so this is depth of search rather than a choice among equals). */
+const WOOD_CANDIDATES = 40;
+/** A hostile body this close to a tree makes it somebody else's tree (see `safeTree`). Wider
+ *  than a camp's own 200-unit acquisition ring, because a worker chops from outside the trunk
+ *  and a camp answers a call from its whole body (docs/creeps.md `campFightAnchor`). */
+const WOOD_CREEP_CLEAR = 700;
 
 /** How close a loose hostile body has to be to an expansion site to be sitting ON it —
  *  `expansionFoe`'s first question. Ours. */

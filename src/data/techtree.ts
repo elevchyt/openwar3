@@ -73,6 +73,8 @@ const EMPTY: TechDef = {
 export class TechRegistry {
   /** unit type id → every tech id a live one of them satisfies (see `satisfies`). */
   private satisfiesCache = new Map<string, string[]>();
+  /** Every id this tech tree PRODUCES — see `produces`. Built with the indexes below. */
+  private produced = new Set<string>();
   /** id → the ids whose `Upgrade` list names it (its upgrade-chain PARENTS). */
   private parents = new Map<string, string[]>();
   /** id → the ids that name it in their `DependencyOr` (i.e. requirements it helps meet). */
@@ -125,10 +127,15 @@ export class TechRegistry {
     this.parents.clear();
     this.equivalents.clear();
     this.satisfiesCache.clear();
+    this.produced.clear();
     for (const def of new Map([...this.defs, ...this.custom]).values()) {
       for (const to of def.upgrade) push(this.parents, to, def.id);
       // `[TWN2] DependencyOr=hkee,ostr,...` — owning a Keep satisfies the pseudo-tech TWN2.
       for (const from of def.dependencyOr) push(this.equivalents, from, def.id);
+      // …and everything anything MAKES, for `produces`.
+      for (const made of [...def.trains, ...def.builds, ...def.researches, ...def.upgrade, ...def.sellunits]) {
+        this.produced.add(made);
+      }
     }
     this.indexDirty = false;
   }
@@ -147,6 +154,27 @@ export class TechRegistry {
   revives(id: string): boolean {
     return this.get(id).revive;
   }
+  /**
+   * Does anything in this tech tree MAKE `id` — is it trained, built, researched, upgraded
+   * into or sold by some node?
+   *
+   * This is the question "does this edition have it at all" (docs/editions.md), and it is NOT
+   * `has`. `has` answers "is there a NODE for this id", and a node only exists for a row that
+   * says something about the tech tree itself — so the Orc Burrow and the Moon Well, which
+   * train nothing and (in Reign of Chaos) research nothing, have no node in RoC's profiles
+   * while `[opeo] Builds=…,otrb,…` and `[ewsp] Builds=…,emow,…` plainly still build them.
+   * Asked the other way round, a Blood Mage is absent exactly as it should be: RoC's
+   * `[halt] Trains=Hamg,Hmkg,Hpal` never names it, whatever `UnitData.slk` still carries.
+   *
+   * Reading `has` here cost the AIs their supply buildings on Reign of Chaos: a food-blocked
+   * orc stood at 10/10 with two thousand gold banked, because the row that would have built a
+   * Burrow was dropped before it ever reached the build list.
+   */
+  produces(id: string): boolean {
+    if (this.indexDirty) this.reindex();
+    return this.produced.has(id);
+  }
+
   /** Does a building of this type PRODUCE units — i.e. does it take a rally point?
    *
    *  `Trains` and nothing else. `Sellunits` is a different field and a different thing: a

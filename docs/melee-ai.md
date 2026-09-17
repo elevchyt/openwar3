@@ -408,6 +408,18 @@ how you watch a base go up without scouting it.
 ## Reign of Chaos
 
 The race files here are the EXPANSION's scripts. On Reign of Chaos (docs/editions.md) a build
-row for an id the loaded tech tree lacks never enters the build list (`AiPlayer.makeable`), and
+row for an id THIS EDITION MAKES never enters the build list (`AiPlayer.makeable` →
+`TechRegistry.produces`: is it trained, built, researched, upgraded into or sold by something?).
+That question is not `TechRegistry.has`, which only says whether the id has a tech NODE, and a
+node exists only for a row that carries tech fields — so RoC's Orc Burrow and Moon Well, which
+research nothing, have none. Asked through `has`, both AIs dropped their own supply row and sat
+food-blocked at 10/10 with two thousand gold banked while queuing units that could never pop.
+A build
 `pickMeleeHero` draws from three heroes — common.ai's own `VersionCompatible(VERSION_FROZEN_THRONE)`
-branch. RoC's own scripts (`Melee_V0\Scripts\*.ai`) are a different strategy and are not ported.
+branch.
+
+A LUMBERJACK is never sent to a tree a creep camp is standing in (`AiPlayer.safeTree`). The
+forest at a base runs out, the nearest tree then walks outward camp by camp, and the plan sent
+the whole worker force to stand inside one: watched on Lost Temple in BOTH editions, an orc's
+fourteen peons chopped their way 4,400 units from their hall, were eaten out there, and the seat
+finished the match at 0 food with 22 gold and no worker to replace them. RoC's own scripts (`Melee_V0\Scripts\*.ai`) are a different strategy and are not ported.
