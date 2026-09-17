@@ -20,8 +20,9 @@ import { readMapScript, type MapScript } from "./triggers";
 //
 // Flag bit meanings: WC3 w3i format (Hive Workshop map spec / wc3maptranslator).
 
-/** war3map.w3i global-property flags (Map Properties dialog). Only `melee`
- *  drives behaviour today; the rest are decoded for diagnostics / future use. */
+/** war3map.w3i global-property flags (Map Properties dialog). `melee` and
+ *  `maskedAreaPartiallyVisible` (`startsExplored`) drive behaviour; the rest are decoded for
+ *  diagnostics / future use. */
 export const W3I_FLAGS = {
   hideMinimapPreview: 0x0001,
   modifyAllyPriorities: 0x0002,
@@ -37,6 +38,18 @@ export const W3I_FLAGS = {
   waterWavesOnCliffShores: 0x0800,
   waterWavesOnRollingShores: 0x1000,
 } as const;
+
+/**
+ * Does this map OPEN explored — its whole terrain handed over as grey memory rather than the
+ * black mask? That is the World Editor's "Masked areas are partially visible" (Scenario → Map
+ * Options), the w3i's 0x0010, and it is what the lobby's Default visibility means: the MAP's own
+ * choice. Every stock melee map sets it, which is why Default looked like "explored on melee";
+ * a custom map may set it too — WTii's Unit Tester (flags 0xdc1a, no melee bit) opens fully
+ * explored in the real client and has no trigger that reveals anything.
+ */
+export function startsExplored(flags: number): boolean {
+  return (flags & W3I_FLAGS.maskedAreaPartiallyVisible) !== 0;
+}
 
 export type MapKind = "melee" | "custom";
 

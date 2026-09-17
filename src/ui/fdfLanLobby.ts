@@ -1,6 +1,7 @@
 import type { DataSource } from "../vfs/types";
 import { RACES, RACE_LABEL } from "../data/races";
 import type { MapInfo } from "../world/mapInfo";
+import { startsExplored } from "../world/mapKind";
 import type { MapPreview } from "../world/mapPreview";
 import { sanitizeChat } from "../game/chat";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
@@ -318,7 +319,7 @@ export async function mountLanLobbyScreen(
     lobby.onChange = () => {};
     lobby.onStart = () => {};
     lobby.onPeerData = () => {};
-    h.onStart(msg.mapPath, map.info, toConfig(msg, me, map.info.isMelee), link);
+    h.onStart(msg.mapPath, map.info, toConfig(msg, me, startsExplored(map.info.classification.flags)), link);
   };
 
   /** Actually begin the match: the host's own countdown has run out. */

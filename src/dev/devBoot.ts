@@ -7,6 +7,7 @@ import {
 import type { GateLoad } from "../ui/gate";
 import type { FogMode, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
+import { startsExplored } from "../world/mapKind";
 import { RACES, type Race } from "../data/races";
 import { LanLobby, type LobbyState } from "../net/lobby";
 import { WebSocketTransport } from "../net/transport";
@@ -353,6 +354,6 @@ async function devLanBoot(
   const me = lobby.snapshot.you?.id;
   const hostPeer = lobby.snapshot.peers.find((p) => p.host)?.id ?? 1;
   const link = matchLinkFrom(lobby, lobby.isHost, start.slots, me, hostPeer, observerSeats(start));
-  const config = { ...toConfig(start, me, info.isMelee), fog };
+  const config = { ...toConfig(start, me, startsExplored(info.classification.flags)), fog };
   await hooks.startGame(file, info, config, link);
 }

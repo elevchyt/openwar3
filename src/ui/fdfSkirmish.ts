@@ -10,6 +10,7 @@ import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { profilePlayerName } from "../data/profiles";
 import { VISIBILITY_ITEMS, visibilityFog, type Visibility } from "../net/advancedOptions";
+import { startsExplored } from "../world/mapKind";
 import { freeColorsFor, swapColors } from "../net/lobbySetup";
 import { OBSERVER_PLAYER, meleeSeat, type Controller, type FogMode, type MeleeConfig, type SlotConfig } from "./lobby";
 import {
@@ -139,8 +140,8 @@ export async function mountSkirmish(
     sharedControl: false,
     randomRaces: false,
     randomHero: false,
-    /** Opens on DEFAULT, the real client's own default — the MAP's visibility, which on a melee
-     *  map is Map Explored and on a custom map the black mask (advancedOptions.ts `visibilityFog`). */
+    /** Opens on DEFAULT, the real client's own default — the MAP's visibility: Map Explored when
+     *  its w3i says so (every melee map does), else the black mask (advancedOptions.ts `visibilityFog`). */
     visibility: "DEFAULT" as Visibility,
     /**
      * **Computer+** — play the computer seats with OpenWar3's own improved melee AI
@@ -273,7 +274,7 @@ export async function mountSkirmish(
     const picked = browser.selected;
     if (!picked) return;
     h.onStart(picked.file, picked.info, toConfig(slots, picked.info, {
-      fog: visibilityFog(advanced.visibility, picked.info.isMelee),
+      fog: visibilityFog(advanced.visibility, startsExplored(picked.info.classification.flags)),
       computerPlus: advanced.computerPlus,
       observer: advanced.observerMode,
     }));

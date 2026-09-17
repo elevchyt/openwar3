@@ -53,7 +53,7 @@ export interface AdvancedOptions {
  * observers, the map's own visibility.
  *
  * VISIBILITY opens on **Default**, the real client's own choice, on both screens — which is the
- * MAP's own visibility: explored on a melee map, the black mask on a custom one (`visibilityFog`). It is the default in BOTH senses, so a LAN game on it prints no
+ * MAP's own visibility: explored when the map says so, else the black mask (`visibilityFog`). It is the default in BOTH senses, so a LAN game on it prints no
  * Advanced Options block (`isDefaultAdvanced`) and an older client's silence reads as it too
  * (`advancedOf`).
  *
@@ -80,24 +80,26 @@ export function isDefaultAdvanced(a: AdvancedOptions): boolean {
 
 /**
  * What each visibility choice means to the match — on THIS map, because `DEFAULT` is not a fog
- * mode of its own: it is "whatever the map says", and a MELEE map says Map Explored. Every one
- * of the 192 stock melee maps in the 1.30.4 install carries the w3i melee flag (`W3I_FLAGS.melee`)
- * together with "Masked areas are partially visible" (`maskedAreaPartiallyVisible`), and a real
- * melee game on Default opens with the whole map as grey terrain memory — gold mines, shops and
- * trees in the fog from the first second — never on the pitch-black mask. So Default and Map
- * Explored only part ways on a custom map, which keeps the black mask its script expects.
+ * mode of its own: it is "whatever the map says", and a map says it with the w3i's "Masked
+ * areas are partially visible" flag (`startsExplored`, mapKind.ts). Every one of the 192 stock
+ * melee maps in the 1.30.4 install carries it, and a real melee game on Default opens with the
+ * whole map as grey terrain memory — gold mines, shops and trees in the fog from the first
+ * second — never on the pitch-black mask. A custom map is the MAP's call as well, not a rule
+ * about custom maps: this used to read the MELEE flag instead, which agrees on every stock map
+ * and put WTii's Unit Tester (the flag set, no melee bit, no reveal trigger anywhere in its
+ * script) under a black mask the real client never draws on it.
  *
  * `HIDE_TERRAIN` stays unexplored on every map (that is what it is for), and lands on the same
- * `FogMode` as a custom map's Default because we model one unexplored state, not two: WC3's Hide
- * Terrain additionally blanks the terrain in the minimap preview and the loading screen, which is
- * a presentation difference on ground that is black either way while you play.
+ * `FogMode` as an unexplored map's Default because we model one unexplored state, not two: WC3's
+ * Hide Terrain additionally blanks the terrain in the minimap preview and the loading screen,
+ * which is a presentation difference on ground that is black either way while you play.
  */
-export function visibilityFog(v: Visibility, isMelee: boolean): FogMode {
+export function visibilityFog(v: Visibility, mapExplored: boolean): FogMode {
   switch (v) {
     case "MAP_EXPLORED": return "explored";
     case "ALWAYS_VISIBLE": return "revealall";
     case "HIDE_TERRAIN": return "unexplored";
-    default: return isMelee ? "explored" : "unexplored";
+    default: return mapExplored ? "explored" : "unexplored";
   }
 }
 
