@@ -104,14 +104,14 @@ panel in the top-left drives whichever 3D scene is up. On the campaign screen it
 has no sprite-layer chrome to frame anything against. "Log values" prints every backdrop
 touched this session, one line per model path, ready to be baked in.
 
-**That flag also opens every campaign row** (`isCampaignOpen`, `data/campaignProgress.ts`), and
-it has to: a campaign's scene is only up once that campaign has been SELECTED, so on a fresh
-profile most of the backdrops could not be reached to be tuned at all — the expansion opens two
-of its four, Reign of Chaos one of its five. The CHAPTER rows keep their own rule and no progress
-is written, so the profile is exactly as it was next time the game is opened without it. The
-edition is reachable the same way, without clicking through the menu: **`?dev&edition=roc`**
+The edition is reachable without clicking through the menu: **`?dev&edition=roc`**
 (`src/dev/devBoot.ts`), set before the install door because the switch re-points every object
-table (`docs/editions.md`).
+table (`docs/editions.md`). A LOCKED campaign's backdrop still cannot be reached from a fresh
+profile — its scene is only up once that campaign has been selected — so tuning one means
+playing far enough to open it, or setting its progress by hand
+(`openwar3.campaigns.<profile>` in localStorage, `data/campaignProgress.ts`). Unlocking them
+all behind the debug flag was tried and taken back out: the tuning flag has no business
+deciding what a profile has finished.
 
 **The arrival is tuned separately from the pose it lands on.** The settled shot is a still
 picture and can be framed by eye; the Birth is a camera MOVE along the model's own KCTR track,

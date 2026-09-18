@@ -70,30 +70,11 @@ function saveProgress(p: Progress): void {
   } catch { /* storage unavailable — progress is lost, the menus still work */ }
 }
 
-/**
- * `?menudebug` opens every campaign ROW.
- *
- * The backdrop tuning panel (issue #105, ui/menuDebug.ts) drives whichever 3D scene is on
- * screen, and a campaign's scene is only up once that campaign has been SELECTED — so on a
- * fresh profile the locked campaigns' backdrops could not be reached at all, which is most of
- * them in both editions (TFT opens two of four, Reign of Chaos one of five). This is the
- * tuning switch's own gate and nothing else: the CHAPTER rows keep their rule, and no progress
- * is written, so the profile is exactly as it was when the browser is next opened without it.
- */
-function tuningBackdrops(): boolean {
-  if (typeof location === "undefined") return false; // headless (tools/campaign-test.cjs)
-  try {
-    return new URLSearchParams(location.search).has("menudebug");
-  } catch {
-    return false;
-  }
-}
-
 /** Is `campaign` selectable? DefaultOpen, or the previous campaign in the list is finished. */
 export function isCampaignOpen(campaigns: Campaign[], index: number, p = loadProgress()): boolean {
   const c = campaigns[index];
   if (!c) return false;
-  if (c.defaultOpen || tuningBackdrops()) return true;
+  if (c.defaultOpen) return true;
   const prev = campaigns[index - 1];
   if (!prev) return true;
   return completed(prev, p) >= prev.missions.length;

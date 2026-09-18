@@ -41,6 +41,28 @@ export const CAMPAIGN_INDEX = "UI\\CampaignStrings_exp.txt";
 /** Reign of Chaos's — `CampaignFile_V0`. */
 export const ROC_CAMPAIGN_INDEX = "UI\\CampaignStrings.txt";
 
+/**
+ * The map the main menu's **Credits** button plays.
+ *
+ * WC3's credits are not a screen — they are a MAP, played exactly as a chapter is, and
+ * `Game.dll` names all four of them in one run (docs/reverse-engineering/game-dll-thread.md):
+ *
+ *     maps\campaign\War3XBonusCredits.w3x        maps\campaign\BonusCredits.w3m
+ *     maps\campaign\War3XRegularCreditsIce.w3x   maps\campaign\WarcraftIIICredits.w3m
+ *
+ * A REGULAR and a BONUS one per edition. The button plays the regular one; the bonus pair is
+ * what the Bonus campaign closes ON, which is a campaign ending rather than a menu button.
+ *
+ * The dll spells all four under `maps\campaign\`, but the install puts the expansion's two
+ * under `Maps\FrozenThrone\Campaign\` with the rest of the TFT campaign — so those are the
+ * paths here, the install's own spelling rather than the string in the binary.
+ */
+export function creditsMap(): string {
+  return isRoc()
+    ? "Maps\\Campaign\\WarCraftIIICredits.w3m"
+    : "Maps\\FrozenThrone\\Campaign\\War3XRegularCreditsIce.w3x";
+}
+
 /** The racial cursor a campaign screen wears. From the file's own header comment:
  *  "Human = 0, Orc = 1, Undead = 2, Night Elf = 3." */
 export const CURSOR_RACES = ["Human", "Orc", "Undead", "NightElf"] as const;

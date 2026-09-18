@@ -14,7 +14,7 @@ import { mountSkirmish } from "./ui/fdfSkirmish";
 import { mountCampaignScreen, type CampaignScreenState } from "./ui/fdfCampaign";
 import { mountCustomCampaignScreen } from "./ui/fdfCustomCampaign";
 import { mountViewReplayScreen } from "./ui/fdfViewReplay";
-import { loadCampaigns, type Campaign } from "./data/campaigns";
+import { creditsMap, loadCampaigns, type Campaign } from "./data/campaigns";
 import { isRoc, setEdition } from "./data/edition";
 import {
   loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
@@ -201,6 +201,7 @@ function mainMenuScreen(vfs: DataSource): { chrome: "MainMenu"; mount: () => Pro
       onEdition: () => void switchEdition(vfs),
       onLan: () => void glue.goTo(lanScreen(vfs)),
       onOptions: () => void glue.goTo(optionsScreen(vfs)),
+      onCredits: () => void startCredits(vfs),
       onQuit: () => window.close(),
     }),
   };
@@ -520,6 +521,32 @@ async function startCampaignMission(vfs: DataSource, c: Campaign, index: number,
   // the next chapter (data/campaignProgress.ts).
   pendingCampaign = { key: c.key, index };
   await startGame(bytes, info, campaignConfig(info, difficulty, mission.name));
+}
+
+/**
+ * The main menu's Credits button (`creditsMap`, data/campaigns.ts).
+ *
+ * WC3's credits are a MAP and nothing else — there is no credits screen to build — so this is
+ * the chapter path with the campaign taken out of it: the edition's credits map out of the
+ * archives, on `campaignConfig`, and the match's own script rolls the names. Everything that
+ * makes a CHAPTER a chapter is deliberately absent: `pendingCampaign` is cleared, because
+ * watching the credits finishes nothing and a victory the map's own script declares must not
+ * be credited to whatever chapter was last played.
+ *
+ * Difficulty is Normal, and it is not a choice withheld: no screen offers one here, and the
+ * map asks nothing of `GetGameDifficulty`.
+ */
+async function startCredits(vfs: DataSource): Promise<void> {
+  const path = creditsMap();
+  const bytes = await readMapBytes(vfs, path);
+  if (!bytes) {
+    console.warn(`[OpenWar3] credits map missing from this install: ${path}`);
+    return;
+  }
+  applyMenuCursor(vfs); // no glue screen arrives after this one — the match does
+  const info = parseMapInfo(bytes, "Credits");
+  pendingCampaign = null;
+  await startGame(bytes, info, campaignConfig(info, "normal", info.name || "Credits"));
 }
 
 /** The chapter the player is IN, so a victory can be credited to it. */
