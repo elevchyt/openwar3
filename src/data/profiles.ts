@@ -22,7 +22,14 @@ const STORAGE_KEY = "openwar3.profiles";
 /** Every key whose value belongs to a PROFILE rather than to the install. `deleteProfile`
  *  clears all of them for the profile it removes, which is what PROFILE_MESSAGE promises.
  *  Add a key here the moment something new is stored per profile. */
-const PROFILE_OWNED = ["openwar3.campaigns", "openwar3.campaignDifficulty", "openwar3.saves"];
+const PROFILE_OWNED = [
+  "openwar3.campaigns", "openwar3.campaignDifficulty", "openwar3.saves",
+  // …and the campaign's GAME CACHES — a hero's level and inventory on their way from one
+  // chapter to the next — which are per-profile by common.j's own account of them ("stored in
+  // the current campaign profile dir"). Every cache FILE a profile has is inside this one key,
+  // which is what keeps the two sweeps below exact-match (see data/gameCache.ts).
+  "openwar3.gamecache",
+];
 
 /**
  * How long a profile name may be.

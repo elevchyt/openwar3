@@ -186,6 +186,19 @@ export interface MeleeConfig {
    */
   difficulty?: number;
   /**
+   * The difficulty `GetDefaultDifficulty` answers with — the campaign SCREEN's own dropdown,
+   * which is not always the one the match is running at.
+   *
+   * The two come apart at exactly one place, and it is why this field exists: the defeat
+   * dialog's **Reduce Difficulty** restarts the mission a rung lower
+   * (`CustomDefeatReduceDifficultyBJ`), and blizzard.j then puts the LIVE difficulty back to
+   * this one on the way out of the chapter — "Bump the difficulty back up to the default", in
+   * both `CustomVictoryOkBJ` and `CustomDefeatQuitBJ`. Up to, so the default is the player's
+   * choice rather than the concession they were given. Defaults to `difficulty` when unset,
+   * which is every start that is not a restart.
+   */
+  defaultDifficulty?: number;
+  /**
    * This match is a CAMPAIGN chapter rather than a game off a map list.
    *
    * Set by the campaign start (src/main.ts) and read for the things a mission is not: there is

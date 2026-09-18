@@ -58,6 +58,13 @@ export function registerCinematicNatives(rt: Runtime): void {
   // campaign screen's own.
   def(rt, "GetGameDifficulty", (c) => c.rt.enumHandle("GameDifficulty", c.rt.hooks?.getGameDifficulty?.() ?? 1));
   def(rt, "SetGameDifficulty", (c, a) => (c.rt.hooks?.setGameDifficulty?.(c.rt.enumIndex(a[0])), JNULL));
+  // …and the CAMPAIGN SCREEN's own rung, which is a different question (Runtime.getDefaultDifficulty):
+  // blizzard.j lowers the live one for a player who keeps losing and puts it back "up to the
+  // default" on the way out of the chapter, so a concession must not become the default.
+  // Left unimplemented it answered the typed default for a `gamedifficulty`, i.e. index 0 —
+  // MAP_DIFFICULTY_EASY — so `SetGameDifficulty(GetDefaultDifficulty())`, which every Continue
+  // and every Quit Mission runs, quietly dropped the whole campaign to Easy.
+  def(rt, "GetDefaultDifficulty", (c) => c.rt.enumHandle("GameDifficulty", c.rt.hooks?.getDefaultDifficulty?.() ?? 1));
   def(rt, "SetRandomSeed", (c, a) => (c.rt.setRandomSeed(asInt(a[0])), JNULL));
   // EnableOcclusion draws the "unit behind a cliff" x-ray silhouettes — something we don't
   // render at all. An explicit no-op: the behaviour is identical to an unimplemented native,

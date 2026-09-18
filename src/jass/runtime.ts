@@ -11,6 +11,7 @@
 import type { FunctionDecl } from "./ast";
 import { type JassValue, JNULL, jHandle } from "./values";
 import { FIRST_NEUTRAL_SLOT, PlayerSlot } from "../data/enums";
+import type { StoredUnitState } from "../sim/world";
 
 /** A trigger object (CreateTrigger) — its conditions + actions (function names)
  *  and enabled flag. The engine fires it when a registered event occurs (7.4). */
@@ -440,6 +441,20 @@ export interface LobbySlot {
   name?: string;
 }
 
+/**
+ * A `gamecache` handle — one CAMPAIGN FILE's stored data, live for the session.
+ *
+ * `data` is deliberately plain JSON (missionKey → key → typed slots) rather than nested Maps,
+ * because it is persisted verbatim into the player's profile (src/data/gameCache.ts). What the
+ * slots hold is natives/gamecache.ts's business.
+ */
+export interface GameCacheObj {
+  handleId: number;
+  /** The name the script opened it under: "Campaigns.w3v" (RoC) / "Campaigns.w3x" (TFT). */
+  file: string;
+  data: Record<string, Record<string, unknown>>;
+}
+
 /** A unit created by the script (CreateUnit). Kept so main()/CreateAllUnits can be
  *  cross-checked against war3mapUnits.doo (the 7.2 oracle) even with no engine
  *  attached, and so bridge lookups can map a unit handle back to our sim id. */
@@ -552,6 +567,14 @@ export interface MapSetup {
  *  the 4-char rawcode string (e.g. "hfoo"); unit ids are our engine's sim ids. */
 export interface EngineHooks {
   createUnit?(player: number, typeId: string, x: number, y: number, facing: number): number;
+  /** `StoreUnit` — write a unit down for another chapter (see SimWorld.storeUnitState for
+   *  what that means and why each field is in it). Null for a unit that is already gone. */
+  storeUnit?(unitId: number): StoredUnitState | null;
+  /** `RestoreUnit` — create the stored unit for `player` at (x, y) facing `facing` degrees,
+   *  and hand back its sim id. **-1 is the answer the campaign is written against**: "If the
+   *  label is not found, no unit will be created, and 'Last Restored Unit' will have the value
+   *  'No Unit'" (UI\TriggerStrings.txt), which is the branch every chapter falls back on. */
+  restoreUnit?(stored: StoredUnitState, player: number, x: number, y: number, facing: number): number;
   setResourceAmount?(unitId: number, amount: number): void;
   setUnitAcquireRange?(unitId: number, range: number): void;
   setUnitState?(unitId: number, whichState: number, value: number): void;
@@ -834,6 +857,16 @@ export interface EngineHooks {
    *  dialog is a DialogAddQuitButton, and this is what it does. */
   endGame?(doScoreScreen: boolean): void;
   /**
+   * `RestartGame(doScoreScreen)` — **play this same map again, from the top.**
+   *
+   * The defeat dialog's first button, and its second: `CustomDefeatRestartBJ` is a bare
+   * `PauseGame(false)` + `RestartGame(true)`, and `CustomDefeatReduceDifficultyBJ` is the same
+   * thing with a `SetGameDifficulty` one rung lower in front of it. So the restart has to carry
+   * the LIVE difficulty rather than the one the match began on — that is the whole of what the
+   * second button does.
+   */
+  restartGame?(doScoreScreen: boolean): void;
+  /**
    * ChangeLevel(mapName, doScoreScreen) — **play the next chapter**.
    *
    * The one native the whole campaign hangs on, and it is easy to miss because `EndGame` sits
@@ -1018,6 +1051,13 @@ export interface EngineHooks {
    *  `GetGameDifficulty() == MAP_DIFFICULTY_HARD` before it decides what to send at you. */
   setGameDifficulty?(difficulty: number): void;
   getGameDifficulty?(): number;
+  /** `GetDefaultDifficulty` — the campaign SCREEN's own dropdown, which is not always the rung
+   *  the match is running at. A different question from `getGameDifficulty`, and the difference
+   *  is load-bearing: blizzard.j lowers the live one for a player who keeps losing
+   *  (`CustomDefeatReduceDifficultyBJ`) and puts it back to THIS on the way out of the chapter
+   *  — "Bump the difficulty back up to the default" — in both `CustomVictoryOkBJ` and
+   *  `CustomDefeatQuitBJ`. Unimplemented, those two silently reset every campaign to Easy. */
+  getDefaultDifficulty?(): number;
   /** IsFogEnabled / IsFogMaskEnabled — the LIVE state of the two fog-of-war switches, which
    *  CinematicModeExBJ saves before turning both off and restores when the cinematic ends. */
   isFogEnabled?(): boolean;
@@ -1237,6 +1277,10 @@ export class Runtime {
 
   /** Units the script has created (CreateUnit), in creation order. */
   readonly units: JassUnit[] = [];
+  /** Open game caches, by the FILE name the script asked for (lower-cased). One object per
+   *  file for the whole session, because a chapter opens its cache several times and every one
+   *  of those has to be the same cache — see natives/gamecache.ts. */
+  readonly gameCaches = new Map<string, GameCacheObj>();
 
   /** war3map.wts trigger-string table (id → text). The compiled script refers to
    *  authored strings by placeholder ("TRIGSTR_019"); resolveTrigStr swaps them in. */

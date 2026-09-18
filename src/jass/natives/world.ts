@@ -39,7 +39,26 @@ function createUnit(ctx: NativeCtx, playerV: JassValue, typeInt: number, x: numb
   const simId = rt.spawnSuppressed
     ? rt.hooks?.findPlacedUnit?.(typeId, x, y) ?? -1
     : rt.hooks?.createUnit?.(playerIdx, typeId, x, y, facing) ?? -1;
-  const u: JassUnit = { handleId: 0, player: playerIdx, typeId, x, y, facing, simId };
+  return mintUnitHandle(rt, playerIdx, typeId, x, y, facing, simId);
+}
+
+/**
+ * Give a freshly created sim unit its JASS `unit` handle.
+ *
+ * Shared with `RestoreUnit` (natives/gamecache.ts), which is a create like any other once the
+ * cache has said WHAT to create — and which needs the handle for the same reason `CreateUnit`
+ * does: the next line of the script configures the unit it just made.
+ */
+export function mintUnitHandle(
+  rt: Runtime,
+  player: number,
+  typeId: string,
+  x: number,
+  y: number,
+  facing: number,
+  simId: number,
+): JassValue {
+  const u: JassUnit = { handleId: 0, player, typeId, x, y, facing, simId };
   u.handleId = rt.handles.alloc(u);
   rt.units.push(u);
   rt.bindSimUnit(u); // one sim unit = one handle: a later group enum/event pump reuses THIS one

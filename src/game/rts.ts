@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect } from "../sim/world";
+import { SimWorld, weaponsFromDef, isOffField, CREEP_CAMP_ACQUIRE_RANGE, BUILD_START_HP_FRAC, ANIM_FOR_DURATION, HERO_FADE_TIME, HERO_DISSIPATE_TIME, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning, type CombatText, type FallenHero, type SimSpellEffect, type StoredUnitState } from "../sim/world";
 import { KNOWN_ABILITIES, NO_AOE_CURSOR, aoeCursorRadius } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -2343,6 +2343,34 @@ export class RtsController {
       su.neutralPassive = true;
     }
     this.scriptSpawns.push({ typeId, x, y, facing, player: owner, team, simId }); // …gets a body later
+    return simId;
+  }
+
+  /**
+   * JASS `RestoreUnit` — the hero (or the stash) a previous chapter wrote into the game cache
+   * (docs/campaigns.md, `SimWorld.storeUnitState`).
+   *
+   * A restore is a CREATE plus a state, in that order and through the ordinary door: the unit
+   * is made exactly as `CreateUnit` makes one — same displacement off a blocked cell, same
+   * deferred body — and `applyStoredUnit` then makes it the unit it was. Sharing the create is
+   * the point: a restored Arthas is an ordinary unit of his type the moment he exists, so
+   * nothing downstream needs to know he came out of a cache.
+   *
+   * -1 when the stored type is not a unit this install knows, which the native reports as
+   * "no unit created" — the branch every chapter in the game already has a fallback for
+   * ("If the hero data wasn't found, create a default hero").
+   */
+  restoreScriptUnit(
+    stored: StoredUnitState,
+    player: number,
+    x: number,
+    y: number,
+    facingDeg: number,
+    teamOf: (p: number) => number,
+  ): number {
+    const simId = this.createScriptUnit(player, stored.typeId, x, y, facingDeg, teamOf);
+    if (simId < 0) return -1;
+    this.sim.applyStoredUnit(simId, stored);
     return simId;
   }
 
@@ -8025,6 +8053,9 @@ export class RtsController {
         // CreateUnit needs the CONTROLLER, not the authority object: resolving placement reads
         // the pathing grid and the footprint reader, and attaching a body needs the spawn queue.
         createScriptUnit: (p, t, x, y, f) => this.createScriptUnit(p, t, x, y, f, teamOf),
+        // …and RestoreUnit, which is a create with the cached unit's own state put back on
+        // top of it. Beside CreateUnit because it IS one (see restoreScriptUnit).
+        restoreScriptUnit: (stored, p, x, y, f) => this.restoreScriptUnit(stored, p, x, y, f, teamOf),
       }),
       ...visionHooks(this.viewpoints, this.alliances),
       ...rosterHooks(this.sim, this.registry, teamOf),

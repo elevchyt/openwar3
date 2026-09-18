@@ -1143,6 +1143,11 @@ export class MapViewerScene {
    *  named map (src/main.ts `changeLevel`). See Runtime.changeLevel for why this is a
    *  different exit from `onExit`. */
   onChangeLevel: ((mapName: string) => void) | null = null;
+  /** `RestartGame` — the defeat dialog's Restart. The same map again, from the top, at the
+   *  difficulty the match is on NOW: "Reduce Difficulty" is that button with one
+   *  `SetGameDifficulty` in front of it, so the rung has to travel with the restart
+   *  (src/main.ts `restartMatch`). */
+  onRestart: ((difficulty: number) => void) | null = null;
   // --- the trigger's on-screen output (7.19) ---
   private textTags: TextTagOverlay | null = null; // CreateTextTag, drawn in the world
   // The ENGINE's own floating combat text — a Critical Strike's red "127!", a deny's "!".
@@ -1165,6 +1170,10 @@ export class MapViewerScene {
   private gameSpeed = 2;
   /** common.j gamedifficulty index — MAP_DIFFICULTY_NORMAL until a campaign says otherwise. */
   private gameDifficulty = 1;
+  /** …and the CAMPAIGN SCREEN's own rung, which a script may not change: `GetDefaultDifficulty`.
+   *  It is what blizzard.j puts the live difficulty back UP to on the way out of a chapter, and
+   *  a Reduce Difficulty restart carries it across unchanged (MeleeConfig.defaultDifficulty). */
+  private defaultDifficulty = 1;
   /** This match is a campaign CHAPTER (MeleeConfig.campaign) — a mission, not a game off a
    *  map list. Read by panelDead: no allies to talk to, nobody to chat with. */
   private campaign = false;
@@ -2180,6 +2189,9 @@ export class MapViewerScene {
     // its chapters branch on GetGameDifficulty from map init onwards. A skirmish sends none
     // and the match runs at MAP_DIFFICULTY_NORMAL, which is what the reference calls it.
     this.gameDifficulty = config.difficulty ?? 1;
+    // …and the rung `GetDefaultDifficulty` answers with, which is the campaign SCREEN's and
+    // survives a Reduce Difficulty restart (MeleeConfig.defaultDifficulty).
+    this.defaultDifficulty = config.defaultDifficulty ?? this.gameDifficulty;
     // …and whether this is a MISSION at all, which decides the two console buttons a campaign
     // has no use for (see panelDead).
     this.campaign = config.campaign === true;
@@ -2953,6 +2965,14 @@ export class MapViewerScene {
         this.scriptPaused = false; // CustomVictoryDialogBJ's own PauseGame, released with it
         this.onExit?.();
       },
+      // …and the defeat dialog's Restart: the same map, from the top, carrying whatever
+      // difficulty the script has just set (Reduce Difficulty is this button, one rung down).
+      restartGame: () => {
+        this.showDialog(null);
+        this.scriptPaused = false; // CustomDefeatRestartBJ releases it too, but not through us
+        if (this.onRestart) this.onRestart(this.gameDifficulty);
+        else this.onExit?.(); // nobody here can re-run a map (a lone map, a test boot)
+      },
       // …and its campaign twin: Continue on a chapter that named a next level. The match is
       // over either way — the difference is only what the player is handed next, so both
       // clear the same dialog and the same script pause on the way out.
@@ -3140,6 +3160,7 @@ export class MapViewerScene {
         this.gameDifficulty = difficulty;
       },
       getGameDifficulty: () => this.gameDifficulty,
+      getDefaultDifficulty: () => this.defaultDifficulty,
       // --- animation (7.17) — a model's, not the world's, so it stays with the renderer ---
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
       // --- items (7.18) ---

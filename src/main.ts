@@ -180,6 +180,8 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
     // …and the chapter's own "and now play THIS": `ChangeLevel`, which the victory dialog's
     // Continue button reaches whenever the map named a next level (see changeLevel below).
     mapScene.onChangeLevel = (path) => void changeLevel(path);
+    // …and the defeat dialog's Restart, which plays THIS map again.
+    mapScene.onRestart = (difficulty) => void restartMatch(difficulty);
     mapScene.loadMap(bytes);
     mapScene.start();
     return `${name} — authentic render (textures & models stream in)`;
@@ -572,6 +574,45 @@ async function changeLevel(mapPath: string): Promise<void> {
   await startGame(bytes, info, campaignConfig(info, difficulty, title));
 }
 
+/**
+ * `RestartGame` — the defeat dialog's **Restart**, and its **Reduce Difficulty**.
+ *
+ * Blizzard.j makes them one thing: `CustomDefeatRestartBJ` is `PauseGame(false)` +
+ * `RestartGame(true)`, and `CustomDefeatReduceDifficultyBJ` is the same pair with one
+ * `SetGameDifficulty` a rung lower in front of it. So the only thing that travels from the old
+ * match to the new one is the DIFFICULTY the script left it on — everything else about the
+ * lobby is what it was, because it is the same mission being played again.
+ *
+ * `pendingCampaign` is deliberately untouched: this is the same chapter, so a player who then
+ * quits still lands on its own chapter list, and a victory still credits the right row. The
+ * chapter's own progress is not disturbed either — losing a mission never cost you the one
+ * before it.
+ *
+ * The SEED is fresh, because this is a new game of the map rather than a rewind: WC3's Restart
+ * re-rolls its creep drops and its item stock the same way starting the chapter again does.
+ *
+ * Refused outright with a wire attached. Blizzard gates the Restart button itself on
+ * `bj_isSinglePlayer` and never offers it in a multiplayer game; a map that calls the native
+ * anyway cannot be allowed to restart a match other machines are in, so it leaves instead.
+ */
+async function restartMatch(difficulty: number): Promise<void> {
+  const m = lastMatch;
+  if (!m || matchLink) return exitToMenu();
+  endMatch();
+  // The LIVE difficulty is whatever the script left it on; the DEFAULT is the campaign
+  // screen's and does not move — "bump the difficulty back up to the default" only means
+  // anything if a concession cannot become the default (MeleeConfig.defaultDifficulty).
+  await startGame(m.bytes, m.info, {
+    ...m.config,
+    difficulty,
+    defaultDifficulty: m.config.defaultDifficulty ?? m.config.difficulty,
+    seed: 1 + Math.floor(Math.random() * 2147483645),
+  });
+}
+
+/** The match on screen, kept so `RestartGame` can play it again. */
+let lastMatch: { bytes: Uint8Array; info: MapInfo; config: MeleeConfig } | null = null;
+
 /** Which campaign row a `Maps\…\Foo.w3x` path is, if the index names it. Compared on the
  *  path the index itself carries — case- and separator-insensitively, because a script types
  *  the path by hand (`SetNextLevelBJ`) and nothing makes it match the file's own spelling. */
@@ -752,6 +793,10 @@ async function startGame(
 
     const bytes = await step(0.05, async () =>
       map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer()));
+    // …kept, so the match can be PLAYED AGAIN without going back to the menu: `RestartGame`,
+    // the defeat dialog's first button (see restartMatch). The bytes rather than the `File`,
+    // because a file handle a browser handed us once may not be readable a second time.
+    lastMatch = { bytes, info, config };
     // The minimap's markers are read out of the map itself (its terrain header and its placed
     // units), so they can only be stamped once its bytes are in hand — which is why the loading
     // screen takes them afterwards rather than at mount. Never at the cost of the match: a map
@@ -1009,6 +1054,9 @@ function endMatch(): void {
   matchLink?.channel.close?.();
   matchLink = null;
   lan = null; // the wire the match owned is closed; a fresh LAN session opens a fresh one
+  // …and the map's bytes go with it. `restartMatch` reads them BEFORE calling this, so the
+  // one caller that still wants them has them; everyone else is leaving for good.
+  lastMatch = null;
 }
 
 /** Leave the current match (F10 → End Game): tear down the map scene and return to

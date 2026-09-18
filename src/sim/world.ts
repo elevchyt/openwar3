@@ -751,6 +751,28 @@ export interface SimItem {
   charges: number; // charges carried onto the ground (restored when picked back up)
 }
 
+/**
+ * A unit written down by `StoreUnit`, to be handed back by `RestoreUnit` in another chapter.
+ *
+ * Plain JSON on purpose — it is persisted in the player's profile (data/gameCache.ts) and has
+ * to survive a build. See `SimWorld.storeUnitState` for why each field is in it and what is
+ * deliberately not.
+ */
+export interface StoredUnitState {
+  typeId: string;
+  /** The hero's given name ("Arthas Menethil"), which is rolled at spawn and must not be. */
+  properName: string;
+  level: number;
+  xp: number;
+  skillPoints: number;
+  /** Every ability the unit had and the RANK it was at — 0 for a hero ability never learned. */
+  abilities: Array<{ id: string; level: number }>;
+  /** Slot for slot; null is an empty slot, so the belt comes back in its own order. */
+  inventory: Array<{ typeId: string; charges: number } | null>;
+  /** What the unit ate: permanent gains over the unit TYPE's own numbers. */
+  tomes: { str: number; agi: number; int: number; hp: number };
+}
+
 /** Where an item is right now — the one lookup the trigger engine needs, since a
  *  JASS `item` handle can refer to an item lying on the ground OR sitting in a
  *  hero's inventory (`holder`/`slot` are 0/-1 for a ground item). */
@@ -14954,6 +14976,114 @@ export class SimWorld {
     const h = this.units.get(unitId);
     if (!h?.isHero) return false;
     h.skillPoints = Math.max(0, h.skillPoints + Math.trunc(delta));
+    return true;
+  }
+
+  /**
+   * `StoreUnit` — write a unit down so another CHAPTER can have it back.
+   *
+   * This is the sim's half of the game cache (src/jass/natives/gamecache.ts,
+   * docs/campaigns.md). What goes in it is settled by what the campaign actually does with it,
+   * because nothing in the install states the field list:
+   *
+   *   * **hero progress** — level, experience, unspent skill points and the rank of every
+   *     ability learned. That is the whole point of the mechanism: RoC's Human02 restores
+   *     Arthas and, if the restore comes back empty, falls back on
+   *     `SetHeroLevel(udg_Arthas, 2, false)` + two `SelectHeroSkill` calls, which is a
+   *     hand-written copy of what the player would have arrived with.
+   *   * **the inventory** — and the proof is the TFT campaign's STASH. `OrcX02` creates a
+   *     throwaway `Obla`, moves the stash building's items into it, `StoreUnit`s *that*, and
+   *     on the next chapter restores it and moves the items back out. The dummy has no level,
+   *     no experience and no abilities; an inventory is the only thing it carries, so if
+   *     `StoreUnit` did not save one the entire Rexxar shared stash would be a no-op.
+   *   * **permanent TOME gains**, as a delta over the unit type's own numbers rather than as
+   *     absolutes, because a campaign map may retune the hero in its own `war3map.w3u`: what
+   *     the player EARNED travels, and what the chapter says the hero is stays the chapter's.
+   *
+   * Two things deliberately do NOT travel, and both are "a restored unit is a new unit": its
+   * hit points and mana (`applyStoredUnit` brings it in whole) and everything about where it
+   * was standing — buffs, orders, cooldowns, position. Not one chapter in the game tops a
+   * restored hero up afterwards, which is what a wounded arrival would have forced them to do.
+   */
+  storeUnitState(unitId: number): StoredUnitState | null {
+    const u = this.units.get(unitId);
+    if (!u) return null;
+    const type = this.unitReg?.get(u.typeId);
+    return {
+      typeId: u.typeId,
+      properName: u.properName,
+      level: u.level,
+      xp: u.xp,
+      skillPoints: u.skillPoints,
+      // A CARRIED ability is left out on purpose: it belongs to the item granting it
+      // (`syncCarriedAbilities`), and the item is in the inventory below — restore both and
+      // the Talisman of Evasion would arrive having granted Evasion twice.
+      abilities: u.abilities.filter((a) => !a.carried).map((a) => ({ id: a.id, level: a.level })),
+      inventory: u.inventory.map((h) => (h ? { typeId: h.itemId, charges: h.charges } : null)),
+      tomes: {
+        str: u.baseStr - u.startStr,
+        agi: u.baseAgi - u.startAgi,
+        int: u.baseInt - u.startInt,
+        // The Manual of Health (`AImi`) is the only thing that moves `baseMaxHp`, and the
+        // type's own `hitPoints` is what it started from — so the difference is the manuals.
+        hp: type ? u.baseMaxHp - type.hitPoints : 0,
+      },
+    };
+  }
+
+  /**
+   * `RestoreUnit` — put a stored unit's state onto the body that has just been created for it.
+   *
+   * The unit is made by the ordinary spawn path first (`RtsController.restoreScriptUnit`), so
+   * this only has to make it the unit it WAS. Order matters and is why this is one method
+   * rather than a dozen writes at the call site:
+   *
+   *   1. the LEVEL is written straight down rather than levelled up to. `setHeroLevel` walks
+   *      the hero up one rank at a time, and each rank fires the level-up nova and an
+   *      `EVENT_PLAYER_HERO_LEVEL` — five of each on a chapter's opening frame, into a map
+   *      whose triggers are already registered. A restore is not a promotion. The attributes
+   *      come out right anyway, because `recomputeStats` DERIVES them from the level
+   *      (`baseStr + strPerLevel × (level − 1)`) rather than accumulating them per level-up —
+   *      the same property `initIllusion` leans on.
+   *   2. the tome gains land on the BASE attributes, before the recompute that turns them into
+   *      hit points, mana and damage.
+   *   3. `recomputeStats` runs once, with everything in place…
+   *   4. …and only then is the pool filled, because `maxHp`/`maxMana` do not exist until it has.
+   */
+  applyStoredUnit(unitId: number, stored: StoredUnitState): boolean {
+    const u = this.units.get(unitId);
+    if (!u) return false;
+    if (stored.properName) u.properName = stored.properName;
+    if (u.isHero) {
+      u.level = Math.max(1, Math.min(MAX_HERO_LEVEL, Math.trunc(stored.level)));
+      u.xp = Math.max(0, Math.trunc(stored.xp));
+      u.skillPoints = Math.max(0, Math.trunc(stored.skillPoints));
+    }
+    u.baseStr += stored.tomes.str;
+    u.baseAgi += stored.tomes.agi;
+    u.baseInt += stored.tomes.int;
+    u.baseMaxHp += stored.tomes.hp;
+    for (const a of stored.abilities) {
+      const ab = u.abilities.find((x) => x.id === a.id);
+      const def = this.abilities?.get(a.id);
+      // Only a rank the NEW map's version of the ability actually has. A chapter may retune a
+      // spell, and a rank past its ceiling is the cache overruling the map (`setAbilityLevel`
+      // clamps the same way; this is the same clamp without its recompute, which runs below).
+      if (ab && def) ab.level = Math.max(0, Math.min(def.levels || 1, Math.trunc(a.level)));
+    }
+    this.recomputeStats(u);
+    u.hp = u.maxHp;
+    u.mana = u.maxMana;
+    for (let slot = 0; slot < stored.inventory.length && slot < u.inventory.length; slot++) {
+      const held = stored.inventory[slot];
+      if (!held || !this.itemReg?.get(held.typeId)) continue;
+      // Through the ordinary door: the item is an ENTITY with an id of its own, so it is
+      // created on the ground at the unit's feet and picked up, exactly as `UnitAddItemById`
+      // does it. Slot-for-slot, so a hero's belt comes back in the order it was left in.
+      const id = this.createItem(held.typeId, u.x, u.y, held.charges);
+      if (id >= 0) this.unitAddItem(unitId, id, slot);
+    }
+    this.recomputeStats(u); // …and once more for what the items confer
     return true;
   }
 

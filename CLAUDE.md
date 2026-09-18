@@ -241,6 +241,20 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   button) branches on `bj_changeLevelMapName`, so a melee map leaves through `EndGame` and a
   chapter through **`ChangeLevel`**, whose whole job is to play the map the chapter's own
   `SetNextLevelBJ` named. Answering it with a no-op is why Continue did nothing.
+  What a hero CARRIES between chapters is the GAME CACHE (`StoreUnit`/`RestoreUnit`), and a
+  cache belongs to a PROFILE — common.j's own words, "stored in the current campaign profile
+  dir" — so two players on one install have two campaigns with their own levels and belts
+  ([`src/data/gameCache.ts`](src/data/gameCache.ts), one blob per profile so profiles.ts's
+  exact-key sweeps keep working). Nothing states which fields travel, so the list is read off
+  what the campaign DOES: hero progress, the inventory slot for slot (proved by the TFT stash —
+  a throwaway body stored for nothing BUT its items) and the tome gains as a DELTA; NOT hit
+  points (a restored unit arrives whole) and NOT the level-up nova (`applyStoredUnit` writes the
+  level down rather than levelling up to it — attributes are DERIVED from the level anyway).
+  A miss is a supported answer: every chapter has a "create a default hero" branch behind it.
+  Losing has its own pair: **`RestartGame`** replays the same map carrying the LIVE difficulty
+  (Reduce Difficulty is that button with one `SetGameDifficulty` in front of it), and
+  **`GetDefaultDifficulty`** is the one the match STARTED on — left unimplemented it answered
+  index 0, so every Continue quietly dropped the campaign to Easy.
 - **Loading screens:** read [`docs/loading-screens.md`](docs/loading-screens.md) before touching `Loading.fdf`, the
   `[LoadingScreens]` table, or the start-of-match path. The w3i field that picks a map's screen is the one the
   parsers call **`campaignBackground`** (the int AFTER the subtitle is not a screen at all), the art is flat 2D in

@@ -44,6 +44,9 @@ const EXPECTED = [
   "resetUnitCooldown", "selectHeroSkill", "setAllTypeSlots", "setDawnDusk", "setHeroLevel",
   "setResourceAmount",
   "setHeroXp", "setItemCharges", "setItemDroppable", "setItemPosition", "setPlayerTechMaxAllowed",
+  // StoreUnit — a chapter writing its hero down for the next one (docs/campaigns.md). Its
+  // twin RestoreUnit is the AUTHORITY's, because putting one back means creating it.
+  "storeUnit",
   "setPlayerTechResearched", "setTimeOfDay", "setTypeSlots", "setUnitAbilityLevel",
   // The rest of the day/night clock: how fast it runs and whether it runs at all. A campaign
   // sets both (Rise of the Naga: 25% speed, then UseTimeOfDayBJ(false) to hold it at night).
@@ -191,6 +194,7 @@ const authority = new Authority(world, stubRegistry, stubRegistry, null, stubReg
 // createScriptUnit lives on the CONTROLLER, not on Authority — resolving placement reads the
 // pathing grid and the footprint reader — so the structural dep is assembled here the same way
 // RtsController.worldHooks assembles it. Spying on it also checks the native routes at all.
+const restored = [];
 const created = [];
 const ah = authorityHooks({
   stashFor: (o) => authority.stashFor(o),
@@ -202,9 +206,20 @@ const ah = authorityHooks({
   currentOrderId: (id) => authority.currentOrderId(id),
   issueUnitOrder: (...a) => authority.issueUnitOrder(...a),
   createScriptUnit: (...a) => { created.push(a); return 909; },
+  restoreScriptUnit: (...a) => { restored.push(a); return 910; },
 });
 check("authorityHooks holds the resource, order and create natives", Object.keys(ah).sort(),
-  ["createUnit", "getPlayerState", "getUnitCurrentOrder", "issueUnitOrder", "setPlayerState"]);
+  ["createUnit", "getPlayerState", "getUnitCurrentOrder", "issueUnitOrder", "restoreUnit", "setPlayerState"]);
+
+// RestoreUnit is a CREATE — the game cache only says what to make (docs/campaigns.md) — so it
+// is here beside CreateUnit rather than in the pure-world half, and it is synchronous for the
+// same reason: `set udg_Arthas = GetLastRestoredUnitBJ()` is the very next line of every
+// chapter, and the lines after that order him about.
+{
+  const stored = { typeId: "Hart", properName: "Arthas Menethil", level: 4, xp: 900, skillPoints: 1, abilities: [], inventory: [], tomes: { str: 0, agi: 0, int: 0, hp: 0 } };
+  check("restoreUnit hands the id back from the call", ah.restoreUnit(stored, 1, 100, 200, 90), 910);
+  check("…with the stored unit and the placement it was given", restored.pop(), [stored, 1, 100, 200, 90]);
+}
 
 // CreateUnit is SYNCHRONOUS in JASS: the id must come back from the call itself, because the
 // next statement may order or configure that unit. A queue-only implementation that returned

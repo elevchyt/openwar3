@@ -18,6 +18,7 @@ import { registerEffectNatives } from "./effects";
 import { registerEventNatives } from "./events";
 import { registerLeaderboardNatives } from "./leaderboard";
 import { registerForceNatives } from "./forces";
+import { registerGameCacheNatives } from "./gamecache";
 import { registerGroupNatives } from "./groups";
 import { registerItemNatives } from "./items";
 import { registerMeleeNatives } from "./melee";
@@ -133,6 +134,7 @@ export function registerNatives(rt: Runtime): void {
   registerEventNatives(rt);
   registerLeaderboardNatives(rt); // the scoreboard every TD/AoS shows (7.19)
   registerForceNatives(rt);
+  registerGameCacheNatives(rt); // the campaign's memory between chapters (docs/campaigns.md)
   registerGroupNatives(rt);
   registerItemNatives(rt); // items + the item events (7.18)
   registerDestructableNatives(rt); // destructibles: gates open by dying (issue #85)

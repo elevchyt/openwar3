@@ -598,12 +598,121 @@ which `CustomVictoryBJ` raises before it shows anything, and that is already wha
 chapter on the campaign screen (`data/campaignProgress.ts`). Continue and Quit Mission both leave
 the chapter behind them recorded; only what comes next differs.
 
+## The hero carries over: game caches
+
+A campaign chapter is a separate map with a separate world, so the only thing that can travel
+between two of them is what the script writes down. WC3's mechanism is the **game cache**, and
+`Scripts\common.j` says where one lives in the comment over the native that makes it:
+
+```
+// Creates a new or reads in an existing game cache file stored
+// in the current campaign profile dir
+native  InitGameCache    takes string campaignFile returns gamecache
+```
+
+So a cache is a FILE and it belongs to a **profile**. Both halves are real here
+([`src/data/gameCache.ts`](../src/data/gameCache.ts)): the store is `openwar3.gamecache` under
+`profileKey`, listed in profiles.ts's `PROFILE_OWNED`, so two players on one install have two
+campaigns with their own heroes, levels, experience and belts — and deleting a profile takes its
+caches with it, which is what `PROFILE_MESSAGE` promises on the Single Player screen. **The file
+name is the whole of the separation between the two editions** and it is the game's own: RoC's
+chapters all say `InitGameCacheBJ("Campaigns.w3v")`, TFT's all say `"Campaigns.w3x"`.
+
+A chapter ends by filing its hero under the chapter that will want it…
+
+```
+call InitGameCacheBJ( "Campaigns.w3v" )                                   // Human01, Next Level Prep
+call StoreUnitBJ( udg_Arthas, "Arthas", "Human02", GetLastCreatedGameCacheBJ() )
+call SaveGameCacheBJ( GetLastCreatedGameCacheBJ() )
+```
+
+…and the next one opens by asking for it back, with a hand-written fallback if it is not there:
+
+```
+call RestoreUnitLocFacingAngleBJ( "Arthas", "Human02", GetLastCreatedGameCacheBJ(), … )  // Human02
+set udg_Arthas = GetLastRestoredUnitBJ()
+if ( udg_Arthas != null ) then
+    return
+endif
+// If the hero data wasn't found, create a default hero
+call CreateNUnitsAtLoc( 1, 'Hart', Player(1), GetRectCenter(gg_rct_ArthasStart), 90.00 )
+call SetHeroLevel( udg_Arthas, 2, false )
+call SelectHeroSkill( udg_Arthas, 'AHhb' )
+```
+
+**A miss is a supported answer, not a failure** — "If the label is not found, no unit will be
+created, and 'Last Restored Unit' will have the value 'No Unit'" (UI\TriggerStrings.txt) — which
+is why a fresh profile simply plays chapter two with the default hero, exactly as the reference
+does, and why nothing on this path throws.
+
+### What a stored unit is made of
+
+Nothing in the install states the field list, so it is settled by what the campaign DOES with
+it (`SimWorld.storeUnitState`):
+
+| carried | why |
+| --- | --- |
+| hero level, experience, unspent skill points, the RANK of every ability | it is the point of the mechanism: Human02's own fallback hand-writes `SetHeroLevel(…, 2, false)` plus two `SelectHeroSkill` calls, i.e. a copy of what the player would have arrived with |
+| the INVENTORY, slot for slot, with charges | proved by the TFT campaign's shared **stash**: `OrcX02` creates a throwaway `Obla`, moves the stash building's items into it, `StoreUnit`s *that*, and restores it on the next chapter. The dummy has no level, no experience and no abilities — an inventory is the only thing it carries, so without this the whole Rexxar stash is a no-op |
+| permanent TOME gains, as a DELTA over the unit type's own numbers | what the player earned travels; what the chapter says the hero is (its own `war3map.w3u`) stays the chapter's |
+| the hero's given name | it is rolled at spawn, and Arthas must not be re-rolled into somebody else |
+
+and two that deliberately do not:
+
+* **hit points and mana.** A restored unit arrives whole. Not one chapter in the game tops a
+  restored hero up afterwards, which a wounded arrival would have forced them all to do — and
+  the fallback branch beside it creates a fresh, full-health hero, so the two arrivals would
+  otherwise differ in a way no mission designer accounted for.
+* **the level-up nova.** `applyStoredUnit` writes the level down rather than levelling the hero
+  up to it: `setHeroLevel` walks a hero one rank at a time and each rank fires the nova and an
+  `EVENT_PLAYER_HERO_LEVEL`, which on a chapter's opening frame — into a map whose triggers are
+  already registered — is five of each. A restore is not a promotion. The attributes still come
+  out right because `recomputeStats` DERIVES them from the level
+  (`baseStr + strPerLevel × (level − 1)`) rather than accumulating them per level-up.
+
+`RestoreUnit` is a **create** with that state put on top of it, through the ordinary door
+(`RtsController.restoreScriptUnit` → `createScriptUnit`), so a restored Arthas is an ordinary
+unit of his type the moment he exists and nothing downstream has to know where he came from.
+`tools/sim-game-cache-test.cjs` pins every row of the table above.
+
+## Losing: Restart, and the difficulty that comes back up
+
+The defeat dialog is the victory one's twin and is also plain JASS (`CustomDefeatDialogBJ`),
+with four buttons in single player: **Restart**, **Reduce Difficulty** (unless you are already on
+Easy), **Load**, **Quit Campaign**. The first two are one mechanism:
+
+```
+function CustomDefeatRestartBJ takes nothing returns nothing
+    call PauseGame( false )
+    call RestartGame( true )
+endfunction
+```
+
+and Reduce Difficulty is that with one `SetGameDifficulty` a rung lower in front of it. So
+`RestartGame` has to carry the **live** difficulty rather than the one the match began on — that
+is the entire difference between the two buttons. It re-runs the same map from the top on the
+same lobby, with a fresh seed (a restart is a new game of the map, not a rewind), and it leaves
+the campaign alone: same chapter, same progress, and a player who then quits still lands on the
+right chapter list. `src/main.ts` `restartMatch`.
+
+`GetDefaultDifficulty` is the other half of it and is easy to miss. It answers the CAMPAIGN
+SCREEN's own dropdown, and blizzard.j uses it to put the live difficulty back on the way out of a
+chapter ("Bump the difficulty back **up** to the default", in both `CustomVictoryOkBJ` and
+`CustomDefeatQuitBJ`). Unimplemented it returned the typed default for a `gamedifficulty`, i.e.
+index 0 — **MAP_DIFFICULTY_EASY** — so every Continue quietly dropped the rest of the campaign to
+Easy.
+
+That "up to" is what keeps it a separate number from the one the match is running at
+(`MeleeConfig.defaultDifficulty` beside `difficulty`). The two come apart at exactly one place —
+a Reduce Difficulty restart — and if the restart let the concession become the default, the rung
+the player actually chose would be gone for the rest of the campaign.
+
 ## Not done yet
 
 - The campaign **cinematics** (`OpenCinematic`/`EndCinematic`) are listed and greyed. WC3 ships
   them as `Movies\*.mpq` files that are, despite the extension, plain RIFF AVIs — nothing this
   engine decodes.
-- **Game caches** — the `InitGameCache`/`StoreUnit` family that carries a hero's level and
-  inventory from one chapter to the next — are still stubs, so chapters start fresh.
 - No saved games, and no custom-campaign (`.w3n`) screen. Profiles exist (issue #80) and own the
-  progress above; the "personal saved games list" half of what one holds waits on saving.
+  progress and the game caches above; the "personal saved games list" half of what one holds
+  waits on saving. That is also why the defeat dialog's **Load** button is dead: it is the map's
+  own button (`CustomDefeatLoadBJ` → `DisplayLoadDialog`) and there is nothing to load yet.

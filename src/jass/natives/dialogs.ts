@@ -122,7 +122,12 @@ export function registerDialogNatives(rt: Runtime): void {
   def(rt, "IsNoVictoryCheat", () => jBool(false));
   def(rt, "IsNoDefeatCheat", () => jBool(false));
   def(rt, "SetIntegerGameState", () => JNULL); // GAME_STATE_DISCONNECTED etc. — nothing to set
-  def(rt, "RestartGame", () => JNULL);
+  // RestartGame — the defeat dialog's Restart (and its Reduce Difficulty, which is the same
+  // button with a lower difficulty set in front of it). See Runtime.restartGame.
+  def(rt, "RestartGame", (c, a) => {
+    c.rt.hooks?.restartGame?.(truthy(a[0]));
+    return JNULL;
+  });
   // ChangeLevel(mapName, doScoreScreen) — the campaign's own "play the next chapter". It is
   // what the victory dialog's Continue button reaches whenever the map called SetNextLevelBJ;
   // a melee map never does, and leaves through EndGame above instead (Runtime.changeLevel).

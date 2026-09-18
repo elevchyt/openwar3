@@ -1,4 +1,4 @@
-import { jassOwnerOf, type SimWorld, type SimMine, type SimUnit } from "../sim/world";
+import { jassOwnerOf, type SimWorld, type SimMine, type SimUnit, type StoredUnitState } from "../sim/world";
 import type { EngineHooks, UnitSnapshot } from "../jass/runtime";
 import { MAIN_HALL_CHAINS } from "../data/races";
 import { MoveType } from "../data/enums";
@@ -220,6 +220,10 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     itemInfo: (id) => sim.itemSnapshot(id),
     setItemCharges: (id, charges) => void sim.setItemCharges(id, charges),
     setItemDroppable: (id, flag) => void sim.setItemDroppable(id, flag),
+    // StoreUnit — what a chapter writes into the game cache for the next one (docs/campaigns.md).
+    // Pure world: it only READS a unit. Its twin `restoreUnit` is not here, because putting one
+    // back means creating it, and creating belongs to the authority.
+    storeUnit: (id) => sim.storeUnitState(id),
     setItemPosition: (id, x, y) => void sim.setItemPosition(id, x, y),
     unitAddItem: (unitId, itemId, slot) => sim.unitAddItem(unitId, itemId, slot),
     unitRemoveItem: (unitId, itemId) => sim.unitRemoveItem(unitId, itemId),
@@ -267,6 +271,7 @@ export function authorityHooks(authority: {
   givesBounty(player: number): boolean;
   currentOrderId(unitId: number): number;
   createScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number): number;
+  restoreScriptUnit(stored: StoredUnitState, player: number, x: number, y: number, facingDeg: number): number;
   issueUnitOrder(
     unitId: number,
     orderId: number,
@@ -310,6 +315,10 @@ export function authorityHooks(authority: {
     // correct behaviour rather than a gap. See `RtsController.createScriptUnit` for why the
     // dual-writer trick from item 1c could not be used here.
     createUnit: (player, typeId, x, y, facing) => authority.createScriptUnit(player, typeId, x, y, facing),
+    // RestoreUnit — the same create, with a previous chapter's unit put back on top of it
+    // (docs/campaigns.md). It shares CreateUnit's two properties for the same reasons: the
+    // sim unit exists the instant it returns, and its body is queued for whoever is drawing.
+    restoreUnit: (stored, player, x, y, facing) => authority.restoreScriptUnit(stored, player, x, y, facing),
     // SetPlayerState → the live stash, via the authority's named setter. This is what grants a
     // custom map its starting gold/lumber (its init triggers set it).
     // state: 1=gold 2=lumber 3=hero tokens 4=food cap 5=food used 6=food cap ceiling 7=gives bounty (common.j).
