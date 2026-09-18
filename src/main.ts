@@ -35,6 +35,7 @@ import { profilePlayerName } from "./data/profiles";
 import { applyVideoOptions } from "./render/videoQuality";
 import { applyHealthBarOptions } from "./render/worldOverlays";
 import { applyHotkeyOptions } from "./data/hotkeys";
+import { applyScrollOptions } from "./render/scrollOptions";
 import { GlueManager, type GlueScreenDef } from "./ui/glue";
 import { mountLoadingScreen, type LoadingScreen } from "./ui/loadingScreen";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
@@ -95,6 +96,8 @@ applyVideoOptions(bootOptions);
 applyHealthBarOptions(bootOptions);
 // …and the panel's "Hotkeys:" row (issue #142), which the HUD's key handler reads live.
 applyHotkeyOptions(bootOptions);
+// …and its two scroll sliders, which the camera reads every frame (render/scrollOptions.ts).
+applyScrollOptions(bootOptions);
 
 const resolver = new AssetResolver(null);
 

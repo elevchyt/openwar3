@@ -23,20 +23,31 @@
 // the hotkey letters come with them ("Pause Ga|Cffffffffm|Re" — the M is the accelerator,
 // and `ControlShortcutKey "M"` in the FDF is what binds it).
 //
-// Save / Load / Options / Restart are DISABLED, not hidden: WC3 greys them when they can't
-// be used and the FDF ships the greyed face for exactly that (ControlDisabledBackdrop). We
-// have no save system, and the Options panel is a separate 750-line file (EscMenuOptionsPanel.fdf).
+// Save / Load / Restart are DISABLED, not hidden: WC3 greys them when they can't be used and
+// the FDF ships the greyed face for exactly that (ControlDisabledBackdrop). We have no save
+// system.
+//
+// OPTIONS is four more panels on the same stack, and they are in another file — the game's own
+// `UI\FrameDef\UI\EscMenuOptionsPanel.fdf`, loaded into this screen's library beside the main
+// one (`includeFdf`) exactly as the engine has both in scope at once. Its panels anchor to a
+// root called `EscMenuOptionsPanel` rather than to `EscMenuMainPanel`, so the root this file
+// synthesizes takes the name the active panel expects. What those panels' controls DO is
+// ui/escOptions.ts's; the stack, the chrome and the buttons are here.
 
 import { loadHelpText, loadTips } from "../data/uiStrings";
 import type { DataSource } from "../vfs/types";
+import type { SoundBoard } from "../audio/sounds";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { numProp, type FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, playFdfClick, type FdfScreen } from "./fdf/render";
+import { ESC_OPTIONS_OVERRIDE, OW3_STRINGS } from "../overrides";
+import { EscOptions } from "./escOptions";
 
 const ESC_MENU_FDF = "UI\\FrameDef\\UI\\EscMenuMainPanel.fdf";
+const ESC_OPTIONS_FDF = "UI\\FrameDef\\UI\\EscMenuOptionsPanel.fdf";
 
-/** Which of the file's five panels is up. */
-type PanelId = "main" | "endgame" | "confirmquit" | "help" | "tips";
+/** Which of the two files' nine panels is up. */
+type PanelId = "main" | "endgame" | "confirmquit" | "help" | "tips" | "options" | "optgameplay" | "optvideo" | "optsound";
 
 const PANEL_FRAME: Record<PanelId, string> = {
   main: "MainPanel",
@@ -44,7 +55,33 @@ const PANEL_FRAME: Record<PanelId, string> = {
   confirmquit: "ConfirmQuitPanel",
   help: "HelpPanel",
   tips: "TipsPanel",
+  options: "OptionsPanel",
+  optgameplay: "GameplayPanel",
+  optvideo: "VideoPanel",
+  optsound: "SoundPanel",
 };
+
+/** The four panels that come out of `EscMenuOptionsPanel.fdf`, and which of the three settings
+ *  panels each of the last three is (ui/escOptions.ts binds by that). */
+const OPTIONS_PANELS: Partial<Record<PanelId, "gameplay" | "video" | "sound" | null>> = {
+  options: null,
+  optgameplay: "gameplay",
+  optvideo: "video",
+  optsound: "sound",
+};
+
+/**
+ * The size of the Options panel — the ONE thing about it that is not in the file.
+ *
+ * `EscMenuMainPanel.fdf` gives each of its five panels a Width and a Height; the options file
+ * gives its four none at all, because in the engine they are laid inside a frame the game sizes
+ * for them. The file still says what that size is, twice over: the OK/Cancel row is inset
+ * 0.028125 from the left and is 0.112 + 0.00625 + 0.112 wide, which comes to 0.286625 plus the
+ * same inset on the right — and `EscMenuBackdrop`, the shared stone frame, declares exactly the
+ * 0.288 x 0.384 that MainPanel does. The tallest of the four (Gameplay) ends 0.007 above the OK
+ * button at that height, so it is the size the panels were authored against.
+ */
+const OPTIONS_PANEL_SIZE = { width: 0.288, height: 0.384 };
 
 const num = (v: number): Arg => ({ s: String(v), n: v, str: false });
 const prop = (key: string, ...args: Arg[]): FdfProp => ({ key, args });
@@ -64,6 +101,8 @@ export interface EscMenuActions {
    *  open)? Decides which of the file's two captions the button wears. Absent reads as
    *  "never paused", which is what a screen with no pause to offer wants. */
   isPaused?(): boolean;
+  /** The live SoundBoard, so the Options screen's Sound panel is audible as it is dragged. */
+  sounds?(): SoundBoard | null;
 }
 
 export class EscMenu {
@@ -75,6 +114,8 @@ export class EscMenu {
   private help: string[] = [];
   private tips: string[] = [];
   private tip = 0;
+  private lib: FdfLibrary | null = null;
+  private readonly options: EscOptions;
   private onEscape: (e: KeyboardEvent) => void;
 
   /** `skin` is the war3skins.txt section the chrome is decorated from — WC3 gives the
@@ -85,6 +126,7 @@ export class EscMenu {
     private skin: string,
     private actions: EscMenuActions,
   ) {
+    this.options = new EscOptions({ sounds: () => this.actions.sounds?.() ?? null });
     // Escape closes the menu, captured ahead of the HUD's own Escape handler. From a
     // sub-panel it steps BACK one level instead — the same thing its Previous Menu /
     // Cancel button does, and what the reference does with the key.
@@ -96,8 +138,23 @@ export class EscMenu {
       // Previous Menu / Cancel on a sub-panel — it makes that button's sound.
       playFdfClick();
       if (this.panel === "main") this.actions.onReturn();
-      else this.go(this.panel === "confirmquit" ? "endgame" : "main");
+      else this.go(this.stepBack());
     };
+  }
+
+  /** Which panel a Previous Menu / Cancel — or the Escape key standing in for one — goes back
+   *  to from here. One level up the stack, every time. */
+  private stepBack(): PanelId {
+    if (this.panel === "confirmquit") return "endgame";
+    if (this.panel in OPTIONS_PANELS) {
+      // Escape on a settings panel is its CANCEL button, so it undoes the visit exactly as the
+      // button does — anything applied live along the way included.
+      if (this.panel !== "options") {
+        this.options.cancel();
+        return "options";
+      }
+    }
+    return "main";
   }
 
   get visible(): boolean {
@@ -108,6 +165,9 @@ export class EscMenu {
     if (this.shown) return;
     this.shown = true;
     this.panel = "main";
+    // A setting changed from the glue Options screen since the last visit is what these panels
+    // should show, so the store is re-read rather than remembered from last time.
+    this.options.reload();
     document.body.classList.add("game-menu-open"); // HUD hotkeys check this and stand down
     window.addEventListener("keydown", this.onEscape, true);
     void this.build();
@@ -172,10 +232,15 @@ export class EscMenu {
         container: this.scrim,
         vfs: this.vfs,
         fdfPath: ESC_MENU_FDF,
+        // The Options panels are four more faces of this same screen, and they are in the
+        // game's other in-game FrameDef file — so it is loaded into the same library, which is
+        // also what puts `EscMenuTemplates.fdf` in scope for both.
+        includeFdf: [ESC_OPTIONS_FDF],
         rootFrame: "EscMenuMainPanel",
         overlayClass: "fdf-ingame fdf-dialog",
         skin: this.skin,
         centerRoot: true,
+        overrides: [OW3_STRINGS, ESC_OPTIONS_OVERRIDE],
         buildRoot: (lib) => this.rootFrame(lib),
         handlers: this.handlers(),
         onBuild: (built) => this.onBuild(built),
@@ -209,6 +274,8 @@ export class EscMenu {
    * half as tall), and SetAllPoints is how the engine does that.
    */
   private rootFrame(lib: FdfLibrary): FdfFrame {
+    this.lib = lib; // captured so the Options panels' readouts resolve through GlobalStrings
+    if (this.panel in OPTIONS_PANELS) return this.optionsRoot(lib);
     const panel = lib.resolveRoot(PANEL_FRAME[this.panel]);
     const backdrop = lib.resolveRoot("EscMenuBackdrop");
     if (!panel) throw new Error(`FDF: frame "${PANEL_FRAME[this.panel]}" not found`);
@@ -234,6 +301,49 @@ export class EscMenu {
         prop("Width", num(numProp(panel, "Width") ?? 0.288)),
         prop("Height", num(numProp(panel, "Height") ?? 0.384)),
       ],
+      children,
+    };
+  }
+
+  /**
+   * The same root, for the four panels of `EscMenuOptionsPanel.fdf`.
+   *
+   * Three things make it its own function rather than a branch of `rootFrame`. The root has to
+   * be NAMED `EscMenuOptionsPanel`, because that is the frame every control in that file
+   * anchors to. Its size is not in the file (see `OPTIONS_PANEL_SIZE`). And the panel frame is
+   * kept as a CHILD, stretched over the root, rather than having its children hoisted the way
+   * the main file's are: `GameplayPanel` is what our own override hangs its two extra rows
+   * inside (`add: { into: "GameplayPanel" }`), so the container has to still be there when the
+   * override edits the built tree.
+   *
+   * The three settings panels also take `BottomButtonPanel` — the file's OK / Cancel row, which
+   * is declared outside all four panels because it belongs to whichever one is up, exactly as
+   * the backdrop is.
+   */
+  private optionsRoot(lib: FdfLibrary): FdfFrame {
+    const panel = lib.resolveRoot(PANEL_FRAME[this.panel]);
+    const backdrop = lib.resolveRoot("EscMenuBackdrop");
+    if (!panel) throw new Error(`FDF: frame "${PANEL_FRAME[this.panel]}" not found`);
+
+    const stretch = (f: FdfFrame): FdfFrame => ({
+      ...f,
+      props: [...f.props.filter((p) => p.key !== "Width" && p.key !== "Height"), prop("SetAllPoints")],
+    });
+
+    const children: FdfFrame[] = [];
+    if (backdrop) children.push(stretch(backdrop));
+    children.push(stretch(panel));
+    if (this.panel !== "options") {
+      const buttons = lib.resolveRoot("BottomButtonPanel");
+      if (buttons) children.push(stretch(buttons));
+    }
+
+    return {
+      type: "FRAME",
+      name: "EscMenuOptionsPanel",
+      inherits: null,
+      withChildren: false,
+      props: [prop("Width", num(OPTIONS_PANEL_SIZE.width)), prop("Height", num(OPTIONS_PANEL_SIZE.height))],
       children,
     };
   }
@@ -282,6 +392,17 @@ export class EscMenu {
       // --- ConfirmQuitPanel
       ConfirmQuitQuitButton: () => (this.actions.onExitProgram ?? this.actions.onEndGame)(),
       ConfirmQuitCancelButton: () => this.go("endgame"),
+      // --- OptionsPanel, and the three settings panels behind it (ui/escOptions.ts). Every
+      // one of these buttons steps the same stack the panels above it do.
+      OptionsButton: () => this.go("options"),
+      GameplayButton: () => this.go("optgameplay"),
+      VideoButton: () => this.go("optvideo"),
+      SoundButton: () => this.go("optsound"),
+      OptionsPreviousButton: () => this.go("main"),
+      // OK and Cancel go back ONE level, to the category list they were opened from — the same
+      // step Previous Menu and Cancel take everywhere else on this stack.
+      OptionsOKButton: () => { this.options.ok(); this.go("options"); },
+      OptionsCancelButton: () => { this.options.cancel(); this.go("options"); },
       // --- HelpPanel / TipsPanel
       HelpOKButton: () => this.go("main"),
       TipsOKButton: () => this.go("main"),
@@ -293,10 +414,12 @@ export class EscMenu {
   /** Fill the panel's contents and grey what we can't do yet. Runs on every build —
    *  including the rebuild a RESIZE triggers, which is why it can't be done inline. */
   private onBuild(screen: FdfScreen): void {
-    // No save system, and no Options panel yet (EscMenuOptionsPanel.fdf is its own screen).
-    for (const name of ["SaveGameButton", "LoadGameButton", "OptionsButton", "RestartButton"]) {
+    // No save system, and no way to restart a match from inside it.
+    for (const name of ["SaveGameButton", "LoadGameButton", "RestartButton"]) {
       screen.setEnabled(name, false);
     }
+    const settings = OPTIONS_PANELS[this.panel];
+    if (settings) this.options.bind(screen, settings, this.lib);
     if (this.panel === "help") {
       screen.textArea("HelpTextArea")?.setLines(this.help);
     } else if (this.panel === "tips") {

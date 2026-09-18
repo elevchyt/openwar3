@@ -26,7 +26,8 @@ baked `war3map.shd` layer is not one of them — it is part of how the ground lo
 
 **There is no Spell Detail row.** The whole `SpellFilterBackdrop` / `SpellFilterMenu` block is
 commented out in the shipped FDF, so the game has no such control. The option that used to sit
-in `OPTION_DEFS` for it was bound to a frame that has never existed.
+in `OPTION_DEFS` for it was bound to a frame that has never existed. (The IN-GAME panel does
+carry a `SpellFilterValue` — see below — but as a READOUT, not a control.)
 
 ## What each row does here
 
@@ -42,6 +43,23 @@ in `OPTION_DEFS` for it was bound to a frame that has never existed.
 | **Unit Shadows** | Skips the unit and building shadow passes (and the batch rebuild that feeds them). |
 | **Occlusion** | *Nothing* — see below. |
 | **Vertical Sync** | Ours. A Chromium launch switch in the desktop app — see the last section. |
+
+## The in-game twin, and its five read-only rows
+
+F10 → Options → Video is the same settings over a second, smaller panel — the game's own
+`UI\FrameDef\UI\EscMenuOptionsPanel.fdf`, mounted by [`src/ui/escOptions.ts`](../src/ui/escOptions.ts)
+as four more faces of the Esc menu's stack. There is one model and one store behind both
+screens: every row there is an `OPTION_DEFS` row, bound through the same table (`escFrame` names
+the few frames the two files spell differently — the in-game pulldowns are
+`EscOptionsParticlesMenu` and friends).
+
+What the in-game panel offers is deliberately SMALLER, and the shape is the game's, not ours.
+Only the Gamma slider and the four pulldowns (Particles, Lights, Unit Shadows, Occlusion) are
+controls; **Resolution, Model Detail, Animation Quality, Texture Quality and Spell Detail are
+read-only values** — `ResolutionValue`, `ModelDetailValue` and so on are `TEXT` frames in the
+file, with no pulldown anywhere near them. In 2003 that was because changing any of them meant
+resetting the D3D device mid-match. We print the live value into each of them and leave the
+pulldowns on the glue screen, because the file says which rows this panel gets to be.
 
 ## Resolution is the one that changes how many pixels are drawn
 

@@ -17,8 +17,14 @@ import { SOUND_GROUP, type SoundBoard } from "../audio/sounds";
 // `applyVideoOptions` in render/videoQuality.ts, which is also where each video setting's
 // meaning (and which of its numbers are the game's) is written down, and the Gameplay panel's
 // two health-bar rows through `applyHealthBarOptions` in render/worldOverlays.ts — the module
-// that draws the bars they describe — and its "Hotkeys:" row through `applyHotkeyOptions` in
-// data/hotkeys.ts, which is where the three keyboard schemes are written down.
+// that draws the bars they describe — its "Hotkeys:" row through `applyHotkeyOptions` in
+// data/hotkeys.ts, which is where the three keyboard schemes are written down, and its two
+// scroll sliders through `applyScrollOptions` in render/scrollOptions.ts.
+//
+// The table serves BOTH options screens: the glue one the main menu opens and the in-game one
+// behind F10 → Options (ui/escOptions.ts), which is the same settings out of the game's own
+// `UI\FrameDef\UI\EscMenuOptionsPanel.fdf`. A row whose two files name it differently carries
+// an `escFrame`; a row only one of the two panels has simply never binds on the other.
 
 /** The kind of control an option is bound to, which decides how its value is read/written. */
 export type OptionKind = "bool" | "range" | "choice" | "text";
@@ -27,6 +33,12 @@ export interface OptionDef {
   key: string;
   /** The FDF frame name the control lives under (CheckBox / Slider / PopupMenu / EditBox). */
   frame: string;
+  /** The same control's frame name on the IN-GAME panel, when `UI\FrameDef\UI\EscMenuOptionsPanel.fdf`
+   *  spells it differently from the glue screen's `UI\FrameDef\Glue\OptionsMenu.fdf` (ui/escOptions.ts).
+   *  Most rows need none — the two files name the same row the same way, which is how the two
+   *  screens end up being one table. A row the in-game panel does not carry at all needs none
+   *  either: its frame is simply not in that tree and binding it is a no-op. */
+  escFrame?: string;
   kind: OptionKind;
   /** The Options panel it sits on — used to bind and to switch tabs. */
   panel: "gameplay" | "video" | "sound";
@@ -113,9 +125,13 @@ const RESOLUTIONS = [
 // Ordered by panel, then by the FDF's own top-to-bottom order.
 export const OPTION_DEFS: readonly OptionDef[] = [
   // --- Gameplay ---
-  { key: "mouseScrollSpeed", frame: "MouseScrollSlider", kind: "range", panel: "gameplay", def: 50, applied: false },
-  { key: "mouseScrollDisable", frame: "MouseScrollDisableCheckBox", kind: "bool", panel: "gameplay", def: false, applied: false },
-  { key: "keyScrollSpeed", frame: "KeyScrollSlider", kind: "range", panel: "gameplay", def: 50, applied: false },
+  // The two scroll sliders and the switch between them, live through `applyScrollOptions`
+  // (render/scrollOptions.ts) — which is also where the only invented number on this panel is
+  // written down and justified: what a notch MEANS is engine-internal and in no game file, so
+  // the middle of either slider is the speed OpenWar3 has always panned at.
+  { key: "mouseScrollSpeed", frame: "MouseScrollSlider", kind: "range", panel: "gameplay", def: 50 },
+  { key: "mouseScrollDisable", frame: "MouseScrollDisableCheckBox", escFrame: "MouseScrollDisable", kind: "bool", panel: "gameplay", def: false },
+  { key: "keyScrollSpeed", frame: "KeyScrollSlider", kind: "range", panel: "gameplay", def: 50 },
   // Four rows the game had here are GONE (issue #142), and the panel is shorter for it. Three
   // of them — Enhanced Tooltips, the Subgroup order modifier key and Enable formation movement
   // toggle — are simply how OpenWar3 behaves: all three are what a player wants on, none of
@@ -146,10 +162,10 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   { key: "healthBars", frame: "HealthBarsCheckBox", kind: "bool", panel: "gameplay", def: true },
   // …and what those bars are COLOURED like (see HEALTH_BAR_STYLES). A row of ours, on a frame
   // of ours, directly under the checkbox it qualifies.
-  { key: "healthBarStyle", frame: "HealthBarStyleMenu", kind: "choice", panel: "gameplay", def: "default", choices: HEALTH_BAR_STYLES },
+  { key: "healthBarStyle", frame: "HealthBarStyleMenu", escFrame: "EscHealthBarStyleMenu", kind: "choice", panel: "gameplay", def: "default", choices: HEALTH_BAR_STYLES },
   // …and which KEY presses a command button (issue #142). Live, through `applyHotkeyOptions`
   // in data/hotkeys.ts, which is where the three rungs are written down.
-  { key: "hotkeys", frame: "HotkeysMenu", kind: "choice", panel: "gameplay", def: "legacy", choices: HOTKEY_MODES },
+  { key: "hotkeys", frame: "HotkeysMenu", escFrame: "EscHotkeysMenu", kind: "choice", panel: "gameplay", def: "legacy", choices: HOTKEY_MODES },
   // …and whether that key is PRINTED on the button, in the corner box the game already stamps a
   // quantity into (`.hud-count-badge`). Not a WC3 row — the 2003 card shows its key only inside
   // the tooltip — so it is ours, on a frame of ours, under the row whose answer it prints. ON by
@@ -167,14 +183,14 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   { key: "modelDetail", frame: "ModelDetailMenu", kind: "choice", panel: "video", def: "high", choices: quality("MODELS"), applied: false },
   { key: "animQuality", frame: "AnimQualityMenu", kind: "choice", panel: "video", def: "high", choices: quality("ANIM") },
   { key: "textureQuality", frame: "TextureQualityMenu", kind: "choice", panel: "video", def: "high", choices: quality("TEXTURES") },
-  { key: "particles", frame: "ParticlesMenu", kind: "choice", panel: "video", def: "high", choices: quality("PARTICLES") },
-  { key: "lights", frame: "LightsMenu", kind: "choice", panel: "video", def: "high", choices: quality("LIGHTS") },
+  { key: "particles", frame: "ParticlesMenu", escFrame: "EscOptionsParticlesMenu", kind: "choice", panel: "video", def: "high", choices: quality("PARTICLES") },
+  { key: "lights", frame: "LightsMenu", escFrame: "EscOptionsLightsMenu", kind: "choice", panel: "video", def: "high", choices: quality("LIGHTS") },
   // "Unit Shadows:" (COLON_SHADOWS) — the model shadow decals, not the baked terrain layer.
-  { key: "shadows", frame: "ShadowsMenu", kind: "choice", panel: "video", def: "on", choices: ON_OFF },
+  { key: "shadows", frame: "ShadowsMenu", escFrame: "EscOptionsShadowsMenu", kind: "choice", panel: "video", def: "on", choices: ON_OFF },
   // Occlusion is the x-ray silhouette a unit shows through a cliff or a tree — the thing
   // `EnableOcclusion` turns off for a cinematic (jass/natives/cinematic.ts). We don't draw it,
   // so there is nothing here to switch.
-  { key: "occlusion", frame: "OcclusionMenu", kind: "choice", panel: "video", def: "on", choices: ON_OFF, applied: false },
+  { key: "occlusion", frame: "OcclusionMenu", escFrame: "EscOptionsOcclusionMenu", kind: "choice", panel: "video", def: "on", choices: ON_OFF, applied: false },
   // …and no Spell Detail row: the shipped 1.30.4 OptionsMenu.fdf has the whole `SpellFilterMenu`
   // block commented out, so the panel it is bound to has never had one.
   // "Vertical Sync" — not a WC3 row (1.30.4's panel has no frame-rate or vsync control), so it is

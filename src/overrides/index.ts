@@ -10,6 +10,7 @@ import hotkeyEditorFdf from "./ui/HotkeyEditor.fdf?raw";
 import localMultiplayerCreateFdf from "./ui/LocalMultiplayerCreate.fdf?raw";
 import localMultiplayerJoinFdf from "./ui/LocalMultiplayerJoin.fdf?raw";
 import optionsMenuFdf from "./ui/OptionsMenu.fdf?raw";
+import escMenuOptionsPanelFdf from "./ui/EscMenuOptionsPanel.fdf?raw";
 
 // OpenWar3's own layer on top of the game's UI files (issue #124). Read `README.md` first.
 //
@@ -128,6 +129,48 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     // Options → Video: "Vertical Sync", under the game's last row (Occlusion).
     { frame: "VsyncCheckBox", into: "VideoPanel" },
     { frame: "VsyncLabel", into: "VideoPanel" },
+  ],
+};
+
+/**
+ * F10 → Options: the same three edits this file makes to the glue Options screen, made to the
+ * game's IN-GAME panel (`UI\FrameDef\UI\EscMenuOptionsPanel.fdf`) — the rows whose only honest
+ * value is ON go, "Custom Keyboard Shortcuts:" becomes the "Hotkeys:" pulldown, the Network
+ * panel goes with the latency knob we have nothing to set, the campaign "Difficulty:" readout
+ * goes with them, and the two rows of ours that the glue panel grew come in. See `ui/EscMenuOptionsPanel.fdf` for what each one is and
+ * src/ui/escOptions.ts for the screen that layers it.
+ */
+export const ESC_OPTIONS_OVERRIDE: FdfOverride = {
+  id: "ow3-esc-options-panel",
+  source: escMenuOptionsPanelFdf,
+  repoint: [
+    // "Always show Health Bars" takes the retired Enhanced Tooltips row's place, directly under
+    // the Keyboard Scroll slider's label — wearing that row's own offsets off it (-0.005 back
+    // out of the label column, -0.021 to clear the slider), because it is now that row.
+    { from: "FormationToggleCheckBox", to: "KeyScrollLabel", dx: -0.005, dy: -0.021, only: ["HealthBarsCheckBox"] },
+  ],
+  remove: [
+    // Three rows whose only honest value is ON (issue #142's reasons, panel for panel), each a
+    // checkbox with its label hanging off it.
+    "TooltipsCheckBox", "TooltipsLabel",
+    "SubgroupCheckBox", "SubgroupLabel",
+    "FormationToggleCheckBox", "FormationToggleLabel",
+    // …and the read-only "Custom Keyboard Shortcuts:" row the "Hotkeys:" pulldown answers,
+    // and the "Difficulty:" one under it — a readout of the campaign screen's own dropdown,
+    // printing back at the player the one thing about the chapter they chose themselves.
+    "CustomKeysLabel", "CustomKeysValue",
+    "DifficultyLabel", "DifficultyValue",
+    // …and the Network category, whose panel sets a turn latency an OpenWar3 LAN match has not
+    // got. The button is the only thing that reaches its panel, so the panel needs no entry.
+    "NetworkButton",
+  ],
+  add: [
+    { frame: "HealthBarStyleLabel", into: "GameplayPanel" },
+    { frame: "EscHealthBarStyleMenu", into: "GameplayPanel" },
+    { frame: "HotkeysLabel", into: "GameplayPanel" },
+    { frame: "EscHotkeysMenu", into: "GameplayPanel" },
+    { frame: "ShowHotkeysCheckBox", into: "GameplayPanel" },
+    { frame: "ShowHotkeysLabel", into: "GameplayPanel" },
   ],
 };
 

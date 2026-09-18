@@ -15,6 +15,7 @@ import {
 import { applyVideoOptions } from "../render/videoQuality";
 import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
+import { applyScrollOptions } from "../render/scrollOptions";
 import { nativeVsync, relaunchNative, setNativeVsync } from "../assets/nativeInstall";
 import { showGlueDialog } from "./glueDialog";
 import { showHotkeyEditor } from "./hotkeyEditor";
@@ -37,11 +38,16 @@ import { setGameTip } from "./gameTip";
 //     ones live so a volume drag is heard immediately; OK commits the copy to localStorage,
 //     Cancel throws it away and restores the committed values (re-applying the audio it touched).
 //
-// All three panels have a live backend now — applyAudioOptions, applyVideoOptions and
-// applyHealthBarOptions, each called from `commit` as its own panel is touched, so a volume
-// drag is heard, a gamma drag is seen, and a health bar changes colour under the pulldown. The
-// gameplay SLIDERS, and the two video rows this engine has no feature behind, are remembered
-// only (see OPTION_DEFS `applied:false`, which says why for each).
+// All three panels have a live backend now — applyAudioOptions, applyVideoOptions,
+// applyHealthBarOptions and applyScrollOptions, each called from `commit` as its own panel is
+// touched, so a volume drag is heard, a gamma drag is seen, a health bar changes colour under
+// the pulldown and the camera pans at the speed the slider was left at. Only the two video rows
+// this engine has no feature behind are remembered and unread (see OPTION_DEFS `applied:false`,
+// which says why for each).
+//
+// This screen has an IN-GAME twin — F10 → Options, ui/escOptions.ts — over the game's own
+// smaller panel. The two are one model and one store: every row there is an `OPTION_DEFS` row
+// bound through the same table.
 //
 // WHERE THE BIG PANEL BEHIND THESE CONTROLS COMES FROM. Nothing in this file draws it: the
 // settings frame is 3D chrome in the LEFT sprite layer, and it is the one screen in the game
@@ -101,9 +107,10 @@ export async function mountOptions(
   // putting the committed values back through the same two calls is a complete undo.
   const applyVideo = (opts: Options): void => applyVideoOptions(opts);
   // The Gameplay panel has a live half too now (issue #141): the two health-bar rows are read
-  // per frame by the world overlays, so a bar changes colour as the pulldown is used — and the
-  // "Hotkeys:" row (issue #142), which the HUD's key handler asks before every keystroke.
-  const applyGameplay = (opts: Options): void => { applyHealthBarOptions(opts); applyHotkeyOptions(opts); };
+  // per frame by the world overlays, so a bar changes colour as the pulldown is used — the
+  // "Hotkeys:" row (issue #142), which the HUD's key handler asks before every keystroke — and
+  // the two scroll sliders, which the camera asks every frame (render/scrollOptions.ts).
+  const applyGameplay = (opts: Options): void => { applyHealthBarOptions(opts); applyHotkeyOptions(opts); applyScrollOptions(opts); };
 
   const num = (v: unknown, fallback: number): number => (typeof v === "number" ? v : fallback);
   const str = (v: unknown, fallback: string): string => (typeof v === "string" ? v : fallback);

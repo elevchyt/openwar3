@@ -1,0 +1,121 @@
+// OpenWar3 override — `UI\FrameDef\UI\EscMenuOptionsPanel.fdf`, the panel behind F10 → Options.
+//
+// The in-game Options panel is the glue Options screen's smaller twin: the same settings, minus
+// everything the 2003 engine could not change without a device reset (which it prints as
+// read-only values instead — Resolution, Model Detail, Animation Quality, Texture Quality,
+// Spell Detail). We keep that shape, because it is the shape the game has, and this file makes
+// the same three edits to it that `OptionsMenu.fdf` makes to the glue one:
+//
+//   · "Enhanced Tooltips", "Subgroup order modifier key" and "Enable Formation Movement toggle"
+//     GO. All three are simply how OpenWar3 behaves — see src/data/options.ts, where the glue
+//     screen's copies of the same three rows were retired by issue #142 — and a setting whose
+//     only honest value is ON is not a setting.
+//   · "Custom Keyboard Shortcuts:" GOES, and the "Hotkeys:" pulldown takes its place. That row
+//     is the one of the three rungs a checkbox could say (data/hotkeys.ts), and on this panel
+//     it was a read-only VALUE rather than a control at all.
+//   · "Network" GOES, with its whole panel. It set the turn latency of a Battle.net game, and
+//     an OpenWar3 LAN match has no such knob to offer (docs/multiplayer.md).
+//   · "Difficulty:" GOES. It was a readout of the campaign screen's own dropdown, printing back
+//     at the player the one thing about the chapter they chose themselves.
+//
+// …and adds the two rows of ours that the glue panel grew with them: the "Healthbars:" pulldown
+// under "Always show Health Bars", and "Show hotkeys on command buttons" under "Hotkeys:". The
+// frames below carry the SAME NAMES as their glue twins in `OptionsMenu.fdf` — which is the
+// game's own idiom (both of Blizzard's files name this panel's `GameplayPanel`,
+// `MouseScrollSlider` and `HealthBarsCheckBox` alike, over different templates), and is what
+// lets one `OPTION_DEFS` row bind on either screen without naming its control twice.
+//
+// The removals and the re-anchoring live in the manifest (src/overrides/index.ts), because FDF
+// is a declaration language with no syntax for either.
+//
+// Every number here is read off the file being layered: a pulldown is `EscOptionsParticlesMenu`'s
+// 0.1175 x 0.0245 hung 0.004 off a 0.1-wide label, two pulldowns are 0.004 apart, and a label
+// row follows a checkbox row by the -0.004 `CustomKeysLabel` used.
+
+// --- Gameplay panel --------------------------------------------------------------------
+
+Frame "TEXT" "HealthBarStyleLabel" INHERITS "EscMenuLabelTextTemplate" {
+    Height 0.0245,
+    Width 0.1,
+    // +0.005 back into the label column: the checkbox above hangs 0.005 left of it, exactly as
+    // the file's own `CustomKeysLabel` re-indents under the same box.
+    SetPoint TOPLEFT, "HealthBarsCheckBox", BOTTOMLEFT, 0.005, -0.004,
+    Text "COLON_HEALTHBARS",
+}
+
+Frame "POPUPMENU" "EscHealthBarStyleMenu" {
+    Width 0.1175,
+    Height 0.0245,
+    PopupButtonInset 0.01,
+    SetPoint LEFT, "HealthBarStyleLabel", RIGHT, 0.004, 0.0,
+
+    ControlBackdrop "EscHealthBarStylePopupMenuBackdrop",
+    Frame "BACKDROP" "EscHealthBarStylePopupMenuBackdrop" INHERITS "EscMenuButtonBackdropTemplate" {
+    }
+
+    ControlDisabledBackdrop "EscHealthBarStylePopupMenuDisabledBackdrop",
+    Frame "BACKDROP" "EscHealthBarStylePopupMenuDisabledBackdrop" INHERITS "EscMenuButtonDisabledBackdropTemplate" {
+    }
+
+    PopupTitleFrame "EscHealthBarStylePopupMenuTitle",
+    Frame "GLUETEXTBUTTON" "EscHealthBarStylePopupMenuTitle" INHERITS WITHCHILDREN "EscMenuPopupMenuTitleTemplate" {
+    }
+
+    PopupArrowFrame "EscHealthBarStylePopupMenuArrow",
+    Frame "BUTTON" "EscHealthBarStylePopupMenuArrow" INHERITS WITHCHILDREN "EscMenuPopupMenuArrowTemplate" {
+    }
+
+    // The entries are filled from OPTION_DEFS at bind time, as the glue screen's are — so the
+    // two panels can never drift apart on what a row offers.
+    PopupMenuFrame "EscHealthBarStylePopupMenuMenu",
+    Frame "MENU" "EscHealthBarStylePopupMenuMenu" INHERITS WITHCHILDREN "EscMenuPopupMenuMenuTemplate" {
+    }
+}
+
+Frame "TEXT" "HotkeysLabel" INHERITS "EscMenuLabelTextTemplate" {
+    Height 0.0245,
+    Width 0.1,
+    SetPoint TOPLEFT, "HealthBarStyleLabel", BOTTOMLEFT, 0.0, -0.004,
+    Text "COLON_HOTKEYS",
+}
+
+Frame "POPUPMENU" "EscHotkeysMenu" {
+    Width 0.1175,
+    Height 0.0245,
+    PopupButtonInset 0.01,
+    SetPoint LEFT, "HotkeysLabel", RIGHT, 0.004, 0.0,
+
+    ControlBackdrop "EscHotkeysPopupMenuBackdrop",
+    Frame "BACKDROP" "EscHotkeysPopupMenuBackdrop" INHERITS "EscMenuButtonBackdropTemplate" {
+    }
+
+    ControlDisabledBackdrop "EscHotkeysPopupMenuDisabledBackdrop",
+    Frame "BACKDROP" "EscHotkeysPopupMenuDisabledBackdrop" INHERITS "EscMenuButtonDisabledBackdropTemplate" {
+    }
+
+    PopupTitleFrame "EscHotkeysPopupMenuTitle",
+    Frame "GLUETEXTBUTTON" "EscHotkeysPopupMenuTitle" INHERITS WITHCHILDREN "EscMenuPopupMenuTitleTemplate" {
+    }
+
+    PopupArrowFrame "EscHotkeysPopupMenuArrow",
+    Frame "BUTTON" "EscHotkeysPopupMenuArrow" INHERITS WITHCHILDREN "EscMenuPopupMenuArrowTemplate" {
+    }
+
+    PopupMenuFrame "EscHotkeysPopupMenuMenu",
+    Frame "MENU" "EscHotkeysPopupMenuMenu" INHERITS WITHCHILDREN "EscMenuPopupMenuMenuTemplate" {
+    }
+}
+
+// The checkbox hangs off the LABEL column, not off the pulldown, and half the difference
+// between a 0.0245 pulldown row and a 0.024 checkbox puts its tick on the line a third
+// pulldown's label would have sat on. -0.005 back out of the label indent (see above).
+Frame "GLUECHECKBOX" "ShowHotkeysCheckBox" INHERITS WITHCHILDREN "EscMenuCheckBoxTemplate" {
+    SetPoint TOPLEFT, "HotkeysLabel", BOTTOMLEFT, -0.005, -0.00375,
+}
+
+Frame "TEXT" "ShowHotkeysLabel" INHERITS "EscMenuLabelTextTemplate" {
+    SetPoint LEFT, "ShowHotkeysCheckBox", RIGHT, 0.003, 0.0,
+    Width 0.195,
+    Height 0.024,
+    Text "SHOW_HOTKEYS_ON_BUTTONS",
+}

@@ -69,6 +69,7 @@ import { MetricsOverlay } from "../ui/metrics";
 import { cursorImageValue, cursorPx, cursorValue } from "../ui/cursor";
 import { perfLog } from "../dev/perfLog";
 import { animStride, renderSize, videoSettings } from "./videoQuality";
+import { edgeScrollScale, keyScrollScale } from "./scrollOptions";
 import { TerrainCull } from "./terrainCull";
 import type { PickVolume } from "./modelCollision";
 import { setSimProfiler } from "../sim/profile";
@@ -7644,6 +7645,9 @@ export class MapViewerScene {
         this.askPause(!this.playerPaused);
       },
       isPaused: () => this.playerPaused,
+      // …and what the Options panels behind this menu need: the board a volume drag is heard
+      // on (ui/escOptions.ts).
+      sounds: () => this.sounds,
     });
     this.allies?.dispose();
     this.allies = new AllianceDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
@@ -13122,10 +13126,13 @@ export class MapViewerScene {
       const panDown = (letters && this.keys.has("s")) || this.keys.has("arrowdown");
       const panRight = (letters && this.keys.has("d")) || this.keys.has("arrowright");
       const panLeft = (letters && this.keys.has("a")) || this.keys.has("arrowleft");
-      if (panUp) this.pan(fwd, speed);
-      if (panDown) this.pan(fwd, -speed);
-      if (panRight) this.pan(right, speed);
-      if (panLeft) this.pan(right, -speed);
+      // Options → Gameplay → "Keyboard Scroll:" scales the KEYS alone; the screen edges take
+      // their own slider a few lines down (render/scrollOptions.ts).
+      const keySpeed = speed * keyScrollScale();
+      if (panUp) this.pan(fwd, keySpeed);
+      if (panDown) this.pan(fwd, -keySpeed);
+      if (panRight) this.pan(right, keySpeed);
+      if (panLeft) this.pan(right, -keySpeed);
       // Driving the camera with the keys ends a Ctrl+C lock (as every other hand on the
       // camera does — see `rideLocked`).
       if (panUp || panDown || panRight || panLeft) this.releaseCameraRide();
@@ -13277,7 +13284,10 @@ export class MapViewerScene {
   private scrollArrow: HTMLDivElement | null = null;
   private updateEdgeScroll(fwd: [number, number], right: [number, number], speed: number): void {
     // Only in a live match, cursor on the page, nothing modal.
+    // …and "Disable Mouse Scroll", which is this slider reading zero (render/scrollOptions.ts).
+    const scale = edgeScrollScale();
     const active =
+      scale > 0 &&
       !!this.hud &&
       !this.paused &&
       !this.placement &&
@@ -13305,8 +13315,9 @@ export class MapViewerScene {
       else if (m.y >= f.bottom - margin) dy = 1;
     }
     if (dx || dy) {
-      if (dx) this.pan(right, dx * speed);
-      if (dy) this.pan(fwd, -dy * speed); // top of screen (dy<0) pans the view forward
+      const edgeSpeed = speed * scale; // Options → Gameplay → "Mouse Scroll:"
+      if (dx) this.pan(right, dx * edgeSpeed);
+      if (dy) this.pan(fwd, -dy * edgeSpeed); // top of screen (dy<0) pans the view forward
       // The edge releases a Ctrl+C lock on the first frame it pans, exactly as an arrow key
       // does: a camera the player is moving is a camera they have taken back, and a lock that
       // fought the pan for a moment first would only read as the edge being sticky.
