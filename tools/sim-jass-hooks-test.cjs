@@ -43,7 +43,7 @@ const EXPECTED = [
   "modifySkillPoints", "pauseUnit", "playerTechCount", "removeFromStock", "removeItem",
   "resetUnitCooldown", "selectHeroSkill", "setAllTypeSlots", "setDawnDusk", "setHeroLevel",
   "setResourceAmount",
-  "setHeroXp", "setItemCharges", "setItemPosition", "setPlayerTechMaxAllowed",
+  "setHeroXp", "setItemCharges", "setItemDroppable", "setItemPosition", "setPlayerTechMaxAllowed",
   "setPlayerTechResearched", "setTimeOfDay", "setTypeSlots", "setUnitAbilityLevel",
   // The rest of the day/night clock: how fast it runs and whether it runs at all. A campaign
   // sets both (Rise of the Naga: 25% speed, then UseTimeOfDayBJ(false) to hold it at night).

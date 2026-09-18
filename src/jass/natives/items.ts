@@ -133,7 +133,7 @@ export function registerItemNatives(rt: Runtime): void {
   def(rt, "IsItemIdSellable", (c, a) => jBool(typeInfo(c, intToRawcode(asInt(a[0])))?.sellable ?? false));
   def(rt, "IsItemIdPawnable", (c, a) => jBool(typeInfo(c, intToRawcode(asInt(a[0])))?.pawnable ?? false));
 
-  // --- per-instance flags. WC3 keeps these on the item; our sim models none of them
+  // --- per-instance flags. WC3 keeps these on the item; our sim models most of them
   // (a ground item here is neither hideable nor destructible), so they live on the handle:
   // set and read back faithfully — CheckItemStatus and the GUI conditions that ride on it
   // work — but only the script observes them. Honest, and no lie to the map. ---
@@ -149,9 +149,16 @@ export function registerItemNatives(rt: Runtime): void {
     return JNULL;
   });
   def(rt, "IsItemInvulnerable", (c, a) => jBool(item(c, a[0])?.invulnerable ?? false));
+  // …with ONE exception, and it is not a flag the script merely reads back: an undroppable
+  // item cannot leave the inventory it is in, which is a rule the SIM has to enforce (the
+  // drop button, a hand-over, a sale). See SimWorld.setItemDroppable.
   def(rt, "SetItemDroppable", (c, a) => {
     const it = item(c, a[0]);
-    if (it) it.droppable = a[1].k === "bool" && a[1].b;
+    const flag = a[1].k === "bool" && a[1].b;
+    if (it) {
+      it.droppable = flag;
+      if (it.simId >= 0) c.rt.hooks?.setItemDroppable?.(it.simId, flag);
+    }
     return JNULL;
   });
   def(rt, "SetItemPawnable", (c, a) => {

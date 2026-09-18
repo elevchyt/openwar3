@@ -72,7 +72,7 @@ const item = (id, abils, over = {}) => ({
   id, name: id, description: "", icon: "", tip: "", hotkey: "", buttonX: -1, buttonY: -1,
   model: "", scale: 1, gold: 0, lumber: 0, level: 0, classType: "Purchasable", abilities: abils,
   charges: 1, cooldownGroup: id, usable: true, perishable: true, powerup: false, droppable: true,
-  sellable: true, pawnable: true, pickRandom: false, maxHp: 75, stockMax: 1, stockRegen: 120,
+  sellable: true, pawnable: true, droppable: true, pickRandom: false, maxHp: 75, stockMax: 1, stockRegen: 120,
   stockStart: 0, ...over,
 });
 const passive = (id, abils) => item(id, abils, { charges: 0, usable: false, perishable: false, classType: "Permanent" });
@@ -85,6 +85,11 @@ const ITEMS = new Map([
   ["nspi", passive("nspi", ["AImx"])], ["gemt", passive("gemt", ["Adt1"])],
   ["ward", passive("ward", ["AIcd"])], ["spsh", passive("spsh", ["ANss"])],
   ["ankh", item("ankh", ["AIrc"], { usable: false })],
+  // The one item in the whole of ItemData.slk with `droppable` 0 — `soul`, "Soul"; pawnable
+  // and sellable are 0 on it too. Its twin here, `ledg`, is Gerard's Lost Ledger, which the
+  // TABLE ships as perfectly droppable and Human01's own trigger makes undroppable per item.
+  ["soul", item("soul", [], { charges: 0, usable: false, perishable: false, classType: "Miscellaneous", droppable: false, pawnable: false, sellable: false })],
+  ["ledg", passive("ledg", [])],
 ]);
 
 const N = 256;
@@ -372,6 +377,61 @@ console.log("\na HEXED hero uses nothing and picks up nothing — a critter has 
   world.items.set(ground.id, ground);
   check("…and nothing is picked up off the ground", world.pickUpItem(hexed, ground), false);
   check("…the item is still lying there", world.items.has(ground.id), true);
+}
+
+// --- UNDROPPABLE -----------------------------------------------------------------------
+//
+// `UI\TriggerStrings.txt`, beside the GUI action that sets it:
+//   SetItemDroppableBJHint="An undroppable item cannot be removed from a Hero's inventory
+//                           once it has been picked up."
+// So it is not only the drop button — a hand-over and a sale are removals too. Two sources
+// for the flag and both are tested: the TYPE's own `droppable` column (`soul` is the one
+// stock item with it clear) and the per-ITEM override a script sets (`SetItemDroppable`,
+// which is how Human01's Ledger becomes undroppable the moment Arthas picks it up).
+console.log("\nan undroppable item cannot leave the inventory");
+{
+  world = newWorld();
+  const hero = give(unit({ isHero: true }), "ledg");
+  const id = hero.inventory[0].id;
+  check("an ordinary item drops", world.dropItem(hero.id, 0, hero.x + 10, hero.y), true);
+  check("…and is on the ground", world.items.has(id), true);
+
+  world = newWorld();
+  const keeper = give(unit({ isHero: true }), "ledg");
+  const ledger = keeper.inventory[0].id;
+  check("SetItemDroppable finds a HELD item", world.setItemDroppable(ledger, false), true);
+  check("…and the drop is refused", world.dropItem(keeper.id, 0, keeper.x + 10, keeper.y), false);
+  check("…with the item still in the slot", keeper.inventory[0] !== null, true);
+  check("…and nothing on the ground", world.items.has(ledger), false);
+  // A far-away drop point takes the walk-and-drop road instead; it must refuse at the ORDER,
+  // so the hero does not walk across the map to fail on arrival.
+  check("…a drop out of reach is refused too", world.dropItem(keeper.id, 0, keeper.x + 2000, keeper.y), false);
+  check("…and no walk was started", keeper.order, "idle");
+  // The other two doors out of an inventory.
+  const mate = unit({ isHero: true, x: keeper.x + 40 });
+  world.transferItem(keeper, 0, mate);
+  check("…it cannot be handed to another hero", mate.inventory.some((h) => h && h.id === ledger), false);
+  check("…and the giver still has it", keeper.inventory[0] && keeper.inventory[0].id, ledger);
+  check("SetItemDroppable(true) gives it back", world.setItemDroppable(ledger, true), true);
+  check("…and now it drops", world.dropItem(keeper.id, 0, keeper.x + 10, keeper.y), true);
+}
+{
+  // No script involved: the TYPE's own column is the default.
+  world = newWorld();
+  const hero = give(unit({ isHero: true }), "soul");
+  check("a type with `droppable` 0 refuses with no script at all", world.dropItem(hero.id, 0, hero.x + 10, hero.y), false);
+  check("…and a script can still free it", world.setItemDroppable(hero.inventory[0].id, true)
+    && world.dropItem(hero.id, 0, hero.x + 10, hero.y), true);
+}
+{
+  // A non-hero inventory holder scatters what it carries when it dies — but not this.
+  world = newWorld();
+  const cart = give(unit({ isHero: false, hp: 1 }), "ledg");
+  const ledger = cart.inventory[0].id;
+  world.setItemDroppable(ledger, false);
+  world.dropInventory(cart);
+  check("a dead carrier does not scatter it either", world.items.has(ledger), false);
+  check("…it goes down with the body", cart.inventory[0] && cart.inventory[0].id, ledger);
 }
 
 console.log(failed ? `\nitems: ${failed} check(s) FAILED` : "\nitems: all checks passed");

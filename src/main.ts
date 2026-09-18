@@ -14,7 +14,7 @@ import { mountSkirmish } from "./ui/fdfSkirmish";
 import { mountCampaignScreen, type CampaignScreenState } from "./ui/fdfCampaign";
 import { mountCustomCampaignScreen } from "./ui/fdfCustomCampaign";
 import { mountViewReplayScreen } from "./ui/fdfViewReplay";
-import { creditsMap, loadCampaigns, type Campaign } from "./data/campaigns";
+import { creditsMap, loadCampaigns, type Campaign, type CampaignEntry } from "./data/campaigns";
 import { isRoc, setEdition } from "./data/edition";
 import {
   loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
@@ -177,6 +177,9 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
     mapScene.onLocalVictory = () => {
       if (pendingCampaign) markMissionComplete(pendingCampaign.key, pendingCampaign.index);
     };
+    // …and the chapter's own "and now play THIS": `ChangeLevel`, which the victory dialog's
+    // Continue button reaches whenever the map named a next level (see changeLevel below).
+    mapScene.onChangeLevel = (path) => void changeLevel(path);
     mapScene.loadMap(bytes);
     mapScene.start();
     return `${name} — authentic render (textures & models stream in)`;
@@ -527,6 +530,62 @@ async function startCampaignMission(vfs: DataSource, c: Campaign, index: number,
 }
 
 /**
+ * `ChangeLevel("Maps\Campaign\Human02.w3m")` — the chapter that just ended asked for the next
+ * one, which is what the victory dialog's **Continue** button does in a campaign (see
+ * `Runtime.changeLevel` for the Blizzard.j branch it comes out of).
+ *
+ * The match is taken down exactly as End Game takes it down, and the named map is then started
+ * on the campaign's own config — the same path `startCampaignMission` takes, because a chapter
+ * reached this way is a chapter reached any other way.
+ *
+ * The path is looked up in the CAMPAIGN INDEX first, and that lookup is worth more than it
+ * looks: it is what gives the loading screen its "Chapter Two / Blackrock & Roll" (a campaign
+ * map's own w3i name is the file's), what keeps the chapter list behind the player in step, and
+ * what credits the NEXT chapter's victory to the next chapter rather than to this one. A map
+ * the index does not name — a custom campaign, a chapter chain we have no row for — still
+ * plays: it simply arrives with the map's own name and finishes nothing.
+ *
+ * A path the install has no map for ends the campaign the only way left: back to the menus,
+ * with the chapter that was just won already recorded.
+ */
+async function changeLevel(mapPath: string): Promise<void> {
+  const vfs = resolver.installSource;
+  if (!vfs) return exitToMenu();
+  const bytes = await readMapBytes(vfs, mapPath);
+  if (!bytes) {
+    console.warn(`[OpenWar3] next chapter missing from this install: ${mapPath}`);
+    return exitToMenu();
+  }
+  const found = findChapter(mapPath);
+  const difficulty = campaignState?.difficulty ?? loadDifficulty();
+  endMatch();
+  if (found) {
+    // The campaign screen follows the player: quitting out of chapter two must land on
+    // chapter two's list, not on the one the session happened to start from.
+    campaignState = { campaign: found.campaign, chapters: true, difficulty };
+    pendingCampaign = { key: found.campaign.key, index: found.index };
+  } else {
+    pendingCampaign = null;
+  }
+  const title = found?.entry.name ?? mapPath.replace(/^.*[\\/]/, "").replace(/\.w3[mx]$/i, "");
+  const info = parseMapInfo(bytes, title);
+  await startGame(bytes, info, campaignConfig(info, difficulty, title));
+}
+
+/** Which campaign row a `Maps\…\Foo.w3x` path is, if the index names it. Compared on the
+ *  path the index itself carries — case- and separator-insensitively, because a script types
+ *  the path by hand (`SetNextLevelBJ`) and nothing makes it match the file's own spelling. */
+function findChapter(mapPath: string): { campaign: Campaign; index: number; entry: CampaignEntry } | null {
+  const key = (p: string): string => p.toLowerCase().replace(/\//g, "\\");
+  const want = key(mapPath);
+  for (const c of campaigns) {
+    const index = c.missions.findIndex((m) => key(m.file) === want);
+    if (index >= 0) return { campaign: c, index, entry: c.missions[index] };
+  }
+  return null;
+}
+
+/**
  * The main menu's Credits button (`creditsMap`, data/campaigns.ts).
  *
  * WC3's credits are a MAP and nothing else — there is no credits screen to build — so this is
@@ -562,10 +621,14 @@ let pendingCampaign: { key: string; index: number } | null = null;
 async function startChapter(name: string, difficulty: string): Promise<void> {
   const vfs = resolver.installSource;
   if (!vfs) throw new Error("no install mounted");
-  const campaigns = await loadCampaigns(vfs);
+  // Into the MODULE's list, not a local one: a chapter that ends with `ChangeLevel` looks the
+  // next map up in exactly this index (`findChapter`), so a dev boot that kept the campaigns
+  // to itself would play chapter one and then hand chapter two over as a nameless map.
+  if (!campaigns.length) campaigns = await loadCampaigns(vfs);
   for (const c of campaigns) {
     const index = c.missions.findIndex((m) => m.playable && m.file.toLowerCase().includes(name.toLowerCase()));
     if (index < 0) continue;
+    campaignState ??= { campaign: c, chapters: true, difficulty: difficulty as Difficulty };
     await startCampaignMission(vfs, c, index, difficulty as Difficulty);
     return;
   }
@@ -919,9 +982,14 @@ function freshMapCanvas(): void {
   mapCanvas = next;
 }
 
-/** Leave the current match (F10 → End Game): tear down the map scene and return to
- *  the main menu over its animated 3D scene. A fresh scene is built next game. */
-function exitToMenu(): void {
+/**
+ * Take the current match down — the half of leaving that is the same whatever comes next.
+ *
+ * Shared by `exitToMenu` (which then shows a glue screen) and by `changeLevel` (which then
+ * starts the next chapter). It deliberately does NOT touch `pendingCampaign`: who the match
+ * belonged to is the caller's business, and a chapter hand-off keeps the campaign.
+ */
+function endMatch(): void {
   const played = !!mapScene;
   mapScene?.dispose(); // …which silences the match's audio and flushes what it put on the page
   mapScene = null;
@@ -941,6 +1009,12 @@ function exitToMenu(): void {
   matchLink?.channel.close?.();
   matchLink = null;
   lan = null; // the wire the match owned is closed; a fresh LAN session opens a fresh one
+}
+
+/** Leave the current match (F10 → End Game): tear down the map scene and return to
+ *  the main menu over its animated 3D scene. A fresh scene is built next game. */
+function exitToMenu(): void {
+  endMatch();
   document.body.classList.remove("in-game"); // reveal the main-menu panel again
   const vfs = resolver.installSource;
   // A campaign chapter returns to the chapter LIST it was started from — the reference drops

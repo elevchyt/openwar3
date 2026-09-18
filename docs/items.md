@@ -393,6 +393,48 @@ restock clocks and their tech gates out in front of you — reconnaissance for o
 foreign shop's card and a foreign shop's purchase are the same question asked twice, which is
 why they ask it of the same function.
 
+## Undroppable: an item that cannot leave the inventory
+
+`SetItemDroppable(item, false)` is a per-ITEM flag, and the install says what it means beside
+the GUI action that sets it (`UI\TriggerStrings.txt`):
+
+```
+SetItemDroppableBJ="Make Undroppable"
+SetItemDroppableBJHint="An undroppable item cannot be removed from a Hero's inventory
+                        once it has been picked up."
+```
+
+**"Removed from the inventory" is broader than the drop button**, and that is the whole of the
+rule: dropping it, handing it to another hero and selling it back to a shop are all refused, and
+a non-hero inventory holder that dies goes down with it rather than scattering it (a HERO never
+scattered anything anyway — it keeps its inventory through death and revival). Moving it between
+SLOTS is not a removal and is left alone. All four doors ask one predicate,
+`SimWorld.mayLeaveInventory`.
+
+Two sources for the flag, in that order:
+
+* the **item instance**, if a script has spoken about it (`SimWorld.setItemDroppable`, keyed on
+  the ENTITY id — a `SimItem`/`HeldItem` id, which is what a JASS `item` handle stands for);
+* otherwise the **type's own `ItemData.slk` `droppable` column**. Exactly ONE stock item has it
+  clear — `soul`, "Soul" — so in practice every undroppable item in the game got that way from
+  a trigger.
+
+The case that reported it is the human campaign's first chapter. `ledg`, Gerard's Lost Ledger,
+is shipped as a perfectly ordinary droppable item; Human01's own `Ledger Is Picked Up` trigger
+is what pins it to Arthas:
+
+```
+call CreateItemLoc( 'ledg', GetRectCenter(gg_rct_Menag) )
+call SetItemInvulnerableBJ( udg_Ledger, true )
+…
+call SetItemDroppableBJ( udg_Ledger, false )     // Ledger Is Picked Up
+```
+
+The flag used to live on the JASS handle alone, with the rest of the per-instance item flags
+that "only the script observes" (`SetItemVisible`, `SetItemInvulnerable`) — honest for those,
+because a ground item here is neither hideable nor destructible, and wrong for this one, because
+this one is a rule the player runs into.
+
 ## Two things still open
 
 **`AIrb` Rune of Rebirth.** Its row carries nothing at all — no duration, no data, one buff

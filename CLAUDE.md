@@ -222,6 +222,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   pressed ability's own `Cool1`), and `ignoreCD` says the press costs no cooldown at all. The
   clock belongs to the HERO and outlives the bottle (`SimUnit.itemCooldowns`), which is what
   makes a potion bought mid-cooldown arrive on cooldown and one handed to another hero ready.
+  An **UNDROPPABLE** item ("cannot be removed from a Hero's inventory once it has been picked
+  up" — `UI\TriggerStrings.txt`'s own words beside `SetItemDroppableBJ`) is refused at all FOUR
+  doors and not only the drop button: dropping it, handing it over, selling it, and a NON-hero
+  carrier dying with it. It is a per-ITEM flag (`SetItemDroppable`, keyed on the entity id) laid
+  over the type's own `droppable` column, which exactly one stock item — `soul` — has clear.
 - **Orb effects:** read [`docs/orbs.md`](docs/orbs.md) before touching any ATTACK MODIFIER — the orb items, the
   arrow abilities (Searing/Cold/Black/Incinerate), Slow Poison, Envenomed Spears, Feedback, Frost Attack or the
   Mask of Death. They are ONE family under one rule — only **one** orb effect may ride a blow, by a fixed priority
@@ -232,6 +237,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   chapter-start path. The whole campaign is ONE text file (`UI\CampaignStrings_exp.txt`) that documents itself, and
   three of its rows break the obvious parse (a comma inside quotes, a fourth field, a "mission" that is a `.mdl`).
   The screen is also the one glue screen with **no panel chrome** — the campaign's 3D backdrop is the screen.
+  A chapter ENDS through a different native from a melee match: `CustomVictoryOkBJ` (the Continue
+  button) branches on `bj_changeLevelMapName`, so a melee map leaves through `EndGame` and a
+  chapter through **`ChangeLevel`**, whose whole job is to play the map the chapter's own
+  `SetNextLevelBJ` named. Answering it with a no-op is why Continue did nothing.
 - **Loading screens:** read [`docs/loading-screens.md`](docs/loading-screens.md) before touching `Loading.fdf`, the
   `[LoadingScreens]` table, or the start-of-match path. The w3i field that picks a map's screen is the one the
   parsers call **`campaignBackground`** (the int AFTER the subtitle is not a screen at all), the art is flat 2D in
@@ -298,6 +307,19 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   a colour, with an OBJECT twin (`BoundaryObject`, a black silhouette) that lives in the mdx SD shader. It does NOT
   block line of sight — that was tried and taken back out; see the doc's last section before reaching for it again.
   And the three rects (world bounds ⊃ playable area ⊃ camera bounds) are 512/256 apart and not interchangeable.
+  The one thing it refuses NOTHING is a unit the script has turned pathing off on
+  (`SetUnitPathing`, `PathDomain`'s **`ghost`**): that is how a campaign walks a body off the map,
+  and it is a different flag from the sim's own `noCollision` because it survives the orders that
+  clear that one and it takes the TERRAIN with it.
+- **Walkable destructibles:** read [`docs/walkable-destructibles.md`](docs/walkable-destructibles.md)
+  before touching [`src/render/walkableHeight.ts`](src/render/walkableHeight.ts) or
+  `RtsController.groundOrDeck`. `DestructableData.slk`'s `walkable` column (106 of the 247 stock
+  types: every bridge, the ramps, the invisible platforms) is a HEIGHT flag, not a pathing one —
+  where a unit may walk is already the type's `pathTex`, and what this adds is that the DECK is the
+  floor. Found by a ray cast straight DOWN at the model's own geometry, always MAXed with the
+  ground (so stepping off a bridge needs no rule), and the `.doo`'s `z` is an ABSOLUTE world height.
+  The geometry is parsed out of the archives because the viewer does not keep it: `setupGeosets`
+  uploads each geoset to a GL buffer and keeps only byte offsets.
 - **The pause:** read [`docs/pause.md`](docs/pause.md) before touching `paused` in
   `src/render/mapViewer.ts`, the F10 panel's Pause button or the Quest Log's Done button. The
   pause has THREE independent owners (a modal panel, the map's own `PauseGame`, a player) and

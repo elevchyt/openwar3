@@ -680,6 +680,10 @@ export interface EngineHooks {
    *  GetItemX/Y/Charges/TypeId, IsItemOwned, GetItemPlayer. */
   itemInfo?(itemId: number): ItemSnapshot | null;
   setItemCharges?(itemId: number, charges: number): void;
+  /** SetItemDroppable — an item that cannot leave the inventory it is in. A real sim rule
+   *  rather than a flag the script reads back: see SimWorld.setItemDroppable for the game's
+   *  own wording of it and for what "leave" covers. */
+  setItemDroppable?(itemId: number, flag: boolean): void;
   /** SetItemPosition — move a ground item; on a CARRIED item WC3 drops it there. */
   setItemPosition?(itemId: number, x: number, y: number): void;
   /** The item TYPE's data (GetItemLevel / GetItemType / IsItemIdPowerup / …). */
@@ -829,6 +833,29 @@ export interface EngineHooks {
   /** EndGame(doScoreScreen) — leave the match. The Quit button of the victory/defeat
    *  dialog is a DialogAddQuitButton, and this is what it does. */
   endGame?(doScoreScreen: boolean): void;
+  /**
+   * ChangeLevel(mapName, doScoreScreen) — **play the next chapter**.
+   *
+   * The one native the whole campaign hangs on, and it is easy to miss because `EndGame` sits
+   * beside it doing something that looks similar. `Scripts\Blizzard.j` spells the difference
+   * out: `CustomVictoryOkBJ` (the Continue button) and `CustomVictorySkipBJ` (no dialog at
+   * all) both read the same global and branch on it —
+   *
+   *     if (bj_changeLevelMapName == null) then
+   *         call EndGame( bj_changeLevelShowScores )
+   *     else
+   *         call ChangeLevel( bj_changeLevelMapName, bj_changeLevelShowScores )
+   *     endif
+   *
+   * — so a melee map, which never calls `SetNextLevelBJ`, leaves through `EndGame`, while a
+   * campaign chapter's own `Next Level Run` trigger sets the global first
+   * (`SetNextLevelBJ("Maps\\Campaign\\Human02.w3m")`) and leaves through THIS one. Answering
+   * it with a no-op is why Continue appeared to do nothing: the dialog closed and the player
+   * was left standing in the chapter they had just finished.
+   *
+   * `mapName` is an archive path, exactly as the campaign index spells it.
+   */
+  changeLevel?(mapName: string, doScoreScreen: boolean): void;
   /** PauseGame — CustomVictoryDialogBJ freezes a single-player game under its dialog. */
   pauseGame?(flag: boolean): void;
   /** EnableUserUI(false) — hide the HUD (the victory dialog does this in campaigns). */

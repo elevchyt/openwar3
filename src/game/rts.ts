@@ -4420,9 +4420,11 @@ export class RtsController {
       this.loc[1] = u.y;
       if (e.liftFromSim) e.moveHeight = lift(u.flyHeight); // the climb is the sim's — see Entry.liftFromSim
       // Buildings seat on the tallest terrain their footprint spans (issue #15); mobile
-      // units (footHalfW 0) ride the centre-sampled ground + their fly height.
+      // units (footHalfW 0) ride the centre-sampled FLOOR + their fly height — the ground, or
+      // the deck of a walkable destructible where one is over it, which is what puts a unit
+      // ON a bridge rather than in the river under it (`groundOrDeck`).
       this.loc[2] =
-        (e.footHalfW > 0 ? this.footMaxHeight(u.x, u.y, e.footHalfW, e.footHalfH) : this.heightAt(u.x, u.y));
+        (e.footHalfW > 0 ? this.footMaxHeight(u.x, u.y, e.footHalfW, e.footHalfH) : this.groundOrDeck(u.x, u.y));
       if (e.floats) this.loc[2] = Math.max(this.loc[2], this.waterAt(u.x, u.y)); // a hull rides the surface, not the sea floor
       this.loc[2] += e.moveHeight;
       e.unit.instance.setLocation(this.loc);
@@ -6549,7 +6551,7 @@ export class RtsController {
    *  move/patrol, red for an attack-move. Drained + rendered by the host. */
   private orderArrows: Array<{ x: number; y: number; z: number; color: [number, number, number] }> = [];
   private queueArrow(x: number, y: number, color: [number, number, number]): void {
-    this.orderArrows.push({ x, y, z: this.heightAt(x, y), color });
+    this.orderArrows.push({ x, y, z: this.groundOrDeck(x, y), color });
   }
   drainOrderArrows(): Array<{ x: number; y: number; z: number; color: [number, number, number] }> {
     if (!this.orderArrows.length) return this.orderArrows;
@@ -6985,8 +6987,31 @@ export class RtsController {
    *  whichever is higher of the ground and the water surface (`makeWaterSampler`). The max
    *  keeps a ship honest in the shallows, where the beach rises above the water plane. */
   private standZ(e: Entry, x: number, y: number): number {
-    const ground = this.heightAt(x, y);
+    const ground = this.groundOrDeck(x, y);
     return e.floats ? Math.max(ground, this.waterAt(x, y)) : ground;
+  }
+
+  /**
+   * The FLOOR at a world point: the terrain, or a walkable destructible's deck where one is
+   * over it — a bridge, a stone ramp, one of the invisible platforms a mapmaker builds an
+   * upper storey out of (`DestructableData.walkable`; render/walkableHeight.ts).
+   *
+   * Always a MAX with the ground, which is the reference's own shape
+   * (`Math.max(getWalkableRenderHeight(x, y), terrain.getGroundHeight(x, y))`): the bridge
+   * wins over the streambed it spans, and a unit that steps off the end of it is back on the
+   * grass in the same step with nothing to say when the deck stops.
+   */
+  private groundOrDeck(x: number, y: number): number {
+    const ground = this.heightAt(x, y);
+    const deck = this.walkableAt(x, y);
+    return deck > ground ? deck : ground;
+  }
+
+  /** The walkable-surface sampler — installed by the map scene once the map's bridges are
+   *  known. Nothing anywhere until then, and on the great majority of maps forever. */
+  private walkableAt: HeightSampler = () => -Infinity;
+  setWalkableSampler(sampler: HeightSampler): void {
+    this.walkableAt = sampler;
   }
 
   /** How far above the GROUND a flash ring round this unit sits — its fly height, plus the
@@ -7107,7 +7132,7 @@ export class RtsController {
     if (this.selectedItem !== null) {
       const it = this.sim.items.get(this.selectedItem);
       // A ground item rings yellow (neutral), like a mine — sized to the item.
-      if (it) out.push({ x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: ITEM_RING_RADIUS, owner: -1, team: -2, sizeToRadius: true, allegiance: "neutral" });
+      if (it) out.push({ x: it.x, y: it.y, z: this.groundOrDeck(it.x, it.y), radius: ITEM_RING_RADIUS, owner: -1, team: -2, sizeToRadius: true, allegiance: "neutral" });
     }
     return out;
   }
@@ -7268,7 +7293,7 @@ export class RtsController {
     // inside the trunk, on a building inside the wall, and from most camera angles it is not
     // there at all. See rallyLift for how far — enough to clear the base, not enough to
     // become a landmark of its own.
-    return { x, y, z: this.heightAt(x, y) + this.rallyLift(b.rallyKind, b.rallyTargetId), owner: bu.owner };
+    return { x, y, z: this.groundOrDeck(x, y) + this.rallyLift(b.rallyKind, b.rallyTargetId), owner: bu.owner };
   }
 
   /** How far a rally flag stands off the ground, by what it was planted on. A plain point

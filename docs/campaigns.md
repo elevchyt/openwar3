@@ -548,6 +548,56 @@ case where it says nothing at all, and the game plainly draws it. So a **BACKDRO
 whose alpha is entirely zero is drawn opaque (`opaqueIfBlankAlpha`, one WeakMap-cached copy per
 texture). Scoped to that one draw so the null shadow and the blank highlight are untouched.
 
+## Finishing a chapter: Continue plays the next one
+
+WC3 has no "next chapter" screen and no engine-side chapter list at play time. A chapter ends
+with its own trigger naming its successor and then declaring victory — Human01's `Next Level Run`
+is the whole of it:
+
+```
+call SetNextLevelBJ( "Maps\\Campaign\\Human02.w3m" )
+call CustomVictoryBJ( udg_AAAP_Arthas, true, true )
+```
+
+`SetNextLevelBJ` only writes a `Scripts\Blizzard.j` global (`bj_changeLevelMapName`), and
+`CustomVictoryBJ` puts up the victory dialog. **The branch that matters is inside the Continue
+button**, and it is the same three lines in `CustomVictoryOkBJ` (the button) and
+`CustomVictorySkipBJ` (a chapter that asked for no dialog):
+
+```
+if (bj_changeLevelMapName == null) then
+    call EndGame( bj_changeLevelShowScores )
+else
+    call ChangeLevel( bj_changeLevelMapName, bj_changeLevelShowScores )
+endif
+```
+
+So a MELEE map, which never calls `SetNextLevelBJ`, leaves through `EndGame` and a CAMPAIGN
+chapter leaves through `ChangeLevel` — two different natives behind one button, and `ChangeLevel`
+was a no-op here. That is why Continue appeared to do nothing: the dialog closed and the player
+was left standing in the chapter they had just won.
+
+It is also why the dialog's two buttons are worded differently in a campaign. The melee screen
+(`MeleeVictoryDialogBJ`) says **Continue Game** / **Quit Game**; the campaign one
+(`CustomVictoryDialogBJ`) says **Continue** / **Quit Campaign** — `GAMEOVER_CONTINUE` and
+`GAMEOVER_QUIT_MISSION`, different `GlobalStrings.fdf` keys, read rather than retyped. (The
+second of those is one of the file's small traps: the KEY says mission and the STRING says
+"Quit Campaign".)
+
+`ChangeLevel` arrives as `MapViewerScene.onChangeLevel` and is answered in `src/main.ts`
+(`changeLevel`): the match is taken down exactly as End Game takes it down (`endMatch`), the
+named map is read out of the archives, and the ordinary chapter path starts it. The path is
+looked up in the campaign index first, and that lookup does three things at once — it gives the
+loading screen its "Chapter Two / Blackrock & Roll" (a campaign map's own w3i name is the
+file's), it moves the campaign screen the player will eventually quit to onto the new chapter's
+list, and it credits the NEXT chapter's victory to the next chapter. A map the index does not
+name still plays, under its own file name, finishing nothing.
+
+Progress is not touched here: a chapter is completed by `RemovePlayer(p, PLAYER_GAME_RESULT_VICTORY)`,
+which `CustomVictoryBJ` raises before it shows anything, and that is already what opens the next
+chapter on the campaign screen (`data/campaignProgress.ts`). Continue and Quit Mission both leave
+the chapter behind them recorded; only what comes next differs.
+
 ## Not done yet
 
 - The campaign **cinematics** (`OpenCinematic`/`EndCinematic`) are listed and greyed. WC3 ships

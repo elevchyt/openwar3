@@ -19,6 +19,8 @@ import { loadMapScript, type MapScriptEngine } from "../jass/index";
 import { EVENT_PLAYER_END_CINEMATIC, EVENT_PLAYER_LEAVE } from "../jass/interpreter";
 import { MAP_CONTROL, type CinematicScene, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
 import { makeHeightSampler, makeWaterSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
+import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
+import { WalkableSurfaces, type WalkableGeoset } from "./walkableHeight";
 import { FogOverlay, type BoundaryMask } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
 import { ShadowOverlay } from "./shadowOverlay";
@@ -1135,6 +1137,12 @@ export class MapViewerScene {
    *  which `CustomVictoryBJ` calls before it shows anything. A campaign uses it to open the
    *  next chapter (src/data/campaignProgress.ts); a skirmish has nobody listening. */
   onLocalVictory: (() => void) | null = null;
+  /** `ChangeLevel(mapName, …)` — the map's script asked for the NEXT CHAPTER by archive path.
+   *  Nothing here can honour that (a match cannot load its own successor), so it leaves the
+   *  same way a quit does: the match is torn down and whoever owns the campaign starts the
+   *  named map (src/main.ts `changeLevel`). See Runtime.changeLevel for why this is a
+   *  different exit from `onExit`. */
+  onChangeLevel: ((mapName: string) => void) | null = null;
   // --- the trigger's on-screen output (7.19) ---
   private textTags: TextTagOverlay | null = null; // CreateTextTag, drawn in the world
   // The ENGINE's own floating combat text — a Critical Strike's red "127!", a deny's "!".
@@ -1752,6 +1760,7 @@ export class MapViewerScene {
       // Watcher. Above the reserved block they are ordinal and identical on every machine,
       // because this walks the .doo in its own order.
       this.seedDestructibles();
+      this.buildWalkableSurfaces(); // the bridges' decks, which units stand ON (render/walkableHeight.ts)
       this.mapPlayerUnits = nodes.players; // pre-placed player units → seeded owned in startCustom (issue #33)
     }
   }
@@ -1822,6 +1831,51 @@ export class MapViewerScene {
     const mdx = d.portraitModel.replace(/\.mdl$/i, ".mdx");
     if (mdx && this.vfs.exists(mdx)) return mdx;
     return ""; // no bust for this type — the panel shows an empty pane, as it does for a unit with none
+  }
+
+  /**
+   * The map's WALKABLE destructibles — the bridges and ramps a unit stands on top of rather
+   * than under (`DestructableData.walkable`; see render/walkableHeight.ts for the whole rule,
+   * and for the Strahnbrad bridge the numbers were checked against).
+   *
+   * The geometry is parsed straight out of the archives rather than taken off the viewer's
+   * doodad instance, because the viewer does not keep it: `setupGeosets` uploads each geoset
+   * to a GL buffer and the runtime `Geoset` holds byte offsets into it, not vertices. One
+   * parse per distinct MODEL, and most maps in the game have none at all.
+   */
+  private buildWalkableSurfaces(): void {
+    this.walkables.clear();
+    const meshes = new Map<string, WalkableGeoset[] | null>();
+    for (const d of this.destructibles) {
+      if (!d.walkable || !d.model) continue;
+      let geosets = meshes.get(d.model);
+      if (geosets === undefined) {
+        geosets = this.walkableMesh(d.model);
+        meshes.set(d.model, geosets);
+      }
+      if (!geosets) continue;
+      this.walkables.add(d.id, geosets, { x: d.x, y: d.y, z: d.z, angle: d.angle, scale: d.scale });
+    }
+    this.rts?.setWalkableSampler((x, y) => this.walkables.heightAt(x, y));
+  }
+  private readonly walkables = new WalkableSurfaces();
+
+  /** One walkable model's triangles, or null if the install hasn't got it / it won't parse.
+   *  LOD geosets are skipped for the same reason the viewer skips them when it draws: `lod`
+   *  above 0 is a reduced copy of a mesh already in the list. */
+  private walkableMesh(path: string): WalkableGeoset[] | null {
+    const bytes = this.vfs.rawBytes(path);
+    if (!bytes) return null;
+    try {
+      const model = new MdlxModel();
+      model.load(bytes);
+      return model.geosets
+        .filter((g) => g.lod === 0 || g.lod === -1)
+        .map((g) => ({ vertices: g.vertices, faces: g.faces }));
+    } catch (err) {
+      console.warn(`[OpenWar3] walkable destructible model unreadable: ${path}`, err);
+      return null;
+    }
   }
 
   /** Destructibles still waiting for the doodad pass to build their model. */
@@ -2898,6 +2952,15 @@ export class MapViewerScene {
         this.showDialog(null);
         this.scriptPaused = false; // CustomVictoryDialogBJ's own PauseGame, released with it
         this.onExit?.();
+      },
+      // …and its campaign twin: Continue on a chapter that named a next level. The match is
+      // over either way — the difference is only what the player is handed next, so both
+      // clear the same dialog and the same script pause on the way out.
+      changeLevel: (mapName) => {
+        this.showDialog(null);
+        this.scriptPaused = false;
+        if (this.onChangeLevel) this.onChangeLevel(mapName);
+        else this.onExit?.(); // nobody owns a campaign here (a lone map, a test boot)
       },
       // RemovePlayer(p, PLAYER_GAME_RESULT_*) — blizzard.j's own "this player's game is over",
       // called by CustomVictoryBJ/CustomDefeatBJ before either of them shows anything. Recorded

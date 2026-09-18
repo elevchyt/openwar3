@@ -51,8 +51,18 @@ export enum PathingFlag {
  *  ABSENCE of almost every rule. A flyer crosses cliffs, water, trees, buildings and other
  *  units, so the only thing left to ask it is whether the cell is part of the map at all
  *  (`PathingFlag.Unflyable`, issue #117) — which is why a flyer flies straight nearly always
- *  and searches only when a strip of unplayable ground is in the way. */
-export type PathDomain = "ground" | "water" | "air";
+ *  and searches only when a strip of unplayable ground is in the way.
+ *
+ *  `ghost` goes one step further and asks NOTHING: it is `SetUnitPathing(u, false)`, the
+ *  script's own "this unit has no collision", and in Warcraft III that means terrain as much
+ *  as bodies. It is not an exotic case — it is how a campaign walks a caravan out of the map.
+ *  Human01 (The Defense of Strahnbrad) turns it on for the two escorting Grunts and the six
+ *  kidnapped villagers as they pass `Slave_Collisions`, then orders them to the centre of
+ *  `RemoveCaravan` — a rect whose every war3map.wpm cell is `0xce`, i.e. the black border.
+ *  Read as ordinary ground that order can never complete, the caravan stops at the treeline,
+ *  and the `RemoveSlaves` enter-region trigger that deletes each body as it crosses never
+ *  fires: the orcs the cinematic says have left are still standing on the map. */
+export type PathDomain = "ground" | "water" | "air" | "ghost";
 
 export interface PathingData {
   width: number;
@@ -282,6 +292,9 @@ export class PathingGrid {
     // The air domain asks a different question and reads no stamps: a flyer passes over the
     // pier as readily as over the trees under it (see PathDomain).
     if (domain === "air") return this.playable(cx, cy);
+    // …and a ghost asks nothing at all, the boundary included: it is the script saying this
+    // body is not in the world's way, and nothing in the world is in its.
+    if (domain === "ghost") return true;
     const i = cy * this.width + cx;
     const flag = domain === "water" ? PathingFlag.NoWater : PathingFlag.Unwalkable;
     return (this.flags[i] & flag) === 0 && !(this.blockStamps && this.blockStamps[i] > 0);

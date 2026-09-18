@@ -219,6 +219,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     removeItem: (id) => void sim.removeItemById(id),
     itemInfo: (id) => sim.itemSnapshot(id),
     setItemCharges: (id, charges) => void sim.setItemCharges(id, charges),
+    setItemDroppable: (id, flag) => void sim.setItemDroppable(id, flag),
     setItemPosition: (id, x, y) => void sim.setItemPosition(id, x, y),
     unitAddItem: (unitId, itemId, slot) => sim.unitAddItem(unitId, itemId, slot),
     unitRemoveItem: (unitId, itemId) => sim.unitRemoveItem(unitId, itemId),

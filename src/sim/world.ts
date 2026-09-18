@@ -1584,6 +1584,18 @@ export interface SimUnit {
   working: boolean; // chopping (renderer plays the attack animation)
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
   noCollision: boolean; // ghosts through other units (mining workers, WC3-style)
+  /**
+   * `SetUnitPathing(u, false)` — the SCRIPT's collision switch, and a stronger thing than
+   * `noCollision` beside it.
+   *
+   * Two differences, and both are why it could not simply reuse that field. It survives being
+   * given an order: `noCollision` is the sim's own harvester ghost and every manual order
+   * clears it ("manual control restores collision"), whereas a map turns this on and expects
+   * it to stay on until it turns it off. And it takes the TERRAIN with it — a unit with
+   * pathing off walks through cliffs, water and the map's own black border, which is exactly
+   * what the caravan leaving Strahnbrad is doing (see PathDomain's `ghost`).
+   */
+  pathingOff: boolean;
   constructing: number; // building id this worker is constructing (0 = none)
   repair: RepairState | null; // active repair job (null = not repairing)
   orderQueue: QueuedOrder[]; // shift-queued follow-up orders (drained as each completes)
@@ -2378,9 +2390,18 @@ function speedBuilds(u: SimUnit): boolean {
 export function summonsBuildings(u: SimUnit): boolean {
   return u.race === "undead";
 }
-/** The grid domain a unit searches — see SimUnit.waterborne. */
+/** The grid domain a unit searches — see SimUnit.waterborne. A unit the script has turned
+ *  pathing off on searches nothing at all (`SimUnit.pathingOff`, PathDomain's `ghost`). */
 export function pathDomain(u: SimUnit): PathDomain {
+  if (u.pathingOff) return "ghost";
   return u.waterborne ? "water" : "ground";
+}
+
+/** Is this body in anybody's WAY? The two ghost flags answer to different owners — the sim's
+ *  own harvester ghost (`noCollision`) and the script's `SetUnitPathing` (`pathingOff`) — and
+ *  every "can I stand here / who do I have to walk around" test wants both. */
+export function ghosting(u: SimUnit): boolean {
+  return u.noCollision || u.pathingOff;
 }
 // Proactive reroute poll (issue #6). A unit's path is computed once, but other
 // units may stop and reserve cells across it while it travels. Rather than let a
@@ -4429,6 +4450,9 @@ export class SimWorld {
     if (!held) return false;
     const def = this.itemReg.get(held.itemId);
     if (!def || !def.pawnable) return false;
+    // …and an UNDROPPABLE item is not sellable either, whatever its `pawnable` column says:
+    // selling is one of the ways an item is "removed from a Hero's inventory" (setItemDroppable).
+    if (!this.mayLeaveInventory(held)) return false;
     // The shop must actually DEAL IN ITEMS — the `Apit` ability, see canPawnAt. (Asking its
     // ware LIST instead, as this did, silently refused a Marketplace: it lists nothing.)
     if (!this.canPawnAt(shop)) return false;
@@ -8072,6 +8096,7 @@ export class SimWorld {
       | "working"
       | "atNode"
       | "noCollision"
+      | "pathingOff"
       | "building"
       | "constructing"
       | "repair"
@@ -8350,6 +8375,7 @@ export class SimWorld {
       working: false,
       atNode: false,
       noCollision: false,
+      pathingOff: false,
       building: building ?? null,
       constructing: 0,
       repair: null,
@@ -8781,7 +8807,7 @@ export class SimWorld {
    *  (an uprooted Ancient) collide by radius only, and a ghosting worker walks through
    *  the crowd around its mine on purpose. */
   private claimsCells(u: SimUnit): boolean {
-    return u.footprint > 0 && !u.flying && !u.noCollision && u.hp > 0 && !isOffField(u);
+    return u.footprint > 0 && !u.flying && !ghosting(u) && u.hp > 0 && !isOffField(u);
   }
 
   /** The unit stands where it stands: take the block under it, whatever else holds those
@@ -10109,7 +10135,7 @@ export class SimWorld {
       const [ax, ay] = this.grid.footprintAnchor(o.x, o.y, o.footprint);
       const caught = inBox(o.x, o.y, o.radius) && !this.grid.footprintClear(ax, ay, o.footprint, domain);
       let crosses = false;
-      if (!caught && o.moving && o.noCollision) {
+      if (!caught && o.moving && ghosting(o)) {
         // Does the rest of its route pass over the new walls? Sampled at half a cell.
         let px = o.x;
         let py = o.y;
@@ -14942,11 +14968,25 @@ export class SimWorld {
     if (!flag) this.recomputeStats(u); // buffs may still hold it invulnerable
   }
 
-  /** SetUnitPathing(false) — the unit ignores collision (walks through units and,
-   *  in WC3, terrain; ours is the sim's existing ghost flag). */
+  /**
+   * `SetUnitPathing(u, flag)` — the unit ignores collision: other bodies AND the terrain,
+   * the map's black border included (`SimUnit.pathingOff`, PathDomain's `ghost`).
+   *
+   * The ROUTE has to be thrown away with it, and that is the half that is easy to miss. A
+   * script turns pathing off part-way through a walk — Human01 does it from an enter-region
+   * trigger, on units that were ordered out of the map several seconds earlier — so the path
+   * the unit is following was planned under the OLD rules and is exactly as truncated as it
+   * was before. Re-planning here is what lets the caravan carry on past the treeline instead
+   * of stopping where the ground ran out with its order still in hand.
+   */
   setPathing(unitId: number, flag: boolean): void {
     const u = this.units.get(unitId);
-    if (u) u.noCollision = !flag;
+    if (!u || u.pathingOff === !flag) return;
+    u.pathingOff = !flag;
+    u.noCollision = !flag;
+    if (u.pathingOff) this.releaseClaim(u); // a body nobody has to walk around holds no cells
+    else if (u.order === "idle" && u.hp > 0) this.settle(u); // …and one that has a body again takes its ground back where it stands (as ShowUnit does)
+    if (u.moving || u.order === "move") this.pathTo(u, u.chaseX, u.chaseY);
   }
 
   /**
@@ -20856,6 +20896,7 @@ export class SimWorld {
     for (let i = 0; i < u.inventory.length; i++) {
       const held = u.inventory[i];
       if (!held) continue;
+      if (!this.mayLeaveInventory(held)) continue; // it goes down with the body, not onto the grass
       u.inventory[i] = null;
       const ang = (n * 2.399963) % (Math.PI * 2);
       this.spawnGroundItem(held.itemId, u.x + Math.cos(ang) * 64, u.y + Math.sin(ang) * 64, held.charges, held.id);
@@ -21215,6 +21256,7 @@ export class SimWorld {
     if (from.isIllusion) return;
     const held = from.inventory[slot];
     if (!held) return;
+    if (!this.mayLeaveInventory(held)) return; // undroppable: it cannot change hands either
     const dest = to.inventory.indexOf(null);
     if (dest < 0) { this.spawnGroundItem(held.itemId, to.x, to.y, held.charges, held.id); }
     else { to.inventory[dest] = { id: held.id, itemId: held.itemId, charges: held.charges, cooldownLeft: this.itemCooldownOn(to, held.itemId) }; }
@@ -21237,6 +21279,10 @@ export class SimWorld {
     if (this.itemsLocked(u)) return false; // stunned or asleep: the inventory is greyed (itemsLocked)
     const held = u.inventory[slot];
     if (!held) return false;
+    // "An undroppable item cannot be removed from a Hero's inventory once it has been picked
+    // up" (UI\TriggerStrings.txt) — refused at the ORDER, so the hero does not even walk over
+    // to the spot to fail there. See setItemDroppable.
+    if (!this.mayLeaveInventory(held)) return false;
     if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE + u.radius) {
       this.doDropItem(u, slot, x, y);
       return true;
@@ -21268,6 +21314,7 @@ export class SimWorld {
     if (this.itemsLocked(u)) return; // a walk-and-drop that arrives stunned drops nothing (yet)
     const held = u.inventory[slot];
     if (!held) return;
+    if (!this.mayLeaveInventory(held)) return; // made undroppable while the hero was walking over
     u.inventory[slot] = null;
     u.pendingDrop = null;
     this.spawnGroundItem(held.itemId, x, y, held.charges, held.id);
@@ -22496,6 +22543,7 @@ export class SimWorld {
 
   /** RemoveItem — destroy an item wherever it is (ground or inventory). */
   removeItemById(id: number): boolean {
+    this.forgetItem(id);
     if (this.items.has(id)) { this.removeGroundItem(id); return true; }
     for (const u of this.units.values()) {
       const slot = u.inventory.findIndex((h) => h?.id === id);
@@ -22506,6 +22554,51 @@ export class SimWorld {
       }
     }
     return false;
+  }
+
+  /**
+   * `SetItemDroppable(item, flag)` — **an item that cannot leave the inventory it is in.**
+   *
+   * The rule is the install's own, out of `UI\TriggerStrings.txt` beside the GUI action that
+   * sets it (`SetItemDroppableBJ`, "Make Undroppable"):
+   *
+   *     SetItemDroppableBJHint="An undroppable item cannot be removed from a Hero's
+   *                             inventory once it has been picked up."
+   *
+   * — so it is not only the drop button: handing it to another hero, selling it to a shop and
+   * a non-hero holder dying with it are all "removed from the inventory" and all refused
+   * (`mayLeaveInventory`). Swapping it between SLOTS is not, and is left alone.
+   *
+   * This is a per-ITEM flag, not a per-type one, which is why it is keyed on the entity id and
+   * not on the rawcode: Human01 creates a perfectly ordinary `ledg` (ItemData `droppable` = 1)
+   * and makes THAT ONE undroppable the moment Arthas picks it up (`Ledger Is Picked Up` →
+   * `SetItemDroppableBJ( udg_Ledger, false )`). Only the override lives here; an item nobody
+   * has called this on answers with its type's own column, which is how the one stock
+   * undroppable item (`soul`) is undroppable without a script.
+   */
+  setItemDroppable(id: number, flag: boolean): boolean {
+    if (!this.items.has(id) && !this.itemSnapshot(id)) return false;
+    this.itemDroppable.set(id, flag);
+    return true;
+  }
+
+  /** The per-item `SetItemDroppable` overrides — see there. Sparse: only items a script has
+   *  actually spoken about. Dropped with the item itself (`forgetItem`). */
+  private readonly itemDroppable = new Map<number, boolean>();
+
+  /** May this held item leave the inventory at all — dropped, given away or sold? The
+   *  script's override if there is one, else the type's own `droppable` column. */
+  private mayLeaveInventory(held: HeldItem): boolean {
+    const set = this.itemDroppable.get(held.id);
+    if (set !== undefined) return set;
+    return this.itemReg?.get(held.itemId)?.droppable ?? true;
+  }
+
+  /** An item entity is gone for good — drop anything remembered about it by id. Called from
+   *  `RemoveItem` and nowhere else on purpose: `removeGroundItem` is ALSO how an item that was
+   *  merely picked up leaves the ground, and the entity (and its flags) survive that. */
+  private forgetItem(id: number): void {
+    this.itemDroppable.delete(id);
   }
 
   /** SetItemCharges. */
@@ -23333,7 +23426,7 @@ export class SimWorld {
   private repathPoll(u: SimUnit, dt: number): void {
     // Flyers (footprint 0) path straight and ignore ground occupancy; ghosting
     // workers (mining) pass through units, so neither reroutes.
-    if (u.footprint <= 0 || u.noCollision) return;
+    if (u.footprint <= 0 || ghosting(u)) return;
     if (u.repathT > 0) return; // just got blocked — honour the chaser repath cooldown
     u.repollT -= dt;
     if (u.repollT > 0) return;
@@ -24116,7 +24209,7 @@ export class SimWorld {
       // …and a ghosting worker is never what corked us, so it is never asked to move: it
       // holds no cell, and shuffling a mining Peon out of a doorway it is not standing in
       // would only take it off its round trip.
-      if (o === u || o.moving || o.building || o.speed <= 0 || o.footprint <= 0 || o.noCollision) continue;
+      if (o === u || o.moving || o.building || o.speed <= 0 || o.footprint <= 0 || ghosting(o)) continue;
       // Only the mover's OWN units make way. Warcraft III shuffles your idle units aside for your
       // other units and never an ALLY's — which is why an allied body blocks a lane, and why a
       // team game's base traffic jams on a teammate's idle Footman. Asking the whole team moved
@@ -24327,7 +24420,7 @@ export class SimWorld {
     // the pathfinder instead of by the separation pass. Terrain and building stamps still
     // stop it, exactly as they stop a WC3 miner. (repathPoll already declines to reroute it
     // for the same reason; without this the FIRST route was drawn around the queue anyway.)
-    if (self.noCollision) return (cx, cy) => !this.grid.footprintClear(cx, cy, n, pathDomain(self));
+    if (ghosting(self)) return (cx, cy) => !this.grid.footprintClear(cx, cy, n, pathDomain(self));
     const [sx, sy] = start;
     const half = n >> 1;
     const ownX0 = sx - half; // the unit's own footprint (reservation-exempt) origin
@@ -24575,7 +24668,7 @@ export class SimWorld {
     // hundred units into the voyage. (A mining peon or a devoured sheep was only ever saved
     // from the same fate by sitting inside a building's footprint.)
     for (const u of this.units.values())
-      if (!u.flying && u.radius > 0 && u.speed > 0 && !u.noCollision && !isOffField(u)) list.push(u);
+      if (!u.flying && u.radius > 0 && u.speed > 0 && !ghosting(u) && !isOffField(u)) list.push(u);
     // Snapshot each unit's intended (pathed) velocity for this tick, captured
     // before the nudges below mutate positions. prevX/prevY are set pre-movement,
     // so (x-prevX) is the step tickMovement just took toward the goal — used to
@@ -24831,7 +24924,7 @@ export class SimWorld {
   private resolveAirSeparation(dt: number): void {
     const list: SimUnit[] = [];
     for (const u of this.units.values())
-      if (u.flying && u.radius > 0 && !u.moving && !u.noCollision && u.hp > 0) list.push(u);
+      if (u.flying && u.radius > 0 && !u.moving && !ghosting(u) && u.hp > 0) list.push(u);
     if (list.length < 2) return;
     // Accumulate every pair's desired push, then apply once (capped) per unit — so a
     // flyer buried in a stack drifts out smoothly instead of jerking pair-by-pair.

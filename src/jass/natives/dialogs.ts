@@ -123,7 +123,13 @@ export function registerDialogNatives(rt: Runtime): void {
   def(rt, "IsNoDefeatCheat", () => jBool(false));
   def(rt, "SetIntegerGameState", () => JNULL); // GAME_STATE_DISCONNECTED etc. — nothing to set
   def(rt, "RestartGame", () => JNULL);
-  def(rt, "ChangeLevel", () => JNULL); // campaign-only (bj_changeLevelMapName is null in melee)
+  // ChangeLevel(mapName, doScoreScreen) — the campaign's own "play the next chapter". It is
+  // what the victory dialog's Continue button reaches whenever the map called SetNextLevelBJ;
+  // a melee map never does, and leaves through EndGame above instead (Runtime.changeLevel).
+  def(rt, "ChangeLevel", (c, a) => {
+    c.rt.hooks?.changeLevel?.(asStr(a[0]), truthy(a[1]));
+    return JNULL;
+  });
 
   // The victory/defeat STING (bj_victoryDialogSound = CreateSoundFromLabel("QuestCompleted",
   // …) — blizzard.j InitBlizzardGlobals) is a plain `sound` handle like any other: 7.19 wired

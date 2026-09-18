@@ -26,6 +26,10 @@ export interface MapDestructible {
   y: number;
   z: number;
   angle: number; // radians; the pathing footprint turns with it
+  /** The .doo's own per-axis scale. Only the walkable-surface pass reads it — everything else
+   *  about a destructible is sized by its table row — but a ray cast at a bridge's deck has to
+   *  be cast at the bridge as DRAWN. */
+  scale: [number, number, number];
   /** Max life from `DestructableData.HP`. The .doo carries a PERCENTAGE, which is why the
    *  record's own byte can't be used as a life value directly. */
   maxLife: number;
@@ -36,6 +40,17 @@ export interface MapDestructible {
   pathTexDeath: string;
   /** `targType == "tree"` — harvestable, and felled by the SIM rather than by a script. */
   isTree: boolean;
+  /**
+   * `walkable` — **units stand ON this rather than on the ground under it.** The bridges, the
+   * stone ramps and the invisible platforms a mapmaker builds a second storey out of; 106 of
+   * the 247 stock types carry it, and nothing else in the table means anything like it.
+   *
+   * It is not a pathing flag (the `pathTex` already says where the deck is), it is a HEIGHT
+   * one: the deck is a mesh, and a unit crossing it is drawn where a ray dropped onto that
+   * mesh lands (src/render/walkableHeight.ts). Without it a unit walking a bridge is drawn at
+   * the riverbed the bridge spans, i.e. underneath it.
+   */
+  walkable: boolean;
   /** `targType` verbatim — the weapon-target class this destructible presents. The stock data
    *  uses five: `tree` (27 types), `debris` (77), `wall` (15), `bridge` (100), `decoration` (28).
    *  It is matched against a weapon's own Targets Allowed, and that list really does name them:
@@ -103,6 +118,7 @@ export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: Destru
       y: d.y,
       z: d.z,
       angle: d.angle,
+      scale: d.scale,
       maxLife,
       // The .doo's `life` byte is a PERCENT of the type's HP — 100 for everything the editor
       // places normally, 40/50 for the pre-damaged trees a few maps use, 0 for one placed dead.
@@ -118,6 +134,7 @@ export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: Destru
       pathTex,
       pathTexDeath,
       isTree: targType === "tree",
+      walkable: row.string("walkable") === "1",
       targType,
       selectable: row.string("selectable") === "1",
       radius: Number(row.string("radius")) || 0,

@@ -136,6 +136,27 @@ map never hears about it.
 trigger's `IssuePointOrder`, an order off the wire, an autocast — for the same reason every
 other cast rule is checked in both places.
 
+### …and the one thing it refuses NOTHING
+
+`SetUnitPathing(u, false)` — the script's own "this unit has no collision" — ignores the
+boundary along with everything else. That is not an exotic corner: it is how a campaign walks
+a body off the map, and the human campaign's first chapter does exactly that. The orc caravan
+leaving Strahnbrad is ordered to the centre of `gg_rct_RemoveCaravan`, `Rect(-96, 5184, 800,
+5408)`, whose every war3map.wpm cell reads **`0xce`** — the black border — and the map turns
+pathing off on each escort and each kidnapped villager as it crosses `Slave_Collisions` on the
+way there. `RemoveSlaves` then deletes each body as it enters the rect.
+
+Read as ordinary ground, none of that can happen: the caravan stops at the last walkable row,
+the enter-region trigger never fires, and the orcs the cinematic has just shown marching away
+are still standing in the map when the player gets control back. So a ghost searches a domain
+of its own (`PathDomain`'s **`ghost`**, `sim/pathing.ts`) whose `walkable` answers true for
+every in-bounds cell, and `SimUnit.pathingOff` is a separate flag from the sim's own
+`noCollision` for two reasons: it survives the ordinary orders that clear that one ("manual
+control restores collision"), and it takes the terrain with it. Turning it on also RE-PLANS the
+walk in flight, because the map flips the switch from a trigger seconds after the order was
+given — the route the unit is following was planned under the old rules and stops where the
+ground does. `tools/sim-unit-pathing-test.cjs` pins all three.
+
 ## 6. Air movement: a straight line, until it isn't
 
 A flyer's path is one waypoint — WC3 air units cross cliffs, trees, buildings and crowds, so
