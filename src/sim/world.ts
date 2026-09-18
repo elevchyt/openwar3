@@ -1987,6 +1987,12 @@ export interface SimUnit {
    *  Immolation's so the two clocks cannot interfere (they never run together anyway: the
    *  cloak stands down while its wearer is alight — see tickCarriedItems). */
   cloakBurnTick: number;
+  /** GOBLIN LAND MINE (`Amin`, "Mine - exploding"): seconds this mine has been in the
+   *  ground. It measures the ability's own `Min1` "Activation Delay" (DataA = 10) — the
+   *  window in which a freshly-placed mine is inert and can simply be shot — and nothing
+   *  else; the hiding is a buff and needs no clock of its own. 0 for everything that
+   *  carries no mine. See tickMine. */
+  mineAge: number;
   /** AMULET OF SPELL SHIELD (`ANss`) — seconds until the shield grows back after a block
    *  (`Cool1` = 40). 0 = ready, or no amulet carried. */
   spellShieldCooldown: number;
@@ -2579,6 +2585,10 @@ const AURA_REFRESH = 0.5; // aura buffs re-applied each tick with this TTL (fade
  *  the cheapest way to make that true is to stop renewing it. Shorter than AURA_REFRESH —
  *  "instantly" is what the ritual breaking is supposed to feel like. */
 const VOODOO_REFRESH = 0.25;
+/** The non-stacking key the Goblin Land Mine's own hiding sits under (`Amin`, tickMine).
+ *  Named beside the other buff groups because two places have to agree about it: the tick
+ *  that lays it exactly once, and the test that asks whether it is already down. */
+const MINE_CLOAK_GROUP = "mine";
 const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // Channelled abilities (base code): the caster stands locked for the channel and a
 // new order stops it AND the remaining ticks (unlike a backswing, which is free to
@@ -7599,6 +7609,91 @@ export class SimWorld {
   }
 
   /**
+   * MINE — EXPLODING (`Amin`), what a Goblin Land Mine (`nglm`) IS.
+   *
+   * The mine is not a unit with a weapon and a hide button: `UnitAbilities.slk` gives `nglm`
+   * exactly two abilities, `Amnx,Amin`, and between them they are the whole gadget. `Amnx` is
+   * the blast — "AOE damage upon death" (NeutralAbilityStrings), `code = Adda`, already fired
+   * by `deathBlast` when the mine dies — which leaves `Amin` to do the other two things the
+   * item's own Ubertip promises: *"Places a **hidden** land mine at a target point. Enemy units
+   * that **move near** the land mine will **activate** the mine, destroying the mine and causing
+   * area of effect damage to nearby units."* (`[gobm]`, Units\ItemStrings.txt.)
+   *
+   * Without this the mine was a small model sitting in plain sight that nothing could set off —
+   * which is exactly how the eighteen mines WarChasers plants with `CreateUnit(p,'nglm',…)`
+   * looked, and why the map's own "Stop MineTraps" trigger (`EVENT_PLAYER_UNIT_DEATH` on
+   * Player 11) never fired.
+   *
+   * Its two columns are the two halves, and the World Editor names them (AbilityMetaData
+   * `Min1`/`Min2`, useSpecific = `Amin`):
+   *
+   *   Min1  DataA = 10   "Activation Delay" — a mine just laid is inert and can simply be
+   *                      shot. Its WorldEditStrings entry is the SAME STRING as the Stasis
+   *                      Trap's `Sta1`, which this file already reads that way (tickWards),
+   *                      and that is how it is settled: 1.30.4 ships no `WESTRING_AEVAL_*`
+   *                      at all (its own `UI\WorldEditStrings.txt` carries none), so the
+   *                      names come off a mirrored World Editor strings file, where `MIN1`
+   *                      and `STA1` are one and the same line.
+   *   Min2  DataB = 2    "Invisibility Transition Time" — how long it stays in plain sight
+   *                      before it hides. Named outright in the Hive thread that asks how to
+   *                      keep a mine VISIBLE — "you have to increase the 'Data - Invisibility
+   *                      Transition Time' to a very high number" (hiveworkshop 235406) — i.e.
+   *                      this one field is the whole of the hiding.
+   *   Rng1  = 200        the trigger radius. The row carries no Data column for a radius and
+   *                      no `Area1`; 200 is the only distance on it.
+   *
+   * The hiding is the ordinary `invisible` buff every other cloak in the sim uses, so True
+   * Sight uncovers a mine exactly as it uncovers a Stasis Trap (`cloakSummon` is the same
+   * shape). Undispellable, and for the same reason a ward's is: it is not a spell cast on the
+   * mine, it is what the mine is.
+   *
+   * WHAT SETS IT OFF is the blast's own Targets Allowed rather than a rule of ours: `[Amnx]
+   * targs1 = ground,structure,debris,enemy`. No `air` — so a Gryphon crossing overhead is not
+   * something the mine could hurt and does not spend it — and `enemy`, which is the Ubertip's
+   * "enemy units". A BUILDING is excluded on top of that, because the Ubertip's verb is *move*
+   * near and a structure never moves: a mine laid beside an enemy Farm would otherwise detonate
+   * on the frame it landed. Both clauses are the Stasis Trap's, which reads its trigger the
+   * same way (`!e.flying && !e.building`, tickWards).
+   */
+  private tickMine(u: SimUnit, dt: number): void {
+    if (u.hp <= 0) return;
+    const ab = u.abilities.find((a) => a.code === "Amin" && a.level >= 1);
+    if (!ab) return;
+    const def = this.abilities?.get(ab.id);
+    const lvl = def?.levelData[Math.min(ab.level, def.levelData.length) - 1];
+    if (!def || !lvl) return;
+    // HIDE. Laid once and never refreshed — re-applying it every tick would restart the
+    // transition every tick and the mine would never actually vanish. `invisTransition` is
+    // the one fade rule, so a custom map that zeroes the column still gets the engine's
+    // reaction window rather than a mine that blinks out on the frame it was planted.
+    if (!u.buffs.some((b) => b.kind === "invisible" && b.group === MINE_CLOAK_GROUP)) {
+      this.applyBuffInternal(u, {
+        kind: "invisible",
+        group: MINE_CLOAK_GROUP,
+        timeLeft: Infinity,
+        sourceId: u.id,
+        delay: invisTransition(this.dataOf(lvl, 1, 2)), // Min2 "Transition Time"
+        undispellable: true,
+      });
+    }
+    // ARM. `Min1` "Activation Delay" — until it is up the mine is scenery.
+    const activation = this.dataOf(lvl, 0, 10);
+    if (u.mineAge < activation) {
+      u.mineAge += dt;
+      return;
+    }
+    const blast = u.abilities.find((a) => a.code === "Adda" && a.level >= 1);
+    const blastFlags = (blast && this.abilities?.get(blast.id)?.targetFlags) || [];
+    const trigger = lvl.castRange > 0 ? lvl.castRange : 200;
+    for (const t of this.unitsInAreaInternal(u.x, u.y, trigger)) {
+      if (t.id === u.id || t.hp <= 0 || t.invulnerable || t.flying || t.building) continue;
+      if (!this.hostile(u, t) || !this.targsAdmit(t, blastFlags)) continue;
+      this.kill(u); // …and `deathBlast` goes off on the way out — the mine IS the explosion
+      return;
+    }
+  }
+
+  /**
    * BIG BAD VOODOO (`AOvd`) — a ritual, not a blessing. `Animnames = stand,channel` makes it
    * a channel, and that is the entire balance of the ultimate: the Shadow Hunter stands in
    * his own circle for the full `Dur1` = 30 seconds, protected by nothing (`targs1` has no
@@ -8091,6 +8186,7 @@ export class SimWorld {
       | "immolation"
       | "immolationTick"
       | "cloakBurnTick"
+      | "mineAge"
       | "spellShieldCooldown"
       | "voodooLeft"
       | "voodooAbil"
@@ -8366,6 +8462,7 @@ export class SimWorld {
       immolation: "",
       immolationTick: 0,
       cloakBurnTick: 0,
+      mineAge: 0, // a mine counts its own arming delay (tickMine)
       spellShieldCooldown: 0,
       voodooLeft: 0,
       voodooAbil: "",
@@ -16295,6 +16392,7 @@ export class SimWorld {
       this.tickVoodoo(u, dt); // …and Big Bad Voodoo renews its circle for as long as the ritual holds
       this.tickExhume(u, dt); // …and a Meat Wagon with the upgrade grows its own bodies
       this.tickCarriedItems(u, dt); // …and an Amulet of Spell Shield regrowing its shield
+      this.tickMine(u, dt); // …and a Goblin Land Mine hiding itself, arming, and going off
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking

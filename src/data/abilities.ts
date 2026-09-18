@@ -888,6 +888,16 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Amtc: { target: "passive" }, // Cargo Hold (Meat Wagon) — capacity 8
   Amel: { target: "none", autocast: true }, // Meat Load / "Get Corpse" — one body into the hold
   Amed: { target: "none" }, // Meat Drop / "Drop All Corpses" — the whole hold, where it stands
+  // THE GOBLIN LAND MINE, both halves of it. `Units\UnitAbilities.slk` gives `nglm` exactly
+  // `Amnx,Amin` and nothing else, so between them they are the whole gadget — and neither was
+  // named here, which is why a mine in WarChasers sat in the open and could not be stepped on:
+  // `buildInitialAbilities` keeps only what this table names, so the unit reached the sim with
+  // an EMPTY ability list and both the hiding and the blast had nothing to read. (Exactly the
+  // trap the Fountains and the Meat Wagon's hold fell into above.)
+  Amin: { target: "passive" }, // Mine — exploding: hides the mine, then arms it (world.ts tickMine)
+  // …and the blast it goes off with. `Amnx` and `Amnz` (the small and BIG mine) are both
+  // `code = Adda` "AOE damage upon death", which is the code world.ts `deathBlast` looks for.
+  Adda: { target: "passive" },
   // Exhume Corpses — passive, and gated: `[Aexh] Requires = Ruex`, the Slaughterhouse upgrade.
   // "Generates a Crypt Fiend corpse within the Meat Wagon every 15 seconds" (Liquipedia), and
   // the row says both halves — `Dur1` = 15 is the interval, `UnitID1 = ucry` the body. (It was
