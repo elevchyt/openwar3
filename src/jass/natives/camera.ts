@@ -172,9 +172,11 @@ export function registerCameraNatives(rt: Runtime): void {
   def(rt, "PanCameraToTimed", (c, a) => pan(c, asNum(a[0]), asNum(a[1]), asNum(a[2])));
   def(rt, "PanCameraToWithZ", (c, a) => pan(c, asNum(a[0]), asNum(a[1]), 0, asNum(a[2])));
   def(rt, "PanCameraToTimedWithZ", (c, a) => pan(c, asNum(a[0]), asNum(a[1]), asNum(a[3]), asNum(a[2])));
-  // SetCameraPosition / SetCameraQuickPosition JUMP the focus with no blend at all — they
-  // are not a pan, which is why they live in natives/melee.ts on their own hook (7.3:
-  // MeleeStartingUnits frames the view on the starting workers with one).
+  // SetCameraPosition JUMPS the focus with no blend at all — it is not a pan, which is why it
+  // lives in natives/melee.ts on its own hook (7.3: MeleeStartingUnits frames the view on the
+  // starting workers with one). Its near-namesake `SetCameraQuickPosition` is NOT a camera
+  // move at all — it arms the Space key (see the note on it there) — which is why Blizzard.j's
+  // melee opening calls BOTH of them on the same point.
 
   def(rt, "ResetToGameCamera", (c, a) => (c.rt.hooks?.resetToGameCamera?.(asNum(a[0])), JNULL));
   def(rt, "StopCamera", (c) => (c.rt.hooks?.stopCamera?.(), JNULL));

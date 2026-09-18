@@ -744,9 +744,17 @@ export interface EngineHooks {
   /** `SuspendTimeOfDay` — hold the clock where it stands. blizzard.j's `UseTimeOfDayBJ(false)`
    *  is this, and it is the MAP's switch: distinct from the cinematic's EnableDawnDusk. */
   suspendTimeOfDay?(flag: boolean): void;
-  /** SetCameraPosition / SetCameraQuickPosition (via the …ForPlayer BJs, which gate on
-   *  GetLocalPlayer). MeleeStartingUnits* centres the view on the starting workers. */
+  /** SetCameraPosition (via the …ForPlayer BJs, which gate on GetLocalPlayer).
+   *  MeleeStartingUnits* centres the view on the starting workers. */
   setCameraPosition?(x: number, y: number): void;
+  /** `SetCameraQuickPosition` — NOT a camera move, whatever the name suggests. The World
+   *  Editor calls this action **"Set Spacebar-Point"**, and says what one is in as many
+   *  words: "A spacebar-point is a location that the game camera jumps to when the player
+   *  presses the spacebar" (`UI\TriggerStrings.txt`). `UI\HelpStrings.txt` gives the key
+   *  itself — "Spacebar — Center on last notification(s)" — and TipStrings Tip36 the rest:
+   *  repeated presses walk back through the last EIGHT. Campaign chapters set one beside
+   *  every quest ping, so moving the camera here jumped the view at each one. */
+  setSpacebarPoint?(x: number, y: number): void;
   /** GetResourceAmount — a gold mine's remaining gold. */
   getResourceAmount?(unitId: number): number;
   /** CreateBlightedGoldmine — the Undead start "replaces" the nearest gold mine with a

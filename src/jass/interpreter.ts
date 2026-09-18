@@ -985,7 +985,15 @@ export class Interpreter {
       if (reg.kind !== "timerExpire") continue;
       if (reg.params[0]?.k === "handle" && reg.params[0].h === t.handleId) {
         const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
-        if (trig) this.fireTrigger(trig, responses);
+        // …`withTrigger` like every other dispatch: a timer event is an event, so
+        // `GetTriggeringTrigger()` answers with the trigger it is firing. This was the ONE
+        // fireTrigger call site without it, and the editor's run-once idiom on a periodic
+        // time event is where it shows: Human01's "Ledger Quest" is a 0.5 s periodic trigger
+        // whose first action is `DisableTrigger( GetTriggeringTrigger() )`, so with a null
+        // response it never turned itself off and re-queued Gerard's quest for ever — every
+        // half-second Arthas stood in the rect (and a queued trigger still runs disabled:
+        // `TriggerExecuteBJ` gates on TriggerEvaluate, not on the enabled flag).
+        if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
       }
     }
   }

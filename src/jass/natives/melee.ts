@@ -89,7 +89,14 @@ export function registerMeleeNatives(rt: Runtime): void {
   // of those passes is allowed to move the real camera is settled at the HOOK, by
   // `Runtime.localViewHooks`: the extra passes get a stub.
   def(rt, "SetCameraPosition", (c, a) => (c.rt.hooks?.setCameraPosition?.(asNum(a[0]), asNum(a[1])), JNULL));
-  def(rt, "SetCameraQuickPosition", (c, a) => (c.rt.hooks?.setCameraPosition?.(asNum(a[0]), asNum(a[1])), JNULL));
+  // `SetCameraQuickPosition` MOVES NOTHING. It is the World Editor's "Set Spacebar-Point"
+  // (UI\TriggerStrings.txt, whose hint spells it out: "a location that the game camera jumps
+  // to when the player presses the spacebar"), so it arms the Space key and leaves the view
+  // where the player put it. Reading it as a jump is not a small error: Human01 sets one
+  // beside EVERY quest ping — "ping the minimap, and Space will take you there" is the
+  // stock quest-giver pair — and the Ledger Quest's `SmartCameraPanBJ(…, 0.5)` one line
+  // above it would be pointless if the next line snapped the camera to the same spot.
+  def(rt, "SetCameraQuickPosition", (c, a) => (c.rt.hooks?.setSpacebarPoint?.(asNum(a[0]), asNum(a[1])), JNULL));
 
   // --- hero + tech limits (MeleeStartingHeroLimit) ---
   // The availability cap is now REAL (issue #57): the sim's TechState reads it, so

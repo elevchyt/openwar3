@@ -82,6 +82,40 @@ function Evaluated takes nothing returns boolean
 endfunction
 `;
 
+// The same idiom on a PERIODIC TIME EVENT, which is Human01's "Ledger Quest" exactly: a 0.5 s
+// timer whose first action turns itself off and queues the trigger that hands out the quest.
+// A timer event is an event, so `GetTriggeringTrigger()` must answer there too — with no
+// response the DisableTrigger went to null, the poll never stopped, and Gerard gave the Ledger
+// Quest again every half-second Arthas stood in the rect.
+const TIMER_SRC = `
+globals
+    trigger gg_trg_Poll  = null
+    trigger gg_trg_Queue = null
+    integer polls        = 0
+    integer given        = 0
+endglobals
+
+function Trig_Poll_Actions takes nothing returns nothing
+    call DisableTrigger( GetTriggeringTrigger() )
+    set polls = polls + 1
+    call QueuedTriggerAddBJ( gg_trg_Queue, true )
+endfunction
+
+function Trig_Queue_Actions takes nothing returns nothing
+    call DisableTrigger( GetTriggeringTrigger() )
+    set given = given + 1
+    call QueuedTriggerRemoveBJ( gg_trg_Queue )
+endfunction
+
+function SetupTimer takes nothing returns nothing
+    set gg_trg_Queue = CreateTrigger()
+    call TriggerAddAction( gg_trg_Queue, function Trig_Queue_Actions )
+    set gg_trg_Poll = CreateTrigger()
+    call TriggerRegisterTimerEventPeriodic( gg_trg_Poll, 0.50 )
+    call TriggerAddAction( gg_trg_Poll, function Trig_Poll_Actions )
+endfunction
+`;
+
 const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC]);
 interp.callFunction("InitBlizzard", []);
 const num = (name) => interp.rt.globals.get(name)?.n;
@@ -98,6 +132,15 @@ interp.callFunction("RunInit", []);
 check("a second pass is refused — DisableTrigger reached the right trigger", num("runs"), 1);
 check("TriggerEvaluate sees the same response, so it reports the disabled trigger's own state",
   interp.callFunction("Evaluated", [])?.b, false);
+
+console.log("\nthe same pair on a periodic TIME EVENT (Human01's Ledger Quest)");
+const timed = buildInterpreter([COMMON_J, BLIZZARD_J, TIMER_SRC]);
+timed.callFunction("InitBlizzard", []);
+timed.callFunction("SetupTimer", []);
+const tnum = (name) => timed.rt.globals.get(name)?.n;
+for (let i = 0; i < 20; i++) timed.advanceTime(0.5); // ten seconds of polling
+check("the poll fired once and turned itself off", tnum("polls"), 1);
+check("…so the quest was handed out exactly once", tnum("given"), 1);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall GetTriggeringTrigger checks passed");
 process.exit(failed ? 1 : 0);

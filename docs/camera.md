@@ -219,6 +219,39 @@ executing Blizzard.j itself rather than reimplementing melee setup, so there is 
 "correct" here. (It is also what makes the worker spacing a usable ruler: the camera is pointed
 exactly at the middle of them.)
 
+## `SetCameraQuickPosition` is not a camera move — it is the spacebar
+
+Those two lines are not a typo and not a belt-and-braces double move. **`SetCameraQuickPosition`
+moves nothing.** The World Editor's name for the action is `"Set Spacebar-Point"`, and the hint
+beside it says what one is in as many words (`UI\TriggerStrings.txt`):
+
+```
+SetCameraQuickPositionLocForPlayer="Set Spacebar-Point"
+SetCameraQuickPositionLocForPlayerHint="A spacebar-point is a location that the game camera jumps to when the player presses the spacebar."
+```
+
+The key itself is in `UI\HelpStrings.txt` — "**Spacebar** — Center on last notification(s)" — and
+how far back it reaches is TipStrings **Tip36**: "Pressing the spacebar will center your screen on
+the location of the last transmission. Repeatedly pressing the spacebar will move your screen
+through the locations of the **last eight** transmissions." So it is a ring of eight, newest
+first, and a press walks one step back through it. A new notification puts the walk back at the
+top.
+
+Two things arm it (`mapViewer.noteSpacebarPoint`): **a minimap ping**, which is what a
+notification is — `DoTransmissionBasicsXYBJ` pings the speaker, so the "last transmission" arms
+itself — and the script's own `SetCameraQuickPosition`. A point that repeats the newest one does
+not take a slot, because the stock quest-giver pair does both at the same spot:
+
+```jass
+call PingMinimapLocForForce( udg_AAAPG_Arthas, GetRectCenter(gg_rct_LedgerCenter), 7.00 )
+call SetCameraQuickPositionLocForPlayer( udg_AAAP_Arthas, GetRectCenter(gg_rct_LedgerCenter) )
+```
+
+Reading it as a jump is not a small error. *The Defense of Strahnbrad* sets a spacebar-point
+beside **every** quest ping, so each one yanked the camera off whatever the player was doing —
+and the `SmartCameraPanBJ(…, 0.5)` one line above the Ledger Quest's pair would be pointless if
+the next line snapped to the same spot anyway.
+
 ## Hold a hero key or a control-group digit and the camera follows
 
 Tapping `F1`/`F2`/`F3` or a group digit twice inside the double-tap window centres the camera on

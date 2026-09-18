@@ -2786,7 +2786,15 @@ export class MapViewerScene {
         // answer from the panel. See loadCinematicPortrait and CinematicPanelOverlay.setScene.
         void this.loadCinematicPortrait(scene?.portraitUnitId ?? "", scene?.playerColor ?? 0, scene?.voiceoverDuration ?? 0);
       },
-      pingMinimap: (ping) => this.hud?.ping(ping),
+      // A ping IS a notification, and Space is "Center on last notification(s)"
+      // (UI\HelpStrings.txt) — so every ping arms the key as well as lighting the minimap.
+      // `DoTransmissionBasicsXYBJ` pings the speaker, which is exactly the "last transmission"
+      // TipStrings Tip36 promises Space will take you to.
+      pingMinimap: (ping) => {
+        this.hud?.ping(ping);
+        this.noteSpacebarPoint(ping.x, ping.y);
+      },
+      setSpacebarPoint: (x, y) => this.noteSpacebarPoint(x, y),
       // A speaker's white blink (TransmissionFromUnitWithNameBJ → UnitAddIndicator). The
       // colour MULTIPLIES the white ring, alpha scaling all three — see tickFlashCircles.
       unitAddIndicator: (unitId, r, g, b, a) => {
@@ -6927,6 +6935,41 @@ export class MapViewerScene {
     };
     this.on(document, "fullscreenchange", sync);
     sync();
+  }
+
+  // --- the spacebar points ----------------------------------------------------------
+  // "Spacebar — Center on last notification(s)" (UI\HelpStrings.txt), and TipStrings Tip36
+  // says how far back it reaches: "Pressing the spacebar will center your screen on the
+  // location of the last transmission. Repeatedly pressing the spacebar will move your screen
+  // through the locations of the last eight transmissions." So it is a RING of eight, newest
+  // first, and a press walks one step back through it; a new notification puts the walk back
+  // at the top. Two things arm it: a minimap ping (a transmission's own ping included) and
+  // the script's `SetCameraQuickPosition`, which is the World Editor's "Set Spacebar-Point".
+  private spacebarPoints: Array<[number, number]> = [];
+  private spacebarStep = 0;
+
+  /** Arm the Space key with a notification's location (newest first, eight kept). A point
+   *  that repeats the newest one is the same notification seen twice — the stock quest-giver
+   *  pair pings AND sets a spacebar-point at the same spot — and must not eat a slot. */
+  private noteSpacebarPoint(x: number, y: number): void {
+    const head = this.spacebarPoints[0];
+    this.spacebarStep = 0;
+    if (head && Math.abs(head[0] - x) < 1 && Math.abs(head[1] - y) < 1) return;
+    this.spacebarPoints.unshift([x, y]);
+    this.spacebarPoints.length = Math.min(this.spacebarPoints.length, 8);
+  }
+
+  /** Space: centre on the next notification back. Nothing to go to — nothing has happened
+   *  yet — is simply nothing, as it is in WC3. */
+  private jumpToSpacebarPoint(): void {
+    if (!this.spacebarPoints.length) return;
+    const p = this.spacebarPoints[Math.min(this.spacebarStep, this.spacebarPoints.length - 1)];
+    this.spacebarStep = (this.spacebarStep + 1) % this.spacebarPoints.length;
+    this.target[0] = p[0];
+    this.target[1] = p[1];
+    this.cameraLock = false; // a jump releases the portrait's follow-lock, as every other one does
+    this.groupFollow = false;
+    this.releaseCameraRide();
   }
 
   /** Centre the camera on the current selection (control-group / hero jump) — on the
@@ -13736,6 +13779,15 @@ export class MapViewerScene {
       // into the Allies dialog leaves the letters stuck in `keys` (the field swallows the
       // keyup) and the camera scrolls off on its own afterwards.
       if (isTyping(e.target)) return;
+      // Space centres on the last notification, and again on the one before it — the ring in
+      // `noteSpacebarPoint`. Read off `e.code`, so it answers on a layout whose space key
+      // reports something else, and swallowed either way: the browser scrolls the page on
+      // Space, which would slide the whole game out from under the camera it just moved.
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (this.userControl) this.jumpToSpacebarPoint();
+        return;
+      }
       this.keys.add(e.key.toLowerCase());
       this.checkCheatCode(e.key);
     });
