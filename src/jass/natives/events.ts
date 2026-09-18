@@ -78,6 +78,12 @@ export function registerEventNatives(rt: Runtime): void {
     TriggerRegisterEnterRegion: "enterRegion",
     TriggerRegisterLeaveRectSimple: "leaveRegion",
     TriggerRegisterLeaveRegion: "leaveRegion",
+    // TriggerRegisterUnitInRange(trigger, unit whichUnit, real range, boolexpr filter) — an
+    // enter-region whose region is a CIRCLE that walks around with `whichUnit`. Polled beside
+    // the rect pump for exactly that reason (Interpreter.pumpRegions). Blizzard.j's
+    // `TriggerRegisterUnitInRangeSimple(trig, range, whichUnit)` reorders the two and passes
+    // no filter, and that wrapper is what the campaign scripts actually call.
+    TriggerRegisterUnitInRange: "unitInRange",
     TriggerRegisterUnitEvent: "unitEvent",
     TriggerRegisterPlayerUnitEvent: "playerUnitEvent",
     TriggerRegisterPlayerEvent: "playerEvent",

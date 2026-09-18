@@ -3924,5 +3924,90 @@ console.log("\n[7.26b] Special effects run on the game's clock (fog must not que
   } else fail(`no-birth model: ${JSON.stringify(specialFxPhaseAt(0, NO_BIRTH))}`);
 }
 
+// --- TriggerRegisterUnitInRange — the region that WALKS ABOUT with a unit ------------------
+//
+// `TriggerRegisterUnitInRange(trigger, unit whichUnit, real range, boolexpr filter)` is an
+// enter-region whose region is a circle centred on a unit, so it rides the same pump and obeys
+// the same baseline. It is how a map says "somebody walked up to this person": Strahnbrad's
+// five roadside villagers (`AproachesJerrett` and its four siblings), UndeadX03's ogre camps,
+// OrcX02_06's "Player Returns to Thrall", UndeadX08's Illidan and Kael voiceovers.
+//
+// Two things this pins, and the campaign script is the authority for both. The unit and the
+// range arrive in the OPPOSITE order from the one every call site shows, because Blizzard.j's
+// wrapper swaps them — `TriggerRegisterUnitInRangeSimple(trig, range, whichUnit)` calls
+// `TriggerRegisterUnitInRange(trig, whichUnit, range, null)` — and that wrapper is what all
+// of those maps use, so the registration records (unit, range) while the script reads
+// (range, unit). Take the pair off the call site and a 256-unit villager becomes a 0-unit
+// one that nobody can ever reach. And the responses are the APPROACHING unit, not the unit
+// the circle hangs on: Human01's trigger tests `GetTriggerUnit() == udg_Arthas` in its
+// condition and then turns the villager to face `GetEnteringUnit()`, so both are Arthas and
+// neither is Farmer Jerrett.
+console.log('\n[7.4b] Unit-in-range events (the circle that walks — TriggerRegisterUnitInRange)');
+{
+  const SRC = `
+globals
+    unit    udg_Villager = null
+    integer udg_fired    = 0
+    boolean udg_sawArthas = false
+    boolean udg_facedArthas = false
+endglobals
+function Approaches_Conditions takes nothing returns boolean
+    // Human01's own condition, near enough: the quest is Arthas's, nobody else's.
+    return GetUnitTypeId(GetTriggerUnit()) == 'Hamg'
+endfunction
+function Approaches_Actions takes nothing returns nothing
+    set udg_fired = udg_fired + 1
+    set udg_sawArthas = ( GetUnitTypeId(GetTriggerUnit()) == 'Hamg' )
+    set udg_facedArthas = ( GetEnteringUnit() == GetTriggerUnit() )
+endfunction
+function InitT takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    call TriggerRegisterUnitInRangeSimple( t, 256.00, udg_Villager )
+    call TriggerAddCondition( t, Condition( function Approaches_Conditions ) )
+    call TriggerAddAction( t, function Approaches_Actions )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC]);
+  interp.callFunction('InitBlizzard', []);
+  // The villager stands still; Arthas walks up to him. A third unit (a footman) is parked
+  // inside the circle from the first tick — the baseline rule, restated for a circle.
+  const villager = { id: 1, typeId: 'nvlw', owner: 15, x: 0, y: 0, facing: 0 };
+  const footman = { id: 3, typeId: 'hfoo', owner: 1, x: 100, y: 0, facing: 0 };
+  const arthas = (x) => ({ id: 2, typeId: 'Hamg', owner: 1, x, y: 0, facing: 0 });
+  interp.rt.globals.set('udg_Villager', interp.rt.unitForSim(villager));
+  interp.run('InitT', []);
+
+  interp.pumpRegions([villager, arthas(900), footman]); // baseline: Arthas far off, footman already inside
+  interp.pumpRegions([villager, arthas(300), footman]); // 300 > 256 — still outside
+  const early = interp.rt.globals.get('udg_fired')?.n ?? -1;
+  if (early === 0) ok('nothing fires at 300 units with a range of 256 — the registration reads the pair in the NATIVE\'s order (unit, range), which is the reverse of the wrapper the map called');
+  else fail(`fired ${early}× before Arthas was in range`);
+
+  interp.pumpRegions([villager, arthas(200), footman]); // crosses in
+  interp.pumpRegions([villager, arthas(150), footman]); // still inside — no re-fire
+  const fired = interp.rt.globals.get('udg_fired')?.n ?? -1;
+  if (fired === 1) ok('walking within 256 of the villager fires it exactly once; standing there does not fire it again');
+  else fail(`crossing in: fired ${fired}× (want 1)`);
+  if (interp.rt.globals.get('udg_sawArthas')?.b === true && interp.rt.globals.get('udg_facedArthas')?.b === true) {
+    ok('...and GetTriggerUnit() and GetEnteringUnit() are BOTH the unit that walked up (Human01 tests one and faces the other)');
+  } else fail('GetTriggerUnit/GetEnteringUnit are not the approaching unit');
+
+  // The footman never fires: it was inside at the baseline, exactly as a unit standing in a
+  // rect at registration never "enters" it. (The condition would refuse it too — which is why
+  // the count above is checked against a walk-out and back rather than trusted on its own.)
+  interp.pumpRegions([villager, arthas(900), footman]); // walks back out
+  interp.pumpRegions([villager, arthas(200), footman]); // and in again
+  const twice = interp.rt.globals.get('udg_fired')?.n ?? -1;
+  if (twice === 2) ok('leaving the circle and coming back is a fresh crossing (2×) — the membership really is a set-difference');
+  else fail(`re-entry: fired ${twice}× (want 2)`);
+
+  // The centre unit dying drops the circle rather than emptying it: nobody "leaves", and the
+  // unit standing there when the centre returns is not a fresh arrival.
+  interp.pumpRegions([arthas(200), footman]); // villager removed from the world
+  interp.pumpRegions([villager, arthas(200), footman]); // …and back, Arthas never having moved
+  const afterDeath = interp.rt.globals.get('udg_fired')?.n ?? -1;
+  if (afterDeath === 2) ok('a circle whose centre leaves the world stops existing — it does not re-fire for whoever was standing in it');
+  else fail(`centre gone: fired ${afterDeath}× (want 2)`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

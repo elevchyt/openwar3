@@ -1007,9 +1007,9 @@ export class Interpreter {
 
   // --- live enter/leave-region pump (milestone 7.4b) -------------------------
 
-  /** Which sim units were inside each enter/leave registration's rect(s) last pump.
-   *  Keyed by the registration object (stable across ticks) so a crossing is a
-   *  set-difference, not a re-scan. */
+  /** Which sim units were inside each enter/leave registration's rect(s) — or inside a
+   *  `unitInRange` registration's circle — last pump. Keyed by the registration object
+   *  (stable across ticks) so a crossing is a set-difference, not a re-scan. */
   private readonly regionMembers = new Map<TriggerReg, Set<number>>();
 
   /** Pump enter/leave-region events from the sim tick: for every enter/leave
@@ -1017,23 +1017,20 @@ export class Interpreter {
    *  tick and fire the trigger on each crossing (GetTriggerUnit + GetEnteringUnit /
    *  GetLeavingUnit set to the crossing unit). Units already inside when a trigger
    *  is registered do NOT fire — the first pump for a registration seeds a silent
-   *  baseline, matching WC3. Cheap: O(regs × units) containment checks per tick. */
+   *  baseline, matching WC3. Cheap: O(regs × units) containment checks per tick.
+   *
+   * `TriggerRegisterUnitInRange` rides the same pump under `unitInRange`: it is an
+   * enter-region whose region is a CIRCLE centred on a unit, so the only thing that
+   * differs is how membership is computed — the baseline, the filter and the responses
+   * are the rect event's. See `inRangeMembers`. */
   pumpRegions(units: ReadonlyArray<UnitSnapshot>): void {
     for (const reg of this.rt.triggerRegs) {
-      const entering = reg.kind === "enterRegion";
+      const inRange = reg.kind === "unitInRange";
+      const entering = inRange || reg.kind === "enterRegion"; // a circle only has an "in"
       if (!entering && reg.kind !== "leaveRegion") continue;
-      const rects = this.rectsOf(reg.params[0]);
-      if (!rects.length) continue;
+      const cur = inRange ? this.inRangeMembers(reg, units) : this.rectMembers(reg, units);
+      if (!cur) continue; // no region to be inside (an unresolvable rect, or the centre unit is gone)
 
-      const cur = new Set<number>();
-      for (const u of units) {
-        for (const r of rects) {
-          if (u.x >= r.minx && u.x <= r.maxx && u.y >= r.miny && u.y <= r.maxy) {
-            cur.add(u.id);
-            break;
-          }
-        }
-      }
       const prev = this.regionMembers.get(reg);
       this.regionMembers.set(reg, cur);
       if (!prev) continue; // baseline tick: seed membership without firing
@@ -1053,6 +1050,57 @@ export class Interpreter {
     }
   }
 
+  /** Which units are inside an enter/leave registration's rect(s) right now. Null when the
+   *  registration names no resolvable rect — there is no region, so there is nothing to be
+   *  inside and nothing to seed a baseline with either. */
+  private rectMembers(reg: TriggerReg, units: ReadonlyArray<UnitSnapshot>): Set<number> | null {
+    const rects = this.rectsOf(reg.params[0]);
+    if (!rects.length) return null;
+    const cur = new Set<number>();
+    for (const u of units) {
+      for (const r of rects) {
+        if (u.x >= r.minx && u.x <= r.maxx && u.y >= r.miny && u.y <= r.maxy) {
+          cur.add(u.id);
+          break;
+        }
+      }
+    }
+    return cur;
+  }
+
+  /**
+   * Which units are inside a `TriggerRegisterUnitInRange(trigger, whichUnit, range, filter)`
+   * circle right now — the moving region the rect pump's set-difference then reads exactly as
+   * it reads a rect's.
+   *
+   * The centre is read out of the SNAPSHOT rather than off the `unit` handle, because the
+   * snapshot is this tick's truth for both ends of the measurement and the handle is only as
+   * fresh as the last thing that refreshed it. A centre that is no longer in the snapshot —
+   * the villager died, the unit was removed — answers null: the circle does not exist, so
+   * nobody is in it and nobody LEFT it either (the membership is dropped rather than emptied,
+   * so a unit still standing there when the centre comes back is not a fresh crossing).
+   *
+   * Distance is centre-to-centre, the measure `DistanceBetweenUnits` and every `Rng`/`Area`
+   * column in the game's data use. The registered unit is left out of its own circle: it sits
+   * at distance 0 for ever, so it could never be a crossing anyway — this only says so out
+   * loud instead of leaning on the baseline to hide it.
+   */
+  private inRangeMembers(reg: TriggerReg, units: ReadonlyArray<UnitSnapshot>): Set<number> | null {
+    const watched = this.rt.data<JassUnit>(reg.params[0] ?? JNULL);
+    if (!watched || watched.simId < 0) return null;
+    const centre = units.find((u) => u.id === watched.simId);
+    if (!centre) return null;
+    const range = asNum(reg.params[1] ?? JNULL);
+    const r2 = range * range;
+    const cur = new Set<number>();
+    for (const u of units) {
+      if (u.id === centre.id) continue;
+      const dx = u.x - centre.x, dy = u.y - centre.y;
+      if (dx * dx + dy * dy <= r2) cur.add(u.id);
+    }
+    return cur;
+  }
+
   /** Resolve a registration's region param to its rect bounds (a bare rect, or a
    *  region's member rects). */
   private rectsOf(param: JassValue | undefined): RectObj[] {
@@ -1065,10 +1113,17 @@ export class Interpreter {
 
   /** Fire one enter/leave crossing: mint the unit handle, honour a boolexpr filter
    *  (TriggerRegisterEnterRegion's 3rd arg — exposed as GetFilterUnit), then run the
-   *  trigger with the right event responses. */
+   *  trigger with the right event responses.
+   *
+   * The crossing unit is BOTH `GetTriggerUnit` and `GetEnteringUnit`, for the circle event as
+   * much as for the rect one — Human01's own villager triggers are the proof, since each
+   * tests `GetTriggerUnit() == udg_Arthas` and then turns the villager to face
+   * `GetEnteringUnit()`. Neither response is the unit the circle is centred ON; the script
+   * already holds that one in the global it registered with. The filter's index does differ:
+   * the rect event's is its 3rd argument, the circle's its 4th. */
   private fireRegionCrossing(reg: TriggerReg, trig: TriggerObj, u: UnitSnapshot, respKey: string): void {
     const handle = this.rt.unitForSim(u);
-    if (!this.eventFilterPasses(reg.params[1], handle)) return;
+    if (!this.eventFilterPasses(reg.params[reg.kind === "unitInRange" ? 2 : 1], handle)) return;
     const responses = new Map<string, JassValue>([["TriggerUnit", handle], [respKey, handle]]);
     this.fireTrigger(trig, this.withTrigger(responses, trig));
   }

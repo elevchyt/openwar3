@@ -3400,7 +3400,9 @@ export class MapViewerScene {
       // Player-resource thresholds (EVENT_PLAYER_STATE_LIMIT) — polled for the same reason.
       if (this.scriptWatchesPlayerState) engine.interp.pumpPlayerStates();
       // Enter/leave-region — only snapshot the world if some trigger watches a region.
-      if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) {
+      // `unitInRange` is one of those regions: a circle that walks about with a unit
+      // (pumpRegions), so leaving it out of this gate switches the whole event off.
+      if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion" || r.kind === "unitInRange")) {
         engine.interp.pumpRegions(this.rts ? unitSnapshots(this.rts.simView) : []);
       }
       this.pumpScriptSounds(engine.interp.rt); // 7.20
