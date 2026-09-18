@@ -16,6 +16,7 @@ import { observerSeats, toConfig } from "../ui/fdfLan";
 import { buildStart, newSetup, seatPeers } from "../net/lobbySetup";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL } from "../ai/ids";
+import { edition, setEdition, type Edition } from "../data/edition";
 
 /**
  * Scripted boot for automated testing — the load gate without the human
@@ -41,6 +42,7 @@ import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL } from "../ai/ids";
  *   ?dev&map=EchoIsles&ai=plus-easy         …played by Computer+ instead (src/ai/plus/)
  *   ?dev&map=EchoIsles&airace=orc           …with every OTHER seat seated as that race
  *   ?dev&chapter=NightElfX01                start a CAMPAIGN chapter (&difficulty=easy|normal|hard)
+ *   ?dev&edition=roc                        boot the Reign of Chaos client (`tft` for the expansion)
  *
  * `player` and `seed` are what make two-client testing possible: point two browser contexts at
  * the same map and seed with different slots and they are in the same world looking at it from
@@ -125,6 +127,17 @@ const MAX_DEV_MAPS = 20;
 
 export async function devBoot(hooks: DevBootHooks): Promise<void> {
   const params = new URLSearchParams(location.search);
+
+  // `?edition=roc|tft` — which GAME this client is (docs/editions.md), before anything reads a
+  // versioned key. The edition is otherwise the player's own choice, remembered in localStorage
+  // and flipped by the main menu's `EditionButton`; a scripted boot has no menu to click, and
+  // the switch re-points every object table at the install door below, so it has to be set here
+  // rather than after the mount. Left out, the stored choice stands — this OVERRIDES it (and,
+  // like the button, remembers it), so a harness URL says which edition it tested.
+  const wantEdition = params.get("edition");
+  if (wantEdition === "roc" || wantEdition === "tft") setEdition(wantEdition as Edition);
+  log(`edition: ${edition()}`);
+
   const want = params.get("map") ?? params.get("dev");
   const wantMap = want && want !== "" && want !== "1" ? want : null;
   const wantChapter = params.get("chapter");
