@@ -49,6 +49,32 @@ does too. `Custom_V1` is the expansion's own "Custom" snapshot and is unused.
 
 An MPQ-era install has no `Melee_V0\`, so it reads the same tables in both editions.
 
+**How much this moves is the reason it is tested rather than assumed.** The two games are not a
+reskin of each other: **232 of the 468 units they both carry change ARMOUR CLASS**, and the
+damage table those classes are read against changes with them. A Footman is Medium on Reign of
+Chaos and Heavy on the expansion; a Raider is Light/0 against Medium/1; a Wind Rider goes the
+other way, Heavy against Light; a Knight hits for 19+2d5 against 28+2d5. Read the wrong set and
+nothing breaks — every fight is just quietly balanced for the other game.
+`tools/sim-edition-data-test.cjs` pins the whole chain against the install: the overlay itself
+(including the twin of `UI\FrameDef\InfoPanelStrings.fdf`, which is filed under a DIFFERENT
+spelling of the folder — `Melee_V0\UI\Framedef\` — so the lookup has to fold case), the rows
+`loadUnitRegistry` builds out of it, and the `damageMultiplier` those rows are graded by.
+
+**The switch is read at the LOOKUP and that is load-bearing**, because the menu flips editions
+on an install that is already mounted: an `EditionDataSource` built while on the expansion has
+to start answering with Reign of Chaos's tables the moment the button is pressed. The same is
+true one layer up — the viewer's base SLK blob urls are built per MATCH (`MapViewerScene.create`),
+so they are the current edition's too.
+
+One thing here is a READING rather than a fact from the files, and it is flagged because a
+campaign chapter is the case that tests it: a Reign of Chaos map's w3i is version 18 and carries
+no "Game Data Set" field at all (Human01's flags are `0x1C69` — no melee bit, no data-set word),
+so nothing in the map says which of `Melee_V0` and `Custom_V0` to read it with. We read every
+RoC map with `Melee_V0`. The two disagree about **11 of 468 units**, and the Raider is one of
+them (Light on Melee_V0, Heavy on Custom_V0) — so if a chapter ever turns out to want the 1.01
+snapshot, that is the list to check. `InfoPanelStrings.fdf` keeps armour tips for both
+(`ARMORTIP_*_V0M` and `ARMORTIP_*_V0C`), which is what says the engine really does use both.
+
 ### 2. `Units\MiscGame.txt` — compiled in, so restated
 
 The gameplay constants are literals in `src/data/gameplayConstants.ts` (checked by

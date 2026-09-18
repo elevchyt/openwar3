@@ -173,6 +173,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   Two things are NOT data and are restated: `MISC_GAME_V0` (RoC's `MiscGame.txt` rows —
   its damage table and XP rules, checked by `pnpm data:verify`; read them through
   `damageTable()`/`miscGame()`, never `MISC_GAME` directly) and the engine's food ceiling (90).
+  **How much the switch moves is why it is tested:** 232 of the 468 units the two games share
+  change ARMOUR CLASS (a Footman is Medium on RoC and Heavy on TFT, a Raider Light/0 against
+  Medium/1), and the damage table they are graded by changes with them — read the wrong set and
+  nothing breaks, every fight is just balanced for the other game
+  (`tools/sim-edition-data-test.cjs` pins the overlay, the rows and the multipliers together).
   A RoC client lists only `.w3m` maps and only RoC LAN rooms (`RoomInfo.edition`), and both
   melee AIs drop rows the edition's tech tree lacks rather than naming TFT ids.
 - **Camera:** read [`docs/camera.md`](docs/camera.md) before touching `GAME_FOV`, the zoom constants, or a map's
