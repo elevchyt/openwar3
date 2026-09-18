@@ -104,6 +104,26 @@ panel in the top-left drives whichever 3D scene is up. On the campaign screen it
 has no sprite-layer chrome to frame anything against. "Log values" prints every backdrop
 touched this session, one line per model path, ready to be baked in.
 
+**That flag also opens every campaign row** (`isCampaignOpen`, `data/campaignProgress.ts`), and
+it has to: a campaign's scene is only up once that campaign has been SELECTED, so on a fresh
+profile most of the backdrops could not be reached to be tuned at all — the expansion opens two
+of its four, Reign of Chaos one of its five. The CHAPTER rows keep their own rule and no progress
+is written, so the profile is exactly as it was next time the game is opened without it. The
+edition is reachable the same way, without clicking through the menu: **`?dev&edition=roc`**
+(`src/dev/devBoot.ts`), set before the install door because the switch re-points every object
+table (`docs/editions.md`).
+
+**The arrival is tuned separately from the pose it lands on.** The settled shot is a still
+picture and can be framed by eye; the Birth is a camera MOVE along the model's own KCTR track,
+and a set that reads fine at both ends of it can still put the eye through a body on the way.
+`birthPanX` / `birthPanY` ("Birth lead-in X/Y" on the panel) are an extra pan applied at the
+clip's first keyframe and eased to nothing by its last, so they move where the sweep comes in
+FROM and leave `camPanX`/`camPanY`'s framing alone. Exodus of the Horde is the case that needed
+it — its sweep drops out of the sky and passed through Thrall's head at the narrowed lens the
+small RoC dioramas need — and it is the only baked one. To SEE a lead-in you must leave the
+screen and come back: a Birth plays on arrival, not on a re-mount (`showBackdrop` returns early
+for the backdrop already standing).
+
 The camera sliders are dolly, pan X/Y, FOV × and — since pan and zoom cannot produce them —
 three **orbit** angles in the game's own vocabulary (`docs/camera.md`): **rotation** (yaw about
 world Z), **angle of attack** (pitch about the camera's right axis, positive raises the eye) and

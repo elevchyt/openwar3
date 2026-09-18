@@ -73,6 +73,11 @@ const BACKDROP_SLIDERS: Slider<keyof BackdropTuning>[] = [
   { key: "camPanY", label: "Cam pan Y", min: -1500, max: 1500, step: 5 },
   { key: "camFov", label: "Cam FOV ×", min: 0.4, max: 1.6, step: 0.01 },
   ...ROTATION,
+  // The Birth's lead-in: where the arrival sweeps in FROM, eased out by the time it lands, so
+  // these two move the shot without moving the pose the sliders above frame (see `birthPanX`).
+  // To see them, leave the screen and come back — a Birth plays on arrival, not on a re-mount.
+  { key: "birthPanX", label: "Birth lead-in X", min: -1500, max: 1500, step: 5 },
+  { key: "birthPanY", label: "Birth lead-in Y", min: -1500, max: 1500, step: 5 },
   // BackgroundFogEnd runs 1700 (Sentinels) → 16000 (Alliance) in CampaignStrings_exp.txt.
   { key: "fogStart", label: "Fog start (world)", min: 0, max: 20000, step: 100 },
   { key: "fogEnd", label: "Fog end (world)", min: 0, max: 20000, step: 100 },

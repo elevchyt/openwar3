@@ -883,8 +883,15 @@ function renderButtonLayers(
   const stateNames = stateLayerNames(f);
   const baseChild = baseName ? node.children.find((c) => c.frame.name === baseName) : undefined;
 
-  // 1) normal face
-  if (baseChild) renderFrame(baseChild, el, ctx, abs);
+  // 1) normal face. TAGGED, because the engine draws exactly ONE face per state: its
+  // ControlBackdrop / ControlPushedBackdrop / ControlDisabledBackdrop are alternatives, not
+  // layers. Ours are stacked canvases, so the pushed face going to opacity 1 leaves the normal
+  // one lit underneath it — and every one of these faces is alpha-blended (`BackdropBlendAll`),
+  // so wherever the Down art is transparent the normal art shows through it. On the campaign
+  // rows' arrow that is the arrow itself: the Down twin draws it pressed in a couple of pixels,
+  // and the button came up wearing BOTH arrows the moment it was held. `.fdf-base-face` is what
+  // the stylesheet turns off while another face is up.
+  if (baseChild) renderFrame(baseChild, el, ctx, abs)?.classList.add("fdf-base-face");
 
   // 2) pushed face (a composited overlay toggled by :active)
   const pushedChild = pushedName ? node.children.find((c) => c.frame.name === pushedName) : undefined;

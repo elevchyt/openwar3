@@ -54,8 +54,14 @@ const TFT_SCENE_TUNING = {
 const ROC_SCENE_TUNING = {
   // Dollied in and narrowed so the widescreen frame stays inside the set: at the authored camera
   // (1 / 1) a 16:9 screen shows the black past the meadow's edges down the left and the bottom.
-  camZoom: 0.8, camPanX: 0, camPanY: 0, camFov: 0.85, camYaw: 0, camPitch: 0, camRoll: 0,
-  lightAmbient: 0.5, fogStart: 6000, fogEnd: 20000, fogR: 0.6, fogG: 0.65, fogB: 0.7,
+  // The lens is the tight end of what the set allows — narrowing it further than the expansion's
+  // is what this diorama needs, since it is built only as wide as its authored 4:3 shot — and the
+  // pan then puts the banner and the shield back under the chrome rather than behind it.
+  camZoom: 0.87, camPanX: -25, camPanY: -25, camFov: 0.61, camYaw: 0, camPitch: 0, camRoll: 0,
+  // Fog and ambient are ONE setting here as they are on Icecrown (see `tuning` below): the haze
+  // starts well past the meadow so it lands on the far ridge instead of on the grass, and its
+  // colour is that ridge's own green rather than the expansion's lavender.
+  lightAmbient: 0.55, fogStart: 9700, fogEnd: 18000, fogR: 0.49, fogG: 0.62, fogB: 0.44,
 };
 
 /**
@@ -191,6 +197,24 @@ export interface BackdropTuning {
    *  that would leave a scene whose bounds run to ±3000 pitch black past the set, which the
    *  reference plainly is not. Tuned by eye against a capture of the real client. */
   lightAmbient: number;
+  /**
+   * An extra pan applied only while the Birth is playing, full at its first keyframe and eased
+   * to nothing by its last — so it moves where the arrival STARTS FROM without touching the
+   * pose it settles on (which is what `camPanX`/`camPanY` frame).
+   *
+   * It exists because the two halves of a backdrop's framing are not the same problem. The
+   * settled pose is a still picture and can be framed by eye; the Birth is a camera MOVE along
+   * the model's own KCTR track, and a set that reads fine at either end of it can still put the
+   * eye through a body on the way. Exodus of the Horde is the case: its sweep drops out of the
+   * sky and passes close enough to Thrall that at our narrowed lens (`camFov` 0.7, which is what
+   * keeps a 16:9 frame inside this small diorama) it goes through his head. Widening the lens
+   * back would show the black past the set, and panning the settled pose away would give up the
+   * framing — so the lead-in is moved instead, and only the lead-in.
+   *
+   * Same axes and units as `camPanX`/`camPanY`: the camera's screen right and up, in world units.
+   */
+  birthPanX: number;
+  birthPanY: number;
 }
 
 /**
@@ -332,6 +356,7 @@ const NEUTRAL_BACKDROP = {
   camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0,
   gradeBrightness: 0.67, gradeContrast: 1, gradeSaturation: 0.97, gradeHue: 0,
   lightAmbient: 0.5,
+  birthPanX: 0, birthPanY: 0, // the arrival starts where the model's own track starts
 } as const;
 
 /**
@@ -372,29 +397,60 @@ const BACKDROP_DEFAULTS: Record<string, Partial<BackdropTuning>> = {
   // as that frame — so at 16:9 each showed the black past its sky plane in a top or bottom
   // corner, even though `frameCameras` already keeps the authored HORIZONTAL extent and gives up
   // height for it. The fix is the lens rather than the pose: every entry here narrows `camFov`
-  // until the frame is inside the set, and the two that also tilt do it by 2° to put the corner
-  // that was left behind the ground. Measured on the running screen at 16:9, one set at a time.
+  // until the frame is inside the set, and the ones that also tilt or turn do it by a couple of
+  // degrees to put the corner that was left behind the ground. Measured on the running screen at
+  // 16:9, one set at a time.
   //
-  // The FOG on three of them is pushed out for the reason the expansion's entries give: these
-  // campaigns' own `BackgroundFog*` keys end at 1600–2950 units, which in our linear distance fog
-  // buries the set itself in haze where Blizzard's renderer wanted a tint on the far wall.
+  // Unlike the expansion's two, all five carry their OWN grade and ambient rather than leaning on
+  // NEUTRAL_BACKDROP's. That shared pair was tuned on the Sentinels backdrop, and these are five
+  // sets lit five ways — a closed ice cavern, a canyon at sunset, a forest at night — where one
+  // exposure cannot serve them all: the ambient runs from 0.28 on the ravine to 0.73 under
+  // Lordaeron's gate, and it is the ambient rather than the fog that decides how much of each set
+  // there is to see (the models' own omnis reach 200 units into sets that run to thousands).
+  //
+  // The FOG is likewise each set's own, and on four of the five it is pushed well past what the
+  // campaign's `BackgroundFog*` keys ask for, for the reason the expansion's entries give: those
+  // keys end at 1600–2950 units, which in our linear distance fog buries the set itself in haze
+  // where Blizzard's renderer wanted a tint on the far wall.
   "ui\\glues\\singleplayer\\tutorialcampaign3d\\tutorialcampaign3d.mdx": {
     // Prologue / Exodus of the Horde — Thrall, torch in hand, in the ravine. Its sky plane stops
-    // just past the top-left rock, so the lens comes in and the eye drops 2°.
-    camFov: 0.7, camPitch: -2,
-    fogStart: 1500, fogEnd: 9000, // its own 0→2000 hazed the rock Thrall is standing on
+    // just past the top-left rock, so the lens comes in and the eye drops 2°; the pan then lifts
+    // the frame off the ravine floor.
+    camPanY: 15, camFov: 0.7, camPitch: -2,
+    // Its own 0→2000 hazed the rock Thrall is standing on. Pushed right out, the blue-green is
+    // left doing what it is for — the cold cast on the far end of the ravine.
+    fogStart: 1600, fogEnd: 17100, fogR: 0, fogG: 0.2, fogB: 0.302,
+    // The darkest of the five: the ravine is a night scene lit by the torch in Thrall's hand, so
+    // the ambient is barely half the shared default and the contrast carries the firelight.
+    gradeContrast: 1.1, lightAmbient: 0.28,
+    // The one backdrop that needs a lead-in (see `birthPanX`): its Birth drops out of the sky
+    // and swings in past Thrall, and at the 0.7 lens above the last of that swing went THROUGH
+    // his head. Measured on the running screen against 0 / -150 / -300 / -500 — at -150 the
+    // sweep still grazes his shoulder, and by -500 it starts far enough out to be worth
+    // watching the set's own left edge. -300 comes in past the rocks with him entering frame
+    // from the right, and the pose it settles on is untouched.
+    birthPanX: -300,
   },
   "ui\\glues\\singleplayer\\humancampaign3d\\humancampaign3d.mdx": {
     // Human / The Scourge of Lordaeron — the knight under Lordaeron's gate. The arch is the set:
-    // nothing is built outside it, so this is the narrowest lens of the five that still shows the
-    // whole span, and the subject slides right to clear the Difficulty Level box.
-    camFov: 0.7, camPanX: 20,
-    // Its own fog (0→9000, warm grey) lands on the keep behind the gate, which is where it belongs.
+    // nothing is built outside it, so this is a narrow lens, and the subject slides well LEFT to
+    // sit under the campaign rows rather than behind them, with 2° of yaw to keep the far pier of
+    // the arch in frame as he goes.
+    camPanX: -105, camFov: 0.7, camYaw: 2,
+    fogStart: 8200, fogEnd: 19300, fogR: 0.37, fogG: 0.302, fogB: 0.35,
+    // The brightest of the five — it is the one daylight exterior, and the gate's stone reads
+    // flat grey at the shared exposure.
+    gradeBrightness: 0.78, gradeSaturation: 1.02, lightAmbient: 0.73,
   },
   "ui\\glues\\singleplayer\\undeadcampaign3d\\undeadcampaign3d.mdx": {
     // Undead / Path of the Damned — the crypt lord in the ice cavern. A CLOSED set (walls, roof
-    // and floor all built), so it needs the least of the five and keeps its own fog.
-    camFov: 0.78,
+    // and floor all built), so it needs the least framing of the five; the pan drops the eye onto
+    // him rather than onto the roof.
+    camPanY: -45, camFov: 0.78,
+    fogStart: 8400, fogEnd: 20000, fogR: 0, fogG: 0.33, fogB: 0.13,
+    // The saturation is the highest here on purpose: the set's whole palette is the sick green of
+    // its own lights on ice, and at the shared 0.97 it washed to grey.
+    gradeBrightness: 0.72, gradeContrast: 0.98, gradeSaturation: 1.19, lightAmbient: 0.43,
   },
   "ui\\glues\\singleplayer\\orccampaign3d\\orccampaign3d.mdx": {
     // Orc / The Invasion of Kalimdor — Grom at the campfire in the canyon. Same shape of fix as
@@ -402,15 +458,23 @@ const BACKDROP_DEFAULTS: Record<string, Partial<BackdropTuning>> = {
     // flat ochre of `BackgroundFogColor`, so it is pushed back onto the far mesas and the sunset
     // sky the model actually carries comes through.
     camFov: 0.7, camPitch: -2,
-    fogStart: 2000, fogEnd: 12000,
+    fogStart: 2000, fogEnd: 20000, fogR: 0.302, fogG: 0.2, fogB: 0,
+    gradeBrightness: 0.82, gradeContrast: 1.13, gradeSaturation: 1.1, lightAmbient: 0.62,
   },
   "ui\\glues\\singleplayer\\nightelfcampaign3d\\nightelfcampaign3d.mdx": {
     // Night Elf / Eternity's End — Tyrande among the Ashenvale trees. The tightest lens of the
     // five: the canopy ends a little way past the top-left tree and nothing but narrowing moved
     // that corner (a tilt made it worse, which is how you can tell it is the set's edge and not
     // the horizon).
-    camFov: 0.66,
-    fogStart: 800, fogEnd: 7000, // its own 0→1600 put haze between the camera and Tyrande
+    camPanX: -15, camFov: 0.66, camYaw: 4,
+    // The one entry whose fog is CLOSE, and deliberately so — this is the only set where the haze
+    // is meant to sit between the trees a few hundred units out, which is what makes the forest
+    // read as deep rather than as a wall of trunks. Its own 0→1600 put that haze in front of
+    // Tyrande instead.
+    fogStart: 300, fogEnd: 800, fogR: 0.2, fogG: 0.302, fogB: 0.502,
+    // Desaturated under a raised contrast: moonlight on bark, not the blue-green the raw
+    // textures carry.
+    gradeContrast: 1.16, gradeSaturation: 0.85, lightAmbient: 0.47,
   },
   // Bonus / The Founding of Durotar. Its camera sits ~990 units from its subject while the
   // model's lights only reach 200, so this set is mostly ambient-lit — hence the dolly in and
@@ -441,6 +505,8 @@ export class MenuScene {
   /** The frame the current backdrop's Birth ends on, or null once it has settled (see
    *  showBackdrop). Watched by the frame loop rather than timed off a wall clock. */
   private backdropBirthEnd: number | null = null;
+  /** The Birth's FIRST keyframe, held for as long as `backdropBirthEnd` is (see `birthPanX`). */
+  private backdropBirthStart: number | null = null;
   /** Per-backdrop framing/fog tuning (issue #105) and which one is currently up. */
   private backdropTunings = new Map<string, BackdropTuning>();
   private backdropShown: string | null = null;
@@ -740,6 +806,8 @@ export class MenuScene {
     // animation" symptom by a different route.
     const birthSeq = model.sequences.find((q) => /^birth$/i.test(q.name));
     this.backdropBirthEnd = birthSeq ? birthSeq.interval[1] : null;
+    // …and where it starts, which is the other end of the lead-in pan (`birthPanX`).
+    this.backdropBirthStart = birthSeq ? birthSeq.interval[0] : null;
     // The menu's own scene stops drawing behind it, as do the screen-edge sprite layers.
     if (this.menuInstance) this.scene3d.removeInstance(this.menuInstance);
     this.panelsHidden = true;
@@ -771,6 +839,7 @@ export class MenuScene {
     this.backdropModel = null;
     this.backdropShown = null;
     this.backdropBirthEnd = null;
+    this.backdropBirthStart = null;
   }
 
   private async loadPanel(path: string, scene: Scene, side: PanelSide): Promise<void> {
@@ -1053,10 +1122,31 @@ export class MenuScene {
     const model = this.backdropModel;
     if (end === null || !instance || !model || instance.frame < end) return;
     this.backdropBirthEnd = null;
+    this.backdropBirthStart = null;
     const stand = model.sequences.findIndex((q) => /^stand$/i.test(q.name));
     if (stand < 0) return;
     instance.setSequenceLoopMode(2);
     instance.setSequence(stand);
+  }
+
+  /**
+   * How much of the Birth's lead-in pan is still owed this frame: 1 on the clip's first
+   * keyframe, 0 on its last, on a smoothstep so the offset leaves without a kink in the middle
+   * of a move that is otherwise all Blizzard's.
+   *
+   * Zero whenever there is no Birth running — a backdrop that has settled, one whose model
+   * carries no Birth at all, and the menu's own scene — so nothing here can move a standing
+   * pose. It reads the same `backdropBirthStart`/`End` pair `settleBackdrop` watches, which is
+   * what keeps the two from disagreeing about when the arrival is over.
+   */
+  private birthLead(): number {
+    const a = this.backdropBirthStart;
+    const b = this.backdropBirthEnd;
+    const instance = this.backdropInstance;
+    if (a === null || b === null || !instance || b <= a) return 0;
+    const p = Math.min(1, Math.max(0, (instance.frame - a) / (b - a)));
+    const eased = p * p * (3 - 2 * p); // smoothstep
+    return 1 - eased;
   }
 
   /**
@@ -1190,7 +1280,12 @@ export class MenuScene {
       // Whichever block is driving this scene — both carry the same camera fields.
       const c = backdrop ? bt ?? NEUTRAL_BACKDROP : t;
       const zoom = c.camZoom;
-      const [panX, panY] = [c.camPanX, c.camPanY];
+      // The settled pan, plus the Birth's own lead-in while one is playing (see `birthPanX`).
+      // `birthLead` is 1 on the clip's first keyframe and 0 on its last, so the extra offset
+      // eases out as the sweep arrives and the pose it lands on is exactly the tuned one.
+      const lead = backdrop ? this.birthLead() : 0;
+      const panX = c.camPanX + (backdrop ? (bt?.birthPanX ?? 0) * lead : 0);
+      const panY = c.camPanY + (backdrop ? (bt?.birthPanY ?? 0) * lead : 0);
       // A backdrop's camera is authored for the 4:3 screen WC3 shipped on, and it frames the
       // scene exactly — Maiev's ruins have nothing painted past their edges. Feed that vertical
       // FOV to a 16:9 viewport and the extra width is scene that was never built: a black void

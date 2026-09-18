@@ -2686,10 +2686,16 @@ body.in-game .fdf-screen.fdf-ingame {
 }
 .fdf-button:active .fdf-pushed { opacity: 1; }
 .fdf-button:active .fdf-btn-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
+/* …and the normal face goes OUT while it does. The engine has one backdrop per state rather
+   than a stack of them, and these faces are alpha-blended, so a Down art that draws its detail
+   a pixel or two in leaves the normal art's showing through beside it — the campaign rows'
+   arrow button wore two arrows while held. */
+.fdf-button:active > .fdf-base-face { opacity: 0; }
 
 /* A latched button stays pressed even when not held — the Options screen's active category
    tab (Gameplay / Video / Sound), which WC3 keeps depressed to show which panel is open. */
 .fdf-button.fdf-latched .fdf-pushed { opacity: 1; }
+.fdf-button.fdf-latched > .fdf-base-face { opacity: 0; }
 .fdf-button.fdf-latched .fdf-btn-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
 
 /* --- disabled state (issue #61) — the FDF's own ControlDisabledBackdrop, revealed over
