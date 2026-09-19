@@ -168,6 +168,16 @@ const SIM_DT = 1 / SIM_HZ;
  *  queues still more — the classic spiral of death. */
 const MAX_STEPS_PER_FRAME = 5;
 
+/**
+ * The ESC-skip fade, in SECONDS of game time — out, a beat at black while the skip lands, and
+ * back. **Ours**: nothing in the install describes an engine-side fade over a skip, and 0.5 s is
+ * the length every campaign chapter's own skip trigger fades in (`CinematicFadeBJ(…, 0.50, …)`),
+ * so the two read as one move when a chapter does both. See `beginCinematicSkip`.
+ */
+const SKIP_FADE_OUT = 0.5;
+const SKIP_FADE_HOLD = 0.25;
+const SKIP_FADE_IN = 0.5;
+
 /** Time constant of the hold-to-follow camera's spring (issue #114) — see `followHeld`.
  *  Critically damped, so the lag it costs a group moving at speed `v` is `2·τ·v`: 45 ms
  *  trails a running hero by ~27 units, a fifth of a terrain tile. */
@@ -11869,6 +11879,7 @@ export class MapViewerScene {
       // (`simAdvanced` is drained here, right after the sim was stepped, so a frame that
       // stepped nothing ages nothing — which is also what a paused game should do.)
       this.cinematic?.update(this.simAdvanced);
+      this.tickCinematicSkip(this.simAdvanced); // …and the ESC cover over it (beginCinematicSkip)
       if (this.consoleTalk) {
         this.consoleTalk.age += this.simAdvanced;
         if (this.consoleTalk.duration > 0 && this.consoleTalk.age >= this.consoleTalk.duration) this.endConsoleTransmission();
@@ -12479,6 +12490,7 @@ export class MapViewerScene {
     // handed the main menu a letterbox, a transmission panel and a fade to sit behind.
     this.cinematic?.dispose();
     this.cinematic = null;
+    this.cinematicSkip = null; // …and the skip fade that was riding over it
     this.cinePortraitViewer?.dispose();
     this.cinePortraitViewer = null;
     this.portraitViewer?.dispose();
@@ -13817,6 +13829,63 @@ export class MapViewerScene {
    *  checks it: the scene is gone and anything it produces now would never be freed. */
   private disposed = false;
 
+  /**
+   * A skip in flight: seconds since ESC, and whether the event has gone out yet. Null when
+   * there is no skip running, which is also what makes a second ESC mid-fade do nothing.
+   */
+  private cinematicSkip: { t: number; fired: boolean } | null = null;
+
+  /**
+   * ESC during a cinematic — **the screen goes out before the skip lands.**
+   *
+   * The event itself is the map's business (see `Interpreter.firePlayerEvent`): every campaign
+   * chapter writes out what "skip" means longhand, and some of them are violent about it —
+   * Reign of Chaos's first human chapter teleports Arthas and four footmen to their end
+   * positions, removes the villagers, resets the sky and cuts the camera, all in one action with
+   * no fade of its own (`Trig_Intro_Cancel_Actions`). Landed on a live frame that is a hard cut
+   * to a different scene. So the cut is covered: the cinematic keeps playing under a cover that
+   * darkens, the skip lands at FULL BLACK where none of it can be seen, and the game fades up
+   * from there.
+   *
+   * The cover is ours and the map's own fade is the map's, and they are deliberately separate
+   * (ui/cinematicPanel.ts `setSkipCover`) — a chapter that fades on a skip (TFT's first night
+   * elf one does, 0.5 s to black) starts that fade from the press, i.e. underneath this one, and
+   * ours coming off then reveals its black rather than a flash of the world.
+   *
+   * **The timings are OURS.** Nothing in the install describes an engine-side skip fade; 0.5 s
+   * out and back is the length the campaign's own skip triggers all fade in (`CinematicFadeBJ(…,
+   * 0.50, …)`), and the beat at black is what covers the work the skip does.
+   *
+   * A press the MAP will not answer is not a skip at all — a chapter creates its skip trigger
+   * disabled and enables it only for the length of a cinematic — so nothing is covered for it
+   * either (`playerEventAnswered`), or ESC would black the screen for a second and a quarter
+   * and change nothing.
+   */
+  private beginCinematicSkip(): void {
+    if (this.cinematicSkip) return; // already going out
+    const interp = this.mapScript?.interp;
+    if (!interp?.playerEventAnswered(this.localPlayer, EVENT_PLAYER_END_CINEMATIC)) return;
+    this.cinematicSkip = { t: 0, fired: false };
+  }
+
+  /** Drive the skip cover and fire the skip itself at black. On the SIM's clock, like the rest
+   *  of the cinematic (see the `cinematic.update` call site). */
+  private tickCinematicSkip(dt: number): void {
+    const skip = this.cinematicSkip;
+    if (!skip) return;
+    skip.t += dt;
+    if (!skip.fired && skip.t >= SKIP_FADE_OUT) {
+      skip.fired = true;
+      this.mapScript?.interp.firePlayerEvent(this.localPlayer, EVENT_PLAYER_END_CINEMATIC);
+    }
+    const back = skip.t - SKIP_FADE_OUT - SKIP_FADE_HOLD;
+    const alpha = skip.t < SKIP_FADE_OUT
+      ? skip.t / SKIP_FADE_OUT
+      : back <= 0 ? 1 : 1 - back / SKIP_FADE_IN;
+    this.cinematic?.setSkipCover(alpha);
+    if (alpha <= 0) this.cinematicSkip = null;
+  }
+
   private attachControls(): void {
     const c = this.canvas;
     this.on(window, "keydown", (e: KeyboardEvent) => {
@@ -13835,7 +13904,7 @@ export class MapViewerScene {
       // after that finds nothing registered and is silently dropped, exactly as in the game.
       if (e.key === "Escape" && !this.interfaceShown) {
         e.preventDefault();
-        this.mapScript?.interp.firePlayerEvent(this.localPlayer, EVENT_PLAYER_END_CINEMATIC);
+        this.beginCinematicSkip();
         return;
       }
       // The four console panels. Each `preventDefault` is about the BROWSER (F10 opens its

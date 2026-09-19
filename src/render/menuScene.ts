@@ -275,6 +275,9 @@ interface Scene {
   distFog?: DistFog; // OpenWar3: read by the patched SD shaders
   omniLights?: OmniLights | null; // …as is this (the model's own LITE lights)
   removeInstance(instance: unknown): void;
+  /** The viewer's broad-phase cull: one huge cell here, tested against the frustum before any
+   *  instance in it is stepped (viewer/scene.js `update`). See `neverCull`. */
+  grid: { cells: Array<{ isVisible(camera: unknown): boolean }> };
 }
 interface Viewer {
   on(event: string, cb: (e: unknown) => void): void;
@@ -300,6 +303,10 @@ interface MdxInstance {
   sequence: number;
   frame: number;
   counter: number;
+  /** The viewer's own culling hook — "Called for instance culling", viewer/modelinstance.js.
+   *  It answers the bounding SPHERE an instance is tested against the frustum with, and it is
+   *  writable per instance, which is where `NEVER_CULLED` goes (see showBackdrop). */
+  getBounds(): { x: number; y: number; z: number; r: number };
 }
 
 /** An MDX light as the viewer exposes it. Each getter writes the sampled value into `out`
@@ -338,6 +345,41 @@ interface MdxModel {
 }
 
 const ViewerClass = ModelViewerCtor as unknown as { new(canvas: HTMLCanvasElement): Viewer };
+
+/**
+ * **Nothing in a glue scene is ever culled**, and the campaign backdrops are why.
+ *
+ * mdx-m3-viewer only STEPS an instance it can see. `Scene.update` walks its grid and skips any
+ * cell outside the frustum, and `ModelInstance.update` is `if (rendered && isVisible(camera))
+ * { render; updateAnimations }` — so an instance out of frame does not merely go undrawn, its
+ * CLIP STOPS. For a match that is the whole point (docs/terrain-culling.md, and the
+ * `culled-instances-freeze` lesson). For this screen it is a DEADLOCK: a backdrop's own
+ * animation is what MOVES the camera (`frameCameras`), so the moment a sweep puts the set out
+ * of frame the clip stops, and a stopped clip can never bring the camera back. The screen
+ * stands frozen mid-Birth for the rest of the session.
+ *
+ * The Scourge of Lordaeron is where it showed. Its Birth tilts the eye up into Lordaeron's gate,
+ * and 1.7 s into a 2.7 s sweep the BROAD phase dropped it — `testCell` is a 2-D test (it reads
+ * the frustum planes at z=0, gl-matrix-addon.js), and a camera pitched up enough turns one of
+ * those planes nearly horizontal, at which point every corner of the cell is "behind" it however
+ * big the cell is. The campaign then came up frozen on the black inside the arch, with the
+ * chapter list printed over it.
+ *
+ * So both gates are opened, once, for every scene this file owns: the cells are always visible,
+ * and every instance gets a bounding sphere nothing can be outside of. There is nothing here to
+ * cull — four scenes holding a backdrop, two panel models and a logo, all of which are on screen
+ * because we put them there — and the two together are the only way to be sure the clip keeps
+ * running whatever the camera does.
+ */
+function neverCull(scene: Scene): Scene {
+  for (const cell of scene.grid.cells) cell.isVisible = () => true;
+  return scene;
+}
+
+/** The instance half of `neverCull`: a bounding sphere the frustum cannot be outside of.
+ *  Radius in world units — the biggest glue set is a few thousand across and the far plane is
+ *  25 000, so this is "always". */
+const NEVER_CULLED = { x: 0, y: 0, z: 0, r: 1e9 };
 
 /**
  * What EVERY campaign backdrop starts at.
@@ -697,17 +739,19 @@ export class MenuScene {
     viewer.addHandler(mdxHandler, this.solver, false);
     viewer.addHandler(blpHandler);
 
-    const scene3d = viewer.addScene();
+    // Every one of the four goes through `neverCull` — see there; a glue model that stops
+    // being drawn also stops ANIMATING, and one of them is driving the camera.
+    const scene3d = neverCull(viewer.addScene());
     scene3d.alpha = false; // clears to black behind the icy scene
     scene3d.color.set([0, 0, 0]);
 
-    const scenePanel = viewer.addScene();
+    const scenePanel = neverCull(viewer.addScene());
     scenePanel.alpha = true; // composite the panels over the background, don't clear it
 
-    const sceneLeft = viewer.addScene();
+    const sceneLeft = neverCull(viewer.addScene());
     sceneLeft.alpha = true;
 
-    const sceneLogo = viewer.addScene();
+    const sceneLogo = neverCull(viewer.addScene());
     sceneLogo.alpha = true;
 
     this.viewer = viewer;
@@ -882,6 +926,7 @@ export class MenuScene {
 
   private addInstance(model: MdxModel, scene: Scene, prefer: RegExp): MdxInstance {
     const instance = model.addInstance();
+    instance.getBounds = () => NEVER_CULLED; // the instance half of `neverCull` — see there
     instance.setScene(scene);
     instance.setSequenceLoopMode(2); // always loop
     const idx = model.sequences.findIndex((s) => prefer.test(s.name));

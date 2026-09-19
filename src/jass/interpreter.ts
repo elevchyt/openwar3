@@ -1547,10 +1547,32 @@ export class Interpreter {
    */
   firePlayerEvent(player: number, eventIndex: number): void {
     const responses = new Map<string, JassValue>([["TriggerPlayer", this.rt.playerHandle(player)]]);
-    this.dispatchToRegs(responses, (reg) =>
-      reg.kind === "playerEvent"
+    this.dispatchToRegs(responses, (reg) => this.matchesPlayerEvent(reg, player, eventIndex));
+  }
+
+  /**
+   * Will `firePlayerEvent` reach anything — is there a registration for this player and this
+   * event on a trigger that is switched ON?
+   *
+   * Asked BEFORE the event, for the one case where the engine has to do something of its own
+   * around it: ESC during a cinematic fades the screen out before the skip lands
+   * (`MapViewerScene.beginCinematicSkip`), and a fade for a press that the map is going to
+   * ignore would be a black screen for nothing. It is the same predicate the dispatch uses,
+   * plus the `enabled` test `fireTrigger` applies — which is exactly the switch a chapter
+   * uses to say when its cinematic is skippable (see `firePlayerEvent`).
+   */
+  playerEventAnswered(player: number, eventIndex: number): boolean {
+    return this.rt.triggerRegs.some((reg) => {
+      if (!this.matchesPlayerEvent(reg, player, eventIndex)) return false;
+      const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+      return !!trig?.enabled;
+    });
+  }
+
+  private matchesPlayerEvent(reg: TriggerReg, player: number, eventIndex: number): boolean {
+    return reg.kind === "playerEvent"
       && this.rt.data<JassPlayer>(reg.params[0])?.index === player
-      && this.rt.enumIndex(reg.params[1] ?? JNULL) === eventIndex);
+      && this.rt.enumIndex(reg.params[1] ?? JNULL) === eventIndex;
   }
 
   /**

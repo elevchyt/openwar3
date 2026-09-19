@@ -36,13 +36,37 @@ import { arg, num, setProp, str } from "./mapBrowser";
 // will appear on the campaign selection screen" — and RoC's frame chain confirms which end is
 // which: its bottom-most row is the LAST campaign of its list, each next one anchored above.
 
-/** RoC CampaignMenu.fdf, MissionNFrame: the bottom row sits 0.04 above the Back button's top,
- *  indented 0.03 left of it, and each row above is 0.023 clear of the one below. */
-const MISSION_BOTTOM = 0.04;
+/**
+ * The list is anchored by its TOP and grows DOWNWARD, and that is a correction to RoC's own
+ * chain rather than a copy of it. `CampaignMenu.fdf` anchors its bottom-most `MissionNFrame`
+ * above the Back button and hangs every other row off the one below — which is exactly right
+ * for a list that is always fourteen rows long, and wrong for ours: since the unreached rows
+ * stopped being drawn (data/campaignProgress.ts), a bottom-anchored list SLID DOWN the screen
+ * as it got shorter, so a fresh profile's two campaigns sat in the bottom corner and every
+ * chapter finished pushed the list back up. Anchoring the FIRST row instead pins the list where
+ * the reference's full one starts and lets it grow towards the Back button, which is the
+ * direction it fills in.
+ *
+ * `LIST_TOP` is that first row's top, measured UP from the Back button's own top edge — the
+ * frame the rows already take their 0.03 indent from, so the whole list stays tied to the one
+ * anchor the file gives this column. Both lists start there: the campaign list and the chapter
+ * list are the same column in the same place, and a list that moved when you stepped into a
+ * campaign would read as the screen jumping.
+ *
+ * The number is where the LONGEST list already started — Legacy of the Damned's fifteen rows,
+ * measured on the running screen at 1600x900 (row one's top 68 px down, the Back button's top
+ * at 825; 757 px over a 900 px screen that is 0.6 units tall). So the list that decides whether
+ * this column fits at all has not moved an inch: every shorter one now starts where it does
+ * instead of hanging off the bottom.
+ */
+const LIST_TOP = 0.5047;
+/** The left indent both lists take off the Back button (RoC's own -0.03). */
+const ROW_INDENT = -0.03;
+/** Row to row: the gap between one row's header line and the next one's, RoC's own 0.023 for
+ *  chapters… */
 const MISSION_PITCH = 0.023;
-/** …and the campaign rows, which are the same shape but stand further apart (0.05) and start
- *  higher (0.11), because each carries a campaign title rather than a chapter number. */
-const CAMPAIGN_BOTTOM = 0.11;
+/** …and 0.05 for the campaign rows, which are the same shape but stand further apart because
+ *  each carries a campaign title rather than a chapter number. */
 const CAMPAIGN_PITCH = 0.05;
 /** The row's arrow button, hung off the label's left edge. */
 const ARROW_DX = -0.004;
@@ -242,9 +266,9 @@ function buildCampaignRoot(
   const container = state.chapters ? "MissionSelectFrame" : "CampaignSelectFrame";
   const built = state.chapters
     ? buildRows(lib, rows.map(({ entry }) => ({ header: entry.header, name: entry.name, camera: !entry.playable })),
-        MISSION_BOTTOM, MISSION_PITCH, ROW_HEADER_FONT, ROW_NAME_FONT)
+        MISSION_PITCH, ROW_HEADER_FONT, ROW_NAME_FONT)
     : buildRows(lib, shown.map(({ campaign }) => ({ header: `${campaign.header}:`, name: campaign.name, camera: false })),
-        CAMPAIGN_BOTTOM, CAMPAIGN_PITCH, CAMPAIGN_HEADER_FONT, CAMPAIGN_NAME_FONT);
+        CAMPAIGN_PITCH, CAMPAIGN_HEADER_FONT, CAMPAIGN_NAME_FONT);
   const target = findChild(root, container);
   if (target) target.children.push(...built);
 
@@ -255,21 +279,21 @@ function buildCampaignRoot(
 }
 
 /**
- * One row per entry, stacked bottom-up exactly as RoC's CampaignMenu.fdf chains them: the
- * LAST row is anchored above the Back button, and every row above is anchored to the row
- * below it. Chaining (rather than computing a y per row) is what keeps the spacing right —
- * a row's height is its text's, and only the file's own chain knows it without measuring.
+ * One row per entry, stacked TOP-DOWN: the FIRST row is anchored `LIST_TOP` above the Back
+ * button and every row below is anchored to the row above it. Chaining (rather than computing
+ * a y per row) is what keeps the spacing right — a row's height is its text's, and only a
+ * chain knows it without measuring — and it is the same chain RoC's CampaignMenu.fdf builds,
+ * read from the other end (see LIST_TOP for why that end).
  */
 function buildRows(
   lib: FdfLibrary,
   entries: Array<{ header: string; name: string; camera: boolean }>,
-  bottom: number,
   pitch: number,
   headerFont: number,
   nameFont: number,
 ): FdfFrame[] {
   const out: FdfFrame[] = [];
-  for (let i = entries.length - 1; i >= 0; i--) {
+  for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     const label = lib.resolveRoot("StandardSmallTextTemplate");
     const desc = lib.resolveRoot("StandardTitleTextTemplate");
@@ -282,10 +306,14 @@ function buildRows(
     setProp(label, "Text", [str(entry.header)]);
     // Same shape the FDF spells a size in — "MasterFont", size, flags (StandardTemplates.fdf).
     setProp(label, "FrameFont", [str("MasterFont"), num(headerFont), str("")]);
-    const below = i === entries.length - 1
-      ? [arg("BOTTOMLEFT"), str("BackButton"), arg("TOPLEFT"), num(-0.03), num(bottom)]
-      : [arg("BOTTOMLEFT"), str(rowLabel(i + 1)), arg("TOPLEFT"), num(0), num(pitch)];
-    setProp(label, "SetPoint", below);
+    // The first row off the Back button, every other off the HEADER LINE of the row above it
+    // — the same link RoC's own chain makes, followed the other way, with that row's grey
+    // name line hanging inside the gap. `pitch` is the same number read from either end, so
+    // only its sign changes with the direction the chain runs.
+    const above = i === 0
+      ? [arg("TOPLEFT"), str("BackButton"), arg("TOPLEFT"), num(ROW_INDENT), num(LIST_TOP)]
+      : [arg("TOPLEFT"), str(rowLabel(i - 1)), arg("BOTTOMLEFT"), num(0), num(-pitch)];
+    setProp(label, "SetPoint", above);
 
     desc.name = rowDesc(i);
     setProp(desc, "Text", [str(entry.name)]);
@@ -296,9 +324,9 @@ function buildRows(
     button.name = rowButton(i);
     setProp(button, "SetPoint", [arg("TOPRIGHT"), str(rowLabel(i)), arg("TOPLEFT"), num(ARROW_DX), num(ARROW_DY)]);
 
-    // Built bottom-up (each anchors to the row below), but pushed in list order so the DOM
-    // reads top-to-bottom like the screen does.
-    out.unshift(label, desc, button);
+    // Built top-down, each anchoring to the row above it — so list order IS build order, and
+    // the DOM reads top-to-bottom like the screen does.
+    out.push(label, desc, button);
   }
   return out;
 }

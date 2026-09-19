@@ -87,6 +87,8 @@ export class CinematicPanelOverlay {
    *  have to). So it sits under the panel and over the canvas. */
   private filterEl: HTMLDivElement;
   private live: LiveFilter | null = null;
+  /** The SKIP cover — ours, not the map's (see `setSkipCover`). */
+  private skipEl: HTMLDivElement;
 
   /** The portrait canvas we splice into the FDF's SPRITE frame; the host owns the model
    *  viewer that draws into it (mapViewer, exactly as for the HUD's bust). */
@@ -97,6 +99,13 @@ export class CinematicPanelOverlay {
     this.filterEl.className = "cine-filter";
     this.filterEl.hidden = true;
     container.appendChild(this.filterEl);
+    // OVER the map's own filter, so a skip that happens to run while the map is fading covers
+    // that too — and so dropping ours reveals whatever the map has put up rather than a flash
+    // of the world (see `setSkipCover`).
+    this.skipEl = document.createElement("div");
+    this.skipEl.className = "cine-skip-cover";
+    this.skipEl.hidden = true;
+    container.appendChild(this.skipEl);
     this.portraitCanvasEl = document.createElement("canvas");
     this.portraitCanvasEl.className = "cine-portrait-canvas";
   }
@@ -127,6 +136,18 @@ export class CinematicPanelOverlay {
     this.scene = scene;
     this.sceneAge = 0;
     this.sync();
+  }
+
+  /**
+   * The ESC-skip cover, 0 (gone) to 1 (black). **Not a cine filter** — the map's own fade is
+   * the script's, this one is the ENGINE's, and the two have to be able to run at once: the
+   * campaign chapters that fade on a skip start their fade FROM the press, which is the very
+   * moment this cover is already darkening. It is driven by `MapViewerScene`'s own clock
+   * (`tickCinematicSkip`), which is what decides when the skip itself lands.
+   */
+  setSkipCover(alpha: number): void {
+    this.skipEl.hidden = alpha <= 0;
+    this.skipEl.style.opacity = String(Math.min(1, Math.max(0, alpha)));
   }
 
   /** DisplayCineFilter(flag) — commit a configured filter, or take the current one down. */
@@ -312,6 +333,7 @@ export class CinematicPanelOverlay {
   dispose(): void {
     this.teardown();
     this.filterEl.remove();
+    this.skipEl.remove();
   }
 }
 

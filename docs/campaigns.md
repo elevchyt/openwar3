@@ -70,6 +70,19 @@ Birth look as though it had none.
 
 Two traps sit under that, and both produce the same "there is no animation" symptom:
 
+* **Nothing in a glue scene is ever culled** (`neverCull`, `render/menuScene.ts`), and a campaign
+  backdrop is why. mdx-m3-viewer only STEPS an instance it can see — `Scene.update` skips a grid
+  cell outside the frustum, and `ModelInstance.update` is `if (rendered && isVisible(camera)) {
+  render; updateAnimations }` — so an instance out of frame does not merely go undrawn, its CLIP
+  STOPS. Here that is a DEADLOCK: the backdrop's own animation is what MOVES the camera, so the
+  moment a sweep puts the set out of frame the clip stops and can never bring it back. The
+  Scourge of Lordaeron is where it showed — its Birth tilts the eye up into Lordaeron's gate, and
+  1.7 s into a 2.7 s sweep the BROAD phase dropped it (`testCell` reads the frustum planes at
+  z=0, so a camera pitched up enough turns one of them nearly horizontal and every corner of the
+  cell is "behind" it however big the cell is). The campaign then came up frozen on the black
+  inside the arch with the chapter list printed over it. Both gates are opened once, for all four
+  scenes: the cells are always visible and every instance gets a bounding sphere nothing can be
+  outside of.
 * **A stalled frame must not fast-forward the clip.** Building the screen blocks the main
   thread, and the first frame afterwards carries the whole stall as its `dt`. Fed straight to
   the animation clock, a 3.3 s hitch advanced the 3.3 s Birth in ONE step. The scene's step is
@@ -192,9 +205,20 @@ entire contents are a scrollbar) so a custom campaign can carry 128 missions. Th
 campaigns top out at 14, so nothing scrolls, and the geometry we build rows with is **RoC's
 own**, out of the same file one edition earlier: a small header line, the name in grey under
 it, and a `CampaignArrowButtonTemplate` (or `CampaignCameraButtonTemplate` for a row that
-isn't a playable map) hanging off its left — the stack anchored above the Back button and
-chained upwards, each row to the one below it. Chaining, not computed offsets: a row's height
-is its text's, and only the file's own chain knows it without measuring.
+isn't a playable map) hanging off its left — the stack chained row to row. Chaining, not
+computed offsets: a row's height is its text's, and only a chain knows it without measuring.
+
+**But the chain runs the other way, from the TOP down**, and that is a correction to the file
+rather than a copy of it. RoC anchors its BOTTOM row above the Back button and hangs every row
+above off the one below — exactly right for a list that is always fourteen rows long, and wrong
+for ours since the unreached rows stopped being drawn (above): a bottom-anchored list SLID DOWN
+the screen as it got shorter, so a fresh profile's two campaigns sat in the bottom corner and
+every chapter finished pushed the list back up. `LIST_TOP` anchors the FIRST row instead, at the
+height the LONGEST list already started (Legacy of the Damned's fifteen rows: 68 px down at
+1600×900, over a Back button whose top is at 825), so that list has not moved and every shorter
+one now starts where it does. Both lists share it — the campaign list and the chapter list are
+the same column in the same place, and a list that moved when you stepped into a campaign would
+read as the screen jumping.
 
 **And a row's height is its TYPE SIZE, which is why the rows carry their own.** The chain adds a
 fixed pitch to whatever height each line asks for, so the font is what decides whether a campaign
@@ -282,6 +306,30 @@ chapter on `campaignConfig`, exactly as the campaign screen would. See `src/dev/
 own `Intro Skipped` trigger does the rest. It is the map that decides when a cinematic is
 skippable at all (`gg_trg_Intro_Skipped` is created disabled), so this is one line of engine and
 a lot of map. See [`docs/triggers.md`](triggers.md) §7.24.
+
+**…and the screen goes out before it lands.** What a skip DOES is violent: Reign of Chaos's first
+human chapter teleports Arthas and four footmen to their end positions, removes the villagers,
+resets the sky and cuts the camera, all in one action — and, unlike TFT's night elf chapter, with
+no fade of its own (`Trig_Intro_Cancel_Actions` against `Trig_Intro_Skipped_Actions`). Landed on a
+live frame that is a hard cut to a different scene, so ESC now fades the screen to black first,
+fires the event at FULL BLACK, and fades up from there (`MapViewerScene.beginCinematicSkip`).
+
+Three things about it are worth keeping:
+
+* **The cover is not a cine filter.** The map's fade is the script's (`DisplayCineFilter`, drawn
+  over the world and under the interface because the map turned the interface off itself); this
+  one is the engine's and covers the interface too, because the skip lands at black and that is
+  where the console comes BACK — anything left uncovered pops in at full brightness over a dark
+  screen. They also have to be able to run at once: a chapter that fades on a skip starts its
+  fade from the press, i.e. underneath this one, and ours coming off then reveals its black
+  rather than a flash of the world.
+* **A press the map will not answer is not covered.** `Interpreter.playerEventAnswered` asks
+  whether any ENABLED trigger is registered for the event first — a chapter enables its skip
+  trigger only for the length of a cinematic — or ESC would black the screen for a second and a
+  quarter and change nothing.
+* **The timings are ours** (0.5 s out, a 0.25 s beat at black, 0.5 s back). Nothing in the install
+  describes an engine-side skip fade; 0.5 s is what every campaign chapter's own skip trigger
+  fades in (`CinematicFadeBJ(…, 0.50, …)`), so the two read as one move when a chapter does both.
 
 ### Two engine bugs the first chapter found
 

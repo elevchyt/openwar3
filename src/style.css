@@ -3195,6 +3195,25 @@ body.in-game .load-gate { display: none; }
   pointer-events: none;
 }
 
+/* The ESC-skip cover (ui/cinematicPanel.ts `setSkipCover`): plain black, its opacity driven
+   per frame rather than by a CSS transition — the fade is timed on the SIM's clock like
+   everything else in a cinematic.
+
+   Unlike the cine filter above it covers the INTERFACE as well, and the two are different for
+   a reason. A map's fade is drawn over the world because the map turned the interface off
+   itself (EnableUserUI). This one is the ENGINE's, over a moment when the interface is coming
+   BACK: the skip lands at full black and that is where the console arrives, so anything this
+   does not cover pops in at full brightness over a screen that is still dark. Hence a z-index
+   over the HUD (3), the cinematic panel (4) and the dialogs (6–7), and under the F10 menu's
+   own modal (50). */
+.cine-skip-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: #000;
+  pointer-events: none;
+}
+
 /* The letterbox + subtitle panel draws OVER the console: a transmission during ordinary
    play (an ally warning you mid-melee) puts its portrait in the bottom-left corner, where
    the minimap is, and it is not hidden behind it. */
