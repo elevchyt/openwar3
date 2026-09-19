@@ -1,7 +1,9 @@
 import type { DataSource } from "../vfs/types";
-import type { Campaign, CampaignEntry } from "../data/campaigns";
-import { campaignRows } from "../data/campaigns";
-import { completed, isCampaignOpen, isMissionOpen, loadProgress, type Difficulty } from "../data/campaignProgress";
+import type { Campaign } from "../data/campaigns";
+import {
+  completed, loadProgress, openCampaigns, openRows,
+  type CampaignRow, type Difficulty,
+} from "../data/campaignProgress";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
@@ -117,8 +119,12 @@ export function mountCampaignScreen(
   state: CampaignScreenState,
   h: CampaignHandlers,
 ): Promise<FdfScreen> {
-  const rows = state.chapters ? campaignRows(state.campaign) : [];
   const progress = loadProgress();
+  // Only what this profile has OPENED is built: a locked campaign and an unreached chapter are
+  // not rows at all (data/campaignProgress.ts). Both lists are therefore indexed by where a row
+  // sits ON SCREEN, and each row carries what it stands for.
+  const rows = state.chapters ? openRows(state.campaign, progress) : [];
+  const shown = state.chapters ? [] : openCampaigns(campaigns, progress);
   // Captured from buildRoot so the difficulty labels resolve through GlobalStrings, exactly
   // as the Options screen resolves LOW/MEDIUM/HIGH (ui/fdfOptions.ts).
   let lib: FdfLibrary | null = null;
@@ -141,11 +147,11 @@ export function mountCampaignScreen(
     textOverrides: state.chapters
       ? { MissionNameHeader: state.campaign.header, MissionName: state.campaign.name }
       : {},
-    buildRoot: (l) => { lib = l; return buildCampaignRoot(l, campaigns, state, rows); },
+    buildRoot: (l) => { lib = l; return buildCampaignRoot(l, state, rows, shown); },
     // One panel: the whole screen fades as one, because there is no chrome to fade it
     // against — every other glue screen's panels are carried by the 3D chain panels.
     panels: ["MissionSelectFrame", "CampaignSelectFrame", "BackButton"],
-    handlers: rowHandlers(campaigns, state, rows, progress, h),
+    handlers: rowHandlers(state, rows, shown, h),
     onBuild: (s) => fill(s),
   });
 
@@ -157,19 +163,16 @@ export function mountCampaignScreen(
       difficulty.onChange = (v) => { state.difficulty = v as Difficulty; h.onDifficulty(state.difficulty); };
     }
 
-    // A locked campaign, a locked chapter, and every cinematic row answer to nothing.
+    // Everything on screen is open — what is not is not drawn. The one dead row left is a
+    // cinematic: it is listed (the reference lists it) and there is nothing to play, because
+    // the movies are AVIs this engine does not decode yet (docs/campaigns.md).
     if (state.chapters) {
       rows.forEach((row, i) => {
-        const on = playable(row, state.campaign, rows, i, progress);
-        s.setEnabled(rowButton(i), on);
-        if (on) wireRowText(s, i);
+        s.setEnabled(rowButton(i), row.entry.playable);
+        if (row.entry.playable) wireRowText(s, i);
       });
     } else {
-      campaigns.forEach((_, i) => {
-        const on = isCampaignOpen(campaigns, i, progress);
-        s.setEnabled(rowButton(i), on);
-        if (on) wireRowText(s, i);
-      });
+      shown.forEach((_, i) => wireRowText(s, i));
     }
   }
 }
@@ -197,42 +200,24 @@ function wireRowText(s: FdfScreen, i: number): void {
   }
 }
 
-/** Is a chapter row clickable? Only a row that names a MAP is: the campaign cinematics are
- *  AVI movies under Movies\*.mpq and the Scourge finale is a model played in-engine (see
- *  CampaignEntry.file) — neither is something to launch. A mission also needs the one before
- *  it finished. */
-function playable(row: CampaignEntry, c: Campaign, rows: CampaignEntry[], i: number, progress: ReturnType<typeof loadProgress>): boolean {
-  if (!row.playable) return false;
-  return isMissionOpen(c, missionIndex(rows, i), progress);
-}
-
-/** Row `i` of the chapter list as an index into `campaign.missions` — the list also carries
- *  the campaign's own three cinematics, which are not chapters and are not counted. */
-function missionIndex(rows: CampaignEntry[], i: number): number {
-  let n = 0;
-  for (let k = 0; k < i; k++) if (rows[k].mission) n++;
-  return n;
-}
-
-/** frameName → click handler for every row on screen. */
+/** frameName → click handler for every row on screen. A row's index is its place in the list
+ *  as BUILT, and the row itself says what it stands for — a cinematic names no chapter, and a
+ *  campaign row's index into `campaigns` is not where it sits once locked ones are dropped. */
 function rowHandlers(
-  campaigns: Campaign[],
   state: CampaignScreenState,
-  rows: CampaignEntry[],
-  progress: ReturnType<typeof loadProgress>,
+  rows: CampaignRow[],
+  shown: Array<{ campaign: Campaign }>,
   h: CampaignHandlers,
 ): Record<string, () => void> {
   const out: Record<string, () => void> = { BackButton: h.onBack };
   if (state.chapters) {
     rows.forEach((row, i) => {
-      if (!row.playable) return;
-      const mission = missionIndex(rows, i);
-      out[rowButton(i)] = () => h.onPlayMission(state.campaign, mission);
+      if (!row.entry.playable) return;
+      out[rowButton(i)] = () => h.onPlayMission(state.campaign, row.mission);
     });
   } else {
-    campaigns.forEach((c, i) => {
-      if (!isCampaignOpen(campaigns, i, progress)) return;
-      out[rowButton(i)] = () => h.onSelectCampaign(c);
+    shown.forEach(({ campaign }, i) => {
+      out[rowButton(i)] = () => h.onSelectCampaign(campaign);
     });
   }
   return out;
@@ -246,9 +231,9 @@ const rowDesc = (i: number): string => `CampaignRow${i}Desc`;
 
 function buildCampaignRoot(
   lib: FdfLibrary,
-  campaigns: Campaign[],
   state: CampaignScreenState,
-  rows: CampaignEntry[],
+  rows: CampaignRow[],
+  shown: Array<{ campaign: Campaign }>,
 ): FdfFrame {
   const root = lib.resolveRoot("CampaignMenu");
   if (!root) throw new Error("CampaignMenu.fdf: no CampaignMenu frame");
@@ -256,9 +241,9 @@ function buildCampaignRoot(
   // The rows, into whichever of the two select frames this mode is.
   const container = state.chapters ? "MissionSelectFrame" : "CampaignSelectFrame";
   const built = state.chapters
-    ? buildRows(lib, rows.map((r) => ({ header: r.header, name: r.name, camera: !r.playable })),
+    ? buildRows(lib, rows.map(({ entry }) => ({ header: entry.header, name: entry.name, camera: !entry.playable })),
         MISSION_BOTTOM, MISSION_PITCH, ROW_HEADER_FONT, ROW_NAME_FONT)
-    : buildRows(lib, campaigns.map((c) => ({ header: `${c.header}:`, name: c.name, camera: false })),
+    : buildRows(lib, shown.map(({ campaign }) => ({ header: `${campaign.header}:`, name: campaign.name, camera: false })),
         CAMPAIGN_BOTTOM, CAMPAIGN_PITCH, CAMPAIGN_HEADER_FONT, CAMPAIGN_NAME_FONT);
   const target = findChild(root, container);
   if (target) target.children.push(...built);

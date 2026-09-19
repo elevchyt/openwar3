@@ -232,6 +232,30 @@ before it in list order is finished.
 "Completed" is the map's own word for it: `RemovePlayer(p, PLAYER_GAME_RESULT_VICTORY)`, which
 `CustomVictoryBJ` calls before it shows anything — surfaced as `MapViewerScene.onLocalVictory`.
 
+**What is locked is not on the screen at all.** A campaign this profile has not opened and a
+chapter it has not reached are not greyed rows — they are not built, and the screen has no
+placeholder for them: a fresh Frozen Throne profile's campaign list is the Sentinels and the
+Bonus campaign, a fresh Reign of Chaos one is the Prologue and the Human campaign, and each
+chapter list is the chapters played plus the next one. That is what the reference does, and it
+is also the point of holding a campaign back — a locked row that still read "Legacy of the
+Damned" would name what the screen is keeping. The two lists the screen is built from are
+`openCampaigns` and `openRows` (`src/data/campaignProgress.ts`); **a row index is therefore a
+place on the SCREEN, not a place in `campaigns` or in `campaignRows`**, so each row carries what
+it stands for (`CampaignRow.mission`, −1 for a cinematic) rather than being counted back out of
+the list. `tools/campaign-progress-test.cjs` pins both, the unlock chain and the growing chapter
+list, against a stub profile store.
+
+The campaign's own cinematics are not chapters and are not gated like them: the Intro and Open
+ones bracket the campaign from the front and are listed from the first visit (you may watch
+"The Awakening" before playing chapter one, or not), while the End one is its last word and
+appears with the last chapter done. They are listed and dead either way — the movies are AVIs
+nothing here decodes (see *Not done yet*).
+
+The screen also REMEMBERS its campaign across a trip into a chapter, and the profile underneath
+it can change while it does (the Single Player screen switches profiles). `openCampaignScreen`
+re-checks the remembered campaign against the profile in play and falls back to the first, which
+is always open.
+
 **Difficulty is not cosmetic.** The screen's dropdown reaches the map through
 `MeleeConfig.difficulty` → `GetGameDifficulty` (common.j: EASY 0 / NORMAL 1 / HARD 2 /
 INSANE 3). Terror of the Tides gates three of its waves on it directly, and blizzard.j's
@@ -709,7 +733,8 @@ the player actually chose would be gone for the rest of the campaign.
 
 ## Not done yet
 
-- The campaign **cinematics** (`OpenCinematic`/`EndCinematic`) are listed and greyed. WC3 ships
+- The campaign **cinematics** (`OpenCinematic`/`EndCinematic`) are listed (an opener from the
+  first visit, a closer once the campaign is finished) and dead. WC3 ships
   them as `Movies\*.mpq` files that are, despite the extension, plain RIFF AVIs — nothing this
   engine decodes.
 - No saved games, and no custom-campaign (`.w3n`) screen. Profiles exist (issue #80) and own the

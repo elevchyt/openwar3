@@ -17,7 +17,7 @@ import { mountViewReplayScreen } from "./ui/fdfViewReplay";
 import { creditsMap, loadCampaigns, type Campaign, type CampaignEntry } from "./data/campaigns";
 import { isRoc, setEdition } from "./data/edition";
 import {
-  loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
+  isCampaignOpen, loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
 } from "./data/campaignProgress";
 import { mountLanScreen, savedPlayerName } from "./ui/fdfLan";
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
@@ -452,6 +452,14 @@ async function openCampaignScreen(vfs: DataSource): Promise<void> {
     return;
   }
   campaignState ??= { campaign: campaigns[0], chapters: false, difficulty: loadDifficulty() };
+  // The screen remembers the campaign across a trip into a mission, but the PROFILE it was
+  // remembered under can have changed underneath it (ui/fdfSinglePlayerMenu.ts) — and a
+  // campaign the profile in play has not opened is one it may not even see
+  // (data/campaignProgress.ts). Fall back to the first, which is always open.
+  const at = campaigns.indexOf(campaignState.campaign);
+  if (at < 0 || !isCampaignOpen(campaigns, at)) {
+    campaignState = { campaign: campaigns[0], chapters: false, difficulty: loadDifficulty() };
+  }
   await glue.goTo(campaignScreen(vfs));
 }
 

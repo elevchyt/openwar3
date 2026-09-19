@@ -1,4 +1,4 @@
-import type { Campaign } from "./campaigns";
+import type { Campaign, CampaignEntry } from "./campaigns";
 import { profileKey } from "./profiles";
 
 // Campaign progress (issue #101) — which campaigns are open and how far into each one the
@@ -17,6 +17,11 @@ import { profileKey } from "./profiles";
 //     the index calls "significant", i.e. the order the screen lists them in.
 // Within a campaign, chapter N+1 opens when chapter N is completed; cinematics never gate
 // anything (you may watch the opening one, or not, and chapter one is open either way).
+//
+// What is LOCKED is not merely dead — it is not on the screen at all (`openCampaigns` /
+// `openRows` below, which is what the screen is built from). The reference lists a campaign
+// and a chapter only once the profile has reached it, so the screen never names what is
+// still ahead of the player.
 
 // The BASE keys. Never read one directly — `profileKey` suffixes it with the profile in play,
 // and these two are listed in that module's PROFILE_OWNED so a deleted profile takes them with it.
@@ -89,6 +94,49 @@ export function completed(c: Campaign, p = loadProgress()): number {
  *  the rest need the one before them finished. */
 export function isMissionOpen(c: Campaign, index: number, p = loadProgress()): boolean {
   return index <= completed(c, p);
+}
+
+/**
+ * The campaigns this profile may SEE, in list order, each with its index into `campaigns`.
+ *
+ * A campaign it has not opened yet is not drawn at all — not a greyed row, not a placeholder —
+ * which is what the reference does: a fresh Frozen Throne profile's campaign screen lists the
+ * Sentinels and the Bonus campaign and nothing else, and Curse of the Blood Elves APPEARS when
+ * Terror of the Tides is finished. (A locked row that named the campaign would also spoil the
+ * one thing the screen is holding back.)
+ */
+export function openCampaigns(campaigns: Campaign[], p = loadProgress()): Array<{ campaign: Campaign; index: number }> {
+  return campaigns
+    .map((campaign, index) => ({ campaign, index }))
+    .filter(({ index }) => isCampaignOpen(campaigns, index, p));
+}
+
+/** One row of a chapter list: the entry, and — for a chapter — which of `campaign.missions`
+ *  it is. A cinematic is not a chapter and carries `-1`. */
+export interface CampaignRow {
+  entry: CampaignEntry;
+  /** Index into `campaign.missions`, or -1 for one of the campaign's three cinematics. */
+  mission: number;
+}
+
+/**
+ * The rows of `c`'s chapter list this profile may SEE, top to bottom — `campaignRows` order,
+ * minus everything it has not reached.
+ *
+ * The list GROWS as the campaign is played, exactly as the reference's does: chapter N+1 is not
+ * listed until chapter N is finished, so the screen never names a chapter ahead of the player.
+ * The campaign's own cinematics are not chapters and are not gated the same way (see
+ * `isCampaignOpen`'s note): the Intro and Open ones bracket the campaign from the front and are
+ * there from the first visit, and the End one is the campaign's last word — it appears with the
+ * last chapter done, and not before.
+ */
+export function openRows(c: Campaign, p = loadProgress()): CampaignRow[] {
+  const done = completed(c, p);
+  const out: CampaignRow[] = [];
+  for (const cinematic of [c.intro, c.open]) if (cinematic) out.push({ entry: cinematic, mission: -1 });
+  c.missions.forEach((entry, mission) => { if (isMissionOpen(c, mission, p)) out.push({ entry, mission }); });
+  if (c.end && done >= c.missions.length) out.push({ entry: c.end, mission: -1 });
+  return out;
 }
 
 /** Record a mission as finished — everything up to and including `index` is now done. */
