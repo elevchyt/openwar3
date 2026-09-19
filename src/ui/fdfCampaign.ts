@@ -37,29 +37,26 @@ import { arg, num, setProp, str } from "./mapBrowser";
 // which: its bottom-most row is the LAST campaign of its list, each next one anchored above.
 
 /**
- * The list is anchored by its TOP and grows DOWNWARD, and that is a correction to RoC's own
+ * The list is CENTRED on the screen and grows both ways, and that is a correction to RoC's own
  * chain rather than a copy of it. `CampaignMenu.fdf` anchors its bottom-most `MissionNFrame`
  * above the Back button and hangs every other row off the one below — which is exactly right
  * for a list that is always fourteen rows long, and wrong for ours: since the unreached rows
- * stopped being drawn (data/campaignProgress.ts), a bottom-anchored list SLID DOWN the screen
- * as it got shorter, so a fresh profile's two campaigns sat in the bottom corner and every
- * chapter finished pushed the list back up. Anchoring the FIRST row instead pins the list where
- * the reference's full one starts and lets it grow towards the Back button, which is the
- * direction it fills in.
+ * stopped being drawn (data/campaignProgress.ts) the list's LENGTH is what changes as a profile
+ * plays, and an end-anchored list walks up or down the screen as it does. Pinning its MIDDLE is
+ * the only anchor that stands still: a fresh profile's two campaigns and the Scourge's fifteen
+ * chapters are the same column, centred the same way, and the rows the next chapter adds arrive
+ * half above and half below rather than shunting the lot.
  *
- * `LIST_TOP` is that first row's top, measured UP from the Back button's own top edge — the
- * frame the rows already take their 0.03 indent from, so the whole list stays tied to the one
- * anchor the file gives this column. Both lists start there: the campaign list and the chapter
- * list are the same column in the same place, and a list that moved when you stepped into a
- * campaign would read as the screen jumping.
+ * `LIST_CENTRE` is that middle, measured UP from the Back button's own top edge — the frame the
+ * rows already take their indent from, so the whole column stays tied to the one anchor the file
+ * gives it. The Back button's top is 0.05 over the bottom of a screen 0.6 tall
+ * (`SetPoint TOPRIGHT, "CampaignMenu", BOTTOMRIGHT, -0.04, 0.05`), so the screen's own middle is
+ * 0.3 − 0.05 above it.
  *
- * The number is where the LONGEST list already started — Legacy of the Damned's fifteen rows,
- * measured on the running screen at 1600x900 (row one's top 68 px down, the Back button's top
- * at 825; 757 px over a 900 px screen that is 0.6 units tall). So the list that decides whether
- * this column fits at all has not moved an inch: every shorter one now starts where it does
- * instead of hanging off the bottom.
+ * The first row is then `LIST_CENTRE + listSpan()/2` (see there: the span is arithmetic, not a
+ * measurement), and everything below chains off it as before.
  */
-const LIST_TOP = 0.5047;
+const LIST_CENTRE = 0.25;
 /** The left indent both lists take off the Back button (RoC's own -0.03). */
 const ROW_INDENT = -0.03;
 /** Row to row: the gap between one row's header line and the next one's, RoC's own 0.023 for
@@ -279,11 +276,27 @@ function buildCampaignRoot(
 }
 
 /**
- * One row per entry, stacked TOP-DOWN: the FIRST row is anchored `LIST_TOP` above the Back
- * button and every row below is anchored to the row above it. Chaining (rather than computing
- * a y per row) is what keeps the spacing right — a row's height is its text's, and only a
- * chain knows it without measuring — and it is the same chain RoC's CampaignMenu.fdf builds,
- * read from the other end (see LIST_TOP for why that end).
+ * How tall a list of `n` of these rows is, from the first header line's top to the last name
+ * line's bottom — and it is EXACT rather than a guess, which is what lets the list be centred
+ * without measuring anything on screen.
+ *
+ * A one-line TEXT frame is exactly its own font size tall, with no leading: that is the engine's
+ * shrink-wrap and `ui/fdf/layout.ts` proves it off OptionsMenu.fdf's two parallel chains. So a
+ * row is `headerFont + nameFont` (the grey name hangs straight off the header's bottom), and the
+ * step from one row's top to the next is `headerFont + pitch` — the chain's own link. Checked
+ * against the running screen at 1600×900: the Scourge's fifteen chapters measure 715 px against
+ * 0.477 units × 1500, and the four-campaign list 308 px against 0.2055.
+ */
+function listSpan(n: number, pitch: number, headerFont: number, nameFont: number): number {
+  return Math.max(0, n - 1) * (headerFont + pitch) + headerFont + nameFont;
+}
+
+/**
+ * One row per entry, stacked TOP-DOWN from a list CENTRED on `LIST_CENTRE`: the first row is
+ * anchored half the list's height above the middle, and every row below is anchored to the row
+ * above it. Chaining (rather than computing a y per row) is what keeps the spacing right — a
+ * row's height is its text's, and only a chain knows it without measuring — and it is the same
+ * chain RoC's CampaignMenu.fdf builds, read from the other end (see LIST_CENTRE for why).
  */
 function buildRows(
   lib: FdfLibrary,
@@ -293,6 +306,7 @@ function buildRows(
   nameFont: number,
 ): FdfFrame[] {
   const out: FdfFrame[] = [];
+  const top = LIST_CENTRE + listSpan(entries.length, pitch, headerFont, nameFont) / 2;
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     const label = lib.resolveRoot("StandardSmallTextTemplate");
@@ -311,7 +325,7 @@ function buildRows(
     // name line hanging inside the gap. `pitch` is the same number read from either end, so
     // only its sign changes with the direction the chain runs.
     const above = i === 0
-      ? [arg("TOPLEFT"), str("BackButton"), arg("TOPLEFT"), num(ROW_INDENT), num(LIST_TOP)]
+      ? [arg("TOPLEFT"), str("BackButton"), arg("TOPLEFT"), num(ROW_INDENT), num(top)]
       : [arg("TOPLEFT"), str(rowLabel(i - 1)), arg("BOTTOMLEFT"), num(0), num(-pitch)];
     setProp(label, "SetPoint", above);
 

@@ -208,17 +208,24 @@ it, and a `CampaignArrowButtonTemplate` (or `CampaignCameraButtonTemplate` for a
 isn't a playable map) hanging off its left — the stack chained row to row. Chaining, not
 computed offsets: a row's height is its text's, and only a chain knows it without measuring.
 
-**But the chain runs the other way, from the TOP down**, and that is a correction to the file
+**But the list is CENTRED and the chain runs from its middle**, which is a correction to the file
 rather than a copy of it. RoC anchors its BOTTOM row above the Back button and hangs every row
 above off the one below — exactly right for a list that is always fourteen rows long, and wrong
-for ours since the unreached rows stopped being drawn (above): a bottom-anchored list SLID DOWN
-the screen as it got shorter, so a fresh profile's two campaigns sat in the bottom corner and
-every chapter finished pushed the list back up. `LIST_TOP` anchors the FIRST row instead, at the
-height the LONGEST list already started (Legacy of the Damned's fifteen rows: 68 px down at
-1600×900, over a Back button whose top is at 825), so that list has not moved and every shorter
-one now starts where it does. Both lists share it — the campaign list and the chapter list are
-the same column in the same place, and a list that moved when you stepped into a campaign would
-read as the screen jumping.
+for ours since the unreached rows stopped being drawn (above): what changes as a profile plays is
+the list's LENGTH, and an end-anchored list walks up or down the screen as it does. Pinning the
+MIDDLE is the only anchor that stands still — a fresh profile's two campaigns and the Scourge's
+fifteen chapters are the same column centred the same way, and the rows a finished chapter adds
+arrive half above and half below instead of shunting the lot. Both lists share it, so stepping
+into a campaign does not make the column jump.
+
+**The height it is centred on is arithmetic, not a measurement**, and that is what lets this stay
+declarative. A one-line TEXT frame is exactly its own font size tall with no leading (the engine's
+shrink-wrap — `ui/fdf/layout.ts` proves it off OptionsMenu.fdf's two parallel chains), so a row is
+`headerFont + nameFont` and the step from one row's top to the next is `headerFont + pitch`, the
+chain's own link. `listSpan()` is those two, and the first row is anchored half of it above
+`LIST_CENTRE`. Checked against the running screen at 1600×900: fifteen chapters measure 92→808 px
+and four campaigns 296→604, both centred on 450 to the pixel, and the longest clears the Back
+button's top (825) by 17.
 
 **And a row's height is its TYPE SIZE, which is why the rows carry their own.** The chain adds a
 fixed pitch to whatever height each line asks for, so the font is what decides whether a campaign
