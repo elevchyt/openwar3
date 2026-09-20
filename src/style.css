@@ -3034,7 +3034,13 @@ body.in-game .fdf-screen.fdf-ingame {
 /* The selected row: the game's own bar — a flat, saturated blue (sampled off the reference
    at rgb(7,7,162)) with the row's text turned gold, exactly as an open menu highlights. */
 .fdf-list-row.selected { background: #0707a2; color: var(--fdf-menu-highlight, #fcd312); }
-.fdf-list-row:not(.selected):hover { background: rgba(60, 80, 140, 0.35); }
+.fdf-list-row:not(.selected):not(.disabled):hover { background: rgba(60, 80, 140, 0.35); }
+/* A map the engine cannot open is SHOWN and not pickable (ui/mapBrowser.ts, src/compat/):
+   greyed the way a dead console button is, its icon drained, hovering its own reason. The
+   2003 UI has no such row — it leaves the file out entirely, which is why a download that
+   would not run looked like a download that had not arrived. */
+.fdf-list-row.disabled { color: rgba(255, 255, 255, 0.35); cursor: default; }
+.fdf-list-row.disabled .fdf-list-icon { filter: grayscale(1); opacity: 0.4; }
 /* The row's badge (folder, or the melee icon with the map's player count in it) — the
    reference's is a good half again the height of the row's text. */
 .fdf-list-icon { width: 1.45em; height: 1.45em; flex: 0 0 auto; }

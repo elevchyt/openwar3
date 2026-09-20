@@ -1,5 +1,6 @@
-import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
 import { MpqDataSource } from "../vfs/mpq";
+import { readW3i } from "../compat/w3i";
+import { readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
 import { raceFromW3i, type Race } from "../data/races";
 import { parseWts } from "../jass/wts";
 import { classifyMap, type MapClassification } from "./mapKind";
@@ -169,6 +170,10 @@ export interface MapInfo {
   loading: MapLoadingScreen;
   /** Melee/custom classification + the map's flags and trigger script. */
   classification: MapClassification;
+  /** What FORMAT the file is — read once, here, and carried (src/compat/mapFormat.ts). The
+   *  Custom Game list is the only thing that acts on it, and it acts on `unsupportedReason`
+   *  rather than on the versions themselves. */
+  format: MapFormatProfile;
 }
 
 /** w3i flags — see PlayerSlot.team. */
@@ -179,17 +184,22 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
   const mpq = new MpqDataSource("map", bytes);
   const classification = classifyMap(mpq); // melee vs. custom, from the w3i flags
   const minimap = mpq.rawBytes("war3mapMap.blp") ?? null;
+  const format = readMapFormat(mpq);
   const empty: MapInfo = {
     name: fallbackName, description: "", recommendedPlayers: "", tileset: "", width: 0, height: 0,
     slots: [], neutralPlayers: [], maxPlayers: 0, minimap, isMelee: classification.isMelee, forces: [], fixedPlayerSettings: false,
     loading: { screen: -1, model: "", title: "", subtitle: "", text: "" },
     classification,
+    format,
   };
   const w3iBytes = mpq.rawBytes("war3map.w3i");
-  if (!w3iBytes) return empty;
+  if (!w3iBytes) return { ...empty, format: UNKNOWN_FORMAT };
 
-  const info = new w3iParser.File();
-  info.load(w3iBytes);
+  // TOLERANT, not all-or-nothing (src/compat/w3i.ts): a w3i that stops early still names its
+  // tileset, its flags and its slots, and a protected map — five of the eight in a stock
+  // install's own Maps\Download — has nothing else wrong with it. Throwing here took the map
+  // out of the Custom Game list altogether, with no row and no reason.
+  const { info } = readW3i(w3iBytes);
 
   // The name/description a map shows are usually TRIGSTR_### keys into its own war3map.wts
   // (every Blizzard melee map is), so resolve them the way the engine does. war3map.wts is
@@ -250,6 +260,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
       text: resolveName(info.loadingScreenText, "", strings),
     },
     classification,
+    format,
   };
 }
 

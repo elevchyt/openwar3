@@ -37,6 +37,7 @@ import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData } from "../data/objectData";
+import { readMapFormat } from "../compat/mapFormat";
 import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/mapMisc";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
@@ -3268,6 +3269,14 @@ export class MapViewerScene {
     this.upgrades.clearCustom();
     this.tech.clearCustom();
     if (!this.mapArchive) return;
+    // What FORMAT this map is, once, where the map is opened (src/compat/mapFormat.ts). Printed
+    // rather than acted on: the versions are the first thing worth knowing about a map that
+    // behaves oddly, and every branch that CARES about them is behind a parser.
+    const format = readMapFormat(this.mapArchive);
+    console.info(`[map] format: w3i v${format.w3iVersion}, terrain v${format.terrainVersion}, object data v${format.objectVersion}, ${format.scriptLanguage} script`
+      + (format.editorBuild ? `, editor build ${(format.editorBuild / 100).toFixed(2)}` : "")
+      + (format.partialW3i ? ", w3i stops early (protected?)" : "")
+      + (format.laterFormat ? " — saved by a later editor (docs/map-compatibility.md)" : ""));
     const wts = this.mapArchive.rawBytes("war3map.wts") ?? this.mapArchive.rawBytes("war3map\\wts") ?? undefined;
     const w3u = this.mapArchive.rawBytes("war3map.w3u") ?? this.mapArchive.rawBytes("war3map\\w3u") ?? undefined;
     const w3a = this.mapArchive.rawBytes("war3map.w3a") ?? this.mapArchive.rawBytes("war3map\\w3a") ?? undefined;
@@ -3446,7 +3455,10 @@ export class MapViewerScene {
     const any = (kind: string, lo: number, hi = lo): boolean =>
       rt.triggerRegs.some((r) => r.kind === kind && idx(r) >= lo && idx(r) <= hi);
     sw.captureDeaths = rt.triggerRegs.some((r) => r.kind === "unitDeath") || any("unitEvent", 53) || any("playerUnitEvent", 20);
-    sw.captureDamage = any("unitEvent", 52);
+    // 308 is 1.31's per-PLAYER damage event, which a later-format map registers once instead
+    // of once per unit. The index is our own compat prelude's (src/compat/prelude.ts); without
+    // it here the trigger registers and the sim never captures a blow to raise it with.
+    sw.captureDamage = any("unitEvent", 52) || any("playerUnitEvent", 308);
     sw.captureAttacks = any("unitEvent", 62) || any("playerUnitEvent", 18);
     sw.captureOrders = any("playerUnitEvent", 38, 40) || any("unitEvent", 75, 77);
     sw.captureConstruct = any("playerUnitEvent", 26, 28) || any("unitEvent", 64, 65);

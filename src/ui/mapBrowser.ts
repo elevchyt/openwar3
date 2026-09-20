@@ -3,6 +3,7 @@ import { onEditionChange } from "../data/edition";
 import { blpToCanvas } from "../render/blputil";
 import { mapSizeLabel } from "../data/gameplayConstants";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
+import { unsupportedReason } from "../compat/mapFormat";
 import { readMapPreview, type MapPreview } from "../world/mapPreview";
 import { loadUnitRegistry, type UnitRegistry } from "../data/units";
 import { MAPS_PREFIX } from "../assets/opfs";
@@ -299,6 +300,9 @@ export class MapBrowser {
         e.label = info.name || e.label;
         e.melee = info.isMelee;
         if (info.maxPlayers) e.players = info.maxPlayers;
+        // A map this engine cannot PLAY is still a map, and still the player's: it keeps its
+        // name, its badge and its row, and says why when hovered (src/compat/mapFormat.ts).
+        e.unsupported = unsupportedReason(info.format) ?? undefined;
       } catch (err) {
         e.invalid = true;
         console.warn(`[OpenWar3] couldn't read ${e.path}:`, err);
@@ -374,7 +378,7 @@ export class MapBrowser {
 
   /** The best fit for `q` across every folder — the ranking is ui/mapSearch.ts's. */
   private search(q: string): MapEntry | null {
-    return bestMatch(this.entries.filter((e) => !e.invalid), q, this.cwd);
+    return bestMatch(this.entries.filter((e) => !e.invalid && !e.unsupported), q, this.cwd);
   }
 
   /** Go to a map the search found — walking into its folder first when it is in another. */
@@ -607,6 +611,16 @@ interface MapEntry {
   melee: boolean; // drives the row icon; only known once the map has been read
   /** The map could not be read as a map — see `readFolder`. Such a row is never listed. */
   invalid?: boolean;
+  /**
+   * The map READS, and this engine cannot play it — a Lua script, say. The row is LISTED,
+   * greyed, and hovers its own reason (src/compat/mapFormat.ts `unsupportedReason`).
+   *
+   * This is the difference between "your download is not here" and "your download is here and
+   * here is what is missing". The 2003 client has no such row because it has nothing to say;
+   * we do, and a map that silently vanishes is the single least actionable thing the Custom
+   * Game screen can do to a player.
+   */
+  unsupported?: string;
 }
 
 /** Every playable map in the install, with the folder it lives in. */
@@ -670,7 +684,13 @@ function toListItem(r: MapEntry | FolderRow, icons: Icons, upOneLevel: string): 
       icon: r.up ? icons.up : icons.folder,
     };
   }
-  return { value: r.path, label: r.label, icon: icons.map(r.melee, r.players) };
+  return {
+    value: r.path,
+    label: r.label,
+    icon: icons.map(r.melee, r.players),
+    disabled: !!r.unsupported,
+    title: r.unsupported,
+  };
 }
 
 interface Icons {

@@ -20,6 +20,10 @@ import { registerLeaderboardNatives } from "./leaderboard";
 import { registerForceNatives } from "./forces";
 import { registerGameCacheNatives } from "./gamecache";
 import { registerGroupNatives } from "./groups";
+import { registerHashtableNatives } from "./hashtable";
+// A NAMED SEAM into the compatibility layer (src/compat/README.md): the 1.31 frame API is
+// declared by our own prelude and answered there, because none of it exists in 1.30.4.
+import { registerFrameNatives } from "../../compat/frames";
 import { registerItemNatives } from "./items";
 import { registerMeleeNatives } from "./melee";
 import { registerMultiboardNatives } from "./multiboard";
@@ -51,6 +55,10 @@ const CONVERT_NATIVES = [
   "ConvertRacePref", "ConvertRarityControl", "ConvertSoundType", "ConvertStartLocPrio",
   "ConvertTexMapFlags", "ConvertUnitEvent", "ConvertUnitState", "ConvertUnitType",
   "ConvertVersion", "ConvertVolumeGroup", "ConvertWeaponType", "ConvertWidgetEvent",
+  // …and the three our own compat prelude declares, for the 1.31 frame API's enums
+  // (src/compat/prelude.ts). Interned exactly like the rest, so `==` on two of the same
+  // constant is true and a frame point can be told from a frame event.
+  "ConvertOriginFrameType", "ConvertFramePointType", "ConvertFrameEventType",
 ];
 
 /** Cheap, pure utility natives (string/number conversions, RNG, camera/env
@@ -136,6 +144,8 @@ export function registerNatives(rt: Runtime): void {
   registerForceNatives(rt);
   registerGameCacheNatives(rt); // the campaign's memory between chapters (docs/campaigns.md)
   registerGroupNatives(rt);
+  registerHashtableNatives(rt); // InitHashtable & co — what every modern map keeps its state in
+  registerFrameNatives(rt); // the 1.31 custom-UI frame API (src/compat/frames.ts)
   registerItemNatives(rt); // items + the item events (7.18)
   registerDestructableNatives(rt); // destructibles: gates open by dying (issue #85)
   registerMeleeNatives(rt); // what blizzard.j's Melee* library stands on (7.3)

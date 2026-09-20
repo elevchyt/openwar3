@@ -68,6 +68,11 @@ export function mintUnitHandle(
 export function registerWorldNatives(rt: Runtime): void {
   // --- unit creation ---
   def(rt, "CreateUnit", (c, a) => createUnit(c, a[0], asInt(a[1]), asNum(a[2]), asNum(a[3]), asNum(a[4])));
+  // 1.31's CreateUnit with a Reforged HD SKIN id on the end (declared in our own compat
+  // prelude — src/compat/prelude.ts). We draw SD out of an SD install, so the skin is read
+  // and dropped: the unit is created exactly as CreateUnit would, which is what the map
+  // wanted the call for. Every later-format map in the corpus uses it in place of CreateUnit.
+  def(rt, "BlzCreateUnitWithSkin", (c, a) => createUnit(c, a[0], asInt(a[1]), asNum(a[2]), asNum(a[3]), asNum(a[4])));
   // CreateUnitAtLoc takes a location handle {x,y}; degrade gracefully if unresolved.
   def(rt, "CreateUnitAtLoc", (c, a) => {
     const loc = c.rt.data<{ x: number; y: number }>(a[2]);

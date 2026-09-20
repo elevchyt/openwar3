@@ -30,6 +30,11 @@ export function registerConfigNatives(rt: Runtime): void {
   });
   def(rt, "SetStartLocPrio", () => JNULL); // AI start-loc priorities — recorded as no-ops
   def(rt, "SetStartLocPrioCount", () => JNULL);
+  // …and their 1.31 twins, which say the same thing about which start an ENEMY should be put
+  // at. Declared by our own compat prelude (src/compat/prelude.ts); no-ops for the same reason
+  // as the pair above — the lobby seats players, not the map's preference ordering.
+  def(rt, "SetEnemyStartLocPrio", () => JNULL);
+  def(rt, "SetEnemyStartLocPrioCount", () => JNULL);
 
   // --- per-player setup (SetPlayer*) ---
   def(rt, "SetPlayerColor", (c, a) => {

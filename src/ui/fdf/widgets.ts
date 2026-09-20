@@ -36,6 +36,15 @@ export interface ListItem {
    * one and then delete it.
    */
   action?: { label: string; title?: string; onClick: () => void };
+  /**
+   * A row that is THERE and cannot be picked — greyed, and taking neither click. WC3's own
+   * lists have no such row, but WC3's own list also has nothing to say about a map it cannot
+   * open: it simply leaves it out, and the player is left wondering where their download went.
+   * A greyed row with `title` on it says which map and why (see MapBrowser / compat).
+   */
+  disabled?: boolean;
+  /** The hover slab's text — a disabled row's REASON, in the game's own tooltip art. */
+  title?: string;
 }
 
 interface Control {
@@ -551,6 +560,8 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
       const row = document.createElement("div");
       row.className = "fdf-list-row";
       if (it.value === value) row.classList.add("selected");
+      if (it.disabled) row.classList.add("disabled");
+      if (it.title) setGameTip(row, it.title);
       if (it.icon) {
         const icon = document.createElement("img");
         icon.className = "fdf-list-icon";
@@ -576,12 +587,12 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
         row.appendChild(action);
       }
       row.addEventListener("click", () => {
-        if (!enabled || value === it.value) return;
+        if (!enabled || it.disabled || value === it.value) return;
         value = it.value;
         paint();
         control.onChange?.(it.value);
       });
-      row.addEventListener("dblclick", () => { if (enabled) control.onActivate?.(it.value); });
+      row.addEventListener("dblclick", () => { if (enabled && !it.disabled) control.onActivate?.(it.value); });
       rows.appendChild(row);
     }
     scrollbar?.sync();

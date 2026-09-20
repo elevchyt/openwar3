@@ -13,6 +13,7 @@ import type { MpqDataSource } from "../vfs/mpq";
 import { buildInterpreter } from "./headless";
 import type { Interpreter } from "./interpreter";
 import type { EngineHooks, LobbySlot, MapSetup } from "./runtime";
+import { COMPAT_PRELUDE } from "../compat/prelude";
 
 const decode = (b: Uint8Array): string => new TextDecoder("windows-1252").decode(b);
 // war3map.wts is UTF-8 (with a BOM); decode it as such so authored text isn't mojibake.
@@ -98,7 +99,10 @@ export function loadMapScript(
   // map script alone (natives still resolve to safe defaults, so config() partially
   // works — better than nothing).
   const wts = readUtf8(map, "war3map.wts", "scripts\\war3map.wts") ?? undefined;
-  const sources = [common, blizzard, mapJ].filter((s): s is string => s !== null);
+  // The compatibility prelude goes BETWEEN them (src/compat/prelude.ts): it declares only what
+  // a 1.31+ map refers to and this install's common.j has never heard of, so a 2003 map never
+  // touches a line of it, and blizzard.j — which is the install's — still loads last of the two.
+  const sources = [common, COMPAT_PRELUDE, blizzard, mapJ].filter((s): s is string => s !== null);
   const interp = buildInterpreter(sources, {
     gameType: opts.melee ? 1 : 4, hooks: opts.hooks,
     worldWritingHooks: opts.worldWritingHooks, localViewHooks: opts.localViewHooks, wts,

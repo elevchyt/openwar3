@@ -625,6 +625,27 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   order by name has nothing to match and falls through to "smart" — a FOLLOW. Their strings come
   from `UI\TriggerData.txt`, joining `HeroSkill<Name>`'s code to `UnitOrder<Name>`'s string
   (`fillIntrinsicOrders`); that is what keeps Extreme Candy War's Candy Mages at their posts.
+- **Later-format maps:** read [`docs/map-compatibility.md`](docs/map-compatibility.md) before
+  touching [`src/compat/`](src/compat/README.md), a map-file parser, or a parser hunk in the
+  viewer patch. A map downloaded from Hive or EpicWar today was saved by a 1.31–Reforged 2.0
+  editor, and four of its entries have grown fields since 2018: `war3map.w3i` **v32/v33** (two
+  camera distances, then a third), the object files **v3** (each object's modifications wrapped
+  in SETS — `setCount`, then `setFlags`+`modCount` per set), `war3map.w3e` **v12** (the ground
+  texture widened to 6 bits for more than 16 tilesets, so a corner is **8** bytes and the flags
+  moved up with it), and the `.doo` skin id (already wired — it only ever wanted the w3i's build
+  version). **The w3i gates all of it**: its throw is why such a map never even appears in the
+  Custom Game list, and the same throw hides five PROTECTED v25 maps in the install's own
+  `Maps\Download` (Extreme Candy War, DotA), whose w3i is TRUNCATED — so the reader wants
+  tolerance as much as version-awareness. The trap directly behind that fix is
+  `solverParams.reforged`, which the viewer sets from `buildVersion > 131` and which switches
+  texture lookups to `.dds` and the team-colour table to 28: an ASSET FLAVOUR keyed on a FILE
+  LAYOUT, and we draw SD out of an SD install, so it stays false. This is a **compatibility
+  layer and must stay one** — every branch is `if (version >= N) … else <what it does today>`,
+  the format is asked ONCE at the map door into a `MapFormatProfile`, and nothing outside
+  `src/compat/` imports from it (the `src/ai/plus/` rule, for the same reason). The newer
+  `Blz*` natives are a DEGRADATION surface, not a blocker — an unknown native and an undefined
+  global are each logged once and stepped over, so such a map runs before any of them exist —
+  and their constants must come from a prelude of OUR OWN, never Blizzard's newer `common.j`.
 - **Extreme Candy War:** read [`docs/candy-war-ai.md`](docs/candy-war-ai.md) before touching
   [`src/ai/plus/candy/`](src/ai/plus/candy/). It is Computer+ as a HERO player for Blizzard's lane
   map, seated by `startCustom` when the script has the map's four triggers (never by file name), on

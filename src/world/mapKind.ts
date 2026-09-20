@@ -1,5 +1,5 @@
-import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
 import type { MpqDataSource } from "../vfs/mpq";
+import { readW3i } from "../compat/w3i";
 import { readMapScript, type MapScript } from "./triggers";
 
 // Classify a map as **standard melee** vs **custom / scenario / game mode**.
@@ -71,9 +71,9 @@ export function classifyMap(mpq: MpqDataSource): MapClassification {
   let flags = 0;
   const w3iBytes = mpq.rawBytes("war3map.w3i");
   if (w3iBytes) {
-    const info = new w3iParser.File();
-    info.load(w3iBytes);
-    flags = info.flags;
+    // The flags sit near the FRONT of the file, so a w3i that stops early (a protected map,
+    // src/compat/w3i.ts) still answers melee-vs-custom correctly.
+    flags = readW3i(w3iBytes).info.flags;
   }
   const isMelee = (flags & W3I_FLAGS.melee) !== 0;
   const flagNames = Object.entries(W3I_FLAGS)

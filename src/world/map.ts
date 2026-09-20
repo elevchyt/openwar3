@@ -1,5 +1,5 @@
-import w3i from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
 import { MpqDataSource } from "../vfs/mpq";
+import { readW3i } from "../compat/w3i";
 import { parseW3E, type TerrainData } from "./terrain";
 import { parseDoo, type DoodadInstance } from "./doodads";
 import { parseMapUnits, type PlacedUnit } from "./mapUnits";
@@ -29,14 +29,11 @@ export function loadMapBytes(bytes: Uint8Array, label = "map"): LoadedMap {
   if (!w3eFile) throw new Error(`${label}: no war3map.w3e (not a Warcraft III map?)`);
   const terrain = parseW3E(w3eFile);
 
-  // buildVersion gates doodad parsing; default 0 (pre-1.32) if w3i is absent.
-  let buildVersion = 0;
+  // buildVersion gates doodad parsing; default 0 (pre-1.32) if w3i is absent. Read TOLERANTLY
+  // (src/compat/w3i.ts) — the build version is one of the first fields in the file, so a w3i
+  // that stops early still has it, and a protected map's doodads parse like anybody else's.
   const w3iBytes = mpq.rawBytes("war3map.w3i");
-  if (w3iBytes) {
-    const info = new w3i.File();
-    info.load(w3iBytes);
-    buildVersion = info.getBuildVersion();
-  }
+  const buildVersion = w3iBytes ? readW3i(w3iBytes).info.getBuildVersion() : 0;
 
   const dooBytes = mpq.rawBytes("war3map.doo");
   const doodads = dooBytes ? parseDoo(dooBytes, buildVersion) : [];

@@ -134,6 +134,13 @@ export const EVENT_PLAYER_LEAVE = 15;
 const EVENT_UNIT_DEATH = 53;
 const EVENT_PLAYER_UNIT_DEATH = 20;
 const EVENT_UNIT_DAMAGED = 52;
+// 1.31's per-PLAYER damage event, which a modern map registers ONCE instead of once per unit.
+// The index is OURS, not the file's: 1.30.4's common.j does not carry the constant at all, so
+// it is declared in our own compat prelude (src/compat/prelude.ts) and the two must agree —
+// the number never appears in a map file, only the name does. Its twin EVENT_PLAYER_UNIT_
+// DAMAGING (315) fires BEFORE the reduction and lets a script change the amount, which the sim
+// has no seam for; it is declared so the registration compiles and is never raised.
+const EVENT_PLAYER_UNIT_DAMAGED = 308;
 const EVENT_PLAYER_UNIT_ATTACKED = 18;
 const EVENT_UNIT_ATTACKED = 62;
 // Issued-order events: no-target (38/75), point-target (39/76), unit-target (40/77).
@@ -1204,7 +1211,9 @@ export class Interpreter {
       const target = this.rt.unitForSim(e.target);
       const source = e.source ? this.rt.unitForSim(e.source) : JNULL;
       const responses = new Map<string, JassValue>([["TriggerUnit", target], ["EventDamageSource", source], ["EventDamage", jReal(e.amount)]]);
-      this.dispatchToRegs(responses, (reg) => reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_DAMAGED) && this.paramUnitIs(reg, target));
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_DAMAGED) && this.paramUnitIs(reg, target)) ||
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_DAMAGED, e.target.owner, target)));
     }
   }
 

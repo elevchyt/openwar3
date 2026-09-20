@@ -338,7 +338,7 @@ index c210e02c8002aed4e3ddc02e42ebe25f04d2a27e..af203a247a924c6a0a427b75735e919d
      save(): Uint8Array;
      getByteLength(): number;
 diff --git a/dist/cjs/parsers/w3x/w3d/file.js b/dist/cjs/parsers/w3x/w3d/file.js
-index 5c2629bdcf279decae84d9fddfc523d5548192e8..4a65c029e233f1a4f11a092c6bb76e4936364d94 100644
+index 5c2629bdcf279decae84d9fddfc523d5548192e8..276d18c22305fb19eb65a0e7a5a0132cfc85b3cb 100644
 --- a/dist/cjs/parsers/w3x/w3d/file.js
 +++ b/dist/cjs/parsers/w3x/w3d/file.js
 @@ -12,6 +12,8 @@ class War3MapW3d {
@@ -370,8 +370,8 @@ index 5c2629bdcf279decae84d9fddfc523d5548192e8..4a65c029e233f1a4f11a092c6bb76e49
 +        // consumes each of the 44 files (never both, never neither), so the test is decisive.
 +        const start = stream.index;
 +        try {
-+            this.originalTable.load(stream, true);
-+            this.customTable.load(stream, true);
++            this.originalTable.load(stream, true, this.version);
++            this.customTable.load(stream, true, this.version);
 +            if (stream.remaining === 0) {
 +                this.useOptionalInts = true;
 +                return;
@@ -383,8 +383,8 @@ index 5c2629bdcf279decae84d9fddfc523d5548192e8..4a65c029e233f1a4f11a092c6bb76e49
 +        stream.seek(start);
 +        this.originalTable = new modificationtable_1.default();
 +        this.customTable = new modificationtable_1.default();
-+        this.originalTable.load(stream, false);
-+        this.customTable.load(stream, false);
++        this.originalTable.load(stream, false, this.version);
++        this.customTable.load(stream, false, this.version);
 +        this.useOptionalInts = false;
      }
      save() {
@@ -392,24 +392,401 @@ index 5c2629bdcf279decae84d9fddfc523d5548192e8..4a65c029e233f1a4f11a092c6bb76e49
          stream.writeInt32(this.version);
 -        this.originalTable.save(stream, true);
 -        this.customTable.save(stream, true);
-+        this.originalTable.save(stream, this.useOptionalInts);
-+        this.customTable.save(stream, this.useOptionalInts);
++        this.originalTable.save(stream, this.useOptionalInts, this.version);
++        this.customTable.save(stream, this.useOptionalInts, this.version);
          return stream.uint8array;
      }
      getByteLength() {
 -        return 4 + this.originalTable.getByteLength(true) + this.customTable.getByteLength(true);
-+        return 4 + this.originalTable.getByteLength(this.useOptionalInts) + this.customTable.getByteLength(this.useOptionalInts);
++        return 4 + this.originalTable.getByteLength(this.useOptionalInts, this.version) + this.customTable.getByteLength(this.useOptionalInts, this.version);
      }
  }
  exports.default = War3MapW3d;
+diff --git a/dist/cjs/parsers/w3x/w3e/corner.js b/dist/cjs/parsers/w3x/w3e/corner.js
+index 22bc46919b2ae341d6139fd2f544bcbc04d816e9..4957509b8e3b176559d946f20f99c19b942edeaf 100644
+--- a/dist/cjs/parsers/w3x/w3e/corner.js
++++ b/dist/cjs/parsers/w3x/w3e/corner.js
+@@ -18,17 +18,36 @@ class Corner {
+         this.cliffTexture = 0;
+         this.layerHeight = 0;
+     }
+-    load(stream) {
++    load(stream, version) {
+         this.groundHeight = (stream.readInt16() - 8192) / 512;
+         const waterAndEdge = stream.readInt16();
+         this.waterHeight = ((waterAndEdge & 0x3FFF) - 8192) / 512;
+         this.mapEdge = waterAndEdge & 0x4000;
+-        const textureAndFlags = stream.readUint8();
+-        this.ramp = textureAndFlags & 0b00010000;
+-        this.blight = textureAndFlags & 0b00100000;
+-        this.water = textureAndFlags & 0b01000000;
+-        this.boundary = textureAndFlags & 0b10000000;
+-        this.groundTexture = textureAndFlags & 0b00001111;
++        // OpenWar3 fix (docs/map-compatibility.md): a w3e v12 corner is EIGHT bytes, not seven.
++        // Reforged lifted the 16-tileset limit, so the ground texture widened from 4 bits to 6
++        // and the four flags moved up with it into a uint16 — Test of Faith Reborn names 42
++        // ground tilesets, which is an exact fit for 6 bits and could not be written at all in
++        // v11. Derived from the bytes (the two spare bits of the low byte carry the two RARE
++        // flags: 1377 ramp corners and 52 blight corners of 66049) and confirmed against
++        // HiveWE's src/base/terrain.ixx, which reads exactly this and writes v12 by default.
++        // The four booleans below must come out IDENTICAL on a v11 map — nothing throws if
++        // they do not, the terrain is simply wrong.
++        if (version >= 12) {
++            const textureAndFlags = stream.readUint16();
++            this.ramp = textureAndFlags & 0b0001000000;
++            this.blight = textureAndFlags & 0b0010000000;
++            this.water = textureAndFlags & 0b0100000000;
++            this.boundary = textureAndFlags & 0b1000000000;
++            this.groundTexture = textureAndFlags & 0b0000111111;
++        }
++        else {
++            const textureAndFlags = stream.readUint8();
++            this.ramp = textureAndFlags & 0b00010000;
++            this.blight = textureAndFlags & 0b00100000;
++            this.water = textureAndFlags & 0b01000000;
++            this.boundary = textureAndFlags & 0b10000000;
++            this.groundTexture = textureAndFlags & 0b00001111;
++        }
+         const variation = stream.readUint8();
+         this.cliffVariation = (variation & 0b11100000) >>> 5;
+         this.groundVariation = variation & 0b00011111;
+@@ -36,10 +55,18 @@ class Corner {
+         this.cliffTexture = (cliffTextureAndLayer & 0b11110000) >>> 4;
+         this.layerHeight = cliffTextureAndLayer & 0b00001111;
+     }
+-    save(stream) {
++    save(stream, version) {
+         stream.writeInt16(this.groundHeight * 512 + 8192);
+         stream.writeInt16(this.waterHeight * 512 + 8192 + this.mapEdge << 14);
+-        stream.writeUint8((this.ramp << 4) | (this.blight << 5) | (this.water << 6) | (this.boundary << 7) | this.groundTexture);
++        // OpenWar3: mirror of load — v12 packs texture (6 bits) and flags into a uint16.
++        if (version >= 12) {
++            stream.writeUint16((this.ramp ? 0b0001000000 : 0) | (this.blight ? 0b0010000000 : 0)
++                | (this.water ? 0b0100000000 : 0) | (this.boundary ? 0b1000000000 : 0)
++                | (this.groundTexture & 0b111111));
++        }
++        else {
++            stream.writeUint8((this.ramp << 4) | (this.blight << 5) | (this.water << 6) | (this.boundary << 7) | this.groundTexture);
++        }
+         stream.writeUint8((this.cliffVariation << 5) | this.groundVariation);
+         stream.writeUint8((this.cliffTexture << 4) + this.layerHeight);
+     }
+diff --git a/dist/cjs/parsers/w3x/w3e/file.js b/dist/cjs/parsers/w3x/w3e/file.js
+index 49ce36b8bddb89496d1873b3200f85ff75c845bf..fe328d3fbe9390b9d98afa0cb4227c22bce93a82 100644
+--- a/dist/cjs/parsers/w3x/w3e/file.js
++++ b/dist/cjs/parsers/w3x/w3e/file.js
+@@ -36,7 +36,7 @@ class War3MapW3e {
+             this.corners[row] = [];
+             for (let column = 0, columns = this.mapSize[0]; column < columns; column++) {
+                 const corner = new corner_1.default();
+-                corner.load(stream);
++                corner.load(stream, this.version);
+                 this.corners[row][column] = corner;
+             }
+         }
+@@ -59,13 +59,14 @@ class War3MapW3e {
+         stream.writeFloat32Array(this.centerOffset);
+         for (const row of this.corners) {
+             for (const corner of row) {
+-                corner.save(stream);
++                corner.save(stream, this.version);
+             }
+         }
+         return stream.uint8array;
+     }
+     getByteLength() {
+-        return 37 + (this.groundTilesets.length * 4) + (this.cliffTilesets.length * 4) + (this.mapSize[0] * this.mapSize[1] * 7);
++        // OpenWar3: a v12 corner is 8 bytes (see corner.js).
++        return 37 + (this.groundTilesets.length * 4) + (this.cliffTilesets.length * 4) + (this.mapSize[0] * this.mapSize[1] * (this.version >= 12 ? 8 : 7));
+     }
+ }
+ exports.default = War3MapW3e;
+diff --git a/dist/cjs/parsers/w3x/w3i/file.js b/dist/cjs/parsers/w3x/w3i/file.js
+index be984fa634f4f125fce57ba4a109f455ff8f39b1..e96af48dcc3599b4945ffb4c54a603e8f81cc202 100644
+--- a/dist/cjs/parsers/w3x/w3i/file.js
++++ b/dist/cjs/parsers/w3x/w3i/file.js
+@@ -53,6 +53,10 @@ class War3MapW3i {
+         this.randomUnitTables = [];
+         this.randomItemTables = [];
+         this.unknown1 = 0;
++        // OpenWar3: w3i v32/v33 — the map's own camera distances (see load).
++        this.defaultCameraDistance = 0;
++        this.maxCameraDistance = 0;
++        this.minCameraDistance = 0;
+     }
+     load(buffer) {
+         const stream = new binarystream_1.default(buffer);
+@@ -99,9 +103,27 @@ class War3MapW3i {
+             this.scriptMode = stream.readUint32();
+         }
+         if (this.version > 30) {
++            // OpenWar3: these two are NOT "graphics mode" and "unknown" — HiveWE's
++            // map_info.ixx names them `supported_modes` (1 = SD, 2 = HD, 3 = both) and
++            // `game_data_version` (0 = RoC, 1 = TFT). Kept under the old property names so
++            // nothing downstream has to change; read them through the aliases below.
+             this.graphicsMode = stream.readUint32();
+             this.unknown1 = stream.readUint32();
+         }
++        // OpenWar3 fix (docs/map-compatibility.md): v32 appends TWO ints and v33 a THIRD —
++        // the map's own default / maximum / minimum camera distance. Without them the player
++        // and force records are read three ints early and the file runs out mid-record, which
++        // is why every map saved by a 1.32+ editor threw here and was hidden from the Custom
++        // Game list. Verified byte-exact on two v33 maps (Test of Faith Reborn v3.00, Test of
++        // Balance v1.24): with three extra ints each file is consumed to its last byte and the
++        // players/forces come out coherent; with two or four they do not.
++        if (this.version > 31) {
++            this.defaultCameraDistance = stream.readUint32();
++            this.maxCameraDistance = stream.readUint32();
++            if (this.version > 32) {
++                this.minCameraDistance = stream.readUint32();
++            }
++        }
+         for (let i = 0, l = stream.readInt32(); i < l; i++) {
+             const player = new player_1.default();
+             player.load(stream, this.version);
+@@ -183,6 +205,13 @@ class War3MapW3i {
+             stream.writeUint32(this.graphicsMode);
+             stream.writeUint32(this.unknown1);
+         }
++        if (this.version > 31) {
++            stream.writeUint32(this.defaultCameraDistance);
++            stream.writeUint32(this.maxCameraDistance);
++            if (this.version > 32) {
++                stream.writeUint32(this.minCameraDistance);
++            }
++        }
+         stream.writeUint32(this.players.length);
+         for (const player of this.players) {
+             player.save(stream, this.version);
+@@ -236,6 +265,10 @@ class War3MapW3i {
+         if (this.version > 30) {
+             size += 8;
+         }
++        // OpenWar3: the v32/v33 camera distances (see load).
++        if (this.version > 31) {
++            size += this.version > 32 ? 12 : 8;
++        }
+         return size;
+     }
+     /**
+diff --git a/dist/cjs/parsers/w3x/w3u/file.js b/dist/cjs/parsers/w3x/w3u/file.js
+index 6b5a2a2e41deee0595104564daf9fdb71fab4257..1acab5fc85627b3f93f89946953a17eb0d725408 100644
+--- a/dist/cjs/parsers/w3x/w3u/file.js
++++ b/dist/cjs/parsers/w3x/w3u/file.js
+@@ -22,18 +22,19 @@ class War3MapW3u {
+             stream = new binarystream_1.default(bufferOrStream);
+         }
+         this.version = stream.readInt32();
+-        this.originalTable.load(stream, false);
+-        this.customTable.load(stream, false);
++        // OpenWar3: the version reaches the objects — v3 wraps their modifications in sets.
++        this.originalTable.load(stream, false, this.version);
++        this.customTable.load(stream, false, this.version);
+     }
+     save() {
+         const stream = new binarystream_1.default(new ArrayBuffer(this.getByteLength()));
+         stream.writeInt32(this.version);
+-        this.originalTable.save(stream, false);
+-        this.customTable.save(stream, false);
++        this.originalTable.save(stream, false, this.version);
++        this.customTable.save(stream, false, this.version);
+         return stream.uint8array;
+     }
+     getByteLength() {
+-        return 4 + this.originalTable.getByteLength(false) + this.customTable.getByteLength(false);
++        return 4 + this.originalTable.getByteLength(false, this.version) + this.customTable.getByteLength(false, this.version);
+     }
+ }
+ exports.default = War3MapW3u;
+diff --git a/dist/cjs/parsers/w3x/w3u/modificationtable.js b/dist/cjs/parsers/w3x/w3u/modificationtable.js
+index 509893d4076882fb2b2edb1780a203743b9c0af8..6fd437e2393a2ded8c309e692301aa09730cdfaa 100644
+--- a/dist/cjs/parsers/w3x/w3u/modificationtable.js
++++ b/dist/cjs/parsers/w3x/w3u/modificationtable.js
+@@ -8,23 +8,23 @@ class ModificationTable {
+     constructor() {
+         this.objects = [];
+     }
+-    load(stream, useOptionalInts) {
++    load(stream, useOptionalInts, version) {
+         for (let i = 0, l = stream.readUint32(); i < l; i++) {
+             const object = new modifiedobject_1.default();
+-            object.load(stream, useOptionalInts);
++            object.load(stream, useOptionalInts, version);
+             this.objects[i] = object;
+         }
+     }
+-    save(stream, useOptionalInts) {
++    save(stream, useOptionalInts, version) {
+         stream.writeUint32(this.objects.length);
+         for (const object of this.objects) {
+-            object.save(stream, useOptionalInts);
++            object.save(stream, useOptionalInts, version);
+         }
+     }
+-    getByteLength(useOptionalInts) {
++    getByteLength(useOptionalInts, version) {
+         let size = 4;
+         for (const object of this.objects) {
+-            size += object.getByteLength(useOptionalInts);
++            size += object.getByteLength(useOptionalInts, version);
+         }
+         return size;
+     }
+diff --git a/dist/cjs/parsers/w3x/w3u/modifiedobject.js b/dist/cjs/parsers/w3x/w3u/modifiedobject.js
+index b602f3b841d5cab7679b90e7505b6b5b64be9278..24ac2edfba41c9b200668b9e536686b5c79f704a 100644
+--- a/dist/cjs/parsers/w3x/w3u/modifiedobject.js
++++ b/dist/cjs/parsers/w3x/w3u/modifiedobject.js
+@@ -9,17 +9,33 @@ class ModifiedObject {
+         this.oldId = '\0\0\0\0';
+         this.newId = '\0\0\0\0';
+         this.modifications = [];
++        // OpenWar3: one entry per v3 modification set (see load); empty below v3.
++        this.setFlags = [];
+     }
+-    load(stream, useOptionalInts) {
++    load(stream, useOptionalInts, version) {
+         this.oldId = stream.readBinary(4);
+         this.newId = stream.readBinary(4);
+-        for (let i = 0, l = stream.readUint32(); i < l; i++) {
+-            const modification = new modification_1.default();
+-            modification.load(stream, useOptionalInts);
+-            this.modifications[i] = modification;
++        // OpenWar3 fix (docs/map-compatibility.md): object data format version 3 (Reforged)
++        // wraps the modification list in SETS — `setCount`, then `setFlags` + `modCount` per
++        // set, where a set is the HD/SD skin variation an SD-only client never has to choose
++        // between. Verified byte-exact on all six object files of three 1.36/2.0 maps: every
++        // file is consumed to its last byte, `setCount` is always 1 and `setFlags` always 0.
++        // Read as one flat list (what every consumer wants); the flags are kept so `save`
++        // writes back the layout it read.
++        const setCount = version >= 3 ? stream.readInt32() : 1;
++        this.setFlags = [];
++        for (let set = 0; set < setCount; set++) {
++            if (version >= 3) {
++                this.setFlags.push(stream.readInt32());
++            }
++            for (let i = 0, l = stream.readUint32(); i < l; i++) {
++                const modification = new modification_1.default();
++                modification.load(stream, useOptionalInts);
++                this.modifications.push(modification);
++            }
+         }
+     }
+-    save(stream, useOptionalInts) {
++    save(stream, useOptionalInts, version) {
+         if (this.oldId !== '\0\0\0\0') {
+             stream.writeBinary(this.oldId);
+         }
+@@ -32,13 +48,19 @@ class ModifiedObject {
+         else {
+             stream.writeUint32(0);
+         }
++        // OpenWar3: v3 writes the set layer back (see load). A flat list becomes ONE set,
++        // which is what every file in the corpus is.
++        if (version >= 3) {
++            stream.writeInt32(1);
++            stream.writeInt32(this.setFlags.length ? this.setFlags[0] : 0);
++        }
+         stream.writeUint32(this.modifications.length);
+         for (const modification of this.modifications) {
+             modification.save(stream, useOptionalInts);
+         }
+     }
+-    getByteLength(useOptionalInts) {
+-        let size = 12;
++    getByteLength(useOptionalInts, version) {
++        let size = version >= 3 ? 20 : 12;
+         for (const modification of this.modifications) {
+             size += modification.getByteLength(useOptionalInts);
+         }
+diff --git a/dist/cjs/viewer/handlers/blp/texture.js b/dist/cjs/viewer/handlers/blp/texture.js
+index 26347d6d988194c95415c2a40597123e80bd61a2..3d28cc4165be8474ed4005abfe3ce7265f762b9c 100644
+--- a/dist/cjs/viewer/handlers/blp/texture.js
++++ b/dist/cjs/viewer/handlers/blp/texture.js
+@@ -29,28 +29,58 @@ class BlpTexture extends texture_1.default {
+             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+         }
+         const mipmaps = image.mipmaps();
++        // OpenWar3: Options -> Video -> Texture Quality (src/render/videoQuality.ts, VideoBridge).
++        // `textureMipDrop` levels are taken off the TOP of the chain, so Medium uploads the
++        // half-size mip as level 0 and Low the quarter-size one. This is the one downscale a
++        // mipmapped BLP gives away free: the levels below are already in the file, so the large
++        // one is never decoded and never uploaded -- load time and CPU as well as texture memory
++        // (a quarter-width texture is a sixteenth of the bytes). Read through a global because
++        // this is vendored code our own modules cannot be imported into.
++        //
++        // …with one exemption, and it is visible the moment it is missing. A terrain TILESET is
++        // an ATLAS -- an "extended" tileset is four variations side by side in one image, which
++        // is exactly what the ground shader's `u_extended` test (width > height) is asking. An
++        // atlas has no padding between its cells, so each mip level down blends further across
++        // their borders, and the coarse levels a drop promotes to level 0 paint a dark seam
++        // around every terrain tile on the map. Wide images keep their full chain for that
++        // reason; the bulk of the memory is in the hundreds of unit and doodad skins anyway,
++        // and those are square.
++        const ow3 = globalThis.__OW3_VIDEO__;
++        const atlas = image.width > image.height;
++        const drop = atlas ? 0 : Math.max(0, Math.min(ow3 ? ow3.textureMipDrop | 0 : 0, mipmaps - 1));
+         // If there is one mipmap, or fake mipmaps, or it's an NPOT image, use just the first mipmap. Otherwise load all of them.
+         if (mipmaps === 1 || image.fakeMipmaps() || !isPOT) {
++            // Nothing to drop here: there is no chain to climb down, and re-sampling the single
++            // level on the CPU would cost more than the upload it saves.
+             const imageData = image.getMipmap(0);
+             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, imageData);
++            this.width = image.width;
++            this.height = image.height;
+         }
+         else {
+             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+             let width = image.width;
+             let height = image.height;
+-            for (let i = 0; i < mipmaps; i++) {
++            for (let i = 0; i < drop; i++) {
++                width = Math.ceil(width / 2);
++                height = Math.ceil(height / 2);
++            }
++            // The dropped level becomes level 0, so these are the size of the texture that now
++            // EXISTS. Everything reading them wants that: the ground shader's "is this tileset
++            // extended" test is a width-vs-height ratio, which whole halvings preserve.
++            this.width = width;
++            this.height = height;
++            for (let i = drop; i < mipmaps; i++) {
+                 const imageData = image.getMipmap(i);
+                 // Don't use the image data dimensions directly.
+                 // Some JPG mipmaps out there have wrong sizes.
+                 // For example the last two mipmaps being 2x1, which messes with GL.
+-                gl.texImage2D(gl.TEXTURE_2D, i, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, imageData.data);
++                gl.texImage2D(gl.TEXTURE_2D, i - drop, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, imageData.data);
+                 width = Math.ceil(width / 2);
+                 height = Math.ceil(height / 2);
+             }
+         }
+-        this.width = image.width;
+-        this.height = image.height;
+         this.webglResource = id;
+     }
+ }
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index 7fe06bd7314e83b578dc8987e819b08cea287dfb..ccaf93519a59b78b909a15a36d6bad88b8db986f 100644
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..8d0fb463d4154e99aca52bba51f3353e56c84ff4 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-@@ -45,6 +45,70 @@ class BatchGroup {
-             gl.uniform1f(uniforms['u_hasBones'], 0);
-         }
-         gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
+@@ -31,11 +31,110 @@ class BatchGroup {
+         const shader = handler_1.default.getBatchShader(viewer, skinningType, isHd);
+         shader.use();
+         const uniforms = shader.uniforms;
++        // OpenWar3: everything from here to the end of this block belongs to the SCENE and not
++        // to the instance -- the camera, the scene's lights, its fog, its boundary mask. It was
++        // being re-uploaded for every instance of every batch group, which in a match is ~20
++        // redundant GL calls a time and several thousand a frame; a uniform lives on the PROGRAM,
++        // so writing it once per (shader, scene, frame) leaves exactly the same values in place.
++        // The stamp carries the SCENE as well as the frame because one viewer draws several
++        // (the glue screens have four), and `viewer.frame` advances in `update()`, which every
++        // render path calls first. `ow3HoistUniforms = false` turns it off so the saving can be
++        // measured in a real match, the way TerrainCull.enabled and SightStamps.enabled are.
++        if (shader.ow3Scene !== scene || shader.ow3Frame !== viewer.frame || viewer.ow3HoistUniforms === false) {
++        shader.ow3Scene = scene;
++        shader.ow3Frame = viewer.frame;
+         gl.uniformMatrix4fv(uniforms['u_VP'], false, camera.viewProjectionMatrix);
++        gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
 +        // OpenWar3: the scene's day/night light for models (Environment\DNC\*Unit.mdx).
 +        // Only the SD shader declares these; on HD/other shaders the lookup misses and
 +        // the uniform call is a no-op. Scenes without a cycle keep dncEnabled = 0.
@@ -474,10 +851,63 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..ccaf93519a59b78b909a15a36d6bad88
 +        else {
 +            gl.uniform1f(uniforms['u_boundaryEnabled'], 0);
 +        }
++        if (isHd) {
++            // The sampler slots never change, and the view matrix and eye are the camera's --
++            // all of them scene-wide, so they ride in here rather than being re-stated per
++            // instance below. The BLEND/DEPTH state does not: the SD path changes it per batch,
++            // so an HD group has to restate it every time it draws.
++            gl.uniform1i(uniforms['u_diffuseMap'], 0);
++            gl.uniform1i(uniforms['u_normalsMap'], 1);
++            gl.uniform1i(uniforms['u_ormMap'], 2);
++            gl.uniform1i(uniforms['u_emissiveMap'], 3);
++            gl.uniform1i(uniforms['u_teamColorMap'], 4);
++            gl.uniform1i(uniforms['u_environmentMap'], 5);
++            gl.uniformMatrix4fv(uniforms['u_MV'], false, camera.viewMatrix);
++            gl.uniform3fv(uniforms['u_eyePos'], camera.location);
++        }
++        } // ---- end of the once-per-(shader, scene, frame) block -------------------------
++        // ---- and from here it is the INSTANCE's ------------------------------------------
+         const boneTexture = instance.boneTexture;
+         // Instances of models with no bones don't have a bone texture.
+         if (boneTexture) {
+             boneTexture.bind(15);
++            // …and put the ACTIVE unit back to 0. `bind` leaves it at 15, and the boundary
++            // block above used to be what restored it -- it no longer runs every instance, and
++            // the SD path can leave here without binding anything (a fully faded instance
++            // returns early). What comes after the world are our own overlay passes, which bind
++            // their textures without naming a unit and would land on 15.
++            gl.activeTexture(gl.TEXTURE0);
+             gl.uniform1f(uniforms['u_hasBones'], 1);
+             gl.uniform1i(uniforms['u_boneMap'], 15);
+             gl.uniform1f(uniforms['u_vectorSize'], 1 / boneTexture.width);
+@@ -44,24 +143,14 @@ class BatchGroup {
+         else {
+             gl.uniform1f(uniforms['u_hasBones'], 0);
+         }
+-        gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
          gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
          if (isHd) {
-@@ -115,6 +179,14 @@ class BatchGroup {
+-            gl.uniform1i(uniforms['u_diffuseMap'], 0);
+-            gl.uniform1i(uniforms['u_normalsMap'], 1);
+-            gl.uniform1i(uniforms['u_ormMap'], 2);
+-            gl.uniform1i(uniforms['u_emissiveMap'], 3);
+-            gl.uniform1i(uniforms['u_teamColorMap'], 4);
+-            gl.uniform1i(uniforms['u_environmentMap'], 5);
+-            // gl.uniform1i(uniforms['u_lutMap'], 6);
+-            // gl.uniform1i(uniforms['u_envDiffuseMap'], 7);
+-            // gl.uniform1i(uniforms['u_envSpecularMap'], 8);
++            // The samplers, u_MV and u_eyePos are hoisted above; this is the state the SD path
++            // takes back from us between draws.
+             gl.disable(gl.BLEND);
+             gl.enable(gl.DEPTH_TEST);
+             gl.depthMask(true);
+-            gl.uniformMatrix4fv(uniforms['u_MV'], false, camera.viewMatrix);
+-            gl.uniform3fv(uniforms['u_eyePos'], camera.location);
+             for (const index of this.objects) {
+                 const batch = batches[index];
+                 const geoset = batch.geoset;
+@@ -115,6 +204,14 @@ class BatchGroup {
              const uvAnims = instance.uvAnims;
              gl.uniform4fv(uniforms['u_vertexColor'], instance.vertexColor);
              gl.uniform1i(uniforms['u_texture'], 0);
@@ -492,7 +922,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..ccaf93519a59b78b909a15a36d6bad88
              for (const object of this.objects) {
                  const batch = batches[object];
                  const geoset = batch.geoset;
-@@ -133,7 +205,7 @@ class BatchGroup {
+@@ -133,7 +230,7 @@ class BatchGroup {
                      gl.uniform2f(uniforms['u_uvTrans'], uvAnim[0], uvAnim[1]);
                      gl.uniform2f(uniforms['u_uvRot'], uvAnim[2], uvAnim[3]);
                      gl.uniform1f(uniforms['u_uvScale'], uvAnim[4]);
@@ -501,6 +931,24 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..ccaf93519a59b78b909a15a36d6bad88
                      let texture = textureOverrides.get(textureIndex);
                      if (!texture) {
                          const replaceable = layerTexture.replaceableId;
+diff --git a/dist/cjs/viewer/handlers/mdx/handler.js b/dist/cjs/viewer/handlers/mdx/handler.js
+index 87e3bbdbf1377c888ac650cf23029492fc1a05f7..b92458b2d3645c0bcec2169797706a84d66ac9f1 100644
+--- a/dist/cjs/viewer/handlers/mdx/handler.js
++++ b/dist/cjs/viewer/handlers/mdx/handler.js
+@@ -153,7 +153,12 @@ exports.default = {
+     loadTeamTextures(viewer) {
+         const { pathSolver, reforged, teamColors, teamGlows } = viewer.sharedCache.get('mdx');
+         if (teamColors.length === 0) {
+-            const teams = reforged ? 28 : 16;
++            // OpenWar3: the classic table is 28 too since patch 1.29 - TeamColor00..23 are the
++            // 24 player colours and TeamColor24..27 the four black NEUTRAL swatches the creeps
++            // and shops wear (src/render/teamColor.ts `neutralTeamColor`). Loading 16 left a
++            // 1.30.4 install's neutral slot with no swatch at all. A 2003 install simply has
++            // no TeamColor16..27 to load, which was already the case for 13..15.
++            const teams = 28;
+             const ext = reforged ? 'dds' : 'blp';
+             const params = reforged ? { reforged: true } : undefined;
+             for (let i = 0; i < teams; i++) {
 diff --git a/dist/cjs/viewer/handlers/mdx/layer.js b/dist/cjs/viewer/handlers/mdx/layer.js
 index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c17ca894f 100644
 --- a/dist/cjs/viewer/handlers/mdx/layer.js
@@ -554,7 +1002,7 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
          }
          else {
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499c2ed0173 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff0ca7b9a5 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
 @@ -21,6 +21,13 @@ const scaleHeap = gl_matrix_1.vec3.create();
@@ -571,7 +1019,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499
  /**
   * An MDX model instance.
   */
-@@ -48,6 +55,13 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +55,26 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -585,7 +1033,20 @@ index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499
          this.geosetColors = [];
          this.layerAlphas = [];
          this.layerTextures = [];
-@@ -223,6 +237,25 @@ class MdxModelInstance extends modelinstance_1.default {
+         this.uvAnims = [];
+         this.worldMatrices = null;
+         this.boneTexture = null;
++        // OpenWar3: has anything moved since the bone texture was last uploaded? `updateNodes`
++        // already decides this per node -- `wasDirty` is what tells it whether to recompute a
++        // node's world matrix at all -- so the answer costs nothing to collect, and the world
++        // matrices CANNOT have changed unless at least one node was dirty, because
++        // `recalculateTransformation` is the only thing that writes them. See updateBoneTexture.
++        this.ow3BonesDirty = true;
++        this.ow3BonesUploaded = false;
+         for (let i = 0, l = model.geosets.length; i < l; i++) {
+             this.geosetColors[i] = new Float32Array(4);
+         }
+@@ -223,7 +244,27 @@ class MdxModelInstance extends modelinstance_1.default {
          const sortedNodes = this.sortedNodes;
          const model = this.model;
          const sortedGenericObjects = model.sortedGenericObjects;
@@ -609,9 +1070,11 @@ index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499
 +            }
 +        }
          // Update the nodes
++        let anyDirty = forced; // OpenWar3: see updateBoneTexture
          for (let i = 0, l = sortedNodes.length; i < l; i++) {
              const genericObject = sortedGenericObjects[i];
-@@ -231,20 +264,43 @@ class MdxModelInstance extends modelinstance_1.default {
+             const node = sortedNodes[i];
+@@ -231,25 +272,49 @@ class MdxModelInstance extends modelinstance_1.default {
              let wasDirty = forced || parent.wasDirty || genericObject.anyBillboarding;
              const variants = genericObject.variants;
              // Local node transformation.
@@ -663,8 +1126,45 @@ index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499
                  }
              }
              node.wasDirty = wasDirty;
-@@ -367,14 +423,29 @@ class MdxModelInstance extends modelinstance_1.default {
+             // If this is a forced update, or this node's local data was updated, or the parent node was updated, do a full world update.
+             if (wasDirty) {
++                anyDirty = true; // OpenWar3
+                 node.recalculateTransformation(this);
+             }
+             // If there is an instance object associated with this node (emitter/attachment), and it is visible, update it.
+@@ -269,6 +334,7 @@ class MdxModelInstance extends modelinstance_1.default {
+                 child.update(dt);
+             }
+         }
++        this.ow3BonesDirty = anyDirty; // OpenWar3
+     }
+     /**
+      * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
+@@ -362,19 +428,51 @@ class MdxModelInstance extends modelinstance_1.default {
+             }
+         }
+     }
++    /**
++     * Hand this instance's bone matrices to the GPU -- but only when they have actually changed.
++     *
++     * This is one `bindTexture` plus one `texSubImage2D` per instance per frame, and the cost is
++     * almost entirely the CALL rather than the bytes: measured at ~2 microseconds an instance
++     * whether it carries three bones or two hundred. Half of them were paying it to upload a pose
++     * identical to last frame's. Probed in a real match with 249 visible instances: 127 unchanged
++     * against 122 changed, and the split was exactly by model -- every unit animating, every tree
++     * standing still. A doodad's Stand sequence has no tracks, so `updateNodes` marks not one of
++     * its nodes dirty and `recalculateTransformation`, the only thing that writes `worldMatrices`,
++     * never runs. Uploading it again cannot say anything new.
++     *
++     * `ow3BonesUploaded` is separate from the dirty flag so the FIRST upload always happens, even
++     * for an instance whose very first update somehow finds nothing dirty.
++     */
+     updateBoneTexture() {
+-        if (this.boneTexture) {
++        if (this.boneTexture && (this.ow3BonesDirty || !this.ow3BonesUploaded)) {
              this.boneTexture.bindAndUpdate(this.worldMatrices);
++            this.ow3BonesUploaded = true;
++            this.ow3BonesDirty = false;
          }
      }
 +    // OpenWar3 (issue #66): a faded instance (vertex-colour alpha < 1 — Wind Walk,
@@ -693,7 +1193,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -436,6 +507,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +534,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -701,7 +1201,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +517,64 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +544,64 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
@@ -766,6 +1266,48 @@ index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499
      getBounds() {
          const model = this.model;
          if (this.sequence === -1) {
+diff --git a/dist/cjs/viewer/handlers/mdx/particleemitter2.js b/dist/cjs/viewer/handlers/mdx/particleemitter2.js
+index 34686902ea449513570fad17cecbb6938ad9547a..2d355bcd094726e48a364a491faa5fb6d7d0af39 100644
+--- a/dist/cjs/viewer/handlers/mdx/particleemitter2.js
++++ b/dist/cjs/viewer/handlers/mdx/particleemitter2.js
+@@ -3,6 +3,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
+ const emitter_1 = require("./emitter");
+ const particle2_1 = require("./particle2");
+ const emissionRateHeap = new Float32Array(1);
++// OpenWar3: Options -> Video -> Particles (src/render/videoQuality.ts, VideoBridge).
++//
++// The emitter OBJECT has already multiplied the author's rate by SETTING_PARTICLES_HIGH = 2 --
++// geometryemitterfuncs.js records why: the game doubles emission at High, so the rate written
++// into the MDX is the game's Medium. That stays where it is and this scales it, making High the
++// doubled rate, Medium the authored one, and Low a quarter of it. Applied HERE, at the moment of
++// emission, rather than to the object's stored rate, so a change on the Options screen shows in
++// the scene behind it instead of waiting for the next model to load. Read through a global
++// because this is vendored code our own modules cannot be imported into.
++function ow3ParticleScale() {
++    const ow3 = globalThis.__OW3_VIDEO__;
++    return ow3 && typeof ow3.particleScale === 'number' ? ow3.particleScale : 1;
++}
+ /**
+  * An MDX particle emitter type 2.
+  */
+@@ -17,14 +30,15 @@ class ParticleEmitter2 extends emitter_1.default {
+         if (instance.allowParticleSpawn) {
+             const emitterObject = this.emitterObject;
+             const keyframe = emitterObject.getEmissionRate(emissionRateHeap, instance.sequence, instance.frame, instance.counter);
++            const scale = ow3ParticleScale();
+             if (emitterObject.squirt) {
+                 if (keyframe !== this.lastEmissionKey) {
+-                    this.currentEmission += emissionRateHeap[0];
++                    this.currentEmission += emissionRateHeap[0] * scale;
+                 }
+                 this.lastEmissionKey = keyframe;
+             }
+             else {
+-                this.currentEmission += emissionRateHeap[0] * dt;
++                this.currentEmission += emissionRateHeap[0] * dt * scale;
+             }
+         }
+     }
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e15e90b99 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
@@ -992,7 +1534,7 @@ index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c6971c0f070 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3ebd610d6b 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -16,6 +16,41 @@ const file_3 = require("../../../parsers/w3x/doo/file");
@@ -1051,7 +1593,37 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
          this.cliffTilesets = [];
          this.columns = 0;
          this.rows = 0;
-@@ -136,12 +178,32 @@ class War3MapViewerMap {
+@@ -53,6 +95,10 @@ class War3MapViewerMap {
+         this.textureBuffer = null;
+         this.variationBuffer = null;
+         this.waterBuffer = null;
++        // OpenWar3 (terrain camera culling): (first instance, count) pairs naming the cell rows
++        // the camera can see, refilled every frame by src/render/terrainCull.ts. Null means
++        // "nobody is culling" and every pass below draws the whole map, exactly as it always did.
++        this.ow3Runs = null;
+         this.heightMap = null;
+         this.waterHeightMap = null;
+         this.cliffHeightMap = null;
+@@ -109,9 +155,15 @@ class War3MapViewerMap {
+         }
+         this.solverParams.tileset = parser.tileset.toLowerCase();
+         this.buildVersion = parser.getBuildVersion();
+-        if (this.buildVersion > 131) {
+-            this.solverParams.reforged = true;
+-        }
++        // OpenWar3 fix (docs/map-compatibility.md): `reforged` is an ASSET FLAVOUR and
++        // `buildVersion` is a FILE LAYOUT, and they are not the same question. The flag
++        // switches texture lookups to `.dds`, asks for Reforged's `*Skin.txt` object tables
++        // and widens the team-colour table from 16 to 28 — none of which a 1.30.4 install
++        // has. Every map saved by a 1.32+ editor reports build 132+, so keying it this way
++        // meant that merely READING such a map's w3i put the renderer into a mode the
++        // install cannot serve. We draw SD out of an SD install: the flag stays false, while
++        // `buildVersion` goes on gating the doodad skin id in war3map.doo, which is a
++        // question about the FILE and is answered correctly above.
+     }
+     async loadTerrainCliffsAndWater() {
+         const mpqFile = this.map.get('war3map.w3e');
+@@ -136,12 +188,32 @@ class War3MapViewerMap {
          // Override the grid based on the map.
          this.worldScene.grid = new grid_1.default(centerOffset[0], centerOffset[1], mapSize[0] * 128 - 128, mapSize[1] * 128 - 128, 16 * 128, 16 * 128);
          const texturesExt = this.solverParams.reforged ? '.dds' : '.blp';
@@ -1086,7 +1658,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
              this.tilesets.push(row);
              tilesetTextures.push(this.load(`${row.string('dir')}\\${row.string('file')}${texturesExt}`));
          }
-@@ -165,10 +227,19 @@ class War3MapViewerMap {
+@@ -165,10 +237,19 @@ class War3MapViewerMap {
              Y: 'Village',
              Z: 'Ruins',
          };
@@ -1108,7 +1680,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
              this.cliffTilesets.push(row);
              cliffTextures.push(this.load(`${row.string('texDir')}\\${row.string('texFile')}${texturesExt}`));
          }
-@@ -199,6 +270,99 @@ class War3MapViewerMap {
+@@ -199,6 +280,99 @@ class War3MapViewerMap {
          const cliffs = {};
          this.columns = columns - 1;
          this.rows = rows - 1;
@@ -1208,7 +1780,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
          for (let y = 0; y < rows; y++) {
              for (let x = 0; x < columns; x++) {
                  const bottomLeft = corners[y][x];
-@@ -209,8 +373,12 @@ class War3MapViewerMap {
+@@ -209,8 +383,12 @@ class War3MapViewerMap {
                  if (y < rows - 1 && x < columns - 1) {
                      // Water can be used with cliffs and normal corners, so store water state regardless.
                      waterFlags[instance] = this.isWater(x, y);
@@ -1223,7 +1795,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
                          const bottomLeftLayer = bottomLeft.layerHeight;
                          const bottomRightLayer = corners[y][x + 1].layerHeight;
                          const topLeftLayer = corners[y + 1][x].layerHeight;
-@@ -234,38 +402,30 @@ class War3MapViewerMap {
+@@ -234,38 +412,30 @@ class War3MapViewerMap {
                          }
                      }
                      else {
@@ -1281,7 +1853,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
          const gl = this.viewer.gl;
          const webgl = this.viewer.webgl;
          this.vertexBuffer = gl.createBuffer();
-@@ -291,10 +451,17 @@ class War3MapViewerMap {
+@@ -291,10 +461,17 @@ class War3MapViewerMap {
          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(instanceCount).map((currentValue, index) => index), gl.STATIC_DRAW);
          this.textureBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
@@ -1301,7 +1873,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
          this.waterBuffer = gl.createBuffer();
          gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
          gl.bufferData(gl.ARRAY_BUFFER, waterFlags, gl.STATIC_DRAW);
-@@ -358,7 +525,25 @@ class War3MapViewerMap {
+@@ -358,7 +535,25 @@ class War3MapViewerMap {
                          }
                          promise.then((model) => {
                              if (model) {
@@ -1328,7 +1900,39 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
                              }
                          });
                      }
-@@ -503,6 +688,8 @@ class War3MapViewerMap {
+@@ -485,6 +680,31 @@ class War3MapViewerMap {
+             worldScene.renderTranslucent();
+         }
+     }
++    /**
++     * OpenWar3: issue one instanced terrain pass over the cells `ow3Runs` names.
++     *
++     * The per-cell attribute buffers are ROW-MAJOR, so a row of cells is a contiguous slice of
++     * every one of them and the whole of the culling is an OFFSET into the attribute pointers --
++     * which is what `rebind(first)` re-points, per run, for whichever attributes this pass uses.
++     * With no runs set, this is the original single call over `rows * columns`.
++     */
++    ow3DrawCells(rebind) {
++        const gl = this.viewer.gl;
++        const instancedArrays = this.viewer.webgl.extensions['ANGLE_instanced_arrays'];
++        const runs = this.ow3Runs;
++        if (!runs || !runs.length) {
++            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
++            return;
++        }
++        for (let i = 0; i < runs.length; i += 2) {
++            const count = runs[i + 1];
++            if (count <= 0) {
++                continue;
++            }
++            rebind(runs[i]);
++            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, count);
++        }
++    }
+     renderGround() {
+         if (this.terrainReady) {
+             const gl = this.viewer.gl;
+@@ -503,6 +723,8 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1337,7 +1941,37 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 15);
-@@ -558,11 +745,17 @@ class War3MapViewerMap {
+@@ -527,7 +749,19 @@ class War3MapViewerMap {
+                 gl.uniform1i(uniforms[`u_tilesets[${i}]`], i);
+                 webgl.bindTexture(tilesetTextures[i], i);
+             }
+-            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
++            // OpenWar3: the three per-instance attributes are all 4 bytes per cell -- one float
++            // of instance id, four texture bytes, four variation bytes -- so one offset serves
++            // all three (see ow3DrawCells).
++            const rebindGround = (first) => {
++                const at = first * 4;
++                gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
++                gl.vertexAttribPointer(instanceAttrib, 1, gl.FLOAT, false, 0, at);
++                gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
++                gl.vertexAttribPointer(texturesAttrib, 4, gl.UNSIGNED_BYTE, false, 0, at);
++                gl.bindBuffer(gl.ARRAY_BUFFER, this.variationBuffer);
++                gl.vertexAttribPointer(variationsAttrib, 4, gl.UNSIGNED_BYTE, false, 0, at);
++            };
++            this.ow3DrawCells(rebindGround);
+             if (tilesetCount > 15) {
+                 gl.uniform1f(uniforms['u_baseTileset'], 15);
+                 for (let i = 0, l = tilesetCount - 15; i < l; i++) {
+@@ -535,7 +769,7 @@ class War3MapViewerMap {
+                     gl.uniform1f(uniforms[`u_extended[${i}]`], isExtended);
+                     webgl.bindTexture(tilesetTextures[i + 15], i);
+                 }
+-                instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
++                this.ow3DrawCells(rebindGround);
+             }
+             instancedArrays.vertexAttribDivisorANGLE(texturesAttrib, 0);
+             instancedArrays.vertexAttribDivisorANGLE(variationsAttrib, 0);
+@@ -558,11 +792,17 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1355,7 +1989,23 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
              gl.uniform1f(uniforms['u_offsetHeight'], this.waterHeightOffset);
              gl.uniform4fv(uniforms['u_maxDeepColor'], this.maxDeepColor);
              gl.uniform4fv(uniforms['u_minDeepColor'], this.minDeepColor);
-@@ -599,6 +792,8 @@ class War3MapViewerMap {
+@@ -582,7 +822,14 @@ class War3MapViewerMap {
+             gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, 0);
+             instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 1);
+             gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.faceBuffer);
+-            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
++            // OpenWar3: same cell grid, same runs -- but water's two per-instance attributes are
++            // a 4-byte instance id and a SINGLE water flag byte, so the two offsets differ.
++            this.ow3DrawCells((first) => {
++                gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
++                gl.vertexAttribPointer(instanceAttrib, 1, gl.FLOAT, false, 4, first * 4);
++                gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
++                gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, first);
++            });
+             instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 0);
+             instancedArrays.vertexAttribDivisorANGLE(instanceAttrib, 0);
+         }
+@@ -599,6 +846,8 @@ class War3MapViewerMap {
              gl.disable(gl.BLEND);
              shader.use();
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1364,7 +2014,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
              gl.uniform1i(uniforms['u_heightMap'], 0);
              gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
              gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
-@@ -612,6 +807,9 @@ class War3MapViewerMap {
+@@ -612,6 +861,9 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
@@ -1374,7 +2024,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +869,86 @@ class War3MapViewerMap {
+@@ -671,6 +923,86 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -1461,7 +2111,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
      /**
       * Is the tile at the given column and row water?
       */
-@@ -692,6 +970,108 @@ class War3MapViewerMap {
+@@ -692,6 +1024,108 @@ class War3MapViewerMap {
          }
          return 0;
      }
@@ -1570,7 +2220,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..896581a99fa97b1c96a5092ac4843c69
      /**
       * Get the ground texture of a corner, whether it's normal ground, a cliff, or a blighted corner.
       */
-@@ -730,17 +1110,37 @@ class War3MapViewerMap {
+@@ -730,17 +1164,37 @@ class War3MapViewerMap {
      applyModificationTable(dataMap, metadataMap, modificationTable) {
          for (const modificationObject of modificationTable.objects) {
              let row;
@@ -1870,385 +2520,3 @@ index afd956b8a078be77190d840a7fe5cb4d2c76797a..66de9bb3445643603adc39e0cbec367e
          this.viewer = viewer;
          const canvas = viewer.canvas;
          const width = canvas.width;
-diff --git a/dist/cjs/viewer/handlers/blp/texture.js b/dist/cjs/viewer/handlers/blp/texture.js
-index 26347d6d988194c95415c2a40597123e80bd61a2..3d28cc4165be8474ed4005abfe3ce7265f762b9c 100644
---- a/dist/cjs/viewer/handlers/blp/texture.js
-+++ b/dist/cjs/viewer/handlers/blp/texture.js
-@@ -29,28 +29,58 @@ class BlpTexture extends texture_1.default {
-             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-         }
-         const mipmaps = image.mipmaps();
-+        // OpenWar3: Options -> Video -> Texture Quality (src/render/videoQuality.ts, VideoBridge).
-+        // `textureMipDrop` levels are taken off the TOP of the chain, so Medium uploads the
-+        // half-size mip as level 0 and Low the quarter-size one. This is the one downscale a
-+        // mipmapped BLP gives away free: the levels below are already in the file, so the large
-+        // one is never decoded and never uploaded -- load time and CPU as well as texture memory
-+        // (a quarter-width texture is a sixteenth of the bytes). Read through a global because
-+        // this is vendored code our own modules cannot be imported into.
-+        //
-+        // …with one exemption, and it is visible the moment it is missing. A terrain TILESET is
-+        // an ATLAS -- an "extended" tileset is four variations side by side in one image, which
-+        // is exactly what the ground shader's `u_extended` test (width > height) is asking. An
-+        // atlas has no padding between its cells, so each mip level down blends further across
-+        // their borders, and the coarse levels a drop promotes to level 0 paint a dark seam
-+        // around every terrain tile on the map. Wide images keep their full chain for that
-+        // reason; the bulk of the memory is in the hundreds of unit and doodad skins anyway,
-+        // and those are square.
-+        const ow3 = globalThis.__OW3_VIDEO__;
-+        const atlas = image.width > image.height;
-+        const drop = atlas ? 0 : Math.max(0, Math.min(ow3 ? ow3.textureMipDrop | 0 : 0, mipmaps - 1));
-         // If there is one mipmap, or fake mipmaps, or it's an NPOT image, use just the first mipmap. Otherwise load all of them.
-         if (mipmaps === 1 || image.fakeMipmaps() || !isPOT) {
-+            // Nothing to drop here: there is no chain to climb down, and re-sampling the single
-+            // level on the CPU would cost more than the upload it saves.
-             const imageData = image.getMipmap(0);
-             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, imageData);
-+            this.width = image.width;
-+            this.height = image.height;
-         }
-         else {
-             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-             let width = image.width;
-             let height = image.height;
--            for (let i = 0; i < mipmaps; i++) {
-+            for (let i = 0; i < drop; i++) {
-+                width = Math.ceil(width / 2);
-+                height = Math.ceil(height / 2);
-+            }
-+            // The dropped level becomes level 0, so these are the size of the texture that now
-+            // EXISTS. Everything reading them wants that: the ground shader's "is this tileset
-+            // extended" test is a width-vs-height ratio, which whole halvings preserve.
-+            this.width = width;
-+            this.height = height;
-+            for (let i = drop; i < mipmaps; i++) {
-                 const imageData = image.getMipmap(i);
-                 // Don't use the image data dimensions directly.
-                 // Some JPG mipmaps out there have wrong sizes.
-                 // For example the last two mipmaps being 2x1, which messes with GL.
--                gl.texImage2D(gl.TEXTURE_2D, i, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, imageData.data);
-+                gl.texImage2D(gl.TEXTURE_2D, i - drop, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, imageData.data);
-                 width = Math.ceil(width / 2);
-                 height = Math.ceil(height / 2);
-             }
-         }
--        this.width = image.width;
--        this.height = image.height;
-         this.webglResource = id;
-     }
- }
-diff --git a/dist/cjs/viewer/handlers/mdx/particleemitter2.js b/dist/cjs/viewer/handlers/mdx/particleemitter2.js
-index 34686902ea449513570fad17cecbb6938ad9547a..2d355bcd094726e48a364a491faa5fb6d7d0af39 100644
---- a/dist/cjs/viewer/handlers/mdx/particleemitter2.js
-+++ b/dist/cjs/viewer/handlers/mdx/particleemitter2.js
-@@ -3,6 +3,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
- const emitter_1 = require("./emitter");
- const particle2_1 = require("./particle2");
- const emissionRateHeap = new Float32Array(1);
-+// OpenWar3: Options -> Video -> Particles (src/render/videoQuality.ts, VideoBridge).
-+//
-+// The emitter OBJECT has already multiplied the author's rate by SETTING_PARTICLES_HIGH = 2 --
-+// geometryemitterfuncs.js records why: the game doubles emission at High, so the rate written
-+// into the MDX is the game's Medium. That stays where it is and this scales it, making High the
-+// doubled rate, Medium the authored one, and Low a quarter of it. Applied HERE, at the moment of
-+// emission, rather than to the object's stored rate, so a change on the Options screen shows in
-+// the scene behind it instead of waiting for the next model to load. Read through a global
-+// because this is vendored code our own modules cannot be imported into.
-+function ow3ParticleScale() {
-+    const ow3 = globalThis.__OW3_VIDEO__;
-+    return ow3 && typeof ow3.particleScale === 'number' ? ow3.particleScale : 1;
-+}
- /**
-  * An MDX particle emitter type 2.
-  */
-@@ -17,14 +30,15 @@ class ParticleEmitter2 extends emitter_1.default {
-         if (instance.allowParticleSpawn) {
-             const emitterObject = this.emitterObject;
-             const keyframe = emitterObject.getEmissionRate(emissionRateHeap, instance.sequence, instance.frame, instance.counter);
-+            const scale = ow3ParticleScale();
-             if (emitterObject.squirt) {
-                 if (keyframe !== this.lastEmissionKey) {
--                    this.currentEmission += emissionRateHeap[0];
-+                    this.currentEmission += emissionRateHeap[0] * scale;
-                 }
-                 this.lastEmissionKey = keyframe;
-             }
-             else {
--                this.currentEmission += emissionRateHeap[0] * dt;
-+                this.currentEmission += emissionRateHeap[0] * dt * scale;
-             }
-         }
-     }
-diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index 95bb7a5be241f134d8486d67e9b496be7a9c1925..517d487f05cfb948e778090634a344f0098fc3eb 100644
---- a/dist/cjs/viewer/handlers/w3x/map.js
-+++ b/dist/cjs/viewer/handlers/w3x/map.js
-@@ -95,6 +95,10 @@ class War3MapViewerMap {
-         this.textureBuffer = null;
-         this.variationBuffer = null;
-         this.waterBuffer = null;
-+        // OpenWar3 (terrain camera culling): (first instance, count) pairs naming the cell rows
-+        // the camera can see, refilled every frame by src/render/terrainCull.ts. Null means
-+        // "nobody is culling" and every pass below draws the whole map, exactly as it always did.
-+        this.ow3Runs = null;
-         this.heightMap = null;
-         this.waterHeightMap = null;
-         this.cliffHeightMap = null;
-@@ -670,6 +674,31 @@ class War3MapViewerMap {
-             worldScene.renderTranslucent();
-         }
-     }
-+    /**
-+     * OpenWar3: issue one instanced terrain pass over the cells `ow3Runs` names.
-+     *
-+     * The per-cell attribute buffers are ROW-MAJOR, so a row of cells is a contiguous slice of
-+     * every one of them and the whole of the culling is an OFFSET into the attribute pointers --
-+     * which is what `rebind(first)` re-points, per run, for whichever attributes this pass uses.
-+     * With no runs set, this is the original single call over `rows * columns`.
-+     */
-+    ow3DrawCells(rebind) {
-+        const gl = this.viewer.gl;
-+        const instancedArrays = this.viewer.webgl.extensions['ANGLE_instanced_arrays'];
-+        const runs = this.ow3Runs;
-+        if (!runs || !runs.length) {
-+            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
-+            return;
-+        }
-+        for (let i = 0; i < runs.length; i += 2) {
-+            const count = runs[i + 1];
-+            if (count <= 0) {
-+                continue;
-+            }
-+            rebind(runs[i]);
-+            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, count);
-+        }
-+    }
-     renderGround() {
-         if (this.terrainReady) {
-             const gl = this.viewer.gl;
-@@ -714,7 +743,19 @@ class War3MapViewerMap {
-                 gl.uniform1i(uniforms[`u_tilesets[${i}]`], i);
-                 webgl.bindTexture(tilesetTextures[i], i);
-             }
--            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
-+            // OpenWar3: the three per-instance attributes are all 4 bytes per cell -- one float
-+            // of instance id, four texture bytes, four variation bytes -- so one offset serves
-+            // all three (see ow3DrawCells).
-+            const rebindGround = (first) => {
-+                const at = first * 4;
-+                gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
-+                gl.vertexAttribPointer(instanceAttrib, 1, gl.FLOAT, false, 0, at);
-+                gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
-+                gl.vertexAttribPointer(texturesAttrib, 4, gl.UNSIGNED_BYTE, false, 0, at);
-+                gl.bindBuffer(gl.ARRAY_BUFFER, this.variationBuffer);
-+                gl.vertexAttribPointer(variationsAttrib, 4, gl.UNSIGNED_BYTE, false, 0, at);
-+            };
-+            this.ow3DrawCells(rebindGround);
-             if (tilesetCount > 15) {
-                 gl.uniform1f(uniforms['u_baseTileset'], 15);
-                 for (let i = 0, l = tilesetCount - 15; i < l; i++) {
-@@ -722,7 +763,7 @@ class War3MapViewerMap {
-                     gl.uniform1f(uniforms[`u_extended[${i}]`], isExtended);
-                     webgl.bindTexture(tilesetTextures[i + 15], i);
-                 }
--                instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
-+                this.ow3DrawCells(rebindGround);
-             }
-             instancedArrays.vertexAttribDivisorANGLE(texturesAttrib, 0);
-             instancedArrays.vertexAttribDivisorANGLE(variationsAttrib, 0);
-@@ -775,7 +816,14 @@ class War3MapViewerMap {
-             gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, 0);
-             instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 1);
-             gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.faceBuffer);
--            instancedArrays.drawElementsInstancedANGLE(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0, this.rows * this.columns);
-+            // OpenWar3: same cell grid, same runs -- but water's two per-instance attributes are
-+            // a 4-byte instance id and a SINGLE water flag byte, so the two offsets differ.
-+            this.ow3DrawCells((first) => {
-+                gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
-+                gl.vertexAttribPointer(instanceAttrib, 1, gl.FLOAT, false, 4, first * 4);
-+                gl.bindBuffer(gl.ARRAY_BUFFER, this.waterBuffer);
-+                gl.vertexAttribPointer(isWaterAttrib, 1, gl.UNSIGNED_BYTE, false, 1, first);
-+            });
-             instancedArrays.vertexAttribDivisorANGLE(isWaterAttrib, 0);
-             instancedArrays.vertexAttribDivisorANGLE(instanceAttrib, 0);
-         }
-diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index ccaf93519a59b78b909a15a36d6bad88b8db986f..8d0fb463d4154e99aca52bba51f3353e56c84ff4 100644
---- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
-+++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-@@ -31,19 +31,19 @@ class BatchGroup {
-         const shader = handler_1.default.getBatchShader(viewer, skinningType, isHd);
-         shader.use();
-         const uniforms = shader.uniforms;
-+        // OpenWar3: everything from here to the end of this block belongs to the SCENE and not
-+        // to the instance -- the camera, the scene's lights, its fog, its boundary mask. It was
-+        // being re-uploaded for every instance of every batch group, which in a match is ~20
-+        // redundant GL calls a time and several thousand a frame; a uniform lives on the PROGRAM,
-+        // so writing it once per (shader, scene, frame) leaves exactly the same values in place.
-+        // The stamp carries the SCENE as well as the frame because one viewer draws several
-+        // (the glue screens have four), and `viewer.frame` advances in `update()`, which every
-+        // render path calls first. `ow3HoistUniforms = false` turns it off so the saving can be
-+        // measured in a real match, the way TerrainCull.enabled and SightStamps.enabled are.
-+        if (shader.ow3Scene !== scene || shader.ow3Frame !== viewer.frame || viewer.ow3HoistUniforms === false) {
-+        shader.ow3Scene = scene;
-+        shader.ow3Frame = viewer.frame;
-         gl.uniformMatrix4fv(uniforms['u_VP'], false, camera.viewProjectionMatrix);
--        const boneTexture = instance.boneTexture;
--        // Instances of models with no bones don't have a bone texture.
--        if (boneTexture) {
--            boneTexture.bind(15);
--            gl.uniform1f(uniforms['u_hasBones'], 1);
--            gl.uniform1i(uniforms['u_boneMap'], 15);
--            gl.uniform1f(uniforms['u_vectorSize'], 1 / boneTexture.width);
--            gl.uniform1f(uniforms['u_rowSize'], 1);
--        }
--        else {
--            gl.uniform1f(uniforms['u_hasBones'], 0);
--        }
-         gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
-         // OpenWar3: the scene's day/night light for models (Environment\DNC\*Unit.mdx).
-         // Only the SD shader declares these; on HD/other shaders the lookup misses and
-@@ -109,23 +109,48 @@ class BatchGroup {
-         else {
-             gl.uniform1f(uniforms['u_boundaryEnabled'], 0);
-         }
--        gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
--        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
-         if (isHd) {
-+            // The sampler slots never change, and the view matrix and eye are the camera's --
-+            // all of them scene-wide, so they ride in here rather than being re-stated per
-+            // instance below. The BLEND/DEPTH state does not: the SD path changes it per batch,
-+            // so an HD group has to restate it every time it draws.
-             gl.uniform1i(uniforms['u_diffuseMap'], 0);
-             gl.uniform1i(uniforms['u_normalsMap'], 1);
-             gl.uniform1i(uniforms['u_ormMap'], 2);
-             gl.uniform1i(uniforms['u_emissiveMap'], 3);
-             gl.uniform1i(uniforms['u_teamColorMap'], 4);
-             gl.uniform1i(uniforms['u_environmentMap'], 5);
--            // gl.uniform1i(uniforms['u_lutMap'], 6);
--            // gl.uniform1i(uniforms['u_envDiffuseMap'], 7);
--            // gl.uniform1i(uniforms['u_envSpecularMap'], 8);
-+            gl.uniformMatrix4fv(uniforms['u_MV'], false, camera.viewMatrix);
-+            gl.uniform3fv(uniforms['u_eyePos'], camera.location);
-+        }
-+        } // ---- end of the once-per-(shader, scene, frame) block -------------------------
-+        // ---- and from here it is the INSTANCE's ------------------------------------------
-+        const boneTexture = instance.boneTexture;
-+        // Instances of models with no bones don't have a bone texture.
-+        if (boneTexture) {
-+            boneTexture.bind(15);
-+            // …and put the ACTIVE unit back to 0. `bind` leaves it at 15, and the boundary
-+            // block above used to be what restored it -- it no longer runs every instance, and
-+            // the SD path can leave here without binding anything (a fully faded instance
-+            // returns early). What comes after the world are our own overlay passes, which bind
-+            // their textures without naming a unit and would land on 15.
-+            gl.activeTexture(gl.TEXTURE0);
-+            gl.uniform1f(uniforms['u_hasBones'], 1);
-+            gl.uniform1i(uniforms['u_boneMap'], 15);
-+            gl.uniform1f(uniforms['u_vectorSize'], 1 / boneTexture.width);
-+            gl.uniform1f(uniforms['u_rowSize'], 1);
-+        }
-+        else {
-+            gl.uniform1f(uniforms['u_hasBones'], 0);
-+        }
-+        gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
-+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
-+        if (isHd) {
-+            // The samplers, u_MV and u_eyePos are hoisted above; this is the state the SD path
-+            // takes back from us between draws.
-             gl.disable(gl.BLEND);
-             gl.enable(gl.DEPTH_TEST);
-             gl.depthMask(true);
--            gl.uniformMatrix4fv(uniforms['u_MV'], false, camera.viewMatrix);
--            gl.uniform3fv(uniforms['u_eyePos'], camera.location);
-             for (const index of this.objects) {
-                 const batch = batches[index];
-                 const geoset = batch.geoset;
-diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index b80da6448a597b662087852d83a1f499c2ed0173..d5d8afa8b489dd57f20a698e22812aff0ca7b9a5 100644
---- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
-+++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -68,6 +68,13 @@ class MdxModelInstance extends modelinstance_1.default {
-         this.uvAnims = [];
-         this.worldMatrices = null;
-         this.boneTexture = null;
-+        // OpenWar3: has anything moved since the bone texture was last uploaded? `updateNodes`
-+        // already decides this per node -- `wasDirty` is what tells it whether to recompute a
-+        // node's world matrix at all -- so the answer costs nothing to collect, and the world
-+        // matrices CANNOT have changed unless at least one node was dirty, because
-+        // `recalculateTransformation` is the only thing that writes them. See updateBoneTexture.
-+        this.ow3BonesDirty = true;
-+        this.ow3BonesUploaded = false;
-         for (let i = 0, l = model.geosets.length; i < l; i++) {
-             this.geosetColors[i] = new Float32Array(4);
-         }
-@@ -257,6 +264,7 @@ class MdxModelInstance extends modelinstance_1.default {
-             }
-         }
-         // Update the nodes
-+        let anyDirty = forced; // OpenWar3: see updateBoneTexture
-         for (let i = 0, l = sortedNodes.length; i < l; i++) {
-             const genericObject = sortedGenericObjects[i];
-             const node = sortedNodes[i];
-@@ -306,6 +314,7 @@ class MdxModelInstance extends modelinstance_1.default {
-             node.wasDirty = wasDirty;
-             // If this is a forced update, or this node's local data was updated, or the parent node was updated, do a full world update.
-             if (wasDirty) {
-+                anyDirty = true; // OpenWar3
-                 node.recalculateTransformation(this);
-             }
-             // If there is an instance object associated with this node (emitter/attachment), and it is visible, update it.
-@@ -325,6 +334,7 @@ class MdxModelInstance extends modelinstance_1.default {
-                 child.update(dt);
-             }
-         }
-+        this.ow3BonesDirty = anyDirty; // OpenWar3
-     }
-     /**
-      * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -418,9 +428,26 @@ class MdxModelInstance extends modelinstance_1.default {
-             }
-         }
-     }
-+    /**
-+     * Hand this instance's bone matrices to the GPU -- but only when they have actually changed.
-+     *
-+     * This is one `bindTexture` plus one `texSubImage2D` per instance per frame, and the cost is
-+     * almost entirely the CALL rather than the bytes: measured at ~2 microseconds an instance
-+     * whether it carries three bones or two hundred. Half of them were paying it to upload a pose
-+     * identical to last frame's. Probed in a real match with 249 visible instances: 127 unchanged
-+     * against 122 changed, and the split was exactly by model -- every unit animating, every tree
-+     * standing still. A doodad's Stand sequence has no tracks, so `updateNodes` marks not one of
-+     * its nodes dirty and `recalculateTransformation`, the only thing that writes `worldMatrices`,
-+     * never runs. Uploading it again cannot say anything new.
-+     *
-+     * `ow3BonesUploaded` is separate from the dirty flag so the FIRST upload always happens, even
-+     * for an instance whose very first update somehow finds nothing dirty.
-+     */
-     updateBoneTexture() {
--        if (this.boneTexture) {
-+        if (this.boneTexture && (this.ow3BonesDirty || !this.ow3BonesUploaded)) {
-             this.boneTexture.bindAndUpdate(this.worldMatrices);
-+            this.ow3BonesUploaded = true;
-+            this.ow3BonesDirty = false;
-         }
-     }
-     // OpenWar3 (issue #66): a faded instance (vertex-colour alpha < 1 — Wind Walk,
-diff --git a/dist/cjs/viewer/handlers/mdx/handler.js b/dist/cjs/viewer/handlers/mdx/handler.js
-index 87e3bbdbf1377c888ac650cf23029492fc1a05f7..b92458b2d3645c0bcec2169797706a84d66ac9f1 100644
---- a/dist/cjs/viewer/handlers/mdx/handler.js
-+++ b/dist/cjs/viewer/handlers/mdx/handler.js
-@@ -153,7 +153,12 @@ exports.default = {
-     loadTeamTextures(viewer) {
-         const { pathSolver, reforged, teamColors, teamGlows } = viewer.sharedCache.get('mdx');
-         if (teamColors.length === 0) {
--            const teams = reforged ? 28 : 16;
-+            // OpenWar3: the classic table is 28 too since patch 1.29 - TeamColor00..23 are the
-+            // 24 player colours and TeamColor24..27 the four black NEUTRAL swatches the creeps
-+            // and shops wear (src/render/teamColor.ts `neutralTeamColor`). Loading 16 left a
-+            // 1.30.4 install's neutral slot with no swatch at all. A 2003 install simply has
-+            // no TeamColor16..27 to load, which was already the case for 13..15.
-+            const teams = 28;
-             const ext = reforged ? 'dds' : 'blp';
-             const params = reforged ? { reforged: true } : undefined;
-             for (let i = 0; i < teams; i++) {
