@@ -120,6 +120,12 @@ function probe(path) {
       // (src/compat/w3i.ts) and keeps what parsed, which is how five PROTECTED maps in a
       // stock install's own Maps\\Download play at all. The header fields it needs are read
       // before the truncation, so the build version below is real.
+      //
+      // "The engine reads it the same way" is the claim this line is really making, and it
+      // was WRONG once: three readers were made tolerant and a fourth was missed, inside
+      // `loadMap`, so Angel Arena Allstars listed and then opened on a black screen with no
+      // world behind it. If this note ever appears for a map that will not start, the first
+      // place to look is a `war3map.w3i` read that still throws.
       row.notes.push(`war3map.w3i stops early (protected?): ${e.message}`);
       row.players = info.players.length;
       row.build = info.buildVersion[0] * 100 + info.buildVersion[1];

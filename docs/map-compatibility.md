@@ -234,10 +234,18 @@ w3e v11, object data ≤ v2) stops reading. It is the regression guard for every
 honest answer to "will this map work", and how everything in this document was measured.
 
 **Step 1 — the w3i, and the flag behind it. DONE.** The parser learned v32/v33 (viewer patch) and
-the read became tolerant (`src/compat/w3i.ts`), wired through `parseMapInfo`, `classifyMap` and
-`loadMapBytes`; `solverParams.reforged` no longer follows `buildVersion`. **This is the step that
-makes these maps appear and load at all**, and it un-hides five maps in the developer's own
-`Maps\Download` as a side effect.
+the read became tolerant (`src/compat/w3i.ts`); `solverParams.reforged` no longer follows
+`buildVersion`. **This is the step that makes these maps appear and load at all**, and it
+un-hides five maps in the developer's own `Maps\Download` as a side effect.
+
+**Every reader of `war3map.w3i` has to be the tolerant one, and there are FOUR.** Three were
+converted first — `parseMapInfo`, `classifyMap`, `loadMapBytes` — and the fourth was missed:
+`MapViewerScene.stampMapPathing`, which runs inside `loadMap`. A throw there does not hide a
+row or refuse a file, it aborts the whole bring-up *after* the loading screen has handed over,
+so the player gets a black screen with no world behind it and no message. That is precisely
+what Angel Arena Allstars 1.69f did once its row was visible: listed, picked, loaded, black.
+The lesson is the general one — a tolerant read is only tolerant if EVERY reader is — and the
+grep that finds them is `parsers/w3x/w3i`.
 
 **Step 2 — object data v3. DONE.** A version branch in `w3u/modifiedobject.js` with the version
 threaded through `modificationtable`, `w3u/file.js` and `w3d/file.js`. All six object files of

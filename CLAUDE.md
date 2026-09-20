@@ -641,8 +641,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   moved up with it), and the `.doo` skin id (already wired — it only ever wanted the w3i's build
   version). **The w3i gates all of it**: its throw is why such a map never even appears in the
   Custom Game list, and the same throw hides five PROTECTED v25 maps in the install's own
-  `Maps\Download` (Extreme Candy War, DotA), whose w3i is TRUNCATED — so the reader wants
-  tolerance as much as version-awareness. The trap directly behind that fix is
+  `Maps\Download` (Extreme Candy War, DotA, Angel Arena), whose w3i is TRUNCATED — so the reader
+  wants tolerance as much as version-awareness, and EVERY reader of that file has to be the
+  tolerant one: there are FOUR, and the one inside `loadMap` (`stampMapPathing`) is the one
+  whose throw is a BLACK SCREEN rather than a missing row, because it fires after the loading
+  screen has handed over. `grep parsers/w3x/w3i` finds them. The trap directly behind that fix is
   `solverParams.reforged`, which the viewer sets from `buildVersion > 131` and which switches
   texture lookups to `.dds` and the team-colour table to 28: an ASSET FLAVOUR keyed on a FILE
   LAYOUT, and we draw SD out of an SD install, so it stays false. This is a **compatibility

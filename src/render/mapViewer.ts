@@ -2,7 +2,6 @@ import War3MapViewer from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/viewer";
 import { dataSetFolder, isRoc } from "../data/edition";
 import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import type { DataSource } from "../vfs/types";
-import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
 import { tilesetOverlay } from "../vfs/tileset";
@@ -38,6 +37,7 @@ import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData } from "../data/objectData";
 import { readMapFormat } from "../compat/mapFormat";
+import { readW3i } from "../compat/w3i";
 import { preloadLuaHost } from "../compat/lua/index";
 import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/mapMisc";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
@@ -2115,8 +2115,13 @@ export class MapViewerScene {
     let buildVersion = 0;
     const w3iBytes = archive.rawBytes("war3map.w3i");
     if (w3iBytes) {
-      const info = new w3iParser.File();
-      info.load(w3iBytes);
+      // TOLERANT (src/compat/w3i.ts). This is the THIRD reader of the same file and the one
+      // that decides whether there is a match at all: it runs inside `loadMap`, so a throw
+      // here takes the whole bring-up with it and the player is left on a black screen with
+      // no world behind it. That is exactly what a PROTECTED map did — Angel Arena Allstars
+      // and the four beside it in a stock install's own `Maps\Download` have a w3i truncated
+      // mid-structure, and every field read below sits BEFORE the truncation.
+      const { info } = readW3i(w3iBytes);
       buildVersion = info.getBuildVersion();
       // The map's environment fog (w3i): useTerrainFog 0 = off; fogHeight is [z-start,
       // z-end] camera distance, fogColor is RGBA bytes. Applied to the world scene so the
@@ -14408,15 +14413,11 @@ const EMPTY_VERTS = new Float32Array(0); // clears a persistent OverlayLayer (ve
 function lightEnvironment(archive: DataSource, tileset: string): string {
   const bytes = archive.rawBytes("war3map.w3i");
   if (!bytes) return tileset;
-  try {
-    const info = new w3iParser.File();
-    info.load(bytes);
-    const letter = info.lightEnvironmentTileset;
-    if (letter && letter !== "\0") return letter;
-  } catch {
-    // Pre-TFT w3i (version 18) has no such field — the tileset it is.
-  }
-  return tileset;
+  // Tolerant like every other read of this file (src/compat/w3i.ts): a pre-TFT w3i (version
+  // 18) has no such field and a protected one may stop before it, and both mean the same
+  // thing — the tileset's own environment.
+  const letter = readW3i(bytes).info.lightEnvironmentTileset;
+  return letter && letter !== "\0" ? letter : tileset;
 }
 
 function pushColliderVert(a: number[], x: number, y: number, z: number, c: readonly number[]): void {
