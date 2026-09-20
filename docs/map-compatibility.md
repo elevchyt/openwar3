@@ -426,6 +426,9 @@ The work is going in passes, largest first, each with its own test and each re-m
 |---|---|---|---|
 | 1 | hero attributes — `Get`/`SetHeroStr\|Agi\|Int`, `SuspendHeroXP` | 452 | ✓ |
 | 2 | `Get`/`SetWidgetLife`, `GetWidgetX/Y`, `UnitDamageTarget` | 196 | ✓ |
+| 4 | the `Is…` predicates, `GetWorldBounds` | 1199 | ✓ |
+
+5019 → 4371 → **3172** call sites.
 
 Two findings from those two that are worth more than the code:
 
@@ -458,16 +461,56 @@ what passing an `attacktype` is for, so it lands on `landDamage` with the two mu
 already applied: the same seam a spell lands on. `DAMAGE_TYPE_UNIVERSAL` is the one damagetype
 that bypasses both of them and magic immunity with them.
 
+### Pass 4 — the predicates
+
+Twenty-odd `Is…` natives, and they are worth more than their size because they are all
+CONDITIONS. An unimplemented native returns a typed default and a boolean's typed default is
+FALSE, so an unanswered predicate does not degrade a map's behaviour — **it inverts it**. DotA
+gates most of its targeting on `IsUnitVisible`, and with no answer all 153 of those calls said
+"nobody has eyes on it": an AoS whose spells believe nothing is ever in sight.
+
+Three things in that family are not obvious and each is settled by evidence rather than by
+taste:
+
+* **`IsUnitInRange` is measured to the COLLISION**, not centre to centre — `distance + both
+  radii` — because that is what "in range" already means everywhere in this sim (`distSkip`:
+  a weapon's reach, a spell's cast range, an acquisition sweep). A script that asked the
+  question a second way would get a different answer from the engine for the same two units
+  standing still.
+* **`IsTerrainPathable` returns TRUE when the terrain is NOT pathable.** Its name says the
+  opposite, and the install states the rule outright rather than leaving it to lore —
+  `UI\TriggerStrings.txt` names the BJ that wraps it "Terrain Pathing Is Off" and explains:
+  *"Terrain pathing is off if it is not pathable to the given pathing type. For example,
+  'Buildability' is off if the pathing cell is unbuildable."* Read it the way its name reads
+  and every "can I put something here" check in a custom map answers backwards, which is worse
+  than answering nothing.
+* **`IsUnitVisible` is not `fogHides`.** That one is about DRAWING, and drawing keeps a
+  building you have scouted standing in the fog as a memory — right for a model, wrong for
+  this question, because a script asking "can this player see it" while the answer is a
+  five-minute-old picture has been told yes when it means no. It asks for eyes NOW:
+  `fogBlocksAt` on the unit's own position, plus the two things that hide a unit from eyes
+  that would otherwise have it (`ShowUnit(false)`, undetected invisibility).
+
+The vision half lives on `VisionSet` and reaches JASS through `visionHooks`, **not** through
+`simHooks`: the answer is a viewpoint's, and answering it anywhere else would let what a script
+believes a player can see drift from what that player is actually shown. common.j asks five
+different questions about a unit (visible / fogged / masked / invisible / detected) and three
+about a point, and they are five and three questions rather than one with variations — a unit
+in the BLACK is masked, not fogged, and the natives exist to tell those apart.
+
 One thing was deliberately **not** done: `BlzSetEventDamage` (6 sites). `pumpDamageEvents` fires
 after the sim has applied the damage, so there is nothing left to modify, and making it work
 means first settling whether 1.31's `EVENT_PLAYER_UNIT_DAMAGED` is pre- or post-application and
 how it differs from `_DAMAGING` (315) — a question for the sources, not a guess.
 
-Tests: `tools/sim-hero-attr-test.cjs`, `tools/sim-trigger-damage-test.cjs` (the sim arithmetic,
-with the multipliers computed from the game's own table rather than transcribed) and
-`tools/jass-widget-damage-test.cjs` (the two vocabularies, through the real interpreter against
-the install's own `common.j`). `tools/sim-jass-hooks-test.cjs` pins the exact hook roster, so
-every pass that adds a hook adds its name there too.
+Tests: `tools/sim-hero-attr-test.cjs` and `tools/sim-trigger-damage-test.cjs` (the sim
+arithmetic — the damage multipliers computed from the game's own table rather than transcribed,
+and the collision-inclusive range rule), `tools/jass-widget-damage-test.cjs` and
+`tools/jass-predicates-test.cjs` (the vocabularies and the wiring, through the real interpreter
+against the install's own `common.j`; the predicate stubs answer each hook DIFFERENTLY, so a
+native wired to the wrong one of five vision questions cannot pass by accident).
+`tools/sim-jass-hooks-test.cjs` pins the exact hook roster on both tables, so every pass that
+adds a hook adds its name there too.
 
 ## Traps
 

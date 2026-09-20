@@ -15100,6 +15100,37 @@ export class SimWorld {
     return this.landDamage(target, dealt, sourceId, opts.attack);
   }
 
+  /**
+   * `IsUnitInRange` — is `other` within `distance` of `unitId`?
+   *
+   * Measured the way this sim measures EVERY other range (`distSkip`): centre distance against
+   * `distance + both collision radii`, not centre to centre. That is not a liberty — it is what
+   * "in range" already means here, for a weapon's reach, a spell's cast range and an
+   * acquisition sweep alike, and a script that asked the question a second way would get a
+   * different answer from the engine for the same two units standing still. A Tauren and a
+   * Peasant are 100 apart in different amounts of space.
+   *
+   * 452 call sites across the later-format corpus, all but one of them DotA's.
+   */
+  unitInRange(unitId: number, otherId: number, distance: number): boolean {
+    const a = this.units.get(unitId);
+    const b = this.units.get(otherId);
+    if (!a || !b) return false;
+    return !distSkip(a, b, distance, true);
+  }
+
+  /** `IsUnitInRangeXY` / `IsUnitInRangeLoc` — the same against bare ground, which has no
+   *  collision of its own to add. */
+  unitInRangeXY(unitId: number, x: number, y: number, distance: number): boolean {
+    const u = this.units.get(unitId);
+    if (!u) return false;
+    const reach = distance + u.radius;
+    if (reach < 0) return false;
+    const dx = x - u.x;
+    const dy = y - u.y;
+    return dx * dx + dy * dy <= reach * reach;
+  }
+
   /** UnitModifySkillPoints — add/remove unspent skill points (never below zero). */
   modifySkillPoints(unitId: number, delta: number): boolean {
     const h = this.units.get(unitId);

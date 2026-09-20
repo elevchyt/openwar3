@@ -3227,6 +3227,19 @@ export class MapViewerScene {
         const b = this.mapBounds ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
         return { minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY };
       },
+      // `GetWorldBounds` — the OUTER of the three rects (docs/unplayable-area.md): the whole
+      // terrain grid, black border and all. Deliberately NOT `mapBounds`, which is the camera
+      // bounds and sits 512/256 inside the playable area, itself inside this. A map clamps its
+      // own arithmetic with this one, so handing it the camera rect shrinks whatever it clamps.
+      // Read off the terrain the same way the fallback camera rect is built above: the grid
+      // spans `centerOffset` → `centerOffset + (n − 1) × 128`.
+      worldBounds: () => {
+        const map = this.viewer.map;
+        if (!map) return { minx: 0, miny: 0, maxx: 0, maxy: 0 };
+        const [cols, rows] = map.mapSize;
+        const [ox, oy] = map.centerOffset;
+        return { minx: ox, miny: oy, maxx: ox + (cols - 1) * 128, maxy: oy + (rows - 1) * 128 };
+      },
       // …and the constant Blizzard.j widens them by to get `bj_mapInitialPlayableArea`.
       // A reader of an engine constant, so it belongs with the readers (see above).
       cameraMargin: (field) => CAMERA_MARGIN[field] ?? 0,

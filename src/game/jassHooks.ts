@@ -208,6 +208,21 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // native does the common.j-index → AttackType mapping and the sim is handed a column name.
     damageTarget: (sourceId, targetId, amount, opts) =>
       sim.damageTarget(sourceId, targetId, amount, { ...opts, attackType: opts.attackType as AttackType }),
+    // --- predicates (docs/map-compatibility.md pass 4) ---
+    isUnitInRange: (id, otherId, distance) => sim.unitInRange(id, otherId, distance),
+    isUnitInRangeXY: (id, x, y, distance) => sim.unitInRangeXY(id, x, y, distance),
+    isUnitIllusion: (id) => sim.units.get(id)?.isIllusion ?? false,
+    unitRace: (id) => sim.units.get(id)?.race ?? "",
+    // `IsTerrainPathable` — and remember its polarity: TRUE means NOT pathable, which the
+    // install states outright (natives/predicates.ts quotes `UI\TriggerStrings.txt`). So each
+    // branch here asks the grid the POSITIVE question and the native's own `true` is the
+    // negation of it.
+    isTerrainPathable: (x, y, pathingType) => {
+      const [cx, cy] = sim.grid.worldToCell(x, y);
+      if (pathingType === 3) return !sim.grid.buildable(cx, cy); // PATHING_TYPE_BUILDABILITY
+      if (pathingType === 2) return !sim.grid.walkable(cx, cy, "air"); // …FLYABILITY
+      return !sim.grid.walkable(cx, cy, "ground"); // …WALKABILITY
+    },
     // --- per-unit flags (7.17) ---
     // `setUnitAnimation` is NOT here: an animation is a model's, not the world's.
     setUnitInvulnerable: (id, flag) => sim.setInvulnerable(id, flag),
@@ -650,6 +665,18 @@ export function visionHooks(
     setFogMaskEnabled(on: boolean): void;
     isFogEnabled(): boolean;
     isFogMaskEnabled(): boolean;
+    // What a SCRIPT may ask about a player's eyes (docs/map-compatibility.md pass 4). Asked of
+    // the vision set rather than of the sim because the answer IS a viewpoint's, and answering
+    // it anywhere else would let what a script believes a player can see drift from what that
+    // player is shown. See VisionSet.unitVisibleTo for why this is not `fogHides`.
+    unitVisibleTo(player: number, unitId: number): boolean;
+    unitFoggedTo(player: number, unitId: number): boolean;
+    unitMaskedTo(player: number, unitId: number): boolean;
+    unitInvisibleTo(player: number, unitId: number): boolean;
+    unitDetectedTo(player: number, unitId: number): boolean;
+    pointVisibleTo(player: number, x: number, y: number): boolean;
+    pointFoggedTo(player: number, x: number, y: number): boolean;
+    pointMaskedTo(player: number, x: number, y: number): boolean;
   },
   alliances: {
     set(source: number, other: number, type: number, value: boolean): void;
@@ -688,5 +715,17 @@ export function visionHooks(
     fogMaskEnable: (flag) => vision.setFogMaskEnabled(flag),
     isFogEnabled: () => vision.isFogEnabled(),
     isFogMaskEnabled: () => vision.isFogMaskEnabled(),
+    // --- what a script may ask about a player's eyes (docs/map-compatibility.md pass 4) ---
+    // `IsUnitVisible` alone is 369 call sites across the later-format corpus: DotA gates most
+    // of its targeting on it, and with no answer every one of those reads FALSE — an AoS whose
+    // spells believe nothing is ever in sight.
+    isUnitVisibleTo: (unitId, player) => vision.unitVisibleTo(player, unitId),
+    isUnitFoggedTo: (unitId, player) => vision.unitFoggedTo(player, unitId),
+    isUnitMaskedTo: (unitId, player) => vision.unitMaskedTo(player, unitId),
+    isUnitInvisibleTo: (unitId, player) => vision.unitInvisibleTo(player, unitId),
+    isUnitDetectedTo: (unitId, player) => vision.unitDetectedTo(player, unitId),
+    isPointVisibleTo: (player, x, y) => vision.pointVisibleTo(player, x, y),
+    isPointFoggedTo: (player, x, y) => vision.pointFoggedTo(player, x, y),
+    isPointMaskedTo: (player, x, y) => vision.pointMaskedTo(player, x, y),
   };
 }

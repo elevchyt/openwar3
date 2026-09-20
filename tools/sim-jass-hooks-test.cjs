@@ -49,6 +49,10 @@ const EXPECTED = [
   // …and `UnitDamageTarget`, which is how a custom map's spells deal damage at all
   // (pass 2; sim-trigger-damage-test.cjs).
   "damageTarget",
+  // The PREDICATES whose answer is the world's rather than a viewpoint's (pass 4). The vision
+  // half of that family is NOT here: `IsUnitVisible` and its four siblings are answered by the
+  // viewpoint the renderer draws from, which is `visionHooks`' table, not this one.
+  "isUnitInRange", "isUnitInRangeXY", "isUnitIllusion", "unitRace", "isTerrainPathable",
   "setHeroXp", "setItemCharges", "setItemDroppable", "setItemPosition", "setPlayerTechMaxAllowed",
   // StoreUnit — a chapter writing its hero down for the next one (docs/campaigns.md). Its
   // twin RestoreUnit is the AUTHORITY's, because putting one back means creating it.
@@ -281,11 +285,25 @@ const vset = new VisionSet(visionWorld, stubAlliances, () => [], 0, 0, 1024, 102
 vset.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }, { player: 2, team: 1 }]);
 const vh = visionHooks(vset, stubAlliances);
 
-check("visionHooks is exactly the 13 natives", Object.keys(vh).sort(), [
+check("visionHooks is exactly the 21 natives", Object.keys(vh).sort(), [
   "createFogModifier", "cripplePlayer", "destroyFogModifier", "fogEnable", "fogMaskEnable",
   "fogModifierStart", "fogModifierStop", "getPlayerAlliance", "isFogEnabled", "isFogMaskEnabled",
   "isPlayerAlly", "setFogState", "setPlayerAlliance",
+  // What a SCRIPT may ask about a player's eyes (docs/map-compatibility.md pass 4). They are
+  // HERE and not in the world table on purpose: the answer is a viewpoint's, and answering it
+  // anywhere else lets what a script believes a player can see drift from what that player is
+  // shown. Five questions about a unit and three about a point, because they are five and three
+  // different questions — see VisionSet.unitVisibleTo.
+  "isUnitVisibleTo", "isUnitFoggedTo", "isUnitMaskedTo", "isUnitInvisibleTo", "isUnitDetectedTo",
+  "isPointVisibleTo", "isPointFoggedTo", "isPointMaskedTo",
 ].sort());
+
+// …and they answer. An empty world has no units, so the unit questions are all false; the POINT
+// questions still work, and on a viewpoint that has explored nothing every point is MASKED.
+check("an unknown unit is not visible to anyone", vh.isUnitVisibleTo(1, 0), false);
+check("unexplored ground is masked", vh.isPointMaskedTo(0, 500, 500), true);
+check("…and is therefore not fogged", vh.isPointFoggedTo(0, 500, 500), false);
+check("…nor visible", vh.isPointVisibleTo(0, 500, 500), false);
 
 // One handle space: ids are unique across the whole match, not per viewpoint.
 const rect = { kind: "rect", minX: 0, minY: 0, maxX: 100, maxY: 100 };

@@ -1,5 +1,7 @@
-// Headless check of TRIGGER-DEALT DAMAGE — `SimWorld.damageTarget`, behind `UnitDamageTarget`
-// (docs/map-compatibility.md pass 2).
+// Headless check of the SIM entry points behind two map-compatibility passes: trigger-dealt
+// damage (`SimWorld.damageTarget` ← `UnitDamageTarget`, pass 2) and the range question
+// (`unitInRange`/`unitInRangeXY` ← `IsUnitInRange`, pass 4). Both are arithmetic a native can
+// only pass through, which is why they are pinned here rather than in the natives' own test.
 //
 // This is how a custom map's spells deal damage at all: a map that rebuilt its spells on
 // unrelated bases does its own arithmetic and then calls the native. 38 call sites across the
@@ -147,5 +149,27 @@ function check(what, got, want) {
   check("lethal trigger damage kills", t.hp <= 0, true);
 }
 
-console.log(failed ? `\n${failed} FAILED` : "\nall trigger-damage checks passed");
+// --- 7. IsUnitInRange is measured to the COLLISION ----------------------------------------
+// Not centre to centre. That is what "in range" already means everywhere else in this sim
+// (`distSkip`: centre distance against `bound + both radii`), and a script that asked the
+// question a second way would get a different answer from the engine for the same two units
+// standing still. A Tauren and a Peasant are 100 apart in different amounts of space.
+{
+  world = newWorld();
+  const a = unit({ x: 0, y: 0, radius: 16 });
+  const b = unit({ x: 300, y: 0, radius: 16 });
+  check("centre to centre would be short at 290", world.unitInRange(a.id, b.id, 290), true);
+  check("…because both collisions count", world.unitInRange(a.id, b.id, 267), false);
+  check("the boundary is inclusive", world.unitInRange(a.id, b.id, 268), true);
+  // A bigger body is in range at a distance a smaller one is not — the whole point of the rule.
+  const big = unit({ x: 300, y: 0, radius: 72 });
+  check("a bigger body reaches further", world.unitInRange(a.id, big.id, 215), true);
+  check("…and the small one does not", world.unitInRange(a.id, b.id, 215), false);
+  // The POINT form has no far-end collision to add — bare ground has none.
+  check("a point counts only the unit's own radius", world.unitInRangeXY(a.id, 300, 0, 284), true);
+  check("…and not a second one", world.unitInRangeXY(a.id, 300, 0, 283), false);
+  check("a unit that is gone is never in range", world.unitInRange(a.id, 9999, 99999), false);
+}
+
+console.log(failed ? `\n${failed} FAILED` : "\nall trigger-damage and range checks passed");
 process.exit(failed ? 1 : 0);

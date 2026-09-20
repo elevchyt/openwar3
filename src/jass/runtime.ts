@@ -697,6 +697,31 @@ export interface EngineHooks {
     amount: number,
     opts: { attack: boolean; ranged: boolean; attackType: string; magic: boolean; universal: boolean },
   ): number;
+  // --- predicates a custom map gates on (docs/map-compatibility.md pass 4) ---
+  /** IsUnitInRange / IsUnitInRangeXY / IsUnitInRangeLoc. Measured the way the SIM measures
+   *  every other range — centre distance against `distance + both collision radii` — so a
+   *  script's idea of "in range" and the engine's cannot disagree (SimWorld.unitInRange). */
+  isUnitInRange?(unitId: number, otherId: number, distance: number): boolean;
+  isUnitInRangeXY?(unitId: number, x: number, y: number, distance: number): boolean;
+  /** IsUnitIllusion — a Mirror Image / Wand of Illusion copy (docs/illusions.md). */
+  isUnitIllusion?(unitId: number): boolean;
+  /** IsUnitRace — the unit's race, as `UnitData.slk` spells it ("human", "orc", …). */
+  unitRace?(unitId: number): string;
+  /** IsTerrainPathable — `t` is common.j's `pathingtype` index. TRUE means BLOCKED: the
+   *  native's polarity is the opposite of its name (see natives/predicates.ts). */
+  isTerrainPathable?(x: number, y: number, pathingType: number): boolean;
+  /** GetWorldBounds — the world rect, which is the OUTER one of the three (see
+   *  docs/unplayable-area.md): world bounds ⊃ playable area ⊃ camera bounds. */
+  worldBounds?(): { minx: number; miny: number; maxx: number; maxy: number };
+  // …and the vision half, answered by the viewpoint the renderer draws from (jassHooks.ts).
+  isUnitVisibleTo?(unitId: number, player: number): boolean;
+  isUnitFoggedTo?(unitId: number, player: number): boolean;
+  isUnitMaskedTo?(unitId: number, player: number): boolean;
+  isUnitInvisibleTo?(unitId: number, player: number): boolean;
+  isUnitDetectedTo?(unitId: number, player: number): boolean;
+  isPointVisibleTo?(player: number, x: number, y: number): boolean;
+  isPointFoggedTo?(player: number, x: number, y: number): boolean;
+  isPointMaskedTo?(player: number, x: number, y: number): boolean;
   // --- destructibles (issue #85): gates, doors, the walls a lever drops ---
   //
   // A gate has no "open" state of its own — it opens by DYING, and its collider drops to the

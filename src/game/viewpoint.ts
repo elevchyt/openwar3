@@ -520,6 +520,79 @@ export class VisionSet {
     return vp;
   }
 
+  // --- what a SCRIPT may ask about somebody's eyes (docs/map-compatibility.md pass 4) -------
+  //
+  // common.j has five of these about a unit and three about a point, and they are five
+  // different questions rather than one with variations:
+  //
+  //     IsUnitVisible   eyes on it RIGHT NOW
+  //     IsUnitFogged    in the grey — explored, but nobody is looking
+  //     IsUnitMasked    in the black — never explored
+  //     IsUnitInvisible it is invisible to these eyes
+  //     IsUnitDetected  it is invisible and these eyes see it anyway (True Sight)
+  //
+  // They answer from the same viewpoint the renderer draws from, so what a script believes a
+  // player can see and what that player is actually shown cannot come apart.
+  //
+  // **`IsUnitVisible` is not `fogHides`.** That one is about DRAWING, and drawing keeps a
+  // building you have scouted standing in the fog as a memory — which is right for a model and
+  // wrong for this question, because a script asking "can this player see it" while the answer
+  // is a five-minute-old picture is a script that has been told yes when it means no. This asks
+  // for eyes, now: `fogBlocksAt` on the unit's own position, plus the two things that hide a
+  // unit from eyes that would otherwise have it — `ShowUnit(false)` and undetected invisibility.
+
+  /** `IsUnitVisible` — has this player eyes on this unit right now? */
+  unitVisibleTo(player: number, unitId: number): boolean {
+    const u = this.world.units.get(unitId);
+    if (!u || u.hidden) return false; // ShowUnit(false) is off the field for everyone
+    const vp = this.viewpointFor(player);
+    if (vp.invisHides(u)) return false;
+    return !vp.fogBlocksAt(u);
+  }
+
+  /** `IsUnitFogged` — explored ground, but nobody is looking. Not the same as "not visible":
+   *  a unit in the BLACK is masked, not fogged, and the two natives exist to tell them apart. */
+  unitFoggedTo(player: number, unitId: number): boolean {
+    const u = this.world.units.get(unitId);
+    if (!u) return false;
+    const vp = this.viewpointFor(player);
+    return vp.hasExplored(u) && vp.fogBlocksAt(u);
+  }
+
+  /** `IsUnitMasked` — standing on ground this player has never explored. */
+  unitMaskedTo(player: number, unitId: number): boolean {
+    const u = this.world.units.get(unitId);
+    return u ? !this.viewpointFor(player).hasExplored(u) : false;
+  }
+
+  /** `IsUnitInvisible` / `IsUnitDetected` — the two halves of one state. An invisible unit is
+   *  either hidden from these eyes or revealed to them by True Sight, and never both, so the
+   *  pair is `invisHides` read from each side. A unit that is not invisible at all is neither. */
+  unitInvisibleTo(player: number, unitId: number): boolean {
+    const u = this.world.units.get(unitId);
+    return !!u?.invisible && this.viewpointFor(player).invisHides(u);
+  }
+
+  unitDetectedTo(player: number, unitId: number): boolean {
+    const u = this.world.units.get(unitId);
+    return !!u?.invisible && !this.viewpointFor(player).invisHides(u);
+  }
+
+  /** `IsLocationVisibleToPlayer` and its fogged/masked twins — the same three states asked of
+   *  bare ground, where there is no unit to be hidden or invisible. */
+  pointVisibleTo(player: number, x: number, y: number): boolean {
+    return !this.viewpointFor(player).fogBlocksAt({ x, y });
+  }
+
+  pointFoggedTo(player: number, x: number, y: number): boolean {
+    const vp = this.viewpointFor(player);
+    return vp.hasExplored({ x, y }) && vp.fogBlocksAt({ x, y });
+  }
+
+  pointMaskedTo(player: number, x: number, y: number): boolean {
+    return !this.viewpointFor(player).hasExplored({ x, y });
+  }
+
   /**
    * Give every seat the lobby knows about its own eyes, at MATCH START
    * (docs/multiplayer.md Phase E item 2). Idempotent — an already-created viewpoint is kept
