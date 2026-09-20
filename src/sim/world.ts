@@ -14756,13 +14756,17 @@ export class SimWorld {
     return n;
   }
 
-  /** Add XP to a hero, leveling it up (with stat growth) across thresholds. */
-  gainXp(hero: SimUnit, amount: number, isCreep = false): void {
+  /** Add XP to a hero, leveling it up (with stat growth) across thresholds.
+   *
+   *  `eyeCandy` is common.j's `showEyeCandy` (see `levelUp`): false for a SCRIPT that is
+   *  setting a hero's progress up rather than awarding it. Everything the game itself pays —
+   *  a kill, a tome, a Fountain — takes the default and flashes. */
+  gainXp(hero: SimUnit, amount: number, isCreep = false, eyeCandy = true): void {
     // An image never banks experience of its own — it is shown its hero's (mirrorXpToIllusions).
     if (!hero.isHero || hero.isIllusion || hero.level >= MAX_HERO_LEVEL || amount <= 0) return;
     hero.xp += amount;
     while (hero.level < MAX_HERO_LEVEL && hero.xp >= xpToReachLevel(hero.level + 1)) {
-      this.levelUp(hero);
+      this.levelUp(hero, eyeCandy);
       // WC3: once a hero reaches a level where creeps grant no XP (HeroFactorXP=0 at
       // level 5+), any surplus that a creep kill pushed past the threshold is dropped
       // — the overshoot came from a creep and must not count (issue #30). The bar sits
@@ -14786,14 +14790,29 @@ export class SimWorld {
     }
   }
 
-  private levelUp(hero: SimUnit): void {
+  /**
+   * One level, with everything that comes with it.
+   *
+   * `eyeCandy` is common.j's own third argument — `SetHeroLevel`, `SetHeroXP` and `AddHeroXP`
+   * all take `boolean showEyeCandy`, and it is the LEVEL-UP NOVA
+   * (`Abilities\Spells\Other\Levelup\Levelupcaster.mdx` and its fanfare). A map that is
+   * seating a hero at the level the story says he is — Human01's
+   * `SetHeroLevel(gg_unit_Huth_0024, 10, false)`, which is Uther arriving at Strahnbrad
+   * already a level-10 paladin — passes false, and the reference client plays nothing. We
+   * ignored the flag and flashed the nova over him in the middle of the cinematic.
+   *
+   * It is the NOVA that the flag withholds and nothing else: the level, the skill point, the
+   * recomputed sheet and the HERO_LEVEL event all still happen, which is why the flag is read
+   * here rather than at the call site.
+   */
+  private levelUp(hero: SimUnit, eyeCandy = true): void {
     hero.level++;
     hero.skillPoints++;
     // Levelling does NOT refill (issue #69). The new strength/intellect raise the ceiling and
     // recomputeStats carries the current pool up with it in proportion — a hero who dings at
     // 100/1000 comes out at 105/1050, not healed to full. A level-up is not an escape.
     this.recomputeStats(hero); // new maxHp/maxMana/attributes, current pool scaled with them
-    this.levelUps.push({ unitId: hero.id, level: hero.level }); // renderer: level-up nova
+    if (eyeCandy) this.levelUps.push({ unitId: hero.id, level: hero.level }); // renderer: level-up nova
     // EVENT_(PLAYER_)HERO_LEVEL for the trigger engine (7.17) — a separate queue from
     // the renderer's, since each side drains its own.
     if (this.captureHeroEvents) this.heroEvents.push({ hero: eventInfo(hero), phase: "level", level: hero.level, abilityId: "" });
@@ -14801,7 +14820,7 @@ export class SimWorld {
     // a Blademaster who dinged while his images stood beside him would otherwise be the only
     // one of the four to grow and flash — pointing straight at the real one.
     for (const im of this.units.values()) {
-      if (im.isIllusion && im.illusionOf === hero.id && im.hp > 0) this.levelUpIllusion(im, hero);
+      if (im.isIllusion && im.illusionOf === hero.id && im.hp > 0) this.levelUpIllusion(im, hero, eyeCandy);
     }
   }
 
@@ -14846,13 +14865,15 @@ export class SimWorld {
   /** Bring an illusion up to its hero's new level. Not levelUp(): an image earns nothing of
    *  its own — no skill point (it cannot learn or cast), and no HERO_LEVEL event, which is
    *  the player's hero levelling and must fire once, not once per copy. */
-  private levelUpIllusion(im: SimUnit, hero: SimUnit): void {
+  private levelUpIllusion(im: SimUnit, hero: SimUnit, eyeCandy = true): void {
     im.level = hero.level;
     im.xp = hero.xp; // the shared bar, carried over the threshold with him
     // The hero's pool rides his new ceiling in proportion, so the images' must too — matching
     // pools is the whole point. recomputeStats does exactly that for both.
     this.recomputeStats(im); // new maxHp/maxMana/attributes off the level
-    this.levelUps.push({ unitId: im.id, level: im.level }); // the same nova, on every image
+    // …and the same silence when the hero's own was withheld: a nova on the copies alone would
+    // point straight at which of the four is not the original (docs/illusions.md).
+    if (eyeCandy) this.levelUps.push({ unitId: im.id, level: im.level }); // the same nova, on every image
   }
 
   /**
@@ -14946,28 +14967,29 @@ export class SimWorld {
    *  (a lower level is ignored), granting the skill points and stat growth of each
    *  level crossed — so it runs the real levelUp path (nova, HP/mana refill, and the
    *  HERO_LEVEL event) once per level, and parks the XP bar at the new level's floor. */
-  setHeroLevel(unitId: number, level: number): void {
+  setHeroLevel(unitId: number, level: number, eyeCandy = true): void {
     const h = this.units.get(unitId);
     if (!h?.isHero) return;
     const target = Math.min(MAX_HERO_LEVEL, Math.trunc(level));
-    while (h.level < target) this.levelUp(h);
+    while (h.level < target) this.levelUp(h, eyeCandy);
     h.xp = Math.max(h.xp, xpToReachLevel(h.level));
     this.mirrorXpToIllusions(h); // the bar his images show is his (see gainXp)
   }
 
   /** AddHeroXP — grant experience (levels follow through gainXp). Not a creep kill,
-   *  so no HeroFactorXP discount applies. */
-  addHeroXp(unitId: number, amount: number): void {
+   *  so no HeroFactorXP discount applies. `eyeCandy` is the native's own third argument. */
+  addHeroXp(unitId: number, amount: number, eyeCandy = true): void {
     const h = this.units.get(unitId);
-    if (h) this.gainXp(h, amount);
+    if (h) this.gainXp(h, amount, false, eyeCandy);
   }
 
-  /** SetHeroXP — set the XP bar directly, levelling the hero to match it. */
-  setHeroXp(unitId: number, xp: number): void {
+  /** SetHeroXP — set the XP bar directly, levelling the hero to match it. `eyeCandy` is the
+   *  native's own third argument (see `levelUp`). */
+  setHeroXp(unitId: number, xp: number, eyeCandy = true): void {
     const h = this.units.get(unitId);
     if (!h?.isHero) return;
     h.xp = Math.max(0, Math.trunc(xp));
-    while (h.level < MAX_HERO_LEVEL && h.xp >= xpToReachLevel(h.level + 1)) this.levelUp(h);
+    while (h.level < MAX_HERO_LEVEL && h.xp >= xpToReachLevel(h.level + 1)) this.levelUp(h, eyeCandy);
     this.mirrorXpToIllusions(h); // the bar his images show is his (see gainXp)
   }
 

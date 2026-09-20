@@ -232,6 +232,18 @@ export interface RingInfo {
   x: number;
   y: number;
   z: number;
+  /**
+   * The WALKABLE DECK the ring's owner is standing on, when it is standing on one — a bridge,
+   * a stone ramp, an invisible platform (docs/walkable-destructibles.md). Absent on ordinary
+   * ground, which is nearly always.
+   *
+   * A selection circle is an ubersplat and an ubersplat CONFORMS to the terrain, corner by
+   * corner (render/uberSplatOverlay.ts). Over a bridge that puts it in the river, hundreds of
+   * units below the planks its unit is visibly standing on. Where there is a deck the ring is
+   * drawn FLAT on the deck instead — a deck has no terrain corners to conform to, and it is
+   * flat enough to need none.
+   */
+  deck?: number;
   radius: number;
   owner: number;
   team: number;
@@ -5781,7 +5793,43 @@ export class RtsController {
     return false;
   }
 
+  /**
+   * The order modes SHIFT keeps ARMED after the click it just spent.
+   *
+   * Queueing is the game's own ("Holding down the Shift key while issuing commands will queue
+   * up orders for a specific unit" — `UI\TipStrings.txt` Tip53), and the half of it that is
+   * easy to miss is that the COMMAND survives the target: press A, then shift-click three
+   * bodies, and all three go on the queue without pressing A again. Ours spent the command on
+   * the first target like an unmodified click, so a shift-attack was indistinguishable from a
+   * plain one and there was no way to queue a second.
+   *
+   * Only orders that GO ON A QUEUE are on this list. A rally point, a minimap signal, a shop's
+   * purchaser, a cargo pick, Unload All and an aimed item are each one-of-a-kind acts the sim
+   * never queues, so holding shift over one must still spend it.
+   */
+  private static readonly REARM_ON_SHIFT = new Set(["move", "attack", "patrol", "repair", "harvest"]);
+
+  /**
+   * A click that aims the armed command. Answers whether the command was SPENT — the caller
+   * uses it to drop the console's highlight — so a refusal (which leaves the reticle up for
+   * another try) and a shift-click (which leaves the command armed for the next target)
+   * both answer false.
+   */
   orderClickAt(cssX: number, cssY: number, queued = false): boolean {
+    const rearm = queued && this.orderMode !== null && RtsController.REARM_ON_SHIFT.has(this.orderMode)
+      ? this.orderMode
+      : null;
+    const spent = this.aimArmedOrder(cssX, cssY, queued);
+    // Spent AND queueable: put the command back exactly as it was. Nothing else is restored —
+    // `armedCast`/`armedItem`/`armedLoad` belong to modes that are not on the list above.
+    if (spent && rearm !== null) {
+      this.orderMode = rearm;
+      return false;
+    }
+    return spent;
+  }
+
+  private aimArmedOrder(cssX: number, cssY: number, queued: boolean): boolean {
     // The Minimap Signal aimed at the game world ("Targeting a position on the minimap or in the
     // game world…", MINIMAPSIGNALTOOLTIP_UBER). A click that finds no ground keeps it armed.
     if (this.orderMode === "signal") {
@@ -6145,9 +6193,18 @@ export class RtsController {
       return "ordered";
     }
     if (mode) {
+      // SHIFT keeps the command armed for the next waypoint, exactly as it does for a click in
+      // the world (REARM_ON_SHIFT) — laying a string of attack-move points across the minimap
+      // is the gesture this matters most for. "ignored" is the answer that leaves the console's
+      // highlight up, which is what an armed command looks like.
+      const rearm = queued && RtsController.REARM_ON_SHIFT.has(mode);
       this.orderMode = null;
       this.ack(mode === "attack");
       this.groundOrder(mode, wx, wy, queued);
+      if (rearm) {
+        this.orderMode = mode;
+        return "ignored";
+      }
       return "ordered";
     }
     if (!right) return "none"; // plain left-click: the HUD pans the camera
@@ -7035,6 +7092,13 @@ export class RtsController {
     return deck > ground ? deck : ground;
   }
 
+  /** The deck at (x, y) when there IS one over the terrain, else undefined — the question a
+   *  ground DECAL asks, as against `groundOrDeck`'s "how high is the floor". */
+  private deckUnder(x: number, y: number): number | undefined {
+    const deck = this.walkableAt(x, y);
+    return deck > this.heightAt(x, y) ? deck : undefined;
+  }
+
   /** The walkable-surface sampler — installed by the map scene once the map's bridges are
    *  known. Nothing anywhere until then, and on the great majority of maps forever. */
   private walkableAt: HeightSampler = () => -Infinity;
@@ -7150,7 +7214,7 @@ export class RtsController {
       // entities ring yellow.
       // Air units' ring floats at their flight altitude (e.moveHeight matches the
       // model's drawn base), so it hugs the unit instead of sitting on the ground.
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building });
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, deck: this.deckUnder(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building });
     }
     if (this.selectedMine !== null) {
       const m = this.sim.mines.get(this.selectedMine);
@@ -7160,7 +7224,7 @@ export class RtsController {
     if (this.selectedItem !== null) {
       const it = this.sim.items.get(this.selectedItem);
       // A ground item rings yellow (neutral), like a mine — sized to the item.
-      if (it) out.push({ x: it.x, y: it.y, z: this.groundOrDeck(it.x, it.y), radius: ITEM_RING_RADIUS, owner: -1, team: -2, sizeToRadius: true, allegiance: "neutral" });
+      if (it) out.push({ x: it.x, y: it.y, z: this.groundOrDeck(it.x, it.y), deck: this.deckUnder(it.x, it.y), radius: ITEM_RING_RADIUS, owner: -1, team: -2, sizeToRadius: true, allegiance: "neutral" });
     }
     return out;
   }
@@ -7172,7 +7236,7 @@ export class RtsController {
     const u = this.frameUnit(id);
     const e = this.byId.get(id);
     if (!u || !e || isOffField(u)) return null;
-    return { x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building };
+    return { x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, deck: this.deckUnder(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building };
   }
 
   /** Ground-circles for the units currently inside the live drag-box, so the player previews
@@ -7183,7 +7247,7 @@ export class RtsController {
     for (const id of this.previewIds) {
       const u = this.frameUnit(id);
       const e = this.byId.get(id);
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building });
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, deck: this.deckUnder(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building });
     }
     return out;
   }
@@ -7195,7 +7259,7 @@ export class RtsController {
     if (this.hovered !== null && !this.selected.has(this.hovered)) {
       const u = this.frameUnit(this.hovered);
       const e = this.byId.get(this.hovered);
-      if (u && e) return { x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building };
+      if (u && e) return { x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, deck: this.deckUnder(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building };
     }
     if (this.hoveredMine !== null && this.hoveredMine !== this.selectedMine) {
       const m = this.sim.mines.get(this.hoveredMine);
@@ -9093,13 +9157,29 @@ export class RtsController {
 
   /** Where the ray in `this.ray` first meets the terrain. Also records the ray PARAMETER of
    *  that hit in `groundT`, which is what lets the pick reject a body behind a cliff. */
+  /**
+   * Where the click ray meets the FLOOR — the terrain, or a bridge's deck where one is over it.
+   *
+   * The surface it marches against is `groundOrDeck`, not the terrain, and that is the whole of
+   * what makes a bridge clickable. A bridge spans a gap: the streambed under Strahnbrad's is
+   * **279 world units** below the planks. March against the terrain alone and the ray sails
+   * straight through the deck the player is looking at and lands in the water some way past it
+   * — so a right-click on the middle of the bridge ordered the unit to a spot it could not
+   * stand on, which is both halves of the report (the click "not registering where you
+   * clicked", and the crossing that then never happened because the destination was in the
+   * river). Everything that DRAWS on the floor already asked `groundOrDeck`
+   * (docs/walkable-destructibles.md); what reads the floor back off the screen did not.
+   *
+   * Costs nothing where there are no bridges: `walkableAt` is a constant `-Infinity` until a
+   * map installs a sampler, and the sampler itself returns on an empty list.
+   */
   private groundHit(): [number, number] | null {
     this.groundT = Infinity;
     const r = this.ray;
     const nx = r[0], ny = r[1], nz = r[2];
     const dx = r[3] - nx, dy = r[4] - ny, dz = r[5] - nz;
     const at = (t: number): number =>
-      nz + dz * t - this.heightAt(nx + dx * t, ny + dy * t);
+      nz + dz * t - this.groundOrDeck(nx + dx * t, ny + dy * t);
     const steps = 256;
     let prev = at(0);
     for (let i = 1; i <= steps; i++) {

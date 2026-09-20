@@ -90,12 +90,28 @@ console.log("\nthe first profile adopts what was played before profiles existed"
 {
   store.clear();
   store.set("openwar3.campaigns", JSON.stringify({ human: 4 }));
-  store.set("openwar3.campaignDifficulty", "easy");
+  store.set("openwar3.campaignDifficulty", "hard");
   const name = P.createProfile("Thrall", 9);
   P.adoptOrphanedData(name);
   check("progress came across", C.loadProgress(), { human: 4 });
-  check("difficulty too", C.loadDifficulty(), "easy");
+  check("difficulty too", C.loadDifficulty(), "hard");
   check("the bare key is gone", store.has("openwar3.campaigns"), false);
+}
+
+// The campaign screens offer NORMAL and HARD and nothing else — Easy is reached only by losing
+// and taking the defeat dialog's Reduce Difficulty (Blizzard.j CustomDefeatReduceDifficultyBJ;
+// see DIFFICULTIES in ui/fdfCampaign.ts). So "easy" is a live gamedifficulty but never a
+// REMEMBERED choice, and a profile carrying one from before that was fixed reads as the game's
+// own default rather than as a row that is no longer on the menu.
+console.log("\nEasy is not a difficulty any screen offers");
+{
+  store.clear();
+  const name = P.createProfile("Uther", 1);
+  P.selectProfile(name);
+  store.set("openwar3.campaignDifficulty.Uther", "easy");
+  check("a stored Easy reads back as Normal", C.loadDifficulty(), "normal");
+  C.saveDifficulty("hard");
+  check("…and the two that ARE offered still round-trip", C.loadDifficulty(), "hard");
 }
 
 console.log("\na corrupt store reads as a fresh install rather than throwing");

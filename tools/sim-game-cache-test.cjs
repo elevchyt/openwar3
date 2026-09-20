@@ -163,6 +163,32 @@ console.log("\n…and a restore is not a promotion");
   check("…and the hero is still level 6", fresh.level, 6);
 }
 
+// common.j: `SetHeroLevel takes unit whichHero, integer level, boolean showEyeCandy`. The flag
+// is the NOVA, and the campaign leans on it — Human01's own opening line is
+// `call SetHeroLevel( gg_unit_Huth_0024, 10, false )`, Uther arriving at Strahnbrad already a
+// level-10 paladin. Ignored, it burned Levelupcaster.mdx over him mid-cinematic.
+console.log("\n…and `showEyeCandy` is a knob, not a comment");
+{
+  const w = world();
+  // `Huth` is Uther the Lightbringer, the very hero Human01 names.
+  const uther = spawn(w, UNITS.get("Huth") ? "Huth" : "Hart");
+  w.drainLevelUps();
+  w.setHeroLevel(uther.id, 10, false);
+  check("a script that seats a hero plays no nova", w.drainLevelUps().length, 0);
+  check("…but he is level 10 all the same", uther.level, 10);
+
+  const loud = spawn(w, "Hart");
+  w.drainLevelUps();
+  w.setHeroLevel(loud.id, 4, true);
+  check("showEyeCandy true still flashes, once per rank crossed", w.drainLevelUps().length, 3);
+
+  // The XP writers take the same flag, for the levels the new bar crosses.
+  const quiet = spawn(w, "Hart");
+  w.drainLevelUps();
+  w.addHeroXp(quiet.id, 100000, false);
+  check("AddHeroXP obeys it too", [w.drainLevelUps().length, quiet.level > 1], [0, true]);
+}
+
 console.log("\nhe keeps his BELT, slot for slot");
 {
   const w = world();

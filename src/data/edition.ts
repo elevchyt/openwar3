@@ -51,7 +51,10 @@ export function setEdition(next: Edition): void {
   for (const fn of listeners) fn(next);
 }
 
-/** Subscribe to edition changes; returns the unsubscribe. */
+/** Subscribe to anything that moves the object tables underfoot — an edition switch, or a
+ *  match whose map reads the other data set (`setMapDataSet`). Every listener is a cache that
+ *  parsed a table and must drop it; both events mean the same thing to one.
+ *  Returns the unsubscribe. */
 export function onEditionChange(fn: (e: Edition) => void): () => void {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -68,5 +71,45 @@ export function versionIndex(): 0 | 1 {
   return current === "roc" ? 0 : 1;
 }
 
-/** The data-set folder Reign of Chaos reads its object tables out of (src/vfs/edition.ts). */
+/**
+ * Which of the install's four OBJECT-TABLE sets is underfoot — a **melee** map's or a
+ * **custom** one's (docs/editions.md).
+ *
+ * 1.30 splits the balance two ways, not one. Beside the live `Units\*` tables the store keeps
+ * three more complete copies of them, at `Melee_V0\`, `Custom_V1\` and `Custom_V0\`: the
+ * VERSION is the edition (`_V0` Reign of Chaos, `_V1` The Frozen Throne — the same suffix
+ * war3skins keys wear) and the WORD is whether the map is a melee map or anything else. The
+ * live paths are the fourth corner, Melee/TFT, which is why there is no `Melee_V1\` folder.
+ *
+ * The two halves of a version are NOT the same numbers. Melee carries the balance patches
+ * 1.29+ made — a Knight at 835, a Headhunter at 375, an Archer down to 260 — and Custom is
+ * frozen where the expansion shipped, so a CAMPAIGN chapter (a custom map, every one of them)
+ * plays on the numbers it was written for. In Reign of Chaos that is exactly how a Grunt comes
+ * to have **680** hit points in Scourge of Lordaeron and 700 in a melee game: `Custom_V0`'s
+ * `UnitBalance.slk` says 680 and every other set says 700.
+ */
+export type MapDataSet = "melee" | "custom";
+
+let dataSet: MapDataSet = "melee";
+
+/** Which set the next table read will come from. Set from the map's own w3i melee flag
+ *  (world/mapKind.ts) as a match starts, before anything parses a table. */
+export function setMapDataSet(next: MapDataSet): void {
+  if (next === dataSet) return;
+  dataSet = next;
+  for (const fn of listeners) fn(current);
+}
+
+export function mapDataSet(): MapDataSet {
+  return dataSet;
+}
+
+/** The folder the object tables are read out of right now, or `null` for the live paths —
+ *  which ARE the fourth corner, The Frozen Throne's melee tables (src/vfs/edition.ts). */
+export function dataSetFolder(): string | null {
+  if (dataSet === "custom") return current === "roc" ? "Custom_V0" : "Custom_V1";
+  return current === "roc" ? ROC_DATA_SET : null;
+}
+
+/** The data-set folder Reign of Chaos reads its MELEE object tables out of. */
 export const ROC_DATA_SET = "Melee_V0";

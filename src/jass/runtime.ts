@@ -657,12 +657,15 @@ export interface EngineHooks {
   resetUnitCooldown?(unitId: number): void;
   /** GetHeroLevel / GetUnitLevel — a hero's level (0 for a non-hero). */
   getUnitLevel?(unitId: number): number;
-  /** SetHeroLevel — level the hero up to `level` (WC3 never levels one down). */
-  setHeroLevel?(unitId: number, level: number): void;
-  /** GetHeroXP / SetHeroXP / AddHeroXP — the hero's experience. */
+  /** SetHeroLevel — level the hero up to `level` (WC3 never levels one down). `eyeCandy` is
+   *  the native's own `showEyeCandy`: the level-up NOVA, which a script seating a hero at the
+   *  level the story gives him turns off (SimWorld.levelUp). */
+  setHeroLevel?(unitId: number, level: number, eyeCandy: boolean): void;
+  /** GetHeroXP / SetHeroXP / AddHeroXP — the hero's experience. Both writers take the same
+   *  `showEyeCandy` flag `SetHeroLevel` does, for the levels the new bar crosses. */
   getHeroXp?(unitId: number): number;
-  setHeroXp?(unitId: number, xp: number): void;
-  addHeroXp?(unitId: number, xp: number): void;
+  setHeroXp?(unitId: number, xp: number, eyeCandy: boolean): void;
+  addHeroXp?(unitId: number, xp: number, eyeCandy: boolean): void;
   /** GetHeroSkillPoints / UnitModifySkillPoints — unspent skill points. */
   getHeroSkillPoints?(unitId: number): number;
   modifySkillPoints?(unitId: number, delta: number): boolean;

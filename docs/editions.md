@@ -27,27 +27,55 @@ black lifts. The choice is remembered (`localStorage` `openwar3.edition`).
 
 ### 1. The object tables — a data set, laid over the live paths
 
-A 1.30.4 store keeps Reign of Chaos's tables one folder down, at the same path under
-`Melee_V0\`:
+A 1.30.4 store keeps THREE more complete copies of the object tables one folder down, at the
+same paths under `Melee_V0\`, `Custom_V1\` and `Custom_V0\`. They are a 2×2, and the live
+paths are the fourth corner:
 
-| RoC twin | what it is |
+|  | The Frozen Throne | Reign of Chaos |
+|---|---|---|
+| **melee map** | the live `Units\*` (there is no `Melee_V1\`) | `Melee_V0\` |
+| **anything else** | `Custom_V1\` | `Custom_V0\` |
+
+Each folder carries the same set:
+
+| twin | what it is |
 |---|---|
-| `Melee_V0\Units\*` (85 files) | every unit/ability/upgrade/item table — 469 UnitBalance rows against the expansion's 837, no fourth heroes, no shops, no tavern |
-| `Melee_V0\Scripts\{human,orc,undead,elf}.ai` + `*.pld` | RoC's own melee AI scripts (a different codebase from the expansion's) |
-| `Melee_V0\UI\Framedef\InfoPanelStrings.fdf` | armour tips that describe RoC's damage table |
+| `<set>\Units\*` (85 files) | every unit/ability/upgrade/item table — RoC's are 469 UnitBalance rows against the expansion's 837, no fourth heroes, no shops, no tavern |
+| `<set>\Scripts\{human,orc,undead,elf}.ai` + `*.pld` | that set's own melee AI scripts (V0's are a different codebase from V1's) |
+| `<set>\UI\Framedef\InfoPanelStrings.fdf` | armour tips that describe that set's damage table |
 
-`EditionDataSource` (`src/vfs/edition.ts`) is the whole rule: **while on Reign of Chaos, a path
-with a `Melee_V0\` twin reads the twin.** It wraps both storages at `loadProfile`, the one door
-every install passes through, and it asks the switch at every lookup — so anything that parsed
-a table BEFORE a switch still holds the other game's copy. A match builds its tables fresh; the
-two module-level caches that outlive one (`mapBrowser`'s unit registry, the hotkey editor's
-catalog) drop themselves on `onEditionChange`.
+`EditionDataSource` (`src/vfs/edition.ts`) is the whole rule: **a path with a twin under the
+folder `dataSetFolder()` names reads the twin.** It wraps both storages at `loadProfile`, the one
+door every install passes through, and it asks both switches at every lookup — so anything that
+parsed a table BEFORE a switch still holds the other set's copy. A match builds its tables
+fresh (`MapViewerScene.syncDataSet`, which re-reads the five registries when the set underfoot
+has moved); the two module-level caches that outlive a match (`mapBrowser`'s unit registry, the
+hotkey editor's catalog) drop themselves on `onEditionChange`, which BOTH switches fire.
 
-Why `Melee_V0` and not `Custom_V0`: the World Editor names the folders "Melee (Latest Patch)"
-and "Custom (1.01)". The expansion side reads the latest tables for every map, so the RoC side
-does too. `Custom_V1` is the expansion's own "Custom" snapshot and is unused.
+**Why both axes.** The edition is the obvious one — see the armour-class count below. The map
+KIND is the one that is easy to miss, and it is not cosmetic: the melee sets carry the balance
+patches 1.29+ made and the custom sets are frozen where each game shipped, so the same unit is
+two units depending on which kind of map you are on.
 
-An MPQ-era install has no `Melee_V0\`, so it reads the same tables in both editions.
+| | melee (latest) | custom (as shipped) |
+|---|---|---|
+| Knight | 835 | 800 |
+| Troll Headhunter | 375 | 350 |
+| Archer | 260 | 310 |
+| Flying Machine | 250 | 175 |
+| **Grunt, Reign of Chaos** | **700** | **680** |
+
+70 units differ in hit points alone between the expansion's two sets. The Grunt is the row this
+was found through: a Grunt in Scourge of Lordaeron has 680 hit points in the reference client
+and had 700 here, because a campaign chapter is a CUSTOM map and every set but `Custom_V0`
+says 700.
+
+The map kind is taken from the w3i melee flag (`world/mapKind.ts`), which is the same bit the
+whole client already uses to decide melee rules against a map's own triggers; `startGame` sets
+it before a byte of the map is read, and `exitToMenu` puts it back on melee so the shell's own
+table reads (map previews, the hotkey cards, tooltips) describe the ordinary game.
+
+An MPQ-era install has none of the three folders, so it reads the same tables throughout.
 
 **How much this moves is the reason it is tested rather than assumed.** The two games are not a
 reskin of each other: **232 of the 468 units they both carry change ARMOUR CLASS**, and the
@@ -66,21 +94,37 @@ to start answering with Reign of Chaos's tables the moment the button is pressed
 true one layer up — the viewer's base SLK blob urls are built per MATCH (`MapViewerScene.create`),
 so they are the current edition's too.
 
-One thing here is a READING rather than a fact from the files, and it is flagged because a
-campaign chapter is the case that tests it: a Reign of Chaos map's w3i is version 18 and carries
-no "Game Data Set" field at all (Human01's flags are `0x1C69` — no melee bit, no data-set word),
-so nothing in the map says which of `Melee_V0` and `Custom_V0` to read it with. We read every
-RoC map with `Melee_V0`. The two disagree about **11 of 468 units**, and the Raider is one of
-them (Light on Melee_V0, Heavy on Custom_V0) — so if a chapter ever turns out to want the 1.01
-snapshot, that is the list to check. `InfoPanelStrings.fdf` keeps armour tips for both
-(`ARMORTIP_*_V0M` and `ARMORTIP_*_V0C`), which is what says the engine really does use both.
+**A map states the kind and not the set.** A Reign of Chaos map's w3i is version 18 and carries
+no "Game Data Set" field at all (Human01's flags are `0x1C69` — no melee bit, no data-set word);
+the field the World Editor exposes as "Melee (Latest Patch)" / "Custom (1.01)" only exists in
+much later w3i versions, and 1.30.4 ships none of them. So the engine derives it, and the one
+thing every map DOES state is the melee bit — which is what the table above keys on. The
+install says the same thing in its own strings: `InfoPanelStrings.fdf` keeps a full set of
+armour and damage tips suffixed **`_V0M`** and **`_V0C`** — Melee and Custom of version 0 — and
+they do not agree ("Medium armor takes extra damage from Magic attacks" against "All attacks do
+full damage to Medium armor"). A file that describes both is a file for an engine that reads
+both.
 
 ### 2. `Units\MiscGame.txt` — compiled in, so restated
 
 The gameplay constants are literals in `src/data/gameplayConstants.ts` (checked by
 `pnpm data:verify`), which the VFS overlay cannot reach. `MISC_GAME_V0` restates the rows
 Reign of Chaos's copy disagrees on, and `pnpm data:verify` checks it against
-`Melee_V0\Units\MiscGame.txt`. The ones the sim reads:
+`Melee_V0\Units\MiscGame.txt`.
+
+**This file is keyed on the EDITION only, and that is checked rather than assumed.** Compared
+key by key across all four sets, every `DamageBonus*` row and every XP rule
+(`HeroFactorXP`, `GlobalExperience`, `MaxLevelHeroesDrainExp`, `BuildingKillsGiveExp`) is
+identical between a version's melee and custom copies — so a campaign chapter is graded by its
+edition's table, which is what `damageTable()` already answers with. Exactly **one** number in
+this file moves with the map kind and is therefore still the melee value everywhere:
+`DamageBonusSpells` against HERO armour is 0.70 on the expansion's melee tables and 0.75 in the
+other three sets. Reaching it would mean a third compiled-in block and a third precomputed
+damage table for five percentage points on one attack/armour pair, so it is written down here
+instead. The kind-dependent BOOLEANS in the same file (the Illusion rows, the Drain rows,
+`CycloneStasis`, `MoveSpeedBonusesStack`…) are in the same position.
+
+The ones the sim reads:
 
 | key | TFT | RoC | read by |
 |---|---|---|---|

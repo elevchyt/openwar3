@@ -167,7 +167,14 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   Reign of Chaos ↔ The Frozen Throne through black. Nearly all of RoC is DATA already in the
   install: its object tables are a data set at `Melee_V0\<same path>`, laid over the live paths
   by `EditionDataSource` at the install door and asked at EVERY lookup (so a cache that outlives
-  a switch must drop itself on `onEditionChange`); its glue art, music and campaign file are the
+  a switch must drop itself on `onEditionChange`). **The data set is a 2×2, not a pair**
+  (`dataSetFolder()`): the version is the edition and the WORD is the MAP KIND, so a melee map
+  reads the live tables or `Melee_V0\` and everything else — a campaign chapter, a scenario, a
+  custom map — reads `Custom_V1\` or `Custom_V0\`. Melee carries the balance patches 1.29+
+  made and custom is frozen where each game shipped, which is the whole of why a Grunt has
+  **680** hit points in Scourge of Lordaeron and 700 in a melee game (70 units differ in hit
+  points between the expansion's two sets alone). The kind is the w3i melee flag, set by
+  `startGame` before a table is parsed and put back to melee by `exitToMenu`; its glue art, music and campaign file are the
   `_V0` twins of versioned war3skins keys (`skinVersionSuffix()`, never a literal `_V1`); and
   `VersionGet()` answers the switch so Blizzard.j picks 750/200 and a three-hero roll itself.
   Two things are NOT data and are restated: `MISC_GAME_V0` (RoC's `MiscGame.txt` rows —

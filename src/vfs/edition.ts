@@ -1,24 +1,29 @@
 import type { DataSource } from "./types";
-import { isRoc, ROC_DATA_SET } from "../data/edition";
+import { dataSetFolder } from "../data/edition";
 
-// The Reign of Chaos DATA SET, laid over the live paths (docs/editions.md).
+// The DATA SET, laid over the live paths (docs/editions.md).
 //
-// A 1.30.4 store keeps the expansion's object tables at their ordinary paths (`Units\UnitData.slk`)
-// and Reign of Chaos's copies one folder down, at the SAME path under `Melee_V0\` — every
-// `Units\*` table, the four melee `Scripts\*.ai` with their `.pld`s, and
-// `UI\FrameDef\InfoPanelStrings.fdf` (whose armour tips describe RoC's damage table). That is the
-// whole of the rule, so it is written as one: while the client is on Reign of Chaos, a path that
-// has a `Melee_V0\` twin reads the twin.
+// A 1.30.4 store keeps ONE set of object tables at their ordinary paths (`Units\UnitData.slk`)
+// and THREE more complete copies one folder down, at the SAME path under `Melee_V0\`,
+// `Custom_V1\` and `Custom_V0\` — every `Units\*` table, the melee `Scripts\*.ai` with their
+// `.pld`s, and `UI\FrameDef\InfoPanelStrings.fdf` (whose armour tips describe the set's own
+// damage table). That is the whole of the rule, so it is written as one: a path that has a twin
+// under the folder `dataSetFolder()` names reads the twin.
 //
-// Why `Melee_V0` and not `Custom_V0`: the World Editor names the pair "Melee (Latest Patch)" and
-// "Custom (1.01)" (UI\WorldEditStrings.txt `WESTRING_GAMEDATASET_*`). The expansion side of this
-// client reads the latest tables for every map, melee or custom alike, and its RoC side does the
-// same — the balance a Reign of Chaos player last played on.
+// The four corners are (edition × map kind), and the LIVE paths are the fourth — The Frozen
+// Throne's MELEE tables — which is why the store ships no `Melee_V1\`. Both axes matter and
+// each was learned the hard way:
+//   • the EDITION, because 232 of the 468 units the two games share change armour class
+//     (docs/editions.md);
+//   • the MAP KIND, because melee carries the balance patches 1.29+ made and custom is frozen
+//     where the game shipped. A campaign chapter is a custom map, so on Reign of Chaos its
+//     Grunt has `Custom_V0`'s **680** hit points and not the 700 every other set gives it.
 //
-// The switch is read at EVERY lookup rather than baked in, because the menu flips it on a mounted
-// install. Anything that parsed a table before the flip still holds the old edition's copy; the
-// things that cache across matches are told through `onEditionChange` (src/data/edition.ts).
-// An MPQ-era install has no `Melee_V0\` at all, so it reads the live tables in both editions.
+// Both are read at EVERY lookup rather than baked in, because the menu flips the edition on a
+// mounted install and every match may bring the other kind of map. Anything that parsed a table
+// before the flip still holds the old set's copy; the things that cache across matches are told
+// through `onEditionChange`, which both switches fire (src/data/edition.ts).
+// An MPQ-era install has none of the four folders, so it reads the live tables throughout.
 
 export class EditionDataSource implements DataSource {
   constructor(private base: DataSource) {}
@@ -27,10 +32,11 @@ export class EditionDataSource implements DataSource {
     return this.base.label;
   }
 
-  /** The path the current edition reads `path` from. */
+  /** The path the current edition + map kind reads `path` from. */
   private resolve(path: string): string {
-    if (!isRoc()) return path;
-    const twin = `${ROC_DATA_SET}\\${path.replace(/\//g, "\\").replace(/^\\+/, "")}`;
+    const set = dataSetFolder();
+    if (set === null) return path;
+    const twin = `${set}\\${path.replace(/\//g, "\\").replace(/^\\+/, "")}`;
     return this.base.exists(twin) ? twin : path;
   }
 

@@ -28,18 +28,28 @@ import { profileKey } from "./profiles";
 const STORAGE_KEY = "openwar3.campaigns";
 const DIFFICULTY_KEY = "openwar3.campaignDifficulty";
 
-/** The three the campaign screens offer (CustomCampaignMenu.fdf's own menu items:
- *  EASY / NORMAL / HARD). */
+/**
+ * common.j's `gamedifficulty` rungs, by name — MAP_DIFFICULTY_EASY / NORMAL / HARD.
+ *
+ * All three are real: a chapter runs at any of them and `GetGameDifficulty` answers with any
+ * of them. Only two are ever OFFERED — see `DIFFICULTIES` in ui/fdfCampaign.ts. Easy is
+ * reached exclusively by losing and taking the defeat dialog's Reduce Difficulty
+ * (`CustomDefeatReduceDifficultyBJ`), which is why the name stays here while the campaign
+ * screens no longer list it.
+ */
 export type Difficulty = "easy" | "normal" | "hard";
 
-const DIFFICULTIES: Difficulty[] = ["easy", "normal", "hard"];
+/** What may be REMEMBERED as the player's choice: the rungs the screens offer. A profile that
+ *  stored "easy" before the menu was corrected — or by hand — reads back as Normal, the
+ *  game's own default, rather than as a row that is no longer on the menu. */
+const OFFERED: Difficulty[] = ["normal", "hard"];
 
 /** The difficulty the player last chose — remembered between visits, as the reference
  *  remembers it per profile. WC3's own default is Normal. */
 export function loadDifficulty(): Difficulty {
   try {
     const raw = localStorage.getItem(profileKey(DIFFICULTY_KEY)) as Difficulty | null;
-    return raw && DIFFICULTIES.includes(raw) ? raw : "normal";
+    return raw && OFFERED.includes(raw) ? raw : "normal";
   } catch {
     return "normal";
   }

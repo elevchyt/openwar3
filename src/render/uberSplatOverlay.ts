@@ -102,6 +102,17 @@ export interface SplatOptions {
   additive?: boolean;
   mask?: boolean;
   alpha?: number;
+  /**
+   * Draw the splat FLAT at this world height instead of conforming to the terrain.
+   *
+   * For a WALKABLE DESTRUCTIBLE's deck — a bridge, a ramp, one of the platforms a mapmaker
+   * builds an upper storey out of (docs/walkable-destructibles.md). The terrain under a bridge
+   * is the streambed it spans, so the ordinary corner-by-corner tessellation puts a unit's
+   * selection circle in the river, hundreds of units below the planks the unit is standing on.
+   * A deck is its own floor and has no terrain corners to follow, so one quad is the whole of
+   * it.
+   */
+  floor?: number;
 }
 
 interface CachedTexture {
@@ -152,7 +163,7 @@ export class UberSplatOverlay {
   add(id: string | number, x: number, y: number, scale: number, texture: string, opts?: SplatOptions): void {
     const key = String(id);
     this.remove(key); // drop any prior geometry for this id
-    const { pos, uv, count } = this.buildGeometry(x, y, scale);
+    const { pos, uv, count } = this.buildGeometry(x, y, scale, opts?.floor);
     if (count === 0) return;
     const gl = this.gl;
     const posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
@@ -200,7 +211,19 @@ export class UberSplatOverlay {
    *  sits at the terrain's own height (cornerHeight·CELL) so the decal is coplanar
    *  with the ground; UVs map the [center ± scale] box to [0,1]. Non-indexed tris,
    *  BR–TL diagonal to match the viewer's terrain + the fog mesh. */
-  private buildGeometry(cx: number, cy: number, scale: number): { pos: Float32Array; uv: Float32Array; count: number } {
+  private buildGeometry(cx: number, cy: number, scale: number, floor?: number): { pos: Float32Array; uv: Float32Array; count: number } {
+    // A splat on a DECK follows no terrain: one quad at the deck's own height (see
+    // SplatOptions.floor). Same two triangles and the same UV box as a cell of the
+    // tessellation below, so nothing downstream can tell the two apart.
+    if (floor !== undefined) {
+      const z = floor + LIFT;
+      const x0 = cx - scale, x1 = cx + scale, y0 = cy - scale, y1 = cy + scale;
+      return {
+        pos: new Float32Array([x0, y0, z, x1, y0, z, x0, y1, z, x1, y0, z, x1, y1, z, x0, y1, z]),
+        uv: new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]),
+        count: 6,
+      };
+    }
     const { width, height, centerOffset, corners } = this.terrain;
     const ox = centerOffset[0];
     const oy = centerOffset[1];

@@ -12,7 +12,7 @@
 
 import { intToRawcode } from "../lexer";
 import type { JassUnit, NativeCtx, Runtime } from "../runtime";
-import { asInt, jBool, jInt, JNULL, type JassValue } from "../values";
+import { asInt, jBool, jInt, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -75,11 +75,15 @@ export function registerAbilityNatives(rt: Runtime): void {
   };
   def(rt, "GetHeroLevel", (c, a) => level(c, a[0]));
   def(rt, "GetUnitLevel", (c, a) => level(c, a[0]));
-  // SetHeroLevel(hero, level, showEyeCandy) — the eye-candy flag is the level-up nova,
-  // which our sim plays on every level-up anyway (drainLevelUps), so it's not a knob.
+  // SetHeroLevel(hero, level, showEyeCandy) — the eye-candy flag is the level-up NOVA
+  // (Levelupcaster.mdx and its fanfare), and it is a real knob: a map that seats a hero at
+  // the level the story says he is passes FALSE and the reference client plays nothing.
+  // Human01 opens with `SetHeroLevel( gg_unit_Huth_0024, 10, false )` — Uther arriving at
+  // Strahnbrad already a level-10 paladin — and ignoring it flashed the nova over him in the
+  // middle of the cinematic.
   def(rt, "SetHeroLevel", (c, a) => {
     const id = simOf(c, a[0]);
-    if (id !== undefined) c.rt.hooks?.setHeroLevel?.(id, asInt(a[1]));
+    if (id !== undefined) c.rt.hooks?.setHeroLevel?.(id, asInt(a[1]), truthy(a[2]));
     return JNULL;
   });
   def(rt, "GetHeroXP", (c, a) => {
@@ -88,12 +92,12 @@ export function registerAbilityNatives(rt: Runtime): void {
   });
   def(rt, "SetHeroXP", (c, a) => {
     const id = simOf(c, a[0]);
-    if (id !== undefined) c.rt.hooks?.setHeroXp?.(id, asInt(a[1]));
+    if (id !== undefined) c.rt.hooks?.setHeroXp?.(id, asInt(a[1]), truthy(a[2]));
     return JNULL;
   });
   def(rt, "AddHeroXP", (c, a) => {
     const id = simOf(c, a[0]);
-    if (id !== undefined) c.rt.hooks?.addHeroXp?.(id, asInt(a[1]));
+    if (id !== undefined) c.rt.hooks?.addHeroXp?.(id, asInt(a[1]), truthy(a[2]));
     return JNULL;
   });
   def(rt, "GetHeroSkillPoints", (c, a) => {

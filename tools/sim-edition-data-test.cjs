@@ -23,7 +23,7 @@ const fs = require("node:fs");
 const REPO = join(__dirname, "..");
 fs.writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { EditionDataSource } = require(join(REPO, ".sim-build", "src", "vfs", "edition.js"));
-const { setEdition, isRoc, ROC_DATA_SET } = require(join(REPO, ".sim-build", "src", "data", "edition.js"));
+const { setEdition, isRoc, ROC_DATA_SET, setMapDataSet, mapDataSet, dataSetFolder } = require(join(REPO, ".sim-build", "src", "data", "edition.js"));
 const { loadUnitRegistry } = require(join(REPO, ".sim-build", "src", "data", "units.js"));
 const { damageTable, damageMultiplier } = require(join(REPO, ".sim-build", "src", "data", "gameplayConstants.js"));
 
@@ -159,6 +159,64 @@ console.log("\nthe switch is read at every lookup");
   check("isRoc() agrees", isRoc(), true);
 }
 
+// THE SECOND AXIS. The edition is only half of which tables a match plays on: the install keeps
+// FOUR complete sets, (Reign of Chaos | expansion) × (melee | custom), and the map's own w3i
+// melee flag picks the second half. Melee carries the balance patches 1.29+ made; custom is
+// frozen where the game shipped, so every campaign chapter, scenario and custom map plays on
+// the numbers it was written for.
+//
+// The report this was written for: a Grunt in Scourge of Lordaeron with 700 hit points where
+// the reference client gives it 680. Nothing in either MELEE table says 680 — only
+// `Custom_V0\Units\UnitBalance.slk` does.
+console.log("\nthe map KIND picks the other half of the set");
+{
+  const same = (a, b) => a !== null && b !== null && a.length === b.length && a.every((v, i) => v === b[i]);
+  const has = (folder) => base.exists(`${folder}\\Units\\UnitBalance.slk`);
+  if (!has("Custom_V0") || !has("Custom_V1")) {
+    console.log("skip  no extracted Custom_V0/Custom_V1 data set");
+  } else {
+    setEdition("tft");
+    check("a melee map on the expansion reads the LIVE tables (the fourth corner)", dataSetFolder(), null);
+    setMapDataSet("custom");
+    check("…and a custom one reads Custom_V1", dataSetFolder(), "Custom_V1");
+    check("…which is what the path resolves to",
+      same(vfs.rawBytes("Units\\UnitBalance.slk"), base.rawBytes("Custom_V1\\Units\\UnitBalance.slk")), true);
+    setEdition("roc");
+    check("Reign of Chaos + custom is Custom_V0", dataSetFolder(), "Custom_V0");
+    setMapDataSet("melee");
+    check("…and Reign of Chaos + melee is back to Melee_V0", dataSetFolder(), ROC_DATA_SET);
+
+    // The number the report was about, read through the registry a match is actually built from.
+    setEdition("roc");
+    setMapDataSet("melee");
+    const rocMelee = loadUnitRegistry(vfs);
+    setMapDataSet("custom");
+    const rocCustom = loadUnitRegistry(vfs);
+    setEdition("tft");
+    setMapDataSet("custom");
+    const tftCustom = loadUnitRegistry(vfs);
+    check("the Grunt: 680 in a Reign of Chaos CAMPAIGN, 700 in a Reign of Chaos melee game",
+      [rocCustom.get("ogru").hitPoints, rocMelee.get("ogru").hitPoints], [680, 700]);
+    check("…and 700 on the expansion, which is why only RoC showed it",
+      tftCustom.get("ogru").hitPoints, 700);
+    // The melee-only balance patches, from the other direction: these three are 1.29+ changes
+    // that a custom map must never see.
+    check("the Knight, the Headhunter and the Archer keep their shipped hit points on a custom map",
+      [tftCustom.get("hkni").hitPoints, tftCustom.get("ohun").hitPoints, tftCustom.get("earc").hitPoints],
+      [800, 350, 310]);
+    setMapDataSet("melee");
+    const tftMelee = loadUnitRegistry(vfs);
+    check("…and the patched ones on a melee map",
+      [tftMelee.get("hkni").hitPoints, tftMelee.get("ohun").hitPoints, tftMelee.get("earc").hitPoints],
+      [835, 375, 260]);
+    check("that is not a handful of units either",
+      [...tftMelee.defs.keys()].filter((id) => tftCustom.defs.get(id) && tftCustom.defs.get(id).hitPoints !== tftMelee.defs.get(id).hitPoints).length > 50,
+      true);
+  }
+}
+
 setEdition("tft"); // leave the module as the suite found it
+setMapDataSet("melee");
+check("the module is left on the melee tables", [isRoc(), mapDataSet()], [false, "melee"]);
 console.log(failed ? `\neditions: ${failed} check(s) FAILED` : "\neditions: all checks passed");
 process.exit(failed ? 1 : 0);

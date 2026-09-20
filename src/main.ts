@@ -15,7 +15,7 @@ import { mountCampaignScreen, type CampaignScreenState } from "./ui/fdfCampaign"
 import { mountCustomCampaignScreen } from "./ui/fdfCustomCampaign";
 import { mountViewReplayScreen } from "./ui/fdfViewReplay";
 import { creditsMap, loadCampaigns, type Campaign, type CampaignEntry } from "./data/campaigns";
-import { isRoc, setEdition } from "./data/edition";
+import { isRoc, setEdition, setMapDataSet } from "./data/edition";
 import {
   isCampaignOpen, loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
 } from "./data/campaignProgress";
@@ -761,6 +761,13 @@ async function startGame(
 ): Promise<void> {
   meleeConfig = config;
   matchLink = link ?? null;
+  // WHICH OBJECT TABLES THIS MATCH PLAYS ON, before a byte of the map is read and before any
+  // table is parsed. The install keeps four complete sets and the map's own w3i melee flag
+  // picks between two of them (src/data/edition.ts, src/vfs/edition.ts): a melee map plays on
+  // the latest balance, everything else — a campaign chapter, a scenario, a custom map — on the
+  // set frozen where the game shipped. It is what gives a Reign of Chaos campaign Grunt its 680
+  // hit points instead of a melee game's 700.
+  setMapDataSet(info.isMelee ? "melee" : "custom");
   // The menus LEAVE the way they always leave (issue #78): the panel's contents fade out and
   // the chrome slides up on its own "<Screen> Death" clip, whooshes and all, and only then
   // does the loading screen appear. Awaited, so the two never overlap — and awaited BEFORE the
@@ -1071,6 +1078,11 @@ function endMatch(): void {
  *  the main menu over its animated 3D scene. A fresh scene is built next game. */
 function exitToMenu(): void {
   endMatch();
+  // …and back onto the MELEE tables. The menus read object data too — the Custom Game screen's
+  // map previews, the hotkey editor's cards, every tooltip — and the set a chapter left behind
+  // is not the one the shell should be describing. The next match sets it again from its own
+  // map (startGame).
+  setMapDataSet("melee");
   document.body.classList.remove("in-game"); // reveal the main-menu panel again
   const vfs = resolver.installSource;
   // A campaign chapter returns to the chapter LIST it was started from — the reference drops

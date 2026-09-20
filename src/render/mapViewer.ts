@@ -1,5 +1,5 @@
 import War3MapViewer from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/viewer";
-import { isRoc } from "../data/edition";
+import { dataSetFolder, isRoc } from "../data/edition";
 import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import type { DataSource } from "../vfs/types";
 import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
@@ -1424,6 +1424,10 @@ export class MapViewerScene {
   /** UI\war3skins.txt, parsed once — see skinPath(). */
   private skins: Map<string, Map<string, string>> | undefined;
   private strings!: CommandStrings; // Units\commandstrings.txt [Errors] — every refusal line
+  /** Which of the install's four object-table sets the five registries below were read from
+   *  (src/data/edition.ts). The scene outlives a match, so the NEXT map may want the other
+   *  one — see syncDataSet. */
+  private dataSet: string | null = dataSetFolder();
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -1574,9 +1578,32 @@ export class MapViewerScene {
     return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), loadTechRegistry(vfs), loadUpgradeRegistry(vfs), solver, sounds);
   }
 
+  /**
+   * Re-read the object tables when the map about to load plays on a different set from the
+   * one in hand — a melee game after a campaign chapter, or either after the edition button.
+   *
+   * The scene is built ONCE and kept for the life of the page, so the five registries it was
+   * handed at `create` are the set that was current then. `EditionDataSource` resolves every
+   * path afresh (src/vfs/edition.ts), so re-running the loaders is the whole of the rebuild;
+   * nothing else in the scene holds a parsed table, and everything that reads one — the
+   * RtsController included — is built after `loadMap` from these same fields.
+   */
+  private syncDataSet(): void {
+    const want = dataSetFolder();
+    if (want === this.dataSet) return;
+    this.dataSet = want;
+    this.registry = loadUnitRegistry(this.vfs);
+    this.abilities = loadAbilityRegistry(this.vfs);
+    this.items = loadItemRegistry(this.vfs);
+    this.tech = loadTechRegistry(this.vfs);
+    this.upgrades = loadUpgradeRegistry(this.vfs);
+    this.strings = loadCommandStrings(this.vfs);
+  }
+
   /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map. */
   loadMap(bytes: Uint8Array): void {
     syncCanvasSize(this.canvas);
+    this.syncDataSet();
     // Drop the previous map's scene so reloading doesn't stack renders.
     const prev = this.viewer.map?.worldScene;
     if (prev) this.viewer.removeScene(prev);
@@ -6653,7 +6680,7 @@ export class MapViewerScene {
    *  fades a hover ring. `live` collects the keys painted this frame for pruning. */
   private addRing(
     key: string,
-    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; allegiance: "own" | "neutral" | "enemy"; isBuilding?: boolean } | null,
+    info: { x: number; y: number; z: number; deck?: number; radius: number; owner: number; team: number; allegiance: "own" | "neutral" | "enemy"; isBuilding?: boolean } | null,
     tint: number[] | null,
     dim: boolean,
     live: Set<string>,
@@ -6683,7 +6710,9 @@ export class MapViewerScene {
     // bright grass as well as dark dirt (the real ring BLP is a hairline built for additive
     // blend that washes out as a terrain splat — issue #34 f/u). The BLP is still named so
     // the entry loads/draws; its pixels are ignored.
-    this.ringSplats.add(key, info.x, info.y, half, texture, { tint: [vcolor[0], vcolor[1], vcolor[2]], mask: true });
+    // …and on a BRIDGE it is painted on the planks rather than tessellated over the streambed
+    // below them (RingInfo.deck, SplatOptions.floor).
+    this.ringSplats.add(key, info.x, info.y, half, texture, { tint: [vcolor[0], vcolor[1], vcolor[2]], mask: true, floor: info.deck });
     live.add(key);
   }
 

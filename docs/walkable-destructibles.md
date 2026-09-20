@@ -78,6 +78,27 @@ asks it: the drawn body (`this.loc[2]` in the per-frame unit sync), `standZ` (an
 selection rings, the flash rings and the screen projection a drag box uses), the move-order
 arrow, a selected ground item's ring and a rally flag.
 
+**And the CLICK RAY.** `RtsController.groundHit` marches the ray from the camera against
+`groundOrDeck`, not against the terrain — the deck is what the player is looking at, so it has
+to be what the player is clicking on. Marched against the terrain alone the ray sails straight
+through the planks and lands in the water some way past them: on Strahnbrad's bridge a
+right-click on the middle of the span came out **381 world units** away, and near the far end up
+to **600**. That is both halves of "bridges don't work properly" at once — the click that does
+not land where you clicked, and the crossing that then never happens, because the destination it
+did land on is a spot in the river that no unit can stand on. With the deck in the march the
+same three clicks land 0–2 units from the point aimed at.
+
+The only clicks that still miss are the ones the ARCH hides: a bridge is a curve, and from a
+shallow camera angle the crown genuinely occludes the far slope behind it. That is what the
+reference does too — you cannot click a piece of bridge you cannot see.
+
+**A ring drawn on a deck is drawn FLAT.** A selection circle is an ubersplat, and an ubersplat
+conforms to the terrain corner by corner (`render/uberSplatOverlay.ts`), which over a bridge
+puts it in the river hundreds of units below the unit it belongs to. `RingInfo.deck` carries the
+deck height when the unit is standing on one, and `SplatOptions.floor` then emits a single quad
+at that height instead of tessellating the ground. There are no terrain corners on a deck to
+follow and a deck is flat enough not to need any.
+
 Two things deliberately do NOT ask it:
 
 * **a building's seat**, which samples the tallest terrain its footprint spans (issue #15) —

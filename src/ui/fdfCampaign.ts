@@ -104,11 +104,21 @@ const SCENE_SPRITES = ["CampaignBackdrop", "SlidingDoors", "WarCraftIIILogo"];
 
 export type { Difficulty };
 
-/** The difficulty menu, as CustomCampaignMenu.fdf declares it: EASY / NORMAL / HARD, in that
- *  order, as GlobalStrings keys. Exported because that screen is real too (ui/fdfCustomCampaign.ts)
- *  and it is the same three rows out of the same file. */
+/**
+ * The difficulty menu, as GlobalStrings keys: **NORMAL / HARD**, in that order. Exported
+ * because the Custom Campaign screen is real too (ui/fdfCustomCampaign.ts) and it is the same
+ * two rows out of the same file.
+ *
+ * **EASY is not on it**, in either game. `GlobalStrings.fdf` does carry the string and
+ * common.j does carry the constant (`MAP_DIFFICULTY_EASY` 0), but nothing on the campaign
+ * screens ever picks it — the only way into Easy is **losing**. Blizzard.j says so in as many
+ * words: `CustomDefeatDialogBJ` offers "Reduce |CFFFFFFFFD|Rifficulty" only
+ * `if (GetGameDifficulty() != MAP_DIFFICULTY_EASY)`, and `CustomDefeatReduceDifficultyBJ`
+ * steps HARD→NORMAL→EASY and then stops ("Sorry, but it doesn't get any easier than this").
+ * A rung you can only fall to is not a rung you can start on, so offering it here handed the
+ * player a difficulty the reference client has no way to select.
+ */
 export const DIFFICULTIES: Array<{ value: Difficulty; key: string }> = [
-  { value: "easy", key: "EASY" },
   { value: "normal", key: "NORMAL" },
   { value: "hard", key: "HARD" },
 ];

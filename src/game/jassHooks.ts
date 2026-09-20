@@ -193,10 +193,10 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     selectHeroSkill: (id, abilityId) => sim.learnAbility(id, abilityId),
     resetUnitCooldown: (id) => sim.resetCooldowns(id),
     getUnitLevel: (id) => sim.units.get(id)?.level ?? 0,
-    setHeroLevel: (id, level) => sim.setHeroLevel(id, level),
+    setHeroLevel: (id, level, eyeCandy) => sim.setHeroLevel(id, level, eyeCandy),
     getHeroXp: (id) => sim.units.get(id)?.xp ?? 0,
-    setHeroXp: (id, xp) => sim.setHeroXp(id, xp),
-    addHeroXp: (id, xp) => sim.addHeroXp(id, xp),
+    setHeroXp: (id, xp, eyeCandy) => sim.setHeroXp(id, xp, eyeCandy),
+    addHeroXp: (id, xp, eyeCandy) => sim.addHeroXp(id, xp, eyeCandy),
     getHeroSkillPoints: (id) => sim.units.get(id)?.skillPoints ?? 0,
     modifySkillPoints: (id, delta) => sim.modifySkillPoints(id, delta),
     // --- per-unit flags (7.17) ---
