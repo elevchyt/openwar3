@@ -989,8 +989,14 @@ export class RtsController {
     seed: number,
     starts: ReadonlyArray<{ player: number; x: number; y: number }> = slots.map((s) => ({ player: s.player, x: s.startX, y: s.startY })),
     races: ReadonlyMap<number, PlayableRace> = new Map(slots.map((s) => [s.player, s.race])),
+    melee = false,
   ): void {
     this.meleeSeats = new Map(slots.map((s) => [s.player, s]));
+    // Is this a MELEE map? The lobby knows and the script does not, and it is the one thing
+    // `startMeleeAIFor` needs that it cannot read off the seat — see there. A new match says
+    // its piece again, so the note below is once per MATCH and not once per session.
+    this.meleeMap = melee;
+    this.warnedPlusOnCustom = false;
     // EVERY playing seat's start location, computers and people alike — what a Computer+ scout
     // walks its tour round (src/ai/plus/, `PlusHost.startLocations`). `slots` is only the
     // computers, so this is a second list rather than a projection of that one; it defaults to
@@ -1072,7 +1078,24 @@ export class RtsController {
     // own flag. It is the same seam, the same moment and the same arguments: the map's melee
     // script still decides WHO plays and as what, and only which of the two AI objects the seat
     // lands in changes. The two share no state, so a match may hold both.
-    if (seat.plus) {
+    //
+    // **On a CUSTOM map it is refused**, whatever the switch said. Computer+ is a MELEE player
+    // end to end (docs/computer-plus.md): a build order, an expansion clock, a tier-up ladder,
+    // a wave that sets off at another player's town. A custom map has none of those things to
+    // mean — its "computer" is whatever its own triggers make of the seat — so a Computer+
+    // seated there spends the match building a base the map never asked for, and every rule
+    // that reads the tech tree or the start locations is reading a melee shape that is not
+    // there. Blizzard's own AI is what such a map was written against and is what the seat
+    // gets: the switch is a melee setting, and this is where it stops being one.
+    //
+    // The two custom maps that DO have Computer+ are seated somewhere else entirely and are
+    // untouched by this — Extreme Candy War through `startCandyWarAI` and WarChasers through
+    // `startWarChasersAI`, each with its own AI object and its own rules for that one map
+    // (docs/candy-war-ai.md, docs/warchasers-ai.md). Neither goes through `StartMeleeAI`,
+    // because a scenario runs none of the melee library.
+    if (seat.plus && !this.meleeMap) {
+      this.warnOncePlusOnCustom();
+    } else if (seat.plus) {
       this.computerPlus?.add(player, race, seat.difficulty, seat.startX, seat.startY, this.meleeSeed);
       // …and no harvest bonus, at any difficulty. Computer+ does not cheat — see
       // docs/computer-plus.md and `AiPlayer.bypassFog`, which it also switches off.
@@ -1094,6 +1117,18 @@ export class RtsController {
     // gold a trip and runs dry on the same schedule as everybody's. An insane computer is
     // paid double for the same digging, not digging twice as fast.
     if (seat.difficulty === MELEE_INSANE) this.sim.setHarvestBonus(player, INSANE_HARVEST_FACTOR);
+  }
+
+  /** Was this match started on a MELEE map? Set by `prepareMeleeAI`; read by
+   *  `startMeleeAIFor`, which refuses Computer+ anywhere else. */
+  private meleeMap = false;
+  private warnedPlusOnCustom = false;
+  /** Say once, per match, that a Computer+ seat became a classic one — so a player who ticked
+   *  the box and then watched Blizzard's AI play is not left guessing. */
+  private warnOncePlusOnCustom(): void {
+    if (this.warnedPlusOnCustom) return;
+    this.warnedPlusOnCustom = true;
+    console.info("[ai] Computer+ is a melee player — on a custom map its seats play Blizzard's AI instead (docs/computer-plus.md).");
   }
 
   private meleeAi: MeleeAi | null = null;

@@ -28,6 +28,8 @@
     "../src/jass/natives/events.ts",
     "../src/jass/headless.ts",
     "../src/compat/prelude.ts",
+    "../src/compat/blzFields.ts",
+    "../src/jass/natives/blzFields.ts",
     "../src/compat/frames.ts",
     "../src/compat/lua/host.ts",
     "../src/data/objectData.ts",

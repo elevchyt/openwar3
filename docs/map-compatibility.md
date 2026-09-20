@@ -211,6 +211,8 @@ binding the existing `registerNatives` table into a Lua VM, not a second engine.
 | `reforged` ≠ `buildVersion` | **viewer patch** | one line, in `loadMapInformation` |
 | the 1.31 declarations | `src/compat/prelude.ts` | our own JASS, loaded after the install's `common.j` |
 | the 1.31 frame API | `src/compat/frames.ts` | none of it exists in 1.30.4; registered through a named seam |
+| the 1.31 field constants | `src/compat/blzFields.ts` | one table the prelude and the native are both generated from |
+| the field GETTERS | `src/jass/natives/blzFields.ts` + `game/jassHooks.ts` | the natives are natives; the row they read is the registry's |
 | hashtables | `src/jass/natives/hashtable.ts` | **not compat** — 1.30.4's own `common.j` declares them; they were simply unimplemented |
 | the Lua front end | `src/compat/lua/` | one Lua state over the running JASS runtime; a dynamic import, so it is its own bundle |
 | host functions | `src/jass/runtime.ts` + `interpreter.ts` | 6 lines: a third registry beside natives and JASS functions |
@@ -353,6 +355,39 @@ The result, on the corpus map: **10 645 of the map's own functions published, `c
 missing in exactly the same way.
 
 `unsupportedReason` now has one clause instead of two — a Lua map is a row like any other.
+
+**Step 7 — the object-FIELD accessors.** Testing the two JASS maps end to end left exactly one
+compatibility gap, and it had a gameplay effect rather than a cosmetic one:
+`BlzGetUnitIntegerField(u, UNIT_IF_PRIMARY_ATTRIBUTE)` read as an undefined global, so Balanced
+Hero Survival's trait system — which asks twelve times which attribute a hero is built on —
+put every bonus in the same place.
+
+The fix is the shape the earlier note predicted. **One table**
+([`src/compat/blzFields.ts`](../src/compat/blzFields.ts)) names every constant and what it
+reads; the prelude's `globals` block is GENERATED from it, and the native's lookup is the same
+array, so the two can never disagree about an index. The indices are ours, by the same argument
+as the damage event: a `ConvertUnitIntegerField(n)` never appears in a map file — the map writes
+the NAME.
+
+**One value in the family is not ours**, because a map compares against it as a literal.
+Balanced Hero Survival settles the primary attribute in its own trait trigger, where each branch
+modifies the attribute it has just tested for — `== 1` → `bj_HEROSTAT_STR`, `== 2` →
+`bj_HEROSTAT_INT`, `== 3` → `bj_HEROSTAT_AGI` — so **1 = strength, 2 = intelligence, 3 =
+agility**. That is deliberately NOT the World Editor's own order: `UI\UnitEditorData.txt`
+`[attributeType]` reads `00=AGI, 01=INT, 02=STR`, which is the dropdown's order and a different
+thing from the value the native answers with. Test of Balance uses the same three values on the
+same field, which corroborates the set without disambiguating it.
+
+**A getter reads the TYPE row**, out of the same registry everything else reads — so a map's own
+`war3map.w3u` edit is in the answer by construction. **A setter is refused**, once and in one
+place: `BlzSetUnitRealField` changes ONE unit while our object-data routing writes the TYPE
+(`UNIT_SETTERS`), and bridging that wants a per-unit override table in the sim, which is a
+change to the standard build rather than to this layer. A field we declare and cannot answer
+logs once and returns the typed default — better declared than missing, because an undefined
+global is a hard error in Lua and a silent null in JASS.
+
+`tools/jass-blz-fields-test.cjs` pins the values, the defaults, the refusal, and that the
+prelude and the table still share their indices.
 
 ## Traps
 

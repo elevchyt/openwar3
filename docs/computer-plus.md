@@ -12,6 +12,27 @@ library on about 150 engine natives, transcribed function for function
 2002, including issue #124's — an *unpleasant first opponent*: the easy computer still expands,
 still towers, still masses, and still runs a build order a new player cannot answer.
 
+## It is a MELEE player, and on a custom map it does not play
+
+Computer+ is a melee player end to end: a build order, an expansion clock, a tier-up ladder, a
+wave that sets off at another player's town, a creep camp priced against a party. A CUSTOM map
+has none of those things to mean — its "computer" is whatever the map's own triggers make of the
+seat — so a Computer+ seated there spends the match building a base nobody asked for, and every
+rule that reads the tech tree or the start locations is reading a melee shape that is not there.
+
+So `RtsController.startMeleeAIFor` refuses it: on a map whose w3i melee flag is clear, a seat
+the lobby marked Computer+ gets **Blizzard's own AI** instead, which is what such a map was
+written against and what the real client would put there. The Advanced Options switch is a melee
+setting, and that is where it stops being one. It is said once per match in the log, so a player
+who ticked the box and then watched the classic AI play is not left guessing.
+
+The two custom maps that DO have Computer+ are seated somewhere else entirely and are untouched
+by this — **Extreme Candy War** through `startCandyWarAI` and **WarChasers** through
+`startWarChasersAI`, each with its own AI object and its own rules for that one map
+(docs/candy-war-ai.md, docs/warchasers-ai.md). Neither goes through `StartMeleeAI` at all,
+because a scenario runs none of the melee library.
+
+
 **Computer+ is a second player sitting at the same controls.** Not a difficulty slider on the
 first one: a different strategy layer, a different army manager, a different spell chooser and a
 different set of manners, seated per slot by a checkbox in Advanced Options.

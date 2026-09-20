@@ -410,6 +410,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   seen/sample/difficulty switches as the rest of the countering and on counter.ts's own
   `AIR_HEAVY`. Countering reads the game's
   own `DAMAGE_TABLE` against what the AI has SCOUTED, so never add a hand-written counter chart.
+  It is a MELEE player END TO END, which is why it does not play a CUSTOM map at all:
+  `startMeleeAIFor` refuses a Computer+ seat on a map whose w3i melee flag is clear and hands it
+  Blizzard's own AI instead — a build order, an expansion clock and a wave aimed at another
+  player's town have nothing to mean where the map's own triggers own the seat. The two custom
+  maps that DO have it are seated somewhere else entirely (`startCandyWarAI`,
+  `startWarChasersAI`), and neither goes through `StartMeleeAI`.
   CREEPING is PRICED, never measured in food ([`plus/power.ts`](src/ai/plus/power.ts)): a camp's
   combined level already says how hard it is on the game's own green/orange/red scale, and a
   party is priced by √Σ(dps × current hp) × a hero factor — FOOD is not what an army is worth,

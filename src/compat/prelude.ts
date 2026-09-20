@@ -1,3 +1,5 @@
+import { fieldConstantsJass } from "./blzFields";
+
 // The JASS a later-format map expects and 1.30.4's own `common.j` does not declare.
 //
 // **This is OUR file, not Blizzard's.** OpenWar3 ships zero Blizzard code (CLAUDE.md's legal
@@ -20,10 +22,10 @@
 // `src/jass/interpreter.ts`, which must not disagree.
 
 /**
- * The prelude, as JASS source. Loaded between the install's `common.j` and its `blizzard.j`,
+ * The hand-written half. Loaded between the install's `common.j` and its `blizzard.j`,
  * for every map — a 2003 map simply never refers to any of it.
  */
-export const COMPAT_PRELUDE = `
+const PRELUDE_BODY = `
 //============================================================================
 // OpenWar3 compatibility prelude — see src/compat/prelude.ts.
 // Declarations a map saved by a 1.31+ World Editor expects, which the
@@ -285,3 +287,13 @@ native SetThematicMusicVolumeBJ takes integer volume returns nothing
 // --- the minimap terrain texture (1.31) -------------------------------------
 native BlzChangeMinimapTerrainTex takes string texFile returns boolean
 `;
+
+/**
+ * The prelude, as JASS source: the hand-written declarations above plus the generated
+ * object-FIELD constants (src/compat/blzFields.ts).
+ *
+ * Generated rather than typed out because the constants and the native that answers them share
+ * one table, and an index typed twice is an index that eventually differs. Appended last, so a
+ * `globals` block never lands in the middle of the type and native declarations above it.
+ */
+export const COMPAT_PRELUDE = `${PRELUDE_BODY}\n${fieldConstantsJass()}\n`;

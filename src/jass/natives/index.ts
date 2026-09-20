@@ -24,6 +24,7 @@ import { registerHashtableNatives } from "./hashtable";
 // A NAMED SEAM into the compatibility layer (src/compat/README.md): the 1.31 frame API is
 // declared by our own prelude and answered there, because none of it exists in 1.30.4.
 import { registerFrameNatives } from "../../compat/frames";
+import { registerFieldNatives } from "./blzFields";
 import { registerItemNatives } from "./items";
 import { registerMeleeNatives } from "./melee";
 import { registerMultiboardNatives } from "./multiboard";
@@ -57,7 +58,9 @@ const CONVERT_NATIVES = [
   "ConvertVersion", "ConvertVolumeGroup", "ConvertWeaponType", "ConvertWidgetEvent",
   // …and the three our own compat prelude declares, for the 1.31 frame API's enums
   // (src/compat/prelude.ts). Interned exactly like the rest, so `==` on two of the same
-  // constant is true and a frame point can be told from a frame event.
+  // constant is true and a frame point can be told from a frame event. The four
+  // `ConvertUnit*Field` families are NOT here: natives/blzFields.ts registers them beside the
+  // table whose indices they carry.
   "ConvertOriginFrameType", "ConvertFramePointType", "ConvertFrameEventType",
 ];
 
@@ -146,6 +149,7 @@ export function registerNatives(rt: Runtime): void {
   registerGroupNatives(rt);
   registerHashtableNatives(rt); // InitHashtable & co — what every modern map keeps its state in
   registerFrameNatives(rt); // the 1.31 custom-UI frame API (src/compat/frames.ts)
+  registerFieldNatives(rt); // the 1.31 object-FIELD accessors (src/compat/blzFields.ts)
   registerItemNatives(rt); // items + the item events (7.18)
   registerDestructableNatives(rt); // destructibles: gates open by dying (issue #85)
   registerMeleeNatives(rt); // what blizzard.j's Melee* library stands on (7.3)

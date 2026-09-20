@@ -769,6 +769,18 @@ export interface EngineHooks {
   clearText?(player: number): void;
   /** Resolve a unit's display name (GetUnitName / GetHeroProperName) from our data
    *  tables — the interpreter only knows the rawcode, the engine knows the name. */
+  /**
+   * One column of a unit's TYPE row, named by the compatibility layer's own key
+   * (src/compat/blzFields.ts) — what `BlzGetUnitIntegerField` and its three siblings answer
+   * with. Undefined for a key this install has no value for, which the native reports as the
+   * typed default.
+   *
+   * A TYPE read and not a per-unit one, because that is what our object data is: the registry
+   * holds a row per unit type, the map's own w3u is an overlay on it, and nothing writes a
+   * column for one unit (see natives/blzFields.ts).
+   */
+  unitTypeField?(unitId: number, field: string): number | boolean | string | undefined;
+
   unitName?(unitId: number): string | undefined;
   /** Resolve an object (unit/ability/…) name from its rawcode (GetObjectName). */
   objectName?(typeId: string): string | undefined;

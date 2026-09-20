@@ -2404,6 +2404,10 @@ export class MapViewerScene {
       // wants it is Computer+ naming an opponent to its allies by race rather than by colour —
       // "im going to hit the undead at the top" (src/ai/plus/teamchat.ts).
       races,
+      // …and whether this is a MELEE map, which decides whether the Advanced Options switch
+      // means anything at all: Computer+ is a melee player and is refused on a custom map
+      // (RtsController.startMeleeAIFor). The lobby is the only place that knows.
+      melee,
     );
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     // …and the supply CEILING this map asks for, before a line of its script runs — a chapter

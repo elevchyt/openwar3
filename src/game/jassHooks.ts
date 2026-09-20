@@ -5,6 +5,8 @@ import { MoveType } from "../data/enums";
 import { MELEE } from "../data/gameplayConstants";
 import { fogStateOf, type FogState } from "../sim/vision";
 import type { FogArea } from "./fog";
+import { PrimaryAttribute } from "../data/enums";
+import type { UnitDef } from "../data/units";
 
 /**
  * The id space gold mines occupy when a SCRIPT is looking at them.
@@ -396,13 +398,85 @@ const PLACED_MATCH_RADIUS = 128;
 
 /** The unit-type fields these natives classify by. Structural, so `UnitRegistry` satisfies it and
  *  this file keeps a narrow import closure. */
-interface TypeDef {
-  isHero: boolean;
-  isBuilding: boolean;
-  moveType: MoveType;
-  race: string;
-  classification: readonly string[];
-  typeName: string;
+/**
+ * The unit TYPE row these hooks read.
+ *
+ * It was a structural list of the six fields the classification natives happened to want, which
+ * documented them nicely while there were six. The 1.31 field accessors read forty
+ * (`unitTypeField` below), so the list stopped being documentation and became a second copy of
+ * `UnitDef` that could fall behind it. It is the registry's own row and now says so.
+ */
+type TypeDef = UnitDef;
+
+/**
+ * One column of a unit TYPE's row, by the compatibility layer's key (src/compat/blzFields.ts).
+ *
+ * Every case is a plain read of the registry row the rest of the engine already uses, so a
+ * map's own `war3map.w3u` edit is in the answer by construction — the overlay is applied at
+ * load and this reads the result, not the stock table.
+ *
+ * `primaryAttribute` is the one that converts rather than reads: the map compares the answer
+ * against literal 1/2/3, and Balanced Hero Survival's own trait trigger pairs each value with
+ * the attribute it then modifies (1 → STR, 2 → INT, 3 → AGI). See `UNIT_INTEGER_FIELDS` for
+ * why that is not the World Editor's own `[attributeType]` order.
+ */
+function unitTypeField(def: TypeDef, field: string): number | boolean | string | undefined {
+  switch (field) {
+    case "primaryAttribute":
+      return def.primaryAttr === PrimaryAttribute.Strength ? 1
+        : def.primaryAttr === PrimaryAttribute.Intelligence ? 2
+        : def.primaryAttr === PrimaryAttribute.Agility ? 3
+        : 0;
+    case "level": return def.level;
+    case "defenseType": return def.armorType;
+    case "armorType": return def.armorType;
+    case "targetedAs": return def.targType.length;
+    case "goldBountyBase": return def.bountyPlus;
+    case "goldBountyDice": return def.bountyDice;
+    case "goldBountySides": return def.bountySides;
+    case "lumberBountyBase": return def.lumberBountyPlus;
+    case "lumberBountyDice": return def.lumberBountyDice;
+    case "lumberBountySides": return def.lumberBountySides;
+    case "foodUsed": return def.foodUsed;
+    case "foodProduced": return def.foodMade;
+    case "goldCost": return def.goldCost;
+    case "lumberCost": return def.lumberCost;
+    case "buildTime": return def.buildTime;
+    case "hitPointsMaximum": return def.hitPoints;
+    case "manaMaximum": return def.mana;
+    case "manaInitial": return def.manaStart;
+    case "manaRegeneration": return def.manaRegen;
+    case "hitPointsRegeneration": return def.hpRegen;
+    case "defense": return def.armor;
+    case "sightRadiusDay": return def.sightDay;
+    case "sightRadiusNight": return def.sightNight;
+    case "strengthPerLevel": return def.strPerLevel;
+    case "agilityPerLevel": return def.agiPerLevel;
+    case "intelligencePerLevel": return def.intPerLevel;
+    case "startingStrength": return def.strength;
+    case "startingAgility": return def.agility;
+    case "startingIntelligence": return def.intelligence;
+    case "scalingValue": return def.modelScale;
+    case "selectionScale": return def.selScale;
+    case "animationRunSpeed": return def.animRunSpeed;
+    case "animationWalkSpeed": return def.animWalkSpeed;
+    case "acquisitionRange": return def.acquireRange;
+    case "turnRate": return def.turnRate;
+    case "deathTime": return def.deathTime;
+    case "castPoint": return def.castPoint;
+    case "castBackswing": return def.castBackswing;
+    case "attackRange": return def.attackRange;
+    case "attackCooldown": return def.attackCooldown;
+    case "attackDamageBase": return def.attackDamage;
+    case "attackDice": return def.attackDice;
+    case "attackSides": return def.attackSides;
+    case "collisionSize": return def.collision;
+    case "speed": return def.speed;
+    case "isBuilding": return def.isBuilding;
+    case "canSleep": return def.canSleep;
+    case "isHero": return def.isHero;
+    default: return undefined;
+  }
 }
 
 // The natives that ENUMERATE and CLASSIFY units (docs/multiplayer.md Phase E item 1g).
@@ -462,6 +536,15 @@ export function rosterHooks(
   return {
     // Unit groups (7.16): every GroupEnumUnits* scan reads the live sim through here.
     enumUnits: () => unitSnapshots(sim),
+    // One column of a unit's TYPE row, for the 1.31 field accessors (natives/blzFields.ts).
+    // Here because that is where the registry is: the key is the compatibility layer's own
+    // (src/compat/blzFields.ts), and a key with no row here answers undefined, which the
+    // native reports as the typed default rather than as a wrong number.
+    unitTypeField: (id, field) => {
+      const u = sim.units.get(id);
+      const def = u ? registry.get(u.typeId) : undefined;
+      return def ? unitTypeField(def, field) : undefined;
+    },
     /** IsUnitType (7.16) — answer a unittype classification from the sim unit's flags. `t` is the
      *  common.j ConvertUnitType index. The classifications we hold no data for (ATTACKS_FLYING,
      *  GIANT, SAPPER, RESISTANT, …) read false rather than guess. Melee/ranged come from the

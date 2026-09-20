@@ -314,9 +314,12 @@ check("a player not in the force does not", vset.viewpointFor(0).isExposed(victi
 // renderer field anywhere. Same classify-by-name mistake Phase B paid for four times.
 console.log("\nthe roster natives enumerate and classify from the sim alone");
 const roster = rosterHooks(world, { get: (id) => TYPEDEFS[id] }, teamOf);
-check("rosterHooks is exactly the eight", Object.keys(roster).sort(), [
+// `unitTypeField` joined them when the 1.31 object-FIELD accessors landed (natives/blzFields.ts):
+// it reads one column of a unit's TYPE row, which is the registry and nothing else, so it
+// belongs in exactly this factory and under exactly this rule.
+check("rosterHooks is exactly the nine", Object.keys(roster).sort(), [
   "enumUnits", "findPlacedUnit", "isUnitAlly", "isUnitIdType", "isUnitType",
-  "playerStructureCount", "playerTypedUnitCount", "playerUnitCount",
+  "playerStructureCount", "playerTypedUnitCount", "playerUnitCount", "unitTypeField",
 ].sort());
 
 // IsUnitIdType is the same reading asked of a TYPE. Extreme Candy War's Hero_Death trigger is
