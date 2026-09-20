@@ -177,8 +177,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `startGame` before a table is parsed and put back to melee by `exitToMenu`; its glue art, music and campaign file are the
   `_V0` twins of versioned war3skins keys (`skinVersionSuffix()`, never a literal `_V1`); and
   `VersionGet()` answers the switch so Blizzard.j picks 750/200 and a three-hero roll itself.
-  Two things are NOT data and are restated: `MISC_GAME_V0` (RoC's `MiscGame.txt` rows —
-  its damage table and XP rules, checked by `pnpm data:verify`; read them through
+  Two things are NOT data and are restated: the `MiscGame.txt` rows (`MISC_GAME_V0` for Reign
+  of Chaos's copy, `MISC_GAME_CUSTOM` for a CUSTOM map's — the same 2×2, for the one file a
+  compiled-in literal puts out of the overlay's reach; both checked by `pnpm data:verify`, which
+  also asserts that no row it leaves out quietly differs. Read them through
   `damageTable()`/`miscGame()`, never `MISC_GAME` directly) and the engine's food ceiling (90).
   **How much the switch moves is why it is tested:** 232 of the 468 units the two games share
   change ARMOUR CLASS (a Footman is Medium on RoC and Heavy on TFT, a Raider Light/0 against

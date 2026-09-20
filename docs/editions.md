@@ -112,17 +112,45 @@ The gameplay constants are literals in `src/data/gameplayConstants.ts` (checked 
 Reign of Chaos's copy disagrees on, and `pnpm data:verify` checks it against
 `Melee_V0\Units\MiscGame.txt`.
 
-**This file is keyed on the EDITION only, and that is checked rather than assumed.** Compared
-key by key across all four sets, every `DamageBonus*` row and every XP rule
-(`HeroFactorXP`, `GlobalExperience`, `MaxLevelHeroesDrainExp`, `BuildingKillsGiveExp`) is
-identical between a version's melee and custom copies — so a campaign chapter is graded by its
-edition's table, which is what `damageTable()` already answers with. Exactly **one** number in
-this file moves with the map kind and is therefore still the melee value everywhere:
-`DamageBonusSpells` against HERO armour is 0.70 on the expansion's melee tables and 0.75 in the
-other three sets. Reaching it would mean a third compiled-in block and a third precomputed
-damage table for five percentage points on one attack/armour pair, so it is written down here
-instead. The kind-dependent BOOLEANS in the same file (the Illusion rows, the Drain rows,
-`CycloneStasis`, `MoveSpeedBonusesStack`…) are in the same position.
+**This file has both axes too, so there is a third block.** `MISC_GAME_CUSTOM` is what a CUSTOM
+map's copy says for the rows it disagrees with its own edition's melee copy about, and
+`miscGame()` asks the map kind first, then the edition:
+
+```
+custom && key in MISC_GAME_CUSTOM  →  MISC_GAME_CUSTOM   (an answer for BOTH editions)
+isRoc() && key in MISC_GAME_V0     →  MISC_GAME_V0
+                                   →  MISC_GAME          (the live file: melee, expansion)
+```
+
+**One block serves both editions, and that is a checked claim.** Of the rows `MISC_GAME`
+models, every one a custom copy states differently is stated the SAME by `Custom_V0` and
+`Custom_V1` — so `pnpm data:verify` checks the block against *both* files. (The rows where the
+two custom copies genuinely diverge — `CycloneStasis`, `MorphLandClosest`, the four `*Cluster`
+rows — are ones `MISC_GAME` does not model at all; RoC's custom copy is the older snapshot
+there.) Three rows are in it:
+
+| key | melee | custom | what it does |
+|---|---|---|---|
+| `DamageBonusSpells` | …,**0.70**,… | …,**0.75**,… | Spells against HERO armour. The expansion's melee tables alone say 0.70 |
+| `AbolishMagicDispelSmart` | 1 | 0 | a custom map's Abolish Magic autocast is a PLAIN dispel and will take a summon |
+| `UnitSaleAggroRange` | 600 | 0 | hiring from a shop is silent on a custom map — no creep hears it |
+
+`DamageBonusSpells` is why the block exists: a campaign chapter graded by the melee number was
+quietly taking five percentage points off every spell aimed at a hero. `DAMAGE_TABLE_CUSTOM`
+unpacks it, and there is no fourth table — Reign of Chaos states all five `DamageBonus*` rows
+identically in its two copies, so a RoC custom map is graded by `DAMAGE_TABLE_V0`.
+
+`ItemSaleAggroRange` looks like it belongs and does not: `Custom_V0` spells it
+`ItemSaleAggroRanges`, with an s, and both copies say 0 — which is what the live file says too.
+
+**The XP rules are the edition's alone.** `HeroFactorXP`, `GlobalExperience`,
+`MaxLevelHeroesDrainExp` and `BuildingKillsGiveExp` are identical between a version's melee and
+custom copies, so a chapter earns experience by its edition's rules.
+
+`pnpm data:verify` also checks the SHAPE and not just the values: for every row `MISC_GAME`
+models that `MISC_GAME_CUSTOM` does *not* restate, it asserts the custom copy agrees with its
+own edition's melee copy. That check is what would have caught `DamageBonusSpells` in the first
+place, and it is why a fourth row appearing in a later patch cannot pass unnoticed.
 
 The ones the sim reads:
 

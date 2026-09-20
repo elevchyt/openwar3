@@ -1,5 +1,5 @@
 import type { AbilityDef, AbilityLevel, BuffFx } from "../data/abilities";
-import { MISC_GAME } from "../data/gameplayConstants";
+import { miscGame } from "../data/gameplayConstants";
 import { corpseNeed, corpseReach } from "./corpses";
 import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim, EffectAnim } from "./world";
 
@@ -952,9 +952,13 @@ export const DISPEL_CODES = new Set(["Aprg", "Adis", "Aadm", "Advm"]);
  * the fight and costs the same 75 mana as taking a Bloodlust off, so it stays the manual
  * press's. Abolish Magic (`Aadm`) is the only member of the family with a toggle at all, so
  * this is its rule in practice whatever the other two codes are asked.
+ *
+ * It is the MELEE file that says 1. Every custom copy says **0** — a custom map's autocast is a
+ * plain dispel and will take a summon off the field — so the flag is read through `miscGame`
+ * rather than off `MISC_GAME`, and the data set underfoot answers it (docs/editions.md).
  */
 export function worthDispelling(t: SimUnit, units: ReadonlyMap<number, SimUnit>, ours = false, auto = false): boolean {
-  if (!ours && t.summonLeft > 0 && !(auto && MISC_GAME.AbolishMagicDispelSmart)) return true;
+  if (!ours && t.summonLeft > 0 && !(auto && miscGame("AbolishMagicDispelSmart"))) return true;
   return t.buffs.some((b) => {
     if (b.undispellable || !Number.isFinite(b.timeLeft)) return false;
     const src = units.get(b.sourceId);

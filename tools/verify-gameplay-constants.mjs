@@ -96,6 +96,19 @@ const files = {
   MISC_GAME: { label: "Units\\MiscGame.txt", data: parseMiscIni(read(path.join(merged, "Units", "MiscGame.txt"))) },
   // Reign of Chaos's copy of the same file (docs/editions.md) — the rows MISC_GAME_V0 restates.
   MISC_GAME_V0: { label: "Melee_V0\\Units\\MiscGame.txt", data: parseMiscIni(read(path.join(merged, "Melee_V0", "Units", "MiscGame.txt"))) },
+  // …and a CUSTOM map's copy — the second axis of the data set (docs/editions.md). Checked
+  // against BOTH editions' custom files, because that is precisely the claim MISC_GAME_CUSTOM
+  // makes by being ONE block: every row it restates is stated the same by Custom_V0 and
+  // Custom_V1. Let the two diverge on a row we model and this fails rather than silently
+  // picking one.
+  MISC_GAME_CUSTOM: {
+    label: "Custom_V1\\Units\\MiscGame.txt",
+    data: parseMiscIni(read(path.join(merged, "Custom_V1", "Units", "MiscGame.txt"))),
+    also: [{
+      label: "Custom_V0\\Units\\MiscGame.txt",
+      data: parseMiscIni(read(path.join(merged, "Custom_V0", "Units", "MiscGame.txt"))),
+    }],
+  },
   MISC_DATA: { label: "Units\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "Units", "MiscData.txt"))) },
   MELEE: { label: "Scripts\\Blizzard.j", data: parseJassConstants(read(path.join(merged, "Scripts", "Blizzard.j"))) },
   // Note the different MiscData.txt: the minimap's palette lives in the *UI* one.
@@ -117,13 +130,40 @@ const meleeKey = (key) => (key === "MELEE_UNIT_SPACING" ? "unitSpacing" : `bj_${
 
 let checked = 0;
 const problems = [];
-for (const [block, { label, data }] of Object.entries(files)) {
+for (const [block, entry] of Object.entries(files)) {
+  const sources = [{ label: entry.label, data: entry.data }, ...(entry.also ?? [])];
   for (const [key, ours] of parseTsBlock(source, block)) {
     const lookup = block === "MELEE" ? meleeKey(key) : key;
-    const theirs = data.get(lookup);
-    checked++;
-    if (theirs === undefined) problems.push(`${block}.${key} — no \`${lookup}\` in ${label}`);
-    else if (!matches(ours, theirs)) problems.push(`${block}.${key} — we say ${JSON.stringify(ours)}, ${label} says ${theirs}`);
+    for (const { label, data } of sources) {
+      const theirs = data.get(lookup);
+      checked++;
+      if (theirs === undefined) problems.push(`${block}.${key} — no \`${lookup}\` in ${label}`);
+      else if (!matches(ours, theirs)) problems.push(`${block}.${key} — we say ${JSON.stringify(ours)}, ${label} says ${theirs}`);
+    }
+  }
+}
+
+// The other half of the data set's shape, which no per-key check can state: a row MISC_GAME
+// models and MISC_GAME_CUSTOM does NOT must be one the custom copies agree with their own
+// edition's melee copy about — otherwise a custom map is quietly graded by a melee number.
+// This is what caught DamageBonusSpells (0.70 melee, 0.75 everywhere else).
+{
+  const pairs = [
+    ["The Frozen Throne", files.MISC_GAME.data, files.MISC_GAME_CUSTOM.data],
+    ["Reign of Chaos", files.MISC_GAME_V0.data, files.MISC_GAME_CUSTOM.also[0].data],
+  ];
+  const restated = new Set([...parseTsBlock(source, "MISC_GAME_CUSTOM")].map(([k]) => k));
+  // A Reign of Chaos row the V0 file does not carry falls back to the live one (miscGame).
+  const melee = (data, key) => data.get(key) ?? files.MISC_GAME.data.get(key);
+  for (const [key] of parseTsBlock(source, "MISC_GAME")) {
+    if (restated.has(key)) continue;
+    for (const [edition, meleeData, customData] of pairs) {
+      const m = melee(meleeData, key);
+      const c = customData.get(key);
+      if (c === undefined || m === undefined) continue; // a key one copy does not carry
+      checked++;
+      if (m !== c) problems.push(`MISC_GAME.${key} — ${edition}: melee says ${m} but a custom map's copy says ${c}, and MISC_GAME_CUSTOM does not restate it`);
+    }
   }
 }
 

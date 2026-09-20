@@ -4419,8 +4419,10 @@ export class SimWorld {
 
   /** Buy a UNIT from a shop (a Tavern's heroes, a Mercenary Camp's creeps). No patron is
    *  needed — the unit is produced by the shop itself and walks out — but the stock still
-   *  depletes, and hiring is loud: creeps hear it (UnitSaleAggroRange 600). The caller has
-   *  already charged the cost and queues the training. */
+   *  depletes, and on a melee map hiring is loud: creeps hear it (`UnitSaleAggroRange` 600 —
+   *  and **0** on a custom map, where the transaction is silent; read through `miscGame` so the
+   *  data set answers, docs/editions.md). The caller has already charged the cost and queues
+   *  the training. */
   purchaseUnit(shopId: number, unitId: string, player: number): ShopResult {
     const shop = this.units.get(shopId);
     if (!shop || shop.hp <= 0) return "no";
@@ -4433,7 +4435,7 @@ export class SimWorld {
     // Whoever of the buyer's units is nearest the shop takes the blame for the noise. NOT
     // shopPatrons(), which only returns inventory-holders — you don't need a hero to hire a
     // mercenary, so an army of Footmen parked outside the camp must still draw the aggro.
-    this.notifyCreepsOfShopUse(shop, this.nearestUnitOf(player, shop), MISC_GAME.UnitSaleAggroRange);
+    this.notifyCreepsOfShopUse(shop, this.nearestUnitOf(player, shop), miscGame("UnitSaleAggroRange") as number);
     return "ok";
   }
 

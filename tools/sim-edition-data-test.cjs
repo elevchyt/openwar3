@@ -209,6 +209,28 @@ console.log("\nthe map KIND picks the other half of the set");
     check("…and the patched ones on a melee map",
       [tftMelee.get("hkni").hitPoints, tftMelee.get("ohun").hitPoints, tftMelee.get("earc").hitPoints],
       [835, 375, 260]);
+    // The DAMAGE TABLE moves with the kind too, in exactly one cell. MiscGame.txt is compiled
+    // in (MISC_GAME / MISC_GAME_V0 / MISC_GAME_CUSTOM — the VFS overlay cannot reach a literal),
+    // so this is the check that the third block is wired to `damageTable()` and not just
+    // written down. `pnpm data:verify` is the other half: it checks the block against BOTH
+    // custom files AND that no other modelled row quietly differs.
+    setEdition("tft"); setMapDataSet("melee");
+    const meleeSpells = damageMultiplier("spells", "hero");
+    setMapDataSet("custom");
+    const customSpells = damageMultiplier("spells", "hero");
+    check("Spells vs HERO armour: 0.70 on the expansion's melee tables, 0.75 on a custom map",
+      [meleeSpells, customSpells], [0.7, 0.75]);
+    setEdition("roc");
+    const rocCustomSpells = damageMultiplier("spells", "hero");
+    setMapDataSet("melee");
+    const rocMeleeSpells = damageMultiplier("spells", "hero");
+    check("…and Reign of Chaos says 0.75 whichever kind of map it is",
+      [rocMeleeSpells, rocCustomSpells], [0.75, 0.75]);
+    setEdition("tft"); setMapDataSet("custom");
+    check("no other cell moves with the kind — Piercing vs Light is 2.0 on both",
+      damageMultiplier("pierce", "small"), 2);
+    setMapDataSet("melee");
+
     check("that is not a handful of units either",
       [...tftMelee.defs.keys()].filter((id) => tftCustom.defs.get(id) && tftCustom.defs.get(id).hitPoints !== tftMelee.defs.get(id).hitPoints).length > 50,
       true);

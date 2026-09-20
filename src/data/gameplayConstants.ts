@@ -1,4 +1,4 @@
-import { isRoc } from "./edition";
+import { isRoc, mapDataSet } from "./edition";
 import { ArmorType, AttackType } from "./enums";
 
 // WC3's "Gameplay Constants" — the numbers the engine reads out of two INI files
@@ -342,14 +342,57 @@ export const MISC_GAME_V0 = {
   DisplayEnemyInventory: 0,
 } as const;
 
+/**
+ * `Custom_V<n>\Units\MiscGame.txt` [Misc] — what a CUSTOM map's copy of the file says, for the
+ * rows it disagrees with its own edition's MELEE copy about (docs/editions.md).
+ *
+ * The data set is a 2×2 — (edition × map kind) — and this is the second axis of it for the one
+ * file the VFS overlay cannot reach, because these constants are compiled in. A campaign
+ * chapter, a scenario and every custom map read it; a melee game does not.
+ *
+ * **One block serves both editions on purpose, and that is a checked claim, not a shortcut.**
+ * Compared key by key against the install, every row modelled in `MISC_GAME` that a custom copy
+ * states differently is stated the SAME by `Custom_V0` and `Custom_V1` — so there is one
+ * "custom" answer rather than two, and `pnpm data:verify` checks this block against BOTH files.
+ * (The rows where the two custom copies DO diverge — `CycloneStasis`, `MorphLandClosest`, the
+ * four `*Cluster` rows — are ones `MISC_GAME` does not model at all; Reign of Chaos's custom
+ * copy is the older snapshot there.)
+ *
+ * Three rows, and the damage one is why this exists: **Spells hitting HERO armour is 0.70 on the
+ * expansion's melee tables and 0.75 everywhere else**, so a chapter graded by the melee number
+ * was quietly taking five percentage points off every spell aimed at a hero.
+ *
+ * `ItemSaleAggroRange` is NOT here even though it looks like it should be: `Custom_V0` spells it
+ * `ItemSaleAggroRanges`, with an s, and both copies say 0 — which is what `MISC_GAME` says too.
+ */
+export const MISC_GAME_CUSTOM = {
+  // …,0.75,… against the live file's 0.70 in the SPELLS-vs-Hero cell (ARMOR_TYPE_ORDER index 5).
+  DamageBonusSpells: [1.0, 1.0, 1.0, 1.0, 1.0, 0.75, 0.05, 1.0],
+  // Abolish Magic's autocast is a PLAIN dispel on a custom map — it will take a summon off the
+  // field rather than holding off for a buff to strip (sim/spells.ts).
+  AbolishMagicDispelSmart: 0,
+  // Hiring from a shop is SILENT on a custom map: 600 is the melee file's, and it is the radius
+  // within which creeps hear the transaction (SimWorld.notifyCreepsOfShopUse).
+  UnitSaleAggroRange: 0,
+} as const;
+
 /** The engine's food ceiling for the edition the client is on — 100, or Reign of Chaos's 90. */
 export function engineFoodCeiling(): number {
   return isRoc() ? MISC_ENGINE.FoodCeiling_V0 : MISC_ENGINE.FoodCeiling;
 }
 
-/** The `[Misc]` row `key` for the edition the client is on: Reign of Chaos's where its file
- *  differs (MISC_GAME_V0), the live file's everywhere else. */
+/**
+ * The `[Misc]` row `key` for the data set this match is on — the edition AND the map kind
+ * (data/edition.ts, docs/editions.md).
+ *
+ * The MAP KIND is asked first because it is the narrower statement: `MISC_GAME_CUSTOM` holds
+ * only rows whose custom copy differs from its own edition's melee copy, so anything in it is
+ * already an answer for both editions, while `MISC_GAME_V0` is the answer for a Reign of Chaos
+ * copy of whichever kind. The two blocks overlap on exactly one row (`DamageBonusSpells`) and
+ * agree about it, so the order is a statement of intent rather than a tie-break.
+ */
 export function miscGame<K extends keyof typeof MISC_GAME>(key: K): (typeof MISC_GAME)[K] | number | readonly number[] {
+  if (mapDataSet() === "custom" && key in MISC_GAME_CUSTOM) return MISC_GAME_CUSTOM[key as keyof typeof MISC_GAME_CUSTOM];
   if (isRoc() && key in MISC_GAME_V0) return MISC_GAME_V0[key as keyof typeof MISC_GAME_V0];
   return MISC_GAME[key];
 }
@@ -695,10 +738,23 @@ function unpackDamageTable(misc: Record<string, unknown>): DamageTable {
 export const DAMAGE_TABLE: DamageTable = unpackDamageTable(MISC_GAME);
 /** …and Reign of Chaos's, off `Melee_V0\Units\MiscGame.txt`. */
 export const DAMAGE_TABLE_V0: DamageTable = unpackDamageTable(MISC_GAME_V0);
+/**
+ * …and the expansion's CUSTOM one, off `Custom_V1\Units\MiscGame.txt`. It differs from
+ * `DAMAGE_TABLE` in a single cell — Spells against Hero armour, 0.75 against 0.70 — because
+ * `unpackDamageTable` falls back to `MISC_GAME` for every row `MISC_GAME_CUSTOM` does not
+ * restate, and that is the only `DamageBonus*` row a custom copy moves.
+ *
+ * There is deliberately no fourth table. Reign of Chaos's two copies agree on ALL FIVE
+ * `DamageBonus*` rows, so a RoC custom map is graded by `DAMAGE_TABLE_V0` — which is a fact
+ * about the install, checked by `pnpm data:verify` rather than assumed here.
+ */
+export const DAMAGE_TABLE_CUSTOM: DamageTable = unpackDamageTable(MISC_GAME_CUSTOM);
 
-/** The damage table of the edition the client is on (data/edition.ts). */
+/** The damage table of the data set this match is on — edition, then map kind
+ *  (data/edition.ts). */
 export function damageTable(): DamageTable {
-  return isRoc() ? DAMAGE_TABLE_V0 : DAMAGE_TABLE;
+  if (isRoc()) return DAMAGE_TABLE_V0; // RoC states the same five rows in both its copies
+  return mapDataSet() === "custom" ? DAMAGE_TABLE_CUSTOM : DAMAGE_TABLE;
 }
 
 /** Damage multiplier for `attack` striking `armor`. An unknown pair (a weaponless
