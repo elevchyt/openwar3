@@ -680,6 +680,23 @@ export interface EngineHooks {
   /** GetHeroSkillPoints / UnitModifySkillPoints — unspent skill points. */
   getHeroSkillPoints?(unitId: number): number;
   modifySkillPoints?(unitId: number, delta: number): boolean;
+  /** GetHeroStr / GetHeroAgi / GetHeroInt — one attribute. `includeBonuses` is the native's own
+   *  second argument: TRUE counts items and buffs, FALSE is the hero's growth alone. */
+  getHeroAttribute?(unitId: number, attr: "str" | "agi" | "int", includeBonuses: boolean): number;
+  /** SetHeroStr / SetHeroAgi / SetHeroInt — set one attribute (see SimWorld.setHeroAttribute
+   *  for what `permanent` can and cannot mean here). */
+  setHeroAttribute?(unitId: number, attr: "str" | "agi" | "int", value: number, permanent: boolean): void;
+  /** SuspendHeroXP — stop this hero banking experience (the bar keeps what it has). */
+  suspendHeroXp?(unitId: number, flag: boolean): void;
+  /** UnitDamageTarget — damage dealt by a TRIGGER: the damage table and the target's armour,
+   *  but none of a swing's procs (SimWorld.damageTarget). `attackType` is the damage-table
+   *  column; `magic`/`universal` come off the native's damagetype. Returns what landed. */
+  damageTarget?(
+    sourceId: number,
+    targetId: number,
+    amount: number,
+    opts: { attack: boolean; ranged: boolean; attackType: string; magic: boolean; universal: boolean },
+  ): number;
   // --- destructibles (issue #85): gates, doors, the walls a lever drops ---
   //
   // A gate has no "open" state of its own — it opens by DYING, and its collider drops to the

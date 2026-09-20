@@ -43,6 +43,12 @@ const EXPECTED = [
   "modifySkillPoints", "pauseUnit", "playerTechCount", "removeFromStock", "removeItem",
   "resetUnitCooldown", "selectHeroSkill", "setAllTypeSlots", "setDawnDusk", "setHeroLevel",
   "setResourceAmount",
+  // Hero ATTRIBUTES — the stat system a custom map is built on, and a world write like any
+  // other (docs/map-compatibility.md pass 1; pinned in detail by sim-hero-attr-test.cjs).
+  "getHeroAttribute", "setHeroAttribute", "suspendHeroXp",
+  // …and `UnitDamageTarget`, which is how a custom map's spells deal damage at all
+  // (pass 2; sim-trigger-damage-test.cjs).
+  "damageTarget",
   "setHeroXp", "setItemCharges", "setItemDroppable", "setItemPosition", "setPlayerTechMaxAllowed",
   // StoreUnit — a chapter writing its hero down for the next one (docs/campaigns.md). Its
   // twin RestoreUnit is the AUTHORITY's, because putting one back means creating it.

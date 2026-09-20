@@ -1,7 +1,7 @@
 import { jassOwnerOf, type SimWorld, type SimMine, type SimUnit, type StoredUnitState } from "../sim/world";
 import type { EngineHooks, UnitSnapshot } from "../jass/runtime";
 import { MAIN_HALL_CHAINS } from "../data/races";
-import { MoveType } from "../data/enums";
+import { AttackType, MoveType } from "../data/enums";
 import { MELEE } from "../data/gameplayConstants";
 import { fogStateOf, type FogState } from "../sim/vision";
 import type { FogArea } from "./fog";
@@ -201,6 +201,13 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     addHeroXp: (id, xp, eyeCandy) => sim.addHeroXp(id, xp, eyeCandy),
     getHeroSkillPoints: (id) => sim.units.get(id)?.skillPoints ?? 0,
     modifySkillPoints: (id, delta) => sim.modifySkillPoints(id, delta),
+    getHeroAttribute: (id, attr, includeBonuses) => sim.heroAttribute(id, attr, includeBonuses),
+    setHeroAttribute: (id, attr, value, permanent) => sim.setHeroAttribute(id, attr, value, permanent),
+    suspendHeroXp: (id, flag) => sim.suspendHeroXp(id, flag),
+    // `attackType` crosses the boundary as the enum's own string value (data/enums.ts), so the
+    // native does the common.j-index → AttackType mapping and the sim is handed a column name.
+    damageTarget: (sourceId, targetId, amount, opts) =>
+      sim.damageTarget(sourceId, targetId, amount, { ...opts, attackType: opts.attackType as AttackType }),
     // --- per-unit flags (7.17) ---
     // `setUnitAnimation` is NOT here: an animation is a model's, not the world's.
     setUnitInvulnerable: (id, flag) => sim.setInvulnerable(id, flag),

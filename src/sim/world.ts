@@ -1649,6 +1649,9 @@ export interface SimUnit {
   str: number; // current (floored) attributes, recomputed on level-up
   agi: number;
   int: number;
+  /** `SuspendHeroXP` — this hero banks no experience while true (see gainXp). The bar keeps
+   *  what is already in it; only the crediting stops. */
+  xpSuspended: boolean;
   baseMaxHp: number; // level-1 maxHp — attribute growth is layered on top
   baseMaxMana: number;
   baseArmor: number; // armour before agility growth + buffs
@@ -8144,6 +8147,7 @@ export class SimWorld {
       | "str"
       | "agi"
       | "int"
+      | "xpSuspended"
       | "baseMaxHp"
       | "baseMaxMana"
       | "baseArmor"
@@ -8424,6 +8428,7 @@ export class SimWorld {
       str: hero?.str ?? 0,
       agi: hero?.agi ?? 0,
       int: hero?.int ?? 0,
+      xpSuspended: false, // SuspendHeroXP — a hero banks experience until a script says not to
       // Level-1 baselines — attribute growth + buffs layer on top of these.
       baseMaxHp: unit.maxHp,
       baseMaxMana: unit.maxMana,
@@ -14765,7 +14770,9 @@ export class SimWorld {
    *  a kill, a tome, a Fountain — takes the default and flashes. */
   gainXp(hero: SimUnit, amount: number, isCreep = false, eyeCandy = true): void {
     // An image never banks experience of its own — it is shown its hero's (mirrorXpToIllusions).
-    if (!hero.isHero || hero.isIllusion || hero.level >= MAX_HERO_LEVEL || amount <= 0) return;
+    // `SuspendHeroXP` is read HERE and nowhere else: it stops the crediting, not the levelling,
+    // so `SetHeroLevel` on a suspended hero still works and the bar keeps what it had.
+    if (!hero.isHero || hero.isIllusion || hero.xpSuspended || hero.level >= MAX_HERO_LEVEL || amount <= 0) return;
     hero.xp += amount;
     while (hero.level < MAX_HERO_LEVEL && hero.xp >= xpToReachLevel(hero.level + 1)) {
       this.levelUp(hero, eyeCandy);
@@ -14993,6 +15000,104 @@ export class SimWorld {
     h.xp = Math.max(0, Math.trunc(xp));
     while (h.level < MAX_HERO_LEVEL && h.xp >= xpToReachLevel(h.level + 1)) this.levelUp(h, eyeCandy);
     this.mirrorXpToIllusions(h); // the bar his images show is his (see gainXp)
+  }
+
+  /**
+   * `GetHeroStr` / `GetHeroAgi` / `GetHeroInt` — one of a hero's three attributes.
+   *
+   * `includeBonuses` is common.j's own second argument and it is a real distinction: a hero's
+   * attribute is DERIVED every tick by `recomputeStats` as
+   * `floor(base + perLevel × (level − 1)) + items + buffs`, so `u.str` is the number with the
+   * bonuses in it and the growth term alone is the number without. A map that reads the
+   * unbonused value is asking "what is this hero worth naked" — Angel Arena prices its stat
+   * shop off it — and answering with the bonused one makes every item the hero already wears
+   * count twice.
+   */
+  heroAttribute(unitId: number, attr: "str" | "agi" | "int", includeBonuses: boolean): number {
+    const h = this.units.get(unitId);
+    if (!h?.isHero) return 0;
+    if (includeBonuses) return attr === "str" ? h.str : attr === "agi" ? h.agi : h.int;
+    const base = attr === "str" ? h.baseStr : attr === "agi" ? h.baseAgi : h.baseInt;
+    const per = attr === "str" ? h.strPerLevel : attr === "agi" ? h.agiPerLevel : h.intPerLevel;
+    return Math.floor(base + per * (h.level - 1));
+  }
+
+  /**
+   * `SetHeroStr` / `SetHeroAgi` / `SetHeroInt` — set one attribute to `value`.
+   *
+   * Writes the BASE, exactly as a tome does (`applyPowerup`'s `AIsm` case), and never `u.str`:
+   * `recomputeStats` runs every tick and would overwrite the current value before the next
+   * frame, so a setter that wrote the derived number would appear to work and then silently
+   * undo itself. The base is solved for the growth the hero has already accrued, so
+   * `SetHeroStr(h, 50, …)` makes `GetHeroStr(h, false)` answer 50 at the hero's CURRENT level,
+   * which is what the native promises.
+   *
+   * `permanent` is the native's own third argument. In the reference client it says whether the
+   * change survives a level-up; here every attribute is recomputed from the base at every tick,
+   * so a base write survives one by construction and both spellings land in the same place. A
+   * map that passes FALSE gets a change that outlives its level-up — more than it asked for,
+   * never less, and no map in the corpus reads the difference back.
+   */
+  setHeroAttribute(unitId: number, attr: "str" | "agi" | "int", value: number, _permanent: boolean): void {
+    const h = this.units.get(unitId);
+    if (!h?.isHero) return;
+    // WC3 floors an attribute at 1: a hero with 0 strength is not a state the engine has.
+    const want = Math.max(1, Math.trunc(value));
+    const per = attr === "str" ? h.strPerLevel : attr === "agi" ? h.agiPerLevel : h.intPerLevel;
+    const base = want - per * (h.level - 1);
+    if (attr === "str") h.baseStr = base;
+    else if (attr === "agi") h.baseAgi = base;
+    else h.baseInt = base;
+    this.recomputeStats(h); // the hit points / mana / damage the new points confer
+  }
+
+  /** `SuspendHeroXP` — stop (or restart) a hero banking experience. The bar keeps whatever is
+   *  in it; only the crediting stops, which is why it is read in `gainXp` rather than anywhere
+   *  a level is computed. A map uses it to hold a hero at a chapter's level while its allies
+   *  catch up. */
+  suspendHeroXp(unitId: number, flag: boolean): void {
+    const h = this.units.get(unitId);
+    if (h) h.xpSuspended = flag;
+  }
+
+  /**
+   * `UnitDamageTarget` — damage dealt by a TRIGGER rather than by a swing.
+   *
+   * The native is `UnitDamageTarget(source, target, amount, attack, ranged, attacktype,
+   * damagetype, weapontype)` and it is how a custom map's spells deal their damage at all: a
+   * map that rebuilt Stormbolt on an unrelated base does its own arithmetic and then calls
+   * this. Unanswered it is a spell that hits for nothing.
+   *
+   * It is NOT `applyDamage`, and the difference is the point: that is the ATTACK path, and a
+   * blow carries the swing's rolled procs with it — Bash, the orbs, lifesteal, thorns. Trigger
+   * damage carries none of them. What it does carry is the damage TABLE and the target's
+   * armour, because that is what passing an `attacktype` is for, so it lands on `landDamage`
+   * with the two multipliers already applied — the same seam a spell lands on.
+   *
+   * `magic` comes off the native's `damagetype`, not its `attacktype`, because that is what
+   * magic immunity reads (a Spell Breaker is not immune to a Sorceress's melee). `universal`
+   * is `DAMAGE_TYPE_UNIVERSAL`, which is the one that bypasses both the table and the immunity.
+   *
+   * Returns the damage that actually landed (0 when the target was invulnerable or immune),
+   * which is the native's own boolean seen as a number.
+   */
+  damageTarget(
+    sourceId: number,
+    targetId: number,
+    amount: number,
+    opts: { attack: boolean; ranged: boolean; attackType: AttackType; magic: boolean; universal: boolean },
+  ): number {
+    const target = this.units.get(targetId);
+    if (!target || target.hp <= 0 || amount <= 0) return 0;
+    if (opts.magic && !opts.universal && target.magicImmune) return 0;
+    let dealt = amount;
+    if (!opts.universal) {
+      dealt *= damageMultiplier(opts.attackType, target.armorType);
+      dealt *= 1 - armorDamageReduction(target.armor);
+    }
+    // `recordHit` is the native's own `attack` flag: a blow makes the weapon-on-armour clang
+    // and a trigger's damage out of nowhere does not.
+    return this.landDamage(target, dealt, sourceId, opts.attack);
   }
 
   /** UnitModifySkillPoints — add/remove unspent skill points (never below zero). */

@@ -115,4 +115,39 @@ export function registerAbilityNatives(rt: Runtime): void {
     if (id !== undefined) c.rt.hooks?.selectHeroSkill?.(id, intToRawcode(asInt(a[1])));
     return JNULL;
   });
+
+  // --- hero ATTRIBUTES: the stat system every arena and RPG map is built on ---
+  //
+  // `GetHeroStr(h, includeBonuses)` / `SetHeroStr(h, newStr, permanent)` and their Agi/Int
+  // twins. Six natives that are one pair three times over, so they are registered from a table
+  // rather than written out six times — the only thing that differs between them is which of
+  // the three attributes they name.
+  //
+  // This is the single most-called family a downloaded map uses that we had no answer for:
+  // ~450 call sites across the eleven maps in the install's own `Maps\Download`, of which
+  // Angel Arena Allstars alone is 295. With no answer, `GetHeroStr` returned nothing and every
+  // stat-shop price, every attribute-scaled spell and every "is this hero strong enough yet"
+  // branch read zero.
+  //
+  // The `permanent` flag and the `includeBonuses` flag are both real and both explained where
+  // they are obeyed (SimWorld.heroAttribute / setHeroAttribute).
+  const ATTRS = [["Str", "str"], ["Agi", "agi"], ["Int", "int"]] as const;
+  for (const [suffix, attr] of ATTRS) {
+    def(rt, `GetHero${suffix}`, (c, a) => {
+      const id = simOf(c, a[0]);
+      return jInt(id === undefined ? 0 : Math.floor(c.rt.hooks?.getHeroAttribute?.(id, attr, truthy(a[1])) ?? 0));
+    });
+    def(rt, `SetHero${suffix}`, (c, a) => {
+      const id = simOf(c, a[0]);
+      if (id !== undefined) c.rt.hooks?.setHeroAttribute?.(id, attr, asInt(a[1]), truthy(a[2]));
+      return JNULL;
+    });
+  }
+  // SuspendHeroXP(h, flag) — TRUE stops the hero banking experience. Note the polarity: the
+  // flag says SUSPENDED, so `SuspendHeroXP(h, false)` is the one that lets him earn again.
+  def(rt, "SuspendHeroXP", (c, a) => {
+    const id = simOf(c, a[0]);
+    if (id !== undefined) c.rt.hooks?.suspendHeroXp?.(id, truthy(a[1]));
+    return JNULL;
+  });
 }

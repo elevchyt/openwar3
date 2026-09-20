@@ -36,6 +36,7 @@ import { registerTextNatives } from "./text";
 import { registerTimerDialogNatives } from "./timerdialog";
 import { registerVisionNatives } from "./vision";
 import { registerWeatherNatives } from "./weather";
+import { registerWidgetNatives } from "./widgets";
 import { registerWorldNatives } from "./world";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -138,6 +139,7 @@ export function registerNatives(rt: Runtime): void {
   registerConfigNatives(rt);
   registerWorldNatives(rt);
   registerAbilityNatives(rt); // abilities + heroes (7.17)
+  registerWidgetNatives(rt); // a widget's life, and damage dealt by a trigger (docs/map-compatibility.md)
   registerCameraNatives(rt); // camera setups + the camera-move family (7.24)
   registerCinematicNatives(rt); // letterbox, fade, transmissions, minimap pings (7.24)
   registerDialogNatives(rt); // dialogs + the victory/defeat screen (7.19)

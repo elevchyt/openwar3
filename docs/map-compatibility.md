@@ -397,6 +397,78 @@ global is a hard error in Lua and a silent null in JASS.
 `tools/jass-blz-fields-test.cjs` pins the values, the defaults, the refusal, and that the
 prelude and the table still share their indices.
 
+## Step 8 — the native backlog
+
+Once the formats read, a later-format map's remaining problem is the **runtime API**, and the
+size of it is a measurement rather than an opinion:
+
+```
+pnpm jass:coverage --maps "Warcraft III/Maps/Download" --calls
+```
+
+`--maps` points the coverage tool at the later-format corpus instead of the whole install —
+the install's own 200-odd maps are Blizzard's, and their ranking says nothing about what a map
+downloaded from Hive today calls — and `--calls` ranks by call SITES rather than by how many
+maps mention a native once, which is what says how load-bearing one is. The tool asks the real
+registry (`buildInterpreter(['']).rt.natives`), not the source text, because a family can be
+registered under names the source never spells: `natives/hashtable.ts` builds forty
+`Save<Type>Handle`/`Load<Type>Handle` pairs in a loop, and a string scan reported all eighty —
+~450 call sites in DotA alone — as missing work that was already done.
+
+Baseline, 2026-09-21: **136 natives, 5019 call sites**. A missing native is logged once and
+returns a safe default, so the map RUNS and that one system silently does nothing — which is
+why the two rebalance maps in the corpus boot and are inert, their whole content being `Blz*`
+accessors.
+
+The work is going in passes, largest first, each with its own test and each re-measured:
+
+| pass | family | sites | landed |
+|---|---|---|---|
+| 1 | hero attributes — `Get`/`SetHeroStr\|Agi\|Int`, `SuspendHeroXP` | 452 | ✓ |
+| 2 | `Get`/`SetWidgetLife`, `GetWidgetX/Y`, `UnitDamageTarget` | 196 | ✓ |
+
+Two findings from those two that are worth more than the code:
+
+* **A hero attribute is DERIVED, so a setter must write the base.** `recomputeStats` recomputes
+  `u.str` from `baseStr + strPerLevel × (level − 1) + items + buffs` every tick, so a
+  `SetHeroStr` that wrote `u.str` would read back correctly once and be gone by the next frame.
+  It writes `baseStr`, solved for the growth the hero has already accrued — the same thing a
+  tome does. `includeBonuses`, the native's own second argument, is the difference between
+  those two numbers and is a real distinction: a map that reads the unbonused value is asking
+  what the hero is worth naked, and answering with the other makes every item it wears count
+  twice.
+* **The `attacktype` enum's first two entries are crossed over**, and the install says so in as
+  many words. `UI\TriggerData.txt` names each constant with the string the World Editor prints
+  beside it:
+
+      AttackTypeNormal=1,attacktype,ATTACK_TYPE_NORMAL,WESTRING_UE_ATTACKTYPE_SPELLS
+      AttackTypeMelee =1,attacktype,ATTACK_TYPE_MELEE, WESTRING_UE_ATTACKTYPE_NORMAL
+
+  So JASS's `ATTACK_TYPE_NORMAL` is the damage table's **Spells** row and `ATTACK_TYPE_MELEE` is
+  its **Normal** row. Read the obvious way round, every trigger's damage in a custom map is
+  graded by the wrong column for every blow — Spells is flat 1.0 against everything but Hero and
+  Divine, Normal is ×1.5 against Medium and ×0.7 against Fortified, so the two are never the
+  same number. (And note which armour is which while you are there: the ×0.7 row is FORTIFIED.
+  Normal vs Heavy is a flat 1.0; Heavy's real weakness is Magic at ×2.0.)
+
+`UnitDamageTarget` is **not** `applyDamage`. That is the ATTACK path and a blow carries the
+swing's rolled procs with it — Bash, the orbs, lifesteal, thorns — and trigger damage carries
+none of them. What it does carry is the damage table and the target's armour, because that is
+what passing an `attacktype` is for, so it lands on `landDamage` with the two multipliers
+already applied: the same seam a spell lands on. `DAMAGE_TYPE_UNIVERSAL` is the one damagetype
+that bypasses both of them and magic immunity with them.
+
+One thing was deliberately **not** done: `BlzSetEventDamage` (6 sites). `pumpDamageEvents` fires
+after the sim has applied the damage, so there is nothing left to modify, and making it work
+means first settling whether 1.31's `EVENT_PLAYER_UNIT_DAMAGED` is pre- or post-application and
+how it differs from `_DAMAGING` (315) — a question for the sources, not a guess.
+
+Tests: `tools/sim-hero-attr-test.cjs`, `tools/sim-trigger-damage-test.cjs` (the sim arithmetic,
+with the multipliers computed from the game's own table rather than transcribed) and
+`tools/jass-widget-damage-test.cjs` (the two vocabularies, through the real interpreter against
+the install's own `common.j`). `tools/sim-jass-hooks-test.cjs` pins the exact hook roster, so
+every pass that adds a hook adds its name there too.
+
 ## Traps
 
 * **After editing the viewer patch, restart the dev server AND delete `node_modules/.vite`**, or
