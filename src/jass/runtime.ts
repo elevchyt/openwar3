@@ -282,6 +282,17 @@ export interface SoundLabelInfo {
   cutoff: number;
 }
 
+/**
+ * A function the runtime can call that is not JASS — see `Runtime.hostFunctions`.
+ *
+ * `run` is a generator in the interpreter's own thread protocol: it YIELDS a number of seconds
+ * to sleep and RETURNS the call's value. A host that cannot suspend simply never yields.
+ */
+export interface HostFunction {
+  call(args: JassValue[]): JassValue;
+  run(args: JassValue[]): Generator<number, JassValue, void>;
+}
+
 /** A rectangular region (Rect / the World-Editor `gg_rct_*` globals). Its bounds
  *  drive enter/leave-region events: the live pump tests each unit's (x,y) against
  *  every registered rect and fires the trigger on a crossing. */
@@ -1213,6 +1224,19 @@ export class Runtime {
   /** Global variables (name → value) and arrays (name → JassArray). */
   readonly globals = new Map<string, JassValue>();
   readonly globalArrays = new Map<string, JassArray>();
+  /**
+   * Functions a HOST LANGUAGE has put into this runtime — today, a Lua map's own functions
+   * (src/compat/lua/). They are named and called exactly like a JASS one, so everything that
+   * already takes a `code` value takes one of these without knowing: a trigger action, a
+   * boolexpr, a timer handler, a `ForGroup` callback.
+   *
+   * Two entry points because the interpreter has two: `call` for the places JavaScript cannot
+   * suspend (a condition, a filter, an enum callback) and `run` for a THREAD, where a wait may
+   * park it. `run` yields seconds exactly as a JASS generator does — see Interpreter's
+   * ThreadGen — which is what lets a Lua trigger action sleep.
+   */
+  readonly hostFunctions = new Map<string, HostFunction>();
+
   /** User functions and engine natives, by name. */
   readonly functions = new Map<string, FunctionDecl>();
   readonly natives = new Map<string, (ctx: NativeCtx, args: JassValue[]) => JassValue>();

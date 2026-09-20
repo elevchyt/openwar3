@@ -29,7 +29,7 @@
 
 import { orderIdToString, orderStringToId } from "../orders";
 import type { BoolExpr, JassPlayer, JassUnit, NativeCtx, RectObj, Runtime, UnitSnapshot } from "../runtime";
-import { asInt, asNum, asStr, jBool, jHandle, JNULL, truthy, type JassValue } from "../values";
+import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -232,6 +232,35 @@ export function registerGroupNatives(rt: Runtime): void {
     return JNULL;
   });
   def(rt, "GetEnumUnit", (c) => c.rt.eventResponse("EnumUnit"));
+
+  // --- groups by INDEX (1.31; declared in src/compat/prelude.ts) ---
+  // The fast half of the API: before it, a map that wanted member 3 had to drain the group
+  // into a second one and put it back. Indexed over the LIVE members for the same reason
+  // ForGroup iterates them — a handle whose unit has left the sim is not a member any more.
+  def(rt, "BlzGroupGetSize", (c, a) => {
+    const g = group(c, a[0]);
+    return jInt(g ? liveMembers(c, g).length : 0);
+  });
+  def(rt, "BlzGroupUnitAt", (c, a) => {
+    const g = group(c, a[0]);
+    const members = g ? liveMembers(c, g) : [];
+    const i = asInt(a[1]);
+    return i >= 0 && i < members.length ? jHandle(members[i], "unit") : JNULL;
+  });
+  // The "Fast" pair skip the per-unit filter the BJ versions run; they answer how many
+  // members the group has afterwards, which is what the natives return.
+  def(rt, "BlzGroupAddGroupFast", (c, a) => {
+    const into = group(c, a[0]);
+    const from = group(c, a[1]);
+    if (into && from) for (const hid of liveMembers(c, from)) into.units.add(hid);
+    return jInt(into ? into.units.size : 0);
+  });
+  def(rt, "BlzGroupRemoveGroupFast", (c, a) => {
+    const from = group(c, a[0]);
+    const which = group(c, a[1]);
+    if (from && which) for (const hid of liveMembers(c, which)) from.units.delete(hid);
+    return jInt(from ? from.units.size : 0);
+  });
 
   // --- group orders: one order, every member (a spawn wave marching out) ---
   // Returns true if the order took for at least one unit, like the engine.

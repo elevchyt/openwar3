@@ -212,7 +212,9 @@ binding the existing `registerNatives` table into a Lua VM, not a second engine.
 | the 1.31 declarations | `src/compat/prelude.ts` | our own JASS, loaded after the install's `common.j` |
 | the 1.31 frame API | `src/compat/frames.ts` | none of it exists in 1.30.4; registered through a named seam |
 | hashtables | `src/jass/natives/hashtable.ts` | **not compat** — 1.30.4's own `common.j` declares them; they were simply unimplemented |
-| Lua host | `src/compat/` | binds the existing native table; see the note under step 6 |
+| the Lua front end | `src/compat/lua/` | one Lua state over the running JASS runtime; a dynamic import, so it is its own bundle |
+| host functions | `src/jass/runtime.ts` + `interpreter.ts` | 6 lines: a third registry beside natives and JASS functions |
+| fengari's Node assumptions | **`patches/fengari@0.1.5.patch`** | two unguarded `process` reads at module scope |
 
 The first row moved while this was built. The tolerance is ours and the version knowledge is the
 patch's, because the viewer reads the w3i **itself** — a second reader of our own would be a
@@ -285,23 +287,72 @@ The result, measured by running `config()` and `main()` against the install's ow
 JASS maps in the corpus **run to completion**, with six and eight distinct "safe default" notes
 respectively and not one "undefined variable" or "unknown function" left.
 
-**Step 6 — Lua. NOT DONE, and deliberately not half-done.** One of the three corpus maps is
-`war3map.lua`. The natives are the same, so this is a host adapter rather than a second engine —
-but it is not a small one, and two things in it are decisions rather than work:
+**Step 6 — Lua. DONE.** One of the three corpus maps is `war3map.lua`, and it now runs.
 
-* **It needs a change to a core type of the standard build.** A JASS `code` value is a function
-  NAME (`{ k: "code", fn: string }`, `values.ts`) which the interpreter resolves by lookup. A Lua
-  function is a value, not a name, so `TriggerAddAction`, `TimerStart` and `ForGroup` would need
-  `code` to be able to hold a host callback. That is additive and small, but it is in the middle
-  of the interpreter and belongs to a pass that is about the interpreter.
-* **It adds a runtime dependency and a determinism question.** fengari is the right pick (pure
-  JS, Lua 5.3, no wasm fetch, identical in the Electron shell and a browser tab), but the sim is
-  lockstep: a second VM must be deterministic across machines, held to the same bar
-  `GetLocalPlayer` re-runs already are.
+The thing that makes it tractable is that **the language is different and the API is not**.
+Every name a Lua map calls is one of three things this engine already has: an engine native, a
+BJ from the install's own `blizzard.j`, or a common.j constant. Test of Faith Reborn calls
+`IsUnitAliveBJ` **381** times and `ForGroupBJ` **139** — the BJ layer is most of what a Lua map
+is made of. So `src/compat/lua/` is a FRONT END, not a second engine: one Lua state
+(**fengari**, pure JS, Lua 5.3 — the version 1.31 shipped) whose globals resolve into the
+running JASS runtime.
 
-Until it lands, a Lua map is honest about itself: step 4 lists it, greys it, and says "This map's
-triggers are written in Lua, which OpenWar3 cannot run yet." When it does land, the one line to
-delete is `unsupportedReason`'s Lua clause.
+Five things are the design, and each is a decision the shape of the API forced:
+
+1. **Unknown globals resolve into the runtime.** `_G` gets an `__index` that reads a JASS
+   global first — **live, never cached**, because blizzard.j writes `bj_lastCreatedUnit` on
+   nearly every BJ call and a cached copy would be a lie the second time the script looked —
+   and then a callable, which IS cached back into `_G`. `__newindex` writes THROUGH to a JASS
+   global that already exists, so the map's Lua and the install's blizzard.j never hold two
+   copies of one variable.
+2. **A handle is light userdata**, interned per handle id. Lua `==` is then the handle identity
+   JASS `==` is, `type()` answers `"userdata"` as the real client does, and a handle works as a
+   table key. Nothing about the handle table changes.
+3. **A Lua function handed to the engine becomes a named host function.** `TriggerAddAction(t,
+   Foo)` registers `Foo` in the new `Runtime.hostFunctions` and gives JASS an ordinary `code`
+   value, so trigger actions, boolexprs, timer handlers and `ForGroup` callbacks are unchanged.
+   Identity lives in a Lua table keyed by the function itself, so the same function handed over
+   twice is one entry.
+4. **A wait is a coroutine yield.** Every call into Lua runs inside a Lua coroutine, and
+   `TriggerSleepAction` / `PolledWait` yield it. The interpreter's thread protocol is already a
+   generator yielding SECONDS, so the two nest exactly — which is why the seam in the
+   interpreter is six lines and not a scheduler.
+5. **The map's own globals are published by NAME** — `config`, `main`, and every
+   `Trig_*_Actions`. That is what makes the map start at all, and what lets blizzard.j's
+   `ExecuteFunc("…")` find a Lua trigger.
+
+Beside those, two things a Lua map needs that JASS does not: **`__jarray`** (a JASS array in
+Lua mode is a table that reads its type's default at an unwritten index — the corpus map calls
+it 390 times, once per array its triggers declare) and **`FourCC`** (JASS writes a rawcode as
+the literal `'hfoo'` and Lua cannot, so every compiled Lua map converts its ids through this).
+`FourCC` is written in JS rather than in the Lua prologue so it produces the same 32-bit value
+the lexer gives a JASS literal, sign and all.
+
+**What is not supported, and says so:** a wait reached THROUGH a JASS BJ that Lua called. The
+bridge into the interpreter is an ordinary JS call, so Lua cannot yield across it ("attempt to
+yield across a JS-call boundary"), and such a call carries on without sleeping and logs once —
+the same answer a wait in a JASS condition gets. The two functions that matter are intercepted
+in the host for exactly that reason rather than routed to blizzard.j, and the guard is
+`lua_isyieldable`: a wait at the chunk's own top level would otherwise raise a Lua error and
+take the whole map's script down at load time.
+
+**Safety.** A map is untrusted content the player downloaded. The state opens the standard
+libraries and then takes away every door out of the sandbox — `io`, `os`, `package`, `require`,
+`dofile`, `loadfile`, `load`, `debug` — so a map script can compute and call the game API and
+nothing else.
+
+**Determinism**, because the sim is lockstep: `math.randomseed` is seeded from a constant, not
+from the clock, so every client's Lua rolls the same numbers. fengari is a deterministic pure-JS
+interpreter, and the host adds no clock, no locale and no iteration over a JS `Map` whose order
+could differ. The one thing to keep an eye on is a map that iterates `pairs(_G)` and ACTS on the
+order; the host itself does that once, at load, and sorts the names before using them.
+
+The result, on the corpus map: **10 645 of the map's own functions published, `config()` and
+`main()` run to completion, 635 trigger registrations**, and the only notes left are three
+`Convert*` stubs and two natives (`SetSkyModel`, `SetPlayerAbilityAvailable`) that a JASS map is
+missing in exactly the same way.
+
+`unsupportedReason` now has one clause instead of two — a Lua map is a row like any other.
 
 ## Traps
 
@@ -323,6 +374,14 @@ delete is `unsupportedReason`'s Lua clause.
   `boundary` is a pathing and fog change on every Reforged-era map, and nothing will throw.
 * **Do not let the layer leak.** The moment a gameplay file asks about a map's editor version,
   this stops being a compatibility layer and becomes a fork of the engine.
+* **The compat prelude is a TEMPLATE LITERAL, so a backtick in it ends the string.** JASS has
+  no backticks, but a comment wanting to quote an identifier does — and the failure is a
+  TypeScript syntax error a hundred lines away from the one that caused it.
+* **fengari reads `process` at module scope, twice, before its own browser guard** — in
+  `luaconf.js` and `liolib.js` — so merely importing it in a browser throws "process is not
+  defined". Patched rather than shimmed: defining a global `process` would flip `lbaselib`,
+  `lauxlib` and `loadlib` onto their NODE paths (each tests `typeof process === "undefined"` to
+  choose) and they would then reach for `process.stdout`.
 
 ## Sources
 
@@ -333,3 +392,8 @@ delete is `unsupportedReason`'s Lua clause.
   field names). Cross-check only — see [`REFERENCES.md`](REFERENCES.md) on not building on it blindly.
 * mdx-m3-viewer's own `parsers/w3x/*` and `viewer/handlers/w3x/map.js`, which is where the
   `buildVersion`/`reforged` conflation and the tolerant-read precedent both live.
+* The install's own `Scripts\common.j` and `Scripts\blizzard.j` — read at run time like every
+  other asset, never shipped. They are what told us 1.30.4 already declares 97 `Blz*` natives
+  and the whole hashtable family, and they are what a Lua map's BJ calls resolve into.
+* [fengari](https://github.com/fengari-lua/fengari) — Lua 5.3 in JavaScript, the version 1.31
+  shipped. Two `process` reads patched for the browser; nothing else touched.

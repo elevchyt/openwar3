@@ -38,6 +38,7 @@ import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData } from "../data/objectData";
 import { readMapFormat } from "../compat/mapFormat";
+import { preloadLuaHost } from "../compat/lua/index";
 import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/mapMisc";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
@@ -2485,6 +2486,7 @@ export class MapViewerScene {
     // `startGame` in src/main.ts).
     await this.waitForMapUnits(onProgress);
     this.rts.seedModellessPlaced(); // …including the ones the renderer never delivers (dummy units)
+    await this.preloadScriptHost();
     const engine = this.runMapScript({ melee: true, races, slots: config.slots });
     // No script (or it created nothing for the local player — a script that leans on
     // natives we haven't written yet): fall back to our own roster so the match still
@@ -2804,6 +2806,7 @@ export class MapViewerScene {
     // Run the map's own script (Phase 7). config() sets players/start-locations;
     // main() fires the map's initialization triggers, so its welcome text / quest
     // messages appear in the HUD message log.
+    await this.preloadScriptHost();
     this.runMapScript({ melee: false, slots: config.slots });
     // COMPUTER+ ON EXTREME CANDY WAR (src/ai/plus/candy/, docs/candy-war-ai.md). A scenario runs none
     // of the melee library, so no script will ever call `StartMeleeAI` here — the lobby's computers
@@ -3355,6 +3358,24 @@ export class MapViewerScene {
    *  are PLAYING, as which race — the melee library asks for exactly that, and config()
    *  can't know it. Best-effort and non-fatal: a script error is swallowed so the match
    *  continues. Returns the running engine, or null if the map ships no script. */
+  /**
+   * Fetch the LUA front end, if this map needs one (src/compat/lua/).
+   *
+   * `runMapScript` is synchronous — it sits in the middle of an already carefully ordered
+   * bring-up — so the chunk is fetched HERE, one await earlier, where the loading bar is
+   * already moving. A map with a `war3map.j` never touches it, and the import is its own
+   * bundle, so a player who never opens a Lua map never downloads a Lua interpreter.
+   */
+  private async preloadScriptHost(): Promise<void> {
+    if (!this.mapArchive) return;
+    if (!this.mapArchive.exists("war3map.lua") && !this.mapArchive.exists("scripts\\war3map.lua")) return;
+    try {
+      await preloadLuaHost();
+    } catch (err) {
+      console.warn("[lua] the Lua front end could not be loaded — this map will run with no triggers:", err);
+    }
+  }
+
   private runMapScript(opts: { melee: boolean; races?: Map<number, PlayableRace>; slots: SlotConfig[] }): MapScriptEngine | null {
     if (!this.mapArchive) return null;
     try {
@@ -12577,6 +12598,10 @@ export class MapViewerScene {
     this.interfaceShown = true;
     this.userUi = true;
     this.userControl = true;
+    // A Lua map's front end goes with it: the state itself is GC'd with the interpreter, but
+    // its host functions were registered in that interpreter's runtime, and dropping them
+    // here is what keeps "nothing a match puts on the page outlives it" true of this too.
+    this.mapScript?.lua?.dispose();
     this.mapScript = null;
     // The SoundBoard is shared with the menu, so this map's archive comes back off it with
     // everything else this map brought (see mountMap).

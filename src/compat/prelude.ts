@@ -145,6 +145,143 @@ native BlzGetTriggerFrame          takes nothing returns framehandle
 native BlzGetTriggerFrameEvent     takes nothing returns frameeventtype
 native BlzTriggerRegisterFrameEvent takes trigger whichTrigger, framehandle frame, frameeventtype eventId returns event
 
+// --- the object-FIELD accessors (1.29-1.31) ---------------------------------
+// A map reads and writes a unit's or an ability's object-data column at run time. The
+// field is an opaque handle wrapping the column's own metadata id, which is why the
+// Convert* pair below is all the declaration needs: a map names the constant, the
+// constant is ours to mint, and the engine is handed the id it already routes by
+// (data/objectData.ts UNIT_SETTERS). The GETTERS read the row; the per-UNIT setters
+// are not implemented (they change ONE unit, while our routing writes the TYPE) and
+// answer their typed default, which is the same thing a 2003 map gets from a native
+// this engine has not written yet.
+type unitrealfield             extends    handle
+type unitintegerfield          extends    handle
+type unitbooleanfield          extends    handle
+type unitstringfield           extends    handle
+type unitweaponrealfield       extends    handle
+type unitweaponintegerfield    extends    handle
+type unitweaponbooleanfield    extends    handle
+type unitweaponstringfield     extends    handle
+type itemrealfield             extends    handle
+type itemintegerfield          extends    handle
+type itembooleanfield          extends    handle
+type itemstringfield           extends    handle
+type abilityrealfield          extends    handle
+type abilityintegerfield       extends    handle
+type abilitybooleanfield       extends    handle
+type abilitystringfield        extends    handle
+type abilityreallevelfield     extends    handle
+type abilityintegerlevelfield  extends    handle
+type abilitybooleanlevelfield  extends    handle
+type abilitystringlevelfield   extends    handle
+type abilityreallevelarrayfield    extends handle
+type abilityintegerlevelarrayfield extends handle
+type abilitybooleanlevelarrayfield extends handle
+type abilitystringlevelarrayfield  extends handle
+
+constant native ConvertUnitRealField            takes integer i returns unitrealfield
+constant native ConvertUnitIntegerField         takes integer i returns unitintegerfield
+constant native ConvertUnitBooleanField         takes integer i returns unitbooleanfield
+constant native ConvertUnitStringField          takes integer i returns unitstringfield
+constant native ConvertUnitWeaponRealField      takes integer i returns unitweaponrealfield
+constant native ConvertUnitWeaponIntegerField   takes integer i returns unitweaponintegerfield
+constant native ConvertUnitWeaponBooleanField   takes integer i returns unitweaponbooleanfield
+constant native ConvertUnitWeaponStringField    takes integer i returns unitweaponstringfield
+constant native ConvertItemRealField            takes integer i returns itemrealfield
+constant native ConvertItemIntegerField         takes integer i returns itemintegerfield
+constant native ConvertItemBooleanField         takes integer i returns itembooleanfield
+constant native ConvertItemStringField          takes integer i returns itemstringfield
+constant native ConvertAbilityRealField         takes integer i returns abilityrealfield
+constant native ConvertAbilityIntegerField      takes integer i returns abilityintegerfield
+constant native ConvertAbilityBooleanField      takes integer i returns abilitybooleanfield
+constant native ConvertAbilityStringField       takes integer i returns abilitystringfield
+constant native ConvertAbilityRealLevelField    takes integer i returns abilityreallevelfield
+constant native ConvertAbilityIntegerLevelField takes integer i returns abilityintegerlevelfield
+constant native ConvertAbilityBooleanLevelField takes integer i returns abilitybooleanlevelfield
+constant native ConvertAbilityStringLevelField  takes integer i returns abilitystringlevelfield
+
+native BlzGetUnitRealField    takes unit whichUnit, unitrealfield whichField returns real
+native BlzGetUnitIntegerField takes unit whichUnit, unitintegerfield whichField returns integer
+native BlzGetUnitBooleanField takes unit whichUnit, unitbooleanfield whichField returns boolean
+native BlzGetUnitStringField  takes unit whichUnit, unitstringfield whichField returns string
+native BlzSetUnitRealField    takes unit whichUnit, unitrealfield whichField, real value returns boolean
+native BlzSetUnitIntegerField takes unit whichUnit, unitintegerfield whichField, integer value returns boolean
+native BlzSetUnitBooleanField takes unit whichUnit, unitbooleanfield whichField, boolean value returns boolean
+native BlzSetUnitStringField  takes unit whichUnit, unitstringfield whichField, string value returns boolean
+
+native BlzGetUnitWeaponRealField    takes unit whichUnit, unitweaponrealfield whichField, integer index returns real
+native BlzGetUnitWeaponIntegerField takes unit whichUnit, unitweaponintegerfield whichField, integer index returns integer
+native BlzGetUnitWeaponBooleanField takes unit whichUnit, unitweaponbooleanfield whichField, integer index returns boolean
+native BlzGetUnitWeaponStringField  takes unit whichUnit, unitweaponstringfield whichField, integer index returns string
+native BlzSetUnitWeaponRealField    takes unit whichUnit, unitweaponrealfield whichField, integer index, real value returns boolean
+native BlzSetUnitWeaponIntegerField takes unit whichUnit, unitweaponintegerfield whichField, integer index, integer value returns boolean
+native BlzSetUnitWeaponBooleanField takes unit whichUnit, unitweaponbooleanfield whichField, integer index, boolean value returns boolean
+native BlzSetUnitWeaponStringField  takes unit whichUnit, unitweaponstringfield whichField, integer index, string value returns boolean
+
+native BlzGetItemRealField    takes item whichItem, itemrealfield whichField returns real
+native BlzGetItemIntegerField takes item whichItem, itemintegerfield whichField returns integer
+native BlzGetItemBooleanField takes item whichItem, itembooleanfield whichField returns boolean
+native BlzGetItemStringField  takes item whichItem, itemstringfield whichField returns string
+native BlzSetItemRealField    takes item whichItem, itemrealfield whichField, real value returns boolean
+native BlzSetItemIntegerField takes item whichItem, itemintegerfield whichField, integer value returns boolean
+native BlzSetItemBooleanField takes item whichItem, itembooleanfield whichField, boolean value returns boolean
+native BlzSetItemStringField  takes item whichItem, itemstringfield whichField, string value returns boolean
+
+native BlzGetUnitAbility        takes unit whichUnit, integer abilId returns ability
+native BlzGetUnitAbilityByIndex takes unit whichUnit, integer index returns ability
+native BlzGetItemAbility        takes item whichItem, integer abilCode returns ability
+native BlzGetItemAbilityByIndex takes item whichItem, integer index returns ability
+native BlzGetAbilityId          takes ability whichAbility returns integer
+native BlzGetAbilityRealField           takes ability whichAbility, abilityrealfield whichField returns real
+native BlzGetAbilityIntegerField        takes ability whichAbility, abilityintegerfield whichField returns integer
+native BlzGetAbilityBooleanField        takes ability whichAbility, abilitybooleanfield whichField returns boolean
+native BlzGetAbilityStringField         takes ability whichAbility, abilitystringfield whichField returns string
+native BlzGetAbilityRealLevelField      takes ability whichAbility, abilityreallevelfield whichField, integer level returns real
+native BlzGetAbilityIntegerLevelField   takes ability whichAbility, abilityintegerlevelfield whichField, integer level returns integer
+native BlzGetAbilityBooleanLevelField   takes ability whichAbility, abilitybooleanlevelfield whichField, integer level returns boolean
+native BlzGetAbilityStringLevelField    takes ability whichAbility, abilitystringlevelfield whichField, integer level returns string
+native BlzSetAbilityRealField           takes ability whichAbility, abilityrealfield whichField, real value returns boolean
+native BlzSetAbilityIntegerField        takes ability whichAbility, abilityintegerfield whichField, integer value returns boolean
+native BlzSetAbilityBooleanField        takes ability whichAbility, abilitybooleanfield whichField, boolean value returns boolean
+native BlzSetAbilityStringField         takes ability whichAbility, abilitystringfield whichField, string value returns boolean
+native BlzSetAbilityRealLevelField      takes ability whichAbility, abilityreallevelfield whichField, integer level, real value returns boolean
+native BlzSetAbilityIntegerLevelField   takes ability whichAbility, abilityintegerlevelfield whichField, integer level, integer value returns boolean
+native BlzSetAbilityBooleanLevelField   takes ability whichAbility, abilitybooleanlevelfield whichField, integer level, boolean value returns boolean
+native BlzSetAbilityStringLevelField    takes ability whichAbility, abilitystringlevelfield whichField, integer level, string value returns boolean
+native BlzStartUnitAbilityCooldown      takes unit whichUnit, integer abilCode, real cooldown returns nothing
+native BlzEndUnitAbilityCooldown        takes unit whichUnit, integer abilCode returns nothing
+
+// --- the damage event's other half (1.31) -----------------------------------
+native BlzGetEventDamageTarget takes nothing returns unit
+native BlzGetEventAttackType   takes nothing returns attacktype
+native BlzGetEventDamageType   takes nothing returns damagetype
+native BlzGetEventWeaponType   takes nothing returns weapontype
+native BlzSetEventAttackType   takes attacktype whichAttackType returns boolean
+native BlzSetEventDamageType   takes damagetype whichDamageType returns boolean
+native BlzSetEventWeaponType   takes weapontype whichWeaponType returns boolean
+
+// --- groups by INDEX (1.31) -------------------------------------------------
+// The fast half of the group API: a map that wants member 3 no longer has to drain
+// the group into another one. Implemented, not defaulted — see natives/groups.ts.
+native BlzGroupGetSize      takes group whichGroup returns integer
+native BlzGroupUnitAt       takes group whichGroup, integer index returns unit
+native BlzGroupAddGroupFast takes group whichGroup, group addGroup returns integer
+native BlzGroupRemoveGroupFast takes group whichGroup, group removeGroup returns integer
+
+// --- the rest of the "WithSkin" family (1.31) --------------------------------
+// Each is its skinless twin with a Reforged HD art id on the end, which an SD client
+// drops. "BlzCreateUnitWithSkin" is declared with the units above.
+native BlzCreateDestructableWithSkin      takes integer objectid, real x, real y, real face, real scale, integer variation, integer skinId returns destructable
+native BlzCreateDestructableZWithSkin     takes integer objectid, real x, real y, real z, real face, real scale, integer variation, integer skinId returns destructable
+native BlzCreateDeadDestructableWithSkin  takes integer objectid, real x, real y, real face, real scale, integer variation, integer skinId returns destructable
+native BlzCreateDeadDestructableZWithSkin takes integer objectid, real x, real y, real z, real face, real scale, integer variation, integer skinId returns destructable
+native BlzCreateItemWithSkin              takes integer itemid, real x, real y, integer skinId returns item
+native BlzSetUnitSkin                     takes unit whichUnit, integer skinId returns nothing
+native BlzGetUnitSkin                     takes unit whichUnit returns integer
+
+// --- odds and ends a later blizzard.j grew -----------------------------------
+native SetThematicMusicVolumeBJ takes integer volume returns nothing
+
 // --- the minimap terrain texture (1.31) -------------------------------------
 native BlzChangeMinimapTerrainTex takes string texFile returns boolean
 `;

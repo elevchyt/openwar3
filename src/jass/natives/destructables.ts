@@ -85,6 +85,14 @@ export function registerDestructableNatives(rt: Runtime): void {
   def(rt, "CreateDestructableZ", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), false));
   def(rt, "CreateDeadDestructable", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), true));
   def(rt, "CreateDeadDestructableZ", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), true));
+  // …and their 1.31 twins, which take a Reforged HD skin id on the end (declared in our own
+  // compat prelude — src/compat/prelude.ts). We draw SD out of an SD install, so the skin is
+  // read and dropped and the destructible is made exactly as its skinless twin would be.
+  // A Lua map uses these in place of the originals, which is where they turn up.
+  def(rt, "BlzCreateDestructableWithSkin", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), false));
+  def(rt, "BlzCreateDestructableZWithSkin", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), false));
+  def(rt, "BlzCreateDeadDestructableWithSkin", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), true));
+  def(rt, "BlzCreateDeadDestructableZWithSkin", (c, a) => create(c, asInt(a[0]), asNum(a[1]), asNum(a[2]), true));
   def(rt, "RemoveDestructable", (c, a) => {
     const d = dest(c, a[0]);
     if (d) {

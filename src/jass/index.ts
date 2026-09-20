@@ -14,6 +14,7 @@ import { buildInterpreter } from "./headless";
 import type { Interpreter } from "./interpreter";
 import type { EngineHooks, LobbySlot, MapSetup } from "./runtime";
 import { COMPAT_PRELUDE } from "../compat/prelude";
+import { createLuaMapScript, type LuaMapScript } from "../compat/lua/index";
 
 const decode = (b: Uint8Array): string => new TextDecoder("windows-1252").decode(b);
 // war3map.wts is UTF-8 (with a BOM); decode it as such so authored text isn't mojibake.
@@ -38,7 +39,15 @@ function readUtf8(vfs: DataSource | MpqDataSource, ...paths: string[]): string |
 export interface MapScriptEngine {
   interp: Interpreter;
   setup: MapSetup;
+  /** The Lua front end, when the map's script is `war3map.lua` (src/compat/lua/). Held so the
+   *  match can drop it with everything else it owns; nothing else in the engine asks. */
+  lua?: LuaMapScript;
 }
+
+/** The seed the map's Lua `math.random` starts from. A match is LOCKSTEP, so this has to be
+ *  the same number on every machine and must not come from the clock — it is a constant for
+ *  the same reason the sim's own RNG is seeded from the match, not from `Date.now()`. */
+const LUA_SEED = 1;
 
 /** Load common.j + blizzard.j (from the install) and war3map.j (from the map),
  *  boot the interpreter, and run config(). Returns null if the map has no compiled
@@ -92,7 +101,11 @@ export function loadMapScript(
   } = {},
 ): MapScriptEngine | null {
   const mapJ = readScript(map, "war3map.j", "scripts\\war3map.j");
-  if (!mapJ) return null;
+  // A map saved by a 1.31+ editor may ship LUA instead (docs/map-compatibility.md): same API,
+  // different language. The JASS libraries are loaded either way — a Lua map's BJ calls and
+  // common.j constants resolve into them (src/compat/lua/host.ts).
+  const mapLua = mapJ ? null : readScript(map, "war3map.lua", "scripts\\war3map.lua");
+  if (!mapJ && !mapLua) return null;
   const common = readScript(install, "Scripts\\common.j", "scripts\\common.j");
   const blizzard = readScript(install, "Scripts\\blizzard.j", "Scripts\\Blizzard.j", "scripts\\blizzard.j");
   // common.j/blizzard.j should always be present in a real install; if not, run the
@@ -109,6 +122,21 @@ export function loadMapScript(
     neutralColor: opts.neutralColor,
   });
   const engine: MapScriptEngine = { interp, setup: interp.rt.setup };
+  // The Lua chunk runs LAST, after the JASS libraries are in the runtime, because that is what
+  // its globals resolve into — and it publishes its own `config`/`main` as host functions, so
+  // the two lines below do not care which language the map was written in. A chunk that will
+  // not compile is fatal to the SCRIPT and not to the match: the map opens with no triggers,
+  // which is the same shape as a JASS map whose main() threw.
+  if (mapLua) {
+    try {
+      const lua = createLuaMapScript(interp, LUA_SEED);
+      lua.load(mapLua, "war3map.lua");
+      engine.lua = lua;
+      console.info(`[lua] war3map.lua loaded — ${lua.functionCount()} map function(s) published`);
+    } catch (err) {
+      console.warn("[lua] war3map.lua failed to load (the map will run with no triggers):", err);
+    }
+  }
   opts.onBoot?.(engine);
   interp.run("config", []);
   if (opts.lobby) interp.rt.applyLobby(opts.lobby.slots, opts.lobby.localPlayer);

@@ -159,6 +159,10 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetTransportUnit", (c) => resp(c, "TransportUnit"));
   def(rt, "GetFilterUnit", (c) => resp(c, "FilterUnit")); // set during enter/enum boolexpr filters
   def(rt, "GetEventDamageSource", (c) => resp(c, "EventDamageSource")); // EVENT_UNIT_DAMAGED
+  // 1.31's other half of the same event (declared in src/compat/prelude.ts). The unit that was
+  // HIT is already the triggering unit — a damage event is raised on it — so this is that same
+  // response under the name a later map knows it by, and not a second thing to keep in step.
+  def(rt, "BlzGetEventDamageTarget", (c) => resp(c, "TriggerUnit"));
   // The whole line that was typed, and the part of it the registration asked for. A map that
   // registers "-kick " and reads both is how "-kick 3" gets its argument: the matched half is
   // sliced off the front and the rest is the parameter.

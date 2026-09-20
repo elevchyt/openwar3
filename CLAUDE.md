@@ -646,6 +646,21 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `Blz*` natives are a DEGRADATION surface, not a blocker — an unknown native and an undefined
   global are each logged once and stepped over, so such a map runs before any of them exist —
   and their constants must come from a prelude of OUR OWN, never Blizzard's newer `common.j`.
+  A map's script may also be **LUA** (`war3map.lua`), and the reason that is a front end rather
+  than a second engine is that the LANGUAGE is different and the API is not: every name such a
+  script calls is an engine native, a BJ out of the install's own `blizzard.j` (Test of Faith
+  Reborn calls `IsUnitAliveBJ` 381 times) or a common.j constant. So `src/compat/lua/` is one
+  Lua state whose `_G` resolves into the running JASS runtime — a JASS global read LIVE and
+  never cached (blizzard.j rewrites `bj_lastCreatedUnit` constantly), a handle as interned
+  LIGHT USERDATA so Lua `==` is handle identity, a Lua function registered by name in
+  `Runtime.hostFunctions` so a `code` value is unchanged downstream, and a WAIT as a coroutine
+  yield, which nests exactly because the interpreter's thread protocol already yields SECONDS.
+  Two things a Lua map needs that JASS does not: `__jarray` (an array is a table reading its
+  type's default) and **`FourCC`** (JASS writes `'hfoo'` and Lua cannot) — the latter in JS, so
+  its sign matches the lexer's. The sandbox is CLOSED (`io`, `os`, `load`, `require` removed): a
+  map is untrusted content. It is a DYNAMIC IMPORT, so a player who never opens a Lua map never
+  downloads a Lua interpreter, and `preloadScriptHost` fetches it one await before the script
+  runs because `loadMapScript` must stay synchronous.
 - **Extreme Candy War:** read [`docs/candy-war-ai.md`](docs/candy-war-ai.md) before touching
   [`src/ai/plus/candy/`](src/ai/plus/candy/). It is Computer+ as a HERO player for Blizzard's lane
   map, seated by `startCustom` when the script has the map's four triggers (never by file name), on

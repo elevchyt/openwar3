@@ -17,7 +17,7 @@
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
 import { rawcodeToInt } from "./lexer";
-import { Runtime, JassArray, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
+import { Runtime, JassArray, playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type HostFunction, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
@@ -313,9 +313,26 @@ export class Interpreter {
   callFunction(name: string, args: JassValue[], adoptWaits = false): JassValue {
     const nat = this.rt.natives.get(name);
     if (nat) return this.callNative(name, nat, args); // natives are synchronous — no generator needed
+    // A HOST function (a Lua map's own — src/compat/lua/) is the map's code and outranks
+    // blizzard.j's, exactly as a JASS map's own definition of a BJ would. It is looked up
+    // before `functions` for that reason and after the natives, which are the engine's.
+    const host = this.rt.hostFunctions.get(name);
+    if (host) return this.callHost(name, host, args);
     const fn = this.rt.functions.get(name);
     if (fn) return this.runSync(this.callUserG(fn, args), name, adoptWaits);
     return this.missing(name);
+  }
+
+  /** A host function on the caller's stack. Its own `call` decides what a wait means there —
+   *  for Lua that is the same answer JASS gives: the callback is abandoned and said so once. */
+  private callHost(name: string, host: HostFunction, args: JassValue[]): JassValue {
+    try {
+      return host.call(args);
+    } catch (err) {
+      if (err instanceof ThreadAbort) throw err;
+      this.rt.warnOnce(name, `threw: ${(err as Error).message}`);
+      return JNULL;
+    }
   }
 
   /** The same resolution, as a generator — used from a thread, where a user function
@@ -323,6 +340,10 @@ export class Interpreter {
   private *callFunctionG(name: string, args: JassValue[]): ThreadGen {
     const nat = this.rt.natives.get(name);
     if (nat) return this.callNative(name, nat, args);
+    // …and from a thread the host's generator form, so a Lua trigger action's wait parks the
+    // thread instead of abandoning the callback. Same protocol: a yielded number is seconds.
+    const host = this.rt.hostFunctions.get(name);
+    if (host) return yield* host.run(args);
     const fn = this.rt.functions.get(name);
     if (fn) return yield* this.callUserG(fn, args);
     return this.missing(name);

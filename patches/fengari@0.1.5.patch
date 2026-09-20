@@ -1,0 +1,35 @@
+diff --git a/src/liolib.js b/src/liolib.js
+index 92dda580e726cf5d4914132df363869cef6fefe2..22f8c91b615d81fdf298bd66802438ea5a30a01e 100644
+--- a/src/liolib.js
++++ b/src/liolib.js
+@@ -131,7 +131,10 @@ const io_output = function(L) {
+ };
+ 
+ /* node <= 6 doesn't support passing a Uint8Array to fs.writeSync */
+-const prepare_string_for_write = process.versions.node > 6 ?
++// OpenWar3 fix: the same unguarded `process` at module scope (see luaconf.js). In a browser
++// there is no Node to be old, so the identity function is the right branch — and the `io`
++// library is taken away from a map script anyway (src/compat/lua/host.ts sandboxes it).
++const prepare_string_for_write = typeof process === "undefined" || process.versions.node > 6 ?
+     (s) => s : // identity function
+     (s) => Buffer.from(s.buffer, s.byteOffset, s.byteLength);
+ 
+diff --git a/src/luaconf.js b/src/luaconf.js
+index 5fb91cd70840b5721009ecf440f950aa9478c833..ebb8cb515449b79137de47734fe944f27953b6a7 100644
+--- a/src/luaconf.js
++++ b/src/luaconf.js
+@@ -1,6 +1,13 @@
+ "use strict";
+ 
+-const conf = (process.env.FENGARICONF ? JSON.parse(process.env.FENGARICONF) : {});
++// OpenWar3 fix: fengari reads `process.env` here BEFORE its own "am I in Node?" guard
++// thirty lines below, so merely importing it in a browser throws "process is not defined".
++// Guarded rather than shimmed: defining a global `process` would flip lbaselib, lauxlib and
++// loadlib onto their NODE paths (they each test `typeof process === "undefined"` to choose),
++// and they would then reach for `process.stdout`. The browser is the platform this engine
++// runs on; fengari's own browser build (fengari-web) makes the same two corrections.
++const conf = (typeof process !== "undefined" && process.env && process.env.FENGARICONF
++    ? JSON.parse(process.env.FENGARICONF) : {});
+ 
+ const {
+     LUA_VERSION_MAJOR,

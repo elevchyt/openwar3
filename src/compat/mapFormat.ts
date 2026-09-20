@@ -96,10 +96,11 @@ function scriptOf(mpq: MpqDataSource): MapScriptLanguage {
  *
  * This is the ONE place that decides, and it is deliberately short: a map is refused for
  * something the engine genuinely cannot do, never for being new. Everything the parsers were
- * taught (w3i v32/v33, object data v3, terrain v12) is absent from this list on purpose.
+ * taught (w3i v32/v33, object data v3, terrain v12) is absent from this list on purpose, and
+ * so is a LUA script, which src/compat/lua/ now runs — the clause that was here is the one
+ * line that had to go when it landed.
  */
 export function unsupportedReason(profile: MapFormatProfile): string | null {
   if (profile.w3iVersion === 0) return "This file has no map information in it.";
-  if (profile.scriptLanguage === "lua") return "This map's triggers are written in Lua, which OpenWar3 cannot run yet.";
   return null;
 }

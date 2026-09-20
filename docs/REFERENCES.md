@@ -11,6 +11,7 @@ incomplete; the MPQ file list settled it).
 | [HiveWE](https://github.com/stijnherfst/HiveWE) | Terrain/cliff/ramp/pathing reference (`src/base/terrain.ixx`) | Best ramp reference, but misses 2-layer (X/H) ramps and hardcodes the CliffTrans dir — cross-check with MPQ data |
 | [Warsmash](https://github.com/Retera/WarsmashModEngine) | Behavioral reference for sim, orders, JASS natives | Java; ≥1 GPL dep — study, don't lift |
 | [war3-model](https://github.com/4eb0da/war3-model) | Alternative TS MDX parser/renderer | Oracle for MDX parsing diffs |
+| [fengari](https://github.com/fengari-lua/fengari) | Lua 5.3 in JavaScript — the VM a `war3map.lua` map runs on (`src/compat/lua/`, docs/map-compatibility.md) | Reads `process` at module scope twice before its own browser guard; patched in `patches/fengari@0.1.5.patch`. Do NOT shim a global `process` instead — that flips its other modules onto their Node paths |
 | [w3x-parser](https://github.com/voces/w3x-spec) | `.w3m/.w3x` format reference | |
 | [StormLib](https://github.com/ladislav-zezula/StormLib) / [CascLib](https://github.com/ladislav-zezula/CascLib) | MPQ/CASC correctness reference | CASC only matters for §9 |
 | [Nowar-Sans-War3](https://github.com/nowar-fonts/Nowar-Sans-War3) | Multi-language game font (Friz Quadrata replacement), OFL 1.1 | Bundled at `public/fonts/NowarSans.ttf` |
