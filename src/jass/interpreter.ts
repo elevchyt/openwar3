@@ -725,7 +725,12 @@ export class Interpreter {
   /** Run a trigger's action functions in order, on the current thread. One throwing
    *  action is logged and skipped — the rest still run (one bad trigger ≠ dead map). */
   private *runActionsG(trig: TriggerObj): ThreadGen {
-    for (const fn of trig.actions) {
+    // `GetTriggerExecCount` counts the times the actions actually RAN, which is here and not
+    // at the fire — a trigger whose conditions refused it was evaluated, not executed.
+    trig.execs++;
+    // Iterate a SNAPSHOT: an action may `TriggerRemoveAction` (its own, commonly) mid-run, and
+    // splicing the array a live `for…of` is walking makes it skip the next one.
+    for (const { fn } of [...trig.actions]) {
       try {
         yield* this.callFunctionG(fn, []);
       } catch (err) {
@@ -738,7 +743,8 @@ export class Interpreter {
 
   /** Evaluate a trigger's conditions (synchronously — WC3 can't wait in a condition). */
   private conditionsPass(trig: TriggerObj): boolean {
-    return trig.conditions.every((fn) => truthy(this.callFunction(fn, [])));
+    trig.evals++; // GetTriggerEvalCount — every weighing, passed or not
+    return trig.conditions.every(({ fn }) => truthy(this.callFunction(fn, [])));
   }
 
   private arrayFor(name: string, frame: Frame | null): JassArray {

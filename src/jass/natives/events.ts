@@ -26,7 +26,7 @@ const timer = (c: NativeCtx, v: JassValue): TimerObj | undefined => c.rt.data<Ti
 export function registerEventNatives(rt: Runtime): void {
   // --- triggers ---
   def(rt, "CreateTrigger", (c) => {
-    const t: TriggerObj = { handleId: 0, actions: [], conditions: [], enabled: true };
+    const t: TriggerObj = { handleId: 0, actions: [], conditions: [], enabled: true, evals: 0, execs: 0 };
     t.handleId = c.rt.handles.alloc(t);
     return jHandle(t.handleId, "trigger");
   });
@@ -41,17 +41,51 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "EnableTrigger", (c, a) => (trig(c, a[0]) && (trig(c, a[0])!.enabled = true), JNULL));
   def(rt, "DisableTrigger", (c, a) => (trig(c, a[0]) && (trig(c, a[0])!.enabled = false), JNULL));
   def(rt, "IsTriggerEnabled", (c, a) => jBool(trig(c, a[0])?.enabled ?? false));
+  // A real handle, not a shared dummy. The handle IS the return value's whole purpose: it is
+  // what `TriggerRemoveAction` takes, and with every action sharing `jHandle(0, …)` the remover
+  // could not be written at all — one call would have had to remove all of them or none.
   def(rt, "TriggerAddAction", (c, a) => {
     const t = trig(c, a[0]);
-    if (t && a[1].k === "code") t.actions.push(a[1].fn);
-    return jHandle(0, "triggeraction");
+    if (!t || a[1].k !== "code") return jHandle(0, "triggeraction");
+    const entry = { id: 0, fn: a[1].fn, owner: t.handleId };
+    entry.id = c.rt.handles.alloc(entry);
+    t.actions.push(entry);
+    return jHandle(entry.id, "triggeraction");
   });
   def(rt, "TriggerAddCondition", (c, a) => {
     const t = trig(c, a[0]);
     const be = c.rt.data<BoolExpr>(a[1]);
-    if (t && be) t.conditions.push(be.fn);
-    return jHandle(0, "triggercondition");
+    if (!t || !be) return jHandle(0, "triggercondition");
+    const entry = { id: 0, fn: be.fn, owner: t.handleId };
+    entry.id = c.rt.handles.alloc(entry);
+    t.conditions.push(entry);
+    return jHandle(entry.id, "triggercondition");
   });
+  // …and the removers they exist for. Removing by HANDLE rather than by function name is the
+  // point: a map that adds the same function twice and removes it once keeps the other copy.
+  // The native is handed only the ACTION's handle, never its trigger, so the entry carries the
+  // trigger it was added to. That back-pointer is why this is a lookup rather than a sweep of
+  // every handle in the match.
+  const removeEntry = (c: NativeCtx, v: JassValue, which: "actions" | "conditions"): void => {
+    const entry = c.rt.data<{ id: number; owner: number }>(v);
+    if (!entry) return;
+    const t = c.rt.handles.get(entry.owner) as TriggerObj | undefined;
+    if (!t) return;
+    const i = t[which].findIndex((e) => e.id === entry.id);
+    if (i >= 0) t[which].splice(i, 1);
+    c.rt.handles.free(entry.id);
+  };
+  def(rt, "TriggerRemoveAction", (c, a) => (removeEntry(c, a[0], "actions"), JNULL));
+  def(rt, "TriggerRemoveCondition", (c, a) => (removeEntry(c, a[0], "conditions"), JNULL));
+  // `ResetTrigger` — zero the two counters. It does NOT clear actions or conditions
+  // (`TriggerClearActions` is that), which is why it is here and not an alias of one.
+  def(rt, "ResetTrigger", (c, a) => {
+    const t = trig(c, a[0]);
+    if (t) { t.evals = 0; t.execs = 0; }
+    return JNULL;
+  });
+  def(rt, "GetTriggerEvalCount", (c, a) => jInt(trig(c, a[0])?.evals ?? 0));
+  def(rt, "GetTriggerExecCount", (c, a) => jInt(trig(c, a[0])?.execs ?? 0));
   def(rt, "TriggerClearActions", (c, a) => (trig(c, a[0]) && (trig(c, a[0])!.actions = []), JNULL));
   def(rt, "TriggerClearConditions", (c, a) => (trig(c, a[0]) && (trig(c, a[0])!.conditions = []), JNULL));
 
@@ -297,13 +331,16 @@ export function registerEventNatives(rt: Runtime): void {
       c.rt.eventStack.pop();
     }
   };
-  const conditionsPass = (c: NativeCtx, t: TriggerObj): boolean =>
-    t.conditions.every((fn) => {
+  const conditionsPass = (c: NativeCtx, t: TriggerObj): boolean => {
+    t.evals++; // GetTriggerEvalCount — see TriggerObj
+    return t.conditions.every(({ fn }) => {
       const r = c.call(fn, []);
       return r.k === "bool" ? r.b : true;
     });
+  };
   const runActions = (c: NativeCtx, t: TriggerObj): void => {
-    for (const fn of t.actions) {
+    t.execs++; // GetTriggerExecCount — the actions RAN
+    for (const { fn } of [...t.actions]) {
       try {
         c.call(fn, []);
       } catch (err) {

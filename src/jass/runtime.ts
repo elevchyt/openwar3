@@ -17,9 +17,21 @@ import type { StoredUnitState } from "../sim/world";
  *  and enabled flag. The engine fires it when a registered event occurs (7.4). */
 export interface TriggerObj {
   handleId: number;
-  actions: string[]; // function names added via TriggerAddAction
-  conditions: string[]; // function names wrapped by TriggerAddCondition
+  /** Actions added via `TriggerAddAction`, and conditions via `TriggerAddCondition`. Each
+   *  carries the HANDLE the native handed back as well as the function it names, because
+   *  `TriggerRemoveAction`/`TriggerRemoveCondition` take that handle and remove exactly the
+   *  one it stands for — a map that adds the same function twice and removes it once keeps
+   *  the other. The handles used to be a shared dummy (`jHandle(0, …)`), which made both
+   *  removers un-implementable rather than merely unimplemented. */
+  actions: Array<{ id: number; fn: string }>;
+  conditions: Array<{ id: number; fn: string }>;
   enabled: boolean;
+  /** `GetTriggerEvalCount` / `GetTriggerExecCount`. Two different counters and not one: the
+   *  eval count counts every time this trigger's CONDITIONS were weighed, the exec count only
+   *  the times they passed and the actions actually ran. A map polls the difference to see how
+   *  often something was offered and declined. `ResetTrigger` zeroes both. */
+  evals: number;
+  execs: number;
 }
 
 /** A `boolexpr` — a condition wrapping a `code` (function ref), from Condition()/
