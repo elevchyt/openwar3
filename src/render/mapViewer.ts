@@ -1247,6 +1247,26 @@ export class MapViewerScene {
   // doodad widgets stream in async, so we can't hold instance refs here. Lets fogWidgets
   // light a tree from ANY cell it covers rather than one self-shadowed origin cell (#43).
   private treeFogRadius = new Map<number, number>();
+  /**
+   * …and the same for every OTHER prop the map laid down, keyed the same way.
+   *
+   * A doodad is lit from one 64-unit vision cell — the one holding its ORIGIN — and for a
+   * tree, a rock or a fence that is the whole of it. A **BRIDGE** is not: `LT05` on Human01 is
+   * over a thousand world units end to end and its origin sits **mid-span, out over the
+   * river** — the cell a player standing on either bank sees last and loses first. So the
+   * whole span flipped between explored-grey (×0.5) and full brightness on the state of one
+   * cell in the middle of the water: walk up to the bridge and it goes dark, step onto it and
+   * it lights up, which reads exactly like the deck being high ground the player cannot see
+   * onto. It is not — vision never asks about the deck at all (`VisionSet.initBlockers`
+   * installs the CLIFF-LEVEL field, and the river here is cliff level 0 from bank to bank
+   * while the deck stands at +161). It was only ever which cell the LIGHTING was read from.
+   *
+   * The half-extent of the prop's own pathing texture, which is the one statement of how big
+   * a doodad is that the data makes. Trees keep `treeFogRadius` (the same number by a
+   * different route — theirs doubles as their line-of-sight blocker), so nothing about them
+   * moves.
+   */
+  private propFogRadius = new Map<number, number>();
   // Animated portrait of the selected unit (own small viewer + canvas).
   private portraitViewer: ModelViewerScene | null = null;
   private portraitFor: number | null = null;
@@ -2112,6 +2132,7 @@ export class MapViewerScene {
     const readBytes = (p: string): Uint8Array | null => this.vfs.rawBytes(p);
 
     // Destructibles (trees, rocks) from war3map.doo.
+    this.propFogRadius.clear(); // …outside the branch: a map with no .doo has no props either
     const dooBytes = archive.rawBytes("war3map.doo");
     if (dooBytes) {
       const doodads = parseDoo(dooBytes, buildVersion);
@@ -2139,6 +2160,20 @@ export class MapViewerScene {
         .map((d, i) => ({ id: d.id, x: d.x, y: d.y, angle: d.angle, pathTex: dead.get(i + 1), isDead: dead.has(i + 1) }))
         .filter((p) => !p.isDead || p.pathTex); // dead with no wreckage → no collider at all
       stampFootprints(grid, placements, pathTexOf, readBytes);
+      // How big each prop IS, for the fog pass to light it by (propFogRadius). The type's own
+      // pathing texture, not the death one: this is the extent of the thing on screen, and a
+      // gate that has swung open is still a gate-sized hole in the fog. Every doodad, so a
+      // bridge, a wall and a city gate are all lit from their whole body rather than from the
+      // one cell under their origin. Cheap: `footprintFor` caches per texture, and a type that
+      // has no pathing texture at all simply keeps the single-cell reading.
+      for (const d of doodads) {
+        const tex = pathTexOf(d.id);
+        if (!tex) continue;
+        const fp = this.footprintFor(tex, d.angle);
+        if (!fp) continue;
+        const half = (Math.max(fp.w, fp.h) * PATHING_CELL) / 2;
+        if (half > 0) this.propFogRadius.set(fogKey(d.x, d.y), half);
+      }
       // A tree placed dead is a stump: scenery, not something a wisp can chop.
       for (const d of this.destructibles) {
         if (d.isTree && d.life > 0) trees.push({ x: d.x, y: d.y, angle: d.angle, pathTex: d.pathTex });
@@ -12778,7 +12813,10 @@ export class MapViewerScene {
       // its own back half — and its origin sits exactly where its four cells meet, so
       // the floor() in worldToCell often landed on a self-shadowed one and drew a
       // front-line tree as explored-grey (#43). Props with no footprint use their cell.
-      const state = vision.bestStateAt(loc[0], loc[1], this.treeFogRadius.get(fogKey(loc[0], loc[1])) ?? 0);
+      const key = fogKey(loc[0], loc[1]);
+      // A tree's own blocker radius first (it is the number that also shadows the ground
+      // behind it), then the prop's body — see propFogRadius for why a bridge needs one.
+      const state = vision.bestStateAt(loc[0], loc[1], this.treeFogRadius.get(key) ?? this.propFogRadius.get(key) ?? 0);
       if (state === FogState.Unexplored) {
         if (inst.rendered === false) return; // already dark — nothing to do
         inst.hide(); // never seen — don't even hint at what's there

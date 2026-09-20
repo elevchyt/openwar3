@@ -347,7 +347,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   floor. Found by a ray cast straight DOWN at the model's own geometry, always MAXed with the
   ground (so stepping off a bridge needs no rule), and the `.doo`'s `z` is an ABSOLUTE world height.
   The geometry is parsed out of the archives because the viewer does not keep it: `setupGeosets`
-  uploads each geoset to a GL buffer and keeps only byte offsets.
+  uploads each geoset to a GL buffer and keeps only byte offsets. The CLICK RAY marches the same
+  floor (`groundHit`), or a right-click on a bridge lands in the river a few hundred units past
+  it. A deck is **not high ground**: vision installs the CLIFF-LEVEL field and never asks about
+  it — what looked like it was the fog pass lighting a thousand-unit bridge from the one vision
+  cell under its ORIGIN, out in the middle of the water (`propFogRadius` now gives every prop
+  the half-extent of its own pathing texture, as trees already had).
 - **The pause:** read [`docs/pause.md`](docs/pause.md) before touching `paused` in
   `src/render/mapViewer.ts`, the F10 panel's Pause button or the Quest Log's Done button. The
   pause has THREE independent owners (a modal panel, the map's own `PauseGame`, a player) and

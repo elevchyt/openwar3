@@ -25,6 +25,9 @@ const { WalkableSurfaces } = require(join(REPO, ".sim-build", "src", "render", "
 const mdlx = require(join(REPO, "node_modules", "mdx-m3-viewer", "dist", "cjs", "parsers", "mdlx", "model"));
 const MdlxModel = mdlx.default ?? mdlx;
 const { openInstall, isCascInstallDir } = require(join(REPO, "tools", "install.cjs"));
+const { decodePathTex } = require(join(REPO, ".sim-build", "src", "sim", "destructibles.js"));
+const { PATHING_CELL } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
+const { VisionMap, FogState } = require(join(REPO, ".sim-build", "src", "sim", "vision.js"));
 
 let failed = 0;
 function check(what, cond, detail) {
@@ -102,6 +105,50 @@ if (!fs.existsSync(WC3) || !isCascInstallDir(WC3)) {
     check("…so the deck rises about 80 over the span", near(crown - bank, 80, 10), crown - bank);
     check("…and stands ~325 clear of the streambed (-165)", near(crown + 165, 325, 12), crown + 165);
     check("past the end of the bridge the ray finds nothing", along(700) === -Infinity, along(700));
+  }
+
+  // --- and the other half of "a bridge is not high ground" -------------------------------
+  //
+  // A bridge's DECK is never in the fog's line-of-sight field — `VisionSet.initBlockers`
+  // installs the CLIFF-LEVEL sampler, and the river Human01's bridge spans is cliff level 0
+  // from bank to bank while the deck stands at +161. What made the bridge LOOK like high
+  // ground was the renderer lighting it from the single vision cell under its ORIGIN, which
+  // for a thousand-unit bridge is out in the middle of the water: walk up to it and the whole
+  // span went explored-grey, step onto it and it lit up. `MapViewerScene.propFogRadius` gives
+  // every prop its own body to be lit from (the half-extent of its pathing texture), so both
+  // halves of the claim are pinned here — how big the bridge's body is, and that a footprint
+  // of that size is what turns one dark cell into a lit prop.
+  console.log("\na prop is lit from its BODY, not from the cell under its origin");
+  {
+    const bytes = vfs.rawBytes("PathTextures\\CityBridgeLarge45.tga");
+    check("the bridge's own pathing texture is in the install", !!bytes);
+    if (bytes) {
+      const fp = decodePathTex(bytes);
+      const half = (Math.max(fp.w, fp.h) * PATHING_CELL) / 2;
+      check("…and it is 32x32 cells, so the bridge's body reaches 512 from its origin",
+        fp.w === 32 && fp.h === 32 && half === 512, `${fp.w}x${fp.h} → ${half}`);
+      // A tree, for scale: its texture is four cells, so it keeps a single-cell-ish reading.
+      const tree = vfs.rawBytes("PathTextures\\4x4Default.tga");
+      if (tree) {
+        const tfp = decodePathTex(tree);
+        check("…while a tree's is 4x4, i.e. 64 — props are not all given a huge radius",
+          (Math.max(tfp.w, tfp.h) * PATHING_CELL) / 2 === 64, `${tfp.w}x${tfp.h}`);
+      }
+    }
+
+    // The mechanism, on a vision map of its own: one cell Explored in a Visible field.
+    const v = new VisionMap(0, 0, 4096, 4096);
+    v.stampRect(0, 0, 4096, 4096, FogState.Visible);
+    v.stampCircle(2048, 2048, 70, FogState.Explored); // one vision cell (VISION_CELL is 64)
+    check("the origin cell alone reads Explored", v.stateAt(2048, 2048) === FogState.Explored);
+    check("…which is what dimmed the whole bridge (radius 0 sees only that cell)",
+      v.bestStateAt(2048, 2048, 0) === FogState.Explored);
+    check("…and with the bridge's own 512 it is Visible again",
+      v.bestStateAt(2048, 2048, 512) === FogState.Visible);
+    // …and the fix must not light a prop whose whole body really is unseen.
+    v.stampCircle(2048, 2048, 700, FogState.Explored);
+    check("a prop whose whole body is explored-grey still reads Explored",
+      v.bestStateAt(2048, 2048, 512) === FogState.Explored);
   }
   console.log(failed ? `\nwalkable: ${failed} check(s) FAILED` : "\nwalkable: all checks passed");
   process.exit(failed ? 1 : 0);

@@ -108,6 +108,36 @@ Two things deliberately do NOT ask it:
   [`selection.md`](./selection.md)): one system is 2D and about where you may go, the other is
   3D and about where you are drawn.
 
+## A bridge is NOT high ground — and the fog pass has to say so too
+
+Nothing in the sim treats a deck as elevation. `VisionSet.initBlockers` installs the
+**cliff-level** sampler (`makeCliffLevelSampler`), never `groundOrDeck`, so line of sight never
+asks whether there is a bridge over a point. Measured across Strahnbrad's span: cliff level **0**
+from bank to bank while the deck stands at **+161**. A unit beside a bridge can see onto it, and
+always could.
+
+It still *looked* like high ground, and the reason was one line in the renderer. `fogWidgets`
+lights each prop from `bestStateAt(origin, radius)`, and `radius` was non-zero for TREES only
+(`treeFogRadius`, issue #43 — "light a prop from the BRIGHTEST cell of its footprint, not the
+one cell holding its origin"). A tree is one cell wide, so that was the whole of it. **A bridge
+is not**: `LT05` is over a thousand world units end to end and its origin sits mid-span, out
+over the river — the cell a player on either bank sees last and loses first. So the whole span
+flipped between explored-grey (×0.5) and full brightness on the state of that one cell in the
+water: walk up to the bridge and it went dark, step onto it and it lit up, which reads exactly
+like a deck you cannot see onto until you are standing on it.
+
+`MapViewerScene.propFogRadius` is the same fix as the trees', extended to every prop: the
+half-extent of the doodad's own **pathing texture**, which is the one statement of how big a
+doodad is that the data makes. `CityBridgeLarge45.tga` is 32×32 cells, so the bridge's body
+reaches **512** from its origin; a tree's `4x4Default.tga` gives **64**, so nothing about trees
+moves. Trees keep `treeFogRadius` (theirs doubles as their line-of-sight blocker) and the prop
+table is the fallback under it.
+
+It does not make everything bright: a prop whose whole body is remembered-but-unseen still
+draws at ×0.5. `tools/render-walkable-height-test.cjs` pins both halves — the bridge texture's
+own extent, and that `bestStateAt` at that radius turns one dark cell into a lit prop while a
+wholly dark body stays dark.
+
 ## What WC3 does not do
 
 You cannot walk *under* a bridge. The engine treats the deck as ground and rejects a fly height
