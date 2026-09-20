@@ -131,7 +131,7 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 
 | File | Role |
 |---|---|
-| `lexer.ts` | JASS tokens: keywords, idents, int/real/string literals, `'fourcc'` rawcodes (`rawcodeToInt`/`intToRawcode`), operators, significant newlines |
+| `lexer.ts` | JASS tokens: keywords, idents, int/real/string literals, `'fourcc'` rawcodes (`rawcodeToInt`/`intToRawcode`), operators, significant newlines — **all three terminators**, `\n`, `\r\n` and a bare `\r` (see below) |
 | `ast.ts` | node types (globals, native/function decls, set/call/if/loop/exitwhen/return, expressions) |
 | `parser.ts` | recursive-descent → `JassProgram`. Precedence: `or` < `and` < comparisons < `+ -` < `* /` < unary |
 | `values.ts` | value model — **int and real are separate kinds** (JASS `int/int` truncates!); handles, code refs, null; `defaultForType` |
@@ -2167,3 +2167,23 @@ Echo Isles: town hall + 5 workers, 500/150, teams unchanged.
 - **The 7.21 countdown format is still not ground-truthed** — M:SS under an hour / HH:MM:SS over is *inferred* from the
   `Game.dll` string dump, not measured. To settle it, read the clock off a real client.
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.
+
+## A bare `\r` is a line terminator, and a map protector writes them
+
+JASS is line-oriented: a statement ends at the end of its line, so the terminator is a TOKEN and
+not whitespace. All three conventions have to produce exactly one of it, and the third is not
+hypothetical — a map PROTECTOR re-emits the script it rewrites, and at least one writes old-Mac
+endings. Four of the eleven maps in a stock install's own `Maps\Download` are like that: **DotA
+v6.71b AI has 93 138 carriage returns and not one line feed**, and Extreme Candy War is mixed.
+
+Skipping `\r` as whitespace made such a file ONE logical line, and a line-oriented grammar then
+yields nothing at all. The failure had no error in it anywhere: the parse "succeeded" with zero
+functions and zero globals, the map loaded, `config` and `main` were "unknown function", and the
+match opened on an empty world. Four maps went from **0 functions to 4022, 13 531, 1285 and 961**
+when the lexer learned the third terminator — including Extreme Candy War, whose whole AI
+subsystem ([`candy-war-ai.md`](candy-war-ai.md)) is seated by reading that script's globals and
+so had never been seated at all.
+
+`tools/jass-line-endings-test.cjs` parses the same program written three ways, checks the token
+counts match, and asserts that every map in `Maps\Download` still parses to at least one
+function — which is the assertion that would have caught this.

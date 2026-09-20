@@ -613,6 +613,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   never fire. `tools/ai-plus-ladder-test.cjs` runs ten headless minutes of the ladder per build.
   **AMAI is GPL** — it was studied for the shape of the strategy table and nothing else; never
   lift its code or its numbers.
+- **A bare `\r` is a JASS line terminator.** JASS is LINE-ORIENTED — a statement ends at the end
+  of its line — so the terminator is a TOKEN and not whitespace, and all three conventions must
+  yield exactly one of it. The third is not hypothetical: a map PROTECTOR re-emits the script it
+  rewrites and at least one writes old-Mac endings, so four of the eleven maps in the install's
+  own `Maps\Download` are like that (DotA v6.71b AI has **93 138 carriage returns and not one
+  line feed**). Skipping `\r` as whitespace made such a file ONE logical line and the parse then
+  "succeeded" with ZERO functions — no error anywhere, `config`/`main` "unknown function", and a
+  match on an empty world. Four maps went from 0 functions to 4022 / 13 531 / 1285 / 961 when
+  the lexer learned it, Extreme Candy War among them — which means its whole AI subsystem, seated
+  by reading that script's globals, had never been seated. See [`docs/triggers.md`](docs/triggers.md).
 - **A map's custom abilities are translated, never hand-coded.** A w3a object keeps its base
   `code` (so the base ability's behaviour runs) and every column the map changed is routed through
   `Units\AbilityMetaData.slk` onto the same `AbilityDef` field the SLK loader fills

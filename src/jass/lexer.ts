@@ -68,7 +68,18 @@ export function tokenize(src: string): Token[] {
   while (i < n) {
     const c = src[i];
 
-    // Newlines (both \n and \r\n collapse to one significant separator).
+    // Newlines. JASS is LINE-ORIENTED — a statement ends at the end of its line — so the
+    // separator is a TOKEN and not whitespace, and every one of the three conventions has to
+    // produce exactly one of it.
+    //
+    // The third one is not hypothetical. A map PROTECTOR re-emits the script it rewrites, and
+    // at least one of them writes **bare `\r`** (old-Mac endings): of the eleven maps in a
+    // stock install's own `Maps\Download`, four are like that — DotA v6.71b AI has 93 138
+    // carriage returns and not one line feed, and Extreme Candy War is mixed. Skipping `\r`
+    // as whitespace made such a file ONE logical line, and a line-oriented grammar then
+    // yields nothing at all: the parse "succeeded" with zero functions and zero globals, so
+    // the map loaded, `config` and `main` were "unknown function", and the match opened on an
+    // empty world with no error anywhere.
     if (c === "\n") {
       push("newline", "\n");
       i++;
@@ -77,6 +88,10 @@ export function tokenize(src: string): Token[] {
     }
     if (c === "\r") {
       i++;
+      // `\r\n` is ONE separator: leave it to the `\n` on the next pass.
+      if (src[i] === "\n") continue;
+      push("newline", "\n");
+      line++;
       continue;
     }
     // Horizontal whitespace.
@@ -84,9 +99,10 @@ export function tokenize(src: string): Token[] {
       i++;
       continue;
     }
-    // Line comment.
+    // Line comment — ends at ANY of the three line terminators (see above); stopping only at
+    // `\n` would swallow the rest of a bare-`\r` file from its first comment onwards.
     if (c === "/" && src[i + 1] === "/") {
-      while (i < n && src[i] !== "\n") i++;
+      while (i < n && src[i] !== "\n" && src[i] !== "\r") i++;
       continue;
     }
     // String literal.
