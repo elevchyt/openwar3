@@ -353,13 +353,57 @@ export class WorldOverlays {
    */
   private frameGeom = { dpr: 1, w: 0, h: 0, clientW: 0, clientH: 0, viewport: new Float32Array(4) as Float32Array };
 
+  /**
+   * The canvas's CSS box, refreshed when it CHANGES rather than when it is asked for.
+   *
+   * `clientWidth`/`clientHeight` are the only layout reads in this file, and an overlay pass is
+   * exactly what dirties layout: three passes run back to back every frame (bars, crew labels,
+   * the hover slab — see `sim.overlays` in rts.ts), each one sampling the geometry after the
+   * previous one wrote a few hundred `transform`s and `width`s. Every sample after the first
+   * therefore forced a synchronous reflow of the whole document to learn two numbers that can
+   * only change when the WINDOW does. Profiled in a 287-unit fight at 6× CPU throttle,
+   * `sampleGeom` was 4.2% of all CPU — none of it arithmetic.
+   *
+   * A ResizeObserver is what makes the read rare: it fires outside the frame's write phase,
+   * where layout is already clean. The canvas ITSELF is swapped from under us when a map loads
+   * (`freshMapCanvas`), so the observer follows whichever one is current, and a browser without
+   * one (or a headless test) simply reads as before.
+   */
+  private clientBox = { w: 0, h: 0, el: null as HTMLCanvasElement | null };
+  private boxObserver: ResizeObserver | null = null;
+
+  private clientSize(canvas: HTMLCanvasElement): { w: number; h: number } {
+    const box = this.clientBox;
+    if (box.el !== canvas) {
+      box.el = canvas;
+      box.w = canvas.clientWidth;
+      box.h = canvas.clientHeight;
+      if (typeof ResizeObserver !== "undefined") {
+        this.boxObserver?.disconnect();
+        this.boxObserver = new ResizeObserver(() => {
+          // Inside the callback layout is already computed, so this read is the cheap kind.
+          box.w = canvas.clientWidth;
+          box.h = canvas.clientHeight;
+        });
+        this.boxObserver.observe(canvas);
+      }
+    } else if (this.boxObserver === null) {
+      box.w = canvas.clientWidth; // no observer to keep it fresh — behave exactly as before
+      box.h = canvas.clientHeight;
+    }
+    return box;
+  }
+
   private sampleGeom(): void {
     const canvas = this.host.canvas;
     const g = this.frameGeom;
+    // `width`/`height` are attributes rather than layout, so they stay per pass: the drawing
+    // buffer can change with the Resolution rung between frames.
     g.w = canvas.width;
     g.h = canvas.height;
-    g.clientW = canvas.clientWidth;
-    g.clientH = canvas.clientHeight;
+    const box = this.clientSize(canvas);
+    g.clientW = box.w;
+    g.clientH = box.h;
     g.dpr = g.w / g.clientW || 1;
     g.viewport = this.host.viewport();
   }

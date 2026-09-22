@@ -13548,16 +13548,54 @@ export class MapViewerScene {
     this.showScrollArrow(dx, dy);
   }
 
-  /** The game frame's box in viewport coords. Read once a frame: the pointer handlers and the
-   *  edge-scroll both need it, and `getBoundingClientRect` on every mouse move would force a
-   *  layout against a HUD that mutates the DOM each frame. */
+  /**
+   * The game frame's box in viewport coords — read when it CHANGES, not once a frame.
+   *
+   * The pointer handlers and the edge-scroll both convert against it, and
+   * `getBoundingClientRect` on every mouse move would force a layout against a HUD that mutates
+   * the DOM every frame. Reading it once a frame was the first answer and it is the same trap one
+   * step further out: the read still lands AFTER that frame's HUD writes, so it still forces the
+   * layout — profiled in a 287-unit fight at 6× throttle, `getBoundingClientRect` was 4.0% of all
+   * CPU, none of it arithmetic (render/worldOverlays.ts `clientSize` is the same lesson on the
+   * canvas's CSS box).
+   *
+   * What actually moves this box is the WINDOW: a resize, the stage re-boxing itself between 4:3
+   * and 16:9 (ui/stage.ts), a scroll, or the canvas being swapped out from under us when a map
+   * loads (`freshMapCanvas`). So those mark it stale and the next frame re-reads — where the read
+   * is the cheap kind, because nothing has written since the browser last laid out.
+   */
+  private frameBoxDirty = true;
+  private frameBoxEl: HTMLCanvasElement | null = null;
+  private frameBoxObserver: ResizeObserver | null = null;
+
   private syncFrame(): void {
-    const r = this.canvas.getBoundingClientRect();
+    const canvas = this.canvas;
+    if (this.frameBoxEl !== canvas) {
+      this.frameBoxEl = canvas;
+      this.frameBoxDirty = true;
+      if (typeof ResizeObserver !== "undefined") {
+        this.frameBoxObserver?.disconnect();
+        this.frameBoxObserver = new ResizeObserver(() => { this.frameBoxDirty = true; });
+        this.frameBoxObserver.observe(canvas);
+      }
+      if (!this.frameBoxListening && typeof window !== "undefined") {
+        this.frameBoxListening = true;
+        // A resize the observer sees as well; a SCROLL it does not, and the box is in viewport
+        // coordinates. Passive, and they only set a flag.
+        window.addEventListener("resize", () => { this.frameBoxDirty = true; }, { passive: true });
+        window.addEventListener("scroll", () => { this.frameBoxDirty = true; }, { passive: true, capture: true });
+      }
+    }
+    // No observer to keep it fresh (an old browser, a headless test) — behave as it used to.
+    if (!this.frameBoxDirty && this.frameBoxObserver !== null) return;
+    this.frameBoxDirty = false;
+    const r = canvas.getBoundingClientRect();
     this.frame.left = r.left;
     this.frame.top = r.top;
     this.frame.right = r.right;
     this.frame.bottom = r.bottom;
   }
+  private frameBoxListening = false;
 
   /** The edge-pan cursor: the game's OWN three-frame chevron (row 3, cols 5-7 of the race
    *  cursor sheet), spun to point the way the camera is going. `<race>Cursor.mdx` plays those
