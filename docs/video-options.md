@@ -187,27 +187,59 @@ Three things still belong to the instance and are done for it:
 - **The flip itself.** Turning the mode on or off changes what the matrices MEAN, so the instance
   forces a full pass on that frame and re-uploads its own texture.
 
-**What is excluded, and why it is not negotiable.** A model is skeleton-shareable only if no node
-is billboarded and none carries `dontInheritTranslation/Rotation/Scaling`. Both reach outside the
-clip: a billboarded node faces the CAMERA through the instance's own inverse world rotation, and a
-`dontInherit` node reaches past its parent to the instance's world scale. Allowing billboarding
-was tried and photographed: every Footman grew a white halo around its shield, because the
-billboarded quads there turned with the body instead of facing the camera. Of 69 unit models
-sampled across the four races, **48 qualify (70%, and 56% of all nodes)**; the ones that do not —
-Footman, grunt, Archer, Priest, the heroes — keep the shared POSE and compose for themselves, so
-they are no worse than the previous step left them.
+**BILLBOARDED nodes are redone per instance rather than shut out.** A billboarded node faces the
+CAMERA through the instance's own inverse world rotation, so at one frame of one clip two bodies
+facing different ways genuinely hold different matrices — and a shared skeleton has the wrong one
+in it. That was tried and photographed: every Footman grew a white halo around its shield, the
+quads turning with the body instead of facing the camera. Shutting those models out instead was
+also tried, and it left the bread-and-butter soldiers on the slow path: 21 of 69 unit models
+sampled have billboarding, Footman, grunt, Archer, Priest and the heroes among them.
 
-Measured, 259 units at 6× CPU throttle, interleaved:
+So `ow3FixBillboards` takes the bucket's pose as this body's own, recomposes the billboarded
+subtrees in TRUE WORLD space (the space the billboard maths is defined in) and converts just those
+back into instance space, where the rest of the skeleton already is. It costs a bone texture of
+this instance's own and the nodes in those subtrees — a Footman redoes **six of fifty-seven** and
+samples none. Measured interleaved in one match, handling them is worth **16–29%** of the
+low-performance frame against excluding them (62.6 / 61.7 → 42.6 / 45.5 ms on a mixed army;
+`__OW3_VIDEO__.noBillboardShare` shuts them out again so the claim can be re-measured rather than
+argued, as `TerrainCull.enabled` does for the cull).
+
+What is still excluded is `dontInheritTranslation/Rotation/Scaling` — a node that reaches past its
+parent to the INSTANCE's world scale — which is **6 of the 69 models** (Knight, the Arch Mage, the
+Frost Wyrm, the Town Hall). They keep the shared POSE and compose for themselves.
+
+**Two traps on this path, both found by measurement rather than by reading.**
+
+- **`worldMatrices` is in NODE order, `sortedNodes` is in HIERARCHY order** (`sortedNodes[i] =
+  nodes[hierarchy[i]]`). Everything that indexes the skeleton — the capture, the object-node pass,
+  the click ray — has to use node order. Mixing them hands a node somebody else's matrix on every
+  model whose file does not happen to list its objects parents-first.
+- **A node's matrix is not always a pose.** `ow3ComposeObjectNodes` writes a WORLD matrix into the
+  nodes that act on the world, and a node whose clip says nothing is never rewritten — so the next
+  instance to compose a bucket captures that world matrix into a shared pose, and every body
+  wearing it draws that part of itself where the composer stood. The composer therefore redoes
+  every node that carries something now OR has ever had a world matrix composed into it
+  (`ow3WorldWritten`); the second half is not paranoia, it is OpenWar3 parenting a buff model onto
+  a bone and taking it away again. Forcing the composer's whole pass fixes it too and costs a
+  third of the saving.
+
+**How to verify a change here, because pixels cannot.** Two frames of a living match differ by
+6% of their pixels on their own (rain, idle clips, the fps readout), which is larger than the
+thing being checked. `scratch/matrices` compares the two paths NUMERICALLY instead: park an
+instance on a bucket boundary, read `instance.worldMatrix × local[i]` under the shared path, flip
+`sharedPoses` off, drive the same clip and frame, and compare against `nodes[i].worldMatrix`. Every
+model that takes the path agrees to **≤0.0011 world units**; both bugs above were found this way
+and neither was visible in a screenshot.
+
+Measured, 259 units at 6× CPU throttle, interleaved off/on. The ratio depends on how much of the
+frame is animation, so it is quoted as a range across runs (and the box was shared with other work
+for the later ones):
 
 | Army | Off | On | |
 |---|---|---|---|
-| All Riflemen (every model shareable) | 54.3 / 57.4 ms | 18.3 / 17.9 ms | **3.1×** |
-| A mixed human army (Footmen, Riflemen, Knights, Priests) | 63.0 / 63.9 ms | 29.3 / 29.9 ms | **2.1×** |
-
-What is left on the table is the excluded 44% of nodes. Bringing them in means composing a
-billboarded node's subtree per instance and expressing the result back in instance space — the
-walk would still be shared, so it is worth having, but it is fiddly and the failure mode is the
-halo above, which is why it is not in this pass.
+| Every model shareable (Riflemen) | 54–74 ms | 18–30 ms | **2.4–3.1×** |
+| A mixed human army (Footmen, Riflemen, Knights, Priests) | 63–79 ms | 33–45 ms | **1.8–2.0×** |
+| All Footmen — billboarded, so nothing shared before this pass | 50–52 ms | 30–32 ms | **1.6×** |
 
 ### The rungs
 
@@ -274,8 +306,8 @@ off/on/off/on, median frame time:
 | Early game, 110 units — rungs only | 7.7 / 7.7 ms | 7.0 / 7.5 ms | −3…9 % |
 | An army standing on it, 259 units — rungs only | 40.1 / 40.0 ms | 39.2 / 39.3 ms | −2 % |
 | …the same army, with the shared POSE | 38.8 / 39.0 ms | 34.1 / 34.3 ms | −12 % |
-| A mixed human army of 259, with the shared SKELETON | 63.0 / 63.9 ms | 29.3 / 29.9 ms | **2.1×** |
-| …an army whose every model is shareable (Riflemen) | 54.3 / 57.4 ms | 18.3 / 17.9 ms | **3.1×** |
+| A mixed human army of 259, with the shared SKELETON | 63–79 ms | 33–45 ms | **1.8–2.0×** |
+| …an army whose every model is shareable (Riflemen) | 54–74 ms | 18–30 ms | **2.4–3.1×** |
 
 The first two rows are the panel's own rungs, and they are worth a few per cent: most of them are
 idle bookkeeping and one shadow pass, and the texture rung does not reach a map that is already

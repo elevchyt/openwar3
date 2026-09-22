@@ -766,7 +766,7 @@ index 26347d6d988194c95415c2a40597123e80bd61a2..3d28cc4165be8474ed4005abfe3ce726
      }
  }
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index 7fe06bd7314e83b578dc8987e819b08cea287dfb..69d8e91d198f53a150ea5ae90cc9524f54849e43 100644
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..5fd7c8cafea4782e3833d3992fe245fb834a333f 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
 @@ -2,6 +2,8 @@
@@ -1019,10 +1019,10 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
          }
          else {
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10425368d5 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c36cae6c6 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -21,6 +21,283 @@ const scaleHeap = gl_matrix_1.vec3.create();
+@@ -21,6 +21,454 @@ const scaleHeap = gl_matrix_1.vec3.create();
  const colorHeap = new Float32Array(3);
  const alphaHeap = new Float32Array(1);
  const textureIdHeap = new Uint32Array(1);
@@ -1104,26 +1104,68 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 + *
 + * Two node kinds say no, and both are nodes whose matrix is not a function of the clip alone:
 + *
-+ *   · **billboarded** nodes face the CAMERA through the instance's own inverse world rotation,
-+ *     so two instances facing different ways hold different matrices at the same frame;
 + *   · **dontInheritTranslation / Rotation / Scaling** nodes reach past their parent to the
 + *     INSTANCE's world scale and the parent's inverse world values, which in instance space are
-+ *     not what they are in the world.
++ *     not what they are in the world. Six models of the sixty-nine sampled have them.
 + *
-+ * Both are rare on unit skeletons — of 295 visible instances in a real match, three (seaweed)
-+ * had billboarding — and a model that has them simply keeps the per-instance path.
++ * BILLBOARDED nodes are the other kind that is not a function of the clip — they face the CAMERA
++ * through the instance's own inverse world rotation — but they are far too common to step around
++ * (a Footman has six, a grunt two, a Demon Hunter fifty-five: 21 of 69 unit models), and shutting
++ * them out left the bread-and-butter soldiers on the slow path. They are REDONE PER INSTANCE
++ * instead — see `ow3FixBillboards` — which costs the handful of nodes in those subtrees and a
++ * bone texture of this instance's own, and still skips the whole sampling-and-composing walk.
 + */
 +function ow3SkeletonShareable(model) {
++    // `__OW3_VIDEO__.noBillboardShare` shuts the billboarded models out again, so what handling
++    // them per instance is WORTH can be measured in a real match rather than argued — the same
++    // reason `TerrainCull.enabled` and `SightStamps.enabled` exist. Read live, not cached.
++    if (globalThis.__OW3_VIDEO__ && globalThis.__OW3_VIDEO__.noBillboardShare && ow3Billboards(model)) {
++        return false;
++    }
 +    if (model.ow3SkeletonShareable === undefined) {
 +        let ok = ow3Shareable(model);
 +        for (const object of model.sortedGenericObjects) {
-+            if (object.anyBillboarding || object.dontInheritTranslation || object.dontInheritRotation || object.dontInheritScaling) {
++            if (object.dontInheritTranslation || object.dontInheritRotation || object.dontInheritScaling) {
 +                ok = false;
 +            }
 +        }
 +        model.ow3SkeletonShareable = ok;
 +    }
 +    return model.ow3SkeletonShareable;
++}
++/**
++ * Which nodes a billboarded model has to redo for itself: every billboarded node AND everything
++ * hanging under it, because a child's matrix is composed off its parent's.
++ *
++ * All three lists are in NODE order (`instance.nodes`, which is what the skeleton is laid out
++ * in); `subtree` is additionally ordered parents-first, so composing down it never reads a matrix
++ * that has not been written yet. `parents` are the nodes just ABOVE the subtree roots: they are
++ * not redone, but they have to hold TRUE world values for the moment the roots are composed, and
++ * are put back afterwards.
++ */
++function ow3Billboards(model) {
++    if (model.ow3Billboards === undefined) {
++        const generic = model.genericObjects;
++        const count = generic.length;
++        const inSubtree = new Uint8Array(count);
++        const subtree = [];
++        const parents = [];
++        // Hierarchy order, so a node is decided after its parent is.
++        for (const index of model.hierarchy) {
++            const object = generic[index];
++            const parentId = object.parentId;
++            const inherited = parentId >= 0 && inSubtree[parentId] === 1;
++            if (object.anyBillboarding || inherited) {
++                inSubtree[index] = 1;
++                subtree.push(index);
++                if (!inherited && parentId >= 0 && parents.indexOf(parentId) < 0) {
++                    parents.push(parentId);
++                }
++            }
++        }
++        model.ow3Billboards = subtree.length > 0 ? { subtree, parents, inSubtree } : null;
++    }
++    return model.ow3Billboards;
 +}
 +/** The nodes of this instance carrying an emitter, an event object or an attachment — the only
 + *  ones that still need TRUE world matrices while the skeleton is shared, because what they do
@@ -1138,10 +1180,15 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 +    // unit's bone at runtime (render/mapViewer.ts `inst.setParent(node)`), so a node grows
 +    // children long after the instance was built, and a cached list would leave that model
 +    // hanging at the world origin. Two property reads a node, against the matrix work it saves.
++    //
++    // The indices are NODE order — `instance.nodes`, which is what `worldMatrices` and so the
++    // cached skeleton are laid out in — and NOT the hierarchy order `sortedNodes` walks in
++    // (`sortedNodes[i] = nodes[hierarchy[i]]`). Mixing the two hands a node somebody else's
++    // matrix on every model whose file does not happen to list its objects parents-first.
 +    list.length = 0;
-+    const sortedNodes = instance.sortedNodes;
-+    for (let i = 0, l = sortedNodes.length; i < l; i++) {
-+        const node = sortedNodes[i];
++    const nodes = instance.nodes;
++    for (let i = 0, l = nodes.length; i < l; i++) {
++        const node = nodes[i];
 +        if (node.object || node.children.length > 0) {
 +            list.push(i);
 +        }
@@ -1217,9 +1264,9 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 +        pose.scl = new Float32Array(nodes * 3);
 +    }
 +    pose.bones.set(instance.worldMatrices);
-+    const sortedNodes = instance.sortedNodes;
++    const instNodes = instance.nodes; // node order, like `worldMatrices` — see ow3ObjectNodes
 +    for (let i = 0; i < nodes; i++) {
-+        const node = sortedNodes[i];
++        const node = instNodes[i];
 +        const r = i * 4;
 +        const c = i * 3;
 +        pose.rot[r] = node.worldRotation[0];
@@ -1230,11 +1277,15 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 +        pose.scl[c + 1] = node.worldScale[1];
 +        pose.scl[c + 2] = node.worldScale[2];
 +    }
-+    if (pose.texture === null && instance.boneTexture) {
-+        pose.texture = new datatexture_1.default(model.viewer.gl, 4, model.bones.length * 4, 1);
-+    }
-+    if (pose.texture) {
-+        pose.texture.bindAndUpdate(pose.bones);
++    // A model with billboarded subtrees sends a texture of each instance's own (ow3FixBillboards),
++    // so the bucket's would be filled for nobody — one upload per bucket that nothing ever binds.
++    if (ow3Billboards(model) === null) {
++        if (pose.texture === null && instance.boneTexture) {
++            pose.texture = new datatexture_1.default(model.viewer.gl, 4, model.bones.length * 4, 1);
++        }
++        if (pose.texture) {
++            pose.texture.bindAndUpdate(pose.bones);
++        }
 +    }
 +    pose.skeleton = true;
 +}
@@ -1246,32 +1297,41 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 + * those) get `instance.worldMatrix * local` composed into them. A Footman has two or three of
 + * them against sixteen bones, which is why this is still most of the saving.
 + */
-+function ow3ComposeObjectNodes(instance, pose, dt, sequence, frame, counter) {
++function ow3ComposeObjectNodes(instance, pose, dt, sequence, frame, counter, plan) {
 +    const indices = ow3ObjectNodes(instance);
 +    if (indices.length === 0) {
 +        return;
 +    }
-+    const sortedNodes = instance.sortedNodes;
-+    const sortedGenericObjects = instance.model.sortedGenericObjects;
-+    const bones = pose.bones;
++    const nodes = instance.nodes;
++    const genericObjects = instance.model.genericObjects; // node order, beside `nodes`
++    // With billboarded subtrees redone, this instance's own array is the truth and the bucket's
++    // is not — and those nodes' rotation and scale are already TRUE world, so they are left as
++    // `recalculateTransformation` wrote them rather than re-derived from the shared pose.
++    const inSubtree = plan === null || plan === undefined ? null : plan.inSubtree;
++    const bones = inSubtree === null ? pose.bones : instance.ow3LocalBones;
 +    const iw = instance.worldMatrix;
 +    const ir = instance.worldRotation;
 +    const is = instance.worldScale;
++    const written = ow3WorldWritten(instance);
 +    for (let k = 0; k < indices.length; k++) {
 +        const i = indices[k];
-+        const node = sortedNodes[i];
++        written[i] = 1; // this node's matrix is about to stop being a pose — see `cleanObjects`
++        const node = nodes[i];
 +        const local = bones.subarray(i * 16, i * 16 + 16);
-+        gl_matrix_1.mat4.multiply(node.worldMatrix, iw, local);
++        gl_matrix_1.mat4.multiply(ow3Scratch, iw, local);
++        node.worldMatrix.set(ow3Scratch); // via scratch: `local` may BE this node's own slice
 +        const r = i * 4;
 +        ow3Quat[0] = pose.rot[r];
 +        ow3Quat[1] = pose.rot[r + 1];
 +        ow3Quat[2] = pose.rot[r + 2];
 +        ow3Quat[3] = pose.rot[r + 3];
-+        gl_matrix_1.quat.mul(node.worldRotation, ir, ow3Quat);
 +        const c = i * 3;
-+        node.worldScale[0] = is[0] * pose.scl[c];
-+        node.worldScale[1] = is[1] * pose.scl[c + 1];
-+        node.worldScale[2] = is[2] * pose.scl[c + 2];
++        if (inSubtree === null || inSubtree[i] === 0) {
++            gl_matrix_1.quat.mul(node.worldRotation, ir, ow3Quat);
++            node.worldScale[0] = is[0] * pose.scl[c];
++            node.worldScale[1] = is[1] * pose.scl[c + 1];
++            node.worldScale[2] = is[2] * pose.scl[c + 2];
++        }
 +        const m = node.worldMatrix;
 +        const pivot = node.pivot;
 +        const x = pivot[0];
@@ -1291,7 +1351,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 +        node.inverseWorldScale[1] = 1 / node.worldScale[1];
 +        node.inverseWorldScale[2] = 1 / node.worldScale[2];
 +        if (node.object) {
-+            sortedGenericObjects[i].getVisibility(visibilityHeap, sequence, frame, counter);
++            genericObjects[i].getVisibility(visibilityHeap, sequence, frame, counter);
 +            if (visibilityHeap[0] > 0) {
 +                node.object.update(dt);
 +            }
@@ -1303,10 +1363,121 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 +    }
 +}
 +const ow3Quat = gl_matrix_1.quat.create();
++const ow3Inverse = gl_matrix_1.mat4.create();
++const ow3Scratch = gl_matrix_1.mat4.create();
++/**
++ * Redo this body's billboarded subtrees, which no crowd can share.
++ *
++ * A billboarded node faces the CAMERA, and it gets there through its parent's inverse world
++ * rotation — so at one frame of one clip, two instances facing different ways hold genuinely
++ * different matrices, and a shared skeleton has the wrong one in it (tried, and photographed: a
++ * white halo around every Footman's shield, the quads turning with the body instead of facing the
++ * camera). What is still shared is everything else — the sampling and the composing of every
++ * other bone, which is nearly all of both.
++ *
++ * So this instance takes the bucket's skeleton as its own, then composes the billboarded subtrees
++ * for itself in TRUE WORLD space (the space the billboard maths is defined in) and converts just
++ * those back into instance space, where the rest of the skeleton already is and where
++ * `u_instance` expects to find it. It pays for a bone texture of its own; a Footman redoes six
++ * nodes of fifty-seven and samples none.
++ */
++function ow3FixBillboards(instance, pose, plan) {
++    const nodes = instance.nodes;
++    const bones = pose.bones;
++    const iw = instance.worldMatrix;
++    const ir = instance.worldRotation;
++    const is = instance.worldScale;
++    // A second array of this instance's own, because the two things cannot share one: the TEXTURE
++    // wants the skeleton in instance space, while `node.worldMatrix` — which is a window onto
++    // `worldMatrices` — is where an emitter reads its position in the WORLD. Composing the object
++    // nodes into the same memory the texture is sent from would draw the model inside out.
++    let local = instance.ow3LocalBones;
++    if (!local || local.length !== bones.length) {
++        local = instance.ow3LocalBones = new Float32Array(bones.length);
++    }
++    local.set(bones);
++    // The nodes just above the subtrees have to read as world for the moment their children are
++    // composed off them.
++    for (let k = 0; k < plan.parents.length; k++) {
++        ow3WorldFromPose(nodes[plan.parents[k]], plan.parents[k], pose, iw, ir, is);
++    }
++    // …then the subtrees, by the engine's own routine, in world space.
++    instance.ow3LocalPose = false;
++    for (let k = 0; k < plan.subtree.length; k++) {
++        nodes[plan.subtree[k]].recalculateTransformation(instance);
++    }
++    instance.ow3LocalPose = true;
++    // …and back into instance space, which is where the rest of this instance's skeleton is and
++    // where `u_instance` expects to find all of it.
++    gl_matrix_1.mat4.invert(ow3Inverse, iw);
++    for (let k = 0; k < plan.subtree.length; k++) {
++        const i = plan.subtree[k];
++        gl_matrix_1.mat4.multiply(ow3Scratch, ow3Inverse, nodes[i].worldMatrix);
++        local.set(ow3Scratch, i * 16);
++    }
++    // The borrowed parents go back to the rotation and scale they hold for everybody else; their
++    // matrices are the pose's again on the next frame's copy, and nothing reads them before it.
++    for (let k = 0; k < plan.parents.length; k++) {
++        ow3PoseRotScale(nodes[plan.parents[k]], plan.parents[k], pose);
++    }
++}
++/** Write TRUE world values onto a node from the shared pose — the product `u_instance` forms. */
++function ow3WorldFromPose(node, i, pose, iw, ir, is) {
++    gl_matrix_1.mat4.multiply(node.worldMatrix, iw, pose.bones.subarray(i * 16, i * 16 + 16));
++    const r = i * 4;
++    ow3Quat[0] = pose.rot[r];
++    ow3Quat[1] = pose.rot[r + 1];
++    ow3Quat[2] = pose.rot[r + 2];
++    ow3Quat[3] = pose.rot[r + 3];
++    gl_matrix_1.quat.mul(node.worldRotation, ir, ow3Quat);
++    const c = i * 3;
++    node.worldScale[0] = is[0] * pose.scl[c];
++    node.worldScale[1] = is[1] * pose.scl[c + 1];
++    node.worldScale[2] = is[2] * pose.scl[c + 2];
++    const m = node.worldMatrix;
++    const pivot = node.pivot;
++    const x = pivot[0];
++    const y = pivot[1];
++    const z = pivot[2];
++    node.worldLocation[0] = m[0] * x + m[4] * y + m[8] * z + m[12];
++    node.worldLocation[1] = m[1] * x + m[5] * y + m[9] * z + m[13];
++    node.worldLocation[2] = m[2] * x + m[6] * y + m[10] * z + m[14];
++    node.inverseWorldLocation[0] = -node.worldLocation[0];
++    node.inverseWorldLocation[1] = -node.worldLocation[1];
++    node.inverseWorldLocation[2] = -node.worldLocation[2];
++    node.inverseWorldRotation[0] = -node.worldRotation[0];
++    node.inverseWorldRotation[1] = -node.worldRotation[1];
++    node.inverseWorldRotation[2] = -node.worldRotation[2];
++    node.inverseWorldRotation[3] = node.worldRotation[3];
++    node.inverseWorldScale[0] = 1 / node.worldScale[0];
++    node.inverseWorldScale[1] = 1 / node.worldScale[1];
++    node.inverseWorldScale[2] = 1 / node.worldScale[2];
++}
++/** Which of this instance's nodes have ever had a WORLD matrix composed into them — the set the
++ *  composer of a bucket has to redo before its matrices become everybody's. Grown once. */
++function ow3WorldWritten(instance) {
++    let flags = instance.ow3WorldWritten;
++    if (flags === undefined || flags.length < instance.nodes.length) {
++        flags = instance.ow3WorldWritten = new Uint8Array(instance.nodes.length);
++    }
++    return flags;
++}
++/** Put a node's rotation and scale back to the bucket's (instance-space) pose. */
++function ow3PoseRotScale(node, i, pose) {
++    const r = i * 4;
++    node.worldRotation[0] = pose.rot[r];
++    node.worldRotation[1] = pose.rot[r + 1];
++    node.worldRotation[2] = pose.rot[r + 2];
++    node.worldRotation[3] = pose.rot[r + 3];
++    const c = i * 3;
++    node.worldScale[0] = pose.scl[c];
++    node.worldScale[1] = pose.scl[c + 1];
++    node.worldScale[2] = pose.scl[c + 2];
++}
  /**
   * An MDX model instance.
   */
-@@ -48,12 +325,35 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +496,35 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -1342,7 +1513,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +516,166 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +687,187 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -1396,6 +1567,26 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 +        }
 +        const skeleton = wantLocal && pose !== null && !this.ow3PoseReset ? pose : null;
 +        const replaySkeleton = skeleton !== null && skeleton.skeleton;
++        // The instance that COMPOSES a bucket has one trap to clear first. A node whose clip says
++        // nothing is not rewritten, so it still holds whatever was last written there — and for a
++        // node carrying an emitter or an event object that is the WORLD matrix
++        // `ow3ComposeObjectNodes` left at the end of the previous frame. Captured, that entry is
++        // a body's POSITION baked into a shared pose, and every instance wearing it draws that
++        // part of itself where the composer stood. (Caught by comparing the two paths' matrices:
++        // a Footman's node 49, a root-parented event object, was out by 19,192 units.)
++        //
++        // So the composer redoes exactly those nodes — `cleanObjects` below — rather than the
++        // whole skeleton. Forcing the whole pass fixed it too and cost a full 57-node walk with
++        // every channel sampled for every bucket that opens, which measured as a third of the
++        // saving handed back.
++        //
++        // The set is every node this instance has EVER had composed into (`ow3WorldWritten`), not
++        // the ones carrying something right now, and the difference is a real bug that shows up
++        // once in a while: OpenWar3 parents a buff model onto a bone and takes it away again, and
++        // between the two the node keeps the world matrix the compose left in it while no longer
++        // looking like a node anybody writes. Marked on the write, it is always cleaned.
++        const cleanObjects = skeleton !== null && !replaySkeleton;
++        const written = cleanObjects ? ow3WorldWritten(this) : null;
 +        // What the tracks are sampled AT: the bucket's time while sharing (so every instance in
 +        // the bucket gets one pose), the instance's own frame otherwise.
 +        const poseFrame = pose === null ? frame : pose.frame;
@@ -1411,7 +1602,9 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
              const genericObject = sortedGenericObjects[i];
              const node = sortedNodes[i];
              const parent = node.parent;
-             let wasDirty = forced || parent.wasDirty || genericObject.anyBillboarding;
+-            let wasDirty = forced || parent.wasDirty || genericObject.anyBillboarding;
++            let wasDirty = forced || parent.wasDirty || genericObject.anyBillboarding
++                || (cleanObjects && (written[i] === 1 || node.object !== null && node.object !== undefined || node.children.length > 0));
              const variants = genericObject.variants;
 +            // OpenWar3 (issue #161): a pose somebody already sampled is COPIED rather than
 +            // sampled again — ten floats a node against a keyframe search and a slerp per
@@ -1521,7 +1714,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +683,36 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +875,48 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -1540,17 +1733,29 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 +        // OpenWar3 (issue #161): the composed half of the cache. This instance either just
 +        // composed the bucket's skeleton — in its own space, so it is everybody's — or it wore
 +        // one, in which case it did no node work at all this frame.
++        let plan = null;
 +        if (skeleton !== null) {
 +            if (!replaySkeleton) {
 +                ow3CaptureSkeleton(this, skeleton);
 +            }
-+            this.ow3SharedTexture = skeleton.texture;
-+            // …and the same matrices to whoever asks in world terms rather than in pixels: the
-+            // click ray (src/render/modelCollision.ts) composes this exactly as the shader does.
-+            this.ow3SharedBones = skeleton.bones;
-+            ow3ComposeObjectNodes(this, skeleton, dt, sequence, poseFrame, counter);
++            plan = ow3Billboards(model);
++            if (plan === null) {
++                // Nothing in this model faces the camera: the bucket's texture IS this instance's,
++                // and it sends nothing of its own.
++                this.ow3SharedTexture = skeleton.texture;
++                this.ow3SharedBones = skeleton.bones;
++            }
++            else {
++                // Billboarded subtrees are this body's own, so it wears the bucket's pose in an
++                // array of its own and sends that — still without sampling or composing the rest.
++                ow3FixBillboards(this, skeleton, plan);
++                this.ow3SharedTexture = null;
++                this.ow3SharedBones = this.ow3LocalBones;
++                anyDirty = true; // the billboards move with the camera, so this goes up every frame
++            }
++            ow3ComposeObjectNodes(this, skeleton, dt, sequence, poseFrame, counter, plan);
 +        }
-+        else if (this.ow3SharedTexture) {
++        else if (this.ow3SharedBones) {
 +            this.ow3SharedTexture = null;
 +            this.ow3SharedBones = null;
 +        }
@@ -1559,7 +1764,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,19 +806,56 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,19 +1010,58 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -1580,13 +1785,16 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 +     */
      updateBoneTexture() {
 -        if (this.boneTexture) {
+-            this.boneTexture.bindAndUpdate(this.worldMatrices);
 +        // OpenWar3 (issue #161): an instance wearing the bucket's skeleton has nothing of its own
 +        // to send — the texture was filled once, by whoever composed it (`ow3CaptureSkeleton`).
 +        if (this.ow3SharedTexture) {
 +            return;
 +        }
 +        if (this.boneTexture && (this.ow3BonesDirty || !this.ow3BonesUploaded)) {
-             this.boneTexture.bindAndUpdate(this.worldMatrices);
++            // …or from `ow3LocalBones` when this instance wears a shared pose with billboarded
++            // subtrees of its own in it (ow3FixBillboards).
++            this.boneTexture.bindAndUpdate(this.ow3LocalBones && this.ow3LocalPose ? this.ow3LocalBones : this.worldMatrices);
 +            this.ow3BonesUploaded = true;
 +            this.ow3BonesDirty = false;
          }
@@ -1617,7 +1825,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -436,6 +917,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1123,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -1625,7 +1833,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +927,65 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1133,65 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
@@ -1644,8 +1852,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
          this.resetAttachments();
          this.forced = true;
 +        this.ow3PoseReset = true; // OpenWar3 (issue #161): a new clip rewrites every local
-+        return this;
-+    }
+         return this;
+     }
 +    /**
 +     * OpenWar3: set this instance's animation cross-fade duration, in seconds.
 +     * Fed from each unit's UnitUI.slk `blend` value (0.15s for most WC3 units).
@@ -1656,8 +1864,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10
 +        if (this.blendTime === 0) {
 +            this.blendRemaining = 0;
 +        }
-         return this;
-     }
++        return this;
++    }
 +    /**
 +     * OpenWar3: snapshot every node's current local TRS into the flat blend
 +     * buffer, laid out as [loc.x,loc.y,loc.z, rot.x,rot.y,rot.z,rot.w, sc.x,sc.y,sc.z]
@@ -1734,7 +1942,7 @@ index 34686902ea449513570fad17cecbb6938ad9547a..2d355bcd094726e48a364a491faa5fb6
          }
      }
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js b/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js
-index 3e7460e457fec7d247ebcb2b8641ffb028f47736..ed1aae1aace9db30c040dbfbf111089af87641aa 100644
+index 3e7460e457fec7d247ebcb2b8641ffb028f47736..6bca9cb85b2e627bb4b110d8f4cc065503f3561b 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js
 @@ -33,6 +33,10 @@ vec3 TBN(vec3 vector, vec3 tangent, vec3 binormal, vec3 normal) {
@@ -1959,7 +2167,7 @@ index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e
  }
  
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
-index 49733805785c0ef269901d8928e47a953ada93a9..3f04a3b1c651fada8fd05867ab37754d5a73ddb8 100644
+index 49733805785c0ef269901d8928e47a953ada93a9..f15149f33f353822f4cb73eaf85eb727ea0415ab 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
 @@ -12,6 +12,12 @@ uniform vec2 u_uvTrans;
@@ -2995,7 +3203,7 @@ index afd956b8a078be77190d840a7fe5cb4d2c76797a..66de9bb3445643603adc39e0cbec367e
          const canvas = viewer.canvas;
          const width = canvas.width;
 diff --git a/dist/cjs/viewer/skeletalnode.js b/dist/cjs/viewer/skeletalnode.js
-index 2ae99b7f8f6167035bd01cf13339de280c3f402c..eb527980310e2e8e731aa5848cb4e4335187e1e1 100644
+index 2ae99b7f8f6167035bd01cf13339de280c3f402c..64281c010591f82e43696323f024f66ed5bfa6e7 100644
 --- a/dist/cjs/viewer/skeletalnode.js
 +++ b/dist/cjs/viewer/skeletalnode.js
 @@ -3,6 +3,17 @@ Object.defineProperty(exports, "__esModule", { value: true });

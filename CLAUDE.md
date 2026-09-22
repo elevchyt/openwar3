@@ -162,9 +162,19 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   for it: the nodes that act on the WORLD (emitters, event objects, attached models — listed
   fresh every frame, because a buff model is PARENTED to a bone at runtime), the click ray's
   collision shapes (`src/render/modelCollision.ts`), and the frame the mode flips on. A
-  BILLBOARDED node disqualifies its whole model and that is not negotiable — it faces the camera
-  through the instance's own rotation, and allowing it drew a white halo around every Footman's
-  shield (48 of 69 unit models qualify; the rest keep the shared pose).
+  BILLBOARDED node cannot be IN a shared pose — it faces the camera through the instance's own
+  rotation, and putting it there drew a white halo around every Footman's shield — so those
+  SUBTREES are redone per instance in world space and converted back (`ow3FixBillboards`: six of
+  a Footman's 57 nodes, worth 16–29% of the frame against shutting those 21-of-69 models out).
+  Only `dontInherit*` still disqualifies a model (6 of 69). **Verify a change here NUMERICALLY,
+  never in pixels** — two frames of a living match differ by 6% of their pixels on their own, and
+  both bugs this path had were invisible in a screenshot: compare `instance.worldMatrix ×
+  local[i]` against the per-instance path's `nodes[i].worldMatrix` at the same clip and frame
+  (they agree to ≤0.0011 world units). Those two were that `worldMatrices` is in NODE order while
+  `sortedNodes` is in HIERARCHY order, and that a node which ACTS ON THE WORLD holds a world
+  matrix the next composer captures into a shared pose unless it is redone (`ow3WorldWritten`,
+  which must include nodes that merely USED to carry something — a buff model is parented to a
+  bone and taken away again).
 - **Windows:** read [`docs/windows.md`](docs/windows.md) before touching the NSIS include
   ([`packaging/windows-installer.nsh`](packaging/windows-installer.nsh)), the `win`/`nsis` build
   blocks or [`electron/locate.mjs`](electron/locate.mjs). ONE installer carries the 64- and the
