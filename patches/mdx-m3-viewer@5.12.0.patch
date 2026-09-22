@@ -1019,10 +1019,10 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
          }
          else {
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c36cae6c6 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd43e3e31e 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -21,6 +21,454 @@ const scaleHeap = gl_matrix_1.vec3.create();
+@@ -21,6 +21,464 @@ const scaleHeap = gl_matrix_1.vec3.create();
  const colorHeap = new Float32Array(3);
  const alphaHeap = new Float32Array(1);
  const textureIdHeap = new Uint32Array(1);
@@ -1066,6 +1066,15 @@ index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c
 +// Entries OUTLIVE THE FRAME on purpose: a walk cycle loops, so after one lap every bucket of
 +// it is already sampled and a crowd of Footmen samples nothing at all.
 +const OW3_POSE_BUCKET = 1000 / 30; // ms of animation time per shared pose
++/** How coarse the buckets are, in ms of animation time. The default is the rate an MDX's tracks
++ *  are about authored at, which is why 30 Hz stepping is hard to see; `__OW3_VIDEO__.poseBucket`
++ *  makes it a knob so a coarser one can be MEASURED (fewer buckets = fewer samples AND more
++ *  instances per bucket) rather than guessed at. */
++function ow3Bucket() {
++    const v = globalThis.__OW3_VIDEO__;
++    const ms = v === undefined ? 0 : v.poseBucket;
++    return typeof ms === "number" && ms > 0 ? ms : OW3_POSE_BUCKET;
++}
 +const OW3_POSE_CAP = 3000; // entries, across all models, before the cache is dropped whole
 +let ow3PoseCount = 0;
 +/** Every model holding a pose cache, so the cap can empty all of them. */
@@ -1209,7 +1218,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c
 +        cache = model.ow3PoseCache = new Map();
 +        ow3PoseModels.add(model);
 +    }
-+    const bucket = Math.round(frame / OW3_POSE_BUCKET);
++    const span = ow3Bucket();
++    const bucket = Math.round(frame / span);
 +    const key = sequence * 1000000 + bucket;
 +    let pose = cache.get(key);
 +    if (pose === undefined) {
@@ -1224,7 +1234,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c
 +        // handful of nodes carrying an emitter or an attachment, which need true world values.
 +        pose = {
 +            trs: new Float32Array(nodes * 10), dirty: new Uint8Array(nodes),
-+            frame: bucket * OW3_POSE_BUCKET, filled: false,
++            frame: bucket * span, filled: false,
 +            bones: null, rot: null, scl: null, texture: null, skeleton: false,
 +        };
 +        cache.set(key, pose);
@@ -1477,7 +1487,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c
  /**
   * An MDX model instance.
   */
-@@ -48,12 +496,35 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +506,35 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -1513,7 +1523,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +687,187 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +697,187 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -1714,7 +1724,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +875,48 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +885,48 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -1764,7 +1774,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,19 +1010,58 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,19 +1020,58 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -1825,7 +1835,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -436,6 +1123,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1133,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -1833,7 +1843,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..54dd3ee214e3e01a80ed0a9369b2bf7c
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1133,65 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1143,65 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }

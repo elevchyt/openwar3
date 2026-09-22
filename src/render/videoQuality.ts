@@ -74,12 +74,32 @@ export interface VideoBridge {
    * quantized to 30 Hz, which is why it is off at full quality.
    */
   sharedPoses: boolean;
+  /**
+   * How coarse a shared pose bucket is, in ms of ANIMATION time. Default 1000/30, which is about
+   * the rate an MDX's tracks are authored at and so the rate at which stepping stops being
+   * visible. A knob rather than a constant because it is the one dial on the animation path with
+   * two effects at once — fewer buckets means fewer poses SAMPLED and more instances sharing each
+   * one — and its cost is purely how the clips read, which is a judgement to be measured and
+   * looked at rather than argued (docs/perf-research.md).
+   */
+  poseBucket: number;
 }
 
 const bridge = (): VideoBridge => {
   const g = globalThis as { __OW3_VIDEO__?: VideoBridge };
-  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0, sharedPoses: false });
+  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0, sharedPoses: false, poseBucket: POSE_BUCKET_MS });
 };
+
+/**
+ * The shared pose bucket, in ms of animation time — Low Performance Mode's one animation dial.
+ *
+ * OURS, and it is the trade the mode makes: clips step at this rate rather than per frame. 1000/30
+ * is where it sits because MDX tracks are authored at about that, so the stepping is hard to see;
+ * a coarser bucket samples fewer poses AND puts more instances in each one, so it pays twice.
+ * Measured interleaved at 287 units and 6× throttle, 15 Hz was worth ~4% of the frame — see
+ * docs/perf-research.md for why that was not enough to spend the smoothness on.
+ */
+const POSE_BUCKET_MS = 1000 / 30;
 
 /** What OpenWar3 has always rendered at, and what `ui/stage.ts` calls the game frame. */
 const DEFAULT_WIDTH = 1920;
@@ -300,6 +320,7 @@ export function applyVideoOptions(options: Options): void {
   // actually FOR (see `VideoBridge.sharedPoses`), and it is live — a tick takes effect on the
   // next frame, and unticking has every instance sampling for itself again.
   b.sharedPoses = current.lowPerf;
+  b.poseBucket = POSE_BUCKET_MS;
   applyGamma(current.gamma);
 }
 

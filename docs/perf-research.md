@@ -30,10 +30,11 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 6 | **Target-flag cache** — `targetFlagSet`, one Set per ability row | **exact** | **−23% low-perf, −26% full quality** | landed `11fb8de` |
 | 7 | Overlay canvas box read on RESIZE, not 3×/frame | **exact** | `sim.overlays` 4.46 → 0.48 ms | landed |
 | 8 | The game frame's box likewise (`syncFrame`) | **exact** | `getBoundingClientRect` 4.0% → out of the profile | landed |
+| 9 | A coarser pose bucket (30 → 15 Hz) | trade | nothing — sign flips between pairs | **not taken**, knob kept |
 
-**Rows 6, 7 and 8 are the point of this file.** Both are exact, both were found while chasing the
-low-performance frame, and both help full quality by as much or more — 6 is the largest single
-win of the whole effort and it is not a rendering change at all.
+**Rows 6, 7 and 8 are the point of this file.** All three are exact, all three were found while
+chasing the low-performance frame, and all three help full quality as much as they help the mode —
+row 6 is the largest single win of the whole effort and is not a rendering change at all.
 
 ## Where the frame goes now
 
@@ -46,7 +47,7 @@ Echo Isles, 287 units with both armies fighting, 6× CPU throttle, Low Performan
 | sim | 54.0 (at 287 units) | 25.9 → ~21 with row 7 |
 | render | 11.6 | 9.2 |
 | fog | 4.7 | 6.4 |
-| (unaccounted) | 12.3 | ~11 |
+| (unaccounted) | 12.3 | ~17 (88% of the whole frame is JS — see below) |
 
 Top self-time after row 7, as a share of all CPU:
 
@@ -55,17 +56,17 @@ Top self-time after row 7, as a share of all CPU:
 - `revealLineOfSight` 4.7% (the fog raycast — `SightStamps` already caches across viewpoints)
 - `autocastTarget` 4.6% (the SCAN now, not the legality test under it)
 - `fogWidgets` 4.4% (ours — a 10 Hz sweep over every doodad on the map)
-- `(program)` 15.5% and a `(unaccounted)` phase that has GROWN to ~17 ms as everything around it
-  got cheaper — now the second-largest item in the frame after animation, and the next thing to
-  identify rather than optimise past
+- `(program)` 15.5%, and an `(unaccounted)` phase of ~17 ms that has since been SPLIT and holds
+  nothing worth chasing — see the list below
 
 ## Still on the list
 
 Roughly in value order, with the kind marked, because that is what decides where each one lands:
 
-- **A coarser pose bucket in low-perf (30 → 15 Hz).** *Trade.* Halves the number of bucket FILLS,
-  which is most of what `getValue`/`slerp` still are. One constant; needs a look at whether the
-  stepping reads badly on a hero-scale model.
+- ~~A coarser pose bucket (30 → 15 Hz)~~ — **measured, worth nothing** (row 9). Once the SKELETON
+  is shared too, a bucket is filled by one instance and replayed by every other, so halving the
+  buckets halves a small share and changes nothing about what each instance still does for itself.
+  `VideoBridge.poseBucket` keeps it a knob so the question can be re-asked cheaply.
 - **`fogWidgets` (4.4%).** *Exact.* A 10 Hz sweep over every doodad the map laid down (4,345 on
   Extreme Candy War), each one doing two Map lookups and a vision query to learn a state that
   almost never changes. Candidates: hoist the per-widget constants out of the pass, or key the
@@ -73,10 +74,14 @@ Roughly in value order, with the kind marked, because that is what decides where
 - **`autocastTarget` (4.6%).** *Exact.* Now that the legality test is cheap, what is left is the
   scan itself — every autocaster against every candidate. The sim already has a collision grid;
   this is the O(n²) shape `docs/perf-logging.md` has a lesson about.
-- **The `unaccounted` ~17 ms (20%).** *Unknown.* GC, GPU wait, or work inside the frame that no
-  `perfLog` span covers. It is now second only to animation, and it grew as a SHARE while the
-  measured phases shrank — which is exactly the third shape `docs/perf-logging.md` describes
-  ("nothing in our loop grew at all"). Split it before optimising anything smaller.
+- ~~The `unaccounted` ~17 ms~~ — **split, and there is no monster in it.** Chrome's own counters
+  over 176 frames at 6× throttle: frame 86.1 ms, of which **ScriptDuration 75.8 ms (88%)**,
+  RecalcStyleDuration 2.65, LayoutDuration 1.89 — one layout and two style recalcs per frame,
+  which is the healthy once-per-frame pipeline rather than a forced one, across 3,606 DOM nodes.
+  So the DOM HUD is not the cost, GC is not the cost, and the GPU is not the cost: the frame is
+  JavaScript, and the unaccounted part of it is small uninstrumented JS plus the browser's normal
+  ~4.5 ms. **Keep optimising the named phases.** (Worth re-running after any change that adds DOM
+  per unit — `Performance.getMetrics` is the tool, see the scratch `split` harness.)
 - **BLP decode off the main thread** (`decodeScan` ~1%, plus the hitch it causes). *Exact.*
 - **The fog overlay and baked shadow layer taking terrain-cull's runs** — named in
   `docs/terrain-culling.md` and still not done. *Exact.*
