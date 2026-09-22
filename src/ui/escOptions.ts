@@ -10,7 +10,7 @@ import {
   type OptionDef,
   type OptionValue,
 } from "../data/options";
-import { applyVideoOptions } from "../render/videoQuality";
+import { applyVideoOptions, LOW_PERF_FORCED } from "../render/videoQuality";
 import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
 import { applyScrollOptions } from "../render/scrollOptions";
@@ -94,6 +94,28 @@ export class EscOptions {
     else this.fillSound(screen);
   }
 
+  /**
+   * "Low Performance Mode" (issue #161) on THIS panel: the four pulldowns it forces go dead and
+   * show the rung it puts them at, exactly as on the glue screen (ui/fdfOptions.ts says why both
+   * halves are needed). The three read-only rows are covered by `fillVideo`, which prints the
+   * effective value rather than the stored one.
+   *
+   * The switch has to be reachable HERE and not only from the menus: the two panels are one store,
+   * so a mode turned on before a match would otherwise be unreachable until the match ended.
+   */
+  private syncVideoRows(screen: FdfScreen): void {
+    const on = this.working.lowPerf === true;
+    for (const d of OPTION_DEFS) {
+      if (d.panel !== "video" || d.kind !== "choice") continue;
+      const forced = LOW_PERF_FORCED[d.key];
+      if (forced === undefined) continue;
+      const c = screen.popup(d.escFrame ?? d.frame);
+      if (!c) continue;
+      c.setEnabled(!on);
+      c.value = on ? forced : String(this.working[d.key] ?? d.def);
+    }
+  }
+
   private applyAll(opts: Options): void {
     const sounds = this.host.sounds();
     if (sounds) applyAudioOptions(sounds, opts);
@@ -112,6 +134,8 @@ export class EscOptions {
       const sounds = this.host.sounds();
       if (d.panel === "sound" && sounds) applyAudioOptions(sounds, this.working);
       if (d.panel === "video") applyVideoOptions(this.working);
+      // …and the mode owns the rows under it, so a tick re-paints the panel it is on.
+      if (d.key === "lowPerf") this.fillVideo(screen, lib);
       if (d.panel === "gameplay") {
         applyHealthBarOptions(this.working);
         applyHotkeyOptions(this.working);
@@ -150,8 +174,11 @@ export class EscOptions {
   }
 
   /** The Video panel's five read-only rows (see the file header): the live value of each,
-   *  worded out of the same GlobalStrings keys the glue screen's pulldowns offer. */
+   *  worded out of the same GlobalStrings keys the glue screen's pulldowns offer. Three of the
+   *  five are rows "Low Performance Mode" forces, and a READOUT prints what the renderer is
+   *  doing — so with the mode on they read Low whatever the store remembers (`choiceLabel`). */
   private fillVideo(screen: FdfScreen, lib: FdfLibrary | null): void {
+    this.syncVideoRows(screen);
     screen.setText("ResolutionValue", this.choiceLabel("resolution", lib));
     screen.setText("ModelDetailValue", this.choiceLabel("modelDetail", lib));
     screen.setText("AnimQualityValue", this.choiceLabel("animQuality", lib));
@@ -170,7 +197,8 @@ export class EscOptions {
    *  same pair the glue screen's pulldown would be showing. */
   private choiceLabel(key: string, lib: FdfLibrary | null): string {
     const def = OPTION_DEFS.find((d) => d.key === key);
-    const value = String(this.working[key] ?? def?.def ?? "");
+    const forced = this.working.lowPerf === true ? LOW_PERF_FORCED[key] : undefined;
+    const value = forced ?? String(this.working[key] ?? def?.def ?? "");
     const label = def?.choices?.find((c) => c.value === value)?.label ?? value;
     return lib?.string(label) ?? label;
   }

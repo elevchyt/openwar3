@@ -18,8 +18,9 @@
 //   · "Difficulty:" GOES. It was a readout of the campaign screen's own dropdown, printing back
 //     at the player the one thing about the chapter they chose themselves.
 //
-// …and adds the two rows of ours that the glue panel grew with them: the "Healthbars:" pulldown
-// under "Always show Health Bars", and "Show hotkeys on command buttons" under "Hotkeys:". The
+// …and adds the rows of ours that the glue panel grew with them: the "Healthbars:" pulldown
+// under "Always show Health Bars", "Show hotkeys on command buttons" under "Hotkeys:", and on the
+// Video panel "Low Performance Mode" (issue #161). The
 // frames below carry the SAME NAMES as their glue twins in `OptionsMenu.fdf` — which is the
 // game's own idiom (both of Blizzard's files name this panel's `GameplayPanel`,
 // `MouseScrollSlider` and `HealthBarsCheckBox` alike, over different templates), and is what
@@ -118,4 +119,35 @@ Frame "TEXT" "ShowHotkeysLabel" INHERITS "EscMenuLabelTextTemplate" {
     Width 0.195,
     Height 0.024,
     Text "SHOW_HOTKEYS_ON_BUTTONS",
+}
+
+// --- Video panel -----------------------------------------------------------------------
+
+// "Low Performance Mode" (issue #161), the same row the glue panel grows under "Resolution:"
+// — and the same frame names, so one OPTION_DEFS row binds on either screen.
+//
+// It closes THIS panel instead of sitting mid-stack, because this file's Video panel is in a
+// different order from the glue one: its four pulldowns come first and its five READ-ONLY values
+// (Resolution, Model Detail, Animation Quality, Texture Quality, Spell Detail) follow them, so
+// "under Resolution" here would put a live control in the middle of a block of readouts. Under
+// the last of them it is the panel's own last row, exactly as "Show hotkeys on command buttons"
+// closes the Gameplay panel above.
+//
+// This row has to BE here rather than being left to the glue screen, because the two panels are
+// one store: with the mode on, the four pulldowns above are greyed (src/ui/escOptions.ts) and
+// the three readouts print the rung the mode forces — so without the switch, a player who turned
+// it on from the menus could not turn it off without leaving the match.
+//
+// Numbers off the file being layered: a checkbox sits 0.005 LEFT of the label column (the
+// relationship `CustomKeysLabel` states from the other side) and a 0.024 box needs more room
+// under a label row than the 0.00625 the readouts step by.
+Frame "GLUECHECKBOX" "LowPerfCheckBox" INHERITS WITHCHILDREN "EscMenuCheckBoxTemplate" {
+    SetPoint TOPLEFT, "SpellFilterLabel", BOTTOMLEFT, -0.005, -0.005,
+}
+
+Frame "TEXT" "LowPerfLabel" INHERITS "EscMenuLabelTextTemplate" {
+    SetPoint LEFT, "LowPerfCheckBox", RIGHT, 0.003, 0.0,
+    Width 0.195,
+    Height 0.024,
+    Text "LOW_PERFORMANCE_MODE",
 }

@@ -35,6 +35,7 @@ carry a `SpellFilterValue` — see below — but as a READOUT, not a control.)
 |---|---|
 | **Gamma** | An SVG `feComponentTransfer type="gamma"` over `#map`. Installed only off the middle. |
 | **Resolution** | The size of the buffer the world is drawn into. |
+| **Low Performance Mode** | Ours. One switch: every row below it at its cheapest rung. |
 | **Model Detail** | *Nothing* — see below. |
 | **Animation Quality** | Strides the map's widget stand-scan (1 / 2 / 4 frames). |
 | **Texture Quality** | Drops 0 / 1 / 2 mip levels off the top of every BLP as it uploads. |
@@ -114,6 +115,87 @@ it. We leave that 2 where it is and scale it, which makes our High exactly what 
 always drawn and our Medium the game's own middle rung. Every other rung in the file is OURS and
 says so at its definition. Nothing in the install describes what a quality setting does — these
 were engine settings, not data — so there is nothing to check them against.
+
+## Low Performance Mode (issue #161)
+
+The row directly under Resolution, and the only one on this panel that is about the other rows.
+It is **ours** — the 2003 panel is nine independent settings and has nothing that says "all of
+it, as cheap as it goes" — and a machine that needs it should not have to find seven dropdowns
+and know which way each one is cheaper.
+
+What it forces is `LOW_PERF_FORCED` in [`src/render/videoQuality.ts`](../src/render/videoQuality.ts):
+
+| Row | Forced to |
+|---|---|
+| Model Detail | Low *(no backend — see below)* |
+| Animation Quality | Low (widget scan strided 4) |
+| Texture Quality | Low (2 mips dropped; reaches the NEXT map) |
+| Particles | Low (×0.25) |
+| Lights | Low (no omni lights) |
+| Unit Shadows | Off |
+| Occlusion | Off *(no backend)* |
+
+**Two rows are deliberately not in that table.** **Resolution** is the one rung that changes how
+many pixels are drawn, and so the one a weak GPU cares most about — which is exactly why it stays
+the player's: how sharp the world is against how smooth it runs is the trade only they can make,
+and issue #161 asks for it in as many words. **Gamma** is the brightness of the picture rather
+than a cheaper drawing of the same one; a full-screen filter pass is not free, but a player on a
+dim panel needs it wherever they set it.
+
+**It is forced at APPLY time and never written to the store.** `applyVideoOptions` lays the table
+over the options it is handed; the player's own seven values sit untouched in localStorage, so
+unticking the box gives every one of them back with nothing having to be remembered. That is also
+why `VideoSettings` carries `lowPerf` beside the rungs it forces: the mode is a fact of its own,
+not something to infer from a rung the player might equally have chosen by hand.
+
+**Both screens grey the rows it owns AND show the rung it puts them at.** Half of that rule is not
+enough: a live dropdown over a setting the applier overrides is a control that does nothing, and a
+dead one still reading "High" while the renderer draws Low is the panel lying about the game. The
+forced label is painted onto the WIDGET only — the working copy keeps the player's value. On the
+in-game panel the same applies to its four pulldowns, and its three read-only rows (Model Detail,
+Animation Quality, Texture Quality) print the forced rung for the same reason: a readout says what
+the renderer is doing.
+
+The row is on the **in-game panel** too, where it closes the panel rather than sitting under
+Resolution — that file's Video panel puts its pulldowns first and its read-only values after, so
+"under Resolution" there would drop a live control into a block of readouts. It has to be
+reachable there at all because the two panels are one store: a mode turned on from the menus would
+otherwise be unreachable until the match ended.
+
+**Launch flag.** `?lowperf` turns it on for the session, applied inside `loadOptions` so that the
+boot applier, the glue screen and the F10 panel all agree. The box then shows ticked, which is
+true, and OK persists it like any other choice. Not DEV-gated, unlike `?dev`: this one is for the
+machine that needs it.
+
+**Where the row sits, and what it cost to put there.** The shipped 1.30.4 file has a checkbox row
+commented out in exactly this slot — `FixedAspectRatioCheckboxLabel` / `FixedAspectRatioCheckBox`,
+"Disabled for 1.29, needs some work" — and left behind both its anchors and the two re-anchorings
+Model Detail wears when a row stands between it and Resolution. What is ours is the arrangement
+(box then label, like the panel's other four checkbox rows) and the SPACING: the game paid 0.0105
+for this insertion, and at that price the panel overran, because this panel carries a row the 2003
+one never did ("Vertical Sync") and the last row landed on the frame's bottom rail. The box tucks
+into the 0.042 of empty label column the pulldowns' own chrome already leaves, the row costs
+**0.005**, and both of this panel's checkbox rows tuck **0.0115** under their labels so the last
+row lands where it always did. Measured in the running screen at 16:9 and at 4:3.
+
+**What it is worth, measured.** Echo Isles, 6× CPU throttle in headless Chrome, interleaved
+off/on/off/on, median frame time:
+
+| Scene | Off | On | |
+|---|---|---|---|
+| Early game, 110 units | 7.7 / 7.7 ms | 7.0 / 7.5 ms | −3…9 % |
+| An army standing on it, 259 units | 40.1 / 40.0 ms | 39.2 / 39.3 ms | −2 % |
+
+A few per cent, and the early-game pair is close to noise. That is the honest size of this switch
+as it stands, and it is worth stating plainly: what it composes is the rungs this panel already
+had, most of which are idle bookkeeping and one shadow pass, and the texture rung does not reach a
+map that is already loaded. The 259-unit row says something sharper — with the CPU throttled 6×,
+taking the unit and building shadow passes away is worth under a millisecond of a 40 ms frame, so
+that is not where a weak machine's time goes. **The substance of issue #161 is still the renderer work behind the flag**
+— particles and ribbons off rather than quartered, the fog overlay and the baked shadow layer
+taking terrain-cull's runs (docs/terrain-culling.md), skinning off the main thread, single-pass
+terrain, batching by texture — each of which the issue gates on its own Step 0 profile. The flag
+is where they land; `VideoSettings.lowPerf` is what they ask.
 
 ## The two rows with no backend, and why they stay that way
 
@@ -213,6 +295,9 @@ edge reading comes out wrong by exactly that.
 
 `tools/sim-options-test.cjs` (run by `pnpm sim:test`) pins the applier: every rung's number,
 including that an unknown value from an older or hand-edited store falls back to the default
-rather than putting a junk string into a ladder. Everything else here is visible, so screenshot
+rather than putting a junk string into a ladder — and, for Low Performance Mode, that it forces
+every row in its table, leaves resolution and gamma alone, does not touch the options it is handed
+(so unticking restores them), and names only keys the Video panel has with values those rows
+actually offer. Everything else here is visible, so screenshot
 it — `?dev&map=EchoIsles&ai=easy` with the options seeded into `localStorage` before the boot
 navigation is the whole test.

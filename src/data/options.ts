@@ -177,6 +177,18 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // The buffer the world is drawn into (see RESOLUTIONS). 1920x1080 is the default and is what
   // OpenWar3 has always rendered at, so a player who never opens this screen sees no change.
   { key: "resolution", frame: "ResolutionMenu", kind: "choice", panel: "video", def: "1920x1080", choices: RESOLUTIONS },
+  // "Low Performance Mode" (issue #161) — one switch that puts every rung BELOW it at its
+  // cheapest, for a machine that cannot afford them. Not a WC3 row: the 2003 panel is nine
+  // independent settings and has nothing that says "all of it, as cheap as it goes", so the frame
+  // comes from `src/overrides/ui/OptionsMenu.fdf` (and its in-game twin from
+  // `EscMenuOptionsPanel.fdf`) and the label from our GlobalStrings layer.
+  //
+  // It sits directly under "Resolution:" because Resolution is exactly what it does NOT touch:
+  // the pixels are the player's to choose (issue #161 asks for that in as many words), and so is
+  // the Gamma slider above it. What it forces, and what forcing means, is `LOW_PERF_FORCED` in
+  // render/videoQuality.ts — the values under it are left ALONE in the store, so unticking gives
+  // the player their own seven choices back. Off by default: nobody's current look changes.
+  { key: "lowPerf", frame: "LowPerfCheckBox", kind: "bool", panel: "video", def: false },
   // No LOD models to swap to: an MDX carries one mesh, and WC3's lower rungs picked a simpler
   // one. Faking it by thinning the map's doodads would change what the map LOOKS like rather
   // than how much it costs to draw, which is not what the row says.
@@ -262,7 +274,28 @@ export function loadOptions(): Options {
   } catch {
     /* unreadable store — the defaults stand */
   }
-  return base;
+  return lowPerfFlag(base);
+}
+
+/**
+ * The `?lowperf` LAUNCH FLAG (issue #161), which asks for the mode "selectable in options and via
+ * launch flag".
+ *
+ * Applied here rather than at boot so that every reader agrees: the applier main.ts calls before
+ * the first texture is uploaded, the glue Options screen, and the F10 panel all go through
+ * `loadOptions`. The box then shows TICKED, which is true, and pressing OK persists it like any
+ * other choice.
+ *
+ * Not DEV-gated, unlike `?dev` — this one is for the machine that needs it. `location` is guarded
+ * because this module is required from Node by `tools/sim-options-test.cjs`.
+ */
+function lowPerfFlag(o: Options): Options {
+  try {
+    if (typeof location !== "undefined" && new URLSearchParams(location.search).has("lowperf")) o.lowPerf = true;
+  } catch {
+    /* no URL to read — the stored value stands */
+  }
+  return o;
 }
 
 /** Commit the options to localStorage (the OK button). Best-effort: a full/disabled store

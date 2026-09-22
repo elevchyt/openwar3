@@ -136,6 +136,15 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `settings.json` owns it and OK offers to RELAUNCH the game to apply it (nothing in Electron
   changes it on a running window); with it off the page caps itself
   at 300 fps (`src/render/frameCap.ts`), and in a browser tab the box is greyed.
+  **LOW PERFORMANCE MODE** (issue #161, the row under Resolution, also `?lowperf`) is ONE SWITCH
+  over the rows below it — `LOW_PERF_FORCED` — and is FORCED AT APPLY TIME, never written to the
+  store, which is the whole of why unticking it gives the player their seven values back.
+  Resolution and Gamma are deliberately NOT in it (the pixels and the brightness are the
+  player's), both screens GREY the rows it owns *and* show them the rung it forces (a dead
+  dropdown still reading "High" is the panel lying about the game), and it is worth only a few
+  per cent as it stands: it composes the rungs this panel already had, and the renderer work the
+  issue actually asks for lands BEHIND the flag, which is why `VideoSettings.lowPerf` is carried
+  beside the rungs it forces.
 - **Windows:** read [`docs/windows.md`](docs/windows.md) before touching the NSIS include
   ([`packaging/windows-installer.nsh`](packaging/windows-installer.nsh)), the `win`/`nsis` build
   blocks or [`electron/locate.mjs`](electron/locate.mjs). ONE installer carries the 64- and the

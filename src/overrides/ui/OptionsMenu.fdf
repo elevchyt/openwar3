@@ -159,13 +159,55 @@ Frame "TEXT" "ComputerPlusDefaultLabel" INHERITS "StandardInfoTextTemplate" {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Video panel: "Low Performance Mode" (issue #161), a checkbox row directly under "Resolution:"
+// and above "Model Detail:" — one switch that puts every rung on this panel that costs something
+// at its cheapest, for a machine that cannot afford them (src/render/videoQuality.ts holds the
+// list, and Resolution and Gamma are deliberately not on it).
+//
+// THE GAME AUTHORED THIS SLOT. The shipped 1.30.4 file has a checkbox row commented out in
+// exactly this position — `FixedAspectRatioCheckboxLabel` / `FixedAspectRatioCheckBox`, marked
+// "Disabled for 1.29, needs some work" — and it left behind both that row's anchors AND the two
+// re-anchorings `ModelDetailLabel` / `ModelDetailBackdrop` wear when a row stands between them
+// and Resolution. So the shape of the row is the file's; what is ours is the ARRANGEMENT, which
+// is box-then-label (the game's dead row put its label in the label column and its box in the
+// pulldown column). The panel's other four checkbox rows — the game's own "Automatically Save
+// Replays" and our three — all read box-then-label, and a mode's answer is a tick rather than a
+// value, so it takes no colon and wants no pulldown column.
+//
+// The two offsets are one measurement, and the second was MEASURED IN THE RUNNING SCREEN rather
+// than taken from the file. The pulldown rows are 0.055 apart (a 0.053 backdrop and the 0.002
+// between two of them) and a label is 0.013 tall, so there is already 0.042 of EMPTY label column
+// between "Resolution:" and "Model Detail:" — the space the pulldowns' own chrome fills on the
+// right — and a 0.024 box very nearly fits in it as it stands. The game's dead row paid **0.0105**
+// for the same insertion (it stepped -0.02625 twice where "Model Detail:" alone steps -0.042), and
+// at that price the panel overran: this panel carries a row the 2003 one never did ("Vertical
+// Sync"), and the full 0.0105 pushed that last row onto the frame's bottom rail. So the row takes
+// **0.005** — every row below shifts by that much in the manifest (src/overrides/index.ts), which
+// carries the whole rest of the panel, since every row under Model Detail hangs off Model Detail —
+// and the box is CENTRED in the band that leaves: (0.042 + 0.005 - 0.024) / 2 = **0.0115** of gap
+// above it and the same below.
+//
+// "Vertical Sync" then tucks under "Occlusion:" by that same 0.0115 rather than the 0.02075 it
+// used to, so the panel's two checkbox rows are spaced alike and the last row lands where it
+// always did. That step is the Gameplay panel's, where the panel is a row emptier.
+Frame "GLUECHECKBOX" "LowPerfCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
+    SetPoint TOPLEFT, "ResolutionLabel", BOTTOMLEFT, 0.0, -0.0115,
+}
+
+Frame "TEXT" "LowPerfLabel" INHERITS "StandardInfoTextTemplate" {
+    SetPoint LEFT, "LowPerfCheckBox", RIGHT, 0.01, 0.0,
+    Text "LOW_PERFORMANCE_MODE",
+}
+
+// ---------------------------------------------------------------------------------------------
 // Video panel: "Vertical Sync", a checkbox row under the game's last row, "Occlusion:". 1.30.4's
 // panel has no frame-rate or vsync control, so the row is ours; in the desktop app it is a
 // Chromium LAUNCH switch, applied by the relaunch OK offers (electron/main.mjs,
-// src/ui/fdfOptions.ts). Spaced exactly as "Show hotkeys on command buttons" is under the
-// Gameplay panel's "Hotkeys:" pulldown: the same checkbox-under-a-pulldown-label step.
+// src/ui/fdfOptions.ts). Spaced by the same 0.0115 as the "Low Performance Mode" row above — see
+// there for why this panel's checkbox rows tuck closer under their labels than the Gameplay
+// panel's -0.02075 does.
 Frame "GLUECHECKBOX" "VsyncCheckBox" INHERITS WITHCHILDREN "StandardCheckBoxTemplate" {
-    SetPoint TOPLEFT, "OcclusionLabel", BOTTOMLEFT, 0.0, -0.02075,
+    SetPoint TOPLEFT, "OcclusionLabel", BOTTOMLEFT, 0.0, -0.0115,
 }
 
 Frame "TEXT" "VsyncLabel" INHERITS "StandardInfoTextTemplate" {
