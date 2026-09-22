@@ -1,4 +1,4 @@
-import { isRepairCode, NO_AOE_CURSOR, type AbilityDef, type AbilityLevel } from "../../data/abilities";
+import { isRepairCode, NO_AOE_CURSOR, targetFlagSet, type AbilityDef, type AbilityLevel } from "../../data/abilities";
 import type { SimUnit } from "../../sim/world";
 import { DISPEL_CODES, POLARITY_SPELLS, worthDispelling } from "../../sim/spells";
 import { friendlySpell, near, treeAim, treeSpots, waveDistance, waveHalfWidth, type CasterView } from "../casting";
@@ -1685,7 +1685,7 @@ export class PlusCaster {
 function friendlyAim(code: string, def: AbilityDef, role: Role): boolean {
   if (POLARITY_SPELLS[code] !== undefined) return false; // two spells on one button
   if (friendlySpell(def)) return true;
-  const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+  const F = targetFlagSet(def.targetFlags);
   if (F.has("enemy") || F.has("dead")) return false;
   if (def.target !== "unit" && def.target !== "point") return false;
   return role === "heal" || role === "buff";
@@ -1716,7 +1716,7 @@ function buffFree(t: SimUnit, lvl: AbilityLevel): boolean {
 function roleOf(def: AbilityDef, lvl: AbilityLevel): Role | null {
   const named = ROLE_OF.get(def.code);
   if (named) return named;
-  const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+  const F = targetFlagSet(def.targetFlags);
   if (lvl.summon || def.levelData.some((l) => !!l.summon)) return "summon";
   if (F.has("dead")) return "heal";
   const friendly = friendlySpell(def);

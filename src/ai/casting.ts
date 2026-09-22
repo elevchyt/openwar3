@@ -1,4 +1,4 @@
-import { NO_AOE_CURSOR, isRepairCode, type AbilityDef, type AbilityLevel } from "../data/abilities";
+import { NO_AOE_CURSOR, isRepairCode, targetFlagSet, type AbilityDef, type AbilityLevel } from "../data/abilities";
 import { AttackType } from "../data/enums";
 import type { Command } from "../game/commands";
 import type { SimUnit, SimWorld } from "../sim/world";
@@ -868,7 +868,7 @@ const SILENCE_MANA = 75;
  *  distance are the data's, and two casters disagreeing about them would be a bug in one of
  *  them rather than a difference in how they play. */
 export function friendlySpell(def: AbilityDef): boolean {
-  const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+  const F = targetFlagSet(def.targetFlags);
   return !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
 }
 
@@ -918,7 +918,7 @@ export function waveHalfWidth(def: AbilityDef, lvl: AbilityLevel): number {
  * row that names no body at all has named the forest.
  */
 export function treeAim(def: AbilityDef): boolean {
-  const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+  const F = targetFlagSet(def.targetFlags);
   return F.has("tree") && !F.has("ground") && !F.has("air") && !F.has("structure");
 }
 
@@ -993,7 +993,7 @@ export function near(a: SimUnit, b: SimUnit, range: number): boolean {
  * cast.
  */
 function classDefault(def: AbilityDef, lvl: AbilityLevel): CastRule | null {
-  const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+  const F = targetFlagSet(def.targetFlags);
   if (lvl.summon || def.levelData.some((l) => !!l.summon)) return { when: "engaged" };
   if (F.has("dead")) return { when: "engaged" };
   const friendly = friendlySpell(def);

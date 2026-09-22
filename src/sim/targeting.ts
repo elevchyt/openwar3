@@ -18,7 +18,7 @@
 // hand-write its own approximation (`if (t.flying) continue`, a `hitBuildings` argument,
 // or nothing at all), and the approximations drifted from the table they were copied from.
 
-import { normalizeTargetFlags } from "../data/abilities";
+import { targetFlagSet } from "../data/abilities";
 
 /** The unit fields a Targets Allowed decision reads. Structural, so both the sim's SimUnit
  *  and a test's plain object satisfy it. */
@@ -43,7 +43,9 @@ export interface TargetKind {
  * — or null when it may. Allegiance is not consulted (see the file header).
  */
 export function targsKindError(target: TargetKind, flags: readonly string[] = []): string | null {
-  const F = new Set(normalizeTargetFlags(flags ?? []));
+  // Normalised once per ROW and kept — see `targetFlagSet` (data/abilities.ts) for why this was
+  // the hottest thing in the frame.
+  const F = targetFlagSet(flags);
   // Clear-cut unit-type gates.
   //
   // A PAIR names both halves of one question, and then it restricts nothing: `hero,nonhero` is

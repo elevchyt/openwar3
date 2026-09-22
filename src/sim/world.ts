@@ -4,7 +4,7 @@ import { targsKindError } from "./targeting";
 import { corpseAdmits, corpseMissingError, corpseNeed, corpseReach, spawnsFromCorpse, type CorpseNeed, type CorpseOrder } from "./corpses";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { BlightGrid } from "./blight";
-import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, normalizeTargetFlags, requiredHeroLevel, KNOWN_ABILITIES, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, targetFlagSet, requiredHeroLevel, KNOWN_ABILITIES, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { slotMissileArt, autoArmed, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
@@ -12833,7 +12833,7 @@ export class SimWorld {
   private auraSide(abilityId: string, targetFlags: readonly string[]): { hostileAura: boolean; alliedAura: boolean } {
     let side = this.auraSides.get(abilityId);
     if (!side) {
-      const F = new Set(targetFlags.map((f) => f.toLowerCase()));
+      const F = targetFlagSet(targetFlags);
       side = { hostileAura: F.has("enemy") && !F.has("friend"), alliedAura: F.has("friend") && !F.has("enemy") };
       this.auraSides.set(abilityId, side);
     }
@@ -13083,8 +13083,11 @@ export class SimWorld {
    *  Codes with no allegiance flag (Banish) stay unrestricted.
    *  Returns an [Errors] key, or null when allowed. */
   private targetAllowed(caster: SimUnit, target: SimUnit, flags: string[]): string | null {
-    // One vocabulary — `enemies` IS `enemy` (see normalizeTargetFlags).
-    const F = new Set(normalizeTargetFlags(flags));
+    // One vocabulary — `enemies` IS `enemy` (see normalizeTargetFlags) — and one SET per row,
+    // kept rather than rebuilt per question (`targetFlagSet`, data/abilities.ts). This function
+    // and `targsKindError` under it were each building their own, on a path an autocast scan
+    // walks for every unit against every candidate.
+    const F = targetFlagSet(flags);
     const kindError = targsKindError(target, flags);
     if (kindError !== null) return kindError;
     const enemy = F.has("enemy");
@@ -13126,7 +13129,7 @@ export class SimWorld {
    */
   allegianceAdmits(caster: SimUnit, target: SimUnit, flags: string[]): boolean {
     if (target.id !== caster.id) return this.targetAllowed(caster, target, flags) === null;
-    const F = new Set(normalizeTargetFlags(flags));
+    const F = targetFlagSet(flags);
     const named = ["enemy", "friend", "player", "allies", "self", "neutral", "notself"].some((w) => F.has(w));
     return !named || F.has("self") || F.has("friend") || F.has("player");
   }
@@ -13920,7 +13923,7 @@ export class SimWorld {
       // target off `Rng1 = 99999`, i.e. the whole map.
       if (ab.code === "Ambt") continue;
       // …and the ability's own Targets Allowed, read once: every branch below asks it.
-      const F = new Set(this.abilities.get(ab.id)?.targetFlags.map((f) => f.toLowerCase()) ?? []);
+      const F = targetFlagSet(this.abilities.get(ab.id)?.targetFlags);
       // Renew is not a cast either — it is the ordinary repair JOB under the wisp's own art
       // (see KNOWN_ABILITIES). tickRenew hands out the work.
       if (isRepairCode(ab.code)) continue;
@@ -14248,7 +14251,7 @@ export class SimWorld {
     // …and the dispel family re-asks its own question: somebody else's Dryad may have taken the
     // buff off while this one was walking, and then there is nothing here to spend mana on.
     if (DISPEL_CODES.has(def.code)) return worthDispelling(t, this.units, !this.hostile(u, t), true);
-    const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+    const F = targetFlagSet(def.targetFlags);
     const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
     // The buff ids are read off level 1: no stock ability changes WHICH buff it applies
     // between ranks (see abilities.ts buffIdOf), and the walk does not know the rank.

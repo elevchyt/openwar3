@@ -90,6 +90,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   outside our loop*. The recorder is dev-server-only in both halves (`apply: "serve"` +
   `import.meta.env.DEV`), and phases must PARTITION the frame — nesting two `perfLog.begin`
   spans makes the report's `(unaccounted)` row meaningless.
+  A hot predicate that takes a DATA ROW as an argument is the standing trap there: an ability's
+  Targets Allowed is a CONSTANT (normalised at the SLK boundary, and a map edit REPLACES the
+  array), yet `targetAllowed` and `targsKindError` each rebuilt `new Set(normalizeTargetFlags(…))`
+  per call — ~24% of a 287-unit frame, more than the whole renderer cost by then. `targetFlagSet`
+  (data/abilities.ts) normalises once per array and keeps it in a WeakMap: **−23% in Low
+  Performance Mode and −26% at full quality**, exact, with `TargetFlagCache.enabled` to re-measure.
 - **Fog rebuild:** the per-seat vision rebuild (`sim.fog`) is the largest sub-phase of the sim
   after the world step in a team game, and `SightStamps` in [`src/sim/vision.ts`](src/sim/vision.ts)
   is why it is no longer. A sight's footprint is a fact about the TERRAIN, not about who is

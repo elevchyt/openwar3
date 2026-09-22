@@ -151,6 +151,25 @@ UNIT so the cache has one entry per unit rather than a new one every 64 world un
 what made it findable: `sim.fog` was already a phase of its own, so the report named it without
 anybody profiling anything.
 
+**A CONSTANT RE-PARSED FOR EVERY QUESTION ASKED OF IT.** An ability's Targets Allowed is a fixed
+property of its row — the SLK boundary normalises it as the def is built, and a map's edit
+REPLACES the array rather than editing it — and the two functions that answer "may this ability
+touch that body" each rebuilt it from scratch per call: `new Set(normalizeTargetFlags(flags))`,
+which trims, lower-cases, alias-maps and de-duplicates with `includes` into a fresh array and then
+allocates a Set. `targetAllowed` did it once for itself and once more inside `targsKindError`
+under it, and an autocast scan asks the pair for every unit against every candidate several times
+a second. Profiled in a 287-unit fight at 6× CPU throttle it was **~24% of the whole frame**
+(`targetAllowed` 10.0%, `targsKindError` 7.4%, `autocastTarget` 6.5%), which is more than the
+entire renderer was costing by then. `targetFlagSet` (data/abilities.ts) normalises once per ARRAY
+and keeps it against that array's identity in a WeakMap, so the entry dies with the def; four more
+copies of the same rebuild in the sim and both AIs were pointed at it. Measured interleaved in one
+match: **113.9 → 87.8 ms in Low Performance Mode (−23%) and 138.3 → 102.2 at full quality
+(−26%)**. It is EXACT — same words, same order, same set — which is the only reason it may sit
+under the sim at all, and `TargetFlagCache.enabled` turns it off so the claim can be re-measured.
+**Look for this wherever a hot predicate takes a DATA ROW as an argument**: the row is a constant
+and the question is asked thousands of times a second, so anything derived from it belongs beside
+it and not inside the loop.
+
 **THE SAME ANSWER, UPLOADED AGAIN.** Every MDX instance owns a bone-matrix texture and re-sent it
 to the GPU every frame — one `bindTexture` plus one `texSubImage2D` apiece, and the cost is almost
 entirely the CALL rather than the bytes: ~2 µs an instance whether it carries three bones or two
