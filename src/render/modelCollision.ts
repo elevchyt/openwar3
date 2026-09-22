@@ -45,6 +45,16 @@ export interface CollisionShapeNode {
 export interface CollisionHost {
   nodes?: ArrayLike<{ worldMatrix: ArrayLike<number> }>;
   model: { collisionShapes?: ArrayLike<CollisionShapeNode> };
+  /**
+   * Low Performance Mode's shared skeleton (issue #161, docs/video-options.md). While it is on,
+   * an instance may be wearing a pose a whole bucket of its own kind shares — so the matrices in
+   * `nodes` above are NOT this body's, and the ones that are live in `ow3SharedBones`, in the
+   * INSTANCE's own space. A click has to compose the same thing the vertex shader does
+   * (`u_instance` × the local matrix) or it tests a shape standing at the world origin.
+   */
+  ow3LocalPose?: boolean;
+  ow3SharedBones?: ArrayLike<number> | null;
+  worldMatrix?: ArrayLike<number>;
 }
 
 /** A world-space volume the click ray is tested against. */
@@ -70,6 +80,21 @@ function axisLen(m: ArrayLike<number>, c: number): number {
 
 const P0: number[] = [0, 0, 0];
 const P1: number[] = [0, 0, 0];
+/** Scratch for `compose` — one product at a time, as `xform` uses P0/P1. */
+const M: number[] = new Array<number>(16).fill(0);
+
+/** `instance × local[index]`, column-major, into the module's scratch. */
+function compose(a: ArrayLike<number>, bones: ArrayLike<number>, index: number): number[] {
+  const o = index * 16;
+  for (let c = 0; c < 4; c++) {
+    const b0 = bones[o + c * 4], b1 = bones[o + c * 4 + 1], b2 = bones[o + c * 4 + 2], b3 = bones[o + c * 4 + 3];
+    M[c * 4] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+    M[c * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+    M[c * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+    M[c * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+  }
+  return M;
+}
 
 /**
  * The world-space selection volumes of one drawn instance, appended to `out`. Returns the
@@ -80,12 +105,17 @@ export function modelPickVolumes(inst: CollisionHost, out: PickVolume[]): number
   const shapes = inst.model.collisionShapes;
   const nodes = inst.nodes;
   if (!shapes || !nodes) return 0;
+  // Low Performance Mode's shared skeleton (see `CollisionHost`): the shape's matrix is the
+  // bucket's pose, and this body's own matrix has to be multiplied back in — the same product
+  // the vertex shader forms, done here for two shapes rather than for every vertex.
+  const shared = inst.ow3LocalPose === true && inst.ow3SharedBones ? inst.ow3SharedBones : null;
+  const instWorld = inst.worldMatrix;
   let n = 0;
   for (let i = 0; i < shapes.length; i++) {
     const s = shapes[i];
     const node = nodes[s.index];
     if (!node) continue;
-    const m = node.worldMatrix;
+    const m = shared && instWorld ? compose(instWorld, shared, s.index) : node.worldMatrix;
     const v0 = s.vertices[0];
     if (s.type === SHAPE_SPHERE) {
       xform(m, v0[0], v0[1], v0[2], P0);

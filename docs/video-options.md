@@ -164,13 +164,50 @@ counter, so two instances genuinely differ and no key on (sequence, frame) can s
 Measured, same scene, interleaved: **38.9 → 34.2 ms** median, **−12%**, where the rungs alone had
 been worth −2%.
 
-What is still on the table is the other half of that 41%: the per-instance world compose
-(`recalculateTransformation` + `fromRotationTranslationScaleOrigin` + `multiply4` ≈ 22% of CPU).
-It needs the bone matrices to become INSTANCE-LOCAL, with the instance's own matrix applied in the
-vertex shader — and then a bucket's composed matrices are shareable too, and a pose can be strided
-for distant units without the unit's body lagging behind its position. That is the next step, and
-it is a bigger surface: everything that reads a node's world matrix (emitters, attachments,
-`src/render/modelCollision.ts`'s click ray) would have to apply the instance matrix too.
+### …and the shared SKELETON, which is where the big number is
+
+Sharing the sampled pose still left every instance composing its own matrices — the other half of
+that 41%. That half goes away when the matrices stop being world-space, and the change that makes
+them stop is one line: **a root bone's parent is the instance itself, so hanging it off an
+identity instead (`ow3LocalPose`, viewer/skeletalnode.js) composes the whole skeleton in the
+INSTANCE's own space.** A pose with no position in it is a pose a crowd can share — one
+`Float32Array`, one bone texture, filled once per bucket — and the vertex shader multiplies each
+body's own matrix back in (`u_instance`, sd.vert.js and hd.vert.js). An instance wearing one does
+**no node work at all**: no sampling, no composing, no texture upload.
+
+Three things still belong to the instance and are done for it:
+
+- **Nodes that act on the world** — a particle emitter, an event object (a footstep sound, a
+  blood splat), an attached model — get `instance.worldMatrix × local` composed into them, and
+  only them. A Footman has two or three against fifty-seven bones. The list is rebuilt every
+  frame rather than cached, because OpenWar3 PARENTS a buff or spell model onto a bone at
+  runtime (`inst.setParent(node)`), and a cached list would leave that model at the world origin.
+- **The click ray** (`src/render/modelCollision.ts`) composes the same product for the two or
+  three collision shapes it tests, or a click lands on a body standing at the origin.
+- **The flip itself.** Turning the mode on or off changes what the matrices MEAN, so the instance
+  forces a full pass on that frame and re-uploads its own texture.
+
+**What is excluded, and why it is not negotiable.** A model is skeleton-shareable only if no node
+is billboarded and none carries `dontInheritTranslation/Rotation/Scaling`. Both reach outside the
+clip: a billboarded node faces the CAMERA through the instance's own inverse world rotation, and a
+`dontInherit` node reaches past its parent to the instance's world scale. Allowing billboarding
+was tried and photographed: every Footman grew a white halo around its shield, because the
+billboarded quads there turned with the body instead of facing the camera. Of 69 unit models
+sampled across the four races, **48 qualify (70%, and 56% of all nodes)**; the ones that do not —
+Footman, grunt, Archer, Priest, the heroes — keep the shared POSE and compose for themselves, so
+they are no worse than the previous step left them.
+
+Measured, 259 units at 6× CPU throttle, interleaved:
+
+| Army | Off | On | |
+|---|---|---|---|
+| All Riflemen (every model shareable) | 54.3 / 57.4 ms | 18.3 / 17.9 ms | **3.1×** |
+| A mixed human army (Footmen, Riflemen, Knights, Priests) | 63.0 / 63.9 ms | 29.3 / 29.9 ms | **2.1×** |
+
+What is left on the table is the excluded 44% of nodes. Bringing them in means composing a
+billboarded node's subtree per instance and expressing the result back in instance space — the
+walk would still be shared, so it is worth having, but it is fiddly and the failure mode is the
+halo above, which is why it is not in this pass.
 
 ### The rungs
 
@@ -236,13 +273,17 @@ off/on/off/on, median frame time:
 |---|---|---|---|
 | Early game, 110 units — rungs only | 7.7 / 7.7 ms | 7.0 / 7.5 ms | −3…9 % |
 | An army standing on it, 259 units — rungs only | 40.1 / 40.0 ms | 39.2 / 39.3 ms | −2 % |
-| …the same army, with the shared pose cache | 38.8 / 39.0 ms | 34.1 / 34.3 ms | −12 % |
+| …the same army, with the shared POSE | 38.8 / 39.0 ms | 34.1 / 34.3 ms | −12 % |
+| A mixed human army of 259, with the shared SKELETON | 63.0 / 63.9 ms | 29.3 / 29.9 ms | **2.1×** |
+| …an army whose every model is shareable (Riflemen) | 54.3 / 57.4 ms | 18.3 / 17.9 ms | **3.1×** |
 
 The first two rows are the panel's own rungs, and they are worth a few per cent: most of them are
 idle bookkeeping and one shadow pass, and the texture rung does not reach a map that is already
 loaded. The 259-unit row says it sharply — with the CPU throttled 6×, taking the unit and building
 shadow passes away is worth under a millisecond of a 40 ms frame, so that is not where a weak
-machine's time goes. The third row is the pose cache, and it is where this mode's value is. **The substance of issue #161 is still the renderer work behind the flag**
+machine's time goes. Everything below the second row is the animation path, and that is where
+this mode's value is: the pose cache first, then the shared skeleton, which is what turns a
+weak-machine frame from 63 ms into 29. **The substance of issue #161 is still the renderer work behind the flag**
 — particles and ribbons off rather than quartered, the fog overlay and the baked shadow layer
 taking terrain-cull's runs (docs/terrain-culling.md), skinning off the main thread, single-pass
 terrain, batching by texture — each of which the issue gates on its own Step 0 profile. The flag

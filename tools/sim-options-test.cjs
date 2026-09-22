@@ -252,6 +252,22 @@ console.log("\nLow Performance Mode forces every rung but the pixels and the bri
     ["high", "high", true, true]);
   check("…and the mode is off again", lowPerfMode(), false);
 
+  // The LAUNCH FLAG, at both doors: an empty store and a full one. `?lowperf` reaching only the
+  // second is the bug this pins — a fresh profile has no stored options, which is exactly the
+  // machine the flag is for.
+  const withSearch = (search, fn) => {
+    const had = Object.prototype.hasOwnProperty.call(global, "location");
+    const prev = global.location;
+    global.location = { search };
+    try { return fn(); } finally { if (had) global.location = prev; else delete global.location; }
+  };
+  store.clear();
+  check("the flag reaches an EMPTY store", withSearch("?dev&lowperf", () => loadOptions().lowPerf), true);
+  saveOptions({ ...defaultOptions(), lowPerf: false });
+  check("…and a stored one", withSearch("?lowperf", () => loadOptions().lowPerf), true);
+  check("…and without it the store stands", withSearch("?dev", () => loadOptions().lowPerf), false);
+  store.clear();
+
   // Every key the table names has to BE a video row, or the Options screens would grey a row that
   // does not exist and the applier would force a setting nothing reads.
   const videoKeys = OPTION_DEFS.filter((d) => d.panel === "video").map((d) => d.key);

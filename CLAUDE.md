@@ -153,7 +153,18 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   are WORLD space here. The trap that makes or breaks it: **`forced` means two different
   things** — a sequence change (rewrite every local) and a MOVE (recompose every world matrix,
   tracks untouched) — and since the units worth sharing are the ones that are moving, folding
-  them into one flag means nothing ever shares (`ow3PoseReset` is the first kind).
+  them into one flag means nothing ever shares (`ow3PoseReset` is the first kind). The SECOND
+  half is the shared **SKELETON**, and it is where the big number is: a root bone's parent is
+  the INSTANCE, so hanging it off an identity (`ow3LocalPose`) composes the pose in instance
+  space, a whole bucket then shares ONE bone texture, and the vertex shader multiplies each
+  body's own matrix back in (`u_instance`). **2.1× on a mixed human army, 3.1× where every model
+  qualifies**, 259 units at 6× CPU throttle. Three things stay the instance's and are composed
+  for it: the nodes that act on the WORLD (emitters, event objects, attached models — listed
+  fresh every frame, because a buff model is PARENTED to a bone at runtime), the click ray's
+  collision shapes (`src/render/modelCollision.ts`), and the frame the mode flips on. A
+  BILLBOARDED node disqualifies its whole model and that is not negotiable — it faces the camera
+  through the instance's own rotation, and allowing it drew a white halo around every Footman's
+  shield (48 of 69 unit models qualify; the rest keep the shared pose).
 - **Windows:** read [`docs/windows.md`](docs/windows.md) before touching the NSIS include
   ([`packaging/windows-installer.nsh`](packaging/windows-installer.nsh)), the `win`/`nsis` build
   blocks or [`electron/locate.mjs`](electron/locate.mjs). ONE installer carries the 64- and the

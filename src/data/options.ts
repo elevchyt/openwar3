@@ -245,10 +245,14 @@ const STORAGE_KEY = "openwar3.options";
 export function loadOptions(): Options {
   const base = defaultOptions();
   const ls = typeof localStorage !== "undefined" ? localStorage : null;
-  if (!ls) return base;
+  // Every way out of this function goes through `lowPerfFlag` — the launch flag has to reach a
+  // player whose store is EMPTY or unreadable just as much as one whose store is fine, and those
+  // are the two early returns below. (Missed once: a fresh profile has no stored options, so
+  // `?lowperf` did nothing at all on the machine most likely to pass it.)
+  if (!ls) return lowPerfFlag(base);
   try {
     const raw = ls.getItem(STORAGE_KEY);
-    if (!raw) return base;
+    if (!raw) return lowPerfFlag(base);
     const saved = JSON.parse(raw) as Partial<Options>;
     // A store written before issue #141 carries a `healthBars` NOBODY CHOSE. The checkbox was
     // remembered but unapplied (`applied: false`) and defaulted to the game's own `false`, so

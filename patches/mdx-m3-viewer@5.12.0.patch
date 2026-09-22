@@ -766,10 +766,19 @@ index 26347d6d988194c95415c2a40597123e80bd61a2..3d28cc4165be8474ed4005abfe3ce726
      }
  }
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index 7fe06bd7314e83b578dc8987e819b08cea287dfb..8d0fb463d4154e99aca52bba51f3353e56c84ff4 100644
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..69d8e91d198f53a150ea5ae90cc9524f54849e43 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-@@ -31,11 +31,110 @@ class BatchGroup {
+@@ -2,6 +2,8 @@
+ Object.defineProperty(exports, "__esModule", { value: true });
+ const handler_1 = require("./handler");
+ const batch_1 = require("./batch");
++// OpenWar3 (issue #161): what `u_instance` says when the bones are already world space.
++const OW3_IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+ /**
+  * A group of batches that are going to be rendered together.
+  */
+@@ -31,11 +33,117 @@ class BatchGroup {
          const shader = handler_1.default.getBatchShader(viewer, skinningType, isHd);
          shader.use();
          const uniforms = shader.uniforms;
@@ -786,6 +795,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..8d0fb463d4154e99aca52bba51f3353e
 +        shader.ow3Scene = scene;
 +        shader.ow3Frame = viewer.frame;
          gl.uniformMatrix4fv(uniforms['u_VP'], false, camera.viewProjectionMatrix);
+-        const boneTexture = instance.boneTexture;
 +        gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
 +        // OpenWar3: the scene's day/night light for models (Environment\DNC\*Unit.mdx).
 +        // Only the SD shader declares these; on HD/other shaders the lookup misses and
@@ -867,7 +877,14 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..8d0fb463d4154e99aca52bba51f3353e
 +        }
 +        } // ---- end of the once-per-(shader, scene, frame) block -------------------------
 +        // ---- and from here it is the INSTANCE's ------------------------------------------
-         const boneTexture = instance.boneTexture;
++        // OpenWar3 (issue #161): in Low Performance Mode an instance may be wearing a skeleton a
++        // whole bucket of its own kind shares — one texture, filled once by whoever composed it.
++        // Those matrices are in the INSTANCE's own space, and `u_instance` is what puts them in
++        // the world; an instance composing for itself sends the identity and is unchanged.
++        const boneTexture = instance.ow3SharedTexture || instance.boneTexture;
++        if (uniforms['u_instance']) {
++            gl.uniformMatrix4fv(uniforms['u_instance'], false, instance.ow3LocalPose === true ? instance.worldMatrix : OW3_IDENTITY);
++        }
          // Instances of models with no bones don't have a bone texture.
          if (boneTexture) {
              boneTexture.bind(15);
@@ -880,7 +897,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..8d0fb463d4154e99aca52bba51f3353e
              gl.uniform1f(uniforms['u_hasBones'], 1);
              gl.uniform1i(uniforms['u_boneMap'], 15);
              gl.uniform1f(uniforms['u_vectorSize'], 1 / boneTexture.width);
-@@ -44,24 +143,14 @@ class BatchGroup {
+@@ -44,24 +152,14 @@ class BatchGroup {
          else {
              gl.uniform1f(uniforms['u_hasBones'], 0);
          }
@@ -907,7 +924,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..8d0fb463d4154e99aca52bba51f3353e
              for (const index of this.objects) {
                  const batch = batches[index];
                  const geoset = batch.geoset;
-@@ -115,6 +204,14 @@ class BatchGroup {
+@@ -115,6 +213,14 @@ class BatchGroup {
              const uvAnims = instance.uvAnims;
              gl.uniform4fv(uniforms['u_vertexColor'], instance.vertexColor);
              gl.uniform1i(uniforms['u_texture'], 0);
@@ -922,7 +939,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..8d0fb463d4154e99aca52bba51f3353e
              for (const object of this.objects) {
                  const batch = batches[object];
                  const geoset = batch.geoset;
-@@ -133,7 +230,7 @@ class BatchGroup {
+@@ -133,7 +239,7 @@ class BatchGroup {
                      gl.uniform2f(uniforms['u_uvTrans'], uvAnim[0], uvAnim[1]);
                      gl.uniform2f(uniforms['u_uvRot'], uvAnim[2], uvAnim[3]);
                      gl.uniform1f(uniforms['u_uvScale'], uvAnim[4]);
@@ -1002,10 +1019,10 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
          }
          else {
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f6ac4be73 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..edc5396cd6269a37ad660b6a644c0c10425368d5 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -21,6 +21,121 @@ const scaleHeap = gl_matrix_1.vec3.create();
+@@ -21,6 +21,283 @@ const scaleHeap = gl_matrix_1.vec3.create();
  const colorHeap = new Float32Array(3);
  const alphaHeap = new Float32Array(1);
  const textureIdHeap = new Uint32Array(1);
@@ -1083,6 +1100,55 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
 +    return model.ow3Shareable;
 +}
 +/**
++ * May this model's composed SKELETON be shared, not just the pose it is composed from?
++ *
++ * Two node kinds say no, and both are nodes whose matrix is not a function of the clip alone:
++ *
++ *   · **billboarded** nodes face the CAMERA through the instance's own inverse world rotation,
++ *     so two instances facing different ways hold different matrices at the same frame;
++ *   · **dontInheritTranslation / Rotation / Scaling** nodes reach past their parent to the
++ *     INSTANCE's world scale and the parent's inverse world values, which in instance space are
++ *     not what they are in the world.
++ *
++ * Both are rare on unit skeletons — of 295 visible instances in a real match, three (seaweed)
++ * had billboarding — and a model that has them simply keeps the per-instance path.
++ */
++function ow3SkeletonShareable(model) {
++    if (model.ow3SkeletonShareable === undefined) {
++        let ok = ow3Shareable(model);
++        for (const object of model.sortedGenericObjects) {
++            if (object.anyBillboarding || object.dontInheritTranslation || object.dontInheritRotation || object.dontInheritScaling) {
++                ok = false;
++            }
++        }
++        model.ow3SkeletonShareable = ok;
++    }
++    return model.ow3SkeletonShareable;
++}
++/** The nodes of this instance carrying an emitter, an event object or an attachment — the only
++ *  ones that still need TRUE world matrices while the skeleton is shared, because what they do
++ *  happens in the world (a particle is spawned there, a sound is played there, an attached model
++ *  is parented there). Everything else in the model exists only to be drawn. */
++function ow3ObjectNodes(instance) {
++    let list = instance.ow3ObjectNodes;
++    if (list === undefined) {
++        list = instance.ow3ObjectNodes = [];
++    }
++    // Rebuilt every frame rather than cached: OpenWar3 PARENTS a buff or spell model onto a
++    // unit's bone at runtime (render/mapViewer.ts `inst.setParent(node)`), so a node grows
++    // children long after the instance was built, and a cached list would leave that model
++    // hanging at the world origin. Two property reads a node, against the matrix work it saves.
++    list.length = 0;
++    const sortedNodes = instance.sortedNodes;
++    for (let i = 0, l = sortedNodes.length; i < l; i++) {
++        const node = sortedNodes[i];
++        if (node.object || node.children.length > 0) {
++            list.push(i);
++        }
++    }
++    return list;
++}
++/**
 + * The shared pose for (model, sequence, bucket), minted empty on the first ask.
 + *
 + * `trs` is ten floats a node — translation, rotation, scale — in the model's own sorted node
@@ -1105,7 +1171,15 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
 +            cache = model.ow3PoseCache;
 +        }
 +        const nodes = model.sortedGenericObjects.length;
-+        pose = { trs: new Float32Array(nodes * 10), dirty: new Uint8Array(nodes), frame: bucket * OW3_POSE_BUCKET, filled: false };
++        // `bones`/`rot`/`scl` are the COMPOSED skeleton in instance space — the second half of
++        // this cache (issue #161). `bones` is what the bone texture is filled from and what the
++        // shader multiplies the instance's own matrix into; `rot` and `scl` are only read for the
++        // handful of nodes carrying an emitter or an attachment, which need true world values.
++        pose = {
++            trs: new Float32Array(nodes * 10), dirty: new Uint8Array(nodes),
++            frame: bucket * OW3_POSE_BUCKET, filled: false,
++            bones: null, rot: null, scl: null, texture: null, skeleton: false,
++        };
 +        cache.set(key, pose);
 +        ow3PoseCount++;
 +    }
@@ -1124,10 +1198,115 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
 +        ow3PoseModels.add(current);
 +    }
 +}
++/** OpenWar3 (issue #161): stand-in for a node's child list while the pose is in instance space. */
++const EMPTY_CHILDREN = [];
++const ow3Mat = gl_matrix_1.mat4.create();
++/**
++ * Keep the skeleton this instance just composed, as the bucket's.
++ *
++ * `worldMatrices` is instance-local here (skeletalnode.js hangs the root off an identity), so
++ * what is copied out is a pose and not a position — which is exactly what makes it shareable.
++ * The bone texture is filled once, here, instead of once per instance per frame.
++ */
++function ow3CaptureSkeleton(instance, pose) {
++    const model = instance.model;
++    const nodes = model.sortedGenericObjects.length;
++    if (pose.bones === null) {
++        pose.bones = new Float32Array(nodes * 16);
++        pose.rot = new Float32Array(nodes * 4);
++        pose.scl = new Float32Array(nodes * 3);
++    }
++    pose.bones.set(instance.worldMatrices);
++    const sortedNodes = instance.sortedNodes;
++    for (let i = 0; i < nodes; i++) {
++        const node = sortedNodes[i];
++        const r = i * 4;
++        const c = i * 3;
++        pose.rot[r] = node.worldRotation[0];
++        pose.rot[r + 1] = node.worldRotation[1];
++        pose.rot[r + 2] = node.worldRotation[2];
++        pose.rot[r + 3] = node.worldRotation[3];
++        pose.scl[c] = node.worldScale[0];
++        pose.scl[c + 1] = node.worldScale[1];
++        pose.scl[c + 2] = node.worldScale[2];
++    }
++    if (pose.texture === null && instance.boneTexture) {
++        pose.texture = new datatexture_1.default(model.viewer.gl, 4, model.bones.length * 4, 1);
++    }
++    if (pose.texture) {
++        pose.texture.bindAndUpdate(pose.bones);
++    }
++    pose.skeleton = true;
++}
++/**
++ * Give the nodes that act on the WORLD their true matrices back.
++ *
++ * A shared skeleton is a pose, and a pose has no position — but a particle is spawned somewhere,
++ * a footstep is heard somewhere and an attached model hangs somewhere, so those nodes (and only
++ * those) get `instance.worldMatrix * local` composed into them. A Footman has two or three of
++ * them against sixteen bones, which is why this is still most of the saving.
++ */
++function ow3ComposeObjectNodes(instance, pose, dt, sequence, frame, counter) {
++    const indices = ow3ObjectNodes(instance);
++    if (indices.length === 0) {
++        return;
++    }
++    const sortedNodes = instance.sortedNodes;
++    const sortedGenericObjects = instance.model.sortedGenericObjects;
++    const bones = pose.bones;
++    const iw = instance.worldMatrix;
++    const ir = instance.worldRotation;
++    const is = instance.worldScale;
++    for (let k = 0; k < indices.length; k++) {
++        const i = indices[k];
++        const node = sortedNodes[i];
++        const local = bones.subarray(i * 16, i * 16 + 16);
++        gl_matrix_1.mat4.multiply(node.worldMatrix, iw, local);
++        const r = i * 4;
++        ow3Quat[0] = pose.rot[r];
++        ow3Quat[1] = pose.rot[r + 1];
++        ow3Quat[2] = pose.rot[r + 2];
++        ow3Quat[3] = pose.rot[r + 3];
++        gl_matrix_1.quat.mul(node.worldRotation, ir, ow3Quat);
++        const c = i * 3;
++        node.worldScale[0] = is[0] * pose.scl[c];
++        node.worldScale[1] = is[1] * pose.scl[c + 1];
++        node.worldScale[2] = is[2] * pose.scl[c + 2];
++        const m = node.worldMatrix;
++        const pivot = node.pivot;
++        const x = pivot[0];
++        const y = pivot[1];
++        const z = pivot[2];
++        node.worldLocation[0] = m[0] * x + m[4] * y + m[8] * z + m[12];
++        node.worldLocation[1] = m[1] * x + m[5] * y + m[9] * z + m[13];
++        node.worldLocation[2] = m[2] * x + m[6] * y + m[10] * z + m[14];
++        node.inverseWorldLocation[0] = -node.worldLocation[0];
++        node.inverseWorldLocation[1] = -node.worldLocation[1];
++        node.inverseWorldLocation[2] = -node.worldLocation[2];
++        node.inverseWorldRotation[0] = -node.worldRotation[0];
++        node.inverseWorldRotation[1] = -node.worldRotation[1];
++        node.inverseWorldRotation[2] = -node.worldRotation[2];
++        node.inverseWorldRotation[3] = node.worldRotation[3];
++        node.inverseWorldScale[0] = 1 / node.worldScale[0];
++        node.inverseWorldScale[1] = 1 / node.worldScale[1];
++        node.inverseWorldScale[2] = 1 / node.worldScale[2];
++        if (node.object) {
++            sortedGenericObjects[i].getVisibility(visibilityHeap, sequence, frame, counter);
++            if (visibilityHeap[0] > 0) {
++                node.object.update(dt);
++            }
++        }
++        for (const child of node.children) {
++            child.recalculateTransformation();
++            child.update(dt);
++        }
++    }
++}
++const ow3Quat = gl_matrix_1.quat.create();
  /**
   * An MDX model instance.
   */
-@@ -48,12 +163,35 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +325,35 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -1163,7 +1342,16 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -223,38 +361,138 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +516,166 @@ class MdxModelInstance extends modelinstance_1.default {
+      * Updates all of this instance internal nodes and objects.
+      * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
+      */
+-    updateNodes(dt, forced) {
++    updateNodes(dt, forcedArg) {
++        let forced = forcedArg; // OpenWar3 (issue #161): a change of pose SPACE forces a full pass
+         const sequence = this.sequence;
+         const frame = this.frame;
+         const counter = this.counter;
          const sortedNodes = this.sortedNodes;
          const model = this.model;
          const sortedGenericObjects = model.sortedGenericObjects;
@@ -1194,14 +1382,32 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
 +        if (!this.ow3PoseReset && !blending && sequence !== -1 && ow3SharePoses() && ow3Shareable(model)) {
 +            pose = ow3PoseFor(model, sequence, frame);
 +        }
++        // OpenWar3 (issue #161): …and whether the COMPOSED skeleton is shared too, which is the
++        // half that takes the per-instance node walk away entirely. It means this instance's node
++        // matrices are in ITS OWN space (see skeletalnode.js), so the switch is a change of
++        // meaning and every node has to be recomposed on the frame it flips.
++        const wantLocal = pose !== null && ow3SkeletonShareable(model);
++        if (wantLocal !== (this.ow3LocalPose === true)) {
++            this.ow3LocalPose = wantLocal;
++            this.forced = forced = true;
++            this.ow3PoseReset = true;
++            this.ow3BonesUploaded = false;
++            pose = wantLocal ? ow3PoseFor(model, sequence, frame) : null;
++        }
++        const skeleton = wantLocal && pose !== null && !this.ow3PoseReset ? pose : null;
++        const replaySkeleton = skeleton !== null && skeleton.skeleton;
 +        // What the tracks are sampled AT: the bucket's time while sharing (so every instance in
 +        // the bucket gets one pose), the instance's own frame otherwise.
 +        const poseFrame = pose === null ? frame : pose.frame;
 +        const fillPose = pose !== null && !pose.filled;
 +        const replayPose = pose !== null && pose.filled;
          // Update the nodes
+-        for (let i = 0, l = sortedNodes.length; i < l; i++) {
 +        let anyDirty = forced; // OpenWar3: see updateBoneTexture
-         for (let i = 0, l = sortedNodes.length; i < l; i++) {
++        // OpenWar3 (issue #161): ZERO laps when this instance is wearing a skeleton somebody else
++        // composed — the whole point of the cache. What it still owes the world (emitters,
++        // sounds, attached models) is paid by `ow3ComposeObjectNodes` below.
++        for (let i = 0, l = replaySkeleton ? 0 : sortedNodes.length; i < l; i++) {
              const genericObject = sortedGenericObjects[i];
              const node = sortedNodes[i];
              const parent = node.parent;
@@ -1305,25 +1511,55 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
                  node.recalculateTransformation(this);
              }
              // If there is an instance object associated with this node (emitter/attachment), and it is visible, update it.
-             if (node.object) {
+-            if (node.object) {
 -                genericObject.getVisibility(visibilityHeap, sequence, frame, counter);
++            // OpenWar3 (issue #161): …unless the pose is being composed in INSTANCE space, where
++            // this node's matrix is not yet the world's. `ow3ComposeObjectNodes` does it below,
++            // once the instance's own matrix has been multiplied back in.
++            if (node.object && !this.ow3LocalPose) {
 +                genericObject.getVisibility(visibilityHeap, sequence, poseFrame, counter);
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -269,6 +507,11 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +683,36 @@ class MdxModelInstance extends modelinstance_1.default {
+             }
+             // Recalculate and update child nodes.
+             // Note that this only affects normal nodes such as instances, and not skeletal nodes.
+-            for (const child of node.children) {
++            // OpenWar3 (issue #161): deferred with the objects above while in instance space.
++            for (const child of this.ow3LocalPose ? EMPTY_CHILDREN : node.children) {
+                 if (wasDirty) {
+                     child.recalculateTransformation();
+                 }
                  child.update(dt);
              }
          }
 +        if (fillPose) {
 +            pose.filled = true; // OpenWar3 (issue #161): every node of this bucket is now sampled
 +        }
++        // OpenWar3 (issue #161): the composed half of the cache. This instance either just
++        // composed the bucket's skeleton — in its own space, so it is everybody's — or it wore
++        // one, in which case it did no node work at all this frame.
++        if (skeleton !== null) {
++            if (!replaySkeleton) {
++                ow3CaptureSkeleton(this, skeleton);
++            }
++            this.ow3SharedTexture = skeleton.texture;
++            // …and the same matrices to whoever asks in world terms rather than in pixels: the
++            // click ray (src/render/modelCollision.ts) composes this exactly as the shader does.
++            this.ow3SharedBones = skeleton.bones;
++            ow3ComposeObjectNodes(this, skeleton, dt, sequence, poseFrame, counter);
++        }
++        else if (this.ow3SharedTexture) {
++            this.ow3SharedTexture = null;
++            this.ow3SharedBones = null;
++        }
 +        this.ow3PoseReset = false; // OpenWar3 (issue #161): the new clip's locals are written
 +        this.ow3BonesDirty = anyDirty; // OpenWar3
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,19 +605,51 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,19 +806,56 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -1344,6 +1580,11 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
 +     */
      updateBoneTexture() {
 -        if (this.boneTexture) {
++        // OpenWar3 (issue #161): an instance wearing the bucket's skeleton has nothing of its own
++        // to send — the texture was filled once, by whoever composed it (`ow3CaptureSkeleton`).
++        if (this.ow3SharedTexture) {
++            return;
++        }
 +        if (this.boneTexture && (this.ow3BonesDirty || !this.ow3BonesUploaded)) {
              this.boneTexture.bindAndUpdate(this.worldMatrices);
 +            this.ow3BonesUploaded = true;
@@ -1376,7 +1617,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -436,6 +711,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +917,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -1384,7 +1625,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +721,65 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +927,65 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
@@ -1403,8 +1644,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
          this.resetAttachments();
          this.forced = true;
 +        this.ow3PoseReset = true; // OpenWar3 (issue #161): a new clip rewrites every local
-         return this;
-     }
++        return this;
++    }
 +    /**
 +     * OpenWar3: set this instance's animation cross-fade duration, in seconds.
 +     * Fed from each unit's UnitUI.slk `blend` value (0.15s for most WC3 units).
@@ -1415,8 +1656,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f
 +        if (this.blendTime === 0) {
 +            this.blendRemaining = 0;
 +        }
-+        return this;
-+    }
+         return this;
+     }
 +    /**
 +     * OpenWar3: snapshot every node's current local TRS into the flat blend
 +     * buffer, laid out as [loc.x,loc.y,loc.z, rot.x,rot.y,rot.z,rot.w, sc.x,sc.y,sc.z]
@@ -1492,6 +1733,36 @@ index 34686902ea449513570fad17cecbb6938ad9547a..2d355bcd094726e48a364a491faa5fb6
              }
          }
      }
+diff --git a/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js b/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js
+index 3e7460e457fec7d247ebcb2b8641ffb028f47736..ed1aae1aace9db30c040dbfbf111089af87641aa 100644
+--- a/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js
++++ b/dist/cjs/viewer/handlers/mdx/shaders/hd.vert.js
+@@ -33,6 +33,10 @@ vec3 TBN(vec3 vector, vec3 tangent, vec3 binormal, vec3 normal) {
+   return vec3(dot(vector, tangent), dot(vector, binormal), dot(vector, normal));
+ }
+ 
++// OpenWar3 (issue #161): see sd.vert.js — the instance's own matrix, identity unless this
++// instance is wearing a skeleton shared by a bucket of its own kind.
++uniform mat4 u_instance;
++
+ void main() {
+   vec3 position = a_position;
+   vec3 normal = a_normal;
+@@ -52,6 +56,14 @@ void main() {
+     #endif
+   }
+ 
++  // OpenWar3 (issue #161): identity unless this instance wears a shared skeleton, in which case
++  // its bones are in its own space and this is what puts the body where it stands.
++  position = (u_instance * vec4(position, 1.0)).xyz;
++  mat3 ow3Instance = mat3(u_instance);
++  normal = normalize(ow3Instance * normal);
++  tangent = normalize(ow3Instance * tangent);
++  binormal = normalize(ow3Instance * binormal);
++
+   vec3 position_mv = vec3(u_MV * vec4(position, 1));
+ 
+   mat3 mv = mat3(u_MV);
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e15e90b99 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
@@ -1688,10 +1959,23 @@ index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e
  }
  
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
-index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393a2478522 100644
+index 49733805785c0ef269901d8928e47a953ada93a9..3f04a3b1c651fada8fd05867ab37754d5a73ddb8 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
-@@ -23,6 +23,7 @@ varying vec4 v_color;
+@@ -12,6 +12,12 @@ uniform vec2 u_uvTrans;
+ uniform vec2 u_uvRot;
+ uniform float u_uvScale;
+ uniform bool u_hasBones;
++// OpenWar3 (issue #161): the instance's own world matrix, applied AFTER skinning. Identity for
++// everything drawn the old way — an instance's bone matrices are world space already. In Low
++// Performance Mode's shared-skeleton path they are the INSTANCE's space instead, because a pose
++// can only be shared by a crowd if it carries no position, and this is what puts each body back
++// where it stands. See mdx/modelinstance.js.
++uniform mat4 u_instance;
+ 
+ attribute vec3 a_position;
+ attribute vec3 a_normal;
+@@ -23,6 +29,7 @@ varying vec4 v_color;
  varying vec4 v_uvTransRot;
  varying float v_uvScale;
  varying vec3 v_lightDir;
@@ -1699,8 +1983,14 @@ index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393
  
  ${bonetexture_glsl_1.default}
  ${transforms_glsl_1.default}
-@@ -37,10 +38,16 @@ void main() {
+@@ -35,12 +42,22 @@ void main() {
+     transformVertexGroups(position, normal);
+   }
  
++  // OpenWar3 (issue #161): identity unless this instance wears a shared skeleton.
++  position = (u_instance * vec4(position, 1.0)).xyz;
++  normal = normalize(mat3(u_instance) * normal);
++
    v_uv = a_uv;
    v_normal = normal;
 -  v_color = u_vertexColor * u_geosetColor.bgra * vec4(1.0, 1.0, 1.0, u_layerAlpha);
@@ -2704,3 +2994,49 @@ index afd956b8a078be77190d840a7fe5cb4d2c76797a..66de9bb3445643603adc39e0cbec367e
          this.viewer = viewer;
          const canvas = viewer.canvas;
          const width = canvas.width;
+diff --git a/dist/cjs/viewer/skeletalnode.js b/dist/cjs/viewer/skeletalnode.js
+index 2ae99b7f8f6167035bd01cf13339de280c3f402c..eb527980310e2e8e731aa5848cb4e4335187e1e1 100644
+--- a/dist/cjs/viewer/skeletalnode.js
++++ b/dist/cjs/viewer/skeletalnode.js
+@@ -3,6 +3,17 @@ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.createSkeletalNodes = exports.SkeletalNode = void 0;
+ const gl_matrix_1 = require("gl-matrix");
+ const gl_matrix_addon_1 = require("../common/gl-matrix-addon");
++// OpenWar3 (issue #161): the identity a root bone hangs off while a pose is being composed in
++// instance space. Shaped like a SkeletalNode as far as `recalculateTransformation` reads one.
++const OW3_IDENTITY_PARENT = {
++    worldMatrix: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
++    worldRotation: new Float32Array([0, 0, 0, 1]),
++    worldScale: new Float32Array([1, 1, 1]),
++    inverseWorldLocation: new Float32Array([0, 0, 0]),
++    inverseWorldRotation: new Float32Array([0, 0, 0, 1]),
++    inverseWorldScale: new Float32Array([1, 1, 1]),
++    wasDirty: true,
++};
+ const locationHeap = gl_matrix_1.vec3.create();
+ const rotationHeap = gl_matrix_1.quat.create();
+ const scalingHeap = gl_matrix_1.vec3.create();
+@@ -54,6 +65,14 @@ class SkeletalNode {
+      */
+     recalculateTransformation(instance) {
+         const scene = instance.scene;
++        // OpenWar3 (issue #161): Low Performance Mode composes a model's pose ONCE per
++        // (model, clip, 1/30 s) and every instance wearing it shares the result — which is only
++        // possible if the matrices are the INSTANCE's own space rather than the world's. A root
++        // bone's parent is the instance itself, so that is the one link to cut: with
++        // `ow3LocalPose` set, the root hangs off an identity instead, the composed matrices come
++        // out instance-local, and the vertex shader multiplies the instance's own matrix back in
++        // (`u_instance`, sd.vert.js). See the pose cache at the top of mdx/modelinstance.js.
++        const ow3Parent = instance.ow3LocalPose === true && this.parent === instance ? OW3_IDENTITY_PARENT : this.parent;
+         const localMatrix = this.localMatrix;
+         const localLocation = this.localLocation;
+         const localRotation = this.localRotation;
+@@ -66,7 +85,7 @@ class SkeletalNode {
+         const inverseWorldLocation = this.inverseWorldLocation;
+         const inverseWorldRotation = this.inverseWorldRotation;
+         const inverseWorldScale = this.inverseWorldScale;
+-        const parent = this.parent;
++        const parent = ow3Parent;
+         let computedLocation;
+         let computedRotation;
+         let computedScaling;
