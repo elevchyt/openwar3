@@ -123,6 +123,57 @@ It is **ours** — the 2003 panel is nine independent settings and has nothing t
 it, as cheap as it goes" — and a machine that needs it should not have to find seven dropdowns
 and know which way each one is cheaper.
 
+### The shared pose cache — what the mode is actually for
+
+The rungs below are the small half of this mode. The large half is one change that has no row on
+the panel at all, and it comes straight off the profile: at 257 units and 6× CPU throttle the
+frame's biggest phase is `anim` (45 ms of 93), and inside it the **MDX node walk is ~41% of all
+CPU** — `recalculateTransformation`, `updateNodes` and the gl-matrix calls they make — against
+**~7% for the drawing** (`render` plus every GL call). Skinning is already on the GPU via the bone
+texture. What costs is sampling every node's tracks and composing its matrices, in JavaScript,
+per instance, per frame.
+
+And it is mostly the same answer. Probed in a real match, **317 visible instances were holding 60
+distinct** `(model, sequence, ~33 ms frame)` **poses** — 34 Footmen in one bucket — because an RTS
+draws crowds of one unit doing one thing. So the pose is sampled once per bucket and replayed:
+the fog cache's lesson (`SightStamps`, src/sim/vision.ts) in a second place.
+
+**What is shared is the LOCAL pose, not the bone matrices.** A bone matrix here is world-space
+(`worldMatrix = parent.worldMatrix * localMatrix`, and the root's parent is the instance), so two
+units standing apart can never share one. What is shareable is the per-node translation/rotation/
+scale the tracks are sampled into; every instance still composes its own world matrices, which is
+why billboarding, per-instance scale, emitters, attachments and click collision are all untouched.
+
+Two things make it work, both in `viewer/handlers/mdx/modelinstance.js` in the patch:
+
+- **`forced` means two different things** and they had to be told apart. A sequence change must
+  rewrite every node's locals, including the ones the new clip says nothing about. A MOVE —
+  `recalculateTransformation` on the instance, which the sim does to every walking unit every
+  frame — forces the node walk for a reason that has nothing to do with the tracks: the world
+  matrices hang off the instance's, so they must be recomposed while the local pose is untouched.
+  Without that split nothing shares, because *the units worth sharing are the ones that are
+  moving*. `ow3PoseReset` is the first kind.
+- **Entries outlive the frame**, because a walk cycle loops: after one lap every bucket of it is
+  already sampled and a crowd samples nothing at all.
+
+The cost is **animation time quantized to 30 Hz** — clips step at the bucket rate — which is the
+trade this mode exists to make, and why it is off at full quality. A model whose TRS tracks are
+driven by a GLOBAL SEQUENCE is excluded: those are sampled against the instance's own elapsed-time
+counter, so two instances genuinely differ and no key on (sequence, frame) can say so.
+
+Measured, same scene, interleaved: **38.9 → 34.2 ms** median, **−12%**, where the rungs alone had
+been worth −2%.
+
+What is still on the table is the other half of that 41%: the per-instance world compose
+(`recalculateTransformation` + `fromRotationTranslationScaleOrigin` + `multiply4` ≈ 22% of CPU).
+It needs the bone matrices to become INSTANCE-LOCAL, with the instance's own matrix applied in the
+vertex shader — and then a bucket's composed matrices are shareable too, and a pose can be strided
+for distant units without the unit's body lagging behind its position. That is the next step, and
+it is a bigger surface: everything that reads a node's world matrix (emitters, attachments,
+`src/render/modelCollision.ts`'s click ray) would have to apply the instance matrix too.
+
+### The rungs
+
 What it forces is `LOW_PERF_FORCED` in [`src/render/videoQuality.ts`](../src/render/videoQuality.ts):
 
 | Row | Forced to |
@@ -183,15 +234,15 @@ off/on/off/on, median frame time:
 
 | Scene | Off | On | |
 |---|---|---|---|
-| Early game, 110 units | 7.7 / 7.7 ms | 7.0 / 7.5 ms | −3…9 % |
-| An army standing on it, 259 units | 40.1 / 40.0 ms | 39.2 / 39.3 ms | −2 % |
+| Early game, 110 units — rungs only | 7.7 / 7.7 ms | 7.0 / 7.5 ms | −3…9 % |
+| An army standing on it, 259 units — rungs only | 40.1 / 40.0 ms | 39.2 / 39.3 ms | −2 % |
+| …the same army, with the shared pose cache | 38.8 / 39.0 ms | 34.1 / 34.3 ms | −12 % |
 
-A few per cent, and the early-game pair is close to noise. That is the honest size of this switch
-as it stands, and it is worth stating plainly: what it composes is the rungs this panel already
-had, most of which are idle bookkeeping and one shadow pass, and the texture rung does not reach a
-map that is already loaded. The 259-unit row says something sharper — with the CPU throttled 6×,
-taking the unit and building shadow passes away is worth under a millisecond of a 40 ms frame, so
-that is not where a weak machine's time goes. **The substance of issue #161 is still the renderer work behind the flag**
+The first two rows are the panel's own rungs, and they are worth a few per cent: most of them are
+idle bookkeeping and one shadow pass, and the texture rung does not reach a map that is already
+loaded. The 259-unit row says it sharply — with the CPU throttled 6×, taking the unit and building
+shadow passes away is worth under a millisecond of a 40 ms frame, so that is not where a weak
+machine's time goes. The third row is the pose cache, and it is where this mode's value is. **The substance of issue #161 is still the renderer work behind the flag**
 — particles and ribbons off rather than quartered, the fog overlay and the baked shadow layer
 taking terrain-cull's runs (docs/terrain-culling.md), skinning off the main thread, single-pass
 terrain, batching by texture — each of which the issue gates on its own Step 0 profile. The flag

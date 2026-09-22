@@ -144,7 +144,16 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   dropdown still reading "High" is the panel lying about the game), and it is worth only a few
   per cent as it stands: it composes the rungs this panel already had, and the renderer work the
   issue actually asks for lands BEHIND the flag, which is why `VideoSettings.lowPerf` is carried
-  beside the rungs it forces.
+  beside the rungs it forces. The FIRST of that work is the **shared pose cache**
+  (`VideoBridge.sharedPoses`, the cache at the top of the patch's `mdx/modelinstance.js`):
+  profiled, the MDX NODE WALK is ~41% of all CPU and the DRAWING is ~7%, so a second renderer is
+  aimed at the wrong number — and 317 visible instances were found holding **60** distinct
+  `(model, sequence, 1/30 s)` poses, so the pose is sampled once and replayed (SightStamps'
+  lesson in a second place). What is shared is the LOCAL pose, never the bone matrices, which
+  are WORLD space here. The trap that makes or breaks it: **`forced` means two different
+  things** — a sequence change (rewrite every local) and a MOVE (recompose every world matrix,
+  tracks untouched) — and since the units worth sharing are the ones that are moving, folding
+  them into one flag means nothing ever shares (`ow3PoseReset` is the first kind).
 - **Windows:** read [`docs/windows.md`](docs/windows.md) before touching the NSIS include
   ([`packaging/windows-installer.nsh`](packaging/windows-installer.nsh)), the `win`/`nsis` build
   blocks or [`electron/locate.mjs`](electron/locate.mjs). ONE installer carries the 64- and the

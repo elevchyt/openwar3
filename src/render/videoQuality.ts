@@ -62,11 +62,23 @@ export interface VideoBridge {
   particleScale: number;
   /** Mipmap levels to drop from the top of a BLP's chain as it is uploaded. 0 = full size. */
   textureMipDrop: number;
+  /**
+   * Low Performance Mode's animation path: may an MDX instance take a pose another instance of
+   * the same model already sampled, at the same clip and the same 1/30 s of it?
+   *
+   * This is the largest thing the mode does, and the only one that is not a rung of the panel —
+   * see `LOW_PERF_FORCED` for why it is here rather than there. Profiled at 257 units and 6x CPU
+   * throttle, the MDX node walk is ~41% of all CPU against ~7% for the drawing, and 317 visible
+   * instances were holding 60 distinct poses. The cache and the reasoning live at the top of
+   * `viewer/handlers/mdx/modelinstance.js` in the patch; what it costs is animation time
+   * quantized to 30 Hz, which is why it is off at full quality.
+   */
+  sharedPoses: boolean;
 }
 
 const bridge = (): VideoBridge => {
   const g = globalThis as { __OW3_VIDEO__?: VideoBridge };
-  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0 });
+  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0, sharedPoses: false });
 };
 
 /** What OpenWar3 has always rendered at, and what `ui/stage.ts` calls the game frame. */
@@ -284,6 +296,10 @@ export function applyVideoOptions(options: Options): void {
   const b = bridge();
   b.particleScale = PARTICLE_SCALE[current.particles];
   b.textureMipDrop = MIP_DROP[current.textureQuality];
+  // The mode's own switch rather than a rung's: the pose cache is what Low Performance Mode is
+  // actually FOR (see `VideoBridge.sharedPoses`), and it is live — a tick takes effect on the
+  // next frame, and unticking has every instance sampling for itself again.
+  b.sharedPoses = current.lowPerf;
   applyGamma(current.gamma);
 }
 

@@ -338,7 +338,7 @@ index c210e02c8002aed4e3ddc02e42ebe25f04d2a27e..af203a247a924c6a0a427b75735e919d
      save(): Uint8Array;
      getByteLength(): number;
 diff --git a/dist/cjs/parsers/w3x/w3d/file.js b/dist/cjs/parsers/w3x/w3d/file.js
-index 5c2629bdcf279decae84d9fddfc523d5548192e8..276d18c22305fb19eb65a0e7a5a0132cfc85b3cb 100644
+index 5c2629bdcf279decae84d9fddfc523d5548192e8..c86626b0bed35ec36dcfe3cecc535efed6f9f270 100644
 --- a/dist/cjs/parsers/w3x/w3d/file.js
 +++ b/dist/cjs/parsers/w3x/w3d/file.js
 @@ -12,6 +12,8 @@ class War3MapW3d {
@@ -403,7 +403,7 @@ index 5c2629bdcf279decae84d9fddfc523d5548192e8..276d18c22305fb19eb65a0e7a5a0132c
  }
  exports.default = War3MapW3d;
 diff --git a/dist/cjs/parsers/w3x/w3e/corner.js b/dist/cjs/parsers/w3x/w3e/corner.js
-index 22bc46919b2ae341d6139fd2f544bcbc04d816e9..4957509b8e3b176559d946f20f99c19b942edeaf 100644
+index 22bc46919b2ae341d6139fd2f544bcbc04d816e9..f74b2c8697c5cf994565b3fbf16c0baa408932c3 100644
 --- a/dist/cjs/parsers/w3x/w3e/corner.js
 +++ b/dist/cjs/parsers/w3x/w3e/corner.js
 @@ -18,17 +18,36 @@ class Corner {
@@ -472,7 +472,7 @@ index 22bc46919b2ae341d6139fd2f544bcbc04d816e9..4957509b8e3b176559d946f20f99c19b
          stream.writeUint8((this.cliffTexture << 4) + this.layerHeight);
      }
 diff --git a/dist/cjs/parsers/w3x/w3e/file.js b/dist/cjs/parsers/w3x/w3e/file.js
-index 49ce36b8bddb89496d1873b3200f85ff75c845bf..fe328d3fbe9390b9d98afa0cb4227c22bce93a82 100644
+index 49ce36b8bddb89496d1873b3200f85ff75c845bf..ee6d758757c8a8e1b25891e99c3f184b3b48557a 100644
 --- a/dist/cjs/parsers/w3x/w3e/file.js
 +++ b/dist/cjs/parsers/w3x/w3e/file.js
 @@ -36,7 +36,7 @@ class War3MapW3e {
@@ -502,7 +502,7 @@ index 49ce36b8bddb89496d1873b3200f85ff75c845bf..fe328d3fbe9390b9d98afa0cb4227c22
  }
  exports.default = War3MapW3e;
 diff --git a/dist/cjs/parsers/w3x/w3i/file.js b/dist/cjs/parsers/w3x/w3i/file.js
-index be984fa634f4f125fce57ba4a109f455ff8f39b1..e96af48dcc3599b4945ffb4c54a603e8f81cc202 100644
+index be984fa634f4f125fce57ba4a109f455ff8f39b1..2596069827696ba8953e991355afc539acf0fc4b 100644
 --- a/dist/cjs/parsers/w3x/w3i/file.js
 +++ b/dist/cjs/parsers/w3x/w3i/file.js
 @@ -53,6 +53,10 @@ class War3MapW3i {
@@ -570,7 +570,7 @@ index be984fa634f4f125fce57ba4a109f455ff8f39b1..e96af48dcc3599b4945ffb4c54a603e8
      }
      /**
 diff --git a/dist/cjs/parsers/w3x/w3u/file.js b/dist/cjs/parsers/w3x/w3u/file.js
-index 6b5a2a2e41deee0595104564daf9fdb71fab4257..1acab5fc85627b3f93f89946953a17eb0d725408 100644
+index 6b5a2a2e41deee0595104564daf9fdb71fab4257..9113710fb1140299825d1fb27f90ab5ef891567f 100644
 --- a/dist/cjs/parsers/w3x/w3u/file.js
 +++ b/dist/cjs/parsers/w3x/w3u/file.js
 @@ -22,18 +22,19 @@ class War3MapW3u {
@@ -599,7 +599,7 @@ index 6b5a2a2e41deee0595104564daf9fdb71fab4257..1acab5fc85627b3f93f89946953a17eb
  }
  exports.default = War3MapW3u;
 diff --git a/dist/cjs/parsers/w3x/w3u/modificationtable.js b/dist/cjs/parsers/w3x/w3u/modificationtable.js
-index 509893d4076882fb2b2edb1780a203743b9c0af8..6fd437e2393a2ded8c309e692301aa09730cdfaa 100644
+index 509893d4076882fb2b2edb1780a203743b9c0af8..27f462f8b26f39d7ea1c5c4752b5f3804bd0a076 100644
 --- a/dist/cjs/parsers/w3x/w3u/modificationtable.js
 +++ b/dist/cjs/parsers/w3x/w3u/modificationtable.js
 @@ -8,23 +8,23 @@ class ModificationTable {
@@ -633,7 +633,7 @@ index 509893d4076882fb2b2edb1780a203743b9c0af8..6fd437e2393a2ded8c309e692301aa09
          return size;
      }
 diff --git a/dist/cjs/parsers/w3x/w3u/modifiedobject.js b/dist/cjs/parsers/w3x/w3u/modifiedobject.js
-index b602f3b841d5cab7679b90e7505b6b5b64be9278..24ac2edfba41c9b200668b9e536686b5c79f704a 100644
+index b602f3b841d5cab7679b90e7505b6b5b64be9278..c412b5465f68e67d0425cea0a14f50c026e5a8bd 100644
 --- a/dist/cjs/parsers/w3x/w3u/modifiedobject.js
 +++ b/dist/cjs/parsers/w3x/w3u/modifiedobject.js
 @@ -9,17 +9,33 @@ class ModifiedObject {
@@ -1002,10 +1002,10 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
          }
          else {
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff0ca7b9a5 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..c55c7d34385ee0ddd1803b8d605d6f9f6ac4be73 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -21,6 +21,13 @@ const scaleHeap = gl_matrix_1.vec3.create();
+@@ -21,6 +21,121 @@ const scaleHeap = gl_matrix_1.vec3.create();
  const colorHeap = new Float32Array(3);
  const alphaHeap = new Float32Array(1);
  const textureIdHeap = new Uint32Array(1);
@@ -1016,13 +1016,130 @@ index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff
 +// majority of units; the app overrides this per instance via setBlendTime().
 +// Applies to any instance that never gets an override (effects, portraits, …).
 +const DEFAULT_BLEND_TIME = 150;
++// ---------------------------------------------------------------------------------------
++// OpenWar3 (issue #161): THE SHARED POSE CACHE — Low Performance Mode's animation path.
++//
++// Profiled on Echo Isles with 257 units at 6x CPU throttle, the frame's largest phase by far
++// is `anim` (45 ms of 93), and inside it the MDX node walk is ~41% of all CPU:
++// recalculateTransformation, updateNodes, and the gl-matrix calls they make. The DRAWING —
++// `render` plus every GL call — is ~7%. So the expensive part of animating a model here is
++// not the pixels and not the skinning (that is already on the GPU, via the bone texture):
++// it is SAMPLING every node's animation tracks and composing its matrices, in JavaScript,
++// for every instance, every frame.
++//
++// And most of that answer is the same answer. Probed in a real match, 317 visible instances
++// were holding only 60 distinct (model, sequence, ~33 ms frame) poses — 34 Footmen in one
++// bucket — because an RTS draws crowds of one unit doing one thing. This is the fog cache's
++// lesson (src/sim/vision.ts SightStamps) in a second place: the pose is a fact about the
++// MODEL and the CLOCK, not about the instance wearing it, so it is sampled once and replayed.
++//
++// WHAT IS SHARED IS THE LOCAL POSE, not the bone matrices. A bone matrix is WORLD space here
++// (`worldMatrix = parent.worldMatrix * localMatrix`, and the root's parent is the instance),
++// so two units standing in different places can never share one — the shareable part is the
++// per-node local translation/rotation/scale the tracks are sampled INTO. Every instance still
++// composes its own world matrices, which is also why billboarding, per-instance scale, the
++// camera and everything downstream (emitters, attachments, click collision) are untouched:
++// they all read the world matrices, and those are still each instance's own.
++//
++// THE COST IS QUANTIZED ANIMATION TIME. A shared pose is sampled at the BUCKET's time rather
++// than at each instance's own frame, so clips step at 30 Hz. That is the trade this mode is
++// for, and it is smaller than it sounds — MDX tracks are authored at about that rate — but it
++// is why this is off unless Low Performance Mode is on.
++//
++// Entries OUTLIVE THE FRAME on purpose: a walk cycle loops, so after one lap every bucket of
++// it is already sampled and a crowd of Footmen samples nothing at all.
++const OW3_POSE_BUCKET = 1000 / 30; // ms of animation time per shared pose
++const OW3_POSE_CAP = 3000; // entries, across all models, before the cache is dropped whole
++let ow3PoseCount = 0;
++/** Every model holding a pose cache, so the cap can empty all of them. */
++const ow3PoseModels = new Set();
++/** Is Low Performance Mode asking for shared poses? Read off the same global the texture and
++ *  particle settings travel on (src/render/videoQuality.ts `VideoBridge`). */
++function ow3SharePoses() {
++    const v = globalThis.__OW3_VIDEO__;
++    return v !== undefined && v.sharedPoses === true;
++}
++/**
++ * May this model's pose be shared at all?
++ *
++ * One disqualifier: a TRS track driven by a GLOBAL SEQUENCE, which is sampled against the
++ * instance's own `counter` (total elapsed ms) rather than against the sequence frame — two
++ * instances alive for different lengths of time genuinely have different poses, and no key on
++ * (sequence, frame) can say so. Rare on unit skeletons and worth simply stepping around.
++ */
++function ow3Shareable(model) {
++    if (model.ow3Shareable === undefined) {
++        let ok = true;
++        for (const object of model.sortedGenericObjects) {
++            for (const name of ['KGTR', 'KGRT', 'KGSC']) {
++                const animation = object.animations.get(name);
++                if (animation && animation.globalSequence) {
++                    ok = false;
++                }
++            }
++        }
++        model.ow3Shareable = ok;
++    }
++    return model.ow3Shareable;
++}
++/**
++ * The shared pose for (model, sequence, bucket), minted empty on the first ask.
++ *
++ * `trs` is ten floats a node — translation, rotation, scale — in the model's own sorted node
++ * order; `dirty` is whether that node's tracks said anything for this sequence, which is the
++ * half of `wasDirty` that belongs to the POSE (the rest — a dirty parent, billboarding — is
++ * the instance's own and is ORed in by the caller).
++ */
++function ow3PoseFor(model, sequence, frame) {
++    let cache = model.ow3PoseCache;
++    if (cache === undefined) {
++        cache = model.ow3PoseCache = new Map();
++        ow3PoseModels.add(model);
++    }
++    const bucket = Math.round(frame / OW3_POSE_BUCKET);
++    const key = sequence * 1000000 + bucket;
++    let pose = cache.get(key);
++    if (pose === undefined) {
++        if (ow3PoseCount >= OW3_POSE_CAP) {
++            ow3ClearPoses(model);
++            cache = model.ow3PoseCache;
++        }
++        const nodes = model.sortedGenericObjects.length;
++        pose = { trs: new Float32Array(nodes * 10), dirty: new Uint8Array(nodes), frame: bucket * OW3_POSE_BUCKET, filled: false };
++        cache.set(key, pose);
++        ow3PoseCount++;
++    }
++    return pose;
++}
++/** Drop every cached pose. Called when the cache has grown past its cap — the models whose
++ *  poses are being asked for right now re-fill within a lap of their clips. */
++function ow3ClearPoses(current) {
++    for (const model of ow3PoseModels) {
++        model.ow3PoseCache = new Map();
++    }
++    ow3PoseModels.clear();
++    ow3PoseCount = 0;
++    if (current) {
++        current.ow3PoseCache = new Map();
++        ow3PoseModels.add(current);
++    }
++}
  /**
   * An MDX model instance.
   */
-@@ -48,12 +55,26 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +163,35 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
++        // OpenWar3 (issue #161): `forced` means two different things, and the shared pose cache
++        // has to tell them apart. A SEQUENCE CHANGE has to rewrite every node's local pose,
++        // including the nodes the new clip says nothing about (they must fall back to its
++        // defaults rather than keep the last clip's). A MOVE — `recalculateTransformation` on the
++        // instance, which the sim does to every walking unit every frame — forces `updateNodes`
++        // for a reason that has nothing to do with the tracks: the node WORLD matrices hang off
++        // the instance's, so they all have to be recomposed, while the local pose is untouched.
++        // Only the first kind may not share. This flag is the first kind.
++        this.ow3PoseReset = true;
 +        // OpenWar3: animation cross-fade state. On setSequence() we snapshot the
 +        // current per-node local TRS into blendSnapshot, then over blendTime ms
 +        // blend from that snapshot toward the new sequence's pose (WC3 plays
@@ -1046,7 +1163,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -223,7 +244,27 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -223,38 +361,138 @@ class MdxModelInstance extends modelinstance_1.default {
          const sortedNodes = this.sortedNodes;
          const model = this.model;
          const sortedGenericObjects = model.sortedGenericObjects;
@@ -1069,20 +1186,57 @@ index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff
 +                blendInv = this.blendTime > 0 ? this.blendRemaining / this.blendTime : 0;
 +            }
 +        }
++        // OpenWar3 (issue #161): the shared pose for this (model, sequence, bucket), or null when
++        // this instance has to sample for itself. A blending instance never shares — the fade is
++        // per instance, mixing in a snapshot only it has — and neither does a forced update,
++        // which is the one pass that must write every node whatever the tracks say.
++        let pose = null;
++        if (!this.ow3PoseReset && !blending && sequence !== -1 && ow3SharePoses() && ow3Shareable(model)) {
++            pose = ow3PoseFor(model, sequence, frame);
++        }
++        // What the tracks are sampled AT: the bucket's time while sharing (so every instance in
++        // the bucket gets one pose), the instance's own frame otherwise.
++        const poseFrame = pose === null ? frame : pose.frame;
++        const fillPose = pose !== null && !pose.filled;
++        const replayPose = pose !== null && pose.filled;
          // Update the nodes
 +        let anyDirty = forced; // OpenWar3: see updateBoneTexture
          for (let i = 0, l = sortedNodes.length; i < l; i++) {
              const genericObject = sortedGenericObjects[i];
              const node = sortedNodes[i];
-@@ -231,25 +272,49 @@ class MdxModelInstance extends modelinstance_1.default {
+             const parent = node.parent;
              let wasDirty = forced || parent.wasDirty || genericObject.anyBillboarding;
              const variants = genericObject.variants;
++            // OpenWar3 (issue #161): a pose somebody already sampled is COPIED rather than
++            // sampled again — ten floats a node against a keyframe search and a slerp per
++            // channel. `dirty` is the tracks' half of `wasDirty`; the parent's and the
++            // billboard's halves are this instance's own and are already in it above.
++            if (replayPose) {
++                if (pose.dirty[i]) {
++                    wasDirty = true;
++                    const s = i * 10;
++                    const trs = pose.trs;
++                    const t = node.localLocation;
++                    const r = node.localRotation;
++                    const sc = node.localScale;
++                    t[0] = trs[s];
++                    t[1] = trs[s + 1];
++                    t[2] = trs[s + 2];
++                    r[0] = trs[s + 3];
++                    r[1] = trs[s + 4];
++                    r[2] = trs[s + 5];
++                    r[3] = trs[s + 6];
++                    sc[0] = trs[s + 7];
++                    sc[1] = trs[s + 8];
++                    sc[2] = trs[s + 9];
++                }
++            }
              // Local node transformation.
 -            // Use variants to skip animation data when possible.
 -            if (forced || variants['generic'][sequence]) {
 +            // Use variants to skip animation data when possible (never while
 +            // blending — every node has to re-blend each frame).
-+            if (forced || blending || variants['generic'][sequence]) {
++            else if (forced || blending || variants['generic'][sequence]) {
                  wasDirty = true;
 +                const s = i * 10; // this node's slot in the flat snapshot buffer
                  // Translation
@@ -1090,7 +1244,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff
 -                    genericObject.getTranslation(node.localLocation, sequence, frame, counter);
 +                if (forced || blending || variants['translation'][sequence]) {
 +                    const t = node.localLocation;
-+                    genericObject.getTranslation(t, sequence, frame, counter);
++                    genericObject.getTranslation(t, sequence, poseFrame, counter);
 +                    if (blending) {
 +                        t[0] += (snapshot[s] - t[0]) * blendInv;
 +                        t[1] += (snapshot[s + 1] - t[1]) * blendInv;
@@ -1102,7 +1256,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff
 -                    genericObject.getRotation(node.localRotation, sequence, frame, counter);
 +                if (forced || blending || variants['rotation'][sequence]) {
 +                    const r = node.localRotation;
-+                    genericObject.getRotation(r, sequence, frame, counter);
++                    genericObject.getRotation(r, sequence, poseFrame, counter);
 +                    if (blending) {
 +                        blendRotationHeap[0] = snapshot[s + 3];
 +                        blendRotationHeap[1] = snapshot[s + 4];
@@ -1117,12 +1271,31 @@ index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff
 -                    genericObject.getScale(node.localScale, sequence, frame, counter);
 +                if (forced || blending || variants['scale'][sequence]) {
 +                    const sc = node.localScale;
-+                    genericObject.getScale(sc, sequence, frame, counter);
++                    genericObject.getScale(sc, sequence, poseFrame, counter);
 +                    if (blending) {
 +                        sc[0] += (snapshot[s + 7] - sc[0]) * blendInv;
 +                        sc[1] += (snapshot[s + 8] - sc[1]) * blendInv;
 +                        sc[2] += (snapshot[s + 9] - sc[2]) * blendInv;
 +                    }
++                }
++                // OpenWar3 (issue #161): this instance is the one sampling this bucket, so what
++                // it sampled becomes the bucket's pose for everybody else in it.
++                if (fillPose) {
++                    const trs = pose.trs;
++                    const t = node.localLocation;
++                    const r = node.localRotation;
++                    const sc = node.localScale;
++                    trs[s] = t[0];
++                    trs[s + 1] = t[1];
++                    trs[s + 2] = t[2];
++                    trs[s + 3] = r[0];
++                    trs[s + 4] = r[1];
++                    trs[s + 5] = r[2];
++                    trs[s + 6] = r[3];
++                    trs[s + 7] = sc[0];
++                    trs[s + 8] = sc[1];
++                    trs[s + 9] = sc[2];
++                    pose.dirty[i] = 1;
                  }
              }
              node.wasDirty = wasDirty;
@@ -1132,15 +1305,25 @@ index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff
                  node.recalculateTransformation(this);
              }
              // If there is an instance object associated with this node (emitter/attachment), and it is visible, update it.
-@@ -269,6 +334,7 @@ class MdxModelInstance extends modelinstance_1.default {
+             if (node.object) {
+-                genericObject.getVisibility(visibilityHeap, sequence, frame, counter);
++                genericObject.getVisibility(visibilityHeap, sequence, poseFrame, counter);
+                 // If the attachment/emitter is visible, update it.
+                 if (visibilityHeap[0] > 0) {
+                     node.object.update(dt);
+@@ -269,6 +507,11 @@ class MdxModelInstance extends modelinstance_1.default {
                  child.update(dt);
              }
          }
++        if (fillPose) {
++            pose.filled = true; // OpenWar3 (issue #161): every node of this bucket is now sampled
++        }
++        this.ow3PoseReset = false; // OpenWar3 (issue #161): the new clip's locals are written
 +        this.ow3BonesDirty = anyDirty; // OpenWar3
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,19 +428,51 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,19 +605,51 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -1193,7 +1376,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -436,6 +534,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +711,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -1201,7 +1384,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +544,64 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +721,65 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
@@ -1219,6 +1402,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff
          this.resetEventEmitters();
          this.resetAttachments();
          this.forced = true;
++        this.ow3PoseReset = true; // OpenWar3 (issue #161): a new clip rewrites every local
          return this;
      }
 +    /**
@@ -1534,7 +1718,7 @@ index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..601e7c6b601488be3dbe477500a3ed3ebd610d6b 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..a66add78794d91318a073834fa3d46198e822a29 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -16,6 +16,41 @@ const file_3 = require("../../../parsers/w3x/doo/file");
