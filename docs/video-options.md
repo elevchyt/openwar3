@@ -241,6 +241,32 @@ for the later ones):
 | A mixed human army (Footmen, Riflemen, Knights, Priests) | 63–79 ms | 33–45 ms | **1.8–2.0×** |
 | All Footmen — billboarded, so nothing shared before this pass | 50–52 ms | 30–32 ms | **1.6×** |
 
+### One that was tried at FULL quality and taken back out
+
+The `forced`-means-two-things insight looks like it should pay off outside this mode as well. At
+every quality setting, the sim writes a walking unit's position onto its instance, which calls
+`recalculateTransformation` and so sets `forced` every frame for everything that moves — and
+`forced` then walks past the `variants` test, so every node re-samples all three channels
+including the ones whose clip says nothing about them. Recomposing the world matrices is what a
+move genuinely needs; re-reading tracks that cannot have changed is not.
+
+Asking a separate `resample` (the sequence-change kind of forced) instead was built and measured.
+It is **exact** — the node world matrices come out bit-for-bit identical across 19 models, both
+for a moving body and across a sequence change — and it is worth **nothing measurable**:
+interleaved at 6× throttle with 257 units, old 66.8 / 66.1 / 72.2 ms against new 64.5 / 68.1 /
+67.1, and the sign of the difference flips between runs.
+
+The reason is worth keeping, because the estimate that motivated it (8–12% of CPU, read off
+`getValue` and `slerp` in a profile) was wrong about WHICH nodes those samples belong to. Sampling
+a node whose clip is silent is cheap — the lookup misses or the track is constant, and a default
+is written. The expensive samples in that profile belong to the nodes that really are animated,
+and those sample every frame either way. And the instances `forced` by a move are precisely the
+UNITS, whose clips animate most of their skeleton; nothing that stands still (a building, a
+doodad) is forced at all. So there was little to skip.
+
+It was reverted rather than kept: the viewer patch is load-bearing, and a hunk that buys nothing
+is a hunk somebody has to reason about later.
+
 ### The rungs
 
 What it forces is `LOW_PERF_FORCED` in [`src/render/videoQuality.ts`](../src/render/videoQuality.ts):

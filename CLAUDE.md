@@ -174,7 +174,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   `sortedNodes` is in HIERARCHY order, and that a node which ACTS ON THE WORLD holds a world
   matrix the next composer captures into a shared pose unless it is redone (`ow3WorldWritten`,
   which must include nodes that merely USED to carry something — a buff model is parented to a
-  bone and taken away again).
+  bone and taken away again). The `forced` insight looks like it should pay at FULL quality too —
+  a moving unit re-samples every channel of every node, including the ones its clip is silent
+  about — and that was built, proved EXACT (bit-for-bit across 19 models) and **taken back out**,
+  because interleaved it is worth nothing and the sign flips between runs: a silent node's sample
+  is a miss or a constant, and the instances a move forces are the UNITS, whose clips animate most
+  of their skeleton. See docs/video-options.md before reaching for it again.
 - **Windows:** read [`docs/windows.md`](docs/windows.md) before touching the NSIS include
   ([`packaging/windows-installer.nsh`](packaging/windows-installer.nsh)), the `win`/`nsis` build
   blocks or [`electron/locate.mjs`](electron/locate.mjs). ONE installer carries the 64- and the
