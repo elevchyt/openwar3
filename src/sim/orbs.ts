@@ -35,6 +35,8 @@
 // while idle / on Stop / on Hold Position, but work under Attack-Move and Patrol). We fire
 // them on every qualifying hit.
 
+import { gameNum } from "../data/gameplayConstants";
+
 /**
  * The orb family, keyed by base ability `code` (never by alias — `ACsa` is the creep's
  * Searing Arrows and its code is `AHfa`, `AIll` and `AIdf` are both `AIsb`, `AIsz` is
@@ -135,13 +137,15 @@ export const ENABLED_ATTACK_INDEX = 4; // DataE — index into AbilityLevel.data
  * The generic **Slowed** buff (`Bfro`) — the one WC3 hangs off every frost source: Frost
  * Nova, Frost Armor's chill, Frost Attack, Frost Breath and the Orb of Frost. Not one of
  * those abilities carries the magnitude in its own Data columns (AIob's are `DataA` damage
- * and nothing else, Afra/Afrb's are empty), so the numbers are engine-internal and come from
- * Liquipedia's buff card (Template:Infobox_Buff/Slowed): **50% movement, 25% attack speed**.
+ * and nothing else, Afra/Afrb's are empty) — it is a GAMEPLAY CONSTANT: `Units\MiscGame.txt`
+ * `FrostMoveSpeedDecrease=0.5` and `FrostAttackSpeedDecrease=0.25`, which is also what
+ * Liquipedia's buff card (Template:Infobox_Buff/Slowed) says, "50% movement, 25% attack speed".
+ * A map restates them (DotA's war3mapMisc.txt: 0.3 and 0.2), hence read per blow.
  * Durations DO come from the data — Orb of Frost 3s / 1s on heroes, Frost Attack 5s / 5s,
  * Frost Wyrm 10s / 3s.
  */
-export const SLOWED_MOVE = 0.5;
-export const SLOWED_ATTACK = 0.25;
+export const slowedMove = (): number => gameNum("FrostMoveSpeedDecrease");
+export const slowedAttack = (): number => gameNum("FrostAttackSpeedDecrease");
 
 /**
  * **Stacking Types** — the column that decides whether two sources of the same effect ADD or

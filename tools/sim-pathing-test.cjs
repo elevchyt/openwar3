@@ -176,14 +176,16 @@ console.log("a slow unit ahead in a corridor holds a fast one back");
   let control = 0;
   {
     const w = new SimWorld(gridOf(flags), 1);
-    addUnit(w, 1, 0, 400, 672);
+    addUnit(w, 1, 0, 400, 672, { speed: 400 });
     w.issueMove(1, 2400, 672);
     run(w, 6);
     control = w.units.get(1).x - 400;
   }
+  // The slowest a walker can go is the game's MinUnitSpeed floor (150 on TFT) — a 90 would be
+  // lifted to it — so the runner is set to the 400 ceiling to keep the gap between them.
   const w = new SimWorld(gridOf(flags), 1);
-  const runner = addUnit(w, 1, 0, 400, 672);
-  const blocker = addUnit(w, 2, 0, 560, 672, { speed: 90 }); // a third of the runner's pace
+  const runner = addUnit(w, 1, 0, 400, 672, { speed: 400 });
+  const blocker = addUnit(w, 2, 0, 560, 672, { speed: 150 }); // under half the runner's pace
   w.issueMove(1, 2400, 672);
   w.issueMove(2, 2400, 672);
   run(w, 6);

@@ -13,8 +13,8 @@ import { type UpgradeRegistry } from "../data/upgrades";
 import { TechState } from "./tech";
 import {
   ENABLED_ATTACK_INDEX,
-  SLOWED_ATTACK,
-  SLOWED_MOVE,
+  slowedAttack,
+  slowedMove,
   STACK_DAMAGE,
   abilityOrbTier,
   isArrowOrb,
@@ -25,16 +25,16 @@ import {
 } from "./orbs";
 import { AttackType, ArmorType, MoveType, PrimaryAttribute, RegenType, WeaponType, isRangedWeapon, launchesMissile } from "../data/enums";
 import {
-  MISC_DATA,
-  MISC_GAME,
   MELEE,
-  GAME_HOURS_PER_SEC,
+  gameHoursPerSec,
+  gameNum,
+  dataNum,
   armorDamageReduction,
   creepXpFactor,
   miscGame,
   damageMultiplier,
   etherealDamageMultiplier,
-  ETHEREAL_SPELL_BONUS,
+  etherealSpellBonus,
   grantedXp,
   heroReviveVitals,
   xpToReachLevel,
@@ -2246,9 +2246,9 @@ const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
 // Hero inventory reach, straight from the Gameplay Constants. Note that picking an
 // item up reaches FURTHER than dropping one does (150 vs 100) — they are separate
 // constants in the game, not one shared radius.
-const ITEM_PICKUP_RANGE = MISC_GAME.PickupItemRange;
-const ITEM_GIVE_RANGE = MISC_GAME.GiveItemRange;
-const ITEM_DROP_RANGE = MISC_GAME.DropItemRange;
+const ITEM_PICKUP_RANGE = (): number => gameNum("PickupItemRange");
+const ITEM_GIVE_RANGE = (): number => gameNum("GiveItemRange");
+const ITEM_DROP_RANGE = (): number => gameNum("DropItemRange");
 // Being PAID for an item: the coins that land on the seller, the label of the sound they
 // land with, and how long they last (issue #120).
 //
@@ -2629,11 +2629,11 @@ const RENEW_SEEK_RANGE = 500;
 // The tables and thresholds live in data/gameplayConstants (Units\MiscGame.txt),
 // derived from the game's own base lists + `f(x) = A·f(x-1) + B·x + C` formulas.
 // Cross-checked with Liquipedia: Experience + warcraft3.info article 232.
-const MAX_HERO_LEVEL = MISC_GAME.MaxHeroLevel;
+const MAX_HERO_LEVEL = (): number => gameNum("MaxHeroLevel");
 /** Heroes within this of a kill share its XP; with none in range, GlobalExperience=1
  *  spreads it across all the killer's heroes instead. */
-const XP_SHARE_RANGE = MISC_GAME.HeroExpRange;
-const SUMMON_XP_FACTOR = MISC_GAME.SummonedKillFactor;
+const XP_SHARE_RANGE = (): number => gameNum("HeroExpRange");
+const SUMMON_XP_FACTOR = (): number => gameNum("SummonedKillFactor");
 
 /** Clear the float noise off a derived life/mana ceiling — see `refreshDerived`, where it is
  *  applied. Six decimals is far below anything the data can mean and far above the 1e-13 a
@@ -2643,13 +2643,13 @@ function snapPool(v: number): number {
 }
 
 // Attribute → stat conversions (MiscGame Str/Int/Agi bonuses; Liquipedia: Hero).
-const HP_PER_STR = MISC_GAME.StrHitPointBonus;
-const MANA_PER_INT = MISC_GAME.IntManaBonus;
+const HP_PER_STR = (): number => gameNum("StrHitPointBonus");
+const MANA_PER_INT = (): number => gameNum("IntManaBonus");
 /** One cliff layer in world units (world/terrain.ts `CELL`) — see SimWorld.cliffApart. */
 const CLIFF_STEP = 128;
-const ARMOR_PER_AGI = MISC_GAME.AgiDefenseBonus;
-const REGEN_PER_STR = MISC_GAME.StrRegenBonus; // hp/sec per Strength point
-const REGEN_PER_INT = MISC_GAME.IntRegenBonus; // mana/sec per Intelligence point
+const ARMOR_PER_AGI = (): number => gameNum("AgiDefenseBonus");
+const REGEN_PER_STR = (): number => gameNum("StrRegenBonus"); // hp/sec per Strength point
+const REGEN_PER_INT = (): number => gameNum("IntRegenBonus"); // mana/sec per Intelligence point
 // Attack-speed (IAS) caps. NOT in MiscGame/MiscData — neither file carries any attack-speed
 // cap key; the engine hardcodes them, so they live here at the use site rather than in
 // gameplayConstants.ts (which mirrors the data files). "The most FAR a unit can have is +400%
@@ -2945,7 +2945,7 @@ const MAGIC_IMMUNE_EXEMPT = new Set(["Adis", "Aadm", "Adcn"]);
 // death — the renderer sequences it Death → Decay Flesh → Decay Bone within this
 // window — and is then removed. The flesh stage is an early sub-phase, not added
 // on top; 88s is the full lifetime from the moment of death.
-const CORPSE_TOTAL_TIME = MISC_DATA.BoneDecayTime;
+const CORPSE_TOTAL_TIME = (): number => dataNum("BoneDecayTime");
 
 // A HERO's body instead of a corpse (issue #126). It plays its death clip — the type's own
 // `death` time — and then DISSIPATES, which `Units\MiscData.txt` states as a duration under
@@ -2956,7 +2956,7 @@ const CORPSE_TOTAL_TIME = MISC_DATA.BoneDecayTime;
 // alpha at all (HeroPaladin.mdx loads with an empty `geosetAnimations` and no layer anims —
 // read off the live model), so the going-away is ours to time and the clip is only the gesture
 // inside it. HeroPaladin's Dissipate runs 2.0s of the 3.
-export const HERO_DISSIPATE_TIME = MISC_DATA.DissipateTime;
+export const HERO_DISSIPATE_TIME = (): number => dataNum("DissipateTime");
 /** The fade at the TAIL of that window — the last second of the dissipate, once the clip has
  *  played itself out, ramping the body away to nothing.
  *
@@ -2973,7 +2973,7 @@ export const HERO_FADE_TIME = 1;
  *  body finishing and the button lighting are one moment, and one number is how they stay
  *  one moment. */
 export function heroBodyTime(deathTime: number): number {
-  return Math.max(0, deathTime) + HERO_DISSIPATE_TIME;
+  return Math.max(0, deathTime) + HERO_DISSIPATE_TIME();
 }
 
 // Repair's share of the target's repair cost and repair time, for a worker whose repair
@@ -2998,13 +2998,13 @@ const NO_SITES: ReadonlyArray<{ x: number; y: number; half: number; builderId: n
 // WC3 day/night (Units\MiscData.txt): a full cycle is DayLength=480 real seconds =
 // DayHours=24 game hours (so one game hour = 20 real seconds); daytime runs from
 // Dawn to Dusk. Melee games open at bj_MELEE_STARTING_TOD = 08:00.
-const DAY_START = MISC_DATA.Dawn;
-const DAY_END = MISC_DATA.Dusk;
+const DAY_START = (): number => dataNum("Dawn");
+const DAY_END = (): number => dataNum("Dusk");
 
 // Neutral-hostile creep guard/leash AI, from Units\MiscGame.txt. (These supersede
 // the ~1.8×-aggro guess — the MPQ wins; see CLAUDE.md.)
-const GUARD_DISTANCE = MISC_GAME.GuardDistance; // strayed this far from home → start the return timer
-const MAX_GUARD_DISTANCE = MISC_GAME.MaxGuardDistance; // strayed this far → return home unconditionally, even under attack
+const GUARD_DISTANCE = (): number => gameNum("GuardDistance"); // strayed this far from home → start the return timer
+const MAX_GUARD_DISTANCE = (): number => gameNum("MaxGuardDistance"); // strayed this far → return home unconditionally, even under attack
 
 /**
  * The ENGINE's movement ceiling, above the game's own `MaxUnitSpeed` (400, MiscGame.txt).
@@ -3030,17 +3030,17 @@ const HEX_TARGET_SOUND = `${POLYMORPH_DIR}PolymorphTarget1.wav`;
 const HEX_TARGET_SOUND_AIR = `${POLYMORPH_DIR}PolymorphTargetAir1.wav`;
 const HEX_DONE_ART = `${POLYMORPH_DIR}PolyMorphDoneGround.mdx`;
 const HEX_DONE_SOUND = `${POLYMORPH_DIR}PolymorphDone.wav`;
-const GUARD_RETURN_TIME = MISC_GAME.GuardReturnTime; // also the "can't get home, resume fighting" window
+const GUARD_RETURN_TIME = (): number => gameNum("GuardReturnTime"); // also the "can't get home, resume fighting" window
 // Seconds a camp must go unstruck before a creep may doze off (campQuiet). OURS, not the game's —
 // no file states a sleep delay; the maintainer's value, short so a camp still sleeps quickly.
 const CREEP_SLEEP_CALM = 3;
-const CREEP_CALL_FOR_HELP = MISC_GAME.CreepCallForHelp; // camp cohesion: one aggros → the whole camp wakes/joins
-const CALL_FOR_HELP = MISC_GAME.CallForHelp; // a PLAYER's attacked unit or building calls its owner's idle units in — see callForHelp
+const CREEP_CALL_FOR_HELP = (): number => gameNum("CreepCallForHelp"); // camp cohesion: one aggros → the whole camp wakes/joins
+const CALL_FOR_HELP = (): number => gameNum("CallForHelp"); // a PLAYER's attacked unit or building calls its owner's idle units in — see callForHelp
 // "Radius of creep notification when a new building gets placed" — Units\MiscData.txt's
 // own comment on this constant. Laying a foundation shouts to the creeps around it, quite
 // apart from anyone's acquisition range: this is why a gold mine's guards charge a Peasant
 // who starts an expansion from further out than they'd have noticed him merely walking by.
-const BUILDING_PLACEMENT_NOTIFY_RADIUS = MISC_DATA.BuildingPlacementNotifyRadius;
+const BUILDING_PLACEMENT_NOTIFY_RADIUS = (): number => dataNum("BuildingPlacementNotifyRadius");
 /**
  * A "Camp" creep's acquisition range. The World Editor's per-unit Target Acquisition radio has
  * three settings — Normal (the type's own `acquire`, 500 on nearly every creep), **Camp (200)**
@@ -3071,7 +3071,7 @@ const CREEP_RETURN_TRIGGER = 128; // 4 cells — safely beyond CREEP_HOME_EPS + 
 // Shooting from the dark gives you away (issue #45). MiscData names no duration for
 // FoggedAttackRevealRadius, so the blow buys the attacker's position one second,
 // re-stamped by every following blow.
-const FOGGED_ATTACK_REVEAL_RADIUS = MISC_DATA.FoggedAttackRevealRadius;
+const FOGGED_ATTACK_REVEAL_RADIUS = (): number => dataNum("FoggedAttackRevealRadius");
 const FOGGED_ATTACK_REVEAL_TIME = 1;
 
 // A DYING unit goes on seeing (issue #126). "Fog Reveal Radius - Dying Unit" is the World
@@ -3082,7 +3082,7 @@ const FOGGED_ATTACK_REVEAL_TIME = 1;
 // critters, on 350, are not. (DotA sets the same constant to 500 and the guide reads it the
 // same way — hiveworkshop "Vision guide" 290769.) How LONG it lasts is the type's own death
 // time (UnitData `death`, UnitDef.deathTime) — the body sees for as long as it takes to fall.
-const DYING_REVEAL_RADIUS = MISC_DATA.DyingRevealRadius;
+const DYING_REVEAL_RADIUS = (): number => dataNum("DyingRevealRadius");
 
 /**
  * The sight a body keeps while it falls — a dying unit's own eyes, outliving it.
@@ -4437,7 +4437,7 @@ export class SimWorld {
     // carried, so it has no slot to wait in and nothing to press. Handed to the inventory like
     // an ordinary item it sat there as a button, which is not a thing the game ever shows.
     if (def.powerup) {
-      this.notifyCreepsOfShopUse(shop, buyer, MISC_GAME.ItemSaleAggroRange);
+      this.notifyCreepsOfShopUse(shop, buyer, gameNum("ItemSaleAggroRange"));
       this.noteItem(buyer, { id: this.nextItemId++, itemId, charges: def.charges }, "sell", shop);
       this.applyPowerup(buyer, def);
       return "ok";
@@ -4447,7 +4447,7 @@ export class SimWorld {
     // (itemCooldownOn) — buying another is not a way round a cooldown group.
     const bought = { id: this.nextItemId++, itemId, charges: def.charges, cooldownLeft: this.itemCooldownOn(buyer, itemId) };
     buyer.inventory[slot] = bought;
-    this.notifyCreepsOfShopUse(shop, buyer, MISC_GAME.ItemSaleAggroRange);
+    this.notifyCreepsOfShopUse(shop, buyer, gameNum("ItemSaleAggroRange"));
     // EVENT_(PLAYER_)UNIT_SELL_ITEM. Blizzard.j listens for this on every neutral-passive
     // building and answers it with RemoveItemFromStock(GetSellingUnit(), …) — so a Marketplace
     // only ever clears a sold item off its shelf (and frees the slot for the next 30s update)
@@ -4499,7 +4499,7 @@ export class SimWorld {
   pawnPrice(itemId: string): { gold: number; lumber: number } {
     const def = this.itemReg?.get(itemId);
     if (!def?.pawnable) return { gold: 0, lumber: 0 };
-    return { gold: Math.floor(def.gold * MISC_GAME.PawnItemRate), lumber: Math.floor(def.lumber * MISC_GAME.PawnItemRate) };
+    return { gold: Math.floor(def.gold * gameNum("PawnItemRate")), lumber: Math.floor(def.lumber * gameNum("PawnItemRate")) };
   }
 
   /** Sell an item back to a shop. WC3 pays `PawnItemRate` of its gold value (0.50 in the
@@ -4558,7 +4558,7 @@ export class SimWorld {
     for (const c of this.units.values()) {
       if (!c.isCreep || c.hp <= 0 || c.building || !c.weapon || c.returning) continue;
       const d = Math.hypot(c.x - shop.x, c.y - shop.y) - shop.radius;
-      if (d > MISC_DATA.NeutralUseNotifyRadius) continue;
+      if (d > dataNum("NeutralUseNotifyRadius")) continue;
       c.asleep = false; // heard it — awake, but not necessarily coming
       if (d > saleAggroRange || !buyer || buyer.hp <= 0 || !this.hostile(c, buyer)) continue;
       c.campHelper = false; // roused in its own right, so it may call the rest of the camp
@@ -6610,7 +6610,7 @@ export class SimWorld {
         // (classic.battle.net/war3/undead/units/acolyte.shtml).
         this.unloadBurrow(u.id);
         this.removeUnit(u.id);
-      } else if (mine.gold < MISC_DATA.LowGoldAmount && !this.minesRunningLow.has(mine.id)) {
+      } else if (mine.gold < dataNum("LowGoldAmount") && !this.minesRunningLow.has(mine.id)) {
         this.minesRunningLow.add(mine.id);
         this.alerts.push({ kind: "minelow", player: u.owner, x: mine.x, y: mine.y });
       }
@@ -6936,7 +6936,7 @@ export class SimWorld {
     // ability that put the unit in it (morphToggle's `altFormAbil`).
     const chemicalRage = !!u.altFormAbil && this.abilities?.get(u.altFormAbil)?.code === "ANcr";
     if (windWalk || chemicalRage) return ENGINE_MAX_UNIT_SPEED;
-    return u.building ? MISC_GAME.MaxBldgSpeed : MISC_GAME.MaxUnitSpeed;
+    return u.building ? gameNum("MaxBldgSpeed") : gameNum("MaxUnitSpeed");
   }
 
   /**
@@ -11021,7 +11021,7 @@ export class SimWorld {
 
   /** True during daylight (06:00–18:00 game time). */
   get isDay(): boolean {
-    return this.timeOfDay >= DAY_START && this.timeOfDay < DAY_END;
+    return this.timeOfDay >= DAY_START() && this.timeOfDay < DAY_END();
   }
 
   /**
@@ -11267,7 +11267,7 @@ export class SimWorld {
    *  that column, but "can restore mana" fits it exactly as well, so the alias is the honest
    *  discriminator. See tickReplenish.) */
   private baseManaRegen(u: SimUnit): number {
-    if (u.isHero) return REGEN_PER_INT * u.int;
+    if (u.isHero) return REGEN_PER_INT() * u.int;
     if (u.baseMaxMana <= 0) return 0;
     const def = this.unitReg?.get(u.typeId);
     return def?.manaRegen || UNIT_MANA_REGEN;
@@ -11545,7 +11545,9 @@ export class SimWorld {
     const dStr = u.isHero ? u.str - Math.floor(u.startStr) : 0;
     const dAgi = u.isHero ? u.agi - Math.floor(u.startAgi) : 0;
     const dInt = u.isHero ? u.int - Math.floor(u.startInt) : 0;
-    const primaryDelta = u.primaryAttr === PrimaryAttribute.Strength ? dStr : u.primaryAttr === PrimaryAttribute.Agility ? dAgi : u.primaryAttr === PrimaryAttribute.Intelligence ? dInt : 0;
+    // Damage per point of the primary gained since spawn — `StrAttackBonus`, 1.0 in the file and
+    // restated by a map (Extreme Candy War: 1.5).
+    const primaryDelta = (u.primaryAttr === PrimaryAttribute.Strength ? dStr : u.primaryAttr === PrimaryAttribute.Agility ? dAgi : u.primaryAttr === PrimaryAttribute.Intelligence ? dInt : 0) * gameNum("StrAttackBonus");
     let armorBonus = 0;
     let manaRegenBonus = 0;
     let damageBonus = 0;
@@ -11615,8 +11617,8 @@ export class SimWorld {
     // Masonry'd building stood a whole point above its own maximum at EVERY health it had
     // ("1651 / 1650"). Six decimals clears the noise and leaves a real fraction (the Arcane
     // Vault's 485 x 1.1 = 533.5) exactly where the data puts it.
-    const newMaxHp = snapPool((u.baseMaxHp + HP_PER_STR * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp + maxHpBonus);
-    const newMaxMana = snapPool(u.baseMaxMana + MANA_PER_INT * dInt + upg.mana + item.maxMana);
+    const newMaxHp = snapPool((u.baseMaxHp + HP_PER_STR() * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp + maxHpBonus);
+    const newMaxMana = snapPool(u.baseMaxMana + MANA_PER_INT() * dInt + upg.mana + item.maxMana);
     // Moving the ceiling keeps the unit's RELATIVE pool, in both directions: "Increasing the
     // maximum amount of Hit Points of a unit does not change its relative Hit Points"
     // (Liquipedia, Hit_Points). The page's own item-drop trick proves the ratio (not a flat
@@ -11662,7 +11664,7 @@ export class SimWorld {
     // not construction (see enqueueUpgrade), so it carries no `constructionLeft` and never
     // reaches this branch.
     const raising = !!u.building && u.building.constructionLeft > 0;
-    u.armor = raising ? 0 : u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
+    u.armor = raising ? 0 : u.baseArmor + ARMOR_PER_AGI() * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
     u.bonusArmor = raising ? 0 : armorBonus + carapaceArmor + item.armor + upg.armor; // the buff/aura/item/upgrade portion (shown green in the HUD)
     // The corner numbers on the info panel's two icons: the LEVEL researched, not the bonus.
     u.attackUpgrade = upg.attackLevel;
@@ -11676,7 +11678,7 @@ export class SimWorld {
     // of TOTAL agility — `cool1` is the raw Base Attack Time with no agility baked in
     // (Blademaster cool1=1.77, and Liquipedia's displayed 1.23 = 1.77/(1+0.02*22) at that
     // patch's 22 agi). Verified against MiscGame.txt AgiAttackSpeedBonus=0.02.
-    const agiAttackSpeed = u.isHero ? MISC_GAME.AgiAttackSpeedBonus * u.agi : 0;
+    const agiAttackSpeed = u.isHero ? gameNum("AgiAttackSpeedBonus") * u.agi : 0;
     const ias = Math.min(
       IAS_MAX,
       Math.max(IAS_MIN, agiAttackSpeed + hasteAttack + item.attackSpeed + upg.attackSpeed - slowAttack),
@@ -11769,6 +11771,15 @@ export class SimWorld {
     u.speed = Math.max(0, (u.baseSpeed + upg.speed + item.speed) * (1 - slowMove) * (1 + hasteMove));
     // …under the game's ceiling. Without it a Scroll of Speed's +200% walked a Footman at 810.
     u.speed = Math.min(u.speed, this.speedCeiling(u));
+    // …and over its FLOOR, `MinUnitSpeed` / `MinBldgSpeed` (150 / 25 in the file, 25/10 on Reign
+    // of Chaos; ten of the downloaded maps restate it). A slow never takes a walker under it —
+    // "If you have movement speed of 30, you probably hit the minimum limit in Gameplay Constants
+    // meaning it's set to something like 150 instead of 30" (hiveworkshop 335806) — and neither
+    // does its own type's speed, so a TFT critter's 100 walks at 150. Only a unit that MOVES at
+    // all: a pinned one (Ensnare is a 100% `root` slow) or a type with no speed stays at 0.
+    // An uprooted Ancient is still a STRUCTURE (Root is a building deciding to walk), so its
+    // UnitBalance 40 is held to the building floor, 25, and walks at 40.
+    if (u.baseSpeed > 0 && u.speed > 0) u.speed = Math.max(u.speed, u.building || root ? gameNum("MinBldgSpeed") : gameNum("MinUnitSpeed"));
     // A critter walks at exactly its own pace, whatever it was before (HEX_MOVE_SPEED) — and
     // the zeroing rules below still hold it, so an ensnared sheep stays put.
     if (hexed) u.speed = HEX_MOVE_SPEED;
@@ -11787,7 +11798,7 @@ export class SimWorld {
     u.manaRegen = this.manaRegenSuspended(u)
       ? 0
       : this.baseManaRegen(u) + manaRegenBonus + item.manaRegen + upg.manaRegen;
-    u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus + item.hpRegen;
+    u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR() * u.str : 0) + hpRegenBonus + item.hpRegen;
     // Vampiric Aura only — the Mask of Death's life steal is an ORB (exclusive with every
     // other orb, and it works on a ranged attack), so it is applied at the blow instead.
     u.lifesteal = lifesteal;
@@ -14762,7 +14773,7 @@ export class SimWorld {
     // else pays GrantNormalXP. Both are indexed by the victim's own level.
     let base = grantedXp(victim.level || 0, victim.isHero);
     if (base <= 0) return;
-    if (victim.isSummon) base *= SUMMON_XP_FACTOR;
+    if (victim.isSummon) base *= SUMMON_XP_FACTOR();
     // Beneficiaries: enemy heroes of the victim within share range (else global).
     // NB max-level heroes are deliberately NOT excluded — MiscGame
     // MaxLevelHeroesDrainExp=1, so a level-10 hero standing in range still claims a
@@ -14787,12 +14798,12 @@ export class SimWorld {
     // max-level hero is simply not a sharer, and the heroes still levelling split the kill.
     const drains = !!miscGame("MaxLevelHeroesDrainExp");
     const sharer = (h: SimUnit): boolean =>
-      h.isHero && !h.isIllusion && !h.hexed && h.hp > 0 && (drains || h.level < MAX_HERO_LEVEL);
+      h.isHero && !h.isIllusion && !h.hexed && h.hp > 0 && (drains || h.level < MAX_HERO_LEVEL());
     const eligible: SimUnit[] = [];
     for (const h of this.units.values()) {
       if (!sharer(h) || h.team === victim.team) continue;
       if (killer && h.team !== killer.team) continue; // only the killer's side (team = alliance group)
-      if (Math.hypot(h.x - victim.x, h.y - victim.y) <= XP_SHARE_RANGE) eligible.push(h);
+      if (Math.hypot(h.x - victim.x, h.y - victim.y) <= XP_SHARE_RANGE()) eligible.push(h);
     }
     if (!eligible.length && miscGame("GlobalExperience")) {
       // No hero in range: GlobalExperience=1 (the expansion's; Reign of Chaos's is 0, and there a
@@ -14869,9 +14880,9 @@ export class SimWorld {
     // An image never banks experience of its own — it is shown its hero's (mirrorXpToIllusions).
     // `SuspendHeroXP` is read HERE and nowhere else: it stops the crediting, not the levelling,
     // so `SetHeroLevel` on a suspended hero still works and the bar keeps what it had.
-    if (!hero.isHero || hero.isIllusion || hero.xpSuspended || hero.level >= MAX_HERO_LEVEL || amount <= 0) return;
+    if (!hero.isHero || hero.isIllusion || hero.xpSuspended || hero.level >= MAX_HERO_LEVEL() || amount <= 0) return;
     hero.xp += amount;
-    while (hero.level < MAX_HERO_LEVEL && hero.xp >= xpToReachLevel(hero.level + 1)) {
+    while (hero.level < MAX_HERO_LEVEL() && hero.xp >= xpToReachLevel(hero.level + 1)) {
       this.levelUp(hero, eyeCandy);
       // WC3: once a hero reaches a level where creeps grant no XP (HeroFactorXP=0 at
       // level 5+), any surplus that a creep kill pushed past the threshold is dropped
@@ -15076,7 +15087,7 @@ export class SimWorld {
   setHeroLevel(unitId: number, level: number, eyeCandy = true): void {
     const h = this.units.get(unitId);
     if (!h?.isHero) return;
-    const target = Math.min(MAX_HERO_LEVEL, Math.trunc(level));
+    const target = Math.min(MAX_HERO_LEVEL(), Math.trunc(level));
     while (h.level < target) this.levelUp(h, eyeCandy);
     h.xp = Math.max(h.xp, xpToReachLevel(h.level));
     this.mirrorXpToIllusions(h); // the bar his images show is his (see gainXp)
@@ -15095,7 +15106,7 @@ export class SimWorld {
     const h = this.units.get(unitId);
     if (!h?.isHero) return;
     h.xp = Math.max(0, Math.trunc(xp));
-    while (h.level < MAX_HERO_LEVEL && h.xp >= xpToReachLevel(h.level + 1)) this.levelUp(h, eyeCandy);
+    while (h.level < MAX_HERO_LEVEL() && h.xp >= xpToReachLevel(h.level + 1)) this.levelUp(h, eyeCandy);
     this.mirrorXpToIllusions(h); // the bar his images show is his (see gainXp)
   }
 
@@ -15462,7 +15473,7 @@ export class SimWorld {
     if (!u) return false;
     if (stored.properName) u.properName = stored.properName;
     if (u.isHero) {
-      u.level = Math.max(1, Math.min(MAX_HERO_LEVEL, Math.trunc(stored.level)));
+      u.level = Math.max(1, Math.min(MAX_HERO_LEVEL(), Math.trunc(stored.level)));
       u.xp = Math.max(0, Math.trunc(stored.xp));
       u.skillPoints = Math.max(0, Math.trunc(stored.skillPoints));
     }
@@ -16183,7 +16194,7 @@ export class SimWorld {
       owner: u.owner,
       isHero: u.isHero,
       mechanical: u.mechanical,
-      decayLeft: CORPSE_TOTAL_TIME,
+      decayLeft: CORPSE_TOTAL_TIME(),
       raised: false,
       heldBy: 0,
       eatenBy: 0,
@@ -16304,7 +16315,7 @@ export class SimWorld {
       c.heldBy = 0;
       c.x = x;
       c.y = y;
-      c.decayLeft = CORPSE_TOTAL_TIME; // dropped bodies are fresh again — see above
+      c.decayLeft = CORPSE_TOTAL_TIME(); // dropped bodies are fresh again — see above
       dropped++;
     }
     return dropped;
@@ -16341,7 +16352,7 @@ export class SimWorld {
     this.corpses.set(this.nextCorpseId, {
       id: this.nextCorpseId, deadId: 0, unitId, x, y, facing: 0, owner,
       isHero: false, mechanical: !!def?.classification.includes("mechanical"),
-      decayLeft: CORPSE_TOTAL_TIME, raised: false, heldBy, eatenBy: 0,
+      decayLeft: CORPSE_TOTAL_TIME(), raised: false, heldBy, eatenBy: 0,
     });
     this.nextCorpseId++;
   }
@@ -16400,7 +16411,7 @@ export class SimWorld {
     allows: (caster, def, t) => this.allegianceAdmits(caster, t, def.targetFlags),
     launchWave: (caster, def, rank, opts) => this.spawnWaveProjectile(caster, def, rank, opts),
     // Untyped ability damage ignores armor; a Banished (ethereal) target takes +66%
-    // (ETHEREAL_SPELL_BONUS — the file's Spells column), the flip side of its physical
+    // (etherealSpellBonus — the file's Spells column), the flip side of its physical
     // immunity (issue #49).
     // Magic Immunity stops spell damage as well as spell targeting — that is what makes a
     // Dryad walk through a Blizzard. It belongs on this seam and not in landDamage, because
@@ -16411,7 +16422,7 @@ export class SimWorld {
     // slowly. Ethereal's +66% is applied first for the same reason — it is a property of what
     // is being hit, not a second reduction to be netted off.
     spellDamage: (t, amount, src) =>
-      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * ETHEREAL_SPELL_BONUS : amount) * (1 - t.magicReduction)), src, false),
+      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * etherealSpellBonus() : amount) * (1 - t.magicReduction)), src, false),
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
@@ -16951,7 +16962,7 @@ export class SimWorld {
   tick(dt: number): void {
     this.elapsed += dt;
     if (this.dawnDusk && !this.timeOfDaySuspended) {
-      this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC * this.timeOfDayScale) % MISC_DATA.DayHours;
+      this.timeOfDay = (this.timeOfDay + dt * gameHoursPerSec() * this.timeOfDayScale) % dataNum("DayHours");
     }
     // The tech census (who owns what, and so what each player may build) is invalidated
     // wholesale each tick rather than at every birth/death/morph/construction-finish. The
@@ -18474,7 +18485,7 @@ export class SimWorld {
       if (gap >= bestGap) continue;
       if (gap > near) {
         if (!campTargets.has(t.id) && !this.fightsCamp(u, t)) continue;
-        if (Math.hypot(t.x - u.guardX, t.y - u.guardY) >= MAX_GUARD_DISTANCE) continue;
+        if (Math.hypot(t.x - u.guardX, t.y - u.guardY) >= MAX_GUARD_DISTANCE()) continue;
       }
       if (!this.hostile(u, t) || !this.canAttack(u, t) || !this.canSee(u, t)) continue;
       if (this.lowPriorityTarget(t) || this.poisonedBy(t, u)) continue;
@@ -19474,7 +19485,7 @@ export class SimWorld {
             // "A gold mine has collapsed." — told to whoever was working it, since they are
             // the one who has to go and find another (Goldminedestroyed + GoldMineCollapseSound).
             this.alerts.push({ kind: "minedestroyed", player: u.owner, x: mine.x, y: mine.y });
-          } else if (mine.gold < MISC_DATA.LowGoldAmount && !this.minesRunningLow.has(mine.id)) {
+          } else if (mine.gold < dataNum("LowGoldAmount") && !this.minesRunningLow.has(mine.id)) {
             // MiscData names the line itself: "this is the amount where a gold mine is
             // considered low" (LowGoldAmount=1500). Warned on the trip that crosses it, once.
             this.minesRunningLow.add(mine.id);
@@ -20220,14 +20231,14 @@ export class SimWorld {
         break;
       }
       // --- Orb of Frost: the generic Slowed buff (`Bfro`) for the row's own duration. The
-      // magnitudes are engine-internal — see SLOWED_MOVE/SLOWED_ATTACK in orbs.ts. Frost
+      // magnitudes are engine-internal — see slowedMove/slowedAttack in orbs.ts. Frost
       // Attack (Frost Wyrm, Nerubian Tower, the Blue Dragons) is the same buff, longer.
       case "AIob":
       case "Afra":
       case "Afrb":
         this.applyBuffInternal(target, {
           kind: "slow", group: "frostattack", timeLeft: dur || 3,
-          value: SLOWED_MOVE, value2: SLOWED_ATTACK, sourceId: attacker.id, ...this.buffArtOf(def),
+          value: slowedMove(), value2: slowedAttack(), sourceId: attacker.id, ...this.buffArtOf(def),
         });
         break;
       // --- Orb of Corruption. Its armour strip goes on BEFORE the blow that carried it, so
@@ -20641,7 +20652,7 @@ export class SimWorld {
     this.attackReveals.set(key, {
       x: attacker.x,
       y: attacker.y,
-      radius: FOGGED_ATTACK_REVEAL_RADIUS,
+      radius: FOGGED_ATTACK_REVEAL_RADIUS(),
       team: target.team,
       flying: attacker.flying,
       timeLeft: FOGGED_ATTACK_REVEAL_TIME,
@@ -20679,7 +20690,7 @@ export class SimWorld {
     if (life <= 0) return;
     // A CAP, not a replacement, and read LIVE: a Footman (1400 day / 800 night) is cut back to
     // 500 either way, while a crab (350) dies seeing everything it saw in life.
-    const radius = Math.min(this.sightOf(u), DYING_REVEAL_RADIUS);
+    const radius = Math.min(this.sightOf(u), DYING_REVEAL_RADIUS());
     if (radius <= 0) return;
     this.deathReveals.push({ x: u.x, y: u.y, radius, team: u.team, owner: u.owner, flying: u.flying, timeLeft: life });
   }
@@ -20756,8 +20767,8 @@ export class SimWorld {
     // every hostile blow that lands anywhere on the map.
     const key = target.owner * 2 + (target.building ? 1 : 0);
     const last = this.attackNotify.get(key);
-    if (last && this.elapsed - last.t < MISC_DATA.AttackNotifyDelay &&
-        Math.hypot(target.x - last.x, target.y - last.y) <= MISC_DATA.AttackNotifyRange) return;
+    if (last && this.elapsed - last.t < dataNum("AttackNotifyDelay") &&
+        Math.hypot(target.x - last.x, target.y - last.y) <= dataNum("AttackNotifyRange")) return;
     this.attackNotify.set(key, { t: this.elapsed, x: target.x, y: target.y });
     this.alerts.push({ kind: target.building ? "townattack" : "attack", player: target.owner, x: target.x, y: target.y });
   }
@@ -20950,7 +20961,7 @@ export class SimWorld {
     for (const h of this.units.values()) {
       if (h === victim || h.owner !== victim.owner || h.order !== "idle") continue;
       if (h.building || h.isCreep || h.hp <= 0 || !h.weapon || h.returning || isOffField(h)) continue;
-      if (distSkip(victim, h, CALL_FOR_HELP)) continue;
+      if (distSkip(victim, h, CALL_FOR_HELP())) continue;
       if (this.acquireRange(h) <= 0 || this.pinned(h)) continue;
       if (!this.hostile(h, attacker) || !this.canAttack(h, attacker) || this.fleesTower(h, attacker)) continue;
       this.setAutoGuardPost(h);
@@ -21541,7 +21552,7 @@ export class SimWorld {
     u.noCollision = false;
     this.cancelSwing(u);
     this.detachBuilder(unitId);
-    if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE) {
+    if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE()) {
       this.pickUpOrRefuse(u, it);
       this.stop(unitId);
     } else {
@@ -21608,7 +21619,7 @@ export class SimWorld {
   }
 
   private inPawnRange(u: SimUnit, shop: SimUnit): boolean {
-    return Math.hypot(u.x - shop.x, u.y - shop.y) <= MISC_GAME.PawnItemRange + shop.radius;
+    return Math.hypot(u.x - shop.x, u.y - shop.y) <= gameNum("PawnItemRange") + shop.radius;
   }
 
   /** A standing spot on the shop's near side, OUTSIDE its pathing footprint. A building's
@@ -21668,7 +21679,7 @@ export class SimWorld {
     u.inCombat = false;
     u.noCollision = false;
     this.cancelSwing(u);
-    if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_GIVE_RANGE) {
+    if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_GIVE_RANGE()) {
       this.transferItem(u, slot, to);
       this.stop(fromId);
     } else {
@@ -21683,7 +21694,7 @@ export class SimWorld {
     if (u.pendingDrop) {
       const { slot, x, y } = u.pendingDrop;
       if (!u.inventory[slot]) { this.stop(u.id); return; } // slot emptied meanwhile
-      if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE + u.radius) {
+      if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE() + u.radius) {
         this.doDropItem(u, slot, x, y);
         this.stop(u.id);
       } else if (!u.moving) {
@@ -21711,7 +21722,7 @@ export class SimWorld {
     if (u.pendingGive) {
       const to = this.units.get(u.pendingGive.toId);
       if (!to || to.hp <= 0 || !u.inventory[u.pendingGive.slot]) { this.stop(u.id); return; }
-      if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_GIVE_RANGE) {
+      if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_GIVE_RANGE()) {
         this.transferItem(u, u.pendingGive.slot, to);
         this.stop(u.id);
       } else if (!u.moving) {
@@ -21726,7 +21737,7 @@ export class SimWorld {
       if (!shop || shop.hp <= 0 || !u.inventory[u.pendingSell.slot]) { this.stop(u.id); return; }
       if (this.inPawnRange(u, shop)) {
         this.pawnItem(u.id, u.pendingSell.slot, shop.id);
-        this.notifyCreepsOfShopUse(shop, u, MISC_GAME.ItemSaleAggroRange); // using a neutral shop is loud
+        this.notifyCreepsOfShopUse(shop, u, gameNum("ItemSaleAggroRange")); // using a neutral shop is loud
         this.stop(u.id);
       } else if (!u.moving) {
         const [ax, ay] = this.shopApproach(u, shop);
@@ -21736,7 +21747,7 @@ export class SimWorld {
     }
     const it = this.items.get(u.getItemId);
     if (!it) { this.stop(u.id); return; } // item gone (someone else grabbed it)
-    if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE) {
+    if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE()) {
       this.pickUpOrRefuse(u, it);
       this.stop(u.id);
     } else if (!u.moving) {
@@ -21841,7 +21852,7 @@ export class SimWorld {
     // up" (UI\TriggerStrings.txt) — refused at the ORDER, so the hero does not even walk over
     // to the spot to fail there. See setItemDroppable.
     if (!this.mayLeaveInventory(held)) return false;
-    if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE + u.radius) {
+    if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE() + u.radius) {
       this.doDropItem(u, slot, x, y);
       return true;
     }
@@ -22507,7 +22518,7 @@ export class SimWorld {
     if (seconds <= 0) return false;
     const hour = this.dataOf(lvl, 0, 0) + this.dataOf(lvl, 1, 0) / 60;
     this.moonstone = { left: seconds, restore: this.timeOfDay };
-    this.timeOfDay = ((hour % MISC_DATA.DayHours) + MISC_DATA.DayHours) % MISC_DATA.DayHours;
+    this.timeOfDay = ((hour % dataNum("DayHours")) + dataNum("DayHours")) % dataNum("DayHours");
     return true;
   }
 
@@ -22518,7 +22529,7 @@ export class SimWorld {
     if (this.moonstone.left > 0) return;
     const owed = this.moonstone.restore;
     this.moonstone = null;
-    this.timeOfDay = owed % MISC_DATA.DayHours;
+    this.timeOfDay = owed % dataNum("DayHours");
   }
 
   /** SCROLL OF TOWN PORTAL (`AItp`) — "Teleports the Hero and any of its nearby troops to a
@@ -22935,9 +22946,9 @@ export class SimWorld {
    *  everything a level-up entails (the skill point, the stat growth, the nova, the
    *  HERO_LEVEL event, the images levelling with him) happens exactly once and in order. */
   private itemLevelGain(u: SimUnit, ad: AbilityDef): boolean {
-    if (!u.isHero || u.level >= MAX_HERO_LEVEL) return false;
+    if (!u.isHero || u.level >= MAX_HERO_LEVEL()) return false;
     const levels = Math.max(1, Math.round(this.dataOf(ad.levelData[0] ?? emptyAbilityLevel(), 0, 1)));
-    for (let i = 0; i < levels && u.level < MAX_HERO_LEVEL; i++) {
+    for (let i = 0; i < levels && u.level < MAX_HERO_LEVEL(); i++) {
       this.gainXp(u, Math.max(1, xpToReachLevel(u.level + 1) - u.xp));
     }
     return true;
@@ -23615,11 +23626,11 @@ export class SimWorld {
           return true;
         }
       }
-      if (dist >= MAX_GUARD_DISTANCE) {
+      if (dist >= MAX_GUARD_DISTANCE()) {
         this.beginCreepReturn(u); // dragged out past the hard limit — always go home
         return true;
       }
-      if (dist >= GUARD_DISTANCE) {
+      if (dist >= GUARD_DISTANCE()) {
         // Past the soft limit: normally head home after chasing GUARD_RETURN_TIME
         // unattacked (each hit resets strayT in landDamage). But do NOT peel off
         // while a camp-mate is still in the fight — the camp commits as one and
@@ -23635,7 +23646,7 @@ export class SimWorld {
           u.strayT = 0;
         } else {
           u.strayT += dt;
-          if (u.strayT >= GUARD_RETURN_TIME) {
+          if (u.strayT >= GUARD_RETURN_TIME()) {
             this.beginCreepReturn(u);
             return true;
           }
@@ -23693,13 +23704,13 @@ export class SimWorld {
     // "If a CREEP goes beyond 'MaxGuardDistance' then it always returns home regardless of
     // who's attacking it" — the one sentence in MiscGame.txt that names creeps, so it holds
     // for the map's own units and not for a player's unit on a post it planted itself.
-    if (dist >= MAX_GUARD_DISTANCE && !u.guardAuto) {
+    if (dist >= MAX_GUARD_DISTANCE() && !u.guardAuto) {
       this.beginCreepReturn(u);
       return true;
     }
-    if (dist >= GUARD_DISTANCE) {
+    if (dist >= GUARD_DISTANCE()) {
       u.strayT += dt; // landDamage resets this — being shot at keeps it in the fight
-      if (u.strayT >= GUARD_RETURN_TIME) {
+      if (u.strayT >= GUARD_RETURN_TIME()) {
         this.beginCreepReturn(u);
         return true;
       }
@@ -23773,7 +23784,7 @@ export class SimWorld {
       u.returnStuckT = 0;
     } else {
       u.returnStuckT += dt;
-      if (u.returnStuckT >= GUARD_RETURN_TIME) {
+      if (u.returnStuckT >= GUARD_RETURN_TIME()) {
         u.returning = false; // can't get home — resume fighting from here
         u.returnStuckT = 0;
         u.order = "idle";
@@ -23838,7 +23849,7 @@ export class SimWorld {
    *  NOT live positions — so a creep dragged out to the edge of its leash still
    *  counts as a camp-mate and can rally (or be rallied by) the ones back home. */
   private sameCamp(a: SimUnit, b: SimUnit): boolean {
-    return Math.hypot(a.guardX - b.guardX, a.guardY - b.guardY) <= CREEP_CALL_FOR_HELP;
+    return Math.hypot(a.guardX - b.guardX, a.guardY - b.guardY) <= CREEP_CALL_FOR_HELP();
   }
 
   /** Camp cohesion (MiscGame CreepCallForHelp): a creep that engages a target
@@ -23899,7 +23910,7 @@ export class SimWorld {
     for (const c of this.units.values()) {
       if (!c.isCreep || c.hp <= 0 || c.returning || c.campGuard || !c.weapon) continue;
       if (!this.hostile(c, b)) continue;
-      if (Math.hypot(b.x - c.x, b.y - c.y) - b.radius > BUILDING_PLACEMENT_NOTIFY_RADIUS) continue;
+      if (Math.hypot(b.x - c.x, b.y - c.y) - b.radius > BUILDING_PLACEMENT_NOTIFY_RADIUS()) continue;
       c.asleep = false;
       c.campHelper = false; // notified in its own right — it may shout for the rest of the camp
       this.issueAttack(c.id, b.id);
@@ -23937,8 +23948,8 @@ export class SimWorld {
       if (c.order !== "attack" || c.targetId === null) continue;
       const ax = c.campHelper ? c.campCallX : c.guardX;
       const ay = c.campHelper ? c.campCallY : c.guardY;
-      if (Math.hypot(u.guardX - ax, u.guardY - ay) > CREEP_CALL_FOR_HELP) continue;
-      if (atHome && Math.hypot(c.x - c.guardX, c.y - c.guardY) >= GUARD_DISTANCE) continue;
+      if (Math.hypot(u.guardX - ax, u.guardY - ay) > CREEP_CALL_FOR_HELP()) continue;
+      if (atHome && Math.hypot(c.x - c.guardX, c.y - c.guardY) >= GUARD_DISTANCE()) continue;
       const t = this.units.get(c.targetId);
       // …and a fight `u` could actually be in: an enemy of its own that it has a weapon for, and
       // not a tower it is too hurt to stand under (it would only walk out and break off again).

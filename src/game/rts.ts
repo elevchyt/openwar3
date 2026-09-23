@@ -44,7 +44,7 @@ import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import { modelPickVolumes, rayVolume, type CollisionShapeNode, type PickVolume } from "../render/modelCollision";
 import { autoArmed, type UnitRegistry, type UnitDef } from "../data/units";
 import { ArmorType, AttackType, MoveType, PlayerSlot, PrimaryAttribute } from "../data/enums";
-import { MELEE, MISC_GAME, xpToReachLevel } from "../data/gameplayConstants";
+import { MELEE, gameNum, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
 import { disabledIconPath } from "../data/commandStrings";
@@ -5095,7 +5095,7 @@ export class RtsController {
         // The fade is the LAST HERO_FADE_TIME of that window, not an extra phase after it —
         // see the constants' own note. HeroPaladin's Dissipate is 2.0s and the window is 3, so
         // for it the two line up exactly: the clip ends, the second of fade begins.
-        if (c.phaseT < HERO_DISSIPATE_TIME - HERO_FADE_TIME) continue;
+        if (c.phaseT < HERO_DISSIPATE_TIME() - HERO_FADE_TIME) continue;
         this.enterCorpsePhase(c, "fade");
       } else if (c.phase === "fade") {
         // …and out. A plain alpha ramp on the instance's tint — nothing else writes a corpse's
@@ -7000,7 +7000,7 @@ export class RtsController {
     // (Widened: the constant is `as const` 0, so TypeScript would call the comparison dead.
     //  It is read rather than folded away because it is the game's switch, not our policy —
     //  a mod that turns it on turns this on.)
-    const status = (MISC_GAME.DisplayBuildingStatus as number) !== 0 || this.readsSideOf(u.owner);
+    const status = gameNum("DisplayBuildingStatus") !== 0 || this.readsSideOf(u.owner);
     return {
       id: e.simId,
       typeId: e.typeId,

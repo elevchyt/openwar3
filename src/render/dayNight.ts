@@ -1,6 +1,6 @@
 import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
 import type { DataSource } from "../vfs/types";
-import { MISC_DATA } from "../data/gameplayConstants";
+import { dataNum } from "../data/gameplayConstants";
 
 // WC3's day/night cycle lighting, read from the game's own data (issue #47).
 //
@@ -196,7 +196,7 @@ class LightSampler {
   /** Evaluate at `hour` in [0, DayHours). Returns the shared `out` buffer. */
   sample(hour: number): DayNightLight {
     const [start, end] = this.interval;
-    const t = start + (hour / MISC_DATA.DayHours) * (end - start);
+    const t = start + (hour / dataNum("DayHours")) * (end - start);
     const s = this.scratch;
     const light = this.light;
 

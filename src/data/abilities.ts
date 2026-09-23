@@ -1,7 +1,7 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { layCustomKeys } from "./customKeys";
 import type { DataSource } from "../vfs/types";
-import { MISC_GAME } from "./gameplayConstants";
+import { gameNum } from "./gameplayConstants";
 
 // Ability data registry (plan §4, spells slice). Merges WC3's AbilityData.slk
 // (numbers), per-race AbilityFunc.txt (icon/effect art/buttonpos) and
@@ -1334,7 +1334,7 @@ export function tipFieldValue(lvl: AbilityLevel, field: string): number | null {
  *  "baseReq + levelSkip*abilityLevel". Basics take the default 2-level skip (ranks
  *  at hero 1/3/5); ultimates carry reqLevel 6 directly. */
 export function requiredHeroLevel(def: AbilityDef, rank: number): number {
-  const skip = def.levelSkip > 0 ? def.levelSkip : MISC_GAME.HeroAbilityLevelSkip;
+  const skip = def.levelSkip > 0 ? def.levelSkip : gameNum("HeroAbilityLevelSkip");
   return Math.max(1, def.reqLevel) + skip * (rank - 1);
 }
 

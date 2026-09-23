@@ -434,8 +434,10 @@ The work is going in passes, largest first, each with its own test and each re-m
 | 6 | the summon event, `GetSummonedUnit`/`GetSummoningUnit`, `UnitApplyTimedLife` | 200 | ✓ |
 | 7 | `ReviveHero`, `ReviveHeroLoc` | 72 | ✓ |
 | 10 | what a script paints — its own lightning, the `BlzSetSpecialEffect…` transforms, ubersplats, images, terrain tiles, water tint; and `GetLocationZ` | 127 | ✓ (not `SetSkyModel`) |
+| — | the `GetUnitDefault…` family, `GetUnitAcquireRange`, and `SetUnitAcquireRange` actually doing something | 303 | ✓ |
+| 11 | a map's own `war3mapMisc.txt` applied (no natives — the constants every system reads) | — | ✓ |
 
-5019 → 4371 → 3172 → 2610 → 2190 → 1503 → 927 → 655 → **528** call sites (41 natives).
+5019 → 4371 → 3172 → 2610 → 2190 → 1503 → 927 → 655 → 528 → **225** call sites (36 natives).
 
 Two findings from those two that are worth more than the code:
 
@@ -626,6 +628,48 @@ Not done, on purpose: `SetSkyModel` (the renderer draws no sky at all yet, so a 
 answered would only hide that), `SetUbersplatRender` and `SetImageAboveWater` (nothing says what
 they do). Tests: `tools/jass-lightning-test.cjs`, `tools/jass-effect-blz-test.cjs`,
 `tools/jass-imagery-test.cjs`, `tools/sim-effect-anim-test.cjs`, `tools/sim-terrain-brush-test.cjs`.
+
+### `GetUnitDefault…` — the type, even after the unit is gone
+
+`GetUnitDefaultMoveSpeed` alone was 284 call sites, 268 of them Test of Faith's "can this move"
+filter. The family answers the TYPE's row (`unitTypeDefault`, keyed on the handle's type id —
+the one `GetUnitTypeId` answers with), because Test of Faith asks it of `GetDyingUnit()` and a
+dying unit is out of `sim.units` before its trigger runs. `SetUnitAcquireRange` had been
+registered with no engine behind it at all — counted as done by the coverage tool while every
+call did nothing — and now replaces the range (never the worker/cloak/hidden gates).
+
+### Pass 11 — a map's own gameplay constants
+
+`war3mapMisc.txt` is the World Editor's Gameplay Constants dialog, written under the SAME keys the
+install's `MiscGame.txt`/`MiscData.txt` use, so it is simply the top layer of the chain
+`miscGame()` already walked (map → custom-map copy → Reign of Chaos → file) — `setMapMiscOverlay`
+at the map door, taken down by the scene that put it up. Across the install's maps it is ~115
+distinct keys. Making it reach anything took three things:
+
+* **Every read goes through the accessor.** ~65 sites read `MISC_GAME.X`/`MISC_DATA.X` directly,
+  23 of them as module-level constants in `world.ts` captured once at import, which no map could
+  ever move. They are `gameNum`/`gameList`/`dataNum` now, parsed once per match into each row's
+  own shape.
+* **Derived tables follow.** The damage table (Balanced Hero Survival rewrites all five rows), the
+  XP curves, the day length (DotA: 450 s), the ethereal bonuses, the revive costs, and the frost
+  slow — whose "engine-internal" 0.5/0.25 were `FrostMoveSpeedDecrease`/`FrostAttackSpeedDecrease`
+  all along (DotA: 0.3/0.2).
+* **Hero types are re-folded.** A hero type's vitals are stored ALREADY FOLDED (`realHP` includes
+  strength × 25), and the sim adds only the attributes gained since spawn, so a map's 15 hp per
+  strength moved only the strength gained later. `refoldHeroConstants` applies the difference per
+  type into the registry's per-map overlay: on Angel Arena a Paladin is 430 hp, not 650.
+
+Two rules were missing from the engine outright and had to exist for the map's value to mean
+anything: the **`MinUnitSpeed` floor** ("If you have movement speed of 30, you probably hit the
+minimum limit … set to something like 150 instead of 30" — hiveworkshop 335806; a pinned unit
+and a type with no speed stay 0, and an uprooted Ancient is a structure, floored at
+`MinBldgSpeed`), and **`StrAttackBonus`** (damage per point of primary attribute, an implied 1).
+
+`MISC_UNREAD` lists the 32 rows this engine declares but no system reads (trading, a miss chance,
+the follow ranges, decay after death …); the map door logs a map's restatement of one as "no
+system reads" rather than applying it, and `tools/sim-map-misc-test.cjs` re-derives the list from
+the source so it cannot drift. Left for its own task: Frost Nova applies the same Slowed buff with
+a hard-coded 0.4/0.4, agreeing with neither the file nor Liquipedia.
 
 One thing was deliberately **not** done: `BlzSetEventDamage` (6 sites). `pumpDamageEvents` fires
 after the sim has applied the damage, so there is nothing left to modify, and making it work

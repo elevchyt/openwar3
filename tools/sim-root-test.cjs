@@ -239,10 +239,12 @@ const settled = (u) => { u.morphT = 0; world.tickRootSettle(u); world.recomputeS
 
 // --- a unit without the ability is untouched -------------------------------------------
 {
-  const u = ancient("Aro1", { abilities: [] });
+  // An ordinary walker's speed: with no Root and no building it is not a structure, so a 40
+  // would be lifted to the walker floor (MinUnitSpeed, 150) — a different rule from this one.
+  const u = ancient("Aro1", { abilities: [], baseSpeed: 270 });
   check("a unit with no Root ability cannot toggle", world.toggleRoot(u), false);
   world.recomputeStats(u);
-  check("…and keeps its ordinary movement speed", u.speed, 40);
+  check("…and keeps its ordinary movement speed", u.speed, 270);
 }
 
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);

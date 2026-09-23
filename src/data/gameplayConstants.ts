@@ -392,9 +392,115 @@ export function engineFoodCeiling(): number {
  * agree about it, so the order is a statement of intent rather than a tie-break.
  */
 export function miscGame<K extends keyof typeof MISC_GAME>(key: K): (typeof MISC_GAME)[K] | number | readonly number[] {
+  const own = mapValue(key, MISC_GAME[key]);
+  if (own !== undefined) return own;
   if (mapDataSet() === "custom" && key in MISC_GAME_CUSTOM) return MISC_GAME_CUSTOM[key as keyof typeof MISC_GAME_CUSTOM];
   if (isRoc() && key in MISC_GAME_V0) return MISC_GAME_V0[key as keyof typeof MISC_GAME_V0];
   return MISC_GAME[key];
+}
+
+/** `Units\MiscData.txt`'s row `key` for this match — the MAP's own value when its
+ *  war3mapMisc.txt states one (MiscData has no edition or map-kind copies). */
+export function miscData<K extends keyof typeof MISC_DATA>(key: K): (typeof MISC_DATA)[K] | number | readonly number[] {
+  const own = mapValue(key, MISC_DATA[key]);
+  return own !== undefined ? own : MISC_DATA[key];
+}
+
+// --- A MAP's own constants: war3mapMisc.txt (docs/map-compatibility.md pass 11) -------------
+//
+// The World Editor's Gameplay Constants dialog writes a map's edits out under the SAME key the
+// base file uses (Units\MiscMetaData.slk gives each its `field` name), so a map's `[Misc]` block
+// is simply the top layer of the chain `miscGame` already walks: the map's own statement, then
+// the custom-map copy, then Reign of Chaos's, then the file. MiscData keys ride the same block —
+// DotA's DayLength and every map's BoneDecayTime are MiscData rows — and read through
+// `miscData`.
+//
+// Set at the map door (`setMapMiscOverlay`, before a table is parsed or a unit made) and taken
+// down on the way out, exactly as the data set's map kind is (data/edition.ts). Each value is
+// PARSED ONCE into the shape of the row it replaces — a comma list for a list row, one number
+// otherwise — because some of these are read per unit per tick (the attribute bonuses in
+// recomputeStats), and a value that does not parse is ignored rather than read as 0.
+
+type Shaped = number | readonly number[];
+let mapStated: ReadonlyMap<string, string> | null = null;
+const mapParsed = new Map<string, Shaped | null>();
+/** Bumped every time the overlay changes, so a table DERIVED from these rows (the damage table,
+ *  the XP curves) can tell that its cached copy is stale. */
+let overlayEpoch = 0;
+
+/** Install a map's war3mapMisc.txt `[Misc]` values (data/mapMisc.ts), or take them down with
+ *  null. Keys match case-insensitively, as the game's own INI lookups do. */
+export function setMapMiscOverlay(values: ReadonlyMap<string, string> | null): void {
+  mapStated = values && values.size ? new Map([...values].map(([k, v]) => [k.toLowerCase(), v])) : null;
+  mapParsed.clear();
+  overlayEpoch++;
+}
+
+/** The overlay's generation — see `overlayEpoch`. */
+export function mapMiscEpoch(): number {
+  return overlayEpoch;
+}
+
+/** The map's statement of `key`, shaped like `base`; undefined when it states none (or states
+ *  something that does not read as the row's shape). */
+function mapValue(key: string, base: unknown): Shaped | undefined {
+  if (!mapStated) return undefined;
+  const lower = key.toLowerCase();
+  let v = mapParsed.get(lower);
+  if (v === undefined) {
+    const raw = mapStated.get(lower);
+    v = raw === undefined ? null : parseLike(raw, base);
+    mapParsed.set(lower, v);
+  }
+  return v ?? undefined;
+}
+
+function parseLike(raw: string, base: unknown): Shaped | null {
+  const fields = raw.split(",").map((f) => Number.parseFloat(f.trim()));
+  if (Array.isArray(base)) return fields.length && fields.every(Number.isFinite) ? fields : null;
+  if (typeof base === "number") return Number.isFinite(fields[0]) ? fields[0] : null;
+  return null; // a string row (ItemShadowFile) is not the map's to restate here
+}
+
+/**
+ * Rows this module DECLARES that no code reads yet — each names a system that does not exist
+ * (trading, a miss chance, a building's decay after death, the follow ranges, …) or one that
+ * reads its own number instead. A map restating one changes nothing, and the map door's log
+ * says so rather than reporting it applied. `tools/sim-map-misc-test.cjs` re-derives this list
+ * from the source, so a row that gains a reader must leave it (and one that loses its reader
+ * must join it) or the test fails.
+ */
+export const MISC_UNREAD: ReadonlySet<string> = new Set([
+  "AbilSaleAggroRange", "AgiMoveBonus", "ConstructionLifeDrainRate", "DisplayEnemyInventory",
+  "AttackHalfAngle", "BuildingAngle", "BuildingUnblightRadius", "BulletDeathTime", "CancelTime",
+  "ChanceToMiss", "CloseEnoughRange", "CreepCampPathingCellDistance", "DecayTime", "EffectDeathTime",
+  "FogFlashTime", "FollowItemRange", "FollowRange", "GoldMineMaxGold", "GoldMineOwnDuration",
+  "InvisSpeed", "MaxCollisionRadius", "MissDamageReduction", "RallyZOffset", "ReactionDelay",
+  "RootAngle", "ScaledAnimTime", "SelectionCircleBaseZ", "SpellCastRangeBuffer", "StructureDecayTime",
+  "StructureFollowRange", "TradingIncLarge", "TradingIncSmall",
+]);
+
+/** Does a map stating `key` change anything this engine reads? A row we hold and read. */
+export function miscKeyIsRead(key: string): boolean {
+  const lower = key.toLowerCase();
+  return [MISC_GAME, MISC_DATA, MISC_ENGINE].some((t) =>
+    Object.keys(t).some((k) => k.toLowerCase() === lower && !MISC_UNREAD.has(k)));
+}
+
+type NumKey<T> = { [K in keyof T]: T[K] extends number ? K : never }[keyof T];
+type ListKey<T> = { [K in keyof T]: T[K] extends readonly number[] ? K : never }[keyof T];
+
+/** A number row of MiscGame.txt for this match (the map's, the data set's, or the file's). */
+export function gameNum(key: NumKey<typeof MISC_GAME>): number {
+  return miscGame(key) as number;
+}
+/** A list row of MiscGame.txt for this match. */
+export function gameList(key: ListKey<typeof MISC_GAME>): readonly number[] {
+  return miscGame(key) as readonly number[];
+}
+/** A number row of MiscData.txt for this match. */
+export function dataNum(key: NumKey<typeof MISC_DATA>): number {
+  return miscData(key) as number;
 }
 
 /**
@@ -753,8 +859,23 @@ export const DAMAGE_TABLE_CUSTOM: DamageTable = unpackDamageTable(MISC_GAME_CUST
 /** The damage table of the data set this match is on — edition, then map kind
  *  (data/edition.ts). */
 export function damageTable(): DamageTable {
-  if (isRoc()) return DAMAGE_TABLE_V0; // RoC states the same five rows in both its copies
-  return mapDataSet() === "custom" ? DAMAGE_TABLE_CUSTOM : DAMAGE_TABLE;
+  const base = isRoc() ? DAMAGE_TABLE_V0 : mapDataSet() === "custom" ? DAMAGE_TABLE_CUSTOM : DAMAGE_TABLE; // RoC states the same five rows in both its copies
+  if (!mapStatesAny(DAMAGE_ROWS)) return base;
+  // A MAP that restates a DamageBonus row (war3mapMisc.txt — Balanced Hero Survival rewrites
+  // all five) grades every blow by its own table. Built from the rows `miscGame` answers, so
+  // each row the map left alone still comes from the data set's copy; rebuilt only when the
+  // overlay or the data set changes.
+  const key = `${overlayEpoch}:${isRoc() ? "v0" : "v1"}:${mapDataSet()}`;
+  if (mapTable?.key !== key) {
+    mapTable = { key, table: unpackDamageTable(Object.fromEntries(DAMAGE_ROWS.map((r) => [r, miscGame(r as keyof typeof MISC_GAME)]))) };
+  }
+  return mapTable.table;
+}
+const DAMAGE_ROWS = ["DamageBonusNormal", "DamageBonusPierce", "DamageBonusSiege", "DamageBonusMagic", "DamageBonusChaos", "DamageBonusSpells", "DamageBonusHero"];
+let mapTable: { key: string; table: DamageTable } | null = null;
+/** Does the map's overlay state any of these rows? */
+function mapStatesAny(keys: readonly string[]): boolean {
+  return !!mapStated && keys.some((k) => mapValue(k, MISC_GAME[k as keyof typeof MISC_GAME]) !== undefined);
 }
 
 /** Damage multiplier for `attack` striking `armor`. An unknown pair (a weaponless
@@ -777,31 +898,34 @@ const ETHEREAL_ATTACK_ORDER: readonly AttackType[] = [
   AttackType.Hero,
 ];
 
-const ETHEREAL_DAMAGE_TABLE: Readonly<Record<string, number>> = Object.fromEntries(
-  ETHEREAL_ATTACK_ORDER.map((atk, i) => [atk, MISC_GAME.EtherealDamageBonus[i]]),
-);
+
 
 /** Extra multiplier a BANISHED (ethereal) target takes from `attack`, on top of the
  *  normal damage table: 0 for every physical type (immune to melee/pierce/siege) and
  *  1.66 for Magic & Spells (+66%). An attack type not in the file's list — most
  *  notably `None`, used by untyped ability damage — defaults to 1.0 so the hit is
- *  unchanged (untyped spell damage is boosted explicitly via ETHEREAL_SPELL_BONUS). */
+ *  unchanged (untyped spell damage is boosted explicitly via etherealSpellBonus). */
 export function etherealDamageMultiplier(attack: AttackType): number {
-  return ETHEREAL_DAMAGE_TABLE[attack] ?? 1;
+  const i = ETHEREAL_ATTACK_ORDER.indexOf(attack);
+  return i < 0 ? 1 : gameList("EtherealDamageBonus")[i] ?? 1;
 }
 
 /** The multiplier untyped ability damage (`spellDamage`, dealt as AttackType.None)
  *  applies to an ethereal target — the file's Spells column, ×1.66. */
-export const ETHEREAL_SPELL_BONUS = ETHEREAL_DAMAGE_TABLE[AttackType.Spells];
+export function etherealSpellBonus(): number {
+  return etherealDamageMultiplier(AttackType.Spells);
+}
 
 /** Healing landed on an ethereal target is amplified the same ×1.66 (EtherealHealBonus). */
-export const ETHEREAL_HEAL_BONUS = MISC_GAME.EtherealHealBonus;
+export function etherealHealBonus(): number {
+  return gameNum("EtherealHealBonus");
+}
 
 /** The share of a hit that `armor` points of armour absorb: `n·k / (1 + k·n)`, with
  *  k = DefenseArmor. Diminishing returns, so armour never reaches 100%. Negative
  *  armour (Acid Bomb, Faerie Fire) falls out of the same formula as extra damage. */
 export function armorDamageReduction(armor: number): number {
-  const k = MISC_GAME.DefenseArmor;
+  const k = gameNum("DefenseArmor");
   return (armor * k) / (1 + k * Math.max(0, armor));
 }
 
@@ -859,24 +983,24 @@ export function heroReviveCost(
 ): { gold: number; lumber: number; time: number } {
   const lv = Math.max(1, level) - 1;
   if (mode === "tavern") {
-    const factor = Math.min(MISC_GAME.AwakenBaseFactor + MISC_GAME.AwakenLevelFactor * lv, MISC_GAME.AwakenMaxFactor);
-    const lumberFactor = Math.min(MISC_GAME.AwakenBaseLumberFactor + MISC_GAME.AwakenLumberLevelFactor * lv, MISC_GAME.AwakenMaxFactor);
+    const factor = Math.min(gameNum("AwakenBaseFactor") + gameNum("AwakenLevelFactor") * lv, gameNum("AwakenMaxFactor"));
+    const lumberFactor = Math.min(gameNum("AwakenBaseLumberFactor") + gameNum("AwakenLumberLevelFactor") * lv, gameNum("AwakenMaxFactor"));
     return {
-      gold: Math.min(Math.floor(goldCost * factor), MISC_GAME.HeroMaxAwakenCostGold),
-      lumber: Math.min(Math.floor(lumberCost * lumberFactor), MISC_GAME.HeroMaxAwakenCostLumber),
+      gold: Math.min(Math.floor(goldCost * factor), gameNum("HeroMaxAwakenCostGold")),
+      lumber: Math.min(Math.floor(lumberCost * lumberFactor), gameNum("HeroMaxAwakenCostLumber")),
       time: 0, // "you can also use it to INSTANTLY revive your Heroes"
     };
   }
-  const factor = Math.min(MISC_GAME.ReviveBaseFactor + MISC_GAME.ReviveLevelFactor * lv, MISC_GAME.ReviveMaxFactor);
-  const lumberFactor = Math.min(MISC_GAME.ReviveBaseLumberFactor + MISC_GAME.ReviveLumberLevelFactor * lv, MISC_GAME.ReviveMaxFactor);
+  const factor = Math.min(gameNum("ReviveBaseFactor") + gameNum("ReviveLevelFactor") * lv, gameNum("ReviveMaxFactor"));
+  const lumberFactor = Math.min(gameNum("ReviveBaseLumberFactor") + gameNum("ReviveLumberLevelFactor") * lv, gameNum("ReviveMaxFactor"));
   // The TIME ladder is the one that reads differently from the two cost ones: it is
   // `level * ReviveTimeFactor`, not `base + step*(level-1)`, so it starts at 0.65 of the
   // build time rather than at a base factor and reaches its 2.0 ceiling at level 4.
-  const timeFactor = Math.min(Math.max(1, level) * MISC_GAME.ReviveTimeFactor, MISC_GAME.ReviveMaxTimeFactor);
+  const timeFactor = Math.min(Math.max(1, level) * gameNum("ReviveTimeFactor"), gameNum("ReviveMaxTimeFactor"));
   return {
-    gold: Math.min(Math.floor(goldCost * factor), MISC_GAME.HeroMaxReviveCostGold),
-    lumber: Math.min(Math.floor(lumberCost * lumberFactor), MISC_GAME.HeroMaxReviveCostLumber),
-    time: Math.min(buildTime * timeFactor, MISC_GAME.HeroMaxReviveTime),
+    gold: Math.min(Math.floor(goldCost * factor), gameNum("HeroMaxReviveCostGold")),
+    lumber: Math.min(Math.floor(lumberCost * lumberFactor), gameNum("HeroMaxReviveCostLumber")),
+    time: Math.min(buildTime * timeFactor, gameNum("HeroMaxReviveTime")),
   };
 }
 
@@ -890,9 +1014,9 @@ export function heroReviveVitals(
   manaStart: number,
 ): { hp: number; mana: number } {
   const tavern = mode === "tavern";
-  const life = tavern ? MISC_GAME.HeroAwakenLifeFactor : MISC_GAME.HeroReviveLifeFactor;
-  const start = tavern ? MISC_GAME.HeroAwakenManaStart : MISC_GAME.HeroReviveManaStart;
-  const factor = tavern ? MISC_GAME.HeroAwakenManaFactor : MISC_GAME.HeroReviveManaFactor;
+  const life = tavern ? gameNum("HeroAwakenLifeFactor") : gameNum("HeroReviveLifeFactor");
+  const start = tavern ? gameNum("HeroAwakenManaStart") : gameNum("HeroReviveManaStart");
+  const factor = tavern ? gameNum("HeroAwakenManaFactor") : gameNum("HeroReviveManaFactor");
   return {
     hp: Math.max(1, Math.round(maxHp * life)),
     mana: Math.min(maxMana, Math.round(manaStart * start + maxMana * factor)),
@@ -902,42 +1026,57 @@ export function heroReviveVitals(
 /** XP a kill grants, indexed by the VICTIM's level. Normal units follow GrantNormalXP
  *  (25/40/60/85/115/…); enemy heroes the far richer GrantHeroXP (100/120/160/220/300/
  *  400/…). Buildings grant none at all — BuildingKillsGiveExp = 0. */
-export const GRANT_NORMAL_XP: readonly number[] = expandLevelTable(
-  MISC_GAME.GrantNormalXP,
-  MISC_GAME.GrantNormalXPFormulaA,
-  MISC_GAME.GrantNormalXPFormulaB,
-  MISC_GAME.GrantNormalXPFormulaC,
-  MISC_GAME.MaxUnitLevel,
-);
+const grantNormalXp = perOverlay(() => expandLevelTable(
+  gameList("GrantNormalXP"),
+  gameNum("GrantNormalXPFormulaA"),
+  gameNum("GrantNormalXPFormulaB"),
+  gameNum("GrantNormalXPFormulaC"),
+  gameNum("MaxUnitLevel"),
+));
 
-export const GRANT_HERO_XP: readonly number[] = expandLevelTable(
-  MISC_GAME.GrantHeroXP,
-  MISC_GAME.GrantHeroXPFormulaA,
-  MISC_GAME.GrantHeroXPFormulaB,
-  MISC_GAME.GrantHeroXPFormulaC,
-  MISC_GAME.MaxHeroLevel,
-);
+const grantHeroXp = perOverlay(() => expandLevelTable(
+  gameList("GrantHeroXP"),
+  gameNum("GrantHeroXPFormulaA"),
+  gameNum("GrantHeroXPFormulaB"),
+  gameNum("GrantHeroXPFormulaC"),
+  gameNum("MaxHeroLevel"),
+));
 
 /** Total XP a hero needs to REACH each level. NeedHeroXP's single entry (200) is the
  *  cost of level 2; the formula (A=1, B=100, C=0) carries it from there, giving the
  *  familiar closed form 50·(L² + L − 2) → 200/500/900/1400/2000/… Index by level;
  *  level 1 costs nothing. One entry past MaxHeroLevel, for the HUD's "next level" bar. */
-const NEED_HERO_XP: readonly number[] = expandLevelTable(
-  MISC_GAME.NeedHeroXP,
-  MISC_GAME.NeedHeroXPFormulaA,
-  MISC_GAME.NeedHeroXPFormulaB,
-  MISC_GAME.NeedHeroXPFormulaC,
-  MISC_GAME.MaxHeroLevel + 1,
+const needHeroXp = perOverlay(() => expandLevelTable(
+  gameList("NeedHeroXP"),
+  gameNum("NeedHeroXPFormulaA"),
+  gameNum("NeedHeroXPFormulaB"),
+  gameNum("NeedHeroXPFormulaC"),
+  gameNum("MaxHeroLevel") + 1,
   2, // the table starts at level 2 — there is no XP cost to "reach" level 1
-);
+));
+
+/** A table derived from these rows, rebuilt when a map's overlay moves under it and never
+ *  otherwise — the curves are read on every kill. */
+function perOverlay<T>(build: () => T): () => T {
+  let epoch = -1;
+  let value: T;
+  return () => {
+    if (epoch !== overlayEpoch) {
+      value = build();
+      epoch = overlayEpoch;
+    }
+    return value;
+  };
+}
 
 export function xpToReachLevel(level: number): number {
-  return NEED_HERO_XP[Math.max(0, Math.min(level, NEED_HERO_XP.length - 1))] ?? 0;
+  const table = needHeroXp();
+  return table[Math.max(0, Math.min(level, table.length - 1))] ?? 0;
 }
 
 /** XP a kill of `victimLevel` grants, before the summon/creep factors. */
 export function grantedXp(victimLevel: number, victimIsHero: boolean): number {
-  const table = victimIsHero ? GRANT_HERO_XP : GRANT_NORMAL_XP;
+  const table = victimIsHero ? grantHeroXp() : grantNormalXp();
   return table[Math.max(0, Math.min(victimLevel, table.length - 1))] ?? 0;
 }
 
@@ -946,13 +1085,15 @@ export function grantedXp(victimLevel: number, victimIsHero: boolean): number {
  *  farm camps. Heroes are always level ≥ 1; level 0 is treated as level 1. */
 export function creepXpFactor(heroLevel: number): number {
   // Reign of Chaos's is the one-entry list `100`: a creep pays in full at every level.
-  const table = miscGame("HeroFactorXP") as readonly number[];
+  const table = gameList("HeroFactorXP");
   const i = Math.max(1, Math.min(heroLevel, table.length)) - 1;
   return table[i] / 100;
 }
 
 /** Game hours elapsed per real second — a 24-hour Azeroth day in 480 real seconds. */
-export const GAME_HOURS_PER_SEC = MISC_DATA.DayHours / MISC_DATA.DayLength;
+export function gameHoursPerSec(): number {
+  return dataNum("DayHours") / dataNum("DayLength"); // DotA's own map runs a 450-second day
+}
 
 /** `[a, r, g, b]` → a CSS colour. The alpha in `UI\MiscData.txt` is always 255 for
  *  the entries we use, so it is dropped rather than emitted as `rgba(…)`. */

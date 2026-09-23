@@ -27,7 +27,7 @@ import War3MapW3u from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file";
 import War3MapW3d from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3d/file";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toPrimaryAttribute, toRegenType, toWeaponType } from "./enums";
-import { MISC_GAME } from "./gameplayConstants";
+import { gameNum } from "./gameplayConstants";
 import { syncPrimaryWeapon, type UnitDef, type UnitRegistry, type WeaponSlotDef } from "./units";
 import { emptyAbilityLevel, mdlPath, normalizeTargetFlags, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import type { ItemDef, ItemRegistry } from "./items";
@@ -555,16 +555,16 @@ function applyMods(def: UnitDef, mods: Array<{ id: string; value: Val }>, trigSt
   //    unstated one keeps the clone's already-folded value and moves by the attribute delta.
   //    Non-heroes carry no attributes, so both arms collapse to "use what was stated".
   const hero = def.isHero;
-  if (rawHp !== undefined) def.hitPoints = rawHp + (hero ? def.strength * MISC_GAME.StrHitPointBonus : 0);
-  else if (hero) def.hitPoints += (def.strength - was.str) * MISC_GAME.StrHitPointBonus;
-  if (rawMana !== undefined) def.mana = rawMana + (hero ? def.intelligence * MISC_GAME.IntManaBonus : 0);
-  else if (hero) def.mana += (def.intelligence - was.int) * MISC_GAME.IntManaBonus;
+  if (rawHp !== undefined) def.hitPoints = rawHp + (hero ? def.strength * gameNum("StrHitPointBonus") : 0);
+  else if (hero) def.hitPoints += (def.strength - was.str) * gameNum("StrHitPointBonus");
+  if (rawMana !== undefined) def.mana = rawMana + (hero ? def.intelligence * gameNum("IntManaBonus") : 0);
+  else if (hero) def.mana += (def.intelligence - was.int) * gameNum("IntManaBonus");
   // Unrounded, as the SLK's own `realdef` is (units.ts): the 0.3-per-point fold leaves tenths,
   // and "Damage Reduction" is computed off them. Snapped only to clear the float noise.
   if (rawArmor !== undefined) {
-    def.armor = snapArmor(rawArmor + (hero ? MISC_GAME.AgiDefenseBase + def.agility * MISC_GAME.AgiDefenseBonus : 0));
+    def.armor = snapArmor(rawArmor + (hero ? gameNum("AgiDefenseBase") + def.agility * gameNum("AgiDefenseBonus") : 0));
   } else if (hero) {
-    def.armor = snapArmor(def.armor + (def.agility - was.agi) * MISC_GAME.AgiDefenseBonus);
+    def.armor = snapArmor(def.armor + (def.agility - was.agi) * gameNum("AgiDefenseBonus"));
   }
   const primary = primaryVal(def);
   def.weapons.forEach((w, i) => {
@@ -613,6 +613,60 @@ function makeTrigStr(wtsBytes?: Uint8Array): (v: string) => string {
     const id = parseInt(v.slice("TRIGSTR_".length), 10);
     return Number.isNaN(id) ? v : table.get(id) ?? v;
   };
+}
+
+/** The five `Misc` rows a hero TYPE's stored vitals are folded with (see the attribute fold
+ *  above): hit points per strength, mana per intelligence, armour's agility base and step, and
+ *  damage per point of the primary attribute. */
+export interface HeroFoldConstants {
+  str: number; // StrHitPointBonus
+  int: number; // IntManaBonus
+  agiBase: number; // AgiDefenseBase
+  agi: number; // AgiDefenseBonus
+  primary: number; // StrAttackBonus
+}
+
+/** The fold constants this match reads right now (gameplayConstants.ts — the map's own
+ *  war3mapMisc.txt when it states them). */
+export function heroFoldConstants(): HeroFoldConstants {
+  return {
+    str: gameNum("StrHitPointBonus"),
+    int: gameNum("IntManaBonus"),
+    agiBase: gameNum("AgiDefenseBase"),
+    agi: gameNum("AgiDefenseBonus"),
+    primary: gameNum("StrAttackBonus"),
+  };
+}
+
+/**
+ * Re-fold every HERO type's stored vitals for a map that changes the attribute constants
+ * (war3mapMisc.txt — docs/map-compatibility.md pass 11).
+ *
+ * A hero type carries its vitals ALREADY FOLDED (units.ts reads `realHP`/`realM`/`realdef`,
+ * and the fold above keeps them so), and the sim adds only the attributes gained since spawn on
+ * top (recomputeStats). So a map lowering `StrHitPointBonus` 25 → 15 — Angel Arena, Balanced
+ * Hero Survival and six more do — moved only the strength a hero gains later, while the game's
+ * own formula is base + strength × the bonus for ALL of it. The difference is applied here, per
+ * type, into the registry's per-map overlay, which `clearCustom` already takes down with the map.
+ * Returns how many types moved.
+ */
+export function refoldHeroConstants(registry: UnitRegistry, from: HeroFoldConstants, to: HeroFoldConstants): number {
+  const d = { str: to.str - from.str, int: to.int - from.int, agiBase: to.agiBase - from.agiBase, agi: to.agi - from.agi, primary: to.primary - from.primary };
+  if (!d.str && !d.int && !d.agiBase && !d.agi && !d.primary) return 0;
+  let n = 0;
+  for (const def of registry.all()) {
+    if (!def.isHero) continue;
+    const next = cloneDef(def, def.id);
+    next.hitPoints = def.hitPoints + def.strength * d.str;
+    next.mana = def.mana + def.intelligence * d.int;
+    next.armor = snapArmor(def.armor + d.agiBase + def.agility * d.agi);
+    const primary = primaryVal(def);
+    for (const w of next.weapons) w.damage += primary * d.primary;
+    syncPrimaryWeapon(next);
+    registry.setCustom(def.id, next);
+    n++;
+  }
+  return n;
 }
 
 export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, wtsBytes?: Uint8Array): number {

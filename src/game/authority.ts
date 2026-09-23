@@ -6,7 +6,7 @@ import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
 import type { Command } from "./commands";
-import { engineFoodCeiling, MISC_GAME, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
+import { engineFoodCeiling, gameNum, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
 
 // The authority half of the bridge (docs/multiplayer.md Phase B): the questions whose
 // answers are THE GAME'S, not one machine's view of it — who owns what, what a player can
@@ -995,7 +995,7 @@ export class Authority {
         const def = this.registry.get(b.typeId);
         if (def) {
           const stash = this.sim.stashOf(player);
-          const rate = MISC_GAME.ConstructionRefundRate * (1 - this.sim.constructionDamageFrac(b.id));
+          const rate = gameNum("ConstructionRefundRate") * (1 - this.sim.constructionDamageFrac(b.id));
           stash.gold += Math.round(def.goldCost * rate);
           stash.lumber += Math.round(def.lumberCost * rate);
         }
@@ -1024,10 +1024,10 @@ export class Authority {
         // still there to price. The price is what was CHARGED (`jobCost`) — an upgrade's
         // difference, never the new building's whole cost. Paid to the canceller: the owner
         // check above already made them the building's owner or the job's buyer.
-        const rate = job.kind === "research" ? MISC_GAME.ResearchRefundRate
-          : job.kind === "revive" ? MISC_GAME.ReviveRefundRate
-          : job.kind === "upgrade" ? MISC_GAME.UpgradeRefundRate
-          : MISC_GAME.TrainRefundRate;
+        const rate = job.kind === "research" ? gameNum("ResearchRefundRate")
+          : job.kind === "revive" ? gameNum("ReviveRefundRate")
+          : job.kind === "upgrade" ? gameNum("UpgradeRefundRate")
+          : gameNum("TrainRefundRate");
         this.refundJob(b, job, rate);
         return true;
       }

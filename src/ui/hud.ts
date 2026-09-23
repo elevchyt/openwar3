@@ -6,7 +6,7 @@
 
 import { ArmorType, AttackType, PrimaryAttribute } from "../data/enums";
 import {
-  ALLY_DOT_COLOR, armorDamageReduction, attackSpeedRung, campMarker, ENEMY_DOT_COLOR, INFO_PANEL, MISC_GAME, moveSpeedRung,
+  ALLY_DOT_COLOR, armorDamageReduction, attackSpeedRung, campMarker, ENEMY_DOT_COLOR, gameNum, INFO_PANEL, moveSpeedRung,
   NEUTRAL_DOT_COLOR, SELF_DOT_COLOR,
 } from "../data/gameplayConstants";
 import type { MinimapPing } from "../jass/runtime";
@@ -4046,22 +4046,22 @@ export class GameHud {
     const block = (attr: PrimaryAttribute, label: string, own: string[]): string[] => [
       str(label),
       ...(sel.primaryAttr === attr
-        ? [` - ${str("PRIMARY_ATTRIBUTE")}`, fdfFormat(str("BONUS_DAMAGE"), MISC_GAME.StrAttackBonus)]
+        ? [` - ${str("PRIMARY_ATTRIBUTE")}`, fdfFormat(str("BONUS_DAMAGE"), gameNum("StrAttackBonus"))]
         : []),
       ...own,
     ];
     const lines = [
       ...block(PrimaryAttribute.Strength, "COLON_STRENGTH", [
-        fdfFormat(str("BONUS_HITPOINTS"), MISC_GAME.StrHitPointBonus),
+        fdfFormat(str("BONUS_HITPOINTS"), gameNum("StrHitPointBonus")),
         str("BONUS_HPREGEN"),
       ]),
       ...block(PrimaryAttribute.Agility, "COLON_AGILITY", [
         // "Every 3 points increase armor by 1" — the FIXED form, since 0.3 a point is a third.
-        fdfFormat(str("BONUS_DEFENSE_FIXED"), Math.round(1 / MISC_GAME.AgiDefenseBonus)),
+        fdfFormat(str("BONUS_DEFENSE_FIXED"), Math.round(1 / gameNum("AgiDefenseBonus"))),
         str("BONUS_ATTACK_SPEED"),
       ]),
       ...block(PrimaryAttribute.Intelligence, "COLON_INTELLECT", [
-        fdfFormat(str("BONUS_MANA"), MISC_GAME.IntManaBonus),
+        fdfFormat(str("BONUS_MANA"), gameNum("IntManaBonus")),
         str("BONUS_MANAREGEN"),
       ]),
     ];

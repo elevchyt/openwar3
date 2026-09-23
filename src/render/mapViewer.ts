@@ -36,7 +36,7 @@ import type { MatchLinkSetup } from "../game/matchLink";
 import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
-import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData } from "../data/objectData";
+import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData, heroFoldConstants, refoldHeroConstants } from "../data/objectData";
 import { readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
 import { readW3i } from "../compat/w3i";
 import { preloadLuaHost } from "../compat/lua/index";
@@ -50,7 +50,7 @@ import { isDesktopApp } from "../assets/nativeInstall";
 import { loadCommandStrings, disabledIconPath, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
-import { CAMERA, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, type ReviveMode } from "../data/gameplayConstants";
+import { CAMERA, MELEE, MINIMAP, MISC_DATA, TEXT_TAG, heroReviveCost, mapMiscEpoch, miscKeyIsRead, setMapMiscOverlay, type ReviveMode } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
 import { makeMapFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
@@ -3453,8 +3453,12 @@ export class MapViewerScene {
    *  beside the object data because it is the same kind of thing: the map's overlay on the
    *  install's tables, cleared and re-read per map. Applied in `beginMatch`, which is the first
    *  moment there is a match to apply it to. */
+  /** The overlay generation this scene installed (gameplayConstants.ts), or -1. */
+  private miscEpoch = -1;
+
   private loadMapMisc(): void {
     this.mapMisc = NO_MAP_MISC;
+    setMapMiscOverlay(null); // never the last map's, whatever happens below
     const bytes = this.mapArchive?.rawBytes(MAP_MISC_FILE);
     if (!bytes) return;
     try {
@@ -3463,13 +3467,24 @@ export class MapViewerScene {
       console.warn(`[jass] ${MAP_MISC_FILE} failed (non-fatal):`, err);
       return;
     }
-    // Say what was read AND what was not: only FoodCeiling has a use site today, and a map
-    // whose MaxHeroLevel or DayLength we quietly ignored should be visible in the log rather
-    // than a puzzle later. See src/data/mapMisc.ts for the seven keys the stock maps use.
+    // The map's constants become the top layer of every Misc read (docs/map-compatibility.md
+    // pass 11). The hero TYPES were folded with the constants that stood before it — the stored
+    // vitals carry the attribute bonuses — so any fold constant the map moves is re-applied to
+    // them here, AFTER the map's object data (loadMapObjectData runs first) and before a unit
+    // is made.
+    const before = heroFoldConstants();
+    setMapMiscOverlay(this.mapMisc.values);
+    this.miscEpoch = mapMiscEpoch();
+    const refolded = refoldHeroConstants(this.registry, before, heroFoldConstants());
+    // Say what was read AND what nothing reads: a key this engine has no row for (the
+    // Illusions* toggles, UpkeepUsage …) or holds but never reads (MISC_UNREAD — the Trading*
+    // rates, ChanceToMiss …) names a system that does not exist yet, and a map leaning on it
+    // should be visible in the log rather than a puzzle.
     const stated = [...this.mapMisc.values].map(([k, v]) => `${k}=${v}`).join(", ");
-    const ignored = [...this.mapMisc.values.keys()].filter((k) => k !== "FoodCeiling");
+    const unread = [...this.mapMisc.values.keys()].filter((k) => !miscKeyIsRead(k));
     console.info(`[jass] map gameplay constants (${MAP_MISC_FILE}): ${stated}`
-      + (ignored.length ? ` — not applied yet: ${ignored.join(", ")}` : ""));
+      + (refolded ? ` — ${refolded} hero type(s) re-folded` : "")
+      + (unread.length ? ` — no system reads: ${unread.join(", ")}` : ""));
   }
 
   /** Run the map's config() + main() through the JASS interpreter (Phase 7 — issue #33).
@@ -13216,6 +13231,10 @@ export class MapViewerScene {
     this.scriptImages.clear();
     this.waterBase = null; // the next map's tileset has its own water
     this.waterTint = null;
+    // The menus and the next map read the install's constants — but only if the overlay is still
+    // THIS scene's: a ChangeLevel/RestartGame can load the next scene before this one is
+    // disposed, and taking down its constants would be the old map reaching into the new one.
+    if (this.miscEpoch >= 0 && mapMiscEpoch() === this.miscEpoch) setMapMiscOverlay(null);
     for (const inst of this.projectileInsts.values()) inst.detach();
     this.projectileInsts.clear();
     this.projectileLoading.clear();
