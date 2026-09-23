@@ -35,6 +35,7 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 11 | `upgradeBonuses` cached per (owner, type) (`UpgradeBonusCache`) | **exact** | 1.02× the whole headless step (120 units); below the frame's noise floor | landed |
 | 12 | **Fog pass doodad table** (`FogWidgetTable`) — flat arrays, objects opened only on a state change | **exact** | pass 7.1 → 1.2 ms (5.9×); **frame −9%** (69.4 → 63.3 ms) | landed |
 | 13 | Icon warmer: the player's own icons forced, the rest idle-only | scheduling (same pixels; only WHEN an icon is decoded) | ~3.4% of CPU for ~5 min → nothing after the first 30 s | landed |
+| 14 | Unit placement: one `setTransformation`, none when unchanged (`PlaceInstance`) | **exact** (keeps `forced`) | `syncEntries` 3.9 → 3.4 ms (−13%); frame below noise | landed |
 
 **Rows 6, 7, 8 and 12 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
@@ -158,6 +159,28 @@ Roughly in value order, with the kind marked, because that is what decides where
   selecting a worker and the Town Hall then decodes no command-card icon (only three `infocard-*`
   info-panel icons, which the warmer never covered). Unthrottled the rest still drains in idle
   time at ~35–40 icons a second, exactly as before, so a fast machine is unchanged.
+- ~~**`syncEntries` (3.6%)**~~ — **as far as it goes exactly** (row 14). It is the per-frame
+  drawing half of the sim — every model placed, every clip picked — and its cost is spread thin:
+  self 1.3% (the per-unit branching), `recalculateTransformation` 0.8%, health bars 0.5%, terrain
+  sampling 0.35%, then a tail of 0.1% items. The one structural waste was the placement:
+  `setLocation` then `setRotation`, each a whole `recalculateTransformation` (matrix compose,
+  recursion into child instances, scene-grid re-file), so every unit paid it twice a frame and a
+  building or idle unit paid it for nothing. Now one `setTransformation`, and none when the local
+  location and rotation already hold those Float32 values — verified by forcing a recalculation
+  after the fact on every drawn unit (25 checks × 116 units, zero changes to world matrix or grid
+  cell). **The trap, and a latent bug it exposed:** the viewer's `recalculateTransformation`
+  override also raises `forced`, so the old placement re-sampled every animation channel of every
+  unit every frame, and a first version that dropped that flag for still units was measurably NOT
+  the same picture. At the end of one of the patch's CROSS-FADES a channel the new clip holds
+  constant keeps the last BLENDED value, because an unforced update only re-samples channels the
+  clip animates — 1.2 units off on a Priest's root, 8 in world space, caught by comparing an
+  unforced unit against a forced `updateAnimations(0)` at the same frame (Normal mode: 14–17
+  mismatches in 15 checks with the flag dropped, 0 with it kept; Low Performance Mode's shared
+  poses make that comparison noisy in both arms, so there the proof is by construction). So the
+  flag is kept and the saving is the transform work alone. **For a later pass:** a cross-fade
+  that forced one full sample on its LAST step would make "unforced when still" exact, and would
+  let a still unit skip re-sampling the channels its clip never animates — but row 5 says that
+  kind of skipping was worth nothing at full quality, so measure before building it.
 - **BLP decode off the main thread** (`decodeScan` ~1%, plus the hitch it causes). *Exact.*
 - **The fog overlay and baked shadow layer taking terrain-cull's runs** — named in
   `docs/terrain-culling.md` and still not done. *Exact.*
