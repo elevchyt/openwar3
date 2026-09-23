@@ -580,6 +580,45 @@ export class VisionMap {
     return this.cellState(cx, cy);
   }
 
+  /**
+   * `stateAt` for every point of a lattice — `out[j * xs.length + i]` is the state at
+   * (`xs[i]`, `ys[j]`) — in one call rather than one per point. The minimap asks this for every
+   * one of its pixels ten times a second, and asked point by point that was a closure, a
+   * `getVision()`, `stateAt`, `cellState` and `inBounds` per pixel. A column's cell and a row's
+   * cell are each worked out once here, with `stateAt`'s own expression, and the rest is
+   * `cellState`'s body inline — the same answer for every point, by the same arithmetic.
+   */
+  statesAtGrid(xs: Float64Array, ys: Float64Array, out: Uint8Array): void {
+    const nx = xs.length;
+    if (this.revealAll) {
+      out.fill(FogState.Visible, 0, nx * ys.length);
+      return;
+    }
+    const cols = (this.gridCols && this.gridCols.length === nx) ? this.gridCols : (this.gridCols = new Int32Array(nx));
+    for (let i = 0; i < nx; i++) cols[i] = Math.floor((xs[i] - this.originX) / VISION_CELL);
+    const off = this.maskEnabled ? FogState.Unexplored : FogState.Explored;
+    const { width, height, visible, explored } = this;
+    for (let j = 0; j < ys.length; j++) {
+      const cy = Math.floor((ys[j] - this.originY) / VISION_CELL);
+      const row = j * nx;
+      if (cy < 0 || cy >= height) {
+        out.fill(off, row, row + nx);
+        continue;
+      }
+      const base = cy * width;
+      for (let i = 0; i < nx; i++) {
+        const cx = cols[i];
+        if (cx < 0 || cx >= width) {
+          out[row + i] = off;
+          continue;
+        }
+        const k = base + cx;
+        out[row + i] = this.promote(visible[k] ? FogState.Visible : explored[k] ? FogState.Explored : FogState.Unexplored);
+      }
+    }
+  }
+  private gridCols: Int32Array | null = null;
+
   /** Fog state at a grid cell — used per-vertex by the 3D overlay mesh. Cells off
    *  the map read Unexplored (black), matching the border fog. `FogEnable(false)` /
    *  `FogMaskEnable(false)` lift the grey / black layers on the way out. */

@@ -36,6 +36,7 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 12 | **Fog pass doodad table** (`FogWidgetTable`) — flat arrays, objects opened only on a state change | **exact** | pass 7.1 → 1.2 ms (5.9×); **frame −9%** (69.4 → 63.3 ms) | landed |
 | 13 | Icon warmer: the player's own icons forced, the rest idle-only | scheduling (same pixels; only WHEN an icon is decoded) | ~3.4% of CPU for ~5 min → nothing after the first 30 s | landed |
 | 14 | Unit placement: one `setTransformation`, none when unchanged (`PlaceInstance`) | **exact** (keeps `forced`) | `syncEntries` 3.9 → 3.4 ms (−13%); frame below noise | landed |
+| 15 | Minimap fog read as one lattice (`MinimapFogGrid`, `VisionMap.statesAtGrid`) | **exact** (pixel-identical) | `drawDots` 2.6 → 2.2 ms (−15%) | landed |
 
 **Rows 6, 7, 8 and 12 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
@@ -181,6 +182,20 @@ Roughly in value order, with the kind marked, because that is what decides where
   that forced one full sample on its LAST step would make "unforced when still" exact, and would
   let a still unit skip re-sampling the channels its clip never animates — but row 5 says that
   kind of skipping was worth nothing at full quality, so measure before building it.
+- ~~**The minimap dots (2.3%)**~~ — **done as far as it pays** (row 15). Two thirds of it was
+  `paintFog`, the fog mask the minimap rebuilds ten times a second: every pixel asked
+  `fogAt` → `getVision()` → `stateAt` → `cellState` → `inBounds`, with a division to find its
+  cell. It is now one `statesAtGrid` call over a lattice cached per map/minimap shape, each
+  column's and row's cell found once with `stateAt`'s own expression. `tools/sim-vision-grid-test.cjs`
+  compares it with `stateAt` at every point of three lattices (the minimap's, one past every edge,
+  one on cell boundaries) under all eight combinations of reveal-all/FogEnable/FogMaskEnable, and
+  live the two paths wrote the identical 84,672-byte mask. The minimap is only 168×126 on Echo
+  Isles, so the sampling was never most of it: `drawDots` 2.6 → 2.2 ms at 6×. **Measured and
+  declined:** the rest is mostly the `putImageData` upload (0.7%), which could be skipped when
+  the mask is unchanged by keeping it on an offscreen canvas and `drawImage`-ing it (the same
+  pixels onto a cleared canvas). The mask was unchanged on 97 of 98 redraws with the armies
+  standing — and changed on 86 of 96 with one army marching. It would pay when nothing is
+  happening and not in the fights a weak machine is struggling with, so it was not built.
 - **BLP decode off the main thread** (`decodeScan` ~1%, plus the hitch it causes). *Exact.*
 - **The fog overlay and baked shadow layer taking terrain-cull's runs** — named in
   `docs/terrain-culling.md` and still not done. *Exact.*

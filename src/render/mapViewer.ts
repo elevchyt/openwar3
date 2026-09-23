@@ -7714,6 +7714,11 @@ export class MapViewerScene {
         return [ox, oy, (cols - 1) * 128, (rows - 1) * 128];
       },
       fogAt: (wx, wy) => this.rts?.getVision().stateAt(wx, wy) ?? 2, // 2 = visible (no fog before a match)
+      fogStates: (xs, ys, out) => {
+        const vision = this.rts?.getVision();
+        if (vision) vision.statesAtGrid(xs, ys, out);
+        else out.fill(2); // as fogAt: no fog before a match
+      },
       cameraRect: () => this.viewRect(),
       panTo: (wx, wy) => {
         this.releaseCameraRide(); // a minimap click/drag is the player taking the camera back
