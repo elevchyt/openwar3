@@ -92,16 +92,41 @@ export function fogStateOf(jassState: number): FogState {
  * another vision cell — which still hits, because viewpoints rebuild 8 ms apart while a running
  * unit takes ~240 ms to cross a cell.
  *
+ * …AND, BEHIND THAT, ON THE POSITION TOO — BOUNDED. The per-unit entry misses every time a unit
+ * crosses into a new cell, and in a FIGHT that is nearly every unit, all the time: counted over
+ * 20 s of a 287-unit fight at 6x throttle, 6,460 casts, of which 4,316 (67%) cast a (cell,
+ * sight) footprint that some unit had already cast within the previous ten seconds — an army
+ * mills about on a few dozen cells. So a miss on the unit asks a second layer keyed on
+ * (cell, sight) before it casts. The "no bound" objection above is answered by bounding it: the
+ * layer is least-recently-used and capped by the CELLS it holds (`SHARED_CELL_CAP`), and an
+ * entry's array is the same one the unit's entry holds, so it costs no second copy. The key is
+ * complete for the same reason the per-unit one is: the eye is the cell's own ground plus
+ * `EYE_BONUS`, and the rays read only the terrain and the tree stamps, which `invalidateAround`
+ * and `clear` already account for.
+ *
  * DETERMINISM. A replay writes exactly the cell list the cast produced, so a cached rebuild and
  * an uncast one are the same grid to the byte. `tools/sim-vision-cache-test.cjs` asserts that
  * against the real map rather than trusting it.
  */
+/** Cells the position-keyed layer may hold before it drops its least recently used footprint —
+ *  about 8 MB of Uint32. Ours: a footprint is ~1,000 cells, so this is ~2,000 of them, the
+ *  number of distinct footprints a 287-unit fight touched in 20 s. */
+const SHARED_CELL_CAP = 2_000_000;
+
 export class SightStamps {
   private readonly byUnit = new Map<number, { cx: number; cy: number; r: number; cells: Uint32Array; used: number }>();
+  /** The position-keyed layer, in least-recently-used order (a Map keeps insertion order, and a
+   *  hit is moved to the back). See the note above. */
+  private readonly byCell = new Map<number, { cx: number; cy: number; r: number; cells: Uint32Array }>();
+  private byCellCells = 0;
   private clock = 0;
-  /** Cast/replay counts, for the test and for anyone wondering whether it is working. */
+  /** Cast/replay counts, for the test and for anyone wondering whether it is working.
+   *  `sharedHits` is the part of `hits` the position layer answered. */
   hits = 0;
   misses = 0;
+  sharedHits = 0;
+  /** The position layer on its own, for a live A/B — off, a unit's miss is a cast, as it was. */
+  shareCells = true;
   /**
    * Turn the sharing off — every sight is cast from scratch, which is what this replaced.
    *
@@ -116,6 +141,16 @@ export class SightStamps {
   get(unit: number, cx: number, cy: number, r: number): Uint32Array | null {
     const e = this.byUnit.get(unit);
     if (!e || e.cx !== cx || e.cy !== cy || e.r !== r) {
+      const shared = this.shareCells ? this.byCell.get(cellKey(cx, cy, r)) : undefined;
+      if (shared) {
+        // Somebody cast this footprint already: it is this unit's now too.
+        this.byCell.delete(cellKey(cx, cy, r));
+        this.byCell.set(cellKey(cx, cy, r), shared);
+        this.byUnit.set(unit, { cx, cy, r, cells: shared.cells, used: ++this.clock });
+        this.hits++;
+        this.sharedHits++;
+        return shared.cells;
+      }
       this.misses++;
       return null;
     }
@@ -128,6 +163,21 @@ export class SightStamps {
 
   put(unit: number, cx: number, cy: number, r: number, cells: Uint32Array): void {
     this.byUnit.set(unit, { cx, cy, r, cells, used: ++this.clock });
+    if (this.shareCells) {
+      const key = cellKey(cx, cy, r);
+      const old = this.byCell.get(key);
+      if (old) {
+        this.byCell.delete(key);
+        this.byCellCells -= old.cells.length;
+      }
+      this.byCell.set(key, { cx, cy, r, cells });
+      this.byCellCells += cells.length;
+      for (const [k, e] of this.byCell) {
+        if (this.byCellCells <= SHARED_CELL_CAP) break;
+        this.byCell.delete(k);
+        this.byCellCells -= e.cells.length;
+      }
+    }
     // A dead unit's entry is never asked for again, and nothing tells us it died. Sweep the
     // ones nothing has touched in a long while, but only once the map is big enough to be
     // worth walking — the live set is one entry per unit on the field.
@@ -144,11 +194,20 @@ export class SightStamps {
       const reach = e.r + radius;
       if (Math.abs(e.cx - cx) <= reach && Math.abs(e.cy - cy) <= reach) this.byUnit.delete(unit);
     }
+    for (const [key, e] of this.byCell) {
+      const reach = e.r + radius;
+      if (Math.abs(e.cx - cx) <= reach && Math.abs(e.cy - cy) <= reach) {
+        this.byCell.delete(key);
+        this.byCellCells -= e.cells.length;
+      }
+    }
   }
 
   /** The ground itself moved under everything — forget the lot. */
   clear(): void {
     this.byUnit.clear();
+    this.byCell.clear();
+    this.byCellCells = 0;
   }
 
   // ---- the recorder's scratch ----------------------------------------------------------
@@ -182,6 +241,12 @@ export class SightStamps {
     const stale = this.clock - 2048;
     for (const [unit, e] of this.byUnit) if (e.used < stale) this.byUnit.delete(unit);
   }
+}
+
+/** The position layer's key: a vision cell and a sight radius in cells. Maps are at most a few
+ *  hundred vision cells a side and a sight a few dozen cells, so this is exact well inside 2^53. */
+function cellKey(cx: number, cy: number, r: number): number {
+  return (cy * 8192 + cx) * 1024 + r;
 }
 
 export class VisionMap {

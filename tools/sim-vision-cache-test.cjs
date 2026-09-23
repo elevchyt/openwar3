@@ -156,6 +156,51 @@ console.log("\na felled tree is cast again rather than replayed stale");
   check("the grid after the felling matches", same(grid(cached), grid(plain)), -1);
 }
 
+console.log("\na footprint ANOTHER unit cast is replayed — and a felling between is honoured");
+{
+  // An army milling about a few dozen cells, which is the fight shape the position layer is for:
+  // units wander onto cells some other unit stood on a moment ago, so the per-unit entry misses
+  // and the (cell, sight) layer answers. Trees come down in the middle of it every few rounds.
+  const stamps = new SightStamps();
+  const cached = [newMap(stamps), newMap(stamps)];
+  const plain = [newMap(null), newMap(null)];
+  const r = rng(31);
+  const cx0 = ORIGIN + SPAN * 0.45, cy0 = ORIGIN + SPAN * 0.45;
+  const army = Array.from({ length: 80 }, (_, id) => ({ id: 1000 + id, x: cx0 + r() * 640, y: cy0 + r() * 640, sight: [1400, 1800][id % 2] }));
+  let bad = -1;
+  for (let i = 0; i < 30 && bad < 0; i++) {
+    for (const u of army) { u.x = cx0 + Math.floor(r() * 10) * VISION_CELL + 20; u.y = cy0 + Math.floor(r() * 10) * VISION_CELL + 20; }
+    if (i % 4 === 3) {
+      for (let k = 0; k < 6; k++) {
+        const x = cx0 + r() * 900 - 130, y = cy0 + r() * 900 - 130;
+        for (const m of [...cached, ...plain]) m.removeTreeBlocker(x, y, VISION_CELL / 2);
+      }
+    }
+    for (const m of cached) { m.beginFrame(); for (const u of army) m.reveal(u.x, u.y, u.sight, false, u.id); }
+    for (const m of plain) { m.beginFrame(); for (const u of army) m.reveal(u.x, u.y, u.sight, false); }
+    for (let v = 0; v < cached.length && bad < 0; v++) { bad = same(grid(cached[v]), grid(plain[v])); }
+  }
+  check("thirty rounds of a milling army with fellings, no cell differs", bad, -1);
+  check("…and the position layer answered some of it", stamps.sharedHits > 0, true);
+
+  // The case the invalidation has to get right, pinned: unit A casts at a cell, a tree in A's reach
+  // comes down, and unit B then steps onto A's cell. B's own entry is empty, so the only thing that
+  // could hand B a stale footprint is the position layer — it must cast again instead.
+  const s2 = new SightStamps();
+  const c2 = newMap(s2), p2 = newMap(null);
+  const x = ORIGIN + SPAN * 0.3 + 20, y = ORIGIN + SPAN * 0.3 + 20;
+  c2.beginFrame(); c2.reveal(x, y, 1400, false, 1);
+  for (let k = 0; k < 40; k++) {
+    const tx = x + (k % 8 - 4) * 150, ty = y + (Math.floor(k / 8) - 2) * 150;
+    c2.removeTreeBlocker(tx, ty, VISION_CELL / 2); p2.removeTreeBlocker(tx, ty, VISION_CELL / 2);
+  }
+  const missesBefore = s2.misses;
+  c2.beginFrame(); c2.reveal(x, y, 1400, false, 2);
+  p2.beginFrame(); p2.reveal(x, y, 1400, false);
+  check("a unit stepping onto a cell whose footprint a felling spoiled casts it afresh", s2.misses > missesBefore, true);
+  check("…and sees what an uncast sight sees", same(grid(c2), grid(p2)), -1);
+}
+
 console.log("\nwhat it is worth");
 {
   const bench = (withIds) => {

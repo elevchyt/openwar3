@@ -38,6 +38,8 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 14 | Unit placement: one `setTransformation`, none when unchanged (`PlaceInstance`) | **exact** (keeps `forced`) | `syncEntries` 3.9 → 3.4 ms (−13%); frame below noise | landed |
 | 15 | Minimap fog read as one lattice (`MinimapFogGrid`, `VisionMap.statesAtGrid`) | **exact** (pixel-identical) | `drawDots` 2.6 → 2.2 ms (−15%) | landed |
 | 16 | **Own-clock (global-sequence) nodes redone per instance** — the Knight and the Town Hall share their skeletons (`noOwnClockShare`) | **trade** (rides on 2–3; per-instance path matched to ≤0.001) | **standing army 61.5 → 43–44 ms (−29%)**; fight neutral | landed |
+| 17 | Sight footprints also shared by POSITION, LRU-capped (`SightStamps.shareCells`) | **exact** | fight: casts 3–5× fewer, fog rebuild −47% (~3% of CPU) | landed |
+| 18 | A* heap: typed arrays + hole sifts (same pop order) | exact | nothing — 1174 vs 1179 ms, identical paths | **not taken** |
 
 **Rows 6, 7, 8 and 12 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
@@ -218,6 +220,33 @@ Roughly in value order, with the kind marked, because that is what decides where
   bucket in three. Interleaved at 6×, Low Performance Mode: a standing mixed army 61.5 → 43–44 ms
   in all three warmed pairs; a heavy fight ~140 ms either way, because a clip change per swing
   starts a per-instance cross-fade and the frame there is the simulation's.
+- **THE FIGHT IS NOW THE PATHFINDER'S (29% of all CPU), and it is at its exact limit.** A
+  fresh profile of a 180-unit fight at 6× put `pathfind.ts` at 29% inclusive (`run` 17%, `open`
+  6.8% self), against a standing scene where it barely registers. Two things were tried:
+  - *Make each expansion cheaper* (row 18). Profiled headless on the real sim build (a 384² grid,
+    700 searches, the sim's own clearance predicate), `hpop` is 42% of a search and `run` 45%.
+    Rewritten as a typed-array heap moving a HOLE — the same comparisons in the same order, so
+    the same pop order; the digest of all 700 paths was identical — it measured 1,179 ms against
+    1,174. The cost is the comparisons (data-dependent branches over a big heap), not the swaps,
+    and any other queue breaks (f, h) ties differently and so changes paths. Reverted.
+  - *Ask for fewer searches* — the real lever, and a GAMEPLAY decision rather than an exact one,
+    so it is written down here rather than made. Counted over 20 s of the fight (1,217 searches,
+    1.79M expansions): `checkStuck` re-planning a unit jostled in the crowd, 126 searches that
+    ARRIVE at ~3,300 expansions each (412k — the single largest line: a route that still exists,
+    rebuilt because the unit was shoved); escalated jobs that exhaust a whole region without
+    arriving, 20 at ~15k each (308k); `repairPath` searches that run out of budget, 183 (375k).
+    Arrived 754 (725k), out of budget 288 (756k), frontier exhausted 175 (314k). Anything that
+    cuts these changes where units walk, and wants the developer's call first.
+- ~~**Sight casts in a fight**~~ — **done** (row 17). `castRay` + `revealLineOfSight` were ~7% of
+  the fight. `SightStamps` keyed its cache on the UNIT, so a unit crossing into a new vision cell
+  cast again — nearly every unit, all the time, in a fight. Counted over 20 s: 6,460 casts, 4,316
+  (67%) of them a (cell, sight) footprint some unit had cast in the previous 10 s. A second layer
+  keyed on (cell, sight), least-recently-used and capped at 2M cells (~8 MB, sharing the unit
+  entries' arrays), answers those; `invalidateAround` and `clear` cover it by the same rule.
+  `tools/sim-vision-cache-test.cjs` gained a milling army with fellings (30 rounds, cell for cell
+  against uncast grids) and the pinned case — a felling in reach, then a DIFFERENT unit onto the
+  cell — which must cast afresh. Live, interleaved: casts 3–5× fewer in every pair, the fog
+  rebuild's total time −47% (366 → 195 ms per 6 s), about 3% of the frame.
 - **BLP decode off the main thread** (`decodeScan` ~1%, plus the hitch it causes). *Exact.*
 - **The fog overlay and baked shadow layer taking terrain-cull's runs** — named in
   `docs/terrain-culling.md` and still not done. *Exact.*

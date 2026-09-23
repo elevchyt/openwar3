@@ -101,7 +101,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   is why it is no longer. A sight's footprint is a fact about the TERRAIN, not about who is
   looking — every viewpoint gets the same height field and every felled tree — so the ray cast is
   cast ONCE and replayed into each viewpoint's own three layers, keyed on the UNIT (one entry per
-  unit; a position key would mint a new one every 64 world units a unit walks). Invalidated by the
+  unit; a position key would mint a new one every 64 world units a unit walks) — and, behind that,
+  on (cell, sight) in a least-recently-used layer CAPPED by cells held, because in a fight two
+  thirds of all casts repeat a footprint another unit cast moments before. Invalidated by the
   tree that comes down and by the sight radius changing (day/night is a different `R`, so it
   re-keys itself). It must stay EXACT — fog gates what an AI knows and what a client may see, so a
   footprint that is even slightly wrong is a desync and a cheat at once; `tools/sim-vision-cache-test.cjs`
