@@ -830,6 +830,53 @@ class LoaderProgress {
   }
 }
 
+/** The fog pass's doodad table (MapViewerScene.fogWidgets). On, unless a live A/B turns it off to
+ *  walk every doodad OBJECT every pass as it used to — it changes what the pass COSTS and never
+ *  what it draws (docs/perf-research.md). */
+export const FogWidgetTable = { enabled: true };
+
+/**
+ * What the fog pass knows about each of the map's own doodads, in `map.doodads` order, held in
+ * flat typed arrays rather than read back off the widgets.
+ *
+ * That is the whole of the saving, and it is a MEMORY saving: the pass used to open every one of
+ * ~2,500 doodads ten times a second — its widget, its instance, the instance's `localLocation`
+ * and `vertexColor`, a WeakSet, a Set and two Maps per widget — and between two passes all of
+ * that falls out of the CPU cache. Measured live at 6× throttle, a pass cost 7.9 ms, against
+ * ~1.8 ms for the very same work run back to back; the difference is cache misses. Here the
+ * pass reads a few typed arrays and the vision grid, and opens a doodad's OBJECTS only when its
+ * fog state has moved since the tint it last put on.
+ */
+interface FogDoodadTable {
+  /** The `map.doodads` array, and the sizes of everything the rows were read out of — a change
+   *  in any of them rebuilds the table (the array grows as doodads stream in; the radius maps
+   *  are filled during load). */
+  doodads: readonly unknown[];
+  n: number;
+  treeN: number;
+  propN: number;
+  /** removedWidgets.size / doodadActors.size when `retired` was last read. Both only ever GROW
+   *  within a match (clear() comes with a new map), so a size that moved is a membership that
+   *  moved. */
+  removedN: number;
+  actorsN: number;
+  /** The origin a row's fog is sampled at, and the footprint half-extent it is sampled over —
+   *  the tree's blocker radius, else the prop's body, else 0 (fogWidgets). NaN = the instance
+   *  had no location yet when the row was read; it is re-read until it does. A static doodad
+   *  never moves once placed (nothing writes its location), so the row stays good. */
+  x: Float64Array;
+  y: Float64Array;
+  r: Float64Array;
+  /** The FogState the pass last put on this doodad, or -1 = unknown (never tinted, skipped
+   *  while something else owned its colour, or marked by `fogRecheck`): ask the object. */
+  state: Int8Array;
+  /** 1 = a felled tree, an opened gate, a mined-out mine, a hidden destructible, or a doodad
+   *  drawn by its stand-in — the fog pass never shows it again. */
+  retired: Uint8Array;
+  /** instance → row, for `fogRecheck`. */
+  row: Map<object, number>;
+}
+
 export class MapViewerScene {
   // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
   // (7.24).
@@ -1037,6 +1084,13 @@ export class MapViewerScene {
   private entangledMines = new Map<number, { widget: HideableWidget; mineId: number }>();
   private baseColors = new WeakMap<object, Float32Array>(); // each widget's tint before fog dimming
   private tintScratch = new Float32Array(4); // reused fog tint, avoids per-widget allocation
+  /** See FogDoodadTable. Dropped with the fog (disposeFog). */
+  private fogTable: FogDoodadTable | null = null;
+  /** Doodad instances whose COLOUR something other than the fog pass has written since its last
+   *  pass — the harvest blink and the AoE highlight, the only two there are. The pass forgets
+   *  what it last put on each, so it looks at the object again and re-tints it once the effect
+   *  lets go, exactly as it did when it read every doodad's colour back every pass. */
+  private readonly fogRecheck = new Set<object>();
   private cheatBuf = ""; // rolling buffer of typed letters, for WC3 chat cheat codes
   private footprints = new Map<string, Footprint | null>();
   private metrics = new MetricsOverlay();
@@ -6218,6 +6272,7 @@ export class MapViewerScene {
       // OVER-BRIGHT, fully-saturated yellow when on (heavy red so a green canopy
       // reads as yellow; zero blue; RGB >1 glows).
       tp.inst.setVertexColor(on ? [3.2, 1.5, 0, 1] : [1, 1, 1, 1]);
+      this.fogRecheck.add(tp.inst); // the fog pass must look at it again (see fogRecheck)
       if (tp.t <= 0) {
         tp.inst.setVertexColor([1, 1, 1, 1]); // restore
         this.treePulses.splice(i, 1);
@@ -6849,6 +6904,7 @@ export class MapViewerScene {
         if (inst) {
           next.add(inst as object);
           inst.setVertexColor(AOE_TREE_TINT);
+          this.fogRecheck.add(inst as object); // the fog pass must look at it again (see fogRecheck)
         }
       }
     }
@@ -12862,24 +12918,27 @@ export class MapViewerScene {
     const pulsing = this.treePulses.length
       ? new Set(this.treePulses.map((p) => p.inst as unknown as HideableWidget["instance"]))
       : null;
-    const tintInstance = (inst: HideableWidget["instance"]): void => {
-      if (pulsing && pulsing.has(inst)) return;
-      if (this.aoeTreeInsts.has(inst)) return; // green AoE-target tree owns its colour this frame
-      const loc = inst.localLocation;
-      if (!loc) return; // nothing placed yet — the same guard fogSpawnedInstances keeps
-      // Light a prop from the BRIGHTEST cell of its footprint, not the one cell holding
-      // its origin. A tree blocks sight on every cell it covers, so a 4×4 tree shadows
-      // its own back half — and its origin sits exactly where its four cells meet, so
-      // the floor() in worldToCell often landed on a self-shadowed one and drew a
-      // front-line tree as explored-grey (#43). Props with no footprint use their cell.
-      const key = fogKey(loc[0], loc[1]);
-      // A tree's own blocker radius first (it is the number that also shadows the ground
-      // behind it), then the prop's body — see propFogRadius for why a bridge needs one.
-      const state = vision.bestStateAt(loc[0], loc[1], this.treeFogRadius.get(key) ?? this.propFogRadius.get(key) ?? 0);
+    // Light a prop from the BRIGHTEST cell of its footprint, not the one cell holding
+    // its origin. A tree blocks sight on every cell it covers, so a 4×4 tree shadows
+    // its own back half — and its origin sits exactly where its four cells meet, so
+    // the floor() in worldToCell often landed on a self-shadowed one and drew a
+    // front-line tree as explored-grey (#43). Props with no footprint use their cell.
+    // A tree's own blocker radius first (it is the number that also shadows the ground
+    // behind it), then the prop's body — see propFogRadius for why a bridge needs one.
+    const fogRadius = (x: number, y: number): number => {
+      const key = fogKey(x, y);
+      return this.treeFogRadius.get(key) ?? this.propFogRadius.get(key) ?? 0;
+    };
+    /** Put `state`'s tint on `inst`. False = it was not this pass's to tint (something else
+     *  owns its colour this frame, or it has no location yet) — the doodad table then keeps
+     *  asking. */
+    const tintState = (inst: HideableWidget["instance"], state: FogState): boolean => {
+      if (pulsing && pulsing.has(inst)) return false;
+      if (this.aoeTreeInsts.has(inst)) return false; // green AoE-target tree owns its colour this frame
       if (state === FogState.Unexplored) {
-        if (inst.rendered === false) return; // already dark — nothing to do
+        if (inst.rendered === false) return true; // already dark — nothing to do
         inst.hide(); // never seen — don't even hint at what's there
-        return;
+        return true;
       }
       const b = state === FogState.Visible ? 1 : MapViewerScene.FOG_EXPLORED_BRIGHT;
       const base = this.widgetBase(inst);
@@ -12898,14 +12957,48 @@ export class MapViewerScene {
       // above — but only while they are running), and it must be re-tinted when it comes back
       // rather than left wearing the effect's colour forever.
       const cur = inst.vertexColor;
-      if (inst.rendered !== false && cur && cur[0] === r && cur[1] === g && cur[2] === bl && cur[3] === a) return;
+      if (inst.rendered !== false && cur && cur[0] === r && cur[1] === g && cur[2] === bl && cur[3] === a) return true;
       const s = this.tintScratch;
       s[0] = r; s[1] = g; s[2] = bl; s[3] = a;
       inst.setVertexColor?.(s);
       inst.show();
+      return true;
+    };
+    const tintInstance = (inst: HideableWidget["instance"]): void => {
+      const loc = inst.localLocation;
+      if (!loc) return; // nothing placed yet — the same guard fogSpawnedInstances keeps
+      tintState(inst, vision.bestStateAt(loc[0], loc[1], fogRadius(loc[0], loc[1])));
     };
     const tint = (w: HideableWidget): void => tintInstance(w.instance);
-    for (const w of map.doodads) {
+    if (FogWidgetTable.enabled) {
+      // The same walk as the loop below, answered out of the table (FogDoodadTable): a doodad
+      // whose fog state has not moved since the tint the pass last put on it is wearing that
+      // tint still — the only other writers of a doodad's colour mark it in `fogRecheck` —
+      // so there is nothing to open it for.
+      const t = this.fogDoodadTable(map.doodads as unknown as HideableWidget[]);
+      if (this.fogRecheck.size) {
+        for (const inst of this.fogRecheck) {
+          const i = t.row.get(inst);
+          if (i !== undefined) t.state[i] = -1;
+        }
+        this.fogRecheck.clear();
+      }
+      const doodads = map.doodads as unknown as HideableWidget[];
+      const { x, y, r, state, retired } = t;
+      for (let i = 0; i < t.n; i++) {
+        if (retired[i]) continue;
+        if (x[i] !== x[i]) { // NaN: not placed when the row was read — try again
+          const loc = doodads[i].instance.localLocation;
+          if (!loc) continue;
+          x[i] = loc[0];
+          y[i] = loc[1];
+          r[i] = fogRadius(loc[0], loc[1]);
+        }
+        const s = vision.bestStateAt(x[i], y[i], r[i]);
+        if (s === state[i]) continue;
+        state[i] = tintState(doodads[i].instance, s) ? s : -1;
+      }
+    } else for (const w of map.doodads) {
       this.mapProps.add(w.instance); // …and claimed, so the sweep below leaves it to us
       // A doodad that has a STAND-IN is drawn by the stand-in, full stop.
       //
@@ -12941,6 +13034,47 @@ export class MapViewerScene {
       tint(w);
     }
     this.fogSpawnedInstances(vision);
+  }
+
+  /** fogWidgets' doodad table, brought up to date with the map: rebuilt when a doodad streams
+   *  in or a fog radius is filled, and its `retired` column re-read when a doodad is retired.
+   *  Every row's instance is claimed for `mapProps` here, as the plain walk claims it. */
+  private fogDoodadTable(doodads: HideableWidget[]): FogDoodadTable {
+    let t = this.fogTable;
+    if (!t || t.doodads !== doodads || t.n !== doodads.length
+      || t.treeN !== this.treeFogRadius.size || t.propN !== this.propFogRadius.size) {
+      const n = doodads.length;
+      t = {
+        doodads, n, treeN: this.treeFogRadius.size, propN: this.propFogRadius.size, removedN: -1, actorsN: -1,
+        x: new Float64Array(n), y: new Float64Array(n), r: new Float64Array(n),
+        state: new Int8Array(n).fill(-1), retired: new Uint8Array(n), row: new Map(),
+      };
+      for (let i = 0; i < n; i++) {
+        const inst = doodads[i].instance;
+        this.mapProps.add(inst);
+        t.row.set(inst, i);
+        const loc = inst.localLocation;
+        if (loc) {
+          t.x[i] = loc[0];
+          t.y[i] = loc[1];
+          const key = fogKey(loc[0], loc[1]);
+          t.r[i] = this.treeFogRadius.get(key) ?? this.propFogRadius.get(key) ?? 0;
+        } else {
+          t.x[i] = t.y[i] = t.r[i] = NaN;
+        }
+      }
+      this.fogTable = t;
+    }
+    if (t.removedN !== this.removedWidgets.size || t.actorsN !== this.doodadActors.size) {
+      // See the plain walk in fogWidgets for why `doodadActors` is asked as well.
+      for (let i = 0; i < t.n; i++) {
+        const w = doodads[i];
+        t.retired[i] = this.removedWidgets.has(w) || this.doodadActors.has(w) ? 1 : 0;
+      }
+      t.removedN = this.removedWidgets.size;
+      t.actorsN = this.doodadActors.size;
+    }
+    return t;
   }
 
   /** Instances the two loops above have claimed — the map's own props and units. Everything
@@ -13300,6 +13434,8 @@ export class MapViewerScene {
     this.fogTerrain = null;
     this.removedWidgets.clear();
     this.baseColors = new WeakMap();
+    this.fogTable = null;
+    this.fogRecheck.clear();
     this.fogAccum = 0;
     // Everything the fog was holding back goes with it — both queues are answers about a map
     // and a viewpoint that no longer exist (see syncBlight / flushPendingFells).

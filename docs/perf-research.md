@@ -33,8 +33,9 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 9 | A coarser pose bucket (30 → 15 Hz) | trade | nothing — sign flips between pairs | **not taken**, knob kept |
 | 10 | **Autocast search: flat ordered list + axis reject** (`AutocastScan`) | **exact** | search 6.71 → 4.57 µs (1.47×), scan alone 2×; frame ~1–2% (noise floor) | landed |
 | 11 | `upgradeBonuses` cached per (owner, type) (`UpgradeBonusCache`) | **exact** | 1.02× the whole headless step (120 units); below the frame's noise floor | landed |
+| 12 | **Fog pass doodad table** (`FogWidgetTable`) — flat arrays, objects opened only on a state change | **exact** | pass 7.1 → 1.2 ms (5.9×); **frame −9%** (69.4 → 63.3 ms) | landed |
 
-**Rows 6, 7 and 8 are the point of this file.** All three are exact, all three were found while
+**Rows 6, 7, 8 and 12 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
 row 6 is the largest single win of the whole effort and is not a rendering change at all.
 
@@ -95,10 +96,31 @@ Roughly in value order, with the kind marked, because that is what decides where
   is shared too, a bucket is filled by one instance and replayed by every other, so halving the
   buckets halves a small share and changes nothing about what each instance still does for itself.
   `VideoBridge.poseBucket` keeps it a knob so the question can be re-asked cheaply.
-- **`fogWidgets` (4.4%).** *Exact.* A 10 Hz sweep over every doodad the map laid down (4,345 on
-  Extreme Candy War), each one doing two Map lookups and a vision query to learn a state that
-  almost never changes. Candidates: hoist the per-widget constants out of the pass, or key the
-  vision query by CELL so a treeline asks once.
+- ~~**`fogWidgets` (4.4–5.8%)**~~ — **done** (row 12), and the cost was not where it looked. The
+  pass runs at 10 Hz over every doodad (2,548 on Echo Isles). Timed back to back it cost ~0.3 ms
+  (~1.8 ms at 6× throttle); timed IN PLACE during play it cost **7.9 ms** — the same work, four
+  times dearer, because between two passes the ~2,500 widgets, their instances, their
+  `localLocation`/`vertexColor` arrays and the WeakSet/Set/Map entries each one touched had all
+  left the CPU cache. So the fix is a memory layout, not an algorithm: `FogDoodadTable` keeps
+  each doodad's origin, fog radius, retired flag and LAST APPLIED fog state in typed arrays, the
+  pass reads those and the vision grid, and it opens a doodad's objects only when its state has
+  moved. The old pass's self-healing (it read every doodad's colour back, so an effect that took
+  the colour over was undone once it let go) is kept by marking instead of reading: the only two
+  other writers of a live doodad's colour — the harvest blink and the AoE highlight — add the
+  instance to `fogRecheck`, and every hide of a doodad goes with a `removedWidgets.add`, whose
+  size (like `doodadActors`', both only grow within a match) re-reads the retired column.
+  **Verified** by running the old walk straight after each table pass with every doodad
+  `setVertexColor`/`hide`/`show` counted: zero writes across 40 checks in a live fight, 12 across
+  harvest blinks and one across a one-frame AoE highlight (the green trees come back to explored
+  grey on the table's own pass), with a control — a colour written behind the table's back — that
+  the counter does catch. That control is also the invariant's one edge: a NEW writer of a doodad's
+  colour must add to `fogRecheck`, or the tint it leaves behind is not undone. Interleaved at 6×:
+  pass 7.1 → 1.2 ms median, whole frame 69.4 → 63.3 ms in all four pairs.
+  **Harness trap found on the way:** `import("/src/render/mapViewer.ts")` from the page loads a
+  SECOND copy of the module in Vite dev (the app's copy carries a version query), so a switch
+  flipped on it switches nothing — the first A/B read "no difference" for exactly that reason.
+  Import the URL the app actually loaded: `performance.getEntriesByType("resource")`, and prove
+  the switch bites with a control before trusting a null result.
 - ~~`autocastTarget`~~ — **done as far as it safely goes** (row 10). The profile put `tickAutocast`
   at 7.1% of ALL CPU — ~40% of the whole sim step — because every idle caster with autocast on
   rescans every unit on the map every step. The search now walks a flat copy of the unit Map in
