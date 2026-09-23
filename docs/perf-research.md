@@ -36,6 +36,32 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
 row 6 is the largest single win of the whole effort and is not a rendering change at all.
 
+## The final comparison — Normal vs Low Performance Mode
+
+Measured on `f42bf10`, Echo Isles, 287 units, the mode flipped back and forth through the REAL
+F10 → Options → Video panel three times in one match (so each pair is interleaved and machine
+drift cancels). Median frame time, with p90 in brackets:
+
+| Scene | Normal | Low Performance Mode | |
+|---|---|---|---|
+| Armies FIGHTING, 6× CPU throttle (weak machine) | 85.9 ms · 11.6 fps (p90 ~106) | 64.7 ms · 15.5 fps (p90 ~76) | **1.33×** |
+| Army STANDING, 6× throttle (sim frozen — the part the mode touches) | 42.0 ms · 23.8 fps | 26.5 ms · 37.7 fps | **1.58×** |
+| Armies FIGHTING, no throttle (the dev box) | 11.0 ms · 91 fps | 4.8 ms · 208 fps | **2.29×** |
+
+The three numbers disagree for a reason, and the reason is the whole of what to do next: **the
+mode cuts per-FRAME work and leaves per-SIM-STEP work alone.** The sim ticks at a fixed rate, so
+on a fast machine most frames carry no sim step at all and the frame is nearly all animation and
+drawing — which the mode more than halves (2.29×). On a throttled one each long frame carries
+several sim steps, the sim is the biggest share of it, and the mode's ratio shrinks to 1.33× in a
+fight. Freeze the sim and it comes back up to 1.58×. So on the weak machine this is for, **the
+ceiling is now the simulation**, and only EXACT sim work (identical results, less work — the
+sim must stay deterministic) can raise it.
+
+The p90 moved more than the median in every row — frames got more even as well as faster.
+
+These ratios are Low against TODAY's Normal, which is itself faster than it was: rows 6–8 are
+exact and ungated, so Normal got them too (row 6 alone was −26% at full quality).
+
 ## Where the frame goes now
 
 Echo Isles, 287 units with both armies fighting, 6× CPU throttle, Low Performance Mode ON.
