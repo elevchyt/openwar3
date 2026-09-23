@@ -40,6 +40,7 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 16 | **Own-clock (global-sequence) nodes redone per instance** — the Knight and the Town Hall share their skeletons (`noOwnClockShare`) | **trade** (rides on 2–3; per-instance path matched to ≤0.001) | **standing army 61.5 → 43–44 ms (−29%)**; fight neutral | landed |
 | 17 | Sight footprints also shared by POSITION, LRU-capped (`SightStamps.shareCells`) | **exact** | fight: casts 3–5× fewer, fog rebuild −47% (~3% of CPU) | landed |
 | 18 | A* heap: typed arrays + hole sifts (same pop order) | exact | nothing — 1174 vs 1179 ms, identical paths | **not taken** |
+| 19 | Shared poses are opt-in PER VIEWER — only the match world shares | fix (review) | the menu backdrop animates at full rate again | landed |
 
 **Rows 6, 7, 8 and 12 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
@@ -247,6 +248,16 @@ Roughly in value order, with the kind marked, because that is what decides where
   against uncast grids) and the pinned case — a felling in reach, then a DIFFERENT unit onto the
   cell — which must cast afresh. Live, interleaved: casts 3–5× fewer in every pair, the fog
   rebuild's total time −47% (366 → 195 ms per 6 s), about 3% of the frame.
+- ~~**The main menu judders in Low Performance Mode**~~ — **fixed** (row 19), found in review. The
+  pose cache's switch is a GLOBAL (`__OW3_VIDEO__.sharedPoses`), so it reached every MDX viewer on
+  the page, not just the world's, and row 16 made the main menu's backdrop (`MainMenu3D_Exp`,
+  211 nodes, global-sequence nodes of its own) shareable. With nothing to share with, all the
+  menu got was 30 Hz stepping, drawn at the monitor's rate — held poses then a jump, which read
+  exactly like vsync off. Now `ow3SharePoses` also asks the model's VIEWER (`viewer.ow3SharePoses`,
+  set by `MapViewerScene` on its world viewer and by nothing else); the menu, the loading screen,
+  the portraits and the HUD's clock always sample for themselves. Checked: with the flag on, the
+  backdrop moves all 173 of its animated nodes every frame, identically to the flag off, and the
+  world still shares and matches the per-instance path (1,084 instance checks, ≤0.00146).
 - **BLP decode off the main thread** (`decodeScan` ~1%, plus the hitch it causes). *Exact.*
 - **The fog overlay and baked shadow layer taking terrain-cull's runs** — named in
   `docs/terrain-culling.md` and still not done. *Exact.*

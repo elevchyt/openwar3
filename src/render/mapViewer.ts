@@ -1595,6 +1595,12 @@ export class MapViewerScene {
 
     const viewer = new ViewerClass(canvas, solver, false);
     viewer.terrainModelExists = (path) => vfs.exists(path);
+    // Low Performance Mode's shared poses are for THIS viewer — the world, where a crowd of one
+    // model stands at the same point of the same clip. Every other viewer on the page (the menu's
+    // backdrop, the loading screen, the portraits, the HUD's clock) keeps sampling for itself at
+    // full rate: it has nothing to share with, and a 30 Hz pose on the menu read as judder. See
+    // `ow3SharePoses` in the viewer patch.
+    (viewer as unknown as { ow3SharePoses?: boolean }).ow3SharePoses = true;
     viewer.on("error", (e) => console.error("[mapviewer]", e));
 
     // Blob-url lifetime. Every model/texture path resolves to one stable blob URL (the

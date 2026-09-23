@@ -216,6 +216,12 @@ clock before recomposing it. Worth **61.5 → 43–44 ms** (−29%) on a standin
 neutral in a heavy fight, where a clip change per swing starts a per-instance cross-fade anyway.
 `__OW3_VIDEO__.noOwnClockShare` shuts them out again for a re-measurement.
 
+**Only the WORLD shares.** The switch is a global every MDX viewer on the page can read, so
+`ow3SharePoses` also asks the model's viewer (`viewer.ow3SharePoses`, set by `MapViewerScene` on
+its own viewer alone). The menu's backdrop, the loading screen, the portraits and the HUD's clock
+have no crowd to share with and would get nothing but the 30 Hz stepping — which on the main menu
+read as judder, like vsync off.
+
 What is still excluded is `dontInheritTranslation/Rotation/Scaling` — a node that reaches past its
 parent to the INSTANCE's world scale. Those models keep the shared POSE and compose for
 themselves, and an own-clock node in one of them still shuts the pose out too (the pose-only path

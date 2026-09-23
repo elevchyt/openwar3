@@ -1019,10 +1019,10 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
          }
          else {
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..9c06d5cb6fdf8fe545a2112866e7264eeca55180 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..a99d1abc0b3812f6eaadeaae05d57342f9da7ff6 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -21,6 +21,518 @@ const scaleHeap = gl_matrix_1.vec3.create();
+@@ -21,6 +21,524 @@ const scaleHeap = gl_matrix_1.vec3.create();
  const colorHeap = new Float32Array(3);
  const alphaHeap = new Float32Array(1);
  const textureIdHeap = new Uint32Array(1);
@@ -1079,11 +1079,17 @@ index 020a99b949ec1634579d439261027e00b6da23ac..9c06d5cb6fdf8fe545a2112866e7264e
 +let ow3PoseCount = 0;
 +/** Every model holding a pose cache, so the cap can empty all of them. */
 +const ow3PoseModels = new Set();
-+/** Is Low Performance Mode asking for shared poses? Read off the same global the texture and
-+ *  particle settings travel on (src/render/videoQuality.ts `VideoBridge`). */
-+function ow3SharePoses() {
++/** Is Low Performance Mode asking for shared poses — and is this model drawn by a viewer that
++ *  wants them? The first half is read off the same global the texture and particle settings
++ *  travel on (src/render/videoQuality.ts `VideoBridge`). The second is the VIEWER's own opt-in
++ *  (`viewer.ow3SharePoses`, set by the match's world viewer and by nothing else), because the
++ *  global reaches every viewer on the page and only one of them has a crowd to share with. The
++ *  main menu's backdrop, a portrait or the HUD's clock gains nothing from a pose cache and pays
++ *  its whole cost: 30 Hz stepping on a model drawn at the monitor's rate, which on the menu read
++ *  exactly like vsync being off (issue #161 review). */
++function ow3SharePoses(model) {
 +    const v = globalThis.__OW3_VIDEO__;
-+    return v !== undefined && v.sharedPoses === true;
++    return v !== undefined && v.sharedPoses === true && model.viewer !== undefined && model.viewer.ow3SharePoses === true;
 +}
 +/**
 + * Does this node keep its OWN CLOCK — a translation, rotation or scale track driven by a GLOBAL
@@ -1541,7 +1547,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..9c06d5cb6fdf8fe545a2112866e7264e
  /**
   * An MDX model instance.
   */
-@@ -48,12 +560,35 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +566,35 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -1577,7 +1583,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..9c06d5cb6fdf8fe545a2112866e7264e
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +751,193 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +757,193 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -1614,7 +1620,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..9c06d5cb6fdf8fe545a2112866e7264e
 +        // per instance, mixing in a snapshot only it has — and neither does a forced update,
 +        // which is the one pass that must write every node whatever the tracks say.
 +        let pose = null;
-+        if (!this.ow3PoseReset && !blending && sequence !== -1 && ow3SharePoses() && ow3Shareable(model)) {
++        if (!this.ow3PoseReset && !blending && sequence !== -1 && ow3SharePoses(model) && ow3Shareable(model)) {
 +            pose = ow3PoseFor(model, sequence, frame);
 +        }
 +        // OpenWar3 (issue #161): …and whether the COMPOSED skeleton is shared too, which is the
@@ -1784,7 +1790,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..9c06d5cb6fdf8fe545a2112866e7264e
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +945,48 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +951,48 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -1834,7 +1840,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..9c06d5cb6fdf8fe545a2112866e7264e
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,19 +1080,58 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,19 +1086,58 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -1895,7 +1901,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..9c06d5cb6fdf8fe545a2112866e7264e
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -436,6 +1193,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1199,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -1903,7 +1909,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..9c06d5cb6fdf8fe545a2112866e7264e
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1203,65 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1209,65 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
