@@ -154,6 +154,8 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     isUnitPaused: (id) => sim.isUnitPaused(id),
     getUnitFlyHeight: (id) => sim.getUnitFlyHeight(id),
     setUnitMoveSpeed: (id, speed) => sim.setUnitMoveSpeed(id, speed),
+    setUnitAcquireRange: (id, range) => sim.setUnitAcquireRange(id, range),
+    getUnitAcquireRange: (id) => sim.getUnitAcquireRange(id),
     getUnitMoveSpeed: (id) => sim.getUnitMoveSpeed(id),
     setUnitTurnSpeed: (id, turn) => sim.setUnitTurnSpeed(id, turn),
     getUnitFacing: (id) => sim.getUnitFacing(id),
@@ -575,6 +577,19 @@ export function rosterHooks(
     // Here because that is where the registry is: the key is the compatibility layer's own
     // (src/compat/blzFields.ts), and a key with no row here answers undefined, which the
     // native reports as the typed default rather than as a wrong number.
+    // GetUnitDefault… — the TYPE's row, by type id (a dying unit is already out of `sim.units`).
+    // Turn speed is UnitData `turnRate`, the same 0..1 scale SetUnitTurnSpeed writes; fly
+    // height is UnitData `moveHeight`.
+    unitTypeDefault: (typeId, field) => {
+      const def = registry.get(typeId);
+      if (!def) return undefined;
+      switch (field) {
+        case "moveSpeed": return def.speed;
+        case "turnRate": return def.turnRate;
+        case "flyHeight": return def.moveHeight;
+        case "acquireRange": return def.acquireRange;
+      }
+    },
     unitTypeField: (id, field) => {
       const u = sim.units.get(id);
       const def = u ? registry.get(u.typeId) : undefined;

@@ -481,6 +481,9 @@ export interface GameCacheObj {
 /** A unit created by the script (CreateUnit). Kept so main()/CreateAllUnits can be
  *  cross-checked against war3mapUnits.doo (the 7.2 oracle) even with no engine
  *  attached, and so bridge lookups can map a unit handle back to our sim id. */
+/** The columns the GetUnitDefault… natives read (natives/world.ts). */
+export type UnitTypeDefault = "moveSpeed" | "turnRate" | "flyHeight" | "acquireRange";
+
 export interface JassUnit {
   handleId: number;
   player: number;
@@ -600,6 +603,13 @@ export interface EngineHooks {
   restoreUnit?(stored: StoredUnitState, player: number, x: number, y: number, facing: number): number;
   setResourceAmount?(unitId: number, amount: number): void;
   setUnitAcquireRange?(unitId: number, range: number): void;
+  /** GetUnitAcquireRange — the range the unit auto-acquires at: a script's, else its own
+   *  (a creep's placed aggro range, else its weapon's `acquire`). undefined when it is gone. */
+  getUnitAcquireRange?(unitId: number): number | undefined;
+  /** GetUnitDefault… — one column of the unit TYPE's row, the map's object data applied. Asked
+   *  by TYPE, never by unit: Test of Faith asks it of `GetDyingUnit()`, which has already left
+   *  the world. undefined for a type the registry does not have. */
+  unitTypeDefault?(typeId: string, field: UnitTypeDefault): number | undefined;
   setUnitState?(unitId: number, whichState: number, value: number): void;
   getUnitState?(unitId: number, whichState: number): number; // GetUnitState (life/mana/…)
   setUnitColor?(unitId: number, color: number): void; // SetUnitColor — team-colour tint

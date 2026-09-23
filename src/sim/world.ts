@@ -2003,6 +2003,10 @@ export interface SimUnit {
    *  on one. It is what lets the info panel show the clock on a unit that is NOT a summon, and
    *  what the bar is labelled with. */
   timedLifeBuff: string;
+  /** A SCRIPT's acquisition range (`SetUnitAcquireRange`), or -1 for the unit's own. It
+   *  replaces the range, never the gates in `acquireRange` — a worker, a cloaked or a hidden
+   *  unit still picks no fights of its own. */
+  scriptAcquire: number;
   summonMax: number; // the summon's full duration (for the "Summoned Unit" bar fill)
   /** The summoner this summon is BOUND to (0 = none, which is almost everything). A bound
    *  summon leaves the moment its summoner does — "Lasts 50 seconds or until the avatar
@@ -8255,6 +8259,7 @@ export class SimWorld {
       | "spawning"
       | "summonLeft"
       | "timedLifeBuff"
+      | "scriptAcquire"
       | "summonMax"
       | "summonerId"
       | "exhumeLeft"
@@ -8534,6 +8539,7 @@ export class SimWorld {
       spawning: 0,
       summonLeft: 0,
       timedLifeBuff: "", // no script clock
+      scriptAcquire: -1, // its own range
       summonMax: 0,
       summonerId: 0,
       exhumeLeft: 0,
@@ -16766,6 +16772,23 @@ export class SimWorld {
     const u = this.units.get(id);
     if (u) u.speed = u.baseSpeed = speed;
   }
+  /** JASS SetUnitAcquireRange. It used to have no implementation at all — the native was
+   *  registered and the hook was declared, so the coverage report counted it done while every
+   *  call did nothing. A creep's camp logic reads `aggroRange` directly, so it moves too. */
+  setUnitAcquireRange(id: number, range: number): void {
+    const u = this.units.get(id);
+    if (!u) return;
+    u.scriptAcquire = Math.max(0, range);
+    if (u.isCreep) u.aggroRange = u.scriptAcquire;
+  }
+  /** JASS GetUnitAcquireRange — the unit's range as SET, not as gated this instant: a worker's
+   *  is its weapon's even though `acquireRange` answers 0 for it on the way to the mine. */
+  getUnitAcquireRange(id: number): number | undefined {
+    const u = this.units.get(id);
+    if (!u) return undefined;
+    if (u.scriptAcquire >= 0) return u.scriptAcquire;
+    return u.isCreep ? u.aggroRange : u.weapon?.acquire ?? 0;
+  }
   /** JASS SetUnitTurnSpeed — same 0..1 scale as UnitData `turnRate`. */
   setUnitTurnSpeed(id: number, turn: number): void {
     const u = this.units.get(id);
@@ -17358,6 +17381,7 @@ export class SimWorld {
     if (u.hidden) return 0; // a hidden unit picks no fights of its own — see SimUnit.hidden
     if (u.hexed) return 0; // a critter has no attack to pick a fight with (see tickAttack)
     if (u.isPeon || this.harvesting(u)) return 0;
+    if (u.scriptAcquire >= 0) return u.scriptAcquire; // SetUnitAcquireRange
     if (u.isCreep) return u.aggroRange;
     return u.weapon ? u.weapon.acquire : 0;
   }

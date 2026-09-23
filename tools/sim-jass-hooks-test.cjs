@@ -37,7 +37,7 @@ const world = new SimWorld(grid);
 const EXPECTED = [
   "addHeroXp", "addToStock", "createBlightedGoldMine", "createItem", "enumItems",
   "getHeroSkillPoints", "getHeroXp", "getResourceAmount", "killUnit", "removeUnit",
-  "getTimeOfDay", "getUnitAbilityLevel", "getUnitFacing", "getUnitFlyHeight", "getUnitLevel",
+  "getTimeOfDay", "getUnitAbilityLevel", "getUnitAcquireRange", "getUnitFacing", "getUnitFlyHeight", "getUnitLevel",
   "getUnitMoveSpeed", "getUnitState", "getUnitX", "getUnitY",
   "isDawnDuskEnabled", "isPointBlighted", "setBlight", "isUnitPaused", "itemInfo",
   "modifySkillPoints", "pauseUnit", "playerTechCount", "removeFromStock", "removeItem",
@@ -67,7 +67,7 @@ const EXPECTED = [
   // StoreUnit — a chapter writing its hero down for the next one (docs/campaigns.md). Its
   // twin RestoreUnit is the AUTHORITY's, because putting one back means creating it.
   "storeUnit",
-  "setPlayerTechResearched", "setTimeOfDay", "setTypeSlots", "setUnitAbilityLevel",
+  "setPlayerTechResearched", "setTimeOfDay", "setTypeSlots", "setUnitAbilityLevel", "setUnitAcquireRange",
   // The rest of the day/night clock: how fast it runs and whether it runs at all. A campaign
   // sets both (Rise of the Naga: 25% speed, then UseTimeOfDayBJ(false) to hold it at night).
   "getTimeOfDayScale", "setTimeOfDayScale", "suspendTimeOfDay",
@@ -350,10 +350,11 @@ console.log("\nthe roster natives enumerate and classify from the sim alone");
 const roster = rosterHooks(world, { get: (id) => TYPEDEFS[id] }, teamOf);
 // `unitTypeField` joined them when the 1.31 object-FIELD accessors landed (natives/blzFields.ts):
 // it reads one column of a unit's TYPE row, which is the registry and nothing else, so it
-// belongs in exactly this factory and under exactly this rule.
-check("rosterHooks is exactly the nine", Object.keys(roster).sort(), [
+// belongs in exactly this factory and under exactly this rule. `unitTypeDefault` (the
+// GetUnitDefault… natives) is the same read keyed by TYPE id, for a unit already gone.
+check("rosterHooks is exactly the ten", Object.keys(roster).sort(), [
   "enumUnits", "findPlacedUnit", "isUnitAlly", "isUnitIdType", "isUnitType",
-  "playerStructureCount", "playerTypedUnitCount", "playerUnitCount", "unitTypeField",
+  "playerStructureCount", "playerTypedUnitCount", "playerUnitCount", "unitTypeDefault", "unitTypeField",
 ].sort());
 
 // IsUnitIdType is the same reading asked of a TYPE. Extreme Candy War's Hero_Death trigger is

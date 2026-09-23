@@ -9,7 +9,7 @@
 
 import { intToRawcode, rawcodeToInt } from "../lexer";
 import { orderIdToString, orderStringToId } from "../orders";
-import type { EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime } from "../runtime";
+import type { EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime, UnitTypeDefault } from "../runtime";
 import { asInt, asNum, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -288,6 +288,20 @@ export function registerWorldNatives(rt: Runtime): void {
     return fromHandle(u);
   };
   const rad2deg = (r: number | undefined): number | undefined => (r === undefined ? undefined : (r * 180) / Math.PI);
+  def(rt, "GetUnitAcquireRange", (c, a) => jReal(liveNum(c, unit(c, a[0]), (h, id) => h.getUnitAcquireRange?.(id), () => 0)));
+  // GetUnitDefault… — what the unit's TYPE says, whatever a script has since done to the unit
+  // (Test of Faith resets a slowed unit with `SetUnitMoveSpeed(u, GetUnitDefaultMoveSpeed(u))`).
+  // 284 call sites between them, 268 of them Test of Faith's "can this thing move at all" test.
+  // Read off the handle's type, the one GetUnitTypeId answers with, so a unit that has died or
+  // been removed still has a default.
+  const typeDefault = (field: UnitTypeDefault) => (c: NativeCtx, a: JassValue[]): JassValue => {
+    const u = unit(c, a[0]);
+    return jReal(u ? c.rt.hooks?.unitTypeDefault?.(u.typeId, field) ?? 0 : 0);
+  };
+  def(rt, "GetUnitDefaultMoveSpeed", typeDefault("moveSpeed"));
+  def(rt, "GetUnitDefaultTurnSpeed", typeDefault("turnRate"));
+  def(rt, "GetUnitDefaultFlyHeight", typeDefault("flyHeight"));
+  def(rt, "GetUnitDefaultAcquireRange", typeDefault("acquireRange"));
   def(rt, "GetUnitTypeId", (c, a) => jInt(unit(c, a[0]) ? rawcodeToInt(unit(c, a[0])!.typeId) : 0));
   def(rt, "GetOwningPlayer", (c, a) => c.rt.playerHandle(unit(c, a[0])?.player ?? 15));
   // Position/facing prefer the live sim value (a script-created unit's handle keeps its

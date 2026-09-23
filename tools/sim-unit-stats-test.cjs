@@ -149,5 +149,27 @@ function check(what, got, want) {
   check("a non-number is refused", world.setUnitStat(u.id, "maxHp", NaN), false);
 }
 
+// --- 7. the acquisition range: SetUnitAcquireRange used to do NOTHING ------------------------
+// The native was registered and its hook declared, so coverage counted it done — and no engine
+// ever answered it. Test of Faith pairs it with GetUnitDefaultAcquireRange to reset a unit.
+{
+  const u = unit({ weapons: [weapon(0, { acquire: 500 })], scriptAcquire: -1 });
+  check("a unit's own range is its weapon's acquire", world.getUnitAcquireRange(u.id), 500);
+  world.setUnitAcquireRange(u.id, 1200);
+  check("SetUnitAcquireRange is read back", world.getUnitAcquireRange(u.id), 1200);
+  check("…and is the range it auto-acquires at", world.acquireRange(u), 1200);
+  world.setUnitAcquireRange(u.id, -50);
+  check("a negative range is none", world.getUnitAcquireRange(u.id), 0);
+  const worker = unit({ weapons: [weapon(0, { acquire: 500 })], scriptAcquire: -1, isPeon: true });
+  world.setUnitAcquireRange(worker.id, 900);
+  check("a worker still picks no fights of its own — the range replaces the range, not the gates", world.acquireRange(worker), 0);
+  check("…though the range it was SET to reads back", world.getUnitAcquireRange(worker.id), 900);
+  const creep = unit({ isCreep: true, aggroRange: 200, scriptAcquire: -1 });
+  check("a creep's own range is its camp's aggro range", world.getUnitAcquireRange(creep.id), 200);
+  world.setUnitAcquireRange(creep.id, 700);
+  check("…and a script's range moves the camp's aggro range with it", creep.aggroRange, 700);
+  check("a unit that is not there has none", world.getUnitAcquireRange(9999), undefined);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall unit-stat checks passed");
 process.exit(failed ? 1 : 0);
