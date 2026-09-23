@@ -135,9 +135,21 @@ and many 1% items. Going further means STRUCTURAL changes, each exact but each n
 invariant the code does not yet keep:
 
 - **A per-step spatial index for unit searches** (autocast, and the acquisition scans that already
-  use `distSkip`). Needs: every place that writes a unit's position mid-step to mark the index
-  stale — or to route through one `moveUnit`. Payoff: the searches visit ~12 bodies instead of all
-  of them; scales with the SQUARE of the army, so it is the late-game fix.
+  use `distSkip`) — **measured before building, and not worth its invariant on today's scenes.**
+  After row 10 the whole autocast search is 4.4% of CPU inclusive and 2.3% self in the 287-unit
+  scene, and part of the inclusive share is `targetError` on bodies that ARE in reach, which no
+  index removes. Counted live over 25 s: 35 autocasters, each search in reach of **34** of the
+  287 units, and a 128-unit grid would still hand it **56** (the look radius is 600–800, so a
+  query covers a dozen cells a side). So the index cuts each scan about 5×, and the most it could
+  take off is most of the 2.3% self time — ~1.5–2% of CPU. Against that, it needs every mid-step
+  position write to report itself, and there are **67** such writes across eight modules
+  (`sim/world.ts` 35, the JASS natives a trigger can fire in the middle of a step, the snapshot
+  appliers, rts, the AIs); one missed or future site silently hides a body from a search for the
+  rest of that step. That is a deterministic difference, not a desync — every peer runs the same
+  code — but it is a different game from today's, which is the bar every other row here cleared.
+  **When to revisit:** a scene with many more units spread over the map (a late 12-player game),
+  where the in-reach count stays small while the unit count grows. Build the invariant first
+  (one `moveUnit` everything goes through), and prove it with the both-ways test row 10 uses.
 - **Incremental `recomputeStats`** — skip a unit whose inputs did not change. It runs for every
   unit every step and rebuilds armour, speed, damage and regen from buffs, items and upgrades.
   Needs: a change signal from every input — buffs (including the ones that fade by themselves on a
