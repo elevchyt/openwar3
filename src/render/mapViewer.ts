@@ -1263,6 +1263,12 @@ export class MapViewerScene {
   private world3 = new Float32Array(3);
   private minimap: HTMLCanvasElement | null = null;
   private iconCache = new Map<string, string | null>();
+  /** The icon warmer's two queues and its restart hook — see warmIconCache. */
+  private iconWarmFirst: string[] = [];
+  private iconWarmRest: string[] = [];
+  private iconWarmRestAt = 0;
+  private iconWarmIdle = false;
+  private iconWarmKick: (() => void) | null = null;
   /** Every icon URL blpIcon() has handed out, mapped back to the BLP it was decoded from.
    *  A greyed command button needs its icon's DIS* twin, and by the time the card is
    *  assembled the call site has long since thrown the path away — this is how `cmd()`
@@ -2730,6 +2736,10 @@ export class MapViewerScene {
       (p) => onProgress(DRAIN_SHARE * p),
     );
     const roster = this.producibleRoster();
+    // The rest of what this roster can put on a card goes to the FRONT of the icon warmer:
+    // the preload below decodes the units' own icons, and their abilities, their shops'
+    // items and the greyed twins follow in the background (see warmIconCache).
+    this.prioritizeIcons(roster);
     let done = 0;
     await Promise.all(roster.map(async (id) => {
       const def = this.registry.get(id);
@@ -11444,44 +11454,105 @@ export class MapViewerScene {
    *  selection of a unit/building type stalls a frame — the visible "first select"
    *  FPS spike. The unit/ability registries are fixed for the session, so we warm
    *  the cache once during idle time; blpIcon()'s lazy decode stays as the fallback
-   *  for anything selected before warming reaches it. */
+   *  for anything selected before warming reaches it.
+   *
+   *  **Two queues, because not every icon is worth a frame.** That list is every unit,
+   *  ability and item in the game and each one's greyed twin — ~1,750 icons at ~1 ms apiece
+   *  (0.37 decode + 0.62 PNG encode, measured), and on a machine with no idle time at all the
+   *  browser forces the callback in on its timeout, so the warmer took a batch out of a frame
+   *  every second for about five minutes: ~3.4% of all CPU at 6× throttle, and most of it art
+   *  of races nobody in the match is playing (docs/perf-research.md). So:
+   *
+   *   • `iconWarmFirst` — the card's own fixed buttons, and (from `prioritizeIcons`, at match
+   *     start) what the LOCAL player's roster can put on a card: its abilities, the items its
+   *     shops make, and the greyed twins. This is what the first-select stall is about, so it
+   *     keeps making progress whether or not the browser is idle, as the whole list used to.
+   *   • `iconWarmRest` — everything else, decoded ONLY in real idle time. A fast machine still
+   *     warms all of it, as before; a machine without the idle time stops spending frames on it,
+   *     and the lazy decode is what it always was for an icon warming had not reached. */
   private warmIconCache(): void {
-    const paths = new Set<string>();
-    for (const n of FIXED_CARD_ICONS) paths.add(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
+    const first = new Set<string>();
+    for (const n of FIXED_CARD_ICONS) first.add(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
     // The hero "Hero Abilities" learn-skill book uses the Skillz art (see
     // pushAbilityButtons) — not a registry icon, so warm it explicitly.
-    paths.add("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp");
-    for (const d of this.registry.all()) if (d.icon) paths.add(d.icon);
-    for (const a of this.abilities.all()) if (a.icon) paths.add(a.icon);
-    for (const it of this.items.all()) if (it.icon) paths.add(it.icon);
+    first.add("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp");
+    const rest = new Set<string>();
+    for (const d of this.registry.all()) if (d.icon) rest.add(d.icon);
+    for (const a of this.abilities.all()) if (a.icon) rest.add(a.icon);
+    for (const it of this.items.all()) if (it.icon) rest.add(it.icon);
     // …and each icon's greyed twin, which a card reaches for the moment a building's
     // prerequisite is missing — i.e. on the FIRST worker selected, for most of the build
     // card. Queued strictly behind the live art: a twin nobody has greyed yet must never
     // delay the icon that is on screen right now.
-    const queue = [...paths, ...[...paths].map(disabledIconPath).filter((p): p is string => !!p)].filter(
-      (p) => !this.iconCache.has(p),
-    );
+    this.iconWarmFirst.push(...this.withTwins(first));
+    this.iconWarmRest.push(...this.withTwins(rest));
 
-    let i = 0;
     const ric = typeof window.requestIdleCallback === "function" ? window.requestIdleCallback.bind(window) : null;
+    const next = (): string | undefined => {
+      let p: string | undefined;
+      while ((p = this.iconWarmFirst.shift()) !== undefined && this.iconCache.has(p));
+      return p;
+    };
     const step = (deadline?: IdleDeadline) => {
       // The match may have been left while this was still draining. Every icon it decodes
       // mints a blob URL onto `blobUrls`, and dispose() has already revoked that list —
       // anything added after it would never be released.
       if (this.disposed) return;
-      // With real idle time, drain until the budget runs low. When the browser
-      // forced us in on the timeout (or there's no idle API) decode a small fixed
-      // batch instead, so we make steady progress without stealing a whole frame.
+      // With real idle time, drain until the budget runs low — the player's own icons first,
+      // then the rest. When the browser forced us in on the timeout (or there's no idle API)
+      // decode a small fixed batch of the player's own instead, so they make steady progress
+      // without stealing a whole frame, and leave the rest for an idle moment.
       const hasIdle = !!deadline && !deadline.didTimeout;
       let n = 0;
-      while (i < queue.length && (hasIdle ? deadline!.timeRemaining() > 1 : n < 6)) {
-        this.blpIcon(queue[i++]); // decode + cache (a miss caches null, so no retry)
+      while (hasIdle ? deadline!.timeRemaining() > 1 : n < 6) {
+        let p = next();
+        if (p === undefined && hasIdle) {
+          while ((p = this.iconWarmRest[this.iconWarmRestAt++]) !== undefined && this.iconCache.has(p));
+        }
+        if (p === undefined) break;
+        this.blpIcon(p); // decode + cache (a miss caches null, so no retry)
         n++;
       }
-      if (i < queue.length) schedule();
+      if (this.iconWarmFirst.length || this.iconWarmRestAt < this.iconWarmRest.length) schedule();
+      else this.iconWarmIdle = true;
     };
-    const schedule = () => (ric ? ric(step, { timeout: 1000 }) : setTimeout(step, 32));
+    const schedule = () => {
+      this.iconWarmIdle = false;
+      if (ric) ric(step, { timeout: 1000 });
+      else setTimeout(step, 32);
+    };
+    this.iconWarmKick = schedule;
     schedule();
+  }
+
+  /** Paths plus each one's greyed twin, live art first. */
+  private withTwins(paths: Set<string>): string[] {
+    return [...paths, ...[...paths].map(disabledIconPath).filter((p): p is string => !!p)];
+  }
+
+  /** Move what `roster` can put on the LOCAL player's command card to the front of the icon
+   *  warmer (see warmIconCache): each unit's own icon (the start preload has usually decoded
+   *  it already), its abilities and hero abilities, the items its buildings make or sell, and
+   *  every one's greyed twin. */
+  private prioritizeIcons(roster: string[]): void {
+    const paths = new Set<string>();
+    for (const id of roster) {
+      const def = this.registry.get(id);
+      if (def?.icon) paths.add(def.icon);
+      for (const aid of [...(def?.abilities ?? []), ...(def?.heroAbilities ?? [])]) {
+        const icon = this.abilities.get(aid)?.icon;
+        if (icon) paths.add(icon);
+      }
+      const node = this.tech.get(id);
+      for (const iid of [...(node?.makeitems ?? []), ...(node?.sellitems ?? [])]) {
+        const icon = this.items.get(iid)?.icon;
+        if (icon) paths.add(icon);
+      }
+    }
+    const fresh = this.withTwins(paths).filter((p) => !this.iconCache.has(p));
+    if (!fresh.length) return;
+    this.iconWarmFirst.unshift(...fresh);
+    if (this.iconWarmIdle) this.iconWarmKick?.();
   }
 
   /** The decoded pathing footprint for `texPath`, turned to `angle` if one is given (a

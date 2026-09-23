@@ -34,6 +34,7 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 10 | **Autocast search: flat ordered list + axis reject** (`AutocastScan`) | **exact** | search 6.71 → 4.57 µs (1.47×), scan alone 2×; frame ~1–2% (noise floor) | landed |
 | 11 | `upgradeBonuses` cached per (owner, type) (`UpgradeBonusCache`) | **exact** | 1.02× the whole headless step (120 units); below the frame's noise floor | landed |
 | 12 | **Fog pass doodad table** (`FogWidgetTable`) — flat arrays, objects opened only on a state change | **exact** | pass 7.1 → 1.2 ms (5.9×); **frame −9%** (69.4 → 63.3 ms) | landed |
+| 13 | Icon warmer: the player's own icons forced, the rest idle-only | scheduling (same pixels; only WHEN an icon is decoded) | ~3.4% of CPU for ~5 min → nothing after the first 30 s | landed |
 
 **Rows 6, 7, 8 and 12 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
@@ -144,6 +145,19 @@ Roughly in value order, with the kind marked, because that is what decides where
   JavaScript, and the unaccounted part of it is small uninstrumented JS plus the browser's normal
   ~4.5 ms. **Keep optimising the named phases.** (Worth re-running after any change that adds DOM
   per unit — `Performance.getMetrics` is the tool, see the scratch `split` harness.)
+- ~~**The icon warmer (~3.4%)**~~ — **done** (row 13). The profile's `blpIcon < step` was not a
+  per-frame decode but the idle-time warmer (`warmIconCache`), which queued EVERY unit, ability
+  and item icon in the game plus each greyed twin — 876 + twins ≈ **1,750 icons** at ~1 ms each
+  (0.37 ms BLP → canvas, 0.62 ms PNG encode, unthrottled). A machine with no idle time never
+  reaches `requestIdleCallback`'s idle path, so the browser forced it in on the 1 s timeout and it
+  decoded six icons a second — a ~36 ms bite out of one frame a second at 6× throttle, for about
+  five minutes. It is now two queues: the card's fixed buttons plus what the LOCAL roster can put
+  on a card (abilities, shop items, twins — `prioritizeIcons`, called from `preloadForStart`) keep
+  the old forced progress, and everything else waits for REAL idle time. Measured at 6×: the
+  player's set (~200 icons) is done 30 s into the match and the warmer is silent after that, and
+  selecting a worker and the Town Hall then decodes no command-card icon (only three `infocard-*`
+  info-panel icons, which the warmer never covered). Unthrottled the rest still drains in idle
+  time at ~35–40 icons a second, exactly as before, so a fast machine is unchanged.
 - **BLP decode off the main thread** (`decodeScan` ~1%, plus the hitch it causes). *Exact.*
 - **The fog overlay and baked shadow layer taking terrain-cull's runs** — named in
   `docs/terrain-culling.md` and still not done. *Exact.*
