@@ -1,6 +1,7 @@
 import type { AbilityDef, AbilityLevel, BuffFx } from "../data/abilities";
 import { miscGame } from "../data/gameplayConstants";
 import { corpseNeed, corpseReach } from "./corpses";
+import { slowedAttack, slowedMove } from "./orbs";
 import type { SimUnit, BuffKind, ClaimedCorpse, CorpseClaim, EffectAnim } from "./world";
 
 // Spell effect handlers, dispatched on an ability's base `code` (data/abilities).
@@ -1946,8 +1947,15 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     for (const o of enemiesInArea(api, caster, def, t.x, t.y, lvl.area || 200)) {
       api.spellDamage(o, d(lvl, 0, 50), caster.id);
       // …and the frozen unit wears `Bfro`'s own art (FrostDamage.mdl) for as long as it is
-      // slowed — the shared "Frozen" buff Frost Armor and the Frost Attacks also apply.
-      api.applyBuff(o, { kind: "slow", group: "frostnova", timeLeft: dur(lvl, o) || 4, sourceId: caster.id, value: 0.4, value2: 0.4, ...fx(def) });
+      // slowed — the shared "Slowed" buff (CommonAbilityStrings `[Bfro] Bufftip=Slowed`) Frost
+      // Armor and the Frost Attacks also apply. AUfn's `BuffID` is `Bfro` at every rank (ACfn,
+      // the creep's, too) and its Data columns are its two damages and nothing else, so the
+      // magnitude is the buff's, not the spell's: `Units\MiscGame.txt`
+      // `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease` (0.5 / 0.25) — which is exactly
+      // Liquipedia's Frost Nova card ("Debuff: Slowed … Movement Speed -50%, Attack Speed -25%",
+      // Template:SpellCard/AUfn) and its Slowed card, which lists Frost Nova as a source. Read
+      // through orbs.ts so a map's war3mapMisc.txt reaches it like every other frost source.
+      api.applyBuff(o, { kind: "slow", group: "frostnova", timeLeft: dur(lvl, o) || 4, sourceId: caster.id, value: slowedMove(), value2: slowedAttack(), ...fx(def) });
     }
   },
 

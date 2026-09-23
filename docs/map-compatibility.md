@@ -668,8 +668,9 @@ and a type with no speed stay 0, and an uprooted Ancient is a structure, floored
 `MISC_UNREAD` lists the 32 rows this engine declares but no system reads (trading, a miss chance,
 the follow ranges, decay after death …); the map door logs a map's restatement of one as "no
 system reads" rather than applying it, and `tools/sim-map-misc-test.cjs` re-derives the list from
-the source so it cannot drift. Left for its own task: Frost Nova applies the same Slowed buff with
-a hard-coded 0.4/0.4, agreeing with neither the file nor Liquipedia.
+the source so it cannot drift. Frost Nova now reads them too: its `BuffID` is `Bfro` at every rank and its
+Data columns are only its two damages, so its slow is the buff's — 0.5/0.25, which is also what
+Liquipedia's Frost Nova card states. It had been a hand-typed 0.4/0.4.
 
 One thing was deliberately **not** done: `BlzSetEventDamage` (6 sites). `pumpDamageEvents` fires
 after the sim has applied the damage, so there is nothing left to modify, and making it work
