@@ -47,7 +47,7 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "TriggerAddAction", (c, a) => {
     const t = trig(c, a[0]);
     if (!t || a[1].k !== "code") return jHandle(0, "triggeraction");
-    const entry = { id: 0, fn: a[1].fn, owner: t.handleId };
+    const entry = { id: 0, fn: a[1].fn };
     entry.id = c.rt.handles.alloc(entry);
     t.actions.push(entry);
     return jHandle(entry.id, "triggeraction");
@@ -56,27 +56,24 @@ export function registerEventNatives(rt: Runtime): void {
     const t = trig(c, a[0]);
     const be = c.rt.data<BoolExpr>(a[1]);
     if (!t || !be) return jHandle(0, "triggercondition");
-    const entry = { id: 0, fn: be.fn, owner: t.handleId };
+    const entry = { id: 0, fn: be.fn };
     entry.id = c.rt.handles.alloc(entry);
     t.conditions.push(entry);
     return jHandle(entry.id, "triggercondition");
   });
-  // …and the removers they exist for. Removing by HANDLE rather than by function name is the
-  // point: a map that adds the same function twice and removes it once keeps the other copy.
-  // The native is handed only the ACTION's handle, never its trigger, so the entry carries the
-  // trigger it was added to. That back-pointer is why this is a lookup rather than a sweep of
-  // every handle in the match.
-  const removeEntry = (c: NativeCtx, v: JassValue, which: "actions" | "conditions"): void => {
-    const entry = c.rt.data<{ id: number; owner: number }>(v);
-    if (!entry) return;
-    const t = c.rt.handles.get(entry.owner) as TriggerObj | undefined;
-    if (!t) return;
-    const i = t[which].findIndex((e) => e.id === entry.id);
-    if (i >= 0) t[which].splice(i, 1);
-    c.rt.handles.free(entry.id);
+  // …and the removers they exist for. `TriggerRemoveAction(trigger, action)` / `TriggerRemoveCondition(trigger, condition)` —
+  // common.j passes BOTH, the trigger first. Removal is by the entry's HANDLE, so a map that
+  // added the same function twice and removes it once keeps the other copy.
+  const removeEntry = (c: NativeCtx, trigV: JassValue, v: JassValue, which: "actions" | "conditions"): void => {
+    const t = trig(c, trigV);
+    if (!t || v?.k !== "handle") return;
+    const i = t[which].findIndex((e) => e.id === v.h);
+    if (i < 0) return;
+    t[which].splice(i, 1);
+    c.rt.handles.free(v.h);
   };
-  def(rt, "TriggerRemoveAction", (c, a) => (removeEntry(c, a[0], "actions"), JNULL));
-  def(rt, "TriggerRemoveCondition", (c, a) => (removeEntry(c, a[0], "conditions"), JNULL));
+  def(rt, "TriggerRemoveAction", (c, a) => (removeEntry(c, a[0], a[1], "actions"), JNULL));
+  def(rt, "TriggerRemoveCondition", (c, a) => (removeEntry(c, a[0], a[1], "conditions"), JNULL));
   // `ResetTrigger` — zero the two counters. It does NOT clear actions or conditions
   // (`TriggerClearActions` is that), which is why it is here and not an alias of one.
   def(rt, "ResetTrigger", (c, a) => {
@@ -174,6 +171,10 @@ export function registerEventNatives(rt: Runtime): void {
   // --- event responses (read the current event's thread-local values) ---
   const resp = (c: NativeCtx, key: string): JassValue => c.rt.eventResponse(key);
   def(rt, "GetTriggeringTrigger", (c) => resp(c, "TriggeringTrigger"));
+  // `GetTriggerEventId` — the constant of the REGISTRATION that matched (Interpreter.eventIdOf),
+  // so a trigger registered on EVENT_UNIT_DEATH and EVENT_UNIT_DAMAGED can tell which one this
+  // is. Null when nothing fired it (a `TriggerExecute` has no event), as in the game.
+  def(rt, "GetTriggerEventId", (c) => resp(c, "TriggerEventId"));
   def(rt, "GetTriggerUnit", (c) => resp(c, "TriggerUnit"));
   def(rt, "GetEnteringUnit", (c) => resp(c, "EnteringUnit"));
   def(rt, "GetLeavingUnit", (c) => resp(c, "LeavingUnit"));

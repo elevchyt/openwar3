@@ -131,6 +131,21 @@ export const EVENT_PLAYER_END_CINEMATIC = 17;
 export const EVENT_PLAYER_LEAVE = 15;
 
 // common.j event enum indices (ConvertUnitEvent/ConvertPlayerUnitEvent values).
+/** The registration kinds whose registrar IS the event — no constant is passed, so
+ *  `GetTriggerEventId` names it by the `common.j` constant it corresponds to, looked up by NAME
+ *  in the runtime's globals so no index is retyped (see Interpreter.eventIdOf). */
+const IMPLIED_EVENT: Readonly<Record<string, string>> = {
+  timerExpire: "EVENT_GAME_TIMER_EXPIRED",
+  enterRegion: "EVENT_GAME_ENTER_REGION",
+  leaveRegion: "EVENT_GAME_LEAVE_REGION",
+  gameStateEvent: "EVENT_GAME_STATE_LIMIT",
+  unitDeath: "EVENT_WIDGET_DEATH", // TriggerRegisterDeathEvent takes a WIDGET
+  unitState: "EVENT_UNIT_STATE_LIMIT",
+  playerState: "EVENT_PLAYER_STATE_LIMIT",
+  playerChat: "EVENT_PLAYER_CHAT",
+  dialogButton: "EVENT_DIALOG_BUTTON_CLICK",
+  dialogEvent: "EVENT_DIALOG_CLICK",
+};
 const EVENT_UNIT_DEATH = 53;
 const EVENT_PLAYER_UNIT_DEATH = 20;
 const EVENT_UNIT_DAMAGED = 52;
@@ -971,7 +986,7 @@ export class Interpreter {
     const regs = this.rt.triggerRegs.filter((r) => r.kind === kind && (!matches || matches(r.params)));
     for (const reg of regs) {
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
-      if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
+      if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
     }
   }
 
@@ -1027,16 +1042,49 @@ export class Interpreter {
         // response it never turned itself off and re-queued Gerard's quest for ever — every
         // half-second Arthas stood in the rect (and a queued trigger still runs disabled:
         // `TriggerExecuteBJ` gates on TriggerEvaluate, not on the enabled flag).
-        if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
+        if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
       }
     }
   }
 
-  /** Add the standard GetTriggeringTrigger response for the trigger being fired. */
-  private withTrigger(responses: Map<string, JassValue>, trig: TriggerObj): Map<string, JassValue> {
+  /** Add the standard responses for the trigger being fired: `GetTriggeringTrigger`, and —
+   *  when the dispatch knows which REGISTRATION matched — `GetTriggerEventId`. */
+  private withTrigger(responses: Map<string, JassValue>, trig: TriggerObj, reg?: TriggerReg): Map<string, JassValue> {
     const m = new Map(responses);
     m.set("TriggeringTrigger", jHandle(trig.handleId, "trigger"));
+    const id = reg ? this.eventIdOf(reg) : undefined;
+    if (id) m.set("TriggerEventId", id);
     return m;
+  }
+
+  /**
+   * `GetTriggerEventId` — WHICH event fired this trigger, as the very constant the map compares
+   * it against (docs/map-compatibility.md pass 5).
+   *
+   * It is a fact about the REGISTRATION, not the trigger, and the maps that call it are the
+   * proof: they register one trigger on several events and branch on which one arrived. Across
+   * the later-format corpus the commonest comparisons are `EVENT_UNIT_DEATH` (114) and
+   * `EVENT_UNIT_DAMAGED` (72) — typically both registered on the SAME trigger — so an id
+   * stored per trigger would answer the last one registered for every event it received.
+   *
+   * Two ways a registration names its event, and both hand back the handle the map already
+   * holds, so `GetTriggerEventId() == EVENT_UNIT_DEATH` is plain handle identity:
+   *
+   *   * EXPLICITLY — `TriggerRegisterUnitEvent(t, u, EVENT_UNIT_DEATH)` and its player, game and
+   *     player-unit siblings carry the constant in their params. Enum handles are interned by
+   *     `(Convert…, index)`, so the param IS the global. Found by type rather than by position,
+   *     because the position differs between the four registrars.
+   *   * IMPLICITLY — a timer, a region, a death on a widget, a state limit, a chat line, a
+   *     dialog: the registrar's NAME is the event and no constant is passed. Those are resolved
+   *     by NAME against the runtime's own globals, i.e. against `common.j` as the install ships
+   *     it, so no index is retyped here. A kind with no constant in 1.30.4 — the unit-in-range
+   *     circle has none — gets no id, and the native answers null, which is what a map comparing
+   *     against nothing would get anyway.
+   */
+  private eventIdOf(reg: TriggerReg): JassValue | undefined {
+    for (const p of reg.params) if (p?.k === "handle" && p.ty.endsWith("Event")) return p;
+    const name = IMPLIED_EVENT[reg.kind];
+    return name ? this.rt.globals.get(name) : undefined;
   }
 
   // --- live enter/leave-region pump (milestone 7.4b) -------------------------
@@ -1159,7 +1207,7 @@ export class Interpreter {
     const handle = this.rt.unitForSim(u);
     if (!this.eventFilterPasses(reg.params[reg.kind === "unitInRange" ? 2 : 1], handle)) return;
     const responses = new Map<string, JassValue>([["TriggerUnit", handle], [respKey, handle]]);
-    this.fireTrigger(trig, this.withTrigger(responses, trig));
+    this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
   }
 
   /** Evaluate an event registration's boolexpr filter (enter-region's 3rd arg, a
@@ -1226,7 +1274,7 @@ export class Interpreter {
         const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
         if (!trig) continue;
         const responses = new Map<string, JassValue>([["DyingDestructable", subject], ["TriggerWidget", subject]]);
-        this.fireTrigger(trig, this.withTrigger(responses, trig));
+        this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
       }
     }
   }
@@ -1513,7 +1561,7 @@ export class Interpreter {
       const u = this.rt.data<JassUnit>(reg.params[0] ?? JNULL);
       if (!trig || !u) continue;
       const handle = jHandle(u.handleId, "unit");
-      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerUnit", handle]]), trig));
+      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerUnit", handle]]), trig, reg));
     }
   }
 
@@ -1539,7 +1587,7 @@ export class Interpreter {
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
       const p = this.rt.data<JassPlayer>(reg.params[0] ?? JNULL);
       if (!trig || !p) continue;
-      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerPlayer", this.rt.playerHandle(p.index)]]), trig));
+      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerPlayer", this.rt.playerHandle(p.index)]]), trig, reg));
     }
   }
 
@@ -1650,7 +1698,7 @@ export class Interpreter {
       // The MATCHED string is per-registration, so it is added here rather than above.
       const own = new Map(responses);
       own.set("EventPlayerChatStringMatched", { k: "string", s: pattern });
-      this.fireTrigger(trig, this.withTrigger(own, trig));
+      this.fireTrigger(trig, this.withTrigger(own, trig, reg));
     }
   }
 
@@ -1660,7 +1708,7 @@ export class Interpreter {
     for (const reg of [...this.rt.triggerRegs]) {
       if (!pred(reg)) continue;
       const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
-      if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
+      if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
     }
   }
 
