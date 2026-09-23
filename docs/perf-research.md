@@ -32,6 +32,7 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 8 | The game frame's box likewise (`syncFrame`) | **exact** | `getBoundingClientRect` 4.0% → out of the profile | landed |
 | 9 | A coarser pose bucket (30 → 15 Hz) | trade | nothing — sign flips between pairs | **not taken**, knob kept |
 | 10 | **Autocast search: flat ordered list + axis reject** (`AutocastScan`) | **exact** | search 6.71 → 4.57 µs (1.47×), scan alone 2×; frame ~1–2% (noise floor) | landed |
+| 11 | `upgradeBonuses` cached per (owner, type) (`UpgradeBonusCache`) | **exact** | 1.02× the whole headless step (120 units); below the frame's noise floor | landed |
 
 **Rows 6, 7 and 8 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
@@ -142,9 +143,17 @@ invariant the code does not yet keep:
   Needs: a change signal from every input — buffs (including the ones that fade by themselves on a
   timer), auras, items, upgrades, level. One missed input puts a wrong stat on the field silently,
   so it wants the same both-ways step-for-step test as row 10 before it lands.
-- **`upgradeBonuses` cached per (owner, type)** — small (~0.6%) but safe: research levels change
-  only through `TechState.setResearchLevel` (the snapshot applier included), so a version counter
-  there is a complete invalidation.
+- ~~**`upgradeBonuses` cached per (owner, type)**~~ — **done** (row 11). Research levels change
+  only through `TechState.setResearchLevel` (the snapshot applier included) and `reset`, so
+  `TechState.researchVersion`, bumped by both, is a complete invalidation; the unit def is kept
+  beside each entry so a registry that handed back a different row misses instead of serving a
+  stale sum. The result is SHARED, so it is read-only — `recomputeStats`, its one caller, only
+  reads it. `tools/sim-upgrade-cache-test.cjs` runs a 120-unit fight both ways for 600 steps
+  through research on both sides, a level written back DOWN, a unit changing type and a unit
+  changing hands, and demands identical stats every step. Worth ~2% of the headless step, as
+  estimated — it was never going to be more. It was done because it was safe, not because it was
+  big: the real payoff in this area is the incremental `recomputeStats` above, and this cache is a
+  piece of that one's input signal for free.
 
 ## What a later full-quality pass should do with this
 

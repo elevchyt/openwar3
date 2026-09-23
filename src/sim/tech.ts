@@ -22,6 +22,10 @@ const AVAILABLE = -1;
 export class TechState {
   /** player → upgrade id → researched level (absent = 0 = not researched). */
   private research = new Map<number, Map<string, number>>();
+  /** Bumped on EVERY write to a research level — the whole invalidation of anything cached off
+   *  them (SimWorld's upgrade-bonus cache). `setResearchLevel` and `reset` are the only two
+   *  writers, the snapshot applier included, so this counter is complete. */
+  researchVersion = 0;
   /** player → tech id → how many live units satisfy it. Rebuilt lazily; see invalidate(). */
   private counts = new Map<number, Map<string, number>>();
   private dirty = true;
@@ -107,6 +111,7 @@ export class TechState {
     let m = this.research.get(player);
     if (!m) this.research.set(player, (m = new Map()));
     m.set(id, Math.max(0, level));
+    this.researchVersion++;
   }
 
   /** The levels this player has researched — used to apply upgrade effects to their units. */
@@ -190,6 +195,7 @@ export class TechState {
   /** Drop every player's state (new match). */
   reset(): void {
     this.research.clear();
+    this.researchVersion++;
     this.counts.clear();
     this.maxAllowedOverride.clear();
     this.dirty = true;

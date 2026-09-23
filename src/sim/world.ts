@@ -2495,6 +2495,17 @@ export const CollisionGrid = { enabled: true };
  *  test or a live A/B turns it off to run the Map-iterator-and-hypot loop it replaced — it changes
  *  what the search COSTS and never what it FINDS (tools/sim-autocast-scan-test.cjs). */
 export const AutocastScan = { fast: true };
+/** The upgrade-bonus cache (SimWorld.upgradeBonuses). On, unless a test or a live A/B turns it
+ *  off to recompute the sum for every unit every step — it changes what recomputeStats COSTS and
+ *  never what it computes (tools/sim-upgrade-cache-test.cjs). */
+export const UpgradeBonusCache = { enabled: true };
+/** What the owner's researched upgrades add to one unit type (SimWorld.upgradeBonuses). */
+interface UpgradeBonuses {
+  dice: number; armor: number; hp: number; hpPct: number; mana: number; manaRegen: number;
+  range: number; sight: number; speed: number; attackSpeed: number; damage: number;
+  lumber: number; spillDist: number; spillRadius: number; weaponMask: number;
+  attackLevel: number; armorLevel: number;
+}
 /** The grid's cell, in world units. Ours, and free to be anything: the reach a body is offered is
  *  computed from the radii, so the size only decides how many cells a query walks and how many
  *  bodies each one holds — four footman-sized bodies a side at 128. */
@@ -3252,6 +3263,9 @@ export class SimWorld {
   private unitList: SimUnit[] = [];
   private unitListVersion = -1;
   private unitsVersion = 0;
+  /** upgradeBonuses' cache: owner → unit type → the sum, the research version it was taken at
+   *  and the def it was taken from. */
+  private upgradeCache = new Map<number, Map<string, { version: number; def: unknown; bonuses: UpgradeBonuses }>>();
   private unitsInOrder(): readonly SimUnit[] {
     // The size test is a second net under the version: a unit added or taken out by a path that
     // somehow bypassed the four bumped sites still forces a rebuild.
@@ -11368,12 +11382,27 @@ export class SimWorld {
    *  Reinforced Defenses), `ratc` (attack target count — Moon Glaive's bounce), `rrai`,
    *  `rent`, `rspi`, `rlev`, `raud`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
    *  unit's availability and is handled by TechState.maxAllowed. */
-  private upgradeBonuses(u: SimUnit): {
-    dice: number; armor: number; hp: number; hpPct: number; mana: number; manaRegen: number;
-    range: number; sight: number; speed: number; attackSpeed: number; damage: number;
-    lumber: number; spillDist: number; spillRadius: number; weaponMask: number;
-    attackLevel: number; armorLevel: number;
-  } {
+  private upgradeBonuses(u: SimUnit): Readonly<UpgradeBonuses> {
+    // The sum depends on three things only — the owner's research levels, the unit's TYPE (its
+    // `upgradesUsed` list and `defUp`) and the upgrade rows — so every unit of one type under
+    // one owner gets the same answer, and it was being rebuilt for every unit every step
+    // (recomputeStats). Cached per (owner, type) and dropped when TechState.researchVersion
+    // moves; the def is kept beside it so a registry that handed back a different row would
+    // miss rather than serve a stale one. The result is SHARED, so it is read-only to callers.
+    if (!UpgradeBonusCache.enabled || !this.tech || !this.unitReg) return this.sumUpgradeBonuses(u);
+    let byType = this.upgradeCache.get(u.owner);
+    if (!byType) this.upgradeCache.set(u.owner, (byType = new Map()));
+    const def = this.unitReg.get(u.typeId);
+    const version = this.tech.researchVersion;
+    const hit = byType.get(u.typeId);
+    if (hit && hit.version === version && hit.def === def) return hit.bonuses;
+    const bonuses = this.sumUpgradeBonuses(u);
+    byType.set(u.typeId, { version, def, bonuses });
+    return bonuses;
+  }
+
+  /** upgradeBonuses without the cache: the sum itself. */
+  private sumUpgradeBonuses(u: SimUnit): UpgradeBonuses {
     const b = {
       dice: 0, armor: 0, hp: 0, hpPct: 0, mana: 0, manaRegen: 0, range: 0, sight: 0, speed: 0,
       attackSpeed: 0, damage: 0, lumber: 0, spillDist: 0, spillRadius: 0,
