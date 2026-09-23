@@ -37,6 +37,7 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 13 | Icon warmer: the player's own icons forced, the rest idle-only | scheduling (same pixels; only WHEN an icon is decoded) | ~3.4% of CPU for ~5 min → nothing after the first 30 s | landed |
 | 14 | Unit placement: one `setTransformation`, none when unchanged (`PlaceInstance`) | **exact** (keeps `forced`) | `syncEntries` 3.9 → 3.4 ms (−13%); frame below noise | landed |
 | 15 | Minimap fog read as one lattice (`MinimapFogGrid`, `VisionMap.statesAtGrid`) | **exact** (pixel-identical) | `drawDots` 2.6 → 2.2 ms (−15%) | landed |
+| 16 | **Own-clock (global-sequence) nodes redone per instance** — the Knight and the Town Hall share their skeletons (`noOwnClockShare`) | **trade** (rides on 2–3; per-instance path matched to ≤0.001) | **standing army 61.5 → 43–44 ms (−29%)**; fight neutral | landed |
 
 **Rows 6, 7, 8 and 12 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
@@ -196,6 +197,27 @@ Roughly in value order, with the kind marked, because that is what decides where
   pixels onto a cleared canvas). The mask was unchanged on 97 of 98 redraws with the armies
   standing — and changed on 86 of 96 with one army marching. It would pay when nothing is
   happening and not in the fights a weak machine is struggling with, so it was not built.
+- ~~**The animation walk, again (36% of all CPU)**~~ — **the largest single piece was one model**
+  (row 16). A fresh profile after row 15 put `updateNodes` at 36% inclusive, 14% of it
+  `recalculateTransformation` walking skeletons node by node — which a shared skeleton exists to
+  avoid. Counted in the page (every skeleton-node recalculation, attributed to its instance and
+  the reason it walked): **80% of them were the Knight**, 518,308 of 651,684 in 10 s, marked
+  unshareable because three LEAF attachment points (`Origin Ref`, `OverHead Ref`, `Chest Ref`)
+  carry a global-sequence scale track. The rest was composers (one per bucket per frame — inherent
+  at 12 fps), cross-fades, and the Town Hall for the same reason as the Knight. Such a node is now
+  in the per-instance plan beside the billboards, sampled on the instance's own clock. Verified the
+  way this path must be — `instance.worldMatrix × bone[i]` against the per-instance path's
+  `nodes[i].worldMatrix` at the same clip and bucket frame — over 1,090 instance checks standing
+  and 653 fighting, worst 0.000977 world units (float rounding). **The check found two older bugs
+  on the way**, both now fixed: `ow3FixBillboards` wrote world matrices into the plan's parent
+  nodes without marking them in `ow3WorldWritten`, so the next bucket that instance composed
+  captured them (the Priest's `Staff-hide` was 7,700–8,700 units off in the SHIPPED path; not
+  checked whether anything is skinned to that node, which would decide whether it ever showed),
+  and the composer's
+  walk read `written` by hierarchy index rather than node index, which hid a marked node about one
+  bucket in three. Interleaved at 6×, Low Performance Mode: a standing mixed army 61.5 → 43–44 ms
+  in all three warmed pairs; a heavy fight ~140 ms either way, because a clip change per swing
+  starts a per-instance cross-fade and the frame there is the simulation's.
 - **BLP decode off the main thread** (`decodeScan` ~1%, plus the hitch it causes). *Exact.*
 - **The fog overlay and baked shadow layer taking terrain-cull's runs** — named in
   `docs/terrain-culling.md` and still not done. *Exact.*

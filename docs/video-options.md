@@ -204,9 +204,22 @@ low-performance frame against excluding them (62.6 / 61.7 → 42.6 / 45.5 ms on 
 `__OW3_VIDEO__.noBillboardShare` shuts them out again so the claim can be re-measured rather than
 argued, as `TerrainCull.enabled` does for the cull).
 
+**OWN-CLOCK nodes are redone per instance the same way.** A translation, rotation or scale track
+driven by a GLOBAL SEQUENCE is sampled on the instance's own `counter`, not the clip's frame, so no
+shared pose can hold it for everybody — and it used to shut its whole model out. That was the
+Knight's case (not `dontInherit*`, as this page once said): **214 nodes** walked per instance every
+frame for three leaf attachment points with a global-sequence scale track, which was **80%** of
+every skeleton node composed in a 287-unit scene. The Town Hall's clock hands and flags are the
+same. `ow3Billboards` now puts own-clock nodes and everything under them in the per-instance plan,
+and `ow3FixBillboards` samples every node of that plan at the bucket's frame on the instance's own
+clock before recomposing it. Worth **61.5 → 43–44 ms** (−29%) on a standing mixed army at 6×;
+neutral in a heavy fight, where a clip change per swing starts a per-instance cross-fade anyway.
+`__OW3_VIDEO__.noOwnClockShare` shuts them out again for a re-measurement.
+
 What is still excluded is `dontInheritTranslation/Rotation/Scaling` — a node that reaches past its
-parent to the INSTANCE's world scale — which is **6 of the 69 models** (Knight, the Arch Mage, the
-Frost Wyrm, the Town Hall). They keep the shared POSE and compose for themselves.
+parent to the INSTANCE's world scale. Those models keep the shared POSE and compose for
+themselves, and an own-clock node in one of them still shuts the pose out too (the pose-only path
+replays the composer's locals as they are).
 
 **Two traps on this path, both found by measurement rather than by reading.**
 
@@ -222,6 +235,13 @@ Frost Wyrm, the Town Hall). They keep the shared POSE and compose for themselves
   (`ow3WorldWritten`); the second half is not paranoia, it is OpenWar3 parenting a buff model onto
   a bone and taking it away again. Forcing the composer's whole pass fixes it too and costs a
   third of the saving.
+- **…and `ow3FixBillboards` writes world matrices too**, into the plan's PARENTS (the static nodes
+  just above each subtree) and the subtree itself. It never marked them, so a static parent — the
+  Priest's `Staff-hide`, the Town Hall's `Upgrade0 Townhall` — was captured into the next bucket
+  its instance composed, thousands of units off. The composer's walk also read `written` by the
+  HIERARCHY index (`written[i]` beside `sortedNodes[i]`), which is the first trap again: object
+  nodes survived it only because the clause after it looks at the node itself. Both fixed
+  (docs/perf-research.md row 16); the Priest one predates the own-clock work.
 
 **How to verify a change here, because pixels cannot.** Two frames of a living match differ by
 6% of their pixels on their own (rain, idle clips, the fps readout), which is larger than the

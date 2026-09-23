@@ -1019,10 +1019,10 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
          }
          else {
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd43e3e31e 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..9c06d5cb6fdf8fe545a2112866e7264eeca55180 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-@@ -21,6 +21,464 @@ const scaleHeap = gl_matrix_1.vec3.create();
+@@ -21,6 +21,518 @@ const scaleHeap = gl_matrix_1.vec3.create();
  const colorHeap = new Float32Array(3);
  const alphaHeap = new Float32Array(1);
  const textureIdHeap = new Uint32Array(1);
@@ -1086,27 +1086,55 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
 +    return v !== undefined && v.sharedPoses === true;
 +}
 +/**
++ * Does this node keep its OWN CLOCK — a translation, rotation or scale track driven by a GLOBAL
++ * SEQUENCE, which is sampled against the instance's `counter` (total elapsed ms) rather than the
++ * sequence frame? Two instances alive for different lengths of time genuinely hold different
++ * values there, and no key on (sequence, frame) can say so.
++ */
++function ow3OwnClock(object) {
++    for (const name of ['KGTR', 'KGRT', 'KGSC']) {
++        const animation = object.animations.get(name);
++        if (animation && animation.globalSequence) {
++            return true;
++        }
++    }
++    return false;
++}
++function ow3DontInherit(object) {
++    return !!(object.dontInheritTranslation || object.dontInheritRotation || object.dontInheritScaling);
++}
++/**
 + * May this model's pose be shared at all?
 + *
-+ * One disqualifier: a TRS track driven by a GLOBAL SEQUENCE, which is sampled against the
-+ * instance's own `counter` (total elapsed ms) rather than against the sequence frame — two
-+ * instances alive for different lengths of time genuinely have different poses, and no key on
-+ * (sequence, frame) can say so. Rare on unit skeletons and worth simply stepping around.
++ * A node with its OWN CLOCK (`ow3OwnClock`) holds a value no shared pose can hold for everybody.
++ * It used to shut the whole model out, and that was expensive out of all proportion: the
++ * Knight's 214 nodes walked per instance, every frame, for three leaf attachment points
++ * (`Origin Ref`, `OverHead Ref`, `Chest Ref`) with a global-sequence scale track — 80% of every
++ * skeleton node composed in a 287-unit scene. Those nodes are now REDONE PER INSTANCE, exactly as
++ * billboarded ones are (`ow3Billboards` puts them and everything under them in the plan, and
++ * `ow3FixBillboards` samples them on the instance's own clock) — but that only happens on the
++ * SHARED-SKELETON path. A model that cannot share its skeleton (`dontInherit*`) replays the pose's
++ * locals as they are, so for one of those an own-clock node still says no.
 + */
 +function ow3Shareable(model) {
-+    if (model.ow3Shareable === undefined) {
-+        let ok = true;
++    if (model.ow3OwnClock === undefined) {
++        let ownClock = false;
++        let dontInherit = false;
 +        for (const object of model.sortedGenericObjects) {
-+            for (const name of ['KGTR', 'KGRT', 'KGSC']) {
-+                const animation = object.animations.get(name);
-+                if (animation && animation.globalSequence) {
-+                    ok = false;
-+                }
-+            }
++            ownClock = ownClock || ow3OwnClock(object);
++            dontInherit = dontInherit || ow3DontInherit(object);
 +        }
-+        model.ow3Shareable = ok;
++        model.ow3OwnClock = ownClock;
++        model.ow3DontInherit = dontInherit;
 +    }
-+    return model.ow3Shareable;
++    if (!model.ow3OwnClock) {
++        return true;
++    }
++    // `__OW3_VIDEO__.noOwnClockShare` shuts the own-clock models out again, as they were, so what
++    // redoing those nodes per instance is WORTH can be measured in a real match (the
++    // `noBillboardShare` idea). Read live, not cached.
++    const v = globalThis.__OW3_VIDEO__;
++    return !model.ow3DontInherit && !(v !== undefined && v.noOwnClockShare);
 +}
 +/**
 + * May this model's composed SKELETON be shared, not just the pose it is composed from?
@@ -1134,7 +1162,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
 +    if (model.ow3SkeletonShareable === undefined) {
 +        let ok = ow3Shareable(model);
 +        for (const object of model.sortedGenericObjects) {
-+            if (object.dontInheritTranslation || object.dontInheritRotation || object.dontInheritScaling) {
++            if (ow3DontInherit(object)) {
 +                ok = false;
 +            }
 +        }
@@ -1143,8 +1171,9 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
 +    return model.ow3SkeletonShareable;
 +}
 +/**
-+ * Which nodes a billboarded model has to redo for itself: every billboarded node AND everything
-+ * hanging under it, because a child's matrix is composed off its parent's.
++ * Which nodes a model has to redo for itself: every BILLBOARDED node, every node with its OWN
++ * CLOCK (`ow3OwnClock` — a global-sequence track), AND everything hanging under either, because
++ * a child's matrix is composed off its parent's.
 + *
 + * All three lists are in NODE order (`instance.nodes`, which is what the skeleton is laid out
 + * in); `subtree` is additionally ordered parents-first, so composing down it never reads a matrix
@@ -1164,7 +1193,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
 +            const object = generic[index];
 +            const parentId = object.parentId;
 +            const inherited = parentId >= 0 && inSubtree[parentId] === 1;
-+            if (object.anyBillboarding || inherited) {
++            if (object.anyBillboarding || ow3OwnClock(object) || inherited) {
 +                inSubtree[index] = 1;
 +                subtree.push(index);
 +                if (!inherited && parentId >= 0 && parents.indexOf(parentId) < 0) {
@@ -1391,8 +1420,9 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
 + * `u_instance` expects to find it. It pays for a bone texture of its own; a Footman redoes six
 + * nodes of fifty-seven and samples none.
 + */
-+function ow3FixBillboards(instance, pose, plan) {
++function ow3FixBillboards(instance, pose, plan, sequence, frame, counter) {
 +    const nodes = instance.nodes;
++    const genericObjects = instance.model.genericObjects; // node order, beside `nodes`
 +    const bones = pose.bones;
 +    const iw = instance.worldMatrix;
 +    const ir = instance.worldRotation;
@@ -1408,12 +1438,36 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
 +    local.set(bones);
 +    // The nodes just above the subtrees have to read as world for the moment their children are
 +    // composed off them.
++    //
++    // Every node this writes a WORLD matrix into is marked in `ow3WorldWritten`, the same as an
++    // object node, and for the same reason: `node.worldMatrix` is a window onto this instance's
++    // `worldMatrices`, and when this instance next COMPOSES a bucket its walk only recomputes the
++    // nodes that are dirty. A static node above a subtree (the Town Hall's `Upgrade0 Townhall`,
++    // the Priest's `Staff-hide`) is not, so without the mark its world matrix was captured into
++    // the shared skeleton and every instance wearing it drew that part of itself thousands of
++    // units off — found by comparing the two paths' matrices, as the object-node case was.
++    const written = ow3WorldWritten(instance);
 +    for (let k = 0; k < plan.parents.length; k++) {
++        written[plan.parents[k]] = 1;
 +        ow3WorldFromPose(nodes[plan.parents[k]], plan.parents[k], pose, iw, ir, is);
++    }
++    // The subtree nodes' LOCAL values are this instance's to sample, at the bucket's frame and on
++    // this instance's own clock: an instance wearing somebody else's skeleton walked no nodes this
++    // frame, so without this they would still hold whatever it last sampled for itself — and an
++    // own-clock node's value was never the bucket's to begin with. Every channel, as a forced
++    // pass samples them, since which ones the clip animates is exactly what may not be assumed.
++    for (let k = 0; k < plan.subtree.length; k++) {
++        const i = plan.subtree[k];
++        const node = nodes[i];
++        const object = genericObjects[i];
++        object.getTranslation(node.localLocation, sequence, frame, counter);
++        object.getRotation(node.localRotation, sequence, frame, counter);
++        object.getScale(node.localScale, sequence, frame, counter);
 +    }
 +    // …then the subtrees, by the engine's own routine, in world space.
 +    instance.ow3LocalPose = false;
 +    for (let k = 0; k < plan.subtree.length; k++) {
++        written[plan.subtree[k]] = 1;
 +        nodes[plan.subtree[k]].recalculateTransformation(instance);
 +    }
 +    instance.ow3LocalPose = true;
@@ -1487,7 +1541,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
  /**
   * An MDX model instance.
   */
-@@ -48,12 +506,35 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -48,12 +560,35 @@ class MdxModelInstance extends modelinstance_1.default {
          // Any later non-forced update can then use variancy to skip updating things.
          // It is set to true every time the sequence is set with setSequence().
          this.forced = true;
@@ -1523,7 +1577,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
          for (let i = 0, l = model.geosets.length; i < l; i++) {
              this.geosetColors[i] = new Float32Array(4);
          }
-@@ -216,45 +697,187 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -216,45 +751,193 @@ class MdxModelInstance extends modelinstance_1.default {
       * Updates all of this instance internal nodes and objects.
       * Nodes that are determined to not be visible will not be updated, nor will any of their children down the hierarchy.
       */
@@ -1597,6 +1651,12 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
 +        // looking like a node anybody writes. Marked on the write, it is always cleaned.
 +        const cleanObjects = skeleton !== null && !replaySkeleton;
 +        const written = cleanObjects ? ow3WorldWritten(this) : null;
++        // `written` is in NODE order and this walk is in HIERARCHY order (`sortedNodes[i] =
++        // nodes[hierarchy[i]]`) — the trap `ow3ObjectNodes` names. Read as `written[i]` it asked
++        // about somebody else's node; object nodes survived it only because the clause after it
++        // looks at the node itself, and a static node above a billboarded or own-clock subtree
++        // (which is no object) came through with a world matrix in it about one bucket in three.
++        const hierarchy = model.hierarchy;
 +        // What the tracks are sampled AT: the bucket's time while sharing (so every instance in
 +        // the bucket gets one pose), the instance's own frame otherwise.
 +        const poseFrame = pose === null ? frame : pose.frame;
@@ -1614,7 +1674,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
              const parent = node.parent;
 -            let wasDirty = forced || parent.wasDirty || genericObject.anyBillboarding;
 +            let wasDirty = forced || parent.wasDirty || genericObject.anyBillboarding
-+                || (cleanObjects && (written[i] === 1 || node.object !== null && node.object !== undefined || node.children.length > 0));
++                || (cleanObjects && (written[hierarchy[i]] === 1 || node.object !== null && node.object !== undefined || node.children.length > 0));
              const variants = genericObject.variants;
 +            // OpenWar3 (issue #161): a pose somebody already sampled is COPIED rather than
 +            // sampled again — ten floats a node against a keyframe search and a slerp per
@@ -1724,7 +1784,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
                  // If the attachment/emitter is visible, update it.
                  if (visibilityHeap[0] > 0) {
                      node.object.update(dt);
-@@ -262,13 +885,48 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -262,13 +945,48 @@ class MdxModelInstance extends modelinstance_1.default {
              }
              // Recalculate and update child nodes.
              // Note that this only affects normal nodes such as instances, and not skeletal nodes.
@@ -1758,7 +1818,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
 +            else {
 +                // Billboarded subtrees are this body's own, so it wears the bucket's pose in an
 +                // array of its own and sends that — still without sampling or composing the rest.
-+                ow3FixBillboards(this, skeleton, plan);
++                ow3FixBillboards(this, skeleton, plan, sequence, poseFrame, counter);
 +                this.ow3SharedTexture = null;
 +                this.ow3SharedBones = this.ow3LocalBones;
 +                anyDirty = true; // the billboards move with the camera, so this goes up every frame
@@ -1774,7 +1834,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
      }
      /**
       * If a model has no sequences or is running no sequence, it will only update once since it will never be forced to update.
-@@ -362,19 +1020,58 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -362,19 +1080,58 @@ class MdxModelInstance extends modelinstance_1.default {
              }
          }
      }
@@ -1835,7 +1895,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
          for (const group of model.translucentGroups) {
              group.render(this);
          }
-@@ -436,6 +1133,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -436,6 +1193,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -1843,7 +1903,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +1143,65 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +1203,65 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
@@ -1862,8 +1922,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
          this.resetAttachments();
          this.forced = true;
 +        this.ow3PoseReset = true; // OpenWar3 (issue #161): a new clip rewrites every local
-         return this;
-     }
++        return this;
++    }
 +    /**
 +     * OpenWar3: set this instance's animation cross-fade duration, in seconds.
 +     * Fed from each unit's UnitUI.slk `blend` value (0.15s for most WC3 units).
@@ -1874,8 +1934,8 @@ index 020a99b949ec1634579d439261027e00b6da23ac..bca26ad3fbc4c6ee0e525c2e452c59cd
 +        if (this.blendTime === 0) {
 +            this.blendRemaining = 0;
 +        }
-+        return this;
-+    }
+         return this;
+     }
 +    /**
 +     * OpenWar3: snapshot every node's current local TRS into the flat blend
 +     * buffer, laid out as [loc.x,loc.y,loc.z, rot.x,rot.y,rot.z,rot.w, sc.x,sc.y,sc.z]

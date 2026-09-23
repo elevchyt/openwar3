@@ -172,7 +172,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   rotation, and putting it there drew a white halo around every Footman's shield — so those
   SUBTREES are redone per instance in world space and converted back (`ow3FixBillboards`: six of
   a Footman's 57 nodes, worth 16–29% of the frame against shutting those 21-of-69 models out).
-  Only `dontInherit*` still disqualifies a model (6 of 69). **Verify a change here NUMERICALLY,
+  A node with its OWN CLOCK (a global-sequence TRS track, sampled on the instance's `counter`) is
+  redone the same way — it used to shut its whole model out, which was the Knight's 214 nodes for
+  three leaf attachments and 80% of all skeleton work in a 287-unit scene — and only
+  `dontInherit*` still disqualifies a model. **Verify a change here NUMERICALLY,
   never in pixels** — two frames of a living match differ by 6% of their pixels on their own, and
   both bugs this path had were invisible in a screenshot: compare `instance.worldMatrix ×
   local[i]` against the per-instance path's `nodes[i].worldMatrix` at the same clip and frame
