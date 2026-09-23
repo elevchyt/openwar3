@@ -712,6 +712,23 @@ export interface EngineHooks {
   /** The `BlzGetUnit…`/`BlzSetUnit…` stat accessors (SimWorld.unitStat says what each stat
    *  means). `slot` is the weapon SLOT, 0-based — already translated from the map's index. */
   unitStat?(unitId: number, stat: string, slot: number): number | boolean | undefined;
+  // --- pass 9: abilities, per unit and per type (docs/map-compatibility.md) ---
+  /** BlzUnitDisableAbility / BlzUnitHideAbility — per-UNIT counters (SimAbility.disableCount). */
+  unitDisableAbility?(unitId: number, abilityId: string, disable: boolean, hideUI: boolean): void;
+  unitHideAbility?(unitId: number, abilityId: string, hide: boolean): void;
+  /** BlzGetUnitAbilityCooldownRemaining / BlzEndUnitAbilityCooldown. */
+  unitAbilityCooldownLeft?(unitId: number, abilityId: string): number;
+  endUnitAbilityCooldown?(unitId: number, abilityId: string): void;
+  /** One rank (0-based) of an ability TYPE's cost and cooldown. */
+  abilityRankData?(abilityId: string, rank: number): { cost: number; cooldown: number } | undefined;
+  /** An ability type's words and art — PRESENTATION, so the renderer's half (RtsController),
+   *  not `simHooks`: a map sets these inside `GetLocalPlayer` blocks. `rank` is 0-based. */
+  abilityText?(abilityId: string, rank: number, extended: boolean): string;
+  setAbilityText?(abilityId: string, rank: number, text: string, extended: boolean): void;
+  abilityIcon?(abilityId: string): string;
+  setAbilityIcon?(abilityId: string, path: string): void;
+  /** BlzSetItemExtendedTooltip — one item ENTITY's own long description. */
+  setItemExtendedTooltip?(itemId: number, text: string): void;
   setUnitStat?(unitId: number, stat: string, value: number, slot: number): boolean;
   // --- predicates a custom map gates on (docs/map-compatibility.md pass 4) ---
   /** IsUnitInRange / IsUnitInRangeXY / IsUnitInRangeLoc. Measured the way the SIM measures
@@ -1407,12 +1424,14 @@ export class Runtime {
    *  `neutralTeamColor`; the host sets this through `HeadlessOptions.neutralColor`). A
    *  neutral slot's own index is not a colour at all on the wide table — 12 there is maroon. */
   neutralPlayerColor: number = PlayerSlot.NeutralHostile;
-  /** What the `Blz…` weapon natives count weapons FROM — 1 or 0 — so `weaponIndex − this` is
-   *  the weapon slot. "In 1.30 or lower, the function is 1-indexed, but in 1.31 and newer, it
-   *  is 0-indexed" (hiveworkshop 319334). 1 is our own 1.30.4's answer; a map saved by a 1.31+
+  /** What the `Blz…` natives count FROM — 1 or 0 — for BOTH of the indices they take: a weapon
+   *  (`weaponIndex − this` is the weapon slot) and an ability LEVEL (`level − this` is the rank,
+   *  0-based). One patch moved both: "in 1.30 or lower, the function is 1-indexed, but in 1.31
+   *  and newer, it is 0-indexed" (hiveworkshop 319334, weapons), and 1.31's `BlzSetAbility…`
+   *  family "require 0-indexed levels instead of 1-indexed" (hiveworkshop 316163). 1 is our own 1.30.4's answer; a map saved by a 1.31+
    *  editor was only ever run on a 1.31+ client, so the map door sets 0 for it
-   *  (MapFormatProfile.weaponIndexBase). A plain number, so no native imports `src/compat/`. */
-  weaponIndexBase = 1;
+   *  (MapFormatProfile.blzIndexBase). A plain number, so no native imports `src/compat/`. */
+  blzIndexBase = 1;
 
   /** Which slot the human at THIS MACHINE is playing. The lobby's user slot isn't always 0,
    *  so the host sets this with applyLobby. */

@@ -10,7 +10,7 @@
 // **The weapon index is counted from 0 or from 1 depending on the MAP.** "In 1.30 or lower, the
 // function is 1-indexed, but in 1.31 and newer, it is 0-indexed" (hiveworkshop 319334). Our own
 // 1.30.4 counts from 1, and a map saved by a 1.31+ editor — which only ever ran on a 1.31+
-// client — counts from 0; `Runtime.weaponIndexBase` carries which, set at the map door off the
+// client — counts from 0; `Runtime.blzIndexBase` carries which, set at the map door off the
 // map's own editor build. Read the wrong way round and `BlzSetUnitBaseDamage(u, d, 0)` on a
 // Reforged-era map writes nothing at all (there is no weapon "0" in 1-based counting), which is
 // what three quarters of the corpus's calls would have done.
@@ -26,7 +26,7 @@ const simOf = (c: NativeCtx, v: JassValue): number | undefined => {
   return u && u.simId >= 0 ? u.simId : undefined;
 };
 /** The map's weapon index → the type's weapon SLOT (0-based). */
-const slotOf = (c: NativeCtx, v: JassValue | undefined): number => asInt(v ?? JNULL) - c.rt.weaponIndexBase;
+const slotOf = (c: NativeCtx, v: JassValue | undefined): number => asInt(v ?? JNULL) - c.rt.blzIndexBase;
 
 const get = (c: NativeCtx, unitV: JassValue, stat: string, slot = 0): number | boolean | undefined => {
   const id = simOf(c, unitV);

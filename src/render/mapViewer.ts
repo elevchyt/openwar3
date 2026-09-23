@@ -3443,8 +3443,8 @@ export class MapViewerScene {
         // (UndeadX05) colours its sleeping guards off it so they read as creeps.
         neutralColor: neutralTeamColor(this.vfs),
         // Whether this map's `Blz…` weapon natives count from 0 or 1 — its own editor build says
-        // which convention its author tested (MapFormatProfile.weaponIndexBase).
-        weaponIndexBase: this.mapFormat.weaponIndexBase,
+        // which convention its author tested (MapFormatProfile.blzIndexBase).
+        blzIndexBase: this.mapFormat.blzIndexBase,
         // Publish the engine BEFORE config()/main() run: a hook fired during init may need
         // the interpreter itself (ChooseRandomItem draws from its seeded RNG — 7.18).
         onBoot: (e) => {
@@ -10172,6 +10172,10 @@ export class MapViewerScene {
       // unit that player owns — REMOVED, not greyed ("hide/disable an ability from the command
       // card", hiveworkshop 225879). The unit keeps the ability; see TechState.abilityAvailable.
       if (this.rts.simView.tech?.abilityAvailable(su.owner, ab.id) === false) continue;
+      // …and `BlzUnitHideAbility` (or a disable with `hideUI`) does the same for ONE unit, while
+      // a plain `BlzUnitDisableAbility` leaves the button on the card, drawn unavailable below.
+      if (this.rts.simView.scriptHidden(ab)) continue;
+      const scriptOff = this.rts.simView.scriptDisabled(ab);
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
@@ -10285,11 +10289,11 @@ export class MapViewerScene {
         // it just isn't a button you press (see `passive` below).
         noMana,
         // Unavailable: the button goes inert and wears the DIS* art with no frame, so it reads
-        // as unpressable at a glance. Six things say so — a silenced or stunned caster, a
+        // as unpressable at a glance. Seven things say so — a silenced or stunned caster, a
         // planted Ancient with a queue that cannot pull itself up, a unit mid-morph, an
-        // ability whose research is not in, one whose effect is already on the presser, and
-        // a night ability by day.
-        disabled: muted || rootBlocked || morphing || !techMet || hidden || daylight || holdGate,
+        // ability whose research is not in, one whose effect is already on the presser, a
+        // night ability by day, and a script's `BlzUnitDisableAbility` on this unit.
+        disabled: muted || rootBlocked || morphing || !techMet || hidden || daylight || holdGate || scriptOff,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and

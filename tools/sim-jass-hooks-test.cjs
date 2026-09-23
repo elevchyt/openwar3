@@ -58,6 +58,9 @@ const EXPECTED = [
   "setPlayerAbilityAvailable",
   // The Blz… per-unit stat accessors (pass 3; sim-unit-stats-test.cjs).
   "unitStat", "setUnitStat",
+  // Pass 9's world half (sim-ability-script-test.cjs). The words and icons are NOT here — they
+  // are presentation, composed on RtsController so a GetLocalPlayer block may write them.
+  "unitDisableAbility", "unitHideAbility", "unitAbilityCooldownLeft", "endUnitAbilityCooldown", "abilityRankData",
   "setHeroXp", "setItemCharges", "setItemDroppable", "setItemPosition", "setPlayerTechMaxAllowed",
   // StoreUnit — a chapter writing its hero down for the next one (docs/campaigns.md). Its
   // twin RestoreUnit is the AUTHORITY's, because putting one back means creating it.

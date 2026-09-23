@@ -6,7 +6,7 @@
 //
 // "In 1.30 or lower, the function is 1-indexed, but in 1.31 and newer, it is 0-indexed"
 // (hiveworkshop 319334). Our own 1.30.4 counts from 1; a map saved by a 1.31+ editor counts from
-// 0, and `Runtime.weaponIndexBase` says which (set at the map door off MapFormatProfile). The same
+// 0, and `Runtime.blzIndexBase` says which (set at the map door off MapFormatProfile). The same
 // script is run under BOTH bases here, because the failure this guards against is silent: read
 // the wrong way round, a Reforged-era map's `…(u, x, 0)` names a weapon that does not exist and
 // nothing happens — which is what three quarters of the corpus's calls would have done.
@@ -99,7 +99,7 @@ function boot(base) {
   const quiet = [console.info, console.warn];
   console.info = () => {};
   console.warn = () => {};
-  const interp = buildInterpreter([common, SRC], base === undefined ? { hooks: w.hooks } : { hooks: w.hooks, weaponIndexBase: base });
+  const interp = buildInterpreter([common, SRC], base === undefined ? { hooks: w.hooks } : { hooks: w.hooks, blzIndexBase: base });
   interp.callFunction('Make', []);
   [console.info, console.warn] = quiet;
   return { ...w, call: (fn) => interp.callFunction(fn, []) };

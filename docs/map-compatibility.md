@@ -430,8 +430,9 @@ The work is going in passes, largest first, each with its own test and each re-m
 | 5 | `GetTriggerEventId`, eval/exec counts, `TriggerRemoveAction/Condition` | 562 | ✓ |
 | 8 | `SetPlayerAbilityAvailable` | 420 | ✓ |
 | 3 | the `BlzGet/SetUnit…` stat accessors | 687 | ✓ |
+| 9 | the `Blz…` ability natives — per-unit disable/hide, clocks, costs, words, icons | 576 | ✓ |
 
-5019 → 4371 → 3172 → 2610 → 2190 → **1503** call sites.
+5019 → 4371 → 3172 → 2610 → 2190 → 1503 → **927** call sites.
 
 Two findings from those two that are worth more than the code:
 
@@ -532,7 +533,7 @@ hiveworkshop 319734), the life pool is held ABSOLUTE across a new ceiling (31702
 **The weapon index is counted from 0 or 1 depending on the MAP**: "in 1.30 or lower, the function
 is 1-indexed, but in 1.31 and newer, it is 0-indexed" (hiveworkshop 319334). Our 1.30.4 counts
 from 1; the two rebalance maps, saved by 1.36 and 2.0 editors, pass index 0 in 81 of 108 calls. A
-map a 1.31+ editor wrote only ever ran on a 1.31+ client, so `MapFormatProfile.weaponIndexBase`
+map a 1.31+ editor wrote only ever ran on a 1.31+ client, so `MapFormatProfile.blzIndexBase`
 is `editorBuild >= 131 ? 0 : 1`, and it reaches the runtime as a plain number so no native
 imports `src/compat/`. The sim also records each weapon's real SLOT: both the SLK parser and the
 sim skip undeclared or unarmed slots, so list position is not the slot.
@@ -542,6 +543,31 @@ are at the refusal in `natives/blzFields.ts`: they are the editor's BASE columns
 totals, which cannot be recovered for a hero; the corpus sets the routable ones zero times; and
 the two it does set (armor/defense TYPE, all Bribe's Damage Engine) are a save/restore round-trip
 whose getter currently answers 0, so routing them would corrupt the armour class.
+
+### Pass 9 — levels count like weapons, disable and hide are counters
+
+An ability LEVEL is counted from 0 or 1 by the map, like a weapon: 1.31's `BlzSetAbility…` family
+"require 0-indexed levels instead of 1-indexed" (hiveworkshop 316163), in the same patch that moved
+weapons, and every later-format map here passes `GetUnitAbilityLevel(u, a) - 1`. So pass 3's flag
+became `blzIndexBase` and serves both.
+
+`BlzUnitDisableAbility` / `BlzUnitHideAbility` are COUNTERS: "increase/decrease counters on each
+usage … switches … state only when moving over the 0 even line" (312477), so a map that disables
+twice must enable twice (312184), and "the counters reset when the ability is lost" — which is free
+when they live on the unit's own ability entry. A disabled button stays on the card, greyed; a
+hidden one (or a disable with `hideUI`) leaves it, and "hide also disables". `hideUI` moves the hide
+counter with the disable, which fits every call in the corpus (they come in matched pairs).
+
+Words and icons are PRESENTATION and are composed on `RtsController`, not in `simHooks`, because a
+map rewrites them inside `GetLocalPlayer` blocks and the world-writing guard refuses `simHooks`
+there. They go into the ability registry's per-map overlay as a CLONE, so nothing leaks into the
+next map. Doing this found a HUD bug: the command card redraws only when a per-button key changes,
+and that key had never needed an icon or a title — they could not change mid-match before. The
+titles are now in it; the icon (a data URL, rebuilt every frame) is compared per slot instead.
+
+Not done, deliberately: `BlzSetUnitAbilityCooldown`/`…ManaCost` (per-unit overrides of a per-type
+value, called zero times), so their unit-level getters answer the type — exact while nothing can
+have changed it.
 
 One thing was deliberately **not** done: `BlzSetEventDamage` (6 sites). `pumpDamageEvents` fires
 after the sim has applied the damage, so there is nothing left to modify, and making it work

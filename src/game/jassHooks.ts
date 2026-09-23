@@ -191,6 +191,12 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // The Blz… stat accessors (pass 3). The stat name crosses as a string and is narrowed here;
     // `invulnerable` is read-only, so the setter refuses it rather than inventing a write.
     unitStat: (id, stat, slot) => sim.unitStat(id, stat as UnitStat, slot),
+    // Pass 9's world half: the per-unit counters and clocks, and the TYPE's rank data.
+    unitDisableAbility: (id, abil, disable, hideUI) => void sim.unitDisableAbility(id, abil, disable, hideUI),
+    unitHideAbility: (id, abil, hide) => void sim.unitHideAbility(id, abil, hide),
+    unitAbilityCooldownLeft: (id, abil) => sim.unitAbilityCooldownLeft(id, abil),
+    endUnitAbilityCooldown: (id, abil) => sim.endUnitAbilityCooldown(id, abil),
+    abilityRankData: (abil, rank) => sim.abilityRankData(abil, rank),
     setUnitStat: (id, stat, value, slot) =>
       stat === "invulnerable" ? false : sim.setUnitStat(id, stat as Exclude<UnitStat, "invulnerable">, value, slot),
     // --- abilities + heroes (7.17): a trigger grants a spell / levels a hero ---

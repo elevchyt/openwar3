@@ -1,4 +1,4 @@
-import type { SimUnit, SimMine, SimItem, ItemSnapshot } from "../sim/world";
+import type { SimAbility, SimUnit, SimMine, SimItem, ItemSnapshot } from "../sim/world";
 import type { TechState } from "../sim/tech";
 
 // A READ-ONLY window onto the world (docs/multiplayer.md Phase B item 7).
@@ -31,6 +31,9 @@ export interface SimView {
   readonly dawnDusk: boolean;
 
   techMeets(player: number, id: string): boolean;
+  /** A script's per-unit `BlzUnitDisableAbility` / `BlzUnitHideAbility` on this entry. */
+  scriptDisabled(ab: SimAbility): boolean;
+  scriptHidden(ab: SimAbility): boolean;
   groundItems(): SimItem[];
   itemSnapshot(id: number): ItemSnapshot | null;
 

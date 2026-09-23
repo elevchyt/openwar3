@@ -711,6 +711,10 @@ export class RtsController {
    * exist. The sim id is what a hit event actually carries.
    */
   private destructibleDefs = new Map<number, UnitDef>();
+  /** `BlzSetItemExtendedTooltip` — one item's own long description, by item ENTITY id (the
+   *  inventory entry and the ground item share it). Presentation, so it lives here beside the
+   *  slot view that reads it rather than in the sim; a new map is a new controller. */
+  private itemTooltips = new Map<number, string>();
   // Multi-unit selection: `selected` holds the whole group, `primary` is the
   // leader that drives the HUD (portrait, info panel, command card).
   private selected = new Set<number>();
@@ -6524,7 +6528,7 @@ export class RtsController {
         name: def?.name ?? held.itemId,
         // The item's own Ubertip, with its <ID,Field> value references filled in — the
         // same text the HUD shows for the item lying on the ground.
-        desc: def ? this.tipText(def.description) : "",
+        desc: def ? this.tipText(this.itemTooltips.get(held.id) ?? def.description) : "",
         charges: held.charges,
         cooldownLeft: held.cooldownLeft,
         cooldownFrac: total > 0 ? Math.max(0, Math.min(1, held.cooldownLeft / total)) : 0,
@@ -8162,6 +8166,31 @@ export class RtsController {
       // Here rather than in a sub-module because the brains are the CONTROLLER's: they issue
       // their orders through `execute`, the same door a click goes through.
       startMeleeAI: (player, script) => this.startMeleeAIFor(player, script),
+      // The `BlzSetAbility…` / `BlzSetItemExtendedTooltip` words and art (docs/map-compatibility.md
+      // pass 9). PRESENTATION, and composed here rather than in `simHooks` on purpose: a map sets a
+      // tooltip for one player inside a `GetLocalPlayer` block (Test of Faith Reborn rewrites its
+      // draft buttons per player), and the world-writing guard refuses every `simHooks` entry
+      // there. An ability's words are written into the registry's per-MAP overlay — a clone, not
+      // the row, so nothing leaks into the next map (`clearCustom`) or into the install's table.
+      abilityText: (abilId, rank, extended) => {
+        const def = this.abilities.get(abilId);
+        return def ? (extended ? def.uberTips : def.tips)[rank] ?? "" : "";
+      },
+      setAbilityText: (abilId, rank, text, extended) => {
+        const def = this.abilities.get(abilId);
+        if (!def || rank < 0) return;
+        const clone = { ...def, tips: [...def.tips], uberTips: [...def.uberTips] };
+        (extended ? clone.uberTips : clone.tips)[rank] = text;
+        this.abilities.setCustom(abilId, clone);
+      },
+      abilityIcon: (abilId) => this.abilities.get(abilId)?.icon ?? "",
+      setAbilityIcon: (abilId, path) => {
+        const def = this.abilities.get(abilId);
+        if (def) this.abilities.setCustom(abilId, { ...def, icon: path });
+      },
+      // …and ONE item's long description, which is not the type's: two Claws of Attack can say
+      // different things. Keyed on the item's entity id, like `SetItemDroppable`'s override.
+      setItemExtendedTooltip: (itemId, text) => void this.itemTooltips.set(itemId, text),
     };
   }
 

@@ -404,6 +404,15 @@ export interface SimAbility {
    *  of Shadows' Shadow Meld (see `syncCarriedAbilities`), taken off again with the item. Host
    *  bookkeeping only: it does not cross the wire, and nothing but the sync reads it. */
   carried?: true;
+  /** `BlzUnitDisableAbility` / `BlzUnitHideAbility` — two COUNTERS, not flags (docs/map-
+   *  compatibility.md pass 9). Each call moves one by one, and the state flips only across zero:
+   *  "BlzUnitHideAbility & BlzUnitDisableAbility increase/decrease counters on each usage. The
+   *  Ability switches hidden/shown Enabled/Disabled state only when moving over the 0 even line"
+   *  (hiveworkshop 312477) — so a map that disables twice must enable twice (312184). Kept ON the
+   *  entry because "the counters reset when the ability is lost", which is then free. Absent = 0.
+   *  See SimWorld.scriptDisabled for what each one stops. */
+  disableCount?: number;
+  hideCount?: number;
 }
 
 /** A timed effect on a unit. `kind` is our gameplay category; `group` de-dupes
@@ -13205,6 +13214,10 @@ export class SimWorld {
     // TechState.abilityAvailable). Its button is not on the card at all, so this is only ever
     // reached by a hotkey or a computer, and is silent for the same reason.
     if (this.tech && !this.tech.abilityAvailable(u.owner, ab.id)) return SILENT_REFUSAL;
+    // …nor one a script has disabled or hidden on THIS unit (`BlzUnitDisableAbility`,
+    // `BlzUnitHideAbility`). Silent: a hidden button is not on the card, and a disabled one is
+    // drawn greyed, which is exactly what a silent refusal draws.
+    if (this.scriptDisabled(ab)) return SILENT_REFUSAL;
     // …nor a unit halfway through changing shape (SimUnit.morphT). `castLocked` already
     // refuses the order; this is the half that lets the CARD know, so Unburrow reads as
     // unpressable until the Crypt Fiend is actually underground.
@@ -13363,6 +13376,7 @@ export class SimWorld {
     // anything already in flight — this is an order gate, so a cast underway finishes, as the
     // tutorial says it does.
     if (this.tech && !this.tech.abilityAvailable(u.owner, ab.id)) return false;
+    if (this.scriptDisabled(ab)) return false; // per UNIT, the same door (see SimAbility.disableCount)
     const def = this.abilities.get(ab.id);
     if (!def || def.target === "passive") return false;
     // Already hidden by this ability: the press restarts nothing and pays for it (see
@@ -15202,6 +15216,64 @@ export class SimWorld {
     else w.sides = Math.max(0, Math.trunc(value));
     this.recomputeStats(u);
     return true;
+  }
+
+  /**
+   * `BlzUnitDisableAbility(u, abil, disable, hideUI)` / `BlzUnitHideAbility(u, abil, hide)` — the
+   * per-UNIT cousins of `SetPlayerAbilityAvailable` (TechState), and counters rather than flags:
+   * see SimAbility.disableCount for the source. `hideUI` moves the HIDE counter in the same
+   * direction as the disable, which is the reading every call in the corpus fits — they come in
+   * matched pairs with the same `hideUI` on both sides (34 × `false`, 7 × `true`), so a disable
+   * with it is exactly undone by the enable with it. (One Hive post reports an enable with
+   * `hideUI` FALSE also un-hiding; no map here does that, so it is not modelled.)
+   *
+   * Addressed by the ability's own id (the alias a map writes), not by its base code, and false
+   * when the unit does not have it — there is no counter to move on an ability that isn't there.
+   */
+  unitDisableAbility(unitId: number, abilityId: string, disable: boolean, hideUI: boolean): boolean {
+    const ab = this.units.get(unitId)?.abilities.find((a) => a.id === abilityId);
+    if (!ab) return false;
+    const step = disable ? 1 : -1;
+    ab.disableCount = (ab.disableCount ?? 0) + step;
+    if (hideUI) ab.hideCount = (ab.hideCount ?? 0) + step;
+    return true;
+  }
+
+  unitHideAbility(unitId: number, abilityId: string, hide: boolean): boolean {
+    const ab = this.units.get(unitId)?.abilities.find((a) => a.id === abilityId);
+    if (!ab) return false;
+    ab.hideCount = (ab.hideCount ?? 0) + (hide ? 1 : -1);
+    return true;
+  }
+
+  /** May this entry not be USED right now because a script said so? Disabled OR hidden — "hide
+   *  also disables abilities" (hiveworkshop 312477). Like `SetPlayerAbilityAvailable` this is
+   *  asked only where an ability is used, never by its passive effect or its cooldown. */
+  scriptDisabled(ab: SimAbility): boolean {
+    return (ab.disableCount ?? 0) > 0 || (ab.hideCount ?? 0) > 0;
+  }
+
+  /** Is this entry's BUTTON off the card (`BlzUnitHideAbility`, or a disable with `hideUI`)? */
+  scriptHidden(ab: SimAbility): boolean {
+    return (ab.hideCount ?? 0) > 0;
+  }
+
+  /** `BlzGetUnitAbilityCooldownRemaining` — the entry's own clock. 0 when the unit lacks it. */
+  unitAbilityCooldownLeft(unitId: number, abilityId: string): number {
+    return this.units.get(unitId)?.abilities.find((a) => a.id === abilityId)?.cooldownLeft ?? 0;
+  }
+
+  /** `BlzEndUnitAbilityCooldown` — ready now. Just the one ability, unlike `UnitResetCooldown`. */
+  endUnitAbilityCooldown(unitId: number, abilityId: string): void {
+    const ab = this.units.get(unitId)?.abilities.find((a) => a.id === abilityId);
+    if (ab) ab.cooldownLeft = 0;
+  }
+
+  /** One rank of an ability TYPE's data (`BlzGetAbilityManaCost`, `…Cooldown`), `rank` 0-based.
+   *  Undefined for an ability or rank the registry does not have. */
+  abilityRankData(abilityId: string, rank: number): { cost: number; cooldown: number } | undefined {
+    const lvl = this.abilities?.get(abilityId)?.levelData[rank];
+    return lvl ? { cost: lvl.cost, cooldown: lvl.cooldown } : undefined;
   }
 
   /** The starting primary attribute data/units.ts folded into a hero's `dmgplus` (0 for

@@ -1319,6 +1319,9 @@ export class GameHud {
   private cmdCount: HTMLSpanElement[] = []; // per-slot corner count badge (skill points)
   private cmdHotkey: HTMLSpanElement[] = []; // per-slot corner key box ("Show hotkeys on command buttons")
   private cmdKey = "";
+  /** The icon each button was last drawn with — compared per slot rather than folded into
+   *  `cmdKey`, because an icon is a data URL (see refreshCommandCard). */
+  private cmdIcons: Array<string | null> = [];
   // Hero inventory: 6 slot buttons (2×3) with icon, charge badge, cooldown sweep.
   private invSlots: HTMLButtonElement[] = [];
   private invCount: HTMLSpanElement[] = []; // per-slot charge count badge
@@ -3341,12 +3344,20 @@ export class GameHud {
     // The printed keys hang off two options rather than off the buttons, so the options are in
     // the key too: `applyHotkeyOptions` switching either has to re-dress a card that did not change.
     const printKeys = hotkeysOnButtons();
-    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${!!c.countKeySize}:${c.desc}`).join("|");
-    if (key === this.cmdKey) {
+    // The TITLE and the ICON can change under an unchanged id too, since a map may rewrite an
+    // ability's words and art mid-match (`BlzSetAbilityTooltip` / `BlzSetAbilityIcon`, pass 9 of
+    // docs/map-compatibility.md) — left out, the button kept Slow's art after the map had given
+    // it Storm Bolt's. The titles are short and go in the key; the icon is a DATA URL, kilobytes
+    // per button on a key rebuilt every frame, so it is compared per slot instead — the cached
+    // string for an unchanged icon is the same string, and that comparison costs nothing.
+    const key = `${printKeys ? hotkeyMode() : "-"}#` + cmds.map((c) => `${c.id}:${c.hotkey}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.modal}:${c.count ?? 0}:${!!c.countKeySize}:${c.name}:${c.tip ?? ""}:${c.desc}`).join("|");
+    const iconsSame = cmds.length === this.cmdIcons.length && cmds.every((c, i) => c.icon === this.cmdIcons[i]);
+    if (key === this.cmdKey && iconsSame) {
       this.refreshCmdTooltip(cmds); // every frame: the stash moves without the card changing
       return;
     }
     this.cmdKey = key;
+    this.cmdIcons = cmds.map((c) => c.icon);
     for (let i = 0; i < this.cmdSlots.length; i++) {
       const btn = this.cmdSlots[i];
       btn.disabled = true;

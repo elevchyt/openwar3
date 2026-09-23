@@ -38,6 +38,7 @@ import { registerVisionNatives } from "./vision";
 import { registerWeatherNatives } from "./weather";
 import { registerPredicateNatives } from "./predicates";
 import { registerUnitStatNatives } from "./unitStats";
+import { registerAbilityBlzNatives } from "./abilityBlz";
 import { registerWidgetNatives } from "./widgets";
 import { registerWorldNatives } from "./world";
 
@@ -144,6 +145,7 @@ export function registerNatives(rt: Runtime): void {
   registerWidgetNatives(rt); // a widget's life, and damage dealt by a trigger (docs/map-compatibility.md)
   registerPredicateNatives(rt); // the `Is…` conditions a custom map gates on (ditto)
   registerUnitStatNatives(rt); // BlzGet/SetUnit… — a map rebalancing a unit at run time (ditto)
+  registerAbilityBlzNatives(rt); // Blz… abilities: off/hidden per unit, clocks, costs, words (ditto)
   registerCameraNatives(rt); // camera setups + the camera-move family (7.24)
   registerCinematicNatives(rt); // letterbox, fade, transmissions, minimap pings (7.24)
   registerDialogNatives(rt); // dialogs + the victory/defeat screen (7.19)
