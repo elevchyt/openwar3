@@ -1998,6 +1998,11 @@ export interface SimUnit {
   isSummon: boolean; // a summoned unit (Water Elemental) — leaves no corpse, ×0.5 XP
   spawning: number; // >0: materializing (playing its birth clip) — cannot act yet
   summonLeft: number; // >0: a temporary summon that expires (Water Elemental); else 0
+  /** The buff a SCRIPT's `UnitApplyTimedLife` named for this unit's clock — `'BTLF'` "Timed Life"
+   *  for most maps (UI\TriggerData.txt's `timedlifebuffcode` list) — or "" when no script put it
+   *  on one. It is what lets the info panel show the clock on a unit that is NOT a summon, and
+   *  what the bar is labelled with. */
+  timedLifeBuff: string;
   summonMax: number; // the summon's full duration (for the "Summoned Unit" bar fill)
   /** The summoner this summon is BOUND to (0 = none, which is almost everything). A bound
    *  summon leaves the moment its summoner does — "Lasts 50 seconds or until the avatar
@@ -8249,6 +8254,7 @@ export class SimWorld {
       | "isSummon"
       | "spawning"
       | "summonLeft"
+      | "timedLifeBuff"
       | "summonMax"
       | "summonerId"
       | "exhumeLeft"
@@ -8527,6 +8533,7 @@ export class SimWorld {
       isSummon: false,
       spawning: 0,
       summonLeft: 0,
+      timedLifeBuff: "", // no script clock
       summonMax: 0,
       summonerId: 0,
       exhumeLeft: 0,
@@ -9145,11 +9152,12 @@ export class SimWorld {
    * summon XP factor read, and a map giving a dummy caster a two-second life is not asking for
    * either. A second call replaces the clock.
    */
-  applyTimedLife(unitId: number, seconds: number): void {
+  applyTimedLife(unitId: number, seconds: number, buffId = ""): void {
     const u = this.units.get(unitId);
     if (!u || u.hp <= 0 || !(seconds > 0)) return;
     u.summonLeft = seconds;
     u.summonMax = seconds;
+    u.timedLifeBuff = buffId || "BTLF"; // the generic "Timed Life" when a map names nothing
   }
 
   /** Units bought from a shop since the last drain (`captureSellUnits`). */

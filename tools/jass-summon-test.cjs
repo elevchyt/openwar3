@@ -46,7 +46,7 @@ const timed = [];
 const revived = [];
 const hooks = {
   createUnit: () => nextSim++,
-  applyTimedLife: (id, s) => timed.push([id, s]),
+  applyTimedLife: (id, s, buff) => timed.push([id, s, buff]),
   // The engine answers false for a hero that is not dead — the native must pass that through.
   reviveHero: (id, x, y, eyeCandy) => { revived.push([id, x, y, eyeCandy]); return id === 1; },
 };
@@ -133,7 +133,9 @@ check('a unit event on the SUMMONED unit does not', g('onWolf').n, 0);
 
 console.log('\n--- UnitApplyTimedLife ---');
 interp.callFunction('Dummy', []);
-check('the duration reaches the engine for that unit', JSON.stringify(timed[0]), JSON.stringify([2, 2.5]));
+check('the duration reaches the engine for that unit', JSON.stringify(timed[0].slice(0, 2)), JSON.stringify([2, 2.5]));
+// The buff names the clock's bar in the info panel ('BTLF' is [Btlf] Bufftip=Timed Life).
+check('…with the buff the script named', timed[0][2], 'BTLF');
 
 console.log('\n--- ReviveHero / ReviveHeroLoc (pass 7) ---');
 check('ReviveHero returns what the engine answered', interp.callFunction('ReviveSeer', []).b, true);

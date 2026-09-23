@@ -7085,11 +7085,15 @@ export class RtsController {
       // summon triple with it, so an enemy's payload reports an ordinary hero with no expiry.
       // A client re-applying the viewpoint here would be a client deciding for itself which
       // units are illusions; on the sim path the local viewpoint is still what knows.
-      isSummon: u.isSummon && u.summonLeft > 0 && (!u.isIllusion || this.snapshot.active || this.readsSideOf(u.owner)),
+      // …and a unit a SCRIPT put on a clock (`UnitApplyTimedLife`) shows the same bar without
+      // being a summon — `isSummon` is what Dispel and the XP factor read, and that stays false.
+      isSummon: (u.isSummon || u.timedLifeBuff !== "") && u.summonLeft > 0 && (!u.isIllusion || this.snapshot.active || this.readsSideOf(u.owner)),
       isIllusion: u.isIllusion && (this.snapshot.active || this.readsSideOf(u.owner)), // same viewpoint rule as the tint
 
       summonSecondsLeft: Math.max(0, Math.ceil(u.summonLeft)),
-      summonLabel: (u.raisedBy && this.abilities.get(u.raisedBy)?.name) || "Summoned Unit",
+      // A script's clock is labelled with the buff it named — `[Btlf] Bufftip=Timed Life`
+      // (NeutralAbilityStrings.txt) for the generic one — read from the table, not typed here.
+      summonLabel: (u.raisedBy && this.abilities.get(u.raisedBy)?.name) || (u.timedLifeBuff && this.abilities.buff(u.timedLifeBuff)?.name) || "Summoned Unit",
       isRaised: u.raisedBy !== "",
       summonFrac: u.summonMax > 0 ? Math.max(0, Math.min(1, u.summonLeft / u.summonMax)) : 0,
       // …and the same bar for a TIMED ALTERNATE FORM, which is the same fact about the unit:

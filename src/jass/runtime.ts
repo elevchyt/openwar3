@@ -733,7 +733,7 @@ export interface EngineHooks {
    *  (RtsController.reviveHeroByScript). False when nothing is dead behind it, or food refuses. */
   reviveHero?(heroId: number, x: number, y: number, eyeCandy: boolean): boolean;
   /** UnitApplyTimedLife — a clock that kills the unit when it runs out (SimWorld.applyTimedLife). */
-  applyTimedLife?(unitId: number, seconds: number): void;
+  applyTimedLife?(unitId: number, seconds: number, buffId: string): void;
   setUnitStat?(unitId: number, stat: string, value: number, slot: number): boolean;
   // --- predicates a custom map gates on (docs/map-compatibility.md pass 4) ---
   /** IsUnitInRange / IsUnitInRangeXY / IsUnitInRangeLoc. Measured the way the SIM measures

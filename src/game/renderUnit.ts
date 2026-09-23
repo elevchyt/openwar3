@@ -175,6 +175,12 @@ export interface RenderUnit {
   readonly summonLeft: number;
   readonly summonMax: number;
   readonly raisedBy: string; // SimUnit.raisedBy
+  /** SimUnit.timedLifeBuff — a script's `UnitApplyTimedLife` clock on a unit that is not a
+   *  summon. NOT sent on the wire: the clock would ride the summon block, whose presence IS
+   *  F_IS_SUMMON (so a remote client would read a dummy caster as a summon), and all 32 unit
+   *  flag bits are spoken for. A remote client therefore shows no timer bar for a script's timed
+   *  life — the unit still dies on time, since that is the host's sim. */
+  readonly timedLifeBuff: string;
   /** The status row's icons. `SimBuff` is a plain data record and crosses whole. */
   readonly buffs: readonly RenderBuff[];
   /** What it can cast, and at what rank. Read by the world layer for an ALLY's hero only —

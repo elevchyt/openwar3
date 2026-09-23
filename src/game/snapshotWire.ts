@@ -534,6 +534,7 @@ function readUnit(r: Reader): UnitSnapshot {
     summonLeft: 0,
     summonMax: 0,
     raisedBy: "",
+    timedLifeBuff: "", // never sent — see RenderUnit.timedLifeBuff
     isIllusion: (flags & F_IS_ILLUSION) !== 0,
     illusionOf: 0,
     guardX: 0,

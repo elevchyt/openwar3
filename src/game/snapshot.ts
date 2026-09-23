@@ -353,6 +353,7 @@ export interface UnitSnapshot {
   summonLeft: number;
   summonMax: number;
   raisedBy: string;
+  timedLifeBuff: string; // not on the wire — see RenderUnit.timedLifeBuff
   isIllusion: boolean;
   illusionOf: number;
 
@@ -695,6 +696,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     summonLeft: 0,
     summonMax: 0,
     raisedBy: "",
+    timedLifeBuff: "",
     isIllusion: false,
     illusionOf: 0,
 
@@ -856,6 +858,7 @@ export function snapshotFor(
       summonLeft: showSummon ? u.summonLeft : 0,
       summonMax: showSummon ? u.summonMax : 0,
       raisedBy: showSummon ? u.raisedBy : "",
+      timedLifeBuff: "", // never sent — see RenderUnit.timedLifeBuff
       isIllusion: knowsIllusion,
       illusionOf: knowsIllusion ? u.illusionOf : 0,
 
