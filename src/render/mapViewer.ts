@@ -36,7 +36,7 @@ import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData } from "../data/objectData";
-import { readMapFormat } from "../compat/mapFormat";
+import { readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
 import { readW3i } from "../compat/w3i";
 import { preloadLuaHost } from "../compat/lua/index";
 import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/mapMisc";
@@ -878,6 +878,9 @@ export class MapViewerScene {
    *  map load from the terrain's boundary flags, and a map's own SetCameraBounds may then
    *  move it. Null = no map. */
   private mapBounds: WorldRect | null = null;
+  /** The open map's format, read once at the door (loadMapObjectData). Kept because one of its
+   *  answers outlives the read: the weapon-index convention the script runtime needs later. */
+  private mapFormat: MapFormatProfile = UNKNOWN_FORMAT;
   private distance = 4000;
   // Look from the south toward +Y (north up), matching WC3's default camera so
   // units/buildings (which default to facing 270° = south) face the viewer.
@@ -3288,6 +3291,7 @@ export class MapViewerScene {
    *  into the registry overlays (Phase 7 — issue #33). Best-effort: a missing/bad file
    *  just means the map runs with base-game types only. Clears prior overlays first. */
   private loadMapObjectData(): void {
+    this.mapFormat = UNKNOWN_FORMAT; // before the early return below, or the last map's leaks in
     this.registry.clearCustom();
     this.abilities.clearCustom();
     this.items.clearCustom();
@@ -3298,6 +3302,7 @@ export class MapViewerScene {
     // rather than acted on: the versions are the first thing worth knowing about a map that
     // behaves oddly, and every branch that CARES about them is behind a parser.
     const format = readMapFormat(this.mapArchive);
+    this.mapFormat = format;
     console.info(`[map] format: w3i v${format.w3iVersion}, terrain v${format.terrainVersion}, object data v${format.objectVersion}, ${format.scriptLanguage} script`
       + (format.editorBuild ? `, editor build ${(format.editorBuild / 100).toFixed(2)}` : "")
       + (format.partialW3i ? ", w3i stops early (protected?)" : "")
@@ -3437,6 +3442,9 @@ export class MapViewerScene {
         // What `GetPlayerColor(Player(PLAYER_NEUTRAL_AGGRESSIVE))` answers — a campaign map
         // (UndeadX05) colours its sleeping guards off it so they read as creeps.
         neutralColor: neutralTeamColor(this.vfs),
+        // Whether this map's `Blz…` weapon natives count from 0 or 1 — its own editor build says
+        // which convention its author tested (MapFormatProfile.weaponIndexBase).
+        weaponIndexBase: this.mapFormat.weaponIndexBase,
         // Publish the engine BEFORE config()/main() run: a hook fired during init may need
         // the interpreter itself (ChooseRandomItem draws from its seeded RNG — 7.18).
         onBoot: (e) => {

@@ -427,8 +427,11 @@ The work is going in passes, largest first, each with its own test and each re-m
 | 1 | hero attributes — `Get`/`SetHeroStr\|Agi\|Int`, `SuspendHeroXP` | 452 | ✓ |
 | 2 | `Get`/`SetWidgetLife`, `GetWidgetX/Y`, `UnitDamageTarget` | 196 | ✓ |
 | 4 | the `Is…` predicates, `GetWorldBounds` | 1199 | ✓ |
+| 5 | `GetTriggerEventId`, eval/exec counts, `TriggerRemoveAction/Condition` | 562 | ✓ |
+| 8 | `SetPlayerAbilityAvailable` | 420 | ✓ |
+| 3 | the `BlzGet/SetUnit…` stat accessors | 687 | ✓ |
 
-5019 → 4371 → **3172** call sites.
+5019 → 4371 → 3172 → 2610 → 2190 → **1503** call sites.
 
 Two findings from those two that are worth more than the code:
 
@@ -497,6 +500,48 @@ believes a player can see drift from what that player is actually shown. common.
 different questions about a unit (visible / fogged / masked / invisible / detected) and three
 about a point, and they are five and three questions rather than one with variations — a unit
 in the BLACK is masked, not fogged, and the natives exist to tell those apart.
+
+### Pass 5 — the event id belongs to the REGISTRATION
+
+Maps register one trigger on several events and branch on `GetTriggerEventId()` — the corpus's
+commonest comparisons are `EVENT_UNIT_DEATH` (114) and `EVENT_UNIT_DAMAGED` (72), typically on
+the same trigger — so the id is taken from the registration that matched, and hands back the very
+handle the map registered with. Implicit registrars (a timer, a region, a chat line, a dialog)
+carry no constant, and are named by looking the `common.j` constant up BY NAME in the runtime's
+own globals (`IMPLIED_EVENT`), so no index is retyped.
+
+### Pass 8 — `SetPlayerAbilityAvailable` takes the button, not the ability
+
+Two Hive tutorials agree (hiveworkshop 225879, 120518): per PLAYER, the button leaves the card and
+the ability cannot be used, but the unit KEEPS it — its cooldown keeps running, a cast underway is
+not interrupted, a passive keeps working. So it is asked only where an ability is used
+(`castUseError`, `issueCast`) and where its button is drawn — REMOVED there, not greyed, which is
+what an unresearched ability looks like. Most of DotA's 420 calls are the "disabled spellbook"
+trick, which also needs `Aspb` spellbooks, a separate item.
+
+### Pass 3 — the stat accessors are 1.30.4's, and the index is the map's
+
+`BlzSetUnitBaseDamage` and its family are in the install's OWN `common.j`: they are not later-format
+natives, just unimplemented ones, and they need no per-unit override table because the unit
+already owns its bases (`baseMaxHp`, `baseArmor`, `weapon.baseDamage/baseCooldown/baseDice`,
+layered on by `recomputeStats`). What each setter means is on `SimWorld.unitStat`: max life,
+max mana and armour are TOTALS with the base solved under today's bonuses (sourced for armour —
+hiveworkshop 319734), the life pool is held ABSOLUTE across a new ceiling (317026), and a hero's
+"Damage Base" has its starting primary attribute taken back out of the sim's copy.
+
+**The weapon index is counted from 0 or 1 depending on the MAP**: "in 1.30 or lower, the function
+is 1-indexed, but in 1.31 and newer, it is 0-indexed" (hiveworkshop 319334). Our 1.30.4 counts
+from 1; the two rebalance maps, saved by 1.36 and 2.0 editors, pass index 0 in 81 of 108 calls. A
+map a 1.31+ editor wrote only ever ran on a 1.31+ client, so `MapFormatProfile.weaponIndexBase`
+is `editorBuild >= 131 ? 0 : 1`, and it reaches the runtime as a plain number so no native
+imports `src/compat/`. The sim also records each weapon's real SLOT: both the SLK parser and the
+sim skip undeclared or unarmed slots, so list position is not the slot.
+
+The generic `BlzSetUnit*Field` setters were looked at and deliberately LEFT REFUSED — the reasons
+are at the refusal in `natives/blzFields.ts`: they are the editor's BASE columns rather than
+totals, which cannot be recovered for a hero; the corpus sets the routable ones zero times; and
+the two it does set (armor/defense TYPE, all Bribe's Damage Engine) are a save/restore round-trip
+whose getter currently answers 0, so routing them would corrupt the armour class.
 
 One thing was deliberately **not** done: `BlzSetEventDamage` (6 sites). `pumpDamageEvents` fires
 after the sim has applied the damage, so there is nothing left to modify, and making it work

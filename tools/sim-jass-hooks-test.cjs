@@ -56,6 +56,8 @@ const EXPECTED = [
   // SetPlayerAbilityAvailable — per-player availability, stored on TechState beside the tech
   // cap it sits next to (pass 8; sim-ability-available-test.cjs).
   "setPlayerAbilityAvailable",
+  // The Blz… per-unit stat accessors (pass 3; sim-unit-stats-test.cjs).
+  "unitStat", "setUnitStat",
   "setHeroXp", "setItemCharges", "setItemDroppable", "setItemPosition", "setPlayerTechMaxAllowed",
   // StoreUnit — a chapter writing its hero down for the next one (docs/campaigns.md). Its
   // twin RestoreUnit is the AUTHORITY's, because putting one back means creating it.

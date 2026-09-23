@@ -84,6 +84,9 @@ export interface SimWeapon {
   baseBackswing: number;
   /** Whether this slot may be used at all: its bit in `weapsOn`, which the `renw` upgrade
    *  effect can rewrite (Flying Machine Bombs switches the bomb slot on). See WeaponSlotDef. */
+  /** The unit type's weapon SLOT this is, 0-based — see WeaponSlotDef.slot. `weapons` also
+   *  drops unarmed slots, so its index is not the slot either. */
+  slot: number;
   enabled: boolean;
   /** "Targets Allowed" (`targs1`/`targs2`). A weapon strikes a target only if its list admits
    *  it — `air` for a flyer, `structure` for a building, `ground` for everything else — which
@@ -325,6 +328,7 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
     // same column what art, if any, this slot may show.
     const ranged = isRangedWeapon(s.weaponType);
     out.push({
+      slot: s.slot,
       damage: s.damage,
       dice: s.dice,
       sides: s.sides,
@@ -819,6 +823,11 @@ export interface LoadEvent {
 export interface ItemDropSet {
   items: Array<{ id: string; chance: number }>;
 }
+
+/** The per-unit stats the `BlzGetUnit…`/`BlzSetUnit…` natives read and write
+ *  (SimWorld.unitStat). The first three are TOTALS, the weapon four are the weapon's own
+ *  columns, and `invulnerable` is read-only. */
+export type UnitStat = "maxHp" | "maxMana" | "armor" | "invulnerable" | "baseDamage" | "attackCooldown" | "diceNumber" | "diceSides";
 
 /** Attributes + growth for a hero, applied on spawn and each level-up. */
 export interface HeroInit {
@@ -15111,6 +15120,98 @@ export class SimWorld {
     // `recordHit` is the native's own `attack` flag: a blow makes the weapon-on-armour clang
     // and a trigger's damage out of nowhere does not.
     return this.landDamage(target, dealt, sourceId, opts.attack);
+  }
+
+  /**
+   * The `BlzGetUnit…` / `BlzSetUnit…` stat accessors (docs/map-compatibility.md pass 3).
+   *
+   * These are 1.30.4 natives — they are in the install's own `common.j` — and they need no
+   * per-unit override table, because the unit already OWNS its bases: `baseMaxHp`, `baseArmor`,
+   * each weapon's `baseDamage`/`baseCooldown`/`baseDice` are seeded from the type at spawn and
+   * belong to the unit afterwards, and `recomputeStats` layers attributes, upgrades, items and
+   * buffs over them every tick. So a setter writes a base, exactly as a tome does, and what is
+   * worth writing down is WHICH base each one means:
+   *
+   *   * `maxHp`, `maxMana`, `armor` are TOTALS. The setter solves for the base that yields the
+   *     value with today's bonuses on top — for armour that is sourced ("only possible to
+   *     get/set total", ArmorUtils, hiveworkshop 319734: set 0 under a +100 aura and the base
+   *     becomes −100), and max hit points and mana are given the same reading. Solved by
+   *     re-asking `recomputeStats` rather than by restating its formula here, which would be a
+   *     second copy to drift.
+   *   * `baseDamage`, `attackCooldown`, `diceNumber`, `diceSides` are the weapon's own columns,
+   *     the object editor's "Attack N - Damage Base" etc. — bonuses stay on top. A hero's
+   *     `baseDamage` has its starting primary attribute folded in (data/units.ts adds it to
+   *     `dmgplus` at parse time), so it is taken back out here and the map sees the editor's
+   *     number; get and set are symmetric either way, so the corpus's read-modify-write idiom
+   *     (`BlzSetUnitBaseDamage(u, BlzGetUnitBaseDamage(u, i) + 15, i)`) is exact regardless.
+   *
+   * `slot` is the type's weapon SLOT, 0-based — the native's own index is translated into it by
+   * the caller, because whether a map counts from 0 or 1 is a fact about the MAP.
+   */
+  unitStat(unitId: number, stat: UnitStat, slot = 0): number | boolean | undefined {
+    const u = this.units.get(unitId);
+    if (!u) return undefined;
+    switch (stat) {
+      case "maxHp": return u.maxHp;
+      case "maxMana": return u.maxMana;
+      case "armor": return u.armor;
+      case "invulnerable": return u.invulnerable;
+    }
+    const w = u.weapons.find((x) => x.slot === slot);
+    if (!w) return undefined;
+    switch (stat) {
+      case "baseDamage": return w.baseDamage - this.foldedPrimary(u);
+      case "attackCooldown": return w.baseCooldown;
+      case "diceNumber": return w.baseDice;
+      case "diceSides": return w.sides;
+    }
+  }
+
+  /** Write one of `unitStat`'s values (see there for what each one means). False when there is
+   *  nothing to write it on — no such unit, or no such weapon slot. */
+  setUnitStat(unitId: number, stat: Exclude<UnitStat, "invulnerable">, value: number, slot = 0): boolean {
+    const u = this.units.get(unitId);
+    if (!u || !Number.isFinite(value)) return false;
+    if (stat === "maxHp" || stat === "maxMana" || stat === "armor") {
+      // `BlzSetUnitMaxHP` does NOT keep the life fraction — hiveworkshop 317026 tells a map to
+      // restore the percentage itself — while `recomputeStats` carries the pool up with any
+      // ceiling in proportion (its rule for items and levels). So the pool is held absolute
+      // across the solve, and only clamped to the new ceiling.
+      const keepHp = u.hp;
+      const keepMana = u.mana;
+      const read = (): number => (stat === "maxHp" ? u.maxHp : stat === "maxMana" ? u.maxMana : u.armor);
+      // A handful of passes: armour is linear in its base and settles on the first; a pool
+      // multiplied by an upgrade's percentage and snapped to whole points needs a second.
+      for (let pass = 0; pass < 4; pass++) {
+        const miss = value - read();
+        if (Math.abs(miss) < 1e-6) break;
+        if (stat === "maxHp") u.baseMaxHp += miss;
+        else if (stat === "maxMana") u.baseMaxMana += miss;
+        else u.baseArmor += miss;
+        this.recomputeStats(u);
+      }
+      u.hp = Math.min(keepHp, u.maxHp);
+      u.mana = Math.min(keepMana, u.maxMana);
+      return true;
+    }
+    const w = u.weapons.find((x) => x.slot === slot);
+    if (!w) return false;
+    if (stat === "baseDamage") w.baseDamage = Math.trunc(value) + this.foldedPrimary(u);
+    else if (stat === "attackCooldown") w.baseCooldown = Math.max(0.01, value);
+    else if (stat === "diceNumber") w.baseDice = Math.max(0, Math.trunc(value));
+    else w.sides = Math.max(0, Math.trunc(value));
+    this.recomputeStats(u);
+    return true;
+  }
+
+  /** The starting primary attribute data/units.ts folded into a hero's `dmgplus` (0 for
+   *  anybody else) — so `unitStat("baseDamage")` can hand back the editor's own column. */
+  private foldedPrimary(u: SimUnit): number {
+    if (!u.isHero) return 0;
+    return u.primaryAttr === PrimaryAttribute.Strength ? u.startStr
+      : u.primaryAttr === PrimaryAttribute.Agility ? u.startAgi
+      : u.primaryAttr === PrimaryAttribute.Intelligence ? u.startInt
+      : 0;
   }
 
   /**

@@ -1,4 +1,4 @@
-import { jassOwnerOf, type SimWorld, type SimMine, type SimUnit, type StoredUnitState } from "../sim/world";
+import { jassOwnerOf, type SimWorld, type SimMine, type SimUnit, type StoredUnitState, type UnitStat } from "../sim/world";
 import type { EngineHooks, UnitSnapshot } from "../jass/runtime";
 import { MAIN_HALL_CHAINS } from "../data/races";
 import { AttackType, MoveType } from "../data/enums";
@@ -188,6 +188,11 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     setPlayerTechResearched: (player, tech, level) => sim.tech?.setResearchLevel(player, tech, level),
     setPlayerTechMaxAllowed: (player, tech, max) => sim.tech?.setMaxAllowed(player, tech, max),
     setPlayerAbilityAvailable: (player, abil, available) => sim.tech?.setAbilityAvailable(player, abil, available),
+    // The Blz… stat accessors (pass 3). The stat name crosses as a string and is narrowed here;
+    // `invulnerable` is read-only, so the setter refuses it rather than inventing a write.
+    unitStat: (id, stat, slot) => sim.unitStat(id, stat as UnitStat, slot),
+    setUnitStat: (id, stat, value, slot) =>
+      stat === "invulnerable" ? false : sim.setUnitStat(id, stat as Exclude<UnitStat, "invulnerable">, value, slot),
     // --- abilities + heroes (7.17): a trigger grants a spell / levels a hero ---
     unitAddAbility: (id, abilityId) => sim.addAbility(id, abilityId),
     unitRemoveAbility: (id, abilityId) => sim.removeAbility(id, abilityId),

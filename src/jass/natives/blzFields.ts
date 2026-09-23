@@ -61,8 +61,24 @@ export function registerFieldNatives(rt: Runtime): void {
     return jStr(typeof v === "string" ? v : "");
   });
 
-  // The setters, refused in one place and for one reason (see the note at the top). Named
-  // individually rather than looped so `tools/native-coverage.mjs` still sees them.
+  // The setters, refused in one place (see the note at the top). Named individually rather
+  // than looped so `tools/native-coverage.mjs` still sees them.
+  //
+  // They were looked at again when the NAMED accessors landed (natives/unitStats.ts, pass 3),
+  // and deliberately left refused — read this before routing one of them onto those writes:
+  //
+  //   * They do not mean the same thing. `BlzSetUnitMaxHP`/`BlzSetUnitArmor` set the unit's
+  //     TOTAL (the engine solves the base); these fields are the object editor's BASE columns
+  //     (`uhpm` "Hit Points Maximum (Base)", `udef` "Combat - Defense Base", `umpm`). For a hero
+  //     that base cannot be recovered: the sim's bases are the data's own pre-folded `realhp` /
+  //     `realdef` / `realm` columns, starting attributes and the hero armour constant included,
+  //     and the raw `hp`/`def` columns are not carried.
+  //   * Nothing asks. Across the eleven maps in `Maps\Download` these three are set ZERO times.
+  //   * The two that ARE set — `UNIT_IF_ARMOR_TYPE` / `UNIT_IF_DEFENSE_TYPE`, 8 calls, every one
+  //     Bribe's Damage Engine — are a save/override/RESTORE round-trip inside the pre-damage
+  //     event, and their getter reads the damage-table class for BOTH (a string, so it answers
+  //     0). Routing the setter before fixing that getter would write 0 back after every hit and
+  //     corrupt the unit's armour class. The refusal is what protects it.
   for (const name of [
     "BlzSetUnitIntegerField", "BlzSetUnitRealField", "BlzSetUnitBooleanField", "BlzSetUnitStringField",
   ]) {

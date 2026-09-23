@@ -33,6 +33,12 @@ export interface MapFormatProfile {
    *  format is not by itself a refusal, and after the parsers learned v32/v33, v3 and v12
    *  most such maps play. */
   laterFormat: boolean;
+  /** What the `Blz…` weapon natives count weapons from: 0 for a map saved by a 1.31+ editor,
+   *  1 otherwise. "In 1.30 or lower, the function is 1-indexed, but in 1.31 and newer, it is
+   *  0-indexed" (hiveworkshop 319334) — and a map a 1.31+ editor wrote only ever ran on a 1.31+
+   *  client, so it is the map's own build that says which convention its author tested. The
+   *  two rebalance maps in the corpus pass 0 in 81 of 108 such calls. */
+  weaponIndexBase: 0 | 1;
 }
 
 /** What the map door reads when there is no map (a campaign chapter's repacked archive that
@@ -45,6 +51,7 @@ export const UNKNOWN_FORMAT: MapFormatProfile = {
   scriptLanguage: "none",
   partialW3i: false,
   laterFormat: false,
+  weaponIndexBase: 1,
 };
 
 /** The seven object files, in the order the engine reads them. */
@@ -81,6 +88,7 @@ export function readMapFormat(mpq: MpqDataSource): MapFormatProfile {
     // 1.30.4 is what we target; anything the 1.31+ editors stamped is "later". A 2003 map
     // stamps nothing at all (build 0), which is the common case and not a later format.
     laterFormat: editorBuild > 130 || info.version > 25,
+    weaponIndexBase: editorBuild >= 131 ? 0 : 1,
   };
 }
 

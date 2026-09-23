@@ -709,6 +709,10 @@ export interface EngineHooks {
     amount: number,
     opts: { attack: boolean; ranged: boolean; attackType: string; magic: boolean; universal: boolean },
   ): number;
+  /** The `BlzGetUnit…`/`BlzSetUnit…` stat accessors (SimWorld.unitStat says what each stat
+   *  means). `slot` is the weapon SLOT, 0-based — already translated from the map's index. */
+  unitStat?(unitId: number, stat: string, slot: number): number | boolean | undefined;
+  setUnitStat?(unitId: number, stat: string, value: number, slot: number): boolean;
   // --- predicates a custom map gates on (docs/map-compatibility.md pass 4) ---
   /** IsUnitInRange / IsUnitInRangeXY / IsUnitInRangeLoc. Measured the way the SIM measures
    *  every other range — centre distance against `distance + both collision radii` — so a
@@ -1403,6 +1407,12 @@ export class Runtime {
    *  `neutralTeamColor`; the host sets this through `HeadlessOptions.neutralColor`). A
    *  neutral slot's own index is not a colour at all on the wide table — 12 there is maroon. */
   neutralPlayerColor: number = PlayerSlot.NeutralHostile;
+  /** What the `Blz…` weapon natives count weapons FROM — 1 or 0 — so `weaponIndex − this` is
+   *  the weapon slot. "In 1.30 or lower, the function is 1-indexed, but in 1.31 and newer, it
+   *  is 0-indexed" (hiveworkshop 319334). 1 is our own 1.30.4's answer; a map saved by a 1.31+
+   *  editor was only ever run on a 1.31+ client, so the map door sets 0 for it
+   *  (MapFormatProfile.weaponIndexBase). A plain number, so no native imports `src/compat/`. */
+  weaponIndexBase = 1;
 
   /** Which slot the human at THIS MACHINE is playing. The lobby's user slot isn't always 0,
    *  so the host sets this with applyLobby. */

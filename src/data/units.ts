@@ -31,6 +31,10 @@ import {
  *  buildings. Modelling one weapon per unit made a Footman able to swing at a Gryphon and
  *  a Siege Engine able to mow down Footmen — neither of which WC3 permits. */
 export interface WeaponSlotDef {
+  /** Which of the row's two weapon slots this is, 0-based (slot 1 = 0). Carried because the
+   *  list SKIPS undeclared slots, so a unit with only a slot-2 attack has it at index 0 — and
+   *  `BlzSetUnitBaseDamage(u, d, <weapon 2>)` has to find slot 2, not the first entry. */
+  slot: number;
   /** This slot's bit in `weapsOn` ("Attacks Enabled"). The Flying Machine ships weapsOn=1
    *  (air only) and the Chimaera weapsOn=2 (ground only — its acid breath is slot 1, OFF).
    *  The `renw` upgrade effect REPLACES the whole mask: Flying Machine Bombs (`Rhgb`) and
@@ -888,6 +892,7 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
     if (!targets.length) continue; // the row declares no such slot
     const weaponType = toWeaponType(str(w, `weapTp${n}`));
     out.push({
+      slot: n - 1,
       enabled: (mask & (1 << (n - 1))) !== 0,
       targets,
       damage: num(w, `dmgplus${n}`, 0) + primaryVal,
