@@ -82,6 +82,11 @@ export interface SellUnitEvent {
   shop: UnitSnapshot;
   sold: UnitSnapshot;
 }
+/** A unit spawned a summoned unit (EVENT_(PLAYER_)UNIT_SUMMON). */
+export interface SummonEvent {
+  summoner: UnitSnapshot;
+  summoned: UnitSnapshot;
+}
 /** A hero levelling up or learning a skill (7.17). */
 export interface HeroEvent {
   hero: UnitSnapshot;
@@ -204,6 +209,8 @@ const EVENT_UNIT_SELL_ITEM = 288;
 // the same Scroll of Town Portal a trained one does).
 const EVENT_PLAYER_UNIT_SELL = 269;
 const EVENT_UNIT_SELL = 286;
+const EVENT_PLAYER_UNIT_SUMMON = 47;
+const EVENT_UNIT_SUMMON = 84;
 /** The three contiguous item phases, in common.j's order (phase index + base = event id). */
 const ITEM_PHASES = ["drop", "pickup", "use"] as const;
 // A unit loaded into a transport / burrow (common.j 51 player, 88 unit).
@@ -1472,6 +1479,30 @@ export class Interpreter {
    * This is the second half of MeleeGrantHeroItems: a melee player's first hero carries a
    * Scroll of Town Portal whether it was trained at an Altar or woken at a Tavern.
    */
+  /**
+   * Pump summon events — a unit SPAWNED a summoned unit.
+   *
+   * The SUMMONER is the subject, and the install says so in the event's own words: "When
+   * responding to a 'Spawns A Summoned Unit' unit event" (`UI\TriggerStrings.txt`, the hints for
+   * `GetSummonedUnit`/`GetSummoningUnit`) — the unit that spawns is the "A unit", which is the
+   * triggering unit (hiveworkshop 264641). So `GetTriggerUnit` is the summoner, a unit-scoped
+   * registration matches the summoner, and the player event is filed under the summoner's owner.
+   */
+  pumpSummonEvents(events: ReadonlyArray<SummonEvent>): void {
+    for (const e of events) {
+      const summoner = this.rt.unitForSim(e.summoner);
+      const summoned = this.rt.unitForSim(e.summoned);
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", summoner],
+        ["SummoningUnit", summoner],
+        ["SummonedUnit", summoned],
+      ]);
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_SUMMON, e.summoner.owner, summoner)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_SUMMON) && this.paramUnitIs(reg, summoner)));
+    }
+  }
+
   pumpSellUnitEvents(events: ReadonlyArray<SellUnitEvent>): void {
     for (const e of events) {
       const shop = this.rt.unitForSim(e.shop);

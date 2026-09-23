@@ -820,7 +820,7 @@ export class RtsController {
   // A HERO's body is the same list and a different ending (issue #126): Death → Dissipate,
   // whose last second fades the body away → gone. It never has a `corpseId`, because a hero
   // leaves no remains for anything to raise, eat or carry — see SimWorld.spawnCorpse.
-  private corpses: Array<{ instance: Instance; corpseId: number; anims: AnimSet; phaseT: number; phase: CorpsePhase; hero?: boolean; held?: boolean; fadeFrom?: Float32Array }> = [];
+  private corpses: Array<{ instance: Instance; corpseId: number; anims: AnimSet; phaseT: number; phase: CorpsePhase; hero?: boolean; heroId?: number; held?: boolean; fadeFrom?: Float32Array }> = [];
   private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number]; sizeToRadius: boolean }> = [];
   private treePulses: Array<{ x: number; y: number }> = []; // trees to flash yellow on harvest
   // scratch buffers to avoid per-frame allocation
@@ -2333,6 +2333,58 @@ export class RtsController {
    * `createUnit(): number` can only carry an id back, not the resolved position the renderer needs
    * to put a model at. A queue carries both.
    */
+  /**
+   * `ReviveHero(h, x, y, doEyecandy)` / `ReviveHeroLoc` — a trigger brings a fallen hero back,
+   * instantly, where it says (docs/map-compatibility.md pass 7). 72 call sites across the
+   * corpus, in eight of its eleven maps: every arena and hero-survival map revives this way.
+   *
+   * It is the ALTAR's revival with the altar taken out, not a new one: the hero comes back under
+   * the id it died with, so the handle a script kept is the living hero again (see the altar path
+   * in mapViewer's train drain), with its level, ranks, items and name, and the ALTAR's vitals —
+   * MiscGame's `HeroRevive*` set, full life and starting mana. The game has exactly two sets,
+   * Revive and Awaken, and a trigger's is the former: the standard advice for a full-mana revive
+   * is "instantly revive… followed by Set mana to max" (hiveworkshop 115134).
+   *
+   * Three things it has to get right that the altar never faces:
+   *
+   *   * FOOD gates it. "It doesn't work if the food cost of the hero is higher than how much food
+   *     you have" (hiveworkshop 263960; 241073 — "another reason why the campaign heroes cost 0
+   *     food"). A dead hero no longer counts toward food used, so it needs room again — asked of
+   *     the same `foodRefusal` training asks.
+   *   * A hero QUEUED at an altar is revived by the trigger, not twice: its altar job is cancelled
+   *     through the player's own `canceltrain` command, refund and all, before the hero stands
+   *     up — or the altar would later spawn it again under the id it now lives under.
+   *   * The altar waits for the body to finish (`FallenHero.bodyLeft`); a trigger does not, and
+   *     "revive on death" maps depend on that. So a body still dissipating is taken off the field.
+   *
+   * False when there is no fallen hero behind the handle (it is alive, or was never a hero), or
+   * when food refuses — which is the native's own boolean.
+   */
+  reviveHeroByScript(heroId: number, x: number, y: number, eyeCandy: boolean): boolean {
+    const f = this.sim.fallen.get(heroId);
+    if (!f) return false;
+    const def = this.registry.get(f.typeId);
+    if (!def) return false;
+    if (this.foodRefusal(f.owner, def.foodUsed) !== "") return false;
+    if (f.revivingAt) {
+      const b = this.sim.units.get(f.revivingAt);
+      const queue = b?.building?.queue ?? [];
+      const index = queue.findIndex((j) => j.kind === "revive" && j.heroId === heroId);
+      const slot = queue[index];
+      if (b && slot) this.execute(slot.kind === "revive" && slot.buyer !== undefined ? slot.buyer : b.owner, { c: "canceltrain", buildingId: b.id, index });
+    }
+    for (let i = this.corpses.length - 1; i >= 0; i--) {
+      if (this.corpses[i].heroId !== heroId) continue;
+      this.corpses[i].instance.hide();
+      this.corpses.splice(i, 1);
+    }
+    const facing = (MELEE.UNIT_FACING * Math.PI) / 180; // Blizzard.j's bj_UNIT_FACING
+    this.addSimUnit(def, x, y, facing, f.owner, f.team, 0, heroId); // under the id it died with
+    this.sim.reviveFallenHero(heroId, heroId, "altar", eyeCandy);
+    this.scriptSpawns.push({ typeId: f.typeId, x, y, facing, player: f.owner, team: f.team, simId: heroId }); // …a body later
+    return true;
+  }
+
   createScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number, teamOf: (p: number) => number): number {
     const def = this.registry.get(typeId);
     if (!def) return -1;
@@ -4897,7 +4949,10 @@ export class RtsController {
       // A hero has no sim corpse to find (spawnCorpse declines one) and does not want the
       // "no corpse → blink out when the Death clip ends" ending either: it dissipates and
       // fades. See tickCorpses.
-      this.corpses.push({ instance: e.unit.instance, corpseId: corpse?.id ?? -1, anims: e.anims, phaseT: 0, phase: "death", hero: def?.isHero });
+      // A hero's body remembers WHOSE it is, so a script that revives the hero before the body has
+      // dissipated can take it off the field (reviveHeroByScript) instead of leaving it fading
+      // beside the hero standing up.
+      this.corpses.push({ instance: e.unit.instance, corpseId: corpse?.id ?? -1, anims: e.anims, phaseT: 0, phase: "death", hero: def?.isHero, heroId: def?.isHero ? simId : undefined });
     } else {
       e.unit.instance.hide();
     }
@@ -8191,6 +8246,9 @@ export class RtsController {
       // …and ONE item's long description, which is not the type's: two Claws of Attack can say
       // different things. Keyed on the item's entity id, like `SetItemDroppable`'s override.
       setItemExtendedTooltip: (itemId, text) => void this.itemTooltips.set(itemId, text),
+      // ReviveHero — the controller's, because a revival needs a body spawned and, for a hero
+      // queued at an altar, the player's own cancel command (reviveHeroByScript).
+      reviveHero: (heroId, x, y, eyeCandy) => this.reviveHeroByScript(heroId, x, y, eyeCandy),
     };
   }
 

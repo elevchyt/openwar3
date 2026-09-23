@@ -3524,6 +3524,8 @@ export class MapViewerScene {
     // SELL_ITEM and a separate event. Every melee map registers it: MeleeGrantHeroItems
     // watches the neutral-passive shops so a Tavern hero gets the same starting scroll.
     sw.captureSellUnits = any("playerUnitEvent", 269) || any("unitEvent", 286);
+    // SUMMON — 47 player / 84 unit (common.j). The corpus reads `GetSummonedUnit` 92 times.
+    sw.captureSummons = any("playerUnitEvent", 47) || any("unitEvent", 84);
     // LOADED — 51 player / 88 unit. A campaign harbour scene is the case: the ship leaves the
     // moment its passenger is aboard, and it is a unit-scoped registration on the PASSENGER.
     sw.captureLoads = any("playerUnitEvent", 51) || any("unitEvent", 88);
@@ -3593,6 +3595,8 @@ export class MapViewerScene {
       if (trains.length) engine.interp.pumpTrainEvents(trains);
       const sales = sw.drainSellUnitEvents();
       if (sales.length) engine.interp.pumpSellUnitEvents(sales);
+      const summons = sw.drainSummonEvents();
+      if (summons.length) engine.interp.pumpSummonEvents(summons);
       const heroes = sw.drainHeroEvents();
       if (heroes.length) engine.interp.pumpHeroEvents(heroes);
       // 7.18: items picked up / dropped / used (a trigger's UnitAddItem and a hero walking
@@ -11665,6 +11669,10 @@ export class MapViewerScene {
         // level has to be applied and the stats rebuilt off it before hp/mana can be set
         // (see initIllusion), which is not something the renderer should be sequencing.
         if (su && s.illusion) world.initIllusion(su, s.sourceId, s.illusion);
+        // …and a unit has now SPAWNED a summoned unit (EVENT_(PLAYER_)UNIT_SUMMON). Raised here
+        // because this is the first moment the summon has an id to hand a script — after the
+        // illusion is set up, so `IsUnitIllusion(GetSummonedUnit())` already answers true.
+        if (su && s.sourceId) world.noteSummon(s.sourceId, simId);
         // …and a hidden ward starts the clock on its fade (Sentry Ward, Stasis Trap).
         if (su && s.cloakAfter !== undefined) world.cloakSummon(su, s.cloakAfter);
         this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)

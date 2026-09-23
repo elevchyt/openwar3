@@ -12,7 +12,7 @@
 
 import { intToRawcode } from "../lexer";
 import type { JassUnit, NativeCtx, Runtime } from "../runtime";
-import { asInt, jBool, jInt, JNULL, truthy, type JassValue } from "../values";
+import { asInt, asNum, jBool, jInt, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -143,6 +143,19 @@ export function registerAbilityNatives(rt: Runtime): void {
       return JNULL;
     });
   }
+  // ReviveHero(h, x, y, doEyecandy) / ReviveHeroLoc(h, loc, doEyecandy) — a fallen hero back,
+  // instantly, where the script says. The handle is the one the map took while the hero lived:
+  // it revives under the same id (RtsController.reviveHeroByScript), so it is the hero again.
+  const revive = (c: NativeCtx, heroV: JassValue, x: number, y: number, eyeCandy: boolean): JassValue => {
+    const u = c.rt.data<JassUnit>(heroV);
+    if (!u || u.simId < 0) return jBool(false);
+    return jBool(c.rt.hooks?.reviveHero?.(u.simId, x, y, eyeCandy) ?? false);
+  };
+  def(rt, "ReviveHero", (c, a) => revive(c, a[0], asNum(a[1]), asNum(a[2]), truthy(a[3])));
+  def(rt, "ReviveHeroLoc", (c, a) => {
+    const p = c.rt.data<{ x: number; y: number }>(a[1]);
+    return revive(c, a[0], p?.x ?? 0, p?.y ?? 0, truthy(a[2]));
+  });
   // SuspendHeroXP(h, flag) — TRUE stops the hero banking experience. Note the polarity: the
   // flag says SUSPENDED, so `SuspendHeroXP(h, false)` is the one that lets him earn again.
   def(rt, "SuspendHeroXP", (c, a) => {

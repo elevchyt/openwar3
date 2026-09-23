@@ -207,7 +207,7 @@ console.log("\nthe light a hero comes back in is picked by its race");
     get: (id) => (id === "Arev" ? { targetArts: ARTS } : id === "Aawa" ? { targetArts: [AWAKEN] } : undefined),
   };
 
-  function burstFor(race, mode = "altar") {
+  function burstFor(race, mode = "altar", eyeCandy = true) {
     const grid = new PathingGrid({ width: 64, height: 64, flags: new Uint8Array(64 * 64) }, [0, 0]);
     const world = new SimWorld(grid, 1, abilities);
     const u = {
@@ -225,7 +225,8 @@ console.log("\nthe light a hero comes back in is picked by its race");
       abilities: [], inventory: [], baseStr: 10, baseAgi: 10, baseInt: 10, baseMaxHp: 100,
       x: 0, y: 0, revivingAt: 0,
     });
-    world.reviveFallenHero(u.id, u.id, mode);
+    world.reviveFallenHero(u.id, u.id, mode, eyeCandy);
+    burstFor.last = u;
     return world.drainSpellEffects();
   }
 
@@ -243,6 +244,12 @@ console.log("\nthe light a hero comes back in is picked by its race");
   // …and the Tavern is not the altar wearing a different hat.
   check("a Tavern wakes a human hero in Awaken, not ReviveHuman", burstFor("human", "tavern").map((e) => e.art), [AWAKEN]);
   check("…and an orc one in the very same model", burstFor("orc", "tavern").map((e) => e.art), [AWAKEN]);
+
+  // A TRIGGER's revive (`ReviveHero`, docs/map-compatibility.md pass 7) takes the altar's vitals and
+  // obeys its own last argument — the editor's "Show/Hide revival graphics".
+  check("ReviveHero with eye candy off plays nothing", burstFor("human", "altar", false).length, 0);
+  check("…but the hero still came back whole", burstFor.last.hp, burstFor.last.maxHp);
+  check("…and with it on, the altar's own light", burstFor("human", "altar", true).map((e) => e.art), [ARTS[0]]);
 }
 
 console.log("\nan enemy building's status is the owner's");

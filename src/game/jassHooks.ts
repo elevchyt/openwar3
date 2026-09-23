@@ -197,6 +197,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     unitAbilityCooldownLeft: (id, abil) => sim.unitAbilityCooldownLeft(id, abil),
     endUnitAbilityCooldown: (id, abil) => sim.endUnitAbilityCooldown(id, abil),
     abilityRankData: (abil, rank) => sim.abilityRankData(abil, rank),
+    applyTimedLife: (id, seconds) => sim.applyTimedLife(id, seconds),
     setUnitStat: (id, stat, value, slot) =>
       stat === "invulnerable" ? false : sim.setUnitStat(id, stat as Exclude<UnitStat, "invulnerable">, value, slot),
     // --- abilities + heroes (7.17): a trigger grants a spell / levels a hero ---

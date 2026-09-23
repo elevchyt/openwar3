@@ -95,6 +95,14 @@ export function registerWorldNatives(rt: Runtime): void {
     if (u && u.simId >= 0) c.rt.hooks?.setUnitState?.(u.simId, c.rt.enumIndex(a[1]), asNum(a[2]));
     return JNULL;
   });
+  // UnitApplyTimedLife(u, buffId, duration) — the summon clock, handed to any unit (88 call
+  // sites, 80 of them DotA's dummy casters). The buff id is the timer's LABEL ('BTLF' "Timed
+  // Life" for most maps) and is not modelled; the duration is. See SimWorld.applyTimedLife.
+  def(rt, "UnitApplyTimedLife", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.applyTimedLife?.(u.simId, asNum(a[2]));
+    return JNULL;
+  });
   def(rt, "GetUnitState", (c, a) => {
     const u = unit(c, a[0]);
     return { k: "real", n: u && u.simId >= 0 ? c.rt.hooks?.getUnitState?.(u.simId, c.rt.enumIndex(a[1])) ?? 0 : 0 };

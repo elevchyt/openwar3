@@ -431,8 +431,10 @@ The work is going in passes, largest first, each with its own test and each re-m
 | 8 | `SetPlayerAbilityAvailable` | 420 | ✓ |
 | 3 | the `BlzGet/SetUnit…` stat accessors | 687 | ✓ |
 | 9 | the `Blz…` ability natives — per-unit disable/hide, clocks, costs, words, icons | 576 | ✓ |
+| 6 | the summon event, `GetSummonedUnit`/`GetSummoningUnit`, `UnitApplyTimedLife` | 200 | ✓ |
+| 7 | `ReviveHero`, `ReviveHeroLoc` | 72 | ✓ |
 
-5019 → 4371 → 3172 → 2610 → 2190 → 1503 → **927** call sites.
+5019 → 4371 → 3172 → 2610 → 2190 → 1503 → 927 → **655** call sites.
 
 Two findings from those two that are worth more than the code:
 
@@ -568,6 +570,26 @@ titles are now in it; the icon (a data URL, rebuilt every frame) is compared per
 Not done, deliberately: `BlzSetUnitAbilityCooldown`/`…ManaCost` (per-unit overrides of a per-type
 value, called zero times), so their unit-level getters answer the type — exact while nothing can
 have changed it.
+
+### Passes 6 and 7 — a unit's lifecycle
+
+The summon event's SUBJECT is the summoner: the install words it "'Spawns A Summoned Unit'" with the
+spawner as the "A unit" (`UI\TriggerStrings.txt`; hiveworkshop 264641), so `GetTriggerUnit` is the
+summoner and the player event is filed under the summoner's owner. It is raised when the summon
+EXISTS — after its model loads, the first moment it has an id — and after an illusion is set up, so
+DotA's `IsUnitIllusion(GetSummonedUnit())` answers true. A TIMED raise now names its caster; a
+Resurrection names nobody and is not a summon. `UnitApplyTimedLife` is the summon clock handed to any
+unit, without making it a summon (Dispel and the summon XP factor read `isSummon`).
+
+`ReviveHero` is the ALTAR's revival with the altar taken out: the hero comes back under the id it died
+with (so the handle a map kept is the hero again), with its level, ranks, items and name, and the
+altar's vitals — MiscGame has exactly two sets, Revive and Awaken, and a trigger's is Revive (the
+standard advice for a full-mana revive is to set the mana yourself afterwards, hiveworkshop 115134).
+Three things the altar never faces: FOOD gates it ("doesn't work if the food cost of the hero is
+higher than how much food you have", hiveworkshop 263960 / 241073); a hero QUEUED at an altar has its
+altar job cancelled through the player's own `canceltrain` command, refund included, or the altar
+would later spawn it again under the id it now lives under; and a trigger does not wait for the body
+to dissipate, so a body still on the field is taken off it.
 
 One thing was deliberately **not** done: `BlzSetEventDamage` (6 sites). `pumpDamageEvents` fires
 after the sim has applied the damage, so there is nothing left to modify, and making it work

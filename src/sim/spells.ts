@@ -505,6 +505,9 @@ export interface RaiseOptions {
   art?: string; // the burst each body rises in
   unsummonArt?: string; // …and the one that replaces it when the timer runs out
   raisedBy?: string; // the raising ability's id (SimUnit.raisedBy) — a timed raise's bar label and tint
+  /** The unit that raised them — `GetSummoningUnit` for a TIMED raise (a skeleton is a summon;
+   *  a Resurrection is not, and gets no summon event). Filled in by `raiseCorpses`. */
+  summoner?: number;
 }
 
 /** Where a cast is aimed. */
@@ -3730,7 +3733,7 @@ function summonFromCorpse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank:
 function raiseCorpses(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, x: number, y: number, opts?: RaiseOptions): number {
   const lvl = lv(def, rank);
   const taken = api.claimCorpses(caster, def, x, y, corpseReach(def.code, lvl), Math.max(1, d(lvl, 0, 6)), { order: "freshest" });
-  return api.raiseClaimed(taken, caster.owner, caster.team, opts);
+  return api.raiseClaimed(taken, caster.owner, caster.team, { ...opts, durationSec: opts?.durationSec ?? 0, summoner: caster.id });
 }
 
 /** Generic summon: place `count` (0 ⇒ read dataA/dataB) copies of the ability's

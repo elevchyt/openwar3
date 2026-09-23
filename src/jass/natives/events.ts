@@ -194,6 +194,9 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetTransportUnit", (c) => resp(c, "TransportUnit"));
   def(rt, "GetFilterUnit", (c) => resp(c, "FilterUnit")); // set during enter/enum boolexpr filters
   def(rt, "GetEventDamageSource", (c) => resp(c, "EventDamageSource")); // EVENT_UNIT_DAMAGED
+  // EVENT_(PLAYER_)UNIT_SUMMON — the new unit, and the one that spawned it (Interpreter.pumpSummonEvents).
+  def(rt, "GetSummonedUnit", (c) => resp(c, "SummonedUnit"));
+  def(rt, "GetSummoningUnit", (c) => resp(c, "SummoningUnit"));
   // 1.31's other half of the same event (declared in src/compat/prelude.ts). The unit that was
   // HIT is already the triggering unit — a damage event is raised on it — so this is that same
   // response under the name a later map knows it by, and not a second thing to keep in step.

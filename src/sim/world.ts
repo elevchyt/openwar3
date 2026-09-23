@@ -1313,6 +1313,13 @@ export interface SellUnitEvent {
   sold: EventUnitInfo; // GetSoldUnit
 }
 
+/** A unit spawned a summoned unit — EVENT_(PLAYER_)UNIT_SUMMON. The SUMMONER is the event's
+ *  subject: the install words it "'Spawns A Summoned Unit'" with the spawner as "A unit". */
+export interface SummonEvent {
+  summoner: EventUnitInfo; // GetSummoningUnit (and GetTriggerUnit)
+  summoned: EventUnitInfo; // GetSummonedUnit
+}
+
 /** A hero gaining a level (EVENT_PLAYER_HERO_LEVEL) or learning a skill
  *  (EVENT_PLAYER_HERO_SKILL). `abilityId` is set only for "skill". */
 export interface HeroEvent {
@@ -3306,6 +3313,7 @@ export class SimWorld {
   captureHeroEvents = false; // EVENT_PLAYER_HERO_LEVEL / _SKILL (7.17)
   captureItems = false; // EVENT_(PLAYER_)UNIT_PICKUP/DROP/USE/SELL_ITEM (7.18)
   captureSellUnits = false; // EVENT_(PLAYER_)UNIT_SELL — a unit bought from a shop (269/286)
+  captureSummons = false; // EVENT_(PLAYER_)UNIT_SUMMON — a unit spawned a summoned unit (47/84)
   captureLoads = false; // EVENT_UNIT_LOADED (88) / EVENT_PLAYER_UNIT_LOADED (51)
   private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
   /** The last `HERO_KILL_LOG` hero deaths, oldest first, each numbered — read, never drained, by
@@ -3319,6 +3327,7 @@ export class SimWorld {
   private constructEvents: ConstructEvent[] = [];
   private trainEvents: TrainEvent[] = [];
   private sellUnitEvents: SellUnitEvent[] = [];
+  private summonEvents: SummonEvent[] = [];
   private heroEvents: HeroEvent[] = [];
   private itemEvents: ItemEvent[] = [];
   private loadEvents: LoadEvent[] = [];
@@ -4862,7 +4871,7 @@ export class SimWorld {
    * back whole (full life, its opening 100 mana), a tavern hands it back at half life with
    * nothing in the tank.
    */
-  reviveFallenHero(unitId: number, heroId: number, mode: ReviveMode): boolean {
+  reviveFallenHero(unitId: number, heroId: number, mode: ReviveMode, eyeCandy = true): boolean {
     const u = this.units.get(unitId);
     const f = this.fallen.get(heroId);
     if (!u || !f) return false;
@@ -4888,7 +4897,9 @@ export class SimWorld {
     const vitals = heroReviveVitals(mode, u.maxHp, u.maxMana, this.unitReg?.get(u.typeId)?.manaStart ?? 0);
     u.hp = Math.min(u.maxHp, vitals.hp);
     u.mana = vitals.mana;
-    this.emitReviveFx(u, mode);
+    // `eyeCandy` is `ReviveHero`'s own last argument ("Show/Hide revival graphics" in the editor);
+    // an altar and a tavern always show theirs.
+    if (eyeCandy) this.emitReviveFx(u, mode);
     return true;
   }
 
@@ -9103,6 +9114,42 @@ export class SimWorld {
     }
     if (!this.captureTrain) return;
     this.trainEvents.push({ building: eventInfo(b), unitTypeId: t.typeId, trained: eventInfo(t), phase: "finish" });
+  }
+
+  /**
+   * A summon has become a unit (`captureSummons`) — called when it EXISTS, which for a summon is
+   * after its model loads (the renderer's summon drain), because that is when it has an id a
+   * script could be handed. Every kind of summon counts: a Water Elemental, a ward, a Mirror Image
+   * copy (DotA spots illusions exactly this way, with `IsUnitIllusion` on `GetSummonedUnit`) and a
+   * TIMED raise; a Resurrection names no summoner and is not one.
+   */
+  noteSummon(summonerId: number, summonedId: number): void {
+    if (!this.captureSummons) return;
+    const a = this.units.get(summonerId);
+    const b = this.units.get(summonedId);
+    if (a && b) this.summonEvents.push({ summoner: eventInfo(a), summoned: eventInfo(b) });
+  }
+
+  drainSummonEvents(): SummonEvent[] {
+    if (!this.summonEvents.length) return this.summonEvents;
+    const out = this.summonEvents;
+    this.summonEvents = [];
+    return out;
+  }
+
+  /**
+   * `UnitApplyTimedLife(u, buffId, duration)` — put a unit on a clock that kills it when it runs
+   * out: the summon timer every Water Elemental wears, handed to any unit. It is the same clock
+   * (`summonLeft`, whose bar the info panel already draws), so the unit leaves the way a timed
+   * summon leaves. It does NOT make the unit a summon: that is `isSummon`, which Dispel and the
+   * summon XP factor read, and a map giving a dummy caster a two-second life is not asking for
+   * either. A second call replaces the clock.
+   */
+  applyTimedLife(unitId: number, seconds: number): void {
+    const u = this.units.get(unitId);
+    if (!u || u.hp <= 0 || !(seconds > 0)) return;
+    u.summonLeft = seconds;
+    u.summonMax = seconds;
   }
 
   /** Units bought from a shop since the last drain (`captureSellUnits`). */
@@ -16300,7 +16347,10 @@ export class SimWorld {
         stripped: (opts?.durationSec ?? 0) > 0, // a TIMED raise is a shell; Resurrection gives the unit back whole
         raisedBy: (opts?.durationSec ?? 0) > 0 ? opts?.raisedBy : undefined,
         invulnerable: opts?.invulnerable ?? false,
-        sourceId: 0, summonArt: opts?.art ?? "", unsummonArt: opts?.unsummonArt ?? "", atPoint: true,
+        // A TIMED raise has a summoner (`GetSummoningUnit`); a Resurrection gives units back and
+        // is not a summon at all, so it names nobody and raises no summon event.
+        sourceId: (opts?.durationSec ?? 0) > 0 ? opts?.summoner ?? 0 : 0,
+        summonArt: opts?.art ?? "", unsummonArt: opts?.unsummonArt ?? "", atPoint: true,
       });
     }
     return taken.length;
