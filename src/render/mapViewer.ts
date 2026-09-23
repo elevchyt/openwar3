@@ -10160,6 +10160,10 @@ export class MapViewerScene {
       // deleted the generic Repair for. Build Structure is withheld the same way, one level up
       // (`sel.isWorker`).
       if (!su.worker && (isHarvestCode(ab.code) || isRepairCode(ab.code))) continue;
+      // `SetPlayerAbilityAvailable(p, abil, false)` takes the button off the card for every
+      // unit that player owns — REMOVED, not greyed ("hide/disable an ability from the command
+      // card", hiveworkshop 225879). The unit keeps the ability; see TechState.abilityAvailable.
+      if (this.rts.simView.tech?.abilityAvailable(su.owner, ab.id) === false) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];

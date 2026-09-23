@@ -900,6 +900,9 @@ export interface EngineHooks {
   setPlayerTechResearched?(player: number, tech: string, level: number): void;
   /** SetPlayerTechMaxAllowed — 0 makes a unit type untrainable for that player. */
   setPlayerTechMaxAllowed?(player: number, tech: string, max: number): void;
+  /** SetPlayerAbilityAvailable — `available` false takes the ability off every card of that
+   *  player's units and out of their hands, without removing it from a unit (TechState). */
+  setPlayerAbilityAvailable?(player: number, abilityId: string, available: boolean): void;
   /** GetPlayerTypedUnitCount — count a player's units of one internal TYPE name (the
    *  `name` column of UnitUI.slk: "townhall", "greathall", …). Melee asks for the four
    *  main halls: owning none while still holding structures is what "crippled" means. */

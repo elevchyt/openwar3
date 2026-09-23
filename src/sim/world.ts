@@ -13192,6 +13192,10 @@ export class SimWorld {
     // …and neither does an ability whose upgrade is not researched (`[Aweb] Requires=Ruwb`).
     // Same shape, same silence: WC3 greys the button, so there is nothing to say.
     if (!this.techMeets(u.owner, ab.id)) return SILENT_REFUSAL;
+    // …nor one the map has made unavailable to this player (`SetPlayerAbilityAvailable`,
+    // TechState.abilityAvailable). Its button is not on the card at all, so this is only ever
+    // reached by a hotkey or a computer, and is silent for the same reason.
+    if (this.tech && !this.tech.abilityAvailable(u.owner, ab.id)) return SILENT_REFUSAL;
     // …nor a unit halfway through changing shape (SimUnit.morphT). `castLocked` already
     // refuses the order; this is the half that lets the CARD know, so Unburrow reads as
     // unpressable until the Crypt Fiend is actually underground.
@@ -13341,6 +13345,15 @@ export class SimWorld {
     // refuses the press (the button is drawn unavailable), but a gate that only the UI keeps
     // is not a gate: `[Aweb] Requires=Ruwb` has to mean the same thing to a trigger.
     if (!this.techMeets(u.owner, ab.id)) return false;
+    // …and so does `SetPlayerAbilityAvailable`, at the same door and for the same reason — a
+    // trigger's order and an autocast included. That a disabled ability cannot be cast even
+    // by a trigger is INFERRED rather than stated: the whole "disabled spellbook" idiom exists
+    // to hide abilities that can still be cast (spellbook tutorial, hiveworkshop 228604: "In
+    // theory it also allows to cast hidden actives with triggers"), and that indirection would
+    // be pointless if disabling the ability itself left it castable. What is NOT refused here is
+    // anything already in flight — this is an order gate, so a cast underway finishes, as the
+    // tutorial says it does.
+    if (this.tech && !this.tech.abilityAvailable(u.owner, ab.id)) return false;
     const def = this.abilities.get(ab.id);
     if (!def || def.target === "passive") return false;
     // Already hidden by this ability: the press restarts nothing and pays for it (see

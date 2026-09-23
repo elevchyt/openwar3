@@ -111,6 +111,15 @@ export function registerMeleeNatives(rt: Runtime): void {
     c.rt.hooks?.setPlayerTechMaxAllowed?.(player, tech, max);
     return JNULL;
   });
+  // SetPlayerAbilityAvailable(p, abil, avail) — the ABILITY twin of the cap above, and the
+  // most-called native a downloaded map used that we had no answer for after the predicates:
+  // 420 calls in DotA alone. It takes the button off the card and the ability out of the
+  // player's hands without taking it off any unit (TechState.abilityAvailable says what
+  // survives, and why).
+  def(rt, "SetPlayerAbilityAvailable", (c, a) => {
+    c.rt.hooks?.setPlayerAbilityAvailable?.(playerIndex(c, a[0]), intToRawcode(asInt(a[1])), truthy(a[2]));
+    return JNULL;
+  });
   def(rt, "GetPlayerTechMaxAllowed", (c, a) => jInt(c.rt.techMaxAllowed.get(`${playerIndex(c, a[0])}:${asInt(a[1])}`) ?? -1));
   // For an upgrade the count is its researched LEVEL; for a unit type it's how many the
   // player owns. One native, both meanings — that's WC3's own overload.

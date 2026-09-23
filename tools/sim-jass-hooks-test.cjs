@@ -53,6 +53,9 @@ const EXPECTED = [
   // half of that family is NOT here: `IsUnitVisible` and its four siblings are answered by the
   // viewpoint the renderer draws from, which is `visionHooks`' table, not this one.
   "isUnitInRange", "isUnitInRangeXY", "isUnitIllusion", "unitRace", "isTerrainPathable",
+  // SetPlayerAbilityAvailable — per-player availability, stored on TechState beside the tech
+  // cap it sits next to (pass 8; sim-ability-available-test.cjs).
+  "setPlayerAbilityAvailable",
   "setHeroXp", "setItemCharges", "setItemDroppable", "setItemPosition", "setPlayerTechMaxAllowed",
   // StoreUnit — a chapter writing its hero down for the next one (docs/campaigns.md). Its
   // twin RestoreUnit is the AUTHORITY's, because putting one back means creating it.

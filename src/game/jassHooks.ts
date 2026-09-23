@@ -187,6 +187,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     playerTechCount: (player, tech) => sim.tech?.count(player, tech) ?? 0,
     setPlayerTechResearched: (player, tech, level) => sim.tech?.setResearchLevel(player, tech, level),
     setPlayerTechMaxAllowed: (player, tech, max) => sim.tech?.setMaxAllowed(player, tech, max),
+    setPlayerAbilityAvailable: (player, abil, available) => sim.tech?.setAbilityAvailable(player, abil, available),
     // --- abilities + heroes (7.17): a trigger grants a spell / levels a hero ---
     unitAddAbility: (id, abilityId) => sim.addAbility(id, abilityId),
     unitRemoveAbility: (id, abilityId) => sim.removeAbility(id, abilityId),
