@@ -1098,6 +1098,21 @@ export interface EngineHooks {
   addSpecialEffectTarget?(path: string, unitId: number, attach: string[]): number;
   /** DestroyEffect — play the model's Death clip out, then take it off the scene. */
   destroyEffect?(id: number): void;
+  // --- lightning: a SCRIPT's bolt (docs/map-compatibility.md pass 10) ---
+  /** AddLightning[Ex] — a `Splats\LightningData.slk` row (`code`, "CLPB") strung between two
+   *  POINTS, standing until `destroyLightning`. `absZ` false is plain `AddLightning`, whose
+   *  ends "attach to the ground" (hiveworkshop 278746) — `z1`/`z2` are then 0 and mean "on
+   *  the ground"; true is the Ex form, whose z is an ABSOLUTE height. Returns the engine's
+   *  id, or -1 for a row the table does not have. */
+  addLightning?(code: string, checkVis: boolean, x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, absZ: boolean): number;
+  /** MoveLightning[Ex] — the same bolt to two new points. False for a bolt that is gone. */
+  moveLightning?(id: number, checkVis: boolean, x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, absZ: boolean): boolean;
+  destroyLightning?(id: number): boolean;
+  /** SetLightningColor — 0..1, alpha included. False for a bolt that is gone. */
+  setLightningColor?(id: number, r: number, g: number, b: number, a: number): boolean;
+  /** The bolt's colour as `GetLightningColorR/G/B/A` read it — its row's until the script
+   *  sets one. Null for a bolt that is gone. */
+  lightningColor?(id: number): [number, number, number, number] | null;
   /** Find the sim unit a PRE-PLACED `CreateUnit` row refers to (7.22). Inside
    *  `CreateAllUnits()` we record the row and never spawn (the unit is already on the map,
    *  adopted from war3mapUnits.doo — Runtime.recordOnlySpawnFns), which used to leave the

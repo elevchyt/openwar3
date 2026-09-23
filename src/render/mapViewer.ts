@@ -1387,6 +1387,8 @@ export class MapViewerScene {
   // Its own GL pass, drawn after the world's translucent instances and before the fog; the
   // bolts are strung by the sim's `drainFxLightnings` events and follow their units.
   private lightning: LightningOverlay | null = null;
+  /** The engine ids a script's `lightning` handles carry (docs/map-compatibility.md pass 10). */
+  private nextScriptBoltId = 1;
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
   private queueFlagModel: SpawnModel | null = null; // the (smaller) waypoint flag, pooled below
   private queueFlags: SpawnInstance[] = []; // pool: small flags at queued-order positions
@@ -3206,6 +3208,21 @@ export class MapViewerScene {
       addSpecialEffect: (path, x, y) => this.addSpecialEffect(path, x, y),
       addSpecialEffectTarget: (path, unitId, attach) => this.addSpecialEffectTarget(path, unitId, attach),
       destroyEffect: (id) => this.destroySpecialFx(id),
+      // --- lightning: a script's own bolts (docs/map-compatibility.md pass 10) ---
+      // The overlay spell bolts are drawn by, holding them until the script lets go.
+      addLightning: (code, checkVis, x1, y1, z1, x2, y2, z2, absZ) => {
+        if (!this.lightning) return -1;
+        const id = this.nextScriptBoltId++;
+        const ok = this.lightning.addScript(id, {
+          type: code, srcId: 0, dstId: 0, sx: x1, sy: y1, sz: z1, tx: x2, ty: y2, tz: z2, life: 0, delay: 0, absZ, checkVis,
+        });
+        return ok ? id : -1;
+      },
+      moveLightning: (id, checkVis, x1, y1, z1, x2, y2, z2, absZ) =>
+        this.lightning?.moveScript(id, { sx: x1, sy: y1, sz: z1, tx: x2, ty: y2, tz: z2, absZ, checkVis }) ?? false,
+      destroyLightning: (id) => this.lightning?.removeScript(id) ?? false,
+      setLightningColor: (id, r, g, b, a) => this.lightning?.setScriptColor(id, [r, g, b, a]) ?? false,
+      lightningColor: (id) => this.lightning?.scriptColor(id) ?? null,
       // --- cameras + cinematics (7.24) ---
       // The WRITERS live in `localViewHooks` — see there for why they are a set of their own.
       ...this.localViewHooks(),
@@ -5021,6 +5038,21 @@ export class MapViewerScene {
     if (!overlay || !rts || overlay.count === 0) return;
     const units = rts.simView.units;
     overlay.render(camera.viewProjectionMatrix, camera.location, (b) => {
+      // A SCRIPT's bolt stands between two POINTS the script placed. Plain AddLightning's ends
+      // sit on the ground; the Ex form's z is absolute (see natives/lightning.ts). With
+      // `checkVisibility` it is withheld in the fog like a spell's bolt — seen when either end
+      // is in live sight — and without it, it shows through the fog and the black mask.
+      if (b.scriptId !== undefined) {
+        return {
+          sx: b.sx,
+          sy: b.sy,
+          sz: b.absZ ? b.sz : rts.groundHeightAt(b.sx, b.sy) + b.sz,
+          tx: b.tx,
+          ty: b.ty,
+          tz: b.absZ ? b.tz : rts.groundHeightAt(b.tx, b.ty) + b.tz,
+          visible: !b.checkVis || this.pointVisible(b.sx, b.sy) || this.pointVisible(b.tx, b.ty),
+        };
+      }
       const src = b.srcId ? units.get(b.srcId) : undefined;
       const dst = b.dstId ? units.get(b.dstId) : undefined;
       const sx = src ? src.x : b.sx;
