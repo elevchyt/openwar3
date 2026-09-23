@@ -28,6 +28,12 @@ export interface UberSplatDef {
   birthTime: number;
   pauseTime: number;
   decay: number;
+  /** The colour at each end of those three phases, R,G,B,A as 0..1 — `StartR..A`,
+   *  `MiddleR..A`, `EndR..A`: Start → Middle across BirthTime, Middle held through PauseTime,
+   *  Middle → End across Decay. Every stock row is white, 0 → 255 → 0 alpha. */
+  start: [number, number, number, number];
+  middle: [number, number, number, number];
+  end: [number, number, number, number];
 }
 
 interface Row {
@@ -67,9 +73,17 @@ export function loadUberSplatRegistry(vfs: DataSource): UberSplatRegistry {
       birthTime: num(r, "birthtime", 0),
       pauseTime: num(r, "pausetime", 0),
       decay: num(r, "decay", 0),
+      start: rgba(r, "start", 0),
+      middle: rgba(r, "middle", 255),
+      end: rgba(r, "end", 0),
     });
   }
   return new UberSplatRegistry(defs);
+}
+
+/** One of the envelope's colours: `<phase>R/G/B/A` as 0..1, white by default with `alpha`. */
+function rgba(row: Row, phase: string, alpha: number): [number, number, number, number] {
+  return [num(row, `${phase}r`, 255) / 255, num(row, `${phase}g`, 255) / 255, num(row, `${phase}b`, 255) / 255, num(row, `${phase}a`, alpha) / 255];
 }
 
 // SLK cells use "-" for "none"; treat that (and missing) as empty/default.

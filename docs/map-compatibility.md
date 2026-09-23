@@ -433,8 +433,9 @@ The work is going in passes, largest first, each with its own test and each re-m
 | 9 | the `Blz…` ability natives — per-unit disable/hide, clocks, costs, words, icons | 576 | ✓ |
 | 6 | the summon event, `GetSummonedUnit`/`GetSummoningUnit`, `UnitApplyTimedLife` | 200 | ✓ |
 | 7 | `ReviveHero`, `ReviveHeroLoc` | 72 | ✓ |
+| 10 | what a script paints — its own lightning, the `BlzSetSpecialEffect…` transforms, ubersplats, images, terrain tiles, water tint; and `GetLocationZ` | 127 | ✓ (not `SetSkyModel`) |
 
-5019 → 4371 → 3172 → 2610 → 2190 → 1503 → 927 → **655** call sites.
+5019 → 4371 → 3172 → 2610 → 2190 → 1503 → 927 → 655 → **528** call sites (41 natives).
 
 Two findings from those two that are worth more than the code:
 
@@ -590,6 +591,41 @@ higher than how much food you have", hiveworkshop 263960 / 241073); a hero QUEUE
 altar job cancelled through the player's own `canceltrain` command, refund included, or the altar
 would later spawn it again under the id it now lives under; and a trigger does not wait for the body
 to dissipate, so a body still on the field is taken off it.
+
+### Pass 10 — what a script paints on the world
+
+Four families, one idea: presentation that the SCRIPT owns, on the host's screen, the way
+`AddSpecialEffect` already was (none of it is relayed to a remote client). Every rule below is
+from one page of lep.nrw/jassbot or a Hive thread, cited at the code.
+
+* **Lightning** (`natives/lightning.ts`, 70 sites) is the Chain Lightning ribbon with no lifetime
+  and no fade, strung between POINTS the script moves. Plain `AddLightning` "attaches to the
+  ground" (hiveworkshop 278746); the Ex form's z is ABSOLUTE — blizzard.j's own
+  `AddLightningLoc` passes `GetLocationZ` straight in. `checkVisibility` true hides it in the fog.
+* **`GetLocationZ` answered 0 everywhere**, which is the trap this pass nearly shipped over: a GUI
+  bolt on raised ground (Echo Isles' base is at z ≈ 590) was drawn underground. It now asks the
+  SURFACE — terrain, a walkable deck, the water — and `BlzGetUnitZ` is that plus the unit's
+  occluder height (unitUI `occH`), not its fly height.
+* **Effect transforms** (`natives/effects.ts`): every position is absolute and each of X/Y/Z
+  moves only its own axis (jassbot records a "1.29-??" bug that reset the other two; the maps
+  that call these were written for a client without it). None applies to an attached effect.
+  `BlzPlaySpecialEffect` picks a clip by NAME — the animation word first, then the most of the
+  effect's sub-animation tags (`render/effectAnim.ts`); `ConvertAnimType`/`ConvertSubAnimType`
+  had never been registered, so every `ANIM_TYPE_`/`SUBANIM_TYPE_` constant was null.
+  TimeScale/Time are left out: the documentation does not settle whether normal is 1.0 or 100.
+* **Ubersplats, images, tiles, water** (`natives/imagery.ts`). A script's ubersplat plays its
+  row's Start → Middle → End colour envelope; `SetUbersplatRenderAlways` lifts the fog rule. An
+  image needs BOTH `SetImageRenderAlways` and `ShowImage`, and `SetImageRender` does nothing.
+  `SetTerrainType`'s area is the World Editor's BRUSH, read off the install's own brush icons
+  (`render/terrainBrush.ts`: a circle of size 1–5 covers 1, 5, 21, 37, 61 points); a tile the
+  map's palette lacks is LOADED, up to 16 (hiveworkshop 339901), and the viewer puts it after the
+  blight texture. `SetWaterBaseColor` multiplies the tileset's four water colours, held against
+  the viewer reading Water.slk asynchronously.
+
+Not done, on purpose: `SetSkyModel` (the renderer draws no sky at all yet, so a native that
+answered would only hide that), `SetUbersplatRender` and `SetImageAboveWater` (nothing says what
+they do). Tests: `tools/jass-lightning-test.cjs`, `tools/jass-effect-blz-test.cjs`,
+`tools/jass-imagery-test.cjs`, `tools/sim-effect-anim-test.cjs`, `tools/sim-terrain-brush-test.cjs`.
 
 One thing was deliberately **not** done: `BlzSetEventDamage` (6 sites). `pumpDamageEvents` fires
 after the sim has applied the damage, so there is nothing left to modify, and making it work

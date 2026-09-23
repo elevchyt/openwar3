@@ -28,6 +28,7 @@ export function makePlaceholderTerrain(cols = 64, rows = 64): TerrainData {
         waterHeight: inPool ? 0.2 : groundHeight,
         layerHeight,
         groundTexture: onPlateau ? 1 : inPool ? 2 : 0,
+        groundVariation: 0,
         cliffTexture: 0,
         ramp: false,
         rampAdjust: 0,

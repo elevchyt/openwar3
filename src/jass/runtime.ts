@@ -1122,6 +1122,36 @@ export interface EngineHooks {
   /** GetLocationZ — "the current surface elevation … This includes the terrain (hills or
    *  water) and walkable destructables" (jassbot). */
   surfaceZ?(x: number, y: number): number;
+  // --- what a script paints on the world (natives/imagery.ts — pass 10) ---
+  /** CreateUbersplat — an UberSplatData row at (x, y), tinted r,g,b,a (0–255), playing the
+   *  row's Birth → Pause → Decay envelope (`forcePaused` holds the pause, `noBirthTime` skips
+   *  the birth). -1 for a row the table does not have. */
+  createUbersplat?(x: number, y: number, name: string, r: number, g: number, b: number, a: number, forcePaused: boolean, noBirthTime: boolean): number;
+  destroyUbersplat?(id: number): void;
+  showUbersplat?(id: number, show: boolean): void;
+  /** True draws it whatever the fog; false leaves it to the fog, like a spell's splat. */
+  setUbersplatRenderAlways?(id: number, always: boolean): void;
+  /** CreateImage — `file` laid on the ground, sizeX × sizeY, its bottom-left corner at
+   *  (posX − originX, posY − originY). -1 for a texture that is not there. */
+  createImage?(file: string, sizeX: number, sizeY: number, posX: number, posY: number, posZ: number, originX: number, originY: number, originZ: number, type: number): number;
+  destroyImage?(id: number): void;
+  showImage?(id: number, show: boolean): void;
+  setImageRenderAlways?(id: number, always: boolean): void;
+  /** 0–255 each. */
+  setImageColor?(id: number, r: number, g: number, b: number, a: number): void;
+  /** Flat at an absolute `height` while `flag`, else back on the terrain. */
+  setImageConstantHeight?(id: number, flag: boolean, height: number): void;
+  setImagePosition?(id: number, x: number, y: number): void;
+  setImageType?(id: number, type: number): void;
+  /** GetTerrainType — the tile id ("Ldrt") at the tile point nearest (x, y); "" off the map. */
+  terrainTypeAt?(x: number, y: number): string;
+  /** GetTerrainVariance — that point's variation cell. */
+  terrainVarianceAt?(x: number, y: number): number;
+  /** SetTerrainType — paint `tile` over an area of `area` (the editor's brush size) and
+   *  `shape` (0 circle, 1 square); `variation` -1 picks randomly per point. */
+  setTerrainType?(x: number, y: number, tile: string, variation: number, area: number, shape: number): void;
+  /** SetWaterBaseColor — the tint over the tileset's own water colours, 0–255 (255 = none). */
+  setWaterBaseColor?(r: number, g: number, b: number, a: number): void;
   /** BlzGetUnitZ / BlzGetLocalUnitZ — the surface under the unit "plus the unit's occluder
    *  height" (jassbot), NOT its fly height. 0 for a unit that is gone. */
   unitZ?(unitId: number): number;

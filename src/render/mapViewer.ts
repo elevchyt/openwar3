@@ -5,7 +5,8 @@ import type { DataSource } from "../vfs/types";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
 import { tilesetOverlay } from "../vfs/tileset";
-import { CAMERA_MARGIN, cameraBoundsOf, parseW3E, type TerrainData, type WorldRect } from "../world/terrain";
+import { CAMERA_MARGIN, CELL, cameraBoundsOf, parseW3E, type TerrainData, type WorldRect } from "../world/terrain";
+import { brushPoints, parseCellRarity, pickCell } from "./terrainBrush";
 import { parseDoo } from "../world/doodads";
 import { collectMapDestructibles, findDestructibleAt, type MapDestructible } from "../world/mapDestructibles";
 import { destructibleUnitDef } from "../data/units";
@@ -40,7 +41,7 @@ import { readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/
 import { readW3i } from "../compat/w3i";
 import { preloadLuaHost } from "../compat/lua/index";
 import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/mapMisc";
-import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
+import { loadUberSplatRegistry, type UberSplatDef, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
 import { pickEffectSequence, yawPitchRollQuat } from "./effectAnim";
@@ -647,6 +648,18 @@ interface W3xMap {
    *  changed since the last push. See src/sim/blight.ts for what drives it. */
   setBlight(column: number, row: number, on: boolean): boolean;
   flushBlight(): void;
+  // --- what a script's SetTerrainType reaches (docs/map-compatibility.md pass 10) ---
+  /** The viewer's own corner records, row-major — the tile each corner wears. */
+  corners: Array<Array<{ groundTexture: number; groundVariation: number }>>;
+  /** The patch's set of tiles waiting for `flushBlight` — a re-tiled corner joins it too. */
+  blightDirty?: Set<number>;
+  columns: number;
+  rows: number;
+  /** Terrain.slk rows by texture index, and the loaded textures — ground tiles, then the
+   *  blight texture, then whatever a script loaded. */
+  tilesets: unknown[];
+  tilesetTextures: unknown[];
+  load(path: string): Promise<unknown>;
   renderGround(): void;
   renderCliffs(): void;
   renderWater(): void;
@@ -735,6 +748,49 @@ interface DoodadActor {
   dead: boolean;
   revertEnd: number;
   clipT: number;
+}
+
+/** A row of `TerrainArt\Terrain.slk`, as the viewer's MappedData hands it back. */
+interface TerrainRow {
+  string(key: string): string | undefined;
+}
+/** Stands in the viewer's row list at the BLIGHT texture's index, which has no Terrain.slk row
+ *  — only `cliffGroundIndex` walks that list, looking for a `tileID` this never matches. */
+const NO_TILE_ROW: TerrainRow = { string: () => "" };
+
+/** A SCRIPT's ubersplat (CreateUbersplat — docs/map-compatibility.md pass 10). */
+interface ScriptSplat {
+  key: string; // its entry in the splat overlay
+  def: UberSplatDef;
+  x: number;
+  y: number;
+  /** The script's own r,g,b,a (0..1), multiplied over the row's envelope. */
+  tint: [number, number, number, number];
+  forcePaused: boolean;
+  t: number; // seconds along the envelope
+  shown: boolean; // ShowUbersplat
+  always: boolean; // SetUbersplatRenderAlways
+  seen: boolean; // in live sight when it was created
+}
+
+/** A SCRIPT's image (CreateImage — pass 10): a texture laid on the ground. */
+interface ScriptImage {
+  key: string;
+  file: string;
+  x: number; // centre
+  y: number;
+  halfX: number;
+  halfY: number;
+  type: number;
+  shown: boolean; // ShowImage
+  always: boolean; // SetImageRenderAlways
+  color: [number, number, number, number]; // SetImageColor, 0..1
+  constZ: number | null; // SetImageConstantHeight
+}
+
+function lerp4(a: readonly number[], b: readonly number[], k: number): [number, number, number, number] {
+  const f = Math.max(0, Math.min(1, k));
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f];
 }
 
 /** One live script `effect` (7.26 — issue #68): the model AddSpecialEffect* put in the
@@ -1748,6 +1804,9 @@ export class MapViewerScene {
     const wpm = archive.rawBytes("war3map.wpm");
     if (w3e && wpm) {
       const terrain = parseW3E(w3e);
+      this.terrainData = terrain; // GetTerrainType reads it, SetTerrainType writes it
+      this.mapTileCount = terrain.groundTilesets.length;
+      this.tileLoads.clear();
       this.fogTerrain = terrain; // corner grid for the fog overlay mesh
       // …and where the camera focus may go: the map's camera bounds, off the terrain's own
       // boundary flags (issue #117). A map's `main()` re-states this through SetCameraBounds
@@ -1774,6 +1833,7 @@ export class MapViewerScene {
       // overlays are, and consulted once a frame just before the ground and water passes.
       this.terrainCull = new TerrainCull(terrain);
       this.splats = new UberSplatOverlay(this.viewer.gl, terrain, splatLoader);
+      this.splatTexture = splatLoader; // a script's CreateImage asks it whether its file is there
       // Separate overlay for selection/hover rings: same terrain-tessellation, but drawn
       // as its OWN pass AFTER the building splats so a ring paints on top of a foundation
       // decal (issue #16) — while still under the units (issue #34).
@@ -3227,6 +3287,7 @@ export class MapViewerScene {
       addSpecialEffectTarget: (path, unitId, attach) => this.addSpecialEffectTarget(path, unitId, attach),
       destroyEffect: (id) => this.destroySpecialFx(id),
       ...this.specialFxHooks(),
+      ...this.imageryHooks(),
       // --- lightning: a script's own bolts (docs/map-compatibility.md pass 10) ---
       // The overlay spell bolts are drawn by, holding them until the script lets go.
       addLightning: (code, checkVis, x1, y1, z1, x2, y2, z2, absZ) => {
@@ -5158,6 +5219,303 @@ export class MapViewerScene {
         this.splats?.setAlpha(s.key, Math.min(1, a));
       }
     }
+  }
+
+  // --- A SCRIPT's ubersplats and images (docs/map-compatibility.md pass 10) -----------
+  //
+  // Both are painted through the same overlay a building's foundation is, so they conform to
+  // the terrain and sit under the fog veil like the ground they lie on. See natives/imagery.ts
+  // for what each native is documented to do.
+  private scriptSplats = new Map<number, ScriptSplat>();
+  private nextScriptSplatId = 1;
+  private scriptImages = new Map<number, ScriptImage>();
+  private nextScriptImageId = 1;
+  // --- A script's terrain TILES (SetTerrainType — pass 10; render/terrainBrush.ts) ---------
+  private terrainData: TerrainData | null = null;
+  /** How many tiles the map's own palette has — the viewer puts the blight texture right
+   *  after them, so a tile a script loads sits one index further on in the viewer. */
+  private mapTileCount = 0;
+  /** Tiles a script loaded that are still on their way, by OUR index, with the corner writes
+   *  waiting for them: the viewer cannot draw an index it holds no texture for. */
+  private tileLoads = new Map<number, Array<[number, number, number]>>();
+  /** Loads run one after another, so the viewer's texture list never has a hole in it. */
+  private tileChain: Promise<void> = Promise.resolve();
+  private cellRarity: Array<[number, number]> | null | undefined;
+
+  /** The tile POINT nearest (x, y) — a terrain corner — or null off the map. */
+  private terrainCorner(x: number, y: number): [number, number] | null {
+    const t = this.terrainData;
+    if (!t) return null;
+    const col = Math.round((x - t.centerOffset[0]) / CELL);
+    const row = Math.round((y - t.centerOffset[1]) / CELL);
+    return col >= 0 && row >= 0 && col < t.width && row < t.height ? [col, row] : null;
+  }
+
+  private terrainTypeAt(x: number, y: number): string {
+    const t = this.terrainData;
+    const at = this.terrainCorner(x, y);
+    return t && at ? t.groundTilesets[t.corners[at[1] * t.width + at[0]].groundTexture] ?? "" : "";
+  }
+
+  private terrainVarianceAt(x: number, y: number): number {
+    const t = this.terrainData;
+    const at = this.terrainCorner(x, y);
+    return t && at ? t.corners[at[1] * t.width + at[0]].groundVariation : 0;
+  }
+
+  /** SetTerrainType. Changes land at once — nothing says a re-tiled patch waits for the
+   *  player to look, as blight's spreading does. */
+  private setTerrainType(x: number, y: number, tile: string, variation: number, area: number, shape: number): void {
+    const t = this.terrainData;
+    const at = this.terrainCorner(x, y);
+    const map = this.viewer.map as unknown as W3xMap | null;
+    if (!t || !at || !map) return;
+    let k = t.groundTilesets.findIndex((id) => id.toLowerCase() === tile.toLowerCase());
+    if (k < 0) {
+      const row = (this.viewer as unknown as { terrainData?: { getRow(id: string): TerrainRow | undefined } }).terrainData?.getRow(tile);
+      if (!row) return; // not a tile the game has at all
+      // "At most 16 terrain textures can be loaded … will result in the tiles being assigned one
+      // of the already existing 16 terrain textures" (hiveworkshop 339901), "likely the result of
+      // arithmetic overflow in the bitfield" — the 4-bit index wraps.
+      if (t.groundTilesets.length >= 16) k = t.groundTilesets.length & 15;
+      else {
+        k = t.groundTilesets.length;
+        t.groundTilesets.push(tile);
+        this.loadScriptTile(map, k, row);
+      }
+    }
+    if (this.cellRarity === undefined) {
+      const bytes = this.vfs.rawBytes("UI\\WorldEditData.txt");
+      this.cellRarity = bytes ? parseCellRarity(new TextDecoder("windows-1252").decode(bytes)) : null;
+    }
+    const rng = this.mapScript?.interp.rt.random ?? Math.random;
+    const pending = this.tileLoads.get(k);
+    for (const [dx, dy] of brushPoints(area, shape, Math.max(t.width, t.height))) {
+      const col = at[0] + dx;
+      const row = at[1] + dy;
+      if (col < 0 || row < 0 || col >= t.width || row >= t.height) continue;
+      // -1: "Use a variation of -1 to generate random variations across the area."
+      const v = variation >= 0 ? variation : this.cellRarity ? pickCell(this.cellRarity, rng()) : 0;
+      const c = t.corners[row * t.width + col];
+      c.groundTexture = k;
+      c.groundVariation = v;
+      if (pending) pending.push([col, row, v]);
+      else this.paintViewerCorner(map, col, row, k, v);
+    }
+    if (!pending) map.flushBlight();
+  }
+
+  /** Put one corner's new tile into the viewer and mark the four tiles it touches. */
+  private paintViewerCorner(map: W3xMap, col: number, row: number, k: number, variation: number): void {
+    const corner = map.corners[row]?.[col];
+    if (!corner) return;
+    corner.groundTexture = k < this.mapTileCount ? k : k + 1; // past the blight texture
+    corner.groundVariation = variation;
+    const dirty = (map.blightDirty ??= new Set<number>());
+    for (let y = row - 1; y <= row; y++) {
+      for (let x = col - 1; x <= col; x++) {
+        if (x >= 0 && y >= 0 && x < map.columns && y < map.rows) dirty.add(y * map.columns + x);
+      }
+    }
+  }
+
+  /** Load a tile the map's palette does not have — "A texture is loaded … the first time a
+   *  trigger places it in the world" (hiveworkshop 339901) — then paint what was waiting. */
+  private loadScriptTile(map: W3xMap, k: number, row: TerrainRow): void {
+    this.tileLoads.set(k, []);
+    const path = `${row.string("dir")}\\${row.string("file")}.blp`; // SD: see solverParams.reforged
+    this.tileChain = this.tileChain.then(async () => {
+      const tex = await map.load(path).catch(() => null);
+      const waiting = this.tileLoads.get(k) ?? [];
+      this.tileLoads.delete(k);
+      if (this.viewer.map !== (map as unknown) || !tex) return;
+      const at = k + 1; // the viewer's index: after the map's tiles and the blight texture
+      while (map.tilesets.length < at) map.tilesets.push(NO_TILE_ROW); // the blight slot has no row
+      map.tilesets[at] = row;
+      map.tilesetTextures[at] = tex;
+      for (const [col, r, v] of waiting) this.paintViewerCorner(map, col, r, k, v);
+      map.flushBlight();
+    });
+  }
+
+  /** The splat overlay's texture loader — a BLP decoded to a canvas, or null when absent. */
+  private splatTexture: ((path: string) => HTMLCanvasElement | null) | null = null;
+
+  private createScriptSplat(x: number, y: number, name: string, r: number, g: number, b: number, a: number, forcePaused: boolean, noBirthTime: boolean): number {
+    const def = this.uberSplatRegistry().get(name);
+    if (!def || !this.splats) return -1;
+    const id = this.nextScriptSplatId++;
+    const key = `usp:${id}`;
+    this.splats.add(key, x, y, def.scale, def.texture, { alpha: 0 });
+    this.scriptSplats.set(id, {
+      key, def, x, y, tint: [r / 255, g / 255, b / 255, a / 255], forcePaused,
+      t: noBirthTime ? def.birthTime : 0,
+      shown: true, always: false,
+      // A spell's splat "created in fog … is also invisible to you. Only if it was created in a
+      // visible area and then … the fog of war covers the ubersplat afterwards … are you able
+      // to see it" (hiveworkshop 235035) — so what counts is sight AT CREATION.
+      seen: this.pointVisible(x, y),
+    });
+    return id;
+  }
+
+  /** Walk every script splat along its row's envelope: Start → Middle over BirthTime, Middle
+   *  through PauseTime (for ever while `forcePaused`), Middle → End over Decay. A finished one
+   *  is invisible but still HELD — only DestroyUbersplat lets go of it. */
+  private updateScriptSplats(dt: number): void {
+    for (const s of this.scriptSplats.values()) {
+      const d = s.def;
+      s.t += dt;
+      let c: [number, number, number, number];
+      if (s.t < d.birthTime) c = lerp4(d.start, d.middle, s.t / d.birthTime);
+      else if (s.forcePaused || s.t < d.birthTime + d.pauseTime) c = d.middle;
+      else if (s.t < d.birthTime + d.pauseTime + d.decay) c = lerp4(d.middle, d.end, (s.t - d.birthTime - d.pauseTime) / d.decay);
+      else c = d.end;
+      this.splats?.setTint(s.key, [c[0] * s.tint[0], c[1] * s.tint[1], c[2] * s.tint[2]]);
+      this.splats?.setAlpha(s.key, c[3] * s.tint[3]);
+      this.splats?.setVisible(s.key, s.shown && (s.always || s.seen));
+    }
+  }
+
+  private createScriptImage(file: string, sizeX: number, sizeY: number, posX: number, posY: number, _posZ: number, originX: number, originY: number, _originZ: number, type: number): number {
+    // "If an invalid path is specified CreateImage returns image(-1)" (jassbot).
+    if (!this.splats || !this.splatTexture?.(file)) return -1;
+    const id = this.nextScriptImageId++;
+    const img: ScriptImage = {
+      key: `img:${id}`, file, halfX: sizeX / 2, halfY: sizeY / 2,
+      // (posX, posY) is the BOTTOM-LEFT corner, moved by -origin; the overlay wants the centre.
+      x: posX - originX + sizeX / 2, y: posY - originY + sizeY / 2,
+      type, shown: true, always: false, color: [1, 1, 1, 1], constZ: null,
+    };
+    this.scriptImages.set(id, img);
+    this.placeScriptImage(img);
+    return id;
+  }
+
+  /** (Re)lay an image's geometry — on the terrain, or flat at its constant height. */
+  private placeScriptImage(img: ScriptImage): void {
+    this.splats?.add(img.key, img.x, img.y, img.halfX, img.file, {
+      halfY: img.halfY,
+      floor: img.constZ ?? undefined,
+      tint: [img.color[0], img.color[1], img.color[2]],
+      alpha: img.color[3],
+    });
+    this.syncScriptImage(img);
+  }
+
+  /** Drawn only while BOTH switches are on and its type is one of the four that draw at all
+   *  ("Every other value will simply cause WC3 to not display the image" — jassbot). */
+  private syncScriptImage(img: ScriptImage): void {
+    this.splats?.setVisible(img.key, img.shown && img.always && img.type >= 1 && img.type <= 4);
+  }
+
+  /** The imagery hooks (natives/imagery.ts). */
+  private imageryHooks(): Partial<EngineHooks> {
+    const splat = (id: number) => this.scriptSplats.get(id);
+    const image = (id: number) => this.scriptImages.get(id);
+    return {
+      createUbersplat: (x, y, name, r, g, b, a, forcePaused, noBirthTime) => this.createScriptSplat(x, y, name, r, g, b, a, forcePaused, noBirthTime),
+      destroyUbersplat: (id) => {
+        const s = splat(id);
+        if (!s) return;
+        this.splats?.remove(s.key);
+        this.scriptSplats.delete(id);
+      },
+      showUbersplat: (id, show) => {
+        const s = splat(id);
+        if (s) s.shown = show;
+      },
+      setUbersplatRenderAlways: (id, always) => {
+        const s = splat(id);
+        if (s) s.always = always;
+      },
+      createImage: (file, sizeX, sizeY, posX, posY, posZ, originX, originY, originZ, type) =>
+        this.createScriptImage(file, sizeX, sizeY, posX, posY, posZ, originX, originY, originZ, type),
+      destroyImage: (id) => {
+        const img = image(id);
+        if (!img) return;
+        this.splats?.remove(img.key);
+        this.scriptImages.delete(id);
+      },
+      showImage: (id, show) => {
+        const img = image(id);
+        if (!img) return;
+        img.shown = show;
+        this.syncScriptImage(img);
+      },
+      setImageRenderAlways: (id, always) => {
+        const img = image(id);
+        if (!img) return;
+        img.always = always;
+        this.syncScriptImage(img);
+      },
+      setImageColor: (id, r, g, b, a) => {
+        const img = image(id);
+        if (!img) return;
+        img.color = [r / 255, g / 255, b / 255, a / 255];
+        this.splats?.setTint(img.key, [img.color[0], img.color[1], img.color[2]]);
+        this.splats?.setAlpha(img.key, img.color[3]);
+      },
+      setImageConstantHeight: (id, flag, height) => {
+        const img = image(id);
+        if (!img) return;
+        img.constZ = flag ? height : null;
+        this.placeScriptImage(img);
+      },
+      setImagePosition: (id, x, y) => {
+        const img = image(id);
+        if (!img) return;
+        // The same bottom-left convention as CreateImage (the origin offset is baked into the
+        // centre, so moving the corner moves the centre by as much).
+        const cornerX = img.x - img.halfX;
+        const cornerY = img.y - img.halfY;
+        img.x += x - cornerX;
+        img.y += y - cornerY;
+        this.placeScriptImage(img);
+      },
+      setImageType: (id, type) => {
+        const img = image(id);
+        if (!img) return;
+        img.type = type;
+        this.syncScriptImage(img);
+      },
+      setWaterBaseColor: (r, g, b, a) => this.setWaterTint([r / 255, g / 255, b / 255, a / 255]),
+      terrainTypeAt: (x, y) => this.terrainTypeAt(x, y),
+      terrainVarianceAt: (x, y) => this.terrainVarianceAt(x, y),
+      setTerrainType: (x, y, tile, variation, area, shape) => this.setTerrainType(x, y, tile, variation, area, shape),
+    };
+  }
+
+  /** The tileset's own water colours (Water.slk `<letter>Sha`), captured before the first tint
+   *  so a second SetWaterBaseColor tints the ORIGINAL rather than the last tint. */
+  private waterBase: { map: unknown; colors: Float32Array[] } | null = null;
+
+  /** The script's water tint, 0..1 — null while no script has set one. */
+  private waterTint: [number, number, number, number] | null = null;
+
+  /** SetWaterBaseColor — "Sets the tint of the water. The default is 255 for all parameters"
+   *  (jassbot): each of the four colours the viewer's water shader blends between, multiplied. */
+  private setWaterTint(tint: [number, number, number, number]): void {
+    this.waterTint = tint;
+    this.applyWaterTint();
+  }
+
+  /** Lay the tint over the tileset's colours. Also asked every frame while a tint is set,
+   *  because the viewer reads Water.slk ASYNCHRONOUSLY — a map setting its water in its init
+   *  can run before the colours exist, and the load would then overwrite the tint. */
+  private applyWaterTint(): void {
+    const tint = this.waterTint;
+    const map = this.viewer.map as unknown as Record<"maxDeepColor" | "minDeepColor" | "maxShallowColor" | "minShallowColor", Float32Array> | null;
+    if (!tint || !map) return;
+    const live = [map.maxDeepColor, map.minDeepColor, map.maxShallowColor, map.minShallowColor];
+    if (live.some((c) => !c)) return;
+    if (!this.waterBase || this.waterBase.map !== map) {
+      if (live.every((c) => c.every((v) => v === 0))) return; // Water.slk not read yet
+      this.waterBase = { map, colors: live.map((c) => Float32Array.from(c)) };
+    }
+    this.waterBase.colors.forEach((base, i) => {
+      for (let k = 0; k < 4; k++) live[i][k] = base[k] * tint[k];
+    });
   }
 
   // --- Mirror Image missiles ------------------------------------------------------
@@ -12204,6 +12562,8 @@ export class MapViewerScene {
       this.updateOrderArrows(wdt / 1000);
       this.updateEffects(wdt / 1000);
       this.updateSpellSplats(wdt / 1000); // Thunder Clap's scorch fading in/out on the ground
+      this.updateScriptSplats(wdt / 1000); // a script's CreateUbersplat, on its row's envelope
+      if (this.waterTint) this.applyWaterTint(); // SetWaterBaseColor, held against a late Water.slk
       this.lightning?.update(wdt / 1000); // age the live bolts; expired ones retire themselves
       this.updateMirrorMissiles(wdt / 1000);
       this.updateAuraEffects();
@@ -12852,6 +13212,10 @@ export class MapViewerScene {
     this.effectBirthing = [];
     this.effectModels.clear();
     this.lightning?.clear(); // bolts hold unit ids the next match will reuse
+    this.scriptSplats.clear(); // their geometry went with the overlay
+    this.scriptImages.clear();
+    this.waterBase = null; // the next map's tileset has its own water
+    this.waterTint = null;
     for (const inst of this.projectileInsts.values()) inst.detach();
     this.projectileInsts.clear();
     this.projectileLoading.clear();

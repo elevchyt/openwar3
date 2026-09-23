@@ -16,6 +16,7 @@ import { registerDestructableNatives } from "./destructables";
 import { registerDialogNatives } from "./dialogs";
 import { registerEffectNatives } from "./effects";
 import { registerLightningNatives } from "./lightning";
+import { registerImageryNatives } from "./imagery";
 import { registerEventNatives } from "./events";
 import { registerLeaderboardNatives } from "./leaderboard";
 import { registerForceNatives } from "./forces";
@@ -156,6 +157,7 @@ export function registerNatives(rt: Runtime): void {
   registerDialogNatives(rt); // dialogs + the victory/defeat screen (7.19)
   registerEffectNatives(rt); // the trigger puts a model in the world (7.26 — issue #68)
   registerLightningNatives(rt); // a script's own bolts (docs/map-compatibility.md pass 10)
+  registerImageryNatives(rt); // ubersplats, images, water tint, sky (ditto)
   registerEventNatives(rt);
   registerLeaderboardNatives(rt); // the scoreboard every TD/AoS shows (7.19)
   registerForceNatives(rt);

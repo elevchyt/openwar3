@@ -113,6 +113,9 @@ export interface SplatOptions {
    * it.
    */
   floor?: number;
+  /** Half-HEIGHT in world units, for a rectangle: `scale` is then the half-width alone. A
+   *  script's `CreateImage` is sizeX × sizeY, where every ubersplat is square. */
+  halfY?: number;
 }
 
 interface CachedTexture {
@@ -163,7 +166,7 @@ export class UberSplatOverlay {
   add(id: string | number, x: number, y: number, scale: number, texture: string, opts?: SplatOptions): void {
     const key = String(id);
     this.remove(key); // drop any prior geometry for this id
-    const { pos, uv, count } = this.buildGeometry(x, y, scale, opts?.floor);
+    const { pos, uv, count } = this.buildGeometry(x, y, scale, opts?.halfY ?? scale, opts?.floor);
     if (count === 0) return;
     const gl = this.gl;
     const posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
@@ -180,6 +183,13 @@ export class UberSplatOverlay {
   setAlpha(id: string | number, alpha: number): void {
     const e = this.entries.get(String(id));
     if (e) e.alpha = alpha;
+  }
+
+  /** Recolour an existing splat without rebuilding it (a script's ubersplat, whose row
+   *  envelope moves its colour as well as its alpha; SetImageColor). */
+  setTint(id: string | number, tint: [number, number, number]): void {
+    const e = this.entries.get(String(id));
+    if (e) e.tint = tint;
   }
 
   /** Show or withhold a splat without forgetting it (see `SplatEntry.hidden`). Idempotent
@@ -211,13 +221,13 @@ export class UberSplatOverlay {
    *  sits at the terrain's own height (cornerHeight·CELL) so the decal is coplanar
    *  with the ground; UVs map the [center ± scale] box to [0,1]. Non-indexed tris,
    *  BR–TL diagonal to match the viewer's terrain + the fog mesh. */
-  private buildGeometry(cx: number, cy: number, scale: number, floor?: number): { pos: Float32Array; uv: Float32Array; count: number } {
+  private buildGeometry(cx: number, cy: number, scale: number, halfY: number, floor?: number): { pos: Float32Array; uv: Float32Array; count: number } {
     // A splat on a DECK follows no terrain: one quad at the deck's own height (see
     // SplatOptions.floor). Same two triangles and the same UV box as a cell of the
     // tessellation below, so nothing downstream can tell the two apart.
     if (floor !== undefined) {
       const z = floor + LIFT;
-      const x0 = cx - scale, x1 = cx + scale, y0 = cy - scale, y1 = cy + scale;
+      const x0 = cx - scale, x1 = cx + scale, y0 = cy - halfY, y1 = cy + halfY;
       return {
         pos: new Float32Array([x0, y0, z, x1, y0, z, x0, y1, z, x1, y0, z, x1, y1, z, x0, y1, z]),
         uv: new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]),
@@ -228,13 +238,14 @@ export class UberSplatOverlay {
     const ox = centerOffset[0];
     const oy = centerOffset[1];
     const minX = cx - scale;
-    const minY = cy - scale;
-    const span = 2 * scale;
+    const minY = cy - halfY;
+    const spanX = 2 * scale;
+    const spanY = 2 * halfY;
     // Corner-grid cell range overlapping the box (clamped to the map).
     const gx0 = clamp(Math.floor((minX - ox) / CELL), 0, width - 2);
     const gx1 = clamp(Math.ceil((cx + scale - ox) / CELL), gx0 + 1, width - 1);
     const gy0 = clamp(Math.floor((minY - oy) / CELL), 0, height - 2);
-    const gy1 = clamp(Math.ceil((cy + scale - oy) / CELL), gy0 + 1, height - 1);
+    const gy1 = clamp(Math.ceil((cy + halfY - oy) / CELL), gy0 + 1, height - 1);
 
     const cellsX = gx1 - gx0;
     const cellsY = gy1 - gy0;
@@ -249,8 +260,8 @@ export class UberSplatOverlay {
       pos[pi++] = wx;
       pos[pi++] = wy;
       pos[pi++] = cw(gxi, gyi);
-      uv[ui++] = (wx - minX) / span;
-      uv[ui++] = (wy - minY) / span;
+      uv[ui++] = (wx - minX) / spanX;
+      uv[ui++] = (wy - minY) / spanY;
     };
     for (let gy = gy0; gy < gy1; gy++) {
       for (let gx = gx0; gx < gx1; gx++) {
