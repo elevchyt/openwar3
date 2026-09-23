@@ -1098,6 +1098,33 @@ export interface EngineHooks {
   addSpecialEffectTarget?(path: string, unitId: number, attach: string[]): number;
   /** DestroyEffect — play the model's Death clip out, then take it off the scene. */
   destroyEffect?(id: number): void;
+  // --- an effect's transform and look (the BlzSetSpecialEffect… family — pass 10) ---
+  /** BlzSetSpecialEffectPosition/X/Y/Z/Height — ABSOLUTE map coordinates; a null keeps that
+   *  axis. "Does not apply if the effect is attached" (jassbot) — the engine ignores it there. */
+  setSpecialEffectPosition?(id: number, x: number | null, y: number | null, z: number | null): void;
+  /** BlzSetSpecialEffectOrientation/Yaw/Pitch/Roll — RADIANS; a null keeps that angle. */
+  setSpecialEffectOrientation?(id: number, yaw: number | null, pitch: number | null, roll: number | null): void;
+  setSpecialEffectScale?(id: number, scale: number): void;
+  /** BlzSetSpecialEffectColor — vertex colour, 0–255 each (the native drops anything else). */
+  setSpecialEffectColor?(id: number, r: number, g: number, b: number): void;
+  /** BlzSetSpecialEffectAlpha — 0–255. */
+  setSpecialEffectAlpha?(id: number, alpha: number): void;
+  /** BlzSetSpecialEffectColorByPlayer — the player's COLOUR index (not their slot). */
+  setSpecialEffectTeamColor?(id: number, color: number): void;
+  /** BlzPlaySpecialEffect — play the clip named `anim` ("stand", "birth"), qualified by the
+   *  effect's sub-animation tags. */
+  playSpecialEffect?(id: number, anim: string): void;
+  /** BlzSpecialEffectAdd/RemoveSubAnimation — one tag ("second", "upgrade"); `tag` null with
+   *  `add` false is BlzSpecialEffectClearSubAnimations. */
+  specialEffectSubAnim?(id: number, tag: string | null, add: boolean): void;
+  /** BlzGetLocalSpecialEffectX/Y/Z — where it stands; all zero for an attached effect. */
+  specialEffectPosition?(id: number): { x: number; y: number; z: number } | null;
+  /** GetLocationZ — "the current surface elevation … This includes the terrain (hills or
+   *  water) and walkable destructables" (jassbot). */
+  surfaceZ?(x: number, y: number): number;
+  /** BlzGetUnitZ / BlzGetLocalUnitZ — the surface under the unit "plus the unit's occluder
+   *  height" (jassbot), NOT its fly height. 0 for a unit that is gone. */
+  unitZ?(unitId: number): number;
   // --- lightning: a SCRIPT's bolt (docs/map-compatibility.md pass 10) ---
   /** AddLightning[Ex] — a `Splats\LightningData.slk` row (`code`, "CLPB") strung between two
    *  POINTS, standing until `destroyLightning`. `absZ` false is plain `AddLightning`, whose

@@ -7221,6 +7221,13 @@ export class RtsController {
     return this.heightAt(x, y);
   }
 
+  /** `GetLocationZ`'s SURFACE: the highest of the terrain, a walkable destructable's deck and
+   *  the water — "the current surface elevation … This includes the terrain (hills or water)
+   *  and walkable destructables" (jassbot, GetLocationZ). */
+  surfaceZ(x: number, y: number): number {
+    return Math.max(this.groundOrDeck(x, y), this.waterAt(x, y));
+  }
+
   /** Convert a CSS click to a world ground point (for build placement). */
   groundPoint(cssX: number, cssY: number): [number, number] | null {
     const dpr = this.dpr();

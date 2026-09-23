@@ -31,8 +31,8 @@
 // SoulBurn buff model on a worm's head for as long as it is eating, AzeroGrandPrix parks a
 // TalkToMe over a cart until it turns around. So the lifetime is the SCRIPT's, not a TTL.
 
-import type { JassUnit, NativeCtx, Runtime } from "../runtime";
-import { asNum, asStr, jHandle, JNULL, type JassValue } from "../values";
+import type { JassPlayer, JassUnit, NativeCtx, Runtime } from "../runtime";
+import { asInt, asNum, asStr, jHandle, jReal, JNULL, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -60,6 +60,30 @@ function effectHandle(ctx: NativeCtx, engineId: number): JassValue {
   return jHandle(e.handleId, "effect");
 }
 
+/** `ANIM_TYPE_*` by its `ConvertAnimType` index (common.j lines 303-313) — the word a model's
+ *  sequence names start with ("Stand Second", "Birth"). */
+const ANIM_WORDS = ["birth", "death", "decay", "dissipate", "stand", "walk", "attack", "morph", "sleep", "spell", "portrait"];
+
+/** `SUBANIM_TYPE_*` by its `ConvertSubAnimType` index (common.j lines 315-366, starting at
+ *  11) — the qualifying word in a sequence name ("Stand SECOND", "Attack SLAM"). The one
+ *  that is not its own constant name is ALTERNATE_EX: the world models spell that tag
+ *  "Alternate" (see render/unitAnims.ts applyAnimProps — not one of them says AlternateEx). */
+const SUBANIM_WORDS: Record<number, string> = Object.fromEntries(
+  ("rooted alternate looping slam throw spiked fast spin ready channel defend victory turn left right fire " +
+    "flesh hit wounded light moderate severe critical complete gold lumber work talk first second third " +
+    "fourth fifth one two three four five small medium large upgrade drain fill chainlightning eattree " +
+    "puke flail off swim entangle berserk")
+    .split(" ")
+    .map((w, i) => [i + 11, w]),
+);
+
+/** A 0–255 channel as the BlzSetSpecialEffectColor/Alpha natives take it: "only accepts values
+ *  0-255", and "does nothing if any single parameter is invalid or out of range" (jassbot). */
+const channel255 = (v: JassValue | undefined): number | null => {
+  const n = asInt(v ?? JNULL);
+  return n >= 0 && n <= 255 ? n : null;
+};
+
 export function registerEffectNatives(rt: Runtime): void {
   def(rt, "AddSpecialEffect", (c, a) =>
     effectHandle(c, c.rt.hooks?.addSpecialEffect?.(asStr(a[0]), asNum(a[1]), asNum(a[2])) ?? -1),
@@ -85,4 +109,94 @@ export function registerEffectNatives(rt: Runtime): void {
     c.rt.handles.free(e.handleId);
     return JNULL;
   });
+
+  // --- BlzSetSpecialEffect…: the effect's transform and look (docs/map-compatibility.md pass
+  // 10). All of them are in the install's own 1.30.4 common.j. Every position is ABSOLUTE —
+  // Test of Faith writes `BlzSetSpecialEffectZ(e, BlzGetLocalUnitZ(u) + 150)` — and none of
+  // them applies to an effect riding an attachment point (jassbot); the engine ignores those.
+  //
+  // One place this follows the documented INTENT rather than a version's bug: jassbot notes
+  // that in "1.29-??" setting X alone reset Y and Z to where the effect spawned. The maps that
+  // call these were written for a client where it works (Test of Faith sets X, then Y, then Z
+  // on the same effect every tick), so each setter here moves only its own axis.
+  //
+  // Not here: BlzSetSpecialEffectTimeScale/Time and BlzPlaySpecialEffectWithTimeScale. Their
+  // documentation does not settle whether normal speed is 1.0 or 100.0, and no map in the corpus
+  // calls any of them — a guessed scale would be exactly the invented number CLAUDE.md forbids.
+  const fx = (c: NativeCtx, v: JassValue | undefined): number | undefined => c.rt.data<EffectObj>(v ?? JNULL)?.engineId;
+  const onFx = (name: string, fn: (c: NativeCtx, id: number, a: JassValue[]) => void): void =>
+    def(rt, name, (c, a) => {
+      const id = fx(c, a[0]);
+      if (id !== undefined) fn(c, id, a);
+      return JNULL;
+    });
+  const pos = (c: NativeCtx, id: number, x: number | null, y: number | null, z: number | null) =>
+    c.rt.hooks?.setSpecialEffectPosition?.(id, x, y, z);
+  onFx("BlzSetSpecialEffectPosition", (c, id, a) => pos(c, id, asNum(a[1]), asNum(a[2]), asNum(a[3])));
+  onFx("BlzSetSpecialEffectPositionLoc", (c, id, a) => {
+    const l = c.rt.data<{ x: number; y: number }>(a[1]);
+    // A location carries no height of its own: the effect goes to the surface there.
+    if (l) pos(c, id, l.x, l.y, c.rt.hooks?.surfaceZ?.(l.x, l.y) ?? 0);
+  });
+  onFx("BlzSetSpecialEffectX", (c, id, a) => pos(c, id, asNum(a[1]), null, null));
+  onFx("BlzSetSpecialEffectY", (c, id, a) => pos(c, id, null, asNum(a[1]), null));
+  onFx("BlzSetSpecialEffectZ", (c, id, a) => pos(c, id, null, null, asNum(a[1])));
+  // "Sets the effect's absolute Z position (height). This native appears to be mostly
+  // identical to BlzSetSpecialEffectZ" (jassbot).
+  onFx("BlzSetSpecialEffectHeight", (c, id, a) => pos(c, id, null, null, asNum(a[1])));
+  const turn = (c: NativeCtx, id: number, yaw: number | null, pitch: number | null, roll: number | null) =>
+    c.rt.hooks?.setSpecialEffectOrientation?.(id, yaw, pitch, roll);
+  onFx("BlzSetSpecialEffectOrientation", (c, id, a) => turn(c, id, asNum(a[1]), asNum(a[2]), asNum(a[3])));
+  onFx("BlzSetSpecialEffectYaw", (c, id, a) => turn(c, id, asNum(a[1]), null, null));
+  onFx("BlzSetSpecialEffectPitch", (c, id, a) => turn(c, id, null, asNum(a[1]), null));
+  onFx("BlzSetSpecialEffectRoll", (c, id, a) => turn(c, id, null, null, asNum(a[1])));
+  onFx("BlzSetSpecialEffectScale", (c, id, a) => c.rt.hooks?.setSpecialEffectScale?.(id, asNum(a[1])));
+  onFx("BlzSetSpecialEffectColor", (c, id, a) => {
+    const [r, g, b] = [channel255(a[1]), channel255(a[2]), channel255(a[3])];
+    if (r !== null && g !== null && b !== null) c.rt.hooks?.setSpecialEffectColor?.(id, r, g, b);
+  });
+  onFx("BlzSetSpecialEffectAlpha", (c, id, a) => {
+    const alpha = channel255(a[1]);
+    if (alpha !== null) c.rt.hooks?.setSpecialEffectAlpha?.(id, alpha);
+  });
+  // "Sets the tinting color to match the specific player's color" — the player's COLOUR,
+  // which SetPlayerColor can have moved off their slot.
+  onFx("BlzSetSpecialEffectColorByPlayer", (c, id, a) => {
+    const p = c.rt.data<JassPlayer>(a[1]);
+    if (p) c.rt.hooks?.setSpecialEffectTeamColor?.(id, p.color);
+  });
+
+  // --- …its animation: a clip by NAME, qualified by sub-animation tags ---
+  onFx("BlzPlaySpecialEffect", (c, id, a) => {
+    const word = ANIM_WORDS[c.rt.enumIndex(a[1] ?? JNULL)];
+    if (word) c.rt.hooks?.playSpecialEffect?.(id, word);
+  });
+  const tag = (c: NativeCtx, v: JassValue | undefined) => SUBANIM_WORDS[c.rt.enumIndex(v ?? JNULL)];
+  onFx("BlzSpecialEffectAddSubAnimation", (c, id, a) => {
+    const t = tag(c, a[1]);
+    if (t) c.rt.hooks?.specialEffectSubAnim?.(id, t, true);
+  });
+  onFx("BlzSpecialEffectRemoveSubAnimation", (c, id, a) => {
+    const t = tag(c, a[1]);
+    if (t) c.rt.hooks?.specialEffectSubAnim?.(id, t, false);
+  });
+  onFx("BlzSpecialEffectClearSubAnimations", (c, id) => c.rt.hooks?.specialEffectSubAnim?.(id, null, false));
+
+  // --- …and where it is. "If the effect is attached to something, returns 0.0" (jassbot). ---
+  const where = (axis: "x" | "y" | "z") => (c: NativeCtx, a: JassValue[]): JassValue => {
+    const id = fx(c, a[0]);
+    return jReal(id === undefined ? 0 : c.rt.hooks?.specialEffectPosition?.(id)?.[axis] ?? 0);
+  };
+  def(rt, "BlzGetLocalSpecialEffectX", where("x"));
+  def(rt, "BlzGetLocalSpecialEffectY", where("y"));
+  def(rt, "BlzGetLocalSpecialEffectZ", where("z"));
+
+  // BlzGetUnitZ / BlzGetLocalUnitZ — "Alias for BlzGetUnitZ" (jassbot). The surface under the
+  // unit plus its occluder height; "Returns 0.0 if unit was removed or is null".
+  const unitZ: NativeFn = (c, a) => {
+    const u = c.rt.data<JassUnit>(a[0]);
+    return jReal(u && u.simId >= 0 ? c.rt.hooks?.unitZ?.(u.simId) ?? 0 : 0);
+  };
+  def(rt, "BlzGetUnitZ", unitZ);
+  def(rt, "BlzGetLocalUnitZ", unitZ);
 }

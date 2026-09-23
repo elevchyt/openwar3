@@ -43,6 +43,7 @@ import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
+import { pickEffectSequence, yawPitchRollQuat } from "./effectAnim";
 import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, requiredHeroLevel, aoeCursorRadius, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT, type AbilityLevel } from "../data/abilities";
 import { isDesktopApp } from "../assets/nativeInstall";
 import { loadCommandStrings, disabledIconPath, type CommandStrings } from "../data/commandStrings";
@@ -768,6 +769,23 @@ interface SpecialFx {
   y: number;
   /** DestroyEffect landed before the model did — drop it the moment it loads. */
   doomed: boolean;
+  // --- what the BlzSetSpecialEffect… natives set (docs/map-compatibility.md pass 10) ---
+  /** An ABSOLUTE height the script put it at, or null to stand on the ground. */
+  z: number | null;
+  /** Radians — yaw about Z (like a unit's facing), pitch about Y, roll about X. */
+  yaw: number;
+  pitch: number;
+  roll: number;
+  scale: number;
+  /** Vertex colour and alpha, 0..1. */
+  color: [number, number, number, number];
+  /** A player colour index, or -1 for the model's own. */
+  teamColor: number;
+  /** Sub-animation tags ("second", "upgrade") qualifying the clip BlzPlaySpecialEffect picks. */
+  tags: string[];
+  /** The animation BlzPlaySpecialEffect asked for. From then on the SCRIPT owns the clip and
+   *  the Birth → Stand lifecycle stops driving it. null until then. */
+  played: string | null;
 }
 
 // A Blood Mage's orbiting spheres (issue #37). The Sphere ability (Asph) attaches
@@ -3208,6 +3226,7 @@ export class MapViewerScene {
       addSpecialEffect: (path, x, y) => this.addSpecialEffect(path, x, y),
       addSpecialEffectTarget: (path, unitId, attach) => this.addSpecialEffectTarget(path, unitId, attach),
       destroyEffect: (id) => this.destroySpecialFx(id),
+      ...this.specialFxHooks(),
       // --- lightning: a script's own bolts (docs/map-compatibility.md pass 10) ---
       // The overlay spell bolts are drawn by, holding them until the script lets go.
       addLightning: (code, checkVis, x1, y1, z1, x2, y2, z2, absZ) => {
@@ -5823,6 +5842,7 @@ export class MapViewerScene {
       inst: null, age: 0, spent: false, standing: false, standIdx: -1,
       clips: { hasBirth: false, birthStart: 0, birthSecs: 0, hasStand: false },
       hidden: true, hostId, attach, parented: false, x, y, doomed: false,
+      z: null, yaw: 0, pitch: 0, roll: 0, scale: 1, color: [1, 1, 1, 1], teamColor: -1, tags: [], played: null,
     };
     this.specialFx.set(id, fx);
     void this.loadSpecialFx(id, model, fx);
@@ -5864,6 +5884,9 @@ export class MapViewerScene {
       fx.standing = true;
     }
     fx.inst = inst;
+    // Whatever the script already set while the model was loading lands now.
+    this.applySpecialFxLook(fx);
+    if (fx.played !== null) this.playSpecialFxClip(fx);
     this.placeSpecialFx(fx); // land it before its first frame is drawn
     // The model may have taken long enough to arrive that the effect is already over, or
     // it may be standing in fog: never show() blind — let the age/fog pass below decide.
@@ -5902,8 +5925,110 @@ export class MapViewerScene {
     }
     this.loc3[0] = fx.x;
     this.loc3[1] = fx.y;
-    this.loc3[2] = this.rts?.groundHeightAt(fx.x, fx.y) ?? 0;
+    this.loc3[2] = fx.z ?? this.rts?.groundHeightAt(fx.x, fx.y) ?? 0;
     inst.setLocation(this.loc3);
+  }
+
+  /** Scale, rotation, vertex colour and team colour onto the instance. The ROTATION is a
+   *  ground effect's only: one riding an attachment point is turned by the node it rides
+   *  ("does not apply if the effect is attached" — jassbot). */
+  private applySpecialFxLook(fx: SpecialFx): void {
+    const inst = fx.inst;
+    if (!inst) return;
+    inst.setUniformScale(fx.scale);
+    if (fx.hostId < 0) inst.setRotation(yawPitchRollQuat(fx.yaw, fx.pitch, fx.roll));
+    inst.setVertexColor(fx.color);
+    if (fx.teamColor >= 0) inst.setTeamColor(fx.teamColor);
+  }
+
+  /** BlzPlaySpecialEffect — the clip named by the animation and the effect's tags
+   *  (render/effectAnim.ts), played by its OWN looping flag: a Stand loops, a Death holds its
+   *  last frame. A model with no such clip is left as it is, and keeps its own lifecycle. */
+  private playSpecialFxClip(fx: SpecialFx): void {
+    const inst = fx.inst;
+    if (!inst || fx.played === null) return;
+    const seq = pickEffectSequence(inst.model.sequences.map((s) => s.name), fx.played, fx.tags);
+    if (seq < 0) {
+      fx.played = null;
+      return;
+    }
+    inst.setSequence(seq);
+    inst.setSequenceLoopMode(0); // model-defined: obey the clip's own nonLooping flag
+    fx.standing = true;
+  }
+
+  /** The BlzSetSpecialEffect… hooks (docs/map-compatibility.md pass 10). */
+  private specialFxHooks(): Partial<EngineHooks> {
+    const live = (id: number) => this.specialFx.get(id);
+    return {
+      setSpecialEffectPosition: (id, x, y, z) => {
+        const fx = live(id);
+        if (!fx || fx.hostId >= 0) return; // an attached effect goes where its node goes
+        if (x !== null) fx.x = x;
+        if (y !== null) fx.y = y;
+        if (z !== null) fx.z = z;
+        this.placeSpecialFx(fx);
+      },
+      setSpecialEffectOrientation: (id, yaw, pitch, roll) => {
+        const fx = live(id);
+        if (!fx || fx.hostId >= 0) return;
+        if (yaw !== null) fx.yaw = yaw;
+        if (pitch !== null) fx.pitch = pitch;
+        if (roll !== null) fx.roll = roll;
+        this.applySpecialFxLook(fx);
+      },
+      setSpecialEffectScale: (id, scale) => {
+        const fx = live(id);
+        if (!fx) return;
+        fx.scale = scale;
+        this.applySpecialFxLook(fx);
+      },
+      setSpecialEffectColor: (id, r, g, b) => {
+        const fx = live(id);
+        if (!fx) return;
+        fx.color = [r / 255, g / 255, b / 255, fx.color[3]];
+        this.applySpecialFxLook(fx);
+      },
+      // "If current effect is attached to something … this doesn't apply alpha" (jassbot).
+      setSpecialEffectAlpha: (id, alpha) => {
+        const fx = live(id);
+        if (!fx || fx.hostId >= 0) return;
+        fx.color = [fx.color[0], fx.color[1], fx.color[2], alpha / 255];
+        this.applySpecialFxLook(fx);
+      },
+      setSpecialEffectTeamColor: (id, color) => {
+        const fx = live(id);
+        if (!fx) return;
+        fx.teamColor = color;
+        this.applySpecialFxLook(fx);
+      },
+      playSpecialEffect: (id, anim) => {
+        const fx = live(id);
+        if (!fx) return;
+        fx.played = anim;
+        fx.spent = false; // a Birth-only model that had burned out is alive again
+        this.playSpecialFxClip(fx);
+      },
+      specialEffectSubAnim: (id, tag, add) => {
+        const fx = live(id);
+        if (!fx) return;
+        if (tag === null) fx.tags = [];
+        else if (add && !fx.tags.includes(tag)) fx.tags.push(tag);
+        else if (!add) fx.tags = fx.tags.filter((t) => t !== tag);
+      },
+      specialEffectPosition: (id) => {
+        const fx = live(id);
+        if (!fx) return null;
+        if (fx.hostId >= 0) return { x: 0, y: 0, z: 0 };
+        return { x: fx.x, y: fx.y, z: fx.z ?? this.rts?.groundHeightAt(fx.x, fx.y) ?? 0 };
+      },
+      surfaceZ: (x, y) => this.rts?.surfaceZ(x, y) ?? 0,
+      unitZ: (id) => {
+        const u = this.rts?.simView.units.get(id);
+        if (!u || !this.rts) return 0;
+        return this.rts.surfaceZ(u.x, u.y) + (this.registry.get(u.typeId)?.occlusionHeight ?? 0);
+      },
+    };
   }
 
   /** Age every live effect and reconcile what the player sees.
@@ -5931,7 +6056,9 @@ export class MapViewerScene {
   private updateSpecialFxOne(fx: SpecialFx): void {
     const inst = fx.inst;
     if (!inst) return; // still loading — age is already running, and the load will catch up
-    if (!fx.spent) {
+    if (!fx.spent && fx.played !== null) {
+      this.placeSpecialFx(fx); // the script owns the clip now (BlzPlaySpecialEffect)
+    } else if (!fx.spent) {
       this.placeSpecialFx(fx);
       const phase = specialFxPhaseAt(fx.age, fx.clips);
       if (phase.kind === "birth") {

@@ -147,6 +147,7 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // --- Art ------------------------------------------------------------------------
   umdl: (d, v) => { d.model = normModel(s(v)); },
   usca: (d, v) => { d.modelScale = n(v); },
+  uocc: (d, v) => { d.occlusionHeight = n(v); }, // Art - Occlusion Height (unitUI occH)
   // "Art - Selection Scale" (unitUI `scale`) — the SELECTION CIRCLE's size, which is a
   // different column from the model scale above and the one the click radius is measured in
   // (SEL_RADIUS_PER_SCALE). Azure Tower Defense sets it on 37 of its types.
@@ -443,7 +444,7 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   ucua: "no caster-upgrade art (Casterupgradeart)", ussi: "no score screen (ScoreScreenIcon)",
   uspa: "no per-unit Specialart hook", utaa: "no per-unit Targetart hook",
   uept: "no elevation sampling (elevPts)", uerd: "no elevation sampling (elevRad)",
-  ufrd: "fog radius is taken from sight, not fogRad", uocc: "no occluder height (occH)",
+  ufrd: "fog radius is taken from sight, not fogRad",
   ulos: "no fat line-of-sight (fatLOS)", uver: "no SD/HD asset split (fileVerFlags)",
   umxp: "no terrain pitch/roll on models (maxPitch)", umxr: "no terrain pitch/roll on models (maxRoll)",
   uori: "orientInterp — turnRate carries the turn; no interpolation mode",

@@ -131,6 +131,10 @@ export interface UnitDef {
   tilesets: string[];
   model: string; // MDX path, backslashes, with extension
   modelScale: number;
+  /** Art - Occlusion Height (unitUI `occH`). What `BlzGetUnitZ` adds on top of the surface
+   *  under a unit — "plus the unit's occluder height" (jassbot, BlzGetUnitZ) — and NOT its fly
+   *  height. 0 for nearly every ground unit. */
+  occlusionHeight: number;
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
   /** Art - Animation - Walk Speed / Run Speed (unitUI "walk"/"run"). NOT how fast the unit
    *  moves — the movement speed at which the model's "Walk" / "Walk Fast" clips were AUTHORED
@@ -648,6 +652,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       tilesets: (b ? str(b, "tilesets") : "").split(",").map((s) => s.trim().toUpperCase()).filter((s) => s && s !== "_" && s !== "-"),
       model: unitModelPath(vfs, file, animProps),
       modelScale: u ? num(u, "modelScale", 1) : 1,
+      occlusionHeight: u ? num(u, "occH", 0) : 0,
       selScale: u ? num(u, "scale", 1) : 1,
       animWalkSpeed: u ? num(u, "walk", 0) : 0,
       animRunSpeed: u ? num(u, "run", 0) : 0,
@@ -1032,6 +1037,7 @@ export function destructibleUnitDef(d: {
     // dedicated bust for that — the doodad's own model is a piece of terrain.
     model: d.portraitModel,
     modelScale: 1,
+    occlusionHeight: 0,
     // The selection circle, which is the field the CLICK is measured against, and it is
     // NOT `radius`. `radius` is the "Elevation Sample Radius" — 50 on every gate in the
     // game, so a 640-unit-long Elven Gate could only be picked within a stride of its

@@ -67,6 +67,10 @@ const CONVERT_NATIVES = [
   // `ConvertUnit*Field` families are NOT here: natives/blzFields.ts registers them beside the
   // table whose indices they carry.
   "ConvertOriginFrameType", "ConvertFramePointType", "ConvertFrameEventType",
+  // …and the two the special-effect animation natives take (natives/effects.ts). Both are in
+  // the install's own 1.30.4 common.j; without them every ANIM_TYPE_/SUBANIM_TYPE_ constant
+  // was null and BlzPlaySpecialEffect could not be told which clip to play.
+  "ConvertAnimType", "ConvertSubAnimType",
 ];
 
 /** Cheap, pure utility natives (string/number conversions, RNG, camera/env
