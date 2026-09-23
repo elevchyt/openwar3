@@ -2491,6 +2491,10 @@ const BODY_GAP_CELLS = 4;
  *  turns it off to run the all-pairs loop it replaced — it changes what the pass COSTS and never
  *  what it does (tools/sim-collision-grid-test.cjs). */
 export const CollisionGrid = { enabled: true };
+/** The autocast search's flat scan (SimWorld.autocastTarget / dispelAutocastTarget). On, unless a
+ *  test or a live A/B turns it off to run the Map-iterator-and-hypot loop it replaced — it changes
+ *  what the search COSTS and never what it FINDS (tools/sim-autocast-scan-test.cjs). */
+export const AutocastScan = { fast: true };
 /** The grid's cell, in world units. Ours, and free to be anything: the reach a body is offered is
  *  computed from the radii, so the size only decides how many cells a query walks and how many
  *  bodies each one holds — four footman-sized bodies a side at 128. */
@@ -3206,8 +3210,57 @@ function distSkip(
   return strict ? d2 > reach * reach : d2 >= reach * reach;
 }
 
+/**
+ * Is `t` out of an autocast's reach from `u` — hull to hull, `hypot(dx, dy) − u.radius − t.radius
+ * > range`, which is the test the search always made?
+ *
+ * The fast path rejects on ONE AXIS first, and that is what makes it cheap: a body across the map
+ * is apart along x or y by far more than the reach, and a subtraction and two compares say so
+ * without the square root — where `Math.hypot` was most of the search's own time, called for every
+ * unit on the map by every idle caster every step. It rejects EXACTLY what the full test would:
+ * `hypot` is never less than either leg, and the one-world-unit margin keeps a body anywhere near
+ * the boundary away from the axis test altogether, so rounding can never be what decides it — that
+ * body falls through to the original expression, word for word. A non-finite position compares
+ * false both ways and falls through too, exactly as it did.
+ */
+function autocastOutOfReach(u: SimUnit, t: SimUnit, range: number): boolean {
+  if (AutocastScan.fast) {
+    const lim = range + u.radius + t.radius + 1;
+    const dx = t.x - u.x;
+    if (dx > lim || dx < -lim) return true;
+    const dy = t.y - u.y;
+    if (dy > lim || dy < -lim) return true;
+  }
+  return Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range;
+}
+
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
+  /**
+   * `units.values()` as a flat array, in the Map's OWN order, for the one scan too hot for an
+   * iterator: the autocast search, which every idle caster with autocast on runs every step
+   * against every unit on the map. Profiled in a 287-unit fight at 6× CPU throttle it was 7.1% of
+   * ALL CPU and about 40% of the whole simulation step (docs/perf-research.md).
+   *
+   * The ORDER is the load-bearing part, not the array. A friendly buff ranks allies by a fraction
+   * of health, every full-health ally in the fight scores the same, and the tie goes to whichever
+   * the scan met FIRST — so a list in any other order would put the Inner Fire on a different
+   * Footman, which is a different game. Rebuilt from the Map itself whenever the set of units
+   * changes (`unitsVersion`, bumped at the one insert and the three deletes), so it is always the
+   * Map's order exactly.
+   */
+  private unitList: SimUnit[] = [];
+  private unitListVersion = -1;
+  private unitsVersion = 0;
+  private unitsInOrder(): readonly SimUnit[] {
+    // The size test is a second net under the version: a unit added or taken out by a path that
+    // somehow bypassed the four bumped sites still forces a rebuild.
+    if (this.unitListVersion !== this.unitsVersion || this.unitList.length !== this.units.size) {
+      this.unitList = Array.from(this.units.values());
+      this.unitListVersion = this.unitsVersion;
+    }
+    return this.unitList;
+  }
   /** Every hero of every player that is currently dead and revivable (see FallenHero). */
   readonly fallen = new Map<number, FallenHero>();
   readonly mines = new Map<number, SimMine>();
@@ -7934,6 +7987,7 @@ export class SimWorld {
     // closed to every worker and every later haunting for the rest of the match.
     this.releaseEntangled(u);
     this.units.delete(u.id);
+    this.unitsVersion++; // see unitsInOrder
     this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
     this.teleportedFrom.delete(u.id); // a missile at a unit that is gone fizzles; nothing reads these again
     this.boardedFrom.delete(u.id);
@@ -7964,6 +8018,7 @@ export class SimWorld {
     }
     this.releaseEntangled(u); // an Entangled Gold Mine leaving hands the mine back
     this.units.delete(u.id);
+    this.unitsVersion++; // see unitsInOrder
     this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
     this.teleportedFrom.delete(u.id); // a missile at a unit that is gone fizzles; nothing reads these again
     this.boardedFrom.delete(u.id);
@@ -8558,6 +8613,7 @@ export class SimWorld {
       pendingDrop: null,
     };
     this.units.set(u.id, u);
+    this.unitsVersion++; // see unitsInOrder
     this.settle(u);
     if (u.worker) this.applyHarvestData(u.worker); // rates come off the harvest ability's row
     this.tech?.invalidate(); // a new unit may unlock (or, for a shop, be) something
@@ -14100,6 +14156,12 @@ export class SimWorld {
     return Math.max(castRange, u.weapon?.acquire ?? 0);
   }
 
+  /** What an autocast search walks: the flat list in the Map's own order (`unitsInOrder`), or the
+   *  Map itself with `AutocastScan.fast` off — the same units in the same order either way. */
+  private autocastPool(): Iterable<SimUnit> {
+    return AutocastScan.fast ? this.unitsInOrder() : this.units.values();
+  }
+
   private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean, flags: string[] = [], buffs: string[] = []): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = friendly ? 1.999 : Infinity;
@@ -14129,8 +14191,8 @@ export class SimWorld {
     // all. Outside the fight it is the most hurt, as before. A HEAL keeps its own reading: the
     // most wounded, whoever is on it.
     const fight = friendly && !HEAL_SPELLS.has(code) ? this.fightSides() : null;
-    for (const t of this.units.values()) {
-      if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
+    for (const t of this.autocastPool()) {
+      if (autocastOutOfReach(u, t, range)) continue;
       if (!this.autocastWants(u, t, friendly, code, selfOk, flags, buffs)) continue;
       if (friendly) {
         // heal the most-hurt ally; a buff, the one in the fight (then the most hurt)
@@ -14184,9 +14246,9 @@ export class SimWorld {
   private dispelAutocastTarget(u: SimUnit, range: number, def: AbilityDef): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = -Infinity;
-    for (const t of this.units.values()) {
+    for (const t of this.autocastPool()) {
       if (t.hp <= 0 || t.building) continue;
-      if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
+      if (autocastOutOfReach(u, t, range)) continue;
       if (this.targetError(u, t, def.targetFlags, def.code) !== null) continue;
       const ours = !this.hostile(u, t);
       if (!worthDispelling(t, this.units, ours, true)) continue;
@@ -21113,6 +21175,7 @@ export class SimWorld {
     // stops existing (issue #126; see revealDyingUnit).
     this.revealDyingUnit(u);
     this.units.delete(u.id); // Map delete during values() iteration is safe
+    this.unitsVersion++; // see unitsInOrder
     this.teleportChannels.delete(u.id); // a caster that leaves mid-teleport takes its channel with it
     this.teleportedFrom.delete(u.id); // a missile at a unit that is gone fizzles; nothing reads these again
     this.boardedFrom.delete(u.id);

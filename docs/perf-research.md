@@ -31,6 +31,7 @@ Read [`docs/video-options.md`](video-options.md) for what the mode IS and
 | 7 | Overlay canvas box read on RESIZE, not 3×/frame | **exact** | `sim.overlays` 4.46 → 0.48 ms | landed |
 | 8 | The game frame's box likewise (`syncFrame`) | **exact** | `getBoundingClientRect` 4.0% → out of the profile | landed |
 | 9 | A coarser pose bucket (30 → 15 Hz) | trade | nothing — sign flips between pairs | **not taken**, knob kept |
+| 10 | **Autocast search: flat ordered list + axis reject** (`AutocastScan`) | **exact** | search 6.71 → 4.57 µs (1.47×), scan alone 2×; frame ~1–2% (noise floor) | landed |
 
 **Rows 6, 7 and 8 are the point of this file.** All three are exact, all three were found while
 chasing the low-performance frame, and all three help full quality as much as they help the mode —
@@ -97,9 +98,21 @@ Roughly in value order, with the kind marked, because that is what decides where
   Extreme Candy War), each one doing two Map lookups and a vision query to learn a state that
   almost never changes. Candidates: hoist the per-widget constants out of the pass, or key the
   vision query by CELL so a treeline asks once.
-- **`autocastTarget` (4.6%).** *Exact.* Now that the legality test is cheap, what is left is the
-  scan itself — every autocaster against every candidate. The sim already has a collision grid;
-  this is the O(n²) shape `docs/perf-logging.md` has a lesson about.
+- ~~`autocastTarget`~~ — **done as far as it safely goes** (row 10). The profile put `tickAutocast`
+  at 7.1% of ALL CPU — ~40% of the whole sim step — because every idle caster with autocast on
+  rescans every unit on the map every step. The search now walks a flat copy of the unit Map in
+  the Map's OWN order (the order is load-bearing: a friendly buff's ties go to whichever ally the
+  scan met first) and rejects on one axis before `Math.hypot`, with a one-unit margin so rounding
+  never decides a body on the boundary. `tools/sim-autocast-scan-test.cjs` runs a 108-unit melee
+  both ways and demands the identical world for 900 steps — deaths, reinforcements, heals, Inner
+  Fire ties, Slow and Abolish Magic all exercised. The search is 1.47× faster (the scan itself
+  2×); in the 287-unit fight that is ~1–2% of the frame, at the noise floor, because the search
+  was only 7% of it. It scales with casters × units, so it matters more late-game than here.
+  **Why it stops there:** the next step is a spatial index (visit the ~12 units in reach, not all
+  287), and it is not safe as things stand — units MOVE during the order loop that runs the
+  search (a Blink resolving inside `tickCast`, a worker leaving a mine, an unload), so an index
+  built once a step can miss a body that arrived since. It needs every teleport site to report
+  itself first; see "the sim's structural options" below.
 - ~~The `unaccounted` ~17 ms~~ — **split, and there is no monster in it.** Chrome's own counters
   over 176 frames at 6× throttle: frame 86.1 ms, of which **ScriptDuration 75.8 ms (88%)**,
   RecalcStyleDuration 2.65, LayoutDuration 1.89 — one layout and two style recalcs per frame,
@@ -111,6 +124,27 @@ Roughly in value order, with the kind marked, because that is what decides where
 - **BLP decode off the main thread** (`decodeScan` ~1%, plus the hitch it causes). *Exact.*
 - **The fog overlay and baked shadow layer taking terrain-cull's runs** — named in
   `docs/terrain-culling.md` and still not done. *Exact.*
+
+## The sim's structural options
+
+After rows 6 and 10 the simulation has no single big item left: its cost is spread over the
+per-unit order loop (`sim.world.units` ~10.8 ms of a ~19 ms sim in the 287-unit fight),
+`recomputeStats` (2.9% of CPU), the fog reveal (~3% across `revealLineOfSight`/`stateAt`/`reveal`)
+and many 1% items. Going further means STRUCTURAL changes, each exact but each needing an
+invariant the code does not yet keep:
+
+- **A per-step spatial index for unit searches** (autocast, and the acquisition scans that already
+  use `distSkip`). Needs: every place that writes a unit's position mid-step to mark the index
+  stale — or to route through one `moveUnit`. Payoff: the searches visit ~12 bodies instead of all
+  of them; scales with the SQUARE of the army, so it is the late-game fix.
+- **Incremental `recomputeStats`** — skip a unit whose inputs did not change. It runs for every
+  unit every step and rebuilds armour, speed, damage and regen from buffs, items and upgrades.
+  Needs: a change signal from every input — buffs (including the ones that fade by themselves on a
+  timer), auras, items, upgrades, level. One missed input puts a wrong stat on the field silently,
+  so it wants the same both-ways step-for-step test as row 10 before it lands.
+- **`upgradeBonuses` cached per (owner, type)** — small (~0.6%) but safe: research levels change
+  only through `TechState.setResearchLevel` (the snapshot applier included), so a version counter
+  there is a complete invalidation.
 
 ## What a later full-quality pass should do with this
 
