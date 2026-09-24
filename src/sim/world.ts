@@ -21056,17 +21056,17 @@ export class SimWorld {
     // arrows aside. Straight off the ability's own Ubertip, which spells the whole thing out:
     // "Activate to have a <DataF1>% chance to reflect Piercing attacks upon the source, and to
     // take only <DataA1,%>% of the damage from attacks that are not reflected."
-    const stance = this.defendStance(target);
-    // …and every blow that reaches a braced Footman flashes off the shield: the row's own
+    const defend = attackType === AttackType.Pierce ? this.defendStance(target) : null;
+    // …and every PIERCING blow that reaches a braced Footman flashes off the shield — the blows
+    // Defend actually does something about, and so the only ones it shows: the row's own
     // `Casterart` (DefendCaster.mdl), whose geometry is authored ~45 units FORWARD of its
     // origin — so it is hung on the unit's `origin` bone and turns with him, which is what
     // puts it in front rather than at his feet. Its Birth (0.5 s) is its whole life (life 0).
-    if (stance && !target.invulnerable) {
+    if (defend && !target.invulnerable) {
       const ab = target.abilities.find((a) => a.code === "Adef" && a.autocastOn);
       const art = ab ? this.abilityDefOf(ab)?.casterArt : "";
       if (art) this.spellEffects.push({ art, x: target.x, y: target.y, targetId: target.id, z: 0, life: 0, attach: ["origin"] });
     }
-    const defend = attackType === AttackType.Pierce ? stance : null;
     if (defend) {
       if (this.rng() * 100 < this.dataOf(defend, 5, 30)) {
         // Reflected: the shot goes back down its own flight path. The defender takes nothing.
