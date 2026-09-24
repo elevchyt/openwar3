@@ -1355,6 +1355,12 @@ export class MapViewerScene {
   /** The FORM the bust was loaded for (SelectionInfo.altModel) — a morph keeps the unit id,
    *  so this is what says the bear's bust must replace the elf's. */
   private portraitAlt = false;
+  /** …and the MODEL it was shown for. A unit's model can arrive after the unit does: a hero
+   *  bought from a shop is in the sim a frame or two before its body has loaded, and
+   *  `selectedInfo` reports no model until then. Keyed on the id alone, the portrait took that
+   *  first frame's "no bust" as the answer for the unit and never looked again — and the canvas
+   *  kept the last bust it drew, which is how Test of Balance's heroes all wore the pillar. */
+  private portraitModel = "";
   private portraitLoading = false;
   // Background portrait-model warming (kills the first-select spike): types whose
   // bust is already parsed/cached, the pending decode queue, and the idle-drain guard.
@@ -9063,12 +9069,13 @@ export class MapViewerScene {
       }
       return;
     }
-    if ((sel.id === this.portraitFor && sel.altModel === this.portraitAlt) || this.portraitLoading) return;
+    if ((sel.id === this.portraitFor && sel.altModel === this.portraitAlt && sel.model === this.portraitModel) || this.portraitLoading) return;
     if (!sel.model) {
       // A unit with no model has no bust — the frame stands empty rather than keep showing
       // whoever was selected before it (an invisible dummy, RtsController.infoFor).
       this.portraitFor = sel.id;
       this.portraitAlt = sel.altModel;
+      this.portraitModel = "";
       this.portraitLabel = "";
       this.portraitViewer?.stop();
       return;
@@ -9106,12 +9113,14 @@ export class MapViewerScene {
     const panLeft = /paladin/i.test(sel.model) ? 0.14 : 0;
     // The half of a two-form bust this unit is in right now (ModelViewerScene.load).
     const alt = sel.altModel;
+    const model = sel.model;
     const props = animPropsFor(this.registry.get(sel.typeId), alt) ?? [];
     this.portraitViewer
       .load(path, this.rts.unitColor(sel.owner), true, panLeft, props)
       .then(() => {
         this.portraitFor = id;
         this.portraitAlt = alt;
+        this.portraitModel = model;
         this.portraitViewer!.start();
         // The selection voice ("What") likely started before this bust finished
         // loading — its onVoiceStart no-op'd because the instance wasn't ready yet.
