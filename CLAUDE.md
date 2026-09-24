@@ -770,7 +770,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   button with a key IS that key (O Escape, Triangle Space, L1 "-", R2 F8, Start F10, Select
   F9), and the stick and X/R1 are a drawn cursor dispatching real pointer events with
   `pointerId: 1`, so every existing gate applies unchanged. `:hover` cannot see that cursor:
-  ask `isHovered(el)`, and give a hover glow a `.pad-hover` twin.
+  ask `isHovered(el)`, and give a hover glow a `.pad-hover` twin. The OS pointer is hidden by
+  a transparent `#gamepad-veil` over the page, never by a global `cursor: none`: the drawn cursor
+  READS the page's `cursor:` values, so a global rule would hide it too.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
   that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
   files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its

@@ -51,6 +51,17 @@ second input system:
   exist (`applyRaceCursor`, `ui/cursor.ts`), and `cursor: none` hides it exactly where the
   edge-scroll chevron and the carried item replace the mouse's cursor.
 
+**The OS pointer is hidden by a VEIL.** A page cannot move or remove the OS pointer, so while the
+pad drives, a transparent full-page layer (`#gamepad-veil`, `cursor: none !important` under an ID
+that beats every other cursor rule) sits between it and the page. A global `cursor: none` rule
+would not work: the drawn cursor reads its image from the page's own `cursor:` values, and every
+element would then report "none". The pad's events hit-test past the veil (`hit`, via
+`elementsFromPoint`), so they still reach what is underneath. Raising the veil under a still mouse
+makes the browser send real `pointerleave`/`mouseout` events from whatever the OS pointer was
+over, and that is usually the element the pad has just entered. So those events are stopped at the
+window while the veil is up, or the pad's hover tooltip comes straight back down. A real mouse
+move, press or wheel notch takes the veil away. The press or notch that does it is spent on that.
+
 `:hover` cannot see a synthetic pointer. The places that ask the DOM whether something is still
 hovered call `isHovered(el)` instead (the command tooltip, the stat slabs, `gameTip`), and the
 stylesheet's hover glows have `.pad-hover` twins. If you add a `:hover` rule that matters, give it

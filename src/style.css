@@ -2487,6 +2487,18 @@ body.carrying-item .hud-inv-slot.pad-hover { border-color: var(--gold); }
   will-change: transform;
 }
 .gamepad-cursor img { position: absolute; display: block; }
+/* The OS pointer's cover while the pad has the pointer (ui/gamepad.ts `veilEl`): transparent,
+   over the page and under the drawn cursor. An ID and !important, because every other cursor rule
+   is !important too (the race gauntlet on `body.in-game *`, the menu hand on
+   `body:not(.in-game) *`), and this one has to beat all of them. */
+#gamepad-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: transparent;
+  cursor: none !important;
+}
+#gamepad-veil[hidden] { display: none; }
 /* No image to wear (before an install has given the page its gauntlet): a plain arrow. */
 .gamepad-cursor.plain::before {
   content: "";

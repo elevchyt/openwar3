@@ -109,6 +109,17 @@ let lastTick = 0;
 // --- the virtual cursor -----------------------------------------------------------------
 
 let cursorEl: HTMLDivElement | null = null;
+/**
+ * A transparent layer over the whole page while the pad has the pointer, wearing `cursor: none`
+ * — which is how the OS pointer is hidden, since a page cannot move it out of the way.
+ *
+ * It is a LAYER rather than a `cursor: none` rule on everything because the drawn cursor is read
+ * OFF the page's own `cursor:` values (`paintCursor`): a global rule would make every element
+ * answer "none" and the pad's cursor would vanish with the OS one. The layer is hit-tested
+ * PAST (`hit`), so the pad's events still reach what is under it, and nothing else in the page
+ * ever learns it is there — the real mouse's first move takes it away (`hideCursor`).
+ */
+let veilEl: HTMLDivElement | null = null;
 let cursorImg: HTMLImageElement | null = null;
 /** Is the pad driving the pointer (the virtual cursor is up)? */
 let cursorOn = false;
@@ -154,6 +165,30 @@ export function startGamepad(): void {
     },
     { capture: true },
   );
+  // …and a real press or wheel turn is the mouse too. They land on the VEIL while the pad has the
+  // pointer (it covers the page), so this one press or notch is spent taking the pointer back —
+  // a player picking the mouse up moves it first anyway.
+  for (const type of ["pointerdown", "wheel"] as const) {
+    window.addEventListener(type, (e) => { if (e.isTrusted && cursorOn) hideCursor(); }, { capture: true });
+  }
+  // The veil going up under a STILL mouse is a layout change under the pointer, and the browser
+  // answers it with real boundary events: the element the OS pointer was over is told it has been
+  // left, for the veil. The pad's cursor starts exactly where that mouse was, so that element is
+  // usually the one the pad has just ENTERED — and a command button's tooltip, raised by the
+  // pad's own pointerenter, was taken straight back down by the real pointerleave. While the
+  // pad has the pointer those events describe nothing the player did, so they are stopped at the
+  // window, before any handler sees them. (Capture runs for the non-bubbling enter/leave too.)
+  // The ones the veil's REMOVAL sends are left alone: by then the mouse is moving and they are
+  // true.
+  for (const type of ["pointerover", "pointerout", "pointerenter", "pointerleave", "mouseover", "mouseout", "mouseenter", "mouseleave"] as const) {
+    window.addEventListener(
+      type,
+      (e) => {
+        if (e.isTrusted && cursorOn && (e.target === veilEl || e.relatedTarget === veilEl)) e.stopImmediatePropagation();
+      },
+      { capture: true },
+    );
+  }
   requestAnimationFrame(tick);
   refreshPrompt(); // a pad the page has already been shown
 }
@@ -386,9 +421,12 @@ function showCursor(): void {
     cursorImg = document.createElement("img");
     cursorImg.alt = "";
     cursorEl.appendChild(cursorImg);
-    document.body.appendChild(cursorEl);
+    veilEl = document.createElement("div");
+    veilEl.id = "gamepad-veil";
+    document.body.append(veilEl, cursorEl);
   }
   cursorEl.hidden = false;
+  if (veilEl) veilEl.hidden = false;
   moveCursor(cx, cy);
 }
 
@@ -396,13 +434,22 @@ function hideCursor(): void {
   if (!cursorOn) return;
   cursorOn = false;
   if (cursorEl) cursorEl.hidden = true;
+  if (veilEl) veilEl.hidden = true;
   setHover(null);
+}
+
+/** The element at a point as the page would see it with no veil over it. */
+function hit(x: number, y: number): Element | null {
+  for (const el of document.elementsFromPoint(x, y)) {
+    if (el !== veilEl && el !== cursorEl && !cursorEl?.contains(el)) return el;
+  }
+  return null;
 }
 
 function moveCursor(x: number, y: number): void {
   cx = Math.min(Math.max(x, 0), window.innerWidth - 1);
   cy = Math.min(Math.max(y, 0), window.innerHeight - 1);
-  const under = document.elementFromPoint(cx, cy);
+  const under = hit(cx, cy);
   setHover(under);
   const target = captureEl ?? under;
   if (target) {
@@ -481,7 +528,7 @@ function setHover(next: Element | null): void {
 function holdMouse(padButton: number, b: 0 | 2): void {
   if (!cursorOn) showCursor();
   const bit = b === 0 ? 1 : 2;
-  const under = document.elementFromPoint(cx, cy);
+  const under = hit(cx, cy);
   if (!under) return;
   setHover(under);
   heldMask |= bit;
@@ -497,12 +544,12 @@ function holdMouse(padButton: number, b: 0 | 2): void {
   }
   holds.set(padButton, () => {
     heldMask &= ~bit;
-    const upAt = (b === 0 ? captureEl : null) ?? document.elementFromPoint(cx, cy) ?? under;
+    const upAt = (b === 0 ? captureEl : null) ?? hit(cx, cy) ?? under;
     if (b === 0) captureEl = null;
     upAt.dispatchEvent(pointerEvent("pointerup", b));
     upAt.dispatchEvent(mouseEvent("mouseup", b));
     // The click lands on the nearest element both ends of it share, as it does for a mouse.
-    const end = document.elementFromPoint(cx, cy);
+    const end = hit(cx, cy);
     let common: Element | null = end;
     while (common && !common.contains(under)) common = common.parentElement;
     if (!common) return;
