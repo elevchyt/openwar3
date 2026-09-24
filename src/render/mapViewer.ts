@@ -338,9 +338,11 @@ const CARRIED_ITEM_SCALE = 0.85;
 // and the carried gauntlet below. A DOM stand-in that skips it moves the aiming point out
 // from under the player mid-gesture, which is the whole complaint.
 const CURSOR_HOTSPOT: [number, number] = [cursorPx(3), cursorPx(3)];
-// The recoloured cursors' pulse (overlayCursor): brightness 1 → 1.85 → 1 over PULSE_MS, the
-// timing the old CSS `reticle-pulse` animation had. A cursor image cannot animate, so the cycle
-// is baked into PULSE_FRAMES stills — 100 ms apiece, which still reads as a glow, not a blink.
+// The hover hand's pulse (overlayCursor): brightness 1 → 1.85 → 1 over PULSE_MS, the timing the
+// old CSS `reticle-pulse` animation had. A cursor image cannot animate, so the cycle is baked into
+// PULSE_FRAMES stills — 100 ms apiece, which still reads as a glow, not a blink. The armed
+// RETICLE does not pulse: the model's "Target" sequence is one frame ([0, 33]) with no geoset
+// colour or alpha track (UI\Cursor\HumanCursor.mdx), so the real one is a steady picture.
 const PULSE_MS = 800;
 const PULSE_FRAMES = 8;
 // Where the carried item's icon sits against the gauntlet holding it, straight off
@@ -1492,7 +1494,8 @@ export class MapViewerScene {
   private reticleImgs = new Map<string, HTMLCanvasElement>(); // tinted WC3 reticle by colour key
   private handImgs = new Map<string, HTMLCanvasElement>(); // tinted race hand cursor by colour key
   private overlayCursors = new Map<string, string>(); // `cursor:` values by kind:colour:pulse frame
-  private overlayCursorRule = ""; // the value --ow3-overlay-cursor holds now (see updateReticle)
+  private reticleCursorRule = ""; // the value --ow3-reticle-cursor holds on <body> now (see updateReticle)
+  private handCursorRule = ""; // the value --ow3-hand-cursor holds on the map canvas now (see updateReticle)
   private scrollStripUrl = ""; // the three "Scroll *" frames laid side by side (see applyRaceCursor)
   private lastMouse = { x: 0, y: 0 };
   // Transient harvest-/attack-order ring flashes: a colour + lifetime; the ring itself
@@ -11999,9 +12002,9 @@ export class MapViewerScene {
       this.cursorStyleEl = document.createElement("style");
       document.head.appendChild(this.cursorStyleEl);
     }
-    // Normal = the WC3 arrow everywhere. The recoloured cursors and the carried item are REAL
-    // cursors too, swapped in through --ow3-overlay-cursor (updateReticle); the one DOM stand-in
-    // left, the scroll chevron, hides it instead.
+    // Normal = the WC3 arrow everywhere. The reticle and the recoloured hand are REAL cursors
+    // too, swapped in through --ow3-reticle-cursor / --ow3-hand-cursor (updateReticle); the DOM
+    // stand-ins left, the scroll chevron and the carried item, hide it instead.
     //  - `reticle-on` (the recoloured hover HAND) only ever happens over the map, so
     //    it's scoped to the canvas and HUD buttons keep the plain arrow.
     //  - `armed-on` (an armed order's target reticle) is body-wide: in WC3 the reticle
@@ -12021,8 +12024,8 @@ export class MapViewerScene {
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
       `body.in-game.carrying-item, body.in-game.carrying-item * { cursor: none !important; }\n` +
-      `body.in-game.reticle-on #map { cursor: var(--ow3-overlay-cursor) !important; }\n` +
-      `body.in-game.armed-on, body.in-game.armed-on * { cursor: var(--ow3-overlay-cursor) !important; }\n` +
+      `body.in-game.reticle-on #map { cursor: var(--ow3-hand-cursor) !important; }\n` +
+      `body.in-game.armed-on, body.in-game.armed-on * { cursor: var(--ow3-reticle-cursor) !important; }\n` +
       `body.in-game.scroll-on, body.in-game.scroll-on * { cursor: none !important; }\n` +
       `body.in-game.cine-on:not(.dialog-on), body.in-game.cine-on:not(.dialog-on) * { cursor: none !important; }`;
   }
@@ -12118,12 +12121,16 @@ export class MapViewerScene {
    *
    *  These used to be a DOM element moved to the pointer every frame, and so drew a frame or two
    *  behind it — the reticle you aim with visibly trailed the mouse. A real cursor is drawn by the
-   *  OS wherever the pointer IS. What that costs is the pulse: a cursor cannot run a CSS
+   *  OS wherever the pointer IS. What that costs is the hand's pulse: a cursor cannot run a CSS
    *  animation, so the old `reticle-pulse` (brightness 1 → 1.85 → 1 over 0.8 s, ease-in-out,
-   *  colour only) is baked into PULSE_FRAMES images and stepped on the wall clock. Empty until the
-   *  cursor sheet loads. */
+   *  colour only) is baked into PULSE_FRAMES images and stepped on the wall clock. The reticle is
+   *  always frame 0 — unfiltered — because the game's own does not pulse (see PULSE_MS), and
+   *  because a pulse is a NEW cursor ten times a second: while an order was armed that was a
+   *  style recalc of every element in the document per step (the rule is body-wide) and a fresh
+   *  OS cursor bitmap each time, measured at 5–6× the idle style time. Empty until the cursor
+   *  sheet loads. */
   private overlayCursor(kind: "reticle" | "hand", colorKey: "green" | "yellow" | "red"): string {
-    const frame = Math.floor((performance.now() % PULSE_MS) / (PULSE_MS / PULSE_FRAMES));
+    const frame = kind === "reticle" ? 0 : Math.floor((performance.now() % PULSE_MS) / (PULSE_MS / PULSE_FRAMES));
     const key = `${kind}:${colorKey}:${frame}`;
     const cached = this.overlayCursors.get(key);
     if (cached !== undefined) return cached;
@@ -12144,13 +12151,25 @@ export class MapViewerScene {
     return rule;
   }
 
-  /** Point --ow3-overlay-cursor at `rule`. Written only when it changes: this runs every frame,
-   *  and a custom property on <body> is inherited by the whole document, so every write is a
-   *  style recalc of all of it. The pulse changes it at its own step rate, not the frame rate. */
-  private setOverlayCursor(rule: string): void {
-    if (rule === this.overlayCursorRule) return;
-    this.overlayCursorRule = rule;
-    document.body.style.setProperty("--ow3-overlay-cursor", rule);
+  /** Point the reticle's or the hand's custom property at `rule`. Written only when it changes:
+   *  this runs every frame, and a custom property is inherited by everything under the element
+   *  that holds it, so every write is a style recalc of that whole subtree.
+   *
+   *  Which is why the two live on different elements. The RETICLE is body-wide (`armed-on`), so
+   *  its property has to sit on <body> — and it changes only with its colour. The HAND pulses,
+   *  ten writes a second for as long as a unit is hovered, and is only ever drawn over the map,
+   *  so its property sits on the map CANVAS, which has no children: a step restyles one element
+   *  instead of the ~940 in the document. */
+  private setOverlayCursor(kind: "reticle" | "hand", rule: string): void {
+    if (kind === "reticle") {
+      if (rule === this.reticleCursorRule) return;
+      this.reticleCursorRule = rule;
+      document.body.style.setProperty("--ow3-reticle-cursor", rule);
+    } else {
+      if (rule === this.handCursorRule) return;
+      this.handCursorRule = rule;
+      this.canvas.style.setProperty("--ow3-hand-cursor", rule);
+    }
   }
 
   /** Decode a BLP to a cached data URL for DOM use (icons). */
@@ -13530,8 +13549,9 @@ export class MapViewerScene {
     this.scrollStripUrl = "";
     this.disposeFog(); // the veil mesh and its GL texture — loadMap dropped these, exit didn't
     document.body.classList.remove("reticle-on", "armed-on", "carrying-item", "scroll-on", "game-paused");
-    document.body.style.removeProperty("--ow3-overlay-cursor");
-    this.overlayCursorRule = "";
+    document.body.style.removeProperty("--ow3-reticle-cursor");
+    this.canvas.style.removeProperty("--ow3-hand-cursor");
+    this.reticleCursorRule = this.handCursorRule = "";
     this.pauseUiOn = this.pauseUiHard = false;
     this.dialogUp = false;
     this.deadPanelKey = "";
@@ -14655,12 +14675,12 @@ export class MapViewerScene {
 
   /** Pick the cursor for what the mouse is doing. While an order is ARMED (Move/Attack/
    *  Patrol/Rally/Repair) it is the WC3 **target reticle**; while merely hovering a
-   *  unit/mine it keeps the race **hand cursor** but recoloured. Both pulse (colour
-   *  only, constant size) — green friendly / yellow neutral / red enemy. While an item is
+   *  unit/mine it keeps the race **hand cursor** but recoloured — green friendly / yellow
+   *  neutral / red enemy; the hand pulses (colour only), the reticle holds still. While an item is
    *  being moved it is the gauntlet holding it (updateCarriedItem, DOM). The reticle and the
-   *  hand are real `cursor:` images, swapped in through --ow3-overlay-cursor under the
-   *  `armed-on` (screen-wide) or `reticle-on` (map-only) class — never DOM chasing the
-   *  pointer, which trails it by a frame or two however fast the game draws. */
+   *  hand are real `cursor:` images, swapped in through --ow3-reticle-cursor under the
+   *  `armed-on` (screen-wide) class or --ow3-hand-cursor under `reticle-on` (map-only) — never
+   *  DOM chasing the pointer, which trails it by a frame or two however fast the game draws. */
   private updateReticle(): void {
     if (!this.rts) return this.hideCursorOverlay();
     const mode = this.rts.orderMode;
@@ -14684,7 +14704,7 @@ export class MapViewerScene {
     }
     const rule = kind ? this.overlayCursor(kind, colorKey) : "";
     if (!kind || !rule) return this.hideCursorOverlay();
-    this.setOverlayCursor(rule);
+    this.setOverlayCursor(kind, rule);
     // The armed reticle owns the cursor screen-wide; the hover hand only over the map.
     document.body.classList.toggle("armed-on", kind === "reticle");
     document.body.classList.toggle("reticle-on", kind === "hand");
