@@ -115,9 +115,13 @@ export class ModelViewerScene {
     viewer.on("error", (e) => console.error("[modelviewer]", e));
 
     // pathSolver: bytes pass through; string (backslash WC3) paths resolve from
-    // the VFS. A Promise return is supported; a miss rejects and the viewer drops
-    // that texture (fire-and-forget) without aborting the model.
-    this.solver = (src) => (typeof src === "string" ? this.vfs.read(src) : src);
+    // the VFS. A path that is in NO layer answers `undefined`, which the viewer takes as
+    // "nothing to load" and draws the model without that texture. It used to REJECT, and the
+    // viewer loads textures fire-and-forget, so every miss surfaced as an uncaught exception:
+    // sixteen of Test of Balance's imported models name `Textures\Clouds8x8.blp`, which a
+    // 1.30.4 install does not ship (it has the eight `Clouds8x8Fire`/`Mod`/`Fade`/… variants
+    // and not the plain one).
+    this.solver = (src) => (typeof src === "string" ? (this.vfs.exists(src) ? this.vfs.read(src) : undefined) : src);
 
     viewer.addHandler(mdxHandler, this.solver, false); // also loads team-color textures
     viewer.addHandler(blpHandler);
