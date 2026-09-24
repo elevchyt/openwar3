@@ -7,7 +7,7 @@
 import { ArmorType, AttackType, PrimaryAttribute } from "../data/enums";
 import {
   ALLY_DOT_COLOR, armorDamageReduction, attackSpeedRung, campMarker, ENEMY_DOT_COLOR, gameNum, INFO_PANEL, moveSpeedRung,
-  NEUTRAL_DOT_COLOR, SELF_DOT_COLOR,
+  NEUTRAL_DOT_COLOR, SELF_DOT_COLOR, upkeepBandIndex, upkeepBands,
 } from "../data/gameplayConstants";
 import type { MinimapPing } from "../jass/runtime";
 import { escapeHtml, wc3StripMarkup, wc3ToHtml } from "./wc3Text";
@@ -25,24 +25,12 @@ import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
 import { anyModalOpen } from "./modal";
 import { gridCommandKey, gridCommandSlot, gridHotkeys, gridInventoryKey, gridInventorySlot, hotkeyMode, hotkeysOnButtons } from "../data/hotkeys";
 
-/** The three upkeep bands: the food each covers and the share of mined gold it lets through.
- *  The game's own words, from the official basics page (classic.battle.net/war3/basics/
- *  upkeep.shtml): "No Upkeep (0-50 Food: 100% income)", "Low Upkeep (51-80 Food: 70% income)",
- *  "High Upkeep (81-100 Food: 40% income)". The install states none of it — `UpkeepUsage` and
- *  `UpkeepGoldTax` are MiscMetaData fields a map's war3mapMisc.txt may set, with no default in
- *  any file — which is why they are written out here, and in exactly the shape the resource bar's
- *  `RESOURCE_UBERTIP_UPKEEP_INFO` line prints ("%d-%d Food: %s (%d%% income)"). */
-export const UPKEEP_BANDS: ReadonlyArray<{ from: number; to: number; income: number }> = [
-  { from: 0, to: 50, income: 100 },
-  { from: 51, to: 80, income: 70 },
-  { from: 81, to: 100, income: 40 },
-];
-
-/** Which upkeep band a food count falls in: 0 none (0–50), 1 low (51–80), 2 high (81+).
- *  Shared with the message the game prints when a player crosses one (`Upkeeplevel`, see
+/** Which upkeep band a food count falls in: 0 none, 1 low, 2 high — at the bands of this match
+ *  (gameplayConstants `upkeepBands`: the edition's, or the map's war3mapMisc.txt). Shared with
+ *  the message the game prints when a player crosses one (`Upkeeplevel`, see
  *  MapViewerScene.noteUpkeep) so the label and the line can never disagree. */
 export function upkeepBand(foodUsed: number): 0 | 1 | 2 {
-  return foodUsed <= UPKEEP_BANDS[0].to ? 0 : foodUsed <= UPKEEP_BANDS[1].to ? 1 : 2;
+  return Math.min(2, upkeepBandIndex(foodUsed)) as 0 | 1 | 2;
 }
 
 /** The resource bar's four readouts, as `ConsoleUi` reports a hover over one. */
@@ -3542,7 +3530,8 @@ export class GameHud {
    * are the engine's `RESOURCE_UBERTIP_*`. The TITLES are ours: GlobalStrings has `GOLD` and
    * `LUMBER` and nothing for supply, so the supply slab is its line alone, and the upkeep slab
    * is titled by the band it is in (the bar's own label) over one `RESOURCE_UBERTIP_UPKEEP_INFO`
-   * line per band. `|N` in those lines is the game's newline in its other case.
+   * line per band (the bands `upkeepBands` answers for this match — the sim taxes by the same
+   * ones). `|N` in those lines is the game's newline in its other case.
    */
   showResourceTip(kind: ResourceKind | null): void {
     if (!kind) {
@@ -3561,7 +3550,10 @@ export class GameHud {
     } else {
       const band = upkeepBand(this.driver.resources().foodUsed);
       const line = s("RESOURCE_UBERTIP_UPKEEP_INFO", "|N%d-%d Food: %s|R (%d%% income)");
-      const lines = UPKEEP_BANDS.map((b, i) => printf(line, [b.from, b.to, s(UPKEEP_KEY[i], UPKEEP_FALLBACK[i]), b.income])).join("");
+      const lines = upkeepBands().map((b, i) => {
+        const k = Math.min(i, 2);
+        return printf(line, [b.from, b.to, s(UPKEEP_KEY[k], UPKEEP_FALLBACK[k]), b.income]);
+      }).join("");
       html = block(s(UPKEEP_KEY[band], UPKEEP_FALLBACK[band]),
         s("RESOURCE_UBERTIP_UPKEEP", "Upkeep is determined by the amount of food your forces are currently using.") + lines);
     }

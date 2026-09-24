@@ -922,6 +922,8 @@ export class RtsController {
     // wants one side to hold its fire writes one direction only. See SimWorld.hostile.
     this.sim.passivePlayers = (a, b) => this.alliances.get(a, b, AllianceType.Passive);
     this.authority = new Authority(this.sim, registry, abilities, tech, upgrades);
+    // Upkeep taxes mined gold by the FOOD a player uses, which the authority derives.
+    this.sim.foodUsedOf = (player) => this.authority.foodFor(player).used;
     this.overlays = new WorldOverlays(host);
   }
 

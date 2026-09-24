@@ -530,7 +530,57 @@ export const MISC_ENGINE = {
    * editor field at 300 and says nothing of the default.
    */
   FoodCeiling_V0: 90,
+  /**
+   * `UpkeepUsage` (`upku`, section "Misc", intList) and `UpkeepGoldTax` (`upkg`, unrealList) —
+   * the upkeep bands: the FOOD USED past which each band starts, and the share of mined gold
+   * each takes. Named in Units\MiscMetaData.slk and stated in no file, so these are the
+   * engine's own numbers as the official basics page gives them: "No Upkeep (0-50 Food: 100%
+   * income)", "Low Upkeep (51-80 Food: 70% income)", "High Upkeep (81-100 Food: 40% income)"
+   * (classic.battle.net/war3/basics/upkeep.shtml). A map restates either in war3mapMisc.txt
+   * (Test of Balance's `UpkeepGoldTax=0.00` turns the tax off at every band).
+   */
+  UpkeepUsage: [50, 80],
+  UpkeepGoldTax: [0.3, 0.6],
+  /** …and Reign of Chaos's bands, ten food lower — "In Reign of Chaos, the Upkeep levels are
+   *  decreased by 10 (No Upkeep is 0-40, Low is 41-70, High is 71-90)" (warcraft.wiki.gg,
+   *  Upkeep) — at the same two rates ("you'll only get to keep seven of it … down to four
+   *  gold per trip", RomRom's Reign of Chaos strategy guide, GameFAQs). */
+  UpkeepUsage_V0: [40, 70],
 } as const;
+
+/** One upkeep band as a player meets it: the food it covers and the share of mined gold kept. */
+export interface UpkeepBand {
+  from: number;
+  to: number;
+  /** Percent of mined gold that reaches the bank. */
+  income: number;
+}
+
+/**
+ * The upkeep bands for this match — the map's `UpkeepUsage`/`UpkeepGoldTax` where its
+ * war3mapMisc.txt states them, else the edition's (MISC_ENGINE). The last band runs to the food
+ * ceiling (the map's `FoodCeiling`, else the engine's). A tax list shorter than the bands
+ * repeats its last rate, which is how a map's single `0.00` reads as "no tax anywhere".
+ */
+export function upkeepBands(): UpkeepBand[] {
+  const usage = (mapValue("UpkeepUsage", MISC_ENGINE.UpkeepUsage) as readonly number[] | undefined)
+    ?? (isRoc() ? MISC_ENGINE.UpkeepUsage_V0 : MISC_ENGINE.UpkeepUsage);
+  const tax = (mapValue("UpkeepGoldTax", MISC_ENGINE.UpkeepGoldTax) as readonly number[] | undefined) ?? MISC_ENGINE.UpkeepGoldTax;
+  const ceiling = (mapValue("FoodCeiling", MISC_ENGINE.FoodCeiling) as number | undefined) ?? engineFoodCeiling();
+  const bands: UpkeepBand[] = [{ from: 0, to: usage[0] ?? ceiling, income: 100 }];
+  for (let i = 0; i < usage.length; i++) {
+    const rate = tax.length ? tax[Math.min(i, tax.length - 1)] : 0;
+    bands.push({ from: usage[i] + 1, to: usage[i + 1] ?? ceiling, income: Math.round((1 - rate) * 100) });
+  }
+  return bands;
+}
+
+/** Which band a food count falls in (an index into `upkeepBands()`). */
+export function upkeepBandIndex(foodUsed: number, bands: readonly UpkeepBand[] = upkeepBands()): number {
+  let i = 0;
+  while (i + 1 < bands.length && foodUsed >= bands[i + 1].from) i++;
+  return i;
+}
 
 /** `UI\MiscData.txt` [Minimap] + [FogOfWar]. The minimap's own palette: how a creep
  *  camp's marker is coloured and sized by the camp's combined level, and the colour

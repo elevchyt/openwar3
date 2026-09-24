@@ -39,6 +39,8 @@ import {
   etherealSpellBonus,
   grantedXp,
   heroReviveVitals,
+  upkeepBandIndex,
+  upkeepBands,
   xpToReachLevel,
   type ReviveMode,
 } from "../data/gameplayConstants";
@@ -3739,6 +3741,26 @@ export class SimWorld {
    */
   private readonly harvestBonus = new Map<number, number>();
 
+  /**
+   * How much food a player is using — installed by the controller, whose Authority derives it
+   * from the unit table (`Authority.foodFor`). Read only for UPKEEP (`upkeepShare`); absent in
+   * a world with no controller, which then taxes nothing.
+   */
+  foodUsedOf: ((player: number) => number) | null = null;
+
+  /**
+   * UPKEEP: the share of MINED gold that reaches this player's bank — "a tax on your Gold mining
+   * that is automatically deducted from all Gold you gather" (classic.battle.net/war3/basics/
+   * upkeep.shtml), by the band its food used is in (gameplayConstants `upkeepBands`: 100 %,
+   * 70 %, 40 %, or the map's own). Gold only, and only gold that is DUG: a bounty, a pawned item
+   * or a Transmute is not taxed. Neutral owners pay none.
+   */
+  private upkeepShare(player: number): number {
+    if (player < 0 || !this.foodUsedOf) return 1;
+    const bands = upkeepBands();
+    return bands[upkeepBandIndex(this.foodUsedOf(player), bands)].income / 100;
+  }
+
   /** Pay this player `factor` times what its workers actually carry home. See harvestBonus. */
   setHarvestBonus(player: number, factor: number): void {
     if (factor === 1) this.harvestBonus.delete(player);
@@ -6711,10 +6733,12 @@ export class SimWorld {
       u.workT += rules.interval;
       const gold = Math.min(mine.gold, rules.gold);
       mine.gold -= gold;
-      this.stashOf(u.owner).gold += gold;
+      // The mine gives up the whole take; upkeep keeps back its share of what is banked.
+      const banked = Math.floor(gold * this.upkeepShare(u.owner));
+      this.stashOf(u.owner).gold += banked;
       // Paid where the gold is dug — the crewed mine IS the drop-off for both races that work
       // one, so the "+N" belongs on it and not on some hall the money never travels to.
-      this.floatCredit("gold", gold, u.owner, u);
+      this.floatCredit("gold", banked, u.owner, u);
       if (mine.gold <= 0) {
         this.mines.delete(mine.id);
         this.depleted.push(mine);
@@ -20374,7 +20398,8 @@ export class SimWorld {
     // insane computer (see harvestBonus). The floats below report what was banked, because
     // what the player is told is what the player got.
     const factor = this.harvestBonus.get(u.owner) ?? 1;
-    const gold = Math.floor(w.carryGold * factor);
+    // …less upkeep: a ten-gold load at Low Upkeep banks seven, at High four.
+    const gold = Math.floor(w.carryGold * factor * this.upkeepShare(u.owner));
     const lumber = Math.floor(w.carryLumber * factor);
     stash.gold += gold;
     stash.lumber += lumber;

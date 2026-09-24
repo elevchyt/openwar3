@@ -517,5 +517,27 @@ console.log("\nthe Attack command fells a tree with the weapon that may strike o
   check("…and stands down once it is gone", ghoul.order === "idle", ghoul.order);
 }
 
+console.log("\nupkeep taxes MINED gold by the food a player uses (classic.battle.net basics: 100/70/40 %)");
+{
+  const { upkeepBands, setMapMiscOverlay } = require(join(REPO, ".sim-build", "src", "data", "gameplayConstants.js"));
+  check("the bands are 0-50 / 51-80 / 81-100 at 100 / 70 / 40 %",
+    JSON.stringify(upkeepBands()) === JSON.stringify([{ from: 0, to: 50, income: 100 }, { from: 51, to: 80, income: 70 }, { from: 81, to: 100, income: 40 }]),
+    JSON.stringify(upkeepBands()));
+  const at = (food) => harvestRun(45, 5, 60, 1, (w, _m, t) => { if (t === 0) w.foodUsedOf = () => food; });
+  const none = at(50), low = at(51), high = at(81);
+  // The same digging each time (a load still being carried when the run ends is dug and not
+  // banked, so the untaxed run is the yardstick, not the mine).
+  const plain = harvestRun(45, 5, 60);
+  check("at 50 food a ten-gold load banks ten", none.gold === plain.gold, `${none.gold} vs ${plain.gold}`);
+  check("at 51 it banks seven", low.gold * 10 === plain.gold * 7, `${low.gold} vs ${plain.gold}`);
+  check("at 81 it banks four", high.gold * 10 === plain.gold * 4, `${high.gold} vs ${plain.gold}`);
+  check("…having dug the same gold", low.mined === plain.mined && high.mined === plain.mined, `${low.mined}, ${high.mined} vs ${plain.mined}`);
+  // A map's war3mapMisc.txt may restate the tax: Test of Balance's single 0.00 turns it off.
+  setMapMiscOverlay(new Map([["UpkeepGoldTax", "0.00"]]));
+  const untaxed = at(90);
+  setMapMiscOverlay(null);
+  check("a map's UpkeepGoldTax=0.00 banks every load whole", untaxed.gold === plain.gold, `${untaxed.gold} vs ${plain.gold}`);
+}
+
 console.log(failed ? `\nharvest: ${failed} check(s) FAILED` : "\nharvest: all checks passed");
 process.exit(failed ? 1 : 0);

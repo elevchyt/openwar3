@@ -775,8 +775,11 @@ And the map's interface layer, with the four bugs found standing on it:
   `IDLE_PEON`/`IDLE_PEON_DESC`, all three of which 1.30.4's own data carries. The resource bar's
   four readouts answer the mouse too (`ConsoleUi.hoverZones` → `GameHud.showResourceTip`): the
   `RESOURCE_UBERTIP_*` bodies by key, and the upkeep slab's one `RESOURCE_UBERTIP_UPKEEP_INFO`
-  line per band, off the bands the official basics page states (`hud.ts UPKEEP_BANDS`) — so the
-  map's "This map is Balanced." and its three renamed bands show there. The slab TITLES are ours
+  line per band, off the bands this match is on (`gameplayConstants upkeepBands` — the official
+  basics page's 50/80 at 70 %/40 %, Reign of Chaos's 40/70, or the map's own `UpkeepUsage` /
+  `UpkeepGoldTax`) — so the map's "This map is Balanced." and its three renamed bands show there.
+  The SIM taxes mined gold by the same bands (`SimWorld.upkeepShare`), which it never did before;
+  Test of Balance's `UpkeepGoldTax=0.00` turns the tax off, and its tooltip says 100 % at every band. The slab TITLES are ours
   (GlobalStrings has `GOLD`/`LUMBER` and nothing for supply); `COLON_FOOD` is the info panel's
   "Food:" and never the bar's.
 * **A model file that is not there is an INVISIBLE unit, not an absent one.** Pointing Art - Model
