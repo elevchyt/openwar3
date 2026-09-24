@@ -8435,7 +8435,7 @@ export class SimWorld {
       | "baseSightNight"
     >,
     building?: BuildingState | null,
-    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; ward?: boolean; ancient?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
+    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; ward?: boolean; ancient?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean; inventorySize?: number },
   ): SimUnit {
     const hero = opts?.hero;
     // The primary weapon is DERIVED, never passed in: it is the first slot `weapsOn` has
@@ -8707,9 +8707,11 @@ export class SimWorld {
       struckAt: -Infinity,
       returnBestDist: 0,
       returnStuckT: 0,
-      // Only heroes carry an inventory in melee WC3 (6 slots). Other units get an
-      // empty array (no inventory ability) so item logic simply skips them.
-      inventory: hero ? [null, null, null, null, null, null] : [],
+      // The slots are the type's INVENTORY ability's "Item Capacity" (`AInv` DataA — 6 for a
+      // hero, 4 for the Pack Mule `Apak`, 2 for the racial backpacks; the caller reads it off
+      // the row, `inventorySize`). A hero whose row names no inventory still gets the six every
+      // stock hero has; anything else without one has none, and item logic simply skips it.
+      inventory: new Array<null>(opts?.inventorySize ?? (hero ? 6 : 0)).fill(null),
       getItemId: 0,
       pendingGive: null,
       pendingUse: null,
@@ -15276,6 +15278,12 @@ export class SimWorld {
     if (!u || !def) return false;
     if (u.abilities.some((a) => a.id === abilityId)) return false;
     u.abilities.push({ id: abilityId, code: def.code, level: 1, cooldownLeft: 0, autocastOn: false });
+    // An INVENTORY given at run time opens its slots ("Item Capacity", DataA) — how a map
+    // hands a courier or a dummy a backpack. Never fewer than it has.
+    if (def.code === "AInv") {
+      const slots = Math.max(0, Math.min(6, Math.trunc(Number(def.levelData[0]?.data[0]) || 0)));
+      while (u.inventory.length < slots) u.inventory.push(null);
+    }
     this.recomputeStats(u); // an ability can carry stat bonuses / an aura
     return true;
   }

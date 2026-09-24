@@ -784,7 +784,13 @@ And the map's interface layer, with the four bugs found standing on it:
   "Whatever.mdx" — hiveworkshop 165420), and the viewer cannot deliver such a unit, so
   `seedModellessPlaced` now seeds any placed unit whose model does not EXIST, not only one with an
   empty path; and `spawnUnit` makes a trained or summoned one bodiless instead of dropping it. Test
-  of Balance's four `umdl=none` Dummies had vanished with their starting items.
+  of Balance's four `umdl=none` Dummies had vanished with their starting items — and once they
+  existed they still held nothing, because only a HERO was given slots. An inventory is an
+  ABILITY: every one is base code `AInv`, and its `DataA` is the "Item Capacity" (`inv1` — 6 for
+  the hero's, 4 for the Pack Mule's `Apak`, 2 for the racial backpacks), so a unit's slots come
+  off the inventory ability it carries (and `UnitAddAbility` of one opens them at run time). One
+  starting item still does not arrive: `sxpl` is a stock item from AFTER 1.30.4, which the map
+  edits in its ORIGINAL table and this install has no row for.
 * **A unit with no body still has a panel and a card** (`RtsController.infoFor` reads the type row
   when there is no render entry), with an empty portrait rather than the last unit's bust; and the
   Attack button asks for an ENABLED weapon, as the building card already did — a unit type whose

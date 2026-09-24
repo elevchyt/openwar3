@@ -697,6 +697,19 @@ export interface SelectionEvent {
   selected: boolean;
 }
 
+/** A type's inventory slots: the "Item Capacity" (`AbilityMetaData` `inv1`, DataA) of the
+ *  inventory ability it carries — every one of them is base code `AInv` (the hero's own `AInv`,
+ *  the Pack Mule's `Apak`, the four racial `Ai?n` backpacks). Undefined when it carries none. */
+function inventoryCapacity(innate: ReadonlyArray<{ code: string; data: ReadonlyArray<unknown> }>): number | undefined {
+  let slots: number | undefined;
+  for (const a of innate) {
+    if (a.code !== "AInv") continue;
+    const n = Number(a.data[0]);
+    if (Number.isFinite(n)) slots = Math.max(slots ?? 0, Math.max(0, Math.min(6, Math.trunc(n))));
+  }
+  return slots;
+}
+
 export class RtsController {
   private sim: SimWorld;
   private entries: Entry[] = [];
@@ -3905,7 +3918,7 @@ export class RtsController {
       // harvests lumber but is NOT Peon-classified — it fights like any other unit.
       // "Ward" classification = a planted gadget (Serpent/Healing/Sentry Ward, Stasis Trap,
       // …): like a worker, it is the last thing a creep camp turns on (SimUnit.ward).
-      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), isPeon: def.classification.includes("peon"), ward: def.classification.includes("ward"), ancient: def.classification.includes("ancient"), level: def.level, baseInvulnerable: def.abilities.includes("Avul") },
+      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), isPeon: def.classification.includes("peon"), ward: def.classification.includes("ward"), ancient: def.classification.includes("ancient"), level: def.level, baseInvulnerable: def.abilities.includes("Avul"), inventorySize: inventoryCapacity(innate) },
     );
     // A structure spawned WITH a build time is a foundation just laid — that's the
     // moment EVENT_(PLAYER_)UNIT_CONSTRUCT_START fires (7.17). A pre-placed/instant
