@@ -134,9 +134,12 @@ export function registerAbilityFieldNatives(rt: Runtime): void {
   });
   // The unit-level readers answer the unit's OWN instance (natives/abilityBlz.ts registered the
   // type-level answer they gave before an instance could differ from its type).
+  // An engine with no instances to ask (or a unit without the ability) answers the TYPE's row.
   const unitRank = (c: NativeCtx, a: JassValue[]) => {
     const id = unitSim(c, a[0]);
-    return id === undefined ? undefined : c.rt.hooks?.unitAbilityRankData?.(id, abilCode(a[1]), levelOf(c, a[2]) - 1);
+    const abil = abilCode(a[1]);
+    const rank = levelOf(c, a[2]) - 1;
+    return (id === undefined ? undefined : c.rt.hooks?.unitAbilityRankData?.(id, abil, rank)) ?? c.rt.hooks?.abilityRankData?.(abil, rank);
   };
   def(rt, "BlzGetUnitAbilityCooldown", (c, a) => jReal(unitRank(c, a)?.cooldown ?? 0));
   def(rt, "BlzGetUnitAbilityManaCost", (c, a) => jInt(unitRank(c, a)?.cost ?? 0));
