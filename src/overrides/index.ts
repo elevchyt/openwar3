@@ -126,6 +126,7 @@ export const OPTIONS_MENU_OVERRIDE: FdfOverride = {
     { frame: "HotkeyEditorBackdrop", into: "GameplayPanel" },
     { frame: "ShowHotkeysCheckBox", into: "GameplayPanel" },
     { frame: "ShowHotkeysLabel", into: "GameplayPanel" },
+    { frame: "DetectGamepadButton", into: "GameplayPanel" }, // issue #162
     // Options → Video: "Vertical Sync", under the game's last row (Occlusion).
     { frame: "VsyncCheckBox", into: "VideoPanel" },
     { frame: "VsyncLabel", into: "VideoPanel" },
@@ -171,6 +172,7 @@ export const ESC_OPTIONS_OVERRIDE: FdfOverride = {
     { frame: "EscHotkeysMenu", into: "GameplayPanel" },
     { frame: "ShowHotkeysCheckBox", into: "GameplayPanel" },
     { frame: "ShowHotkeysLabel", into: "GameplayPanel" },
+    { frame: "DetectGamepadButton", into: "GameplayPanel" }, // issue #162
   ],
 };
 

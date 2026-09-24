@@ -12,6 +12,8 @@
 //
 // One slab for the whole page, since only one element can be under the pointer.
 
+import { isHovered } from "./gamepad";
+
 /** The gap between the element's top edge and the slab's bottom edge, in CSS pixels. */
 const GAP_PX = 6;
 /** How close the slab may come to the viewport's side edges. */
@@ -108,7 +110,7 @@ function place(): void {
 /** Follow the element while the slab is up, and drop the slab when the element goes — hidden,
  *  removed, or simply no longer under the pointer without a pointerleave having arrived. */
 function watch(): void {
-  if (!slab || slab.hidden || !anchor || !anchor.isConnected || !anchor.matches(":hover")) {
+  if (!slab || slab.hidden || !anchor || !anchor.isConnected || !isHovered(anchor)) {
     watching = false;
     if (anchor) hide();
     return;

@@ -82,6 +82,7 @@ import { cursorImageValue, cursorPx, cursorValue } from "../ui/cursor";
 import { perfLog } from "../dev/perfLog";
 import { animStride, renderSize, videoSettings } from "./videoQuality";
 import { edgeScrollScale, keyScrollScale } from "./scrollOptions";
+import { gamepadPan, setGamepadHost } from "../ui/gamepad";
 import { TerrainCull } from "./terrainCull";
 import type { PickVolume } from "./modelCollision";
 import { setSimProfiler } from "../sim/profile";
@@ -7843,8 +7844,9 @@ export class MapViewerScene {
   // location of the last transmission. Repeatedly pressing the spacebar will move your screen
   // through the locations of the last eight transmissions." So it is a RING of eight, newest
   // first, and a press walks one step back through it; a new notification puts the walk back
-  // at the top. Two things arm it: a minimap ping (a transmission's own ping included) and
-  // the script's `SetCameraQuickPosition`, which is the World Editor's "Set Spacebar-Point".
+  // at the top. Three things arm it: a minimap ping (a transmission's own ping included — and
+  // so every raid on your base), the script's `SetCameraQuickPosition`, which is the World
+  // Editor's "Set Spacebar-Point", and a completion of yours (`noteCompletion`).
   private spacebarPoints: Array<[number, number]> = [];
   private spacebarStep = 0;
 
@@ -7857,6 +7859,17 @@ export class MapViewerScene {
     if (head && Math.abs(head[0] - x) < 1 && Math.abs(head[1] - y) < 1) return;
     this.spacebarPoints.unshift([x, y]);
     this.spacebarPoints.length = Math.min(this.spacebarPoints.length, 8);
+  }
+
+  /**
+   * A completion is a notification too: a building up, a unit trained, a research or a
+   * structure upgrade finished. Each announces itself (the chime and the "Completed:" line)
+   * without naming WHERE, and the whole point of the ring is to take you there — issue #162
+   * asks exactly this of the gamepad's Triangle, and Triangle is Space, so the keyboard walks
+   * the same ring. Placed at the building, which is what finished.
+   */
+  private noteCompletion(u: { x: number; y: number } | undefined): void {
+    if (u) this.noteSpacebarPoint(u.x, u.y);
   }
 
   /** Space: centre on the next notification back. Nothing to go to — nothing has happened
@@ -7875,6 +7888,58 @@ export class MapViewerScene {
   /** Centre the camera on the current selection (control-group / hero jump) — on the
    *  group's LEADING unit, the one the portrait shows. See RtsController.selectionAnchor
    *  for why the point has to be on a body rather than in the middle of the group. */
+  /**
+   * The match's side of the gamepad (issue #162, ui/gamepad.ts): the pad actions that have no
+   * key to be pressed through. Everything a pad button CAN say as a key (Escape, Space, "-",
+   * F8, F9, F10) or as a click is sent as one, and reaches this scene by its ordinary doors.
+   */
+  private installGamepad(): void {
+    setGamepadHost({
+      canAct: () => !!this.hud?.acceptsInput() && !this.hardPaused,
+      jumpToSelection: () => {
+        this.cameraLock = false; // a jump releases a follow, as every other one does
+        this.groupFollow = false;
+        this.releaseCameraRide();
+        this.jumpToSelection();
+      },
+      attackMoveAt: (clientX, clientY) => this.padAttackMove(clientX, clientY),
+      cycleBuilding: () => {
+        if (!this.rts?.cycleBuilding()) return;
+        const pos = this.rts.selectedPosition();
+        if (pos) {
+          this.target[0] = pos[0];
+          this.target[1] = pos[1];
+        }
+        this.cameraLock = false;
+        this.groupFollow = false;
+        this.releaseCameraRide();
+      },
+      cardMove: (dx, dy) => this.hud?.padCardMove(dx, dy),
+      cardPress: () => this.hud?.padCardPress() ?? false,
+      cardMode: (on) => this.hud?.padCardMode(on),
+      targeting: () => !!this.rts?.orderMode || !!this.placement,
+    });
+  }
+
+  /**
+   * Square: attack-move the selection to what is under the cursor, in one press — the Attack
+   * button's click and its aim at once, with no reticle in between (issue #162). It is the
+   * command card's own Attack, so it goes only where that button would: a selection whose card
+   * has no live Attack (a building, a worker-only Wisp) is left alone, and an aim the order
+   * refuses leaves nothing armed behind it. Over an enemy it is an attack on that unit, exactly
+   * as the reticle's click would be.
+   */
+  private padAttackMove(clientX: number, clientY: number): void {
+    const rts = this.rts;
+    if (!rts || this.placement) return;
+    if (!this.commandCard().some((c) => c.id === "attack" && !c.disabled)) return;
+    rts.orderMode = "attack";
+    rts.armedCast = null;
+    rts.orderClickAt(clientX - this.frame.left, clientY - this.frame.top, false);
+    rts.orderMode = null;
+    this.hud?.clearOrderMode();
+  }
+
   private jumpToSelection(): void {
     const c = this.rts?.selectionAnchor();
     if (c) {
@@ -8457,6 +8522,7 @@ export class MapViewerScene {
         return gave;
       },
       commandCard: () => this.commandCard(),
+      cardPage: () => this.cardPage,
       runCommand: (id) => this.runCommand(id),
       unloadCargo: (hostId, passengerId) => !!this.rts?.unloadCargo(hostId, passengerId),
       inventory: () =>
@@ -8519,6 +8585,7 @@ export class MapViewerScene {
       resourceHover: (kind) => this.hud?.showResourceTip(kind),
     });
     this.hud = new GameHud(ui, driver);
+    this.installGamepad();
     this.mountScriptUi(ui);
     this.gameMenu?.dispose();
     const endGame = (): void => {
@@ -12280,7 +12347,10 @@ export class MapViewerScene {
       const rally = { kind: t.rallyKind, targetId: t.rallyTargetId, x: t.rallyX, y: t.rallyY };
       // "unit ready" voice on completion — YOUR unit, like the research chime below: on a
       // LAN host this drain completes other players' trainings too (Phase G item 5).
-      if (t.owner === this.localPlayer) this.sounds?.play(d.soundSet, "Ready");
+      if (t.owner === this.localPlayer) {
+        this.sounds?.play(d.soundSet, "Ready");
+        this.noteSpacebarPoint(t.x, t.y); // "unit trained" is a notification (see noteCompletion)
+      }
       const buildingId = t.buildingId;
       // The unit belongs to whoever owned the TRAINER, never to this machine's player —
       // `localPlayer` here was playtest bug 4: every peon a client trained came out
@@ -12824,6 +12894,7 @@ export class MapViewerScene {
           if (c.owner !== this.localPlayer) continue;
           this.sounds?.playUi(`JobDoneSound${UI_SOUND_RACE[this.localRace]}`);
           this.announceCompleted(this.registry.get(world.units.get(c.buildingId)?.typeId ?? "")?.name);
+          this.noteCompletion(world.units.get(c.buildingId));
         }
         // --- research + structure upgrades (issue #57) ---
         // WC3 keeps two DISTINCT completion cues, per race: ResearchComplete<Race> for an
@@ -12851,6 +12922,7 @@ export class MapViewerScene {
           // install doesn't ship a name for, and "Completed: Rhri" is worse than silence.
           const name = this.upgrades.name(r.upgradeId, r.level);
           this.announceCompleted(name === r.upgradeId ? "" : name);
+          this.noteCompletion(world.units.get(r.buildingId));
         }
         // A building became something else: swap its model in place. The sim kept the SAME
         // entity — rally point, queue, selection and damage all carried over — so this only
@@ -12875,6 +12947,7 @@ export class MapViewerScene {
             // that is news. Gated on the same `building` test as the chime, so a hero leaving
             // Metamorphosis announces nothing here either.
             this.announceCompleted(this.registry.get(m.to)?.name);
+            this.noteCompletion(u);
           }
           void this.remodelUnit(m.unitId, m.to);
         }
@@ -13299,6 +13372,7 @@ export class MapViewerScene {
    *  `cine-on` still on the body so the menu had no cursor. */
   dispose(): void {
     this.disposed = true;
+    setGamepadHost(null); // the pad's match actions die with the match
     this.stop();
     // The listeners first: they are the only leak that would keep FIRING — every keydown
     // handler a dead match left on `window` still answers keys typed at the main menu.
@@ -14126,7 +14200,13 @@ export class MapViewerScene {
       if (panLeft) this.pan(right, -keySpeed);
       // Driving the camera with the keys ends a Ctrl+C lock (as every other hand on the
       // camera does — see `rideLocked`).
-      if (panUp || panDown || panRight || panLeft) this.releaseCameraRide();
+      // The gamepad's RIGHT STICK is the same four keys in any direction and at any strength
+      // (issue #162): each axis scales the key speed, so full tilt pans exactly as fast as a
+      // held arrow key and a diagonal is a true diagonal. Stick-down is +y, the screen's down.
+      const [padX, padY] = gamepadPan();
+      if (padX) this.pan(right, keySpeed * padX);
+      if (padY) this.pan(fwd, -keySpeed * padY);
+      if (panUp || panDown || panRight || panLeft || padX || padY) this.releaseCameraRide();
       this.updateEdgeScroll(fwd, right, speed); // pan when the cursor rests at a screen edge
     } else {
       this.showScrollArrow(0, 0);

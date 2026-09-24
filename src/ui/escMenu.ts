@@ -42,6 +42,7 @@ import { numProp, type FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, playFdfClick, type FdfScreen } from "./fdf/render";
 import { ESC_OPTIONS_OVERRIDE, OW3_STRINGS } from "../overrides";
 import { EscOptions } from "./escOptions";
+import { startGamepadDetect } from "./gamepad";
 
 const ESC_MENU_FDF = "UI\\FrameDef\\UI\\EscMenuMainPanel.fdf";
 const ESC_OPTIONS_FDF = "UI\\FrameDef\\UI\\EscMenuOptionsPanel.fdf";
@@ -402,6 +403,7 @@ export class EscMenu {
       // OK and Cancel go back ONE level, to the category list they were opened from — the same
       // step Previous Menu and Cancel take everywhere else on this stack.
       OptionsOKButton: () => { this.options.ok(); this.go("options"); },
+      DetectGamepadButton: () => startGamepadDetect(), // issue #162 — ui/gamepad.ts
       OptionsCancelButton: () => { this.options.cancel(); this.go("options"); },
       // --- HelpPanel / TipsPanel
       HelpOKButton: () => this.go("main"),

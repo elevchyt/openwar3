@@ -762,6 +762,8 @@ export class RtsController {
   private lastVoiceId: number | null = null; // last single unit that spoke (for What→Pissed escalation)
   private voiceStreak = 0; // consecutive re-clicks of that same unit
   private lastIdleWorker: number | null = null; // last idle worker selected via the badge/F8/~ cycle
+  private lastCycledBuilding: number | null = null; // last building the gamepad's L2 cycle picked (issue #162)
+  private buildingTiers = new Map<string, number>(); // type id → its tech tier, for that cycle (`techTier`)
   private groups = new Map<string, number[]>(); // control groups "0".."9" → ordered member sim ids
   private localPlayer = 0; // owner whose units a drag-box selects
   private localTeam = 0; // team whose combined sight reveals the fog of war
@@ -3002,6 +3004,94 @@ export class RtsController {
     if (!army.length) return false;
     this.selected.clear();
     for (const id of army) this.selected.add(id);
+    this.selectedMine = null;
+    this.selectedItem = null;
+    this.refocus();
+    this.announceSelection();
+    return true;
+  }
+
+  // --- the building cycle (the gamepad's L2, issue #162) ----------------------
+
+  /**
+   * Where a building of this type falls in the L2 cycle, or null when it is not in it at all.
+   *
+   * The ORDER is issue #162's: the main hall, the altar, the unit producers tier by tier, the
+   * upgrade buildings, and the shops. WC3 has no such key and so no table saying what these
+   * are; every rung is read off the data the rest of the engine already reads them off:
+   *
+   *  - **hall** — UnitBalance `type` carries `TownHall` (`classification`), the flag that folds
+   *    a Castle into "a Town Hall" for the melee AIs as well;
+   *  - **altar** — the profile's `Revive=1`, the one thing every race's altar and nothing
+   *    else of a player's has (`TechRegistry.revives`);
+   *  - **producer** — `Trains` (`producesUnits`, the same test the rally point is given by);
+   *  - **upgrade building** — `Researches` and nothing trained (Blacksmith, Lumber Mill, War
+   *    Mill, Graveyard, Hunter's Hall…);
+   *  - **shop** — `Makeitems` or `Sellitems` (Arcane Vault, Voodoo Lounge, Tomb of Relics,
+   *    Ancient of Wonders).
+   *
+   * Farms, towers, Moon Wells and burrows fall in none of them and are not visited — the
+   * issue's list is of the buildings a player has something to DO at.
+   */
+  private buildingRank(typeId: string): [number, number] | null {
+    const def = this.registry.get(typeId);
+    if (!def?.isBuilding) return null;
+    const tech = this.tech.get(typeId);
+    if (def.classification.includes("townhall")) return [0, 0];
+    if (tech.revive) return [1, 0];
+    if (tech.trains.length) return [2, this.techTier(typeId)];
+    if (tech.researches.length) return [3, this.techTier(typeId)];
+    if (tech.makeitems.length || tech.sellitems.length) return [4, this.techTier(typeId)];
+    return null;
+  }
+
+  /**
+   * A building's TIER — 1, 2 or 3 — read off what it `Requires`: a hall counts for the step of
+   * its upgrade chain it is (a Keep is the second hall its own `satisfies` reaches, a Castle the
+   * third), the pseudo-techs `TWN2`/`TWN3` say theirs in their names, and a building required
+   * in turn counts for its own tier (the Gryphon Aviary sits behind the Lumber Mill and a
+   * Castle). Nothing required is tier 1.
+   */
+  private techTier(typeId: string, depth = 0): number {
+    const hit = this.buildingTiers.get(typeId);
+    if (hit !== undefined) return hit;
+    let tier = 1;
+    if (this.registry.get(typeId)?.classification.includes("townhall")) {
+      tier = Math.max(1, this.tech.satisfies(typeId).filter((id) => this.registry.get(id)?.classification.includes("townhall")).length);
+    } else if (depth < 6) {
+      for (const { tech } of this.tech.requirements(typeId)) {
+        const twn = /^TWN(\d)$/i.exec(tech);
+        tier = Math.max(tier, twn ? Number(twn[1]) : this.registry.get(tech)?.isBuilding ? this.techTier(tech, depth + 1) : 1);
+      }
+    }
+    this.buildingTiers.set(typeId, tier);
+    return tier;
+  }
+
+  /** L2: select the NEXT of the player's buildings in `buildingRank` order — one at a time,
+   *  wrapping round — replacing the current selection. False when there is none to select
+   *  (the host then leaves the camera where it is). */
+  cycleBuilding(): boolean {
+    const ranked: Array<{ id: number; rank: [number, number] }> = [];
+    for (const e of this.entries) {
+      const u = this.sim.units.get(e.simId);
+      if (!u || u.owner !== this.localPlayer || !u.building || isOffField(u)) continue;
+      const rank = this.buildingRank(u.typeId);
+      if (rank) ranked.push({ id: u.id, rank });
+    }
+    if (!ranked.length) return false;
+    // Within one rung, the order the buildings went up in — sim ids are handed out in order.
+    ranked.sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.id - b.id);
+    const ids = ranked.map((r) => r.id);
+    // Carry on from what the last press picked, or from the building selected now if the
+    // player has clicked one since — so the cycle always moves on from what is on screen.
+    const only = this.selected.size === 1 ? [...this.selected][0] : null;
+    const from = only !== null && ids.includes(only) ? only : this.lastCycledBuilding;
+    const at = from !== null ? ids.indexOf(from) : -1;
+    const id = ids[(at + 1) % ids.length];
+    this.lastCycledBuilding = id;
+    this.selected.clear();
+    this.selected.add(id);
     this.selectedMine = null;
     this.selectedItem = null;
     this.refocus();

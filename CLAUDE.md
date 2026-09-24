@@ -764,6 +764,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   creep that pulled the camp stopped. A creep's meld takes its Hold with it however the meld
   ends (`breakInvisibility`) — a Hold that outlived one at dawn froze the Nightcrawler at its
   post for the rest of the game.
+- **Gamepad:** read [`docs/gamepad.md`](docs/gamepad.md) before touching
+  [`src/ui/gamepad.ts`](src/ui/gamepad.ts) or a `:hover` rule. WC3 has no controller support,
+  so the MAPPING is the developer's (issue #162), but what a button does is the game's: a
+  button with a key IS that key (O Escape, Triangle Space, L1 "-", R2 F8, Start F10, Select
+  F9), and the stick and X/R1 are a drawn cursor dispatching real pointer events with
+  `pointerId: 1`, so every existing gate applies unchanged. `:hover` cannot see that cursor:
+  ask `isHovered(el)`, and give a hover glow a `.pad-hover` twin.
 - **Never edit the install's UI files.** `UI\FrameDef\` is the player's. A control OpenWar3 needs
   that the 2003 UI has no frame for goes in [`src/overrides/`](src/overrides/) — our own FrameDef
   files, layered onto the screen at mount through `mountFdfScreen`'s `overrides` option — and its

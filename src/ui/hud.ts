@@ -19,6 +19,7 @@ import type { MinimapDot } from "../game/minimapView";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { MinimapModel } from "./minimapModel";
+import { gamepadPaired, isHovered } from "./gamepad";
 import { setGameTip } from "./gameTip";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
@@ -361,6 +362,9 @@ export interface HudDriver {
   dropItemOnUnit(simId: number, slot?: number): boolean;
   /** Command-card buttons for the current selection (empty = no card). */
   commandCard(): CommandButton[];
+  /** Which page of the card is up — "root", or a submenu (the build list, the hero's skill
+   *  page). The gamepad's selector starts over when it turns (issue #162). */
+  cardPage(): string;
   /** Run a command-card button by id. */
   runCommand(id: string): void;
   /** The primary selected hero's 6 inventory slots (null = empty; [] = no inventory). */
@@ -1318,6 +1322,13 @@ export class GameHud {
    *  cost row reddens and un-reddens with the stash and the "Requires:" line comes and goes
    *  while the cursor sits still, and `pointerenter` fires only when it moves. */
   private cmdHover = -1;
+  /** The gamepad's command-card selector (issue #162): the slot it is on (-1 = none), whether
+   *  the D-pad currently owns X (`padLive` — the left stick takes it back), what it was last
+   *  reset for (the selection and the card page), and what was last painted. */
+  private padSlot = -1;
+  private padLive = false;
+  private padKey = "";
+  private padPainted = "";
   /** What the slab was last given, so a per-frame re-show writes the DOM only on a change —
    *  every writer goes through `setTooltip`, or the memo would lie about what is on screen. */
   private tooltipHtml = "";
@@ -1608,6 +1619,7 @@ export class GameHud {
     }
     this.updateCameraRect(); // every frame, unthrottled: the box IS the camera's motion
     this.refreshCommandCard();
+    this.syncPadCard();
     this.refreshInventory();
     this.refreshHeroBar();
     this.updateIdleWorkers();
@@ -3493,6 +3505,77 @@ export class GameHud {
     this.refreshCmdTooltip(cmds);
   }
 
+  // --- the gamepad's command-card selector (issue #162) -----------------------------------
+  //
+  // The D-pad walks a frame over the 4×3 card and X presses the button under it, so a pad can
+  // reach every command without the cursor. Where it STARTS is the issue's rule: a unit's card
+  // opens on the bottom-left slot (the row a worker's Build and a soldier's Hold Position live
+  // on), a building's — a shop's, a tavern's — on the top-left, which is where their first
+  // unit, item or research is. A submenu (the build list, the skill page) opens top-left too,
+  // because it is a list of those.
+
+  /** May the player give an order through the console now? Every gate `onKey` asks, in one
+   *  place, for the gamepad's actions that have no key to go through `onKey` with. */
+  acceptsInput(): boolean {
+    if (this.root.hidden || !this.driver.controlEnabled()) return false;
+    const body = document.body.classList;
+    return !body.contains("game-menu-open") && !body.contains("game-paused") && !anyModalOpen();
+  }
+
+  /** Move the selector one slot, clamped to the card's edges. */
+  padCardMove(dx: number, dy: number): void {
+    if (this.padSlot < 0) return;
+    const col = Math.min(3, Math.max(0, (this.padSlot % 4) + dx));
+    const row = Math.min(2, Math.max(0, Math.floor(this.padSlot / 4) + dy));
+    this.padSlot = row * 4 + col;
+    this.syncPadCard();
+    this.padTooltip(this.driver.commandCard());
+  }
+
+  /** Press the button the selector is on, exactly as a click on it would — an unavailable or
+   *  passive one takes no press, as it takes no click. False when nothing was pressed. */
+  padCardPress(): boolean {
+    const c = this.driver.commandCard().find((b) => b.row * 4 + b.col === this.padSlot);
+    if (!c || c.disabled || c.passive) return false;
+    this.driver.runCommand(c.id);
+    this.refreshSelectionNow();
+    return true;
+  }
+
+  /** The D-pad took X (show the selected button's tooltip), or the left stick took it back. */
+  padCardMode(on: boolean): void {
+    this.padLive = on;
+    this.syncPadCard();
+    if (on) this.padTooltip(this.driver.commandCard());
+    else if (this.cmdHover < 0 && this.invHover < 0 && this.buffHover < 0 && !this.statHover) this.cmdTooltip.hidden = true;
+  }
+
+  /** Start the selector over when the selection or the card page changes, and paint it. */
+  private syncPadCard(): void {
+    const sel = gamepadPaired() && !this.root.hidden ? this.driver.selection() : null;
+    const page = sel ? this.driver.cardPage() : "";
+    const key = sel ? `${sel.id}|${page}` : "";
+    if (key !== this.padKey) {
+      this.padKey = key;
+      this.padSlot = !sel ? -1 : page !== "root" || sel.isBuilding ? 0 : 8;
+    }
+    const paint = `${this.padSlot}|${this.padLive}`;
+    if (paint === this.padPainted) return;
+    this.padPainted = paint;
+    this.cmdSlots.forEach((btn, i) => {
+      btn.classList.toggle("pad-sel", i === this.padSlot);
+      btn.classList.toggle("pad-live", i === this.padSlot && this.padLive);
+    });
+  }
+
+  /** The tooltip of the button the selector is on — or none, over an empty slot. */
+  private padTooltip(cmds: CommandButton[]): void {
+    if (!this.padLive || this.padSlot < 0) return;
+    const c = cmds.find((b) => b.row * 4 + b.col === this.padSlot);
+    if (c) this.showTooltip(c);
+    else this.cmdTooltip.hidden = true;
+  }
+
   /**
    * Re-show the command tooltip for the slot under the cursor against the card's CURRENT
    * contents, or take it down if that slot has emptied.
@@ -3508,9 +3591,14 @@ export class GameHud {
    * a `pointerleave` ever arriving, and `cmdHover` would name a slot it is no longer over.
    */
   private refreshCmdTooltip(cmds: CommandButton[]): void {
-    if (this.cmdHover < 0) return;
+    if (this.cmdHover < 0) {
+      // The gamepad's selector is a hover too, while the D-pad has it — and a still one, so it
+      // is re-read against the card every frame for the same reasons (issue #162).
+      if (this.padLive && this.padSlot >= 0) this.padTooltip(cmds);
+      return;
+    }
     const btn = this.cmdSlots[this.cmdHover];
-    if (!btn?.matches(":hover")) {
+    if (!btn || !isHovered(btn)) {
       this.cmdHover = -1;
       // Another slab owner (an item, a buff) may already have taken over; leave its text up.
       if (this.invHover < 0 && this.buffHover < 0 && !this.statHover) this.cmdTooltip.hidden = true;
@@ -4053,7 +4141,7 @@ export class GameHud {
     if (!which) return;
     const el = which === "attack" ? this.attackStat.icon : which === "armor" ? this.armorStat.icon : this.attrIconEl;
     const sel = this.driver.selection();
-    const html = sel && el.matches(":hover") && el.getClientRects().length > 0 ? this.statTooltipHtml(which, sel) : "";
+    const html = sel && isHovered(el) && el.getClientRects().length > 0 ? this.statTooltipHtml(which, sel) : "";
     if (!html) {
       this.statHover = null;
       this.cmdTooltip.hidden = true;

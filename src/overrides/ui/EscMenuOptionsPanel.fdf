@@ -119,3 +119,17 @@ Frame "TEXT" "ShowHotkeysLabel" INHERITS "EscMenuLabelTextTemplate" {
     Height 0.024,
     Text "SHOW_HOTKEYS_ON_BUTTONS",
 }
+
+// "Detect Gamepad" (issue #162), under "Show hotkeys on command buttons" as on the glue panel —
+// see `OptionsMenu.fdf` for what it does. The panel's own button (`EscMenuButtonTemplate`, the
+// Gameplay/Video/Sound buttons' art), narrowed to the checkbox column's label width.
+Frame "GLUETEXTBUTTON" "DetectGamepadButton" INHERITS WITHCHILDREN "EscMenuButtonTemplate" {
+    Width 0.16,
+    Height 0.03,
+    SetPoint TOPLEFT, "ShowHotkeysCheckBox", BOTTOMLEFT, 0.005, -0.006,
+
+    ButtonText "DetectGamepadButtonText",
+    Frame "TEXT" "DetectGamepadButtonText" INHERITS "EscMenuButtonTextTemplate" {
+        Text "DETECT_GAMEPAD",
+    }
+}
