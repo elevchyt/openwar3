@@ -1,5 +1,6 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { layCustomKeys } from "./customKeys";
+import { versionIndex } from "./edition";
 import type { DataSource } from "../vfs/types";
 import {
   ArmorType,
@@ -680,7 +681,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       typeName: u ? str(u, "name") : "",
       race: d ? str(d, "race") : "",
       tilesets: (b ? str(b, "tilesets") : "").split(",").map((s) => s.trim().toUpperCase()).filter((s) => s && s !== "_" && s !== "-"),
-      model: unitModelPath(vfs, file, animProps),
+      model: unitModelPath(vfs, file, u ? num(u, "fileVerFlags", 0) : 0),
       modelScale: u ? num(u, "modelScale", 1) : 1,
       occlusionHeight: u ? num(u, "occH", 0) : 0,
       selScale: u ? num(u, "scale", 1) : 1,
@@ -983,11 +984,28 @@ function list(v: string): string[] {
 // We only reach for `_V1` when the unit actually needs those alternate clips (its Animprops name
 // `alternate`), since forcing `_V1` on every unit swaps sequence sets in ways that break some
 // models' idle/stand pickers; everything else keeps the plain `.mdx`.
-function unitModelPath(vfs: DataSource, file: string, animProps: string[]): string {
+/**
+ * The model a unit type draws, honouring UnitUI's `fileVerFlags` (UnitMetaData `uver`, type
+ * "versionFlags"): bit `1 << version` set means the type has a model of its own for that game
+ * VERSION, at `<file>_V<version>.mdx` — the same `_V0`/`_V1` suffix war3skins keys carry
+ * (edition.ts versionIndex: 0 Reign of Chaos, 1 The Frozen Throne).
+ *
+ * Nineteen rows carry `2` in every one of the four table sets and no row carries anything
+ * else, and they are exactly the install's thirteen `_V1.mdx` twins: the Demolisher (`ocat`,
+ * `ncat` — catapult_V1.mdx wears `Textures\Demolisher.blp` where Catapult.mdx wears
+ * `Catapult.blp`), the Ballista, Gyrocopter, Priest, Sorceress, both War Wagon rows, the
+ * Headhunter and Berserker, the Lich and Kel'Thuzad, the Fel Hound and the five Murlocs. So
+ * The Frozen Throne draws the `_V1` model and Reign of Chaos the plain one.
+ *
+ * This replaced a guess — "take `_V1` when the type's Animprops say alternate" — which found
+ * the Berserker's (HeadHunter_V1 holds its alternate clips) and missed the other seventeen. A
+ * flagged twin the install does not ship falls back to the plain file.
+ */
+function unitModelPath(vfs: DataSource, file: string, verFlags: number): string {
   const base = file.replace(/\//g, "\\");
-  const wantsAlternate = animProps.includes("alternate") || animProps.includes("alternateex");
-  const v1 = `${base}_V1.mdx`;
-  return wantsAlternate && vfs.exists(v1) ? v1 : `${base}.mdx`;
+  const v = versionIndex();
+  const twin = `${base}_V${v}.mdx`;
+  return verFlags & (1 << v) && vfs.exists(twin) ? twin : `${base}.mdx`;
 }
 
 // A .mdl model path from the Func profile → the .mdx the MPQ actually ships.

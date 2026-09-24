@@ -160,8 +160,7 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   urun: (d, v) => { d.animRunSpeed = n(v); },
   // "Art - Required Animation Names" (`Animprops`) — which set of a multi-tier model's
   // sequences is this type's own (the Keep is `upgrade,first`). A custom building that names
-  // its tier here rendered as tier 1 without this. Note this arrives too late to re-pick the
-  // `_V1` model variant (units.ts unitModelPath), which only the SLK path does.
+  // its tier here rendered as tier 1 without this.
   uani: (d, v) => { d.animProps = targetList(s(v)); },
   // "Art - Required Animation Names - Attachments" (`Attachmentanimprops`) — the size of clip
   // an effect riding this unit plays (Ensnare's net; see SimWorld.bodySize).
@@ -454,7 +453,7 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   utaa: "no per-unit Targetart hook",
   uept: "no elevation sampling (elevPts)", uerd: "no elevation sampling (elevRad)",
   ufrd: "fog radius is taken from sight, not fogRad",
-  ulos: "no fat line-of-sight (fatLOS)", uver: "no SD/HD asset split (fileVerFlags)",
+  ulos: "no fat line-of-sight (fatLOS)", uver: "a map's own fileVerFlags (the table's `_V1` twin is picked at load, units.ts unitModelPath)",
   umxp: "no terrain pitch/roll on models (maxPitch)", umxr: "no terrain pitch/roll on models (maxRoll)",
   uori: "orientInterp — turnRate carries the turn; no interpolation mode",
   uprw: "no propulsion window (propWin)", uscb: "no bull-scaling (scaleBull)",
