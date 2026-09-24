@@ -170,6 +170,8 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // points effects ride on this type (`alternate` on a metamorphosed hero; UnitDef.attachLinkProps).
   ualp: (d, v) => { d.attachLinkProps = targetList(s(v)); },
   uico: (d, v) => { d.icon = normIcon(s(v)); },
+  // deathType: read by UNIT_BF_RAISABLE/_DECAYABLE; the corpse RULES still come from classification.
+  udea: (d, v) => { d.deathType = n(v); },
   // "Art - Special": what an exploding death leaves (SetUnitExploded).
   uspa: (d, v) => { d.specialArt = normModel(s(v)); },
   ubpx: (d, v) => { d.buttonX = n(v); },
@@ -462,7 +464,6 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   // classification (utyp, which is applied), the hero flag and the air/ground split, each with
   // its own citation in world.ts — so wiring this in means replacing that rule wholesale
   // rather than adding a field. Left for that change, not for this one.
-  udea: "deathType — corpse rules come from classification + hero/air instead; see world.ts",
   udu1: "dmgUp1 — every one of the 837 stock rows leaves it empty", udu2: "dmgUp2 — likewise empty on every stock row",
   uamn: "minRange — no minimum attack range; 6 stock rows carry one (the mortar/siege pair)",
   uma1: "no missile arc (Missilearc)", uma2: "no missile arc (Missilearc)",

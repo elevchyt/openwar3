@@ -67,6 +67,10 @@ const EXPECTED = [
   "startUnitAbilityCooldown", "unitAbilityRankData",
   // SetUnitExploded — the burst and no corpse (SimWorld.kill).
   "setUnitExploded",
+  // BlzSetUnit…Field — ONE unit's own object-data value (SimWorld.setUnitField).
+  "setUnitField",
+  // GetUnitName / BlzSetUnitName / BlzSetHeroProperName — one unit's own name.
+  "unitName", "setUnitName",
   // UnitApplyTimedLife (pass 6; sim-summon-test.cjs).
   "applyTimedLife",
   "setHeroXp", "setItemCharges", "setItemDroppable", "setItemPosition", "setPlayerTechMaxAllowed",

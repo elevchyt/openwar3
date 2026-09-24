@@ -899,9 +899,16 @@ export interface EngineHooks {
    * holds a row per unit type, the map's own w3u is an overlay on it, and nothing writes a
    * column for one unit (see natives/blzFields.ts).
    */
-  unitTypeField?(unitId: number, field: string): number | boolean | string | undefined;
+  unitTypeField?(unitId: number, field: string, slot?: number): number | boolean | string | undefined;
+  /** BlzSetUnit…Field / BlzSetUnitWeapon…Field — ONE unit's own value (SimWorld.setUnitField);
+   *  `slot` is the weapon slot, 0-based. Booleans cross as 1/0. False when nothing was written. */
+  setUnitField?(unitId: number, field: string, value: number, slot?: number): boolean;
 
+  /** GetUnitName — THIS unit's own name if a script gave it one (BlzSetUnitName), else undefined
+   *  and the type's name answers. */
   unitName?(unitId: number): string | undefined;
+  /** BlzSetUnitName / BlzSetHeroProperName — one unit's name, or a hero's given name. */
+  setUnitName?(unitId: number, name: string, proper: boolean): void;
   /** Resolve an object (unit/ability/…) name from its rawcode (GetObjectName). */
   objectName?(typeId: string): string | undefined;
   // --- melee from the script (7.3) — what blizzard.j's Melee* library reaches for ---

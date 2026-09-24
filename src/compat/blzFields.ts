@@ -14,11 +14,10 @@
 // **What a field READS is the unit's TYPE row**, out of the same registry the rest of the engine
 // reads (`UnitDef`). That is what the getter half of the family means, and it is right for every
 // field a map asks about here: a Blademaster's `UNIT_RF_STRENGTH_PER_LEVEL` is a property of
-// Blademasters. The SETTER half is not implemented and says so: `BlzSetUnitRealField` changes
-// ONE unit, while our routing writes the TYPE (`UNIT_SETTERS` in data/objectData.ts), and
-// bridging that means a per-unit override table in the sim — which is exactly the intrusion the
-// compatibility layer must not make (src/compat/README.md). A setter therefore logs once and
-// answers false, which is what a 2003 map gets from any native we have not written.
+// Blademasters — unless THIS unit has a value of its own, which the per-unit field layer answers
+// first (SimWorld.unitField). The SETTER half writes that layer (SimWorld.setUnitField): each
+// write lands where the engine already reads that value per unit, so nothing here is a second
+// copy of the unit.
 //
 // A row with a null `reads` is DECLARED and not answered: the map compiles and runs, the read
 // logs once and returns the typed default. That is deliberate — a constant a map mentions is
@@ -39,7 +38,10 @@ export type UnitFieldKey =
   | "attackRange" | "attackCooldown" | "attackDamageBase" | "attackDice" | "attackSides"
   | "collisionSize" | "speed" | "sightRadiusDay" | "sightRadiusNight"
   | "hitPointsMaximum" | "manaMaximum" | "manaInitial" | "manaRegeneration"
-  | "hitPointsRegeneration" | "defense" | "isBuilding" | "canSleep" | "isHero";
+  | "hitPointsRegeneration" | "defense" | "isBuilding" | "canSleep" | "isHero"
+  | "raisable" | "decayable" | "minimumAttackRange"
+  // The WEAPON fields, read and written per weapon SLOT (the native translates the map's index).
+  | "weaponAttackRange" | "weaponAttacksEnabled" | "weaponAttackType";
 
 export interface BlzFieldDef {
   /** The constant a map writes. */
@@ -123,7 +125,7 @@ export const UNIT_REAL_FIELDS: ReadonlyArray<BlzFieldDef> = [
   { name: "UNIT_RF_HIT_POINTS_REGENERATION_RATE", reads: "hitPointsRegeneration" },
   { name: "UNIT_RF_MANA_REGENERATION", reads: "manaRegeneration" },
   { name: "UNIT_RF_BUILD_TIME", reads: "buildTime" },
-  { name: "UNIT_RF_MINIMUM_ATTACK_RANGE", reads: null },
+  { name: "UNIT_RF_MINIMUM_ATTACK_RANGE", reads: "minimumAttackRange" },
   { name: "UNIT_RF_OCCLUSION_HEIGHT", reads: null },
   { name: "UNIT_RF_FLY_HEIGHT", reads: null },
   { name: "UNIT_RF_ELEVATION_SAMPLE_RADIUS", reads: null },
@@ -141,8 +143,8 @@ export const UNIT_BOOLEAN_FIELDS: ReadonlyArray<BlzFieldDef> = [
   { name: "UNIT_BF_IS_A_BUILDING", reads: "isBuilding" },
   { name: "UNIT_BF_SLEEPS", reads: "canSleep" },
   { name: "UNIT_BF_IS_A_HERO_UNIT", reads: "isHero" },
-  { name: "UNIT_BF_RAISABLE", reads: null },
-  { name: "UNIT_BF_DECAYABLE", reads: null },
+  { name: "UNIT_BF_RAISABLE", reads: "raisable" },
+  { name: "UNIT_BF_DECAYABLE", reads: "decayable" },
   { name: "UNIT_BF_CAN_BE_BUILT_ON", reads: null },
   { name: "UNIT_BF_CAN_BUILD_ON", reads: null },
   { name: "UNIT_BF_CAN_FLEE", reads: null },
@@ -163,12 +165,21 @@ export const UNIT_STRING_FIELDS: ReadonlyArray<BlzFieldDef> = [
   { name: "UNIT_SF_SHADOW_IMAGE_UNIT", reads: null },
 ];
 
+/** The WEAPON fields (`BlzGetUnitWeapon…Field(u, field, index)`) — only what a map in the corpus
+ *  names: the range the rebalance maps double, the "Attacks Enabled" switch and the attack type. */
+export const UNIT_WEAPON_REAL_FIELDS: ReadonlyArray<BlzFieldDef> = [{ name: "UNIT_WEAPON_RF_ATTACK_RANGE", reads: "weaponAttackRange" }];
+export const UNIT_WEAPON_INTEGER_FIELDS: ReadonlyArray<BlzFieldDef> = [{ name: "UNIT_WEAPON_IF_ATTACK_ATTACK_TYPE", reads: "weaponAttackType" }];
+export const UNIT_WEAPON_BOOLEAN_FIELDS: ReadonlyArray<BlzFieldDef> = [{ name: "UNIT_WEAPON_BF_ATTACKS_ENABLED", reads: "weaponAttacksEnabled" }];
+
 /** Every family, in the order their `Convert*` natives are declared. */
 export const UNIT_FIELD_FAMILIES = [
   { convert: "ConvertUnitIntegerField", type: "unitintegerfield", fields: UNIT_INTEGER_FIELDS },
   { convert: "ConvertUnitRealField", type: "unitrealfield", fields: UNIT_REAL_FIELDS },
   { convert: "ConvertUnitBooleanField", type: "unitbooleanfield", fields: UNIT_BOOLEAN_FIELDS },
   { convert: "ConvertUnitStringField", type: "unitstringfield", fields: UNIT_STRING_FIELDS },
+  { convert: "ConvertUnitWeaponRealField", type: "unitweaponrealfield", fields: UNIT_WEAPON_REAL_FIELDS },
+  { convert: "ConvertUnitWeaponIntegerField", type: "unitweaponintegerfield", fields: UNIT_WEAPON_INTEGER_FIELDS },
+  { convert: "ConvertUnitWeaponBooleanField", type: "unitweaponbooleanfield", fields: UNIT_WEAPON_BOOLEAN_FIELDS },
 ] as const;
 
 /**

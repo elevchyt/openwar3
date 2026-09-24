@@ -345,6 +345,10 @@ export interface UnitDef {
    * (see `heroBodyTime`), which is what the altar's revive button waits on.
    */
   deathTime: number;
+  /** UnitData `deathType` — 0 none, 1 raise, 2 decay, 3 both (UI\\UnitEditorData.txt
+   *  [deathType]). Read for UNIT_BF_RAISABLE / _DECAYABLE; the corpse rules themselves still come
+   *  from classification (SimWorld.spawnCorpse). */
+  deathType?: number;
   hitPoints: number;
   /** UnitBalance.slk `regenHP` — the unit type's own hit-point regeneration (hp/sec). The sim
    *  adds the attribute/buff/item regen on top of this (world.ts recomputeStats), so this is
@@ -449,6 +453,9 @@ export interface UnitDef {
   // Cast backswing = the recovery animation AFTER the effect — pure follow-through
   // that a new order cancels for free (the "animation canceling" micro). Verified
   // against the real game data (Archmage 0.3/2.4, Paladin 0.5/1.67, MK 0.4/0.5).
+  /** UnitWeapons `minRange` — how close is too close to fire (the siege roster's dead zone);
+   *  read by UNIT_RF_MINIMUM_ATTACK_RANGE. */
+  minRange?: number;
   castPoint: number;
   castBackswing: number;
   attackRange: number;
@@ -718,6 +725,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       sightNight: b ? num(b, "nsight", 0) : 0,
       // UnitData.slk `death` — how long this type takes to die. See UnitDef.deathTime.
       deathTime: d ? num(d, "death", 0) : 0,
+      deathType: d ? num(d, "deathType", 3) : 3,
       hitPoints: isHero && realhp > 0 ? realhp : b ? num(b, "hp", 0) : 0,
       hpRegen: b ? num(b, "regenHP", 0) : 0,
       regenType: toRegenType(b ? str(b, "regenType") : ""),
@@ -765,6 +773,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // apply to the unit's casting, not to any one weapon). Default 0 → an instant
       // cast / no backswing for units with no weapons row (wards, most summons).
       castPoint: w ? num(w, "castpt", 0) : 0,
+      minRange: w ? num(w, "minRange", 0) : 0, // UnitWeapons `minRange` — the artillery dead zone
       castBackswing: w ? num(w, "castbsw", 0) : 0,
       attackRange: 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,

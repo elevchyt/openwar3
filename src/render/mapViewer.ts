@@ -3260,6 +3260,14 @@ export class MapViewerScene {
       setPlayerColor: (p, color) => this.rts?.setPlayerColor(p, color),
       setPlayerNeutral: (p, neutral) => this.rts?.setPlayerNeutral(p, neutral),
       setUnitScale: (id, scale) => this.rts?.setUnitScale(id, scale),
+      // BlzSetUnit…Field — DUAL-WRITER like setUnitFlyHeight: the sim keeps ONE unit's value (and
+      // does everything with it the world does), the renderer then wears the three that are
+      // pictures — scale, selection circle, run speed (RtsController.applyFieldOverrides).
+      setUnitField: (id, field, value, slot) => {
+        const ok = world.setUnitField?.(id, field, value, slot) ?? false;
+        if (ok) this.rts?.applyFieldOverrides(id);
+        return ok;
+      },
       setUnitVertexColor: (id, r, g, b, a) => this.rts?.setUnitVertexColor(id, r, g, b, a),
       // Fly height lives in two places: the sim (missile launch/land Z) and the render lift.
       // DUAL-WRITER, same shape as setUnitOwner above — `world` writes the sim, this adds the lift.

@@ -8,6 +8,7 @@ import { PlacedIndex, type PlacedRef } from "./placement";
 import { Authority } from "./authority";
 import { simHooks, authorityHooks, visionHooks, rosterHooks, mineForScript } from "./jassHooks";
 import type { EngineHooks } from "../jass/runtime";
+import { armorSoundFrom } from "../data/unitFieldCodes";
 import type { SimView } from "./simView";
 export type { PlacedRef };
 import {
@@ -2236,8 +2237,11 @@ export class RtsController {
       // while its arrow was still in the air, and a dead shooter has no def to ask. Both
       // halves are normalised to "" when the row names none (units.ts soundBase), so absence
       // is falsy rather than the SLK's literal "_".
-      if (h.weaponSound && tgt?.armorSound) {
-        this.sounds.playImpact(h.weaponSound, tgt.armorSound, at); // melee: material clang
+      // …the struck UNIT's own material where a script set one (UNIT_IF_ARMOR_TYPE), else its type's.
+      const armorCode = this.sim.units.get(h.targetId)?.fieldOverrides?.armorSound;
+      const armorSound = armorCode !== undefined ? armorSoundFrom(armorCode) : tgt?.armorSound;
+      if (h.weaponSound && armorSound) {
+        this.sounds.playImpact(h.weaponSound, armorSound, at); // melee: material clang
         continue;
       }
       // No weapon sound: a missile's own impact noise instead, which only the def records.
@@ -4043,6 +4047,7 @@ export class RtsController {
       prevDrawnY: NaN,
     };
     this.entries.push(entry);
+    this.applyFieldOverrides(entry); // a script's scale / selection / run speed, set before the body loaded
     this.byId.set(simId, entry);
     // A borrowed .doo body arrives tinted with its SLOT; a slot's colour is not its index once
     // `SetPlayerColor` has moved it (see playerColor), and the ally-colour filter paints over
@@ -4191,6 +4196,19 @@ export class RtsController {
     const e = this.byId.get(simId);
     if (e) e.baseScale = scale > 0 ? scale : 1;
   }
+  /** The render half of a script's per-unit FIELDS (`BlzSetUnitRealField` — SimWorld.setUnitField
+   *  keeps the values): the model scale, the selection circle and the run-animation speed. Asked
+   *  when a body arrives, because a script sets these on the line after CreateUnit, while the
+   *  model is still loading, and again by the scene's writer each time one changes. */
+  applyFieldOverrides(entryOrId: Entry | number): void {
+    const e = typeof entryOrId === "number" ? this.byId.get(entryOrId) : entryOrId;
+    const o = e ? this.sim.units.get(e.simId)?.fieldOverrides : undefined;
+    if (!e || !o) return;
+    if (o.scalingValue !== undefined) e.baseScale = o.scalingValue > 0 ? o.scalingValue : 1;
+    if (o.selectionScale !== undefined) e.selRadius = (o.selectionScale || 1) * SEL_RADIUS_PER_SCALE;
+    if (o.animationRunSpeed !== undefined) e.animRunSpeed = o.animationRunSpeed;
+  }
+
   /** JASS SetUnitVertexColor — the model's own tint (0–1), which fog dimming then
    *  multiplies. Reset fogTintB so applyFogTint re-emits with the new base. */
   setUnitVertexColor(simId: number, r: number, g: number, b: number, a: number): void {
@@ -7067,7 +7085,7 @@ export class RtsController {
       id,
       typeId,
       race: e?.race ?? def?.race ?? "",
-      name: e?.name ?? def?.name ?? typeId,
+      name: this.sim.units.get(id)?.nameOverride ?? e?.name ?? def?.name ?? typeId, // BlzSetUnitName first
       owner: u.owner,
       hp: u.hp,
       maxHp: u.maxHp,

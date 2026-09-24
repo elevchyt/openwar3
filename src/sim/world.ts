@@ -7,6 +7,7 @@ import { BlightGrid } from "./blight";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isCriticalStrikeCode, isRepairCode, normalizeTargetFlags, requiredHeroLevel, KNOWN_ABILITIES, morphFlags, MORPH_FLAG_PERMANENT, MORPH_FLAG_REQUIRES_PAYMENT } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { cloneAbilityDef, readAbilityField, writeAbilityField } from "../data/objectData";
+import { ATTACK_TYPES, defenseTypeCode, defenseTypeFrom, targetedAsCode, targetedAsFrom } from "../data/unitFieldCodes";
 import { slotMissileArt, autoArmed, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
 import { RACE_INDEX, workerProfileFor, harvestAbilityOf, type PlayableRace } from "../data/races";
@@ -1827,6 +1828,16 @@ export interface SimUnit {
   isPeon: boolean;
   /** `SetUnitExploded` — dies in a burst of its "Art - Special" and leaves no corpse. */
   explodes?: boolean;
+  /** Per-unit values a script set through `BlzSetUnit…Field` that have no field of their own on
+   *  SimUnit — the bounty, the hit-sound class, the model and selection scale, the run speed —
+   *  keyed by the field layer's own names (SimWorld.setUnitField). Absent = the type's. */
+  fieldOverrides?: Record<string, number>;
+  /** `BlzSetUnitName` — THIS unit's own name ("Change individual unit's name at runtime",
+   *  jassbot), shown on its panel and answered by GetUnitName. Absent = its type's. */
+  nameOverride?: string;
+  /** `BlzSetUnitWeaponBooleanField(u, UNIT_WEAPON_BF_ATTACKS_ENABLED, i, …)` — the unit's own
+   *  "Attacks Enabled" mask, replacing its type's `weapsOn` (recomputeStats). */
+  scriptWeaponsOn?: number;
   /** "Ward" in UnitBalance.slk's `type` column — the ten planted, immobile gadgets: Serpent
    *  Ward (`osp1`-`osp4`), Healing Ward (`ohwd`), Sentry Ward (`oeye`), Stasis Trap (`otot`),
    *  Watcher Ward (`nwad`), Monster Lure (`nlur`), Goblin Land Mine (`nglm`). They are units
@@ -11736,6 +11747,9 @@ export class SimWorld {
       // rather than an OR with the old one, which is what lets Impaling Bolt take the Glaive
       // Thrower OFF its original weapon.
       if (upg.weaponMask >= 0) w.enabled = (upg.weaponMask & (1 << u.weapons.indexOf(w))) !== 0;
+      // A script's own mask for THIS unit (UNIT_WEAPON_BF_ATTACKS_ENABLED) replaces the data's, as
+      // `renw` does — and, like it, still yields to an orb waking a slot (below).
+      if (u.scriptWeaponsOn !== undefined) w.enabled = (u.scriptWeaponsOn & (1 << w.slot)) !== 0;
       // …and an ORB switches its "Enabled Attack Index" slot ON, which is the whole of "the
       // Hero's attacks also become ranged when attacking air": a hero's dormant slot 2 is a
       // 500-range homing missile that lists `air` (UnitWeapons.slk), and carrying the orb is
@@ -14981,8 +14995,11 @@ export class SimWorld {
     if (!killer || !this.hostile(killer, victim)) return; // unattributed, or your own doing
     const def = this.unitReg?.get(victim.typeId);
     if (!def) return;
-    const gold = this.rollBounty(def.bountyPlus, def.bountyDice, def.bountySides);
-    const lumber = this.rollBounty(def.lumberBountyPlus, def.lumberBountyDice, def.lumberBountySides);
+    // …the UNIT's own bounty where a script set one (BlzSetUnitIntegerField — both rebalance maps
+    // scale each wave's gold this way), else the type's.
+    const o = victim.fieldOverrides;
+    const gold = this.rollBounty(o?.goldBountyBase ?? def.bountyPlus, o?.goldBountyDice ?? def.bountyDice, o?.goldBountySides ?? def.bountySides);
+    const lumber = this.rollBounty(o?.lumberBountyBase ?? def.lumberBountyPlus, o?.lumberBountyDice ?? def.lumberBountyDice, o?.lumberBountySides ?? def.lumberBountySides);
     const stash = this.stashOf(killer.owner);
     stash.gold += gold;
     stash.lumber += lumber;
@@ -16954,6 +16971,93 @@ export class SimWorld {
   setUnitTurnSpeed(id: number, turn: number): void {
     const u = this.units.get(id);
     if (u) u.turnRate = turn;
+  }
+
+  // === the per-unit object FIELDS (`BlzGetUnit…Field` / `BlzSetUnit…Field`) ===================
+  //
+  // A 1.31+ map reads and writes ONE unit's object-data columns: both rebalance maps scale each
+  // wave's creeps (level, bounty, size, acquisition, targeting, weapon range) and their Damage
+  // Engine saves a unit's DEFENSE type, overrides it for one blow and writes it back. Each write
+  // lands where the engine already reads that value per unit — `armorType` for the damage table,
+  // `targClass` for targeting, `level` for XP, the weapon's own `baseRange` — and the few that
+  // have no such home live in `fieldOverrides`. Keys are the field layer's (compat/blzFields.ts),
+  // integers encoded as data/unitFieldCodes.ts says. `slot` is a weapon slot, 0-based.
+
+  /** One unit's LIVE value for a field, or undefined when it is simply its type's. */
+  unitField(id: number, key: string, slot = 0): number | boolean | string | undefined {
+    const u = this.units.get(id);
+    if (!u) return undefined;
+    const o = u.fieldOverrides;
+    const w = u.weapons.find((x) => x.slot === slot);
+    switch (key) {
+      case "defenseType": return defenseTypeCode(u.armorType);
+      case "armorType": return o?.armorSound;
+      case "targetedAs": return targetedAsCode(u.targClass);
+      case "level": return u.level;
+      case "castPoint": return u.castPoint;
+      case "strengthPerLevel": return u.isHero ? u.strPerLevel : undefined;
+      case "agilityPerLevel": return u.isHero ? u.agiPerLevel : undefined;
+      case "intelligencePerLevel": return u.isHero ? u.intPerLevel : undefined;
+      case "acquisitionRange": return this.getUnitAcquireRange(id);
+      case "weaponAttackRange": return w?.baseRange;
+      case "weaponAttacksEnabled": return w?.enabled;
+      case "weaponAttackType": return w ? ATTACK_TYPES.indexOf(w.attackType) : undefined;
+      default: return o?.[key];
+    }
+  }
+
+  /** `BlzSetUnit…Field` for one unit. False when the unit is gone, the key is not one we can
+   *  write, or the value names nothing (an integer outside a field's encoding). */
+  setUnitField(id: number, key: string, value: number, slot = 0): boolean {
+    const u = this.units.get(id);
+    if (!u) return false;
+    const w = u.weapons.find((x) => x.slot === slot);
+    const over = (k: string) => { (u.fieldOverrides ??= {})[k] = value; return true; };
+    switch (key) {
+      case "defenseType": {
+        const t = defenseTypeFrom(Math.round(value));
+        if (!t) return false;
+        u.armorType = t;
+        return true;
+      }
+      case "armorType": return over("armorSound");
+      case "targetedAs": u.targClass = targetedAsFrom(Math.round(value)); return true;
+      // A HERO's level is SetHeroLevel's — its attributes, skill points and XP all follow it —
+      // so this writes only a non-hero's, which is what XP-on-kill and GetUnitLevel read.
+      case "level": if (u.isHero) return false; u.level = Math.max(0, Math.round(value)); return true;
+      case "castPoint": u.castPoint = Math.max(0, value); return true;
+      case "strengthPerLevel": if (!u.isHero) return false; u.strPerLevel = value; return true;
+      case "agilityPerLevel": if (!u.isHero) return false; u.agiPerLevel = value; return true;
+      case "intelligencePerLevel": if (!u.isHero) return false; u.intPerLevel = value; return true;
+      case "acquisitionRange": this.setUnitAcquireRange(id, value); return true;
+      case "turnRate": this.setUnitTurnSpeed(id, value); return over("turnRate");
+      case "weaponAttackRange":
+        if (!w) return false;
+        w.baseRange = Math.max(0, value);
+        this.recomputeStats(u);
+        return true;
+      case "weaponAttacksEnabled": {
+        const bit = 1 << slot;
+        const now = u.scriptWeaponsOn ?? u.weapons.reduce((m, x) => (x.enabled ? m | (1 << x.slot) : m), 0);
+        u.scriptWeaponsOn = value ? now | bit : now & ~bit;
+        this.recomputeStats(u);
+        return true;
+      }
+      case "weaponAttackType": {
+        const t = ATTACK_TYPES[Math.round(value)];
+        if (!w || !t) return false;
+        w.attackType = t;
+        return true;
+      }
+      // Stored for the reads (and, for the four with a render half, handed to the renderer by
+      // the scene's dual writer — MapViewerScene's setUnitField).
+      case "goldBountyBase": case "goldBountyDice": case "goldBountySides":
+      case "lumberBountyBase": case "lumberBountyDice": case "lumberBountySides":
+      case "scalingValue": case "selectionScale": case "animationRunSpeed": case "deathTime":
+      case "minimumAttackRange":
+        return over(key);
+      default: return false;
+    }
   }
   /** JASS SetUnitFlyHeight — the sim altitude (missiles launch/land here); the render
    *  lift is kept in step by RtsController.setUnitFlyHeight. */

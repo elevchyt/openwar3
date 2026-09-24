@@ -1,3 +1,4 @@
+import { armorSoundCode, defenseTypeCode, targetedAsCode } from "../data/unitFieldCodes";
 import { jassOwnerOf, type SimWorld, type SimMine, type SimUnit, type StoredUnitState, type UnitStat } from "../sim/world";
 import type { EngineHooks, UnitSnapshot } from "../jass/runtime";
 import { MAIN_HALL_CHAINS } from "../data/races";
@@ -202,6 +203,15 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // The ability INSTANCES (the 1.31 ability-field API): a unit's own entry or an item's
     // ability, read and rewritten through the same metadata routing a w3a edit takes.
     setUnitExploded: (id, exploded) => sim.setUnitExploded(id, exploded),
+    // BlzSetUnit…Field — a WORLD write, so it lives in this table (whose names are the ones a
+    // per-viewer re-run of a GetLocalPlayer block refuses), not beside its reader unitTypeField.
+    setUnitField: (id, field, value, slot) => sim.setUnitField(id, field, value, slot ?? 0),
+    unitName: (id) => sim.units.get(id)?.nameOverride,
+    setUnitName: (id, name, proper) => {
+      const u = sim.units.get(id);
+      if (!u || !name) return; // "Setting to an empty string will crash the game" (jassbot) — we refuse it instead
+      if (proper) { if (u.isHero) u.properName = name; } else u.nameOverride = name;
+    },
     unitHasAbility: (id, abil) => sim.units.get(id)?.abilities.some((a) => a.id === abil) ?? false,
     unitAbilityAt: (id, index) => sim.units.get(id)?.abilities[index]?.id,
     itemAbilityIds: (item) => sim.itemAbilityIds(item),
@@ -475,9 +485,16 @@ function unitTypeField(def: TypeDef, field: string): number | boolean | string |
         : def.primaryAttr === PrimaryAttribute.Agility ? 3
         : 0;
     case "level": return def.level;
-    case "defenseType": return def.armorType;
-    case "armorType": return def.armorType;
-    case "targetedAs": return def.targType.length;
+    // The three whose VALUE is an integer a map stores and compares (data/unitFieldCodes.ts says
+    // where each encoding is written down). These used to hand back the damage-class STRING for
+    // both type fields — which the native turned into 0 — and the LENGTH of the target list.
+    case "defenseType": return defenseTypeCode(def.armorType);
+    case "armorType": return armorSoundCode(def.armorSound);
+    case "targetedAs": return targetedAsCode(def.targType);
+    // UnitData `deathType`: 0 none, 1 raise, 2 decay, 3 both (UI\UnitEditorData.txt [deathType]).
+    case "raisable": return ((def.deathType ?? 3) & 1) !== 0;
+    case "decayable": return ((def.deathType ?? 3) & 2) !== 0;
+    case "minimumAttackRange": return def.minRange ?? 0;
     case "goldBountyBase": return def.bountyPlus;
     case "goldBountyDice": return def.bountyDice;
     case "goldBountySides": return def.bountySides;
@@ -600,7 +617,11 @@ export function rosterHooks(
         case "acquireRange": return def.acquireRange;
       }
     },
-    unitTypeField: (id, field) => {
+    // THIS unit's value where it has one of its own (a script's BlzSetUnit…Field, or the per-unit
+    // state the engine already keeps — its damage class, its level), else its type's row.
+    unitTypeField: (id, field, slot) => {
+      const live = sim.unitField(id, field, slot ?? 0);
+      if (live !== undefined) return live;
       const u = sim.units.get(id);
       const def = u ? registry.get(u.typeId) : undefined;
       return def ? unitTypeField(def, field) : undefined;

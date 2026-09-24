@@ -10,7 +10,7 @@
 import { intToRawcode, rawcodeToInt } from "../lexer";
 import { orderIdToString, orderStringToId } from "../orders";
 import type { EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime, UnitTypeDefault } from "../runtime";
-import { asInt, asNum, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
+import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -162,6 +162,21 @@ export function registerWorldNatives(rt: Runtime): void {
     if (u.simId >= 0) c.rt.hooks?.setUnitFacing?.(u.simId, deg * DEG, instant);
   };
   def(rt, "SetUnitFacing", (c, a) => (unit(c, a[0]) && face(c, unit(c, a[0])!, asNum(a[1]), true), JNULL));
+  // "Same as SetUnitFacing, but turns the unit around immediately" (jassbot) — and our
+  // SetUnitFacing is already the immediate turn, so it is that call.
+  def(rt, "BlzSetUnitFacingEx", (c, a) => (unit(c, a[0]) && face(c, unit(c, a[0])!, asNum(a[1]), true), JNULL));
+  // One unit's name (BlzSetUnitName) and a hero's given name (BlzSetHeroProperName), "Applies
+  // immediately" (jassbot) — to its panel and to GetUnitName / GetHeroProperName.
+  def(rt, "BlzSetUnitName", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitName?.(u.simId, asStr(a[1] ?? JNULL), false);
+    return JNULL;
+  });
+  def(rt, "BlzSetHeroProperName", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitName?.(u.simId, asStr(a[1] ?? JNULL), true);
+    return JNULL;
+  });
   def(rt, "SetUnitFacingTimed", (c, a) => (unit(c, a[0]) && face(c, unit(c, a[0])!, asNum(a[1]), false), JNULL));
 
   def(rt, "SetUnitOwner", (c, a) => {

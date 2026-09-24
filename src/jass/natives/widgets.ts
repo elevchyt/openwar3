@@ -12,6 +12,7 @@
 // whole file is a router, and adding a widget kind later means adding a branch here rather than
 // a new seam through the engine.
 
+import { ATTACK_TYPES } from "../../data/unitFieldCodes";
 import type { JassDestructable } from "./destructables";
 import type { JassUnit, NativeCtx, Runtime } from "../runtime";
 import { AttackType } from "../../data/enums";
@@ -46,15 +47,7 @@ const simOf = (c: NativeCtx, v: JassValue): number | undefined => {
  * are never the same number. A map dealing "pure" trigger damage passes ATTACK_TYPE_NORMAL and
  * means the flat column — which is what makes this the wrong trap to get wrong.
  */
-const ATTACK_TYPES: readonly AttackType[] = [
-  AttackType.Spells, // 0 ATTACK_TYPE_NORMAL  → "Spells"
-  AttackType.Normal, // 1 ATTACK_TYPE_MELEE   → "Normal"
-  AttackType.Pierce, // 2
-  AttackType.Siege, // 3
-  AttackType.Magic, // 4
-  AttackType.Chaos, // 5
-  AttackType.Hero, // 6
-];
+// (The table itself lives in data/unitFieldCodes.ts, shared with the weapon-field natives.)
 
 /** common.j `damagetype` indices we have to tell apart. The enum has twenty-odd values and they
  *  are almost all flavour (DAMAGE_TYPE_FIRE, _SONIC, _POISON …) that differ in nothing the sim
