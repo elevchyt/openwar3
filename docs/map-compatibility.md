@@ -59,7 +59,7 @@ Three maps the developer named, run through the repo's own parsers:
 | `.w3u/.w3t/.w3a/.w3d/.w3h/.w3q` | **v3** | **v3** | **v3** |
 | script | **`war3map.lua`**, 1.8 MB, minified | `war3map.j`, 1.1 MB | `war3map.j`, 850 KB |
 | art | 23 BLP, 2 MDX, 4 FLAC, 2 TGA | 71 BLP, 47 MDX, 22 FLAC | 70 BLP, 59 MDX, 23 FLAC |
-| MDX that fail to parse | 0 of 2 | 0 of 47 | 1 of 59 (v1100) |
+| MDX that fail to parse | 0 of 2 | 0 of 47 | 1 of 59 (v1100 — now read, see the long tail) |
 
 We read w3i ≤ v31 (partially), w3e v11, object data v2, JASS. Everything in bold is unread.
 
@@ -197,8 +197,15 @@ binding the existing `registerNatives` table into a Lua VM, not a second engine.
   Not in any SLK or txt in the install. A custom row whose base is missing cannot be built and
   must be skipped — but **visibly**, because a guess at a "near equivalent" is exactly the kind
   of invention the prime directive forbids.
-* **MDX v1100** — one model of 108 across the three maps fails to parse. Left alone; one missing
-  doodad is not worth a parser fork.
+* **MDX v1100** — one model of 108 across the three maps failed to parse, and it was not a
+  doodad: it was Test of Balance's Sacred Pillar (`Obelisk.mdx`), the building the whole draft
+  happens at. Fixed in the viewer patch (`parsers/mdlx/material.js`, `layer.js`): a v1100
+  material has no 80-byte shader name, and a layer carries a texture LIST after a shader-type id
+  — `uint32 shaderTypeId, uint32 count`, then per texture `int32 id, uint32 slot` and an optional
+  KMTF — of which an SD renderer draws slot 0 (war3-model's `parseMaterials`, checked byte for
+  byte against the file). Alongside it, the model handler no longer turns a v1000+ file into a
+  `.dds` request or writes `reforged` into the SHARED solver params — the model-side twin of
+  blocker 4. Pinned by `tools/render-mdx-v1100-test.cjs`.
 * `war3mapSkin.txt` (the map's own war3skins overlay) is unread. Noted, not scheduled.
 
 ## Where each fix belongs

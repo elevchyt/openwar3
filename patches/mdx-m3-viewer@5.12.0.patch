@@ -1,3 +1,67 @@
+diff --git a/dist/cjs/parsers/mdlx/layer.js b/dist/cjs/parsers/mdlx/layer.js
+index f9e7f8614096ec0da6a9b2dd7cb827777aff4bc1..aeb4dfe2d054586ea3eba4eaff0405b5514162ac 100644
+--- a/dist/cjs/parsers/mdlx/layer.js
++++ b/dist/cjs/parsers/mdlx/layer.js
+@@ -1,6 +1,7 @@
+ "use strict";
+ Object.defineProperty(exports, "__esModule", { value: true });
+ const animatedobject_1 = require("./animatedobject");
++const animationmap_1 = require("./animationmap");
+ // These two functions are needed because I am using const enums, which lets TS completely remove them from the output.
+ // I think it's worth it for the price of these two functions that effectively were always here either way.
+ function stringToMode(s) {
+@@ -82,6 +83,34 @@ class Layer extends animatedobject_1.default {
+             this.fresnelOpacity = stream.readFloat32();
+             this.fresnelTeamColor = stream.readFloat32();
+         }
++        // OpenWar3: v1100 (1.33+) gives a layer a LIST of textures — an HD material's diffuse,
++        // normal, ORM, emissive… — after a shader-type id: `uint32 shaderTypeId, uint32 count`,
++        // then per texture `int32 textureId, uint32 slot`, each optionally followed by its own
++        // KMTF track (war3-model's parseMaterials; the byte layout checked against Obelisk.mdx,
++        // whose every layer it consumes exactly). An SD renderer draws slot 0, the diffuse, and
++        // the legacy `textureId` above is not it (0 on every layer of that file).
++        if (version >= 1100) {
++            this.shaderTypeId = stream.readUint32();
++            for (let i = 0, l = stream.readUint32(); i < l; i++) {
++                const textureId = stream.readInt32();
++                stream.readUint32(); // slot
++                if (i === 0) {
++                    this.textureId = textureId;
++                }
++                const u = stream.uint8array;
++                const at = stream.index;
++                if (stream.remaining >= 4 && u[at] === 0x4b && u[at + 1] === 0x4d && u[at + 2] === 0x54 && u[at + 3] === 0x46) {
++                    // An animated texture id for this slot: the diffuse's drives the layer,
++                    // the others' are read past.
++                    const name = stream.readBinary(4);
++                    const animation = new animationmap_1.default[name][1]();
++                    animation.readMdx(stream, name);
++                    if (i === 0) {
++                        this.animations.push(animation);
++                    }
++                }
++            }
++        }
+         this.readAnimations(stream, size - (stream.index - start));
+     }
+     writeMdx(stream, version) {
+diff --git a/dist/cjs/parsers/mdlx/material.js b/dist/cjs/parsers/mdlx/material.js
+index e2dd7133b41aae9be6a700950611adf97b7e9934..643582d70a94898a80ba577cb5fcea10a7546547 100644
+--- a/dist/cjs/parsers/mdlx/material.js
++++ b/dist/cjs/parsers/mdlx/material.js
+@@ -18,7 +18,11 @@ class Material {
+         stream.readUint32(); // Don't care about the size.
+         this.priorityPlane = stream.readInt32();
+         this.flags = stream.readUint32();
+-        if (version > 800) {
++        // OpenWar3: the 80-byte shader name exists in 900 and 1000 only — a v1100 (1.33+) material
++        // goes straight from its flags to LAYS (read off Test of Balance's Obelisk.mdx, and what
++        // war3-model's parseMaterials does: `Version >= 900 && Version < 1100`). Reading it anyway
++        // swallowed the layers and the model drew nothing.
++        if (version > 800 && version < 1100) {
+             this.shader = stream.read(80);
+         }
+         stream.skip(4); // LAYS
 diff --git a/dist/cjs/parsers/mpq/adpcm.js b/dist/cjs/parsers/mpq/adpcm.js
 index 819b5459014ef60441683f396f391ec82df03281..401e55a45dd6111fec9d5a4576f4b0ea7fed35b4 100644
 --- a/dist/cjs/parsers/mpq/adpcm.js
@@ -325,7 +389,7 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
      }
      return offset;
 diff --git a/dist/cjs/parsers/w3x/map.js b/dist/cjs/parsers/w3x/map.js
-index 2e429462c9fe97126996684b8d998a3b7d2c3f21..7647d576ec1558edd81189c436666d837c9c7b22 100644
+index 2e429462c9fe97126996684b8d998a3b7d2c3f21..f0de2e2350c99916185a20c1c3bf9f96152ee322 100644
 --- a/dist/cjs/parsers/w3x/map.js
 +++ b/dist/cjs/parsers/w3x/map.js
 @@ -274,6 +274,21 @@ class War3Map {
@@ -1027,6 +1091,36 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c
              gl.depthMask(false);
          }
          else {
+diff --git a/dist/cjs/viewer/handlers/mdx/model.js b/dist/cjs/viewer/handlers/mdx/model.js
+index 5f2c0c2ffbfae107c42070fe99e41669814924ef..bdc0844a8d022810ec8977cac5e74206172ff5cb 100644
+--- a/dist/cjs/viewer/handlers/mdx/model.js
++++ b/dist/cjs/viewer/handlers/mdx/model.js
+@@ -86,7 +86,11 @@ class MdxModel extends model_2.default {
+         const pathSolver = this.pathSolver;
+         const solverParams = this.solverParams;
+         const reforged = parser.version > 800;
+-        const texturesExt = reforged ? '.dds' : '.blp';
++        // OpenWar3: the VERSION is a file layout, not an asset flavour. We draw SD out of an SD
++        // install, which has no .dds at all, so a v1000/v1100 model imported into a custom map
++        // wants the same ReplaceableTextures\*.blp as any other (see solverParams below, and
++        // docs/map-compatibility.md on the map handler's twin of this).
++        const texturesExt = '.blp';
+         let hasTeamColors = false;
+         this.reforged = reforged;
+         this.name = parser.name;
+@@ -119,9 +123,9 @@ class MdxModel extends model_2.default {
+                 this.hd = true;
+             }
+         }
+-        if (reforged) {
+-            solverParams.reforged = true;
+-        }
++        // OpenWar3: never flag the SHARED params. For a unit the map places, `solverParams` is
++        // the map handler's own object, so one v1100 model (Test of Balance's pillar) switched
++        // every later texture swap on the map — every placed tree's canopy — to .dds.
+         if (this.hd) {
+             solverParams.hd = true;
+             // mdxHandler.loadEnv(viewer);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
 index 020a99b949ec1634579d439261027e00b6da23ac..d5d8afa8b489dd57f20a698e22812aff0ca7b9a5 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
@@ -1334,6 +1428,19 @@ index 34686902ea449513570fad17cecbb6938ad9547a..2d355bcd094726e48a364a491faa5fb6
              }
          }
      }
+diff --git a/dist/cjs/viewer/handlers/mdx/particleemitter2object.js b/dist/cjs/viewer/handlers/mdx/particleemitter2object.js
+index 86f9b942bde23d1f97252ef5b457b65aa6e1cbcf..dadfe665704463284c9af6e321eb5820f0f8dd9d 100644
+--- a/dist/cjs/viewer/handlers/mdx/particleemitter2object.js
++++ b/dist/cjs/viewer/handlers/mdx/particleemitter2object.js
+@@ -44,7 +44,7 @@ class ParticleEmitter2Object extends genericobject_1.default {
+             this.teamColored = 1;
+         }
+         else if (replaceableId > 2) {
+-            const texturesExt = model.reforged ? '.dds' : '.blp';
++            const texturesExt = '.blp'; // OpenWar3: an SD install has no .dds (see MdxModel.load)
+             this.internalTexture = new texture_1.default(replaceableId, 0 /* RepeatBoth */);
+             model.viewer.load(`ReplaceableTextures\\${replaceableids_1.default[replaceableId]}${texturesExt}`, model.pathSolver, model.solverParams)
+                 .then((texture) => {
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 index 235f29101256617d34587316e8f40984a8f95685..5c6b20f33f3737fabbdc213483d3809e15e90b99 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
@@ -1560,7 +1667,7 @@ index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..34bdc892b283216fa1390e306383a63497b71129 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..205e1f1d8971735c75b168669d44cb634ebb64fe 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -16,6 +16,41 @@ const file_3 = require("../../../parsers/w3x/doo/file");
